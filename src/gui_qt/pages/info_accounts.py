@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from accounts_manager import load_accounts, add_account, remove_account
+from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 
 
@@ -107,5 +108,4 @@ class InfoAccountsPage(BasePage):
             e = None
         except Exception as ex:
             r, e = None, str(ex)
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: on_done(r, e))
+        post_to_main(on_done, r, e)

@@ -5,7 +5,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QProgressBar,
     QPushButton, QTextEdit, QVBoxLayout,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from toolbox.audio_engine import find_audio_videos, extract_audio_one, scan_audio_by_date, delete_files_safe
 from toolbox.utils import format_size
 
+from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 
 
@@ -152,18 +153,18 @@ class AudioPage(BasePage):
                 break
             dst = src.with_suffix(".m4a")
             if dst.exists():
-                self._log(f"💾 {src.name} -> 已存在，跳过")
+                post_to_main(self._log, f"💾 {src.name} -> 已存在，跳过")
                 stats["skipped"] += 1
             else:
                 ok, err = extract_audio_one(src, dst)
                 if ok:
                     stats["success"] += 1
-                    self._log(f"  ✅ 完成 -> {dst.name}")
+                    post_to_main(self._log, f"  ✅ 完成 -> {dst.name}")
                 else:
                     stats["failed"] += 1
-                    self._log(f"  ❌ 失败: {err}")
-            QTimer.singleShot(0, lambda v=int((i + 1) / total * 100): self.progress.setValue(v))
-        QTimer.singleShot(0, lambda: self._finish(stats))
+                    post_to_main(self._log, f"  ❌ 失败: {err}")
+            post_to_main(self.progress.setValue, int((i + 1) / total * 100))
+        post_to_main(self._finish, stats)
 
     def _finish(self, stats):
         self.running = False

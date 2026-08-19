@@ -3,7 +3,6 @@
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
     QPushButton, QTextEdit, QVBoxLayout, QWidget,
@@ -15,6 +14,7 @@ from toolbox.config_manager import (
 from toolbox.convert_engine import find_videos, is_convert_cached, convert_one_file, get_output_path, update_convert_cache
 from toolbox.utils import format_size
 
+from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 
 
@@ -149,20 +149,20 @@ class ConvertPage(BasePage):
                 break
             dst = get_output_path(src, root, self.config)
             if dst.exists() and not is_convert_cached(self.cache, src):
-                self._log(f"💾 {src.name} -> 已存在，跳过")
+                post_to_main(self._log, f"💾 {src.name} -> 已存在，跳过")
                 skip += 1
             else:
                 success, msg, _ = convert_one_file(src, dst, self.config)
                 if success:
                     ok += 1
-                    self._log(f"✅ {src.name}")
+                    post_to_main(self._log, f"✅ {src.name}")
                 else:
                     fail += 1
-                    self._log(f"❌ {src.name}: {msg}")
+                    post_to_main(self._log, f"❌ {src.name}: {msg}")
             update_convert_cache(self.cache, src, True, dst)
-            QTimer.singleShot(0, lambda v=int((i + 1) / total * 100): self.progress.setValue(v))
+            post_to_main(self.progress.setValue, int((i + 1) / total * 100))
         save_convert_cache(self.cache)
-        QTimer.singleShot(0, lambda: self._finish(ok, fail, skip))
+        post_to_main(self._finish, ok, fail, skip)
 
     def _finish(self, ok, fail, skip):
         self.running = False

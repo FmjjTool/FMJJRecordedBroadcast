@@ -2,11 +2,11 @@
 
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QVBoxLayout,
 )
 
+from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 
 
@@ -81,7 +81,7 @@ class TestPage(BasePage):
         def apply():
             if info.get("anchor"):
                 self._append(f"[房间] 主播 {info['anchor']} · 在线 {info.get('online', '?')}")
-        QTimer.singleShot(0, apply)
+        post_to_main(apply)
 
     def _on_message(self, name, text):
         def apply():
@@ -95,7 +95,7 @@ class TestPage(BasePage):
                 self._append(f"⭐ {text}")
             else:
                 self._append(text)
-        QTimer.singleShot(0, apply)
+        post_to_main(apply)
 
     def _on_status(self, status, msg):
         def apply():
@@ -109,4 +109,4 @@ class TestPage(BasePage):
             else:
                 self.status_label.setText(msg)
                 self.status_label.setStyleSheet("color: #eab308;")
-        QTimer.singleShot(0, apply)
+        post_to_main(apply)

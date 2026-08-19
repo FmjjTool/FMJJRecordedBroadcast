@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 
 PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博"}
@@ -254,4 +255,4 @@ class TrackerPage(BasePage):
             e = None
         except Exception as ex:
             r, e = None, str(ex)
-        QTimer.singleShot(0, lambda: on_done(r, e))
+        post_to_main(on_done, r, e)

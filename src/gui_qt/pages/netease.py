@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import get_export_subdir
 
+from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 
 
@@ -77,8 +78,7 @@ class NeteasePage(BasePage):
             e = None
         except Exception as ex:
             r, e = None, str(ex)
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: on_done(r, e))
+        post_to_main(on_done, r, e)
 
     def _download(self):
         row = self.list.currentRow()
@@ -89,7 +89,6 @@ class NeteasePage(BasePage):
         sid = song.get("id")
         name = song.get("name", str(sid))
         self.dl_btn.setEnabled(False)
-        from PySide6.QtCore import QTimer
 
         def work():
             from netease import MusicDownloader
