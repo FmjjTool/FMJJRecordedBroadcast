@@ -1,0 +1,183 @@
+"""
+======================================================================
+  5sing音乐 (5sing.kugou.com) 抓取器 - 三种模式: 原唱/翻唱/伴奏
+  策略: 5sing主站受CloudFlare保护，改用酷狗搜索API（共享数据库）
+======================================================================
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+from ..base_scraper import BaseScraper
+from ..models import SongInfo, AlbumInfo
+from ..utils import get_client, make_headers, safe_json, parse_duration
+
+
+FIVESING_MODES = {
+    "yc": {"key": "yc", "name": "原唱", "type_id": 1},
+    "fc": {"key": "fc", "name": "翻唱", "type_id": 2},
+    "bz": {"key": "bz", "name": "伴奏", "type_id": 3},
+}
+
+
+class FiveSingScraper(BaseScraper):
+    platform = "5sing"
+    platform_name = "5sing音乐"
+    BASE = "https://5sing.kugou.com"
+
+    # 使用酷狗搜索API（5sing共享数据库）
+    KUGOU_SEARCH = "http://mobilecdn.kugou.com/api/v3/search/song"
+    KUGOU_LYRIC  = "http://m.kugou.com/app/i/krc.php"
+
+    # ------------------------------------------------------------------
+    def search_by_mode(self, keyword: str, mode: str, page: int = 1, limit: int = 10) -> list[SongInfo]:
+        cfg = FIVESING_MODES.get(mode)
+        if not cfg:
+            return []
+        songs = self._search_kugou(keyword, cfg, page, limit)
+        for s in songs:
+            s.mode = cfg["name"]
+        return songs
+
+    def search_all_modes(self, keyword: str, page: int = 1, limit: int = 10) -> dict[str, list[SongInfo]]:
+        return {mc["name"]: self.search_by_mode(keyword, mk, page, limit) for mk, mc in FIVESING_MODES.items()}
+
+    def search_song(self, keyword: str, page: int = 1, limit: int = 10) -> list[SongInfo]:
+        merged = []
+        for s in self.search_all_modes(keyword, page, limit).values():
+            merged.extend(s)
+        return merged
+
+    # ------------------------------------------------------------------
+    def get_song_detail(self, song_id: str) -> Optional[SongInfo]:
+        """song_id = hash (from Kugou)"""
+        lyrics = self._get_lyrics(song_id)
+        if not lyrics:
+            return None
+        return SongInfo(
+            song_id=song_id, lyrics=lyrics,
+            platform=self.platform, platform_name=self.platform_name,
+            url=f"https://5sing.kugou.com/m/detail/{song_id}.html",
+        )
+
+    # ------------------------------------------------------------------
+    def _search_kugou(self, keyword: str, cfg: dict, page: int, limit: int) -> list[SongInfo]:
+        """通过酷狗搜索获取5sing歌曲，用 isoriginal / Accompany / album_name 区分模式"""
+        params = {"keyword": keyword, "page": page, "pagesize": limit * 3, "showtype": 1, "format": "json"}
+        headers = make_headers(referer="http://m.kugou.com/")
+        with get_client() as client:
+            resp = client.get(self.KUGOU_SEARCH, params=params, headers=headers)
+        data = safe_json(resp.text)
+        if not data or data.get("status") != 1:
+            return []
+
+        songs = []
+        for item in data.get("data", {}).get("info", []):
+            song_hash = item.get("hash", "")
+            song_name = item.get("songname", "").replace("<em>", "").replace("</em>", "")
+            album_name = item.get("album_name", "") or ""
+            accompany = item.get("Accompany", 0)
+            is_original = item.get("isoriginal", 0)
+            othername = item.get("othername_original", "") or ""
+
+            # ---- 模式判定 ----
+            mode_key = cfg["key"]
+            matched = False
+
+            if mode_key == "yc":  # 原唱
+                # isoriginal=1 或 (非伴奏 且 非翻唱 且 非DJ)
+                if is_original == 1:
+                    matched = True
+                elif not accompany and "翻唱" not in album_name and "DJ" not in othername and "伴奏" not in song_name:
+                    matched = True
+
+            elif mode_key == "bz":  # 伴奏
+                # Accompany=1 或 歌名/专辑含"伴奏"
+                if accompany == 1:
+                    matched = True
+                elif "伴奏" in song_name or "伴奏" in album_name:
+                    matched = True
+
+            elif mode_key == "fc":  # 翻唱
+                # 非原唱 且 非伴奏 且 (含"翻唱"或默认)
+                if is_original != 1 and accompany != 1:
+                    if "翻唱" in album_name or "cover" in album_name.lower():
+                        matched = True
+                    elif not ("伴奏" in song_name or "DJ" in othername):
+                        matched = True
+
+            if not matched:
+                continue
+
+            songs.append(SongInfo(
+                song_id=song_hash,
+                song_name=song_name,
+                singer=item.get("singername", ""),
+                language=_detect_lang(song_name),
+                album_name=album_name,
+                album_id=str(item.get("album_id", "")),
+                duration=parse_duration(item.get("duration", 0)),
+                cover_url=item.get("imgUrl", item.get("imgurl", "")),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"https://5sing.kugou.com/m/detail/{song_hash}.html",
+                release_date=item.get("release_date", ""),
+                extra=_remainder(item, "hash songname singername album_name album_id remark duration imgUrl imgurl Accompany sourceid isoriginal"),
+            ))
+            if len(songs) >= limit:
+                break
+        return songs
+
+    # ------------------------------------------------------------------
+    def _get_lyrics(self, song_hash: str) -> str:
+        params = {"hash": song_hash, "timelength": 300000, "cmd": "100"}
+        headers = make_headers(referer="http://m.kugou.com/")
+        with get_client() as client:
+            resp = client.get(self.KUGOU_LYRIC, params=params, headers=headers)
+        text = resp.text.strip()
+        # 去除 BOM 头
+        if text.startswith("\ufeff"):
+            text = text[1:]
+        if text.startswith("["):  # LRC/KRC 歌词格式
+            return text
+        data = safe_json(text)
+        if data:
+            content = data.get("content", "") or data.get("lyrics", "")
+            if content:
+                import base64, zlib
+                try:
+                    decoded = base64.b64decode(content)
+                    try:
+                        decompressed = zlib.decompress(decoded).decode("utf-8", errors="replace")
+                    except zlib.error:
+                        decompressed = decoded.decode("utf-8", errors="replace")
+                    lines = re.findall(r'\[(\d+),(\d+)\](.*?)(?=\[\d+,\d+\]|$)', decompressed)
+                    return "\n".join(t.strip() for _, _, t in lines if t.strip())
+                except Exception:
+                    pass
+                return content
+        return ""
+
+    # ------------------------------------------------------------------
+    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
+        return None  # 5sing无传统专辑
+
+    def get_play_url(self, song_id: str) -> str:
+        return f"https://m.kugou.com/api/v1/wechat/index?cmd=101&hash={song_id}"
+
+
+# ------------------------------------------------------------------
+
+def _detect_lang(name: str) -> str:
+    if not name: return ""
+    if re.search(r'[\u4e00-\u9fff]', name): return "国语"
+    if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', name): return "日语"
+    if re.search(r'[\uac00-\ud7af]', name): return "韩语"
+    return "外语"
+
+
+def _remainder(obj: dict, exclude: str) -> dict:
+    skip = set(exclude.split())
+    return {k: v for k, v in obj.items() if k not in skip}
