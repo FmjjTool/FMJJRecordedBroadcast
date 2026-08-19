@@ -125,7 +125,10 @@ class ConvertPage(BasePage):
         if not self.videos:
             self._log("⚠️ 未找到可转换的视频文件")
             return
-        self._log(f"📂 扫描完成，共找到 {len(self.videos)} 个文件\n")
+        self._log(f"📂 扫描完成，共找到 {len(self.videos)} 个文件：\n")
+        for v in self.videos:
+            size = format_size(v.stat().st_size) if v.exists() else "?"
+            self._log(f"  📄 {v.name}  ({size})")
 
     def _start(self):
         if not self.videos or self.running:

@@ -37,6 +37,7 @@ from gui_qt.pages.netease import NeteasePage
 from gui_qt.pages.tracker import TrackerPage
 from gui_qt.pages.dycast import DycastPage
 from gui_qt.pages.test_page import TestPage
+from gui_qt.toast import show_toast
 
 # 页面注册：key -> (标题, 页面类或 None=占位)
 PAGE_CLASSES = {
@@ -106,12 +107,39 @@ NAV_GROUPS = [
 DARK_QSS = """
 QMainWindow, QWidget { background-color: #1a1d27; color: #c6cbd6; font-family: "Microsoft YaHei"; font-size: 13px; }
 QScrollArea { border: none; background: #15171d; }
-QPushButton { background: transparent; color: #c6cbd6; padding: 7px 12px; border: none; border-radius: 4px; text-align: left; }
-QPushButton:hover { background: #23262f; }
-QPushButton:checked { background: #2a2d3a; color: #ffffff; }
-QLineEdit { background: #23262f; color: #c6cbd6; border: 1px solid #333; border-radius: 4px; padding: 6px; }
+QPushButton { background: #23262f; color: #c6cbd6; padding: 6px 12px; border: 1px solid #2e3140; border-radius: 4px; text-align: center; }
+QPushButton:hover { background: #2e7d32; color: #ffffff; border-color: #3a8c3a; }
+QPushButton:pressed { background: #1a5c2a; color: #ffffff; }
+QPushButton:checked { background: #1a5c2a; color: #ffffff; border-color: #2e7d32; }
+QPushButton:disabled { background: #1a1d27; color: #555; border-color: #23262f; }
+QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #23262f; color: #c6cbd6; border: 1px solid #333; border-radius: 4px; padding: 6px; selection-background-color: #2a5a8c; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #2a5a8c; background: #2a2d3a; }
+QListWidget::item:selected { background: #2a5a8c; color: #ffffff; }
+QListWidget::item:hover { background: #2e7d32; }
+QCheckBox::indicator { width: 16px; height: 16px; }
+QCheckBox::indicator:checked { background: #2e7d32; border: 1px solid #1a5c2a; border-radius: 3px; }
+QCheckBox::indicator:unchecked { background: #23262f; border: 1px solid #444; border-radius: 3px; }
+QRadioButton::indicator:checked { background: #2a5a8c; border: 1px solid #2a5a8c; border-radius: 8px; }
+QTabBar::tab { background: #23262f; color: #888; padding: 8px 16px; border: 1px solid #2e3140; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+QTabBar::tab:selected { background: #1a5c2a; color: #ffffff; }
+QTabBar::tab:hover { background: #2e7d32; color: #ffffff; }
+QTabWidget::pane { border: 1px solid #2e3140; background: #15171d; }
+QProgressBar { background: #23262f; border: 1px solid #333; border-radius: 4px; text-align: center; color: #c6cbd6; }
+QProgressBar::chunk { background: #2e7d32; border-radius: 3px; }
+QScrollBar:vertical { background: #15171d; width: 12px; }
+QScrollBar::handle:vertical { background: #3a3d4a; border-radius: 4px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #4a5a8c; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal { background: #15171d; height: 12px; }
+QScrollBar::handle:horizontal { background: #3a3d4a; border-radius: 4px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #4a5a8c; }
 QStatusBar { background: #15171d; color: #888; }
+QStatusBar::item { border: none; }
 QLabel { color: #c6cbd6; }
+QMenuBar { background: #15171d; color: #c6cbd6; }
+QMenuBar::item:selected { background: #2e7d32; }
+QMenu { background: #1a1d27; color: #c6cbd6; border: 1px solid #2e3140; }
+QMenu::item:selected { background: #2e7d32; }
 """
 
 
@@ -213,4 +241,4 @@ class MainWindow(QMainWindow):
         return key
 
     def toast(self, msg, _type="info"):
-        self.statusBar().showMessage(msg, 3000)
+        show_toast(self, msg, kind=_type)

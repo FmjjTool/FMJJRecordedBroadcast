@@ -4,7 +4,7 @@ import io
 import os
 import threading
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -39,6 +39,7 @@ class AssetPage(BasePage):
 
         self.list = QListWidget()
         self.list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.list.setIconSize(QSize(72, 72))
         self.list.itemDoubleClicked.connect(self._show_detail)
         layout.addWidget(self.list, 1)
 
@@ -66,9 +67,30 @@ class AssetPage(BasePage):
                 continue
             it = QListWidgetItem(text)
             it.setData(Qt.UserRole, id(info))
+            self._load_thumb(info, it)
             self.list.addItem(it)
             shown += 1
         self.count_label.setText(f"显示 {shown} / 共 {len(COLLECTED)}")
+
+    def _load_thumb(self, info, item):
+        if not info.cover_url:
+            return
+        from gui_qt.common import run_bg
+
+        def work():
+            import requests
+            try:
+                r = requests.get(info.cover_url, timeout=10)
+                return r.content
+            except Exception:
+                return None
+
+        def done(data, err):
+            if data:
+                img = QImage.fromData(data).scaledToHeight(72, Qt.SmoothTransformation)
+                item.setIcon(QPixmap.fromImage(img))
+
+        run_bg(work, done)
 
     def _selected_infos(self):
         ids = {self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
