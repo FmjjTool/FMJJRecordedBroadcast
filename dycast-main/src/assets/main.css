@@ -1,0 +1,82 @@
+@import url('./font/font.css');
+
+/* ===== 主题色系统 ===== */
+:root {
+  --bg: #f7f6f5;
+  --bg-card: #ffffff;
+  --bg-card-alt: rgba(255, 255, 255, 0.8);
+  --bd: #b2bfc3;
+  --bd-light: #e4eaed;
+  --bd-dashed: #e6ecef;
+  --theme: #68be8d;
+  --tool: #8b968d;
+  --text-primary: #1e2732;
+  --text-secondary: #6b798e;
+  --text-hint: #7f8b97;
+  --text-rank: #33414f;
+  --text-rank-head: #6a7786;
+  --text-rank-time: #8a9aab;
+  --text-error: #e94829;
+  --input-bg: #ffffff;
+  --input-border: #cdd5db;
+  --input-focus: #3b82f6;
+  --progress-bg: #f5f7f9;
+  --progress-track: #d6dee6;
+  --progress-thumb: #3b82f6;
+  --overlay-bg: rgba(0, 0, 0, 0.45);
+  --overlay-dialog: rgba(0, 0, 0, 0.3);
+  --link-color: #4f83c2;
+  --danger: #e95464;
+  --loading-bg-a: #eae5e3;
+  --loading-bg-b: #ffffff;
+  --cast-bg: #ffffff;
+  --cast-time: #aab5bd;
+}
+
+html.dark {
+  --bg: #1a1a2e;
+  --bg-card: #16213e;
+  --bg-card-alt: rgba(22, 33, 62, 0.9);
+  --bd: #2c3e55;
+  --bd-light: #243447;
+  --bd-dashed: #2a3a4d;
+  --theme: #5cb888;
+  --tool: #6a7e6c;
+  --text-primary: #e0e0e0;
+  --text-secondary: #9ca8b8;
+  --text-hint: #6a7a8a;
+  --text-rank: #c8d0d8;
+  --text-rank-head: #7a8a9a;
+  --text-rank-time: #6a7a8a;
+  --text-error: #ff6b5a;
+  --input-bg: #1e2d4a;
+  --input-border: #3a4a5e;
+  --input-focus: #5b9cf6;
+  --progress-bg: #1e2d4a;
+  --progress-track: #3a4a5e;
+  --progress-thumb: #5b9cf6;
+  --overlay-bg: rgba(0, 0, 0, 0.6);
+  --overlay-dialog: rgba(0, 0, 0, 0.5);
+  --link-color: #6da8e8;
+  --danger: #ff6b7a;
+  --loading-bg-a: #1e2d4a;
+  --loading-bg-b: #243a56;
+  --cast-bg: #16213e;
+  --cast-time: #5a6a7a;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  font-size: 16px;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+}

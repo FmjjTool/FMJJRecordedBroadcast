@@ -173,6 +173,17 @@ class MainWindow(QMainWindow):
                 self.nav_buttons[key] = btn
         nav_layout.addStretch(1)
 
+        # 底部 Cookie 管理入口
+        cookie_btn = QPushButton("🍪 Cookie")
+        cookie_btn.setStyleSheet("font-weight: bold; padding: 8px;")
+        cookie_btn.clicked.connect(self._open_cookie_manager)
+        nav_layout.addWidget(cookie_btn)
+
+    def _open_cookie_manager(self):
+        from gui_qt.cookie_manager import CookieManagerDialog
+        dlg = CookieManagerDialog(self)
+        dlg.exec()
+
     def show_page(self, key):
         # 高亮当前按钮
         for k, btn in self.nav_buttons.items():

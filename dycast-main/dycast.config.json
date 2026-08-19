@@ -1,0 +1,13 @@
+{
+  "monitorInterval": 30000,
+  "statsInterval": 1000,
+  "monitorRoomList": "582775732015",
+  "enableRecording": false,
+  "darkMode": false,
+  "timedBWEnabled": true,
+  "timedBWStart": "08:00",
+  "timedBWEnd": "22:00",
+  "timedBWDefault": "black",
+  "videoMode": "off",
+  "forceLatestScroll": true
+}
