@@ -21,6 +21,7 @@ from gui_qt.pages.info_batch import InfoBatchPage
 from gui_qt.pages.info_accounts import InfoAccountsPage
 from gui_qt.pages.info_results import InfoResultsPage
 from gui_qt.pages.download import VideoDownloadPage
+from gui_qt.pages.asset import AssetPage
 from gui_qt.pages.subtitle import SubtitlePage
 from gui_qt.pages.organize import OrganizePage
 from gui_qt.pages.convert import ConvertPage
@@ -33,6 +34,9 @@ from gui_qt.pages.calendar import CalendarPage
 from gui_qt.pages.migrate import MigratePage
 from gui_qt.pages.music_info import MusicInfoPage
 from gui_qt.pages.netease import NeteasePage
+from gui_qt.pages.tracker import TrackerPage
+from gui_qt.pages.dycast import DycastPage
+from gui_qt.pages.test_page import TestPage
 
 # 页面注册：key -> (标题, 页面类或 None=占位)
 PAGE_CLASSES = {
@@ -41,6 +45,7 @@ PAGE_CLASSES = {
     "info_accounts": InfoAccountsPage,
     "info_results": InfoResultsPage,
     "download": VideoDownloadPage,
+    "asset": AssetPage,
     "toolbox_organize": OrganizePage,
     "toolbox_convert": ConvertPage,
     "toolbox_rename": RenamePage,
@@ -53,6 +58,9 @@ PAGE_CLASSES = {
     "music_info": MusicInfoPage,
     "netease": NeteasePage,
     "unlock_music": MusicUnlockPage,
+    "tracker": TrackerPage,
+    "dycast": DycastPage,
+    "test_page": TestPage,
     "global_settings": GlobalSettingsPage,
 }
 
