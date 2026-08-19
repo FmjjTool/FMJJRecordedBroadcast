@@ -18,11 +18,13 @@ from gui_qt.pages.placeholder import PlaceholderPage
 from gui_qt.pages.settings import GlobalSettingsPage
 from gui_qt.pages.info_parse import InfoParsePage
 from gui_qt.pages.info_batch import InfoBatchPage
+from gui_qt.pages.subtitle import SubtitlePage
 
 # 页面注册：key -> (标题, 页面类或 None=占位)
 PAGE_CLASSES = {
     "info_parse": InfoParsePage,
     "info_batch": InfoBatchPage,
+    "toolbox_subtitle": SubtitlePage,
     "global_settings": GlobalSettingsPage,
 }
 
