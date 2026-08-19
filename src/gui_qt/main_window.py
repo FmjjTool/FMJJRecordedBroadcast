@@ -18,26 +18,40 @@ from gui_qt.pages.placeholder import PlaceholderPage
 from gui_qt.pages.settings import GlobalSettingsPage
 from gui_qt.pages.info_parse import InfoParsePage
 from gui_qt.pages.info_batch import InfoBatchPage
+from gui_qt.pages.info_accounts import InfoAccountsPage
+from gui_qt.pages.info_results import InfoResultsPage
+from gui_qt.pages.download import VideoDownloadPage
 from gui_qt.pages.subtitle import SubtitlePage
 from gui_qt.pages.organize import OrganizePage
 from gui_qt.pages.convert import ConvertPage
+from gui_qt.pages.rename import RenamePage
 from gui_qt.pages.audio import AudioPage
 from gui_qt.pages.lyrics_tool import LyricsToolPage
 from gui_qt.pages.launcher import LauncherPage
 from gui_qt.pages.music_unlock import MusicUnlockPage
 from gui_qt.pages.calendar import CalendarPage
+from gui_qt.pages.migrate import MigratePage
+from gui_qt.pages.music_info import MusicInfoPage
+from gui_qt.pages.netease import NeteasePage
 
 # 页面注册：key -> (标题, 页面类或 None=占位)
 PAGE_CLASSES = {
     "info_parse": InfoParsePage,
     "info_batch": InfoBatchPage,
+    "info_accounts": InfoAccountsPage,
+    "info_results": InfoResultsPage,
+    "download": VideoDownloadPage,
     "toolbox_organize": OrganizePage,
     "toolbox_convert": ConvertPage,
+    "toolbox_rename": RenamePage,
     "toolbox_audio": AudioPage,
     "toolbox_subtitle": SubtitlePage,
     "lyrics_tool": LyricsToolPage,
     "toolbox_launcher": LauncherPage,
     "toolbox_calendar": CalendarPage,
+    "toolbox_migrate": MigratePage,
+    "music_info": MusicInfoPage,
+    "netease": NeteasePage,
     "unlock_music": MusicUnlockPage,
     "global_settings": GlobalSettingsPage,
 }
