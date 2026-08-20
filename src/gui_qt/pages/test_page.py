@@ -7,21 +7,36 @@
 - 真实抓取：DouyinLiveFetcher / StatsCollector / LiveMonitor
 """
 
+import atexit
 import html
+import json
 import os
+import shutil
+import tempfile
 import time
+import zipfile
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
-    QTableWidgetItem, QTextBrowser, QVBoxLayout,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
+    QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem,
+    QTextBrowser, QVBoxLayout,
 )
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+
+# 回放包解压出的临时目录（recording.flv），进程退出兜底清理
+_replay_tmp_dirs = []
+
+
+@atexit.register
+def _cleanup_replay_tmp():
+    for d in list(_replay_tmp_dirs):
+        shutil.rmtree(d, ignore_errors=True)
 
 
 class TestPage(BasePage):
@@ -37,6 +52,17 @@ class TestPage(BasePage):
         self.live_monitor = None
         self._monitoring = False
         self.settings = self._load_settings()
+        # 视频预览 / 录制 / 模式 / 回放
+        self.mode = "normal"            # normal / video_only / replay
+        self.video_player = None
+        self.recorder = None
+        self._recording = False
+        self._streams = {}              # 清晰度 → FLV URL
+        self._current_stream = None
+        self._session_casts = []        # 本场消息快照（含毫秒时间戳，用于导出回放包）
+        self._replay = None             # 回放状态 dict
+        self._replay_timer = None
+        self._auto_stopped = False      # 因切走页面被自动断开（切回时自动重连）
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -59,6 +85,14 @@ class TestPage(BasePage):
         self.poll_var = QCheckBox("轮询")
         self.poll_var.setChecked(True)
         top_l.addWidget(self.poll_var)
+        # 模式切换：正常（视频+弹幕）/ 仅视频 / 回放
+        top_l.addWidget(QLabel("模式:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("正常模式", "normal")
+        self.mode_combo.addItem("仅视频模式", "video_only")
+        self.mode_combo.addItem("回放模式", "replay")
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        top_l.addWidget(self.mode_combo)
         settings_btn = QPushButton("⚙ 设置")
         settings_btn.clicked.connect(self._open_settings)
         top_l.addWidget(settings_btn)
@@ -85,6 +119,12 @@ class TestPage(BasePage):
         save_btn = QPushButton("💾 保存弹幕")
         save_btn.clicked.connect(self._save_danmaku_now)
         tb.addWidget(save_btn)
+        export_btn = QPushButton("📦 导出回放包")
+        export_btn.clicked.connect(self._export_replay_zip)
+        tb.addWidget(export_btn)
+        import_btn = QPushButton("📂 导入回放包")
+        import_btn.clicked.connect(self._pick_replay_zip)
+        tb.addWidget(import_btn)
         self.save_stats_var = QCheckBox("📊 保存统计")
         self.save_stats_var.setChecked(bool(self.settings.get("save_stats", False)))
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
@@ -105,7 +145,7 @@ class TestPage(BasePage):
         # ===== 主体三栏 =====
         body = QHBoxLayout()
         self._build_anchor_panel(body)
-        self._build_chat_gift_panel(body)
+        self._build_center_panel(body)
         self._build_right_panel(body)
         outer.addLayout(body, 1)
 
@@ -202,11 +242,78 @@ class TestPage(BasePage):
         v.addStretch(1)
         parent.addWidget(card, 1)
 
-    # ======================== 中：弹幕信息（聊天+礼物） ========================
-    def _build_chat_gift_panel(self, parent):
-        card = QFrame()
-        card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
-        v = QVBoxLayout(card)
+    # ======================== 中：视频预览 + 弹幕信息 ========================
+    def _build_center_panel(self, parent):
+        wrap = QVBoxLayout()
+        wrap.setSpacing(4)
+
+        # ---- 视频卡片 ----
+        self.video_card = QFrame()
+        self.video_card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        vv = QVBoxLayout(self.video_card)
+        vv.setContentsMargins(10, 8, 10, 8)
+        head = QHBoxLayout()
+        self.video_title = QLabel("📺 直播预览（仅播放，不录制）",
+                                  styleSheet="font-weight: bold;")
+        head.addWidget(self.video_title)
+        head.addStretch(1)
+        self.video_status_lbl = QLabel("", styleSheet="color: #888; font-size: 11px;")
+        head.addWidget(self.video_status_lbl)
+        vv.addLayout(head)
+
+        self.video_label = QLabel("等待连接…")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setMinimumHeight(260)
+        self.video_label.setStyleSheet(
+            "background: #000; border-radius: 4px; color: #666; font-size: 14px;")
+        vv.addWidget(self.video_label, 1)
+
+        # 直播控制行：清晰度 + 录播
+        self.live_ctrl_row = QHBoxLayout()
+        self.live_ctrl_row.addWidget(QLabel("清晰度:", styleSheet="color: #888;"))
+        self.quality_combo = QComboBox()
+        self.quality_combo.setMinimumWidth(110)
+        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
+        self.live_ctrl_row.addWidget(self.quality_combo)
+        self.record_btn = QPushButton("⏺ 录播")
+        self.record_btn.setStyleSheet("background: #8e24aa; color: white;")
+        self.record_btn.clicked.connect(self._toggle_record)
+        self.live_ctrl_row.addWidget(self.record_btn)
+        self.rec_time_lbl = QLabel("", styleSheet="color: #e91e63; font-size: 11px;")
+        self.live_ctrl_row.addWidget(self.rec_time_lbl)
+        self.live_ctrl_row.addStretch(1)
+        self.live_ctrl_row_widget = self._wrap_h(self.live_ctrl_row)
+        vv.addWidget(self.live_ctrl_row_widget)
+
+        # 回放控制行：播放/暂停 + 进度条 + 时间 + 倍速
+        self.replay_row = QHBoxLayout()
+        self.replay_btn = QPushButton("⏸")
+        self.replay_btn.setFixedWidth(40)
+        self.replay_btn.clicked.connect(self._toggle_replay_pause)
+        self.replay_row.addWidget(self.replay_btn)
+        self.replay_slider = QSlider(Qt.Horizontal)
+        self.replay_slider.setRange(0, 0)
+        self.replay_slider.sliderReleased.connect(self._on_replay_slider_released)
+        self.replay_row.addWidget(self.replay_slider, 1)
+        self.replay_time_lbl = QLabel("00:00 / 00:00",
+                                      styleSheet="color: #888; font-family: Consolas;")
+        self.replay_row.addWidget(self.replay_time_lbl)
+        self.replay_row.addWidget(QLabel("倍速:", styleSheet="color: #888;"))
+        self.replay_speed = QComboBox()
+        for s in ("1.0", "2.0", "4.0", "8.0", "16.0"):
+            self.replay_speed.addItem(f"{s}x", float(s))
+        self.replay_speed.currentIndexChanged.connect(self._on_replay_speed_changed)
+        self.replay_row.addWidget(self.replay_speed)
+        self.replay_row_widget = self._wrap_h(self.replay_row)
+        self.replay_row_widget.hide()
+        vv.addWidget(self.replay_row_widget)
+
+        wrap.addWidget(self.video_card, 3)
+
+        # ---- 弹幕卡片（聊天+礼物）----
+        self.chat_card = QFrame()
+        self.chat_card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        v = QVBoxLayout(self.chat_card)
         v.setContentsMargins(10, 10, 10, 10)
         head = QHBoxLayout()
         head.addWidget(QLabel("💬 弹幕信息（聊天+礼物）", styleSheet="font-weight: bold;"))
@@ -223,7 +330,579 @@ class TestPage(BasePage):
         self.chat_gift_box.setStyleSheet(
             "QTextBrowser { background: #14161f; border: none; color: #d7dae0; }")
         v.addWidget(self.chat_gift_box, 1)
-        parent.addWidget(card, 2)
+        wrap.addWidget(self.chat_card, 2)
+
+        parent.addLayout(wrap, 2)
+
+    @staticmethod
+    def _wrap_h(layout):
+        w = QFrame()
+        w.setLayout(layout)
+        return w
+
+    # ======================== 模式切换 ========================
+    QUALITY_NAMES = {"FULL_HD1": "1080P", "HD1": "720P", "SD1": "540P",
+                     "SD2": "360P", "LD": "360P", "_origin": "原画"}
+
+    def _on_mode_changed(self, index):
+        mode = self.mode_combo.itemData(index)
+        if mode == self.mode:
+            return
+        # 回放模式切换出去时停止回放
+        if self.mode == "replay" and mode != "replay":
+            self._stop_replay()
+        self.mode = mode
+        self._apply_mode()
+
+    def _apply_mode(self):
+        """按当前模式刷新中部布局与视频状态。"""
+        normal = self.mode == "normal"
+        video_only = self.mode == "video_only"
+        replay = self.mode == "replay"
+        self.chat_card.setVisible(normal or replay)
+        self.video_card.setVisible(normal or video_only or replay)
+        self.live_ctrl_row_widget.setVisible(normal or video_only)
+        self.replay_row_widget.setVisible(replay)
+        if replay:
+            self.video_title.setText("🎬 回放（拖入 zip 回放包，弹幕与视频同步）")
+            self._stop_live_preview()
+            if not self._replay:
+                self.video_label.setText("将 zip 回放包拖入窗口\n或点击「📂 导入回放包」")
+        else:
+            self.video_title.setText("📺 直播预览（仅播放，不录制）")
+            self._stop_replay()
+            # 已连接且有流 → 自动起预览
+            if self.connected and self._streams and not (self.video_player and self.video_player.is_running()):
+                self._start_live_preview()
+        self._refresh_record_ui()
+
+    # ======================== 直播预览 / 清晰度 / 录播 ========================
+    def _on_room_streams(self, streams):
+        """房间信息带回清晰度列表 → 填充下拉并自动起预览。"""
+        self._streams = streams or {}
+        self.quality_combo.blockSignals(True)
+        self.quality_combo.clear()
+        for q in self._streams:
+            label = self.QUALITY_NAMES.get(q, q)
+            self.quality_combo.addItem(label, q)
+        self.quality_combo.blockSignals(False)
+        if self._streams and self.mode in ("normal", "video_only"):
+            self._start_live_preview()
+
+    def _on_quality_changed(self, _index=None):
+        if self.mode in ("normal", "video_only") and self._streams:
+            self._start_live_preview()
+
+    def _start_live_preview(self):
+        if not self._streams or self.mode == "replay":
+            return
+        q = self.quality_combo.currentData()
+        if not q:
+            q = next(iter(self._streams))
+        url = self._streams.get(q)
+        if not url:
+            return
+        self._current_stream = url
+        from toolbox.live_video import VideoStreamPlayer
+        if self.video_player:
+            self.video_player.stop()
+        self.video_player = VideoStreamPlayer(
+            on_frame=self._on_video_frame,
+            on_status=self._on_video_status)
+        self.video_player.start(url, is_live=True)
+
+    def _stop_live_preview(self):
+        if self.video_player:
+            self.video_player.stop()
+            self.video_player = None
+
+    def _on_video_frame(self, w, h, data):
+        img = QImage(data, w, h, w * 3, QImage.Format_RGB888)
+        if img.isNull():
+            return
+        pix = QPixmap.fromImage(img).scaled(
+            self.video_label.width(), self.video_label.height(),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.video_label.setPixmap(pix)
+
+    def _on_video_status(self, state, detail):
+        if state == "connecting":
+            self.video_label.setText(detail or "正在获取直播流...")
+            self.video_label.setPixmap(QPixmap())
+        elif state == "error":
+            self.video_label.setText(detail or "直播流获取失败")
+            self.video_label.setPixmap(QPixmap())
+        if self.mode == "replay":
+            return
+        self.video_status_lbl.setText(detail or "")
+
+    def _toggle_record(self):
+        if self._recording:
+            self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _start_recording(self):
+        if not self._current_stream:
+            self.app.toast("无可用直播流（需先连接并获取清晰度）", "warning")
+            return
+        from toolbox.douyin_live import _danmaku_dir
+        d = _danmaku_dir().parent / "直播录制"
+        d.mkdir(parents=True, exist_ok=True)
+        room = self.room_entry.text().strip() or "room"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = str(d / f"{room}_{ts}.flv")
+        from toolbox.live_video import StreamRecorder
+        self.recorder = StreamRecorder(on_status=lambda s, p: None)
+        if not self.recorder.start(self._current_stream, path):
+            self.app.toast("录制启动失败（FFmpeg 未找到）", "error")
+            self.recorder = None
+            return
+        self._recording = True
+        self._refresh_record_ui()
+
+    def _stop_recording(self, package=True):
+        self._recording = False
+        path = None
+        rec_meta = None
+        if self.recorder:
+            rec_meta = {"startTimestamp": self.recorder.start_ts,
+                        "endTimestamp": int(time.time() * 1000),
+                        "file": "recording.flv"}
+            self.recorder.stop()
+            path = self.recorder.path
+            self.recorder = None
+        self._refresh_record_ui()
+        if package and path and os.path.exists(path) and os.path.getsize(path) > 1024:
+            self._export_replay_zip(video_path=path, rec_meta=rec_meta, quiet=True)
+        elif package and path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def _refresh_record_ui(self):
+        if self._recording:
+            self.record_btn.setText("⏹ 停止录播")
+            self.record_btn.setStyleSheet("background: #c62828; color: white;")
+            if not self._rec_timer_on:
+                self._rec_timer_on = True
+                self._tick_record()
+        else:
+            self.record_btn.setText("⏺ 录播")
+            self.record_btn.setStyleSheet("background: #8e24aa; color: white;")
+            self.rec_time_lbl.setText("")
+
+    _rec_timer_on = False
+
+    def _tick_record(self):
+        if not self._recording or not self.recorder:
+            self._rec_timer_on = False
+            return
+        secs = int((time.time() * 1000 - self.recorder.start_ts) / 1000)
+        self.rec_time_lbl.setText(f"录制中 {secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
+        QTimer.singleShot(1000, self._tick_record)
+
+    # ======================== 导出 / 导入回放包 ========================
+    def _export_replay_zip(self, video_path=None, rec_meta=None, quiet=False):
+        """把本场弹幕（+录制的视频）打包为可回放 zip（dycast 兼容格式）。"""
+        casts = list(self._session_casts)
+        if not casts:
+            if not quiet:
+                self.app.toast("当前没有弹幕数据可打包", "warning")
+            return
+        from toolbox.douyin_live import _danmaku_dir
+        d = _danmaku_dir().parent / "回放包"
+        d.mkdir(parents=True, exist_ok=True)
+        room = self.room_entry.text().strip() or "room"
+        anchor = (self.anchor_fields["anchor_name"].text() or "").strip() or "未知主播"
+        ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        out = d / f"{anchor}-{room}-{ts}-{len(casts)}条.zip"
+        bundle = {
+            "_bundle": True,
+            "exportTime": datetime.now().isoformat(),
+            "roomId": room,
+            "nickname": anchor,
+            "title": "",
+            "casts": casts,
+        }
+        has_video = bool(video_path and os.path.exists(video_path)
+                         and os.path.getsize(video_path) > 1024)
+        if has_video and not rec_meta:
+            rec_meta = {"startTimestamp": casts[0].get("timestamp"), "file": "recording.flv"}
+        meta_json = json.dumps(rec_meta, ensure_ascii=False, indent=1) if rec_meta else None
+        bundle_json = json.dumps(bundle, ensure_ascii=False, indent=1)
+        cover = getattr(self, "_cover_bytes", None)
+        vpath = video_path if has_video else None
+
+        def work():
+            try:
+                with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+                    z.writestr("data.json", bundle_json)
+                    if cover:
+                        z.writestr("cover.jpg", cover)
+                    if vpath:
+                        z.write(vpath, "recording.flv")
+                        if meta_json:
+                            z.writestr("recording_meta.json", meta_json)
+                return str(out)
+            except Exception as e:
+                return f"__error__{e}"
+
+        def done(result, err=None):
+            if result and not result.startswith("__error__"):
+                self.app.toast(f"回放包已导出: {os.path.basename(result)}", "success")
+            else:
+                self.app.toast("回放包导出失败", "error")
+
+        run_bg(work, done if not quiet else lambda r, e=None: None)
+
+    def _pick_replay_zip(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择回放包", "", "回放包 (*.zip *.json)")
+        if path:
+            self.load_replay_zip(path)
+
+    # ======================== 回放引擎（zip 导入 → 弹幕/视频时间同步） ========================
+
+    @staticmethod
+    def _fmt_ms(ms):
+        s = int(ms // 1000)
+        h, rem = divmod(s, 3600)
+        m, sec = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
+    def load_replay_zip(self, path):
+        """拖入/选择回放包（zip 或 json）→ 切回放模式并开始同步回放。"""
+        if not os.path.isfile(path):
+            return
+        # 切到回放模式（blockSignals 避免 _on_mode_changed 二次触发 stop）
+        if self.mode != "replay":
+            idx = self.mode_combo.findData("replay")
+            if idx >= 0:
+                self.mode_combo.blockSignals(True)
+                self.mode_combo.setCurrentIndex(idx)
+                self.mode_combo.blockSignals(False)
+            self.mode = "replay"
+            self._apply_mode()
+
+        def work():
+            return self._parse_replay_file(path)
+
+        def done(result, err=None):
+            if err or not result or not result.get("casts"):
+                self.video_label.setText("回放包解析失败\n（未找到 data.json 或 casts 为空）")
+                self.app.toast("回放包解析失败", "error")
+                return
+            self._start_replay(result)
+
+        self.video_label.setText("正在解析回放包…")
+        run_bg(work, done)
+
+    def _parse_replay_file(self, path):
+        """解析回放包 → dict(casts/bundle/video/rec_meta/zip_dir/cover)，失败返回 None。"""
+        try:
+            if path.lower().endswith(".json"):
+                with open(path, "r", encoding="utf-8") as f:
+                    bundle = json.load(f)
+                casts = (bundle or {}).get("casts") if isinstance(bundle, dict) else None
+                if isinstance(casts, list) and casts:
+                    return {"casts": casts, "bundle": bundle}
+                return None
+            with zipfile.ZipFile(path) as z:
+                names = set(z.namelist())
+                if "data.json" not in names:
+                    return None
+                bundle = json.loads(z.read("data.json").decode("utf-8"))
+                casts = bundle.get("casts") if isinstance(bundle, dict) else None
+                if not isinstance(casts, list) or not casts:
+                    return None
+                out = {"casts": casts, "bundle": bundle}
+                if "recording_meta.json" in names:
+                    try:
+                        out["rec_meta"] = json.loads(z.read("recording_meta.json").decode("utf-8"))
+                    except Exception:
+                        pass
+                for n in names:
+                    if n.lower().startswith("cover."):
+                        out["cover"] = z.read(n)
+                        break
+                if "recording.flv" in names:
+                    # 流式解压录制视频到临时目录（ZIP_STORED 近似纯拷贝）
+                    tmp = tempfile.mkdtemp(prefix="replay_")
+                    vpath = os.path.join(tmp, "recording.flv")
+                    with z.open("recording.flv") as src, open(vpath, "wb") as f:
+                        shutil.copyfileobj(src, f, 1024 * 1024)
+                    out["video"] = vpath
+                    out["zip_dir"] = tmp
+                    _replay_tmp_dirs.append(tmp)
+                return out
+        except Exception:
+            return None
+
+    @staticmethod
+    def _norm_cast(c):
+        """回放包消息（dycast DyMessage 或原始 type/ts 格式）→ 内部 m dict。"""
+        if not isinstance(c, dict):
+            return {}
+        if c.get("type"):
+            return dict(c)
+        gift = c.get("gift") if isinstance(c.get("gift"), dict) else {}
+        user = c.get("user") if isinstance(c.get("user"), dict) else {}
+        m = {
+            "type": c.get("method") or "",
+            "ts": c.get("timestamp") or 0,
+            "nickname": user.get("name") or "",
+            "content": c.get("content") or "",
+            "rtf": c.get("rtfContent") or [],
+        }
+        if gift:
+            m["giftName"] = gift.get("name")
+            m["giftCount"] = gift.get("count") or 1
+            m["giftPrice"] = gift.get("price") or 0
+            m["giftIcon"] = gift.get("icon") or ""
+        if m["type"] == "WebcastGiftMessage" and not m["content"]:
+            m["content"] = f"送出 {m.get('giftName') or '礼物'} x{m.get('giftCount') or 1}"
+        return m
+
+    def _start_replay(self, data):
+        """初始化回放状态并从 0 开始播放（弹幕与视频时间同步）。"""
+        self._stop_replay()
+        casts = sorted(
+            (c for c in data["casts"]
+             if isinstance(c, dict) and (c.get("timestamp") or c.get("ts"))),
+            key=lambda c: c.get("timestamp") or c.get("ts"))
+        if not casts:
+            self.app.toast("回放包中没有带时间戳的消息", "warning")
+            return
+        first = casts[0].get("timestamp") or casts[0].get("ts")
+        last = casts[-1].get("timestamp") or casts[-1].get("ts")
+        self._replay = {
+            "casts": casts, "first": first,
+            "total_ms": max(0, last - first),
+            "video": data.get("video"), "rec_meta": data.get("rec_meta"),
+            "zip_dir": data.get("zip_dir"),
+            "idx": 0, "offset_ms": 0.0, "start_real": time.time(),
+            "paused": False,
+            "speed": float(self.replay_speed.currentData() or 1.0),
+        }
+        # 恢复主播信息 + 重置面板
+        b = data.get("bundle") or {}
+        self._clear_all()
+        self._gift_rank = {}
+        self._like_count = 0
+        self.like_label.setText("0")
+        if b.get("nickname"):
+            self.anchor_fields["anchor_name"].setText(str(b["nickname"]))
+        if b.get("roomId"):
+            self.room_entry.setText(str(b["roomId"]))
+        cover = data.get("cover")
+        if cover:
+            pix = QPixmap()
+            if pix.loadFromData(cover):
+                pix = pix.scaled(96, 96, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                if pix.width() > 96 or pix.height() > 96:
+                    pix = pix.copy((pix.width() - 96) // 2, (pix.height() - 96) // 2, 96, 96)
+                self.cover_label.setPixmap(pix)
+        self.replay_slider.setRange(0, int(self._replay["total_ms"]))
+        self.replay_slider.setValue(0)
+        self._update_replay_time(0)
+        # 视频同步播放（从弹幕零点对应的位置开始）
+        if self._replay["video"]:
+            from toolbox.live_video import VideoStreamPlayer
+            self.video_player = VideoStreamPlayer(
+                on_frame=self._on_video_frame, on_status=self._on_video_status)
+            self.video_player.start(self._replay["video"], is_live=False,
+                                    start_sec=self._video_base_sec(),
+                                    speed=self._replay["speed"])
+        self.replay_btn.setText("⏸")
+        self._replay_timer = QTimer(self)
+        self._replay_timer.timeout.connect(self._replay_tick)
+        self._replay_timer.start(200)
+        note = "（含录制视频，弹幕与视频同步）" if self._replay["video"] else ""
+        self.app.toast(f"开始回放：{len(casts)} 条弹幕{note}", "success")
+
+    def _video_base_sec(self):
+        """录制起点到第一条弹幕的偏移（秒）：视频内弹幕时间轴的零点。"""
+        r = self._replay or {}
+        start = (r.get("rec_meta") or {}).get("startTimestamp")
+        if start and r.get("first"):
+            return max(0.0, (r["first"] - start) / 1000.0)
+        return 0.0
+
+    def _replay_tick(self):
+        """200ms 心跳：按当前回放位置渲染到期弹幕 + 刷新进度条。"""
+        r = self._replay
+        if not r or r["paused"]:
+            return
+        cur = self._replay_cur_ms()
+        target = r["first"] + cur
+        n = 0
+        while r["idx"] < len(r["casts"]) and n < 400:
+            c = r["casts"][r["idx"]]
+            ts = c.get("timestamp") or c.get("ts") or 0
+            if ts > target:
+                break
+            self._render_cast(c)
+            r["idx"] += 1
+            n += 1
+        self.replay_slider.setValue(int(cur))
+        self._update_replay_time(cur)
+        if cur >= r["total_ms"] and r["idx"] >= len(r["casts"]):
+            self._finish_replay()
+
+    def _render_cast(self, c, rank=True):
+        """渲染一条回放消息（显示原始时间戳）。"""
+        m = self._norm_cast(c)
+        if not m:
+            return
+        from toolbox.douyin_live import MSG_TYPES
+        mtype = m.get("type", "")
+        name, _cat = MSG_TYPES.get(mtype, (mtype, "other"))
+        nick = m.get("nickname") or ""
+        content = m.get("content") or ""
+        text = f"[{nick}]：{content}" if nick else content
+        ts = m.get("ts") or 0
+        t = datetime.fromtimestamp(ts / 1000) if ts else datetime.now()
+        self._apply_message(name, text, m, t, rank=rank)
+
+    def _seek_replay(self, target_ms):
+        """进度条快进/回退：重建打赏榜 + 渲染之前的消息 + 视频对位重启。"""
+        r = self._replay
+        if not r:
+            return
+        target_ms = max(0.0, min(float(target_ms), float(r["total_ms"])))
+        target_abs = r["first"] + target_ms
+        # target 之前的消息（重建榜全量，面板仅渲染末尾）
+        past = []
+        idx = len(r["casts"])
+        for i, c in enumerate(r["casts"]):
+            ts = c.get("timestamp") or c.get("ts") or 0
+            if ts > target_abs:
+                idx = i
+                break
+            past.append(c)
+        self._clear_all()
+        self._gift_rank = {}
+        self._like_count = 0
+        for c in past:
+            m = self._norm_cast(c)
+            if m.get("giftName"):
+                ts = m.get("ts") or 0
+                t = datetime.fromtimestamp(ts / 1000) if ts else datetime.now()
+                self._add_gift_rank(m, t, refresh=False)
+        self._refresh_gift_rank()
+        # 只渲染最近 250 条到面板（与 dycast 一致，避免大量 append 卡顿）
+        for c in past[-250:]:
+            self._render_cast(c, rank=False)
+        r["idx"] = idx
+        r["offset_ms"] = target_ms
+        r["start_real"] = time.time()
+        r["paused"] = False
+        # 视频对位重启
+        if r.get("video"):
+            from toolbox.live_video import VideoStreamPlayer
+            if self.video_player:
+                self.video_player.stop()
+            self.video_player = VideoStreamPlayer(
+                on_frame=self._on_video_frame, on_status=self._on_video_status)
+            self.video_player.start(r["video"], is_live=False,
+                                    start_sec=self._video_base_sec() + target_ms / 1000.0,
+                                    speed=r["speed"])
+        self.replay_btn.setText("⏸")
+        self.replay_slider.setValue(int(target_ms))
+        self._update_replay_time(target_ms)
+        if not self._replay_timer:
+            self._replay_timer = QTimer(self)
+            self._replay_timer.timeout.connect(self._replay_tick)
+            self._replay_timer.start(200)
+
+    def _toggle_replay_pause(self):
+        r = self._replay
+        if not r:
+            return
+        if r["paused"]:
+            self._resume_replay()
+        else:
+            self._pause_replay()
+
+    def _pause_replay(self):
+        r = self._replay
+        if not r or r["paused"]:
+            return
+        r["paused"] = True
+        r["paused_at"] = self._replay_cur_ms()
+        if self._replay_timer:
+            self._replay_timer.stop()
+        if self.video_player:
+            self.video_player.stop()
+            self.video_player = None
+        self.replay_btn.setText("▶")
+
+    def _resume_replay(self):
+        r = self._replay
+        if not r or not r["paused"]:
+            return
+        # 与 dycast 一致：从暂停位置重新调度（含视频对位）
+        self._seek_replay(r.get("paused_at") or 0.0)
+
+    def _on_replay_slider_released(self):
+        if self._replay:
+            self._seek_replay(self.replay_slider.value())
+
+    def _on_replay_speed_changed(self, _index=None):
+        r = self._replay
+        if not r:
+            return
+        speed = float(self.replay_speed.currentData() or 1.0)
+        r["speed"] = speed
+        if not r["paused"]:
+            # 与 dycast 一致：倍速变化时从当前位置重新调度
+            self._seek_replay(self._replay_cur_ms())
+
+    def _replay_cur_ms(self):
+        r = self._replay
+        if not r:
+            return 0.0
+        if r["paused"]:
+            return float(r.get("paused_at") or r["offset_ms"])
+        cur = r["offset_ms"] + (time.time() - r["start_real"]) * 1000.0 * r["speed"]
+        return min(cur, float(r["total_ms"]))
+
+    def _update_replay_time(self, cur_ms):
+        total = self._replay["total_ms"] if self._replay else 0
+        self.replay_time_lbl.setText(f"{self._fmt_ms(cur_ms)} / {self._fmt_ms(total)}")
+
+    def _finish_replay(self):
+        r = self._replay
+        if not r:
+            return
+        r["paused"] = True
+        r["paused_at"] = float(r["total_ms"])
+        if self._replay_timer:
+            self._replay_timer.stop()
+        self.replay_btn.setText("▶")
+        self.app.toast("回放完成", "success")
+
+    def _stop_replay(self):
+        """退出回放模式：停定时器/视频，清理临时目录。"""
+        if self._replay_timer:
+            self._replay_timer.stop()
+            self._replay_timer = None
+        if self.video_player:
+            self.video_player.stop()
+            self.video_player = None
+        r, self._replay = self._replay, None
+        if r and r.get("zip_dir"):
+            shutil.rmtree(r["zip_dir"], ignore_errors=True)
+            try:
+                _replay_tmp_dirs.remove(r["zip_dir"])
+            except ValueError:
+                pass
+        self.replay_btn.setText("⏸")
+        self.replay_slider.setRange(0, 0)
+        self.replay_slider.setValue(0)
+        self.replay_time_lbl.setText("00:00 / 00:00")
 
     # ======================== 右：5 块垂直 ========================
     def _build_right_panel(self, parent):
@@ -237,6 +916,10 @@ class TestPage(BasePage):
         row1 = QHBoxLayout()
         self.room_entry = QLineEdit()
         self.room_entry.setPlaceholderText("582775732015")
+        # 恢复上次房间号（进入页面自动重连用）
+        _last_room = str(self.settings.get("last_room", "") or "")
+        if _last_room:
+            self.room_entry.setText(_last_room)
         self.room_entry.returnPressed.connect(self._connect)
         row1.addWidget(self.room_entry, 1)
         self.connect_btn2 = QPushButton("连接")
@@ -486,6 +1169,10 @@ class TestPage(BasePage):
         self._start_ts = time.time()
         self._like_count = 0
         self._gift_rank = {}
+        self._session_casts = []
+        # 记住本次房间号（切走自动断开后，切回可自动重连）
+        self.settings["last_room"] = room
+        self._save_settings()
         self.gift_table.setRowCount(0)
         self.like_label.setText("0")
         self.anchor_fields["like_count"].setText("0")
@@ -697,6 +1384,9 @@ class TestPage(BasePage):
                 self.anchor_fields["like_count"].setText(info["like_count"])
             if info.get("title"):
                 self._append(self.event_box, f"[房间] {info['title']}")
+            # 直播流清晰度 → 填充下拉并自动起预览
+            if info.get("streams"):
+                self._on_room_streams(info["streams"])
             # 封面：无封面时退回主播头像
             self._set_cover(info.get("cover") or info.get("avatar"))
         post_to_main(apply)
@@ -708,59 +1398,80 @@ class TestPage(BasePage):
         在线人数/粉丝数等统计字段，与弹幕姬 DyMessage 对齐）。
         """
         m = m or {}
+        self._record_cast(name, text, m)
         t = datetime.now()
+        post_to_main(lambda: self._apply_message(name, text, m, t))
+
+    def _record_cast(self, name, text, m):
+        """记录本场消息快照（dycast DyMessage 格式，供导出回放包）。"""
+        if len(self._session_casts) >= 50000:
+            self._session_casts = self._session_casts[-25000:]
+        c = {
+            "method": m.get("type", ""),
+            "timestamp": m.get("ts") or int(time.time() * 1000),
+            "content": m.get("content") or text,
+            "rtfContent": m.get("rtf") or [],
+        }
+        if m.get("nickname"):
+            c["user"] = {"name": m["nickname"]}
+        if m.get("giftName"):
+            c["gift"] = {"name": m.get("giftName"), "count": m.get("giftCount") or 1,
+                         "price": m.get("giftPrice") or 0, "icon": m.get("giftIcon") or ""}
+        self._session_casts.append(c)
+
+    def _apply_message(self, name, text, m, t, rank=True):
+        """主线程：渲染一条消息到界面（直播与回放共用；rank=False 跳过打赏榜）。"""
         ts = t.strftime("%H:%M:%S") + f".{t.microsecond // 1000:03d}"
 
         def set_field(key, value):
             self.anchor_fields[key].setText(f"{int(value):,}")
 
-        def apply():
-            if name == "礼物":
-                # 打赏榜：礼物数累计、价值=数量×抖币价，与弹幕姬一致
-                self._add_gift_rank(m, t)
-                if self.gift_var.isChecked():
-                    self._append_html(self.chat_gift_box, self._gift_html(ts, m))
-            elif name in ("弹幕", "表情弹幕"):
-                if self.chat_var.isChecked():
-                    self._append_html(self.chat_gift_box, self._chat_html(ts, m, text))
-            elif name == "进场":
-                if m.get("memberCount"):
-                    set_field("online_count", m["memberCount"])
-                if self.enter_var.isChecked():
-                    self._append(self.event_box, f"{ts} 💚 {text}")
-            elif name == "点赞":
-                # likeTotal 为本场累计点赞总数（弹幕姬行为），缺失时退化为 +1
-                if m.get("likeTotal"):
-                    self._like_count = int(m["likeTotal"])
-                else:
-                    self._like_count += 1
-                self.like_label.setText(f"{self._like_count:,}")
-                self.anchor_fields["like_count"].setText(f"{self._like_count:,}")
-                if self.like_var.isChecked():
-                    self._append(self.event_box, f"{ts} 👍 {text}")
-            elif name == "关注":
-                if m.get("followCount"):
-                    set_field("anchor_fans", m["followCount"])
-                if self.log_var.isChecked():
-                    self._append(self.event_box, f"{ts} ⭐ {text}")
-            elif name == "在线人数":
-                # WebcastRoomUserSeqMessage：静默更新左栏统计
-                if m.get("roomTotal"):
-                    set_field("online_count", m["roomTotal"])
-                if m.get("roomTotalUser"):
-                    # totalUserStr 为文本（如 "10万+"），原样展示
-                    self.anchor_fields["total_viewers"].setText(str(m["roomTotalUser"]))
-            elif name == "直播数据":
-                # WebcastRoomStatsMessage：displayMiddle 如 "1.2万"
-                if text:
-                    self.anchor_fields["online_count"].setText(text)
+        if name == "礼物":
+            # 打赏榜：礼物数累计、价值=数量×抖币价，与弹幕姬一致
+            self._add_gift_rank(m, t, refresh=rank)
+            if self.gift_var.isChecked():
+                self._append_html(self.chat_gift_box, self._gift_html(ts, m))
+        elif name in ("弹幕", "表情弹幕"):
+            if self.chat_var.isChecked():
+                self._append_html(self.chat_gift_box, self._chat_html(ts, m, text))
+        elif name == "进场":
+            if m.get("memberCount"):
+                set_field("online_count", m["memberCount"])
+            if self.enter_var.isChecked():
+                self._append(self.event_box, f"{ts} 💚 {text}")
+        elif name == "点赞":
+            # likeTotal 为本场累计点赞总数（弹幕姬行为），缺失时退化为 +1
+            if m.get("likeTotal"):
+                self._like_count = int(m["likeTotal"])
             else:
-                if self.log_var.isChecked() and text:
-                    self._append(self.event_box, f"{ts} [{name}] {text}")
-        post_to_main(apply)
+                self._like_count += 1
+            self.like_label.setText(f"{self._like_count:,}")
+            self.anchor_fields["like_count"].setText(f"{self._like_count:,}")
+            if self.like_var.isChecked():
+                self._append(self.event_box, f"{ts} 👍 {text}")
+        elif name == "关注":
+            if m.get("followCount"):
+                set_field("anchor_fans", m["followCount"])
+            if self.log_var.isChecked():
+                self._append(self.event_box, f"{ts} ⭐ {text}")
+        elif name == "在线人数":
+            # WebcastRoomUserSeqMessage：静默更新左栏统计
+            if m.get("roomTotal"):
+                set_field("online_count", m["roomTotal"])
+            if m.get("roomTotalUser"):
+                # totalUserStr 为文本（如 "10万+"），原样展示
+                self.anchor_fields["total_viewers"].setText(str(m["roomTotalUser"]))
+        elif name == "直播数据":
+            # WebcastRoomStatsMessage：displayMiddle 如 "1.2万"
+            if text:
+                self.anchor_fields["online_count"].setText(text)
+        else:
+            if self.log_var.isChecked() and text:
+                self._append(self.event_box, f"{ts} [{name}] {text}")
 
-    def _add_gift_rank(self, m, t):
-        """累计打赏榜：按用户累计礼物数与抖币价值（弹幕姬同款逻辑）。"""
+    def _add_gift_rank(self, m, t, refresh=True):
+        """累计打赏榜：按用户累计礼物数与抖币价值（弹幕姬同款逻辑）。
+        refresh=False 用于回放 seek 批量重建（末尾统一刷新一次）。"""
         gift_name = m.get("giftName")
         if not gift_name:
             return
@@ -780,7 +1491,8 @@ class TestPage(BasePage):
         cur["giftCount"] += count
         cur["totalValue"] += count * price
         cur["lastTime"] = t
-        self._refresh_gift_rank()
+        if refresh:
+            self._refresh_gift_rank()
 
     def _refresh_gift_rank(self):
         items = sorted(self._gift_rank.items(),
@@ -892,3 +1604,26 @@ class TestPage(BasePage):
         box.append(html_str)
         if self.settings.get("keep_scroll", True) or at_bottom:
             sb.setValue(sb.maximum())
+
+    # ======================== 页面生命周期（全局同步：进自动启 / 出自动停） ========================
+    def on_show(self):
+        """切到本页：上次因切走被自动断开（且有房间号）→ 自动重连。"""
+        if self.connected or self.fetcher:
+            return
+        room = self.room_entry.text().strip()
+        if room and self._auto_stopped:
+            self._auto_stopped = False
+            self._connect()
+
+    def on_hide(self):
+        """切离本页：停录制（自动打包回放包）/ 回放 / 视频预览 / 弹幕抓取 / 监控。"""
+        was_active = self.connected or self.fetcher or self.video_player or self._recording
+        if self._recording:
+            self._stop_recording()
+        self._stop_replay()
+        self._stop_live_preview()
+        if self.connected or self.fetcher or self.stats_collector:
+            self._disconnect()
+        if self._monitoring:
+            self._toggle_monitor()
+        self._auto_stopped = bool(was_active)

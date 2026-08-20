@@ -115,6 +115,13 @@ def fetch_room_info(room_num):
                 like = _pick(stats, "like_count", "like_count_str")
                 if like is not None:
                     info["like_count"] = _fmt_count(like)
+                # 直播流（清晰度 → FLV 拉流地址），供预览播放 / 录制
+                stream_url = room.get("stream_url") or {}
+                flv = stream_url.get("flv_pull_url") or {}
+                if isinstance(flv, dict) and flv:
+                    info["streams"] = dict(flv)
+                    if stream_url.get("hls_pull_url"):
+                        info["hls"] = stream_url["hls_pull_url"]
                 # 更新缓存（roomId 是稳定标识，缓存起来供风控时兜底）
                 if info.get("roomId"):
                     cache[room_num] = {
@@ -791,7 +798,9 @@ class DouyinLiveFetcher:
                         msgs = page.evaluate(_READ_QUEUE_JS)
                     except Exception:
                         break
+                    now_ms = int(time.time() * 1000)
                     for m in msgs:
+                        m["ts"] = now_ms
                         mtype = m.get("type", "")
                         name, _cat = MSG_TYPES.get(mtype, (mtype, "other"))
                         nickname = m.get("nickname", "")

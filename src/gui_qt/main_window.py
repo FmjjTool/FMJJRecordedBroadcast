@@ -331,6 +331,14 @@ class MainWindow(QMainWindow):
         for k, btn in self.nav_buttons.items():
             btn.setChecked(k == key)
 
+        # 退出旧页面钩子（全局同步：切走时停后台任务）
+        old_page = self.pages.get(self.current_page)
+        if old_page is not None and self.current_page != key and hasattr(old_page, "on_hide"):
+            try:
+                old_page.on_hide()
+            except Exception:
+                pass
+
         # 懒加载
         if key not in self.pages:
             page = PAGE_CLASSES[key](self)
@@ -343,6 +351,17 @@ class MainWindow(QMainWindow):
         # 触发页面刷新钩子（如「已获取」页切回时刷新列表）
         if hasattr(page, "on_show"):
             page.on_show()
+
+    def closeEvent(self, event):
+        # 关闭窗口：对所有已加载页面触发 on_hide（停抓取/录制/回放等后台任务）
+        for page in self.pages.values():
+            fn = getattr(page, "on_hide", None)
+            if fn:
+                try:
+                    fn()
+                except Exception:
+                    pass
+        super().closeEvent(event)
 
     # ==================== 回车键统一分发 ====================
 
@@ -401,6 +420,14 @@ class MainWindow(QMainWindow):
                 if file_list:
                     p.add_dropped_files(file_list)
             return
+
+        # 弹幕测试页：拖入 zip 回放包 → 进入回放模式
+        if self.current_page == "test_page":
+            p = self.pages.get("test_page")
+            zips = [f for f in file_list if f.lower().endswith(".zip")]
+            if p is not None and zips:
+                p.load_replay_zip(zips[0])
+                return
 
         # 其他页：拖入文件夹 → 设为工作目录
         target = dirs[0] if dirs else os.path.dirname(file_list[0])
