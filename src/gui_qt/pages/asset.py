@@ -1230,8 +1230,6 @@ class AssetPage(BasePage):
                     cx += bb[2] - bb[0]
                 return cx
 
-            imgs = [m["path"] for m in item.get("media_files", []) if m["type"] == "image"]
-
             # 中文字体（多字重）
             font_paths = ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf",
                           "C:/Windows/Fonts/simsun.ttc"]
@@ -1259,7 +1257,6 @@ class AssetPage(BasePage):
             W = 720
             pad = 24
             gap = 14
-            banner_h = 200
             thumb = 200
             thumb_cols = 3
 
@@ -1294,6 +1291,48 @@ class AssetPage(BasePage):
             fetched = item.get("fetched_at") or "-"
             desc = (item.get("description") or "")[:300]
 
+            # 标题自适应：按宽度换行（最多2行），放不下则逐级缩小字号
+            _tdraw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+
+            def _wrap_text(text, font, max_w):
+                lines, cur = [], ""
+                for ch in text:
+                    bb = _tdraw.textbbox((0, 0), cur + ch, font=font)
+                    if bb[2] - bb[0] > max_w and cur:
+                        lines.append(cur)
+                        cur = ch
+                    else:
+                        cur += ch
+                if cur:
+                    lines.append(cur)
+                return lines
+
+            f_head = f_big
+            title_lines = [title]
+            for size in (36, 32, 28, 24, 20):
+                try:
+                    f_try = ImageFont.truetype(font_file, size) if font_file else ImageFont.load_default()
+                except Exception:
+                    f_try = ImageFont.load_default()
+                lines = _wrap_text(title, f_try, W - 2 * pad)
+                if len(lines) <= 2:
+                    f_head, title_lines = f_try, lines
+                    break
+                f_head, title_lines = f_try, lines
+            if len(title_lines) > 2:
+                title_lines = title_lines[:2]
+                title_lines[-1] = title_lines[-1][:-1] + "…"
+
+            # 副标题超宽截断
+            subtitle = f"@{author}  ·  {fetched}"
+            while _tdraw.textbbox((0, 0), subtitle, font=f_info)[2] > W - 2 * pad and len(subtitle) > 4:
+                subtitle = subtitle[:-2] + "…"
+
+            # banner 高度按标题行数自适应
+            line_h = f_head.size + 10
+            title_block_h = len(title_lines) * line_h
+            banner_h = max(180, 46 + title_block_h + 68)  # 顶部平台行 + 标题块 + 副标题/底条
+
             # ============ 1. 顶部紫色渐变 banner ============
             banner = Image.new("RGB", (W, banner_h), BG_TOP)
             bdraw = ImageDraw.Draw(banner)
@@ -1305,21 +1344,23 @@ class AssetPage(BasePage):
 
             bdraw.line([(pad, 28), (W - pad, 28)], fill=(255, 255, 255, 80), width=1)
             _draw_mixed(bdraw, pad, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_small, f_emoji_sm)
-            title_bbox = bdraw.textbbox((0, 0), title, font=f_big)
-            title_w = title_bbox[2] - title_bbox[0]
-            title_x = (W - title_w) // 2
-            bdraw.text((title_x, 64), title, fill=TEXT_PRIMARY, font=f_big)
-            subtitle = f"@{author}  ·  {fetched}"
+            title_y = 42
+            for tl in title_lines:
+                tl_bbox = bdraw.textbbox((0, 0), tl, font=f_head)
+                tl_w = tl_bbox[2] - tl_bbox[0]
+                bdraw.text(((W - tl_w) // 2, title_y), tl, fill=TEXT_PRIMARY, font=f_head)
+                title_y += line_h
+            sub_y = title_y + 2
             sub_bbox = bdraw.textbbox((0, 0), subtitle, font=f_info)
             sub_w = sub_bbox[2] - sub_bbox[0]
-            bdraw.text(((W - sub_w) // 2, 122), subtitle, fill=TEXT_SECONDARY, font=f_info)
+            bdraw.text(((W - sub_w) // 2, sub_y), subtitle, fill=TEXT_SECONDARY, font=f_info)
             bdraw.line([(pad, banner_h - 24), (W - pad, banner_h - 24)], fill=(255, 255, 255, 60), width=1)
             _draw_mixed(bdraw, pad, banner_h - 18, "📊 内容数据预览", TEXT_PRIMARY, f_small, f_emoji_sm)
 
             # ============ 2. 平台数据卡片 ============
             card_x = pad
             card_w = W - 2 * pad
-            card_h = 130
+            card_h = 150
             data_items = [
                 ("播放", play_count, ACCENT_GREEN, "▶"),
                 ("点赞", like_count, ACCENT_RED, "❤"),
@@ -1328,56 +1369,116 @@ class AssetPage(BasePage):
             stats_card = Image.new("RGB", (card_w, card_h), CARD_BG)
             sdraw = ImageDraw.Draw(stats_card)
 
-            _draw_mixed(sdraw, 20, 16, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_title, f_emoji)
+            _draw_mixed(sdraw, 20, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_title, f_emoji)
             try:
                 tag_w = 80
                 tag_h = 22
                 sdraw.rounded_rectangle(
-                    (card_w - tag_w - 20, 16, card_w - 20, 16 + tag_h),
+                    (card_w - tag_w - 20, 14, card_w - 20, 14 + tag_h),
                     radius=11, fill=plat_accent)
                 tag_text = plat_en
                 tag_bbox = sdraw.textbbox((0, 0), tag_text, font=f_small)
                 tag_text_w = tag_bbox[2] - tag_bbox[0]
-                sdraw.text((card_w - 20 - tag_w // 2 - tag_text_w // 2, 20),
+                sdraw.text((card_w - 20 - tag_w // 2 - tag_text_w // 2, 17),
                            tag_text, fill=TEXT_PRIMARY, font=f_small)
             except Exception:
-                sdraw.text((card_w - 90, 18), plat_en, fill=TEXT_PRIMARY, font=f_small)
+                sdraw.text((card_w - 90, 16), plat_en, fill=TEXT_PRIMARY, font=f_small)
 
-            sdraw.line([(20, 52), (card_w - 20, 52)], fill=(60, 64, 80), width=1)
+            sdraw.line([(20, 48), (card_w - 20, 48)], fill=(60, 64, 80), width=1)
 
             col_w = (card_w - 40) // 3
+            try:
+                f_val = ImageFont.truetype(font_file, 24)
+            except Exception:
+                f_val = f_info
             for i, (label, value, color, icon) in enumerate(data_items):
                 x = 20 + i * col_w
-                _draw_mixed(sdraw, x, 64, f"{icon}  {label}", TEXT_SECONDARY, f_info, f_emoji)
-                try:
-                    f_val = ImageFont.truetype(font_file, 28)
-                except Exception:
-                    f_val = f_info
-                sdraw.text((x, 88), value, fill=color, font=f_val)
+                _draw_mixed(sdraw, x, 58, f"{icon}  {label}", TEXT_SECONDARY, f_info, f_emoji)
+                sdraw.text((x, 84), value, fill=color, font=f_val)
 
             time_text = f"发布: {pub}  ·  采集: {fetched}"
-            sdraw.text((20, card_h - 24), time_text, fill=TEXT_TERTIARY, font=f_small)
+            sdraw.text((20, card_h - 26), time_text, fill=TEXT_TERTIARY, font=f_small)
 
-            # ============ 3. 图片网格卡片 ============
+            # ============ 3. 媒体网格卡片（图片缩略图 + 视频抽帧封面） ============
             grid_card = None
             grid_card_h = 0
-            if imgs:
-                n_rows = (len(imgs) + thumb_cols - 1) // thumb_cols
+            imgs = [m["path"] for m in item.get("media_files", []) if m["type"] == "image"]
+            vids = [m["path"] for m in item.get("media_files", []) if m["type"] == "video"]
+
+            _ffmpeg_ok = [""]  # 缓存可抽帧的 ffmpeg 路径（PATH 里可能是精简版）
+
+            def _video_cover(vpath, cell):
+                """用 ffmpeg 抽视频第 1 秒帧作为封面，失败返回 None。"""
+                import shutil
+                import subprocess
+                from io import BytesIO
+                args_base = ["-y", "-ss", "1", "-i", vpath, "-frames:v", "1",
+                             "-vf", f"scale={cell}:{cell}:force_original_aspect_ratio=increase,crop={cell}:{cell}",
+                             "-f", "image2", "-c:v", "mjpeg", "-"]
+                candidates = []
+                if _ffmpeg_ok[0]:
+                    candidates.append(_ffmpeg_ok[0])
+                else:
+                    which = shutil.which("ffmpeg")
+                    if which:
+                        candidates.append(which)
+                    candidates.append("D:/Programs/ffmpeg/bin/ffmpeg.exe")
+                for exe in candidates:
+                    if not exe or not os.path.exists(exe):
+                        continue
+                    try:
+                        r = subprocess.run([exe] + args_base, capture_output=True, timeout=20)
+                        if r.returncode == 0 and r.stdout:
+                            _ffmpeg_ok[0] = exe
+                            return Image.open(BytesIO(r.stdout)).convert("RGB")
+                    except Exception:
+                        continue
+                return None
+
+            def _video_placeholder(cell):
+                """视频封面占位卡（ffmpeg 不可用/抽帧失败时）。"""
+                ph = Image.new("RGB", (cell, cell), (44, 48, 66))
+                pd = ImageDraw.Draw(ph)
+                try:
+                    f_ico = ImageFont.truetype(emoji_file or font_file, 44)
+                except Exception:
+                    f_ico = f_title
+                bb = pd.textbbox((0, 0), "🎬", font=f_ico)
+                pd.text(((cell - (bb[2] - bb[0])) // 2, cell // 2 - 40), "🎬",
+                        fill=(255, 255, 255), font=f_ico)
+                label = "视频"
+                bb2 = pd.textbbox((0, 0), label, font=f_info)
+                pd.text(((cell - (bb2[2] - bb2[0])) // 2, cell // 2 + 24), label,
+                        fill=TEXT_SECONDARY, font=f_info)
+                return ph
+
+            media_cells = [("img", p) for p in imgs] + [("vid", p) for p in vids]
+            if media_cells:
+                n_rows = (len(media_cells) + thumb_cols - 1) // thumb_cols
                 cell = thumb  # 固定方格大小（正方形）
                 thumb_gap = 8
                 grid_h = n_rows * (cell + thumb_gap) + 16  # 内边距 8*2
                 grid_card_h = grid_h + 40  # 卡片上下边距
                 grid_card = Image.new("RGB", (card_w, grid_card_h), CARD_BG)
                 gdraw = ImageDraw.Draw(grid_card)
-                _draw_mixed(gdraw, 20, 12, f"🖼 媒体文件  ({len(imgs)} 图)", TEXT_PRIMARY, f_info, f_emoji)
+                if imgs and vids:
+                    head = f"🖼 媒体文件  ({len(imgs)} 图 · {len(vids)} 视频)"
+                elif vids:
+                    head = f"🎬 媒体文件  ({len(vids)} 视频)"
+                else:
+                    head = f"🖼 媒体文件  ({len(imgs)} 图)"
+                _draw_mixed(gdraw, 20, 12, head, TEXT_PRIMARY, f_info, f_emoji)
                 gdraw.line([(20, 42), (card_w - 20, 42)], fill=(60, 64, 80), width=1)
                 inner_w = card_w - 32
                 total_grid_w = thumb_cols * cell + (thumb_cols - 1) * thumb_gap
                 grid_x0 = 16 + max(0, (inner_w - total_grid_w) // 2)  # 居中
                 grid_y0 = 52
-                for i, p in enumerate(imgs):
+                for i, (kind, p) in enumerate(media_cells):
                     try:
-                        im = Image.open(p).convert("RGB")
+                        if kind == "img":
+                            im = Image.open(p).convert("RGB")
+                        else:
+                            im = _video_cover(p, cell) or _video_placeholder(cell)
                         im = ImageOps.fit(im, (cell, cell), Image.LANCZOS, centering=(0.5, 0.5))
                         row, col = i // thumb_cols, i % thumb_cols
                         x = grid_x0 + col * (cell + thumb_gap)

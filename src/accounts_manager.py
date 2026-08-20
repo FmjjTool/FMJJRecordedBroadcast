@@ -49,17 +49,24 @@ class Account:
 
     @staticmethod
     def from_line(line: str) -> "Account":
-        """从文件中的一行解析。兼容旧格式（组号|组名|备注|URL → 第三段当作账号名）。"""
+        """从文件中的一行解析。兼容旧格式（组号|组名|备注|URL → 第三段当作账号名）。
+
+        第3/4段自动纠偏：若账号名与 URL 位置填反（账号名是 http 开头），自动对调。
+        """
         line = line.strip()
         parts = line.split("|")
         # pipe 格式: 组号(逗号分隔可多组)|组名|账号名|URL[|备注]
         if len(parts) >= 4 and re.match(r'^[\d,]+$', parts[0]):
             gids = [g for g in parts[0].split(",") if g]
+            name, url = parts[2], parts[3]
+            # 账号名/URL 位置填反时自动纠偏
+            if url and not re.match(r'^https?://', url) and re.match(r'^https?://', name or ""):
+                name, url = url, name
             return Account(
                 group_ids=gids,
                 group_name=parts[1],
-                name=parts[2],
-                url=parts[3],
+                name=name,
+                url=url,
                 note=parts[4] if len(parts) > 4 else "",
             )
         # 账号名|URL
@@ -120,6 +127,9 @@ def add_account(url: str, name: str = "", group_id: str = "", group_name: str = 
     name = name.replace("|", " ")
     group_name = group_name.replace("|", " ")
     note = note.replace("|", " ")
+    # 账号名/URL 输入框填反时自动纠偏
+    if name and url and not re.match(r'^https?://', url) and re.match(r'^https?://', name):
+        url, name = name, url
     accounts = load_accounts()
     for a in accounts:
         if a.url == url:

@@ -12,8 +12,9 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QVBoxLayout,
+    QAbstractItemView, QCheckBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -27,6 +28,7 @@ class TestPage(BasePage):
         self._timer_running = False
         self._start_ts = None
         self._like_count = 0
+        self._gift_rank = {}
         self.fetcher = None
         self.stats_collector = None
         self.live_monitor = None
@@ -276,20 +278,22 @@ class TestPage(BasePage):
         except Exception:
             pass
 
-        # 4. 累计打赏榜
+        # 4. 累计打赏榜（与弹幕姬一致：排名/昵称/礼物数/价值(抖币)/更新时间，前150名）
         v.addWidget(QLabel("④ 累计打赏榜", styleSheet="font-weight: bold;"))
-        hdr = QHBoxLayout()
-        for txt, w in [("排名", 50), ("昵称", 120), ("礼物数", 60), ("价值(抖币)", 80), ("更新时间", 90)]:
-            lbl = QLabel(txt)
-            lbl.setFixedWidth(w)
-            lbl.setStyleSheet("color: #888; font-size: 11px; font-weight: bold;")
-            hdr.addWidget(lbl)
-        hdr.addStretch(1)
-        v.addLayout(hdr)
-        self.gift_list = QPlainTextEdit()
-        self.gift_list.setReadOnly(True)
-        self.gift_list.setPlainText("（暂无礼物数据）")
-        v.addWidget(self.gift_list, 1)
+        self.gift_table = QTableWidget(0, 5)
+        self.gift_table.setHorizontalHeaderLabels(["排名", "昵称", "礼物数", "价值(抖币)", "更新时间"])
+        self.gift_table.verticalHeader().setVisible(False)
+        self.gift_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.gift_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.gift_table.setAlternatingRowColors(True)
+        self.gift_table.setFocusPolicy(Qt.NoFocus)
+        hh = self.gift_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        v.addWidget(self.gift_table, 1)
 
         # 5. 弹幕信息2（点赞+进入直播间+日志提醒）
         head5 = QHBoxLayout()
@@ -413,6 +417,8 @@ class TestPage(BasePage):
         self.connected = True
         self._start_ts = time.time()
         self._like_count = 0
+        self._gift_rank = {}
+        self.gift_table.setRowCount(0)
         self.like_label.setText("0")
         self.anchor_fields["like_count"].setText("0")
         self.connect_btn.setEnabled(False)
@@ -622,34 +628,100 @@ class TestPage(BasePage):
                 self._append(self.event_box, f"[房间] {info['title']}")
         post_to_main(apply)
 
-    def _on_message(self, name, text):
-        """后台线程回调：收到一条真实消息（text 已是 '[昵称]：内容' 格式）。"""
+    def _on_message(self, name, text, m=None):
+        """后台线程回调：收到一条真实消息。
+
+        text 为 '[昵称]：内容' 格式；m 为原始字段 dict（礼物价格/点赞总数/
+        在线人数/粉丝数等统计字段，与弹幕姬 DyMessage 对齐）。
+        """
+        m = m or {}
         t = datetime.now()
         ts = t.strftime("%H:%M:%S") + f".{t.microsecond // 1000:03d}"
 
+        def set_field(key, value):
+            self.anchor_fields[key].setText(f"{int(value):,}")
+
         def apply():
             if name == "礼物":
+                # 打赏榜：礼物数累计、价值=数量×抖币价，与弹幕姬一致
+                self._add_gift_rank(m, t)
                 if self.gift_var.isChecked():
-                    self._append(self.chat_gift_box, f"{ts} {text}")
+                    self._append(self.chat_gift_box, f"{ts} 🎁 {text}")
             elif name in ("弹幕", "表情弹幕"):
                 if self.chat_var.isChecked():
                     self._append(self.chat_gift_box, f"{ts} {text}")
             elif name == "进场":
+                if m.get("memberCount"):
+                    set_field("online_count", m["memberCount"])
                 if self.enter_var.isChecked():
                     self._append(self.event_box, f"{ts} 💚 {text}")
             elif name == "点赞":
-                self._like_count += 1
+                # likeTotal 为本场累计点赞总数（弹幕姬行为），缺失时退化为 +1
+                if m.get("likeTotal"):
+                    self._like_count = int(m["likeTotal"])
+                else:
+                    self._like_count += 1
                 self.like_label.setText(f"{self._like_count:,}")
                 self.anchor_fields["like_count"].setText(f"{self._like_count:,}")
                 if self.like_var.isChecked():
                     self._append(self.event_box, f"{ts} 👍 {text}")
             elif name == "关注":
+                if m.get("followCount"):
+                    set_field("anchor_fans", m["followCount"])
                 if self.log_var.isChecked():
                     self._append(self.event_box, f"{ts} ⭐ {text}")
+            elif name == "在线人数":
+                # WebcastRoomUserSeqMessage：静默更新左栏统计
+                if m.get("roomTotal"):
+                    set_field("online_count", m["roomTotal"])
+                if m.get("roomTotalUser"):
+                    # totalUserStr 为文本（如 "10万+"），原样展示
+                    self.anchor_fields["total_viewers"].setText(str(m["roomTotalUser"]))
+            elif name == "直播数据":
+                # WebcastRoomStatsMessage：displayMiddle 如 "1.2万"
+                if text:
+                    self.anchor_fields["online_count"].setText(text)
             else:
-                if self.log_var.isChecked():
+                if self.log_var.isChecked() and text:
                     self._append(self.event_box, f"{ts} [{name}] {text}")
         post_to_main(apply)
+
+    def _add_gift_rank(self, m, t):
+        """累计打赏榜：按用户累计礼物数与抖币价值（弹幕姬同款逻辑）。"""
+        gift_name = m.get("giftName")
+        if not gift_name:
+            return
+        user = (m.get("nickname") or "").strip() or "未知用户"
+        try:
+            count = int(m.get("giftCount") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        try:
+            price = int(m.get("giftPrice") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        cur = self._gift_rank.get(user)
+        if cur is None:
+            cur = {"giftCount": 0, "totalValue": 0, "lastTime": t}
+            self._gift_rank[user] = cur
+        cur["giftCount"] += count
+        cur["totalValue"] += count * price
+        cur["lastTime"] = t
+        self._refresh_gift_rank()
+
+    def _refresh_gift_rank(self):
+        items = sorted(self._gift_rank.items(),
+                       key=lambda kv: (-kv[1]["totalValue"], -kv[1]["giftCount"], kv[0]))
+        self.gift_table.setRowCount(0)
+        for i, (user, d) in enumerate(items[:150]):
+            self.gift_table.insertRow(i)
+            vals = [str(i + 1), user, f"{d['giftCount']:,}",
+                    f"{d['totalValue']:,}", d["lastTime"].strftime("%H:%M:%S")]
+            for c, val in enumerate(vals):
+                item = QTableWidgetItem(val)
+                if c != 1:
+                    item.setTextAlignment(Qt.AlignCenter)
+                self.gift_table.setItem(i, c, item)
 
     def _on_status(self, status, msg):
         """后台线程回调：连接状态变化。"""

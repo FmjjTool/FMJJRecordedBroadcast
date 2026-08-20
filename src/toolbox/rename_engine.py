@@ -9,7 +9,8 @@ from .utils import clean_special_chars
 
 # ==================== 正则模式 ====================
 
-TIME_HHMMSS_PATTERN = re.compile(r"(?<!20)\b(\d{2}-\d{2}-\d{2})\b", re.I)
+TIME_HHMMSS_PATTERN = re.compile(r"(?<![\d-])(\d{2}-\d{2}-\d{2})(?!\d)", re.I)
+STANDARD_DT_PATTERN = re.compile(r"20\d{2}-\d{2}-\d{2}[_\-](\d{2})-(\d{2})-(\d{2})")
 TIMESTAMP_14_PATTERN = re.compile(r"20\d{2}(0[1-9]|1[0-2])([0-2]\d|3[01])(\d{2})(\d{2})(\d{2})")
 REC_TIME_PATTERN = re.compile(r"20\d{6}-(\d{6})")
 BV_PATTERN = re.compile(r"BV[a-zA-Z0-9]{8,12}", re.I)
@@ -33,6 +34,10 @@ DATE_FOLDER_PATTERN = re.compile(r"^(20\d{6})")
 def extract_time_str(file_name: str) -> str:
     """从文件名中提取时间字符串"""
     fname = str(file_name).lower()
+    # 标准命名 2026-08-19_20-15-30_标题（_ 或 - 分隔日期与时间）
+    m = STANDARD_DT_PATTERN.search(fname)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
     m = TIME_HHMMSS_PATTERN.search(fname)
     if m:
         return m.group(1)

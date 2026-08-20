@@ -93,6 +93,18 @@ def fetch_room_info(room_num):
                 stats = room.get("stats") or {}
                 if stats.get("user_count_str"):
                     info["online"] = stats["user_count_str"]
+                # 封面 / 主播头像（弹幕姬左栏展示）
+                cover = room.get("cover_url") or {}
+                if isinstance(cover, dict):
+                    cover = cover.get("url_list") or [""]
+                cover_url = cover[0] if isinstance(cover, (list, tuple)) and cover else (cover or "")
+                if cover_url:
+                    info["cover"] = cover_url
+                avatar = owner.get("avatar_thumb") or {}
+                if isinstance(avatar, dict):
+                    av_list = avatar.get("url_list") or []
+                    if av_list:
+                        info["avatar"] = av_list[0]
                 # 粉丝数 / 累计观看（字段名兼容多种）
                 fans = _pick(owner, "follower_count", "followers") or _pick(stats, "follower_count")
                 if fans is not None:
@@ -440,12 +452,13 @@ async (args) => {
       else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
     return null;
   }
-  function parseGiftName(b){ // 解析 GiftStruct，返回 name（field 16）
-    const r=makeReader(b);
+  function parseGift(b){ // 解析 GiftStruct，返回 {name(field 16), price(field 9 diamondCount 抖币)}
+    const r=makeReader(b);let name=null,price=null;
     while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r.varint());if(f===16){const s=r.str(l);return s;}r.skip(l);}
-      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return null;
+      if(w===0){const v=r.varint();if(f===9)price=Number(v);}
+      else if(w===2){const l=Number(r.varint());if(f===16){name=r.str(l);}else r.skip(l);}
+      else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
+    return{name,price};
   }
   function parseText(b){ // 解析 Text，返回 defaultPattern（field 2，礼物显示名）
     const r=makeReader(b);
@@ -474,19 +487,28 @@ async (args) => {
     const type=method||'';
 
     // 2. 解析 payload（各消息类型 user 字段号不同：Chat/Social/Member=2, Gift=7, Like=5）
-    const userField=(type==='WebcastGiftMessage')?7:(type==='WebcastLikeMessage')?5:2;
+    // 仅对已知用户消息类型解析昵称，其它类型 field 2 非 User 结构（解析出乱码）
+    const userFieldMap={WebcastGiftMessage:7,WebcastLikeMessage:5,WebcastChatMessage:2,WebcastMemberMessage:2,WebcastSocialMessage:2,WebcastEmojiChatMessage:2};
+    const userField=userFieldMap[type];
     const r=makeReader(payload);
-    let nickname=null,content=null,giftName=null,comboCount=null,repeatCount=null,action=null,trayText=null;
+    let nickname=null,content=null,giftName=null,giftPrice=null,comboCount=null,repeatCount=null,action=null,trayText=null;
+    let repeatEnd=null,giftCount=null,likeTotal=null,likeCount=null,followCount=null,roomTotal=null,roomTotalUser=null,memberCount=null;
     while(r.pos<payload.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===0){const v=r.varint();if(f===6)comboCount=v;else if(f===5)repeatCount=v;}
+      if(w===0){const v=r.varint();
+        if(f===5){if(type==='WebcastGiftMessage')repeatCount=v;}
+        else if(f===6){if(type==='WebcastGiftMessage')comboCount=v;else if(type==='WebcastSocialMessage')followCount=v;}
+        else if(f===2){if(type==='WebcastGiftMessage')giftCount=v;else if(type==='WebcastLikeMessage')likeCount=v;}
+        else if(f===3){if(type==='WebcastLikeMessage')likeTotal=v;else if(type==='WebcastRoomUserSeqMessage')roomTotal=v;else if(type==='WebcastMemberMessage')memberCount=v;}
+        else if(f===7){if(type==='WebcastRoomUserSeqMessage')roomTotalUser=v;}
+        else if(f===9){if(type==='WebcastGiftMessage')repeatEnd=v;}}
       else if(w===2){const l=Number(r.varint());const d=payload.slice(r.pos,r.pos+l);r.skip(l);
         if(f===userField){nickname=parseUser(d);}
-        else if(f===3){content=new TextDecoder('utf-8',{fatal:false}).decode(d);}
-        else if(f===15){giftName=parseGiftName(d);}
+        else if(f===3&&type!=='WebcastLikeMessage'&&type!=='WebcastRoomUserSeqMessage'){content=new TextDecoder('utf-8',{fatal:false}).decode(d);}
+        else if(f===8&&type==='WebcastRoomUserSeqMessage'){roomTotalUser=new TextDecoder('utf-8',{fatal:false}).decode(d);}
+        else if(f===15&&type==='WebcastGiftMessage'){const g=parseGift(d);if(g.name)giftName=g.name;if(g.price!=null)giftPrice=g.price;}
         else if(f===11){action=new TextDecoder('utf-8',{fatal:false}).decode(d);}
         else if(f===19){trayText=parseText(d);}
-        else if(f===21){const t=parseTrayInfo(d);if(t)trayText=t;}
-      }
+        else if(f===21){const t=parseTrayInfo(d);if(t)trayText=t;}}
       else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
     // 3. 根据类型构建内容
     let outContent='';
@@ -497,10 +519,13 @@ async (args) => {
     }else if(type==='WebcastMemberMessage'){
       outContent=action||'进入直播间';
     }else if(type==='WebcastLikeMessage'){
-      outContent='为主播点赞了';
+      outContent='为主播点赞了('+(likeCount!=null?likeCount:1)+')';
     }else if(type==='WebcastSocialMessage'){
       outContent='关注了主播';
     }else if(type==='WebcastChatMessage'||type==='WebcastEmojiChatMessage'){
+      outContent=content||'';
+    }else if(type==='WebcastRoomStatsMessage'){
+      // 房间实时统计：displayMiddle(field 3) 已进 content，如 "1.2万"
       outContent=content||'';
     }else{
       // 系统消息等：提取有意义的中文短语，过滤 JSON 噪音 + 截断
@@ -513,7 +538,11 @@ async (args) => {
       outContent=parts[0]||'';
       if(outContent.length>40)outContent=outContent.slice(0,40)+'…';
     }
-    return{type,nickname,content:outContent};
+    return{type,nickname,content:outContent,
+      giftName:giftName,giftPrice:giftPrice,repeatEnd:repeatEnd,
+      giftCount:(repeatCount!=null?repeatCount:(comboCount!=null?comboCount:1)),
+      likeTotal:likeTotal,likeCount:likeCount,followCount:followCount,
+      roomTotal:roomTotal,roomTotalUser:roomTotalUser,memberCount:memberCount};
   }
 
   out.signature = window.byted_acrawler.frontierSign({'X-MS-STUB':md5hex})['X-Bogus'];
@@ -559,7 +588,7 @@ async (args) => {
           for (const m of res.messages) {
             const e = extractMsg(m);
             if (e.type) {
-              window.__queue.push({type:e.type, nickname:e.nickname, content:e.content});
+              window.__queue.push(e);
             }
           }
         } catch(e){}
@@ -640,7 +669,10 @@ class DouyinLiveFetcher:
         if name == "关注":
             return f"[{nickname}]：关注了主播" if nickname else "关注了主播"
         if name == "点赞":
-            return f"[{nickname}]：为主播点赞了" if nickname else "为主播点赞了"
+            # content 已含次数：为主播点赞了(N)
+            if nickname:
+                return f"[{nickname}]：{content or '为主播点赞了'}"
+            return content or "为主播点赞了"
         # 弹幕 / 礼物 / 表情弹幕 / 其他
         if nickname and content:
             return f"[{nickname}]：{content}"
@@ -733,7 +765,10 @@ class DouyinLiveFetcher:
                         content = m.get("content", "")
                         line = self._format_line(name, nickname, content)
                         if line:
-                            self._emit(self.on_message, name, line)
+                            self._emit(self.on_message, name, line, m)
+                        else:
+                            # 统计类消息可能无正文，但仍需更新 UI（在线数/点赞总数等）
+                            self._emit(self.on_message, name, "", m)
                     try:
                         if page.evaluate(_WS_CLOSED_JS):
                             self._emit(self.on_status, "disconnected", "连接已断开")
