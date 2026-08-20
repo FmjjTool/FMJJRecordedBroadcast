@@ -93,8 +93,8 @@ def fetch_room_info(room_num):
                 stats = room.get("stats") or {}
                 if stats.get("user_count_str"):
                     info["online"] = stats["user_count_str"]
-                # 封面 / 主播头像（弹幕姬左栏展示）
-                cover = room.get("cover_url") or {}
+                # 封面 / 主播头像（弹幕姬左栏展示；web 端字段为 cover，兼容 cover_url）
+                cover = room.get("cover") or room.get("cover_url") or {}
                 if isinstance(cover, dict):
                     cover = cover.get("url_list") or [""]
                 cover_url = cover[0] if isinstance(cover, (list, tuple)) and cover else (cover or "")
@@ -430,7 +430,7 @@ async (args) => {
   const heartbeat = () => encPushFrame({payloadType:'hb'});
   const ackMsg = (ext,logId) => encPushFrame({payloadType:'ack', payload:new TextEncoder().encode(ext||''), logId});
 
-  function makeReader(b){let p=0;return{varint(){let r=0n,s=0n;while(true){const x=b[p++];r|=BigInt(x&0x7f)<<s;if(!(x&0x80))break;s+=7n;}return r;},str(l){const s=new TextDecoder().decode(b.slice(p,p+l));p+=l;return s;},skip(n){p+=n;},get pos(){return p;}};}
+  function makeReader(b){let p=0;return{varint(){let r=0n,s=0n;while(true){const x=b[p++];r|=BigInt(x&0x7f)<<s;if(!(x&0x80))break;s+=7n;}return r;},str(l){const s=new TextDecoder().decode(b.slice(p,p+l));p+=l;return s;},take(l){const s=b.slice(p,p+l);p+=l;return s;},skip(n){p+=n;},get pos(){return p;}};}
   function decodePushFrame(b){const r=makeReader(b);let logId=null,payloadType=null,payload=null;const headers={};
     while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
       if(w===0){const v=r.varint();if(f===2)logId=v;}
@@ -452,13 +452,43 @@ async (args) => {
       else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
     return null;
   }
-  function parseGift(b){ // 解析 GiftStruct，返回 {name(field 16), price(field 9 diamondCount 抖币)}
-    const r=makeReader(b);let name=null,price=null;
+  function parseImageUrl(b){ // 解析 Image，返回 urlList[0]（field 1）
+    const r=makeReader(b);
+    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
+      if(w===2){const l=Number(r.varint());if(f===1){const s=r.str(l);return s;}r.skip(l);}
+      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
+    return null;
+  }
+  function parseGift(b){ // 解析 GiftStruct：name(16)/diamondCount(9)/image(1→Image.urlList[0])
+    const r=makeReader(b);let name=null,price=null,icon=null;
     while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
       if(w===0){const v=r.varint();if(f===9)price=Number(v);}
-      else if(w===2){const l=Number(r.varint());if(f===16){name=r.str(l);}else r.skip(l);}
+      else if(w===2){const l=Number(r.varint());
+        if(f===16)name=r.str(l);
+        else if(f===1)icon=parseImageUrl(r.take(l));
+        else r.skip(l);}
       else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return{name,price};
+    return{name,price,icon};
+  }
+  function parsePieces(b){ // 解析 Text.pieces(4)：[{type:1 text stringValue=11} | {type:2 emoji imageValue=25→image=1}]
+    const r=makeReader(b);const out=[];
+    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
+      if(w===2){const l=Number(r.varint());const d=r.take(l);
+        if(f===4){const pr=makeReader(d);let ptype=null,str=null,img=null;
+          while(pr.pos<d.length){const t2=Number(pr.varint());const f2=t2>>3,w2=t2&7;
+            if(w2===0){const v=pr.varint();if(f2===1)ptype=Number(v);}
+            else if(w2===2){const l2=Number(pr.varint());
+              if(f2===11)str=pr.str(l2);
+              else if(f2===25){const imgb=pr.take(l2);const ir=makeReader(imgb);
+                while(ir.pos<imgb.length){const t3=Number(ir.varint());const f3=t3>>3,w3=t3&7;
+                  if(w3===2){const l3=Number(ir.varint());if(f3===1)img=ir.str(l3);else ir.skip(l3);}
+                  else if(w3===0)ir.varint();else if(w3===1)ir.skip(8);else if(w3===5)ir.skip(4);else break;}}
+              else pr.skip(l2);}
+            else if(w2===1)pr.skip(8);else if(w2===5)pr.skip(4);else break;}
+          if(img)out.push({type:2,url:img,text:str||''});
+          else if(str!=null)out.push({type:1,text:str});}}
+      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
+    return out;
   }
   function parseText(b){ // 解析 Text，返回 defaultPattern（field 2，礼物显示名）
     const r=makeReader(b);
@@ -491,8 +521,8 @@ async (args) => {
     const userFieldMap={WebcastGiftMessage:7,WebcastLikeMessage:5,WebcastChatMessage:2,WebcastMemberMessage:2,WebcastSocialMessage:2,WebcastEmojiChatMessage:2};
     const userField=userFieldMap[type];
     const r=makeReader(payload);
-    let nickname=null,content=null,giftName=null,giftPrice=null,comboCount=null,repeatCount=null,action=null,trayText=null;
-    let repeatEnd=null,giftCount=null,likeTotal=null,likeCount=null,followCount=null,roomTotal=null,roomTotalUser=null,memberCount=null;
+    let nickname=null,content=null,giftName=null,giftPrice=null,giftIcon=null,comboCount=null,repeatCount=null,action=null,trayText=null;
+    let repeatEnd=null,giftCount=null,likeTotal=null,likeCount=null,followCount=null,roomTotal=null,roomTotalUser=null,memberCount=null,rtf=null;
     while(r.pos<payload.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
       if(w===0){const v=r.varint();
         if(f===5){if(type==='WebcastGiftMessage')repeatCount=v;}
@@ -505,10 +535,12 @@ async (args) => {
         if(f===userField){nickname=parseUser(d);}
         else if(f===3&&type!=='WebcastLikeMessage'&&type!=='WebcastRoomUserSeqMessage'){content=new TextDecoder('utf-8',{fatal:false}).decode(d);}
         else if(f===8&&type==='WebcastRoomUserSeqMessage'){roomTotalUser=new TextDecoder('utf-8',{fatal:false}).decode(d);}
-        else if(f===15&&type==='WebcastGiftMessage'){const g=parseGift(d);if(g.name)giftName=g.name;if(g.price!=null)giftPrice=g.price;}
+        else if(f===15&&type==='WebcastGiftMessage'){const g=parseGift(d);if(g.name)giftName=g.name;if(g.price!=null)giftPrice=g.price;if(g.icon)giftIcon=g.icon;}
         else if(f===11){action=new TextDecoder('utf-8',{fatal:false}).decode(d);}
         else if(f===19){trayText=parseText(d);}
-        else if(f===21){const t=parseTrayInfo(d);if(t)trayText=t;}}
+        else if(f===21){const t=parseTrayInfo(d);if(t)trayText=t;}
+        else if(f===41&&type==='WebcastChatMessage'){rtf=parsePieces(d);}
+        else if(f===4&&type==='WebcastEmojiChatMessage'){rtf=parsePieces(d);}}
       else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
     // 3. 根据类型构建内容
     let outContent='';
@@ -539,10 +571,11 @@ async (args) => {
       if(outContent.length>40)outContent=outContent.slice(0,40)+'…';
     }
     return{type,nickname,content:outContent,
-      giftName:giftName,giftPrice:giftPrice,repeatEnd:repeatEnd,
+      giftName:giftName,giftPrice:giftPrice,giftIcon:giftIcon,repeatEnd:repeatEnd,
       giftCount:(repeatCount!=null?repeatCount:(comboCount!=null?comboCount:1)),
       likeTotal:likeTotal,likeCount:likeCount,followCount:followCount,
-      roomTotal:roomTotal,roomTotalUser:roomTotalUser,memberCount:memberCount};
+      roomTotal:roomTotal,roomTotalUser:roomTotalUser,memberCount:memberCount,
+      rtf:(rtf&&rtf.length?rtf:null)};
   }
 
   out.signature = window.byted_acrawler.frontierSign({'X-MS-STUB':md5hex})['X-Bogus'];

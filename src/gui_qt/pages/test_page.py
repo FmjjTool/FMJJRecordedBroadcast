@@ -7,14 +7,17 @@
 - 真实抓取：DouyinLiveFetcher / StatsCollector / LiveMonitor
 """
 
+import html
+import os
 import time
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout,
+    QTableWidgetItem, QTextBrowser, QVBoxLayout,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -153,7 +156,7 @@ class TestPage(BasePage):
         # 封面 + 保存按钮
         cover_row = QHBoxLayout()
         self.cover_label = QLabel("暂无封面")
-        self.cover_label.setFixedSize(80, 80)
+        self.cover_label.setFixedSize(96, 96)
         self.cover_label.setAlignment(Qt.AlignCenter)
         self.cover_label.setStyleSheet(
             "background: #1a1d27; border-radius: 6px; color: #555;")
@@ -215,9 +218,10 @@ class TestPage(BasePage):
         self.chat_var.setChecked(True)
         head.addWidget(self.chat_var)
         v.addLayout(head)
-        self.chat_gift_box = QPlainTextEdit()
-        self.chat_gift_box.setReadOnly(True)
-        self.chat_gift_box.setPlainText("（暂无弹幕/礼物）")
+        self.chat_gift_box = QTextBrowser()
+        self.chat_gift_box.setOpenExternalLinks(False)
+        self.chat_gift_box.setStyleSheet(
+            "QTextBrowser { background: #14161f; border: none; color: #d7dae0; }")
         v.addWidget(self.chat_gift_box, 1)
         parent.addWidget(card, 2)
 
@@ -285,8 +289,13 @@ class TestPage(BasePage):
         self.gift_table.verticalHeader().setVisible(False)
         self.gift_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.gift_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.gift_table.setAlternatingRowColors(True)
         self.gift_table.setFocusPolicy(Qt.NoFocus)
+        self.gift_table.setStyleSheet(
+            "QTableWidget { background: #1a1d27; color: #d7dae0; border: none;"
+            " gridline-color: #242938; font-size: 11px; }"
+            "QTableWidget::item { padding: 2px 4px; }"
+            "QHeaderView::section { background: #1a1d27; color: #888; border: none;"
+            " border-bottom: 1px solid #242938; padding: 3px 4px; font-size: 11px; }")
         hh = self.gift_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -387,8 +396,67 @@ class TestPage(BasePage):
         v.addWidget(save_btn)
         dlg.exec()
 
+    def _set_cover(self, url):
+        """后台下载直播间封面（无封面用主播头像），显示到左栏。"""
+        if not url:
+            return
+        import httpx
+
+        def work():
+            try:
+                r = httpx.get(url, timeout=15, follow_redirects=True,
+                              headers={"User-Agent": "Mozilla/5.0"})
+                return r.content if r.status_code == 200 else None
+            except Exception:
+                return None
+
+        def done(data, err=None):
+            if err or not data:
+                return
+            self._cover_bytes = data
+            pix = QPixmap()
+            if not pix.loadFromData(data):
+                return
+            pix = pix.scaled(96, 96, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            if pix.width() > 96 or pix.height() > 96:
+                pix = pix.copy((pix.width() - 96) // 2, (pix.height() - 96) // 2, 96, 96)
+            self.cover_label.setPixmap(pix)
+
+        run_bg(work, done)
+
     def _save_cover(self):
-        self.app.toast("已保存主播封面与数据（模拟）", "success")
+        """保存封面图 + 主播数据文本到导出目录。"""
+        out_dir = self.app.export_dir if hasattr(self.app, "export_dir") else "."
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError:
+            out_dir = "."
+        saved = []
+        if getattr(self, "_cover_bytes", None):
+            path = os.path.join(out_dir, f"{self.room_entry.text().strip() or 'room'}_cover.png")
+            try:
+                with open(path, "wb") as f:
+                    f.write(self._cover_bytes)
+                saved.append(os.path.basename(path))
+            except OSError:
+                pass
+        lines = [f"保存时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                 f"房间号: {self.room_entry.text().strip()}"]
+        for text, key in [("主播", "anchor_name"), ("粉丝数", "anchor_fans"),
+                          ("在线观众数", "online_count"), ("累计观看人数", "total_viewers"),
+                          ("本场点赞数", "like_count")]:
+            lines.append(f"{text}: {self.anchor_fields[key].text()}")
+        txt_path = os.path.join(out_dir, f"{self.room_entry.text().strip() or 'room'}_主播数据.txt")
+        try:
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            saved.append(os.path.basename(txt_path))
+        except OSError:
+            pass
+        if saved:
+            self.app.toast(f"已保存: {', '.join(saved)} → {out_dir}", "success")
+        else:
+            self.app.toast("保存失败（封面未加载且数据写入失败）", "error")
 
     def _relay(self):
         self.app.toast("WS 转发已启动（模拟）", "info")
@@ -428,8 +496,11 @@ class TestPage(BasePage):
         self.status_label.setText(f"连接中 · 房间 {room}")
         self.status_label.setStyleSheet("color: #eab308;")
         # 清空两个弹幕框的初始占位
-        self.chat_gift_box.setPlainText("")
+        self.chat_gift_box.clear()
         self.event_box.setPlainText("")
+        # 重置封面占位
+        self._cover_bytes = None
+        self.cover_label.setText("暂无封面")
         # 重置主播信息占位
         for key in ("anchor_name", "anchor_fans", "online_count", "total_viewers"):
             self.anchor_fields[key].setText("…")
@@ -626,6 +697,8 @@ class TestPage(BasePage):
                 self.anchor_fields["like_count"].setText(info["like_count"])
             if info.get("title"):
                 self._append(self.event_box, f"[房间] {info['title']}")
+            # 封面：无封面时退回主播头像
+            self._set_cover(info.get("cover") or info.get("avatar"))
         post_to_main(apply)
 
     def _on_message(self, name, text, m=None):
@@ -646,10 +719,10 @@ class TestPage(BasePage):
                 # 打赏榜：礼物数累计、价值=数量×抖币价，与弹幕姬一致
                 self._add_gift_rank(m, t)
                 if self.gift_var.isChecked():
-                    self._append(self.chat_gift_box, f"{ts} 🎁 {text}")
+                    self._append_html(self.chat_gift_box, self._gift_html(ts, m))
             elif name in ("弹幕", "表情弹幕"):
                 if self.chat_var.isChecked():
-                    self._append(self.chat_gift_box, f"{ts} {text}")
+                    self._append_html(self.chat_gift_box, self._chat_html(ts, m, text))
             elif name == "进场":
                 if m.get("memberCount"):
                     set_field("online_count", m["memberCount"])
@@ -723,6 +796,36 @@ class TestPage(BasePage):
                     item.setTextAlignment(Qt.AlignCenter)
                 self.gift_table.setItem(i, c, item)
 
+    @staticmethod
+    def _ts_html(ts):
+        return f'<span style="color:#6b7280">{ts}</span>'
+
+    def _chat_html(self, ts, m, text):
+        """弹幕行：富文本表情直接内嵌抖音 CDN 图片，无 rtf 退回纯文本。"""
+        parts = []
+        for p in (m.get("rtf") or []):
+            if p.get("url"):
+                alt = html.escape(p.get("text") or "表情")
+                parts.append(f'<img src="{html.escape(p["url"])}" height="20" alt="[{alt}]">')
+            elif p.get("text"):
+                parts.append(html.escape(p["text"]))
+        body = "".join(parts) or html.escape(m.get("content") or text or "")
+        nick = m.get("nickname") or ""
+        nick_h = f'<b style="color:#e8eaf0">{html.escape(nick)}：</b>' if nick else ""
+        return f"{self._ts_html(ts)} {nick_h}{body}"
+
+    def _gift_html(self, ts, m):
+        """礼物行：抖音礼物图标 + 名称 xN。"""
+        icon = m.get("giftIcon") or ""
+        icon_h = ""
+        if icon:
+            alt = html.escape(m.get("giftName") or "礼物")
+            icon_h = f'<img src="{html.escape(icon)}" height="22" alt="{alt}"> '
+        nick = m.get("nickname") or ""
+        nick_h = f'<b style="color:#ffd54f">{html.escape(nick)}：</b>' if nick else ""
+        body = html.escape(m.get("content") or "")
+        return f'{self._ts_html(ts)} 🎁 {nick_h}{icon_h}<span style="color:#ffd54f">{body}</span>'
+
     def _on_status(self, status, msg):
         """后台线程回调：连接状态变化。"""
         def apply():
@@ -774,11 +877,18 @@ class TestPage(BasePage):
 
     def _clear_all(self):
         """总清除：清空中间 + 右侧两个弹幕框。"""
-        self.chat_gift_box.setPlainText("")
+        self.chat_gift_box.clear()
         self.event_box.setPlainText("")
 
     def _append(self, box, text):
         box.appendPlainText(text)
         if self.settings.get("keep_scroll", True):
             sb = box.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def _append_html(self, box, html_str):
+        sb = box.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 8
+        box.append(html_str)
+        if self.settings.get("keep_scroll", True) or at_bottom:
             sb.setValue(sb.maximum())
