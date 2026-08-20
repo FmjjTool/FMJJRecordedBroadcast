@@ -5,35 +5,57 @@
 - 设置 tab：每项 名称/路径 输入（实时同步）+ 图标预览与选择 + 上移/下移/删除
   + 添加软件 / 添加链接 / 保存并刷新面板
 - 启动：http/https 链接 → 浏览器；文件 → os.startfile（不存在则警告）
+- 跟随进程树：勾选后启动的软件纳入 Job Object，本工具退出时整棵进程树一并关闭
 """
 
 import os
+import subprocess
 import webbrowser
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.pages.base import BasePage
+from gui_qt.process_tree import assign_job, create_kill_job, terminate_job
 
 
 class LauncherPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.items = load_convert_config().get("launcher_items", [])
+        # 已链接进程树的任务列表 [(job 或 None, proc 或 None), ...]
+        self._linked = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
+
+        # 进程树控制行
+        tree_row = QHBoxLayout()
+        self.link_tree_var = QCheckBox(
+            "跟随进程树（启动的软件纳入进程树：本工具退出时一并关闭全部子进程）")
+        self.link_tree_var.setChecked(True)
+        tree_row.addWidget(self.link_tree_var)
+        self.stop_all_btn = QPushButton("⏹ 停止已链接软件")
+        self.stop_all_btn.setStyleSheet("background: #c62828; color: white; padding: 4px 12px;")
+        self.stop_all_btn.clicked.connect(self._stop_all_linked)
+        tree_row.addWidget(self.stop_all_btn)
+        self.linked_lbl = QLabel("", styleSheet="color: #888; font-size: 11px;")
+        tree_row.addWidget(self.linked_lbl)
+        tree_row.addStretch(1)
+        layout.addLayout(tree_row)
+
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_panel(), "功能")
         self.tabs.addTab(self._build_config(), "设置")
         self._refresh_panel()
+        self._refresh_linked_lbl()
 
     # ==================== 功能 tab（4×3 面板） ====================
 
@@ -100,10 +122,84 @@ class LauncherPage(BasePage):
             except Exception as e:
                 QMessageBox.warning(self, "打开失败", str(e))
             return
-        if os.path.isfile(path):
-            os.startfile(path)  # noqa: S606 (Windows)
-        else:
+        if not os.path.isfile(path):
             QMessageBox.warning(self, "无法启动", f"文件不存在:\n{path}")
+            return
+        if self.link_tree_var.isChecked():
+            self._launch_linked(path)
+        else:
+            os.startfile(path)  # noqa: S606 (Windows) 独立运行，不随本工具退出
+
+    def _launch_linked(self, path):
+        """纳入进程树启动：exe 直接 Popen；bat/cmd 经 cmd /c；其余退回 startfile。"""
+        try:
+            if path.lower().endswith((".exe", ".com")):
+                proc = subprocess.Popen([path])
+            elif path.lower().endswith((".bat", ".cmd")):
+                proc = subprocess.Popen(
+                    ["cmd", "/c", path], cwd=os.path.dirname(path),
+                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+            else:
+                # 文档等非可执行文件无法纳入 Job → 独立打开
+                os.startfile(path)  # noqa: S606 (Windows)
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "启动失败", str(e))
+            return
+        job = create_kill_job()
+        if job and assign_job(job, proc):
+            self._linked.append((job, proc))
+            self.app.toast(f"已启动（跟随进程树）: {os.path.basename(path)}", "success")
+        else:
+            # Job 绑定失败：退化为 taskkill /T 兜底跟踪
+            if job:
+                terminate_job(job)
+            self._linked.append((None, proc))
+            self.app.toast(f"已启动（进程树链接降级）: {os.path.basename(path)}", "warning")
+        self._refresh_linked_lbl()
+
+    def _refresh_linked_lbl(self):
+        # 清理已退出的任务
+        self._linked = [(job, p) for job, p in self._linked
+                        if p.poll() is None]
+        n = len(self._linked)
+        self.linked_lbl.setText(f"已链接 {n} 个进程" if n else "")
+        self.stop_all_btn.setEnabled(n > 0)
+
+    def _stop_all_linked(self):
+        """手动停止：终止全部已链接进程树。"""
+        for job, proc in self._linked:
+            if job is not None:
+                terminate_job(job)
+            else:
+                try:
+                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
+        self._linked = []
+        self._refresh_linked_lbl()
+        self.app.toast("已链接软件进程树已全部终止", "success")
+
+    def shutdown(self):
+        """软件退出：跟随进程树的软件整树一并关闭（父关子关）。"""
+        self._stop_all_linked_silent()
+
+    def _stop_all_linked_silent(self):
+        for job, proc in self._linked:
+            if job is not None:
+                terminate_job(job)
+            else:
+                try:
+                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
+        self._linked = []
+
+    def on_show(self):
+        # 切回页面时同步已链接进程状态（软件可能已被用户手动关闭）
+        self._refresh_linked_lbl()
 
     # ==================== 设置 tab（配置管理） ====================
 

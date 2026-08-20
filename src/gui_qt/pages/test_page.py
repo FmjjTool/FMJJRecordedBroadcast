@@ -79,13 +79,12 @@ class TestPage(BasePage):
                                styleSheet="color: #888; font-size: 11px;"))
 
         # ===== 顶栏：全局控制 =====
+        # Cookie 说明：凭证统一由侧栏「Cookie 管理」维护（总开关+账号池），
+        # 连接时自动套用其中的抖音 Cookie，本页不再单独提供登录入口。
         top = QFrame()
         top.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
         top_l = QHBoxLayout(top)
         top_l.setContentsMargins(10, 6, 10, 6)
-        cookie_btn = QPushButton("🔑 Cookie 登录")
-        cookie_btn.clicked.connect(self._open_cookie)
-        top_l.addWidget(cookie_btn)
         self.poll_var = QCheckBox("轮询")
         self.poll_var.setChecked(True)
         self.poll_var.setToolTip(
@@ -145,10 +144,9 @@ class TestPage(BasePage):
         self.monitor_status.setStyleSheet("color: #888; font-size: 11px;")
         tb.addWidget(self.monitor_status)
         tb.addStretch(1)
-        login_btn = QPushButton("🔐 登录抖音")
-        login_btn.setStyleSheet("background: #2a5a8c; color: white;")
-        login_btn.clicked.connect(self._login_douyin)
-        tb.addWidget(login_btn)
+        cookie_hint = QLabel("Cookie 由侧栏「Cookie 管理」统一提供（自动套用）",
+                             styleSheet="color: #666; font-size: 11px;")
+        tb.addWidget(cookie_hint)
         outer.addWidget(toolbar)
 
         # ===== 主体三栏 =====
@@ -245,7 +243,7 @@ class TestPage(BasePage):
         self.now_label = QLabel("--")
         self.now_label.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.now_label)
-        for txt in ("抖音：欲墓", "微博：欲墓XINMU", "b站：欲墓XINMU"):
+        for txt in ("抖音：歆慕", "微博：歆慕XINMU", "b站：歆慕XINMU"):
             v.addWidget(QLabel(txt, styleSheet="color: #888; font-size: 11px;"))
         v.addWidget(QLabel("使用信息请标明来源", styleSheet="color: #666; font-size: 10px;"))
         v.addStretch(1)
@@ -1079,13 +1077,6 @@ class TestPage(BasePage):
         parent.addWidget(card, 2)
 
     # ======================== 动作 ========================
-    def _open_cookie(self):
-        """打开主窗口的 Cookie 管理对话框。"""
-        if hasattr(self.app, "_open_cookie_manager"):
-            self.app._open_cookie_manager()
-        else:
-            self.app.toast("Cookie 登录请通过侧栏 🍪 Cookie 按钮管理", "info")
-
     def _open_settings(self):
         s = self.settings
         dlg = QDialog(self)
@@ -1279,6 +1270,17 @@ class TestPage(BasePage):
             on_room_info=self._on_room_info,
             on_status=self._on_status,
         )
+        # 轮询重连竞态防护：旧抓取线程 stop 后仍会异步发 disconnected/error，
+        # 若已是新实例则忽略，避免把新连接状态又改回“已断开”
+        cur = self.fetcher
+        orig_status = cur.on_status
+
+        def guarded_status(status, msg):
+            if self.fetcher is not cur and status in ("disconnected", "error"):
+                return
+            orig_status(status, msg)
+
+        cur.on_status = guarded_status
         self.fetcher.start()
         # 启动统计数据采集（若开启保存统计）
         if self.save_stats_var.isChecked():
@@ -1297,16 +1299,18 @@ class TestPage(BasePage):
         if self.stats_collector:
             self.stats_collector.stop()
             self.stats_collector = None
-        self.connect_btn.setEnabled(True)
-        self.connect_btn2.setEnabled(True)
-        self.disconnect_btn.setEnabled(False)
-        self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
-        self.status_label.setText("已断开")
-        self.status_label.setStyleSheet("color: #888;")
+        # 手动断开：停视频预览（彻底断开房间），且不再自动重连
         if not self._polling:
-            # 手动断开：自动保存弹幕 + 重置清晰度选择（下次连接默认最高流）
+            self._stop_live_preview()
+            self._auto_stopped = False
             self._quality_manual = False
             self.like_label.setText("0")
+            self.connect_btn.setEnabled(True)
+            self.connect_btn2.setEnabled(True)
+            self.disconnect_btn.setEnabled(False)
+            self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
+            self.status_label.setText("已断开")
+            self.status_label.setStyleSheet("color: #888;")
             if self.settings.get("auto_save_danmaku", True):
                 self._auto_save_danmaku()
 
@@ -1440,22 +1444,6 @@ class TestPage(BasePage):
         interval = max(10, int(self.settings.get("monitor_interval", 30)))
         self.live_monitor = LiveMonitor(room, interval, on_change=self._on_live_change)
         self.live_monitor.start()
-
-    def _login_douyin(self):
-        """复用 Cookie 管理器的浏览器登录（auth.browser_login，自动检测3分钟）。"""
-        def work():
-            from auth import douyin_browser_login
-            return douyin_browser_login()
-
-        def done(result, err):
-            if err:
-                self.app.toast(f"登录失败: {err}", "error")
-            elif result:
-                self.app.toast("抖音登录成功，Cookie 已保存", "success")
-            else:
-                self.app.toast("未检测到登录（3分钟超时），请重试", "warning")
-
-        run_bg(work, done)
 
     def _show_captcha_dialog(self):
         """风控验证窗口：提示用户过完验证码后点「继续」。"""

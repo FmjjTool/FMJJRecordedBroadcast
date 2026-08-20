@@ -7,13 +7,11 @@
 - 打开项目目录 + 使用说明
 """
 
-import ctypes
 import functools
 import http.server
 import os
 import socket
 import subprocess
-import sys
 import threading
 
 from PySide6.QtWidgets import (
@@ -24,6 +22,7 @@ from toolbox.config_manager import get_app_root
 
 from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
+from gui_qt.process_tree import assign_job, create_kill_job, terminate_job
 
 
 def _find_dycast_dir():
@@ -41,76 +40,6 @@ def _find_dycast_dir():
     if os.path.isdir(sibling):
         return sibling
     return None
-
-
-# ==================== Windows Job Object（进程树父关子关） ====================
-_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
-_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
-
-
-def _create_kill_job():
-    """创建 Job Object：句柄关闭或 Terminate 时整棵进程树终止（父关子关）。"""
-    if sys.platform != "win32":
-        return None
-
-    class _Basic(ctypes.Structure):
-        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
-                    ("PerJobUserTimeLimit", ctypes.c_int64),
-                    ("LimitFlags", ctypes.c_uint32),
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),
-                    ("ActiveProcessLimit", ctypes.c_uint32),
-                    ("Affinity", ctypes.c_void_p),
-                    ("PriorityClass", ctypes.c_uint32),
-                    ("SchedulingClass", ctypes.c_uint32)]
-
-    class _IoCounters(ctypes.Structure):
-        _fields_ = [(n, ctypes.c_uint64) for n in
-                    ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                     "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-
-    class _Extended(ctypes.Structure):
-        _fields_ = [("BasicLimitInformation", _Basic),
-                    ("IoInfo", _IoCounters),
-                    ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-    try:
-        kernel32 = ctypes.windll.kernel32
-        job = kernel32.CreateJobObjectW(None, None)
-        if not job:
-            return None
-        info = _Extended()
-        info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not kernel32.SetInformationJobObject(
-                job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                ctypes.byref(info), ctypes.sizeof(info)):
-            kernel32.CloseHandle(job)
-            return None
-        return job
-    except Exception:
-        return None
-
-
-def _assign_job(job, proc):
-    """把进程（及其后续子进程）纳入 Job Object。"""
-    try:
-        return bool(ctypes.windll.kernel32.AssignProcessToJobObject(job, int(proc._handle)))
-    except Exception:
-        return False
-
-
-def _terminate_job(job):
-    """终止整棵进程树并释放句柄。"""
-    try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.TerminateJobObject(job, 0)
-        kernel32.CloseHandle(job)
-        return True
-    except Exception:
-        return False
 
 
 class DycastPage(BasePage):
@@ -216,16 +145,16 @@ class DycastPage(BasePage):
         try:
             if linked:
                 # Job Object 进程树：cmd → node/vite 全部纳入，父关子关
-                job = _create_kill_job()
+                job = create_kill_job()
                 proc = subprocess.Popen(
                     ["cmd", "/c", bat], cwd=self.dycast_dir,
                     creationflags=subprocess.CREATE_NEW_CONSOLE)
-                if job and _assign_job(job, proc):
+                if job and assign_job(job, proc):
                     self._job, self._proc = job, proc
                 else:
                     # Job 绑定失败：退化为普通跟踪（关闭时 taskkill /T 兜底）
                     if job:
-                        _terminate_job(job)
+                        terminate_job(job)
                     self._job, self._proc = None, proc
                 self.stop_btn.setEnabled(True)
                 self.launch_btn.setEnabled(False)
@@ -265,7 +194,7 @@ class DycastPage(BasePage):
 
     def _cleanup_linked(self):
         if self._job is not None:
-            _terminate_job(self._job)
+            terminate_job(self._job)
             self._job = None
         elif self._proc is not None:
             # 无 Job（绑定失败兜底）：taskkill /T 杀整树

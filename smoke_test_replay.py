@@ -356,11 +356,12 @@ def main():
     page.connected = False
 
     print("== 16. dycast 进程树（Job Object 父关子关） ==")
-    from gui_qt.pages.dycast import DycastPage, _create_kill_job, _terminate_job
-    job = _create_kill_job()
+    from gui_qt.pages.dycast import DycastPage
+    from gui_qt.process_tree import create_kill_job, terminate_job
+    job = create_kill_job()
     check("Job Object 创建", bool(job))
     if job:
-        check("Job 终止+释放", _terminate_job(job))
+        check("Job 终止+释放", terminate_job(job))
     dp = DycastPage(FakeApp())
     check("链接进程树默认勾选", dp.link_tree_var.isChecked())
     check("启动时停止按钮禁用", not dp.stop_btn.isEnabled())
@@ -382,6 +383,113 @@ def main():
     dp._job = None
     dp.shutdown()
     check("shutdown 清理安全", dp._proc is None and dp._job is None)
+
+    print("== 17. 手动断开彻底停止（修复：断开后还会继续） ==")
+    from PySide6.QtWidgets import QLabel, QPushButton
+    fp = TestPage(FakeApp())
+    fp.connected = True
+    fp._timer_running = True
+    fp._auto_stopped = True   # 之前切走页面被自动断开过
+
+    class FakeStop:
+        def __init__(self):
+            self.calls = []
+
+        def stop(self):
+            self.calls.append("stop")
+
+    fetcher_spy = FakeStop()
+
+    class FakePlayer2:
+        def stop(self):
+            fetcher_spy.calls.append("player")
+
+    fp.fetcher = fetcher_spy
+    fp.video_player = FakePlayer2()
+    fp._polling = False
+    fp._disconnect()
+    check("断开停抓取线程", fetcher_spy.calls[:1] == ["stop"]
+          and "player" in fetcher_spy.calls and fp.fetcher is None)
+    check("断开停视频预览", fp.video_player is None)
+    check("断开重置自动重连标记", fp._auto_stopped is False)
+    calls3 = []
+    fp._connect = lambda: calls3.append("connect")
+    fp.on_show()
+    check("手动断开后切回页面不自动重连", calls3 == [])
+    # 文字修正 + 按钮移除
+    all_text = [l.text() for l in fp.findChildren(QLabel)] + \
+               [b.text() for b in fp.findChildren(QPushButton)]
+    check("错字修正为「歆慕」", any("歆慕" in t for t in all_text)
+          and not any("欲墓" in t for t in all_text))
+    check("「Cookie 登录」按钮已移除", not any("Cookie 登录" in t for t in all_text))
+    check("「登录抖音」按钮已移除", not any("登录抖音" in t for t in all_text))
+
+    print("== 18. 轮询重连竞态防护（旧实例回调隔离） ==")
+    import toolbox.douyin_live as dl_mod
+
+    class FakeFetcher:
+        def __init__(self, room, on_message=None, on_room_info=None, on_status=None):
+            self.on_status = on_status
+            self.stopped = False
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.stopped = True
+
+    orig_cls = dl_mod.DouyinLiveFetcher
+    dl_mod.DouyinLiveFetcher = FakeFetcher
+    try:
+        fp2 = TestPage(FakeApp())
+        fp2.save_stats_var.setChecked(False)
+        fp2.poll_var.setChecked(False)
+        fp2.room_entry.setText("123")
+        fp2._connect()
+        f1 = fp2.fetcher
+        f1.on_status("connected", "已连接 · 房间 123")
+        check("新实例连接状态生效", fp2.connected is True
+              and fp2.status_label.text().startswith("已连接"))
+        # 轮询重连：旧实例收尾回调不得影响新连接
+        fp2._polling = True
+        fp2._connect()
+        f2 = fp2.fetcher
+        check("重连产生新实例", f2 is not f1)
+        f1.on_status("disconnected", "已停止")
+        check("旧实例 disconnected 被忽略", fp2.connected is True)
+        check("状态不被旧回调改写", fp2.status_label.text() != "已停止")
+        f2.on_status("disconnected", "已停止")
+        check("新实例 disconnected 正常生效", fp2.connected is False)
+        fp2.shutdown()
+    finally:
+        dl_mod.DouyinLiveFetcher = orig_cls
+
+    print("== 19. 继续操作页：跟随进程树（父关子关） ==")
+    from gui_qt.pages.launcher import LauncherPage
+
+    def has_ping():
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq PING.EXE"],
+                             capture_output=True, text=True).stdout
+        return "PING.EXE" in out
+
+    lp = LauncherPage(FakeApp())
+    check("跟随进程树默认开启", lp.link_tree_var.isChecked())
+    bat = os.path.join(tmpdir, "tree_ping.bat")
+    with open(bat, "w") as f:
+        f.write("@echo off\r\nping -n 60 127.0.0.1 >nul\r\n")
+    lp._launch(bat)
+    check("启动纳入进程树", len(lp._linked) == 1 and lp._linked[0][0] is not None)
+    time.sleep(2)
+    check("子进程运行中", has_ping())
+    lp._stop_all_linked()
+    time.sleep(1)
+    check("停止后进程树全灭（父关子关）", not has_ping())
+    check("链接列表清空", len(lp._linked) == 0)
+    # 退出兜底
+    lp._launch(bat)
+    lp.shutdown()
+    time.sleep(1)
+    check("软件退出进程树全灭", not has_ping())
 
     # 清理
     try:
