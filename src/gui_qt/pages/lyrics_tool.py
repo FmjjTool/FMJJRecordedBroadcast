@@ -21,6 +21,9 @@ class LyricsToolPage(BasePage):
         super().__init__(app)
         self.converter = LyricConverter()
         self.input_files = []
+        self.krcd_files = []
+        self.work_dir = ""       # 用户指定的歌词工作目录
+        self._enter_stage = 0    # 回车快捷：0=待扫描，1=待转换
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -41,6 +44,9 @@ class LyricsToolPage(BasePage):
         frow.addWidget(QPushButton("📁 选择文件夹", clicked=self._select_folder))
         frow.addWidget(QPushButton("📂 指定工作目录", clicked=self._set_work_dir))
         frow.addWidget(QPushButton("📅 扫描日期子文件夹", clicked=self._scan_date_folders))
+        self.work_dir_label = QLabel("（未指定）")
+        self.work_dir_label.setStyleSheet("color: #888; font-size: 10px;")
+        frow.addWidget(self.work_dir_label)
         frow.addStretch(1)
         v.addLayout(frow)
         self.file_count_label = QLabel("未选择文件")
@@ -116,6 +122,7 @@ class LyricsToolPage(BasePage):
         bar = QHBoxLayout()
         bar.addWidget(QLabel("文件列表:"))
         bar.addWidget(QPushButton("☑ 全选", clicked=lambda: self._krcd_sel("all")))
+        bar.addWidget(QPushButton("🔄 反选", clicked=lambda: self._krcd_sel("invert")))
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._krcd_sel("none")))
         bar.addStretch(1)
         v.addLayout(bar)
@@ -123,16 +130,34 @@ class LyricsToolPage(BasePage):
         self.krcd_list.setMaximumHeight(140)
         v.addWidget(self.krcd_list)
 
+        run_row = QHBoxLayout()
         run = QPushButton("▶️ 执行")
         run.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
         run.clicked.connect(self._krcd_run)
-        v.addWidget(run)
+        run_row.addWidget(run)
+        self.krcd_result_label = QLabel("")
+        run_row.addWidget(self.krcd_result_label)
+        run_row.addStretch(1)
+        v.addLayout(run_row)
         self.krcd_log = QTextEdit()
         self.krcd_log.setReadOnly(True)
         v.addWidget(self.krcd_log, 1)
         return w
 
     # ---- 转换 tab ----
+    def on_return_press(self):
+        """按当前 tab 分发回车：KRCD工具 → 执行；转换 → 扫描/转换两段。"""
+        if self.tabs.currentIndex() == 1:
+            self._krcd_run()
+            return
+        if self._enter_stage == 0:
+            self._enter_stage = 1
+            self._scan_date_folders()
+            self._log("⏎ 再次按回车将按当前格式转换（或点「开始转换」）")
+        else:
+            self._enter_stage = 0
+            self._convert()
+
     def _set_fmt(self, v):
         self.fmt_var = v
 
@@ -143,19 +168,24 @@ class LyricsToolPage(BasePage):
         files, _ = QFileDialog.getOpenFileNames(self, "选择歌词文件", "", "歌词文件 (*.lrc *.krc *.ksc *.qrc *.trc *.elrc);;所有文件 (*.*)")
         if files:
             self.input_files = list(files)
+            self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件")
             self._log_scanned()
 
     def _select_folder(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
         if d:
             self._add_folder_files(d)
+            self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件")
             self._log_scanned()
 
     def _set_work_dir(self):
         d = QFileDialog.getExistingDirectory(self, "指定歌词工作目录")
-        if d:
-            self.work_dir = d
-            self._scan_dir(d)
+        if not d:
+            return
+        self.work_dir = d
+        self.work_dir_label.setText(f"📂 {d}")
+        self.work_dir_label.setStyleSheet("color: #64b5f6; font-size: 10px;")
+        self._scan_dir(d)
 
     def _add_folder_files(self, folder):
         self.input_files = []
@@ -165,6 +195,9 @@ class LyricsToolPage(BasePage):
                     self.input_files.append(os.path.join(root, f))
 
     def _scan_dir(self, d):
+        if not os.path.isdir(d):
+            self._log("⚠️ 目录不存在")
+            return
         self.input_files = []
         for root, _d, files in os.walk(d):
             for f in files:
@@ -172,12 +205,25 @@ class LyricsToolPage(BasePage):
                     self.input_files.append(os.path.join(root, f))
         self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件")
         self._log_scanned()
+        if not self.input_files:
+            self._log(f"⚠️ 该目录下未找到歌词文件\n   支持: {', '.join(sorted(self.SUPPORTED_EXTS))}")
 
     def _scan_date_folders(self):
         from toolbox.rename_engine import scan_date_folders
-        target = getattr(self, "work_dir", "") or self.app.work_dir
+        target = self.work_dir or self.app.work_dir
+        if not target or not os.path.isdir(target):
+            self.log_text.clear()
+            self._log("⚠️ 请先点击「指定工作目录」选择目录\n   （或设置 App 全局工作目录）")
+            return
+        folders = scan_date_folders(target)
+        if not folders:
+            self.log_text.clear()
+            self._log(f"⚠️ 未找到日期子文件夹\n   目录: {target}")
+            self.file_count_label.setText("未找到日期子文件夹")
+            self._refresh_list()
+            return
         self.input_files = []
-        for folder_name, _ in scan_date_folders(target):
+        for folder_name, _ in folders:
             fp_dir = os.path.join(target, folder_name)
             if not os.path.isdir(fp_dir):
                 continue
@@ -187,6 +233,40 @@ class LyricsToolPage(BasePage):
                     self.input_files.append(fp)
         self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件")
         self._log_scanned()
+        if not self.input_files:
+            self._log(f"⚠️ 日期子文件夹中未找到歌词文件\n   支持: {', '.join(sorted(self.SUPPORTED_EXTS))}")
+
+    # ---- 拖放 ----
+    def add_dropped_files(self, files):
+        added = []
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in self.SUPPORTED_EXTS and f not in self.input_files:
+                self.input_files.append(f)
+                added.append(os.path.basename(f))
+        if added:
+            self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件（+{len(added)}）")
+            self._log(f"📥 拖放添加 {len(added)} 个歌词文件:")
+            for n in added:
+                self._log(f"  + {n}")
+        else:
+            self._log("📥 拖放（无新增歌词文件）")
+        self._refresh_list()
+
+    def add_dropped_folder(self, folder):
+        added = 0
+        for root, _d, files in os.walk(folder):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.splitext(f)[1].lower() in self.SUPPORTED_EXTS and fp not in self.input_files:
+                    self.input_files.append(fp)
+                    added += 1
+        self.work_dir = folder
+        self.work_dir_label.setText(f"📂 {folder}")
+        self.work_dir_label.setStyleSheet("color: #64b5f6; font-size: 10px;")
+        self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件（+{added}）")
+        self._log(f"📥 拖放文件夹: {folder}\n   新增 {added} 个歌词文件")
+        self._refresh_list()
 
     def _log_scanned(self):
         self.log_text.clear()
@@ -194,8 +274,9 @@ class LyricsToolPage(BasePage):
         if not self.input_files:
             return
         self._log(f"📂 已选择 {len(self.input_files)} 个歌词文件:")
-        for fp in self.input_files:
-            self._log(f"  {os.path.basename(fp)}")
+        for i, fp in enumerate(self.input_files, 1):
+            self._log(f"  [{i}] {os.path.basename(fp)}")
+        self._log("💡 勾选要转换的文件，选择输出格式后按「开始转换」")
 
     def _refresh_list(self):
         self.lyr_list.clear()
@@ -287,36 +368,50 @@ class LyricsToolPage(BasePage):
 
     def _krcd_sel(self, mode):
         for i in range(self.krcd_list.count()):
-            self.krcd_list.item(i).setCheckState(Qt.Checked if mode == "all" else Qt.Unchecked)
+            it = self.krcd_list.item(i)
+            if mode == "all":
+                it.setCheckState(Qt.Checked)
+            elif mode == "none":
+                it.setCheckState(Qt.Unchecked)
+            else:
+                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked else Qt.Checked)
 
     def _krcd_run(self):
         to_run = [self.krcd_list.item(i).data(Qt.UserRole) for i in range(self.krcd_list.count())
                   if self.krcd_list.item(i).checkState() == Qt.Checked]
         if not to_run:
-            QMessageBox.warning(self, "提示", "请先勾选文件")
+            QMessageBox.warning(self, "提示", "请先在列表中勾选要处理的文件")
             return
         mode = self.krcd_mode
         self.krcd_log.clear()
-        self._krcd_log(f"🔄 {'解密 KRC→KRCD' if mode == 'decrypt' else '加密 KRCD→KRC'}，共 {len(to_run)} 个文件\n")
+        self._krcd_log(f"🔄 开始{'解密 KRC→KRCD' if mode == 'decrypt' else '加密 KRCD→KRC'}，共 {len(to_run)} 个文件")
         success = 0
         for fp in to_run:
             name = os.path.basename(fp)
             ext = os.path.splitext(fp)[1].lower()
             try:
                 if mode == "decrypt":
+                    if ext == ".krcd":
+                        self._krcd_log(f"  ⏭ {name}: 已是 KRCD 明文，跳过")
+                        continue
                     with open(fp, "rb") as f:
                         plain = self.converter.krc_to_krcd(f.read())
                     with open(fp + ".krcd", "w", encoding="utf-8") as f:
                         f.write(plain)
                     self._krcd_log(f"  ✅ {name} → {name}.krcd")
                 else:
+                    if ext == ".krc":
+                        self._krcd_log(f"  ⏭ {name}: 已是 KRC，跳过")
+                        continue
                     with open(fp, "r", encoding="utf-8", errors="ignore") as f:
                         enc = self.converter.krcd_to_krc(f.read())
-                    out = fp[:-len(ext)] + ".krc" if fp.endswith(ext) else fp + ".krc"
+                    out = fp[:-len(ext)] if fp.endswith(ext) else fp
+                    out = out + ".krc"
                     with open(out, "wb") as f:
                         f.write(enc)
                     self._krcd_log(f"  ✅ {name} → {os.path.basename(out)}")
                 success += 1
             except Exception as e:
                 self._krcd_log(f"  ❌ {name}: {e}")
-        self._krcd_log(f"\n✅ 完成: {success}/{len(to_run)} 成功")
+        self._krcd_log(f"\n✅ 处理完成: {success}/{len(to_run)} 成功")
+        self.krcd_result_label.setText(f"完成 {success}/{len(to_run)}")

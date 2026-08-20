@@ -53,13 +53,27 @@ class CalendarPage(BasePage):
                 item.widget().deleteLater()
 
     def _scan(self):
+        """扫描日期文件夹"""
         self.date_map = {}
+        if not os.path.isdir(self.app.work_dir):
+            self._clear_grid()
+            lbl = QLabel("（工作目录不存在，请先设置）")
+            lbl.setStyleSheet("color: #ff9800;")
+            self.grid.addWidget(lbl, 0, 0)
+            return
         for name, _ in scan_date_folders(self.app.work_dir):
             try:
                 dt = date(int(name[:4]), int(name[4:6]), int(name[6:8]))
                 self.date_map[dt] = name
             except Exception:
                 continue
+        if not self.date_map:
+            self._clear_grid()
+            lbl = QLabel(f"（未找到日期文件夹）\n当前目录: {self.app.work_dir}")
+            lbl.setStyleSheet("color: #ff9800;")
+            self.grid.addWidget(lbl, 0, 0)
+            self.breadcrumb.setText("📅 无数据")
+            return
         self.current_level = "year"
         self.current_year = None
         self.current_month = None
@@ -75,16 +89,22 @@ class CalendarPage(BasePage):
 
     def _show_year_view(self):
         self._clear_grid()
-        self.breadcrumb.setText("年视图")
+        self.breadcrumb.setText("📅 年视图 — 点击年份进入月份")
         self.back_btn.setEnabled(False)
         years = sorted({d.year for d in self.date_map}, reverse=True)
         if not years:
-            self.grid.addWidget(QLabel("（工作目录下没有日期文件夹）"), 0, 0)
+            lbl = QLabel("（无日期文件夹，请检查工作目录）")
+            lbl.setStyleSheet("color: #888;")
+            self.grid.addWidget(lbl, 0, 0)
             return
         for i, y in enumerate(years):
             days = sum(1 for d in self.date_map if d.year == y)
-            btn = QPushButton(f"{y} 年\n📁 {days} 天")
+            months = len({d.month for d in self.date_map if d.year == y})
+            btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
             btn.setMinimumHeight(70)
+            btn.setStyleSheet(
+                "QPushButton { background: #1a3a5c; font-size: 15px; font-weight: bold; }"
+                "QPushButton:hover { background: #2a5a8c; }")
             btn.clicked.connect(lambda checked, yr=y: self._open_year(yr))
             self.grid.addWidget(btn, i // 4, i % 4)
 
@@ -102,11 +122,17 @@ class CalendarPage(BasePage):
                  "七月", "八月", "九月", "十月", "十一月", "十二月"]
         for m in range(1, 13):
             days = sum(1 for d in self.date_map if d.year == y and d.month == m)
-            btn = QPushButton(f"{m}月 {names[m - 1]}\n📁 {days} 天")
-            btn.setMinimumHeight(70)
-            btn.setEnabled(days > 0)
-            if days:
+            if days > 0:
+                btn = QPushButton(f"{m}月\n{names[m - 1]}\n📁 {days} 天")
+                btn.setStyleSheet(
+                    "QPushButton { background: #1a3a5c; font-size: 14px; font-weight: bold; }"
+                    "QPushButton:hover { background: #2a5a8c; }")
                 btn.clicked.connect(lambda checked, mo=m: self._open_month(mo))
+            else:
+                btn = QPushButton(f"{m}月\n{names[m - 1]}\n无数据")
+                btn.setStyleSheet("QPushButton { background: #1a1a2e; font-size: 14px; }")
+                btn.setEnabled(False)
+            btn.setMinimumHeight(70)
             self.grid.addWidget(btn, (m - 1) // 4, (m - 1) % 4)
 
     def _open_month(self, month):
@@ -132,12 +158,24 @@ class CalendarPage(BasePage):
                     break
                 d = date(y, m, day)
                 has = d in self.date_map
-                btn = QPushButton(f"{day}\n📁" if has else str(day))
-                btn.setMinimumHeight(45)
-                btn.setEnabled(has)
                 if has:
                     folder = self.date_map[d]
-                    btn.setStyleSheet("background: #1a5c2a;")
+                    # 统计文件数
+                    fpath = os.path.join(self.app.work_dir, folder)
+                    file_count = 0
+                    if os.path.isdir(fpath):
+                        file_count = len([f for f in os.listdir(fpath)
+                                          if os.path.isfile(os.path.join(fpath, f))])
+                    btn = QPushButton(f"{day}\n📁 {file_count}")
+                    btn.setMinimumHeight(45)
+                    btn.setStyleSheet(
+                        "QPushButton { background: #1a5c2a; font-size: 13px; font-weight: bold; }"
+                        "QPushButton:hover { background: #2a8c3a; }")
                     btn.clicked.connect(lambda checked, fd=folder: os.startfile(os.path.join(self.app.work_dir, fd)))
+                else:
+                    btn = QPushButton(str(day))
+                    btn.setMinimumHeight(45)
+                    btn.setStyleSheet("QPushButton { background: #1a1a2e; font-size: 13px; }")
+                    btn.setEnabled(False)
                 self.grid.addWidget(btn, week + 1, col)
                 day += 1

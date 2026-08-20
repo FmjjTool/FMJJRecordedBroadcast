@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from toolbox.subtitle_engine import SubtitleConverter
 from toolbox.rename_engine import scan_date_folders
 from toolbox.utils import format_size
+from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.pages.base import BasePage
 
@@ -25,6 +26,11 @@ class SubtitlePage(BasePage):
         super().__init__(app)
         self.converter = SubtitleConverter()
         self.input_files = []
+        self._enter_stage = 0  # 回车快捷：0=待扫描，1=待转换
+
+        # 持久化的格式选择 / 日期文件夹开关
+        fmt_settings = load_convert_config().get("subtitle_formats", ["text", "timed_text", "lrc"])
+        use_date_folder = load_convert_config().get("subtitle_use_date_folder", False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -48,13 +54,14 @@ class SubtitlePage(BasePage):
         frow.addStretch(1)
         layout.addLayout(frow)
 
-        # 输出格式
+        # 输出格式（持久化）
         fmt_row = QHBoxLayout()
         fmt_row.addWidget(QLabel("输出格式:"))
         self.fmt_checks = {}
         for label, key in self.FORMATS:
             cb = QCheckBox(label)
-            cb.setChecked(key in ("text", "timed_text", "lrc"))
+            cb.setChecked(key in fmt_settings)
+            cb.toggled.connect(lambda _c: self._save_fmt_settings())
             self.fmt_checks[key] = cb
             fmt_row.addWidget(cb)
         fmt_row.addStretch(1)
@@ -80,6 +87,8 @@ class SubtitlePage(BasePage):
         self.same_dir.setChecked(True)
         opt_row.addWidget(self.same_dir)
         self.date_folder = QCheckBox("📁 创建日期文件夹")
+        self.date_folder.setChecked(use_date_folder)
+        self.date_folder.toggled.connect(lambda _c: self._save_sub_setting())
         opt_row.addWidget(self.date_folder)
         opt_row.addStretch(1)
         self.convert_btn = QPushButton("🔄 开始转换")
@@ -103,6 +112,55 @@ class SubtitlePage(BasePage):
         if danger:
             b.setStyleSheet("background: #c62828; color: white; padding: 2px 8px; border-radius: 3px;")
         return b
+
+    # ---- 回车快捷 / 设置持久化 ----
+    def on_return_press(self):
+        """第一次回车=扫描日期文件夹，第二次回车=按当前配置转换。"""
+        if self._enter_stage == 0:
+            self._enter_stage = 1
+            self._scan_date_folders()
+            self._log("⏎ 再次按回车将按当前格式配置转换（或点「开始转换」）")
+        else:
+            self._enter_stage = 0
+            self._convert()
+
+    def _save_fmt_settings(self):
+        """持久化字幕输出格式选择"""
+        fmts = [key for key, cb in self.fmt_checks.items() if cb.isChecked()]
+        s = load_convert_config()
+        s["subtitle_formats"] = fmts
+        save_convert_config(s)
+
+    def _save_sub_setting(self):
+        """保存字幕日期文件夹开关"""
+        s = load_convert_config()
+        s["subtitle_use_date_folder"] = self.date_folder.isChecked()
+        save_convert_config(s)
+
+    # ---- 拖放 ----
+    def add_dropped_files(self, files):
+        """拖放文件处理：按扩展名过滤后追加（去重）"""
+        added_names = []
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in self.EXTS and f not in self.input_files:
+                self.input_files.append(f)
+                added_names.append(os.path.basename(f))
+        added = len(added_names)
+        self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件（+{added}）")
+        if added:
+            self._log(f"📥 拖放添加 {added} 个文件:")
+            for name in added_names:
+                self._log(f"  + {name}")
+        else:
+            self._log("📥 拖放（无新文件）")
+        self._refresh_list()
+
+    def add_dropped_folder(self, folder):
+        """拖放文件夹处理"""
+        self._add_folder_files(folder)
+        self._log(f"📥 拖放文件夹: {os.path.basename(folder)}")
+        self._log_scanned()
 
     # ---- 文件选择 ----
     def _select_files(self):

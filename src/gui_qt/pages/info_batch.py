@@ -1,7 +1,9 @@
 """批量导入页（PySide6 版）：每行一个 URL，自动按平台分流解析。"""
 
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
+    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QTextEdit, QVBoxLayout,
 )
 
 from gui_qt.common import _collect, refresh_results_count, run_bg
@@ -27,6 +29,9 @@ class InfoBatchPage(BasePage):
         self.text.setPlaceholderText("每行一个 URL...")
         self.text.setFixedHeight(150)
         layout.addWidget(self.text)
+        # QTextEdit 回车会换行，用 Ctrl+Enter 触发批量解析（对应原版 <Control-Return>）
+        shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.text)
+        shortcut.activated.connect(self._parse)
 
         btn_row = QHBoxLayout()
         self.batch_btn = QPushButton("批量解析")

@@ -1,10 +1,13 @@
-"""Cookie 管理对话框（PySide6 版）：平台列表 + 扫码/浏览器/输入/清除。"""
+"""Cookie 管理对话框（PySide6 版）：平台列表 + 扫码/浏览器/输入/清除。
+
+二维码轮询在后台线程执行，所有 UI 更新通过 post_to_main 调度回主线程。
+"""
 
 import io
 import threading
 import time
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
@@ -12,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 import auth
+from gui_qt.common import post_to_main
 
 COOKIE_PLATFORMS = [
     ("bilibili", "B站", True, True),
@@ -138,7 +142,14 @@ class CookieManagerDialog(QDialog):
         img.save(buf, format="PNG")
         data = buf.getvalue()
         qimg = QImage.fromData(data)
-        qr_label.setPixmap(QPixmap.fromImage(qimg).scaled(280, 280, Qt.KeepAspectRatio))
+        pm = QPixmap.fromImage(qimg).scaled(280, 280, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        def _set():
+            try:
+                qr_label.setPixmap(pm)
+            except Exception:
+                pass
+        post_to_main(_set)
 
     def _netease_qr(self):
         from netease.music_api import QRLoginManager
@@ -149,7 +160,7 @@ class CookieManagerDialog(QDialog):
                 manager = QRLoginManager()
                 unikey = manager.generate_qr_key()
                 if not unikey:
-                    status.setText("❌ 生成二维码失败")
+                    post_to_main(status.setText, "❌ 生成二维码失败")
                     return
                 import qrcode
                 qr = qrcode.QRCode(border=1)
@@ -157,7 +168,7 @@ class CookieManagerDialog(QDialog):
                 qr.make(fit=True)
                 img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
                 self._show_qr(qr_label, img)
-                status.setText("📱 请用网易云音乐 APP 扫码")
+                post_to_main(status.setText, "📱 请用网易云音乐 APP 扫码")
                 while dlg.isVisible():
                     time.sleep(2)
                     code, cookies = manager.check_qr_login(unikey)
@@ -165,14 +176,16 @@ class CookieManagerDialog(QDialog):
                         cookie_str = f"MUSIC_U={cookies.get('MUSIC_U', '')};os=pc;appver=8.9.70;"
                         auth.set_cookie("netease", cookie_str)
                         auth.sync_netease_to_legacy()
-                        dlg.close()
-                        self._reload()
-                        self._notify()
+                        post_to_main(self._on_qr_success, dlg, "网易云登录成功，Cookie 已保存")
                         return
+                    elif code == 801:
+                        post_to_main(status.setText, "⏳ 等待扫码...")
                     elif code == 802:
-                        status.setText("✅ 扫码成功，请在手机上确认")
+                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                    else:
+                        post_to_main(status.setText, f"登录失败，错误码 {code}")
             except Exception as e:
-                status.setText(f"❌ {e}")
+                post_to_main(status.setText, f"❌ {e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -189,7 +202,7 @@ class CookieManagerDialog(QDialog):
                 s = requests.Session()
                 d = s.get(GEN, headers=UA, timeout=15).json()
                 if d.get("code") != 0:
-                    status.setText("❌ 生成二维码失败")
+                    post_to_main(status.setText, "❌ 生成二维码失败")
                     return
                 url, key = d["data"]["url"], d["data"]["qrcode_key"]
                 qr = qrcode.QRCode(border=1)
@@ -197,7 +210,7 @@ class CookieManagerDialog(QDialog):
                 qr.make(fit=True)
                 img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
                 self._show_qr(qr_label, img)
-                status.setText("📱 请用哔哩哔哩 APP 扫码")
+                post_to_main(status.setText, "📱 请用哔哩哔哩 APP 扫码")
                 while dlg.isVisible():
                     time.sleep(2)
                     pd = s.get(POLL.format(key), headers=UA, timeout=15).json().get("data", {})
@@ -211,19 +224,30 @@ class CookieManagerDialog(QDialog):
                                 cookies = dict(s.cookies)
                         cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
                         auth.set_cookie("bilibili", cookie_str)
-                        dlg.close()
-                        self._reload()
-                        self._notify()
+                        post_to_main(self._on_qr_success, dlg, "B站登录成功，Cookie 已保存")
                         return
+                    elif code == 86101:
+                        post_to_main(status.setText, "⏳ 等待扫码...")
                     elif code == 86090:
-                        status.setText("✅ 扫码成功，请在手机上确认")
+                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
                     elif code == 86038:
-                        status.setText("⚠️ 二维码已失效")
+                        post_to_main(status.setText, "⚠️ 二维码已失效，请重新登录")
                         return
+                    else:
+                        post_to_main(status.setText, f"登录失败，错误码 {code}")
             except Exception as e:
-                status.setText(f"❌ {e}")
+                post_to_main(status.setText, f"❌ {e}")
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _on_qr_success(self, dlg, msg):
+        try:
+            dlg.close()
+        except Exception:
+            pass
+        self._reload()
+        self._notify()
+        QMessageBox.information(self, "登录成功", msg)
 
     def _notify(self):
         if self.on_changed:

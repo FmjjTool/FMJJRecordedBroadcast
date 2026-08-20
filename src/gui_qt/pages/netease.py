@@ -1,40 +1,72 @@
-"""网易云音乐下载页（PySide6 版）：四种模式 + 音质选择 + 批量下载。"""
+"""网易云音乐工具箱（PySide6 版，对应原版 gui/netease_page.py）。
 
+五功能：歌曲搜索 / 单曲解析 / 歌单解析 / 专辑解析 / 批量下载。
+- 功能/设置 双标签
+- 模式按钮 + 动态输入区（搜索模式带歌手预填）
+- 详情滚动区：歌曲列表（封面+时长）、单曲详情卡（封面+歌词+立即下载）、
+  歌单/专辑信息卡、专辑搜索结果（整张下载）
+- 音质选择（标准/极高/无损/Hi-Res/沉浸环绕声/高清环绕声/超清母带）
+- 下载前 sync_netease_to_legacy 同步 Cookie
+"""
+
+import os
 import re
+import time
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import run_bg
+from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 
 QUALITY_NAMES = {
-    "standard": "标准", "exhigh": "极高", "lossless": "无损", "hires": "Hi-Res",
-    "sky": "沉浸环绕声", "jyeffect": "高清环绕声", "jymaster": "超清母带",
+    "standard": "标准",
+    "exhigh": "极高",
+    "lossless": "无损",
+    "hires": "Hi-Res",
+    "sky": "沉浸环绕声",
+    "jyeffect": "高清环绕声",
+    "jymaster": "超清母带",
 }
 
 MODES = [
-    ("search", "🎵 歌曲搜索"), ("song", "🎶 单曲解析"),
-    ("playlist", "📋 歌单解析"), ("album", "💿 专辑解析"),
+    ("search", "🎵 歌曲搜索"),
+    ("song", "🎶 单曲解析"),
+    ("playlist", "📋 歌单解析"),
+    ("album", "💿 专辑解析"),
 ]
 
 
-def _parse_id(text):
+def _parse_netease_id(text):
+    """从输入解析网易云 ID（支持纯数字或链接里的 id=xxx）。"""
     s = (text or "").strip()
     if s.isdigit():
         return int(s)
     m = re.search(r"id[=/](\d+)", s)
-    return int(m.group(1)) if m else None
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _fmt_duration(ms):
+    if not ms:
+        return "?:??"
+    s = ms // 1000
+    return f"{s // 60}:{s % 60:02d}"
 
 
 class NeteasePage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.mode = "search"
-        self.results = []
+        self.results = []           # 当前模式的结果（统一为 [{id, name, artists, album, duration, _kind}]）
+        self.check_boxes = []
+        self.single_song_id = None  # 单曲解析时的当前歌曲 ID
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -43,89 +75,7 @@ class NeteasePage(BasePage):
         self.tabs.addTab(self._build_func(), "功能")
         self.tabs.addTab(self._build_settings(), "设置")
 
-    def _build_func(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.addWidget(QLabel("🎧 网易云音乐工具箱", styleSheet="font-size: 18px; font-weight: bold;"))
-
-        # 模式按钮 + 输入
-        mode_row = QHBoxLayout()
-        self.mode_btns = {}
-        for mode_id, label in MODES:
-            b = QPushButton(label)
-            b.setCheckable(True)
-            b.clicked.connect(lambda checked, m=mode_id: self._switch_mode(m))
-            mode_row.addWidget(b)
-            self.mode_btns[mode_id] = b
-        mode_row.addStretch(1)
-        v.addLayout(mode_row)
-
-        input_row = QHBoxLayout()
-        self.singer_entry = QLineEdit()
-        self.singer_entry.setPlaceholderText("歌手（默认封茗囧菌）")
-        self.singer_entry.setFixedWidth(150)
-        input_row.addWidget(self.singer_entry)
-        self.kw_entry = QLineEdit()
-        self.kw_entry.setPlaceholderText("歌曲关键词 / 链接 / ID")
-        self.kw_entry.returnPressed.connect(self._search)
-        input_row.addWidget(self.kw_entry, 1)
-        search_btn = QPushButton("🔍 获取")
-        search_btn.clicked.connect(self._search)
-        input_row.addWidget(search_btn)
-        v.addLayout(input_row)
-
-        self.list = QListWidget()
-        v.addWidget(self.list, 1)
-
-        # 底部操作
-        bottom = QHBoxLayout()
-        bottom.addWidget(QPushButton("☑ 全选", clicked=lambda: self._sel("all")))
-        bottom.addWidget(QPushButton("🔄 反选", clicked=lambda: self._sel("invert")))
-        bottom.addWidget(QPushButton("□ 全不选", clicked=lambda: self._sel("none")))
-        bottom.addWidget(QLabel("音质:"))
-        self.quality = QComboBox()
-        self.quality.addItems(list(QUALITY_NAMES.values()))
-        self.quality.setCurrentText(QUALITY_NAMES["lossless"])
-        bottom.addWidget(self.quality)
-        dl_btn = QPushButton("⬇ 下载选中")
-        dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
-        dl_btn.clicked.connect(self._download_selected)
-        bottom.addWidget(dl_btn)
-        self.status_label = QLabel("")
-        bottom.addWidget(self.status_label)
-        bottom.addStretch(1)
-        v.addLayout(bottom)
-        self._switch_mode("search")
-        return w
-
-    def _build_settings(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.addWidget(QLabel("⚙️ 网易云音乐设置", styleSheet="font-size: 16px; font-weight: bold;"))
-        v.addWidget(QLabel(
-            "五种功能说明\n\n"
-            "🎵 歌曲搜索：输入「歌名 / 歌手」关键词，可勾选下载\n"
-            "🎶 单曲解析：输入歌曲链接或 ID，展示详情，可立即下载\n"
-            "📋 歌单解析：输入歌单链接或 ID，批量下载\n"
-            "💿 专辑解析：输入专辑链接/ID 或专辑名\n\n"
-            "音质选项：标准 / 极高 / 无损 / Hi-Res / 沉浸环绕声 / 高清环绕声 / 超清母带\n"
-            "默认无损；登录 VIP 账号可获取更高音质\n\n"
-            "左侧底部「🍪 Cookie → 网易云」可扫码登录", styleSheet="color: #888;"))
-        v.addStretch(1)
-        return w
-
-    def _switch_mode(self, mode):
-        self.mode = mode
-        for m, b in self.mode_btns.items():
-            b.setChecked(m == mode)
-        placeholders = {
-            "song": "歌曲链接或 ID", "playlist": "歌单链接或 ID", "album": "专辑链接 / ID / 专辑名",
-        }
-        self.kw_entry.setPlaceholderText(placeholders.get(mode, "歌曲关键词"))
-        self.singer_entry.setVisible(mode in ("search", "album"))
-        self.list.clear()
-        self.results = []
-
+    # ===================== 公共：Cookie =====================
     def _cookies(self):
         from auth import get_netease_cookie
         from netease import CookieManager, COOKIE_FILE
@@ -135,44 +85,243 @@ class NeteasePage(BasePage):
         except Exception:
             return {}
 
-    def _sel(self, mode):
-        for i in range(self.list.count()):
-            it = self.list.item(i)
-            if mode == "all":
-                it.setCheckState(Qt.Checked)
-            elif mode == "none":
-                it.setCheckState(Qt.Unchecked)
-            else:
-                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked else Qt.Checked)
+    # ===================== 功能 tab =====================
+    def _build_func(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(QLabel("🎧 网易云音乐工具箱", styleSheet="font-size: 18px; font-weight: bold;"))
 
+        # 顶部：模式按钮 + 输入
+        top = QHBoxLayout()
+        self.mode_btns = {}
+        for mode_id, label in MODES:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda checked, m=mode_id: self._switch_mode(m))
+            top.addWidget(btn)
+            self.mode_btns[mode_id] = btn
+        v.addLayout(top)
+
+        # 输入区（动态，随模式变化）
+        self.input_row = QHBoxLayout()
+        v.addLayout(self.input_row)
+
+        # 详情区
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setStyleSheet("QScrollArea { background: #1a1d27; border-radius: 6px; }")
+        self.detail_container = QWidget()
+        self.detail_layout = QVBoxLayout(self.detail_container)
+        self.detail_layout.setContentsMargins(8, 8, 8, 8)
+        self.detail_layout.setSpacing(2)
+        self.detail_layout.setAlignment(Qt.AlignTop)
+        self.detail_scroll.setWidget(self.detail_container)
+        v.addWidget(self.detail_scroll, 1)
+
+        # 底部：操作栏
+        bottom = QHBoxLayout()
+        bottom.addWidget(QPushButton("☑ 全选", clicked=lambda: self._sel("all")))
+        bottom.addWidget(QPushButton("🔄 反选", clicked=lambda: self._sel("invert")))
+        bottom.addWidget(QPushButton("□ 全不选", clicked=lambda: self._sel("none")))
+        bottom.addWidget(QLabel("音质:"))
+        self.quality_menu = QComboBox()
+        self.quality_menu.addItems(list(QUALITY_NAMES.values()))
+        self.quality_menu.setCurrentText(QUALITY_NAMES["lossless"])
+        bottom.addWidget(self.quality_menu)
+        self.download_btn = QPushButton("⬇ 下载选中")
+        self.download_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
+        self.download_btn.clicked.connect(self._download_selected)
+        bottom.addWidget(self.download_btn)
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #888;")
+        bottom.addWidget(self.status_label, 1)
+        v.addLayout(bottom)
+
+        # 默认模式
+        self._switch_mode("search")
+        return w
+
+    # ===================== 设置 tab =====================
+    def _build_settings(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.addWidget(QLabel("⚙️ 网易云音乐设置", styleSheet="font-size: 18px; font-weight: bold;"))
+        tip = QLabel(
+            "五个功能说明\n\n"
+            "🎵 歌曲搜索：输入「歌名 / 歌手」关键词，可勾选下载\n"
+            "🎶 单曲解析：输入歌曲链接或 ID，展示详情 + 歌词 + 封面，可立即下载\n"
+            "📋 歌单解析：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载\n"
+            "💿 专辑解析：输入专辑链接/ID 或专辑名，展示专辑信息 + 歌曲列表\n"
+            "⬇ 批量下载：勾选结果后统一下载\n\n"
+            "音质选项：标准 / 极高 / 无损 / Hi-Res / 沉浸环绕声 / 高清环绕声 / 超清母带\n"
+            "默认无损；登录 VIP 账号 + 高清 Cookie 可获取更高音质（VIP 歌曲需要登录）\n\n"
+            "Cookie 文件：netease/cookie.txt\n"
+            "下载目录：全局设置里配置的导出目录（默认 download/）\n\n"
+            "左侧底部「🍪 管理 Cookie → 网易云」可扫码登录或手动输入 Cookie"
+        )
+        tip.setStyleSheet("color: #888; font-size: 12px;")
+        tip.setWordWrap(True)
+        tip.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        v.addWidget(tip)
+        v.addStretch(1)
+        return w
+
+    # ===================== 模式切换 =====================
+    def _switch_mode(self, mode):
+        self.mode = mode
+        for m, btn in self.mode_btns.items():
+            btn.setChecked(m == mode)
+            if m == mode:
+                btn.setStyleSheet("background: #1a5c2a; color: white;")
+            else:
+                btn.setStyleSheet("")
+        # 清空输入区重建
+        while self.input_row.count():
+            item = self.input_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.singer_entry = None
+        if mode == "search":
+            self.singer_entry = QLineEdit()
+            self.singer_entry.setPlaceholderText("歌手（默认封茗囧菌）")
+            self.singer_entry.setFixedWidth(150)
+            self.singer_entry.setText("封茗囧菌")
+            self.input_row.addWidget(self.singer_entry)
+        placeholders = {
+            "song": "歌曲链接或 ID（例：https://music.163.com/song?id=xxx）",
+            "playlist": "歌单链接或 ID（例：https://music.163.com/playlist?id=xxx）",
+            "album": "专辑链接 / ID / 专辑名",
+        }
+        self.kw_entry = QLineEdit()
+        self.kw_entry.setPlaceholderText(placeholders.get(mode, "歌曲关键词"))
+        self.kw_entry.returnPressed.connect(self._search)
+        self.input_row.addWidget(self.kw_entry, 1)
+        self.search_btn = QPushButton("🔍 获取")
+        self.search_btn.clicked.connect(self._search)
+        self.input_row.addWidget(self.search_btn)
+        # 清空详情
+        self._clear_detail()
+        self.results = []
+        self.check_boxes = []
+        self.single_song_id = None
+        self._show_empty()
+
+    def _clear_detail(self):
+        while self.detail_layout.count():
+            item = self.detail_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                while item.layout().count():
+                    sub = item.layout().takeAt(0)
+                    if sub.widget():
+                        sub.widget().deleteLater()
+
+    def _show_empty(self):
+        hints = {
+            "search": "输入「歌手 + 关键词」搜索歌曲",
+            "song": "输入歌曲链接或 ID，查看详情 + 歌词",
+            "playlist": "输入歌单链接或 ID，查看歌单信息 + 歌曲列表",
+            "album": "输入专辑链接 / ID / 专辑名",
+        }
+        lbl = QLabel("💡 " + hints.get(self.mode, ""))
+        lbl.setStyleSheet("color: #888; font-size: 13px; padding: 40px;")
+        lbl.setAlignment(Qt.AlignCenter)
+        self.detail_layout.addWidget(lbl)
+
+    # ===================== 全选/反选 =====================
+    def _sel(self, mode):
+        for cb in self.check_boxes:
+            if mode == "all":
+                cb.setChecked(True)
+            elif mode == "none":
+                cb.setChecked(False)
+            else:
+                cb.setChecked(not cb.isChecked())
+
+    # ===================== 封面图（异步加载） =====================
+    def _load_image_async(self, url, size, parent_layout):
+        """异步加载网络图片，返回占位 QLabel（加载成功后替换 pixmap）。"""
+        lbl = QLabel("🎵")
+        lbl.setFixedSize(size, size)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("background: #1a1d27; border-radius: 4px; color: #555;")
+        parent_layout.addWidget(lbl)
+        if not url:
+            return lbl
+
+        def load():
+            try:
+                import requests
+                resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                img = QImage.fromData(resp.content)
+                if img.isNull():
+                    return
+                pm = QPixmap.fromImage(img).scaled(
+                    size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+                def _set():
+                    try:
+                        lbl.setPixmap(pm)
+                    except Exception:
+                        pass
+                post_to_main(_set)
+            except Exception:
+                pass
+
+        import threading
+        threading.Thread(target=load, daemon=True).start()
+        return lbl
+
+    # ===================== 搜索 =====================
     def _search(self):
         kw = self.kw_entry.text().strip()
         if not kw:
             QMessageBox.warning(self, "提示", "请输入关键词或链接")
             return
-        singer = self.singer_entry.text().strip() if self.singer_entry.isVisible() else ""
-        mode = self.mode
+        singer = self.singer_entry.text().strip() if getattr(self, "singer_entry", None) else ""
+
+        self.search_btn.setEnabled(False)
         self.status_label.setText("⏳ 获取中...")
-        self.list.clear()
+        self._clear_detail()
+        self.results = []
+        self.check_boxes = []
+        self.single_song_id = None
+
+        mode = self.mode
 
         def work():
-            from netease import search_music, search_album, playlist_detail, album_detail, get_song_detail
+            from netease import (
+                search_music, search_album, playlist_detail, album_detail,
+                get_song_detail, get_lyric, get_pic_url,
+            )
             cookies = self._cookies()
             if mode == "search":
                 keyword = f"{singer} {kw}".strip() if singer else kw
                 return ("songs", search_music(keyword, cookies, limit=50))
             if mode == "song":
-                sid = _parse_id(kw)
+                sid = _parse_netease_id(kw)
                 if sid is None:
                     raise ValueError("请输入正确的歌曲链接或 ID")
-                return ("song", get_song_detail(sid))
+                info = get_song_detail(sid)
+                # 补充歌词和封面
+                lyric_data = get_lyric(sid, cookies)
+                info["_lyric"] = lyric_data.get("lrc", "")
+                al = info.get("al") or {}
+                pic = al.get("picUrl")
+                if not pic and al.get("pic"):
+                    pic = get_pic_url(al.get("pic"), 300)
+                info["_picUrl"] = pic
+                return ("song", info)
             if mode == "playlist":
-                pid = _parse_id(kw)
+                pid = _parse_netease_id(kw)
                 if pid is None:
                     raise ValueError("请输入正确的歌单链接或 ID")
                 return ("playlist", playlist_detail(pid, cookies))
             if mode == "album":
-                aid = _parse_id(kw)
+                aid = _parse_netease_id(kw)
                 if aid is not None:
                     return ("album", album_detail(aid, cookies))
                 keyword = f"{singer} {kw}".strip() if singer else kw
@@ -180,96 +329,309 @@ class NeteasePage(BasePage):
             return ("songs", [])
 
         def done(result, err):
+            self.search_btn.setEnabled(True)
             if err:
                 self.status_label.setText(f"❌ {err}")
+                self._show_empty()
                 return
             kind, data = result
-            self._render(kind, data)
+            if kind == "songs":
+                self._render_songs(data or [])
+            elif kind == "song":
+                self._render_single_song(data)
+            elif kind == "playlist":
+                self._render_playlist(data)
+            elif kind == "album":
+                self._render_album(data)
+            elif kind == "albums":
+                self._render_albums(data or [])
 
         run_bg(work, done)
 
-    def _render(self, kind, data):
-        self.list.clear()
-        self.results = []
-        if kind in ("songs", "albums"):
-            songs = data or []
-            if kind == "albums":
-                songs = [{"id": a.get("id"), "name": a.get("name"), "artists": a.get("artist", {}).get("name", "") if isinstance(a.get("artist"), dict) else "", "album": ""} for a in songs]
-            for s in songs:
-                name = s.get("name", "")
-                artists = s.get("artists", "")
-                if isinstance(artists, list):
-                    artists = " / ".join(a.get("name", "") for a in artists)
-                album = s.get("album", "")
-                if isinstance(album, dict):
-                    album = album.get("name", "")
-                it = QListWidgetItem(f"{name} - {artists}  ({album})")
-                it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                it.setCheckState(Qt.Unchecked)
-                it.setData(Qt.UserRole, s.get("id"))
-                self.list.addItem(it)
-                self.results.append(s)
-            self.status_label.setText(f"✅ 共 {len(self.results)} 首，勾选后批量下载")
-        elif kind in ("playlist", "album"):
-            songs = (data or {}).get("songs", []) or (data or {}).get("tracks", [])
-            for s in songs:
-                name = s.get("name", "")
-                ar = s.get("ar", []) or s.get("artists", [])
-                artists = " / ".join(a.get("name", "") for a in ar)
-                it = QListWidgetItem(f"{name} - {artists}")
-                it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                it.setCheckState(Qt.Unchecked)
-                it.setData(Qt.UserRole, s.get("id"))
-                self.list.addItem(it)
-                self.results.append(s)
-            self.status_label.setText(f"✅ 共 {len(self.results)} 首，勾选后批量下载")
-        elif kind == "song":
-            s = data or {}
-            name = s.get("name", "")
-            it = QListWidgetItem(f"{name} - 单曲")
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked)
-            it.setData(Qt.UserRole, s.get("id"))
-            self.list.addItem(it)
-            self.results.append(s)
-            self.status_label.setText("✅ 单曲解析完成")
-
-    def _download_selected(self):
-        selected = []
-        for i in range(self.list.count()):
-            it = self.list.item(i)
-            if it.checkState() == Qt.Checked:
-                sid = it.data(Qt.UserRole)
-                if sid:
-                    selected.append(sid)
-        if not selected:
-            QMessageBox.warning(self, "提示", "请先勾选要下载的歌曲")
+    # ===================== 渲染：歌曲列表（带封面） =====================
+    def _render_songs(self, songs):
+        self.results = songs
+        if not songs:
+            lbl = QLabel("（无结果）")
+            lbl.setStyleSheet("color: gray; padding: 20px;")
+            lbl.setAlignment(Qt.AlignCenter)
+            self.detail_layout.addWidget(lbl)
+            self.status_label.setText("无结果")
             return
-        quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality.currentText()][0]
-        self.status_label.setText(f"⏳ 下载 {len(selected)} 首...")
+        for s in songs:
+            row = QFrame()
+            row.setStyleSheet("QFrame { background: transparent; border: none; }")
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 1, 0, 1)
+            cb = QCheckBox()
+            cb.setFixedSize(18, 18)
+            self.check_boxes.append(cb)
+            h.addWidget(cb)
+            pic = s.get("picUrl") or (s.get("al") or {}).get("picUrl")
+            self._load_image_async(pic, 44, h)
+            text = f"{s.get('name', '')} - {s.get('artists', '')}  ({s.get('album', '')})"
+            info = QLabel(text)
+            h.addWidget(info, 1)
+            dur = QLabel(_fmt_duration(s.get("duration", 0)))
+            dur.setStyleSheet("color: #888; font-size: 11px;")
+            h.addWidget(dur)
+            self.detail_layout.addWidget(row)
+        self.status_label.setText(f"✅ 共 {len(songs)} 首，勾选后批量下载")
+
+    # ===================== 渲染：单曲解析（详情 + 歌词） =====================
+    def _render_single_song(self, song):
+        if not song:
+            self._show_empty()
+            return
+        self.single_song_id = song.get("id")
+        info_card = QFrame()
+        info_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+        h = QHBoxLayout(info_card)
+        h.setContentsMargins(10, 10, 10, 10)
+        pic = song.get("_picUrl") or (song.get("al") or {}).get("picUrl")
+        self._load_image_async(pic, 120, h)
+        info_text = (
+            f"🎵 {song.get('name', '')}\n"
+            f"👤 歌手: {song.get('artists', '')}\n"
+            f"💿 专辑: {song.get('album', '')}\n"
+            f"⏱ 时长: {_fmt_duration(song.get('duration', 0))}\n"
+            f"🆔 ID: {song.get('id', '')}"
+        )
+        txt = QLabel(info_text)
+        h.addWidget(txt, 1)
+        # 单曲下载按钮（独立）
+        dl_btn = QPushButton("⬇ 立即下载")
+        dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 12px; border-radius: 4px;")
+        dl_btn.clicked.connect(self._download_single_song)
+        h.addWidget(dl_btn, 0, Qt.AlignBottom)
+        self.detail_layout.addWidget(info_card)
+
+        # 歌词
+        lyric = song.get("_lyric", "")
+        if lyric:
+            lyric_card = QFrame()
+            lyric_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+            lv = QVBoxLayout(lyric_card)
+            lv.setContentsMargins(10, 10, 10, 10)
+            lv.addWidget(QLabel("📝 歌词", styleSheet="font-weight: bold;"))
+            lyric_text = QPlainTextEdit()
+            lyric_text.setReadOnly(True)
+            lyric_text.setMaximumHeight(220)
+            lyric_text.setStyleSheet("font-family: Consolas; font-size: 12px;")
+            # 仅显示前 100 行避免卡顿
+            lines = lyric.splitlines()
+            display = "\n".join(lines[:100]) + ("\n…(更多歌词省略)" if len(lines) > 100 else "")
+            lyric_text.setPlainText(display)
+            lv.addWidget(lyric_text)
+            self.detail_layout.addWidget(lyric_card)
+        else:
+            lbl = QLabel("（暂无歌词）")
+            lbl.setStyleSheet("color: #888; padding: 8px;")
+            self.detail_layout.addWidget(lbl)
+        self.status_label.setText("✅ 单曲解析完成，可立即下载或查看歌词")
+
+    # ===================== 渲染：歌单解析 =====================
+    def _render_playlist(self, pl):
+        if not pl:
+            self._show_empty()
+            return
+        info = pl.get("playlist") or {}
+        info_card = QFrame()
+        info_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+        h = QHBoxLayout(info_card)
+        h.setContentsMargins(10, 10, 10, 10)
+        pic = info.get("coverImgUrl")
+        self._load_image_async(pic, 96, h)
+        creator = info.get("creator") or {}
+        txt = QLabel(
+            f"📋 {info.get('name', '')}\n"
+            f"👤 创建者: {creator.get('nickname', '')}\n"
+            f"🎵 歌曲数: {info.get('trackCount', 0)}  "
+            f"▶ 播放数: {info.get('playCount', 0)}\n"
+            f"📝 简介: {(info.get('description') or '无')[:90]}"
+        )
+        txt.setWordWrap(True)
+        h.addWidget(txt, 1)
+        self.detail_layout.addWidget(info_card)
+        # 歌曲列表
+        tracks = pl.get("tracks") or []
+        self.results = [
+            {"id": t["id"], "name": t.get("name", ""),
+             "artists": "/".join(a.get("name", "") for a in (t.get("ar") or [])),
+             "album": (t.get("al") or {}).get("name", ""),
+             "duration": t.get("dt", 0)}
+            for t in tracks
+        ]
+        self._render_songs(self.results)
+        self.status_label.setText(f"✅ 歌单「{info.get('name', '')}」共 {len(self.results)} 首")
+
+    # ===================== 渲染：专辑解析（专辑详情） =====================
+    def _render_album(self, album):
+        if not album:
+            self._show_empty()
+            return
+        songs = album.get("songs") or []
+        album_info = album.get("album") or {}
+        info_card = QFrame()
+        info_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+        h = QHBoxLayout(info_card)
+        h.setContentsMargins(10, 10, 10, 10)
+        pic = album_info.get("picUrl") or album_info.get("blurPicUrl")
+        self._load_image_async(pic, 96, h)
+        artist = album_info.get("artist") or {}
+        artist_name = artist.get("name", "") if isinstance(artist, dict) else str(artist)
+        publish = album_info.get("publishTime", 0)
+        pub_str = time.strftime("%Y-%m-%d", time.localtime(publish / 1000)) if publish else "未知"
+        txt = QLabel(
+            f"💿 {album_info.get('name', '')}\n"
+            f"👤 歌手: {artist_name}\n"
+            f"🎵 歌曲数: {album_info.get('size', len(songs))}\n"
+            f"📅 发行: {pub_str}"
+        )
+        h.addWidget(txt, 1)
+        self.detail_layout.addWidget(info_card)
+        self.results = [
+            {"id": s["id"], "name": s.get("name", ""),
+             "artists": "/".join(a.get("name", "") for a in (s.get("ar") or [])),
+             "album": album_info.get("name", ""),
+             "duration": s.get("dt", 0)}
+            for s in songs
+        ]
+        self._render_songs(self.results)
+        self.status_label.setText(f"✅ 专辑「{album_info.get('name', '')}」共 {len(self.results)} 首")
+
+    # ===================== 渲染：专辑搜索结果（整张专辑下载） =====================
+    def _render_albums(self, albums):
+        self.results = albums
+        if not albums:
+            lbl = QLabel("（无结果）")
+            lbl.setStyleSheet("color: gray; padding: 20px;")
+            lbl.setAlignment(Qt.AlignCenter)
+            self.detail_layout.addWidget(lbl)
+            self.status_label.setText("无结果")
+            return
+        for alb in albums:
+            row = QFrame()
+            row.setStyleSheet("QFrame { background: transparent; border: none; }")
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 1, 0, 1)
+            cb = QCheckBox()
+            cb.setFixedSize(18, 18)
+            self.check_boxes.append(cb)
+            h.addWidget(cb)
+            pic = alb.get("picUrl") or alb.get("blurPicUrl")
+            self._load_image_async(pic, 44, h)
+            artist = alb.get("artist")
+            if isinstance(artist, dict):
+                artist = artist.get("name", "")
+            lbl = QLabel(f"💿 {alb.get('name', '')} - {artist}")
+            h.addWidget(lbl, 1)
+            self.detail_layout.addWidget(row)
+        self.status_label.setText(f"✅ 共 {len(albums)} 个专辑，勾选后下载整张专辑")
+
+    # ===================== 下载：单曲立即下载 =====================
+    def _download_single_song(self):
+        if not self.single_song_id:
+            QMessageBox.warning(self, "提示", "请先解析单曲")
+            return
+        quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
+        sid = int(self.single_song_id)
+        self.download_btn.setEnabled(False)
+        self.status_label.setText("⏳ 下载中...")
 
         def work():
             from netease import MusicDownloader, COOKIE_FILE
             from toolbox.config_manager import get_export_subdir
-            out_dir = str(get_export_subdir("songs"))
+            from auth import sync_netease_to_legacy
+            sync_netease_to_legacy()
+            out_dir = str(get_export_subdir("music"))
             dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
-            ok = fail = 0
-            for sid in selected:
-                try:
-                    r = dl.download_music_file(sid, quality)
-                    if r:
-                        ok += 1
-                    else:
-                        fail += 1
-                except Exception:
-                    fail += 1
-            return ok, fail
+            try:
+                r = dl.download_music_file(sid, quality)
+                if r and r.success:
+                    return (True, os.path.basename(r.file_path), "")
+                return (False, "", (r.error_message if r else "失败"))
+            except Exception as e:
+                return (False, "", str(e))
 
         def done(result, err):
+            self.download_btn.setEnabled(True)
             if err:
                 self.status_label.setText(f"❌ {err}")
                 return
-            ok, fail = result
-            self.status_label.setText(f"✅ 下载完成：成功 {ok}，失败 {fail}")
+            ok, fname, fmsg = result
+            if ok:
+                self.status_label.setText(f"✅ 已下载 {fname}")
+            else:
+                self.status_label.setText(f"❌ {fmsg[:60]}")
+
+        run_bg(work, done)
+
+    # ===================== 下载：批量下载（歌曲/专辑） =====================
+    def _download_selected(self):
+        selected = [self.results[i] for i, cb in enumerate(self.check_boxes)
+                    if cb.isChecked() and i < len(self.results)]
+        if not selected:
+            QMessageBox.warning(self, "提示", "请先勾选要下载的歌曲")
+            return
+        quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
+        # 判断是专辑（搜索结果含 artist 字段而非 artists）还是歌曲
+        is_albums = bool(selected) and ("artists" not in selected[0] and "artist" in selected[0])
+
+        self.download_btn.setEnabled(False)
+        self.status_label.setText("⏳ 下载中...")
+
+        def work():
+            from netease import MusicDownloader, COOKIE_FILE, album_detail
+            from toolbox.config_manager import get_export_subdir
+            from auth import sync_netease_to_legacy
+            sync_netease_to_legacy()
+            out_dir = str(get_export_subdir("music"))
+            dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
+            ok, fail, first_err = 0, 0, ""
+            ids = []
+            if is_albums:
+                cookies = self._cookies()
+                for alb in selected:
+                    try:
+                        info = album_detail(int(alb["id"]), cookies)
+                        for song in info.get("songs", []):
+                            ids.append(song["id"])
+                    except Exception as e:
+                        fail += 1
+                        if not first_err:
+                            first_err = str(e)
+                if not ids and not fail:
+                    first_err = "专辑内无歌曲"
+            else:
+                ids = [int(s["id"]) for s in selected]
+
+            for sid in ids:
+                try:
+                    r = dl.download_music_file(sid, quality)
+                    if r and r.success:
+                        ok += 1
+                    else:
+                        fail += 1
+                        msg = (r.error_message if r else "失败")
+                        if not first_err:
+                            first_err = msg
+                except Exception as e:
+                    fail += 1
+                    if not first_err:
+                        first_err = str(e)
+            return ok, fail, first_err
+
+        def done(result, err):
+            self.download_btn.setEnabled(True)
+            if err:
+                self.status_label.setText(f"❌ {err}")
+                return
+            ok, fail, first_err = result
+            if fail:
+                tip = f"⚠️ 完成（成功 {ok} / 失败 {fail}）" + (f"：{first_err[:50]}" if first_err else "")
+                self.status_label.setText(tip)
+            else:
+                self.status_label.setText(f"✅ 下载完成（成功 {ok}）")
 
         run_bg(work, done)

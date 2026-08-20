@@ -70,6 +70,10 @@ class MusicInfoPage(BasePage):
         bottom.addStretch(1)
         layout.addLayout(bottom)
 
+    def on_return_press(self):
+        """主窗口回车统一入口。"""
+        self._search()
+
     def _col_select(self, key, mode):
         lst = self.columns[key]["list"]
         for i in range(lst.count()):
@@ -119,8 +123,14 @@ class MusicInfoPage(BasePage):
             for key, _name in PLATFORMS:
                 lst = self.columns[key]["list"]
                 lst.clear()
-                self.columns[key]["songs"] = result.get(key, [])
-                for s in result.get(key, []):
+                songs = result.get(key, [])
+                self.columns[key]["songs"] = songs
+                if not songs:
+                    it = QListWidgetItem("（无结果）")
+                    it.setFlags(Qt.NoItemFlags)
+                    lst.addItem(it)
+                    continue
+                for s in songs:
                     dur = f"{s.duration // 60}:{s.duration % 60:02d}" if s.duration else "?:??"
                     mode = f"[{s.mode}]" if getattr(s, "mode", "") else ""
                     it = QListWidgetItem(f"{s.song_name}{mode}  {s.singer} {dur}")
@@ -151,29 +161,47 @@ class MusicInfoPage(BasePage):
         def work():
             from music import ALL_PLATFORMS
             scraper_map = {k: c() for k, _n, c in ALL_PLATFORMS}
-            final_songs, platforms = [], []
+            final_songs, platforms, albums, lines = [], [], [], []
             for key, song_item in selected:
                 name = dict(PLATFORMS)[key]
-                platforms.append(name)
+                lines.append(f"[{name}] {song_item.song_name}")
                 scraper = scraper_map.get(key)
                 if not scraper:
                     final_songs.append(song_item)
+                    platforms.append(name)
                     continue
                 try:
                     full = scraper.fetch_full_detail(song_item)
-                    final_songs.append(full if full else song_item)
-                except Exception:
+                    if full:
+                        final_songs.append(full)
+                        platforms.append(name)
+                        album_data = full.extra.get("_album")
+                        if album_data:
+                            from music import AlbumInfo
+                            try:
+                                albums.append(AlbumInfo(**album_data))
+                            except Exception:
+                                pass
+                    else:
+                        final_songs.append(song_item)
+                        platforms.append(name)
+                except Exception as e:
                     final_songs.append(song_item)
+                    platforms.append(name)
+                    lines.append(f"  ⚠️ {e}")
             if not final_songs:
                 return "未获取到任何歌曲", None
             result = SearchResult(keyword=f"{singer} {song}".strip(),
                                   platforms_available=platforms,
-                                  total_songs=len(final_songs), songs=final_songs, albums=[])
+                                  total_songs=len(final_songs),
+                                  total_albums=len(albums),
+                                  songs=final_songs, albums=albums)
             from toolbox.config_manager import get_export_subdir
             out_dir = str(get_export_subdir("music_info"))
             outputs = export_all_formats(result, out_dir)
-            lines = [f"[{n}] {s.song_name}" for (n, _), s in zip([], [])]
-            lines = [f"共获取 {len(final_songs)} 首，导出 {len(outputs)} 份"]
+            lines.append("\n📤 导出结果:")
+            for label, path in outputs.items():
+                lines.append(f"  [OK] {label}: {path}")
             return "\n".join(lines), result
 
         def done(result, err):
