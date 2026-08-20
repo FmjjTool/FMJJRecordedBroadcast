@@ -1,19 +1,47 @@
 """PySide6 共享工具：后台线程回主线程 + 跨页面共享状态 + 格式化工具。
 
-与原版 info_pages.py 顶部的共享逻辑对应，只是把 app.after 换成 QTimer.singleShot。
+与原版 info_pages.py 顶部的共享逻辑对应，只是把 app.after 换成信号排队。
 """
 
 import threading
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot
 
 
-class _Bridge(QObject):
-    """跨线程信号桥：后台线程 emit 信号，自动排队到主线程执行槽。"""
-    done = Signal(object, object)
+class _MainBridge(QObject):
+    """post_to_main 专用桥：信号携带可调用对象，主线程执行。"""
+    call = Signal(object)
 
 
-_bridge = _Bridge()  # 在主线程（首次 import 时）创建，线程亲和性 = 主线程
+class _BgBridge(QObject):
+    """run_bg 专用桥：信号携带回调与结果，主线程执行。"""
+    done = Signal(object, object, object)
+
+
+_main_bridge = _MainBridge()   # 在主线程（首次 import 时）创建，线程亲和性 = 主线程
+_bg_bridge = _BgBridge()
+
+
+@Slot(object)
+def _on_main_call(fn):
+    try:
+        fn()
+    except Exception:
+        pass
+
+
+@Slot(object, object, object)
+def _on_bg_done(cb, result, err):
+    try:
+        cb(result, err)
+    except Exception:
+        pass
+
+
+# 只连接一次、永不断开：避免逐次 connect/disconnect 产生的
+# "Failed to disconnect ... from signal" RuntimeWarning
+_main_bridge.call.connect(_on_main_call)
+_bg_bridge.done.connect(_on_bg_done)
 
 
 # ==================== 共享状态 ====================
@@ -30,21 +58,9 @@ CURRENT_QUALITY = "最高画质"
 def run_bg(fn, on_done):
     """后台线程执行 fn()，完成后回主线程调用 on_done(result, err)。
 
-    用信号（Signal）跨线程：后台线程 emit，PySide6 自动 QueuedConnection 排队到主线程。
-    注意：不能用 QTimer.singleShot（它在后台线程创建 QTimer 但无事件循环，回调永远不执行）。
+    信号在 import 时已连接好（QueuedConnection 语义：后台线程 emit 自动排队到主线程），
+    每次调用只 emit 携带回调的信号，不再动态 connect/disconnect。
     """
-    def _handler(result, err):
-        try:
-            _bridge.done.disconnect(_handler)
-        except Exception:
-            pass
-        try:
-            on_done(result, err)
-        except Exception:
-            pass
-
-    _bridge.done.connect(_handler)
-
     def _w():
         result = None
         err = None
@@ -53,7 +69,7 @@ def run_bg(fn, on_done):
         except Exception as e:  # noqa: BLE001
             err = str(e)
         try:
-            _bridge.done.emit(result, err)
+            _bg_bridge.done.emit(on_done, result, err)
         except Exception:
             pass
 
@@ -61,22 +77,11 @@ def run_bg(fn, on_done):
 
 
 def post_to_main(fn, *args):
-    """把 fn(*args) 调度到主线程执行（跨线程安全，用于进度更新等轻量回调）。
-
-    内部同样走 _bridge 信号，避免 QTimer.singleShot 在后台线程失效的问题。
-    """
-    def _handler(_r, _e):
-        try:
-            _bridge.done.disconnect(_handler)
-        except Exception:
-            pass
-        try:
-            fn(*args)
-        except Exception:
-            pass
-
-    _bridge.done.connect(_handler)
-    _bridge.done.emit(None, None)
+    """把 fn(*args) 调度到主线程执行（跨线程安全，用于进度更新等轻量回调）。"""
+    if args:
+        _main_bridge.call.emit(lambda: fn(*args))
+    else:
+        _main_bridge.call.emit(fn)
 
 
 # ==================== 格式化工具 ====================

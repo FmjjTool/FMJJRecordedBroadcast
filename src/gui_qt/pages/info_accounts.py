@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import _collect, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 
 
 def _clear_layout(layout):
@@ -129,7 +130,7 @@ class InfoAccountsPage(BasePage):
         layout.addLayout(sel_bar)
 
         # 账号列表（复选框，固定高度滚动）
-        self.acc_list = QListWidget()
+        self.acc_list = RowCheckList()
         self.acc_list.setFixedHeight(170)
         layout.addWidget(self.acc_list)
 

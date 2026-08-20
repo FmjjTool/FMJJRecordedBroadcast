@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from toolbox.lyrics_engine import LyricConverter
 
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 
 
 class LyricsToolPage(BasePage):
@@ -72,7 +73,7 @@ class LyricsToolPage(BasePage):
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._sel("none")))
         bar.addStretch(1)
         v.addLayout(bar)
-        self.lyr_list = QListWidget()
+        self.lyr_list = RowCheckList()
         self.lyr_list.setMaximumHeight(140)
         v.addWidget(self.lyr_list)
 
@@ -126,7 +127,7 @@ class LyricsToolPage(BasePage):
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._krcd_sel("none")))
         bar.addStretch(1)
         v.addLayout(bar)
-        self.krcd_list = QListWidget()
+        self.krcd_list = RowCheckList()
         self.krcd_list.setMaximumHeight(140)
         v.addWidget(self.krcd_list)
 

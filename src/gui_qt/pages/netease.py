@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import make_row_clickable
 
 QUALITY_NAMES = {
     "standard": "标准",
@@ -375,6 +376,7 @@ class NeteasePage(BasePage):
             dur = QLabel(_fmt_duration(s.get("duration", 0)))
             dur.setStyleSheet("color: #888; font-size: 11px;")
             h.addWidget(dur)
+            make_row_clickable(row, cb)
             self.detail_layout.addWidget(row)
         self.status_label.setText(f"✅ 共 {len(songs)} 首，勾选后批量下载")
 
@@ -526,6 +528,7 @@ class NeteasePage(BasePage):
                 artist = artist.get("name", "")
             lbl = QLabel(f"💿 {alb.get('name', '')} - {artist}")
             h.addWidget(lbl, 1)
+            make_row_clickable(row, cb)
             self.detail_layout.addWidget(row)
         self.status_label.setText(f"✅ 共 {len(albums)} 个专辑，勾选后下载整张专辑")
 

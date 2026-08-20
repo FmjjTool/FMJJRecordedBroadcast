@@ -18,6 +18,7 @@ from gui_qt import common
 from gui_qt.common import _collect, _fmt, post_to_main, refresh_results_count, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 
 
 class VideoDownloadPage(BasePage):
@@ -81,7 +82,7 @@ class VideoDownloadPage(BasePage):
         layout.addLayout(bar)
 
         # 3. 已获取列表
-        self.list_widget = QListWidget()
+        self.list_widget = RowCheckList()
         layout.addWidget(self.list_widget, 1)
 
         # 4. 统一日志框（解析 + 下载）

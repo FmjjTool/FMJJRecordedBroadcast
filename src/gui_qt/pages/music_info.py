@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 
 PLATFORMS = [
     ("kugou", "酷狗音乐"), ("qq", "QQ音乐"), ("netease", "网易云音乐"),
@@ -54,7 +55,7 @@ class MusicInfoPage(BasePage):
             bar.addWidget(QPushButton("反选", clicked=lambda k=key: self._col_select(k, "invert")))
             bar.addWidget(QPushButton("清除", clicked=lambda k=key: self._col_select(k, "none")))
             cv.addLayout(bar)
-            lst = QListWidget()
+            lst = RowCheckList()
             cv.addWidget(lst, 1)
             cols.addWidget(col_w, 1)
             self.columns[key] = {"songs": [], "list": lst}

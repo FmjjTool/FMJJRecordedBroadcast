@@ -27,6 +27,7 @@ from toolbox.utils import format_size
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 from gui_qt.toolbox_common import count_date_subfolders
 
 
@@ -96,7 +97,7 @@ class AudioPage(BasePage):
         head.addWidget(self._mini_btn("全不选", lambda: self._set_all_checks(False)))
         head.addWidget(self._mini_btn("仅当天", self._check_today_only))
         layout.addLayout(head)
-        self.file_list = QListWidget()
+        self.file_list = RowCheckList()
         self.file_list.setMaximumHeight(180)
         self.file_list.itemChanged.connect(lambda _it: self._refresh_start_btn())
         layout.addWidget(self.file_list)
@@ -314,7 +315,7 @@ class AudioPage(BasePage):
         v.addWidget(QLabel(
             f"共 {len(all_files)} 个音频文件（默认全选，取消勾选可保留）"))
 
-        lst = QListWidget()
+        lst = RowCheckList()
         for p in all_files:
             try:
                 size = format_size(p.stat().st_size) if p.exists() else "?"

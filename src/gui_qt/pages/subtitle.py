@@ -15,6 +15,7 @@ from toolbox.utils import format_size
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 
 
 class SubtitlePage(BasePage):
@@ -77,7 +78,7 @@ class SubtitlePage(BasePage):
         bar.addStretch(1)
         layout.addLayout(bar)
 
-        self.file_list = QListWidget()
+        self.file_list = RowCheckList()
         self.file_list.setMaximumHeight(150)
         layout.addWidget(self.file_list)
 

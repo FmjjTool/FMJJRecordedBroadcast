@@ -18,6 +18,7 @@ from gui_qt import common
 from gui_qt.common import _collect, _fmt, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import RowCheckList
 
 PLATFORMS_3 = [
     ("douyin", "📕 抖音"),
@@ -115,7 +116,7 @@ class InfoResultsPage(BasePage):
         btns.addWidget(dl_btn)
         v.addLayout(btns)
 
-        lst = QListWidget()
+        lst = RowCheckList()
         self.cols[key]["list"] = lst
         v.addWidget(lst, 1)
         return col
