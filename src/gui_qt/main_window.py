@@ -353,9 +353,9 @@ class MainWindow(QMainWindow):
             page.on_show()
 
     def closeEvent(self, event):
-        # 关闭窗口：对所有已加载页面触发 on_hide（停抓取/录制/回放等后台任务）
+        # 关闭窗口：对所有已加载页面触发全停（停抓取/录制/回放/dycast 进程树等）
         for page in self.pages.values():
-            fn = getattr(page, "on_hide", None)
+            fn = getattr(page, "shutdown", None) or getattr(page, "on_hide", None)
             if fn:
                 try:
                     fn()

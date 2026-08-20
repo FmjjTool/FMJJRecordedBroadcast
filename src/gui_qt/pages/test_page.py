@@ -53,16 +53,20 @@ class TestPage(BasePage):
         self._monitoring = False
         self.settings = self._load_settings()
         # 视频预览 / 录制 / 模式 / 回放
-        self.mode = "normal"            # normal / video_only / replay
+        self.mode = "normal"            # normal / video_only / danmaku_only / replay
         self.video_player = None
         self.recorder = None
         self._recording = False
         self._streams = {}              # 清晰度 → FLV URL
         self._current_stream = None
+        self._quality_manual = False    # 用户手动切换过清晰度（否则始终默认最高）
         self._session_casts = []        # 本场消息快照（含毫秒时间戳，用于导出回放包）
         self._replay = None             # 回放状态 dict
         self._replay_timer = None
         self._auto_stopped = False      # 因切走页面被自动断开（切回时自动重连）
+        # 轮询：按设置间隔反复重访直播间（断开→重连，保留本场数据）
+        self._poll_timer = None
+        self._polling = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -84,12 +88,17 @@ class TestPage(BasePage):
         top_l.addWidget(cookie_btn)
         self.poll_var = QCheckBox("轮询")
         self.poll_var.setChecked(True)
+        self.poll_var.setToolTip(
+            "轮询：按设置中的「轮询间隔」反复访问直播间（断开→重连），\n"
+            "刷新房间信息与直播流，本场弹幕/统计/计时保持连续。")
+        self.poll_var.stateChanged.connect(lambda _s: self._setup_poll_timer())
         top_l.addWidget(self.poll_var)
-        # 模式切换：正常（视频+弹幕）/ 仅视频 / 回放
+        # 模式切换：正常（视频+弹幕）/ 仅视频 / 仅弹幕 / 回放
         top_l.addWidget(QLabel("模式:"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("正常模式", "normal")
         self.mode_combo.addItem("仅视频模式", "video_only")
+        self.mode_combo.addItem("仅弹幕模式", "danmaku_only")
         self.mode_combo.addItem("回放模式", "replay")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         top_l.addWidget(self.mode_combo)
@@ -341,8 +350,6 @@ class TestPage(BasePage):
         return w
 
     # ======================== 模式切换 ========================
-    QUALITY_NAMES = {"FULL_HD1": "1080P", "HD1": "720P", "SD1": "540P",
-                     "SD2": "360P", "LD": "360P", "_origin": "原画"}
 
     def _on_mode_changed(self, index):
         mode = self.mode_combo.itemData(index)
@@ -358,8 +365,10 @@ class TestPage(BasePage):
         """按当前模式刷新中部布局与视频状态。"""
         normal = self.mode == "normal"
         video_only = self.mode == "video_only"
+        danmaku_only = self.mode == "danmaku_only"
         replay = self.mode == "replay"
-        self.chat_card.setVisible(normal or replay)
+        # 仅视频隐藏弹幕卡；仅弹幕隐藏视频卡（弹幕卡占满中部）
+        self.chat_card.setVisible(not video_only)
         self.video_card.setVisible(normal or video_only or replay)
         self.live_ctrl_row_widget.setVisible(normal or video_only)
         self.replay_row_widget.setVisible(replay)
@@ -368,6 +377,10 @@ class TestPage(BasePage):
             self._stop_live_preview()
             if not self._replay:
                 self.video_label.setText("将 zip 回放包拖入窗口\n或点击「📂 导入回放包」")
+        elif danmaku_only:
+            # 仅弹幕：不拉视频流，弹幕抓取照常
+            self._stop_live_preview()
+            self._stop_replay()
         else:
             self.video_title.setText("📺 直播预览（仅播放，不录制）")
             self._stop_replay()
@@ -377,19 +390,37 @@ class TestPage(BasePage):
         self._refresh_record_ui()
 
     # ======================== 直播预览 / 清晰度 / 录播 ========================
+    QUALITY_NAMES = {"FULL_HD1": "1080P", "HD1": "720P", "SD1": "540P",
+                     "SD2": "360P", "LD": "360P", "_origin": "原画"}
+    # 画质优先级：原画最高（录播默认自动录最高流）
+    QUALITY_ORDER = {"_origin": 100, "FULL_HD1": 90, "UHD": 85, "HD1": 80,
+                     "SD1": 70, "SD2": 60, "LD": 50}
+
     def _on_room_streams(self, streams):
-        """房间信息带回清晰度列表 → 填充下拉并自动起预览。"""
+        """房间信息带回清晰度列表 → 按画质排序填充，默认选中最高并起预览。"""
         self._streams = streams or {}
+        keys = sorted(self._streams, key=lambda k: -self.QUALITY_ORDER.get(k, 0))
+        # 手动切换过 → 记住用户选择；否则默认最高
+        prev = self.quality_combo.currentData() if self._quality_manual else None
         self.quality_combo.blockSignals(True)
         self.quality_combo.clear()
-        for q in self._streams:
-            label = self.QUALITY_NAMES.get(q, q)
-            self.quality_combo.addItem(label, q)
+        for q in keys:
+            self.quality_combo.addItem(self.QUALITY_NAMES.get(q, q), q)
+        idx = self.quality_combo.findData(prev) if prev in self._streams else 0
+        self.quality_combo.setCurrentIndex(max(0, idx))
         self.quality_combo.blockSignals(False)
+        if keys:
+            q = self.quality_combo.currentData() or keys[0]
+            self._current_stream = self._streams.get(q)
         if self._streams and self.mode in ("normal", "video_only"):
             self._start_live_preview()
 
     def _on_quality_changed(self, _index=None):
+        """用户手动切换清晰度 → 预览与录制流跟随（除非手动切换，否则始终最高）。"""
+        self._quality_manual = True
+        q = self.quality_combo.currentData()
+        if q and self._streams.get(q):
+            self._current_stream = self._streams[q]
         if self.mode in ("normal", "video_only") and self._streams:
             self._start_live_preview()
 
@@ -443,6 +474,10 @@ class TestPage(BasePage):
             self._start_recording()
 
     def _start_recording(self):
+        # 录制流跟随清晰度选择：默认最高画质；手动切换过则录切换后的流
+        if not self._current_stream and self._streams:
+            best = sorted(self._streams, key=lambda k: -self.QUALITY_ORDER.get(k, 0))[0]
+            self._current_stream = self._streams[best]
         if not self._current_stream:
             self.app.toast("无可用直播流（需先连接并获取清晰度）", "warning")
             return
@@ -504,8 +539,31 @@ class TestPage(BasePage):
         QTimer.singleShot(1000, self._tick_record)
 
     # ======================== 导出 / 导入回放包 ========================
+    # dycast castTypeMap 同款分类（method → 分类 TXT 文件名）
+    CAST_TXT_TYPES = (
+        ("WebcastChatMessage", "弹幕"),
+        ("WebcastGiftMessage", "礼物"),
+        ("WebcastSocialMessage", "关注"),
+        ("WebcastLikeMessage", "点赞"),
+        ("WebcastMemberMessage", "进入"),
+    )
+
+    @staticmethod
+    def _cast_txt_line(c):
+        """一条弹幕 → dycast TXT 行（HH:mm:ss.SSS|[昵称]：内容）。"""
+        ts = c.get("timestamp") or 0
+        time_str = (datetime.fromtimestamp(ts / 1000).strftime("%H:%M:%S.%f")[:-3]
+                    if ts else "??:??:??.???")
+        name = (c.get("user") or {}).get("name") or "unknown"
+        if c.get("gift"):
+            text = f"送出了 {c['gift'].get('name') or '礼物'} × {c['gift'].get('count') or 1}"
+        else:
+            text = c.get("content") or ""
+        return f"{time_str}|[{name}]：{text}" if text else None
+
     def _export_replay_zip(self, video_path=None, rec_meta=None, quiet=False):
-        """把本场弹幕（+录制的视频）打包为可回放 zip（dycast 兼容格式）。"""
+        """打包为 dycast 全量格式 zip：data.json + 全量弹幕.json + 分类 TXT +
+        cover + recording.flv（可被 dycast 与本工具回放直接导入）。"""
         casts = list(self._session_casts)
         if not casts:
             if not quiet:
@@ -523,7 +581,10 @@ class TestPage(BasePage):
             "exportTime": datetime.now().isoformat(),
             "roomId": room,
             "nickname": anchor,
+            "avatar": "",
+            "cover": "",
             "title": "",
+            "likeCount": self._like_count,
             "casts": casts,
         }
         has_video = bool(video_path and os.path.exists(video_path)
@@ -531,14 +592,25 @@ class TestPage(BasePage):
         if has_video and not rec_meta:
             rec_meta = {"startTimestamp": casts[0].get("timestamp"), "file": "recording.flv"}
         meta_json = json.dumps(rec_meta, ensure_ascii=False, indent=1) if rec_meta else None
-        bundle_json = json.dumps(bundle, ensure_ascii=False, indent=1)
+        # 分类 TXT（dycast castTypeMap 同款：弹幕/礼物/关注/点赞/进入）
+        txt_files = []
+        for method, label in self.CAST_TXT_TYPES:
+            lines = [ln for c in casts if c.get("method") == method
+                     for ln in [self._cast_txt_line(c)] if ln]
+            if lines:
+                txt_files.append((f"{label}.txt", "\n".join(lines)))
         cover = getattr(self, "_cover_bytes", None)
         vpath = video_path if has_video else None
 
         def work():
             try:
                 with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
-                    z.writestr("data.json", bundle_json)
+                    z.writestr("data.json",
+                               json.dumps(bundle, ensure_ascii=False, indent=1))
+                    z.writestr("全量弹幕.json",
+                               json.dumps(casts, ensure_ascii=False, indent=1))
+                    for name, content in txt_files:
+                        z.writestr(name, content)
                     if cover:
                         z.writestr("cover.jpg", cover)
                     if vpath:
@@ -1034,6 +1106,12 @@ class TestPage(BasePage):
 
         e_monitor = row("弹幕监控间隔(秒):", s.get("monitor_interval", 30))
         e_stats = row("统计数据采集间隔(秒):", s.get("stats_interval", 1))
+        e_poll = row("轮询间隔(秒):", s.get("poll_interval", 60))
+        # 弹幕自动保存说明（保存位置固定为 导出目录/弹幕文件/）
+        from toolbox.douyin_live import _danmaku_dir
+        v.addWidget(QLabel(
+            f"自动保存弹幕到：{_danmaku_dir()}（断开连接 / 退出软件时自动导出）",
+            styleSheet="color: #888; font-size: 11px;"))
 
         # 监控房间列表（多行）
         v.addWidget(QLabel("监控房间列表（每行一个房间号）:", styleSheet="color: #888;"))
@@ -1052,24 +1130,22 @@ class TestPage(BasePage):
         sw_record = QCheckBox("启用直播录制（FLV，需视频模式）")
         sw_record.setChecked(bool(s.get("auto_record", False)))
         v.addWidget(sw_record)
-
-        # 视频显示模式
-        video_row = QHBoxLayout()
-        video_row.addWidget(QLabel("视频显示模式:"))
-        from PySide6.QtWidgets import QComboBox
-        video_mode = QComboBox()
-        video_mode.addItems(["正常(视频+弹幕)", "关闭视频(仅弹幕/数据)", "仅视频"])
-        video_row.addWidget(video_mode, 1)
-        v.addLayout(video_row)
+        sw_autosave = QCheckBox("自动保存弹幕（断开连接 / 退出软件时导出到「弹幕文件」目录）")
+        sw_autosave.setChecked(bool(s.get("auto_save_danmaku", True)))
+        v.addWidget(sw_autosave)
 
         def save():
             self.settings["monitor_interval"] = int(e_monitor.text() or 30)
             self.settings["stats_interval"] = int(e_stats.text() or 1)
+            self.settings["poll_interval"] = max(15, int(e_poll.text() or 60))
             self.settings["room_list"] = room_box.toPlainText().strip()
             self.settings["keep_scroll"] = bool(sw_keep.isChecked())
             self.settings["dark_mode"] = bool(sw_dark.isChecked())
             self.settings["auto_record"] = bool(sw_record.isChecked())
+            self.settings["auto_save_danmaku"] = bool(sw_autosave.isChecked())
             self._save_settings()
+            # 轮询间隔变更 → 已连接时立即按新间隔重排
+            self._setup_poll_timer()
             dlg.accept()
             self.app.toast("设置已保存", "success")
 
@@ -1165,32 +1241,33 @@ class TestPage(BasePage):
         if not room:
             QMessageBox.warning(self, "提示", "请输入房间号")
             return
+        # 轮询重访：保留本场弹幕/统计/计时（仅刷新连接）
+        keep = self._polling
         self.connected = True
-        self._start_ts = time.time()
-        self._like_count = 0
-        self._gift_rank = {}
-        self._session_casts = []
-        # 记住本次房间号（切走自动断开后，切回可自动重连）
-        self.settings["last_room"] = room
-        self._save_settings()
-        self.gift_table.setRowCount(0)
-        self.like_label.setText("0")
-        self.anchor_fields["like_count"].setText("0")
+        if not keep:
+            self._start_ts = time.time()
+            self._like_count = 0
+            self._gift_rank = {}
+            self._session_casts = []
+            self.gift_table.setRowCount(0)
+            self.like_label.setText("0")
+            self.anchor_fields["like_count"].setText("0")
+            # 记住本次房间号（切走自动断开后，切回可自动重连）
+            self.settings["last_room"] = room
+            self._save_settings()
+            # 清空两个弹幕框的初始占位 + 封面/主播占位
+            self.chat_gift_box.clear()
+            self.event_box.setPlainText("")
+            self._cover_bytes = None
+            self.cover_label.setText("暂无封面")
+            for key in ("anchor_name", "anchor_fans", "online_count", "total_viewers"):
+                self.anchor_fields[key].setText("…")
         self.connect_btn.setEnabled(False)
         self.connect_btn2.setEnabled(False)
         self.disconnect_btn.setEnabled(True)
         self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
         self.status_label.setText(f"连接中 · 房间 {room}")
         self.status_label.setStyleSheet("color: #eab308;")
-        # 清空两个弹幕框的初始占位
-        self.chat_gift_box.clear()
-        self.event_box.setPlainText("")
-        # 重置封面占位
-        self._cover_bytes = None
-        self.cover_label.setText("暂无封面")
-        # 重置主播信息占位
-        for key in ("anchor_name", "anchor_fans", "online_count", "total_viewers"):
-            self.anchor_fields[key].setText("…")
         if not self._timer_running:
             self._timer_running = True
             self._tick()
@@ -1206,10 +1283,14 @@ class TestPage(BasePage):
         # 启动统计数据采集（若开启保存统计）
         if self.save_stats_var.isChecked():
             self._start_stats_collector(room)
+        self._setup_poll_timer()
 
     def _disconnect(self):
         self.connected = False
         self._timer_running = False
+        if self._poll_timer:
+            self._poll_timer.stop()
+            self._poll_timer = None
         if self.fetcher:
             self.fetcher.stop()
             self.fetcher = None
@@ -1222,7 +1303,39 @@ class TestPage(BasePage):
         self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
         self.status_label.setText("已断开")
         self.status_label.setStyleSheet("color: #888;")
-        self.like_label.setText("0")
+        if not self._polling:
+            # 手动断开：自动保存弹幕 + 重置清晰度选择（下次连接默认最高流）
+            self._quality_manual = False
+            self.like_label.setText("0")
+            if self.settings.get("auto_save_danmaku", True):
+                self._auto_save_danmaku()
+
+    # ======================== 轮询（按设置间隔反复访问直播间） ========================
+    def _setup_poll_timer(self):
+        """勾选轮询且已连接 → 按设置间隔周期性重访直播间。"""
+        if self._poll_timer:
+            self._poll_timer.stop()
+            self._poll_timer = None
+        if not (self.poll_var.isChecked() and self.connected):
+            return
+        interval = max(15, int(self.settings.get("poll_interval", 60) or 60))
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_reconnect)
+        self._poll_timer.start(interval * 1000)
+
+    def _poll_reconnect(self):
+        """轮询到点：断开 → 重连（反复访问直播间，刷新房间信息与直播流）。"""
+        if not self.poll_var.isChecked() or not self.connected:
+            self._setup_poll_timer()
+            return
+        self._polling = True
+        try:
+            self._disconnect()
+            self._connect()
+        finally:
+            self._polling = False
+        if self.connected:
+            self.app.toast("轮询：已重新访问直播间", "info")
 
     # ======================== 保存弹幕 / 统计 / 开播监控 ========================
     def _save_danmaku_now(self):
@@ -1231,13 +1344,21 @@ class TestPage(BasePage):
         if not room:
             QMessageBox.warning(self, "提示", "请先输入房间号")
             return
+        path = self._auto_save_danmaku()
+        if path:
+            self.app.toast(f"弹幕已保存到 {path}", "success")
+        else:
+            self.app.toast("当前没有弹幕数据可保存", "warning")
+
+    def _auto_save_danmaku(self):
+        """静默导出弹幕（断开/退出时自动调用），返回文件路径（无数据返回 None）。"""
+        room = self.room_entry.text().strip() or "room"
         chat = self.chat_gift_box.toPlainText().strip()
         event = self.event_box.toPlainText().strip()
         if chat == "（暂无弹幕/礼物）":
             chat = ""
         if not chat and not event:
-            self.app.toast("当前没有弹幕数据可保存", "warning")
-            return
+            return None
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         lines = []
         if chat:
@@ -1246,16 +1367,16 @@ class TestPage(BasePage):
         if event:
             lines.append("===== 进场/点赞/关注/日志 =====")
             lines.append(event)
-        content = "\n".join(lines) + "\n"
-        # 写入文件
-        from toolbox.douyin_live import _danmaku_dir
-        d = _danmaku_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        fname = f"{room}_{ts}.txt"
-        path = d / fname
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        self.app.toast(f"弹幕已保存到 {path}", "success")
+        try:
+            from toolbox.douyin_live import _danmaku_dir
+            d = _danmaku_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            path = d / f"{room}_{ts}.txt"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            return str(path)
+        except Exception:
+            return None
 
     def _on_save_stats_toggle(self, checked):
         self.settings["save_stats"] = bool(checked)
@@ -1607,8 +1728,12 @@ class TestPage(BasePage):
 
     # ======================== 页面生命周期（全局同步：进自动启 / 出自动停） ========================
     def on_show(self):
-        """切到本页：上次因切走被自动断开（且有房间号）→ 自动重连。"""
+        """切到本页：录制中恢复预览；上次因切走被自动断开（且有房间号）→ 自动重连。"""
         if self.connected or self.fetcher:
+            # 后台保持运作中（如录制中切走再切回）：恢复视频预览渲染
+            if self._streams and self.mode in ("normal", "video_only") \
+                    and not (self.video_player and self.video_player.is_running()):
+                self._start_live_preview()
             return
         room = self.room_entry.text().strip()
         if room and self._auto_stopped:
@@ -1616,7 +1741,17 @@ class TestPage(BasePage):
             self._connect()
 
     def on_hide(self):
-        """切离本页：停录制（自动打包回放包）/ 回放 / 视频预览 / 弹幕抓取 / 监控。"""
+        """切离本页：录制中保持后台运作（弹幕抓取+录制继续），仅停 UI 渲染；
+        未录制则全停（录制自动打包回放包/回放/预览/抓取/监控）。"""
+        if self._recording:
+            # 录制中切页面：维持弹幕抓取与录制，只停视频预览渲染与回放
+            self._stop_replay()
+            self._stop_live_preview()
+            return
+        self.shutdown()
+
+    def shutdown(self):
+        """全停（切走且未录制 / 软件退出时调用）：停一切后台任务并自动保存。"""
         was_active = self.connected or self.fetcher or self.video_player or self._recording
         if self._recording:
             self._stop_recording()

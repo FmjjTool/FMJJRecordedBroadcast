@@ -15,3 +15,7 @@ class BasePage(QWidget):
     def on_hide(self):
         """每次从该页切走时调用（停后台任务用）。默认无操作。"""
         pass
+
+    def shutdown(self):
+        """软件退出时调用（全停：子进程树 / 录制 / 抓取等）。默认等同 on_hide。"""
+        self.on_hide()

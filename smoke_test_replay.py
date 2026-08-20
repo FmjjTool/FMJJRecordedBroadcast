@@ -244,6 +244,145 @@ def main():
     check("json 包回放（无视频）", page._replay is not None and page.video_player is None)
     page._stop_replay()
 
+    print("== 10. 四模式切换（含仅弹幕模式） ==")
+    page._recording = False
+    for mode, video_h, chat_h in (("normal", False, False), ("video_only", False, True),
+                                  ("danmaku_only", True, False), ("replay", False, False)):
+        page.mode = mode
+        page._apply_mode()
+        ok = page.video_card.isHidden() == video_h and page.chat_card.isHidden() == chat_h
+        check(f"模式 {mode} 布局", ok)
+    page.mode = "danmaku_only"
+    page._apply_mode()
+    check("仅弹幕：隐藏录播控制行", page.live_ctrl_row_widget.isHidden())
+
+    print("== 11. 清晰度排序 + 默认最高 + 手动切换 ==")
+    page._start_live_preview = lambda: None  # 防真实拉流
+    streams = {"SD1": "url_sd", "_origin": "url_origin", "HD1": "url_hd"}
+    page._quality_manual = False
+    page._on_room_streams(dict(streams))
+    check("默认最高流（原画优先）", page.quality_combo.currentData() == "_origin")
+    check("录制流 = 最高流", page._current_stream == "url_origin")
+    check("排序：原画第一", page.quality_combo.itemText(0) == "原画")
+    page.quality_combo.setCurrentIndex(page.quality_combo.findData("HD1"))
+    check("手动切换标记", page._quality_manual)
+    check("录制流跟随手动切换", page._current_stream == "url_hd")
+    page._on_room_streams(dict(streams))
+    check("重连保持手动选择", page.quality_combo.currentData() == "HD1")
+    page._quality_manual = False
+    page._on_room_streams(dict(streams))
+    check("重置后回到最高", page.quality_combo.currentData() == "_origin")
+
+    print("== 12. 轮询（按间隔反复访问直播间） ==")
+    page.poll_var.setChecked(True)
+    page.connected = True
+    page.settings["poll_interval"] = 90
+    page._setup_poll_timer()
+    check("轮询定时器创建", page._poll_timer is not None and page._poll_timer.isActive())
+    check("轮询间隔 90s", page._poll_timer is not None and page._poll_timer.interval() == 90000)
+    seq = []
+    page._disconnect = lambda: (seq.append("disc"), setattr(page, "connected", False))
+    page._connect = lambda: (seq.append("conn"), setattr(page, "connected", True))
+    page._poll_reconnect()
+    check("轮询重访顺序 断开→重连", seq == ["disc", "conn"])
+    check("轮询标志复位", page._polling is False)
+    page.poll_var.setChecked(False)
+    check("取消轮询 → 定时器停", page._poll_timer is None)
+
+    print("== 13. 自动保存弹幕（断开/退出时） ==")
+    page.connected = False
+    page.room_entry.setText("6096197105")
+    page.chat_gift_box.setPlainText("22:06:49 [观众]：你好")
+    page.event_box.setPlainText("22:06:50 [新人]：进入直播间")
+    path = page._auto_save_danmaku()
+    check("自动保存生成文件", bool(path) and os.path.exists(path))
+    if path:
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        check("内容含弹幕+进场分段", "===== 弹幕/礼物 =====" in content and "进入直播间" in content)
+        check("保存到 弹幕文件 目录", "弹幕文件" in path)
+        os.remove(path)
+    page.chat_gift_box.clear()
+    page.event_box.clear()
+    check("无数据不生成文件", page._auto_save_danmaku() is None)
+
+    print("== 14. 导出 dycast 全量包结构 ==")
+    import gui_qt.pages.test_page as tp_mod
+    orig_run_bg = tp_mod.run_bg
+    tp_mod.run_bg = lambda work, done=None: (done or (lambda r, e=None: None))(work())
+    page._session_casts = list(casts)
+    page._cover_bytes = None
+    page.anchor_fields["anchor_name"].setText("测试主播")
+    page._export_replay_zip(quiet=True)
+    from toolbox.douyin_live import _danmaku_dir as _dd
+    out_dir = _dd().parent / "回放包"
+    zips = sorted(out_dir.glob("测试主播-*.zip"))
+    check("导出 zip 生成", len(zips) >= 1)
+    if zips:
+        with zipfile.ZipFile(zips[-1]) as z:
+            names = set(z.namelist())
+            check("含 data.json", "data.json" in names)
+            check("含 全量弹幕.json", "全量弹幕.json" in names)
+            check("含分类TXT（弹幕/礼物/进入）",
+                  "弹幕.txt" in names and "礼物.txt" in names and "进入.txt" in names)
+            b = json.loads(z.read("data.json").decode("utf-8"))
+            check("_bundle 标记（dycast 可导入）", b.get("_bundle") is True)
+            check("casts 数量", len(b.get("casts", [])) == 20)
+            txt = z.read("弹幕.txt").decode("utf-8")
+            check("TXT 行格式 dycast 同款", "|[观众0]：第0条弹幕" in txt)
+        os.remove(zips[-1])
+    tp_mod.run_bg = orig_run_bg
+
+    print("== 15. 录制中切页面保持后台运作 ==")
+    seq2 = []
+
+    class FakeFetcher:
+        def stop(self):
+            seq2.append("fetcher_stop")
+
+    page._recording = True
+    page.fetcher = FakeFetcher()
+    page.connected = True
+    page.video_player = None
+    page._stop_recording = lambda: seq2.append("stop_rec")
+    page._disconnect = lambda: seq2.append("disc")
+    page.on_hide()
+    check("录制中切走：抓取/录制继续", seq2 == [] and page.fetcher is not None and page.connected)
+    check("录制中切走：不标记自动重连", not page._auto_stopped)
+    page.shutdown()
+    check("软件退出：录制停止+断开", seq2 == ["stop_rec", "disc"])
+    page._recording = False
+    page.fetcher = None
+    page.connected = False
+
+    print("== 16. dycast 进程树（Job Object 父关子关） ==")
+    from gui_qt.pages.dycast import DycastPage, _create_kill_job, _terminate_job
+    job = _create_kill_job()
+    check("Job Object 创建", bool(job))
+    if job:
+        check("Job 终止+释放", _terminate_job(job))
+    dp = DycastPage(FakeApp())
+    check("链接进程树默认勾选", dp.link_tree_var.isChecked())
+    check("启动时停止按钮禁用", not dp.stop_btn.isEnabled())
+
+    class FakeProc:
+        pid = 99999
+
+        @staticmethod
+        def poll():
+            return None
+
+    dp._proc = FakeProc()
+    dp.on_show()  # 切回页面同步按钮状态
+    FakeApp.toasts.clear()
+    dp._launch()
+    check("单实例拒绝二次启动", any(l == "warning" for l, _ in FakeApp.toasts))
+    check("运行中停止按钮可用", dp.stop_btn.isEnabled())
+    dp._proc = None
+    dp._job = None
+    dp.shutdown()
+    check("shutdown 清理安全", dp._proc is None and dp._job is None)
+
     # 清理
     try:
         os.remove(zip_path)
