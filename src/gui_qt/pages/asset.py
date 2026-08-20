@@ -13,7 +13,6 @@ import io
 import json
 import os
 import re
-import threading
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
@@ -25,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import common
-from gui_qt.common import _fmt, post_to_main, run_bg
+from gui_qt.common import _fmt, run_bg
 from gui_qt.pages.base import BasePage
 
 # 支持的资源扩展名
@@ -215,7 +214,7 @@ class AssetPage(BasePage):
         v.addWidget(self.local_status)
 
         # 懒加载列表（滚动区）
-        self.local_scroll, self.local_container, self.local_layout = self._make_scroll()
+        self.local_scroll, _, self.local_layout = self._make_scroll()
         v.addWidget(self.local_scroll, 1)
         return f
 
@@ -408,7 +407,7 @@ class AssetPage(BasePage):
         bar.addWidget(refresh_btn)
         v.addLayout(bar)
 
-        self.collected_scroll, self.collected_container, self.collected_layout = self._make_scroll()
+        self.collected_scroll, _, self.collected_layout = self._make_scroll()
         v.addWidget(self.collected_scroll, 1)
 
         # 首次扫描（后台，避免阻塞界面）

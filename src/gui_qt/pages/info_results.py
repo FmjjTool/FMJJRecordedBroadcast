@@ -10,12 +10,12 @@ import webbrowser
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
     QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
-from gui_qt.common import _collect, _fmt, run_bg
+from gui_qt.common import _fmt, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
@@ -117,6 +117,8 @@ class InfoResultsPage(BasePage):
         v.addLayout(btns)
 
         lst = RowCheckList()
+        lst.itemDoubleClicked.connect(
+            lambda item: self._open_url(item.data(Qt.UserRole) or ""))
         self.cols[key]["list"] = lst
         v.addWidget(lst, 1)
         return col
@@ -191,14 +193,13 @@ class InfoResultsPage(BasePage):
     # ==================== 操作 ====================
 
     def _open_url(self, url):
+        """双击行（行尾 🔗）打开对应链接。"""
+        if not url:
+            return
         try:
             webbrowser.open(url)
         except Exception as e:
             QMessageBox.critical(self, "打开失败", str(e))
-
-    def mousePressEvent(self, event):
-        # 双击行尾 🔗 或整行 → 打开链接（用 itemDoubleClicked 更贴近原版按钮）
-        super().mousePressEvent(event)
 
     def _get_formats(self):
         fmts = []

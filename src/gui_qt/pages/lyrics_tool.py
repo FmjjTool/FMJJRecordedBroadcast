@@ -4,7 +4,7 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
     QMessageBox, QPushButton, QRadioButton, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 

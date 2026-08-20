@@ -10,7 +10,7 @@ B站视频走 playurl 下载（画质可选，默认最高），抖音/微博走
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidgetItem,
     QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
 )
 

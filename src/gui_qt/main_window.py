@@ -11,7 +11,7 @@ import os
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
+    QApplication, QCheckBox, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -312,7 +312,7 @@ class MainWindow(QMainWindow):
             pass
 
     def _toggle_cookie(self, checked):
-        from auth import is_cookie_enabled, set_cookie_enabled
+        from auth import set_cookie_enabled
         set_cookie_enabled(bool(checked))
         self._refresh_cookie_status()
 
@@ -441,14 +441,6 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return False
         return True
-
-    def choose_work_dir(self):
-        """弹出目录选择框切换工作目录（供工具箱页面共用）。"""
-        d = QFileDialog.getExistingDirectory(self, "选择工作目录", self.work_dir)
-        if d:
-            self.work_dir = d
-            self._refresh_all()
-            self.toast(f"✅ 已切换: {d}", "success")
 
     def toast(self, msg, kind="info"):
         show_toast(self, msg, kind=kind)

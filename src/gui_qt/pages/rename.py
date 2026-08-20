@@ -702,7 +702,7 @@ class RenamePage(BasePage):
         self.plat_scroll.setWidget(self.plat_container)
         outer.addWidget(self.plat_scroll)
         add_plat_btn = QPushButton("➕ 添加平台")
-        add_plat_btn.clicked.connect(self._add_platform)
+        add_plat_btn.clicked.connect(lambda: self._add_card_item("platform"))
         outer.addWidget(add_plat_btn)
 
         # 其他设置：后缀 / 阈值 / 保存
@@ -869,21 +869,6 @@ class RenamePage(BasePage):
             save_rename_config(cfg)
             self._build_card_list(self._get_card_layout(card_type), lst, card_type)
             self._rebuild_rename_radios(card_type)
-
-    def _add_account(self):
-        name, ok = QInputDialog.getText(self, "添加账户", "输入新账户名:")
-        if ok and name.strip():
-            self._do_add("account", name.strip())
-
-    def _add_type(self):
-        name, ok = QInputDialog.getText(self, "添加类型", "输入新类型名:")
-        if ok and name.strip():
-            self._do_add("type", name.strip())
-
-    def _add_platform(self):
-        name, ok = QInputDialog.getText(self, "添加平台", "输入新平台名:")
-        if ok and name.strip():
-            self._do_add("platform", name.strip())
 
     def _load_params_to_ui(self):
         self.rename_config = get_rename_config()

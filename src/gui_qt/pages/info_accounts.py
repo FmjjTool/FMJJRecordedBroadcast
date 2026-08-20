@@ -11,13 +11,12 @@ import contextlib
 import io
 import json
 import os
-import threading
 import time
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
     QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget,
 )
