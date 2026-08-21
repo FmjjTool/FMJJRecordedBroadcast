@@ -59,6 +59,15 @@ def main():
     except Exception:
         pass  # 日志初始化失败不影响主程序
 
+    # QtWebEngine 必须在 QApplication 之前导入（否则运行期创建内嵌浏览器
+    # 会报 "must be imported before QCoreApplication"），缺组件时静默降级
+    try:
+        from PySide6.QtCore import Qt
+        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+        from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+    except ImportError:
+        pass
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     # 主题：先装 setStyleSheet 自动重映射补丁，再按配置应用浅色/深色 QSS

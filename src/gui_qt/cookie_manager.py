@@ -70,23 +70,16 @@ class CookieManagerDialog(QDialog):
         self.pw_status.setText("浏览器组件：❌ 未安装（未登录抖音/微博时采集需要）")
         self.pw_status.setStyleSheet("color: #ff5252;")
 
-    def _install_playwright(self):
-        """后台安装 playwright + chromium，弹日志窗口显示进度。"""
-        if getattr(sys, "frozen", False):
-            QMessageBox.information(
-                self, "提示",
-                "安装版内置了免登录方案（软件内浏览器登录 + Cookie 直采），无需此组件。\n"
-                "该安装功能仅在源码运行（python app_qt.py）时可用。")
-            return
-
+    def _pip_install_dialog(self, title, tip, cmds, success_msg, on_ok=None):
+        """通用后台安装：逐条执行 cmds（(显示名, 参数列表)），弹实时日志窗口。"""
         from gui_qt.common import post_to_main
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("下载浏览器组件")
+        dlg.setWindowTitle(title)
         dlg.resize(560, 320)
         v = QVBoxLayout(dlg)
-        tip = QLabel("正在安装 Playwright + Chromium（约 150 MB，取决于网速）…")
-        v.addWidget(tip)
+        tip_lbl = QLabel(tip)
+        v.addWidget(tip_lbl)
         from PySide6.QtWidgets import QPlainTextEdit
         log_view = QPlainTextEdit()
         log_view.setReadOnly(True)
@@ -105,38 +98,47 @@ class CookieManagerDialog(QDialog):
             import subprocess
             ok = True
             try:
-                append_log("$ pip install playwright")
-                r = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "playwright"],
-                    capture_output=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", timeout=1800,
-                )
-                for line in (r.stdout or "").splitlines():
-                    append_log(line)
-                ok = ok and r.returncode == 0
-
-                append_log("\n$ playwright install chromium")
-                r2 = subprocess.run(
-                    [sys.executable, "-m", "playwright", "install", "chromium"],
-                    capture_output=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", timeout=3600,
-                )
-                for line in (r2.stdout or "").splitlines():
-                    append_log(line)
-                ok = ok and r2.returncode == 0
+                for disp, args in cmds:
+                    append_log(f"$ {disp}")
+                    r = subprocess.run(
+                        [sys.executable] + args,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, encoding="utf-8", errors="replace", timeout=3600,
+                    )
+                    for line in (r.stdout or "").splitlines():
+                        append_log(line)
+                    ok = ok and r.returncode == 0
             except Exception as e:
                 append_log(f"安装失败：{e}")
                 ok = False
 
             def _finish():
-                append_log("\n完成 ✅" if ok else "\n失败 ❌（可重试或手动执行上面两条命令）")
-                tip.setText("安装完成，可关闭本窗口" if ok else "安装失败，可重试")
-                self._refresh_pw_status()
+                append_log("\n完成 ✅" if ok else "\n失败 ❌（可重试或手动执行上面的命令）")
+                tip_lbl.setText("安装完成，可关闭本窗口" if ok else "安装失败，可重试")
+                if on_ok:
+                    on_ok(ok)
                 if ok:
-                    QMessageBox.information(self, "成功", "浏览器组件安装完成！\n现在未登录抖音/微博也可以采集数据了。")
+                    QMessageBox.information(self, "成功", success_msg)
             post_to_main(_finish)
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _install_playwright(self):
+        """后台安装 playwright + chromium，弹日志窗口显示进度。"""
+        if getattr(sys, "frozen", False):
+            QMessageBox.information(
+                self, "提示",
+                "安装版内置了免登录方案（软件内浏览器登录 + Cookie 直采），无需此组件。\n"
+                "该安装功能仅在源码运行（python app_qt.py）时可用。")
+            return
+        self._pip_install_dialog(
+            "下载浏览器组件",
+            "正在安装 Playwright + Chromium（约 150 MB，取决于网速）…",
+            [("pip install playwright", ["-m", "pip", "install", "playwright"]),
+             ("playwright install chromium", ["-m", "playwright", "install", "chromium"])],
+            "浏览器组件安装完成！\n现在未登录抖音/微博也可以采集数据了。",
+            on_ok=lambda ok: self._refresh_pw_status(),
+        )
 
     def _reload(self):
         while self.container_layout.count():
@@ -214,6 +216,23 @@ class CookieManagerDialog(QDialog):
             from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
             from PySide6.QtWebEngineWidgets import QWebEngineView
         except ImportError:
+            if not getattr(sys, "frozen", False):
+                # 源码运行且 PySide6 是精简安装（Essentials 不含 WebEngine）→ 一键补装
+                ret = QMessageBox.question(
+                    self, "缺少组件",
+                    "内嵌浏览器组件（QtWebEngine）未安装，通常是 PySide6 精简安装导致。\n"
+                    "是否现在自动安装 PySide6-Addons（约 150 MB）？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                if ret == QMessageBox.Yes:
+                    self._pip_install_dialog(
+                        "安装 QtWebEngine 组件",
+                        "正在安装 PySide6-Addons（含内嵌浏览器组件）…",
+                        [("pip install PySide6-Addons", ["-m", "pip", "install", "PySide6-Addons"])],
+                        "组件安装完成！请重启软件后再点「浏览器」登录。",
+                    )
+                else:
+                    QMessageBox.warning(self, "不可用", "可先改用「输入」手动粘贴 Cookie")
+                return
             QMessageBox.warning(self, "不可用", "内嵌浏览器组件缺失（QtWebEngine），请改用「输入」手动粘贴 Cookie")
             return
 
