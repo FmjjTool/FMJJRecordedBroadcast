@@ -233,6 +233,14 @@ def clear_cookie(platform: str):
     cookie_times.pop(platform, None)
 
     save_cookies(all_cookies, cookie_times)
+    if platform == "netease":
+        # 同时删旧 netease/cookie.txt，否则下次读取会被迁移逻辑"复活"成刚登录
+        legacy = _netease_legacy_file()
+        try:
+            if os.path.exists(legacy):
+                os.remove(legacy)
+        except OSError:
+            pass
 
 
 def _netease_legacy_file() -> str:
@@ -241,16 +249,21 @@ def _netease_legacy_file() -> str:
 
 
 def get_netease_cookie() -> str:
-    """获取网易云 cookie，统一从 config/cookies.json 读，为空时从旧 netease/cookie.txt 迁移。"""
+    """获取网易云 cookie。仅当统一存储从未记录过 netease 时，做一次性迁移（旧
+    netease/cookie.txt）；TTL 过期、用户清除都不会从旧文件复活 Cookie。"""
     cookie = get_cookie("netease")
     if cookie:
         return cookie
+    # 曾记录过（含被清除/过期）→ 不迁移，避免清除后显示"已登录·刚刚"复活
+    if "netease" in _load_cookie_times() or "netease" in load_cookies():
+        return ""
     legacy = _netease_legacy_file()
     try:
         if os.path.exists(legacy):
             content = open(legacy, encoding="utf-8").read().strip()
             if content:
                 set_cookie("netease", content)  # 迁移到统一存储
+                os.remove(legacy)               # 迁移是一次性的，删掉旧文件
                 return content
     except Exception:
         pass
