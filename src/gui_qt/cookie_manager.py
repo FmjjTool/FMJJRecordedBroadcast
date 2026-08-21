@@ -77,7 +77,7 @@ class CookieManagerDialog(QDialog):
             row.addWidget(self._btn("清除", lambda p=plat: self._clear(p), danger=True))
             w = QWidget()
             w.setLayout(row)
-            w.setStyleSheet("QWidget { background: #1a1d27; border-radius: 6px; }")
+            w.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             self.container_layout.addWidget(w)
 
     def _btn(self, text, slot, primary=False, danger=False):

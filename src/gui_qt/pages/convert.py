@@ -47,7 +47,7 @@ class ConvertPage(BasePage):
         dir_row = QHBoxLayout()
         self.dir_label = QLabel(app.work_dir)
         self.dir_label.setStyleSheet(
-            "background: transparent; color: #c6cbd6; padding: 4px 8px;")
+            "background: transparent; color: #2f3440; padding: 4px 8px;")
         dir_row.addWidget(self.dir_label, 1)
         self.dir_date_label = QLabel("")
         self.dir_date_label.setStyleSheet("color: #888;")
@@ -115,7 +115,7 @@ class ConvertPage(BasePage):
         btn_row.addWidget(self.stop_btn)
         clear_btn = QPushButton("🗑 清除缓存")
         clear_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #3a3d4a; color: #c6cbd6;")
+            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         clear_btn.clicked.connect(self._clear_cache)
         btn_row.addWidget(clear_btn)
         btn_row.addStretch(1)

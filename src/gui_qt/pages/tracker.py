@@ -12,8 +12,8 @@ import time
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QTableWidget,
-    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QProgressBar, QScrollArea,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import run_bg
@@ -90,7 +90,7 @@ class TrackerPage(BasePage):
         head.addWidget(refresh_btn)
         export_group_btn = QPushButton("📷 按组导出")
         export_group_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #3a3d4a; color: #e1e4ed;")
+            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         export_group_btn.clicked.connect(self._export_group)
         head.addWidget(export_group_btn)
         self.timer_dot = QLabel("○")
@@ -98,7 +98,7 @@ class TrackerPage(BasePage):
         head.addWidget(self.timer_dot)
         timer_btn = QPushButton("⏰ 定时采集")
         timer_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #3a3d4a; color: #e1e4ed;")
+            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         timer_btn.clicked.connect(self._toggle_collect_timer)
         head.addWidget(timer_btn)
         fetch_all_btn = QPushButton("⬇ 获取全部")
@@ -109,6 +109,13 @@ class TrackerPage(BasePage):
         self.batch_platform.addItems(["全部平台", "B站", "抖音", "微博"])
         self.batch_platform.setFixedWidth(92)
         head.addWidget(self.batch_platform)
+        # 批量采集进度条
+        self.batch_prog = QProgressBar()
+        self.batch_prog.setFixedWidth(150)
+        self.batch_prog.setFormat("采集 %v/%m（%p%）")
+        self.batch_prog.setRange(0, 1)
+        self.batch_prog.setValue(0)
+        head.addWidget(self.batch_prog)
         v.addLayout(head)
 
         # 卡片滚动区
@@ -135,7 +142,7 @@ class TrackerPage(BasePage):
 
         # 添加追踪账号（账号名 + 链接，可选归属分组）
         add_card = QFrame()
-        add_card.setStyleSheet("QFrame { background: #23262f; border-radius: 8px; }")
+        add_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
         av = QVBoxLayout(add_card)
         av.setContentsMargins(10, 10, 10, 10)
         av.setSpacing(4)
@@ -171,7 +178,7 @@ class TrackerPage(BasePage):
 
         # 分组管理
         group_card = QFrame()
-        group_card.setStyleSheet("QFrame { background: #23262f; border-radius: 8px; }")
+        group_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
         gv = QVBoxLayout(group_card)
         gv.setContentsMargins(10, 10, 10, 10)
         gv.setSpacing(4)
@@ -206,7 +213,7 @@ class TrackerPage(BasePage):
 
         # 已配置账号
         list_card = QFrame()
-        list_card.setStyleSheet("QFrame { background: #23262f; border-radius: 8px; }")
+        list_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
         lv = QVBoxLayout(list_card)
         lv.setContentsMargins(10, 10, 10, 10)
         lv.setSpacing(4)
@@ -255,7 +262,7 @@ class TrackerPage(BasePage):
     def _make_card(self, acc):
         from tracker.accounts import parse_url, load_history
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #23262f; border-radius: 8px; }")
+        card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
         cv = QVBoxLayout(card)
         cv.setContentsMargins(8, 6, 8, 4)
         cv.setSpacing(2)
@@ -273,7 +280,7 @@ class TrackerPage(BasePage):
         name_lbl.setStyleSheet("font-weight: bold;")
         left.addWidget(name_lbl)
         plat_lbl = QLabel(plat_name)
-        plat_lbl.setStyleSheet("color: #64b5f6; font-size: 11px;")
+        plat_lbl.setStyleSheet("color: #1976d2; font-size: 11px;")
         left.addWidget(plat_lbl)
         head.addLayout(left)
         head.addStretch(1)
@@ -283,13 +290,13 @@ class TrackerPage(BasePage):
         export_btn = QPushButton("📷 导出")
         export_btn.setFixedSize(60, 26)
         export_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #3a3d4a; color: #e1e4ed;")
+            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         export_btn.clicked.connect(lambda _=False, a=acc: self._export_png(a))
         head.addWidget(export_btn)
         hist_btn = QPushButton("📊 历史")
         hist_btn.setFixedSize(60, 26)
         hist_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #3a3d4a; color: #e1e4ed;")
+            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         hist_btn.clicked.connect(lambda _=False, a=acc: self._open_history(a))
         head.addWidget(hist_btn)
         btn = QPushButton("📥 采集")
@@ -339,7 +346,7 @@ class TrackerPage(BasePage):
             rows.append((t or "上次", records[1]))
         for r, (time_label, rec) in enumerate(rows):
             tl = QLabel(time_label)
-            tl.setStyleSheet("color: #64b5f6; font-weight: bold;")
+            tl.setStyleSheet("color: #1976d2; font-weight: bold;")
             grid.addWidget(tl, r, 0)
             for c, field in enumerate(["fans", "following", "likes"]):
                 vl = QLabel(_cell(rec, [field]))
@@ -350,7 +357,7 @@ class TrackerPage(BasePage):
         """对比前后两次采集，返回 [(文本, 颜色), ...] 列表（涨绿跌红）。"""
         items = []
         if curr.get("name") and prev.get("name") and curr["name"] != prev["name"]:
-            items.append((f"🔄 更名 {prev['name']}→{curr['name']}", "#64b5f6"))
+            items.append((f"🔄 更名 {prev['name']}→{curr['name']}", "#1976d2"))
         for label, field in [("粉丝", "fans"), ("关注", "following"), ("获赞", "likes")]:
             try:
                 c = curr.get(field)
@@ -493,13 +500,17 @@ class TrackerPage(BasePage):
             return
         if not silent:
             self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号...", "info")
+        self.batch_prog.setRange(0, max(len(accounts), 1))
+        self.batch_prog.setValue(0)
 
         def step(idx):
             if idx >= len(accounts):
                 if not silent:
                     self.app.toast("✅ 批量采集完成", "info")
+                self.batch_prog.setValue(len(accounts))
                 self._collecting = False
                 return
+            self.batch_prog.setValue(idx)
             self._collect_account(accounts[idx], on_done=lambda i=idx: step(i + 1))
 
         self._collecting = True
@@ -628,7 +639,7 @@ class TrackerPage(BasePage):
             return
         for i, acc in enumerate(accounts):
             row = QFrame()
-            row.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+            row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
             plat = PLATFORM_NAMES.get(acc.get("platform"), acc.get("platform") or "自动")
@@ -698,12 +709,12 @@ class TrackerPage(BasePage):
         else:
             for gid, gname in sorted(groups.items()):
                 row = QFrame()
-                row.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+                row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
                 h = QHBoxLayout(row)
                 h.setContentsMargins(8, 4, 8, 4)
                 gid_lbl = QLabel(gid)
                 gid_lbl.setFixedWidth(44)
-                gid_lbl.setStyleSheet("font-weight: bold; color: #64b5f6;")
+                gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2;")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
                 del_btn = QPushButton("✕")

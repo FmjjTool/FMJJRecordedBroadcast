@@ -4,8 +4,9 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
-    QMessageBox, QPushButton, QRadioButton, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QFileDialog, QHBoxLayout, QLabel, QListWidgetItem, QMessageBox,
+    QPlainTextEdit, QPushButton, QRadioButton, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox.lyrics_engine import LyricConverter
@@ -45,11 +46,41 @@ class LyricsToolPage(BasePage):
         frow.addWidget(QPushButton("📁 选择文件夹", clicked=self._select_folder))
         frow.addWidget(QPushButton("📂 指定工作目录", clicked=self._set_work_dir))
         frow.addWidget(QPushButton("📅 扫描日期子文件夹", clicked=self._scan_date_folders))
+        self.input_toggle = QPushButton("✍️ 输入歌词")
+        self.input_toggle.setCheckable(True)
+        self.input_toggle.toggled.connect(lambda c: self.input_area.setVisible(c))
+        frow.addWidget(self.input_toggle)
         self.work_dir_label = QLabel("（未指定）")
         self.work_dir_label.setStyleSheet("color: #888; font-size: 10px;")
         frow.addWidget(self.work_dir_label)
         frow.addStretch(1)
         v.addLayout(frow)
+
+        # 歌词文字输入区（默认折叠）：直接粘贴 LRC 等文本，走正常转换流程
+        self.input_area = QWidget()
+        iv = QVBoxLayout(self.input_area)
+        iv.setContentsMargins(0, 4, 0, 4)
+        iv.setSpacing(4)
+        self.input_text = QPlainTextEdit()
+        self.input_text.setPlaceholderText(
+            "在此粘贴歌词文本（LRC / QRC / TRC / KSC 等文本格式），然后点「转换输入内容」")
+        self.input_text.setMaximumHeight(120)
+        iv.addWidget(self.input_text)
+        irow = QHBoxLayout()
+        input_btn = QPushButton("🔄 转换输入内容")
+        input_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 12px; border-radius: 4px;")
+        input_btn.clicked.connect(self._convert_input)
+        irow.addWidget(input_btn)
+        clr_btn = QPushButton("🗑 清空输入")
+        clr_btn.clicked.connect(self.input_text.clear)
+        irow.addWidget(clr_btn)
+        ihint = QLabel("（粘贴内容按 LRC 处理，输出到工作目录）")
+        ihint.setStyleSheet("color: #888; font-size: 10px;")
+        irow.addWidget(ihint)
+        irow.addStretch(1)
+        iv.addLayout(irow)
+        self.input_area.setVisible(False)
+        v.addWidget(self.input_area)
         self.file_count_label = QLabel("未选择文件")
         self.file_count_label.setStyleSheet("color: #888;")
         v.addWidget(self.file_count_label)
@@ -185,7 +216,7 @@ class LyricsToolPage(BasePage):
             return
         self.work_dir = d
         self.work_dir_label.setText(f"📂 {d}")
-        self.work_dir_label.setStyleSheet("color: #64b5f6; font-size: 10px;")
+        self.work_dir_label.setStyleSheet("color: #1976d2; font-size: 10px;")
         self._scan_dir(d)
 
     def _add_folder_files(self, folder):
@@ -264,7 +295,7 @@ class LyricsToolPage(BasePage):
                     added += 1
         self.work_dir = folder
         self.work_dir_label.setText(f"📂 {folder}")
-        self.work_dir_label.setStyleSheet("color: #64b5f6; font-size: 10px;")
+        self.work_dir_label.setStyleSheet("color: #1976d2; font-size: 10px;")
         self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件（+{added}）")
         self._log(f"📥 拖放文件夹: {folder}\n   新增 {added} 个歌词文件")
         self._refresh_list()
@@ -302,6 +333,52 @@ class LyricsToolPage(BasePage):
         return [self.lyr_list.item(i).data(Qt.UserRole) for i in range(self.lyr_list.count())
                 if self.lyr_list.item(i).checkState() == Qt.Checked]
 
+    def _convert_one(self, fp, out_fmt):
+        """转换单个文件并写回同目录，返回是否成功。"""
+        name = os.path.basename(fp)
+        try:
+            with open(fp, "rb") as f:
+                content = f.read()
+            r = self.converter.convert(name, content, out_fmt)
+            if r["success"]:
+                for of in r["output_files"]:
+                    out_path = os.path.join(os.path.dirname(fp), of["filename"])
+                    data = of["content"]
+                    mode = "w" if isinstance(data, str) else "wb"
+                    with open(out_path, mode, encoding="utf-8" if mode == "w" else None) as f:
+                        f.write(data)
+                    self._log(f"  ✅ {name} → {of['filename']}")
+                return True
+            self._log(f"  ❌ {name}: {r['message']}")
+        except Exception as e:
+            self._log(f"  ❌ {name}: {e}")
+        return False
+
+    def _convert_input(self):
+        """输入框粘贴的歌词文本 → 保存为 LRC → 走正常转换流程。"""
+        text = self.input_text.toPlainText().strip()
+        if not text:
+            QMessageBox.warning(self, "提示", "请先在输入框粘贴歌词文本")
+            return
+        out_dir = self.work_dir or self.app.work_dir or os.getcwd()
+        base = "输入歌词.lrc"
+        n = 1
+        while os.path.exists(os.path.join(out_dir, base)):
+            n += 1
+            base = f"输入歌词({n}).lrc"
+        src = os.path.join(out_dir, base)
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+        self.log_text.clear()
+        self._log(f"✍️ 已保存输入内容: {src}")
+        self._log(f"🔄 转换输入内容 → {self.fmt_var.upper()} ...")
+        ok = self._convert_one(src, self.fmt_var)
+        if ok:
+            self._log("\n✅ 输入内容转换完成")
+        else:
+            self._log("\n❌ 输入内容转换失败")
+        self.result_label.setText("输入转换 " + ("成功" if ok else "失败"))
+
     def _convert(self):
         to_convert = self._checked()
         if not to_convert:
@@ -312,24 +389,8 @@ class LyricsToolPage(BasePage):
         self._log(f"🔄 开始转换 {len(to_convert)} 个文件 → {out_fmt.upper()} ...\n")
         success = 0
         for fp in to_convert:
-            name = os.path.basename(fp)
-            try:
-                with open(fp, "rb") as f:
-                    content = f.read()
-                r = self.converter.convert(name, content, out_fmt)
-                if r["success"]:
-                    for of in r["output_files"]:
-                        out_path = os.path.join(os.path.dirname(fp), of["filename"])
-                        data = of["content"]
-                        mode = "w" if isinstance(data, str) else "wb"
-                        with open(out_path, mode, encoding="utf-8" if mode == "w" else None) as f:
-                            f.write(data)
-                        self._log(f"  ✅ {name} → {of['filename']}")
-                    success += 1
-                else:
-                    self._log(f"  ❌ {name}: {r['message']}")
-            except Exception as e:
-                self._log(f"  ❌ {name}: {e}")
+            if self._convert_one(fp, out_fmt):
+                success += 1
         self._log(f"\n✅ 转换完成: {success}/{len(to_convert)} 成功")
         self.result_label.setText(f"完成 {success}/{len(to_convert)}")
 

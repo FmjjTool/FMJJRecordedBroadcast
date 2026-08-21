@@ -304,14 +304,14 @@ class AssetPage(BasePage):
         if self._shown < len(self._all_files):
             more = QPushButton(f"加载更多（{len(self._all_files) - self._shown} 个）")
             more.setStyleSheet(
-                "background: transparent; border: 1px solid #3a3d4a; color: #9aa0b4; padding: 4px;")
+                "background: transparent; border: 1px solid #c8cdd6; color: #6b7280; padding: 4px;")
             more.clicked.connect(self._render_local_batch)
             lay.addWidget(more)
         lay.addStretch(1)
 
     def _render_local_item(self, item):
         row = QFrame()
-        row.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(6, 4, 6, 4)
         kind = item["type"]
@@ -324,7 +324,7 @@ class AssetPage(BasePage):
             lbl.setFixedSize(90, 60)
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(
-                "background: #151720; border-radius: 4px; font-size: 28px;")
+                "background: #eef1f5; border-radius: 4px; font-size: 28px;")
             h.addWidget(lbl)
         info = QLabel(f"{item['name']}\n类型: {kind}  大小: {_fmt_size(item['size'])}  {item['mtime']}")
         info.setStyleSheet("font-size: 11px;")
@@ -337,7 +337,7 @@ class AssetPage(BasePage):
         lbl = QLabel("🖼")
         lbl.setFixedSize(w, h)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #151720; border-radius: 4px;")
+        lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
         lbl.setToolTip(path)
 
         def load():
@@ -655,7 +655,7 @@ class AssetPage(BasePage):
         if self._collected_shown < len(items):
             more = QPushButton(f"加载更多（{len(items) - self._collected_shown} 条）")
             more.setStyleSheet(
-                "background: transparent; border: 1px solid #3a3d4a; color: #9aa0b4; padding: 4px;")
+                "background: transparent; border: 1px solid #c8cdd6; color: #6b7280; padding: 4px;")
             more.clicked.connect(self._render_collected_batch)
             lay.addWidget(more)
         lay.addStretch(1)
@@ -664,7 +664,7 @@ class AssetPage(BasePage):
         """渲染一行（点击弹详情窗，双击缩略图打开原图）。"""
         row = _RowWidget(lambda it=it: self._show_detail(it))
         row.setStyleSheet(
-            "_RowWidget { background: #1a1d27; border-radius: 6px; }"
+            "_RowWidget { background: #ffffff; border-radius: 6px; }"
             "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(6, 4, 6, 4)
@@ -680,7 +680,7 @@ class AssetPage(BasePage):
             lbl = QLabel("🎬")
             lbl.setFixedSize(72, 50)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("background: #151720; border-radius: 4px; font-size: 22px;")
+            lbl.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 22px;")
             h.addWidget(lbl)
         # 文本（中间 expand）
         plat_cn = PLATFORM_CN.get(it["platform"], it["platform"])
@@ -704,13 +704,13 @@ class AssetPage(BasePage):
             dl_btn = QPushButton("📥")
             dl_btn.setFixedSize(32, 28)
             dl_btn.setStyleSheet(
-                "background: transparent; border: 1px solid #3a3d4a; color: white;")
+                "background: transparent; border: 1px solid #c8cdd6; color: white;")
             dl_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e))
             h.addWidget(dl_btn)
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(32, 28)
         del_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #3a3d4a; color: white;")
+            "background: transparent; border: 1px solid #c8cdd6; color: white;")
         del_btn.clicked.connect(lambda _=False, e=it: self._delete_item(e))
         h.addWidget(del_btn)
         self.collected_layout.addWidget(row)
@@ -1032,7 +1032,7 @@ class AssetPage(BasePage):
         lbl = QLabel("🖼")
         lbl.setFixedSize(w, h)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #151720; border-radius: 4px;")
+        lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
 
         def load():
             try:
@@ -1095,7 +1095,7 @@ class AssetPage(BasePage):
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
             kl.setFixedWidth(84)
-            kl.setStyleSheet("color: #9aa0b4; font-size: 12px;")
+            kl.setStyleSheet("color: #6b7280; font-size: 12px;")
             row_f.addWidget(kl)
             wl = QLabel(str(val))
             wl.setWordWrap(True)
@@ -1105,7 +1105,7 @@ class AssetPage(BasePage):
         desc = item.get("description") or ""
         if desc:
             dh = QLabel("正文")
-            dh.setStyleSheet("color: #9aa0b4; font-weight: bold;")
+            dh.setStyleSheet("color: #6b7280; font-weight: bold;")
             v.addWidget(dh)
             dl = QLabel(desc)
             dl.setWordWrap(True)
@@ -1117,7 +1117,7 @@ class AssetPage(BasePage):
             imgs = [m for m in mfs if m["type"] == "image"]
             vids = [m for m in mfs if m["type"] == "video"]
             mh = QLabel(f"🖼 媒体文件（{len(imgs)} 图 / {len(vids)} 视频）")
-            mh.setStyleSheet("color: #9aa0b4; font-weight: bold;")
+            mh.setStyleSheet("color: #6b7280; font-weight: bold;")
             v.addWidget(mh)
             if imgs:
                 grid_holder = QWidget()
@@ -1132,7 +1132,7 @@ class AssetPage(BasePage):
             for vd in vids:
                 rowv = QPushButton(f"🎬 {vd['name']}")
                 rowv.setStyleSheet(
-                    "background: transparent; border: none; color: #64b5f6; "
+                    "background: transparent; border: none; color: #1976d2; "
                     "text-align: left; font-size: 12px; padding: 1px;")
                 rowv.clicked.connect(lambda _=False, p=vd["path"]: self._open_media(p))
                 v.addWidget(rowv)
@@ -1156,7 +1156,7 @@ class AssetPage(BasePage):
         lbl = QLabel("🖼")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #151720; border-radius: 4px;")
+        lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
         lbl.setToolTip(path)
 
         def load():

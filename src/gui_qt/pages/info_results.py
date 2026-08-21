@@ -1,12 +1,14 @@
 """已获取页（PySide6 版）：三栏分平台展示 COLLECTED，按栏全选/反选/清除、导出、下载。
 
 对应原版 gui/info_pages.py 的 InfoResultsPage：
-- 顶部：画质下拉（全局共享）+ 🗑 全部清空 + 导出格式复选（JSON/XLSX/MD）
+- 顶部：画质下拉（全局共享）+ 🗑 全部清空 + 📤 全部导出 + 📥 全部下载 + 导出格式复选
 - 三栏（抖音/B站/微博）：计数标签 + 全选/反选/清除/📤 导出/📥 下载 + 复选行 + 🔗 打开链接
+- 每行显示发布日期，默认按发布日期倒序（最新在前）
 - 下载：B站按画质直下（视频走 playurl、DRAW 动态走图片），非 B站走 media_downloader
 """
 
 import webbrowser
+from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -26,6 +28,32 @@ PLATFORMS_3 = [
     ("weibo", "📝 微博"),
 ]
 
+_PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+                "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
+
+
+def _parse_pub(info):
+    """解析发布时间 → (datetime, 显示文本)。无法解析时返回 (datetime.min, '无日期')。"""
+    raw = (getattr(info, "publish_time", "") or "").strip()
+    if raw:
+        for fmt in _PUB_FORMATS:
+            try:
+                dt = datetime.strptime(raw[:19] if " " in raw else raw[:10], fmt)
+                return dt, raw[:16] if " " in raw else raw[:10]
+            except ValueError:
+                continue
+        # 纯数字时间戳
+        if raw.isdigit():
+            try:
+                ts = int(raw)
+                if ts > 10 ** 12:  # 毫秒
+                    ts //= 1000
+                dt = datetime.fromtimestamp(ts)
+                return dt, dt.strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OSError):
+                pass
+    return datetime.min, "无日期"
+
 
 class InfoResultsPage(BasePage):
     def __init__(self, app):
@@ -39,10 +67,20 @@ class InfoResultsPage(BasePage):
 
         # 顶部：标题 + 全部清空 + 画质选择
         head = QHBoxLayout()
-        title = QLabel("📦 已获取（按平台分栏）")
+        title = QLabel("📦 已获取（按平台分栏，按发布日期倒序）")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
         head.addStretch(1)
+        export_all_btn = QPushButton("📤 全部导出")
+        export_all_btn.setStyleSheet("background: #2e7d32; color: white;")
+        export_all_btn.setToolTip("导出三栏内全部勾选条目（一次导出三平台）")
+        export_all_btn.clicked.connect(self._export_all)
+        head.addWidget(export_all_btn)
+        dl_all_btn = QPushButton("📥 全部下载")
+        dl_all_btn.setStyleSheet("background: #2e7d32; color: white;")
+        dl_all_btn.setToolTip("下载三栏内全部勾选条目（一次下载三平台）")
+        dl_all_btn.clicked.connect(self._download_all)
+        head.addWidget(dl_all_btn)
         clear_btn = QPushButton("🗑 全部清空")
         clear_btn.setStyleSheet("background: #c62828; color: white;")
         clear_btn.clicked.connect(self._clear)
@@ -82,7 +120,7 @@ class InfoResultsPage(BasePage):
 
     def _build_column(self, key, name):
         col = QWidget()
-        col.setStyleSheet("QWidget { background: #23262f; border-radius: 8px; }")
+        col.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
         v = QVBoxLayout(col)
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(4)
@@ -90,7 +128,7 @@ class InfoResultsPage(BasePage):
         head = QHBoxLayout()
         head.addWidget(QLabel(name))
         count = QLabel("0")
-        count.setStyleSheet("color: #64b5f6;")
+        count.setStyleSheet("color: #1976d2;")
         head.addStretch(1)
         head.addWidget(count)
         self.cols[key]["count_label"] = count
@@ -126,7 +164,7 @@ class InfoResultsPage(BasePage):
     # ==================== 渲染 ====================
 
     def refresh(self):
-        # 按平台分到三栏
+        # 按平台分到三栏，默认按发布日期倒序（最新在前）
         grouped = {key: [] for key, _ in PLATFORMS_3}
         for info in common.COLLECTED:
             plat = info.platform or "other"
@@ -134,6 +172,7 @@ class InfoResultsPage(BasePage):
                 grouped[plat].append(info)
             # 抖音/b站/微博以外的平台不展示
         for key, _name in PLATFORMS_3:
+            grouped[key].sort(key=_parse_pub, reverse=True)
             self._render_column(key, grouped[key])
 
     def _render_column(self, key, songs):
@@ -151,7 +190,9 @@ class InfoResultsPage(BasePage):
             title = (info.title or "-")[:30]
             author = info.author or "-"
             kind_tag = "动态" if getattr(info, "kind", "") == "dynamic" else "视频"
-            text = f"[{i}] [{kind_tag}] {title}  @{author}  播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}"
+            _dt, date_str = _parse_pub(info)
+            text = (f"[{i}] {date_str} [{kind_tag}] {title}  @{author}  "
+                    f"播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}")
             url = info.video_url or info.raw_url
             if url:
                 text += "   🔗"
@@ -211,10 +252,16 @@ class InfoResultsPage(BasePage):
             fmts.append("md")
         return fmts
 
-    def _col_export(self, key):
-        items = self._selected(key)
+    def _all_selected(self):
+        """聚合三栏内全部勾选条目。"""
+        out = []
+        for key, _name in PLATFORMS_3:
+            out.extend(self._selected(key))
+        return out
+
+    def _export_items(self, items, warn_empty="暂无勾选条目"):
         if not items:
-            QMessageBox.warning(self, "提示", "该栏暂无勾选条目")
+            QMessageBox.warning(self, "提示", warn_empty)
             return
         fmts = self._get_formats()
         if not fmts:
@@ -245,11 +292,16 @@ class InfoResultsPage(BasePage):
 
         run_bg(work, done)
 
-    def _col_download(self, key):
-        """按栏下载（不弹任何二级窗）：B站图文动态直接下图片，视频按 head 画质下拉下载。"""
-        items = self._selected(key)
+    def _col_export(self, key):
+        self._export_items(self._selected(key), "该栏暂无勾选条目")
+
+    def _export_all(self):
+        """三平台一次导出：聚合三栏勾选项统一导出。"""
+        self._export_items(self._all_selected(), "三栏均无勾选条目，请先勾选要导出的内容")
+
+    def _download_items(self, items):
+        """按条目下载（不弹任何二级窗）：B站图文动态直接下图片，视频按 head 画质下拉下载。"""
         if not items:
-            QMessageBox.warning(self, "提示", "该栏暂无勾选条目")
             return
         bili_items = [i for i in items if i.platform == "bilibili"]
         non_bili = [i for i in items if i.platform != "bilibili"]
@@ -261,6 +313,21 @@ class InfoResultsPage(BasePage):
             self._do_bilibili_download(bv_items, draw_items, non_bili, quality, ck)
         else:
             self._download_media(items)
+
+    def _col_download(self, key):
+        items = self._selected(key)
+        if not items:
+            QMessageBox.warning(self, "提示", "该栏暂无勾选条目")
+            return
+        self._download_items(items)
+
+    def _download_all(self):
+        """三平台一次下载：聚合三栏勾选项统一下载。"""
+        items = self._all_selected()
+        if not items:
+            QMessageBox.warning(self, "提示", "三栏均无勾选条目，请先勾选要下载的内容")
+            return
+        self._download_items(items)
 
     def _on_quality_change(self, value):
         """清晰度改变时同步到全局（供资产管理/视频下载页复用）。"""

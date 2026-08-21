@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from gui_qt.main_window import MainWindow, DARK_QSS
+from gui_qt.main_window import MainWindow, LIGHT_QSS
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(DARK_QSS)
+    app.setStyleSheet(LIGHT_QSS)
 
     win = MainWindow()
     win.show()

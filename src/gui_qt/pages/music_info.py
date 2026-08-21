@@ -131,12 +131,13 @@ class MusicInfoPage(BasePage):
                     it.setFlags(Qt.NoItemFlags)
                     lst.addItem(it)
                     continue
-                for s in songs:
+                for j, s in enumerate(songs):
                     dur = f"{s.duration // 60}:{s.duration % 60:02d}" if s.duration else "?:??"
                     mode = f"[{s.mode}]" if getattr(s, "mode", "") else ""
                     it = QListWidgetItem(f"{s.song_name}{mode}  {s.singer} {dur}")
                     it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                    it.setCheckState(Qt.Unchecked)
+                    # 默认勾选第一首（最匹配结果）
+                    it.setCheckState(Qt.Checked if j == 0 else Qt.Unchecked)
                     lst.addItem(it)
             self.status_label.setText("✅ 搜索完成，勾选歌曲后点「获取」")
 

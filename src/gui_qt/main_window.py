@@ -99,10 +99,9 @@ NAV_GROUPS = [
     ]),
     ("📈 直播·追踪", [
         ("tracker", "📈 账号追踪"),
-        ("dycast", "📺 抖音弹幕姬"),
+        ("test_page", "📺 弹幕姬"),
     ]),
     ("⚙️ 全局", [
-        ("test_page", "🧪 测试"),
         ("global_settings", "⚙️ 全局设置"),
     ]),
 ]
@@ -121,56 +120,56 @@ COOKIE_PLATFORMS = [
     ("kuaishou", "快手", False, False),
 ]
 
-DARK_QSS = """
-QMainWindow, QWidget { background-color: #1a1d27; color: #c6cbd6; font-family: "Microsoft YaHei"; font-size: 13px; }
-QScrollArea { border: none; background: #15171d; }
-QPushButton { background: #23262f; color: #c6cbd6; padding: 6px 12px; border: 1px solid #2e3140; border-radius: 4px; text-align: center; }
+LIGHT_QSS = """
+QMainWindow, QWidget { background-color: #f4f5f7; color: #2f3440; font-family: "Microsoft YaHei"; font-size: 13px; }
+QScrollArea { border: none; background: #eceff3; }
+QPushButton { background: #ffffff; color: #2f3440; padding: 6px 12px; border: 1px solid #c3c9d4; border-radius: 4px; text-align: center; }
 QPushButton:hover { background: #2e7d32; color: #ffffff; border-color: #3a8c3a; }
 QPushButton:pressed { background: #1a5c2a; color: #ffffff; }
 QPushButton:checked { background: #1a5c2a; color: #ffffff; border-color: #2e7d32; }
-QPushButton:disabled { background: #1a1d27; color: #555; border-color: #23262f; }
-QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #23262f; color: #c6cbd6; border: 1px solid #333; border-radius: 4px; padding: 6px; selection-background-color: #2a5a8c; }
-QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #2a5a8c; background: #2a2d3a; }
+QPushButton:disabled { background: #eef0f4; color: #9aa3b0; border-color: #d9dee6; }
+QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #ffffff; color: #2f3440; border: 1px solid #c8cdd6; border-radius: 4px; padding: 6px; selection-background-color: #2a6a9c; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #2a6a9c; background: #ffffff; }
 QListWidget { padding: 2px; }
 QListWidget::item { padding: 3px; border-radius: 3px; }
-QListWidget::item:selected { background: #2a5a8c; color: #ffffff; }
-QListWidget::item:hover { background: #23262f; }
-QTreeWidget, QTreeView, QTableWidget, QTableView { background: #23262f; color: #c6cbd6; border: 1px solid #333; border-radius: 4px; }
-QTreeWidget::item:selected, QTableWidget::item:selected { background: #2a5a8c; color: #ffffff; }
-QHeaderView::section { background: #23262f; color: #9aa0b4; border: none; border-bottom: 1px solid #2e3140; padding: 5px; }
-QCheckBox { color: #c6cbd6; spacing: 6px; }
+QListWidget::item:selected { background: #2a6a9c; color: #ffffff; }
+QListWidget::item:hover { background: #e3e9f2; }
+QTreeWidget, QTreeView, QTableWidget, QTableView { background: #ffffff; color: #2f3440; border: 1px solid #c8cdd6; border-radius: 4px; }
+QTreeWidget::item:selected, QTableWidget::item:selected { background: #2a6a9c; color: #ffffff; }
+QHeaderView::section { background: #eef0f4; color: #5a6474; border: none; border-bottom: 1px solid #d0d6df; padding: 5px; }
+QCheckBox { color: #2f3440; spacing: 6px; }
 QCheckBox::indicator { width: 16px; height: 16px; }
 QCheckBox::indicator:checked { background: #2e7d32; border: 1px solid #1a5c2a; border-radius: 3px; }
-QCheckBox::indicator:unchecked { background: #23262f; border: 1px solid #444; border-radius: 3px; }
-QRadioButton::indicator:checked { background: #2a5a8c; border: 1px solid #2a5a8c; border-radius: 8px; }
-QTabBar::tab { background: #23262f; color: #888; padding: 8px 16px; border: 1px solid #2e3140; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+QCheckBox::indicator:unchecked { background: #ffffff; border: 1px solid #b6bdca; border-radius: 3px; }
+QRadioButton::indicator:checked { background: #2a6a9c; border: 1px solid #2a6a9c; border-radius: 8px; }
+QTabBar::tab { background: #e4e8ee; color: #5a6474; padding: 8px 16px; border: 1px solid #d0d6df; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 QTabBar::tab:selected { background: #1a5c2a; color: #ffffff; }
 QTabBar::tab:hover { background: #2e7d32; color: #ffffff; }
-QTabWidget::pane { border: 1px solid #2e3140; background: #15171d; }
-QProgressBar { background: #23262f; border: 1px solid #333; border-radius: 4px; text-align: center; color: #c6cbd6; }
+QTabWidget::pane { border: 1px solid #d0d6df; background: #eceff3; }
+QProgressBar { background: #ffffff; border: 1px solid #c8cdd6; border-radius: 4px; text-align: center; color: #2f3440; }
 QProgressBar::chunk { background: #2e7d32; border-radius: 3px; }
-QScrollBar:vertical { background: #15171d; width: 12px; }
-QScrollBar::handle:vertical { background: #3a3d4a; border-radius: 4px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #4a5a8c; }
+QScrollBar:vertical { background: #eceff3; width: 12px; }
+QScrollBar::handle:vertical { background: #c2c8d2; border-radius: 4px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #9fb0c8; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: #15171d; height: 12px; }
-QScrollBar::handle:horizontal { background: #3a3d4a; border-radius: 4px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #4a5a8c; }
+QScrollBar:horizontal { background: #eceff3; height: 12px; }
+QScrollBar::handle:horizontal { background: #c2c8d2; border-radius: 4px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #9fb0c8; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QStatusBar { background: #15171d; color: #888; }
+QStatusBar { background: #eceff3; color: #6b7280; }
 QStatusBar::item { border: none; }
-QLabel { color: #c6cbd6; }
-QMenuBar { background: #15171d; color: #c6cbd6; }
-QMenuBar::item:selected { background: #2e7d32; }
-QMenu { background: #1a1d27; color: #c6cbd6; border: 1px solid #2e3140; }
-QMenu::item:selected { background: #2e7d32; }
-QGroupBox { border: 1px solid #2e3140; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
-QGroupBox::title { color: #9aa0b4; subcontrol-origin: margin; left: 10px; }
+QLabel { color: #2f3440; }
+QMenuBar { background: #eceff3; color: #2f3440; }
+QMenuBar::item:selected { background: #2e7d32; color: #ffffff; }
+QMenu { background: #ffffff; color: #2f3440; border: 1px solid #c8cdd6; }
+QMenu::item:selected { background: #2e7d32; color: #ffffff; }
+QGroupBox { border: 1px solid #d0d6df; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
+QGroupBox::title { color: #5a6474; subcontrol-origin: margin; left: 10px; }
 QSpinBox, QDoubleSpinBox { padding: 3px 6px; }
-QComboBox QAbstractItemView { background: #23262f; color: #c6cbd6; selection-background-color: #2a5a8c; }
-QSlider::groove:horizontal { height: 6px; background: #23262f; border-radius: 3px; }
+QComboBox QAbstractItemView { background: #ffffff; color: #2f3440; selection-background-color: #2a6a9c; selection-color: #ffffff; }
+QSlider::groove:horizontal { height: 6px; background: #d9dee6; border-radius: 3px; }
 QSlider::sub-page:horizontal { background: #2e7d32; border-radius: 3px; }
-QSlider::handle:horizontal { background: #c6cbd6; width: 12px; margin: -4px 0; border-radius: 6px; }
+QSlider::handle:horizontal { background: #ffffff; border: 1px solid #9aa3b0; width: 12px; margin: -4px 0; border-radius: 6px; }
 """
 
 # 回车键分发时，这些控件的回车留给控件自身处理（对应原版 event.widget 判断）
@@ -260,7 +259,7 @@ class MainWindow(QMainWindow):
 
     def _build_cookie_bar(self, nav_layout):
         box = QWidget()
-        box.setStyleSheet("QWidget { background: #1a1d27; border-radius: 8px; }")
+        box.setStyleSheet("QWidget { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
         v = QVBoxLayout(box)
         v.setContentsMargins(8, 6, 8, 8)
         v.setSpacing(4)
@@ -361,6 +360,12 @@ class MainWindow(QMainWindow):
                     fn()
                 except Exception:
                     pass
+        # 弹幕姬进程树：即使页面未打开过也要兜底终止（父关子关）
+        try:
+            from gui_qt.pages.dycast import stop_dycast_app
+            stop_dycast_app(None)
+        except Exception:
+            pass
         super().closeEvent(event)
 
     # ==================== 回车键统一分发 ====================

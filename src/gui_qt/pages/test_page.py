@@ -1,8 +1,8 @@
 """抖音弹幕实时数据接入页（PySide6 版，对应原版 gui/test_page.py）。
 
-三栏布局：左主播信息 / 中弹幕聊天礼物 / 右5块垂直（房间号/WS/sessionid/打赏榜/弹幕信息2）。
-- 顶栏：Cookie 登录 / 轮询 / 设置 / 连接 / 断开 / 清空弹幕
-- 工具栏：保存弹幕 / 保存统计 / 开播监控 / 登录抖音
+三栏布局：左主播信息（首行直播标题）/ 中弹幕聊天礼物 / 右5块垂直（房间号/WS/sessionid/打赏榜/弹幕信息2）。
+- 顶栏：轮询 / 模式 / 设置 / 清空内容 / 启动弹幕姬 / 连接 / 断开
+- 工具栏：保存弹幕 / 导出导入回放包 / 保存统计 / 开播监控
 - 底栏：状态点 + 状态文本 + 计时 + 本场点赞
 - 真实抓取：DouyinLiveFetcher / StatsCollector / LiveMonitor
 """
@@ -82,7 +82,7 @@ class TestPage(BasePage):
         # Cookie 说明：凭证统一由侧栏「Cookie 管理」维护（总开关+账号池），
         # 连接时自动套用其中的抖音 Cookie，本页不再单独提供登录入口。
         top = QFrame()
-        top.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        top.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         top_l = QHBoxLayout(top)
         top_l.setContentsMargins(10, 6, 10, 6)
         self.poll_var = QCheckBox("轮询")
@@ -105,9 +105,16 @@ class TestPage(BasePage):
         settings_btn.clicked.connect(self._open_settings)
         top_l.addWidget(settings_btn)
         top_l.addStretch(1)
-        clear_btn = QPushButton("🗑 清空弹幕")
+        clear_btn = QPushButton("🗑 清空内容")
+        clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
+                             "保留房间号、WS 地址、sessionid 等配置")
         clear_btn.clicked.connect(self._clear_all)
         top_l.addWidget(clear_btn)
+        self.dycast_btn = QPushButton("🚀 启动弹幕姬")
+        self.dycast_btn.setStyleSheet("background: #e65100; color: white;")
+        self.dycast_btn.setToolTip("启动原版弹幕姬（dycast-main，纳入进程树：本工具退出时一并关闭）")
+        self.dycast_btn.clicked.connect(self._launch_dycast)
+        top_l.addWidget(self.dycast_btn)
         self.disconnect_btn = QPushButton("■ 断开")
         self.disconnect_btn.setStyleSheet("background: #c62828; color: white;")
         self.disconnect_btn.clicked.connect(self._disconnect)
@@ -121,7 +128,7 @@ class TestPage(BasePage):
 
         # ===== 工具栏 =====
         toolbar = QFrame()
-        toolbar.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        toolbar.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         tb = QHBoxLayout(toolbar)
         tb.setContentsMargins(10, 4, 10, 4)
         save_btn = QPushButton("💾 保存弹幕")
@@ -172,7 +179,7 @@ class TestPage(BasePage):
         bottom.addWidget(QLabel("│"))
         bottom.addWidget(QLabel("🛒 本场点赞:"))
         self.like_label = QLabel("0")
-        self.like_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
+        self.like_label.setStyleSheet("color: #1976d2; font-weight: bold;")
         bottom.addWidget(self.like_label)
         bottom.addStretch(1)
         outer.addLayout(bottom)
@@ -195,10 +202,19 @@ class TestPage(BasePage):
     # ======================== 左：主播信息 ========================
     def _build_anchor_panel(self, parent):
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         v = QVBoxLayout(card)
         v.setContentsMargins(10, 10, 10, 10)
         v.addWidget(QLabel("📺 主播信息", styleSheet="font-weight: bold;"))
+
+        self.anchor_fields = {}
+        # 直播标题（第一行：比正文大两号 + 加粗，不进日志）
+        self.live_title_lbl = QLabel("未获取直播标题")
+        self.live_title_lbl.setWordWrap(True)
+        self.live_title_lbl.setStyleSheet(
+            "font-size: 17px; font-weight: bold; padding: 2px 0 6px 0;")
+        self.anchor_fields["live_title"] = self.live_title_lbl
+        v.addWidget(self.live_title_lbl)
 
         # 封面 + 保存按钮
         cover_row = QHBoxLayout()
@@ -206,7 +222,7 @@ class TestPage(BasePage):
         self.cover_label.setFixedSize(96, 96)
         self.cover_label.setAlignment(Qt.AlignCenter)
         self.cover_label.setStyleSheet(
-            "background: #1a1d27; border-radius: 6px; color: #555;")
+            "background: #ffffff; border-radius: 6px; color: #555;")
         cover_row.addWidget(self.cover_label)
         cover_btn = QPushButton("💾 保存封面/数据")
         cover_btn.clicked.connect(self._save_cover)
@@ -215,7 +231,6 @@ class TestPage(BasePage):
         v.addLayout(cover_row)
 
         # 5 字段
-        self.anchor_fields = {}
         for text, key in [("主播:", "anchor_name"), ("主播粉丝数:", "anchor_fans"),
                           ("在线观众数:", "online_count"), ("累计观看人数:", "total_viewers"),
                           ("本场点赞数:", "like_count")]:
@@ -233,7 +248,7 @@ class TestPage(BasePage):
         # 分隔
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: #2a2d3a;")
+        sep.setStyleSheet("color: #c9d1dc;")
         v.addWidget(sep)
 
         # 时间/来源
@@ -256,7 +271,7 @@ class TestPage(BasePage):
 
         # ---- 视频卡片 ----
         self.video_card = QFrame()
-        self.video_card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        self.video_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         vv = QVBoxLayout(self.video_card)
         vv.setContentsMargins(10, 8, 10, 8)
         head = QHBoxLayout()
@@ -300,6 +315,8 @@ class TestPage(BasePage):
         self.replay_row.addWidget(self.replay_btn)
         self.replay_slider = QSlider(Qt.Horizontal)
         self.replay_slider.setRange(0, 0)
+        self.replay_slider.sliderPressed.connect(
+            lambda: setattr(self, "_replay_dragging", True))
         self.replay_slider.sliderReleased.connect(self._on_replay_slider_released)
         self.replay_row.addWidget(self.replay_slider, 1)
         self.replay_time_lbl = QLabel("00:00 / 00:00",
@@ -319,7 +336,7 @@ class TestPage(BasePage):
 
         # ---- 弹幕卡片（聊天+礼物）----
         self.chat_card = QFrame()
-        self.chat_card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        self.chat_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         v = QVBoxLayout(self.chat_card)
         v.setContentsMargins(10, 10, 10, 10)
         head = QHBoxLayout()
@@ -335,7 +352,7 @@ class TestPage(BasePage):
         self.chat_gift_box = QTextBrowser()
         self.chat_gift_box.setOpenExternalLinks(False)
         self.chat_gift_box.setStyleSheet(
-            "QTextBrowser { background: #14161f; border: none; color: #d7dae0; }")
+            "QTextBrowser { background: #ffffff; border: none; color: #2f3440; }")
         v.addWidget(self.chat_gift_box, 1)
         wrap.addWidget(self.chat_card, 2)
 
@@ -412,6 +429,10 @@ class TestPage(BasePage):
             self._current_stream = self._streams.get(q)
         if self._streams and self.mode in ("normal", "video_only"):
             self._start_live_preview()
+            # 自动录制：设置开启 + 正常模式 + 未在录 → 拿到流立即录最高画质
+            if (self.mode == "normal" and self.settings.get("auto_record", False)
+                    and not self._recording):
+                self._start_recording()
 
     def _on_quality_changed(self, _index=None):
         """用户手动切换清晰度 → 预览与录制流跟随（除非手动切换，否则始终最高）。"""
@@ -569,7 +590,7 @@ class TestPage(BasePage):
                 self.app.toast("当前没有弹幕数据可打包", "warning")
             return None
         from toolbox.douyin_live import _danmaku_dir
-        d = _danmaku_dir().parent / "回放包"
+        d = _danmaku_dir()
         d.mkdir(parents=True, exist_ok=True)
         room = self.room_entry.text().strip() or "room"
         anchor = (self.anchor_fields["anchor_name"].text() or "").strip() or "未知主播"
@@ -582,7 +603,7 @@ class TestPage(BasePage):
             "nickname": anchor,
             "avatar": "",
             "cover": "",
-            "title": "",
+            "title": self.anchor_fields["live_title"].text().strip(),
             "likeCount": self._like_count,
             "casts": casts,
         }
@@ -771,6 +792,8 @@ class TestPage(BasePage):
         self.like_label.setText("0")
         if b.get("nickname"):
             self.anchor_fields["anchor_name"].setText(str(b["nickname"]))
+        if b.get("title"):
+            self.anchor_fields["live_title"].setText(str(b["title"]))
         if b.get("roomId"):
             self.room_entry.setText(str(b["roomId"]))
         cover = data.get("cover")
@@ -823,7 +846,8 @@ class TestPage(BasePage):
             self._render_cast(c)
             r["idx"] += 1
             n += 1
-        self.replay_slider.setValue(int(cur))
+        if not getattr(self, "_replay_dragging", False):
+            self.replay_slider.setValue(int(cur))
         self._update_replay_time(cur)
         if cur >= r["total_ms"] and r["idx"] >= len(r["casts"]):
             self._finish_replay()
@@ -920,10 +944,15 @@ class TestPage(BasePage):
         r = self._replay
         if not r or not r["paused"]:
             return
+        at = float(r.get("paused_at") or 0.0)
+        # 播放到结尾后再点播放 → 从头重播
+        if at >= float(r["total_ms"]) - 1:
+            at = 0.0
         # 与 dycast 一致：从暂停位置重新调度（含视频对位）
-        self._seek_replay(r.get("paused_at") or 0.0)
+        self._seek_replay(at)
 
     def _on_replay_slider_released(self):
+        self._replay_dragging = False
         if self._replay:
             self._seek_replay(self.replay_slider.value())
 
@@ -984,7 +1013,7 @@ class TestPage(BasePage):
     # ======================== 右：5 块垂直 ========================
     def _build_right_panel(self, parent):
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         v = QVBoxLayout(card)
         v.setContentsMargins(10, 10, 10, 10)
 
@@ -1051,11 +1080,11 @@ class TestPage(BasePage):
         self.gift_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.gift_table.setFocusPolicy(Qt.NoFocus)
         self.gift_table.setStyleSheet(
-            "QTableWidget { background: #1a1d27; color: #d7dae0; border: none;"
-            " gridline-color: #242938; font-size: 11px; }"
+            "QTableWidget { background: #ffffff; color: #2f3440; border: none;"
+            " gridline-color: #dfe4ec; font-size: 11px; }"
             "QTableWidget::item { padding: 2px 4px; }"
-            "QHeaderView::section { background: #1a1d27; color: #888; border: none;"
-            " border-bottom: 1px solid #242938; padding: 3px 4px; font-size: 11px; }")
+            "QHeaderView::section { background: #ffffff; color: #888; border: none;"
+            " border-bottom: 1px solid #dfe4ec; padding: 3px 4px; font-size: 11px; }")
         hh = self.gift_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -1105,10 +1134,10 @@ class TestPage(BasePage):
         e_monitor = row("弹幕监控间隔(秒):", s.get("monitor_interval", 30))
         e_stats = row("统计数据采集间隔(秒):", s.get("stats_interval", 1))
         e_poll = row("轮询间隔(秒):", s.get("poll_interval", 60))
-        # 弹幕自动导出说明（默认导出回放包 zip，保存位置为 导出目录/回放包/）
+        # 弹幕自动导出说明（默认导出回放包 zip，保存位置为 导出目录/弹幕文件/）
         from toolbox.douyin_live import _danmaku_dir
         v.addWidget(QLabel(
-            f"自动导出回放包到：{_danmaku_dir().parent / '回放包'}"
+            f"自动导出回放包到：{_danmaku_dir()}"
             "（断开连接 / 退出软件时自动打包 zip，含全量弹幕与分类 TXT）",
             styleSheet="color: #888; font-size: 11px;"))
 
@@ -1129,7 +1158,7 @@ class TestPage(BasePage):
         sw_record = QCheckBox("启用直播录制（FLV，需视频模式）")
         sw_record.setChecked(bool(s.get("auto_record", False)))
         v.addWidget(sw_record)
-        sw_autosave = QCheckBox("自动导出回放包（断开连接 / 退出软件时打包 zip 到「回放包」目录）")
+        sw_autosave = QCheckBox("自动导出回放包（断开连接 / 退出软件时打包 zip 到「弹幕文件」目录）")
         sw_autosave.setChecked(bool(s.get("auto_save_danmaku", True)))
         v.addWidget(sw_autosave)
 
@@ -1423,7 +1452,7 @@ class TestPage(BasePage):
         self.monitor_btn.setText("👁 停止监控")
         self.monitor_btn.setStyleSheet("background: #2a5a8c; color: white;")
         self.monitor_status.setText(f"监控中 · 房间 {room}")
-        self.monitor_status.setStyleSheet("color: #64b5f6; font-size: 11px;")
+        self.monitor_status.setStyleSheet("color: #1976d2; font-size: 11px;")
         from toolbox.douyin_live import LiveMonitor
         interval = max(10, int(self.settings.get("monitor_interval", 30)))
         self.live_monitor = LiveMonitor(room, interval, on_change=self._on_live_change)
@@ -1476,7 +1505,7 @@ class TestPage(BasePage):
             if info.get("like_count"):
                 self.anchor_fields["like_count"].setText(info["like_count"])
             if info.get("title"):
-                self._append(self.event_box, f"[房间] {info['title']}")
+                self.anchor_fields["live_title"].setText(str(info["title"]))
             # 直播流清晰度 → 填充下拉并自动起预览
             if info.get("streams"):
                 self._on_room_streams(info["streams"])
@@ -1681,9 +1710,40 @@ class TestPage(BasePage):
         QTimer.singleShot(1000, self._tick)
 
     def _clear_all(self):
-        """总清除：清空中间 + 右侧两个弹幕框。"""
+        """清空内容：清除界面上所有临时内容（弹幕/打赏榜/统计/主播信息/封面/计时/本场快照），
+        保留房间号、WS 地址、sessionid、清晰度、轮询等常配置与连接状态。"""
+        # 弹幕框
         self.chat_gift_box.clear()
         self.event_box.setPlainText("")
+        # 打赏榜
+        self.gift_table.setRowCount(0)
+        self._gift_rank = {}
+        # 统计：本场点赞 / 快照 / 计时
+        self._like_count = 0
+        self.like_label.setText("0")
+        self.anchor_fields["like_count"].setText("0")
+        self._session_casts = []
+        self._start_ts = time.time()
+        self.timer_label.setText("00:00:00")
+        # 主播信息 + 直播标题 + 封面
+        self.anchor_fields["live_title"].setText("未获取直播标题")
+        self.anchor_fields["anchor_name"].setText("*****")
+        self.anchor_fields["anchor_fans"].setText("*****")
+        self.anchor_fields["online_count"].setText("*****")
+        self.anchor_fields["total_viewers"].setText("*****")
+        self._cover_bytes = None
+        self.cover_label.clear()
+        self.cover_label.setText("暂无封面")
+
+    def _launch_dycast(self):
+        """启动/停止原版弹幕姬（dycast-main，纳入进程树：本工具退出时一并关闭）。"""
+        from gui_qt.pages.dycast import dycast_app_running, launch_dycast_app, stop_dycast_app
+        if dycast_app_running():
+            stop_dycast_app(self.app.toast)
+            self.dycast_btn.setText("🚀 启动弹幕姬")
+            return
+        if launch_dycast_app(self.app.toast, linked=True):
+            self.dycast_btn.setText("⏹ 停止弹幕姬")
 
     def _append(self, box, text):
         box.appendPlainText(text)

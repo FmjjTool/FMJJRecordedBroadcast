@@ -299,7 +299,7 @@ def main():
     page._session_casts = list(casts)
     path = page._auto_save_danmaku()
     check("自动导出为回放包 zip", bool(path) and os.path.exists(path) and path.endswith(".zip"))
-    check("保存到 回放包 目录", "回放包" in path)
+    check("保存到 弹幕文件 目录", "弹幕文件" in path)
     if path:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())
@@ -316,7 +316,7 @@ def main():
     page.anchor_fields["anchor_name"].setText("测试主播")
     page._export_replay_zip(quiet=True)
     from toolbox.douyin_live import _danmaku_dir as _dd
-    out_dir = _dd().parent / "回放包"
+    out_dir = _dd()  # 回放包与弹幕文件同目录（弹幕文件/）
     zips = sorted(out_dir.glob("测试主播-*.zip"))
     check("导出 zip 生成", len(zips) >= 1)
     if zips:
@@ -357,6 +357,7 @@ def main():
     page.connected = False
 
     print("== 16. dycast 进程树（Job Object 父关子关） ==")
+    from gui_qt.pages import dycast as dycast_mod
     from gui_qt.pages.dycast import DycastPage
     from gui_qt.process_tree import create_kill_job, terminate_job
     job = create_kill_job()
@@ -374,16 +375,20 @@ def main():
         def poll():
             return None
 
-    dp._proc = FakeProc()
+    # 模拟弹幕姬已运行（共享单实例状态）
+    dycast_mod._DYCAST_APP["job"] = None
+    dycast_mod._DYCAST_APP["proc"] = FakeProc()
     dp.on_show()  # 切回页面同步按钮状态
+    check("运行中停止按钮可用", dp.stop_btn.isEnabled())
     FakeApp.toasts.clear()
     dp._launch()
     check("单实例拒绝二次启动", any(l == "warning" for l, _ in FakeApp.toasts))
-    check("运行中停止按钮可用", dp.stop_btn.isEnabled())
-    dp._proc = None
-    dp._job = None
+    # 清理共享状态 + 退出兜底
+    dycast_mod._DYCAST_APP["job"] = None
+    dycast_mod._DYCAST_APP["proc"] = None
     dp.shutdown()
-    check("shutdown 清理安全", dp._proc is None and dp._job is None)
+    check("shutdown 清理安全", dycast_mod._DYCAST_APP["proc"] is None
+          and dycast_mod._DYCAST_APP["job"] is None)
 
     print("== 17. 手动断开彻底停止（修复：断开后还会继续） ==")
     from PySide6.QtWidgets import QLabel, QPushButton
@@ -465,7 +470,7 @@ def main():
     finally:
         dl_mod.DouyinLiveFetcher = orig_cls
 
-    print("== 19. 继续操作页：跟随进程树（父关子关） ==")
+    print("== 19. 继续操作页：跟随进程树（父关子关，每项单独勾选） ==")
     from gui_qt.pages.launcher import LauncherPage
 
     def has_ping():
@@ -474,20 +479,35 @@ def main():
         return "PING.EXE" in out
 
     lp = LauncherPage(FakeApp())
-    check("跟随进程树默认开启", lp.link_tree_var.isChecked())
+    lp._persist_items = lambda: None  # 测试不写真实配置
     bat = os.path.join(tmpdir, "tree_ping.bat")
     with open(bat, "w") as f:
         f.write("@echo off\r\nping -n 60 127.0.0.1 >nul\r\n")
-    lp._launch(bat)
-    check("启动纳入进程树", len(lp._linked) == 1 and lp._linked[0][0] is not None)
+    # 每项独立勾选：item.linked=True 时纳入进程树
+    lp.items = [{"name": "tree", "path": bat, "icon": "", "linked": True},
+                {"name": "free", "path": bat, "icon": "", "linked": False}]
+    lp._launch_item(0)
+    check("勾选项启动纳入进程树", len(lp._linked) == 1 and lp._linked[0][0] is not None)
     time.sleep(2)
     check("子进程运行中", has_ping())
     lp._stop_all_linked()
     time.sleep(1)
     check("停止后进程树全灭（父关子关）", not has_ping())
     check("链接列表清空", len(lp._linked) == 0)
+    # 未勾选项：独立运行（不纳入进程树），_linked 不增长
+    lp._launch_item(1)
+    time.sleep(2)
+    check("未勾选项独立启动不进进程树", len(lp._linked) == 0)
+    check("未勾选项子进程运行中", has_ping())
+    subprocess.run(["taskkill", "/IM", "PING.EXE", "/F"], capture_output=True)
+    time.sleep(1)
+    check("独立进程手动清理", not has_ping())
+    # 勾选状态切换 + 持久化
+    lp._set_item_linked(0, 0)  # 0 = Qt.Unchecked
+    check("勾选状态可切换", lp.items[0]["linked"] is False)
+    lp.items[0]["linked"] = True
     # 退出兜底
-    lp._launch(bat)
+    lp._launch_item(0)
     lp.shutdown()
     time.sleep(1)
     check("软件退出进程树全灭", not has_ping())

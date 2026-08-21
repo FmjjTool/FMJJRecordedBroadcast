@@ -90,7 +90,7 @@ class RenamePage(BasePage):
         top.addWidget(self.folder_count_label)
         top.addStretch(1)
         self.progress_label = QLabel("")
-        self.progress_label.setStyleSheet("color: #64b5f6;")
+        self.progress_label.setStyleSheet("color: #1976d2;")
         top.addWidget(self.progress_label)
         v.addLayout(top)
 
@@ -298,7 +298,7 @@ class RenamePage(BasePage):
             if t in self.type_order:
                 idx = self.type_order.index(t) + 1
                 item.setText(f"[{idx}] {t}")
-                item.setForeground(QColor("#64b5f6"))
+                item.setForeground(QColor("#1976d2"))
             else:
                 item.setText(f"[ ] {t}")
                 item.setForeground(QColor("#888888"))
@@ -470,11 +470,11 @@ class RenamePage(BasePage):
         for i in range(self.file_list.count()):
             it = self.file_list.item(i)
             if i == self.current_video_idx:
-                it.setBackground(QColor("#1a3a5c"))
+                it.setBackground(QColor("#d8e7f6"))
                 it.setForeground(QColor("#ffeb3b"))
             else:
                 it.setBackground(QColor("transparent"))
-                it.setForeground(QColor("#c6cbd6"))
+                it.setForeground(QColor("#2f3440"))
         self.file_list.scrollToItem(
             self.file_list.item(self.current_video_idx) if self.current_video_idx < self.file_list.count() else None)
 
@@ -785,7 +785,7 @@ class RenamePage(BasePage):
         for i, name in enumerate(items):
             card = QFrame()
             card.setStyleSheet(
-                "QFrame { background: #1a1a3e; border-radius: 6px; }")
+                "QFrame { background: #eef1f6; border-radius: 6px; }")
             h = QHBoxLayout(card)
             h.setContentsMargins(8, 3, 4, 3)
             h.setSpacing(2)

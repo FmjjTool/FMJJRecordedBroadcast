@@ -17,11 +17,11 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
-    QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QTabWidget,
-    QTextEdit, QVBoxLayout, QWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QProgressBar, QScrollArea,
+    QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import _collect, refresh_results_count, run_bg
+from gui_qt.common import _collect, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 
@@ -185,6 +185,18 @@ class InfoAccountsPage(BasePage):
         strat_row.addStretch(1)
         layout.addLayout(strat_row)
 
+        # 进度条行（实时显示当前抓到第几个账号）
+        prog_row = QHBoxLayout()
+        self.prog_label = QLabel("空闲")
+        self.prog_label.setStyleSheet("color: #5a6072; font-size: 11px;")
+        self.prog_label.setFixedWidth(260)
+        prog_row.addWidget(self.prog_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
+        self.progress_bar.setValue(0)
+        prog_row.addWidget(self.progress_bar, 1)
+        layout.addLayout(prog_row)
+
         # 日志
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
@@ -209,7 +221,7 @@ class InfoAccountsPage(BasePage):
 
         # 添加账号卡片
         add_card = QWidget()
-        add_card.setStyleSheet("QWidget { background: #23262f; border-radius: 8px; }")
+        add_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
         ac = QVBoxLayout(add_card)
         ac.setContentsMargins(10, 10, 10, 10)
         ac.setSpacing(4)
@@ -239,7 +251,7 @@ class InfoAccountsPage(BasePage):
 
         # 分组管理卡片
         grp_card = QWidget()
-        grp_card.setStyleSheet("QWidget { background: #23262f; border-radius: 8px; }")
+        grp_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
         gc = QVBoxLayout(grp_card)
         gc.setContentsMargins(10, 10, 10, 10)
         gc.setSpacing(4)
@@ -269,7 +281,7 @@ class InfoAccountsPage(BasePage):
 
         # 已配置账号
         acct_card = QWidget()
-        acct_card.setStyleSheet("QWidget { background: #23262f; border-radius: 8px; }")
+        acct_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
         acc = QVBoxLayout(acct_card)
         acc.setContentsMargins(10, 10, 10, 10)
         acc.setSpacing(4)
@@ -392,24 +404,50 @@ class InfoAccountsPage(BasePage):
         incremental = self.inc_check.isChecked()
         self.fetch_btn.setEnabled(False)
         self.log_text.setPlainText(f"⏳ 开始获取 {len(accounts)} 个账号的最新内容...\n")
+        self.progress_bar.setRange(0, max(len(accounts), 1))
+        self.progress_bar.setValue(0)
+        self.prog_label.setText("准备中...")
 
         def work():
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
-                incremental=incremental)
+                incremental=incremental, on_event=self._make_event_bridge())
 
         def done(result, err):
             self.fetch_btn.setEnabled(True)
             self._fetching = False
             if err:
                 self.log_text.append(f"❌ {err}")
+                self.prog_label.setText("❌ 获取失败")
                 return
-            total, log = result
-            self.log_text.append("\n".join(log) + f"\n\n✅ 共获取 {total} 条（已存入「已获取」）")
+            total, _log = result
+            self.log_text.append(f"\n✅ 共获取 {total} 条（已存入「已获取」）")
+            self.prog_label.setText("✅ 获取完成")
             refresh_results_count(self.app)
 
         self._fetching = True
         run_bg(work, done)
+
+    def _make_event_bridge(self):
+        """后台线程事件 → 主线程实时更新日志/进度条。"""
+        def on_event(event):
+            post_to_main(self._on_fetch_event, event)
+        return on_event
+
+    def _on_fetch_event(self, event):
+        """主线程处理采集事件：log=追加一行日志，progress=更新进度条。"""
+        t = event.get("type")
+        if t == "log":
+            text = event.get("text", "")
+            if text:
+                self.log_text.append(text)
+        elif t == "progress":
+            total = event.get("total", 0)
+            self.progress_bar.setRange(0, max(total, 1))
+            self.progress_bar.setValue(event.get("done", 0))
+            label = event.get("label", "")
+            if label:
+                self.prog_label.setText(label)
 
     def _resolve_target_accounts(self):
         """根据采集模式解析目标账号列表。返回 (accounts, err_msg)。"""
@@ -435,27 +473,44 @@ class InfoAccountsPage(BasePage):
             return [], "没有可采集的账号"
         return accounts, None
 
-    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False):
+    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None):
         """采集账号最新内容，返回 (total, log)。供手动与定时获取共用。
 
+        on_event(dict)：实时事件回调（后台线程调用），{"type": "log", "text": ...}
+        或 {"type": "progress", "done": x, "total": y, "label": ...}。
         rate_count/rate_interval: 搜索限流（每网站累计抓到 rate_count 个暂停 rate_interval 秒）。
         incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
         """
         from platforms import URLRecognizer, get_parser
         total = 0
         log = []
+
+        def emit(line):
+            # 逐行实时推送 + 保留完整日志（定时模式结束后打印汇总）
+            log.append(line)
+            if on_event is not None:
+                on_event({"type": "log", "text": line})
+
+        n = len(accounts)
+        if on_event is not None:
+            on_event({"type": "progress", "done": 0, "total": n, "label": "准备中..."})
         all_posts = []
         # 0 = 无上限（抓完所有分页）
         fetch_count = count if count > 0 else 9999
         per_platform = {}  # 平台 -> 已抓数量（用于限流）
         for i, a in enumerate(accounts, 1):
             platform = URLRecognizer.recognize(a.url)
+            name = a.name or (a.url[:36] if a.url else "未命名")
             if not platform:
-                log.append(f"[{i}] 无法识别: {a.url[:50]}")
+                emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
                 continue
+            if on_event is not None:
+                on_event({"type": "progress", "done": i - 1, "total": n,
+                          "label": f"[{i}/{n}] {platform} · {name}"})
+            emit(f"[{i}/{n}] ⏳ 正在获取 {platform} · {name} ...")
             parser = get_parser(platform)
             if not parser or not hasattr(parser, "fetch_user_posts"):
-                log.append(f"[{i}] {platform} 不支持时间线")
+                emit(f"[{i}/{n}] {platform} 不支持时间线")
                 continue
             try:
                 # 捕获解析器内部 print 日志（Cookie 状态 / Playwright / 访客通行证等），一并回显
@@ -475,7 +530,7 @@ class InfoAccountsPage(BasePage):
                 if rate_count > 0 and rate_interval > 0:
                     per_platform[platform] = per_platform.get(platform, 0) + len(posts)
                     if per_platform[platform] >= rate_count:
-                        log.append(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
+                        emit(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
                         time.sleep(rate_interval)
                         per_platform[platform] = 0
                 # 区分主页作品 / 动态统计
@@ -483,24 +538,26 @@ class InfoAccountsPage(BasePage):
                 videos = len(posts) - dyns
                 kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(account_kind, "")
                 if dyns and videos:
-                    log.append(f"[{i}] {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
+                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
                 elif dyns:
-                    log.append(f"[{i}] {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
+                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
                 else:
-                    log.append(f"[{i}] {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
+                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
                 detail = buf.getvalue().strip()
                 if detail:
                     for line in detail.splitlines():
                         line = line.strip()
                         if line:
-                            log.append(f"    {line}")
+                            emit(f"    {line}")
             except Exception as e:
-                log.append(f"[{i}] {platform} 失败: {e}")
+                emit(f"[{i}/{n}] {platform} 失败: {e}")
         # 自动导出（增量 or 单独）
         if all_posts:
             export_msg = self._auto_export(all_posts, incremental)
             if export_msg:
-                log.append(export_msg)
+                emit(export_msg)
+        if on_event is not None:
+            on_event({"type": "progress", "done": n, "total": n, "label": "✅ 全部完成"})
         return total, log
 
     def _auto_export(self, posts, incremental):
@@ -635,18 +692,17 @@ class InfoAccountsPage(BasePage):
         def work():
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
-                incremental=incremental)
+                incremental=incremental, on_event=self._make_event_bridge())
 
         def done(result, err):
             self._fetching = False
             ts = datetime.now().strftime("%H:%M:%S")
             if err:
                 self.log_text.append(f"[{ts}] ⏰ 定时获取失败: {err}")
+                self.prog_label.setText("❌ 定时获取失败")
                 return
-            total, log = result
+            total, _log = result
             self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
-            if log:
-                self.log_text.append("\n".join(log) + "\n")
             refresh_results_count(self.app)
 
         self._fetching = True
@@ -664,12 +720,12 @@ class InfoAccountsPage(BasePage):
         else:
             for gid, gname in sorted(groups.items()):
                 row = QWidget()
-                row.setStyleSheet("QWidget { background: #1a1d27; border-radius: 6px; }")
+                row.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
                 h = QHBoxLayout(row)
                 h.setContentsMargins(8, 4, 6, 4)
                 gid_lbl = QLabel(f"{gid}")
                 gid_lbl.setFixedWidth(44)
-                gid_lbl.setStyleSheet("font-weight: bold; color: #64b5f6; background: transparent;")
+                gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2; background: transparent;")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
                 del_btn = QPushButton("✕")
@@ -720,7 +776,7 @@ class InfoAccountsPage(BasePage):
             return
         for i, a in enumerate(accounts, 1):
             row = QWidget()
-            row.setStyleSheet("QWidget { background: #1a1d27; border-radius: 6px; }")
+            row.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 6, 4)
             plat = URLRecognizer.recognize(a.url) or "?"

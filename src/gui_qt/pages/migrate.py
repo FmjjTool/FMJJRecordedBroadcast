@@ -342,7 +342,7 @@ class MigratePage(BasePage):
         bottom.addWidget(all_del_btn)
         bottom.addStretch(1)
         skip_btn = QPushButton("跳过全部")
-        skip_btn.setStyleSheet("background: transparent; border: 1px solid #3a3d4a;")
+        skip_btn.setStyleSheet("background: transparent; border: 1px solid #c8cdd6;")
         skip_btn.clicked.connect(win.accept)
         bottom.addWidget(skip_btn)
         v.addLayout(bottom)
@@ -352,7 +352,7 @@ class MigratePage(BasePage):
         from PySide6.QtWidgets import QFrame
         display = f"{it['folder']}/{it['name']}" if it.get("folder") else it["name"]
         row = QFrame()
-        row.setStyleSheet("QFrame { background: #1a1d27; border-radius: 6px; }")
+        row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(8, 6, 8, 6)
         lbl = QLabel(f"📄 {display}")

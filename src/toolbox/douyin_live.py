@@ -70,6 +70,15 @@ def fetch_room_info(room_num):
         with httpx.Client(headers={"User-Agent": UA, "Referer": "https://live.douyin.com/"}, follow_redirects=True) as c:
             c.get(f"https://live.douyin.com/{room_num}", timeout=15)
             cookie_str = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
+            # 合并 Cookie 管理器的抖音登录 Cookie（匿名 cookie 拿不到原画等高画质流）
+            login_cookie = _get_douyin_cookie()
+            if login_cookie:
+                have = {p.split("=", 1)[0].strip()
+                        for p in cookie_str.split(";") if "=" in p}
+                extra = [p.strip() for p in login_cookie.split(";")
+                         if "=" in p and p.split("=", 1)[0].strip() not in have]
+                if extra:
+                    cookie_str = "; ".join([cookie_str] + extra)
             params = {
                 "aid": "6383", "app_name": "douyin_web", "live_id": "1",
                 "device_platform": "web", "language": "zh-CN", "browser_language": "zh-CN",
@@ -120,6 +129,11 @@ def fetch_room_info(room_num):
                 flv = stream_url.get("flv_pull_url") or {}
                 if isinstance(flv, dict) and flv:
                     info["streams"] = dict(flv)
+                    # 原画兜底：flv_pull_url 没有 _origin 时，从 pull_data.stream_data 解析
+                    if "_origin" not in info["streams"]:
+                        origin_url = _extract_origin_stream(stream_url)
+                        if origin_url:
+                            info["streams"] = {"_origin": origin_url, **info["streams"]}
                     if stream_url.get("hls_pull_url"):
                         info["hls"] = stream_url["hls_pull_url"]
                 # 更新缓存（roomId 是稳定标识，缓存起来供风控时兜底）
@@ -239,6 +253,23 @@ def _get_douyin_cookie():
         return get_cookie("douyin")
     except Exception:
         return ""
+
+
+def _extract_origin_stream(stream_url):
+    """从 stream_url.pull_data.stream_data 里解析原画 FLV 地址（登录态下才有）。"""
+    import json as _json
+    pull = stream_url.get("pull_data") or {}
+    raw = pull.get("stream_data")
+    if not raw:
+        return None
+    try:
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        origin = (data or {}).get("origin") or {}
+        main = origin.get("main") or {}
+        flv = main.get("flv") or ""
+        return flv or None
+    except Exception:
+        return None
 
 
 def _parse_cookie_str(cookie_str, domain):

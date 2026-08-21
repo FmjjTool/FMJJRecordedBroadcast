@@ -4,13 +4,57 @@ import os
 from calendar import monthrange
 from datetime import date
 
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox.rename_engine import scan_date_folders
 
 from gui_qt.pages.base import BasePage
+
+
+class DayCell(QFrame):
+    """日期格：内容从顶部开始往下排（日期在上、文件夹信息在下）。"""
+
+    clicked = Signal()
+
+    def __init__(self, day, file_count=None, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor if file_count is not None
+                       else Qt.ArrowCursor)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(6, 4, 6, 4)
+        v.setSpacing(2)
+        v.setAlignment(Qt.AlignTop)
+        num = QLabel(str(day))
+        num.setStyleSheet(
+            "font-size: 14px; font-weight: bold; background: transparent; border: none;")
+        v.addWidget(num)
+        if file_count is not None:
+            info = QLabel(f"📁 {file_count}")
+            info.setStyleSheet("font-size: 11px; background: transparent; border: none;")
+            v.addWidget(info)
+            v.addStretch(1)
+            num.setStyleSheet(
+                "font-size: 14px; font-weight: bold; background: transparent; "
+                "border: none; color: #ffffff;")
+            info.setStyleSheet(
+                "font-size: 11px; background: transparent; border: none; color: #ffffff;")
+            self.setStyleSheet(
+                "DayCell { background: #1a5c2a; border-radius: 4px; border: none; }"
+                "DayCell:hover { background: #2a8c3a; }")
+        else:
+            v.addStretch(1)
+            self.setStyleSheet(
+                "DayCell { background: #e8ebf0; border-radius: 4px; border: none; }")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.cursor().shape() == Qt.PointingHandCursor:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
 
 
 class CalendarPage(BasePage):
@@ -103,7 +147,7 @@ class CalendarPage(BasePage):
             btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
             btn.setMinimumHeight(70)
             btn.setStyleSheet(
-                "QPushButton { background: #1a3a5c; font-size: 15px; font-weight: bold; }"
+                "QPushButton { background: #d8e7f6; font-size: 15px; font-weight: bold; }"
                 "QPushButton:hover { background: #2a5a8c; }")
             btn.clicked.connect(lambda checked, yr=y: self._open_year(yr))
             self.grid.addWidget(btn, i // 4, i % 4)
@@ -125,12 +169,12 @@ class CalendarPage(BasePage):
             if days > 0:
                 btn = QPushButton(f"{m}月\n{names[m - 1]}\n📁 {days} 天")
                 btn.setStyleSheet(
-                    "QPushButton { background: #1a3a5c; font-size: 14px; font-weight: bold; }"
+                    "QPushButton { background: #d8e7f6; font-size: 14px; font-weight: bold; }"
                     "QPushButton:hover { background: #2a5a8c; }")
                 btn.clicked.connect(lambda checked, mo=m: self._open_month(mo))
             else:
                 btn = QPushButton(f"{m}月\n{names[m - 1]}\n无数据")
-                btn.setStyleSheet("QPushButton { background: #1a1a2e; font-size: 14px; }")
+                btn.setStyleSheet("QPushButton { background: #e8ebf0; font-size: 14px; }")
                 btn.setEnabled(False)
             btn.setMinimumHeight(70)
             self.grid.addWidget(btn, (m - 1) // 4, (m - 1) % 4)
@@ -166,16 +210,12 @@ class CalendarPage(BasePage):
                     if os.path.isdir(fpath):
                         file_count = len([f for f in os.listdir(fpath)
                                           if os.path.isfile(os.path.join(fpath, f))])
-                    btn = QPushButton(f"{day}\n📁 {file_count}")
-                    btn.setMinimumHeight(45)
-                    btn.setStyleSheet(
-                        "QPushButton { background: #1a5c2a; font-size: 13px; font-weight: bold; }"
-                        "QPushButton:hover { background: #2a8c3a; }")
-                    btn.clicked.connect(lambda checked, fd=folder: os.startfile(os.path.join(self.app.work_dir, fd)))
+                    cell = DayCell(day, file_count)
+                    cell.setMinimumHeight(52)
+                    cell.clicked.connect(
+                        lambda fd=folder: os.startfile(os.path.join(self.app.work_dir, fd)))
                 else:
-                    btn = QPushButton(str(day))
-                    btn.setMinimumHeight(45)
-                    btn.setStyleSheet("QPushButton { background: #1a1a2e; font-size: 13px; }")
-                    btn.setEnabled(False)
-                self.grid.addWidget(btn, week + 1, col)
+                    cell = DayCell(day)
+                    cell.setMinimumHeight(52)
+                self.grid.addWidget(cell, week + 1, col)
                 day += 1

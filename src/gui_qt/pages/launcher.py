@@ -2,10 +2,11 @@
 
 对应原版 gui/toolbox_pages.py LauncherPage：
 - 功能 tab：4×3 面板（最多 12 项），点击启动；软件/链接区分底色；支持 150px 图标
+  + 每项卡片底部独立勾选「跟随进程树」
 - 设置 tab：每项 名称/路径 输入（实时同步）+ 图标预览与选择 + 上移/下移/删除
-  + 添加软件 / 添加链接 / 保存并刷新面板
+  + 每项独立「跟随进程树」勾选 + 添加软件 / 添加链接 / 保存并刷新面板
 - 启动：http/https 链接 → 浏览器；文件 → os.startfile（不存在则警告）
-- 跟随进程树：勾选后启动的软件纳入 Job Object，本工具退出时整棵进程树一并关闭
+- 跟随进程树：按每项勾选决定；勾选项启动后纳入 Job Object，本工具退出时整棵进程树一并关闭
 """
 
 import os
@@ -15,14 +16,24 @@ import webbrowser
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.pages.base import BasePage
 from gui_qt.process_tree import assign_job, create_kill_job, terminate_job
+
+CARD_SOFT_QSS = (
+    "QPushButton { background: #eceefb; border: 1px solid #c6ccef;"
+    " border-radius: 16px; font-size: 11px; color: #3a3f6d; padding: 8px; }"
+    "QPushButton:hover { background: #dfe3f8; }")
+CARD_LINK_QSS = (
+    "QPushButton { background: #e8f5ee; border: 1px solid #b7e0c8;"
+    " border-radius: 16px; font-size: 11px; color: #1d5c3a; padding: 8px; }"
+    "QPushButton:hover { background: #d4eddf; }")
 
 
 class LauncherPage(BasePage):
@@ -35,19 +46,19 @@ class LauncherPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
 
-        # 进程树控制行
+        # 进程树控制行（跟随与否改为每项单独勾选）
         tree_row = QHBoxLayout()
-        self.link_tree_var = QCheckBox(
-            "跟随进程树（启动的软件纳入进程树：本工具退出时一并关闭全部子进程）")
-        self.link_tree_var.setChecked(True)
-        tree_row.addWidget(self.link_tree_var)
+        hint = QLabel("跟随进程树为每项单独设置：在功能面板卡片底部或设置行勾选，"
+                      "勾选项启动后纳入进程树，本工具退出时一并关闭")
+        hint.setStyleSheet("color: #5a6072; font-size: 11px;")
+        hint.setWordWrap(True)
+        tree_row.addWidget(hint, 1)
         self.stop_all_btn = QPushButton("⏹ 停止已链接软件")
         self.stop_all_btn.setStyleSheet("background: #c62828; color: white; padding: 4px 12px;")
         self.stop_all_btn.clicked.connect(self._stop_all_linked)
         tree_row.addWidget(self.stop_all_btn)
-        self.linked_lbl = QLabel("", styleSheet="color: #888; font-size: 11px;")
+        self.linked_lbl = QLabel("", styleSheet="color: #5a6072; font-size: 11px;")
         tree_row.addWidget(self.linked_lbl)
-        tree_row.addStretch(1)
         layout.addLayout(tree_row)
 
         self.tabs = QTabWidget()
@@ -74,48 +85,72 @@ class LauncherPage(BasePage):
             item = self.panel_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        for i, item in enumerate(self.items):
-            if i >= 12:
-                break
+        shown = min(len(self.items), 12)
+        for i in range(shown):
+            item = self.items[i]
             row, col = divmod(i, 4)
             name = item.get("name", f"软件{i + 1}")
             path = item.get("path", "")
             icon = item.get("icon", "")
             is_link = item.get("type") == "link"
 
-            card = QPushButton()
-            card.setMinimumHeight(150)
-            card.setCursor(Qt.PointingHandCursor)
-            card.setStyleSheet(
-                "QPushButton { background: #1a3a2a; border-radius: 16px; "
-                "font-size: 11px; color: #ccc; padding: 8px; }"
-                "QPushButton:hover { background: #22553a; }"
-                if is_link else
-                "QPushButton { background: #1e1e3a; border-radius: 16px; "
-                "font-size: 11px; color: #ccc; padding: 8px; }"
-                "QPushButton:hover { background: #2b2b52; }")
+            cell = QFrame()
+            cv = QVBoxLayout(cell)
+            cv.setContentsMargins(0, 0, 0, 0)
+            cv.setSpacing(2)
 
+            card = QPushButton()
+            card.setMinimumHeight(120)
+            card.setCursor(Qt.PointingHandCursor)
+            card.setStyleSheet(CARD_LINK_QSS if is_link else CARD_SOFT_QSS)
             if icon and os.path.isfile(icon):
                 pm = QPixmap(icon)
                 if not pm.isNull():
                     card.setIcon(QIcon(pm))
-                    card.setIconSize(pm.size().boundedTo(QSize(150, 150)))
+                    card.setIconSize(pm.size().boundedTo(QSize(140, 140)))
             if card.icon().isNull():
                 card.setText(f"{'🔗' if is_link else '📦'}\n{name}")
             else:
                 card.setText(name)
-            card.clicked.connect(lambda _c=False, p=path: self._launch(p))
-            self.panel_grid.addWidget(card, row, col)
-        # 补满空格子保持网格均匀
-        for i in range(len(self.items), 12):
-            row, col = divmod(i, 4)
-            placeholder = QWidget()
-            self.panel_grid.addWidget(placeholder, row, col)
+            card.clicked.connect(lambda _c=False, idx=i: self._launch_item(idx))
+            cv.addWidget(card, 1)
 
-    def _launch(self, path):
+            # 每项单独的跟随进程树勾选（链接项不适用）
+            if not is_link and path:
+                cb = QCheckBox("🌲 跟随进程树")
+                cb.setChecked(item.get("linked", True))
+                cb.stateChanged.connect(
+                    lambda st, idx=i: self._set_item_linked(idx, st))
+                cb.setStyleSheet("font-size: 11px;")
+                cv.addWidget(cb)
+
+            self.panel_grid.addWidget(cell, row, col)
+        # 补满空格子保持网格均匀
+        for i in range(shown, 12):
+            row, col = divmod(i, 4)
+            self.panel_grid.addWidget(QWidget(), row, col)
+
+    def _set_item_linked(self, idx, state):
+        if 0 <= idx < len(self.items):
+            # stateChanged 载荷可能是 int 或 CheckState 枚举（PySide6 版本差异），统一取值
+            val = getattr(state, "value", state)
+            self.items[idx]["linked"] = bool(val)
+            self._persist_items()
+
+    def _persist_items(self):
+        cfg = load_convert_config()
+        cfg["launcher_items"] = self.items
+        save_convert_config(cfg)
+
+    def _launch_item(self, idx):
+        if not (0 <= idx < len(self.items)):
+            return
+        item = self.items[idx]
+        path = item.get("path", "")
         if not path:
             return
-        # 链接模式：http/https 链接直接跳浏览器
+        linked = bool(item.get("linked", True))
+        # 链接模式：http/https 链接直接跳浏览器（无进程树概念）
         if path.lower().startswith(("http://", "https://")):
             try:
                 webbrowser.open(path)
@@ -125,7 +160,7 @@ class LauncherPage(BasePage):
         if not os.path.isfile(path):
             QMessageBox.warning(self, "无法启动", f"文件不存在:\n{path}")
             return
-        if self.link_tree_var.isChecked():
+        if linked:
             self._launch_linked(path)
         else:
             os.startfile(path)  # noqa: S606 (Windows) 独立运行，不随本工具退出
@@ -168,16 +203,7 @@ class LauncherPage(BasePage):
 
     def _stop_all_linked(self):
         """手动停止：终止全部已链接进程树。"""
-        for job, proc in self._linked:
-            if job is not None:
-                terminate_job(job)
-            else:
-                try:
-                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                                   capture_output=True, timeout=10)
-                except Exception:
-                    pass
-        self._linked = []
+        self._stop_all_linked_silent()
         self._refresh_linked_lbl()
         self.app.toast("已链接软件进程树已全部终止", "success")
 
@@ -234,11 +260,21 @@ class LauncherPage(BasePage):
         self._refresh_config_cards()
         return w
 
-    def _mini_btn(self, text, slot, danger=False):
+    def _mini_btn(self, text, tip, slot, danger=False):
         b = QPushButton(text)
-        b.setFixedSize(28, 24)
+        b.setToolTip(tip)
+        b.setFixedSize(34, 26)
+        b.setCursor(Qt.PointingHandCursor)
         if danger:
-            b.setStyleSheet("background: #c62828; color: white;")
+            b.setStyleSheet(
+                "QPushButton { background: #fdecea; color: #c62828;"
+                " border: 1px solid #f2b8b5; border-radius: 4px; font-weight: bold; }"
+                "QPushButton:hover { background: #f9d3d0; }")
+        else:
+            b.setStyleSheet(
+                "QPushButton { background: #ffffff; color: #2f3440;"
+                " border: 1px solid #c3cad6; border-radius: 4px; }"
+                "QPushButton:hover { background: #e9edf3; border-color: #7a8db0; }")
         b.clicked.connect(slot)
         return b
 
@@ -250,22 +286,25 @@ class LauncherPage(BasePage):
         self._icon_refs = []
         for i, item in enumerate(self.items):
             is_link = item.get("type") == "link"
-            card = QWidget()
+            card = QFrame()
+            card.setObjectName("linkCard" if is_link else "softCard")
+            # 用 objectName 限定样式，避免 QWidget 选择器污染子控件
             card.setStyleSheet(
-                "QWidget { background: #1a3a2a; border-radius: 6px; }" if is_link
-                else "QWidget { background: #1a1a3e; border-radius: 6px; }")
+                "QFrame#linkCard { background: #e8f5ee; border-radius: 6px; }"
+                if is_link else
+                "QFrame#softCard { background: #eef1f6; border-radius: 6px; }")
             h = QHBoxLayout(card)
             h.setContentsMargins(8, 3, 4, 3)
-            h.setSpacing(3)
+            h.setSpacing(4)
 
             drag_lbl = QLabel("⋮⋮")
-            drag_lbl.setStyleSheet("color: #666; background: transparent; border: none;")
-            drag_lbl.setFixedWidth(20)
+            drag_lbl.setStyleSheet("color: #8a93a5; background: transparent; border: none;")
+            drag_lbl.setFixedWidth(18)
             h.addWidget(drag_lbl)
 
             # 名称输入（实时同步）
             name_entry = QLineEdit(item.get("name", ""))
-            name_entry.setFixedWidth(120)
+            name_entry.setFixedWidth(110)
             name_entry.setPlaceholderText("名称")
             name_entry.textChanged.connect(
                 lambda t, idx=i: self._on_item_change(idx, "name", t))
@@ -292,20 +331,31 @@ class LauncherPage(BasePage):
                 lambda t, idx=i: self._on_item_change(idx, "path", t))
             h.addWidget(path_entry, 1)
 
-            # 浏览按钮（仅软件项显示）
+            # 每项独立的跟随进程树勾选（仅软件项）
+            if not is_link:
+                cb = QCheckBox("🌲")
+                cb.setToolTip("跟随进程树：本工具退出时该项启动的软件整树一并关闭")
+                cb.setChecked(item.get("linked", True))
+                cb.stateChanged.connect(
+                    lambda st, idx=i: self._set_item_linked(idx, st))
+                h.addWidget(cb)
+            # 浏览 / 图标 / 上移 / 下移 / 删除（带提示文字）
             if not is_link:
                 h.addWidget(self._mini_btn(
-                    "📁", lambda _c=False, e=path_entry, idx=i: self._browse_file(e, idx)))
-            # 图标选择
+                    "📁 浏览", "选择程序文件",
+                    lambda _c=False, e=path_entry, idx=i: self._browse_file(e, idx)))
             h.addWidget(self._mini_btn(
-                "🖼", lambda _c=False, idx=i: self._browse_icon(idx)))
-            # 上移 / 下移 / 删除
+                "🖼 图标", "选择该项的显示图标",
+                lambda _c=False, idx=i: self._browse_icon(idx)))
             h.addWidget(self._mini_btn(
-                "⬆", lambda _c=False, idx=i: self._move_launcher_item(idx, -1)))
+                "⬆ 上移", "与上一项交换位置",
+                lambda _c=False, idx=i: self._move_launcher_item(idx, -1)))
             h.addWidget(self._mini_btn(
-                "⬇", lambda _c=False, idx=i: self._move_launcher_item(idx, 1)))
+                "⬇ 下移", "与下一项交换位置",
+                lambda _c=False, idx=i: self._move_launcher_item(idx, 1)))
             h.addWidget(self._mini_btn(
-                "✕", lambda _c=False, idx=i: self._delete_launcher_item(idx), danger=True))
+                "✕ 删除", "删除该项",
+                lambda _c=False, idx=i: self._delete_launcher_item(idx), danger=True))
 
             self.cfg_layout.addWidget(card)
 
@@ -328,7 +378,7 @@ class LauncherPage(BasePage):
             self._refresh_config_cards()  # 刷新显示
 
     def _add_item(self):
-        self.items.append({"name": "", "path": "", "icon": ""})
+        self.items.append({"name": "", "path": "", "icon": "", "linked": True})
         self._refresh_config_cards()
 
     def _add_link(self):
@@ -347,9 +397,7 @@ class LauncherPage(BasePage):
             self._refresh_config_cards()
 
     def _save_and_refresh(self):
-        cfg = load_convert_config()
-        cfg["launcher_items"] = self.items
-        save_convert_config(cfg)
+        self._persist_items()
         self._refresh_config_cards()
         self._refresh_panel()
         self.app.toast("软件面板已更新", "success")

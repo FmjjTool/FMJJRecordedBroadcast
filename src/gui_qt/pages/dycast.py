@@ -42,13 +42,90 @@ def _find_dycast_dir():
     return None
 
 
+# ===== 共享启动器（弹幕姬单实例 + Job Object 进程树，供本页与弹幕姬页按钮共用）=====
+_DYCAST_APP = {"job": None, "proc": None}
+
+
+def dycast_app_running():
+    """弹幕姬（进程树链接）是否运行中。"""
+    p = _DYCAST_APP.get("proc")
+    return p is not None and p.poll() is None
+
+
+def launch_dycast_app(toast, linked=True):
+    """启动原版弹幕姬。linked=True 纳入 Job Object 进程树（父关子关）。"""
+    dycast_dir = _find_dycast_dir()
+    if not dycast_dir:
+        toast("未找到 dycast-main 目录", "error")
+        return False
+    bat = os.path.join(dycast_dir, "start.bat")
+    if not os.path.isfile(bat):
+        toast(f"未找到启动脚本: {bat}", "error")
+        return False
+    if linked and dycast_app_running():
+        toast("弹幕姬已在运行（已链接进程树，同一时间仅一个实例）", "warning")
+        return False
+    try:
+        if linked:
+            # Job Object 进程树：cmd → node/vite 全部纳入，父关子关
+            job = create_kill_job()
+            proc = subprocess.Popen(
+                ["cmd", "/c", bat], cwd=dycast_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE)
+            if job and assign_job(job, proc):
+                _DYCAST_APP["job"], _DYCAST_APP["proc"] = job, proc
+            else:
+                # Job 绑定失败：退化为普通跟踪（关闭时 taskkill /T 兜底）
+                if job:
+                    terminate_job(job)
+                _DYCAST_APP["job"], _DYCAST_APP["proc"] = None, proc
+            threading.Thread(target=_watch_dycast_proc, args=(toast,), daemon=True).start()
+            toast("弹幕姬启动中（已链接进程树：本软件退出时一并结束）", "success")
+        else:
+            os.startfile(bat)  # 独立运行（不纳入进程树，软件退出不影响）
+            toast("弹幕姬启动中，稍后会自动打开浏览器窗口", "success")
+    except Exception as e:
+        toast(f"启动失败: {e}", "error")
+        return False
+    return True
+
+
+def stop_dycast_app(toast=None):
+    """终止弹幕姬整棵进程树（Job Object / taskkill /T 兜底）。"""
+    job, proc = _DYCAST_APP["job"], _DYCAST_APP["proc"]
+    if job is None and proc is None:
+        return
+    if job is not None:
+        terminate_job(job)
+    elif proc is not None:
+        try:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+    _DYCAST_APP["job"] = None
+    _DYCAST_APP["proc"] = None
+    if toast:
+        toast("弹幕姬进程树已终止", "success")
+
+
+def _watch_dycast_proc(toast=None):
+    """后台监视：宿主 cmd 退出 → 终止 Job 清残留子进程（父关子关）。"""
+    proc = _DYCAST_APP["proc"]
+    if proc is None:
+        return
+    proc.wait()
+    if _DYCAST_APP["proc"] is not proc:
+        return  # 已被停止逻辑处理
+    stop_dycast_app(None)
+    if toast:
+        post_to_main(lambda: toast("弹幕姬已退出（进程树已全部结束）", "info"))
+
+
 class DycastPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.dycast_dir = _find_dycast_dir()
-        # 进程树管理：链接进程树（Job Object 父关子关）时的启动实例
-        self._proc = None
-        self._job = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -62,12 +139,12 @@ class DycastPage(BasePage):
 
         info = QLabel()
         info.setStyleSheet(
-            "background: #1a1d27; border-radius: 6px; padding: 8px; color: #c6cbd6;")
+            "background: #ffffff; border-radius: 6px; padding: 8px; color: #2f3440;")
         info.setWordWrap(True)
         info.setText(
             "<b>弹幕姬前端</b><br>"
-            + ("<span style='color:#64b5f6;'>内置 dycast-main（已集成到本软件）</span>"
-               if self.dycast_dir else "<span style='color:#64b5f6;'>（未找到 dycast-main 目录）</span>"))
+            + ("<span style='color:#1976d2;'>内置 dycast-main（已集成到本软件）</span>"
+               if self.dycast_dir else "<span style='color:#1976d2;'>（未找到 dycast-main 目录）</span>"))
         layout.addWidget(info)
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #888; padding-left: 4px;")
@@ -102,7 +179,7 @@ class DycastPage(BasePage):
 
         tip = QTextBrowser()
         tip.setOpenExternalLinks(False)
-        tip.setStyleSheet("color: #888; font-size: 12px; background: #1a1d27; border-radius: 6px; padding: 10px;")
+        tip.setStyleSheet("color: #888; font-size: 12px; background: #ffffff; border-radius: 6px; padding: 10px;")
         tip.setPlainText(
             "使用说明\n\n"
             "1. 依赖缺失时启动会自动安装（start.bat 自动检测 pnpm/npm 并 install）\n"
@@ -130,92 +207,25 @@ class DycastPage(BasePage):
             self.status_label.setStyleSheet("color: #ff9800;")
 
     def _launch(self):
-        if not self.dycast_dir:
-            self.app.toast("未找到 dycast-main 目录", "error")
-            return
-        bat = os.path.join(self.dycast_dir, "start.bat")
-        if not os.path.isfile(bat):
-            self.app.toast(f"未找到启动脚本: {bat}", "error")
-            return
         linked = self.link_tree_var.isChecked()
-        if linked and self._proc is not None and self._proc.poll() is None:
-            # 单实例：进程树已存在则不再启动第二个
-            self.app.toast("弹幕姬已在运行（已链接进程树，同一时间仅一个实例）", "warning")
-            return
-        try:
+        if launch_dycast_app(self.app.toast, linked=linked):
             if linked:
-                # Job Object 进程树：cmd → node/vite 全部纳入，父关子关
-                job = create_kill_job()
-                proc = subprocess.Popen(
-                    ["cmd", "/c", bat], cwd=self.dycast_dir,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE)
-                if job and assign_job(job, proc):
-                    self._job, self._proc = job, proc
-                else:
-                    # Job 绑定失败：退化为普通跟踪（关闭时 taskkill /T 兜底）
-                    if job:
-                        terminate_job(job)
-                    self._job, self._proc = None, proc
                 self.stop_btn.setEnabled(True)
                 self.launch_btn.setEnabled(False)
-                threading.Thread(target=self._watch_proc, daemon=True).start()
-            else:
-                os.startfile(bat)  # 独立运行（不纳入进程树，软件退出不影响）
-        except Exception as e:
-            self.app.toast(f"启动失败: {e}", "error")
-            return
-        if linked:
-            self.app.toast("弹幕姬启动中（已链接进程树：本软件退出时一并结束）", "success")
-        else:
-            self.app.toast("弹幕姬启动中，稍后会自动打开浏览器窗口", "success")
-
-    def _watch_proc(self):
-        """后台监视：宿主 cmd 退出 → 清理进程树残留（父关子关）。"""
-        proc = self._proc
-        if proc is None:
-            return
-        proc.wait()
-        if self._proc is not proc:
-            return  # 已被停止按钮处理
-        self._proc = None
-        post_to_main(self._on_linked_exit)
-
-    def _on_linked_exit(self):
-        """弹幕姬宿主进程退出（用户关窗口等）→ 终止 Job 清残留子进程。"""
-        self._cleanup_linked()
-        self.app.toast("弹幕姬已退出（进程树已全部结束）", "info")
 
     def _stop_linked(self):
         """手动停止：终止整棵进程树。"""
-        if self._proc is None and self._job is None:
-            return
-        self._cleanup_linked()
-        self.app.toast("弹幕姬进程树已终止", "success")
-
-    def _cleanup_linked(self):
-        if self._job is not None:
-            terminate_job(self._job)
-            self._job = None
-        elif self._proc is not None:
-            # 无 Job（绑定失败兜底）：taskkill /T 杀整树
-            try:
-                subprocess.run(["taskkill", "/PID", str(self._proc.pid), "/T", "/F"],
-                               capture_output=True, timeout=10)
-            except Exception:
-                pass
-        self._proc = None
+        stop_dycast_app(self.app.toast)
         self.stop_btn.setEnabled(False)
         self.launch_btn.setEnabled(bool(self.dycast_dir))
 
     def shutdown(self):
         """软件退出：链接进程树时一并结束弹幕姬全部子进程（父关子关）。"""
-        self._cleanup_linked()
+        stop_dycast_app(None)
 
     def on_show(self):
         # 切回页面时同步进程树状态（宿主可能已被用户手动关闭）
-        if self._proc is not None and self._proc.poll() is not None:
-            self._cleanup_linked()
-        linked_running = self._proc is not None
+        linked_running = dycast_app_running()
         self.stop_btn.setEnabled(linked_running)
         self.launch_btn.setEnabled(bool(self.dycast_dir) and not linked_running)
 

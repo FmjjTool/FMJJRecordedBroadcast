@@ -95,7 +95,7 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(self._card_title("🛠 关于"))
         maker_row = QHBoxLayout()
         maker_lbl = QLabel("🛠 制作：歆慕")
-        maker_lbl.setStyleSheet("color: #64b5f6; font-weight: bold;")
+        maker_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
         maker_row.addWidget(maker_lbl)
         maker_row.addStretch(1)
         maker_row.addWidget(self._btn("🔗 B站主页", lambda: os.startfile("https://space.bilibili.com/622821754")))
@@ -103,7 +103,7 @@ class GlobalSettingsPage(BasePage):
 
         site_row = QHBoxLayout()
         site_lbl = QLabel("📋 官方网站：封茗囧菌数据汇总库")
-        site_lbl.setStyleSheet("color: #64b5f6; font-weight: bold;")
+        site_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
         site_row.addWidget(site_lbl)
         site_row.addStretch(1)
         site_row.addWidget(self._btn("🔗 打开", lambda: os.startfile("https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr")))

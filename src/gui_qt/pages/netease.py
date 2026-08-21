@@ -111,7 +111,7 @@ class NeteasePage(BasePage):
         # 详情区
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setStyleSheet("QScrollArea { background: #1a1d27; border-radius: 6px; }")
+        self.detail_scroll.setStyleSheet("QScrollArea { background: #ffffff; border-radius: 6px; }")
         self.detail_container = QWidget()
         self.detail_layout = QVBoxLayout(self.detail_container)
         self.detail_layout.setContentsMargins(8, 8, 8, 8)
@@ -248,7 +248,7 @@ class NeteasePage(BasePage):
         lbl = QLabel("🎵")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #1a1d27; border-radius: 4px; color: #555;")
+        lbl.setStyleSheet("background: #ffffff; border-radius: 4px; color: #555;")
         parent_layout.addWidget(lbl)
         if not url:
             return lbl
@@ -387,7 +387,7 @@ class NeteasePage(BasePage):
             return
         self.single_song_id = song.get("id")
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         pic = song.get("_picUrl") or (song.get("al") or {}).get("picUrl")
@@ -412,19 +412,25 @@ class NeteasePage(BasePage):
         lyric = song.get("_lyric", "")
         if lyric:
             lyric_card = QFrame()
-            lyric_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+            lyric_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
             lv = QVBoxLayout(lyric_card)
-            lv.setContentsMargins(10, 10, 10, 10)
-            lv.addWidget(QLabel("📝 歌词", styleSheet="font-weight: bold;"))
+            lv.setContentsMargins(10, 6, 10, 8)
+            lv.setSpacing(2)
+            # 标题行：固定小高度，避免占大块
+            title_lbl = QLabel("📝 歌词")
+            title_lbl.setStyleSheet("font-weight: bold; font-size: 12px; background: transparent; border: none;")
+            title_lbl.setFixedHeight(18)
+            lv.addWidget(title_lbl)
             lyric_text = QPlainTextEdit()
             lyric_text.setReadOnly(True)
-            lyric_text.setMaximumHeight(220)
+            lyric_text.setMinimumHeight(160)
+            lyric_text.setMaximumHeight(260)
             lyric_text.setStyleSheet("font-family: Consolas; font-size: 12px;")
             # 仅显示前 100 行避免卡顿
             lines = lyric.splitlines()
             display = "\n".join(lines[:100]) + ("\n…(更多歌词省略)" if len(lines) > 100 else "")
             lyric_text.setPlainText(display)
-            lv.addWidget(lyric_text)
+            lv.addWidget(lyric_text, 1)
             self.detail_layout.addWidget(lyric_card)
         else:
             lbl = QLabel("（暂无歌词）")
@@ -437,35 +443,35 @@ class NeteasePage(BasePage):
         if not pl:
             self._show_empty()
             return
-        info = pl.get("playlist") or {}
+        # get_playlist_detail 返回扁平结构：{id, name, coverImgUrl, creator(str), trackCount, description, tracks}
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
-        pic = info.get("coverImgUrl")
+        pic = pl.get("coverImgUrl")
         self._load_image_async(pic, 96, h)
-        creator = info.get("creator") or {}
         txt = QLabel(
-            f"📋 {info.get('name', '')}\n"
-            f"👤 创建者: {creator.get('nickname', '')}\n"
-            f"🎵 歌曲数: {info.get('trackCount', 0)}  "
-            f"▶ 播放数: {info.get('playCount', 0)}\n"
-            f"📝 简介: {(info.get('description') or '无')[:90]}"
+            f"📋 {pl.get('name', '')}\n"
+            f"👤 创建者: {pl.get('creator') or ''}\n"
+            f"🎵 歌曲数: {pl.get('trackCount', 0)}\n"
+            f"📝 简介: {(pl.get('description') or '无')[:90]}"
         )
         txt.setWordWrap(True)
         h.addWidget(txt, 1)
         self.detail_layout.addWidget(info_card)
-        # 歌曲列表
-        tracks = pl.get("tracks") or []
+        # 歌曲列表（tracks 已是 {id, name, artists, album, picUrl, duration} 结构）
+        tracks = [t for t in (pl.get("tracks") or [])
+                  if isinstance(t, dict) and t.get("id")]
         self.results = [
             {"id": t["id"], "name": t.get("name", ""),
-             "artists": "/".join(a.get("name", "") for a in (t.get("ar") or [])),
-             "album": (t.get("al") or {}).get("name", ""),
-             "duration": t.get("dt", 0)}
+             "artists": t.get("artists", ""),
+             "album": t.get("album", ""),
+             "picUrl": t.get("picUrl", ""),
+             "duration": t.get("duration", 0)}
             for t in tracks
         ]
         self._render_songs(self.results)
-        self.status_label.setText(f"✅ 歌单「{info.get('name', '')}」共 {len(self.results)} 首")
+        self.status_label.setText(f"✅ 歌单「{pl.get('name', '')}」共 {len(self.results)} 首")
 
     # ===================== 渲染：专辑解析（专辑详情） =====================
     def _render_album(self, album):
@@ -475,7 +481,7 @@ class NeteasePage(BasePage):
         songs = album.get("songs") or []
         album_info = album.get("album") or {}
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #23262f; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         pic = album_info.get("picUrl") or album_info.get("blurPicUrl")
