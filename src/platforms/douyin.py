@@ -211,20 +211,44 @@ class DouyinParser(PlatformBase):
     # ========== 用户时间线（Playwright） ==========
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
+        """三级回退：① 游客 Playwright → ② 接入 Cookie 重试（Cookie 固定放第三级）。
+
+        抖音用户时间线无免登录 HTTP API，浏览器是直连手段；
+        先跑游客浏览器，拿不到数据才带 Cookie 再跑一次。
+        """
         sec_uid = self.extract_user_id(url_or_id)
         if not sec_uid:
             print(f"[抖音] 无法提取用户ID: {url_or_id}")
             return []
 
         try:
-            from playwright.sync_api import sync_playwright
-            print("[抖音] Playwright 已检测到，启动浏览器...")
+            from playwright.sync_api import sync_playwright  # noqa: F401
         except ImportError:
             print("[抖音] 未安装 playwright")
             return []
 
         from auth import get_cookie
         cookie_str = get_cookie("douyin")
+
+        # 一级：无 Cookie 游客浏览器
+        results = self._fetch_pw_once(sec_uid, count, cookie_str="")
+        if results:
+            return results
+
+        # 三级：接入 Cookie 重试
+        if cookie_str:
+            print("[抖音] 游客浏览器未获取到数据，接入 Cookie 重试...")
+            results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str)
+            if results:
+                return results
+        else:
+            print("[抖音] 游客浏览器未拦截到数据（可能需登录 Cookie，或页面触发验证码）")
+        return results
+
+    def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "") -> list:
+        """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
+        from playwright.sync_api import sync_playwright
+
         results = []
 
         with sync_playwright() as p:
@@ -326,8 +350,6 @@ class DouyinParser(PlatformBase):
             finally:
                 browser.close()
 
-        if not results:
-            print("[抖音] Playwright 已运行但未拦截到 API 数据（可能需登录 Cookie，或页面触发了验证码）")
         return results
 
     def _extract_aweme_list_from_html(self, html: str) -> list:
@@ -369,17 +391,33 @@ class DouyinParser(PlatformBase):
     # ========== 主入口 ==========
 
     def parse(self, url: str, client: Optional[httpx.Client] = None) -> Optional[VideoInfo]:
+        """三级回退：① 游客直连（页面 + 游客 Playwright）→ ② 接入 Cookie 重试。
+
+        Cookie 固定放第三级：游客方式拿不到数据才带 Cookie 走 _try_api + 页面解析。
+        """
+        # 一级：无 Cookie（页面解析 + 游客 Playwright 兜底）
+        result = self._parse_once(url, client, cookie="")
+        if result is None and client is None:
+            from auth import get_cookie
+            ck = get_cookie("douyin")
+            if ck:
+                print("[抖音] 游客解析失败，接入 Cookie 重试...")
+                # Playwright 游客已在一级试过，Cookie 重试只走 API + 页面
+                result = self._parse_once(url, None, cookie=ck, allow_playwright=False)
+        return result
+
+    def _parse_once(self, url: str, client: Optional[httpx.Client],
+                    cookie: str = "", allow_playwright: bool = True) -> Optional[VideoInfo]:
         close_client = False
         if client is None:
-            from auth import get_cookie
-            cookie_str = get_cookie("douyin")
             headers = dict(self.HEADERS)
-            if cookie_str: headers["Cookie"] = cookie_str
+            if cookie: headers["Cookie"] = cookie
             client = httpx.Client(headers=headers, timeout=20, follow_redirects=True)
             close_client = True
         try:
             # 图文 note：iteminfo 接口对图文返回 11110 风控，直接委托 multi_downloader
-            # 的 aweme/detail + a_bogus 签名解析（能拿到 images 和完整元数据）
+            # 的 aweme/detail + a_bogus 签名解析（能拿到 images 和完整元数据；
+            # 其内部同样是游客优先、失败才接入 Cookie）
             if "/note/" in url:
                 try:
                     from multi_downloader import parse_video
@@ -423,6 +461,8 @@ class DouyinParser(PlatformBase):
             result = self._parse_from_page(url, client)
             if result and (result.title or result.author):
                 return result
+            if not allow_playwright:
+                return None
             print("[抖音] HTTP 方式未能获取有效数据，尝试 Playwright...")
             try:
                 from .douyin_playwright import DouyinPlaywrightParser

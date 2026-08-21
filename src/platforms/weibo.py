@@ -211,12 +211,22 @@ class WeiboParser(PlatformBase):
     # ========== 主入口 ==========
 
     def parse(self, url: str, client: Optional[httpx.Client] = None) -> Optional[VideoInfo]:
+        """三级回退：① 游客直连 → ② 接入 Cookie 重试（Cookie 固定放第三级）。"""
+        # 一级：无 Cookie 直连
+        result = self._parse_once(url, client, cookie="")
+        if result is None and client is None:
+            from auth import get_cookie
+            ck = get_cookie("weibo")
+            if ck:
+                print("[微博] 游客解析失败，接入 Cookie 重试...")
+                result = self._parse_once(url, None, cookie=ck)
+        return result
+
+    def _parse_once(self, url: str, client: Optional[httpx.Client], cookie: str = "") -> Optional[VideoInfo]:
         close_client = False
         if client is None:
-            from auth import get_cookie
             headers = dict(self.HEADERS)
-            ck = get_cookie("weibo")
-            if ck: headers["Cookie"] = ck
+            if cookie: headers["Cookie"] = cookie
             client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
             close_client = True
         try:
@@ -242,19 +252,16 @@ class WeiboParser(PlatformBase):
         return m.group(1) if m else ""
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
+        """三级回退：① 访客通行证 API → ② HTTP 页面 → ③ 接入用户 Cookie → ④ Playwright 兜底。
+
+        Cookie 是账号凭据，能不用就不用（降低风控/封号风险）；
+        游客方式实在连不上才接入，Cookie 固定放第三级。
+        """
         uid = self.extract_user_id(url_or_id)
         if not uid: return []
         from auth import get_cookie
 
-        # 层级 1: 用户 Cookie API
-        headers = dict(self.HEADERS)
-        ck = get_cookie("weibo")
-        if ck: headers["Cookie"] = ck
-        api_results = self._try_api_fetch(uid, count, headers)
-        if api_results:
-            return api_results
-
-        # 层级 2: 访客通行证（自动获取，无需登录）
+        # 层级 1: 访客通行证 API（自动获取，无需登录）
         vck = self._get_visitor_cookie()
         if vck:
             visitor_headers = dict(self.HEADERS)
@@ -264,15 +271,28 @@ class WeiboParser(PlatformBase):
                 print(f"[微博-访客通行证] API 获取到 {len(api_results)} 条")
                 return api_results
 
-        # 层级 3: HTTP 页面解析
-        page_headers = headers if ck else ({"Cookie": vck} if vck else {})
+        # 层级 2: HTTP 页面解析（游客）
         print("[微博] 尝试 HTTP 页面解析...")
+        page_headers = {"Cookie": vck} if vck else {}
         page_results = self._fetch_http_page(uid, count, page_headers)
         if page_results:
             return page_results
 
-        # 层级 4: Playwright 浏览器
-        print("[微博] HTTP 解析未获取到数据，尝试 Playwright...")
+        # 层级 3: 接入用户 Cookie（API + 页面各试一次）
+        ck = get_cookie("weibo")
+        if ck:
+            print("[微博] 游客方式未获取到数据，接入 Cookie 重试...")
+            cookie_headers = dict(self.HEADERS)
+            cookie_headers["Cookie"] = ck
+            api_results = self._try_api_fetch(uid, count, cookie_headers)
+            if api_results:
+                return api_results
+            page_results = self._fetch_http_page(uid, count, cookie_headers)
+            if page_results:
+                return page_results
+
+        # 层级 4: Playwright 浏览器（最后兜底）
+        print("[微博] 尝试 Playwright...")
         return self._fetch_pw(uid, count)
 
     def _try_api_fetch(self, uid: str, count: int, headers: dict) -> list:

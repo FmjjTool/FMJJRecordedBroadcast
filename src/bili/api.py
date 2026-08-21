@@ -27,7 +27,13 @@ CACHE_TTL = 300
 
 
 class BiliApiError(Exception):
-    pass
+    def __init__(self, msg: str, code: int | None = None):
+        super().__init__(msg)
+        self.code = code
+
+
+# 这些错误码下游客态被拒，接入登录 Cookie 通常可解（风控/需登录）
+_RETRY_WITH_LOGIN_CODES = {-352, -403, -412, -799, -101}
 
 
 def _cache_get(url: str):
@@ -51,57 +57,78 @@ def clear_cache():
 def api_get(url: str, params: dict | None = None, *,
             wbi_sign: bool = False, app_sign: bool = False,
             use_cache: bool = True, login_required: bool = False) -> dict:
-    """统一 GET。返回 data 字段；code!=0 抛 BiliApiError。"""
+    """统一 GET。返回 data 字段；code!=0 抛 BiliApiError。
+
+    游客优先：默认不带登录 Cookie（设备指纹+ticket）；仅风控/需登录码被拒时
+    才接入登录 Cookie 重试。login_required=True 的接口必须用 Cookie（三级链路不适用）。
+    """
     params = {k: v for k, v in (params or {}).items() if v is not None}
     if app_sign:
         params = wbi.sign_app(params)
     client = httpx.Client(timeout=15, follow_redirects=True)
     try:
         login_cookie = get_cookie("bilibili")
-        if login_required and not login_cookie:
-            raise BiliApiError("该接口需要登录 B站 Cookie（设置页 → Cookie 管理）")
+        if login_required:
+            if not login_cookie:
+                raise BiliApiError("该接口需要登录 B站 Cookie（设置页 → Cookie 管理）")
+            return _api_get_once(client, url, params, login_cookie, wbi_sign, use_cache)
 
-        def _build_full() -> str:
-            if wbi_sign:
-                return wbi.sign_wbi(url, params, client)
-            qs = urllib.parse.urlencode(params)
-            return f"{url}?{qs}" if qs else url
-
-        full = _build_full()
-        if use_cache:
-            cached = _cache_get(full)
-            if cached is not None:
-                return cached
-
-        headers = {
-            "User-Agent": UA,
-            "Origin": "https://www.bilibili.com",
-            "Referer": "https://www.bilibili.com/",
-            "Cookie": wbi.build_cookie_header(client, login_cookie),
-        }
-        for attempt in range(2):
-            r = client.get(full, headers=headers)
-            try:
-                js = r.json()
-            except Exception:
-                raise BiliApiError(f"[{r.status_code}] 接口返回异常（可能已下线）")
-            code = js.get("code", -1)
-            if code == 0:
-                if js.get("data") is None:
-                    raise BiliApiError("接口返回空数据（该内容可能已下架或 ID 无效）")
-                if use_cache:
-                    _cache_put(full, js["data"])
-                return js["data"]
-            if code in (-352, -403) and wbi_sign and attempt == 0:
-                wbi.refresh_wbi()   # 刷新 WBI 密钥重试一次
-                full = _build_full()
-                continue
-            if code == -101:
-                raise BiliApiError("B站登录已失效，请重新登录（设置页 → Cookie 管理）")
-            raise BiliApiError(f"[{code}] {js.get('message', '请求失败')}")
-        raise BiliApiError("请求失败（WBI 风控重试后仍被拒绝）")
+        # 一级：游客（不带登录 Cookie）
+        try:
+            return _api_get_once(client, url, params, "", wbi_sign, use_cache)
+        except BiliApiError as e:
+            if not login_cookie or e.code not in _RETRY_WITH_LOGIN_CODES:
+                raise
+            print("[B站API] 游客请求被拒，接入Cookie重试...")
+            # 三级：接入登录 Cookie（缓存键不含 Cookie，重试绕过缓存读）
+            return _api_get_once(client, url, params, login_cookie, wbi_sign, use_cache)
     finally:
         client.close()
+
+
+def _api_get_once(client: httpx.Client, url: str, params: dict,
+                  login_cookie: str, wbi_sign: bool, use_cache: bool) -> dict:
+    def _build_full() -> str:
+        if wbi_sign:
+            return wbi.sign_wbi(url, params, client)
+        qs = urllib.parse.urlencode(params)
+        return f"{url}?{qs}" if qs else url
+
+    full = _build_full()
+    if use_cache:
+        cached = _cache_get(full)
+        if cached is not None:
+            return cached
+
+    headers = {
+        "User-Agent": UA,
+        "Origin": "https://www.bilibili.com",
+        "Referer": "https://www.bilibili.com/",
+        "Cookie": wbi.build_cookie_header(client, login_cookie),
+    }
+    for attempt in range(2):
+        r = client.get(full, headers=headers)
+        try:
+            js = r.json()
+        except Exception:
+            raise BiliApiError(f"[{r.status_code}] 接口返回异常（可能已下线）")
+        code = js.get("code", -1)
+        if code == 0:
+            if js.get("data") is None:
+                raise BiliApiError("接口返回空数据（该内容可能已下架或 ID 无效）")
+            if use_cache:
+                _cache_put(full, js["data"])
+            return js["data"]
+        if code in (-352, -403) and wbi_sign and attempt == 0:
+            wbi.refresh_wbi()   # 刷新 WBI 密钥重试一次
+            full = _build_full()
+            continue
+        if code == -101:
+            if login_cookie:
+                raise BiliApiError("B站登录已失效，请重新登录（设置页 → Cookie 管理）", code)
+            raise BiliApiError("该接口需要登录 B站 Cookie（设置页 → Cookie 管理）", code)
+        raise BiliApiError(f"[{code}] {js.get('message', '请求失败')}", code)
+    raise BiliApiError("请求失败（WBI 风控重试后仍被拒绝）")
 
 
 # ==================== 表情包 ====================
@@ -213,9 +240,21 @@ def dynamic_detail(dynamic_id: str) -> dict:
 
 
 def space_feed(mid: str, offset: str = "") -> dict:
-    """用户动态列表（WBI 签名）。"""
-    return api_get("https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space",
-                   {"host_mid": mid, "offset": offset}, wbi_sign=True)
+    """用户动态列表（WBI 签名）。游客优先；空 items 软风控（has_more 却 total=0）时接入Cookie重试。"""
+    url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+    params = {"host_mid": mid, "offset": offset}
+    d = api_get(url, params, wbi_sign=True)
+    if not (d.get("items") or []):
+        ck = get_cookie("bilibili")
+        if ck:
+            print("[B站API] 游客动态列表为空，接入Cookie重试...")
+            try:
+                d2 = api_get(url, params, wbi_sign=True, use_cache=False, login_required=True)
+                if d2.get("items"):
+                    return d2
+            except BiliApiError:
+                pass
+    return d
 
 
 def user_card(mid: str) -> dict:

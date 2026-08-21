@@ -12,3 +12,5 @@ dycast-main/downloads/
 src/tracker/accounts.json
 src/tracker/groups.json
 src/tracker/data/
+# 登录凭据（本地登录状态，含隐私，禁止入库）
+src/netease/cookie.txt

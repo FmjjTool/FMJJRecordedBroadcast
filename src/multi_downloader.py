@@ -147,16 +147,37 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
         "User-Agent": UA_PC,
         "Referer": f"https://www.douyin.com/{ref_path}/{aweme_id}",
     }
-    # 注入主程序抖音 cookie（登录态可绕过风控）
-    try:
-        from auth import get_cookie
-        ck = get_cookie("douyin")
+
+    def _detail(cookie: str) -> dict:
+        if cookie:
+            h = dict(headers)
+            h["Cookie"] = cookie
+            try:
+                return httpx.get(full_url, headers=h, timeout=15).json()
+            except Exception:
+                return {}
+        # 游客：先访问首页拿 ttwid 等游客票据，否则接口直接拒绝
+        with httpx.Client(headers=headers, timeout=15, follow_redirects=True) as c:
+            try:
+                c.get("https://www.douyin.com/")
+            except Exception:
+                pass
+            try:
+                return c.get(full_url).json()
+            except Exception:
+                return {}
+
+    # 游客优先；拿不到详情才接入登录 Cookie（三级兜底）
+    data = _detail("")
+    if not (data.get("aweme_detail") or {}):
+        try:
+            from auth import get_cookie
+            ck = get_cookie("douyin")
+        except Exception:
+            ck = ""
         if ck:
-            headers["Cookie"] = ck
-    except Exception:
-        pass
-    resp = httpx.get(full_url, headers=headers, timeout=15)
-    data = resp.json()
+            print("[抖音下载] 游客解析失败，接入Cookie重试...")
+            data = _detail(ck)
     detail = data.get("aweme_detail", {}) or {}
     video = detail.get("video", {}) or {}
 

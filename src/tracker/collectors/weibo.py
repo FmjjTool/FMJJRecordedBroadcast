@@ -26,17 +26,34 @@ def _parse_num(s: object) -> int | None:
 
 
 def _sync_collect(uid=None) -> dict:
+    """三级回退：① 游客 HTTP → ② 游客 Playwright → ③ 接入 Cookie。
+
+    Cookie 是账号凭据，能不用就不用（降低风控/封号风险）；
+    只有游客方式实在连不上才接入，Cookie 固定放第三级。
+    """
     from auth import get_cookie
 
-    if get_cookie("weibo"):
-        return _http_collect(uid)
-    return _playwright_collect(uid)
+    cookie = get_cookie("weibo")
+
+    # 一级：无 Cookie 游客 HTTP（内部先取游客 cookie）
+    r = _http_collect(uid, cookie="")
+    if not r.get("error"):
+        return r
+
+    # 二级：无 Cookie Playwright 游客浏览器（未安装组件则立即跳过）
+    r = _playwright_collect(uid)
+    if not r.get("error"):
+        return r
+
+    # 三级：接入 Cookie 直采
+    if cookie:
+        print("[微博采集] 游客方式失败，接入 Cookie 重试")
+        return _http_collect(uid, cookie=cookie)
+    return {"platform": "weibo", "error": "游客与 Cookie 方式均失败：请在「Cookie 管理」中登录微博后重试"}
 
 
-def _http_collect(uid=None) -> dict:
+def _http_collect(uid=None, cookie: str = "") -> dict:
     import requests
-
-    from auth import get_cookie
 
     uid = uid or WEIBO_UID
     headers = {
@@ -46,7 +63,6 @@ def _http_collect(uid=None) -> dict:
     }
     s = requests.Session()
     s.headers.update(headers)
-    cookie = get_cookie("weibo")
     if cookie:
         s.headers["Cookie"] = cookie
     else:

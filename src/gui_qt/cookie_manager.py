@@ -71,12 +71,16 @@ class CookieManagerDialog(QDialog):
             import playwright  # noqa: F401
             self.pw_status.setText("浏览器组件：✅ 已安装（Playwright）")
             self.pw_status.setStyleSheet("color: #4caf50;")
+            # 已安装：按钮变灰防误点（置灰样式见 _btn 的 :disabled 规则）
             self.pw_btn.setEnabled(False)
+            self.pw_btn.setText("✅ 组件已就绪")
             return
         except ImportError:
             pass
         self.pw_status.setText("浏览器组件：❌ 未安装（未登录抖音/微博时采集需要）")
         self.pw_status.setStyleSheet("color: #ff5252;")
+        self.pw_btn.setEnabled(True)
+        self.pw_btn.setText("📦 下载浏览器组件")
 
     def _pip_install_dialog(self, title, tip, cmds, success_msg, on_ok=None):
         """通用后台安装：逐条执行 cmds（(显示名, 参数列表)），弹实时日志窗口。"""
@@ -187,6 +191,12 @@ class CookieManagerDialog(QDialog):
             if len(cookie) > 10 and plat not in self._whoami_cache and plat not in self._whoami_probing:
                 self._start_probe(plat)
 
+    @staticmethod
+    def _short(s: str, limit: int = 20) -> str:
+        """超长文本截断（如 QQ 音乐微信登录的 19 位 uin），避免撑破行布局。"""
+        s = s or ""
+        return s if len(s) <= limit else s[:limit - 3] + "..."
+
     def _status_text(self, plat, has, age):
         if not has:
             return "🔴 未登录"
@@ -199,7 +209,7 @@ class CookieManagerDialog(QDialog):
         if info["ok"] is False:
             base = "🟠 已保存 · 验证失败"
         elif info.get("username"):
-            base = f"🟢 已登录 · {info['username']}"
+            base = f"🟢 已登录 · {self._short(info['username'])}"
         return base + (f" · {age}" if age else "")
 
     def _status_color(self, plat, has):
@@ -257,10 +267,16 @@ class CookieManagerDialog(QDialog):
         # 收到 plat=False 而静默无效）——这里显式丢弃信号参数再调 slot
         b.clicked.connect(lambda *args: slot())
         b.setFixedHeight(28)
+        # :disabled 态必须显式给出：自定义 background 会盖掉 Qt 默认的禁用变灰，
+        # 按钮看起来可点实则失效（「下载浏览器组件」已安装时点了没反应的根因）
         if primary:
-            b.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 2px 8px;")
+            b.setStyleSheet(
+                "QPushButton { background: #2e7d32; color: white; border-radius: 4px; padding: 2px 8px; }"
+                "QPushButton:disabled { background: #b9c4bc; color: #eef1ee; }")
         elif danger:
-            b.setStyleSheet("background: #c62828; color: white; border-radius: 4px; padding: 2px 8px;")
+            b.setStyleSheet(
+                "QPushButton { background: #c62828; color: white; border-radius: 4px; padding: 2px 8px; }"
+                "QPushButton:disabled { background: #d8b9b9; color: #f3e9e9; }")
         return b
 
     def _input(self, plat):

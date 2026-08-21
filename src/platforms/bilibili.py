@@ -101,15 +101,24 @@ class BilibiliParser(PlatformBase):
         except: return url
 
     def parse(self, url: str, client: Optional[httpx.Client] = None) -> Optional[VideoInfo]:
+        """两级回退：① 游客直连 → ② 接入Cookie重试（Cookie固定放第三级）。"""
         # 动态链接走动态详情解析
         if self.DYNAMIC_ID_PATTERN.search(url):
             return self.parse_dynamic(url, client)
+        result = self._parse_once(url, client, cookie="")
+        if result is None and client is None:
+            from auth import get_cookie
+            ck = get_cookie("bilibili")
+            if ck:
+                print("[B站] 游客解析失败，接入Cookie重试...")
+                result = self._parse_once(url, None, cookie=ck)
+        return result
+
+    def _parse_once(self, url: str, client: Optional[httpx.Client], cookie: str = "") -> Optional[VideoInfo]:
         close_client = False
         if client is None:
-            from auth import get_cookie
             headers = dict(self.HEADERS)
-            ck = get_cookie("bilibili")
-            if ck: headers["Cookie"] = ck
+            if cookie: headers["Cookie"] = cookie
             client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
             close_client = True
         try:
@@ -176,7 +185,17 @@ class BilibiliParser(PlatformBase):
             if close_client: client.close()
 
     def parse_dynamic(self, url: str, client: Optional[httpx.Client] = None) -> Optional[VideoInfo]:
-        """解析单条 B站动态（t.bilibili.com/{id} 或 bilibili.com/opus/{id}）。"""
+        """解析单条 B站动态（t.bilibili.com/{id} 或 bilibili.com/opus/{id}）。两级回退：游客优先。"""
+        result = self._parse_dynamic_once(url, client, cookie="")
+        if result is None and client is None:
+            from auth import get_cookie
+            ck = get_cookie("bilibili")
+            if ck:
+                print("[B站] 游客动态解析失败，接入Cookie重试...")
+                result = self._parse_dynamic_once(url, None, cookie=ck)
+        return result
+
+    def _parse_dynamic_once(self, url: str, client: Optional[httpx.Client], cookie: str = "") -> Optional[VideoInfo]:
         m = self.DYNAMIC_ID_PATTERN.search(url)
         if not m:
             print(f"[B站] 无法提取动态ID: {url}")
@@ -184,11 +203,9 @@ class BilibiliParser(PlatformBase):
         dyn_id = m.group(1)
         close_client = False
         if client is None:
-            from auth import get_cookie
             headers = dict(self.HEADERS)
             headers["Referer"] = f"https://t.bilibili.com/{dyn_id}"
-            ck = get_cookie("bilibili")
-            if ck: headers["Cookie"] = ck
+            if cookie: headers["Cookie"] = cookie
             client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
             close_client = True
         try:
@@ -384,12 +401,22 @@ class BilibiliParser(PlatformBase):
         return unique[:count]
 
     def _fetch_user_videos(self, mid: str, count: int = 10) -> list:
+        """三级回退：① 游客HTTP（内部失败切游客Playwright）→ ② 接入Cookie重试。"""
+        results = self._fetch_user_videos_once(mid, count, cookie="")
+        if results:
+            return results
+        from auth import get_cookie
+        ck = get_cookie("bilibili")
+        if ck:
+            print("[B站] 游客方式未获取到视频，接入Cookie重试...")
+            results = self._fetch_user_videos_once(mid, count, cookie=ck)
+        return results
+
+    def _fetch_user_videos_once(self, mid: str, count: int = 10, cookie: str = "") -> list:
         results = []
         page = 1; remaining = count
-        from auth import get_cookie
         headers = dict(self.HEADERS)
-        ck = get_cookie("bilibili")
-        if ck: headers["Cookie"] = ck
+        if cookie: headers["Cookie"] = cookie
         client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
         # 尝试获取 WBI 签名密钥（nav 接口），失败则回退旧接口
         mixin_key = None
@@ -520,13 +547,22 @@ class BilibiliParser(PlatformBase):
     # ========== 动态 (含图文) ==========
 
     def _fetch_dynamics(self, mid: str, count: int = 10) -> list:
-        """获取用户动态（支持图文、转发视频等）"""
+        """获取用户动态（支持图文、转发视频等）。游客优先，失败接入Cookie。"""
+        results = self._fetch_dynamics_once(mid, count, cookie="")
+        if results:
+            return results
+        from auth import get_cookie
+        ck = get_cookie("bilibili")
+        if ck:
+            print("[B站] 游客方式未获取到动态，接入Cookie重试...")
+            results = self._fetch_dynamics_once(mid, count, cookie=ck)
+        return results
+
+    def _fetch_dynamics_once(self, mid: str, count: int = 10, cookie: str = "") -> list:
         results = []
         headers = dict(self.HEADERS)
         headers["Referer"] = f"https://space.bilibili.com/{mid}/dynamic"
-        from auth import get_cookie
-        ck = get_cookie("bilibili")
-        if ck: headers["Cookie"] = ck
+        if cookie: headers["Cookie"] = cookie
         client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
         offset = ""
         try:
