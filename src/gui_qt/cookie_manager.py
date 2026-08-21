@@ -4,6 +4,7 @@
 """
 
 import io
+import sys
 import threading
 import time
 
@@ -35,7 +36,7 @@ class CookieManagerDialog(QDialog):
     def __init__(self, parent, on_changed=None):
         super().__init__(parent)
         self.setWindowTitle("Cookie 管理")
-        self.resize(500, 600)
+        self.resize(500, 640)
         self.on_changed = on_changed
 
         layout = QVBoxLayout(self)
@@ -45,8 +46,97 @@ class CookieManagerDialog(QDialog):
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self.container)
-        layout.addWidget(scroll)
+        layout.addWidget(scroll, 1)
+
+        # 底部：浏览器组件安装（Playwright + Chromium，游客态采集兜底用）
+        bottom = QHBoxLayout()
+        self.pw_status = QLabel()
+        bottom.addWidget(self.pw_status, 1)
+        self.pw_btn = self._btn("📦 下载浏览器组件", self._install_playwright, True)
+        bottom.addWidget(self.pw_btn)
+        layout.addLayout(bottom)
+        self._refresh_pw_status()
         self._reload()
+
+    def _refresh_pw_status(self):
+        try:
+            import playwright  # noqa: F401
+            self.pw_status.setText("浏览器组件：✅ 已安装（Playwright）")
+            self.pw_status.setStyleSheet("color: #4caf50;")
+            self.pw_btn.setEnabled(False)
+            return
+        except ImportError:
+            pass
+        self.pw_status.setText("浏览器组件：❌ 未安装（未登录抖音/微博时采集需要）")
+        self.pw_status.setStyleSheet("color: #ff5252;")
+
+    def _install_playwright(self):
+        """后台安装 playwright + chromium，弹日志窗口显示进度。"""
+        if getattr(sys, "frozen", False):
+            QMessageBox.information(
+                self, "提示",
+                "安装版内置了免登录方案（软件内浏览器登录 + Cookie 直采），无需此组件。\n"
+                "该安装功能仅在源码运行（python app_qt.py）时可用。")
+            return
+
+        from gui_qt.common import post_to_main
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("下载浏览器组件")
+        dlg.resize(560, 320)
+        v = QVBoxLayout(dlg)
+        tip = QLabel("正在安装 Playwright + Chromium（约 150 MB，取决于网速）…")
+        v.addWidget(tip)
+        from PySide6.QtWidgets import QPlainTextEdit
+        log_view = QPlainTextEdit()
+        log_view.setReadOnly(True)
+        v.addWidget(log_view, 1)
+        close_btn = QPushButton("后台继续，关闭窗口")
+        close_btn.clicked.connect(dlg.close)
+        v.addWidget(close_btn)
+        dlg.show()
+
+        def append_log(line):
+            def _do():
+                log_view.appendPlainText(line)
+            post_to_main(_do)
+
+        def run():
+            import subprocess
+            ok = True
+            try:
+                append_log("$ pip install playwright")
+                r = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "playwright"],
+                    capture_output=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", timeout=1800,
+                )
+                for line in (r.stdout or "").splitlines():
+                    append_log(line)
+                ok = ok and r.returncode == 0
+
+                append_log("\n$ playwright install chromium")
+                r2 = subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    capture_output=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", timeout=3600,
+                )
+                for line in (r2.stdout or "").splitlines():
+                    append_log(line)
+                ok = ok and r2.returncode == 0
+            except Exception as e:
+                append_log(f"安装失败：{e}")
+                ok = False
+
+            def _finish():
+                append_log("\n完成 ✅" if ok else "\n失败 ❌（可重试或手动执行上面两条命令）")
+                tip.setText("安装完成，可关闭本窗口" if ok else "安装失败，可重试")
+                self._refresh_pw_status()
+                if ok:
+                    QMessageBox.information(self, "成功", "浏览器组件安装完成！\n现在未登录抖音/微博也可以采集数据了。")
+            post_to_main(_finish)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _reload(self):
         while self.container_layout.count():
@@ -82,7 +172,9 @@ class CookieManagerDialog(QDialog):
 
     def _btn(self, text, slot, primary=False, danger=False):
         b = QPushButton(text)
-        b.clicked.connect(slot)
+        # clicked 信号自带 checked 参数，会覆盖 lambda 的默认参数（曾导致所有按钮
+        # 收到 plat=False 而静默无效）——这里显式丢弃信号参数再调 slot
+        b.clicked.connect(lambda *args: slot())
         b.setFixedHeight(28)
         if primary:
             b.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 2px 8px;")
