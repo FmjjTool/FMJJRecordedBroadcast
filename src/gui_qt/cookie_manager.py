@@ -36,7 +36,7 @@ class CookieManagerDialog(QDialog):
     def __init__(self, parent, on_changed=None):
         super().__init__(parent)
         self.setWindowTitle("Cookie 管理")
-        self.resize(500, 640)
+        self.resize(620, 640)
         self.on_changed = on_changed
 
         layout = QVBoxLayout(self)
@@ -47,6 +47,10 @@ class CookieManagerDialog(QDialog):
         self.container_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self.container)
         layout.addWidget(scroll, 1)
+
+        # 登录用户名探测：缓存 {plat: {"ok":..,"username":..} | "probing"}
+        self._whoami_cache: dict = {}
+        self._whoami_probing: set = set()
 
         # 底部：浏览器组件安装（Playwright + Chromium，游客态采集兜底用）
         bottom = QHBoxLayout()
@@ -156,11 +160,12 @@ class CookieManagerDialog(QDialog):
                 age = auth.get_cookie_age(plat)
             row = QHBoxLayout()
             row.addWidget(QLabel(name, styleSheet="font-weight: bold;"))
-            status = ("🟢 已登录" if has else "🔴 未登录") + (f" · {age}" if age else "")
-            sl = QLabel(status)
-            sl.setStyleSheet("color: #4caf50;" if has else "color: #ff5252;")
+            sl = QLabel(self._status_text(plat, has, age))
+            sl.setStyleSheet(self._status_color(plat, has))
             row.addWidget(sl)
             row.addStretch(1)
+            if has:
+                row.addWidget(self._btn("验证", lambda p=plat: self._verify(p)))
             if can_qr:
                 row.addWidget(self._btn("扫码登录", lambda p=plat: self._qr_login(p), True))
             if can_browser:
@@ -171,6 +176,76 @@ class CookieManagerDialog(QDialog):
             w.setLayout(row)
             w.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             self.container_layout.addWidget(w)
+
+        # 有 Cookie 且未探测过的平台 → 后台自动拉取登录用户名
+        for plat, _n, _q, _b in COOKIE_PLATFORMS:
+            cookie = (auth.get_netease_cookie() if plat == "netease" else auth.get_cookie(plat)) or ""
+            if len(cookie) > 10 and plat not in self._whoami_cache and plat not in self._whoami_probing:
+                self._start_probe(plat)
+
+    def _status_text(self, plat, has, age):
+        if not has:
+            return "🔴 未登录"
+        info = self._whoami_cache.get(plat)
+        if info is None:
+            return "🟢 已登录" + (f" · {age}" if age else "")
+        if info == "probing":
+            return "🟢 已登录 · ⏳ 验证中…" + (f" · {age}" if age else "")
+        base = "🟢 已登录"
+        if info["ok"] is False:
+            base = "🟠 已保存 · 验证失败"
+        elif info.get("username"):
+            base = f"🟢 已登录 · {info['username']}"
+        return base + (f" · {age}" if age else "")
+
+    def _status_color(self, plat, has):
+        if not has:
+            return "color: #ff5252;"
+        info = self._whoami_cache.get(plat)
+        if info and info != "probing" and info["ok"] is False:
+            return "color: #ef6c00;"
+        return "color: #4caf50;"
+
+    def _start_probe(self, plat):
+        from gui_qt.common import post_to_main
+        from tracker import whoami
+
+        self._whoami_probing.add(plat)
+        self._whoami_cache[plat] = "probing"
+        self._render_status(plat)
+
+        def run():
+            try:
+                info = whoami.probe(plat)
+            except Exception:
+                info = {"ok": None, "username": ""}
+
+            def done():
+                self._whoami_cache[plat] = info
+                self._whoami_probing.discard(plat)
+                self._render_status(plat)
+            post_to_main(done)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _render_status(self, plat):
+        """只更新对应行的状态文字（避免整表重建闪烁）。"""
+        for i in range(self.container_layout.count()):
+            w = self.container_layout.itemAt(i).widget()
+            if not w:
+                continue
+            labels = w.findChildren(QLabel)
+            if labels and labels[0].text() == auth.PLATFORM_NAMES.get(plat):
+                has = bool((auth.get_netease_cookie() if plat == "netease" else auth.get_cookie(plat)) or "")
+                age = auth.get_cookie_age(plat) if has else ""
+                labels[1].setText(self._status_text(plat, has, age))
+                labels[1].setStyleSheet(self._status_color(plat, has))
+                return
+
+    def _verify(self, plat):
+        """手动验证：清缓存重新拉取登录用户名。"""
+        self._whoami_cache.pop(plat, None)
+        self._start_probe(plat)
 
     def _btn(self, text, slot, primary=False, danger=False):
         b = QPushButton(text)
@@ -194,6 +269,7 @@ class CookieManagerDialog(QDialog):
             auth.set_cookie(plat, val.strip())
             if plat == "netease":
                 auth.sync_netease_to_legacy()
+            self._whoami_cache.pop(plat, None)
             self._reload()
             self._notify()
             QMessageBox.information(self, "成功", f"{name} Cookie 已保存")
@@ -205,6 +281,7 @@ class CookieManagerDialog(QDialog):
         name = PLATFORM_NAMES.get(plat, plat)
         try:
             auth.clear_cookie(plat)
+            self._whoami_cache.pop(plat, None)
             self._reload()
             self._notify()
         except Exception as e:
@@ -310,6 +387,7 @@ class CookieManagerDialog(QDialog):
             cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
             try:
                 auth.set_cookie(plat, cookie_str)
+                self._whoami_cache.pop(plat, None)
                 self._reload()
                 self._notify()
             except Exception as e:
@@ -383,6 +461,7 @@ class CookieManagerDialog(QDialog):
                         cookie_str = f"MUSIC_U={cookies.get('MUSIC_U', '')};os=pc;appver=8.9.70;"
                         auth.set_cookie("netease", cookie_str)
                         auth.sync_netease_to_legacy()
+                        self._whoami_cache.pop("netease", None)
                         post_to_main(self._on_qr_success, dlg, "网易云登录成功，Cookie 已保存")
                         return
                     elif code == 801:
@@ -431,6 +510,7 @@ class CookieManagerDialog(QDialog):
                                 cookies = dict(s.cookies)
                         cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
                         auth.set_cookie("bilibili", cookie_str)
+                        self._whoami_cache.pop("bilibili", None)
                         post_to_main(self._on_qr_success, dlg, "B站登录成功，Cookie 已保存")
                         return
                     elif code == 86101:
