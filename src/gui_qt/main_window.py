@@ -135,12 +135,12 @@ COOKIE_PLATFORMS = [
     ("douyin", "抖音", False, True),
     ("weibo", "微博", False, True),
     ("netease", "网易云", True, False),
-    ("qq", "QQ音乐", False, False),
-    ("kugou", "酷狗", False, False),
-    ("kuwo", "酷我", False, False),
-    ("5sing", "5sing", False, False),
-    ("xiaohongshu", "小红书", False, False),
-    ("kuaishou", "快手", False, False),
+    ("qq", "QQ音乐", True, True),
+    ("kugou", "酷狗", False, True),
+    ("kuwo", "酷我", False, True),
+    ("5sing", "5sing", False, True),
+    ("xiaohongshu", "小红书", False, True),
+    ("kuaishou", "快手", False, True),
 ]
 
 # 回车键分发时，这些控件的回车留给控件自身处理（对应原版 event.widget 判断）

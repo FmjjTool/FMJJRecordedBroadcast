@@ -4,6 +4,7 @@
 """
 
 import io
+import re
 import sys
 import threading
 import time
@@ -18,17 +19,20 @@ from PySide6.QtWidgets import (
 import auth
 from gui_qt.common import post_to_main
 
+# (key, 中文名, 支持扫码, 支持浏览器登录)
+# 扫码：网易云/B站 原生接口，QQ音乐 走微信扫码换 musickey；
+# 酷狗/酷我/5sing/小红书/快手 无公开扫码 API，登录页内扫码由「浏览器」入口承载
 COOKIE_PLATFORMS = [
     ("bilibili", "B站", True, True),
     ("douyin", "抖音", False, True),
     ("weibo", "微博", False, True),
     ("netease", "网易云", True, False),
-    ("qq", "QQ音乐", False, False),
-    ("kugou", "酷狗", False, False),
-    ("kuwo", "酷我", False, False),
-    ("5sing", "5sing", False, False),
-    ("xiaohongshu", "小红书", False, False),
-    ("kuaishou", "快手", False, False),
+    ("qq", "QQ音乐", True, True),
+    ("kugou", "酷狗", False, True),
+    ("kuwo", "酷我", False, True),
+    ("5sing", "5sing", False, True),
+    ("xiaohongshu", "小红书", False, True),
+    ("kuaishou", "快手", False, True),
 ]
 
 
@@ -313,22 +317,36 @@ class CookieManagerDialog(QDialog):
             QMessageBox.warning(self, "不可用", "内嵌浏览器组件缺失（QtWebEngine），请改用「输入」手动粘贴 Cookie")
             return
 
+        # (url, 标题, 登录特征 Cookie, 登录操作提示)
         configs = {
-            "weibo": ("https://m.weibo.cn/", "微博登录（软件内）", ("SUB",)),
-            "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",)),
-            "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",)),
+            "weibo": ("https://m.weibo.cn/", "微博登录（软件内）", ("SUB",), ""),
+            "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",), ""),
+            "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",), ""),
+            "qq": ("https://y.qq.com/", "QQ音乐登录（软件内）",
+                   ("uin", "qm_keyst"), "点击右上角「登录」→ 扫码或账号登录"),
+            "kugou": ("https://www.kugou.com/", "酷狗登录（软件内）",
+                      ("KugouID", "userid", "token"), "点击右上角「登录」→ 扫码或账号登录"),
+            "kuwo": ("https://www.kuwo.cn/", "酷我登录（软件内）",
+                     ("userid",), "点击顶部「登录」→ 手机号验证码登录"),
+            "5sing": ("https://5sing.kugou.com/login", "5sing登录（软件内）",
+                      ("userid",), "账号密码登录（支持酷狗账号）"),
+            "xiaohongshu": ("https://www.xiaohongshu.com/", "小红书登录（软件内）",
+                            ("web_session",), "点击「登录」→ 扫码或短信验证"),
+            "kuaishou": ("https://www.kuaishou.com/", "快手登录（软件内）",
+                         ("passToken",), "点击「登录」→ 扫码或手机号登录"),
         }
         if plat not in configs:
             QMessageBox.information(self, "提示", f"{plat} 暂不支持浏览器登录，请使用「输入」")
             return
-        url, title, auth_keys = configs[plat]
+        url, title, auth_keys, login_hint = configs[plat]
 
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
         dlg.resize(1100, 780)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（无时间限制，由你决定）")
+        hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（无时间限制，由你决定）"
+                      + (f"　💡 {login_hint}" if login_hint else ""))
         hint.setStyleSheet("color: #555; padding: 4px; background: #ffffff;")
         v.addWidget(hint)
 
@@ -405,6 +423,8 @@ class CookieManagerDialog(QDialog):
             self._netease_qr()
         elif plat == "bilibili":
             self._bilibili_qr()
+        elif plat == "qq":
+            self._qq_qr()
 
     def _qr_dialog(self, title):
         dlg = QDialog(self)
@@ -425,7 +445,9 @@ class CookieManagerDialog(QDialog):
     def _show_qr(self, qr_label, img):
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        data = buf.getvalue()
+        self._show_qr_bytes(qr_label, buf.getvalue())
+
+    def _show_qr_bytes(self, qr_label, data: bytes):
         qimg = QImage.fromData(data)
         pm = QPixmap.fromImage(qimg).scaled(280, 280, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
@@ -435,6 +457,93 @@ class CookieManagerDialog(QDialog):
             except Exception:
                 pass
         post_to_main(_set)
+
+    def _qq_qr(self):
+        """QQ音乐扫码登录：微信扫码 → wx_code → musicu.fcg LoginServer 换 musicid/musickey。
+
+        ptlogin2 直连路线已被网关按 u1 参数封禁（403），微信扫码路线轮询走
+        lp.open.weixin.qq.com（微信开放平台域名，无此限制）。
+        """
+        import requests
+        dlg, qr_label, status = self._qr_dialog("QQ音乐扫码登录")
+        UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"}
+        CONNECT = "https://open.weixin.qq.com/connect/qrconnect"
+        POLL = "https://lp.open.weixin.qq.com/connect/l/qrconnect"
+
+        def run():
+            try:
+                s = requests.Session()
+                s.headers.update(UA)
+                r = s.get(CONNECT, params={
+                    "appid": "wx48db31d50e334801",
+                    "redirect_uri": "https://y.qq.com/portal/wx_redirect.html?login_type=2&surl=https://y.qq.com/",
+                    "response_type": "code", "scope": "snsapi_login", "state": "STATE",
+                    "href": "https://y.qq.com/mediastyle/music_v17/src/css/popup_wechat.css#wechat_redirect",
+                }, timeout=20)
+                m = re.search(r"uuid=(.+?)\"", r.text)
+                if not m:
+                    post_to_main(status.setText, "❌ 生成二维码失败")
+                    return
+                uuid = m.group(1)
+                img = s.get(f"https://open.weixin.qq.com/connect/qrcode/{uuid}",
+                            headers={"Referer": CONNECT}, timeout=20)
+                if not img.content:
+                    post_to_main(status.setText, "❌ 二维码图片获取失败")
+                    return
+                self._show_qr_bytes(qr_label, img.content)
+                post_to_main(status.setText, "📱 请用微信扫码（QQ音乐登录）")
+                while dlg.isVisible():
+                    p = s.get(POLL, params={"uuid": uuid, "_": int(time.time() * 1000)},
+                              headers={"Referer": "https://open.weixin.qq.com/"}, timeout=35)
+                    m_err = re.search(r"window\.wx_errcode=(\d+);", p.text)
+                    m_code = re.search(r"window\.wx_code='([^']*)';", p.text)
+                    err = m_err.group(1) if m_err else ""
+                    if err == "405" and m_code and m_code.group(1):
+                        cookie_str = self._qq_exchange_wxcode(s, m_code.group(1))
+                        if not cookie_str:
+                            post_to_main(status.setText, "❌ 获取登录凭据失败，请重试")
+                            return
+                        auth.set_cookie("qq", cookie_str)
+                        self._whoami_cache.pop("qq", None)
+                        post_to_main(self._on_qr_success, dlg, "QQ音乐登录成功，Cookie 已保存")
+                        return
+                    elif err == "404":
+                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                    elif err == "403":
+                        post_to_main(status.setText, "⚠️ 二维码已失效，请重新登录")
+                        return
+                    elif err == "408":
+                        post_to_main(status.setText, "⏳ 等待扫码...")
+                    time.sleep(2)
+            except Exception as e:
+                post_to_main(status.setText, f"❌ {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @staticmethod
+    def _qq_exchange_wxcode(session, wx_code: str) -> str:
+        """wx_code → musicid/musickey → 拼成 Cookie 串；失败返回空。"""
+        body = {
+            "comm": {"cv": 13020508, "v": 13020508, "ct": "11", "tmeAppID": "qqmusic",
+                     "format": "json", "inCharset": "utf-8", "outCharset": "utf-8",
+                     "uid": "0", "tmeLoginType": "1"},
+            "music.login.LoginServer.Login": {
+                "module": "music.login.LoginServer", "method": "Login",
+                "param": {"code": wx_code, "strAppid": "wx48db31d50e334801"},
+            },
+        }
+        r = session.post("https://u.y.qq.com/cgi-bin/musicu.fcg", json=body,
+                         headers={"Referer": "https://y.qq.com/"}, timeout=20)
+        login = (r.json() or {}).get("music.login.LoginServer.Login") or {}
+        if login.get("code") not in (0, None):
+            return ""
+        user = login.get("data") or {}
+        musicid = str(user.get("str_musicid") or user.get("musicid") or user.get("uin") or "")
+        musickey = user.get("musickey") or user.get("music_key") or ""
+        if not musicid or not musickey:
+            return ""
+        return (f"uin={musicid}; qqmusic_key={musickey}; qm_keyst={musickey}; "
+                f"tmeLoginType=1; wxuin={musicid};")
 
     def _netease_qr(self):
         from netease.music_api import QRLoginManager
