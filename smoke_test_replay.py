@@ -289,22 +289,23 @@ def main():
     page.poll_var.setChecked(False)
     check("取消轮询 → 定时器停", page._poll_timer is None)
 
-    print("== 13. 自动保存弹幕（断开/退出时） ==")
+    print("== 13. 自动导出回放包（断开/退出时默认 zip 而非 txt） ==")
     page.connected = False
     page.room_entry.setText("6096197105")
-    page.chat_gift_box.setPlainText("22:06:49 [观众]：你好")
-    page.event_box.setPlainText("22:06:50 [新人]：进入直播间")
+    page.anchor_fields["anchor_name"].setText("自动导出")
+    page._cover_bytes = None
+    page._session_casts = []
+    check("无弹幕数据不导出", page._auto_save_danmaku() is None)
+    page._session_casts = list(casts)
     path = page._auto_save_danmaku()
-    check("自动保存生成文件", bool(path) and os.path.exists(path))
+    check("自动导出为回放包 zip", bool(path) and os.path.exists(path) and path.endswith(".zip"))
+    check("保存到 回放包 目录", "回放包" in path)
     if path:
-        with open(path, encoding="utf-8") as f:
-            content = f.read()
-        check("内容含弹幕+进场分段", "===== 弹幕/礼物 =====" in content and "进入直播间" in content)
-        check("保存到 弹幕文件 目录", "弹幕文件" in path)
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+        check("含 data.json + 全量弹幕.json", "data.json" in names and "全量弹幕.json" in names)
+        check("含分类 TXT（不只一个 txt）", any(n.endswith(".txt") for n in names))
         os.remove(path)
-    page.chat_gift_box.clear()
-    page.event_box.clear()
-    check("无数据不生成文件", page._auto_save_danmaku() is None)
 
     print("== 14. 导出 dycast 全量包结构 ==")
     import gui_qt.pages.test_page as tp_mod

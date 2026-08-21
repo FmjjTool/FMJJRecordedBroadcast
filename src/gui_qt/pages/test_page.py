@@ -559,14 +559,15 @@ class TestPage(BasePage):
             text = c.get("content") or ""
         return f"{time_str}|[{name}]：{text}" if text else None
 
-    def _export_replay_zip(self, video_path=None, rec_meta=None, quiet=False):
+    def _export_replay_zip(self, video_path=None, rec_meta=None, quiet=False, sync=False):
         """打包为 dycast 全量格式 zip：data.json + 全量弹幕.json + 分类 TXT +
-        cover + recording.flv（可被 dycast 与本工具回放直接导入）。"""
+        cover + recording.flv（可被 dycast 与本工具回放直接导入）。
+        sync=True 时在当前线程同步写完并返回路径（退出软件时后台线程可能来不及落盘）。"""
         casts = list(self._session_casts)
         if not casts:
             if not quiet:
                 self.app.toast("当前没有弹幕数据可打包", "warning")
-            return
+            return None
         from toolbox.douyin_live import _danmaku_dir
         d = _danmaku_dir().parent / "回放包"
         d.mkdir(parents=True, exist_ok=True)
@@ -625,7 +626,13 @@ class TestPage(BasePage):
             else:
                 self.app.toast("回放包导出失败", "error")
 
+        if sync:
+            result = work()
+            if not quiet:
+                done(result)
+            return result if (result and not result.startswith("__error__")) else None
         run_bg(work, done if not quiet else lambda r, e=None: None)
+        return None
 
     def _pick_replay_zip(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1098,10 +1105,11 @@ class TestPage(BasePage):
         e_monitor = row("弹幕监控间隔(秒):", s.get("monitor_interval", 30))
         e_stats = row("统计数据采集间隔(秒):", s.get("stats_interval", 1))
         e_poll = row("轮询间隔(秒):", s.get("poll_interval", 60))
-        # 弹幕自动保存说明（保存位置固定为 导出目录/弹幕文件/）
+        # 弹幕自动导出说明（默认导出回放包 zip，保存位置为 导出目录/回放包/）
         from toolbox.douyin_live import _danmaku_dir
         v.addWidget(QLabel(
-            f"自动保存弹幕到：{_danmaku_dir()}（断开连接 / 退出软件时自动导出）",
+            f"自动导出回放包到：{_danmaku_dir().parent / '回放包'}"
+            "（断开连接 / 退出软件时自动打包 zip，含全量弹幕与分类 TXT）",
             styleSheet="color: #888; font-size: 11px;"))
 
         # 监控房间列表（多行）
@@ -1121,7 +1129,7 @@ class TestPage(BasePage):
         sw_record = QCheckBox("启用直播录制（FLV，需视频模式）")
         sw_record.setChecked(bool(s.get("auto_record", False)))
         v.addWidget(sw_record)
-        sw_autosave = QCheckBox("自动保存弹幕（断开连接 / 退出软件时导出到「弹幕文件」目录）")
+        sw_autosave = QCheckBox("自动导出回放包（断开连接 / 退出软件时打包 zip 到「回放包」目录）")
         sw_autosave.setChecked(bool(s.get("auto_save_danmaku", True)))
         v.addWidget(sw_autosave)
 
@@ -1343,44 +1351,20 @@ class TestPage(BasePage):
 
     # ======================== 保存弹幕 / 统计 / 开播监控 ========================
     def _save_danmaku_now(self):
-        """点击保存：把当前两个弹幕框的内容一次性导出到文件。"""
+        """点击保存：立即导出回放包（与断开/退出的自动导出同格式）。"""
         room = self.room_entry.text().strip()
         if not room:
             QMessageBox.warning(self, "提示", "请先输入房间号")
             return
-        path = self._auto_save_danmaku()
-        if path:
-            self.app.toast(f"弹幕已保存到 {path}", "success")
-        else:
+        if not self._auto_save_danmaku():
             self.app.toast("当前没有弹幕数据可保存", "warning")
 
     def _auto_save_danmaku(self):
-        """静默导出弹幕（断开/退出时自动调用），返回文件路径（无数据返回 None）。"""
-        room = self.room_entry.text().strip() or "room"
-        chat = self.chat_gift_box.toPlainText().strip()
-        event = self.event_box.toPlainText().strip()
-        if chat == "（暂无弹幕/礼物）":
-            chat = ""
-        if not chat and not event:
+        """断开/退出时自动导出：默认导出回放包 zip（含全量弹幕/分类 TXT），
+        而不是只导出一个 txt；同步写入保证退出软件前落盘。返回路径（无数据 None）。"""
+        if not self._session_casts:
             return None
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        lines = []
-        if chat:
-            lines.append("===== 弹幕/礼物 =====")
-            lines.append(chat)
-        if event:
-            lines.append("===== 进场/点赞/关注/日志 =====")
-            lines.append(event)
-        try:
-            from toolbox.douyin_live import _danmaku_dir
-            d = _danmaku_dir()
-            d.mkdir(parents=True, exist_ok=True)
-            path = d / f"{room}_{ts}.txt"
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-            return str(path)
-        except Exception:
-            return None
+        return self._export_replay_zip(sync=True)
 
     def _on_save_stats_toggle(self, checked):
         self.settings["save_stats"] = bool(checked)
