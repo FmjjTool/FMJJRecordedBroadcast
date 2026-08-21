@@ -246,7 +246,8 @@ def _join_ar(artists: list) -> str:
 
 
 def _cover_url(album_id) -> str:
-    return f"https://p2.music.126.net/{album_id}.jpg" if album_id else ""
+    # 图床路径是加密文件名而非专辑 ID，用 ID 拼直链必 404；留空由上层用接口返回的 picUrl
+    return ""
 
 
 def _detect_lang(name: str) -> str:

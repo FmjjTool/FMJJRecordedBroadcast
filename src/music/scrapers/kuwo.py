@@ -69,16 +69,21 @@ class KuwoScraper(BaseScraper):
             rid = str(item.get("MUSICRID", "")).replace("MUSIC_", "")
             song_name = (item.get("SONGNAME") or item.get("NAME", "")).replace("&nbsp;", " ").replace("\u0026", "&")
             singer = (item.get("ARTIST") or item.get("SINGER", "")).replace("\u0026", "&")
+            # www 详情/专辑接口有反爬；封面用搜索自带 web_albumpic_short（120px）升级 700 大图
+            pic_short = item.get("web_albumpic_short", "") or ""
+            pic_short = re.sub(r"^\d+/", "", pic_short)
+            cover = item.get("PICPATH", "") or item.get("pic", "") or (
+                f"https://img1.kuwo.cn/star/albumcover/700/{pic_short}" if pic_short else "")
             songs.append(SongInfo(
                 song_id=rid, song_name=song_name, title=song_name, singer=singer,
                 album_name=item.get("ALBUM", ""), album_id=str(item.get("ALBUMID", "")),
                 duration=parse_duration(item.get("DURATION", 0)),
                 interval=int(item.get("DURATION", 0)) if item.get("DURATION", 0) else 0,
                 language=_detect_lang(song_name),
-                cover_url=item.get("PICPATH", item.get("pic", "")),
+                cover_url=cover,
                 platform=self.platform, platform_name=self.platform_name,
                 url=f"http://www.kuwo.cn/play_detail/{rid}",
-                extra=_remainder(item, "MUSICRID SONGNAME NAME ARTIST SINGER ALBUM ALBUMID DURATION PICPATH pic"),
+                extra=_remainder(item, "MUSICRID SONGNAME NAME ARTIST SINGER ALBUM ALBUMID DURATION PICPATH pic web_albumpic_short"),
             ))
         return songs
 

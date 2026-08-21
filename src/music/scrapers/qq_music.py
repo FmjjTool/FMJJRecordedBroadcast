@@ -258,7 +258,7 @@ class QQMusicScraper(BaseScraper):
 # ------------------------------------------------------------------
 # Helpers
 
-def _cover_url(albummid: str, size: int = 300) -> str:
+def _cover_url(albummid: str, size: int = 800) -> str:
     if not albummid:
         return ""
     return f"https://y.gtimg.cn/music/photo_new/T002R{size}x{size}M000{albummid}.jpg"

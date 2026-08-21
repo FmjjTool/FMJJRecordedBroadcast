@@ -34,6 +34,7 @@ from gui_qt.pages.audio import AudioPage
 from gui_qt.pages.lyrics_tool import LyricsToolPage
 from gui_qt.pages.launcher import LauncherPage
 from gui_qt.pages.music_unlock import MusicUnlockPage
+from gui_qt.pages.music_tag import MusicTagPage
 from gui_qt.pages.calendar import CalendarPage
 from gui_qt.pages.migrate import MigratePage
 from gui_qt.pages.music_info import MusicInfoPage
@@ -41,6 +42,11 @@ from gui_qt.pages.netease import NeteasePage
 from gui_qt.pages.tracker import TrackerPage
 from gui_qt.pages.dycast import DycastPage
 from gui_qt.pages.test_page import TestPage
+from gui_qt.pages.bili_emoji import BiliEmojiPage
+from gui_qt.pages.bili_garb import BiliGarbPage
+from gui_qt.pages.bili_info import BiliInfoPage
+from gui_qt.pages.file_time import FileTimePage
+from gui_qt.pages.rename_batch import RenameBatchPage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> 页面类
@@ -63,9 +69,15 @@ PAGE_CLASSES = {
     "music_info": MusicInfoPage,
     "netease": NeteasePage,
     "unlock_music": MusicUnlockPage,
+    "music_tag": MusicTagPage,
     "tracker": TrackerPage,
     "dycast": DycastPage,
     "test_page": TestPage,
+    "bili_emoji": BiliEmojiPage,
+    "bili_garb": BiliGarbPage,
+    "bili_info": BiliInfoPage,
+    "file_time": FileTimePage,
+    "rename_batch": RenameBatchPage,
     "global_settings": GlobalSettingsPage,
 }
 
@@ -101,6 +113,16 @@ NAV_GROUPS = [
     ("📈 直播·追踪", [
         ("tracker", "📈 账号追踪"),
         ("test_page", "📺 弹幕姬"),
+    ]),
+    ("🎁 B站资源", [
+        ("bili_emoji", "😀 表情包"),
+        ("bili_garb", "👕 装扮/收藏集"),
+        ("bili_info", "🎬 视频/空间/动态"),
+    ]),
+    ("🧰 实用工具", [
+        ("rename_batch", "✏️ 批量重命名"),
+        ("file_time", "🕓 文件时间修改"),
+        ("music_tag", "🏷 音乐标签"),
     ]),
     ("⚙️ 全局", [
         ("global_settings", "⚙️ 全局设置"),
@@ -438,8 +460,8 @@ class MainWindow(QMainWindow):
         dirs = [f for f in files if os.path.isdir(f)]
         file_list = [f for f in files if os.path.isfile(f)]
 
-        # 字幕转换页 / 歌词转换页：接受拖放的文件或文件夹
-        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics"):
+        # 字幕转换页 / 歌词转换页 / 音乐标签页：接受拖放的文件或文件夹（本地列表，不改全局目录）
+        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics", "music_tag"):
             p = self.pages.get(self.current_page)
             if p:
                 if dirs:

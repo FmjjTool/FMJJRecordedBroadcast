@@ -391,12 +391,15 @@ class NeteaseAPI:
                 
                 song_result = song_resp.json()
                 for song in song_result.get('songs', []):
+                    # 登录态下 VIP/下架歌曲的 ar/al 可能是 [{name: null}] 占位 → 全字段防 None
+                    artists = '/'.join((ar.get('name') or '') for ar in (song.get('ar') or []))
+                    al = song.get('al') or {}
                     info['tracks'].append({
-                        'id': song['id'],
-                        'name': song['name'],
-                        'artists': '/'.join(artist['name'] for artist in song['ar']),
-                        'album': song['al']['name'],
-                        'picUrl': song['al']['picUrl'],
+                        'id': song.get('id'),
+                        'name': song.get('name') or '',
+                        'artists': artists or '未知歌手',
+                        'album': al.get('name') or '',
+                        'picUrl': al.get('picUrl') or '',
                         'duration': song.get('dt', 0)
                     })
             

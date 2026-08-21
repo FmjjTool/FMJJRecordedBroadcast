@@ -415,7 +415,7 @@ def _export_markdown(result: SearchResult, filepath: str):
             ("封面", s.cover_url or "-"), ("直链", s.play_url or "-"),
             ("链接", s.url), ("平台标识", s.platform),
         ]:
-            a(f"- **{k}**: {str(v).replace('|','\\\\|')}")
+            a("- **%s**: %s" % (k, str(v).replace("|", "\\\\|")))
 
         if s.files:
             a("")

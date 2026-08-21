@@ -1022,10 +1022,9 @@ class TestPage(BasePage):
         row1 = QHBoxLayout()
         self.room_entry = QLineEdit()
         self.room_entry.setPlaceholderText("582775732015")
-        # 恢复上次房间号（进入页面自动重连用）
+        # 恢复上次房间号（进入页面自动重连用），无历史记录时默认 582775732015
         _last_room = str(self.settings.get("last_room", "") or "")
-        if _last_room:
-            self.room_entry.setText(_last_room)
+        self.room_entry.setText(_last_room or "582775732015")
         self.room_entry.returnPressed.connect(self._connect)
         row1.addWidget(self.room_entry, 1)
         self.connect_btn2 = QPushButton("连接")

@@ -63,6 +63,35 @@ class FiveSingScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
+    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
+        """酷狗 v3 专辑接口（共享数据库）→ 取封面等专辑信息。"""
+        if not album_id or album_id == "0":
+            return None
+        with get_client() as client:
+            resp = client.get(
+                "http://mobilecdn.kugou.com/api/v3/album/info",
+                params={"albumid": album_id},
+                headers=make_headers(referer="http://m.kugou.com/"))
+        data = safe_json(resp.text)
+        if not data or data.get("status") != 1:
+            return None
+        info = data.get("data", {}) or {}
+        name = info.get("albumname", "")
+        if not name:
+            return None
+        return AlbumInfo(
+            album_id=album_id, album_name=name, title=name,
+            singer=info.get("singername", ""),
+            release_date=info.get("publishtime", ""),
+            description=info.get("intro", ""),
+            cover_url=(info.get("imgurl", "") or "").replace("{size}", "480"),
+            song_count=info.get("songcount", 0),
+            songs=[],
+            platform=self.platform, platform_name=self.platform_name,
+            url=f"https://5sing.kugou.com/album/{album_id}.html",
+        )
+
+    # ------------------------------------------------------------------
     def _search_kugou(self, keyword: str, cfg: dict, page: int, limit: int) -> list[SongInfo]:
         """通过酷狗搜索获取5sing歌曲，用 isoriginal / Accompany / album_name 区分模式"""
         params = {"keyword": keyword, "page": page, "pagesize": limit * 3, "showtype": 1, "format": "json"}
@@ -119,7 +148,7 @@ class FiveSingScraper(BaseScraper):
                 album_name=album_name,
                 album_id=str(item.get("album_id", "")),
                 duration=parse_duration(item.get("duration", 0)),
-                cover_url=item.get("imgUrl", item.get("imgurl", "")),
+                cover_url=(item.get("imgUrl", "") or item.get("imgurl", "")).replace("{size}", "480"),
                 platform=self.platform,
                 platform_name=self.platform_name,
                 url=f"https://5sing.kugou.com/m/detail/{song_hash}.html",
@@ -161,9 +190,6 @@ class FiveSingScraper(BaseScraper):
         return ""
 
     # ------------------------------------------------------------------
-    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
-        return None  # 5sing无传统专辑
-
     def get_play_url(self, song_id: str) -> str:
         return f"https://m.kugou.com/api/v1/wechat/index?cmd=101&hash={song_id}"
 
