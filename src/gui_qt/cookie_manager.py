@@ -248,10 +248,10 @@ class CookieManagerDialog(QDialog):
 
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
-        dlg.resize(1100, 760)
+        dlg.resize(1100, 780)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("  在下方页面完成登录后，将自动保存 Cookie 并关闭本窗口（最长等待 3 分钟）")
+        hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（无时间限制，由你决定）")
         hint.setStyleSheet("color: #555; padding: 4px; background: #ffffff;")
         v.addWidget(hint)
 
@@ -263,8 +263,24 @@ class CookieManagerDialog(QDialog):
         view.setPage(page)
         v.addWidget(view, 1)
 
+        # 底部操作栏：只有用户点「已获取」才保存，不自动不超时
+        bar = QHBoxLayout()
+        self_keys = "/".join(auth_keys)
+        cap_lbl = QLabel(f"  已捕获 {0} 个 Cookie（登录特征：{self_keys}）")
+        cap_lbl.setStyleSheet("color: #888; padding: 4px;")
+        bar.addWidget(cap_lbl, 1)
+        got_btn = QPushButton("✅ 已获取（保存 Cookie）")
+        got_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
+        got_btn.clicked.connect(lambda *args: save_now())
+        bar.addWidget(got_btn)
+        cancel_btn = QPushButton("放弃")
+        cancel_btn.clicked.connect(dlg.close)
+        bar.addWidget(cancel_btn)
+        bar_w = QWidget()
+        bar_w.setLayout(bar)
+        v.addWidget(bar_w)
+
         jar: dict[str, str] = {}
-        state = {"saved": False, "timer": None}
 
         def on_cookie_added(cookie):
             try:
@@ -275,31 +291,36 @@ class CookieManagerDialog(QDialog):
             if not name or not value:
                 return
             jar[name] = value
-            if name in auth_keys and not state["saved"]:
-                # 登录特征 cookie 出现 → 延时 2s 等其余 cookie 到齐再保存
-                if state["timer"] is not None:
-                    state["timer"].stop()
-                t = QTimer(dlg)
-                t.setSingleShot(True)
-                t.timeout.connect(save_and_close)
-                state["timer"] = t
-                t.start(2000)
+            hit = any(k in jar for k in auth_keys)
+            cap_lbl.setText(f"  已捕获 {len(jar)} 个 Cookie" + (f"（✅ 检测到登录特征 {self_keys}）" if hit else f"（登录特征：{self_keys}）"))
+            cap_lbl.setStyleSheet("color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
 
-        def save_and_close():
-            if state["saved"] or not any(k in jar for k in auth_keys):
+        def save_now():
+            if not jar:
+                QMessageBox.warning(dlg, "无 Cookie", "尚未捕获到任何 Cookie，请先在页面完成登录")
                 return
-            state["saved"] = True
+            if not any(k in jar for k in auth_keys):
+                ret = QMessageBox.question(
+                    dlg, "未检测到登录特征",
+                    f"未检测到登录特征 Cookie（{self_keys}），当前捕获 {len(jar)} 个。\n"
+                    "可能尚未完成登录，仍要保存吗？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if ret != QMessageBox.Yes:
+                    return
             cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
-            auth.set_cookie(plat, cookie_str)
-            self._reload()
-            self._notify()
+            try:
+                auth.set_cookie(plat, cookie_str)
+                self._reload()
+                self._notify()
+            except Exception as e:
+                QMessageBox.critical(dlg, "保存失败", f"Cookie 写入失败：\n{e}")
+                return
             dlg.close()
 
         profile.cookieStore().cookieAdded.connect(on_cookie_added)
 
         view.load(QUrl(url))
         dlg.show()
-        QTimer.singleShot(180000, dlg.close)  # 3 分钟超时自动关
 
     def _qr_login(self, plat):
         if plat == "netease":
