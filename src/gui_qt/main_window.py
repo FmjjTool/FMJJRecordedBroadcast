@@ -9,7 +9,7 @@
 
 import os
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
-from gui_qt import theme
+from gui_qt import common, theme
 from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.pages.settings import GlobalSettingsPage
 from gui_qt.pages.info_parse import InfoParsePage
@@ -131,8 +131,14 @@ class MainWindow(QMainWindow):
 
         from version import APP_VERSION, APP_DISPLAY_NAME
         self.setWindowTitle(f"{APP_DISPLAY_NAME} v{APP_VERSION} · 制作歆慕")
-        self.resize(1600, 1000)
-        self.setMinimumSize(1280, 800)
+        # 默认 1120×700（原 1600×1000 缩小 30%），小屏自动收到可用区域内
+        self.resize(1120, 700)
+        screen = self.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            if avail.width() < 1120 or avail.height() < 700:
+                self.resize(min(1120, avail.width()), min(700, avail.height()))
+        self.setMinimumSize(880, 560)
 
         # 全局工作目录（持久化）
         cfg = load_convert_config()
@@ -150,16 +156,29 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 左侧导航
+        # 左侧导航：外部容器 = 上（可滚动导航）+ 下（固定全局区，不随导航滚动）
+        nav_panel = QWidget()
+        nav_panel.setFixedWidth(210)
+        nav_v = QVBoxLayout(nav_panel)
+        nav_v.setContentsMargins(0, 0, 0, 0)
+        nav_v.setSpacing(0)
+
         nav_scroll = QScrollArea()
-        nav_scroll.setFixedWidth(210)
         nav_scroll.setWidgetResizable(True)
+        nav_scroll.setFrameShape(QScrollArea.NoFrame)
         nav_widget = QWidget()
         self.nav_layout = QVBoxLayout(nav_widget)
         self.nav_layout.setContentsMargins(8, 8, 8, 8)
         self.nav_layout.setSpacing(3)
         nav_scroll.setWidget(nav_widget)
-        layout.addWidget(nav_scroll)
+        nav_v.addWidget(nav_scroll, 1)
+
+        # 底部固定区：标题 + 全局设置入口 + Cookie 状态 + 主题切换
+        self.bottom_layout = QVBoxLayout()
+        self.bottom_layout.setContentsMargins(8, 0, 8, 8)
+        self.bottom_layout.setSpacing(3)
+        nav_v.addLayout(self.bottom_layout)
+        layout.addWidget(nav_panel)
 
         # 右侧内容（懒加载）
         self.stack = QStackedWidget()
@@ -183,9 +202,18 @@ class MainWindow(QMainWindow):
         # 延迟刷新 Cookie 状态（内部 import auth 等重依赖，避免阻塞启动）
         self._refresh_cookie_status()
 
+        # 恢复上次「已获取」的数据（config/collected.json，重启不丢）
+        common.load_collected()
+
         # 保存了深色主题时，把构造期内联样式统一适配（含 styleSheet= 关键字参数）
         if theme.is_dark():
             theme.adapt(self)
+
+        # 主题定时开关：启动对齐一次 + 每 10 秒强制对齐（到点即变，无需手动触发）
+        self._check_theme_schedule()
+        self._theme_timer = QTimer(self)
+        self._theme_timer.timeout.connect(self._check_theme_schedule)
+        self._theme_timer.start(10_000)
 
     # ==================== 侧栏 ====================
 
@@ -195,26 +223,34 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(title)
 
         for group_title, items in NAV_GROUPS:
-            gl = QLabel(group_title)
-            gl.setStyleSheet("color: #5a6072; font-size: 11px; padding: 10px 4px 2px 4px;")
-            nav_layout.addWidget(gl)
+            # 「全局」组放底部固定区（只留按钮，不再加分组标题），其余放可滚动导航区
+            is_bottom = group_title == "⚙️ 全局"
+            if is_bottom:
+                sep = QLabel("─" * 14)
+                sep.setStyleSheet("color: #b6bdca; font-size: 11px; padding: 0; background: transparent;")
+                self.bottom_layout.addWidget(sep)
+            else:
+                gl = QLabel(group_title)
+                gl.setStyleSheet("color: #5a6072; font-size: 11px; padding: 10px 4px 2px 4px;")
+                nav_layout.addWidget(gl)
+            target = self.bottom_layout if is_bottom else nav_layout
             for key, item_title in items:
                 btn = QPushButton(item_title)
                 btn.setCheckable(True)
                 btn.setStyleSheet("text-align: left; padding: 5px 8px;")
                 btn.clicked.connect(lambda checked, k=key: self.show_page(k))
-                nav_layout.addWidget(btn)
+                target.addWidget(btn)
                 self.nav_buttons[key] = btn
         nav_layout.addStretch(1)
 
-        # 底部 Cookie 状态指示区（非独立标签页）
-        self._build_cookie_bar(nav_layout)
+        # 底部固定区：Cookie 状态 + 主题切换（全局设置入口已随「全局」组固定）
+        self._build_cookie_bar(self.bottom_layout)
 
-        # 主题切换（浅色/深色，持久化）
+        # 主题切换（浅色/深色，持久化）— 底部固定区
         self.theme_btn = QPushButton("🌙 深色主题")
         self.theme_btn.setToolTip("切换 浅色 / 深色 界面（自动保存）")
         self.theme_btn.clicked.connect(self._toggle_theme)
-        nav_layout.addWidget(self.theme_btn)
+        self.bottom_layout.addWidget(self.theme_btn)
         self._update_theme_btn()
 
     def _toggle_theme(self):
@@ -223,6 +259,19 @@ class MainWindow(QMainWindow):
         theme.retheme_all()
         self._update_theme_btn()
         show_toast(self, f"已切换到{'深色' if name == 'dark' else '浅色'}主题", "success")
+
+    def _check_theme_schedule(self):
+        """定时开关：启用时把主题对齐到当前时段目标（到点即变）。"""
+        try:
+            name = theme.check_scheduled_switch()
+        except Exception:
+            return
+        if not name:
+            return
+        theme.apply_theme()
+        theme.retheme_all()
+        self._update_theme_btn()
+        show_toast(self, f"⏰ 已定时切换到{'深色' if name == 'dark' else '浅色'}主题", "info")
 
     def _update_theme_btn(self):
         # 当前深色 → 按钮显示可切回浅色

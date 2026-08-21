@@ -8,14 +8,15 @@
    选择器安全：QPushButton:hover 等不会被改写）
 - 切换时：retheme_all() 遍历全部顶层控件重映射已设置的样式
 - 持久化：config["theme"] = "light" | "dark"
+- 定时开关：check_scheduled_switch() 按配置时间自动黑白（主窗口 QTimer 周期调用）
 
 注意：刻意在两种主题下保持不变的色值（强调绿/红/蓝、视频区纯黑、
-终端预览深底等）不进映射表；tracker 视频预览占位 #15171d 与
-test_page 监控按钮 #2a5a8c 是浅色主题下的刻意深色，因此深色对应物
-刻意选用邻近但不冲突的色值。
+终端预览深底等）不进映射表；test_page 监控按钮 #2a5a8c 是浅色主题下的
+刻意深色，因此深色对应物刻意选用邻近但不冲突的色值。
 """
 
 import re
+from datetime import datetime
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
@@ -128,7 +129,7 @@ QSlider::handle:horizontal { background: #c6cbd6; width: 12px; margin: -4px 0; b
 # 同一深色值对应多个浅色键时，反向映射取“最后写入”的代表键。
 
 _SURFACE_L2D = {
-    # 滚动区/窗体底色（深色值避开 tracker 刻意使用的 #15171d）
+    # 滚动区/窗体底色（深色值即 DARK_QSS 的 #15171d，不进映射避免反向误命中）
     "#eceff3": "#14161d",
     "#f4f5f7": "#1a1d27",
     # 浅灰卡片/输入底（代表键 #ffffff 放最后）
@@ -179,6 +180,8 @@ _TEXT_L2D = {
     "#5a6072": "#9aa0b4",
     "#5a6474": "#9aa0b4",   # 代表键放最后
     "#6b7280": "#888888",
+    "#888888": "#9aa0b4",   # tracker 状态圆点/提示灰（#888 归一化后命中）
+    "#1976d2": "#64b5f6",   # 链接蓝/平台标签/时间标签（深色下提亮，否则看不清）
 }
 
 _SURFACE_D2L = {v: k for k, v in _SURFACE_L2D.items()}
@@ -261,6 +264,49 @@ def set_theme(name):
 def toggle_theme():
     set_theme("light" if is_dark() else "dark")
     return get_theme()
+
+
+# ==================== 主题定时开关（按时间自动黑白） ====================
+
+def _parse_hhmm(s, fallback):
+    """把 "HH:MM" 解析成当天分钟数，非法值回退 fallback。"""
+    try:
+        h, m = str(s).strip().split(":")
+        h, m = int(h), int(m)
+        if 0 <= h < 24 and 0 <= m < 60:
+            return h * 60 + m
+    except (ValueError, TypeError):
+        pass
+    return fallback
+
+
+def scheduled_theme():
+    """按当前时间计算定时目标主题：'light' / 'dark'；未启用或配置无效返回 None。"""
+    cfg = load_convert_config()
+    if not cfg.get("theme_schedule_enabled"):
+        return None
+    light = _parse_hhmm(cfg.get("theme_light_time"), 7 * 60)
+    dark = _parse_hhmm(cfg.get("theme_dark_time"), 19 * 60)
+    if light == dark:
+        return None
+    now = datetime.now().hour * 60 + datetime.now().minute
+    if light < dark:
+        return "light" if light <= now < dark else "dark"
+    # 浅色时间晚于深色时间（跨午夜，如 08:00 亮 / 00:30 暗）
+    return "light" if now >= light or now < dark else "dark"
+
+
+def check_scheduled_switch():
+    """定时开关检查：启用时把主题强制对齐到当前时段目标（到点即变）。
+
+    每 10 秒由主窗口调用；启用期间手动切换会在下个检查点被拉回目标主题，
+    关闭定时后手动切换不受影响。
+    """
+    want = scheduled_theme()
+    if want is None or is_dark() == (want == "dark"):
+        return None
+    set_theme(want)
+    return want
 
 
 def current_qss():

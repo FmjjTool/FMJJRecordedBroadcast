@@ -6,13 +6,27 @@
 
 import json
 import re
+import sys
 import asyncio
 from pathlib import Path
 from datetime import datetime
 
 BASE_DIR = Path(__file__).parent
-ACCOUNTS_FILE = BASE_DIR / "accounts.json"
-GROUPS_FILE = BASE_DIR / "groups.json"
+
+
+def _data_dir() -> Path:
+    """账号/分组数据目录：源码运行=模块旁；打包后=exe 旁 config/。
+
+    打包后 __file__ 位于 _internal（Program Files 下通常只读），必须外移。
+    """
+    if getattr(sys, "frozen", False):
+        from toolbox.config_manager import get_config_dir
+        return get_config_dir()
+    return BASE_DIR
+
+
+ACCOUNTS_FILE = _data_dir() / "accounts.json"
+GROUPS_FILE = _data_dir() / "groups.json"
 DATA_DIR = BASE_DIR / "data"
 
 PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博"}

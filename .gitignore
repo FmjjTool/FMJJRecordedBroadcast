@@ -5,5 +5,10 @@ download/
 logs/
 dist/
 build/
+*.spec
 _test_replay.flv
 dycast-main/downloads/
+# 追踪页用户数据（账号/分组/采集记录），仅本地保留，不进仓库
+src/tracker/accounts.json
+src/tracker/groups.json
+src/tracker/data/

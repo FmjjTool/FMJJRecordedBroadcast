@@ -8,15 +8,16 @@
 
 import os
 
+from PySide6.QtCore import QTime
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import (
     get_app_root, get_config_dir, get_export_dir, load_convert_config,
     migrate_old_cache, has_old_cache_files, has_date_subfolders,
-    set_export_dir, set_work_dir,
+    save_convert_config, set_export_dir, set_work_dir,
 )
 
 from gui_qt.common import run_bg
@@ -70,6 +71,37 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_status = QLabel("")
         self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.exportdir_status)
+
+        v.addSpacing(12)
+
+        # ---- 主题定时切换 ----
+        v.addWidget(self._card_title("🌗 主题定时切换（到点自动黑白）"))
+        ts_row = QHBoxLayout()
+        self.sched_enable = QCheckBox("启用定时切换")
+        self.sched_enable.setToolTip(
+            "到达设定时间自动切换主题，改动即时生效；\n"
+            "启用期间手动切换会在数秒内被拉回目标主题，关闭后手动切换不受影响")
+        ts_row.addWidget(self.sched_enable)
+        ts_row.addStretch(1)
+        ts_row.addWidget(QLabel("☀ 浅色时间:"))
+        self.sched_light = QTimeEdit()
+        self.sched_light.setDisplayFormat("HH:mm")
+        self.sched_light.setFixedWidth(84)
+        ts_row.addWidget(self.sched_light)
+        ts_row.addWidget(QLabel("🌙 深色时间:"))
+        self.sched_dark = QTimeEdit()
+        self.sched_dark.setDisplayFormat("HH:mm")
+        self.sched_dark.setFixedWidth(84)
+        ts_row.addWidget(self.sched_dark)
+        ts_row.addWidget(self._btn("💾 保存", self._save_theme_schedule_clicked))
+        v.addLayout(ts_row)
+        self.sched_status = QLabel("")
+        self.sched_status.setStyleSheet("color: #888; font-size: 11px;")
+        v.addWidget(self.sched_status)
+        # 改动即时生效：开关/时间一变就写入配置并立刻对齐主题（无需点保存）
+        self.sched_enable.toggled.connect(self._on_schedule_changed)
+        self.sched_light.timeChanged.connect(self._on_schedule_changed)
+        self.sched_dark.timeChanged.connect(self._on_schedule_changed)
 
         v.addSpacing(12)
 
@@ -152,8 +184,63 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_entry.setText(exd)
         self.exportdir_status.setText(f"当前: {exd}")
         self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
+        # 主题定时切换
+        self._load_theme_schedule()
         # 信息
         self._refresh_info()
+
+    # ---- 主题定时切换 ----
+    def _load_theme_schedule(self):
+        cfg = load_convert_config()
+        # 载入时屏蔽信号，避免触发「改动即保存」
+        for w in (self.sched_enable, self.sched_light, self.sched_dark):
+            w.blockSignals(True)
+        self.sched_enable.setChecked(bool(cfg.get("theme_schedule_enabled")))
+        light = QTime.fromString(str(cfg.get("theme_light_time", "07:00")), "HH:mm")
+        dark = QTime.fromString(str(cfg.get("theme_dark_time", "19:00")), "HH:mm")
+        self.sched_light.setTime(light if light.isValid() else QTime(7, 0))
+        self.sched_dark.setTime(dark if dark.isValid() else QTime(19, 0))
+        for w in (self.sched_enable, self.sched_light, self.sched_dark):
+            w.blockSignals(False)
+        self._update_sched_status()
+
+    def _update_sched_status(self):
+        if self.sched_enable.isChecked():
+            from gui_qt import theme
+            want = theme.scheduled_theme()
+            if want:
+                self.sched_status.setText(
+                    f"已启用：当前为{'☀ 浅色' if want == 'light' else '🌙 深色'}时段 · "
+                    f"{self.sched_light.time().toString('HH:mm')} 自动切浅色 / "
+                    f"{self.sched_dark.time().toString('HH:mm')} 自动切深色（每 10 秒自动检测，到点即变）")
+                self.sched_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+            else:
+                self.sched_status.setText("两个时间点相同，定时无效，请修改")
+                self.sched_status.setStyleSheet("color: #e53935; font-size: 11px;")
+        else:
+            self.sched_status.setText("未启用：手动点击侧栏「深色/浅色主题」按钮切换")
+            self.sched_status.setStyleSheet("color: #888; font-size: 11px;")
+
+    def _on_schedule_changed(self):
+        """开关/时间一变即保存并立即对齐主题（无需点保存）。"""
+        self._save_theme_schedule(silent=True)
+
+    def _save_theme_schedule_clicked(self):
+        self._save_theme_schedule(silent=False)
+
+    def _save_theme_schedule(self, silent: bool):
+        cfg = load_convert_config()
+        cfg["theme_schedule_enabled"] = self.sched_enable.isChecked()
+        cfg["theme_light_time"] = self.sched_light.time().toString("HH:mm")
+        cfg["theme_dark_time"] = self.sched_dark.time().toString("HH:mm")
+        save_convert_config(cfg)
+        # 立即生效：让主窗口立刻对齐（启用/修改时间后无需等下一个检查点）
+        if hasattr(self.app, "_check_theme_schedule"):
+            from gui_qt.common import post_to_main
+            post_to_main(self.app._check_theme_schedule)
+        if not silent:
+            self.app.toast("✅ 主题定时切换设置已保存", "success")
+        self._update_sched_status()
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(

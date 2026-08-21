@@ -209,6 +209,9 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "migrate_target_dir": "",
     "max_log_files": 50,
     "theme": "light",
+    "theme_schedule_enabled": False,
+    "theme_light_time": "07:00",
+    "theme_dark_time": "19:00",
 }
 
 

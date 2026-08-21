@@ -373,4 +373,5 @@ class InfoResultsPage(BasePage):
         if not common.COLLECTED:
             return
         common.COLLECTED.clear()
+        common.save_collected()
         self.refresh()

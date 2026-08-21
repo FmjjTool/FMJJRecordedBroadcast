@@ -145,7 +145,64 @@ def _collect(infos):
             existing.add(key)
         COLLECTED.append(i)
         cnt += 1
+    if cnt:
+        save_collected()
     return cnt
+
+
+# ==================== 已获取数据持久化（重启不丢） ====================
+
+_collected_lock = threading.Lock()
+
+
+def _collected_path():
+    from toolbox.config_manager import get_config_dir
+    return get_config_dir() / "collected.json"
+
+
+def save_collected():
+    """把已获取列表写入 config/collected.json（线程安全）。"""
+    import json
+    from dataclasses import asdict, is_dataclass
+    try:
+        data = [asdict(i) for i in COLLECTED if is_dataclass(i)]
+        with _collected_lock:
+            import os
+            path = _collected_path()
+            os.makedirs(path.parent, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+    except Exception:
+        pass
+
+
+def load_collected():
+    """启动时从 config/collected.json 恢复已获取列表（失败静默，保持空列表）。
+
+    按去重键跳过已存在的条目，重复调用安全。
+    """
+    import json
+    from platforms.base import VideoInfo
+    try:
+        path = _collected_path()
+        if not path.exists():
+            return
+        existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        fields = set(VideoInfo.__dataclass_fields__)
+        for d in data:
+            if not isinstance(d, dict):
+                continue
+            info = VideoInfo(**{k: v for k, v in d.items() if k in fields})
+            key = _dedup_key(info)
+            if key and key in existing:
+                continue
+            if key:
+                existing.add(key)
+            COLLECTED.append(info)
+    except Exception:
+        pass
 
 
 def refresh_results_count(app):

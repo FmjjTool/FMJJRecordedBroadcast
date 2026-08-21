@@ -312,7 +312,7 @@ class TrackerPage(BasePage):
 
         # 预览：2 行 × 4 列网格
         preview_frame = QWidget()
-        preview_frame.setStyleSheet("background: #15171d; border-radius: 6px;")
+        preview_frame.setStyleSheet("background: #e8ebf0; border-radius: 6px;")
         grid = QGridLayout(preview_frame)
         grid.setContentsMargins(6, 4, 6, 4)
         grid.setSpacing(4)

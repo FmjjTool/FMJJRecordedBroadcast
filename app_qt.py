@@ -14,7 +14,40 @@ from gui_qt.main_window import MainWindow
 from gui_qt import theme
 
 
+def _headless_io():
+    """无控制台启动（pythonw / 打包 --noconsole）时 stdout/stderr 为 None，
+    print / rich / logging 会直接崩溃 — 统一补空流。"""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
+def _suppress_child_consoles():
+    """无控制台时给 subprocess.Popen 补 CREATE_NO_WINDOW：
+    ffmpeg / node 等子进程不再弹出黑窗；launcher/dycast 刻意要求
+    CREATE_NEW_CONSOLE 的调用不受影响。"""
+    if os.name != "nt":
+        return
+    import subprocess
+    _orig_init = subprocess.Popen.__init__
+
+    def _patched(self, *args, **kwargs):
+        flags = kwargs.get("creationflags", 0)
+        if not flags & subprocess.CREATE_NEW_CONSOLE:
+            flags |= subprocess.CREATE_NO_WINDOW
+        kwargs["creationflags"] = flags
+        return _orig_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = _patched
+
+
 def main():
+    _headless_io()
+    # 无控制台环境（pythonw 启动或打包后）隐藏子进程黑窗
+    if getattr(sys, "frozen", False) or sys.__stdout__ is None:
+        _suppress_child_consoles()
+
     from toolbox.config_manager import init_all_configs
     init_all_configs()
 
