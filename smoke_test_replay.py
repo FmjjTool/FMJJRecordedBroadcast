@@ -512,6 +512,66 @@ def main():
     time.sleep(1)
     check("软件退出进程树全灭", not has_ping())
 
+    print("== 20. 黑白主题切换（浅色/深色可替换） ==")
+    from gui_qt import theme as th
+    from PySide6.QtWidgets import QLabel
+    from toolbox.config_manager import load_convert_config
+
+    orig_theme = th.get_theme()
+    th.set_theme("light")
+
+    # 内联样式重映射：浅 → 深
+    ss = ("QFrame { background: #ffffff; border: 1px solid #d0d6df; } "
+          "QLabel { color: #2f3440; }")
+    dark = th.remap_stylesheet(ss, True)
+    check("卡片底色转深色", "#23262f" in dark)
+    check("边框转深色", "#2e3140" in dark)
+    check("文字转浅色", "#c6cbd6" in dark)
+    check("选择器保留", dark.startswith("QFrame"))
+
+    # 强调色 / 刻意深色 / 按钮白字 不受影响
+    keep = th.remap_stylesheet(
+        "background: #2e7d32; color: white; border: 1px solid #3a8c3a;", True)
+    check("强调绿色不变", keep == "background: #2e7d32; color: white; border: 1px solid #3a8c3a;")
+    keep2 = th.remap_stylesheet("background: #15171d; color: #888;", True)
+    check("刻意深色(#15171d)不被改", "#15171d" in keep2)
+    wtxt = th.remap_stylesheet("QPushButton { background: #2e7d32; color: #ffffff; }", True)
+    check("按钮白字保留", "#ffffff" in wtxt)
+
+    # 幂等 + 往返还原
+    once = th.remap_stylesheet(ss, True)
+    check("重映射幂等", th.remap_stylesheet(once, True) == once)
+    check("切回浅色还原", th.remap_stylesheet(once, False) == ss)
+
+    # 伪类选择器安全
+    pseudo = th.remap_stylesheet("QPushButton:hover { background: #e3e9f2; }", True)
+    check("伪类选择器不被改写", "QPushButton:hover" in pseudo and "#23262f" in pseudo)
+
+    # 持久化
+    th.set_theme("dark")
+    check("主题状态切换", th.get_theme() == "dark" and th.is_dark())
+    check("主题写入配置", load_convert_config().get("theme") == "dark")
+    th.set_theme("light")
+    check("主题写回浅色", load_convert_config().get("theme") == "light")
+
+    # setStyleSheet 补丁：深色下自动换色，浅色下不动
+    th.set_theme("dark")
+    th.install_auto_remap()
+    lbl = QLabel()
+    lbl.setStyleSheet("background: #ffffff; color: #2f3440;")
+    check("补丁自动转深色", "#23262f" in lbl.styleSheet() and "#c6cbd6" in lbl.styleSheet())
+
+    # adapt：切换后已有控件重映射 + 幂等
+    th.set_theme("light")
+    th.adapt(lbl)
+    check("adapt 切回浅色", "#ffffff" in lbl.styleSheet() and "#2f3440" in lbl.styleSheet())
+    before = lbl.styleSheet()
+    th.adapt(lbl)
+    check("adapt 幂等", lbl.styleSheet() == before)
+
+    # 还原现场
+    th.set_theme(orig_theme)
+
     # 清理
     try:
         os.remove(zip_path)

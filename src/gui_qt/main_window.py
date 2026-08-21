@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
+from gui_qt import theme
 from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.pages.settings import GlobalSettingsPage
 from gui_qt.pages.info_parse import InfoParsePage
@@ -120,58 +121,6 @@ COOKIE_PLATFORMS = [
     ("kuaishou", "快手", False, False),
 ]
 
-LIGHT_QSS = """
-QMainWindow, QWidget { background-color: #f4f5f7; color: #2f3440; font-family: "Microsoft YaHei"; font-size: 13px; }
-QScrollArea { border: none; background: #eceff3; }
-QPushButton { background: #ffffff; color: #2f3440; padding: 6px 12px; border: 1px solid #c3c9d4; border-radius: 4px; text-align: center; }
-QPushButton:hover { background: #2e7d32; color: #ffffff; border-color: #3a8c3a; }
-QPushButton:pressed { background: #1a5c2a; color: #ffffff; }
-QPushButton:checked { background: #1a5c2a; color: #ffffff; border-color: #2e7d32; }
-QPushButton:disabled { background: #eef0f4; color: #9aa3b0; border-color: #d9dee6; }
-QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #ffffff; color: #2f3440; border: 1px solid #c8cdd6; border-radius: 4px; padding: 6px; selection-background-color: #2a6a9c; }
-QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #2a6a9c; background: #ffffff; }
-QListWidget { padding: 2px; }
-QListWidget::item { padding: 3px; border-radius: 3px; }
-QListWidget::item:selected { background: #2a6a9c; color: #ffffff; }
-QListWidget::item:hover { background: #e3e9f2; }
-QTreeWidget, QTreeView, QTableWidget, QTableView { background: #ffffff; color: #2f3440; border: 1px solid #c8cdd6; border-radius: 4px; }
-QTreeWidget::item:selected, QTableWidget::item:selected { background: #2a6a9c; color: #ffffff; }
-QHeaderView::section { background: #eef0f4; color: #5a6474; border: none; border-bottom: 1px solid #d0d6df; padding: 5px; }
-QCheckBox { color: #2f3440; spacing: 6px; }
-QCheckBox::indicator { width: 16px; height: 16px; }
-QCheckBox::indicator:checked { background: #2e7d32; border: 1px solid #1a5c2a; border-radius: 3px; }
-QCheckBox::indicator:unchecked { background: #ffffff; border: 1px solid #b6bdca; border-radius: 3px; }
-QRadioButton::indicator:checked { background: #2a6a9c; border: 1px solid #2a6a9c; border-radius: 8px; }
-QTabBar::tab { background: #e4e8ee; color: #5a6474; padding: 8px 16px; border: 1px solid #d0d6df; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
-QTabBar::tab:selected { background: #1a5c2a; color: #ffffff; }
-QTabBar::tab:hover { background: #2e7d32; color: #ffffff; }
-QTabWidget::pane { border: 1px solid #d0d6df; background: #eceff3; }
-QProgressBar { background: #ffffff; border: 1px solid #c8cdd6; border-radius: 4px; text-align: center; color: #2f3440; }
-QProgressBar::chunk { background: #2e7d32; border-radius: 3px; }
-QScrollBar:vertical { background: #eceff3; width: 12px; }
-QScrollBar::handle:vertical { background: #c2c8d2; border-radius: 4px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #9fb0c8; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: #eceff3; height: 12px; }
-QScrollBar::handle:horizontal { background: #c2c8d2; border-radius: 4px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #9fb0c8; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QStatusBar { background: #eceff3; color: #6b7280; }
-QStatusBar::item { border: none; }
-QLabel { color: #2f3440; }
-QMenuBar { background: #eceff3; color: #2f3440; }
-QMenuBar::item:selected { background: #2e7d32; color: #ffffff; }
-QMenu { background: #ffffff; color: #2f3440; border: 1px solid #c8cdd6; }
-QMenu::item:selected { background: #2e7d32; color: #ffffff; }
-QGroupBox { border: 1px solid #d0d6df; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
-QGroupBox::title { color: #5a6474; subcontrol-origin: margin; left: 10px; }
-QSpinBox, QDoubleSpinBox { padding: 3px 6px; }
-QComboBox QAbstractItemView { background: #ffffff; color: #2f3440; selection-background-color: #2a6a9c; selection-color: #ffffff; }
-QSlider::groove:horizontal { height: 6px; background: #d9dee6; border-radius: 3px; }
-QSlider::sub-page:horizontal { background: #2e7d32; border-radius: 3px; }
-QSlider::handle:horizontal { background: #ffffff; border: 1px solid #9aa3b0; width: 12px; margin: -4px 0; border-radius: 6px; }
-"""
-
 # 回车键分发时，这些控件的回车留给控件自身处理（对应原版 event.widget 判断）
 _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 import 全部控件类型）
 
@@ -234,6 +183,10 @@ class MainWindow(QMainWindow):
         # 延迟刷新 Cookie 状态（内部 import auth 等重依赖，避免阻塞启动）
         self._refresh_cookie_status()
 
+        # 保存了深色主题时，把构造期内联样式统一适配（含 styleSheet= 关键字参数）
+        if theme.is_dark():
+            theme.adapt(self)
+
     # ==================== 侧栏 ====================
 
     def _build_nav(self, nav_layout):
@@ -256,6 +209,24 @@ class MainWindow(QMainWindow):
 
         # 底部 Cookie 状态指示区（非独立标签页）
         self._build_cookie_bar(nav_layout)
+
+        # 主题切换（浅色/深色，持久化）
+        self.theme_btn = QPushButton("🌙 深色主题")
+        self.theme_btn.setToolTip("切换 浅色 / 深色 界面（自动保存）")
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        nav_layout.addWidget(self.theme_btn)
+        self._update_theme_btn()
+
+    def _toggle_theme(self):
+        name = theme.toggle_theme()
+        theme.apply_theme()
+        theme.retheme_all()
+        self._update_theme_btn()
+        show_toast(self, f"已切换到{'深色' if name == 'dark' else '浅色'}主题", "success")
+
+    def _update_theme_btn(self):
+        # 当前深色 → 按钮显示可切回浅色
+        self.theme_btn.setText("☀️ 浅色主题" if theme.is_dark() else "🌙 深色主题")
 
     def _build_cookie_bar(self, nav_layout):
         box = QWidget()
@@ -347,6 +318,8 @@ class MainWindow(QMainWindow):
         page = self.pages[key]
         self.stack.setCurrentWidget(page)
         self.current_page = key
+        # 主题自适应：构造期 styleSheet= 关键字参数与动态新增的行在此兜底
+        theme.adapt(page)
         # 触发页面刷新钩子（如「已获取」页切回时刷新列表）
         if hasattr(page, "on_show"):
             page.on_show()

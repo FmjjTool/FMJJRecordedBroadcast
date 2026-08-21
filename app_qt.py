@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from gui_qt.main_window import MainWindow, LIGHT_QSS
+from gui_qt.main_window import MainWindow
+from gui_qt import theme
 
 
 def main():
@@ -27,7 +28,10 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(LIGHT_QSS)
+    # 主题：先装 setStyleSheet 自动重映射补丁，再按配置应用浅色/深色 QSS
+    theme.init_theme()
+    theme.install_auto_remap()
+    theme.apply_theme(app)
 
     win = MainWindow()
     win.show()

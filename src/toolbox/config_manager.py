@@ -208,6 +208,7 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "launcher_items": [],
     "migrate_target_dir": "",
     "max_log_files": 50,
+    "theme": "light",
 }
 
 
