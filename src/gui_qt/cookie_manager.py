@@ -7,7 +7,7 @@ import io
 import threading
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
@@ -96,24 +96,99 @@ class CookieManagerDialog(QDialog):
         val, ok = QInputDialog.getText(self, "输入 Cookie", f"请输入 {name} 的 Cookie:")
         if not ok or not val.strip():
             return
-        auth.set_cookie(plat, val.strip())
-        if plat == "netease":
-            auth.sync_netease_to_legacy()
-        self._reload()
-        self._notify()
+        try:
+            auth.set_cookie(plat, val.strip())
+            if plat == "netease":
+                auth.sync_netease_to_legacy()
+            self._reload()
+            self._notify()
+            QMessageBox.information(self, "成功", f"{name} Cookie 已保存")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"{name} Cookie 写入失败：\n{e}")
 
     def _clear(self, plat):
-        auth.clear_cookie(plat)
-        self._reload()
-        self._notify()
+        from auth import PLATFORM_NAMES
+        name = PLATFORM_NAMES.get(plat, plat)
+        try:
+            auth.clear_cookie(plat)
+            self._reload()
+            self._notify()
+        except Exception as e:
+            QMessageBox.critical(self, "清除失败", f"{name} Cookie 清除失败：\n{e}")
 
     def _browser_login(self, plat):
-        QMessageBox.information(self, "提示", "将在后台启动浏览器，请扫码登录。\n登录成功后 Cookie 自动保存（约 2 分钟内）。")
+        """软件内嵌浏览器登录：窗口内加载平台页，自动捕获 Cookie 后保存关闭。"""
+        try:
+            from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+        except ImportError:
+            QMessageBox.warning(self, "不可用", "内嵌浏览器组件缺失（QtWebEngine），请改用「输入」手动粘贴 Cookie")
+            return
 
-        def work():
-            auth.browser_login(plat, blocking=False)
+        configs = {
+            "weibo": ("https://m.weibo.cn/", "微博登录（软件内）", ("SUB",)),
+            "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",)),
+            "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",)),
+        }
+        if plat not in configs:
+            QMessageBox.information(self, "提示", f"{plat} 暂不支持浏览器登录，请使用「输入」")
+            return
+        url, title, auth_keys = configs[plat]
 
-        threading.Thread(target=work, daemon=True).start()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(1100, 760)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(0, 0, 0, 0)
+        hint = QLabel("  在下方页面完成登录后，将自动保存 Cookie 并关闭本窗口（最长等待 3 分钟）")
+        hint.setStyleSheet("color: #555; padding: 4px; background: #ffffff;")
+        v.addWidget(hint)
+
+        # 独立持久 profile：cookieStore 持续接收 cookieAdded（含 HttpOnly）
+        profile = QWebEngineProfile(f"login_{plat}", dlg)
+        profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        page = QWebEnginePage(profile, dlg)
+        view = QWebEngineView(dlg)
+        view.setPage(page)
+        v.addWidget(view, 1)
+
+        jar: dict[str, str] = {}
+        state = {"saved": False, "timer": None}
+
+        def on_cookie_added(cookie):
+            try:
+                name = bytes(cookie.name()).decode("utf-8", "ignore")
+                value = bytes(cookie.value()).decode("utf-8", "ignore")
+            except Exception:
+                return
+            if not name or not value:
+                return
+            jar[name] = value
+            if name in auth_keys and not state["saved"]:
+                # 登录特征 cookie 出现 → 延时 2s 等其余 cookie 到齐再保存
+                if state["timer"] is not None:
+                    state["timer"].stop()
+                t = QTimer(dlg)
+                t.setSingleShot(True)
+                t.timeout.connect(save_and_close)
+                state["timer"] = t
+                t.start(2000)
+
+        def save_and_close():
+            if state["saved"] or not any(k in jar for k in auth_keys):
+                return
+            state["saved"] = True
+            cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
+            auth.set_cookie(plat, cookie_str)
+            self._reload()
+            self._notify()
+            dlg.close()
+
+        profile.cookieStore().cookieAdded.connect(on_cookie_added)
+
+        view.load(QUrl(url))
+        dlg.show()
+        QTimer.singleShot(180000, dlg.close)  # 3 分钟超时自动关
 
     def _qr_login(self, plat):
         if plat == "netease":

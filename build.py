@@ -168,6 +168,10 @@ def run_pyinstaller(name: str):
         "--name", name,
         "--paths", "src",
         "--exclude-module", "tkinter",
+        # 函数体内动态 import 的模块，静态分析收不到，必须显式声明
+        "--hidden-import", "qrcode",                        # 扫码登录二维码
+        "--hidden-import", "PySide6.QtWebEngineWidgets",    # 软件内嵌浏览器登录
+        "--hidden-import", "PySide6.QtWebEngineCore",
     ]
     icon = ROOT / "icon.ico"
     if icon.exists():

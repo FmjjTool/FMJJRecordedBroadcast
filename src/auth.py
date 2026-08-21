@@ -12,9 +12,12 @@ from datetime import datetime, timedelta
 
 from rich.console import Console
 
+from toolbox.config_manager import get_config_dir
+
 console = Console()
 
-COOKIE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "cookies.json")
+# 统一走 config_manager：exe 旁不可写（如装在 Program Files）时自动落 AppData
+COOKIE_FILE = str(get_config_dir() / "cookies.json")
 _cookie_lock = threading.Lock()  # 线程安全
 
 
@@ -69,8 +72,9 @@ def _decrypt_cookie(s: str) -> str:
         return ""  # 密钥不匹配（如重装系统），需重新登录
 
 # 各平台 Cookie 有效期（天），0 表示永不过期
+# 微博 SUB 实际有效期约 1 个月，过短会导致用户明明登录了却提示未登录
 COOKIE_TTL_DAYS = {
-    "weibo": 3,
+    "weibo": 30,
     "douyin": 0,
     "bilibili": 0,
     "qq": 0,

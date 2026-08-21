@@ -1,5 +1,6 @@
 """配置管理器 — 合并为 config.json + cache.json + rename_log.log 三个文件"""
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,9 +15,23 @@ def get_app_root() -> Path:
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent.parent
 
+def _writable_dir(d: Path) -> bool:
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / ".write_test"
+        probe.write_text("1", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
 def get_config_dir() -> Path:
     cfg_dir = get_app_root() / "config"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
+    if not _writable_dir(cfg_dir):
+        # exe 旁不可写（如安装在 Program Files）→ 落到用户 AppData，保证 Cookie/配置可保存
+        base = Path(os.environ.get("APPDATA", "")) or (Path.home() / "AppData" / "Roaming")
+        cfg_dir = base / "FengMingToolbox" / "config"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
     return cfg_dir
 
 # 合并后的文件路径
