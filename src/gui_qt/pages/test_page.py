@@ -2095,9 +2095,16 @@ class TestPage(BasePage):
             now = time.time()
         key = (user, gift_name)
         if m.get("type") == "WebcastBindingGiftMessage":
-            # 捆绑礼物（如 66个小心心）无连击概念：每帧都是完整独立赠送，
+            # 捆绑礼物（如"66个小心心"）无连击概念：每帧都是完整独立赠送，
             # 走会话逻辑会把 15s 内第二次全量大数（delta=0）吞掉
             delta = count
+            # 价值：GiftStruct.diamondCount 是整包总价（66包=66抖币），官方模板
+            # 显示实际送出 repeatCount 个单价礼物（小心心 x67，66+1赠送），
+            # 价值=单价×数量，禁止按 67×66 虚增
+            head = gift_name.split("个", 1)[0]
+            units = int(head) if head.isdigit() and int(head) > 0 else 0
+            unit = int(round(price / units)) if units else price
+            value_delta = unit * count
         else:
             sess = self._gift_sessions.get(key)
             if sess and now - sess["t"] > 15:
@@ -2110,13 +2117,14 @@ class TestPage(BasePage):
                 self._gift_sessions.pop(key, None)
             else:
                 self._gift_sessions[key] = {"settled": count, "t": now}
+            value_delta = delta * price
         if delta > 0:
             cur = self._gift_rank.get(user)
             if cur is None:
                 cur = {"giftCount": 0, "totalValue": 0, "lastTime": t}
                 self._gift_rank[user] = cur
             cur["giftCount"] += delta
-            cur["totalValue"] += delta * price
+            cur["totalValue"] += value_delta
             cur["lastTime"] = t
         if refresh:
             self._refresh_gift_rank()
