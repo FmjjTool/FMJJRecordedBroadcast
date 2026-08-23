@@ -1859,14 +1859,12 @@ class TestPage(BasePage):
             self._add_gift_rank(m, t, refresh=rank)
             self._log_chat(ts, "礼物", m, "")
             if self.gift_var.isChecked() and not self._chat_filter:
-                icon = m.get("giftIcon") or ""
-                self._append_rich(self.chat_gift_box, [icon] if icon else [],
+                self._append_rich(self.chat_gift_box, self._chat_urls("礼物", m),
                                   lambda res: self._gift_html(ts, m, res))
         elif name in ("弹幕", "表情弹幕"):
             self._log_chat(ts, name, m, text)
             if self.chat_var.isChecked() and not self._chat_filter:
-                urls = [p.get("url") for p in (m.get("rtf") or []) if p.get("url")]
-                self._append_rich(self.chat_gift_box, urls,
+                self._append_rich(self.chat_gift_box, self._chat_urls(name, m),
                                   lambda res: self._chat_html(ts, m, text, res))
         elif name == "进场":
             if m.get("memberCount"):
@@ -1970,16 +1968,39 @@ class TestPage(BasePage):
 
     def _log_chat(self, ts, kind, m, text):
         """聊天日志：弹幕/礼物（含时间点）入内存列表，供搜索与按人筛选。
-        「礼物/聊天」复选框是显示过滤器（取消=隐藏不丢弃）。"""
+        「礼物/聊天」复选框与文字筛选是显示过滤器（取消=隐藏不丢弃），
+        图片无论显示与否都预下载缓存（筛选期间收到的表情/图标，回填时有图可渲）。"""
         self._chat_log.append({"ts": ts, "kind": kind, "m": m, "text": text})
         if len(self._chat_log) > 8000:
             self._chat_log = self._chat_log[-4000:]
-        # 筛选中：新消息若命中关键字且类别未隐藏，追加显示并更新计数
+        urls = self._chat_urls(kind, m)
         if self._chat_filter and self._chat_match(self._chat_log[-1], self._chat_filter) \
                 and self._chat_kind_visible(kind):
-            self._append_html(self.chat_gift_box, self._chat_row_html(self._chat_log[-1]))
+            # 筛选中命中：走富文本队列（缺图后台下载，就绪/超时按序渲染）
+            e = self._chat_log[-1]
+            self._append_rich(self.chat_gift_box, urls,
+                              lambda res, e=e: self._chat_row_html(e, res))
             self._scroll_chat_bottom()
             self._update_search_count()
+        else:
+            # 未显示（未命中/类别隐藏）：只预下载图片，不渲染
+            self._prefetch_imgs(urls)
+
+    def _prefetch_imgs(self, urls):
+        """后台预下载未缓存图片（不渲染，仅供回填/后续显示有图）。"""
+        todo = [u for u in urls
+                if u and str(u).startswith("http")
+                and u not in self._img_tried and not img_cache_lookup(u)]
+        if not todo:
+            return
+        self._img_tried.update(todo)
+
+        def work():
+            for u in todo:
+                img_cache_download(u)
+            return None
+
+        run_bg(work, lambda _r, _e=None: None)
 
     def _chat_kind_visible(self, kind):
         return self.gift_var.isChecked() if kind == "礼物" else self.chat_var.isChecked()
@@ -2005,12 +2026,23 @@ class TestPage(BasePage):
                                    entry.get("text") or "") if x)
         return kw.lower() in hay.lower()
 
-    def _chat_row_html(self, entry):
+    @staticmethod
+    def _chat_urls(kind, m):
+        """一条聊天/礼物消息引用的图片 URL（礼物图标 / 表情 rtf）。"""
+        m = m or {}
+        if kind == "礼物":
+            icon = m.get("giftIcon") or ""
+            return [icon] if icon else []
+        return [p.get("url") for p in (m.get("rtf") or []) if p.get("url")]
+
+    def _chat_row_html(self, entry, resolve=None):
         """单条日志 → 显示 HTML（图片走已缓存路径，缺图按文字占位）。"""
         m = entry["m"] or {}
+        if resolve is None:
+            resolve = _img_src
         if entry["kind"] == "礼物":
-            return self._gift_html(entry["ts"], m, _img_src)
-        return self._chat_html(entry["ts"], m, entry.get("text") or "", _img_src)
+            return self._gift_html(entry["ts"], m, resolve)
+        return self._chat_html(entry["ts"], m, entry.get("text") or "", resolve)
 
     def _render_chat_rows(self, entries, note=""):
         """批量重渲染聊天框（筛选/清除筛选时）。"""
