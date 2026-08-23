@@ -18,6 +18,7 @@
 """
 
 import time
+import json
 import threading
 import hashlib
 
@@ -51,6 +52,8 @@ MSG_TYPES = {
     "WebcastRanklistHourEntranceMessage": ("小时榜", "other"),
     "WebcastFansclubMessage": ("粉丝团", "other"),
     "WebcastRoomRankMessage": ("排行榜", "other"),
+    "WebcastHotChatMessage": ("热议", "other"),
+    "WebcastLotteryDrawResultEventMessage": ("抽奖", "other"),
 }
 
 
@@ -846,6 +849,102 @@ _USER_FIELD_MAP = {
 }
 
 
+_BANNER_TYPE_NAMES = {
+    "fans": "粉丝团", "ai_gift": "AI 礼物", "tier": "周榜任务", "activity": "活动",
+    "gift": "礼物", "rank": "榜单", "task": "任务", "subscribe": "订阅", "vip": "会员",
+    "qixi": "七夕",
+}
+
+_BANNER_TASK_NAMES = {"gift_task": "礼物任务", "quota_task": "额度任务",
+                      "anchor_gift_task": "主播礼物任务"}
+
+_TASK_STATUS_NAMES = {0: "未开始", 1: "进行中", 2: "已完成", 3: "已结束"}
+
+
+def _banner_fans_summary(node):
+    """粉丝团榜横幅：p_*_hrank/drank.foot.extra.selectors=分组（如"百万粉团"）。"""
+    outs = []
+    for k, sub in node.items():
+        if not isinstance(sub, dict):
+            continue
+        core = sub.get(k) or {}
+        if not isinstance(core, dict):
+            continue
+        extra = ((core.get("foot") or {}).get("extra") or {})
+        sel = [s for s in (extra.get("selectors") or []) if isinstance(s, str)]
+        if sel:
+            period = "日榜" if "drank" in k else "时榜"
+            outs.append(f"{sel[0]}{period}")
+    return outs
+
+
+def _banner_task_summary(node):
+    """任务型横幅节点：遍历 *_task.task_items 提取「任务名 状态 进度」摘要。"""
+    outs = []
+    for k, sub in node.items():
+        if not isinstance(sub, dict) or "task_items" not in sub:
+            continue
+        cname = sub.get("component_name") or k
+        label = _BANNER_TASK_NAMES.get(cname, _BANNER_TYPE_NAMES.get(cname, cname))
+        bits = []
+        for item in sub.get("task_items") or []:
+            st_name = _TASK_STATUS_NAMES.get(item.get("status"), "")
+            conds = []
+            for ph in item.get("phases") or []:
+                for c in ph.get("conditions") or []:
+                    tgt = c.get("target")
+                    if tgt:
+                        conds.append(f"{c.get('current') or 0}/{tgt}")
+            if st_name:
+                bits.append(f"{st_name} {' '.join(conds)}".strip())
+        if bits:
+            outs.append(f"{label}：{'；'.join(bits)}")
+    return outs
+
+
+def _parse_banner_json(raw):
+    """横幅 f2 字段是完整 JSON（活动配置树）。提取人类可读的完整描述：
+    活动型→标题/副标题/规则/状态；任务型→gift_task 等进度摘要。失败返回 None。"""
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    outs = []
+    for key, node in data.items():
+        if not isinstance(node, dict):
+            continue
+        # key 形如 "25v_7_fans" → 取末段语义名映射为中文
+        short = key.rsplit("_", 1)[-1] if "_" in key else key
+        label = _BANNER_TYPE_NAMES.get(short, short)
+        title = node.get("title") or node.get("name") or ""
+        sub = node.get("subtitle") or node.get("desc") or node.get("description") or ""
+        # 进度/状态类字段
+        parts = [p for p in (title, sub) if p]
+        status = node.get("status")
+        if isinstance(status, dict):
+            nm = status.get("Name") or status.get("name")
+            if nm:
+                parts.append(f"[{nm}]")
+        # _extra.step 是运行状态，_extra 里常有 rule 文本
+        extra = node.get("_extra") or {}
+        if isinstance(extra, dict):
+            rule = extra.get("rule") or extra.get("text") or ""
+            if rule and len(str(rule)) < 150:
+                parts.append(str(rule))
+        # 任务型横幅（无 title，进度藏在 *_task.task_items.conditions）
+        if not parts:
+            parts = _banner_task_summary(node)
+            if not parts:
+                parts = _banner_fans_summary(node)
+            if not parts and isinstance(extra, dict):
+                nm = (extra.get("step") or {}).get("Name")
+                if nm:
+                    parts.append(f"[{nm}]")
+        if parts:
+            outs.append(f"{label}·{' | '.join(str(p) for p in parts)}")
+    return "；".join(outs) if outs else None
+
+
 def extract_msg(m):
     """解码单条 Message（对应 JS extractMsg），返回与旧版相同结构的 dict。"""
     r0 = _Reader(m)
@@ -879,6 +978,7 @@ def extract_msg(m):
     combo_count = repeat_count = action = tray_text = None
     repeat_end = gift_count = like_total = like_count = follow_count = None
     room_total = room_total_user = room_total_user_str = member_count = rtf = None
+    banner_json = hot_label = lottery_json = None
     while r.pos < len(payload):
         tag = r.varint()
         f, w = tag >> 3, tag & 7
@@ -931,6 +1031,15 @@ def extract_msg(m):
                     gift_icon = g["icon"]
             elif f == 11:
                 action = d.decode("utf-8", errors="replace")
+            elif f == 2 and mtype == "WebcastInRoomBannerMessage":
+                # f2 是完整活动 JSON（千字节级配置树，正则只能抓到"锋芒II"这类碎片）
+                s = d.decode("utf-8", errors="replace")
+                if s.lstrip()[:1] == "{":
+                    banner_json = s
+            elif f == 2 and mtype == "WebcastHotChatMessage":
+                hot_label = d.decode("utf-8", errors="replace")  # 栏目名，如"大家说"
+            elif f == 4 and mtype == "WebcastLotteryDrawResultEventMessage":
+                lottery_json = d.decode("utf-8", errors="replace")  # 结果 JSON
             elif f == 19:
                 tray_text = _parse_text(d)
             elif f == 21:
@@ -963,6 +1072,28 @@ def extract_msg(m):
         out_content = content or ""
     elif mtype == "WebcastRoomStatsMessage":
         out_content = content or ""
+    elif mtype == "WebcastHotChatMessage":
+        # f2=栏目名（大家说），f3=热评内容
+        out_content = f"{hot_label}：{content}" if (hot_label and content) else (content or "")
+    elif mtype == "WebcastLotteryDrawResultEventMessage":
+        out_content = ""
+        if lottery_json:
+            try:
+                d = json.loads(lottery_json)
+                bits = []
+                for k, v in d.items():
+                    kn = {"candidate_num": "候选"}.get(k, k)
+                    bits.append(f"{kn} {v}")
+                out_content = "抽奖结果：" + "，".join(bits)
+            except Exception:
+                pass
+    elif mtype == "WebcastInRoomBannerMessage":
+        # 优先完整 JSON 解析（活动名/规则/状态/任务进度），失败退回正则片段
+        out_content = _parse_banner_json(banner_json) if banner_json else ""
+        if not out_content:
+            out_content = content or ""
+        if len(out_content) > 200:
+            out_content = out_content[:200] + "…"
     else:
         txt = payload.decode("utf-8", errors="replace")
         parts = []

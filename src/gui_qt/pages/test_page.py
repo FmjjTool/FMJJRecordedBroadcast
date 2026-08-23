@@ -156,6 +156,7 @@ class TestPage(BasePage):
         # 弹幕搜索：完整聊天日志（含时间点，供关键字/按人筛选）+ 当前筛选关键字
         self._chat_log = []         # [{ts, kind, m, text}]
         self._chat_filter = ""
+        self._last_banner_text = ""  # 横幅同内容连发去重（显示用）
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -1870,9 +1871,12 @@ class TestPage(BasePage):
             if m.get("roomTotal"):
                 self.anchor_fields["online_count"].setText(f"{int(m['roomTotal']):,}")
         elif name == "横幅":
-            # WebcastInRoomBannerMessage：系统推广横幅（锋芒II/点亮甄选展馆/VIP表情
-            # 宣传等），同秒重复推送刷屏——不展示（仍记录进导出快照）
-            pass
+            # WebcastInRoomBannerMessage：完整显示（活动名/规则/状态/任务进度，来自
+            # f2 JSON 解析）。服务器同内容连发（实测 90 秒 176 条）只显示首条防刷屏，
+            # 全量仍进导出快照
+            if self.log_var.isChecked() and text and text != self._last_banner_text:
+                self._last_banner_text = text
+                self._append(self.event_box, f"{ts} 📢 {text}")
         else:
             if self.log_var.isChecked() and text:
                 self._append(self.event_box, f"{ts} [{name}] {text}")
@@ -2230,6 +2234,7 @@ class TestPage(BasePage):
         self.search_count.setText("")
         self._img_pending.clear()
         self.event_box.setPlainText("")
+        self._last_banner_text = ""
         # 打赏榜
         self.gift_table.setRowCount(0)
         self._gift_rank = {}
