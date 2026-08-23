@@ -716,6 +716,57 @@ def _parse_gift(b):
     return {"name": name, "price": price, "icon": icon}
 
 
+_IMG_URL_RE = _re.compile(r"https?://[^\s\"'\\]{8,400}")
+
+
+def _scan_image_urls(b, depth=0):
+    """兜底：在嵌套 protobuf 里找图片 URL（VIP 表情等非标准片段结构）。
+    仅认 douyinstatic/webcastcdn 域或图片扩展名，防二进制误报。"""
+    if depth > 3 or not isinstance(b, (bytes, bytearray)):
+        return []
+    urls = []
+    try:
+        r = _Reader(b)
+    except Exception:
+        return urls
+    while r.pos < len(r.b):
+        try:
+            tag = r.varint()
+        except Exception:
+            break
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            try:
+                l = r.varint()
+                d = r.take(l)
+            except Exception:
+                break
+            if len(d) < 8:
+                continue
+            printable = sum(32 <= c < 127 for c in d) / len(d)
+            if printable > 0.9:
+                s = d.decode("utf-8", errors="replace")
+                for u in _IMG_URL_RE.findall(s):
+                    low = u.lower()
+                    if ("webcastcdn" in low or "douyinstatic" in low
+                            or low.endswith((".png", ".gif", ".webp", ".jpg", ".jpeg"))):
+                        urls.append(u)
+            else:
+                urls.extend(_scan_image_urls(d, depth + 1))
+        elif w == 0:
+            try:
+                r.varint()
+            except Exception:
+                break
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return urls
+
+
 def _parse_pieces(b):
     """Text.pieces(4)：[{type:1 text stringValue=11} | {type:2 emoji imageValue=25→image=1}]。"""
     r = _Reader(b)
@@ -774,6 +825,10 @@ def _parse_pieces(b):
                     out.append({"type": 2, "url": img, "text": sval or ""})
                 elif sval is not None:
                     out.append({"type": 1, "text": sval})
+                else:
+                    # 非标准片段兜底（VIP 表情等）：扫嵌套结构里的图片 URL
+                    for u in _scan_image_urls(d)[:2]:
+                        out.append({"type": 2, "url": u, "text": ""})
         elif w == 0:
             r.varint()
         elif w == 1:
