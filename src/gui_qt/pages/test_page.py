@@ -478,9 +478,13 @@ class TestPage(BasePage):
         head.addStretch(1)
         self.gift_var = QCheckBox("礼物")
         self.gift_var.setChecked(True)
+        self.gift_var.stateChanged.connect(
+            lambda _s=0: (self._apply_chat_filter(), self._update_search_count()))
         head.addWidget(self.gift_var)
         self.chat_var = QCheckBox("聊天")
         self.chat_var.setChecked(True)
+        self.chat_var.stateChanged.connect(
+            lambda _s=0: (self._apply_chat_filter(), self._update_search_count()))
         head.addWidget(self.chat_var)
         v.addLayout(head)
         # 搜索栏：关键字搜弹幕/昵称；点击弹幕里的昵称=按此人筛选全部发言及时间点
@@ -1357,12 +1361,15 @@ class TestPage(BasePage):
         head5.addStretch(1)
         self.like_var = QCheckBox("点赞")
         self.like_var.setChecked(True)
+        self.like_var.stateChanged.connect(lambda _s=0: self._apply_event_filter())
         head5.addWidget(self.like_var)
         self.enter_var = QCheckBox("进入直播间")
         self.enter_var.setChecked(True)
+        self.enter_var.stateChanged.connect(lambda _s=0: self._apply_event_filter())
         head5.addWidget(self.enter_var)
         self.log_var = QCheckBox("日志")
         self.log_var.setChecked(True)
+        self.log_var.stateChanged.connect(lambda _s=0: self._apply_event_filter())
         head5.addWidget(self.log_var)
         v.addLayout(head5)
         # 搜索栏：关键字筛点赞/进入/关注/横幅/日志（与中部弹幕搜索同款防抖）
@@ -1847,26 +1854,24 @@ class TestPage(BasePage):
             self.anchor_fields[key].setText(f"{int(value):,}")
 
         if name == "礼物":
-            # 打赏榜：礼物数累计、价值=数量×抖币价，与弹幕姬一致
+            # 打赏榜：礼物数累计、价值=数量×抖币价；记录与计算永远进行，
+            # 「礼物」复选框只是显示过滤器（取消=隐藏不丢弃）
             self._add_gift_rank(m, t, refresh=rank)
-            if self.gift_var.isChecked():
-                self._log_chat(ts, "礼物", m, "")
-                if not self._chat_filter:
-                    icon = m.get("giftIcon") or ""
-                    self._append_rich(self.chat_gift_box, [icon] if icon else [],
-                                      lambda res: self._gift_html(ts, m, res))
+            self._log_chat(ts, "礼物", m, "")
+            if self.gift_var.isChecked() and not self._chat_filter:
+                icon = m.get("giftIcon") or ""
+                self._append_rich(self.chat_gift_box, [icon] if icon else [],
+                                  lambda res: self._gift_html(ts, m, res))
         elif name in ("弹幕", "表情弹幕"):
-            if self.chat_var.isChecked():
-                self._log_chat(ts, name, m, text)
-                if not self._chat_filter:
-                    urls = [p.get("url") for p in (m.get("rtf") or []) if p.get("url")]
-                    self._append_rich(self.chat_gift_box, urls,
-                                      lambda res: self._chat_html(ts, m, text, res))
+            self._log_chat(ts, name, m, text)
+            if self.chat_var.isChecked() and not self._chat_filter:
+                urls = [p.get("url") for p in (m.get("rtf") or []) if p.get("url")]
+                self._append_rich(self.chat_gift_box, urls,
+                                  lambda res: self._chat_html(ts, m, text, res))
         elif name == "进场":
             if m.get("memberCount"):
                 set_field("online_count", m["memberCount"])
-            if self.enter_var.isChecked():
-                self._log_event(f"{ts} 💚 {text}")
+            self._log_event(f"{ts} 💚 {text}")
         elif name == "点赞":
             # likeTotal 为本场累计点赞总数（弹幕姬行为），缺失时退化为 +1
             if m.get("likeTotal"):
@@ -1875,13 +1880,11 @@ class TestPage(BasePage):
                 self._like_count += 1
             self.like_label.setText(f"{self._like_count:,}")
             self.anchor_fields["like_count"].setText(f"{self._like_count:,}")
-            if self.like_var.isChecked():
-                self._log_event(f"{ts} 👍 {text}")
+            self._log_event(f"{ts} 👍 {text}")
         elif name == "关注":
             if m.get("followCount"):
                 set_field("anchor_fans", m["followCount"])
-            if self.log_var.isChecked():
-                self._log_event(f"{ts} ⭐ {text}")
+            self._log_event(f"{ts} ⭐ {text}")
         elif name == "在线人数":
             # WebcastRoomUserSeqMessage：静默更新左栏统计（真实数字，非"3万"文本）
             # 注意 set_field 内部自行格式化，必须传原始 int（传 "36,680" 字符串
@@ -1898,41 +1901,59 @@ class TestPage(BasePage):
                 self.anchor_fields["online_count"].setText(f"{int(m['roomTotal']):,}")
         elif name == "横幅":
             # WebcastInRoomBannerMessage：完整显示（活动名/规则/状态/任务进度，来自
-            # f2 JSON 解析）。服务器同内容连发（实测 90 秒 176 条）只显示首条防刷屏，
+            # f2 JSON 解析）。服务器同内容连发（实测 90 秒 176 条）只记录首条防刷屏，
             # 全量仍进导出快照
-            if self.log_var.isChecked() and text and text != self._last_banner_text:
+            if text and text != self._last_banner_text:
                 self._last_banner_text = text
                 self._log_event(f"{ts} 📢 {text}")
         else:
-            if self.log_var.isChecked() and text:
+            if text:
                 self._log_event(f"{ts} [{name}] {text}")
 
     def _log_event(self, text):
-        """④框：入内存日志（供搜索）+ 按当前筛选状态决定是否实时显示。"""
+        """④框：入内存日志（供搜索）+ 按当前筛选状态决定是否实时显示。
+        「点赞/进入直播间/日志」复选框是显示过滤器（取消=隐藏不丢弃）。"""
         self._event_log.append(text)
         if len(self._event_log) > 4000:
             self._event_log = self._event_log[-2000:]
-        if not self._event_filter or self._event_match(text, self._event_filter):
+        if self._event_visible(text):
             self._append(self.event_box, text)
         self._update_event_count()
+
+    def _event_visible(self, text):
+        """事件行是否显示：类别复选框（👍点赞/💚进入/其余=日志）+ 文字筛选。"""
+        if "👍" in text:
+            if not self.like_var.isChecked():
+                return False
+        elif "💚" in text:
+            if not self.enter_var.isChecked():
+                return False
+        elif not self.log_var.isChecked():
+            return False
+        if self._event_filter and not self._event_match(text, self._event_filter):
+            return False
+        return True
 
     @staticmethod
     def _event_match(text, kw):
         return kw.lower() in text.lower()
 
     def _update_event_count(self):
+        n = len(self._visible_event_rows())
         if not self._event_filter:
-            self.event_count.setText(f"共 {len(self._event_log)} 条")
+            self.event_count.setText(f"共 {n} 条")
         else:
-            n = sum(1 for t in self._event_log if self._event_match(t, self._event_filter))
             self.event_count.setText(f"{n} 条匹配")
 
+    def _visible_event_rows(self):
+        """当前过滤条件（类别复选框 + 文字筛选）下可见的事件行。"""
+        return [t for t in self._event_log if self._event_visible(t)]
+
     def _apply_event_filter(self):
-        """④搜索框变更（防抖后）：空=回最近视图，非空=筛选匹配。"""
+        """④搜索框变更（防抖后）/ 复选框切换：按可见行重渲染。"""
         kw = self.event_search.text().strip()
         self._event_filter = kw
-        rows = self._event_log if not kw else \
-            [t for t in self._event_log if self._event_match(t, kw)]
+        rows = self._visible_event_rows()
         self.event_box.setPlainText("")
         for t in rows[-500:]:
             self.event_box.appendPlainText(t)
@@ -1940,7 +1961,7 @@ class TestPage(BasePage):
             sb = self.event_box.verticalScrollBar()
             sb.setValue(sb.maximum())
         if not kw:
-            self.event_count.setText(f"共 {len(self._event_log)} 条")
+            self.event_count.setText(f"共 {len(rows)} 条")
         else:
             note = f"筛选「{kw}」：{len(rows)} 条匹配"
             if len(rows) > 500:
@@ -1948,15 +1969,31 @@ class TestPage(BasePage):
             self.event_count.setText(note)
 
     def _log_chat(self, ts, kind, m, text):
-        """聊天日志：弹幕/礼物（含时间点）入内存列表，供搜索与按人筛选。"""
+        """聊天日志：弹幕/礼物（含时间点）入内存列表，供搜索与按人筛选。
+        「礼物/聊天」复选框是显示过滤器（取消=隐藏不丢弃）。"""
         self._chat_log.append({"ts": ts, "kind": kind, "m": m, "text": text})
         if len(self._chat_log) > 8000:
             self._chat_log = self._chat_log[-4000:]
-        # 筛选中：新消息若命中关键字，追加显示并更新计数
-        if self._chat_filter and self._chat_match(self._chat_log[-1], self._chat_filter):
+        # 筛选中：新消息若命中关键字且类别未隐藏，追加显示并更新计数
+        if self._chat_filter and self._chat_match(self._chat_log[-1], self._chat_filter) \
+                and self._chat_kind_visible(kind):
             self._append_html(self.chat_gift_box, self._chat_row_html(self._chat_log[-1]))
             self._scroll_chat_bottom()
             self._update_search_count()
+
+    def _chat_kind_visible(self, kind):
+        return self.gift_var.isChecked() if kind == "礼物" else self.chat_var.isChecked()
+
+    def _visible_chat_entries(self):
+        """当前过滤条件（类别复选框 + 文字筛选）下可见的聊天/礼物条目。"""
+        out = []
+        for e in self._chat_log:
+            if not self._chat_kind_visible(e["kind"]):
+                continue
+            if self._chat_filter and not self._chat_match(e, self._chat_filter):
+                continue
+            out.append(e)
+        return out
 
     @staticmethod
     def _chat_match(entry, kw):
@@ -1990,24 +2027,24 @@ class TestPage(BasePage):
         bar.setValue(bar.maximum())
 
     def _update_search_count(self):
+        n = len(self._visible_chat_entries())
         if not self._chat_filter:
-            self.search_count.setText(f"共 {len(self._chat_log)} 条")
+            self.search_count.setText(f"共 {n} 条")
         else:
-            n = sum(1 for e in self._chat_log if self._chat_match(e, self._chat_filter))
             self.search_count.setText(f"{n} 条匹配")
 
     def _apply_chat_filter(self):
-        """搜索框变更（防抖后）：空=回直播视图（最近历史），非空=筛选匹配。"""
+        """搜索框变更（防抖后）/ 复选框切换：空=回直播视图（最近历史），非空=筛选匹配。"""
         kw = self.search_entry.text().strip()
         self._chat_filter = kw
+        visible = self._visible_chat_entries()
         if not kw:
-            self.search_count.setText(f"共 {len(self._chat_log)} 条")
-            self._render_chat_rows(self._chat_log[-500:])
+            self.search_count.setText(f"共 {len(visible)} 条")
+            self._render_chat_rows(visible[-500:])
             return
-        matched = [e for e in self._chat_log if self._chat_match(e, kw)]
         # 按发布者筛选（关键字=完整昵称）时提示总条数；一般关键字命中昵称即等价
-        self._render_chat_rows(matched[-500:],
-                               f"筛选「{kw}」：{len(matched)} 条匹配（显示最近 500 条）")
+        self._render_chat_rows(visible[-500:],
+                               f"筛选「{kw}」：{len(visible)} 条匹配（显示最近 500 条）")
         self._update_search_count()
 
     def _on_chat_anchor(self, url):
