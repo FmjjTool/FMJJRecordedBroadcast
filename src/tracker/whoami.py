@@ -30,10 +30,12 @@ def _headers(cookie: str) -> dict:
 def probe(platform: str) -> dict:
     import auth
 
+    # whoami 仅服务于 Cookie 管理弹窗的"状态展示/验证"——读已存储 Cookie，
+    # 不受总开关限制（总开关只控制采集功能是否用 Cookie）
     if platform == "netease":
-        cookie = (auth.get_netease_cookie() or "").strip()
+        cookie = (auth.get_netease_cookie_stored() or "").strip()
     else:
-        cookie = (auth.get_cookie(platform) or "").strip()
+        cookie = (auth.load_cookies().get(platform, "") or "").strip()
     if not cookie:
         return {"ok": False, "username": ""}
 

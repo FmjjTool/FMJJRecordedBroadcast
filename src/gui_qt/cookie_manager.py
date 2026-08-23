@@ -158,7 +158,7 @@ class CookieManagerDialog(QDialog):
             if item.widget():
                 item.widget().deleteLater()
         cookies = auth.load_cookies()
-        netease_has = bool((auth.get_netease_cookie() or "").strip())
+        netease_has = bool(auth.get_netease_cookie_stored().strip())
         for plat, name, can_qr, can_browser in COOKIE_PLATFORMS:
             if plat == "netease":
                 has = netease_has
@@ -186,8 +186,10 @@ class CookieManagerDialog(QDialog):
             self.container_layout.addWidget(w)
 
         # 有 Cookie 且未探测过的平台 → 后台自动拉取登录用户名
+        # （管理弹窗读"已存储"Cookie：总开关只管采集，不影响这里的状态展示/验证）
+        stored = auth.load_cookies()
         for plat, _n, _q, _b in COOKIE_PLATFORMS:
-            cookie = (auth.get_netease_cookie() if plat == "netease" else auth.get_cookie(plat)) or ""
+            cookie = (auth.get_netease_cookie_stored() if plat == "netease" else stored.get(plat, "")) or ""
             if len(cookie) > 10 and plat not in self._whoami_cache and plat not in self._whoami_probing:
                 self._start_probe(plat)
 
@@ -250,7 +252,10 @@ class CookieManagerDialog(QDialog):
                 continue
             labels = w.findChildren(QLabel)
             if labels and labels[0].text() == auth.PLATFORM_NAMES.get(plat):
-                has = bool((auth.get_netease_cookie() if plat == "netease" else auth.get_cookie(plat)) or "")
+                if plat == "netease":
+                    has = bool(auth.get_netease_cookie_stored().strip())
+                else:
+                    has = bool((auth.load_cookies().get(plat, "") or "").strip())
                 age = auth.get_cookie_age(plat) if has else ""
                 labels[1].setText(self._status_text(plat, has, age))
                 labels[1].setStyleSheet(self._status_color(plat, has))

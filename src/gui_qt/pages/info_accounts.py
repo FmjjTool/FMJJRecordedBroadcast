@@ -7,7 +7,6 @@
   （组号下拉 + 采集类型下拉 + 保存/删除）
 """
 
-import contextlib
 import io
 import json
 import os
@@ -476,11 +475,15 @@ class InfoAccountsPage(BasePage):
     def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None):
         """采集账号最新内容，返回 (total, log)。供手动与定时获取共用。
 
+        多账号并发采集（ThreadPoolExecutor，上限 4 线程）：原串行逐个等待，
+        账号多时总耗时 ≈ 各账号耗时之和，并发后 ≈ 最慢一个账号的耗时。
+
         on_event(dict)：实时事件回调（后台线程调用），{"type": "log", "text": ...}
         或 {"type": "progress", "done": x, "total": y, "label": ...}。
         rate_count/rate_interval: 搜索限流（每网站累计抓到 rate_count 个暂停 rate_interval 秒）。
         incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
         """
+        from concurrent.futures import ThreadPoolExecutor
         from platforms import URLRecognizer, get_parser
         total = 0
         log = []
@@ -497,60 +500,111 @@ class InfoAccountsPage(BasePage):
         all_posts = []
         # 0 = 无上限（抓完所有分页）
         fetch_count = count if count > 0 else 9999
-        per_platform = {}  # 平台 -> 已抓数量（用于限流）
-        for i, a in enumerate(accounts, 1):
+
+        # 线程安全 stdout 捕获：redirect_stdout 是全局替换，多线程并发采集会互相覆盖，
+        # 改用 thread-local 代理——各采集线程的 print 只进自己的缓冲区
+        import sys
+        import threading
+
+        class _TLStdout(io.TextIOBase):
+            def __init__(self, orig):
+                self._local = threading.local()
+                self._orig = orig
+
+            def write(self, s):
+                buf = getattr(self._local, "buf", None)
+                if buf is not None:
+                    buf.write(s)
+                else:
+                    self._orig.write(s)
+                return len(s)
+
+            def flush(self):
+                pass
+
+        proxy = _TLStdout(sys.stdout)
+
+        def _fetch_one(job):
+            """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, detail, error)。"""
+            i, a = job
             platform = URLRecognizer.recognize(a.url)
             name = a.name or (a.url[:36] if a.url else "未命名")
             if not platform:
-                emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
-                continue
-            if on_event is not None:
-                on_event({"type": "progress", "done": i - 1, "total": n,
-                          "label": f"[{i}/{n}] {platform} · {name}"})
-            emit(f"[{i}/{n}] ⏳ 正在获取 {platform} · {name} ...")
+                return i, a, "", [], "", "无法识别链接"
             parser = get_parser(platform)
             if not parser or not hasattr(parser, "fetch_user_posts"):
+                return i, a, platform, [], "", "不支持时间线"
+            # B站按账号 kind 决定只采视频/只采动态/混合；其他平台忽略
+            account_kind = getattr(a, "kind", "")
+            if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
+                kwargs = {"kind": account_kind}
+            else:
+                kwargs = {}
+            buf = io.StringIO()
+            proxy._local.buf = buf
+            try:
+                posts = parser.fetch_user_posts(a.url, count=fetch_count, **kwargs)
+            except Exception as e:  # noqa: BLE001
+                return i, a, platform, [], "", str(e)
+            finally:
+                proxy._local.buf = None
+            return i, a, platform, posts, buf.getvalue(), ""
+
+        old_stdout = sys.stdout
+        sys.stdout = proxy
+        try:
+            # 并发上限 4：过高并发容易触发平台风控，且 Playwright 兜底时资源开销大
+            workers = min(4, max(1, n))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                # map 按账号顺序产出结果（日志顺序与串行版一致），任务本身并发执行
+                outcomes = list(ex.map(_fetch_one, list(enumerate(accounts, 1))))
+        finally:
+            sys.stdout = old_stdout
+
+        per_platform = {}  # 平台 -> 已抓数量（用于限流）
+        done_cnt = 0
+        for i, a, platform, posts, detail, error in outcomes:
+            name = a.name or (a.url[:36] if a.url else "未命名")
+            done_cnt += 1
+            if on_event is not None:
+                on_event({"type": "progress", "done": done_cnt, "total": n,
+                          "label": f"[{i}/{n}] {platform} · {name}"})
+            if error == "无法识别链接":
+                emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
+                continue
+            if error == "不支持时间线":
                 emit(f"[{i}/{n}] {platform} 不支持时间线")
                 continue
-            try:
-                # 捕获解析器内部 print 日志（Cookie 状态 / Playwright / 访客通行证等），一并回显
-                buf = io.StringIO()
-                # B站按账号 kind 决定只采视频/只采动态/混合；其他平台忽略
-                account_kind = getattr(a, "kind", "")
-                if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
-                    kwargs = {"kind": account_kind}
-                else:
-                    kwargs = {}
-                with contextlib.redirect_stdout(buf):
-                    posts = parser.fetch_user_posts(a.url, count=fetch_count, **kwargs)
-                _collect(posts)
-                all_posts.extend(posts)
-                total += len(posts)
-                # 搜索限流：每网站累计抓到 rate_count 个后暂停 rate_interval 秒
-                if rate_count > 0 and rate_interval > 0:
-                    per_platform[platform] = per_platform.get(platform, 0) + len(posts)
-                    if per_platform[platform] >= rate_count:
-                        emit(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
-                        time.sleep(rate_interval)
-                        per_platform[platform] = 0
-                # 区分主页作品 / 动态统计
-                dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
-                videos = len(posts) - dyns
-                kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(account_kind, "")
-                if dyns and videos:
-                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
-                elif dyns:
-                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
-                else:
-                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
-                detail = buf.getvalue().strip()
-                if detail:
-                    for line in detail.splitlines():
-                        line = line.strip()
-                        if line:
-                            emit(f"    {line}")
-            except Exception as e:
-                emit(f"[{i}/{n}] {platform} 失败: {e}")
+            if error:
+                emit(f"[{i}/{n}] {platform} 失败: {error}")
+                continue
+            emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
+            _collect(posts)
+            all_posts.extend(posts)
+            total += len(posts)
+            # 搜索限流：每网站累计抓到 rate_count 个后暂停 rate_interval 秒
+            if rate_count > 0 and rate_interval > 0 and posts:
+                per_platform[platform] = per_platform.get(platform, 0) + len(posts)
+                if per_platform[platform] >= rate_count:
+                    emit(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
+                    time.sleep(rate_interval)
+                    per_platform[platform] = 0
+            # 区分主页作品 / 动态统计
+            dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
+            videos = len(posts) - dyns
+            account_kind = getattr(a, "kind", "")
+            kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(account_kind, "")
+            if dyns and videos:
+                emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
+            elif dyns:
+                emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
+            else:
+                emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
+            if detail:
+                for line in detail.splitlines():
+                    line = line.strip()
+                    if line:
+                        emit(f"    {line}")
         # 自动导出（增量 or 单独）
         if all_posts:
             export_msg = self._auto_export(all_posts, incremental)

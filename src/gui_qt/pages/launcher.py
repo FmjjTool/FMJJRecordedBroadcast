@@ -14,11 +14,11 @@ import subprocess
 import webbrowser
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QTabWidget,
-    QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -27,13 +27,61 @@ from gui_qt.pages.base import BasePage
 from gui_qt.process_tree import assign_job, create_kill_job, terminate_job
 
 CARD_SOFT_QSS = (
-    "QPushButton { background: #eceefb; border: 1px solid #c6ccef;"
-    " border-radius: 16px; font-size: 11px; color: #3a3f6d; padding: 8px; }"
-    "QPushButton:hover { background: #dfe3f8; }")
+    "QToolButton { background: #eceefb; border: 1px solid #c6ccef;"
+    " border-radius: 16px; font-size: 12px; color: #3a3f6d; padding: 6px; }"
+    "QToolButton:hover { background: #dfe3f8; }")
 CARD_LINK_QSS = (
-    "QPushButton { background: #e8f5ee; border: 1px solid #b7e0c8;"
-    " border-radius: 16px; font-size: 11px; color: #1d5c3a; padding: 8px; }"
-    "QPushButton:hover { background: #d4eddf; }")
+    "QToolButton { background: #e8f5ee; border: 1px solid #b7e0c8;"
+    " border-radius: 16px; font-size: 12px; color: #1d5c3a; padding: 6px; }"
+    "QToolButton:hover { background: #d4eddf; }")
+
+# 图标浮动缩放区间：下限保证小窗口也清晰可见，上限防止大窗口溢出卡片
+ICON_MIN, ICON_MAX = 88, 168
+
+
+def _emoji_pixmap(ch: str) -> QPixmap:
+    """无图标项兜底：把 emoji 画成大 pixmap 当图标用（原文字模式 emoji 只有字号大小）。"""
+    pm = QPixmap(ICON_MIN, ICON_MIN)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    f = p.font()
+    f.setPixelSize(ICON_MIN - 12)
+    p.setFont(f)
+    p.drawText(pm.rect(), Qt.AlignCenter, ch)
+    p.end()
+    return pm
+
+
+class _CardButton(QToolButton):
+    """启动器卡片：图标在上文字在下，图标尺寸随卡片大小浮动缩放（固定下限/上限）。
+
+    QToolButton 默认水平 size policy 是 Fixed，卡片会被锁死在 sizeHint 宽度
+    （无图标时塌缩到几十像素），必须显式 Expanding 才能撑满网格格子。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pix = None
+        self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumHeight(150)
+        self.setMinimumWidth(150)
+
+    def set_icon_pixmap(self, pix: QPixmap):
+        self._pix = pix
+        self._apply_icon_size()
+
+    def _apply_icon_size(self):
+        if self._pix is None or self._pix.isNull():
+            return
+        side = max(ICON_MIN, min(ICON_MAX, min(self.width(), self.height()) - 64))
+        self.setIcon(QIcon(self._pix.scaled(
+            side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+        self.setIconSize(QSize(side, side))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_icon_size()
 
 
 class LauncherPage(BasePage):
@@ -76,8 +124,7 @@ class LauncherPage(BasePage):
         v.setContentsMargins(6, 6, 6, 6)
         self.panel_grid = QGridLayout()
         self.panel_grid.setSpacing(8)
-        v.addLayout(self.panel_grid)
-        v.addStretch(1)
+        v.addLayout(self.panel_grid, 1)
         return w
 
     def _refresh_panel(self):
@@ -99,19 +146,17 @@ class LauncherPage(BasePage):
             cv.setContentsMargins(0, 0, 0, 0)
             cv.setSpacing(2)
 
-            card = QPushButton()
-            card.setMinimumHeight(120)
+            # 卡片：图标在上文字在下、撑满格子，图标尺寸随卡片浮动（固定 88~168px 区间）
+            card = _CardButton()
             card.setCursor(Qt.PointingHandCursor)
             card.setStyleSheet(CARD_LINK_QSS if is_link else CARD_SOFT_QSS)
+            pix = None
             if icon and os.path.isfile(icon):
-                pm = QPixmap(icon)
-                if not pm.isNull():
-                    card.setIcon(QIcon(pm))
-                    card.setIconSize(pm.size().boundedTo(QSize(140, 140)))
-            if card.icon().isNull():
-                card.setText(f"{'🔗' if is_link else '📦'}\n{name}")
-            else:
-                card.setText(name)
+                pix = QPixmap(icon)
+            if pix is None or pix.isNull():
+                pix = _emoji_pixmap("🔗" if is_link else "📦")
+            card.set_icon_pixmap(pix)
+            card.setText(name)
             card.clicked.connect(lambda _c=False, idx=i: self._launch_item(idx))
             cv.addWidget(card, 1)
 
@@ -129,6 +174,11 @@ class LauncherPage(BasePage):
         for i in range(shown, 12):
             row, col = divmod(i, 4)
             self.panel_grid.addWidget(QWidget(), row, col)
+        # 行列均分拉伸：卡片撑满整个面板（原挤在顶部留大片空白）
+        for r in range(3):
+            self.panel_grid.setRowStretch(r, 1)
+        for c in range(4):
+            self.panel_grid.setColumnStretch(c, 1)
 
     def _set_item_linked(self, idx, state):
         if 0 <= idx < len(self.items):

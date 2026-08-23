@@ -97,10 +97,11 @@ class MusicInfoPage(BasePage):
         keyword = f"{singer} {song}"
 
         def work():
+            from concurrent.futures import ThreadPoolExecutor
             from music import ALL_PLATFORMS
             cls_map = {k: c for k, _n, c in ALL_PLATFORMS}
-            results = {}
-            for key, _name in PLATFORMS:
+
+            def _search_one(key):
                 try:
                     scraper = cls_map[key]()
                     if key == "5sing":
@@ -109,11 +110,16 @@ class MusicInfoPage(BasePage):
                             for s in ss:
                                 s.mode = s.mode or ""
                             merged.extend(ss)
-                        results[key] = merged
-                    else:
-                        results[key] = scraper.search(keyword, limit=8)
+                        return key, merged
+                    return key, scraper.search(keyword, limit=8)
                 except Exception:
-                    results[key] = []
+                    return key, []
+
+            # 五大音源并行搜索（原串行要等 5 个站挨个返回，太慢）
+            results = {}
+            with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as ex:
+                for key, songs in ex.map(_search_one, [k for k, _ in PLATFORMS]):
+                    results[key] = songs
             return results
 
         def done(result, err):
@@ -161,36 +167,45 @@ class MusicInfoPage(BasePage):
         song = self.song_entry.text().strip()
 
         def work():
+            from concurrent.futures import ThreadPoolExecutor
             from music import ALL_PLATFORMS
             scraper_map = {k: c() for k, _n, c in ALL_PLATFORMS}
-            final_songs, platforms, albums, lines = [], [], [], []
-            for key, song_item in selected:
-                name = dict(PLATFORMS)[key]
-                lines.append(f"[{name}] {song_item.song_name}")
+            names = dict(PLATFORMS)
+
+            def _fetch_one(item):
+                """单首详情：返回 (song_item, full_or_None, album_or_None, err_or_None)。"""
+                key, song_item = item
                 scraper = scraper_map.get(key)
                 if not scraper:
-                    final_songs.append(song_item)
-                    platforms.append(name)
-                    continue
+                    return song_item, None, None, None
                 try:
                     full = scraper.fetch_full_detail(song_item)
+                    album = None
                     if full:
-                        final_songs.append(full)
-                        platforms.append(name)
                         album_data = full.extra.get("_album")
                         if album_data:
                             from music import AlbumInfo
                             try:
-                                albums.append(AlbumInfo(**album_data))
+                                album = AlbumInfo(**album_data)
                             except Exception:
-                                pass
-                    else:
-                        final_songs.append(song_item)
-                        platforms.append(name)
+                                album = None
+                    return song_item, full, album, None
                 except Exception as e:
-                    final_songs.append(song_item)
-                    platforms.append(name)
-                    lines.append(f"  ⚠️ {e}")
+                    return song_item, None, None, str(e)
+
+            # 多首并行获取详情（原串行逐首等待，勾选多首时极慢）
+            final_songs, platforms, albums, lines = [], [], [], []
+            with ThreadPoolExecutor(max_workers=min(5, len(selected) or 1)) as ex:
+                outcomes = list(ex.map(_fetch_one, selected))
+            for (key, song_item), (orig, full, album, err) in zip(selected, outcomes):
+                name = names[key]
+                lines.append(f"[{name}] {song_item.song_name}")
+                if err:
+                    lines.append(f"  ⚠️ {err}")
+                final_songs.append(full or song_item)
+                platforms.append(name)
+                if album:
+                    albums.append(album)
             if not final_songs:
                 return "未获取到任何歌曲", None
             result = SearchResult(keyword=f"{singer} {song}".strip(),

@@ -383,7 +383,7 @@ class AssetPage(BasePage):
         bar.addWidget(self.plat_sel)
         self.search_entry = QLineEdit()
         self.search_entry.setPlaceholderText("🔍 搜索标题/作者/ID...")
-        self.search_entry.setFixedWidth(200)
+        self.search_entry.setMinimumWidth(200)  # 可随窗口拉伸（原固定 200 不自适应）
         # 防抖：停止输入 300ms 后才触发过滤，避免每敲一个字符就重扫
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -401,13 +401,16 @@ class AssetPage(BasePage):
         self.sort_sel.setFixedWidth(90)
         self.sort_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
         bar.addWidget(self.sort_sel)
-        bar.addStretch(1)
         refresh_btn = QPushButton("🔄 刷新")
         refresh_btn.clicked.connect(self._refresh_collected)
         bar.addWidget(refresh_btn)
+        # 搜索框伸展吃掉剩余空间：窗口越宽搜索框越长（原固定 200px 导致右侧大片空白）
+        bar.setStretchFactor(self.search_entry, 1)
         v.addLayout(bar)
 
         self.collected_scroll, _, self.collected_layout = self._make_scroll()
+        # 禁横向滚动：行内文字自动换行自适应宽度，保证右侧下载/删除按钮不滑走
+        self.collected_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         v.addWidget(self.collected_scroll, 1)
 
         # 首次扫描（后台，避免阻塞界面）
@@ -668,23 +671,28 @@ class AssetPage(BasePage):
             "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(6, 4, 6, 4)
-        # 缩略图：优先本地媒体图，其次网络封面
+        # 缩略图：优先本地媒体图，其次网络封面（放大到 96×64，原 72×50 太小看不清）
         local_img = next((m["path"] for m in it.get("media_files", []) if m["type"] == "image"), None)
         if local_img:
-            lbl = self._load_local_thumb(local_img, 72, 50)
+            lbl = self._load_local_thumb(local_img, 96, 64)
             h.addWidget(lbl)
         elif it["cover_url"]:
-            lbl = self._load_net_thumb(it["cover_url"], 72, 50)
+            lbl = self._load_net_thumb(it["cover_url"], 96, 64)
             h.addWidget(lbl)
         else:
             lbl = QLabel("🎬")
-            lbl.setFixedSize(72, 50)
+            lbl.setFixedSize(96, 64)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 22px;")
+            lbl.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 28px;")
             h.addWidget(lbl)
         # 文本（中间 expand）
         plat_cn = PLATFORM_CN.get(it["platform"], it["platform"])
-        title = (it["title"] or "-")[:40]
+        # 显示层截断 + 自动换行：长标题/长文件名会把行的最小宽度撑爆，
+        # 导致必须横向滚动才能看到右侧的下载/删除按钮（完整内容在 tooltip）
+        full_title = it["title"] or "-"
+        title = full_title[:60] + ("…" if len(full_title) > 60 else "")
+        fname = os.path.basename(it["file_path"])
+        fname = fname[:44] + ("…" if len(fname) > 44 else "")
         date_str = it["date_part"] if it["date_part"] else ""
         imgs = sum(1 for m in it.get("media_files", []) if m["type"] == "image")
         vids = sum(1 for m in it.get("media_files", []) if m["type"] == "video")
@@ -695,22 +703,26 @@ class AssetPage(BasePage):
             media_str += f" 🎬{vids}"
         text = (f"[{index}] [{plat_cn}] {title}{media_str}\n"
                 f"@{it['author'] or '-'}  播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}\n"
-                f"📅 {date_str}  📄 {os.path.basename(it['file_path'])}")
+                f"📅 {date_str}  📄 {fname}")
         txt = QLabel(text)
         txt.setStyleSheet("font-size: 11px;")
+        txt.setWordWrap(True)
+        txt.setToolTip(f"{full_title}\n\n📄 {os.path.basename(it['file_path'])}")
         h.addWidget(txt, 1)
-        # 右侧按钮：下载（有封面无媒体时）/ 删除
+        # 右侧按钮：下载（有封面无媒体时）/ 删除（放大到 42×32，原 32×28 不好点）
         if it.get("cover_url") and not it.get("media_files"):
             dl_btn = QPushButton("📥")
-            dl_btn.setFixedSize(32, 28)
+            dl_btn.setFixedSize(42, 32)
+            dl_btn.setToolTip("下载封面")
             dl_btn.setStyleSheet(
-                "background: transparent; border: 1px solid #c8cdd6; color: white;")
+                "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;")
             dl_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e))
             h.addWidget(dl_btn)
         del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(32, 28)
+        del_btn.setFixedSize(42, 32)
+        del_btn.setToolTip("删除该条目")
         del_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: white;")
+            "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;")
         del_btn.clicked.connect(lambda _=False, e=it: self._delete_item(e))
         h.addWidget(del_btn)
         self.collected_layout.addWidget(row)

@@ -95,6 +95,18 @@ class CalendarPage(BasePage):
             item = self.grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        # 清掉上一视图设置的行列拉伸（否则残留 stretch 影响新视图布局）
+        for r in range(32):
+            self.grid.setRowStretch(r, 0)
+        for c in range(7):
+            self.grid.setColumnStretch(c, 0)
+
+    def _stretch_grid(self, rows, cols):
+        """格子撑满整个滚动区：行/列均分拉伸（原挤在顶部留大片空白）。"""
+        for r in range(rows):
+            self.grid.setRowStretch(r, 1)
+        for c in range(cols):
+            self.grid.setColumnStretch(c, 1)
 
     def _scan(self):
         """扫描日期文件夹"""
@@ -150,7 +162,10 @@ class CalendarPage(BasePage):
                 "QPushButton { background: #d8e7f6; font-size: 15px; font-weight: bold; }"
                 "QPushButton:hover { background: #2a5a8c; }")
             btn.clicked.connect(lambda checked, yr=y: self._open_year(yr))
-            self.grid.addWidget(btn, i // 4, i % 4)
+            # 3 列 n 行排列（用户要求；原 4 列）
+            self.grid.addWidget(btn, i // 3, i % 3)
+        rows = (len(years) + 2) // 3
+        self._stretch_grid(rows, 3)
 
     def _open_year(self, year):
         self.current_year = year
@@ -178,6 +193,8 @@ class CalendarPage(BasePage):
                 btn.setEnabled(False)
             btn.setMinimumHeight(70)
             self.grid.addWidget(btn, (m - 1) // 4, (m - 1) % 4)
+        # 12 个月撑满：4 列 × 3 行均分拉伸（原挤在顶部，下方大片空白）
+        self._stretch_grid(3, 4)
 
     def _open_month(self, month):
         self.current_month = month
@@ -219,3 +236,8 @@ class CalendarPage(BasePage):
                     cell.setMinimumHeight(52)
                 self.grid.addWidget(cell, week + 1, col)
                 day += 1
+        # 7 列撑满；表头行不拉伸，日期行均分剩余高度
+        for c in range(7):
+            self.grid.setColumnStretch(c, 1)
+        for r in range(1, 7):
+            self.grid.setRowStretch(r, 1)

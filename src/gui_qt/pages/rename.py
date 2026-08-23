@@ -207,8 +207,10 @@ class RenamePage(BasePage):
         c3.addWidget(QLabel("📝 新文件名:"))
         self.new_name_label = QLabel("")
         self.new_name_label.setWordWrap(True)
+        # 深绿底必须配浅色文字：不指定 color 时浅色主题用黑字，黑字绿底看不清
         self.new_name_label.setStyleSheet(
-            "background: #0a2a0a; border-radius: 6px; padding: 6px; font-size: 12px;")
+            "background: #0a2a0a; color: #b9f6ca; border-radius: 6px; "
+            "padding: 6px; font-size: 12px;")
         c3.addWidget(self.new_name_label)
 
         # 操作按钮

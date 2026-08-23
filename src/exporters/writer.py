@@ -188,15 +188,18 @@ EXPORT_DIR = "video_data"
 def export_per_video(info_list: list, output_dir: Optional[str] = None, formats: Optional[list[str]] = None, skip_existing: bool = True) -> tuple[dict[str, list[str]], list[str]]:
     """按视频独立导出。skip_existing=True 时已存在文件跳过不覆盖。
 
+    并行导出（ThreadPoolExecutor，上限 8 线程）：单条导出是 xlsx 渲染/磁盘 IO 密集型，
+    条目多时串行极慢，并行后总耗时 ≈ 最慢单条。
     返回 (results, skipped)：results 为新导出的路径分组，skipped 为已存在被跳过的路径。
     文件被移走/删除/改名后（路径不存在），会重新保存。
     """
     if formats is None: formats = ["json","xlsx","md"]
     base_dir = output_dir or EXPORT_DIR
     os.makedirs(base_dir, exist_ok=True)
-    results: dict[str, list[str]] = {}
-    skipped: list[str] = []
-    for info in info_list:
+
+    def _export_one(info):
+        paths: list[str] = []
+        skipped_local: list[str] = []
         stem = _build_stem(info)
         # 按平台分文件夹: video_data/weibo/, video_data/douyin/, video_data/bilibili/
         plat_dir = os.path.join(base_dir, info.platform or "unknown")
@@ -205,16 +208,30 @@ def export_per_video(info_list: list, output_dir: Optional[str] = None, formats:
             path = os.path.join(plat_dir, f"{stem}.{fmt}")
             # 已存在则跳过（用户移走/删除/改名后路径不存在，会重新保存）
             if skip_existing and os.path.exists(path):
-                skipped.append(path)
+                skipped_local.append(path)
                 continue
             if fmt == "json":
                 export_json([info], path)
                 raw_path = os.path.join(plat_dir, f"{stem}_raw.json")
                 _export_raw_json(info, raw_path)
-                results.setdefault(info.platform, []).append(raw_path)
+                paths.append(raw_path)
             elif fmt == "xlsx": export_xlsx([info], path)
             elif fmt == "md": export_md([info], path)
-            results.setdefault(info.platform, []).append(path)
+            paths.append(path)
+        return info.platform, paths, skipped_local
+
+    if len(info_list) > 4:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(info_list))) as ex:
+            outcomes = list(ex.map(_export_one, info_list))
+    else:
+        outcomes = [_export_one(info) for info in info_list]
+
+    results: dict[str, list[str]] = {}
+    skipped: list[str] = []
+    for plat, paths, skipped_local in outcomes:
+        results.setdefault(plat, []).extend(paths)
+        skipped.extend(skipped_local)
     return results, skipped
 
 

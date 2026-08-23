@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from .models import SongInfo, AlbumInfo
+from .models import SongInfo, AlbumInfo, PlaylistInfo
 
 
 class BaseScraper(ABC):
@@ -30,6 +30,19 @@ class BaseScraper(ABC):
 
     def get_album(self, album_id: str) -> Optional[AlbumInfo]:
         return None
+
+    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+        """获取歌单信息（含歌曲列表），平台未实现时返回 None"""
+        return None
+
+    # ---- 链接/输入解析：从用户输入提取歌曲或歌单 ID ----
+    @staticmethod
+    def extract_song_id(text: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def extract_playlist_id(text: str) -> str:
+        raise NotImplementedError
 
     def get_play_url(self, song_id: str) -> str:
         return ""

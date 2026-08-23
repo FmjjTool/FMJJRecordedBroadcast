@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 from ..base_scraper import BaseScraper
-from ..models import SongInfo, AlbumInfo
+from ..models import SongInfo, AlbumInfo, PlaylistInfo
 from ..utils import get_client, make_headers, safe_json, parse_duration
 
 
@@ -52,7 +52,9 @@ class FiveSingScraper(BaseScraper):
 
     # ------------------------------------------------------------------
     def get_song_detail(self, song_id: str) -> Optional[SongInfo]:
-        """song_id = hash (from Kugou)"""
+        """song_id = hash (from Kugou) 或 yc/123456（5sing 歌曲页形式）"""
+        if "/" in song_id:
+            return self._parse_song_page(song_id)
         lyrics = self._get_lyrics(song_id)
         if not lyrics:
             return None
@@ -61,6 +63,126 @@ class FiveSingScraper(BaseScraper):
             platform=self.platform, platform_name=self.platform_name,
             url=f"https://5sing.kugou.com/m/detail/{song_id}.html",
         )
+
+    def _parse_song_page(self, song_id: str) -> Optional[SongInfo]:
+        """5sing 歌曲页 HTML 解析：标题「歌名 - 歌手 - 5sing音乐」+ 封面"""
+        url = f"https://5sing.kugou.com/{song_id}.html"
+        with get_client() as client:
+            resp = client.get(url, headers=make_headers(referer="https://5sing.kugou.com/"))
+        body = resp.text
+        tm = re.search(r"<title>([^<]+)</title>", body)
+        song_name, singer = "", ""
+        if tm:
+            parts = [p.strip() for p in tm.group(1).split(" - ")]
+            if parts:
+                song_name = parts[0]
+            if len(parts) >= 2:
+                singer = parts[1]
+        if not song_name:
+            return None
+        mode_key = song_id.split("/", 1)[0]
+        return SongInfo(
+            song_id=song_id,
+            song_name=song_name,
+            title=song_name,
+            singer=singer,
+            language=_detect_lang(song_name),
+            cover_url=_first_cover(body),
+            mode=FIVESING_MODES.get(mode_key, {}).get("name", ""),
+            platform=self.platform,
+            platform_name=self.platform_name,
+            url=url,
+        )
+
+    # ------------------------------------------------------------------
+    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+        """5sing 歌单解析：HTML 页面解析（playlist_id 为完整 URL 或 uid/dj/hex 路径）"""
+        url = self._normalize_playlist_url(playlist_id)
+        if not url:
+            return None
+        with get_client() as client:
+            resp = client.get(url, headers=make_headers(referer="https://5sing.kugou.com/"))
+        body = resp.text
+
+        name, creator = "", ""
+        tm = re.search(r"<title>([^<]+)</title>", body)
+        if tm:
+            parts = [p.strip() for p in tm.group(1).split(" - ")]
+            if parts:
+                name = parts[0]
+            if len(parts) >= 2:
+                creator = parts[1].replace("的歌单", "").strip()
+
+        songs, seen = [], set()
+        for m in re.finditer(r'href="(?:https?://5sing\.kugou\.com)?/?((?:yc|fc|bz)/\d+)\.html"[^>]*>\s*([^<]{1,60}?)\s*</a>', body):
+            sid, sname = m.group(1), m.group(2).strip()
+            if not sname or sid in seen:
+                continue
+            seen.add(sid)
+            mode_key = sid.split("/", 1)[0]
+            songs.append(SongInfo(
+                song_id=sid,
+                song_name=sname,
+                title=sname,
+                language=_detect_lang(sname),
+                mode=FIVESING_MODES.get(mode_key, {}).get("name", ""),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"https://5sing.kugou.com/{sid}.html",
+            ))
+        if not name and not songs:
+            return None
+
+        count_m = re.search(r"(\d+)\s*首", body)
+        return PlaylistInfo(
+            playlist_id=url,
+            name=name,
+            creator=creator,
+            cover_url=_first_cover(body),
+            description="",
+            song_count=int(count_m.group(1)) if count_m else len(songs),
+            songs=songs,
+            platform=self.platform,
+            platform_name=self.platform_name,
+            url=url,
+            extra={},
+        )
+
+    @staticmethod
+    def _normalize_playlist_url(text: str) -> str:
+        """把用户输入规范成 5sing 歌单 URL（https://5sing.kugou.com/{uid}/dj/{hex}.html）"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = re.search(r"(?:https?://5sing\.kugou\.com)?/?(\d+)/dj/([0-9a-fA-F]+)\.html", s)
+        if m:
+            return f"https://5sing.kugou.com/{m.group(1)}/dj/{m.group(2)}.html"
+        return ""
+
+    # ------------------------------------------------------------------
+    def get_play_url(self, song_id: str) -> str:
+        return f"https://m.kugou.com/api/v1/wechat/index?cmd=101&hash={song_id}"
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def extract_song_id(text: str) -> str:
+        """从输入解析歌曲 ID：yc/123456.html 链接或 yc/123456 形式或酷狗 hash"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = re.search(r"/(yc|fc|bz)/(\d+)\.html", s) or re.search(r"/m/(yc|fc|bz)/(\d+)", s)
+        if m:
+            return f"{m.group(1)}/{m.group(2)}"
+        if re.fullmatch(r"(yc|fc|bz)/\d+", s):
+            return s
+        if re.fullmatch(r"[a-fA-F0-9]{32}", s):
+            return s
+        return ""
+
+    @staticmethod
+    def extract_playlist_id(text: str) -> str:
+        """从输入解析歌单：返回规范化的歌单 URL（uid/dj/hex 形式）"""
+        return FiveSingScraper._normalize_playlist_url(text or "")
 
     # ------------------------------------------------------------------
     def get_album(self, album_id: str) -> Optional[AlbumInfo]:
@@ -195,6 +317,16 @@ class FiveSingScraper(BaseScraper):
 
 
 # ------------------------------------------------------------------
+
+def _first_cover(body: str) -> str:
+    """取页面第一张无缩略后缀的 wsingbssdl 大图作为封面"""
+    for m in re.finditer(r'(?:src|data-src|href)="(https://wsingbssdl\.kugou\.com/[^"]+?\.(?:jpg|jpeg|png))"', body):
+        u = m.group(1)
+        fname = u.rsplit("/", 1)[-1]
+        if "_" not in fname.split(".")[0]:
+            return u
+    return ""
+
 
 def _detect_lang(name: str) -> str:
     if not name: return ""

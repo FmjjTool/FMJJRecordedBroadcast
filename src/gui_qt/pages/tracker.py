@@ -239,6 +239,7 @@ class TrackerPage(BasePage):
         self.cards = []
         from tracker.accounts import load_accounts
         accounts = load_accounts()
+        self._reload_acc_list()
         if not accounts:
             lbl = QLabel("（暂无账号，请在「设置」里添加）")
             lbl.setStyleSheet("color: gray;")
@@ -246,9 +247,65 @@ class TrackerPage(BasePage):
             self.cards_layout.takeAt(self.cards_layout.count() - 1)
             self.cards_layout.addWidget(lbl)
             self.cards_layout.addStretch(1)
-        for acc in accounts:
-            self.cards.append(self._make_card(acc))
-        self._reload_acc_list()
+            return
+        # 骨架屏：先渲染灰色占位卡（点进页面秒开），
+        # 后台批量读各账号 xlsx 历史缓存（openpyxl 逐个读是卡顿根源），
+        # 完成后回主线程一次性替换为真实卡片
+        skeletons = [self._make_skeleton() for _ in accounts]
+        self._reload_gen = getattr(self, "_reload_gen", 0) + 1
+        gen = self._reload_gen
+
+        def work():
+            from tracker.accounts import load_history
+            return [load_history(acc.get("name", "")) for acc in accounts]
+
+        def done(histories, err):
+            if gen != getattr(self, "_reload_gen", 0):
+                return  # 期间又触发了 reload，本轮结果作废
+            self._clear_layout(self.cards_layout)
+            self.cards_layout.addStretch(1)
+            if err:
+                self.app.toast(f"读取历史缓存失败：{err}", "error")
+                histories = None
+            for i, acc in enumerate(accounts):
+                history = histories[i] if histories else []
+                self.cards.append(self._make_card(acc, history=history))
+
+        run_bg(work, done)
+
+    def _make_skeleton(self):
+        """骨架占位卡：与真实卡片同结构的灰色块，历史数据加载完成后被真实卡片替换。"""
+        sk = QFrame()
+        sk.setFixedHeight(112)
+        sk.setStyleSheet(
+            "QFrame { background: #ffffff; border-radius: 8px; }"
+            "QLabel { background: #dfe3ea; border-radius: 4px; }")
+        v = QVBoxLayout(sk)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
+        top = QHBoxLayout()
+        left = QVBoxLayout()
+        left.setSpacing(3)
+        name_bar = QLabel()
+        name_bar.setFixedSize(150, 16)
+        left.addWidget(name_bar)
+        plat_bar = QLabel()
+        plat_bar.setFixedSize(72, 11)
+        left.addWidget(plat_bar)
+        top.addLayout(left)
+        top.addStretch(1)
+        btn_bar = QLabel()
+        btn_bar.setFixedSize(70, 24)
+        top.addWidget(btn_bar)
+        v.addLayout(top)
+        grid_bar = QLabel()
+        grid_bar.setFixedHeight(54)
+        grid_bar.setStyleSheet("background: #e8ebf0; border-radius: 6px;")
+        v.addWidget(grid_bar)
+        self.cards_layout.takeAt(self.cards_layout.count() - 1)
+        self.cards_layout.addWidget(sk)
+        self.cards_layout.addStretch(1)
+        return sk
 
     def _clear_layout(self, lay):
         while lay.count():
@@ -259,7 +316,7 @@ class TrackerPage(BasePage):
             elif item.layout():
                 self._clear_layout(item.layout())
 
-    def _make_card(self, acc):
+    def _make_card(self, acc, history=None):
         from tracker.accounts import parse_url, load_history
         card = QFrame()
         card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
@@ -317,8 +374,9 @@ class TrackerPage(BasePage):
         grid.setContentsMargins(6, 4, 6, 4)
         grid.setSpacing(4)
 
-        # 预览只显示「当前」+「前一次」
-        history = load_history(acc.get("name", ""))
+        # 预览只显示「当前」+「前一次」（骨架加载路径已预读 history，避免重复读 xlsx）
+        if history is None:
+            history = load_history(acc.get("name", ""))
         preview = history[:2]
         self._render_preview(grid, preview)
         if history:
@@ -483,7 +541,7 @@ class TrackerPage(BasePage):
         run_bg(work, done)
 
     def _collect_all(self, silent=False):
-        """批量采集：按平台筛选（全部/某平台），逐个串行采集。silent=True 用于定时采集。"""
+        """批量采集：按平台筛选（全部/某平台），4 个一批并发采集。silent=True 用于定时采集。"""
         if self._collecting:
             if not silent:
                 self.app.toast("正在采集中，请稍候", "info")
@@ -499,22 +557,36 @@ class TrackerPage(BasePage):
                 self.app.toast("没有符合条件的账号", "info")
             return
         if not silent:
-            self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号...", "info")
+            self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
         self.batch_prog.setRange(0, max(len(accounts), 1))
         self.batch_prog.setValue(0)
 
-        def step(idx):
-            if idx >= len(accounts):
+        # 并发波次：4 个一批（原串行逐个等待，账号多时总耗时=各账号之和）
+        from collections import deque
+        queue = deque(accounts)
+        state = {"running": 0, "done": 0}
+        total = len(accounts)
+
+        def _next_wave():
+            while queue and state["running"] < 4:
+                acc = queue.popleft()
+                state["running"] += 1
+                self._collect_account(acc, on_done=_finish_one)
+
+        def _finish_one():
+            # run_bg 的 done 回调在主线程执行，此处补位安全
+            state["running"] -= 1
+            state["done"] += 1
+            self.batch_prog.setValue(state["done"])
+            if queue:
+                _next_wave()
+            elif state["running"] == 0:
                 if not silent:
                     self.app.toast("✅ 批量采集完成", "info")
-                self.batch_prog.setValue(len(accounts))
                 self._collecting = False
-                return
-            self.batch_prog.setValue(idx)
-            self._collect_account(accounts[idx], on_done=lambda i=idx: step(i + 1))
 
         self._collecting = True
-        step(0)
+        _next_wave()
 
     # ---------- 定时采集 ----------
     def _toggle_collect_timer(self):

@@ -5,8 +5,11 @@
   1. room/enter 接口（web_rid 短号换 roomId）+ 主播信息
   2. im/fetch 接口（带 ttwid cookie）→ cursor / internalExt / pushServer
   3. Playwright 真实浏览器（真实指纹 + 真实 mssdk.js）→ frontierSign 生成有效签名
-  4. WebSocket 连接 → 完整协议（ack + 心跳 hb）保持连接
+  4. WebSocket 连接（握手凭证 = ttwid 匿名会话 + sessionid 登录凭证：
+     ttwid 过握手强制校验，sessionid 决定礼物消息是否推送）
+     → 完整协议（ack + 心跳 hb）保持连接
   5. 解析 PushFrame → Response → Webcast* 消息（弹幕/礼物/进场/点赞/关注）
+  6. WS 确认收到服务端推送后才关闭浏览器释放登录 Cookie（出弹幕后才断 Cookie 链接）
 
 用法：
   fetcher = DouyinLiveFetcher(room_num, on_message=..., on_room_info=..., on_status=...)
@@ -60,8 +63,12 @@ def stub_md5(room_id, unique_id):
     return hashlib.md5(stub.encode()).hexdigest()
 
 
-def fetch_room_info(room_num):
-    """通过 room/enter 接口拿房间信息 + 主播信息。"""
+def fetch_room_info(room_num, login=True):
+    """通过 room/enter 接口拿房间信息 + 主播信息。
+
+    login=True 合并登录 Cookie（建连拿原画流用，一次性）；
+    login=False 游客态（统计采集/开播监控等高频循环用，不占用账号）。
+    """
     import urllib.parse as up
     info = {"roomNum": room_num, "uniqueId": DEFAULT_UNIQUE_ID}
     cache = _load_room_cache()
@@ -71,7 +78,7 @@ def fetch_room_info(room_num):
             c.get(f"https://live.douyin.com/{room_num}", timeout=15)
             cookie_str = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
             # 合并 Cookie 管理器的抖音登录 Cookie（匿名 cookie 拿不到原画等高画质流）
-            login_cookie = _get_douyin_cookie()
+            login_cookie = _get_douyin_cookie() if login else ""
             if login_cookie:
                 have = {p.split("=", 1)[0].strip()
                         for p in cookie_str.split(";") if "=" in p}
@@ -128,12 +135,9 @@ def fetch_room_info(room_num):
                 stream_url = room.get("stream_url") or {}
                 flv = stream_url.get("flv_pull_url") or {}
                 if isinstance(flv, dict) and flv:
-                    info["streams"] = dict(flv)
-                    # 原画兜底：flv_pull_url 没有 _origin 时，从 pull_data.stream_data 解析
-                    if "_origin" not in info["streams"]:
-                        origin_url = _extract_origin_stream(stream_url)
-                        if origin_url:
-                            info["streams"] = {"_origin": origin_url, **info["streams"]}
+                    # 原画/蓝光直链在 live_core_sdk_data（flv_pull_url 最高只有 1080P）
+                    core = _extract_core_streams(stream_url)
+                    info["streams"] = {**core, **flv}
                     if stream_url.get("hls_pull_url"):
                         info["hls"] = stream_url["hls_pull_url"]
                 # 更新缓存（roomId 是稳定标识，缓存起来供风控时兜底）
@@ -206,13 +210,18 @@ def _fmt_count(v):
 
 # ==================== 设置存储 ====================
 DEFAULT_SETTINGS = {
-    "monitor_interval": 30,     # 弹幕监控间隔（秒）
+    "monitor_interval": 30,     # 开播监控检测间隔（秒，供「👁 开播监控」用）
     "stats_interval": 1,        # 统计数据采集间隔（秒）
-    "room_list": "",            # 监控房间列表（每行一个）
+    "poll_interval": 60,        # 轮询间隔（秒）
     "save_danmaku": False,      # 保存弹幕到文件
-    "save_stats": False,        # 保存统计数据
+    "save_stats": True,         # 保存统计数据（默认勾选）
     "keep_scroll": True,        # 保持滚动（强制最新）
     "dark_mode": True,          # 深色模式
+    "last_room": "582775732015",  # 默认房号
+    "poll_enabled": True,       # 轮询开关（顶栏）
+    "mode": "danmaku_only",     # 弹幕方式：默认仅弹幕
+    "auto_record": False,       # 自动录播（勾选后拿到流即录）
+    "auto_save_danmaku": True,  # 自动导出回放包
 }
 
 
@@ -230,10 +239,20 @@ def load_settings():
     if p.exists():
         try:
             import json
-            return {**DEFAULT_SETTINGS, **json.loads(p.read_text(encoding="utf-8"))}
+            data = json.loads(p.read_text(encoding="utf-8"))
+            # 一次性迁移：旧版本默认值变更（保存统计 False→True）。
+            # 老文件里的 save_stats=False 是旧默认值而非用户选择，丢弃让新默认生效；
+            # 迁移后写入 _cfg_v1 标记，用户之后的手动开关正常持久化。
+            if not data.get("_cfg_v1"):
+                data.pop("save_stats", None)
+                data["_cfg_v1"] = True
+            data.pop("room_list", None)  # 旧版遗留键（无消费者），加载时清掉
+            return {**DEFAULT_SETTINGS, **data}
         except Exception:
             pass
-    return dict(DEFAULT_SETTINGS)
+    d = dict(DEFAULT_SETTINGS)
+    d["_cfg_v1"] = True
+    return d
 
 
 def _login_state_path():
@@ -255,21 +274,36 @@ def _get_douyin_cookie():
         return ""
 
 
-def _extract_origin_stream(stream_url):
-    """从 stream_url.pull_data.stream_data 里解析原画 FLV 地址（登录态下才有）。"""
+def _extract_core_streams(stream_url):
+    """解析 live_core_sdk_data 里的高画质直链（登录态才有）。
+
+    新版结构：stream_url.live_core_sdk_data.pull_data.stream_data 为 JSON 字符串
+    {"common":..., "data":{"origin":{"main":{"flv":...}}, "md":{...}, "uhd":{...}}}，
+    质量树在 "data" 键下；旧版：stream_url.pull_data.stream_data 根下直接是质量树。
+    origin=原画（_or4 后缀），md=蓝光档，均高于 flv_pull_url 的 FULL_HD1(1080P)。"""
     import json as _json
-    pull = stream_url.get("pull_data") or {}
-    raw = pull.get("stream_data")
-    if not raw:
-        return None
-    try:
-        data = _json.loads(raw) if isinstance(raw, str) else raw
-        origin = (data or {}).get("origin") or {}
-        main = origin.get("main") or {}
-        flv = main.get("flv") or ""
-        return flv or None
-    except Exception:
-        return None
+    outs = {}
+    candidates = []
+    lcd = (stream_url.get("live_core_sdk_data") or {}).get("pull_data") or {}
+    if lcd.get("stream_data"):
+        candidates.append(lcd["stream_data"])
+    pd = stream_url.get("pull_data") or {}
+    if pd.get("stream_data"):
+        candidates.append(pd["stream_data"])
+    for raw in candidates:
+        try:
+            data = _json.loads(raw) if isinstance(raw, str) else raw
+            data = (data or {}).get("data") or data  # 新版多包一层 {common, data}
+            for key, name in (("_origin", "origin"), ("_md", "md")):
+                main = ((data.get(name) or {}).get("main")) or {}
+                flv = main.get("flv") or ""
+                if flv and key not in outs:
+                    outs[key] = flv
+            if outs:
+                break
+        except Exception:
+            continue
+    return outs
 
 
 def _parse_cookie_str(cookie_str, domain):
@@ -296,8 +330,8 @@ def save_settings(s):
 
 
 def check_live_status(room_num):
-    """检测直播间是否在直播。返回 (是否直播中, info)。"""
-    info = fetch_room_info(room_num)
+    """检测直播间是否在直播（游客态，不占用 Cookie）。返回 (是否直播中, info)。"""
+    info = fetch_room_info(room_num, login=False)
     return info.get("status") == 2, info
 
 
@@ -316,50 +350,7 @@ def _stats_dir():
     return _danmaku_dir()
 
 
-# ==================== sessionid 凭证加密存储（存 src 内） ====================
-def _session_key_path():
-    from pathlib import Path
-    return Path(__file__).resolve().parent / ".danmaku.key"
-
-
-def _session_dat_path():
-    from pathlib import Path
-    return Path(__file__).resolve().parent / ".danmaku_session.dat"
-
-
-def _get_cipher():
-    from cryptography.fernet import Fernet
-    kp = _session_key_path()
-    if kp.exists():
-        key = kp.read_bytes()
-    else:
-        key = Fernet.generate_key()
-        kp.write_bytes(key)
-    return Fernet(key)
-
-
-def save_sessionid(sessionid):
-    """加密保存 sessionid 到 src/toolbox/.danmaku_session.dat。"""
-    try:
-        cipher = _get_cipher()
-        _session_dat_path().write_bytes(cipher.encrypt(sessionid.encode("utf-8")))
-        return True
-    except Exception:
-        return False
-
-
-def load_sessionid():
-    """解密读取已保存的 sessionid，无或失败返回空串。"""
-    p = _session_dat_path()
-    if not p.exists():
-        return ""
-    try:
-        cipher = _get_cipher()
-        return cipher.decrypt(p.read_bytes()).decode("utf-8")
-    except Exception:
-        return ""
-
-
+# ==================== 统计落盘 ====================
 def append_stats_file(room_num, stats_line):
     """把一条统计数据追加写入文件（download/stats/房间号_日期.csv）。"""
     try:
@@ -401,7 +392,7 @@ class StatsCollector:
     def _run(self):
         while not self._stop.is_set():
             try:
-                info = fetch_room_info(self.room_num)
+                info = fetch_room_info(self.room_num, login=False)
                 if self.on_stats:
                     try:
                         self.on_stats(info)
@@ -449,172 +440,20 @@ class LiveMonitor:
             self._stop.wait(self.interval)
 
 
-# ============ 浏览器端 JS（完整协议 + 持续监听） ============
-_START_JS = r"""
+# ============ 浏览器端 JS（过风控 + 拿 WS 连接参数，随即关浏览器释放 Cookie） ============
+_PREP_JS = r"""
 async (args) => {
   const roomId = args.roomId, uniqueId = args.uniqueId, md5hex = args.md5hex;
   const out = {};
   const UA = navigator.userAgent;
-  window.__queue = [];
-
-  function encVarint(n) { n=BigInt(n); const a=[]; while(n>0x7fn){a.push(Number(n&0x7fn)|0x80);n>>=7n;} a.push(Number(n)); return a; }
-  function encPushFrame(o) {
-    const parts=[];
-    if(o.payloadType){const s=new TextEncoder().encode(o.payloadType);parts.push(0x3A,s.length,...s);}
-    if(o.payload){parts.push(0x42,o.payload.length,...o.payload);}
-    if(o.logId){parts.push(0x10,...encVarint(o.logId));}
-    return new Uint8Array(parts);
-  }
-  const heartbeat = () => encPushFrame({payloadType:'hb'});
-  const ackMsg = (ext,logId) => encPushFrame({payloadType:'ack', payload:new TextEncoder().encode(ext||''), logId});
 
   function makeReader(b){let p=0;return{varint(){let r=0n,s=0n;while(true){const x=b[p++];r|=BigInt(x&0x7f)<<s;if(!(x&0x80))break;s+=7n;}return r;},str(l){const s=new TextDecoder().decode(b.slice(p,p+l));p+=l;return s;},take(l){const s=b.slice(p,p+l);p+=l;return s;},skip(n){p+=n;},get pos(){return p;}};}
-  function decodePushFrame(b){const r=makeReader(b);let logId=null,payloadType=null,payload=null;const headers={};
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===0){const v=r.varint();if(f===2)logId=v;}
-      else if(w===2){const l=Number(r.varint());
-        if(f===5){const e=r.pos+l;let key=null,val=null;while(r.pos<e){const t2=Number(r.varint());const f2=t2>>3;const l2=Number(r.varint());if(f2===1)key=r.str(l2);else if(f2===2)val=r.str(l2);else r.skip(l2);}if(key)headers[key]=val;}
-        else if(f===7)payloadType=r.str(l);else if(f===8){payload=b.slice(r.pos,r.pos+l);r.skip(l);}else r.skip(l);}
-      else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return{logId,payloadType,payload,headers};}
   function decodeResponse(b){const r=makeReader(b);let needAck=false,cursor=null,internalExt=null;const messages=[];
     while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
       if(w===0){const v=r.varint();if(f===9)needAck=(v===1n);}
       else if(w===2){const l=Number(r.varint());if(f===1){messages.push(b.slice(r.pos,r.pos+l));r.skip(l);}else if(f===2)cursor=r.str(l);else if(f===5)internalExt=r.str(l);else r.skip(l);}
       else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
     return{needAck,cursor,internalExt,messages};}
-  function parseUser(b){ // 解析 User，返回 nickname（field 3）
-    const r=makeReader(b);
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r.varint());if(f===3){const s=r.str(l);return s;}r.skip(l);}
-      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return null;
-  }
-  function parseImageUrl(b){ // 解析 Image，返回 urlList[0]（field 1）
-    const r=makeReader(b);
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r.varint());if(f===1){const s=r.str(l);return s;}r.skip(l);}
-      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return null;
-  }
-  function parseGift(b){ // 解析 GiftStruct：name(16)/diamondCount(9)/image(1→Image.urlList[0])
-    const r=makeReader(b);let name=null,price=null,icon=null;
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===0){const v=r.varint();if(f===9)price=Number(v);}
-      else if(w===2){const l=Number(r.varint());
-        if(f===16)name=r.str(l);
-        else if(f===1)icon=parseImageUrl(r.take(l));
-        else r.skip(l);}
-      else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return{name,price,icon};
-  }
-  function parsePieces(b){ // 解析 Text.pieces(4)：[{type:1 text stringValue=11} | {type:2 emoji imageValue=25→image=1}]
-    const r=makeReader(b);const out=[];
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r.varint());const d=r.take(l);
-        if(f===4){const pr=makeReader(d);let ptype=null,str=null,img=null;
-          while(pr.pos<d.length){const t2=Number(pr.varint());const f2=t2>>3,w2=t2&7;
-            if(w2===0){const v=pr.varint();if(f2===1)ptype=Number(v);}
-            else if(w2===2){const l2=Number(pr.varint());
-              if(f2===11)str=pr.str(l2);
-              else if(f2===25){const imgb=pr.take(l2);const ir=makeReader(imgb);
-                while(ir.pos<imgb.length){const t3=Number(ir.varint());const f3=t3>>3,w3=t3&7;
-                  if(w3===2){const l3=Number(ir.varint());if(f3===1)img=ir.str(l3);else ir.skip(l3);}
-                  else if(w3===0)ir.varint();else if(w3===1)ir.skip(8);else if(w3===5)ir.skip(4);else break;}}
-              else pr.skip(l2);}
-            else if(w2===1)pr.skip(8);else if(w2===5)pr.skip(4);else break;}
-          if(img)out.push({type:2,url:img,text:str||''});
-          else if(str!=null)out.push({type:1,text:str});}}
-      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return out;
-  }
-  function parseText(b){ // 解析 Text，返回 defaultPattern（field 2，礼物显示名）
-    const r=makeReader(b);
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r.varint());if(f===2){const s=r.str(l);return s;}r.skip(l);}
-      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return null;
-  }
-  function parseTrayInfo(b){ // 解析 GiftTrayInfo，返回 trayDisplayText.defaultPattern（field 1 → Text field 2）
-    const r=makeReader(b);
-    while(r.pos<b.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r.varint());const d=b.slice(r.pos,r.pos+l);r.skip(l);
-        if(f===1){const s=parseText(d);if(s)return s;}}
-      else if(w===0)r.varint();else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    return null;
-  }
-  function extractMsg(m){
-    // 1. 解析 Message 外层：field 1 = method（类型名），field 2 = payload（真正消息体）
-    const r0=makeReader(m);
-    let method=null,payload=null;
-    while(r0.pos<m.length){const tag=Number(r0.varint());const f=tag>>3,w=tag&7;
-      if(w===2){const l=Number(r0.varint());const d=m.slice(r0.pos,r0.pos+l);r0.skip(l);
-        if(f===1)method=new TextDecoder('utf-8',{fatal:false}).decode(d);else if(f===2)payload=d;}
-      else if(w===0)r0.varint();else if(w===1)r0.skip(8);else if(w===5)r0.skip(4);else break;}
-    if(!payload)payload=m; // 兜底：无 wrapper 时整个就是消息体
-    const type=method||'';
-
-    // 2. 解析 payload（各消息类型 user 字段号不同：Chat/Social/Member=2, Gift=7, Like=5）
-    // 仅对已知用户消息类型解析昵称，其它类型 field 2 非 User 结构（解析出乱码）
-    const userFieldMap={WebcastGiftMessage:7,WebcastLikeMessage:5,WebcastChatMessage:2,WebcastMemberMessage:2,WebcastSocialMessage:2,WebcastEmojiChatMessage:2};
-    const userField=userFieldMap[type];
-    const r=makeReader(payload);
-    let nickname=null,content=null,giftName=null,giftPrice=null,giftIcon=null,comboCount=null,repeatCount=null,action=null,trayText=null;
-    let repeatEnd=null,giftCount=null,likeTotal=null,likeCount=null,followCount=null,roomTotal=null,roomTotalUser=null,memberCount=null,rtf=null;
-    while(r.pos<payload.length){const tag=Number(r.varint());const f=tag>>3,w=tag&7;
-      if(w===0){const v=r.varint();
-        if(f===5){if(type==='WebcastGiftMessage')repeatCount=v;}
-        else if(f===6){if(type==='WebcastGiftMessage')comboCount=v;else if(type==='WebcastSocialMessage')followCount=v;}
-        else if(f===2){if(type==='WebcastGiftMessage')giftCount=v;else if(type==='WebcastLikeMessage')likeCount=v;}
-        else if(f===3){if(type==='WebcastLikeMessage')likeTotal=v;else if(type==='WebcastRoomUserSeqMessage')roomTotal=v;else if(type==='WebcastMemberMessage')memberCount=v;}
-        else if(f===7){if(type==='WebcastRoomUserSeqMessage')roomTotalUser=v;}
-        else if(f===9){if(type==='WebcastGiftMessage')repeatEnd=v;}}
-      else if(w===2){const l=Number(r.varint());const d=payload.slice(r.pos,r.pos+l);r.skip(l);
-        if(f===userField){nickname=parseUser(d);}
-        else if(f===3&&type!=='WebcastLikeMessage'&&type!=='WebcastRoomUserSeqMessage'){content=new TextDecoder('utf-8',{fatal:false}).decode(d);}
-        else if(f===8&&type==='WebcastRoomUserSeqMessage'){roomTotalUser=new TextDecoder('utf-8',{fatal:false}).decode(d);}
-        else if(f===15&&type==='WebcastGiftMessage'){const g=parseGift(d);if(g.name)giftName=g.name;if(g.price!=null)giftPrice=g.price;if(g.icon)giftIcon=g.icon;}
-        else if(f===11){action=new TextDecoder('utf-8',{fatal:false}).decode(d);}
-        else if(f===19){trayText=parseText(d);}
-        else if(f===21){const t=parseTrayInfo(d);if(t)trayText=t;}
-        else if(f===41&&type==='WebcastChatMessage'){rtf=parsePieces(d);}
-        else if(f===4&&type==='WebcastEmojiChatMessage'){rtf=parsePieces(d);}}
-      else if(w===1)r.skip(8);else if(w===5)r.skip(4);else break;}
-    // 3. 根据类型构建内容
-    let outContent='';
-    if(type==='WebcastGiftMessage'){
-      const cnt=comboCount!=null?comboCount:(repeatCount!=null?repeatCount:1);
-      const gname=giftName||trayText||'礼物';
-      outContent='送出了'+gname+' x'+cnt;
-    }else if(type==='WebcastMemberMessage'){
-      outContent=action||'进入直播间';
-    }else if(type==='WebcastLikeMessage'){
-      outContent='为主播点赞了('+(likeCount!=null?likeCount:1)+')';
-    }else if(type==='WebcastSocialMessage'){
-      outContent='关注了主播';
-    }else if(type==='WebcastChatMessage'||type==='WebcastEmojiChatMessage'){
-      outContent=content||'';
-    }else if(type==='WebcastRoomStatsMessage'){
-      // 房间实时统计：displayMiddle(field 3) 已进 content，如 "1.2万"
-      outContent=content||'';
-    }else{
-      // 系统消息等：提取有意义的中文短语，过滤 JSON 噪音 + 截断
-      const txt=new TextDecoder('utf-8',{fatal:false}).decode(payload);
-      const noise=/荣誉等级|粉丝团等级|级勋章|勋章|人气开场|重庆|中部|新星|万粉团|多阶段任务|tier_icon|default_selector|is_current|desc|icon_src|selector|直播已结束|http|douyinpic|\.com|\.png|\.jpg|\.webp|\.mp4|\.jpeg|\.gif|current|target|status|already|light_current|a_type_roof_text|pro_conf|reward_list|小时榜|挑战榜|人气榜/;
-      // 提取中文短语，去掉尾部的 JSON 分隔符（引号/逗号/冒号/反斜杠）
-      const m2=txt.match(/[\u4e00-\u9fff][\u4e00-\u9fff\w\s]{3,60}/g)||[];
-      const parts=m2.map(t=>t.replace(/[\",:;\\]+$/g,'').trim())
-                     .filter(t=>t.length>=4&&!noise.test(t));
-      outContent=parts[0]||'';
-      if(outContent.length>40)outContent=outContent.slice(0,40)+'…';
-    }
-    return{type,nickname,content:outContent,
-      giftName:giftName,giftPrice:giftPrice,giftIcon:giftIcon,repeatEnd:repeatEnd,
-      giftCount:(repeatCount!=null?repeatCount:(comboCount!=null?comboCount:1)),
-      likeTotal:likeTotal,likeCount:likeCount,followCount:followCount,
-      roomTotal:roomTotal,roomTotalUser:roomTotalUser,memberCount:memberCount,
-      rtf:(rtf&&rtf.length?rtf:null)};
-  }
 
   out.signature = window.byted_acrawler.frontierSign({'X-MS-STUB':md5hex})['X-Bogus'];
 
@@ -633,50 +472,539 @@ async (args) => {
   }catch(e){out.error='imfetch:'+e.message;}
 
   if(!cursor||!internalExt||!pushServer||!out.signature){out.result='missing';return out;}
-
-  const wsParams=new URLSearchParams({aid:'6383',app_name:'douyin_web',browser_language:'zh-CN',browser_name:'Mozilla',browser_online:'true',browser_platform:'Win32',browser_version:UA,compress:'gzip',cookie_enabled:'true',device_platform:'web',did_rule:'3',endpoint:'live_pc',heartbeatDuration:'0',host:'https://live.douyin.com',identity:'audience',insert_task_id:'',live_id:'1',live_reason:'',need_persist_msg_count:'15',screen_height:screen.height,screen_width:screen.width,support_wrds:'1',tz_name:'Asia/Shanghai',update_version_code:'1.0.14-beta.0',version_code:'180800',webcast_sdk_version:'1.0.14-beta.0',room_id:roomId,user_unique_id:uniqueId,cursor:cursor,internal_ext:internalExt,signature:out.signature});
-  const wsUrl=pushServer+'?'+wsParams.toString();
-
-  window.__wsClosed = false;
-  try {
-    const ws = new WebSocket(wsUrl);
-    window.__ws = ws;
-    ws.binaryType = 'arraybuffer';
-    ws.onopen = () => { out.wsOpen = true; try{ws.send(heartbeat());}catch(e){} };
-    ws.onmessage = async (ev) => {
-      const bytes = new Uint8Array(ev.data);
-      let frame; try { frame = decodePushFrame(bytes); } catch(e){ return; }
-      let payload = frame.payload;
-      if (frame.headers['compress_type']==='gzip' && payload) {
-        try { const ds=new DecompressionStream('gzip'); const st=new Blob([payload]).stream().pipeThrough(ds); payload=new Uint8Array(await new Response(st).arrayBuffer()); } catch(e){}
-      }
-      let needAck=false, ext=frame.headers['im-internal_ext']||'';
-      if (payload) {
-        try {
-          const res = decodeResponse(payload);
-          if (res.needAck) needAck=true;
-          if (res.internalExt) ext=res.internalExt;
-          for (const m of res.messages) {
-            const e = extractMsg(m);
-            if (e.type) {
-              window.__queue.push(e);
-            }
-          }
-        } catch(e){}
-      }
-      if (needAck) { try { ws.send(ackMsg(ext, frame.logId)); } catch(e){} }
-    };
-    ws.onclose = (e) => { window.__wsClosed = true; };
-    window.__hbTimer = setInterval(() => { if (ws.readyState===1) { try{ws.send(heartbeat());}catch(e){} } }, 10000);
-  } catch(e) {
-    out.error = 'ws:'+e.message;
-  }
+  out.cursor=cursor;
+  out.internalExt=internalExt;
+  out.pushServer=pushServer;
+  out.screenHeight=screen.height;
+  out.screenWidth=screen.width;
   return out;
 }
 """
 
-_READ_QUEUE_JS = "() => { const q = window.__queue || []; window.__queue = []; return q; }"
-_WS_CLOSED_JS = "() => !!window.__wsClosed"
+
+# ==================== Python 端 protobuf 编解码（WS 弹幕消息） ====================
+# 浏览器负责过风控 + 拿连接参数（signature/cursor/internalExt/pushServer）+ 提供
+# ttwid/sessionid 握手凭证；WS 确认收流后才关浏览器释放登录 Cookie。之后弹幕 WS
+# 由 Python 直连，握手仅带 ttwid+sessionid（会话凭证，连接保持期不占浏览器登录态）。
+
+import gzip as _gzip
+import re as _re
+
+
+class _Reader:
+    """protobuf 流式读取器（对应 JS makeReader）。"""
+
+    __slots__ = ("b", "p")
+
+    def __init__(self, b):
+        self.b = b
+        self.p = 0
+
+    def varint(self):
+        r = 0
+        s = 0
+        while True:
+            x = self.b[self.p]
+            self.p += 1
+            r |= (x & 0x7F) << s
+            if not (x & 0x80):
+                break
+            s += 7
+        return r
+
+    def str_(self, l):
+        v = bytes(self.b[self.p:self.p + l]).decode("utf-8", errors="replace")
+        self.p += l
+        return v
+
+    def take(self, l):
+        v = bytes(self.b[self.p:self.p + l])
+        self.p += l
+        return v
+
+    def skip(self, n):
+        self.p += n
+
+    @property
+    def pos(self):
+        return self.p
+
+
+def _enc_varint(n):
+    a = []
+    while n > 0x7F:
+        a.append((n & 0x7F) | 0x80)
+        n >>= 7
+    a.append(n)
+    return bytes(a)
+
+
+def _enc_push_frame(payload_type="", payload=b"", log_id=None):
+    """编码 PushFrame（心跳 hb / 应答 ack），字段号与 JS encPushFrame 一致。"""
+    parts = []
+    if payload_type:
+        s = payload_type.encode()
+        parts.append(b"\x3a" + _enc_varint(len(s)) + s)   # field 7 LEN
+    if payload:
+        parts.append(b"\x42" + _enc_varint(len(payload)) + payload)  # field 8 LEN
+    if log_id:
+        parts.append(b"\x10" + _enc_varint(log_id))       # field 2 VARINT
+    return b"".join(parts)
+
+
+def _heartbeat():
+    return _enc_push_frame(payload_type="hb")
+
+
+def _ack_msg(ext, log_id):
+    return _enc_push_frame(payload_type="ack", payload=(ext or "").encode(), log_id=log_id)
+
+
+def decode_push_frame(b):
+    """解码 PushFrame → {logId, payloadType, payload, headers}。"""
+    r = _Reader(b)
+    log_id = None
+    payload_type = None
+    payload = None
+    headers = {}
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 0:
+            v = r.varint()
+            if f == 2:
+                log_id = v
+        elif w == 2:
+            l = r.varint()
+            if f == 5:  # headers map<str,str>
+                end = r.pos + l
+                key = val = None
+                while r.pos < end:
+                    t2 = r.varint()
+                    f2, w2 = t2 >> 3, t2 & 7
+                    if w2 != 2:
+                        break
+                    l2 = r.varint()
+                    if f2 == 1:
+                        key = r.str_(l2)
+                    elif f2 == 2:
+                        val = r.str_(l2)
+                    else:
+                        r.skip(l2)
+                if key is not None:
+                    headers[key] = val or ""
+            elif f == 7:
+                payload_type = r.str_(l)
+            elif f == 8:
+                payload = r.take(l)
+            else:
+                r.skip(l)
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return {"logId": log_id, "payloadType": payload_type, "payload": payload, "headers": headers}
+
+
+def decode_response(b):
+    """解码 Response → {needAck, cursor, internalExt, messages}。"""
+    r = _Reader(b)
+    need_ack = False
+    cursor = None
+    internal_ext = None
+    messages = []
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 0:
+            v = r.varint()
+            if f == 9:
+                need_ack = (v == 1)
+        elif w == 2:
+            l = r.varint()
+            if f == 1:
+                messages.append(r.take(l))
+            elif f == 2:
+                cursor = r.str_(l)
+            elif f == 5:
+                internal_ext = r.str_(l)
+            else:
+                r.skip(l)
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return {"needAck": need_ack, "cursor": cursor, "internalExt": internal_ext, "messages": messages}
+
+
+def _parse_user(b):
+    """User → nickname（field 3）。"""
+    r = _Reader(b)
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            l = r.varint()
+            if f == 3:
+                return r.str_(l)
+            r.skip(l)
+        elif w == 0:
+            r.varint()
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return None
+
+
+def _parse_image_url(b):
+    """Image → urlList[0]（field 1）。"""
+    r = _Reader(b)
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            l = r.varint()
+            if f == 1:
+                return r.str_(l)
+            r.skip(l)
+        elif w == 0:
+            r.varint()
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return None
+
+
+def _parse_gift(b):
+    """GiftStruct → name(16)/diamondCount(9)/image(1)。"""
+    r = _Reader(b)
+    name = price = icon = None
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 0:
+            v = r.varint()
+            if f == 9:
+                price = v
+        elif w == 2:
+            l = r.varint()
+            if f == 16:
+                name = r.str_(l)
+            elif f == 1:
+                icon = _parse_image_url(r.take(l))
+            else:
+                r.skip(l)
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return {"name": name, "price": price, "icon": icon}
+
+
+def _parse_pieces(b):
+    """Text.pieces(4)：[{type:1 text stringValue=11} | {type:2 emoji imageValue=25→image=1}]。"""
+    r = _Reader(b)
+    out = []
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            l = r.varint()
+            d = r.take(l)
+            if f == 4:
+                pr = _Reader(d)
+                ptype = None
+                sval = None
+                img = None
+                while pr.pos < len(d):
+                    t2 = pr.varint()
+                    f2, w2 = t2 >> 3, t2 & 7
+                    if w2 == 0:
+                        v = pr.varint()
+                        if f2 == 1:
+                            ptype = v
+                    elif w2 == 2:
+                        l2 = pr.varint()
+                        if f2 == 11:
+                            sval = pr.str_(l2)
+                        elif f2 == 25:
+                            imgb = pr.take(l2)
+                            ir = _Reader(imgb)
+                            while ir.pos < len(imgb):
+                                t3 = ir.varint()
+                                f3, w3 = t3 >> 3, t3 & 7
+                                if w3 == 2:
+                                    l3 = ir.varint()
+                                    if f3 == 1:
+                                        img = ir.str_(l3)
+                                    else:
+                                        ir.skip(l3)
+                                elif w3 == 0:
+                                    ir.varint()
+                                elif w3 == 1:
+                                    ir.skip(8)
+                                elif w3 == 5:
+                                    ir.skip(4)
+                                else:
+                                    break
+                        else:
+                            pr.skip(l2)
+                    elif w2 == 1:
+                        pr.skip(8)
+                    elif w2 == 5:
+                        pr.skip(4)
+                    else:
+                        break
+                if img:
+                    out.append({"type": 2, "url": img, "text": sval or ""})
+                elif sval is not None:
+                    out.append({"type": 1, "text": sval})
+        elif w == 0:
+            r.varint()
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return out
+
+
+def _parse_text(b):
+    """Text → defaultPattern（field 2，礼物显示名）。"""
+    r = _Reader(b)
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            l = r.varint()
+            if f == 2:
+                return r.str_(l)
+            r.skip(l)
+        elif w == 0:
+            r.varint()
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return None
+
+
+def _parse_tray_info(b):
+    """GiftTrayInfo → trayDisplayText.defaultPattern（field 1 → Text field 2）。"""
+    r = _Reader(b)
+    while r.pos < len(b):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            l = r.varint()
+            d = r.take(l)
+            if f == 1:
+                s = _parse_text(d)
+                if s:
+                    return s
+        elif w == 0:
+            r.varint()
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+    return None
+
+
+_NOISE_RE = _re.compile(
+    r"荣誉等级|粉丝团等级|级勋章|勋章|人气开场|重庆|中部|新星|万粉团|多阶段任务|tier_icon|"
+    r"default_selector|is_current|desc|icon_src|selector|直播已结束|http|douyinpic|\.com|\.png|"
+    r"\.jpg|\.webp|\.mp4|\.jpeg|\.gif|current|target|status|already|light_current|a_type_roof_text|"
+    r"pro_conf|reward_list|小时榜|挑战榜|人气榜")
+_CN_PHRASE_RE = _re.compile(r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9_\s]{3,60}")
+_TAIL_JUNK_RE = _re.compile(r'["\x2C:;\\]+$')
+
+_USER_FIELD_MAP = {
+    "WebcastGiftMessage": 7,
+    "WebcastLikeMessage": 5,
+    "WebcastChatMessage": 2,
+    "WebcastMemberMessage": 2,
+    "WebcastSocialMessage": 2,
+    "WebcastEmojiChatMessage": 2,
+}
+
+
+def extract_msg(m):
+    """解码单条 Message（对应 JS extractMsg），返回与旧版相同结构的 dict。"""
+    r0 = _Reader(m)
+    method = None
+    payload = None
+    while r0.pos < len(m):
+        tag = r0.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            l = r0.varint()
+            d = r0.take(l)
+            if f == 1:
+                method = d.decode("utf-8", errors="replace")
+            elif f == 2:
+                payload = d
+        elif w == 0:
+            r0.varint()
+        elif w == 1:
+            r0.skip(8)
+        elif w == 5:
+            r0.skip(4)
+        else:
+            break
+    if payload is None:
+        payload = m
+    mtype = method or ""
+
+    user_field = _USER_FIELD_MAP.get(mtype)
+    r = _Reader(payload)
+    nickname = content = gift_name = gift_price = gift_icon = None
+    combo_count = repeat_count = action = tray_text = None
+    repeat_end = gift_count = like_total = like_count = follow_count = None
+    room_total = room_total_user = room_total_user_str = member_count = rtf = None
+    while r.pos < len(payload):
+        tag = r.varint()
+        f, w = tag >> 3, tag & 7
+        if w == 0:
+            v = r.varint()
+            if f == 5:
+                if mtype == "WebcastGiftMessage":
+                    repeat_count = v
+                elif mtype == "WebcastRoomStatsMessage":
+                    room_total = v  # 真实在线人数（display 文本如"3万"只是格式化展示）
+            elif f == 6:
+                if mtype == "WebcastGiftMessage":
+                    combo_count = v
+                elif mtype == "WebcastSocialMessage":
+                    follow_count = v
+            elif f == 2:
+                if mtype == "WebcastGiftMessage":
+                    gift_count = v
+                elif mtype == "WebcastLikeMessage":
+                    like_count = v
+            elif f == 3:
+                if mtype == "WebcastLikeMessage":
+                    like_total = v
+                elif mtype == "WebcastRoomUserSeqMessage":
+                    room_total = v  # 真实在线人数（varint，非"3万"文本）
+                elif mtype == "WebcastMemberMessage":
+                    member_count = v
+            elif f == 7:
+                if mtype == "WebcastRoomUserSeqMessage":
+                    room_total_user = v  # 真实累计观看（varint）
+            elif f == 9:
+                if mtype == "WebcastGiftMessage":
+                    repeat_end = v
+        elif w == 2:
+            l = r.varint()
+            d = r.take(l)
+            if f == user_field:
+                nickname = _parse_user(d)
+            elif f == 3 and mtype not in ("WebcastLikeMessage", "WebcastRoomUserSeqMessage"):
+                content = d.decode("utf-8", errors="replace")
+            elif f == 8 and mtype == "WebcastRoomUserSeqMessage":
+                room_total_user_str = d.decode("utf-8", errors="replace")  # 如"10万+"，展示用；不覆盖 f7 真实值
+            elif f == 15 and mtype == "WebcastGiftMessage":
+                g = _parse_gift(d)
+                if g["name"]:
+                    gift_name = g["name"]
+                if g["price"] is not None:
+                    gift_price = g["price"]
+                if g["icon"]:
+                    gift_icon = g["icon"]
+            elif f == 11:
+                action = d.decode("utf-8", errors="replace")
+            elif f == 19:
+                tray_text = _parse_text(d)
+            elif f == 21:
+                t = _parse_tray_info(d)
+                if t:
+                    tray_text = t
+            elif f == 41 and mtype == "WebcastChatMessage":
+                rtf = _parse_pieces(d)
+            elif f == 4 and mtype == "WebcastEmojiChatMessage":
+                rtf = _parse_pieces(d)
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            break
+
+    out_content = ""
+    if mtype == "WebcastGiftMessage":
+        cnt = combo_count if combo_count is not None else (repeat_count if repeat_count is not None else 1)
+        gname = gift_name or tray_text or "礼物"
+        out_content = f"送出了{gname} x{cnt}"
+    elif mtype == "WebcastMemberMessage":
+        out_content = action or "进入直播间"
+    elif mtype == "WebcastLikeMessage":
+        out_content = f"为主播点赞了({like_count if like_count is not None else 1})"
+    elif mtype == "WebcastSocialMessage":
+        out_content = "关注了主播"
+    elif mtype in ("WebcastChatMessage", "WebcastEmojiChatMessage"):
+        out_content = content or ""
+    elif mtype == "WebcastRoomStatsMessage":
+        out_content = content or ""
+    else:
+        txt = payload.decode("utf-8", errors="replace")
+        parts = []
+        for t in _CN_PHRASE_RE.findall(txt):
+            t = _TAIL_JUNK_RE.sub("", t).strip()
+            if len(t) >= 4 and not _NOISE_RE.search(t):
+                parts.append(t)
+        out_content = parts[0] if parts else ""
+        if len(out_content) > 40:
+            out_content = out_content[:40] + "…"
+
+    return {
+        "type": mtype, "nickname": nickname, "content": out_content,
+        "giftName": gift_name, "giftPrice": gift_price, "giftIcon": gift_icon,
+        "repeatEnd": repeat_end,
+        "giftCount": repeat_count if repeat_count is not None else (combo_count if combo_count is not None else 1),
+        "likeTotal": like_total, "likeCount": like_count, "followCount": follow_count,
+        "roomTotal": room_total, "roomTotalUser": room_total_user,
+        "roomTotalUserStr": room_total_user_str, "memberCount": member_count,
+        "rtf": rtf if (rtf and len(rtf)) else None,
+    }
+
+
+def build_ws_url(push_server, room_id, unique_id, cursor, internal_ext, signature,
+                 screen_h=1080, screen_w=1920):
+    """组 WS 连接地址（参数与 JS wsParams 一致）。"""
+    import urllib.parse as up
+    params = {
+        "aid": "6383", "app_name": "douyin_web", "browser_language": "zh-CN",
+        "browser_name": "Mozilla", "browser_online": "true", "browser_platform": "Win32",
+        "browser_version": UA, "compress": "gzip", "cookie_enabled": "true",
+        "device_platform": "web", "did_rule": "3", "endpoint": "live_pc",
+        "heartbeatDuration": "0", "host": "https://live.douyin.com", "identity": "audience",
+        "insert_task_id": "", "live_id": "1", "live_reason": "",
+        "need_persist_msg_count": "15", "screen_height": str(screen_h),
+        "screen_width": str(screen_w), "support_wrds": "1", "tz_name": "Asia/Shanghai",
+        "update_version_code": "1.0.14-beta.0", "version_code": "180800",
+        "webcast_sdk_version": "1.0.14-beta.0", "room_id": str(room_id),
+        "user_unique_id": str(unique_id), "cursor": cursor,
+        "internal_ext": internal_ext, "signature": signature,
+    }
+    return push_server + "?" + up.urlencode(params)
 
 
 class DouyinLiveFetcher:
@@ -759,9 +1087,14 @@ class DouyinLiveFetcher:
             if not info.get("roomId"):
                 self._emit(self.on_status, "error", info.get("error") or "未获取到房间信息（直播间可能不存在或已结束）")
                 return
+            # 未开播：不硬建浏览器/WS 连接，直接回报状态（UI 提示后由轮询或用户手动重试）
+            if info.get("status") is not None and int(info["status"]) != 2:
+                self._emit(self.on_status, "not_live",
+                           f"主播当前未开播（房间 {self.room_num}）")
+                return
 
             md5hex = stub_md5(info["roomId"], info["uniqueId"])
-            self._emit(self.on_status, "connecting", "正在建立弹幕连接（真实浏览器）...")
+            self._emit(self.on_status, "connecting", "正在建立弹幕通道（过风控，确认收流后释放 Cookie）...")
 
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
@@ -812,44 +1145,186 @@ class DouyinLiveFetcher:
                         pass
                     self._emit(self.on_status, "connecting", "验证通过，继续连接...")
 
-                result = page.evaluate(_START_JS, {"roomId": info["roomId"], "uniqueId": info["uniqueId"], "md5hex": md5hex})
+                result = page.evaluate(_PREP_JS, {"roomId": info["roomId"], "uniqueId": info["uniqueId"], "md5hex": md5hex})
                 if result.get("error"):
-                    self._emit(self.on_status, "error", f"连接失败: {result['error']}")
                     browser.close()
+                    self._emit(self.on_status, "error", f"连接失败: {result['error']}")
                     return
                 if result.get("result") == "missing":
-                    self._emit(self.on_status, "error", "连接参数不完整（可能被抖音风控拦截）")
                     browser.close()
+                    self._emit(self.on_status, "error", "连接参数不完整（可能被抖音风控拦截）")
                     return
+                # WS 握手凭证：ttwid（匿名会话，握手强制）+ sessionid（登录凭证）。
+                # 实测：无 Cookie 握手被 417 拒绝；仅 ttwid 弹幕正常但礼物消息被服务器
+                # 过滤（同房间同窗口：全量 Cookie 848 条礼物 / 仅 ttwid 0 条）——
+                # 礼物推送需要 sessionid 登录凭证。WS 仅在握手时携带，连接建立后
+                # 照旧确认收流即释放浏览器 Cookie，不长期占用账号。
+                ck = {}
+                try:
+                    ck = {c["name"]: c["value"] for c in ctx.cookies()}
+                except Exception:
+                    pass
+                cred = []
+                if ck.get("ttwid"):
+                    cred.append("ttwid=" + ck["ttwid"])
+                if ck.get("sessionid"):
+                    cred.append("sessionid=" + ck["sessionid"])
+                if not cred:
+                    browser.close()
+                    self._emit(self.on_status, "error", "未获取到会话凭证（ttwid），无法建立弹幕通道")
+                    return
+                result["wsCookie"] = "; ".join(cred)
+                result["guest"] = not ck.get("sessionid")
 
-                self._emit(self.on_status, "connected", f"已连接 · 房间 {self.room_num}")
-                while not self._stop.is_set():
-                    time.sleep(1)
-                    try:
-                        msgs = page.evaluate(_READ_QUEUE_JS)
-                    except Exception:
-                        break
-                    now_ms = int(time.time() * 1000)
-                    for m in msgs:
-                        m["ts"] = now_ms
-                        mtype = m.get("type", "")
-                        name, _cat = MSG_TYPES.get(mtype, (mtype, "other"))
-                        nickname = m.get("nickname", "")
-                        content = m.get("content", "")
-                        line = self._format_line(name, nickname, content)
-                        if line:
-                            self._emit(self.on_message, name, line, m)
-                        else:
-                            # 统计类消息可能无正文，但仍需更新 UI（在线数/点赞总数等）
-                            self._emit(self.on_message, name, "", m)
-                    try:
-                        if page.evaluate(_WS_CLOSED_JS):
-                            self._emit(self.on_status, "disconnected", "连接已断开")
-                            break
-                    except Exception:
-                        break
-                browser.close()
+                # Cookie 链接（浏览器）保持到弹幕通道确认收流后再释放：
+                # 握手失败 / 收不到服务端推送时立即报错，不会带着假连接状态放走。
+                released = [False]
+
+                def _release_browser():
+                    if not released[0]:
+                        released[0] = True
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+
+                try:
+                    self._ws_loop(result, info, release=_release_browser)
+                except Exception as e:
+                    self._emit(self.on_status, "error", f"弹幕连接异常: {e}")
+                finally:
+                    _release_browser()
+                    # 终态统一在此上报一次（覆盖握手失败/心跳失败/recv 断开/空帧/手动停止全部路径），
+                    # _ws_loop 内部不再发 disconnected，避免双重上报互相覆盖文案
+                    self._emit(self.on_status, "disconnected",
+                               "已停止" if self._stop.is_set() else "直播已结束 / 连接断开")
+                return
         except Exception as e:
             self._emit(self.on_status, "error", f"抓取异常: {e}")
-        finally:
-            self._emit(self.on_status, "disconnected", "已停止")
+            return
+
+    def _ws_loop(self, params, info, release=None):
+        """Python 原生 WebSocket 弹幕循环（仅带 ttwid 匿名凭证，不占用账号 Cookie）。
+
+        release: 确认收流后的回调（关浏览器释放登录 Cookie）；未确认前绝不调用。
+        """
+        import websocket
+        ws_url = build_ws_url(
+            params["pushServer"], info["roomId"], info["uniqueId"],
+            params["cursor"], params["internalExt"], params["signature"],
+            screen_h=params.get("screenHeight") or 1080,
+            screen_w=params.get("screenWidth") or 1920)
+        headers = ["User-Agent: " + UA, "Origin: https://live.douyin.com"]
+        if params.get("wsCookie"):
+            headers.append("Cookie: " + params["wsCookie"])
+        ws = websocket.WebSocket()
+        ws.connect(ws_url, header=headers, timeout=10)
+        ws.settimeout(2)
+        ws.send(_heartbeat())
+
+        # 首帧确认：握手通过且收到服务端推送（出弹幕/在线人数等）才算连通。
+        # 确认前保持浏览器（Cookie 链接）不释放；超时/断开则明确报错。
+        confirm_deadline = time.time() + 20
+        confirmed = False
+        last_hb = time.time()
+        while not self._stop.is_set() and time.time() < confirm_deadline:
+            if time.time() - last_hb >= 10:
+                try:
+                    ws.send(_heartbeat())
+                    last_hb = time.time()
+                except Exception:
+                    break
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception:
+                break
+            if raw:
+                confirmed = True
+                break
+        if not confirmed:
+            try:
+                ws.close()
+            except Exception:
+                pass
+            if release:
+                release()
+            if self._stop.is_set():
+                return
+            raise RuntimeError("弹幕通道未确认收流（20 秒内无服务端推送，可能被风控）")
+
+        # 弹幕已确认推送：此刻释放登录 Cookie（关浏览器），WS 靠握手凭证维持
+        if release:
+            release()
+        if params.get("guest"):
+            self._emit(self.on_status, "connected",
+                       f"已连接 · 房间 {self.room_num}（游客态：无登录凭证，礼物消息收不到）")
+        else:
+            self._emit(self.on_status, "connected",
+                       f"已连接 · 房间 {self.room_num}（已确认收流，Cookie 已释放）")
+        last_hb = time.time()
+        while not self._stop.is_set():
+            # 心跳：每 10 秒
+            if time.time() - last_hb >= 10:
+                try:
+                    ws.send(_heartbeat())
+                except Exception:
+                    break
+                last_hb = time.time()
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception:
+                break
+            if not raw:
+                break
+            try:
+                frame = decode_push_frame(raw)
+            except Exception:
+                continue
+            payload = frame.get("payload")
+            headers = frame.get("headers") or {}
+            if payload and headers.get("compress_type") == "gzip":
+                try:
+                    payload = _gzip.decompress(payload)
+                except Exception:
+                    pass
+            if not payload:
+                continue
+            need_ack = False
+            ext = headers.get("im-internal_ext", "")
+            try:
+                res = decode_response(payload)
+                if res["needAck"]:
+                    need_ack = True
+                if res["internalExt"]:
+                    ext = res["internalExt"]
+            except Exception:
+                res = None
+            if res:
+                now_ms = int(time.time() * 1000)
+                for m in res["messages"]:
+                    try:
+                        e = extract_msg(m)
+                    except Exception:
+                        continue
+                    if not e.get("type"):
+                        continue
+                    e["ts"] = now_ms
+                    name, _cat = MSG_TYPES.get(e["type"], (e["type"], "other"))
+                    line = self._format_line(name, e.get("nickname", ""), e.get("content", ""))
+                    if line:
+                        self._emit(self.on_message, name, line, e)
+                    else:
+                        self._emit(self.on_message, name, "", e)
+            if need_ack:
+                try:
+                    ws.send(_ack_msg(ext, frame.get("logId")))
+                except Exception:
+                    break
+        try:
+            ws.close()
+        except Exception:
+            pass

@@ -248,13 +248,9 @@ def _netease_legacy_file() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "netease", "cookie.txt")
 
 
-def get_netease_cookie() -> str:
-    """获取网易云 cookie。仅当统一存储从未记录过 netease 时，做一次性迁移（旧
-    netease/cookie.txt）；TTL 过期、用户清除都不会从旧文件复活 Cookie。"""
-    cookie = get_cookie("netease")
-    if cookie:
-        return cookie
-    # 曾记录过（含被清除/过期）→ 不迁移，避免清除后显示"已登录·刚刚"复活
+def _netease_legacy_migrate() -> str:
+    """旧 netease/cookie.txt 一次性迁移（统一存储从未记录过 netease 才迁）。
+    TTL 过期、用户清除都不会从旧文件复活。"""
     if "netease" in _load_cookie_times() or "netease" in load_cookies():
         return ""
     legacy = _netease_legacy_file()
@@ -268,6 +264,18 @@ def get_netease_cookie() -> str:
     except Exception:
         pass
     return ""
+
+
+def get_netease_cookie() -> str:
+    """获取网易云 cookie（受总开关/TTL 控制，采集使用）。
+    仅当统一存储从未记录过 netease 时，做一次性迁移（旧 netease/cookie.txt）。"""
+    return get_cookie("netease") or _netease_legacy_migrate()
+
+
+def get_netease_cookie_stored() -> str:
+    """已存储的网易云 Cookie（不看总开关、不校验过期）。
+    仅供登录状态展示/用户名探测使用；采集请走 get_netease_cookie()。"""
+    return load_cookies().get("netease", "") or _netease_legacy_migrate()
 
 
 def sync_netease_to_legacy():

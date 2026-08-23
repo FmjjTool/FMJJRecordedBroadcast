@@ -7,11 +7,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 from datetime import datetime
 
 from ..base_scraper import BaseScraper
-from ..models import SongInfo, AlbumInfo, FileInfo, MVInfo, PayInfo
+from ..models import SongInfo, AlbumInfo, PlaylistInfo, FileInfo, MVInfo, PayInfo
 from ..utils import get_client, make_headers, safe_json, parse_duration
 
 
@@ -34,6 +35,7 @@ class QQMusicScraper(BaseScraper):
     SONG_URL   = "https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg"
     LYRIC_URL  = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
     ALBUM_URL  = "https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_detail_cp.fcg"
+    PLAYLIST_URL = "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg"
 
     # ------------------------------------------------------------------
     def search_song(self, keyword: str, page: int = 1, limit: int = 10) -> list[SongInfo]:
@@ -47,48 +49,51 @@ class QQMusicScraper(BaseScraper):
 
         songs = []
         for item in data.get("data", {}).get("song", {}).get("list", []):
-            albummid = item.get("albummid", "")
-            singer_list = item.get("singer", [])
-            singer0 = singer_list[0] if singer_list else {}
-            song_name = item.get("songname", "")
-
-            songs.append(SongInfo(
-                song_id=item.get("songmid", str(item.get("songid", ""))),
-                song_name=song_name,
-                title=song_name,
-                subtitle="",
-                alias=[],
-                singer=_join(singer_list),
-                singer_id=str(singer0.get("id", "")),
-                singer_mid=singer0.get("mid", ""),
-                album_name=item.get("albumname", ""),
-                album_id=albummid,
-                track_no=item.get("cdIdx", 0),
-                disc_no=str(item.get("belongCD", "")),
-                duration=parse_duration(item.get("interval", 0)),
-                interval=item.get("interval", 0),
-                language=_detect_lang(song_name),
-                cover_url=_cover_url(albummid) if albummid else "",
-                files=_parse_files(item),
-                size128=item.get("size128", 0),
-                size320=item.get("size320", 0),
-                sizeflac=item.get("sizeflac", 0),
-                mv=MVInfo(vid=item.get("vid", "")),
-                pay=PayInfo(
-                    fee=item.get("pay", {}).get("payplay", 0),
-                    pay_play=item.get("pay", {}).get("payplay", 0),
-                    pay_down=item.get("pay", {}).get("paydownload", 0),
-                    price_track=item.get("pay", {}).get("paytrackprice", 0),
-                    price_album=item.get("pay", {}).get("payalbumprice", 0),
-                ),
-                publish_time=item.get("pubtime", 0),
-                release_date=_ts_to_date(item.get("pubtime", 0)),
-                platform=self.platform,
-                platform_name=self.platform_name,
-                url=f"https://y.qq.com/n/ryqq/songDetail/{item.get('songmid', '')}",
-                extra=_remainder(item, "songmid songid songname albumname albummid albumid singer interval cdIdx belongCD size128 size320 sizeflac vid pay pubtime"),
-            ))
+            songs.append(self._parse_song_item(item))
         return songs
+
+    def _parse_song_item(self, item: dict) -> SongInfo:
+        """搜索/歌单通用的歌曲条目解析"""
+        albummid = item.get("albummid", "")
+        singer_list = item.get("singer", [])
+        singer0 = singer_list[0] if singer_list else {}
+        song_name = item.get("songname", "")
+        return SongInfo(
+            song_id=item.get("songmid", str(item.get("songid", ""))),
+            song_name=song_name,
+            title=song_name,
+            subtitle="",
+            alias=[],
+            singer=_join(singer_list),
+            singer_id=str(singer0.get("id", "")),
+            singer_mid=singer0.get("mid", ""),
+            album_name=item.get("albumname", ""),
+            album_id=albummid,
+            track_no=item.get("cdIdx", 0),
+            disc_no=str(item.get("belongCD", "")),
+            duration=parse_duration(item.get("interval", 0)),
+            interval=item.get("interval", 0),
+            language=_detect_lang(song_name),
+            cover_url=_cover_url(albummid) if albummid else "",
+            files=_parse_files(item),
+            size128=item.get("size128", 0),
+            size320=item.get("size320", 0),
+            sizeflac=item.get("sizeflac", 0),
+            mv=MVInfo(vid=item.get("vid", "")),
+            pay=PayInfo(
+                fee=item.get("pay", {}).get("payplay", 0),
+                pay_play=item.get("pay", {}).get("payplay", 0),
+                pay_down=item.get("pay", {}).get("paydownload", 0),
+                price_track=item.get("pay", {}).get("paytrackprice", 0),
+                price_album=item.get("pay", {}).get("payalbumprice", 0),
+            ),
+            publish_time=item.get("pubtime", 0),
+            release_date=_ts_to_date(item.get("pubtime", 0)),
+            platform=self.platform,
+            platform_name=self.platform_name,
+            url=f"https://y.qq.com/n/ryqq/songDetail/{item.get('songmid', '')}",
+            extra=_remainder(item, "songmid songid songname albumname albummid albumid singer interval cdIdx belongCD size128 size320 sizeflac vid pay pubtime"),
+        )
 
     # ------------------------------------------------------------------
     def get_song_detail(self, song_id: str) -> Optional[SongInfo]:
@@ -249,10 +254,82 @@ class QQMusicScraper(BaseScraper):
         return super().search_by_album(singer, album_name, limit)
 
     # ------------------------------------------------------------------
+    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+        """QQ音乐歌单解析：qzone cdinfo 接口（disstid）"""
+        params = {"type": 1, "json": 1, "utf8": 1, "onlysong": 0,
+                  "disstid": playlist_id, "format": "json", "g_tk": 5381,
+                  "loginUin": 0, "hostUin": 0, "inCharset": "utf8",
+                  "outCharset": "utf-8", "notice": 0, "platform": "yqq",
+                  "needNewCode": 0}
+        headers = make_headers(referer="https://y.qq.com/")
+        with get_client() as client:
+            resp = client.get(self.PLAYLIST_URL, params=params, headers=headers)
+        data = safe_json(resp.text)
+        if not data:
+            return None
+        cdlist = data.get("cdlist") or []
+        cd = cdlist[0] if cdlist else {}
+        if not cd or not cd.get("dissname") and not cd.get("songlist"):
+            return None
+
+        songs = [self._parse_song_item(item) for item in (cd.get("songlist") or [])]
+        creator = cd.get("nickname", "") or ""
+        tags = cd.get("tags") or []
+        tag_names = []
+        for t in tags:
+            name = t.get("name", "") if isinstance(t, dict) else str(t)
+            if name:
+                tag_names.append(name)
+        tag_str = "、".join(tag_names)
+        visit = cd.get("visitnum", 0)
+        return PlaylistInfo(
+            playlist_id=str(cd.get("dissid", playlist_id)),
+            name=cd.get("dissname", ""),
+            creator=creator,
+            cover_url=cd.get("logo", ""),
+            description=cd.get("desc", ""),
+            song_count=int(cd.get("total_song_num", len(songs)) or len(songs)),
+            play_count=int(visit) if isinstance(visit, int) else 0,
+            tags=tag_str,
+            songs=songs,
+            platform=self.platform,
+            platform_name=self.platform_name,
+            url=f"https://y.qq.com/n/ryqq/playlist/{playlist_id}",
+            extra=_remainder(cd, "dissid dissname logo desc total_song_num songnum nickname tags visitnum songlist"),
+        )
+
+    # ------------------------------------------------------------------
     def get_play_url(self, song_id: str) -> str:
         """QQ音乐播放直链 - 朋友圈分享格式"""
         # song_id 即 songmid, 格式: http://c6.y.qq.com/rsc/fcgi-bin/fcg_pyq_play.fcg?songid=&songmid={songmid}&songtype=1&fromtag=50&uin=0&code=5F4F8
         return f"http://c6.y.qq.com/rsc/fcgi-bin/fcg_pyq_play.fcg?songid=&songmid={song_id}&songtype=1&fromtag=50&uin=0&code=5F4F8"
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def extract_song_id(text: str) -> str:
+        """从输入解析歌曲 songmid：songDetail/xxx、songmid=xxx 或纯 ID"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = re.search(r"songDetail/([A-Za-z0-9]+)", s) or re.search(r"songmid=([A-Za-z0-9]+)", s)
+        if m:
+            return m.group(1)
+        if re.fullmatch(r"[A-Za-z0-9]{8,}", s):
+            return s
+        return ""
+
+    @staticmethod
+    def extract_playlist_id(text: str) -> str:
+        """从输入解析歌单 dissid：playlist/xxx、disstid=xxx 或纯数字"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = re.search(r"playlist/(\d+)", s) or re.search(r"disstid=(\d+)", s)
+        if m:
+            return m.group(1)
+        if s.isdigit():
+            return s
+        return ""
 
 
 # ------------------------------------------------------------------
@@ -271,7 +348,6 @@ def _join(singers: list) -> str:
 
 
 def _detect_lang(name: str) -> str:
-    import re
     if not name: return ""
     if re.search(r'[\u4e00-\u9fff]', name): return "国语"
     if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', name): return "日语"

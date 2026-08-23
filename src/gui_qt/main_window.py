@@ -332,10 +332,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_cookie_status(self):
         try:
-            from auth import load_cookies, is_cookie_enabled, get_netease_cookie
+            from auth import load_cookies, is_cookie_enabled, get_netease_cookie_stored
             enabled = is_cookie_enabled()
             cookies = load_cookies()
-            netease_ok = bool((get_netease_cookie() or "").strip())
+            netease_ok = bool(get_netease_cookie_stored().strip())
             logged = 0
             total = len(COOKIE_PLATFORMS)
             for plat, _name, _qr, _browser in COOKIE_PLATFORMS:

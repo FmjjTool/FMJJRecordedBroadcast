@@ -139,6 +139,27 @@ class AlbumInfo(BaseModel):
     extra: dict = Field(default_factory=dict, description="API返回的其他未映射字段")
 
 
+class PlaylistInfo(BaseModel):
+    """歌单信息"""
+    playlist_id: str = Field(default="", description="歌单ID")
+    name: str = Field(default="", description="歌单名称")
+    creator: str = Field(default="", description="创建者昵称")
+    cover_url: str = Field(default="", description="歌单封面URL")
+    description: str = Field(default="", description="歌单简介")
+    song_count: int = Field(default=0, description="歌曲总数")
+    play_count: int = Field(default=0, description="播放次数")
+    tags: str = Field(default="", description="标签(逗号分隔)")
+    songs: list[SongInfo] = Field(default_factory=list, description="歌单内歌曲列表")
+    platform: str = Field(default="", description="来源平台标识")
+    platform_name: str = Field(default="", description="来源平台中文名")
+    url: str = Field(default="", description="歌单页面URL")
+    collected_at: str = Field(
+        default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        description="采集时间"
+    )
+    extra: dict = Field(default_factory=dict, description="API返回的其他未映射字段")
+
+
 class SearchResult(BaseModel):
     """跨平台搜索结果"""
     keyword: str = Field(default="", description="搜索关键词")
