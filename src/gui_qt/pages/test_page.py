@@ -128,6 +128,8 @@ class TestPage(BasePage):
         self._start_ts = None
         self._like_count = 0
         self._gift_rank = {}
+        self._gift_sessions = {}
+        self._gift_sessions = {}   # (user, gift) → {settled, t}：连击会话已结算数
         self.fetcher = None
         self.stats_collector = None
         self.live_monitor = None
@@ -1034,6 +1036,8 @@ class TestPage(BasePage):
             m["giftCount"] = gift.get("count") or 1
             m["giftPrice"] = gift.get("price") or 0
             m["giftIcon"] = gift.get("icon") or ""
+            if gift.get("repeatEnd"):
+                m["repeatEnd"] = 1
         if m["type"] == "WebcastGiftMessage" and not m["content"]:
             m["content"] = f"送出 {m.get('giftName') or '礼物'} x{m.get('giftCount') or 1}"
         return m
@@ -1063,6 +1067,7 @@ class TestPage(BasePage):
         b = data.get("bundle") or {}
         self._clear_all()
         self._gift_rank = {}
+        self._gift_sessions = {}
         self._like_count = 0
         self.like_label.setText("0")
         if b.get("nickname"):
@@ -1160,6 +1165,7 @@ class TestPage(BasePage):
             past.append(c)
         self._clear_all()
         self._gift_rank = {}
+        self._gift_sessions = {}
         self._like_count = 0
         for c in past:
             m = self._norm_cast(c)
@@ -1520,6 +1526,7 @@ class TestPage(BasePage):
         self._start_ts = time.time()
         self._like_count = 0
         self._gift_rank = {}
+        self._gift_sessions = {}
         self._session_casts = []
         self.gift_table.setRowCount(0)
         self.like_label.setText("0")
@@ -1825,8 +1832,11 @@ class TestPage(BasePage):
         if m.get("nickname"):
             c["user"] = {"name": m["nickname"]}
         if m.get("giftName"):
-            c["gift"] = {"name": m.get("giftName"), "count": m.get("giftCount") or 1,
-                         "price": m.get("giftPrice") or 0, "icon": m.get("giftIcon") or ""}
+            g = {"name": m.get("giftName"), "count": m.get("giftCount") or 1,
+                 "price": m.get("giftPrice") or 0, "icon": m.get("giftIcon") or ""}
+            if m.get("repeatEnd"):
+                g["repeatEnd"] = 1
+            c["gift"] = g
         self._session_casts.append(c)
 
     def _apply_message(self, name, text, m, t, rank=True):
@@ -2061,7 +2071,11 @@ class TestPage(BasePage):
                 QTimer.singleShot(int(delay * 1000) + 50, self._img_flush)
 
     def _add_gift_rank(self, m, t, refresh=True):
-        """累计打赏榜：按用户累计礼物数与抖币价值（弹幕姬同款逻辑）。
+        """累计打赏榜：按用户累计礼物数与抖币价值。
+        连击礼物去重：服务器每帧 repeatCount 是累计值（x7→x19→x34 推 3 条，
+        实际共 34 个），直接累加会算成 60——按 (用户,礼物) 会话增量结算
+        delta=count-settled；repeatEnd=1 结束会话，>15s 无新帧按超时重开
+        （防 end 帧丢失后新一轮 x1 被旧 settled 吞掉）。
         refresh=False 用于回放 seek 批量重建（末尾统一刷新一次）。"""
         gift_name = m.get("giftName")
         if not gift_name:
@@ -2075,13 +2089,30 @@ class TestPage(BasePage):
             price = int(m.get("giftPrice") or 0)
         except (TypeError, ValueError):
             price = 0
-        cur = self._gift_rank.get(user)
-        if cur is None:
-            cur = {"giftCount": 0, "totalValue": 0, "lastTime": t}
-            self._gift_rank[user] = cur
-        cur["giftCount"] += count
-        cur["totalValue"] += count * price
-        cur["lastTime"] = t
+        try:
+            now = t.timestamp()
+        except Exception:
+            now = time.time()
+        key = (user, gift_name)
+        sess = self._gift_sessions.get(key)
+        if sess and now - sess["t"] > 15:
+            sess = None
+        settled = sess["settled"] if sess else 0
+        delta = count - settled
+        if delta < 0:
+            delta = count
+        if m.get("repeatEnd"):
+            self._gift_sessions.pop(key, None)
+        else:
+            self._gift_sessions[key] = {"settled": count, "t": now}
+        if delta > 0:
+            cur = self._gift_rank.get(user)
+            if cur is None:
+                cur = {"giftCount": 0, "totalValue": 0, "lastTime": t}
+                self._gift_rank[user] = cur
+            cur["giftCount"] += delta
+            cur["totalValue"] += delta * price
+            cur["lastTime"] = t
         if refresh:
             self._refresh_gift_rank()
 
@@ -2300,6 +2331,7 @@ class TestPage(BasePage):
         # 打赏榜
         self.gift_table.setRowCount(0)
         self._gift_rank = {}
+        self._gift_sessions = {}
         # 统计：本场点赞 / 快照 / 计时
         self._like_count = 0
         self.like_label.setText("0")

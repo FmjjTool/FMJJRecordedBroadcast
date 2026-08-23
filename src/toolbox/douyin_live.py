@@ -1159,7 +1159,9 @@ def extract_msg(m):
 
     out_content = ""
     if mtype == "WebcastGiftMessage":
-        cnt = combo_count if combo_count is not None else (repeat_count if repeat_count is not None else 1)
+        # repeatCount(f5) 是连击权威累计值（x7→x19→x34 每帧递增，最终帧即总数）；
+        # 显示行与 giftCount 统一取值优先级，保证界面显示与打赏榜统计一致
+        cnt = repeat_count if repeat_count is not None else (combo_count if combo_count is not None else 1)
         gname = gift_name or tray_text or "礼物"
         out_content = f"送出了{gname} x{cnt}"
     elif mtype == "WebcastMemberMessage":
