@@ -2094,30 +2094,21 @@ class TestPage(BasePage):
         except Exception:
             now = time.time()
         key = (user, gift_name)
-        if m.get("type") == "WebcastBindingGiftMessage":
-            # 捆绑礼物（如"66个小心心"）无连击概念：每帧都是完整独立赠送，
-            # 走会话逻辑会把 15s 内第二次全量大数（delta=0）吞掉
+        # 捆绑礼物（66个小心心 等）与普通礼物同一套连击会话结算：
+        # repeatCount=67 即送了 67 包，单价=整包抖币价(66)，
+        # 价值 = 67×66 = 4422（用户确认口径：66个一毛 × 67次）
+        sess = self._gift_sessions.get(key)
+        if sess and now - sess["t"] > 15:
+            sess = None
+        settled = sess["settled"] if sess else 0
+        delta = count - settled
+        if delta < 0:
             delta = count
-            # 价值：GiftStruct.diamondCount 是整包总价（66包=66抖币），官方模板
-            # 显示实际送出 repeatCount 个单价礼物（小心心 x67，66+1赠送），
-            # 价值=单价×数量，禁止按 67×66 虚增
-            head = gift_name.split("个", 1)[0]
-            units = int(head) if head.isdigit() and int(head) > 0 else 0
-            unit = int(round(price / units)) if units else price
-            value_delta = unit * count
+        if m.get("repeatEnd"):
+            self._gift_sessions.pop(key, None)
         else:
-            sess = self._gift_sessions.get(key)
-            if sess and now - sess["t"] > 15:
-                sess = None
-            settled = sess["settled"] if sess else 0
-            delta = count - settled
-            if delta < 0:
-                delta = count
-            if m.get("repeatEnd"):
-                self._gift_sessions.pop(key, None)
-            else:
-                self._gift_sessions[key] = {"settled": count, "t": now}
-            value_delta = delta * price
+            self._gift_sessions[key] = {"settled": count, "t": now}
+        value_delta = delta * price
         if delta > 0:
             cur = self._gift_rank.get(user)
             if cur is None:
