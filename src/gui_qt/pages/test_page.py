@@ -2094,17 +2094,22 @@ class TestPage(BasePage):
         except Exception:
             now = time.time()
         key = (user, gift_name)
-        sess = self._gift_sessions.get(key)
-        if sess and now - sess["t"] > 15:
-            sess = None
-        settled = sess["settled"] if sess else 0
-        delta = count - settled
-        if delta < 0:
+        if m.get("type") == "WebcastBindingGiftMessage":
+            # 捆绑礼物（如 66个小心心）无连击概念：每帧都是完整独立赠送，
+            # 走会话逻辑会把 15s 内第二次全量大数（delta=0）吞掉
             delta = count
-        if m.get("repeatEnd"):
-            self._gift_sessions.pop(key, None)
         else:
-            self._gift_sessions[key] = {"settled": count, "t": now}
+            sess = self._gift_sessions.get(key)
+            if sess and now - sess["t"] > 15:
+                sess = None
+            settled = sess["settled"] if sess else 0
+            delta = count - settled
+            if delta < 0:
+                delta = count
+            if m.get("repeatEnd"):
+                self._gift_sessions.pop(key, None)
+            else:
+                self._gift_sessions[key] = {"settled": count, "t": now}
         if delta > 0:
             cur = self._gift_rank.get(user)
             if cur is None:
