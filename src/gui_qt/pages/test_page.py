@@ -157,6 +157,9 @@ class TestPage(BasePage):
         self._chat_log = []         # [{ts, kind, m, text}]
         self._chat_filter = ""
         self._last_banner_text = ""  # 横幅同内容连发去重（显示用）
+        # ④框搜索：完整事件日志（点赞/进入/关注/横幅/系统）+ 当前筛选关键字
+        self._event_log = []
+        self._event_filter = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -1356,6 +1359,19 @@ class TestPage(BasePage):
         self.log_var.setChecked(True)
         head5.addWidget(self.log_var)
         v.addLayout(head5)
+        # 搜索栏：关键字筛点赞/进入/关注/横幅/日志（与中部弹幕搜索同款防抖）
+        es_row = QHBoxLayout()
+        self.event_search = QLineEdit()
+        self.event_search.setPlaceholderText("🔍 搜索：点赞/进入/关注/横幅/日志")
+        self.event_search.setClearButtonEnabled(True)
+        self._event_search_timer = QTimer(singleShot=True, interval=300)
+        self._event_search_timer.timeout.connect(self._apply_event_filter)
+        self.event_search.textChanged.connect(lambda: self._event_search_timer.start())
+        es_row.addWidget(self.event_search, 1)
+        self.event_count = QLabel("")
+        self.event_count.setStyleSheet("color:#6b7280; font-size:12px;")
+        es_row.addWidget(self.event_count)
+        v.addLayout(es_row)
         self.event_box = QPlainTextEdit()
         self.event_box.setReadOnly(True)
         v.addWidget(self.event_box, 1)
@@ -1840,7 +1856,7 @@ class TestPage(BasePage):
             if m.get("memberCount"):
                 set_field("online_count", m["memberCount"])
             if self.enter_var.isChecked():
-                self._append(self.event_box, f"{ts} 💚 {text}")
+                self._log_event(f"{ts} 💚 {text}")
         elif name == "点赞":
             # likeTotal 为本场累计点赞总数（弹幕姬行为），缺失时退化为 +1
             if m.get("likeTotal"):
@@ -1850,12 +1866,12 @@ class TestPage(BasePage):
             self.like_label.setText(f"{self._like_count:,}")
             self.anchor_fields["like_count"].setText(f"{self._like_count:,}")
             if self.like_var.isChecked():
-                self._append(self.event_box, f"{ts} 👍 {text}")
+                self._log_event(f"{ts} 👍 {text}")
         elif name == "关注":
             if m.get("followCount"):
                 set_field("anchor_fans", m["followCount"])
             if self.log_var.isChecked():
-                self._append(self.event_box, f"{ts} ⭐ {text}")
+                self._log_event(f"{ts} ⭐ {text}")
         elif name == "在线人数":
             # WebcastRoomUserSeqMessage：静默更新左栏统计（真实数字，非"3万"文本）
             # 注意 set_field 内部自行格式化，必须传原始 int（传 "36,680" 字符串
@@ -1876,10 +1892,50 @@ class TestPage(BasePage):
             # 全量仍进导出快照
             if self.log_var.isChecked() and text and text != self._last_banner_text:
                 self._last_banner_text = text
-                self._append(self.event_box, f"{ts} 📢 {text}")
+                self._log_event(f"{ts} 📢 {text}")
         else:
             if self.log_var.isChecked() and text:
-                self._append(self.event_box, f"{ts} [{name}] {text}")
+                self._log_event(f"{ts} [{name}] {text}")
+
+    def _log_event(self, text):
+        """④框：入内存日志（供搜索）+ 按当前筛选状态决定是否实时显示。"""
+        self._event_log.append(text)
+        if len(self._event_log) > 4000:
+            self._event_log = self._event_log[-2000:]
+        if not self._event_filter or self._event_match(text, self._event_filter):
+            self._append(self.event_box, text)
+        self._update_event_count()
+
+    @staticmethod
+    def _event_match(text, kw):
+        return kw.lower() in text.lower()
+
+    def _update_event_count(self):
+        if not self._event_filter:
+            self.event_count.setText(f"共 {len(self._event_log)} 条")
+        else:
+            n = sum(1 for t in self._event_log if self._event_match(t, self._event_filter))
+            self.event_count.setText(f"{n} 条匹配")
+
+    def _apply_event_filter(self):
+        """④搜索框变更（防抖后）：空=回最近视图，非空=筛选匹配。"""
+        kw = self.event_search.text().strip()
+        self._event_filter = kw
+        rows = self._event_log if not kw else \
+            [t for t in self._event_log if self._event_match(t, kw)]
+        self.event_box.setPlainText("")
+        for t in rows[-500:]:
+            self.event_box.appendPlainText(t)
+        if self.settings.get("keep_scroll", True):
+            sb = self.event_box.verticalScrollBar()
+            sb.setValue(sb.maximum())
+        if not kw:
+            self.event_count.setText(f"共 {len(self._event_log)} 条")
+        else:
+            note = f"筛选「{kw}」：{len(rows)} 条匹配"
+            if len(rows) > 500:
+                note += "（显示最近 500 条）"
+            self.event_count.setText(note)
 
     def _log_chat(self, ts, kind, m, text):
         """聊天日志：弹幕/礼物（含时间点）入内存列表，供搜索与按人筛选。"""
@@ -2235,6 +2291,12 @@ class TestPage(BasePage):
         self._img_pending.clear()
         self.event_box.setPlainText("")
         self._last_banner_text = ""
+        self._event_log = []
+        self._event_filter = ""
+        self.event_search.blockSignals(True)
+        self.event_search.clear()
+        self.event_search.blockSignals(False)
+        self.event_count.setText("")
         # 打赏榜
         self.gift_table.setRowCount(0)
         self._gift_rank = {}
