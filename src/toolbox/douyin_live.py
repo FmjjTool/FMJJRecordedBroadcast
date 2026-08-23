@@ -39,6 +39,7 @@ KNOWN_ROOM_IDS = {
 MSG_TYPES = {
     "WebcastChatMessage": ("弹幕", "chat"),
     "WebcastGiftMessage": ("礼物", "gift"),
+    "WebcastBindingGiftMessage": ("礼物", "gift"),
     "WebcastMemberMessage": ("进场", "member"),
     "WebcastLikeMessage": ("点赞", "like"),
     "WebcastSocialMessage": ("关注", "social"),
@@ -667,7 +668,10 @@ def _parse_user(b):
 
 
 def _parse_gift(b):
-    """GiftStruct → name(16)/diamondCount(9)/image(1)。"""
+    """GiftStruct → name(16)/diamondCount(12)/image(1)。
+    字段号以本地 dycast-main/src/core/model.ts 为准：
+    f4=duration(特效时长ms) f5=id f9=forFansclub(bool) f11=type
+    f12=diamondCount(抖币价) f14=primaryEffectId f16=name。"""
     r = _Reader(b)
     name = price = icon = None
     while r.pos < len(b):
@@ -675,7 +679,7 @@ def _parse_gift(b):
         f, w = tag >> 3, tag & 7
         if w == 0:
             v = r.varint()
-            if f == 9:
+            if f == 12:
                 price = v
         elif w == 2:
             l = r.varint()
@@ -921,12 +925,16 @@ _TAIL_JUNK_RE = _re.compile(r'["\x2C:;\\]+$')
 
 _USER_FIELD_MAP = {
     "WebcastGiftMessage": 7,
+    "WebcastBindingGiftMessage": 7,
     "WebcastLikeMessage": 5,
     "WebcastChatMessage": 2,
     "WebcastMemberMessage": 2,
     "WebcastSocialMessage": 2,
     "WebcastEmojiChatMessage": 2,
 }
+
+# 按礼物处理的消息类型（GiftMessage 同构：f5/f6=数量 f7=user f15=GiftStruct）
+_GIFT_TYPES = ("WebcastGiftMessage", "WebcastBindingGiftMessage")
 
 
 _BANNER_TYPE_NAMES = {
@@ -1069,6 +1077,26 @@ def extract_msg(m):
     if payload is None:
         payload = m
     mtype = method or ""
+    if mtype == "WebcastBindingGiftMessage":
+        # 实测 payload 多包一层：{f1: 真正 body, f2: Common}，剥壳后与 GiftMessage 同构
+        rb = _Reader(payload)
+        while rb.pos < len(payload):
+            tag = rb.varint()
+            f, w = tag >> 3, tag & 7
+            if w == 2:
+                l = rb.varint()
+                d = rb.take(l)
+                if f == 1 and l > 64:
+                    payload = d
+                    break
+            elif w == 0:
+                rb.varint()
+            elif w == 1:
+                rb.skip(8)
+            elif w == 5:
+                rb.skip(4)
+            else:
+                break
 
     user_field = _USER_FIELD_MAP.get(mtype)
     r = _Reader(payload)
@@ -1083,17 +1111,17 @@ def extract_msg(m):
         if w == 0:
             v = r.varint()
             if f == 5:
-                if mtype == "WebcastGiftMessage":
+                if mtype in _GIFT_TYPES:
                     repeat_count = v
                 elif mtype == "WebcastRoomStatsMessage":
                     room_total = v  # 真实在线人数（display 文本如"3万"只是格式化展示）
             elif f == 6:
-                if mtype == "WebcastGiftMessage":
+                if mtype in _GIFT_TYPES:
                     combo_count = v
                 elif mtype == "WebcastSocialMessage":
                     follow_count = v
             elif f == 2:
-                if mtype == "WebcastGiftMessage":
+                if mtype in _GIFT_TYPES:
                     gift_count = v
                 elif mtype == "WebcastLikeMessage":
                     like_count = v
@@ -1108,7 +1136,7 @@ def extract_msg(m):
                 if mtype == "WebcastRoomUserSeqMessage":
                     room_total_user = v  # 真实累计观看（varint）
             elif f == 9:
-                if mtype == "WebcastGiftMessage":
+                if mtype in _GIFT_TYPES:
                     repeat_end = v
         elif w == 2:
             l = r.varint()
@@ -1119,7 +1147,7 @@ def extract_msg(m):
                 content = d.decode("utf-8", errors="replace")
             elif f == 8 and mtype == "WebcastRoomUserSeqMessage":
                 room_total_user_str = d.decode("utf-8", errors="replace")  # 如"10万+"，展示用；不覆盖 f7 真实值
-            elif f == 15 and mtype == "WebcastGiftMessage":
+            elif f == 15 and mtype in _GIFT_TYPES:
                 g = _parse_gift(d)
                 if g["name"]:
                     gift_name = g["name"]
@@ -1158,11 +1186,14 @@ def extract_msg(m):
             break
 
     out_content = ""
-    if mtype == "WebcastGiftMessage":
+    if mtype in _GIFT_TYPES:
         # repeatCount(f5) 是连击权威累计值（x7→x19→x34 每帧递增，最终帧即总数）；
-        # 显示行与 giftCount 统一取值优先级，保证界面显示与打赏榜统计一致
+        # 显示行与 giftCount 统一取值优先级，保证界面显示与打赏榜统计一致。
+        # BindingGift（捆绑礼物如 66个小心心）同构：f15 GiftStruct 含真实价格
         cnt = repeat_count if repeat_count is not None else (combo_count if combo_count is not None else 1)
         gname = gift_name or tray_text or "礼物"
+        if not gift_name and tray_text:
+            gift_name = tray_text  # 统计与显示用同名（防显示赠送但打赏榜漏计）
         out_content = f"送出了{gname} x{cnt}"
     elif mtype == "WebcastMemberMessage":
         out_content = action or "进入直播间"

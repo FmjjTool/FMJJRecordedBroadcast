@@ -1038,7 +1038,7 @@ class TestPage(BasePage):
             m["giftIcon"] = gift.get("icon") or ""
             if gift.get("repeatEnd"):
                 m["repeatEnd"] = 1
-        if m["type"] == "WebcastGiftMessage" and not m["content"]:
+        if m["type"] in ("WebcastGiftMessage", "WebcastBindingGiftMessage") and not m["content"]:
             m["content"] = f"送出 {m.get('giftName') or '礼物'} x{m.get('giftCount') or 1}"
         return m
 
