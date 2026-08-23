@@ -1857,10 +1857,13 @@ class TestPage(BasePage):
             # 打赏榜：礼物数累计、价值=数量×抖币价；记录与计算永远进行，
             # 「礼物」复选框只是显示过滤器（取消=隐藏不丢弃）
             self._add_gift_rank(m, t, refresh=rank)
-            self._log_chat(ts, "礼物", m, "")
-            if self.gift_var.isChecked() and not self._chat_filter:
-                self._append_rich(self.chat_gift_box, self._chat_urls("礼物", m),
-                                  lambda res: self._gift_html(ts, m, res))
+            if m.get("_delta") == 0:
+                pass  # 纯重推帧（连击进度重复推送，榜单无增量）：不记录不显示
+            else:
+                self._log_chat(ts, "礼物", m, "")
+                if self.gift_var.isChecked() and not self._chat_filter:
+                    self._append_rich(self.chat_gift_box, self._chat_urls("礼物", m),
+                                      lambda res: self._gift_html(ts, m, res))
         elif name in ("弹幕", "表情弹幕"):
             self._log_chat(ts, name, m, text)
             if self.chat_var.isChecked() and not self._chat_filter:
@@ -2178,6 +2181,8 @@ class TestPage(BasePage):
         else:
             self._gift_sessions[key] = {"settled": count, "t": now}
         value_delta = delta * price
+        m["_delta"] = delta  # 显示层用：本帧实际新增（+0=纯重推帧）
+        m["_combo"] = count  # 显示层用：本帧连击累计值
         if delta > 0:
             cur = self._gift_rank.get(user)
             if cur is None:
@@ -2235,7 +2240,9 @@ class TestPage(BasePage):
         return f"{self._ts_html(ts)} {self._nick_html(m.get('nickname'))}{body}"
 
     def _gift_html(self, ts, m, resolve=None):
-        """礼物行：礼物图标（本地缓存）+ 名称 xN。白底主题下用深金色保证可读。"""
+        """礼物行：礼物图标（本地缓存）+ 名称 xN。白底主题下用深金色保证可读。
+        连击帧的 xN 是累计进度（x1→x2→x3 三帧实为 3 个），与打赏榜口径易混——
+        本帧实际新增与累计不等时标注（+N），各行 +N 之和=榜单数量。"""
         if resolve is None:
             resolve = _img_src
         icon = m.get("giftIcon") or ""
@@ -2248,6 +2255,9 @@ class TestPage(BasePage):
             else:
                 icon_h = f'<span style="color:#9aa0a6">[{alt}]</span> '
         body = html.escape(m.get("content") or "")
+        d, c = m.get("_delta"), m.get("_combo")
+        if d is not None and c is not None and d != c:
+            body = f"{body}（+{d}）"
         return (f'{self._ts_html(ts)} 🎁 {self._nick_html(m.get("nickname"))}'
                 f'{icon_h}<span style="color:#8a6d00; font-weight:bold">{body}</span>')
 
