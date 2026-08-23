@@ -666,28 +666,6 @@ def _parse_user(b):
     return None
 
 
-def _parse_image_url(b):
-    """Image → urlList[0]（field 1）。"""
-    r = _Reader(b)
-    while r.pos < len(b):
-        tag = r.varint()
-        f, w = tag >> 3, tag & 7
-        if w == 2:
-            l = r.varint()
-            if f == 1:
-                return r.str_(l)
-            r.skip(l)
-        elif w == 0:
-            r.varint()
-        elif w == 1:
-            r.skip(8)
-        elif w == 5:
-            r.skip(4)
-        else:
-            break
-    return None
-
-
 def _parse_gift(b):
     """GiftStruct → name(16)/diamondCount(9)/image(1)。"""
     r = _Reader(b)
@@ -767,6 +745,68 @@ def _scan_image_urls(b, depth=0):
     return urls
 
 
+def _parse_image_url(b):
+    """Image 结构 → URL。兼容两种布局：
+    f1=纯 URL 字符串（ChatMessage 表情片段）；f1=嵌套消息{repeated f1=url_list
+    双镜像, f2=uri, f5=颜色}（EmojiChat/VIP 表情）。返回首个 http URL 或 None。"""
+    r = _Reader(b)
+    while r.pos < len(b):
+        try:
+            tag = r.varint()
+        except Exception:
+            return None
+        f, w = tag >> 3, tag & 7
+        if w == 2:
+            try:
+                l = r.varint()
+                d = r.take(l)
+            except Exception:
+                return None
+            if f != 1:
+                continue
+            s = d.decode("utf-8", errors="replace")
+            if s.startswith("http"):
+                return s
+            # f1 是嵌套 Image（url_list）：再进一层取 repeated f1
+            r2 = _Reader(d)
+            while r2.pos < len(d):
+                try:
+                    t2 = r2.varint()
+                except Exception:
+                    break
+                f2, w2 = t2 >> 3, t2 & 7
+                if w2 == 2:
+                    try:
+                        l2 = r2.varint()
+                        d2 = r2.take(l2)
+                    except Exception:
+                        break
+                    if f2 == 1:
+                        s2 = d2.decode("utf-8", errors="replace")
+                        if s2.startswith("http"):
+                            return s2
+                elif w2 == 0:
+                    r2.varint()
+                elif w2 == 1:
+                    r2.skip(8)
+                elif w2 == 5:
+                    r2.skip(4)
+                else:
+                    break
+        elif w == 0:
+            try:
+                r.varint()
+            except Exception:
+                return None
+        elif w == 1:
+            r.skip(8)
+        elif w == 5:
+            r.skip(4)
+        else:
+            return None
+    return None
+
+
 def _parse_pieces(b):
     """Text.pieces(4)：[{type:1 text stringValue=11} | {type:2 emoji imageValue=25→image=1}]。"""
     r = _Reader(b)
@@ -795,24 +835,9 @@ def _parse_pieces(b):
                             sval = pr.str_(l2)
                         elif f2 == 25:
                             imgb = pr.take(l2)
-                            ir = _Reader(imgb)
-                            while ir.pos < len(imgb):
-                                t3 = ir.varint()
-                                f3, w3 = t3 >> 3, t3 & 7
-                                if w3 == 2:
-                                    l3 = ir.varint()
-                                    if f3 == 1:
-                                        img = ir.str_(l3)
-                                    else:
-                                        ir.skip(l3)
-                                elif w3 == 0:
-                                    ir.varint()
-                                elif w3 == 1:
-                                    ir.skip(8)
-                                elif w3 == 5:
-                                    ir.skip(4)
-                                else:
-                                    break
+                            u = _parse_image_url(imgb)
+                            if u:
+                                img = u
                         else:
                             pr.skip(l2)
                     elif w2 == 1:
@@ -907,7 +932,7 @@ _USER_FIELD_MAP = {
 _BANNER_TYPE_NAMES = {
     "fans": "粉丝团", "ai_gift": "AI 礼物", "tier": "周榜任务", "activity": "活动",
     "gift": "礼物", "rank": "榜单", "task": "任务", "subscribe": "订阅", "vip": "会员",
-    "qixi": "七夕",
+    "qixi": "七夕", "flow": "充能",
 }
 
 _BANNER_TASK_NAMES = {"gift_task": "礼物任务", "quota_task": "额度任务",
@@ -930,6 +955,22 @@ def _banner_fans_summary(node):
         if sel:
             period = "日榜" if "drank" in k else "时榜"
             outs.append(f"{sel[0]}{period}")
+    return outs
+
+
+def _banner_flow_summary(node):
+    """充能类运行横幅：banner_detail.role2views.*.banners[].basic_props（title/desc）。"""
+    bd = node.get("banner_detail") or {}
+    outs = []
+    for rv in (bd.get("role2views") or {}).values():
+        if not isinstance(rv, dict):
+            continue
+        for bn in rv.get("banners") or []:
+            bp = (bn or {}).get("basic_props") or {}
+            title = (bp.get("title") or [""])[0]
+            desc = (bp.get("desc") or [""])[0]
+            if title or desc:
+                outs.append(" ".join(x for x in (title, desc) if x))
     return outs
 
 
@@ -991,6 +1032,8 @@ def _parse_banner_json(raw):
             parts = _banner_task_summary(node)
             if not parts:
                 parts = _banner_fans_summary(node)
+            if not parts:
+                parts = _banner_flow_summary(node)
             if not parts and isinstance(extra, dict):
                 nm = (extra.get("step") or {}).get("Name")
                 if nm:
@@ -1095,6 +1138,8 @@ def extract_msg(m):
                 hot_label = d.decode("utf-8", errors="replace")  # 栏目名，如"大家说"
             elif f == 4 and mtype == "WebcastLotteryDrawResultEventMessage":
                 lottery_json = d.decode("utf-8", errors="replace")  # 结果 JSON
+            elif f == 5 and mtype == "WebcastEmojiChatMessage":
+                content = d.decode("utf-8", errors="replace")  # "[表情]" 文字兜底
             elif f == 19:
                 tray_text = _parse_text(d)
             elif f == 21:
