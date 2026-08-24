@@ -10,6 +10,7 @@
 import io
 import json
 import os
+import threading
 import time
 from datetime import datetime
 
@@ -42,6 +43,9 @@ class InfoAccountsPage(BasePage):
         self._timer_interval = 3600
         self._fetching = False
         self._timer = None
+        # 暂停门闩：set=放行 / clear=暂停（采集线程在账号边界等待）
+        self._pause_evt = threading.Event()
+        self._pause_evt.set()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -155,6 +159,11 @@ class InfoAccountsPage(BasePage):
         self.fetch_btn = QPushButton("获取最新")
         self.fetch_btn.clicked.connect(self._fetch)
         op_row.addWidget(self.fetch_btn)
+        self.pause_btn = QPushButton("⏸ 暂停")
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setToolTip("暂停后当前账号采集完即停住，点「继续」恢复")
+        self.pause_btn.clicked.connect(self._toggle_pause)
+        op_row.addWidget(self.pause_btn)
         self.timer_btn = QPushButton("⏰ 定时获取")
         self.timer_btn.clicked.connect(self._toggle_timer)
         op_row.addWidget(self.timer_btn)
@@ -296,6 +305,9 @@ class InfoAccountsPage(BasePage):
         self.set_layout.addStretch(1)
 
     # ---------- 账号列表 ----------
+    # B站采集类型标签（其他平台无此概念）
+    _KIND_TAG = {"video": "作品", "dynamic": "动态", "all": "作品+动态"}
+
     def _reload_account_list(self):
         from accounts_manager import load_accounts
         from platforms import URLRecognizer
@@ -309,6 +321,10 @@ class InfoAccountsPage(BasePage):
             return
         for i, a in enumerate(accounts, 1):
             plat = URLRecognizer.recognize(a.url) or "?"
+            if plat == "bilibili":
+                kind = getattr(a, "kind", "") or ""
+                # 自动（无 /video /dynamic 后缀的主页链接）实际按「作品+动态」混合采集
+                plat = f"B站·{self._KIND_TAG.get(kind, '作品+动态')}"
             gids = ",".join(a.group_ids) if a.group_ids else ""
             name = a.name or ""
             prefix = f"{name} " if name else ""
@@ -376,6 +392,31 @@ class InfoAccountsPage(BasePage):
         else:
             QMessageBox.warning(self, "提示", "账号已存在")
 
+    # ---------- 暂停 ----------
+    def _toggle_pause(self):
+        if not self._fetching:
+            return
+        if self._pause_evt.is_set():
+            self._pause_evt.clear()
+            self.pause_btn.setText("▶ 继续")
+            self.pause_btn.setStyleSheet("background: #eab308; color: white;")
+            self.log_text.append("⏸ 已暂停（当前账号采集完成后停住）")
+            self.prog_label.setText("⏸ 已暂停，等待继续...")
+        else:
+            self._pause_evt.set()
+            self.pause_btn.setText("⏸ 暂停")
+            self.pause_btn.setStyleSheet("")
+            self.log_text.append("▶ 已继续采集")
+            self.prog_label.setText("继续采集中...")
+
+    def _set_fetch_ui(self, running: bool):
+        """获取开始/结束时同步暂停按钮状态（手动与定时获取共用）。"""
+        self.pause_btn.setEnabled(running)
+        if not running:
+            self._pause_evt.set()  # 复位门闩，避免下轮启动即处于暂停态
+            self.pause_btn.setText("⏸ 暂停")
+            self.pause_btn.setStyleSheet("")
+
     # ---------- 获取 ----------
     def _read_int(self, edit, default):
         try:
@@ -402,6 +443,7 @@ class InfoAccountsPage(BasePage):
         rate_interval = self._read_float(self.rate_interval_entry, 0)
         incremental = self.inc_check.isChecked()
         self.fetch_btn.setEnabled(False)
+        self._set_fetch_ui(True)
         self.log_text.setPlainText(f"⏳ 开始获取 {len(accounts)} 个账号的最新内容...\n")
         self.progress_bar.setRange(0, max(len(accounts), 1))
         self.progress_bar.setValue(0)
@@ -410,10 +452,12 @@ class InfoAccountsPage(BasePage):
         def work():
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
-                incremental=incremental, on_event=self._make_event_bridge())
+                incremental=incremental, on_event=self._make_event_bridge(),
+                pause_event=self._pause_evt)
 
         def done(result, err):
             self.fetch_btn.setEnabled(True)
+            self._set_fetch_ui(False)
             self._fetching = False
             if err:
                 self.log_text.append(f"❌ {err}")
@@ -472,7 +516,7 @@ class InfoAccountsPage(BasePage):
             return [], "没有可采集的账号"
         return accounts, None
 
-    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None):
+    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None):
         """采集账号最新内容，返回 (total, log)。供手动与定时获取共用。
 
         多账号并发采集（ThreadPoolExecutor，上限 4 线程）：原串行逐个等待，
@@ -482,6 +526,7 @@ class InfoAccountsPage(BasePage):
         或 {"type": "progress", "done": x, "total": y, "label": ...}。
         rate_count/rate_interval: 搜索限流（每网站累计抓到 rate_count 个暂停 rate_interval 秒）。
         incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
+        pause_event: threading.Event，clear 时在账号边界停住（在飞账号自然跑完）。
         """
         from concurrent.futures import ThreadPoolExecutor
         from platforms import URLRecognizer, get_parser
@@ -527,6 +572,9 @@ class InfoAccountsPage(BasePage):
         def _fetch_one(job):
             """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, detail, error)。"""
             i, a = job
+            # 暂停门闩：clear 时阻塞在账号边界，set 后继续（在飞账号自然跑完）
+            if pause_event is not None:
+                pause_event.wait()
             platform = URLRecognizer.recognize(a.url)
             name = a.name or (a.url[:36] if a.url else "未命名")
             if not platform:
@@ -582,11 +630,13 @@ class InfoAccountsPage(BasePage):
             _collect(posts)
             all_posts.extend(posts)
             total += len(posts)
-            # 搜索限流：每网站累计抓到 rate_count 个后暂停 rate_interval 秒
+            # 搜索限流：每网站累计抓到 rate_count 个后暂停 rate_interval 秒（暂停门闩优先）
             if rate_count > 0 and rate_interval > 0 and posts:
                 per_platform[platform] = per_platform.get(platform, 0) + len(posts)
                 if per_platform[platform] >= rate_count:
                     emit(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
+                    if pause_event is not None:
+                        pause_event.wait()
                     time.sleep(rate_interval)
                     per_platform[platform] = 0
             # 区分主页作品 / 动态统计
@@ -746,9 +796,11 @@ class InfoAccountsPage(BasePage):
         def work():
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
-                incremental=incremental, on_event=self._make_event_bridge())
+                incremental=incremental, on_event=self._make_event_bridge(),
+                pause_event=self._pause_evt)
 
         def done(result, err):
+            self._set_fetch_ui(False)
             self._fetching = False
             ts = datetime.now().strftime("%H:%M:%S")
             if err:
@@ -760,6 +812,7 @@ class InfoAccountsPage(BasePage):
             refresh_results_count(self.app)
 
         self._fetching = True
+        self._set_fetch_ui(True)
         run_bg(work, done)
 
     # ---------- 分组管理（设置页） ----------

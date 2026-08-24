@@ -10,6 +10,7 @@
 import time
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPushButton, QProgressBar, QScrollArea,
@@ -492,11 +493,39 @@ class TrackerPage(BasePage):
             ver = QTableWidgetItem(title)
             table.setVerticalHeaderItem(i, ver)
             for j, (_name, fields) in enumerate(METRICS):
-                table.setItem(i, j, QTableWidgetItem(_cell(rec, fields)))
+                cell = QTableWidgetItem(_cell(rec, fields))
+                # 与上一条（时间更早的一条）对比：数值涨绿跌红，附增减量
+                delta = self._num_delta(history[i + 1], rec, fields) if i + 1 < len(history) else None
+                if delta:
+                    arrow = "↑" if delta > 0 else "↓"
+                    cell.setText(f"{cell.text()} {arrow}{abs(delta)}")
+                    cell.setForeground(QColor("#4caf50" if delta > 0 else "#ff5252"))
+                table.setItem(i, j, cell)
         table.resizeColumnsToContents()
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        hint = QLabel("颜色说明：与上一条采集对比，绿色=数值增加，红色=数值减少（↑/↓ 后为增减量）")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        v.addWidget(hint)
         v.addWidget(table, 1)
         win.exec()
+
+    @staticmethod
+    def _num_delta(prev, curr, fields):
+        """数值指标对比：返回 curr - prev（涨正跌负），任一侧缺失/非数值返回 None。"""
+        def _val(rec):
+            for f in fields:
+                v = rec.get(f)
+                if v is None or v == "":
+                    continue
+                try:
+                    return int(float(v))
+                except (ValueError, TypeError):
+                    return None
+            return None
+        c, p = _val(curr), _val(prev)
+        if c is None or p is None:
+            return None
+        return c - p
 
     def _card_for(self, acc):
         for c in self.cards:

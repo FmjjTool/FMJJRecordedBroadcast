@@ -134,9 +134,13 @@ class _RowWidget(QWidget):
         self._on_click = on_click
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._on_click:
-            self._on_click()
-        super().mousePressEvent(event)
+        # 列表刷新时行已被 deleteLater，但点击事件仍在派发队列中——直接忽略
+        try:
+            if event.button() == Qt.LeftButton and self._on_click:
+                self._on_click()
+            super().mousePressEvent(event)
+        except RuntimeError:
+            pass
 
 
 class AssetPage(BasePage):

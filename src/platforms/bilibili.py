@@ -286,7 +286,8 @@ class BilibiliParser(PlatformBase):
             archive = major.get("archive", {})
             cover_url = archive.get("cover", "")
             archive_title = archive.get("title", "")
-            if archive_title and not title:
+            # 无正文时用投稿标题（默认兜底标题已生成，需显式覆盖）
+            if archive_title and not text:
                 title = archive_title
         elif mtype == "MAJOR_TYPE_OPUS":
             # 纯文本/图文短帖（desc 常为 null，正文在 summary）
@@ -388,7 +389,23 @@ class BilibiliParser(PlatformBase):
                 # 已抓的视频数（按非 dynamic 计）保证合计接近 count
                 existing_videos = sum(1 for r in results if getattr(r, "kind", "") != "dynamic")
                 n = count - existing_videos + 2
-            results.extend(self._fetch_dynamics(mid, n))
+            dyn = self._fetch_dynamics(mid, n)
+            if kind == "all":
+                # 混合模式：投稿动态与视频列表是同一内容两条，按 bvid 去掉动态侧
+                # （转发他人视频/超出视频列表抓取范围的不受影响，仍保留为动态）
+                bvids = {r.video_id for r in results if getattr(r, "kind", "") != "dynamic"}
+                keep = []
+                for r in dyn:
+                    mod = (r.raw_data or {}).get("modules") or {}
+                    dyn_mod = mod.get("module_dynamic") or {}
+                    major = dyn_mod.get("major") or {}
+                    arch = major.get("archive") or {}
+                    bv = arch.get("bvid", "")
+                    if bv and bv in bvids:
+                        continue
+                    keep.append(r)
+                dyn = keep
+            results.extend(dyn)
         # 去重并限制数量
         seen = set()
         unique = []
@@ -547,16 +564,66 @@ class BilibiliParser(PlatformBase):
     # ========== 动态 (含图文) ==========
 
     def _fetch_dynamics(self, mid: str, count: int = 10) -> list:
-        """获取用户动态（支持图文、转发视频等）。游客优先，失败接入Cookie。"""
+        """获取用户动态（支持图文、转发视频等）。游客HTTP→游客Playwright→Cookie 三级回退。"""
         results = self._fetch_dynamics_once(mid, count, cookie="")
+        if results:
+            return results
+        print("[B站] 游客HTTP未获取到动态，切Playwright...")
+        results = self._fetch_dynamics_playwright(mid, count)
         if results:
             return results
         from auth import get_cookie
         ck = get_cookie("bilibili")
         if ck:
-            print("[B站] 游客方式未获取到动态，接入Cookie重试...")
+            print("[B站] Playwright也未获取到动态，接入Cookie重试...")
             results = self._fetch_dynamics_once(mid, count, cookie=ck)
         return results
+
+    def _fetch_dynamics_playwright(self, mid: str, count: int = 10) -> list:
+        """游客 Playwright 兜底：打开空间动态页，捕获 feed/space 接口响应。"""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            print("[B站] Playwright 未安装")
+            return []
+        results = []
+        items = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(user_agent=self.HEADERS["User-Agent"])
+            page = ctx.new_page()
+
+            def on_resp(r):
+                if "web-dynamic/v1/feed/space" in r.url and r.status == 200:
+                    try:
+                        d = r.json()
+                        if d.get("code") == 0:
+                            items.extend(d.get("data", {}).get("items", []))
+                    except Exception:
+                        pass
+
+            page.on("response", on_resp)
+            try:
+                page.goto(f"https://space.bilibili.com/{mid}/dynamic",
+                          wait_until="networkidle", timeout=30000)
+                for _ in range(3):
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(2000)
+                if not items:
+                    page.wait_for_timeout(5000)
+                # 滚动翻页会重复推送同一批，按动态 id 去重
+                seen = set()
+                for item in items:
+                    did = item.get("id_str", "")
+                    if not did or did in seen:
+                        continue
+                    seen.add(did)
+                    results.append(self._build_dynamic_info(item))
+            except Exception as e:
+                print(f"[B站-Playwright] 动态获取失败: {e}")
+            finally:
+                browser.close()
+        return results[:count] if count > 0 else results
 
     def _fetch_dynamics_once(self, mid: str, count: int = 10, cookie: str = "") -> list:
         results = []
