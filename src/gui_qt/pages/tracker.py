@@ -472,6 +472,9 @@ class TrackerPage(BasePage):
 
         win = QDialog(self)
         win.setWindowTitle(f"📊 {acc.get('name', '账号')} · 历史数据")
+        # QDialog 默认只有关闭按钮，补上最小化/最大化（双击标题栏全屏也生效）
+        win.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        win.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         win.resize(980, 520)
         v = QVBoxLayout(win)
         v.setContentsMargins(10, 12, 10, 10)
@@ -500,6 +503,8 @@ class TrackerPage(BasePage):
                 table.setItem(i, j, cell)
         table.resizeColumnsToContents()
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        # 最后一列拉伸：最大化后不留右侧大片空白
+        table.horizontalHeader().setStretchLastSection(True)
         hint = QLabel("颜色说明：与上一条采集对比，绿色=数值增加，红色=数值减少（↑/↓ 后为增减量）")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(hint)
