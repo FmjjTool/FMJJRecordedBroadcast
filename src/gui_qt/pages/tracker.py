@@ -371,6 +371,12 @@ class TrackerPage(BasePage):
         # 预览：2 行 × 4 列网格
         preview_frame = QWidget()
         preview_frame.setStyleSheet("background: #e8ebf0; border-radius: 6px;")
+        # 双击预览区快捷打开完整历史窗口
+        preview_frame.setCursor(Qt.PointingHandCursor)
+        preview_frame.setToolTip("双击查看完整历史数据")
+        preview_frame.mouseDoubleClickEvent = (
+            lambda ev, a=acc: self._open_history(a)
+            if ev.button() == Qt.LeftButton else None)
         grid = QGridLayout(preview_frame)
         grid.setContentsMargins(6, 4, 6, 4)
         grid.setSpacing(4)
