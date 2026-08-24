@@ -322,7 +322,8 @@ class InfoAccountsPage(BasePage):
         for i, a in enumerate(accounts, 1):
             plat = URLRecognizer.recognize(a.url) or "?"
             if plat == "bilibili":
-                kind = getattr(a, "kind", "") or ""
+                from accounts_manager import infer_kind_from_url
+                kind = getattr(a, "kind", "") or infer_kind_from_url(a.url)
                 # 自动（无 /video /dynamic 后缀的主页链接）实际按「作品+动态」混合采集
                 plat = f"B站·{self._KIND_TAG.get(kind, '作品+动态')}"
             gids = ",".join(a.group_ids) if a.group_ids else ""
@@ -529,6 +530,7 @@ class InfoAccountsPage(BasePage):
         pause_event: threading.Event，clear 时在账号边界停住（在飞账号自然跑完）。
         """
         from concurrent.futures import ThreadPoolExecutor
+        from accounts_manager import infer_kind_from_url
         from platforms import URLRecognizer, get_parser
         total = 0
         log = []
@@ -582,8 +584,8 @@ class InfoAccountsPage(BasePage):
             parser = get_parser(platform)
             if not parser or not hasattr(parser, "fetch_user_posts"):
                 return i, a, platform, [], "", "不支持时间线"
-            # B站按账号 kind 决定只采视频/只采动态/混合；其他平台忽略
-            account_kind = getattr(a, "kind", "")
+            # B站按账号 kind 决定只采视频/只采动态/混合（存量账号 kind 空时按 URL 后缀推断）；其他平台忽略
+            account_kind = getattr(a, "kind", "") or infer_kind_from_url(a.url)
             if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
                 kwargs = {"kind": account_kind}
             else:
@@ -642,8 +644,8 @@ class InfoAccountsPage(BasePage):
             # 区分主页作品 / 动态统计
             dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
             videos = len(posts) - dyns
-            account_kind = getattr(a, "kind", "")
-            kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(account_kind, "")
+            kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(
+                getattr(a, "kind", "") or infer_kind_from_url(a.url), "")
             if dyns and videos:
                 emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
             elif dyns:
@@ -912,16 +914,16 @@ class InfoAccountsPage(BasePage):
             save_btn = QPushButton("💾")
             save_btn.setFixedSize(34, 26)
             save_btn.setStyleSheet("background: #2e7d32; color: white;")
-            save_btn.clicked.connect(lambda _=False, idx=i, s=gsel, k=ksel: self._save_account_row(idx, s, k))
+            save_btn.clicked.connect(lambda _=False, u=a.url, s=gsel, k=ksel: self._save_account_row(u, s, k))
             h.addWidget(save_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet("background: #c62828; color: white;")
-            del_btn.clicked.connect(lambda _=False, idx=i: self._delete_account_row(idx))
+            del_btn.clicked.connect(lambda _=False, u=a.url: self._delete_account_row(u))
             h.addWidget(del_btn)
             self.acct_set_layout.addWidget(row)
 
-    def _save_account_row(self, idx, gsel, ksel):
+    def _save_account_row(self, url, gsel, ksel):
         v = gsel.currentText()
         gid = "" if v == "无分组" else v.split(":")[0].strip()
         kv = ksel.currentText()
@@ -930,14 +932,14 @@ class InfoAccountsPage(BasePage):
         kind = kind_rev.get(kv, "")
         from accounts_manager import update_account, get_groups
         gname = get_groups().get(gid, "") if gid else ""
-        if update_account(idx, group_id=gid, group_name=gname, kind=kind):
+        if update_account(url, group_id=gid, group_name=gname, kind=kind):
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
 
-    def _delete_account_row(self, idx):
+    def _delete_account_row(self, url):
         from accounts_manager import remove_account
-        if remove_account(idx):
+        if remove_account(url):
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)

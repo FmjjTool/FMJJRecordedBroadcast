@@ -36,25 +36,32 @@ class Account:
         return self.group_ids[0] if self.group_ids else ""
 
     def to_line(self) -> str:
-        """序列化为文件中的一行（组号|组名|账号名|URL[|备注]）。"""
+        """序列化为文件中的一行。采集类型作为尾段追加（三种格式统一，video/dynamic/all）。"""
         if self.group_ids:
             gids = ",".join(self.group_ids)
             line = f"{gids}|{self.group_name}|{self.name}|{self.url}"
-            if self.note:
-                line += f"|{self.note}"
-            return line
-        if self.name:
-            return f"{self.name}|{self.url}"
-        return self.url
+        elif self.name:
+            line = f"{self.name}|{self.url}"
+        else:
+            line = self.url
+        if self.note:
+            line += f"|{self.note}"
+        if self.kind in ("video", "dynamic", "all"):
+            line += f"|{self.kind}"
+        return line
 
     @staticmethod
     def from_line(line: str) -> "Account":
         """从文件中的一行解析。兼容旧格式（组号|组名|备注|URL → 第三段当作账号名）。
 
         第3/4段自动纠偏：若账号名与 URL 位置填反（账号名是 http 开头），自动对调。
+        尾段为采集类型标记（video/dynamic/all）时剥离为 kind。
         """
         line = line.strip()
         parts = line.split("|")
+        kind = ""
+        if len(parts) >= 2 and parts[-1] in ("video", "dynamic", "all"):
+            kind = parts.pop()
         # pipe 格式: 组号(逗号分隔可多组)|组名|账号名|URL[|备注]
         if len(parts) >= 4 and re.match(r'^[\d,]+$', parts[0]):
             gids = [g for g in parts[0].split(",") if g]
@@ -68,12 +75,14 @@ class Account:
                 name=name,
                 url=url,
                 note=parts[4] if len(parts) > 4 else "",
+                kind=kind,
             )
-        # 账号名|URL
-        if len(parts) == 2 and not re.match(r'^https?://', parts[0]):
-            return Account(name=parts[0], url=parts[1])
+        # 账号名|URL[|备注]
+        if len(parts) in (2, 3) and not re.match(r'^https?://', parts[0]):
+            return Account(name=parts[0], url=parts[1],
+                           note=parts[2] if len(parts) > 2 else "", kind=kind)
         # 纯 URL
-        return Account(url=line)
+        return Account(url=parts[0] if parts else line, kind=kind)
 
 
 # ========== 文件读写 ==========
@@ -143,31 +152,32 @@ def add_account(url: str, name: str = "", group_id: str = "", group_name: str = 
     return True
 
 
-def update_account(index: int, name=None, group_id: str = "", group_name: str = "", note=None, kind=None) -> bool:
-    """更新指定账号的账号名/分组/备注/采集类型。传 None 表示不修改。"""
+def update_account(url: str, name=None, group_id: str = "", group_name: str = "", note=None, kind=None) -> bool:
+    """按 URL 更新账号的账号名/分组/备注/采集类型。传 None 表示不修改。"""
     group_name = (group_name or "").replace("|", " ")
     accounts = load_accounts()
-    if 1 <= index <= len(accounts):
-        acc = accounts[index - 1]
-        if name is not None:
-            acc.name = name.replace("|", " ")
-        if note is not None:
-            acc.note = note.replace("|", " ")
-        if kind is not None:
-            acc.kind = kind
-        acc.group_ids = _parse_group_ids(group_id)
-        acc.group_name = group_name
-        save_accounts(accounts)
-        return True
+    for acc in accounts:
+        if acc.url == url:
+            if name is not None:
+                acc.name = name.replace("|", " ")
+            if note is not None:
+                acc.note = note.replace("|", " ")
+            if kind is not None:
+                acc.kind = kind
+            acc.group_ids = _parse_group_ids(group_id)
+            acc.group_name = group_name
+            save_accounts(accounts)
+            return True
     return False
 
 
-def remove_account(index: int) -> bool:
+def remove_account(url: str) -> bool:
     accounts = load_accounts()
-    if 1 <= index <= len(accounts):
-        accounts.pop(index - 1)
-        save_accounts(accounts)
-        return True
+    for i, acc in enumerate(accounts):
+        if acc.url == url:
+            accounts.pop(i)
+            save_accounts(accounts)
+            return True
     return False
 
 
