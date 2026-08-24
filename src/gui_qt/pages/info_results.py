@@ -11,9 +11,11 @@ import webbrowser
 from datetime import datetime
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics, QTextDocument
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
-    QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
+    QMessageBox, QPushButton, QStyledItemDelegate, QStyle, QStyleOptionViewItem,
+    QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -30,6 +32,47 @@ PLATFORMS_3 = [
 
 _PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
                 "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
+
+# 视频/动态标签配色：常规态 + 选中态（蓝底上的浅色变体）
+TAG_COLORS = {"[视频]": ("#1976d2", "#bbdefb"), "[动态]": ("#e65100", "#ffe0b2")}
+
+
+def colorize_tag_html(text: str, selected: bool = False) -> str:
+    """把行文本里的 [视频]/[动态] 标签替换为彩色加粗 span，其余文本原样转义。"""
+    esc = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    for tag, (normal, sel) in TAG_COLORS.items():
+        color = sel if selected else normal
+        esc = esc.replace(tag, f'<span style="color:{color}; font-weight:bold;">{tag}</span>')
+    return esc
+
+
+class TagColorDelegate(QStyledItemDelegate):
+    """列表行富文本渲染：仅给 [视频]/[动态] 标签上色（其余文字保持默认样式）。"""
+
+    def paint(self, painter, option, index):
+        text = index.data(Qt.DisplayRole)
+        if not isinstance(text, str) or not any(t in text for t in TAG_COLORS):
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        selected = bool(opt.state & QStyle.State_Selected)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        shown = QFontMetrics(opt.font).elidedText(
+            text, Qt.ElideRight, int(rect.width()))
+        doc = QTextDocument()
+        doc.setDefaultFont(opt.font)
+        doc.setDocumentMargin(0)
+        doc.setHtml(colorize_tag_html(shown, selected))
+        painter.save()
+        painter.setClipRect(rect)
+        y = rect.top() + (rect.height() - doc.size().height()) / 2.0
+        painter.translate(rect.left(), y)
+        doc.drawContents(painter)
+        painter.restore()
 
 
 def _parse_pub(info):
@@ -155,6 +198,8 @@ class InfoResultsPage(BasePage):
         v.addLayout(btns)
 
         lst = RowCheckList()
+        # [视频]/[动态] 标签彩色渲染（其余文字默认样式）
+        lst.setItemDelegate(TagColorDelegate(lst))
         lst.itemDoubleClicked.connect(
             lambda item: self._open_url(item.data(Qt.UserRole) or ""))
         self.cols[key]["list"] = lst
