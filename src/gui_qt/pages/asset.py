@@ -487,6 +487,12 @@ class AssetPage(BasePage):
                     "file_path": str(path),
                     "media_files": [],
                 }
+                # B站类型标记：动态 video_id=dyn_*（或 t.bilibili.com 链接），视频 BV/av 开头
+                if platform == "bilibili":
+                    vid = str(entry["video_id"])
+                    link = entry["video_url"]
+                    entry["is_dynamic"] = (vid.startswith("dyn_")
+                                           or "t.bilibili.com" in link)
                 # 匹配媒体（date + 标题双向子串 + 子目录匹配）
                 title_norm = _sanitize_title_key(title).strip("_")
                 json_subdir = _norm_subdir(path.parent.name)
@@ -698,6 +704,14 @@ class AssetPage(BasePage):
         fname = os.path.basename(it["file_path"])
         fname = fname[:44] + ("…" if len(fname) > 44 else "")
         date_str = it["date_part"] if it["date_part"] else ""
+        # B站条目带类型彩色标签（蓝=视频 橙=动态，与已获取页一致）；其他平台原样
+        if it["platform"] == "bilibili" and "is_dynamic" in it:
+            if it["is_dynamic"]:
+                plat_tag = '<span style="color:#e65100; font-weight:bold;">[B站·动态]</span> '
+            else:
+                plat_tag = '<span style="color:#1976d2; font-weight:bold;">[B站·视频]</span> '
+        else:
+            plat_tag = f"[{plat_cn}] "
         imgs = sum(1 for m in it.get("media_files", []) if m["type"] == "image")
         vids = sum(1 for m in it.get("media_files", []) if m["type"] == "video")
         media_str = ""
@@ -705,10 +719,15 @@ class AssetPage(BasePage):
             media_str += f" 🖼{imgs}"
         if vids:
             media_str += f" 🎬{vids}"
-        text = (f"[{index}] [{plat_cn}] {title}{media_str}\n"
-                f"@{it['author'] or '-'}  播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}\n"
-                f"📅 {date_str}  📄 {fname}")
+
+        def _esc(s):
+            return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        text = (f"[{index}] {plat_tag}{_esc(title)}{media_str}<br>"
+                f"@{_esc(it['author'] or '-')}  播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}<br>"
+                f"📅 {date_str}  📄 {_esc(fname)}")
         txt = QLabel(text)
+        txt.setTextFormat(Qt.RichText)
         txt.setStyleSheet("font-size: 11px;")
         txt.setWordWrap(True)
         txt.setToolTip(f"{full_title}\n\n📄 {os.path.basename(it['file_path'])}")

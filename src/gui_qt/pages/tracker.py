@@ -399,10 +399,10 @@ class TrackerPage(BasePage):
             lbl.setStyleSheet("color: gray;")
             grid.addWidget(lbl, 0, 0, 1, 4)
             return
-        rows = [("当前", records[0])]
+        rows = [((records[0].get("_time") or "")[:16] or "记录1", records[0])]
         if len(records) >= 2:
             t = (records[1].get("_time") or "")[:16]
-            rows.append((t or "上次", records[1]))
+            rows.append((t or "记录2", records[1]))
         for r, (time_label, rec) in enumerate(rows):
             tl = QLabel(time_label)
             tl.setStyleSheet("color: #1976d2; font-weight: bold;")
@@ -485,11 +485,8 @@ class TrackerPage(BasePage):
         table.verticalHeader().setVisible(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         for i, rec in enumerate(history):
-            if i == 0:
-                title = "当前"
-            else:
-                t = (rec.get("_time") or "")[:16]  # 带时间
-                title = t if t else f"历史{i}"
+            t = (rec.get("_time") or "")[:16]  # 行标直接显示采集时间
+            title = t if t else f"记录{i + 1}"
             ver = QTableWidgetItem(title)
             table.setVerticalHeaderItem(i, ver)
             for j, (_name, fields) in enumerate(METRICS):
