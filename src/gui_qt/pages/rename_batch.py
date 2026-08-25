@@ -546,7 +546,9 @@ class RenameBatchPage(BasePage):
                 "conflict": self.o_conflict.isChecked(),
             },
         }
-        if not hasattr(self, "_tm_busy"):
+        # hasattr 判断不行：_fill_textmode 结束后 _tm_busy 恒存在（值 False），
+        # 会把之后所有规则变更的自动预览全部短路（规则怎么改都不生效的根因）
+        if not getattr(self, "_tm_busy", False):
             self._refresh()
 
     def _filter_files(self) -> list[dict]:
@@ -562,7 +564,7 @@ class RenameBatchPage(BasePage):
         return [x for x in self.files if x["ext"].lower() in keep or ("." + x["ext"].lower()) in keep]
 
     def _refresh(self):
-        if hasattr(self, "_tm_busy"):
+        if getattr(self, "_tm_busy", False):
             return
         now = datetime.now()
         items = self._filter_files()

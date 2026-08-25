@@ -11,7 +11,7 @@ import webbrowser
 from datetime import datetime
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontMetrics, QTextDocument
+from PySide6.QtGui import QFontMetrics, QPalette, QTextDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
     QMessageBox, QPushButton, QStyledItemDelegate, QStyle, QStyleOptionViewItem,
@@ -63,10 +63,15 @@ class TagColorDelegate(QStyledItemDelegate):
         rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
         shown = QFontMetrics(opt.font).elidedText(
             text, Qt.ElideRight, int(rect.width()))
+        # 基础文字颜色取调色板（深色主题浅色/浅色主题深色，选中态用高亮前景）。
+        # 不设的话 QTextDocument 默认黑字，深色主题下整行不可读。
+        base = (opt.palette.color(QPalette.HighlightedText) if selected
+                else opt.palette.color(QPalette.Text)).name()
         doc = QTextDocument()
         doc.setDefaultFont(opt.font)
         doc.setDocumentMargin(0)
-        doc.setHtml(colorize_tag_html(shown, selected))
+        doc.setHtml(
+            f'<span style="color:{base};">{colorize_tag_html(shown, selected)}</span>')
         painter.save()
         painter.setClipRect(rect)
         y = rect.top() + (rect.height() - doc.size().height()) / 2.0

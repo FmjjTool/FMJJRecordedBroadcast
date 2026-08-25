@@ -9,7 +9,7 @@ import re
 from urllib.parse import urlparse
 
 import httpx
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
@@ -136,7 +136,9 @@ def _guess_kw(path: str, tags: dict) -> str:
     # 去掉常见前缀「艺术家 - 标题」取标题部分，去音质后缀
     stem = re.sub(r"\s*[\[(](FLAC|320K|320kbps|24bit|96kHz|44\.1kHz)[\])]\s*", "", stem, flags=re.I)
     parts = [p.strip() for p in re.split(r"\s+-\s+", stem) if p.strip()]
-    return parts[1] if len(parts) >= 2 else stem
+    if len(parts) >= 2:
+        return f"{parts[1]} {parts[0]}"   # 「艺术家 - 标题」→「标题 艺术家」搜索更准
+    return stem
 
 
 class _NetDialog(QDialog):
@@ -234,11 +236,11 @@ class _NetDialog(QDialog):
         if not rows or not getattr(self, "_songs", None):
             return
         song = self._songs[rows[0].row()]
+        src = self.src_cb.currentData()  # 主线程读，job 内跨线程访问控件属未定义行为
         self.info.setText("获取详情（歌词/专辑）……")
         self.setEnabled(False)
 
         def job():
-            src = self.src_cb.currentData()
             from music import ALL_PLATFORMS
             cls = dict((k, c) for k, _n, c in ALL_PLATFORMS)[src]
             return cls().fetch_full_detail(song)
@@ -250,6 +252,8 @@ class _NetDialog(QDialog):
                 return
             self.song = full
             self.accept()
+
+        run_bg(job, done)
 
 
 class MusicTagPage(BasePage):
@@ -287,6 +291,7 @@ class MusicTagPage(BasePage):
         btn("🌐 网络匹配（当前）", blue, "按文件名搜索网络标签，手动选择候选", self._net_match)
         btn("⚡ 批量匹配（选中）", blue, "对选中文件逐一自动匹配（取第一候选，覆盖全部字段）", self._net_batch)
         btn("✖ 移除选中", plain, "从列表移除（不删文件）", self._remove_selected)
+        btn("🗑 清除标签（选中）", plain, "清空选中文件的全部标签与封面（保存后从文件删除）", self._clear_tags)
         btn("🧹 清空列表", plain, "", self._clear_list)
         row.addStretch(1)
         return w
@@ -358,6 +363,7 @@ class MusicTagPage(BasePage):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_select)
+        self.table.installEventFilter(self)   # Del/Backspace 删除选中行
         sp.addWidget(self.table)
         sp.setStretchFactor(1, 3)
         sp.setSizes([340, 760])
@@ -586,6 +592,38 @@ class MusicTagPage(BasePage):
         self._fill_form(None)
         self._edit_targets = []
         self._update_status()
+
+    def eventFilter(self, obj, ev):
+        """右侧文件表格：Del/Backspace 删除选中行（等同「移除选中」）。"""
+        if obj is self.table and ev.type() == QEvent.KeyPress:
+            if ev.key() in (Qt.Key_Delete, Qt.Key_Backspace) and \
+                    self.table.selectionModel().selectedRows():
+                self._remove_selected()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _clear_tags(self):
+        """清空选中文件的全部标签与封面（内存态，保存后从文件删除）。"""
+        rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
+        if not rows:
+            self.app.toast("请先选中要清除标签的文件行", "warning")
+            return
+        if QMessageBox.question(
+                self, "清除标签",
+                f"将清空 {len(rows)} 个文件的全部标签与封面（保存后从文件中删除），继续？"
+                ) != QMessageBox.StandardButton.Yes:
+            return
+        for i in rows:
+            r = self._rows[i]
+            for k in r["tags"]:
+                r["tags"][k] = ""
+            r["cover"], r["cover_state"] = None, "removed"
+            r["dirty"] = True
+            self._mark_row(i)
+        if self._edit_targets:
+            self._fill_form(self._rows[self._edit_targets[0]])
+        self._update_status()
+        self.app.toast(f"已清空 {len(rows)} 个文件的标签（记得保存）", "success")
 
     def _clear_list(self):
         dirty = [r for r in self._rows if r["dirty"]]
