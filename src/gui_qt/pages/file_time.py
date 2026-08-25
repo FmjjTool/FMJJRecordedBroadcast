@@ -6,14 +6,12 @@ Windows 下创建时间通过 win32file 或 ctypes 修改。
 
 import os
 import re
-import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QDateTimeEdit, QFileDialog, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout,
 )
 
 from gui_qt.common import run_bg
@@ -100,6 +98,8 @@ class FileTimePage(BasePage):
         clear.clicked.connect(self._clear)
         self.cnt = QLabel("0 个文件（可直接拖入）")
         self.cnt.setStyleSheet("color:#888;")
+        self.cnt.setToolTip("在表格中选中行（可多选）后，预览/应用只作用于选中的文件；"
+                            "不选中则为全部文件")
         top.addWidget(add_files)
         top.addWidget(add_dir)
         top.addWidget(clear)
@@ -112,6 +112,8 @@ class FileTimePage(BasePage):
         self.table.setHorizontalHeaderLabels(["文件", "修改时间", "创建时间", "新修改时间", "新创建时间", "状态"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         layout.addWidget(self.table, 1)
 
         # 模式区
@@ -130,12 +132,12 @@ class FileTimePage(BasePage):
 
         # 参数区
         pr = QHBoxLayout()
-        self.time_entry = QLineEdit()
-        self.time_entry.setPlaceholderText("2024-01-02 15:04:05（也可只到分钟）")
-        self.time_entry.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        pr.addWidget(self.time_entry)
+        self.time_dt = QDateTimeEdit(datetime.now())
+        self.time_dt.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.time_dt.setCalendarPopup(True)
+        pr.addWidget(self.time_dt)
         self.offset_entry = QLineEdit()
-        self.offset_entry.setPlaceholderText("偏移量，如 -3h30m / +2d / +90m / -30s")
+        self.offset_entry.setPlaceholderText("偏移量，如 -210m / +2d / +90m / -30s")
         self.offset_entry.setText("+0h")
         self.offset_entry.setEnabled(False)
         pr.addWidget(self.offset_entry)
@@ -199,21 +201,22 @@ class FileTimePage(BasePage):
 
     # ---------- 计算 ----------
     def _update_mode(self):
-        self.time_entry.setEnabled(self.rb_set.isChecked())
+        self.time_dt.setEnabled(self.rb_set.isChecked())
         self.offset_entry.setEnabled(self.rb_offset.isChecked())
+
+    def _scope(self) -> list[tuple[int, str]]:
+        """操作范围：表格有选中行 → 仅选中文件；否则全部文件。"""
+        sel = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
+        if sel:
+            return [(i, self.files[i]) for i in sel if i < len(self.files)]
+        return list(enumerate(self.files))
 
     def _compute(self, f: str) -> tuple[float, float, float] | str:
         """返回 (atime, mtime, ctime) 或错误文本。"""
         st = os.stat(f)
         if self.rb_set.isChecked():
-            txt = self.time_entry.text().strip()
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
-                try:
-                    ts = datetime.strptime(txt, fmt).timestamp()
-                    return (ts, ts, ts)
-                except ValueError:
-                    continue
-            return "时间格式错误"
+            ts = self.time_dt.dateTime().toSecsSinceEpoch()
+            return (ts, ts, ts)
         if self.rb_offset.isChecked():
             txt = self.offset_entry.text().strip().lower()
             m = re.fullmatch(r"([+-])(\d+(?:\.\d+)?)([smhd])", txt)
@@ -230,10 +233,12 @@ class FileTimePage(BasePage):
         return got
 
     def _preview(self):
-        for i, f in enumerate(self.files):
+        scope = self._scope()
+        ok = 0
+        for i, f in scope:
             r = self._compute(f)
             if i >= self.table.rowCount():
-                break
+                continue
             if isinstance(r, str):
                 self.table.setItem(i, 3, QTableWidgetItem(r))
                 self.table.setItem(i, 4, QTableWidgetItem(""))
@@ -243,20 +248,24 @@ class FileTimePage(BasePage):
                 self.table.setItem(i, 3, QTableWidgetItem(fmt))
                 self.table.setItem(i, 4, QTableWidgetItem(datetime.fromtimestamp(r[2]).strftime("%Y-%m-%d %H:%M:%S") if r[2] else "（不变）"))
                 self.table.setItem(i, 5, QTableWidgetItem("待应用"))
-        ok = sum(1 for f in self.files if not isinstance(self._compute(f), str))
-        self.status.setText(f"预览：{ok}/{len(self.files)} 可应用")
+            if not isinstance(r, str):
+                ok += 1
+        only = len(scope) < len(self.files)
+        tail = f"（仅选中 {len(scope)} 项）" if only else ""
+        self.status.setText(f"预览：{ok}/{len(scope)} 可应用{tail}")
 
     def _apply(self):
         if not self.files:
             QMessageBox.information(self, "提示", "请先添加文件")
             return
-        files = list(self.files)
+        scope = self._scope()
+        # 主线程先把目标值全部算好：后台线程不再读控件（跨线程访问 QWidget 属未定义行为）
+        plan = [(i, f, self._compute(f)) for i, f in scope]
         results = []
 
         def job():
             ok = 0
-            for i, f in enumerate(files):
-                r = self._compute(f)
+            for i, f, r in plan:
                 if isinstance(r, str):
                     results.append((i, r))
                     continue
@@ -280,7 +289,10 @@ class FileTimePage(BasePage):
             for i, msg in results:
                 if i < self.table.rowCount() and not msg:
                     self.table.setItem(i, 5, QTableWidgetItem("✔"))
-            self.status.setText(f"完成 {ok}/{len(files)}" + (f"，失败 {len(fails)}" if fails else ""))
-            self.app.toast(f"时间修改完成 {ok}/{len(files)}", "success" if ok == len(files) else "warning")
+            only = len(plan) < len(self.files)
+            tail = (f"（仅选中 {len(plan)} 项）" if only else "") + \
+                (f"，失败 {len(fails)}" if fails else "")
+            self.status.setText(f"完成 {ok}/{len(plan)}{tail}")
+            self.app.toast(f"时间修改完成 {ok}/{len(plan)}", "success" if ok == len(plan) else "warning")
 
         run_bg(job, done)

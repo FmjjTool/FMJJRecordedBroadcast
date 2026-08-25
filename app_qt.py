@@ -23,6 +23,20 @@ def _headless_io():
         sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 
+def _minimize_console():
+    """开发模式（python 直接启动、带控制台）时把 cmd 窗口自动最小化，
+    避免挡住 GUI。打包 --noconsole / pythonw 启动时无控制台句柄，自动跳过。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+    except Exception:
+        pass
+
+
 def _suppress_child_consoles():
     """给 subprocess.Popen 补 CREATE_NO_WINDOW：
     ffmpeg / node 等子进程不再弹出黑窗（无论有无控制台都生效）；
@@ -83,6 +97,8 @@ def main():
     _headless_io()
     # 任何启动方式（python/pythonw/打包 exe）下都不让子进程弹黑框
     _suppress_child_consoles()
+    # 开发模式启动后把 cmd 控制台窗口自动最小化（打包/pythonw 无控制台则跳过）
+    _minimize_console()
 
     from toolbox.config_manager import init_all_configs
     init_all_configs()
