@@ -27,6 +27,7 @@ class WeiboParser(PlatformBase):
     WEIBO_DETAIL_PATTERN = re.compile(r"m\.weibo\.cn/detail/([a-zA-Z0-9]+)")
     WEIBO_STATUS_PATTERN = re.compile(r"m\.weibo\.cn/status/([a-zA-Z0-9]+)")
     STATUS_API = "https://m.weibo.cn/api/statuses/show"
+    LONGTEXT_API = "https://m.weibo.cn/statuses/extend"
 
 
     @staticmethod
@@ -65,7 +66,7 @@ class WeiboParser(PlatformBase):
             if "passport" in str(resp.url): return None
             data = resp.json()
             if "id" not in data or "user" not in data: return None
-            return self._build_info(data, weibo_id, original_url)
+            return self._build_info(data, weibo_id, original_url, client)
         except Exception as e:
             print(f"[微博] API失败: {e}")
             return None
@@ -79,18 +80,53 @@ class WeiboParser(PlatformBase):
             # 复用括号计数提取 $render_data（兼容 var $render_data / window.$render_data）
             mblogs = self._extract_mblogs_from_html(html)
             if mblogs:
-                return self._build_info(mblogs[0], weibo_id, url)
+                return self._build_info(mblogs[0], weibo_id, url, client)
             return None
         except Exception as e:
             print(f"[微博] 页面失败: {e}")
             return None
 
-    def _build_info(self, status: dict, weibo_id: str, original_url: str) -> Optional[VideoInfo]:
+    def _fill_long_text(self, status: dict, client: httpx.Client) -> None:
+        """长微博展开：时间轴/详情接口的 mblog 常只有截断 text（尾部"...全文"），
+        isLongText=true 时需单独请求 extend 接口取全文，填回 longText 字段。"""
+        mid = str(status.get("mid") or status.get("id") or "")
+        if not mid:
+            return
+        try:
+            resp = client.get(f"{self.LONGTEXT_API}?id={mid}")
+            data = resp.json()
+            if data.get("ok") == 1:
+                lt = (data.get("data") or {}).get("longTextContent", "")
+                if lt:
+                    status["longText"] = {"longTextContent": lt}
+        except Exception as e:
+            print(f"[微博] 长文展开失败({mid}): {e}")
+
+    @staticmethod
+    def _clean_rich(text: str) -> str:
+        """HTML 正文清洗：<br> 保留换行，其余标签去除。"""
+        if not text:
+            return ""
+        t = re.sub(r"<br\s*/?\s*>", "\n", text, flags=re.IGNORECASE)
+        return re.sub(r"<[^>]+>", "", t).strip()
+
+    def _build_info(self, status: dict, weibo_id: str, original_url: str,
+                    client: Optional[httpx.Client] = None) -> Optional[VideoInfo]:
+        # 长微博：接口未附带 longText 时现场请求 extend 接口展开全文
+        if status.get("isLongText") and not status.get("longText"):
+            if client is not None:
+                self._fill_long_text(status, client)
+            else:
+                tmp = httpx.Client(headers=self.HEADERS, timeout=15, follow_redirects=True)
+                try:
+                    self._fill_long_text(status, tmp)
+                finally:
+                    tmp.close()
         text = status.get("text", "") or status.get("raw_text", "")
-        clean_text = re.sub(r'<[^>]+>', '', text).strip() if text else ""
+        clean_text = self._clean_rich(text)
         if status.get("isLongText") and status.get("longText"):
             lt = status["longText"].get("longTextContent", "")
-            if lt: clean_text = re.sub(r'<[^>]+>', '', lt).strip()
+            if lt: clean_text = self._clean_rich(lt)
 
         title = status.get("status_title") or (clean_text.split("\n")[0].strip() if "\n" in clean_text else clean_text)
         description = clean_text
@@ -316,7 +352,7 @@ class WeiboParser(PlatformBase):
                     if taken >= remaining: break
                     mblog = card.get("mblog")
                     if not mblog: continue
-                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}")
+                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", client)
                     if info: results.append(info); taken += 1
                 remaining -= taken; page += 1
                 if taken == 0: break
@@ -372,9 +408,15 @@ class WeiboParser(PlatformBase):
                 print("[微博-HTTP] 遇到验证页")
                 return results
             mblogs = self._extract_mblogs_from_html(html)
-            for mblog in mblogs[:count]:
-                info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}")
-                if info: results.append(info)
+            if mblogs:
+                # 复用带 Cookie 的会话做长文展开（extend 接口）
+                ext_client = httpx.Client(headers=h5_headers, timeout=15, follow_redirects=True)
+                try:
+                    for mblog in mblogs[:count]:
+                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", ext_client)
+                        if info: results.append(info)
+                finally:
+                    ext_client.close()
             if results:
                 print(f"[微博-HTTP] 页面解析获取到 {len(results)} 条")
         except Exception as e:
@@ -421,6 +463,10 @@ class WeiboParser(PlatformBase):
             page = ctx.new_page()
             collected = []
             api_urls_seen = []
+            # 长文展开会话（extend 接口，游客可用；有 Cookie 时带上）
+            ext_headers = dict(self.HEADERS)
+            ext_headers["Cookie"] = ck or ""
+            ext_client = httpx.Client(headers=ext_headers, timeout=15, follow_redirects=True)
 
             def on_resp(r):
                 if r.status != 200:
@@ -472,7 +518,7 @@ class WeiboParser(PlatformBase):
                 if posts_from_html:
                     print(f"[微博-Playwright] 从页面内嵌数据提取到 {len(posts_from_html)} 条")
                     for mblog in posts_from_html[:count]:
-                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}")
+                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", ext_client)
                         if info: results.append(info)
                     if results:
                         browser.close()
@@ -504,7 +550,7 @@ class WeiboParser(PlatformBase):
                         continue
                     if len(results) >= count:
                         break
-                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}")
+                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", ext_client)
                     if info: results.append(info)
 
                 if not results:
@@ -515,6 +561,7 @@ class WeiboParser(PlatformBase):
             except Exception as e:
                 print(f"[微博-Playwright] 失败: {e}")
             finally:
+                ext_client.close()
                 browser.close()
         return results
 
