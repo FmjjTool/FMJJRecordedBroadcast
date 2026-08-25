@@ -446,6 +446,10 @@ class LauncherPage(BasePage):
             h.addWidget(self._mini_btn(
                 "🖼 图标", "选择该项的显示图标",
                 lambda _c=False, idx=i: self._browse_icon(idx)))
+            if icon_path:
+                h.addWidget(self._mini_btn(
+                    "✕ 清图标", "清除该项的显示图标（恢复默认图标）",
+                    lambda _c=False, idx=i: self._clear_icon(idx), danger=True))
             h.addWidget(self._mini_btn(
                 "⬆ 上移", "与上一项交换位置",
                 lambda _c=False, idx=i: self._move_launcher_item(idx, -1)))
@@ -475,6 +479,12 @@ class LauncherPage(BasePage):
         if path and 0 <= idx < len(self.items):
             self.items[idx]["icon"] = path
             self._refresh_config_cards()  # 刷新显示
+
+    def _clear_icon(self, idx):
+        """清除该项图标（恢复默认 emoji 兜底），点「保存并刷新面板」生效。"""
+        if 0 <= idx < len(self.items) and self.items[idx].get("icon"):
+            self.items[idx]["icon"] = ""
+            self._refresh_config_cards()
 
     def _add_item(self):
         self.items.append({"name": "", "path": "", "icon": "", "linked": True})
