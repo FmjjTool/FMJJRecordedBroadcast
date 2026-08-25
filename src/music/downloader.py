@@ -2,8 +2,9 @@
 四平台音乐下载器（QQ/酷狗/酷我/5sing）。
 
 直链策略（2026-08 实测）：
-- 酷狗: m.kugou.com getSongInfo playInfo → sharefs 直链（免费歌 128k 全曲，游客可用）
-- 酷我: antiserver convert_url3 wma → 免费歌全曲，VIP 歌 11.3s 试听（下载后按时长判别）
+- 酷狗: m.kugou.com getSongInfo playInfo → sharefs 直链（免费歌 128k 全曲，游客上限即 128k）
+- 酷我: Web playUrl（Secret 头，算法见 utils.kuwo_secret）→ 免费歌 320k MP3 全曲；
+        VIP 歌回退 antiserver convert_url3 wma → 11.3s 试听（下载后按时长判别）
 - 5sing: mobileapi getSongUrl → hqurl 192k / lqurl 128k 全曲，游客可用
 - QQ: vkey 接口游客+普通 Cookie 均被拒（860100005），仅支持解析，不支持下载
 
@@ -14,11 +15,12 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .models import SongInfo
-from .utils import get_client, make_headers, safe_json
+from .utils import get_client, make_headers, safe_json, kuwo_secret, kuwo_web_token, KUWO_COOKIE_KEY
 
 
 @dataclass
@@ -112,7 +114,38 @@ def _url_kugou(song: SongInfo, quality: str) -> _UrlResult:
                       quality=f"{data.get('bitRate', 128)}kbps")
 
 
+def _url_kuwo_web(song: SongInfo) -> _UrlResult:
+    """酷我 Web playUrl（Secret 头）→ 免费歌 320k MP3 全曲。
+
+    VIP 歌返回 code=-1（付费提示），由调用方回退 antiserver 拿试听。
+    """
+    with get_client() as client:
+        token = kuwo_web_token(client)
+        if not token:
+            return _UrlResult(error="")
+        headers = make_headers(referer=f"https://www.kuwo.cn/play_detail/{song.song_id}",
+                               extra={"Secret": kuwo_secret(token),
+                                      "Cookie": f"{KUWO_COOKIE_KEY}={token}"})
+        resp = client.get(
+            "https://www.kuwo.cn/api/v1/www/music/playUrl",
+            params={"mid": song.song_id, "type": "music", "httpsStatus": "1",
+                    "reqId": str(uuid.uuid4()), "plat": "web_www", "from": ""},
+            headers=headers)
+    data = safe_json(resp.text) or {}
+    if data.get("code") != 200:
+        return _UrlResult(error="")
+    url = (data.get("data") or {}).get("url") or ""
+    if not url:
+        return _UrlResult(error="")
+    return _UrlResult(url=url, ext=".mp3", quality="320kbps")
+
+
 def _url_kuwo(song: SongInfo, quality: str) -> _UrlResult:
+    """酷我直链：320k 走 Web playUrl（Secret），128k / 失败回退 antiserver WMA。"""
+    if quality != "128k":
+        got = _url_kuwo_web(song)
+        if got.url:
+            return got
     with get_client() as client:
         resp = client.get(
             "https://antiserver.kuwo.cn/anti.s",
@@ -200,10 +233,17 @@ def quality_options(platform: str) -> list[tuple[str, str]]:
     if platform == "5sing":
         return [("hq", "192k 高音质"), ("lq", "128k 标准")]
     if platform == "kugou":
-        return [("128k", "128k")]
+        return [("128k", "128k（游客上限）")]
     if platform == "kuwo":
-        return [("128k", "128k")]
+        return [("320k", "320k MP3 高音质"), ("128k", "128k WMA")]
+    if platform == "qq":
+        return [("default", "默认（下载走换源）")]
     return [("default", "默认")]
+
+
+def default_quality(platform: str) -> str:
+    """平台默认音质（换源下载到其他平台时使用该平台最优档）。"""
+    return {"kuwo": "320k", "kugou": "128k", "5sing": "hq"}.get(platform, "")
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +375,7 @@ def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
         if cand is None:
             continue
         try:
-            r = download_song(cand, out_dir, quality)
+            r = download_song(cand, out_dir, default_quality(pf))
         except Exception:
             continue
         if r.success and not r.is_preview:
