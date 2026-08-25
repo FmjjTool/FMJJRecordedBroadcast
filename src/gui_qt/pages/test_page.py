@@ -149,6 +149,8 @@ class TestPage(BasePage):
         self._auto_stopped = False      # 因切走页面被自动断开（切回时自动重连）
         self._waiting_live = False      # 未开播/已下播（轮询开着则等开播自动接入）
         self._manual_stop = False       # 手动断开（下播后的 disconnected 不自动进入等待）
+        self._rec_switched_away = False  # 录播中切走页面（切回时重新开始录制）
+        self._rec_resume_pending = False  # 切回时未连上 → 待拿到直播流自动重开录制
         # 轮询：按设置间隔反复重访直播间（断开→重连，保留本场数据）
         self._poll_timer = None
         # 表情/礼物图标：待图片缓存就绪的富文本消息队列（保序）+ 后台下载状态
@@ -585,10 +587,11 @@ class TestPage(BasePage):
             self._current_stream = self._streams.get(q)
         if self._streams and self.mode in ("normal", "video_only"):
             self._start_live_preview()
-        # 自动录制：勾选「自动录播」且未在录 → 拿到流立即录最高画质
+        # 自动录制：勾选「自动录播」或切页返回后待重开 → 拿到流立即录最高画质
         # （正常/仅视频/仅弹幕均可自动录；回放模式除外）
-        if (self.mode != "replay" and self.settings.get("auto_record", False)
-                and not self._recording):
+        if (self.mode != "replay" and not self._recording
+                and (self.settings.get("auto_record", False) or self._rec_resume_pending)):
+            self._rec_resume_pending = False
             self._start_recording()
 
     def _on_quality_changed(self, _index=None):
@@ -652,6 +655,9 @@ class TestPage(BasePage):
 
     def _toggle_record(self):
         if self._recording:
+            # 手动停止：清掉切页自动重开标志（用户明确不录了）
+            self._rec_switched_away = False
+            self._rec_resume_pending = False
             self._stop_recording()
         else:
             self._start_recording()
@@ -670,6 +676,10 @@ class TestPage(BasePage):
         room = self.room_entry.text().strip() or "room"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = str(d / f"{room}_{ts}.flv")
+        n = 1
+        while os.path.exists(path):  # 同秒内重开（切页返回）防同名覆盖
+            path = str(d / f"{room}_{ts}_{n}.flv")
+            n += 1
         from toolbox.live_video import StreamRecorder
         self.recorder = StreamRecorder(on_status=lambda s, p: None)
         if not self.recorder.start(self._current_stream, path):
@@ -2457,23 +2467,52 @@ class TestPage(BasePage):
 
     # ======================== 页面生命周期（全局同步：进自动启 / 出自动停） ========================
     def on_show(self):
-        """切到本页：录制中恢复预览；上次因切走被自动断开（且有房间号）→ 自动重连。"""
+        """切到本页：录制中恢复预览；录播中切走的重新开始录制；
+        上次因切走被自动断开（且有房间号）→ 自动重连。"""
         if self.connected or self.fetcher:
             # 后台保持运作中（如录制中切走再切回）：恢复视频预览渲染
             if self._streams and self.mode in ("normal", "video_only") \
                     and not (self.video_player and self.video_player.is_running()):
                 self._start_live_preview()
+            # 录播中切走的 → 重新开始录制（切走期间的段落自动打包，起一个新文件）
+            self._restart_recording_after_switch()
             return
+        if self._rec_switched_away:
+            # 切走期间录制已被断连停止（如主播下播）→ 待重连拿到流后自动重开
+            self._rec_switched_away = False
+            self._rec_resume_pending = True
         room = self.room_entry.text().strip()
         if room and self._auto_stopped:
             self._auto_stopped = False
             self._connect()
 
+    def _restart_recording_after_switch(self):
+        """返回页面：录播中切走过的 → 重新开始录制。
+
+        后台仍在录的：停掉并自动打包切走期间的段落，再起一个新文件；
+        切走期间因下播/断连已停录的：已重连就直接重开，否则待拿到流后自动重开。
+        """
+        if not self._rec_switched_away:
+            return
+        self._rec_switched_away = False
+        if self.mode == "replay":
+            return
+        if self._recording:
+            self._stop_recording()  # 切走期间的录制段自动打包（不足 1KB 的清理掉）
+        if not (self.connected and self._streams):
+            self._rec_resume_pending = True  # 等待重连/开播，拿到流自动重开
+            return
+        self._start_recording()
+        if self._recording:
+            self.app.toast("已重新开始录制（新文件）", "info")
+
     def on_hide(self):
         """切离本页：录制中保持后台运作（弹幕抓取+录制继续），仅停 UI 渲染；
         未录制则全停（录制自动打包回放包/回放/预览/抓取/监控）。"""
         if self._recording:
-            # 录制中切页面：维持弹幕抓取与录制，只停视频预览渲染与回放
+            # 录制中切页面：维持弹幕抓取与录制，只停视频预览渲染与回放；
+            # 返回页面时重新开始录制（见 _restart_recording_after_switch）
+            self._rec_switched_away = True
             self._stop_replay()
             self._stop_live_preview()
             return
@@ -2482,6 +2521,8 @@ class TestPage(BasePage):
     def shutdown(self):
         """全停（切走且未录制 / 软件退出时调用）：停一切后台任务并自动保存。"""
         was_active = self.connected or self.fetcher or self.video_player or self._recording
+        self._rec_switched_away = False
+        self._rec_resume_pending = False
         if self._recording:
             self._stop_recording()
         self._stop_replay()
