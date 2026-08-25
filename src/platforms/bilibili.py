@@ -268,17 +268,21 @@ class BilibiliParser(PlatformBase):
         view_count = _cnt("view")
 
         images = []
+        live_photos = []
         cover_url = ""
         video_url = ""
         title = text[:80] if text else f"B站动态 {dyn_id[:8]}"
 
         if mtype == "MAJOR_TYPE_DRAW":
-            # 图片动态
+            # 图片动态（draw items 可能带实况图 live_url）
             draw = major.get("draw", {})
             for img_item in draw.get("items", []):
                 src = img_item.get("src", "")
                 if src:
                     images.append(src)
+                lv = img_item.get("live_url") or ""
+                if lv and lv not in live_photos:
+                    live_photos.append(lv)
             if images:
                 cover_url = images[0]
         elif mtype == "MAJOR_TYPE_ARCHIVE":
@@ -290,12 +294,15 @@ class BilibiliParser(PlatformBase):
             if archive_title and not text:
                 title = archive_title
         elif mtype == "MAJOR_TYPE_OPUS":
-            # 纯文本/图文短帖（desc 常为 null，正文在 summary）
+            # 纯文本/图文短帖（desc 常为 null，正文在 summary）；pics 可能带实况图 live_url
             opus = major.get("opus", {})
             for pic in opus.get("pics", []):
                 src = pic.get("url", "") or pic.get("src", "")
                 if src:
                     images.append(src)
+                lv = pic.get("live_url") or ""
+                if lv and lv not in live_photos:
+                    live_photos.append(lv)
             if images:
                 cover_url = images[0]
             if not text:
@@ -334,6 +341,7 @@ class BilibiliParser(PlatformBase):
             video_url=video_url or f"https://t.bilibili.com/{dyn_id}",
             publish_time=publish_time,
             images=images,
+            live_photos=live_photos,
             raw_url=f"https://t.bilibili.com/{dyn_id}",
             raw_data=item,
             fetched_at=now_str(),

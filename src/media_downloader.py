@@ -99,6 +99,15 @@ def _resolve_livephoto(url: str, headers: dict) -> str:
 _SINAIMG_TIER_RE = re.compile(r"(https?://w[a-z]\d*\.sinaimg\.cn/)([a-z0-9]+)/", re.IGNORECASE)
 
 
+def _url_path(url: str) -> str:
+    """取 URL 的路径部分（去 query/fragment，供扩展名判断）。"""
+    from urllib.parse import urlparse
+    try:
+        return urlparse(url).path
+    except Exception:
+        return ""
+
+
 def _upgrade_sinaimg(url: str) -> str:
     """sinaimg 图片 URL 升级为原图（large 档）。
 
@@ -196,10 +205,13 @@ def download_media(
                 fname = f"{stem}.jpg" if len(info.images) == 1 else f"{stem}_{i}.jpg"
                 tasks.append((img_url, os.path.join(user_dir, fname), "图片"))
 
-        # live 图
+        # live 图（扩展名跟随 URL：B站实况图 .mp4 / 微博 .mov）
         if download_live and info.live_photos:
             for i, lv_url in enumerate(info.live_photos, 1):
-                fname = f"{stem}_live.mov" if len(info.live_photos) == 1 else f"{stem}_live{i}.mov"
+                ext = os.path.splitext(_url_path(lv_url))[1].lower()
+                if ext not in (".mov", ".mp4"):
+                    ext = ".mov"
+                fname = f"{stem}_live{ext}" if len(info.live_photos) == 1 else f"{stem}_live{i}{ext}"
                 tasks.append((lv_url, os.path.join(user_dir, fname), "Live图"))
 
         # 视频
@@ -304,6 +316,10 @@ def download_media(
                 hdrs = _dy_headers()
             elif "weibo" in url or "sinaimg" in url:
                 hdrs = _wb_headers()
+            elif "hdslb.com" in url or "bilibili.com" in url or "bilivideo" in url:
+                h = dict(headers)
+                h["Referer"] = "https://www.bilibili.com/"
+                hdrs = h
             else:
                 hdrs = dict(headers)
             filepath, ok = _download_one(url, fpath, hdrs)

@@ -16,8 +16,8 @@ import re
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
@@ -165,6 +165,24 @@ class _RowWidget(QWidget):
             pass
 
 
+class _ThumbLabel(QLabel):
+    """缩略图：吞掉单击（不触发行点击/详情窗），双击播放本地视频。"""
+
+    def __init__(self, on_dblclick, parent=None):
+        super().__init__(parent)
+        self._on_dblclick = on_dblclick
+
+    def mousePressEvent(self, event):
+        event.accept()  # 阻止冒泡到 _RowWidget（单击缩略图不弹详情窗）
+
+    def mouseDoubleClickEvent(self, event):
+        try:
+            if event.button() == Qt.LeftButton and self._on_dblclick:
+                self._on_dblclick()
+        except RuntimeError:
+            pass
+
+
 class AssetPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
@@ -176,6 +194,8 @@ class AssetPage(BasePage):
         self._collected_shown = 0       # 已渲染条数（懒加载游标）
         self._dl_state = {}             # 条目下载状态：'downloading' / 'done'
         self._search_var = ""           # 搜索关键词
+        self._checked_keys = set()      # 勾选条目键（批量下载用）
+        self._reload_gen = 0            # 骨架加载代数守卫（中途刷新作废旧轮）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -430,6 +450,14 @@ class AssetPage(BasePage):
         refresh_btn = QPushButton("🔄 刷新")
         refresh_btn.clicked.connect(self._refresh_collected)
         bar.addWidget(refresh_btn)
+        # 批量操作：全选 + 下载所选
+        self.select_all_cb = QCheckBox("全选")
+        self.select_all_cb.stateChanged.connect(self._toggle_select_all)
+        bar.addWidget(self.select_all_cb)
+        self.batch_dl_btn = QPushButton("📥 下载所选")
+        self.batch_dl_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.batch_dl_btn.clicked.connect(self._batch_download_checked)
+        bar.addWidget(self.batch_dl_btn)
         # 搜索框伸展吃掉剩余空间：窗口越宽搜索框越长（原固定 200px 导致右侧大片空白）
         bar.setStretchFactor(self.search_entry, 1)
         v.addLayout(bar)
@@ -633,38 +661,153 @@ class AssetPage(BasePage):
         return "unknown"
 
     def _refresh_collected(self):
-        """重新扫描 + 平台/状态/关键词筛选 + 懒加载分批渲染（点击 row 弹详情窗）。"""
-        self._disk_items = self._load_disk_items()
-        plat = self.plat_sel.currentText()
-        items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
-        # 状态筛选
-        status = self.status_sel.currentText()
-        if status == "未下载":
-            items = [it for it in items if not it.get("media_files")]
-        elif status == "已下载":
-            items = [it for it in items if it.get("media_files")]
-        elif status == "下载不完整":
-            items = [it for it in items
-                     if it.get("expected_imgs", 0) > sum(1 for m in it.get("media_files", []) if m["type"] == "image")]
-        # 关键词过滤（标题/作者/视频ID/正文，大小写不敏感）
-        kw = (self._search_var or "").strip().lower()
-        if kw:
-            items = [it for it in items
-                     if kw in (it.get("title") or "").lower()
-                     or kw in (it.get("author") or "").lower()
-                     or kw in (it.get("video_id") or "").lower()
-                     or kw in (it.get("description") or "").lower()]
-        # 时间排序（正序/倒序；空日期始终排最后）
-        desc = self.sort_sel.currentText() == "时间倒序"
-        placeholder = "00000000" if desc else "99999999"
+        """骨架加载：立即渲染灰色占位行，后台扫描磁盘后一次性替换真实列表。
 
-        def _sort_key(it):
-            d = it.get("date_part") or ""
-            return d if d else placeholder
-        items = sorted(items, key=_sort_key, reverse=desc)
-        self._collected_all_items = items
+        扫描要读全部 json + 匹配媒体文件（几百条时明显卡顿），
+        与 TrackerPage 同款模式：骨架先行 + run_bg 后台扫描 + 代数守卫防旧轮覆盖。
+        """
+        # 主线程先读筛选条件（后台线程不能碰 Qt 控件）
+        plat = self.plat_sel.currentText()
+        status = self.status_sel.currentText()
+        desc = self.sort_sel.currentText() == "时间倒序"
+        kw = (self._search_var or "").strip().lower()
+
+        self._reload_gen += 1
+        gen = self._reload_gen
+        self._collected_all_items = []
         self._collected_shown = 0
-        self._render_collected_batch()
+        self._render_skeleton(8)
+
+        def work():
+            return self._load_disk_items()
+
+        def done(disk_items, err):
+            if gen != self._reload_gen:
+                return  # 中途又触发了刷新，本轮作废
+            self._disk_items = disk_items or []
+            items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
+            # 状态筛选
+            if status == "未下载":
+                items = [it for it in items if not it.get("media_files")]
+            elif status == "已下载":
+                items = [it for it in items if it.get("media_files")]
+            elif status == "下载不完整":
+                items = [it for it in items
+                         if it.get("expected_imgs", 0) > sum(1 for m in it.get("media_files", []) if m["type"] == "image")]
+            # 关键词过滤（标题/作者/视频ID/正文，大小写不敏感）
+            if kw:
+                items = [it for it in items
+                         if kw in (it.get("title") or "").lower()
+                         or kw in (it.get("author") or "").lower()
+                         or kw in (it.get("video_id") or "").lower()
+                         or kw in (it.get("description") or "").lower()]
+            # 时间排序（正序/倒序；空日期始终排最后）
+            placeholder = "00000000" if desc else "99999999"
+
+            def _sort_key(it):
+                d = it.get("date_part") or ""
+                return d if d else placeholder
+            self._collected_all_items = sorted(items, key=_sort_key, reverse=desc)
+            self._collected_shown = 0
+            self._render_collected_batch()
+            self._backfill_bili_covers()
+
+        run_bg(work, done)
+
+    def _backfill_bili_covers(self):
+        """补齐已下载 B站视频的官方封面（旧版下载的视频没有同名 .jpg 索引）。
+
+        列表缩略图优先用本地媒体图——视频条目只有同名 .jpg 封面才能显示图片。
+        只补「有本地视频 + 有封面URL + 缺 .jpg」的条目，下完刷新一次列表。
+        """
+        if getattr(self, "_cover_backfill_running", False):
+            return
+        todo = []
+        for it in self._collected_all_items:
+            if it.get("platform") != "bilibili":
+                continue
+            cover = (it.get("cover_url") or "").strip()
+            if not cover or not cover.startswith(("http://", "https://")):
+                continue  # 独立媒体条目的 cover_url 是本地路径，不是可下载的官方封面
+            vid_path = next((m["path"] for m in it.get("media_files", [])
+                             if m["type"] == "video"), None)
+            if not vid_path or not os.path.exists(vid_path):
+                continue
+            stem = os.path.splitext(vid_path)[0]
+            # 封面可能被 _download_one 按 Content-Type 存成 .png，同 stem 任意图片扩展都算已有
+            if any(os.path.exists(stem + e) for e in (".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            cext = ".png" if cover.lower().split("?")[0].endswith(".png") else ".jpg"
+            todo.append((cover, stem + cext))
+        if not todo:
+            return
+        self._cover_backfill_running = True
+
+        def work():
+            from media_downloader import _download_one
+            hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36",
+                    "Referer": "https://www.bilibili.com/"}
+            ok = 0
+            for cover, cpath in todo:
+                try:
+                    _path, success = _download_one(cover, cpath, hdrs)
+                    ok += 1 if success else 0
+                except Exception:
+                    pass
+            return ok
+
+        def done(ok, err):
+            self._cover_backfill_running = False
+            if ok:
+                QTimer.singleShot(100, self._refresh_collected)
+
+        run_bg(work, done)
+
+    def _render_skeleton(self, n):
+        """扫描期间渲染 n 条骨架占位行（与真实行同构的灰色块）。"""
+        lay = self.collected_layout
+        self._clear_layout(lay)
+        for _ in range(n):
+            lay.addWidget(self._make_skeleton_row())
+        tip = QLabel("⏳ 正在扫描已获取数据...")
+        tip.setStyleSheet("color: gray;")
+        tip.setContentsMargins(8, 10, 8, 10)
+        lay.addWidget(tip)
+        lay.addStretch(1)
+
+    def _make_skeleton_row(self) -> QWidget:
+        """骨架行：勾选框 + 灰缩略图 + 三行文字条 + 三个按钮位（固定高，防跳动）。"""
+        row = QFrame()
+        row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        row.setFixedHeight(72)
+        h = QHBoxLayout(row)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(8)
+        cb = QCheckBox()
+        cb.setEnabled(False)
+        h.addWidget(cb)
+        thumb = QLabel()
+        thumb.setFixedSize(96, 64)
+        thumb.setStyleSheet("background: #e4e7ec; border-radius: 4px;")
+        h.addWidget(thumb)
+        bars = QVBoxLayout()
+        bars.setSpacing(7)
+        bars.setContentsMargins(0, 6, 0, 6)
+        for w in (140, 220, 160):
+            bar = QLabel()
+            bar.setFixedSize(w, 10)
+            bar.setStyleSheet("background: #e4e7ec; border-radius: 5px;")
+            bars.addWidget(bar)
+        wrap = QWidget()
+        wrap.setLayout(bars)
+        h.addWidget(wrap, 1)
+        for _ in range(3):
+            btn = QLabel()
+            btn.setFixedSize(42, 32)
+            btn.setStyleSheet("background: #e4e7ec; border-radius: 4px;")
+            h.addWidget(btn)
+        return row
 
     def _render_collected_batch(self):
         """懒加载分批渲染已获取资源（每批 BATCH=20 条，加载更多按钮续）。"""
@@ -696,27 +839,38 @@ class AssetPage(BasePage):
         lay.addStretch(1)
 
     def _render_collected_row(self, it, index):
-        """渲染一行（点击弹详情窗，双击缩略图打开原图）。"""
+        """渲染一行（点击弹详情窗，双击缩略图播放本地视频）。"""
         row = _RowWidget(lambda it=it: self._show_detail(it))
         row.setStyleSheet(
             "_RowWidget { background: #ffffff; border-radius: 6px; }"
             "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(6, 4, 6, 4)
+        # 批量勾选框（记住勾选状态，重渲染后恢复）
+        key = self._dl_key(it)
+        cb = QCheckBox()
+        if key in self._checked_keys:
+            cb.setChecked(True)
+        cb.stateChanged.connect(
+            lambda st, k=key: (self._checked_keys.add(k) if st else self._checked_keys.discard(k)))
+        cb.setToolTip("勾选后可批量下载")
+        h.addWidget(cb)
         # 缩略图：优先本地媒体图，其次网络封面（放大到 96×64，原 72×50 太小看不清）
+        # 双击缩略图播放本地视频（无本地视频则打开链接）
+        thumb = _ThumbLabel(lambda it=it: self._open_media_video(it))
+        thumb.setFixedSize(96, 64)
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+        thumb.setToolTip("双击播放视频")
         local_img = next((m["path"] for m in it.get("media_files", []) if m["type"] == "image"), None)
         if local_img:
-            lbl = self._load_local_thumb(local_img, 96, 64)
-            h.addWidget(lbl)
+            self._fill_local_thumb(thumb, local_img, 96, 64)
         elif it["cover_url"]:
-            lbl = self._load_net_thumb(it["cover_url"], 96, 64)
-            h.addWidget(lbl)
+            self._fill_net_thumb(thumb, it["cover_url"], 96, 64)
         else:
-            lbl = QLabel("🎬")
-            lbl.setFixedSize(96, 64)
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 28px;")
-            h.addWidget(lbl)
+            thumb.setText("🎬")
+            thumb.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 28px;")
+        h.addWidget(thumb)
         # 文本（中间 expand）
         plat_cn = PLATFORM_CN.get(it["platform"], it["platform"])
         # 显示层截断 + 自动换行：长标题/长文件名会把行的最小宽度撑爆，
@@ -754,7 +908,14 @@ class AssetPage(BasePage):
         txt.setWordWrap(True)
         txt.setToolTip(f"{full_title}\n\n📄 {os.path.basename(it['file_path'])}")
         h.addWidget(txt, 1)
-        # 右侧按钮：下载（有封面无媒体时）/ 删除（放大到 42×32，原 32×28 不好点）
+        # 右侧按钮：重新下载 / 下载封面（有封面无媒体时）/ 删除（42×32，原 32×28 不好点）
+        redo_btn = QPushButton("↻")
+        redo_btn.setFixedSize(42, 32)
+        redo_btn.setToolTip("重新下载（忽略已下载状态）")
+        redo_btn.setStyleSheet(
+            "background: transparent; border: 1px solid #c8cdd6; color: #2e7d32; font-size: 15px;")
+        redo_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e, force=True))
+        h.addWidget(redo_btn)
         if it.get("cover_url") and not it.get("media_files"):
             dl_btn = QPushButton("📥")
             dl_btn.setFixedSize(42, 32)
@@ -772,6 +933,22 @@ class AssetPage(BasePage):
         h.addWidget(del_btn)
         self.collected_layout.addWidget(row)
 
+    def _open_media_video(self, it):
+        """双击缩略图：优先播放本地视频文件，无则打开链接。"""
+        try:
+            vid_path = next((m["path"] for m in it.get("media_files", [])
+                             if m["type"] == "video"), None)
+            if vid_path and os.path.exists(vid_path):
+                os.startfile(vid_path)  # noqa: PTH110 — Windows 系统播放器
+                return
+            url = it.get("video_url") or it.get("raw_url") or ""
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+            else:
+                self.app.toast("该条目无本地视频，也没有可打开的链接", "info")
+        except Exception as e:
+            self.app.toast(f"打开失败: {e}", "error")
+
     def _dl_key(self, it):
         """条目的下载状态键（唯一标识一个资产）。"""
         return it.get("file_path") or it.get("video_id") or it.get("title", "")
@@ -781,33 +958,112 @@ class AssetPage(BasePage):
         return {"8K": 127, "杜比视界": 126, "HDR": 125, "4K": 120,
                 "1080P60": 116, "1080P": 80, "720P": 64, "480P": 32}.get(label)
 
-    def _download_for_item(self, it):
-        """按平台下载（防重复点击：下载中/已完成分别提示）。"""
+    def _download_for_item(self, it, force=False, on_finished=None, quiet=False):
+        """按平台下载（防重复点击：下载中/已完成分别提示；force=True 强制重下）。"""
         key = self._dl_key(it)
         state = self._dl_state.get(key)
         if state == "downloading":
             self.app.toast("文件下载中，请稍后再试", "warning")
+            if on_finished:
+                on_finished()
             return
-        if state == "done":
+        if state == "done" and not force:
             self.app.toast("文件已下载完毕，请勿重复点击", "info")
+            if on_finished:
+                on_finished()
             return
         self._dl_state[key] = "downloading"
         plat = it.get("platform", "")
         if plat == "bilibili":
-            self._download_bilibili_item(it)
+            self._download_bilibili_item(it, on_finished=on_finished, quiet=quiet)
         elif plat == "douyin":
-            self._download_video_item(it)
+            self._download_video_item(it, on_finished=on_finished, quiet=quiet)
         else:
-            self._download_images_for_item(it)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet)
 
-    def _download_bilibili_item(self, it):
+    def _toggle_select_all(self, state):
+        """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""
+        checked = bool(state)
+        if checked:
+            self._checked_keys = {self._dl_key(it) for it in self._collected_all_items}
+        else:
+            self._checked_keys.clear()
+        # 重渲染以同步复选框状态（保留已加载批次数）
+        if self._collected_shown:
+            self._render_collected_batch()
+
+    def _batch_download_checked(self):
+        """顺序批量下载所有勾选条目（跳过下载中/已下载，完成一条续下一条）。"""
+        items = [it for it in self._collected_all_items
+                 if self._dl_key(it) in self._checked_keys]
+        if not items:
+            self.app.toast("请先勾选要下载的条目", "info")
+            return
+        skip = sum(1 for it in items
+                   if self._dl_state.get(self._dl_key(it)) in ("downloading", "done"))
+        todo = [it for it in items
+                if self._dl_state.get(self._dl_key(it)) not in ("downloading", "done")]
+        n = len(todo)
+        cancel_ev = threading.Event()
+        dlg = QProgressDialog(f"批量下载 0/{n}", "取消", 0, max(n, 1), self)
+        dlg.setWindowTitle("批量下载")
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumDuration(0)
+        dlg.setMinimumWidth(420)
+        dlg.canceled.connect(cancel_ev.set)
+        if skip:
+            self.app.toast(f"跳过 {skip} 条（下载中/已下载），开始下载 {n} 条", "info")
+        if not todo:
+            dlg.close()
+            return
+        dlg.show()
+
+        done_n = [0]
+
+        def _advance():
+            done_n[0] += 1
+            try:
+                dlg.setValue(done_n[0])
+            except RuntimeError:
+                pass
+            if cancel_ev.is_set() or done_n[0] >= n:
+                # close() 会触发 closeEvent → emit canceled → cancel_ev 被置位，
+                # 必须先记下用户是否真取消，再 close
+                was_cancelled = cancel_ev.is_set()
+                try:
+                    dlg.close()
+                except RuntimeError:
+                    pass
+                if was_cancelled:
+                    self.app.toast(f"批量下载已取消（完成 {done_n[0]}/{n}）", "warning")
+                else:
+                    self.app.toast(f"✅ 批量下载完成 {done_n[0]} 条", "success")
+                QTimer.singleShot(100, self._refresh_collected)
+            else:
+                _step()
+
+        def _step():
+            if cancel_ev.is_set():
+                return
+            it = todo[done_n[0]]
+            try:
+                dlg.setLabelText(
+                    f"批量下载 {done_n[0] + 1}/{n}  {(it.get('title') or '')[:44]}")
+            except RuntimeError:
+                pass
+            self._download_for_item(it, force=False, on_finished=_advance, quiet=True)
+
+        _step()
+
+    def _download_bilibili_item(self, it, on_finished=None, quiet=False):
         """B站分发：图文动态→图片；视频动态(AV)/BV号→视频。"""
         vid = it.get("video_id", "")
         dtype = self._bili_dynamic_type(it)
 
         # 图文动态：下载图片（不能套视频下载模式）
         if dtype == "draw":
-            self._download_images_for_item(it)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet)
             return
         # 视频动态：从 archive.bvid 取真实 BV 号
         if dtype == "av":
@@ -816,29 +1072,77 @@ class AssetPage(BasePage):
                 vid = bvid
         # 仍是 dyn_ 且拿不到 BV 号 → 退化为图片（封面兜底）
         if not vid or vid.startswith("dyn_"):
-            self._download_images_for_item(it)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet)
             return
+
+        cancel_ev = threading.Event()
+        bridge = _ProgressBridge()
+        dlg = None
+        if not quiet:
+            dlg = _make_progress_dlg(self, "下载 B站视频", 1, cancel_ev)
+            dlg.setLabelText("正在解析视频流...")
+
+        def on_prog(done_n, total_n, name):
+            if dlg is None:
+                return
+            if total_n != dlg.maximum():
+                dlg.setMaximum(max(total_n, 1))
+            dlg.setValue(done_n)
+            if total_n > 100000:  # 字节进度（视频流）
+                dlg.setLabelText(
+                    f"下载中 {done_n / 1048576:.1f}/{total_n / 1048576:.1f} MB")
+            else:
+                dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+
+        if dlg is not None:
+            bridge.updated.connect(on_prog)
 
         def work():
             from bilibili_download import download_bilibili_by_bvid
             from auth import get_cookie
             from toolbox.config_manager import get_export_subdir
             out_dir = str(get_export_subdir("video_data"))
-            return download_bilibili_by_bvid(
+            vpath = download_bilibili_by_bvid(
                 vid, quality=self._quality_to_qn(common.CURRENT_QUALITY),
                 cookie=get_cookie("bilibili") or "",
                 out_dir=out_dir, title=it.get("title", ""),
                 author=it.get("author", ""), publish_time=it.get("publish_time", ""),
+                progress_cb=(lambda d, t: bridge.emit_progress(int(d), int(t), "视频流")
+                             if not quiet else None),
             )
+            # 同步下载官方封面：与视频同名 .jpg（改名索引），列表即可显示本地缩略图
+            cover = (it.get("cover_url") or "").strip()
+            if cover and vpath:
+                try:
+                    from media_downloader import _download_one
+                    if cover.startswith("//"):
+                        cover = "https:" + cover
+                    cpath = os.path.splitext(vpath)[0] + ".jpg"
+                    _download_one(cover, cpath, {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                      "AppleWebKit/537.36",
+                        "Referer": "https://www.bilibili.com/"})
+                except Exception:
+                    pass
+            return vpath
 
         def done(result, err):
+            if dlg is not None and dlg.isVisible():
+                dlg.close()
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
             else:
                 self._dl_state[self._dl_key(it)] = "done"
-                self.app.toast("✅ 已下载 B站视频", "success")
-            QTimer.singleShot(100, self._refresh_collected)
+                stem = os.path.splitext(result)[0] if result else ""
+                cover_ok = bool(stem) and any(
+                    os.path.exists(stem + e) for e in (".jpg", ".jpeg", ".png", ".webp"))
+                self.app.toast("✅ 已下载 B站视频" + ("（含封面）" if cover_ok else ""),
+                               "success")
+            if not quiet:  # 批量模式由 _advance 统一刷新一次，避免逐条骨架闪烁
+                QTimer.singleShot(100, self._refresh_collected)
+            if on_finished:
+                on_finished()
 
         self.app.toast("开始下载 B站视频...", "info")
         run_bg(work, done)
@@ -878,26 +1182,33 @@ class AssetPage(BasePage):
         except Exception:
             return ""
 
-    def _download_video_item(self, it):
-        """抖音：直链有时效性（过期 403），下载前用 video_id 重新解析拿新直链。"""
+    def _download_video_item(self, it, on_finished=None, quiet=False):
+        """抖音：直链有时效性（过期 403），下载前用 video_id 重新解析拿新直链。
+
+        quiet=True 时不弹单条进度框（批量下载有总进度条），完成后回调 on_finished 续下一条。
+        """
         vurl = it.get("video_url", "")
         vid = it.get("video_id", "")
         if not vurl and not vid:
             self.app.toast("此条目无视频链接", "warning")
+            if on_finished:
+                on_finished()
             return
 
         cancel_ev = threading.Event()
         bridge = _ProgressBridge()
-        dlg = _make_progress_dlg(self, "下载视频", 1, cancel_ev)
-        dlg.setLabelText("正在解析链接...")
+        dlg = None
+        if not quiet:
+            dlg = _make_progress_dlg(self, "下载视频", 1, cancel_ev)
+            dlg.setLabelText("正在解析链接...")
 
-        def on_prog(done_n, total_n, name):
-            if total_n != dlg.maximum():
-                dlg.setMaximum(max(total_n, 1))
-            dlg.setValue(done_n)
-            dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+            def on_prog(done_n, total_n, name):
+                if total_n != dlg.maximum():
+                    dlg.setMaximum(max(total_n, 1))
+                dlg.setValue(done_n)
+                dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
 
-        bridge.updated.connect(on_prog)
+            bridge.updated.connect(on_prog)
 
         def work():
             from platforms.base import VideoInfo, now_str
@@ -943,9 +1254,9 @@ class AssetPage(BasePage):
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev)
 
         def done(result, err):
-            if dlg.isVisible():
+            if dlg is not None and dlg.isVisible():
                 dlg.close()
-            bridge.updated.disconnect(on_prog)
+                bridge.updated.disconnect(on_prog)
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
@@ -964,7 +1275,10 @@ class AssetPage(BasePage):
                 else:
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
                     self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
-            QTimer.singleShot(100, self._refresh_collected)
+            if not quiet:  # 批量模式由 _advance 统一刷新一次
+                QTimer.singleShot(100, self._refresh_collected)
+            if on_finished:
+                on_finished()
 
         run_bg(work, done)
 
@@ -1121,34 +1435,48 @@ class AssetPage(BasePage):
                 for pid in data.get("pic_ids", []) or []:
                     if pid:
                         urls.append(f"https://wx1.sinaimg.cn/large/{pid}.jpg")
-            # 方式3：B站图文动态 opus.pics（i0.hdslb.com 原图）
+            # 方式3：B站图文动态 opus.pics（i0.hdslb.com 原图 + 实况图 live_url）
             if not urls:
                 try:
                     major = ((data.get("modules", {}) or {}).get("module_dynamic", {}) or {}).get("major", {}) or {}
                     opus_pics = (major.get("opus", {}) or {}).get("pics", []) or []
                     for p in opus_pics:
-                        u = (p or {}).get("url", "") if isinstance(p, dict) else ""
+                        if not isinstance(p, dict):
+                            continue
+                        u = p.get("url", "") or p.get("src", "")
                         if u and u not in urls:
                             urls.append(u)
+                        # 实况图：live_url 是 hdslb 视频直链，直接可下
+                        lv = p.get("live_url") or ""
+                        if lv and lv not in lives:
+                            lives.append(lv)
                 except Exception:
                     pass
-            # 方式4：B站新版图文动态 draw.items（.src）
+            # 方式4：B站新版图文动态 draw.items（.src + live_url）
             if not urls:
                 try:
                     major = ((data.get("modules", {}) or {}).get("module_dynamic", {}) or {}).get("major", {}) or {}
                     draw_items = (major.get("draw", {}) or {}).get("items", []) or []
                     for p in draw_items:
-                        u = (p or {}).get("src", "") if isinstance(p, dict) else ""
+                        if not isinstance(p, dict):
+                            continue
+                        u = p.get("src", "")
                         if u and u not in urls:
                             urls.append(u)
+                        lv = p.get("live_url") or ""
+                        if lv and lv not in lives:
+                            lives.append(lv)
                 except Exception:
                     pass
         except Exception:
             pass
         return urls, lives
 
-    def _download_images_for_item(self, it):
-        """下载单条条目所有图片与 live 图视频（优先 raw json 的 pics/pic_ids）。"""
+    def _download_images_for_item(self, it, on_finished=None, quiet=False):
+        """下载单条条目所有图片与 live 图视频（优先 raw json 的 pics/pic_ids）。
+
+        quiet=True 时不弹单条进度框（批量下载有总进度条），完成后回调 on_finished 续下一条。
+        """
         # 优先从 raw json 提取所有原图 + live 视频，封面图也加入（B站动态封面 i0.hdslb.com 等）
         pics, lives = self._extract_pic_urls(it)
         cover = it.get("cover_url", "")
@@ -1158,19 +1486,23 @@ class AssetPage(BasePage):
                 pics.insert(0, cover)  # 封面优先下载（列表里预览的就是它）
         if not pics and not lives:
             self.app.toast("此条目无可下载图片（raw json 无 pics 且无封面）", "warning")
+            if on_finished:
+                on_finished()
             return
 
         cancel_ev = threading.Event()
         bridge = _ProgressBridge()
-        dlg = _make_progress_dlg(self, "下载图片", len(pics) + len(lives), cancel_ev)
+        dlg = None
+        if not quiet:
+            dlg = _make_progress_dlg(self, "下载图片", len(pics) + len(lives), cancel_ev)
 
-        def on_prog(done_n, total_n, name):
-            if total_n != dlg.maximum():
-                dlg.setMaximum(max(total_n, 1))
-            dlg.setValue(done_n)
-            dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+            def on_prog(done_n, total_n, name):
+                if total_n != dlg.maximum():
+                    dlg.setMaximum(max(total_n, 1))
+                dlg.setValue(done_n)
+                dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
 
-        bridge.updated.connect(on_prog)
+            bridge.updated.connect(on_prog)
 
         def work():
             from platforms.base import VideoInfo, now_str
@@ -1194,9 +1526,9 @@ class AssetPage(BasePage):
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev)
 
         def done(result, err):
-            if dlg.isVisible():
+            if dlg is not None and dlg.isVisible():
                 dlg.close()
-            bridge.updated.disconnect(on_prog)
+                bridge.updated.disconnect(on_prog)
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
@@ -1212,33 +1544,67 @@ class AssetPage(BasePage):
                     msg += "（已取消）"
                 self.app.toast(msg, "success" if not cancelled else "warning")
             # 刷新列表（重新扫描磁盘，新下载的图会显示本地缩略图）
-            QTimer.singleShot(100, self._refresh_collected)
+            if not quiet:  # 批量模式由 _advance 统一刷新一次
+                QTimer.singleShot(100, self._refresh_collected)
+            if on_finished:
+                on_finished()
 
         run_bg(work, done)
 
-    def _load_net_thumb(self, url, w, h):
-        """后台加载网络封面缩略图。"""
-        lbl = QLabel("🖼")
-        lbl.setFixedSize(w, h)
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+    def _fill_local_thumb(self, lbl, path, w, h):
+        """后台加载本地图片到已有缩略图 label。"""
+        lbl.setToolTip(path)
+
+        def load():
+            try:
+                from PIL import Image
+                img = Image.open(path).convert("RGB")
+                img.thumbnail((w, h), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return buf.getvalue()
+            except Exception:
+                return None
+
+        def done(data, err):
+            try:
+                if data:
+                    qimg = QImage.fromData(data)
+                    lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
+                        w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            except RuntimeError:
+                pass  # 列表刷新后 label 已销毁
+
+        run_bg(load, done)
+
+    def _fill_net_thumb(self, lbl, url, w, h):
+        """后台加载网络封面到已有缩略图 label。"""
 
         def load():
             try:
                 import requests
-                resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                h = {"User-Agent": "Mozilla/5.0"}
+                if "hdslb" in url or "bilibili" in url:
+                    h["Referer"] = "https://www.bilibili.com/"
+                if url.startswith("//"):
+                    url2 = "https:" + url
+                else:
+                    url2 = url
+                resp = requests.get(url2, timeout=8, headers=h)
                 return resp.content
             except Exception:
                 return None
 
         def done(data, err):
-            if data:
-                qimg = QImage.fromData(data)
-                lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
-                    w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            try:
+                if data:
+                    qimg = QImage.fromData(data)
+                    lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
+                        w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            except RuntimeError:
+                pass
 
         run_bg(load, done)
-        return lbl
 
     def on_show(self):
         self._refresh_collected()
