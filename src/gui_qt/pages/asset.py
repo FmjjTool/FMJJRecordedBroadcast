@@ -1048,11 +1048,11 @@ class AssetPage(BasePage):
         self._dl_state[key] = "downloading"
         plat = it.get("platform", "")
         if plat == "bilibili":
-            self._download_bilibili_item(it, on_finished=on_finished, quiet=quiet)
+            self._download_bilibili_item(it, on_finished=on_finished, quiet=quiet, force=force)
         elif plat == "douyin":
             self._download_video_item(it, on_finished=on_finished, quiet=quiet)
         else:
-            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
 
     def _toggle_select_all(self, state):
         """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""
@@ -1129,14 +1129,14 @@ class AssetPage(BasePage):
 
         _step()
 
-    def _download_bilibili_item(self, it, on_finished=None, quiet=False):
+    def _download_bilibili_item(self, it, on_finished=None, quiet=False, force=False):
         """B站分发：图文动态→图片；视频动态(AV)/BV号→视频。"""
         vid = it.get("video_id", "")
         dtype = self._bili_dynamic_type(it)
 
         # 图文动态：下载图片（不能套视频下载模式）
         if dtype == "draw":
-            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
             return
         # 视频动态：从 archive.bvid 取真实 BV 号
         if dtype == "av":
@@ -1145,7 +1145,7 @@ class AssetPage(BasePage):
                 vid = bvid
         # 仍是 dyn_ 且拿不到 BV 号 → 退化为图片（封面兜底）
         if not vid or vid.startswith("dyn_"):
-            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
             return
 
         cancel_ev = threading.Event()
@@ -1545,10 +1545,11 @@ class AssetPage(BasePage):
             pass
         return urls, lives
 
-    def _download_images_for_item(self, it, on_finished=None, quiet=False):
+    def _download_images_for_item(self, it, on_finished=None, quiet=False, force=False):
         """下载单条条目所有图片与 live 图视频（优先 raw json 的 pics/pic_ids）。
 
         quiet=True 时不弹单条进度框（批量下载有总进度条），完成后回调 on_finished 续下一条。
+        force=True 强制重下（跳过已下载的原图也要重新下载）。
         """
         # 优先从 raw json 提取所有原图 + live 视频，封面图也加入（B站动态封面 i0.hdslb.com 等）
         pics, lives = self._extract_pic_urls(it)
@@ -1596,7 +1597,8 @@ class AssetPage(BasePage):
             return download_media([info], base_dir=base_dir,
                                   download_images=True, download_live=True, download_videos=False,
                                   progress_callback=bridge.emit_progress,
-                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev)
+                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev,
+                                  skip_existing=not force)
 
         def done(result, err):
             if dlg is not None and dlg.isVisible():
@@ -1608,11 +1610,17 @@ class AssetPage(BasePage):
             else:
                 n = (result or {}).get("images", 0)
                 n_live = (result or {}).get("live", 0)
+                n_skip = (result or {}).get("skipped", 0)
                 cancelled = (result or {}).get("cancelled", False)
                 self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
-                msg = f"✅ 已下载图片 {n} 张"
-                if n_live:
-                    msg += f" + Live图视频 {n_live} 个"
+                if not n and not n_live and n_skip:
+                    msg = f"✅ {n_skip} 个文件已下载过，自动跳过"
+                else:
+                    msg = f"✅ 已下载图片 {n} 张"
+                    if n_live:
+                        msg += f" + Live图视频 {n_live} 个"
+                    if n_skip:
+                        msg += f"（跳过已下载 {n_skip} 个）"
                 if cancelled:
                     msg += "（已取消）"
                 self.app.toast(msg, "success" if not cancelled else "warning")

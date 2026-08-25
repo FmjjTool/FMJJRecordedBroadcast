@@ -249,8 +249,11 @@ class VideoDownloadPage(BasePage):
                 self._log(f"❌ 下载失败: {err}")
                 return
             stats = result or {}
-            self._log(f"✅ 下载完成: 图片 {stats.get('images', 0)} | "
-                      f"Live图 {stats.get('live', 0)} | 视频 {stats.get('videos', 0)}")
+            msg = (f"✅ 下载完成: 图片 {stats.get('images', 0)} | "
+                   f"Live图 {stats.get('live', 0)} | 视频 {stats.get('videos', 0)}")
+            if stats.get("skipped", 0):
+                msg += f" | 跳过已下载 {stats['skipped']}"
+            self._log(msg)
 
         run_bg(work, done)
 

@@ -52,20 +52,27 @@ _QT_NOISE = (
     "QPixmap::scaled: Pixmap is a null pixmap",
 )
 
+# "OpenType support missing" 实测是 QtInfoMsg（不是 warning），
+# 只关 warning 级拦不住，必须连 info 级一起关
+_FONTDB_RULES = "qt.text.font.db.info=false\nqt.text.font.db.warning=false"
+
 
 def _install_qt_noise_filter():
     """吞掉已知无害的 Qt 运行期警告（setFilterRules 之外的兜底），
-    其余消息照常输出到 stderr。"""
+    其余消息照常输出到 stderr（带类别前缀，与 Qt 默认格式一致）。"""
     from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 
     def _handler(msg_type, context, message):
-        if msg_type in (QtMsgType.QtDebugMsg, QtMsgType.QtWarningMsg) and any(
+        if msg_type in (QtMsgType.QtDebugMsg, QtMsgType.QtInfoMsg,
+                        QtMsgType.QtWarningMsg) and any(
                 n in message for n in _QT_NOISE):
             return
         stream = sys.stderr or sys.__stderr__
         if stream:
+            cat = getattr(context, "category", "") or ""
+            line = f"{cat}: {message}" if cat and cat != "default" else message
             try:
-                stream.write(message + "\n")
+                stream.write(line + "\n")
             except Exception:
                 pass
 
@@ -100,7 +107,7 @@ def main():
     # Windows 中文系统的 Qt 字体回退链（雅黑/Tahoma/SimSun/Arial...）不含印度系文字字体，
     # 渲染抓取内容里的旁遮普语等外文时每条都刷 "OpenType support missing" 警告，关闭降噪
     from PySide6.QtCore import QLoggingCategory
-    QLoggingCategory.setFilterRules("qt.text.font.db.warning=false")
+    QLoggingCategory.setFilterRules(_FONTDB_RULES)
     _install_qt_noise_filter()
 
     app = QApplication(sys.argv)

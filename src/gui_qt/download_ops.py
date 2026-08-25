@@ -160,7 +160,10 @@ def summarize_download(paths, draw_stats, other_stats, errors):
     if draw_stats:
         lines.append(f"动态图片: {draw_stats.get('images', 0)} 张")
     if other_stats:
-        lines.append(f"其他: 图 {other_stats.get('images', 0)} / 视频 {other_stats.get('videos', 0)}")
+        line = f"其他: 图 {other_stats.get('images', 0)} / 视频 {other_stats.get('videos', 0)}"
+        if other_stats.get("skipped", 0):
+            line += f"（跳过已下载 {other_stats['skipped']}）"
+        lines.append(line)
     msg = " | ".join(lines) or "无内容下载"
     if errors:
         msg += f"（失败 {len(errors)} 条）"

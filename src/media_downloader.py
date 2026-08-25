@@ -119,6 +119,67 @@ def _upgrade_sinaimg(url: str) -> str:
     return _SINAIMG_TIER_RE.sub(r"\1large/", url, count=1)
 
 
+_MEDIA_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
+               ".mp4", ".mov", ".webm")
+
+
+def _find_existing_media(filepath: str) -> str | None:
+    """目标路径或同 stem 其他媒体扩展名的已有文件。
+
+    _download_one 会按 Content-Type 改扩展名（.jpg 存成 .png 等），
+    判重需覆盖同 stem 任意媒体扩展，否则改名过的文件每次都被重下。
+    """
+    if os.path.exists(filepath):
+        return filepath
+    d, base = os.path.split(filepath)
+    if "." not in base:
+        return None
+    stem = base.rsplit(".", 1)[0]
+    try:
+        for fn in os.listdir(d):
+            if fn.startswith(stem + ".") and \
+                    os.path.splitext(fn)[1].lower() in _MEDIA_EXTS:
+                return os.path.join(d, fn)
+    except OSError:
+        pass
+    return None
+
+
+def _remote_size(url: str, headers: dict) -> int | None:
+    """HEAD 探测远端文件大小（新浪图床已验证支持），失败返回 None。"""
+    try:
+        r = httpx.head(url, headers=headers, timeout=20, follow_redirects=True)
+        if r.status_code == 200:
+            cl = r.headers.get("content-length", "")
+            if cl.isdigit():
+                return int(cl)
+    except Exception:
+        pass
+    return None
+
+
+def _should_skip_download(url: str, filepath: str, headers: dict) -> bool:
+    """已下载自动跳过（仅原图场景）。
+
+    微博图片采集存的是 mw2000/orj1080 压缩档，_download_one 每次都升级成
+    large 原图并把旧文件当压缩版删除重下——重复下载同一批图时全部重来。
+    本地已有文件（含同 stem 其他扩展名）大小与原图一致，说明上次已经
+    下过原图，直接跳过，不再发完整下载请求。
+    """
+    up = _upgrade_sinaimg(url)
+    if up == url:
+        return False  # 无原图升级语义（抖音/B站等），维持原有 Range/416 快速跳过
+    local = _find_existing_media(filepath)
+    if not local:
+        return False
+    try:
+        size = os.path.getsize(local)
+    except OSError:
+        return False
+    remote = _remote_size(up, headers)
+    return remote is not None and remote == size
+
+
 def _download_one(url: str, filepath: str, headers: dict) -> tuple[str, bool]:
     """下载单个文件，返回 (filepath, success)"""
     try:
@@ -134,6 +195,7 @@ def _download_one(url: str, filepath: str, headers: dict) -> tuple[str, bool]:
         existing = os.path.getsize(filepath) if os.path.exists(filepath) else 0
         if existing > 0 and upgraded:
             # URL 已升级为原图：旧文件是压缩版，续传会拼出损坏文件，删掉重下
+            # （已下载的原图由 download_media 的 _should_skip_download 提前跳过）
             os.remove(filepath)
             existing = 0
         if existing > 0:
@@ -167,6 +229,7 @@ def download_media(
     progress_callback=None,
     wait_range: tuple | None = None,
     cancel_event=None,
+    skip_existing: bool = True,
 ) -> dict:
     """
     批量下载媒体文件。返回统计信息。
@@ -180,6 +243,8 @@ def download_media(
         progress_callback: 进度回调 (done, total, name)，在工作线程调用
         wait_range: 文件间随机等待区间 (lo, hi) 秒；None 用默认 3~60（防反爬）
         cancel_event: threading.Event，置位后跳过剩余文件（stats["cancelled"]=True）
+        skip_existing: 已下载的原图自动跳过（本地文件与原图大小一致即视为已下载，
+            stats["skipped"] 计数）；强制重下时传 False
     """
     if base_dir is None:
         base_dir = DOWNLOAD_DIR
@@ -284,7 +349,7 @@ def download_media(
         return h
 
     stats = {"images": 0, "live": 0, "videos": 0, "total": len(tasks), "failed": 0,
-             "cancelled": False}
+             "skipped": 0, "cancelled": False}
     if progress_callback:
         progress_callback(0, len(tasks), "")
 
@@ -304,14 +369,7 @@ def download_media(
                 stats["cancelled"] = True
                 console.print("[yellow]已取消，跳过剩余文件[/yellow]")
                 break
-            if idx > 0:
-                lo, hi = wait_range if wait_range else (3, 60)
-                wait = random.uniform(lo, hi) if hi > lo else lo
-                if wait > 0:
-                    progress.update(pbar, description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
-                    time.sleep(wait)
-            progress.update(pbar, description=f"[cyan]{mtype}[/cyan] {os.path.basename(fpath)}")
-            # 根据 URL 域名选择请求头
+            # 根据 URL 域名选择请求头（提前到跳过检查之前）
             if "douyin.com" in url or "douyinvod" in url:
                 hdrs = _dy_headers()
             elif "weibo" in url or "sinaimg" in url:
@@ -322,6 +380,23 @@ def download_media(
                 hdrs = h
             else:
                 hdrs = dict(headers)
+            # 已下载自动跳过（原图）：本地文件与原图大小一致 → 不发下载请求
+            if skip_existing and _should_skip_download(url, fpath, hdrs):
+                stats["skipped"] += 1
+                progress.update(pbar, description=f"[dim]已下载，跳过 {os.path.basename(fpath)}[/dim]")
+                progress.advance(pbar)
+                if progress_callback:
+                    done = (stats["images"] + stats["live"] + stats["videos"]
+                            + stats["failed"] + stats["skipped"])
+                    progress_callback(done, len(tasks), os.path.basename(fpath))
+                continue
+            if idx > 0:
+                lo, hi = wait_range if wait_range else (3, 60)
+                wait = random.uniform(lo, hi) if hi > lo else lo
+                if wait > 0:
+                    progress.update(pbar, description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
+                    time.sleep(wait)
+            progress.update(pbar, description=f"[cyan]{mtype}[/cyan] {os.path.basename(fpath)}")
             filepath, ok = _download_one(url, fpath, hdrs)
             if ok:
                 if mtype == "图片":
@@ -340,6 +415,8 @@ def download_media(
 
     console.print("\n[bold green]V 下载完成:[/bold green]")
     console.print(f"  图片: {stats['images']} | Live图: {stats['live']} | 视频: {stats['videos']}")
+    if stats["skipped"]:
+        console.print(f"  [dim]跳过已下载: {stats['skipped']}[/dim]")
     if stats["failed"]:
         console.print(f"  [red]失败: {stats['failed']}[/red]")
     console.print(f"  [dim]保存到: {os.path.abspath(base_dir)}[/dim]")
