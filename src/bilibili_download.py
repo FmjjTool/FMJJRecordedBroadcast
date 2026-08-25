@@ -87,20 +87,30 @@ def _pick_audio_stream(audio_list):
     return max(audio_list, key=lambda s: s.get("bandwidth", 0))
 
 
-def _download_to_file(url: str, path: str, headers: dict, progress_cb=None) -> str:
-    """下载到文件，返回文件路径。"""
-    with httpx.Client(headers=headers, timeout=60, follow_redirects=True) as client:
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0) or 0)
-            done = 0
-            with open(path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-                    done += len(chunk)
-                    if progress_cb:
-                        progress_cb(done, total)
-    return path
+def _download_to_file(url: str, path: str, headers: dict, progress_cb=None,
+                       backup_urls: list | None = None) -> str:
+    """下载到文件，返回文件路径。主链接失败自动尝试 backupUrl 镜像。"""
+    urls = [url] + (backup_urls or [])
+    last_err = None
+    for i, u in enumerate(urls):
+        try:
+            with httpx.Client(headers=headers, timeout=60, follow_redirects=True) as client:
+                with client.stream("GET", u) as resp:
+                    resp.raise_for_status()
+                    total = int(resp.headers.get("content-length", 0) or 0)
+                    done = 0
+                    with open(path, "wb") as f:
+                        for chunk in resp.iter_bytes(chunk_size=65536):
+                            f.write(chunk)
+                            done += len(chunk)
+                            if progress_cb:
+                                progress_cb(done, total)
+                    return path
+        except Exception as e:
+            last_err = e
+            if i < len(urls) - 1:
+                continue  # 还有镜像可试
+            raise last_err
 
 
 def get_cid(video_id: str, cookie: str = "") -> tuple:
@@ -131,6 +141,24 @@ def download_bilibili_by_bvid(
     """便捷入口：根据 bvid/av 号下载（内部自动拿 cid）。quality=None 表示最高画质。"""
     cid, bvid = get_cid(video_id, cookie)
     return download_bilibili_video(bvid, cid, quality, cookie, out_dir, title, progress_cb, author, publish_time)
+
+
+def _stream_urls(stream: dict) -> list:
+    """流的全部可用链接：baseUrl + backupUrl 镜像（503 时逐个回退）。"""
+    urls = []
+    for k in ("baseUrl", "base_url"):
+        if stream.get(k):
+            urls.append(stream[k])
+    for k in ("backupUrl", "backup_url"):
+        v = stream.get(k)
+        if isinstance(v, list):
+            urls.extend(u for u in v if u)
+    seen, out = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 def download_bilibili_video(
@@ -176,11 +204,13 @@ def download_bilibili_video(
     video_tmp = os.path.join(tmpdir, "video.m4s")
     audio_tmp = os.path.join(tmpdir, "audio.m4s")
     try:
-        # 下载视频流
-        _download_to_file(video["baseUrl"], video_tmp, headers, progress_cb)
+        # 下载视频流（主链接 503/超时自动回退 backupUrl 镜像）
+        vurls = _stream_urls(video)
+        _download_to_file(vurls[0], video_tmp, headers, progress_cb, vurls[1:])
         # 下载音频流
         if audio and audio.get("baseUrl"):
-            _download_to_file(audio["baseUrl"], audio_tmp, headers, progress_cb)
+            aurls = _stream_urls(audio)
+            _download_to_file(aurls[0], audio_tmp, headers, progress_cb, aurls[1:])
         # ffmpeg 合并
         if audio and os.path.exists(audio_tmp):
             cmd = ["ffmpeg", "-y", "-i", video_tmp, "-i", audio_tmp, "-c", "copy", out_path]

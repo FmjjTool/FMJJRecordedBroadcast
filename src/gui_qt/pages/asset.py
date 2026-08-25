@@ -16,8 +16,9 @@ import re
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QColor, QDesktopServices, QImage, QPainter,
+                           QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
@@ -1670,7 +1671,7 @@ class AssetPage(BasePage):
                         .replace(">", "&gt;").replace("\n", "<br>")))
             dl.setStyleSheet("font-size: 12px;")
             v.addWidget(dl)
-        # 媒体文件（实际下载的图片/视频，双击图片看大图、视频用系统播放器）
+        # 媒体文件（实际下载的图片/视频，双击图片看大图、双击视频缩略图播放）
         mfs = item.get("media_files") or []
         if mfs:
             imgs = [m for m in mfs if m["type"] == "image"]
@@ -1678,23 +1679,23 @@ class AssetPage(BasePage):
             mh = QLabel(f"🖼 媒体文件（{len(imgs)} 图 / {len(vids)} 视频）")
             mh.setStyleSheet("color: #6b7280; font-weight: bold;")
             v.addWidget(mh)
-            if imgs:
+            if imgs or vids:
                 grid_holder = QWidget()
                 grid = QGridLayout(grid_holder)
                 grid.setContentsMargins(0, 0, 0, 0)
                 grid.setSpacing(4)
                 cols = 5
-                for i, im in enumerate(imgs):
-                    cell = self._load_local_thumb_cell(im["path"], 128)
+                i = 0
+                for im in imgs:
+                    cell = self._load_local_thumb_cell(im["path"], 128, is_video=False)
                     grid.addWidget(cell, i // cols, i % cols)
+                    i += 1
+                for vd in vids:
+                    # 视频（含 live 图 .mov）：ffmpeg 抽首帧做封面，双击播放
+                    cell = self._load_local_thumb_cell(vd["path"], 128, is_video=True)
+                    grid.addWidget(cell, i // cols, i % cols)
+                    i += 1
                 v.addWidget(grid_holder)
-            for vd in vids:
-                rowv = QPushButton(f"🎬 {vd['name']}")
-                rowv.setStyleSheet(
-                    "background: transparent; border: none; color: #1976d2; "
-                    "text-align: left; font-size: 12px; padding: 1px;")
-                rowv.clicked.connect(lambda _=False, p=vd["path"]: self._open_media(p))
-                v.addWidget(rowv)
         v.addStretch(1)
 
         # 底部操作栏
@@ -1710,9 +1711,17 @@ class AssetPage(BasePage):
         outer.addLayout(bottom)
         win.exec()
 
-    def _load_local_thumb_cell(self, path, size):
-        """图片网格单格（双击用系统默认看图器打开原图）。"""
-        lbl = QLabel("🖼")
+    def _load_local_thumb_cell(self, path, size, is_video=False):
+        """媒体网格单格：双击图片用系统看图器开大图 / 双击视频缩略图播放。
+
+        视频先用 ffmpeg 抽首帧做封面（live 图 .mov 的静态帧），失败回退 🎬 占位。
+        """
+        if is_video:
+            lbl = _ThumbLabel(lambda p=path: self._open_media(p))
+            lbl.setText("🎬")
+        else:
+            lbl = _ThumbLabel(lambda p=path: self._open_media(p))
+            lbl.setText("🖼")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
@@ -1720,6 +1729,24 @@ class AssetPage(BasePage):
 
         def load():
             try:
+                if is_video:
+                    from toolbox.live_video import find_ffmpeg
+                    exe = find_ffmpeg()
+                    if not exe:
+                        return None
+                    import subprocess
+                    r = subprocess.run(
+                        [exe, "-hide_banner", "-loglevel", "error", "-ss", "0.5",
+                         "-i", path, "-vframes", "1", "-f", "image2", "pipe:1"],
+                        capture_output=True, timeout=15)
+                    data = r.stdout if r.returncode == 0 and len(r.stdout) > 100 else b""
+                    if not data:  # 首帧 0.5s 失败（短视频/0.5s 处黑帧），重试第 0 秒
+                        r = subprocess.run(
+                            [exe, "-hide_banner", "-loglevel", "error", "-ss", "0",
+                             "-i", path, "-vframes", "1", "-f", "image2", "pipe:1"],
+                            capture_output=True, timeout=15)
+                        data = r.stdout if r.returncode == 0 else b""
+                    return data or None
                 from PIL import Image
                 img = Image.open(path).convert("RGB")
                 img.thumbnail((size, size), Image.LANCZOS)
@@ -1730,10 +1757,33 @@ class AssetPage(BasePage):
                 return None
 
         def done(data, err):
-            if data:
-                qimg = QImage.fromData(data)
-                lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
-                    size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            try:
+                if data:
+                    qimg = QImage.fromData(data)
+                    pix = QPixmap.fromImage(qimg).scaled(
+                        size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    if is_video:
+                        # 居中叠 ▶ 播放角标
+                        canvas = QPixmap(size, size)
+                        canvas.fill(Qt.transparent)
+                        cp = QPainter(canvas)
+                        cp.drawPixmap((size - pix.width()) // 2,
+                                      (size - pix.height()) // 2, pix)
+                        cp.setPen(QPen(QColor(0, 0, 0, 130), 1))
+                        cp.setBrush(QColor(0, 0, 0, 110))
+                        cp.drawEllipse(size // 2 - 17, size // 2 - 17, 34, 34)
+                        cp.setPen(QPen(QColor("white"), 2))
+                        tri = QPolygonF([QPointF(size / 2 - 6, size / 2 - 9),
+                                         QPointF(size / 2 - 6, size / 2 + 9),
+                                         QPointF(size / 2 + 10, size / 2)])
+                        cp.setBrush(QColor("white"))
+                        cp.drawPolygon(tri)
+                        cp.end()
+                        lbl.setPixmap(canvas)
+                    else:
+                        lbl.setPixmap(pix)
+            except RuntimeError:
+                pass  # 详情窗已关闭
 
         run_bg(load, done)
         return lbl
