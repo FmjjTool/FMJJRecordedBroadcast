@@ -4,12 +4,14 @@
 """
 
 import io
+import os
 import re
+import sqlite3
 import sys
 import threading
 import time
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
@@ -34,6 +36,110 @@ COOKIE_PLATFORMS = [
     ("xiaohongshu", "小红书", False, True),
     ("kuaishou", "快手", False, True),
 ]
+
+# 每平台常驻的登录 profile（app 生命周期内复用）
+_LOGIN_PROFILES: dict = {}
+
+
+def _login_profile(plat: str):
+    """平台级共享无痕 profile（app 生命周期内复用）。
+
+    不用持久 profile 的原因（打包版"页面明明登录了却存不下 Cookie"的根因）：
+    持久 profile 里保留的登录 Cookie 不触发 cookieAdded（只报新写入）、
+    loadAllCookies 在 PySide6 6.11 实测不回灌、Cookies 库被 Chromium 以
+    无共享读方式锁死连本进程都读不了。无痕 profile 每次开窗都是空的，
+    登录必是新写入、事件必定触发；已存 Cookie 由 _seed_stored_cookies
+    回种实现自动登录，持久化由应用自己的 cookies.json 承担。
+    """
+    prof = _LOGIN_PROFILES.get(plat)
+    if prof is None:
+        from PySide6.QtWebEngineCore import QWebEngineProfile
+        prof = QWebEngineProfile()  # 无 storage name → off-the-record
+        prof.setHttpUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        _LOGIN_PROFILES[plat] = prof
+    return prof
+
+
+def _legacy_profile_dir(plat: str) -> str:
+    """旧持久 profile 的目录（AppData\\<应用>\\QtWebEngine\\login_<plat>）。"""
+    from PySide6.QtCore import QStandardPaths
+    base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+    return os.path.join(base, "QtWebEngine", f"login_{plat}")
+
+
+def _legacy_profile_cookies(plat: str) -> dict:
+    """读旧持久 profile 的 Chromium Cookies 库（Windows 上 QtWebEngine 明文存值）。
+
+    只在 profile 未被本应用创建时调用（库不被 Chromium 锁住才能读到）。
+    """
+    out: dict = {}
+    try:
+        db = os.path.join(_legacy_profile_dir(plat), "Cookies")
+        if not os.path.exists(db):
+            return out
+        uri = "file:" + db.replace("?", "%3F").replace("#", "%23") + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=2.0)
+        try:
+            rows = con.execute(
+                "select name, value from cookies where value != '' "
+                "order by last_update_utc desc").fetchall()
+        finally:
+            con.close()
+    except Exception:
+        return out
+    for name, value in rows:
+        if name and name not in out:  # 同名多域取最近更新的
+            out[name] = value
+    return out
+
+
+def _import_legacy_profile(plat: str, auth_keys: tuple) -> bool:
+    """一次性迁移旧持久 profile 里留下的登录 Cookie 到应用存储。
+
+    修复前（持久 profile 时代）用户在登录窗完成了登录但没能捕获保存，
+    登录态只留在 Chromium 的 Cookies 库里 —— 这里把它救回 cookies.json，
+    成功后删掉旧库防止重复迁移。库被占用（旧版应用还在运行）时静默跳过，
+    下次再试。
+    """
+    try:
+        if auth.load_cookies().get(plat, ""):
+            return False  # 应用已有存储，无需迁移
+        cks = _legacy_profile_cookies(plat)
+        if not any(k in cks for k in auth_keys):
+            return False  # 旧库里没有登录特征（游客态），不迁
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cks.items())
+        auth.set_cookie(plat, cookie_str)
+        for f in ("Cookies", "Cookies-journal"):
+            try:
+                os.remove(os.path.join(_legacy_profile_dir(plat), f))
+            except OSError:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+def _seed_stored_cookies(profile, stored: str, url: str, jar: dict):
+    """把应用已存的 Cookie 回种到无痕 profile（页面自动登录 + jar 预填）。"""
+    if not stored:
+        return
+    from PySide6.QtCore import QUrl
+    from PySide6.QtNetwork import QNetworkCookie
+    origin = QUrl(url)
+    host = origin.host()
+    domain = "." + host.split(".", 1)[1] if host.count(".") >= 2 else host
+    store = profile.cookieStore()
+    for pair in stored.split(";"):
+        name, eq, value = pair.strip().partition("=")
+        if not (name and eq):
+            continue
+        ck = QNetworkCookie(name.encode("utf-8"), value.encode("utf-8"))
+        ck.setDomain(domain)
+        ck.setPath("/")
+        store.setCookie(ck, origin)
+        jar[name] = value
 
 
 class CookieManagerDialog(QDialog):
@@ -366,14 +472,19 @@ class CookieManagerDialog(QDialog):
         dlg.resize(1100, 780)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（无时间限制，由你决定）"
+        hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（页面已自动登录时可直接点击）"
                       + (f"　💡 {login_hint}" if login_hint else ""))
         hint.setStyleSheet("color: #555; padding: 4px; background: #ffffff;")
         v.addWidget(hint)
 
-        # 独立持久 profile：cookieStore 持续接收 cookieAdded（含 HttpOnly）
-        profile = QWebEngineProfile(f"login_{plat}", dlg)
-        profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        # 旧持久 profile 时代留下的登录态一次性迁移（必须在 profile 创建前读库）
+        if _import_legacy_profile(plat, auth_keys):
+            self._whoami_cache.pop(plat, None)
+            self._reload()
+            self._notify()
+
+        # 平台级共享无痕 profile（见 _login_profile）：登录必是新写入、事件必定触发
+        profile = _login_profile(plat)
         page = QWebEnginePage(profile, dlg)
         view = QWebEngineView(dlg)
         view.setPage(page)
@@ -398,6 +509,11 @@ class CookieManagerDialog(QDialog):
 
         jar: dict[str, str] = {}
 
+        def _refresh_cap():
+            hit = any(k in jar for k in auth_keys)
+            cap_lbl.setText(f"  已捕获 {len(jar)} 个 Cookie" + (f"（✅ 检测到登录特征 {self_keys}）" if hit else f"（登录特征：{self_keys}）"))
+            cap_lbl.setStyleSheet("color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
+
         def on_cookie_added(cookie):
             try:
                 name = bytes(cookie.name()).decode("utf-8", "ignore")
@@ -407,9 +523,7 @@ class CookieManagerDialog(QDialog):
             if not name or not value:
                 return
             jar[name] = value
-            hit = any(k in jar for k in auth_keys)
-            cap_lbl.setText(f"  已捕获 {len(jar)} 个 Cookie" + (f"（✅ 检测到登录特征 {self_keys}）" if hit else f"（登录特征：{self_keys}）"))
-            cap_lbl.setStyleSheet("color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
+            _refresh_cap()
 
         def save_now():
             if not jar:
@@ -435,6 +549,11 @@ class CookieManagerDialog(QDialog):
             dlg.close()
 
         profile.cookieStore().cookieAdded.connect(on_cookie_added)
+
+        # 回种已存 Cookie（导入/上次保存的）：无痕 profile 开窗为空，回种后
+        # 页面自动保持登录，用户可直接点「已获取」保存；登录过期则正常重新登录
+        _seed_stored_cookies(profile, auth.load_cookies().get(plat, ""), url, jar)
+        _refresh_cap()
 
         view.load(QUrl(url))
         dlg.show()
