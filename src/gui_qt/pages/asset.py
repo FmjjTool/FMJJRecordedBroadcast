@@ -13,14 +13,15 @@ import io
 import json
 import os
 import re
+import threading
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QTabWidget,
-    QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -35,6 +36,27 @@ AUDIO_EXTS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac", ".opus"}
 BATCH = 20  # 懒加载：每批渲染数量
 
 PLATFORM_CN = {"douyin": "抖音", "weibo": "微博", "bilibili": "B站"}
+
+
+class _ProgressBridge(QObject):
+    """工作线程 → GUI 线程的进度信号桥（queued connection 保证线程安全）。"""
+    updated = Signal(int, int, str)
+
+    def emit_progress(self, done: int, total: int, name: str):
+        self.updated.emit(done, total, name)
+
+
+def _make_progress_dlg(parent, title: str, total: int, cancel_event: threading.Event):
+    """构造下载进度对话框：实时显示 N/M + 当前文件名，可取消。"""
+    dlg = QProgressDialog("准备下载...", "取消", 0, max(total, 1), parent)
+    dlg.setWindowTitle(title)
+    dlg.setAutoClose(False)
+    dlg.setAutoReset(False)
+    dlg.setMinimumDuration(0)
+    dlg.setMinimumWidth(420)
+    dlg.canceled.connect(cancel_event.set)
+    dlg.show()
+    return dlg
 
 
 def _fmt_size(n):
@@ -864,6 +886,19 @@ class AssetPage(BasePage):
             self.app.toast("此条目无视频链接", "warning")
             return
 
+        cancel_ev = threading.Event()
+        bridge = _ProgressBridge()
+        dlg = _make_progress_dlg(self, "下载视频", 1, cancel_ev)
+        dlg.setLabelText("正在解析链接...")
+
+        def on_prog(done_n, total_n, name):
+            if total_n != dlg.maximum():
+                dlg.setMaximum(max(total_n, 1))
+            dlg.setValue(done_n)
+            dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+
+        bridge.updated.connect(on_prog)
+
         def work():
             from platforms.base import VideoInfo, now_str
             from toolbox.config_manager import get_export_subdir
@@ -897,13 +932,20 @@ class AssetPage(BasePage):
             if note_images:
                 info.images = note_images
                 return download_media([info], base_dir=base_dir,
-                                      download_images=True, download_live=False, download_videos=False)
+                                      download_images=True, download_live=False, download_videos=False,
+                                      progress_callback=bridge.emit_progress,
+                                      wait_range=(0.5, 1.5), cancel_event=cancel_ev)
             if not vurl2:
                 raise ValueError("无可用视频链接")
             return download_media([info], base_dir=base_dir,
-                                  download_images=False, download_live=False, download_videos=True)
+                                  download_images=False, download_live=False, download_videos=True,
+                                  progress_callback=bridge.emit_progress,
+                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev)
 
         def done(result, err):
+            if dlg.isVisible():
+                dlg.close()
+            bridge.updated.disconnect(on_prog)
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
@@ -911,9 +953,11 @@ class AssetPage(BasePage):
                 n_img = (result or {}).get("images", 0)
                 n_vid = (result or {}).get("videos", 0)
                 f = (result or {}).get("failed", 0)
+                cancelled = (result or {}).get("cancelled", False)
                 if n_img:
-                    self._dl_state[self._dl_key(it)] = "done"
-                    self.app.toast(f"✅ 已下载图片 {n_img} 张", "success")
+                    self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
+                    self.app.toast(f"✅ 已下载图片 {n_img} 张" + ("（已取消）" if cancelled else ""),
+                                   "success" if not cancelled else "warning")
                 elif n_vid:
                     self._dl_state[self._dl_key(it)] = "done"
                     self.app.toast(f"✅ 已下载视频 {n_vid} 个", "success")
@@ -922,7 +966,6 @@ class AssetPage(BasePage):
                     self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
             QTimer.singleShot(100, self._refresh_collected)
 
-        self.app.toast("开始下载抖音视频...", "info")
         run_bg(work, done)
 
     def _delete_item(self, it):
@@ -1117,6 +1160,18 @@ class AssetPage(BasePage):
             self.app.toast("此条目无可下载图片（raw json 无 pics 且无封面）", "warning")
             return
 
+        cancel_ev = threading.Event()
+        bridge = _ProgressBridge()
+        dlg = _make_progress_dlg(self, "下载图片", len(pics) + len(lives), cancel_ev)
+
+        def on_prog(done_n, total_n, name):
+            if total_n != dlg.maximum():
+                dlg.setMaximum(max(total_n, 1))
+            dlg.setValue(done_n)
+            dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+
+        bridge.updated.connect(on_prog)
+
         def work():
             from platforms.base import VideoInfo, now_str
             from toolbox.config_manager import get_export_subdir
@@ -1134,24 +1189,31 @@ class AssetPage(BasePage):
             info.live_photos = lives
             base_dir = str(get_export_subdir("video_data"))
             return download_media([info], base_dir=base_dir,
-                                  download_images=True, download_live=True, download_videos=False)
+                                  download_images=True, download_live=True, download_videos=False,
+                                  progress_callback=bridge.emit_progress,
+                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev)
 
         def done(result, err):
+            if dlg.isVisible():
+                dlg.close()
+            bridge.updated.disconnect(on_prog)
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
             else:
                 n = (result or {}).get("images", 0)
                 n_live = (result or {}).get("live", 0)
-                self._dl_state[self._dl_key(it)] = "done"
+                cancelled = (result or {}).get("cancelled", False)
+                self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
+                msg = f"✅ 已下载图片 {n} 张"
                 if n_live:
-                    self.app.toast(f"✅ 已下载图片 {n} 张 + Live图视频 {n_live} 个", "success")
-                else:
-                    self.app.toast(f"✅ 已下载图片 {n} 张", "success")
+                    msg += f" + Live图视频 {n_live} 个"
+                if cancelled:
+                    msg += "（已取消）"
+                self.app.toast(msg, "success" if not cancelled else "warning")
             # 刷新列表（重新扫描磁盘，新下载的图会显示本地缩略图）
             QTimer.singleShot(100, self._refresh_collected)
 
-        self.app.toast("开始下载图片...", "info")
         run_bg(work, done)
 
     def _load_net_thumb(self, url, w, h):

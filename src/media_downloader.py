@@ -96,15 +96,37 @@ def _resolve_livephoto(url: str, headers: dict) -> str:
     return url
 
 
+_SINAIMG_TIER_RE = re.compile(r"(https?://w[a-z]\d*\.sinaimg\.cn/)([a-z0-9]+)/", re.IGNORECASE)
+
+
+def _upgrade_sinaimg(url: str) -> str:
+    """sinaimg 图片 URL 升级为原图（large 档）。
+
+    m.weibo.cn 接口给的常是 mw2000/orj1080 等压缩档（1.2MB vs 原图 12MB+），
+    large 档才是原始上传文件。livephoto.us.sinaimg.cn（视频）不匹配此正则，不受影响。
+    """
+    if "sinaimg.cn" not in url:
+        return url
+    return _SINAIMG_TIER_RE.sub(r"\1large/", url, count=1)
+
+
 def _download_one(url: str, filepath: str, headers: dict) -> tuple[str, bool]:
     """下载单个文件，返回 (filepath, success)"""
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         # live 图：先解析出带签名的实时直链
         url = _resolve_livephoto(url, headers)
+        # 微博图片：压缩档升级为原图
+        url2 = _upgrade_sinaimg(url)
+        upgraded = url2 != url
+        url = url2
         # 断点续传：文件已存在则用 Range 请求续传
         h = dict(headers)
         existing = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+        if existing > 0 and upgraded:
+            # URL 已升级为原图：旧文件是压缩版，续传会拼出损坏文件，删掉重下
+            os.remove(filepath)
+            existing = 0
         if existing > 0:
             h["Range"] = f"bytes={existing}-"
         with httpx.Client(timeout=60, follow_redirects=True, headers=h) as client:
@@ -134,6 +156,8 @@ def download_media(
     download_live: bool = True,
     download_videos: bool = True,
     progress_callback=None,
+    wait_range: tuple | None = None,
+    cancel_event=None,
 ) -> dict:
     """
     批量下载媒体文件。返回统计信息。
@@ -144,6 +168,9 @@ def download_media(
         download_images: 是否下载图片
         download_live: 是否下载 live 图
         download_videos: 是否下载视频
+        progress_callback: 进度回调 (done, total, name)，在工作线程调用
+        wait_range: 文件间随机等待区间 (lo, hi) 秒；None 用默认 3~60（防反爬）
+        cancel_event: threading.Event，置位后跳过剩余文件（stats["cancelled"]=True）
     """
     if base_dir is None:
         base_dir = DOWNLOAD_DIR
@@ -212,7 +239,8 @@ def download_media(
 
     if not tasks:
         console.print("[yellow]没有可下载的媒体文件[/yellow]")
-        return {"images": 0, "live": 0, "videos": 0, "total": 0, "failed": 0}
+        return {"images": 0, "live": 0, "videos": 0, "total": 0, "failed": 0,
+                "cancelled": False}
 
     console.print(f"[bold]开始下载 {len(tasks)} 个文件到 [cyan]{os.path.abspath(base_dir)}[/cyan]...[/bold]")
 
@@ -243,7 +271,10 @@ def download_media(
             h["Cookie"] = _wb_ck_cache[0]
         return h
 
-    stats = {"images": 0, "live": 0, "videos": 0, "total": len(tasks), "failed": 0}
+    stats = {"images": 0, "live": 0, "videos": 0, "total": len(tasks), "failed": 0,
+             "cancelled": False}
+    if progress_callback:
+        progress_callback(0, len(tasks), "")
 
     with Progress(
         SpinnerColumn(),
@@ -255,12 +286,18 @@ def download_media(
     ) as progress:
         pbar = progress.add_task("[cyan]下载中...", total=len(tasks))
 
-        # 串行下载：每个文件前随机等待 3~60 秒（防反爬硬性条件，所有平台通用）
+        # 串行下载：每个文件前随机等待（默认 3~60 秒防反爬；GUI 手动下载传小区间提速）
         for idx, (url, fpath, mtype) in enumerate(tasks):
+            if cancel_event is not None and cancel_event.is_set():
+                stats["cancelled"] = True
+                console.print("[yellow]已取消，跳过剩余文件[/yellow]")
+                break
             if idx > 0:
-                wait = random.uniform(3, 60)
-                progress.update(pbar, description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
-                time.sleep(wait)
+                lo, hi = wait_range if wait_range else (3, 60)
+                wait = random.uniform(lo, hi) if hi > lo else lo
+                if wait > 0:
+                    progress.update(pbar, description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
+                    time.sleep(wait)
             progress.update(pbar, description=f"[cyan]{mtype}[/cyan] {os.path.basename(fpath)}")
             # 根据 URL 域名选择请求头
             if "douyin.com" in url or "douyinvod" in url:
