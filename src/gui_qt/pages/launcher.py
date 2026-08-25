@@ -2,7 +2,6 @@
 
 对应原版 gui/toolbox_pages.py LauncherPage：
 - 功能 tab：4×3 面板（最多 12 项），点击启动；软件/链接区分底色；支持 150px 图标
-  + 每项卡片底部独立勾选「跟随进程树」
 - 设置 tab：每项 名称/路径 输入（实时同步）+ 图标预览与选择 + 上移/下移/删除
   + 每项独立「跟随进程树」勾选 + 添加软件 / 添加链接 / 保存并刷新面板
 - 启动：http/https 链接 → 浏览器；文件 → os.startfile（不存在则警告）
@@ -96,7 +95,7 @@ class LauncherPage(BasePage):
 
         # 进程树控制行（跟随与否改为每项单独勾选）
         tree_row = QHBoxLayout()
-        hint = QLabel("跟随进程树为每项单独设置：在功能面板卡片底部或设置行勾选，"
+        hint = QLabel("跟随进程树为每项单独设置：在「设置」页配置行勾选，"
                       "勾选项启动后纳入进程树，本工具退出时一并关闭")
         hint.setStyleSheet("color: #5a6072; font-size: 11px;")
         hint.setWordWrap(True)
@@ -137,7 +136,6 @@ class LauncherPage(BasePage):
             item = self.items[i]
             row, col = divmod(i, 4)
             name = item.get("name", f"软件{i + 1}")
-            path = item.get("path", "")
             icon = item.get("icon", "")
             is_link = item.get("type") == "link"
 
@@ -159,15 +157,6 @@ class LauncherPage(BasePage):
             card.setText(name)
             card.clicked.connect(lambda _c=False, idx=i: self._launch_item(idx))
             cv.addWidget(card, 1)
-
-            # 每项单独的跟随进程树勾选（链接项不适用）
-            if not is_link and path:
-                cb = QCheckBox("🌲 跟随进程树")
-                cb.setChecked(item.get("linked", True))
-                cb.stateChanged.connect(
-                    lambda st, idx=i: self._set_item_linked(idx, st))
-                cb.setStyleSheet("font-size: 11px;")
-                cv.addWidget(cb)
 
             self.panel_grid.addWidget(cell, row, col)
         # 补满空格子保持网格均匀

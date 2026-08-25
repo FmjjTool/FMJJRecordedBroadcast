@@ -45,7 +45,6 @@ class LyricsToolPage(BasePage):
         frow.addWidget(QPushButton("📄 选择歌词文件", clicked=self._select_files))
         frow.addWidget(QPushButton("📁 选择文件夹", clicked=self._select_folder))
         frow.addWidget(QPushButton("📂 指定工作目录", clicked=self._set_work_dir))
-        frow.addWidget(QPushButton("📅 扫描日期子文件夹", clicked=self._scan_date_folders))
         self.input_toggle = QPushButton("✍️ 输入歌词")
         self.input_toggle.setCheckable(True)
         self.input_toggle.toggled.connect(lambda c: self.input_area.setVisible(c))
@@ -184,7 +183,9 @@ class LyricsToolPage(BasePage):
             return
         if self._enter_stage == 0:
             self._enter_stage = 1
-            self._scan_date_folders()
+            target = self.work_dir or self.app.work_dir
+            if target and os.path.isdir(target):
+                self._scan_dir(target)
             self._log("⏎ 再次按回车将按当前格式转换（或点「开始转换」）")
         else:
             self._enter_stage = 0
@@ -239,34 +240,6 @@ class LyricsToolPage(BasePage):
         self._log_scanned()
         if not self.input_files:
             self._log(f"⚠️ 该目录下未找到歌词文件\n   支持: {', '.join(sorted(self.SUPPORTED_EXTS))}")
-
-    def _scan_date_folders(self):
-        from toolbox.rename_engine import scan_date_folders
-        target = self.work_dir or self.app.work_dir
-        if not target or not os.path.isdir(target):
-            self.log_text.clear()
-            self._log("⚠️ 请先点击「指定工作目录」选择目录\n   （或设置 App 全局工作目录）")
-            return
-        folders = scan_date_folders(target)
-        if not folders:
-            self.log_text.clear()
-            self._log(f"⚠️ 未找到日期子文件夹\n   目录: {target}")
-            self.file_count_label.setText("未找到日期子文件夹")
-            self._refresh_list()
-            return
-        self.input_files = []
-        for folder_name, _ in folders:
-            fp_dir = os.path.join(target, folder_name)
-            if not os.path.isdir(fp_dir):
-                continue
-            for f in os.listdir(fp_dir):
-                fp = os.path.join(fp_dir, f)
-                if os.path.isfile(fp) and os.path.splitext(f)[1].lower() in self.SUPPORTED_EXTS:
-                    self.input_files.append(fp)
-        self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件")
-        self._log_scanned()
-        if not self.input_files:
-            self._log(f"⚠️ 日期子文件夹中未找到歌词文件\n   支持: {', '.join(sorted(self.SUPPORTED_EXTS))}")
 
     # ---- 拖放 ----
     def add_dropped_files(self, files):

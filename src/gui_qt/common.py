@@ -132,9 +132,9 @@ def _dedup_key(info) -> str:
 
 
 def _collect(infos):
-    """批量加入共享列表（自动去重），返回新增条数。"""
+    """批量加入共享列表（自动去重，SQLite 增量落库），返回新增条数。"""
     existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
-    cnt = 0
+    new_items = []
     for i in infos:
         if i is None:
             continue
@@ -143,16 +143,30 @@ def _collect(infos):
             continue
         if key:
             existing.add(key)
-        COLLECTED.append(i)
-        cnt += 1
-    if cnt:
-        save_collected()
-    return cnt
+        new_items.append(i)
+    if not new_items:
+        return 0
+    COLLECTED.extend(new_items)
+    _db_insert(new_items)
+    return len(new_items)
 
 
-# ==================== 已获取数据持久化（重启不丢） ====================
+# ==================== 已获取数据持久化（SQLite 增量存储） ====================
+#
+# config/collected.db 表 videos：
+#   dedup_key TEXT PRIMARY KEY  去重键（video_url/raw_url/video_id）
+#   platform  TEXT              平台（bilibili/douyin/weibo，便于按平台查询）
+#   created_at REAL             入库时间戳
+#   data      TEXT              VideoInfo asdict 的 JSON
+# rowid 隐式自增 → 插入顺序即列表顺序。
+# 旧 collected.json 首次启动自动迁移入库，原文件改名 .bak 保留备份。
 
 _collected_lock = threading.Lock()
+
+
+def _db_path():
+    from toolbox.config_manager import get_config_dir
+    return get_config_dir() / "collected.db"
 
 
 def _collected_path():
@@ -160,38 +174,137 @@ def _collected_path():
     return get_config_dir() / "collected.json"
 
 
-def save_collected():
-    """把已获取列表写入 config/collected.json（线程安全）。"""
+def _db_connect():
+    import sqlite3
+    import os
+    p = _db_path()
+    os.makedirs(p.parent, exist_ok=True)
+    conn = sqlite3.connect(p, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS videos ("
+        " dedup_key TEXT PRIMARY KEY,"
+        " platform  TEXT,"
+        " created_at REAL,"
+        " data      TEXT NOT NULL)")
+    return conn
+
+
+def _row_of(info, now):
     import json
-    from dataclasses import asdict, is_dataclass
+    from dataclasses import asdict
+    return (_dedup_key(info), (info.platform or ""), now,
+            json.dumps(asdict(info), ensure_ascii=False))
+
+
+def _db_insert(items):
+    """增量写入：只插新行（主键冲突自动忽略），不再全量重写文件。"""
+    import time
     try:
-        data = [asdict(i) for i in COLLECTED if is_dataclass(i)]
+        now = time.time()
+        rows = [_row_of(i, now) for i in items]
         with _collected_lock:
-            import os
-            path = _collected_path()
-            os.makedirs(path.parent, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
+            conn = _db_connect()
+            try:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO videos"
+                    " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
+                    rows)
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:
+        pass
+
+
+def _migrate_from_json(conn):
+    """旧 collected.json → db（仅在 db 为空时执行一次），成功后 json 改名 .bak。"""
+    import json
+    from platforms.base import VideoInfo
+    jp = _collected_path()
+    if not jp.exists():
+        return
+    try:
+        data = json.loads(jp.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    import time
+    now = time.time()
+    fields = set(VideoInfo.__dataclass_fields__)
+    for d in data:
+        if not isinstance(d, dict):
+            continue
+        info = VideoInfo(**{k: v for k, v in d.items() if k in fields})
+        key = _dedup_key(info)
+        if not key:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO videos"
+            " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
+            _row_of(info, now))
+    conn.commit()
+    try:
+        jp.rename(jp.with_suffix(".json.bak"))
+    except OSError:
+        pass
+
+
+def save_collected():
+    """全量同步内存列表到 db（清空/重建场景用；日常新增走 _db_insert 增量）。
+
+    保留每条原有的 created_at，按当前列表顺序重排 rowid（列表顺序 = 展示顺序）。
+    """
+    import time
+    from dataclasses import asdict, is_dataclass
+    import json as _json
+    try:
+        items = [i for i in COLLECTED if is_dataclass(i)]
+        with _collected_lock:
+            conn = _db_connect()
+            try:
+                old = dict(conn.execute(
+                    "SELECT dedup_key, created_at FROM videos").fetchall())
+                now = time.time()
+                rows = [(_dedup_key(i), (i.platform or ""),
+                         old.get(_dedup_key(i)) or now,
+                         _json.dumps(asdict(i), ensure_ascii=False))
+                        for i in items]
+                conn.execute("DELETE FROM videos")
+                conn.executemany(
+                    "INSERT OR REPLACE INTO videos"
+                    " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
+                    rows)
+                conn.commit()
+            finally:
+                conn.close()
     except Exception:
         pass
 
 
 def load_collected():
-    """启动时从 config/collected.json 恢复已获取列表（失败静默，保持空列表）。
+    """启动时从 config/collected.db 恢复已获取列表（失败静默，保持空列表）。
 
-    按去重键跳过已存在的条目，重复调用安全。
+    首次运行自动把旧 collected.json 迁移入库；按去重键跳过已存在条目，重复调用安全。
     """
     import json
     from platforms.base import VideoInfo
     try:
-        path = _collected_path()
-        if not path.exists():
-            return
+        import os
+        os.makedirs(_db_path().parent, exist_ok=True)
+        with _collected_lock:
+            conn = _db_connect()
+            try:
+                n = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
+                if n == 0:
+                    _migrate_from_json(conn)
+                rows = conn.execute(
+                    "SELECT data, created_at FROM videos ORDER BY rowid").fetchall()
+            finally:
+                conn.close()
         existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
-        data = json.loads(path.read_text(encoding="utf-8"))
         fields = set(VideoInfo.__dataclass_fields__)
-        for d in data:
+        for data, _created_at in rows:
+            d = json.loads(data)
             if not isinstance(d, dict):
                 continue
             info = VideoInfo(**{k: v for k, v in d.items() if k in fields})

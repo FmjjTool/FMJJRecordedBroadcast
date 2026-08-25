@@ -620,6 +620,9 @@ class TrackerPage(BasePage):
             elif state["running"] == 0:
                 if not silent:
                     self.app.toast("✅ 批量采集完成", "info")
+                elif not self.isVisible():
+                    # 定时采集在后台跑完（用户已切到其他页）：提示仍在生效
+                    self.app.toast(f"⏰ 定时采集已在后台完成（{total} 个账号）", "info")
                 self._collecting = False
 
         self._collecting = True
@@ -674,21 +677,25 @@ class TrackerPage(BasePage):
             self.timer_dot.setText("●")
             self.timer_dot.setStyleSheet("color: #4caf50; font-size: 15px;")
             self.app.toast(f"⏰ 定时采集已启动（每 {m} 分钟）", "success")
-
-            def loop():
-                # 启动后先执行一次，之后每隔 interval 执行一次
-                from gui_qt.common import post_to_main
-                post_to_main(lambda: self._collect_all(silent=True))
-                while self._timer_running:
-                    time.sleep(self._timer_interval)
-                    if not self._timer_running:
-                        break
-                    post_to_main(lambda: self._collect_all(silent=True))
-
-            import threading
-            threading.Thread(target=loop, daemon=True).start()
+            self._begin_timer_loop()
 
         win.exec()
+
+    def _begin_timer_loop(self):
+        """后台定时循环：daemon 线程独立于页面可见性运行（切走页面后仍按时采集）。"""
+        import threading
+
+        def loop():
+            from gui_qt.common import post_to_main
+            # 启动后先执行一次，之后每隔 interval 执行一次
+            post_to_main(lambda: self._collect_all(silent=True))
+            while self._timer_running:
+                time.sleep(self._timer_interval)
+                if not self._timer_running:
+                    break
+                post_to_main(lambda: self._collect_all(silent=True))
+
+        threading.Thread(target=loop, daemon=True).start()
 
     def _stop_collect_timer(self):
         self._timer_running = False

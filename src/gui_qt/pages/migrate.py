@@ -3,7 +3,7 @@
 对应原版 gui/toolbox_pages.py MigratePage：
 - 源目录 = 全局工作目录；目标目录选择后持久化
 - 剪切 / 复制两种模式（单选）
-- 扫描待迁移：日期文件夹（YYYYMMDD）预览
+- 扫描待迁移：日期文件夹（YYYYMMDD）勾选列表（全选/反选/清除，默认勾选当天）
 - 开始迁移：确认后后台执行；目标已存在同名文件夹 → 文件级合并，同名文件记录重复
 - 重复项报告：逐项「覆盖目标 / 删除本地」，支持批量（全部覆盖 / 全部删除 / 跳过全部）
 """
@@ -11,10 +11,13 @@
 import os
 import shutil
 import threading
+from datetime import datetime
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QRadioButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QMessageBox, QPushButton, QRadioButton, QScrollArea, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -72,17 +75,36 @@ class MigratePage(BasePage):
         scan_btn = QPushButton("🔍 扫描待迁移")
         scan_btn.clicked.connect(self._scan)
         ctrl.addWidget(scan_btn)
+        all_btn = QPushButton("全选")
+        all_btn.clicked.connect(lambda: self._set_all_checks(True))
+        ctrl.addWidget(all_btn)
+        invert_btn = QPushButton("反选")
+        invert_btn.clicked.connect(self._invert_checks)
+        ctrl.addWidget(invert_btn)
+        clear_btn = QPushButton("清除")
+        clear_btn.clicked.connect(lambda: self._set_all_checks(False))
+        ctrl.addWidget(clear_btn)
+        ctrl.addStretch(1)
+        self.checked_lbl = QLabel("")
+        self.checked_lbl.setStyleSheet("color: #888;")
+        ctrl.addWidget(self.checked_lbl)
         self.migrate_btn = QPushButton("🚚 开始迁移")
         self.migrate_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.migrate_btn.clicked.connect(self._migrate)
         ctrl.addWidget(self.migrate_btn)
-        ctrl.addStretch(1)
         layout.addLayout(ctrl)
 
-        # 预览 + 日志
-        self.preview_text = QTextEdit()
-        self.preview_text.setReadOnly(True)
-        layout.addWidget(self.preview_text, 1)
+        # 勾选列表 + 日志
+        self.list_scroll = QScrollArea()
+        self.list_scroll.setWidgetResizable(True)
+        self.list_container = QWidget()
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setContentsMargins(2, 2, 2, 2)
+        self.list_layout.setSpacing(3)
+        self.list_layout.addStretch(1)
+        self.list_scroll.setWidget(self.list_container)
+        layout.addWidget(self.list_scroll, 1)
+        self.folder_checks = {}  # 文件夹名 -> QCheckBox
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFixedHeight(120)
@@ -112,40 +134,86 @@ class MigratePage(BasePage):
 
     def _scan(self):
         self.pending = []
-        self.preview_text.clear()
+        self.folder_checks = {}
+        while self.list_layout.count():
+            item = self.list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.list_layout.addStretch(1)
         src = self.app.work_dir
         if not os.path.isdir(src):
-            self.preview_text.setPlainText("⚠️ 源目录不存在，请先在「全局设置」选择工作目录")
+            self._list_placeholder("⚠️ 源目录不存在，请先在「全局设置」选择工作目录")
             return
         try:
             names = sorted(os.listdir(src))
         except OSError as e:
-            self.preview_text.setPlainText(f"⚠️ 无法读取源目录: {e}")
+            self._list_placeholder(f"⚠️ 无法读取源目录: {e}")
             return
         for name in names:
             full = os.path.join(src, name)
             if os.path.isdir(full) and DATE_FOLDER_RE.match(name):
                 self.pending.append(name)
         if not self.pending:
-            self.preview_text.setPlainText("⚠️ 未找到日期文件夹（YYYYMMDD）")
+            self._list_placeholder("⚠️ 未找到日期文件夹（YYYYMMDD）")
+            self._refresh_checked_lbl()
             return
-        mode_text = "复制（保留源）" if self._mode() == "copy" else "剪切（移动）"
-        lines = [f"操作模式: {mode_text}", ""]
+        today = datetime.now().strftime("%Y%m%d")
         for name in self.pending:
             full = os.path.join(src, name)
             try:
                 cnt = len(os.listdir(full))
             except Exception:
                 cnt = 0
-            lines.append(f"📁 {name}/  ({cnt} 项)")
-        lines.append(f"\n共 {len(self.pending)} 个日期文件夹待迁移")
-        if self.target_dir:
-            lines.append(f"目标: {self.target_dir}")
-        self.preview_text.setPlainText("\n".join(lines))
+            cb = QCheckBox(f"📁 {name}  ({cnt} 项)")
+            # 默认勾选当天（前 8 位日期 == 今天）
+            cb.setChecked(name[:8] == today)
+            cb.stateChanged.connect(self._refresh_checked_lbl)
+            row = QFrame()
+            row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+            h = QHBoxLayout(row)
+            h.setContentsMargins(8, 4, 8, 4)
+            h.addWidget(cb)
+            self.list_layout.takeAt(self.list_layout.count() - 1)
+            self.list_layout.addWidget(row)
+            self.list_layout.addStretch(1)
+            self.folder_checks[name] = cb
+        self._refresh_checked_lbl()
+
+    def _list_placeholder(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: #888;")
+        lbl.setAlignment(Qt.AlignCenter)
+        self.list_layout.takeAt(self.list_layout.count() - 1)
+        self.list_layout.addWidget(lbl)
+        self.list_layout.addStretch(1)
+        self._refresh_checked_lbl()
+
+    def _checked_folders(self):
+        return [name for name in self.pending
+                if name in self.folder_checks and self.folder_checks[name].isChecked()]
+
+    def _set_all_checks(self, checked):
+        for cb in self.folder_checks.values():
+            cb.setChecked(checked)
+        self._refresh_checked_lbl()
+
+    def _invert_checks(self):
+        for cb in self.folder_checks.values():
+            cb.setChecked(not cb.isChecked())
+        self._refresh_checked_lbl()
+
+    def _refresh_checked_lbl(self):
+        n = len(self._checked_folders())
+        total = len(self.folder_checks)
+        self.checked_lbl.setText(f"已勾选 {n}/{total}" if total else "")
 
     def _migrate(self):
         if not self.pending:
             QMessageBox.warning(self, "提示", "请先扫描待迁移文件夹")
+            return
+        checked = self._checked_folders()
+        if not checked:
+            QMessageBox.warning(self, "提示", "请先勾选要迁移的日期文件夹（全选/反选/清除）")
             return
         if not self.target_dir or not os.path.isdir(self.target_dir):
             QMessageBox.warning(self, "提示", "请先选择有效的目标目录")
@@ -158,7 +226,7 @@ class MigratePage(BasePage):
         if QMessageBox.question(
                 self, "确认迁移",
                 f"操作模式: {mode_text}\n"
-                f"将迁移 {len(self.pending)} 个日期文件夹到:\n{self.target_dir}\n\n确认？",
+                f"将迁移 {len(checked)} 个日期文件夹到:\n{self.target_dir}\n\n确认？",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
 
@@ -166,12 +234,12 @@ class MigratePage(BasePage):
         self.log_text.clear()
         self.duplicates = []
         # 后台线程执行迁移，避免大文件操作阻塞 UI
-        threading.Thread(target=self._migrate_worker, args=(mode,), daemon=True).start()
+        threading.Thread(target=self._migrate_worker, args=(mode, checked), daemon=True).start()
 
-    def _migrate_worker(self, mode):
+    def _migrate_worker(self, mode, folders):
         """后台线程：执行迁移（文件操作不阻塞界面）。"""
         success = fail = 0
-        for name in self.pending:
+        for name in folders:
             src_dir = os.path.join(self.app.work_dir, name)
             dst_dir = os.path.join(self.target_dir, name)
             if not os.path.isdir(src_dir):

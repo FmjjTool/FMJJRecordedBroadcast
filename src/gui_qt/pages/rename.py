@@ -686,26 +686,12 @@ class RenamePage(BasePage):
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(6)
 
-        # 上：账户列表 + 直播类型 两列
+        # 上：账户列表 + 直播类型 + 直播平台 三列（均竖向卡片）
         cols = QHBoxLayout()
         cols.addWidget(self._build_card_column("👤 账户列表", "account"), 1)
         cols.addWidget(self._build_card_column("🎯 直播类型", "type"), 1)
+        cols.addWidget(self._build_card_column("📡 直播平台", "platform"), 1)
         outer.addLayout(cols, 1)
-
-        # 直播平台（横向卡片）
-        outer.addWidget(QLabel("📡 直播平台"))
-        self.plat_scroll = QScrollArea()
-        self.plat_scroll.setFixedHeight(120)
-        self.plat_scroll.setWidgetResizable(True)
-        self.plat_container = QWidget()
-        self.plat_flow = QHBoxLayout(self.plat_container)
-        self.plat_flow.setContentsMargins(4, 4, 4, 4)
-        self.plat_flow.setSpacing(6)
-        self.plat_scroll.setWidget(self.plat_container)
-        outer.addWidget(self.plat_scroll)
-        add_plat_btn = QPushButton("➕ 添加平台")
-        add_plat_btn.clicked.connect(lambda: self._add_card_item("platform"))
-        outer.addWidget(add_plat_btn)
 
         # 其他设置：后缀 / 阈值 / 保存
         of = QHBoxLayout()
@@ -767,6 +753,8 @@ class RenamePage(BasePage):
             self.account_cards_layout = box
         elif card_type == "type":
             self.type_cards_layout = box
+        elif card_type == "platform":
+            self.plat_cards_layout = box
         return w
 
     def _mini_btn(self, text, slot, danger=False):
@@ -813,7 +801,7 @@ class RenamePage(BasePage):
             return self.account_cards_layout
         if card_type == "type":
             return self.type_cards_layout
-        return self.plat_flow
+        return self.plat_cards_layout
 
     def _get_cfg_list(self, card_type):
         cfg = get_rename_config()
@@ -879,7 +867,7 @@ class RenamePage(BasePage):
         self._build_card_list(
             self.type_cards_layout, self.rename_config.live_types, "type")
         self._build_card_list(
-            self.plat_flow, self.rename_config.platform_list, "platform")
+            self.plat_cards_layout, self.rename_config.platform_list, "platform")
         self.suffix_entry.setText(self.rename_config.video_suffix)
         self.threshold_entry.setText(str(self.rename_config.subtitle_match_threshold))
         self.extra_info_entry.setText(self.rename_config.extra_info)

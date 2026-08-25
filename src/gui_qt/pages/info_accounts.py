@@ -812,6 +812,9 @@ class InfoAccountsPage(BasePage):
             total, _log = result
             self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
             refresh_results_count(self.app)
+            if not self.isVisible():
+                # 用户已切到其他页：提示定时获取仍在后台生效
+                self.app.toast(f"⏰ 定时获取已在后台完成（共 {total} 条）", "info")
 
         self._fetching = True
         self._set_fetch_ui(True)

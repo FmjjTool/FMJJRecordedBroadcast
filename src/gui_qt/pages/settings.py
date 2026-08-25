@@ -130,16 +130,29 @@ class GlobalSettingsPage(BasePage):
         maker_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
         maker_row.addWidget(maker_lbl)
         maker_row.addStretch(1)
-        maker_row.addWidget(self._btn("🔗 B站主页", lambda: os.startfile("https://space.bilibili.com/622821754")))
+        maker_row.addWidget(self._btn(
+            "🔗 B站主页", lambda: os.startfile("https://space.bilibili.com/622821754")))
+        maker_row.addWidget(self._btn(
+            "🎵 抖音主页",
+            lambda: os.startfile(
+                "https://www.douyin.com/user/MS4wLjABAAAANr2f2DlSduMtGo3LtUm2MoxXu9cblLhTs2pJRDDZQHY")))
+        maker_row.addWidget(self._btn(
+            "🎤 微博主页", lambda: os.startfile("https://weibo.com/u/7262942477")))
         v.addLayout(maker_row)
 
-        site_row = QHBoxLayout()
-        site_lbl = QLabel("📋 官方网站：封茗囧菌数据汇总库")
-        site_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
-        site_row.addWidget(site_lbl)
-        site_row.addStretch(1)
-        site_row.addWidget(self._btn("🔗 打开", lambda: os.startfile("https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr")))
-        v.addLayout(site_row)
+        for name, url in [
+            ("封茗囧菌数据汇总库", "https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr"),
+            ("无料周边汇总", "https://docs.qq.com/smartsheet/DRkZIbkZtQ0taTHd4"),
+            ("用户协议与编辑须知",
+             "https://docs.qq.com/aio/p/scisutrcci3apy1?p=w5TSrLIyhtOn7j9KjoGXP3"),
+        ]:
+            site_row = QHBoxLayout()
+            site_lbl = QLabel(f"📋 官方网站：{name}")
+            site_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
+            site_row.addWidget(site_lbl)
+            site_row.addStretch(1)
+            site_row.addWidget(self._btn("🔗 打开", lambda u=url: os.startfile(u)))
+            v.addLayout(site_row)
 
         about = QLabel(
             "封茗囧菌数据汇总库 · 统一维护工具箱 · 制作歆慕\n"
@@ -317,25 +330,53 @@ class GlobalSettingsPage(BasePage):
         run_bg(work, done)
 
     def _clean_pycache(self):
-        """清理工作目录下所有 __pycache__ 和 .pyc 文件（静默，结果写入标签）。"""
+        """清理程序根目录与工作目录下所有 __pycache__ 和 .pyc（后台执行，结果写入标签）。
+
+        两处都清：work_dir 常被设到纯数据目录（无代码），只清它等于没清。
+        """
         import shutil
-        target = self.app.work_dir if hasattr(self.app, "work_dir") and os.path.isdir(self.app.work_dir) else get_app_root()
-        deleted_dirs = 0
-        deleted_files = 0
-        for root, dirs, files in os.walk(str(target), topdown=False):
-            for d in dirs:
-                if d == "__pycache__":
-                    try:
-                        shutil.rmtree(os.path.join(root, d))
-                        deleted_dirs += 1
-                    except Exception:
-                        pass
-            for f in files:
-                if f.endswith(".pyc"):
-                    try:
-                        os.remove(os.path.join(root, f))
-                        deleted_files += 1
-                    except Exception:
-                        pass
-        self.clean_result_label.setText(f"✅ 清理完成: {deleted_dirs} 个 __pycache__ 目录, {deleted_files} 个 .pyc")
-        self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+        wd = getattr(self.app, "work_dir", None)
+        wd = str(wd) if wd else ""
+        if not os.path.isdir(wd):
+            wd = ""
+        targets = [get_app_root()]
+        if wd and os.path.normpath(get_app_root()) != wd:
+            targets.append(wd)
+
+        def work():
+            deleted_dirs = deleted_files = 0
+            for target in targets:
+                for root, dirs, files in os.walk(target, topdown=False):
+                    if os.path.basename(root) == "__pycache__":
+                        continue  # 已在删除目录内，跳过
+                    for d in dirs:
+                        if d == "__pycache__":
+                            try:
+                                shutil.rmtree(os.path.join(root, d))
+                                deleted_dirs += 1
+                            except Exception:
+                                pass
+                    for f in files:
+                        if f.endswith(".pyc"):
+                            try:
+                                os.remove(os.path.join(root, f))
+                                deleted_files += 1
+                            except Exception:
+                                pass
+            return deleted_dirs, deleted_files
+
+        def done(result, err):
+            if err:
+                self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
+                self.clean_result_label.setStyleSheet("color: #ff5252; font-size: 11px;")
+                return
+            d_n, f_n = result or (0, 0)
+            scope = " + 工作目录" if len(targets) > 1 else ""
+            self.clean_result_label.setText(
+                f"✅ 清理完成: {d_n} 个 __pycache__ 目录, {f_n} 个 .pyc"
+                f"（程序目录{scope}；运行中新生导入会重建，属正常）")
+            self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+
+        self.clean_result_label.setText("🧹 清理中...")
+        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
+        run_bg(work, done)
