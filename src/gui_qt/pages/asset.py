@@ -401,8 +401,9 @@ class AssetPage(BasePage):
         def done(data, err):
             if data:
                 qimg = QImage.fromData(data)
-                lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
-                    w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                if not qimg.isNull():
+                    lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
+                        w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
         run_bg(load, done)
         return lbl
@@ -688,11 +689,13 @@ class AssetPage(BasePage):
                 return "bilibili"
         return "unknown"
 
-    def _refresh_collected(self):
+    def _refresh_collected(self, keep_page=False):
         """骨架加载：立即渲染灰色占位行，后台扫描磁盘后一次性替换真实列表。
 
         扫描要读全部 json + 匹配媒体文件（几百条时明显卡顿），
         与 TrackerPage 同款模式：骨架先行 + run_bg 后台扫描 + 代数守卫防旧轮覆盖。
+        keep_page=True 保持当前页码（删除/下载完成后刷新不打断浏览位置），
+        筛选/搜索/排序/手动刷新走默认重置第 1 页。
         """
         # 主线程先读筛选条件（后台线程不能碰 Qt 控件）
         plat = self.plat_sel.currentText()
@@ -703,7 +706,8 @@ class AssetPage(BasePage):
         self._reload_gen += 1
         gen = self._reload_gen
         self._collected_all_items = []
-        self._collected_page = 1
+        if not keep_page:
+            self._collected_page = 1
         self._render_skeleton(8)
 
         def work():
@@ -736,7 +740,9 @@ class AssetPage(BasePage):
                 d = it.get("date_part") or ""
                 return d if d else placeholder
             self._collected_all_items = sorted(items, key=_sort_key, reverse=desc)
-            self._collected_page = 1
+            if not keep_page:
+                self._collected_page = 1
+            # keep_page 时 _render_collected_batch 内部会把越界页码钳回有效范围
             self._render_collected_batch()
             self._backfill_bili_covers()
 
@@ -788,7 +794,7 @@ class AssetPage(BasePage):
         def done(ok, err):
             self._cover_backfill_running = False
             if ok:
-                QTimer.singleShot(100, self._refresh_collected)
+                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
 
         run_bg(work, done)
 
@@ -1106,7 +1112,7 @@ class AssetPage(BasePage):
                     self.app.toast(f"批量下载已取消（完成 {done_n[0]}/{n}）", "warning")
                 else:
                     self.app.toast(f"✅ 批量下载完成 {done_n[0]} 条", "success")
-                QTimer.singleShot(100, self._refresh_collected)
+                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
             else:
                 _step()
 
@@ -1207,7 +1213,7 @@ class AssetPage(BasePage):
                 self.app.toast("✅ 已下载 B站视频" + ("（含封面）" if cover_ok else ""),
                                "success")
             if not quiet:  # 批量模式由 _advance 统一刷新一次，避免逐条骨架闪烁
-                QTimer.singleShot(100, self._refresh_collected)
+                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
             if on_finished:
                 on_finished()
 
@@ -1343,7 +1349,7 @@ class AssetPage(BasePage):
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
                     self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
             if not quiet:  # 批量模式由 _advance 统一刷新一次
-                QTimer.singleShot(100, self._refresh_collected)
+                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
             if on_finished:
                 on_finished()
 
@@ -1447,7 +1453,7 @@ class AssetPage(BasePage):
         if cb_doc.isChecked():
             self._dl_state.pop(self._dl_key(it), None)
         self.app.toast(f"已删除 {deleted} 个文件", "success")
-        QTimer.singleShot(100, self._refresh_collected)
+        QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
 
     def _extract_pic_urls(self, it) -> tuple:
         """从 raw json 提取该条目的所有图片 URL 与 live 图视频 URL。
@@ -1612,7 +1618,7 @@ class AssetPage(BasePage):
                 self.app.toast(msg, "success" if not cancelled else "warning")
             # 刷新列表（重新扫描磁盘，新下载的图会显示本地缩略图）
             if not quiet:  # 批量模式由 _advance 统一刷新一次
-                QTimer.singleShot(100, self._refresh_collected)
+                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
             if on_finished:
                 on_finished()
 
@@ -1637,8 +1643,9 @@ class AssetPage(BasePage):
             try:
                 if data:
                     qimg = QImage.fromData(data)
-                    lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
-                        w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    if not qimg.isNull():
+                        lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
+                            w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             except RuntimeError:
                 pass  # 列表刷新后 label 已销毁
 
@@ -1666,8 +1673,9 @@ class AssetPage(BasePage):
             try:
                 if data:
                     qimg = QImage.fromData(data)
-                    lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
-                        w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    if not qimg.isNull():
+                        lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
+                            w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             except RuntimeError:
                 pass
 
@@ -1826,6 +1834,8 @@ class AssetPage(BasePage):
             try:
                 if data:
                     qimg = QImage.fromData(data)
+                    if qimg.isNull():
+                        return  # 损坏/非图片数据：保持占位，避免 null pixmap 警告刷屏
                     pix = QPixmap.fromImage(qimg).scaled(
                         size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     if is_video:

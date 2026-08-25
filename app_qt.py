@@ -24,9 +24,9 @@ def _headless_io():
 
 
 def _suppress_child_consoles():
-    """无控制台时给 subprocess.Popen 补 CREATE_NO_WINDOW：
-    ffmpeg / node 等子进程不再弹出黑窗；launcher/dycast 刻意要求
-    CREATE_NEW_CONSOLE 的调用不受影响。"""
+    """给 subprocess.Popen 补 CREATE_NO_WINDOW：
+    ffmpeg / node 等子进程不再弹出黑窗（无论有无控制台都生效）；
+    launcher/dycast 刻意要求 CREATE_NEW_CONSOLE 的调用不受影响。"""
     if os.name != "nt":
         return
     import subprocess
@@ -42,11 +42,40 @@ def _suppress_child_consoles():
     subprocess.Popen.__init__ = _patched
 
 
+_QT_NOISE = (
+    # Windows 中文系统 Qt 字体回退链（雅黑/Tahoma/SimSun/Arial...）不含
+    # 印度系文字字体，渲染抓取内容里的旁遮普语等外文时每条都刷警告
+    "OpenType support missing",
+    # Fixedsys 等老式位图字体无 DirectWrite FontFace，QTextEdit 等宽回退时刷
+    "CreateFontFaceFromHDC",
+    # 损坏/空图片数据缩略：占位图已兜底，无需每条警告
+    "QPixmap::scaled: Pixmap is a null pixmap",
+)
+
+
+def _install_qt_noise_filter():
+    """吞掉已知无害的 Qt 运行期警告（setFilterRules 之外的兜底），
+    其余消息照常输出到 stderr。"""
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+    def _handler(msg_type, context, message):
+        if msg_type in (QtMsgType.QtDebugMsg, QtMsgType.QtWarningMsg) and any(
+                n in message for n in _QT_NOISE):
+            return
+        stream = sys.stderr or sys.__stderr__
+        if stream:
+            try:
+                stream.write(message + "\n")
+            except Exception:
+                pass
+
+    qInstallMessageHandler(_handler)
+
+
 def main():
     _headless_io()
-    # 无控制台环境（pythonw 启动或打包后）隐藏子进程黑窗
-    if getattr(sys, "frozen", False) or sys.__stdout__ is None:
-        _suppress_child_consoles()
+    # 任何启动方式（python/pythonw/打包 exe）下都不让子进程弹黑框
+    _suppress_child_consoles()
 
     from toolbox.config_manager import init_all_configs
     init_all_configs()
@@ -72,6 +101,7 @@ def main():
     # 渲染抓取内容里的旁遮普语等外文时每条都刷 "OpenType support missing" 警告，关闭降噪
     from PySide6.QtCore import QLoggingCategory
     QLoggingCategory.setFilterRules("qt.text.font.db.warning=false")
+    _install_qt_noise_filter()
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
