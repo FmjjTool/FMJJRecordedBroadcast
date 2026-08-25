@@ -1,7 +1,8 @@
-"""继续操作页（PySide6 版）：外部软件/链接启动器 4×3 面板 + 配置管理。
+"""继续操作页（PySide6 版）：外部软件/链接启动器 4×3 分页面板 + 配置管理。
 
 对应原版 gui/toolbox_pages.py LauncherPage：
-- 功能 tab：4×3 面板（最多 12 项），点击启动；软件/链接区分底色；支持 150px 图标
+- 功能 tab：4×3 面板（每页 12 项），超过 12 项自动分页——‹ › 按钮/页码指示/滚轮滑动翻页；
+  点击启动；软件/链接区分底色；支持 150px 图标
 - 设置 tab：每项 名称/路径 输入（实时同步）+ 图标预览与选择 + 上移/下移/删除
   + 每项独立「跟随进程树」勾选 + 添加软件 / 添加链接 / 保存并刷新面板
 - 启动：http/https 链接 → 浏览器；文件 → os.startfile（不存在则警告）
@@ -12,7 +13,7 @@ import os
 import subprocess
 import webbrowser
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -84,11 +85,14 @@ class _CardButton(QToolButton):
 
 
 class LauncherPage(BasePage):
+    PAGE_SIZE = 12  # 每页 4×3
+
     def __init__(self, app):
         super().__init__(app)
         self.items = load_convert_config().get("launcher_items", [])
         # 已链接进程树的任务列表 [(job 或 None, proc 或 None), ...]
         self._linked = []
+        self._page = 0  # 当前面板页码（0 起）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -119,23 +123,71 @@ class LauncherPage(BasePage):
 
     def _build_panel(self):
         w = QWidget()
+        # 面板本体接滚轮：下滑=下一页，上滑=上一页（单页时无效）
+        self._panel_host = w
+        w.installEventFilter(self)
         v = QVBoxLayout(w)
         v.setContentsMargins(6, 6, 6, 6)
+
+        # 分页导航行（单页时整体隐藏）
+        self.page_nav = QWidget()
+        nav = QHBoxLayout(self.page_nav)
+        nav.setContentsMargins(2, 0, 2, 0)
+        self.prev_btn = QPushButton("‹ 上一页")
+        self.prev_btn.setFixedHeight(26)
+        self.prev_btn.clicked.connect(lambda: self._goto_page(self._page - 1))
+        nav.addWidget(self.prev_btn)
+        nav.addStretch(1)
+        self.page_lbl = QLabel("")
+        self.page_lbl.setStyleSheet("color: #5a6072; font-size: 12px;")
+        nav.addWidget(self.page_lbl)
+        nav.addStretch(1)
+        self.next_btn = QPushButton("下一页 ›")
+        self.next_btn.setFixedHeight(26)
+        self.next_btn.clicked.connect(lambda: self._goto_page(self._page + 1))
+        nav.addWidget(self.next_btn)
+        v.addWidget(self.page_nav)
+
         self.panel_grid = QGridLayout()
         self.panel_grid.setSpacing(8)
         v.addLayout(self.panel_grid, 1)
         return w
+
+    def _page_count(self) -> int:
+        return max(1, -(-len(self.items) // self.PAGE_SIZE))
+
+    def _goto_page(self, page: int):
+        """翻页（clamp 到有效范围），页码变化时刷新面板。"""
+        p = max(0, min(page, self._page_count() - 1))
+        if p != self._page:
+            self._page = p
+            self._refresh_panel()
+
+    def eventFilter(self, watched, event):
+        # 功能面板滚轮滑动翻页（wheel 事件从卡片逐级冒泡到面板本体）
+        if watched is self._panel_host and event.type() == QEvent.Wheel:
+            dy = event.angleDelta().y()
+            if dy < 0:
+                self._goto_page(self._page + 1)
+            elif dy > 0:
+                self._goto_page(self._page - 1)
+            return True
+        return super().eventFilter(watched, event)
 
     def _refresh_panel(self):
         while self.panel_grid.count():
             item = self.panel_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        shown = min(len(self.items), 12)
+        pages = self._page_count()
+        self._page = max(0, min(self._page, pages - 1))
+        start = self._page * self.PAGE_SIZE
+        shown = min(len(self.items) - start, self.PAGE_SIZE)
         for i in range(shown):
-            item = self.items[i]
+            abs_idx = start + i  # 绝对索引（跨页点击仍指向正确条目）
+            item = self.items[abs_idx]
             row, col = divmod(i, 4)
-            name = item.get("name", f"软件{i + 1}")
+            name = item.get("name", f"软件{abs_idx + 1}")
             icon = item.get("icon", "")
             is_link = item.get("type") == "link"
 
@@ -155,12 +207,12 @@ class LauncherPage(BasePage):
                 pix = _emoji_pixmap("🔗" if is_link else "📦")
             card.set_icon_pixmap(pix)
             card.setText(name)
-            card.clicked.connect(lambda _c=False, idx=i: self._launch_item(idx))
+            card.clicked.connect(lambda _c=False, idx=abs_idx: self._launch_item(idx))
             cv.addWidget(card, 1)
 
             self.panel_grid.addWidget(cell, row, col)
         # 补满空格子保持网格均匀
-        for i in range(shown, 12):
+        for i in range(shown, self.PAGE_SIZE):
             row, col = divmod(i, 4)
             self.panel_grid.addWidget(QWidget(), row, col)
         # 行列均分拉伸：卡片撑满整个面板（原挤在顶部留大片空白）
@@ -168,6 +220,14 @@ class LauncherPage(BasePage):
             self.panel_grid.setRowStretch(r, 1)
         for c in range(4):
             self.panel_grid.setColumnStretch(c, 1)
+        # 分页导航：单页隐藏；多页显示页码并按边界禁用
+        if pages > 1:
+            self.page_nav.setVisible(True)
+            self.page_lbl.setText(f"第 {self._page + 1} / {pages} 页 · 共 {len(self.items)} 项")
+            self.prev_btn.setEnabled(self._page > 0)
+            self.next_btn.setEnabled(self._page < pages - 1)
+        else:
+            self.page_nav.setVisible(False)
 
     def _set_item_linked(self, idx, state):
         if 0 <= idx < len(self.items):
