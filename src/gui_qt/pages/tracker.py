@@ -746,6 +746,7 @@ class TrackerPage(BasePage):
         accounts = load_accounts()
         groups = get_groups()
         group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in sorted(groups.items())]
+        self._acc_rows = []  # (index, gsel, 初始组值)
         if not accounts:
             lbl = QLabel("（暂无账号，先在上方添加）")
             lbl.setStyleSheet("color: gray;")
@@ -773,11 +774,10 @@ class TrackerPage(BasePage):
             gsel.setCurrentText(cur_val)
             gsel.setFixedWidth(126)
             h.addWidget(gsel)
-            save_btn = QPushButton("💾")
-            save_btn.setFixedSize(34, 26)
-            save_btn.setStyleSheet("background: #2e7d32; color: white;")
-            save_btn.clicked.connect(lambda _=False, idx=i, s=gsel: self._save_account_group(idx, s))
-            h.addWidget(save_btn)
+            # 记录行控件与初始值，改动后启用底部「保存全部修改」
+            self._acc_rows.append((i, gsel, cur_val))
+            gsel.currentTextChanged.connect(
+                lambda _t: self._acc_save_btn.setEnabled(True))
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet("background: #c62828; color: white;")
@@ -786,18 +786,39 @@ class TrackerPage(BasePage):
             self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
             self.acc_list_layout.addWidget(row)
             self.acc_list_layout.addStretch(1)
+        # 底部统一保存按钮（替代逐行 💾）
+        bar = QHBoxLayout()
+        self._acc_save_btn = QPushButton("💾 保存全部修改")
+        self._acc_save_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
+        self._acc_save_btn.setEnabled(False)
+        self._acc_save_btn.clicked.connect(self._save_all_account_groups)
+        bar.addWidget(self._acc_save_btn)
+        bar.addStretch(1)
+        hint = QLabel("修改组号后点此一次性保存")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        bar.addWidget(hint)
+        self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
+        self.acc_list_layout.addLayout(bar)
+        self.acc_list_layout.addStretch(1)
 
-    def _save_account_group(self, index, gsel):
-        """保存某个账号的分组归属（从下拉框读取组号）。"""
-        v = gsel.currentText()
-        gid = "" if v == "无分组" else v.split(":")[0].strip()
+    def _save_all_account_groups(self):
+        """一次性保存所有行的分组修改（替代逐行保存）。"""
         from tracker.accounts import load_accounts, save_accounts
         accounts = load_accounts()
-        if 0 <= index < len(accounts):
-            accounts[index]["group_id"] = gid
+        changed = 0
+        for idx, gsel, orig in getattr(self, "_acc_rows", []):
+            v = gsel.currentText()
+            if v == orig or not (0 <= idx < len(accounts)):
+                continue
+            gid = "" if v == "无分组" else v.split(":")[0].strip()
+            accounts[idx]["group_id"] = gid
+            changed += 1
+        if changed:
             save_accounts(accounts)
-            self.app.toast(f"✅ 已更新「{accounts[index].get('name', '')}」的分组", "success")
-            self.reload_accounts()
+            self.app.toast(f"✅ 已保存 {changed} 项分组修改", "success")
+        else:
+            self.app.toast("没有需要保存的修改", "info")
+        self.reload_accounts()
 
     # ---------- 分组管理 ----------
     def _reload_group_list(self):

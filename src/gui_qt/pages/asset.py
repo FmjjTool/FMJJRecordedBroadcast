@@ -22,7 +22,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QImage, QPainter,
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
-    QTabWidget, QVBoxLayout, QWidget,
+    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -192,7 +192,7 @@ class AssetPage(BasePage):
         self._folder = ""
         self._disk_items = []           # 磁盘已下载数据全量
         self._collected_all_items = []  # 当前平台筛选后的列表
-        self._collected_shown = 0       # 已渲染条数（懒加载游标）
+        self._collected_page = 1        # 当前页码（分页渲染）
         self._dl_state = {}             # 条目下载状态：'downloading' / 'done'
         self._search_var = ""           # 搜索关键词
         self._checked_keys = set()      # 勾选条目键（批量下载用）
@@ -558,6 +558,8 @@ class AssetPage(BasePage):
 
                 # 第1轮：同日期 + 同子目录（最精确）
                 for (m_date, m_title, m_sub), mfs in list(media_map.items()):
+                    if mfs and mfs[0].get("pkg"):
+                        continue  # B站资源包整体条目，不参与 json 匹配
                     if m_date != date_part or m_sub != json_subdir:
                         continue
                     if _match(m_title):
@@ -566,6 +568,8 @@ class AssetPage(BasePage):
                 # 第2轮：同日期 + 跨子目录
                 if not entry["media_files"]:
                     for (m_date, m_title, m_sub), mfs in list(media_map.items()):
+                        if mfs and mfs[0].get("pkg"):
+                            continue
                         if m_date != date_part or m_sub == json_subdir:
                             continue
                         if _match(m_title):
@@ -574,6 +578,8 @@ class AssetPage(BasePage):
                 # 第3轮：无日期的旧格式媒体（根目录平铺旧 mp4/jpg），只按标题兜底
                 if not entry["media_files"]:
                     for (m_date, m_title, m_sub), mfs in list(media_map.items()):
+                        if mfs and mfs[0].get("pkg"):
+                            continue
                         if m_date:  # 只处理 date 为空的旧媒体
                             continue
                         if _match(m_title):
@@ -594,9 +600,10 @@ class AssetPage(BasePage):
                 continue
             imgs = [m for m in mfs if m["type"] == "image"]
             vids = [m for m in mfs if m["type"] == "video"]
+            pkg = next((m.get("pkg") for m in mfs if m.get("pkg")), None)
             results.append({
                 "platform": self._media_platform(mfs),
-                "title": tk or "(媒体)",
+                "title": pkg or tk or "(媒体)",
                 "description": "",
                 "author": (mfs[0] or {}).get("author", "") if mfs else "",
                 "play_count": 0, "like_count": 0, "comment_count": 0,
@@ -612,13 +619,33 @@ class AssetPage(BasePage):
         return results
 
     def _scan_media_files(self, root, media_map):
-        """递归扫描 download 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。"""
+        """递归扫描 download 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。
+
+        B站资源（download/B站资源/<类别>/<资源包名>/...）整个资源包聚合成一个条目，
+        不再按文件名拆散（否则一个收藏集会变成 N 条散行）。
+        """
         skip_dirs = {"账号追踪数据", "弹幕文件", "字幕文件", "歌曲文件", "音乐信息", "danmaku", "stats",
                      "预览图", "导出的图片"}
         for p in root.rglob("*"):
             if not p.is_file() or p.suffix.lower() not in self._MEDIA_EXTS:
                 continue
             if any(s in p.parts for s in skip_dirs):
+                continue
+            parts = list(p.parts)
+            if "B站资源" in parts:
+                i = parts.index("B站资源")
+                category = parts[i + 1] if len(parts) > i + 1 else ""
+                pkg = parts[i + 2] if len(parts) > i + 2 else category
+                if not pkg:
+                    continue
+                base = _sanitize_title_key(pkg)[:20] or "B站资源"
+                key = ("", base, "bilibili")
+                mtype = "image" if p.suffix.lower() in self._IMG_EXTS else "video"
+                media_map.setdefault(key, []).append({
+                    "path": str(p), "name": p.name, "type": mtype,
+                    "date_part": "", "author": category, "subdir": "bilibili",
+                    "pkg": pkg,
+                })
                 continue
             # 平台子目录（取路径中第一个匹配的子目录名，规范化为英文，否则空）
             subdir = ""
@@ -676,7 +703,7 @@ class AssetPage(BasePage):
         self._reload_gen += 1
         gen = self._reload_gen
         self._collected_all_items = []
-        self._collected_shown = 0
+        self._collected_page = 1
         self._render_skeleton(8)
 
         def work():
@@ -709,7 +736,7 @@ class AssetPage(BasePage):
                 d = it.get("date_part") or ""
                 return d if d else placeholder
             self._collected_all_items = sorted(items, key=_sort_key, reverse=desc)
-            self._collected_shown = 0
+            self._collected_page = 1
             self._render_collected_batch()
             self._backfill_bili_covers()
 
@@ -811,10 +838,9 @@ class AssetPage(BasePage):
         return row
 
     def _render_collected_batch(self):
-        """懒加载分批渲染已获取资源（每批 BATCH=20 条，加载更多按钮续）。"""
+        """分页渲染已获取资源：每页 BATCH 条，底部页码导航（首页/上一页/跳页/下一页/末页）。"""
         lay = self.collected_layout
         self._clear_layout(lay)
-        lay.addStretch(1)
         items = self._collected_all_items
         if not items:
             tip = ("（download/已获取数据/ 目录为空）" if not self._disk_items
@@ -822,22 +848,62 @@ class AssetPage(BasePage):
             lbl = QLabel(tip)
             lbl.setStyleSheet("color: gray;")
             lbl.setContentsMargins(8, 10, 8, 10)
-            lay.takeAt(lay.count() - 1)
             lay.addWidget(lbl)
             lay.addStretch(1)
             return
-        lay.takeAt(lay.count() - 1)
-        end = min(self._collected_shown + BATCH, len(items))
-        for i in range(self._collected_shown, end):
+        total_pages = (len(items) + BATCH - 1) // BATCH
+        page = min(max(1, self._collected_page), total_pages)
+        self._collected_page = page
+        start = (page - 1) * BATCH
+        for i in range(start, min(start + BATCH, len(items))):
             self._render_collected_row(items[i], i + 1)
-        self._collected_shown = end
-        if self._collected_shown < len(items):
-            more = QPushButton(f"加载更多（{len(items) - self._collected_shown} 条）")
-            more.setStyleSheet(
-                "background: transparent; border: 1px solid #c8cdd6; color: #6b7280; padding: 4px;")
-            more.clicked.connect(self._render_collected_batch)
-            lay.addWidget(more)
+        lay.addWidget(self._make_pager(len(items), page, total_pages))
         lay.addStretch(1)
+
+    def _make_pager(self, total, page, total_pages):
+        """页码导航条（浏览器式）：⏮ ◀ 第N/M页(跳页输入) ▶ ⏭ + 总数。"""
+        bar = QWidget()
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(8, 6, 8, 2)
+        h.setSpacing(4)
+
+        def nav_btn(text, tip, target):
+            b = QPushButton(text)
+            b.setFixedSize(34, 26)
+            b.setToolTip(tip)
+            b.setEnabled(1 <= target <= total_pages and target != page)
+            b.setStyleSheet(
+                "QPushButton { background: transparent; border: 1px solid #c8cdd6;"
+                " color: #374151; }"
+                "QPushButton:disabled { color: #c3c8d0; border-color: #e5e8ee; }")
+            b.clicked.connect(lambda _=False, t=target: self._goto_collected_page(t))
+            return b
+
+        h.addWidget(nav_btn("⏮", "第一页", 1))
+        h.addWidget(nav_btn("◀", "上一页", page - 1))
+        info = QLabel(f"第 {page} / {total_pages} 页 · 共 {total} 条")
+        info.setStyleSheet("color: #6b7280;")
+        h.addWidget(info)
+        h.addWidget(nav_btn("▶", "下一页", page + 1))
+        h.addWidget(nav_btn("⏭", "最后一页", total_pages))
+        h.addSpacing(8)
+        h.addWidget(QLabel("跳至"))
+        spin = QSpinBox()
+        spin.setRange(1, total_pages)
+        spin.setValue(page)
+        spin.setFixedWidth(64)
+        spin.setStyleSheet("QSpinBox { padding: 1px 4px; }")
+        spin.editingFinished.connect(lambda s=spin: self._goto_collected_page(s.value()))
+        h.addWidget(spin)
+        h.addWidget(QLabel("页"))
+        h.addStretch(1)
+        return bar
+
+    def _goto_collected_page(self, page):
+        total = len(self._collected_all_items)
+        total_pages = (total + BATCH - 1) // BATCH if total else 1
+        self._collected_page = min(max(1, page), total_pages)
+        self._render_collected_batch()
 
     def _render_collected_row(self, it, index):
         """渲染一行（点击弹详情窗，双击缩略图播放本地视频）。"""
@@ -989,8 +1055,8 @@ class AssetPage(BasePage):
             self._checked_keys = {self._dl_key(it) for it in self._collected_all_items}
         else:
             self._checked_keys.clear()
-        # 重渲染以同步复选框状态（保留已加载批次数）
-        if self._collected_shown:
+        # 重渲染以同步复选框状态（保持当前页码）
+        if self._collected_all_items:
             self._render_collected_batch()
 
     def _batch_download_checked(self):

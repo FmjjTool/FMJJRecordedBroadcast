@@ -878,6 +878,9 @@ class InfoAccountsPage(BasePage):
         kind_options = ["", "video", "dynamic", "all"]
         kind_label = {"": "自动", "video": "[作品]", "dynamic": "[动态]", "all": "[全部]"}
         _clear_layout(self.acct_set_layout)
+        self._acct_set_rows = []
+        self.save_all_btn = QPushButton("💾 保存全部修改")
+        self.save_all_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
         accounts = [a for a in load_accounts() if a.url]  # 过滤分组占位账号
         groups = get_groups()
         group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in sorted(groups.items())]
@@ -914,31 +917,54 @@ class InfoAccountsPage(BasePage):
             ksel.setCurrentText(kind_label.get(cur_kind, "自动"))
             ksel.setFixedWidth(80)
             h.addWidget(ksel)
-            save_btn = QPushButton("💾")
-            save_btn.setFixedSize(34, 26)
-            save_btn.setStyleSheet("background: #2e7d32; color: white;")
-            save_btn.clicked.connect(lambda _=False, u=a.url, s=gsel, k=ksel: self._save_account_row(u, s, k))
-            h.addWidget(save_btn)
+            # 记录行控件与初始值，改动后启用底部「保存全部修改」
+            self._acct_set_rows.append((a.url, gsel, ksel, cur_val, ksel.currentText()))
+            gsel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
+            ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet("background: #c62828; color: white;")
             del_btn.clicked.connect(lambda _=False, u=a.url: self._delete_account_row(u))
             h.addWidget(del_btn)
             self.acct_set_layout.addWidget(row)
+        # 底部统一保存按钮（替代逐行 💾）
+        bar = QHBoxLayout()
+        self.save_all_btn.setEnabled(False)
+        self.save_all_btn.clicked.connect(self._save_all_account_rows)
+        bar.addWidget(self.save_all_btn)
+        bar.addStretch(1)
+        hint = QLabel("修改组号/采集类型后点此一次性保存")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        bar.addWidget(hint)
+        self.acct_set_layout.addLayout(bar)
 
-    def _save_account_row(self, url, gsel, ksel):
-        v = gsel.currentText()
-        gid = "" if v == "无分组" else v.split(":")[0].strip()
-        kv = ksel.currentText()
-        # 还原 kind 标识
-        kind_rev = {"自动": "", "[作品]": "video", "[动态]": "dynamic", "[全部]": "all"}
-        kind = kind_rev.get(kv, "")
+    @staticmethod
+    def _mark_set_dirty(btn):
+        btn.setEnabled(True)
+
+    def _save_all_account_rows(self):
+        """一次性保存所有行的组号/采集类型修改（替代逐行保存）。"""
         from accounts_manager import update_account, get_groups
-        gname = get_groups().get(gid, "") if gid else ""
-        if update_account(url, group_id=gid, group_name=gname, kind=kind):
-            QTimer.singleShot(150, self._reload_account_list)
-            QTimer.singleShot(150, self._reload_account_settings)
-            QTimer.singleShot(150, self._reload_group_list)
+        groups = get_groups()
+        changed = 0
+        for url, gsel, ksel, orig_g, orig_k in getattr(self, "_acct_set_rows", []):
+            v = gsel.currentText()
+            gid = "" if v == "无分组" else v.split(":")[0].strip()
+            kind_rev = {"自动": "", "[作品]": "video", "[动态]": "dynamic", "[全部]": "all"}
+            kind = kind_rev.get(ksel.currentText(), "")
+            if v == orig_g and ksel.currentText() == orig_k:
+                continue  # 无变化
+            gname = groups.get(gid, "") if gid else ""
+            if update_account(url, group_id=gid, group_name=gname, kind=kind):
+                changed += 1
+        if changed:
+            self.app.toast(f"✅ 已保存 {changed} 项账号设置", "success")
+        else:
+            self.app.toast("没有需要保存的修改", "info")
+        self.save_all_btn.setEnabled(False)
+        QTimer.singleShot(150, self._reload_account_list)
+        QTimer.singleShot(150, self._reload_account_settings)
+        QTimer.singleShot(150, self._reload_group_list)
 
     def _delete_account_row(self, url):
         from accounts_manager import remove_account
