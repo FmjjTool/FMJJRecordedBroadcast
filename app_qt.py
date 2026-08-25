@@ -68,6 +68,11 @@ def main():
     except ImportError:
         pass
 
+    # Windows 中文系统的 Qt 字体回退链（雅黑/Tahoma/SimSun/Arial...）不含印度系文字字体，
+    # 渲染抓取内容里的旁遮普语等外文时每条都刷 "OpenType support missing" 警告，关闭降噪
+    from PySide6.QtCore import QLoggingCategory
+    QLoggingCategory.setFilterRules("qt.text.font.db.warning=false")
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     # 主题：先装 setStyleSheet 自动重映射补丁，再按配置应用浅色/深色 QSS
