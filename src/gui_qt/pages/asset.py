@@ -926,36 +926,103 @@ class AssetPage(BasePage):
         run_bg(work, done)
 
     def _delete_item(self, it):
-        """删除当前资产（json + 关联 md/xlsx/raw + 媒体文件）。"""
-        files = [it.get("file_path", "")]
+        """删除当前资产：按类别选择（图片/视频/文本/全部）。"""
         stem = os.path.splitext(it.get("file_path", ""))[0]
-        # 关联的 md / xlsx / raw
+        doc_files = [it.get("file_path", "")]
         for ext in (".md", ".xlsx", "_raw.json"):
             cand = stem + ext
             if os.path.exists(cand):
-                files.append(cand)
-        # 媒体文件
-        for m in it.get("media_files", []):
-            files.append(m["path"])
-        files = [f for f in files if f and os.path.exists(f)]
-        if not files:
+                doc_files.append(cand)
+        img_files = [m["path"] for m in it.get("media_files", []) if m["type"] == "image"]
+        vid_files = [m["path"] for m in it.get("media_files", []) if m["type"] == "video"]
+        doc_files = [f for f in doc_files if f and os.path.exists(f)]
+        img_files = [f for f in img_files if f and os.path.exists(f)]
+        vid_files = [f for f in vid_files if f and os.path.exists(f)]
+        total = len(doc_files) + len(img_files) + len(vid_files)
+        if total == 0:
             self.app.toast("无文件可删除", "info")
+            return
+
+        # 四类选择对话框（各列数量，无该类时禁用）
+        win = QDialog(self)
+        win.setWindowTitle("删除文件")
+        win.setModal(True)
+        win.resize(420, 300)
+        v = QVBoxLayout(win)
+        v.setSpacing(10)
+        v.addWidget(QLabel(f"「{(it.get('title') or '')[:40]}」关联文件："))
+
+        def _mk_row(emoji, label, files, color):
+            cb = QCheckBox(f"{emoji} {label}（{len(files)} 个）")
+            cb.setStyleSheet(f"color: {color}; font-weight: bold;")
+            cb.setEnabled(bool(files))
+            if not files:
+                cb.setStyleSheet("color: #999;")
+            v.addWidget(cb)
+            return cb, files
+
+        cb_img, _ = _mk_row("🖼", "图片文件", img_files, "#1976d2")
+        cb_vid, _ = _mk_row("🎬", "视频文件", vid_files, "#6a1b9a")
+        cb_doc, _ = _mk_row("📄", "文本文件（json/md/xlsx/raw）", doc_files, "#e65100")
+        cb_all = QCheckBox("🗑 全部删除（含文本，条目将消失）")
+        cb_all.setStyleSheet("color: #c62828; font-weight: bold;")
+        v.addWidget(cb_all)
+
+        def _sync_all(checked):
+            # 勾「全部」= 三类全选；取消「全部」不动单项（可单独调整）
+            if checked:
+                cb_img.setChecked(True)
+                cb_vid.setChecked(True)
+                cb_doc.setChecked(True)
+
+        cb_all.stateChanged.connect(_sync_all)
+        hint = QLabel("勾选要删除的文件类别，未勾选的保留")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        v.addWidget(hint)
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        cancel = QPushButton("取消")
+        cancel.setFixedWidth(72)
+        cancel.clicked.connect(win.reject)
+        ok = QPushButton("删除")
+        ok.setFixedWidth(72)
+        ok.setStyleSheet("background: #c62828; color: white; font-weight: bold;")
+        ok.clicked.connect(win.accept)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+
+        if win.exec() != QDialog.Accepted:
+            return
+        targets = []
+        if cb_img.isChecked():
+            targets += img_files
+        if cb_vid.isChecked():
+            targets += vid_files
+        if cb_doc.isChecked():
+            targets += doc_files
+        if not targets:
+            self.app.toast("未选择任何类别", "info")
             return
         if QMessageBox.question(
                 self, "确认删除",
-                f"将删除 {len(files)} 个文件：\n\n" + "\n".join(os.path.basename(f) for f in files[:10]),
+                f"将删除 {len(targets)} 个文件：\n\n"
+                + "\n".join(os.path.basename(f) for f in targets[:10])
+                + ("\n…等" if len(targets) > 10 else ""),
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         deleted = 0
-        for f in files:
+        for f in targets:
             try:
                 os.remove(f)
                 deleted += 1
             except Exception:
                 pass
+        # 文本全删 = 条目本身消失，清下载状态允许重新采集
+        if cb_doc.isChecked():
+            self._dl_state.pop(self._dl_key(it), None)
         self.app.toast(f"已删除 {deleted} 个文件", "success")
-        # 删除后清空下载状态，允许重新下载
-        self._dl_state.pop(self._dl_key(it), None)
         QTimer.singleShot(100, self._refresh_collected)
 
     def _extract_pic_urls(self, it) -> list:
