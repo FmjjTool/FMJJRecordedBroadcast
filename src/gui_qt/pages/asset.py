@@ -1318,13 +1318,15 @@ class AssetPage(BasePage):
                 return download_media([info], base_dir=base_dir,
                                       download_images=True, download_live=False, download_videos=False,
                                       progress_callback=bridge.emit_progress,
-                                      wait_range=(0.5, 1.5), cancel_event=cancel_ev)
+                                      wait_range=(0.5, 1.5), cancel_event=cancel_ev,
+                                      quiet=True)
             if not vurl2:
                 raise ValueError("无可用视频链接")
             return download_media([info], base_dir=base_dir,
                                   download_images=False, download_live=False, download_videos=True,
                                   progress_callback=bridge.emit_progress,
-                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev)
+                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev,
+                                  quiet=True)
 
         def done(result, err):
             if dlg is not None and dlg.isVisible():
@@ -1598,7 +1600,7 @@ class AssetPage(BasePage):
                                   download_images=True, download_live=True, download_videos=False,
                                   progress_callback=bridge.emit_progress,
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
-                                  skip_existing=not force)
+                                  skip_existing=not force, quiet=True)
 
         def done(result, err):
             if dlg is not None and dlg.isVisible():

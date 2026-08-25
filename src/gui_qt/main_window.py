@@ -24,7 +24,6 @@ from gui_qt.pages.info_parse import InfoParsePage
 from gui_qt.pages.info_batch import InfoBatchPage
 from gui_qt.pages.info_accounts import InfoAccountsPage
 from gui_qt.pages.info_results import InfoResultsPage
-from gui_qt.pages.download import VideoDownloadPage
 from gui_qt.pages.asset import AssetPage
 from gui_qt.pages.subtitle import SubtitlePage
 from gui_qt.pages.organize import OrganizePage
@@ -55,7 +54,6 @@ PAGE_CLASSES = {
     "info_batch": InfoBatchPage,
     "info_accounts": InfoAccountsPage,
     "info_results": InfoResultsPage,
-    "download": VideoDownloadPage,
     "asset": AssetPage,
     "toolbox_organize": OrganizePage,
     "toolbox_convert": ConvertPage,
@@ -87,7 +85,6 @@ NAV_GROUPS = [
         ("info_batch", "📋 批量导入"),
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
-        ("download", "📥 视频下载"),
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),

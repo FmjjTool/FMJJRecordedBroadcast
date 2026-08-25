@@ -220,6 +220,25 @@ def _download_one(url: str, filepath: str, headers: dict) -> tuple[str, bool]:
         return filepath, False
 
 
+class _NullProgress:
+    """quiet 模式占位进度条：GUI 经 progress_callback 展示进度，终端不再渲染。"""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def add_task(self, *args, **kwargs):
+        return 0
+
+    def update(self, *args, **kwargs):
+        pass
+
+    def advance(self, *args, **kwargs):
+        pass
+
+
 def download_media(
     info_list: list,
     base_dir: str | None = None,
@@ -230,6 +249,7 @@ def download_media(
     wait_range: tuple | None = None,
     cancel_event=None,
     skip_existing: bool = True,
+    quiet: bool = False,
 ) -> dict:
     """
     批量下载媒体文件。返回统计信息。
@@ -245,7 +265,12 @@ def download_media(
         cancel_event: threading.Event，置位后跳过剩余文件（stats["cancelled"]=True）
         skip_existing: 已下载的原图自动跳过（本地文件与原图大小一致即视为已下载，
             stats["skipped"] 计数）；强制重下时传 False
+        quiet: 静默模式（GUI 调用）：不向终端打印开始/完成/进度条等任何输出
     """
+    def _say(msg: str):
+        if not quiet:
+            console.print(msg)
+
     if base_dir is None:
         base_dir = DOWNLOAD_DIR
 
@@ -315,11 +340,11 @@ def download_media(
                 tasks.append((vurl, os.path.join(user_dir, fname), "视频"))
 
     if not tasks:
-        console.print("[yellow]没有可下载的媒体文件[/yellow]")
+        _say("[yellow]没有可下载的媒体文件[/yellow]")
         return {"images": 0, "live": 0, "videos": 0, "total": 0, "failed": 0,
                 "cancelled": False}
 
-    console.print(f"[bold]开始下载 {len(tasks)} 个文件到 [cyan]{os.path.abspath(base_dir)}[/cyan]...[/bold]")
+    _say(f"[bold]开始下载 {len(tasks)} 个文件到 [cyan]{os.path.abspath(base_dir)}[/cyan]...[/bold]")
 
     from auth import get_cookie as _gc
     # 惰性获取 cookie（避免下载抖音时也触发 weibo cookie 过期警告/无关请求）
@@ -353,21 +378,22 @@ def download_media(
     if progress_callback:
         progress_callback(0, len(tasks), "")
 
-    with Progress(
+    progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
         TextColumn("[dim]{task.completed}/{task.total}[/dim]"),
         console=console,
-    ) as progress:
+    ) if not quiet else _NullProgress()
+    with progress:
         pbar = progress.add_task("[cyan]下载中...", total=len(tasks))
 
         # 串行下载：每个文件前随机等待（默认 3~60 秒防反爬；GUI 手动下载传小区间提速）
         for idx, (url, fpath, mtype) in enumerate(tasks):
             if cancel_event is not None and cancel_event.is_set():
                 stats["cancelled"] = True
-                console.print("[yellow]已取消，跳过剩余文件[/yellow]")
+                _say("[yellow]已取消，跳过剩余文件[/yellow]")
                 break
             # 根据 URL 域名选择请求头（提前到跳过检查之前）
             if "douyin.com" in url or "douyinvod" in url:
@@ -407,17 +433,17 @@ def download_media(
                     stats["videos"] += 1
             else:
                 stats["failed"] += 1
-                console.print(f"[red]X 失败: {os.path.basename(filepath)}[/red]")
+                _say(f"[red]X 失败: {os.path.basename(filepath)}[/red]")
             progress.advance(pbar)
             if progress_callback:
                 done = stats["images"] + stats["live"] + stats["videos"] + stats["failed"]
                 progress_callback(done, len(tasks), os.path.basename(filepath))
 
-    console.print("\n[bold green]V 下载完成:[/bold green]")
-    console.print(f"  图片: {stats['images']} | Live图: {stats['live']} | 视频: {stats['videos']}")
+    _say("\n[bold green]V 下载完成:[/bold green]")
+    _say(f"  图片: {stats['images']} | Live图: {stats['live']} | 视频: {stats['videos']}")
     if stats["skipped"]:
-        console.print(f"  [dim]跳过已下载: {stats['skipped']}[/dim]")
+        _say(f"  [dim]跳过已下载: {stats['skipped']}[/dim]")
     if stats["failed"]:
-        console.print(f"  [red]失败: {stats['failed']}[/red]")
-    console.print(f"  [dim]保存到: {os.path.abspath(base_dir)}[/dim]")
+        _say(f"  [red]失败: {stats['failed']}[/red]")
+    _say(f"  [dim]保存到: {os.path.abspath(base_dir)}[/dim]")
     return stats

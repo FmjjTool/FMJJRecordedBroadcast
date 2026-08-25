@@ -31,17 +31,22 @@ _log_file_obj = None
 
 
 class _Tee:
-    """同时写控制台和日志文件；写文件时过滤 ANSI 颜色码（rich 进度条等）。"""
+    """同时写控制台和日志文件；写文件时过滤 ANSI 颜色码（rich 进度条等）。
+
+    console_stream=None 时只写日志文件（GUI 模式：控制台不再刷下载进度/警告，
+    全部输出仍进 logs/app_*.log 供溯源）。
+    """
 
     def __init__(self, console_stream, file_obj):
         self._console = console_stream
         self._file = file_obj
 
     def write(self, data):
-        try:
-            self._console.write(data)
-        except Exception:
-            pass
+        if self._console is not None:
+            try:
+                self._console.write(data)
+            except Exception:
+                pass
         try:
             self._file.write(_ANSI_RE.sub("", data))
             self._file.flush()  # 实时落盘，崩溃时也能溯源到最近的输出
@@ -50,6 +55,8 @@ class _Tee:
 
     def flush(self):
         for s in (self._console, self._file):
+            if s is None:
+                continue
             try:
                 s.flush()
             except Exception:
@@ -59,6 +66,8 @@ class _Tee:
         return False
 
     def fileno(self):
+        if self._console is None:
+            return -1
         try:
             return self._console.fileno()
         except Exception:
@@ -108,8 +117,12 @@ def _flush_on_exit():
             pass
 
 
-def setup_logging(max_files: int = 50) -> str:
-    """初始化日志系统，返回日志文件路径。可重复调用（幂等）。"""
+def setup_logging(max_files: int = 50, console: bool = True) -> str:
+    """初始化日志系统，返回日志文件路径。可重复调用（幂等）。
+
+    console=False：stdout/stderr 只写日志文件不回显控制台（GUI 启动用，
+    控制台不再被下载进度/Qt 警告刷屏；未处理异常仍回显真实 stderr）。
+    """
     global _setup_done, _original_stdout, _original_stderr, _log_file_obj
     if _setup_done:
         return ""
@@ -139,11 +152,11 @@ def setup_logging(max_files: int = 50) -> str:
     # 捕获未处理异常
     sys.excepthook = _excepthook
 
-    # Tee stdout/stderr 到日志文件（控制台保留原样，文件侧过滤 ANSI）
+    # Tee stdout/stderr 到日志文件（console=False 时控制台侧静默，文件侧过滤 ANSI）
     _original_stdout = sys.stdout
     _original_stderr = sys.stderr
-    sys.stdout = _Tee(_original_stdout, _log_file_obj)
-    sys.stderr = _Tee(_original_stderr, _log_file_obj)
+    sys.stdout = _Tee(_original_stdout if console else None, _log_file_obj)
+    sys.stderr = _Tee(_original_stderr if console else None, _log_file_obj)
 
     atexit.register(_flush_on_exit)
 

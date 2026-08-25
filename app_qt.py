@@ -87,11 +87,14 @@ def main():
     from toolbox.config_manager import init_all_configs
     init_all_configs()
 
-    # 初始化日志（每次运行生成独立 log，上限可配置，见 max_log_files）
+    # 初始化日志（每次运行生成独立 log，上限可配置，见 max_log_files）。
+    # console=False：GUI 模式控制台静默——下载进度/解析输出/Qt 警告只进
+    # logs/app_*.log，不再刷 cmd（未处理异常仍回显控制台）
     try:
         from app_logger import setup_logging
         from toolbox.config_manager import load_convert_config
-        setup_logging(max_files=int(load_convert_config().get("max_log_files", 50) or 50))
+        setup_logging(max_files=int(load_convert_config().get("max_log_files", 50) or 50),
+                      console=False)
     except Exception:
         pass  # 日志初始化失败不影响主程序
 

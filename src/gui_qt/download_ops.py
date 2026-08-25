@@ -1,7 +1,7 @@
 """下载共享操作（对应原版 info_pages / download_page 中重复的下载逻辑）。
 
-供「已获取」页与「视频下载」页共用：条目分组、B站分类、画质映射、
-抖音直链刷新、B站下载执行、非 B站媒体下载。
+供「已获取」「单个解析」「批量导入」页共用：条目分组、B站分类、画质映射、
+抖音直链刷新、多平台 URL 解析、B站下载执行、非 B站媒体下载。
 """
 
 import os
@@ -9,6 +9,59 @@ import random
 import time
 
 from toolbox.config_manager import get_export_subdir
+
+# multi_downloader 返回的中文平台名 → 英文标识（COLLECTED / 下载目录共用英文键）
+MULTI_PLATFORM_EN = {
+    "抖音": "douyin",
+    "微博": "weibo",
+    "小红书": "xiaohongshu",
+    "快手": "kuaishou",
+    "好看视频": "haokan",
+    "微视": "weishi",
+    "梨视频": "pear",
+    "皮皮搞笑": "pipigx",
+}
+
+
+def parse_url_info(url: str):
+    """解析单条 URL → VideoInfo（单个解析/批量导入共用）。
+
+    B站/抖音/微博走完整解析器（信息全），其余 7 个视频平台（小红书/快手/
+    好看/微视/梨视频/皮皮搞笑）走 multi_downloader 构造最小 VideoInfo。
+    无法识别时抛 ValueError。
+    """
+    from platforms import URLRecognizer, get_parser
+    from platforms.base import VideoInfo, now_str
+
+    platform = URLRecognizer.recognize(url)
+    parser = get_parser(platform) if platform else None
+    if parser:
+        info = parser.parse(url)
+        if not info:
+            raise ValueError("获取失败（可能反爬，需 Cookie）")
+        return info
+
+    from multi_downloader import parse_video
+    d = parse_video(url)  # 无法识别的域名抛 ValueError
+    info = VideoInfo(
+        platform=MULTI_PLATFORM_EN.get(d.get("platform", ""), d.get("platform") or "unknown"),
+        kind="video",
+        video_id=str(d.get("video_id") or url[:64]),
+        title=d.get("title", ""),
+        author=d.get("author", ""),
+        author_id=str(d.get("author_id", "") or ""),
+        play_count=int(d.get("play_count", 0) or 0),
+        like_count=int(d.get("like_count", 0) or 0),
+        comment_count=int(d.get("comment_count", 0) or 0),
+        cover_url=d.get("cover_url", ""),
+        video_url=d.get("video_url", ""),
+        publish_time=d.get("publish_time", ""),
+        raw_url=url,
+        fetched_at=now_str(),
+    )
+    if d.get("images"):
+        info.images = d["images"]
+    return info
 
 
 def resolve_items(items):
@@ -118,7 +171,8 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
             draw_stats = download_media(draw_items, base_dir=out_dir,
                                         download_images=True, download_live=False,
                                         download_videos=False,
-                                        progress_callback=progress_cb if log else None)
+                                        progress_callback=progress_cb if log else None,
+                                        quiet=True)
         except Exception as e:
             errors.append(f"动态图片: {str(e)[:40]}")
             if log:
@@ -131,7 +185,8 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
         try:
             refresh_douyin_urls(non_bili, quality_label)
             other_stats = download_media(non_bili, base_dir=out_dir,
-                                         progress_callback=progress_cb if log else None)
+                                         progress_callback=progress_cb if log else None,
+                                         quiet=True)
         except Exception as e:
             errors.append(f"其他: {str(e)[:40]}")
             if log:
@@ -149,7 +204,8 @@ def download_media_items(items, log=None):
             log(f"✅ ({done}/{total}) {name}")
 
     return download_media(items, base_dir=base_dir,
-                          progress_callback=progress_cb if log else None)
+                          progress_callback=progress_cb if log else None,
+                          quiet=True)
 
 
 def summarize_download(paths, draw_stats, other_stats, errors):
