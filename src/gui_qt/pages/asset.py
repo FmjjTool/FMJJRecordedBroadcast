@@ -474,7 +474,7 @@ class AssetPage(BasePage):
                     "platform": platform,
                     "video_id": data.get("视频ID", "") or "",
                     "title": title,
-                    "description": (data.get("正文") or "")[:140],
+                    "description": data.get("正文") or "",
                     "author": data.get("作者", "") or "",
                     "play_count": play,
                     "like_count": int(data.get("点赞数", 0) or 0),
@@ -530,7 +530,7 @@ class AssetPage(BasePage):
                             break
                 # 预期图片数（从 raw json 提取 pics，用于"下载不完整"筛选）
                 try:
-                    entry["expected_imgs"] = len(self._extract_pic_urls(entry))
+                    entry["expected_imgs"] = len(self._extract_pic_urls(entry)[0])
                 except Exception:
                     entry["expected_imgs"] = 0
                 results.append(entry)
@@ -1025,36 +1025,54 @@ class AssetPage(BasePage):
         self.app.toast(f"已删除 {deleted} 个文件", "success")
         QTimer.singleShot(100, self._refresh_collected)
 
-    def _extract_pic_urls(self, it) -> list:
-        """从 raw json 提取该条目的所有图片 URL（微博 pics/pic_ids + B站动态 opus.pics/draw.items）。"""
-        urls = []
+    def _extract_pic_urls(self, it) -> tuple:
+        """从 raw json 提取该条目的所有图片 URL 与 live 图视频 URL。
+
+        返回 (pic_urls, live_urls)：live 图的静态帧照常入 pic_urls，
+        其视频（videoSrc 播放器 URL，内嵌真实 .mov）入 live_urls。
+        """
+        urls, lives = [], []
         fp = it.get("file_path", "")
         if not fp:
-            return urls
+            return urls, lives
         stem = os.path.splitext(fp)[0]
         raw_candidates = [stem + "_raw.json", stem.replace(".json", "_raw.json")]
         raw_path = next((c for c in raw_candidates if os.path.exists(c)), "")
         if not raw_path:
-            return urls
+            return urls, lives
         try:
             data = json.load(open(raw_path, encoding="utf-8"))
             if isinstance(data, list):
                 data = data[0] if data else {}
             if not isinstance(data, dict):
-                return urls
+                return urls, lives
             # 方式1：微博 pics 列表（dict 含 large/original/url 或纯字符串）
+            from platforms.weibo import WeiboParser
             for pic in data.get("pics", []) or []:
                 if isinstance(pic, dict):
                     u = (pic.get("original", {}).get("url")
                          or pic.get("largest", {}).get("url")
                          or pic.get("large", {}).get("url")
                          or pic.get("url") or "")
+                    # live 图：videoSrc 是播放器页 URL，需解出真实 .mov 直链
+                    lv = pic.get("videoSrc") or ""
+                    if lv:
+                        mov = WeiboParser._extract_livephoto_url(lv)
+                        if mov and mov not in lives:
+                            lives.append(mov)
                 elif isinstance(pic, str):
                     u = pic
                 else:
                     u = ""
                 if u and u not in urls:
                     urls.append(u)
+            # 顶层 live_photo 字段兜底（空格分隔的多个播放器 URL）
+            if not lives and data.get("live_photo"):
+                for lv in str(data["live_photo"]).split():
+                    if lv:
+                        mov = WeiboParser._extract_livephoto_url(lv)
+                        if mov and mov not in lives:
+                            lives.append(mov)
             # 方式2：微博 pic_ids（图片 ID 列表，构造 sinaimg 大图 URL）
             if not urls:
                 for pid in data.get("pic_ids", []) or []:
@@ -1084,16 +1102,18 @@ class AssetPage(BasePage):
                     pass
         except Exception:
             pass
-        return urls
+        return urls, lives
 
     def _download_images_for_item(self, it):
-        """下载单条条目所有图片（优先 raw json 的 pics/pic_ids，否则封面图）。"""
-        # 优先从 raw json 提取所有原图，封面图也加入（B站动态封面 i0.hdslb.com 等）
-        pics = self._extract_pic_urls(it)
+        """下载单条条目所有图片与 live 图视频（优先 raw json 的 pics/pic_ids）。"""
+        # 优先从 raw json 提取所有原图 + live 视频，封面图也加入（B站动态封面 i0.hdslb.com 等）
+        pics, lives = self._extract_pic_urls(it)
         cover = it.get("cover_url", "")
         if cover and cover not in pics:
-            pics.insert(0, cover)  # 封面优先下载（列表里预览的就是它）
-        if not pics:
+            # 微博封面=首图的缩略图变体（parser 里 cover_url=images[0]），pics 存在时跳过防重复
+            if it["platform"] != "weibo" or not pics:
+                pics.insert(0, cover)  # 封面优先下载（列表里预览的就是它）
+        if not pics and not lives:
             self.app.toast("此条目无可下载图片（raw json 无 pics 且无封面）", "warning")
             return
 
@@ -1111,9 +1131,10 @@ class AssetPage(BasePage):
                 fetched_at=now_str(),
             )
             info.images = pics
+            info.live_photos = lives
             base_dir = str(get_export_subdir("video_data"))
             return download_media([info], base_dir=base_dir,
-                                  download_images=True, download_live=False, download_videos=False)
+                                  download_images=True, download_live=True, download_videos=False)
 
         def done(result, err):
             if err:
@@ -1121,8 +1142,12 @@ class AssetPage(BasePage):
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
             else:
                 n = (result or {}).get("images", 0)
+                n_live = (result or {}).get("live", 0)
                 self._dl_state[self._dl_key(it)] = "done"
-                self.app.toast(f"✅ 已下载图片 {n} 张", "success")
+                if n_live:
+                    self.app.toast(f"✅ 已下载图片 {n} 张 + Live图视频 {n_live} 个", "success")
+                else:
+                    self.app.toast(f"✅ 已下载图片 {n} 张", "success")
             # 刷新列表（重新扫描磁盘，新下载的图会显示本地缩略图）
             QTimer.singleShot(100, self._refresh_collected)
 
@@ -1211,6 +1236,10 @@ class AssetPage(BasePage):
             v.addWidget(dh)
             dl = QLabel(desc)
             dl.setWordWrap(True)
+            # \n 在富文本模式下不生效，转 <br> 并转义特殊字符
+            dl.setTextFormat(Qt.RichText)
+            dl.setText((desc.replace("&", "&amp;").replace("<", "&lt;")
+                        .replace(">", "&gt;").replace("\n", "<br>")))
             dl.setStyleSheet("font-size: 12px;")
             v.addWidget(dl)
         # 媒体文件（实际下载的图片/视频，双击图片看大图、视频用系统播放器）
