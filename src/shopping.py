@@ -118,6 +118,9 @@ class TaobaoItemDetail:
             "商品ID": self.item_id, "标题": self.title, "价格": self.price,
             "销量": self.sales, "店铺": self.shop_name,
             "主图": self.main_images,
+            "规格参数": [{"名称": g.get("name") or "规格",
+                        "选项": [v.get("name") for v in g.get("values") or []]}
+                       for g in self.sku_props],
             "选购参数": [{"选项": s.names, "价格": s.price, "库存": s.quantity}
                        for s in self.skus],
             "参数信息": [{"名称": n, "值": v} for n, v in self.params],
@@ -1250,7 +1253,7 @@ def export_item_xlsx(detail: TaobaoItemDetail, path: str) -> str:
     head_fill = PatternFill("solid", fgColor="FFF1E6")
     head_font = Font(bold=True)
 
-    def _sheet(ws, title, headers, rows):
+    def _sheet(ws, title, headers, rows, widths=None):
         ws.title = title
         for c, h in enumerate(headers, 1):
             cell = ws.cell(1, c, h)
@@ -1260,7 +1263,9 @@ def export_item_xlsx(detail: TaobaoItemDetail, path: str) -> str:
             for c, v in enumerate(row, 1):
                 ws.cell(r, c, v)
         for c in range(1, len(headers) + 1):
-            ws.column_dimensions[get_column_letter(c)].width = 46 if c == 1 else 30
+            w = (widths[c - 1] if widths and c <= len(widths)
+                 else (46 if c == 1 else 30))
+            ws.column_dimensions[get_column_letter(c)].width = w
         ws.freeze_panes = "A2"
 
     # 1) 商品信息
@@ -1278,11 +1283,35 @@ def export_item_xlsx(detail: TaobaoItemDetail, path: str) -> str:
     _sheet(wb.active, "商品信息", ["项目", "内容"],
            [(k, v) for k, v in info_rows if v])
 
-    # 2) 参数信息
-    _sheet(wb.create_sheet(), "参数信息", ["参数", "值"],
-           [(n, v) for n, v in detail.params])
+    # 2) 参数信息（全部参数一张表：商品基础 + 规格参数 + 参数明细 + 物流评分）
+    all_params: list = []
+    all_params.append(("商品", "标题", detail.title))
+    if detail.price:
+        all_params.append(("商品", "价格", detail.price))
+    if detail.sales:
+        all_params.append(("商品", "销量", detail.sales))
+    if detail.shop_name:
+        all_params.append(("商品", "店铺", detail.shop_name))
+    if detail.seller_id:
+        all_params.append(("商品", "卖家ID", detail.seller_id))
+    if detail.shop_id:
+        all_params.append(("商品", "店铺ID", detail.shop_id))
+    if detail.url:
+        all_params.append(("商品", "链接", detail.url))
+    for grp in detail.sku_props:
+        vals = " / ".join(v.get("name") or "" for v in grp.get("values") or [])
+        if vals:
+            all_params.append(("规格参数", grp.get("name") or "规格", vals))
+    for n, v in detail.params:
+        all_params.append(("参数", n, v))
+    if detail.delivery:
+        all_params.append(("物流", "发货/运费", detail.delivery))
+    if detail.shop_scores:
+        all_params.append(("店铺", "评分", detail.shop_scores))
+    _sheet(wb.create_sheet(), "参数信息(全部)", ["类别", "参数", "值"], all_params,
+           widths=(10, 20, 80))
 
-    # 3) 选购参数（SKU）
+    # 3) 选购参数（SKU 明细）
     sku_rows = [(s.names, s.price, s.quantity) for s in detail.skus]
     _sheet(wb.create_sheet(), "选购参数", ["选项", "价格", "库存"],
            sku_rows or [("（单规格商品）", detail.price, "")])
