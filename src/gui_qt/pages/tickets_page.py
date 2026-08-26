@@ -357,6 +357,10 @@ class TicketsPage(BasePage):
         for k in order:
             if d.get(k):
                 lines.append(f"{k}：{d[k]}")
+        # 海报 / 场馆图
+        for k in ("海报", "场馆图", "本地图片目录"):
+            if d.get(k):
+                lines.append(f"{k}：{d[k]}")
         # 演出介绍
         desc_text = d.get("演出介绍") or ""
         if desc_text:

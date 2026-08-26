@@ -610,16 +610,52 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
         raise RuntimeError(f"B站会员购详情获取失败：{d.get('msg')}")
     data = d.get("data") or {}
 
-    # ====== 演出介绍（performance_desc，可能含 HTML） ======
-    raw_desc = data.get("performance_desc") or data.get("description") or ""
-    if isinstance(raw_desc, dict):
-        # 部分项目把 desc 包在 dict 里（{content: "..."} 或 {text: "..."}）
-        raw_desc = (raw_desc.get("content") or raw_desc.get("text") or
-                    raw_desc.get("html") or raw_desc.get("desc") or "")
-    desc_html = raw_desc if isinstance(raw_desc, str) else str(raw_desc)
-    desc_text = re.sub(r"<[^>]+>", " ", desc_html)
-    desc_text = re.sub(r"\s+", " ", desc_text).strip()
-    images = re.findall(r'src="([^"]+)"', desc_html) if desc_html else []
+    # ====== 演出介绍（performance_desc 新结构 {list:[{module,details}]}；
+    #         旧项目为空，回退 description 字符串可能含 HTML） ======
+    desc_html = ""
+    desc_text = ""
+    images = []
+    base_info_items = []    # base_info 模块：活动日期/场馆地址/入场说明等结构化条目
+    custom_sections = []    # custom 模块：票种福利等自定义文字段落
+    raw_pd = data.get("performance_desc")
+    if isinstance(raw_pd, dict):
+        for mod in (raw_pd.get("list") or []):
+            if not isinstance(mod, dict):
+                continue
+            det = mod.get("details")
+            module = mod.get("module") or ""
+            if module == "activity_content" and isinstance(det, str):
+                desc_html += det
+                for u in re.findall(r'src="([^"]+)"', det):
+                    if u.startswith("//"):
+                        u = "https:" + u
+                    if u and u not in images:
+                        images.append(u)
+            elif isinstance(det, list):
+                for it in det:
+                    if isinstance(it, dict) and it.get("title"):
+                        base_info_items.append(
+                            (str(it["title"]), str(it.get("content") or "")))
+            elif isinstance(det, str) and det.strip():
+                text = re.sub(r"<[^>]+>", " ", det)
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    custom_sections.append(
+                        (mod.get("module_name") or module or "补充说明", text))
+    elif isinstance(raw_pd, str) and raw_pd.strip():
+        desc_html = raw_pd
+    if not desc_html and not images:
+        legacy = data.get("description") or ""
+        if isinstance(legacy, str) and "<" in legacy:
+            desc_html = legacy
+            for u in re.findall(r'src="([^"]+)"', legacy):
+                if u.startswith("//"):
+                    u = "https:" + u
+                if u and u not in images:
+                    images.append(u)
+    if desc_html:
+        desc_text = re.sub(r"<[^>]+>", " ", desc_html)
+        desc_text = re.sub(r"\s+", " ", desc_text).strip()
 
     # ====== 嘉宾明细（guests：头像+简介，详情页"参展嘉宾"数据源） ======
     guests_detail = []
@@ -653,6 +689,12 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
         v = str(v).strip()
         if v:
             notice_items.append({"标题": label, "内容": v[:500]})
+    # base_info 模块结构化条目（活动日期/场馆地址/入场说明/儿童说明等）+ 自定义段落
+    for title, content in base_info_items:
+        if content:
+            notice_items.append({"标题": f"基本信息·{title}", "内容": content[:500]})
+    for title, content in custom_sections:
+        notice_items.append({"标题": title, "内容": content[:500]})
 
     # ====== 退票政策 ======
     refund_policy = ""
@@ -675,35 +717,38 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
     if rdd and rdd not in refund_policy:
         refund_policy = (refund_policy + "；" + rdd[:200]).strip("；")
 
-    # ====== 座位图 / 演出图 ======
-    seat_images = []
+    # ====== 头图（performance_image：{banner, banners[], card_square, first}） ======
     pi = data.get("performance_image")
     if isinstance(pi, str) and pi.strip().startswith("{"):
         try:
             pi = json.loads(pi)   # B站此字段是 JSON 字符串而非 dict
         except (ValueError, TypeError):
             pi = {}
+    banners = []
     if isinstance(pi, dict):
-        for k in ("url", "image", "img"):
-            v = pi.get(k)
-            if v:
-                if isinstance(v, str):
-                    seat_images.append(("https:" + v) if v.startswith("//") else v)
-                elif isinstance(v, list):
-                    for x in v:
-                        if isinstance(x, str):
-                            seat_images.append(("https:" + x) if x.startswith("//") else x)
-                break
-    elif isinstance(pi, str) and pi:
-        seat_images.append(("https:" + pi) if pi.startswith("//") else pi)
+        b = ((pi.get("banner") or {}).get("url")) or ""
+        if b:
+            banners.append(b)
+        for x in (pi.get("banners") or []):
+            u = (x or {}).get("url") or ""
+            if u and u not in banners:
+                banners.append(u)
+    seat_images = []
     cover = data.get("cover") or ""
     if cover.startswith("//"):
         cover = "https:" + cover
     banner = data.get("banner") or ""
     if banner.startswith("//"):
         banner = "https:" + banner
-    if banner and banner not in images:
-        images.insert(0, banner)
+    if not banner and banners:
+        banner = banners[0]
+    if banner and not images:
+        images.insert(0, banner)   # 无活动详情图的老项目用头图兜底
+    for u in banners[1:]:          # 额外 banner（头图数组）并入宣传图
+        if u.startswith("//"):
+            u = "https:" + u
+        if u and u not in images and u != banner:
+            images.append(u)
     # 场馆图（place_info.base_pic）
     venue_image = (data.get("place_info") or {}).get("base_pic") or ""
     if isinstance(venue_image, str) and venue_image.startswith("//"):
@@ -1280,6 +1325,23 @@ def download_event_images(ev: ShowEvent, base_dir, log=None) -> ShowEvent:
             except Exception as e:
                 if log:
                     log(f"嘉宾头像失败 {g.get('名字','')}: {str(e)[:40]}")
+            # 艺人海报（秀动 performers.poster，页面艺人卡片大图）
+            po = g.get("艺人海报") or ""
+            if po:
+                if po.startswith("//"):
+                    po = "https:" + po
+                if "imageMogr2" in po:
+                    po = po.split("?")[0]
+                ppath = gdir / f"{n:02d}_{safe}_海报{_img_ext(po)}"
+                try:
+                    r2 = httpx.get(po, timeout=30, follow_redirects=True,
+                                   headers={"User-Agent": UA})
+                    r2.raise_for_status()
+                    ppath.write_bytes(r2.content)
+                    ev.local_guests.append(str(ppath))
+                except Exception as e:
+                    if log:
+                        log(f"艺人海报失败 {g.get('名字','')}: {str(e)[:40]}")
     ev.local_venue = _download_images([ev.venue_image] if ev.venue_image else [],
                                       base / "venue", "场馆", log=log)
     total = (len(ev.local_cover) + len(ev.local_poster) + len(ev.local_images)
