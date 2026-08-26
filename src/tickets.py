@@ -12,6 +12,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
@@ -67,7 +68,18 @@ class ShowEvent:
     category: str = ""       # 演出分类（音乐会/话剧/体育...）
     tags: list = field(default_factory=list)              # 标签
     sessions: list = field(default_factory=list)          # ShowSession 列表
+    guests_detail: list = field(default_factory=list)     # 嘉宾明细 [{"名字","头像","简介","标签"}]
+    poster: str = ""         # 演出主海报（与封面区分：详情页大海报）
+    venue_image: str = ""    # 场馆图
     extra: dict = field(default_factory=dict)             # 平台特有字段
+    # 图片下载结果：本地路径
+    image_dir: str = ""      # 图片下载目录
+    local_cover: list = field(default_factory=list)
+    local_poster: list = field(default_factory=list)
+    local_images: list = field(default_factory=list)
+    local_seat: list = field(default_factory=list)
+    local_guests: list = field(default_factory=list)
+    local_venue: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = {
@@ -100,6 +112,12 @@ class ShowEvent:
             "标签": self.tags,
             "链接": self.url,
             "封面": self.cover,
+            "海报": self.poster,
+            "场馆图": self.venue_image,
+            "嘉宾明细": [{"名字": g.get("名字", ""), "头像": g.get("头像", ""),
+                        "简介": g.get("简介", ""), "标签": g.get("标签", ""),
+                        **({"艺人海报": g["艺人海报"]} if g.get("艺人海报") else {})}
+                       for g in self.guests_detail if g.get("名字")],
             "获取时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         d.update(self.extra)
@@ -109,6 +127,12 @@ class ShowEvent:
                  "票档": [{"名称": t.name, "价格": t.price, "状态": t.status,
                            "说明": t.desc} for t in s.tickets]}
                 for s in self.sessions]
+        if self.image_dir:
+            d["本地图片目录"] = self.image_dir
+            local = {"本地封面": self.local_cover, "本地海报": self.local_poster,
+                     "本地宣传图": self.local_images, "本地座位图": self.local_seat,
+                     "本地嘉宾头像": self.local_guests, "本地场馆图": self.local_venue}
+            d.update({k: v for k, v in local.items() if v})
         return {k: v for k, v in d.items() if v not in ("", [], None)}
 
 
@@ -237,6 +261,9 @@ def parse_damai_item(item_id: str) -> ShowEvent:
     venue = data.get("venue") or {}
     artists = "、".join(a.get("name", "") for a in (guide.get("artists") or [])
                         if a.get("name"))
+    guests_detail = [{"名字": a.get("name") or "", "头像": a.get("picUrl") or "",
+                      "简介": (a.get("desc") or "").strip(), "标签": a.get("tag") or ""}
+                     for a in (guide.get("artists") or []) if a.get("name")]
     extra = {}
     if item.get("purchaseLimitation"):
         extra["限购"] = f"每单限购 {item['purchaseLimitation']} 张"
@@ -316,6 +343,7 @@ def parse_damai_item(item_id: str) -> ShowEvent:
         status=((data.get("buyButton") or {}).get("text")) or "",
         url=f"https://m.damai.cn/damai/detail/item.html?itemId={item_id}",
         cover=((item.get("itemPics") or {}).get("itemPicList") or [{}])[0].get("picUrl", ""),
+        poster=images[0] if images else "",   # 大麦主海报=介绍首图（详情页大图）
         want_count=want.get("wantNumStr") or "",
         description_html=desc_html,
         description_text=desc_text,
@@ -325,6 +353,7 @@ def parse_damai_item(item_id: str) -> ShowEvent:
         faqs=faqs,
         refund_policy=refund_policy,
         sessions=sessions,
+        guests_detail=guests_detail,
         extra=extra,
     )
 
@@ -420,15 +449,43 @@ def parse_showstart_event(event_id: str) -> ShowEvent:
             raw = m.group(1)
             images = re.findall(r'src="([^"]+)"', raw)
             desc_text = _strip_tags(raw)[:1500]
-    # ====== 艺人 ======
+    # ====== 艺人（performers 数组含 avatar 头像 + poster 艺人海报） ======
     performers = []
-    pm = re.search(r"performers\s*:\s*\[(.*?)\]", html, re.S)
+    guests_detail = []
+    poster = ""
+    pm = re.search(r"performers\s*:\s*\[(.*?)\]\s*,\s*\w+\s*:", html, re.S)
+    if not pm:
+        pm = re.search(r"performers\s*:\s*\[(.{0,8000}?)\]", html, re.S)
     if pm:
-        performers = re.findall(r'name\s*:\s*"([^"]{1,40})"', pm.group(1))
+        from html import unescape as _unesc
+        for gm in re.finditer(
+                r'\{\s*userType:[^{}]*?name:"((?:[^"\\]|\\.){1,60})"'
+                r'[^{}]*?avatar:"((?:[^"\\]|\\.)+)"'
+                r'(?:[^{}]*?poster:"((?:[^"\\]|\\.)+)")?', pm.group(1)):
+            name = gm.group(1).replace('\\"', '"')
+            av = _unesc(gm.group(2).replace("\\u002F", "/").replace("\\/", "/"))
+            po = (_unesc(gm.group(3).replace("\\u002F", "/").replace("\\/", "/"))
+                  if gm.group(3) else "")
+            performers.append(name)
+            guests_detail.append({"名字": name, "头像": av,
+                                  "简介": "", "标签": "", "艺人海报": po})
     if not performers:
         pm = re.search(r"<p class=\"performerName\"[^>]*>(.*?)</p>", html, re.S)
         if pm:
             performers = [_strip_tags(x) for x in re.findall(r">([^<>]{2,30})<", pm.group(1))]
+    # 主海报：detail.poster（NUXT）；兜底 detail 大图
+    pom = re.search(r'detail\s*:\s*\{[^{}]{0,120}?poster\s*:\s*"((?:[^"\\]|\\.){10,300})"', html)
+    if pom:
+        poster = pom.group(1).replace("\\u002F", "/").replace("\\/", "/")
+    if not poster:
+        om = re.search(r'og:image"\s+content="([^"]+)"', html)
+        if om:
+            poster = om.group(1)
+    # 兜底：页面正文大图（showstart 图床 1080_6816 长图）
+    if not images:
+        for u in re.findall(r'(https?://s\d?\.showstart\.com/img/\d{4}/[^"\'?]+\.(?:jpg|png|webp))', html):
+            if u not in images and "logo" not in u and "beian" not in u:
+                images.append(u)
     # ====== 场馆 + 地址 ======
     venue = addr = ""
     vm = re.search(r'href="/venue/\d+"[^>]*>([^<]{2,50})', html)
@@ -485,12 +542,14 @@ def parse_showstart_event(event_id: str) -> ShowEvent:
         sale_start=sale_start,
         price_range=f"¥{uniq_tiers[0].price[1:]}" if uniq_tiers else "",
         url=f"https://www.showstart.com/event/{event_id}",
+        poster=poster,
         description_html=desc_html,
         description_text=desc_text,
         images=images,
         refund_policy=refund_policy,
         merchant=merchant,
         sessions=sessions,
+        guests_detail=guests_detail,
     )
 
 
@@ -562,6 +621,21 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
     desc_text = re.sub(r"\s+", " ", desc_text).strip()
     images = re.findall(r'src="([^"]+)"', desc_html) if desc_html else []
 
+    # ====== 嘉宾明细（guests：头像+简介，详情页"参展嘉宾"数据源） ======
+    guests_detail = []
+    for g in (data.get("guests") or []):
+        if not isinstance(g, dict) or not g.get("name"):
+            continue
+        img = g.get("guest_img") or g.get("guestImg") or g.get("avatar") or ""
+        if isinstance(img, str) and img.startswith("//"):
+            img = "https:" + img
+        guests_detail.append({
+            "名字": g.get("name") or "",
+            "头像": img,
+            "简介": str(g.get("description") or "").strip(),
+            "标签": str(g.get("tag") or g.get("guest_type") or ""),
+        })
+
     # ====== 公告 / 通知 / 免责声明 ======
     notice_items = []
     for key, label in (("notice", "购票须知"), ("bulletin", "项目公告"),
@@ -603,7 +677,12 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
 
     # ====== 座位图 / 演出图 ======
     seat_images = []
-    pi = data.get("performance_image") or {}
+    pi = data.get("performance_image")
+    if isinstance(pi, str) and pi.strip().startswith("{"):
+        try:
+            pi = json.loads(pi)   # B站此字段是 JSON 字符串而非 dict
+        except (ValueError, TypeError):
+            pi = {}
     if isinstance(pi, dict):
         for k in ("url", "image", "img"):
             v = pi.get(k)
@@ -615,7 +694,7 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
                         if isinstance(x, str):
                             seat_images.append(("https:" + x) if x.startswith("//") else x)
                 break
-    elif isinstance(pi, str):
+    elif isinstance(pi, str) and pi:
         seat_images.append(("https:" + pi) if pi.startswith("//") else pi)
     cover = data.get("cover") or ""
     if cover.startswith("//"):
@@ -625,6 +704,10 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
         banner = "https:" + banner
     if banner and banner not in images:
         images.insert(0, banner)
+    # 场馆图（place_info.base_pic）
+    venue_image = (data.get("place_info") or {}).get("base_pic") or ""
+    if isinstance(venue_image, str) and venue_image.startswith("//"):
+        venue_image = "https:" + venue_image
 
     # ====== 实名制 ======
     id_bind = data.get("id_bind") or {}
@@ -737,6 +820,8 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
         status=data.get("sale_flag") or "",
         url=f"https://show.bilibili.com/platform/detail.html?id={project_id}",
         cover=cover,
+        poster=banner,
+        venue_image=venue_image,
         want_count=want_count,
         description_html=desc_html,
         description_text=desc_text,
@@ -747,6 +832,7 @@ def parse_bilibili_project(project_id: str) -> ShowEvent:
         merchant=merchant,
         tags=tags,
         sessions=sessions,
+        guests_detail=guests_detail,
         extra=extra,
     )
 
@@ -1092,3 +1178,117 @@ def search_tickets_by_keyword(keyword: str, *,
         seen.add(key)
         unique.append(ev)
     return unique, diag
+
+
+# ==================== 图片下载 ====================
+
+def _safe_folder_name(s: str, maxlen: int = 40) -> str:
+    """演出标题 → 合法目录名（去 Windows 非法字符，截断长度）。"""
+    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "", str(s or "")).strip(" ._")
+    return s[:maxlen] or "未命名"
+
+
+def _img_ext(url: str) -> str:
+    m = re.search(r"\.(jpe?g|png|webp|gif)(?:[?~]|$)", url, re.I)
+    return "." + m.group(1).lower().replace("jpeg", "jpg") if m else ".jpg"
+
+
+_REFERER_BY_HOST = (
+    ("hdslb.com", "https://show.bilibili.com/"),
+    ("damai.cn", "https://m.damai.cn/"),
+    ("alicdn.com", "https://m.damai.cn/"),
+    ("showstart.com", "https://www.showstart.com/"),
+)
+
+
+def _download_images(urls: list, folder: Path, prefix: str, log=None) -> list:
+    """下载图片到目录（失败跳过不致命），返回本地路径列表。"""
+    if not urls:
+        return []
+    folder.mkdir(parents=True, exist_ok=True)
+    out = []
+    for i, u in enumerate(urls, 1):
+        if not u:
+            continue
+        if u.startswith("//"):
+            u = "https:" + u
+        # 秀动缩略参数（?imageMogr2/thumb）去掉拿原图
+        if "imageMogr2" in u:
+            u = u.split("?")[0]
+        referer = ""
+        for host, ref in _REFERER_BY_HOST:
+            if host in u:
+                referer = ref
+                break
+        path = folder / f"{prefix}{i:02d}{_img_ext(u)}"
+        try:
+            r = httpx.get(u, timeout=30, follow_redirects=True,
+                          headers={"User-Agent": UA,
+                                   **({"Referer": referer} if referer else {})})
+            r.raise_for_status()
+            if len(r.content) < 2000:
+                raise RuntimeError("内容过小疑似防盗链占位图")
+            path.write_bytes(r.content)
+            out.append(str(path))
+        except Exception as e:
+            if log:
+                log(f"图片下载失败 {u[-40:]}: {str(e)[:40]}")
+    return out
+
+
+def download_event_images(ev: ShowEvent, base_dir, log=None) -> ShowEvent:
+    """下载演出图片：封面 / 海报 / 宣传图 / 座位图 / 嘉宾头像 / 场馆图。
+
+    目录：base_dir/{演出标题}_{演出ID}_{获取时间}/{cover,poster,images,seat,guests,venue}/
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = f"{_safe_folder_name(ev.title)}_{ev.event_id}_{ts}"
+    base = Path(base_dir) / folder_name
+    if log:
+        log(f"下载图片到 {base} ...")
+    ev.local_cover = _download_images([ev.cover] if ev.cover else [],
+                                      base / "cover", "封面", log=log)
+    ev.local_poster = _download_images([ev.poster] if ev.poster else [],
+                                       base / "poster", "海报", log=log)
+    ev.local_images = _download_images(ev.images, base / "images",
+                                       "宣传", log=log)
+    ev.local_seat = _download_images(ev.seat_images, base / "seat",
+                                     "座位", log=log)
+    guest_urls = [g.get("头像") for g in ev.guests_detail if g.get("头像")]
+    # 嘉宾头像文件名带名字，便于对应
+    if guest_urls:
+        gdir = base / "guests"
+        gdir.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for g in ev.guests_detail:
+            u = g.get("头像") or ""
+            if not u:
+                continue
+            n += 1
+            if u.startswith("//"):
+                u = "https:" + u
+            if "imageMogr2" in u:
+                u = u.split("?")[0]
+            safe = _safe_folder_name(g.get("名字", ""), 24)
+            path = gdir / f"{n:02d}_{safe}{_img_ext(u)}"
+            try:
+                r = httpx.get(u, timeout=30, follow_redirects=True,
+                              headers={"User-Agent": UA})
+                r.raise_for_status()
+                path.write_bytes(r.content)
+                ev.local_guests.append(str(path))
+            except Exception as e:
+                if log:
+                    log(f"嘉宾头像失败 {g.get('名字','')}: {str(e)[:40]}")
+    ev.local_venue = _download_images([ev.venue_image] if ev.venue_image else [],
+                                      base / "venue", "场馆", log=log)
+    total = (len(ev.local_cover) + len(ev.local_poster) + len(ev.local_images)
+             + len(ev.local_seat) + len(ev.local_guests) + len(ev.local_venue))
+    if total:
+        ev.image_dir = str(base)
+    if log:
+        log(f"图片下载完成：共 {total} 张（封面 {len(ev.local_cover)} / "
+            f"海报 {len(ev.local_poster)} / 宣传 {len(ev.local_images)} / "
+            f"座位 {len(ev.local_seat)} / 嘉宾 {len(ev.local_guests)} / "
+            f"场馆 {len(ev.local_venue)}）")
+    return ev

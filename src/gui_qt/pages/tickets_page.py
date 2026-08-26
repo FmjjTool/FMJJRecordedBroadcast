@@ -40,7 +40,9 @@ class TicketsPage(BasePage):
         hint = QLabel("支持大麦（艺人/演出）、秀动（艺人/事件）、B站会员购（搜索/项目）链接；"
                       "也可直接输入「封茗囧菌」这类演出名/艺人名/场馆关键词，"
                       "B站+大麦+秀动三平台同时搜索（大麦走真实浏览器约需 20 秒）。"
-                      "选中演出看详情；勾选后「导出列表」为全量 JSON（未拉详情的自动逐场拉取）")
+                      "勾选演出（全选/反选/清除）后点「获取选中演出详情」逐场拉取"
+                      "并下载图片（封面/海报/宣传图/座位图/嘉宾头像/场馆图）；"
+                      "「导出列表」为全量 JSON（未拉详情的自动逐场拉取+下载图片）")
         hint.setStyleSheet("color: #888;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -57,13 +59,16 @@ class TicketsPage(BasePage):
         row.addWidget(self.parse_btn)
         self.detail_btn = QPushButton("🎫 获取选中演出详情")
         self.detail_btn.setEnabled(False)
-        self.detail_btn.setToolTip("拉取选中演出的场次、票档、购票须知（大麦详情/秀动事件/B站项目）")
+        self.detail_btn.setToolTip(
+            "勾选了演出→逐场拉取详情+下载图片（封面/海报/宣传图/座位图/嘉宾头像/"
+            "场馆图，存 download/票务演出/）；未勾选→仅当前选中行")
         self.detail_btn.clicked.connect(self._fetch_detail)
         row.addWidget(self.detail_btn)
         self.export_btn = QPushButton("💾 导出列表")
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip(
-            "导出勾选的演出为全量 JSON（场次/票档/须知）；未拉详情的自动逐场拉取")
+            "导出勾选的演出为全量 JSON（场次/票档/须知/嘉宾明细/图片本地路径）；"
+            "未拉详情的自动逐场拉取并下载图片")
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
         layout.addLayout(row)
@@ -248,38 +253,98 @@ class TicketsPage(BasePage):
         self.detail_text.setPlainText(self._format_detail(ev, None))
         self.link_btn.setEnabled(bool(ev.url))
 
+    @staticmethod
+    def _parse_one(ev):
+        """单场演出 → ShowEvent 详情对象（按平台分发）。"""
+        if ev.platform == "damai":
+            return tickets_mod.parse_damai_item(ev.event_id)
+        if ev.platform == "showstart":
+            return tickets_mod.parse_showstart_event(ev.event_id)
+        if ev.platform == "bilibili_show":
+            return tickets_mod.parse_bilibili_project(ev.event_id)
+        raise RuntimeError(f"平台 {ev.platform_cn} 暂不支持详情获取")
+
     def _fetch_detail(self):
-        rows = self.table.selectionModel().selectedRows()
+        """「获取选中演出详情」：勾选了演出→逐场拉详情+下载图片；
+        未勾选→仅当前选中行。已拉过的（缓存）自动跳过。"""
+        if not self._events:
+            return
+        checked = self._checked_rows()
+        if checked:
+            rows = sorted(set(checked))
+        else:
+            rows = [r.row() for r in self.table.selectionModel().selectedRows()]
+        rows = [r for r in rows if 0 <= r < len(self._events)]
         if not rows:
             return
-        ev = self._events[rows[0].row()]
-        key = f"{ev.platform}:{ev.event_id}"
-        if key in self._detail_cache:
-            self.detail_text.setPlainText(
-                self._format_detail(ev, self._detail_cache[key]))
+        todo = [self._events[r] for r in rows
+                if f"{self._events[r].platform}:{self._events[r].event_id}"
+                not in self._detail_cache]
+        if not todo:
+            self._show_cached_or(rows)
             return
+        total = len(todo)
         self.detail_btn.setEnabled(False)
-        self.status_label.setText("⏳ 获取演出详情...")
+        self.parse_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.status_label.setText(f"⏳ 获取 {total} 场演出详情（含图片下载）...")
 
         def work():
-            if ev.platform == "damai":
-                return tickets_mod.parse_damai_item(ev.event_id).to_dict()
-            if ev.platform == "showstart":
-                return tickets_mod.parse_showstart_event(ev.event_id).to_dict()
-            if ev.platform == "bilibili_show":
-                return tickets_mod.parse_bilibili_project(ev.event_id).to_dict()
-            raise RuntimeError(f"平台 {ev.platform_cn} 暂不支持详情获取")
+            import time
+            from toolbox.config_manager import get_export_dir
+            base = get_export_dir() / "票务演出"
+            done_items, failed = [], []
+            for n, ev in enumerate(todo, 1):
+                self._log(f"详情进度 {n}/{total}：{ev.title[:26]}")
+                if n > 1:
+                    time.sleep(1.5)   # 件间隔，降低风控概率
+                for attempt in (1, 2):
+                    try:
+                        obj = self._parse_one(ev)
+                        tickets_mod.download_event_images(obj, base, log=self._log)
+                        done_items.append(obj)
+                        break
+                    except Exception as e:
+                        if attempt == 1:
+                            self._log(f"  {ev.title[:16]} 失败，5 秒后重试...")
+                            time.sleep(5)
+                        else:
+                            failed.append((ev.title, str(e)[:60]))
+            return done_items, failed
 
         def done(result, err):
-            self.detail_btn.setEnabled(True)
-            self.status_label.setText("")
+            self.parse_btn.setEnabled(True)
+            self.export_btn.setEnabled(bool(self._events))
+            self.detail_btn.setEnabled(
+                bool(self.table.selectionModel().selectedRows()))
             if err:
+                self.status_label.setText("")
                 QMessageBox.warning(self, "详情获取失败", str(err))
                 return
-            self._detail_cache[key] = result
-            self.detail_text.setPlainText(self._format_detail(ev, result))
+            done_items, failed = result
+            for obj in done_items:
+                self._detail_cache[f"{obj.platform}:{obj.event_id}"] = obj.to_dict()
+            self._show_cached_or([r for r in rows])
+            tip = f"，{len(failed)} 场失败" if failed else ""
+            self.status_label.setText(
+                f"✅ 已获取 {len(done_items)} 场详情并下载图片{tip}"
+                f"（download/票务演出/，每场一个目录）")
 
         run_bg(work, done)
+
+    def _show_cached_or(self, rows):
+        """显示当前选中行（无选中则 rows 首行）的已缓存详情。"""
+        show = None
+        ev = None
+        sel = self.table.selectionModel().selectedRows()
+        if sel and 0 <= sel[0].row() < len(self._events):
+            ev = self._events[sel[0].row()]
+        if ev is None and rows and 0 <= rows[0] < len(self._events):
+            ev = self._events[rows[0]]
+        if ev:
+            show = self._detail_cache.get(f"{ev.platform}:{ev.event_id}")
+        if show is not None:
+            self.detail_text.setPlainText(self._format_detail(ev, show))
 
     def _format_detail(self, ev, detail: dict) -> str:
         """演出 → 可读文本（detail 为获取详情后的完整 dict）。"""
@@ -338,6 +403,22 @@ class TicketsPage(BasePage):
             lines.append("")
             lines.append(f"═══ 标签 ═══")
             lines.append(" / ".join(tags[:15]))
+        # 嘉宾明细（头像+简介）
+        guests = d.get("嘉宾明细") or []
+        if guests:
+            lines.append("")
+            lines.append(f"═══ 嘉宾（{len(guests)} 位）═══")
+            for g in guests[:30]:
+                parts = [g.get("名字") or ""]
+                if g.get("标签"):
+                    parts.append(g.get("标签"))
+                line = " / ".join(x for x in parts if x)
+                if g.get("简介"):
+                    intro = g["简介"]
+                    line += f"：{intro[:60]}{'…' if len(intro) > 60 else ''}"
+                lines.append(f"  · {line}")
+            if len(guests) > 30:
+                lines.append(f"  （还有 {len(guests) - 30} 位…）")
         # 场次明细
         sessions = d.get("场次明细") or []
         if sessions:
@@ -359,7 +440,8 @@ class TicketsPage(BasePage):
                     lines.append("  · " + " | ".join(x for x in parts if x))
         # 其余 extra 字段
         known = set(order) | {"场次明细", "演出介绍", "演出介绍HTML", "宣传图",
-                              "座位图", "购票须知", "常见问题", "标签",
+                              "座位图", "购票须知", "常见问题", "标签", "嘉宾明细",
+                              "海报", "场馆图", "本地图片目录",
                               "演出ID", "链接", "封面", "获取时间"}
         extras = []
         for k, v in d.items():
@@ -415,6 +497,8 @@ class TicketsPage(BasePage):
 
         def work():
             import time
+            from toolbox.config_manager import get_export_dir
+            base = get_export_dir() / "票务演出"
             data, failed = [], []
             for n, r in enumerate(checked, 1):
                 ev = self._events[r]
@@ -427,14 +511,12 @@ class TicketsPage(BasePage):
                 if detail is None:
                     for attempt in (1, 2):
                         try:
-                            if ev.platform == "damai":
-                                detail = tickets_mod.parse_damai_item(ev.event_id).to_dict()
-                            elif ev.platform == "showstart":
-                                detail = tickets_mod.parse_showstart_event(ev.event_id).to_dict()
-                            elif ev.platform == "bilibili_show":
-                                detail = tickets_mod.parse_bilibili_project(ev.event_id).to_dict()
-                            if detail:
-                                break
+                            obj = self._parse_one(ev)
+                            tickets_mod.download_event_images(
+                                obj, base, log=self._log)
+                            detail = obj.to_dict()
+                            self._detail_cache[key] = detail
+                            break
                         except Exception as e:
                             detail = None
                             err = str(e)[:60]
@@ -444,7 +526,6 @@ class TicketsPage(BasePage):
                             else:
                                 failed.append(f"{ev.title[:20]}：{err}")
                 if detail:
-                    self._detail_cache[key] = detail
                     d.update({k: v for k, v in detail.items()
                               if k not in ("获取时间",) and v})
                 data.append(d)
