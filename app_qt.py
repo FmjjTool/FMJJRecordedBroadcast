@@ -25,14 +25,26 @@ def _headless_io():
 
 def _minimize_console():
     """开发模式（python 直接启动、带控制台）时把 cmd 窗口自动最小化，
-    避免挡住 GUI。打包 --noconsole / pythonw 启动时无控制台句柄，自动跳过。"""
+    避免挡住 GUI。打包 --noconsole / pythonw 启动时无控制台句柄，自动跳过。
+
+    ConPTY 伪控制台（Windows Terminal / IDE 终端 / 隐藏启动的 python）必须用
+    SW_HIDE 整体隐藏：这类窗口没有任务栏按钮，SW_MINIMIZE 会把它弹成屏幕
+    左下角无法关闭的浮动小方块（PseudoConsoleWindow，只能随程序退出消失）。
+    """
     if os.name != "nt":
         return
     try:
         import ctypes
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+        if not hwnd:
+            return
+        u32 = ctypes.windll.user32
+        cls = ctypes.create_unicode_buffer(64)
+        u32.GetClassNameW(hwnd, cls, 64)
+        if cls.value == "PseudoConsoleWindow" or not u32.IsWindowVisible(hwnd):
+            u32.ShowWindow(hwnd, 0)   # SW_HIDE：伪控制台/已隐藏窗口直接隐藏
+        else:
+            u32.ShowWindow(hwnd, 6)   # SW_MINIMIZE：真实控制台最小化到任务栏
     except Exception:
         pass
 

@@ -2,14 +2,16 @@
 
 淘宝对游客收紧店铺商品列表（search.htm 强制登录跳转），策略分三级（按可用性自动降级）：
 - 游客 HTTP：PC 店铺首页（view_shop.htm）可访问 → 店铺名/sellerId/shopId
-- Cookie + 公开店铺 API：通过 mtop.taobao.shop.items 系列 API 拉商品列表（推荐）
-- Cookie + Playwright：注入 Cookie 渲染 search.htm → 兜底
+- Cookie + 公开店铺 API：mtop.taobao.wireless.shop.index.wandering.get 按 userId
+  精确拉店铺在售商品（推荐，带分页）
+- Cookie + Playwright：注入 Cookie 渲染店铺页 → 兜底
 
 数据模型 ShopInfo（店铺）+ ShopProduct（商品）。
 """
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -34,12 +36,14 @@ class ShopProduct:
     item_id: str = ""
     title: str = ""
     price: str = ""      # "¥25.00"
-    sales: str = ""      # "月销 12"
+    sales: str = ""      # "月销 12" / "1万+"
     pic: str = ""
     url: str = ""
+    coupon: str = ""          # 优惠券（如 "5" = 减5元）
+    reserve_price: str = ""   # 原价（与现价不同时有意义）
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "商品ID": self.item_id,
             "标题": self.title,
             "价格": self.price,
@@ -48,6 +52,11 @@ class ShopProduct:
             "链接": self.url,
             "获取时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        if self.reserve_price and self.reserve_price != self.price:
+            d["原价"] = self.reserve_price
+        if self.coupon:
+            d["优惠券"] = self.coupon
+        return d
 
 
 @dataclass
@@ -195,79 +204,70 @@ def _taobao_mtop(api: str, v: str, data: dict, cookie_dict: dict, tk: str) -> di
 
 
 def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
-                         log=None) -> dict:
+                         count: int = 60, log=None) -> dict:
     """登录态 mtop 拉店铺商品（HTTP，绕过 secSDK，**绕过 headless 反爬**）。
 
-    实测可用的接口优先级（先试成功率高的）：
-    1. mtop.taobao.wsearch.appsearch + params{s:seller_id}   ★ 主路径，返回 data.itemsArray
-    2. mtop.taobao.wireless.shop.getshoptabdata              ★ 移动版店铺 tab 数据（带 skuList/items）
-    3. mtop.taobao.shop.items.search / mtop.taobao.shop.pc.search  ※ 旧版接口，现已 FAIL_SYS_API_NOT_FOUNDED
+    主路径 mtop.taobao.wireless.shop.index.wandering.get（移动版店铺首页商品流）：
+    按 userId 精确返回该店铺在售商品，curPage/preItemId/hasNext 分页。
+    ⚠️ 勿再用 mtop.taobao.wsearch.appsearch：其 params.s（店铺过滤）已被淘宝
+    服务端忽略，返回的是与店铺无关的推荐流（实测拿到的是 Steam CDKEY 类目）。
 
-    返回 {"items":[...], "raw":..., "api":...} 或 {}。
+    返回 {"items":[...], "api":...} 或 {}。
     """
+    if not seller_id:
+        return {}
+    try:
+        sid = int(seller_id)
+    except (TypeError, ValueError):
+        return {}
     tk, ck = _taobao_get_token(cookie)
-    # 多套接口尝试（任一命中即返回）
-    endpoints = []
-    if seller_id:
-        # 主路径：店铺内商品检索（空 q 即全店，等价于按店铺内全部商品获取）
-        endpoints.append((
-            "mtop.taobao.wsearch.appsearch", "1.0",
-            {"params": json.dumps({"s": str(seller_id), "pageSize": 40,
-                                   "pageNum": 1, "sort": "_sale"},
-                                  separators=(",", ":"))}))
-    if shop_id and seller_id:
-        # 备路径：移动版店铺 tab 数据（含在售商品 + 店铺分组）
-        endpoints.append((
-            "mtop.taobao.wireless.shop.getshoptabdata", "1.0",
-            {"shopId": str(shop_id), "sellerId": str(seller_id)}))
-    if shop_id:
-        # 备路径：PC 店铺搜索
-        endpoints.append((
-            "mtop.taobao.shop.pc.search", "1.0",
-            {"shopId": str(shop_id), "pageSize": 20, "pageNum": 1}))
-    if seller_id:
-        # 备路径：店铺 items 搜索
-        endpoints.append((
-            "mtop.taobao.shop.items.search", "1.0",
-            {"sellerId": str(seller_id), "shopId": str(shop_id),
-             "pageSize": 20, "pageNum": 1}))
-
-    for api, v, data in endpoints:
+    api = "mtop.taobao.wireless.shop.index.wandering.get"
+    raw: list = []
+    cur_page = 1
+    pre_item_id = 0
+    # 每页 20 件，最多翻 10 页（防死循环）；hasNext 控制提前终止
+    while len(raw) < count and cur_page <= 10:
+        data = {"direction": 1, "userId": sid, "pageSize": 20,
+                "needPreNew": True, "id": 0, "curPage": cur_page,
+                "preItemId": pre_item_id}
+        if log:
+            log(f"mtop wandering 第 {cur_page} 页 ...")
         try:
-            if log:
-                log(f"mtop: {api}")
-            resp = _taobao_mtop(api, v, data, ck, tk)
-            if not resp:
-                continue
-            ret = str(resp.get("ret") or "")
-            if "SUCCESS" not in ret and "::OK" not in ret:
-                if log:
-                    log(f"  ↳ {ret[:60]}")
-                continue
-            data_resp = resp.get("data") or {}
-            # 多路径扫描（移动版 itemsArray / PC 版 items / tab 数据 / result.items）
-            items = (data_resp.get("itemsArray") or
-                     data_resp.get("items") or
-                     (data_resp.get("result") or {}).get("items") or
-                     data_resp.get("itemList") or [])
-            # getshoptabdata 是另一种结构（{tabs:[{sections:[{items:[...]}]}]}）
-            if not items and api.endswith("getshoptabdata"):
-                tabs = data_resp.get("tabs") or []
-                for tab in tabs:
-                    for sec in (tab.get("sections") or []):
-                        if sec.get("items"):
-                            items = sec["items"]
-                            break
-                    if items:
-                        break
-            if items:
-                if log:
-                    log(f"  ⮕ 命中 {len(items)} 件（API={api}）")
-                return {"items": items, "raw": resp, "api": api}
+            resp = _taobao_mtop(api, "1.0", data, ck, tk)
         except Exception as e:
             if log:
-                log(f"  异常: {e}")
-            continue
+                log(f"  mtop 异常: {str(e)[:60]}")
+            break
+        ret = str(resp.get("ret") or "")
+        if "SUCCESS" not in ret:
+            if log:
+                if "RGV587" in ret:
+                    log("  mtop 触发滑块风控（RGV587），转 Playwright 通道")
+                else:
+                    log(f"  mtop 失败: {ret[:60]}")
+            break
+        d = resp.get("data") or {}
+        blocks = d.get("result") or []
+        page_items = [b.get("blockContent") for b in blocks
+                      if isinstance(b, dict) and b.get("blockType") == "item"
+                      and isinstance(b.get("blockContent"), dict)]
+        if not page_items:
+            break
+        raw.extend(page_items)
+        if log:
+            log(f"  +{len(page_items)} 件（累计 {len(raw)}）")
+        last_iid = str(page_items[-1].get("itemId") or "0")
+        try:
+            pre_item_id = int(float(last_iid))
+        except (TypeError, ValueError):
+            break
+        if str(d.get("hasNext", "")).lower() != "true":
+            break
+        cur_page += 1
+        if len(raw) < count:
+            time.sleep(1.2)   # 翻页间隔，降低风控概率
+    if raw:
+        return {"items": raw[:count], "api": api}
     return {}
 
 
@@ -289,6 +289,8 @@ def _harvest_mtop_product(obj, items: dict, depth: int = 0):
                              ("sold", "sales"), ("soldQuantity", "sales"),
                              ("monthSold", "sales"), ("month_sold", "sales"),
                              ("realSales", "sales"),
+                             ("vagueTotalSoldQuantity", "sales"),
+                             ("couponValue", "coupon"),
                              ("pic", "pic"), ("picUrl", "pic"), ("img", "pic"),
                              ("mainPic", "pic"), ("itemPic", "pic"),
                              ("pic_path", "pic"), ("imageUrl", "pic")):
@@ -350,15 +352,12 @@ def _playwright_fetch_products(shop_info: ShopInfo, cookie: str,
     m = re.search(r"https?://([\w.-]+)\.taobao\.com", shop_info.url or "")
     domain = m.group(0) if m else (shop_info.url or "")
     shop_id = shop_info.shop_id or ""
-    seller_id = shop_info.seller_id or ""
 
     # ★ 移动版优先：mobile 版淘宝对 headless 反爬更松，且 shop_index.htm 不强制登录跳转
     # ★ mtop 拦截的 PC 搜索页即使拿到 API 响应，也常因 secSDK 风控被强制登录
     candidates = [
         (f"https://shop.m.taobao.com/shop/shop_index.htm?shop_id={shop_id}", UA_M,
          "M+shop_index"),
-        (f"https://h5api.m.taobao.com/awp/core/detail.htm?id={seller_id}", UA_M,
-         "M+h5_detail"),
         (f"{domain}/search.htm?orderType=hotsell", UA_PC, "PC+hotsell"),
         (f"{domain}/search.htm", UA_PC, "PC+search"),
         (f"{domain}/search.htm?orderType=newinsell", UA_PC, "PC+newinsell"),
@@ -582,6 +581,7 @@ def _playwright_one(url: str, ua: str, cookie: str, count: int, log) -> tuple:
             sales=_fmt_sales(d.get("sales")),
             pic=d.get("pic") or "",
             url=f"https://item.taobao.com/item.htm?id={iid}",
+            coupon=str(d.get("coupon") or "").strip(),
         ))
     products.sort(key=lambda x: x.item_id)
     return products[:max(1, count)], ""
@@ -655,9 +655,14 @@ def _fmt_price(v) -> str:
 
 
 def _fmt_sales(v) -> str:
+    """销量显示：保留 "1万+"/"100+人付款" 原样（淘宝模糊销量），纯数字转 "月销 N"。"""
     if v in (None, ""):
         return ""
     s = str(v).strip()
+    if "万" in s or s.endswith("+"):
+        return f"已售 {s}" if not s.startswith(("月销", "已售")) else s
+    if "+" in s:   # "100+人付款" 之类完整短语，原样保留
+        return s
     m = re.search(r"(\d+)", s)
     if not m:
         return ""
@@ -675,10 +680,10 @@ def fetch_taobao_shop_products(shop_info: ShopInfo, cookie: str, count: int = 60
     if not cookie:
         raise RuntimeError("淘宝商品列表需要登录：请在 Cookie 管理中添加淘宝 Cookie")
 
-    # 一级：mtop API
+    # 一级：mtop API（wandering.get 按 userId 精确拉店铺商品）
     try:
         result = _try_mtop_shop_items(
-            shop_info.shop_id, shop_info.seller_id, cookie, log=log)
+            shop_info.shop_id, shop_info.seller_id, cookie, count=count, log=log)
         if result.get("items"):
             return _products_from_mtop_items(result["items"])
     except Exception as e:
@@ -708,20 +713,25 @@ def _products_from_mtop_items(items: list) -> list:
     """mtop API 返回的商品列表 → [ShopProduct]。
 
     支持多种字段模式（按淘宝接口演进的实际格式）：
+    - wandering.get（当前主路径）：blockContent 平铺——itemId/title/itemPic/price/
+      reservePrice/vagueTotalSoldQuantity("1万+")/couponValue
     - 经典 PC：price="¥25.00" 字符串、pic/picUrl、itemId
-    - wsearch.appsearch（当前主路径）：price=数字、imageInfo=dict{imgUrl}、nidlong
     - getshoptabdata：priceShowWithIcon、extraParams
     """
     products = []
     for it in items:
         if not isinstance(it, dict):
             continue
-        # 商品 ID（多个名字兼容）
-        iid = (it.get("itemId") or it.get("nid") or it.get("auctionId") or
-               it.get("nidlong") or "")
-        if not iid:
+        # 商品 ID（多个名字兼容；浮点值去掉 ".0" 尾巴——wsearch 的 nidlong 是 float）
+        iid = (it.get("itemId") or it.get("itemIdStr") or it.get("nid") or
+               it.get("auctionId") or it.get("nidlong") or "")
+        if isinstance(iid, float):
+            iid = int(iid)
+        iid = str(iid).strip()
+        if iid.endswith(".0"):
+            iid = iid[:-2]
+        if not iid or not iid.isdigit():
             continue
-        iid = str(iid)
         # 标题（多个字段）
         title = (it.get("title") or it.get("itemTitle") or
                  it.get("shortTitle") or
@@ -732,7 +742,7 @@ def _products_from_mtop_items(items: list) -> list:
             if isinstance(ep, dict):
                 title = (ep.get("title") or ep.get("itemTitle") or "").strip()
 
-        # 价格（wsearch.appsearch: price="198.00" 元单位字符串；
+        # 价格（wandering/wsearch: price="198.00" 元单位字符串；
         # priceShow / priceShowWithIcon 是 dict{price}）
         raw_price = (it.get("price") or it.get("reservePrice") or
                      it.get("priceShow") or it.get("priceShowWithIcon") or 0)
@@ -746,11 +756,31 @@ def _products_from_mtop_items(items: list) -> list:
         except (ValueError, TypeError):
             price = _fmt_price(raw_price)
 
-        # 销量（wsearch.appsearch: realSales="100+人付款" 直接采用）
+        # 原价（wandering: reservePrice，与现价不同才有展示价值）
+        reserve = ""
+        rp = it.get("reservePrice")
+        if rp is not None:
+            if isinstance(rp, dict):
+                rp = rp.get("price") or ""
+            rp_s = re.sub(r"[^\d.]", "", str(rp))
+            try:
+                rp_f = float(rp_s) if rp_s else 0
+                if rp_f > 0 and f"¥{rp_f:g}" != price:
+                    reserve = f"¥{rp_f:g}"
+            except (ValueError, TypeError):
+                pass
+
+        # 优惠券（wandering: couponValue，数值字符串=减免金额）
+        coupon = str(it.get("couponValue") or "").strip()
+
+        # 销量（wandering: vagueTotalSoldQuantity "1万+"；wsearch: realSales
+        # "100+人付款"——两者都是模糊销量，直接采用）
         sales = ""
-        rs = it.get("realSales")
-        if isinstance(rs, str) and rs.strip():
-            sales = rs.strip()
+        for k in ("realSales", "vagueTotalSoldQuantity"):
+            v = it.get(k)
+            if isinstance(v, str) and v.strip():
+                sales = v.strip()
+                break
         if not sales:
             sales_raw = (it.get("sold") or it.get("soldQuantity") or
                          it.get("monthSold") or it.get("sale_count") or 0)
@@ -762,7 +792,7 @@ def _products_from_mtop_items(items: list) -> list:
         # 图片（wsearch.appsearch: imageInfo=[{imageUrl}] 是 **list**；
         # pic_path 带 "_60x60.jpg" 缩略后缀，去掉升级原图）
         pic = (it.get("pic") or it.get("picUrl") or it.get("img") or
-               it.get("mainPic") or "")
+               it.get("itemPic") or it.get("mainPic") or "")
         if isinstance(pic, dict):
             pic = pic.get("imgUrl") or pic.get("url") or ""
         if not pic:
@@ -783,7 +813,8 @@ def _products_from_mtop_items(items: list) -> list:
         products.append(ShopProduct(
             item_id=iid, title=re.sub(r"<[^>]+>", "", title)[:120],
             price=price, sales=sales, pic=pic,
-            url=f"https://item.taobao.com/item.htm?id={iid}"))
+            url=f"https://item.taobao.com/item.htm?id={iid}",
+            coupon=coupon, reserve_price=reserve))
     return products
 
 

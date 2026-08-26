@@ -1,13 +1,14 @@
 """购物页（PySide6 版）：淘宝店铺商品解析。
 
-- 输入淘宝店铺链接 → 店铺信息（游客可获取）+ 商品列表（需淘宝 Cookie + Playwright）
-- 商品表格：标题 / 价格 / 销量 / 商品ID，双击打开商品页
+- 输入淘宝店铺链接 → 店铺信息（游客可获取）+ 商品列表（需淘宝 Cookie）
+- 商品表格：标题 / 价格 / 销量 / 优惠券 / 商品ID，单击行预览商品图，双击打开商品页
 - 导出 JSON / 打开淘宝 Cookie 管理
 """
 
 import json
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
@@ -25,6 +26,7 @@ class ShoppingPage(BasePage):
         super().__init__(app)
         self._products = []       # 当前商品列表（ShopProduct）
         self._shop = None         # 最近一次店铺信息
+        self._preview_seq = 0     # 图片预览请求序号（防止旧图覆盖新图）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -34,7 +36,7 @@ class ShoppingPage(BasePage):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
         hint = QLabel("支持淘宝店铺链接；店铺信息游客可获取，商品列表需要淘宝 Cookie"
-                      "（Cookie 管理中登录淘宝后自动获取）")
+                      "（Cookie 管理中登录淘宝后自动获取）。单击行预览商品图，双击打开商品页")
         hint.setStyleSheet("color: #888;")
         layout.addWidget(hint)
 
@@ -55,17 +57,20 @@ class ShoppingPage(BasePage):
 
         # 左：商品表格 / 右：店铺信息 + 图片预览
         splitter = QSplitter(Qt.Horizontal)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["商品标题", "价格", "销量", "商品ID", "链接"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["商品标题", "价格", "销量", "优惠券", "商品ID", "链接"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.setColumnWidth(1, 80)
-        self.table.setColumnWidth(2, 80)
-        self.table.setColumnWidth(3, 130)
-        self.table.setColumnWidth(4, 60)
+        self.table.setColumnWidth(1, 70)
+        self.table.setColumnWidth(2, 90)
+        self.table.setColumnWidth(3, 70)
+        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(5, 60)
         self.table.verticalHeader().setVisible(False)
+        self.table.cellClicked.connect(self._preview_item)
         self.table.cellDoubleClicked.connect(self._open_item)
         splitter.addWidget(self.table)
 
@@ -77,9 +82,9 @@ class ShoppingPage(BasePage):
         self.shop_text = QTextEdit()
         self.shop_text.setReadOnly(True)
         self.shop_text.setPlaceholderText("解析店铺后显示店铺信息")
-        self.shop_text.setFixedHeight(160)
+        self.shop_text.setFixedHeight(140)
         rv.addWidget(self.shop_text)
-        self.pic_label = QLabel("双击表格行打开商品页")
+        self.pic_label = QLabel("单击表格行预览商品图\n双击打开商品页")
         self.pic_label.setAlignment(Qt.AlignCenter)
         self.pic_label.setMinimumHeight(200)
         self.pic_label.setStyleSheet("color: #888;")
@@ -163,10 +168,51 @@ class ShoppingPage(BasePage):
             self.table.setItem(row, 0, QTableWidgetItem(pr.title or "-"))
             self.table.setItem(row, 1, QTableWidgetItem(pr.price or ""))
             self.table.setItem(row, 2, QTableWidgetItem(pr.sales or ""))
-            self.table.setItem(row, 3, QTableWidgetItem(pr.item_id))
-            self.table.setItem(row, 4, QTableWidgetItem("打开"))
+            coupon = f"-¥{pr.coupon}" if pr.coupon else ""
+            self.table.setItem(row, 3, QTableWidgetItem(coupon))
+            self.table.setItem(row, 4, QTableWidgetItem(pr.item_id))
+            self.table.setItem(row, 5, QTableWidgetItem("打开"))
 
     # ==================== 交互 ====================
+
+    def _preview_item(self, row, _col):
+        """单击行 → 右侧预览商品主图（后台下载，旧请求作废）。"""
+        if not (0 <= row < len(self._products)):
+            return
+        pr = self._products[row]
+        if not pr.pic:
+            self.pic_label.setPixmap(QPixmap())
+            self.pic_label.setText("该商品无图片")
+            return
+        self._preview_seq += 1
+        seq = self._preview_seq
+        self.pic_label.setPixmap(QPixmap())
+        self.pic_label.setText("图片加载中...")
+
+        def work():
+            import httpx
+            r = httpx.get(pr.pic, timeout=15,
+                          headers={"User-Agent": "Mozilla/5.0",
+                                   "Referer": "https://www.taobao.com/"})
+            r.raise_for_status()
+            return r.content
+
+        def done(data, err):
+            if seq != self._preview_seq:
+                return  # 已切到别的行，丢弃旧图
+            if err or not data:
+                self.pic_label.setText("图片加载失败")
+                return
+            pm = QPixmap()
+            if not pm.loadFromData(data):
+                self.pic_label.setText("图片解析失败")
+                return
+            self.pic_label.setText("")
+            scaled = pm.scaled(self.pic_label.size(), Qt.KeepAspectRatio,
+                               Qt.SmoothTransformation)
+            self.pic_label.setPixmap(scaled)
+
+        run_bg(work, done)
 
     def _open_item(self, row, _col):
         if 0 <= row < len(self._products):
