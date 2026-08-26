@@ -295,37 +295,50 @@ def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
         return {}
     tk, ck = _taobao_get_token(cookie)
     api = "mtop.taobao.wireless.shop.index.wandering.get"
-    raw: list = []
-    cur_page = 1
-    pre_item_id = 0
-    # 每页 20 件，最多翻 10 页（防死循环）；hasNext 控制提前终止
-    while len(raw) < count and cur_page <= 10:
+
+    def _one_page(cur_page, pre_item_id):
+        """单页请求，返回 (page_items, hasNext, ok)；风控/空页 ok=False。"""
         data = {"direction": 1, "userId": sid, "pageSize": 20,
                 "needPreNew": True, "id": 0, "curPage": cur_page,
                 "preItemId": pre_item_id}
-        if log:
-            log(f"mtop wandering 第 {cur_page} 页 ...")
-        try:
-            resp = _taobao_mtop(api, "1.0", data, ck, tk)
-        except Exception as e:
-            if log:
-                log(f"  mtop 异常: {str(e)[:60]}")
-            break
+        resp = _taobao_mtop(api, "1.0", data, ck, tk)
         ret = str(resp.get("ret") or "")
         if "SUCCESS" not in ret:
             if log:
-                if "RGV587" in ret:
-                    log("  mtop 触发滑块风控（RGV587），转 Playwright 通道")
-                else:
-                    log(f"  mtop 失败: {ret[:60]}")
-            break
+                log(f"  wandering 第{cur_page}页 ret={ret[:50]}")
+            return [], "", False
         d = resp.get("data") or {}
         blocks = d.get("result") or []
         page_items = [b.get("blockContent") for b in blocks
                       if isinstance(b, dict) and b.get("blockType") == "item"
                       and isinstance(b.get("blockContent"), dict)]
-        if not page_items:
-            break
+        return page_items, str(d.get("hasNext", "")).lower(), True
+
+    raw: list = []
+    cur_page = 1
+    pre_item_id = 0
+    page_fail = 0
+    # 每页 20 件，最多翻 10 页；连续请求会触发风控（RECOMMEND_EMPTY/RGV587
+    # 假响应——实测连拉 3 次后返回 0 件），失败等待后原地重试，最多 2 次
+    while len(raw) < count and cur_page <= 10:
+        if log:
+            log(f"mtop wandering 第 {cur_page} 页 ...")
+        try:
+            page_items, has_next, ok = _one_page(cur_page, pre_item_id)
+        except Exception as e:
+            if log:
+                log(f"  mtop 异常: {str(e)[:60]}")
+            page_items, has_next, ok = [], "", False
+        if not ok or not page_items:
+            if raw:
+                break        # 已有数据，翻页失败就停（够用）
+            page_fail += 1   # 首页空——可能被风控，等待重试
+            if page_fail > 2:
+                break
+            if log:
+                log(f"  首页为空/失败，等待 6 秒重试（{page_fail}/2）...")
+            time.sleep(6)
+            continue
         raw.extend(page_items)
         if log:
             log(f"  +{len(page_items)} 件（累计 {len(raw)}）")
@@ -334,11 +347,41 @@ def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
             pre_item_id = int(float(last_iid))
         except (TypeError, ValueError):
             break
-        if str(d.get("hasNext", "")).lower() != "true":
+        if has_next != "true":
             break
         cur_page += 1
         if len(raw) < count:
-            time.sleep(1.2)   # 翻页间隔，降低风控概率
+            time.sleep(1.5)   # 翻页间隔，降低风控概率
+
+    # 推荐流数量有波动（同一店铺 13↔11 件），首页拿不满时再拉一轮合并去重
+    if raw and len(raw) < 20:
+        if log:
+            log(f"  首页仅 {len(raw)} 件（<20），3 秒后补拉一轮合并去重 ...")
+        time.sleep(3)
+        try:
+            extra, _, ok2 = _one_page(1, 0)
+        except Exception:
+            extra, ok2 = [], False
+        if ok2 and extra:
+            seen = set()
+            for it in raw:
+                try:
+                    seen.add(str(int(float(str(it.get("itemId"))))))
+                except (TypeError, ValueError):
+                    pass
+            added = 0
+            for it in extra:
+                try:
+                    iid = str(int(float(str(it.get("itemId")))))
+                except (TypeError, ValueError):
+                    continue
+                if iid not in seen:
+                    raw.append(it)
+                    seen.add(iid)
+                    added += 1
+            if log and added:
+                log(f"  补拉合并 +{added} 件（共 {len(raw)}）")
+
     if raw:
         return {"items": raw[:count], "api": api}
     return {}

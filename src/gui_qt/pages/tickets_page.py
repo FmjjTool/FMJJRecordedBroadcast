@@ -414,24 +414,35 @@ class TicketsPage(BasePage):
         self.detail_btn.setEnabled(False)
 
         def work():
+            import time
             data, failed = [], []
             for n, r in enumerate(checked, 1):
                 ev = self._events[r]
                 self._log(f"导出进度 {n}/{total}：{ev.title[:26]}")
+                if n > 1:
+                    time.sleep(1.5)   # 件间隔，降低风控概率
                 d = ev.to_dict()
                 key = f"{ev.platform}:{ev.event_id}"
                 detail = self._detail_cache.get(key)
                 if detail is None:
-                    try:
-                        if ev.platform == "damai":
-                            detail = tickets_mod.parse_damai_item(ev.event_id).to_dict()
-                        elif ev.platform == "showstart":
-                            detail = tickets_mod.parse_showstart_event(ev.event_id).to_dict()
-                        elif ev.platform == "bilibili_show":
-                            detail = tickets_mod.parse_bilibili_project(ev.event_id).to_dict()
-                    except Exception as e:
-                        failed.append(f"{ev.title[:20]}：{str(e)[:60]}")
-                        detail = None
+                    for attempt in (1, 2):
+                        try:
+                            if ev.platform == "damai":
+                                detail = tickets_mod.parse_damai_item(ev.event_id).to_dict()
+                            elif ev.platform == "showstart":
+                                detail = tickets_mod.parse_showstart_event(ev.event_id).to_dict()
+                            elif ev.platform == "bilibili_show":
+                                detail = tickets_mod.parse_bilibili_project(ev.event_id).to_dict()
+                            if detail:
+                                break
+                        except Exception as e:
+                            detail = None
+                            err = str(e)[:60]
+                            if attempt == 1:
+                                self._log(f"  {ev.title[:16]} 失败，5 秒后重试...")
+                                time.sleep(5)
+                            else:
+                                failed.append(f"{ev.title[:20]}：{err}")
                 if detail:
                     self._detail_cache[key] = detail
                     d.update({k: v for k, v in detail.items()

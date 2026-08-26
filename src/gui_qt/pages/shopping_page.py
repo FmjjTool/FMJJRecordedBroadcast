@@ -615,6 +615,7 @@ class ShoppingPage(BasePage):
         self.detail_btn.setEnabled(False)
 
         def work():
+            import time
             import auth
             from toolbox.config_manager import get_export_dir
             cookie = auth.get_cookie("taobao") or ""
@@ -623,15 +624,25 @@ class ShoppingPage(BasePage):
             for n, r in enumerate(checked, 1):
                 pr = self._products[r]
                 self._log(f"导出进度 {n}/{total}：{pr.title[:26]}")
+                if n > 1:
+                    time.sleep(3)   # 件间隔：连续请求会触发淘宝风控
                 d = self._detail_cache.get(pr.item_id)
                 if d is None:
-                    try:
-                        d = shopping_mod.fetch_taobao_item_detail(
-                            pr.item_id, cookie, log=self._log)
-                        shopping_mod.download_item_images(d, base, log=self._log)
-                    except Exception as e:
-                        failed.append(f"{pr.title[:20]}：{str(e)[:60]}")
-                        d = None
+                    # 单件失败（风控抖动）等待 10 秒原地重试一次
+                    for attempt in (1, 2):
+                        try:
+                            d = shopping_mod.fetch_taobao_item_detail(
+                                pr.item_id, cookie, log=self._log)
+                            shopping_mod.download_item_images(d, base, log=self._log)
+                            break
+                        except Exception as e:
+                            d = None
+                            err = str(e)[:60]
+                            if attempt == 1:
+                                self._log(f"  {pr.title[:16]} 失败，10 秒后重试...")
+                                time.sleep(10)
+                            else:
+                                failed.append((pr.title, err))
                 if d is not None:
                     self._detail_cache[pr.item_id] = d
                 items.append((pr, d))
@@ -654,7 +665,7 @@ class ShoppingPage(BasePage):
                 else:
                     row = pr.to_dict()
                     row["详情获取失败"] = next(
-                        (f[1] for f in failed if f[0] in pr.title), "")
+                        (e for t, e in failed if t == pr.title), "")
                     products_json.append(row)
             data = {
                 "店铺": self._shop.to_dict() if self._shop else {},
@@ -662,7 +673,7 @@ class ShoppingPage(BasePage):
                 "商品": products_json,
             }
             if failed:
-                data["导出告警"] = failed
+                data["导出告警"] = [f"{t[:20]}：{e}" for t, e in failed]
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
