@@ -32,7 +32,8 @@ NUM_METRICS = [
     ("内容数", "video_count", "weibo_count"),
 ]
 
-PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博"}
+PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
+                  "kuaishou": "快手", "xiaohongshu": "小红书"}
 
 _FONT_CANDIDATES = [
     "C:/Windows/Fonts/msyh.ttc",

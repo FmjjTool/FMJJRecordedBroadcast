@@ -46,6 +46,8 @@ from gui_qt.pages.bili_garb import BiliGarbPage
 from gui_qt.pages.bili_info import BiliInfoPage
 from gui_qt.pages.file_time import FileTimePage
 from gui_qt.pages.rename_batch import RenameBatchPage
+from gui_qt.pages.tickets_page import TicketsPage
+from gui_qt.pages.shopping_page import ShoppingPage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> 页面类
@@ -76,6 +78,8 @@ PAGE_CLASSES = {
     "bili_info": BiliInfoPage,
     "file_time": FileTimePage,
     "rename_batch": RenameBatchPage,
+    "tickets": TicketsPage,
+    "shopping": ShoppingPage,
     "global_settings": GlobalSettingsPage,
 }
 
@@ -85,6 +89,10 @@ NAV_GROUPS = [
         ("info_batch", "📋 批量导入"),
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
+    ]),
+    ("🎫 票务购物", [
+        ("tickets", "🎫 票务解析"),
+        ("shopping", "🛒 购物解析"),
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),

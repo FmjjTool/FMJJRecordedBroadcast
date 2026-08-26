@@ -42,14 +42,69 @@ def probe(platform: str) -> dict:
     fn = {
         "bilibili": _bili, "douyin": _douyin, "weibo": _weibo,
         "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
-        "kuwo": _kuwo, "kugou": _kugou,
+        "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
+        "taobao": _taobao,
     }.get(platform)
     if fn is None:
-        return {"ok": None, "username": ""}  # 5sing / 小红书 暂不支持
+        return {"ok": None, "username": ""}  # 5sing 暂不支持
     try:
         return fn(cookie)
     except Exception:
         return {"ok": None, "username": ""}
+
+
+def _taobao(cookie: str) -> dict:
+    # 淘宝无游客可用的身份接口（mtop 需签名+登录），从 cookie 的 unb 展示用户 ID
+    unb = _cookie_field(cookie, "unb")
+    if unb:
+        return {"ok": None, "username": f"淘宝ID {unb}"}
+    return {"ok": None, "username": ""}
+
+
+def _xiaohongshu(cookie: str) -> dict:
+    import requests
+
+    r = requests.get("https://www.xiaohongshu.com/",
+                     headers=_headers(cookie), timeout=12)
+    import re
+    import json
+    m = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>",
+                  r.text, re.S)
+    if not m:
+        return {"ok": None, "username": ""}
+    try:
+        d = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(1)).replace("undefined", "null"))
+    except Exception:
+        return {"ok": None, "username": ""}
+    user = d.get("user") or {}
+
+    def _find_nick(obj, depth=0):
+        if depth > 4:
+            return ""
+        if isinstance(obj, dict):
+            for k in ("nickname", "nickName", "nick_name"):
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            for v in obj.values():
+                r = _find_nick(v, depth + 1)
+                if r:
+                    return r
+        elif isinstance(obj, list):
+            for v in obj:
+                r = _find_nick(v, depth + 1)
+                if r:
+                    return r
+        return ""
+
+    nick = _find_nick(user)
+    logged_in = bool(user.get("loggedIn") is True or user.get("loginInfo")
+                     or (user.get("userInfo") and nick))
+    if logged_in and nick:
+        return {"ok": True, "username": nick}
+    if nick:
+        return {"ok": True, "username": nick}
+    return {"ok": None, "username": ""}
 
 
 def _bili(cookie: str) -> dict:

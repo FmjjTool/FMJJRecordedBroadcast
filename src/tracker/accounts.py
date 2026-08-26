@@ -29,7 +29,8 @@ ACCOUNTS_FILE = _data_dir() / "accounts.json"
 GROUPS_FILE = _data_dir() / "groups.json"
 DATA_DIR = BASE_DIR / "data"
 
-PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博"}
+PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
+                  "kuaishou": "快手", "xiaohongshu": "小红书"}
 
 # 组号规范（与「账号获取」一致）：必须为重复数字，如 11、22、33 ... 99
 GROUP_ID_PATTERN = re.compile(r"^(\d)\1$")
@@ -159,6 +160,14 @@ def parse_url(url):
     m = re.search(r'douyin\.com/user/([\w\-_]+)', url)
     if m:
         return "douyin", m.group(1)
+    # 快手：kuaishou.com/profile/3x2ranvzkq6g6wy
+    m = re.search(r'kuaishou\.com/profile/([a-zA-Z0-9]+)', url)
+    if m:
+        return "kuaishou", m.group(1)
+    # 小红书：xiaohongshu.com/user/profile/60ec2add...
+    m = re.search(r'xiaohongshu\.com/user/profile/([a-f0-9]+)', url)
+    if m:
+        return "xiaohongshu", m.group(1)
     return None, None
 
 
@@ -172,11 +181,14 @@ def collect_account(account):
     if not platform or not pid:
         return {"platform": "unknown", "error": "无法识别链接平台/ID"}
 
-    from .collectors import collect_bilibili, collect_weibo, collect_douyin
+    from .collectors import (collect_bilibili, collect_weibo, collect_douyin,
+                             collect_kuaishou, collect_xiaohongshu)
     fn = {
         "bilibili": collect_bilibili,
         "weibo": collect_weibo,
         "douyin": collect_douyin,
+        "kuaishou": collect_kuaishou,
+        "xiaohongshu": collect_xiaohongshu,
     }.get(platform)
     if not fn:
         return {"platform": "unknown", "error": f"未知平台 {platform}"}

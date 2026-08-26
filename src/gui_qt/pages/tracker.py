@@ -32,7 +32,8 @@ METRICS = [
     ("等级", ["level"]),
 ]
 
-PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博"}
+PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
+                  "kuaishou": "快手", "xiaohongshu": "小红书"}
 _NUM_FIELDS = {"fans", "following", "likes", "video_count", "weibo_count", "level"}
 
 
@@ -107,7 +108,7 @@ class TrackerPage(BasePage):
         fetch_all_btn.clicked.connect(lambda: self._collect_all())
         head.addWidget(fetch_all_btn)
         self.batch_platform = QComboBox()
-        self.batch_platform.addItems(["全部平台", "B站", "抖音", "微博"])
+        self.batch_platform.addItems(["全部平台", "B站", "抖音", "微博", "快手", "小红书"])
         self.batch_platform.setFixedWidth(92)
         head.addWidget(self.batch_platform)
         # 批量采集进度条
@@ -157,7 +158,7 @@ class TrackerPage(BasePage):
         r1.addWidget(self.add_name, 1)
         r1.addWidget(QLabel("平台:"))
         self.add_platform = QComboBox()
-        self.add_platform.addItems(["自动识别", "抖音", "B站", "微博"])
+        self.add_platform.addItems(["自动识别", "抖音", "B站", "微博", "快手", "小红书"])
         self.add_platform.setFixedWidth(100)
         r1.addWidget(self.add_platform)
         av.addLayout(r1)
@@ -583,7 +584,8 @@ class TrackerPage(BasePage):
             if not silent:
                 self.app.toast("正在采集中，请稍候", "info")
             return
-        plat_map = {"B站": "bilibili", "抖音": "douyin", "微博": "weibo"}
+        plat_map = {"B站": "bilibili", "抖音": "douyin", "微博": "weibo",
+                    "快手": "kuaishou", "小红书": "xiaohongshu"}
         target_plat = plat_map.get(self.batch_platform.currentText(), "")
         accounts = [
             c["account"] for c in self.cards
@@ -718,7 +720,8 @@ class TrackerPage(BasePage):
             QMessageBox.warning(self, "提示", "请输入账号链接")
             return
         from tracker.accounts import parse_url, load_accounts, save_accounts
-        plat_map = {"自动识别": "", "抖音": "douyin", "B站": "bilibili", "微博": "weibo"}
+        plat_map = {"自动识别": "", "抖音": "douyin", "B站": "bilibili", "微博": "weibo",
+                    "快手": "kuaishou", "小红书": "xiaohongshu"}
         platform = plat_map.get(self.add_platform.currentText(), "")
         if not platform:
             platform, _ = parse_url(url)

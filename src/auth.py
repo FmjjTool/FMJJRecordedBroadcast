@@ -83,6 +83,7 @@ COOKIE_TTL_DAYS = {
     "5sing": 0,
     "xiaohongshu": 0,
     "kuaishou": 0,
+    "taobao": 0,
 }
 
 # 平台 key -> 中文名（用于 UI 展示）
@@ -97,6 +98,7 @@ PLATFORM_NAMES = {
     "5sing": "5sing",
     "xiaohongshu": "小红书",
     "kuaishou": "快手",
+    "taobao": "淘宝",
 }
 
 

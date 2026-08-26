@@ -28,7 +28,11 @@ PLATFORMS_3 = [
     ("douyin", "📕 抖音"),
     ("bilibili", "📺 B站"),
     ("weibo", "📝 微博"),
+    ("other", "📦 其他"),
 ]
+
+# 「其他」栏收纳的平台（快手/小红书/好看/微视等）；未列出的平台也归入 other
+_KNOWN_COLS = {key for key, _ in PLATFORMS_3}
 
 _PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
                 "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
@@ -214,13 +218,13 @@ class InfoResultsPage(BasePage):
     # ==================== 渲染 ====================
 
     def refresh(self):
-        # 按平台分到三栏，默认按发布日期倒序（最新在前）
+        # 按平台分到四栏（快手/小红书等归入「其他」），默认按发布日期倒序（最新在前）
         grouped = {key: [] for key, _ in PLATFORMS_3}
         for info in common.COLLECTED:
             plat = info.platform or "other"
-            if plat in grouped:
-                grouped[plat].append(info)
-            # 抖音/b站/微博以外的平台不展示
+            if plat not in _KNOWN_COLS:
+                plat = "other"
+            grouped[plat].append(info)
         for key, _name in PLATFORMS_3:
             grouped[key].sort(key=_parse_pub, reverse=True)
             self._render_column(key, grouped[key])
@@ -239,7 +243,13 @@ class InfoResultsPage(BasePage):
         for i, info in enumerate(songs, 1):
             title = (info.title or "-")[:30]
             author = info.author or "-"
-            kind_tag = "动态" if getattr(info, "kind", "") == "dynamic" else "视频"
+            if getattr(info, "kind", "") == "dynamic":
+                kind_tag = "动态"
+            elif getattr(info, "kind", "") == "image" or (
+                    getattr(info, "images", None) and not info.video_url):
+                kind_tag = "图文"
+            else:
+                kind_tag = "视频"
             _dt, date_str = _parse_pub(info)
             text = (f"[{i}] {date_str} [{kind_tag}] {title}  @{author}  "
                     f"播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}")

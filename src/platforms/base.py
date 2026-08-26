@@ -46,9 +46,10 @@ class VideoInfo:
     def to_dict(self) -> dict:
         """转为字典（用于导出），字段名中文化，raw_data 完整透传"""
         view_label = "阅览量" if self.platform == "weibo" else "播放量"
+        kind_label = {"dynamic": "动态", "image": "图文"}.get(self.kind, "视频")
         d = {
             "平台": self.platform,
-            "类型": "动态" if self.kind == "dynamic" else "视频",
+            "类型": kind_label,
             "视频ID": self.video_id,
             "标题": self.title,
             "正文": self.description,
@@ -140,6 +141,15 @@ class URLRecognizer:
             r"weibo\.cn/.+",
             r"m\.weibo\.cn/.+",
             r"video\.weibo\.com/.+",
+        ],
+        "kuaishou": [
+            r"kuaishou\.com/f/([a-zA-Z0-9_-]+)",
+            r"kuaishou\.com/short-video/([a-zA-Z0-9]+)",
+            r"kuaishou\.com/profile/([a-zA-Z0-9]+)",
+        ],
+        "xiaohongshu": [
+            r"xiaohongshu\.com/(?:discovery/item|explore)/([a-f0-9]+)",
+            r"xiaohongshu\.com/user/profile/([a-f0-9]+)",
         ],
     }
 

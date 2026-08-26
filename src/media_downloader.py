@@ -404,6 +404,14 @@ def download_media(
                 h = dict(headers)
                 h["Referer"] = "https://www.bilibili.com/"
                 hdrs = h
+            elif "xiaohongshu" in url or "xhscdn" in url or "sns-img" in url:
+                h = dict(headers)
+                h["Referer"] = "https://www.xiaohongshu.com/"
+                hdrs = h
+            elif "kuaishou" in url or "yximgs" in url or "gifshow" in url:
+                h = dict(headers)
+                h["Referer"] = "https://www.kuaishou.com/"
+                hdrs = h
             else:
                 hdrs = dict(headers)
             # 已下载自动跳过（原图）：本地文件与原图大小一致 → 不发下载请求

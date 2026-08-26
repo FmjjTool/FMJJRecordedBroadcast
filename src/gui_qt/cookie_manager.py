@@ -23,7 +23,7 @@ from gui_qt.common import post_to_main
 
 # (key, 中文名, 支持扫码, 支持浏览器登录)
 # 扫码：网易云/B站 原生接口，QQ音乐 走微信扫码换 musickey；
-# 酷狗/酷我/5sing/小红书/快手 无公开扫码 API，登录页内扫码由「浏览器」入口承载
+# 酷狗/酷我/5sing/小红书/快手/淘宝 无公开扫码 API，登录页内扫码由「浏览器」入口承载
 COOKIE_PLATFORMS = [
     ("bilibili", "B站", True, True),
     ("douyin", "抖音", False, True),
@@ -35,6 +35,7 @@ COOKIE_PLATFORMS = [
     ("5sing", "5sing", False, True),
     ("xiaohongshu", "小红书", False, True),
     ("kuaishou", "快手", False, True),
+    ("taobao", "淘宝", False, True),
 ]
 
 # 每平台常驻的登录 profile（app 生命周期内复用）
@@ -461,6 +462,9 @@ class CookieManagerDialog(QDialog):
                             ("web_session",), "点击「登录」→ 扫码或短信验证"),
             "kuaishou": ("https://www.kuaishou.com/", "快手登录（软件内）",
                          ("passToken",), "点击「登录」→ 扫码或手机号登录"),
+            "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
+                       ("cookie2", "unb", "sg"),
+                       "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
         }
         if plat not in configs:
             QMessageBox.information(self, "提示", f"{plat} 暂不支持浏览器登录，请使用「输入」")
