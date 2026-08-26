@@ -1,4 +1,4 @@
-"""购物平台解析：淘宝店铺。
+"""购物平台解析：淘宝店铺 + 商品详情。
 
 淘宝对游客收紧店铺商品列表（search.htm 强制登录跳转），策略分三级（按可用性自动降级）：
 - 游客 HTTP：PC 店铺首页（view_shop.htm）可访问 → 店铺名/sellerId/shopId
@@ -6,7 +6,14 @@
   精确拉店铺在售商品（推荐，带分页）
 - Cookie + Playwright：注入 Cookie 渲染店铺页 → 兜底
 
-数据模型 ShopInfo（店铺）+ ShopProduct（商品）。
+商品详情（必须 Cookie——游客 item.htm 只有壳页、getdesc 被 RGV587 风控）：
+- Cookie HTTP 请求 item.htm → SSR 内嵌 window.__ICE_APP_CONTEXT__（标题/主图/
+  SKU 组合价/物流/店铺评分/参数表）
+- mtop.taobao.detail.getdesc 6.0 → itemProperties（参数信息）+ pcDescContent
+  （图文详情长图列表）
+- Playwright 兜底（HTTP 通道被风控时同页提 SSR）
+
+数据模型 ShopInfo（店铺）+ ShopProduct（商品）+ TaobaoItemDetail（商品详情）。
 """
 
 import json
@@ -72,15 +79,72 @@ class ShopInfo:
         return {k: v for k, v in d.items() if v}
 
 
+@dataclass
+class ItemSku:
+    """单个 SKU 组合（选购参数的一档）。"""
+    sku_id: str = ""
+    names: str = ""        # 选项名（多规格用 / 连接），如 "3巡海报全款16张（含9亲签）"
+    price: str = ""        # "¥288"
+    quantity: str = ""     # 库存数量文本
+
+
+@dataclass
+class TaobaoItemDetail:
+    """淘宝商品详情：主图 / 选购参数(SKU) / 参数信息 / 图文详情。"""
+    item_id: str = ""
+    title: str = ""
+    price: str = ""              # "¥75 起"
+    sales: str = ""              # "已售 64"
+    shop_name: str = ""
+    seller_id: str = ""
+    shop_id: str = ""
+    main_images: list = field(default_factory=list)   # 主图 URL
+    skus: list = field(default_factory=list)          # [ItemSku]
+    sku_props: list = field(default_factory=list)     # [{name, values:[{name,image}]}]
+    params: list = field(default_factory=list)        # [(名称, 值)]
+    desc_images: list = field(default_factory=list)   # 图文详情长图 URL
+    desc_text: list = field(default_factory=list)     # 详情内文字（通常为空，内容都在长图里）
+    delivery: str = ""           # "预售，15天内发货 | 快递: 10.00 | 江苏南京"
+    shop_scores: str = ""        # "宝贝描述5.0 高 / 卖家服务5.0 高 / 物流服务5.0 高"
+    url: str = ""
+    fetched_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    # 图片下载结果：分类 → 本地路径列表
+    local_main: list = field(default_factory=list)
+    local_sku: list = field(default_factory=list)
+    local_desc: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d = {
+            "商品ID": self.item_id, "标题": self.title, "价格": self.price,
+            "销量": self.sales, "店铺": self.shop_name,
+            "主图": self.main_images,
+            "选购参数": [{"选项": s.names, "价格": s.price, "库存": s.quantity}
+                       for s in self.skus],
+            "参数信息": [{"名称": n, "值": v} for n, v in self.params],
+            "图文详情": self.desc_images,
+            "链接": self.url, "获取时间": self.fetched_at,
+        }
+        if self.delivery:
+            d["物流"] = self.delivery
+        if self.shop_scores:
+            d["店铺评分"] = self.shop_scores
+        return d
+
+
 # ==================== URL 路由 ====================
 
 def detect_shopping_platform(url: str):
     """识别购物链接 → (kind, key)。
+    taobao_item: item.taobao.com/item.htm?id=xxx（商品详情）
     taobao_shop: {domain}.taobao.com/shop/view_shop.htm 或 shop{id}.taobao.com
     """
     url = (url or "").strip()
     if not url:
         return None, None
+    if re.search(r"(?:item\.taobao\.com|detail\.tmall\.com)/item\.htm", url):
+        m = re.search(r"[?&]id=(\d+)", url)
+        if m:
+            return "taobao_item", m.group(1)
     m = re.search(r"https?://([\w-]+)\.taobao\.com/shop/view_shop\.htm", url)
     if m:
         return "taobao_shop", m.group(1)   # 店铺个性化域名
@@ -833,3 +897,437 @@ def parse_shopping_url(url: str, cookie: str = "", count: int = 60, log=None):
         return info, []
     products = fetch_taobao_shop_products(info, cookie, count=count, log=log)
     return info, products
+
+
+# ==================== 商品详情（主图 / 选购参数 / 参数信息 / 图文详情） ====================
+
+def _extract_ice_ssr(html: str) -> dict:
+    """从 item.htm HTML 提取 window.__ICE_APP_CONTEXT__ 的 SSR JSON。
+
+    赋值形式（tbpc-pc-detail-ssr-2025）：
+      <script>!(function () {var a = window.__ICE_APP_CONTEXT__ || {};var b = {...};
+              for (var k in a) {b[k] = a[k]}window.__ICE_APP_CONTEXT__=b;})();</script>
+    用「var b = 」起点做平衡大括号扫描。
+    """
+    m = re.search(r'var b = (\{)', html)
+    if not m:
+        return {}
+    start = m.start(1)
+    depth = 0
+    in_str = None
+    esc = False
+    for i in range(start, min(len(html), start + 500000)):
+        ch = html[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == in_str:
+                in_str = None
+            continue
+        if ch in "\"'":
+            in_str = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(html[start:i + 1])
+                except Exception:
+                    return {}
+    return {}
+
+
+def _ssr_res(data: dict) -> dict:
+    """SSR JSON → res 数据节点。"""
+    try:
+        return (data.get("loaderData", {}).get("home", {})
+                .get("data", {}).get("res", {})) or {}
+    except Exception:
+        return {}
+
+
+def _detail_from_ssr(item_id: str, res: dict) -> TaobaoItemDetail:
+    """SSR res 节点 → TaobaoItemDetail（不含图文详情，详情走 getdesc）。"""
+    d = TaobaoItemDetail(item_id=str(item_id),
+                         url=f"https://item.taobao.com/item.htm?id={item_id}")
+    item = res.get("item") or {}
+    seller = res.get("seller") or {}
+    comp = res.get("componentsVO") or {}
+    d.title = str(item.get("title") or "").strip()
+    d.main_images = [u for u in (item.get("images") or []) if isinstance(u, str)]
+    cnt = item.get("vagueSellCount")
+    d.sales = _fmt_sales(cnt) if str(cnt).strip() else ""
+    d.shop_name = str(seller.get("shopName") or "").strip()
+    d.seller_id = str(seller.get("sellerId") or "").strip()
+    d.shop_id = str(seller.get("shopId") or "").strip()
+    d.url = f"https://item.taobao.com/item.htm?id={d.item_id}"
+
+    # 价格（priceVO.price.priceText，priceDesc="起" 时追加）
+    pv = ((comp.get("priceVO") or {}).get("price") or {})
+    pt = str(pv.get("priceText") or "").strip()
+    if pt:
+        d.price = f"¥{pt}"
+        if str(pv.get("priceDesc") or "").strip():
+            d.price += f" {str(pv['priceDesc']).strip()}"
+
+    # 物流
+    dv = comp.get("deliveryVO") or {}
+    parts = []
+    if dv.get("agingDesc"):
+        parts.append(str(dv["agingDesc"]))
+    if dv.get("freight"):
+        parts.append(str(dv["freight"]))
+    if dv.get("deliveryFromAddr"):
+        parts.append(f"发货地 {dv['deliveryFromAddr']}")
+    d.delivery = " | ".join(parts)
+
+    # 店铺评分
+    ev = seller.get("evaluates") or []
+    if ev:
+        d.shop_scores = " / ".join(
+            f"{e.get('title')}{str(e.get('score')).strip()}{e.get('levelText', '')}"
+            for e in ev if isinstance(e, dict))
+
+    # SKU（选购参数）：props 定义 + skus 组合 + sku2info 价格
+    sb = res.get("skuBase") or {}
+    sc = res.get("skuCore") or {}
+    s2i = sc.get("sku2info") or {}
+    props = sb.get("props") or []
+    d.sku_props = []
+    vid_name = {}          # vid → value 名（跨 props 查找）
+    for p in props:
+        if not isinstance(p, dict):
+            continue
+        vals = []
+        for v in (p.get("values") or []):
+            if not isinstance(v, dict):
+                continue
+            img = str(v.get("image") or "")
+            if img.startswith("//"):
+                img = "https:" + img
+            vals.append({"name": str(v.get("name") or ""), "image": img})
+            vid_name[str(v.get("vid") or "")] = str(v.get("name") or "")
+        if vals:
+            d.sku_props.append({"name": str(p.get("name") or "规格"), "values": vals})
+
+    default_price = ""
+    info0 = s2i.get("0") or {}
+    if isinstance(info0, dict):
+        default_price = str((info0.get("price") or {}).get("priceText") or "").strip()
+    for s in (sb.get("skus") or []):
+        if not isinstance(s, dict):
+            continue
+        sku_id = str(s.get("skuId") or "")
+        prop_path = str(s.get("propPath") or "")
+        names = []
+        for pair in prop_path.split(";"):
+            vid = pair.split(":")[-1] if ":" in pair else ""
+            if vid and vid != "-1" and vid in vid_name:
+                names.append(vid_name[vid])
+        info = s2i.get(sku_id) or {}
+        price = str((info.get("price") or {}).get("priceText") or "").strip() if isinstance(info, dict) else ""
+        if not price:
+            price = default_price
+        qty = str(info.get("quantity") or "").strip() if isinstance(info, dict) else ""
+        d.skus.append(ItemSku(
+            sku_id=sku_id,
+            names=" / ".join(names) if names else "默认",
+            price=f"¥{price}" if price else "",
+            quantity=qty))
+    # 无 SKU 组合（单规格商品）：用 skuItem 默认价展示一行
+    if not d.skus:
+        si = ((sc.get("skuItem") or {}).get("infoVO") or {})
+        price = str((si.get("price") or {}).get("priceText") or "") if isinstance(si, dict) else ""
+        if not price:
+            price = default_price
+        d.skus.append(ItemSku(sku_id="0", names="默认",
+                              price=f"¥{price}" if price else ""))
+
+    # 参数信息（SSR 的 industryParamVO：重点参数 + 基本参数）
+    ip = ((res.get("plusViewVO") or {}).get("industryParamVO") or {})
+    for key in ("enhanceParamList", "basicParamList"):
+        for p in (ip.get(key) or []):
+            if isinstance(p, dict) and p.get("propertyName"):
+                d.params.append((str(p["propertyName"]),
+                                 str(p.get("valueName") or "")))
+    return d
+
+
+def _try_getdesc(item_id: str, cookie: str, log=None) -> dict:
+    """mtop.taobao.detail.getdesc 6.0 → 参数信息 + 图文详情长图（需 Cookie）。
+
+    返回 {"params": [(名称, 值)], "desc_images": [URL], "desc_text": [str]} 或 {}。
+    """
+    tk, ck = _taobao_get_token(cookie)
+    try:
+        resp = _taobao_mtop("mtop.taobao.detail.getdesc", "6.0",
+                            {"id": str(item_id), "type": "1"}, ck, tk)
+    except Exception as e:
+        if log:
+            log(f"getdesc 异常: {str(e)[:60]}")
+        return {}
+    ret = str(resp.get("ret") or "")
+    if "SUCCESS" not in ret:
+        if log:
+            log(f"getdesc 失败: {ret[:60]}")
+        return {}
+    data = resp.get("data") or {}
+    out = {"params": [], "desc_images": [], "desc_text": []}
+    for p in (data.get("itemProperties") or []):
+        if isinstance(p, dict) and p.get("name"):
+            out["params"].append((str(p["name"]), str(p.get("value") or "")))
+    pc = str(data.get("pcDescContent") or "")
+    if pc:
+        for u in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', pc):
+            u = u.strip()
+            if u.startswith("//"):
+                u = "https:" + u
+            if u:
+                out["desc_images"].append(u)
+        for t in re.findall(r'>([^<>]{4,})<', pc):
+            t = re.sub(r"\s+", " ", t).strip()
+            if t and t not in out["desc_text"]:
+                out["desc_text"].append(t)
+    return out
+
+
+def _playwright_item_ssr(item_id: str, cookie: str, log=None) -> dict:
+    """Playwright 兜底：打开 PC item 页提取 SSR JSON（httpx 通道被风控时）。"""
+    if not HAS_PLAYWRIGHT:
+        return {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=[
+            "--disable-blink-features=AutomationControlled", "--no-sandbox"])
+        try:
+            ctx = browser.new_context(user_agent=UA_PC,
+                                      viewport={"width": 1280, "height": 900},
+                                      locale="zh-CN", timezone_id="Asia/Shanghai")
+            ctx.add_init_script(
+                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});")
+            cookies = _cookie_pairs(cookie)
+            if cookies:
+                ctx.add_cookies(cookies)
+            page = ctx.new_page()
+            page.goto(f"https://item.taobao.com/item.htm?id={item_id}",
+                      wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(6000)
+            html = page.content()
+            ctx.close()
+        finally:
+            browser.close()
+    return _extract_ice_ssr(html)
+
+
+def fetch_taobao_item_detail(item_id: str, cookie: str, log=None) -> TaobaoItemDetail:
+    """商品详情三级通道：Cookie HTTP SSR → Playwright SSR → getdesc 补详情。
+
+    淘宝详情页强制登录态（游客 item.htm 只有壳页、getdesc 游客被 RGV587 风控），
+    本功能属于「必须用 Cookie 的接口」。
+    """
+    item_id = str(item_id).strip()
+    if not item_id.isdigit():
+        raise ValueError(f"无效的淘宝商品ID：{item_id}")
+    if not cookie:
+        raise RuntimeError("淘宝商品详情需要登录：请在 Cookie 管理中添加淘宝 Cookie")
+
+    # 一级：带 Cookie 的 httpx 请求 item.htm → SSR
+    res = {}
+    try:
+        if log:
+            log("请求商品页 SSR ...")
+        r = httpx.get(f"https://item.taobao.com/item.htm?id={item_id}",
+                      headers={"User-Agent": UA_PC,
+                               "Accept-Language": "zh-CN,zh;q=0.9",
+                               "Cookie": cookie},
+                      timeout=25, follow_redirects=True)
+        res = _ssr_res(_extract_ice_ssr(r.text))
+    except Exception as e:
+        if log:
+            log(f"SSR 请求失败: {str(e)[:60]}")
+
+    # 二级：Playwright 兜底
+    if not res:
+        if log:
+            log("HTTP 通道未拿到数据，转 Playwright ...")
+        try:
+            res = _ssr_res(_playwright_item_ssr(item_id, cookie, log=log))
+        except Exception as e:
+            if log:
+                log(f"Playwright 失败: {str(e)[:60]}")
+    if not res:
+        raise RuntimeError(
+            "商品页数据获取失败：Cookie 可能失效（请重新登录淘宝），或触发风控稍后再试")
+
+    detail = _detail_from_ssr(item_id, res)
+    if not detail.title:
+        raise RuntimeError("商品已下架或页面结构变化（SSR 无标题）")
+
+    # 三级：getdesc 补参数信息 + 图文详情
+    if log:
+        log("请求图文详情（getdesc）...")
+    gd = _try_getdesc(item_id, cookie, log=log)
+    if gd:
+        # 参数合并去重（getdesc 优先）
+        merged = list(gd.get("params") or [])
+        seen = {n for n, _ in merged}
+        for n, v in detail.params:
+            if n not in seen:
+                merged.append((n, v))
+        detail.params = merged
+        detail.desc_images = gd.get("desc_images") or []
+        detail.desc_text = gd.get("desc_text") or []
+    if log:
+        log(f"主图 {len(detail.main_images)} 张 | SKU {len(detail.skus)} 档 | "
+            f"参数 {len(detail.params)} 项 | 详情图 {len(detail.desc_images)} 张")
+    return detail
+
+
+def _img_ext(url: str) -> str:
+    m = re.search(r"\.(jpe?g|png|webp|gif)(?:[?~]|$)", url, re.I)
+    return "." + m.group(1).lower().replace("jpeg", "jpg") if m else ".jpg"
+
+
+def _download_images(urls: list, folder: Path, prefix: str, log=None) -> list:
+    """下载图片到目录（失败跳过不致命），返回本地路径列表。"""
+    if not urls:
+        return []
+    folder.mkdir(parents=True, exist_ok=True)
+    out = []
+    for i, u in enumerate(urls, 1):
+        if not u:
+            continue
+        if u.startswith("//"):
+            u = "https:" + u
+        path = folder / f"{prefix}{i:02d}{_img_ext(u)}"
+        try:
+            r = httpx.get(u, timeout=30,
+                          headers={"User-Agent": UA_PC,
+                                   "Referer": "https://item.taobao.com/"})
+            r.raise_for_status()
+            path.write_bytes(r.content)
+            out.append(str(path))
+        except Exception as e:
+            if log:
+                log(f"图片下载失败 {u[-40:]}: {str(e)[:40]}")
+    return out
+
+
+def download_item_images(detail: TaobaoItemDetail, base_dir, log=None) -> TaobaoItemDetail:
+    """下载主图 / SKU 图 / 图文详情长图到 base_dir/<商品ID>/{main,sku,desc}/。"""
+    base = Path(base_dir) / detail.item_id
+    if log:
+        log(f"下载图片到 {base} ...")
+    detail.local_main = _download_images(detail.main_images, base / "main",
+                                         "主图", log=log)
+    sku_urls = []
+    for grp in detail.sku_props:
+        for v in grp.get("values") or []:
+            if v.get("image"):
+                sku_urls.append(v["image"])
+    detail.local_sku = _download_images(sku_urls, base / "sku", "规格", log=log)
+    detail.local_desc = _download_images(detail.desc_images, base / "desc",
+                                         "详情", log=log)
+    if log:
+        log(f"图片下载完成：主图 {len(detail.local_main)} / 规格 "
+            f"{len(detail.local_sku)} / 详情 {len(detail.local_desc)}")
+    return detail
+
+
+def export_item_xlsx(detail: TaobaoItemDetail, path: str) -> str:
+    """单商品导出 xlsx：商品信息 / 参数信息 / 选购参数 / 主图 / 图文详情 五个 sheet。
+
+    本地已下载的图片直接插入表格（openpyxl + Pillow）。
+    """
+    from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    head_fill = PatternFill("solid", fgColor="FFF1E6")
+    head_font = Font(bold=True)
+
+    def _sheet(ws, title, headers, rows):
+        ws.title = title
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(1, c, h)
+            cell.fill = head_fill
+            cell.font = head_font
+        for r, row in enumerate(rows, 2):
+            for c, v in enumerate(row, 1):
+                ws.cell(r, c, v)
+        for c in range(1, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(c)].width = 46 if c == 1 else 30
+        ws.freeze_panes = "A2"
+
+    # 1) 商品信息
+    info_rows = [
+        ("标题", detail.title), ("价格", detail.price), ("销量", detail.sales),
+        ("店铺", detail.shop_name), ("卖家ID", detail.seller_id),
+        ("店铺ID", detail.shop_id), ("商品ID", detail.item_id),
+        ("链接", detail.url), ("物流", detail.delivery),
+        ("店铺评分", detail.shop_scores),
+        ("主图数量", len(detail.local_main) or len(detail.main_images)),
+        ("规格图数量", len(detail.local_sku)),
+        ("图文详情图数量", len(detail.local_desc) or len(detail.desc_images)),
+        ("获取时间", detail.fetched_at),
+    ]
+    _sheet(wb.active, "商品信息", ["项目", "内容"],
+           [(k, v) for k, v in info_rows if v])
+
+    # 2) 参数信息
+    _sheet(wb.create_sheet(), "参数信息", ["参数", "值"],
+           [(n, v) for n, v in detail.params])
+
+    # 3) 选购参数（SKU）
+    sku_rows = [(s.names, s.price, s.quantity) for s in detail.skus]
+    _sheet(wb.create_sheet(), "选购参数", ["选项", "价格", "库存"],
+           sku_rows or [("（单规格商品）", detail.price, "")])
+
+    # 图片 sheet：逐行插图，缩放到统一宽 380px
+    def _img_sheet(title: str, local_paths: list, urls: list):
+        ws = wb.create_sheet(title)
+        ws.column_dimensions["A"].width = 56
+        ws.column_dimensions["B"].width = 46
+        ws.cell(1, 1, "图片").fill = head_fill
+        ws.cell(1, 1).font = head_font
+        ws.cell(1, 2, "说明").fill = head_fill
+        ws.cell(1, 2).font = head_font
+        ws.freeze_panes = "A2"
+        row = 2
+        for i, p in enumerate(local_paths, 1):
+            try:
+                from PIL import Image as PILImage
+                with PILImage.open(p) as im:
+                    w0, h0 = im.size
+                img = XLImage(p)
+                img.width = 380
+                img.height = int(h0 * 380 / max(w0, 1))
+                ws.add_image(img, f"A{row}")
+                ws.cell(row, 2, f"{i}/{len(local_paths)}")
+                # 行高（磅）= 像素高 × 0.75，多留 8 磅边距
+                ws.row_dimensions[row].height = img.height * 0.75 + 8
+            except Exception:
+                ws.cell(row, 2, f"图片插入失败：{Path(p).name}")
+            row += 1
+        if not local_paths:
+            for i, u in enumerate(urls, 1):
+                ws.cell(i + 1, 2, u)
+            ws.cell(1, 2, "（图片未下载，仅列 URL）")
+
+    _img_sheet("主图", detail.local_main, detail.main_images)
+    _img_sheet("图文详情", detail.local_desc, detail.desc_images)
+
+    wb.save(path)
+    return path
+
+
+def parse_taobao_item_url(url: str, cookie: str, log=None) -> TaobaoItemDetail:
+    """商品链接 → TaobaoItemDetail（入口，页面直接调用）。"""
+    kind, key = detect_shopping_platform(url)
+    if kind != "taobao_item" or not key:
+        raise ValueError("请输入淘宝商品链接（item.taobao.com/item.htm?id=xxx）")
+    return fetch_taobao_item_detail(key, cookie, log=log)
