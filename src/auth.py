@@ -344,7 +344,11 @@ def browser_login(platform: str, blocking: bool = True) -> Optional[str]:
         console.print("[dim]浏览器窗口打开 → 请扫码登录 → 将自动检测并保存 Cookie（最长等待 3 分钟）[/dim]")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        # exe 打包只带 headless shell，可见窗口登录用系统 Edge（Windows 自带）
+        try:
+            browser = p.chromium.launch(headless=False, channel="msedge")
+        except Exception:
+            browser = p.chromium.launch(headless=False)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800},

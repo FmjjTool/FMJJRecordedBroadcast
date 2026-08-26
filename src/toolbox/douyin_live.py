@@ -1389,7 +1389,11 @@ class DouyinLiveFetcher:
                     browser.close()
                     self._emit(self.on_status, "captcha", "检测到抖音风控，请在弹出的浏览器窗口手动完成验证码...")
                     # 切换有头浏览器，弹出验证窗口，等待用户手动过验证码
-                    browser = p.chromium.launch(headless=False)
+                    # exe 打包只带 headless shell，可见窗口用系统 Edge（Windows 自带）
+                    try:
+                        browser = p.chromium.launch(headless=False, channel="msedge")
+                    except Exception:
+                        browser = p.chromium.launch(headless=False)
                     ctx = browser.new_context(**ctx_kwargs)
                     _inject_cookie(ctx)
                     page = ctx.new_page()
