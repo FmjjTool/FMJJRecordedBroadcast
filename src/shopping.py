@@ -1301,6 +1301,17 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None) -> Taobao
     return detail
 
 
+def default_item_xlsx_path(detail: TaobaoItemDetail, base_dir) -> Path:
+    """xlsx 默认路径：与商品图片同目录同名（{标题}_{ID}_{时间戳}.xlsx）；
+    无图片目录（下载全失败）时落到 base_dir/{标题}_{ID}.xlsx。"""
+    if detail.image_dir:
+        base = Path(detail.image_dir)
+        if base.is_dir():
+            return base / f"{base.name}.xlsx"
+    stem = f"{_safe_folder_name(detail.title)}_{detail.item_id}"
+    return Path(base_dir) / f"{stem}.xlsx"
+
+
 def export_item_xlsx(detail: TaobaoItemDetail, path: str) -> str:
     """单商品导出 xlsx：商品信息 / 参数信息 / 选购参数 / 主图 / 图文详情 五个 sheet。
 

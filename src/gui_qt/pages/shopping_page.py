@@ -11,7 +11,7 @@
 """
 
 import json
-import re
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -51,8 +51,8 @@ class ShoppingPage(BasePage):
         layout.addWidget(title)
         hint = QLabel("支持淘宝店铺链接（店铺信息游客可获取，商品列表需淘宝 Cookie）"
                       "和商品链接 item.taobao.com/item.htm?id=xxx（详情需淘宝 Cookie）。"
-                      "选中行看简介，点「获取选中商品详情」拉主图/选购参数/参数信息/图文详情；"
-                      "勾选商品（全选/反选/清除）后「导出商品 JSON」为全量数据（逐件拉详情+下载图片）")
+                      "勾选商品（全选/反选/清除）后点「获取选中商品详情」逐件拉取并连带导出 Excel；"
+                      "「导出商品 JSON」输出全量数据。Excel 默认存在商品图片同目录，不弹窗选位置")
         hint.setStyleSheet("color: #888;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -70,7 +70,8 @@ class ShoppingPage(BasePage):
         self.detail_btn = QPushButton("🛍 获取选中商品详情")
         self.detail_btn.setEnabled(False)
         self.detail_btn.setToolTip(
-            "拉取选中商品的主图、选购参数(SKU 价格)、参数信息、图文详情长图；图片自动下载")
+            "勾选了商品→逐件拉取主图/选购参数/参数信息/图文详情（图片自动下载、"
+            "Excel 连带导出到商品目录）；未勾选→只拉当前选中行")
         self.detail_btn.clicked.connect(self._fetch_detail)
         row.addWidget(self.detail_btn)
         self.export_btn = QPushButton("💾 导出商品 JSON")
@@ -141,7 +142,7 @@ class ShoppingPage(BasePage):
         self.export_xlsx_btn = QPushButton("📊 导出单商品 Excel")
         self.export_xlsx_btn.setEnabled(False)
         self.export_xlsx_btn.setToolTip(
-            "导出右侧商品的 xlsx（商品信息/参数信息/选购参数/主图/图文详情，图片已插入）")
+            "导出右侧商品的 xlsx（图片已插入），默认存在商品图片同目录，不弹窗")
         self.export_xlsx_btn.clicked.connect(self._export_xlsx)
         btn_row.addWidget(self.export_xlsx_btn)
         self.link_btn = QPushButton("🌐 打开商品页面")
@@ -225,6 +226,8 @@ class ShoppingPage(BasePage):
             detail = shopping_mod.parse_taobao_item_url(url, cookie, log=self._log)
             base = get_export_dir() / "淘宝商品"
             shopping_mod.download_item_images(detail, base, log=self._log)
+            shopping_mod.export_item_xlsx(
+                detail, shopping_mod.default_item_xlsx_path(detail, base))
             return detail
 
         def done(detail, err):
@@ -243,7 +246,7 @@ class ShoppingPage(BasePage):
                     f" / 规格 {len(detail.local_sku)}"
                     f" / 详情 {len(detail.local_desc) or len(detail.desc_images)}")
             self.status_label.setText(
-                f"✅ {detail.title[:40]}｜图片已下载（{imgs}），可导出单商品 Excel")
+                f"✅ {detail.title[:40]}｜图片已下载（{imgs}），Excel 已连带导出到商品目录")
             self.export_btn.setEnabled(False)
 
         run_bg(work, done)
@@ -390,44 +393,94 @@ class ShoppingPage(BasePage):
         self._preview_url(pr.pic)
 
     def _fetch_detail(self):
-        """「获取选中商品详情」：对选中商品拉完整详情并下载图片。"""
+        """「获取选中商品详情」：勾选了商品→逐件拉详情+下载图片+连带导出 xlsx；
+        未勾选→只拉当前选中行。已拉过的（缓存）自动跳过。"""
         if self._detail is not None:
             return
-        rows = self.table.selectionModel().selectedRows()
+        if not self._is_shop_mode():
+            return
+        checked = self._checked_rows()
+        if checked:
+            rows = sorted(set(checked))
+        else:
+            rows = [r.row() for r in self.table.selectionModel().selectedRows()]
+        rows = [r for r in rows if 0 <= r < len(self._products)]
         if not rows:
             return
-        pr = self._products[rows[0].row()]
-        if pr.item_id in self._detail_cache:
-            self._show_detail(self._detail_cache[pr.item_id])
+        todo = [(r, self._products[r]) for r in rows
+                if self._products[r].item_id not in self._detail_cache]
+        if not todo:
+            self._show_cached_or(rows)
             return
+        total = len(todo)
         self.detail_btn.setEnabled(False)
-        self.status_label.setText(f"⏳ 获取商品详情（{pr.title[:24]}）...")
+        self.parse_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.status_label.setText(f"⏳ 获取 {total} 件商品详情（件间隔 3 秒防风控）...")
 
         def work():
+            import time
             import auth
             from toolbox.config_manager import get_export_dir
             cookie = auth.get_cookie("taobao") or ""
-            detail = shopping_mod.fetch_taobao_item_detail(
-                pr.item_id, cookie, log=self._log)
             base = get_export_dir() / "淘宝商品"
-            shopping_mod.download_item_images(detail, base, log=self._log)
-            return detail
+            done_items, failed = [], []
+            for n, (r, pr) in enumerate(todo, 1):
+                self._log(f"详情进度 {n}/{total}：{pr.title[:26]}")
+                if n > 1:
+                    time.sleep(3)   # 件间隔：连续请求会触发淘宝风控
+                for attempt in (1, 2):
+                    try:
+                        d = shopping_mod.fetch_taobao_item_detail(
+                            pr.item_id, cookie, log=self._log)
+                        shopping_mod.download_item_images(d, base, log=self._log)
+                        xlsx = shopping_mod.default_item_xlsx_path(d, base)
+                        shopping_mod.export_item_xlsx(d, xlsx)
+                        self._log(f"  Excel 已导出：{Path(xlsx).name}")
+                        done_items.append(d)
+                        break
+                    except Exception as e:
+                        if attempt == 1:
+                            self._log(f"  {pr.title[:16]} 失败，10 秒后重试...")
+                            time.sleep(10)
+                        else:
+                            failed.append((pr.title, str(e)[:60]))
+            return done_items, failed
 
-        def done(detail, err):
-            self.detail_btn.setEnabled(True)
-            self.status_label.setText("")
+        def done(result, err):
+            self.parse_btn.setEnabled(True)
+            self.export_btn.setEnabled(bool(self._products))
+            self.detail_btn.setEnabled(
+                bool(self.table.selectionModel().selectedRows()))
             if err:
+                self.status_label.setText("")
                 QMessageBox.warning(self, "详情获取失败", str(err))
                 return
-            self._detail_cache[detail.item_id] = detail
-            self._show_detail(detail)
-            imgs = (f"主图 {len(detail.local_main) or len(detail.main_images)}"
-                    f" / 规格 {len(detail.local_sku)}"
-                    f" / 详情 {len(detail.local_desc) or len(detail.desc_images)}")
+            done_items, failed = result
+            for d in done_items:
+                self._detail_cache[d.item_id] = d
+            self._show_cached_or([r for r, _ in todo])
+            tip = f"，{len(failed)} 件失败" if failed else ""
             self.status_label.setText(
-                f"✅ {detail.title[:40]}｜图片已下载（{imgs}），可导出单商品 Excel")
+                f"✅ 已获取 {len(done_items)} 件详情并连带导出 Excel{tip}"
+                f"（download/淘宝商品/，每件一个目录）")
 
         run_bg(work, done)
+
+    def _show_cached_or(self, rows):
+        """显示当前选中行（无选中则 rows 首行）的已缓存详情。"""
+        show = None
+        sel = self.table.selectionModel().selectedRows()
+        if sel and 0 <= sel[0].row() < len(self._products):
+            show = self._detail_cache.get(self._products[sel[0].row()].item_id)
+        if show is None:
+            for r in rows:
+                if 0 <= r < len(self._products):
+                    show = self._detail_cache.get(self._products[r].item_id)
+                    if show:
+                        break
+        if show is not None:
+            self._show_detail(show)
 
     # ==================== 右侧详情渲染 ====================
 
@@ -634,6 +687,8 @@ class ShoppingPage(BasePage):
                             d = shopping_mod.fetch_taobao_item_detail(
                                 pr.item_id, cookie, log=self._log)
                             shopping_mod.download_item_images(d, base, log=self._log)
+                            xlsx = shopping_mod.default_item_xlsx_path(d, base)
+                            shopping_mod.export_item_xlsx(d, xlsx)
                             break
                         except Exception as e:
                             d = None
@@ -698,12 +753,9 @@ class ShoppingPage(BasePage):
             QMessageBox.information(
                 self, "提示", "请先点「获取选中商品详情」拉取商品详情，再导出 Excel")
             return
-        safe = re.sub(r'[\\/:*?"<>|]', "_", d.title)[:24] or d.item_id
-        default = f"淘宝商品_{d.item_id}_{safe}.xlsx"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出商品详情 Excel", default, "Excel (*.xlsx)")
-        if not path:
-            return
+        from toolbox.config_manager import get_export_dir
+        base = get_export_dir() / "淘宝商品"
+        path = shopping_mod.default_item_xlsx_path(d, base)
         try:
             shopping_mod.export_item_xlsx(d, path)
         except Exception as e:
