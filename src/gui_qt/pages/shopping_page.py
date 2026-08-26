@@ -28,8 +28,8 @@ import shopping as shopping_mod
 
 
 class ShoppingPage(BasePage):
-    # 表格两套列头（店铺模式 / 商品详情模式）
-    COLS_SHOP = ["商品标题", "价格", "销量", "优惠券", "商品ID", "链接"]
+    # 表格两套列头（店铺模式含勾选列 / 商品详情模式）
+    COLS_SHOP = ["选", "商品标题", "价格", "销量", "优惠券", "商品ID", "链接"]
     COLS_ITEM = ["SKU 选项", "价格", "库存"]
 
     def __init__(self, app):
@@ -40,6 +40,7 @@ class ShoppingPage(BasePage):
         self._detail_cache = {}      # item_id → TaobaoItemDetail（本次列表已拉过的）
         self._detail_sku_imgs = []   # 详情模式各行预览图 URL（行号对齐）
         self._preview_seq = 0        # 图片预览请求序号（防止旧图覆盖新图）
+        self._filling = False        # 表格填充中（抑制勾选计数刷新）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -50,7 +51,8 @@ class ShoppingPage(BasePage):
         layout.addWidget(title)
         hint = QLabel("支持淘宝店铺链接（店铺信息游客可获取，商品列表需淘宝 Cookie）"
                       "和商品链接 item.taobao.com/item.htm?id=xxx（详情需淘宝 Cookie）。"
-                      "选中行看简介，点「获取选中商品详情」拉主图/选购参数/参数信息/图文详情")
+                      "选中行看简介，点「获取选中商品详情」拉主图/选购参数/参数信息/图文详情；"
+                      "勾选商品（全选/反选/清除）后「导出商品 JSON」为全量数据（逐件拉详情+下载图片）")
         hint.setStyleSheet("color: #888;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -73,7 +75,9 @@ class ShoppingPage(BasePage):
         row.addWidget(self.detail_btn)
         self.export_btn = QPushButton("💾 导出商品 JSON")
         self.export_btn.setEnabled(False)
-        self.export_btn.setToolTip("导出整店商品列表 JSON（含已拉详情的商品）")
+        self.export_btn.setToolTip(
+            "导出勾选的商品为全量 JSON（主图/规格参数/选购参数/参数信息/图文详情/"
+            "本地图片路径）；未拉过详情的自动逐件拉取并下载图片")
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
         self.cookie_btn = QPushButton("🍪 淘宝 Cookie")
@@ -82,15 +86,37 @@ class ShoppingPage(BasePage):
         row.addWidget(self.cookie_btn)
         layout.addLayout(row)
 
+        # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
+        sel_row = QHBoxLayout()
+        self.sel_all_btn = QPushButton("☑ 全选")
+        self.sel_all_btn.setToolTip("勾选全部商品")
+        self.sel_all_btn.clicked.connect(lambda: self._set_all_checks(True))
+        sel_row.addWidget(self.sel_all_btn)
+        self.sel_invert_btn = QPushButton("⇄ 反选")
+        self.sel_invert_btn.setToolTip("反转每行勾选状态")
+        self.sel_invert_btn.clicked.connect(self._invert_checks)
+        sel_row.addWidget(self.sel_invert_btn)
+        self.sel_clear_btn = QPushButton("✖ 清除")
+        self.sel_clear_btn.setToolTip("清除全部勾选")
+        self.sel_clear_btn.clicked.connect(lambda: self._set_all_checks(False))
+        sel_row.addWidget(self.sel_clear_btn)
+        self.check_count_label = QLabel("已勾选 0 件")
+        self.check_count_label.setStyleSheet("color: #888;")
+        sel_row.addWidget(self.check_count_label)
+        sel_row.addStretch(1)
+        layout.addLayout(sel_row)
+
         # 左：商品表格 / 右：商品详情（简介 + 图预览 + 单商品导出）
         splitter = QSplitter(Qt.Horizontal)
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, len(self.COLS_SHOP))
         self.table.setHorizontalHeaderLabels(self.COLS_SHOP)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
+        self.table.setColumnWidth(0, 36)   # 勾选列
+        self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_select)
         self.table.cellDoubleClicked.connect(self._open_item)
         splitter.addWidget(self.table)
@@ -178,8 +204,8 @@ class ShoppingPage(BasePage):
             self._reset_right_panel()
             if products:
                 self.status_label.setText(
-                    f"✅ {shop.shop_name or '店铺'}：获取到 {len(products)} 件商品，"
-                    f"选中一行点「获取选中商品详情」")
+                    f"✅ {shop.shop_name or '店铺'}：获取到 {len(products)} 件商品；"
+                    f"勾选后「导出商品 JSON」全量导出，或选中一行拉详情")
             else:
                 self.status_label.setText(
                     "✅ 店铺信息获取成功（未配置淘宝 Cookie，商品列表需登录后获取）")
@@ -225,24 +251,36 @@ class ShoppingPage(BasePage):
     # ==================== 表格 ====================
 
     def _fill_table_shop(self, products):
+        self._filling = True
         self.table.setColumnCount(len(self.COLS_SHOP))
         self.table.setHorizontalHeaderLabels(self.COLS_SHOP)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, w in ((1, 70), (2, 90), (3, 70), (4, 120), (5, 60)):
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setColumnWidth(0, 36)
+        for col, w in ((2, 70), (3, 90), (4, 70), (5, 120), (6, 60)):
             self.table.setColumnWidth(col, w)
         self.table.setRowCount(0)
         for pr in products:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(pr.title or "-"))
-            self.table.setItem(row, 1, QTableWidgetItem(pr.price or ""))
-            self.table.setItem(row, 2, QTableWidgetItem(pr.sales or ""))
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
+                         | Qt.ItemIsSelectable)
+            chk.setCheckState(Qt.Unchecked)
+            self.table.setItem(row, 0, chk)
+            self.table.setItem(row, 1, QTableWidgetItem(pr.title or "-"))
+            self.table.setItem(row, 2, QTableWidgetItem(pr.price or ""))
+            self.table.setItem(row, 3, QTableWidgetItem(pr.sales or ""))
             coupon = f"-¥{pr.coupon}" if pr.coupon else ""
-            self.table.setItem(row, 3, QTableWidgetItem(coupon))
-            self.table.setItem(row, 4, QTableWidgetItem(pr.item_id))
-            self.table.setItem(row, 5, QTableWidgetItem("打开"))
+            self.table.setItem(row, 4, QTableWidgetItem(coupon))
+            self.table.setItem(row, 5, QTableWidgetItem(pr.item_id))
+            self.table.setItem(row, 6, QTableWidgetItem("打开"))
+        self._filling = False
+        self._update_check_count()
+        for b in (self.sel_all_btn, self.sel_invert_btn, self.sel_clear_btn):
+            b.setEnabled(True)
 
     def _fill_table_item(self, d):
+        self._filling = True
         self.table.setColumnCount(len(self.COLS_ITEM))
         self.table.setHorizontalHeaderLabels(self.COLS_ITEM)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -262,6 +300,56 @@ class ShoppingPage(BasePage):
             self.table.setItem(row, 2, QTableWidgetItem(s.quantity or ""))
             img = sku_imgs[i] if i < len(sku_imgs) else ""
             self._detail_sku_imgs.append(img or (d.main_images[0] if d.main_images else ""))
+        self._filling = False
+        for b in (self.sel_all_btn, self.sel_invert_btn, self.sel_clear_btn):
+            b.setEnabled(False)   # SKU 模式无勾选
+
+    # ==================== 勾选（多选导出） ====================
+
+    def _on_item_changed(self, item):
+        """勾选状态变化 → 更新计数（填充表格时忽略）。"""
+        if not self._filling and item.column() == 0:
+            self._update_check_count()
+
+    def _is_shop_mode(self) -> bool:
+        return self._detail is None and bool(self._products)
+
+    def _row_checked(self, row: int) -> bool:
+        it = self.table.item(row, 0)
+        return bool(it and it.checkState() == Qt.Checked)
+
+    def _checked_rows(self) -> list:
+        if not self._is_shop_mode():
+            return []
+        return [r for r in range(self.table.rowCount()) if self._row_checked(r)]
+
+    def _set_all_checks(self, checked: bool):
+        if not self._is_shop_mode():
+            return
+        self._filling = True
+        state = Qt.Checked if checked else Qt.Unchecked
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it:
+                it.setCheckState(state)
+        self._filling = False
+        self._update_check_count()
+
+    def _invert_checks(self):
+        if not self._is_shop_mode():
+            return
+        self._filling = True
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it:
+                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked
+                                 else Qt.Checked)
+        self._filling = False
+        self._update_check_count()
+
+    def _update_check_count(self):
+        n = len(self._checked_rows())
+        self.check_count_label.setText(f"已勾选 {n} 件")
 
     def _reset_right_panel(self):
         self.detail_text.setPlaceholderText(
@@ -507,35 +595,85 @@ class ShoppingPage(BasePage):
     # ==================== 导出 ====================
 
     def _export(self):
-        """整店商品列表 JSON（含已拉详情的商品合并详情字段）。"""
+        """多选导出 JSON：勾选的商品逐件拉全量详情（含图片下载），一次导出。"""
         if not self._products:
             return
+        checked = self._checked_rows()
+        if not checked:
+            QMessageBox.information(
+                self, "提示",
+                "请先勾选要导出的商品（表格第一列复选框），或点「☑ 全选」")
+            return
+        total = len(checked)
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出商品列表", "商品列表.json", "JSON (*.json)")
+            self, "导出商品 JSON（全量）",
+            f"淘宝商品_已选{total}件.json", "JSON (*.json)")
         if not path:
             return
-        data = {
-            "店铺": self._shop.to_dict() if self._shop else {},
-            "商品数": len(self._products),
-            "商品": [],
-        }
-        for p in self._products:
-            d = p.to_dict()
-            cached = self._detail_cache.get(p.item_id)
-            if cached:
-                cd = cached.to_dict()
-                for k in ("主图", "选购参数", "参数信息", "图文详情", "物流", "店铺评分"):
-                    if cd.get(k):
-                        d[k] = cd[k]
-            data["商品"].append(d)
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            n_detail = sum(1 for p in self._products if p.item_id in self._detail_cache)
-            tip = f"（含 {n_detail} 件完整详情）" if n_detail else ""
-            self.status_label.setText(f"✅ 已导出 {len(self._products)} 件商品{tip}到 {path}")
-        except Exception as e:
-            QMessageBox.warning(self, "导出失败", str(e))
+        self.export_btn.setEnabled(False)
+        self.parse_btn.setEnabled(False)
+        self.detail_btn.setEnabled(False)
+
+        def work():
+            import auth
+            from toolbox.config_manager import get_export_dir
+            cookie = auth.get_cookie("taobao") or ""
+            base = get_export_dir() / "淘宝商品"
+            items, failed = [], []
+            for n, r in enumerate(checked, 1):
+                pr = self._products[r]
+                self._log(f"导出进度 {n}/{total}：{pr.title[:26]}")
+                d = self._detail_cache.get(pr.item_id)
+                if d is None:
+                    try:
+                        d = shopping_mod.fetch_taobao_item_detail(
+                            pr.item_id, cookie, log=self._log)
+                        shopping_mod.download_item_images(d, base, log=self._log)
+                    except Exception as e:
+                        failed.append(f"{pr.title[:20]}：{str(e)[:60]}")
+                        d = None
+                if d is not None:
+                    self._detail_cache[pr.item_id] = d
+                items.append((pr, d))
+            return items, failed
+
+        def done(result, err):
+            self.export_btn.setEnabled(True)
+            self.parse_btn.setEnabled(True)
+            self.detail_btn.setEnabled(
+                bool(self.table.selectionModel().selectedRows()))
+            if err:
+                self.status_label.setText("")
+                QMessageBox.warning(self, "导出失败", str(err))
+                return
+            items, failed = result
+            products_json = []
+            for pr, d in items:
+                if d is not None:
+                    products_json.append(d.to_dict())
+                else:
+                    row = pr.to_dict()
+                    row["详情获取失败"] = next(
+                        (f[1] for f in failed if f[0] in pr.title), "")
+                    products_json.append(row)
+            data = {
+                "店铺": self._shop.to_dict() if self._shop else {},
+                "商品数": len(products_json),
+                "商品": products_json,
+            }
+            if failed:
+                data["导出告警"] = failed
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                QMessageBox.warning(self, "导出失败", str(e))
+                return
+            tip = f"，{len(failed)} 件详情获取失败" if failed else ""
+            self.status_label.setText(
+                f"✅ 已导出 {len(products_json)} 件商品全量 JSON{tip}到 {path}")
+
+        run_bg(work, done)
 
     def _export_xlsx(self):
         """导出右侧商品详情为单商品 xlsx（图片直接插入）。"""

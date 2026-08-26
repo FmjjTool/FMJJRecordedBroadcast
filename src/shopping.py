@@ -112,6 +112,7 @@ class TaobaoItemDetail:
     local_main: list = field(default_factory=list)
     local_sku: list = field(default_factory=list)
     local_desc: list = field(default_factory=list)
+    image_dir: str = ""          # 图片下载目录（{商品标题}_{商品ID}_{获取时间}）
 
     def to_dict(self) -> dict:
         d = {
@@ -131,6 +132,11 @@ class TaobaoItemDetail:
             d["物流"] = self.delivery
         if self.shop_scores:
             d["店铺评分"] = self.shop_scores
+        if self.image_dir:
+            d["本地图片目录"] = self.image_dir
+        if self.local_main or self.local_sku or self.local_desc:
+            d["本地图片"] = {"主图": self.local_main, "规格图": self.local_sku,
+                          "图文详情": self.local_desc}
         return d
 
 
@@ -1218,9 +1224,20 @@ def _download_images(urls: list, folder: Path, prefix: str, log=None) -> list:
     return out
 
 
+def _safe_folder_name(s: str, maxlen: int = 40) -> str:
+    """商品标题 → 合法目录名（去 Windows 非法字符，截断长度）。"""
+    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "", str(s or "")).strip(" ._")
+    return s[:maxlen] or "未命名"
+
+
 def download_item_images(detail: TaobaoItemDetail, base_dir, log=None) -> TaobaoItemDetail:
-    """下载主图 / SKU 图 / 图文详情长图到 base_dir/<商品ID>/{main,sku,desc}/。"""
-    base = Path(base_dir) / detail.item_id
+    """下载主图 / SKU 图 / 图文详情长图。
+
+    目录：base_dir/{商品标题}_{商品ID}_{获取时间 YYYYMMDD_HHMMSS}/{main,sku,desc}/
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = f"{_safe_folder_name(detail.title)}_{detail.item_id}_{ts}"
+    base = Path(base_dir) / folder_name
     if log:
         log(f"下载图片到 {base} ...")
     detail.local_main = _download_images(detail.main_images, base / "main",
@@ -1233,6 +1250,8 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None) -> Taobao
     detail.local_sku = _download_images(sku_urls, base / "sku", "规格", log=log)
     detail.local_desc = _download_images(detail.desc_images, base / "desc",
                                          "详情", log=log)
+    if detail.local_main or detail.local_sku or detail.local_desc:
+        detail.image_dir = str(base)
     if log:
         log(f"图片下载完成：主图 {len(detail.local_main)} / 规格 "
             f"{len(detail.local_sku)} / 详情 {len(detail.local_desc)}")

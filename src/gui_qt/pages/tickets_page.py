@@ -3,6 +3,7 @@
 - 输入票务链接（艺人页/演出页/搜索页）或关键词 → 演出列表
 - 左列表选中演出 → 右侧详情（含场次、票档、购票须知）
 - 「获取详情」对选中演出拉完整场次票档（大麦详情/秀动事件/B站项目）
+- 勾选演出（全选/反选/清除）后「导出列表」为全量 JSON（未拉详情的自动逐场拉取）
 """
 
 import json
@@ -19,12 +20,15 @@ from gui_qt.pages.base import BasePage
 
 import tickets as tickets_mod
 
+COLS = ["选", "标题", "平台", "城市", "时间", "票价", "状态"]
+
 
 class TicketsPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self._events = []          # 当前演出列表（ShowEvent）
         self._detail_cache = {}    # event key → detail dict（获取过详情的）
+        self._filling = False      # 表格填充中（抑制勾选计数刷新）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -35,8 +39,10 @@ class TicketsPage(BasePage):
         layout.addWidget(title)
         hint = QLabel("支持大麦（艺人/演出）、秀动（艺人/事件）、B站会员购（搜索/项目）链接；"
                       "也可直接输入「封茗囧菌」这类演出名/艺人名/场馆关键词，"
-                      "B站+大麦+秀动三平台同时搜索（大麦走真实浏览器约需 20 秒）")
+                      "B站+大麦+秀动三平台同时搜索（大麦走真实浏览器约需 20 秒）。"
+                      "选中演出看详情；勾选后「导出列表」为全量 JSON（未拉详情的自动逐场拉取）")
         hint.setStyleSheet("color: #888;")
+        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         row = QHBoxLayout()
@@ -56,19 +62,43 @@ class TicketsPage(BasePage):
         row.addWidget(self.detail_btn)
         self.export_btn = QPushButton("💾 导出列表")
         self.export_btn.setEnabled(False)
+        self.export_btn.setToolTip(
+            "导出勾选的演出为全量 JSON（场次/票档/须知）；未拉详情的自动逐场拉取")
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
         layout.addLayout(row)
 
+        # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
+        sel_row = QHBoxLayout()
+        self.sel_all_btn = QPushButton("☑ 全选")
+        self.sel_all_btn.setToolTip("勾选全部演出")
+        self.sel_all_btn.clicked.connect(lambda: self._set_all_checks(True))
+        sel_row.addWidget(self.sel_all_btn)
+        self.sel_invert_btn = QPushButton("⇄ 反选")
+        self.sel_invert_btn.setToolTip("反转每行勾选状态")
+        self.sel_invert_btn.clicked.connect(self._invert_checks)
+        sel_row.addWidget(self.sel_invert_btn)
+        self.sel_clear_btn = QPushButton("✖ 清除")
+        self.sel_clear_btn.setToolTip("清除全部勾选")
+        self.sel_clear_btn.clicked.connect(lambda: self._set_all_checks(False))
+        sel_row.addWidget(self.sel_clear_btn)
+        self.check_count_label = QLabel("已勾选 0 场")
+        self.check_count_label.setStyleSheet("color: #888;")
+        sel_row.addWidget(self.check_count_label)
+        sel_row.addStretch(1)
+        layout.addLayout(sel_row)
+
         # 左：演出列表 / 右：详情
         splitter = QSplitter(Qt.Horizontal)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["标题", "平台", "城市", "时间", "票价", "状态"])
+        self.table = QTableWidget(0, len(COLS))
+        self.table.setHorizontalHeaderLabels(COLS)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
+        self.table.setColumnWidth(0, 36)   # 勾选列
+        self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_select)
         splitter.addWidget(self.table)
 
@@ -148,16 +178,62 @@ class TicketsPage(BasePage):
         run_bg(work, done)
 
     def _fill_table(self):
+        self._filling = True
         self.table.setRowCount(0)
         for ev in self._events:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(ev.title or "-"))
-            self.table.setItem(row, 1, QTableWidgetItem(ev.platform_cn or ev.platform))
-            self.table.setItem(row, 2, QTableWidgetItem(ev.city or ""))
-            self.table.setItem(row, 3, QTableWidgetItem(ev.show_time or ""))
-            self.table.setItem(row, 4, QTableWidgetItem(ev.price_range or ""))
-            self.table.setItem(row, 5, QTableWidgetItem(ev.status or ""))
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
+                         | Qt.ItemIsSelectable)
+            chk.setCheckState(Qt.Unchecked)
+            self.table.setItem(row, 0, chk)
+            self.table.setItem(row, 1, QTableWidgetItem(ev.title or "-"))
+            self.table.setItem(row, 2, QTableWidgetItem(ev.platform_cn or ev.platform))
+            self.table.setItem(row, 3, QTableWidgetItem(ev.city or ""))
+            self.table.setItem(row, 4, QTableWidgetItem(ev.show_time or ""))
+            self.table.setItem(row, 5, QTableWidgetItem(ev.price_range or ""))
+            self.table.setItem(row, 6, QTableWidgetItem(ev.status or ""))
+        self._filling = False
+        self._update_check_count()
+
+    # ==================== 勾选（多选导出） ====================
+
+    def _on_item_changed(self, item):
+        """勾选状态变化 → 更新计数（填充表格时忽略）。"""
+        if not self._filling and item.column() == 0:
+            self._update_check_count()
+
+    def _row_checked(self, row: int) -> bool:
+        it = self.table.item(row, 0)
+        return bool(it and it.checkState() == Qt.Checked)
+
+    def _checked_rows(self) -> list:
+        return [r for r in range(self.table.rowCount()) if self._row_checked(r)]
+
+    def _set_all_checks(self, checked: bool):
+        self._filling = True
+        state = Qt.Checked if checked else Qt.Unchecked
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it:
+                it.setCheckState(state)
+        self._filling = False
+        self._update_check_count()
+
+    def _invert_checks(self):
+        self._filling = True
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it:
+                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked
+                                 else Qt.Checked)
+        self._filling = False
+        self._update_check_count()
+
+    def _update_check_count(self):
+        n = len(self._checked_rows())
+        self.check_count_label.setText(f"已勾选 {n} 场")
 
     # ==================== 详情 ====================
 
@@ -318,23 +394,80 @@ class TicketsPage(BasePage):
         QDesktopServices.openUrl(QU(url))
 
     def _export(self):
+        """多选导出 JSON：勾选的演出逐场拉全量详情，一次导出。"""
         if not self._events:
             return
+        checked = self._checked_rows()
+        if not checked:
+            QMessageBox.information(
+                self, "提示",
+                "请先勾选要导出的演出（表格第一列复选框），或点「☑ 全选」")
+            return
+        total = len(checked)
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出演出列表", "票务演出列表.json", "JSON (*.json)")
+            self, "导出演出 JSON（全量）",
+            f"票务演出_已选{total}场.json", "JSON (*.json)")
         if not path:
             return
-        data = []
-        for ev in self._events:
-            d = ev.to_dict()
-            detail = self._detail_cache.get(f"{ev.platform}:{ev.event_id}")
-            if detail:
-                d.update({k: v for k, v in detail.items()
-                          if k not in ("获取时间",) and v})
-            data.append(d)
+        self.export_btn.setEnabled(False)
+        self.parse_btn.setEnabled(False)
+        self.detail_btn.setEnabled(False)
+
+        def work():
+            data, failed = [], []
+            for n, r in enumerate(checked, 1):
+                ev = self._events[r]
+                self._log(f"导出进度 {n}/{total}：{ev.title[:26]}")
+                d = ev.to_dict()
+                key = f"{ev.platform}:{ev.event_id}"
+                detail = self._detail_cache.get(key)
+                if detail is None:
+                    try:
+                        if ev.platform == "damai":
+                            detail = tickets_mod.parse_damai_item(ev.event_id).to_dict()
+                        elif ev.platform == "showstart":
+                            detail = tickets_mod.parse_showstart_event(ev.event_id).to_dict()
+                        elif ev.platform == "bilibili_show":
+                            detail = tickets_mod.parse_bilibili_project(ev.event_id).to_dict()
+                    except Exception as e:
+                        failed.append(f"{ev.title[:20]}：{str(e)[:60]}")
+                        detail = None
+                if detail:
+                    self._detail_cache[key] = detail
+                    d.update({k: v for k, v in detail.items()
+                              if k not in ("获取时间",) and v})
+                data.append(d)
+            return data, failed
+
+        def done(result, err):
+            self.export_btn.setEnabled(True)
+            self.parse_btn.setEnabled(True)
+            self.detail_btn.setEnabled(
+                bool(self.table.selectionModel().selectedRows()))
+            if err:
+                self.status_label.setText("")
+                QMessageBox.warning(self, "导出失败", str(err))
+                return
+            data, failed = result
+            n_export = len(data) if isinstance(data, list) else len(data.get("演出", []))
+            if failed:
+                data = {"演出": data, "导出告警": failed}
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                QMessageBox.warning(self, "导出失败", str(e))
+                return
+            tip = f"，{len(failed)} 场详情获取失败" if failed else ""
+            self.status_label.setText(
+                f"✅ 已导出 {n_export} 场演出全量 JSON{tip}到 {path}")
+
+        run_bg(work, done)
+
+    def _log(self, msg):
+        def apply():
+            self.status_label.setText(f"⏳ {msg}")
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            self.status_label.setText(f"✅ 已导出 {len(data)} 条到 {path}")
-        except Exception as e:
-            QMessageBox.warning(self, "导出失败", str(e))
+            post_to_main(apply)
+        except Exception:
+            pass
