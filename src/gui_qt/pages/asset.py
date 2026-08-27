@@ -17,7 +17,7 @@ import threading
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import (QColor, QDesktopServices, QImage, QPainter,
+from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
                            QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
@@ -1769,8 +1769,13 @@ class AssetPage(BasePage):
         bar.addWidget(QLabel("平台表:"))
         self.db_plat_sel = QComboBox()
         self.db_plat_sel.setFixedWidth(150)
-        self.db_plat_sel.currentIndexChanged.connect(lambda _: self._db_reload())
+        self.db_plat_sel.currentIndexChanged.connect(lambda _: self._db_on_platform_changed())
         bar.addWidget(self.db_plat_sel)
+        bar.addWidget(QLabel("作者:"))
+        self.db_author_sel = QComboBox()
+        self.db_author_sel.setFixedWidth(170)
+        self.db_author_sel.currentIndexChanged.connect(lambda _: self._db_reload())
+        bar.addWidget(self.db_author_sel)
         self.db_search = QLineEdit()
         self.db_search.setPlaceholderText("🔍 搜索标题/作者/正文/ID...")
         # 防抖 300ms（与已获取页同款）
@@ -1785,7 +1790,7 @@ class AssetPage(BasePage):
         bar.addWidget(refresh_btn)
         v.addLayout(bar)
 
-        # 勾选工具行（购物/票务页同款）：全选/反选/清除 + 删除选中 + 已勾选计数
+        # 勾选工具行（购物/票务页同款）：全选/反选/清除 + 导出/删除选中 + 已勾选计数
         selbar = QHBoxLayout()
         self.db_sel_all_btn = QPushButton("☑ 全选")
         self.db_sel_all_btn.clicked.connect(lambda: self._db_set_all_checks(True))
@@ -1793,6 +1798,8 @@ class AssetPage(BasePage):
         self.db_sel_inv_btn.clicked.connect(self._db_invert_checks)
         self.db_sel_clr_btn = QPushButton("✖ 清除")
         self.db_sel_clr_btn.clicked.connect(lambda: self._db_set_all_checks(False))
+        self.db_exp_btn = QPushButton("📤 导出选中")
+        self.db_exp_btn.clicked.connect(self._db_export_checked)
         self.db_del_btn = QPushButton("🗑 删除选中")
         self.db_del_btn.clicked.connect(self._db_delete_checked)
         self.db_del_btn.setStyleSheet(
@@ -1800,7 +1807,7 @@ class AssetPage(BasePage):
         self.db_check_lbl = QLabel("已勾选 0 条")
         self.db_check_lbl.setStyleSheet("color: #888;")
         for w in (self.db_sel_all_btn, self.db_sel_inv_btn, self.db_sel_clr_btn,
-                  self.db_del_btn):
+                  self.db_exp_btn, self.db_del_btn):
             selbar.addWidget(w)
         selbar.addStretch(1)
         selbar.addWidget(self.db_check_lbl)
@@ -1815,6 +1822,7 @@ class AssetPage(BasePage):
         self.db_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.db_table.customContextMenuRequested.connect(self._db_context_menu)
         self.db_table.doubleClicked.connect(self._db_open_link)
+        self.db_table.cellClicked.connect(self._db_on_cell_clicked)
         self.db_table.itemChanged.connect(self._on_db_item_changed)
         hdr = self.db_table.horizontalHeader()
         hdr.setSectionResizeMode(3, QHeaderView.Stretch)
@@ -1867,11 +1875,14 @@ class AssetPage(BasePage):
                 self._db_rows = []
                 self._db_total = 0
                 self._db_update_check_count()
+                self.db_author_sel.blockSignals(True)
+                self.db_author_sel.clear()
+                self.db_author_sel.addItems(["全部作者"])
+                self.db_author_sel.blockSignals(False)
                 self.db_page_lbl.setText(
                     "暂无数据 · 请在「账号追踪」页开启「增量模式」并点「获取最新」")
                 return
-            self._db_page = 1
-            self._db_reload()
+            self._db_reload_authors()
 
         run_bg(work, done)
 
@@ -1881,12 +1892,13 @@ class AssetPage(BasePage):
 
     def _db_reload(self):
         plat = self._db_platform()
+        author = self._db_author_filter()
 
         def work():
             from toolbox import increment_db
             kw = self.db_search.text().strip()
             offset = (self._db_page - 1) * self._DB_PAGE_SIZE
-            return increment_db.query_rows(plat, kw, self._DB_PAGE_SIZE, offset)
+            return increment_db.query_rows(plat, kw, author, self._DB_PAGE_SIZE, offset)
 
         def done(result, err):
             if err:
@@ -1913,14 +1925,90 @@ class AssetPage(BasePage):
                     item = QTableWidgetItem(str(text or ""))
                     if c == 2:
                         item.setToolTip(str(row[15] or "")[:400])
+                    elif c == 3:  # 作者列：点击即筛选
+                        item.setToolTip("点击按该作者筛选")
+                        item.setForeground(QBrush(QColor("#1565C0")))
+                        item.setData(Qt.UserRole, "author")
                     self.db_table.setItem(r, c + 1, item)
             self._db_filling = False
             self._db_update_check_count()
             pages = max(1, -(-total // self._DB_PAGE_SIZE))
+            label = plat if not author else f"{plat} · 作者「{author}」"
             self.db_page_lbl.setText(
-                f"{plat} · 共 {total} 条 · 第 {self._db_page}/{pages} 页 · 双击打开链接，右键删除")
+                f"{label} · 共 {total} 条 · 第 {self._db_page}/{pages} 页 · "
+                f"点击作者筛选，双击打开链接，右键更多")
 
         run_bg(work, done)
+
+    # ==================== 数据库浏览·作者快速筛选 ====================
+
+    def _db_author_filter(self) -> str:
+        text = self.db_author_sel.currentText() or ""
+        return "" if text.startswith("全部") else text.split("（")[0].strip()
+
+    def _db_on_platform_changed(self):
+        """平台表切换 → 刷新作者下拉后重载（保持作者选择）。"""
+        self._db_reload_authors()
+
+    def _db_reload_authors(self):
+        plat = self._db_platform()
+
+        def work():
+            from toolbox import increment_db
+            return increment_db.list_authors(plat)
+
+        def done(authors, err):
+            if err:
+                return
+            prev = self.db_author_sel.currentText()
+            prev_author = "" if prev.startswith("全部") else prev.split("（")[0].strip()
+            self.db_author_sel.blockSignals(True)
+            self.db_author_sel.clear()
+            names = ["全部作者"] + [f"{a}（{c}）" for a, c in (authors or [])]
+            self.db_author_sel.addItems(names)
+            idx = next((i for i, s in enumerate(names) if s.split("（")[0].strip() == prev_author), 0) \
+                if prev_author else 0
+            self.db_author_sel.setCurrentIndex(idx)
+            self.db_author_sel.blockSignals(False)
+            self._db_page = 1
+            self._db_reload()
+
+        run_bg(work, done)
+
+    def _db_on_cell_clicked(self, row: int, col: int):
+        """点击作者列 → 快速按该作者筛选（再次点击同作者 → 清除筛选）。"""
+        if col != 4:
+            return
+        it = self.db_table.item(row, col)
+        if it is None:
+            return
+        author = it.text().strip()
+        if not author:
+            return
+        cur = self._db_author_filter()
+        target = "" if cur == author else author
+        self._db_set_author_filter(target)
+
+    def _db_set_author_filter(self, author: str):
+        """按作者名选中下拉项（不在列表中则临时插入）。"""
+        if not author:
+            self.db_author_sel.blockSignals(True)
+            self.db_author_sel.setCurrentIndex(0)
+            self.db_author_sel.blockSignals(False)
+            self._db_page = 1
+            self._db_reload()
+            return
+        names = [self.db_author_sel.itemText(i) for i in range(self.db_author_sel.count())]
+        idx = next((i for i, s in enumerate(names)
+                    if s.split("（")[0].strip() == author), None)
+        self.db_author_sel.blockSignals(True)
+        if idx is None:
+            self.db_author_sel.insertItem(0, author)
+            idx = 0
+        self.db_author_sel.setCurrentIndex(idx)
+        self.db_author_sel.blockSignals(False)
+        self._db_page = 1
+        self._db_reload()
 
     # ==================== 数据库浏览·勾选（购物/票务页同款） ====================
 
@@ -1986,6 +2074,52 @@ class AssetPage(BasePage):
 
         run_bg(work, done)
 
+    def _db_export_checked(self):
+        """导出勾选记录为 JSON（含 raw_json 全字段）到 download/已获取数据/。"""
+        rows = self._db_checked_rows()
+        if not rows:
+            self.app.toast("请先勾选要导出的记录（表格第一列复选框，支持全选）", "warning")
+            return
+        plat = self._db_platform() or "database"
+        sel = [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
+
+        def work():
+            import json as _json
+            from toolbox.config_manager import get_export_subdir
+            out = []
+            for row in sel:
+                rec = {}
+                # raw_json 是采集时的完整 asdict（中文键），优先取全量
+                try:
+                    rec = _json.loads(row[21]) if row[21] else {}
+                except Exception:
+                    rec = {}
+                # DB 列字段（英文键）补齐/覆盖核心信息
+                rec.update({
+                    "平台": plat, "获取时间": row[1], "类型": row[2],
+                    "视频ID": row[3], "标题": row[4], "作者": row[5],
+                    "发布时间": row[6], "播放量": row[7], "点赞数": row[8],
+                    "评论数": row[9], "分享数": row[10], "收藏数": row[11],
+                    "弹幕数": row[12], "投币数": row[13], "时长": row[14],
+                    "正文": row[15], "封面URL": row[16], "链接": row[17],
+                    "标签": row[18], "分类": row[19], "音乐": row[20],
+                })
+                out.append(rec)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"数据库导出_{plat}_{len(out)}条_{ts}.json"
+            path = get_export_subdir("video_data") / fname
+            path.write_text(_json.dumps(out, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+            return str(path)
+
+        def done(path, err):
+            if err or not path:
+                self.app.toast(f"导出失败: {str(err)[:60]}", "error")
+                return
+            self.app.toast(f"✅ 已导出 {len(sel)} 条 → {path}", "success")
+
+        run_bg(work, done)
+
     def _db_selected_row(self):
         rows = sorted({i.row() for i in self.db_table.selectedIndexes()})
         return [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
@@ -2003,6 +2137,12 @@ class AssetPage(BasePage):
         act_open = menu.addAction("🌐 打开链接")
         act_copy = menu.addAction("📋 复制链接")
         menu.addSeparator()
+        author = (sel[0][5] or "").strip()
+        if author:
+            act_author = menu.addAction(f"🔍 筛选作者「{author}」")
+        else:
+            act_author = None
+        menu.addSeparator()
         act_del = menu.addAction(f"🗑 删除选中（{len(sel)} 条）")
         act = menu.exec(self.db_table.viewport().mapToGlobal(pos))
         if act == act_open:
@@ -2012,6 +2152,8 @@ class AssetPage(BasePage):
         elif act == act_copy:
             QApplication.clipboard().setText("\n".join(r[17] for r in sel if r[17]))
             self.app.toast("已复制链接", "success")
+        elif act_author is not None and act == act_author:
+            self._db_set_author_filter(author)
         elif act == act_del:
             if QMessageBox.question(
                     self, "删除", f"确定删除 {len(sel)} 条记录？",

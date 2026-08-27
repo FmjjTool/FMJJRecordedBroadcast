@@ -291,17 +291,23 @@ def list_tables() -> list:
     return out
 
 
-def query_rows(platform: str, keyword: str = "", limit: int = 500, offset: int = 0) -> tuple:
-    """查询平台表（标题/作者/正文/ID 关键词过滤）。返回 (行列表, 总条数)。"""
+def query_rows(platform: str, keyword: str = "", author: str = "",
+               limit: int = 500, offset: int = 0) -> tuple:
+    """查询平台表（关键词过滤 + 作者精确筛选）。返回 (行列表, 总条数)。"""
     if not (platform or "").strip():
         return [], 0
     platform = _norm_platform(platform)
     kw = (keyword or "").strip().lower()
-    where, params = "", []
+    author = (author or "").strip()
+    conds, params = [], []
     if kw:
-        where = ('WHERE LOWER("title") LIKE ? OR LOWER("author") LIKE ? '
-                 'OR LOWER("description") LIKE ? OR LOWER("video_id") LIKE ?')
-        params = [f"%{kw}%"] * 4
+        conds.append('(LOWER("title") LIKE ? OR LOWER("author") LIKE ? '
+                     'OR LOWER("description") LIKE ? OR LOWER("video_id") LIKE ?)')
+        params += [f"%{kw}%"] * 4
+    if author:
+        conds.append('"author" = ?')
+        params.append(author)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
     rows, total = [], 0
     try:
         with _lock:
@@ -317,6 +323,27 @@ def query_rows(platform: str, keyword: str = "", limit: int = 500, offset: int =
     except Exception:
         pass
     return rows, total
+
+
+def list_authors(platform: str) -> list:
+    """平台表内作者分布 [(作者, 条数)]，按条数降序（作者快速筛选用）。"""
+    if not (platform or "").strip():
+        return []
+    platform = _norm_platform(platform)
+    out = []
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                out = conn.execute(
+                    f'SELECT "author", COUNT(*) FROM "{platform}" '
+                    f'WHERE "author" IS NOT NULL AND "author" != "" '
+                    f'GROUP BY "author" ORDER BY COUNT(*) DESC, "author"').fetchall()
+            finally:
+                conn.close()
+    except Exception:
+        pass
+    return out
 
 
 def delete_row(platform: str, dedup_key: str) -> bool:
