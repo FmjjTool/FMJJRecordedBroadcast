@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem,
-    QTextBrowser, QVBoxLayout,
+    QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -394,11 +394,34 @@ class TestPage(BasePage):
         self.now_label = QLabel("--")
         self.now_label.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.now_label)
-        for txt in ("抖音：歆慕", "微博：歆慕XINMU", "b站：歆慕XINMU"):
-            v.addWidget(QLabel(txt, styleSheet="color: #888; font-size: 11px;"))
-        v.addWidget(QLabel("使用信息请标明来源", styleSheet="color: #666; font-size: 10px;"))
+        # 备注信息（全局设置「备注信息」模块可改；保存/切页时刷新）
+        self._remark_container = QWidget()
+        self._remark_layout = QVBoxLayout(self._remark_container)
+        self._remark_layout.setContentsMargins(0, 0, 0, 0)
+        self._remark_layout.setSpacing(0)
+        v.addWidget(self._remark_container)
+        self.refresh_remark_info()
         v.addStretch(1)
         parent.addWidget(card, 1)
+
+    def refresh_remark_info(self):
+        """按全局设置的备注信息重建主播信息卡底部文字（默认=来源四行）。"""
+        from toolbox.config_manager import load_convert_config
+        text = str(load_convert_config().get("remark_info") or "")
+        lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")
+                 if ln.strip()]
+        while self._remark_layout.count():
+            item = self._remark_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        for i, ln in enumerate(lines):
+            last = i == len(lines) - 1
+            lbl = QLabel(ln)
+            lbl.setStyleSheet("color: #666; font-size: 10px;" if last
+                              else "color: #888; font-size: 11px;")
+            lbl.setWordWrap(True)
+            self._remark_layout.addWidget(lbl)
 
     # ======================== 中：视频预览 + 弹幕信息 ========================
     def _build_center_panel(self, parent):
@@ -2469,6 +2492,8 @@ class TestPage(BasePage):
     def on_show(self):
         """切到本页：录制中恢复预览；录播中切走的重新开始录制；
         上次因切走被自动断开（且有房间号）→ 自动重连。"""
+        # 备注信息可能已在全局设置里改过 → 每次切回刷新
+        self.refresh_remark_info()
         if self.connected or self.fetcher:
             # 后台保持运作中（如录制中切走再切回）：恢复视频预览渲染
             if self._streams and self.mode in ("normal", "video_only") \

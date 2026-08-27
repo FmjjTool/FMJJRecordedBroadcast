@@ -24,6 +24,9 @@ COLS = ["选", "标题", "平台", "城市", "时间", "票价", "状态"]
 
 
 class TicketsPage(BasePage):
+    # 输入框留空直接回车时默认搜索的关键词
+    DEFAULT_KEYWORD = "封茗囧菌"
+
     def __init__(self, app):
         super().__init__(app)
         self._events = []          # 当前演出列表（ShowEvent）
@@ -50,7 +53,7 @@ class TicketsPage(BasePage):
         row = QHBoxLayout()
         self.url_entry = QLineEdit()
         self.url_entry.setPlaceholderText(
-            "https://m.damai.cn/shows/artist.html?artistId=… / showstart.com/artist/… / 直接输入关键词如「封茗囧菌」")
+            "留空直接回车 = 搜索「封茗囧菌」· 或输入 damai/showstart/bilibili 链接或任意关键词")
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
         self.parse_btn = QPushButton("🔍 解析")
@@ -134,8 +137,9 @@ class TicketsPage(BasePage):
     def _parse(self):
         url = self.url_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入票务链接或关键词")
-            return
+            # 留空直接回车 → 默认关键词
+            self.url_entry.setText(self.DEFAULT_KEYWORD)
+            url = self.DEFAULT_KEYWORD
         self.parse_btn.setEnabled(False)
         self.status_label.setText("⏳ 解析中...")
 

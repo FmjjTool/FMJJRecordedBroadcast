@@ -110,6 +110,23 @@ class WeiboParser(PlatformBase):
         t = re.sub(r"<br\s*/?\s*>", "\n", text, flags=re.IGNORECASE)
         return re.sub(r"<[^>]+>", "", t).strip()
 
+    @staticmethod
+    def _parse_play_count(v) -> int:
+        """播放数容错解析："5万次播放"/"1.2亿次播放"/"999+" / 12345 → int。"""
+        if isinstance(v, (int, float)):
+            return int(v)
+        if not v:
+            return 0
+        s = str(v).strip()
+        m = re.match(r"([\d.]+)\s*亿", s)
+        if m:
+            return int(float(m.group(1)) * 1e8)
+        m = re.match(r"([\d.]+)\s*万", s)
+        if m:
+            return int(float(m.group(1)) * 1e4)
+        m = re.match(r"(\d+)", s)
+        return int(m.group(1)) if m else 0
+
     def _build_info(self, status: dict, weibo_id: str, original_url: str,
                     client: Optional[httpx.Client] = None) -> Optional[VideoInfo]:
         # 长微博：接口未附带 longText 时现场请求 extend 接口展开全文
@@ -132,8 +149,14 @@ class WeiboParser(PlatformBase):
         description = clean_text
 
         # 发布设备：从 annotations.client_mblogid 提取
+        # （视频帖的 annotations 是嵌套 list：[[{...}], [{...}]]，需拍平后逐个检查）
         device = ""
-        for ann in (status.get("annotations") or []):
+        ann_list = status.get("annotations") or []
+        if ann_list and isinstance(ann_list[0], list):
+            ann_list = [x for sub in ann_list for x in sub]
+        for ann in ann_list:
+            if not isinstance(ann, dict):
+                continue
             cid = ann.get("client_mblogid", "")
             if cid and "-" in cid:
                 device = cid.split("-")[0]
@@ -227,8 +250,14 @@ class WeiboParser(PlatformBase):
             cover_url = images[0]
         if not cover_url: cover_url = status.get("original_pic", "")
         tags = list(set(re.findall(r'#([^#]+)#', text)))
-        play_count = int(page_info.get("play_count", 0)) if isinstance(page_info, dict) else 0
-        duration = int(page_info.get("duration", 0) or 0) if isinstance(page_info, dict) else 0
+        # play_count 可能是 "5万次播放" 这类字符串（视频帖），duration 可能是
+        # "124.528" / 124.528 —— 统一容错解析
+        play_count = self._parse_play_count(
+            page_info.get("play_count", 0)) if isinstance(page_info, dict) else 0
+        try:
+            duration = int(float(page_info.get("duration", 0) or 0)) if isinstance(page_info, dict) else 0
+        except (TypeError, ValueError):
+            duration = 0
         region = (status.get("region_name") or "").replace("发布于 ", "")
         info = VideoInfo(
             platform="weibo", video_id=weibo_id or str(status.get("id","")),

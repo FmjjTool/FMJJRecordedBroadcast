@@ -302,6 +302,7 @@ class InfoBatchPage(BasePage):
             else:
                 stats = result or {}
                 msg = (f"✅ 下载完成: 图片 {stats.get('images', 0)} | "
+                       f"封面 {stats.get('covers', 0)} | "
                        f"Live图 {stats.get('live', 0)} | 视频 {stats.get('videos', 0)}")
                 if stats.get("skipped", 0):
                     msg += f" | 跳过已下载 {stats['skipped']}"

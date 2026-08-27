@@ -1611,14 +1611,17 @@ class AssetPage(BasePage):
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
             else:
                 n = (result or {}).get("images", 0)
+                n_cov = (result or {}).get("covers", 0)
                 n_live = (result or {}).get("live", 0)
                 n_skip = (result or {}).get("skipped", 0)
                 cancelled = (result or {}).get("cancelled", False)
                 self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
-                if not n and not n_live and n_skip:
+                if not n and not n_live and not n_cov and n_skip:
                     msg = f"✅ {n_skip} 个文件已下载过，自动跳过"
                 else:
                     msg = f"✅ 已下载图片 {n} 张"
+                    if n_cov:
+                        msg += f" + 封面 {n_cov} 张"
                     if n_live:
                         msg += f" + Live图视频 {n_live} 个"
                     if n_skip:

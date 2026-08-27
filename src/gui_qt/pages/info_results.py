@@ -406,7 +406,8 @@ class InfoResultsPage(BasePage):
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
                 return
             stats = result or {}
-            msg = (f"图片 {stats.get('images', 0)} | Live图 {stats.get('live', 0)} | "
+            msg = (f"图片 {stats.get('images', 0)} | 封面 {stats.get('covers', 0)} | "
+                   f"Live图 {stats.get('live', 0)} | "
                    f"视频 {stats.get('videos', 0)}")
             if stats.get("skipped", 0):
                 msg += f" | 跳过已下载 {stats['skipped']}"

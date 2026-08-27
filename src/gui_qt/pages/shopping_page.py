@@ -32,6 +32,9 @@ class ShoppingPage(BasePage):
     COLS_SHOP = ["选", "商品标题", "价格", "销量", "优惠券", "商品ID", "链接"]
     COLS_ITEM = ["SKU 选项", "价格", "库存"]
 
+    # 输入框留空直接回车时默认解析的店铺
+    DEFAULT_SHOP_URL = "https://f03rr9e3mrh0fdmsfil8w1sdcgp77kl.taobao.com/shop/view_shop.htm"
+
     def __init__(self, app):
         super().__init__(app)
         self._products = []          # 当前商品列表（ShopProduct，店铺模式）
@@ -60,7 +63,8 @@ class ShoppingPage(BasePage):
         row = QHBoxLayout()
         self.url_entry = QLineEdit()
         self.url_entry.setPlaceholderText(
-            "https://xxx.taobao.com/shop/view_shop.htm 或 https://item.taobao.com/item.htm?id=123456")
+            "留空直接回车 = 默认店铺 · 或输入 https://xxx.taobao.com/shop/view_shop.htm / "
+            "https://item.taobao.com/item.htm?id=123456")
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
         self.parse_btn = QPushButton("🔍 解析")
@@ -164,8 +168,9 @@ class ShoppingPage(BasePage):
     def _parse(self):
         url = self.url_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入淘宝店铺或商品链接")
-            return
+            # 留空直接回车 → 默认店铺
+            self.url_entry.setText(self.DEFAULT_SHOP_URL)
+            url = self.DEFAULT_SHOP_URL
         kind, _ = shopping_mod.detect_shopping_platform(url)
         if kind == "taobao_item":
             self._parse_item(url)

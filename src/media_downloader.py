@@ -289,6 +289,14 @@ def download_media(
         user_dir = os.path.join(base_dir, plat_cn, author)
         stem = f"{date_str}_{author}_{title}" if title else f"{date_str}_{author}_{info.video_id[:8]}"
 
+        # 封面（视频帖独有：抖音/B站等封面不在 images 里；图文帖封面=首图自动去重）
+        if download_images and info.cover_url and info.cover_url not in info.images:
+            cov_ext = os.path.splitext(_url_path(info.cover_url))[1].lower()
+            if cov_ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                cov_ext = ".jpg"
+            tasks.append((info.cover_url,
+                          os.path.join(user_dir, f"{stem}_封面{cov_ext}"), "封面"))
+
         # 图片
         if download_images and info.images:
             for i, img_url in enumerate(info.images, 1):
@@ -373,8 +381,8 @@ def download_media(
             h["Cookie"] = _wb_ck_cache[0]
         return h
 
-    stats = {"images": 0, "live": 0, "videos": 0, "total": len(tasks), "failed": 0,
-             "skipped": 0, "cancelled": False}
+    stats = {"images": 0, "covers": 0, "live": 0, "videos": 0, "total": len(tasks),
+             "failed": 0, "skipped": 0, "cancelled": False}
     if progress_callback:
         progress_callback(0, len(tasks), "")
 
@@ -420,8 +428,8 @@ def download_media(
                 progress.update(pbar, description=f"[dim]已下载，跳过 {os.path.basename(fpath)}[/dim]")
                 progress.advance(pbar)
                 if progress_callback:
-                    done = (stats["images"] + stats["live"] + stats["videos"]
-                            + stats["failed"] + stats["skipped"])
+                    done = (stats["images"] + stats["covers"] + stats["live"]
+                            + stats["videos"] + stats["failed"] + stats["skipped"])
                     progress_callback(done, len(tasks), os.path.basename(fpath))
                 continue
             if idx > 0:
@@ -437,6 +445,8 @@ def download_media(
                     stats["images"] += 1
                 elif mtype == "Live图":
                     stats["live"] += 1
+                elif mtype == "封面":
+                    stats["covers"] += 1
                 elif mtype == "视频":
                     stats["videos"] += 1
             else:
@@ -444,11 +454,13 @@ def download_media(
                 _say(f"[red]X 失败: {os.path.basename(filepath)}[/red]")
             progress.advance(pbar)
             if progress_callback:
-                done = stats["images"] + stats["live"] + stats["videos"] + stats["failed"]
+                done = (stats["images"] + stats["live"] + stats["covers"]
+                        + stats["videos"] + stats["failed"])
                 progress_callback(done, len(tasks), os.path.basename(filepath))
 
     _say("\n[bold green]V 下载完成:[/bold green]")
-    _say(f"  图片: {stats['images']} | Live图: {stats['live']} | 视频: {stats['videos']}")
+    _say(f"  图片: {stats['images']} | 封面: {stats['covers']} | "
+         f"Live图: {stats['live']} | 视频: {stats['videos']}")
     if stats["skipped"]:
         _say(f"  [dim]跳过已下载: {stats['skipped']}[/dim]")
     if stats["failed"]:

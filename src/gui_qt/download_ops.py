@@ -216,7 +216,9 @@ def summarize_download(paths, draw_stats, other_stats, errors):
     if draw_stats:
         lines.append(f"动态图片: {draw_stats.get('images', 0)} 张")
     if other_stats:
-        line = f"其他: 图 {other_stats.get('images', 0)} / 视频 {other_stats.get('videos', 0)}"
+        line = (f"其他: 图 {other_stats.get('images', 0)}"
+                f" / 封面 {other_stats.get('covers', 0)}"
+                f" / 视频 {other_stats.get('videos', 0)}")
         if other_stats.get("skipped", 0):
             line += f"（跳过已下载 {other_stats['skipped']}）"
         lines.append(line)

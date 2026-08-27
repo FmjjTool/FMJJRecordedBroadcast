@@ -227,6 +227,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "theme_schedule_enabled": False,
     "theme_light_time": "07:00",
     "theme_dark_time": "19:00",
+    # 弹幕姬主播信息卡底部备注（全局设置可改，每行一条）
+    "remark_info": "抖音：歆慕\n微博：歆慕XINMU\nb站：歆慕XINMU\n使用信息请标明来源",
 }
 
 

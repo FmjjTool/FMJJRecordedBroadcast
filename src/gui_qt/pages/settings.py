@@ -11,7 +11,7 @@ import os
 from PySide6.QtCore import QTime
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QTextEdit, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import (
@@ -102,6 +102,24 @@ class GlobalSettingsPage(BasePage):
         self.sched_enable.toggled.connect(self._on_schedule_changed)
         self.sched_light.timeChanged.connect(self._on_schedule_changed)
         self.sched_dark.timeChanged.connect(self._on_schedule_changed)
+
+        v.addSpacing(12)
+
+        # ---- 备注信息（弹幕姬主播信息卡） ----
+        v.addWidget(self._card_title("📝 备注信息（显示在弹幕姬主播信息卡 UTC+8 时间下方）"))
+        self.remark_edit = QTextEdit()
+        self.remark_edit.setPlaceholderText("每行一条备注，回车换行；保存后立即同步到弹幕姬页")
+        self.remark_edit.setFixedHeight(96)
+        self.remark_edit.setAcceptRichText(False)
+        v.addWidget(self.remark_edit)
+        remark_row = QHBoxLayout()
+        remark_row.addWidget(self._btn("💾 保存", self._save_remark))
+        remark_row.addWidget(self._btn("↩ 恢复默认", self._reset_remark))
+        remark_row.addStretch(1)
+        self.remark_status = QLabel("")
+        self.remark_status.setStyleSheet("color: #888; font-size: 11px;")
+        remark_row.addWidget(self.remark_status)
+        v.addLayout(remark_row)
 
         v.addSpacing(12)
 
@@ -199,6 +217,9 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
         # 主题定时切换
         self._load_theme_schedule()
+        # 备注信息
+        self.remark_edit.setPlainText(
+            str(load_convert_config().get("remark_info") or ""))
         # 信息
         self._refresh_info()
 
@@ -254,6 +275,29 @@ class GlobalSettingsPage(BasePage):
         if not silent:
             self.app.toast("✅ 主题定时切换设置已保存", "success")
         self._update_sched_status()
+
+    # ---- 备注信息 ----
+    def _save_remark(self):
+        text = self.remark_edit.toPlainText().strip()
+        if not text:
+            self.app.toast("备注信息不能为空（可点「恢复默认」）", "warning")
+            return
+        cfg = load_convert_config()
+        cfg["remark_info"] = text
+        save_convert_config(cfg)
+        # 弹幕姬页已创建 → 立即刷新显示；未创建（未访问过该页）→ 切页时 on_show 会载入
+        page = getattr(self.app, "pages", {}).get("test_page")
+        if page and hasattr(page, "refresh_remark_info"):
+            page.refresh_remark_info()
+        self.remark_status.setText("✅ 已保存并同步到弹幕姬页")
+        self.remark_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+        self.app.toast("✅ 备注信息已保存", "success")
+
+    def _reset_remark(self):
+        from toolbox.config_manager import DEFAULT_CONVERT_CONFIG_DICT
+        default = str(DEFAULT_CONVERT_CONFIG_DICT.get("remark_info", ""))
+        self.remark_edit.setPlainText(default)
+        self._save_remark()
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
