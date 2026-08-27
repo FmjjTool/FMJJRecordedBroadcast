@@ -201,6 +201,7 @@ class AssetPage(BasePage):
         self._db_page = 1               # 数据库浏览当前页码
         self._db_total = 0              # 数据库浏览总条数
         self._db_rows = []              # 当前页原始行（含 dedup_key）
+        self._db_filling = False        # 数据库表填充中（抑制勾选计数刷新）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -212,6 +213,12 @@ class AssetPage(BasePage):
         self.tabs.addTab(self._build_collected_tab(), "已获取资源")
         self.tabs.addTab(self._build_db_tab(), "数据库浏览")
         self.tabs.addTab(self._build_local_tab(), "本地资源")
+        # 切到数据库浏览 Tab 时刷新（采集后无需切页面，直接切 Tab 即可见新数据）
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _on_tab_changed(self, idx: int):
+        if 0 <= idx < self.tabs.count() and self.tabs.tabText(idx) == "数据库浏览":
+            self._db_reload_tables()
 
     # ==================== 本地资源 ====================
 
@@ -1743,7 +1750,7 @@ class AssetPage(BasePage):
     # ==================== 数据库浏览（增量采集库） ====================
 
     _DB_PAGE_SIZE = 200
-    _DB_HEADERS = ["获取时间", "类型", "标题", "作者", "发布时间", "播放/阅览",
+    _DB_HEADERS = ["", "获取时间", "类型", "标题", "作者", "发布时间", "播放/阅览",
                    "点赞", "评论", "链接"]
 
     def _build_db_tab(self) -> QWidget:
@@ -1754,7 +1761,7 @@ class AssetPage(BasePage):
         title = QLabel("🗄 数据库浏览")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         v.addWidget(title)
-        hint = QLabel("账号追踪「增量模式」采集内容自动入库（分平台分表；首次打开自动迁移旧 _增量汇总.json）")
+        hint = QLabel("账号追踪「增量模式」采集内容自动入库（分平台分表，跨平台同内容自动去重；首次打开自动迁移旧 _增量汇总.json）")
         hint.setStyleSheet("color: #888;")
         v.addWidget(hint)
 
@@ -1778,6 +1785,27 @@ class AssetPage(BasePage):
         bar.addWidget(refresh_btn)
         v.addLayout(bar)
 
+        # 勾选工具行（购物/票务页同款）：全选/反选/清除 + 删除选中 + 已勾选计数
+        selbar = QHBoxLayout()
+        self.db_sel_all_btn = QPushButton("☑ 全选")
+        self.db_sel_all_btn.clicked.connect(lambda: self._db_set_all_checks(True))
+        self.db_sel_inv_btn = QPushButton("☯ 反选")
+        self.db_sel_inv_btn.clicked.connect(self._db_invert_checks)
+        self.db_sel_clr_btn = QPushButton("✖ 清除")
+        self.db_sel_clr_btn.clicked.connect(lambda: self._db_set_all_checks(False))
+        self.db_del_btn = QPushButton("🗑 删除选中")
+        self.db_del_btn.clicked.connect(self._db_delete_checked)
+        self.db_del_btn.setStyleSheet(
+            "QPushButton { color: #c62828; }")
+        self.db_check_lbl = QLabel("已勾选 0 条")
+        self.db_check_lbl.setStyleSheet("color: #888;")
+        for w in (self.db_sel_all_btn, self.db_sel_inv_btn, self.db_sel_clr_btn,
+                  self.db_del_btn):
+            selbar.addWidget(w)
+        selbar.addStretch(1)
+        selbar.addWidget(self.db_check_lbl)
+        v.addLayout(selbar)
+
         self.db_table = QTableWidget(0, len(self._DB_HEADERS))
         self.db_table.setHorizontalHeaderLabels(self._DB_HEADERS)
         self.db_table.verticalHeader().setVisible(False)
@@ -1787,9 +1815,11 @@ class AssetPage(BasePage):
         self.db_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.db_table.customContextMenuRequested.connect(self._db_context_menu)
         self.db_table.doubleClicked.connect(self._db_open_link)
+        self.db_table.itemChanged.connect(self._on_db_item_changed)
         hdr = self.db_table.horizontalHeader()
-        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
-        for col, w in ((0, 130), (1, 56), (3, 110), (4, 130), (5, 80), (6, 56), (7, 56)):
+        hdr.setSectionResizeMode(3, QHeaderView.Stretch)
+        self.db_table.setColumnWidth(0, 34)
+        for col, w in ((1, 130), (2, 56), (4, 110), (5, 130), (6, 80), (7, 56), (8, 56)):
             self.db_table.setColumnWidth(col, w)
         v.addWidget(self.db_table, 1)
 
@@ -1832,6 +1862,14 @@ class AssetPage(BasePage):
             idx = next((i for i, s in enumerate(names) if s.startswith(prev)), 0) if prev else 0
             self.db_plat_sel.setCurrentIndex(max(0, idx))
             self.db_plat_sel.blockSignals(False)
+            if not tables:
+                self.db_table.setRowCount(0)
+                self._db_rows = []
+                self._db_total = 0
+                self._db_update_check_count()
+                self.db_page_lbl.setText(
+                    "暂无数据 · 请在「账号追踪」页开启「增量模式」并点「获取最新」")
+                return
             self._db_page = 1
             self._db_reload()
 
@@ -1839,7 +1877,7 @@ class AssetPage(BasePage):
 
     def _db_platform(self) -> str:
         text = self.db_plat_sel.currentText() or ""
-        return text.split("（")[0].strip()
+        return "" if text.startswith("（") else text.split("（")[0].strip()
 
     def _db_reload(self):
         plat = self._db_platform()
@@ -1857,11 +1895,17 @@ class AssetPage(BasePage):
             rows, total = result
             self._db_rows = rows or []
             self._db_total = total
+            self._db_filling = True
             self.db_table.setRowCount(len(self._db_rows))
             for r, row in enumerate(self._db_rows):
                 # (dedup_key, fetched_at, kind, video_id, title, author, publish_time,
                 #  play, like, comment, share, fav, dm, coin, duration, desc,
-                #  cover, video_url, tags, category, music, raw_json)
+                #  cover, video_url, tags, category, music, raw_json, content_key)
+                chk = QTableWidgetItem()
+                chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
+                              | Qt.ItemIsSelectable)
+                chk.setCheckState(Qt.Unchecked)
+                self.db_table.setItem(r, 0, chk)
                 vals = [row[1], {"dynamic": "动态", "image": "图文"}.get(row[2], "视频"),
                         row[4], row[5], row[6], _fmt(row[7]), _fmt(row[8]), _fmt(row[9]),
                         row[17]]
@@ -1869,10 +1913,76 @@ class AssetPage(BasePage):
                     item = QTableWidgetItem(str(text or ""))
                     if c == 2:
                         item.setToolTip(str(row[15] or "")[:400])
-                    self.db_table.setItem(r, c, item)
+                    self.db_table.setItem(r, c + 1, item)
+            self._db_filling = False
+            self._db_update_check_count()
             pages = max(1, -(-total // self._DB_PAGE_SIZE))
             self.db_page_lbl.setText(
                 f"{plat} · 共 {total} 条 · 第 {self._db_page}/{pages} 页 · 双击打开链接，右键删除")
+
+        run_bg(work, done)
+
+    # ==================== 数据库浏览·勾选（购物/票务页同款） ====================
+
+    def _on_db_item_changed(self, item):
+        if not self._db_filling and item.column() == 0:
+            self._db_update_check_count()
+
+    def _db_row_checked(self, row: int) -> bool:
+        it = self.db_table.item(row, 0)
+        return bool(it and it.checkState() == Qt.Checked)
+
+    def _db_checked_rows(self) -> list:
+        return [r for r in range(self.db_table.rowCount()) if self._db_row_checked(r)]
+
+    def _db_set_all_checks(self, checked: bool):
+        self._db_filling = True
+        state = Qt.Checked if checked else Qt.Unchecked
+        for r in range(self.db_table.rowCount()):
+            it = self.db_table.item(r, 0)
+            if it:
+                it.setCheckState(state)
+        self._db_filling = False
+        self._db_update_check_count()
+
+    def _db_invert_checks(self):
+        self._db_filling = True
+        for r in range(self.db_table.rowCount()):
+            it = self.db_table.item(r, 0)
+            if it:
+                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked
+                                 else Qt.Checked)
+        self._db_filling = False
+        self._db_update_check_count()
+
+    def _db_update_check_count(self):
+        n = len(self._db_checked_rows())
+        self.db_check_lbl.setText(f"已勾选 {n} 条")
+
+    def _db_delete_checked(self):
+        rows = self._db_checked_rows()
+        if not rows:
+            self.app.toast("请先勾选要删除的记录（表格第一列复选框）", "warning")
+            return
+        plat = self._db_platform()
+        if not plat:
+            return
+        if QMessageBox.question(
+                self, "删除", f"确定删除 {plat} 表中勾选的 {len(rows)} 条记录？",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        sel = [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
+
+        def work():
+            from toolbox import increment_db
+            return sum(1 for row in sel if increment_db.delete_row(plat, row[0]))
+
+        def done(n, err):
+            if err:
+                self.app.toast("删除失败", "error")
+                return
+            self.app.toast(f"已删除 {n} 条", "success")
+            self._db_reload_tables()
 
         run_bg(work, done)
 
