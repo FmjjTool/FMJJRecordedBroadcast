@@ -394,7 +394,7 @@ class TestPage(BasePage):
         self.now_label = QLabel("--")
         self.now_label.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.now_label)
-        # 备注信息（全局设置「备注信息」模块可改；保存/切页时刷新）
+        # 备注信息（弹幕姬「⚙ 设置」弹窗可改；保存/切页时刷新）
         self._remark_container = QWidget()
         self._remark_layout = QVBoxLayout(self._remark_container)
         self._remark_layout.setContentsMargins(0, 0, 0, 0)
@@ -405,7 +405,7 @@ class TestPage(BasePage):
         parent.addWidget(card, 1)
 
     def refresh_remark_info(self):
-        """按全局设置的备注信息重建主播信息卡底部文字（默认=来源四行）。"""
+        """按配置重建主播信息卡底部文字（弹幕姬「⚙ 设置」弹窗可改；默认=来源四行）。"""
         from toolbox.config_manager import load_convert_config
         text = str(load_convert_config().get("remark_info") or "")
         lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")
@@ -1428,7 +1428,7 @@ class TestPage(BasePage):
         s = self.settings
         dlg = QDialog(self)
         dlg.setWindowTitle("弹幕姬设置")
-        dlg.resize(500, 520)
+        dlg.resize(500, 660)
         v = QVBoxLayout(dlg)
         v.addWidget(QLabel("⚙ 弹幕姬设置", styleSheet="font-weight: bold;"))
 
@@ -1467,6 +1467,30 @@ class TestPage(BasePage):
         sw_autosave.setChecked(bool(s.get("auto_save_danmaku", True)))
         v.addWidget(sw_autosave)
 
+        # 备注信息（主播信息卡 UTC+8 时间下方显示的来源文字，可自定义）
+        from toolbox.config_manager import load_convert_config, save_convert_config
+        v.addWidget(QLabel("📝 备注信息（显示在主播信息卡 UTC+8 时间下方，每行一条）:",
+                           styleSheet="font-weight: bold;"))
+        remark_edit = QPlainTextEdit()
+        remark_edit.setPlaceholderText("抖音：歆慕\n微博：歆慕XINMU\nb站：歆慕XINMU\n使用信息请标明来源")
+        remark_edit.setFixedHeight(88)
+        remark_edit.setPlainText(
+            str(load_convert_config().get("remark_info") or ""))
+        v.addWidget(remark_edit)
+        remark_row = QHBoxLayout()
+        reset_remark_btn = QPushButton("↩ 恢复默认")
+        reset_remark_btn.setToolTip("恢复为默认的来源备注四行")
+
+        def reset_remark():
+            from toolbox.config_manager import DEFAULT_CONVERT_CONFIG_DICT
+            remark_edit.setPlainText(
+                str(DEFAULT_CONVERT_CONFIG_DICT.get("remark_info", "")))
+
+        reset_remark_btn.clicked.connect(reset_remark)
+        remark_row.addWidget(reset_remark_btn)
+        remark_row.addStretch(1)
+        v.addLayout(remark_row)
+
         def save():
             self.settings["monitor_interval"] = int(e_monitor.text() or 30)
             self.settings["stats_interval"] = int(e_stats.text() or 1)
@@ -1476,6 +1500,14 @@ class TestPage(BasePage):
             self.settings["dark_mode"] = bool(sw_dark.isChecked())
             self.settings["auto_save_danmaku"] = bool(sw_autosave.isChecked())
             self._save_settings()
+            # 备注信息存全局 config（独立于弹幕姬设置），保存后立即刷新主播信息卡
+            remark = remark_edit.toPlainText().strip()
+            if remark:
+                cfg = load_convert_config()
+                if cfg.get("remark_info") != remark:
+                    cfg["remark_info"] = remark
+                    save_convert_config(cfg)
+                self.refresh_remark_info()
             # 轮询间隔变更 → 已连接时立即按新间隔重排
             self._setup_poll_timer()
             dlg.accept()
@@ -2492,7 +2524,7 @@ class TestPage(BasePage):
     def on_show(self):
         """切到本页：录制中恢复预览；录播中切走的重新开始录制；
         上次因切走被自动断开（且有房间号）→ 自动重连。"""
-        # 备注信息可能已在全局设置里改过 → 每次切回刷新
+        # 备注信息可能已在弹幕姬设置弹窗里改过 → 每次切回刷新
         self.refresh_remark_info()
         if self.connected or self.fetcher:
             # 后台保持运作中（如录制中切走再切回）：恢复视频预览渲染

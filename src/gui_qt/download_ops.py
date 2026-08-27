@@ -172,6 +172,7 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
                                         download_images=True, download_live=False,
                                         download_videos=False,
                                         progress_callback=progress_cb if log else None,
+                                        wait_range=(0.5, 1.5),
                                         quiet=True)
         except Exception as e:
             errors.append(f"动态图片: {str(e)[:40]}")
@@ -186,6 +187,7 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
             refresh_douyin_urls(non_bili, quality_label)
             other_stats = download_media(non_bili, base_dir=out_dir,
                                          progress_callback=progress_cb if log else None,
+                                         wait_range=(0.5, 1.5),
                                          quiet=True)
         except Exception as e:
             errors.append(f"其他: {str(e)[:40]}")
@@ -195,7 +197,12 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
 
 
 def download_media_items(items, log=None):
-    """非 B站媒体下载（后台线程内执行）。返回 stats dict。"""
+    """非 B站媒体下载（后台线程内执行）。返回 stats dict。
+
+    GUI 手动下载传小等待区间（与资产页一致）：默认 3~60 秒防反爬区间是为
+    命令行批量采集设计的，GUI 单帖下载场景下 live 图前动辄 30-60 秒静默
+    等待，用户感知为「卡住」。微博 sinaimg/抖音 CDN 小间隔连发实测无限流。
+    """
     from media_downloader import download_media
     base_dir = str(get_export_subdir("video_data"))
 
@@ -205,6 +212,7 @@ def download_media_items(items, log=None):
 
     return download_media(items, base_dir=base_dir,
                           progress_callback=progress_cb if log else None,
+                          wait_range=(0.5, 1.5),
                           quiet=True)
 
 
