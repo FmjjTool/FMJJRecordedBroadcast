@@ -667,33 +667,20 @@ class InfoAccountsPage(BasePage):
         return total, log
 
     def _auto_export(self, posts, incremental):
-        """抓取完成后自动导出。incremental=True 追加到默认汇总文件，False 单独导出独立文件。"""
-        from toolbox.config_manager import get_export_subdir
-        out_dir = str(get_export_subdir("video_data"))
+        """抓取完成后自动导出。incremental=True 增量入库（分平台分表），False 单独导出独立文件。"""
         try:
             if incremental:
-                # 增量：追加到默认汇总 json（按去重键去重）
-                summary_path = os.path.join(out_dir, "_增量汇总.json")
-                existing = []
-                if os.path.exists(summary_path):
-                    try:
-                        existing = json.load(open(summary_path, encoding="utf-8"))
-                    except Exception:
-                        existing = []
-                seen = {self._exp_key(e) for e in existing if isinstance(e, dict)}
-                added = 0
-                for p in posts:
-                    key = self._exp_key(p)
-                    if key and key in seen:
-                        continue
-                    seen.add(key)
-                    existing.append(p.to_dict())
-                    added += 1
-                with open(summary_path, "w", encoding="utf-8") as f:
-                    json.dump(existing, f, ensure_ascii=False, indent=2)
-                return f"💾 已增量写入默认文件（新增 {added} 条）: {summary_path}"
+                # 增量：写入增量数据库（config/increment.db，分平台分表、按去重键忽略重复）
+                from toolbox import increment_db
+                added = increment_db.save_incremental(posts)
+                if any(added.values()):
+                    parts = "、".join(f"{p} +{n}" for p, n in added.items() if n)
+                    return f"💾 已增量写入数据库: {increment_db.db_path()}（{parts}）"
+                return f"💾 无新增（已全部在库中）: {increment_db.db_path()}"
             else:
                 # 单独导出独立文件（已存在则跳过，用户移走/删除/改名后重新保存）
+                from toolbox.config_manager import get_export_subdir
+                out_dir = str(get_export_subdir("video_data"))
                 from exporters import export_per_video_flat
                 paths, skipped = export_per_video_flat(posts, output_dir=out_dir,
                                                        formats=["json", "md"], skip_existing=True)
@@ -705,13 +692,6 @@ class InfoAccountsPage(BasePage):
                 return msg
         except Exception as e:
             return f"⚠️ 自动导出失败: {e}"
-
-    @staticmethod
-    def _exp_key(info):
-        """导出去重键：优先链接，其次 ID。兼容 VideoInfo 和 to_dict() 结果。"""
-        if isinstance(info, dict):
-            return (info.get("链接", "") or info.get("原始URL", "") or info.get("视频ID", "") or "").strip()
-        return (getattr(info, "video_url", "") or getattr(info, "raw_url", "") or getattr(info, "video_id", "") or "").strip()
 
     # ---------- 定时获取 ----------
     def _toggle_timer(self):

@@ -20,9 +20,10 @@ from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QImage, QPainter,
                            QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton, QScrollArea,
-    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
+    QMessageBox, QProgressDialog, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -197,15 +198,19 @@ class AssetPage(BasePage):
         self._search_var = ""           # 搜索关键词
         self._checked_keys = set()      # 勾选条目键（批量下载用）
         self._reload_gen = 0            # 骨架加载代数守卫（中途刷新作废旧轮）
+        self._db_page = 1               # 数据库浏览当前页码
+        self._db_total = 0              # 数据库浏览总条数
+        self._db_rows = []              # 当前页原始行（含 dedup_key）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 顺序：已获取资源在前，本地资源在后
+        # 顺序：已获取资源 | 数据库浏览（中间） | 本地资源
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_collected_tab(), "已获取资源")
+        self.tabs.addTab(self._build_db_tab(), "数据库浏览")
         self.tabs.addTab(self._build_local_tab(), "本地资源")
 
     # ==================== 本地资源 ====================
@@ -1026,6 +1031,35 @@ class AssetPage(BasePage):
         """条目的下载状态键（唯一标识一个资产）。"""
         return it.get("file_path") or it.get("video_id") or it.get("title", "")
 
+    def _item_media_complete(self, it) -> bool:
+        """本地媒体是否已完整（批量下载跳过判定）。
+
+        视频条目（抖音视频/B站视频动态）有本地视频即完整；
+        图文条目本地图片数达到 raw json 里的预期图数即完整
+        （live 图视频计入媒体但不参与图片计数，缺图时下载会自动跳过已有文件只补缺）；
+        纯文本/独立媒体条目本身已有文件，视为完整。
+        """
+        mfs = [m for m in (it.get("media_files") or [])
+               if os.path.exists(m.get("path", ""))]
+        vid = str(it.get("video_id") or "")
+        plat = it.get("platform", "")
+        dtype = self._bili_dynamic_type(it) if plat == "bilibili" else ""
+        is_video_item = (
+            (plat == "douyin" and bool(vid))
+            or (plat == "bilibili" and bool(vid) and not vid.startswith("dyn_"))
+            or dtype == "av"
+        )
+        if is_video_item:
+            return any(m["type"] == "video" for m in mfs)
+        expected = int(it.get("expected_imgs") or 0)
+        n_imgs = sum(1 for m in mfs if m["type"] == "image")
+        if expected:
+            return n_imgs >= expected
+        # 预期图数未知：有可下载源（图/视频链接）但一张都没有 → 不完整
+        if it.get("video_url") or it.get("cover_url"):
+            return n_imgs > 0 or any(m["type"] == "video" for m in mfs)
+        return True
+
     def _quality_to_qn(self, label):
         """全局清晰度 → B站 qn 编号（最高画质返回 None，B站自动选最高逐级降）。"""
         return {"8K": 127, "杜比视界": 126, "HDR": 125, "4K": 120,
@@ -1066,16 +1100,24 @@ class AssetPage(BasePage):
             self._render_collected_batch()
 
     def _batch_download_checked(self):
-        """顺序批量下载所有勾选条目（跳过下载中/已下载，完成一条续下一条）。"""
+        """顺序批量下载所有勾选条目：仅初次下载（本地无媒体）或媒体不完整的才下载；
+        已完整的直接跳过；部分图片缺失时下载内部会自动跳过已存在文件只补缺。"""
         items = [it for it in self._collected_all_items
                  if self._dl_key(it) in self._checked_keys]
         if not items:
             self.app.toast("请先勾选要下载的条目", "info")
             return
-        skip = sum(1 for it in items
-                   if self._dl_state.get(self._dl_key(it)) in ("downloading", "done"))
-        todo = [it for it in items
-                if self._dl_state.get(self._dl_key(it)) not in ("downloading", "done")]
+        todo, skip = [], 0
+        for it in items:
+            key = self._dl_key(it)
+            if self._dl_state.get(key) == "downloading":
+                skip += 1
+                continue
+            if self._item_media_complete(it):  # 已有图/文且完整 → 跳过
+                skip += 1
+                self._dl_state[key] = "done"
+                continue
+            todo.append(it)
         n = len(todo)
         cancel_ev = threading.Event()
         dlg = QProgressDialog(f"批量下载 0/{n}", "取消", 0, max(n, 1), self)
@@ -1086,7 +1128,7 @@ class AssetPage(BasePage):
         dlg.setMinimumWidth(420)
         dlg.canceled.connect(cancel_ev.set)
         if skip:
-            self.app.toast(f"跳过 {skip} 条（下载中/已下载），开始下载 {n} 条", "info")
+            self.app.toast(f"跳过 {skip} 条（已下载完整），开始下载 {n} 条", "info")
         if not todo:
             dlg.close()
             return
@@ -1696,6 +1738,189 @@ class AssetPage(BasePage):
 
     def on_show(self):
         self._refresh_collected()
+        self._db_reload_tables()
+
+    # ==================== 数据库浏览（增量采集库） ====================
+
+    _DB_PAGE_SIZE = 200
+    _DB_HEADERS = ["获取时间", "类型", "标题", "作者", "发布时间", "播放/阅览",
+                   "点赞", "评论", "链接"]
+
+    def _build_db_tab(self) -> QWidget:
+        f = QWidget()
+        v = QVBoxLayout(f)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(6)
+        title = QLabel("🗄 数据库浏览")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        v.addWidget(title)
+        hint = QLabel("账号追踪「增量模式」采集内容自动入库（分平台分表；首次打开自动迁移旧 _增量汇总.json）")
+        hint.setStyleSheet("color: #888;")
+        v.addWidget(hint)
+
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("平台表:"))
+        self.db_plat_sel = QComboBox()
+        self.db_plat_sel.setFixedWidth(150)
+        self.db_plat_sel.currentIndexChanged.connect(lambda _: self._db_reload())
+        bar.addWidget(self.db_plat_sel)
+        self.db_search = QLineEdit()
+        self.db_search.setPlaceholderText("🔍 搜索标题/作者/正文/ID...")
+        # 防抖 300ms（与已获取页同款）
+        self._db_search_timer = QTimer(self)
+        self._db_search_timer.setSingleShot(True)
+        self._db_search_timer.setInterval(300)
+        self._db_search_timer.timeout.connect(self._db_reload)
+        self.db_search.textChanged.connect(self._db_search_timer.start)
+        bar.addWidget(self.db_search, 1)
+        refresh_btn = QPushButton("🔄 刷新")
+        refresh_btn.clicked.connect(self._db_reload_tables)
+        bar.addWidget(refresh_btn)
+        v.addLayout(bar)
+
+        self.db_table = QTableWidget(0, len(self._DB_HEADERS))
+        self.db_table.setHorizontalHeaderLabels(self._DB_HEADERS)
+        self.db_table.verticalHeader().setVisible(False)
+        self.db_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.db_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.db_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.db_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.db_table.customContextMenuRequested.connect(self._db_context_menu)
+        self.db_table.doubleClicked.connect(self._db_open_link)
+        hdr = self.db_table.horizontalHeader()
+        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        for col, w in ((0, 130), (1, 56), (3, 110), (4, 130), (5, 80), (6, 56), (7, 56)):
+            self.db_table.setColumnWidth(col, w)
+        v.addWidget(self.db_table, 1)
+
+        pager = QHBoxLayout()
+        prev_btn = QPushButton("◀ 上一页")
+        prev_btn.clicked.connect(lambda: self._db_turn(-1))
+        next_btn = QPushButton("下一页 ▶")
+        next_btn.clicked.connect(lambda: self._db_turn(1))
+        self.db_page_lbl = QLabel("0 条")
+        self.db_page_lbl.setStyleSheet("color: #888;")
+        pager.addWidget(prev_btn)
+        pager.addWidget(next_btn)
+        pager.addStretch(1)
+        pager.addWidget(self.db_page_lbl)
+        v.addLayout(pager)
+        return f
+
+    def _db_turn(self, delta: int):
+        pages = max(1, -(-self._db_total // self._DB_PAGE_SIZE))
+        nxt = min(max(1, self._db_page + delta), pages)
+        if nxt != self._db_page:
+            self._db_page = nxt
+            self._db_reload()
+
+    def _db_reload_tables(self):
+        """刷新平台表下拉（含行数），保持当前选择。"""
+        def work():
+            from toolbox import increment_db
+            return increment_db.list_tables()
+
+        def done(tables, err):
+            if err:
+                return
+            tables = tables or []
+            prev = self.db_plat_sel.currentText()
+            self.db_plat_sel.blockSignals(True)
+            self.db_plat_sel.clear()
+            names = [f"{n}（{c}）" for n, c in tables] or ["（空）"]
+            self.db_plat_sel.addItems(names)
+            idx = next((i for i, s in enumerate(names) if s.startswith(prev)), 0) if prev else 0
+            self.db_plat_sel.setCurrentIndex(max(0, idx))
+            self.db_plat_sel.blockSignals(False)
+            self._db_page = 1
+            self._db_reload()
+
+        run_bg(work, done)
+
+    def _db_platform(self) -> str:
+        text = self.db_plat_sel.currentText() or ""
+        return text.split("（")[0].strip()
+
+    def _db_reload(self):
+        plat = self._db_platform()
+
+        def work():
+            from toolbox import increment_db
+            kw = self.db_search.text().strip()
+            offset = (self._db_page - 1) * self._DB_PAGE_SIZE
+            return increment_db.query_rows(plat, kw, self._DB_PAGE_SIZE, offset)
+
+        def done(result, err):
+            if err:
+                self.db_page_lbl.setText("加载失败")
+                return
+            rows, total = result
+            self._db_rows = rows or []
+            self._db_total = total
+            self.db_table.setRowCount(len(self._db_rows))
+            for r, row in enumerate(self._db_rows):
+                # (dedup_key, fetched_at, kind, video_id, title, author, publish_time,
+                #  play, like, comment, share, fav, dm, coin, duration, desc,
+                #  cover, video_url, tags, category, music, raw_json)
+                vals = [row[1], {"dynamic": "动态", "image": "图文"}.get(row[2], "视频"),
+                        row[4], row[5], row[6], _fmt(row[7]), _fmt(row[8]), _fmt(row[9]),
+                        row[17]]
+                for c, text in enumerate(vals):
+                    item = QTableWidgetItem(str(text or ""))
+                    if c == 2:
+                        item.setToolTip(str(row[15] or "")[:400])
+                    self.db_table.setItem(r, c, item)
+            pages = max(1, -(-total // self._DB_PAGE_SIZE))
+            self.db_page_lbl.setText(
+                f"{plat} · 共 {total} 条 · 第 {self._db_page}/{pages} 页 · 双击打开链接，右键删除")
+
+        run_bg(work, done)
+
+    def _db_selected_row(self):
+        rows = sorted({i.row() for i in self.db_table.selectedIndexes()})
+        return [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
+
+    def _db_open_link(self, index):
+        row = self._db_rows[index.row()] if 0 <= index.row() < len(self._db_rows) else None
+        if row and row[17]:
+            QDesktopServices.openUrl(QUrl(row[17]))
+
+    def _db_context_menu(self, pos):
+        sel = self._db_selected_row()
+        if not sel:
+            return
+        menu = QMenu(self)
+        act_open = menu.addAction("🌐 打开链接")
+        act_copy = menu.addAction("📋 复制链接")
+        menu.addSeparator()
+        act_del = menu.addAction(f"🗑 删除选中（{len(sel)} 条）")
+        act = menu.exec(self.db_table.viewport().mapToGlobal(pos))
+        if act == act_open:
+            for row in sel:
+                if row[17]:
+                    QDesktopServices.openUrl(QUrl(row[17]))
+        elif act == act_copy:
+            QApplication.clipboard().setText("\n".join(r[17] for r in sel if r[17]))
+            self.app.toast("已复制链接", "success")
+        elif act == act_del:
+            if QMessageBox.question(
+                    self, "删除", f"确定删除 {len(sel)} 条记录？",
+                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+            plat = self._db_platform()
+
+            def work():
+                from toolbox import increment_db
+                return sum(1 for row in sel if increment_db.delete_row(plat, row[0]))
+
+            def done(n, err):
+                if err:
+                    self.app.toast("删除失败", "error")
+                    return
+                self.app.toast(f"已删除 {n} 条", "success")
+                self._db_reload_tables()
+
+            run_bg(work, done)
 
     # ==================== 详情窗 ====================
 

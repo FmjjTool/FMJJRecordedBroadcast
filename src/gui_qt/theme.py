@@ -56,7 +56,7 @@ QScrollBar:horizontal { background: #eceff3; height: 12px; }
 QScrollBar::handle:horizontal { background: #c2c8d2; border-radius: 4px; min-width: 24px; }
 QScrollBar::handle:horizontal:hover { background: #9fb0c8; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QStatusBar { background: #eceff3; color: #6b7280; }
+QStatusBar { background: #eceff3; color: #6b7280; border-top: 1px solid #d0d6df; }
 QStatusBar::item { border: none; }
 QLabel { color: #2f3440; }
 QMenuBar { background: #eceff3; color: #2f3440; }
@@ -108,7 +108,7 @@ QScrollBar:horizontal { background: #15171d; height: 12px; }
 QScrollBar::handle:horizontal { background: #3a3d4a; border-radius: 4px; min-width: 24px; }
 QScrollBar::handle:horizontal:hover { background: #4a5a8c; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QStatusBar { background: #15171d; color: #888; }
+QStatusBar { background: #15171d; color: #888; border-top: 1px solid #2e3140; }
 QStatusBar::item { border: none; }
 QLabel { color: #c6cbd6; }
 QMenuBar { background: #15171d; color: #c6cbd6; }

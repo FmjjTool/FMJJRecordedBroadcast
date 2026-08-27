@@ -48,6 +48,8 @@ from gui_qt.pages.file_time import FileTimePage
 from gui_qt.pages.rename_batch import RenameBatchPage
 from gui_qt.pages.tickets_page import TicketsPage
 from gui_qt.pages.shopping_page import ShoppingPage
+from gui_qt.pages.douyin_recorder import DouyinRecorderPage
+from gui_qt.pages.bili_recorder import BiliRecorderPage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> 页面类
@@ -80,6 +82,8 @@ PAGE_CLASSES = {
     "rename_batch": RenameBatchPage,
     "tickets": TicketsPage,
     "shopping": ShoppingPage,
+    "douyin_rec": DouyinRecorderPage,
+    "bili_rec": BiliRecorderPage,
     "global_settings": GlobalSettingsPage,
 }
 
@@ -118,6 +122,8 @@ NAV_GROUPS = [
     ("📈 直播·追踪", [
         ("tracker", "📈 账号追踪"),
         ("test_page", "📺 弹幕姬"),
+        ("douyin_rec", "🔴 抖音录播姬"),
+        ("bili_rec", "🔴 B站录播姬"),
     ]),
     ("🎁 B站资源", [
         ("bili_emoji", "😀 表情包"),

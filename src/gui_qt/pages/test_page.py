@@ -21,9 +21,9 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem,
-    QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMessageBox, QPlainTextEdit, QPushButton, QSlider, QTableWidget,
+    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -291,8 +291,11 @@ class TestPage(BasePage):
         self._build_right_panel(body)
         outer.addLayout(body, 1)
 
-        # ===== 底栏：状态 + 计时 + 点赞 =====
-        bottom = QHBoxLayout()
+        # ===== 底栏：状态 + 计时 + 点赞（卡片框架，浅色模式下也清晰可见） =====
+        bottom_card = QFrame()
+        bottom_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        bottom = QHBoxLayout(bottom_card)
+        bottom.setContentsMargins(10, 6, 10, 6)
         self.status_dot = QLabel("●")
         self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
         bottom.addWidget(self.status_dot)
@@ -310,7 +313,7 @@ class TestPage(BasePage):
         self.like_label.setStyleSheet("color: #1976d2; font-weight: bold;")
         bottom.addWidget(self.like_label)
         bottom.addStretch(1)
-        outer.addLayout(bottom)
+        outer.addWidget(bottom_card)
 
         # 恢复上次弹幕方式（持久化；面板已建好，切换信号会同步触发 _apply_mode）
         _mode = str(self.settings.get("mode", "") or "danmaku_only")
@@ -341,45 +344,61 @@ class TestPage(BasePage):
         card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         v = QVBoxLayout(card)
         v.setContentsMargins(10, 10, 10, 10)
-        v.addWidget(QLabel("📺 主播信息", styleSheet="font-weight: bold;"))
+        # 标题「主播信息」靠最右侧，其余内容整体居中
+        t_row = QHBoxLayout()
+        t_row.addStretch(1)
+        t_row.addWidget(QLabel("📺 主播信息", styleSheet="font-weight: bold;"))
+        v.addLayout(t_row)
 
         self.anchor_fields = {}
         # 直播标题（第一行：比正文大两号 + 加粗，不进日志）
         self.live_title_lbl = QLabel("未获取直播标题")
         self.live_title_lbl.setWordWrap(True)
+        self.live_title_lbl.setAlignment(Qt.AlignHCenter)
         self.live_title_lbl.setStyleSheet(
             "font-size: 17px; font-weight: bold; padding: 2px 0 6px 0;")
         self.anchor_fields["live_title"] = self.live_title_lbl
         v.addWidget(self.live_title_lbl)
 
-        # 封面 + 保存按钮
-        cover_row = QHBoxLayout()
+        # 封面（居中）+ 保存按钮（封面下方，居中）
+        cover_wrap = QHBoxLayout()
+        cover_wrap.addStretch(1)
         self.cover_label = QLabel("暂无封面")
         self.cover_label.setFixedSize(96, 96)
         self.cover_label.setAlignment(Qt.AlignCenter)
         self.cover_label.setStyleSheet(
             "background: #ffffff; border-radius: 6px; color: #555;")
-        cover_row.addWidget(self.cover_label)
+        cover_wrap.addWidget(self.cover_label)
+        cover_wrap.addStretch(1)
+        v.addLayout(cover_wrap)
         cover_btn = QPushButton("💾 保存封面/数据")
         cover_btn.clicked.connect(self._save_cover)
-        cover_row.addWidget(cover_btn)
-        cover_row.addStretch(1)
-        v.addLayout(cover_row)
+        btn_wrap = QHBoxLayout()
+        btn_wrap.addStretch(1)
+        btn_wrap.addWidget(cover_btn)
+        btn_wrap.addStretch(1)
+        v.addLayout(btn_wrap)
 
-        # 5 字段
-        for text, key in [("主播:", "anchor_name"), ("主播粉丝数:", "anchor_fans"),
-                          ("在线观众数:", "online_count"), ("累计观看人数:", "total_viewers"),
-                          ("本场点赞数:", "like_count")]:
-            row = QHBoxLayout()
+        # 5 字段（两列网格整体居中，列间对齐）
+        grid_wrap = QHBoxLayout()
+        grid_wrap.addStretch(1)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        for r, (text, key) in enumerate([
+                ("主播:", "anchor_name"), ("主播粉丝数:", "anchor_fans"),
+                ("在线观众数:", "online_count"), ("累计观看人数:", "total_viewers"),
+                ("本场点赞数:", "like_count")]):
             lbl = QLabel(text)
-            lbl.setFixedWidth(86)
             lbl.setStyleSheet("color: #888;")
-            row.addWidget(lbl)
+            grid.addWidget(lbl, r, 0, Qt.AlignRight)
             val = QLabel("*****")
             val.setStyleSheet("color: #888;")
-            row.addWidget(val, 1)
+            grid.addWidget(val, r, 1, Qt.AlignLeft)
             self.anchor_fields[key] = val
-            v.addLayout(row)
+        grid_wrap.addLayout(grid)
+        grid_wrap.addStretch(1)
+        v.addLayout(grid_wrap)
 
         # 分隔
         sep = QFrame()
@@ -389,9 +408,11 @@ class TestPage(BasePage):
 
         # 时间/来源
         self.time_label = QLabel("UTC+8 北京时间")
+        self.time_label.setAlignment(Qt.AlignHCenter)
         self.time_label.setStyleSheet("font-weight: bold;")
         v.addWidget(self.time_label)
         self.now_label = QLabel("--")
+        self.now_label.setAlignment(Qt.AlignHCenter)
         self.now_label.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.now_label)
         # 备注信息（弹幕姬「⚙ 设置」弹窗可改；保存/切页时刷新）
@@ -421,6 +442,7 @@ class TestPage(BasePage):
             lbl.setStyleSheet("color: #666; font-size: 10px;" if last
                               else "color: #888; font-size: 11px;")
             lbl.setWordWrap(True)
+            lbl.setAlignment(Qt.AlignHCenter)
             self._remark_layout.addWidget(lbl)
 
     # ======================== 中：视频预览 + 弹幕信息 ========================
@@ -1336,7 +1358,7 @@ class TestPage(BasePage):
         v.setContentsMargins(10, 10, 10, 10)
 
         # 1. 房间号
-        v.addWidget(QLabel("① 房间号", styleSheet="font-weight: bold;"))
+        v.addWidget(QLabel("房间号", styleSheet="font-weight: bold;"))
         row1 = QHBoxLayout()
         self.room_entry = QLineEdit()
         self.room_entry.setPlaceholderText("582775732015")
@@ -1355,7 +1377,7 @@ class TestPage(BasePage):
         v.addLayout(row1)
 
         # 2. WS 地址（转发）
-        v.addWidget(QLabel("② WS 地址（转发）", styleSheet="font-weight: bold;"))
+        v.addWidget(QLabel("WS 地址（转发）", styleSheet="font-weight: bold;"))
         row2 = QHBoxLayout()
         self.ws_entry = QLineEdit()
         self.ws_entry.setPlaceholderText("请输入转发地址")
@@ -1367,7 +1389,7 @@ class TestPage(BasePage):
 
         # 3. 累计打赏榜（与弹幕姬一致：排名/昵称/礼物数/价值(抖币)/更新时间，前150名）
         # sessionid 不再单独录入：握手凭证直接套用「Cookie 管理」里的抖音 Cookie
-        v.addWidget(QLabel("③ 累计打赏榜", styleSheet="font-weight: bold;"))
+        v.addWidget(QLabel("累计打赏榜", styleSheet="font-weight: bold;"))
         self.gift_table = QTableWidget(0, 5)
         self.gift_table.setHorizontalHeaderLabels(["排名", "昵称", "礼物数", "价值(抖币)", "更新时间"])
         self.gift_table.verticalHeader().setVisible(False)
@@ -1390,7 +1412,7 @@ class TestPage(BasePage):
 
         # 4. 弹幕信息2（点赞+进入直播间+日志提醒）
         head5 = QHBoxLayout()
-        head5.addWidget(QLabel("④ 弹幕信息（点赞+进入+日志）", styleSheet="font-weight: bold;"))
+        head5.addWidget(QLabel("弹幕信息（点赞+进入+日志）", styleSheet="font-weight: bold;"))
         head5.addStretch(1)
         self.like_var = QCheckBox("点赞")
         self.like_var.setChecked(True)
@@ -1813,7 +1835,7 @@ class TestPage(BasePage):
             return
         room = self.room_entry.text().strip()
         if not room:
-            QMessageBox.warning(self, "提示", "请先在①房间号输入房间号")
+            QMessageBox.warning(self, "提示", "请先输入房间号")
             return
         self._monitoring = True
         self.monitor_btn.setText("👁 停止监控")
