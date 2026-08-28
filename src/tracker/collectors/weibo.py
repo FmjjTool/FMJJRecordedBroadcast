@@ -1,7 +1,11 @@
 import asyncio
+import json
 import re
 
 from ..config import WEIBO_UID, MOBILE_USER_AGENT
+
+PC_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                 "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
 
 
 def _parse_num(s: object) -> int | None:
@@ -23,6 +27,72 @@ def _parse_num(s: object) -> int | None:
         return int(float(s))
     except (ValueError, TypeError):
         return None
+
+
+def _is_vague(s: object) -> bool:
+    """m端接口把粉丝数脱敏成「126.6万」这类万化文本。"""
+    return isinstance(s, str) and ("万" in s or "亿" in s)
+
+
+def _precise_counts(uid: str, cookie: str = "") -> dict:
+    """PC端 weibo.com/ajax/profile/info 拿精确 粉丝/关注/微博数。
+
+    游客走 passport visitor 系统生成 SUB/SUBP；有 Cookie 直接用。
+    失败返回 {}（调用方保持 m 端万化值兜底）。
+    """
+    import requests
+
+    s = requests.Session()
+    s.headers.update({"User-Agent": PC_USER_AGENT})
+    if cookie:
+        s.headers["Cookie"] = cookie
+    else:
+        try:
+            rv = s.post(
+                "https://passport.weibo.com/visitor/genvisitor",
+                data={"cb": "gen_callback",
+                      "fp": json.dumps({"os": "1", "browser": "Chrome134",
+                                        "fonts": "undefined",
+                                        "screenInfo": "1920*1080*24",
+                                        "plugins": ""})},
+                timeout=15)
+            m = re.search(r"\((\{.*\})\)\s*;?\s*$", rv.text, re.S)
+            tid = ((json.loads(m.group(1)).get("data") or {}).get("tid") or "") if m else ""
+            if not tid:
+                return {}
+            s.get(f"https://passport.weibo.com/visitor/visitor?a=incarnate&t={tid}"
+                  f"&w=2&c=095&gc=&cb=cross_domain&from=weibo&_rand=0.123",
+                  timeout=15)
+        except Exception:
+            return {}
+    try:
+        r = s.get(f"https://weibo.com/ajax/profile/info?uid={uid}",
+                  headers={"Referer": f"https://weibo.com/u/{uid}/",
+                           "X-Requested-With": "XMLHttpRequest"},
+                  timeout=15)
+        user = ((r.json().get("data") or {}).get("user")) or {}
+        out = {}
+        if isinstance(user.get("followers_count"), int):
+            out["fans"] = user["followers_count"]
+        if isinstance(user.get("friends_count"), int):
+            out["following"] = user["friends_count"]
+        if isinstance(user.get("statuses_count"), int):
+            out["weibo_count"] = user["statuses_count"]
+        return out
+    except Exception:
+        return {}
+
+
+def _apply_precise(result: dict, uid: str, cookie: str, raw_followers) -> dict:
+    """m端粉丝数是万化值时用 PC端精确数覆盖（fans/following/weibo_count）。"""
+    if not _is_vague(raw_followers):
+        return result
+    precise = _precise_counts(uid, cookie)
+    if precise:
+        for k, v in precise.items():
+            if v is not None:
+                result[k] = v
+    return result
 
 
 def _sync_collect(uid=None) -> dict:
@@ -88,7 +158,7 @@ def _http_collect(uid=None, cookie: str = "") -> dict:
     following = _parse_num(ui.get("follow_count"))
     posts = _parse_num(ui.get("statuses_count"))
 
-    return {
+    result = {
         "platform": "weibo",
         "name": ui.get("screen_name"),
         "fans": followers,
@@ -103,6 +173,7 @@ def _http_collect(uid=None, cookie: str = "") -> dict:
         "level": ui.get("mbrank"),
         "uid": uid,
     }
+    return _apply_precise(result, uid, cookie, ui.get("followers_count"))
 
 
 def _playwright_collect(uid=None) -> dict:
@@ -171,7 +242,7 @@ def _playwright_collect(uid=None) -> dict:
         followers = _parse_num(user_info.get("followers_count"))
         following = _parse_num(user_info.get("follow_count"))
         posts = _parse_num(user_info.get("statuses_count"))
-        return {
+        result = {
             "platform": "weibo",
             "name": user_info.get("screen_name"),
             "fans": followers,
@@ -186,6 +257,7 @@ def _playwright_collect(uid=None) -> dict:
             "level": user_info.get("mbrank"),
             "uid": uid,
         }
+        return _apply_precise(result, uid, "", user_info.get("followers_count"))
 
 
 async def collect(uid=None) -> dict:
