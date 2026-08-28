@@ -168,6 +168,10 @@ def run_pyinstaller(name: str):
         "--name", name,
         "--paths", "src",
         "--exclude-module", "tkinter",
+        # 环境里同时装有 PyQt5（pywebview 的 hook 会触发其收集），本项目只用 PySide6，
+        # 显式排除以免 PyInstaller 报 "multiple Qt bindings" 中止
+        "--exclude-module", "PyQt5",
+        "--exclude-module", "PyQt5.sip",
         # 函数体内动态 import 的模块，静态分析收不到，必须显式声明
         "--hidden-import", "qrcode",                        # 扫码登录二维码
         "--hidden-import", "PySide6.QtWebEngineWidgets",    # 软件内嵌浏览器登录
