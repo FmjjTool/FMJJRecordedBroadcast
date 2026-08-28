@@ -78,20 +78,25 @@ def _precise_counts(uid: str, cookie: str = "") -> dict:
             out["following"] = user["friends_count"]
         if isinstance(user.get("statuses_count"), int):
             out["weibo_count"] = user["statuses_count"]
+        # 获赞数（m端接口无此字段）：status_total_counter.like_cnt，
+        # 格式化字符串如 "6,138,945"
+        stc = user.get("status_total_counter") or {}
+        likes = _parse_num(stc.get("like_cnt"))
+        if likes is not None:
+            out["likes"] = likes
         return out
     except Exception:
         return {}
 
 
 def _apply_precise(result: dict, uid: str, cookie: str, raw_followers) -> dict:
-    """m端粉丝数是万化值时用 PC端精确数覆盖（fans/following/weibo_count）。"""
-    if not _is_vague(raw_followers):
+    """PC端精确数覆盖：粉丝数万化值修正 + 获赞数（m端没有该字段）。"""
+    if not _is_vague(raw_followers) and result.get("likes") is not None:
         return result
     precise = _precise_counts(uid, cookie)
-    if precise:
-        for k, v in precise.items():
-            if v is not None:
-                result[k] = v
+    for k, v in precise.items():
+        if v is not None:
+            result[k] = v
     return result
 
 
