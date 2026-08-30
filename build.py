@@ -42,6 +42,7 @@ ADD_DATA = [
 PRIVACY_FILES = {
     "cookies.json", "cookies.json.bak", "cache.json", "config.json",
     "accounts.json", "groups.json", "accounts.txt", "rename_log.log",
+    "music_accounts.json", "music_groups.json", "collected.db",
 }
 PRIVACY_FILE_PATTERNS = [re.compile(r"^app_\d{8}_\d{6}.*\.log$")]
 PRIVACY_DIRS = {"config", "logs", "download", "__pycache__"}
