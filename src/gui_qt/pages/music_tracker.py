@@ -426,7 +426,7 @@ class MusicTrackerPage(BasePage):
                 "btn": btn, "diff_frame": diff_frame}
 
     def _render_preview(self, grid, records):
-        """2 行 × 4 列网格预览：每行 = 一个时间点，列 = [时间, 粉丝, 关注, 播放]。"""
+        """2 行 × 4 列网格预览：每行 = 一个时间点，列 = [时间, 粉丝, 关注, 作品]。"""
         self._clear_layout(grid)
         if not records:
             lbl = QLabel("（尚未采集）")
@@ -441,7 +441,7 @@ class MusicTrackerPage(BasePage):
             tl = QLabel(time_label)
             tl.setStyleSheet("color: #1976d2; font-weight: bold;")
             grid.addWidget(tl, r, 0)
-            for c, field in enumerate(["fans", "following", "listens"]):
+            for c, field in enumerate(["fans", "following", "works"]):
                 vl = QLabel(_cell(rec, [field]))
                 vl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 grid.addWidget(vl, r, c + 1)
