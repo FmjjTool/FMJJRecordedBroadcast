@@ -2135,7 +2135,13 @@ class TestPage(BasePage):
         return self._chat_html(entry["ts"], m, entry.get("text") or "", resolve)
 
     def _render_chat_rows(self, entries, note=""):
-        """批量重渲染聊天框（筛选/清除筛选时）。"""
+        """批量重渲染聊天框（筛选/清除筛选时）。
+
+        必须先清空富文本图片队列：排队中的消息早已写入 _chat_log（本次重建
+        已含其占位行），若保留队列，_img_flush 会把旧消息再追加到重建内容
+        末尾——筛选期间入队的消息在退出筛选后大量重复且乱序（文字错位）。
+        """
+        self._img_pending.clear()
         rows = [self._chat_row_html(e) for e in entries]
         if note:
             rows.insert(0, f'<div style="color:#1a73e8; font-size:12px">{html.escape(note)}</div>')

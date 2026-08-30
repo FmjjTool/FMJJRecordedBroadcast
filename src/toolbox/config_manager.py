@@ -417,6 +417,7 @@ EXPORT_CATEGORIES = {
     "music": "歌曲文件",
     "music_info": "音乐信息",
     "tracker": "账号追踪数据",
+    "music_tracker": "音乐账号数据",
     "video_data": "已获取数据",
     "danmaku": "弹幕文件",
 }

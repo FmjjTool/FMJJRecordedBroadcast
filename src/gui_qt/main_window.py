@@ -39,6 +39,7 @@ from gui_qt.pages.migrate import MigratePage
 from gui_qt.pages.music_info import MusicInfoPage
 from gui_qt.pages.netease import NeteasePage
 from gui_qt.pages.tracker import TrackerPage
+from gui_qt.pages.music_tracker import MusicTrackerPage
 from gui_qt.pages.dycast import DycastPage
 from gui_qt.pages.test_page import TestPage
 from gui_qt.pages.bili_emoji import BiliEmojiPage
@@ -73,6 +74,7 @@ PAGE_CLASSES = {
     "unlock_music": MusicUnlockPage,
     "music_tag": MusicTagPage,
     "tracker": TrackerPage,
+    "music_tracker": MusicTrackerPage,
     "dycast": DycastPage,
     "test_page": TestPage,
     "bili_emoji": BiliEmojiPage,
@@ -118,6 +120,7 @@ NAV_GROUPS = [
         ("music_info", "🎵 音乐信息获取"),
         ("netease", "🎧 音乐下载"),
         ("unlock_music", "🔓 音乐解密"),
+        ("music_tracker", "🎼 音乐账号追踪"),
     ]),
     ("📈 直播·追踪", [
         ("tracker", "📈 账号追踪"),
