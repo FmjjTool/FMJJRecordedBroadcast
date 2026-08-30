@@ -119,6 +119,20 @@ def get_accounts_by_group(group_id):
 
 # ==================== 链接解析 ====================
 
+# (平台, 正则, 类型)——顺序即优先级
+_URL_PATTERNS = [
+    ("netease", r'music\.163\.com/(?:#/)?user/home\?id=(\d+)', "user"),
+    ("netease", r'music\.163\.com/(?:#/)?home\?id=(\d+)', "user"),
+    ("netease", r'music\.163\.com/(?:#/)?artist\?id=(\d+)', "artist"),
+    ("qq", r'y\.qq\.com/n/ryqq/singer/([A-Za-z0-9]+)', "singer"),
+    ("kugou", r'kugou\.com/yy/singer/home/(\d+)', "singer"),
+    ("kugou", r'm\.kugou\.com/singer/(\d+)', "singer"),
+    ("kugou", r'kugou\.com/singer/(\d+)', "singer"),
+    ("kuwo", r'kuwo\.cn/singer_detail/(\d+)', "singer"),
+    ("fivesing", r'5sing\.kugou\.com/(?:m/space/)?(\d+)(?:/default\.html|\.html)?', "user"),
+]
+
+
 def parse_url(url):
     """从账号链接解析 (platform, pid, kind)。识别失败返回 (None, None, None)。
 
@@ -127,52 +141,59 @@ def parse_url(url):
     url = (url or "").strip()
     if not url:
         return None, None, None
-    # 网易云：music.163.com/#/user/home?id=xxx 或 /user/home?id=xxx（用户）
-    m = re.search(r'music\.163\.com/(?:#/)?user/home\?id=(\d+)', url)
-    if m:
-        return "netease", m.group(1), "user"
-    m = re.search(r'music\.163\.com/(?:#/)?home\?id=(\d+)', url)
-    if m:
-        return "netease", m.group(1), "user"
-    # 网易云歌手：music.163.com/#/artist?id=xxx
-    m = re.search(r'music\.163\.com/(?:#/)?artist\?id=(\d+)', url)
-    if m:
-        return "netease", m.group(1), "artist"
-    # QQ音乐歌手：y.qq.com/n/ryqq/singer/{mid}
-    m = re.search(r'y\.qq\.com/n/ryqq/singer/([A-Za-z0-9]+)', url)
-    if m:
-        return "qq", m.group(1), "singer"
-    m = re.search(r'[?&]mid=([A-Za-z0-9]{10,20})', url) and "y.qq.com" in url
-    if m and re.search(r'type=singer', url):
-        return "qq", re.search(r'[?&]mid=([A-Za-z0-9]{10,20})', url).group(1), "singer"
-    # 酷狗歌手：kugou.com/yy/singer/home/{id}.html 或 m.kugou.com/singer/{id}
-    m = re.search(r'kugou\.com/yy/singer/home/(\d+)', url)
-    if m:
-        return "kugou", m.group(1), "singer"
-    m = re.search(r'm\.kugou\.com/singer/(\d+)', url)
-    if m:
-        return "kugou", m.group(1), "singer"
-    m = re.search(r'kugou\.com/singer/(\d+)', url)
-    if m:
-        return "kugou", m.group(1), "singer"
-    # 酷我歌手：kuwo.cn/singer_detail/{rid}
-    m = re.search(r'kuwo\.cn/singer_detail/(\d+)', url)
-    if m:
-        return "kuwo", m.group(1), "singer"
-    # 5sing 用户：5sing.kugou.com/{uid}/default.html 或 /m/space/{uid}.html
-    m = re.search(r'5sing\.kugou\.com/(?:m/space/)?(\d+)(?:/default\.html|\.html)?', url)
-    if m:
-        return "fivesing", m.group(1), "user"
+    for plat, pat, kind in _URL_PATTERNS:
+        m = re.search(pat, url)
+        if m:
+            return plat, m.group(1), kind
+    # QQ 老式搜索页链接：y.qq.com/portal/search.html?page=...&mid=xxx&type=singer
+    if "y.qq.com" in url and re.search(r'type=singer', url):
+        m = re.search(r'[?&]mid=([A-Za-z0-9]{10,20})', url)
+        if m:
+            return "qq", m.group(1), "singer"
     return None, None, None
 
 
+def extract_pid(platform, url):
+    """从链接提取「指定平台」的 (pid, kind)；链接不属于该平台返回 (None, None)。
+
+    手动选平台+粘贴他平台链接时用它校验，避免采集错平台的数据。
+    """
+    url = (url or "").strip()
+    if not url or not platform:
+        return None, None
+    for plat, pat, kind in _URL_PATTERNS:
+        if plat != platform:
+            continue
+        m = re.search(pat, url)
+        if m:
+            return m.group(1), kind
+    if platform == "qq" and "y.qq.com" in url and re.search(r'type=singer', url):
+        m = re.search(r'[?&]mid=([A-Za-z0-9]{10,20})', url)
+        if m:
+            return m.group(1), "singer"
+    return None, None
+
+
 def collect_account(account):
-    """采集单个账号：解析链接平台→调用对应采集器，返回 record dict。"""
+    """采集单个账号：以账号存储的平台为准提取 ID→调用采集器。
+
+    平台已存但链接解析不出该平台 ID 时报错（如 5sing 账号配了酷我链接），
+    绝不能静默改采链接指向的其他平台。
+    """
     platform = (account.get("platform") or "").strip()
     pid = (account.get("platform_id") or "").strip()
     kind = (account.get("kind") or "").strip()
-    if not (platform and pid):
-        platform, pid, kind = parse_url(account.get("url", ""))
+    url = account.get("url", "") or ""
+    if not pid:
+        if platform:
+            pid, k = extract_pid(platform, url)
+            if not pid:
+                return {"platform": platform, "error":
+                        "账号链接无法解析出该平台的 ID，请检查链接与所选平台是否匹配"}
+            if not kind:
+                kind = k
+        else:
+            platform, pid, kind = parse_url(url)
     if not platform or not pid:
         return {"platform": "unknown", "error": "无法识别链接平台/ID"}
 

@@ -53,6 +53,15 @@ def _client(referer, cookie="", ua=UA, timeout=15):
     return httpx.Client(timeout=timeout, headers=headers, follow_redirects=True)
 
 
+def _bd_date(ms):
+    """毫秒时间戳 → 'YYYY-MM-DD'，异常返回 ''。"""
+    try:
+        from datetime import datetime
+        return datetime.fromtimestamp(int(ms) / 1000).strftime("%Y-%m-%d")
+    except (ValueError, TypeError, OSError, OverflowError):
+        return ""
+
+
 def _int(v):
     """宽容整数化：'1.2万'/12300.0/'12,300' → int，失败返回 None。"""
     if v is None or v == "":
@@ -83,6 +92,31 @@ def _ne_region(province, city=""):
 
 # ==================== 网易云 ====================
 
+def _netease_user_fields(c, acc_id, rec, extras):
+    """歌手关联的用户账号 → 粉丝/关注/生日/地区（artist 也走这里补字段）。"""
+    try:
+        r = c.get(f"https://music.163.com/api/v1/user/detail/{acc_id}")
+        prof = (r.json() or {}).get("profile") or {}
+    except Exception:
+        return
+    if not prof:
+        return
+    if prof.get("followeds") is not None:
+        rec["fans"] = _int(prof.get("followeds"))
+    if prof.get("follows") is not None:
+        rec["following"] = _int(prof.get("follows"))
+    bd = _bd_date(prof.get("birthday"))
+    if bd:
+        rec["birthday"] = bd
+    region = _ne_region(prof.get("province"), prof.get("city"))
+    if region:
+        rec["region"] = region
+    if not rec.get("sign") and prof.get("signature"):
+        rec["sign"] = prof.get("signature")
+    if prof.get("artistName"):
+        extras.append(f"音乐人：{prof['artistName']}")
+
+
 def _netease_http(pid, kind, cookie=""):
     with _client("https://music.163.com/", cookie) as c:
         if kind == "artist":
@@ -104,10 +138,21 @@ def _netease_http(pid, kind, cookie=""):
                 "avatar": artist.get("picUrl") or artist.get("img1v1Url") or "",
                 "url": f"https://music.163.com/#/artist?id={pid}",
             }
+            extras = []
             alias = artist.get("alias") or []
             if alias:
-                rec["extra"] = "别名：" + "、".join(str(a) for a in alias[:3])
-            # 歌手页粉丝数需登录，游客不可得（fansSize 恒空）
+                extras.append("别名：" + "、".join(str(a) for a in alias[:3]))
+            # 作品数 = 单曲+专辑+MV（网易云无独立"作品"统计）
+            works = sum(v for v in (rec.get("songs"), rec.get("albums"),
+                                    rec.get("mvs")) if v)
+            if works:
+                rec["works"] = works
+            # 歌手关联的用户账号：粉丝/关注/生日/地区（游客可读）
+            acc_id = artist.get("accountId")
+            if acc_id:
+                _netease_user_fields(c, acc_id, rec, extras)
+            if extras:
+                rec["extra"] = "；".join(extras)
             return rec
 
         r = c.get(f"https://music.163.com/api/v1/user/detail/{pid}")
@@ -123,18 +168,23 @@ def _netease_http(pid, kind, cookie=""):
             "name": prof.get("nickname") or "",
             "fans": _int(prof.get("followeds")),
             "following": _int(prof.get("follows")),
-            "works": _int(prof.get("sCount")),
+            "works": _int(prof.get("playlistCount")),
             "sign": prof.get("signature") or "",
             "region": _ne_region(prof.get("province"), prof.get("city")),
             "level": _int(d.get("level")),
             "avatar": prof.get("avatarUrl") or "",
             "url": f"https://music.163.com/#/user/home?id={pid}",
         }
+        bd = _bd_date(prof.get("birthday"))
+        if bd:
+            rec["birthday"] = bd
         extras = []
         if prof.get("artistName"):
             extras.append(f"音乐人：{prof['artistName']}")
         if _int(d.get("listenSongs")):
             extras.append(f"累计听歌 {d['listenSongs']:,}")
+        if _int(prof.get("eventCount")):
+            extras.append(f"动态 {prof['eventCount']}")
         if extras:
             rec["extra"] = "；".join(extras)
         return rec
@@ -219,6 +269,35 @@ def _collect_netease(pid, kind):
 
 # ==================== QQ音乐 ====================
 
+def _qq_desc(c, mid, rec, extras):
+    """歌手简介接口（XML）：生日/国籍/出生地/职业等基本资料。
+
+    format=json 已死（"no supply"），format=xml 游客仍可用；
+    部分歌手未填基本资料 → basic 为空，属正常。
+    """
+    try:
+        r = c.get("https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_singer_desc.fcg",
+                  params={"singermid": mid, "utf8": 1, "format": "xml",
+                          "outCharset": "utf-8"})
+        xml = r.text or ""
+    except Exception:
+        return
+    items = {}
+    for m in re.finditer(r"<key><!\[CDATA\[(.*?)\]\]></key>"
+                         r"<value><!\[CDATA\[(.*?)\]\]></value>", xml, re.S):
+        items[m.group(1).strip()] = m.group(2).strip()
+    if items.get("生日"):
+        rec["birthday"] = items["生日"]
+    region = " ".join(x for x in (items.get("国籍"), items.get("出生地")) if x)
+    if region:
+        rec["region"] = region
+    for label, key in [("职业", "职业"), ("星座", "星座"), ("身高", "身高"),
+                       ("体重", "体重"), ("语言", "语言"), ("代表作", "代表作")]:
+        v = items.get(key)
+        if v:
+            extras.append(f"{label}：{v[:24]}")
+
+
 def _qq_http(mid, cookie=""):
     payload = {
         "comm": {"ct": 19, "cv": 0},
@@ -259,6 +338,14 @@ def _qq_http(mid, cookie=""):
         "avatar": f"https://y.gtimg.cn/music/photo_new/T001R300x300M000{mid}.jpg",
         "url": f"https://y.qq.com/n/ryqq/singer/{mid}",
     }
+    works = sum(v for v in (rec.get("songs"), rec.get("albums"),
+                            rec.get("mvs")) if v)
+    if works:
+        rec["works"] = works
+    extra_list = []
+    _qq_desc(c, mid, rec, extra_list)
+    if extra_list:
+        rec["extra"] = "；".join(extra_list)
     return rec
 
 
@@ -284,20 +371,30 @@ def _collect_qq(mid, kind):
 # ==================== 酷狗 ====================
 
 def _kg_sign(params, body=None):
-    """酷狗 openapi 签名：SALT + sorted('k=v') [+ body JSON] + SALT → md5。"""
+    """酷狗 openapi 签名：SALT + 按 key 排序的 'k=v' 拼接 [+ body JSON] + SALT → md5。
+
+    2026-08-30 用用户提供的打卡榜抓包样例验证：
+    md5(SALT + "appid=1058clienttime=...clientver=1000dfid=-..." + SALT) 完全吻合。
+    """
     parts = [f"{k}={params[k]}" for k in sorted(params) if k != "signature"]
-    plain = KG_SALT + "".join(sorted(parts))
+    plain = KG_SALT + "".join(parts)
     if body is not None:
         plain += json.dumps(body, separators=(",", ":"))
     plain += KG_SALT
     return hashlib.md5(plain.encode()).hexdigest()
 
 
+def _kg_base_params(mid32):
+    return {"appid": "1058", "mid": mid32, "uuid": mid32, "dfid": "-",
+            "clientver": "1000", "clienttime": str(int(time.time() * 1000)),
+            "srcappid": "2919"}
+
+
 def _kugou_http(sid, cookie=""):
     rec = {"platform": "kugou", "kind": "singer", "pid": str(sid),
            "url": f"https://www.kugou.com/yy/singer/home/{sid}.html"}
     with _client("https://m.kugou.com/", cookie) as c:
-        # ① 歌手主页信息（名字/简介/歌曲数/专辑数/MV数/头像）
+        # ① 歌手主页信息（名字/歌曲数/专辑数/MV数/头像）
         try:
             r = c.get("https://gateway.kugou.com/mobilecdn/api/v3/singer/info",
                       params={"singerid": sid})
@@ -307,28 +404,18 @@ def _kugou_http(sid, cookie=""):
                 rec["songs"] = _int(d.get("songcount"))
                 rec["albums"] = _int(d.get("albumcount"))
                 rec["mvs"] = _int(d.get("mvcount"))
-                rec["sign"] = d.get("profile") or d.get("intro") or ""
+                rec.setdefault("sign", d.get("profile") or d.get("intro") or "")
                 img = d.get("imgurl") or ""
                 rec["avatar"] = img.replace("{size}", "240") if img else ""
         except Exception:
             pass
 
-        # ② 粉丝数（打卡榜接口，游客免签名）
+        # ② openapi 作者信息（粉丝/月听众/地区/生日/短简介，带签名）
+        # 结构：data.author_info.{base,extra,singer_info,fans_info}
+        # （fans_info 在 author_info 层级下，2026-08-30 修复：曾错读 data 层级致恒空）
         try:
-            r = c.get("https://singerdiscuss.kugou.com/v3/discuss/get_fans_attendance_rank",
-                      params={"singer_id": sid, "rank_type": 1})
-            m = re.search(r'"fans_count"\s*:\s*(\d+)', r.text)
-            if m:
-                rec["fans"] = int(m.group(1))
-        except Exception:
-            pass
-
-        # ③ openapi 作者信息（月听众/年听众/地区/生日/短简介，带签名）
-        try:
-            mid = "".join(random.choices("0123456789abcdef", k=32))
-            params = {"appid": "1058", "mid": mid, "uuid": mid, "dfid": "-",
-                      "clientver": "1000", "clienttime": str(int(time.time() * 1000)),
-                      "srcappid": "2919"}
+            mid32 = "".join(random.choices("0123456789abcdef", k=32))
+            params = _kg_base_params(mid32)
             body = {"author_id": int(sid), "need_song_list": 0, "page": 1, "pagesize": 1}
             params["signature"] = _kg_sign(params, body)
             r = c.post("https://gateway.kugou.com/openapi/v2/union/author/audios",
@@ -339,25 +426,22 @@ def _kugou_http(sid, cookie=""):
             ai = data.get("author_info") or {}
             base = ai.get("base") or {}
             extra = ai.get("extra") or {}
-            fans_info = data.get("fans_info") or {}
+            si = ai.get("singer_info") or {}
+            fans_info = ai.get("fans_info") or {}
             if base.get("author_name"):
-                rec.setdefault("name", base["author_name"])
+                rec["name"] = base["author_name"]
+            if si.get("songcount"):
+                rec["songs"] = _int(si.get("songcount"))
+            if si.get("albumcount"):
+                rec["albums"] = _int(si.get("albumcount"))
+            if si.get("mvcount"):
+                rec["mvs"] = _int(si.get("mvcount"))
+            if si.get("intro"):
+                rec["sign"] = si.get("intro")
             if fans_info.get("fans") is not None:
                 rec["fans"] = _int(fans_info.get("fans"))
-            month = None
-            year = None
-            for it in (ai.get("listener_list") or []):
-                if it.get("type") == "month":
-                    month = _int(it.get("listener"))
-                elif it.get("type") == "year":
-                    year = _int(it.get("listener"))
-            if month is None and ai.get("listeners"):
-                for it in ai.get("listeners") or []:
-                    if isinstance(it, dict) and it.get("type") == "month":
-                        month = _int(it.get("listener"))
-            listens = month or year
-            if listens:
-                rec["listens"] = listens
+            if si.get("month_listener"):
+                rec["listens"] = _int(si.get("month_listener"))
             region = " ".join(x for x in (base.get("country"), extra.get("areaname")) if x)
             if region:
                 rec["region"] = region
@@ -365,11 +449,37 @@ def _kugou_http(sid, cookie=""):
                 rec["birthday"] = str(base.get("birthday"))
             if extra.get("short_intro"):
                 rec["sign"] = extra["short_intro"]
+            kg_extras = []
+            if si.get("year_listener"):
+                kg_extras.append(f"年听众 {int(si['year_listener']):,}")
+            if si.get("charge_video_count"):
+                kg_extras.append(f"付费视频 {si['charge_video_count']}")
+            if kg_extras:
+                rec["extra"] = "；".join(kg_extras)
         except Exception:
             pass
 
+        # ③ 打卡榜接口（带签名）：粉丝数兜底（data.fans_count）
+        if not rec.get("fans"):
+            try:
+                mid32 = "".join(random.choices("0123456789abcdef", k=32))
+                params = _kg_base_params(mid32)
+                params.update({"singer_id": str(sid), "rank_type": "1", "limit": "100"})
+                params["signature"] = _kg_sign(params)
+                r = c.get("https://gateway.kugou.com/singerdiscuss/v3/discuss/"
+                          "get_fans_attendance_rank", params=params)
+                fc = ((r.json().get("data") or {}).get("fans_count"))
+                if fc is not None:
+                    rec["fans"] = _int(fc)
+            except Exception:
+                pass
+
     if not rec.get("name"):
         return {"platform": "kugou", "error": "接口无歌手数据（可能歌手ID无效）"}
+    works = sum(v for v in (rec.get("songs"), rec.get("albums"),
+                            rec.get("mvs")) if v)
+    if works:
+        rec["works"] = works
     return rec
 
 
@@ -455,35 +565,100 @@ def _collect_kugou(sid, kind):
 
 # ==================== 酷我 ====================
 
-def _kuwo_http(rid, cookie=""):
-    with _client("https://www.kuwo.cn/", cookie) as c:
-        r = c.get(f"https://www.kuwo.cn/singer_detail/{rid}")
-    html = r.text or ""
+def _split_top_level(s):
+    """顶层逗号分割（尊重字符串与括号嵌套），用于 NUXT 实参列表。"""
+    parts, buf, depth, in_str, esc = [], [], 0, False, False
+    for ch in s:
+        if in_str:
+            buf.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            buf.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _kuwo_singer_info(html):
+    """从酷我 SSR 页面提取 singerInfo dict，还原 NUXT 压缩变量。
+
+    NUXT 把重复值抽成 IIFE 参数：
+    (function(a,b,c,d,e,f){...singerInfo:{birthday:a,country:d,...}}("",0,false,"中国","...","/"))
+    旧实现把所有裸标识符一律替换成空串，country/birthday 等真实值全丢（地区恒空的根因）。
+    """
     idx = html.find("singerInfo:")
     if idx < 0:
-        return {"platform": "kuwo", "error": "页面无歌手数据（可能歌手ID无效）"}
+        return None
+    s = html.rfind("<script", 0, idx)
+    e = html.find("</script>", idx)
+    script = html[s:e] if s >= 0 and e > s else html
+
+    varmap = {}
+    m = re.search(r"\(function\(([^)]*)\)\{", script)
+    tail = script.rstrip().rstrip(";")
+    if tail.endswith(")"):
+        tail = tail[:-1]
+    i = tail.rfind("}(")
+    if m and i >= 0:
+        args_raw = tail[i + 2:]
+        if args_raw.endswith(")"):
+            args_raw = args_raw[:-1]
+        names = [p.strip() for p in m.group(1).split(",")]
+        for name, val in zip(names, _split_top_level(args_raw)):
+            varmap[name] = val
+
     start = html.find("{", idx)
     depth, end = 0, -1
-    for i in range(start, len(html)):
-        ch = html[i]
+    for j in range(start, len(html)):
+        ch = html[j]
         if ch == "{":
             depth += 1
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                end = i + 1
+                end = j + 1
                 break
     if end <= start:
-        return {"platform": "kuwo", "error": "页面数据解析失败"}
+        return None
     raw = html[start:end]
-    # NUXT 压缩产物里部分值是函数参数引用（pic:d / isStar:b）——
-    # 单字符裸标识符按空串处理，否则 json.loads 失败
-    raw = re.sub(r':\s*[A-Za-z_$]\s*(?=[,}])', ': ""', raw)
+
+    def repl(mo):
+        v = mo.group(1)
+        return ":" + varmap[v] if v in varmap else ':""'
+
+    raw = re.sub(r":\s*([A-Za-z_$][\w$]*)\s*(?=[,}\]])", repl, raw)
+    fixed = re.sub(r"([{,])(\w+)\s*:", r'\1"\2":', raw)
     try:
-        fixed = re.sub(r'([{,])(\w+)\s*:', r'\1"\2":', raw)
-        info = json.loads(fixed)
+        return json.loads(fixed)
     except json.JSONDecodeError:
-        return {"platform": "kuwo", "error": "页面数据解析失败"}
+        return None
+
+
+def _kuwo_http(rid, cookie=""):
+    with _client("https://www.kuwo.cn/", cookie) as c:
+        r = c.get(f"https://www.kuwo.cn/singer_detail/{rid}")
+    html = r.text or ""
+    info = _kuwo_singer_info(html)
+    if info is None:
+        return {"platform": "kuwo", "error": "页面无歌手数据（可能歌手ID无效）"}
 
     def gv(*keys):
         for k in keys:
@@ -515,6 +690,10 @@ def _kuwo_http(rid, cookie=""):
         rec["region"] = region
     if gv("birthday"):
         rec["birthday"] = str(gv("birthday"))
+    works = sum(v for v in (rec.get("songs"), rec.get("albums"),
+                            rec.get("mvs")) if v)
+    if works:
+        rec["works"] = works
     extras = []
     for label, key in [("性别", "gener"), ("星座", "constellation"), ("身高", "tall"),
                        ("体重", "weight"), ("语言", "language"), ("别名", "aartist")]:
@@ -587,9 +766,8 @@ def _collect_kuwo(rid, kind):
 
 # ==================== 5sing ====================
 
-def _fivesing_http(uid, cookie=""):
-    with _client("https://5sing.kugou.com/", cookie) as c:
-        r = c.get(f"http://5sing.kugou.com/{uid}/default.html")
+def _fivesing_http(c, uid):
+    r = c.get(f"https://5sing.kugou.com/{uid}/default.html")
     html = r.text or ""
 
     # 数字统计在 <div class="number" id="totalfans"><a href="/{uid}/fans/1.html">1394</a>，
@@ -628,7 +806,30 @@ def _fivesing_http(uid, cookie=""):
     if m:
         import html as _html
         rec["sign"] = _html.unescape(m.group(1)).replace("\xa0", " ").strip()
+    # 性别：资料区 sex 图标后的 span（值如"其他"是性别，不是地区；
+    # 5sing 主页/资料页已无地区与生日数据，两字段只能留空）
+    extras = []
+    m = re.search(r'class="lt sex[^"]*"[^>]*>sex</b>\s*'
+                  r'<span class="lt">([^<]+)</span>', html)
+    if m and m.group(1).strip():
+        extras.append(f"性别：{m.group(1).strip()}")
+    if extras:
+        rec["extra"] = "；".join(extras)
     return rec
+
+
+def _fivesing_works(c, uid):
+    """作品数 = 原创yc + 翻唱fc + 伴奏bz 列表页 SSR 的 '(N首)'。"""
+    total = 0
+    for sub in ("yc", "fc", "bz"):
+        try:
+            r = c.get(f"https://5sing.kugou.com/{uid}/{sub}/1.html")
+            m = re.search(r"\((\d+)首\)", r.text or "")
+            if m:
+                total += int(m.group(1))
+        except Exception:
+            continue
+    return total or None
 
 
 def _fivesing_playwright(uid):
@@ -672,9 +873,16 @@ def _fivesing_playwright(uid):
 
 
 def _collect_fivesing(uid, kind):
-    r = _fivesing_http(uid)
-    if not r.get("error"):
-        return r
+    try:
+        with _client("https://5sing.kugou.com/") as c:
+            r = _fivesing_http(c, uid)
+            if not r.get("error"):
+                works = _fivesing_works(c, uid)
+                if works:
+                    r["works"] = works
+                return r
+    except Exception:
+        pass
     r = _fivesing_playwright(uid)
     if not r.get("error"):
         return r

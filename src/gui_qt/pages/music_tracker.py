@@ -828,13 +828,22 @@ class MusicTrackerPage(BasePage):
         if not url:
             QMessageBox.warning(self, "提示", "请输入账号链接（可在上方搜索自动填入）")
             return
-        from music_account.accounts import parse_url, load_accounts, save_accounts
+        from music_account.accounts import parse_url, extract_pid, load_accounts, save_accounts
         plat_map = {"自动识别": "", "网易云": "netease", "QQ音乐": "qq", "酷狗": "kugou",
                     "酷我": "kuwo", "5sing": "fivesing"}
         platform = plat_map.get(self.add_platform.currentText(), "")
         kind = ""
         if not platform:
             platform, _pid, kind = parse_url(url)
+        else:
+            # 手动选平台：链接必须能解析出该平台 ID（防止选 5sing 贴酷我链接）
+            pid, k = extract_pid(platform, url)
+            if not pid:
+                QMessageBox.warning(self, "提示",
+                                    f"链接无法解析出「{self.add_platform.currentText()}」的 ID，\n"
+                                    "请检查链接与所选平台是否匹配")
+                return
+            kind = k
         if not platform:
             QMessageBox.warning(self, "提示", "无法识别链接平台，请检查链接或手动选择平台")
             return
