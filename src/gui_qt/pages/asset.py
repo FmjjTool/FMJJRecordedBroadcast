@@ -17,7 +17,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
                            QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QProgressDialog, QPushButton, QScrollArea, QSpinBox, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+from PySide6.QtWidgets import QLayout
 
 from gui_qt import common
 from gui_qt.common import _fmt, run_bg
@@ -70,6 +71,91 @@ def _fmt_size(n):
     if n < 1024 * 1024 * 1024:
         return f"{n/1024/1024:.1f} MB"
     return f"{n/1024/1024/1024:.2f} GB"
+
+
+_WRAP_CHARS = ("/", "\\", "?", "&", "=", "_", "-", ".", "%", ";", ",")
+
+
+def _wrappable(text: str) -> str:
+    """在分隔符后插入零宽空格，让 QLabel 能在长 URL/路径内断行。
+
+    QLabel wordWrap 的换行与 minimumSizeHint 都取「最长单词」：连续长串
+    （CDN 直链、本地路径）无断点时既换不了行、最小宽度还等于整行宽度，
+    会把详情窗内容体撑出横向滚动条。插零宽空格后视觉不变但处处可断。
+    """
+    for ch in _WRAP_CHARS:
+        if ch in text:
+            text = text.replace(ch, ch + "\u200b")
+    return text
+
+
+class _FlowLayout(QLayout):
+    """流式布局（Qt 官方 FlowLayout 模式）：子项按宽度自动换行成多行。
+
+    详情窗媒体缩略图用固定 5 列网格时，窗口缩窄会被网格最小尺寸顶出
+    横向滚动条；流式布局按实际宽度增减每行列数，窄窗自动多行换行。
+    """
+
+    def __init__(self, parent=None, spacing=4):
+        super().__init__(parent)
+        self._items: list = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y = eff.x(), eff.y()
+        line_h = 0
+        for it in self._items:
+            hint = it.sizeHint()
+            nxt = x + hint.width() + self._spacing
+            if nxt - self._spacing > eff.right() + 1 and line_h > 0:
+                x = eff.x()
+                y = y + line_h + self._spacing
+                nxt = x + hint.width() + self._spacing
+                line_h = 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x = nxt
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y() + m.bottom()
 
 
 def _classify(path: str) -> str:
@@ -553,9 +639,12 @@ class AssetPage(BasePage):
                     link = entry["video_url"]
                     entry["is_dynamic"] = (vid.startswith("dyn_")
                                            or "t.bilibili.com" in link)
-                # 匹配媒体（date + 标题双向子串 + 子目录匹配）
+                # 匹配媒体（date + 标题双向子串 + 平台一致）
+                # 平台归属由文件夹 {平台}_{文件|媒体} 决定：媒体的平台目录必须与
+                # json 的平台一致才可合并（同内容双平台各发一份时，跨平台匹配会把
+                # B站下载的媒体抢给抖音条目——json 平台列与实际媒体张冠李戴）
                 title_norm = _sanitize_title_key(title).strip("_")
-                json_subdir = _norm_subdir(path.parent.name)
+                json_platform = _norm_subdir(path.parent.name) or platform
 
                 def _match(m_t):
                     m_t = m_t.strip("_") if m_t else ""
@@ -565,31 +654,32 @@ class AssetPage(BasePage):
                         return False
                     return m_t in title_norm or title_norm[:40] in m_t
 
-                # 第1轮：同日期 + 同子目录（最精确）
+                # 第1轮：同日期 + 同平台（最精确）
                 for (m_date, m_title, m_sub), mfs in list(media_map.items()):
                     if mfs and mfs[0].get("pkg"):
                         continue  # B站资源包整体条目，不参与 json 匹配
-                    if m_date != date_part or m_sub != json_subdir:
+                    if m_date != date_part or m_sub != json_platform:
                         continue
                     if _match(m_title):
                         entry["media_files"] = media_map.pop((m_date, m_title, m_sub))
                         break
-                # 第2轮：同日期 + 跨子目录
+                # 第2轮：同日期 + 无平台目录的旧平铺媒体（根目录旧 mp4/jpg）；
+                # 不允许跨平台匹配（B站媒体绝不给抖音条目）
                 if not entry["media_files"]:
                     for (m_date, m_title, m_sub), mfs in list(media_map.items()):
                         if mfs and mfs[0].get("pkg"):
                             continue
-                        if m_date != date_part or m_sub == json_subdir:
+                        if m_date != date_part or m_sub:
                             continue
                         if _match(m_title):
                             entry["media_files"] = media_map.pop((m_date, m_title, m_sub))
                             break
-                # 第3轮：无日期的旧格式媒体（根目录平铺旧 mp4/jpg），只按标题兜底
+                # 第3轮：无日期也无平台目录的旧格式媒体，只按标题兜底
                 if not entry["media_files"]:
                     for (m_date, m_title, m_sub), mfs in list(media_map.items()):
                         if mfs and mfs[0].get("pkg"):
                             continue
-                        if m_date:  # 只处理 date 为空的旧媒体
+                        if m_date or m_sub:  # 只处理完全旧格式的媒体
                             continue
                         if _match(m_title):
                             entry["media_files"] = media_map.pop((m_date, m_title, m_sub))
@@ -2211,8 +2301,13 @@ class AssetPage(BasePage):
             kl.setFixedWidth(84)
             kl.setStyleSheet("color: #6b7280; font-size: 12px;")
             row_f.addWidget(kl)
-            wl = QLabel(str(val))
+            wl = QLabel(_wrappable(str(val)))
             wl.setWordWrap(True)
+            wl.setTextFormat(Qt.PlainText)
+            wl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            # 显式最小尺寸：零宽空格后最长词仍可能比窄窗宽，
+            # 最小尺寸强制为 1 才能彻底摆脱 QLabel minimumSizeHint 撑宽布局
+            wl.setMinimumSize(1, 1)
             wl.setStyleSheet("font-size: 12px;")
             row_f.addWidget(wl, 1)
             v.addLayout(row_f)
@@ -2223,10 +2318,13 @@ class AssetPage(BasePage):
             v.addWidget(dh)
             dl = QLabel(desc)
             dl.setWordWrap(True)
-            # \n 在富文本模式下不生效，转 <br> 并转义特殊字符
+            # \n 在富文本模式下不生效，转 <br>；零宽空格须在转义前插入
+            # （先转义再插会拆坏 &amp; 实体），长 URL 才能断行
             dl.setTextFormat(Qt.RichText)
-            dl.setText((desc.replace("&", "&amp;").replace("<", "&lt;")
-                        .replace(">", "&gt;").replace("\n", "<br>")))
+            dl.setText(_wrappable(desc).replace("&", "&amp;")
+                       .replace("<", "&lt;").replace(">", "&gt;")
+                       .replace("\n", "<br>"))
+            dl.setMinimumSize(1, 1)
             dl.setStyleSheet("font-size: 12px;")
             v.addWidget(dl)
         # 媒体文件（实际下载的图片/视频，双击图片看大图、双击视频缩略图播放）
@@ -2238,21 +2336,15 @@ class AssetPage(BasePage):
             mh.setStyleSheet("color: #6b7280; font-weight: bold;")
             v.addWidget(mh)
             if imgs or vids:
+                # 流式布局：缩略图按窗口宽度自动换行（窄窗多行，不出横向滚动条）
+                cells = [self._load_local_thumb_cell(im["path"], 128, is_video=False)
+                         for im in imgs]
+                cells += [self._load_local_thumb_cell(vd["path"], 128, is_video=True)
+                          for vd in vids]
                 grid_holder = QWidget()
-                grid = QGridLayout(grid_holder)
-                grid.setContentsMargins(0, 0, 0, 0)
-                grid.setSpacing(4)
-                cols = 5
-                i = 0
-                for im in imgs:
-                    cell = self._load_local_thumb_cell(im["path"], 128, is_video=False)
-                    grid.addWidget(cell, i // cols, i % cols)
-                    i += 1
-                for vd in vids:
-                    # 视频（含 live 图 .mov）：ffmpeg 抽首帧做封面，双击播放
-                    cell = self._load_local_thumb_cell(vd["path"], 128, is_video=True)
-                    grid.addWidget(cell, i // cols, i % cols)
-                    i += 1
+                flow = _FlowLayout(grid_holder, spacing=4)
+                for c in cells:
+                    flow.addWidget(c)
                 v.addWidget(grid_holder)
         v.addStretch(1)
 
