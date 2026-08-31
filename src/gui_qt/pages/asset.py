@@ -2315,19 +2315,30 @@ class AssetPage(BasePage):
         title_lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
         title_lbl.setWordWrap(True)
         v.addWidget(title_lbl)
+        self._attach_copy_menu(title_lbl, item.get("title") or "", "标题")
+        # (行名, 显示值, 复制原文, 复制菜单名 None=不提供复制, 是否时间字段)
         info_lines = [
-            ("平台", plat_cn),
-            ("作者", "@" + (item.get("author") or "-")),
-            ("播放/阅览", _fmt(item.get("play_count", 0))),
-            ("点赞", _fmt(item.get("like_count", 0))),
-            ("评论", _fmt(item.get("comment_count", 0))),
-            ("发布时间", item.get("publish_time") or "-"),
-            ("采集时间", item.get("fetched_at") or "-"),
-            ("源文件", item.get("file_path") or "-"),
-            ("视频链接", item.get("video_url") or "-"),
-            ("原始URL", item.get("raw_url") or "-"),
+            ("平台", plat_cn, plat_cn, "平台", False),
+            ("作者", "@" + (item.get("author") or "-"),
+             item.get("author") or "", "发布者", False),
+            ("播放/阅览", _fmt(item.get("play_count", 0)),
+             str(item.get("play_count") or 0), "播放/阅览", False),
+            ("点赞", _fmt(item.get("like_count", 0)),
+             str(item.get("like_count") or 0), "点赞", False),
+            ("评论", _fmt(item.get("comment_count", 0)),
+             str(item.get("comment_count") or 0), "评论", False),
+            ("发布时间", item.get("publish_time") or "-",
+             item.get("publish_time") or "", "时间", True),
+            ("采集时间", item.get("fetched_at") or "-",
+             item.get("fetched_at") or "", "时间", True),
+            ("源文件", item.get("file_path") or "-",
+             item.get("file_path") or "", "文件路径", False),
+            ("视频链接", item.get("video_url") or "-",
+             item.get("video_url") or "", "作品链接", False),
+            ("原始URL", item.get("raw_url") or "-",
+             item.get("raw_url") or "", "原始链接", False),
         ]
-        for k, val in info_lines:
+        for k, val, raw, copy_title, is_time in info_lines:
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
             kl.setFixedWidth(84)
@@ -2342,6 +2353,8 @@ class AssetPage(BasePage):
             wl.setMinimumSize(1, 1)
             wl.setStyleSheet("font-size: 12px;")
             row_f.addWidget(wl, 1)
+            if copy_title:
+                self._attach_copy_menu(wl, raw, copy_title, is_time)
             v.addLayout(row_f)
         desc = item.get("description") or ""
         if desc:
@@ -2359,6 +2372,7 @@ class AssetPage(BasePage):
             dl.setMinimumSize(1, 1)
             dl.setStyleSheet("font-size: 12px;")
             v.addWidget(dl)
+            self._attach_copy_menu(dl, desc, "正文")
         # 媒体文件（实际下载的图片/视频，双击图片看大图、双击视频缩略图播放）
         mfs = item.get("media_files") or []
         if mfs:
@@ -2408,6 +2422,16 @@ class AssetPage(BasePage):
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
         lbl.setToolTip(path)
+
+        # 右键缩略图 → 打开媒体位置（资源管理器定位该文件）
+        def _thumb_menu(pos):
+            menu = QMenu(lbl)
+            act = menu.addAction("📂 打开媒体位置")
+            if menu.exec(lbl.mapToGlobal(pos)) is act:
+                self._reveal_media(path)
+
+        lbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        lbl.customContextMenuRequested.connect(_thumb_menu)
 
         def load():
             try:
@@ -2471,6 +2495,60 @@ class AssetPage(BasePage):
 
         run_bg(load, done)
         return lbl
+
+    def _fmt_time_val(self, raw, with_seconds: bool) -> str:
+        """时间文本按带/不带秒重排（发布时间无秒、采集时间有秒）。"""
+        s = str(raw or "").strip()
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?", s)
+        if not m:
+            return s
+        date, hh, mm, ss = m.groups()
+        base = f"{date} {int(hh):02d}:{mm}"
+        return f"{base}:{ss or '00'}" if with_seconds else base
+
+    def _attach_copy_menu(self, w, raw, title, is_time=False):
+        """详情窗字段右键「复制」菜单：按右键所在字段决定复制内容。
+
+        时间字段两项（不带秒在前、带秒在后）；字段无内容时菜单置灰。
+        """
+
+        def show_menu(pos):
+            raw_val = str(raw or "")
+            menu = QMenu(w)
+            if is_time:
+                act_no = menu.addAction("📋 复制时间（不带秒）")
+                act_yes = menu.addAction("📋 复制时间（带秒）")
+            else:
+                act_no = menu.addAction(f"📋 复制{title}")
+                act_yes = None
+            if not raw_val.strip():
+                for a in (act_no, act_yes):
+                    if a:
+                        a.setEnabled(False)
+            act = menu.exec(w.mapToGlobal(pos))
+            if act is None:
+                return
+            if is_time:
+                text = self._fmt_time_val(raw_val, act is act_yes)
+                QApplication.clipboard().setText(text)
+                self.app.toast(f"已复制 {text}", "success")
+            else:
+                QApplication.clipboard().setText(raw_val)
+                self.app.toast(f"已复制{title}", "success")
+
+        w.setContextMenuPolicy(Qt.CustomContextMenu)
+        w.customContextMenuRequested.connect(show_menu)
+
+    def _reveal_media(self, path):
+        """资源管理器中定位媒体文件（打开所在文件夹并选中）。"""
+        if not os.path.exists(path):
+            self.app.toast("媒体文件不存在或已被移动", "error")
+            return
+        import subprocess
+        try:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        except Exception as e:
+            self.app.toast(f"打开媒体位置失败: {e}", "error")
 
     def _open_media(self, path):
         """用系统默认程序打开媒体文件（图片/视频）。"""
