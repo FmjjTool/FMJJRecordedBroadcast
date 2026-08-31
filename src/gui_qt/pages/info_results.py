@@ -108,7 +108,6 @@ class TagColorDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         selected = bool(opt.state & QStyle.State_Selected)
-        checked = opt.state & QStyle.State_On
         style = opt.widget.style() if opt.widget else QApplication.style()
 
         # 1. 卡片底 + 边框（整条范围可视化；选中态蓝底亮边框）
@@ -122,12 +121,20 @@ class TagColorDelegate(QStyledItemDelegate):
         painter.restore()
 
         # 2. 复选框（画在卡片上，位置与原生一致——点击热区由原生位置决定）
+        #    勾选态必须读 opt.checkState：initStyleOption 不会把它映射成 State_On
+        #    状态位（那是 CE_ItemViewItem 内部做的，此处手绘指示框需自行映射）
         opt_chk = QStyleOptionViewItem(opt)
         opt_chk.rect = option.rect
         opt_chk.state &= ~QStyle.State_Selected
         chk_rect = style.subElementRect(QStyle.SE_ItemViewItemCheckIndicator, opt_chk, opt.widget)
         opt_chk.rect = chk_rect
-        opt_chk.state |= (QStyle.State_On if checked else QStyle.State_Off)
+        opt_chk.state &= ~(QStyle.State_On | QStyle.State_Off | QStyle.State_NoChange)
+        if opt.checkState == Qt.Checked:
+            opt_chk.state |= QStyle.State_On
+        elif opt.checkState == Qt.PartiallyChecked:
+            opt_chk.state |= QStyle.State_NoChange
+        else:
+            opt_chk.state |= QStyle.State_Off
         style.drawPrimitive(QStyle.PE_IndicatorItemViewItemCheck, opt_chk, painter, opt.widget)
 
         # 3. 富文本（类型标签彩色 + 自动换行），画在卡片内边距里
