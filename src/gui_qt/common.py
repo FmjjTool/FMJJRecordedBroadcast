@@ -86,6 +86,34 @@ def post_to_main(fn, *args):
 
 # ==================== 格式化工具 ====================
 
+def first_number(s: str):
+    """提取字符串里第一个数字（表格排序用），无数字返回 None。"""
+    import re
+    m = re.search(r"\d+(?:\.\d+)?", s or "")
+    return float(m.group()) if m else None
+
+
+def sales_number(s: str):
+    """销量文本 → 数字（"月销 12"→12，"1万+"→10000），无数字返回 None。"""
+    import re
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(万)?", s or "")
+    if not m:
+        return None
+    v = float(m.group(1))
+    return v * 10000 if m.group(2) else v
+
+
+def stable_sort(items, key, desc):
+    """原地稳定排序；空值（None/空串）恒排末尾（升序降序皆然）。"""
+    pairs = [(it, key(it)) for it in items]
+    non_empty = [(it, v) for it, v in pairs
+                 if v is not None and v != ""]
+    empties = [(it, v) for it, v in pairs
+               if v is None or v == ""]
+    non_empty.sort(key=lambda p: p[1], reverse=desc)
+    items[:] = [it for it, _ in non_empty] + [it for it, _ in empties]
+
+
 def _info_text(info) -> str:
     """将 VideoInfo 格式化为展示文本。"""
     view = "阅览量" if info.platform == "weibo" else "播放量"

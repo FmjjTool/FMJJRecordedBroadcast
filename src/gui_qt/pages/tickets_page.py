@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import first_number, post_to_main, run_bg, stable_sort
 from gui_qt.pages.base import BasePage
 
 import tickets as tickets_mod
@@ -30,8 +30,11 @@ class TicketsPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self._events = []          # 当前演出列表（ShowEvent）
+        self._events_original = [] # 解析时的原始顺序（排序三态回退用）
         self._detail_cache = {}    # event key → detail dict（获取过详情的）
         self._filling = False      # 表格填充中（抑制勾选计数刷新）
+        self._sort_col = None      # 当前排序列（None=原始顺序）
+        self._sort_state = 0       # 0=原顺序 1=A-Z 2=Z-A
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -108,6 +111,8 @@ class TicketsPage(BasePage):
         self.table.setColumnWidth(0, 36)   # 勾选列
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_select)
+        # 点击表头排序：A-Z → Z-A → 原顺序（勾选与选中行保留）
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         splitter.addWidget(self.table)
 
         right = QWidget()
@@ -168,6 +173,9 @@ class TicketsPage(BasePage):
                 self._events, diag = result
             else:
                 self._events, diag = result, {}
+            self._events_original = list(self._events)
+            self._sort_col = None
+            self._sort_state = 0
             self._detail_cache.clear()
             self._fill_table()
             tip = ""
@@ -243,6 +251,63 @@ class TicketsPage(BasePage):
     def _update_check_count(self):
         n = len(self._checked_rows())
         self.check_count_label.setText(f"已勾选 {n} 场")
+
+    # ==================== 表头排序（A-Z / Z-A / 原顺序） ====================
+
+    _EVENT_KEYS = {
+        1: lambda ev: (ev.title or "").lower(),
+        2: lambda ev: (ev.platform_cn or ev.platform or "").lower(),
+        3: lambda ev: (ev.city or "").lower(),
+        4: lambda ev: (ev.show_time or ""),
+        5: lambda ev: first_number(ev.price_range),
+        6: lambda ev: (ev.status or "").lower(),
+    }
+
+    @staticmethod
+    def _event_key(ev):
+        return (ev.platform, ev.event_id)
+
+    def _on_header_clicked(self, col):
+        """点击表头循环切换：A-Z → Z-A → 原顺序；勾选与选中行保留。"""
+        if col == 0 or not self._events:
+            return
+        # 先按当前顺序记录勾选/选中的 key（随后 _events 顺序改变，行号会错位）
+        checked = {self._event_key(self._events[r]) for r in self._checked_rows()}
+        sel_rows = self.table.selectionModel().selectedRows()
+        sel_key = (self._event_key(self._events[sel_rows[0].row()])
+                   if sel_rows and sel_rows[0].row() < len(self._events) else None)
+        if self._sort_col != col:
+            self._sort_col, self._sort_state = col, 1
+        else:
+            self._sort_state = (self._sort_state + 1) % 3
+        header = self.table.horizontalHeader()
+        if self._sort_state == 0:
+            self._events = list(self._events_original)
+            header.setSortIndicatorShown(False)
+        else:
+            key = self._EVENT_KEYS.get(col)
+            if key:
+                stable_sort(self._events, key, desc=(self._sort_state == 2))
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(
+                col, Qt.DescendingOrder if self._sort_state == 2 else Qt.AscendingOrder)
+        self._refill_preserving(checked, sel_key)
+
+    def _refill_preserving(self, checked, sel_key):
+        """按当前 self._events 重填表格，恢复勾选状态与选中行（key 在排序前采集）。"""
+        self._fill_table()
+        if checked:
+            self._filling = True
+            for r, ev in enumerate(self._events):
+                if self._event_key(ev) in checked:
+                    self.table.item(r, 0).setCheckState(Qt.Checked)
+            self._filling = False
+            self._update_check_count()
+        if sel_key:
+            for r, ev in enumerate(self._events):
+                if self._event_key(ev) == sel_key:
+                    self.table.selectRow(r)
+                    break
 
     # ==================== 详情 ====================
 

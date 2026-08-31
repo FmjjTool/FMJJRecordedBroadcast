@@ -67,6 +67,17 @@ def save_accounts(accounts):
         json.dump(accounts, f, ensure_ascii=False, indent=2)
 
 
+def move_account(index: int, delta: int) -> bool:
+    """上移/下移账号（index 为当前行号，delta=-1/+1），调整后立即保存。"""
+    accounts = load_accounts()
+    new = index + delta
+    if not (0 <= index < len(accounts)) or not (0 <= new < len(accounts)):
+        return False
+    accounts[index], accounts[new] = accounts[new], accounts[index]
+    save_accounts(accounts)
+    return True
+
+
 # ==================== 分组 ====================
 
 def get_groups():

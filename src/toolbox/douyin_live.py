@@ -1596,3 +1596,7 @@ class DouyinLiveFetcher:
             ws.close()
         except Exception:
             pass
+
+
+# 弹幕姬页统一抓取器入口（bili_live.LiveFetcher 同名同构）
+LiveFetcher = DouyinLiveFetcher

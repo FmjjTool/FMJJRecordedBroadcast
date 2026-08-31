@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import first_number, post_to_main, run_bg, sales_number, stable_sort
 from gui_qt.pages.base import BasePage
 
 import shopping as shopping_mod
@@ -38,12 +38,17 @@ class ShoppingPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self._products = []          # 当前商品列表（ShopProduct，店铺模式）
+        self._products_original = [] # 解析时的原始顺序（排序三态回退用）
         self._shop = None            # 最近一次店铺信息
         self._detail = None          # 当前获取的商品详情（TaobaoItemDetail）
         self._detail_cache = {}      # item_id → TaobaoItemDetail（本次列表已拉过的）
         self._detail_sku_imgs = []   # 详情模式各行预览图 URL（行号对齐）
+        self._skus_original = []     # SKU 原始顺序（排序三态回退用）
+        self._sku_imgs_original = [] # SKU 原始顺序对应的预览图
         self._preview_seq = 0        # 图片预览请求序号（防止旧图覆盖新图）
         self._filling = False        # 表格填充中（抑制勾选计数刷新）
+        self._sort_col = None        # 当前排序列（None=原始顺序）
+        self._sort_state = 0         # 0=原顺序 1=A-Z 2=Z-A
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -124,6 +129,8 @@ class ShoppingPage(BasePage):
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_select)
         self.table.cellDoubleClicked.connect(self._open_item)
+        # 点击表头排序：A-Z → Z-A → 原顺序（勾选与选中行保留）
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         splitter.addWidget(self.table)
 
         right = QWidget()
@@ -259,6 +266,16 @@ class ShoppingPage(BasePage):
     # ==================== 表格 ====================
 
     def _fill_table_shop(self, products):
+        self._products_original = list(products)
+        self._sort_col = None
+        self._sort_state = 0
+        self.table.horizontalHeader().setSortIndicatorShown(False)
+        self._fill_shop_rows(products)
+        for b in (self.sel_all_btn, self.sel_invert_btn, self.sel_clear_btn):
+            b.setEnabled(True)
+
+    def _fill_shop_rows(self, products):
+        """纯填表（不动排序状态/原始顺序备份，排序重填用）。"""
         self._filling = True
         self.table.setColumnCount(len(self.COLS_SHOP))
         self.table.setHorizontalHeaderLabels(self.COLS_SHOP)
@@ -284,11 +301,12 @@ class ShoppingPage(BasePage):
             self.table.setItem(row, 6, QTableWidgetItem("打开"))
         self._filling = False
         self._update_check_count()
-        for b in (self.sel_all_btn, self.sel_invert_btn, self.sel_clear_btn):
-            b.setEnabled(True)
 
     def _fill_table_item(self, d):
         self._filling = True
+        self._sort_col = None
+        self._sort_state = 0
+        self.table.horizontalHeader().setSortIndicatorShown(False)
         self.table.setColumnCount(len(self.COLS_ITEM))
         self.table.setHorizontalHeaderLabels(self.COLS_ITEM)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -301,16 +319,26 @@ class ShoppingPage(BasePage):
             for v in grp.get("values") or []:
                 sku_imgs.append(v.get("image") or "")
         for i, s in enumerate(d.skus):
+            img = sku_imgs[i] if i < len(sku_imgs) else ""
+            self._detail_sku_imgs.append(img or (d.main_images[0] if d.main_images else ""))
+        self._skus_original = list(d.skus)
+        self._sku_imgs_original = list(self._detail_sku_imgs)
+        self._filling = False
+        self._refill_sku_rows()
+        for b in (self.sel_all_btn, self.sel_invert_btn, self.sel_clear_btn):
+            b.setEnabled(False)   # SKU 模式无勾选
+
+    def _refill_sku_rows(self):
+        """按当前 _detail.skus + _detail_sku_imgs 填 SKU 表（两者顺序对齐）。"""
+        self._filling = True
+        self.table.setRowCount(0)
+        for s in self._detail.skus:
             row = self.table.rowCount()
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(s.names or "-"))
             self.table.setItem(row, 1, QTableWidgetItem(s.price or ""))
             self.table.setItem(row, 2, QTableWidgetItem(s.quantity or ""))
-            img = sku_imgs[i] if i < len(sku_imgs) else ""
-            self._detail_sku_imgs.append(img or (d.main_images[0] if d.main_images else ""))
         self._filling = False
-        for b in (self.sel_all_btn, self.sel_invert_btn, self.sel_clear_btn):
-            b.setEnabled(False)   # SKU 模式无勾选
 
     # ==================== 勾选（多选导出） ====================
 
@@ -358,6 +386,86 @@ class ShoppingPage(BasePage):
     def _update_check_count(self):
         n = len(self._checked_rows())
         self.check_count_label.setText(f"已勾选 {n} 件")
+
+    # ==================== 表头排序（A-Z / Z-A / 原顺序） ====================
+
+    _PRODUCT_KEYS = {
+        1: lambda pr: (pr.title or "").lower(),
+        2: lambda pr: first_number(pr.price),
+        3: lambda pr: sales_number(pr.sales),
+        4: lambda pr: first_number(pr.coupon) if pr.coupon else None,
+        5: lambda pr: int(pr.item_id) if (pr.item_id or "").isdigit() else None,
+    }
+
+    _SKU_KEYS = {
+        0: lambda s: (s.names or "").lower(),
+        1: lambda s: first_number(s.price),
+        2: lambda s: first_number(s.quantity),
+    }
+
+    def _on_header_clicked(self, col):
+        """点击表头循环切换：A-Z → Z-A → 原顺序；店铺模式保留勾选与选中行。"""
+        if self._is_shop_mode():
+            if col == 0 or col == 6 or not self._products:
+                return
+            keys = self._PRODUCT_KEYS
+            # 先按当前顺序记录勾选/选中的 key（随后 _products 顺序改变，行号会错位）
+            checked = {self._products[r].item_id for r in self._checked_rows()}
+            sel_rows = self.table.selectionModel().selectedRows()
+            sel_key = (self._products[sel_rows[0].row()].item_id
+                       if sel_rows and sel_rows[0].row() < len(self._products) else None)
+        elif self._detail is not None:
+            keys = self._SKU_KEYS
+            if col not in keys:
+                return
+            checked = sel_key = None
+        else:
+            return
+        if self._sort_col != col:
+            self._sort_col, self._sort_state = col, 1
+        else:
+            self._sort_state = (self._sort_state + 1) % 3
+        header = self.table.horizontalHeader()
+        if self._sort_state == 0:
+            if self._is_shop_mode():
+                self._products = list(self._products_original)
+            else:
+                self._detail.skus = list(self._skus_original)
+                self._detail_sku_imgs = list(self._sku_imgs_original)
+            header.setSortIndicatorShown(False)
+        else:
+            if self._is_shop_mode():
+                stable_sort(self._products, keys[col], desc=(self._sort_state == 2))
+            else:
+                # SKU 行与预览图成对移动，保持行号对齐
+                pairs = list(zip(self._detail.skus, self._detail_sku_imgs))
+                stable_sort(pairs, key=lambda p: keys[col](p[0]),
+                            desc=(self._sort_state == 2))
+                self._detail.skus = [s for s, _ in pairs]
+                self._detail_sku_imgs = [img for _, img in pairs]
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(
+                col, Qt.DescendingOrder if self._sort_state == 2 else Qt.AscendingOrder)
+        if self._is_shop_mode():
+            self._refill_products_preserving(checked, sel_key)
+        else:
+            self._refill_sku_rows()
+
+    def _refill_products_preserving(self, checked, sel_key):
+        """按当前 self._products 重填商品表，恢复勾选状态与选中行（key 在排序前采集）。"""
+        self._fill_shop_rows(self._products)
+        if checked:
+            self._filling = True
+            for r, pr in enumerate(self._products):
+                if pr.item_id in checked:
+                    self.table.item(r, 0).setCheckState(Qt.Checked)
+            self._filling = False
+            self._update_check_count()
+        if sel_key:
+            for r, pr in enumerate(self._products):
+                if pr.item_id == sel_key:
+                    self.table.selectRow(r)
+                    break
 
     def _reset_right_panel(self):
         self.detail_text.setPlaceholderText(

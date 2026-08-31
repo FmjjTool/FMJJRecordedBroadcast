@@ -91,12 +91,22 @@ def img_cache_lookup(url):
     return None
 
 
+def _img_referer(url):
+    """按图床域名选 Referer（抖音/B站图床防盗链要求不同）。"""
+    u = url or ""
+    if "hdslb.com" in u or "bili" in u:
+        return "https://live.bilibili.com/"
+    if "douyin" in u:
+        return "https://live.douyin.com/"
+    return ""
+
+
 def img_cache_download(url):
     """后台线程下载一张图到缓存（带 Referer 防盗链），成功返回本地路径。"""
     import httpx
     try:
         r = httpx.get(url, timeout=8, follow_redirects=True,
-                      headers={"User-Agent": _IMG_UA, "Referer": "https://live.douyin.com/"})
+                      headers={"User-Agent": _IMG_UA, "Referer": _img_referer(url)})
         if r.status_code == 200 and r.content:
             p = _webcast_img_dir() / (_img_key(url) + _sniff_ext(r.content))
             p.write_bytes(r.content)
@@ -169,11 +179,13 @@ class TestPage(BasePage):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(4)
 
-        # 标题
-        outer.addWidget(QLabel("🎬 抖音弹幕 · 实时数据接入",
-                               styleSheet="font-size: 18px; font-weight: bold;"))
-        outer.addWidget(QLabel("真实连接抖音直播间，实时抓取弹幕 / 礼物 / 进场 / 点赞 / 关注",
-                               styleSheet="color: #888; font-size: 11px;"))
+        # 标题（子类按平台改写文案）
+        self.title_lbl = QLabel("🎬 抖音弹幕 · 实时数据接入",
+                                styleSheet="font-size: 18px; font-weight: bold;")
+        outer.addWidget(self.title_lbl)
+        self.subtitle_lbl = QLabel("真实连接抖音直播间，实时抓取弹幕 / 礼物 / 进场 / 点赞 / 关注",
+                                   styleSheet="color: #888; font-size: 11px;")
+        outer.addWidget(self.subtitle_lbl)
 
         # ===== 顶栏：全局控制 =====
         # Cookie 说明：凭证统一由侧栏「Cookie 管理」维护（总开关+账号池），
@@ -323,20 +335,46 @@ class TestPage(BasePage):
         if _idx >= 0 and _idx != self.mode_combo.currentIndex():
             self.mode_combo.setCurrentIndex(_idx)
 
-    # ======================== 设置 ========================
+    # ======================== 平台后端（B站弹幕姬子类替换此模块） ========================
+    _BACKEND = "toolbox.douyin_live"
+
+    def _backend(self):
+        """平台后端模块（douyin_live / bili_live 同构接口）。"""
+        import importlib
+        return importlib.import_module(self._BACKEND)
+
     def _load_settings(self):
         try:
-            from toolbox.douyin_live import load_settings
-            return load_settings()
+            return self._backend().load_settings()
         except Exception:
             return {}
 
     def _save_settings(self):
         try:
-            from toolbox.douyin_live import save_settings
-            save_settings(self.settings)
+            self._backend().save_settings(self.settings)
         except Exception:
             pass
+
+    def _default_room(self):
+        """未填房间号时的默认房号（上次使用的，无效回退内置默认）。"""
+        room = str(self.settings.get("last_room", "") or "")
+        if room.isdigit() and len(room) >= 6:
+            return room
+        return "582775732015"
+
+    def _create_fetcher(self, room):
+        """创建平台弹幕抓取器（on_message/on_room_info/on_status 同构回调）。"""
+        return self._backend().LiveFetcher(
+            room,
+            on_message=self._on_message,
+            on_room_info=self._on_room_info,
+            on_status=self._on_status,
+        )
+
+    def _rec_dir(self):
+        """录播文件目录。"""
+        return self._backend()._danmaku_dir().parent / "直播录制"
+
 
     # ======================== 左：主播信息 ========================
     def _build_anchor_panel(self, parent):
@@ -715,8 +753,7 @@ class TestPage(BasePage):
         if not self._current_stream:
             self.app.toast("无可用直播流（需先连接并获取清晰度）", "warning")
             return
-        from toolbox.douyin_live import _danmaku_dir
-        d = _danmaku_dir().parent / "直播录制"
+        d = self._rec_dir()
         d.mkdir(parents=True, exist_ok=True)
         room = self.room_entry.text().strip() or "room"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -808,8 +845,7 @@ class TestPage(BasePage):
             if not quiet:
                 self.app.toast("当前没有弹幕数据可打包", "warning")
             return None
-        from toolbox.douyin_live import _danmaku_dir
-        d = _danmaku_dir()
+        d = self._backend()._danmaku_dir()
         d.mkdir(parents=True, exist_ok=True)
         room = self.room_entry.text().strip() or "room"
         anchor = (self.anchor_fields["anchor_name"].text() or "").strip() or "未知主播"
@@ -951,8 +987,7 @@ class TestPage(BasePage):
             anchor = (first.get("nickname") or "未知主播").strip() or "未知主播"
             room = str(first.get("roomId") or "room").strip() or "room"
             like = max((int(b.get("likeCount") or 0) for b in bundles), default=0)
-            from toolbox.douyin_live import _danmaku_dir
-            out_dir = _danmaku_dir()
+            out_dir = self._backend()._danmaku_dir()
             out_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             out = out_dir / f"{anchor}-{room}-合并-{ts}-{len(merged)}条.zip"
@@ -1196,7 +1231,7 @@ class TestPage(BasePage):
         m = self._norm_cast(c)
         if not m:
             return
-        from toolbox.douyin_live import MSG_TYPES
+        MSG_TYPES = self._backend().MSG_TYPES
         mtype = m.get("type", "")
         name, _cat = MSG_TYPES.get(mtype, (mtype, "other"))
         nick = m.get("nickname") or ""
@@ -1468,9 +1503,8 @@ class TestPage(BasePage):
         e_stats = row("统计数据采集间隔(秒):", s.get("stats_interval", 1))
         e_poll = row("轮询间隔(秒):", s.get("poll_interval", 60))
         # 弹幕自动导出说明（默认导出回放包 zip，保存位置为 导出目录/弹幕文件/）
-        from toolbox.douyin_live import _danmaku_dir
         v.addWidget(QLabel(
-            f"自动导出回放包到：{_danmaku_dir()}"
+            f"自动导出回放包到：{self._backend()._danmaku_dir()}"
             "（断开连接 / 退出软件时自动打包 zip，含全量弹幕与分类 TXT）",
             styleSheet="color: #888; font-size: 11px;"))
         v.addWidget(QLabel(
@@ -1610,9 +1644,7 @@ class TestPage(BasePage):
         room = self.room_entry.text().strip()
         if not room:
             # 未填房间号：自动填入默认房号（上次使用的，无效则回退内置默认）
-            room = str(self.settings.get("last_room", "") or "")
-            if not (room.isdigit() and len(room) >= 6):
-                room = "582775732015"
+            room = self._default_room()
             self.room_entry.setText(room)
             self.app.toast(f"未填房间号，已自动填入默认 {room}", "info")
         self._manual_stop = False   # 发起新连接：清除手动停止标记
@@ -1645,15 +1677,9 @@ class TestPage(BasePage):
             self._timer_running = True
             self._tick()
         # 启动真实数据抓取（start 内部自建线程，不阻塞 UI）
-        from toolbox.douyin_live import DouyinLiveFetcher
         if self.fetcher:
             self.fetcher.stop()   # 旧连接先停，避免快速重试时出现双 WS
-        self.fetcher = DouyinLiveFetcher(
-            room,
-            on_message=self._on_message,
-            on_room_info=self._on_room_info,
-            on_status=self._on_status,
-        )
+        self.fetcher = self._create_fetcher(room)
         # 轮询重连竞态防护：旧抓取线程 stop 后仍会异步发 disconnected/error，
         # 若已是新实例则忽略，避免把新连接状态又改回“已断开”
         cur = self.fetcher
@@ -1798,9 +1824,8 @@ class TestPage(BasePage):
     def _start_stats_collector(self, room):
         if self.stats_collector:
             self.stats_collector.stop()
-        from toolbox.douyin_live import StatsCollector
         interval = int(self.settings.get("stats_interval", 1))
-        self.stats_collector = StatsCollector(room, interval, on_stats=self._on_stats)
+        self.stats_collector = self._backend().StatsCollector(room, interval, on_stats=self._on_stats)
         self.stats_collector.start()
 
     def _on_stats(self, info):
@@ -1819,8 +1844,7 @@ class TestPage(BasePage):
             room = self.room_entry.text().strip()
             line = f"{ts},{info.get('online', '')},{self._like_count},{info.get('fans', '')},{info.get('total_viewers', '')}"
             try:
-                from toolbox.douyin_live import append_stats_file
-                append_stats_file(room, line)
+                self._backend().append_stats_file(room, line)
             except Exception:
                 pass
 
@@ -1842,9 +1866,8 @@ class TestPage(BasePage):
         self.monitor_btn.setStyleSheet("background: #2a5a8c; color: white;")
         self.monitor_status.setText(f"监控中 · 房间 {room}")
         self.monitor_status.setStyleSheet("color: #1976d2; font-size: 11px;")
-        from toolbox.douyin_live import LiveMonitor
         interval = max(10, int(self.settings.get("monitor_interval", 30)))
-        self.live_monitor = LiveMonitor(room, interval, on_change=self._on_live_change)
+        self.live_monitor = self._backend().LiveMonitor(room, interval, on_change=self._on_live_change)
         self.live_monitor.start()
 
     def _show_captcha_dialog(self):

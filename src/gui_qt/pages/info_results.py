@@ -11,7 +11,7 @@ import webbrowser
 from datetime import datetime
 
 from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QPalette, QTextDocument
+from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
     QMessageBox, QPushButton, QListView, QStyledItemDelegate, QStyle,
@@ -53,10 +53,21 @@ def colorize_tag_html(text: str, selected: bool = False) -> str:
 
 
 class TagColorDelegate(QStyledItemDelegate):
-    """列表行富文本渲染：类型标签彩色加粗 + 按栏宽自动换行（多行完整显示，不截断）。"""
+    """列表行渲染：卡片框 + 浅底色（条目范围一目了然），类型标签彩色加粗，按栏宽自动换行。"""
+
+    # 卡片视觉参数：外边距（行间距）/ 内边距 / 圆角 / 配色（常规 + 选中态）
+    CARD_MARGIN_X = 3
+    CARD_MARGIN_Y = 2
+    CARD_PAD_X = 8
+    CARD_PAD_Y = 5
+    CARD_RADIUS = 6
+    CARD_BG = QColor("#f3f6fa")
+    CARD_BORDER = QColor("#d4dde7")
+    CARD_BG_SEL = QColor("#d8e8ff")
+    CARD_BORDER_SEL = QColor("#5b9bff")
 
     def _text_width(self, opt):
-        """当前栏内一行文本的可用宽度（视口宽 - 复选框指示框区域）。"""
+        """当前栏内一行文本的可用宽度（视口宽 - 复选框指示框区域 - 卡片内边距）。"""
         view = self.parent()
         if not isinstance(view, QWidget):
             return 260
@@ -64,7 +75,8 @@ class TagColorDelegate(QStyledItemDelegate):
         probe = QStyleOptionViewItem(opt)
         probe.rect = QRect(0, 0, view.viewport().width(), 20)
         rect = style.subElementRect(QStyle.SE_ItemViewItemText, probe, view)
-        return max(rect.width() - 4, 60)
+        inner = (rect.width() - 2 * self.CARD_MARGIN_X - 2 * self.CARD_PAD_X - 2)
+        return max(inner, 60)
 
     def _build_doc(self, text, opt, selected, width):
         doc = QTextDocument()
@@ -84,9 +96,9 @@ class TagColorDelegate(QStyledItemDelegate):
             return super().sizeHint(option, index)
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
-        width = self._text_width(opt)
-        doc = self._build_doc(text, opt, False, width)
-        return QSize(width, int(doc.size().height()) + 6)
+        doc = self._build_doc(text, opt, False, self._text_width(opt))
+        h = int(doc.size().height()) + 2 * self.CARD_PAD_Y + 2 * self.CARD_MARGIN_Y
+        return QSize(max(self._text_width(opt), 60), h)
 
     def paint(self, painter, option, index):
         text = index.data(Qt.DisplayRole)
@@ -96,15 +108,38 @@ class TagColorDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         selected = bool(opt.state & QStyle.State_Selected)
-        opt.text = ""
+        checked = opt.state & QStyle.State_On
         style = opt.widget.style() if opt.widget else QApplication.style()
-        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
-        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
-        doc = self._build_doc(text, opt, selected, rect.width())
+
+        # 1. 卡片底 + 边框（整条范围可视化；选中态蓝底亮边框）
+        card = QRect(option.rect).adjusted(self.CARD_MARGIN_X, self.CARD_MARGIN_Y,
+                                           -self.CARD_MARGIN_X, -self.CARD_MARGIN_Y)
         painter.save()
-        painter.setClipRect(rect)
-        y = rect.top() + max(0.0, (rect.height() - doc.size().height()) / 2.0)
-        painter.translate(rect.left(), y)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(self.CARD_BG_SEL if selected else self.CARD_BG)
+        painter.setPen(QPen(self.CARD_BORDER_SEL if selected else self.CARD_BORDER, 1))
+        painter.drawRoundedRect(card, self.CARD_RADIUS, self.CARD_RADIUS)
+        painter.restore()
+
+        # 2. 复选框（画在卡片上，位置与原生一致）
+        opt_chk = QStyleOptionViewItem(opt)
+        opt_chk.rect = option.rect
+        opt_chk.state &= ~QStyle.State_Selected
+        chk_rect = style.subElementRect(QStyle.SE_ItemViewItemCheckIndicator, opt_chk, opt.widget)
+        opt_chk.rect = chk_rect
+        opt_chk.state |= (QStyle.State_On if checked else QStyle.State_Off)
+        style.drawPrimitive(QStyle.PE_IndicatorItemViewItemCheck, opt_chk, painter, opt.widget)
+
+        # 3. 富文本（类型标签彩色 + 自动换行），画在卡片内边距里
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        doc = self._build_doc(
+            text, opt, selected,
+            rect.width() - 2 * self.CARD_MARGIN_X - 2 * self.CARD_PAD_X - 2)
+        painter.save()
+        text_rect = QRect(card.left() + self.CARD_PAD_X, card.top() + self.CARD_PAD_Y,
+                          card.width() - 2 * self.CARD_PAD_X, card.height() - 2 * self.CARD_PAD_Y)
+        painter.setClipRect(text_rect)
+        painter.translate(text_rect.left(), text_rect.top())
         doc.drawContents(painter)
         painter.restore()
 
@@ -232,7 +267,8 @@ class InfoResultsPage(BasePage):
         v.addLayout(btns)
 
         lst = RowCheckList()
-        # 多行完整显示：按栏宽自动换行，窗口缩放时重新布局重算行高
+        # 卡片式条目：行间距隔开卡片；按栏宽自动换行，窗口缩放时重新布局重算行高
+        lst.setSpacing(4)
         lst.setWordWrap(True)
         lst.setResizeMode(QListView.Adjust)
         lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)

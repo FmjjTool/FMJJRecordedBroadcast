@@ -1,30 +1,23 @@
 # -*- coding: utf-8 -*-
-"""B站直播录制引擎（学习 BililiveRecorder 理念的纯 Python 复刻）。
+"""B站直播采集后端（学习 BililiveRecorder 理念的纯 Python 复刻）。
 
-核心思路（对应 BililiveRecorder.Core）：
-  1. 房间监控：轮询 get_info 接口，live_status 1=直播中 0=未开播 2=轮播
-  2. 自动开播录制：检测到开播 → 自动取流录制；下播 → 自动停止
-  3. 取流：getRoomPlayInfo 接口（游客），FLV 直链 = host + base_url + extra，
-     画质列表直接用接口返回的 stream_qn_info（无需硬编码）
-  4. 纯 HTTP FLV 流式转存（不依赖 ffmpeg），流断开自动重连（重取流地址、
-     开新文件段，与 BililiveRecorder 的切割行为一致）
-  5. 弹幕录制：WebSocket 协议（auth + 心跳 + zlib deflate 解压）→ XML 文件
-     （BililiveRecorder 同款 <ietf><d p="...">格式）
-
-用法（GUI 后台线程）：
-  info = fetch_room_info(room_id)
-  rec = BiliFlvRecorder(out_dir, on_event=cb); rec.start(url, room, title)
-  dan = BiliDanmakuRecorder(out_dir, room_id, uid); dan.start(); dan.stop()
+两类使用者：
+  1. B站弹幕姬页（gui_qt/pages/bili_danmaku.py）：BiliLiveFetcher 弹幕抓取 +
+     fetch_room_info 房间信息 + fetch_play_url 直播流 + StatsCollector/LiveMonitor。
+  2. 协议要点：
+     - 房间信息：room/v1/Room/get_info（游客），live_status 0未播 1直播中 2轮播
+     - 取流：getRoomPlayInfo（游客），FLV 直链 = host + base_url + extra，
+       画质列表直接用接口返回的 stream_qn_info（缺失时静态兜底）
+     - 弹幕：WebSocket（wss://broadcastlv.chat.bilibili.com/sub），
+       鉴权(7) + 心跳(2, 30s) + zlib(2) 解压，帧头大端
 """
 
 import json
-import os
 import re
 import struct
 import threading
 import time
 from datetime import datetime
-from xml.sax.saxutils import escape
 
 import httpx
 
@@ -42,6 +35,8 @@ QN_FALLBACK = [(30000, "杜比"), (25000, "HDR"), (20000, "4K"), (10000, "原画
 HEARTBEAT_INTERVAL = 30      # 弹幕心跳间隔（秒）
 WS_RECV_TIMEOUT = 90         # 收不到任何包超过该秒数视为断线
 
+DEFAULT_ROOM = "6"           # B站直播办公屏（常开，方便测试）
+
 
 def _headers() -> dict:
     return {"User-Agent": UA, "Origin": "https://live.bilibili.com",
@@ -49,13 +44,14 @@ def _headers() -> dict:
 
 
 def fetch_room_info(room_id: str) -> dict:
-    """房间信息（游客）：标题/状态/主播/封面。live_status: 0未播 1直播中 2轮播。
+    """房间信息（游客）：标题/状态/主播/封面/粉丝。live_status: 0未播 1直播中 2轮播。
 
-    get_info 已不返回 uname → 用 uid 查 live_user/v1/Master/info（游客可用）。
+    get_info 已不返回 uname/fans → 用 uid 查 live_user/v1/Master/info（游客可用）。
     real_room_id 必须回传：弹幕 WS 鉴权体 roomid 只认真实号（短号会被断连）。
     """
     out = {"room_id": str(room_id), "live_status": 0, "title": "",
-           "uname": "", "cover": "", "keyframe": "", "area": "", "watch_num": 0}
+           "uname": "", "cover": "", "keyframe": "", "area": "", "watch_num": 0,
+           "fans": 0, "avatar": ""}
     try:
         r = httpx.get(INFO_API, params={"room_id": room_id},
                       headers=_headers(), timeout=15)
@@ -79,7 +75,14 @@ def fetch_room_info(room_id: str) -> dict:
             try:
                 r2 = httpx.get("https://api.live.bilibili.com/live_user/v1/Master/info",
                                params={"uid": uid}, headers=_headers(), timeout=10)
-                out["uname"] = ((r2.json().get("data") or {}).get("info") or {}).get("uname") or ""
+                d2 = r2.json().get("data") or {}
+                out["uname"] = (d2.get("info") or {}).get("uname") or ""
+                out["avatar"] = (d2.get("info") or {}).get("face") or ""
+                try:
+                    out["fans"] = int(d2.get("follower")
+                                      or (d2.get("info") or {}).get("fans") or 0)
+                except (TypeError, ValueError):
+                    out["fans"] = 0
             except Exception:
                 pass
     except Exception as e:
@@ -162,125 +165,231 @@ def fetch_play_url(room_id: str, qn: int | None = None) -> dict:
     return out
 
 
-def _sanitize(name: str, max_len: int = 40) -> str:
-    from toolbox.utils import sanitize_filename
-    return sanitize_filename(name, max_len, "untitled")
+# ==================== 弹幕姬后端（与 douyin_live 同构接口） ====================
+
+DEFAULT_SETTINGS = {
+    "monitor_interval": 30,     # 开播监控检测间隔（秒）
+    "stats_interval": 1,        # 统计数据采集间隔（秒）
+    "poll_interval": 60,        # 轮询间隔（秒）
+    "save_danmaku": False,      # 保存弹幕到文件
+    "save_stats": True,         # 保存统计数据（默认勾选）
+    "keep_scroll": True,        # 保持滚动（强制最新）
+    "dark_mode": True,          # 深色模式
+    "last_room": DEFAULT_ROOM,  # 默认房号
+    "poll_enabled": True,       # 轮询开关（顶栏）
+    "mode": "danmaku_only",     # 弹幕方式：默认仅弹幕
+    "auto_record": False,       # 自动录播（勾选后拿到流即录）
+    "auto_save_danmaku": True,  # 自动导出回放包
+}
 
 
-def _rec_dir() -> "os.PathLike":
-    from toolbox.config_manager import get_export_dir
-    d = get_export_dir() / "直播录制" / "B站录播姬"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _settings_path():
+    try:
+        from toolbox.config_manager import get_config_dir
+        return get_config_dir() / "bili_live.json"
+    except Exception:
+        from pathlib import Path
+        return Path(__file__).resolve().parent.parent.parent / "config" / "bili_live.json"
 
 
-class BiliFlvRecorder:
-    """纯 HTTP FLV 流式录制（学习 BililiveRecorder：无 ffmpeg 依赖 + 断流自动重连）。
+def load_settings():
+    p = _settings_path()
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return {**DEFAULT_SETTINGS, **data}
+        except Exception:
+            pass
+    return dict(DEFAULT_SETTINGS)
 
-    start(url, room, title) 后台线程持续下载；流断开时回调 on_event("reconnect")
-    并由调用方决定是否重取地址续录（自动开播场景由页面轮询驱动重连）。
-    """
 
-    def __init__(self, on_event=None):
-        self.on_event = on_event      # (event, detail) → 主线程回调
-        self._stop_ev = threading.Event()
+def save_settings(s):
+    try:
+        p = _settings_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _danmaku_dir():
+    """弹幕导出目录：统一导出路径/弹幕文件B站/（与抖音弹幕姬分开存放）。"""
+    try:
+        from toolbox.config_manager import get_export_subdir
+        return get_export_subdir("danmaku_bili")
+    except Exception:
+        from pathlib import Path
+        return Path(__file__).resolve().parent.parent.parent / "download" / "弹幕文件B站"
+
+
+def _stats_dir():
+    """统计数据导出目录：与弹幕同目录。"""
+    return _danmaku_dir()
+
+
+def append_stats_file(room_num, stats_line):
+    """把一条统计数据追加写入文件（弹幕文件B站/房间号_日期.csv）。"""
+    try:
+        d = _stats_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{room_num}_{datetime.now().strftime('%Y%m%d')}.csv"
+        path = d / fname
+        if not path.exists():
+            with open(path, "w", encoding="utf-8-sig") as f:
+                f.write("时间,在线人数,点赞数,粉丝数,累计观看\n")
+        with open(path, "a", encoding="utf-8-sig") as f:
+            f.write(stats_line + "\n")
+        return str(path)
+    except Exception:
+        return ""
+
+
+def check_live_status(room_id):
+    """检测直播间是否在直播（游客态）。返回 (是否直播中, info)。"""
+    info = fetch_room_info(room_id)
+    return int(info.get("live_status") or 0) == 1, info
+
+
+def _norm_info(info):
+    """fetch_room_info 原始 dict → 弹幕姬页面契约字段（展示用字符串）。"""
+    out = {}
+    if info.get("uname"):
+        out["anchor"] = info["uname"]
+    if info.get("title"):
+        out["title"] = info["title"]
+    try:
+        if int(info.get("fans") or 0):
+            out["fans"] = f"{int(info['fans']):,}"
+    except (TypeError, ValueError):
+        pass
+    try:
+        if int(info.get("watch_num") or 0):
+            out["online"] = f"{int(info['watch_num']):,}"
+    except (TypeError, ValueError):
+        pass
+    cover = info.get("cover") or info.get("keyframe") or ""
+    if cover:
+        out["cover"] = cover
+    if info.get("avatar"):
+        out["avatar"] = info["avatar"]
+    return out
+
+
+class StatsCollector:
+    """统计数据采集器：定时拉房间信息（人气值/粉丝数），通过回调推送。"""
+
+    def __init__(self, room_num, interval, on_stats=None):
+        self.room_num = room_num
+        self.interval = max(1, int(interval))
+        self.on_stats = on_stats
+        self._stop = threading.Event()
         self._thread = None
-        self.path = None
-        self.start_ts = 0
-        self.bytes_written = 0
-        self._url = ""
 
-    def start(self, url: str, room: str, title: str = "") -> bool:
-        self.stop()
-        self._stop_ev = threading.Event()
-        self._url = url
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = _sanitize(f"{room}_{title}" if title else f"{room}") or room
-        self.path = str(_rec_dir() / f"{base}_{ts}.flv")
-        n = 1
-        while os.path.exists(self.path):
-            self.path = str(_rec_dir() / f"{base}_{ts}_{n}.flv")
-            n += 1
-        self.start_ts = int(time.time() * 1000)
-        self.bytes_written = 0
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        return True
 
     def stop(self):
-        self._stop_ev.set()
-        t, self._thread = self._thread, None
-        if t is not None and t.is_alive():
-            t.join(timeout=6)
+        self._stop.set()
 
     def _run(self):
-        url = self._url
-        try:
-            with httpx.stream("GET", url, headers=_headers(),
-                              follow_redirects=True,
-                              timeout=httpx.Timeout(15, read=30)) as r:
-                r.raise_for_status()
-                with open(self.path, "wb") as f:
-                    self._emit("recording", self.path)
-                    for chunk in r.iter_bytes(chunk_size=256 * 1024):
-                        if self._stop_ev.is_set():
-                            break
-                        f.write(chunk)
-                        self.bytes_written += len(chunk)
-        except Exception as e:
-            if not self._stop_ev.is_set():
-                self._emit("error", str(e)[:120])
-        finally:
-            # 空文件清理（连接失败/立即断流）
+        while not self._stop.is_set():
             try:
-                if self.bytes_written < 1024 and os.path.exists(self.path):
-                    os.remove(self.path)
-            except OSError:
-                pass
-            self._emit("stopped", self.path)
-
-    def _emit(self, ev, detail=""):
-        if self.on_event:
-            try:
-                self.on_event(ev, detail)
+                info = fetch_room_info(self.room_num)
+                if self.on_stats:
+                    try:
+                        self.on_stats(info)
+                    except Exception:
+                        pass
             except Exception:
                 pass
+            self._stop.wait(self.interval)
 
 
-class BiliDanmakuRecorder:
-    """B站直播弹幕录制（WebSocket 协议 → BililiveRecorder 同款 XML）。
+class LiveMonitor:
+    """开播监控：定时检测直播状态，状态变化时回调。"""
 
-    协议帧头（大端！BililiveRecorder 用 WriteUInt32BigEndian，小端必被断连）：
-    总长(4B) + 头长(2B) + protover(2B) + 操作码(4B) + 序号(4B)。
-    auth(7)：body 携带 uid=0/真实roomid/protover=2(zlib)/buvid/token；
-    roomid 只认真实房间号（短号 6 → 真实 7734200，发短号直接被踢）。
-    心跳(2)每 30s、心跳回复(3)=人气值、业务消息(5)：protover=2 时 zlib 解压。
-    鉴权后立即补发一次 ping（BililiveRecorder 同款时序）。
-    """
-
-    def __init__(self, room_id: str, uid: int = 0, on_event=None):
-        self.room_id = str(room_id)
-        self.uid = int(uid)
-        self.on_event = on_event
-        self._stop_ev = threading.Event()
+    def __init__(self, room_num, interval=30, on_change=None):
+        self.room_num = room_num
+        self.interval = max(10, int(interval))
+        self.on_change = on_change  # (is_live, info) -> None
+        self._stop = threading.Event()
         self._thread = None
-        self._hb_thread = None
-        self._ws = None
-        self.path = None
-        self.count = 0
+        self._last = None
 
-    def start(self) -> bool:
-        self.stop()
-        self._stop_ev = threading.Event()
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.path = str(_rec_dir() / f"{self.room_id}_{ts}_弹幕.xml")
-        n = 1
-        while os.path.exists(self.path):
-            self.path = str(_rec_dir() / f"{self.room_id}_{ts}_弹幕_{n}.xml")
-            n += 1
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        return True
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                is_live, info = check_live_status(self.room_num)
+                if self._last is None or is_live != self._last:
+                    self._last = is_live
+                    if self.on_change:
+                        try:
+                            self.on_change(is_live, _norm_info(info))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            self._stop.wait(self.interval)
+
+
+# 弹幕 cmd → (中文名, 分类)
+# 分类：chat 弹幕 / gift 礼物 / member 进场 / like 点赞 / social 关注 / other 日志
+MSG_TYPES = {
+    "DANMU_MSG": ("弹幕", "chat"),
+    "DANMU_MSG_EMOJI": ("表情弹幕", "chat"),
+    "SEND_GIFT": ("礼物", "gift"),
+    "SUPER_CHAT_MESSAGE": ("礼物", "gift"),
+    "GUARD_BUY": ("礼物", "gift"),
+    "INTERACT_WORD": ("进场", "member"),
+    "INTERACT_WORD_V2": ("进场", "member"),
+    "INTERACT_WORD_FOLLOW": ("关注", "social"),
+    "ENTRY_EFFECT": ("进场", "member"),
+    "LIKE_INFO_V3_CLICK": ("点赞", "like"),
+    "LIKE_INFO_V3_UPDATE": ("点赞", "like"),
+    "WATCHED_CHANGE": ("在线人数", "other"),
+    "ONLINE_RANK_COUNT": ("在线人数", "other"),
+    "ROOM_REAL_TIME_MESSAGE_UPDATE": ("粉丝数", "other"),
+}
+
+
+class BiliLiveFetcher:
+    """B站直播弹幕抓取器（后台线程，与 DouyinLiveFetcher 同构接口）。
+
+    on_message(name, text, m)：name 为中文类型（弹幕/礼物/进场/关注/点赞...），
+        text 为 '[昵称]：内容'，m 为原始字段 dict（礼物价格/点赞总数/在线人数等）。
+    on_room_info(info)：房间信息 dict（anchor/title/fans/online/streams/qn_list...）。
+    on_status(status, msg)：状态变化（connecting/connected/disconnected/error/not_live）。
+    """
+
+    def __init__(self, room_id, on_message=None, on_room_info=None, on_status=None):
+        self.room_id = str(room_id)
+        self.on_message = on_message
+        self.on_room_info = on_room_info
+        self.on_status = on_status
+        self._stop_ev = threading.Event()
+        self._thread = None
+        self._ws = None
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_ev.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def stop(self):
         self._stop_ev.set()
@@ -291,30 +400,75 @@ class BiliDanmakuRecorder:
                 ws.shutdown()
             except Exception:
                 pass
-        t, self._thread = self._thread, None
-        if t is not None and t.is_alive():
-            t.join(timeout=6)
 
-    # ---------- 协议封装 ----------
+    def _emit(self, cb, *args):
+        if cb:
+            try:
+                cb(*args)
+            except Exception:
+                pass
+
     @staticmethod
     def _pack(op: int, body: bytes = b"") -> bytes:
         return (struct.pack(">IHHII", 16 + len(body), 16, 1, op, 1) + body)
 
+    @staticmethod
+    def _fmt(nick, content):
+        nick = (nick or "").strip()
+        content = (content or "").strip()
+        if nick and content:
+            return f"[{nick}]：{content}"
+        if nick:
+            return f"[{nick}]："
+        return content
+
     def _run(self):
-        import websocket
-        # 短号 → 真实号（鉴权体只认真实号）
-        real_room = self.room_id
+        real_room = self._prepare()
+        if not real_room:
+            return
         try:
-            info = fetch_room_info(self.room_id)
-            if info.get("real_room_id"):
-                real_room = str(info["real_room_id"])
+            self._ws_loop(real_room)
+        finally:
+            # 终态只发一次：手动停止='已停止'，其余（下播/断线/超时）='直播已结束'
+            self._emit(self.on_status, "disconnected",
+                       "已停止" if self._stop_ev.is_set() else "直播已结束")
+
+    def _prepare(self):
+        """取房间信息 + 直播流。返回真实房间号（str），失败/未开播返回 None（状态已上报）。"""
+        self._emit(self.on_status, "connecting", "正在获取房间信息...")
+        info = fetch_room_info(self.room_id)
+        real_room = str(info.get("real_room_id") or "").strip()
+        if info.get("error") or not real_room.isdigit() or int(real_room) <= 0:
+            self._emit(self.on_status, "error",
+                       info.get("error") or "未获取到房间信息（直播间可能不存在）")
+            return None
+        self._emit(self.on_room_info, _norm_info(info))
+        if self._stop_ev.is_set():
+            return None
+        if int(info.get("live_status") or 0) == 0:
+            self._emit(self.on_status, "not_live",
+                       f"主播当前未开播（房间 {self.room_id}）")
+            return None
+        # 直播流（取不到不阻塞弹幕连接，仅无预览/录制）
+        self._emit(self.on_status, "connecting", "正在获取直播流...")
+        try:
+            play = fetch_play_url(real_room)
+            if play.get("flv"):
+                extra = {"title": play.get("title") or ""}
+                extra["streams"] = {play.get("quality_desc") or "直播流": play["flv"]}
+                extra["qn_list"] = play.get("qn_list") or []
+                self._emit(self.on_room_info, extra)
         except Exception:
             pass
+        return real_room
+
+    def _ws_loop(self, real_room: str):
+        """弹幕 WS 连接主循环（协议同 BililiveRecorder：鉴权→心跳→收帧）。"""
+        import websocket
         auth = get_danmaku_auth(real_room) or {}
-        buvid = _guest_buvid()
         auth_body = json.dumps({
             "uid": 0, "roomid": int(real_room), "protover": 2,
-            "buvid": buvid, "platform": "web", "type": 2,
+            "buvid": _guest_buvid(), "platform": "web", "type": 2,
             "key": (auth.get("token") or ""),
         }).encode()
         host = auth.get("host") or ""
@@ -322,115 +476,255 @@ class BiliDanmakuRecorder:
         ws = websocket.WebSocket()
         self._ws = ws
         try:
-            ws.settimeout(WS_RECV_TIMEOUT)
+            # recv 超时=心跳间隔：超时即发心跳（send/recv 同线程，websocket-client
+            # 非线程安全，独立心跳线程并发写 socket 会被服务端当坏帧断连）
+            ws.settimeout(HEARTBEAT_INTERVAL)
             ws.connect(ws_url, header={"User-Agent": UA,
-                                        "Origin": "https://live.bilibili.com"})
+                                       "Origin": "https://live.bilibili.com"})
             ws.send_binary(self._pack(7, auth_body))
             ws.send_binary(self._pack(2))
-            self._hb_thread = threading.Thread(target=self._heartbeat, args=(ws,), daemon=True)
-            self._hb_thread.start()
-            with open(self.path, "w", encoding="utf-8") as f:
-                f.write('<?xml version="1.0" encoding="UTF-8"?>\n<ietf>\n')
-                self._emit("recording", self.path)
-                buf = b""
-                while not self._stop_ev.is_set():
+            authed = False
+            buf = b""
+            idle = 0
+            while not self._stop_ev.is_set():
+                try:
+                    data = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    idle += 1
+                    if idle * HEARTBEAT_INTERVAL >= WS_RECV_TIMEOUT:
+                        break  # 连续超时累计≥断线阈值：连接已死
                     try:
-                        data = ws.recv()
-                    except websocket.WebSocketTimeoutException:
-                        continue
+                        ws.send_binary(self._pack(2))
                     except Exception:
                         break
-                    if not data or isinstance(data, str):
-                        continue
-                    buf += data
-                    while len(buf) >= 16:
-                        total, hlen, protover, op = struct.unpack_from(">IHHI", buf, 0)
-                        if total < 16 or total > len(buf):
-                            break
-                        body = buf[hlen:total]
-                        buf = buf[total:]
-                        if op == 5:  # 业务消息
-                            if protover == 2:
-                                import zlib
-                                try:
-                                    body = zlib.decompress(body)
-                                except Exception:
-                                    continue
-                            # 解压体常为多条内部帧串（各带16B头）→ 逐帧拆
-                            cur = body
-                            while len(cur) >= 16:
-                                it, ih, _, iop = struct.unpack_from(">IHHI", cur, 0)
-                                if it < 16 or it > len(cur):
-                                    break
-                                if iop == 5:
-                                    self._handle_message(cur[ih:it], f)
-                                cur = cur[it:]
-                            if len(cur) < 16 and cur:
-                                self._handle_message(cur, f)
-                        # op=8 鉴权回执(错误码≠0 连接会被踢,无需处理) / op=3 人气值
-                f.write("</ietf>\n")
-        except Exception as e:
-            self._emit("error", str(e)[:120])
+                    continue
+                except Exception:
+                    break
+                idle = 0
+                if not data or isinstance(data, str):
+                    continue
+                buf += data
+                while len(buf) >= 16:
+                    total, hlen, protover, op = struct.unpack_from(">IHHI", buf, 0)
+                    if total < 16 or total > len(buf):
+                        break
+                    body = buf[hlen:total]
+                    buf = buf[total:]
+                    if op == 8:
+                        # 鉴权回执：code≠0 会被服务端断开，这里主动报错
+                        try:
+                            if (json.loads(body) or {}).get("code") != 0:
+                                self._emit(self.on_status, "error", "弹幕通道鉴权失败（token 无效）")
+                                return
+                        except Exception:
+                            pass
+                        if not authed:
+                            authed = True
+                            self._emit(self.on_status, "connected",
+                                       f"已连接弹幕通道 · 房间 {real_room}")
+                    elif op == 5:
+                        if protover == 2:
+                            import zlib
+                            try:
+                                body = zlib.decompress(body)
+                            except Exception:
+                                continue
+                        # 解压体常为多条内部帧串（各带16B头）→ 逐帧拆
+                        cur = body
+                        while len(cur) >= 16:
+                            it, ih, _, iop = struct.unpack_from(">IHHI", cur, 0)
+                            if it < 16 or it > len(cur):
+                                break
+                            if iop == 5:
+                                self._handle_frame(cur[ih:it])
+                            cur = cur[it:]
+                        if len(cur) < 16 and cur:
+                            self._handle_frame(cur)
+                        if not authed:
+                            authed = True
+                            self._emit(self.on_status, "connected",
+                                       f"已连接弹幕通道 · 房间 {real_room}")
+                    # op=3 人气值 / op=2 心跳回复：忽略
         finally:
             self._ws = None
             try:
                 ws.close()
             except Exception:
                 pass
-            self._emit("stopped", self.path)
 
-    def _heartbeat(self, ws):
-        while not self._stop_ev.is_set():
-            try:
-                ws.send_binary(self._pack(2))
-            except Exception:
-                return
-            self._stop_ev.wait(HEARTBEAT_INTERVAL)
-
-    def _handle_message(self, body: bytes, f):
+    # ---------- 消息解析（cmd → on_message） ----------
+    def _handle_frame(self, body: bytes):
         try:
             msg = json.loads(body)
         except Exception:
             return
-        cmd = msg.get("cmd") or ""
-        info = msg.get("info") or []
-        ts = int(time.time())
-        if cmd == "DANMU_MSG" and len(info) >= 4:
-            text = info[1] if isinstance(info[1], str) else ""
-            if not text:
-                return
-            meta = info[0] if isinstance(info[0], list) else [ts, 1, 25, 16777215, ts]
-            uid = (info[2] or [])[0] if len(info) > 2 and info[2] else 0
-            name = ((info[2] or [])[1] if len(info) > 2 and len(info[2]) > 1 else "")
-            f.write(f'<d p="{meta[0] if len(meta) > 0 else ts},{meta[1] if len(meta) > 1 else 1},'
-                    f'{meta[2] if len(meta) > 2 else 25},{meta[3] if len(meta) > 3 else 16777215},'
-                    f'{uid},{meta[4] if len(meta) > 4 else ts},0,0">{escape(str(text))}</d>\n')
-            self.count += 1
-            self._emit("danmaku", f"{name}: {text}")
-        elif cmd in ("SEND_GIFT", "COMBO_SEND"):
+        if not isinstance(msg, dict):
+            return
+        base = (msg.get("cmd") or "").split(":")[0]
+        now_ms = int(time.time() * 1000)
+        if base == "DANMU_MSG":
+            self._on_danmu(msg, now_ms)
+        elif base == "SEND_GIFT":
+            self._on_gift(msg, now_ms)
+        elif base == "SUPER_CHAT_MESSAGE":
+            self._on_super_chat(msg, now_ms)
+        elif base == "GUARD_BUY":
+            self._on_guard(msg, now_ms)
+        elif base in ("INTERACT_WORD", "INTERACT_WORD_V2"):
+            self._on_interact(msg, now_ms, v2=(base == "INTERACT_WORD_V2"))
+        elif base == "ENTRY_EFFECT":
+            self._on_entry_effect(msg, now_ms)
+        elif base == "LIKE_INFO_V3_CLICK":
             data = msg.get("data") or {}
-            uname = data.get("uname") or ""
-            gname = data.get("giftName") or "礼物"
-            num = data.get("num") or (msg.get("combo_info") or {}).get("gift_num") or 1
-            f.write(f'<gift p="{ts},{uname}">{escape(str(gname))} x{num}</gift>\n')
-            self.count += 1
-            self._emit("gift", f"{uname} 送出 {gname} x{num}")
-        elif cmd == "INTERACT_WORD":
+            nick = data.get("uname") or ""
+            m = {"type": "LIKE_INFO_V3_CLICK", "ts": now_ms, "nickname": nick}
+            self._emit(self.on_message, "点赞", self._fmt(nick, "为主播点赞了"), m)
+        elif base == "LIKE_INFO_V3_UPDATE":
             data = msg.get("data") or {}
-            f.write(f'<interact p="{ts},{data.get("uname") or ""}">'
-                    f'{escape(str(data.get("msg_type") == 2 and "关注" or "进入"))}</interact>\n')
-        elif cmd == "INTERACT_WORD_V2":
-            data = msg.get("data") or {}
-            uname = (data.get("followers_info") or {}).get("uname") or data.get("uname") or ""
-            f.write(f'<interact p="{ts},{uname}">'
-                    f'{escape(str(data.get("msg_type") == 2 and "关注" or "进入"))}</interact>\n')
-
-    def _emit(self, ev, detail=""):
-        if self.on_event:
             try:
-                self.on_event(ev, detail)
-            except Exception:
-                pass
+                total = int(data.get("count") or 0)
+            except (TypeError, ValueError):
+                total = 0
+            if total > 0:
+                m = {"type": "LIKE_INFO_V3_UPDATE", "ts": now_ms, "likeTotal": total}
+                self._emit(self.on_message, "点赞", f"本场点赞 {total:,}", m)
+        elif base == "WATCHED_CHANGE":
+            data = msg.get("data") or {}
+            try:
+                num = int(data.get("num") or 0)
+            except (TypeError, ValueError):
+                num = 0
+            if num > 0:
+                m = {"type": "WATCHED_CHANGE", "ts": now_ms, "roomTotalUser": num}
+                self._emit(self.on_message, "在线人数", "", m)
+        elif base == "ONLINE_RANK_COUNT":
+            data = msg.get("data") or {}
+            try:
+                cnt = int(data.get("count") or 0)
+            except (TypeError, ValueError):
+                cnt = 0
+            if cnt > 0:
+                m = {"type": "ONLINE_RANK_COUNT", "ts": now_ms, "roomTotal": cnt}
+                self._emit(self.on_message, "在线人数", "", m)
+        elif base == "ROOM_REAL_TIME_MESSAGE_UPDATE":
+            data = msg.get("data") or {}
+            try:
+                fans = int(data.get("fans") or 0)
+            except (TypeError, ValueError):
+                fans = 0
+            if fans > 0:
+                m = {"type": "ROOM_REAL_TIME_MESSAGE_UPDATE", "ts": now_ms,
+                     "followCount": fans}
+                self._emit(self.on_message, "粉丝数", "", m)
+        elif base == "ROOM_CHANGE":
+            data = msg.get("data") or {}
+            if data.get("title"):
+                self._emit(self.on_room_info, {"title": data.get("title")})
+        # PREPARING（下播）/LIVE（开播）：由断线路径统一回报终态
+
+    def _on_danmu(self, msg, now_ms):
+        info = msg.get("info") or []
+        text = info[1] if len(info) > 1 and isinstance(info[1], str) else ""
+        user = info[2] if len(info) > 2 and isinstance(info[2], list) else []
+        nick = str(user[1]) if len(user) > 1 else ""
+        if not text and not nick:
+            return
+        m = {"type": "DANMU_MSG", "ts": now_ms, "nickname": nick, "content": text}
+        # 大表情弹幕：info[0][13] = {url, height, ...}
+        try:
+            meta = info[0] if isinstance(info[0], list) else []
+            emo = meta[13] if len(meta) > 13 else None
+            if isinstance(emo, dict) and emo.get("url"):
+                m["rtf"] = [{"url": emo["url"], "text": "表情"}]
+                m["type"] = "DANMU_MSG_EMOJI"
+                if not text:
+                    m["content"] = "[表情]"
+        except Exception:
+            pass
+        name = "表情弹幕" if m.get("rtf") else "弹幕"
+        self._emit(self.on_message, name, self._fmt(nick, m["content"]), m)
+
+    def _on_gift(self, msg, now_ms):
+        data = msg.get("data") or {}
+        nick = data.get("uname") or ""
+        gname = data.get("giftName") or "礼物"
+        try:
+            num = int(data.get("num") or 1)
+        except (TypeError, ValueError):
+            num = 1
+        # 金瓜子礼物价格单位=电池（1000电池=1元），银瓜子礼物价值按 0 计
+        try:
+            price = int(data.get("price") or 0) if data.get("coin_type") == "gold" else 0
+        except (TypeError, ValueError):
+            price = 0
+        gi = data.get("gift_info") or {}
+        icon = gi.get("gift_pic") or gi.get("webp") or data.get("gift_pic") or ""
+        m = {"type": "SEND_GIFT", "ts": now_ms, "nickname": nick,
+             "content": f"送出 {gname} x{num}",
+             "giftName": gname, "giftCount": num, "giftPrice": price,
+             "giftIcon": icon, "repeatEnd": 1}
+        self._emit(self.on_message, "礼物", self._fmt(nick, m["content"]), m)
+
+    def _on_super_chat(self, msg, now_ms):
+        data = msg.get("data") or {}
+        nick = (data.get("user") or {}).get("uname") or ""
+        try:
+            price = int(float(data.get("price") or 0))
+        except (TypeError, ValueError):
+            price = 0
+        # SC 价格单位=元，榜内统一换算为电池（×1000）与礼物可比
+        m = {"type": "SUPER_CHAT_MESSAGE", "ts": now_ms, "nickname": nick,
+             "content": f"醒目留言 ¥{price}：{data.get('message') or ''}",
+             "giftName": "醒目留言", "giftCount": 1, "giftPrice": price * 1000,
+             "giftIcon": "", "repeatEnd": 1}
+        self._emit(self.on_message, "礼物", self._fmt(nick, m["content"]), m)
+
+    def _on_guard(self, msg, now_ms):
+        data = msg.get("data") or {}
+        nick = data.get("uname") or ""
+        gname = data.get("gift_name") or "舰长"
+        try:
+            price = int(float(data.get("price") or 0))
+        except (TypeError, ValueError):
+            price = 0
+        try:
+            num = int(data.get("num") or 1)
+        except (TypeError, ValueError):
+            num = 1
+        m = {"type": "GUARD_BUY", "ts": now_ms, "nickname": nick,
+             "content": f"开通{gname} x{num}",
+             "giftName": gname, "giftCount": num, "giftPrice": price * 1000,
+             "giftIcon": "", "repeatEnd": 1}
+        self._emit(self.on_message, "礼物", self._fmt(nick, m["content"]), m)
+
+    def _on_interact(self, msg, now_ms, v2=False):
+        data = msg.get("data") or {}
+        nick = (data.get("followers_info") or {}).get("uname") or data.get("uname") or ""
+        try:
+            mt = int(data.get("msg_type") or 1)
+        except (TypeError, ValueError):
+            mt = 1
+        if mt == 2:
+            m = {"type": "INTERACT_WORD_FOLLOW", "ts": now_ms, "nickname": nick}
+            self._emit(self.on_message, "关注", self._fmt(nick, "关注了主播"), m)
+        elif mt == 1:
+            m = {"type": "INTERACT_WORD_V2" if v2 else "INTERACT_WORD",
+                 "ts": now_ms, "nickname": nick}
+            self._emit(self.on_message, "进场", self._fmt(nick, "进入直播间"), m)
+        # mt == 3 分享：静默
+
+    def _on_entry_effect(self, msg, now_ms):
+        data = msg.get("data") or {}
+        nick = data.get("uname") or ""
+        copy = re.sub(r"<[^>]+>", "", data.get("copy_writing") or "")
+        if not nick and not copy:
+            return
+        m = {"type": "ENTRY_EFFECT", "ts": now_ms, "nickname": nick}
+        self._emit(self.on_message, "进场", self._fmt(nick, copy or "进入直播间"), m)
+
+
+# 弹幕姬页统一抓取器入口（douyin_live.LiveFetcher 同名同构）
+LiveFetcher = BiliLiveFetcher
 
 
 def _guest_buvid() -> str:
@@ -544,11 +838,6 @@ def _danmaku_token_playwright(room_id: str) -> dict:
             except Exception:
                 pass
     return out
-
-
-def get_danmaku_token(room_id: str) -> str:
-    """弹幕连接 token（get_danmaku_auth 的便捷封装）。"""
-    return (get_danmaku_auth(room_id) or {}).get("token") or ""
 
 
 def parse_room_id_input(text: str) -> str:

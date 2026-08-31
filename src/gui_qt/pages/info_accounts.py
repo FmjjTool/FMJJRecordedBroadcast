@@ -901,6 +901,19 @@ class InfoAccountsPage(BasePage):
             self._acct_set_rows.append((a.url, gsel, ksel, cur_val, ksel.currentText()))
             gsel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
             ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
+            # 上移/下移（直接改 accounts.txt 顺序，立即生效）
+            up_btn = QPushButton("↑")
+            up_btn.setFixedSize(28, 26)
+            up_btn.setToolTip("上移一位")
+            up_btn.setEnabled(i > 1)
+            up_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, -1))
+            h.addWidget(up_btn)
+            down_btn = QPushButton("↓")
+            down_btn.setFixedSize(28, 26)
+            down_btn.setToolTip("下移一位")
+            down_btn.setEnabled(i < len(accounts))
+            down_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, 1))
+            h.addWidget(down_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet("background: #c62828; color: white;")
@@ -952,3 +965,10 @@ class InfoAccountsPage(BasePage):
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
+
+    def _move_account_row(self, url, delta):
+        """上移/下移已配置账号（顺序即采集顺序，保存后立即生效）。"""
+        from accounts_manager import move_account
+        if move_account(url, delta):
+            QTimer.singleShot(150, self._reload_account_list)
+            QTimer.singleShot(150, self._reload_account_settings)

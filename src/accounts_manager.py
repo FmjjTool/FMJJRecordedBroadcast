@@ -171,6 +171,27 @@ def update_account(url: str, name=None, group_id: str = "", group_name: str = ""
     return False
 
 
+def move_account(url: str, delta: int) -> bool:
+    """上移/下移账号（delta=-1 上移一位，+1 下移一位），跳过分组占位行。"""
+    accounts = load_accounts()
+    idx = next((i for i, a in enumerate(accounts) if a.url == url), -1)
+    if idx < 0:
+        return False
+    step = 1 if delta > 0 else -1
+    j = idx
+    moved = 0
+    while moved < abs(delta):
+        j += step
+        if not (0 <= j < len(accounts)):
+            return False
+        if accounts[j].url:
+            accounts[idx], accounts[j] = accounts[j], accounts[idx]
+            idx = j
+            moved += 1
+    save_accounts(accounts)
+    return True
+
+
 def remove_account(url: str) -> bool:
     accounts = load_accounts()
     for i, acc in enumerate(accounts):

@@ -864,6 +864,12 @@ class MusicTrackerPage(BasePage):
             save_accounts(accounts)
             self.reload_accounts()
 
+    def _move_account(self, index, delta):
+        """上移/下移已配置账号（顺序即采集顺序，保存后立即生效）。"""
+        from music_account.accounts import move_account
+        if move_account(index, delta):
+            self.reload_accounts()
+
     def _reload_acc_list(self):
         self._clear_layout(self.acc_list_layout)
         self.acc_list_layout.addStretch(1)
@@ -903,6 +909,19 @@ class MusicTrackerPage(BasePage):
             self._acc_rows.append((i, gsel, cur_val))
             gsel.currentTextChanged.connect(
                 lambda _t: self._acc_save_btn.setEnabled(True))
+            # 上移/下移（直接改账号顺序，立即生效）
+            up_btn = QPushButton("↑")
+            up_btn.setFixedSize(28, 26)
+            up_btn.setToolTip("上移一位")
+            up_btn.setEnabled(i > 0)
+            up_btn.clicked.connect(lambda _=False, idx=i: self._move_account(idx, -1))
+            h.addWidget(up_btn)
+            down_btn = QPushButton("↓")
+            down_btn.setFixedSize(28, 26)
+            down_btn.setToolTip("下移一位")
+            down_btn.setEnabled(i < len(accounts) - 1)
+            down_btn.clicked.connect(lambda _=False, idx=i: self._move_account(idx, 1))
+            h.addWidget(down_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet("background: #c62828; color: white;")

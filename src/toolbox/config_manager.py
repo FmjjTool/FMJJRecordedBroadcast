@@ -420,6 +420,7 @@ EXPORT_CATEGORIES = {
     "music_tracker": "音乐账号数据",
     "video_data": "已获取数据",
     "danmaku": "弹幕文件",
+    "danmaku_bili": "弹幕文件B站",
 }
 
 
