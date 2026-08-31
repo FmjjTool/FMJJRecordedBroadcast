@@ -196,13 +196,14 @@ def export_per_video(info_list: list, output_dir: Optional[str] = None, formats:
     if formats is None: formats = ["json","xlsx","md"]
     base_dir = output_dir or EXPORT_DIR
     os.makedirs(base_dir, exist_ok=True)
+    from toolbox.utils import platform_cn, DATA_DIR_SUFFIX
 
     def _export_one(info):
         paths: list[str] = []
         skipped_local: list[str] = []
         stem = _build_stem(info)
-        # 按平台分文件夹: video_data/weibo/, video_data/douyin/, video_data/bilibili/
-        plat_dir = os.path.join(base_dir, info.platform or "unknown")
+        # 按平台分文件夹: video_data/抖音_文件/, video_data/B站_文件/ ...（媒体在对应 {平台}_媒体/）
+        plat_dir = os.path.join(base_dir, platform_cn(info.platform) + DATA_DIR_SUFFIX)
         os.makedirs(plat_dir, exist_ok=True)
         for fmt in formats:
             path = os.path.join(plat_dir, f"{stem}.{fmt}")

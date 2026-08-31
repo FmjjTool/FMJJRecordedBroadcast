@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
@@ -430,7 +431,52 @@ def get_export_subdir(category: str) -> Path:
     sub = EXPORT_CATEGORIES.get(category, "")
     path = root / sub if sub else root
     path.mkdir(parents=True, exist_ok=True)
+    if category == "video_data":
+        _migrate_video_data_layout(path)
     return path
+
+
+_VD_LAYOUT_MIGRATED = False
+_VD_LAYOUT_LOCK = threading.Lock()
+
+
+def _migrate_video_data_layout(video_dir: Path):
+    """旧目录结构 → 「平台_文件 / 平台_媒体」新结构（首次访问时一次性迁移）。
+
+    旧：已获取数据/douyin（数据导出）+ 已获取数据/抖音（媒体，内含作者子目录）
+    新：已获取数据/抖音_文件 + 已获取数据/抖音_媒体
+    目标已存在时逐项合并，重名冲突加 `_旧` 后缀；线程安全，失败静默不阻塞主流程。
+    """
+    global _VD_LAYOUT_MIGRATED
+    if _VD_LAYOUT_MIGRATED:
+        return
+    with _VD_LAYOUT_LOCK:
+        if _VD_LAYOUT_MIGRATED:
+            return
+        try:
+            import shutil
+            from toolbox.utils import PLATFORM_CN, DATA_DIR_SUFFIX, MEDIA_DIR_SUFFIX
+            for en, cn in PLATFORM_CN.items():
+                for suffix, old in ((DATA_DIR_SUFFIX, en), (MEDIA_DIR_SUFFIX, cn)):
+                    src = video_dir / old
+                    dst = video_dir / f"{cn}{suffix}"
+                    if not src.is_dir() or src == dst:
+                        continue
+                    if not dst.exists():
+                        src.rename(dst)
+                        continue
+                    if src.resolve() == dst.resolve():
+                        continue
+                    for item in src.iterdir():
+                        target = dst / item.name
+                        if target.exists():
+                            stem, ext = os.path.splitext(item.name)
+                            target = dst / f"{stem}_旧{ext}"
+                        shutil.move(str(item), str(target))
+                    shutil.rmtree(src, ignore_errors=True)
+        except Exception:
+            pass  # 迁移失败不影响导出/下载主流程
+        _VD_LAYOUT_MIGRATED = True
 
 
 def ensure_export_structure():

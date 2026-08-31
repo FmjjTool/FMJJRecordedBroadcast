@@ -189,12 +189,12 @@ def download_bilibili_video(
     video = _pick_video_stream(video_streams, quality)
     audio = _pick_audio_stream(audio_streams)
 
-    # 目录：[平台][用户]；文件名 {datetime}_{发布者}_{标题}.mp4
+    # 目录：B站_媒体/[用户]；文件名 {datetime}_{发布者}_{标题}.mp4
     out_dir = out_dir or os.getcwd()
     date_str = re.sub(r'[^0-9]', '', (publish_time or "")[:10]) or time.strftime("%Y%m%d")
     author_safe = _sanitize_filename(author or "未知")
     title_safe = _sanitize_filename(title or bvid)
-    user_dir = os.path.join(out_dir, "B站", author_safe)
+    user_dir = os.path.join(out_dir, "B站_媒体", author_safe)
     os.makedirs(user_dir, exist_ok=True)
     out_path = os.path.join(user_dir, f"{date_str}_{author_safe}_{title_safe}.mp4")
 

@@ -13,6 +13,54 @@ if sys.platform == "win32":
     from ctypes import wintypes
 
 
+# ==================== 平台目录命名 ====================
+
+# 平台英文标识 -> 中文目录名（导出/媒体目录统一用它命名）
+PLATFORM_CN = {
+    "bilibili": "B站",
+    "douyin": "抖音",
+    "weibo": "微博",
+    "xiaohongshu": "小红书",
+    "kuaishou": "快手",
+    "haokan": "好看视频",
+    "weishi": "微视",
+    "pear": "梨视频",
+    "pipigx": "皮皮搞笑",
+}
+
+# 已获取数据目录后缀：{平台}_文件 存数据导出（json/md/xlsx），{平台}_媒体 存媒体（视频/图片/音频）
+DATA_DIR_SUFFIX = "_文件"
+MEDIA_DIR_SUFFIX = "_媒体"
+
+
+def platform_cn(platform: str) -> str:
+    """平台英文标识 -> 中文目录名（未收录的返回原名）。"""
+    return PLATFORM_CN.get((platform or "").lower(), platform or "unknown")
+
+
+def norm_platform_dir(name: str) -> str:
+    """平台目录名（新旧结构均可）-> 规范英文 platform 标识，未识别返回 ""。
+
+    兼容：`抖音`/`douyin`（旧结构）与 `抖音_文件`/`抖音_媒体`/`douyin_文件`（新结构）。
+    """
+    if not name:
+        return ""
+    s = name.lower()
+    for suffix in (MEDIA_DIR_SUFFIX, DATA_DIR_SUFFIX):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break
+    s = s.strip("_")
+    aliases = {
+        "bilibili": "bilibili", "b站": "bilibili", "哔哩哔哩": "bilibili",
+        "douyin": "douyin", "抖音": "douyin",
+        "weibo": "weibo", "微博": "weibo",
+        "xiaohongshu": "xiaohongshu", "小红书": "xiaohongshu",
+        "kuaishou": "kuaishou", "快手": "kuaishou",
+    }
+    return aliases.get(s, "")
+
+
 # ==================== 文件大小格式化 ====================
 
 def sanitize_filename(name: str, max_len: int = 60, fallback: str = "untitled") -> str:

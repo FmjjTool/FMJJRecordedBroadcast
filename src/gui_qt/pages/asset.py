@@ -15,6 +15,7 @@ import os
 import re
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
@@ -89,17 +90,9 @@ def _sanitize_title_key(title: str) -> str:
 
 
 def _norm_subdir(subdir: str) -> str:
-    """规范化平台子目录名（中文/英文统一为英文 platform）。"""
-    if not subdir:
-        return ""
-    s = subdir.lower()
-    if s in ("bilibili", "b站", "哔哩哔哩"):
-        return "bilibili"
-    if s in ("weibo", "微博"):
-        return "weibo"
-    if s in ("douyin", "抖音"):
-        return "douyin"
-    return ""
+    """规范化平台子目录名（新旧结构/中英文统一为英文 platform）。"""
+    from toolbox.utils import norm_platform_dir
+    return norm_platform_dir(subdir)
 
 
 def scan_assets(folder: str, limit: int = 0) -> list:
@@ -509,22 +502,25 @@ class AssetPage(BasePage):
         media_map = {}
         self._scan_media_files(download_root, media_map)
 
-        # 2. 扫 json（根目录 + 英文子目录）
+        # 2. 扫 json（根目录旧平铺 + 所有平台一级子目录，新旧目录名均兼容）
         json_paths = list(video_dir.glob("*.json"))
-        for sub in ("bilibili", "douyin", "weibo"):
-            json_paths.extend((video_dir / sub).glob("*.json"))
+        if video_dir.is_dir():
+            for sub in video_dir.iterdir():
+                if sub.is_dir() and _norm_subdir(sub.name):
+                    json_paths.extend(sub.glob("*.json"))
         json_paths = sorted(set(json_paths), key=lambda p: p.name, reverse=True)
 
         results = []
         for path in json_paths:
             if path.stem.endswith("_raw"):
                 continue
-            # 平台：英文子目录从目录名，根目录从文件名末段
-            if path.parent.name in ("bilibili", "douyin", "weibo"):
-                platform = path.parent.name
-            else:
+            # 平台：子目录从目录名（新旧结构均可），根目录旧平铺从文件名末段
+            platform = _norm_subdir(path.parent.name)
+            if not platform:
+                from toolbox.utils import norm_platform_dir
                 parts = path.stem.rsplit("_", 1)
-                platform = parts[1] if len(parts) == 2 and parts[1] in ("douyin", "weibo", "bilibili") else "unknown"
+                platform = norm_platform_dir(parts[1]) if len(parts) == 2 else ""
+                platform = platform or "unknown"
             date_part = path.stem[:8] if len(path.stem) >= 8 and path.stem[:8].isdigit() else ""
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -690,15 +686,13 @@ class AssetPage(BasePage):
 
     @staticmethod
     def _media_platform(mfs):
-        """从媒体文件路径推断平台。"""
+        """从媒体文件路径推断平台（兼容 {平台}_媒体 新目录名）。"""
+        from toolbox.utils import norm_platform_dir
         for m in mfs:
-            p = m["path"].lower()
-            if "微博" in p or "weibo" in p:
-                return "weibo"
-            if "抖音" in p or "douyin" in p:
-                return "douyin"
-            if "b站" in p or "bilibili" in p:
-                return "bilibili"
+            for part in Path(m["path"]).parts:
+                plat = norm_platform_dir(part)
+                if plat:
+                    return plat
         return "unknown"
 
     def _refresh_collected(self, keep_page=False):
@@ -1356,7 +1350,7 @@ class AssetPage(BasePage):
             info = VideoInfo(
                 platform=it["platform"], video_id=vid,
                 title=it.get("title") or it.get("date_part") or "未知",
-                author=it.get("author", ""),  # 关键：让下载落到 {平台}/{作者}/ 子目录
+                author=it.get("author", ""),  # 关键：让下载落到 {平台}_媒体/{作者}/ 子目录
                 video_url=vurl2, cover_url=it.get("cover_url", ""),
                 publish_time=it.get("publish_time", ""),  # 关键：让 date_str 匹配 json date_part
                 raw_url="", fetched_at=now_str(),
@@ -1636,7 +1630,7 @@ class AssetPage(BasePage):
             info = VideoInfo(
                 platform=it["platform"],
                 title=it.get("title") or it.get("date_part") or "未知",
-                author=it.get("author", ""),  # 关键：让下载落到 {平台}/{作者}/ 子目录
+                author=it.get("author", ""),  # 关键：让下载落到 {平台}_媒体/{作者}/ 子目录
                 cover_url=cover,
                 publish_time=it.get("publish_time", ""),  # 关键：让 date_str 匹配 json date_part
                 raw_url="",

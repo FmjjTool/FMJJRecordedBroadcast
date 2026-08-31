@@ -16,18 +16,8 @@ console = Console()
 
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
 
-# 平台英文标识 -> 中文文件夹名（multi_downloader 返回的已是中文，原样保留）
-_PLATFORM_CN = {
-    "bilibili": "B站",
-    "douyin": "抖音",
-    "weibo": "微博",
-    "xiaohongshu": "小红书",
-    "kuaishou": "快手",
-    "haokan": "好看视频",
-    "weishi": "微视",
-    "pear": "梨视频",
-    "pipigx": "皮皮搞笑",
-}
+# 平台英文标识 -> 中文文件夹名（公共映射见 toolbox.utils.PLATFORM_CN）
+from toolbox.utils import PLATFORM_CN as _PLATFORM_CN, MEDIA_DIR_SUFFIX
 
 
 def _sanitize_filename(name: str, max_len: int = 60) -> str:
@@ -285,8 +275,8 @@ def download_media(
             date_str = time.strftime("%Y%m%d")
         title = _sanitize_filename(info.title or "", 50)
         plat_cn = _PLATFORM_CN.get(info.platform, info.platform or "未知")
-        # 目录：[平台][用户]；文件名 {datetime}_{发布者}_{标题}.{格式}
-        user_dir = os.path.join(base_dir, plat_cn, author)
+        # 目录：[平台]_媒体/[用户]；文件名 {datetime}_{发布者}_{标题}.{格式}
+        user_dir = os.path.join(base_dir, plat_cn + MEDIA_DIR_SUFFIX, author)
         stem = f"{date_str}_{author}_{title}" if title else f"{date_str}_{author}_{info.video_id[:8]}"
 
         # 封面（视频帖独有：抖音/B站等封面不在 images 里；图文帖封面=首图自动去重）
