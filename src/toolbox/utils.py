@@ -38,10 +38,18 @@ def platform_cn(platform: str) -> str:
     return PLATFORM_CN.get((platform or "").lower(), platform or "unknown")
 
 
+# 平台目录名别名 -> 英文标识。由 PLATFORM_CN 全量派生（中/英目录名都收录），
+# 新增平台只需登记 PLATFORM_CN 一处；另含 B站 的俗称写法。
+_PLATFORM_ALIASES = {"b站": "bilibili", "哔哩哔哩": "bilibili"}
+_PLATFORM_ALIASES.update({en: en for en in PLATFORM_CN})
+_PLATFORM_ALIASES.update({cn: en for en, cn in PLATFORM_CN.items()})
+
+
 def norm_platform_dir(name: str) -> str:
     """平台目录名（新旧结构均可）-> 规范英文 platform 标识，未识别返回 ""。
 
     兼容：`抖音`/`douyin`（旧结构）与 `抖音_文件`/`抖音_媒体`/`douyin_文件`（新结构）。
+    别名表覆盖 PLATFORM_CN 全部 9 个平台（含好看视频/微视/梨视频/皮皮搞笑）。
     """
     if not name:
         return ""
@@ -51,14 +59,7 @@ def norm_platform_dir(name: str) -> str:
             s = s[: -len(suffix)]
             break
     s = s.strip("_")
-    aliases = {
-        "bilibili": "bilibili", "b站": "bilibili", "哔哩哔哩": "bilibili",
-        "douyin": "douyin", "抖音": "douyin",
-        "weibo": "weibo", "微博": "weibo",
-        "xiaohongshu": "xiaohongshu", "小红书": "xiaohongshu",
-        "kuaishou": "kuaishou", "快手": "kuaishou",
-    }
-    return aliases.get(s, "")
+    return _PLATFORM_ALIASES.get(s, "")
 
 
 # ==================== 文件大小格式化 ====================

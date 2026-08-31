@@ -31,6 +31,7 @@ from PySide6.QtWidgets import QLayout
 from gui_qt import common
 from gui_qt.common import _fmt, run_bg
 from gui_qt.pages.base import BasePage
+from toolbox.utils import PLATFORM_CN, platform_cn
 
 # 支持的资源扩展名
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
@@ -39,7 +40,8 @@ AUDIO_EXTS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac", ".opus"}
 
 BATCH = 20  # 懒加载：每批渲染数量
 
-PLATFORM_CN = {"douyin": "抖音", "weibo": "微博", "bilibili": "B站"}
+# 平台筛选下拉显示中文名 -> 英文标识（筛选用英文键）
+_CN2EN = {cn: en for en, cn in PLATFORM_CN.items()}
 
 
 class _ProgressBridge(QObject):
@@ -516,7 +518,7 @@ class AssetPage(BasePage):
         bar = QHBoxLayout()
         bar.addWidget(QLabel("平台:"))
         self.plat_sel = QComboBox()
-        self.plat_sel.addItems(["全部", "bilibili", "douyin", "weibo"])
+        self.plat_sel.addItems(["全部"] + list(PLATFORM_CN.values()))
         self.plat_sel.setFixedWidth(120)
         self.plat_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
         bar.addWidget(self.plat_sel)
@@ -585,8 +587,13 @@ class AssetPage(BasePage):
         download_root = get_export_dir()              # download/
 
         # 1. 扫媒体文件，按 (date, title_key, subdir) 分组
+        # 只扫「已获取数据/」（{平台}_文件/_媒体 所在根）+「B站资源/」（资源包整体条目）。
+        # 不能全 download/ 递归：淘宝商品/票务演出/音乐账号数据等无关图片会被
+        # 当成媒体生成一堆无平台「(媒体)」垃圾条目混进列表。
         media_map = {}
-        self._scan_media_files(download_root, media_map)
+        for scan_root in (video_dir, download_root / "B站资源"):
+            if scan_root.is_dir():
+                self._scan_media_files(scan_root, media_map)
 
         # 2. 扫 json（根目录旧平铺 + 所有平台一级子目录，新旧目录名均兼容）
         json_paths = list(video_dir.glob("*.json"))
@@ -722,13 +729,11 @@ class AssetPage(BasePage):
 
         B站资源（download/B站资源/<类别>/<资源包名>/...）整个资源包聚合成一个条目，
         不再按文件名拆散（否则一个收藏集会变成 N 条散行）。
+
+        root 只会是 已获取数据/ 或 B站资源/（调用方已收窄，无需黑名单过滤）。
         """
-        skip_dirs = {"账号追踪数据", "弹幕文件", "字幕文件", "歌曲文件", "音乐信息", "danmaku", "stats",
-                     "预览图", "导出的图片"}
         for p in root.rglob("*"):
             if not p.is_file() or p.suffix.lower() not in self._MEDIA_EXTS:
-                continue
-            if any(s in p.parts for s in skip_dirs):
                 continue
             parts = list(p.parts)
             if "B站资源" in parts:
@@ -794,7 +799,8 @@ class AssetPage(BasePage):
         筛选/搜索/排序/手动刷新走默认重置第 1 页。
         """
         # 主线程先读筛选条件（后台线程不能碰 Qt 控件）
-        plat = self.plat_sel.currentText()
+        # 下拉显示中文名，过滤用英文标识（"全部"原样保留）
+        plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
         status = self.status_sel.currentText()
         desc = self.sort_sel.currentText() == "时间倒序"
         kw = (self._search_var or "").strip().lower()
@@ -1041,7 +1047,7 @@ class AssetPage(BasePage):
             thumb.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 28px;")
         h.addWidget(thumb)
         # 文本（中间 expand）
-        plat_cn = PLATFORM_CN.get(it["platform"], it["platform"])
+        plat_cn = platform_cn(it["platform"])
         # 显示层截断 + 自动换行：长标题/长文件名会把行的最小宽度撑爆，
         # 导致必须横向滚动才能看到右侧的下载/删除按钮（完整内容在 tooltip）
         full_title = it["title"] or "-"
@@ -2278,7 +2284,7 @@ class AssetPage(BasePage):
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
 
-        plat_cn = PLATFORM_CN.get(item["platform"], item["platform"])
+        plat_cn = platform_cn(item["platform"])
         title_lbl = QLabel(item.get("title", "") or "(无标题)")
         title_lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
         title_lbl.setWordWrap(True)
@@ -2534,11 +2540,12 @@ class AssetPage(BasePage):
             ACCENT_RED = (255, 107, 129)
             ACCENT_BLUE = (96, 165, 250)
 
-            plat_cn = {"douyin": "抖音", "weibo": "微博", "bilibili": "B站"}.get(
-                item.get("platform"), item.get("platform") or "未知")
+            plat_cn = platform_cn(item.get("platform"))
             plat_en = {"douyin": "Douyin", "weibo": "Weibo", "bilibili": "bilibili"}.get(
-                item.get("platform"), item.get("platform") or "")
-            plat_emoji = {"douyin": "🎵", "weibo": "💬", "bilibili": "📺"}.get(
+                item.get("platform"), (item.get("platform") or "").title())
+            plat_emoji = {"douyin": "🎵", "weibo": "💬", "bilibili": "📺",
+                          "xiaohongshu": "📕", "kuaishou": "⚡", "haokan": "👀",
+                          "weishi": "🎥", "pear": "🍐", "pipigx": "😂"}.get(
                 item.get("platform"), "📄")
             plat_accent = {"douyin": ACCENT_RED, "weibo": ACCENT_RED, "bilibili": ACCENT_BLUE}.get(
                 item.get("platform"), ACCENT)
