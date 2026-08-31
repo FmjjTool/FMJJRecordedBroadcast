@@ -433,7 +433,7 @@ class _LyricsDialog(QDialog):
         try:
             txt = open(f, "r", encoding="utf-8", errors="replace").read()
         except OSError as e:
-            QMessageBox.warning(self, "读取失败", str(e))
+            self.app.toast(f"读取失败: {str(e)[:60]}", "error")
             return
         self.edit.setPlainText(txt)
 
@@ -579,8 +579,8 @@ class _XlsxDialog(QDialog):
             pr["dirty"] = True
             n += 1
         if not n:
-            QMessageBox.information(self, "没有匹配", "当前映射下没有任何文件匹配成功，"
-                                    "可调整列映射后重试")
+            self.parent().app.toast("当前映射下没有任何文件匹配成功，可调整列映射后重试",
+                                    "warning")
             return
         self.applied = n
         self.accept()

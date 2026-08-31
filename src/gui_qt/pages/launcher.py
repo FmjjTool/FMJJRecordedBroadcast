@@ -17,7 +17,7 @@ from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QLineEdit, QPushButton, QScrollArea, QSizePolicy,
     QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -254,10 +254,10 @@ class LauncherPage(BasePage):
             try:
                 webbrowser.open(path)
             except Exception as e:
-                QMessageBox.warning(self, "打开失败", str(e))
+                self.app.toast(f"打开失败: {str(e)[:60]}", "error")
             return
         if not os.path.isfile(path):
-            QMessageBox.warning(self, "无法启动", f"文件不存在:\n{path}")
+            self.app.toast(f"文件不存在: {path}", "error")
             return
         if linked:
             self._launch_linked(path)
@@ -278,7 +278,7 @@ class LauncherPage(BasePage):
                 os.startfile(path)  # noqa: S606 (Windows)
                 return
         except Exception as e:
-            QMessageBox.warning(self, "启动失败", str(e))
+            self.app.toast(f"启动失败: {str(e)[:60]}", "error")
             return
         job = create_kill_job()
         if job and assign_job(job, proc):

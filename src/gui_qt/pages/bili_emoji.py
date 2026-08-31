@@ -11,7 +11,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
+    QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -85,7 +85,7 @@ class _DlBar(QWidget):
     def start(self):
         current = self._getter()
         if not current or not current["files"]:
-            QMessageBox.information(self, "提示", "请先加载表情包")
+            self._page.app.toast("请先加载表情包", "warning")
             return
         base = os.path.join(str(get_export_dir()), "B站资源", self._sub_dir)
         task = DownloadTask(api.sanitize(current["title"]), current["files"], base,

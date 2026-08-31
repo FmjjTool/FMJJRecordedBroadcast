@@ -12,7 +12,7 @@ import os
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -511,22 +511,32 @@ class MainWindow(QMainWindow):
         save_convert_config(cfg)
 
     def validate_work_dir(self) -> bool:
+        """校验工作目录；不存在/无日期文件夹时直接弹目录选择器就地修正。
+
+        免去「提示 → 进设置页 → 改目录 → 保存 → 回来重新扫描」的流程：
+        就地选目录即保存全局生效，随后立即继续原操作。
+        """
         if not os.path.isdir(self.work_dir):
-            QMessageBox.critical(self, "路径错误", f"工作目录不存在:\n{self.work_dir}")
-            return False
-        if not has_date_subfolders(self.work_dir):
-            reply = QMessageBox.question(
-                self, "未检测到日期文件夹",
-                "当前工作目录下没有找到日期格式（YYYYMMDD）的子文件夹。\n\n"
-                f"路径: {self.work_dir}\n\n"
-                "请确认:\n"
-                "1. 工作目录选择是否正确\n"
-                "2. 录播文件是否已按日期分文件夹存放\n\n"
-                "是否继续？（可能扫描不到文件）",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
+            self.toast(f"工作目录不存在: {self.work_dir}", "warning")
+            if not self._pick_work_dir("选择工作目录（录播文件所在位置）"):
                 return False
+        if not has_date_subfolders(self.work_dir):
+            self.toast("未检测到日期文件夹（YYYYMMDD），请选择正确的录播目录", "warning")
+            if not self._pick_work_dir("选择包含日期文件夹（YYYYMMDD）的工作目录"):
+                return False
+            # 新选目录仍无日期文件夹 → 尊重用户选择，按当前目录继续
+            if not has_date_subfolders(self.work_dir):
+                self.toast("该目录仍无日期文件夹，按当前目录继续扫描", "info")
+        return True
+
+    def _pick_work_dir(self, title) -> bool:
+        """就地弹目录选择器修正工作目录：选中即保存并全局生效。"""
+        from PySide6.QtWidgets import QFileDialog
+        picked = QFileDialog.getExistingDirectory(self, title, self.work_dir or "")
+        if not picked:
+            return False
+        self.work_dir = picked
+        self._refresh_all()
         return True
 
     def toast(self, msg, kind="info"):

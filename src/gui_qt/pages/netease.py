@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -384,7 +384,7 @@ class NeteasePage(BasePage):
     def _search(self):
         kw = self.kw_entry.text().strip()
         if not kw:
-            QMessageBox.warning(self, "提示", "请输入关键词或链接")
+            self.app.toast("请输入关键词或链接", "warning")
             return
         singer = self.singer_entry.text().strip() if getattr(self, "singer_entry", None) else ""
 
@@ -776,7 +776,7 @@ class NeteasePage(BasePage):
             return
         song = self.single_song
         if not song:
-            QMessageBox.warning(self, "提示", "请先解析单曲")
+            self.app.toast("请先解析单曲", "warning")
             return
         quality = self.quality_menu.currentData() or ""
         use_fallback = self.fallback_check.isChecked()
@@ -811,7 +811,7 @@ class NeteasePage(BasePage):
 
     def _download_single_netease(self):
         if not self.single_song_id:
-            QMessageBox.warning(self, "提示", "请先解析单曲")
+            self.app.toast("请先解析单曲", "warning")
             return
         quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
         sid = int(self.single_song_id)
@@ -851,7 +851,7 @@ class NeteasePage(BasePage):
         selected = [self.results[i] for i, cb in enumerate(self.check_boxes)
                     if cb.isChecked() and i < len(self.results)]
         if not selected:
-            QMessageBox.warning(self, "提示", "请先勾选要下载的歌曲")
+            self.app.toast("请先勾选要下载的歌曲", "warning")
             return
         if self.platform == "netease":
             self._download_selected_netease(selected)

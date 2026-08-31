@@ -10,7 +10,7 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QAbstractItemView, QDateTimeEdit, QFileDialog, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
+    QLabel, QLineEdit, QPushButton, QRadioButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout,
 )
 
@@ -256,7 +256,7 @@ class FileTimePage(BasePage):
 
     def _apply(self):
         if not self.files:
-            QMessageBox.information(self, "提示", "请先添加文件")
+            self.app.toast("请先添加文件", "warning")
             return
         scope = self._scope()
         # 主线程先把目标值全部算好：后台线程不再读控件（跨线程访问 QWidget 属未定义行为）

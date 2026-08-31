@@ -209,17 +209,17 @@ class MigratePage(BasePage):
 
     def _migrate(self):
         if not self.pending:
-            QMessageBox.warning(self, "提示", "请先扫描待迁移文件夹")
+            self.app.toast("请先扫描待迁移文件夹", "warning")
             return
         checked = self._checked_folders()
         if not checked:
-            QMessageBox.warning(self, "提示", "请先勾选要迁移的日期文件夹（全选/反选/清除）")
+            self.app.toast("请先勾选要迁移的日期文件夹（全选/反选/清除）", "warning")
             return
         if not self.target_dir or not os.path.isdir(self.target_dir):
-            QMessageBox.warning(self, "提示", "请先选择有效的目标目录")
+            self.app.toast("请先选择有效的目标目录", "warning")
             return
         if self._paths_nested(self.app.work_dir, self.target_dir):
-            QMessageBox.critical(self, "路径错误", "目标目录不能是源目录的父目录/子目录（会递归迁移）")
+            self.app.toast("目标目录不能是源目录的父目录/子目录（会递归迁移）", "error")
             return
         mode = self._mode()
         mode_text = "复制（保留源）" if mode == "copy" else "剪切（移动）"

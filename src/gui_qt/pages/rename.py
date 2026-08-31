@@ -883,7 +883,7 @@ class RenamePage(BasePage):
         try:
             cfg.subtitle_match_threshold = float(self.threshold_entry.text().strip())
         except ValueError:
-            QMessageBox.warning(self, "格式错误", "阈值必须为数字")
+            self.app.toast("阈值必须为数字", "warning")
             return
         cfg.extra_info = self.extra_info_entry.text().strip()
         cfg.append_extra_info = self.append_extra_check.isChecked()
@@ -894,7 +894,7 @@ class RenamePage(BasePage):
         self._rebuild_account_radios()
         self._rebuild_type_checkboxes()
         self._rebuild_platform_radios()
-        QMessageBox.information(self, "保存成功", "参数已保存")
+        self.app.toast("参数已保存", "success")
 
     # ==================== 日志 ====================
 

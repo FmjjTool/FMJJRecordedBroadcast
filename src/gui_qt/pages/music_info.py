@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QListWidgetItem, QMessageBox,
+    QHBoxLayout, QLabel, QLineEdit, QListWidgetItem,
     QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -90,7 +90,7 @@ class MusicInfoPage(BasePage):
         singer = self.singer_entry.text().strip() or "封茗囧菌"
         song = self.song_entry.text().strip()
         if not song:
-            QMessageBox.warning(self, "提示", "请输入歌曲名")
+            self.app.toast("请输入歌曲名", "warning")
             return
         self.search_btn.setEnabled(False)
         self.status_label.setText("⏳ 搜索中...")
@@ -159,7 +159,7 @@ class MusicInfoPage(BasePage):
                 if lst.item(i).checkState() == Qt.Checked and i < len(songs):
                     selected.append((key, songs[i]))
         if not selected:
-            QMessageBox.warning(self, "提示", "请先勾选要获取的歌曲")
+            self.app.toast("请先勾选要获取的歌曲", "warning")
             return
         self.get_btn.setEnabled(False)
         self.status_label.setText(f"⏳ 获取 {len(selected)} 首详情...")

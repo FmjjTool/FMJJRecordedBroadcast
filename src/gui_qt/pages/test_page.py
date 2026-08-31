@@ -22,7 +22,7 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QSlider, QTableWidget,
+    QPlainTextEdit, QPushButton, QSlider, QTableWidget,
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -1813,7 +1813,7 @@ class TestPage(BasePage):
         """点击保存：立即导出回放包（与断开/退出的自动导出同格式）。"""
         room = self.room_entry.text().strip()
         if not room:
-            QMessageBox.warning(self, "提示", "请先输入房间号")
+            self.app.toast("请先输入房间号", "warning")
             return
         if not self._auto_save_danmaku():
             self.app.toast("当前没有弹幕数据可保存", "warning")
@@ -1874,7 +1874,7 @@ class TestPage(BasePage):
             return
         room = self.room_entry.text().strip()
         if not room:
-            QMessageBox.warning(self, "提示", "请先输入房间号")
+            self.app.toast("请先输入房间号", "warning")
             return
         self._monitoring = True
         self.monitor_btn.setText("👁 停止监控")

@@ -13,7 +13,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QRadioButton, QTableWidget,
+    QLineEdit, QPushButton, QRadioButton, QTableWidget,
     QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -680,7 +680,7 @@ class RenameBatchPage(BasePage):
         items = self._filter_files()
         pending = [x for x in items if x.get("new") and x["new"] != os.path.basename(x["path"])]
         if not pending:
-            QMessageBox.information(self, "提示", "没有需要改名的文件（先调整规则再预览）")
+            self.app.toast("没有需要改名的文件（先调整规则再预览）", "warning")
             return
         sel_rows = set(idx.row() for idx in self.table.selectionModel().selectedRows()) if \
             self.table.selectionModel().selectedRows() else None
@@ -722,7 +722,7 @@ class RenameBatchPage(BasePage):
 
     def _undo(self):
         if not self.history:
-            QMessageBox.information(self, "提示", "没有可撤销的改名记录")
+            self.app.toast("没有可撤销的改名记录", "warning")
             return
         pairs = list(self.history)
 

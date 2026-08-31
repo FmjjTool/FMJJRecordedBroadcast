@@ -10,7 +10,7 @@ import os
 
 from PySide6.QtCore import QTime
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget,
 )
 
@@ -270,10 +270,10 @@ class GlobalSettingsPage(BasePage):
     def _save(self):
         path = self.workdir_entry.text().strip()
         if not path:
-            QMessageBox.warning(self, "提示", "请输入工作目录")
+            self.app.toast("请输入工作目录", "warning")
             return
         set_work_dir(path)
-        QMessageBox.information(self, "已保存", f"默认工作目录已设为:\n{path}")
+        self.app.toast(f"工作目录已设为: {path}", "success")
         # 同步刷新全局工作目录并广播到所有页面
         if hasattr(self.app, "work_dir"):
             self.app.work_dir = path
@@ -322,9 +322,9 @@ class GlobalSettingsPage(BasePage):
 
         def done(result, err):
             if err:
-                QMessageBox.critical(self, "迁移失败", str(err))
+                self.app.toast(f"迁移失败: {str(err)[:80]}", "error")
                 return
-            QMessageBox.information(self, "完成", f"迁移完成：{result}")
+            self.app.toast(f"迁移完成: {result}", "success")
             self._refresh_info()
 
         run_bg(work, done)

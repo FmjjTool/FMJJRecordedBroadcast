@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
-    QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
+    QPushButton, QTextEdit, QVBoxLayout,
 )
 
 from toolbox.subtitle_engine import SubtitleConverter
@@ -265,11 +265,11 @@ class SubtitlePage(BasePage):
             return
         to_convert = self._checked_paths()
         if not to_convert:
-            QMessageBox.warning(self, "提示", "请先在列表中勾选要转换的字幕文件")
+            self.app.toast("请先在列表中勾选要转换的字幕文件", "warning")
             return
         output_formats = [key for key, cb in self.fmt_checks.items() if cb.isChecked()]
         if not output_formats:
-            QMessageBox.critical(self, "错误", "请至少选择一种输出格式")
+            self.app.toast("请至少选择一种输出格式", "warning")
             return
 
         self.log_text.clear()
