@@ -205,7 +205,7 @@ class ShoppingPage(BasePage):
             self.parse_btn.setEnabled(True)
             self.status_label.setText("")
             if err:
-                QMessageBox.warning(self, "解析失败", str(err))
+                self.app.toast(f"解析失败: {str(err)[:80]}", "error")
                 return
             shop, products = result
             self._shop = shop
@@ -246,7 +246,7 @@ class ShoppingPage(BasePage):
             self.parse_btn.setEnabled(True)
             self.status_label.setText("")
             if err:
-                QMessageBox.warning(self, "解析失败", str(err))
+                self.app.toast(f"解析失败: {str(err)[:80]}", "error")
                 return
             self._detail = detail
             self._products = []
@@ -567,7 +567,7 @@ class ShoppingPage(BasePage):
                 bool(self.table.selectionModel().selectedRows()))
             if err:
                 self.status_label.setText("")
-                QMessageBox.warning(self, "详情获取失败", str(err))
+                self.app.toast(f"详情获取失败: {str(err)[:80]}", "error")
                 return
             done_items, failed = result
             for d in done_items:
@@ -755,8 +755,7 @@ class ShoppingPage(BasePage):
             from gui_qt.cookie_manager import CookieDialog
             CookieDialog(self).exec()
         except Exception:
-            QMessageBox.information(
-                self, "提示", "请从左下角「全局设置」打开 Cookie 管理登录淘宝")
+            self.app.toast("请从左下角「全局设置」打开 Cookie 管理登录淘宝", "info")
 
     # ==================== 导出 ====================
 
@@ -766,9 +765,8 @@ class ShoppingPage(BasePage):
             return
         checked = self._checked_rows()
         if not checked:
-            QMessageBox.information(
-                self, "提示",
-                "请先勾选要导出的商品（表格第一列复选框），或点「☑ 全选」")
+            self.app.toast("请先勾选要导出的商品（表格第一列复选框），或点「☑ 全选」",
+                           "warning")
             return
         total = len(checked)
         path, _ = QFileDialog.getSaveFileName(
@@ -823,7 +821,7 @@ class ShoppingPage(BasePage):
                 bool(self.table.selectionModel().selectedRows()))
             if err:
                 self.status_label.setText("")
-                QMessageBox.warning(self, "导出失败", str(err))
+                self.app.toast(f"导出失败: {str(err)[:80]}", "error")
                 return
             items, failed = result
             products_json = []
@@ -846,7 +844,7 @@ class ShoppingPage(BasePage):
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                QMessageBox.warning(self, "导出失败", str(e))
+                self.app.toast(f"导出失败: {str(e)[:80]}", "error")
                 return
             tip = f"，{len(failed)} 件详情获取失败" if failed else ""
             self.status_label.setText(
@@ -863,8 +861,8 @@ class ShoppingPage(BasePage):
             if rows and 0 <= rows[0].row() < len(self._products):
                 d = self._detail_cache.get(self._products[rows[0].row()].item_id)
         if not d:
-            QMessageBox.information(
-                self, "提示", "请先点「获取选中商品详情」拉取商品详情，再导出 Excel")
+            self.app.toast("请先点「获取选中商品详情」拉取商品详情，再导出 Excel",
+                           "warning")
             return
         from toolbox.config_manager import get_export_dir
         base = get_export_dir() / "淘宝商品"
@@ -872,6 +870,6 @@ class ShoppingPage(BasePage):
         try:
             shopping_mod.export_item_xlsx(d, path)
         except Exception as e:
-            QMessageBox.warning(self, "导出失败", str(e))
+            self.app.toast(f"导出失败: {str(e)[:80]}", "error")
             return
         self.status_label.setText(f"✅ 已导出单商品 Excel：{path}")

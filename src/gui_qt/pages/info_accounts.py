@@ -354,7 +354,7 @@ class InfoAccountsPage(BasePage):
     def _add(self):
         url = self.url_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入账号 URL")
+            self.app.toast("请输入账号 URL", "warning")
             return
         name = self.name_entry.text().strip()
         gid = self.add_gid_entry.text().strip()
@@ -370,14 +370,14 @@ class InfoAccountsPage(BasePage):
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
         else:
-            QMessageBox.warning(self, "提示", "账号已存在")
+            self.app.toast("账号已存在，无需重复添加", "warning")
 
     def _add_set(self):
         """设置页添加账号（账号名 + 链接 + 组号下拉）。"""
         name = self.set_name_entry.text().strip()
         url = self.set_url_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入账号链接")
+            self.app.toast("请输入账号链接", "warning")
             return
         v = self.set_group_sel.currentText()
         gid = "" if v == "无分组" else v.split(":")[0].strip()
@@ -391,7 +391,7 @@ class InfoAccountsPage(BasePage):
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
         else:
-            QMessageBox.warning(self, "提示", "账号已存在")
+            self.app.toast("账号已存在，无需重复添加", "warning")
 
     # ---------- 暂停 ----------
     def _toggle_pause(self):
@@ -433,11 +433,11 @@ class InfoAccountsPage(BasePage):
 
     def _fetch(self):
         if self._fetching:
-            QMessageBox.warning(self, "提示", "正在获取中，请稍候")
+            self.app.toast("正在获取中，请稍候", "warning")
             return
         accounts, err = self._resolve_target_accounts()
         if err:
-            QMessageBox.warning(self, "提示", err)
+            self.app.toast(err, "warning")
             return
         count = self._read_int(self.count_entry, 10)
         rate_count = self._read_int(self.rate_count_entry, 0)
@@ -726,7 +726,7 @@ class InfoAccountsPage(BasePage):
             except ValueError:
                 m = 60
             if m < 1:
-                QMessageBox.warning(win, "提示", "间隔不能小于 1 分钟")
+                self.app.toast("间隔不能小于 1 分钟", "warning")
                 return
             self._timer_interval = m * 60
             self._timer_running = True
@@ -834,10 +834,10 @@ class InfoAccountsPage(BasePage):
         gname = self.gname_entry.text().strip()
         from accounts_manager import GROUP_ID_PATTERN, save_group
         if not gid or not GROUP_ID_PATTERN.match(gid):
-            QMessageBox.warning(self, "提示", "组号必须为重复数字，如 11、22")
+            self.app.toast("组号必须为重复数字，如 11、22", "warning")
             return
         if not gname:
-            QMessageBox.warning(self, "提示", "请输入组名")
+            self.app.toast("请输入组名", "warning")
             return
         if save_group(gid, gname):
             self.gid_entry.clear()

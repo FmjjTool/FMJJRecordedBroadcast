@@ -671,7 +671,7 @@ class TrackerPage(BasePage):
             except ValueError:
                 m = 60
             if m < 1:
-                QMessageBox.warning(win, "提示", "间隔不能小于 1 分钟")
+                self.app.toast("间隔不能小于 1 分钟", "warning")
                 return
             self._timer_interval = m * 60
             self._timer_running = True
@@ -717,7 +717,7 @@ class TrackerPage(BasePage):
         name = self.add_name.text().strip() or "未命名"
         url = self.add_url.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入账号链接")
+            self.app.toast("请输入账号链接", "warning")
             return
         from tracker.accounts import parse_url, load_accounts, save_accounts
         plat_map = {"自动识别": "", "抖音": "douyin", "B站": "bilibili", "微博": "weibo",
@@ -892,13 +892,13 @@ class TrackerPage(BasePage):
         gname = self.gname_entry.text().strip()
         from tracker.accounts import GROUP_ID_PATTERN, save_group, get_groups
         if not gid or not GROUP_ID_PATTERN.match(gid):
-            QMessageBox.warning(self, "提示", "组编号必须为重复数字，如 11、22、33")
+            self.app.toast("组编号必须为重复数字，如 11、22、33", "warning")
             return
         if not gname:
-            QMessageBox.warning(self, "提示", "请输入组名")
+            self.app.toast("请输入组名", "warning")
             return
         if gid in get_groups():
-            QMessageBox.warning(self, "提示", f"组 {gid} 已存在，直接给账号绑定即可")
+            self.app.toast(f"组 {gid} 已存在，直接给账号绑定即可", "warning")
             return
         if save_group(gid, gname):
             self.gid_entry.clear()

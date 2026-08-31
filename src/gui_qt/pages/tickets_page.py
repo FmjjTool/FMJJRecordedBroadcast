@@ -166,7 +166,7 @@ class TicketsPage(BasePage):
             self.parse_btn.setEnabled(True)
             if err:
                 self.status_label.setText("")
-                QMessageBox.warning(self, "解析失败", str(err))
+                self.app.toast(f"解析失败: {str(err)[:80]}", "error")
                 return
             # 兼容两种返回：list 或 (list, diag)
             if isinstance(result, tuple):
@@ -388,7 +388,7 @@ class TicketsPage(BasePage):
                 bool(self.table.selectionModel().selectedRows()))
             if err:
                 self.status_label.setText("")
-                QMessageBox.warning(self, "详情获取失败", str(err))
+                self.app.toast(f"详情获取失败: {str(err)[:80]}", "error")
                 return
             done_items, failed = result
             for obj in done_items:
@@ -554,9 +554,8 @@ class TicketsPage(BasePage):
             return
         checked = self._checked_rows()
         if not checked:
-            QMessageBox.information(
-                self, "提示",
-                "请先勾选要导出的演出（表格第一列复选框），或点「☑ 全选」")
+            self.app.toast("请先勾选要导出的演出（表格第一列复选框），或点「☑ 全选」",
+                           "warning")
             return
         total = len(checked)
         path, _ = QFileDialog.getSaveFileName(
@@ -611,7 +610,7 @@ class TicketsPage(BasePage):
                 bool(self.table.selectionModel().selectedRows()))
             if err:
                 self.status_label.setText("")
-                QMessageBox.warning(self, "导出失败", str(err))
+                self.app.toast(f"导出失败: {str(err)[:80]}", "error")
                 return
             data, failed = result
             n_export = len(data) if isinstance(data, list) else len(data.get("演出", []))
@@ -621,7 +620,7 @@ class TicketsPage(BasePage):
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                QMessageBox.warning(self, "导出失败", str(e))
+                self.app.toast(f"导出失败: {str(e)[:80]}", "error")
                 return
             tip = f"，{len(failed)} 场详情获取失败" if failed else ""
             self.status_label.setText(

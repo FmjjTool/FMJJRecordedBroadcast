@@ -331,7 +331,7 @@ class LyricsToolPage(BasePage):
         """输入框粘贴的歌词文本 → 保存为 LRC → 走正常转换流程。"""
         text = self.input_text.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "提示", "请先在输入框粘贴歌词文本")
+            self.app.toast("请先在输入框粘贴歌词文本", "warning")
             return
         out_dir = self.work_dir or self.app.work_dir or os.getcwd()
         base = "输入歌词.lrc"
@@ -355,7 +355,7 @@ class LyricsToolPage(BasePage):
     def _convert(self):
         to_convert = self._checked()
         if not to_convert:
-            QMessageBox.warning(self, "提示", "请先勾选要转换的歌词文件")
+            self.app.toast("请先勾选要转换的歌词文件", "warning")
             return
         out_fmt = self.fmt_var
         self.log_text.clear()
@@ -415,7 +415,7 @@ class LyricsToolPage(BasePage):
         to_run = [self.krcd_list.item(i).data(Qt.UserRole) for i in range(self.krcd_list.count())
                   if self.krcd_list.item(i).checkState() == Qt.Checked]
         if not to_run:
-            QMessageBox.warning(self, "提示", "请先在列表中勾选要处理的文件")
+            self.app.toast("请先在列表中勾选要处理的文件", "warning")
             return
         mode = self.krcd_mode
         self.krcd_log.clear()

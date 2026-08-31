@@ -704,7 +704,7 @@ class MusicTrackerPage(BasePage):
             except ValueError:
                 m = 60
             if m < 1:
-                QMessageBox.warning(win, "提示", "间隔不能小于 1 分钟")
+                self.app.toast("间隔不能小于 1 分钟", "warning")
                 return
             self._timer_interval = m * 60
             self._timer_running = True
@@ -746,7 +746,7 @@ class MusicTrackerPage(BasePage):
         platform = plat_map.get(self.search_platform.currentText(), "")
         kw = self.search_kw.text().strip()
         if not kw:
-            QMessageBox.warning(self, "提示", "请输入要搜索的名称")
+            self.app.toast("请输入要搜索的名称", "warning")
             return
         self.search_kw.setEnabled(False)
 
@@ -795,7 +795,7 @@ class MusicTrackerPage(BasePage):
         def _fill():
             rows = {idx.row() for idx in table.selectedIndexes()}
             if not rows:
-                QMessageBox.information(win, "提示", "请先选中一条结果")
+                self.app.toast("请先选中一条结果", "warning")
                 return
             r = results[min(rows)]
             name = str(r.get("name") or "").strip() or "未命名"
@@ -826,7 +826,7 @@ class MusicTrackerPage(BasePage):
         name = self.add_name.text().strip() or "未命名"
         url = self.add_url.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入账号链接（可在上方搜索自动填入）")
+            self.app.toast("请输入账号链接（可在上方搜索自动填入）", "warning")
             return
         from music_account.accounts import parse_url, extract_pid, load_accounts, save_accounts
         plat_map = {"自动识别": "", "网易云": "netease", "QQ音乐": "qq", "酷狗": "kugou",
@@ -839,13 +839,13 @@ class MusicTrackerPage(BasePage):
             # 手动选平台：链接必须能解析出该平台 ID（防止选 5sing 贴酷我链接）
             pid, k = extract_pid(platform, url)
             if not pid:
-                QMessageBox.warning(self, "提示",
-                                    f"链接无法解析出「{self.add_platform.currentText()}」的 ID，\n"
-                                    "请检查链接与所选平台是否匹配")
+                self.app.toast(
+                    f"链接无法解析出「{self.add_platform.currentText()}」的 ID，"
+                    "请检查链接与所选平台是否匹配", "warning")
                 return
             kind = k
         if not platform:
-            QMessageBox.warning(self, "提示", "无法识别链接平台，请检查链接或手动选择平台")
+            self.app.toast("无法识别链接平台，请检查链接或手动选择平台", "warning")
             return
         gid = self._selected_group_id()
         acc = {"name": name, "url": url, "platform": platform, "kind": kind, "group_id": gid}
@@ -1014,13 +1014,13 @@ class MusicTrackerPage(BasePage):
         gname = self.gname_entry.text().strip()
         from music_account.accounts import GROUP_ID_PATTERN, save_group, get_groups
         if not gid or not GROUP_ID_PATTERN.match(gid):
-            QMessageBox.warning(self, "提示", "组编号必须为重复数字，如 11、22、33")
+            self.app.toast("组编号必须为重复数字，如 11、22、33", "warning")
             return
         if not gname:
-            QMessageBox.warning(self, "提示", "请输入组名")
+            self.app.toast("请输入组名", "warning")
             return
         if gid in get_groups():
-            QMessageBox.warning(self, "提示", f"组 {gid} 已存在，直接给账号绑定即可")
+            self.app.toast(f"组 {gid} 已存在，直接给账号绑定即可", "warning")
             return
         if save_group(gid, gname):
             self.gid_entry.clear()
