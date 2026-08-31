@@ -10,12 +10,12 @@
 import webbrowser
 from datetime import datetime
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontMetrics, QPalette, QTextDocument
+from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtGui import QPalette, QTextDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
-    QMessageBox, QPushButton, QStyledItemDelegate, QStyle, QStyleOptionViewItem,
-    QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QListView, QStyledItemDelegate, QStyle,
+    QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -38,12 +38,14 @@ _PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
                 "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
 
 # 视频/动态标签配色：常规态 + 选中态（蓝底上的浅色变体）
-TAG_COLORS = {"[视频]": ("#1976d2", "#bbdefb"), "[动态]": ("#e65100", "#ffe0b2")}
+TAG_COLORS = {"[视频]": ("#1976d2", "#bbdefb"), "[动态]": ("#e65100", "#ffe0b2"),
+              "[图文]": ("#2e7d32", "#c8e6c9")}
 
 
 def colorize_tag_html(text: str, selected: bool = False) -> str:
-    """把行文本里的 [视频]/[动态] 标签替换为彩色加粗 span，其余文本原样转义。"""
-    esc = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    """把行文本里的 [视频]/[动态]/[图文] 标签替换为彩色加粗 span，其余文本原样转义（换行转 <br>）。"""
+    esc = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+           .replace("\n", "<br>"))
     for tag, (normal, sel) in TAG_COLORS.items():
         color = sel if selected else normal
         esc = esc.replace(tag, f'<span style="color:{color}; font-weight:bold;">{tag}</span>')
@@ -51,11 +53,44 @@ def colorize_tag_html(text: str, selected: bool = False) -> str:
 
 
 class TagColorDelegate(QStyledItemDelegate):
-    """列表行富文本渲染：仅给 [视频]/[动态] 标签上色（其余文字保持默认样式）。"""
+    """列表行富文本渲染：类型标签彩色加粗 + 按栏宽自动换行（多行完整显示，不截断）。"""
+
+    def _text_width(self, opt):
+        """当前栏内一行文本的可用宽度（视口宽 - 复选框指示框区域）。"""
+        view = self.parent()
+        if not isinstance(view, QWidget):
+            return 260
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        probe = QStyleOptionViewItem(opt)
+        probe.rect = QRect(0, 0, view.viewport().width(), 20)
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, probe, view)
+        return max(rect.width() - 4, 60)
+
+    def _build_doc(self, text, opt, selected, width):
+        doc = QTextDocument()
+        doc.setDefaultFont(opt.font)
+        doc.setDocumentMargin(0)
+        doc.setTextWidth(max(width, 60))
+        # 基础文字颜色取调色板（深色主题浅色/浅色主题深色，选中态用高亮前景）。
+        # 不设的话 QTextDocument 默认黑字，深色主题下整行不可读。
+        base = (opt.palette.color(QPalette.HighlightedText) if selected
+                else opt.palette.color(QPalette.Text)).name()
+        doc.setHtml(f'<span style="color:{base};">{colorize_tag_html(text, selected)}</span>')
+        return doc
+
+    def sizeHint(self, option, index):
+        text = index.data(Qt.DisplayRole)
+        if not isinstance(text, str) or "\n" not in text:
+            return super().sizeHint(option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        width = self._text_width(opt)
+        doc = self._build_doc(text, opt, False, width)
+        return QSize(width, int(doc.size().height()) + 6)
 
     def paint(self, painter, option, index):
         text = index.data(Qt.DisplayRole)
-        if not isinstance(text, str) or not any(t in text for t in TAG_COLORS):
+        if not isinstance(text, str) or ("\n" not in text and not any(t in text for t in TAG_COLORS)):
             super().paint(painter, option, index)
             return
         opt = QStyleOptionViewItem(option)
@@ -65,20 +100,10 @@ class TagColorDelegate(QStyledItemDelegate):
         style = opt.widget.style() if opt.widget else QApplication.style()
         style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
         rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
-        shown = QFontMetrics(opt.font).elidedText(
-            text, Qt.ElideRight, int(rect.width()))
-        # 基础文字颜色取调色板（深色主题浅色/浅色主题深色，选中态用高亮前景）。
-        # 不设的话 QTextDocument 默认黑字，深色主题下整行不可读。
-        base = (opt.palette.color(QPalette.HighlightedText) if selected
-                else opt.palette.color(QPalette.Text)).name()
-        doc = QTextDocument()
-        doc.setDefaultFont(opt.font)
-        doc.setDocumentMargin(0)
-        doc.setHtml(
-            f'<span style="color:{base};">{colorize_tag_html(shown, selected)}</span>')
+        doc = self._build_doc(text, opt, selected, rect.width())
         painter.save()
         painter.setClipRect(rect)
-        y = rect.top() + (rect.height() - doc.size().height()) / 2.0
+        y = rect.top() + max(0.0, (rect.height() - doc.size().height()) / 2.0)
         painter.translate(rect.left(), y)
         doc.drawContents(painter)
         painter.restore()
@@ -207,7 +232,11 @@ class InfoResultsPage(BasePage):
         v.addLayout(btns)
 
         lst = RowCheckList()
-        # [视频]/[动态] 标签彩色渲染（其余文字默认样式）
+        # 多行完整显示：按栏宽自动换行，窗口缩放时重新布局重算行高
+        lst.setWordWrap(True)
+        lst.setResizeMode(QListView.Adjust)
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # [视频]/[动态]/[图文] 标签彩色渲染（其余文字默认样式）
         lst.setItemDelegate(TagColorDelegate(lst))
         lst.itemDoubleClicked.connect(
             lambda item: self._open_url(item.data(Qt.UserRole) or ""))
@@ -241,7 +270,7 @@ class InfoResultsPage(BasePage):
             lst.addItem(item)
             return
         for i, info in enumerate(songs, 1):
-            title = (info.title or "-")[:30]
+            title = info.title or "-"
             author = info.author or "-"
             if getattr(info, "kind", "") == "dynamic":
                 kind_tag = "动态"
@@ -251,15 +280,17 @@ class InfoResultsPage(BasePage):
             else:
                 kind_tag = "视频"
             _dt, date_str = _parse_pub(info)
-            text = (f"[{i}] {date_str} [{kind_tag}] {title}  @{author}  "
-                    f"播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}")
+            # 两行展示：标题一行（不截断），日期/作者/数据一行；超宽自动换行
+            meta = f"📅 {date_str}  @{author}  播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}"
             url = info.video_url or info.raw_url
             if url:
-                text += "   🔗"
+                meta += "  🔗"
+            text = f"[{i}] [{kind_tag}] {title}\n{meta}"
             item = QListWidgetItem(text)
             item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             item.setCheckState(Qt.Unchecked)
             item.setData(Qt.UserRole, url or "")
+            item.setToolTip(f"{title}\n{author}  {date_str}\n{url or ''}")
             lst.addItem(item)
 
     def refresh_count(self):
