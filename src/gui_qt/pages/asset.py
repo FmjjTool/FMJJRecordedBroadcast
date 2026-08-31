@@ -1074,8 +1074,13 @@ class AssetPage(BasePage):
         def _esc(s):
             return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        text = (f"[{index}] {plat_tag}{_esc(title)}{media_str}<br>"
-                f"@{_esc(it['author'] or '-')}  播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}<br>"
+        # 行格式：{序号}{类别}{标题}{发布者}——发布者放首行一眼可见，
+        # 次行只留数据统计（作者不再重复）
+        author = (it.get("author") or "").strip() or "-"
+        author_disp = author[:20] + ("…" if len(author) > 20 else "")
+        text = (f"[{index}] {plat_tag}{_esc(title)} "
+                f'<span style="color:#555;">@{_esc(author_disp)}</span>{media_str}<br>'
+                f"播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}<br>"
                 f"📅 {date_str}  📄 {_esc(fname)}")
         txt = QLabel(text)
         txt.setTextFormat(Qt.RichText)
@@ -1147,7 +1152,15 @@ class AssetPage(BasePage):
             or dtype == "av"
         )
         if is_video_item:
-            return any(m["type"] == "video" for m in mfs)
+            if not any(m["type"] == "video" for m in mfs):
+                return False
+            # 封面同样要求本地已落（资产页缩略图本地优先，网络封面会过期/403）；
+            # 无封面源（cover_url 空）的视频条目只看视频本体。
+            # 旧数据只下过视频没下封面 → 判不完整，批量下载会自动补（视频
+            # 已存在走 Range/416 快速跳过，实际只补封面）
+            if not (it.get("cover_url") or "").strip():
+                return True
+            return any(m["type"] == "image" for m in mfs)
         expected = int(it.get("expected_imgs") or 0)
         n_imgs = sum(1 for m in mfs if m["type"] == "image")
         if expected:
@@ -1461,8 +1474,11 @@ class AssetPage(BasePage):
                                       quiet=True)
             if not vurl2:
                 raise ValueError("无可用视频链接")
+            # download_images=True 仅为生成「封面」下载任务（images 为空不会多下图）：
+            # 资产页缩略图本地优先，封面必须落盘成 {stem}_封面.jpg，
+            # 否则只能走网络封面（抖音直链会过期、部分图床 403）
             return download_media([info], base_dir=base_dir,
-                                  download_images=False, download_live=False, download_videos=True,
+                                  download_images=True, download_live=False, download_videos=True,
                                   progress_callback=bridge.emit_progress,
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
                                   quiet=True)
@@ -1477,6 +1493,7 @@ class AssetPage(BasePage):
             else:
                 n_img = (result or {}).get("images", 0)
                 n_vid = (result or {}).get("videos", 0)
+                n_cov = (result or {}).get("covers", 0)
                 f = (result or {}).get("failed", 0)
                 cancelled = (result or {}).get("cancelled", False)
                 if n_img:
@@ -1485,7 +1502,10 @@ class AssetPage(BasePage):
                                    "success" if not cancelled else "warning")
                 elif n_vid:
                     self._dl_state[self._dl_key(it)] = "done"
-                    self.app.toast(f"✅ 已下载视频 {n_vid} 个", "success")
+                    msg = f"✅ 已下载视频 {n_vid} 个"
+                    if n_cov:
+                        msg += f" + 封面 {n_cov} 张"
+                    self.app.toast(msg, "success")
                 else:
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
                     self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
@@ -1809,9 +1829,15 @@ class AssetPage(BasePage):
         def load():
             try:
                 import requests
-                h = {"User-Agent": "Mozilla/5.0"}
+                h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
+                # 图床防盗链：微博 sinaimg 无 Referer 必 403；B站/xhs 顺手带上
                 if "hdslb" in url or "bilibili" in url:
                     h["Referer"] = "https://www.bilibili.com/"
+                elif "sinaimg" in url or "weibo" in url:
+                    h["Referer"] = "https://weibo.com/"
+                elif "xhscdn" in url or "xiaohongshu" in url:
+                    h["Referer"] = "https://www.xiaohongshu.com/"
                 if url.startswith("//"):
                     url2 = "https:" + url
                 else:

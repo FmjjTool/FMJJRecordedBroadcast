@@ -46,6 +46,8 @@ class InfoAccountsPage(BasePage):
         # 暂停门闩：set=放行 / clear=暂停（采集线程在账号边界等待）
         self._pause_evt = threading.Event()
         self._pause_evt.set()
+        # 取消标记：set 后未开始的账号直接跳过（在飞账号自然跑完不硬中断）
+        self._cancel_evt = threading.Event()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -164,6 +166,11 @@ class InfoAccountsPage(BasePage):
         self.pause_btn.setToolTip("暂停后当前账号采集完即停住，点「继续」恢复")
         self.pause_btn.clicked.connect(self._toggle_pause)
         op_row.addWidget(self.pause_btn)
+        self.cancel_btn = QPushButton("✕ 取消")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setToolTip("取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束")
+        self.cancel_btn.clicked.connect(self._cancel_fetch)
+        op_row.addWidget(self.cancel_btn)
         self.timer_btn = QPushButton("⏰ 定时获取")
         self.timer_btn.clicked.connect(self._toggle_timer)
         op_row.addWidget(self.timer_btn)
@@ -410,10 +417,24 @@ class InfoAccountsPage(BasePage):
             self.log_text.append("▶ 已继续采集")
             self.prog_label.setText("继续采集中...")
 
+    def _cancel_fetch(self):
+        """取消当前获取：未开始的账号直接跳过，在飞账号自然跑完（不硬中断线程）。"""
+        if not self._fetching:
+            return
+        self._cancel_evt.set()
+        # 若正卡在暂停门闩，先放行让线程看到取消标记后快速退出
+        self._pause_evt.set()
+        self.cancel_btn.setEnabled(False)
+        self.log_text.append("✕ 已请求取消（在飞账号自然结束，未开始的账号跳过）")
+        self.prog_label.setText("✕ 正在取消...")
+
     def _set_fetch_ui(self, running: bool):
-        """获取开始/结束时同步暂停按钮状态（手动与定时获取共用）。"""
+        """获取开始/结束时同步暂停/取消按钮状态（手动与定时获取共用）。"""
         self.pause_btn.setEnabled(running)
-        if not running:
+        self.cancel_btn.setEnabled(running)
+        if running:
+            self._cancel_evt.clear()  # 每轮获取开始前复位取消标记
+        else:
             self._pause_evt.set()  # 复位门闩，避免下轮启动即处于暂停态
             self.pause_btn.setText("⏸ 暂停")
             self.pause_btn.setStyleSheet("")
@@ -454,7 +475,7 @@ class InfoAccountsPage(BasePage):
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
                 incremental=incremental, on_event=self._make_event_bridge(),
-                pause_event=self._pause_evt)
+                pause_event=self._pause_evt, cancel_event=self._cancel_evt)
 
         def done(result, err):
             self.fetch_btn.setEnabled(True)
@@ -465,8 +486,12 @@ class InfoAccountsPage(BasePage):
                 self.prog_label.setText("❌ 获取失败")
                 return
             total, _log = result
-            self.log_text.append(f"\n✅ 共获取 {total} 条（已存入「已获取」）")
-            self.prog_label.setText("✅ 获取完成")
+            if self._cancel_evt.is_set():
+                self.log_text.append(f"\n✕ 已取消（本次已获取 {total} 条，已存入「已获取」）")
+                self.prog_label.setText("✕ 已取消")
+            else:
+                self.log_text.append(f"\n✅ 共获取 {total} 条（已存入「已获取」）")
+                self.prog_label.setText("✅ 获取完成")
             refresh_results_count(self.app)
 
         self._fetching = True
@@ -517,7 +542,7 @@ class InfoAccountsPage(BasePage):
             return [], "没有可采集的账号"
         return accounts, None
 
-    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None):
+    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None):
         """采集账号最新内容，返回 (total, log)。供手动与定时获取共用。
 
         多账号并发采集（ThreadPoolExecutor，上限 4 线程）：原串行逐个等待，
@@ -528,6 +553,7 @@ class InfoAccountsPage(BasePage):
         rate_count/rate_interval: 搜索限流（每网站累计抓到 rate_count 个暂停 rate_interval 秒）。
         incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
         pause_event: threading.Event，clear 时在账号边界停住（在飞账号自然跑完）。
+        cancel_event: threading.Event，set 后未开始的账号直接跳过（在飞账号自然跑完）。
         """
         from concurrent.futures import ThreadPoolExecutor
         from accounts_manager import infer_kind_from_url
@@ -577,6 +603,9 @@ class InfoAccountsPage(BasePage):
             # 暂停门闩：clear 时阻塞在账号边界，set 后继续（在飞账号自然跑完）
             if pause_event is not None:
                 pause_event.wait()
+            # 已取消：还没开始的账号直接跳过（线程池排队任务快速返回）
+            if cancel_event is not None and cancel_event.is_set():
+                return i, a, "", [], "", "__cancelled__"
             platform = URLRecognizer.recognize(a.url)
             name = a.name or (a.url[:36] if a.url else "未命名")
             if not platform:
@@ -619,6 +648,9 @@ class InfoAccountsPage(BasePage):
             if on_event is not None:
                 on_event({"type": "progress", "done": done_cnt, "total": n,
                           "label": f"[{i}/{n}] {platform} · {name}"})
+            if error == "__cancelled__":
+                emit(f"[{i}/{n}] ⊘ 已取消，跳过")
+                continue
             if error == "无法识别链接":
                 emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
                 continue
@@ -633,7 +665,8 @@ class InfoAccountsPage(BasePage):
             all_posts.extend(posts)
             total += len(posts)
             # 搜索限流：每网站累计抓到 rate_count 个后暂停 rate_interval 秒（暂停门闩优先）
-            if rate_count > 0 and rate_interval > 0 and posts:
+            if (rate_count > 0 and rate_interval > 0 and posts
+                    and not (cancel_event is not None and cancel_event.is_set())):
                 per_platform[platform] = per_platform.get(platform, 0) + len(posts)
                 if per_platform[platform] >= rate_count:
                     emit(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
@@ -663,7 +696,9 @@ class InfoAccountsPage(BasePage):
             if export_msg:
                 emit(export_msg)
         if on_event is not None:
-            on_event({"type": "progress", "done": n, "total": n, "label": "✅ 全部完成"})
+            cancelled = cancel_event is not None and cancel_event.is_set()
+            on_event({"type": "progress", "done": n, "total": n,
+                      "label": "✕ 已取消" if cancelled else "✅ 全部完成"})
         return total, log
 
     def _auto_export(self, posts, incremental):
@@ -779,7 +814,7 @@ class InfoAccountsPage(BasePage):
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
                 incremental=incremental, on_event=self._make_event_bridge(),
-                pause_event=self._pause_evt)
+                pause_event=self._pause_evt, cancel_event=self._cancel_evt)
 
         def done(result, err):
             self._set_fetch_ui(False)
@@ -790,7 +825,11 @@ class InfoAccountsPage(BasePage):
                 self.prog_label.setText("❌ 定时获取失败")
                 return
             total, _log = result
-            self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
+            if self._cancel_evt.is_set():
+                self.log_text.append(f"[{ts}] ⏰ 定时获取已取消（已获取 {total} 条）")
+                self.prog_label.setText("✕ 已取消")
+            else:
+                self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
             refresh_results_count(self.app)
             if not self.isVisible():
                 # 用户已切到其他页：提示定时获取仍在后台生效
