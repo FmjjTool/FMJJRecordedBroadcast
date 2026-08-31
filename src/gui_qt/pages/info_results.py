@@ -121,7 +121,7 @@ class TagColorDelegate(QStyledItemDelegate):
         painter.drawRoundedRect(card, self.CARD_RADIUS, self.CARD_RADIUS)
         painter.restore()
 
-        # 2. 复选框（画在卡片上，位置与原生一致）
+        # 2. 复选框（画在卡片上，位置与原生一致——点击热区由原生位置决定）
         opt_chk = QStyleOptionViewItem(opt)
         opt_chk.rect = option.rect
         opt_chk.state &= ~QStyle.State_Selected
@@ -131,13 +131,13 @@ class TagColorDelegate(QStyledItemDelegate):
         style.drawPrimitive(QStyle.PE_IndicatorItemViewItemCheck, opt_chk, painter, opt.widget)
 
         # 3. 富文本（类型标签彩色 + 自动换行），画在卡片内边距里
-        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
-        doc = self._build_doc(
-            text, opt, selected,
-            rect.width() - 2 * self.CARD_MARGIN_X - 2 * self.CARD_PAD_X - 2)
+        #    文本起点必须让开复选框指示框（否则换行文本从卡片左缘起画，盖住勾选框）
         painter.save()
-        text_rect = QRect(card.left() + self.CARD_PAD_X, card.top() + self.CARD_PAD_Y,
-                          card.width() - 2 * self.CARD_PAD_X, card.height() - 2 * self.CARD_PAD_Y)
+        text_left = max(card.left() + self.CARD_PAD_X, chk_rect.right() + 6)
+        text_rect = QRect(text_left, card.top() + self.CARD_PAD_Y,
+                          card.right() - text_left - self.CARD_PAD_X,
+                          card.height() - 2 * self.CARD_PAD_Y)
+        doc = self._build_doc(text, opt, selected, text_rect.width())
         painter.setClipRect(text_rect)
         painter.translate(text_rect.left(), text_rect.top())
         doc.drawContents(painter)
