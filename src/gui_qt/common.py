@@ -155,8 +155,14 @@ def _fmt(n):
 
 
 def _dedup_key(info) -> str:
-    """用于去重的唯一标识：优先链接，其次视频ID。"""
-    return (info.video_url or info.raw_url or info.video_id or "").strip()
+    """用于去重的唯一标识：video_id（稳定，如抖音 aweme_id/B站 bvid/微博 status id）
+    优先，其次 video_url，最后 raw_url——与 increment_db 键序一致。
+
+    抖音 CDN 直链带签名/过期参数（每次抓取都变）不能当键；用户作品条目的
+    raw_url 是主页链接（同账号所有条目相同）也不能当键（曾因此整列重复入库）。
+    """
+    return (getattr(info, "video_id", "") or getattr(info, "video_url", "")
+            or getattr(info, "raw_url", "") or "").strip()
 
 
 def _collect(infos):
@@ -331,6 +337,7 @@ def load_collected():
                 conn.close()
         existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
         fields = set(VideoInfo.__dataclass_fields__)
+        kept = 0
         for data, _created_at in rows:
             d = json.loads(data)
             if not isinstance(d, dict):
@@ -342,6 +349,11 @@ def load_collected():
             if key:
                 existing.add(key)
             COLLECTED.append(info)
+            kept += 1
+        # 旧库可能存有按会过期的 CDN 直链键写入的重复行（同一 video_id 多行），
+        # 加载去重丢过行就把库物理重写成干净键，避免脏行越积越多
+        if kept < len(rows):
+            save_collected()
     except Exception:
         pass
 

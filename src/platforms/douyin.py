@@ -211,10 +211,12 @@ class DouyinParser(PlatformBase):
     # ========== 用户时间线（Playwright） ==========
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
-        """三级回退：① 游客 Playwright → ② 接入 Cookie 重试（Cookie 固定放第三级）。
+        """有 Cookie 直接 Cookie 态抓，失败回退游客态。
 
-        抖音用户时间线无免登录 HTTP API，浏览器是直连手段；
-        先跑游客浏览器，拿不到数据才带 Cookie 再跑一次。
+        抖音用户时间线无免登录 HTTP API，浏览器是直连手段。
+        实测（2026-08-31）：同一主页游客 aweme/post 列表会漏掉最新若干作品
+        （缺 08-29/30/31 三条），Cookie 态完整且为游客态超集——用户时间线
+        属「必须用 Cookie 的接口」，与全链路游客优先原则的例外条款一致。
         """
         sec_uid = self.extract_user_id(url_or_id)
         if not sec_uid:
@@ -230,20 +232,14 @@ class DouyinParser(PlatformBase):
         from auth import get_cookie
         cookie_str = get_cookie("douyin")
 
-        # 一级：无 Cookie 游客浏览器
-        results = self._fetch_pw_once(sec_uid, count, cookie_str="")
-        if results:
-            return results
-
-        # 三级：接入 Cookie 重试
         if cookie_str:
-            print("[抖音] 游客浏览器未获取到数据，接入 Cookie 重试...")
             results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str)
             if results:
                 return results
-        else:
-            print("[抖音] 游客浏览器未拦截到数据（可能需登录 Cookie，或页面触发验证码）")
-        return results
+            print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
+
+        # 无 Cookie 或 Cookie 态失败：游客浏览器兜底
+        return self._fetch_pw_once(sec_uid, count, cookie_str="")
 
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "") -> list:
         """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
@@ -294,7 +290,8 @@ class DouyinParser(PlatformBase):
                         data = response.json()
                         aweme_list = data.get("aweme_list", [])
                         for a in aweme_list:
-                            collected.append(a)
+                            if a not in collected:
+                                collected.append(a)
                     except Exception:
                         pass
 
@@ -305,40 +302,28 @@ class DouyinParser(PlatformBase):
                 print(f"[抖音-Playwright] 加载: {user_url[:60]}...")
                 page.goto(user_url, wait_until="domcontentloaded", timeout=20000)
 
-                # 优先从页面内嵌的 RENDER_DATA 中提取
-                html = page.content()
-                aweme_list_from_html = self._extract_aweme_list_from_html(html)
-                if aweme_list_from_html:
-                    print(f"[抖音-Playwright] 从页面内嵌数据提取到 {len(aweme_list_from_html)} 条")
-                    for item in aweme_list_from_html[:count]:
-                        info = self._build_from_aweme(item, str(item.get("aweme_id", "")))
-                        info.raw_url = user_url
-                        results.append(info)
-                    if results:
-                        browser.close()
-                        return results
-
-                # 滚动触发 API 加载
-                for i in range(5):
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    page.wait_for_timeout(2000)
-                    # 每次滚动后也检查页面内嵌数据
+                # 页面内嵌数据（RENDER_DATA/SSR 首屏）合并进 collected（与 API 拦截去重）
+                def _merge_html_items():
                     html = page.content()
-                    more = self._extract_aweme_list_from_html(html)
-                    for item in more:
+                    for item in self._extract_aweme_list_from_html(html):
                         if item not in collected:
                             collected.append(item)
+
+                _merge_html_items()
+                if collected:
+                    print(f"[抖音-Playwright] 首屏获取到 {len(collected)} 条")
+
+                # 滚动触发 API 翻页加载，凑够 count 条即停
+                for i in range(5):
                     if len(collected) >= count:
                         break
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(2000)
+                    _merge_html_items()
 
                 if not collected:
                     page.wait_for_timeout(5000)
-                    # 最后再检查一次
-                    html = page.content()
-                    more = self._extract_aweme_list_from_html(html)
-                    for item in more:
-                        if item not in collected:
-                            collected.append(item)
+                    _merge_html_items()
 
                 for item in collected[:count]:
                     info = self._build_from_aweme(item, str(item.get("aweme_id", "")))
