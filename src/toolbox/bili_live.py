@@ -693,7 +693,7 @@ class BiliLiveFetcher:
             num = 1
         m = {"type": "GUARD_BUY", "ts": now_ms, "nickname": nick,
              "content": f"开通{gname} x{num}",
-             "giftName": gname, "giftCount": num, "giftPrice": price * 1000,
+             "giftName": gname, "giftCount": num, "giftPrice": price,
              "giftIcon": "", "repeatEnd": 1}
         self._emit(self.on_message, "礼物", self._fmt(nick, m["content"]), m)
 

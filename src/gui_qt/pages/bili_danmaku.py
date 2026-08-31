@@ -40,15 +40,16 @@ class BiliDanmakuPage(TestPage):
         self.dycast_btn.hide()      # dycast 为抖音专属，B站无对应能力
         self.gift_table.setHorizontalHeaderLabels(
             ["排名", "昵称", "礼物数", "价值(电池)", "更新时间"])
-        # 房间号：B站短号合法（抖音页的 ≥6 位校验不适用），支持粘贴直播间链接
+        # 房间号：B站短号合法（抖音页的 ≥6 位校验不适用），支持粘贴直播间链接。
+        # 上次房号 <4 位（如测试残留"6"）不回填：留空走 placeholder + 默认 544820
         self.room_entry.setPlaceholderText(f"房间号或直播间链接，如 {DEFAULT_ROOM}")
         room = str(self.settings.get("last_room", "") or "")
-        self.room_entry.setText(room if room.isdigit() else DEFAULT_ROOM)
+        self.room_entry.setText(room if room.isdigit() and len(room) >= 4 else "")
 
     # ======================== 平台差异覆写 ========================
     def _default_room(self):
         room = str(self.settings.get("last_room", "") or "")
-        if room.isdigit():
+        if room.isdigit() and len(room) >= 4:
             return room
         return DEFAULT_ROOM
 
