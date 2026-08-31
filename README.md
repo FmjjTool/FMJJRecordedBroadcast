@@ -1,10 +1,10 @@
 # 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.1** · 制作：歆慕
+> **FengMingToolbox v2.8.2** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.1>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.2>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -662,7 +662,7 @@ A：不会。普通文件遇到同名则**跳过**（新项目数据优先）；
 ```python
 APP_NAME         = "FengMingToolbox"
 APP_DISPLAY_NAME = "封茗囧菌数据汇总库 统一维护工具箱"
-APP_VERSION      = "2.8.1"
+APP_VERSION      = "2.8.2"
 APP_PUBLISHER    = "歆慕"
 ```
 
