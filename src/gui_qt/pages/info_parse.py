@@ -6,7 +6,7 @@
 """
 
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTextEdit, QVBoxLayout,
 )
 
@@ -78,7 +78,7 @@ class InfoParsePage(BasePage):
     def _parse(self):
         url = self.url_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "提示", "请输入 URL")
+            self.app.toast("请输入要解析的 URL", "warning")
             return
         self.parse_btn.setEnabled(False)
         self.result_text.setPlainText("⏳ 解析中...\n")
@@ -111,7 +111,7 @@ class InfoParsePage(BasePage):
     def _download_current(self):
         info = self._current_info
         if info is None:
-            QMessageBox.warning(self, "提示", "请先解析出结果再下载")
+            self.app.toast("请先解析出结果再下载", "warning")
             return
         self.download_btn.setEnabled(False)
         self._log(f"⏳ 开始下载 [{info.platform}] {(info.title or info.video_id)[:40]}...")

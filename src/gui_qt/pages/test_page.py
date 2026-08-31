@@ -362,6 +362,11 @@ class TestPage(BasePage):
             return room
         return "582775732015"
 
+    def _clear_room_entry(self):
+        """✕ 按钮：一键清空房间号并聚焦，方便快速输入新房间。"""
+        self.room_entry.clear()
+        self.room_entry.setFocus()
+
     def _create_fetcher(self, room):
         """创建平台弹幕抓取器（on_message/on_room_info/on_status 同构回调）。"""
         return self._backend().LiveFetcher(
@@ -1405,6 +1410,16 @@ class TestPage(BasePage):
         self.room_entry.setText(_last_room)
         self.room_entry.returnPressed.connect(self._connect)
         row1.addWidget(self.room_entry, 1)
+        room_clear_btn = QPushButton("✕")
+        room_clear_btn.setFixedSize(26, 26)
+        room_clear_btn.setToolTip("清空房间号，快速输入新房间")
+        room_clear_btn.setFlat(True)
+        room_clear_btn.setStyleSheet(
+            "QPushButton { color: #8a919e; border: none; font-size: 14px; }"
+            "QPushButton:hover { color: #c62828; }")
+        room_clear_btn.clicked.connect(self._clear_room_entry)
+        room_clear_btn.setFocusPolicy(Qt.NoFocus)
+        row1.addWidget(room_clear_btn)
         self.connect_btn2 = QPushButton("连接")
         self.connect_btn2.setStyleSheet("background: #2e7d32; color: white;")
         self.connect_btn2.clicked.connect(self._connect)

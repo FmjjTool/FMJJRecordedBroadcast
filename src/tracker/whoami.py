@@ -218,27 +218,69 @@ def _kuaishou(cookie: str) -> dict:
 def _kuwo(cookie: str) -> dict:
     import requests
 
+    # 远程接口需 Cookie 内的 kw_token 作 csrf——登录 Cookie 不一定带（浏览器
+    # 捕获时可能未存），此时接口恒回 "The request is illegal"，不能当未登录
     token = _cookie_field(cookie, "kw_token")
-    h = _headers(cookie)
-    h["csrf"] = token or "x"
-    h["Referer"] = "https://www.kuwo.cn/"
-    try:
-        d = requests.get("https://www.kuwo.cn/api/www/user/account/info?httpsStatus=1",
-                         headers=h, timeout=10).json()
-    except ValueError:
-        d = {}
-    data = d.get("data") or {}
-    name = data.get("username") or data.get("name") or data.get("nickName")
-    if d.get("success") and name:
-        return {"ok": True, "username": str(name)}
+    if token:
+        h = _headers(cookie)
+        h["csrf"] = token
+        h["Referer"] = "https://www.kuwo.cn/"
+        try:
+            d = requests.get("https://www.kuwo.cn/api/www/user/account/info?httpsStatus=1",
+                             headers=h, timeout=10).json()
+            data = d.get("data") or {}
+            name = data.get("username") or data.get("name") or data.get("nickName")
+            if d.get("success") and name:
+                return {"ok": True, "username": str(name)}
+        except Exception:
+            pass
+    # Cookie 内登录凭据直接判定：uname3 为 JS escape 编码的昵称（可能再被
+    # URL 编码一层，如 %25u6B46%25u6155 → %u6B46%u6155 → 汉字）
     uid = _cookie_field(cookie, "userid")
+    nick = _kw_uname3(cookie)
+    if uid and nick:
+        return {"ok": True, "username": nick}
+    account = _cookie_field(cookie, "username")
+    if uid and account:
+        return {"ok": True, "username": account}
     if uid:
         return {"ok": None, "username": f"用户ID {uid}"}
     return {"ok": None, "username": ""}
 
 
+def _kw_uname3(cookie: str) -> str:
+    """解码酷我 uname3（JS escape 汉字昵称）；无该字段或解不出返回空。"""
+    import re
+    from urllib.parse import unquote
+
+    v = _cookie_field(cookie, "uname3")
+    if not v:
+        return ""
+    for _ in range(2):  # 至多剥两层 URL 编码（%25u… → %u… → 汉字由正则接手）
+        d = unquote(v)
+        if d == v:
+            break
+        v = d
+    m = re.findall(r"%u([0-9a-fA-F]{4})", v)
+    if m:
+        return "".join(chr(int(x, 16)) for x in m)
+    return v if v and "%" not in v else ""
+
+
 def _kugou(cookie: str) -> dict:
-    uid = _cookie_field(cookie, "userid") or _cookie_field(cookie, "KugouID")
+    # 远程用户接口全被拦（userservice 404/passport 403/mobilecdn Access Deny），
+    # 用 Cookie 内登录凭据判定：KugooID（注意双 o，KugouID 拼法查不到值）+
+    # 登录态 Cookie（KuGoo 会话 / t 令牌）同时存在才算有效登录
+    uid = (_cookie_field(cookie, "KugooID")
+           or _cookie_field(cookie, "KugouID")
+           or _cookie_field(cookie, "userid"))
+    logged = bool(uid and (_cookie_field(cookie, "KuGoo")
+                           or _cookie_field(cookie, "t")))
+    name = _cookie_field(cookie, "UserName")
+    if logged and name and name != f"kgopen{uid}":
+        return {"ok": True, "username": name}
+    if logged:
+        return {"ok": True, "username": f"用户ID {uid}"}
     if uid:
         return {"ok": None, "username": f"用户ID {uid}"}
     return {"ok": None, "username": ""}

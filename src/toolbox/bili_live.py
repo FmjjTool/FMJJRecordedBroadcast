@@ -35,7 +35,7 @@ QN_FALLBACK = [(30000, "杜比"), (25000, "HDR"), (20000, "4K"), (10000, "原画
 HEARTBEAT_INTERVAL = 30      # 弹幕心跳间隔（秒）
 WS_RECV_TIMEOUT = 90         # 收不到任何包超过该秒数视为断线
 
-DEFAULT_ROOM = "6"           # B站直播办公屏（常开，方便测试）
+DEFAULT_ROOM = "544820"       # 默认示例房号（与直播间表情页一致，用户确认可用）
 
 
 def _headers() -> dict:

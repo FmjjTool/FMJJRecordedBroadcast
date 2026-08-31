@@ -11,7 +11,7 @@ import webbrowser
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem, QMessageBox,
+    QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
     QPushButton, QTextEdit, QVBoxLayout,
 )
 
@@ -126,7 +126,7 @@ class InfoBatchPage(BasePage):
             with open(path, "r", encoding="utf-8") as f:
                 urls = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"读取失败: {e}")
+            self.app.toast(f"读取失败: {str(e)[:60]}", "error")
             return
         self.text.setPlainText("\n".join(urls))
 
@@ -151,7 +151,7 @@ class InfoBatchPage(BasePage):
     def _parse(self):
         urls = [ln.strip() for ln in self.text.toPlainText().splitlines() if ln.strip()]
         if not urls:
-            QMessageBox.warning(self, "提示", "请输入 URL")
+            self.app.toast("请输入要解析的 URL", "warning")
             return
         self.batch_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
@@ -278,7 +278,7 @@ class InfoBatchPage(BasePage):
     def _download_checked(self):
         items = self._checked_infos()
         if not items:
-            QMessageBox.warning(self, "提示", "请先勾选需要下载的条目")
+            self.app.toast("请先勾选需要下载的条目", "warning")
             return
         self.dl_btn.setEnabled(False)
         self._log(f"⏳ 开始下载勾选的 {len(items)} 个条目（画质: {self.quality_sel.currentText()}）...")

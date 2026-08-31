@@ -14,7 +14,7 @@ from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
-    QMessageBox, QPushButton, QListView, QStyledItemDelegate, QStyle,
+    QPushButton, QListView, QStyledItemDelegate, QStyle,
     QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
@@ -367,7 +367,7 @@ class InfoResultsPage(BasePage):
         try:
             webbrowser.open(url)
         except Exception as e:
-            QMessageBox.critical(self, "打开失败", str(e))
+            self.app.toast(f"打开失败: {str(e)[:60]}", "error")
 
     def _get_formats(self):
         fmts = []
@@ -388,11 +388,11 @@ class InfoResultsPage(BasePage):
 
     def _export_items(self, items, warn_empty="暂无勾选条目"):
         if not items:
-            QMessageBox.warning(self, "提示", warn_empty)
+            self.app.toast(warn_empty, "warning")
             return
         fmts = self._get_formats()
         if not fmts:
-            QMessageBox.warning(self, "提示", "请至少选择一种导出格式")
+            self.app.toast("请至少选择一种导出格式", "warning")
             return
 
         def work():
@@ -444,7 +444,7 @@ class InfoResultsPage(BasePage):
     def _col_download(self, key):
         items = self._selected(key)
         if not items:
-            QMessageBox.warning(self, "提示", "该栏暂无勾选条目")
+            self.app.toast("该栏暂无勾选条目", "warning")
             return
         self._download_items(items)
 
@@ -452,7 +452,7 @@ class InfoResultsPage(BasePage):
         """三平台一次下载：聚合三栏勾选项统一下载。"""
         items = self._all_selected()
         if not items:
-            QMessageBox.warning(self, "提示", "三栏均无勾选条目，请先勾选要下载的内容")
+            self.app.toast("三栏均无勾选条目，请先勾选要下载的内容", "warning")
             return
         self._download_items(items)
 

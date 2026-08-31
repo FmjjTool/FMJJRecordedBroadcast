@@ -113,7 +113,9 @@ class ConvertPage(BasePage):
         self.stop_btn.clicked.connect(self._stop_convert)
         self.stop_btn.setEnabled(False)
         btn_row.addWidget(self.stop_btn)
-        clear_btn = QPushButton("🗑 清除缓存")
+        clear_btn = QPushButton("🗑 清除转换缓存")
+        clear_btn.setToolTip("清除本页的已转换记录（只影响缓存判定，不删除任何文件）：\n"
+                             "清除后，之前被跳过的视频会重新参与转换")
         clear_btn.setStyleSheet(
             "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         clear_btn.clicked.connect(self._clear_cache)
