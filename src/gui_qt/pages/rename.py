@@ -758,17 +758,30 @@ class RenamePage(BasePage):
         return w
 
     def _mini_btn(self, text, slot, danger=False, tip=""):
-        """小图标按钮：带可选 tooltip（悬停提示）。
+        """小图标按钮：仅图标（无文字），带可选 tooltip（悬停提示）。
 
         箭头类按钮的图标统一为 ⬆/⬇（Unicode 单色，符合整套 UI 风格）；
-        tip 不为空时挂 setToolTip（rename 页面上移/下移必备）。
+        删除按钮用 × (U+00D7)；尺寸 36×30 确保 × 图标清晰可辨（原 28×24
+        字号太小，× 几乎看不见）；tip 不为空时挂 setToolTip。
         """
         b = QPushButton(text)
-        b.setFixedSize(28, 24)
+        b.setFixedSize(36, 30)
+        b.setCursor(Qt.PointingHandCursor)
+        # 字号 16 让 ×/⬆/⬇ 在 36×30 框内居中且清晰
+        b.setStyleSheet(
+            "QPushButton { font-size: 16px; padding: 0px;"
+            " border: 1px solid #c3cad6; border-radius: 4px;"
+            " background: #ffffff; color: #2f3440; }"
+            "QPushButton:hover { background: #e9edf3; border-color: #7a8db0; }")
         if tip:
             b.setToolTip(tip)
         if danger:
-            b.setStyleSheet("background: #c62828; color: white;")
+            # 危险色覆盖原白底样式（红色背景 + 白 ×）
+            b.setStyleSheet(
+                "QPushButton { font-size: 18px; padding: 0px;"
+                " border: 1px solid #f2b8b5; border-radius: 4px;"
+                " background: #fdecea; color: #c62828; font-weight: bold; }"
+                "QPushButton:hover { background: #f9d3d0; }")
         b.clicked.connect(slot)
         return b
 
@@ -801,7 +814,7 @@ class RenamePage(BasePage):
                 "⬇", lambda _=False, idx=i: self._move_item(card_type, idx, 1),
                 tip="下移"))
             h.addWidget(self._mini_btn(
-                "✕", lambda _=False, nm=name: self._delete_card_item(card_type, nm),
+                "×", lambda _=False, nm=name: self._delete_card_item(card_type, nm),
                 danger=True, tip="删除"))
             layout.addWidget(card)
         layout.addStretch(1)

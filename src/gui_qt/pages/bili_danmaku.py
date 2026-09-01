@@ -3,7 +3,6 @@
 
 - 后端：toolbox.bili_live（BiliLiveFetcher 弹幕 WS / 房间信息 / 直播流 / 统计 / 监控）
 - 画质：B站按 qn 档位现取直链（游客会被限档，切档即按该档重新取流）
-- 抖音专属能力（dycast 原版弹幕姬启动按钮）在本页隐藏
 - 与抖音页的差异消息：粉丝数实时刷新（ROOM_REAL_TIME_MESSAGE_UPDATE）、
   累计点赞静默更新（LIKE_INFO_V3_UPDATE）、SC/上舰并入打赏榜（价值按 1000电池=1元 折算）
 """
@@ -37,7 +36,6 @@ class BiliDanmakuPage(TestPage):
         self.title_lbl.setText("📺 B站弹幕 · 实时数据接入")
         self.subtitle_lbl.setText(
             "真实连接B站直播间，实时抓取弹幕 / 礼物 / SC / 上舰 / 进场 / 关注 / 点赞")
-        self.dycast_btn.hide()      # dycast 为抖音专属，B站无对应能力
         self.gift_table.setHorizontalHeaderLabels(
             ["排名", "昵称", "礼物数", "价值(电池)", "更新时间"])
         # 房间号：B站短号合法（抖音页的 ≥6 位校验不适用），支持粘贴直播间链接。

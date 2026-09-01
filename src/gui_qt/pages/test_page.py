@@ -194,8 +194,8 @@ class TestPage(BasePage):
         top.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         top_l = QHBoxLayout(top)
         top_l.setContentsMargins(10, 6, 10, 6)
-        # 轮询按钮（点击才开始轮询）：按下=轮询进行中，再点=停止
-        self.poll_btn = QPushButton("🔁 轮询")
+        # 轮询按钮（点击才开始轮询）：按下=轮询进行中，再点=停止（仅图标，tooltip 说明）
+        self.poll_btn = QPushButton("🔁")
         self.poll_btn.setCheckable(True)
         self.poll_btn.setChecked(bool(self.settings.get("poll_enabled", True)))
         self.poll_btn.setToolTip(
@@ -205,8 +205,9 @@ class TestPage(BasePage):
             "③ 下播后若本开关仍开着，自动恢复轮询等下次开播。\n"
             "按钮旁的倒计时显示距下次重试的秒数。")
         self.poll_btn.setStyleSheet(
-            "QPushButton { padding: 2px 10px; }"
+            "QPushButton { padding: 2px 10px; font-size: 14px; }"
             "QPushButton:checked { background: #e65100; color: white; }")
+        self.poll_btn.setFixedWidth(40)
         self.poll_btn.clicked.connect(self._on_poll_toggle)
         top_l.addWidget(self.poll_btn)
         # 轮询倒计时（距下次重访的秒数；未在轮询时隐藏）
@@ -227,27 +228,33 @@ class TestPage(BasePage):
         self.mode_combo.addItem("回放模式", "replay")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         top_l.addWidget(self.mode_combo)
-        settings_btn = QPushButton("⚙ 设置")
+        settings_btn = QPushButton("⚙")
+        settings_btn.setToolTip("打开本页详细设置（轮询间隔、画质、录制、过滤等）")
+        settings_btn.setFixedWidth(36)
+        settings_btn.setStyleSheet("QPushButton { font-size: 16px; }")
         settings_btn.clicked.connect(self._open_settings)
         top_l.addWidget(settings_btn)
         top_l.addStretch(1)
-        clear_btn = QPushButton("🗑 清空内容")
+        clear_btn = QPushButton("🗑")
         clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
                              "保留房间号、WS 地址等配置")
+        clear_btn.setFixedWidth(36)
+        clear_btn.setStyleSheet("QPushButton { font-size: 14px; }")
         clear_btn.clicked.connect(self._clear_all)
         top_l.addWidget(clear_btn)
-        self.dycast_btn = QPushButton("🚀 启动弹幕姬")
-        self.dycast_btn.setStyleSheet("background: #e65100; color: white;")
-        self.dycast_btn.setToolTip("启动原版弹幕姬（dycast-main，纳入进程树：本工具退出时一并关闭）")
-        self.dycast_btn.clicked.connect(self._launch_dycast)
-        top_l.addWidget(self.dycast_btn)
-        self.disconnect_btn = QPushButton("■ 断开")
-        self.disconnect_btn.setStyleSheet("background: #c62828; color: white;")
+        self.disconnect_btn = QPushButton("■")
+        self.disconnect_btn.setToolTip("断开当前直播连接（弹幕/礼物/点赞停止接收）")
+        self.disconnect_btn.setStyleSheet(
+            "QPushButton { background: #c62828; color: white; font-size: 16px; padding: 4px 10px; }")
+        self.disconnect_btn.setFixedWidth(40)
         self.disconnect_btn.clicked.connect(self._disconnect)
         self.disconnect_btn.setEnabled(False)
         top_l.addWidget(self.disconnect_btn)
-        self.connect_btn = QPushButton("▶ 连接")
-        self.connect_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.connect_btn = QPushButton("▶")
+        self.connect_btn.setToolTip("连接抖音直播间，开始实时抓取弹幕 / 礼物 / 点赞")
+        self.connect_btn.setStyleSheet(
+            "QPushButton { background: #2e7d32; color: white; font-size: 16px; padding: 4px 10px; }")
+        self.connect_btn.setFixedWidth(40)
         self.connect_btn.clicked.connect(self._connect)
         top_l.addWidget(self.connect_btn)
         outer.addWidget(top)
@@ -2579,16 +2586,6 @@ class TestPage(BasePage):
         self._cover_bytes = None
         self.cover_label.clear()
         self.cover_label.setText("暂无封面")
-
-    def _launch_dycast(self):
-        """启动/停止原版弹幕姬（dycast-main，纳入进程树：本工具退出时一并关闭）。"""
-        from gui_qt.pages.dycast import dycast_app_running, launch_dycast_app, stop_dycast_app
-        if dycast_app_running():
-            stop_dycast_app(self.app.toast)
-            self.dycast_btn.setText("🚀 启动弹幕姬")
-            return
-        if launch_dycast_app(self.app.toast, linked=True):
-            self.dycast_btn.setText("⏹ 停止弹幕姬")
 
     def _append(self, box, text):
         box.appendPlainText(text)

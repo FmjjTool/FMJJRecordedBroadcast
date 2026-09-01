@@ -11,7 +11,7 @@
 import os
 import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -25,6 +25,64 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 from gui_qt.common import post_to_main
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import DATE_FOLDER_RE
+
+
+def _format_folder_date(name: str) -> str:
+    """YYYYMMDD → '2026-09-01 (今天)' / '(昨天)' / '(N天前)' / 原始回退。"""
+    m = DATE_FOLDER_RE.match(name)
+    if not m:
+        return name
+    try:
+        d = datetime.strptime(m.group(1), "%Y%m%d").date()
+    except ValueError:
+        return name
+    today = datetime.now().date()
+    delta = (today - d).days
+    label = f"{d.year}-{d.month:02d}-{d.day:02d}"
+    if delta == 0:
+        return f"{label} (今天)"
+    if delta == 1:
+        return f"{label} (昨天)"
+    if 0 < delta < 7:
+        return f"{label} ({delta}天前)"
+    if delta < 0:
+        return f"{label} ({abs(delta)}天后)"
+    return label
+
+
+def _format_size(n: int) -> str:
+    """字节 → 人类可读（B / KB / MB / GB）。"""
+    if n < 1024:
+        return f"{n} B"
+    units = ["KB", "MB", "GB", "TB"]
+    f = n / 1024.0
+    for u in units:
+        if f < 1024:
+            return f"{f:.1f} {u}"
+        f /= 1024.0
+    return f"{f:.1f} TB"
+
+
+def _folder_stats(full: str):
+    """返回 (文件数, 总字节, mtime 时间戳)；出错则 (0, 0, 0)。"""
+    cnt = 0
+    total = 0
+    latest = 0
+    try:
+        for root, _dirs, files in os.walk(full):
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                cnt += 1
+                total += st.st_size
+                if st.st_mtime > latest:
+                    latest = st.st_mtime
+    except OSError:
+        pass
+    return cnt, total, latest
 
 
 class MigratePage(BasePage):
@@ -171,19 +229,44 @@ class MigratePage(BasePage):
         today = datetime.now().strftime("%Y%m%d")
         for name in self.pending:
             full = os.path.join(src, name)
-            try:
-                cnt = len(os.listdir(full))
-            except Exception:
-                cnt = 0
-            cb = QCheckBox(f"📁 {name}  ({cnt} 项)")
+            cnt, total, mtime = _folder_stats(full)
+            cb = QCheckBox(f"📁 {_format_folder_date(name)}")
             # 默认勾选当天（前 8 位日期 == 今天）
             cb.setChecked(name[:8] == today)
             cb.stateChanged.connect(self._refresh_checked_lbl)
             row = QFrame()
-            row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+            row.setStyleSheet(
+                "QFrame { background: #ffffff; border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
+            h.setSpacing(8)
             h.addWidget(cb)
+            # 文件夹名（raw YYYYMMDD 给删除/迁移用，UI 不再展示原始字符串）
+            name_lbl = QLabel(name)
+            name_lbl.setStyleSheet(
+                "color: #888; font-family: Consolas; font-size: 11px;")
+            name_lbl.setToolTip("原始文件夹名（YYYYMMDD）")
+            h.addWidget(name_lbl)
+            h.addStretch(1)
+            # 文件数 + 总大小 + 最后修改时间（三段独立信息列对齐）
+            meta = QHBoxLayout()
+            meta.setSpacing(14)
+            cnt_lbl = QLabel(f"📄 {cnt} 项")
+            cnt_lbl.setStyleSheet("color: #555; font-size: 11px;")
+            size_lbl = QLabel(f"💾 {_format_size(total)}")
+            size_lbl.setStyleSheet("color: #1976d2; font-size: 11px; font-weight: bold;")
+            if mtime:
+                mtime_txt = datetime.fromtimestamp(mtime).strftime("%m-%d %H:%M")
+            else:
+                mtime_txt = "--"
+            mtime_lbl = QLabel(f"🕐 {mtime_txt}")
+            mtime_lbl.setStyleSheet("color: #888; font-size: 11px;")
+            meta.addWidget(cnt_lbl)
+            meta.addWidget(size_lbl)
+            meta.addWidget(mtime_lbl)
+            meta_w = QWidget()
+            meta_w.setLayout(meta)
+            h.addWidget(meta_w)
             self.list_layout.takeAt(self.list_layout.count() - 1)
             self.list_layout.addWidget(row)
             self.list_layout.addStretch(1)

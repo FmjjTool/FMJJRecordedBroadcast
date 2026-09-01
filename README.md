@@ -1,10 +1,10 @@
 # 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.2** · 制作：歆慕
+> **FengMingToolbox v2.8.3** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.2>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.3>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -662,7 +662,7 @@ A：不会。普通文件遇到同名则**跳过**（新项目数据优先）；
 ```python
 APP_NAME         = "FengMingToolbox"
 APP_DISPLAY_NAME = "封茗囧菌数据汇总库 统一维护工具箱"
-APP_VERSION      = "2.8.2"
+APP_VERSION      = "2.8.3"
 APP_PUBLISHER    = "歆慕"
 ```
 
@@ -682,6 +682,18 @@ APP_PUBLISHER    = "歆慕"
 - 打包后自动隐私扫描，Cookie/配置/账号进包即中止
 - Cookie 有效期：微博 30 天，其余平台默认永不过期（`auth.py` 的 `COOKIE_TTL_DAYS`）
 - Cookie 总开关可一键停用（`cookie_enabled`），停用后所有采集按游客态走
+
+### 更新日志
+
+#### v2.8.3（2026-09-01）
+
+- **抖音 / B 站弹幕姬（test_page / bili_danmaku）**：删除「🚀 启动弹幕姬」按钮（dycast 外部 Node 项目仅保留作可选启动器，UI 不再展示入口）。顶栏「🔁 轮询 / ⚙ 设置 / 🗑 清空内容 / ■ 断开 / ▶ 连接」统一改为**仅图标**（保留 tooltip 文字说明）。工具栏（保存弹幕 / 导出 / 导入 / 合并 / 统计 / 录播 / 监控）保留文字便于辨识。
+- **文件迁移页（migrate）**：中间文件列表行从「📁 YYYYMMDD (N 项)」升级为「📁 2026-09-01 (今天) + 原始名 + 文件数 + 总大小（B/KB/MB/GB）+ 最后修改时间」。新增 `_format_folder_date` / `_format_size` / `_folder_stats` 三个辅助函数。
+- **重命名设置页（rename）**：`_mini_btn` 尺寸 28×24 → 36×30，× 按钮用 `×` (U+00D7) 替代原 `✕` (U+2715)，字号 16px，确保 × 图标清晰可辨（原 28×24 下 × 几乎不可见）。所有方向按钮（⬆ / ⬇ / ×）保持**仅图标、无文字**（tooltip 提供上移 / 下移 / 删除说明）。删除按钮加红色危险色（红底 + 红字 + 加粗）。
+
+#### v2.8.2（2026-08-30）
+
+- 略（前序版本）
 
 ### 已知问题
 
