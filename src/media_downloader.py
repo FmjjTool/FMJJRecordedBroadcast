@@ -170,8 +170,14 @@ def _should_skip_download(url: str, filepath: str, headers: dict) -> bool:
     return remote is not None and remote == size
 
 
-def _download_one(url: str, filepath: str, headers: dict) -> tuple[str, bool]:
-    """下载单个文件，返回 (filepath, success)"""
+def _download_one(url: str, filepath: str, headers: dict,
+                  progress_cb=None, cancel_check=None) -> tuple[str, bool]:
+    """下载单个文件，返回 (filepath, success)。
+
+    流式写盘（边下边写，不整包进内存——大视频整包缓冲会造成内存暴涨/卡顿），
+    progress_cb(done_bytes, total_bytes) 约 5 次/秒回报字节进度（无 content-length 时 total=0），
+    cancel_check() 返回 True 时中止下载（半截文件保留，下次 Range 续传）。
+    """
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         # live 图：先解析出带签名的实时直链
@@ -191,21 +197,37 @@ def _download_one(url: str, filepath: str, headers: dict) -> tuple[str, bool]:
         if existing > 0:
             h["Range"] = f"bytes={existing}-"
         with httpx.Client(timeout=60, follow_redirects=True, headers=h) as client:
-            resp = client.get(url)
-            # 416 Range Not Satisfiable = 文件已完整（Range 起点超过文件末尾）
-            if resp.status_code == 416:
+            with client.stream("GET", url) as resp:
+                # 416 Range Not Satisfiable = 文件已完整（Range 起点超过文件末尾）
+                if resp.status_code == 416:
+                    return filepath, True
+                resp.raise_for_status()
+                is_partial = resp.status_code == 206  # 206 = 服务端支持续传
+                # 根据 Content-Type 调整扩展名
+                ext = _ext_guess(resp.headers.get("content-type", ""), url)
+                if not filepath.endswith(ext):
+                    filepath = filepath.rsplit(".", 1)[0] + ext
+                # 206 追加写（续传），200/2xx 覆盖写（重新下载）
+                mode = "ab" if is_partial else "wb"
+                # 进度基数：续传时 content-length 只是剩余长度，加上已存在部分
+                total = int(resp.headers.get("content-length", 0) or 0)
+                if is_partial and total:
+                    total += existing
+                done = existing if is_partial else 0
+                last_t = 0.0
+                with open(filepath, mode) as f:
+                    for chunk in resp.iter_bytes(chunk_size=262144):
+                        if cancel_check is not None and cancel_check():
+                            return filepath, False  # 半截文件保留供续传
+                        f.write(chunk)
+                        done += len(chunk)
+                        now_t = time.monotonic()
+                        if progress_cb is not None and now_t - last_t >= 0.2:
+                            progress_cb(done, total)
+                            last_t = now_t
+                if progress_cb is not None:
+                    progress_cb(done, total)
                 return filepath, True
-            resp.raise_for_status()
-            is_partial = resp.status_code == 206  # 206 Partial Content = 服务端支持续传
-            # 根据 Content-Type 调整扩展名
-            ext = _ext_guess(resp.headers.get("content-type", ""), url)
-            if not filepath.endswith(ext):
-                filepath = filepath.rsplit(".", 1)[0] + ext
-            # 206 追加写（续传），200/2xx 覆盖写（重新下载）
-            mode = "ab" if is_partial else "wb"
-            with open(filepath, mode) as f:
-                f.write(resp.content)
-            return filepath, True
     except Exception:
         return filepath, False
 
@@ -240,6 +262,7 @@ def download_media(
     cancel_event=None,
     skip_existing: bool = True,
     quiet: bool = False,
+    byte_progress_callback=None,
 ) -> dict:
     """
     批量下载媒体文件。返回统计信息。
@@ -252,10 +275,13 @@ def download_media(
         download_videos: 是否下载视频
         progress_callback: 进度回调 (done, total, name)，在工作线程调用
         wait_range: 文件间随机等待区间 (lo, hi) 秒；None 用默认 3~60（防反爬）
-        cancel_event: threading.Event，置位后跳过剩余文件（stats["cancelled"]=True）
+        cancel_event: threading.Event，置位后跳过剩余文件（stats["cancelled"]=True）；
+            下载大文件中途置位也会立即中止当前文件（半截文件保留供 Range 续传）
         skip_existing: 已下载的原图自动跳过（本地文件与原图大小一致即视为已下载，
             stats["skipped"] 计数）；强制重下时传 False
         quiet: 静默模式（GUI 调用）：不向终端打印开始/完成/进度条等任何输出
+        byte_progress_callback: 大文件（视频/Live图）字节级进度回调
+            (done_bytes, total_bytes)，约 5 次/秒；None 则不回报（GUI 才需要）
     """
     def _say(msg: str):
         if not quiet:
@@ -429,7 +455,15 @@ def download_media(
                     progress.update(pbar, description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
                     time.sleep(wait)
             progress.update(pbar, description=f"[cyan]{mtype}[/cyan] {os.path.basename(fpath)}")
-            filepath, ok = _download_one(url, fpath, hdrs)
+            # 大文件（视频/Live图）才报字节进度：图片秒下，逐张报进度是噪音；
+            # 取消检查也只在此时传入——文件间本来就有检查，大文件中途能立即停
+            big = mtype in ("视频", "Live图")
+            cancel_chk = (cancel_event.is_set
+                          if big and cancel_event is not None else None)
+            filepath, ok = _download_one(
+                url, fpath, hdrs,
+                progress_cb=byte_progress_callback if big else None,
+                cancel_check=cancel_chk)
             if ok:
                 if mtype == "图片":
                     stats["images"] += 1
@@ -440,6 +474,13 @@ def download_media(
                 elif mtype == "视频":
                     stats["videos"] += 1
             else:
+                # 大文件中途取消：半截文件保留供续传，计失败但标记取消
+                # （单个任务时循环自然结束，靠不了下一轮的顶部检查）
+                if cancel_event is not None and cancel_event.is_set():
+                    stats["cancelled"] = True
+                    stats["failed"] += 1
+                    _say("[yellow]已取消（半截文件保留，下次续传）[/yellow]")
+                    break
                 stats["failed"] += 1
                 _say(f"[red]X 失败: {os.path.basename(filepath)}[/red]")
             progress.advance(pbar)

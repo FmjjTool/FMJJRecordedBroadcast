@@ -52,6 +52,10 @@ class _ProgressBridge(QObject):
     def emit_progress(self, done: int, total: int, name: str):
         self.updated.emit(done, total, name)
 
+    def emit_bytes(self, done: int, total: int):
+        """大文件字节级进度（走同一信号，GUI 按 total 量级区分为字节模式）。"""
+        self.updated.emit(done, total, "")
+
 
 def _make_progress_dlg(parent, title: str, total: int, cancel_event: threading.Event):
     """构造下载进度对话框：实时显示 N/M + 当前文件名，可取消。"""
@@ -1448,7 +1452,12 @@ class AssetPage(BasePage):
                 if total_n != dlg.maximum():
                     dlg.setMaximum(max(total_n, 1))
                 dlg.setValue(done_n)
-                dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+                # 字节进度（视频流边下边走）与 B站弹窗同款 MB 展示
+                if total_n > 100000:
+                    dlg.setLabelText(
+                        f"下载中 {done_n / 1048576:.1f}/{total_n / 1048576:.1f} MB  {name[:40]}")
+                else:
+                    dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
 
             bridge.updated.connect(on_prog)
 
@@ -1494,9 +1503,12 @@ class AssetPage(BasePage):
             # download_images=True 仅为生成「封面」下载任务（images 为空不会多下图）：
             # 资产页缩略图本地优先，封面必须落盘成 {stem}_封面.jpg，
             # 否则只能走网络封面（抖音直链会过期、部分图床 403）
+            # 字节进度：视频流边下边报，弹窗显示实际大小（B站同款）
             return download_media([info], base_dir=base_dir,
                                   download_images=True, download_live=False, download_videos=True,
                                   progress_callback=bridge.emit_progress,
+                                  byte_progress_callback=(
+                                      bridge.emit_bytes if not quiet else None),
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
                                   quiet=True)
 
@@ -1525,7 +1537,10 @@ class AssetPage(BasePage):
                     self.app.toast(msg, "success")
                 else:
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
-                    self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
+                    if cancelled:
+                        self.app.toast("⚠ 下载已取消（半截文件下次续传）", "warning")
+                    else:
+                        self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
             if not quiet:  # 批量模式由 _advance 统一刷新一次
                 QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
             if on_finished:
@@ -1752,7 +1767,12 @@ class AssetPage(BasePage):
                 if total_n != dlg.maximum():
                     dlg.setMaximum(max(total_n, 1))
                 dlg.setValue(done_n)
-                dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
+                # 字节进度（Live图视频流）与视频下载弹窗同款 MB 展示
+                if total_n > 100000:
+                    dlg.setLabelText(
+                        f"下载中 {done_n / 1048576:.1f}/{total_n / 1048576:.1f} MB  {name[:40]}")
+                else:
+                    dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
 
             bridge.updated.connect(on_prog)
 
@@ -1775,6 +1795,8 @@ class AssetPage(BasePage):
             return download_media([info], base_dir=base_dir,
                                   download_images=True, download_live=True, download_videos=False,
                                   progress_callback=bridge.emit_progress,
+                                  byte_progress_callback=(
+                                      bridge.emit_bytes if not quiet else None),
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
                                   skip_existing=not force, quiet=True)
 
