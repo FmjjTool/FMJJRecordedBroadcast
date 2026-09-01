@@ -305,6 +305,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         show_toast(self, msg, "success")
+        # 修复 Bug：手动切换后，全局设置面板仍显示「定时切换:已启用」
+        # 同时实时同步到本页 —— 不必等用户切到设置 Tab 才刷新
+        settings_page = self.pages.get("global_settings")
+        if settings_page is not None and hasattr(settings_page, "sync_theme_schedule_from_config"):
+            try:
+                settings_page.sync_theme_schedule_from_config()
+            except Exception:
+                pass
 
     def _check_theme_schedule(self):
         """定时开关：启用时把主题对齐到当前时段目标（到点即变）。"""

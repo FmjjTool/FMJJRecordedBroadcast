@@ -8,10 +8,10 @@
 
 import os
 
-from PySide6.QtCore import QTime
+from PySide6.QtCore import QTime, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
 )
 
 from toolbox.config_manager import (
@@ -106,7 +106,7 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- 配置与缓存 ----
-        v.addWidget(self._card_title("📦 配置与缓存"))
+        v.addWidget(self._card_title("📦 配置与依赖检查"))
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: #888; font-size: 11px;")
         self.info_label.setWordWrap(True)
@@ -114,12 +114,38 @@ class GlobalSettingsPage(BasePage):
         info_row = QHBoxLayout()
         info_row.addWidget(self._btn("🔄 刷新信息", self._refresh_info))
         info_row.addWidget(self._btn("📦 迁移旧缓存到 config/", self._migrate))
-        info_row.addWidget(self._btn("🧹 清理 Python 缓存 (__pycache__)", self._clean_pycache))
         info_row.addStretch(1)
         v.addLayout(info_row)
+        # 清理 Python 缓存按钮已下线：与依赖检查功能合并到下方的「检测依赖」区
         self.clean_result_label = QLabel("")
         self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.clean_result_label)
+
+        # 检测依赖与其他强依赖：缺失项标红 + 快捷下载按钮
+        self.dependency_frame = QFrame()
+        self.dependency_frame.setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #d8dde6; border-radius: 6px; }")
+        dep_v = QVBoxLayout(self.dependency_frame)
+        dep_v.setContentsMargins(10, 8, 10, 8)
+        dep_v.setSpacing(4)
+        dep_head = QHBoxLayout()
+        dep_title = QLabel("🔍 检测依赖与其他强依赖")
+        dep_title.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent; border: none;")
+        dep_head.addWidget(dep_title)
+        dep_head.addStretch(1)
+        recheck_btn = QPushButton("🔄 重新检测")
+        recheck_btn.setCursor(Qt.PointingHandCursor)
+        recheck_btn.clicked.connect(self._refresh_dependencies)
+        dep_head.addWidget(recheck_btn)
+        dep_v.addLayout(dep_head)
+        # 占位：_refresh_dependencies 重建 self.dependency_layout
+        self.dependency_layout = QVBoxLayout()
+        self.dependency_layout.setContentsMargins(0, 4, 0, 0)
+        self.dependency_layout.setSpacing(3)
+        dep_v.addLayout(self.dependency_layout)
+        v.addWidget(self.dependency_frame)
+        # 后台填充检测结果（避免构造时阻塞）
+        QTimer.singleShot(0, self._refresh_dependencies)
 
         v.addSpacing(12)
 
@@ -131,13 +157,16 @@ class GlobalSettingsPage(BasePage):
         maker_row.addWidget(maker_lbl)
         maker_row.addStretch(1)
         maker_row.addWidget(self._btn(
-            "🔗 B站主页", lambda: os.startfile("https://space.bilibili.com/622821754")))
+            "🔗 B站主页",
+            lambda: self._open_site("B站主页", "https://space.bilibili.com/622821754")))
         maker_row.addWidget(self._btn(
             "🎵 抖音主页",
-            lambda: os.startfile(
+            lambda: self._open_site(
+                "抖音主页",
                 "https://www.douyin.com/user/MS4wLjABAAAANr2f2DlSduMtGo3LtUm2MoxXu9cblLhTs2pJRDDZQHY")))
         maker_row.addWidget(self._btn(
-            "🎤 微博主页", lambda: os.startfile("https://weibo.com/u/7262942477")))
+            "🎤 微博主页",
+            lambda: self._open_site("微博主页", "https://weibo.com/u/7262942477")))
         v.addLayout(maker_row)
 
         for name, url in [
@@ -151,7 +180,8 @@ class GlobalSettingsPage(BasePage):
             site_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
             site_row.addWidget(site_lbl)
             site_row.addStretch(1)
-            site_row.addWidget(self._btn("🔗 打开", lambda u=url: os.startfile(u)))
+            site_row.addWidget(self._btn(
+                "🔗 打开", lambda n=name, u=url: self._open_site(n, u)))
             v.addLayout(site_row)
 
         about = QLabel(
@@ -201,6 +231,21 @@ class GlobalSettingsPage(BasePage):
         self._load_theme_schedule()
         # 信息
         self._refresh_info()
+        # 依赖检测（每次回到本页都重检一次，不依赖外部信号）
+        self._refresh_dependencies()
+
+    def sync_theme_schedule_from_config(self):
+        """主窗口手动切换主题时调用：把当前主题定时面板同步到最新配置状态。
+
+        处理流程：
+        - 重新载入 cfg.theme_schedule_enabled 写入 UI
+        - 调用 _update_sched_status 重画提示文字
+        该方法对用户透明（不要弹 toast —— 主窗口已提示过手动切换结果）。
+        """
+        try:
+            self._load_theme_schedule()
+        except Exception:
+            pass
 
     # ---- 主题定时切换 ----
     def _load_theme_schedule(self):
@@ -260,12 +305,22 @@ class GlobalSettingsPage(BasePage):
             self, "选择工作目录", self.workdir_entry.text().strip() or os.getcwd())
         if d:
             self.workdir_entry.setText(d)
+            self.app.toast(f"已选择工作目录: {d}", "info")
 
     def _browse_export(self):
         d = QFileDialog.getExistingDirectory(
             self, "选择导出目录", self.exportdir_entry.text().strip() or os.getcwd())
         if d:
             self.exportdir_entry.setText(d)
+            self.app.toast(f"已选择导出目录: {d}", "info")
+
+    def _open_site(self, label, url):
+        """统一站点打开：所有「🔗 打开官方链接」按钮走这里，加 toast 提示。"""
+        try:
+            os.startfile(url)
+            self.app.toast(f"已打开「{label}」", "info")
+        except Exception as e:
+            self.app.toast(f"打开失败: {e}", "error")
 
     def _save(self):
         path = self.workdir_entry.text().strip()
@@ -307,6 +362,8 @@ class GlobalSettingsPage(BasePage):
             f"FFmpeg: {'✅' if self._check_ffmpeg() else '⚠️ 未检测到'}\n"
             f"旧缓存: {'⚠️ 有，可迁移' if has_old_cache_files() else '✅ 无'}"
         )
+        # 按用户要求：每个按钮点击后在右下角 toast 提示
+        self.app.toast("已刷新配置信息", "info")
 
     def _check_ffmpeg(self):
         try:
@@ -329,54 +386,215 @@ class GlobalSettingsPage(BasePage):
 
         run_bg(work, done)
 
-    def _clean_pycache(self):
-        """清理程序根目录与工作目录下所有 __pycache__ 和 .pyc（后台执行，结果写入标签）。
+    def _clean_pycache_removed(self):
+        """（已下线）原清理 Python 缓存按钮已合并到「检测依赖」中——按用户要求删除。"""
+        pass
 
-        两处都清：work_dir 常被设到纯数据目录（无代码），只清它等于没清。
-        """
-        import shutil
-        wd = getattr(self.app, "work_dir", None)
-        wd = str(wd) if wd else ""
-        if not os.path.isdir(wd):
-            wd = ""
-        targets = [get_app_root()]
-        if wd and os.path.normpath(get_app_root()) != wd:
-            targets.append(wd)
+    # ----- 检测依赖 -----
+
+    # 依赖规格表：(键, 显示名, 检测函数, 用途说明, 下载 URL)
+    # 检测函数返回 (ok: bool, version: str)
+    _DEPENDENCIES = [
+        ("ffmpeg", "FFmpeg", "_check_ffmpeg_detail",
+         "视频处理、转码、合并、截图等核心功能", "https://www.gyan.dev/ffmpeg/builds/"),
+        ("ffprobe", "FFprobe", "_check_ffprobe_detail",
+         "ffmpeg 同包，探测视频元数据（分辨率/时长/编码）", "https://www.gyan.dev/ffmpeg/builds/"),
+        ("PySide6", "PySide6", "_check_pyside6_detail",
+         "桌面 GUI 框架（Qt for Python）", "pip install PySide6"),
+        ("requests", "requests", "_check_requests_detail",
+         "HTTP 请求库（各平台 API 调用）", "pip install requests"),
+        ("PIL", "Pillow", "_check_pillow_detail",
+         "图片处理（封面 / 截图）", "pip install Pillow"),
+        ("bs4", "BeautifulSoup4", "_check_bs4_detail",
+         "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4"),
+        ("lxml", "lxml", "_check_lxml_detail",
+         "更快的 HTML/XML 解析依赖", "pip install lxml"),
+    ]
+
+    def _refresh_dependencies(self):
+        """重建依赖检测清单，每项一行 + 一键下载/安装按钮（缺失项标红）。"""
+        # 清空旧条目
+        while self.dependency_layout.count():
+            item = self.dependency_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        missing = 0
+        for key, name, fn_name, usage, url in self._DEPENDENCIES:
+            fn = getattr(self, fn_name)
+            try:
+                ok, version = fn()
+            except Exception:
+                ok, version = False, "异常"
+            row = QFrame()
+            row.setObjectName("depRow")
+            row.setStyleSheet(
+                "QFrame#depRow { background: %s; border-radius: 4px; }" % (
+                    "#ffeaea" if not ok else "#f4faf6"))
+            h = QHBoxLayout(row)
+            h.setContentsMargins(8, 4, 8, 4)
+            h.setSpacing(8)
+            # 状态指示
+            mark = QLabel("❌ 缺失" if not ok else "✅ 已安装")
+            mark.setStyleSheet(
+                "color: %s; font-weight: bold; font-size: 12px;"
+                " background: transparent; border: none;" % (
+                    "#d32f2f" if not ok else "#2e7d32"))
+            mark.setFixedWidth(70)
+            h.addWidget(mark)
+            name_lbl = QLabel(f"{name}")
+            name_lbl.setStyleSheet(
+                "color: %s; font-weight: bold; font-size: 12px;"
+                " background: transparent; border: none;" % (
+                    "#d32f2f" if not ok else "#2f3440"))
+            name_lbl.setFixedWidth(110)
+            h.addWidget(name_lbl)
+            ver_lbl = QLabel(version or "—")
+            ver_lbl.setStyleSheet(
+                "color: #888; font-size: 11px; background: transparent; border: none;")
+            ver_lbl.setFixedWidth(180)
+            h.addWidget(ver_lbl)
+            usage_lbl = QLabel(usage)
+            usage_lbl.setStyleSheet(
+                "color: #666; font-size: 11px; background: transparent; border: none;")
+            usage_lbl.setWordWrap(True)
+            h.addWidget(usage_lbl, 1)
+            # 缺失项提供快捷下载/安装按钮
+            if not ok:
+                install_btn = QPushButton("⬇ 下载" if key in ("ffmpeg", "ffprobe") else "⬇ 安装")
+                install_btn.setCursor(Qt.PointingHandCursor)
+                install_btn.setStyleSheet(
+                    "QPushButton { background: #d32f2f; color: white;"
+                    " border-radius: 3px; padding: 3px 10px; font-size: 11px; }"
+                    "QPushButton:hover { background: #b71c1c; }")
+                # Python 包走 pip 静默安装（标准做法）；二进制下载走浏览器打开官方页
+                if url.startswith("pip install"):
+                    install_btn.clicked.connect(
+                        lambda _c=False, k=key, n=name, u=url:
+                        self._pip_install(k, n, u))
+                else:
+                    install_btn.clicked.connect(
+                        lambda _c=False, n=name, u=url:
+                        self._open_browser_for_dep(n, u))
+                h.addWidget(install_btn)
+                missing += 1
+            self.dependency_layout.addWidget(row)
+        # 总览标签 —— 通过顶部右侧的依赖卡片对外展示
+        if missing:
+            summary = QLabel(
+                f"⚠️ 检测完成：{missing} 项缺失（已标红 · 点击「⬇  安装」自动修复或跳转到下载页）")
+            summary.setStyleSheet(
+                "color: #d32f2f; font-size: 11px; padding: 2px;")
+        else:
+            summary = QLabel("✅ 所有依赖已就绪")
+            summary.setStyleSheet(
+                "color: #2e7d32; font-size: 11px; padding: 2px;")
+        self.dependency_layout.addWidget(summary)
+
+    # ----- 依赖检测实现：返回 (ok, version_str) -----
+
+    def _check_ffmpeg_detail(self):
+        try:
+            import subprocess
+            r = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3, text=True)
+            if r.returncode != 0:
+                return False, ""
+            # 首行例：ffmpeg version 6.1.1 ...
+            head = (r.stdout or "").splitlines()[0] if r.stdout else ""
+            return True, head[:60]
+        except Exception:
+            return False, ""
+
+    def _check_ffprobe_detail(self):
+        try:
+            import subprocess
+            r = subprocess.run(["ffprobe", "-version"], capture_output=True, timeout=3, text=True)
+            if r.returncode != 0:
+                return False, ""
+            head = (r.stdout or "").splitlines()[0] if r.stdout else ""
+            return True, head[:60]
+        except Exception:
+            return False, ""
+
+    def _check_pyside6_detail(self):
+        try:
+            import PySide6
+            ver = getattr(PySide6, "__version__", "?")
+            return True, f"PySide6 {ver}"
+        except Exception:
+            return False, ""
+
+    def _check_requests_detail(self):
+        try:
+            import requests
+            return True, f"requests {requests.__version__}"
+        except Exception:
+            return False, ""
+
+    def _check_pillow_detail(self):
+        try:
+            import PIL
+            return True, f"Pillow {PIL.__version__}"
+        except Exception:
+            return False, ""
+
+    def _check_bs4_detail(self):
+        try:
+            import bs4
+            from importlib.metadata import version as pkg_version
+            try:
+                ver = pkg_version("beautifulsoup4")
+            except Exception:
+                ver = "?"
+            return True, f"bs4 {ver}"
+        except Exception:
+            return False, ""
+
+    def _check_lxml_detail(self):
+        try:
+            import lxml
+            from importlib.metadata import version as pkg_version
+            try:
+                ver = pkg_version("lxml")
+            except Exception:
+                ver = "?"
+            return True, f"lxml {ver}"
+        except Exception:
+            return False, ""
+
+    # ----- 缺失项快捷安装 -----
+
+    def _pip_install(self, key, name, cmd):
+        """pip install 走 subprocess，后台线程不阻塞 UI；结果 toast 提示。"""
+        self.app.toast(f"⏳ 开始安装 {name} ...", "info")
 
         def work():
-            deleted_dirs = deleted_files = 0
-            for target in targets:
-                for root, dirs, files in os.walk(target, topdown=False):
-                    if os.path.basename(root) == "__pycache__":
-                        continue  # 已在删除目录内，跳过
-                    for d in dirs:
-                        if d == "__pycache__":
-                            try:
-                                shutil.rmtree(os.path.join(root, d))
-                                deleted_dirs += 1
-                            except Exception:
-                                pass
-                    for f in files:
-                        if f.endswith(".pyc"):
-                            try:
-                                os.remove(os.path.join(root, f))
-                                deleted_files += 1
-                            except Exception:
-                                pass
-            return deleted_dirs, deleted_files
+            import subprocess
+            try:
+                p = subprocess.run(
+                    cmd.split() + ["--disable-pip-version-check", "-q"],
+                    capture_output=True, timeout=300, text=True)
+                if p.returncode == 0:
+                    return True, ""
+                return False, (p.stderr or p.stdout or "").strip()[:200]
+            except Exception as e:
+                return False, str(e)[:200]
 
         def done(result, err):
-            if err:
-                self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
-                self.clean_result_label.setStyleSheet("color: #ff5252; font-size: 11px;")
-                return
-            d_n, f_n = result or (0, 0)
-            scope = " + 工作目录" if len(targets) > 1 else ""
-            self.clean_result_label.setText(
-                f"✅ 清理完成: {d_n} 个 __pycache__ 目录, {f_n} 个 .pyc"
-                f"（程序目录{scope}；运行中新生导入会重建，属正常）")
-            self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+            ok, msg = result
+            if err or not ok:
+                self.app.toast(f"{name} 安装失败: {msg or err}", "error")
+            else:
+                self.app.toast(f"✅ {name} 安装完成", "success")
+                self._refresh_dependencies()
 
-        self.clean_result_label.setText("🧹 清理中...")
-        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
         run_bg(work, done)
+
+    def _open_browser_for_dep(self, name, url):
+        """二进制类依赖（ffmpeg）：调浏览器打开官方下载页。"""
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            self.app.toast(f"已打开 {name} 官方下载页", "info")
+        except Exception as e:
+            self.app.toast(f"无法打开浏览器: {e}", "error")

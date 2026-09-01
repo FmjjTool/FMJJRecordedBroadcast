@@ -40,12 +40,21 @@ class MigratePage(BasePage):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(5)
 
+        # 上半部分统一包一个白底圆角边框容器，与下方勾选列表视觉一致
+        # （原代码散开放置，在某些主题下与下方白色列表对比断裂）
+        top_frame = QFrame()
+        top_frame.setStyleSheet(
+            "QFrame { background: #ffffff; border-radius: 6px; }")
+        top_v = QVBoxLayout(top_frame)
+        top_v.setContentsMargins(10, 8, 10, 8)
+        top_v.setSpacing(6)
+
         # 源目录
         src_row = QHBoxLayout()
         src_row.addWidget(QLabel("源目录:"))
         self.src_label = QLabel(app.work_dir)
         src_row.addWidget(self.src_label, 1)
-        layout.addLayout(src_row)
+        top_v.addLayout(src_row)
 
         # 目标目录
         tgt_row = QHBoxLayout()
@@ -57,7 +66,7 @@ class MigratePage(BasePage):
         choose_btn = QPushButton("📁 选择目标")
         choose_btn.clicked.connect(self._choose_target)
         tgt_row.addWidget(choose_btn)
-        layout.addLayout(tgt_row)
+        top_v.addLayout(tgt_row)
 
         # 操作模式
         mode_row = QHBoxLayout()
@@ -68,7 +77,7 @@ class MigratePage(BasePage):
         self.copy_radio = QRadioButton("📄 复制（保留源）")
         mode_row.addWidget(self.copy_radio)
         mode_row.addStretch(1)
-        layout.addLayout(mode_row)
+        top_v.addLayout(mode_row)
 
         # 控制按钮
         ctrl = QHBoxLayout()
@@ -92,7 +101,9 @@ class MigratePage(BasePage):
         self.migrate_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.migrate_btn.clicked.connect(self._migrate)
         ctrl.addWidget(self.migrate_btn)
-        layout.addLayout(ctrl)
+        top_v.addLayout(ctrl)
+
+        layout.addWidget(top_frame)
 
         # 勾选列表 + 日志
         self.list_scroll = QScrollArea()

@@ -757,9 +757,16 @@ class RenamePage(BasePage):
             self.plat_cards_layout = box
         return w
 
-    def _mini_btn(self, text, slot, danger=False):
+    def _mini_btn(self, text, slot, danger=False, tip=""):
+        """小图标按钮：带可选 tooltip（悬停提示）。
+
+        箭头类按钮的图标统一为 ⬆/⬇（Unicode 单色，符合整套 UI 风格）；
+        tip 不为空时挂 setToolTip（rename 页面上移/下移必备）。
+        """
         b = QPushButton(text)
         b.setFixedSize(28, 24)
+        if tip:
+            b.setToolTip(tip)
         if danger:
             b.setStyleSheet("background: #c62828; color: white;")
         b.clicked.connect(slot)
@@ -786,13 +793,16 @@ class RenamePage(BasePage):
             name_lbl = QLabel(name)
             name_lbl.setStyleSheet("border: none; background: transparent;")
             h.addWidget(name_lbl, 1)
+            # 上移/下移统一用 ⬆/⬇ 图标，并加悬停提示；其他箭头位也保持一致
             h.addWidget(self._mini_btn(
-                "⬆", lambda _=False, idx=i: self._move_item(card_type, idx, -1)))
+                "⬆", lambda _=False, idx=i: self._move_item(card_type, idx, -1),
+                tip="上移"))
             h.addWidget(self._mini_btn(
-                "⬇", lambda _=False, idx=i: self._move_item(card_type, idx, 1)))
+                "⬇", lambda _=False, idx=i: self._move_item(card_type, idx, 1),
+                tip="下移"))
             h.addWidget(self._mini_btn(
                 "✕", lambda _=False, nm=name: self._delete_card_item(card_type, nm),
-                danger=True))
+                danger=True, tip="删除"))
             layout.addWidget(card)
         layout.addStretch(1)
 
