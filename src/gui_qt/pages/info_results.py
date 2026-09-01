@@ -264,16 +264,24 @@ class InfoResultsPage(BasePage):
         head.addWidget(self.quality_sel)
         layout.addLayout(head)
 
-        # 导出格式（对所有栏生效）
+        # 导出格式（对所有栏生效；勾选状态持久化）
+        saved_fmts = set()
+        try:
+            from toolbox.config_manager import load_convert_config
+            saved_fmts = set(load_convert_config().get("export_formats",
+                                                      ["json", "xlsx", "md"]))
+        except Exception:
+            saved_fmts = {"json", "xlsx", "md"}
         fmt_row = QHBoxLayout()
         fmt_row.addWidget(QLabel("导出格式:"))
         self.fmt_json = QCheckBox("JSON")
-        self.fmt_json.setChecked(True)
+        self.fmt_json.setChecked("json" in saved_fmts)
         self.fmt_xlsx = QCheckBox("XLSX")
-        self.fmt_xlsx.setChecked(True)
+        self.fmt_xlsx.setChecked("xlsx" in saved_fmts)
         self.fmt_md = QCheckBox("MD")
-        self.fmt_md.setChecked(True)
+        self.fmt_md.setChecked("md" in saved_fmts)
         for cb in (self.fmt_json, self.fmt_xlsx, self.fmt_md):
+            cb.toggled.connect(lambda _c: self._save_fmt_settings())
             fmt_row.addWidget(cb)
             fmt_row.addSpacing(6)
         fmt_row.addStretch(1)
@@ -286,6 +294,23 @@ class InfoResultsPage(BasePage):
         layout.addLayout(cols, 1)
 
         self.refresh()
+
+    def _save_fmt_settings(self):
+        """导出格式勾选状态写入 config（下次启动保持）。"""
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            cfg = load_convert_config()
+            fmts = []
+            if self.fmt_json.isChecked():
+                fmts.append("json")
+            if self.fmt_xlsx.isChecked():
+                fmts.append("xlsx")
+            if self.fmt_md.isChecked():
+                fmts.append("md")
+            cfg["export_formats"] = fmts
+            save_convert_config(cfg)
+        except Exception:
+            pass
 
     def _build_column(self, key, name):
         col = QWidget()

@@ -291,7 +291,18 @@ class MainWindow(QMainWindow):
         theme.apply_theme()
         theme.retheme_all()
         self._update_theme_btn()
-        show_toast(self, f"已切换到{'深色' if name == 'dark' else '浅色'}主题", "success")
+        msg = f"已切换到{'深色' if name == 'dark' else '浅色'}主题"
+        # 手动优先：手动切换时关闭定时自动切换（需到全局设置里重新打开）
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            cfg = load_convert_config()
+            if cfg.get("theme_schedule_enabled"):
+                cfg["theme_schedule_enabled"] = False
+                save_convert_config(cfg)
+                msg += "（已关闭定时自动切换）"
+        except Exception:
+            pass
+        show_toast(self, msg, "success")
 
     def _check_theme_schedule(self):
         """定时开关：启用时把主题对齐到当前时段目标（到点即变）。"""

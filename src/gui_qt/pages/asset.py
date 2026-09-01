@@ -31,6 +31,7 @@ from PySide6.QtWidgets import QLayout
 from gui_qt import common
 from gui_qt.common import _fmt, run_bg
 from gui_qt.pages.base import BasePage
+from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import PLATFORM_CN, platform_cn
 
 # 支持的资源扩展名
@@ -341,6 +342,13 @@ class AssetPage(BasePage):
         cfg.addWidget(self.batch_entry)
         cfg.addSpacing(8)
         self.inc_var = QCheckBox("增量模式(写入索引)")
+        # 勾选状态持久化（下次启动保持）
+        try:
+            self.inc_var.setChecked(
+                bool(load_convert_config().get("local_inc_enabled", False)))
+        except Exception:
+            pass
+        self.inc_var.toggled.connect(self._save_inc_var)
         cfg.addWidget(self.inc_var)
         cfg.addStretch(1)
         scan_btn = QPushButton("🔍 扫描")
@@ -357,6 +365,15 @@ class AssetPage(BasePage):
         self.local_scroll, _, self.local_layout = self._make_scroll()
         v.addWidget(self.local_scroll, 1)
         return f
+
+    def _save_inc_var(self, checked):
+        """本地资源「增量模式(写入索引)」勾选状态写入 config。"""
+        try:
+            cfg = load_convert_config()
+            cfg["local_inc_enabled"] = bool(checked)
+            save_convert_config(cfg)
+        except Exception:
+            pass
 
     def _make_scroll(self):
         """构造滚动区：QScrollArea + QWidget 容器 + 垂直布局。"""

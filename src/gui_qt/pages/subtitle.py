@@ -29,9 +29,10 @@ class SubtitlePage(BasePage):
         self.input_files = []
         self._enter_stage = 0  # 回车快捷：0=待扫描，1=待转换
 
-        # 持久化的格式选择 / 日期文件夹开关
+        # 持久化的格式选择 / 日期文件夹开关 / 原地址输出开关
         fmt_settings = load_convert_config().get("subtitle_formats", ["text", "timed_text", "lrc"])
         use_date_folder = load_convert_config().get("subtitle_use_date_folder", False)
+        use_same_dir = load_convert_config().get("subtitle_use_same_dir", True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -85,7 +86,8 @@ class SubtitlePage(BasePage):
         # 选项 + 转换
         opt_row = QHBoxLayout()
         self.same_dir = QCheckBox("📁 转换后放到原地址")
-        self.same_dir.setChecked(True)
+        self.same_dir.setChecked(use_same_dir)
+        self.same_dir.toggled.connect(lambda _c: self._save_sub_setting())
         opt_row.addWidget(self.same_dir)
         self.date_folder = QCheckBox("📁 创建日期文件夹")
         self.date_folder.setChecked(use_date_folder)
@@ -133,9 +135,10 @@ class SubtitlePage(BasePage):
         save_convert_config(s)
 
     def _save_sub_setting(self):
-        """保存字幕日期文件夹开关"""
+        """保存字幕日期文件夹 / 原地址输出开关"""
         s = load_convert_config()
         s["subtitle_use_date_folder"] = self.date_folder.isChecked()
+        s["subtitle_use_same_dir"] = self.same_dir.isChecked()
         save_convert_config(s)
 
     # ---- 拖放 ----

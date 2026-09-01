@@ -355,6 +355,14 @@ class TestPage(BasePage):
         except Exception:
             pass
 
+    def _save_filter(self, key, cb):
+        """弹幕/事件过滤器勾选状态持久化（下次启动保持）。"""
+        self.settings[key] = bool(cb.isChecked())
+        try:
+            self._backend().save_settings(self.settings)
+        except Exception:
+            pass
+
     def _default_room(self):
         """未填房间号时的默认房号（上次使用的，无效回退内置默认）。"""
         room = str(self.settings.get("last_room", "") or "")
@@ -567,14 +575,16 @@ class TestPage(BasePage):
         head.addWidget(QLabel("💬 弹幕信息（聊天+礼物）", styleSheet="font-weight: bold;"))
         head.addStretch(1)
         self.gift_var = QCheckBox("礼物")
-        self.gift_var.setChecked(True)
+        self.gift_var.setChecked(bool(self.settings.get("filter_gift", True)))
         self.gift_var.stateChanged.connect(
-            lambda _s=0: (self._apply_chat_filter(), self._update_search_count()))
+            lambda _s=0: (self._apply_chat_filter(), self._update_search_count(),
+                          self._save_filter("filter_gift", self.gift_var)))
         head.addWidget(self.gift_var)
         self.chat_var = QCheckBox("聊天")
-        self.chat_var.setChecked(True)
+        self.chat_var.setChecked(bool(self.settings.get("filter_chat", True)))
         self.chat_var.stateChanged.connect(
-            lambda _s=0: (self._apply_chat_filter(), self._update_search_count()))
+            lambda _s=0: (self._apply_chat_filter(), self._update_search_count(),
+                          self._save_filter("filter_chat", self.chat_var)))
         head.addWidget(self.chat_var)
         v.addLayout(head)
         # 搜索栏：关键字搜弹幕/昵称；点击弹幕里的昵称=按此人筛选全部发言及时间点
@@ -1465,16 +1475,22 @@ class TestPage(BasePage):
         head5.addWidget(QLabel("弹幕信息（点赞+进入+日志）", styleSheet="font-weight: bold;"))
         head5.addStretch(1)
         self.like_var = QCheckBox("点赞")
-        self.like_var.setChecked(True)
-        self.like_var.stateChanged.connect(lambda _s=0: self._apply_event_filter())
+        self.like_var.setChecked(bool(self.settings.get("filter_like", True)))
+        self.like_var.stateChanged.connect(
+            lambda _s=0: (self._apply_event_filter(),
+                          self._save_filter("filter_like", self.like_var)))
         head5.addWidget(self.like_var)
         self.enter_var = QCheckBox("进入直播间")
-        self.enter_var.setChecked(True)
-        self.enter_var.stateChanged.connect(lambda _s=0: self._apply_event_filter())
+        self.enter_var.setChecked(bool(self.settings.get("filter_enter", True)))
+        self.enter_var.stateChanged.connect(
+            lambda _s=0: (self._apply_event_filter(),
+                          self._save_filter("filter_enter", self.enter_var)))
         head5.addWidget(self.enter_var)
         self.log_var = QCheckBox("日志")
-        self.log_var.setChecked(True)
-        self.log_var.stateChanged.connect(lambda _s=0: self._apply_event_filter())
+        self.log_var.setChecked(bool(self.settings.get("filter_log", True)))
+        self.log_var.stateChanged.connect(
+            lambda _s=0: (self._apply_event_filter(),
+                          self._save_filter("filter_log", self.log_var)))
         head5.addWidget(self.log_var)
         v.addLayout(head5)
         # 搜索栏：关键字筛点赞/进入/关注/横幅/日志（与中部弹幕搜索同款防抖）

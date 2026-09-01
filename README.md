@@ -266,8 +266,7 @@ PySide6/
 │   │   └── cookie_manager.py  music_api.py  music_downloader.py
 │   │
 │   ├── bili/                    # B站底层（wbi / api / links / download）
-│   ├── exporters/               # 视频数据导出（JSON / XLSX / MD）
-│   └── assets/fonts/Deng.ttf    # 字体资源
+│   └── exporters/               # 视频数据导出（JSON / XLSX / MD）
 │
 ├── config/                      # 运行时配置（gitignore，不进仓库/安装包）
 ├── download/                    # 运行时产出（gitignore）

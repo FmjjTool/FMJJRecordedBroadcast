@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import make_row_clickable
+from toolbox.config_manager import load_convert_config, save_convert_config
 
 QUALITY_NAMES = {
     "standard": "标准",
@@ -177,7 +178,8 @@ class NeteasePage(BasePage):
         bottom.addWidget(QPushButton("🔄 反选", clicked=lambda: self._sel("invert")))
         bottom.addWidget(QPushButton("□ 全不选", clicked=lambda: self._sel("none")))
         self.fallback_check = QCheckBox("自动换源")
-        self.fallback_check.setChecked(True)
+        self.fallback_check.setChecked(self._load_fallback())
+        self.fallback_check.toggled.connect(self._save_fallback)
         self.fallback_check.setToolTip(
             "下载失败或仅试听时，自动到其他平台找同名曲：酷我→酷狗→网易云\n"
             "（网易云需已在 Cookie 管理中登录）")
@@ -233,6 +235,22 @@ class NeteasePage(BasePage):
         v.addWidget(tip)
         v.addStretch(1)
         return w
+
+    # ===================== 自动换源勾选持久化 =====================
+    @staticmethod
+    def _load_fallback() -> bool:
+        try:
+            return bool(load_convert_config().get("music_fallback_enabled", True))
+        except Exception:
+            return True
+
+    def _save_fallback(self, checked):
+        try:
+            cfg = load_convert_config()
+            cfg["music_fallback_enabled"] = bool(checked)
+            save_convert_config(cfg)
+        except Exception:
+            pass
 
     # ===================== 平台切换 =====================
     def _switch_platform(self, index):

@@ -221,6 +221,15 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "cache_filename": ".video_convert_cache.json",
     "work_dir": "",
     "subtitle_formats": ["text", "timed_text", "lrc"],
+    # 字幕页开关（未注册默认键的键会在 load 时被过滤丢弃，必须登记）
+    "subtitle_use_date_folder": False,
+    "subtitle_use_same_dir": True,
+    # 资产页本地资源「增量模式(写入索引)」
+    "local_inc_enabled": False,
+    # 音乐下载页「自动换源」
+    "music_fallback_enabled": True,
+    # 已获取页导出格式
+    "export_formats": ["json", "xlsx", "md"],
     "launcher_items": [],
     "migrate_target_dir": "",
     "max_log_files": 50,
