@@ -437,7 +437,12 @@ class LauncherPage(BasePage):
                 lambda t, idx=i: self._on_item_change(idx, "path", t))
             h.addWidget(path_entry, 1)
 
-            # 每项独立的跟随进程树勾选（仅软件项）—— 显示为 📌「钉」含义的图钉
+            # 📁 浏览（路径右侧；放在操作按钮的最左，方便"对准路径"操作）
+            if not is_link:
+                h.addWidget(self._mini_btn(
+                    "📁 浏览", "选择程序文件",
+                    lambda _c=False, e=path_entry, idx=i: self._browse_file(e, idx)))
+            # 第二位起图标依次：📌(跟随进程树) → 🆑 清空 → ⬆ → ⬇ → ✕
             if not is_link:
                 cb = QCheckBox("📌")
                 cb.setToolTip("跟随进程树：本工具退出时该项启动的软件整树一并关闭")
@@ -445,12 +450,6 @@ class LauncherPage(BasePage):
                 cb.stateChanged.connect(
                     lambda st, idx=i: self._set_item_linked(idx, st))
                 h.addWidget(cb)
-            # 浏览 / 清空 / 上移 / 下移 / 删除
-            # 第二位起图标依次为 📌(已插入上面)、🆑、⬆、⬇、✕
-            if not is_link:
-                h.addWidget(self._mini_btn(
-                    "📁 浏览", "选择程序文件",
-                    lambda _c=False, e=path_entry, idx=i: self._browse_file(e, idx)))
             h.addWidget(self._mini_btn(
                 "🆑 清空", "清空该项的名称 / 路径 / 图标等配置",
                 lambda _c=False, idx=i: self._clear_item(idx)))

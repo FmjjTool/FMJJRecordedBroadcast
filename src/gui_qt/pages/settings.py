@@ -8,7 +8,7 @@
 
 import os
 
-from PySide6.QtCore import QTime, QTimer
+from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
