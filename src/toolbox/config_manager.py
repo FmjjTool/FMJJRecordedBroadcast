@@ -230,6 +230,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "theme_dark_time": "19:00",
     # 弹幕姬主播信息卡底部备注（全局设置可改，每行一条）
     "remark_info": "抖音：歆慕\n微博：歆慕XINMU\nb站：歆慕XINMU\n使用信息请标明来源",
+    # 账号获取「增量模式(写入数据库)」默认勾选状态（切换即保存）
+    "inc_db_checked": True,
 }
 
 

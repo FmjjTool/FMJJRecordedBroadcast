@@ -1,4 +1,4 @@
-"""账号追踪页（PySide6 版）：单账号单平台，每个账号独立卡片，采集结果存 xlsx 并读取长期缓存。
+"""网媒账号追踪页（PySide6 版）：单账号单平台，每个账号独立卡片，采集结果存 xlsx 并读取长期缓存。
 
 对应原版 gui/tracker_page.py：
 - 功能页：平台筛选 + 获取全部（回车快捷）+ ⏰ 定时采集（状态圆点）+ 📷 按组导出 + 刷新
@@ -83,7 +83,7 @@ class TrackerPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("📈 账号追踪")
+        title = QLabel("📈 网媒账号追踪")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
         head.addStretch(1)

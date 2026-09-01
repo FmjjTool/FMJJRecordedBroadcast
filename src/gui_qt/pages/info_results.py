@@ -40,14 +40,16 @@ _PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
 # 视频/动态标签配色：常规态 + 选中态（蓝底上的浅色变体）
 TAG_COLORS = {"[视频]": ("#1976d2", "#bbdefb"), "[动态]": ("#e65100", "#ffe0b2"),
               "[图文]": ("#2e7d32", "#c8e6c9")}
+# 深色主题用亮色变体（选中卡片底也是暗色，选中与否同色即可）
+TAG_COLORS_DARK = {"[视频]": "#64b5f6", "[动态]": "#ffb74d", "[图文]": "#81c784"}
 
 
-def colorize_tag_html(text: str, selected: bool = False) -> str:
+def colorize_tag_html(text: str, selected: bool = False, dark: bool = False) -> str:
     """把行文本里的 [视频]/[动态]/[图文] 标签替换为彩色加粗 span，其余文本原样转义（换行转 <br>）。"""
     esc = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
            .replace("\n", "<br>"))
     for tag, (normal, sel) in TAG_COLORS.items():
-        color = sel if selected else normal
+        color = TAG_COLORS_DARK[tag] if dark else (sel if selected else normal)
         esc = esc.replace(tag, f'<span style="color:{color}; font-weight:bold;">{tag}</span>')
     return esc
 
@@ -65,6 +67,23 @@ class TagColorDelegate(QStyledItemDelegate):
     CARD_BORDER = QColor("#d4dde7")
     CARD_BG_SEL = QColor("#d8e8ff")
     CARD_BORDER_SEL = QColor("#5b9bff")
+    # 深色主题卡片配色：底色比列表底 #23262f 略亮、边框更亮；选中态暗蓝 tint + 亮蓝边
+    CARD_BG_DARK = QColor("#2b3140")
+    CARD_BORDER_DARK = QColor("#3d4658")
+    CARD_BG_SEL_DARK = QColor("#2a3b52")
+    CARD_BORDER_SEL_DARK = QColor("#5b9bff")
+
+    @staticmethod
+    def _is_dark(opt) -> bool:
+        """按调色板文字亮度判主题：深色主题全局 QSS 把文字换成浅色。"""
+        return opt.palette.color(QPalette.Text).lightness() > 128
+
+    def _card_colors(self, dark: bool, selected: bool):
+        if selected:
+            return ((self.CARD_BG_SEL_DARK, self.CARD_BORDER_SEL_DARK) if dark
+                    else (self.CARD_BG_SEL, self.CARD_BORDER_SEL))
+        return ((self.CARD_BG_DARK, self.CARD_BORDER_DARK) if dark
+                else (self.CARD_BG, self.CARD_BORDER))
 
     def _text_width(self, opt):
         """当前栏内一行文本的可用宽度（视口宽 - 复选框指示框区域 - 卡片内边距）。"""
@@ -87,7 +106,8 @@ class TagColorDelegate(QStyledItemDelegate):
         # 不设的话 QTextDocument 默认黑字，深色主题下整行不可读。
         base = (opt.palette.color(QPalette.HighlightedText) if selected
                 else opt.palette.color(QPalette.Text)).name()
-        doc.setHtml(f'<span style="color:{base};">{colorize_tag_html(text, selected)}</span>')
+        doc.setHtml(f'<span style="color:{base};">'
+                    f'{colorize_tag_html(text, selected, self._is_dark(opt))}</span>')
         return doc
 
     def sizeHint(self, option, index):
@@ -110,13 +130,14 @@ class TagColorDelegate(QStyledItemDelegate):
         selected = bool(opt.state & QStyle.State_Selected)
         style = opt.widget.style() if opt.widget else QApplication.style()
 
-        # 1. 卡片底 + 边框（整条范围可视化；选中态蓝底亮边框）
+        # 1. 卡片底 + 边框（整条范围可视化；选中态蓝底亮边框；深色主题用暗色卡片）
         card = QRect(option.rect).adjusted(self.CARD_MARGIN_X, self.CARD_MARGIN_Y,
                                            -self.CARD_MARGIN_X, -self.CARD_MARGIN_Y)
+        bg, border = self._card_colors(self._is_dark(opt), selected)
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setBrush(self.CARD_BG_SEL if selected else self.CARD_BG)
-        painter.setPen(QPen(self.CARD_BORDER_SEL if selected else self.CARD_BORDER, 1))
+        painter.setBrush(bg)
+        painter.setPen(QPen(border, 1))
         painter.drawRoundedRect(card, self.CARD_RADIUS, self.CARD_RADIUS)
         painter.restore()
 
@@ -149,6 +170,35 @@ class TagColorDelegate(QStyledItemDelegate):
         painter.translate(text_rect.left(), text_rect.top())
         doc.drawContents(painter)
         painter.restore()
+
+
+class _SingleItemScrollList(RowCheckList):
+    """滚轮逐条滚动：一格（120）恰好滚一条。
+
+    QScrollBar 对滚轮按 angleDelta/40 计步，ScrollPerItem 模式下一格默认跳 3 条，
+    条目卡片较高时一次闪过好几条看不清。改为累计角度、满一格滚一条，
+    高分辨率滚轮/触控板的小步事件自然累计，不满一格不滚。
+    """
+
+    _WHEEL_UNIT = 120
+
+    def wheelEvent(self, event):
+        dy = event.angleDelta().y()
+        if dy == 0:
+            super().wheelEvent(event)
+            return
+        acc = getattr(self, "_wheel_acc", 0) + dy
+        steps = 0
+        while abs(acc) >= self._WHEEL_UNIT:
+            acc -= self._WHEEL_UNIT if acc > 0 else -self._WHEEL_UNIT
+            steps += 1
+        self._wheel_acc = acc
+        if steps:
+            sign = 1 if dy > 0 else -1
+            bar = self.verticalScrollBar()
+            # 上滚（角度为正）值减、下滚值加；setValue 自动夹在范围内
+            bar.setValue(bar.value() - sign * steps)
+        event.accept()
 
 
 def _parse_pub(info):
@@ -273,7 +323,7 @@ class InfoResultsPage(BasePage):
         btns.addWidget(dl_btn)
         v.addLayout(btns)
 
-        lst = RowCheckList()
+        lst = _SingleItemScrollList()
         # 卡片式条目：行间距隔开卡片；按栏宽自动换行，窗口缩放时重新布局重算行高
         lst.setSpacing(4)
         lst.setWordWrap(True)

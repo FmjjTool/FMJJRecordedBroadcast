@@ -94,10 +94,6 @@ NAV_GROUPS = [
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
     ]),
-    ("🎫 票务购物", [
-        ("tickets", "🎫 票务解析"),
-        ("shopping", "🛒 购物解析"),
-    ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
     ]),
@@ -111,17 +107,20 @@ NAV_GROUPS = [
         ("toolbox_calendar", "📅 日历浏览"),
         ("toolbox_migrate", "🚚 文件迁移"),
     ]),
-    ("🎤 歌词工具", [
-        ("lyrics_tool", "🎤 歌词转换"),
+    ("🎫 票务购物", [
+        ("tickets", "🎫 票务解析"),
+        ("shopping", "🛒 购物解析"),
     ]),
     ("🎵 音乐服务", [
         ("music_info", "🎵 音乐信息获取"),
         ("netease", "🎧 音乐下载"),
         ("unlock_music", "🔓 音乐解密"),
-        ("music_tracker", "🎼 音乐账号追踪"),
     ]),
-    ("📈 直播·追踪", [
-        ("tracker", "📈 账号追踪"),
+    ("👥 账户追踪", [
+        ("music_tracker", "🎼 音乐账号追踪"),
+        ("tracker", "📈 网媒账号追踪"),
+    ]),
+    ("🔴 直播弹幕录制", [
         ("test_page", "📺 抖音弹幕姬"),
         ("bili_danmaku", "📺 B站弹幕姬"),
     ]),
@@ -134,6 +133,7 @@ NAV_GROUPS = [
         ("rename_batch", "✏️ 批量重命名"),
         ("file_time", "🕓 文件时间修改"),
         ("music_tag", "🏷 音乐标签"),
+        ("lyrics_tool", "🎤 歌词转换"),
     ]),
     ("⚙️ 全局", [
         ("global_settings", "⚙️ 全局设置"),

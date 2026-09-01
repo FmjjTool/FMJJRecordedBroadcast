@@ -1877,7 +1877,7 @@ class AssetPage(BasePage):
         title = QLabel("🗄 数据库浏览")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         v.addWidget(title)
-        hint = QLabel("账号追踪「增量模式」采集内容自动入库（分平台分表，跨平台同内容自动去重；首次打开自动迁移旧 _增量汇总.json）")
+        hint = QLabel("账号获取「增量模式」采集内容自动入库（分平台分表，跨平台同内容自动去重；首次打开自动迁移旧 _增量汇总.json）")
         hint.setStyleSheet("color: #888;")
         v.addWidget(hint)
 
@@ -1996,7 +1996,7 @@ class AssetPage(BasePage):
                 self.db_author_sel.addItems(["全部作者"])
                 self.db_author_sel.blockSignals(False)
                 self.db_page_lbl.setText(
-                    "暂无数据 · 请在「账号追踪」页开启「增量模式」并点「获取最新」")
+                    "暂无数据 · 请在「账号获取」页开启「增量模式」并点「获取最新」")
                 return
             self._db_reload_authors()
 

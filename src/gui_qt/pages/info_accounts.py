@@ -183,7 +183,10 @@ class InfoAccountsPage(BasePage):
 
         # 策略行：增量模式 + 搜索限流
         strat_row = QHBoxLayout()
-        self.inc_check = QCheckBox("增量模式(追加到默认文件)")
+        self.inc_check = QCheckBox("增量模式(写入数据库)")
+        # 默认勾选 + 记住上次选择（写入 config，重启恢复）
+        self.inc_check.setChecked(self._load_inc_checked())
+        self.inc_check.toggled.connect(self._save_inc_checked)
         strat_row.addWidget(self.inc_check)
         strat_row.addSpacing(8)
         strat_row.addWidget(QLabel("限流:每"))
@@ -727,6 +730,24 @@ class InfoAccountsPage(BasePage):
                 return msg
         except Exception as e:
             return f"⚠️ 自动导出失败: {e}"
+
+    # ---------- 增量模式勾选持久化 ----------
+    @staticmethod
+    def _load_inc_checked() -> bool:
+        try:
+            from toolbox.config_manager import load_convert_config
+            return bool(load_convert_config().get("inc_db_checked", True))
+        except Exception:
+            return True
+
+    def _save_inc_checked(self, checked):
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            cfg = load_convert_config()
+            cfg["inc_db_checked"] = bool(checked)
+            save_convert_config(cfg)
+        except Exception:
+            pass
 
     # ---------- 定时获取 ----------
     def _toggle_timer(self):
