@@ -1604,6 +1604,7 @@ class TestPage(BasePage):
         save_btn.setStyleSheet("background: #2e7d32; color: white;")
         save_btn.clicked.connect(save)
         v.addWidget(save_btn)
+        common.bind_checkbox_toasts(dlg)
         dlg.exec()
 
     def _set_cover(self, url):

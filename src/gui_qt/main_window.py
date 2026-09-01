@@ -218,6 +218,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack, 1)
 
         self._build_nav(self.nav_layout)
+        # 侧栏底部固定区（Cookie 总开关）复选框 toast 绑定（页面内的在各页懒加载时绑）
+        common.bind_checkbox_toasts(nav_panel)
 
         self.statusBar().showMessage("就绪")
 
@@ -407,6 +409,8 @@ class MainWindow(QMainWindow):
             page = PAGE_CLASSES[key](self)
             self.stack.addWidget(page)
             self.pages[key] = page
+            # 功能型复选框：点击时右下角 toast「已开启/已关闭 XXX」
+            common.bind_checkbox_toasts(page)
 
         page = self.pages[key]
         self.stack.setCurrentWidget(page)

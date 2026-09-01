@@ -3,6 +3,7 @@
 与原版 info_pages.py 顶部的共享逻辑对应，只是把 app.after 换成信号排队。
 """
 
+import re
 import threading
 
 from PySide6.QtCore import QObject, Signal, Slot
@@ -82,6 +83,54 @@ def post_to_main(fn, *args):
         _main_bridge.call.emit(lambda: fn(*args))
     else:
         _main_bridge.call.emit(fn)
+
+
+# ==================== 复选框开/关 toast ====================
+
+# 装饰性符号（emoji/警示符/变体选择符）：toast 文案里剔除，只留功能名
+_CB_DECOR_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\u2190-\u2BFF\uFE00-\uFE0F]")
+
+
+def _cb_feature_name(cb) -> str:
+    return _CB_DECOR_RE.sub("", cb.text()).strip()
+
+
+def bind_checkbox_toasts(root):
+    """给 root 子树内的功能型复选框绑定「已开启/已关闭 XXX」toast（幂等）。
+
+    绑定 clicked(checked) 而非 toggled：clicked 只在用户点击/空格触发，
+    程序 setChecked（配置恢复/批量刷新）不会发，避免启动时假提示。
+    跳过两类非功能型复选框：无文字的行内勾选框、视图内条目勾选框
+    （表格/树/列表的行选择框，提示会是噪音）。
+    """
+    from PySide6.QtWidgets import QAbstractItemView, QCheckBox
+    if root is None:
+        return
+    for cb in root.findChildren(QCheckBox):
+        if getattr(cb, "_toast_bound", False) or not _cb_feature_name(cb):
+            continue
+        w = cb.parentWidget()
+        in_view = False
+        while w is not None:
+            if isinstance(w, QAbstractItemView):
+                in_view = True
+                break
+            w = w.parentWidget()
+        if in_view:
+            continue
+        cb._toast_bound = True
+
+        def _on_click(checked, c=cb):
+            from gui_qt.toast import show_toast
+            name = _cb_feature_name(c)
+            if not name:
+                return
+            verb = "已开启" if checked else "已关闭"
+            show_toast(c.window(), f"{verb}「{name}」功能",
+                       "success" if checked else "info")
+
+        cb.clicked.connect(_on_click)
 
 
 # ==================== 格式化工具 ====================
