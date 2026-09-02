@@ -42,9 +42,7 @@ from gui_qt.pages.tracker import TrackerPage
 from gui_qt.pages.music_tracker import MusicTrackerPage
 from gui_qt.pages.dycast import DycastPage
 from gui_qt.pages.test_page import TestPage
-from gui_qt.pages.bili_emoji import BiliEmojiPage
-from gui_qt.pages.bili_garb import BiliGarbPage
-from gui_qt.pages.bili_info import BiliInfoPage
+from gui_qt.pages.bili_resource import BiliResourcePage
 from gui_qt.pages.file_time import FileTimePage
 from gui_qt.pages.rename_batch import RenameBatchPage
 from gui_qt.pages.tickets_page import TicketsPage
@@ -76,9 +74,7 @@ PAGE_CLASSES = {
     "music_tracker": MusicTrackerPage,
     "dycast": DycastPage,
     "test_page": TestPage,
-    "bili_emoji": BiliEmojiPage,
-    "bili_garb": BiliGarbPage,
-    "bili_info": BiliInfoPage,
+    "bili_resource": BiliResourcePage,
     "file_time": FileTimePage,
     "rename_batch": RenameBatchPage,
     "tickets": TicketsPage,
@@ -93,6 +89,7 @@ NAV_GROUPS = [
         ("info_batch", "📋 批量导入"),
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
+        ("bili_resource", "🎁 B站资源"),
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
@@ -123,11 +120,6 @@ NAV_GROUPS = [
     ("🔴 直播弹幕录制", [
         ("test_page", "📺 抖音弹幕姬"),
         ("bili_danmaku", "📺 B站弹幕姬"),
-    ]),
-    ("🎁 B站资源", [
-        ("bili_emoji", "😀 表情包"),
-        ("bili_garb", "👕 装扮/收藏集"),
-        ("bili_info", "🎬 视频/空间/动态"),
     ]),
     ("🧰 实用工具", [
         ("rename_batch", "✏️ 批量重命名"),

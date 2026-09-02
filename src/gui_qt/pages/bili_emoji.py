@@ -151,7 +151,7 @@ class BiliEmojiPage(BasePage):
             "<p>· <b>🗃 全部表情包</b>：浏览B站全部表情包，按名字搜索、滚动到底自动加载更多；"
             "点「查看」加载详情后⬇ 全部下载（表格缩略图预览，仅显示前 500，下载不受影响）</p>"
             "<p>· <b>🆔 按ID / 装扮表情包</b>：输入表情包/装扮 ID 下载，"
-            "自动识别普通表情包 → 装扮表情 → 收藏集（命中收藏集自动跳转装扮/收藏集页）</p>"
+            "自动识别普通表情包 → 装扮表情 → 收藏集（命中收藏集自动跳转收藏集页）</p>"
             "<p>· <b>📺 直播间表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
             "附带主播头像、封面、网页+App背景图、关键帧</p>"
             "<p>· 可选下载格式，每个 Tab 独立下载进度；表情类接口需要 B站 登录 Cookie"
@@ -326,7 +326,7 @@ class BiliEmojiPage(BasePage):
         row.addWidget(btn)
         v.addLayout(row)
 
-        self.id_info = QLabel("自动识别：普通表情包 → 装扮表情 → 收藏集（命中收藏集会自动跳转装扮/收藏集页）")
+        self.id_info = QLabel("自动识别：普通表情包 → 装扮表情 → 收藏集（命中收藏集会自动跳转收藏集页）")
         self.id_info.setStyleSheet("color:#888;")
         v.addWidget(self.id_info)
         self.id_table = QTableWidget(0, 2)
@@ -338,11 +338,10 @@ class BiliEmojiPage(BasePage):
         return w
 
     def _goto_garb(self, act_id: str):
-        """跳转到装扮/收藏集页加载收藏集活动。"""
-        self.app.show_page("bili_garb")
-        page = self.app.pages.get("bili_garb")
+        """切换到本页「收藏集」tab 加载收藏集活动（B站资源聚合页内切换）。"""
+        page = self.app.pages.get("bili_resource")
         if page is not None:
-            page.open_act(act_id)
+            page.show_garb(act_id)
 
     def _view_by_id(self):
         raw = self.id_entry.text().strip()
@@ -353,7 +352,7 @@ class BiliEmojiPage(BasePage):
         if parsed:
             typ, oid = parsed
             if typ == "lottery":
-                self.id_info.setText(f"识别到收藏集链接（act_id={oid}），正在跳转装扮/收藏集页……")
+                self.id_info.setText(f"识别到收藏集链接（act_id={oid}），正在跳转收藏集页……")
                 self._goto_garb(oid)
                 return
             if typ == "suit":

@@ -1,4 +1,4 @@
-"""B站资源 · 装扮/收藏集页：商城搜索 → 装扮套装详情 / 收藏集活动详情 → 批量下载。
+"""B站资源 · 收藏集页：商城搜索 → 装扮套装详情 / 收藏集活动详情 → 批量下载。
 
 复刻自 BiliResourceDownloader 的 search/garb.vue + suit/[id].vue + lottery 页，
 字段与目录结构逐一对齐原版 generateDownloadTask：
@@ -343,10 +343,10 @@ class BiliGarbPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(QLabel("👕 B站装扮/收藏集", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("🎁 B站收藏集", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 装扮/收藏集 · 功能介绍", (
+        head.addWidget(attach_help_overlay(self, "❓ 收藏集 · 功能介绍", (
             "<p><b>B站装扮与收藏集资源下载（三个入口）。</b></p>"
             "<p>· <b>🔍 搜索</b>：关键词搜装扮/收藏集（白菜、UP主名等），"
             "无需登录；type=ip 是装扮、type=dlc_act 是收藏集，点「查看」跳转对应页</p>"

@@ -193,24 +193,12 @@ def lottery_home_detail(act_id: str, lottery_id: str) -> dict:
                    {"act_id": act_id, "lottery_id": lottery_id})
 
 
-# ==================== 视频 / 搜索 ====================
-
-def video_view(vid: str) -> dict:
-    """视频信息（支持 BV号 / av号）。"""
-    params = {"bvid": vid} if vid.upper().startswith("BV") else {"aid": vid.lstrip("avAv")}
-    return api_get("https://api.bilibili.com/x/web-interface/view", params)
-
+# ==================== 搜索 ====================
 
 def search_all(keyword: str, page: int = 1) -> dict:
     """综合搜索（用户+视频，WBI 签名）。"""
     return api_get("https://api.bilibili.com/x/web-interface/wbi/search/all/v2",
                    {"keyword": keyword, "page": page}, wbi_sign=True)
-
-
-def search_type(keyword: str, search_type: str, page: int = 1) -> dict:
-    """分类搜索（video/user/bili_user/live...，WBI 签名）。"""
-    return api_get("https://api.bilibili.com/x/web-interface/wbi/search/type",
-                   {"keyword": keyword, "search_type": search_type, "page": page}, wbi_sign=True)
 
 
 # ==================== 直播间 ====================
@@ -231,31 +219,7 @@ def live_master_info(uid: str) -> dict:
     return api_get("https://api.live.bilibili.com/live_user/v1/Master/info", {"uid": uid})
 
 
-# ==================== 动态 / 空间 ====================
-
-def dynamic_detail(dynamic_id: str) -> dict:
-    """动态详情（配图/视频封面/转发内容）。"""
-    return api_get("https://api.bilibili.com/x/polymer/web-dynamic/v1/detail",
-                   {"id": dynamic_id, "features": "itemOpusStyle"})
-
-
-def space_feed(mid: str, offset: str = "") -> dict:
-    """用户动态列表（WBI 签名）。游客优先；空 items 软风控（has_more 却 total=0）时接入Cookie重试。"""
-    url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
-    params = {"host_mid": mid, "offset": offset}
-    d = api_get(url, params, wbi_sign=True)
-    if not (d.get("items") or []):
-        ck = get_cookie("bilibili")
-        if ck:
-            print("[B站API] 游客动态列表为空，接入Cookie重试...")
-            try:
-                d2 = api_get(url, params, wbi_sign=True, use_cache=False, login_required=True)
-                if d2.get("items"):
-                    return d2
-            except BiliApiError:
-                pass
-    return d
-
+# ==================== 空间 ====================
 
 def user_card(mid: str) -> dict:
     """用户基础信息卡。"""

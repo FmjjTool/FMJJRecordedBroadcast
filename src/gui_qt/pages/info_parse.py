@@ -75,6 +75,11 @@ class InfoParsePage(BasePage):
 
     # ==================== 解析 ====================
 
+    def open_url(self, url: str):
+        """供其他页跳转：填入 URL 并自动解析（如 B站空间综合搜索的视频结果）。"""
+        self.url_entry.setText(url)
+        self._parse()
+
     def _parse(self):
         url = self.url_entry.text().strip()
         if not url:
