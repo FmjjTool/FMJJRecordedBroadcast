@@ -16,6 +16,7 @@
 """
 
 import re
+import sys
 from datetime import datetime
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -315,6 +316,67 @@ def check_scheduled_switch():
         return None
     set_theme(want)
     return want
+
+
+# ==================== 跟随系统深浅色 ====================
+
+def follow_system_enabled() -> bool:
+    """全局设置「跟随系统深浅色」是否启用。"""
+    try:
+        return bool(load_convert_config().get("theme_follow_system"))
+    except Exception:
+        return False
+
+
+def system_theme() -> str:
+    """系统当前深浅色偏好：'dark' / 'light'。
+
+    Windows 读注册表 AppsUseLightTheme（1=浅色 0=深色，不依赖 QApplication，
+    offscreen 测试也可靠）；其余平台走 Qt 6.5+ QStyleHints.colorScheme()，
+    检测不到默认浅色。
+    """
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+                v, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
+                return "light" if v else "dark"
+        except OSError:
+            pass
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        hints = QGuiApplication.styleHints()
+        if hints is not None and hints.colorScheme() == Qt.ColorScheme.Dark:
+            return "dark"
+    except Exception:
+        pass
+    return "light"
+
+
+def check_follow_system_switch():
+    """跟随系统检查：启用时把主题对齐到系统深浅色。返回目标主题名或 None。"""
+    if not follow_system_enabled():
+        return None
+    want = system_theme()
+    if is_dark() == (want == "dark"):
+        return None
+    set_theme(want)
+    return want
+
+
+def check_auto_switch():
+    """自动主题统一检查：跟随系统开启时完全压制定时切换（避免两种模式互相拉扯）。
+
+    返回 (来源, 主题名)，来源 ∈ {'system', 'schedule'}；无需变化时 (None, None)。
+    """
+    if follow_system_enabled():
+        name = check_follow_system_switch()
+        return ("system", name) if name else (None, None)
+    name = check_scheduled_switch()
+    return ("schedule", name) if name else (None, None)
 
 
 def current_qss():

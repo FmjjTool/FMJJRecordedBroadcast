@@ -226,6 +226,7 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "max_log_files": 50,
     "theme": "light",
     "theme_schedule_enabled": False,
+    "theme_follow_system": False,
     "theme_light_time": "07:00",
     "theme_dark_time": "19:00",
     # 弹幕姬主播信息卡底部备注（全局设置可改，每行一条）

@@ -265,7 +265,9 @@ class MainWindow(QMainWindow):
             for key, item_title in items:
                 btn = QPushButton(item_title)
                 btn.setCheckable(True)
-                btn.setStyleSheet("text-align: left; padding: 5px 8px;")
+                # 底部固定区按钮文字居中（与主题方块同行、缩短让位），导航区左对齐
+                btn.setStyleSheet("text-align: center; padding: 5px 8px;" if is_bottom
+                                  else "text-align: left; padding: 5px 8px;")
                 btn.clicked.connect(lambda checked, k=key: self.show_page(k))
                 if is_bottom:
                     bottom_buttons.append(btn)
@@ -274,18 +276,21 @@ class MainWindow(QMainWindow):
                 self.nav_buttons[key] = btn
         nav_layout.addStretch(1)
 
-        # 底部固定区：Cookie 状态 + 主题切换 + 全局设置（深色主题下方）
+        # 底部固定区：Cookie 状态 + 「全局设置（居中缩短）+ 主题方块」一行
         self._build_cookie_bar(self.bottom_layout)
 
-        # 主题切换（浅色/深色，持久化）— 底部固定区
-        self.theme_btn = QPushButton("🌙 深色主题")
+        # 主题切换方块（正方形：深色显 🌙 / 浅色显 ☀️，点击切换，持久化）
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(4)
+        for btn in bottom_buttons:
+            theme_row.addWidget(btn, 1)
+        self.theme_btn = QPushButton("🌙")
+        self.theme_btn.setFixedSize(30, 30)
         self.theme_btn.setToolTip("切换 浅色 / 深色 界面（自动保存）")
         self.theme_btn.clicked.connect(self._toggle_theme)
-        self.bottom_layout.addWidget(self.theme_btn)
+        theme_row.addWidget(self.theme_btn)
+        self.bottom_layout.addLayout(theme_row)
         self._update_theme_btn()
-
-        for btn in bottom_buttons:
-            self.bottom_layout.addWidget(btn)
 
     def _toggle_theme(self):
         name = theme.toggle_theme()
@@ -293,14 +298,20 @@ class MainWindow(QMainWindow):
         theme.retheme_all()
         self._update_theme_btn()
         msg = f"已切换到{'深色' if name == 'dark' else '浅色'}主题"
-        # 手动优先：手动切换时关闭定时自动切换（需到全局设置里重新打开）
+        # 手动优先：手动切换时关闭自动切换（跟随系统/定时，需到全局设置里重新打开）
         try:
             from toolbox.config_manager import load_convert_config, save_convert_config
             cfg = load_convert_config()
+            auto_off = False
             if cfg.get("theme_schedule_enabled"):
                 cfg["theme_schedule_enabled"] = False
+                auto_off = True
+            if cfg.get("theme_follow_system"):
+                cfg["theme_follow_system"] = False
+                auto_off = True
+            if auto_off:
                 save_convert_config(cfg)
-                msg += "（已关闭定时自动切换）"
+                msg += "（已关闭自动切换）"
         except Exception:
             pass
         show_toast(self, msg, "success")
@@ -314,9 +325,9 @@ class MainWindow(QMainWindow):
                 pass
 
     def _check_theme_schedule(self):
-        """定时开关：启用时把主题对齐到当前时段目标（到点即变）。"""
+        """自动主题检查：跟随系统优先、定时切换兜底（到点即变）。"""
         try:
-            name = theme.check_scheduled_switch()
+            src, name = theme.check_auto_switch()
         except Exception:
             return
         if not name:
@@ -324,11 +335,12 @@ class MainWindow(QMainWindow):
         theme.apply_theme()
         theme.retheme_all()
         self._update_theme_btn()
-        show_toast(self, f"⏰ 已定时切换到{'深色' if name == 'dark' else '浅色'}主题", "info")
+        label = "🖥 已跟随系统" if src == "system" else "⏰ 已定时"
+        show_toast(self, f"{label}切换到{'深色' if name == 'dark' else '浅色'}主题", "info")
 
     def _update_theme_btn(self):
-        # 当前深色 → 按钮显示可切回浅色
-        self.theme_btn.setText("☀️ 浅色主题" if theme.is_dark() else "🌙 深色主题")
+        # 方块图标反映当前主题：深色显 🌙 / 浅色显 ☀️
+        self.theme_btn.setText("🌙" if theme.is_dark() else "☀️")
 
     def _build_cookie_bar(self, nav_layout):
         box = QWidget()

@@ -76,8 +76,16 @@ class GlobalSettingsPage(BasePage):
 
         v.addSpacing(12)
 
-        # ---- 主题定时切换 ----
-        v.addWidget(self._card_title("🌗 主题定时切换（到点自动黑白）"))
+        # ---- 主题自动切换（跟随系统 / 定时黑白） ----
+        v.addWidget(self._card_title("🌗 主题自动切换（跟随系统 / 定时黑白）"))
+        fs_row = QHBoxLayout()
+        self.follow_sys_cb = QCheckBox("跟随系统深浅色")
+        self.follow_sys_cb.setToolTip(
+            "系统在 浅色/深色 模式之间切换时，应用主题自动跟随同步；\n"
+            "与定时切换互斥（同时只能开一个）；手动点击侧栏主题方块会关闭本功能")
+        fs_row.addWidget(self.follow_sys_cb)
+        fs_row.addStretch(1)
+        v.addLayout(fs_row)
         ts_row = QHBoxLayout()
         self.sched_enable = QCheckBox("启用定时切换")
         self.sched_enable.setToolTip(
@@ -101,6 +109,7 @@ class GlobalSettingsPage(BasePage):
         self.sched_status.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.sched_status)
         # 改动即时生效：开关/时间一变就写入配置并立刻对齐主题（无需点保存）
+        self.follow_sys_cb.toggled.connect(self._on_follow_system_changed)
         self.sched_enable.toggled.connect(self._on_schedule_changed)
         self.sched_light.timeChanged.connect(self._on_schedule_changed)
         self.sched_dark.timeChanged.connect(self._on_schedule_changed)
@@ -265,24 +274,31 @@ class GlobalSettingsPage(BasePage):
         except Exception:
             pass
 
-    # ---- 主题定时切换 ----
+    # ---- 主题自动切换（跟随系统 / 定时） ----
     def _load_theme_schedule(self):
         cfg = load_convert_config()
         # 载入时屏蔽信号，避免触发「改动即保存」
-        for w in (self.sched_enable, self.sched_light, self.sched_dark):
+        for w in (self.follow_sys_cb, self.sched_enable, self.sched_light, self.sched_dark):
             w.blockSignals(True)
+        self.follow_sys_cb.setChecked(bool(cfg.get("theme_follow_system")))
         self.sched_enable.setChecked(bool(cfg.get("theme_schedule_enabled")))
         light = QTime.fromString(str(cfg.get("theme_light_time", "07:00")), "HH:mm")
         dark = QTime.fromString(str(cfg.get("theme_dark_time", "19:00")), "HH:mm")
         self.sched_light.setTime(light if light.isValid() else QTime(7, 0))
         self.sched_dark.setTime(dark if dark.isValid() else QTime(19, 0))
-        for w in (self.sched_enable, self.sched_light, self.sched_dark):
+        for w in (self.follow_sys_cb, self.sched_enable, self.sched_light, self.sched_dark):
             w.blockSignals(False)
         self._update_sched_status()
 
     def _update_sched_status(self):
-        if self.sched_enable.isChecked():
-            from gui_qt import theme
+        from gui_qt import theme
+        if self.follow_sys_cb.isChecked():
+            sysd = "🌙 深色" if theme.system_theme() == "dark" else "☀ 浅色"
+            cur = "🌙 深色" if theme.is_dark() else "☀ 浅色"
+            self.sched_status.setText(
+                f"已启用跟随系统：系统当前为 {sysd} · 主题已同步 {cur}（每 10 秒检测，系统切换即变）")
+            self.sched_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+        elif self.sched_enable.isChecked():
             want = theme.scheduled_theme()
             if want:
                 self.sched_status.setText(
@@ -294,11 +310,23 @@ class GlobalSettingsPage(BasePage):
                 self.sched_status.setText("两个时间点相同，定时无效，请修改")
                 self.sched_status.setStyleSheet("color: #e53935; font-size: 11px;")
         else:
-            self.sched_status.setText("未启用：手动点击侧栏「深色/浅色主题」按钮切换")
+            self.sched_status.setText("未启用：手动点击侧栏主题方块（🌙/☀️）切换")
             self.sched_status.setStyleSheet("color: #888; font-size: 11px;")
+
+    def _on_follow_system_changed(self):
+        """跟随系统一变即保存并立即对齐；与定时切换互斥（程序改勾选需屏蔽信号）。"""
+        if self.follow_sys_cb.isChecked():
+            self.sched_enable.blockSignals(True)
+            self.sched_enable.setChecked(False)
+            self.sched_enable.blockSignals(False)
+        self._save_theme_schedule(silent=True)
 
     def _on_schedule_changed(self):
         """开关/时间一变即保存并立即对齐主题（无需点保存）。"""
+        if self.sched_enable.isChecked() and self.follow_sys_cb.isChecked():
+            self.follow_sys_cb.blockSignals(True)
+            self.follow_sys_cb.setChecked(False)
+            self.follow_sys_cb.blockSignals(False)
         self._save_theme_schedule(silent=True)
 
     def _save_theme_schedule_clicked(self):
@@ -306,16 +334,17 @@ class GlobalSettingsPage(BasePage):
 
     def _save_theme_schedule(self, silent: bool):
         cfg = load_convert_config()
+        cfg["theme_follow_system"] = self.follow_sys_cb.isChecked()
         cfg["theme_schedule_enabled"] = self.sched_enable.isChecked()
         cfg["theme_light_time"] = self.sched_light.time().toString("HH:mm")
         cfg["theme_dark_time"] = self.sched_dark.time().toString("HH:mm")
         save_convert_config(cfg)
-        # 立即生效：让主窗口立刻对齐（启用/修改时间后无需等下一个检查点）
+        # 立即生效：让主窗口立刻对齐（启用/修改后无需等下一个检查点）
         if hasattr(self.app, "_check_theme_schedule"):
             from gui_qt.common import post_to_main
             post_to_main(self.app._check_theme_schedule)
         if not silent:
-            self.app.toast("✅ 主题定时切换设置已保存", "success")
+            self.app.toast("✅ 主题自动切换设置已保存", "success")
         self._update_sched_status()
 
     def _browse(self):
