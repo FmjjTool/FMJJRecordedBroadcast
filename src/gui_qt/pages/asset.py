@@ -2882,7 +2882,6 @@ class AssetPage(BasePage):
 
             def _video_cover(vpath, cell):
                 """用 ffmpeg 抽视频第 1 秒帧作为封面，失败返回 None。"""
-                import shutil
                 import subprocess
                 from io import BytesIO
                 args_base = ["-y", "-ss", "1", "-i", vpath, "-frames:v", "1",
@@ -2892,7 +2891,8 @@ class AssetPage(BasePage):
                 if _ffmpeg_ok[0]:
                     candidates.append(_ffmpeg_ok[0])
                 else:
-                    which = shutil.which("ffmpeg")
+                    from toolbox.utils import find_ffmpeg_exe
+                    which = find_ffmpeg_exe()
                     if which:
                         candidates.append(which)
                     candidates.append("D:/Programs/ffmpeg/bin/ffmpeg.exe")

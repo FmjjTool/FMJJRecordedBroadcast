@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 from dataclasses import dataclass
 
-from .utils import preserve_timestamps, classify_ffmpeg_error
+from .utils import preserve_timestamps, classify_ffmpeg_error, find_ffmpeg_exe
 
 
 @dataclass
@@ -57,7 +57,7 @@ def update_convert_cache(cache: Dict, src: Path, success: bool, output: Path = N
 
 def lossless_mux(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
     """无损封装到 MP4"""
-    cmd = ["ffmpeg", "-i", str(src)]
+    cmd = [find_ffmpeg_exe(), "-i", str(src)]
     cmd += ["-map", "0:v:0", "-map", "0:a:0"]
     if config.get("preserve_metadata", True):
         cmd += ["-map_metadata", "0", "-map_chapters", "0"]
@@ -85,14 +85,14 @@ def lossless_mux(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
         err_type, err_detail = classify_ffmpeg_error(stderr_str)
         return False, err_type, err_detail
     except FileNotFoundError:
-        return False, "ffmpeg 未找到", "请确认 ffmpeg 已安装并加入系统 PATH"
+        return False, "ffmpeg 未找到", "请确认 ffmpeg 已安装并加入系统 PATH，或在全局设置指定 FFmpeg 位置"
     except Exception as e:
         return False, "未知异常", type(e).__name__ + ": " + str(e)
 
 
 def encode_video(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
     """转码视频"""
-    cmd = ["ffmpeg", "-i", str(src)]
+    cmd = [find_ffmpeg_exe(), "-i", str(src)]
     cmd += ["-map", "0:v:0", "-map", "0:a:0"]
     if config.get("preserve_metadata", True):
         cmd += ["-map_metadata", "0", "-map_chapters", "0"]
@@ -122,7 +122,7 @@ def encode_video(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
         detail = stderr_str[-500:] if len(stderr_str) > 500 else stderr_str
         return False, "转码失败", detail
     except FileNotFoundError:
-        return False, "ffmpeg 未找到", "请确认 ffmpeg 已安装并加入系统 PATH"
+        return False, "ffmpeg 未找到", "请确认 ffmpeg 已安装并加入系统 PATH，或在全局设置指定 FFmpeg 位置"
     except Exception as e:
         return False, "未知异常", type(e).__name__ + ": " + str(e)
 

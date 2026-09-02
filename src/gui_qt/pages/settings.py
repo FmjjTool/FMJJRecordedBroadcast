@@ -2,11 +2,12 @@
 
 - 默认工作目录（set_work_dir + 全局广播 on_dir_changed）
 - 统一导出目录（set_export_dir，目录不存在自动创建）
-- 配置与缓存（项目根/配置目录/工作目录/FFmpeg 检测/旧缓存迁移/清理 __pycache__ 和 .pyc）
+- 配置与依赖检查（项目根/配置目录/工作目录/FFmpeg 位置/清理 __pycache__ 和 .pyc/依赖检测）
 - 关于（制作歆慕 / B站主页 / 官方网站）
 """
 
 import os
+import re
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
@@ -16,9 +17,10 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import (
     get_app_root, get_config_dir, get_export_dir, load_convert_config,
-    migrate_old_cache, has_old_cache_files, has_date_subfolders,
-    save_convert_config, set_export_dir, set_work_dir,
+    has_date_subfolders, save_convert_config, set_export_dir, set_ffmpeg_path,
+    set_work_dir,
 )
+from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
 
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
@@ -105,7 +107,7 @@ class GlobalSettingsPage(BasePage):
 
         v.addSpacing(12)
 
-        # ---- 配置与缓存 ----
+        # ---- 配置与依赖检查 ----
         v.addWidget(self._card_title("📦 配置与依赖检查"))
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: #888; font-size: 11px;")
@@ -113,13 +115,26 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(self.info_label)
         info_row = QHBoxLayout()
         info_row.addWidget(self._btn("🔄 刷新信息", self._refresh_info))
-        info_row.addWidget(self._btn("📦 迁移旧缓存到 config/", self._migrate))
+        info_row.addWidget(self._btn("🧹 清理 Python 缓存 (__pycache__)", self._clean_pycache))
         info_row.addStretch(1)
         v.addLayout(info_row)
-        # 清理 Python 缓存按钮已下线：与依赖检查功能合并到下方的「检测依赖」区
         self.clean_result_label = QLabel("")
         self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.clean_result_label)
+
+        # ---- FFmpeg 位置（可选；系统 PATH 优先，未找到时才用这里指定的位置）----
+        ff_row = QHBoxLayout()
+        self.ffmpeg_entry = QLineEdit()
+        self.ffmpeg_entry.setPlaceholderText(
+            "留空 = 自动使用系统 PATH；也可填 ffmpeg 所在目录或 ffmpeg.exe 完整路径")
+        ff_row.addWidget(self.ffmpeg_entry, 1)
+        ff_row.addWidget(self._btn("📂 浏览...", self._browse_ffmpeg))
+        ff_row.addWidget(self._btn("💾 保存", self._save_ffmpeg))
+        v.addLayout(ff_row)
+        self.ffmpeg_status = QLabel("")
+        self.ffmpeg_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.ffmpeg_status.setWordWrap(True)
+        v.addWidget(self.ffmpeg_status)
 
         # 检测依赖与其他强依赖：缺失项标红 + 快捷下载按钮
         self.dependency_frame = QFrame()
@@ -229,6 +244,9 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
         # 主题定时切换
         self._load_theme_schedule()
+        # FFmpeg 位置
+        self.ffmpeg_entry.setText(str(load_convert_config().get("ffmpeg_path", "") or ""))
+        self._update_ffmpeg_status()
         # 信息
         self._refresh_info()
         # 依赖检测（每次回到本页都重检一次，不依赖外部信号）
@@ -352,43 +370,122 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_status.setStyleSheet("color: #4caf50; font-size: 11px;")
         self.app.toast("导出目录已保存", "success")
 
-    def _refresh_info(self):
+    def _info_text(self) -> str:
         cfg = load_convert_config()
         wd = cfg.get("work_dir", "")
-        self.info_label.setText(
+        return (
             f"项目根: {get_app_root()}\n"
             f"配置目录: {get_config_dir()}\n"
             f"工作目录: {wd or '(未设置)'}\n"
-            f"FFmpeg: {'✅' if self._check_ffmpeg() else '⚠️ 未检测到'}\n"
-            f"旧缓存: {'⚠️ 有，可迁移' if has_old_cache_files() else '✅ 无'}"
+            f"FFmpeg: {'✅' if self._check_ffmpeg() else '⚠️ 未检测到'}"
         )
+
+    def _refresh_info(self):
+        self.info_label.setText(self._info_text())
         # 按用户要求：每个按钮点击后在右下角 toast 提示
         self.app.toast("已刷新配置信息", "info")
 
     def _check_ffmpeg(self):
         try:
             import subprocess
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3)
+            subprocess.run([find_ffmpeg_exe(), "-version"], capture_output=True, timeout=3)
             return True
         except Exception:
             return False
 
-    def _migrate(self):
+    # ---- FFmpeg 位置 ----
+
+    def _update_ffmpeg_status(self):
+        invalidate_ffmpeg_cache()
+        exe = find_ffmpeg_exe()
+        if exe == "ffmpeg":
+            self.ffmpeg_status.setText(
+                "⚠️ 未找到 ffmpeg：转换 / 音频提取 / 版权写入 / 直播录制将不可用，"
+                "请安装后加入系统 PATH，或在上方指定位置")
+            self.ffmpeg_status.setStyleSheet("color: #ff5252; font-size: 11px;")
+            return
+        import shutil
+        src = "系统 PATH"
+        which = shutil.which("ffmpeg")
+        if not (which and os.path.normcase(os.path.abspath(exe))
+                == os.path.normcase(os.path.abspath(which))):
+            src = "自定义位置"
+        self.ffmpeg_status.setText(f"当前使用（{src}）: {exe}")
+        self.ffmpeg_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+
+    def _browse_ffmpeg(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "选择 FFmpeg 所在目录", self.ffmpeg_entry.text().strip() or os.getcwd())
+        if d:
+            self.ffmpeg_entry.setText(d)
+            self.app.toast(f"已选择 FFmpeg 目录: {d}", "info")
+
+    def _save_ffmpeg(self):
+        path = self.ffmpeg_entry.text().strip()
+        if path:
+            is_dir = os.path.isdir(path)
+            is_exe = os.path.isfile(path) and os.path.basename(path).lower().startswith("ffmpeg")
+            if not (is_dir or is_exe):
+                self.app.toast("路径无效：请填 ffmpeg 所在目录或 ffmpeg.exe 完整路径", "warning")
+                return
+        set_ffmpeg_path(path)
+        invalidate_ffmpeg_cache()
+        self._update_ffmpeg_status()
+        self.info_label.setText(self._info_text())
+        self._refresh_dependencies()
+        self.app.toast("FFmpeg 位置已保存" if path else "已恢复默认：使用系统 PATH", "success")
+
+    def _clean_pycache(self):
+        """清理程序根目录与工作目录下所有 __pycache__ 和 .pyc（后台执行，结果写入标签）。
+
+        两处都清：work_dir 常被设到纯数据目录（无代码），只清它等于没清。
+        """
+        import shutil
+        wd = getattr(self.app, "work_dir", None)
+        wd = str(wd) if wd else ""
+        if not os.path.isdir(wd):
+            wd = ""
+        targets = [str(get_app_root())]
+        if wd and os.path.normpath(wd) != os.path.normpath(str(get_app_root())):
+            targets.append(wd)
+
         def work():
-            return migrate_old_cache()
+            deleted_dirs = deleted_files = 0
+            for target in targets:
+                for root, dirs, files in os.walk(target, topdown=False):
+                    if os.path.basename(root) == "__pycache__":
+                        continue  # 已在删除目录内，跳过
+                    for d in dirs:
+                        if d == "__pycache__":
+                            try:
+                                shutil.rmtree(os.path.join(root, d))
+                                deleted_dirs += 1
+                            except Exception:
+                                pass
+                    for f in files:
+                        if f.endswith(".pyc"):
+                            try:
+                                os.remove(os.path.join(root, f))
+                                deleted_files += 1
+                            except Exception:
+                                pass
+            return deleted_dirs, deleted_files
 
         def done(result, err):
             if err:
-                self.app.toast(f"迁移失败: {str(err)[:80]}", "error")
+                self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
+                self.clean_result_label.setStyleSheet("color: #ff5252; font-size: 11px;")
                 return
-            self.app.toast(f"迁移完成: {result}", "success")
-            self._refresh_info()
+            d_n, f_n = result or (0, 0)
+            scope = " + 工作目录" if len(targets) > 1 else ""
+            self.clean_result_label.setText(
+                f"✅ 清理完成: {d_n} 个 __pycache__ 目录, {f_n} 个 .pyc"
+                f"（程序目录{scope}；运行中新生导入会重建，属正常）")
+            self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
 
+        self.clean_result_label.setText("🧹 清理中...")
+        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
         run_bg(work, done)
-
-    def _clean_pycache_removed(self):
-        """（已下线）原清理 Python 缓存按钮已合并到「检测依赖」中——按用户要求删除。"""
-        pass
 
     # ----- 检测依赖 -----
 
@@ -453,6 +550,10 @@ class GlobalSettingsPage(BasePage):
             ver_lbl.setStyleSheet(
                 "color: #888; font-size: 11px; background: transparent; border: none;")
             ver_lbl.setFixedWidth(180)
+            if key in ("ffmpeg", "ffprobe"):
+                exe = find_ffmpeg_exe() if key == "ffmpeg" else find_ffprobe_exe()
+                if exe not in ("ffmpeg", "ffprobe"):
+                    ver_lbl.setToolTip(f"位置: {exe}")
             h.addWidget(ver_lbl)
             usage_lbl = QLabel(usage)
             usage_lbl.setStyleSheet(
@@ -493,28 +594,30 @@ class GlobalSettingsPage(BasePage):
 
     # ----- 依赖检测实现：返回 (ok, version_str) -----
 
-    def _check_ffmpeg_detail(self):
+    def _probe_tool(self, exe: str):
+        """运行 <exe> -version，返回 (ok, 版本号, 首行原文)。
+
+        版本号只取首行 "version" 后的一个词（如 6.1.1 / 9.0-full_build-www.gyan.dev），
+        避免整行截断后出现 "…Copyright (c) 2" 这类残缺串。
+        """
+        import subprocess
         try:
-            import subprocess
-            r = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3, text=True)
-            if r.returncode != 0:
-                return False, ""
-            # 首行例：ffmpeg version 6.1.1 ...
-            head = (r.stdout or "").splitlines()[0] if r.stdout else ""
-            return True, head[:60]
+            r = subprocess.run([exe, "-version"], capture_output=True, timeout=3, text=True)
         except Exception:
-            return False, ""
+            return False, "", ""
+        if r.returncode != 0:
+            return False, "", ""
+        head = (r.stdout or "").splitlines()[0] if r.stdout else ""
+        m = re.search(r"version\s+(\S+)", head)
+        return True, (m.group(1) if m else head[:40]), head
+
+    def _check_ffmpeg_detail(self):
+        ok, ver, _head = self._probe_tool(find_ffmpeg_exe())
+        return ok, ver
 
     def _check_ffprobe_detail(self):
-        try:
-            import subprocess
-            r = subprocess.run(["ffprobe", "-version"], capture_output=True, timeout=3, text=True)
-            if r.returncode != 0:
-                return False, ""
-            head = (r.stdout or "").splitlines()[0] if r.stdout else ""
-            return True, head[:60]
-        except Exception:
-            return False, ""
+        ok, ver, _head = self._probe_tool(find_ffprobe_exe())
+        return ok, ver
 
     def _check_pyside6_detail(self):
         try:

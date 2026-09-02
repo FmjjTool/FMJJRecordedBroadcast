@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
         nav_scroll.setWidget(nav_widget)
         nav_v.addWidget(nav_scroll, 1)
 
-        # 底部固定区：标题 + 全局设置入口 + Cookie 状态 + 主题切换
+        # 底部固定区：Cookie 状态 + 主题切换 + 全局设置入口（全局设置在主题按钮下方）
         self.bottom_layout = QVBoxLayout()
         self.bottom_layout.setContentsMargins(8, 0, 8, 8)
         self.bottom_layout.setSpacing(3)
@@ -257,6 +257,8 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-weight: bold; font-size: 14px; padding: 6px 4px 10px 4px;")
         nav_layout.addWidget(title)
 
+        # 「全局」组按钮延迟到主题切换按钮之后再添加（全局设置放深色主题下方）
+        bottom_buttons = []
         for group_title, items in NAV_GROUPS:
             # 「全局」组放底部固定区（只留按钮，不再加分组标题），其余放可滚动导航区
             is_bottom = group_title == "⚙️ 全局"
@@ -268,17 +270,19 @@ class MainWindow(QMainWindow):
                 gl = QLabel(group_title)
                 gl.setStyleSheet("color: #5a6072; font-size: 11px; padding: 10px 4px 2px 4px;")
                 nav_layout.addWidget(gl)
-            target = self.bottom_layout if is_bottom else nav_layout
             for key, item_title in items:
                 btn = QPushButton(item_title)
                 btn.setCheckable(True)
                 btn.setStyleSheet("text-align: left; padding: 5px 8px;")
                 btn.clicked.connect(lambda checked, k=key: self.show_page(k))
-                target.addWidget(btn)
+                if is_bottom:
+                    bottom_buttons.append(btn)
+                else:
+                    nav_layout.addWidget(btn)
                 self.nav_buttons[key] = btn
         nav_layout.addStretch(1)
 
-        # 底部固定区：Cookie 状态 + 主题切换（全局设置入口已随「全局」组固定）
+        # 底部固定区：Cookie 状态 + 主题切换 + 全局设置（深色主题下方）
         self._build_cookie_bar(self.bottom_layout)
 
         # 主题切换（浅色/深色，持久化）— 底部固定区
@@ -287,6 +291,9 @@ class MainWindow(QMainWindow):
         self.theme_btn.clicked.connect(self._toggle_theme)
         self.bottom_layout.addWidget(self.theme_btn)
         self._update_theme_btn()
+
+        for btn in bottom_buttons:
+            self.bottom_layout.addWidget(btn)
 
     def _toggle_theme(self):
         name = theme.toggle_theme()

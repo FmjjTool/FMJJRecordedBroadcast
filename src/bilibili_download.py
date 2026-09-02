@@ -212,10 +212,11 @@ def download_bilibili_video(
             aurls = _stream_urls(audio)
             _download_to_file(aurls[0], audio_tmp, headers, progress_cb, aurls[1:])
         # ffmpeg 合并
+        from toolbox.utils import find_ffmpeg_exe
         if audio and os.path.exists(audio_tmp):
-            cmd = ["ffmpeg", "-y", "-i", video_tmp, "-i", audio_tmp, "-c", "copy", out_path]
+            cmd = [find_ffmpeg_exe(), "-y", "-i", video_tmp, "-i", audio_tmp, "-c", "copy", out_path]
         else:
-            cmd = ["ffmpeg", "-y", "-i", video_tmp, "-c", "copy", out_path]
+            cmd = [find_ffmpeg_exe(), "-y", "-i", video_tmp, "-c", "copy", out_path]
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg 合并失败: {r.stderr[-300:]}")

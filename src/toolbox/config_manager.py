@@ -64,15 +64,6 @@ def _write_json(path: Path, data: Dict[str, Any]):
 
 # ==================== 旧文件迁移 ====================
 
-OLD_FILES = [
-    "convert_config.json",
-    ".video_convert_cache.json",
-    "rename_config.json",
-    "rename_cache.json",
-    "rename_history.json",
-    "app_settings.json",
-]
-
 def _migrate_if_needed():
     """首次运行时，从旧文件迁移数据到 config.json / cache.json"""
     root = get_app_root()
@@ -241,6 +232,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "remark_info": "抖音：歆慕\n微博：歆慕XINMU\nb站：歆慕XINMU\n使用信息请标明来源",
     # 账号获取「增量模式(写入数据库)」默认勾选状态（切换即保存）
     "inc_db_checked": True,
+    # FFmpeg 自定义位置（目录或 ffmpeg.exe 完整路径；空 = 使用系统 PATH）
+    "ffmpeg_path": "",
 }
 
 
@@ -423,6 +416,13 @@ def set_export_dir(path: str):
     _write_json(_cfg_path(), data)
 
 
+def set_ffmpeg_path(path: str):
+    """全局设置「FFmpeg 位置」：目录或 ffmpeg.exe 完整路径，空串 = 使用系统 PATH。"""
+    data = _read_json(_cfg_path())
+    data.setdefault("convert", {})["ffmpeg_path"] = path
+    _write_json(_cfg_path(), data)
+
+
 # 导出分类子文件夹名（按文件类型路由）
 EXPORT_CATEGORIES = {
     "subtitle": "字幕文件",
@@ -559,19 +559,3 @@ def init_all_configs():
     load_rename_config()
 
 
-# ==================== 旧缓存迁移（公开API） ====================
-
-def migrate_old_cache() -> Dict[str, bool]:
-    """兼容旧版调用"""
-    _migrate_if_needed()
-    return {"config.json": _cfg_path().exists(), "cache.json": _cache_path().exists()}
-
-
-def has_old_cache_files() -> bool:
-    """检查根目录或config目录下是否还有旧的独立配置文件"""
-    for f in OLD_FILES:
-        if (get_app_root() / f).exists():
-            return True
-        if (get_config_dir() / f).exists():
-            return True
-    return False

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from .utils import is_video_file
+from .utils import is_video_file, find_ffmpeg_exe
 
 
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".m4b", ".opus", ".amr"}
@@ -15,7 +15,7 @@ DATE_FOLDER_RE = re.compile(r"^20\d{6}$")
 def extract_audio_one(src: Path, dst: Path) -> Tuple[bool, str]:
     """提取单个视频的音频"""
     cmd = [
-        "ffmpeg", "-i", str(src),
+        find_ffmpeg_exe(), "-i", str(src),
         "-vn",
         "-acodec", "copy",
         "-y",

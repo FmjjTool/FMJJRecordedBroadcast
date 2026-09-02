@@ -3,11 +3,14 @@ import os
 import re
 import sys
 import json
+import shutil
 import subprocess
 import ctypes
 from pathlib import Path
 from typing import Tuple, Optional
 from datetime import date
+
+from .config_manager import load_convert_config
 
 if sys.platform == "win32":
     from ctypes import wintypes
@@ -128,6 +131,81 @@ def _set_creation_time_windows(path: str, creation_time: float):
             kernel32.SetFileTime(hfile, ctypes.byref(ct), None, None)
         finally:
             kernel32.CloseHandle(hfile)
+    except Exception:
+        pass
+
+
+# ==================== FFmpeg / FFprobe 定位 ====================
+# 系统PATH优先 → 全局设置「FFmpeg 位置」（目录或 ffmpeg.exe 完整路径）→ 回退命令名
+
+_ffmpeg_cache = {}
+
+
+def _custom_ffmpeg_location() -> str:
+    """全局设置里用户指定的 FFmpeg 位置（未配置返回 ""）。"""
+    try:
+        return str(load_convert_config().get("ffmpeg_path", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _custom_ffmpeg_candidates() -> list:
+    """自定义位置展开成 ffmpeg 候选：目录 → 拼 ffmpeg(.exe)；否则视为 exe 路径本身。"""
+    raw = _custom_ffmpeg_location()
+    if not raw:
+        return []
+    if os.path.isdir(raw):
+        name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+        return [os.path.join(raw, name)]
+    return [raw]
+
+
+def find_ffmpeg_exe() -> str:
+    """ffmpeg 可执行路径：系统 PATH 优先 → 自定义位置；都找不到回退 "ffmpeg"。"""
+    if "ffmpeg" in _ffmpeg_cache:
+        return _ffmpeg_cache["ffmpeg"]
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        for cand in _custom_ffmpeg_candidates():
+            if os.path.isfile(cand):
+                exe = cand
+                break
+    if not exe:
+        exe = "ffmpeg"
+    _ffmpeg_cache["ffmpeg"] = exe
+    return exe
+
+
+def find_ffprobe_exe() -> str:
+    """ffprobe 可执行路径：系统 PATH 优先 → 自定义位置同目录 → ffmpeg 同目录。"""
+    if "ffprobe" in _ffmpeg_cache:
+        return _ffmpeg_cache["ffprobe"]
+    name = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
+    exe = shutil.which("ffprobe")
+    if not exe:
+        for cand in _custom_ffmpeg_candidates():
+            probe = os.path.join(os.path.dirname(cand), name)
+            if os.path.isfile(probe):
+                exe = probe
+                break
+    if not exe:
+        ff = find_ffmpeg_exe()
+        if ff != "ffmpeg":
+            probe = os.path.join(os.path.dirname(ff), name)
+            if os.path.isfile(probe):
+                exe = probe
+    if not exe:
+        exe = "ffprobe"
+    _ffmpeg_cache["ffprobe"] = exe
+    return exe
+
+
+def invalidate_ffmpeg_cache():
+    """全局设置保存 FFmpeg 位置后调用：清空定位缓存（含直播页的 rawvideo 缓存）。"""
+    _ffmpeg_cache.clear()
+    try:
+        from . import live_video
+        live_video._ffmpeg_path[0] = ""
     except Exception:
         pass
 
@@ -253,7 +331,7 @@ def get_video_info(file_path: str) -> dict:
     import subprocess
     try:
         cmd = [
-            "ffprobe", "-v", "quiet",
+            find_ffprobe_exe(), "-v", "quiet",
             "-print_format", "json",
             "-show_format", "-show_streams",
             file_path
@@ -330,7 +408,7 @@ def capture_video_frame(file_path: str, output_path: str = None, time_seconds: f
             time_seconds = min(duration * 0.1, 30) if duration > 0 else 5
 
         cmd = [
-            "ffmpeg", "-y",
+            find_ffmpeg_exe(), "-y",
             "-ss", str(time_seconds),
             "-i", file_path,
             "-vframes", "1",

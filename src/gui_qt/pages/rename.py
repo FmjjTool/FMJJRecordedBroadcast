@@ -30,7 +30,8 @@ from toolbox.rename_engine import (
     extract_file_title, extract_time_str, scan_date_folders,
 )
 from toolbox.utils import (
-    capture_video_frame, clean_special_chars, get_video_info, is_video_file,
+    capture_video_frame, clean_special_chars, find_ffmpeg_exe, get_video_info,
+    is_video_file,
 )
 
 from gui_qt.common import run_bg
@@ -563,7 +564,7 @@ class RenamePage(BasePage):
         def work():
             tmp = filepath + ".tmp_meta.mp4"
             cmd = [
-                "ffmpeg", "-y",
+                find_ffmpeg_exe(), "-y",
                 "-i", filepath,
                 "-c", "copy",
                 "-metadata", f"copyright={info}",

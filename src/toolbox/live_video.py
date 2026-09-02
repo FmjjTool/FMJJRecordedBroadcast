@@ -14,6 +14,8 @@ import subprocess
 import threading
 import time
 
+from .utils import find_ffmpeg_exe
+
 _ffmpeg_path = [""]
 
 
@@ -28,10 +30,14 @@ def _has_rawvideo(exe):
 
 
 def find_ffmpeg():
-    """定位 ffmpeg：缓存 → 候选中优先带 rawvideo 的完整版（PATH 可能命中精简版）。"""
+    """定位 ffmpeg：缓存 → 候选中优先带 rawvideo 的完整版（PATH 可能命中精简版）。
+
+    候选首位是统一定位器（系统 PATH 优先 → 全局设置自定义位置），
+    其后是本机常见完整版安装位置兜底。
+    """
     if _ffmpeg_path[0]:
         return _ffmpeg_path[0]
-    candidates = [shutil.which("ffmpeg"),
+    candidates = [find_ffmpeg_exe(),
                   "D:/Programs/ffmpeg/bin/ffmpeg.exe",
                   "C:/ffmpeg/bin/ffmpeg.exe"]
     fallback = None
