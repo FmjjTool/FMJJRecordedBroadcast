@@ -1,10 +1,10 @@
 # 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.3** · 制作：歆慕
+> **FengMingToolbox v2.8.4** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.3>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.4>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -654,7 +654,7 @@ A：不会。普通文件遇到同名则**跳过**（新项目数据优先）；
 ```python
 APP_NAME         = "FengMingToolbox"
 APP_DISPLAY_NAME = "封茗囧菌数据汇总库 统一维护工具箱"
-APP_VERSION      = "2.8.3"
+APP_VERSION      = "2.8.4"
 APP_PUBLISHER    = "歆慕"
 ```
 
@@ -677,6 +677,21 @@ APP_PUBLISHER    = "歆慕"
 
 ### 更新日志
 
+#### v2.8.4（2026-09-02）
+
+- **主题系统**：新增「跟随系统深浅色」自动模式（注册表检测，与定时切换互斥）；侧栏底部改版——🌙/☀️ 主题方块（30×30）+ ⚙️ 全局设置同排居中，全局设置按钮移至主题下方。
+- **全应用小尺寸按钮统一图标化**：修复 emoji 图标看不清问题（全局 QSS 内边距挤压图标绘制区 + 微软雅黑缺 emoji 字形），沉淀 `icon_btn_style` 辅助函数覆盖 10 个文件——批量导入/已获取的全选/反选/清除/导出/下载、启动器、资产页 ↻📥🗑、账号/追踪页 ↑↓✕、弹幕测试页 ▶■⏸⚙🧹；固定宽度文字按钮同步修复。
+- **B站资源页重构**：表情包/收藏集/空间综合搜索三页合并为「🎁 B站资源」聚合页并入信息获取组，嵌套 tab 拍平为 8 个平级功能 tab（表情包搜索/装扮搜索/装扮表情包/直播表情/装扮ID详情/收藏集/空间/综合搜索）；剥离与单个解析重复的「视频信息/动态详情」，api 死代码清理。
+- **FFmpeg 自定义位置**：全局设置新增「FFmpeg 位置」（支持目录或 exe 全路径），查找顺序系统 PATH → 自定义位置 → 命令名，全部引擎调用点接入（转换/音频/版权写入/B站合并/抽帧）。
+- **已获取列表删除功能**：右键「🗑 删除该条目…」单条删除 + 工具栏「🗑 删除所选」批量删除（确认框列明条目数和文件数，数据 + 媒体文件全清）。
+- **账号获取/网媒追踪/音乐追踪**：分组列表独立滚动 + ⬆️⬇️ 排序（重排 groups.json 键序）；账号获取保存补 toast 提示、添加按钮改 ➕ 图标。
+- **批量导入页**：⏸️ 暂停左侧新增 ❌ 取消按钮（未开始 URL 跳过）；导入/全选/反选/清除/下载全部图标化。
+- **功能介绍浮层**：14 页浮层式功能介绍（不推动布局），支持点击空白区域关闭（浮层内部、教程滚动、锚点点击不受影响）；交互重命名页新增「❓ 使用教程」浮层。
+- **解析增强**：B站纯 BV/AV 号可直接解析（无需完整 URL）；资产页右键可打开 MD/媒体文件。
+- **购物页**：移除右上角「淘宝 Cookie」按钮（Cookie 统一由侧栏管理维护）；解析失败改为状态栏显示完整原因 + Cookie 刷新指引。
+- **修复**：恢复「清理 Python 缓存」按钮（曾误下线）；删除旧缓存迁移功能全链路；依赖版本显示双重截断改正则提取完整版本号；深色模式依赖区配色（底色/红字/绿字走主题映射表）；音乐下载/文件迁移页内容区白底+边框（深浅色均正常）。
+- **其他**：删除零引用的 `_ref` 参考源码目录（3.4MB）；资产页两处刷新按钮改 🔄 图标。
+
 #### v2.8.3（2026-09-01）
 
 - **抖音 / B 站弹幕姬（test_page / bili_danmaku）**：删除「🚀 启动弹幕姬」按钮（dycast 外部 Node 项目仅保留作可选启动器，UI 不再展示入口）。顶栏「🔁 轮询 / ⚙ 设置 / 🗑 清空内容 / ■ 断开 / ▶ 连接」统一改为**仅图标**（保留 tooltip 文字说明）。工具栏（保存弹幕 / 导出 / 导入 / 合并 / 统计 / 录播 / 监控）保留文字便于辨识。
@@ -692,16 +707,15 @@ APP_PUBLISHER    = "歆慕"
 | # | 位置 | 问题 | 影响 |
 |---|---|---|---|
 | 1 | `main_window.py` | `PAGE_CLASSES` 31 项，`NAV_GROUPS` 30 项 —— **`dycast` 已注册但侧栏不可达** | 无。该页作为共享启动器被「📺 弹幕姬」页复用（`launch_dycast_app` / `stop_dycast_app`） |
-| 2 | `pages/shopping_page.py` | `from gui_qt.cookie_manager import CookieDialog` —— 该类不存在（只有 `CookieManagerDialog`） | 「🍪 淘宝 Cookie」按钮打不开弹窗，只弹提示。请从「⚙️ 全局设置」或左下角 Cookie 卡进入 |
-| 3 | `main_window.py` vs `cookie_manager.py` | 两处 `COOKIE_PLATFORMS` 不一致（10 vs 11，后者多 `taobao`） | 侧栏显示「已登录 N/10」，不统计淘宝 |
-| 4 | `pages/calendar.py` | 面包屑写「双击日期打开文件夹」，实现是**单击** | 仅文案不符 |
-| 5 | `main_window.py` | 状态栏只在初始化时设一次「就绪」，之后无更新 | 形同虚设的占位 |
-| 6 | `pages/test_page.py` | 文件名/key 为历史遗留的 `test_page`，实际是弹幕姬页 | 与 `dycast.py` 命名易混淆 |
-| 7 | `pages/douyin_recorder.py` | 有一处中文注释被误编码为 UTF-8 乱码 | 不影响运行 |
-| 8 | `platforms/bilibili.py` vs `bili/wbi.py` | WBI 签名有两套实现，`MIXIN_KEY_ENC_TAB` 置换表**尾部不完全一致** | 二者签名结果可能不同，但目前各自链路均可用 |
-| 9 | `tracker/config.py` | `OUTPUT_PATHS` 只有 3 个平台 | 快手/小红书记录不写入 `tracker/data/`（仍写入按账号的 xlsx） |
-| 10 | `src/music/scrapers/fivesing.py` | `get_play_url()` 在文件中定义了两次（实现相同） | 冗余代码，后者生效 |
-| 11 | `check_deps.py` | docstring 写「被 app 启动时自动调用」，实际**无调用点** | 需手动执行 `python check_deps.py` |
+| 2 | `main_window.py` vs `cookie_manager.py` | 两处 `COOKIE_PLATFORMS` 不一致（10 vs 11，后者多 `taobao`） | 侧栏显示「已登录 N/10」，不统计淘宝 |
+| 3 | `pages/calendar.py` | 面包屑写「双击日期打开文件夹」，实现是**单击** | 仅文案不符 |
+| 4 | `main_window.py` | 状态栏只在初始化时设一次「就绪」，之后无更新 | 形同虚设的占位 |
+| 5 | `pages/test_page.py` | 文件名/key 为历史遗留的 `test_page`，实际是弹幕姬页 | 与 `dycast.py` 命名易混淆 |
+| 6 | `pages/douyin_recorder.py` | 有一处中文注释被误编码为 UTF-8 乱码 | 不影响运行 |
+| 7 | `platforms/bilibili.py` vs `bili/wbi.py` | WBI 签名有两套实现，`MIXIN_KEY_ENC_TAB` 置换表**尾部不完全一致** | 二者签名结果可能不同，但目前各自链路均可用 |
+| 8 | `tracker/config.py` | `OUTPUT_PATHS` 只有 3 个平台 | 快手/小红书记录不写入 `tracker/data/`（仍写入按账号的 xlsx） |
+| 9 | `src/music/scrapers/fivesing.py` | `get_play_url()` 在文件中定义了两次（实现相同） | 冗余代码，后者生效 |
+| 10 | `check_deps.py` | docstring 写「被 app 启动时自动调用」，实际**无调用点** | 需手动执行 `python check_deps.py` |
 
 ### 开发约定
 
