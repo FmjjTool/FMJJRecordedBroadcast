@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 
 # 回放包解压出的临时目录（recording.flv），进程退出兜底清理
@@ -229,8 +229,8 @@ class TestPage(BasePage):
             "③ 下播后若本开关仍开着，自动恢复轮询等下次开播。\n"
             "按钮旁的倒计时显示距下次重试的秒数。")
         self.poll_btn.setStyleSheet(
-            "QPushButton { padding: 2px 10px; font-size: 14px; }"
-            "QPushButton:checked { background: #e65100; color: white; }")
+            icon_btn_style(True, "font-size: 14px;")
+            + "QPushButton:checked { background: #e65100; color: white; }")
         self.poll_btn.setFixedWidth(40)
         self.poll_btn.clicked.connect(self._on_poll_toggle)
         top_l.addWidget(self.poll_btn)
@@ -255,7 +255,7 @@ class TestPage(BasePage):
         settings_btn = QPushButton("⚙")
         settings_btn.setToolTip("打开本页详细设置（轮询间隔、画质、录制、过滤等）")
         settings_btn.setFixedWidth(36)
-        settings_btn.setStyleSheet("QPushButton { font-size: 16px; }")
+        settings_btn.setStyleSheet(icon_btn_style(True, "font-size: 16px;"))
         settings_btn.clicked.connect(self._open_settings)
         top_l.addWidget(settings_btn)
         top_l.addStretch(1)
@@ -263,21 +263,21 @@ class TestPage(BasePage):
         clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
                              "保留房间号、WS 地址等配置")
         clear_btn.setFixedWidth(36)
-        clear_btn.setStyleSheet("QPushButton { font-size: 14px; }")
+        clear_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
         clear_btn.clicked.connect(self._clear_all)
         top_l.addWidget(clear_btn)
         self.disconnect_btn = QPushButton("■")
         self.disconnect_btn.setToolTip("断开当前直播连接（弹幕/礼物/点赞停止接收）")
-        self.disconnect_btn.setStyleSheet(
-            "QPushButton { background: #c62828; color: white; font-size: 16px; padding: 4px 10px; }")
+        self.disconnect_btn.setStyleSheet(icon_btn_style(
+            False, "background: #c62828; color: white; font-size: 16px;"))
         self.disconnect_btn.setFixedWidth(40)
         self.disconnect_btn.clicked.connect(self._disconnect)
         self.disconnect_btn.setEnabled(False)
         top_l.addWidget(self.disconnect_btn)
         self.connect_btn = QPushButton("▶")
         self.connect_btn.setToolTip("连接抖音直播间，开始实时抓取弹幕 / 礼物 / 点赞")
-        self.connect_btn.setStyleSheet(
-            "QPushButton { background: #2e7d32; color: white; font-size: 16px; padding: 4px 10px; }")
+        self.connect_btn.setStyleSheet(icon_btn_style(
+            False, "background: #2e7d32; color: white; font-size: 16px;"))
         self.connect_btn.setFixedWidth(40)
         self.connect_btn.clicked.connect(self._connect)
         top_l.addWidget(self.connect_btn)
@@ -574,6 +574,7 @@ class TestPage(BasePage):
         self.replay_row = QHBoxLayout()
         self.replay_btn = QPushButton("⏸")
         self.replay_btn.setFixedWidth(40)
+        self.replay_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
         self.replay_btn.clicked.connect(self._toggle_replay_pause)
         self.replay_row.addWidget(self.replay_btn)
         self.replay_slider = QSlider(Qt.Horizontal)
@@ -1456,8 +1457,8 @@ class TestPage(BasePage):
         room_clear_btn.setToolTip("清空房间号，快速输入新房间")
         room_clear_btn.setFlat(True)
         room_clear_btn.setStyleSheet(
-            "QPushButton { color: #8a919e; border: none; font-size: 14px; }"
-            "QPushButton:hover { color: #c62828; }")
+            icon_btn_style(False, "color: #8a919e; border: none; font-size: 14px;")
+            + "QPushButton:hover { color: #c62828; }")
         room_clear_btn.clicked.connect(self._clear_room_entry)
         room_clear_btn.setFocusPolicy(Qt.NoFocus)
         row1.addWidget(room_clear_btn)

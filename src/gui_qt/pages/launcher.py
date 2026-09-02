@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
+from gui_qt import common
 from gui_qt.pages.base import BasePage
 from gui_qt.process_tree import assign_job, create_kill_job, terminate_job
 
@@ -368,14 +369,14 @@ class LauncherPage(BasePage):
         b.setCursor(Qt.PointingHandCursor)
         if danger:
             b.setStyleSheet(
-                "QPushButton { background: #fdecea; color: #c62828;"
-                " border: 1px solid #f2b8b5; border-radius: 4px; font-weight: bold; }"
-                "QPushButton:hover { background: #f9d3d0; }")
+                common.icon_btn_style(True, "background: #fdecea; color: #c62828;"
+                    " border: 1px solid #f2b8b5; border-radius: 4px; font-weight: bold;")
+                + "QPushButton:hover { background: #f9d3d0; }")
         else:
             b.setStyleSheet(
-                "QPushButton { background: #ffffff; color: #2f3440;"
-                " border: 1px solid #c3cad6; border-radius: 4px; font-size: 12px; }"
-                "QPushButton:hover { background: #e9edf3; border-color: #7a8db0; }")
+                common.icon_btn_style(True, "background: #ffffff; color: #2f3440;"
+                    " border: 1px solid #c3cad6; border-radius: 4px; font-size: 12px;")
+                + "QPushButton:hover { background: #e9edf3; border-color: #7a8db0; }")
         b.clicked.connect(slot)
         return b
 

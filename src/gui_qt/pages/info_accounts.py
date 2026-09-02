@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import _collect, post_to_main, refresh_results_count, run_bg
+from gui_qt.common import _collect, icon_btn_style, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 
@@ -896,7 +896,7 @@ class InfoAccountsPage(BasePage):
                 h.addWidget(QLabel(gname), 1)
                 del_btn = QPushButton("✕")
                 del_btn.setFixedSize(30, 24)
-                del_btn.setStyleSheet("background: #c62828; color: white;")
+                del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
                 del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
                 h.addWidget(del_btn)
                 self.group_list_layout.addWidget(row)
@@ -978,19 +978,21 @@ class InfoAccountsPage(BasePage):
             # 上移/下移（直接改 accounts.txt 顺序，立即生效）
             up_btn = QPushButton("↑")
             up_btn.setFixedSize(28, 26)
+            up_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
             up_btn.setToolTip("上移一位")
             up_btn.setEnabled(i > 1)
             up_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, -1))
             h.addWidget(up_btn)
             down_btn = QPushButton("↓")
             down_btn.setFixedSize(28, 26)
+            down_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
             down_btn.setToolTip("下移一位")
             down_btn.setEnabled(i < len(accounts))
             down_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, 1))
             h.addWidget(down_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
-            del_btn.setStyleSheet("background: #c62828; color: white;")
+            del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
             del_btn.clicked.connect(lambda _=False, u=a.url: self._delete_account_row(u))
             h.addWidget(del_btn)
             self.acct_set_layout.addWidget(row)

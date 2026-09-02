@@ -1144,23 +1144,23 @@ class AssetPage(BasePage):
         redo_btn = QPushButton("↻")
         redo_btn.setFixedSize(42, 32)
         redo_btn.setToolTip("重新下载（忽略已下载状态）")
-        redo_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: #2e7d32; font-size: 15px;")
+        redo_btn.setStyleSheet(common.icon_btn_style(
+            False, "background: transparent; border: 1px solid #c8cdd6; color: #2e7d32; font-size: 15px;"))
         redo_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e, force=True))
         h.addWidget(redo_btn)
         if it.get("cover_url") and not it.get("media_files"):
             dl_btn = QPushButton("📥")
             dl_btn.setFixedSize(42, 32)
             dl_btn.setToolTip("下载封面")
-            dl_btn.setStyleSheet(
-                "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;")
+            dl_btn.setStyleSheet(common.icon_btn_style(
+                True, "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;"))
             dl_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e))
             h.addWidget(dl_btn)
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(42, 32)
         del_btn.setToolTip("删除该条目")
-        del_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;")
+        del_btn.setStyleSheet(common.icon_btn_style(
+            True, "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;"))
         del_btn.clicked.connect(lambda _=False, e=it: self._delete_item(e))
         h.addWidget(del_btn)
         self.collected_layout.addWidget(row)

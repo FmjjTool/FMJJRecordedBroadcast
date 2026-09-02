@@ -99,7 +99,7 @@ class InfoBatchPage(BasePage):
         for text, mode in (("全选", "all"), ("反选", "invert"), ("清除", "none")):
             b = QPushButton(text)
             b.setFixedSize(40, 22)
-            b.setStyleSheet("font-size: 10px;")
+            b.setStyleSheet(common.icon_btn_style(False, "font-size: 10px;"))
             b.clicked.connect(lambda _=False, m=mode: self._select_rows(m))
             list_head.addWidget(b)
         layout.addLayout(list_head)

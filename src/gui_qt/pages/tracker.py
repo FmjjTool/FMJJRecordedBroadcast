@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import run_bg
+from gui_qt.common import icon_btn_style, run_bg
 from gui_qt.pages.base import BasePage
 
 # 指标行定义：(显示名, [字段名优先级列表])
@@ -790,19 +790,21 @@ class TrackerPage(BasePage):
             # 上移/下移（直接改账号顺序，立即生效）
             up_btn = QPushButton("↑")
             up_btn.setFixedSize(28, 26)
+            up_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
             up_btn.setToolTip("上移一位")
             up_btn.setEnabled(i > 0)
             up_btn.clicked.connect(lambda _=False, idx=i: self._move_account(idx, -1))
             h.addWidget(up_btn)
             down_btn = QPushButton("↓")
             down_btn.setFixedSize(28, 26)
+            down_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
             down_btn.setToolTip("下移一位")
             down_btn.setEnabled(i < len(accounts) - 1)
             down_btn.clicked.connect(lambda _=False, idx=i: self._move_account(idx, 1))
             h.addWidget(down_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
-            del_btn.setStyleSheet("background: #c62828; color: white;")
+            del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
             del_btn.clicked.connect(lambda _=False, idx=i: self._delete_account(idx))
             h.addWidget(del_btn)
             self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
@@ -878,7 +880,7 @@ class TrackerPage(BasePage):
                 h.addWidget(QLabel(gname), 1)
                 del_btn = QPushButton("✕")
                 del_btn.setFixedSize(30, 22)
-                del_btn.setStyleSheet("background: #c62828; color: white;")
+                del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
                 del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
                 h.addWidget(del_btn)
                 self.group_list_layout.takeAt(self.group_list_layout.count() - 1)

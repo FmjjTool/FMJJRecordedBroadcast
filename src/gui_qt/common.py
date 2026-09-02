@@ -85,6 +85,21 @@ def post_to_main(fn, *args):
         _main_bridge.call.emit(fn)
 
 
+# ==================== 仅图标小按钮样式 ====================
+
+def icon_btn_style(emoji: bool = True, extra: str = "") -> str:
+    """仅图标小按钮的完整内联样式（返回值给 setStyleSheet）。
+
+    全局 QSS 给 QPushButton 设了 padding: 6px 12px —— 小尺寸按钮会被内边距
+    吃掉图标绘制区（30px 宽只剩 6px，图标被挤成一团）；且全局字体微软雅黑
+    不含 emoji 字形。emoji=True 指定 Segoe UI Emoji（真 emoji 图标）；
+    False 只清内边距（↑↓✕■▶↻ 等文本符号雅黑自带）。
+    extra 追加 color/background/border/font-size 等声明。
+    """
+    fam = 'font-family: "Segoe UI Emoji"; ' if emoji else ""
+    return f"QPushButton {{ padding: 0; {fam}{extra} }}"
+
+
 # ==================== 复选框开/关 toast ====================
 
 # 装饰性符号（emoji/警示符/变体选择符）：toast 文案里剔除，只留功能名
