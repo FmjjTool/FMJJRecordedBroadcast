@@ -139,6 +139,21 @@ class BiliInfoPage(BasePage):
         self._dyn_current = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        head = QHBoxLayout()
+        head.addWidget(QLabel("🎬 B站视频/空间/动态", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        head.addWidget(attach_help_overlay(self, "❓ 视频/空间/动态 · 功能介绍", (
+            "<p><b>B站公开信息查询与图片资源下载（四个入口）。</b></p>"
+            "<p>· <b>🎬 视频信息</b>：输入 BV/av号或视频页链接——标题/UP主/分区/发布时间/"
+            "播放·弹幕·点赞·收藏·评论·投币等数据一览，可下载封面/头像</p>"
+            "<p>· <b>👤 用户空间</b>：输入 UID 查看用户公开信息与头像等空间资源，可下载</p>"
+            "<p>· <b>📰 动态详情</b>：输入动态ID/链接（t.bilibili.com/opus），"
+            "查看动态内容并下载动态图片</p>"
+            "<p>· <b>🔍 综合搜索</b>：关键词搜B站用户与视频（WBI 签名），"
+            "结果点「查看」本页内跳转到对应详情</p>"
+            "<p>· 全部游客接口，无需登录；下载视频本体请到「信息获取」页解析后下载</p>")))
+        layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._build_video_tab(), "🎬 视频信息")

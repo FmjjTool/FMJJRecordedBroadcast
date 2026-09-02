@@ -6,9 +6,26 @@
 
 import os
 import random
+import re
 import time
 
 from toolbox.config_manager import get_export_subdir
+
+# 纯 BV号/AV号 输入（不带域名前缀）
+_BARE_BV_RE = re.compile(r"^bv([a-zA-Z0-9]{10})$", re.IGNORECASE)
+_BARE_AV_RE = re.compile(r"^av(\d+)$", re.IGNORECASE)
+
+
+def _normalize_bare_bili_id(url: str) -> str:
+    """纯 BV/AV 号 → 标准 B站视频 URL（bv 前缀大写，ID 正文保持原样）。"""
+    s = url.strip()
+    m = _BARE_BV_RE.match(s)
+    if m:
+        return f"https://www.bilibili.com/video/BV{m.group(1)}"
+    m = _BARE_AV_RE.match(s)
+    if m:
+        return f"https://www.bilibili.com/video/av{m.group(1)}"
+    return url
 
 # multi_downloader 返回的中文平台名 → 英文标识（COLLECTED / 下载目录共用英文键）
 MULTI_PLATFORM_EN = {
@@ -33,6 +50,7 @@ def parse_url_info(url: str):
     from platforms import URLRecognizer, get_parser
     from platforms.base import VideoInfo, now_str
 
+    url = _normalize_bare_bili_id(url)
     platform = URLRecognizer.recognize(url)
     parser = get_parser(platform) if platform else None
     if parser:

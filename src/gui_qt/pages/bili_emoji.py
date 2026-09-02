@@ -142,6 +142,21 @@ class BiliEmojiPage(BasePage):
         self._thumb_cache: dict[str, bytes] = {}       # URL → 图片bytes（懒加载重建表格不重复下载）
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        head = QHBoxLayout()
+        head.addWidget(QLabel("😀 B站表情包", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        head.addWidget(attach_help_overlay(self, "❓ 表情包 · 功能介绍", (
+            "<p><b>B站表情包/装扮表情资源下载（三个入口）。</b></p>"
+            "<p>· <b>🗃 全部表情包</b>：浏览B站全部表情包，按名字搜索、滚动到底自动加载更多；"
+            "点「查看」加载详情后⬇ 全部下载（表格缩略图预览，仅显示前 500，下载不受影响）</p>"
+            "<p>· <b>🆔 按ID / 装扮表情包</b>：输入表情包/装扮 ID 下载，"
+            "自动识别普通表情包 → 装扮表情 → 收藏集（命中收藏集自动跳转装扮/收藏集页）</p>"
+            "<p>· <b>📺 直播间表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
+            "附带主播头像、封面、网页+App背景图、关键帧</p>"
+            "<p>· 可选下载格式，每个 Tab 独立下载进度；表情类接口需要 B站 登录 Cookie"
+            "（侧栏「Cookie 管理」维护）</p>")))
+        layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._build_all_tab(), "🗃 全部表情包（需登录）")

@@ -42,13 +42,22 @@ class TicketsPage(BasePage):
 
         title = QLabel("🎫 票务解析")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
-        hint = QLabel("支持大麦（艺人/演出）、秀动（艺人/事件）、B站会员购（搜索/项目）链接；"
-                      "也可直接输入「封茗囧菌」这类演出名/艺人名/场馆关键词，"
-                      "B站+大麦+秀动三平台同时搜索（大麦走真实浏览器约需 20 秒）。"
-                      "勾选演出（全选/反选/清除）后点「获取选中演出详情」逐场拉取"
-                      "并下载图片（封面/海报/宣传图/座位图/嘉宾头像/场馆图）；"
-                      "「导出列表」为全量 JSON（未拉详情的自动逐场拉取+下载图片）")
+        title_row = QHBoxLayout()
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        title_row.addWidget(attach_help_overlay(self, "❓ 票务解析 · 功能介绍", (
+            "<p><b>大麦 / 秀动 / B站会员购 三平台演出检索与详情导出。</b></p>"
+            "<p>· <b>搜索</b>：粘贴平台链接（大麦艺人/演出、秀动艺人/事件、B站会员购搜索/项目），"
+            "或直接输入艺人名/演出名/场馆关键词——留空回车默认搜「封茗囧菌」，"
+            "三平台同时搜索（大麦走真实浏览器约需 20 秒）</p>"
+            "<p>· <b>表格</b>：勾选（全选/反选/清除）后点「获取选中演出详情」逐场拉取，"
+            "并下载图片（封面/海报/宣传图/座位图/嘉宾头像/场馆图，存 download/票务演出/）</p>"
+            "<p>· <b>💾 导出列表</b>：输出全量 JSON（未拉详情的自动逐场拉取+下载图片）</p>"
+            "<p>· 单件失败自动原地重试，不中断整批；导出时按勾选逐件处理并显示进度</p>"
+            "<p>· 采集链路游客优先，降低风控风险</p>")))
+        layout.addLayout(title_row)
+        hint = QLabel("支持大麦/秀动/B站会员购链接，或直接输入演出名/艺人名/场馆关键词搜索；勾选后拉详情+图片")
         hint.setStyleSheet("color: #888;")
         hint.setWordWrap(True)
         layout.addWidget(hint)

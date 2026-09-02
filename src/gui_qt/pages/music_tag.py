@@ -626,6 +626,18 @@ class MusicTagPage(BasePage):
         btn("🗑 清除标签", plain, "清空选中文件的全部标签与封面（保存后从文件删除）", self._clear_tags)
         btn("🧹 清空列表", plain, "", self._clear_list)
         row.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        row.addWidget(attach_help_overlay(self, "❓ 音乐标签 · 功能介绍", (
+            "<p><b>音频标签（Tag）查看与批量编辑：右侧文件列表 + 左侧标签表单。</b></p>"
+            "<p>· <b>加文件</b>：＋添加文件 / 📂添加文件夹（多格式：mp3/flac/m4a/ogg/wma 等）</p>"
+            "<p>· <b>表单 12 字段</b>：标题/艺术家/专辑/年份/风格/专辑艺术家/作曲/作词/"
+            "注释/音轨/碟号 + 封面 + 歌词（点「歌词」可查看编辑全文）</p>"
+            "<p>· <b>保存</b>：💾 保存选中（表单写入选中文件）/ 💾 全部保存（所有标记●的修改文件）</p>"
+            "<p>· <b>网络匹配</b>：🌐 按文件名搜索五大音源（网易云默认）选候选套用；"
+            "⚡ 批量匹配对选中文件自动取第一候选</p>"
+            "<p>· <b>📥 表格匹配</b>：导入 XLSX（标题/艺术家/专辑/年份/音轨/风格/歌词/文件名列），"
+            "自动匹配列表内歌曲批量填充</p>"
+            "<p>· 修改过的文件标记 ●，避免误保存；纯本地编辑（mutagen），不上传</p>")))
         return w
 
     def _build_body(self):

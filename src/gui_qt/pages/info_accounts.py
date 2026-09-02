@@ -98,7 +98,21 @@ class InfoAccountsPage(BasePage):
 
         title = QLabel("👥 账号获取")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        title_row.addWidget(attach_help_overlay(self, "❓ 账号获取 · 功能介绍", (
+            "<p><b>批量追踪账号主页、一键抓取最新作品/动态，结果自动存入「已获取」。</b></p>"
+            "<p>· <b>添加账号</b>：主页 URL + 账号名 + 组号（可逗号分隔绑多组）；"
+            "支持多平台（B站空间/抖音主页/微博等）</p>"
+            "<p>· <b>获取最新</b>：勾选账号后批量抓取，右下角可⏸暂停 / ✕取消；"
+            "抓取结果进入「已获取」与增量数据库</p>"
+            "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
+            "<p>· <b>⏰ 定时获取</b>：按间隔自动抓取全部账号</p>"
+            "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
+            "<p>· Cookie 统一由侧栏「Cookie 管理」维护，抓取时自动套用</p>")))
+        layout.addLayout(title_row)
         hint = QLabel("添加账号、批量抓取最新内容（结果自动存入「已获取」）")
         hint.setStyleSheet("color: #888;")
         layout.addWidget(hint)

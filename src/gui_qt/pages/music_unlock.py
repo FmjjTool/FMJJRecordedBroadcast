@@ -29,7 +29,20 @@ class MusicUnlockPage(BasePage):
 
         title = QLabel("🔓 音乐解密")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        title_row.addWidget(attach_help_overlay(self, "❓ 音乐解密 · 功能介绍", (
+            "<p><b>一键批量解密各平台加密音乐文件，输出为通用格式。</b></p>"
+            "<p>· <b>支持格式</b>：ncm（网易云）/ qmc·mflac·mgg（QQ）/ kgm（酷狗）/"
+            " vpr / kwm（酷我）/ xm（咪咕）/ tm / x2m 等加密音乐</p>"
+            "<p>· <b>操作</b>：📁 选择文件（可多选）→ 🔓 开始解密；"
+            "解密后的文件输出到全局设置的统一导出路径</p>"
+            "<p>· 全程本地解密，不上传、无需 Cookie</p>"
+            "<p>· 解密结果与失败原因实时显示在下方日志区</p>"
+            "<p>提示：解密后可到「音乐标签」页补全标签，或用「重命名」工具整理文件名</p>")))
+        layout.addLayout(title_row)
         layout.addWidget(QLabel("解密 ncm/qmc/mflac/mgg/kgm/vpr/kwm/xm/tm/x2m 等加密音乐，输出到统一导出路径",
                                 styleSheet="color: #888;"))
 

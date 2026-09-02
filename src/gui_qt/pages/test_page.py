@@ -131,6 +131,24 @@ def _cleanup_replay_tmp():
 
 
 class TestPage(BasePage):
+    # 功能介绍浮层文案（B站弹幕姬子类覆写）
+    HELP_INTRO = (
+        "<p><b>抖音直播弹幕姬：真实接入直播间，实时数据 + 录制 + 回放一体。</b></p>"
+        "<p>· <b>连接</b>：输入房间号或直播间链接（留空自动填默认房间号），▶ 连接</p>"
+        "<p>· <b>实时数据</b>：弹幕 / 礼物 / 进场 / 点赞 / 关注，主播信息卡实时刷新；"
+        "礼物打赏榜、消息类别可开关（礼物/聊天/点赞/进入/日志）</p>"
+        "<p>· <b>四种模式</b>：正常（视频+弹幕）/ 仅视频 / 仅弹幕 / 回放</p>"
+        "<p>· <b>视频与录制</b>：直播画面预览 + 画质切换；⏺ 手动录播 / 勾选自动录播；"
+        "切走页面自动断开，切回自动重连</p>"
+        "<p>· <b>🔁 轮询等开播</b>：未开播按间隔自动重试，主播开播自动接入；"
+        "下播后若开关仍开着自动恢复轮询</p>"
+        "<p>· <b>搜索</b>：弹幕区关键字/按人筛选，事件区（点赞/进入/关注/横幅/系统）独立筛选</p>"
+        "<p>· <b>保存与回放</b>：💾 保存弹幕、📊 保存统计；📦 导出/导入/合并回放包"
+        "（含时间戳与表情图标，回放模式可重演整场）；可勾选自动导出回放包</p>"
+        "<p>· <b>⚙ 设置</b>：深色模式、保持滚动、自动导出等；👁 开播监控</p>"
+        "<p>· 弹幕数据游客优先获取，不占用 Cookie，不影响电脑/手机观看直播</p>"
+    )
+
     def __init__(self, app):
         super().__init__(app)
         self.connected = False
@@ -182,7 +200,13 @@ class TestPage(BasePage):
         # 标题（子类按平台改写文案）
         self.title_lbl = QLabel("🎬 抖音弹幕 · 实时数据接入",
                                 styleSheet="font-size: 18px; font-weight: bold;")
-        outer.addWidget(self.title_lbl)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.addWidget(self.title_lbl)
+        title_row.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        title_row.addWidget(attach_help_overlay(self, "❓ 弹幕姬 · 功能介绍", self.HELP_INTRO))
+        outer.addLayout(title_row)
         self.subtitle_lbl = QLabel("真实连接抖音直播间，实时抓取弹幕 / 礼物 / 进场 / 点赞 / 关注",
                                    styleSheet="color: #888; font-size: 11px;")
         outer.addWidget(self.subtitle_lbl)

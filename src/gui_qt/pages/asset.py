@@ -237,11 +237,12 @@ def append_index(folder: str, files: list):
 
 
 class _RowWidget(QWidget):
-    """可点击行：点击任意位置触发 clicked 回调（对应原版整行 <Button-1>）。"""
+    """可点击行：点击任意位置触发 clicked 回调（对应原版整行 <Button-1>）；右键弹菜单。"""
 
-    def __init__(self, on_click, parent=None):
+    def __init__(self, on_click, on_context=None, parent=None):
         super().__init__(parent)
         self._on_click = on_click
+        self._on_context = on_context
 
     def mousePressEvent(self, event):
         # 列表刷新时行已被 deleteLater，但点击事件仍在派发队列中——直接忽略
@@ -249,6 +250,15 @@ class _RowWidget(QWidget):
             if event.button() == Qt.LeftButton and self._on_click:
                 self._on_click()
             super().mousePressEvent(event)
+        except RuntimeError:
+            pass
+
+    def contextMenuEvent(self, event):
+        try:
+            if self._on_context:
+                gp = event.globalPos()   # PySide6 返回 QPoint（个别绑定是 QPointF）
+                self._on_context(gp if isinstance(gp, QPoint) else gp.toPoint())
+            super().contextMenuEvent(event)
         except RuntimeError:
             pass
 
@@ -292,6 +302,26 @@ class AssetPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(8, 6, 8, 0)
+        head.addWidget(QLabel("🗂 资产管理", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
+            "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
+            "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
+            "支持平台/状态筛选（未下载/已下载/下载不完整）、关键词搜索、时间排序、分页浏览；"
+            "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
+            "媒体文件（存在哪项才显示哪项）</p>"
+            "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
+            "勾选后批量下载（已完整的自动跳过，大文件显示字节进度，可取消）</p>"
+            "<p>· <b>删除</b>：可选删除 json/md/xlsx/_raw/媒体文件</p>"
+            "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，右键打开链接/筛选作者）</p>"
+            "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频，缩略图懒加载预览，"
+            "支持扫描上限与增量索引</p>"
+            "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
+        layout.addLayout(head)
 
         # 顺序：已获取资源 | 数据库浏览（中间） | 本地资源
         self.tabs = QTabWidget()
@@ -1036,7 +1066,8 @@ class AssetPage(BasePage):
 
     def _render_collected_row(self, it, index):
         """渲染一行（点击弹详情窗，双击缩略图播放本地视频）。"""
-        row = _RowWidget(lambda it=it: self._show_detail(it))
+        row = _RowWidget(lambda it=it: self._show_detail(it),
+                         lambda pos, it=it: self._row_context_menu(it, pos))
         row.setStyleSheet(
             "_RowWidget { background: #ffffff; border-radius: 6px; }"
             "QLabel { background: transparent; }")
@@ -1133,6 +1164,37 @@ class AssetPage(BasePage):
         del_btn.clicked.connect(lambda _=False, e=it: self._delete_item(e))
         h.addWidget(del_btn)
         self.collected_layout.addWidget(row)
+
+    def _row_context_menu(self, it, global_pos):
+        """行右键菜单：打开本地数据文件（MD）/ 打开本地媒体文件——存在哪项才显示哪项。"""
+        menu = QMenu(self)
+        stem = os.path.splitext(it["file_path"])[0] if it.get("file_path") else ""
+        md_path = (stem + ".md") if stem else ""
+        media = [m for m in it.get("media_files", [])
+                 if m.get("path") and os.path.exists(m["path"])]
+        shown = False
+        if md_path and os.path.exists(md_path):
+            menu.addAction("📄 打开数据文件（MD）").triggered.connect(
+                lambda _=False, p=md_path: os.startfile(p))  # noqa: PTH110
+            shown = True
+        if media:
+            if len(media) == 1:
+                menu.addAction("🎬 打开媒体文件").triggered.connect(
+                    lambda _=False, p=media[0]["path"]: os.startfile(p))  # noqa: PTH110
+            else:
+                sub = menu.addMenu(f"🎬 打开媒体文件（{len(media)} 个）")
+                for m in media:
+                    icon = {"image": "🖼 ", "video": "🎬 "}.get(m.get("type"), "📄 ")
+                    name = os.path.basename(m["path"])
+                    sub.addAction(icon + name).triggered.connect(
+                        lambda _=False, p=m["path"]: os.startfile(p))  # noqa: PTH110
+                sub.addSeparator()
+                sub.addAction("📂 打开媒体所在文件夹").triggered.connect(
+                    lambda _=False: os.startfile(os.path.dirname(media[0]["path"])))  # noqa: PTH110
+            shown = True
+        if not shown:
+            menu.addAction("（该条目没有本地 MD / 媒体文件）").setEnabled(False)
+        menu.exec(global_pos)
 
     def _open_media_video(self, it):
         """双击缩略图：优先播放本地视频文件，无则打开链接。"""

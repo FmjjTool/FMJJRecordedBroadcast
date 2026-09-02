@@ -189,6 +189,22 @@ class RenameBatchPage(BasePage):
         layout.setContentsMargins(4, 4, 4, 4)
         self.setAcceptDrops(True)
 
+        head = QHBoxLayout()
+        head.addWidget(QLabel("✏️ 批量重命名", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        head.addWidget(attach_help_overlay(self, "❓ 批量重命名 · 功能介绍", (
+            "<p><b>zRenamer 风格批量重命名：八类规则叠加 + 实时预览 + 撤销。</b></p>"
+            "<p>· <b>加文件</b>：添加文件/文件夹（可包含子文件夹、支持直接拖入）；"
+            "规则实时预览新文件名，确认后才执行</p>"
+            "<p>· <b>规则标签</b>：整体（大小写/全半角/扩展名）· 替换（文本/正则）· "
+            "添加（前后缀/指定位置/关键词后）· 删除（类型/位置/关键词）· "
+            "序号（起始/增量/位数）· 模板（{名}/{序号}/{日期} 等变量）· "
+            "文本模式（逐行直接编辑新名）· 选项（忽略扩展名/同名冲突自动加序号/文件夹改名）</p>"
+            "<p>· 多规则可同时生效，叠加计算；↩ 撤销上次改名</p>"
+            "<p>· 执行前务必核对预览表「新文件名」列；冲突自动加序号防止覆盖</p>")))
+        layout.addLayout(head)
+
         # 工具栏
         bar = QHBoxLayout()
         for text, fn in [("📄 添加文件", lambda: self._add(False)), ("📂 添加文件夹", lambda: self._add(True)),

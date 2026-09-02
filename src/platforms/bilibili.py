@@ -77,6 +77,9 @@ class BilibiliParser(PlatformBase):
 
 
     def extract_id(self, url: str) -> tuple[str, str]:
+        bare = re.fullmatch(r"[bB][vV][a-zA-Z0-9]{10}", url.strip())
+        if bare:
+            return ("bvid", "BV" + url.strip()[2:])
         bv = self.BV_PATTERN.search(url)
         if bv: return ("bvid", bv.group(0))
         av = self.AV_PATTERN.search(url)

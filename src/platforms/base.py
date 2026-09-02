@@ -121,6 +121,8 @@ class URLRecognizer:
 
     PATTERNS = {
         "bilibili": [
+            r"^BV[a-zA-Z0-9]{10}$",
+            r"^av\d+$",
             r"bilibili\.com/video/(BV[a-zA-Z0-9]+)",
             r"bilibili\.com/video/av(\d+)",
             r"space\.bilibili\.com/\d+",

@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QScrollArea, QTabWidget, QTextBrowser,
+    QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -136,30 +136,27 @@ class NeteasePage(BasePage):
         except Exception:
             return {}
 
-    # 原来的「设置 Tab」帮助文字（功能说明 + 平台说明）整体搬到这里
-    # 用于在功能 Tab 顶部右侧红框中展示，并允许点击展开/收起（长文不抢视野）
-    NETEASE_HELP_TEXT = (
-        "功能说明\n\n"
-        "🎵 歌曲搜索：输入「歌名 / 歌手」关键词，可勾选下载\n"
-        "🎶 单曲解析：输入歌曲链接或 ID，展示详情 + 歌词 + 封面，可立即下载\n"
-        "📋 歌单解析：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载\n"
-        "💿 专辑解析（仅网易云）：输入专辑链接/ID 或专辑名\n\n"
-        "🔄 自动换源（默认开启）：\n"
-        "勾选后，下载失败或只拿到试听片段时，自动到其他平台\n"
-        "搜索同名曲继续下载，顺序：酷我 → 酷狗 → 网易云\n"
-        "（网易云换源需要已在 Cookie 管理中登录）\n\n"
-        "平台说明：\n"
-        "· 网易云音乐：全音质下载，VIP 歌曲需登录 Cookie\n"
-        "· 酷狗音乐：免费歌 128k 直链（游客上限即 128k）；VIP 付费歌游客无法下载\n"
-        "· 酷我音乐：免费歌 320k MP3 高音质直链，可选 128k WMA；VIP 歌仅 11 秒试听\n"
-        "· 5sing音乐：站内原唱/翻唱/伴奏 192k/128k 全曲可下\n"
-        "· QQ音乐：官方直链接口已关闭，下载靠自动换源到其他平台\n\n"
-        "提示：版权歌曲（VIP/付费）游客接口拿不到完整直链，\n"
-        "此时自动换源会尝试其他平台是否有免费版本；\n"
-        "若各平台均需付费，建议在网易云平台用已登录 Cookie 下载\n\n"
-        "网易云 Cookie 文件：netease/cookie.txt\n"
-        "下载目录：全局设置里配置的导出目录（默认 download/）\n\n"
-        "左侧底部「🍪 管理 Cookie → 网易云」可扫码登录或手动输入 Cookie"
+    # 原来的「设置 Tab」帮助文字（功能说明 + 平台说明）
+    # 改为浮层展示：点「❓ 使用说明」在按钮下方弹出，收起不占任何布局空间
+    _HELP_HTML = (
+        "<p><b>功能说明</b></p>"
+        "<p>· <b>🎵 歌曲搜索</b>：输入「歌名 / 歌手」关键词，可勾选下载</p>"
+        "<p>· <b>🎶 单曲解析</b>：输入歌曲链接或 ID，展示详情 + 歌词 + 封面，可立即下载</p>"
+        "<p>· <b>📋 歌单解析</b>：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载</p>"
+        "<p>· <b>💿 专辑解析（仅网易云）</b>：输入专辑链接/ID 或专辑名</p>"
+        "<p>· <b>🔄 自动换源（默认开启）</b>：下载失败或只拿到试听片段时，"
+        "自动到其他平台搜同名曲继续下载，顺序：酷我 → 酷狗 → 网易云"
+        "（网易云换源需已在 Cookie 管理中登录）</p>"
+        "<p><b>平台说明</b></p>"
+        "<p>· 网易云音乐：全音质下载，VIP 歌曲需登录 Cookie</p>"
+        "<p>· 酷狗音乐：免费歌 128k 直链（游客上限即 128k）；VIP 付费歌游客无法下载</p>"
+        "<p>· 酷我音乐：免费歌 320k MP3 高音质直链，可选 128k WMA；VIP 歌仅 11 秒试听</p>"
+        "<p>· 5sing音乐：站内原唱/翻唱/伴奏 192k/128k 全曲可下</p>"
+        "<p>· QQ音乐：官方直链接口已关闭，下载靠自动换源到其他平台</p>"
+        "<p style='color:#888'>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
+        "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录 Cookie 下载。"
+        "网易云 Cookie 文件：netease/cookie.txt；也可左侧底部「🍪 管理 Cookie → 网易云」"
+        "扫码登录或手动输入。下载目录：全局设置里配置的导出目录（默认 download/）</p>"
     )
 
     # ===================== 功能 tab =====================
@@ -234,73 +231,14 @@ class NeteasePage(BasePage):
         return w
 
     def _build_help_redbox(self):
-        """顶部右侧红色边框帮助区：承载原设置 Tab 的长帮助文字，默认收起。
+        """顶部右侧「❓ 使用说明」按钮：浮层面板展示完整说明。
 
-        形态：
-          - 标题行：「❓ 使用说明 ▶」可点击切换展开/收起
-          - 收起时：单行简短说明，告诉用户去哪看详情（左侧底部 Cookie 区 / 点击展开）
-          - 展开时：原设置 Tab 的完整文字在内嵌 QTextBrowser 中显示，
-                    浏览器自带滚动，不挤压主搜索区
+        展开为覆盖式浮层（不加入布局），点按钮弹出/收起——
+        不再挤压搜索区，也不会把下方界面推下去。
         """
-        box = QFrame()
-        # 红色边框明确"这是帮助说明"语义（截图里红框标注的位置就是这里）
-        box.setStyleSheet(
-            "QFrame { background: #fff7f7; border: 1.5px solid #d32f2f;"
-            " border-radius: 6px; }")
-        box.setMaximumWidth(380)
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(8, 6, 8, 6)
-        outer.setSpacing(4)
-
-        head = QHBoxLayout()
-        head_lbl = QLabel("❓ 使用说明")
-        head_lbl.setStyleSheet(
-            "color: #d32f2f; font-weight: bold; font-size: 12px; background: transparent;"
-            " border: none;")
-        head.addWidget(head_lbl)
-        head.addStretch(1)
-        self._help_toggle_btn = QPushButton("展开 ▼")
-        self._help_toggle_btn.setCursor(Qt.PointingHandCursor)
-        self._help_toggle_btn.setFixedHeight(22)
-        self._help_toggle_btn.setStyleSheet(
-            "QPushButton { background: transparent; color: #d32f2f;"
-            " border: 1px solid #d32f2f; border-radius: 3px; padding: 0 6px;"
-            " font-size: 11px; }"
-            "QPushButton:hover { background: #ffeaea; }")
-        self._help_toggle_btn.clicked.connect(self._toggle_help_box)
-        head.addWidget(self._help_toggle_btn)
-        outer.addLayout(head)
-
-        # 收起时显示的简短文案（一行就够）
-        self._help_short_lbl = QLabel(
-            "默认收起 · 点上面「展开 ▼」查看完整说明")
-        self._help_short_lbl.setStyleSheet(
-            "color: #888; font-size: 11px; background: transparent; border: none;")
-        self._help_short_lbl.setWordWrap(True)
-        outer.addWidget(self._help_short_lbl)
-
-        # 长内容（展开时显示）
-        self._help_long = QTextBrowser()
-        self._help_long.setPlainText(self.NETEASE_HELP_TEXT)
-        self._help_long.setStyleSheet(
-            "QTextBrowser { background: #ffffff; border: 1px solid #f1c0c0;"
-            " border-radius: 4px; color: #444; font-size: 12px; }")
-        self._help_long.setMinimumHeight(220)
-        self._help_long.setMaximumHeight(320)
-        self._help_long.hide()  # 默认收起
-        outer.addWidget(self._help_long)
-        return box
-
-    def _toggle_help_box(self):
-        """❓ 帮助红框：点按钮展开/收起（默认收起，避免抢搜索区视野）。"""
-        if self._help_long.isVisible():
-            self._help_long.hide()
-            self._help_short_lbl.show()
-            self._help_toggle_btn.setText("展开 ▼")
-        else:
-            self._help_long.show()
-            self._help_short_lbl.hide()
-            self._help_toggle_btn.setText("收起 ▲")
+        from gui_qt.help_overlay import attach_help_overlay
+        return attach_help_overlay(self, "❓ 使用说明", self._HELP_HTML,
+                                   btn_text="❓ 使用说明")
 
     # ===================== 自动换源勾选持久化 =====================
     @staticmethod
