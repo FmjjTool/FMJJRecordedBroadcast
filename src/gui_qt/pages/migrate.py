@@ -163,9 +163,13 @@ class MigratePage(BasePage):
 
         layout.addWidget(top_frame)
 
-        # 勾选列表 + 日志
+        # 勾选列表 + 日志：白底带边框卡片（内部容器透明，避免全局灰底盖住白底）
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
+        self.list_scroll.setStyleSheet(
+            "QScrollArea { background: #ffffff; border: 1px solid #d0d6df;"
+            " border-radius: 6px; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(2, 2, 2, 2)
@@ -235,8 +239,10 @@ class MigratePage(BasePage):
             cb.setChecked(name[:8] == today)
             cb.stateChanged.connect(self._refresh_checked_lbl)
             row = QFrame()
+            # 行加浅边框：列表区已是白底卡片，无边框的话白行会隐没在白底里
             row.setStyleSheet(
-                "QFrame { background: #ffffff; border-radius: 6px; }")
+                "QFrame { background: #ffffff; border: 1px solid #d0d6df;"
+                " border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
             h.setSpacing(8)

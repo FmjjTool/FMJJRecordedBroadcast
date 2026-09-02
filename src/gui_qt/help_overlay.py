@@ -8,12 +8,13 @@
 用法（页面构建函数内）：
     from gui_qt.help_overlay import attach_help_overlay
     btn = attach_help_overlay(self, "❓ 功能介绍", "<p>…HTML…</p>")
-    # 把 btn 加进标题行布局即可，点击在按钮下方弹出浮层面板，再点收起。
+    # 把 btn 加进标题行布局即可，点击在按钮下方弹出浮层面板。
+    # 收起方式：再点按钮 / 点「✕ 收起」/ 点击浮层外的任意区域。
 """
 
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                               QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
 
 class HelpOverlay(QFrame):
@@ -61,6 +62,10 @@ class HelpOverlay(QFrame):
 
         self.hide()
         page.installEventFilter(self)
+        # 点击浮层外的任意区域即收起（应用级过滤器：浮层/锚点按钮内部除外）
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     def set_anchor(self, btn: QWidget):
         self._anchor = btn
@@ -76,6 +81,11 @@ class HelpOverlay(QFrame):
     def close_panel(self):
         self._open = False
         self.hide()
+        if self._anchor is not None:
+            try:
+                self._anchor.setChecked(False)
+            except RuntimeError:
+                pass
 
     def _reposition(self):
         """定位到锚点按钮下方（超界自动钳回页面内）。"""
@@ -93,8 +103,15 @@ class HelpOverlay(QFrame):
         self.raise_()
 
     def eventFilter(self, obj, ev):
-        if obj is self._page and ev.type() == QEvent.Resize and self._open:
+        t = ev.type()
+        if t == QEvent.Resize and obj is self._page and self._open:
             self._reposition()
+        elif t == QEvent.MouseButtonPress and self._open:
+            # 点在浮层内部（含浏览器/滚动条/关闭按钮）或锚点按钮上：不处理，
+            # 交给各自的点击逻辑（锚点按钮靠 clicked 信号正常切换开关）
+            if (obj is not self and obj is not self._anchor
+                    and isinstance(obj, QWidget) and not self.isAncestorOf(obj)):
+                self.close_panel()
         return super().eventFilter(obj, ev)
 
 
@@ -105,7 +122,7 @@ def attach_help_overlay(page: QWidget, title: str, html: str,
     btn = QPushButton(btn_text)
     btn.setCursor(Qt.PointingHandCursor)
     btn.setCheckable(True)
-    btn.setToolTip("点击展开/收起功能介绍（浮层显示，不挤压界面）")
+    btn.setToolTip("点击展开/收起功能介绍（浮层显示，点空白处也可收起）")
     btn.setStyleSheet(
         "QPushButton { background: #fff7f7; color: #d32f2f;"
         " border: 1.5px solid #d32f2f; border-radius: 4px; padding: 3px 10px;"

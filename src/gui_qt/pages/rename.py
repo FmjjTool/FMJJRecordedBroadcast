@@ -55,6 +55,24 @@ class RenamePage(BasePage):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
+        head = QHBoxLayout()
+        head.addWidget(QLabel("✏️ 交互重命名", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        head.addWidget(attach_help_overlay(self, "❓ 交互重命名 · 使用教程", (
+            "<p><b>直播录屏视频逐条重命名为标准命名（三栏工作流）。</b></p>"
+            "<p>· <b>左栏</b>：日期文件夹 → 文件列表两级浏览，点击定位视频，"
+            "已标准命名的自动跳过（也可手动重命名）</p>"
+            "<p>· <b>中栏</b>：直播账户（单选）+ 直播类型（多选，按点击顺序编号 [N]，"
+            "数字键 1-9 快速切换）</p>"
+            "<p>· <b>右栏</b>：ffprobe 视频信息 + 无/有弹幕版本 + 平台 + "
+            "标题三模式（自动提取/手动输入/不保留）+ 预览截图 + 新文件名实时预览</p>"
+            "<p>· <b>快捷键</b>：Enter 确认重命名；Esc 跳过当前视频</p>"
+            "<p>· 可选「写入版权属性」：重命名后用 ffmpeg 把信息写进视频元数据</p>"
+            "<p>· <b>⚙️ 参数设置 Tab</b>：维护账户/类型/平台列表（上移/下移/删除/添加）、"
+            "视频后缀、匹配阈值、附加信息</p>")))
+        layout.addLayout(head)
+
         self.sub_tabs = QTabWidget()
         layout.addWidget(self.sub_tabs, 1)
         self.sub_tabs.addTab(self._build_rename_tab(), "📁 交互重命名")

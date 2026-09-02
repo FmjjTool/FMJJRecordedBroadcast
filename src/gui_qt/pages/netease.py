@@ -190,10 +190,13 @@ class NeteasePage(BasePage):
         self.input_row = QHBoxLayout()
         v.addLayout(self.input_row)
 
-        # 详情区
+        # 详情区：白底带边框卡片（内部容器透明，否则全局 QWidget 灰底会盖住白底）
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setStyleSheet("QScrollArea { background: #ffffff; border-radius: 6px; }")
+        self.detail_scroll.setStyleSheet(
+            "QScrollArea { background: #ffffff; border: 1px solid #d0d6df;"
+            " border-radius: 6px; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
         self.detail_container = QWidget()
         self.detail_layout = QVBoxLayout(self.detail_container)
         self.detail_layout.setContentsMargins(8, 8, 8, 8)
@@ -549,7 +552,7 @@ class NeteasePage(BasePage):
             return
         self.single_song = song
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         self._load_image_async(song.cover_url, 120, h)
@@ -584,7 +587,7 @@ class NeteasePage(BasePage):
         lyric = song.lyrics or ""
         if lyric:
             lyric_card = QFrame()
-            lyric_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+            lyric_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
             lv = QVBoxLayout(lyric_card)
             lv.setContentsMargins(10, 6, 10, 8)
             lv.setSpacing(2)
@@ -612,7 +615,7 @@ class NeteasePage(BasePage):
     def _render_single_song_netease(self, song):
         self.single_song_id = song.get("id")
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         pic = song.get("_picUrl") or (song.get("al") or {}).get("picUrl")
@@ -637,7 +640,7 @@ class NeteasePage(BasePage):
         lyric = song.get("_lyric", "")
         if lyric:
             lyric_card = QFrame()
-            lyric_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+            lyric_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
             lv = QVBoxLayout(lyric_card)
             lv.setContentsMargins(10, 6, 10, 8)
             lv.setSpacing(2)
@@ -672,7 +675,7 @@ class NeteasePage(BasePage):
             self._render_playlist_netease(pl)
             return
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         self._load_image_async(pl.cover_url, 96, h)
@@ -698,7 +701,7 @@ class NeteasePage(BasePage):
     def _render_playlist_netease(self, pl):
         # get_playlist_detail 返回扁平结构：{id, name, coverImgUrl, creator(str), trackCount, description, tracks}
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         pic = pl.get("coverImgUrl")
@@ -734,7 +737,7 @@ class NeteasePage(BasePage):
         songs = album.get("songs") or []
         album_info = album.get("album") or {}
         info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        info_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
         h = QHBoxLayout(info_card)
         h.setContentsMargins(10, 10, 10, 10)
         pic = album_info.get("picUrl") or album_info.get("blurPicUrl")

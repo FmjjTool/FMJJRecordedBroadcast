@@ -161,14 +161,16 @@ _SURFACE_L2D = {
     "#dfe3f8": "#2a2f45",
     "#eceefb": "#252a3d",
     "#c6ccef": "#2a3350",
-    # 绿 tint（launcher 状态卡）
+    # 绿 tint（launcher 状态卡 / 设置页依赖行）
     "#e8f5ee": "#16281c",
     "#d4eddf": "#2e5a3c",
     "#b7e0c8": "#1f3a29",
-    # 红 tint（launcher 状态卡）
+    "#f4faf6": "#1c2a20",
+    # 红 tint（launcher 状态卡 / 设置页依赖行 / 浮层 hover）
     "#fdecea": "#3a1f1f",
     "#f9d3d0": "#4a2626",
     "#f2b8b5": "#6b3230",
+    "#ffeaea": "#3a2525",
 }
 
 _TEXT_L2D = {
@@ -185,6 +187,9 @@ _TEXT_L2D = {
     # launcher 卡片文字：卡片底色会被映射成深色，文字不提亮则深字深底完全看不清
     "#3a3f6d": "#b9c2ea",   # 软件卡片深藏青 → 浅薰衣草
     "#1d5c3a": "#8fd8ae",   # 链接卡片深绿 → 浅绿
+    # 状态强调文字（设置页依赖行 / toast 之外的绿色成功标记等）：深字深底看不清，提亮
+    "#d32f2f": "#ef5350",   # 红 → 浅红（缺失标记/汇总）
+    "#2e7d32": "#81c784",   # 绿 → 浅绿（已安装标记）
 }
 
 _SURFACE_D2L = {v: k for k, v in _SURFACE_L2D.items()}
