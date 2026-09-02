@@ -337,6 +337,16 @@ def lottery_files(act_id: str, act: dict, bag: dict, lotteries: list[dict]) -> l
 
 
 class BiliGarbPage(BasePage):
+    _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
+    _tab_base = 0       # 本页第 0 个 tab 在平铺外层的起始下标
+
+    def _switch_tab(self, index: int):
+        """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
+        if self._flat_tabs is not None:
+            self._flat_tabs.setCurrentIndex(self._tab_base + index)
+        else:
+            self.tabs.setCurrentIndex(index)
+
     def __init__(self, app):
         super().__init__(app)
         self._current = None
@@ -445,13 +455,9 @@ class BiliGarbPage(BasePage):
 
     def _open_detail(self, iid, t):
         if t == "dlc_act":
-            self.tabs.setCurrentIndex(2)
-            self.lottery_entry.setText(str(iid))
-            self._load_lottery()
+            self.open_act(iid)
         else:
-            self.tabs.setCurrentIndex(1)
-            self.suit_entry.setText(str(iid))
-            self._load_suit()
+            self.open_suit(iid)
 
     # ---------- 装扮详情 ----------
     def _build_suit_tab(self):
@@ -484,12 +490,12 @@ class BiliGarbPage(BasePage):
 
     # 跨页入口：从其他页面跳转加载（先 show_page 再调用）
     def open_act(self, act_id: str):
-        self.tabs.setCurrentIndex(2)
+        self._switch_tab(2)
         self.lottery_entry.setText(str(act_id))
         self._load_lottery()
 
     def open_suit(self, iid: str):
-        self.tabs.setCurrentIndex(1)
+        self._switch_tab(1)
         self.suit_entry.setText(str(iid))
         self._load_suit()
 

@@ -59,6 +59,16 @@ def space_files(card: dict, appinfo: dict, emotes: list) -> list[dict]:
 
 
 class BiliInfoPage(BasePage):
+    _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
+    _tab_base = 0       # 本页第 0 个 tab 在平铺外层的起始下标
+
+    def _switch_tab(self, index: int):
+        """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
+        if self._flat_tabs is not None:
+            self._flat_tabs.setCurrentIndex(self._tab_base + index)
+        else:
+            self.tabs.setCurrentIndex(index)
+
     def __init__(self, app):
         super().__init__(app)
         self._space_current = None
@@ -228,7 +238,7 @@ class BiliInfoPage(BasePage):
 
     def _open_search(self, r):
         if r["t"] == "用户":
-            self.tabs.setCurrentIndex(0)
+            self._switch_tab(0)
             self.space_entry.setText(r["id"])
             self._load_space()
         else:

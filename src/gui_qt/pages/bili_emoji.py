@@ -130,6 +130,9 @@ def render_files(table: QTableWidget, info: QLabel, result: dict):
 
 
 class BiliEmojiPage(BasePage):
+    _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
+    _tab_base = 0       # 本页第 0 个 tab 在平铺外层的起始下标
+
     def __init__(self, app):
         super().__init__(app)
         self._all_current = None
@@ -162,6 +165,13 @@ class BiliEmojiPage(BasePage):
         self.tabs.addTab(self._build_all_tab(), "🗃 全部表情包（需登录）")
         self.tabs.addTab(self._build_id_tab(), "🆔 按ID / 装扮表情包")
         self.tabs.addTab(self._build_room_tab(), "📺 直播间表情")
+
+    def _switch_tab(self, index: int):
+        """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
+        if self._flat_tabs is not None:
+            self._flat_tabs.setCurrentIndex(self._tab_base + index)
+        else:
+            self.tabs.setCurrentIndex(index)
 
     # ---------- 缩略图预览 ----------
     def _preview(self, table: QTableWidget, urls: list[str], col: int = 0):
@@ -300,7 +310,7 @@ class BiliEmojiPage(BasePage):
         self.all_info.setText(f"已显示 {self._all_shown}/{len(self._all_filtered)} 个表情包（滚动到底继续加载）")
 
     def _view_normal(self, idx):
-        self.tabs.setCurrentIndex(1)
+        self._switch_tab(1)
         self.id_entry.setText(str(idx))
         self.id_suit_cb.setChecked(False)
         self._view_by_id()
