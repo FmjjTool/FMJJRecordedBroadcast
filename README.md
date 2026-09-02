@@ -272,7 +272,6 @@ PySide6/
 ├── download/                    # 运行时产出（gitignore）
 ├── logs/                        # 运行日志（gitignore，上限 50 个自动轮转）
 ├── dycast-main/                 # dycast 弹幕姬（外部 Node 项目，运行时定位）
-├── _ref/  _taobao_debug/        # 参考源码 / 调试快照（gitignore）
 └── dist/  build/                # 打包产物（gitignore）
 ```
 
