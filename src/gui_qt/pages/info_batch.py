@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import common, download_ops
-from gui_qt.common import _collect, post_to_main, refresh_results_count, run_bg
+from gui_qt.common import _collect, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 
@@ -40,6 +40,8 @@ class InfoBatchPage(BasePage):
         # 暂停门闩：set=放行 / clear=暂停（解析循环在 URL 边界等待）
         self._pause_evt = threading.Event()
         self._pause_evt.set()
+        # 取消标记：set 后未开始的 URL 直接跳过（在飞 URL 自然解析完不硬中断）
+        self._cancel_evt = threading.Event()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -65,20 +67,23 @@ class InfoBatchPage(BasePage):
         self.batch_btn = QPushButton("批量解析")
         self.batch_btn.clicked.connect(self._parse)
         btn_row.addWidget(self.batch_btn)
-        self.pause_btn = QPushButton("⏸ 暂停")
+        self.cancel_btn = icon_button(
+            "❌", "取消当前解析：未开始的 URL 直接跳过，正在解析的 URL 自然结束",
+            (40, 30), True, "font-size: 15px;", self._cancel_parse)
+        self.cancel_btn.setEnabled(False)
+        btn_row.addWidget(self.cancel_btn)
+        self.pause_btn = icon_button(
+            "⏸️", "暂停后当前 URL 解析完即停住，点「继续」恢复",
+            (40, 30), True, "font-size: 15px;", self._toggle_pause)
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setToolTip("暂停后当前 URL 解析完即停住，点「继续」恢复")
-        self.pause_btn.clicked.connect(self._toggle_pause)
         btn_row.addWidget(self.pause_btn)
-        import_btn = QPushButton("从文件导入")
-        import_btn.clicked.connect(self._import_file)
+        import_btn = icon_button("📁", "从文件导入 URL 列表", (40, 30), True, "font-size: 15px;", self._import_file)
         btn_row.addWidget(import_btn)
         btn_row.addStretch(1)
-        self.dl_btn = QPushButton("⬇ 下载勾选")
+        self.dl_btn = icon_button(
+            "⬇️", "下载勾选的条目（按所选画质）", (40, 30), True,
+            "font-size: 15px; background: #2e7d32; color: white;", self._download_checked)
         self.dl_btn.setEnabled(False)
-        self.dl_btn.setStyleSheet("background: #2e7d32; color: white;")
-        self.dl_btn.setToolTip("仅下载下方列表中勾选的条目（按所选画质）")
-        self.dl_btn.clicked.connect(self._download_checked)
         btn_row.addWidget(self.dl_btn)
         btn_row.addWidget(QLabel("画质:"))
         self.quality_sel = QComboBox()
@@ -96,11 +101,9 @@ class InfoBatchPage(BasePage):
         self.count_label.setStyleSheet("color: #1976d2;")
         list_head.addWidget(self.count_label)
         list_head.addStretch(1)
-        for text, mode in (("全选", "all"), ("反选", "invert"), ("清除", "none")):
-            b = QPushButton(text)
-            b.setFixedSize(40, 22)
-            b.setStyleSheet(common.icon_btn_style(False, "font-size: 10px;"))
-            b.clicked.connect(lambda _=False, m=mode: self._select_rows(m))
+        for text, mode, tip in (("☑️", "all", "全选"), ("🔄", "invert", "反选"), ("❌", "none", "清除选择")):
+            b = icon_button(text, tip, (32, 24), True, "font-size: 12px;",
+                            lambda _=False, m=mode: self._select_rows(m))
             list_head.addWidget(b)
         layout.addLayout(list_head)
 
@@ -133,14 +136,20 @@ class InfoBatchPage(BasePage):
     def _toggle_pause(self):
         if self._pause_evt.is_set():
             self._pause_evt.clear()
-            self.pause_btn.setText("▶ 继续")
-            self.pause_btn.setStyleSheet("background: #eab308; color: white;")
+            self.pause_btn.setText("▶️")
+            self.pause_btn.setStyleSheet(
+                "background: #eab308; color: white; border: none; border-radius: 6px; padding: 0;")
             self._log("⏸ 已暂停（当前 URL 解析完成后停住）")
         else:
             self._pause_evt.set()
-            self.pause_btn.setText("⏸ 暂停")
+            self.pause_btn.setText("⏸️")
             self.pause_btn.setStyleSheet("")
             self._log("▶ 已继续解析")
+
+    def _cancel_parse(self):
+        self._cancel_evt.set()
+        self._pause_evt.set()  # 放行暂停中的解析线程，使其能走到取消检查
+        self._log("❌ 已取消：未开始的 URL 直接跳过")
 
     def _on_quality_change(self, value):
         """清晰度改变时同步到全局（已获取/单个解析/资产管理页共用）。"""
@@ -155,15 +164,20 @@ class InfoBatchPage(BasePage):
             return
         self.batch_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(True)
+        self._cancel_evt.clear()
         self.dl_btn.setEnabled(False)
         self._set_parsed_rows([])
         self.log_text.setPlainText(f"⏳ 批量解析 {len(urls)} 个...\n")
 
         def work():
-            ok, fail = 0, 0
+            ok, fail, cancelled = 0, 0, False
             for idx, u in enumerate(urls, 1):
                 # 暂停门闩：clear 时在 URL 边界停住
                 self._pause_evt.wait()
+                if self._cancel_evt.is_set():
+                    cancelled = True
+                    break
                 prefix = f"[{idx}/{len(urls)}]"
                 try:
                     info = download_ops.parse_url_info(u)
@@ -180,20 +194,24 @@ class InfoBatchPage(BasePage):
                 else:
                     fail += 1
                     self._log(f"{prefix} ❌ {u[:70]}")
-            return ok, fail, urls
+            return ok, fail, urls, cancelled
 
         def done(result, err):
             self.batch_btn.setEnabled(True)
             self.pause_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(False)
             self._pause_evt.set()
-            self.pause_btn.setText("⏸ 暂停")
+            self.pause_btn.setText("⏸️")
             self.pause_btn.setStyleSheet("")
             if err:
                 self._log(f"❌ {err}")
                 return
-            ok, fail, urls = result
-            self._log(f"✅ 解析完成: 成功 {ok} / 失败 {fail} / 共 {len(urls)}"
-                      + ("，请勾选需要下载的条目" if ok else ""))
+            ok, fail, urls, cancelled = result
+            if cancelled:
+                self._log(f"⛔ 已取消: 已解析 成功 {ok} / 失败 {fail} / 共 {len(urls)}")
+            else:
+                self._log(f"✅ 解析完成: 成功 {ok} / 失败 {fail} / 共 {len(urls)}"
+                          + ("，请勾选需要下载的条目" if ok else ""))
             refresh_results_count(self.app)
 
         run_bg(work, done)

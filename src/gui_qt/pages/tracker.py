@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import icon_btn_style, run_bg
+from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 
 # 指标行定义：(显示名, [字段名优先级列表])
@@ -172,8 +172,7 @@ class TrackerPage(BasePage):
         self.add_group_sel = QComboBox()
         self.add_group_sel.setFixedWidth(120)
         r2.addWidget(self.add_group_sel)
-        add_btn = QPushButton("➕ 添加")
-        add_btn.clicked.connect(self._add_account)
+        add_btn = icon_button("➕", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
         r2.addWidget(add_btn)
         av.addLayout(r2)
         outer.addWidget(add_card)
@@ -189,11 +188,13 @@ class TrackerPage(BasePage):
         gv.addWidget(gh)
         self.group_list_frame = QScrollArea()
         self.group_list_frame.setWidgetResizable(True)
-        self.group_list_frame.setFixedHeight(110)
+        self.group_list_frame.setStyleSheet(
+            "QScrollArea { background: transparent; border: 1px solid #e3e7ee; border-radius: 6px; }")
         gcontainer = QWidget()
+        gcontainer.setStyleSheet("background: transparent;")
         self.group_list_layout = QVBoxLayout(gcontainer)
-        self.group_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.group_list_layout.setSpacing(2)
+        self.group_list_layout.setContentsMargins(2, 2, 2, 2)
+        self.group_list_layout.setSpacing(3)
         self.group_list_layout.addStretch(1)
         self.group_list_frame.setWidget(gcontainer)
         gv.addWidget(self.group_list_frame)
@@ -206,8 +207,7 @@ class TrackerPage(BasePage):
         self.gname_entry.setPlaceholderText("组名")
         self.gname_entry.setFixedWidth(140)
         addg.addWidget(self.gname_entry)
-        newg_btn = QPushButton("➕ 新建分组")
-        newg_btn.clicked.connect(self._add_group)
+        newg_btn = icon_button("➕", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
         addg.addWidget(newg_btn)
         addg.addStretch(1)
         gv.addLayout(addg)
@@ -754,7 +754,7 @@ class TrackerPage(BasePage):
         from tracker.accounts import load_accounts, get_groups
         accounts = load_accounts()
         groups = get_groups()
-        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in sorted(groups.items())]
+        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
         self._acc_rows = []  # (index, gsel, 初始组值)
         if not accounts:
             lbl = QLabel("（暂无账号，先在上方添加）")
@@ -788,19 +788,13 @@ class TrackerPage(BasePage):
             gsel.currentTextChanged.connect(
                 lambda _t: self._acc_save_btn.setEnabled(True))
             # 上移/下移（直接改账号顺序，立即生效）
-            up_btn = QPushButton("↑")
-            up_btn.setFixedSize(28, 26)
-            up_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
-            up_btn.setToolTip("上移一位")
+            up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;",
+                                 on_click=lambda idx=i: self._move_account(idx, -1))
             up_btn.setEnabled(i > 0)
-            up_btn.clicked.connect(lambda _=False, idx=i: self._move_account(idx, -1))
             h.addWidget(up_btn)
-            down_btn = QPushButton("↓")
-            down_btn.setFixedSize(28, 26)
-            down_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
-            down_btn.setToolTip("下移一位")
+            down_btn = icon_button("⬇️", "下移一位", (28, 26), True, "font-size: 12px;",
+                                   on_click=lambda idx=i: self._move_account(idx, 1))
             down_btn.setEnabled(i < len(accounts) - 1)
-            down_btn.clicked.connect(lambda _=False, idx=i: self._move_account(idx, 1))
             h.addWidget(down_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
@@ -849,8 +843,8 @@ class TrackerPage(BasePage):
         """刷新分组列表 + 添加账号/已配置账号的组号下拉菜单。"""
         from tracker.accounts import get_groups
         groups = get_groups()
-        # 刷新「添加账号」的组号下拉
-        opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in sorted(groups.items())]
+        # 刷新「添加账号」的组号下拉（按文件序，⬆️⬇️ 排序即调整该顺序）
+        opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
         cur = self.add_group_sel.currentText()
         self.add_group_sel.clear()
         self.add_group_sel.addItems(opts)
@@ -868,7 +862,8 @@ class TrackerPage(BasePage):
             self.group_list_layout.addWidget(lbl)
             self.group_list_layout.addStretch(1)
         else:
-            for gid, gname in sorted(groups.items()):
+            n = len(groups)
+            for pos, (gid, gname) in enumerate(groups.items()):
                 row = QFrame()
                 row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
                 h = QHBoxLayout(row)
@@ -878,6 +873,14 @@ class TrackerPage(BasePage):
                 gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2;")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
+                up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
+                up_btn.setEnabled(pos > 0)
+                up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
+                h.addWidget(up_btn)
+                down_btn = icon_button("⬇️", "下移一位", (28, 24), True, "font-size: 11px;")
+                down_btn.setEnabled(pos < n - 1)
+                down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
+                h.addWidget(down_btn)
                 del_btn = QPushButton("✕")
                 del_btn.setFixedSize(30, 22)
                 del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
@@ -888,6 +891,12 @@ class TrackerPage(BasePage):
                 self.group_list_layout.addStretch(1)
         # 刷新「已配置账号」列表（组号下拉同步新增的分组）
         self._reload_acc_list()
+
+    def _move_group(self, gid, delta):
+        from tracker.accounts import move_group
+        if move_group(gid, delta):
+            self._reload_group_list()
+            self.reload_accounts()
 
     def _add_group(self):
         gid = self.gid_entry.text().strip()

@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtWidgets import QLayout
 
 from gui_qt import common
-from gui_qt.common import _fmt, run_bg
+from gui_qt.common import _fmt, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import PLATFORM_CN, platform_cn
@@ -593,8 +593,7 @@ class AssetPage(BasePage):
         self.sort_sel.setFixedWidth(90)
         self.sort_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
         bar.addWidget(self.sort_sel)
-        refresh_btn = QPushButton("🔄 刷新")
-        refresh_btn.clicked.connect(self._refresh_collected)
+        refresh_btn = icon_button("🔄", "刷新已获取列表", (40, 30), True, "font-size: 15px;", self._refresh_collected)
         bar.addWidget(refresh_btn)
         # 批量操作：全选 + 下载所选
         self.select_all_cb = QCheckBox("全选")
@@ -2002,8 +2001,7 @@ class AssetPage(BasePage):
         self._db_search_timer.timeout.connect(self._db_reload)
         self.db_search.textChanged.connect(self._db_search_timer.start)
         bar.addWidget(self.db_search, 1)
-        refresh_btn = QPushButton("🔄 刷新")
-        refresh_btn.clicked.connect(self._db_reload_tables)
+        refresh_btn = icon_button("🔄", "刷新数据库表", (40, 30), True, "font-size: 15px;", self._db_reload_tables)
         bar.addWidget(refresh_btn)
         v.addLayout(bar)
 

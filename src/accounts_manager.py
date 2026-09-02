@@ -261,6 +261,26 @@ def delete_group(group_id: str) -> None:
         save_accounts(accounts)
 
 
+def move_group(group_id: str, delta: int) -> bool:
+    """上移/下移分组（重排 groups.json 的键顺序，列表/下拉显示顺序随之变化）。"""
+    groups = get_groups()
+    keys = list(groups.keys())
+    if group_id not in keys:
+        return False
+    idx = keys.index(group_id)
+    j = idx + (1 if delta > 0 else -1)
+    if not (0 <= j < len(keys)):
+        return False
+    keys[idx], keys[j] = keys[j], keys[idx]
+    reordered = {k: groups[k] for k in keys}
+    try:
+        with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+            json.dump(reordered, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
 def get_accounts_by_group(group_id: str) -> list[Account]:
     """获取指定组号的所有账号"""
     return [a for a in load_accounts() if group_id in a.group_ids]

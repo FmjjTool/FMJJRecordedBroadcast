@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import _collect, icon_btn_style, post_to_main, refresh_results_count, run_bg
+from gui_qt.common import _collect, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 
@@ -75,7 +75,7 @@ class InfoAccountsPage(BasePage):
         return get_groups()  # {组号: 组名}
 
     def _group_options(self):
-        return ["无分组"] + [f"{gid}:{gname}" for gid, gname in sorted(self._groups().items())]
+        return ["无分组"] + [f"{gid}:{gname}" for gid, gname in self._groups().items()]
 
     def _refresh_gid_menus(self):
         opts = self._group_options()
@@ -131,18 +131,15 @@ class InfoAccountsPage(BasePage):
         self.add_gid_entry.setPlaceholderText("组号(逗号分隔多组)")
         self.add_gid_entry.setFixedWidth(130)
         add_row.addWidget(self.add_gid_entry)
-        self.add_btn = QPushButton("➕ 添加")
-        self.add_btn.clicked.connect(self._add)
+        self.add_btn = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add)
         add_row.addWidget(self.add_btn)
         layout.addLayout(add_row)
 
         # 全选/反选/清除
         sel_bar = QHBoxLayout()
-        for text, mode in (("☑ 全选", "all"), ("🔄 反选", "invert"), ("□ 清除", "none")):
-            b = QPushButton(text)
-            b.setFixedHeight(24)
-            b.setStyleSheet("font-size: 11px;")
-            b.clicked.connect(lambda _=False, m=mode: self._acc_select(m))
+        for text, mode, tip in (("☑️", "all", "全选"), ("🔄", "invert", "反选"), ("❌", "none", "清除选择")):
+            b = icon_button(text, tip, (32, 24), True, "font-size: 12px;",
+                            lambda _=False, m=mode: self._acc_select(m))
             sel_bar.addWidget(b)
         sel_bar.addStretch(1)
         layout.addLayout(sel_bar)
@@ -175,15 +172,15 @@ class InfoAccountsPage(BasePage):
         self.fetch_btn = QPushButton("获取最新")
         self.fetch_btn.clicked.connect(self._fetch)
         op_row.addWidget(self.fetch_btn)
-        self.pause_btn = QPushButton("⏸ 暂停")
+        self.pause_btn = icon_button(
+            "⏸️", "暂停后当前账号采集完即停住，点「继续」恢复",
+            (40, 30), True, "font-size: 15px;", self._toggle_pause)
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setToolTip("暂停后当前账号采集完即停住，点「继续」恢复")
-        self.pause_btn.clicked.connect(self._toggle_pause)
         op_row.addWidget(self.pause_btn)
-        self.cancel_btn = QPushButton("✕ 取消")
+        self.cancel_btn = icon_button(
+            "❌", "取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束",
+            (40, 30), True, "font-size: 15px;", self._cancel_fetch)
         self.cancel_btn.setEnabled(False)
-        self.cancel_btn.setToolTip("取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束")
-        self.cancel_btn.clicked.connect(self._cancel_fetch)
         op_row.addWidget(self.cancel_btn)
         self.timer_btn = QPushButton("⏰ 定时获取")
         self.timer_btn.clicked.connect(self._toggle_timer)
@@ -238,18 +235,11 @@ class InfoAccountsPage(BasePage):
     def _build_settings(self, f):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(12, 12, 12, 12)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        self.set_layout = QVBoxLayout(inner)
-        self.set_layout.setContentsMargins(0, 0, 8, 0)
-        self.set_layout.setSpacing(6)
-        scroll.setWidget(inner)
-        outer.addWidget(scroll)
+        outer.setSpacing(6)
 
         title = QLabel("⚙️ 账号管理设置")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.set_layout.addWidget(title)
+        outer.addWidget(title)
 
         # 添加账号卡片
         add_card = QWidget()
@@ -275,13 +265,12 @@ class InfoAccountsPage(BasePage):
         self.set_url_entry = QLineEdit()
         self.set_url_entry.setPlaceholderText("账号主页链接（自动识别平台）")
         r2.addWidget(self.set_url_entry, 1)
-        add_btn2 = QPushButton("➕ 添加")
-        add_btn2.clicked.connect(self._add_set)
+        add_btn2 = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
         r2.addWidget(add_btn2)
         ac.addLayout(r2)
-        self.set_layout.addWidget(add_card)
+        outer.addWidget(add_card)
 
-        # 分组管理卡片
+        # 分组管理卡片（列表独立滚动，⬆⬇ 调整显示顺序）
         grp_card = QWidget()
         grp_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
         gc = QVBoxLayout(grp_card)
@@ -290,11 +279,18 @@ class InfoAccountsPage(BasePage):
         t2 = QLabel("分组管理（组编号 + 组名，组号用于绑定账号）")
         t2.setStyleSheet("font-weight: bold; background: transparent;")
         gc.addWidget(t2)
-        self.group_list_host = QWidget()
-        self.group_list_layout = QVBoxLayout(self.group_list_host)
-        self.group_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_list_frame = QScrollArea()
+        self.group_list_frame.setWidgetResizable(True)
+        self.group_list_frame.setStyleSheet(
+            "QScrollArea { background: transparent; border: 1px solid #e3e7ee; border-radius: 6px; }")
+        gcontainer = QWidget()
+        gcontainer.setStyleSheet("background: transparent;")
+        self.group_list_layout = QVBoxLayout(gcontainer)
+        self.group_list_layout.setContentsMargins(2, 2, 2, 2)
         self.group_list_layout.setSpacing(3)
-        gc.addWidget(self.group_list_host)
+        self.group_list_layout.addStretch(1)
+        self.group_list_frame.setWidget(gcontainer)
+        gc.addWidget(self.group_list_frame)
         addg = QHBoxLayout()
         self.gid_entry = QLineEdit()
         self.gid_entry.setPlaceholderText("组编号(11/22)")
@@ -304,14 +300,13 @@ class InfoAccountsPage(BasePage):
         self.gname_entry.setPlaceholderText("组名")
         self.gname_entry.setFixedWidth(140)
         addg.addWidget(self.gname_entry)
-        newg_btn = QPushButton("➕ 新建分组")
-        newg_btn.clicked.connect(self._add_group)
+        newg_btn = icon_button("➕", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
         addg.addWidget(newg_btn)
         addg.addStretch(1)
         gc.addLayout(addg)
-        self.set_layout.addWidget(grp_card)
+        outer.addWidget(grp_card)
 
-        # 已配置账号
+        # 已配置账号（列表独立滚动，底部保存栏固定不随列表滚动）
         acct_card = QWidget()
         acct_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
         acc = QVBoxLayout(acct_card)
@@ -320,13 +315,22 @@ class InfoAccountsPage(BasePage):
         t3 = QLabel("已配置账号")
         t3.setStyleSheet("font-weight: bold; background: transparent;")
         acc.addWidget(t3)
-        self.acct_set_host = QWidget()
-        self.acct_set_layout = QVBoxLayout(self.acct_set_host)
-        self.acct_set_layout.setContentsMargins(0, 0, 0, 0)
+        self.acct_set_frame = QScrollArea()
+        self.acct_set_frame.setWidgetResizable(True)
+        self.acct_set_frame.setStyleSheet(
+            "QScrollArea { background: transparent; border: 1px solid #e3e7ee; border-radius: 6px; }")
+        acontainer = QWidget()
+        acontainer.setStyleSheet("background: transparent;")
+        self.acct_set_layout = QVBoxLayout(acontainer)
+        self.acct_set_layout.setContentsMargins(2, 2, 2, 2)
         self.acct_set_layout.setSpacing(3)
-        acc.addWidget(self.acct_set_host)
-        self.set_layout.addWidget(acct_card)
-        self.set_layout.addStretch(1)
+        self.acct_set_layout.addStretch(1)
+        self.acct_set_frame.setWidget(acontainer)
+        acc.addWidget(self.acct_set_frame, 1)
+        # 底部保存栏（固定；由 _reload_account_settings 填充按钮）
+        self.acct_save_bar = QHBoxLayout()
+        acc.addLayout(self.acct_save_bar)
+        outer.addWidget(acct_card, 1)
 
     # ---------- 账号列表 ----------
     # B站采集类型标签（其他平台无此概念）
@@ -423,14 +427,15 @@ class InfoAccountsPage(BasePage):
             return
         if self._pause_evt.is_set():
             self._pause_evt.clear()
-            self.pause_btn.setText("▶ 继续")
-            self.pause_btn.setStyleSheet("background: #eab308; color: white;")
+            self.pause_btn.setText("▶️")
+            self.pause_btn.setStyleSheet(icon_btn_style(
+                True, "background: #eab308; color: white; font-size: 15px;"))
             self.log_text.append("⏸ 已暂停（当前账号采集完成后停住）")
             self.prog_label.setText("⏸ 已暂停，等待继续...")
         else:
             self._pause_evt.set()
-            self.pause_btn.setText("⏸ 暂停")
-            self.pause_btn.setStyleSheet("")
+            self.pause_btn.setText("⏸️")
+            self.pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
             self.log_text.append("▶ 已继续采集")
             self.prog_label.setText("继续采集中...")
 
@@ -453,8 +458,8 @@ class InfoAccountsPage(BasePage):
             self._cancel_evt.clear()  # 每轮获取开始前复位取消标记
         else:
             self._pause_evt.set()  # 复位门闩，避免下轮启动即处于暂停态
-            self.pause_btn.setText("⏸ 暂停")
-            self.pause_btn.setStyleSheet("")
+            self.pause_btn.setText("⏸️")
+            self.pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
 
     # ---------- 获取 ----------
     def _read_int(self, edit, default):
@@ -878,30 +883,56 @@ class InfoAccountsPage(BasePage):
     def _reload_group_list(self):
         self._refresh_gid_menus()
         _clear_layout(self.group_list_layout)
+        self.group_list_layout.addStretch(1)
         groups = self._groups()
+        n = len(groups)
         if not groups:
             lbl = QLabel("（暂无分组）")
             lbl.setStyleSheet("color: #888;")
+            self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
             self.group_list_layout.addWidget(lbl)
+            self.group_list_layout.addStretch(1)
         else:
-            for gid, gname in sorted(groups.items()):
+            gids = list(groups.keys())
+            for pos, gid in enumerate(gids):
+                gname = groups[gid]
                 row = QWidget()
                 row.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
                 h = QHBoxLayout(row)
                 h.setContentsMargins(8, 4, 6, 4)
+                h.setSpacing(4)
                 gid_lbl = QLabel(f"{gid}")
                 gid_lbl.setFixedWidth(44)
                 gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2; background: transparent;")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
-                del_btn = QPushButton("✕")
-                del_btn.setFixedSize(30, 24)
-                del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
-                del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
+                up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
+                up_btn.setEnabled(pos > 0)
+                up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
+                h.addWidget(up_btn)
+                down_btn = icon_button("⬇️", "下移一位", (28, 24), True, "font-size: 11px;")
+                down_btn.setEnabled(pos < n - 1)
+                down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
+                h.addWidget(down_btn)
+                del_btn = icon_button(
+                    "✕", "删除该分组（绑定该组的账号自动解绑）", (30, 24), False,
+                    "background: #c62828; color: white; font-size: 13px;",
+                    lambda _=False, g=gid: self._delete_group(g))
                 h.addWidget(del_btn)
+                self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
                 self.group_list_layout.addWidget(row)
+                self.group_list_layout.addStretch(1)
+        # 分组少时紧凑、多时封顶滚动（每行约 34px）
+        self.group_list_frame.setFixedHeight(min(206, max(84, n * 34 + 16)))
         # 同步刷新已配置账号列表的组号下拉
         self._reload_account_settings()
+
+    def _move_group(self, gid, delta):
+        """上移/下移分组（重排 groups.json 键顺序，立即生效）。"""
+        from accounts_manager import move_group
+        if move_group(gid, delta):
+            self._reload_group_list()
+            self.app.toast("✅ 分组顺序已更新", "success")
 
     def _add_group(self):
         gid = self.gid_entry.text().strip()
@@ -922,6 +953,7 @@ class InfoAccountsPage(BasePage):
     def _delete_group(self, gid):
         from accounts_manager import delete_group
         delete_group(gid)
+        self.app.toast(f"✅ 已删除分组 {gid}（绑定账号已解绑）", "info")
         QTimer.singleShot(150, self._reload_group_list)
         QTimer.singleShot(150, self._reload_account_list)
         QTimer.singleShot(150, self._reload_account_settings)
@@ -932,22 +964,26 @@ class InfoAccountsPage(BasePage):
         kind_options = ["", "video", "dynamic", "all"]
         kind_label = {"": "自动", "video": "[作品]", "dynamic": "[动态]", "all": "[全部]"}
         _clear_layout(self.acct_set_layout)
+        self.acct_set_layout.addStretch(1)
         self._acct_set_rows = []
         self.save_all_btn = QPushButton("💾 保存全部修改")
         self.save_all_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
         accounts = [a for a in load_accounts() if a.url]  # 过滤分组占位账号
         groups = get_groups()
-        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in sorted(groups.items())]
+        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
         if not accounts:
             lbl = QLabel("（暂无账号）")
             lbl.setStyleSheet("color: #888;")
+            self.acct_set_layout.takeAt(self.acct_set_layout.count() - 1)
             self.acct_set_layout.addWidget(lbl)
+            self.acct_set_layout.addStretch(1)
             return
         for i, a in enumerate(accounts, 1):
             row = QWidget()
             row.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 6, 4)
+            h.setSpacing(4)
             plat = URLRecognizer.recognize(a.url) or "?"
             name = a.name or ""
             info = f"{name}  [{plat}]  {a.url[:40]}" if name else f"[{plat}]  {a.url[:50]}"
@@ -976,36 +1012,31 @@ class InfoAccountsPage(BasePage):
             gsel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
             ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
             # 上移/下移（直接改 accounts.txt 顺序，立即生效）
-            up_btn = QPushButton("↑")
-            up_btn.setFixedSize(28, 26)
-            up_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
-            up_btn.setToolTip("上移一位")
+            up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;")
             up_btn.setEnabled(i > 1)
             up_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, -1))
             h.addWidget(up_btn)
-            down_btn = QPushButton("↓")
-            down_btn.setFixedSize(28, 26)
-            down_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
-            down_btn.setToolTip("下移一位")
+            down_btn = icon_button("⬇️", "下移一位", (28, 26), True, "font-size: 12px;")
             down_btn.setEnabled(i < len(accounts))
             down_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, 1))
             h.addWidget(down_btn)
-            del_btn = QPushButton("✕")
-            del_btn.setFixedSize(30, 26)
-            del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
-            del_btn.clicked.connect(lambda _=False, u=a.url: self._delete_account_row(u))
+            del_btn = icon_button(
+                "✕", "删除该账号", (30, 26), False,
+                "background: #c62828; color: white; font-size: 13px;",
+                lambda _=False, u=a.url: self._delete_account_row(u))
             h.addWidget(del_btn)
+            self.acct_set_layout.takeAt(self.acct_set_layout.count() - 1)
             self.acct_set_layout.addWidget(row)
-        # 底部统一保存按钮（替代逐行 💾）
-        bar = QHBoxLayout()
+            self.acct_set_layout.addStretch(1)
+        # 底部统一保存按钮（固定在卡片底栏，不随列表滚动）
+        _clear_layout(self.acct_save_bar)
         self.save_all_btn.setEnabled(False)
         self.save_all_btn.clicked.connect(self._save_all_account_rows)
-        bar.addWidget(self.save_all_btn)
-        bar.addStretch(1)
+        self.acct_save_bar.addWidget(self.save_all_btn)
+        self.acct_save_bar.addStretch(1)
         hint = QLabel("修改组号/采集类型后点此一次性保存")
         hint.setStyleSheet("color: #888; font-size: 11px;")
-        bar.addWidget(hint)
-        self.acct_set_layout.addLayout(bar)
+        self.acct_save_bar.addWidget(hint)
 
     @staticmethod
     def _mark_set_dirty(btn):
@@ -1014,22 +1045,25 @@ class InfoAccountsPage(BasePage):
     def _save_all_account_rows(self):
         """一次性保存所有行的组号/采集类型修改（替代逐行保存）。"""
         from accounts_manager import update_account, get_groups
-        groups = get_groups()
-        changed = 0
-        for url, gsel, ksel, orig_g, orig_k in getattr(self, "_acct_set_rows", []):
-            v = gsel.currentText()
-            gid = "" if v == "无分组" else v.split(":")[0].strip()
-            kind_rev = {"自动": "", "[作品]": "video", "[动态]": "dynamic", "[全部]": "all"}
-            kind = kind_rev.get(ksel.currentText(), "")
-            if v == orig_g and ksel.currentText() == orig_k:
-                continue  # 无变化
-            gname = groups.get(gid, "") if gid else ""
-            if update_account(url, group_id=gid, group_name=gname, kind=kind):
-                changed += 1
-        if changed:
-            self.app.toast(f"✅ 已保存 {changed} 项账号设置", "success")
-        else:
-            self.app.toast("没有需要保存的修改", "info")
+        try:
+            groups = get_groups()
+            changed = 0
+            for url, gsel, ksel, orig_g, orig_k in getattr(self, "_acct_set_rows", []):
+                v = gsel.currentText()
+                gid = "" if v == "无分组" else v.split(":")[0].strip()
+                kind_rev = {"自动": "", "[作品]": "video", "[动态]": "dynamic", "[全部]": "all"}
+                kind = kind_rev.get(ksel.currentText(), "")
+                if v == orig_g and ksel.currentText() == orig_k:
+                    continue  # 无变化
+                gname = groups.get(gid, "") if gid else ""
+                if update_account(url, group_id=gid, group_name=gname, kind=kind):
+                    changed += 1
+            if changed:
+                self.app.toast(f"✅ 已保存 {changed} 项账号设置", "success")
+            else:
+                self.app.toast("没有需要保存的修改", "info")
+        except Exception as e:
+            self.app.toast(f"❌ 保存失败：{str(e)[:60]}", "error")
         self.save_all_btn.setEnabled(False)
         QTimer.singleShot(150, self._reload_account_list)
         QTimer.singleShot(150, self._reload_account_settings)
@@ -1038,6 +1072,7 @@ class InfoAccountsPage(BasePage):
     def _delete_account_row(self, url):
         from accounts_manager import remove_account
         if remove_account(url):
+            self.app.toast("✅ 已删除该账号", "info")
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
@@ -1046,5 +1081,6 @@ class InfoAccountsPage(BasePage):
         """上移/下移已配置账号（顺序即采集顺序，保存后立即生效）。"""
         from accounts_manager import move_account
         if move_account(url, delta):
+            self.app.toast("✅ 账号顺序已更新", "success")
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)

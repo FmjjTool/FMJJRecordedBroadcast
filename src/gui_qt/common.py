@@ -100,6 +100,23 @@ def icon_btn_style(emoji: bool = True, extra: str = "") -> str:
     return f"QPushButton {{ padding: 0; {fam}{extra} }}"
 
 
+def icon_button(text, tip="", size=(30, 26), emoji=True, extra="", on_click=None):
+    """创建一个仅图标的小按钮（固定尺寸 + icon_btn_style + 悬停提示）。
+
+    统一全应用的 ⬆⬇✕☑️🔄❌📁 等行内小图标按钮；tooltip 必填场景下
+    用户无法从文字得知功能，全靠悬停提示。
+    """
+    from PySide6.QtWidgets import QPushButton
+    b = QPushButton(text)
+    b.setFixedSize(*size)
+    b.setStyleSheet(icon_btn_style(emoji, extra))
+    if tip:
+        b.setToolTip(tip)
+    if on_click:
+        b.clicked.connect(on_click)
+    return b
+
+
 # ==================== 复选框开/关 toast ====================
 
 # 装饰性符号（emoji/警示符/变体选择符）：toast 文案里剔除，只留功能名
