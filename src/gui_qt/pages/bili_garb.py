@@ -338,12 +338,12 @@ def lottery_files(act_id: str, act: dict, bag: dict, lotteries: list[dict]) -> l
 
 class BiliGarbPage(BasePage):
     _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
-    _tab_base = 0       # 本页第 0 个 tab 在平铺外层的起始下标
+    _tab_map = None     # 本页各 tab 在平铺外层的下标表（顺序交错时非连续）
 
     def _switch_tab(self, index: int):
         """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
         if self._flat_tabs is not None:
-            self._flat_tabs.setCurrentIndex(self._tab_base + index)
+            self._flat_tabs.setCurrentIndex(self._tab_map[index])
         else:
             self.tabs.setCurrentIndex(index)
 
@@ -507,7 +507,7 @@ class BiliGarbPage(BasePage):
             if parsed:
                 typ, oid = parsed
                 if typ == "lottery":  # 收藏集链接输到装扮页 → 自动跳收藏集 Tab
-                    self.suit_info.setText(f"识别到收藏集链接（act_id={oid}），已跳转收藏集活动页")
+                    self.suit_info.setText(f"识别到收藏集链接（act_id={oid}），已跳「收藏集」tab")
                     self.open_act(oid)
                     return
                 if typ == "suit":
@@ -541,7 +541,7 @@ class BiliGarbPage(BasePage):
                 return
             if result["acts"]:  # 命中收藏集 → 自动跳转
                 iid, t = result["acts"][0]
-                self.suit_info.setText(f"{iid} 是收藏集活动「{t}」（装扮接口无数据），已自动跳转收藏集页")
+                self.suit_info.setText(f"{iid} 是收藏集活动「{t}」（装扮接口无数据），已自动跳「收藏集」tab")
                 self.open_act(iid)
                 return
             self._current = result
@@ -557,7 +557,7 @@ class BiliGarbPage(BasePage):
         row = QHBoxLayout()
         row.addWidget(QLabel("活动 act_id："))
         self.lottery_entry = QLineEdit()
-        self.lottery_entry.setPlaceholderText("收藏集 act_id 或收藏集页链接（如 107423），搜索页可跳转")
+        self.lottery_entry.setPlaceholderText("收藏集 act_id 或收藏集页链接（如 107423），装扮搜索 tab 可跳转")
         self.lottery_entry.returnPressed.connect(self._load_lottery)
         row.addWidget(self.lottery_entry, 1)
         btn = QPushButton("查看")

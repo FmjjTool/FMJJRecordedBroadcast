@@ -131,7 +131,7 @@ def render_files(table: QTableWidget, info: QLabel, result: dict):
 
 class BiliEmojiPage(BasePage):
     _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
-    _tab_base = 0       # 本页第 0 个 tab 在平铺外层的起始下标
+    _tab_map = None     # 本页各 tab 在平铺外层的下标表（顺序交错时非连续）
 
     def __init__(self, app):
         super().__init__(app)
@@ -169,7 +169,7 @@ class BiliEmojiPage(BasePage):
     def _switch_tab(self, index: int):
         """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
         if self._flat_tabs is not None:
-            self._flat_tabs.setCurrentIndex(self._tab_base + index)
+            self._flat_tabs.setCurrentIndex(self._tab_map[index])
         else:
             self.tabs.setCurrentIndex(index)
 
@@ -336,7 +336,7 @@ class BiliEmojiPage(BasePage):
         row.addWidget(btn)
         v.addLayout(row)
 
-        self.id_info = QLabel("自动识别：普通表情包 → 装扮表情 → 收藏集（命中收藏集会自动跳转收藏集页）")
+        self.id_info = QLabel("自动识别：普通表情包 → 装扮表情 → 收藏集（命中收藏集会自动跳「收藏集」tab）")
         self.id_info.setStyleSheet("color:#888;")
         v.addWidget(self.id_info)
         self.id_table = QTableWidget(0, 2)
@@ -362,7 +362,7 @@ class BiliEmojiPage(BasePage):
         if parsed:
             typ, oid = parsed
             if typ == "lottery":
-                self.id_info.setText(f"识别到收藏集链接（act_id={oid}），正在跳转收藏集页……")
+                self.id_info.setText(f"识别到收藏集链接（act_id={oid}），正在跳「收藏集」tab……")
                 self._goto_garb(oid)
                 return
             if typ == "suit":
@@ -408,7 +408,7 @@ class BiliEmojiPage(BasePage):
                     if not pkgs:  # 普通包查不到 → 可能是失效装扮/收藏集 ID，逐级回退
                         try:
                             api.act_basic(idx)
-                            hints.append(f"{idx} 是收藏集活动ID，正在跳转收藏集页")
+                            hints.append(f"{idx} 是收藏集活动ID，正在跳「收藏集」tab")
                             return {"files": [], "title": idx, "act_id": idx, "hints": hints}
                         except api.BiliApiError:
                             pass

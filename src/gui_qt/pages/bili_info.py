@@ -60,12 +60,12 @@ def space_files(card: dict, appinfo: dict, emotes: list) -> list[dict]:
 
 class BiliInfoPage(BasePage):
     _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
-    _tab_base = 0       # 本页第 0 个 tab 在平铺外层的起始下标
+    _tab_map = None     # 本页各 tab 在平铺外层的下标表（顺序交错时非连续）
 
     def _switch_tab(self, index: int):
         """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
         if self._flat_tabs is not None:
-            self._flat_tabs.setCurrentIndex(self._tab_base + index)
+            self._flat_tabs.setCurrentIndex(self._tab_map[index])
         else:
             self.tabs.setCurrentIndex(index)
 
@@ -192,7 +192,7 @@ class BiliInfoPage(BasePage):
         self.search_table2.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.search_table2.setEditTriggers(QTableWidget.NoEditTriggers)
         v.addWidget(self.search_table2, 1)
-        self.search_info2 = QLabel("用户 → 本页空间页；视频 → 单个解析页（自动填入解析）")
+        self.search_info2 = QLabel("用户 → 「空间」tab；视频 → 单个解析页（自动填入解析）")
         self.search_info2.setStyleSheet("color:#888;")
         v.addWidget(self.search_info2)
         return w
