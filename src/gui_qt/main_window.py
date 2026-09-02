@@ -286,6 +286,10 @@ class MainWindow(QMainWindow):
             theme_row.addWidget(btn, 1)
         self.theme_btn = QPushButton("🌙")
         self.theme_btn.setFixedSize(30, 30)
+        # 全局 QSS 的 padding 6px 12px 会把 30px 方块的图标挤没；emoji 也不在
+        # 全局字体微软雅黑里 —— 单独清零内边距并指定 emoji 字体保证图标完整可见
+        self.theme_btn.setStyleSheet(
+            'QPushButton { padding: 0; font-size: 16px; font-family: "Segoe UI Emoji"; }')
         self.theme_btn.setToolTip("切换 浅色 / 深色 界面（自动保存）")
         self.theme_btn.clicked.connect(self._toggle_theme)
         theme_row.addWidget(self.theme_btn)
