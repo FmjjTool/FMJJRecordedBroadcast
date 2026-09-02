@@ -102,10 +102,6 @@ class ShoppingPage(BasePage):
             "本地图片路径）；未拉过详情的自动逐件拉取并下载图片")
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
-        self.cookie_btn = QPushButton("🍪 淘宝 Cookie")
-        self.cookie_btn.setToolTip("打开 Cookie 管理并定位淘宝登录入口")
-        self.cookie_btn.clicked.connect(self._open_cookie)
-        row.addWidget(self.cookie_btn)
         layout.addLayout(row)
 
         # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
@@ -217,7 +213,7 @@ class ShoppingPage(BasePage):
             self.parse_btn.setEnabled(True)
             self.status_label.setText("")
             if err:
-                self.app.toast(f"解析失败: {str(err)[:80]}", "error")
+                self._show_parse_error(err)
                 return
             shop, products = result
             self._shop = shop
@@ -237,6 +233,19 @@ class ShoppingPage(BasePage):
             self.export_btn.setEnabled(bool(products))
 
         run_bg(work, done)
+
+    def _show_parse_error(self, err):
+        """解析失败 → 状态栏显示完整原因与修复指引（toast 只做短提醒）。"""
+        msg = str(err)
+        self.status_label.setWordWrap(True)
+        if ("SESSION_EXPIRED" in msg or "登录页" in msg or "RGV587" in msg
+                or "风控" in msg or "Cookie" in msg):
+            self.status_label.setText(
+                "❌ " + msg[:300] + "  → 修复：左下角⚙️全局设置 → Cookie 管理 → 淘宝 →"
+                "「浏览器」重新登录（淘宝会话几天后过期，需定期刷新）")
+        else:
+            self.status_label.setText("❌ " + msg[:300])
+        self.app.toast("解析失败，详见页面底部状态栏", "error")
 
     def _parse_item(self, url):
         """直接解析商品链接 → 列表填 SKU 档位，右侧显示完整详情。"""
@@ -258,7 +267,7 @@ class ShoppingPage(BasePage):
             self.parse_btn.setEnabled(True)
             self.status_label.setText("")
             if err:
-                self.app.toast(f"解析失败: {str(err)[:80]}", "error")
+                self._show_parse_error(err)
                 return
             self._detail = detail
             self._products = []
@@ -760,14 +769,6 @@ class ShoppingPage(BasePage):
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl as QU
         QDesktopServices.openUrl(QU(url))
-
-    def _open_cookie(self):
-        """打开 Cookie 管理对话框（淘宝条目在列表中，浏览器登录）。"""
-        try:
-            from gui_qt.cookie_manager import CookieDialog
-            CookieDialog(self).exec()
-        except Exception:
-            self.app.toast("请从左下角「全局设置」打开 Cookie 管理登录淘宝", "info")
 
     # ==================== 导出 ====================
 
