@@ -14,7 +14,7 @@ from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
-    QPushButton, QListView, QStyledItemDelegate, QStyle,
+    QMenu, QMessageBox, QPushButton, QListView, QStyledItemDelegate, QStyle,
     QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
@@ -250,6 +250,11 @@ class InfoResultsPage(BasePage):
         dl_all_btn.setToolTip("下载三栏内全部勾选条目（一次下载三平台）")
         dl_all_btn.clicked.connect(self._download_all)
         head.addWidget(dl_all_btn)
+        del_sel_btn = QPushButton("🗑 删除所有勾选")
+        del_sel_btn.setStyleSheet("background: #c62828; color: white;")
+        del_sel_btn.setToolTip("从已获取列表移除三栏内全部勾选条目（不影响已下载的本地文件）")
+        del_sel_btn.clicked.connect(self._delete_selected)
+        head.addWidget(del_sel_btn)
         clear_btn = QPushButton("🗑 全部清空")
         clear_btn.setStyleSheet("background: #c62828; color: white;")
         clear_btn.clicked.connect(self._clear)
@@ -358,6 +363,10 @@ class InfoResultsPage(BasePage):
         lst.setItemDelegate(TagColorDelegate(lst))
         lst.itemDoubleClicked.connect(
             lambda item: self._open_url(item.data(Qt.UserRole) or ""))
+        # 右键条目：删除该条目（从已获取列表移除）
+        lst.setContextMenuPolicy(Qt.CustomContextMenu)
+        lst.customContextMenuRequested.connect(
+            lambda pos, k=key: self._row_menu(k, pos))
         self.cols[key]["list"] = lst
         v.addWidget(lst, 1)
         return col
@@ -587,3 +596,41 @@ class InfoResultsPage(BasePage):
         common.COLLECTED.clear()
         common.save_collected()
         self.refresh()
+
+    # ==================== 删除条目 ====================
+
+    def _row_menu(self, key, pos):
+        """右键条目菜单：删除该条目（从已获取列表移除，不动本地文件）。"""
+        lst = self.cols[key]["list"]
+        row = lst.indexAt(pos).row()
+        if row < 0 or row >= len(self.cols[key]["songs"]):
+            return
+        info = self.cols[key]["songs"][row]
+        menu = QMenu(self)
+        act = menu.addAction("🗑 删除该条目…")
+        if menu.exec(lst.viewport().mapToGlobal(pos)) is act:
+            self._delete_items([info])
+
+    def _delete_selected(self):
+        """删除三栏内全部勾选条目。"""
+        items = self._all_selected()
+        if not items:
+            self.app.toast("三栏均无勾选条目，请先勾选要删除的内容", "warning")
+            return
+        self._delete_items(items)
+
+    def _delete_items(self, items):
+        if not items:
+            return
+        if QMessageBox.question(
+                self, "确认删除",
+                f"从已获取列表删除 {len(items)} 个条目（不影响已下载的本地文件）：\n\n"
+                + "\n".join((i.title or "-")[:40] for i in items[:8])
+                + ("\n…等" if len(items) > 8 else ""),
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        ids = {id(i) for i in items}
+        common.COLLECTED[:] = [i for i in common.COLLECTED if id(i) not in ids]
+        common.save_collected()
+        self.refresh()
+        self.app.toast(f"已删除 {len(items)} 个条目", "success")

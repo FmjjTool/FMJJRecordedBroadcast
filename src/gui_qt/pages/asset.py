@@ -604,10 +604,6 @@ class AssetPage(BasePage):
         self.batch_dl_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.batch_dl_btn.clicked.connect(self._batch_download_checked)
         bar.addWidget(self.batch_dl_btn)
-        self.batch_del_btn = QPushButton("🗑 删除所选")
-        self.batch_del_btn.setStyleSheet("background: #c62828; color: white;")
-        self.batch_del_btn.clicked.connect(self._batch_delete_checked)
-        bar.addWidget(self.batch_del_btn)
         # 搜索框伸展吃掉剩余空间：窗口越宽搜索框越长（原固定 200px 导致右侧大片空白）
         bar.setStretchFactor(self.search_entry, 1)
         v.addLayout(bar)
@@ -1170,8 +1166,7 @@ class AssetPage(BasePage):
         self.collected_layout.addWidget(row)
 
     def _row_context_menu(self, it, global_pos):
-        """行右键菜单：打开本地数据文件（MD）/ 打开本地媒体文件——存在哪项才显示哪项；
-        底部固定提供「删除该条目」。"""
+        """行右键菜单：打开本地数据文件（MD）/ 打开本地媒体文件——存在哪项才显示哪项。"""
         menu = QMenu(self)
         stem = os.path.splitext(it["file_path"])[0] if it.get("file_path") else ""
         md_path = (stem + ".md") if stem else ""
@@ -1199,9 +1194,6 @@ class AssetPage(BasePage):
             shown = True
         if not shown:
             menu.addAction("（该条目没有本地 MD / 媒体文件）").setEnabled(False)
-        menu.addSeparator()
-        del_act = menu.addAction("🗑 删除该条目…")
-        del_act.triggered.connect(lambda _=False, e=it: self._delete_item(e))
         menu.exec(global_pos)
 
     def _open_media_video(self, it):
@@ -1371,47 +1363,6 @@ class AssetPage(BasePage):
             self._download_for_item(it, force=False, on_finished=_advance, quiet=True)
 
         _step()
-
-    def _batch_delete_checked(self):
-        """批量删除勾选条目的全部本地文件（json/md/xlsx/raw + 媒体），条目随之消失。"""
-        items = [it for it in self._collected_all_items
-                 if self._dl_key(it) in self._checked_keys]
-        if not items:
-            self.app.toast("请先勾选要删除的条目", "info")
-            return
-        # 每条目的全部关联文件（与 _delete_item 同一套推导：数据 + 媒体）
-        targets = []
-        for it in items:
-            stem = os.path.splitext(it.get("file_path", ""))[0]
-            files = [it.get("file_path", "")]
-            for ext in (".md", ".xlsx", "_raw.json"):
-                files.append(stem + ext)
-            files += [m["path"] for m in it.get("media_files", [])]
-            targets.append([f for f in files if f and os.path.exists(f)])
-        total = sum(len(fs) for fs in targets)
-        if total == 0:
-            self.app.toast("勾选的条目没有本地文件", "info")
-            return
-        if QMessageBox.question(
-                self, "确认批量删除",
-                f"将删除 {len(items)} 个条目共 {total} 个文件（含数据与媒体，不可恢复）：\n\n"
-                + "\n".join((it.get("title") or "-")[:40] for it in items[:8])
-                + ("\n…等" if len(items) > 8 else ""),
-                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-            return
-        deleted = 0
-        for fs, it in zip(targets, items):
-            for f in fs:
-                try:
-                    os.remove(f)
-                    deleted += 1
-                except Exception:
-                    pass
-            key = self._dl_key(it)
-            self._dl_state.pop(key, None)
-            self._checked_keys.discard(key)
-        self.app.toast(f"✅ 已删除 {len(items)} 个条目（{deleted} 个文件）", "success")
-        QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
 
     def _download_bilibili_item(self, it, on_finished=None, quiet=False, force=False):
         """B站分发：图文动态→图片；视频动态(AV)/BV号→视频。"""
