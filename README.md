@@ -1,10 +1,10 @@
 # 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.4** · 制作：歆慕
+> **FengMingToolbox v2.8.5** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.4>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.5>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -676,6 +676,14 @@ APP_PUBLISHER    = "歆慕"
 - Cookie 总开关可一键停用（`cookie_enabled`），停用后所有采集按游客态走
 
 ### 更新日志
+
+#### v2.8.5（2026-09-03）
+
+- **微博视频解析**：新增 `video.weibo.com/show?fid=` 播放器页链接解析（fid 是媒体对象 ID 而非微博 mid，原正则全部不匹配）——h5 播放器接口游客可用，一次拿全 1080P/720P/480P 直链、作者、封面、播放量等完整信息；同帖 `m.weibo.cn/detail` 链接的视频流兜底修复（url_objects 数据源，此前 page_info 为空拿不到视频）。
+- **资产/已获取页微博视频下载修复**：三处根因——平台路由把微博条目误入图片下载分支（只下封面不下视频）、下载构造缺 raw_data（挖不到清晰度直链）、weibocdn 直链带 Expires 签名过期。新增视频条目判定（微博/小红书/快手等统一路由视频下载）+ 下载前重解析（raw_url 不可用时 `detail/{mid}` 兜底），已获取页下载链路接入 `refresh_weibo_urls`。
+- **媒体删除与补下**：删除图片/视频后条目保留、可正常补下（视频完整判定覆盖微博等平台，此前被判"完整"遭批量跳过）；删除对话框修复独立媒体条目 file_path 误归"文本"类别，新增删光媒体后条目消失的警告。
+- **预览图导出修复**：正文行行重叠错位（`\n` 换行 + 行高度量）与 ▶/emoji 豆腐方框（emoji 正则扩展、混合字体绘制、getlength 排版步进、基线对齐）全面修复；底部水印改为「封茗囧菌数据汇总库 · 维护工具」。
+- **工程**：新增「总结此次更新」发布流程 skill（`skill/summarize-update`）：推送本地提交 → 版本号 +0.0.1 → 打包 → 更新 README → 推送 GitHub → 上传安装包到 Releases 一键完成。
 
 #### v2.8.4（2026-09-02）
 
