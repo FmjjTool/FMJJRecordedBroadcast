@@ -381,6 +381,11 @@ def download_media(
                         vurl = info.raw_data.get("stream_url") or ""
                     if vurl.startswith("//"):
                         vurl = "https:" + vurl
+                # 最后一层兜底：调用方显式传入的 video_url 本身就是直链
+                # （资产页/批量页构造的 VideoInfo 常无 raw_data，直链存于
+                # video_url；网页链接 m.weibo.cn/detail/xxx 不会命中直链判断）
+                if not vurl and _is_direct_media_url(info.video_url):
+                    vurl = info.video_url
                 if not vurl:
                     vurl = pi.get("url", "") if "weibo.com" not in (pi.get("url", "") or "") else ""
             elif plat not in ("bilibili", "B站"):

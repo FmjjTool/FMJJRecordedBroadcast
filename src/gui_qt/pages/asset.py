@@ -685,6 +685,8 @@ class AssetPage(BasePage):
                     "cover_url": data.get("封面URL", "") or "",
                     "publish_time": data.get("发布时间", "") or "",
                     "video_url": data.get("链接", "") or "",
+                    "raw_url": data.get("原始URL", "") or "",
+                    "raw_data": data.get("原始数据") if isinstance(data.get("原始数据"), dict) else {},
                     "fetched_at": data.get("获取时间", "") or "",
                     "date_part": date_part,
                     "file_path": str(path),
@@ -1528,6 +1530,7 @@ class AssetPage(BasePage):
             from media_downloader import download_media
             vurl2 = vurl
             note_images = None
+            raw_data = it.get("raw_data") or {}
             # 抖音：json 里的「链接」是采集时生成的时效直链（几天后 403），
             # 下载前用 video_id 重新解析拿新直链；图文 note 则拿到 images 下图片
             if it["platform"] == "douyin" and vid:
@@ -1541,6 +1544,20 @@ class AssetPage(BasePage):
                         vurl2 = d["video_url"]
                 except Exception:
                     pass  # 重新解析失败就用旧直链（可能已过期，下载会失败）
+            # 微博：weibocdn 直链带 Expires 签名（几天后 403），下载前用
+            # 原始URL 重新解析拿新直链 + 新 raw_data（media_downloader 微博
+            # 分支从 raw_data 挖清晰度直链，不更新会一直用过期的旧链接）
+            elif it["platform"] == "weibo" and it.get("raw_url"):
+                try:
+                    from platforms import get_parser
+                    new_info = get_parser("weibo").parse(it["raw_url"])
+                    if new_info:
+                        if new_info.video_url:
+                            vurl2 = new_info.video_url
+                        if new_info.raw_data:
+                            raw_data = new_info.raw_data
+                except Exception:
+                    pass  # 重新解析失败就用旧直链（可能已过期，下载会失败）
 
             base_dir = str(get_export_subdir("video_data"))
             info = VideoInfo(
@@ -1549,6 +1566,7 @@ class AssetPage(BasePage):
                 author=it.get("author", ""),  # 关键：让下载落到 {平台}_媒体/{作者}/ 子目录
                 video_url=vurl2, cover_url=it.get("cover_url", ""),
                 publish_time=it.get("publish_time", ""),  # 关键：让 date_str 匹配 json date_part
+                raw_data=raw_data,
                 raw_url="", fetched_at=now_str(),
             )
             # 图文 note：下图片
