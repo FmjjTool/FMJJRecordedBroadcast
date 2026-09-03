@@ -26,8 +26,13 @@ class WeiboParser(PlatformBase):
     WEIBO_CN_PATTERN = re.compile(r"weibo\.cn/([a-zA-Z0-9]+)")
     WEIBO_DETAIL_PATTERN = re.compile(r"m\.weibo\.cn/detail/([a-zA-Z0-9]+)")
     WEIBO_STATUS_PATTERN = re.compile(r"m\.weibo\.cn/status/([a-zA-Z0-9]+)")
+    # 视频播放器页（星球视频）: video.weibo.com/show?fid=1034:xxx、
+    # h5.video.weibo.com/show/1034:xxx、weibo.com/tv/show/1034:xxx
+    WEIBO_VIDEO_FID_PATTERN = re.compile(
+        r"(?:video\.weibo\.com/show\?fid=|h5\.video\.weibo\.com/show/|weibo\.com/tv/show/)(\d+:\d+)")
     STATUS_API = "https://m.weibo.cn/api/statuses/show"
     LONGTEXT_API = "https://m.weibo.cn/statuses/extend"
+    COMPONENT_API = "https://h5.video.weibo.com/api/component"
 
 
     @staticmethod
@@ -50,9 +55,22 @@ class WeiboParser(PlatformBase):
         return raw
 
 
+    @staticmethod
+    def _ensure_scheme(url: str) -> str:
+        """协议相对 URL（//xxx.sinaimg.cn/...）补 https: 前缀。"""
+        if url and url.startswith("//"):
+            return "https:" + url
+        return url or ""
+
+    @staticmethod
+    def _extract_fid(url: str) -> str:
+        """视频播放器页 fid（如 1034:5339069916577805），非播放器页返回空。"""
+        m = WeiboParser.WEIBO_VIDEO_FID_PATTERN.search(url)
+        return m.group(1) if m else ""
+
     def extract_id(self, url: str) -> str:
         for p in [self.WEIBO_DETAIL_PATTERN, self.WEIBO_STATUS_PATTERN]:
-            m = p.search(url); 
+            m = p.search(url);
             if m: return m.group(1)
         m = self.WEIBO_CN_PATTERN.search(url)
         if m: return m.group(1)
@@ -85,6 +103,86 @@ class WeiboParser(PlatformBase):
         except Exception as e:
             print(f"[微博] 页面失败: {e}")
             return None
+
+    # ========== 视频播放器页（video.weibo.com/show?fid=1034:xxx）==========
+
+    def _fetch_playinfo(self, fid: str, client: httpx.Client) -> Optional[dict]:
+        """h5 播放器页的 component 接口（游客可用）：
+        POST data={"Component_Play_Playinfo":{"oid":"1034:xxx"}}，
+        返回含真实 mid、清晰度直链（1080P/720P/480P）、作者、封面、播放量等。"""
+        try:
+            resp = client.post(
+                self.COMPONENT_API,
+                params={"page": f"/show/{fid}"},
+                content=f'data={{"Component_Play_Playinfo":{{"oid":"{fid}"}}}}',
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json, text/plain, */*",
+                    "Referer": f"https://h5.video.weibo.com/show/{fid}",
+                    "page-referer": f"/show/{fid}",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if str(data.get("code")) == "100000":
+                play = (data.get("data") or {}).get("Component_Play_Playinfo") or {}
+                if isinstance(play, dict) and (play.get("media_id") or play.get("mid")):
+                    return play
+        except Exception as e:
+            print(f"[微博] 播放器接口失败: {e}")
+        return None
+
+    @staticmethod
+    def _pick_playinfo_video_url(play: dict) -> str:
+        """playinfo.urls（清晰度标签 → mp4 直链）按 1080P > 720P > 480P 优先，
+        兜底 stream_url；均为协议相对或 http 直链。"""
+        urls = play.get("urls") or {}
+        best = ""
+        if isinstance(urls, dict) and urls:
+            best = (urls.get("高清 1080P") or urls.get("高清 720P")
+                    or urls.get("标清 480P") or next(iter(urls.values()), ""))
+        return WeiboParser._ensure_scheme(best or play.get("stream_url") or "")
+
+    def _build_playinfo_info(self, play: dict, fid: str, original_url: str) -> Optional[VideoInfo]:
+        """由 playinfo 直接构造 VideoInfo（fid 与微博 mid 不同，
+        statuses/show 对视频分享帖又常缺 page_info，playinfo 数据最全）。"""
+        clean_text = self._clean_rich(play.get("text") or "")
+        title = (clean_text.split("\n")[0].strip() if "\n" in clean_text else clean_text) \
+            or play.get("title") or ""
+        tags = [t.get("content", "") for t in (play.get("topics") or [])
+                if isinstance(t, dict) and t.get("content")]
+        try:
+            duration = int(float(play.get("duration_time") or 0))
+        except (TypeError, ValueError):
+            duration = 0
+        info = VideoInfo(
+            platform="weibo",
+            video_id=str(play.get("media_id") or fid),
+            title=title, description=clean_text,
+            author=play.get("nickname") or play.get("author") or "",
+            author_id=str(play.get("author_id") or ""),
+            author_face=self._ensure_scheme(play.get("avatar") or ""),
+            play_count=self._parse_play_count(play.get("play_count")),
+            like_count=int(play.get("attitudes_count") or 0),
+            comment_count=int(play.get("comments_count") or 0),
+            share_count=int(play.get("reposts_count") or 0),
+            duration=duration,
+            cover_url=self._ensure_scheme(play.get("cover_image") or ""),
+            video_url=self._pick_playinfo_video_url(play)
+                     or f"https://h5.video.weibo.com/show/{fid}",
+            publish_time=normalize_datetime(play.get("real_date")),
+            tags=tags,
+            category=(play.get("ip_info_str") or "").replace("发布于 ", ""),
+            raw_url=original_url, raw_data=play, fetched_at=now_str(),
+        )
+        return info if info.title or info.author else None
+
+    def _parse_from_fid(self, fid: str, original_url: str,
+                        client: httpx.Client) -> Optional[VideoInfo]:
+        play = self._fetch_playinfo(fid, client)
+        if not play:
+            return None
+        return self._build_playinfo_info(play, fid, original_url)
 
     def _fill_long_text(self, status: dict, client: httpx.Client) -> None:
         """长微博展开：时间轴/详情接口的 mblog 常只有截断 text（尾部"...全文"），
@@ -201,6 +299,28 @@ class WeiboParser(PlatformBase):
                                  or urls.get("mp4_sd_mp4", "")
                                  or next(iter(urls.values()), ""))
             if not video_url: video_url = page_info.get("url", "")
+        # 视频分享帖（超话/星球视频）：page_info 为空，视频藏在
+        # url_objects[0].object.object（stream/urls 里是 mp4 直链）
+        if not video_url:
+            for uo in status.get("url_objects") or []:
+                inner = ((uo.get("object") or {}).get("object") or {})
+                if not isinstance(inner, dict):
+                    continue
+                ou = inner.get("urls") or {}
+                if isinstance(ou, dict) and ou:
+                    video_url = (ou.get("mp4_1080p_mp4") or ou.get("mp4_720p_mp4")
+                                 or ou.get("mp4_hd_mp4") or ou.get("mp4_sd_mp4")
+                                 or next(iter(ou.values()), ""))
+                if not video_url:
+                    st = inner.get("stream") or {}
+                    if isinstance(st, dict):
+                        video_url = st.get("hd_url") or st.get("url") or ""
+                if not cover_url:
+                    img = inner.get("image") or {}
+                    if isinstance(img, dict):
+                        cover_url = img.get("url", "")
+                if video_url or cover_url:
+                    break
 
         # 提取所有图片 URL（优先 original 原图 → large → middle → url）
         pics = status.get("pics", [])
@@ -295,6 +415,9 @@ class WeiboParser(PlatformBase):
             client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
             close_client = True
         try:
+            fid = self._extract_fid(url)
+            if fid:
+                return self._parse_from_fid(fid, url, client)
             weibo_id = self.extract_id(url)
             if not weibo_id: return None
             api_result = self._parse_from_api(weibo_id, url, client)

@@ -352,6 +352,35 @@ def download_media(
                                 or urls.get("mp4_hd_mp4", "")
                                 or urls.get("mp4_sd_mp4", "")
                                 or next(iter(urls.values()), ""))
+                # 视频分享帖（超话/星球视频）：page_info 为空，视频在
+                # url_objects[0].object.object（与 m.weibo.cn 详情页同源）
+                if not vurl:
+                    for uo in info.raw_data.get("url_objects") or []:
+                        inner = ((uo.get("object") or {}).get("object") or {})
+                        if not isinstance(inner, dict):
+                            continue
+                        ou = inner.get("urls") or {}
+                        if isinstance(ou, dict) and ou:
+                            vurl = (ou.get("mp4_1080p_mp4") or ou.get("mp4_720p_mp4")
+                                    or ou.get("mp4_hd_mp4") or ou.get("mp4_sd_mp4")
+                                    or next(iter(ou.values()), ""))
+                        if not vurl:
+                            st = inner.get("stream") or {}
+                            if isinstance(st, dict):
+                                vurl = st.get("hd_url") or st.get("url") or ""
+                        if vurl:
+                            break
+                # video.weibo.com 播放器页解析：raw_data 为 h5 playinfo
+                # （urls=清晰度标签→直链 / stream_url 均在顶层，且为 // 协议相对格式）
+                if not vurl:
+                    pu = info.raw_data.get("urls") or {}
+                    if isinstance(pu, dict) and pu:
+                        vurl = (pu.get("高清 1080P") or pu.get("高清 720P")
+                                or pu.get("标清 480P") or next(iter(pu.values()), ""))
+                    if not vurl:
+                        vurl = info.raw_data.get("stream_url") or ""
+                    if vurl.startswith("//"):
+                        vurl = "https:" + vurl
                 if not vurl:
                     vurl = pi.get("url", "") if "weibo.com" not in (pi.get("url", "") or "") else ""
             elif plat not in ("bilibili", "B站"):
