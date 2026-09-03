@@ -2728,41 +2728,99 @@ class AssetPage(BasePage):
             from PIL import Image, ImageDraw, ImageFont, ImageOps
 
             _EMOJI_RE = re.compile(
-                r'[\U0001F300-\U0001F9FF'
-                r'\U00002600-\U000027BF'
-                r'\U0001F000-\U0001F02F'
-                r'\U0001F100-\U0001F1FF'
-                r'\U0001F600-\U0001F64F'
-                r'\U0001F680-\U0001F6FF'
-                r'\U0001F900-\U0001F9FF'
-                r'\u2600-\u26FF'
-                r'\u2700-\u27BF]'
+                r'[\U0001F000-\U0001FAFF'      # 各 emoji 区块（含 1FA70+ 扩展）
+                r'\U00002190-\U000021FF'       # 箭头 ←→↑↓
+                r'\U00002300-\U000023FF'       # ⏰⌚⏳ 杂项技术符号
+                r'\U000025A0-\U000025FF'       # ▶◼● 几何图形（雅黑缺字形会变方框）
+                r'\U00002600-\U000027BF'       # ☀☁❤✂ 杂项符号/装饰符号
+                r'\U00002B00-\U00002BFF'       # ⭐⬆⬇ 杂项符号与箭头
+                r'\U0000FE0E\U0000FE0F'        # 变体选择符（❤️ 等序列尾部）
+                r'\U0000200D\U000020E3]'       # 零宽连接符 / 键帽组合
             )
 
+            def _is_emoji_ch(ch):
+                return bool(_EMOJI_RE.match(ch))
+
             def _draw_mixed(d, x, y, text, color, font_main, font_emoji):
-                """绘制含 emoji 的字符串：emoji 段用 emoji 字体，普通段用主字体，返回结束 x。"""
+                """绘制含 emoji 的字符串：emoji 段用 emoji 字体，普通段用主字体，返回结束 x。
+
+                段间步进必须用 getlength（排版步进宽度）——textbbox 是墨迹
+                包围盒：空格段宽≈0、首字符带左边距时都会把后续段叠到前一段
+                上（曾致横向错位）。各段统一按 font_main 基线对齐（anchor=ls），
+                避免两种字体 ascent 不一致时 emoji 上下飘。"""
                 if not text:
                     return x
+                if isinstance(font_main, ImageFont.FreeTypeFont):
+                    baseline = y + font_main.getmetrics()[0]
+                    kw = {"anchor": "ls"}
+                else:  # 位图字体（主字体加载全部失败的兜底）不支持 anchor
+                    baseline, kw = y, {}
                 cx = x
                 seg = ""
-                cur_emoji = bool(_EMOJI_RE.match(text[0]))
+                cur_emoji = None
                 for ch in text:
-                    ie = bool(_EMOJI_RE.match(ch))
+                    ie = _is_emoji_ch(ch) and font_emoji is not None
+                    if cur_emoji is None:
+                        cur_emoji = ie
                     if ie == cur_emoji:
                         seg += ch
                     else:
                         font = font_emoji if cur_emoji else font_main
-                        d.text((cx, y), seg, fill=color, font=font)
-                        bb = d.textbbox((0, 0), seg, font=font)
-                        cx += bb[2] - bb[0]
+                        d.text((cx, baseline), seg, fill=color, font=font, **kw)
+                        cx += font.getlength(seg)
                         seg = ch
                         cur_emoji = ie
                 if seg:
                     font = font_emoji if cur_emoji else font_main
-                    d.text((cx, y), seg, fill=color, font=font)
-                    bb = d.textbbox((0, 0), seg, font=font)
-                    cx += bb[2] - bb[0]
+                    d.text((cx, baseline), seg, fill=color, font=font, **kw)
+                    cx += font.getlength(seg)
                 return cx
+
+            def _mixed_len(text, font_main, font_emoji):
+                """含 emoji 字符串的排版宽度（与 _draw_mixed 同分段规则）。"""
+                if not text:
+                    return 0.0
+                total = 0.0
+                seg = ""
+                cur_emoji = None
+                for ch in text:
+                    ie = _is_emoji_ch(ch) and font_emoji is not None
+                    if cur_emoji is None:
+                        cur_emoji = ie
+                    if ie == cur_emoji:
+                        seg += ch
+                    else:
+                        total += (font_emoji if cur_emoji else font_main).getlength(seg)
+                        seg, cur_emoji = ch, ie
+                if seg:
+                    total += (font_emoji if cur_emoji else font_main).getlength(seg)
+                return total
+
+            def _wrap_mixed(text, font_main, font_emoji, max_w):
+                """按排版宽度换行（emoji 段用 emoji 字体量宽），尊重显式 \\n 换行。
+
+                PIL 的 d.text 遇 \\n 会自动画多行，若外层按单行高度递进会行行
+                重叠——必须在此处先把 \\n 切成独立行。"""
+                lines, cur, cur_w = [], "", 0.0
+                for ch in text:
+                    if ch == "\r":
+                        continue
+                    if ch == "\n":
+                        lines.append(cur)
+                        cur, cur_w = "", 0.0
+                        continue
+                    font = (font_emoji if _is_emoji_ch(ch) and font_emoji is not None
+                            else font_main)
+                    w = font.getlength(ch)
+                    if cur_w + w > max_w and cur:
+                        lines.append(cur)
+                        cur, cur_w = ch, w
+                    else:
+                        cur += ch
+                        cur_w += w
+                if cur:
+                    lines.append(cur)
+                return lines
 
             # 中文字体（多字重）
             font_paths = ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf",
@@ -2772,20 +2830,28 @@ class AssetPage(BasePage):
             emoji_paths = ["C:/Windows/Fonts/seguiemj.ttf", "C:/Windows/Fonts/segui.ttf",
                            "C:/Windows/Fonts/AppleColorEmoji.ttf"]
             emoji_file = next((f for f in emoji_paths if os.path.exists(f)), "")
+
+            def _emoji_font_of(size):
+                """与主字体同字号的 emoji 字体（无 emoji 字体时返回 None 回退主字体）。"""
+                if not emoji_file:
+                    return None
+                try:
+                    return ImageFont.truetype(emoji_file, size)
+                except Exception:
+                    return None
+
             try:
                 f_big = ImageFont.truetype(font_file, 36)
                 f_title = ImageFont.truetype(font_file, 26)
                 f_info = ImageFont.truetype(font_file, 20)
                 f_body = ImageFont.truetype(font_file, 18)
                 f_small = ImageFont.truetype(font_file, 14)
-                if emoji_file:
-                    f_emoji = ImageFont.truetype(emoji_file, 20)
-                    f_emoji_sm = ImageFont.truetype(emoji_file, 14)
-                else:
-                    f_emoji = f_emoji_sm = f_info
             except Exception:
                 f_big = f_title = f_info = f_body = f_small = ImageFont.load_default()
-                f_emoji = f_emoji_sm = f_info
+            f_emoji = _emoji_font_of(20)        # 配 f_info
+            f_emoji_sm = _emoji_font_of(14)     # 配 f_small
+            f_emoji_body = _emoji_font_of(18)   # 配 f_body
+            f_emoji_title = _emoji_font_of(26)  # 配 f_title
 
             # ============ 布局参数 ============
             W = 720
@@ -2817,7 +2883,7 @@ class AssetPage(BasePage):
             plat_accent = {"douyin": ACCENT_RED, "weibo": ACCENT_RED, "bilibili": ACCENT_BLUE}.get(
                 item.get("platform"), ACCENT)
 
-            title = (item.get("title") or "(无标题)")[:60]
+            title = re.sub(r'[\r\n]+', ' ', item.get("title") or "(无标题)")[:60]
             author = item.get("author") or "-"
             play_count = _fmt(item.get("play_count", 0))
             like_count = _fmt(item.get("like_count", 0))
@@ -2827,31 +2893,18 @@ class AssetPage(BasePage):
             desc = (item.get("description") or "")[:300]
 
             # 标题自适应：按宽度换行（最多2行），放不下则逐级缩小字号
-            _tdraw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-
-            def _wrap_text(text, font, max_w):
-                lines, cur = [], ""
-                for ch in text:
-                    bb = _tdraw.textbbox((0, 0), cur + ch, font=font)
-                    if bb[2] - bb[0] > max_w and cur:
-                        lines.append(cur)
-                        cur = ch
-                    else:
-                        cur += ch
-                if cur:
-                    lines.append(cur)
-                return lines
-
             f_head = f_big
+            f_emoji_head = _emoji_font_of(36)
             title_lines = [title]
             for size in (36, 32, 28, 24, 20):
                 try:
                     f_try = ImageFont.truetype(font_file, size) if font_file else ImageFont.load_default()
                 except Exception:
                     f_try = ImageFont.load_default()
-                lines = _wrap_text(title, f_try, W - 2 * pad)
+                lines = _wrap_mixed(title, f_try, _emoji_font_of(size), W - 2 * pad)
                 if len(lines) <= 2:
                     f_head, title_lines = f_try, lines
+                    f_emoji_head = _emoji_font_of(size)
                     break
                 f_head, title_lines = f_try, lines
             if len(title_lines) > 2:
@@ -2860,11 +2913,11 @@ class AssetPage(BasePage):
 
             # 副标题超宽截断
             subtitle = f"@{author}  ·  {fetched}"
-            while _tdraw.textbbox((0, 0), subtitle, font=f_info)[2] > W - 2 * pad and len(subtitle) > 4:
+            while f_info.getlength(subtitle) > W - 2 * pad and len(subtitle) > 4:
                 subtitle = subtitle[:-2] + "…"
 
-            # banner 高度按标题行数自适应
-            line_h = f_head.size + 10
+            # banner 高度按标题行数自适应（ascent+descent 才是真实行高）
+            line_h = sum(f_head.getmetrics()) + 10
             title_block_h = len(title_lines) * line_h
             banner_h = max(180, 46 + title_block_h + 68)  # 顶部平台行 + 标题块 + 副标题/底条
 
@@ -2881,13 +2934,12 @@ class AssetPage(BasePage):
             _draw_mixed(bdraw, pad, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_small, f_emoji_sm)
             title_y = 42
             for tl in title_lines:
-                tl_bbox = bdraw.textbbox((0, 0), tl, font=f_head)
-                tl_w = tl_bbox[2] - tl_bbox[0]
-                bdraw.text(((W - tl_w) // 2, title_y), tl, fill=TEXT_PRIMARY, font=f_head)
+                tl_w = _mixed_len(tl, f_head, f_emoji_head)
+                _draw_mixed(bdraw, int((W - tl_w) // 2), title_y, tl,
+                            TEXT_PRIMARY, f_head, f_emoji_head)
                 title_y += line_h
             sub_y = title_y + 2
-            sub_bbox = bdraw.textbbox((0, 0), subtitle, font=f_info)
-            sub_w = sub_bbox[2] - sub_bbox[0]
+            sub_w = f_info.getlength(subtitle)
             bdraw.text(((W - sub_w) // 2, sub_y), subtitle, fill=TEXT_SECONDARY, font=f_info)
             bdraw.line([(pad, banner_h - 24), (W - pad, banner_h - 24)], fill=(255, 255, 255, 60), width=1)
             _draw_mixed(bdraw, pad, banner_h - 18, "📊 内容数据预览", TEXT_PRIMARY, f_small, f_emoji_sm)
@@ -2904,7 +2956,7 @@ class AssetPage(BasePage):
             stats_card = Image.new("RGB", (card_w, card_h), CARD_BG)
             sdraw = ImageDraw.Draw(stats_card)
 
-            _draw_mixed(sdraw, 20, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_title, f_emoji)
+            _draw_mixed(sdraw, 20, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_title, f_emoji_title)
             try:
                 tag_w = 80
                 tag_h = 22
@@ -3029,27 +3081,22 @@ class AssetPage(BasePage):
             desc_card_h = 0
             desc_card = None
             if desc:
-                lines = []
-                cur = ""
-                for ch in desc:
-                    test = cur + ch
-                    bbox = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), test, font=f_body)
-                    if (bbox[2] - bbox[0]) > (card_w - 40) and cur:
-                        lines.append(cur)
-                        cur = ch
-                    else:
-                        cur = test
-                if cur:
-                    lines.append(cur)
-                desc_card_h = max(70, 50 + len(lines) * (f_body.size + 10))
+                # 换行必须走 _wrap_mixed：①尊重显式 \n（微博正文多段，PIL
+                # d.text 遇 \n 自动画多行但外层 cy 按单行递进→行行重叠）；
+                # ②emoji 段用 emoji 字体量宽（主字体量出的是豆腐框宽度）；
+                # ③绘制走 _draw_mixed，正文里的 emoji 不再变方框
+                lines = _wrap_mixed(desc, f_body, f_emoji_body, card_w - 40)
+                body_asc, body_dsc = f_body.getmetrics()
+                line_h_body = body_asc + body_dsc + 8
+                desc_card_h = max(70, 60 + len(lines) * line_h_body)
                 desc_card = Image.new("RGB", (card_w, desc_card_h), CARD_BG)
                 ddraw = ImageDraw.Draw(desc_card)
                 _draw_mixed(ddraw, 20, 14, "📝 正文", TEXT_PRIMARY, f_info, f_emoji)
                 ddraw.line([(20, 44), (card_w - 20, 44)], fill=(60, 64, 80), width=1)
                 cy = 56
                 for line in lines:
-                    ddraw.text((20, cy), line, fill=TEXT_SECONDARY, font=f_body)
-                    cy += f_body.size + 10
+                    _draw_mixed(ddraw, 20, cy, line, TEXT_SECONDARY, f_body, f_emoji_body)
+                    cy += line_h_body
 
             # ============ 5. 拼接所有卡片 ============
             blocks = [("banner", banner), ("stats", stats_card)]
