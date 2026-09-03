@@ -75,12 +75,18 @@ git push origin main
 
 ```powershell
 $in = "protocol=https`nhost=github.com`n`n"
+$out = $in | & "C:/Users/Administrator/.workbuddy/binaries/PortableGit/versions/1.2.0/mingw64/bin/git-credential-manager.exe" get
 $tok = ""
-foreach ($l in (($in | git credential fill) -split "`n")) {
-  if ($l -match "^password=(.+)$") { $tok = $Matches[1] }
+foreach ($l in ($out -split "`n")) {
+  if ($l -match "^password=(.+)$") { $tok = $Matches[1].Trim() }
 }
 $H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json" }
 ```
+
+**执行方式注意（实测坑）**：
+- 必须把 PowerShell 代码写成 `.ps1` 文件后 `powershell -ExecutionPolicy Bypass -File xxx.ps1` 执行——不能 `powershell -Command "..."`（外层双引号会吞掉 `$` 变量），也不能 `cmd /c`（工具宿主禁用）
+- 子 PowerShell 里 `git credential fill` 包装层不工作（报 missing protocol field），必须直接调用 GCM exe（上面写法）
+- `.ps1` 文件必须**纯 ASCII**：PS 5.1 把无 BOM 的 UTF-8 脚本当 ANSI 读，中文会乱码甚至语法错误——中文内容（Release 正文等）写到单独的 UTF-8 `.txt`，脚本里用 `[IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)` 读入
 
 **a) 建本地 tag 并推送**：
 
@@ -91,15 +97,19 @@ git push origin {新版本}
 
 **b) 创建 Release**（非 draft、非 prerelease，name = tag，与历史格式一致）：
 
-```powershell
-$notes = @"
+Release 正文写到 UTF-8 文本文件（如 `_tmp_notes.txt`），格式：
+
+```
 ## 更新说明
 
 > 对比 v{上一版本}：共 N 个提交、N 个文件变更（+N / −N 行）
 
 ### 分组标题
 - 条目……（与 README 更新日志同内容）
-"@
+```
+
+```powershell
+$notes = [IO.File]::ReadAllText("<notes.txt 绝对路径>", [Text.Encoding]::UTF8)
 $json = @{
   tag_name = "{新版本}"; name = "{新版本}"
   body = $notes
@@ -111,7 +121,8 @@ $rel = Invoke-RestMethod -Method Post `
 ```
 
 - 统计头数字来自 `git log {上一tag}..HEAD --oneline | Measure-Object -Line` 和 `git diff --shortstat {上一tag}..HEAD`
-- 中文正文必须走 `UTF8.GetBytes`（PS5.1 直接传字符串会乱码）
+- JSON body 必须走 `UTF8.GetBytes`（PS5.1 直接传字符串会乱码）
+- release id 存临时文件供上传步骤用：`$rel.id | Out-File -Encoding ascii _tmp_relid.txt`
 
 **c) 上传安装包资产**：
 
