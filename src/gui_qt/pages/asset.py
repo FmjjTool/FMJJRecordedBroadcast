@@ -3119,9 +3119,8 @@ class AssetPage(BasePage):
                 y += blk.size[1] + gap
 
             # ============ 6. 底部水印 ============
-            wm = "FMJJ Tracker · 数据每小时自动更新"
-            wm_bbox = fdraw.textbbox((0, 0), wm, font=f_small)
-            fdraw.text(((W - (wm_bbox[2] - wm_bbox[0])) // 2, y + 8), wm,
+            wm = "封茗囧菌数据汇总库 · 维护工具"
+            fdraw.text(((W - f_small.getlength(wm)) // 2, y + 8), wm,
                        fill=TEXT_TERTIARY, font=f_small)
 
             # ============ 7. 保存 ============
