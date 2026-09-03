@@ -1217,10 +1217,31 @@ class AssetPage(BasePage):
         """条目的下载状态键（唯一标识一个资产）。"""
         return it.get("file_path") or it.get("video_id") or it.get("title", "")
 
+    @staticmethod
+    def _item_has_video(it) -> bool:
+        """非抖音/B站条目是否有视频源（决定路由到视频下载还是图片下载）。
+
+        微博视频条目的 video_url 常是 m.weibo.cn/detail 网页链接，
+        真直链藏在 raw_data（page_info.media_info 或 fid playinfo 顶层），
+        需静态检查 raw_data 判断；小红书/快手等平台 video_url 已是直链。
+        """
+        from media_downloader import _is_direct_media_url
+        if _is_direct_media_url(it.get("video_url") or ""):
+            return True
+        raw = it.get("raw_data") or {}
+        if not isinstance(raw, dict):
+            return False
+        mi = (raw.get("page_info") or {}).get("media_info") or {}
+        if isinstance(mi, dict) and (mi.get("stream_url") or mi.get("stream_url_hd")):
+            return True
+        if isinstance(raw.get("urls"), dict) and raw.get("urls"):
+            return True  # fid 条目的 h5 playinfo（清晰度标签 → 直链）
+        return bool(raw.get("stream_url"))
+
     def _item_media_complete(self, it) -> bool:
         """本地媒体是否已完整（批量下载跳过判定）。
 
-        视频条目（抖音视频/B站视频动态）有本地视频即完整；
+        视频条目（抖音视频/B站视频动态/微博等平台视频）有本地视频即完整；
         图文条目本地图片数达到 raw json 里的预期图数即完整
         （live 图视频计入媒体但不参与图片计数，缺图时下载会自动跳过已有文件只补缺）；
         纯文本/独立媒体条目本身已有文件，视为完整。
@@ -1234,6 +1255,7 @@ class AssetPage(BasePage):
             (plat == "douyin" and bool(vid))
             or (plat == "bilibili" and bool(vid) and not vid.startswith("dyn_"))
             or dtype == "av"
+            or (plat not in ("douyin", "bilibili") and self._item_has_video(it))
         )
         if is_video_item:
             if not any(m["type"] == "video" for m in mfs):
@@ -1277,7 +1299,9 @@ class AssetPage(BasePage):
         plat = it.get("platform", "")
         if plat == "bilibili":
             self._download_bilibili_item(it, on_finished=on_finished, quiet=quiet, force=force)
-        elif plat == "douyin":
+        elif plat == "douyin" or (plat not in ("bilibili",) and self._item_has_video(it)):
+            # 视频条目统一走视频下载（微博视频/小红书/快手等直链平台）；
+            # 微博视频曾误入图片分支（download_videos=False）→ 只下封面不下视频
             self._download_video_item(it, on_finished=on_finished, quiet=quiet)
         else:
             self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
@@ -1544,20 +1568,32 @@ class AssetPage(BasePage):
                         vurl2 = d["video_url"]
                 except Exception:
                     pass  # 重新解析失败就用旧直链（可能已过期，下载会失败）
-            # 微博：weibocdn 直链带 Expires 签名（几天后 403），下载前用
-            # 原始URL 重新解析拿新直链 + 新 raw_data（media_downloader 微博
-            # 分支从 raw_data 挖清晰度直链，不更新会一直用过期的旧链接）
-            elif it["platform"] == "weibo" and it.get("raw_url"):
-                try:
-                    from platforms import get_parser
-                    new_info = get_parser("weibo").parse(it["raw_url"])
-                    if new_info:
-                        if new_info.video_url:
+            # 微博：weibocdn 直链带 Expires 签名（几天后 403），下载前重新
+            # 解析拿新直链 + 新 raw_data（media_downloader 微博分支从 raw_data
+            # 挖清晰度直链，不更新会一直用过期的旧链接）。候选链接依次尝试：
+            # 原始URL（fid 播放器页/详情页链接）→ detail/{video_id}（时间线
+            # 批量采集的条目 raw_url 常是用户主页链接，解析不了单条，video_id
+            # 才是微博 mid）
+            elif it["platform"] == "weibo":
+                from platforms import get_parser
+                parser = get_parser("weibo")
+                ru = it.get("raw_url") or ""
+                candidates = []
+                if ru and any(k in ru for k in
+                              ("fid=", "/detail/", "/status/", "/tv/show/", "h5.video.weibo.com")):
+                    candidates.append(ru)
+                if vid and vid.isdigit():
+                    candidates.append(f"https://m.weibo.cn/detail/{vid}")
+                for u in candidates:
+                    try:
+                        new_info = parser.parse(u)
+                        if new_info and new_info.video_url:
                             vurl2 = new_info.video_url
-                        if new_info.raw_data:
-                            raw_data = new_info.raw_data
-                except Exception:
-                    pass  # 重新解析失败就用旧直链（可能已过期，下载会失败）
+                            if new_info.raw_data:
+                                raw_data = new_info.raw_data
+                            break
+                    except Exception:
+                        continue
 
             base_dir = str(get_export_subdir("video_data"))
             info = VideoInfo(
@@ -1629,8 +1665,11 @@ class AssetPage(BasePage):
 
     def _delete_item(self, it):
         """删除当前资产：按类别选择（图片/视频/文本/全部）。"""
-        stem = os.path.splitext(it.get("file_path", ""))[0]
-        doc_files = [it.get("file_path", "")]
+        fp = it.get("file_path", "")
+        stem = os.path.splitext(fp)[0]
+        # 文本文件只认 json/md/xlsx 本体（独立媒体条目的 file_path 是媒体
+        # 文件本身，绝不能归入"文本"类别——否则勾"文本"实际删的是图片/视频）
+        doc_files = [fp] if fp.lower().endswith((".json", ".md", ".xlsx")) else []
         for ext in (".md", ".xlsx", "_raw.json"):
             cand = stem + ext
             if os.path.exists(cand):
@@ -1707,11 +1746,18 @@ class AssetPage(BasePage):
         if not targets:
             self.app.toast("未选择任何类别", "info")
             return
+        # 保留的媒体（未勾选删除的类别）；独立媒体条目无数据文件，
+        # 删光全部媒体后条目将从列表消失且无法补下
+        remaining = (len(img_files) if not cb_img.isChecked() else 0) \
+            + (len(vid_files) if not cb_vid.isChecked() else 0)
+        vanish_warn = ("\n\n⚠ 该条目无数据文件（json），删除全部媒体后条目将从列表消失！"
+                       if not doc_files and remaining == 0 and (img_files or vid_files) else "")
         if QMessageBox.question(
                 self, "确认删除",
                 f"将删除 {len(targets)} 个文件：\n\n"
                 + "\n".join(os.path.basename(f) for f in targets[:10])
-                + ("\n…等" if len(targets) > 10 else ""),
+                + ("\n…等" if len(targets) > 10 else "")
+                + vanish_warn,
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         deleted = 0

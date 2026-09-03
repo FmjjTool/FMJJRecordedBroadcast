@@ -132,6 +132,39 @@ def refresh_douyin_urls(items, quality):
             pass
 
 
+def refresh_weibo_urls(items):
+    """微博条目重新解析拿新直链（weibocdn 直链带 Expires 签名，几天后 403）。
+
+    候选链接依次尝试：raw_url（fid 播放器页/详情页链接；时间线批量采集的
+    raw_url 常是用户主页链接，不可用）→ detail/{video_id}（video_id 是微博 mid）。
+    成功则同步更新 raw_data（media_downloader 微博分支从 raw_data 挖清晰度直链）。
+    """
+    weibo_items = [i for i in items if getattr(i, "platform", "") == "weibo"]
+    if not weibo_items:
+        return
+    from platforms import get_parser
+    parser = get_parser("weibo")
+    for info in weibo_items:
+        ru = getattr(info, "raw_url", "") or ""
+        candidates = []
+        if ru and any(k in ru for k in
+                      ("fid=", "/detail/", "/status/", "/tv/show/", "h5.video.weibo.com")):
+            candidates.append(ru)
+        vid = str(getattr(info, "video_id", "") or "")
+        if vid.isdigit():
+            candidates.append(f"https://m.weibo.cn/detail/{vid}")
+        for u in candidates:
+            try:
+                new = parser.parse(u)
+                if new and new.video_url:
+                    info.video_url = new.video_url
+                    if new.raw_data:
+                        info.raw_data = new.raw_data
+                    break
+            except Exception:
+                continue
+
+
 def get_bilibili_cookie():
     try:
         from auth import get_cookie
