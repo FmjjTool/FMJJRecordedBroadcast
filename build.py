@@ -36,6 +36,7 @@ ADD_DATA = [
     ("src/toolbox/a_bogus.js", "toolbox"),
     ("src/toolbox/abogus_cli.js", "toolbox"),
     ("src/toolbox/_unlock_keys.json", "toolbox"),
+    ("src/skills", "skills"),  # 内置 AI Skill（设置页「下载 Skill」导出用）
 ]
 
 # dist 中禁止出现的隐私/本机数据（文件名 / 目录名）

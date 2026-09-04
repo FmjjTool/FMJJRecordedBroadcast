@@ -20,6 +20,7 @@ from toolbox.config_manager import (
     has_date_subfolders, save_convert_config, set_export_dir, set_ffmpeg_path,
     set_work_dir,
 )
+from toolbox.skills import list_skills, skill_total_size_text
 from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
 
 from gui_qt.common import run_bg
@@ -170,6 +171,23 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(self.dependency_frame)
         # 后台填充检测结果（避免构造时阻塞）
         QTimer.singleShot(0, self._refresh_dependencies)
+
+        v.addSpacing(12)
+
+        # ---- AI Skill 下载（内置 Skill 导出到本地，供 AI 助手使用） ----
+        v.addWidget(self._card_title("🤖 AI Skill 下载（导出内置 Skill 到本地）"))
+        skill_row = QHBoxLayout()
+        self._skill_list = list_skills()
+        skill_count = len(self._skill_list)
+        names = "、".join(m["display_name"] for m in self._skill_list) or "无"
+        skill_info = QLabel(
+            f"内置 {skill_count} 个 Skill（{skill_total_size_text()}）：{names}\n"
+            "导出后可将 Skill 文件夹放入 AI 助手的 Skill 目录使用（如直播转录总结）")
+        skill_info.setStyleSheet("color: #888; font-size: 11px;")
+        skill_info.setWordWrap(True)
+        skill_row.addWidget(skill_info, 1)
+        skill_row.addWidget(self._btn("⬇ 下载 Skill…", self._open_skill_download))
+        v.addLayout(skill_row)
 
         v.addSpacing(12)
 
@@ -368,6 +386,12 @@ class GlobalSettingsPage(BasePage):
             self.app.toast(f"已打开「{label}」", "info")
         except Exception as e:
             self.app.toast(f"打开失败: {e}", "error")
+
+    def _open_skill_download(self):
+        """打开「下载 Skill」二级对话框（选择内置 Skill 导出到本地目录）。"""
+        from gui_qt.skill_download import SkillDownloadDialog
+        dlg = SkillDownloadDialog(self.app, self.app)
+        dlg.exec()
 
     def _save(self):
         path = self.workdir_entry.text().strip()
