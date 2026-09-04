@@ -13,6 +13,9 @@ cryptography>=40.0.0
 pycryptodome
 qrcode>=8.0
 mutagen>=1.46.0
+pillow>=10.0.0
+pillow-heif>=0.13.0  # 图片筛选页 HEIC/实况图解码
+numpy>=1.24.0  # 图片筛选页边界吸附/自动对齐提速（缺失时纯 Python 回退）
 
 # 可选依赖（缺失时引擎自动降级）
 playwright>=1.40.0
