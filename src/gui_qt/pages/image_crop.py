@@ -16,7 +16,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
 )
@@ -343,7 +343,7 @@ class _Magnifier(QWidget):
         p.fillRect(0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE, C_MAG_BG)
         if self._image is not None:
             p.setRenderHint(QPainter.SmoothPixmapTransform, False)
-            p.drawImage(QRect(0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE), self._image, self._src)
+            p.drawImage(QRectF(0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE), self._image, self._src)
         px = float(self._zoom)
         if px >= 3:
             p.setPen(QPen(C_MAG_GRID, 1))
