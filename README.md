@@ -195,7 +195,6 @@ PySide6/
 ├── app_qt.py                    # PySide6 入口
 ├── build.py                     # 一键打包（PyInstaller + Inno Setup + 隐私扫描）
 ├── check_deps.py                # 依赖自检 / 自动安装
-├── migrate_old_data.py          # 从老项目（customtkinter 版）迁移历史数据
 ├── requirements.txt
 ├── FengMingToolbox.spec         # PyInstaller spec（未被 git 跟踪，*.spec 已忽略）
 ├── 启动工具箱(无窗口).vbs        # 开发模式无黑窗启动
@@ -358,17 +357,6 @@ playwright install chromium
 # websocket-client（B站弹幕录制、抖音直播）
 pip install websocket-client
 ```
-
-### 6. 迁移老项目数据（可选，仅一次）
-
-如果你之前用过 customtkinter 版（`../平台信息获取/`）：
-
-```bash
-python migrate_old_data.py          # 执行迁移
-python migrate_old_data.py --dry    # 预演，只打印不写入
-```
-
-规则：普通文件**复制**（新项目已有则跳过，不覆盖）；`账号追踪数据/*.xlsx` **按行合并去重**（合并前自动备份为 `.xlsx.bak`）。
 
 ---
 
