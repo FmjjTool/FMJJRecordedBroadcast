@@ -23,3 +23,5 @@ _taobao_debug/
 # 外部参考项目源码（BililiveRecorder 等，仅本地学习用，不进仓库）
 _ref/
 BililiveRecorder-dev.zip
+# 旧版依赖自检脚本（引用已删除的 app_gui.py，无调用方，仅本地保留）
+check_deps.py
