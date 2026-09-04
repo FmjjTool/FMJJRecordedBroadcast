@@ -652,23 +652,47 @@ class CropCanvas(QWidget):
         s = lay["scale"]
         mx = lay["ox"] + line_x * s
         my = lay["oy"] + line_y * s
-        # 窗口只放在裁切区内侧（线的前进方向一侧），保证遮罩和画布黑边不被盖住；
-        # 裁切区放不下时贴对侧参考线，最后夹画布边界
         cx0, cx1 = lay["ox"] + dc.left * s, lay["ox"] + dc.right * s
         cy0, cy1 = lay["oy"] + dc.top * s, lay["oy"] + dc.bottom * s
         sz, margin = MAGNIFIER_SIZE, 24
-        lo_x, hi_x = cx0, max(cx0, cx1 - sz)
-        lo_y, hi_y = cy0, max(cy0, cy1 - sz)
-        if edge == "left":
-            x, y = min(mx + margin, hi_x), min(max(my - sz / 2, lo_y), hi_y)
-        elif edge == "right":
-            x, y = max(mx - sz - margin, lo_x), min(max(my - sz / 2, lo_y), hi_y)
-        elif edge == "top":
-            x, y = min(max(mx - sz / 2, lo_x), hi_x), min(my + margin, hi_y)
+        cw, ch = self.width(), self.height()
+
+        def clamp_canvas(v, limit):
+            return min(max(v, 4.0), max(4.0, limit - sz - 4))
+
+        if cx1 - cx0 >= sz and cy1 - cy0 >= sz:
+            # 放得下：窗口放裁切区内侧（拖动线前进方向 24px），遮罩与画布黑边不被盖住
+            if edge == "left":
+                x = min(mx + margin, cx1 - sz)
+            elif edge == "right":
+                x = max(mx - sz - margin, cx0)
+            else:
+                x = min(max(mx - sz / 2, cx0), cx1 - sz)
+            if edge == "top":
+                y = min(my + margin, cy1 - sz)
+            elif edge == "bottom":
+                y = max(my - sz - margin, cy0)
+            else:
+                y = min(max(my - sz / 2, cy0), cy1 - sz)
         else:
-            x, y = min(max(mx - sz / 2, lo_x), hi_x), max(my - sz - margin, lo_y)
-        x = min(max(x, 4.0), max(4.0, self.width() - sz - 4))
-        y = min(max(y, 4.0), max(4.0, self.height() - sz - 4))
+            # 放不下（窄/扁选区）：沿拖动轴整体移到裁切区外（拖动线外侧优先、
+            # 其次对侧），保证选区本身可见；另一轴以线为中心夹画布
+            def outside(near, far, limit):
+                for c in (near, far):
+                    if 4 <= c <= limit - sz - 4:
+                        return c
+                return clamp_canvas(near, limit)
+
+            if is_horizontal:
+                y = outside(cy0 - sz - margin if edge == "top" else cy1 + margin,
+                            cy1 + margin if edge == "top" else cy0 - sz - margin, ch)
+                x = clamp_canvas(mx - sz / 2, cw)
+            else:
+                x = outside(cx0 - sz - margin if edge == "left" else cx1 + margin,
+                            cx1 + margin if edge == "left" else cx0 - sz - margin, cw)
+                y = clamp_canvas(my - sz / 2, ch)
+        x = clamp_canvas(x, cw)
+        y = clamp_canvas(y, ch)
         self._magnifier.setGeometry(int(x), int(y), sz, sz)
         self._magnifier.raise_()
         self._magnifier.show()
