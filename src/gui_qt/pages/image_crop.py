@@ -16,7 +16,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
 )
@@ -1202,7 +1202,7 @@ class ImageCropPage(BasePage):
                         ok += 1
                     else:
                         fails.append(slot.name)
-                except Exception as ex:  # noqa: BLE001
+                except Exception:  # noqa: BLE001
                     fails.append(slot.name)
             return ok, fails, cancel.is_set()
 
