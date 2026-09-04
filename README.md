@@ -1,10 +1,10 @@
 # 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.5** · 制作：歆慕
+> **FengMingToolbox v2.8.6** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.5>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.6>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -664,6 +664,14 @@ APP_PUBLISHER    = "歆慕"
 - Cookie 总开关可一键停用（`cookie_enabled`），停用后所有采集按游客态走
 
 ### 更新日志
+
+#### v2.8.6（2026-09-04）
+
+- **图片裁切页（新功能）**：「🧰 实用工具」组新增四边参考线裁图工具（移植自 imgcut）——多图槽位导入（拖拽 / 文件 / 文件夹）、四线拖动（精细模式 20px→1px、Shift 加速）、边界吸附（numpy 边缘画像后台计算）、内容边界自动对齐、像素放大镜（2–64x）、精确坐标输入、撤销 / 重做、右键删除，单张 / 批量导出到 `download/图片裁切/`。
+- **图片裁切修复**：放大镜定位规则重做——源窗口不再夹取图片边界（线到边缘显示越界黑作为到边指示）、放大镜移入裁切区内侧不再遮挡遮罩、窄 / 扁选区放不下时整体移到裁切区外保证选区可见；修复画布参考线渲染中断与放大镜黑块。
+- **设置页**：内置「封茗囧菌直播总结」AI Skill（设置页可下载导出）；页面改骨架屏加载，打开不再卡顿。
+- **抖音解析修复**：分享口令整段粘贴（口令+说明文字一起复制）解析失败；验证码中间页污染解析结果。
+- **工程**：发布流程 skill 沉淀首次实战经验（GCM 直调取凭据 / ps1 纯 ASCII / Release 正文 UTF-8 读入）；删除老项目迁移脚本 `migrate_old_data.py` 及 README 相关说明、`check_deps.py` 取消 git 追踪等死代码清理。
 
 #### v2.8.5（2026-09-03）
 
