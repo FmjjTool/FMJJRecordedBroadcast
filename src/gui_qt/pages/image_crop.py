@@ -227,7 +227,7 @@ def _is_content_pixel(buf: bytes, i: int) -> bool:
         return True
     mx = max(r, g, b)
     mn = min(r, g, b)
-    sat = (mx - mn) / 255.0 if mx > 0 else 0.0
+    sat = (mx - mn) / mx if mx > 0 else 0.0
     return sat > CONTENT_SAT_THRESHOLD and lum > 10
 
 
@@ -538,6 +538,11 @@ class CropCanvas(QWidget):
                     self.setCursor(Qt.SizeHorCursor)
                 else:
                     self.setCursor(Qt.ArrowCursor)
+                # 悬停参考线附近即显示放大镜预览（对齐 imgcut 原版），离开则隐藏
+                if edge is not None:
+                    self._update_magnifier(edge)
+                else:
+                    self._hide_magnifier()
             return
 
         img_x, img_y = self._to_image(lay, pos.x(), pos.y())
@@ -883,7 +888,8 @@ class ImageCropPage(BasePage):
         root.addLayout(status)
 
     def _bind_shortcuts(self):
-        for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo)):
+        for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo),
+                        (QKeySequence("Ctrl+Shift+Z"), self.redo)):
             sc = QShortcut(seq, self)
             sc.setContext(Qt.WidgetWithChildrenShortcut)
             sc.activated.connect(fn)
