@@ -640,29 +640,35 @@ class CropCanvas(QWidget):
         is_horizontal = edge in ("top", "bottom")
         if is_horizontal:
             line_x, line_y = img_w / 2, dc.top if edge == "top" else dc.bottom
-            sx = max(0, min(img_w / 2 - src_size / 2, img_w - src_size))
-            sy = max(0, min(line_y - src_size / 2, img_h - src_size))
         else:
             line_x, line_y = dc.left if edge == "left" else dc.right, img_h / 2
-            sx = max(0, min(line_x - src_size / 2, img_w - src_size))
-            sy = max(0, min(img_h / 2 - src_size / 2, img_h - src_size))
+        # 源窗口始终以参考线为中心、不夹取图片边界：
+        # 线拖到图片边缘时越界部分显示深色底，可直观看到已经到边、无法再移动
         self._magnifier.show_region(
-            slot.image, QRectF(sx, sy, src_size, src_size), zoom, is_horizontal)
+            slot.image,
+            QRectF(line_x - src_size / 2, line_y - src_size / 2, src_size, src_size),
+            zoom, is_horizontal)
 
-        mx = lay["ox"] + line_x * lay["scale"]
-        my = lay["oy"] + line_y * lay["scale"]
-        margin = 24
-        sz = MAGNIFIER_SIZE
-        if edge == "top":
-            x, y = mx - sz / 2, my - sz - margin
-        elif edge == "bottom":
-            x, y = mx - sz / 2, my + margin
-        elif edge == "left":
-            x, y = mx - sz - margin, my - sz / 2
+        s = lay["scale"]
+        mx = lay["ox"] + line_x * s
+        my = lay["oy"] + line_y * s
+        # 窗口只放在裁切区内侧（线的前进方向一侧），保证遮罩和画布黑边不被盖住；
+        # 裁切区放不下时贴对侧参考线，最后夹画布边界
+        cx0, cx1 = lay["ox"] + dc.left * s, lay["ox"] + dc.right * s
+        cy0, cy1 = lay["oy"] + dc.top * s, lay["oy"] + dc.bottom * s
+        sz, margin = MAGNIFIER_SIZE, 24
+        lo_x, hi_x = cx0, max(cx0, cx1 - sz)
+        lo_y, hi_y = cy0, max(cy0, cy1 - sz)
+        if edge == "left":
+            x, y = min(mx + margin, hi_x), min(max(my - sz / 2, lo_y), hi_y)
+        elif edge == "right":
+            x, y = max(mx - sz - margin, lo_x), min(max(my - sz / 2, lo_y), hi_y)
+        elif edge == "top":
+            x, y = min(max(mx - sz / 2, lo_x), hi_x), min(my + margin, hi_y)
         else:
-            x, y = mx + margin, my - sz / 2
-        x = max(4.0, min(x, self.width() - sz - 4))
-        y = max(4.0, min(y, self.height() - sz - 4))
+            x, y = min(max(mx - sz / 2, lo_x), hi_x), max(my - sz - margin, lo_y)
+        x = min(max(x, 4.0), max(4.0, self.width() - sz - 4))
+        y = min(max(y, 4.0), max(4.0, self.height() - sz - 4))
         self._magnifier.setGeometry(int(x), int(y), sz, sz)
         self._magnifier.raise_()
         self._magnifier.show()
