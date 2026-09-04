@@ -158,10 +158,10 @@ class GlobalSettingsPage(BasePage):
         dep_title.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent; border: none;")
         dep_head.addWidget(dep_title)
         dep_head.addStretch(1)
-        recheck_btn = QPushButton("🔄 重新检测")
-        recheck_btn.setCursor(Qt.PointingHandCursor)
-        recheck_btn.clicked.connect(self._refresh_dependencies)
-        dep_head.addWidget(recheck_btn)
+        self.recheck_btn = QPushButton("🔄 重新检测")
+        self.recheck_btn.setCursor(Qt.PointingHandCursor)
+        self.recheck_btn.clicked.connect(self._refresh_dependencies)
+        dep_head.addWidget(self.recheck_btn)
         dep_v.addLayout(dep_head)
         # 占位：_refresh_dependencies 重建 self.dependency_layout
         self.dependency_layout = QVBoxLayout()
@@ -169,8 +169,15 @@ class GlobalSettingsPage(BasePage):
         self.dependency_layout.setSpacing(3)
         dep_v.addLayout(self.dependency_layout)
         v.addWidget(self.dependency_frame)
-        # 后台填充检测结果（避免构造时阻塞）
-        QTimer.singleShot(0, self._refresh_dependencies)
+        # 骨架屏加载：检测在后台线程跑，页面打开即刻渲染灰色占位条（__init__ 末尾 on_show 已触发）
+        self._dep_cache = None      # [(key, name, ok, version)] 上次检测结果
+        self._dep_loading = False
+        self._skel_bars = []
+        self._skel_phase = 0
+        self._skel_timer = QTimer(self)
+        self._skel_timer.setInterval(480)
+        self._skel_timer.timeout.connect(self._pulse_dep_skeleton)
+        self._ffmpeg_ok = None     # FFmpeg 可用性缓存（None = 未检测）
 
         v.addSpacing(12)
 
@@ -423,20 +430,36 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_status.setStyleSheet("color: #4caf50; font-size: 11px;")
         self.app.toast("导出目录已保存", "success")
 
-    def _info_text(self) -> str:
+    def _info_text(self, ffmpeg_ok=None) -> str:
         cfg = load_convert_config()
         wd = cfg.get("work_dir", "")
+        if ffmpeg_ok is None:
+            ffmpeg_ok = self._ffmpeg_ok
+        mark = "⏳ 检测中…" if ffmpeg_ok is None else (
+            "✅" if ffmpeg_ok else "⚠️ 未检测到")
         return (
             f"项目根: {get_app_root()}\n"
             f"配置目录: {get_config_dir()}\n"
             f"工作目录: {wd or '(未设置)'}\n"
-            f"FFmpeg: {'✅' if self._check_ffmpeg() else '⚠️ 未检测到'}"
+            f"FFmpeg: {mark}"
         )
 
-    def _refresh_info(self):
+    def _refresh_info(self, show_toast=True):
+        """刷新配置信息：路径部分立即显示，FFmpeg 检测放后台（不阻塞页面）。"""
         self.info_label.setText(self._info_text())
-        # 按用户要求：每个按钮点击后在右下角 toast 提示
-        self.app.toast("已刷新配置信息", "info")
+        if show_toast:
+            # 按用户要求：每个按钮点击后在右下角 toast 提示
+            self.app.toast("已刷新配置信息", "info")
+
+        def work():
+            return self._check_ffmpeg()
+
+        def done(result, err):
+            if err is None and result is not None:
+                self._ffmpeg_ok = bool(result)
+                self.info_label.setText(self._info_text(self._ffmpeg_ok))
+
+        run_bg(work, done)
 
     def _check_ffmpeg(self):
         try:
@@ -484,7 +507,7 @@ class GlobalSettingsPage(BasePage):
         set_ffmpeg_path(path)
         invalidate_ffmpeg_cache()
         self._update_ffmpeg_status()
-        self.info_label.setText(self._info_text())
+        self._refresh_info(show_toast=False)
         self._refresh_dependencies()
         self.app.toast("FFmpeg 位置已保存" if path else "已恢复默认：使用系统 PATH", "success")
 
@@ -562,20 +585,102 @@ class GlobalSettingsPage(BasePage):
     ]
 
     def _refresh_dependencies(self):
-        """重建依赖检测清单，每项一行 + 一键下载/安装按钮（缺失项标红）。"""
-        # 清空旧条目
+        """依赖检测：骨架屏占位 + 后台线程执行（打开页面不卡顿）。
+
+        首次检测先渲染灰色骨架条（脉冲动画），检测完成回填结果并缓存；
+        再次进入页面先立即显示上次缓存结果，后台静默复核更新。
+        """
+        if self._dep_loading:
+            return
+        self._dep_loading = True
+        self.recheck_btn.setEnabled(False)
+        if self._dep_cache is None:
+            self._show_dep_skeleton()
+        else:
+            self._fill_dep_rows(self._dep_cache)
+
+        def work():
+            results = []
+            for key, name, fn_name, usage, url in self._DEPENDENCIES:
+                fn = getattr(self, fn_name)
+                try:
+                    ok, version = fn()
+                except Exception:
+                    ok, version = False, "异常"
+                results.append((key, name, ok, version))
+            return results
+
+        def done(result, err):
+            self._dep_loading = False
+            self.recheck_btn.setEnabled(True)
+            self._stop_dep_skeleton()
+            if err or result is None:
+                self._clear_dep_rows()
+                tip = QLabel(f"❌ 依赖检测失败: {err or '未知错误'}")
+                tip.setStyleSheet("color: #d32f2f; font-size: 11px; padding: 2px;")
+                self.dependency_layout.addWidget(tip)
+                return
+            self._dep_cache = result
+            self._fill_dep_rows(result)
+
+        run_bg(work, done)
+
+    # ----- 骨架屏 -----
+
+    def _clear_dep_rows(self):
         while self.dependency_layout.count():
             item = self.dependency_layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
+
+    def _skel_bar(self, width=None):
+        bar = QLabel()
+        bar.setFixedHeight(14)
+        if width:
+            bar.setFixedWidth(width)
+        bar.setStyleSheet("background: #dfe4ea; border-radius: 4px;")
+        self._skel_bars.append(bar)
+        return bar
+
+    def _show_dep_skeleton(self):
+        """按依赖行布局渲染灰色骨架条占位（后台检测完成后替换）。"""
+        self._clear_dep_rows()
+        self._skel_bars = []
+        for _spec in self._DEPENDENCIES:
+            row = QFrame()
+            row.setObjectName("depSkelRow")
+            row.setStyleSheet(
+                "QFrame#depSkelRow { background: #f4f6f9; border-radius: 4px; }")
+            h = QHBoxLayout(row)
+            h.setContentsMargins(8, 4, 8, 4)
+            h.setSpacing(8)
+            for width in (70, 110, 180):
+                h.addWidget(self._skel_bar(width))
+            h.addWidget(self._skel_bar(), 1)
+            self.dependency_layout.addWidget(row)
+        tip = QLabel("⏳ 正在检测依赖…")
+        tip.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
+        self.dependency_layout.addWidget(tip)
+        self._skel_phase = 0
+        self._skel_timer.start()
+
+    def _pulse_dep_skeleton(self):
+        self._skel_phase = 1 - self._skel_phase
+        color = "#e7ebf1" if self._skel_phase else "#d7dde6"
+        for bar in self._skel_bars:
+            bar.setStyleSheet(f"background: {color}; border-radius: 4px;")
+
+    def _stop_dep_skeleton(self):
+        self._skel_timer.stop()
+        self._skel_bars = []
+
+    def _fill_dep_rows(self, results):
+        """按检测结果重建依赖清单：每项一行 + 一键下载/安装按钮（缺失项标红）。"""
+        self._clear_dep_rows()
         missing = 0
-        for key, name, fn_name, usage, url in self._DEPENDENCIES:
-            fn = getattr(self, fn_name)
-            try:
-                ok, version = fn()
-            except Exception:
-                ok, version = False, "异常"
+        for (key, name, fn_name, usage, url), (_rk, _rn, ok, version) in zip(
+                self._DEPENDENCIES, results):
             row = QFrame()
             row.setObjectName("depRow")
             row.setStyleSheet(
