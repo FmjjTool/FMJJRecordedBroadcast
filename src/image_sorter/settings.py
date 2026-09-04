@@ -38,6 +38,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "compress_video_options": {},
     "source_folders": [],
     "classified_target_folders": [],
+    "rename_templates": {},          # 重命名模板 {名称: 模板内容}
+    "rename_tags": [],               # 分类词列表（_前缀格式）
     "right_panel": 1,               # 右栏（信息面板）默认标签页
     "media_viewer": 2,              # 中栏预览默认标签页
     "folder_panel": 1,              # 左栏文件夹面板默认标签页
@@ -138,6 +140,10 @@ def set_list(key: str, value: List[str]):
 def get_dict(key: str) -> Dict[str, Any]:
     value = get_setting(key)
     return value if isinstance(value, dict) else {}
+
+
+def set_dict(key: str, value: Dict[str, Any]):
+    set_setting(key, {str(k): v for k, v in (value or {}).items()})
 
 
 # ==================== 路径（替代源项目 runtime_paths） ====================

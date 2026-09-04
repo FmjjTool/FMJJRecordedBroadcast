@@ -166,6 +166,46 @@ class LazyLoadMixin:
         ]
         self._mode_switch_sorted_cache.clear()
 
+    def _rename_lazy_state_file(self, old_path: Path, new_path: Path):
+        """重命名后同步懒加载内部路径状态（桶/已加载键/LRU/待补图/基准列表）。
+
+        手动重命名只换路径不改集合成员，逐容器原地替换可避免全量重扫。
+        """
+        if old_path == new_path:
+            return
+        old_key = self._path_key(old_path)
+        new_key = self._path_key(new_path)
+
+        for bucket in self._lazy_bucket_files.values():
+            for i, p in enumerate(bucket):
+                if self._path_key(p) == old_key:
+                    bucket[i] = new_path
+
+        if old_key in self._lazy_loaded_keys:
+            self._lazy_loaded_keys.discard(old_key)
+            self._lazy_loaded_keys.add(new_key)
+
+        if any(p == old_path for p in self._lazy_thumbnail_lru):
+            self._lazy_thumbnail_lru = [
+                new_path if p == old_path else p for p in self._lazy_thumbnail_lru
+            ]
+        if old_key in self._lazy_thumbnail_lru_keys:
+            self._lazy_thumbnail_lru_keys.discard(old_key)
+            self._lazy_thumbnail_lru_keys.add(new_key)
+
+        if any(p == old_path for p in self._pending_thumb_paths):
+            self._pending_thumb_paths = deque(
+                new_path if p == old_path else p for p in self._pending_thumb_paths
+            )
+        if old_key in self._pending_thumb_keys:
+            self._pending_thumb_keys.discard(old_key)
+            self._pending_thumb_keys.add(new_key)
+
+        for i, p in enumerate(self._mode_switch_base_files):
+            if self._path_key(p) == old_key:
+                self._mode_switch_base_files[i] = new_path
+        self._mode_switch_sorted_cache.clear()
+
     def _resolve_grouping_mode_for_view(self, view_mode: str) -> str:
         mode = str(view_mode or "default").strip().lower()
         if mode == "date":

@@ -23,16 +23,18 @@ from PIL import Image as PILImage
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, Signal
 from PySide6.QtGui import QFontMetrics, QPixmap, QImage
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QGraphicsPixmapItem, QGraphicsScene,
-    QGraphicsView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMenu,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame,
+    QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QGridLayout,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
     QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 from PySide6.QtCore import QStandardPaths
 
 from gui_qt.common import icon_btn_style
 from gui_qt import theme
 
+from image_sorter import settings as cfg
 from image_sorter.constants import (
     FileStatus,
     STATUS_COLORS,
@@ -1602,15 +1604,53 @@ class MediaViewer(QWidget):
 # ==================== 右栏：媒体信息面板（阶段二：信息展示） ====================
 
 class FileInfoPanel(QWidget):
-    """文件信息面板（阶段二仅信息页；压缩/重命名标签页为阶段三/四）。"""
+    """文件信息面板（信息 + 重命名双标签页；压缩标签页为阶段四）。
+
+    重命名标签页：手动重命名 + 模板管理 + 自动重命名 token + 分类词，
+    模板/分类词持久化到 config.json「image_sorter」节（settings.set_dict）。
+    """
 
     copy_info_requested = Signal(str)  # 信息提示文本（页面层转 toast）
+    rename_requested = Signal(str)     # 请求重命名当前文件（新文件名）
+    auto_rename_config_changed = Signal(bool, str)  # 自动重命名配置更新
+    notify_requested = Signal(str, str)  # 通用提示（文本, 级别 success/warning/error）
 
     PRIORITY_FIELDS = [
         "格式", "编码", "分辨率", "时长", "帧率", "文件大小",
         "创建时间", "修改时间", "拍摄时间",
         "制造商", "相机型号", "镜头型号", "ISO", "光圈", "曝光时间", "焦距",
     ]
+
+    AUTO_RENAME_TOKEN_HELP = [
+        ("source_name", "源文件名（不含扩展名）"),
+        ("format", "文件格式，如 JPG/MP4"),
+        ("resolution", "分辨率，如 1920x1080"),
+        ("file_size", "文件大小，如 2.3MB"),
+        ("created_time", "文件创建时间"),
+        ("modified_time", "文件修改时间"),
+        ("captured_time", "拍摄时间（有 Exif 时）"),
+        ("codec", "编码格式（视频常见）"),
+        ("fps", "帧率（视频）"),
+        ("duration", "时长（视频）"),
+        ("bitrate", "码率（视频）"),
+        ("maker", "设备制造商"),
+        ("camera_model", "相机型号"),
+        ("lens_model", "镜头型号"),
+        ("iso", "ISO 感光度"),
+        ("aperture", "光圈值"),
+        ("exposure_time", "曝光时间"),
+        ("focal_length", "焦距"),
+        ("date", "当前日期（YYYYMMDD）"),
+        ("time", "当前时间（HHMMSS）"),
+        ("datetime", "当前日期时间（YYYYMMDD_HHMMSS）"),
+    ]
+    AUTO_RENAME_AVAILABLE_TOKENS = [token for token, _ in AUTO_RENAME_TOKEN_HELP]
+
+    DEFAULT_RENAME_TEMPLATES = {
+        "原名": "{source_name}",
+        "日期_原名": "{date}_{source_name}",
+        "时间戳_原名": "{datetime}_{source_name}",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1619,13 +1659,20 @@ class FileInfoPanel(QWidget):
         self._current_fields: List[str] = []
         self.info_labels: Dict[str, QLabel] = {}
 
+        self._rename_templates: Dict[str, str] = {}
+        self._rename_tags: List[str] = []
+        self._auto_rename_enabled = False
+        self._auto_rename_pattern = "{source_name}"
+        self._pattern_renderer = None  # 页面注入：fn(pattern, target_path) -> str
+
+        self._load_rename_templates()
         self._init_ui()
 
     def _init_ui(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        # 信息卡（白底+边框容器，QScrollArea 内部透明，深浅色主题均正常）
+        # 信息卡（白底+边框容器，深浅色主题均正常）
         card = QFrame(self)
         card.setStyleSheet(
             "QFrame { background-color: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }"
@@ -1635,6 +1682,26 @@ class FileInfoPanel(QWidget):
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(8, 8, 8, 8)
 
+        self.tab_widget = QTabWidget(card)
+        self.tab_widget.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #d0d6df; border-radius: 4px; top: -1px; }"
+            " QTabBar::tab { padding: 5px 12px; background: #f7f8fa;"
+            " border: 1px solid #d0d6df; border-bottom: none;"
+            " border-top-left-radius: 4px; border-top-right-radius: 4px; }"
+            " QTabBar::tab:selected { background: #ffffff; color: #2563eb;"
+            " font-weight: 600; }"
+        )
+        card_layout.addWidget(self.tab_widget, 1)
+
+        self._init_info_tab()
+        self._init_rename_tab()
+
+    def _init_info_tab(self):
+        self.info_tab = QWidget(self.tab_widget)
+        self.info_tab.setStyleSheet("background: transparent;")
+        info_layout = QVBoxLayout(self.info_tab)
+        info_layout.setContentsMargins(6, 8, 6, 6)
+
         header = QHBoxLayout()
         title = QLabel("媒体信息")
         title.setStyleSheet("font-size: 13px; font-weight: 600; color: #2f3440;")
@@ -1643,7 +1710,7 @@ class FileInfoPanel(QWidget):
         self.copy_all_btn = QPushButton("📋 复制全部")
         self.copy_all_btn.clicked.connect(self._on_copy_all_clicked)
         header.addWidget(self.copy_all_btn)
-        card_layout.addLayout(header)
+        info_layout.addLayout(header)
 
         self.export_txt_btn = QPushButton("📄 导出 TXT")
         self.export_txt_btn.clicked.connect(lambda: self._export_current_info("txt"))
@@ -1654,9 +1721,9 @@ class FileInfoPanel(QWidget):
         btn_row.addWidget(self.export_txt_btn)
         btn_row.addWidget(self.export_json_btn)
         btn_row.addStretch(1)
-        card_layout.addLayout(btn_row)
+        info_layout.addLayout(btn_row)
 
-        self.scroll = QScrollArea(card)
+        self.scroll = QScrollArea(self.info_tab)
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet(
             "QScrollArea { background-color: #ffffff; border: 1px solid #d0d6df; border-radius: 4px; }"
@@ -1664,12 +1731,203 @@ class FileInfoPanel(QWidget):
         self.scroll_container = QWidget()
         self.scroll_container.setStyleSheet("background: transparent;")
         self.scroll.setWidget(self.scroll_container)
-        card_layout.addWidget(self.scroll, 1)
+        info_layout.addWidget(self.scroll, 1)
 
         self.info_grid = QVBoxLayout(self.scroll_container)
         self.info_grid.setContentsMargins(6, 6, 6, 6)
         self.info_grid.setSpacing(2)
         self.info_grid.addStretch(1)
+
+        self.tab_widget.addTab(self.info_tab, "文件信息")
+
+    def _init_rename_tab(self):
+        """重命名标签页：手动重命名 + 模板 + 自动重命名 + 分类词。"""
+        self.rename_tab = QWidget(self.tab_widget)
+        self.rename_tab.setStyleSheet("background: transparent;")
+
+        rename_scroll = QScrollArea(self.rename_tab)
+        rename_scroll.setWidgetResizable(True)
+        rename_scroll.setStyleSheet(
+            "QScrollArea { background-color: #ffffff; border: none; }"
+        )
+        rename_tab_layout = QVBoxLayout(self.rename_tab)
+        rename_tab_layout.setContentsMargins(0, 0, 0, 0)
+        rename_tab_layout.addWidget(rename_scroll)
+
+        body = QWidget(rename_scroll)
+        body.setStyleSheet("background: transparent;")
+        rename_layout = QVBoxLayout(body)
+        rename_layout.setContentsMargins(6, 8, 6, 8)
+        rename_layout.setSpacing(6)
+        rename_scroll.setWidget(body)
+
+        self.current_name_label = QLabel("当前文件: -", body)
+        self.current_name_label.setWordWrap(True)
+        self.current_name_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.current_name_label.setStyleSheet("color: #6b7280;")
+        rename_layout.addWidget(self.current_name_label)
+
+        self.rename_input = QLineEdit(body)
+        self.rename_input.setPlaceholderText("输入新文件名（可不带扩展名）")
+        rename_layout.addWidget(self.rename_input)
+
+        template_use_layout = QHBoxLayout()
+        self.template_combo = QComboBox(body)
+        self.template_combo.addItem("选择模板")
+        template_use_layout.addWidget(self.template_combo, 1)
+
+        apply_template_btn = QPushButton("套用", body)
+        apply_template_btn.clicked.connect(self._on_apply_template)
+        template_use_layout.addWidget(apply_template_btn)
+        rename_layout.addLayout(template_use_layout)
+
+        self.template_name_input = QLineEdit(body)
+        self.template_name_input.setPlaceholderText("新模板名称")
+        rename_layout.addWidget(self.template_name_input)
+
+        self.template_pattern_input = QLineEdit(body)
+        self.template_pattern_input.setPlaceholderText(
+            "模板内容，如 {source_name}_{captured_time}_精选"
+        )
+        rename_layout.addWidget(self.template_pattern_input)
+
+        template_edit_layout = QHBoxLayout()
+        save_template_btn = QPushButton("保存模板", body)
+        save_template_btn.clicked.connect(self._on_save_template)
+        template_edit_layout.addWidget(save_template_btn)
+
+        delete_template_btn = QPushButton("删除模板", body)
+        delete_template_btn.clicked.connect(self._on_delete_template)
+        template_edit_layout.addWidget(delete_template_btn)
+        rename_layout.addLayout(template_edit_layout)
+
+        template_hint = QLabel("模板与自动重命名使用同一套占位符（见下方可复制列表）", body)
+        template_hint.setWordWrap(True)
+        template_hint.setStyleSheet("font-size: 11px; color: #888;")
+        rename_layout.addWidget(template_hint)
+
+        auto_title = QLabel("自动重命名（分类后）", body)
+        auto_title.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #2f3440; margin-top: 6px;"
+        )
+        rename_layout.addWidget(auto_title)
+
+        auto_toggle_layout = QHBoxLayout()
+        self.auto_rename_checkbox = QCheckBox("启用自动重命名", body)
+        auto_toggle_layout.addWidget(self.auto_rename_checkbox)
+        auto_toggle_layout.addStretch()
+        rename_layout.addLayout(auto_toggle_layout)
+
+        self.auto_rename_fields_input = QLineEdit(body)
+        self.auto_rename_fields_input.setPlaceholderText(
+            "模板，如 {source_name}_{captured_time}_精选"
+        )
+        rename_layout.addWidget(self.auto_rename_fields_input)
+
+        auto_hint = QLabel(
+            "占位符必须是英文并用 {} 包裹；其余内容按普通文本原样保留", body
+        )
+        auto_hint.setWordWrap(True)
+        auto_hint.setStyleSheet("font-size: 11px; color: #888;")
+        rename_layout.addWidget(auto_hint)
+
+        fields_hint = QLabel("点击下方占位符可直接复制：", body)
+        fields_hint.setWordWrap(True)
+        fields_hint.setStyleSheet("font-size: 11px; color: #6b7280;")
+        rename_layout.addWidget(fields_hint)
+
+        self.auto_token_search_input = QLineEdit(body)
+        self.auto_token_search_input.setPlaceholderText(
+            "搜索占位符，如 time / source / 分辨率"
+        )
+        self.auto_token_search_input.textChanged.connect(
+            self._on_auto_token_search_changed
+        )
+        rename_layout.addWidget(self.auto_token_search_input)
+
+        self.auto_token_panel = QWidget(body)
+        self.auto_token_panel.setStyleSheet("background: transparent;")
+        self.auto_token_layout = QGridLayout(self.auto_token_panel)
+        self.auto_token_layout.setContentsMargins(0, 0, 0, 0)
+        self.auto_token_layout.setHorizontalSpacing(8)
+        self.auto_token_layout.setVerticalSpacing(6)
+        self._auto_token_items: List[tuple] = []
+
+        token_cols = 3
+        for i, (token, desc) in enumerate(self.AUTO_RENAME_TOKEN_HELP):
+            row = i // token_cols
+            col = i % token_cols
+            token_btn = QPushButton(f"{{{token}}}", self.auto_token_panel)
+            token_btn.setToolTip(f"{desc}\n点击可复制")
+            token_btn.clicked.connect(
+                lambda _, t=token: self._copy_auto_rename_token(t)
+            )
+            self.auto_token_layout.addWidget(token_btn, row, col)
+            self._auto_token_items.append((token, desc, token_btn))
+
+        rename_layout.addWidget(self.auto_token_panel)
+
+        invalid_hint = QLabel(
+            "示例: {source_name}_{captured_time}_raw；重复文件名会自动加 (1)/(2) 后缀", body
+        )
+        invalid_hint.setWordWrap(True)
+        invalid_hint.setStyleSheet("font-size: 11px; color: #888;")
+        rename_layout.addWidget(invalid_hint)
+
+        save_auto_btn = QPushButton("保存自动重命名配置", body)
+        save_auto_btn.clicked.connect(self._on_save_auto_rename_config)
+        rename_layout.addWidget(save_auto_btn)
+
+        tag_title = QLabel("分类词", body)
+        tag_title.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #2f3440; margin-top: 6px;"
+        )
+        rename_layout.addWidget(tag_title)
+
+        tag_edit_layout = QHBoxLayout()
+        self.tag_input = QLineEdit(body)
+        self.tag_input.setPlaceholderText(
+            "新增分类词（自动加前缀_），如 风景 / 人物 / 封茗囧菌"
+        )
+        self.tag_input.returnPressed.connect(self._on_add_tag)
+        tag_edit_layout.addWidget(self.tag_input, 1)
+
+        add_tag_btn = QPushButton("新增词", body)
+        add_tag_btn.clicked.connect(self._on_add_tag)
+        tag_edit_layout.addWidget(add_tag_btn)
+        rename_layout.addLayout(tag_edit_layout)
+
+        self.tag_scroll = QScrollArea(body)
+        self.tag_scroll.setWidgetResizable(True)
+        self.tag_scroll.setFixedHeight(130)
+        self.tag_scroll.setStyleSheet(
+            "QScrollArea { background-color: #ffffff; border: 1px solid #d0d6df; border-radius: 4px; }"
+        )
+        self.tag_panel = QWidget(self.tag_scroll)
+        self.tag_panel.setStyleSheet("background: transparent;")
+        self.tag_layout = QGridLayout(self.tag_panel)
+        self.tag_layout.setContentsMargins(4, 4, 4, 4)
+        self.tag_layout.setHorizontalSpacing(6)
+        self.tag_layout.setVerticalSpacing(6)
+        self.tag_scroll.setWidget(self.tag_panel)
+        rename_layout.addWidget(self.tag_scroll)
+
+        self.rename_btn = QPushButton("重命名当前文件", body)
+        self.rename_btn.setStyleSheet(
+            "QPushButton { background-color: #2563eb; color: #ffffff; border: none;"
+            " border-radius: 4px; padding: 6px 16px; font-weight: 600; }"
+        )
+        self.rename_btn.clicked.connect(self._on_rename_clicked)
+        self.rename_btn.setEnabled(False)
+        rename_layout.addWidget(self.rename_btn)
+
+        rename_layout.addStretch()
+        self.tab_widget.addTab(self.rename_tab, "重命名")
+
+        self._refresh_template_combo()
+        self._refresh_tag_buttons()
 
     # ---------- 展示 ----------
 
@@ -1678,12 +1936,14 @@ class FileInfoPanel(QWidget):
         self._current_file = file_path
         self._clear_info()
         self._display_info(info)
+        self._sync_rename_fields(file_path)
 
     def display_video_info(self, file_path: Path, info: Dict[str, str]):
         """显示视频信息"""
         self._current_file = file_path
         self._clear_info()
         self._display_info(info)
+        self._sync_rename_fields(file_path)
 
     def _display_info(self, info: Dict[str, str]):
         """动态显示信息（有多少显多少，按逻辑优先级排列）"""
@@ -1838,3 +2098,311 @@ class FileInfoPanel(QWidget):
         self._current_file = file_path
         if file_path is None:
             self._clear_info()
+        self._sync_rename_fields(file_path)
+
+    # ---------- 重命名（阶段三） ----------
+
+    def set_pattern_renderer(self, renderer):
+        """注入页面级模板渲染器：renderer(pattern: str, target_path: Path) -> str。
+
+        模板占位符渲染依赖页面的媒体信息提取与字符清洗逻辑（与自动重命名同一套），
+        面板自身不重复实现；未注入时「套用」原样返回模板文本。
+        """
+        self._pattern_renderer = renderer
+
+    def set_auto_rename_config(self, enabled: bool, pattern: str):
+        """设置自动重命名配置（由页面加载持久化值）"""
+        self._auto_rename_enabled = bool(enabled)
+        self._auto_rename_pattern = str(pattern or "{source_name}").strip() or "{source_name}"
+
+        self.auto_rename_checkbox.setChecked(self._auto_rename_enabled)
+        self.auto_rename_fields_input.setText(self._auto_rename_pattern)
+
+    def get_auto_rename_config(self) -> tuple:
+        """读取面板当前自动重命名配置（未保存状态）。"""
+        return self.auto_rename_checkbox.isChecked(), self.auto_rename_fields_input.text().strip()
+
+    def _sync_rename_fields(self, file_path: Optional[Path]):
+        """同步重命名区域显示"""
+        if not file_path:
+            self.current_name_label.setText("当前文件: -")
+            self.rename_input.clear()
+            self.rename_btn.setEnabled(False)
+            return
+
+        self.current_name_label.setText(f"当前文件: {file_path.name}")
+        self.rename_input.setText(file_path.stem)
+        self.rename_btn.setEnabled(True)
+
+    def _on_rename_clicked(self):
+        """点击重命名：发信号由页面执行（含扩展名补全与列表联动）"""
+        new_name = self.rename_input.text().strip()
+        if not new_name:
+            QMessageBox.information(self, "提示", "请输入新文件名")
+            return
+        self.rename_requested.emit(new_name)
+
+    def _on_save_auto_rename_config(self):
+        """保存自动重命名配置"""
+        enabled = self.auto_rename_checkbox.isChecked()
+        pattern = self.auto_rename_fields_input.text().strip() or "{source_name}"
+
+        invalid_placeholders = self._find_invalid_auto_rename_placeholders(pattern)
+        if invalid_placeholders:
+            QMessageBox.warning(
+                self,
+                "提示",
+                "以下占位符不可用:\n"
+                + "\n".join(invalid_placeholders)
+                + "\n\n占位符规则：仅英文/下划线，必须写成 {token}。",
+            )
+            return
+
+        self._auto_rename_enabled = enabled
+        self._auto_rename_pattern = pattern
+        self.auto_rename_fields_input.setText(pattern)
+        self.auto_rename_config_changed.emit(enabled, pattern)
+        self.notify_requested.emit("自动重命名配置已保存", "success")
+
+    def _copy_auto_rename_token(self, token: str):
+        """复制自动重命名占位符到剪贴板"""
+        placeholder = "{" + token + "}"
+        QApplication.clipboard().setText(placeholder)
+        self.notify_requested.emit(f"已复制占位符 {placeholder}", "success")
+
+    def _on_auto_token_search_changed(self, text: str):
+        """按关键字筛选可用占位符（token/中文说明均可匹配）"""
+        keyword = (text or "").strip().lower()
+        for token, desc, token_btn in self._auto_token_items:
+            if not keyword:
+                visible = True
+            else:
+                visible = (keyword in token.lower()) or (keyword in desc.lower())
+            token_btn.setVisible(visible)
+
+    def _on_apply_template(self):
+        """套用模板到重命名输入框"""
+        template_name = self.template_combo.currentText().strip()
+        if not template_name or template_name == "选择模板":
+            return
+
+        pattern = self._rename_templates.get(template_name)
+        if not pattern:
+            return
+        self.rename_input.setText(self._render_template(pattern))
+
+    def _on_save_template(self):
+        """保存新模板"""
+        template_name = self.template_name_input.text().strip()
+        pattern = self.template_pattern_input.text().strip()
+
+        if not template_name:
+            QMessageBox.information(self, "提示", "请输入模板名称")
+            return
+        if not pattern:
+            QMessageBox.information(self, "提示", "请输入模板内容")
+            return
+
+        self._rename_templates[template_name] = pattern
+        self._save_rename_templates()
+        self._refresh_template_combo(select_name=template_name)
+
+        self.template_name_input.clear()
+        self.template_pattern_input.clear()
+        self.notify_requested.emit(f"模板「{template_name}」已保存", "success")
+
+    def _on_delete_template(self):
+        """删除当前选择模板"""
+        template_name = self.template_combo.currentText().strip()
+        if not template_name or template_name == "选择模板":
+            return
+
+        if template_name in self._rename_templates:
+            del self._rename_templates[template_name]
+            self._save_rename_templates()
+            self._refresh_template_combo()
+            self.notify_requested.emit(f"模板「{template_name}」已删除", "success")
+
+    def _on_add_tag(self):
+        """新增分类词"""
+        tag = self._normalize_tag(self.tag_input.text())
+        if not tag:
+            QMessageBox.information(self, "提示", "请输入分类词")
+            return
+        if tag in self._rename_tags:
+            self.notify_requested.emit(f"分类词「{tag}」已存在", "warning")
+            return
+
+        self._rename_tags.append(tag)
+        self._save_rename_templates()
+        self._refresh_tag_buttons()
+        self.tag_input.clear()
+
+    def _refresh_tag_buttons(self):
+        """刷新分类词按钮列表（右键删除 + 点击追加到文件名）"""
+        normalized_tags: List[str] = []
+        for tag in self._rename_tags:
+            normalized = self._normalize_tag(tag)
+            if normalized and normalized not in normalized_tags:
+                normalized_tags.append(normalized)
+        self._rename_tags = normalized_tags
+
+        while self.tag_layout.count():
+            item = self.tag_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self._rename_tags:
+            hint = QLabel("暂无分类词，可在上方新增", self.tag_panel)
+            hint.setStyleSheet("font-size: 11px; color: #888;")
+            self.tag_layout.addWidget(hint, 0, 0)
+            return
+
+        max_cols = 3
+        for i, tag in enumerate(self._rename_tags):
+            row = i // max_cols
+            col = i % max_cols
+            btn = QPushButton(tag, self.tag_panel)
+            btn.clicked.connect(lambda _, t=tag: self._append_tag_to_name(t))
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, t=tag, b=btn: self._show_tag_context_menu(b, t)
+            )
+            self.tag_layout.addWidget(btn, row, col)
+
+    def _show_tag_context_menu(self, btn, tag: str):
+        menu = QMenu(self)
+        delete_action = menu.addAction("删除")
+        action = menu.exec(btn.mapToGlobal(QPoint(0, btn.height())))
+        if action is delete_action:
+            self._delete_tag_by_value(tag)
+
+    def _delete_tag_by_value(self, tag: str):
+        """删除指定分类词（右键菜单）"""
+        normalized = self._normalize_tag(tag)
+        if not normalized or normalized not in self._rename_tags:
+            return
+        self._rename_tags.remove(normalized)
+        self._save_rename_templates()
+        self._refresh_tag_buttons()
+        self.notify_requested.emit(f"分类词「{normalized}」已删除", "success")
+
+    def _append_tag_to_name(self, tag: str):
+        """将分类词追加到重命名输入框尾部"""
+        normalized_tag = self._normalize_tag(tag)
+        if not normalized_tag:
+            return
+
+        current_name = self.rename_input.text().strip()
+        if not current_name:
+            self.rename_input.setText(normalized_tag.lstrip("_"))
+            return
+
+        if current_name.endswith(normalized_tag) or current_name.endswith(
+            normalized_tag.lstrip("_")
+        ):
+            return
+
+        self.rename_input.setText(f"{current_name}{normalized_tag}")
+
+    def _render_template(self, pattern: str) -> str:
+        """渲染模板字符串（与自动重命名同一套占位符，渲染器由页面注入）。"""
+        template = (pattern or "").strip()
+        if not template:
+            return ""
+
+        current_file = self._current_file
+        if current_file is None:
+            return template
+
+        if self._pattern_renderer is None:
+            return template
+
+        try:
+            return self._pattern_renderer(template, current_file).strip()
+        except Exception as e:
+            logger.log_exception(e, "渲染重命名模板失败")
+            return template
+
+    def _find_invalid_auto_rename_placeholders(self, pattern: str) -> List[str]:
+        """检查模板占位符合法性：{token} 形式 + token 在允许列表内。"""
+        text = pattern or ""
+        invalid: List[str] = []
+        allowed = set(self.AUTO_RENAME_AVAILABLE_TOKENS)
+
+        for token in re.findall(r"\{([^{}]+)\}", text):
+            normalized = token.strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+                invalid.append("{" + token + "}")
+                continue
+            if normalized not in allowed:
+                invalid.append("{" + token + "}")
+
+        if text.count("{") != text.count("}"):
+            invalid.append("大括号未成对")
+
+        broken_left = re.findall(r"\{[^{}]*$", text)
+        if broken_left:
+            invalid.append("存在未闭合的 {token}")
+
+        unique_invalid: List[str] = []
+        for item in invalid:
+            if item not in unique_invalid:
+                unique_invalid.append(item)
+        return unique_invalid
+
+    @staticmethod
+    def _normalize_tag(tag: str) -> str:
+        """标准化分类词：统一为 `_词` 格式"""
+        raw = (tag or "").strip()
+        if not raw:
+            return ""
+
+        core = raw.lstrip("_").strip()
+        if not core:
+            return ""
+
+        return f"_{core}"
+
+    def _load_rename_templates(self):
+        """加载重命名模板与分类词（config.json「image_sorter」节）"""
+        try:
+            templates = cfg.get_dict("rename_templates")
+            if isinstance(templates, dict):
+                self._rename_templates = {
+                    str(k): str(v) for k, v in templates.items() if isinstance(v, str)
+                }
+            self._rename_tags = [
+                str(t) for t in cfg.get_list("rename_tags") if str(t).strip()
+            ]
+
+            if not self._rename_templates:
+                self._rename_templates = dict(self.DEFAULT_RENAME_TEMPLATES)
+                self._save_rename_templates()
+        except Exception as e:
+            logger.log_exception(e, "加载重命名模板失败")
+            self._rename_templates = dict(self.DEFAULT_RENAME_TEMPLATES)
+            self._rename_tags = []
+
+    def _save_rename_templates(self):
+        """保存重命名模板与分类词"""
+        try:
+            cfg.set_dict("rename_templates", dict(self._rename_templates))
+            cfg.set_list("rename_tags", list(self._rename_tags))
+        except Exception as e:
+            logger.log_exception(e, "保存重命名模板失败")
+
+    def _refresh_template_combo(self, select_name: Optional[str] = None):
+        """刷新模板下拉列表"""
+        self.template_combo.clear()
+        self.template_combo.addItem("选择模板")
+
+        template_names = sorted(self._rename_templates.keys())
+        for name in template_names:
+            self.template_combo.addItem(name)
+
+        if select_name and select_name in self._rename_templates:
+            index = template_names.index(select_name) + 1
+            self.template_combo.setCurrentIndex(index)
+        else:
+            self.template_combo.setCurrentIndex(0)
