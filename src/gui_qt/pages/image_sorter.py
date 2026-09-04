@@ -27,10 +27,9 @@ from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QFileDialog,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
     QSplitter, QVBoxLayout, QWidget,
 )
@@ -78,6 +77,31 @@ VIEW_MODES = [
 ]
 
 STAGE_TITLES = {"import": "导入", "thumbnail": "缩略图", "md5": "MD5", "duplicate": "去重"}
+
+
+class ElidedPathLabel(QLabel):
+    """路径标签：宽度不足时中段省略号（保留盘符与末段），完整路径进 tooltip。"""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setMinimumWidth(60)
+        self._apply_elide()
+
+    def set_full_text(self, text: str):
+        if self._full_text == text:
+            return
+        self._full_text = text
+        self._apply_elide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        fm = self.fontMetrics()
+        self.setText(fm.elidedText(self._full_text, Qt.TextElideMode.ElideMiddle, self.width()))
+        self.setToolTip(self._full_text)
 
 
 class ImageSorterPage(LazyLoadMixin, BasePage):
@@ -195,7 +219,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         top.addWidget(QLabel("视图:"))
         top.addWidget(self.view_combo)
         top.addStretch(1)
-        self.sources_label = QLabel("尚未添加源文件夹")
+        self.sources_label = ElidedPathLabel("尚未添加源文件夹")
         self.sources_label.setStyleSheet("color:#888;")
         top.addWidget(self.sources_label)
         layout.addLayout(top)
@@ -205,7 +229,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.work_dir_btn = QPushButton("📁 分类目录")
         self.work_dir_btn.clicked.connect(self._on_change_work_dir)
         classify_bar.addWidget(self.work_dir_btn)
-        self.work_dir_label = QLabel("")
+        self.work_dir_label = ElidedPathLabel("")
         self.work_dir_label.setStyleSheet("color:#6b7280;")
         classify_bar.addWidget(self.work_dir_label)
         classify_bar.addStretch(1)
@@ -329,14 +353,6 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         shortcut_btn.clicked.connect(self._on_shortcut_mapping)
         area_layout.addWidget(shortcut_btn)
 
-        clear_cache_btn = QPushButton("🧹 清理缓存")
-        clear_cache_btn.clicked.connect(self._on_clear_cache)
-        area_layout.addWidget(clear_cache_btn)
-
-        open_cache_btn = QPushButton("📂 打开缓存目录")
-        open_cache_btn.clicked.connect(self._on_open_cache_folder)
-        area_layout.addWidget(open_cache_btn)
-
         area_layout.addStretch(1)
         self.settings_area.hide()
         self.layout().addWidget(self.settings_area)
@@ -370,110 +386,10 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         finally:
             self._shortcut_mapping_dialog_open = False
 
-    def _on_clear_cache(self):
-        options = self._show_cache_clear_options_dialog()
-        if options is None:
-            return
-        if not any(options.values()):
-            self.app.toast("未勾选任何缓存项", "warning")
-            return
-
-        self._retire_thumbnail_loader(timeout_ms=2500)
-        if self.md5_filter_thread and self.md5_filter_thread.isRunning():
-            self._wait_thread_responsive(self.md5_filter_thread, timeout_ms=2500)
-
-        cleared_items: List[str] = []
-        try:
-            if options.get("scan"):
-                self.cache_manager.clear_scan_cache()
-                cleared_items.append("导入扫描缓存")
-            if options.get("thumbnail"):
-                self.cache_manager.clear_thumbnail_cache()
-                cleared_items.append("缩略图缓存")
-            if options.get("md5"):
-                self.cache_manager.clear_md5_cache()
-                cleared_items.append("MD5缓存")
-            if options.get("classified_md5"):
-                self.cache_manager.clear_classified_md5_cache()
-                cleared_items.append("已分类MD5记录")
-            if options.get("memory"):
-                self._video_cover_cache.clear()
-                self._video_info_cache.clear()
-                cleared_items.append("内存预览缓存")
-            elif options.get("thumbnail"):
-                self._video_cover_cache.clear()
-                self._video_info_cache.clear()
-                cleared_items.append("内存预览缓存(联动)")
-
-            self.app.toast(f"已清理: {'、'.join(cleared_items)}", "success")
-            logger.log_operation("清除缓存", f"{self.cache_manager.base_dir} -> {cleared_items}")
-        except Exception as e:
-            logger.log_exception(e, "清除缓存失败")
-            self.app.toast(f"清除缓存失败: {e}", "error")
-
-    def _show_cache_clear_options_dialog(self) -> Optional[Dict[str, bool]]:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("选择清理项")
-        dialog.setModal(True)
-        dialog.resize(460, 320)
-
-        layout = QVBoxLayout(dialog)
-        tip = QLabel("请选择要清理的缓存项（仅清理勾选内容）：", dialog)
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
-
-        scan_cb = QCheckBox("导入扫描缓存（文件列表缓存）", dialog)
-        scan_cb.setChecked(True)
-        layout.addWidget(scan_cb)
-
-        thumbnail_cb = QCheckBox("缩略图缓存（磁盘）", dialog)
-        thumbnail_cb.setChecked(True)
-        layout.addWidget(thumbnail_cb)
-
-        md5_cb = QCheckBox("MD5缓存（媒体哈希计算结果）", dialog)
-        md5_cb.setChecked(True)
-        layout.addWidget(md5_cb)
-
-        classified_md5_cb = QCheckBox("已分类MD5记录（影响「过滤已筛选文件」）", dialog)
-        classified_md5_cb.setChecked(False)
-        layout.addWidget(classified_md5_cb)
-
-        memory_cb = QCheckBox("内存预览缓存（当前会话视频封面/信息）", dialog)
-        memory_cb.setChecked(True)
-        layout.addWidget(memory_cb)
-
-        caution = QLabel(
-            "提示：清理「已分类MD5记录」后，历史已分类文件可能重新出现在待筛选列表中。",
-            dialog,
-        )
-        caution.setWordWrap(True)
-        caution.setStyleSheet("color: #d32f2f; font-size: 12px;")
-        layout.addWidget(caution)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=dialog,
-        )
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
-
-        return {
-            "scan": scan_cb.isChecked(),
-            "thumbnail": thumbnail_cb.isChecked(),
-            "md5": md5_cb.isChecked(),
-            "classified_md5": classified_md5_cb.isChecked(),
-            "memory": memory_cb.isChecked(),
-        }
-
-    def _on_open_cache_folder(self):
-        cache_path = self.cache_manager.base_dir
-        cache_path.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(cache_path)))
-        self.app.toast(f"缓存目录: {cache_path}", "info")
+    def clear_memory_caches(self):
+        """清空当前会话的内存预览缓存（全局设置「清理媒体筛选缓存」调用）。"""
+        self._video_cover_cache.clear()
+        self._video_info_cache.clear()
 
     def _connect_signals(self):
         self.file_list_panel.folders_dropped.connect(self._on_folders_dropped)
@@ -554,12 +470,12 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
     def _reload_sources_label(self):
         if not self._source_folders:
-            self.sources_label.setText("尚未添加源文件夹（可拖入文件夹）")
+            self.sources_label.set_full_text("尚未添加源文件夹（可拖入文件夹）")
             return
         if len(self._source_folders) == 1:
-            self.sources_label.setText(f"源文件夹: {self._source_folders[0]}")
+            self.sources_label.set_full_text(f"源文件夹: {self._source_folders[0]}")
         else:
-            self.sources_label.setText(f"源文件夹: {len(self._source_folders)} 个")
+            self.sources_label.set_full_text(f"源文件夹: {len(self._source_folders)} 个")
 
     # ==================== 视图模式 ====================
 
@@ -1288,10 +1204,10 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
     def _reload_work_dir_label(self):
         if self.folder_manager._work_dir is None:
-            self.work_dir_label.setText("未设置（分类时自动选择）")
+            self.work_dir_label.set_full_text("未设置（分类时自动选择）")
             return
         work_dir = self.folder_manager.work_dir
-        self.work_dir_label.setText(f"{work_dir}")
+        self.work_dir_label.set_full_text(f"{work_dir}")
 
     @staticmethod
     def _normalize_file_operation_mode(mode) -> str:

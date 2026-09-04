@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from PIL import Image as PILImage
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QUrl, Signal
-from PySide6.QtGui import QFontMetrics, QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -210,15 +210,15 @@ class FileListPanel(QWidget):
     def _compute_layout_metrics(self) -> Dict[str, int]:
         """基于当前可视区宽度计算卡片尺寸，避免固定宽度导致溢出留白。"""
         viewport_width = max(self.file_list.viewport().width(), self.file_list.width(), 1)
-        available_width = max(viewport_width - 12, 180)
-        spacing = max(self.file_list.spacing(), 4)
 
-        # 文件卡片始终按两列计算，避免小屏下退化成单列造成空间浪费
-        two_col_width = int((available_width - spacing * 3) / 2)
+        # IconMode 实测换行开销：两列并排需视口 >= 2W + 29（spacing=4 时，
+        # 含 item margin 与内边距），另留 14px 竖向滚动条宽度（视口未收缩时预防）
+        two_col_width = int((viewport_width - 43) / 2)
         item_width = min(200, max(92, two_col_width))
         preview_card = max(84, item_width - 20)
         preview = max(80, preview_card - 4)
-        item_height = preview_card + 56
+        # 名称标签两行换行（窄面板下完整可读）：36px + 上下边距 12 + 间距 6 + 状态余量
+        item_height = preview_card + 72
         header_width = max(120, viewport_width - 16)
 
         return {
@@ -363,10 +363,12 @@ class FileListPanel(QWidget):
         item_layout.addWidget(preview_card, alignment=Qt.AlignmentFlag.AlignCenter)
 
         name_label = QLabel(file_path.name, item_widget)
-        name_label.setWordWrap(False)
+        # 两行换行显示完整文件名（窄面板下不再只露 "pixpin...5"），超长仍溢出裁剪
+        name_label.setWordWrap(True)
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_label.setFixedHeight(20)
+        name_label.setFixedHeight(36)
         name_label.setStyleSheet("font-size: 12px;")
+        name_label.setToolTip(str(file_path))
         name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         item_layout.addWidget(name_label)
 
@@ -470,9 +472,9 @@ class FileListPanel(QWidget):
 
         name_label = self._file_name_labels.get(file_path)
         if name_label:
-            name_label.setText(self._elide_file_name(file_path.name))
+            name_label.setText(file_path.name)
             name_label.setStyleSheet(f"font-size: 12px; color: {color_hex};")
-            name_label.setToolTip(file_path.name)
+            name_label.setToolTip(str(file_path))
 
     def get_selected_files(self) -> List[Path]:
         """获取选中的文件"""
@@ -1286,12 +1288,6 @@ class FileListPanel(QWidget):
         if preview_label is not None:
             preview_label.setPixmap(QPixmap())
         self._file_thumbnail_loaded[file_path] = False
-
-    def _elide_file_name(self, file_name: str) -> str:
-        """将文件名压缩为单行显示"""
-        metrics = QFontMetrics(QLabel().font())
-        width = max(int(self._layout_metrics.get("text_width", 176)), 88)
-        return metrics.elidedText(file_name, Qt.TextElideMode.ElideMiddle, width)
 
     def _to_square_pixmap(self, pixmap: Optional[QPixmap]) -> QPixmap:
         """缩略图转换为正方形显示；空图返回空 QPixmap（label 底色即占位）。"""

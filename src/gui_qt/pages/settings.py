@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
 )
 
+from image_sorter.core.cache_manager import CacheManager
 from toolbox.config_manager import (
     get_app_root, get_config_dir, get_export_dir, load_convert_config,
     has_date_subfolders, save_convert_config, set_export_dir, set_ffmpeg_path,
@@ -126,6 +127,7 @@ class GlobalSettingsPage(BasePage):
         info_row = QHBoxLayout()
         info_row.addWidget(self._btn("🔄 刷新信息", self._refresh_info))
         info_row.addWidget(self._btn("🧹 清理 Python 缓存 (__pycache__)", self._clean_pycache))
+        info_row.addWidget(self._btn("🧹 清理媒体筛选缓存", self._clean_media_sorter_cache))
         info_row.addStretch(1)
         v.addLayout(info_row)
         self.clean_result_label = QLabel("")
@@ -560,6 +562,40 @@ class GlobalSettingsPage(BasePage):
             self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
 
         self.clean_result_label.setText("🧹 清理中...")
+        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
+        run_bg(work, done)
+
+    def _clean_media_sorter_cache(self):
+        """清理媒体筛选页缓存（点击直接清理，无选择/确认弹窗）。
+
+        覆盖：导入扫描缓存、磁盘缩略图缓存、MD5 计算缓存、
+        已加载筛选页的内存预览缓存。
+        不动「已分类 MD5 记录」——清掉后历史已分类文件会重新出现在待筛选列表。
+        """
+        def work():
+            cm = CacheManager()
+            cm.clear_scan_cache()
+            cm.clear_thumbnail_cache()
+            cm.clear_md5_cache()
+            return str(cm.base_dir)
+
+        def done(result, err):
+            if err:
+                self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
+                self.clean_result_label.setStyleSheet("color: #ff5252; font-size: 11px;")
+                self.app.toast(f"清理媒体筛选缓存失败: {str(err)[:40]}", "error")
+                return
+            page = self.app.pages.get("image_sorter")
+            if page is not None:
+                try:
+                    page.clear_memory_caches()
+                except Exception:
+                    pass
+            self.clean_result_label.setText("✅ 媒体筛选缓存已清理（导入扫描/缩略图/MD5）")
+            self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+            self.app.toast("媒体筛选缓存已清理", "success")
+
+        self.clean_result_label.setText("🧹 清理媒体筛选缓存中...")
         self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
         run_bg(work, done)
 
