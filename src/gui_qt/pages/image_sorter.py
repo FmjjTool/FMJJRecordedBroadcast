@@ -7,7 +7,7 @@
 - 阶段三：文件夹面板（分类目标卡片）+ 分类/删除/收藏/快速分类
   + 复制/移动模式 + 撤销栈 + 复检模式 + 页面级快捷键分发 + 页内设置区 ✅
 - 阶段四（本次）：QMediaPlayer 视频播放（Enter/中央播放键）+ LIVP/sidecar
-  实况播放 + 自动播放设置开关 + 压缩标签页（MediaCompressThread 接线）
+  实况播放 + 自动播放设置开关；压缩标签页已独立为「实用工具·媒体压缩」页
 
 与源项目 MainWindow 的差异：
 - QMainWindow+qfluentwidgets → BasePage（工具箱页面体系），反馈改 app.toast
@@ -59,7 +59,6 @@ from image_sorter.core.duplicate_detector import DuplicateDetectionThread
 from image_sorter.core.file_processor import FileProcessor
 from image_sorter.core.file_scanner import FileScanner
 from image_sorter.core.folder_manager import FolderManager
-from image_sorter.core.media_compress_thread import MediaCompressThread
 from image_sorter.core.media_hash_manager import MediaHashManager
 from image_sorter.core.md5_filter_thread import Md5FilterThread
 from image_sorter.core.media_info_extractor import MediaInfoExtractor
@@ -127,7 +126,6 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.thumbnail_loader = None
         self.duplicate_thread: Optional[DuplicateDetectionThread] = None
         self.md5_filter_thread: Optional[Md5FilterThread] = None
-        self._compress_thread: Optional[MediaCompressThread] = None
         self._scan_job_running = False
 
         # ---------- 扫描会话 ----------
@@ -173,7 +171,6 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
         self._init_ui()
         self._connect_signals()
-        self._restore_compress_profiles()
 
     # ==================== UI ====================
 
@@ -290,7 +287,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
     def _init_settings_area(self):
         self.settings_area = QWidget()
         self.settings_area.setStyleSheet(
-            "QWidget { background-color: #f7f8fa; border: 1px solid #e5e7eb;"
+            "QWidget { background-color: #f4f5f7; border: 1px solid #dfe4ec;"
             " border-radius: 6px; }"
         )
         area_layout = QHBoxLayout(self.settings_area)
@@ -450,7 +447,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
             dialog,
         )
         caution.setWordWrap(True)
-        caution.setStyleSheet("color: #A66; font-size: 12px;")
+        caution.setStyleSheet("color: #d32f2f; font-size: 12px;")
         layout.addWidget(caution)
 
         buttons = QDialogButtonBox(
@@ -509,9 +506,6 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         # 媒体查看器（阶段四：播放失败提示 + LIVP 中央播放键）
         self.media_viewer.playback_failed.connect(self._on_playback_failed)
         self.media_viewer.livp_play_requested.connect(self._play_livp_video)
-
-        # 压缩（阶段四）
-        self.file_info_panel.compress_requested.connect(self._on_compress_requested)
 
     # ==================== 源文件夹管理 ====================
 
@@ -1085,8 +1079,8 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         if event.type() == QEvent.KeyPress:
             if not self.isVisible():
                 return False
-            # 仅接管发往本页控件树（主窗口）的按键；弹窗/独立对话框不拦截
-            if not (self.isAncestorOf(obj) or obj is self):
+            # 仅接管发往本页控件树（主窗口）的按键；弹窗/独立对话框/QWindow 不拦截
+            if not isinstance(obj, QWidget) or not (self.isAncestorOf(obj) or obj is self):
                 return False
             if self._handle_global_shortcuts(event):
                 return True
@@ -1249,129 +1243,6 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         if not self.file_list or not (0 <= self.current_index < len(self.file_list)):
             return False
         return self.file_list[self.current_index].suffix.lower() in SUPPORTED_VIDEO_FORMATS
-
-    # ==================== 媒体压缩（阶段四） ====================
-
-    def _restore_compress_profiles(self):
-        """启动时从配置恢复图片/视频两套压缩预设与参数。"""
-        try:
-            self.file_info_panel.set_compress_profiles(
-                cfg.get_str("compress_image_preset", "均衡(推荐)"),
-                cfg.get_dict("compress_image_options"),
-                cfg.get_str("compress_video_preset", "均衡(推荐)"),
-                cfg.get_dict("compress_video_options"),
-            )
-        except Exception as e:
-            logger.log_exception(e, "恢复压缩配置失败")
-
-    def _on_compress_requested(self, payload: dict):
-        """处理压缩请求：持久化参数 + 启动后台压缩线程。"""
-        file_path = Path(str(payload.get("file_path", "")).strip())
-        if not file_path.exists() or not file_path.is_file():
-            self.app.toast("压缩失败：源文件不存在", "warning")
-            return
-
-        if self._compress_thread is not None and self._compress_thread.isRunning():
-            self.app.toast("请稍候：已有压缩任务正在执行", "warning")
-            return
-
-        # 记录当前预设与参数，下次启动自动恢复
-        try:
-            media_type = str(payload.get("media_type", "image")).strip().lower()
-            if media_type not in {"image", "video"}:
-                media_type = "image"
-            preset_name = str(payload.get("preset", "")).strip() or "均衡(推荐)"
-            options = dict(payload)
-            options.pop("file_path", None)
-            if media_type == "video":
-                cfg.set_setting("compress_video_preset", preset_name)
-                cfg.set_dict("compress_video_options", options)
-            else:
-                cfg.set_setting("compress_image_preset", preset_name)
-                cfg.set_dict("compress_image_options", options)
-        except Exception as e:
-            logger.log_exception(e, "保存压缩配置失败")
-
-        self.file_info_panel.set_compress_running(True, f"[开始] {file_path.name}")
-
-        self._compress_thread = MediaCompressThread(
-            file_path=file_path, options=payload, parent=self
-        )
-        self._compress_thread.progress.connect(self._on_compress_progress)
-        self._compress_thread.finished_ok.connect(self._on_compress_finished)
-        self._compress_thread.failed.connect(self._on_compress_failed)
-        self._compress_thread.start()
-
-    def _on_compress_progress(self, message: str):
-        if message:
-            self.file_info_panel.set_compress_running(True, message)
-
-    def _on_compress_finished(self, result: dict):
-        self.file_info_panel.set_compress_running(False, "")
-
-        source_path = Path(str(result.get("source_path", "")))
-        output_path = Path(str(result.get("output_path", "")))
-        before_size = int(result.get("before_size", 0) or 0)
-        after_size = int(result.get("after_size", 0) or 0)
-        saved = max(before_size - after_size, 0)
-        saved_ratio = (saved * 100.0 / before_size) if before_size > 0 else 0.0
-        options = result.get("options", {}) or {}
-        before_info = result.get("before_info", {}) or {}
-        after_info = result.get("after_info", {}) or {}
-        fmt = FileInfoPanel._format_bytes
-
-        lines = [
-            f"[完成] {source_path.name} -> {output_path.name}",
-            f"输出路径: {output_path}",
-            f"体积变化: {fmt(before_size)} -> {fmt(after_size)} (节省 {saved_ratio:.1f}%)",
-            f"预设: {options.get('preset', '自定义')}",
-            (
-                "参数: "
-                f"压缩率={options.get('compression_ratio', '-')}, 清晰度={options.get('quality', '-')}, "
-                f"分辨率={options.get('resolution', '-')}, 编码={options.get('codec', '-')}, "
-                f"类型={options.get('target_type', '-')}, 帧率={options.get('fps', '-')}, "
-                f"清元数据={'是' if options.get('clear_metadata') else '否'}"
-            ),
-        ]
-        estimated_after = int(options.get("estimated_after_size", 0) or 0)
-        if estimated_after > 0:
-            diff = after_size - estimated_after
-            diff_ratio = (abs(diff) * 100.0 / estimated_after) if estimated_after > 0 else 0.0
-            sign = "+" if diff > 0 else ("-" if diff < 0 else "±")
-            lines.append(
-                f"大小预估: {fmt(estimated_after)} | 实际偏差: "
-                f"{sign}{fmt(abs(diff))} ({diff_ratio:.1f}%)"
-            )
-
-        def _append_change(label: str):
-            old_v = str(before_info.get(label, "")).strip()
-            new_v = str(after_info.get(label, "")).strip()
-            if old_v and new_v and old_v != new_v:
-                lines.append(f"{label}: {old_v} -> {new_v}")
-
-        for key_label in ("格式", "编码", "分辨率", "帧率", "码率", "文件大小"):
-            _append_change(key_label)
-
-        self.file_info_panel.set_compress_result("\n".join(lines) + "\n")
-        self.app.toast(f"压缩完成: {output_path.name}", "success")
-
-        # 压缩结果写入 MD5 缓存并标记已分类，避免再次出现在筛选列表
-        try:
-            hash_manager = MediaHashManager(sqlite_store=self.cache_manager.sqlite_store)
-            md5_value = hash_manager.calculate_md5(output_path)
-            if md5_value:
-                self.cache_manager.mark_md5_classified_batch({md5_value})
-            self._remember_classified_target_folder(output_path.parent)
-        except Exception as e:
-            logger.log_exception(e, f"压缩结果写入MD5缓存失败: {output_path}")
-
-        self._compress_thread = None
-
-    def _on_compress_failed(self, error_message: str):
-        self.file_info_panel.set_compress_running(False, "")
-        self.file_info_panel.set_compress_result(f"[失败] {error_message}\n")
-        self.app.toast(f"压缩失败: {error_message}", "error")
-        self._compress_thread = None
 
     # ==================== 工作目录管理 ====================
 
@@ -2423,6 +2294,6 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         if self._undo_thumbnail_loader is not None and self._undo_thumbnail_loader.isRunning():
             self._undo_thumbnail_loader.stop()
             self._undo_thumbnail_loader.wait(300)
-        for thread in (self.md5_filter_thread, self.duplicate_thread, self._compress_thread):
+        for thread in (self.md5_filter_thread, self.duplicate_thread):
             if thread is not None and thread.isRunning():
                 thread.wait(500)

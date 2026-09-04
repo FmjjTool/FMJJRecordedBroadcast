@@ -49,7 +49,7 @@ class ShortcutMappingDialog(QDialog):
         self.scroll = QScrollArea(self)
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet(
-            "QScrollArea { background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 4px; }"
+            "QScrollArea { background-color: #ffffff; border: 1px solid #dfe4ec; border-radius: 4px; }"
         )
         self.container = QWidget(self.scroll)
         self.container.setStyleSheet("background: transparent;")

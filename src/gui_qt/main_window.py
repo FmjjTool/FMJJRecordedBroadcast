@@ -50,6 +50,7 @@ from gui_qt.pages.shopping_page import ShoppingPage
 from gui_qt.pages.bili_danmaku import BiliDanmakuPage
 from gui_qt.pages.image_crop import ImageCropPage
 from gui_qt.pages.image_sorter import ImageSorterPage
+from gui_qt.pages.media_compress import MediaCompressPage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> 页面类
@@ -84,6 +85,7 @@ PAGE_CLASSES = {
     "bili_danmaku": BiliDanmakuPage,
     "image_crop": ImageCropPage,
     "image_sorter": ImageSorterPage,
+    "media_compress": MediaCompressPage,
     "global_settings": GlobalSettingsPage,
 }
 
@@ -127,7 +129,8 @@ NAV_GROUPS = [
     ]),
     ("🧰 实用工具", [
         ("image_crop", "🖼 图片裁切"),
-        ("image_sorter", "🗃 图片筛选分类"),
+        ("image_sorter", "🎞 媒体筛选分类"),
+        ("media_compress", "🗜 媒体压缩"),
         ("rename_batch", "✏️ 批量重命名"),
         ("file_time", "🕓 文件时间修改"),
         ("music_tag", "🏷 音乐标签"),
@@ -512,8 +515,8 @@ class MainWindow(QMainWindow):
         dirs = [f for f in files if os.path.isdir(f)]
         file_list = [f for f in files if os.path.isfile(f)]
 
-        # 字幕转换页 / 歌词转换页 / 音乐标签页 / 图片裁切页 / 图片筛选分类页：接受拖放的文件或文件夹（本地列表，不改全局目录）
-        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics", "music_tag", "image_crop", "image_sorter"):
+        # 字幕转换页 / 歌词转换页 / 音乐标签页 / 图片裁切页 / 媒体筛选分类页 / 媒体压缩页：接受拖放的文件或文件夹（本地列表，不改全局目录）
+        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics", "music_tag", "image_crop", "image_sorter", "media_compress"):
             p = self.pages.get(self.current_page)
             if p:
                 if dirs:

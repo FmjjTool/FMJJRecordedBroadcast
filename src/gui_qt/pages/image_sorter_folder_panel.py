@@ -332,7 +332,7 @@ class FolderPanel(QWidget):
         layout.addLayout(button_layout)
 
         self.folder_list.setStyleSheet(
-            "QListWidget { background-color: #ffffff; border: 1px solid #e5e7eb;"
+            "QListWidget { background-color: #ffffff; border: 1px solid #dfe4ec;"
             " border-radius: 6px; }"
         )
 

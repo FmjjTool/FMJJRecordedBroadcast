@@ -17,7 +17,7 @@ import subprocess
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from PIL import Image as PILImage
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QUrl, Signal
@@ -1958,19 +1958,16 @@ class MediaViewer(QWidget):
 # ==================== 右栏：媒体信息面板（阶段二：信息展示） ====================
 
 class FileInfoPanel(QWidget):
-    """文件信息面板（信息 + 压缩 + 重命名三标签页）。
+    """文件信息面板（信息 + 重命名两标签页）。
 
     重命名标签页：手动重命名 + 模板管理 + 自动重命名 token + 分类词，
     模板/分类词持久化到 config.json「image_sorter」节（settings.set_dict）。
-    压缩标签页：图片/视频两套预设与九项参数 + 大小预估 + 结果展示，
-    压缩执行经 compress_requested 信号由页面层 MediaCompressThread 完成。
     """
 
     copy_info_requested = Signal(str)  # 信息提示文本（页面层转 toast）
     rename_requested = Signal(str)     # 请求重命名当前文件（新文件名）
     auto_rename_config_changed = Signal(bool, str)  # 自动重命名配置更新
     notify_requested = Signal(str, str)  # 通用提示（文本, 级别 success/warning/error）
-    compress_requested = Signal(dict)   # 请求压缩当前文件（完整参数 payload）
 
     PRIORITY_FIELDS = [
         "格式", "编码", "分辨率", "时长", "帧率", "文件大小",
@@ -2009,97 +2006,6 @@ class FileInfoPanel(QWidget):
         "时间戳_原名": "{datetime}_{source_name}",
     }
 
-    COMPRESS_PRESETS_IMAGE = {
-        "高质量": {
-            "compression_ratio": 20,
-            "quality": 90,
-            "resolution": "保持原始",
-            "codec": "libwebp",
-            "target_type": "webp",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": False,
-        },
-        "均衡(推荐)": {
-            "compression_ratio": 38,
-            "quality": 78,
-            "resolution": "1920x1080",
-            "codec": "libwebp",
-            "target_type": "webp",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": True,
-        },
-        "极限压缩": {
-            "compression_ratio": 70,
-            "quality": 48,
-            "resolution": "1280x720",
-            "codec": "libaom-av1",
-            "target_type": "avif",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": True,
-        },
-        "无损优先": {
-            "compression_ratio": 5,
-            "quality": 98,
-            "resolution": "保持原始",
-            "codec": "png",
-            "target_type": "png",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": False,
-        },
-        "自定义": {},
-    }
-    COMPRESS_PRESETS_VIDEO = {
-        "高质量": {
-            "compression_ratio": 20,
-            "quality": 90,
-            "resolution": "保持原始",
-            "codec": "libx265",
-            "target_type": "keep",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": False,
-        },
-        "均衡(推荐)": {
-            "compression_ratio": 35,
-            "quality": 75,
-            "resolution": "1920x1080",
-            "codec": "libx264",
-            "target_type": "mp4",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": True,
-        },
-        "极限压缩": {
-            "compression_ratio": 65,
-            "quality": 45,
-            "resolution": "1280x720",
-            "codec": "libx265",
-            "target_type": "mp4",
-            "fps": 24,
-            "bitrate_kbps": 1200,
-            "clear_metadata": True,
-        },
-        "无损优先": {
-            "compression_ratio": 5,
-            "quality": 98,
-            "resolution": "保持原始",
-            "codec": "copy",
-            "target_type": "keep",
-            "fps": 0,
-            "bitrate_kbps": 0,
-            "clear_metadata": False,
-        },
-        "自定义": {},
-    }
-    COMPRESS_CODECS_IMAGE = ["auto", "libwebp", "libaom-av1", "mjpeg", "png"]
-    COMPRESS_CODECS_VIDEO = ["auto", "libx264", "libx265", "libvpx-vp9", "mpeg4", "copy"]
-    COMPRESS_TYPES_IMAGE = ["keep", "jpg", "png", "webp", "avif"]
-    COMPRESS_TYPES_VIDEO = ["keep", "mp4", "mov", "mkv", "webm", "avi", "flv"]
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_file: Optional[Path] = None
@@ -2112,15 +2018,6 @@ class FileInfoPanel(QWidget):
         self._auto_rename_enabled = False
         self._auto_rename_pattern = "{source_name}"
         self._pattern_renderer = None  # 页面注入：fn(pattern, target_path) -> str
-
-        # 压缩状态（图片/视频两套独立配置）
-        self._compress_preset_applying = False
-        self._compress_media_type = "image"
-        self._compress_current_file_size = 0
-        self._compress_profiles: Dict[str, Dict[str, Any]] = {
-            "image": {"preset": "均衡(推荐)", "options": {}},
-            "video": {"preset": "均衡(推荐)", "options": {}},
-        }
 
         self._load_rename_templates()
         self._init_ui()
@@ -2142,7 +2039,7 @@ class FileInfoPanel(QWidget):
         self.tab_widget = QTabWidget(card)
         self.tab_widget.setStyleSheet(
             "QTabWidget::pane { border: 1px solid #d0d6df; border-radius: 4px; top: -1px; }"
-            " QTabBar::tab { padding: 5px 12px; background: #f7f8fa;"
+            " QTabBar::tab { padding: 5px 12px; background: #f4f5f7;"
             " border: 1px solid #d0d6df; border-bottom: none;"
             " border-top-left-radius: 4px; border-top-right-radius: 4px; }"
             " QTabBar::tab:selected { background: #ffffff; color: #2563eb;"
@@ -2151,7 +2048,6 @@ class FileInfoPanel(QWidget):
         card_layout.addWidget(self.tab_widget, 1)
 
         self._init_info_tab()
-        self._init_compress_tab()
         self._init_rename_tab()
 
     def _init_info_tab(self):
@@ -2197,156 +2093,6 @@ class FileInfoPanel(QWidget):
         self.info_grid.addStretch(1)
 
         self.tab_widget.addTab(self.info_tab, "文件信息")
-
-    def _init_compress_tab(self):
-        """压缩标签页：预设 + 九项参数 + 大小预估 + 结果区。"""
-        self.compress_tab = QWidget(self.tab_widget)
-        self.compress_tab.setStyleSheet("background: transparent;")
-
-        compress_scroll = QScrollArea(self.compress_tab)
-        compress_scroll.setWidgetResizable(True)
-        compress_scroll.setStyleSheet(
-            "QScrollArea { background-color: #ffffff; border: none; }"
-        )
-        tab_layout = QVBoxLayout(self.compress_tab)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(compress_scroll)
-
-        body = QWidget(compress_scroll)
-        body.setStyleSheet("background: transparent;")
-        compress_layout = QVBoxLayout(body)
-        compress_layout.setContentsMargins(6, 8, 6, 8)
-        compress_layout.setSpacing(8)
-        compress_scroll.setWidget(body)
-
-        self.compress_current_file_label = QLabel("当前文件: -", body)
-        self.compress_current_file_label.setWordWrap(True)
-        self.compress_current_file_label.setStyleSheet("color: #6b7280;")
-        compress_layout.addWidget(self.compress_current_file_label)
-
-        form_layout = QGridLayout()
-        form_layout.setContentsMargins(0, 0, 0, 0)
-        form_layout.setHorizontalSpacing(10)
-        form_layout.setVerticalSpacing(8)
-
-        def _field_label(text: str, tip: str = "") -> QLabel:
-            lab = QLabel(text, body)
-            lab.setStyleSheet("font-weight: 600; color: #5a6474;")
-            if tip:
-                lab.setToolTip(tip)
-            return lab
-
-        row = 0
-        self.compress_preset_label = QLabel("图片压缩预设", body)
-        self.compress_preset_label.setStyleSheet("font-weight: 600; color: #5a6474;")
-        form_layout.addWidget(self.compress_preset_label, row, 0)
-        preset_row = QHBoxLayout()
-        self.compress_preset_combo = QComboBox(body)
-        preset_row.addWidget(self.compress_preset_combo, 1)
-        self.compress_apply_preset_btn = QPushButton("应用预设", body)
-        self.compress_apply_preset_btn.clicked.connect(
-            lambda: self._on_apply_compress_preset(self.compress_preset_combo.currentText())
-        )
-        preset_row.addWidget(self.compress_apply_preset_btn)
-        form_layout.addLayout(preset_row, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("压缩率(%)", "目标压缩率越高，体积越小，画质通常越低"), row, 0)
-        self.compress_ratio_spin = QSpinBox(body)
-        self.compress_ratio_spin.setRange(0, 90)
-        self.compress_ratio_spin.setValue(35)
-        form_layout.addWidget(self.compress_ratio_spin, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("清晰度", "值越高画质越好，体积通常越大"), row, 0)
-        self.compress_quality_slider = QSlider(Qt.Orientation.Horizontal, body)
-        self.compress_quality_slider.setRange(1, 100)
-        self.compress_quality_slider.setValue(75)
-        form_layout.addWidget(self.compress_quality_slider, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("分辨率"), row, 0)
-        self.compress_resolution_combo = QComboBox(body)
-        self.compress_resolution_combo.addItems([
-            "保持原始",
-            "3840x2160",
-            "2560x1440",
-            "1920x1080",
-            "1280x720",
-            "854x480",
-            "640x360",
-        ])
-        form_layout.addWidget(self.compress_resolution_combo, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("编码"), row, 0)
-        self.compress_codec_combo = QComboBox(body)
-        form_layout.addWidget(self.compress_codec_combo, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("文件类型"), row, 0)
-        self.compress_type_combo = QComboBox(body)
-        form_layout.addWidget(self.compress_type_combo, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("帧率(FPS,0=不改)"), row, 0)
-        self.compress_fps_spin = QSpinBox(body)
-        self.compress_fps_spin.setRange(0, 240)
-        self.compress_fps_spin.setValue(0)
-        form_layout.addWidget(self.compress_fps_spin, row, 1)
-
-        row += 1
-        form_layout.addWidget(_field_label("视频码率(kbps,0=自动)"), row, 0)
-        self.compress_bitrate_spin = QSpinBox(body)
-        self.compress_bitrate_spin.setRange(0, 300000)
-        self.compress_bitrate_spin.setValue(0)
-        form_layout.addWidget(self.compress_bitrate_spin, row, 1)
-
-        row += 1
-        self.compress_strip_metadata_cb = QCheckBox("清除元数据", body)
-        self.compress_strip_metadata_cb.setChecked(True)
-        form_layout.addWidget(self.compress_strip_metadata_cb, row, 0, 1, 2)
-
-        compress_layout.addLayout(form_layout)
-
-        self.compress_size_preview_label = QLabel("大小预估: -", body)
-        self.compress_size_preview_label.setWordWrap(True)
-        compress_layout.addWidget(self.compress_size_preview_label)
-        self.compress_size_preview_hint = QLabel("仅预估，实际结果以 ffmpeg 输出为准", body)
-        self.compress_size_preview_hint.setWordWrap(True)
-        self.compress_size_preview_hint.setStyleSheet("font-size: 11px; color: #8a93a3;")
-        compress_layout.addWidget(self.compress_size_preview_hint)
-
-        btn_layout = QHBoxLayout()
-        self.start_compress_btn = QPushButton("🚀 开始压缩", body)
-        self.start_compress_btn.clicked.connect(self._on_start_compress_clicked)
-        self.start_compress_btn.setEnabled(False)
-        btn_layout.addWidget(self.start_compress_btn)
-        btn_layout.addStretch()
-        compress_layout.addLayout(btn_layout)
-
-        self.compress_result_edit = QTextEdit(body)
-        self.compress_result_edit.setReadOnly(True)
-        self.compress_result_edit.setMinimumHeight(150)
-        self.compress_result_edit.setPlaceholderText("压缩结果将在这里显示（大小变化、参数变化、输出路径）")
-        self.compress_result_edit.setStyleSheet(
-            "QTextEdit { background-color: #f7f8fa; border: 1px solid #d0d6df; border-radius: 4px;"
-            " color: #2f3440; font-size: 12px; }"
-        )
-        compress_layout.addWidget(self.compress_result_edit, 1)
-
-        self.compress_preset_combo.currentTextChanged.connect(self._on_compress_preset_changed)
-        self.compress_ratio_spin.valueChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_quality_slider.valueChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_resolution_combo.currentTextChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_codec_combo.currentTextChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_type_combo.currentTextChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_fps_spin.valueChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_bitrate_spin.valueChanged.connect(self._on_compress_option_manually_changed)
-        self.compress_strip_metadata_cb.toggled.connect(self._on_compress_option_manually_changed)
-        self._switch_compress_media_profile("image", force=True)
-
-        self.tab_widget.addTab(self.compress_tab, "压缩")
 
     def _init_rename_tab(self):
         """重命名标签页：手动重命名 + 模板 + 自动重命名 + 分类词。"""
@@ -2537,448 +2283,6 @@ class FileInfoPanel(QWidget):
         self._refresh_template_combo()
         self._refresh_tag_buttons()
 
-    # ---------- 压缩（阶段四） ----------
-
-    @staticmethod
-    def _set_combo_text_if_exists(combo: QComboBox, text: str):
-        """若值存在于下拉选项则设置，不存在则保持当前值。"""
-        target = str(text or "").strip()
-        if not target:
-            return
-        for idx in range(combo.count()):
-            if str(combo.itemText(idx)).strip() == target:
-                combo.setCurrentIndex(idx)
-                return
-
-    def _set_combo_items(self, combo: QComboBox, items: List[str], preferred: str = ""):
-        """重建下拉选项并尽量保留/恢复目标值。"""
-        current_text = str(preferred or combo.currentText() or "").strip()
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(items)
-        if current_text:
-            self._set_combo_text_if_exists(combo, current_text)
-        if combo.currentIndex() < 0 and combo.count() > 0:
-            combo.setCurrentIndex(0)
-        combo.blockSignals(False)
-
-    @staticmethod
-    def _normalize_compress_media_type(media_type: str) -> str:
-        text = str(media_type or "").strip().lower()
-        return "video" if text == "video" else "image"
-
-    def _get_active_compress_presets(self) -> Dict[str, Dict[str, Any]]:
-        return (
-            self.COMPRESS_PRESETS_VIDEO
-            if self._compress_media_type == "video"
-            else self.COMPRESS_PRESETS_IMAGE
-        )
-
-    def _get_active_codec_items(self) -> List[str]:
-        return (
-            list(self.COMPRESS_CODECS_VIDEO)
-            if self._compress_media_type == "video"
-            else list(self.COMPRESS_CODECS_IMAGE)
-        )
-
-    def _get_active_type_items(self) -> List[str]:
-        return (
-            list(self.COMPRESS_TYPES_VIDEO)
-            if self._compress_media_type == "video"
-            else list(self.COMPRESS_TYPES_IMAGE)
-        )
-
-    def _refresh_compress_mode_controls(self):
-        """根据当前媒体类型更新预设、编码和类型可选项。"""
-        media_text = "视频" if self._compress_media_type == "video" else "图片"
-        self.compress_preset_label.setText(f"{media_text}压缩预设")
-
-        self._compress_preset_applying = True
-        try:
-            self._set_combo_items(self.compress_codec_combo, self._get_active_codec_items())
-            self._set_combo_items(self.compress_type_combo, self._get_active_type_items())
-
-            is_video = self._compress_media_type == "video"
-            self.compress_fps_spin.setEnabled(is_video)
-            self.compress_bitrate_spin.setEnabled(is_video)
-            if not is_video:
-                self.compress_fps_spin.setValue(0)
-                self.compress_bitrate_spin.setValue(0)
-        finally:
-            self._compress_preset_applying = False
-
-    def _switch_compress_media_profile(self, media_type: str, force: bool = False):
-        """切换图片/视频压缩配置并恢复对应预设和参数。"""
-        target_type = self._normalize_compress_media_type(media_type)
-        if (not force) and target_type == self._compress_media_type:
-            self._update_compress_size_preview()
-            return
-
-        if not force:
-            self._remember_current_compress_profile()
-
-        self._compress_media_type = target_type
-        self._refresh_compress_mode_controls()
-        profiles = self._compress_profiles.get(target_type, {})
-        preset = str(profiles.get("preset", "均衡(推荐)") or "均衡(推荐)").strip() or "均衡(推荐)"
-        options = profiles.get("options", {}) if isinstance(profiles, dict) else {}
-        self._restore_compress_profile(preset, options if isinstance(options, dict) else {})
-
-    def _restore_compress_profile(self, preset_name: str, options: Dict[str, Any]):
-        """恢复当前媒体类型下的压缩预设和参数。"""
-        presets = self._get_active_compress_presets()
-        preset_items = list(presets.keys())
-        target_preset = str(preset_name or "均衡(推荐)").strip()
-        if target_preset not in presets:
-            target_preset = "均衡(推荐)" if "均衡(推荐)" in presets else preset_items[0]
-        self._set_combo_items(self.compress_preset_combo, preset_items, target_preset)
-
-        self._on_apply_compress_preset(self.compress_preset_combo.currentText())
-        if not isinstance(options, dict):
-            self._remember_current_compress_profile()
-            self._update_compress_size_preview()
-            return
-
-        self._compress_preset_applying = True
-        try:
-            if "compression_ratio" in options:
-                self.compress_ratio_spin.setValue(int(options.get("compression_ratio") or self.compress_ratio_spin.value()))
-            if "quality" in options:
-                self.compress_quality_slider.setValue(int(options.get("quality") or self.compress_quality_slider.value()))
-            if "resolution" in options:
-                self._set_combo_text_if_exists(self.compress_resolution_combo, str(options.get("resolution", "")))
-            if "codec" in options:
-                self._set_combo_text_if_exists(self.compress_codec_combo, str(options.get("codec", "")))
-            if "target_type" in options:
-                self._set_combo_text_if_exists(self.compress_type_combo, str(options.get("target_type", "")))
-            if "fps" in options:
-                self.compress_fps_spin.setValue(int(options.get("fps") or 0))
-            if "bitrate_kbps" in options:
-                self.compress_bitrate_spin.setValue(int(options.get("bitrate_kbps") or 0))
-            if "clear_metadata" in options:
-                self.compress_strip_metadata_cb.setChecked(bool(options.get("clear_metadata")))
-        finally:
-            self._compress_preset_applying = False
-
-        self._remember_current_compress_profile()
-        self._update_compress_size_preview()
-
-    def _collect_current_compress_options(self) -> Dict[str, Any]:
-        return {
-            "compression_ratio": int(self.compress_ratio_spin.value()),
-            "quality": int(self.compress_quality_slider.value()),
-            "resolution": str(self.compress_resolution_combo.currentText()).strip(),
-            "codec": str(self.compress_codec_combo.currentText()).strip(),
-            "target_type": str(self.compress_type_combo.currentText()).strip(),
-            "fps": int(self.compress_fps_spin.value()),
-            "bitrate_kbps": int(self.compress_bitrate_spin.value()),
-            "clear_metadata": bool(self.compress_strip_metadata_cb.isChecked()),
-        }
-
-    def _remember_current_compress_profile(self):
-        if self._compress_media_type not in self._compress_profiles:
-            return
-        self._compress_profiles[self._compress_media_type] = {
-            "preset": str(self.compress_preset_combo.currentText()).strip() or "均衡(推荐)",
-            "options": self._collect_current_compress_options(),
-        }
-
-    def _on_apply_compress_preset(self, preset_name: str = ""):
-        """应用压缩预设到参数控件。"""
-        preset = str(preset_name or self.compress_preset_combo.currentText() or "").strip()
-        values = dict(self._get_active_compress_presets().get(preset, {}))
-        if not values:
-            self._remember_current_compress_profile()
-            self._update_compress_size_preview()
-            return
-        self._compress_preset_applying = True
-        try:
-            self.compress_ratio_spin.setValue(int(values.get("compression_ratio", self.compress_ratio_spin.value())))
-            self.compress_quality_slider.setValue(int(values.get("quality", self.compress_quality_slider.value())))
-            self._set_combo_text_if_exists(self.compress_resolution_combo, str(values.get("resolution", "")))
-            self._set_combo_text_if_exists(self.compress_codec_combo, str(values.get("codec", "")))
-            self._set_combo_text_if_exists(self.compress_type_combo, str(values.get("target_type", "")))
-            self.compress_fps_spin.setValue(int(values.get("fps", self.compress_fps_spin.value())))
-            self.compress_bitrate_spin.setValue(int(values.get("bitrate_kbps", self.compress_bitrate_spin.value())))
-            self.compress_strip_metadata_cb.setChecked(bool(values.get("clear_metadata", self.compress_strip_metadata_cb.isChecked())))
-        finally:
-            self._compress_preset_applying = False
-        self._remember_current_compress_profile()
-        self._update_compress_size_preview()
-
-    def _on_compress_preset_changed(self, preset_name: str):
-        """切换预设时自动应用（自定义除外）。"""
-        if str(preset_name or "").strip() == "自定义":
-            self._remember_current_compress_profile()
-            self._update_compress_size_preview()
-            return
-        self._on_apply_compress_preset(preset_name)
-
-    def _on_compress_option_manually_changed(self, *_args):
-        """用户手动改参数后，将预设标记为自定义。"""
-        if self._compress_preset_applying:
-            return
-        if str(self.compress_preset_combo.currentText()).strip() == "自定义":
-            self._remember_current_compress_profile()
-            self._update_compress_size_preview()
-            return
-        self._set_combo_text_if_exists(self.compress_preset_combo, "自定义")
-        self._remember_current_compress_profile()
-        self._update_compress_size_preview()
-
-    def set_compress_profiles(
-        self,
-        image_preset: str,
-        image_options: Dict[str, Any],
-        video_preset: str,
-        video_options: Dict[str, Any],
-    ):
-        """设置图片/视频两套压缩配置（启动时从持久化配置恢复）。"""
-        self._compress_profiles["image"] = {
-            "preset": str(image_preset or "均衡(推荐)").strip() or "均衡(推荐)",
-            "options": dict(image_options) if isinstance(image_options, dict) else {},
-        }
-        self._compress_profiles["video"] = {
-            "preset": str(video_preset or "均衡(推荐)").strip() or "均衡(推荐)",
-            "options": dict(video_options) if isinstance(video_options, dict) else {},
-        }
-        self._switch_compress_media_profile(self._compress_media_type, force=True)
-        self._sync_compress_fields(self._current_file)
-
-    @staticmethod
-    def _format_bytes(size_value: int) -> str:
-        size = float(max(int(size_value), 0))
-        units = ["B", "KB", "MB", "GB", "TB"]
-        unit_index = 0
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024.0
-            unit_index += 1
-        return f"{size:.2f}{units[unit_index]}"
-
-    @staticmethod
-    def _parse_resolution_text(value: str) -> Optional[Tuple[int, int]]:
-        text = str(value or "").strip().lower()
-        if "x" not in text:
-            return None
-        left, right = text.split("x", 1)
-        try:
-            width = int(re.sub(r"[^\d]", "", left))
-            height = int(re.sub(r"[^\d]", "", right))
-        except Exception:
-            return None
-        if width <= 0 or height <= 0:
-            return None
-        return width, height
-
-    @staticmethod
-    def _parse_duration_seconds(value: str) -> float:
-        text = str(value or "").strip()
-        if not text:
-            return 0.0
-        if ":" not in text:
-            try:
-                return max(float(text), 0.0)
-            except Exception:
-                return 0.0
-        parts = text.split(":")
-        try:
-            if len(parts) == 2:
-                mm, ss = int(parts[0]), float(parts[1])
-                return max(mm * 60 + ss, 0.0)
-            if len(parts) == 3:
-                hh, mm, ss = int(parts[0]), int(parts[1]), float(parts[2])
-                return max(hh * 3600 + mm * 60 + ss, 0.0)
-        except Exception:
-            return 0.0
-        return 0.0
-
-    @staticmethod
-    def _parse_fps_value(value: str) -> float:
-        text = str(value or "").strip()
-        if not text:
-            return 0.0
-        m = re.search(r"(\d+(?:\.\d+)?)", text)
-        if not m:
-            return 0.0
-        try:
-            return max(float(m.group(1)), 0.0)
-        except Exception:
-            return 0.0
-
-    def _estimate_compress_size_bytes(self) -> Optional[int]:
-        src_size = int(self._compress_current_file_size or 0)
-        if src_size <= 0:
-            return None
-
-        options = self._collect_current_compress_options()
-        compression_ratio = max(0, min(int(options.get("compression_ratio", 35)), 90))
-        quality = max(1, min(int(options.get("quality", 75)), 100))
-        resolution = str(options.get("resolution", "保持原始")).strip()
-        codec = str(options.get("codec", "auto")).strip().lower()
-        target_type = str(options.get("target_type", "keep")).strip().lower()
-        fps = max(0, int(options.get("fps", 0) or 0))
-        bitrate_kbps = max(0, int(options.get("bitrate_kbps", 0) or 0))
-        clear_metadata = bool(options.get("clear_metadata", False))
-
-        source_resolution = self._parse_resolution_text(self._current_info.get("分辨率", ""))
-        target_resolution = self._parse_resolution_text(resolution)
-        area_scale = 1.0
-        if source_resolution and target_resolution:
-            src_area = max(source_resolution[0] * source_resolution[1], 1)
-            tgt_area = max(
-                min(target_resolution[0], source_resolution[0]) *
-                min(target_resolution[1], source_resolution[1]),
-                1,
-            )
-            area_scale = min(1.0, tgt_area / float(src_area))
-
-        estimate = float(src_size)
-        if self._compress_media_type == "image":
-            ratio_factor = 1.0 - (compression_ratio / 100.0) * 0.75
-            quality_factor = 0.55 + (quality / 100.0) * 0.55
-            area_factor = 0.35 + (area_scale ** 0.9) * 0.65
-            type_factor_map = {
-                "keep": 1.0,
-                "jpg": 0.95,
-                "jpeg": 0.95,
-                "png": 1.20,
-                "webp": 0.76,
-                "avif": 0.62,
-            }
-            codec_factor_map = {
-                "auto": 1.0,
-                "mjpeg": 0.96,
-                "png": 1.15,
-                "libwebp": 0.78,
-                "libaom-av1": 0.70,
-            }
-            estimate *= ratio_factor * quality_factor * area_factor
-            estimate *= type_factor_map.get(target_type, 1.0)
-            estimate *= codec_factor_map.get(codec, 1.0)
-            if clear_metadata:
-                estimate *= 0.985
-            min_size = int(src_size * 0.02)
-            max_size = int(src_size * 1.4)
-        else:
-            ratio_factor = 1.0 - (compression_ratio / 100.0) * 0.70
-            quality_factor = 0.50 + (quality / 100.0) * 0.60
-            area_factor = 0.40 + (area_scale ** 0.7) * 0.60
-            fps_factor = 1.0
-            source_fps = self._parse_fps_value(self._current_info.get("帧率", ""))
-            if fps > 0 and source_fps > 0:
-                fps_factor = max(0.35, min(float(fps) / source_fps, 1.25))
-
-            codec_factor_map = {
-                "auto": 0.95,
-                "libx264": 0.95,
-                "libx265": 0.80,
-                "libvpx-vp9": 0.76,
-                "mpeg4": 1.15,
-                "copy": 1.0,
-            }
-            type_factor_map = {
-                "keep": 1.0,
-                "mp4": 0.97,
-                "mov": 1.03,
-                "mkv": 0.96,
-                "webm": 0.90,
-                "avi": 1.12,
-                "flv": 1.08,
-            }
-            estimate *= ratio_factor * quality_factor * area_factor * fps_factor
-            estimate *= codec_factor_map.get(codec, 1.0)
-            estimate *= type_factor_map.get(target_type, 1.0)
-
-            duration_seconds = self._parse_duration_seconds(self._current_info.get("时长", ""))
-            if bitrate_kbps > 0 and duration_seconds > 0:
-                bitrate_estimate = (bitrate_kbps * 1000.0 / 8.0) * duration_seconds * 1.12
-                estimate = min(estimate, bitrate_estimate)
-
-            if clear_metadata:
-                estimate *= 0.997
-            min_size = int(src_size * 0.05)
-            max_size = int(src_size * 1.6)
-
-        estimate_int = int(max(min_size, min(max_size, estimate)))
-        return estimate_int
-
-    def _update_compress_size_preview(self):
-        if not hasattr(self, "compress_size_preview_label"):
-            return
-
-        src_size = int(self._compress_current_file_size or 0)
-        if src_size <= 0:
-            self.compress_size_preview_label.setText("大小预估: -")
-            return
-
-        estimate = self._estimate_compress_size_bytes()
-        if estimate is None:
-            self.compress_size_preview_label.setText(f"大小预估: {self._format_bytes(src_size)} -> -")
-            return
-
-        delta = estimate - src_size
-        delta_ratio = (abs(delta) * 100.0 / src_size) if src_size > 0 else 0.0
-        if delta < 0:
-            trend = f"预计减少 {delta_ratio:.1f}%"
-        elif delta > 0:
-            trend = f"预计增加 {delta_ratio:.1f}%"
-        else:
-            trend = "预计基本不变"
-        self.compress_size_preview_label.setText(
-            f"大小预估: {self._format_bytes(src_size)} -> {self._format_bytes(estimate)} ({trend})"
-        )
-
-    def _sync_compress_fields(self, file_path: Optional[Path]):
-        """同步压缩区域显示"""
-        if not file_path:
-            self.compress_current_file_label.setText("当前文件: -")
-            self.start_compress_btn.setEnabled(False)
-            self._compress_current_file_size = 0
-            self._update_compress_size_preview()
-            return
-        media_text = "视频" if self._compress_media_type == "video" else "图片"
-        self.compress_current_file_label.setText(f"当前文件: {file_path.name} ({media_text})")
-        self.start_compress_btn.setEnabled(True)
-        try:
-            self._compress_current_file_size = int(file_path.stat().st_size)
-        except Exception:
-            self._compress_current_file_size = 0
-        self._update_compress_size_preview()
-
-    def _on_start_compress_clicked(self):
-        """发起压缩请求"""
-        if not self._current_file:
-            QMessageBox.information(self, "提示", "当前没有可压缩文件")
-            return
-        self._remember_current_compress_profile()
-        payload = {
-            "file_path": str(self._current_file),
-            "media_type": self._compress_media_type,
-            "preset": str(self.compress_preset_combo.currentText()).strip(),
-            "compression_ratio": int(self.compress_ratio_spin.value()),
-            "quality": int(self.compress_quality_slider.value()),
-            "resolution": str(self.compress_resolution_combo.currentText()).strip(),
-            "codec": str(self.compress_codec_combo.currentText()).strip(),
-            "target_type": str(self.compress_type_combo.currentText()).strip(),
-            "fps": int(self.compress_fps_spin.value()),
-            "bitrate_kbps": int(self.compress_bitrate_spin.value()),
-            "clear_metadata": bool(self.compress_strip_metadata_cb.isChecked()),
-            "estimated_after_size": int(self._estimate_compress_size_bytes() or 0),
-        }
-        self.compress_requested.emit(payload)
-
-    def set_compress_running(self, running: bool, message: str = ""):
-        """更新压缩状态"""
-        if hasattr(self, "start_compress_btn"):
-            self.start_compress_btn.setEnabled((not running) and (self._current_file is not None))
-        if message and hasattr(self, "compress_result_edit"):
-            self.compress_result_edit.append(message)
-
-    def set_compress_result(self, text: str):
-        """追加压缩结果"""
-        if hasattr(self, "compress_result_edit"):
-            self.compress_result_edit.append(text)
-
     # ---------- 展示 ----------
 
     def display_image_info(self, file_path: Path, info: Dict[str, str]):
@@ -2986,18 +2290,14 @@ class FileInfoPanel(QWidget):
         self._current_file = file_path
         self._clear_info()
         self._display_info(info)
-        self._switch_compress_media_profile("image")
         self._sync_rename_fields(file_path)
-        self._sync_compress_fields(file_path)
 
     def display_video_info(self, file_path: Path, info: Dict[str, str]):
         """显示视频信息"""
         self._current_file = file_path
         self._clear_info()
         self._display_info(info)
-        self._switch_compress_media_profile("video")
         self._sync_rename_fields(file_path)
-        self._sync_compress_fields(file_path)
 
     def _display_info(self, info: Dict[str, str]):
         """动态显示信息（有多少显多少，按逻辑优先级排列）"""
