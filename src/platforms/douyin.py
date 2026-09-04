@@ -203,6 +203,9 @@ class DouyinParser(PlatformBase):
             if not info.title and not info.author:
                 tr = re.search(r"<title>(.*?)</title>", html)
                 if tr: info.title = tr.group(1).strip()
+            if not video_info and "验证码" in (info.title or ""):
+                print("[抖音] 页面命中验证码中间页，视为失败")
+                return None
             return info
         except Exception as e:
             print(f"[抖音] 解析失败: {e}")

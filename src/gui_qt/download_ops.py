@@ -15,6 +15,18 @@ from toolbox.config_manager import get_export_subdir
 _BARE_BV_RE = re.compile(r"^bv([a-zA-Z0-9]{10})$", re.IGNORECASE)
 _BARE_AV_RE = re.compile(r"^av(\d+)$", re.IGNORECASE)
 
+# 分享口令文本中提取 URL（ASCII URL 字符集，遇中文/空白自然截断）
+_URL_IN_TEXT_RE = re.compile(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+")
+
+
+def extract_share_url(text: str) -> str:
+    """整段分享口令 → 第一条 URL；纯 URL / 纯 BV号输入原样返回。"""
+    s = text.strip()
+    m = _URL_IN_TEXT_RE.search(s)
+    if m:
+        return m.group(0).rstrip(".,;:!?")
+    return s
+
 
 def _normalize_bare_bili_id(url: str) -> str:
     """纯 BV/AV 号 → 标准 B站视频 URL（bv 前缀大写，ID 正文保持原样）。"""
@@ -45,11 +57,13 @@ def parse_url_info(url: str):
 
     B站/抖音/微博走完整解析器（信息全），其余 7 个视频平台（小红书/快手/
     好看/微视/梨视频/皮皮搞笑）走 multi_downloader 构造最小 VideoInfo。
+    支持整段分享口令（含"复制打开抖音极速版…"等文字）自动提取其中的 URL。
     无法识别时抛 ValueError。
     """
     from platforms import URLRecognizer, get_parser
     from platforms.base import VideoInfo, now_str
 
+    url = extract_share_url(url)
     url = _normalize_bare_bili_id(url)
     platform = URLRecognizer.recognize(url)
     parser = get_parser(platform) if platform else None
