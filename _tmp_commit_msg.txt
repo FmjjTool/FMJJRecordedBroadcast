@@ -1,7 +1,0 @@
-feat(设置): 内置「封茗囧菌直播总结」AI Skill + 设置页下载导出功能
-
-- 新增 src/skills/fengming-livestream-summary/ 内置 Skill（SKILL.md + references 三件套：归类库/纠错映射/输出模板）
-- 新增 toolbox/skills.py：Skill 资源定位（开发 src/skills · 打包 _MEIPASS/skills）、frontmatter 元数据枚举、目录级导出
-- 新增 gui_qt/skill_download.py 下载二级对话框：列表选择 → 详情预览 → 导出指定目录 → 打开导出目录
-- 设置页新增「🤖 AI Skill 下载」区块（内置数量/大小/名称概览 + 下载入口）
-- build.py ADD_DATA 收录 skills 目录随 exe 分发
