@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "shaman-jobs": {
+      "source": "linkerlin/PUAX",
+      "sourceType": "github",
+      "skillPath": "skills/shaman-jobs/SKILL.md",
+      "computedHash": "44a1f87d3c5a95d1e5314809703d9133de1e14596fc6592633281a3cb7aae540"
+    }
+  }
+}
