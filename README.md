@@ -130,7 +130,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  app_qt.py  入口：无控制台守卫 / 子进程 CREATE_NO_WINDOW /    │
+│  main.py    入口：无控制台守卫 / 子进程 CREATE_NO_WINDOW /    │
 │             Qt 降噪 / 配置初始化 / 日志初始化 / ffmpeg 检测    │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -196,7 +196,7 @@
 
 ```
 PySide6/
-├── app_qt.py                    # PySide6 入口
+├── main.py                       # PySide6 入口
 ├── build.py                     # 一键打包（PyInstaller + Inno Setup + 隐私扫描）
 ├── check_deps.py                # 依赖自检 / 自动安装
 ├── requirements.txt
@@ -417,7 +417,7 @@ https://example.com                            # 纯 URL（兼容旧格式）
 ### 开发模式
 
 ```bash
-python app_qt.py
+python main.py
 ```
 
 **无 CMD 黑窗**：双击 `启动工具箱(无窗口).vbs`（优先用 `pythonw` 启动）。
@@ -430,7 +430,7 @@ python app_qt.py
 - 最小尺寸 880×560
 - 左侧 210px 导航（可滚动，「⚙️ 全局」固定在底部）+ 右侧内容区
 
-### 启动流程（`app_qt.py`）
+### 启动流程（`main.py`）
 
 1. `_headless_io()` —— 无控制台时把 `stdout/stderr` 补空流，避免 `print`/`logging` 崩溃
 2. `_suppress_child_consoles()` —— 给 `subprocess.Popen` 补 `CREATE_NO_WINDOW`，ffmpeg/node 不弹黑窗

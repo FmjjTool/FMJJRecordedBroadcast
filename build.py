@@ -188,7 +188,7 @@ def run_pyinstaller(name: str):
         print("（未找到 icon.ico，使用默认图标；放一个 icon.ico 到项目根即可自定义）")
     for src, dst in ADD_DATA:
         cmd += ["--add-data", f"{src};{dst}"]
-    cmd.append("app_qt.py")
+    cmd.append("main.py")
 
     print(" ".join(cmd))
     r = subprocess.run(cmd, cwd=ROOT)

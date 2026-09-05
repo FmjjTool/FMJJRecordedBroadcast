@@ -5,9 +5,9 @@ Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = fso.GetParentFolderName(WScript.ScriptFullName)
 
 On Error Resume Next
-sh.Run "pythonw app_qt.py", 0, False
+sh.Run "pythonw main.py", 0, False
 If Err.Number <> 0 Then
     Err.Clear
-    sh.Run "python app_qt.py", 0, False
+    sh.Run "python main.py", 0, False
 End If
 On Error GoTo 0

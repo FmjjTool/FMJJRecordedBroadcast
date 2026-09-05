@@ -1,6 +1,6 @@
-"""PySide6 版桌面入口（与原版 app_gui.py 对应）。
+"""PySide6 版桌面入口。
 
-启动：python app_qt.py
+启动：python main.py
 """
 import os
 import subprocess
