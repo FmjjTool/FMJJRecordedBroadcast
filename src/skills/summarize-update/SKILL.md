@@ -140,6 +140,7 @@ Invoke-RestMethod -Method Post -Uri $uri `
 ### 验证与汇报
 
 - `GET /repos/FmjjTool/FMJJRecordedBroadcast/releases/tags/{新版本}` 确认：非 draft、assets=1、大小 ≈275MB
+- **仓库为私有仓库**：验证的 GET 也必须带 Authorization 头（GCM 取 token 同上）——无凭据返回 404，曾被误判为 Release 不存在
 - 向用户汇报：新版本号、Release 链接（`https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/{新版本}`）、本次更新内容摘要
 
 ## 安全红线
