@@ -267,8 +267,10 @@ def prune(name: str):
         if stem not in QT_DLL_KEEP:
             removed.append((p.name, p.stat().st_size))
             p.unlink()
-    # 未用模块的 pyd 同步删除（源码 import 的 5 个模块之外；QtOpenGL.pyd 8.3MB 是大头）
-    PYD_KEEP = {"QtCore", "QtGui", "QtWidgets", "QtMultimedia",
+    # 未用模块的 pyd 同步删除（源码 import 的 5 个模块 + QtMultimedia 的 shiboken
+    # 内部依赖 QtNetwork——实测 import QtMultimedia 必拉起 QtNetwork.pyd，漏删即崩；
+    # QtOpenGL.pyd 8.3MB 是大头）
+    PYD_KEEP = {"QtCore", "QtGui", "QtWidgets", "QtNetwork", "QtMultimedia",
                 "QtMultimediaWidgets"}
     for p in (internal / "PySide6").glob("*.pyd"):
         if p.name[:-4] not in PYD_KEEP:
