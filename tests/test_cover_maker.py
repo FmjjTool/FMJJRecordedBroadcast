@@ -4,8 +4,8 @@
 - 渲染引擎：文字像素确实绘制、比例化分辨率一致、自动换行宽度、溢出自动缩小
 - 数据模型：FieldState 序列化/模板往返
 - 底图引擎：递归扫描 / 随机抽取 / 缩放缓存
-- QImage→PIL 转换、字体回退
-- 页面冒烟：实例化 / 预览渲染 / PNG·JPG·GIF 导出 / 拖动更新 / 模板保存加载 / 深色渲染
+- 字体回退
+- 页面冒烟：实例化 / 预览渲染 / PNG·JPG 导出 / 拖动更新 / 模板保存加载 / 深色渲染
 - 底图选择器：方块平铺网格 / 预选与选择 / 筛选 / 缩略图解码
 - 滚轮拦截：五类控件滚轮不改值不吞事件；弹窗与补全列表跟随主题
 - 颜色选择器：预设色板 / 十六进制·RGB 输入识别 / 双击确定 / 接线
@@ -165,12 +165,6 @@ class TestRenderEngine(unittest.TestCase):
         self.assertEqual(img_fit.pixelColor(100, 50).name(), "#00aa00",
                          "完整包含时中心应为底图")
 
-    def test_qimage_to_pil(self):
-        img = _make_bg(12, 8, "#00ff00")
-        pil = cvr.qimage_to_pil(img)
-        self.assertEqual(pil.size, (12, 8))
-        self.assertEqual(pil.getpixel((5, 4)), (0, 255, 0))
-
 
 class TestModelAndHelpers(unittest.TestCase):
     def test_field_state_roundtrip(self):
@@ -280,17 +274,6 @@ class TestCoverMakerPage(unittest.TestCase):
         self.assertTrue(jpg.exists() and jpg.suffix == ".jpg")
         self.assertFalse(QImage(str(png)).isNull())
         self.assertIsNotNone(self.page.cached_export_image)
-
-    def test_export_gif(self):
-        self.page.states["title"].text = "GIF 测试"
-        frames = self.page._render_gif_frames()
-        self.assertEqual(len(frames), self.page.gif_frames_spin.value())
-        out = _TMP / "cover.gif"
-        cvr.CoverMakerPage.save_gif(frames, out)
-        self.assertGreater(out.stat().st_size, 1000)
-        from PIL import Image as PILImage
-        with PILImage.open(out) as im:
-            self.assertGreaterEqual(im.n_frames, 8)
 
     def test_drag_update(self):
         self.page._on_drag_update("title", 0.7, 0.25)
@@ -638,7 +621,6 @@ class TestNoWheelControls(unittest.TestCase):
             self.assertIsInstance(page.fit_combo, cvr.NoWheelComboBox)
             self.assertIsInstance(page.res_combo, cvr.NoWheelComboBox)
             self.assertIsInstance(page.quality_slider, cvr.NoWheelSlider)
-            self.assertIsInstance(page.gif_frames_spin, cvr.NoWheelSpinBox)
             self.assertIsInstance(page.y_spin, cvr.NoWheelDoubleSpinBox)
             self.assertTrue(page.panels["title"].font_combo.isEditable())
         finally:

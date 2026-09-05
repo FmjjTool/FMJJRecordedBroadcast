@@ -12,12 +12,11 @@
 - 交互规范：下拉/滑条/数字框均不响应滚轮改值（滚轮专用于滚动页面）；
   字体下拉可直接输入字体名识别（无效字体名自动回退）；颜色选择用内置
   主题色板（预设色 + 十六进制 / RGB 输入），不弹系统原生黑窗
-- 导出：PNG / JPG（质量 60~100）/ GIF 动效（Pillow 合成正弦浮动帧，无需 FFmpeg）
+- 导出：PNG / JPG（质量 60~100）
 - 集成：主程序经 create_cover_module() 获取 QWidget 实例（亦可作为普通页面注册）
 """
 
 import json
-import math
 import os
 import random
 import re
@@ -27,7 +26,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PIL import Image
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QFontDatabase, QIcon, QImage, QImageReader,
@@ -61,7 +59,6 @@ FIELD_PLACEHOLDERS = {
 DEFAULT_FONT_FAMILY = "Microsoft YaHei"
 CANVAS_REF_H = 1080          # 字号比例基准高度（font_size_ratio = px / 1080）
 PREVIEW_W, PREVIEW_H = 960, 540
-GIF_W, GIF_H = 960, 540
 TEXT_MAX_WIDTH_RATIO = 0.7    # 文字块最大宽度占画布比例
 TEXT_MAX_HEIGHT_RATIO = 0.88 # 触发自动缩小字号的高度阈值
 MIN_FONT_PX = 12
@@ -74,10 +71,6 @@ ALIGN_ITEMS = [("居中", "center"), ("左对齐", "left"), ("右对齐", "right
 
 EXPORT_RESOLUTIONS = ["1920x1080", "2560x1440", "3840x2160", "1280x720"]
 JPG_QUALITY_MIN, JPG_QUALITY_MAX, JPG_QUALITY_DEFAULT = 60, 100, 95
-GIF_FRAMES_MIN, GIF_FRAMES_MAX, GIF_FRAMES_DEFAULT = 8, 15, 12
-GIF_DURATION_MS = 150
-GIF_LOOP = 0
-GIF_AMPLITUDE_RATIO = 0.010  # 正弦浮动幅度（画布高度比例）
 
 CANVAS_BG_FALLBACK = "#181a20"   # 无底图/留白时的画布底色
 PREVIEW_LETTERBOX = "#101216"   # 预览组件画框底色（深浅主题固定）
@@ -101,8 +94,7 @@ HELP_HTML = (
     "Y轴微调整体上下平移（画布高度比例）</p>"
     "<p>· <b>分辨率</b>：所有字号与位置按画布比例存储，预览 960x540，"
     "导出可切 1080p/2K/4K 不乱版；超长文字自动换行（不超过 70% 画布宽）并自动缩小防溢出</p>"
-    "<p>· <b>导出</b>：PNG 无损 / JPG 质量可调（60~100），保存到 download/套版封面/；"
-    "GIF 动效生成正弦浮动循环动画（Pillow 合成，无需 FFmpeg）</p>"
+    "<p>· <b>导出</b>：PNG 无损 / JPG 质量可调（60~100），保存到 download/套版封面/</p>"
     "<p>· <b>模板</b>：保存三字段样式与位置比例，并记忆当时所用底图（文件仍在时加载"
     "自动切换），不保存文字内容；存放在 config/cover_templates/，字体缺失自动回退并提示</p>"
     "<p>· <b>选择底图</b>：方块平铺缩略图浏览底图文件夹全部图片，按名称筛选，"
@@ -345,20 +337,6 @@ def render_cover(width: int, height: int, bg: Optional[QImage], fit_mode: str,
 
     painter.end()
     return image, geoms
-
-
-def qimage_to_pil(image: QImage) -> "Image.Image":
-    """QImage(RGB32) 转 PIL Image（GIF 合成用，RGBA8888 字节序安全）。"""
-    src = image.convertToFormat(QImage.Format.Format_RGBA8888)
-    w, h = src.width(), src.height()
-    stride = src.bytesPerLine()
-    buf = bytes(src.constBits())
-    if stride == w * 4:
-        data = buf
-    else:
-        data = b"".join(buf[r * stride:(r + 1) * stride] for r in range(h))
-    pil = Image.frombytes("RGBA", (w, h), data)
-    return pil.convert("RGB")
 
 
 # ==================== 配置 / 模板持久化 ====================
@@ -616,14 +594,15 @@ class BackgroundPickerDialog(QDialog):
     实时筛选。
     """
 
-    TILE = 168          # 方块图标区边长
+    TILE = 168          # 方块图标区边长（逻辑像素）
     GRID_W = 184        # 格宽 = 图标 + 间距
-    GRID_H = 224        # 格高 = 图标 + 两行文件名 + 间距
+    GRID_H = 216        # 格高 = 图标 + 两行文件名 + 间距
 
     def __init__(self, files: List[Path], current_path: Optional[Path],
                  parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._files = list(files)
+        self._dpr = max(1.0, float(self.devicePixelRatioF()))
         self.setWindowTitle(f"选择底图（共 {len(self._files)} 张）")
         self.resize(1000, 640)
 
@@ -642,7 +621,6 @@ class BackgroundPickerDialog(QDialog):
         self.listw.setViewMode(QListWidget.ViewMode.IconMode)
         self.listw.setIconSize(QSize(self.TILE, self.TILE))
         self.listw.setGridSize(QSize(self.GRID_W, self.GRID_H))
-        self.listw.setUniformItemSizes(True)
         self.listw.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.listw.setMovement(QListWidget.Movement.Static)
         self.listw.setSpacing(8)
@@ -667,8 +645,12 @@ class BackgroundPickerDialog(QDialog):
         v.addLayout(btns)
 
         current_row = -1
+        cell = QSize(self.GRID_W, self.GRID_H)
         for i, path in enumerate(self._files):
             item = QListWidgetItem(path.name)
+            # 显式占满整格：不依赖图标异步到达后的动态尺寸（图标未到时 item
+            # 只有文字高度，曾把整格压成细条），选中框也完整覆盖方块
+            item.setSizeHint(cell)
             item.setData(int(Qt.ItemDataRole.UserRole), str(path))
             self.listw.addItem(item)
             if current_path is not None and path == Path(current_path):
@@ -694,17 +676,35 @@ class BackgroundPickerDialog(QDialog):
         run_bg(job, lambda _r, _e: None)
 
     def _decode_thumb(self, path: Path) -> Optional[QImage]:
-        """解码为方块内等比缩放的缩略图（宽高都不超过 TILE）。"""
-        reader = QImageReader(str(path))
-        reader.setAutoTransform(True)
-        size = reader.size()
-        if size.isValid():
-            scaled = size.scaled(self.TILE, self.TILE,
-                                 Qt.AspectRatioMode.KeepAspectRatio)
-            if scaled.width() > 0 and scaled.height() > 0:
-                reader.setScaledSize(scaled)
-        img = reader.read()
-        return None if img.isNull() else img
+        """解码为方块缩略图：整图等比缩放后居中合成到 TILE×TILE 方形画布。
+
+        每张缩略图都是统一正方形（与图标区同尺寸），网格因此完全整齐；
+        按屏幕 DPR 放大解码保证高分屏清晰；解码失败返回 None。
+        """
+        try:
+            reader = QImageReader(str(path))
+            reader.setAutoTransform(True)
+            side = int(round(self.TILE * self._dpr))
+            size = reader.size()
+            if size.isValid():
+                scaled = size.scaled(side, side,
+                                     Qt.AspectRatioMode.KeepAspectRatio)
+                if scaled.width() > 0 and scaled.height() > 0:
+                    reader.setScaledSize(scaled)
+            img = reader.read()
+            if img.isNull():
+                return None
+            canvas = QImage(side, side, QImage.Format.Format_ARGB32)
+            canvas.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(canvas)
+            x = (side - img.width()) // 2
+            y = (side - img.height()) // 2
+            painter.drawImage(x, y, img)
+            painter.end()
+            canvas.setDevicePixelRatio(self._dpr)
+            return canvas
+        except Exception:
+            return None
 
     def _set_icon(self, index: int, img: Optional[QImage]):
         if img is None:
@@ -1279,12 +1279,6 @@ class CoverMakerPage(BasePage):
                                     min(JPG_QUALITY_MAX, int(section.get("jpg_quality") or JPG_QUALITY_DEFAULT)))
         except (TypeError, ValueError):
             self._jpg_quality = JPG_QUALITY_DEFAULT
-        self._gif_frames = GIF_FRAMES_DEFAULT
-        try:
-            self._gif_frames = max(GIF_FRAMES_MIN,
-                                  min(GIF_FRAMES_MAX, int(section.get("gif_frames") or GIF_FRAMES_DEFAULT)))
-        except (TypeError, ValueError):
-            self._gif_frames = GIF_FRAMES_DEFAULT
         sync = section.get("sync") if isinstance(section.get("sync"), dict) else {}
         self._sync = {
             "font": bool(sync.get("font", True)),
@@ -1303,7 +1297,6 @@ class CoverMakerPage(BasePage):
             folder = default_folder
         self.provider = BackgroundProvider(folder)
         self._bg_path: Optional[Path] = None
-        self._gif_running = False
         self.cached_export_image: Optional[QImage] = None
 
         self._build_ui()
@@ -1382,7 +1375,11 @@ class CoverMakerPage(BasePage):
         scroll.setMinimumWidth(320)
         scroll.setMaximumWidth(460)
         body = QWidget(scroll)
-        body.setStyleSheet("background: transparent;")
+        # 必须用带选择器的样式表：无选择器样式表会传播给全部后代，包括以本栏
+        # 控件为父的对话框（ColorPickerDialog），background: transparent 会覆盖
+        # 应用级 QSS 把整个弹窗变成未初始化黑底（深浅主题均黑）
+        body.setObjectName("coverMakerLeftBody")
+        body.setStyleSheet("QWidget#coverMakerLeftBody { background: transparent; }")
         lv = QVBoxLayout(body)
         lv.setContentsMargins(8, 8, 8, 8)
         lv.setSpacing(10)
@@ -1526,24 +1523,6 @@ class CoverMakerPage(BasePage):
         self.export_jpg_btn.clicked.connect(lambda: self._export_image("JPEG"))
         row2.addWidget(self.export_jpg_btn)
         rv.addLayout(row2)
-
-        row3 = QHBoxLayout()
-        glab = QLabel("GIF帧数")
-        glab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        self.gif_frames_spin = NoWheelSpinBox()
-        self.gif_frames_spin.setRange(GIF_FRAMES_MIN, GIF_FRAMES_MAX)
-        self.gif_frames_spin.setValue(GIF_FRAMES_DEFAULT)
-        self.gif_frames_spin.setFixedWidth(56)
-        self.gif_frames_spin.setToolTip(
-            "GIF 动效帧数（8~15 帧，文字正弦浮动）；可直接输入，滚轮不改变值")
-        row3.addWidget(glab)
-        row3.addWidget(self.gif_frames_spin)
-        row3.addStretch(1)
-        self.export_gif_btn = QPushButton("🎬 GIF动效")
-        self.export_gif_btn.setToolTip("生成文字正弦浮动循环 GIF（Pillow 合成，无需 FFmpeg）")
-        self.export_gif_btn.clicked.connect(self._export_gif)
-        row3.addWidget(self.export_gif_btn)
-        rv.addLayout(row3)
         return right
 
     def _restore_widgets(self, section: Dict[str, Any]):
@@ -1552,7 +1531,6 @@ class CoverMakerPage(BasePage):
             self.res_combo.setCurrentText(self._export_resolution)
         self.quality_slider.setValue(self._jpg_quality)
         self.quality_label.setText(str(self._jpg_quality))
-        self.gif_frames_spin.setValue(self._gif_frames)
         self.y_spin.setValue(self.y_shift)
         self.sync_font_cb.setChecked(self._sync["font"])
         self.sync_color_cb.setChecked(self._sync["color"])
@@ -1751,54 +1729,6 @@ class CoverMakerPage(BasePage):
         self._toast(f"已导出 {fmt}：{path}", "success")
         return path
 
-    def _render_gif_frames(self) -> List[QImage]:
-        n = self.gif_frames_spin.value()
-        frames: List[QImage] = []
-        for i in range(n):
-            shift = GIF_AMPLITUDE_RATIO * math.sin(2.0 * math.pi * i / float(n))
-            image, _geoms = render_cover(GIF_W, GIF_H, self._current_bg(GIF_W, GIF_H),
-                                         self.fit_mode, self.states,
-                                         self.y_shift + shift, draw_hint=False)
-            frames.append(image)
-        return frames
-
-    @staticmethod
-    def save_gif(frames: List[QImage], path: Path) -> None:
-        pil_frames = [qimage_to_pil(f) for f in frames]
-        pil_frames[0].save(str(path), save_all=True,
-                           append_images=pil_frames[1:],
-                           duration=GIF_DURATION_MS, loop=GIF_LOOP)
-
-    def _export_gif(self):
-        if self._gif_running:
-            self._toast("GIF 正在导出中，请稍候", "warning")
-            return
-        frames = self._render_gif_frames()
-        if not frames:
-            self._toast("GIF 帧渲染失败", "error")
-            return
-        out_dir = Path(get_export_dir()) / "套版封面"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"封面_{time.strftime('%Y%m%d_%H%M%S')}.gif"
-        self._gif_running = True
-        self.export_gif_btn.setEnabled(False)
-
-        def job():
-            CoverMakerPage.save_gif(frames, path)
-            return path, path.stat().st_size if path.exists() else 0
-
-        def done(res, err):
-            self._gif_running = False
-            self.export_gif_btn.setEnabled(True)
-            if err:
-                self._toast(f"GIF 导出失败：{err}", "error")
-                return
-            _p, size = res
-            self._persist_state()
-            self._toast(f"已导出 GIF（{len(frames)} 帧 / {size / 1024:.0f} KB）：{_p}", "success")
-
-        run_bg(job, done)
-
     # ---------- 模板 ----------
 
     def _on_save_template(self):
@@ -1936,7 +1866,6 @@ class CoverMakerPage(BasePage):
             "fit_mode": self.fit_mode,
             "export_resolution": self.res_combo.currentText(),
             "jpg_quality": self.quality_slider.value(),
-            "gif_frames": self.gif_frames_spin.value(),
             "y_shift": round(float(self.y_spin.value()), 4),
             "sync": {
                 "font": self.sync_font_cb.isChecked(),
