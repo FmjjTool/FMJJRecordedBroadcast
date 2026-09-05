@@ -3,6 +3,7 @@
 核心设计：
 - 渲染：QPainter + QImage（Antialiasing + TextAntialiasing），系统级字体渲染
 - 预览/导出分离：预览固定 960x540 小画布轻量重绘，导出按所选分辨率完整重渲染
+- 实时渲染：参数变更走 10ms 节流（活跃期间不重启防饿死），文字/滑条/拖动即时跟手不卡顿
 - 全参数比例化：字号 = px/1080、位置 x_ratio/y_ratio 按画布比例存储，
   1080p/2K/4K 分辨率切换布局不乱
 - 文字自动换行（不超过 70% 画布宽）+ 溢出自动缩小字号（最小阈值）
@@ -860,7 +861,7 @@ class CoverMakerPage(BasePage):
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
-        self._debounce.setInterval(150)
+        self._debounce.setInterval(10)
         self._debounce.timeout.connect(self._render_preview)
 
         # 初始底图
@@ -1119,7 +1120,10 @@ class CoverMakerPage(BasePage):
         return self.provider.scaled_background(self._bg_path, w, h, self.fit_mode)
 
     def _schedule_preview(self):
-        self._debounce.start()
+        """10ms 节流请求重绘：定时器活跃期间不重启（连续输入/拖动不会把渲染
+        一次次往后推导致"饿死"），触发时读取最新状态渲染，且渲染频率被压住防卡顿。"""
+        if not self._debounce.isActive():
+            self._debounce.start()
 
     def _render_preview(self):
         bg = self._current_bg(PREVIEW_W, PREVIEW_H)
@@ -1180,7 +1184,7 @@ class CoverMakerPage(BasePage):
             return
         state.x_ratio = min(1.0, max(0.0, x_ratio))
         state.y_ratio = min(1.0, max(0.0, y_ratio - self.y_shift))
-        self._render_preview()
+        self._schedule_preview()
 
     def _on_reset_positions(self):
         defaults = default_states()

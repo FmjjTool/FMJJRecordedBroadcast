@@ -18,7 +18,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEventLoop, QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
@@ -268,6 +268,36 @@ class TestCoverMakerPage(unittest.TestCase):
         self.page._on_drag_update("title", 0.7, 0.25)
         self.assertAlmostEqual(self.page.states["title"].x_ratio, 0.7)
         self.assertAlmostEqual(self.page.states["title"].y_ratio, 0.25)
+        self.assertTrue(self.page._debounce.isActive(), "拖动应经 10ms 节流触发渲染")
+
+    def test_text_typing_renders_within_10ms(self):
+        self.page._debounce.stop()
+        self.page.states["title"].text = ""
+        self.page._render_preview()
+        self.assertNotIn("title", self.page.preview._geoms)
+        self.page.panels["title"].text_edit.setText("实时渲染")
+        self.assertTrue(self.page._debounce.isActive(), "打字后应启动渲染定时器")
+        self.assertLessEqual(self.page._debounce.interval(), 10,
+                             "节流间隔应为 10ms")
+        loop = QEventLoop()
+        QTimer.singleShot(80, loop.quit)
+        loop.exec()
+        self.assertIn("title", self.page.preview._geoms,
+                      "80ms 内必须完成渲染（10ms 节流实时跟手）")
+
+    def test_rapid_typing_does_not_starve(self):
+        self.page._debounce.stop()
+        self.page.states["title"].text = ""
+        self.page._render_preview()
+        self.assertNotIn("title", self.page.preview._geoms)
+        self.page.panels["title"].text_edit.setText("打字1")
+        QTimer.singleShot(20, lambda: self.page.panels["title"].text_edit.setText("打字2"))
+        loop = QEventLoop()
+        QTimer.singleShot(60, loop.quit)
+        loop.exec()
+        self.assertIn("title", self.page.preview._geoms,
+                      "60ms 内第二次输入必须已渲染（定时器不得被连续输入反复重置饿死）")
+        self.assertEqual(self.page.states["title"].text, "打字2")
 
     def test_reset_positions(self):
         self.page.states["title"].x_ratio = 0.9
