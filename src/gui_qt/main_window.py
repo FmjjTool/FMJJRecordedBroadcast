@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
         name = theme.toggle_theme()
         theme.apply_theme()
         theme.retheme_all()
+        self._notify_theme_changed()
         self._update_theme_btn()
         msg = f"已切换到{'深色' if name == 'dark' else '浅色'}主题"
         # 手动优先：手动切换时关闭自动切换（跟随系统/定时，需到全局设置里重新打开）
@@ -345,9 +346,23 @@ class MainWindow(QMainWindow):
             return
         theme.apply_theme()
         theme.retheme_all()
+        self._notify_theme_changed()
         self._update_theme_btn()
         label = "🖥 已跟随系统" if src == "system" else "⏰ 已定时"
         show_toast(self, f"{label}切换到{'深色' if name == 'dark' else '浅色'}主题", "info")
+
+    def _notify_theme_changed(self):
+        """主题切换后：通知各页面刷新自绘 HTML 内容（样式表已由 retheme_all 重映射，
+        但 QTextBrowser 等富文本内容色需页面自行重建）。"""
+        for page in self.pages.values():
+            if page is None:
+                continue
+            try:
+                cb = getattr(page, "on_theme_changed", None)
+                if cb:
+                    cb()
+            except Exception:
+                pass
 
     def _update_theme_btn(self):
         # 方块图标反映当前主题：深色显 🌙 / 浅色显 ☀️

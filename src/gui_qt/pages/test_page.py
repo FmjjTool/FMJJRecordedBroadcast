@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.theme import is_dark
 
 # 回放包解压出的临时目录（recording.flv），进程退出兜底清理
 _replay_tmp_dirs = []
@@ -2231,7 +2232,8 @@ class TestPage(BasePage):
         self._img_pending.clear()
         rows = [self._chat_row_html(e) for e in entries]
         if note:
-            rows.insert(0, f'<div style="color:#1a73e8; font-size:12px">{html.escape(note)}</div>')
+            note_col = "#64b5f6" if is_dark() else "#1a73e8"
+            rows.insert(0, f'<div style="color:{note_col}; font-size:12px">{html.escape(note)}</div>')
         self.chat_gift_box.clear()
         if rows:
             self._append_html(self.chat_gift_box, "<br>".join(rows))
@@ -2392,10 +2394,13 @@ class TestPage(BasePage):
     def _ts_html(ts):
         return f'<span style="color:#6b7280">{ts}</span>'
 
-    def _nick_html(self, nick, color="#1f2328"):
-        """昵称：黑色加粗 + 可点击链接（点击=按此人筛选全部弹幕及时间点）。"""
+    def _nick_html(self, nick, color=None):
+        """昵称：加粗 + 可点击链接（点击=按此人筛选全部弹幕及时间点）。
+        深色主题用浅色字——内容是 HTML 内联样式，不走样式表重映射。"""
         if not nick:
             return ""
+        if color is None:
+            color = "#c6cbd6" if is_dark() else "#1f2328"
         href = html.escape(nick, quote=True)
         return (f'<a href="user:{href}" style="color:{color};'
                 f'text-decoration:none"><b>{html.escape(nick)}</b></a>：')
@@ -2420,7 +2425,7 @@ class TestPage(BasePage):
         return f"{self._ts_html(ts)} {self._nick_html(m.get('nickname'))}{body}"
 
     def _gift_html(self, ts, m, resolve=None):
-        """礼物行：礼物图标（本地缓存）+ 名称 xN。白底主题下用深金色保证可读。
+        """礼物行：礼物图标（本地缓存）+ 名称 xN。白底用深金/深色主题用亮金保证可读。
         连击帧的 xN 是累计进度（x1→x2→x3 三帧实为 3 个），与打赏榜口径易混——
         本帧实际新增与累计不等时标注（+N），各行 +N 之和=榜单数量。"""
         if resolve is None:
@@ -2438,8 +2443,9 @@ class TestPage(BasePage):
         d, c = m.get("_delta"), m.get("_combo")
         if d is not None and c is not None and d != c:
             body = f"{body}（+{d}）"
+        gift_col = "#ffd54f" if is_dark() else "#8a6d00"
         return (f'{self._ts_html(ts)} 🎁 {self._nick_html(m.get("nickname"))}'
-                f'{icon_h}<span style="color:#8a6d00; font-weight:bold">{body}</span>')
+                f'{icon_h}<span style="color:{gift_col}; font-weight:bold">{body}</span>')
 
     def _on_status(self, status, msg):
         """后台线程回调：连接状态变化。"""
@@ -2668,9 +2674,15 @@ class TestPage(BasePage):
         if self._recording:
             self.app.toast("已重新开始录制（新文件）", "info")
 
+    def on_theme_changed(self):
+        """主题切换（手动/自动）后：重建聊天区富文本——昵称/礼物等内联 HTML
+        颜色不随样式表重映射，须按新主题重渲染。"""
+        if self._chat_log:
+            self._apply_chat_filter()
+
     def on_hide(self):
-        """切离本页：录制中保持后台运作（弹幕抓取+录制继续），仅停 UI 渲染；
-        未录制则全停（录制自动打包回放包/回放/预览/抓取/监控）。"""
+        """切离本页：连接中（含录制中）弹幕抓取与统计保持后台运作（WS 握手后
+        不占 Cookie），仅停 UI 渲染（视频预览/回放）；未连接才全停。"""
         if self._recording:
             # 录制中切页面：维持弹幕抓取与录制，只停视频预览渲染与回放；
             # 返回页面时重新开始录制（见 _restart_recording_after_switch）
@@ -2678,10 +2690,16 @@ class TestPage(BasePage):
             self._stop_replay()
             self._stop_live_preview()
             return
+        if self.connected or self.fetcher:
+            # 连接中切走（未录视频）：弹幕抓取/统计继续后台跑，切回时列表
+            # 数据仍在；仅停视频预览渲染与回放
+            self._stop_replay()
+            self._stop_live_preview()
+            return
         self.shutdown()
 
     def shutdown(self):
-        """全停（切走且未录制 / 软件退出时调用）：停一切后台任务并自动保存。"""
+        """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。"""
         was_active = self.connected or self.fetcher or self.video_player or self._recording
         self._rec_switched_away = False
         self._rec_resume_pending = False
