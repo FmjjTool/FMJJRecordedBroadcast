@@ -1,10 +1,10 @@
 ﻿# 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.7** · 制作：歆慕
+> **FengMingToolbox v2.8.8** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.7>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.8>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -669,6 +669,12 @@ APP_PUBLISHER    = "歆慕"
 - Cookie 总开关可一键停用（`cookie_enabled`），停用后所有采集按游客态走
 
 ### 更新日志
+
+#### v2.8.8（2026-09-05）
+
+- **轻量版正式发布（定版）**：v2.8.7 晚间曾以资产替换形式临时上线轻量安装器，本次定版为正式版本线——浏览器架构统一走系统浏览器（Edge → Chrome → 按需下载采集引擎三级降级），安装包不再携带任何浏览器内核，**安装器体积 285.6MB → 90.7MB（缩减 68%）**；启动时自动检测浏览器环境（记日志），无 Edge/Chrome 的机器可在 Cookie 管理页一键下载采集引擎（国内镜像）。
+- **定版伴随更新**：应用图标换为小呆形象；工作文件夹/导出文件夹支持锁定（锁定后拖入不改变）；移除外部 dycast-main 启动器页（功能已由内置弹幕姬页替代）。
+- **工程**：修复打包白名单漏删 QtNetwork（QtMultimedia 的内部依赖）致成品启动即崩的问题。
 
 #### v2.8.7（2026-09-05）
 
