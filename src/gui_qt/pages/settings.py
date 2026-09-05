@@ -56,6 +56,9 @@ class GlobalSettingsPage(BasePage):
         wd_row.addWidget(self.workdir_entry, 1)
         wd_row.addWidget(self._btn("📂 浏览...", self._browse))
         wd_row.addWidget(self._btn("💾 保存", self._save))
+        self.workdir_lock_cb = QCheckBox("🔒 锁定工作文件夹")
+        self.workdir_lock_cb.setToolTip("锁定后拖入文件夹不会改变此目录，直到解锁")
+        wd_row.addWidget(self.workdir_lock_cb)
         v.addLayout(wd_row)
         self.workdir_status = QLabel("")
         self.workdir_status.setStyleSheet("color: #888; font-size: 11px;")
@@ -71,10 +74,16 @@ class GlobalSettingsPage(BasePage):
         ex_row.addWidget(self.exportdir_entry, 1)
         ex_row.addWidget(self._btn("📂 浏览...", self._browse_export))
         ex_row.addWidget(self._btn("💾 保存", self._save_export))
+        self.exportdir_lock_cb = QCheckBox("🔒 锁定导出文件夹")
+        self.exportdir_lock_cb.setToolTip("锁定后拖入文件夹不会改变此目录，直到解锁")
+        ex_row.addWidget(self.exportdir_lock_cb)
         v.addLayout(ex_row)
         self.exportdir_status = QLabel("")
         self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(self.exportdir_status)
+        # 文件夹锁定：改动即保存（拖入文件夹不改变，直到解锁）
+        self.workdir_lock_cb.toggled.connect(self._on_workdir_lock_changed)
+        self.exportdir_lock_cb.toggled.connect(self._on_exportdir_lock_changed)
 
         v.addSpacing(12)
 
@@ -260,24 +269,20 @@ class GlobalSettingsPage(BasePage):
 
     # ---- 逻辑 ----
     def on_show(self):
+        cfg = load_convert_config()
         # 工作目录
-        wd = load_convert_config().get("work_dir", "")
-        self.workdir_entry.setText(wd)
-        if wd:
-            if os.path.isdir(wd):
-                ok = has_date_subfolders(wd)
-                hint = "✅ 已检测到日期子文件夹" if ok else "⚠️ 无日期子文件夹"
-                self.workdir_status.setText(f"{hint} · {wd}")
-                self.workdir_status.setStyleSheet(
-                    "color: #4caf50; font-size: 11px;" if ok else "color: #ff9800; font-size: 11px;")
-            else:
-                self.workdir_status.setText(f"⚠️ 目录不存在: {wd}")
-                self.workdir_status.setStyleSheet("color: #ff5252; font-size: 11px;")
+        self.workdir_entry.setText(cfg.get("work_dir", ""))
+        # 文件夹锁定状态（屏蔽信号：程序 setChecked 不触发「改动即保存」）
+        for cb, key in ((self.workdir_lock_cb, "work_dir_locked"),
+                        (self.exportdir_lock_cb, "export_dir_locked")):
+            cb.blockSignals(True)
+            cb.setChecked(bool(cfg.get(key)))
+            cb.blockSignals(False)
+        self._refresh_workdir_status()
         # 导出目录
         exd = str(get_export_dir())
         self.exportdir_entry.setText(exd)
-        self.exportdir_status.setText(f"当前: {exd}")
-        self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
+        self._refresh_exportdir_status()
         # 主题定时切换
         self._load_theme_schedule()
         # FFmpeg 位置
@@ -287,6 +292,42 @@ class GlobalSettingsPage(BasePage):
         self._refresh_info()
         # 依赖检测（每次回到本页都重检一次，不依赖外部信号）
         self._refresh_dependencies()
+
+    # ---- 文件夹锁定（锁定后拖入文件夹不改变，直到解锁） ----
+    def _refresh_workdir_status(self):
+        """工作目录状态行：日期子文件夹检测 + 锁定标记。"""
+        wd = self.workdir_entry.text().strip()
+        if not wd:
+            return
+        lock = "🔒 已锁定 · " if self.workdir_lock_cb.isChecked() else ""
+        if os.path.isdir(wd):
+            ok = has_date_subfolders(wd)
+            hint = "✅ 已检测到日期子文件夹" if ok else "⚠️ 无日期子文件夹"
+            self.workdir_status.setText(f"{lock}{hint} · {wd}")
+            self.workdir_status.setStyleSheet(
+                "color: #4caf50; font-size: 11px;" if ok else "color: #ff9800; font-size: 11px;")
+        else:
+            self.workdir_status.setText(f"{lock}⚠️ 目录不存在: {wd}")
+            self.workdir_status.setStyleSheet("color: #ff5252; font-size: 11px;")
+
+    def _refresh_exportdir_status(self):
+        """导出目录状态行：当前路径 + 锁定标记。"""
+        lock = "🔒 已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
+        exd = self.exportdir_entry.text().strip() or str(get_export_dir())
+        self.exportdir_status.setText(f"{lock}当前: {exd}")
+        self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
+
+    def _on_workdir_lock_changed(self, checked):
+        cfg = load_convert_config()
+        cfg["work_dir_locked"] = bool(checked)
+        save_convert_config(cfg)
+        self._refresh_workdir_status()
+
+    def _on_exportdir_lock_changed(self, checked):
+        cfg = load_convert_config()
+        cfg["export_dir_locked"] = bool(checked)
+        save_convert_config(cfg)
+        self._refresh_exportdir_status()
 
     def sync_theme_schedule_from_config(self):
         """主窗口手动切换主题时调用：把当前主题定时面板同步到最新配置状态。
@@ -428,7 +469,8 @@ class GlobalSettingsPage(BasePage):
                 self.app.toast(f"目录创建失败: {e}", "error")
                 return
         set_export_dir(path)
-        self.exportdir_status.setText(f"当前: {path}")
+        lock = "🔒 已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
+        self.exportdir_status.setText(f"{lock}当前: {path}")
         self.exportdir_status.setStyleSheet("color: #4caf50; font-size: 11px;")
         self.app.toast("导出目录已保存", "success")
 

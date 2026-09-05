@@ -528,8 +528,11 @@ class MainWindow(QMainWindow):
                 p.load_replay_zip(zips[0])
                 return
 
-        # 其他页：拖入文件夹 → 设为工作目录
+        # 其他页：拖入文件夹 → 设为工作目录（锁定时拒绝改变，直到解锁）
         target = dirs[0] if dirs else os.path.dirname(file_list[0])
+        if load_convert_config().get("work_dir_locked"):
+            self.toast("🔒 默认工作文件夹已锁定，拖入文件夹不改变（可在全局设置解锁）", "info")
+            return
         self.work_dir = target
         self._refresh_all()
         self.toast(f"✅ 已切换: {target}", "success")
