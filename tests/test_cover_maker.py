@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -60,6 +61,31 @@ def _count_pixels(img: QImage, predicate) -> int:
             if predicate(c):
                 n += 1
     return n
+
+
+def _make_test_bgs() -> list:
+    """模块级创建 3 张测试底图（unittest 类按字母序执行，需与类无关地可重入）。"""
+    folder = _TMP / "cover_bgs" / "sub"
+    folder.mkdir(parents=True, exist_ok=True)
+    files = []
+    for i in range(3):
+        p = folder / f"bg{i}.png"
+        if not p.exists():
+            _make_bg(40, 24, "#2030a0").save(str(p), "PNG")
+        files.append(p)
+    return sorted(files)
+
+
+def _pump_until(predicate, timeout_ms: int) -> bool:
+    """事件循环泵：每 5ms 一片，直到 predicate 为真或超时（禁止 busy-loop）。"""
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        loop = QEventLoop()
+        QTimer.singleShot(5, loop.quit)
+        loop.exec()
+        if predicate():
+            return True
+    return False
 
 
 class TestRenderEngine(unittest.TestCase):
@@ -187,11 +213,8 @@ class TestModelAndHelpers(unittest.TestCase):
 class TestBackgroundProvider(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.folder = _TMP / "cover_bgs" / "sub"
-        cls.folder.mkdir(parents=True, exist_ok=True)
-        for i in range(3):
-            img = _make_bg(40, 24, "#2030a0")
-            img.save(str(cls.folder / f"bg{i}.png"), "PNG")
+        cls.files = _make_test_bgs()
+        cls.folder = cls.files[0].parent
 
     def test_scan_recursive(self):
         p = cvr.BackgroundProvider(self.folder.parent)
@@ -279,11 +302,10 @@ class TestCoverMakerPage(unittest.TestCase):
         self.assertTrue(self.page._debounce.isActive(), "打字后应启动渲染定时器")
         self.assertLessEqual(self.page._debounce.interval(), 10,
                              "节流间隔应为 10ms")
-        loop = QEventLoop()
-        QTimer.singleShot(80, loop.quit)
-        loop.exec()
-        self.assertIn("title", self.page.preview._geoms,
-                      "80ms 内必须完成渲染（10ms 节流实时跟手）")
+        # 预算 120ms：10ms 节流远低于界线；旧 150ms 纯防抖必然超界
+        self.assertTrue(
+            _pump_until(lambda: "title" in self.page.preview._geoms, 120),
+            "120ms 内必须完成渲染（10ms 节流实时跟手，旧 150ms 防抖必超界）")
 
     def test_rapid_typing_does_not_starve(self):
         self.page._debounce.stop()
@@ -292,11 +314,10 @@ class TestCoverMakerPage(unittest.TestCase):
         self.assertNotIn("title", self.page.preview._geoms)
         self.page.panels["title"].text_edit.setText("打字1")
         QTimer.singleShot(20, lambda: self.page.panels["title"].text_edit.setText("打字2"))
-        loop = QEventLoop()
-        QTimer.singleShot(60, loop.quit)
-        loop.exec()
-        self.assertIn("title", self.page.preview._geoms,
-                      "60ms 内第二次输入必须已渲染（定时器不得被连续输入反复重置饿死）")
+        # 第二次输入在 20ms；10ms 节流 ~30ms 渲染完成，旧防抖重置后要到 170ms
+        self.assertTrue(
+            _pump_until(lambda: "title" in self.page.preview._geoms, 140),
+            "140ms 内第二次输入必须已渲染（定时器不得被连续输入反复重置饿死）")
         self.assertEqual(self.page.states["title"].text, "打字2")
 
     def test_reset_positions(self):
@@ -337,6 +358,70 @@ class TestCoverMakerPage(unittest.TestCase):
         self.page._load_template_from_path(tpl_path)
         self.assertEqual(self.page.states["date"].color, "#123456")
 
+    def test_template_remembers_background(self):
+        files = sorted((_TMP / "cover_bgs" / "sub").glob("*.png"))
+        self.assertGreaterEqual(len(files), 3)
+        tpl_path = cvr._templates_dir() / "with_bg.json"
+        tpl_path.write_text(json.dumps(
+            {"version": 1, "bg": str(files[0]),
+             "fields": cvr.template_dict_from_states(self.page.states)}),
+            encoding="utf-8")
+        # 当前底图不是模板记录的那张
+        self.page._set_bg_path(files[1])
+        self.assertEqual(self.page._bg_path, files[1])
+        self.page._load_template_from_path(tpl_path)
+        self.assertEqual(self.page._bg_path, files[0],
+                         "加载模板应自动切换到模板记忆的底图（蒙版）")
+
+    def test_template_missing_background_keeps_current(self):
+        files = sorted((_TMP / "cover_bgs" / "sub").glob("*.png"))
+        self.page._set_bg_path(files[0])
+        tpl_path = cvr._templates_dir() / "gone_bg.json"
+        tpl_path.write_text(json.dumps(
+            {"version": 1, "bg": str(_TMP / "___deleted___.png"),
+             "fields": cvr.template_dict_from_states(self.page.states)}),
+            encoding="utf-8")
+        self.page._load_template_from_path(tpl_path)
+        self.assertEqual(self.page._bg_path, files[0],
+                         "模板底图文件不存在时应保留当前底图")
+
+    def test_save_template_writes_bg(self):
+        files = sorted((_TMP / "cover_bgs" / "sub").glob("*.png"))
+        self.page._set_bg_path(files[0])
+        tpl_path = cvr._templates_dir() / "bg_check.json"
+        payload = {"version": cvr.TEMPLATE_VERSION,
+                   "bg": str(self.page._bg_path),
+                   "fields": cvr.template_dict_from_states(self.page.states)}
+        tpl_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        data = json.loads(tpl_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["bg"], str(files[0]))
+
+    def test_persisted_bg_restored_on_init(self):
+        files = sorted((_TMP / "cover_bgs" / "sub").glob("*.png"))
+        self.page._set_bg_path(files[2])
+        self.page._persist_state()
+        self.assertEqual(cvr._read_cover_config()["bg_path"], str(files[2]))
+        page2 = cvr.CoverMakerPage(_FakeApp(),
+                                   bg_folder=_TMP / "cover_bgs")
+        try:
+            self.assertEqual(page2._bg_path, files[2],
+                             "重启应恢复上次使用的底图而非随机抽取")
+        finally:
+            page2.shutdown()
+
+    def test_set_bg_path_rejects_undecodable(self):
+        files = sorted((_TMP / "cover_bgs" / "sub").glob("*.png"))
+        self.assertTrue(self.page._set_bg_path(files[0]))
+        bad = _TMP / "not_an_image.png"
+        bad.write_bytes(b"\x00" * 64)
+        try:
+            self.assertFalse(self.page._set_bg_path(bad),
+                            "无法解码的文件应被拒绝")
+            self.assertEqual(self.page._bg_path, files[0], "失败时保留原底图")
+        finally:
+            bad.unlink()
+
+
     def test_persist_and_restore(self):
         self.page.states["title"].text = "持久化"
         self.page._persist_state()
@@ -369,6 +454,53 @@ class TestCoverMakerPage(unittest.TestCase):
         self.assertAlmostEqual(pt.y(), 144.0, delta=2.0)
         hit = self.page.preview._hit_test(pt)
         self.assertIn(hit, (None, "title", "date", "remark"))
+
+
+class TestBackgroundPickerDialog(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.files = _make_test_bgs()
+
+    def test_items_current_selected_and_pick(self):
+        dlg = cvr.BackgroundPickerDialog(self.files, self.files[1])
+        try:
+            self.assertEqual(dlg.listw.count(), len(self.files))
+            self.assertEqual(dlg.selected_path(), self.files[1],
+                            "当前底图应被预选中")
+            dlg.listw.setCurrentRow(0)
+            self.assertEqual(dlg.selected_path(), self.files[0])
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_filter_hides_non_matching(self):
+        dlg = cvr.BackgroundPickerDialog(self.files, self.files[0])
+        try:
+            dlg.filter_edit.setText(self.files[0].stem.lower())
+            visible = [r for r in range(dlg.listw.count())
+                      if not dlg.listw.item(r).isHidden()]
+            self.assertEqual(visible, [0], "筛选后应只剩匹配项")
+            dlg.filter_edit.setText("___no_match___")
+            visible = [r for r in range(dlg.listw.count())
+                      if not dlg.listw.item(r).isHidden()]
+            self.assertEqual(visible, [], "无匹配时不应有可见项")
+            self.assertIn("0/3", dlg.count_label.text())
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_thumb_decode(self):
+        dlg = cvr.BackgroundPickerDialog(self.files, self.files[0])
+        try:
+            img = dlg._decode_thumb(self.files[0])
+            self.assertIsNotNone(img)
+            self.assertLessEqual(max(img.width() / cvr.BackgroundPickerDialog.THUMB_W,
+                                     img.height() / cvr.BackgroundPickerDialog.THUMB_H),
+                                 1.0 + 1e-6)
+            self.assertIsNone(dlg._decode_thumb(Path("___missing___")))
+        finally:
+            dlg.close()
+            dlg.deleteLater()
 
 
 if __name__ == "__main__":

@@ -7,7 +7,8 @@
 - 全参数比例化：字号 = px/1080、位置 x_ratio/y_ratio 按画布比例存储，
   1080p/2K/4K 分辨率切换布局不乱
 - 文字自动换行（不超过 70% 画布宽）+ 溢出自动缩小字号（最小阈值）
-- 模板：JSON 只存三字段样式与位置比例（不含底图与文字内容）
+- 模板：JSON 存三字段样式与位置比例 + 记忆当时所用底图路径（不保存文字内容）
+- 底图选择：缩略图网格浏览全部扫描图片，指定哪张作为底图（蒙版）
 - 导出：PNG / JPG（质量 60~100）/ GIF 动效（Pillow 合成正弦浮动帧，无需 FFmpeg）
 - 集成：主程序经 create_cover_module() 获取 QWidget 实例（亦可作为普通页面注册）
 """
@@ -32,13 +33,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFontComboBox, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
-    QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSlider,
-    QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
+    QScrollArea, QSlider, QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import get_config_dir, get_export_dir
 
-from gui_qt.common import icon_btn_style, run_bg
+from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.help_overlay import attach_help_overlay
 from gui_qt.pages.base import BasePage
 
@@ -92,8 +93,10 @@ HELP_HTML = (
     "导出可切 1080p/2K/4K 不乱版；超长文字自动换行（不超过 70% 画布宽）并自动缩小防溢出</p>"
     "<p>· <b>导出</b>：PNG 无损 / JPG 质量可调（60~100），保存到 download/套版封面/；"
     "GIF 动效生成正弦浮动循环动画（Pillow 合成，无需 FFmpeg）</p>"
-    "<p>· <b>模板</b>：保存/加载三字段样式与位置比例（不含底图与文字内容），"
-    "存放在 config/cover_templates/，字体缺失自动回退并提示</p>"
+    "<p>· <b>模板</b>：保存三字段样式与位置比例，并记忆当时所用底图（文件仍在时加载"
+    "自动切换），不保存文字内容；存放在 config/cover_templates/，字体缺失自动回退并提示</p>"
+    "<p>· <b>选择底图</b>：缩略图网格浏览底图文件夹全部图片，按名称筛选，"
+    "指定哪张作为当前底图（蒙版）</p>"
 )
 
 
@@ -477,6 +480,130 @@ class BackgroundProvider:
         while len(self._scaled_cache) > 8:
             self._scaled_cache.popitem(last=False)
         return scaled
+
+
+# ==================== 底图选择对话框 ====================
+
+class BackgroundPickerDialog(QDialog):
+    """底图选择：缩略图网格浏览扫描到的全部图片，指定哪张作为底图（蒙版）。
+
+    缩略图在后台线程逐张生成（QImageReader 按目标尺寸解码，避免整图解码大图），
+    当前底图优先加载并预选中；支持按文件名实时筛选。
+    """
+
+    THUMB_W, THUMB_H = 128, 72
+
+    def __init__(self, files: List[Path], current_path: Optional[Path],
+                 parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._files = list(files)
+        self.setWindowTitle(f"选择底图（共 {len(self._files)} 张）")
+        self.resize(860, 560)
+
+        v = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText("按文件名筛选（实时）")
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.textChanged.connect(self._apply_filter)
+        top.addWidget(self.filter_edit, 1)
+        self.count_label = QLabel(f"{len(self._files)} 张")
+        top.addWidget(self.count_label)
+        v.addLayout(top)
+
+        self.listw = QListWidget()
+        self.listw.setViewMode(QListWidget.ViewMode.IconMode)
+        self.listw.setIconSize(QSize(self.THUMB_W, self.THUMB_H))
+        self.listw.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.listw.setMovement(QListWidget.Movement.Static)
+        self.listw.setSpacing(8)
+        self.listw.setWordWrap(True)
+        self.listw.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.listw.itemDoubleClicked.connect(lambda _item: self.accept())
+        v.addWidget(self.listw, 1)
+
+        hint = QLabel("双击缩略图或选中后点「使用此图」；缩略图在后台逐张生成")
+        hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
+        v.addWidget(hint)
+
+        btns = QHBoxLayout()
+        use_btn = QPushButton("使用此图")
+        use_btn.setDefault(True)
+        use_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(use_btn)
+        btns.addStretch(1)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+
+        current_row = -1
+        for i, path in enumerate(self._files):
+            item = QListWidgetItem(path.name)
+            item.setData(int(Qt.ItemDataRole.UserRole), str(path))
+            self.listw.addItem(item)
+            if current_path is not None and path == Path(current_path):
+                current_row = i
+        if current_row >= 0:
+            self.listw.setCurrentRow(current_row)
+        elif self._files:
+            self.listw.setCurrentRow(0)
+        self._start_thumbnails(current_row)
+
+    # ---------- 缩略图后台生成 ----------
+
+    def _start_thumbnails(self, priority_row: int):
+        order = list(range(len(self._files)))
+        if priority_row >= 0 and priority_row < len(order):
+            order.remove(priority_row)
+            order.insert(0, priority_row)
+
+        def job():
+            for i in order:
+                post_to_main(self._set_icon, i, self._decode_thumb(self._files[i]))
+
+        run_bg(job, lambda _r, _e: None)
+
+    def _decode_thumb(self, path: Path) -> Optional[QImage]:
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        size = reader.size()
+        if size.isValid():
+            scaled = size.scaled(self.THUMB_W, self.THUMB_H,
+                                 Qt.AspectRatioMode.KeepAspectRatio)
+            if scaled.width() > 0 and scaled.height() > 0:
+                reader.setScaledSize(scaled)
+        img = reader.read()
+        return None if img.isNull() else img
+
+    def _set_icon(self, index: int, img: Optional[QImage]):
+        if img is None:
+            return
+        try:
+            item = self.listw.item(index)
+            if item is not None:
+                item.setIcon(QIcon(QPixmap.fromImage(img)))
+        except RuntimeError:
+            pass  # 对话框已关闭（C++ 对象已销毁）
+
+    # ---------- 筛选与选择 ----------
+
+    def _apply_filter(self, text: str):
+        needle = str(text).strip().lower()
+        visible = 0
+        for row in range(self.listw.count()):
+            item = self.listw.item(row)
+            match = not needle or needle in item.text().lower()
+            item.setHidden(not match)
+            if match:
+                visible += 1
+        self.count_label.setText(f"{visible}/{len(self._files)} 张")
+
+    def selected_path(self) -> Optional[Path]:
+        item = self.listw.currentItem()
+        if item is None:
+            return None
+        return Path(str(item.data(int(Qt.ItemDataRole.UserRole))))
 
 
 # ==================== 字段控制面板 ====================
@@ -864,10 +991,14 @@ class CoverMakerPage(BasePage):
         self._debounce.setInterval(10)
         self._debounce.timeout.connect(self._render_preview)
 
-        # 初始底图
-        initial = self.provider.random_path()
-        if initial is not None:
-            self._bg_path = initial
+        # 初始底图：上次使用（文件仍在）> 随机抽取
+        stored_bg = str(section.get("bg_path") or "")
+        if stored_bg and Path(stored_bg).is_file():
+            self._bg_path = Path(stored_bg)
+        else:
+            initial = self.provider.random_path()
+            if initial is not None:
+                self._bg_path = initial
         self._render_preview()
 
     # ---------- UI ----------
@@ -890,6 +1021,10 @@ class CoverMakerPage(BasePage):
         self.random_bg_btn = QPushButton("🎲 随机底图")
         self.random_bg_btn.clicked.connect(self._on_random_bg)
         head.addWidget(self.random_bg_btn)
+        self.pick_bg_btn = QPushButton("🖼 选择底图")
+        self.pick_bg_btn.setToolTip("浏览底图文件夹缩略图，指定哪张图片作为当前底图（蒙版）")
+        self.pick_bg_btn.clicked.connect(self._on_pick_bg)
+        head.addWidget(self.pick_bg_btn)
         self.upload_btn = QPushButton("📁 上传图片")
         self.upload_btn.setToolTip("选择本地图片临时替换当前底图（不写入底图文件夹）")
         self.upload_btn.clicked.connect(self._on_upload_bg)
@@ -1197,17 +1332,38 @@ class CoverMakerPage(BasePage):
 
     # ---------- 底图操作 ----------
 
+    def _set_bg_path(self, path: Optional[Path], success_msg: str = "") -> bool:
+        """切换当前底图（先校验可解码，同时预热缩放缓存），成功后重绘预览。"""
+        if path is not None:
+            if self.provider.scaled_background(path, PREVIEW_W, PREVIEW_H,
+                                               self.fit_mode) is None:
+                self._toast(f"底图无法解码：{path.name}", "error")
+                return False
+        self._bg_path = path
+        self._render_preview()
+        if success_msg:
+            self._toast(success_msg, "success")
+        return True
+
     def _on_random_bg(self):
         path = self.provider.random_path()
         if path is None:
             self._toast(f"底图文件夹内没有图片：{self.provider.folder}", "warning")
             return
-        self._bg_path = path
-        bg = self._current_bg(PREVIEW_W, PREVIEW_H)
-        if bg is None:
-            self._toast(f"底图加载失败：{path.name}，请重试或重新扫描", "error")
+        self._set_bg_path(path)
+
+    def _on_pick_bg(self):
+        if not self.provider.files:
+            self._toast(f"底图文件夹内没有图片：{self.provider.folder}", "warning")
             return
-        self._render_preview()
+        dlg = BackgroundPickerDialog(self.provider.files, self._bg_path, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        path = dlg.selected_path()
+        if path is None or path == self._bg_path:
+            return
+        if self._set_bg_path(path, f"已选择底图：{path.name}"):
+            self._persist_state()
 
     def _on_upload_bg(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1215,14 +1371,7 @@ class CoverMakerPage(BasePage):
             "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff);;所有文件 (*)")
         if not path:
             return
-        self._bg_path = Path(path)
-        if self._current_bg(PREVIEW_W, PREVIEW_H) is None:
-            self._bg_path = None
-            self._toast(f"图片无法解码：{Path(path).name}", "error")
-            self._render_preview()
-            return
-        self._render_preview()
-        self._toast("已临时替换底图（不写入底图文件夹）", "success")
+        self._set_bg_path(Path(path), "已临时替换底图（不写入底图文件夹）")
 
     def _on_change_bg_folder(self):
         folder = QFileDialog.getExistingDirectory(
@@ -1341,6 +1490,7 @@ class CoverMakerPage(BasePage):
             if answer != QMessageBox.StandardButton.Yes:
                 return
         payload = {"version": TEMPLATE_VERSION,
+                   "bg": str(self._bg_path) if self._bg_path else "",
                    "fields": template_dict_from_states(self.states)}
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -1348,7 +1498,8 @@ class CoverMakerPage(BasePage):
         except Exception as exc:
             self._toast(f"模板保存失败：{exc}", "error")
             return
-        self._toast(f"模板「{name}」已保存", "success")
+        bg_note = f"（底图：{self._bg_path.name}）" if self._bg_path else ""
+        self._toast(f"模板「{name}」已保存{bg_note}", "success")
 
     def _load_template_from_path(self, path: Path):
         try:
@@ -1358,6 +1509,14 @@ class CoverMakerPage(BasePage):
             self._toast(f"模板文件损坏：{exc}", "error")
             return
         warnings = apply_template_to_states(self.states, data)
+        # 模板记忆的底图（蒙版）：文件仍存在则切换过去，否则保留当前底图
+        bg_ref = str(data.get("bg") or "") if isinstance(data, dict) else ""
+        if bg_ref:
+            bg_file = Path(bg_ref)
+            if bg_file.is_file():
+                self._bg_path = bg_file
+            else:
+                warnings.append(f"模板底图已不存在：{bg_file.name}，保留当前底图")
         for key in FIELD_KEYS:
             self.panels[key].set_state(self.states[key])
         self._render_preview()
@@ -1374,7 +1533,7 @@ class CoverMakerPage(BasePage):
             return
         dlg = QDialog(self)
         dlg.setWindowTitle("加载封面模板")
-        dlg.resize(380, 340)
+        dlg.resize(420, 380)
         v = QVBoxLayout(dlg)
         listw = QListWidget()
         for f in files:
@@ -1382,11 +1541,18 @@ class CoverMakerPage(BasePage):
                 mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))
             except OSError:
                 mtime = ""
-            QListWidgetItem(f"{f.stem}    {mtime}", listw)
+            try:
+                with open(f, "r", encoding="utf-8") as fh:
+                    tpl = json.load(fh)
+                bg_name = Path(str(tpl.get("bg") or "")).name or "未记录"
+            except Exception:
+                bg_name = "未记录"
+            QListWidgetItem(f"{f.stem}    底图: {bg_name}    {mtime}", listw)
         listw.setCurrentRow(0)
         listw.itemDoubleClicked.connect(lambda _i: dlg.accept())
         v.addWidget(listw, 1)
-        hint = QLabel("模板保存三字段样式与位置比例，不含底图与文字内容（保留当前文字）")
+        hint = QLabel("模板保存三字段样式与位置比例，并记忆保存时所用底图"
+                      "（文件仍在时加载自动切换）；不保存文字内容")
         hint.setWordWrap(True)
         hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
         v.addWidget(hint)
@@ -1440,6 +1606,7 @@ class CoverMakerPage(BasePage):
     def _persist_state(self):
         section = {
             "bg_folder": str(self.provider.folder) if self.provider.folder else "",
+            "bg_path": str(self._bg_path) if self._bg_path else "",
             "fit_mode": self.fit_mode,
             "export_resolution": self.res_combo.currentText(),
             "jpg_quality": self.quality_slider.value(),
