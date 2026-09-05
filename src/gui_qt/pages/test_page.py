@@ -1,10 +1,11 @@
 """抖音弹幕实时数据接入页（PySide6 版，对应原版 gui/test_page.py）。
 
 三栏布局：左主播信息（首行直播标题）/ 中弹幕聊天礼物 / 右4块垂直（房间号/WS/打赏榜/弹幕信息2）。
-- 顶栏：轮询 / 模式 / 设置 / 清空内容 / 启动弹幕姬 / 连接 / 断开
-- 工具栏：保存弹幕 / 导出导入回放包 / 保存统计 / 开播监控
+- 顶栏：轮询 / 模式 / 设置 / 清空内容
+- 工具栏：保存弹幕 / 导出导入回放包 / 保存统计 / 自动录播
+- 连接控制：房间号右侧唯一按钮（未连接「连接」/ 已连接「断开」/ 等待开播「立即重试」）
 - 底栏：状态点 + 状态文本 + 计时 + 本场点赞
-- 真实抓取：DouyinLiveFetcher / StatsCollector / LiveMonitor
+- 真实抓取：DouyinLiveFetcher / StatsCollector（开播等待走轮询）
 """
 
 import atexit
@@ -135,18 +136,19 @@ class TestPage(BasePage):
     # 功能介绍浮层文案（B站弹幕姬子类覆写）
     HELP_INTRO = (
         "<p><b>抖音直播弹幕姬：真实接入直播间，实时数据 + 录制 + 回放一体。</b></p>"
-        "<p>· <b>连接</b>：输入房间号或直播间链接（留空自动填默认房间号），▶ 连接</p>"
+        "<p>· <b>连接</b>：输入房间号或直播间链接（留空自动填默认房间号），"
+        "房间号右侧按钮点击连接；连接成功后变为「断开」，再点即断开</p>"
         "<p>· <b>实时数据</b>：弹幕 / 礼物 / 进场 / 点赞 / 关注，主播信息卡实时刷新；"
         "礼物打赏榜、消息类别可开关（礼物/聊天/点赞/进入/日志）</p>"
         "<p>· <b>四种模式</b>：正常（视频+弹幕）/ 仅视频 / 仅弹幕 / 回放</p>"
         "<p>· <b>视频与录制</b>：直播画面预览 + 画质切换；⏺ 手动录播 / 勾选自动录播；"
-        "切走页面自动断开，切回自动重连</p>"
+        "切页后台保持连接，切回自动恢复</p>"
         "<p>· <b>🔁 轮询等开播</b>：未开播按间隔自动重试，主播开播自动接入；"
         "下播后若开关仍开着自动恢复轮询</p>"
         "<p>· <b>搜索</b>：弹幕区关键字/按人筛选，事件区（点赞/进入/关注/横幅/系统）独立筛选</p>"
         "<p>· <b>保存与回放</b>：💾 保存弹幕、📊 保存统计；📦 导出/导入/合并回放包"
         "（含时间戳与表情图标，回放模式可重演整场）；可勾选自动导出回放包</p>"
-        "<p>· <b>⚙ 设置</b>：深色模式、保持滚动、自动导出等；👁 开播监控</p>"
+        "<p>· <b>⚙ 设置</b>：深色模式、保持滚动、自动导出等</p>"
         "<p>· 弹幕数据游客优先获取，不占用 Cookie，不影响电脑/手机观看直播</p>"
     )
 
@@ -161,8 +163,6 @@ class TestPage(BasePage):
         self._gift_sessions = {}   # (user, gift) → {settled, t}：连击会话已结算数
         self.fetcher = None
         self.stats_collector = None
-        self.live_monitor = None
-        self._monitoring = False
         self.settings = self._load_settings()
         # 视频预览 / 录制 / 模式 / 回放
         self.mode = "normal"            # normal / video_only / danmaku_only / replay
@@ -267,21 +267,6 @@ class TestPage(BasePage):
         clear_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
         clear_btn.clicked.connect(self._clear_all)
         top_l.addWidget(clear_btn)
-        self.disconnect_btn = QPushButton("■")
-        self.disconnect_btn.setToolTip("断开当前直播连接（弹幕/礼物/点赞停止接收）")
-        self.disconnect_btn.setStyleSheet(icon_btn_style(
-            False, "background: #c62828; color: white; font-size: 16px;"))
-        self.disconnect_btn.setFixedWidth(40)
-        self.disconnect_btn.clicked.connect(self._disconnect)
-        self.disconnect_btn.setEnabled(False)
-        top_l.addWidget(self.disconnect_btn)
-        self.connect_btn = QPushButton("▶")
-        self.connect_btn.setToolTip("连接抖音直播间，开始实时抓取弹幕 / 礼物 / 点赞")
-        self.connect_btn.setStyleSheet(icon_btn_style(
-            False, "background: #2e7d32; color: white; font-size: 16px;"))
-        self.connect_btn.setFixedWidth(40)
-        self.connect_btn.clicked.connect(self._connect)
-        top_l.addWidget(self.connect_btn)
         outer.addWidget(top)
 
         # ===== 工具栏 =====
@@ -316,12 +301,6 @@ class TestPage(BasePage):
         self.auto_record_var.setChecked(bool(self.settings.get("auto_record", False)))
         self.auto_record_var.toggled.connect(self._on_auto_record_toggle)
         tb.addWidget(self.auto_record_var)
-        self.monitor_btn = QPushButton("👁 开播监控")
-        self.monitor_btn.clicked.connect(self._toggle_monitor)
-        tb.addWidget(self.monitor_btn)
-        self.monitor_status = QLabel("")
-        self.monitor_status.setStyleSheet("color: #888; font-size: 11px;")
-        tb.addWidget(self.monitor_status)
         tb.addStretch(1)
         cookie_hint = QLabel("Cookie 由侧栏「Cookie 管理」统一提供（自动套用）",
                              styleSheet="color: #666; font-size: 11px;")
@@ -1463,9 +1442,11 @@ class TestPage(BasePage):
         room_clear_btn.clicked.connect(self._clear_room_entry)
         room_clear_btn.setFocusPolicy(Qt.NoFocus)
         row1.addWidget(room_clear_btn)
+        # 连接/断开合一按钮：未连接=「连接」（点击发起连接），已连接=「断开」（点击断开）
         self.connect_btn2 = QPushButton("连接")
+        self._action_mode = "connect"
         self.connect_btn2.setStyleSheet("background: #2e7d32; color: white;")
-        self.connect_btn2.clicked.connect(self._connect)
+        self.connect_btn2.clicked.connect(self._on_action_clicked)
         row1.addWidget(self.connect_btn2)
         v.addLayout(row1)
 
@@ -1563,17 +1544,12 @@ class TestPage(BasePage):
             v.addLayout(r)
             return e
 
-        e_monitor = row("开播监控检测间隔(秒):", s.get("monitor_interval", 30))
         e_stats = row("统计数据采集间隔(秒):", s.get("stats_interval", 1))
         e_poll = row("轮询间隔(秒):", s.get("poll_interval", 60))
         # 弹幕自动导出说明（默认导出回放包 zip，保存位置为 导出目录/弹幕文件/）
         v.addWidget(QLabel(
             f"自动导出回放包到：{self._backend()._danmaku_dir()}"
             "（断开连接 / 退出软件时自动打包 zip，含全量弹幕与分类 TXT）",
-            styleSheet="color: #888; font-size: 11px;"))
-        v.addWidget(QLabel(
-            "「开播监控检测间隔」供「👁 开播监控」按钮使用："
-            "按该间隔检测房间开播状态并在开播时提醒。",
             styleSheet="color: #888; font-size: 11px;"))
 
         # 开关类
@@ -1612,9 +1588,9 @@ class TestPage(BasePage):
         v.addLayout(remark_row)
 
         def save():
-            self.settings["monitor_interval"] = int(e_monitor.text() or 30)
             self.settings["stats_interval"] = int(e_stats.text() or 1)
             self.settings["poll_interval"] = max(15, int(e_poll.text() or 60))
+            self.settings.pop("monitor_interval", None)  # 开播监控已下线，清掉遗留键
             self.settings.pop("room_list", None)  # 旧版遗留键，无消费者，保存时清掉
             self.settings["keep_scroll"] = bool(sw_keep.isChecked())
             self.settings["dark_mode"] = bool(sw_dark.isChecked())
@@ -1705,6 +1681,29 @@ class TestPage(BasePage):
     def _relay(self):
         self.app.toast("WS 转发已启动（模拟）", "info")
 
+    def _on_action_clicked(self):
+        """连接/断开合一按钮：按当前模式分派（连接中禁用不可点）。"""
+        if self._action_mode == "disconnect":
+            self._disconnect()
+        else:
+            self._connect()
+
+    def _set_action_btn(self, text, mode, enabled=True):
+        """房间号右侧唯一连接/断开按钮的状态机。
+
+        mode: "connect"=绿（点击发起连接）"disconnect"=红（点击断开）；
+        enabled=False 为连接中/验证中，防重复点击触发风控。"""
+        self._action_mode = mode
+        btn = self.connect_btn2
+        btn.setText(text)
+        btn.setEnabled(enabled)
+        if not enabled:
+            btn.setStyleSheet("background: #9e9e9e; color: white;")
+        elif mode == "disconnect":
+            btn.setStyleSheet("background: #c62828; color: white;")
+        else:
+            btn.setStyleSheet("background: #2e7d32; color: white;")
+
     def _connect(self):
         room = self.room_entry.text().strip()
         if not room:
@@ -1732,9 +1731,7 @@ class TestPage(BasePage):
         self.cover_label.setText("暂无封面")
         for key in ("anchor_name", "anchor_fans", "online_count", "total_viewers"):
             self.anchor_fields[key].setText("…")
-        self.connect_btn.setEnabled(False)
-        self.connect_btn2.setEnabled(False)
-        self.disconnect_btn.setEnabled(True)
+        self._set_action_btn("连接中…", "connect", enabled=False)
         self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
         self.status_label.setText(f"连接中 · 房间 {room}")
         self.status_label.setStyleSheet("color: #eab308;")
@@ -1781,11 +1778,7 @@ class TestPage(BasePage):
         self._auto_stopped = False
         self._quality_manual = False
         self.like_label.setText("0")
-        self.connect_btn.setEnabled(True)
-        self.connect_btn2.setEnabled(True)
-        self.disconnect_btn.setEnabled(False)
-        self.connect_btn.setText("▶ 连接")
-        self.disconnect_btn.setText("■ 断开")
+        self._set_action_btn("连接", "connect")
         self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
         self.status_label.setText("已断开")
         self.status_label.setStyleSheet("color: #888;")
@@ -1815,14 +1808,10 @@ class TestPage(BasePage):
             interval = max(15, int(self.settings.get("poll_interval", 60) or 60))
             self.status_label.setText(
                 f"主播未开播 · 每{interval}秒自动重试中，开播后自动连接")
-            self.connect_btn.setText("▶ 立即重试")
-            self.disconnect_btn.setText("■ 停止等待")
-            self.disconnect_btn.setEnabled(True)
+            self._set_action_btn("立即重试", "connect")
         else:
             self.status_label.setText("主播未开播 · 已停止自动重试（可手动点「连接」重试）")
-            self.connect_btn.setText("▶ 连接")
-            self.disconnect_btn.setText("■ 断开")
-            self.disconnect_btn.setEnabled(False)
+            self._set_action_btn("连接", "connect")
 
     def _update_poll_countdown(self):
         """每秒刷新轮询倒计时（距下次重访的秒数；未在轮询时清空）。"""
@@ -1913,28 +1902,6 @@ class TestPage(BasePage):
             except Exception:
                 pass
 
-    def _toggle_monitor(self):
-        if self._monitoring:
-            self._monitoring = False
-            if self.live_monitor:
-                self.live_monitor.stop()
-                self.live_monitor = None
-            self.monitor_btn.setText("👁 开播监控")
-            self.monitor_status.setText("")
-            return
-        room = self.room_entry.text().strip()
-        if not room:
-            self.app.toast("请先输入房间号", "warning")
-            return
-        self._monitoring = True
-        self.monitor_btn.setText("👁 停止监控")
-        self.monitor_btn.setStyleSheet("background: #2a5a8c; color: white;")
-        self.monitor_status.setText(f"监控中 · 房间 {room}")
-        self.monitor_status.setStyleSheet("color: #1976d2; font-size: 11px;")
-        interval = max(10, int(self.settings.get("monitor_interval", 30)))
-        self.live_monitor = self._backend().LiveMonitor(room, interval, on_change=self._on_live_change)
-        self.live_monitor.start()
-
     def _show_captcha_dialog(self):
         """风控验证窗口：提示用户过完验证码后点「继续」。"""
         dlg = QDialog(self)
@@ -1955,17 +1922,6 @@ class TestPage(BasePage):
         if self.fetcher:
             self.fetcher.continue_captcha()
         dlg.accept()
-
-    def _on_live_change(self, is_live, info):
-        def apply():
-            if is_live:
-                self.monitor_status.setText(f"🔴 已开播 · {info.get('anchor', '')}")
-                self.monitor_status.setStyleSheet("color: #ff5252; font-size: 11px;")
-                self.app.toast(f"主播 {info.get('anchor', '')} 已开播！", "success")
-            else:
-                self.monitor_status.setText("⚫ 未开播")
-                self.monitor_status.setStyleSheet("color: #888; font-size: 11px;")
-        post_to_main(apply)
 
     # ======================== 真实数据回调 ========================
     def _on_room_info(self, info):
@@ -2455,8 +2411,7 @@ class TestPage(BasePage):
                 self.status_label.setText(msg)
                 self.status_label.setStyleSheet("color: #4caf50;")
                 self._waiting_live = False
-                self.connect_btn.setText("▶ 连接")
-                self.disconnect_btn.setText("■ 断开")
+                self._set_action_btn("断开", "disconnect")
             elif status == "connecting":
                 self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
                 self.status_label.setText(msg)
@@ -2479,25 +2434,18 @@ class TestPage(BasePage):
                 if self.stats_collector:
                     self.stats_collector.stop()
                     self.stats_collector = None
-                self.connect_btn2.setEnabled(True)
                 if self.poll_btn.isChecked():
                     interval = max(15, int(self.settings.get("poll_interval", 60) or 60))
                     self.status_label.setText(
                         f"主播未开播 · 每{interval}秒自动重试中，开播后自动连接")
-                    self.connect_btn.setText("▶ 立即重试")
-                    self.connect_btn.setEnabled(True)
-                    self.disconnect_btn.setText("■ 停止等待")
-                    self.disconnect_btn.setEnabled(True)
+                    self._set_action_btn("立即重试", "connect")
                     if not was_waiting:
                         self.app.toast(
                             f"主播当前未开播：每{interval}秒自动重试中，开播后自动连接；"
-                            "点「■ 停止等待」可取消", "info")
+                            "点「🔁 轮询」可取消等待", "info")
                 else:
                     self.status_label.setText("主播未开播（点「🔁 轮询」可自动等待开播）")
-                    self.connect_btn.setText("▶ 连接")
-                    self.connect_btn.setEnabled(True)
-                    self.disconnect_btn.setText("■ 断开")
-                    self.disconnect_btn.setEnabled(False)
+                    self._set_action_btn("连接", "connect")
                     if not was_waiting:
                         self.app.toast("主播当前未开播，未建立连接", "info")
                 self._setup_poll_timer()
@@ -2512,9 +2460,7 @@ class TestPage(BasePage):
                     self.stats_collector.stop()
                     self.stats_collector = None
                 self._stop_live_preview()
-                self.connect_btn.setEnabled(True)
-                self.connect_btn2.setEnabled(True)
-                self.disconnect_btn.setEnabled(False)
+                self._set_action_btn("连接", "connect")
                 self._setup_poll_timer()
             elif status == "disconnected":
                 # 下播/连接断开：先清资源（统计采集/视频预览/录制）+ 自动导出本场弹幕，
@@ -2529,15 +2475,13 @@ class TestPage(BasePage):
                     self._stop_recording()
                 if not self._manual_stop and self.settings.get("auto_save_danmaku", True):
                     self._auto_save_danmaku()
-                self.connect_btn2.setEnabled(True)
                 if self._manual_stop:
                     # 手动断开：不自动重连（UI 已由 _disconnect 复位，此处仅兜底）
                     self._waiting_live = False
                     self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
                     self.status_label.setText(msg)
                     self.status_label.setStyleSheet("color: #888;")
-                    self.connect_btn.setEnabled(True)
-                    self.disconnect_btn.setEnabled(False)
+                    self._set_action_btn("连接", "connect")
                 elif self.poll_btn.isChecked():
                     # 下播且轮询仍开着 → 恢复等待开播，下次开播自动接入
                     self._waiting_live = True
@@ -2546,10 +2490,7 @@ class TestPage(BasePage):
                     self.status_label.setText(
                         f"直播已结束 · 每{interval}秒检测开播中，开播后自动连接")
                     self.status_label.setStyleSheet("color: #ff9800;")
-                    self.connect_btn.setText("▶ 立即重试")
-                    self.connect_btn.setEnabled(True)
-                    self.disconnect_btn.setText("■ 停止等待")
-                    self.disconnect_btn.setEnabled(True)
+                    self._set_action_btn("立即重试", "connect")
                     self.app.toast(
                         f"直播已结束：每{interval}秒自动检测开播，开播后自动连接", "info")
                 else:
@@ -2558,10 +2499,7 @@ class TestPage(BasePage):
                     self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
                     self.status_label.setText("直播已结束（点「🔁 轮询」可自动等待下次开播）")
                     self.status_label.setStyleSheet("color: #888;")
-                    self.connect_btn.setText("▶ 连接")
-                    self.connect_btn.setEnabled(True)
-                    self.disconnect_btn.setText("■ 断开")
-                    self.disconnect_btn.setEnabled(False)
+                    self._set_action_btn("连接", "connect")
                 self._setup_poll_timer()
         post_to_main(apply)
 
@@ -2709,6 +2647,4 @@ class TestPage(BasePage):
         self._stop_live_preview()
         if self.connected or self.fetcher or self.stats_collector:
             self._disconnect()
-        if self._monitoring:
-            self._toggle_monitor()
         self._auto_stopped = bool(was_active)
