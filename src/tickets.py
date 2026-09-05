@@ -16,6 +16,8 @@ from pathlib import Path
 
 import httpx
 
+from toolbox.browser import launch as pw_launch
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
@@ -1036,7 +1038,7 @@ def _damai_search_keyword(keyword: str, log=None) -> list:
             return evts
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=[
+            browser = pw_launch(p, headless=True, args=[
                 "--disable-blink-features=AutomationControlled", "--no-sandbox"])
             try:
                 ctx = browser.new_context(

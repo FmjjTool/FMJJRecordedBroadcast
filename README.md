@@ -118,7 +118,7 @@
 ### 全局特性
 
 - **主题**：浅色/深色手动切换（侧栏底部主题方块，深色显 🌙 / 浅色显 ☀️） + **跟随系统深浅色**（Windows 深浅色变化每 10 秒同步）或 **定时自动切换**（默认 07:00 浅色 / 19:00 深色，到点即变，支持跨午夜），两种自动模式互斥
-- **Cookie 管理**：11 平台 Cookie 统一存储，**Fernet 加密**（密钥派生自机器 GUID）。扫码登录 3 家（B站 / 网易云 / QQ音乐），内嵌浏览器登录 10 家（B站、抖音、微博、QQ音乐、酷狗、酷我、5sing、小红书、快手、淘宝）
+- **Cookie 管理**：11 平台 Cookie 统一存储，**Fernet 加密**（密钥派生自机器 GUID）。扫码登录 3 家（B站 / 网易云 / QQ音乐），内嵌浏览器登录 10 家（B站、抖音、微博、QQ音乐、酷狗、酷我、5sing、小红书、快手、淘宝；系统 Edge/Chrome 嵌入软件窗口，自动捕获含 HttpOnly 的全量 Cookie）
 - **快捷键**：`Enter` 统一分发到当前页主操作，`Esc` 分发到当前页取消操作
 - **全局拖放**：拖入文件夹=切换工作目录（字幕/歌词/音乐标签页则加入文件列表；弹幕姬页拖入 `.zip`=进入回放模式）
 - **Toast 提示**：右下角淡入淡出提示
@@ -280,7 +280,7 @@ PySide6/
 |---|---|---|
 | **操作系统** | Windows 10/11（x64） | 部分功能用了 Win32 API（Job Object、创建时间、注册表 MachineGuid） |
 | **Python** | 3.9+（推荐 **3.10 ~ 3.12**，实测 3.12） | 用到了 `zoneinfo`、内置泛型 `list[]`/`dict[]` |
-| **PySide6** | ≥ 6.5.0 | GUI 框架。内嵌浏览器登录需 `PySide6-Addons` 的 `QtWebEngineWidgets` |
+| **PySide6** | ≥ 6.5.0 | GUI 框架（Essentials 即可，浏览器登录走系统 Edge/Chrome，无需 Addons 的 WebEngine） |
 
 Python 依赖见 `requirements.txt`：
 
@@ -301,7 +301,7 @@ playwright>=1.40.0          # 可选，缺失时相关功能自动降级
 |---|---|---|
 | **ffmpeg / ffprobe** | 视频转换、音频提取、B站视频下载、直播预览与录制、视频抽帧 | 下载 https://ffmpeg.org/download.html 并加入 PATH |
 | **Node.js v18+** | 抖音 `a_bogus` 签名（抖音解析/采集/Cookie 验证） | 需 `node` 在 PATH 或常见安装路径 |
-| **Playwright + Chromium** | 抖音直播抓取、抖音用户作品列表、大麦关键词搜索、Cookie 浏览器登录、部分兜底解析 | `pip install playwright && playwright install chromium`（GUI 的 Cookie 管理弹窗提供一键安装按钮） |
+| **Playwright** | 抖音直播抓取、抖音用户作品列表、大麦关键词搜索、Cookie 浏览器登录、部分兜底解析 | `pip install playwright`；浏览器优先用**系统 Edge/Chrome**（Win10/11 自带，无需打包），都没有时可在 Cookie 管理页按需下载采集引擎（约 91 MB） |
 | **websocket-client** | B站弹幕录制、抖音直播 WebSocket | `pip install websocket-client` |
 | **Pillow / openpyxl / send2trash** | 缩略图、PNG 导出、Excel 导出、回收站删除 | 通常随依赖链安装 |
 | **pywin32** | 精确设置文件创建时间（缺失时回退 ctypes） | `pip install pywin32` |
@@ -355,7 +355,8 @@ ffmpeg -version                # 验证
 
 # Playwright（抖音直播、部分解析兜底、浏览器登录必需）
 pip install playwright
-playwright install chromium
+# 浏览器内核：优先系统 Edge/Chrome（无需下载）；无系统浏览器时按需下载采集引擎
+playwright install chromium-headless-shell
 
 # websocket-client（B站弹幕录制、抖音直播）
 pip install websocket-client
@@ -436,7 +437,7 @@ python app_qt.py
 3. `_minimize_console()` —— 开发模式自动最小化 cmd（ConPTY 伪控制台用 `SW_HIDE` 整体隐藏）
 4. `init_all_configs()` —— 初始化/迁移配置
 5. `setup_logging(console=False)` —— 日志只进 `logs/app_*.log`，不刷控制台
-6. 导入 `QtWebEngineWidgets`（缺组件静默降级）
+6. 检测浏览器环境（注册表读 Edge/Chrome 版本记日志；Edge/Chrome/采集引擎全缺时提示一次）
 7. 安装 Qt 降噪过滤器（吞掉字体回退等已知无害警告）
 8. `theme.init_theme() → install_auto_remap() → apply_theme()`
 9. 创建 `MainWindow` 并 show
@@ -473,7 +474,7 @@ python app_qt.py
 
 1. 左下角「🍪 管理 Cookie」→ 登录抖音（**礼物消息必须登录**，游客只有弹幕）
 2. 「📺 弹幕姬」→ 输入房间号 → ▶ 连接
-   - 需要 Playwright + Chromium（签名用）
+   - 需要 Playwright + 浏览器内核（签名用，系统 Edge/Chrome 即可）
    - 遇到验证码会弹窗，手动过验证后点「继续」
 3. 需要录像：点「⏺ 自动录播」，或去「🔴 抖音录播姬」独立录制
 4. 结束后「💾 保存弹幕」/「📦 导出回放包」
@@ -535,11 +536,13 @@ python build.py --name 自定义名称   # 自定义产物目录 / exe 名
 
 ```
 --onedir --windowed --paths src
---exclude-module tkinter PyQt5 PyQt5.sip     # 环境有 PyQt5 会与 PySide6 冲突导致打包中止
---hidden-import qrcode PySide6.QtWebEngineWidgets PySide6.QtWebEngineCore
+--exclude-module tkinter PyQt5 PyQt5.sip matplotlib IPython  # 死重排除
+--hidden-import qrcode                                        # 函数内动态 import
 --add-data src/toolbox/a_bogus.js;toolbox
 --add-data src/toolbox/abogus_cli.js;toolbox
 --add-data src/toolbox/_unlock_keys.json;toolbox
+打包后 prune()：剥离 WebEngine 调试资源 / 未用 Qt DLL（白名单）/
+QML 插件树 / Playwright 内置浏览器 / 53 种语言文件（只留中英）
 ```
 
 ### 安装器特性
@@ -587,8 +590,8 @@ A：视频转换、音频提取、B站下载、直播预览/录制都依赖 ffmp
 **Q：`pip install` 报 `SystemError` 提到 pydantic-core？**
 A：pydantic 与 pydantic-core 版本不匹配。执行 `python check_deps.py`，它会自动从报错文本提取目标版本并精确安装（兜底 `pydantic-core==2.46.4`）。装完重启终端。
 
-**Q：QtWebEngine 导入失败，Cookie 浏览器登录用不了？**
-A：装的是 PySide6 Essentials 精简版。Cookie 管理弹窗会询问是否一键安装，或手动 `pip install PySide6-Addons`。
+**Q：Cookie 浏览器登录窗口打不开？**
+A：内嵌登录需要系统 **Edge 或 Chrome**（Win10/11 自带）。两者都没有时可在 Cookie 管理页按需下载采集引擎；也可改用「输入」手动粘贴 Cookie。
 
 **Q：控制台一堆 `OpenType support missing` 警告？**
 A：已默认静默（Qt 日志过滤规则 + 消息处理器双重拦截）。这是中文系统字体链不含印度系文字导致的无害警告。
@@ -602,7 +605,7 @@ A：正常的 Cookie 浏览器登录流程，登录完点「✅ 已获取」即�
 A：抖音 `a_bogus` 签名需要 Node.js。安装 Node 18+ 并确保 `node` 在 PATH。
 
 **Q：抖音直播连不上/礼物数为 0？**
-A：① 礼物消息**必须登录抖音 Cookie**（游客只有弹幕）；② 需要 Playwright + Chromium；③ 遇到验证码会弹窗，手动过验证后点「继续」。
+A：① 礼物消息**必须登录抖音 Cookie**（游客只有弹幕）；② 需要 Playwright + 浏览器内核（系统 Edge/Chrome 即可）；③ 遇到验证码会弹窗，手动过验证后点「继续」。
 
 **Q：快手/小红书主页作品列表抓不到？**
 A：这两个平台的**主页/列表必须 Cookie**（游客被登录墙或频控拦）。单作品/笔记详情游客可用。

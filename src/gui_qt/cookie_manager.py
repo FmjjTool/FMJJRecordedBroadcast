@@ -38,30 +38,6 @@ COOKIE_PLATFORMS = [
     ("taobao", "淘宝", False, True),
 ]
 
-# 每平台常驻的登录 profile（app 生命周期内复用）
-_LOGIN_PROFILES: dict = {}
-
-
-def _login_profile(plat: str):
-    """平台级共享无痕 profile（app 生命周期内复用）。
-
-    不用持久 profile 的原因（打包版"页面明明登录了却存不下 Cookie"的根因）：
-    持久 profile 里保留的登录 Cookie 不触发 cookieAdded（只报新写入）、
-    loadAllCookies 在 PySide6 6.11 实测不回灌、Cookies 库被 Chromium 以
-    无共享读方式锁死连本进程都读不了。无痕 profile 每次开窗都是空的，
-    登录必是新写入、事件必定触发；已存 Cookie 由 _seed_stored_cookies
-    回种实现自动登录，持久化由应用自己的 cookies.json 承担。
-    """
-    prof = _LOGIN_PROFILES.get(plat)
-    if prof is None:
-        from PySide6.QtWebEngineCore import QWebEngineProfile
-        prof = QWebEngineProfile()  # 无 storage name → off-the-record
-        prof.setHttpUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-        _LOGIN_PROFILES[plat] = prof
-    return prof
-
 
 def _legacy_profile_dir(plat: str) -> str:
     """旧持久 profile 的目录（AppData\\<应用>\\QtWebEngine\\login_<plat>）。"""
@@ -122,27 +98,6 @@ def _import_legacy_profile(plat: str, auth_keys: tuple) -> bool:
         return False
 
 
-def _seed_stored_cookies(profile, stored: str, url: str, jar: dict):
-    """把应用已存的 Cookie 回种到无痕 profile（页面自动登录 + jar 预填）。"""
-    if not stored:
-        return
-    from PySide6.QtCore import QUrl
-    from PySide6.QtNetwork import QNetworkCookie
-    origin = QUrl(url)
-    host = origin.host()
-    domain = "." + host.split(".", 1)[1] if host.count(".") >= 2 else host
-    store = profile.cookieStore()
-    for pair in stored.split(";"):
-        name, eq, value = pair.strip().partition("=")
-        if not (name and eq):
-            continue
-        ck = QNetworkCookie(name.encode("utf-8"), value.encode("utf-8"))
-        ck.setDomain(domain)
-        ck.setPath("/")
-        store.setCookie(ck, origin)
-        jar[name] = value
-
-
 class CookieManagerDialog(QDialog):
     def __init__(self, parent, on_changed=None):
         super().__init__(parent)
@@ -174,20 +129,35 @@ class CookieManagerDialog(QDialog):
         self._reload()
 
     def _refresh_pw_status(self):
+        """浏览器环境状态：Playwright 库 + 系统 Edge/Chrome + 本地采集引擎。"""
         try:
             import playwright  # noqa: F401
-            self.pw_status.setText("浏览器组件：✅ 已安装（Playwright）")
-            self.pw_status.setStyleSheet("color: #4caf50;")
-            # 已安装：按钮变灰防误点（置灰样式见 _btn 的 :disabled 规则）
-            self.pw_btn.setEnabled(False)
-            self.pw_btn.setText("✅ 组件已就绪")
-            return
         except ImportError:
-            pass
-        self.pw_status.setText("浏览器组件：❌ 未安装（未登录抖音/微博时采集需要）")
-        self.pw_status.setStyleSheet("color: #ff5252;")
+            self.pw_status.setText("浏览器组件：❌ Playwright 未安装（采集需要）")
+            self.pw_status.setStyleSheet("color: #ff5252;")
+            self.pw_btn.setEnabled(True)
+            self.pw_btn.setText("📦 下载浏览器组件")
+            return
+        try:
+            from toolbox.browser import detect
+            env = detect()
+        except Exception:
+            env = {"edge": None, "chrome": None, "shell": False}
+        edge, chrome, shell = env["edge"], env["chrome"], env["shell"]
+        if edge or chrome:
+            which = f"Edge {edge}" if edge else f"Chrome {chrome}"
+            self.pw_status.setText(f"浏览器环境：✅ 系统 {which}（采集走系统浏览器，无需下载）")
+            self.pw_status.setStyleSheet("color: #4caf50;")
+            self.pw_btn.setText("🔄 检测浏览器环境")
+        elif shell:
+            self.pw_status.setText("浏览器环境：✅ 本地采集引擎已就绪")
+            self.pw_status.setStyleSheet("color: #4caf50;")
+            self.pw_btn.setText("🔄 检测浏览器环境")
+        else:
+            self.pw_status.setText("浏览器环境：⚠️ 无系统 Edge/Chrome，采集需要下载引擎（91 MB）")
+            self.pw_status.setStyleSheet("color: #eab308;")
+            self.pw_btn.setText("⬇️ 下载采集引擎")
         self.pw_btn.setEnabled(True)
-        self.pw_btn.setText("📦 下载浏览器组件")
 
     def _pip_install_dialog(self, title, tip, cmds, success_msg, on_ok=None):
         """通用后台安装：逐条执行 cmds（(显示名, 参数列表)），弹实时日志窗口。"""
@@ -243,21 +213,76 @@ class CookieManagerDialog(QDialog):
         threading.Thread(target=run, daemon=True).start()
 
     def _install_playwright(self):
-        """后台安装 playwright + chromium，弹日志窗口显示进度。"""
-        if getattr(sys, "frozen", False):
-            QMessageBox.information(
-                self, "提示",
-                "安装版内置了免登录方案（软件内浏览器登录 + Cookie 直采），无需此组件。\n"
-                "该安装功能仅在源码运行（python app_qt.py）时可用。")
+        """手动检测浏览器环境；缺采集引擎时按需下载 headless shell（用户目录）。"""
+        try:
+            import playwright  # noqa: F401
+        except ImportError:
+            if getattr(sys, "frozen", False):
+                QMessageBox.information(
+                    self, "提示",
+                    "安装版已内置浏览器组件，无需额外下载。\n"
+                    "若采集异常请检查系统是否装有 Edge/Chrome。")
+                return
+            self._pip_install_dialog(
+                "下载浏览器组件",
+                "正在安装 Playwright（约 40 MB，取决于网速）…",
+                [("pip install playwright", ["-m", "pip", "install", "playwright"])],
+                "浏览器组件安装完成！采集将自动使用系统 Edge/Chrome。",
+                on_ok=lambda ok: self._refresh_pw_status(),
+            )
             return
-        self._pip_install_dialog(
-            "下载浏览器组件",
-            "正在安装 Playwright + Chromium（约 150 MB，取决于网速）…",
-            [("pip install playwright", ["-m", "pip", "install", "playwright"]),
-             ("playwright install chromium", ["-m", "playwright", "install", "chromium"])],
-            "浏览器组件安装完成！\n现在未登录抖音/微博也可以采集数据了。",
-            on_ok=lambda ok: self._refresh_pw_status(),
-        )
+
+        from toolbox.browser import detect, download_headless_shell, headless_shell_installed
+        env = detect()
+        edge, chrome = env["edge"], env["chrome"]
+        status = (f"系统 Edge：{edge or '未安装'}\n"
+                  f"系统 Chrome：{chrome or '未安装'}\n"
+                  f"本地采集引擎：{'已就绪' if headless_shell_installed() else '未下载'}\n\n")
+        if edge or chrome:
+            QMessageBox.information(
+                self, "浏览器环境", status + "✅ 采集将自动使用系统浏览器，无需下载。")
+            self._refresh_pw_status()
+            return
+        if headless_shell_installed():
+            QMessageBox.information(self, "浏览器环境", status + "✅ 采集引擎已就绪。")
+            self._refresh_pw_status()
+            return
+        ret = QMessageBox.question(
+            self, "下载采集引擎",
+            status + "未检测到系统 Edge/Chrome，采集功能需要浏览器内核。\n\n"
+                     "是否下载 Playwright 采集引擎（约 91 MB，下载到用户目录，仅需一次）？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret != QMessageBox.Yes:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("下载采集引擎")
+        dlg.resize(560, 320)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel("正在下载 Playwright 采集引擎（约 91 MB，国内镜像优先）…"))
+        from PySide6.QtWidgets import QPlainTextEdit
+        log_view = QPlainTextEdit()
+        log_view.setReadOnly(True)
+        v.addWidget(log_view, 1)
+        close_btn = QPushButton("后台继续，关闭窗口")
+        close_btn.clicked.connect(dlg.close)
+        v.addWidget(close_btn)
+        dlg.show()
+
+        def append_log(line):
+            def _do():
+                log_view.appendPlainText(line)
+            post_to_main(_do)
+
+        def run():
+            ok = download_headless_shell(log=append_log)
+
+            def _finish():
+                append_log("\n完成 ✅ 采集引擎已就绪" if ok else "\n失败 ❌（可重试；也可安装 Edge/Chrome 后使用系统浏览器）")
+                self._refresh_pw_status()
+            post_to_main(_finish)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _reload(self):
         while self.container_layout.count():
@@ -420,29 +445,13 @@ class CookieManagerDialog(QDialog):
             QMessageBox.critical(self, "清除失败", f"{name} Cookie 清除失败：\n{e}")
 
     def _browser_login(self, plat):
-        """软件内嵌浏览器登录：窗口内加载平台页，自动捕获 Cookie 后保存关闭。"""
+        """内嵌登录：系统浏览器（Edge→Chrome）经 Playwright 有头启动，Win32 句柄
+        嵌入对话框，轮询 context.cookies() 捕获全量 Cookie（含 HttpOnly）。"""
         try:
-            from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
-            from PySide6.QtWebEngineWidgets import QWebEngineView
+            from playwright.sync_api import sync_playwright
+            from toolbox.browser import launch as pw_launch
         except ImportError:
-            if not getattr(sys, "frozen", False):
-                # 源码运行且 PySide6 是精简安装（Essentials 不含 WebEngine）→ 一键补装
-                ret = QMessageBox.question(
-                    self, "缺少组件",
-                    "内嵌浏览器组件（QtWebEngine）未安装，通常是 PySide6 精简安装导致。\n"
-                    "是否现在自动安装 PySide6-Addons（约 150 MB）？",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-                if ret == QMessageBox.Yes:
-                    self._pip_install_dialog(
-                        "安装 QtWebEngine 组件",
-                        "正在安装 PySide6-Addons（含内嵌浏览器组件）…",
-                        [("pip install PySide6-Addons", ["-m", "pip", "install", "PySide6-Addons"])],
-                        "组件安装完成！请重启软件后再点「浏览器」登录。",
-                    )
-                else:
-                    QMessageBox.warning(self, "不可用", "可先改用「输入」手动粘贴 Cookie")
-                return
-            QMessageBox.warning(self, "不可用", "内嵌浏览器组件缺失（QtWebEngine），请改用「输入」手动粘贴 Cookie")
+            QMessageBox.warning(self, "不可用", "浏览器组件（Playwright）未安装，请改用「输入」手动粘贴 Cookie")
             return
 
         # (url, 标题, 登录特征 Cookie, 登录操作提示)
@@ -487,12 +496,10 @@ class CookieManagerDialog(QDialog):
             self._reload()
             self._notify()
 
-        # 平台级共享无痕 profile（见 _login_profile）：登录必是新写入、事件必定触发
-        profile = _login_profile(plat)
-        page = QWebEnginePage(profile, dlg)
-        view = QWebEngineView(dlg)
-        view.setPage(page)
-        v.addWidget(view, 1)
+        # 嵌入宿主：worker 找到浏览器窗口句柄后由主线程嵌入
+        host = QWidget()
+        host.setStyleSheet("background: #ffffff;")
+        v.addWidget(host, 1)
 
         # 底部操作栏：只有用户点「已获取」才保存，不自动不超时
         bar = QHBoxLayout()
@@ -518,16 +525,124 @@ class CookieManagerDialog(QDialog):
             cap_lbl.setText(f"  已捕获 {len(jar)} 个 Cookie" + (f"（✅ 检测到登录特征 {self_keys}）" if hit else f"（登录特征：{self_keys}）"))
             cap_lbl.setStyleSheet("color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
 
-        def on_cookie_added(cookie):
+        # ==== Win32 嵌入辅助（Playwright 启动的 Chromium 系窗口类名）====
+        import ctypes
+        user32 = ctypes.windll.user32
+        GWL_STYLE, WS_CAPTION, WS_THICKFRAME = -16, 0x00C00000, 0x00040000
+
+        def _win_proc_name(hwnd):
+            """窗口所属进程名（小写）；Electron 应用（Trae/QQ 等）类名同为
+            Chrome_WidgetWin_1，必须按进程名过滤防止误嵌。"""
+            from ctypes import wintypes
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED
+            if not h:
+                return ""
             try:
-                name = bytes(cookie.name()).decode("utf-8", "ignore")
-                value = bytes(cookie.value()).decode("utf-8", "ignore")
+                buf = ctypes.create_unicode_buffer(260)
+                size = wintypes.DWORD(260)
+                ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                    h, 0, buf, ctypes.byref(size))
+                return buf.value.rsplit("\\", 1)[-1].lower()
+            finally:
+                ctypes.windll.kernel32.CloseHandle(h)
+
+        def _enum_browser_windows():
+            out = []
+            CB = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+            def _cb(hwnd, _):
+                if user32.IsWindowVisible(hwnd):
+                    buf = ctypes.create_unicode_buffer(64)
+                    user32.GetClassNameW(hwnd, buf, 64)
+                    if buf.value == "Chrome_WidgetWin_1" and \
+                            _win_proc_name(hwnd) in ("msedge.exe", "chrome.exe"):
+                        out.append(hwnd)
+                return True
+            user32.EnumWindows(CB(_cb), 0)
+            return out
+
+        state = {"stop": threading.Event(), "hwnd": 0}
+
+        def _embed(hwnd):
+            """主线程：把浏览器窗口嵌入宿主并去掉原生标题栏。"""
+            state["hwnd"] = hwnd
+            try:
+                from PySide6.QtGui import QWindow
+                qwin = QWindow.fromWinId(int(hwnd))
+                box = QWidget.createWindowContainer(qwin, host)
+                lay = QVBoxLayout(host)
+                lay.setContentsMargins(0, 0, 0, 0)
+                lay.addWidget(box)
+                style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+                user32.SetWindowLongW(hwnd, GWL_STYLE,
+                                      int(style) & ~(WS_CAPTION | WS_THICKFRAME))
+                user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)  # NOSIZE|NOMOVE|NOZORDER|FRAMECHANGED
             except Exception:
-                return
-            if not name or not value:
-                return
-            jar[name] = value
+                pass  # 嵌入失败时浏览器以独立窗口显示，登录功能不受影响
             _refresh_cap()
+
+        def worker():
+            """后台线程：Playwright 生命周期必须在创建线程内收尾（sync API 非线程安全）。"""
+            try:
+                before = set(_enum_browser_windows())  # 快照必须在 launch 前
+                with sync_playwright() as p:
+                    browser = pw_launch(p, headless=False)
+                    ctx = browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                        viewport={"width": 1080, "height": 660},
+                        locale="zh-CN",
+                    )
+                    # 回种已存 Cookie：页面自动保持登录，用户可直接点「已获取」
+                    stored = auth.load_cookies().get(plat, "")
+                    if stored:
+                        from urllib.parse import urlparse
+                        h = urlparse(url).hostname or ""
+                        dom = "." + h.split(".", 1)[1] if h.count(".") >= 2 else h
+                        for pair in stored.split(";"):
+                            n, eq, val = pair.strip().partition("=")
+                            if n and eq:
+                                ctx.add_cookies([{"name": n, "value": val,
+                                                  "domain": dom, "path": "/"}])
+                                jar[n] = val
+                    page = ctx.new_page()
+                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                    # 找到新出现的浏览器窗口句柄 → 主线程嵌入
+                    hwnd = None
+                    deadline = time.time() + 10
+                    while time.time() < deadline and not state["stop"].is_set():
+                        new = [h for h in _enum_browser_windows() if h not in before]
+                        if new:
+                            hwnd = new[0]
+                            break
+                        time.sleep(0.3)
+                    if hwnd is not None:
+                        post_to_main(lambda: _embed(hwnd))
+                    # 轮询捕获（全量含 HttpOnly；窗口被用户手动关闭时退出）
+                    while not state["stop"].is_set():
+                        time.sleep(1.5)
+                        try:
+                            for c in ctx.cookies():
+                                n, val = c.get("name"), c.get("value")
+                                if n and val:
+                                    jar[n] = val
+                            post_to_main(_refresh_cap)
+                        except Exception:
+                            break
+            except Exception as e:
+                def _fail(msg=str(e)):
+                    if dlg.isVisible():
+                        QMessageBox.warning(
+                            dlg, "打开失败",
+                            f"浏览器启动失败：\n{msg}\n\n可改用「输入」手动粘贴 Cookie")
+                post_to_main(_fail)
+
+        def _cleanup():
+            state["stop"].set()
+            if state["hwnd"]:
+                user32.ShowWindow(state["hwnd"], 0)  # goto 阻塞期间避免独立窗口闪现
 
         def save_now():
             if not jar:
@@ -552,14 +667,9 @@ class CookieManagerDialog(QDialog):
                 return
             dlg.close()
 
-        profile.cookieStore().cookieAdded.connect(on_cookie_added)
+        dlg.closeEvent = lambda ev: _cleanup()
 
-        # 回种已存 Cookie（导入/上次保存的）：无痕 profile 开窗为空，回种后
-        # 页面自动保持登录，用户可直接点「已获取」保存；登录过期则正常重新登录
-        _seed_stored_cookies(profile, auth.load_cookies().get(plat, ""), url, jar)
-        _refresh_cap()
-
-        view.load(QUrl(url))
+        threading.Thread(target=worker, daemon=True).start()
         dlg.show()
 
     def _qr_login(self, plat):

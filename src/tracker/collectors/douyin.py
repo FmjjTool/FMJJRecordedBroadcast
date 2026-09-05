@@ -1,6 +1,7 @@
 import asyncio
 
 from ..config import DOUYIN_SEC_UID
+from toolbox.browser import launch as pw_launch
 
 
 def _sync_collect(sec_uid=None) -> dict:
@@ -113,8 +114,8 @@ def _playwright_collect(sec_uid=None) -> dict:
     sec_uid = sec_uid or DOUYIN_SEC_UID
     user_url = f"https://www.douyin.com/user/{sec_uid}"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=True,
+        browser = pw_launch(
+            pw, headless=True,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
         )
         context = browser.new_context(

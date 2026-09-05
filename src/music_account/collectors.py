@@ -22,6 +22,8 @@ import time
 
 import httpx
 
+from toolbox.browser import launch as pw_launch
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
@@ -202,7 +204,7 @@ def _netease_playwright(pid, kind):
     else:
         url = f"https://music.163.com/user/home?id={pid}"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = pw_launch(pw, headless=True, args=["--no-sandbox"])
         try:
             ctx = browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900},
                                       locale="zh-CN")
@@ -491,7 +493,7 @@ def _kugou_playwright(sid):
         return {"platform": "kugou", "error": "未安装 Playwright 组件"}
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = pw_launch(pw, headless=True, args=["--no-sandbox"])
         try:
             ctx = browser.new_context(user_agent=MOBILE_UA, viewport={"width": 390, "height": 844},
                                       locale="zh-CN", is_mobile=True, has_touch=True)
@@ -712,7 +714,7 @@ def _kuwo_playwright(rid):
         return {"platform": "kuwo", "error": "未安装 Playwright 组件"}
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = pw_launch(pw, headless=True, args=["--no-sandbox"])
         try:
             ctx = browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900},
                                       locale="zh-CN")
@@ -839,7 +841,7 @@ def _fivesing_playwright(uid):
         return {"platform": "fivesing", "error": "未安装 Playwright 组件"}
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = pw_launch(pw, headless=True, args=["--no-sandbox"])
         try:
             ctx = browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900},
                                       locale="zh-CN")

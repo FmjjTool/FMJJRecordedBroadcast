@@ -21,6 +21,8 @@ from datetime import datetime
 
 import httpx
 
+from toolbox.browser import launch as pw_launch
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
 
@@ -795,7 +797,7 @@ def _danmaku_token_playwright(room_id: str) -> dict:
     from playwright.sync_api import sync_playwright
     out = {"token": "", "host": ""}
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = pw_launch(p, headless=True)
         try:
             ctx = browser.new_context(user_agent=UA)
             page = ctx.new_page()

@@ -6,6 +6,7 @@
 import re, json
 from typing import Optional
 from .base import PlatformBase, VideoInfo, now_str
+from toolbox.browser import launch as pw_launch
 
 
 class DouyinPlaywrightParser(PlatformBase):
@@ -28,8 +29,8 @@ class DouyinPlaywrightParser(PlatformBase):
         video_id = self.extract_id(url) or "unknown"
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
+            browser = pw_launch(
+                p, headless=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",

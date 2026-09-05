@@ -10,6 +10,7 @@ from urllib.parse import unquote
 
 import httpx
 from .base import PlatformBase, VideoInfo, now_str
+from toolbox.browser import launch as pw_launch
 
 
 def _deep_find(d, key, depth=10):
@@ -251,8 +252,8 @@ class DouyinParser(PlatformBase):
         results = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
+            browser = pw_launch(
+                p, headless=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",

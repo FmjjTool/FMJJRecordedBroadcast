@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from toolbox.browser import launch as pw_launch
+
 try:
     from playwright.sync_api import sync_playwright
     HAS_PLAYWRIGHT = True
@@ -578,8 +580,8 @@ def _playwright_one(url: str, ua: str, cookie: str, count: int, log) -> tuple:
     """
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
+        browser = pw_launch(
+            p, headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
@@ -1151,7 +1153,7 @@ def _playwright_item_ssr(item_id: str, cookie: str, log=None) -> dict:
     if not HAS_PLAYWRIGHT:
         return {}
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=[
+        browser = pw_launch(p, headless=True, args=[
             "--disable-blink-features=AutomationControlled", "--no-sandbox"])
         try:
             ctx = browser.new_context(user_agent=UA_PC,

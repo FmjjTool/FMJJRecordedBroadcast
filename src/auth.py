@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from rich.console import Console
 
 from toolbox.config_manager import get_config_dir
+from toolbox.browser import launch as pw_launch
 
 console = Console()
 
@@ -344,11 +345,8 @@ def browser_login(platform: str, blocking: bool = True) -> Optional[str]:
         console.print("[dim]浏览器窗口打开 → 请扫码登录 → 将自动检测并保存 Cookie（最长等待 3 分钟）[/dim]")
 
     with sync_playwright() as p:
-        # exe 打包只带 headless shell，可见窗口登录用系统 Edge（Windows 自带）
-        try:
-            browser = p.chromium.launch(headless=False, channel="msedge")
-        except Exception:
-            browser = p.chromium.launch(headless=False)
+        # 可见窗口登录走统一浏览器层（Edge → Chrome → 默认）
+        browser = pw_launch(p, headless=False)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800},

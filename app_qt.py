@@ -126,14 +126,10 @@ def main():
     except Exception:
         pass  # 日志初始化失败不影响主程序
 
-    # QtWebEngine 必须在 QApplication 之前导入（否则运行期创建内嵌浏览器
-    # 会报 "must be imported before QCoreApplication"），缺组件时静默降级
-    try:
-        from PySide6.QtCore import Qt
-        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
-        from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
-    except ImportError:
-        pass
+    # QtWebEngine 已随内嵌登录改造移除（登录走系统 Edge + Playwright 嵌入），
+    # AA_ShareOpenGLContexts 保留给 QtMultimedia 视频预览的 GL 上下文共享
+    from PySide6.QtCore import Qt
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
 
     # Windows 中文系统的 Qt 字体回退链（雅黑/Tahoma/SimSun/Arial...）不含印度系文字字体，
     # 渲染抓取内容里的旁遮普语等外文时每条都刷 "OpenType support missing" 警告，关闭降噪
@@ -166,6 +162,25 @@ def main():
             "未检测到 ffmpeg！\n\n视频转换和音频提取功能将不可用。\n"
             "请安装 ffmpeg 并添加到系统 PATH。\n下载: https://ffmpeg.org/download.html"
         )
+
+    # 启动时检测浏览器环境（注册表读取，毫秒级）：Edge/Chrome 版本记日志，
+    # 三者全缺时提示一次（采集需要浏览器内核，可在 Cookie 管理里按需下载）
+    try:
+        import logging
+        from toolbox.browser import detect
+        env = detect()
+        logging.getLogger("startup").info(
+            "浏览器环境：Edge=%s Chrome=%s 采集引擎=%s",
+            env["edge"] or "无", env["chrome"] or "无",
+            "已下载" if env["shell"] else "未下载")
+        if not (env["edge"] or env["chrome"] or env["shell"]):
+            QMessageBox.information(
+                win, "浏览器环境",
+                "未检测到系统 Edge / Chrome，也未下载过采集引擎。\n\n"
+                "数据采集功能需要浏览器内核，首次使用时会提示下载（约 91 MB），\n"
+                "也可现在到「Cookie 管理 → 下载采集引擎」提前下载。")
+    except Exception:
+        pass
 
     sys.exit(app.exec())
 

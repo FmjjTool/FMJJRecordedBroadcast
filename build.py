@@ -172,10 +172,14 @@ def run_pyinstaller(name: str):
         # 显式排除以免 PyInstaller 报 "multiple Qt bindings" 中止
         "--exclude-module", "PyQt5",
         "--exclude-module", "PyQt5.sip",
+        # 全源码零引用、纯传递依赖拖入的死重（安装包体积优化报告 2026-09-05）
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "IPython",
+        "--exclude-module", "jedi",
+        "--exclude-module", "parso",
         # 函数体内动态 import 的模块，静态分析收不到，必须显式声明
+        # （QtWebEngine 已移除：登录改走系统浏览器 + Playwright 嵌入）
         "--hidden-import", "qrcode",                        # 扫码登录二维码
-        "--hidden-import", "PySide6.QtWebEngineWidgets",    # 软件内嵌浏览器登录
-        "--hidden-import", "PySide6.QtWebEngineCore",
     ]
     icon = ROOT / "icon.ico"
     if icon.exists():
@@ -191,6 +195,131 @@ def run_pyinstaller(name: str):
     if r.returncode != 0 or not (dist / f"{name}.exe").exists():
         sys.exit("PyInstaller 打包失败，请检查上方报错")
     print(f"绿色版完成：{dist}")
+
+
+# ==================== 产物瘦身（安装包体积优化报告 2026-09-05） ====================
+# PyInstaller 的 PySide6/playwright hook 全量拷贝运行时，以下白名单清理零功能损失：
+# 1. WebEngine 调试/开发资源（F12 devtools，终端用户用不到，88MB）
+# 2. 多语言文件（53 种语言 → 只留中文+英文兜底，约 92MB）
+# 3. 源码零引用的 Qt DLL（3D/Charts/Pdf/Quick 风格包等，见 QT_DLL_KEEP 白名单）
+PRUNE_FILES = [
+    # WebEngine devtools/调试资源（*.debug.* 只服务于内嵌页 F12 调试）
+    "PySide6/resources/qtwebengine_devtools_resources.debug.pak",
+    "PySide6/resources/qtwebengine_resources.debug.pak",
+    "PySide6/resources/qtwebengine_resources_100p.debug.pak",
+    "PySide6/resources/qtwebengine_resources_200p.debug.pak",
+    "PySide6/resources/v8_context_snapshot.debug.bin",
+    "PySide6/resources/qtwebengine_devtools_resources.pak",
+]
+
+# Qt6*.dll 保留白名单：源码实际 import 的 5 个模块（Core/Gui/Widgets/Multimedia/
+# MultimediaWidgets，2026-09-05 全源码统计）+ 各自的依赖链。WebEngine/Qml/Quick/
+# WebChannel/Positioning/ShaderTools 随内嵌登录改走系统浏览器一并移除（~340MB）
+QT_DLL_KEEP = {
+    # 核心界面
+    "Qt6Core", "Qt6Gui", "Qt6Widgets", "Qt6Network", "Qt6Svg", "Qt6OpenGL",
+    "Qt6OpenGLWidgets", "Qt6Concurrent",
+    # 视频预览（image_sorter）
+    "Qt6Multimedia", "Qt6MultimediaWidgets",
+    "Qt6SpatialAudio",
+    # 其余非 Qt6* 前缀的 DLL（python310/vcruntime/avcodec 等）不受白名单管辖
+}
+
+# playwright 内置浏览器（改走系统 Edge 后整目录删除；下载兜底走用户目录）
+PW_BROWSER_DIR = "playwright/driver/package/.local-browsers"
+
+# 各语言目录的保留文件（zh-CN 主用 + en-US 兜底）
+LOCALE_DIRS = [
+    "PySide6/translations/qtwebengine_locales",
+    "playwright/driver/package/.local-browsers/*/chrome-headless-shell-win64/locales",
+]
+LOCALE_KEEP = {"zh-CN.pak", "en-US.pak"}
+QM_KEEP = {"qt_zh_CN.qm", "qtbase_zh_CN.qm"}
+
+
+def _prune_report(removed: list, tag: str):
+    if removed:
+        mb = sum(s for _, s in removed) / 1048576
+        print(f"  [{tag}] 删除 {len(removed)} 项，共 {mb:.1f} MB")
+
+
+def prune(name: str):
+    step("产物瘦身（调试资源 / 多语言 / 未用 Qt 模块）")
+    internal = ROOT / "dist" / name / "_internal"
+    if not internal.is_dir():
+        return
+    total_removed = []
+
+    # 1. 指定文件（debug/devtools 资源）
+    removed = []
+    for rel in PRUNE_FILES:
+        p = internal / rel
+        if p.is_file():
+            removed.append((rel, p.stat().st_size))
+            p.unlink()
+    _prune_report(removed, "调试资源")
+    total_removed += removed
+
+    # 2. Qt DLL 白名单之外的删除（Qt6*.dll）
+    removed = []
+    for p in (internal / "PySide6").glob("Qt6*.dll"):
+        stem = p.stem  # Qt63DCore → 去掉 .dll
+        if stem not in QT_DLL_KEEP:
+            removed.append((p.name, p.stat().st_size))
+            p.unlink()
+    # 未用模块的 pyd 同步删除（源码 import 的 5 个模块之外；QtOpenGL.pyd 8.3MB 是大头）
+    PYD_KEEP = {"QtCore", "QtGui", "QtWidgets", "QtMultimedia",
+                "QtMultimediaWidgets"}
+    for p in (internal / "PySide6").glob("*.pyd"):
+        if p.name[:-4] not in PYD_KEEP:
+            removed.append((p.name, p.stat().st_size))
+            p.unlink()
+    _prune_report(removed, "未用Qt模块")
+    total_removed += removed
+
+    # 3. QML 插件树（Widgets 应用不加载 QML；WebEngine 需要的核心 QtQuick 已在 DLL 白名单）
+    #    实测删 qml/ 前先验证 WebEngine 登录窗，见报告二级方案
+    qml = internal / "PySide6" / "qml"
+    if qml.is_dir():
+        removed = [("qml/", sum(f.stat().st_size for f in qml.rglob("*") if f.is_file()))]
+        shutil.rmtree(qml)
+        _prune_report(removed, "QML插件树")
+        total_removed += removed
+
+    # 4. playwright 内置浏览器（走系统 Edge 方案后不再打包）
+    removed = []
+    lb = internal / PW_BROWSER_DIR
+    if lb.is_dir():
+        size = sum(f.stat().st_size for f in lb.rglob("*") if f.is_file())
+        removed.append((PW_BROWSER_DIR, size))
+        shutil.rmtree(lb)
+        _prune_report(removed, "PW内置浏览器")
+        total_removed += removed
+
+    # 5. 多语言 → 只留中英
+    removed = []
+    for pattern in LOCALE_DIRS:
+        for loc_dir in internal.glob(pattern):
+            if not loc_dir.is_dir():
+                continue
+            for pak in loc_dir.iterdir():
+                if pak.is_file() and pak.name not in LOCALE_KEEP:
+                    removed.append((str(pak.relative_to(internal)), pak.stat().st_size))
+                    pak.unlink()
+    trans = internal / "PySide6" / "translations"
+    if trans.is_dir():
+        for qm in trans.iterdir():
+            if qm.is_file() and qm.suffix == ".qm" and qm.name not in QM_KEEP:
+                removed.append((qm.name, qm.stat().st_size))
+                qm.unlink()
+    _prune_report(removed, "多余语言")
+    total_removed += removed
+
+    if total_removed:
+        mb = sum(s for _, s in total_removed) / 1048576
+        print(f"  瘦身合计：{len(total_removed)} 项，{mb:.1f} MB")
+    else:
+        print("  无可清理项")
 
 
 def privacy_scan(name: str):
@@ -280,6 +409,7 @@ def main():
         if not check_pyinstaller():
             sys.exit(1)
         run_pyinstaller(name)
+        prune(name)
 
     privacy_scan(name)
 

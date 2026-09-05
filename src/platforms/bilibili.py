@@ -10,6 +10,7 @@ import hashlib
 from urllib.parse import urlencode
 import httpx
 from .base import PlatformBase, VideoInfo, now_str, normalize_datetime
+from toolbox.browser import launch as pw_launch
 
 # B站 WBI 签名固定置换表（用于混淆 img_key+sub_key 得到 mixin_key）
 _MIXIN_KEY_ENC_TAB = [
@@ -532,7 +533,7 @@ class BilibiliParser(PlatformBase):
             return []
         results = []
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = pw_launch(p, headless=True)
             ctx = browser.new_context(user_agent=self.HEADERS["User-Agent"])
             page = ctx.new_page()
             collected = []
@@ -600,7 +601,7 @@ class BilibiliParser(PlatformBase):
         results = []
         items = []
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = pw_launch(p, headless=True)
             ctx = browser.new_context(user_agent=self.HEADERS["User-Agent"])
             page = ctx.new_page()
 

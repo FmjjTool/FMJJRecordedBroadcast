@@ -3,6 +3,7 @@ import json
 import re
 
 from ..config import WEIBO_UID, MOBILE_USER_AGENT
+from toolbox.browser import launch as pw_launch
 
 PC_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                  "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
@@ -193,8 +194,8 @@ def _playwright_collect(uid=None) -> dict:
     uid = uid or WEIBO_UID
     user_url = f"https://m.weibo.cn/u/{uid}"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=True,
+        browser = pw_launch(
+            pw, headless=True,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
         )
         context = browser.new_context(

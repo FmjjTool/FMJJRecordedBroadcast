@@ -24,6 +24,8 @@ import hashlib
 
 import httpx
 
+from toolbox.browser import launch as pw_launch
+
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 SDK_VERSION = "1.0.14-beta.0"
 DEFAULT_UNIQUE_ID = "7673531686768002601"
@@ -1377,7 +1379,7 @@ class DouyinLiveFetcher:
                         except Exception:
                             pass
 
-                browser = p.chromium.launch(headless=True)
+                browser = pw_launch(p, headless=True)
                 ctx = browser.new_context(**ctx_kwargs)
                 _inject_cookie(ctx)
                 page = ctx.new_page()
@@ -1389,11 +1391,8 @@ class DouyinLiveFetcher:
                     browser.close()
                     self._emit(self.on_status, "captcha", "检测到抖音风控，请在弹出的浏览器窗口手动完成验证码...")
                     # 切换有头浏览器，弹出验证窗口，等待用户手动过验证码
-                    # exe 打包只带 headless shell，可见窗口用系统 Edge（Windows 自带）
-                    try:
-                        browser = p.chromium.launch(headless=False, channel="msedge")
-                    except Exception:
-                        browser = p.chromium.launch(headless=False)
+                    # 可见窗口（验证码弹窗）走统一浏览器层（Edge → Chrome → 默认）
+                    browser = pw_launch(p, headless=False)
                     ctx = browser.new_context(**ctx_kwargs)
                     _inject_cookie(ctx)
                     page = ctx.new_page()
