@@ -669,7 +669,7 @@ def _parse_user(b):
 
 def _parse_gift(b):
     """GiftStruct → name(16)/diamondCount(12)/image(1)。
-    字段号以本地 dycast-main/src/core/model.ts 为准：
+    字段号参考 dycast 项目 src/core/model.ts（历史抓包依据）：
     f4=duration(特效时长ms) f5=id f9=forFansclub(bool) f11=type
     f12=diamondCount(抖币价) f14=primaryEffectId f16=name。"""
     r = _Reader(b)

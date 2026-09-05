@@ -1,4 +1,4 @@
-# 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
+﻿# 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
 > **FengMingToolbox v2.8.7** · 制作：歆慕
 >
@@ -267,7 +267,6 @@ PySide6/
 ├── config/                      # 运行时配置（gitignore，不进仓库/安装包）
 ├── download/                    # 运行时产出（gitignore）
 ├── logs/                        # 运行日志（gitignore，上限 50 个自动轮转）
-├── dycast-main/                 # dycast 弹幕姬（外部 Node 项目，运行时定位）
 └── dist/  build/                # 打包产物（gitignore）
 ```
 
@@ -445,7 +444,7 @@ python app_qt.py
 
 ### 停止
 
-直接关闭窗口。`closeEvent` 会对**所有已加载页面**调用 `shutdown()`（优先）或 `on_hide()` 全停，并兜底停止弹幕姬子进程。
+直接关闭窗口。`closeEvent` 会对**所有已加载页面**调用 `shutdown()`（优先）或 `on_hide()` 全停。
 
 ---
 
@@ -522,7 +521,6 @@ winget install JRSoftware.InnoSetup      # 仅生成安装器时需要
 python build.py                    # 完整：PyInstaller 绿色版 → 隐私扫描 → Inno Setup 安装器
 python build.py --no-installer     # 只出绿色版
 python build.py --skip-build       # 复用 dist/，仅重编安装器
-python build.py --with-dycast      # 附带 dycast-main 弹幕姬源码
 python build.py --name 自定义名称   # 自定义产物目录 / exe 名
 ```
 
@@ -722,16 +720,15 @@ APP_PUBLISHER    = "歆慕"
 
 | # | 位置 | 问题 | 影响 |
 |---|---|---|---|
-| 1 | `main_window.py` | `PAGE_CLASSES` 33 项，`NAV_GROUPS` 32 项 —— **`dycast` 已注册但侧栏不可达** | 无。该页作为共享启动器被「📺 弹幕姬」页复用（`launch_dycast_app` / `stop_dycast_app`） |
-| 2 | `main_window.py` vs `cookie_manager.py` | 两处 `COOKIE_PLATFORMS` 不一致（10 vs 11，后者多 `taobao`） | 侧栏显示「已登录 N/10」，不统计淘宝 |
-| 3 | `pages/calendar.py` | 面包屑写「双击日期打开文件夹」，实现是**单击** | 仅文案不符 |
-| 4 | `main_window.py` | 状态栏只在初始化时设一次「就绪」，之后无更新 | 形同虚设的占位 |
-| 5 | `pages/test_page.py` | 文件名/key 为历史遗留的 `test_page`，实际是弹幕姬页 | 与 `dycast.py` 命名易混淆 |
-| 6 | `pages/douyin_recorder.py` | 有一处中文注释被误编码为 UTF-8 乱码 | 不影响运行 |
-| 7 | `platforms/bilibili.py` vs `bili/wbi.py` | WBI 签名有两套实现，`MIXIN_KEY_ENC_TAB` 置换表**尾部不完全一致** | 二者签名结果可能不同，但目前各自链路均可用 |
-| 8 | `tracker/config.py` | `OUTPUT_PATHS` 只有 3 个平台 | 快手/小红书记录不写入 `tracker/data/`（仍写入按账号的 xlsx） |
-| 9 | `src/music/scrapers/fivesing.py` | `get_play_url()` 在文件中定义了两次（实现相同） | 冗余代码，后者生效 |
-| 10 | `check_deps.py` | docstring 写「被 app 启动时自动调用」，实际**无调用点** | 需手动执行 `python check_deps.py` |
+| 1 | `main_window.py` vs `cookie_manager.py` | 两处 `COOKIE_PLATFORMS` 不一致（10 vs 11，后者多 `taobao`） | 侧栏显示「已登录 N/10」，不统计淘宝 |
+| 2 | `pages/calendar.py` | 面包屑写「双击日期打开文件夹」，实现是**单击** | 仅文案不符 |
+| 3 | `main_window.py` | 状态栏只在初始化时设一次「就绪」，之后无更新 | 形同虚设的占位 |
+| 4 | `pages/test_page.py` | 文件名/key 为历史遗留的 `test_page`，实际是抖音弹幕姬页 | 命名易混淆 |
+| 5 | `pages/douyin_recorder.py` | 有一处中文注释被误编码为 UTF-8 乱码 | 不影响运行 |
+| 6 | `platforms/bilibili.py` vs `bili/wbi.py` | WBI 签名有两套实现，`MIXIN_KEY_ENC_TAB` 置换表**尾部不完全一致** | 二者签名结果可能不同，但目前各自链路均可用 |
+| 7 | `tracker/config.py` | `OUTPUT_PATHS` 只有 3 个平台 | 快手/小红书记录不写入 `tracker/data/`（仍写入按账号的 xlsx） |
+| 8 | `src/music/scrapers/fivesing.py` | `get_play_url()` 在文件中定义了两次（实现相同） | 冗余代码，后者生效 |
+| 9 | `check_deps.py` | docstring 写「被 app 启动时自动调用」，实际**无调用点** | 需手动执行 `python check_deps.py` |
 
 ### 开发约定
 
@@ -747,7 +744,7 @@ APP_PUBLISHER    = "歆慕"
 - 录播录制设计参考 [BililiveRecorder](https://github.com/Bililive/BililiveRecorder)（FLV 流式转存、弹幕 XML 格式）
 - 加密音乐解密算法移植自 [Unlock Music](https://github.com/unlock-music/unlock-music)
 - 多平台视频解析思路来自 video-parser 项目
-- 抖音弹幕姬参考 [dycast](https://github.com/skmcj/dycast)（`dycast-main/`，外部 Node 项目，运行时定位，可用 `--with-dycast` 入包）
+- 抖音弹幕姬参考 [dycast](https://github.com/skmcj/dycast)（直播协议与弹幕分类格式的原始参考项目）
 
 ---
 

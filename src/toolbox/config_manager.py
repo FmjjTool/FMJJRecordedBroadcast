@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 # ==================== 路径工具 ====================
 
 def get_app_root() -> Path:
-    # PyInstaller 打包后：以 exe 所在目录为根（config/download/dycast 都落在 exe 旁）
+    # PyInstaller 打包后：以 exe 所在目录为根（config/download 都落在 exe 旁）
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent.parent

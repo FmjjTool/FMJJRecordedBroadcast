@@ -40,7 +40,6 @@ from gui_qt.pages.music_info import MusicInfoPage
 from gui_qt.pages.netease import NeteasePage
 from gui_qt.pages.tracker import TrackerPage
 from gui_qt.pages.music_tracker import MusicTrackerPage
-from gui_qt.pages.dycast import DycastPage
 from gui_qt.pages.test_page import TestPage
 from gui_qt.pages.bili_resource import BiliResourcePage
 from gui_qt.pages.file_time import FileTimePage
@@ -76,7 +75,6 @@ PAGE_CLASSES = {
     "music_tag": MusicTagPage,
     "tracker": TrackerPage,
     "music_tracker": MusicTrackerPage,
-    "dycast": DycastPage,
     "test_page": TestPage,
     "bili_resource": BiliResourcePage,
     "file_time": FileTimePage,
@@ -454,7 +452,7 @@ class MainWindow(QMainWindow):
             page.on_show()
 
     def closeEvent(self, event):
-        # 关闭窗口：对所有已加载页面触发全停（停抓取/录制/回放/dycast 进程树等）
+        # 关闭窗口：对所有已加载页面触发全停（停抓取/录制/回放等）
         for page in self.pages.values():
             fn = getattr(page, "shutdown", None) or getattr(page, "on_hide", None)
             if fn:
@@ -462,12 +460,6 @@ class MainWindow(QMainWindow):
                     fn()
                 except Exception:
                     pass
-        # 弹幕姬进程树：即使页面未打开过也要兜底终止（父关子关）
-        try:
-            from gui_qt.pages.dycast import stop_dycast_app
-            stop_dycast_app(None)
-        except Exception:
-            pass
         super().closeEvent(event)
 
     # ==================== 回车键统一分发 ====================

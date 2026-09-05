@@ -52,7 +52,7 @@ def _minimize_console():
 def _suppress_child_consoles():
     """给 subprocess.Popen 补 CREATE_NO_WINDOW：
     ffmpeg / node 等子进程不再弹出黑窗（无论有无控制台都生效）；
-    launcher/dycast 刻意要求 CREATE_NEW_CONSOLE 的调用不受影响。"""
+    launcher 刻意要求 CREATE_NEW_CONSOLE 的调用不受影响。"""
     if os.name != "nt":
         return
     import subprocess

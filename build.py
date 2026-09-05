@@ -4,7 +4,6 @@
   python build.py                   # 完整流程：清理 → PyInstaller → 隐私扫描 → 生成/编译安装器
   python build.py --skip-build      # 跳过 PyInstaller（复用 dist/），只重新生成并编译安装器
   python build.py --no-installer    # 只出绿色版，不生成安装器
-  python build.py --with-dycast     # 把 dycast-main（弹幕姬源码）一并打进安装包
   python build.py --name 名称        # 自定义产物目录/exe 名（默认 FengMingToolbox）
 
 产物：
@@ -47,8 +46,6 @@ PRIVACY_FILES = {
 }
 PRIVACY_FILE_PATTERNS = [re.compile(r"^app_\d{8}_\d{6}.*\.log$")]
 PRIVACY_DIRS = {"config", "logs", "download", "__pycache__"}
-
-DYCAST_EXCLUDE = {"node_modules", "downloads", "sessions", ".git", ".github", "__pycache__"}
 
 ISS_TEMPLATE = r"""; 由 build.py 自动生成 — Inno Setup 6 脚本（安装目录可选 / 写注册表 / 可卸载）
 ; 手动编译：ISCC.exe installer.iss
@@ -216,21 +213,6 @@ def privacy_scan(name: str):
     print("扫描通过：dist 内无 Cookie / 配置 / 账号等隐私文件")
 
 
-def copy_dycast(name: str):
-    step("附带 dycast-main（弹幕姬）")
-    src = ROOT / "dycast-main"
-    dst = ROOT / "dist" / name / "dycast-main"
-    if not src.is_dir():
-        print("未找到 dycast-main，跳过")
-        return
-
-    def ignore(dir_path, names):
-        return [n for n in names if n in DYCAST_EXCLUDE]
-
-    shutil.copytree(src, dst, ignore=ignore)
-    print(f"已复制 → {dst}（已排除 node_modules/downloads/sessions/.git）")
-
-
 def find_iscc() -> str | None:
     exe = shutil.which("ISCC.exe")
     if exe:
@@ -287,7 +269,6 @@ def main():
     ap.add_argument("--name", default=None, help="产物/exe 名称（默认取 version.py 的 APP_NAME）")
     ap.add_argument("--skip-build", action="store_true", help="跳过 PyInstaller，仅重新生成安装器")
     ap.add_argument("--no-installer", action="store_true", help="只打绿色版，不出安装器")
-    ap.add_argument("--with-dycast", action="store_true", help="附带 dycast-main 弹幕姬源码")
     args = ap.parse_args()
 
     ver = read_version_info()
@@ -299,9 +280,6 @@ def main():
         if not check_pyinstaller():
             sys.exit(1)
         run_pyinstaller(name)
-
-    if args.with_dycast:
-        copy_dycast(name)
 
     privacy_scan(name)
 
