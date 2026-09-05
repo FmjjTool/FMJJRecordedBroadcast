@@ -49,6 +49,7 @@ from gui_qt.pages.tickets_page import TicketsPage
 from gui_qt.pages.shopping_page import ShoppingPage
 from gui_qt.pages.bili_danmaku import BiliDanmakuPage
 from gui_qt.pages.image_crop import ImageCropPage
+from gui_qt.pages.cover_maker import CoverMakerPage
 from gui_qt.pages.image_sorter import ImageSorterPage
 from gui_qt.pages.media_compress import MediaCompressPage
 from gui_qt.toast import show_toast
@@ -84,6 +85,7 @@ PAGE_CLASSES = {
     "shopping": ShoppingPage,
     "bili_danmaku": BiliDanmakuPage,
     "image_crop": ImageCropPage,
+    "cover_maker": CoverMakerPage,
     "image_sorter": ImageSorterPage,
     "media_compress": MediaCompressPage,
     "global_settings": GlobalSettingsPage,
@@ -129,6 +131,7 @@ NAV_GROUPS = [
     ]),
     ("🧰 实用工具", [
         ("image_crop", "🖼 图片裁切"),
+        ("cover_maker", "🎨 套版封面制作"),
         ("image_sorter", "🎞 媒体筛选分类"),
         ("media_compress", "🗜 媒体压缩"),
         ("rename_batch", "✏️ 批量重命名"),
