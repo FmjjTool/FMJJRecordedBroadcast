@@ -143,6 +143,12 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    # 窗口/任务栏图标：开发模式读项目根 icon.ico；
+    # 打包后不随包携带 ico，Qt 自动回落到 exe 内嵌图标（PyInstaller --icon）
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+    if os.path.exists(icon_path):
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(icon_path))
     # 主题：先装 setStyleSheet 自动重映射补丁，再按配置应用浅色/深色 QSS
     theme.init_theme()
     theme.install_auto_remap()

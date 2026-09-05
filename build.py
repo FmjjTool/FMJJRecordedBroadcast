@@ -79,6 +79,7 @@ UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\dist\installer
 OutputBaseFilename={#MyAppNameEn}_Setup_{#MyAppVersion}
+{SETUP_ICON}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -252,11 +253,15 @@ def build_installer(name: str, ver: dict):
     iss_dir = ROOT / "build"
     iss_dir.mkdir(exist_ok=True)
     iss = iss_dir / "installer.iss"
+    # 安装器 exe 图标：项目根 icon.ico（iss 在 build/ 下编译，相对路径 ..\）
+    setup_icon = ("SetupIconFile=..\\icon.ico" if (ROOT / "icon.ico").exists()
+                  else "; 未找到项目根 icon.ico，安装器使用 Inno 默认图标")
     iss.write_text(
         ISS_TEMPLATE
         .replace("{APP_NAME}", name)
         .replace("{APP_VERSION}", ver["APP_VERSION"])
-        .replace("{APP_PUBLISHER}", ver["APP_PUBLISHER"]),
+        .replace("{APP_PUBLISHER}", ver["APP_PUBLISHER"])
+        .replace("{SETUP_ICON}", setup_icon),
         encoding="utf-8-sig",  # BOM：保证 ISCC 正确识别 UTF-8 中文
     )
     print(f"安装脚本已生成：{iss}")
