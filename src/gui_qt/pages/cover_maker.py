@@ -8,7 +8,10 @@
   1080p/2K/4K 分辨率切换布局不乱
 - 文字自动换行（不超过 70% 画布宽）+ 溢出自动缩小字号（最小阈值）
 - 模板：JSON 存三字段样式与位置比例 + 记忆当时所用底图路径（不保存文字内容）
-- 底图选择：缩略图网格浏览全部扫描图片，指定哪张作为底图（蒙版）
+- 底图选择：方块平铺缩略图浏览全部扫描图片，指定哪张作为底图（蒙版）
+- 交互规范：下拉/滑条/数字框均不响应滚轮改值（滚轮专用于滚动页面）；
+  字体下拉可直接输入字体名识别（无效字体名自动回退）；颜色选择用内置
+  主题色板（预设色 + 十六进制 / RGB 输入），不弹系统原生黑窗
 - 导出：PNG / JPG（质量 60~100）/ GIF 动效（Pillow 合成正弦浮动帧，无需 FFmpeg）
 - 集成：主程序经 create_cover_module() 获取 QWidget 实例（亦可作为普通页面注册）
 """
@@ -25,16 +28,17 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PIL import Image
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QFontDatabase, QIcon, QImage, QImageReader,
-    QPainter, QPen, QPixmap, QTextLayout, QTextOption,
+    QPainter, QPalette, QPen, QPixmap, QTextLayout, QTextOption,
 )
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
-    QFontComboBox, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QScrollArea, QSlider, QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFontComboBox, QGridLayout, QGroupBox, QHBoxLayout,
+    QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QListView,
+    QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import get_config_dir, get_export_dir
@@ -42,6 +46,7 @@ from toolbox.config_manager import get_config_dir, get_export_dir
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.help_overlay import attach_help_overlay
 from gui_qt.pages.base import BasePage
+from gui_qt.theme import is_dark
 
 # ==================== 常量 ====================
 
@@ -78,6 +83,11 @@ CANVAS_BG_FALLBACK = "#181a20"   # 无底图/留白时的画布底色
 PREVIEW_LETTERBOX = "#101216"   # 预览组件画框底色（深浅主题固定）
 DRAG_HINT_COLOR = "#f2c14e"
 
+# 滚轮拦截/弹窗主题控件（见 NoWheelMixin / force_combo_popup_theme）
+COMBO_POPUP_BG = {"light": "#ffffff", "dark": "#23262f"}
+COMBO_POPUP_FG = {"light": "#2f3440", "dark": "#c6cbd6"}
+COMBO_POPUP_SEL = {"light": "#2a6a9c", "dark": "#2a5a8c"}
+
 TEMPLATE_VERSION = 1
 _CONFIG_SECTION = "cover_maker"
 
@@ -95,8 +105,12 @@ HELP_HTML = (
     "GIF 动效生成正弦浮动循环动画（Pillow 合成，无需 FFmpeg）</p>"
     "<p>· <b>模板</b>：保存三字段样式与位置比例，并记忆当时所用底图（文件仍在时加载"
     "自动切换），不保存文字内容；存放在 config/cover_templates/，字体缺失自动回退并提示</p>"
-    "<p>· <b>选择底图</b>：缩略图网格浏览底图文件夹全部图片，按名称筛选，"
+    "<p>· <b>选择底图</b>：方块平铺缩略图浏览底图文件夹全部图片，按名称筛选，"
     "指定哪张作为当前底图（蒙版）</p>"
+    "<p>· <b>交互规范</b>：下拉/滑条/数字框不响应滚轮改值（滚轮专用于滚动页面）；"
+    "字体下拉可直接输入字体名回车识别，输入无效字体名自动回退原字体；"
+    "颜色选择为内置主题色板（48 预设色双击直接应用 + 十六进制 / RGB 输入），"
+    "跟随应用明暗主题，不弹系统原生黑窗</p>"
 )
 
 
@@ -189,6 +203,20 @@ def _resolve_font_family(family: str) -> str:
     if text in families:
         return text
     return DEFAULT_FONT_FAMILY
+
+
+def _font_family_exists(family: str) -> bool:
+    """字体下拉输入校验：字体名是否真实存在。
+
+    环境无法枚举字体（如离屏平台字体库为空）时按存在处理，保持输入可用。
+    """
+    try:
+        families = QFontDatabase.families()
+    except Exception:
+        return True
+    if not families:
+        return True
+    return family in families
 
 
 def _build_font(state: FieldState, canvas_h: int) -> QFont:
@@ -482,23 +510,122 @@ class BackgroundProvider:
         return scaled
 
 
+# ==================== 滚轮拦截 / 弹窗主题控件 ====================
+
+def _combo_popup_colors():
+    side = "dark" if is_dark() else "light"
+    return COMBO_POPUP_BG[side], COMBO_POPUP_FG[side], COMBO_POPUP_SEL[side]
+
+
+def _style_popup_view(view) -> None:
+    """把下拉/补全列表视图按当前主题着色（autoFill + 调色板 + 内联 QSS 双保险）。"""
+    bg, fg, sel = _combo_popup_colors()
+    view.setAutoFillBackground(True)
+    pal = view.palette()
+    pal.setColor(view.backgroundRole(), QColor(bg))
+    pal.setColor(QPalette.ColorRole.Text, QColor(fg))
+    pal.setColor(QPalette.ColorRole.Base, QColor(bg))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(sel))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    view.setPalette(pal)
+    view.setStyleSheet(
+        f"QAbstractItemView {{ background: {bg}; color: {fg}; "
+        f"selection-background-color: {sel}; selection-color: #ffffff; }}")
+
+
+def force_combo_popup_theme(combo) -> None:
+    """强制组合框下拉弹窗跟随应用主题。
+
+    Windows 深色系统下 QSS 对弹窗容器可能只应用文字色不填充背景 →
+    弹出黑窗面。这里每次打开前显式设置视图与容器的 autoFillBackground、
+    调色板与内联样式，确保按当前主题绘制（所选用色值不在主题重映射
+    表内，auto_remap 不会二次改写；每次 showPopup 重套，主题切换自愈）。
+    """
+    view = combo.view()
+    _style_popup_view(view)
+    container = view.parentWidget()
+    if container is not None:
+        container.setAutoFillBackground(True)
+        cpal = container.palette()
+        cpal.setColor(container.backgroundRole(), QColor(_combo_popup_colors()[0]))
+        container.setPalette(cpal)
+
+
+class NoWheelMixin:
+    """滚轮不改变值：忽略滚轮事件让它冒泡给外层 QScrollArea 滚动页面。"""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelComboBox(NoWheelMixin, QComboBox):
+    def showPopup(self):
+        force_combo_popup_theme(self)
+        super().showPopup()
+
+
+class NoWheelFontComboBox(NoWheelMixin, QFontComboBox):
+    """字体下拉：滚轮不改值；可编辑（输入字体名回车即识别，无效名回退）；
+    下拉弹窗与输入补全列表均强制跟随应用主题（补全列表不是 QComboBox
+    子控件，全局 QSS 的 QComboBox QAbstractItemView 选择器匹配不到它，
+    必须显式套色，否则深色系统下输入时弹黑窗）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self._comp_popup: Optional[QListView] = None
+        comp = self.completer()
+        if comp is not None:
+            self._comp_popup = QListView()
+            _style_popup_view(self._comp_popup)
+            comp.setPopup(self._comp_popup)
+        line = self.lineEdit()
+        if line is not None:
+            line.textEdited.connect(self._restyle_completer)
+
+    def _restyle_completer(self, _text: str = ""):
+        if self._comp_popup is not None:
+            _style_popup_view(self._comp_popup)
+
+    def showPopup(self):
+        force_combo_popup_theme(self)
+        self._restyle_completer()
+        super().showPopup()
+
+
+class NoWheelSpinBox(NoWheelMixin, QSpinBox):
+    pass
+
+
+class NoWheelDoubleSpinBox(NoWheelMixin, QDoubleSpinBox):
+    pass
+
+
+class NoWheelSlider(NoWheelMixin, QSlider):
+    pass
+
+
 # ==================== 底图选择对话框 ====================
 
 class BackgroundPickerDialog(QDialog):
-    """底图选择：缩略图网格浏览扫描到的全部图片，指定哪张作为底图（蒙版）。
+    """底图选择：统一方块平铺浏览扫描到的全部图片，指定哪张作为底图（蒙版）。
 
-    缩略图在后台线程逐张生成（QImageReader 按目标尺寸解码，避免整图解码大图），
-    当前底图优先加载并预选中；支持按文件名实时筛选。
+    每张图片占据固定尺寸的方块格（图标区内等比缩放居中），网格整齐不随
+    图片宽高比参差；缩略图在后台线程逐张生成（QImageReader 按目标尺寸
+    解码，避免整图解码大图），当前底图优先加载并预选中；支持按文件名
+    实时筛选。
     """
 
-    THUMB_W, THUMB_H = 128, 72
+    TILE = 168          # 方块图标区边长
+    GRID_W = 184        # 格宽 = 图标 + 间距
+    GRID_H = 224        # 格高 = 图标 + 两行文件名 + 间距
 
     def __init__(self, files: List[Path], current_path: Optional[Path],
                  parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._files = list(files)
         self.setWindowTitle(f"选择底图（共 {len(self._files)} 张）")
-        self.resize(860, 560)
+        self.resize(1000, 640)
 
         v = QVBoxLayout(self)
         top = QHBoxLayout()
@@ -513,7 +640,9 @@ class BackgroundPickerDialog(QDialog):
 
         self.listw = QListWidget()
         self.listw.setViewMode(QListWidget.ViewMode.IconMode)
-        self.listw.setIconSize(QSize(self.THUMB_W, self.THUMB_H))
+        self.listw.setIconSize(QSize(self.TILE, self.TILE))
+        self.listw.setGridSize(QSize(self.GRID_W, self.GRID_H))
+        self.listw.setUniformItemSizes(True)
         self.listw.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.listw.setMovement(QListWidget.Movement.Static)
         self.listw.setSpacing(8)
@@ -522,7 +651,7 @@ class BackgroundPickerDialog(QDialog):
         self.listw.itemDoubleClicked.connect(lambda _item: self.accept())
         v.addWidget(self.listw, 1)
 
-        hint = QLabel("双击缩略图或选中后点「使用此图」；缩略图在后台逐张生成")
+        hint = QLabel("双击方块或选中后点「使用此图」；缩略图在后台逐张生成")
         hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
         v.addWidget(hint)
 
@@ -565,11 +694,12 @@ class BackgroundPickerDialog(QDialog):
         run_bg(job, lambda _r, _e: None)
 
     def _decode_thumb(self, path: Path) -> Optional[QImage]:
+        """解码为方块内等比缩放的缩略图（宽高都不超过 TILE）。"""
         reader = QImageReader(str(path))
         reader.setAutoTransform(True)
         size = reader.size()
         if size.isValid():
-            scaled = size.scaled(self.THUMB_W, self.THUMB_H,
+            scaled = size.scaled(self.TILE, self.TILE,
                                  Qt.AspectRatioMode.KeepAspectRatio)
             if scaled.width() > 0 and scaled.height() > 0:
                 reader.setScaledSize(scaled)
@@ -604,6 +734,187 @@ class BackgroundPickerDialog(QDialog):
         if item is None:
             return None
         return Path(str(item.data(int(Qt.ItemDataRole.UserRole))))
+
+
+# ==================== 主题化颜色选择 ====================
+
+# 48 预设色：灰阶 8 级 + 8 色相 × 5 明度档（深→浅）
+PRESET_COLORS = [
+    "#000000", "#262626", "#4d4d4d", "#737373", "#999999", "#bfbfbf", "#e6e6e6", "#ffffff",
+    "#b71c1c", "#bf360c", "#f9a825", "#1b5e20", "#006064", "#0d47a1", "#4a148c", "#880e4f",
+    "#d32f2f", "#e65100", "#fbc02d", "#2e7d32", "#00838f", "#1565c0", "#6a1b9a", "#ad1457",
+    "#ef5350", "#ff9800", "#fdd835", "#4caf50", "#26c6da", "#42a5f5", "#ab47bc", "#f06292",
+    "#ef9a9a", "#ffb74d", "#fff176", "#a5d6a7", "#80deea", "#90caf9", "#ce93d8", "#f48fb1",
+    "#ffcdd2", "#ffe0b2", "#fff9c4", "#c8e6c9", "#b2ebf2", "#bbdefb", "#e1bee7", "#f8bbd0",
+]
+
+
+class _ColorSwatch(QWidget):
+    """颜色小方块：paintEvent 自绘（不经 QSS，避免主题色值重映射改写显示颜色）。
+
+    单击选中；双击选中并直接确定。
+    """
+
+    clicked = Signal(str)
+    double_clicked = Signal(str)
+
+    def __init__(self, color: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self._hover = False
+        self.setFixedSize(30, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(self._color.name())
+
+    def set_color(self, hex_color: str):
+        color = QColor(hex_color)
+        if color.isValid():
+            self._color = color
+            self.setToolTip(color.name())
+            self.update()
+
+    def color(self) -> QColor:
+        return QColor(self._color)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(self._color)
+        painter.setPen(QPen(QColor("#7a828f") if self._hover else QColor("#b8bfca"),
+                           2 if self._hover else 1))
+        painter.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 4, 4)
+        painter.end()
+
+    def enterEvent(self, _event):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, _event):
+        self._hover = False
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._color.name())
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit(self._color.name())
+
+
+class ColorPickerDialog(QDialog):
+    """主题化文字颜色选择器：预设色板 + 十六进制 / RGB 输入识别。
+
+    取代原生 QColorDialog（Windows 深色系统下弹黑窗）：整个对话框由全局
+    明暗主题 QSS 渲染；色块自绘不参与主题重映射，显示颜色始终准确；
+    RGB 数字框不响应滚轮（滚轮不改变值），输入即可识别。
+    """
+
+    def __init__(self, current: str = "#ffffff", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("选择文字颜色")
+        self.setMinimumWidth(380)
+        self._updating = False
+        color = QColor(current)
+        self._color = color if color.isValid() else QColor("#ffffff")
+
+        v = QVBoxLayout(self)
+
+        preset_box = QGroupBox("预设颜色（双击直接应用）")
+        grid = QGridLayout(preset_box)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setSpacing(4)
+        for i, hexc in enumerate(PRESET_COLORS):
+            sw = _ColorSwatch(hexc)
+            sw.clicked.connect(self._apply_hex)
+            sw.double_clicked.connect(self._accept_hex)
+            grid.addWidget(sw, i // 8, i % 8)
+        v.addWidget(preset_box)
+
+        custom_box = QGroupBox("自定义颜色（十六进制或 RGB 输入即时识别）")
+        cv = QGridLayout(custom_box)
+        cv.setContentsMargins(8, 8, 8, 8)
+        cv.setHorizontalSpacing(8)
+        cv.setVerticalSpacing(6)
+
+        self.preview_sw = _ColorSwatch(self._color.name())
+        self.preview_sw.setFixedSize(64, 40)
+        self.preview_sw.setCursor(Qt.CursorShape.ArrowCursor)
+        self.preview_sw.setToolTip("当前颜色")
+        cv.addWidget(self.preview_sw, 0, 0, 3, 1)
+
+        cv.addWidget(QLabel("十六进制"), 0, 1)
+        self.hex_edit = QLineEdit(self._color.name())
+        self.hex_edit.setPlaceholderText("#RRGGBB，如 #ff5500")
+        self.hex_edit.setFixedWidth(120)
+        self.hex_edit.textChanged.connect(self._on_hex_changed)
+        cv.addWidget(self.hex_edit, 0, 2)
+
+        self._spins: Dict[int, NoWheelSpinBox] = {}
+        for row, (name, ch) in enumerate((("R", 0), ("G", 1), ("B", 2)), start=1):
+            spin = NoWheelSpinBox()
+            spin.setRange(0, 255)
+            spin.setValue(self._color.getRgb()[ch])
+            spin.setFixedWidth(80)
+            spin.valueChanged.connect(lambda _v, c=ch: self._on_spin_changed(c))
+            self._spins[ch] = spin
+            cv.addWidget(QLabel(name), row, 1)
+            cv.addWidget(spin, row, 2)
+        v.addWidget(custom_box)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("使用此颜色")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(ok_btn)
+        btns.addStretch(1)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+
+    def selected_color(self) -> QColor:
+        return QColor(self._color)
+
+    # ---------- 内部同步 ----------
+
+    def _set_color(self, color: QColor, source: str):
+        if self._updating or not color.isValid():
+            return
+        self._updating = True
+        try:
+            self._color = QColor(color)
+            self.preview_sw.set_color(self._color.name())
+            if source != "hex":
+                self.hex_edit.setText(self._color.name())
+            if source != "spin":
+                r, g, b, _a = self._color.getRgb()
+                self._spins[0].setValue(r)
+                self._spins[1].setValue(g)
+                self._spins[2].setValue(b)
+        finally:
+            self._updating = False
+
+    def _on_hex_changed(self, text: str):
+        if self._updating:
+            return
+        m = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(text).strip())
+        if not m:
+            return
+        self._set_color(QColor(f"#{m.group(1)}"), "hex")
+
+    def _on_spin_changed(self, _channel: int):
+        if self._updating:
+            return
+        r, g, b = (self._spins[c].value() for c in (0, 1, 2))
+        self._set_color(QColor(r, g, b), "spin")
+
+    def _apply_hex(self, hexc: str):
+        self._set_color(QColor(hexc), "swatch")
+
+    def _accept_hex(self, hexc: str):
+        self._set_color(QColor(hexc), "swatch")
+        self.accept()
 
 
 # ==================== 字段控制面板 ====================
@@ -644,25 +955,26 @@ class FieldPanel(QWidget):
             self.text_edit.textChanged.connect(self._on_text_changed)
         v.addWidget(self.text_edit)
 
-        # 字体 + 对齐
+        # 字体 + 对齐（NoWheel：滚轮不改值；字体下拉可输入识别）
         row1 = QHBoxLayout()
-        self.font_combo = QFontComboBox()
-        self.font_combo.setToolTip("文字字体")
+        self.font_combo = NoWheelFontComboBox()
+        self.font_combo.setToolTip(
+            "文字字体（下拉选择，或直接输入字体名回车识别；滚轮不改变字体）")
         self.font_combo.setMinimumWidth(150)
         row1.addWidget(self.font_combo, 1)
-        self.align_combo = QComboBox()
+        self.align_combo = NoWheelComboBox()
         self.align_combo.setToolTip("对齐方式（决定文字块水平锚点含义）")
         for text, _key in ALIGN_ITEMS:
             self.align_combo.addItem(text)
         row1.addWidget(self.align_combo)
         v.addLayout(row1)
 
-        # 字号滑条（1080p 基准 px，底层存比例）
+        # 字号滑条（1080p 基准 px，底层存比例；NoWheel：滚轮不改值）
         row2 = QHBoxLayout()
         size_lab = QLabel("字号")
         size_lab.setStyleSheet("font-weight: 600; color: #5a6474;")
         row2.addWidget(size_lab)
-        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(FONT_SIZE_MIN, FONT_SIZE_MAX)
         self.size_slider.setValue(48)
         self.size_slider.setToolTip("1080p 基准字号（其他分辨率按画布高度等比缩放）")
@@ -758,6 +1070,14 @@ class FieldPanel(QWidget):
         family = font.family()
         if not family or family == self.state.font_family:
             return
+        if not _font_family_exists(family):
+            # 输入的不是有效字体名（如只打了前缀）：回滚下拉显示并保持原字体
+            self._applying = True
+            try:
+                self.font_combo.setCurrentFont(QFont(self.state.font_family))
+            finally:
+                self._applying = False
+            return
         self.state.font_family = family
         self._notify_attr("font")
 
@@ -791,7 +1111,10 @@ class FieldPanel(QWidget):
     def _pick_color(self):
         if self.state is None:
             return
-        color = QColorDialog.getColor(QColor(self.state.color), self, "选择文字颜色")
+        dlg = ColorPickerDialog(self.state.color, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        color = dlg.selected_color()
         if not color.isValid():
             return
         self.state.color = color.name()
@@ -1029,7 +1352,7 @@ class CoverMakerPage(BasePage):
         self.upload_btn.setToolTip("选择本地图片临时替换当前底图（不写入底图文件夹）")
         self.upload_btn.clicked.connect(self._on_upload_bg)
         head.addWidget(self.upload_btn)
-        self.fit_combo = QComboBox()
+        self.fit_combo = NoWheelComboBox()
         self.fit_combo.setToolTip(
             "裁剪填充：底图等比放大铺满画布并居中裁切；完整包含：整图可见，留白填充")
         for text, _key in FIT_ITEMS:
@@ -1132,10 +1455,11 @@ class CoverMakerPage(BasePage):
         ylab.setStyleSheet("font-weight: 600; color: #5a6474;")
         ylab.setToolTip("全部文字整体上下平移（画布高度比例，正值下移/负值上移）")
         yrow.addWidget(ylab)
-        self.y_spin = QDoubleSpinBox()
+        self.y_spin = NoWheelDoubleSpinBox()
         self.y_spin.setRange(-0.3, 0.3)
         self.y_spin.setSingleStep(0.002)
         self.y_spin.setDecimals(3)
+        self.y_spin.setToolTip("可直接输入数值；滚轮不改变值")
         self.y_spin.valueChanged.connect(self._on_y_changed)
         yrow.addWidget(self.y_spin, 1)
         lv.addLayout(yrow)
@@ -1169,7 +1493,7 @@ class CoverMakerPage(BasePage):
         res_lab = QLabel("导出分辨率")
         res_lab.setStyleSheet("font-weight: 600; color: #5a6474;")
         row0.addWidget(res_lab)
-        self.res_combo = QComboBox()
+        self.res_combo = NoWheelComboBox()
         self.res_combo.addItems(EXPORT_RESOLUTIONS)
         self.res_combo.setMinimumWidth(110)
         self.res_combo.currentTextChanged.connect(lambda _t: self._update_status())
@@ -1182,10 +1506,11 @@ class CoverMakerPage(BasePage):
         row2 = QHBoxLayout()
         qlab = QLabel("JPG质量")
         qlab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        self.quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.quality_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.quality_slider.setRange(JPG_QUALITY_MIN, JPG_QUALITY_MAX)
         self.quality_slider.setValue(JPG_QUALITY_DEFAULT)
         self.quality_slider.setMaximumWidth(160)
+        self.quality_slider.setToolTip("滚轮不改变值，拖动或键盘调整")
         self.quality_label = QLabel(str(JPG_QUALITY_DEFAULT))
         self.quality_label.setMinimumWidth(28)
         self.quality_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1205,11 +1530,12 @@ class CoverMakerPage(BasePage):
         row3 = QHBoxLayout()
         glab = QLabel("GIF帧数")
         glab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        self.gif_frames_spin = QSpinBox()
+        self.gif_frames_spin = NoWheelSpinBox()
         self.gif_frames_spin.setRange(GIF_FRAMES_MIN, GIF_FRAMES_MAX)
         self.gif_frames_spin.setValue(GIF_FRAMES_DEFAULT)
         self.gif_frames_spin.setFixedWidth(56)
-        self.gif_frames_spin.setToolTip("GIF 动效帧数（8~15 帧，文字正弦浮动）")
+        self.gif_frames_spin.setToolTip(
+            "GIF 动效帧数（8~15 帧，文字正弦浮动）；可直接输入，滚轮不改变值")
         row3.addWidget(glab)
         row3.addWidget(self.gif_frames_spin)
         row3.addStretch(1)

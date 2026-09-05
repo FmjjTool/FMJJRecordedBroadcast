@@ -6,6 +6,9 @@
 - 底图引擎：递归扫描 / 随机抽取 / 缩放缓存
 - QImage→PIL 转换、字体回退
 - 页面冒烟：实例化 / 预览渲染 / PNG·JPG·GIF 导出 / 拖动更新 / 模板保存加载 / 深色渲染
+- 底图选择器：方块平铺网格 / 预选与选择 / 筛选 / 缩略图解码
+- 滚轮拦截：五类控件滚轮不改值不吞事件；弹窗与补全列表跟随主题
+- 颜色选择器：预设色板 / 十六进制·RGB 输入识别 / 双击确定 / 接线
 - 集成：create_cover_module() 工厂、PAGE_CLASSES 注册
 """
 import json
@@ -15,13 +18,15 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PySide6.QtCore import QEventLoop, QPointF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEventLoop, QPoint, QPointF, QSize, Qt, QTimer
+from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QPainter,
+                           QPalette, QWheelEvent)
+from PySide6.QtWidgets import QApplication, QDialog, QListWidget
 
 import toolbox.config_manager as cm
 
@@ -489,18 +494,249 @@ class TestBackgroundPickerDialog(unittest.TestCase):
             dlg.close()
             dlg.deleteLater()
 
+    def test_tile_layout(self):
+        """底图选择器应为统一方块平铺：IconMode + 固定图标区 + 固定网格。"""
+        dlg = cvr.BackgroundPickerDialog(self.files, self.files[0])
+        try:
+            self.assertEqual(dlg.listw.viewMode(), QListWidget.ViewMode.IconMode)
+            tile = cvr.BackgroundPickerDialog.TILE
+            self.assertEqual(
+                (dlg.listw.iconSize().width(), dlg.listw.iconSize().height()),
+                (tile, tile), "图标区应为正方形方块")
+            gs = dlg.listw.gridSize()
+            self.assertEqual(
+                (gs.width(), gs.height()),
+                (cvr.BackgroundPickerDialog.GRID_W, cvr.BackgroundPickerDialog.GRID_H),
+                "网格尺寸应固定，保证平铺整齐")
+            self.assertEqual(dlg.listw.movement(), QListWidget.Movement.Static,
+                             "图标不得可拖动乱序")
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
     def test_thumb_decode(self):
         dlg = cvr.BackgroundPickerDialog(self.files, self.files[0])
         try:
             img = dlg._decode_thumb(self.files[0])
             self.assertIsNotNone(img)
-            self.assertLessEqual(max(img.width() / cvr.BackgroundPickerDialog.THUMB_W,
-                                     img.height() / cvr.BackgroundPickerDialog.THUMB_H),
-                                 1.0 + 1e-6)
+            tile = cvr.BackgroundPickerDialog.TILE
+            self.assertLessEqual(max(img.width() / tile, img.height() / tile),
+                                 1.0 + 1e-6,
+                                 "缩略图应等比缩放进方块内（宽高都不超过 TILE）")
             self.assertIsNone(dlg._decode_thumb(Path("___missing___")))
         finally:
             dlg.close()
             dlg.deleteLater()
+
+
+class TestNoWheelControls(unittest.TestCase):
+    """滚轮不改变值：五类控件忽略滚轮事件（冒泡给滚动区），值保持不变。"""
+
+    @staticmethod
+    def _mk_wheel() -> QWheelEvent:
+        return QWheelEvent(QPointF(0, 0), QPointF(0, 100), QPoint(0, 0), QPoint(0, 1),
+                           Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                           Qt.ScrollPhase.ScrollBegin, False)
+
+    def _assert_ignored(self, widget, value_getter, expected, msg):
+        ev = self._mk_wheel()
+        widget.wheelEvent(ev)
+        self.assertFalse(ev.isAccepted(), f"{msg}：滚轮事件应被忽略（不吞事件）")
+        self.assertEqual(value_getter(), expected, f"{msg}：滚轮不得改变值")
+
+    def test_wheel_ignored_on_all_controls(self):
+        combo = cvr.NoWheelComboBox()
+        combo.addItems(["甲", "乙", "丙"])
+        self._assert_ignored(combo, combo.currentIndex, 0, "组合框")
+
+        font_combo = cvr.NoWheelFontComboBox()
+        ev = self._mk_wheel()
+        font_combo.wheelEvent(ev)
+        self.assertFalse(ev.isAccepted(), "字体下拉：滚轮事件应被忽略")
+
+        spin = cvr.NoWheelSpinBox()
+        spin.setRange(0, 100)
+        spin.setValue(50)
+        self._assert_ignored(spin, spin.value, 50, "数字框")
+
+        dspin = cvr.NoWheelDoubleSpinBox()
+        dspin.setRange(0.0, 1.0)
+        dspin.setValue(0.5)
+        self._assert_ignored(dspin, dspin.value, 0.5, "浮点数字框")
+
+        slider = cvr.NoWheelSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(50)
+        self._assert_ignored(slider, slider.value, 50, "滑条")
+
+    def test_font_combo_editable_and_completer_popup(self):
+        combo = cvr.NoWheelFontComboBox()
+        self.assertTrue(combo.isEditable(), "字体下拉应可编辑（输入识别）")
+        self.assertIsNotNone(combo.completer())
+        self.assertIsNotNone(combo._comp_popup, "输入补全列表应被显式主题化")
+
+    def test_popup_follows_theme(self):
+        """下拉弹窗与补全列表每次打开按当前主题套色（不出现黑窗）。"""
+        from gui_qt import theme
+        saved = theme._state.get("dark", False)
+        try:
+            for dark in (False, True):
+                theme._state["dark"] = dark
+                combo = cvr.NoWheelComboBox()
+                combo.addItem("甲")
+                combo.showPopup()
+                try:
+                    view = combo.view()
+                    bg = cvr.COMBO_POPUP_BG["dark" if dark else "light"]
+                    fg = cvr.COMBO_POPUP_FG["dark" if dark else "light"]
+                    self.assertEqual(
+                        view.palette().color(view.backgroundRole()).name(), bg,
+                        f"{'深' if dark else '浅'}色主题下弹窗底色错误")
+                    self.assertEqual(view.palette().color(
+                        QPalette.ColorRole.Text).name(), fg)
+                finally:
+                    combo.hidePopup()
+                    combo.deleteLater()
+                fcombo = cvr.NoWheelFontComboBox()
+                try:
+                    self.assertEqual(
+                        fcombo._comp_popup.palette().color(
+                            QPalette.ColorRole.Base).name(),
+                        cvr.COMBO_POPUP_BG["dark" if dark else "light"],
+                        "输入补全列表也应跟随主题")
+                finally:
+                    fcombo.deleteLater()
+        finally:
+            theme._state["dark"] = saved
+
+    def test_font_input_validation(self):
+        """字体输入识别：无效字体名回退不写入，有效字体名正常写入。"""
+        panel = cvr.FieldPanel("title", "📌 标题", False, "占位", lambda: None)
+        st = cvr.FieldState(font_family="Arial")
+        panel.set_state(st)
+        with patch.object(cvr, "_font_family_exists", return_value=False):
+            panel._on_font_changed(QFont("不存在的字体"))
+        self.assertEqual(st.font_family, "Arial", "无效字体名不应写入状态")
+        if QFontDatabase.families():
+            # 离屏平台字体库为空时 setCurrentFont 无法选中匹配项，仅真实环境可验显示回滚
+            self.assertEqual(panel.font_combo.currentFont().family(), "Arial",
+                             "无效输入后下拉显示应回滚")
+        with patch.object(cvr, "_font_family_exists", return_value=True):
+            panel._on_font_changed(QFont("SimSun"))
+        self.assertEqual(st.font_family, "SimSun", "有效字体名应写入状态")
+
+    def test_page_controls_wired_no_wheel(self):
+        """页面全部下拉/滑条/数字框均使用 NoWheel 系列控件。"""
+        page = cvr.CoverMakerPage(_FakeApp())
+        try:
+            self.assertIsInstance(page.panels["title"].font_combo,
+                                  cvr.NoWheelFontComboBox)
+            self.assertIsInstance(page.panels["title"].align_combo,
+                                  cvr.NoWheelComboBox)
+            self.assertIsInstance(page.panels["title"].size_slider,
+                                  cvr.NoWheelSlider)
+            self.assertIsInstance(page.fit_combo, cvr.NoWheelComboBox)
+            self.assertIsInstance(page.res_combo, cvr.NoWheelComboBox)
+            self.assertIsInstance(page.quality_slider, cvr.NoWheelSlider)
+            self.assertIsInstance(page.gif_frames_spin, cvr.NoWheelSpinBox)
+            self.assertIsInstance(page.y_spin, cvr.NoWheelDoubleSpinBox)
+            self.assertTrue(page.panels["title"].font_combo.isEditable())
+        finally:
+            page.shutdown()
+
+
+class TestColorPickerDialog(unittest.TestCase):
+    """主题化颜色选择器：预设色板 + 十六进制 / RGB 输入识别。"""
+
+    def test_initial_color_and_swatch_select(self):
+        dlg = cvr.ColorPickerDialog("#123456")
+        try:
+            self.assertEqual(dlg.selected_color().name(), "#123456")
+            dlg._apply_hex("#ff0000")
+            self.assertEqual(dlg.selected_color().name(), "#ff0000")
+            self.assertEqual(dlg.hex_edit.text(), "#ff0000", "色板应同步十六进制框")
+            self.assertEqual([dlg._spins[c].value() for c in (0, 1, 2)],
+                             [255, 0, 0], "色板应同步 RGB 数字框")
+            self.assertEqual(dlg.preview_sw.color().name(), "#ff0000")
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_hex_input_recognition(self):
+        dlg = cvr.ColorPickerDialog("#ffffff")
+        try:
+            dlg.hex_edit.setText("00ff88")   # 无 # 前缀也应识别
+            self.assertEqual(dlg.selected_color().name(), "#00ff88")
+            dlg.hex_edit.setText("#zz..")    # 非法输入不改颜色
+            self.assertEqual(dlg.selected_color().name(), "#00ff88")
+            dlg.hex_edit.setText("")        # 清空不改颜色
+            self.assertEqual(dlg.selected_color().name(), "#00ff88")
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_rgb_spin_input(self):
+        dlg = cvr.ColorPickerDialog("#000000")
+        try:
+            dlg._spins[0].setValue(18)
+            dlg._spins[1].setValue(52)
+            dlg._spins[2].setValue(86)
+            self.assertEqual(dlg.selected_color().name(), "#123456")
+            self.assertEqual(dlg.hex_edit.text(), "#123456",
+                             "RGB 输入应同步十六进制框")
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_double_click_swatch_accepts(self):
+        dlg = cvr.ColorPickerDialog("#000000")
+        try:
+            dlg._accept_hex("#00aaff")
+            self.assertEqual(dlg.result(), QDialog.DialogCode.Accepted,
+                             "双击色板应直接确定")
+            self.assertEqual(dlg.selected_color().name(), "#00aaff")
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_rgb_spins_are_no_wheel(self):
+        dlg = cvr.ColorPickerDialog("#000000")
+        try:
+            for ch in (0, 1, 2):
+                self.assertIsInstance(dlg._spins[ch], cvr.NoWheelSpinBox,
+                                      "RGB 数字框不应响应滚轮")
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_pick_color_uses_themed_dialog(self):
+        """FieldPanel._pick_color 走主题色板（原生 QColorDialog 已移除）。"""
+        self.assertFalse(hasattr(cvr, "QColorDialog"),
+                         "模块不应再引用原生 QColorDialog")
+        panel = cvr.FieldPanel("title", "📌 标题", False, "占位", lambda: None)
+        st = cvr.FieldState(color="#111111")
+        panel.set_state(st)
+
+        class _FakeDialog:
+            def __init__(self, current, parent=None):
+                self.current = current
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+            def selected_color(self):
+                return QColor("#00cc66")
+
+        orig = cvr.ColorPickerDialog
+        cvr.ColorPickerDialog = _FakeDialog
+        try:
+            panel._pick_color()
+        finally:
+            cvr.ColorPickerDialog = orig
+        self.assertEqual(st.color, "#00cc66", "选中的颜色应写入状态")
+        self.assertEqual(panel.color_btn.icon().pixmap(20, 14).toImage()
+                         .pixelColor(8, 6).name().lower(), "#00cc66",
+                         "颜色按钮图标应刷新为新颜色")
 
 
 if __name__ == "__main__":
