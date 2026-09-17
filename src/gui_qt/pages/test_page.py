@@ -256,6 +256,13 @@ class TestPage(BasePage):
         settings_btn.setStyleSheet(icon_btn_style(True, "font-size: 16px;"))
         settings_btn.clicked.connect(self._open_settings)
         top_l.addWidget(settings_btn)
+        link_btn = QPushButton("🔗")
+        link_btn.setToolTip("粘贴直播间链接（支持带一堆参数的推荐页/首页链接），\n"
+                            "自动提取房间号并填入")
+        link_btn.setFixedWidth(36)
+        link_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+        link_btn.clicked.connect(self._open_link_paste)
+        top_l.addWidget(link_btn)
         top_l.addStretch(1)
         clear_btn = QPushButton("🗑")
         clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
@@ -382,6 +389,101 @@ class TestPage(BasePage):
         """✕ 按钮：一键清空房间号并聚焦，方便快速输入新房间。"""
         self.room_entry.clear()
         self.room_entry.setFocus()
+
+    # ---- 🔗 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
+
+    @staticmethod
+    def _parse_room_link(text: str) -> str:
+        """从任意抖音/B站直播间链接中提取房间号。
+
+        支持格式：
+          抖音：live.douyin.com/?live_web_rid=xxx（推荐页/首页带一堆参数）
+                live.douyin.com/xxx（短链/直链，含 19 位新格式）
+                anchor_id=xxx 形式的锚点参数（无 rid 时兜底）
+          B站：live.bilibili.com/xxx（含 h5/ 前缀）、纯数字
+        """
+        import re
+        text = (text or "").strip()
+        if not text:
+            return ""
+        # 抖音：查询参数里的 live_web_rid（推荐页/首页链接）
+        m = re.search(r"live_web_rid=(\d+)", text)
+        if m:
+            return m.group(1)
+        # B站：live.bilibili.com/123（含 h5/ 前缀；排除 /blanc/ 等二级路径）
+        m = re.search(r"live\.bilibili\.com/(?:h5/)?(\d+)", text)
+        if m:
+            return m.group(1)
+        # 抖音直链：live.douyin.com/123（19 位新格式或 11 位短号）
+        m = re.search(r"(?:live\.douyin\.com/|douyin\.com/live\?)(\d{6,})", text)
+        if m:
+            return m.group(1)
+        # 抖音 anchor_id（无 rid 时的锚点 ID，enter API 可解析）
+        m = re.search(r"anchor_id=(\d+)", text)
+        if m:
+            return m.group(1)
+        # 纯数字：本身就是房间号
+        m = re.match(r"^\s*(\d{4,})\s*$", text)
+        if m:
+            return m.group(1)
+        return ""
+
+    def _open_link_paste(self):
+        """🔗 按钮：粘贴链接 → 提取房间号 → 填入输入框。"""
+        from PySide6.QtWidgets import (
+            QDialog, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔗 转房间号")
+        dlg.setMinimumWidth(520)
+        v = QVBoxLayout(dlg)
+        tip = QLabel(
+            "粘贴抖音 / B站直播间链接（支持带参数的推荐页、首页链接），\n"
+            "自动提取房间号并填入：")
+        tip.setStyleSheet("color: #888;")
+        v.addWidget(tip)
+        edit = QPlainTextEdit()
+        edit.setPlaceholderText(
+            "https://live.douyin.com/?activity_name=&anchor_id=740437292495388&...&live_web_rid=519524225110...\n"
+            "https://live.douyin.com/582775732015\n"
+            "https://live.bilibili.com/33989")
+        edit.setMinimumHeight(110)
+        v.addWidget(edit)
+        result_lbl = QLabel("")
+        result_lbl.setStyleSheet("color: #2e7d32; font-weight: bold;")
+        result_lbl.setWordWrap(True)
+        v.addWidget(result_lbl)
+
+        def on_parse():
+            room = self._parse_room_link(edit.toPlainText())
+            if room:
+                result_lbl.setText(f"✅ 识别到房间号：{room}")
+                result_lbl.setStyleSheet("color: #2e7d32; font-weight: bold;")
+            else:
+                result_lbl.setText("❌ 未识别到房间号（检查链接是否完整）")
+                result_lbl.setStyleSheet("color: #c62828; font-weight: bold;")
+
+        def on_apply():
+            room = self._parse_room_link(edit.toPlainText())
+            if not room:
+                on_parse()
+                return
+            self.room_entry.setText(room)
+            self.app.toast(f"已填入房间号 {room}", "success")
+            dlg.accept()
+
+        btn_row = QVBoxLayout()
+        parse_btn = QPushButton("🔍 识别")
+        parse_btn.clicked.connect(on_parse)
+        btn_row.addWidget(parse_btn)
+        ok_btn = QPushButton("✅ 填入房间号")
+        ok_btn.setStyleSheet("background: #2e7d32; color: white;")
+        ok_btn.clicked.connect(on_apply)
+        btn_row.addWidget(ok_btn)
+        v.addLayout(btn_row)
+        edit.textChanged.connect(lambda: result_lbl.setText(""))
+        edit.setFocus()
+        dlg.exec()
 
     def _create_fetcher(self, room):
         """创建平台弹幕抓取器（on_message/on_room_info/on_status 同构回调）。"""
