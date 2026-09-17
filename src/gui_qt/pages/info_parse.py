@@ -33,10 +33,6 @@ class InfoParsePage(BasePage):
         title = QLabel("🔍 单个解析")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
-        hint = QLabel("输入 B站 / 抖音 / 微博 / 小红书 / 快手 / 好看 / 微视 / 梨视频 / 皮皮搞笑 链接，"
-                      "自动识别平台解析，可直接下载（画质可选）")
-        hint.setStyleSheet("color: #888;")
-        layout.addWidget(hint)
 
         row = QHBoxLayout()
         self.url_entry = QLineEdit()

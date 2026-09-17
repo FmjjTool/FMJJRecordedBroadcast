@@ -56,10 +56,6 @@ class InfoBatchPage(BasePage):
         title = QLabel("📋 批量导入")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
-        hint = QLabel("每行一个 URL，自动按平台分流解析（Ctrl+Enter 触发）；"
-                      "解析完成后勾选需要下载的条目，点「下载勾选」批量下载")
-        hint.setStyleSheet("color: #888;")
-        layout.addWidget(hint)
 
         self.text = QTextEdit()
         self.text.setPlaceholderText("每行一个 URL...")

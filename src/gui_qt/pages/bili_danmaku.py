@@ -50,8 +50,6 @@ class BiliDanmakuPage(TestPage):
         super().__init__(app)
         # 平台文案与单位
         self.title_lbl.setText("📺 B站弹幕 · 实时数据接入")
-        self.subtitle_lbl.setText(
-            "真实连接B站直播间，实时抓取弹幕 / 礼物 / SC / 上舰 / 进场 / 关注 / 点赞")
         self.gift_table.setHorizontalHeaderLabels(
             ["排名", "昵称", "礼物数", "价值(电池)", "更新时间"])
         # 房间号：B站短号合法（抖音页的 ≥6 位校验不适用），支持粘贴直播间链接。

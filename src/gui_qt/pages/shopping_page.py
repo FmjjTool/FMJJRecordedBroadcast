@@ -72,10 +72,6 @@ class ShoppingPage(BasePage):
             "<p>· 单件失败原地重试不中断整批；详情缓存复用，重复导出不重复请求</p>"
             "<p>· 🍪 淘宝 Cookie 由侧栏「Cookie 管理」维护</p>")))
         layout.addLayout(title_row)
-        hint = QLabel("支持淘宝店铺/商品链接（商品列表与详情需淘宝 Cookie）；勾选后拉详情+图片+Excel")
-        hint.setStyleSheet("color: #888;")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
 
         row = QHBoxLayout()
         self.url_entry = QLineEdit()

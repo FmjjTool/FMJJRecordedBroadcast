@@ -41,9 +41,6 @@ class SubtitlePage(BasePage):
         title = QLabel("字幕格式转换")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
-        hint = QLabel("支持 BCC/JSON/ASS/SRT/TXT → 纯文字/带时间轴TXT/LRC/ASS/SRT")
-        hint.setStyleSheet("color: #888;")
-        layout.addWidget(hint)
 
         # 文件按钮
         frow = QHBoxLayout()

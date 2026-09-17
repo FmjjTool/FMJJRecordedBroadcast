@@ -57,10 +57,6 @@ class TicketsPage(BasePage):
             "<p>· 单件失败自动原地重试，不中断整批；导出时按勾选逐件处理并显示进度</p>"
             "<p>· 采集链路游客优先，降低风控风险</p>")))
         layout.addLayout(title_row)
-        hint = QLabel("支持大麦/秀动/B站会员购链接，或直接输入演出名/艺人名/场馆关键词搜索；勾选后拉详情+图片")
-        hint.setStyleSheet("color: #888;")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
 
         row = QHBoxLayout()
         self.url_entry = QLineEdit()

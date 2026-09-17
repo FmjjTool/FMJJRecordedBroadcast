@@ -208,9 +208,6 @@ class TestPage(BasePage):
         from gui_qt.help_overlay import attach_help_overlay
         title_row.addWidget(attach_help_overlay(self, "❓ 弹幕姬 · 功能介绍", self.HELP_INTRO))
         outer.addLayout(title_row)
-        self.subtitle_lbl = QLabel("真实连接抖音直播间，实时抓取弹幕 / 礼物 / 进场 / 点赞 / 关注",
-                                   styleSheet="color: #888; font-size: 11px;")
-        outer.addWidget(self.subtitle_lbl)
 
         # ===== 顶栏：全局控制 =====
         # Cookie 说明：凭证统一由侧栏「Cookie 管理」维护（总开关+账号池），

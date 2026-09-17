@@ -53,8 +53,6 @@ class LyricsToolPage(BasePage):
         w = QWidget()
         v = QVBoxLayout(w)
         v.addWidget(QLabel("歌词格式转换", styleSheet="font-size: 16px; font-weight: bold;"))
-        v.addWidget(QLabel("LRC / KRC(酷狗) / KSC(酷我) / QRC(QQ) / TRC·ELRC → 纯文字 TXT / LRC / SRT / ASS / KSC",
-                           styleSheet="color: #888;"))
 
         frow = QHBoxLayout()
         frow.addWidget(QPushButton("📄 选择歌词文件", clicked=self._select_files))
@@ -141,7 +139,6 @@ class LyricsToolPage(BasePage):
         w = QWidget()
         v = QVBoxLayout(w)
         v.addWidget(QLabel("KRCD ↔ KRC 工具", styleSheet="font-size: 16px; font-weight: bold;"))
-        v.addWidget(QLabel("KRC（酷狗加密）解密为 KRCD 明文，或把 KRCD 明文加密回 KRC", styleSheet="color: #888;"))
 
         frow = QHBoxLayout()
         frow.addWidget(QPushButton("📄 选择文件", clicked=self._krcd_select_files))

@@ -470,9 +470,6 @@ class AssetPage(BasePage):
         title = QLabel("📁 本地资源")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         v.addWidget(title)
-        hint = QLabel("选择文件夹，扫描图片/视频/音频并快速预览（缩略图/摘要，懒加载不卡顿）")
-        hint.setStyleSheet("color: #888;")
-        v.addWidget(hint)
 
         # 选文件夹行
         row = QHBoxLayout()
@@ -686,9 +683,6 @@ class AssetPage(BasePage):
         title = QLabel("📦 已获取资源")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         v.addWidget(title)
-        hint = QLabel("自动扫描 download/已获取数据/ 下所有历史导出文件（封面 + 摘要）")
-        hint.setStyleSheet("color: #888;")
-        v.addWidget(hint)
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("平台:"))
@@ -2165,9 +2159,6 @@ class AssetPage(BasePage):
         title = QLabel("🗄 数据库浏览")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         v.addWidget(title)
-        hint = QLabel("账号获取「增量模式」采集内容自动入库（分平台分表，跨平台同内容自动去重；首次打开自动迁移旧 _增量汇总.json）")
-        hint.setStyleSheet("color: #888;")
-        v.addWidget(hint)
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("平台表:"))

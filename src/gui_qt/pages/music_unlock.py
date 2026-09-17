@@ -43,8 +43,6 @@ class MusicUnlockPage(BasePage):
             "<p>· 解密结果与失败原因实时显示在下方日志区</p>"
             "<p>提示：解密后可到「音乐标签」页补全标签，或用「重命名」工具整理文件名</p>")))
         layout.addLayout(title_row)
-        layout.addWidget(QLabel("解密 ncm/qmc/mflac/mgg/kgm/vpr/kwm/xm/tm/x2m 等加密音乐，输出到统一导出路径",
-                                styleSheet="color: #888;"))
 
         bar = QHBoxLayout()
         select_btn = QPushButton("📁 选择文件")

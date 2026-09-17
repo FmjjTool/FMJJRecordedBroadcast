@@ -113,9 +113,6 @@ class InfoAccountsPage(BasePage):
             "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
             "<p>· Cookie 统一由侧栏「Cookie 管理」维护，抓取时自动套用</p>")))
         layout.addLayout(title_row)
-        hint = QLabel("添加账号、批量抓取最新内容（结果自动存入「已获取」）")
-        hint.setStyleSheet("color: #888;")
-        layout.addWidget(hint)
 
         # 添加账号行
         add_row = QHBoxLayout()
