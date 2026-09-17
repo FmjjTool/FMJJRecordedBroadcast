@@ -307,6 +307,12 @@ class AssetPage(BasePage):
         head.setContentsMargins(8, 6, 8, 0)
         head.addWidget(QLabel("🗂 资产管理", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
+        backup_btn = QPushButton("💾 备份")
+        backup_btn.setToolTip(
+            "备份所有资产（已获取数据 / 媒体文件 / 数据库快照）为 zip 包或文件夹，\n"
+            "支持导入恢复（文件不覆盖，数据库按去重键合并）")
+        backup_btn.clicked.connect(self._show_backup_menu)
+        head.addWidget(backup_btn)
         from gui_qt.help_overlay import attach_help_overlay
         head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
             "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
@@ -320,6 +326,7 @@ class AssetPage(BasePage):
             "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，右键打开链接/筛选作者）</p>"
             "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频，缩略图懒加载预览，"
             "支持扫描上限与增量索引</p>"
+            "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
             "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
         layout.addLayout(head)
 
@@ -335,6 +342,123 @@ class AssetPage(BasePage):
     def _on_tab_changed(self, idx: int):
         if 0 <= idx < self.tabs.count() and self.tabs.tabText(idx) == "数据库浏览":
             self._db_reload_tables()
+
+    # ==================== 资产备份（导出 / 导入） ====================
+
+    def _show_backup_menu(self):
+        """页头 💾 备份 按钮菜单：导出所有资产（zip / 文件夹）+ 导入恢复。"""
+        m = QMenu(self)
+        m.addAction("📦 导出所有资产（zip 包）…", self._backup_assets_zip)
+        m.addAction("📁 导出所有资产（文件夹）…", self._backup_assets_folder)
+        m.addSeparator()
+        m.addAction("📥 导入备份（zip 包）…", self._import_backup_zip)
+        m.addAction("📥 导入备份（文件夹）…", self._import_backup_folder)
+        btn = self.sender()
+        m.exec(btn.mapToGlobal(QPoint(0, btn.height())) if btn else None)
+
+    def _backup_assets_zip(self):
+        default = f"资产备份_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出所有资产", default, "zip 包 (*.zip)")
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+        self._run_backup_export(path, "zip")
+
+    def _backup_assets_folder(self):
+        dest = QFileDialog.getExistingDirectory(
+            self, "选择备份保存位置（将自动创建「资产备份_时间戳」子文件夹）")
+        if not dest:
+            return
+        self._run_backup_export(dest, "folder")
+
+    def _run_backup_export(self, dest: str, mode: str):
+        from toolbox import backup
+
+        cancel = threading.Event()
+        bridge = _ProgressBridge()
+        dlg = _make_progress_dlg(self, "备份所有资产…", 1, cancel)
+
+        def on_ui(done, total, name):
+            dlg.setMaximum(max(total, 1))
+            dlg.setValue(min(done, total))
+            dlg.setLabelText(f"备份中 {done}/{total}：{name}")
+
+        bridge.updated.connect(on_ui)
+
+        def work():
+            return backup.export_assets(
+                dest, mode=mode,
+                on_progress=lambda d, t, n: bridge.emit_progress(d, t, n),
+                cancel=cancel)
+
+        def done(result, err):
+            bridge.updated.disconnect(on_ui)
+            dlg.close()
+            if err:
+                self.app.toast(f"备份失败：{err}", "error")
+                return
+            if result.get("cancelled"):
+                self.app.toast("已取消备份", "warning")
+                return
+            self.app.toast(
+                f"已备份 {result['files']} 个文件（{result['size_text']}）→ "
+                f"{result['path']}", "success")
+
+        run_bg(work, done)
+
+    def _import_backup_zip(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入资产备份（zip 包）", "", "资产备份 (*.zip)")
+        if not path:
+            return
+        self._run_backup_import(path)
+
+    def _import_backup_folder(self):
+        path = QFileDialog.getExistingDirectory(
+            self, "导入资产备份（选择备份文件夹）")
+        if not path:
+            return
+        self._run_backup_import(path)
+
+    def _run_backup_import(self, src: str):
+        from toolbox import backup
+
+        cancel = threading.Event()
+        bridge = _ProgressBridge()
+        dlg = _make_progress_dlg(self, "导入资产备份…", 1, cancel)
+
+        def on_ui(done, total, name):
+            dlg.setMaximum(max(total, 1))
+            dlg.setValue(min(done, total))
+            dlg.setLabelText(f"导入中 {done}/{total}：{name}")
+
+        bridge.updated.connect(on_ui)
+
+        def work():
+            return backup.import_assets(
+                src, on_progress=lambda d, t, n: bridge.emit_progress(d, t, n),
+                cancel=cancel)
+
+        def done(result, err):
+            bridge.updated.disconnect(on_ui)
+            dlg.close()
+            if err == "已取消":
+                self.app.toast("已取消导入", "warning")
+                return
+            if err:
+                self.app.toast(f"导入失败：{err}", "error")
+                return
+            self.app.toast(
+                f"导入完成：新增 {result['files_copied']} 个文件、"
+                f"跳过已存在 {result['files_skipped']} 个、"
+                f"数据库入库 {result['db_rows']} 条", "success")
+            # 新资产已落盘 → 刷新当前视图（已获取资源 + 数据库浏览）
+            self._refresh_collected()
+            self._on_tab_changed(self.tabs.currentIndex())
+
+        run_bg(work, done)
 
     # ==================== 本地资源 ====================
 
