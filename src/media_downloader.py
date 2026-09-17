@@ -1,10 +1,16 @@
 """
 媒体下载模块 - 下载图片 / live图 / 视频到本地
+
+支持多线程下载（threads 参数，2/4/8/16/32/64）：
+- 单文件且为大文件（视频/Live图）：threads = 分段数，文件拆 N 段各自独立
+  Range 流并行下载（IDM 风格），写 .idmpart 临时文件完成后原子改名；
+- 多文件（批量）：threads = 并行文件数，N 个文件同时下载（每个单流）。
 """
 
 import os
 import random
 import re
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -170,13 +176,144 @@ def _should_skip_download(url: str, filepath: str, headers: dict) -> bool:
     return remote is not None and remote == size
 
 
+# ==================== 多线程分段下载（IDM 风格） ====================
+
+# 小于 2MB 的文件分段收益低于握手开销，直接单流
+SEG_MIN_FILE_SIZE = 2 * 1024 * 1024
+# 每段至少 256KB（避免线程数 > 文件大小能切出的合理段数）
+SEG_MIN_CHUNK = 256 * 1024
+
+
+def _probe_range(url: str, headers: dict):
+    """GET bytes=0-0 试探远端是否支持 Range 分段与真实总大小。
+
+    返回 (total, supports_range, content_type)；探测失败返回 (None, False, "")。
+    HEAD 在部分 CDN（新浪图床）上行为不一致，Range 试探最可靠。
+    """
+    h = dict(headers)
+    h["Range"] = "bytes=0-0"
+    try:
+        r = httpx.get(url, headers=h, timeout=20, follow_redirects=True)
+        ct = r.headers.get("content-type", "")
+        if r.status_code == 206:
+            cr = r.headers.get("content-range", "")  # "bytes 0-0/12345"
+            total = int(cr.rsplit("/", 1)[-1]) if "/" in cr else None
+            if total and total > 0:
+                return total, True, ct
+        if r.status_code == 200:
+            cl = r.headers.get("content-length", "")
+            return (int(cl) if cl.isdigit() else None), False, ct
+    except Exception:
+        pass
+    return None, False, ""
+
+
+def _download_ranged(url: str, filepath: str, headers: dict, threads: int,
+                     total: int, progress_cb=None, seg_progress_cb=None,
+                     cancel_check=None) -> tuple[str, bool]:
+    """分段并行下载单个文件（IDM 风格核心）。
+
+    - 文件均分为 threads 段，每段独立 Range 流写同一 .idmpart 临时文件
+      的各自偏移（预分配 truncate，各段独立文件句柄 seek 写，无锁竞争）；
+    - 全部段完成后原子改名（os.replace）为正式文件；中途取消/失败删除
+      .part —— 分段半截文件中间有洞，不能走单流 Range 续传，完整重下最稳；
+    - 段级重试 3 次（网络抖动只重下该段，从段内断点续）；
+    - progress_cb(done, total)：全文件聚合字节进度（约 5 次/秒）；
+    - seg_progress_cb(seg_idx, seg_done, seg_total)：单段进度（GUI 分段条）。
+    返回 (filepath, success)。
+    """
+    part_path = filepath + ".idmpart"
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        # 预分配占位（各段按偏移覆写）
+        with open(part_path, "wb") as f:
+            f.truncate(total)
+        base, rem = divmod(total, threads)
+        segs = []
+        start = 0
+        for i in range(threads):
+            size = base + (1 if i < rem else 0)
+            segs.append((i, start, start + size - 1))
+            start += size
+        seg_done = [0] * threads
+        lock = threading.Lock()
+        stop = [False]
+        last_t = [0.0]
+
+        def _agg():
+            done = sum(seg_done)
+            now_t = time.monotonic()
+            if progress_cb is not None and now_t - last_t[0] >= 0.2:
+                progress_cb(done, total)
+                last_t[0] = now_t
+
+        def _seg_worker(i: int, s: int, e: int) -> bool:
+            seg_total = e - s + 1
+            for _attempt in range(3):  # 段级重试：从段内断点续下
+                if stop[0] or (cancel_check is not None and cancel_check()):
+                    return False
+                pos = s + seg_done[i]
+                h = dict(headers)
+                h["Range"] = f"bytes={pos}-{e}"
+                try:
+                    with httpx.Client(timeout=60, follow_redirects=True,
+                                      headers=h) as client:
+                        with client.stream("GET", url) as resp:
+                            resp.raise_for_status()
+                            with open(part_path, "r+b") as f:
+                                f.seek(pos)
+                                for chunk in resp.iter_bytes(chunk_size=262144):
+                                    if stop[0] or (cancel_check is not None
+                                                   and cancel_check()):
+                                        return False
+                                    f.write(chunk)
+                                    with lock:
+                                        seg_done[i] += len(chunk)
+                                        if seg_progress_cb is not None:
+                                            seg_progress_cb(
+                                                i, seg_done[i], seg_total)
+                                    _agg()
+                    if seg_done[i] >= seg_total:
+                        return True
+                except Exception:
+                    continue  # 网络抖动 → 从段内断点重试
+            return False
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            futs = [pool.submit(_seg_worker, i, s, e) for i, s, e in segs]
+            ok = all(f.result() for f in futs)
+        if progress_cb is not None:
+            progress_cb(sum(seg_done), total)
+        if ok:
+            os.replace(part_path, filepath)
+            return filepath, True
+        stop[0] = True
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+        return filepath, False
+    except Exception:
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+        return filepath, False
+
+
 def _download_one(url: str, filepath: str, headers: dict,
-                  progress_cb=None, cancel_check=None) -> tuple[str, bool]:
+                  progress_cb=None, cancel_check=None, threads: int = 1,
+                  seg_progress_cb=None) -> tuple[str, bool]:
     """下载单个文件，返回 (filepath, success)。
 
     流式写盘（边下边写，不整包进内存——大视频整包缓冲会造成内存暴涨/卡顿），
     progress_cb(done_bytes, total_bytes) 约 5 次/秒回报字节进度（无 content-length 时 total=0），
     cancel_check() 返回 True 时中止下载（半截文件保留，下次 Range 续传）。
+
+    threads > 1 且为全新下载且远端支持 Range 且文件足够大时，走 IDM 风格
+    分段并行下载（_download_ranged），seg_progress_cb 回报每段进度；
+    其余情况（threads=1 / 半截续传 / 不支持 Range / 文件太小）回退单流。
     """
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -189,6 +326,19 @@ def _download_one(url: str, filepath: str, headers: dict,
         # 断点续传：文件已存在则用 Range 请求续传
         h = dict(headers)
         existing = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+        # 多线程分段模式：仅在全新下载时启用（半截文件必须走单流续传）
+        if threads > 1 and existing == 0:
+            total, rng_ok, ct = _probe_range(url, headers)
+            if (rng_ok and total and total >= SEG_MIN_FILE_SIZE
+                    and total // threads >= SEG_MIN_CHUNK):
+                # 扩展名按探测到的 Content-Type 先定好（分段完成后不再改名）
+                ext = _ext_guess(ct, url)
+                if not filepath.endswith(ext):
+                    filepath = filepath.rsplit(".", 1)[0] + ext
+                return _download_ranged(
+                    url, filepath, headers, threads, total,
+                    progress_cb=progress_cb, seg_progress_cb=seg_progress_cb,
+                    cancel_check=cancel_check)
         if existing > 0 and upgraded:
             # URL 已升级为原图：旧文件是压缩版，续传会拼出损坏文件，删掉重下
             # （已下载的原图由 download_media 的 _should_skip_download 提前跳过）
@@ -263,6 +413,8 @@ def download_media(
     skip_existing: bool = True,
     quiet: bool = False,
     byte_progress_callback=None,
+    threads: int = 1,
+    on_task_event=None,
 ) -> dict:
     """
     批量下载媒体文件。返回统计信息。
@@ -281,7 +433,17 @@ def download_media(
             stats["skipped"] 计数）；强制重下时传 False
         quiet: 静默模式（GUI 调用）：不向终端打印开始/完成/进度条等任何输出
         byte_progress_callback: 大文件（视频/Live图）字节级进度回调
-            (done_bytes, total_bytes)，约 5 次/秒；None 则不回报（GUI 才需要）
+            (done_bytes, total_bytes)，约 5 次/秒；None 则不回报（GUI 才需要）。
+            注意：并行模式下多文件同时回报，仍需区分文件的调用方请改用 on_task_event
+        threads: 线程数（2/4/8/16/32/64）。单任务大文件 = 分段数（IDM 风格）；
+            多任务 = 并行下载的文件数。1 = 原串行行为（默认，命令行/旧调用方兼容）
+        on_task_event: 下载事件回调（GUI 进度面板用，线程安全要求同 progress_callback）：
+            ("plan",  mode, file_count, threads)  一次，mode ∈ "segments"/"parallel"/"serial"
+            ("start", filename)                   文件开始下载（含单流模式）
+            ("seg",   seg_idx, seg_done, seg_total) 分段进度（仅 segments 模式）
+            ("bytes", filename, done, total)      文件字节进度（serial/parallel 模式大文件）
+            ("done",  filename, ok)               文件结束（ok=True 成功 / False 失败）
+            ("skip",  filename)                   已下载跳过
     """
     def _say(msg: str):
         if not quiet:
@@ -436,6 +598,62 @@ def download_media(
     if progress_callback:
         progress_callback(0, len(tasks), "")
 
+    # 线程模式决策：
+    #   segments — 单任务大文件，threads = 分段数（IDM 风格，一个文件拆 N 段）
+    #   parallel — 多任务，threads = 同时在下的文件数（每个文件单流）
+    #   serial   — threads=1 / 单任务小文件，维持原串行行为（兼容命令行与旧调用方）
+    if len(tasks) == 1 and threads > 1 and tasks[0][2] in ("视频", "Live图"):
+        mode = "segments"
+    elif threads > 1 and len(tasks) > 1:
+        mode = "parallel"
+    else:
+        mode = "serial"
+    if on_task_event is not None:
+        try:
+            on_task_event("plan", mode, len(tasks), threads)
+        except Exception:
+            pass
+
+    _lock = threading.Lock()
+
+    def _bump(key: str, n: int = 1):
+        with _lock:
+            stats[key] += n
+
+    def _report_progress(name: str):
+        if progress_callback:
+            with _lock:
+                done = (stats["images"] + stats["covers"] + stats["live"]
+                        + stats["videos"] + stats["failed"] + stats["skipped"])
+            progress_callback(done, len(tasks), name)
+
+    def _evt(*event):
+        if on_task_event is not None:
+            try:
+                on_task_event(*event)
+            except Exception:
+                pass
+
+    def _pick_headers(url: str) -> dict:
+        """根据 URL 域名选择请求头（抖音/微博带 Cookie，其余按平台 Referer）。"""
+        if "douyin.com" in url or "douyinvod" in url:
+            return _dy_headers()
+        if "weibo" in url or "sinaimg" in url:
+            return _wb_headers()
+        if "hdslb.com" in url or "bilibili.com" in url or "bilivideo" in url:
+            h = dict(headers)
+            h["Referer"] = "https://www.bilibili.com/"
+            return h
+        if "xiaohongshu" in url or "xhscdn" in url or "sns-img" in url:
+            h = dict(headers)
+            h["Referer"] = "https://www.xiaohongshu.com/"
+            return h
+        if "kuaishou" in url or "yximgs" in url or "gifshow" in url:
+            h = dict(headers)
+            h["Referer"] = "https://www.kuaishou.com/"
+            return h
+        return dict(headers)
+
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -444,61 +662,61 @@ def download_media(
         TextColumn("[dim]{task.completed}/{task.total}[/dim]"),
         console=console,
     ) if not quiet else _NullProgress()
-    with progress:
-        pbar = progress.add_task("[cyan]下载中...", total=len(tasks))
 
-        # 串行下载：每个文件前随机等待（默认 3~60 秒防反爬；GUI 手动下载传小区间提速）
-        for idx, (url, fpath, mtype) in enumerate(tasks):
-            if cancel_event is not None and cancel_event.is_set():
-                stats["cancelled"] = True
-                _say("[yellow]已取消，跳过剩余文件[/yellow]")
-                break
-            # 根据 URL 域名选择请求头（提前到跳过检查之前）
-            if "douyin.com" in url or "douyinvod" in url:
-                hdrs = _dy_headers()
-            elif "weibo" in url or "sinaimg" in url:
-                hdrs = _wb_headers()
-            elif "hdslb.com" in url or "bilibili.com" in url or "bilivideo" in url:
-                h = dict(headers)
-                h["Referer"] = "https://www.bilibili.com/"
-                hdrs = h
-            elif "xiaohongshu" in url or "xhscdn" in url or "sns-img" in url:
-                h = dict(headers)
-                h["Referer"] = "https://www.xiaohongshu.com/"
-                hdrs = h
-            elif "kuaishou" in url or "yximgs" in url or "gifshow" in url:
-                h = dict(headers)
-                h["Referer"] = "https://www.kuaishou.com/"
-                hdrs = h
-            else:
-                hdrs = dict(headers)
-            # 已下载自动跳过（原图）：本地文件与原图大小一致 → 不发下载请求
-            if skip_existing and _should_skip_download(url, fpath, hdrs):
-                stats["skipped"] += 1
-                progress.update(pbar, description=f"[dim]已下载，跳过 {os.path.basename(fpath)}[/dim]")
-                progress.advance(pbar)
-                if progress_callback:
-                    done = (stats["images"] + stats["covers"] + stats["live"]
-                            + stats["videos"] + stats["failed"] + stats["skipped"])
-                    progress_callback(done, len(tasks), os.path.basename(fpath))
-                continue
-            if idx > 0:
-                lo, hi = wait_range if wait_range else (3, 60)
-                wait = random.uniform(lo, hi) if hi > lo else lo
-                if wait > 0:
-                    progress.update(pbar, description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
-                    time.sleep(wait)
-            progress.update(pbar, description=f"[cyan]{mtype}[/cyan] {os.path.basename(fpath)}")
-            # 大文件（视频/Live图）才报字节进度：图片秒下，逐张报进度是噪音；
-            # 取消检查也只在此时传入——文件间本来就有检查，大文件中途能立即停
-            big = mtype in ("视频", "Live图")
-            cancel_chk = (cancel_event.is_set
-                          if big and cancel_event is not None else None)
-            filepath, ok = _download_one(
-                url, fpath, hdrs,
-                progress_cb=byte_progress_callback if big else None,
-                cancel_check=cancel_chk)
-            if ok:
+    def _process_task(idx: int):
+        """处理第 idx 个任务（串行循环体 / 并行 worker 共用）。"""
+        url, fpath, mtype = tasks[idx]
+        name = os.path.basename(fpath)
+        if cancel_event is not None and cancel_event.is_set():
+            stats["cancelled"] = True
+            return
+        hdrs = _pick_headers(url)
+        # 已下载自动跳过（原图）：本地文件与原图大小一致 → 不发下载请求
+        if skip_existing and _should_skip_download(url, fpath, hdrs):
+            _bump("skipped")
+            progress.update(pbar, description=f"[dim]已下载，跳过 {name}[/dim]")
+            progress.advance(pbar)
+            _evt("skip", name)
+            _report_progress(name)
+            return
+        # 防反爬等待：串行模式沿用「首个不等待」；并行模式每任务前随机等待
+        # （错峰起跑，避免 N 个 worker 同一瞬间全打到 CDN）
+        lo, hi = wait_range if wait_range else (3, 60)
+        if mode == "parallel":
+            wait = random.uniform(lo, hi) if hi > lo else lo
+            if wait > 0:
+                time.sleep(wait)
+        elif idx > 0:
+            wait = random.uniform(lo, hi) if hi > lo else lo
+            if wait > 0:
+                progress.update(pbar,
+                                description=f"[yellow]随机等待 {wait:.1f}s（防反爬）...[/yellow]")
+                time.sleep(wait)
+        progress.update(pbar, description=f"[cyan]{mtype}[/cyan] {name}")
+        # 大文件（视频/Live图）才报字节进度：图片秒下，逐张报进度是噪音；
+        # 取消检查也只在此时传入——文件间本来就有检查，大文件中途能立即停
+        big = mtype in ("视频", "Live图")
+        cancel_chk = (cancel_event.is_set
+                      if big and cancel_event is not None else None)
+        ft = threads if (mode == "segments" and big) else 1
+        seg_cb = ((lambda i, d, t: _evt("seg", i, d, t))
+                  if mode == "segments" and big else None)
+
+        def _byte_cb(done, total, _name=name):
+            # 旧回调（asset 页）与新的 on_task_event 各自独立触发
+            if byte_progress_callback is not None:
+                byte_progress_callback(done, total)
+            _evt("bytes", _name, done, total)
+
+        _evt("start", name)
+        filepath, ok = _download_one(
+            url, fpath, hdrs,
+            progress_cb=_byte_cb if big else None,
+            cancel_check=cancel_chk,
+            threads=ft,
+            seg_progress_cb=seg_cb)
+        if ok:
+            with _lock:
                 if mtype == "图片":
                     stats["images"] += 1
                 elif mtype == "Live图":
@@ -507,21 +725,42 @@ def download_media(
                     stats["covers"] += 1
                 elif mtype == "视频":
                     stats["videos"] += 1
-            else:
-                # 大文件中途取消：半截文件保留供续传，计失败但标记取消
-                # （单个任务时循环自然结束，靠不了下一轮的顶部检查）
-                if cancel_event is not None and cancel_event.is_set():
-                    stats["cancelled"] = True
-                    stats["failed"] += 1
-                    _say("[yellow]已取消（半截文件保留，下次续传）[/yellow]")
-                    break
-                stats["failed"] += 1
-                _say(f"[red]X 失败: {os.path.basename(filepath)}[/red]")
-            progress.advance(pbar)
-            if progress_callback:
+            _evt("done", name, True)
+        else:
+            # 大文件中途取消：半截文件保留供续传，计失败但标记取消
+            if cancel_event is not None and cancel_event.is_set():
+                stats["cancelled"] = True
+                _bump("failed")
+                _say("[yellow]已取消（半截文件保留，下次续传）[/yellow]")
+                _evt("done", name, False)
+                return
+            _bump("failed")
+            _say(f"[red]X 失败: {os.path.basename(filepath)}[/red]")
+            _evt("done", name, False)
+        progress.advance(pbar)
+        # 完成回调里不含 skipped（与原串行循环的口径一致）
+        if progress_callback:
+            with _lock:
                 done = (stats["images"] + stats["live"] + stats["covers"]
                         + stats["videos"] + stats["failed"])
-                progress_callback(done, len(tasks), os.path.basename(filepath))
+            progress_callback(done, len(tasks), os.path.basename(filepath))
+
+    with progress:
+        pbar = progress.add_task("[cyan]下载中...", total=len(tasks))
+        if mode == "parallel":
+            # 多文件并行：N 个文件同时在下载（批量下载线程语义）
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(threads, len(tasks))) as pool:
+                futs = [pool.submit(_process_task, i) for i in range(len(tasks))]
+                for f in futs:
+                    f.result()
+        else:
+            # 串行 / 单文件分段：顺序处理（segments 模式的分段并行在
+            # _download_ranged 内部的线程池完成，外层仍是单任务循环）
+            for i in range(len(tasks)):
+                _process_task(i)
+                if stats["cancelled"]:
+                    break
 
     _say("\n[bold green]V 下载完成:[/bold green]")
     _say(f"  图片: {stats['images']} | 封面: {stats['covers']} | "

@@ -88,9 +88,26 @@ def _pick_audio_stream(audio_list):
 
 
 def _download_to_file(url: str, path: str, headers: dict, progress_cb=None,
-                       backup_urls: list | None = None) -> str:
-    """下载到文件，返回文件路径。主链接失败自动尝试 backupUrl 镜像。"""
+                      backup_urls: list | None = None, threads: int = 1) -> str:
+    """下载到文件，返回文件路径。主链接失败自动尝试 backupUrl 镜像。
+
+    threads > 1 时主链接先尝试 IDM 风格分段并行下载（复用 media_downloader
+    的分段核心）；远端不支持 Range / 分段失败则回退单流 + 镜像回退。
+    """
     urls = [url] + (backup_urls or [])
+    if threads > 1:
+        from media_downloader import (
+            SEG_MIN_CHUNK, SEG_MIN_FILE_SIZE, _download_ranged, _probe_range)
+        try:
+            total, rng_ok, _ct = _probe_range(urls[0], headers)
+            if (rng_ok and total and total >= SEG_MIN_FILE_SIZE
+                    and total // threads >= SEG_MIN_CHUNK):
+                _fp, ok = _download_ranged(urls[0], path, headers, threads,
+                                           total, progress_cb=progress_cb)
+                if ok:
+                    return path
+        except Exception:
+            pass  # 分段失败 → 回退单流（含镜像回退）
     last_err = None
     for i, u in enumerate(urls):
         try:
@@ -137,10 +154,15 @@ def download_bilibili_by_bvid(
     progress_cb=None,
     author: str = "",
     publish_time: str = "",
+    threads: int = 1,
 ) -> str:
-    """便捷入口：根据 bvid/av 号下载（内部自动拿 cid）。quality=None 表示最高画质。"""
+    """便捷入口：根据 bvid/av 号下载（内部自动拿 cid）。quality=None 表示最高画质。
+
+    threads > 1 时视频流 / 音频流走 IDM 风格分段并行下载（复用 media_downloader）。
+    """
     cid, bvid = get_cid(video_id, cookie)
-    return download_bilibili_video(bvid, cid, quality, cookie, out_dir, title, progress_cb, author, publish_time)
+    return download_bilibili_video(bvid, cid, quality, cookie, out_dir, title,
+                                   progress_cb, author, publish_time, threads)
 
 
 def _stream_urls(stream: dict) -> list:
@@ -171,11 +193,13 @@ def download_bilibili_video(
     progress_cb=None,
     author: str = "",
     publish_time: str = "",
+    threads: int = 1,
 ) -> str:
     """下载 B站视频（视频流 + 音频流 ffmpeg 合并），返回输出文件路径。
 
     quality: 目标画质 qn（None=最高画质）
     author / publish_time: 用于组织目录与文件名（[平台][用户]{datetime}_{发布者}_{标题}.mp4）
+    threads: >1 时视频/音频流分段并行下载（IDM 风格）
     """
     info = get_bilibili_play_info(bvid, cid, cookie)
     video_streams = info["video_streams"]
@@ -206,11 +230,13 @@ def download_bilibili_video(
     try:
         # 下载视频流（主链接 503/超时自动回退 backupUrl 镜像）
         vurls = _stream_urls(video)
-        _download_to_file(vurls[0], video_tmp, headers, progress_cb, vurls[1:])
+        _download_to_file(vurls[0], video_tmp, headers, progress_cb, vurls[1:],
+                          threads=threads)
         # 下载音频流
         if audio and audio.get("baseUrl"):
             aurls = _stream_urls(audio)
-            _download_to_file(aurls[0], audio_tmp, headers, progress_cb, aurls[1:])
+            _download_to_file(aurls[0], audio_tmp, headers, progress_cb, aurls[1:],
+                              threads=threads)
         # ffmpeg 合并
         from toolbox.utils import find_ffmpeg_exe
         if audio and os.path.exists(audio_tmp):

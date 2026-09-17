@@ -188,12 +188,16 @@ def get_bilibili_cookie():
 
 
 def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
-                         quality_label="最高画质", log=None):
+                         quality_label="最高画质", log=None,
+                         threads=1, on_task_event=None):
     """实际 B站下载（后台线程内执行）。
 
     每个视频前随机等待 3~60 秒（防反爬硬性条件）；
     draw_items 下动态图片，non_bili 走 media_downloader（抖音重新解析）。
     log(msg) 可选：实时日志回调（需线程安全）。
+    threads（2/4/8/16/32/64）：单视频 = 流分段数（IDM 风格）；
+        多视频 = 同时在下的视频数（每个视频内部单流，与媒体下载语义一致）。
+    on_task_event 可选：同 download_media 的事件回调（B站视频作为文件槽位参与）。
     返回 (paths, draw_stats, other_stats, errors)。
     """
     from bilibili_download import download_bilibili_by_bvid
@@ -205,28 +209,65 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
         if log:
             log(f"✅ ({done}/{total}) {name}")
 
-    for idx, info in enumerate(bv_items):
+    def _evt(*event):
+        if on_task_event is not None:
+            try:
+                on_task_event(*event)
+            except Exception:
+                pass
+
+    # 面板 plan 事件：多视频并行（threads=并行数）；单视频 serial 单槽位
+    # （视频流/音频流内部已按 threads 分段并行，外层一个进度槽）
+    if bv_items and on_task_event is not None:
+        if len(bv_items) > 1 and threads > 1:
+            _evt("plan", "parallel", len(bv_items), min(threads, len(bv_items)))
+        else:
+            _evt("plan", "serial", len(bv_items), 1)
+
+    def _dl_one(idx: int, info, file_threads: int, wait_mode: str):
+        """下载单个 B站视频（串行循环体 / 并行 worker 共用）。"""
         title = (info.title or info.video_id)[:40]
-        if idx > 0:
+        # 防反爬等待：串行首个不等（保持原行为）；并行每任务随机错峰
+        if wait_mode == "parallel" or (wait_mode == "serial" and idx > 0):
             wait = random.uniform(3, 60)
             if log:
                 log(f"⏳ 随机等待 {wait:.1f}s（防反爬）...")
             time.sleep(wait)
+        _evt("start", f"{title}.mp4")
         if log:
-            log(f"⬇ ({idx + 1}/{len(bv_items)}) 正在下载 {title}...")
+            log(f"⬇ 正在下载 {title}...")
         try:
             path = download_bilibili_by_bvid(
                 info.video_id, quality=quality, cookie=ck,
                 out_dir=out_dir, title=info.title,
                 author=info.author, publish_time=info.publish_time,
+                threads=file_threads,
+                progress_cb=(lambda d, t, _n=title:
+                             _evt("bytes", f"{_n}.mp4", d, t)),
             )
             paths.append(path)
+            _evt("done", f"{title}.mp4", True)
             if log:
                 log(f"✅ 完成 {title} → {os.path.basename(str(path))}")
         except Exception as e:
             errors.append(f"{title}: {str(e)[:40]}")
+            _evt("done", f"{title}.mp4", False)
             if log:
                 log(f"❌ 失败 {title} → {e}")
+
+    if bv_items:
+        if len(bv_items) == 1 or threads <= 1:
+            for idx, info in enumerate(bv_items):
+                _dl_one(idx, info, threads if len(bv_items) == 1 else 1,
+                        "serial")
+        else:
+            # 多视频并行：threads = 同时在下的视频数（每视频内部单流）
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(threads, len(bv_items))) as pool:
+                futs = [pool.submit(_dl_one, i, info, 1, "parallel")
+                        for i, info in enumerate(bv_items)]
+                for f in futs:
+                    f.result()
 
     draw_stats = None
     if draw_items:
@@ -238,7 +279,9 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
                                         download_videos=False,
                                         progress_callback=progress_cb if log else None,
                                         wait_range=(0.5, 1.5),
-                                        quiet=True)
+                                        quiet=True,
+                                        threads=threads,
+                                        on_task_event=on_task_event)
         except Exception as e:
             errors.append(f"动态图片: {str(e)[:40]}")
             if log:
@@ -253,7 +296,9 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
             other_stats = download_media(non_bili, base_dir=out_dir,
                                          progress_callback=progress_cb if log else None,
                                          wait_range=(0.5, 1.5),
-                                         quiet=True)
+                                         quiet=True,
+                                         threads=threads,
+                                         on_task_event=on_task_event)
         except Exception as e:
             errors.append(f"其他: {str(e)[:40]}")
             if log:
@@ -261,9 +306,10 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
     return paths, draw_stats, other_stats, errors
 
 
-def download_media_items(items, log=None):
+def download_media_items(items, log=None, threads=1, on_task_event=None):
     """非 B站媒体下载（后台线程内执行）。返回 stats dict。
 
+    threads / on_task_event 透传给 download_media（多线程下载，见其 docstring）。
     GUI 手动下载传小等待区间（与资产页一致）：默认 3~60 秒防反爬区间是为
     命令行批量采集设计的，GUI 单帖下载场景下 live 图前动辄 30-60 秒静默
     等待，用户感知为「卡住」。微博 sinaimg/抖音 CDN 小间隔连发实测无限流。
@@ -278,7 +324,9 @@ def download_media_items(items, log=None):
     return download_media(items, base_dir=base_dir,
                           progress_callback=progress_cb if log else None,
                           wait_range=(0.5, 1.5),
-                          quiet=True)
+                          quiet=True,
+                          threads=threads,
+                          on_task_event=on_task_event)
 
 
 def summarize_download(paths, draw_stats, other_stats, errors):

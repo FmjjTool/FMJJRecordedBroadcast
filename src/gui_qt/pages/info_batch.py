@@ -3,6 +3,8 @@
 - 解析：B站/抖音/微博 完整解析器 + 小红书/快手/好看/微视/梨视频/皮皮搞笑（multi_downloader）
 - 解析结果为可勾选列表（默认全勾选，支持全选/反选/清除），双击行打开原链接
 - 下载：仅下载勾选的条目（B站按画质走 playurl，其余走 media_downloader）
+- 线程数（全局共享，2/4/8/16/32/64）：N 个文件并行下载（IDM 队列风格，
+  下载面板把线程槽位显示为文件名，每行文件名 + 进度）
 """
 
 import threading
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt import common, download_ops
 from gui_qt.common import _collect, icon_button, post_to_main, refresh_results_count, run_bg
+from gui_qt.download_panel import DownloadPanel
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 
@@ -32,6 +35,9 @@ PLAT_CN = {
     "pear": "梨视频",
     "pipigx": "皮皮搞笑",
 }
+
+# 线程数选项（全局共享，与单个解析页一致）
+THREAD_OPTIONS = ["2", "4", "8", "16", "32", "64"]
 
 
 class InfoBatchPage(BasePage):
@@ -93,6 +99,16 @@ class InfoBatchPage(BasePage):
         self.quality_sel.setCurrentText(common.CURRENT_QUALITY)
         self.quality_sel.currentTextChanged.connect(self._on_quality_change)
         btn_row.addWidget(self.quality_sel)
+        btn_row.addWidget(QLabel("线程:"))
+        self.thread_sel = QComboBox()
+        self.thread_sel.addItems(THREAD_OPTIONS)
+        self.thread_sel.setToolTip(
+            "下载线程数：多个文件按线程数并行下载（线程槽位显示文件名）；\n"
+            "单个大文件按线程数分段并行下载（与单个解析页共享设置）")
+        self.thread_sel.setCurrentText(str(common.CURRENT_THREADS))
+        self.thread_sel.setFixedWidth(64)
+        self.thread_sel.currentTextChanged.connect(self._on_threads_change)
+        btn_row.addWidget(self.thread_sel)
         layout.addLayout(btn_row)
 
         # 解析结果列表头：计数 + 全选/反选/清除
@@ -112,6 +128,10 @@ class InfoBatchPage(BasePage):
         self.parsed_list.itemChanged.connect(lambda _item: self._update_counts())
         self.parsed_list.itemDoubleClicked.connect(self._open_row_url)
         layout.addWidget(self.parsed_list, 1)
+
+        # IDM 队列风格下载面板：线程槽位 = 文件名行（并行下载多个文件）
+        self.dl_panel = DownloadPanel()
+        layout.addWidget(self.dl_panel)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
@@ -154,6 +174,19 @@ class InfoBatchPage(BasePage):
     def _on_quality_change(self, value):
         """清晰度改变时同步到全局（已获取/单个解析/资产管理页共用）。"""
         common.CURRENT_QUALITY = value
+
+    def _on_threads_change(self, value):
+        """线程数改变时同步到全局（单个解析页共用）。"""
+        try:
+            common.CURRENT_THREADS = int(value)
+        except ValueError:
+            pass
+
+    def _threads(self) -> int:
+        try:
+            return int(self.thread_sel.currentText())
+        except ValueError:
+            return common.CURRENT_THREADS
 
     # ==================== 解析 ====================
 
@@ -299,7 +332,10 @@ class InfoBatchPage(BasePage):
             self.app.toast("请先勾选需要下载的条目", "warning")
             return
         self.dl_btn.setEnabled(False)
-        self._log(f"⏳ 开始下载勾选的 {len(items)} 个条目（画质: {self.quality_sel.currentText()}）...")
+        self._log(f"⏳ 开始下载勾选的 {len(items)} 个条目"
+                  f"（画质: {self.quality_sel.currentText()} · "
+                  f"{self._threads()} 线程）...")
+        self.dl_panel.begin()
         bili_items, non_bili = download_ops.resolve_items(items)
         if bili_items:
             self._download_bilibili(bili_items, non_bili)
@@ -308,14 +344,18 @@ class InfoBatchPage(BasePage):
 
     def _download_media(self, items):
         quality_label = self.quality_sel.currentText()
+        threads = self._threads()
 
         def work():
             # 抖音：按所选画质重新解析拿新直链（存量直链有时效性）
             download_ops.refresh_douyin_urls(items, quality_label)
-            return download_ops.download_media_items(items, log=self._log)
+            return download_ops.download_media_items(
+                items, log=self._log, threads=threads,
+                on_task_event=self.dl_panel.handle_event)
 
         def done(result, err):
             if err:
+                self.dl_panel.finish(f"❌ 下载失败: {str(err)[:60]}")
                 self._log(f"❌ 下载失败: {err}")
             else:
                 stats = result or {}
@@ -325,6 +365,7 @@ class InfoBatchPage(BasePage):
                 if stats.get("skipped", 0):
                     msg += f" | 跳过已下载 {stats['skipped']}"
                 self._log(msg)
+                self.dl_panel.finish(msg if len(msg) <= 80 else msg[:79] + "…")
             self._update_counts()
 
         run_bg(work, done)
@@ -334,19 +375,23 @@ class InfoBatchPage(BasePage):
         bv_items, draw_items = download_ops.classify_bili(bili_items)
         quality = download_ops.quality_to_qn(self.quality_sel.currentText())
         quality_label = self.quality_sel.currentText()
+        threads = self._threads()
 
         def work():
             return download_ops.do_bilibili_download(
                 bv_items, draw_items, non_bili, quality, ck,
-                quality_label=quality_label, log=self._log)
+                quality_label=quality_label, log=self._log,
+                threads=threads, on_task_event=self.dl_panel.handle_event)
 
         def done(result, err):
             if err:
+                self.dl_panel.finish(f"❌ 下载失败: {str(err)[:60]}")
                 self._log(f"❌ 下载失败: {err}")
             else:
                 paths, draw_stats, other_stats, errors = result
                 msg = download_ops.summarize_download(paths, draw_stats, other_stats, errors)
                 self._log(f"✅ {msg}")
+                self.dl_panel.finish(f"✅ {msg}" if len(msg) <= 80 else "✅ " + msg[:79] + "…")
                 if errors:
                     self._log("失败列表:\n" + "\n".join(errors[:5]))
             self._update_counts()
