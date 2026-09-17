@@ -792,7 +792,7 @@ class TestPage(BasePage):
         from toolbox.live_video import StreamRecorder
         self.recorder = StreamRecorder(on_status=lambda s, p: None)
         if not self.recorder.start(self._current_stream, path):
-            self.app.toast("录制启动失败（FFmpeg 未找到）", "error")
+            self.app.toast("录制启动失败（未找到支持 https 的完整版 FFmpeg）", "error")
             self.recorder = None
             return
         self._recording = True

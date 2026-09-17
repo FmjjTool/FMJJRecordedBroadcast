@@ -69,13 +69,93 @@ def stub_md5(room_id, unique_id):
     return hashlib.md5(stub.encode()).hexdigest()
 
 
+def _query_enter(info, c, web_rid, cookie_str, cache, cache_key):
+    """调用 room/web/enter 解析房间信息写入 info；成功返回 True。"""
+    import urllib.parse as up
+    params = {
+        "aid": "6383", "app_name": "douyin_web", "live_id": "1",
+        "device_platform": "web", "language": "zh-CN", "browser_language": "zh-CN",
+        "browser_platform": "Win32", "browser_name": "Mozilla",
+        "browser_version": UA, "web_rid": web_rid,
+    }
+    url = "https://live.douyin.com/webcast/room/web/enter/?" + up.urlencode(params)
+    r = c.get(url, headers={"User-Agent": UA, "Referer": f"https://live.douyin.com/{web_rid}", "Cookie": cookie_str}, timeout=15)
+    if r.status_code != 200 or not r.text.strip():
+        info["error"] = f"room/enter 接口返回异常（可能被风控），状态 {r.status_code}"
+        return False
+    d = r.json()
+    room = (d.get("data", {}).get("data") or [{}])[0]
+    if room.get("id_str"):
+        info["roomId"] = room["id_str"]
+    owner = room.get("owner") or {}
+    if owner.get("nickname"):
+        info["anchor"] = owner["nickname"]
+    if room.get("title"):
+        info["title"] = room["title"]
+    if room.get("status") is not None:
+        info["status"] = int(room["status"])
+    stats = room.get("stats") or {}
+    if stats.get("user_count_str"):
+        info["online"] = stats["user_count_str"]
+    # 封面 / 主播头像（弹幕姬左栏展示；web 端字段为 cover，兼容 cover_url）
+    cover = room.get("cover") or room.get("cover_url") or {}
+    if isinstance(cover, dict):
+        cover = cover.get("url_list") or [""]
+    cover_url = cover[0] if isinstance(cover, (list, tuple)) and cover else (cover or "")
+    if cover_url:
+        info["cover"] = cover_url
+    avatar = owner.get("avatar_thumb") or {}
+    if isinstance(avatar, dict):
+        av_list = avatar.get("url_list") or []
+        if av_list:
+            info["avatar"] = av_list[0]
+    # 粉丝数 / 累计观看（字段名兼容多种）
+    fans = _pick(owner, "follower_count", "followers") or _pick(stats, "follower_count")
+    if fans is not None:
+        info["fans"] = _fmt_count(fans)
+    total = _pick(stats, "total_user", "total_user_str", "total_user_count")
+    if total is not None:
+        info["total_viewers"] = _fmt_count(total)
+    like = _pick(stats, "like_count", "like_count_str")
+    if like is not None:
+        info["like_count"] = _fmt_count(like)
+    # 直播流（清晰度 → FLV 拉流地址），供预览播放 / 录制
+    stream_url = room.get("stream_url") or {}
+    flv = stream_url.get("flv_pull_url") or {}
+    if isinstance(flv, dict) and flv:
+        # 原画/蓝光直链在 live_core_sdk_data（flv_pull_url 最高只有 1080P）
+        core = _extract_core_streams(stream_url)
+        info["streams"] = {**core, **flv}
+        if stream_url.get("hls_pull_url"):
+            info["hls"] = stream_url["hls_pull_url"]
+    # 更新缓存（roomId 是稳定标识，缓存起来供风控时兜底）
+    if info.get("roomId"):
+        cache[cache_key] = {
+            "roomId": info["roomId"],
+            "anchor": info.get("anchor", ""),
+            "title": info.get("title", ""),
+        }
+        _save_room_cache(cache)
+        info.pop("error", None)
+        return True
+    # enter 业务失败（HTTP 200 但无房间数据）：房间不存在 / 内容不可查看（下播清除、
+    # 被封禁等）——透传官方提示，避免「无错误也无房间」的静默失败；
+    # 标记业务错误，让缓存兜底只在风控/网络故障时生效（内容不可看时用旧 roomId
+    # 强连只会得到 WS 失败的困惑表现）
+    info["error"] = (d.get("data") or {}).get("prompts") or \
+        f"未获取到房间信息（直播间可能不存在或已结束，code={d.get('status_code')}）"
+    info["_biz_error"] = True
+    return False
+
+
 def fetch_room_info(room_num, login=True):
     """通过 room/enter 接口拿房间信息 + 主播信息。
 
     login=True 合并登录 Cookie（建连拿原画流用，一次性）；
     login=False 游客态（统计采集/开播监控等高频循环用，不占用账号）。
+
+    输入可以是 web_rid 短号，也可以是 19 位长号（新格式 web_rid 本身就是长号）。
     """
-    import urllib.parse as up
     info = {"roomNum": room_num, "uniqueId": DEFAULT_UNIQUE_ID}
     cache = _load_room_cache()
     cached = cache.get(room_num, {})
@@ -92,82 +172,23 @@ def fetch_room_info(room_num, login=True):
                          if "=" in p and p.split("=", 1)[0].strip() not in have]
                 if extra:
                     cookie_str = "; ".join([cookie_str] + extra)
-            params = {
-                "aid": "6383", "app_name": "douyin_web", "live_id": "1",
-                "device_platform": "web", "language": "zh-CN", "browser_language": "zh-CN",
-                "browser_platform": "Win32", "browser_name": "Mozilla",
-                "browser_version": UA, "web_rid": room_num,
-            }
-            url = "https://live.douyin.com/webcast/room/web/enter/?" + up.urlencode(params)
-            r = c.get(url, headers={"User-Agent": UA, "Referer": f"https://live.douyin.com/{room_num}", "Cookie": cookie_str}, timeout=15)
-            if r.status_code == 200 and r.text.strip():
-                d = r.json()
-                room = (d.get("data", {}).get("data") or [{}])[0]
-                if room.get("id_str"):
-                    info["roomId"] = room["id_str"]
-                owner = room.get("owner") or {}
-                if owner.get("nickname"):
-                    info["anchor"] = owner["nickname"]
-                if room.get("title"):
-                    info["title"] = room["title"]
-                if room.get("status") is not None:
-                    info["status"] = int(room["status"])
-                stats = room.get("stats") or {}
-                if stats.get("user_count_str"):
-                    info["online"] = stats["user_count_str"]
-                # 封面 / 主播头像（弹幕姬左栏展示；web 端字段为 cover，兼容 cover_url）
-                cover = room.get("cover") or room.get("cover_url") or {}
-                if isinstance(cover, dict):
-                    cover = cover.get("url_list") or [""]
-                cover_url = cover[0] if isinstance(cover, (list, tuple)) and cover else (cover or "")
-                if cover_url:
-                    info["cover"] = cover_url
-                avatar = owner.get("avatar_thumb") or {}
-                if isinstance(avatar, dict):
-                    av_list = avatar.get("url_list") or []
-                    if av_list:
-                        info["avatar"] = av_list[0]
-                # 粉丝数 / 累计观看（字段名兼容多种）
-                fans = _pick(owner, "follower_count", "followers") or _pick(stats, "follower_count")
-                if fans is not None:
-                    info["fans"] = _fmt_count(fans)
-                total = _pick(stats, "total_user", "total_user_str", "total_user_count")
-                if total is not None:
-                    info["total_viewers"] = _fmt_count(total)
-                like = _pick(stats, "like_count", "like_count_str")
-                if like is not None:
-                    info["like_count"] = _fmt_count(like)
-                # 直播流（清晰度 → FLV 拉流地址），供预览播放 / 录制
-                stream_url = room.get("stream_url") or {}
-                flv = stream_url.get("flv_pull_url") or {}
-                if isinstance(flv, dict) and flv:
-                    # 原画/蓝光直链在 live_core_sdk_data（flv_pull_url 最高只有 1080P）
-                    core = _extract_core_streams(stream_url)
-                    info["streams"] = {**core, **flv}
-                    if stream_url.get("hls_pull_url"):
-                        info["hls"] = stream_url["hls_pull_url"]
-                # 更新缓存（roomId 是稳定标识，缓存起来供风控时兜底）
-                if info.get("roomId"):
-                    cache[room_num] = {
-                        "roomId": info["roomId"],
-                        "anchor": info.get("anchor", ""),
-                        "title": info.get("title", ""),
-                    }
-                    _save_room_cache(cache)
-            else:
-                info["error"] = f"room/enter 接口返回异常（可能被风控），状态 {r.status_code}"
+            _query_enter(info, c, room_num, cookie_str, cache, room_num)
     except Exception as e:
         info["error"] = str(e)
-    # 缓存兜底：room/enter 失败（被风控）时，用缓存的 roomId 继续连接
-    if not info.get("roomId") and cached.get("roomId"):
+    # 缓存兜底：room/enter 失败（被风控/网络故障）时，用缓存的 roomId 继续连接；
+    # 业务错误（内容不可查看/房间不存在）不兜底
+    if (not info.get("roomId") and not info.get("_biz_error")
+            and cached.get("roomId")):
         info["roomId"] = cached["roomId"]
         info["anchor"] = cached.get("anchor", "")
         info["title"] = cached.get("title", "")
         info["from_cache"] = True
     # 内置映射兜底：缓存也没有时，用已知 roomId
-    if not info.get("roomId") and room_num in KNOWN_ROOM_IDS:
+    if (not info.get("roomId") and not info.get("_biz_error")
+            and room_num in KNOWN_ROOM_IDS):
         info["roomId"] = KNOWN_ROOM_IDS[room_num]
         info["from_cache"] = True
+    info.pop("_biz_error", None)
     return info
 
 

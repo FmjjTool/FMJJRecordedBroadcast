@@ -17,35 +17,72 @@ import time
 from .utils import find_ffmpeg_exe
 
 _ffmpeg_path = [""]
+_ffmpeg_https = [False]
 
 
-def _has_rawvideo(exe):
-    """探测 ffmpeg 是否带 rawvideo 封装（预览/回放解码需要；精简版无）。"""
+def _is_full_ffmpeg(exe):
+    """完整版判定：rawvideo 封装 + https 协议。
+
+    预览/回放解码需要 rawvideo；直播拉流全是 https，需要 TLS。
+    TRAE 等工具捆绑的精简版可能带 rawvideo 但没有 TLS——PATH 命中它时
+    直播预览/录制会全部静默失败（ffmpeg 报 Protocol not found、0 字节输出），
+    必须跳过。
+    """
     try:
         r = subprocess.run([exe, "-hide_banner", "-muxers"],
                            capture_output=True, timeout=8)
-        return b"rawvideo" in r.stdout
+        if b"rawvideo" not in r.stdout:
+            return False
+        r = subprocess.run([exe, "-hide_banner", "-protocols"],
+                           capture_output=True, timeout=8)
+        return b"https" in r.stdout
     except Exception:
         return False
 
 
-def find_ffmpeg():
-    """定位 ffmpeg：缓存 → 候选中优先带 rawvideo 的完整版（PATH 可能命中精简版）。
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
 
-    候选首位是统一定位器（系统 PATH 优先 → 全局设置自定义位置），
-    其后是本机常见完整版安装位置兜底。
-    """
+
+def _live_headers(url):
+    """直播拉流请求头（ffmpeg -headers，需在 -i 前传入）。
+
+    B站 CDN（bilivideo.com）校验 Referer，缺失直接 403；多数直播 CDN 也会
+    拒绝 ffmpeg 默认的 Lavf UA——统一带浏览器 UA + 平台 Referer。
+    非网络地址（本地文件）返回 ""。"""
+    url = str(url or "")
+    if not url.startswith(("http://", "https://")):
+        return ""
+    host = url.split("/")[2].lower()
+    if "bilivideo" in host:
+        referer = "https://live.bilibili.com/"
+    elif "douyin" in host:
+        referer = "https://live.douyin.com/"
+    else:
+        referer = ""
+    hdr = f"User-Agent: {_UA}\r\n"
+    if referer:
+        hdr = f"Referer: {referer}\r\n" + hdr
+    return hdr
+
+
+def find_ffmpeg():
+    """定位 ffmpeg：缓存 → 候选中优先 rawvideo+https 完整版（PATH 可能命中
+    缺 TLS 的精简版）。找不到完整版时回退首个存在的候选（本地文件操作仍可用，
+    直播拉流会由调用方报「缺 https」错误）。"""
     if _ffmpeg_path[0]:
         return _ffmpeg_path[0]
     candidates = [find_ffmpeg_exe(),
                   "D:/Programs/ffmpeg/bin/ffmpeg.exe",
+                  "D:/Program/ffmpeg/bin/ffmpeg.exe",
                   "C:/ffmpeg/bin/ffmpeg.exe"]
     fallback = None
     for exe in candidates:
         if not exe or not os.path.exists(exe):
             continue
-        if _has_rawvideo(exe):
+        if _is_full_ffmpeg(exe):
             _ffmpeg_path[0] = exe
+            _ffmpeg_https[0] = True
             return exe
         if fallback is None:
             fallback = exe
@@ -108,6 +145,11 @@ class VideoStreamPlayer:
         if not exe:
             self._emit_status("error", "未找到 FFmpeg，无法播放视频")
             return False
+        if not _ffmpeg_https[0]:
+            self._emit_status("error",
+                              "FFmpeg 缺少 https 协议支持（精简版），无法拉取直播流；"
+                              "请在设置中指定完整版 FFmpeg")
+            return False
         self._source = source
         self._is_live = is_live
         self._start_sec = max(0.0, start_sec)
@@ -126,6 +168,9 @@ class VideoStreamPlayer:
         if is_live:
             args += ["-fflags", "nobuffer", "-flags", "low_delay",
                      "-probesize", "64k", "-analyzeduration", "0"]
+            hdr = _live_headers(source)
+            if hdr:
+                args += ["-headers", hdr]
         else:
             args += ["-ss", f"{self._start_sec:.3f}"]
         args += ["-i", source, "-vf", ",".join(filters),
@@ -241,14 +286,17 @@ class StreamRecorder:
 
     def start(self, url, out_path):
         exe = find_ffmpeg()
-        if not exe:
+        if not exe or not _ffmpeg_https[0]:
             return False
         self.stop()
         self.path = out_path
         self.start_ts = int(time.time() * 1000)
         args = [exe, "-hide_banner", "-loglevel", "error",
-                "-fflags", "nobuffer", "-i", url,
-                "-c", "copy", "-f", "flv", "-y", out_path]
+                "-fflags", "nobuffer"]
+        hdr = _live_headers(url)
+        if hdr:
+            args += ["-headers", hdr]
+        args += ["-i", url, "-c", "copy", "-f", "flv", "-y", out_path]
         try:
             self._proc = subprocess.Popen(
                 args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
