@@ -27,3 +27,5 @@ _ref/
 BililiveRecorder-dev.zip
 # 旧版依赖自检脚本（引用已删除的 app_gui.py，无调用方，仅本地保留）
 check_deps.py
+# agent 探测输出（临时文件）
+_probe.txt
