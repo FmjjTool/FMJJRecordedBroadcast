@@ -50,10 +50,14 @@ def _find_node() -> str:
 
 
 def _douyin_abogus(query: str, user_agent: str = UA_PC) -> str:
-    """调用 node 执行 a_bogus.js 生成 a_bogus 签名。"""
+    """调用 node 执行 a_bogus.js 生成 a_bogus 签名。
+
+    node 缺失/调用失败一律返回空串（调用方自行降级），不抛异常——
+    否则会击穿抖音采集的三级回退链（游客 HTTP → Playwright → Cookie）。
+    """
     cli = Path(__file__).parent / "toolbox" / "abogus_cli.js"
-    node = _find_node()
     try:
+        node = _find_node()
         out = subprocess.run(
             [node, str(cli), query, user_agent],
             capture_output=True, timeout=15, encoding="utf-8", errors="replace",

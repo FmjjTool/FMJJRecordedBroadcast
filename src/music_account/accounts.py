@@ -161,6 +161,9 @@ _URL_PATTERNS = [
     ("kugou", r'kugou\.com/singer/(\d+)', "singer"),
     ("kuwo", r'kuwo\.cn/singer_detail/(\d+)', "singer"),
     ("fivesing", r'5sing\.kugou\.com/(?:m/space/)?(\d+)(?:/default\.html|\.html)?', "user"),
+    # 音乐人自定义主页（如 5sing.kugou.com/mondai/default.html，非数字ID）
+    # 必须锚定 /default.html 后缀，避免误配 yc/fc/bz 歌曲页等子路径
+    ("fivesing", r'5sing\.kugou\.com/([A-Za-z][\w-]*)/default\.html', "user"),
 ]
 
 
