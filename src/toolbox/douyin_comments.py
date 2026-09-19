@@ -65,8 +65,10 @@ def fetch_video_info(aweme_id: str, cookie: str = "") -> dict:
            "comment_count": 0, "aweme_type": None}
     d = None
     for attempt in range(2):
-        s = _sess(cookie)
-        if not cookie:
+        # 第 2 次降级游客（登录 Cookie 失效/被风控的兜底）
+        use_ck = cookie if attempt == 0 else ""
+        s = _sess(use_ck)
+        if not use_ck:
             try:
                 s.get("https://www.douyin.com/", timeout=15)
             except Exception:
@@ -105,14 +107,16 @@ def fetch_comments(aweme_id: str, cookie: str = "", pages: int = 10,
 
     progress(stage: str, cur, total)：进度回调；should_stop() 返回 True 时中止。
     登录 Cookie 优先（游客态常被风控返回空响应）。
-    风控空响应时重建会话（刷新游客 ttwid）重试一次。
+    风控空响应重试策略：退避后重建会话，最多 3 次；登录 Cookie 连续被拦时
+    降级纯游客（Cookie 失效/被风控的兜底）。重试不消耗页数配额。
     """
     if not cookie:
         cookie = _cookie_or_guest()
+    state = {"cookie": cookie}
 
     def _new_sess():
-        s = _sess(cookie)
-        if not cookie:
+        s = _sess(state["cookie"])
+        if not state["cookie"]:
             try:
                 s.get("https://www.douyin.com/", timeout=15)
             except Exception:
@@ -120,8 +124,8 @@ def fetch_comments(aweme_id: str, cookie: str = "", pages: int = 10,
         return s
 
     s = _new_sess()
-    out, cursor, retried = [], 0, False
-    for page in range(pages):
+    out, cursor, got_pages, fails = [], 0, 0, 0
+    while got_pages < pages:
         if should_stop and should_stop():
             break
         params = {
@@ -133,7 +137,7 @@ def fetch_comments(aweme_id: str, cookie: str = "", pages: int = 10,
         a_bogus = _douyin_abogus(query, UA_PC)
         if not a_bogus:
             if progress:
-                progress("a_bogus 签名失败（node 异常）", page, pages)
+                progress("a_bogus 签名失败（node 异常）", got_pages, pages)
             break
         d = None
         try:
@@ -143,26 +147,45 @@ def fetch_comments(aweme_id: str, cookie: str = "", pages: int = 10,
         except Exception as e:
             d = None
             if progress:
-                progress(f"第{page + 1}页请求失败：{e}", page, pages)
+                progress(f"第{got_pages + 1}页请求失败：{e}", got_pages, pages)
         if d is None:
-            # 风控空响应：重建会话重试一次（登录态失效时降级游客 ttwid）
-            if retried or cookie:
+            # 风控空响应：退避 + 重建会话；登录态连续被拦则降级游客，
+            # 游客也被拦（IP 级风控）时恢复登录态做最后尝试
+            fails += 1
+            if fails > 4:
                 if progress:
-                    progress(f"第{page + 1}页被风控拦截（空响应），停止", page, pages)
+                    progress(f"第{got_pages + 1}页连续被风控拦截，停止",
+                             got_pages, pages)
                 break
-            retried = True
+            if fails == 2 and state["cookie"]:
+                state["cookie"] = ""
+                if progress:
+                    progress("登录 Cookie 疑似失效，降级游客模式重试...",
+                             got_pages, pages)
+            elif fails == 4 and cookie and not state["cookie"]:
+                state["cookie"] = cookie
+                if progress:
+                    progress("游客通道也被拦，恢复登录 Cookie 最后尝试...",
+                             got_pages, pages)
+            elif progress:
+                progress(f"第{got_pages + 1}页被风控（空响应），"
+                         f"刷新会话重试 {fails}/4...", got_pages, pages)
+            time.sleep(1.5 if fails < 3 else 3)
             s = _new_sess()
             continue
+        fails = 0
         if d.get("status_code") != 0:
             if progress:
-                progress(f"第{page + 1}页 status_code={d.get('status_code')}，停止", page, pages)
+                progress(f"第{got_pages + 1}页 status_code={d.get('status_code')}，停止",
+                         got_pages, pages)
             break
         comments = d.get("comments") or []
         out.extend(comments)
         has_more = int(d.get("has_more") or 0)
         cursor = int(d.get("cursor") or (cursor + PAGE_SIZE))
+        got_pages += 1
         if progress:
-            progress(f"已获取 {len(out)} 条评论", page + 1, pages)
+            progress(f"已获取 {len(out)} 条评论", got_pages, pages)
         if not has_more:
             break
         time.sleep(0.2)

@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import re
 import random
 import shutil
@@ -36,15 +37,33 @@ UA_M = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1
 
 
 def _find_node() -> str:
-    """查找 node 可执行文件路径。"""
+    """查找 node 可执行文件路径。
+
+    优先级：PATH → Playwright 自带 node（Windows 分发，项目已依赖，
+    桌面环境 PATH 无 node 时的关键兜底）→ 常规安装位 → TRAE 内置。
+    """
     node = shutil.which("node")
     if node:
         return node
-    for cand in (
-        r"C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\node.exe",
+    cands = []
+    # Playwright driver 自带 node.exe（playwright 已是项目依赖）
+    try:
+        import playwright as _pw
+        cands.append(str(Path(_pw.__file__).parent / "driver" / "node.exe"))
+    except Exception:
+        pass
+    local = os.environ.get("LOCALAPPDATA", "")
+    appdata = os.environ.get("APPDATA", "")
+    for extra in (
         r"C:\Program Files\nodejs\node.exe",
+        rf"{local}\Programs\nodejs\node.exe",
+        rf"{appdata}\TRAE SOLO CN\ModularData\ai-agent\vm\tools\node\node.exe",
+        rf"{appdata}\TRAE\ModularData\ai-agent\vm\tools\node\node.exe",
+        r"C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\node.exe",
     ):
-        if Path(cand).exists():
+        cands.append(extra)
+    for cand in cands:
+        if cand and Path(cand).exists():
             return cand
     raise RuntimeError("未找到 node 环境（抖音 a_bogus 签名需要）")
 
