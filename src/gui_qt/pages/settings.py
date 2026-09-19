@@ -727,6 +727,9 @@ class GlobalSettingsPage(BasePage):
          "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4"),
         ("lxml", "lxml", "_check_lxml_detail",
          "更快的 HTML/XML 解析依赖", "pip install lxml"),
+        ("douyin_sign", "抖音签名环境", "_check_douyin_sign_detail",
+         "抖音评论区/弹幕/视频详情接口的 a_bogus 签名（node 或 Playwright 内置 node）",
+         "https://nodejs.org/zh-cn"),
     ]
 
     def _refresh_dependencies(self):
@@ -857,6 +860,12 @@ class GlobalSettingsPage(BasePage):
                 exe = find_ffmpeg_exe() if key == "ffmpeg" else find_ffprobe_exe()
                 if exe not in ("ffmpeg", "ffprobe"):
                     ver_lbl.setToolTip(f"位置: {exe}")
+            elif key == "douyin_sign":
+                try:
+                    import multi_downloader as _md
+                    ver_lbl.setToolTip(f"node 位置: {_md._find_node()}")
+                except Exception:
+                    pass
             h.addWidget(ver_lbl)
             usage_lbl = QLabel(usage)
             usage_lbl.setStyleSheet(
@@ -967,6 +976,27 @@ class GlobalSettingsPage(BasePage):
             return True, f"lxml {ver}"
         except Exception:
             return False, ""
+
+    def _check_douyin_sign_detail(self):
+        """抖音签名环境：node 可用 + a_bogus 能生成签名。
+
+        node 来源（PATH / Playwright 内置 / 安装位）决定显示文案；
+        签名跑不通时抖音评论区会恒 0 条——这是它的核心诊断项。
+        """
+        import shutil
+        try:
+            import multi_downloader as md
+            sig = md._douyin_abogus(
+                "device_platform=webapp&aid=6383&count=20", md.UA_PC)
+            if not sig:
+                return False, "签名失败"
+            node = md._find_node()
+            which = shutil.which("node")
+            src = "PATH" if which and os.path.normcase(os.path.abspath(node)) \
+                == os.path.normcase(os.path.abspath(which)) else "Playwright 内置"
+            return True, f"node: {src}"
+        except Exception as e:
+            return False, f"node 未找到: {str(e)[:20]}"
 
     # ----- 缺失项快捷安装 -----
 
