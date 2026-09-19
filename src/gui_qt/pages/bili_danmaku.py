@@ -7,7 +7,7 @@
   累计点赞静默更新（LIKE_INFO_V3_UPDATE）、SC/上舰并入打赏榜（价值按 1000电池=1元 折算）
 """
 
-from toolbox.bili_live import DEFAULT_ROOM, fetch_play_url, parse_room_id_input
+from toolbox.bili_live import DEFAULT_ROOM, fetch_play_url
 from gui_qt.common import run_bg
 from gui_qt.pages.test_page import TestPage
 
@@ -17,7 +17,7 @@ class BiliDanmakuPage(TestPage):
 
     HELP_INTRO = (
         "<p><b>B站直播弹幕姬：完整复用抖音弹幕姬框架，接B站直播间实时数据。</b></p>"
-        "<p>· <b>连接</b>：房间号或直播间链接（链接自动提取房号，短号合法）；"
+        "<p>· <b>连接</b>：房间号或直播间链接（含 b23.tv 短链，自动提取房号）；"
         "留空自动填默认房间号，房间号右侧按钮连接，连接成功后变为「断开」</p>"
         "<p>· <b>实时数据</b>：弹幕 / 礼物 / SC / 上舰 / 进场 / 关注 / 点赞；"
         "主播粉丝数实时刷新，累计点赞静默更新；打赏榜价值按 1000电池=1元 折算</p>"
@@ -68,15 +68,6 @@ class BiliDanmakuPage(TestPage):
     def _rec_dir(self):
         from toolbox.config_manager import get_export_dir
         return get_export_dir() / "直播录制" / "B站弹幕姬"
-
-    def _connect(self):
-        # 支持直接粘贴 live.bilibili.com 链接（自动提取房间号）
-        text = self.room_entry.text().strip()
-        if text:
-            parsed = parse_room_id_input(text)
-            if parsed != text:
-                self.room_entry.setText(parsed)
-        super()._connect()
 
     def _on_room_info(self, info):
         """房间信息：先记下画质档位表，其余交给基类。"""

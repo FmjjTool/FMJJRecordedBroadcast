@@ -43,6 +43,7 @@ PLATFORMS = [
     ("kugou", "🐕 酷狗音乐", ["search", "song", "playlist"]),
     ("kuwo", "🐼 酷我音乐", ["search", "song", "playlist"]),
     ("5sing", "🎤 5sing音乐", ["search", "song", "playlist"]),
+    ("kugou_lite", "🎶 酷狗概念版", ["search", "song"]),
 ]
 
 MODES = [
@@ -73,6 +74,9 @@ PLACEHOLDERS = {
     "5sing": {
         "song": "歌曲页链接（例：https://5sing.kugou.com/yc/4219209.html）",
         "playlist": "歌单链接（例：https://5sing.kugou.com/65188239/dj/61d1a130683d8134f5a28493.html）",
+    },
+    "kugou_lite": {
+        "song": "歌曲 hash（32 位十六进制，可从酷狗概念版搜索结果复制）",
     },
 }
 
@@ -145,14 +149,17 @@ class NeteasePage(BasePage):
         "<p>· <b>📋 歌单解析</b>：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载</p>"
         "<p>· <b>💿 专辑解析（仅网易云）</b>：输入专辑链接/ID 或专辑名</p>"
         "<p>· <b>🔄 自动换源（默认开启）</b>：下载失败或只拿到试听片段时，"
-        "自动到其他平台搜同名曲继续下载，顺序：酷我 → 酷狗 → 网易云"
-        "（网易云换源需已在 Cookie 管理中登录）</p>"
+        "自动到其他平台搜同名曲继续下载，顺序：酷我 → 酷狗 → 酷狗概念版 → 网易云"
+        "（酷狗概念版需扫码登录；网易云换源需已在 Cookie 管理中登录）</p>"
         "<p><b>平台说明</b></p>"
         "<p>· 网易云音乐：全音质下载，VIP 歌曲需登录 Cookie</p>"
         "<p>· 酷狗音乐：免费歌 128k 直链（游客上限即 128k）；VIP 付费歌游客无法下载</p>"
         "<p>· 酷我音乐：免费歌 320k MP3 高音质直链，可选 128k WMA；VIP 歌仅 11 秒试听</p>"
         "<p>· 5sing音乐：站内原唱/翻唱/伴奏 192k/128k 全曲可下</p>"
         "<p>· QQ音乐：官方直链接口已关闭，下载靠自动换源到其他平台</p>"
+        "<p>· <b>酷狗概念版</b>：扫码登录后可下 128k/320k/FLAC；"
+        "在 Cookie 管理扫码登录后点「🎁 领VIP」可免费领取会员（+3小时/次，每日 8 次），"
+        "VIP 曲目即可下载</p>"
         "<p style='color:#888'>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
         "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录 Cookie 下载。"
         "网易云 Cookie 文件：netease/cookie.txt；也可左侧底部「🍪 管理 Cookie → 网易云」"
@@ -214,8 +221,8 @@ class NeteasePage(BasePage):
         self.fallback_check.setChecked(self._load_fallback())
         self.fallback_check.toggled.connect(self._save_fallback)
         self.fallback_check.setToolTip(
-            "下载失败或仅试听时，自动到其他平台找同名曲：酷我→酷狗→网易云\n"
-            "（网易云需已在 Cookie 管理中登录）")
+            "下载失败或仅试听时，自动到其他平台找同名曲：酷我→酷狗→酷狗概念版→网易云\n"
+            "（酷狗概念版需扫码登录；网易云需已在 Cookie 管理中登录）")
         bottom.addWidget(self.fallback_check)
         bottom.addWidget(QLabel("音质:"))
         self.quality_menu = QComboBox()

@@ -743,6 +743,9 @@ def _guest_buvid() -> str:
     return ""
 
 
+_danmu_auth_cache: dict = {}    # room_id -> {"token", "host", "ts"}（弹幕 WS 鉴权 10 分钟复用）
+
+
 def get_danmaku_auth(room_id: str) -> dict:
     """弹幕鉴权信息 {token, host}：游客HTTP(WBI签名) → 游客Playwright → 登录Cookie 三级回退。
 
@@ -757,6 +760,12 @@ def get_danmaku_auth(room_id: str) -> dict:
         hosts = [h.get("host") for h in (data.get("host_list") or []) if h.get("host")]
         return {"token": data.get("token") or "", "host": hosts[0] if hosts else ""}
 
+    # 弹幕姬切页自动断开重连，重连不该再走三级鉴权（一级 ~1.4s，
+    # 被风控时二级 Playwright 10s+）→ token 按 room 缓存 10 分钟
+    c = _danmu_auth_cache.get(room_id)
+    if c and c.get("token") and time.time() - c["ts"] < 600:
+        return {"token": c["token"], "host": c.get("host") or ""}
+
     # 一级：游客 HTTP + WBI 签名 + buvid 设备指纹
     try:
         from bili.wbi import build_cookie_header, sign_wbi
@@ -766,6 +775,7 @@ def get_danmaku_auth(room_id: str) -> dict:
             r = c.get(url, headers={**hdr, "Cookie": ck})
             out = _parse(r.json().get("data") or {})
             if out["token"]:
+                _danmu_auth_cache[room_id] = {**out, "ts": time.time()}
                 return out
     except Exception:
         pass
@@ -773,6 +783,7 @@ def get_danmaku_auth(room_id: str) -> dict:
     try:
         out = _danmaku_token_playwright(room_id)
         if out.get("token"):
+            _danmu_auth_cache[room_id] = {**out, "ts": time.time()}
             return out
     except Exception:
         pass
@@ -786,7 +797,10 @@ def get_danmaku_auth(room_id: str) -> dict:
                 ck = build_cookie_header(c, login)
                 r = c.get(api, params={"id": room_id, "type": 0},
                           headers={**hdr, "Cookie": ck})
-                return _parse(r.json().get("data") or {})
+                out = _parse(r.json().get("data") or {})
+                if out.get("token"):
+                    _danmu_auth_cache[room_id] = {**out, "ts": time.time()}
+                return out
     except Exception:
         pass
     return {"token": "", "host": ""}
@@ -804,22 +818,37 @@ def _danmaku_token_playwright(room_id: str) -> dict:
             captured = {}
 
             def _on_resp(resp):
-                if not captured and "getDanmuInfo" in resp.url:
-                    try:
-                        data = resp.json().get("data") or {}
-                        captured["token"] = data.get("token") or ""
-                        hosts = [h.get("host") for h in (data.get("host_list") or [])
-                                 if h.get("host")]
-                        captured["host"] = hosts[0] if hosts else ""
-                    except Exception:
-                        pass
+                # 守卫看 token 而非 captured 本身：首个响应可能被 -352 拦
+                # （token 空），页面后续重发的成功响应要能覆盖进来
+                if captured.get("token") or "getDanmuInfo" not in resp.url:
+                    return
+                try:
+                    data = resp.json().get("data") or {}
+                    captured["token"] = data.get("token") or ""
+                    hosts = [h.get("host") for h in (data.get("host_list") or [])
+                             if h.get("host")]
+                    captured["host"] = hosts[0] if hosts else ""
+                except Exception:
+                    pass
 
             page.on("response", _on_resp)
+            # domcontentloaded 是必要的：实测 commit 返回时页面会过早发出
+            # 未完成指纹注册的 getDanmuInfo（被 -352 拦后页面不再重试），
+            # DCL 下页面自身请求 ~2~4s 到且带签名可通过
             page.goto(f"https://live.bilibili.com/{room_id}",
                       wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(6000)
+            # 轮询等拦截结果（原固定 6 秒等待，实测 token ~4s 到，早退省 2s）；
+            # 注意：不能提前页内 fetch —— 未完成指纹注册的请求全被 -352 拦，
+            # 且高频失败请求疑似触发风控（实测连发 12 次后 11s 仍全拦）
+            deadline = time.time() + 6.0
+            while time.time() < deadline and not captured.get("token"):
+                try:
+                    page.wait_for_timeout(150)
+                except Exception:
+                    break
             if not captured.get("token"):
-                # 页面未触发该请求（缓存等）→ 页面上下文内主动 fetch（带浏览器指纹）
+                # 窗口期未拦截到（页面未触发该请求）→ 页面上下文内主动 fetch
+                # （带浏览器指纹；此时页面已就绪，实测可过）
                 url = (f"https://api.live.bilibili.com/xlive/web-room/v1/index/"
                        f"getDanmuInfo?id={room_id}&type=0")
                 try:
@@ -843,8 +872,18 @@ def _danmaku_token_playwright(room_id: str) -> dict:
 
 
 def parse_room_id_input(text: str) -> str:
-    """输入清洗：支持纯数字房间号 / live.bilibili.com 链接。"""
+    """输入清洗：纯数字房间号 / live.bilibili.com 链接 / b23.tv 短链（跟随跳转）。"""
     text = (text or "").strip()
+    if "b23.tv/" in text:
+        m = re.search(r"b23\.tv/([0-9A-Za-z]+)", text)
+        if m:
+            try:
+                with httpx.Client(timeout=6, follow_redirects=True) as c:
+                    r = c.get(f"https://b23.tv/{m.group(1)}",
+                              headers={"User-Agent": UA})
+                    text = str(r.url) or text
+            except Exception:
+                pass
     m = re.search(r"live\.bilibili\.com/(?:h5/)?(\d+)", text)
     if m:
         return m.group(1)

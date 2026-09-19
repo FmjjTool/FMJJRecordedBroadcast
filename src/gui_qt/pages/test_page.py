@@ -438,14 +438,16 @@ class TestPage(BasePage):
         dlg.setMinimumWidth(520)
         v = QVBoxLayout(dlg)
         tip = QLabel(
-            "粘贴抖音 / B站直播间链接（支持带参数的推荐页、首页链接），\n"
-            "自动提取房间号并填入：")
+            "粘贴抖音 / B站直播间链接（支持带参数的推荐页、首页链接、\n"
+            "v.douyin.com / b23.tv 短链），自动提取房间号并填入：")
         tip.setStyleSheet("color: #888;")
         v.addWidget(tip)
         edit = QPlainTextEdit()
         edit.setPlaceholderText(
             "https://live.douyin.com/?activity_name=&anchor_id=740437292495388&...&live_web_rid=519524225110...\n"
             "https://live.douyin.com/582775732015\n"
+            "https://v.douyin.com/iXXXXXXX/\n"
+            "https://b23.tv/XXXXXXX\n"
             "https://live.bilibili.com/33989")
         edit.setMinimumHeight(110)
         v.addWidget(edit)
@@ -454,23 +456,39 @@ class TestPage(BasePage):
         result_lbl.setWordWrap(True)
         v.addWidget(result_lbl)
 
+        def _resolve_async(txt, cb):
+            """识别房间号（短链放后台解析，结果回主线程回调 cb(room)）。"""
+            room = self._parse_room_link(txt)
+            if room or not self._short_link_re().search(txt):
+                cb(room)
+                return
+            result_lbl.setText("⏳ 正在解析短链...")
+            def run():
+                final = self._resolve_room_text(txt)
+                def done():
+                    cb(final)
+                post_to_main(done)
+            run_bg(run, lambda *_: None)
+
         def on_parse():
-            room = self._parse_room_link(edit.toPlainText())
-            if room:
-                result_lbl.setText(f"✅ 识别到房间号：{room}")
-                result_lbl.setStyleSheet("color: #2e7d32; font-weight: bold;")
-            else:
-                result_lbl.setText("❌ 未识别到房间号（检查链接是否完整）")
-                result_lbl.setStyleSheet("color: #c62828; font-weight: bold;")
+            def show(room):
+                if room:
+                    result_lbl.setText(f"✅ 识别到房间号：{room}")
+                    result_lbl.setStyleSheet("color: #2e7d32; font-weight: bold;")
+                else:
+                    result_lbl.setText("❌ 未识别到房间号（检查链接是否完整）")
+                    result_lbl.setStyleSheet("color: #c62828; font-weight: bold;")
+            _resolve_async(edit.toPlainText(), show)
 
         def on_apply():
-            room = self._parse_room_link(edit.toPlainText())
-            if not room:
-                on_parse()
-                return
-            self.room_entry.setText(room)
-            self.app.toast(f"已填入房间号 {room}", "success")
-            dlg.accept()
+            def apply(room):
+                if not room:
+                    on_parse()
+                    return
+                self.room_entry.setText(room)
+                self.app.toast(f"已填入房间号 {room}", "success")
+                dlg.accept()
+            _resolve_async(edit.toPlainText(), apply)
 
         btn_row = QVBoxLayout()
         parse_btn = QPushButton("🔍 识别")
@@ -1803,7 +1821,60 @@ class TestPage(BasePage):
         else:
             btn.setStyleSheet("background: #2e7d32; color: white;")
 
+    _SHORT_LINK_RE = None    # 延迟编译（re 模块在方法内导入）
+
+    @classmethod
+    def _short_link_re(cls):
+        import re
+        if cls._SHORT_LINK_RE is None:
+            cls._SHORT_LINK_RE = re.compile(
+                r"https?://(?:v\.douyin\.com|b23\.tv)/[0-9A-Za-z]+")
+        return cls._SHORT_LINK_RE
+
+    def _resolve_room_text(self, text: str) -> str:
+        """任意输入 → 房间号。含短链跳转解析（网络请求，须在后台线程调用）。"""
+        room = self._parse_room_link(text)
+        if room:
+            return room
+        m = self._short_link_re().search(text or "")
+        if not m:
+            return ""
+        try:
+            import httpx
+            with httpx.Client(timeout=8, follow_redirects=True) as c:
+                r = c.get(m.group(0), headers={"User-Agent": _IMG_UA})
+                return self._parse_room_link(str(r.url))
+        except Exception:
+            return ""
+
     def _connect(self):
+        """连接入口：输入框支持直接粘贴链接（含 v.douyin.com / b23.tv 短链）。"""
+        text = self.room_entry.text().strip()
+        if text and not text.isdigit():
+            room = self._parse_room_link(text)
+            if room:
+                if room != text:
+                    self.room_entry.setText(room)
+                self._do_connect()
+                return
+            if self._short_link_re().search(text):
+                # 短链解析含网络请求 → 后台线程，避免阻塞 UI
+                self._set_action_btn("解析链接…", "connect", enabled=False)
+                def run():
+                    final = self._resolve_room_text(text)
+                    def done():
+                        if final:
+                            self.room_entry.setText(final)
+                            self._do_connect()
+                        else:
+                            self._set_action_btn("连接", "connect", enabled=True)
+                            self.app.toast("短链解析失败：请打开链接复制完整地址", "error")
+                    post_to_main(done)
+                run_bg(run, lambda *_: None)
+                return
+        self._do_connect()
+
+    def _do_connect(self):
         room = self.room_entry.text().strip()
         if not room:
             # 未填房间号：自动填入默认房号（上次使用的，无效则回退内置默认）

@@ -51,6 +51,7 @@ from gui_qt.pages.image_crop import ImageCropPage
 from gui_qt.pages.cover_maker import CoverMakerPage
 from gui_qt.pages.image_sorter import ImageSorterPage
 from gui_qt.pages.media_compress import MediaCompressPage
+from gui_qt.pages.video_comments import VideoCommentsPage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> 页面类
@@ -77,6 +78,7 @@ PAGE_CLASSES = {
     "music_tracker": MusicTrackerPage,
     "test_page": TestPage,
     "bili_resource": BiliResourcePage,
+    "video_comments": VideoCommentsPage,
     "file_time": FileTimePage,
     "rename_batch": RenameBatchPage,
     "tickets": TicketsPage,
@@ -96,6 +98,7 @@ NAV_GROUPS = [
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
         ("bili_resource", "🎁 B站资源"),
+        ("video_comments", "💬 视频评论区"),
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
@@ -143,6 +146,7 @@ NAV_GROUPS = [
 ]
 
 # Cookie 管理平台列表：(key, 中文名, 是否支持扫码登录, 是否支持浏览器登录)
+# 酷狗概念版登录态是会话文件（非 Cookie），计数时单独判断
 COOKIE_PLATFORMS = [
     ("bilibili", "B站", True, True),
     ("douyin", "抖音", False, True),
@@ -150,6 +154,7 @@ COOKIE_PLATFORMS = [
     ("netease", "网易云", True, False),
     ("qq", "QQ音乐", True, True),
     ("kugou", "酷狗", False, True),
+    ("kugou_lite", "酷狗概念版", True, False),
     ("kuwo", "酷我", False, True),
     ("5sing", "5sing", False, True),
     ("xiaohongshu", "小红书", False, True),
@@ -410,6 +415,12 @@ class MainWindow(QMainWindow):
             for plat, _name, _qr, _browser in COOKIE_PLATFORMS:
                 if plat == "netease":
                     ok = netease_ok
+                elif plat == "kugou_lite":
+                    try:
+                        from music.scrapers.kugou_lite import session_logged_in
+                        ok = session_logged_in()
+                    except Exception:
+                        ok = False
                 else:
                     ok = bool(cookies.get(plat, "") and len(cookies.get(plat, "")) > 10)
                 if ok:

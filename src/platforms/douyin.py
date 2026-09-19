@@ -304,7 +304,8 @@ class DouyinParser(PlatformBase):
             try:
                 user_url = f"https://www.douyin.com/user/{sec_uid}"
                 print(f"[抖音-Playwright] 加载: {user_url[:60]}...")
-                page.goto(user_url, wait_until="domcontentloaded", timeout=20000)
+                # 抖音主页资源重、加载慢，20s 实测会超时（2026-09-18），放宽到 60s
+                page.goto(user_url, wait_until="domcontentloaded", timeout=60000)
 
                 # 页面内嵌数据（RENDER_DATA/SSR 首屏）合并进 collected（与 API 拦截去重）
                 def _merge_html_items():

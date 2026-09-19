@@ -22,7 +22,8 @@ import auth
 from gui_qt.common import post_to_main
 
 # (key, 中文名, 支持扫码, 支持浏览器登录)
-# 扫码：网易云/B站 原生接口，QQ音乐 走微信扫码换 musickey；
+# 扫码：网易云/B站 原生接口，QQ音乐 走微信扫码换 musickey，
+# 酷狗概念版 走概念版登录接口（会话存 config/kugou_lite_session.json，非 Cookie）；
 # 酷狗/酷我/5sing/小红书/快手/淘宝 无公开扫码 API，登录页内扫码由「浏览器」入口承载
 COOKIE_PLATFORMS = [
     ("bilibili", "B站", True, True),
@@ -31,12 +32,44 @@ COOKIE_PLATFORMS = [
     ("netease", "网易云", True, False),
     ("qq", "QQ音乐", True, True),
     ("kugou", "酷狗", False, True),
+    ("kugou_lite", "酷狗概念版", True, False),
     ("kuwo", "酷我", False, True),
     ("5sing", "5sing", False, True),
     ("xiaohongshu", "小红书", False, True),
     ("kuaishou", "快手", False, True),
     ("taobao", "淘宝", False, True),
 ]
+
+
+def _kugou_lite_state() -> tuple[bool, str]:
+    """酷狗概念版登录态：会话文件判断 + userid 展示。返回 (已登录, userid文本)。"""
+    try:
+        from music.scrapers.kugou_lite import load_session
+        d = load_session()
+        if d.get("token"):
+            return True, str(d.get("userid") or "")
+    except Exception:
+        pass
+    return False, ""
+
+
+def _kugou_lite_age() -> str:
+    """酷狗概念版会话文件保存时长描述（按文件修改时间）。"""
+    try:
+        from music.scrapers.kugou_lite import session_file
+        f = session_file()
+        if not f.exists():
+            return ""
+        delta = time.time() - f.stat().st_mtime
+        if delta >= 86400:
+            return f"{int(delta // 86400)}天前"
+        if delta >= 3600:
+            return f"{int(delta // 3600)}小时前"
+        if delta >= 60:
+            return f"{int(delta // 60)}分钟前"
+        return "刚刚"
+    except Exception:
+        return ""
 
 
 def _legacy_profile_dir(plat: str) -> str:
@@ -295,6 +328,9 @@ class CookieManagerDialog(QDialog):
             if plat == "netease":
                 has = netease_has
                 age = auth.get_cookie_age("netease") if has else ""
+            elif plat == "kugou_lite":
+                has, _uid = _kugou_lite_state()
+                age = _kugou_lite_age() if has else ""
             else:
                 has = bool(cookies.get(plat, "") and len(cookies.get(plat, "")) > 10)
                 age = auth.get_cookie_age(plat)
@@ -306,11 +342,14 @@ class CookieManagerDialog(QDialog):
             row.addStretch(1)
             if has:
                 row.addWidget(self._btn("验证", lambda p=plat: self._verify(p)))
+            if plat == "kugou_lite":
+                row.addWidget(self._btn("🎁 领VIP", lambda: self._kugou_lite_claim_vip(), True))
             if can_qr:
                 row.addWidget(self._btn("扫码登录", lambda p=plat: self._qr_login(p), True))
             if can_browser:
                 row.addWidget(self._btn("浏览器", lambda p=plat: self._browser_login(p)))
-            row.addWidget(self._btn("输入", lambda p=plat: self._input(p)))
+            if plat != "kugou_lite":
+                row.addWidget(self._btn("输入", lambda p=plat: self._input(p)))
             row.addWidget(self._btn("清除", lambda p=plat: self._clear(p), danger=True))
             w = QWidget()
             w.setLayout(row)
@@ -386,9 +425,13 @@ class CookieManagerDialog(QDialog):
             if labels and labels[0].text() == auth.PLATFORM_NAMES.get(plat):
                 if plat == "netease":
                     has = bool(auth.get_netease_cookie_stored().strip())
+                    age = auth.get_cookie_age(plat) if has else ""
+                elif plat == "kugou_lite":
+                    has, _uid = _kugou_lite_state()
+                    age = _kugou_lite_age() if has else ""
                 else:
                     has = bool((auth.load_cookies().get(plat, "") or "").strip())
-                age = auth.get_cookie_age(plat) if has else ""
+                    age = auth.get_cookie_age(plat) if has else ""
                 labels[1].setText(self._status_text(plat, has, age))
                 labels[1].setStyleSheet(self._status_color(plat, has))
                 return
@@ -396,7 +439,35 @@ class CookieManagerDialog(QDialog):
     def _verify(self, plat):
         """手动验证：清缓存重新拉取登录用户名。"""
         self._whoami_cache.pop(plat, None)
+        if plat == "kugou_lite":
+            self._kugou_lite_verify()
+            return
         self._start_probe(plat)
+
+    def _kugou_lite_verify(self):
+        """酷狗概念版验证登录：轻量搜索请求校验 token（会话文件，不走 whoami）。"""
+        self._whoami_cache["kugou_lite"] = "probing"
+        self._render_status("kugou_lite")
+
+        def run():
+            info = {"ok": None, "username": ""}
+            msg = ""
+            try:
+                from music.scrapers.kugou_lite import KuGouLiteClient
+                ok, msg = KuGouLiteClient().verify_session()
+                info = {"ok": ok, "username": ""}
+            except Exception as e:  # noqa: BLE001 - 网络异常按验证失败展示
+                info = {"ok": False, "username": ""}
+                msg = str(e)
+
+            def done():
+                self._whoami_cache["kugou_lite"] = info
+                self._render_status("kugou_lite")
+                if info.get("ok") is False:
+                    QMessageBox.warning(self, "酷狗概念版验证", f"❌ {msg}")
+            post_to_main(done)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _btn(self, text, slot, primary=False, danger=False):
         b = QPushButton(text)
@@ -438,11 +509,15 @@ class CookieManagerDialog(QDialog):
         name = PLATFORM_NAMES.get(plat, plat)
         try:
             auth.clear_cookie(plat)
+            if plat == "kugou_lite":
+                # 概念版登录态在会话文件（非 Cookie 统一存储），需一并清除
+                from music.scrapers.kugou_lite import clear_session
+                clear_session()
             self._whoami_cache.pop(plat, None)
             self._reload()
             self._notify()
         except Exception as e:
-            QMessageBox.critical(self, "清除失败", f"{name} Cookie 清除失败：\n{e}")
+            QMessageBox.critical(self, "清除失败", f"{name} 清除失败：\n{e}")
 
     def _browser_login(self, plat):
         """内嵌登录：系统浏览器（Edge→Chrome）经 Playwright 有头启动，Win32 句柄
@@ -679,6 +754,74 @@ class CookieManagerDialog(QDialog):
             self._bilibili_qr()
         elif plat == "qq":
             self._qq_qr()
+        elif plat == "kugou_lite":
+            self._kugou_lite_qr()
+
+    def _kugou_lite_qr(self):
+        """酷狗概念版扫码登录：v2/qrcode 生成（官方 base64 图）→ 轮询 get_userinfo_qrcode。
+
+        会话（token/userid）存 config/kugou_lite_session.json，登录后免扫码。
+        """
+        dlg, qr_label, status = self._qr_dialog("酷狗概念版扫码登录")
+
+        def run():
+            try:
+                from music.scrapers.kugou_lite import KuGouLiteClient
+                client = KuGouLiteClient()
+                key, png = client.qr_create()
+                self._show_qr_bytes(qr_label, png)
+                post_to_main(status.setText, "📱 请用酷狗概念版 App 扫码")
+                while dlg.isVisible():
+                    time.sleep(2)
+                    r = client.qr_poll(key)
+                    st = r.get("status")
+                    if st == 4 and r.get("logged_in"):
+                        post_to_main(self._on_qr_success, dlg,
+                                    "酷狗概念版登录成功（会话已保存，下次免扫码）")
+                        return
+                    if st == 4:
+                        post_to_main(status.setText, "❌ 已确认但未返回 token，请重试")
+                        return
+                    if st == 0:
+                        post_to_main(status.setText, "⚠️ 二维码已失效，请重新登录")
+                        return
+                    if st == 2:
+                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                    elif r.get("message") and st != 1:
+                        post_to_main(status.setText, f"⏳ {r['message']}")
+            except Exception as e:
+                post_to_main(status.setText, f"❌ {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _kugou_lite_claim_vip(self):
+        """酷狗概念版领 VIP：广告播放上报（每次 +3 小时，每日 8 次上限）。
+
+        无登录态时提示先扫码；领取结果弹窗展示。
+        """
+        try:
+            from music.scrapers.kugou_lite import session_logged_in
+            if not session_logged_in():
+                QMessageBox.information(
+                    self, "未登录", "请先在酷狗概念版行点「扫码登录」，登录后才能领取 VIP。")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"读取登录态失败：\n{e}")
+            return
+
+        def run():
+            from music.scrapers.kugou_lite import KuGouLiteClient
+            ok, msg = KuGouLiteClient().claim_vip()
+
+            def done():
+                QMessageBox.information(
+                    self, "领取 VIP",
+                    f"{'✅' if ok else '❌'} {msg}\n\n"
+                    "概念版每天可领 8 次（每次 +3 小时），领满 24 小时即可当日无损下载。")
+                self._reload()
+            post_to_main(done)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _qr_dialog(self, title):
         dlg = QDialog(self)

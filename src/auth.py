@@ -95,6 +95,7 @@ PLATFORM_NAMES = {
     "netease": "网易云",
     "qq": "QQ音乐",
     "kugou": "酷狗",
+    "kugou_lite": "酷狗概念版",
     "kuwo": "酷我",
     "5sing": "5sing",
     "xiaohongshu": "小红书",

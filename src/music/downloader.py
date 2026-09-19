@@ -187,11 +187,27 @@ def _url_qq(song: SongInfo, quality: str) -> _UrlResult:
     return _UrlResult(error="QQ音乐直链接口已收紧（需 VIP 登录态），当前仅支持解析，暂不支持下载")
 
 
+def _url_kugou_lite(song: SongInfo, quality: str) -> _UrlResult:
+    """酷狗概念版直链：v5/url（登录态 + 概念版免费 VIP 可下高音质/无损）。"""
+    from .scrapers.kugou_lite import KuGouLiteClient, QUALITY_MAP
+    q = QUALITY_MAP.get(quality, "128")
+    try:
+        url, ext = KuGouLiteClient().song_url(song.song_id, q)
+    except RuntimeError as e:
+        return _UrlResult(error=f"酷狗概念版：{e}")
+    except Exception as e:
+        return _UrlResult(error=f"酷狗概念版请求异常：{e}")
+    ext = (ext or "mp3").lower().lstrip(".")
+    tag = {"128": "128kbps", "320": "320kbps", "flac": "FLAC"}.get(q, q)
+    return _UrlResult(url=url, ext=f".{ext}", quality=tag)
+
+
 _RESOLVERS = {
     "kugou": _url_kugou,
     "kuwo": _url_kuwo,
     "5sing": _url_fivesing,
     "qq": _url_qq,
+    "kugou_lite": _url_kugou_lite,
 }
 
 _REFERERS = {
@@ -199,6 +215,7 @@ _REFERERS = {
     "kuwo": "https://kuwo.cn/",
     "5sing": "https://5sing.kugou.com/",
     "qq": "https://y.qq.com/",
+    "kugou_lite": "https://www.kugou.com/",
 }
 
 
@@ -225,7 +242,7 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
 
 
 def platform_downloadable(platform: str) -> bool:
-    return platform in ("kugou", "kuwo", "5sing")
+    return platform in ("kugou", "kuwo", "5sing", "kugou_lite")
 
 
 def quality_options(platform: str) -> list[tuple[str, str]]:
@@ -236,6 +253,8 @@ def quality_options(platform: str) -> list[tuple[str, str]]:
         return [("128k", "128k（游客上限）")]
     if platform == "kuwo":
         return [("320k", "320k MP3 高音质"), ("128k", "128k WMA")]
+    if platform == "kugou_lite":
+        return [("128k", "128k MP3"), ("320k", "320k MP3"), ("flac", "FLAC 无损")]
     if platform == "qq":
         return [("default", "默认（下载走换源）")]
     return [("default", "默认")]
@@ -243,14 +262,16 @@ def quality_options(platform: str) -> list[tuple[str, str]]:
 
 def default_quality(platform: str) -> str:
     """平台默认音质（换源下载到其他平台时使用该平台最优档）。"""
-    return {"kuwo": "320k", "kugou": "128k", "5sing": "hq"}.get(platform, "")
+    return {"kuwo": "320k", "kugou": "128k", "5sing": "hq",
+            "kugou_lite": "320k"}.get(platform, "")
 
 
 # ---------------------------------------------------------------------------
 # 跨平台智能换源：失败/仅试听时，去其他平台找同名曲
 
-_FALLBACK_ORDER = ["kuwo", "kugou"]
-_FALLBACK_NAMES = {"kuwo": "酷我", "kugou": "酷狗", "netease": "网易云"}
+_FALLBACK_ORDER = ["kuwo", "kugou", "kugou_lite"]
+_FALLBACK_NAMES = {"kuwo": "酷我", "kugou": "酷狗", "kugou_lite": "酷狗概念版",
+                   "netease": "网易云"}
 
 
 def _norm_text(s: str) -> str:
@@ -292,10 +313,14 @@ def _find_on(platform: str, song: SongInfo):
     """在指定平台搜索同名曲，返回最佳候选 SongInfo（无则 None）。"""
     from .scrapers.kuwo import KuwoScraper
     from .scrapers.kugou import KugouScraper
+    from .scrapers.kugou_lite import KuGouLiteScraper
     keyword = f"{song.song_name} {song.singer}".strip()
     try:
         if platform == "kuwo":
             cands = KuwoScraper().search_song(keyword, 1, 20) or []
+        elif platform == "kugou_lite":
+            # 概念版搜索需登录，未登录抛异常 → 跳过
+            cands = KuGouLiteScraper().search_song(keyword, 1, 20) or []
         else:
             cands = KugouScraper().search_song(keyword, 1, 20) or []
     except Exception:

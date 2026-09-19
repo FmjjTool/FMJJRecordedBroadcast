@@ -148,6 +148,24 @@ def _query_enter(info, c, web_rid, cookie_str, cache, cache_key):
     return False
 
 
+_ttwid_cache = {"value": "", "ts": 0.0}   # 游客 ttwid 缓存（6 小时内复用，免每次访问首页）
+
+
+def _ttwid_valid() -> bool:
+    return bool(_ttwid_cache["value"]) and time.time() - _ttwid_cache["ts"] < 6 * 3600
+
+
+def _merge_login_cookie(cookie_str: str, login_cookie: str) -> str:
+    """把登录 Cookie 合并进会话 Cookie 串（不覆盖已有键）。"""
+    if not login_cookie:
+        return cookie_str
+    have = {p.split("=", 1)[0].strip()
+            for p in cookie_str.split(";") if "=" in p}
+    extra = [p.strip() for p in login_cookie.split(";")
+             if "=" in p and p.split("=", 1)[0].strip() not in have]
+    return "; ".join([cookie_str] + extra) if extra else cookie_str
+
+
 def fetch_room_info(room_num, login=True):
     """通过 room/enter 接口拿房间信息 + 主播信息。
 
@@ -159,20 +177,38 @@ def fetch_room_info(room_num, login=True):
     info = {"roomNum": room_num, "uniqueId": DEFAULT_UNIQUE_ID}
     cache = _load_room_cache()
     cached = cache.get(room_num, {})
+
+    def _session_cookies() -> str:
+        cs = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
+        return _merge_login_cookie(cs, login_cookie)
+
     try:
         with httpx.Client(headers={"User-Agent": UA, "Referer": "https://live.douyin.com/"}, follow_redirects=True) as c:
-            c.get(f"https://live.douyin.com/{room_num}", timeout=15)
-            cookie_str = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
-            # 合并 Cookie 管理器的抖音登录 Cookie（匿名 cookie 拿不到原画等高画质流）
             login_cookie = _get_douyin_cookie() if login else ""
-            if login_cookie:
-                have = {p.split("=", 1)[0].strip()
-                        for p in cookie_str.split(";") if "=" in p}
-                extra = [p.strip() for p in login_cookie.split(";")
-                         if "=" in p and p.split("=", 1)[0].strip() not in have]
-                if extra:
-                    cookie_str = "; ".join([cookie_str] + extra)
-            _query_enter(info, c, room_num, cookie_str, cache, room_num)
+            # 游客 ttwid 缓存命中：跳过首页访问（实测省 ~1s；enter 失败再回源刷新）
+            used_cache = False
+            if _ttwid_valid():
+                c.cookies.set("ttwid", _ttwid_cache["value"], domain=".douyin.com")
+                used_cache = True
+            else:
+                c.get(f"https://live.douyin.com/{room_num}", timeout=15)
+                ttwid = c.cookies.get("ttwid") or ""
+                if ttwid:
+                    _ttwid_cache["value"] = ttwid
+                    _ttwid_cache["ts"] = time.time()
+            ok = _query_enter(info, c, room_num, _session_cookies(), cache, room_num)
+            if not ok and used_cache:
+                # 缓存的 ttwid 可能已失效：回源刷新一次再试
+                c.cookies.delete("ttwid", domain=".douyin.com")
+                try:
+                    c.get(f"https://live.douyin.com/{room_num}", timeout=15)
+                    ttwid = c.cookies.get("ttwid") or ""
+                    if ttwid:
+                        _ttwid_cache["value"] = ttwid
+                        _ttwid_cache["ts"] = time.time()
+                    _query_enter(info, c, room_num, _session_cookies(), cache, room_num)
+                except Exception:
+                    pass
     except Exception as e:
         info["error"] = str(e)
     # 缓存兜底：room/enter 失败（被风控/网络故障）时，用缓存的 roomId 继续连接；
@@ -1342,6 +1378,23 @@ class DouyinLiveFetcher:
         except Exception:
             return False
 
+    @classmethod
+    def _wait_acrawler(cls, page, timeout: float = 4.0) -> bool:
+        """轮询等待 mssdk.js 就绪（150ms 间隔，就绪即返回）。
+
+        goto(wait_until="commit") 后 JS 上下文可能尚未建立，evaluate 会抛
+        "Execution context" 类异常 → 视为未就绪继续等。超时返回 False（风控）。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if cls._has_acrawler(page):
+                return True
+            try:
+                page.wait_for_timeout(150)
+            except Exception:
+                break
+        return cls._has_acrawler(page)
+
     @staticmethod
     def _format_line(name, nickname, content):
         """构建 '[昵称]：内容' 格式字符串（不含时间戳，时间戳由 UI 端加）。
@@ -1404,11 +1457,17 @@ class DouyinLiveFetcher:
                 ctx = browser.new_context(**ctx_kwargs)
                 _inject_cookie(ctx)
                 page = ctx.new_page()
-                page.goto(f"https://live.douyin.com/{self.room_num}", wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(4000)
-
-                # 检测风控：byted_acrawler（mssdk.js）未加载 → 触发验证码
-                if not self._has_acrawler(page):
+                # commit 即返回（DOM 未就绪由下方 acrawler 轮询兜底），
+                # domcontentloaded 要等整个 DOM 解析完成，实测多耗 1.5~2s
+                try:
+                    page.goto(f"https://live.douyin.com/{self.room_num}",
+                              wait_until="commit", timeout=30000)
+                except Exception:
+                    page.goto(f"https://live.douyin.com/{self.room_num}",
+                              wait_until="domcontentloaded", timeout=30000)
+                # 等 mssdk.js（byted_acrawler）就绪：150ms 轮询、就绪即返回
+                # （原固定 4 秒等待，实测 acrawler 在 goto 后 0~1 秒内就绪，白等 3 秒+）
+                if not self._wait_acrawler(page, timeout=4.0):
                     browser.close()
                     self._emit(self.on_status, "captcha", "检测到抖音风控，请在弹出的浏览器窗口手动完成验证码...")
                     # 切换有头浏览器，弹出验证窗口，等待用户手动过验证码

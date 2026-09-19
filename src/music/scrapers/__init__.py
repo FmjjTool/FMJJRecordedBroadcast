@@ -7,6 +7,7 @@ from .netease import NeteaseScraper
 from .kugou import KugouScraper
 from .kuwo import KuwoScraper
 from .fivesing import FiveSingScraper
+from .kugou_lite import KuGouLiteScraper
 
 __all__ = [
     "QQMusicScraper",
@@ -14,4 +15,5 @@ __all__ = [
     "KugouScraper",
     "KuwoScraper",
     "FiveSingScraper",
+    "KuGouLiteScraper",
 ]
