@@ -1499,8 +1499,12 @@ class AssetPage(BasePage):
         return {"8K": 127, "杜比视界": 126, "HDR": 125, "4K": 120,
                 "1080P60": 116, "1080P": 80, "720P": 64, "480P": 32}.get(label)
 
-    def _download_for_item(self, it, force=False, on_finished=None, quiet=False):
-        """按平台下载（防重复点击：下载中/已完成分别提示；force=True 强制重下）。"""
+    def _download_for_item(self, it, force=False, on_finished=None, quiet=False,
+                           sub_bridge=None, cancel_ev=None):
+        """按平台下载（防重复点击：下载中/已完成分别提示；force=True 强制重下）。
+
+        quiet=True（批量）：sub_bridge 上报当前文件进度给总进度条，cancel_ev 联动取消。
+        """
         key = self._dl_key(it)
         state = self._dl_state.get(key)
         if state == "downloading":
@@ -1516,13 +1520,16 @@ class AssetPage(BasePage):
         self._dl_state[key] = "downloading"
         plat = it.get("platform", "")
         if plat == "bilibili":
-            self._download_bilibili_item(it, on_finished=on_finished, quiet=quiet, force=force)
+            self._download_bilibili_item(it, on_finished=on_finished, quiet=quiet, force=force,
+                                         sub_bridge=sub_bridge, cancel_ev=cancel_ev)
         elif plat == "douyin" or (plat not in ("bilibili",) and self._item_has_video(it)):
             # 视频条目统一走视频下载（微博视频/小红书/快手等直链平台）；
             # 微博视频曾误入图片分支（download_videos=False）→ 只下封面不下视频
-            self._download_video_item(it, on_finished=on_finished, quiet=quiet)
+            self._download_video_item(it, on_finished=on_finished, quiet=quiet,
+                                      sub_bridge=sub_bridge, cancel_ev=cancel_ev)
         else:
-            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force,
+                                           sub_bridge=sub_bridge, cancel_ev=cancel_ev)
 
     def _toggle_select_all(self, state):
         """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""
@@ -1571,6 +1578,23 @@ class AssetPage(BasePage):
         dlg.show()
 
         done_n = [0]
+        # 子进度桥：当前条目内部（视频流字节/图片计数）上报 → 合并进总进度条标签
+        sub_bridge = _ProgressBridge()
+        cur_title = [""]
+
+        def on_sub(done_b, total_b, name):
+            try:
+                if total_b > 100000:  # 字节进度（视频流，MB 展示）
+                    tail = f"  ⬇ {done_b / 1048576:.1f}/{total_b / 1048576:.1f} MB"
+                elif total_b > 0 and name:  # 文件计数（图片/live 图）
+                    tail = f"  ⬇ 文件 {done_b}/{total_b}"
+                else:
+                    return
+                dlg.setLabelText(f"批量下载 {done_n[0] + 1}/{n}  {cur_title[0]}{tail}")
+            except RuntimeError:
+                pass  # 对话框已关
+
+        sub_bridge.updated.connect(on_sub)
 
         def _advance():
             done_n[0] += 1
@@ -1582,6 +1606,10 @@ class AssetPage(BasePage):
                 # close() 会触发 closeEvent → emit canceled → cancel_ev 被置位，
                 # 必须先记下用户是否真取消，再 close
                 was_cancelled = cancel_ev.is_set()
+                try:
+                    sub_bridge.updated.disconnect(on_sub)
+                except (RuntimeError, TypeError):
+                    pass
                 try:
                     dlg.close()
                 except RuntimeError:
@@ -1598,23 +1626,29 @@ class AssetPage(BasePage):
             if cancel_ev.is_set():
                 return
             it = todo[done_n[0]]
+            cur_title[0] = (it.get("title") or "")[:32]
             try:
-                dlg.setLabelText(
-                    f"批量下载 {done_n[0] + 1}/{n}  {(it.get('title') or '')[:44]}")
+                dlg.setLabelText(f"批量下载 {done_n[0] + 1}/{n}  {cur_title[0]}")
             except RuntimeError:
                 pass
-            self._download_for_item(it, force=False, on_finished=_advance, quiet=True)
+            self._download_for_item(it, force=False, on_finished=_advance, quiet=True,
+                                    sub_bridge=sub_bridge, cancel_ev=cancel_ev)
 
         _step()
 
-    def _download_bilibili_item(self, it, on_finished=None, quiet=False, force=False):
-        """B站分发：图文动态→图片；视频动态(AV)/BV号→视频。"""
+    def _download_bilibili_item(self, it, on_finished=None, quiet=False, force=False,
+                                sub_bridge=None, cancel_ev=None):
+        """B站分发：图文动态→图片；视频动态(AV)/BV号→视频。
+
+        quiet=True（批量）：视频流字节进度上报 sub_bridge（总进度条显示），cancel_ev 联动取消。
+        """
         vid = it.get("video_id", "")
         dtype = self._bili_dynamic_type(it)
 
         # 图文动态：下载图片（不能套视频下载模式）
         if dtype == "draw":
-            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force,
+                                           sub_bridge=sub_bridge, cancel_ev=cancel_ev)
             return
         # 视频动态：从 archive.bvid 取真实 BV 号
         if dtype == "av":
@@ -1623,15 +1657,18 @@ class AssetPage(BasePage):
                 vid = bvid
         # 仍是 dyn_ 且拿不到 BV 号 → 退化为图片（封面兜底）
         if not vid or vid.startswith("dyn_"):
-            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force)
+            self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force,
+                                           sub_bridge=sub_bridge, cancel_ev=cancel_ev)
             return
 
-        cancel_ev = threading.Event()
+        cancel_ev = cancel_ev or threading.Event()
         bridge = _ProgressBridge()
         dlg = None
         if not quiet:
             dlg = _make_progress_dlg(self, "下载 B站视频", 1, cancel_ev)
             dlg.setLabelText("正在解析视频流...")
+        elif sub_bridge is not None:
+            bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
         def on_prog(done_n, total_n, name):
             if dlg is None:
@@ -1658,8 +1695,7 @@ class AssetPage(BasePage):
                 cookie=get_cookie("bilibili") or "",
                 out_dir=out_dir, title=it.get("title", ""),
                 author=it.get("author", ""), publish_time=it.get("publish_time", ""),
-                progress_cb=(lambda d, t: bridge.emit_progress(int(d), int(t), "视频流")
-                             if not quiet else None),
+                progress_cb=(lambda d, t: bridge.emit_progress(int(d), int(t), "视频流")),
             )
             # 同步下载官方封面：与视频同名 .jpg（改名索引），列表即可显示本地缩略图
             cover = (it.get("cover_url") or "").strip()
@@ -1733,10 +1769,11 @@ class AssetPage(BasePage):
         except Exception:
             return ""
 
-    def _download_video_item(self, it, on_finished=None, quiet=False):
+    def _download_video_item(self, it, on_finished=None, quiet=False, sub_bridge=None, cancel_ev=None):
         """抖音：直链有时效性（过期 403），下载前用 video_id 重新解析拿新直链。
 
-        quiet=True 时不弹单条进度框（批量下载有总进度条），完成后回调 on_finished 续下一条。
+        quiet=True 时不弹单条进度框，字节进度上报 sub_bridge（批量总进度条显示），
+        cancel_ev 联动批量取消；完成后回调 on_finished 续下一条。
         """
         vurl = it.get("video_url", "")
         vid = it.get("video_id", "")
@@ -1746,7 +1783,7 @@ class AssetPage(BasePage):
                 on_finished()
             return
 
-        cancel_ev = threading.Event()
+        cancel_ev = cancel_ev or threading.Event()
         bridge = _ProgressBridge()
         dlg = None
         if not quiet:
@@ -1765,6 +1802,8 @@ class AssetPage(BasePage):
                     dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
 
             bridge.updated.connect(on_prog)
+        elif sub_bridge is not None:
+            bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
         def work():
             from platforms.base import VideoInfo, now_str
@@ -1840,8 +1879,7 @@ class AssetPage(BasePage):
             return download_media([info], base_dir=base_dir,
                                   download_images=True, download_live=False, download_videos=True,
                                   progress_callback=bridge.emit_progress,
-                                  byte_progress_callback=(
-                                      bridge.emit_bytes if not quiet else None),
+                                  byte_progress_callback=bridge.emit_bytes,
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
                                   quiet=True)
 
@@ -2081,10 +2119,12 @@ class AssetPage(BasePage):
             pass
         return urls, lives
 
-    def _download_images_for_item(self, it, on_finished=None, quiet=False, force=False):
+    def _download_images_for_item(self, it, on_finished=None, quiet=False, force=False,
+                                  sub_bridge=None, cancel_ev=None):
         """下载单条条目所有图片与 live 图视频（优先 raw json 的 pics/pic_ids）。
 
-        quiet=True 时不弹单条进度框（批量下载有总进度条），完成后回调 on_finished 续下一条。
+        quiet=True 时不弹单条进度框，进度上报 sub_bridge（批量总进度条显示），
+        cancel_ev 联动批量取消，完成后回调 on_finished 续下一条。
         force=True 强制重下（跳过已下载的原图也要重新下载）。
         """
         # 优先从 raw json 提取所有原图 + live 视频，封面图也加入（B站动态封面 i0.hdslb.com 等）
@@ -2100,7 +2140,7 @@ class AssetPage(BasePage):
                 on_finished()
             return
 
-        cancel_ev = threading.Event()
+        cancel_ev = cancel_ev or threading.Event()
         bridge = _ProgressBridge()
         dlg = None
         if not quiet:
@@ -2118,6 +2158,8 @@ class AssetPage(BasePage):
                     dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
 
             bridge.updated.connect(on_prog)
+        elif sub_bridge is not None:
+            bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
         def work():
             from platforms.base import VideoInfo, now_str
@@ -2138,8 +2180,7 @@ class AssetPage(BasePage):
             return download_media([info], base_dir=base_dir,
                                   download_images=True, download_live=True, download_videos=False,
                                   progress_callback=bridge.emit_progress,
-                                  byte_progress_callback=(
-                                      bridge.emit_bytes if not quiet else None),
+                                  byte_progress_callback=bridge.emit_bytes,
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
                                   skip_existing=not force, quiet=True)
 
