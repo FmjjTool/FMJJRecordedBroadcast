@@ -6,6 +6,7 @@
 from typing import Optional
 import re
 import json
+import time
 from urllib.parse import unquote
 
 import httpx
@@ -212,38 +213,114 @@ class DouyinParser(PlatformBase):
             print(f"[抖音] 解析失败: {e}")
             return None
 
-    # ========== 用户时间线（Playwright） ==========
+    # ========== 用户时间线（HTTP 直调 + Playwright 兜底） ==========
+
+    POST_API = "https://www.douyin.com/aweme/v1/web/aweme/post/"
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
-        """有 Cookie 直接 Cookie 态抓，失败回退游客态。
+        """用户作品列表。Cookie 是账号凭据但用户时间线属「必须用 Cookie 的接口」
+        （游客 aweme/post 常被风控空响应 + 漏最新作品），Cookie 优先、游客兜底。
 
-        抖音用户时间线无免登录 HTTP API，浏览器是直连手段。
-        实测（2026-08-31）：同一主页游客 aweme/post 列表会漏掉最新若干作品
-        （缺 08-29/30/31 三条），Cookie 态完整且为游客态超集——用户时间线
-        属「必须用 Cookie 的接口」，与全链路游客优先原则的例外条款一致。
+        层级（2026-09-21 Playwright 页面数据层被安全 SDK 拦死后改为 HTTP 直调优先）：
+        ① HTTP 直调 aweme/post + a_bogus 签名（Cookie 优先，游客也试一次）
+        ② Playwright 浏览器兜底（Cookie → 游客）
         """
         sec_uid = self.extract_user_id(url_or_id)
         if not sec_uid:
             print(f"[抖音] 无法提取用户ID: {url_or_id}")
             return []
 
+        from auth import get_cookie
+        cookie_str = get_cookie("douyin") or ""
+
+        # 一级：HTTP 直调（快且稳，翻页拿足 count 条）
+        results = self._fetch_user_posts_http(sec_uid, count, cookie_str=cookie_str)
+        if results:
+            return results
+        if not cookie_str:
+            results = self._fetch_user_posts_http(sec_uid, count, cookie_str="")
+            if results:
+                return results
+
+        # 二级：Playwright 兜底
         try:
             from playwright.sync_api import sync_playwright  # noqa: F401
         except ImportError:
             print("[抖音] 未安装 playwright")
             return []
-
-        from auth import get_cookie
-        cookie_str = get_cookie("douyin")
-
         if cookie_str:
             results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str)
             if results:
                 return results
             print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
-
-        # 无 Cookie 或 Cookie 态失败：游客浏览器兜底
         return self._fetch_pw_once(sec_uid, count, cookie_str="")
+
+    def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "") -> list:
+        """HTTP 直调 aweme/post（a_bogus 签名），max_cursor 链式翻页到 count 条。
+
+        空响应=风控拦截；node 缺失导致无签名时直接放弃（返回空，由上层兜底）。
+        """
+        import requests
+        from multi_downloader import UA_PC, _douyin_abogus
+
+        s = requests.Session()
+        s.headers.update({"User-Agent": UA_PC, "Referer": "https://www.douyin.com/"})
+        if cookie_str:
+            s.headers["Cookie"] = cookie_str
+        else:
+            try:
+                s.get("https://www.douyin.com/", timeout=15)
+            except Exception:
+                pass
+
+        results = []
+        cursor = 0
+        seen = set()
+        for _page in range(50):  # 单页 ~20 条，50 页足够 0=无上限的 9999
+            params = {
+                "device_platform": "webapp", "aid": "6383", "sec_user_id": sec_uid,
+                "max_cursor": str(cursor), "locate_query": "false",
+                "show_live_replay_strategy": "1", "need_time_list": "1",
+                "time_list_query": "0", "whale_cut_token": "", "cut_version": "1",
+                "count": "20",
+            }
+            query = "&".join(f"{k}={v}" for k, v in params.items())
+            d = None
+            # 截断/风控偶发：同参数最多两试（第二试换新签名），两败则放弃本层
+            for _attempt in range(2):
+                a_bogus = _douyin_abogus(query, UA_PC)
+                if not a_bogus:
+                    print("[抖音] a_bogus 签名失败，放弃 HTTP 直调")
+                    return []
+                try:
+                    r = s.get(f"{self.POST_API}?{query}&a_bogus={a_bogus}", timeout=20)
+                    if not r.text.strip():
+                        print("[抖音] HTTP 直调被风控（空响应）")
+                        return []
+                    d = r.json()
+                    break
+                except Exception as e:
+                    print(f"[抖音] HTTP 直调第 {_attempt + 1} 次失败: {e}")
+                    time.sleep(1.0)
+            if d is None:
+                return []
+            if d.get("status_code") != 0:
+                print(f"[抖音] aweme/post status_code={d.get('status_code')}")
+                return []
+            for a in d.get("aweme_list") or []:
+                vid = str(a.get("aweme_id") or "")
+                if not vid or vid in seen:
+                    continue
+                seen.add(vid)
+                info = self._build_from_aweme(a, vid)
+                info.raw_url = f"https://www.douyin.com/user/{sec_uid}"
+                results.append(info)
+            if len(results) >= count or not d.get("has_more"):
+                break
+            cursor = int(d.get("max_cursor") or 0)
+            time.sleep(0.6)
+        print(f"[抖音] HTTP 直调获取到 {len(results)} 条")
+        return results[:count] if count > 0 else results
 
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "") -> list:
         """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""

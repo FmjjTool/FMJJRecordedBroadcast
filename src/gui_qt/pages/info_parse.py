@@ -1,15 +1,19 @@
 """单个解析页（PySide6 版）：输入链接解析 + 直接下载（原「视频下载」页已合并进来）。
 
-- 支持平台：B站/抖音/微博（完整解析器）+ 小红书/快手/好看/微视/梨视频/皮皮搞笑（multi_downloader）
+- 两种模式（输入行前下拉切换）：
+  · 链接模式：输入视频/帖子链接解析（B站/抖音/微博 + 小红书/快手等 multi_downloader）
+  · 搜索模式：输入关键词全局搜索（B站/抖音/微博，可全部平台并发），
+    结果弹窗双击/选中条目即填回链接模式自动解析
 - 画质下拉（全局共享）：B站 playurl 选档，抖音下载前按画质重解析
 - 线程下拉（全局共享，2/4/8/16/32/64）：单文件大文件 IDM 风格分段下载，
   多文件（图集等）按线程数并行；下载时显示 IDM 风格进度面板
 - 解析结果展示 + 下载按钮（B站走 playurl，其余走 media_downloader）+ 下载日志
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QTextEdit, QVBoxLayout,
+    QComboBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
 )
 
 from gui_qt import common, download_ops
@@ -19,6 +23,9 @@ from gui_qt.pages.base import BasePage
 
 # 线程数选项（全局共享，与批量导入页一致）
 THREAD_OPTIONS = ["2", "4", "8", "16", "32", "64"]
+
+# 搜索模式平台下拉值 → video_search 平台名
+SEARCH_PLATFORMS = [("全部平台", "all"), ("B站", "bilibili"), ("抖音", "douyin"), ("微博", "weibo")]
 
 
 class InfoParsePage(BasePage):
@@ -35,13 +42,27 @@ class InfoParsePage(BasePage):
         layout.addWidget(title)
 
         row = QHBoxLayout()
+        # 模式切换：链接模式 / 搜索模式
+        self.mode_sel = QComboBox()
+        self.mode_sel.addItems(["🔗 链接模式", "🔎 搜索模式"])
+        self.mode_sel.setFixedWidth(104)
+        self.mode_sel.setToolTip("链接模式：粘贴链接解析；搜索模式：输入关键词全局搜索视频")
+        self.mode_sel.currentIndexChanged.connect(self._on_mode_change)
+        row.addWidget(self.mode_sel)
+        # 搜索平台下拉（仅搜索模式可见）
+        self.search_plat_sel = QComboBox()
+        self.search_plat_sel.addItems([label for label, _ in SEARCH_PLATFORMS])
+        self.search_plat_sel.setFixedWidth(90)
+        self.search_plat_sel.setToolTip("搜索的平台范围（全部=三平台并发）")
+        self.search_plat_sel.setVisible(False)
+        row.addWidget(self.search_plat_sel)
         self.url_entry = QLineEdit()
         self.url_entry.setPlaceholderText("https://www.bilibili.com/video/BV...")
-        self.url_entry.returnPressed.connect(self._parse)
+        self.url_entry.returnPressed.connect(self._submit)
         row.addWidget(self.url_entry, 1)
         self.parse_btn = QPushButton("🔍 解析")
         self.parse_btn.setStyleSheet("background: #2e7d32; color: white;")
-        self.parse_btn.clicked.connect(self._parse)
+        self.parse_btn.clicked.connect(self._submit)
         row.addWidget(self.parse_btn)
         layout.addLayout(row)
 
@@ -89,6 +110,28 @@ class InfoParsePage(BasePage):
         self.log_text.setPlaceholderText("下载日志")
         layout.addWidget(self.log_text)
 
+    # ==================== 模式切换 ====================
+
+    def _is_search_mode(self) -> bool:
+        return self.mode_sel.currentIndex() == 1
+
+    def _on_mode_change(self, _idx):
+        if self._is_search_mode():
+            self.search_plat_sel.setVisible(True)
+            self.url_entry.setPlaceholderText("输入关键词搜索视频，如：封茗囧菌 原创歌曲")
+            self.parse_btn.setText("🔎 搜索")
+        else:
+            self.search_plat_sel.setVisible(False)
+            self.url_entry.setPlaceholderText("https://www.bilibili.com/video/BV...")
+            self.parse_btn.setText("🔍 解析")
+
+    def _submit(self):
+        """按钮/回车统一入口：按当前模式分流到解析或搜索。"""
+        if self._is_search_mode():
+            self._search()
+        else:
+            self._parse()
+
     # ==================== 解析 ====================
 
     def open_url(self, url: str):
@@ -122,6 +165,107 @@ class InfoParsePage(BasePage):
             refresh_results_count(self.app)
 
         run_bg(work, done)
+
+    # ==================== 搜索模式 ====================
+
+    def _search(self):
+        kw = self.url_entry.text().strip()
+        if not kw:
+            self.app.toast("请输入搜索关键词", "warning")
+            return
+        plat_val = dict(SEARCH_PLATFORMS).get(self.search_plat_sel.currentText(), "all")
+        self.parse_btn.setEnabled(False)
+        self.result_text.setPlainText(f"⏳ 搜索中：{kw}（{self.search_plat_sel.currentText()}）...\n")
+
+        def work():
+            from platforms.video_search import search_videos
+
+            def notify(msg, level):
+                post_to_main(self.app.toast, msg, level)
+
+            return search_videos(plat_val, kw, 20, notify=notify)
+
+        def done(result, err):
+            self.parse_btn.setEnabled(True)
+            if err:
+                self.result_text.setPlainText(f"❌ 搜索失败: {err}")
+                self.app.toast(f"搜索失败：{str(err)[:60]}", "error")
+                return
+            results = result or []
+            added = _collect(results)
+            self.result_text.setPlainText(
+                f"✅ 搜索「{kw}」获取 {len(results)} 条（{added} 条新存入「已获取」）\n"
+                + "=" * 40 + "\n双击结果弹窗中的条目即可自动解析下载")
+            refresh_results_count(self.app)
+            if results:
+                self._show_search_results(kw, results)
+            else:
+                self.app.toast("没有搜到结果", "warning")
+
+        run_bg(work, done)
+
+    def _show_search_results(self, kw, results):
+        """搜索结果弹窗：双击/选中+解析 → 填回链接模式自动解析。"""
+        from platforms.video_search import parse_url_of
+        win = QDialog(self)
+        win.setWindowTitle(f"🔎 搜索「{kw}」 · 共 {len(results)} 条")
+        win.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        win.resize(860, 520)
+        v = QVBoxLayout(win)
+        v.setContentsMargins(12, 12, 12, 12)
+        head = QLabel("双击条目（或选中后点「解析选中」）→ 自动填入链接并解析")
+        head.setStyleSheet("font-size: 12px; color: #5a6072;")
+        v.addWidget(head)
+        table = QTableWidget(len(results), 7)
+        table.setHorizontalHeaderLabels(["平台", "标题", "作者", "播放量", "时长", "发布时间", "链接"])
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        plat_label = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博"}
+        for i, r in enumerate(results):
+            table.setItem(i, 0, QTableWidgetItem(plat_label.get(r.platform, r.platform)))
+            table.setItem(i, 1, QTableWidgetItem((r.title or "")[:60]))
+            table.setItem(i, 2, QTableWidgetItem(r.author or ""))
+            table.setItem(i, 3, QTableWidgetItem(f"{r.play_count:,}" if r.play_count else ""))
+            m, s = divmod(r.duration or 0, 60)
+            table.setItem(i, 4, QTableWidgetItem(f"{m}:{s:02d}" if r.duration else ""))
+            table.setItem(i, 5, QTableWidgetItem(r.publish_time or ""))
+            table.setItem(i, 6, QTableWidgetItem(parse_url_of(r)))
+        table.setColumnWidth(0, 48)
+        table.setColumnWidth(1, 300)
+        table.setColumnWidth(2, 110)
+        table.setColumnWidth(3, 80)
+        table.setColumnWidth(4, 60)
+        table.setColumnWidth(5, 110)
+        table.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(table, 1)
+
+        def _parse_selected():
+            rows = sorted({idx.row() for idx in table.selectedIndexes()})
+            if not rows:
+                self.app.toast("请先选中一条结果", "warning")
+                return
+            _parse_row(rows[0])
+
+        def _parse_row(row):
+            url = table.item(row, 6).text()
+            win.accept()
+            # 切回链接模式 → 填入链接 → 自动解析（闭环到下载）
+            self.mode_sel.setCurrentIndex(0)
+            self.url_entry.setText(url)
+            self._parse()
+
+        table.doubleClicked.connect(lambda idx: _parse_row(idx.row()))
+        btn_row = QHBoxLayout()
+        parse_btn = QPushButton("🔍 解析选中")
+        parse_btn.setStyleSheet("background: #2e7d32; color: white;")
+        parse_btn.clicked.connect(_parse_selected)
+        btn_row.addWidget(parse_btn)
+        btn_row.addStretch(1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(win.reject)
+        btn_row.addWidget(close_btn)
+        v.addLayout(btn_row)
+        win.exec()
 
     # ==================== 下载 ====================
 

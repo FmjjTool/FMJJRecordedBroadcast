@@ -195,6 +195,10 @@ class MusicTrackerPage(BasePage):
         self.add_url.setPlaceholderText("账号/歌手主页链接（自动识别平台）")
         self.add_url.returnPressed.connect(self._add_account)
         r2.addWidget(self.add_url, 1)
+        self.name_fetch_btn = icon_button(
+            "🔍", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
+            "font-size: 14px;", self._auto_fetch_name)
+        r2.addWidget(self.name_fetch_btn)
         r2.addWidget(QLabel("组号:"))
         self.add_group_sel = QComboBox()
         self.add_group_sel.setFixedWidth(120)
@@ -739,6 +743,34 @@ class MusicTrackerPage(BasePage):
         self.app.toast("定时采集已停止", "info")
 
     # ---------- 设置页：搜索/账号增删 ----------
+    def _auto_fetch_name(self):
+        """按链接识别音乐平台并拉取昵称，填充到账号名输入框（后台线程，不卡 UI）。"""
+        url = self.add_url.text().strip()
+        if not url:
+            self.app.toast("请先输入链接", "warning")
+            return
+        self.name_fetch_btn.setEnabled(False)
+        self.name_fetch_btn.setText("⏳")
+
+        def work():
+            from platforms.account_names import fetch_music_account_name
+            return fetch_music_account_name(url)
+
+        def done(result, err):
+            self.name_fetch_btn.setEnabled(True)
+            self.name_fetch_btn.setText("🔍")
+            if err:
+                self.app.toast(f"获取失败：{err[:60]}", "error")
+                return
+            name, ferr = result or ("", "")
+            if name:
+                self.add_name.setText(name)
+                self.app.toast(f"✅ 已获取账号名「{name}」", "success")
+            else:
+                self.app.toast(ferr or "未获取到账号名", "error")
+
+        run_bg(work, done)
+
     def _search_accounts(self):
         """按名称搜索平台账号/歌手：结果弹窗里选中后自动填入账号名+链接。"""
         from music_account.collectors import search_account

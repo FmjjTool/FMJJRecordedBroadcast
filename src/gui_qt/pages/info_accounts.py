@@ -120,6 +120,12 @@ class InfoAccountsPage(BasePage):
         self.url_entry.setPlaceholderText("账号主页 URL")
         self.url_entry.returnPressed.connect(self._add)
         add_row.addWidget(self.url_entry, 1)
+        self.name_fetch_btn = icon_button(
+            "🔍", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
+            "font-size: 14px;",
+            lambda: self._auto_fetch_name(self.url_entry, self.name_entry,
+                                          self.name_fetch_btn))
+        add_row.addWidget(self.name_fetch_btn)
         self.name_entry = QLineEdit()
         self.name_entry.setPlaceholderText("账号名")
         self.name_entry.setFixedWidth(110)
@@ -262,6 +268,12 @@ class InfoAccountsPage(BasePage):
         self.set_url_entry = QLineEdit()
         self.set_url_entry.setPlaceholderText("账号主页链接（自动识别平台）")
         r2.addWidget(self.set_url_entry, 1)
+        self.set_name_fetch_btn = icon_button(
+            "🔍", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
+            "font-size: 14px;",
+            lambda: self._auto_fetch_name(self.set_url_entry, self.set_name_entry,
+                                          self.set_name_fetch_btn))
+        r2.addWidget(self.set_name_fetch_btn)
         add_btn2 = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
         r2.addWidget(add_btn2)
         ac.addLayout(r2)
@@ -417,6 +429,35 @@ class InfoAccountsPage(BasePage):
             QTimer.singleShot(150, self._reload_group_list)
         else:
             self.app.toast("账号已存在，无需重复添加", "warning")
+
+    # ---------- 自动获取账号名 ----------
+    def _auto_fetch_name(self, url_entry, name_entry, btn):
+        """按链接识别平台并拉取昵称，填充到账号名输入框（后台线程，不卡 UI）。"""
+        url = url_entry.text().strip()
+        if not url:
+            self.app.toast("请先输入链接", "warning")
+            return
+        btn.setEnabled(False)
+        btn.setText("⏳")
+
+        def work():
+            from platforms.account_names import fetch_account_name
+            return fetch_account_name(url)
+
+        def done(result, err):
+            btn.setEnabled(True)
+            btn.setText("🔍")
+            if err:
+                self.app.toast(f"获取失败：{err[:60]}", "error")
+                return
+            name, ferr = result or ("", "")
+            if name:
+                name_entry.setText(name)
+                self.app.toast(f"✅ 已获取账号名「{name}」", "success")
+            else:
+                self.app.toast(ferr or "未获取到账号名", "error")
+
+        run_bg(work, done)
 
     # ---------- 暂停 ----------
     def _toggle_pause(self):
