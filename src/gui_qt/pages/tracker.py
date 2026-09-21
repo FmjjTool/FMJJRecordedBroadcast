@@ -3,7 +3,7 @@
 对应原版 gui/tracker_page.py：
 - 功能页：平台筛选 + 获取全部（回车快捷）+ ⏰ 定时采集（状态圆点）+ 📷 按组导出 + 刷新
   每账号卡片：昵称/平台/状态 + 采集/导出/历史按钮 + 变化提示（涨绿跌红）+ 2行×4列预览
-- 设置页：添加追踪账号（账号名/平台/链接/组号）、分组管理（组列表+新建）、已配置账号（组号下拉+保存+删除）
+- 设置页：添加追踪账号（账号名/平台/链接/分组多选）、分组管理（组列表+新建）、已配置账号（分组多选+保存+删除）
 - 历史窗口：指标当列、时间点当行，可横向滚动
 """
 
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import GroupMultiSelect
 
 # 指标行定义：(显示名, [字段名优先级列表])
 METRICS = [
@@ -168,9 +169,8 @@ class TrackerPage(BasePage):
         self.add_url.setPlaceholderText("账号主页链接（自动识别平台）")
         self.add_url.returnPressed.connect(self._add_account)
         r2.addWidget(self.add_url, 1)
-        r2.addWidget(QLabel("组号:"))
-        self.add_group_sel = QComboBox()
-        self.add_group_sel.setFixedWidth(120)
+        r2.addWidget(QLabel("分组:"))
+        self.add_group_sel = GroupMultiSelect(width=126)
         r2.addWidget(self.add_group_sel)
         add_btn = icon_button("➕", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
         r2.addWidget(add_btn)
@@ -706,13 +706,6 @@ class TrackerPage(BasePage):
         self.app.toast("定时采集已停止", "info")
 
     # ---------- 设置页：账号增删 ----------
-    def _selected_group_id(self):
-        """从组号下拉框解析当前选中的组号（"无分组" 或 "组号:组名"）。"""
-        v = self.add_group_sel.currentText()
-        if not v or v == "无分组":
-            return ""
-        return v.split(":")[0].strip()
-
     def _add_account(self):
         name = self.add_name.text().strip() or "未命名"
         url = self.add_url.text().strip()
@@ -725,8 +718,8 @@ class TrackerPage(BasePage):
         platform = plat_map.get(self.add_platform.currentText(), "")
         if not platform:
             platform, _ = parse_url(url)
-        gid = self._selected_group_id()
-        acc = {"name": name, "url": url, "platform": platform or "", "group_id": gid}
+        gids = self.add_group_sel.selected()
+        acc = {"name": name, "url": url, "platform": platform or "", "group_ids": gids}
         accounts = load_accounts()
         accounts.append(acc)
         save_accounts(accounts)
@@ -754,8 +747,7 @@ class TrackerPage(BasePage):
         from tracker.accounts import load_accounts, get_groups
         accounts = load_accounts()
         groups = get_groups()
-        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
-        self._acc_rows = []  # (index, gsel, 初始组值)
+        self._acc_rows = []  # (index, 分组多选控件, 初始已选组列表)
         if not accounts:
             lbl = QLabel("（暂无账号，先在上方添加）")
             lbl.setStyleSheet("color: gray;")
@@ -771,22 +763,15 @@ class TrackerPage(BasePage):
             plat = PLATFORM_NAMES.get(acc.get("platform"), acc.get("platform") or "自动")
             info = QLabel(f"{acc.get('name')}  [{plat}]  {acc.get('url', '')[:36]}")
             h.addWidget(info, 1)
-            # 组号下拉（当前所属组）
-            cur_gid = acc.get("group_id", "")
-            cur_val = "无分组"
-            for opt in group_opts:
-                if opt != "无分组" and opt.split(":")[0] == cur_gid:
-                    cur_val = opt
-                    break
-            gsel = QComboBox()
-            gsel.addItems(group_opts)
-            gsel.setCurrentText(cur_val)
-            gsel.setFixedWidth(126)
+            # 分组多选（当前已绑定组）
+            gsel = GroupMultiSelect(width=126)
+            gsel.set_groups(groups)
+            gsel.set_selected(acc.get("group_ids", []))
             h.addWidget(gsel)
             # 记录行控件与初始值，改动后启用底部「保存全部修改」
-            self._acc_rows.append((i, gsel, cur_val))
-            gsel.currentTextChanged.connect(
-                lambda _t: self._acc_save_btn.setEnabled(True))
+            self._acc_rows.append((i, gsel, gsel.selected()))
+            gsel.changed.connect(
+                lambda b=None: self._acc_save_btn.setEnabled(True))
             # 上移/下移（直接改账号顺序，立即生效）
             up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;",
                                  on_click=lambda idx=i: self._move_account(idx, -1))
@@ -825,11 +810,10 @@ class TrackerPage(BasePage):
         accounts = load_accounts()
         changed = 0
         for idx, gsel, orig in getattr(self, "_acc_rows", []):
-            v = gsel.currentText()
-            if v == orig or not (0 <= idx < len(accounts)):
+            gids = gsel.selected()
+            if gids == orig or not (0 <= idx < len(accounts)):
                 continue
-            gid = "" if v == "无分组" else v.split(":")[0].strip()
-            accounts[idx]["group_id"] = gid
+            accounts[idx]["group_ids"] = gids
             changed += 1
         if changed:
             save_accounts(accounts)
@@ -840,18 +824,11 @@ class TrackerPage(BasePage):
 
     # ---------- 分组管理 ----------
     def _reload_group_list(self):
-        """刷新分组列表 + 添加账号/已配置账号的组号下拉菜单。"""
+        """刷新分组列表 + 添加账号/已配置账号的分组多选菜单。"""
         from tracker.accounts import get_groups
         groups = get_groups()
-        # 刷新「添加账号」的组号下拉（按文件序，⬆️⬇️ 排序即调整该顺序）
-        opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
-        cur = self.add_group_sel.currentText()
-        self.add_group_sel.clear()
-        self.add_group_sel.addItems(opts)
-        if cur in opts:
-            self.add_group_sel.setCurrentText(cur)
-        else:
-            self.add_group_sel.setCurrentText(opts[0])
+        # 刷新「添加账号」的分组多选（按文件序，⬆️⬇️ 排序即调整该顺序）
+        self.add_group_sel.set_groups(groups)
         # 刷新分组列表
         self._clear_layout(self.group_list_layout)
         self.group_list_layout.addStretch(1)
@@ -889,7 +866,7 @@ class TrackerPage(BasePage):
                 self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
                 self.group_list_layout.addWidget(row)
                 self.group_list_layout.addStretch(1)
-        # 刷新「已配置账号」列表（组号下拉同步新增的分组）
+        # 刷新「已配置账号」列表（分组多选同步新增的分组）
         self._reload_acc_list()
 
     def _move_group(self, gid, delta):

@@ -2,11 +2,12 @@
 
 - RowCheckList: QListWidget 子类，条目复选框整行触发（点复选框本身不双重切换）
 - make_row_clickable: 自定义行容器（QFrame/QWidget + 内嵌 QCheckBox）整行触发
+- GroupMultiSelect: 分组多选按钮（账号获取/账号追踪共用，一账号绑多组）
 """
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
-    QListWidget, QStyle, QStyleOptionViewItem, QWidget,
+    QMenu, QPushButton, QListWidget, QStyle, QStyleOptionViewItem, QWidget,
 )
 
 
@@ -59,7 +60,82 @@ _row_click_handler = _RowClickHandler()
 
 
 def make_row_clickable(row: QWidget, checkbox):
-    """让自定义行（含 QCheckBox 的容器）整行点击切换勾选。"""
+    """让自定义行（含 QCheckBox 的容器）整行点击切换复选框。"""
     row.setProperty("row_checkbox", checkbox)
     row.installEventFilter(_row_click_handler)
     row.setCursor(Qt.PointingHandCursor)
+
+
+class GroupMultiSelect(QPushButton):
+    """分组多选按钮：点击弹出勾选菜单，一个账号可同时绑定多个组。
+
+    - set_groups({组号: 组名}) 刷新可选组（保留已选交集）
+    - set_selected(["11", "22"]) / selected() -> [组号]
+    - 勾选变化发 changed 信号（用于启用「保存全部修改」）
+    """
+
+    changed = Signal()
+
+    def __init__(self, width=126, parent=None):
+        super().__init__(parent)
+        self._groups: dict = {}       # {gid: gname}
+        self._selected: list = []     # [gid]
+        self.setFixedWidth(width)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("text-align: left; padding: 2px 8px;")
+        self._menu = QMenu(self)
+        self.clicked.connect(self._show_menu)
+        self._refresh()
+
+    def _show_menu(self):
+        menu = self._menu
+        menu.clear()
+        if not self._groups:
+            act = menu.addAction("（暂无分组）")
+            act.setEnabled(False)
+        for gid, gname in self._groups.items():
+            act = menu.addAction(f"{gid} {gname}")
+            act.setCheckable(True)
+            act.setChecked(gid in self._selected)
+            act.toggled.connect(lambda on, g=gid: self._toggle(g, on))
+        menu.addSeparator()
+        clear = menu.addAction("无分组（清除全部）")
+        clear.triggered.connect(self._clear_all)
+        menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def _toggle(self, gid, on):
+        if on and gid not in self._selected:
+            self._selected.append(gid)
+        elif not on and gid in self._selected:
+            self._selected.remove(gid)
+        self._refresh()
+        self.changed.emit()
+
+    def _clear_all(self):
+        if self._selected:
+            self._selected = []
+            self._refresh()
+            self.changed.emit()
+
+    def _refresh(self):
+        """按钮文本：无组=无分组 / 多组=组号相加。"""
+        if not self._selected:
+            self.setText("无分组")
+        else:
+            self.setText("组" + "+".join(self._selected))
+        self.setToolTip("已绑定：" + ("、".join(
+            f"{g} {self._groups.get(g, '')}".strip() for g in self._selected) or "无"))
+
+    # ---------- 对外 API ----------
+    def set_groups(self, groups: dict):
+        """刷新可选分组（保留仍存在的已选项）。"""
+        self._groups = dict(groups or {})
+        self._selected = [g for g in self._selected if g in self._groups]
+        self._refresh()
+
+    def set_selected(self, gids):
+        self._selected = [g for g in (gids or []) if g in self._groups]
+        self._refresh()
+
+    def selected(self) -> list:
+        return list(self._selected)

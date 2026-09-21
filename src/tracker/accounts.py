@@ -44,14 +44,22 @@ _RECORD_FIELDS = [
 
 
 def _norm_account(a):
-    """补全账号字段默认值（group_id 组号），保证加载后的账号结构统一。"""
+    """补全账号字段默认值（group_ids 组号列表），保证加载后的账号结构统一。
+
+    兼容旧数据：单一 group_id 字符串（含逗号分隔多组）自动转为列表。
+    """
     a = dict(a)
-    a.setdefault("group_id", "")
+    gids = a.get("group_ids")
+    if gids is None:
+        raw = str(a.pop("group_id", "") or "").replace("，", ",")
+        gids = [g.strip() for g in raw.split(",") if g.strip()]
+    a["group_ids"] = [str(g) for g in gids if str(g).strip()]
+    a.pop("group_id", None)
     return a
 
 
 def load_accounts():
-    """加载追踪账号列表：[{name, url, platform, group_id}]。
+    """加载追踪账号列表：[{name, url, platform, group_ids: [组号...]}]。
 
     兼容旧格式（{name, bilibili_mid, douyin_sec_uid, weibo_uid}）：自动拆分为单平台账号。
     """
@@ -133,7 +141,7 @@ def save_group(group_id, group_name):
 
 
 def delete_group(group_id):
-    """删除分组，并把归属该组的账号 group_id 清空。"""
+    """删除分组，并从各账号的组号列表中移除该组。"""
     groups = get_groups()
     if group_id in groups:
         groups.pop(group_id)
@@ -142,8 +150,8 @@ def delete_group(group_id):
     accounts = load_accounts()
     changed = False
     for a in accounts:
-        if a.get("group_id") == group_id:
-            a["group_id"] = ""
+        if group_id in a.get("group_ids", []):
+            a["group_ids"] = [g for g in a["group_ids"] if g != group_id]
             changed = True
     if changed:
         save_accounts(accounts)
@@ -170,8 +178,8 @@ def move_group(group_id, delta):
 
 
 def get_accounts_by_group(group_id):
-    """返回归属指定组号的所有账号。"""
-    return [a for a in load_accounts() if a.get("group_id") == group_id]
+    """返回归属指定组号的所有账号（账号可绑多组，任一命中即返回）。"""
+    return [a for a in load_accounts() if group_id in a.get("group_ids", [])]
 
 
 def parse_url(url):

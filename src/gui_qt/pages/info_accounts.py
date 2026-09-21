@@ -3,8 +3,8 @@
 对应原版 gui/info_pages.py 的 InfoAccountsPage：
 - 功能页：添加账号行 / 账号勾选列表 / 采集模式（全部/选中/按组）/ 条数 /
   定时获取 / 增量模式 / 搜索限流 / 日志
-- 设置页：添加账号（账号名+链接+组号下拉）/ 分组管理 / 已配置账号
-  （组号下拉 + 采集类型下拉 + 保存/删除）
+- 设置页：添加账号（账号名+链接+分组多选）/ 分组管理 / 已配置账号
+  （分组多选 + 采集类型下拉 + 保存/删除）
 """
 
 import io
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import _collect, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.row_widgets import RowCheckList
+from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
 
 
 def _clear_layout(layout):
@@ -84,11 +84,7 @@ class InfoAccountsPage(BasePage):
         self.fetch_group.addItems(opts)
         self.fetch_group.blockSignals(False)
         if hasattr(self, "set_group_sel"):
-            cur = self.set_group_sel.currentText()
-            self.set_group_sel.clear()
-            self.set_group_sel.addItems(opts)
-            if cur in opts:
-                self.set_group_sel.setCurrentText(cur)
+            self.set_group_sel.set_groups(self._groups())
 
     # ---------- 功能页 ----------
     def _build_func(self, f):
@@ -258,9 +254,8 @@ class InfoAccountsPage(BasePage):
         self.set_name_entry = QLineEdit()
         self.set_name_entry.setPlaceholderText("如 封茗囧菌抖音")
         r1.addWidget(self.set_name_entry, 1)
-        r1.addWidget(QLabel("组号:"))
-        self.set_group_sel = QComboBox()
-        self.set_group_sel.setFixedWidth(120)
+        r1.addWidget(QLabel("分组:"))
+        self.set_group_sel = GroupMultiSelect(width=126)
         r1.addWidget(self.set_group_sel)
         ac.addLayout(r1)
         r2 = QHBoxLayout()
@@ -410,16 +405,16 @@ class InfoAccountsPage(BasePage):
             self.app.toast("账号已存在，无需重复添加", "warning")
 
     def _add_set(self):
-        """设置页添加账号（账号名 + 链接 + 组号下拉）。"""
+        """设置页添加账号（账号名 + 链接 + 分组多选）。"""
         name = self.set_name_entry.text().strip()
         url = self.set_url_entry.text().strip()
         if not url:
             self.app.toast("请输入账号链接", "warning")
             return
-        v = self.set_group_sel.currentText()
-        gid = "" if v == "无分组" else v.split(":")[0].strip()
+        gids = self.set_group_sel.selected()
+        gid = ",".join(gids)
         from accounts_manager import add_account, get_groups
-        gname = get_groups().get(gid, "") if gid else ""
+        gname = get_groups().get(gids[0], "") if gids else ""
         if add_account(url, name=name, group_id=gid, group_name=gname):
             self.set_name_entry.clear()
             self.set_url_entry.clear()
@@ -1008,7 +1003,6 @@ class InfoAccountsPage(BasePage):
         self.save_all_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
         accounts = [a for a in load_accounts() if a.url]  # 过滤分组占位账号
         groups = get_groups()
-        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
         if not accounts:
             lbl = QLabel("（暂无账号）")
             lbl.setStyleSheet("color: #888;")
@@ -1026,17 +1020,10 @@ class InfoAccountsPage(BasePage):
             name = a.name or ""
             info = f"{name}  [{plat}]  {a.url[:40]}" if name else f"[{plat}]  {a.url[:50]}"
             h.addWidget(QLabel(info), 1)
-            # 组号下拉（当前主组）
-            cur_gid = a.group_id or ""
-            cur_val = "无分组"
-            for opt in group_opts:
-                if opt != "无分组" and opt.split(":")[0] == cur_gid:
-                    cur_val = opt
-                    break
-            gsel = QComboBox()
-            gsel.addItems(group_opts)
-            gsel.setCurrentText(cur_val)
-            gsel.setFixedWidth(100)
+            # 分组多选（当前绑定的全部组）
+            gsel = GroupMultiSelect(width=110)
+            gsel.set_groups(groups)
+            gsel.set_selected(a.group_ids)
             h.addWidget(gsel)
             # 采集类型下拉（B站生效）
             cur_kind = a.kind or infer_kind_from_url(a.url)
@@ -1046,8 +1033,8 @@ class InfoAccountsPage(BasePage):
             ksel.setFixedWidth(80)
             h.addWidget(ksel)
             # 记录行控件与初始值，改动后启用底部「保存全部修改」
-            self._acct_set_rows.append((a.url, gsel, ksel, cur_val, ksel.currentText()))
-            gsel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
+            self._acct_set_rows.append((a.url, gsel, ksel, gsel.selected(), ksel.currentText()))
+            gsel.changed.connect(lambda b=self.save_all_btn: self._mark_set_dirty(b))
             ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
             # 上移/下移（直接改 accounts.txt 顺序，立即生效）
             up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;")
@@ -1081,19 +1068,19 @@ class InfoAccountsPage(BasePage):
         btn.setEnabled(True)
 
     def _save_all_account_rows(self):
-        """一次性保存所有行的组号/采集类型修改（替代逐行保存）。"""
+        """一次性保存所有行的分组/采集类型修改（替代逐行保存）。"""
         from accounts_manager import update_account, get_groups
         try:
             groups = get_groups()
             changed = 0
             for url, gsel, ksel, orig_g, orig_k in getattr(self, "_acct_set_rows", []):
-                v = gsel.currentText()
-                gid = "" if v == "无分组" else v.split(":")[0].strip()
+                gids = gsel.selected()
+                gid = ",".join(gids)
                 kind_rev = {"自动": "", "[作品]": "video", "[动态]": "dynamic", "[全部]": "all"}
                 kind = kind_rev.get(ksel.currentText(), "")
-                if v == orig_g and ksel.currentText() == orig_k:
+                if gids == orig_g and ksel.currentText() == orig_k:
                     continue  # 无变化
-                gname = groups.get(gid, "") if gid else ""
+                gname = groups.get(gids[0], "") if gids else ""
                 if update_account(url, group_id=gid, group_name=gname, kind=kind):
                     changed += 1
             if changed:
