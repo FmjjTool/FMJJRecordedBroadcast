@@ -275,6 +275,7 @@ class BilibiliParser(PlatformBase):
         live_photos = []
         cover_url = ""
         video_url = ""
+        duration = 0
         title = text[:80] if text else f"B站动态 {dyn_id[:8]}"
 
         if mtype == "MAJOR_TYPE_DRAW":
@@ -294,6 +295,13 @@ class BilibiliParser(PlatformBase):
             archive = major.get("archive", {})
             cover_url = archive.get("cover", "")
             archive_title = archive.get("title", "")
+            # 动态视频时长只有文本格式（duration_text '00:53'，duration 字段为 null）
+            dt = archive.get("duration_text") or ""
+            parts = str(dt).split(":")
+            if len(parts) <= 3 and all(p.isdigit() for p in parts if p):
+                vals = [int(p) for p in parts if p]
+                for i, mul in enumerate([1, 60, 3600][:len(vals)]):
+                    duration += vals[-1 - i] * mul
             # 无正文时用投稿标题（默认兜底标题已生成，需显式覆盖）
             if archive_title and not text:
                 title = archive_title
@@ -342,6 +350,7 @@ class BilibiliParser(PlatformBase):
             comment_count=int(comment_count),
             share_count=int(share_count),
             cover_url=cover_url,
+            duration=duration,
             video_url=video_url or f"https://t.bilibili.com/{dyn_id}",
             publish_time=publish_time,
             images=images,

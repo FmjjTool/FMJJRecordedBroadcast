@@ -17,7 +17,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (QMimeData, QObject, QPoint, QPointF, QRect, QSize,
+                            Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
                            QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (
@@ -78,6 +79,69 @@ def _fmt_size(n):
     if n < 1024 * 1024 * 1024:
         return f"{n/1024/1024:.1f} MB"
     return f"{n/1024/1024/1024:.2f} GB"
+
+
+def _parse_duration_text(text) -> int:
+    """json「时长」字段 → 秒。兼容 'M:SS' / 'H:MM:SS' / 纯数字秒。"""
+    s = str(text or "").strip()
+    if not s:
+        return 0
+    if re.fullmatch(r"\d+", s):
+        return int(s)
+    parts = s.split(":")
+    if len(parts) > 3 or not all(p.isdigit() for p in parts):
+        return 0
+    vals = [int(p) for p in parts]
+    if len(vals) == 3:
+        return vals[0] * 3600 + vals[1] * 60 + vals[2]
+    if len(vals) == 2:
+        return vals[0] * 60 + vals[1]
+    return vals[0]
+
+
+def _fmt_duration_cn(sec) -> str:
+    """秒 → 中文时长，各段两位数：05秒 / 01分19秒 / 01时02分03秒。"""
+    sec = int(sec or 0)
+    if sec <= 0:
+        return ""
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:02d}时{m:02d}分{s:02d}秒"
+    if m:
+        return f"{m:02d}分{s:02d}秒"
+    return f"{s:02d}秒"
+
+
+_DURATION_CACHE: dict = {}
+
+
+def _probe_video_duration(path: str) -> int:
+    """ffprobe 读本地视频时长（秒，取整）。带缓存；ffmpeg 缺失/失败返回 0。"""
+    if not path:
+        return 0
+    mtime = os.path.getmtime(path) if os.path.exists(path) else 0
+    key = (path, mtime)
+    if key in _DURATION_CACHE:
+        return _DURATION_CACHE[key]
+    dur = 0
+    try:
+        import subprocess
+        from toolbox.live_video import find_ffmpeg
+        ff = find_ffmpeg()
+        if ff:
+            probe = str(Path(ff)).replace("ffmpeg.exe", "ffprobe.exe")
+            if os.path.exists(probe):
+                r = subprocess.run(
+                    [probe, "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", path],
+                    capture_output=True, timeout=15, encoding="utf-8", errors="replace")
+                if r.returncode == 0 and r.stdout.strip():
+                    dur = int(float(r.stdout.strip()))
+    except Exception:
+        dur = 0
+    _DURATION_CACHE[key] = dur
+    return dur
 
 
 _WRAP_CHARS = ("/", "\\", "?", "&", "=", "_", "-", ".", "%", ";", ",")
@@ -801,6 +865,7 @@ class AssetPage(BasePage):
                     "like_count": int(data.get("点赞数", 0) or 0),
                     "comment_count": int(data.get("评论数", 0) or 0),
                     "cover_url": data.get("封面URL", "") or "",
+                    "duration": _parse_duration_text(data.get("时长", "")),
                     "publish_time": data.get("发布时间", "") or "",
                     "video_url": data.get("链接", "") or "",
                     "raw_url": data.get("原始URL", "") or "",
@@ -866,6 +931,13 @@ class AssetPage(BasePage):
                     entry["expected_imgs"] = len(self._extract_pic_urls(entry)[0])
                 except Exception:
                     entry["expected_imgs"] = 0
+                # 存量数据兜底：json 无时长（B站动态视频 duration_text 采集端曾漏提）
+                # 但本地有视频文件 → ffprobe 读实际时长
+                if not entry.get("duration"):
+                    vd = next((m["path"] for m in entry["media_files"]
+                               if m["type"] == "video" and os.path.exists(m["path"])), "")
+                    if vd:
+                        entry["duration"] = _probe_video_duration(vd)
                 results.append(entry)
             except Exception:
                 continue
@@ -885,6 +957,7 @@ class AssetPage(BasePage):
                 "play_count": 0, "like_count": 0, "comment_count": 0,
                 "cover_url": imgs[0]["path"] if imgs else (vids[0]["path"] if vids else ""),
                 "publish_time": "", "video_url": "",
+                "duration": _probe_video_duration(vids[0]["path"]) if vids else 0,
                 "fetched_at": "",
                 "date_part": date_part,
                 "file_path": (mfs[0] or {}).get("path", "") if mfs else "",
@@ -1285,13 +1358,40 @@ class AssetPage(BasePage):
         self.collected_layout.addWidget(row)
 
     def _row_context_menu(self, it, global_pos):
-        """行右键菜单：打开本地数据文件（MD）/ 打开本地媒体文件——存在哪项才显示哪项。"""
+        """行右键菜单：复制媒体/链接、打开本地数据文件（MD）/ 打开本地媒体文件——存在哪项才显示哪项。"""
         menu = QMenu(self)
         stem = os.path.splitext(it["file_path"])[0] if it.get("file_path") else ""
         md_path = (stem + ".md") if stem else ""
         media = [m for m in it.get("media_files", [])
                  if m.get("path") and os.path.exists(m["path"])]
         shown = False
+        # 复制视频/媒体文件（本地存在才显示）
+        if media:
+            vids = [m["path"] for m in media if m.get("type") == "video"]
+            if vids:
+                menu.addAction("📋 复制视频").triggered.connect(
+                    lambda _=False, ps=vids: self._copy_files_to_clipboard(ps))
+            elif len(media) == 1:
+                menu.addAction("📋 复制媒体文件").triggered.connect(
+                    lambda _=False, p=media[0]["path"]: self._copy_files_to_clipboard([p]))
+            else:
+                sub = menu.addMenu(f"📋 复制媒体文件（{len(media)} 个）")
+                for m in media:
+                    icon = {"image": "🖼 ", "video": "🎬 "}.get(m.get("type"), "📄 ")
+                    sub.addAction(icon + os.path.basename(m["path"])).triggered.connect(
+                        lambda _=False, p=m["path"]: self._copy_files_to_clipboard([p]))
+                sub.addSeparator()
+                sub.addAction("复制全部").triggered.connect(
+                    lambda _=False: self._copy_files_to_clipboard([m["path"] for m in media]))
+            shown = True
+        url = (it.get("video_url") or "").strip()
+        if url:
+            menu.addAction("🔗 复制视频链接").triggered.connect(
+                lambda _=False: (QApplication.clipboard().setText(url),
+                                 self.app.toast("已复制视频链接", "success")))
+            shown = True
+        if shown:
+            menu.addSeparator()
         if md_path and os.path.exists(md_path):
             menu.addAction("📄 打开数据文件（MD）").triggered.connect(
                 lambda _=False, p=md_path: os.startfile(p))  # noqa: PTH110
@@ -2594,11 +2694,18 @@ class AssetPage(BasePage):
         title_lbl.setWordWrap(True)
         v.addWidget(title_lbl)
         self._attach_copy_menu(title_lbl, item.get("title") or "", "标题")
+        # 封面预览（右键：复制图片/复制链接/定位文件），无封面源则跳过
+        self._add_detail_cover(v, item)
         # (行名, 显示值, 复制原文, 复制菜单名 None=不提供复制, 是否时间字段)
+        dur = _fmt_duration_cn(item.get("duration"))
         info_lines = [
             ("平台", plat_cn, plat_cn, "平台", False),
             ("作者", "@" + (item.get("author") or "-"),
              item.get("author") or "", "发布者", False),
+        ]
+        if dur:
+            info_lines.append(("时长", dur, dur, "时长", False))
+        info_lines.extend([
             ("播放/阅览", _fmt(item.get("play_count", 0)),
              str(item.get("play_count") or 0), "播放/阅览", False),
             ("点赞", _fmt(item.get("like_count", 0)),
@@ -2615,7 +2722,7 @@ class AssetPage(BasePage):
              item.get("video_url") or "", "作品链接", False),
             ("原始URL", item.get("raw_url") or "-",
              item.get("raw_url") or "", "原始链接", False),
-        ]
+        ])
         for k, val, raw, copy_title, is_time in info_lines:
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
@@ -2685,6 +2792,103 @@ class AssetPage(BasePage):
         outer.addLayout(bottom)
         win.exec()
 
+    def _add_detail_cover(self, v, item):
+        """详情窗封面预览：本地文件优先（视频同名官方封面/首图），网络封面兜底。
+
+        右键菜单：📋 复制图片（进剪贴板）/ 🔗 复制封面链接 / 📂 打开媒体位置。
+        无任何封面源时不占位。
+        """
+        mfs = item.get("media_files") or []
+        vids = [m for m in mfs if m.get("type") == "video"]
+        imgs = [m for m in mfs if m.get("type") == "image"]
+        cu = (item.get("cover_url") or "").strip()
+        local = ""
+        if vids:  # 与视频同名的图片 = 官方封面（B站下载时同步保存）
+            vstems = {Path(v["path"]).stem for v in vids}
+            for im in imgs:
+                if Path(im["path"]).stem in vstems:
+                    local = im["path"]
+                    break
+        if not local and cu and not cu.startswith(("http://", "https://", "//")) \
+                and os.path.exists(cu):
+            local = cu
+        if not local and imgs:  # 图文帖：首图即封面
+            local = imgs[0]["path"]
+        url = cu if cu.startswith(("http://", "https://", "//")) else ""
+        if not local and not url:
+            return
+
+        state = {"img": None}
+        lbl = QLabel("🖼 封面加载中...")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setFixedSize(320, 200)
+        lbl.setStyleSheet(
+            "background: #eef1f5; border-radius: 6px; color: #9aa1ad;")
+        v.addWidget(lbl)
+
+        def load():
+            try:
+                if local and os.path.exists(local):
+                    from PIL import Image
+                    img = Image.open(local).convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    return buf.getvalue()
+                import requests
+                h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/126.0.0.0 Safari/537.36"}
+                # 图床防盗链：与列表缩略图同源的 Referer 规则
+                if "hdslb" in url or "bilibili" in url:
+                    h["Referer"] = "https://www.bilibili.com/"
+                elif "sinaimg" in url or "weibo" in url:
+                    h["Referer"] = "https://weibo.com/"
+                elif "xhscdn" in url or "xiaohongshu" in url:
+                    h["Referer"] = "https://www.xiaohongshu.com/"
+                resp = requests.get(("https:" + url) if url.startswith("//") else url,
+                                    timeout=8, headers=h)
+                return resp.content if resp.ok else None
+            except Exception:
+                return None
+
+        def done(data, err):
+            try:
+                if not data:
+                    lbl.setText("🖼 封面不可用")
+                    return
+                qimg = QImage.fromData(data)
+                if qimg.isNull():
+                    lbl.setText("🖼 封面不可用")
+                    return
+                state["img"] = qimg
+                lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
+                    320, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            except RuntimeError:
+                pass  # 详情窗已关闭
+
+        def menu(pos):
+            m = QMenu(lbl)
+            act_img = m.addAction("📋 复制图片")
+            act_img.setEnabled(state["img"] is not None)
+            act_url = m.addAction("🔗 复制封面链接")
+            act_url.setEnabled(bool(url))
+            act_open = m.addAction("📂 打开媒体位置")
+            act_open.setEnabled(bool(local) and os.path.exists(local))
+            act = m.exec(lbl.mapToGlobal(pos))
+            if act is act_img and state["img"] is not None:
+                QApplication.clipboard().setImage(state["img"])
+                self.app.toast("已复制封面图片", "success")
+            elif act is act_url and url:
+                QApplication.clipboard().setText(
+                    ("https:" + url) if url.startswith("//") else url)
+                self.app.toast("已复制封面链接", "success")
+            elif act is act_open and local and os.path.exists(local):
+                self._reveal_media(local)
+
+        lbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        lbl.customContextMenuRequested.connect(menu)
+        run_bg(load, done)
+
     def _load_local_thumb_cell(self, path, size, is_video=False):
         """媒体网格单格：双击图片用系统看图器开大图 / 双击视频缩略图播放。
 
@@ -2701,11 +2905,15 @@ class AssetPage(BasePage):
         lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
         lbl.setToolTip(path)
 
-        # 右键缩略图 → 打开媒体位置（资源管理器定位该文件）
+        # 右键缩略图 → 复制文件（可粘贴到文件夹/聊天软件）/ 打开媒体位置
         def _thumb_menu(pos):
             menu = QMenu(lbl)
+            act_copy = menu.addAction("📋 复制视频" if is_video else "📋 复制图片文件")
             act = menu.addAction("📂 打开媒体位置")
-            if menu.exec(lbl.mapToGlobal(pos)) is act:
+            chosen = menu.exec(lbl.mapToGlobal(pos))
+            if chosen is act_copy:
+                self._copy_files_to_clipboard([path])
+            elif chosen is act:
                 self._reveal_media(path)
 
         lbl.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -2834,6 +3042,20 @@ class AssetPage(BasePage):
             os.startfile(path)
         except Exception as e:
             self.app.toast(f"打开失败: {e}", "error")
+
+    def _copy_files_to_clipboard(self, paths):
+        """媒体文件复制到剪贴板（Windows 文件复制，可粘贴到文件夹/聊天软件发送）。"""
+        paths = [p for p in (paths or []) if p and os.path.exists(p)]
+        if not paths:
+            self.app.toast("媒体文件不存在或已被移动", "error")
+            return
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(os.path.normpath(p)) for p in paths])
+        QApplication.clipboard().setMimeData(mime)
+        if len(paths) == 1:
+            self.app.toast(f"已复制 {os.path.basename(paths[0])}，可直接粘贴", "success")
+        else:
+            self.app.toast(f"已复制 {len(paths)} 个文件，可直接粘贴", "success")
 
     # ==================== 导出预览图 ====================
 
