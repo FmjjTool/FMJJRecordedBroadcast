@@ -7,6 +7,7 @@
 - 开始提取（后台线程，可停止）/ 停止；进度条 + 日志
 - 回车快捷：第一次回车=扫描，第二次回车=开始提取
 - 删除日期内音频：弹复选框对话框（默认全选、全选/全不选/取消），后台移入回收站
+- 外部拖入：拖入视频文件/文件夹 → 追加到文件列表（标记「外部」，不限工作目录）
 """
 
 import os
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
 from toolbox.audio_engine import (
     delete_files_safe, extract_audio_one, find_audio_videos, scan_audio_by_date,
 )
-from toolbox.utils import format_size
+from toolbox.utils import format_size, is_video_file
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
@@ -35,6 +36,7 @@ class AudioPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.videos = []
+        self.external_paths = []  # 拖入的外部视频（工作目录之外，扫描/重扫后保留）
         self.running = False
         self._enter_stage = 0  # 回车快捷：0=待扫描，1=待提取
 
@@ -171,19 +173,18 @@ class AudioPage(BasePage):
         self.log_text.clear()
         if not self.videos:
             self._log("⚠️ 未找到视频文件")
-            self.file_list.clear()
-            self.list_head_label.setText("（扫描后显示文件列表，默认勾选当天）")
         else:
             self._log(f"📂 扫描完成，共找到 {len(self.videos)} 个视频:")
             for i, v in enumerate(self.videos, 1):
                 size = format_size(v.stat().st_size) if v.exists() else "?"
                 self._log(f"  [{i}] {self._rel(v)}  ({size})")
             self._log("💡 在下方勾选要提取的文件（默认勾选当天），按「开始提取」")
-            self._render_file_checks(self.videos)
-            self._refresh_start_btn()
+        self._render_file_checks(self.videos)
+        self._refresh_start_btn()
 
     def _render_file_checks(self, videos):
-        """渲染扫描结果的文件复选框列表。默认勾选当天（北京 UTC+8）文件。"""
+        """渲染扫描结果的文件复选框列表。默认勾选当天（北京 UTC+8）文件。
+        拖入的外部文件（不在本次扫描结果里）追加在列表尾部并保留勾选状态。"""
         self.file_list.blockSignals(True)
         self.file_list.clear()
         if not videos:
@@ -191,6 +192,7 @@ class AudioPage(BasePage):
         else:
             self.list_head_label.setText(
                 f"📋 扫描到 {len(videos)} 个文件（默认勾选当天 = {self._today_bj_str()}）")
+        scanned = {str(v) for v in videos}
         for v in videos:
             is_today = self._is_today_bj(v)
             try:
@@ -203,7 +205,64 @@ class AudioPage(BasePage):
             item.setCheckState(Qt.Checked if is_today else Qt.Unchecked)
             item.setData(Qt.UserRole, str(v))
             self.file_list.addItem(item)
+        for f in self.external_paths:
+            if f in scanned:
+                continue
+            self._append_external_item(f, Qt.Checked)
         self.file_list.blockSignals(False)
+
+    def _append_external_item(self, path, check_state):
+        """外部拖入文件加入列表（工作目录外显示完整路径 + 外部标记）。"""
+        try:
+            size = format_size(Path(path).stat().st_size) if Path(path).exists() else "?"
+        except Exception:
+            size = "?"
+        under_work = self.app.work_dir and str(path).startswith(
+            str(Path(self.app.work_dir).resolve()))
+        display = self._rel(Path(path)) if under_work else str(path)
+        tag = "" if under_work else " 📥外部"
+        item = QListWidgetItem(f"{display}  ({size}){tag}")
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(check_state)
+        item.setData(Qt.UserRole, str(path))
+        self.file_list.addItem(item)
+
+    # ==================== 外部拖入 ====================
+
+    def add_dropped_files(self, files):
+        """拖入视频文件 → 追加到列表（默认勾选，可提取）。"""
+        existing = {self.file_list.item(i).data(Qt.UserRole)
+                    for i in range(self.file_list.count())}
+        added = []
+        for f in files:
+            if not is_video_file(f) or f in self.external_paths or f in existing:
+                continue
+            self.external_paths.append(f)
+            added.append(f)
+        if added:
+            self.file_list.blockSignals(True)
+            for f in added:
+                self._append_external_item(f, Qt.Checked)
+            self.file_list.blockSignals(False)
+            self._log(f"📥 拖放添加 {len(added)} 个外部视频:")
+            for f in added:
+                self._log(f"  + {os.path.basename(f)}")
+        else:
+            self._log("📥 拖放：无新增视频文件（仅支持视频文件，重复自动忽略）")
+        self._refresh_start_btn()
+
+    def add_dropped_folder(self, folder):
+        """拖入文件夹 → 递归收集其中的视频文件加入列表。"""
+        found = []
+        for root, _dirs, names in os.walk(folder):
+            for n in names:
+                fp = os.path.join(root, n)
+                if is_video_file(fp):
+                    found.append(fp)
+        if found:
+            self.add_dropped_files(found)
+        else:
+            self._log(f"📥 拖放文件夹: {folder}（其中没有视频文件）")
 
     def _set_all_checks(self, val):
         self.file_list.blockSignals(True)
@@ -230,9 +289,9 @@ class AudioPage(BasePage):
     def _refresh_start_btn(self):
         selected = self._selected_videos()
         self.start_btn.setEnabled(bool(selected))
-        if self.videos:
-            self.count_label.setText(
-                f"共 {len(self.videos)} 个视频，已勾选 {len(selected)}")
+        total = self.file_list.count()
+        if total or self.videos:
+            self.count_label.setText(f"共 {total} 个视频，已勾选 {len(selected)}")
 
     def _start(self):
         to_process = self._selected_videos()

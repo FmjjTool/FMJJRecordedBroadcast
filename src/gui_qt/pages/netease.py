@@ -163,7 +163,8 @@ class NeteasePage(BasePage):
         "<p style='color:#888'>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
         "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录 Cookie 下载。"
         "网易云 Cookie 文件：netease/cookie.txt；也可左侧底部「🍪 管理 Cookie → 网易云」"
-        "扫码登录或手动输入。下载目录：全局设置里配置的导出目录（默认 download/）</p>"
+        "扫码登录或手动输入。下载目录：「导出」处可选默认位置（全局设置的导出目录，"
+        "默认 download/歌曲文件）或固定位置（自选文件夹，音乐解密输出同目录）</p>"
     )
 
     # ===================== 功能 tab =====================
@@ -227,6 +228,23 @@ class NeteasePage(BasePage):
         bottom.addWidget(QLabel("音质:"))
         self.quality_menu = QComboBox()
         bottom.addWidget(self.quality_menu)
+        # 导出位置双选项：默认位置（统一导出目录/歌曲文件） / 固定位置（自选文件夹）
+        bottom.addWidget(QLabel("导出:"))
+        self.export_loc_combo = QComboBox()
+        self.export_loc_combo.addItem("默认位置")
+        self.export_loc_combo.addItem("固定位置")
+        try:
+            if load_convert_config().get("music_download_use_custom"):
+                self.export_loc_combo.setCurrentIndex(1)
+        except Exception:
+            pass
+        self.export_loc_combo.currentIndexChanged.connect(self._on_export_loc_changed)
+        bottom.addWidget(self.export_loc_combo)
+        pick_dir_btn = QPushButton("📁")
+        pick_dir_btn.setFixedSize(30, 26)
+        pick_dir_btn.setToolTip("选择固定导出位置（文件夹）")
+        pick_dir_btn.clicked.connect(self._pick_music_dir)
+        bottom.addWidget(pick_dir_btn)
         self.download_btn = QPushButton("⬇ 下载选中")
         self.download_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
         self.download_btn.clicked.connect(self._download_selected)
@@ -263,6 +281,43 @@ class NeteasePage(BasePage):
             cfg = load_convert_config()
             cfg["music_fallback_enabled"] = bool(checked)
             save_convert_config(cfg)
+        except Exception:
+            pass
+
+    # ===================== 导出位置（默认/固定 双选项） =====================
+    def _on_export_loc_changed(self, index):
+        try:
+            cfg = load_convert_config()
+            cfg["music_download_use_custom"] = index == 1
+            save_convert_config(cfg)
+        except Exception:
+            pass
+        self._update_export_dir_tip()
+
+    def _pick_music_dir(self):
+        from PySide6.QtWidgets import QFileDialog
+        import os
+        try:
+            cur = load_convert_config().get("music_download_custom_dir", "") or os.path.expanduser("~")
+        except Exception:
+            cur = ""
+        picked = QFileDialog.getExistingDirectory(self, "选择歌曲固定导出位置", cur)
+        if not picked:
+            return
+        try:
+            cfg = load_convert_config()
+            cfg["music_download_custom_dir"] = picked
+            save_convert_config(cfg)
+        except Exception:
+            pass
+        self.export_loc_combo.setCurrentIndex(1)
+        self._update_export_dir_tip()
+        self.app.toast(f"固定导出位置: {picked}", "success")
+
+    def _update_export_dir_tip(self):
+        try:
+            from toolbox.config_manager import get_music_download_dir
+            self.export_loc_combo.setToolTip(f"当前下载目录: {get_music_download_dir()}")
         except Exception:
             pass
 
@@ -817,8 +872,8 @@ class NeteasePage(BasePage):
 
         def work():
             from music.downloader import download_song_smart
-            from toolbox.config_manager import get_export_subdir
-            out_dir = str(get_export_subdir("music"))
+            from toolbox.config_manager import get_music_download_dir
+            out_dir = str(get_music_download_dir())
             try:
                 return download_song_smart(song, out_dir, quality, fallback=use_fallback)
             except Exception as e:
@@ -852,10 +907,10 @@ class NeteasePage(BasePage):
 
         def work():
             from netease import MusicDownloader, COOKIE_FILE
-            from toolbox.config_manager import get_export_subdir
+            from toolbox.config_manager import get_music_download_dir
             from auth import sync_netease_to_legacy
             sync_netease_to_legacy()
-            out_dir = str(get_export_subdir("music"))
+            out_dir = str(get_music_download_dir())
             dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
             try:
                 r = dl.download_music_file(sid, quality)
@@ -897,8 +952,8 @@ class NeteasePage(BasePage):
         def work():
             from concurrent.futures import ThreadPoolExecutor, as_completed
             from music.downloader import download_song_smart
-            from toolbox.config_manager import get_export_subdir
-            out_dir = str(get_export_subdir("music"))
+            from toolbox.config_manager import get_music_download_dir
+            out_dir = str(get_music_download_dir())
             ok, fail, preview, via_cnt, first_err = 0, 0, 0, 0, ""
 
             def _one(item):
@@ -966,10 +1021,10 @@ class NeteasePage(BasePage):
 
         def work():
             from netease import MusicDownloader, COOKIE_FILE, album_detail
-            from toolbox.config_manager import get_export_subdir
+            from toolbox.config_manager import get_music_download_dir
             from auth import sync_netease_to_legacy
             sync_netease_to_legacy()
-            out_dir = str(get_export_subdir("music"))
+            out_dir = str(get_music_download_dir())
             dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
             ok, fail, first_err = 0, 0, ""
             ids = []

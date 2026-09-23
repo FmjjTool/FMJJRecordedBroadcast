@@ -2,7 +2,7 @@
 
 与原版（customtkinter）一一对应：
 - 侧栏底部 Cookie 状态区（总开关 + 已登录计数 + 管理入口）
-- 全局拖放（字幕/歌词页接收文件，其他页切换工作目录）
+- 全局拖放（字幕/歌词/音乐标签/图片裁切/媒体筛选/媒体压缩/音频提取页接收文件，其他页切换工作目录）
 - 工作目录持久化 + on_dir_changed 广播
 - 回车键统一分发到当前页 on_return_press（输入框聚焦时不拦截）
 """
@@ -52,6 +52,7 @@ from gui_qt.pages.cover_maker import CoverMakerPage
 from gui_qt.pages.image_sorter import ImageSorterPage
 from gui_qt.pages.media_compress import MediaCompressPage
 from gui_qt.pages.video_comments import VideoCommentsPage
+from gui_qt.pages.wechat_article import WechatArticlePage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> 页面类
@@ -60,6 +61,7 @@ PAGE_CLASSES = {
     "info_batch": InfoBatchPage,
     "info_accounts": InfoAccountsPage,
     "info_results": InfoResultsPage,
+    "wechat_article": WechatArticlePage,
     "asset": AssetPage,
     "toolbox_organize": OrganizePage,
     "toolbox_convert": ConvertPage,
@@ -97,6 +99,7 @@ NAV_GROUPS = [
         ("info_batch", "📋 批量导入"),
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
+        ("wechat_article", "📰 公众号解析"),
         ("bili_resource", "🎁 B站资源"),
         ("video_comments", "💬 视频评论区"),
     ]),
@@ -536,12 +539,15 @@ class MainWindow(QMainWindow):
         dirs = [f for f in files if os.path.isdir(f)]
         file_list = [f for f in files if os.path.isfile(f)]
 
-        # 字幕转换页 / 歌词转换页 / 音乐标签页 / 图片裁切页 / 媒体筛选分类页 / 媒体压缩页：接受拖放的文件或文件夹（本地列表，不改全局目录）
-        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics", "music_tag", "image_crop", "image_sorter", "media_compress"):
+        # 字幕转换页 / 歌词转换页 / 音乐标签页 / 图片裁切页 / 媒体筛选分类页 / 媒体压缩页
+        # / 音频提取页：接受拖放的文件或文件夹（本地列表，不改全局目录）
+        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics",
+                                 "music_tag", "image_crop", "image_sorter",
+                                 "media_compress", "toolbox_audio"):
             p = self.pages.get(self.current_page)
             if p:
-                if dirs:
-                    p.add_dropped_folder(dirs[0])
+                for d in dirs:
+                    p.add_dropped_folder(d)
                 if file_list:
                     p.add_dropped_files(file_list)
             return

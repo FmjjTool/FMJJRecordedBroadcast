@@ -106,8 +106,8 @@ class MusicUnlockPage(BasePage):
         self.log_text.clear()
         self.log_text.append(f"⏳ 开始解密 {len(files)} 个文件...\n")
 
-        from toolbox.config_manager import get_export_subdir
-        out_dir = str(get_export_subdir("music"))
+        from toolbox.config_manager import get_music_download_dir
+        out_dir = str(get_music_download_dir())
 
         def work():
             from music_unlock import decrypt_to

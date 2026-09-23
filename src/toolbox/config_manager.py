@@ -219,6 +219,12 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "local_inc_enabled": False,
     # 音乐下载页「自动换源」
     "music_fallback_enabled": True,
+    # 音乐下载页「导出位置」双选项：默认位置(统一导出目录) / 固定位置
+    "music_download_use_custom": False,
+    "music_download_custom_dir": "",
+    # 公众号解析页「导出位置」双选项
+    "wechat_use_custom_dir": False,
+    "wechat_custom_dir": "",
     # 已获取页导出格式
     "export_formats": ["json", "xlsx", "md"],
     "launcher_items": [],
@@ -439,6 +445,7 @@ EXPORT_CATEGORIES = {
     "danmaku_bili": "弹幕文件B站",
     "douyin_comments": "评论区",
     "video_comments": "评论区",
+    "wechat": "公众号文章",
 }
 
 
@@ -451,6 +458,20 @@ def get_export_subdir(category: str) -> Path:
     if category == "video_data":
         _migrate_video_data_layout(path)
     return path
+
+
+def get_music_download_dir() -> Path:
+    """歌曲下载目录：优先「固定位置」（音乐下载页双选项），否则统一导出目录/歌曲文件。"""
+    cfg = load_convert_config()
+    d = cfg.get("music_download_custom_dir", "")
+    if cfg.get("music_download_use_custom") and d:
+        p = Path(d)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except OSError:
+            pass
+    return get_export_subdir("music")
 
 
 _VD_LAYOUT_MIGRATED = False
