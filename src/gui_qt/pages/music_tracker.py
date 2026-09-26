@@ -181,7 +181,7 @@ class MusicTrackerPage(BasePage):
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("账号名:"))
         self.add_name = QLineEdit()
-        self.add_name.setPlaceholderText("如 封茗囧菌网易云")
+        self.add_name.setPlaceholderText("如 封茗囧菌网易云（留空自动获取）")
         r1.addWidget(self.add_name, 1)
         r1.addWidget(QLabel("平台:"))
         self.add_platform = QComboBox()
@@ -203,8 +203,8 @@ class MusicTrackerPage(BasePage):
         self.add_group_sel = QComboBox()
         self.add_group_sel.setFixedWidth(120)
         r2.addWidget(self.add_group_sel)
-        add_btn = icon_button("➕", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
-        r2.addWidget(add_btn)
+        self.add_acc_btn = icon_button("➕", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
+        r2.addWidget(self.add_acc_btn)
         av.addLayout(r2)
         outer.addWidget(add_card)
 
@@ -855,11 +855,33 @@ class MusicTrackerPage(BasePage):
         return v.split(":")[0].strip()
 
     def _add_account(self):
-        name = self.add_name.text().strip() or "未命名"
+        name = self.add_name.text().strip()
         url = self.add_url.text().strip()
         if not url:
             self.app.toast("请输入账号链接（可在上方搜索自动填入）", "warning")
             return
+        if name:
+            self._do_add_account(url, name)
+        else:
+            # 名称留空 → 自动获取「昵称+平台」（如 封茗囧菌网易云），失败回退「未命名」
+            self.app.toast("名称留空，正在自动获取账号名...", "info")
+            self.add_acc_btn.setEnabled(False)
+
+            def work():
+                from platforms.account_names import fetch_display_name
+                return fetch_display_name(url)
+
+            def done(result, err):
+                self.add_acc_btn.setEnabled(True)
+                auto_name, _ferr = result or ("", "")
+                if not auto_name:
+                    reason = str(err)[:60] if err else ""
+                    self.app.toast(f"自动获取失败{('：' + reason) if reason else ''}，已按「未命名」添加", "warning")
+                self._do_add_account(url, auto_name or "未命名")
+
+            run_bg(work, done)
+
+    def _do_add_account(self, url: str, name: str):
         from music_account.accounts import parse_url, extract_pid, load_accounts, save_accounts
         plat_map = {"自动识别": "", "网易云": "netease", "QQ音乐": "qq", "酷狗": "kugou",
                     "酷我": "kuwo", "5sing": "fivesing"}

@@ -258,3 +258,32 @@ def fetch_music_account_name(url: str) -> tuple[str, str]:
     if name:
         return name, ""
     return "", f"{label}未返回昵称"
+
+
+def _append_platform(name: str, label: str) -> str:
+    """昵称 + 平台标签（昵称已以平台结尾则不重复拼，如「封茗囧菌抖音」）。"""
+    if not label or name.endswith(label):
+        return name
+    return f"{name}{label}"
+
+
+def fetch_display_name(url: str) -> tuple[str, str]:
+    """任意平台主页链接 → 「昵称+平台」默认名（如 封茗囧菌抖音 / 封茗囧菌网易云）。
+
+    供添加账号时名称留空的自动命名：先按视频平台识别，失败再试音乐平台。
+    返回 (默认名, 错误信息)，恰好一个非空。
+    """
+    from platforms.base import URLRecognizer
+    platform = URLRecognizer.recognize(url or "")
+    if platform:
+        name, err = fetch_account_name(url)
+        if name:
+            return _append_platform(name, PLATFORM_LABELS.get(platform, platform)), ""
+        return "", err
+    name, err = fetch_music_account_name(url)
+    if name:
+        from music_account.accounts import parse_url
+        mplat, _, _ = parse_url(url)
+        from music_account.accounts import PLATFORM_NAMES
+        return _append_platform(name, PLATFORM_NAMES.get(mplat, mplat or "")), ""
+    return "", err

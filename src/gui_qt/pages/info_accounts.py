@@ -106,6 +106,8 @@ class InfoAccountsPage(BasePage):
             "抓取结果进入「已获取」与增量数据库</p>"
             "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
             "<p>· <b>⏰ 定时获取</b>：按间隔自动抓取全部账号</p>"
+            "<p>· <b>📤 同步到追踪</b>：本页账号一键同步到「视频账号追踪」，"
+            "已存在的自动跳过，账号名/分组一并带过去（免重复录入）</p>"
             "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
             "<p>· Cookie 统一由侧栏「Cookie 管理」维护，抓取时自动套用</p>")))
         layout.addLayout(title_row)
@@ -123,7 +125,7 @@ class InfoAccountsPage(BasePage):
                                           self.name_fetch_btn))
         add_row.addWidget(self.name_fetch_btn)
         self.name_entry = QLineEdit()
-        self.name_entry.setPlaceholderText("账号名")
+        self.name_entry.setPlaceholderText("账号名(留空自动获取)")
         self.name_entry.setFixedWidth(110)
         add_row.addWidget(self.name_entry)
         self.add_gid_entry = QLineEdit()
@@ -141,6 +143,10 @@ class InfoAccountsPage(BasePage):
                             lambda _=False, m=mode: self._acc_select(m))
             sel_bar.addWidget(b)
         sel_bar.addStretch(1)
+        self.sync_btn = icon_button(
+            "📤", "同步到追踪：把本页账号一键同步到「视频账号追踪」（按平台+ID去重，已存在跳过；分组一并带过去）",
+            (36, 24), True, "font-size: 13px;", self._sync_to_tracker)
+        sel_bar.addWidget(self.sync_btn)
         layout.addLayout(sel_bar)
 
         # 账号列表（复选框，固定高度滚动）
@@ -252,7 +258,7 @@ class InfoAccountsPage(BasePage):
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("账号名:"))
         self.set_name_entry = QLineEdit()
-        self.set_name_entry.setPlaceholderText("如 封茗囧菌抖音")
+        self.set_name_entry.setPlaceholderText("如 封茗囧菌抖音（留空自动获取）")
         r1.addWidget(self.set_name_entry, 1)
         r1.addWidget(QLabel("分组:"))
         self.set_group_sel = GroupMultiSelect(width=126)
@@ -269,8 +275,8 @@ class InfoAccountsPage(BasePage):
             lambda: self._auto_fetch_name(self.set_url_entry, self.set_name_entry,
                                           self.set_name_fetch_btn))
         r2.addWidget(self.set_name_fetch_btn)
-        add_btn2 = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
-        r2.addWidget(add_btn2)
+        self.set_add_btn = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
+        r2.addWidget(self.set_add_btn)
         ac.addLayout(r2)
         outer.addWidget(add_card)
 
@@ -390,6 +396,27 @@ class InfoAccountsPage(BasePage):
             return
         name = self.name_entry.text().strip()
         gid = self.add_gid_entry.text().strip()
+        if name:
+            self._do_add(url, name, gid)
+        else:
+            # 名称留空 → 自动获取「昵称+平台」（如 封茗囧菌抖音）
+            self.app.toast("名称留空，正在自动获取账号名...", "info")
+            self.add_btn.setEnabled(False)
+
+            def work():
+                from platforms.account_names import fetch_display_name
+                return fetch_display_name(url)
+
+            def done(result, err):
+                self.add_btn.setEnabled(True)
+                if err:
+                    self.app.toast(f"自动获取失败：{str(err)[:60]}，已按无名称添加", "warning")
+                auto_name, _ferr = result or ("", "")
+                self._do_add(url, auto_name, gid)
+
+            run_bg(work, done)
+
+    def _do_add(self, url: str, name: str, gid: str):
         from accounts_manager import add_account, get_groups
         groups = get_groups()
         gids = [g.strip() for g in gid.replace("，", ",").split(",") if g.strip()]
@@ -412,6 +439,27 @@ class InfoAccountsPage(BasePage):
             self.app.toast("请输入账号链接", "warning")
             return
         gids = self.set_group_sel.selected()
+        if name:
+            self._do_add_set(url, name, gids)
+        else:
+            # 名称留空 → 自动获取「昵称+平台」（如 封茗囧菌抖音）
+            self.app.toast("名称留空，正在自动获取账号名...", "info")
+            self.set_add_btn.setEnabled(False)
+
+            def work():
+                from platforms.account_names import fetch_display_name
+                return fetch_display_name(url)
+
+            def done(result, err):
+                self.set_add_btn.setEnabled(True)
+                if err:
+                    self.app.toast(f"自动获取失败：{str(err)[:60]}，已按无名称添加", "warning")
+                auto_name, _ferr = result or ("", "")
+                self._do_add_set(url, auto_name, gids)
+
+            run_bg(work, done)
+
+    def _do_add_set(self, url: str, name: str, gids: list):
         gid = ",".join(gids)
         from accounts_manager import add_account, get_groups
         gname = get_groups().get(gids[0], "") if gids else ""
@@ -424,6 +472,56 @@ class InfoAccountsPage(BasePage):
             QTimer.singleShot(150, self._reload_group_list)
         else:
             self.app.toast("账号已存在，无需重复添加", "warning")
+
+    # ---------- 同步到「视频账号追踪」 ----------
+    def _sync_to_tracker(self):
+        """把本页账号一键同步到「视频账号追踪」：按平台+ID去重，已存在跳过；
+        账号名/链接/分组一并带过去，分组不存在时按同组号+组名自动创建。"""
+        from accounts_manager import load_accounts as load_fm_accounts, get_groups as fm_groups
+        src_accounts = load_fm_accounts()
+        if not src_accounts:
+            self.app.toast("「账号获取」中暂无账号，先添加账号", "warning")
+            return
+        from tracker.accounts import (parse_url, load_accounts, save_accounts,
+                                      get_groups as tk_groups, save_group)
+        dst_accounts = load_accounts()
+
+        def _key(url):
+            plat, pid = parse_url(url)
+            return (plat, pid) if plat and pid else ("__url__", (url or "").strip())
+
+        existing = {_key(a.get("url", "")) for a in dst_accounts}
+        new_items, skipped, new_gids = [], 0, set()
+        for acc in src_accounts:
+            key = _key(acc.url)
+            if key in existing:
+                skipped += 1
+                continue
+            existing.add(key)
+            gids = [str(g) for g in (acc.group_ids or []) if str(g).strip()]
+            new_gids.update(gids)
+            new_items.append({"name": acc.name or "", "url": acc.url,
+                              "platform": _key(acc.url)[0] or "", "group_ids": gids})
+        if not new_items:
+            self.app.toast(f"共 {skipped} 个账号均已存在于「视频账号追踪」，无需同步", "info")
+            return
+        msg = (f"把「账号获取」的账号同步到「视频账号追踪」？\n\n"
+               f"共 {len(src_accounts)} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
+               + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
+               + ("\n…等" if len(new_items) > 8 else ""))
+        if QMessageBox.question(self, "同步到视频账号追踪", msg,
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        dst_accounts.extend(new_items)
+        save_accounts(dst_accounts)
+        # 分组带过去：追踪侧缺的组按同组号+组名补建
+        src_groups = fm_groups()
+        dst_groups = tk_groups()
+        for gid in new_gids:
+            if gid not in dst_groups and src_groups.get(gid):
+                save_group(gid, src_groups[gid])
+        self.app.toast(f"✅ 已同步 {len(new_items)} 个账号到「视频账号追踪」"
+                       + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     # ---------- 自动获取账号名 ----------
     def _auto_fetch_name(self, url_entry, name_entry, btn):
