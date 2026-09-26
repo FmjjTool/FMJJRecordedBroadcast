@@ -53,12 +53,47 @@ def probe(platform: str) -> dict:
         return {"ok": None, "username": ""}
 
 
+def _tb_nick(cookie: str) -> str:
+    """淘宝 Cookie 内的昵称字段（tracknick/dnk/_nk_ 为 URL 编码昵称）。"""
+    from urllib.parse import unquote
+
+    for name in ("tracknick", "dnk", "_nk_"):
+        v = _cookie_field(cookie, name)
+        if v:
+            v = unquote(v).strip()
+            if v:
+                return v
+    return ""
+
+
 def _taobao(cookie: str) -> dict:
-    # 淘宝无游客可用的身份接口（mtop 需签名+登录），从 cookie 的 unb 展示用户 ID
+    # 远程真实验证：复用商品采集同款 mtop 接口（wandering.get，需登录会话）——
+    #   ret 含 SUCCESS → 登录有效（商品采集可用）；FAIL_SYS_SESSION_EXPIRED → 登录失效；
+    #   RGV587 等风控假响应 → 无法判定（ok=None，可稍后重试）。
+    # 注意淘宝会话分层：网页层（i.taobao.com 跳登录）与 mtop 层独立，
+    # 商品采集只依赖 mtop 层，故以 mtop 接口为准。
     unb = _cookie_field(cookie, "unb")
-    if unb:
-        return {"ok": None, "username": f"淘宝ID {unb}"}
-    return {"ok": None, "username": ""}
+    nick = _tb_nick(cookie)
+    id_text = nick or (f"淘宝ID {unb}" if unb else "")
+    fallback = {"ok": None, "username": id_text}
+    try:
+        from shopping import _taobao_get_token, _taobao_mtop, get_verify_seller_id
+        sid = get_verify_seller_id()
+        if not sid:
+            return fallback
+        tk, cd = _taobao_get_token(cookie)
+        data = {"direction": 1, "userId": sid, "pageSize": 20,
+                "needPreNew": True, "id": 0, "curPage": 1, "preItemId": 0}
+        resp = _taobao_mtop("mtop.taobao.wireless.shop.index.wandering.get",
+                            "1.0", data, cd, tk)
+        ret = ";".join(str(x) for x in (resp.get("ret") or []))
+        if "SUCCESS" in ret:
+            return {"ok": True, "username": id_text}
+        if "SESSION_EXPIRED" in ret or "NEED_LOGIN" in ret:
+            return {"ok": False, "username": ""}
+        return fallback
+    except Exception:
+        return fallback
 
 
 def _xiaohongshu(cookie: str) -> dict:

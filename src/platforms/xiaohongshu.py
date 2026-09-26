@@ -182,20 +182,38 @@ class XiaohongshuParser(PlatformBase):
         m = _NOTE_URL_RE.search(url)
         if not m:
             raise ValueError("不是小红书笔记链接")
-        html = _fetch(url)
-        data = _balanced_json(html, r"window\.__INITIAL_STATE__")
-        if not data:
-            raise RuntimeError("小红书页面解析失败（可能需要 Cookie，或链接含失效 xsec_token）")
-        note_map = (data.get("note") or {}).get("noteDetailMap") or {}
-        first_id = (data.get("note") or {}).get("firstNoteId") or ""
-        entry = note_map.get(first_id) or {}
-        if entry.get("note") is None:
-            # 失效/风控时 entry 为 {"note": null}
-            raise RuntimeError(entry.get("errorMsg") or "小红书笔记数据为空（xsec_token 可能已失效）")
-        info = _note_to_info(entry.get("note") or {}, raw_url=url)
-        if info:
-            info.raw_url = url
-        return info
+        # 游客优先；游客无数据（xsec_token 校验过严/风控）时接入 Cookie 兜底
+        data = None
+        tries = [""]
+        ck = _get_cookie()
+        if ck:
+            tries.append(ck)
+        for cookie in tries:
+            try:
+                html = _fetch(url, cookie=cookie) if cookie else _fetch(url)
+            except Exception:
+                if not cookie:
+                    continue
+                break
+            data = _balanced_json(html, r"window\.__INITIAL_STATE__")
+            if not data:
+                continue
+            note_map = (data.get("note") or {}).get("noteDetailMap") or {}
+            first_id = (data.get("note") or {}).get("firstNoteId") or ""
+            entry = note_map.get(first_id) or {}
+            if entry.get("note") is not None:
+                info = _note_to_info(entry.get("note") or {}, raw_url=url)
+                if info:
+                    info.raw_url = url
+                    return info
+        if data:
+            note_map = (data.get("note") or {}).get("noteDetailMap") or {}
+            first_id = (data.get("note") or {}).get("firstNoteId") or ""
+            entry = note_map.get(first_id) or {}
+            if entry.get("note") is None:
+                # 失效/风控时 entry 为 {"note": null}
+                raise RuntimeError(entry.get("errorMsg") or "小红书笔记数据为空（xsec_token 可能已失效）")
+        raise RuntimeError("小红书页面解析失败（可能需要 Cookie，或链接含失效 xsec_token）")
 
     # ==================== 账号数据（主页信息） ====================
 

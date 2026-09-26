@@ -345,6 +345,7 @@ class InfoBatchPage(BasePage):
         def work():
             # 抖音：按所选画质重新解析拿新直链（存量直链有时效性）
             download_ops.refresh_douyin_urls(items, quality_label)
+            download_ops.refresh_xhs_urls(items)
             return download_ops.download_media_items(
                 items, log=self._log, threads=threads,
                 on_task_event=self.dl_panel.handle_event)

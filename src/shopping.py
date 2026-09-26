@@ -278,6 +278,37 @@ def _taobao_mtop(api: str, v: str, data: dict, cookie_dict: dict, tk: str) -> di
         return {}
 
 
+# 登录态远程验证（whoami）用的卖家 userId：优先用最近一次采集成功持久化的，
+# 无历史时用内置公开店铺兜底（wandering.get 只需一个真实卖家 ID 即可判登录态）
+_DEFAULT_VERIFY_SELLER_ID = 3697006383
+
+
+def get_verify_seller_id() -> int:
+    """whoami 淘宝远程验证用的卖家 userId（>0）。"""
+    try:
+        from toolbox.config_manager import load_convert_config
+        sid = int(str(load_convert_config().get("taobao_verify_seller_id") or 0))
+        if sid > 0:
+            return sid
+    except Exception:
+        pass
+    return _DEFAULT_VERIFY_SELLER_ID
+
+
+def _save_verify_seller_id(seller_id):
+    """持久化最近一次采集成功的卖家 ID（whoami 验证时优先使用）。"""
+    if not seller_id:
+        return
+    try:
+        from toolbox.config_manager import load_convert_config, save_convert_config
+        cfg = load_convert_config()
+        if str(cfg.get("taobao_verify_seller_id")) != str(seller_id):
+            cfg["taobao_verify_seller_id"] = str(seller_id)
+            save_convert_config(cfg)
+    except Exception:
+        pass
+
+
 def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
                          count: int = 60, log=None) -> dict:
     """登录态 mtop 拉店铺商品（HTTP，绕过 secSDK，**绕过 headless 反爬**）。
@@ -803,6 +834,7 @@ def fetch_taobao_shop_products(shop_info: ShopInfo, cookie: str, count: int = 60
         result = _try_mtop_shop_items(
             shop_info.shop_id, shop_info.seller_id, cookie, count=count, log=log)
         if result.get("items"):
+            _save_verify_seller_id(shop_info.seller_id)
             return _products_from_mtop_items(result["items"])
     except Exception as e:
         if log:

@@ -146,6 +146,39 @@ def refresh_douyin_urls(items, quality):
             pass
 
 
+def refresh_xhs_urls(items):
+    """小红书条目补真实直链。账号获取的卡片条目 video_url 是笔记页链接
+    （含 xsec_token），media_downloader 只认 CDN 直链会静默跳过视频。
+    逐条解析笔记页回填视频流/图片/类型；已是直链（单个解析/批量导入路径
+    走 parse() 拿到过直链）的条目跳过，不重复请求。"""
+    from media_downloader import _is_direct_media_url
+    xhs_items = [i for i in items
+                 if getattr(i, "platform", "") == "xiaohongshu"
+                 and getattr(i, "video_url", "")
+                 and not _is_direct_media_url(i.video_url)]
+    if not xhs_items:
+        return
+    from platforms import get_parser
+    parser = get_parser("xiaohongshu")
+    import time as _t
+    for idx, info in enumerate(xhs_items):
+        if idx:
+            _t.sleep(0.5)  # 连续访问笔记页间隔，降低风控
+        try:
+            new = parser.parse(info.raw_url or info.video_url)
+        except Exception:
+            continue
+        if not new:
+            continue
+        info.video_url = new.video_url
+        info.images = new.images
+        info.kind = new.kind
+        if new.duration:
+            info.duration = new.duration
+        if new.like_count:
+            info.like_count = new.like_count
+
+
 def refresh_weibo_urls(items):
     """微博条目重新解析拿新直链（weibocdn 直链带 Expires 签名，几天后 403）。
 
@@ -293,6 +326,7 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
             log(f"⬇ 下载 {len(non_bili)} 个其他媒体...")
         try:
             refresh_douyin_urls(non_bili, quality_label)
+            refresh_xhs_urls(non_bili)
             other_stats = download_media(non_bili, base_dir=out_dir,
                                          progress_callback=progress_cb if log else None,
                                          wait_range=(0.5, 1.5),

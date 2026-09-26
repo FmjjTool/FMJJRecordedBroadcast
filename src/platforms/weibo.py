@@ -6,6 +6,7 @@
 from typing import Optional
 import re
 import json
+import time
 import httpx
 from .base import PlatformBase, VideoInfo, now_str, normalize_datetime
 from toolbox.browser import launch as pw_launch
@@ -441,10 +442,11 @@ class WeiboParser(PlatformBase):
         return m.group(1) if m else ""
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
-        """三级回退：① 访客通行证 API → ② HTTP 页面 → ③ 接入用户 Cookie → ④ Playwright 兜底。
+        """多级回退：① 访客通行证 API（不足量且配置了 Cookie 时接入续抓）→ ② HTTP 页面
+        → ③ 接入用户 Cookie → ④ Playwright 兜底。
 
-        Cookie 是账号凭据，能不用就不用（降低风控/封号风险）；
-        游客方式实在连不上才接入，Cookie 固定放第三级。
+        Cookie 是账号凭据，能不用就不用（降低风控/封号风险）：
+        访客拿满 count 不动 Cookie；拿不满（如条数=0 无上限）才接入 Cookie 续翻合并。
         """
         uid = self.extract_user_id(url_or_id)
         if not uid: return []
@@ -458,6 +460,22 @@ class WeiboParser(PlatformBase):
             api_results = self._try_api_fetch(uid, count, visitor_headers)
             if api_results:
                 print(f"[微博-访客通行证] API 获取到 {len(api_results)} 条")
+                # 访客态通常翻 1 页即断（实测约 11 条后 ok!=1）；条数大/0=无上限时
+                # 访客拿不满，接入登录 Cookie 从头续翻再合并去重。游客优先原则不变：
+                # 访客拿满 count 就不动 Cookie
+                ck = get_cookie("weibo")
+                if ck and len(api_results) < count:
+                    cookie_headers = dict(self.HEADERS)
+                    cookie_headers["Cookie"] = ck
+                    print(f"[微博] 访客仅 {len(api_results)} 条（不足 {count}），接入 Cookie 续抓...")
+                    more = self._try_api_fetch(uid, count, cookie_headers)
+                    if more:
+                        seen = {r.video_id for r in api_results}
+                        for r in more:
+                            if r.video_id not in seen:
+                                api_results.append(r)
+                                seen.add(r.video_id)
+                        print(f"[微博-Cookie] 续抓合并后共 {len(api_results)} 条")
                 return api_results
 
         # 层级 2: HTTP 页面解析（游客）
@@ -491,6 +509,8 @@ class WeiboParser(PlatformBase):
         client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
         try:
             while remaining > 0:
+                if page > 1:
+                    time.sleep(0.5)  # 分页间隔，登录态深翻页时降低风控概率
                 params = {"type":"uid","value":uid,"containerid":f"107603{uid}","page":page}
                 resp = client.get(self.USER_API, params=params)
                 if resp.status_code != 200 or not resp.text.strip():

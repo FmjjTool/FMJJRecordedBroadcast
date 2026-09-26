@@ -558,6 +558,7 @@ class InfoResultsPage(BasePage):
         def work():
             download_ops.refresh_douyin_urls(items, quality)
             download_ops.refresh_weibo_urls(items)
+            download_ops.refresh_xhs_urls(items)
             return download_ops.download_media_items(items)
 
         def done(result, err):
