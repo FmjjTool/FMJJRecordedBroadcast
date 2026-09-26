@@ -1,10 +1,10 @@
 ﻿# 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.8.10** · 制作：歆慕
+> **FengMingToolbox v2.9.0** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.8.10>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.9.0>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -670,7 +670,7 @@ APP_PUBLISHER    = "歆慕"
 
 ### 更新日志
 
-#### v2.8.10（2026-09-26）
+#### v2.9.0（2026-09-26）
 
 - **公众号文章解析（新功能）**：新增公众号文章页——粘贴 mp.weixin.qq.com 链接（每行一条，支持批量），抓取标题/公众号/作者/发布时间与正文并自动下载全部配图（webp 自动转 png）；导出 HTML 自包含单文件（图片 base64 内嵌）/ PDF（A4 排版）/ Word docx（内置生成器无第三方依赖）/ Markdown 四种格式；导出位置支持「默认位置/固定位置」双选项并持久化。
 - **音乐与音频**：音乐下载页导出位置双选项（默认=统一导出目录/歌曲文件，可选固定文件夹），音乐解密页同步使用该目录；音频提取页支持拖入外部视频文件/文件夹（不限工作目录，扫描后保留）。

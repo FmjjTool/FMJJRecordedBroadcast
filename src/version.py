@@ -2,5 +2,5 @@
 
 APP_NAME = "FengMingToolbox"
 APP_DISPLAY_NAME = "封茗囧菌数据汇总库 统一维护工具箱"
-APP_VERSION = "2.8.10"
+APP_VERSION = "2.9.0"
 APP_PUBLISHER = "歆慕"
