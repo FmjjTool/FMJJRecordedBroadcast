@@ -713,7 +713,10 @@ class CookieManagerDialog(QDialog):
             try:
                 before = set(_enum_browser_windows())  # 快照必须在 launch 前
                 with sync_playwright() as p:
-                    browser = pw_launch(p, headless=False)
+                    # 登录浏览器强制直连：全部为国内站点，走系统代理反而会被本地
+                    # 代理工具干扰（代理开启时 DNS 解析失败，实测 ERR_NAME_NOT_RESOLVED）；
+                    # 与 app 其余采集器（requests 直连）保持一致
+                    browser = pw_launch(p, headless=False, args=["--no-proxy-server"])
                     ctx = browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -762,6 +765,10 @@ class CookieManagerDialog(QDialog):
                         QMessageBox.warning(
                             dlg, "打开失败",
                             f"浏览器启动失败：\n{msg}\n\n可改用「输入」手动粘贴 Cookie")
+                        # 自动关闭：页面没加载出来时对话框留着也保存不了任何
+                        # Cookie（点「已获取」只会提示「尚未捕获到任何 Cookie」），
+                        # 留着只会误导用户以为还能保存
+                        dlg.close()
                 post_to_main(_fail)
 
         def _pop_out():
