@@ -24,6 +24,7 @@ from gui_qt.pages.info_parse import InfoParsePage
 from gui_qt.pages.info_batch import InfoBatchPage
 from gui_qt.pages.info_accounts import InfoAccountsPage
 from gui_qt.pages.info_results import InfoResultsPage
+from gui_qt.pages.douyin_index import DouyinIndexPage
 from gui_qt.pages.asset import AssetPage
 from gui_qt.pages.subtitle import SubtitlePage
 from gui_qt.pages.organize import OrganizePage
@@ -61,6 +62,7 @@ PAGE_CLASSES = {
     "info_batch": InfoBatchPage,
     "info_accounts": InfoAccountsPage,
     "info_results": InfoResultsPage,
+    "douyin_index": DouyinIndexPage,
     "wechat_article": WechatArticlePage,
     "asset": AssetPage,
     "toolbox_organize": OrganizePage,
@@ -99,6 +101,7 @@ NAV_GROUPS = [
         ("info_batch", "📋 批量导入"),
         ("info_accounts", "👥 账号获取"),
         ("info_results", "📦 已获取"),
+        ("douyin_index", "📈 抖音指数"),
         ("wechat_article", "📰 公众号解析"),
         ("bili_resource", "🎁 B站资源"),
         ("video_comments", "💬 视频评论区"),

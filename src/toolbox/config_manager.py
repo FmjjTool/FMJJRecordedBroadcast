@@ -451,6 +451,7 @@ EXPORT_CATEGORIES = {
     "douyin_comments": "评论区",
     "video_comments": "评论区",
     "wechat": "公众号文章",
+    "douyin_index": "抖音指数",
 }
 
 
