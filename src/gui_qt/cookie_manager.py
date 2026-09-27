@@ -14,8 +14,8 @@ import time
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import auth
@@ -546,7 +546,8 @@ class CookieManagerDialog(QDialog):
             "xiaohongshu": ("https://www.xiaohongshu.com/", "小红书登录（软件内）",
                             ("web_session",), "点击「登录」→ 扫码或短信验证"),
             "kuaishou": ("https://www.kuaishou.com/", "快手登录（软件内）",
-                         ("passToken",), "点击「登录」→ 扫码或手机号登录"),
+                         ("kuaishou.server.web_st",),  # userId 游客也有，不能用
+                         "点击「登录」→ 扫码或手机号登录"),
             "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
                        ("cookie2", "unb", "sg"),
                        "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
@@ -584,6 +585,11 @@ class CookieManagerDialog(QDialog):
         cap_lbl = QLabel(f"  已捕获 {0} 个 Cookie（登录特征：{self_keys}）")
         cap_lbl.setStyleSheet("color: #888; padding: 4px;")
         bar.addWidget(cap_lbl, 1)
+        reload_btn = QPushButton("🔄 刷新")
+        reload_btn.setStyleSheet("color: #1565c0;")
+        reload_btn.setToolTip("页面白屏/卡死/加载异常时点此重新加载（Cookie 捕获不受影响）")
+        reload_btn.clicked.connect(lambda *args: state["reload"].set())
+        bar.addWidget(reload_btn)
         got_btn = QPushButton("✅ 已获取（保存 Cookie）")
         got_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
         got_btn.clicked.connect(lambda *args: save_now())
@@ -647,20 +653,95 @@ class CookieManagerDialog(QDialog):
             user32.EnumWindows(CB(_cb), 0)
             return out
 
-        state = {"stop": threading.Event(), "hwnd": 0, "overlay": False}
+        SWP_NOSIZE, SWP_NOMOVE = 0x0001, 0x0002
+        SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0010, 0x0040
+        SWP_ASYNCWINDOWPOS = 0x4000  # 关键：跨进程异步改窗口，不等对方窗口
+
+        def _bw_show(hwnd, show=True):
+            """跨进程显示/隐藏浏览器窗口。
+
+            必须走 SetWindowPos + SWP_ASYNCWINDOWPOS：同步的 ShowWindow /
+            SetWindowPos 要等目标窗口（Chromium）处理窗口消息才返回，
+            页面白屏/渲染挂起时它不响应 → 主线程被永久吊死（登录框
+            拖不动、按钮全点不动，实测快手白屏时如此）。
+            """
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                SWP_NOSIZE | SWP_NOMOVE | 0x0004  # NOZORDER
+                                | SWP_NOACTIVATE
+                                | (SWP_SHOWWINDOW if show else 0x0080)
+                                | SWP_ASYNCWINDOWPOS)
+
+        state = {"stop": threading.Event(), "hwnd": 0, "overlay": False,
+                 "box_open": False, "reload": threading.Event()}
+
+        def _fg_root():
+            """当前前台窗口的根窗口句柄（0=无）。"""
+            fg = user32.GetForegroundWindow()
+            if not fg:
+                return 0
+            return user32.GetAncestor(fg, 2) or fg  # GA_ROOT
+
+        def _overlay_should_show():
+            """贴合浏览器当前是否应可见。
+
+            登录框激活，或前台就是浏览器本身（用户正在页面里点/打字）→ 可见；
+            其余（用户在主窗口干活、切到别的程序）→ 收起：
+            - 顶层贴合窗口不被 Qt 的 owned 链约束，主窗口一激活就会把它压到
+              下面（「窗口存在却被 Qt 遮住」的根因），收起后再弹出最稳
+            - 主窗口里右键菜单/详情框是嵌套事件循环，与跨进程覆盖层共存
+              会把主线程冻死（实测），收起期间这组合不可能出现
+            """
+            hwnd = state.get("hwnd") or 0
+            if not hwnd or not state.get("overlay"):
+                return False
+            try:
+                if dlg.isActiveWindow():
+                    return True
+                return _fg_root() == hwnd
+            except Exception:
+                return True
+
+        def _resync():
+            """按激活状态同步贴合层可见性（显示时同时贴合+抬 z 序）。"""
+            hwnd = state.get("hwnd") or 0
+            if not hwnd or not state.get("overlay") or state.get("box_open"):
+                return
+            if _overlay_should_show():
+                _bw_show(hwnd, True)
+                _reposition()
+            else:
+                _bw_show(hwnd, False)
 
         def _reposition(*_a):
             """把无边框浏览器窗口贴到 host 的全局矩形上（含 z 序置顶）。"""
             hwnd = state.get("hwnd") or 0
             if not hwnd or not state.get("overlay"):
                 return
+            if state.get("box_open"):
+                return  # 弹窗期间不动浏览器，不与其抢 z 序
             try:
+                if not _overlay_should_show():
+                    return  # 已收起状态不贴合（_resync 负责显示时再贴）
                 from ctypes import wintypes
                 rc = wintypes.RECT()
                 if user32.GetWindowRect(int(host.winId()), ctypes.byref(rc)):
-                    user32.SetWindowPos(hwnd, 0, rc.left, rc.top,
-                                        rc.right - rc.left, rc.bottom - rc.top,
-                                        0x00C0)  # SWP_SHOWWINDOW|SWP_NOACTIVATE
+                    cur = wintypes.RECT()
+                    same = False
+                    if user32.GetWindowRect(hwnd, ctypes.byref(cur)):
+                        same = (cur.left, cur.top, cur.right, cur.bottom) == \
+                               (rc.left, rc.top, rc.right, rc.bottom)
+                    if same:
+                        # 矩形没变也要抬 z 序：主窗口激活过就会把浏览器压到
+                        # 下面（被 Qt 遮住的根因），NOMOVE|NOSIZE 不触发重绘
+                        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                            SWP_NOSIZE | SWP_NOMOVE
+                                            | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                                            | SWP_ASYNCWINDOWPOS)
+                    else:
+                        user32.SetWindowPos(hwnd, 0, rc.left, rc.top,
+                                            rc.right - rc.left, rc.bottom - rc.top,
+                                            SWP_NOACTIVATE | SWP_SHOWWINDOW
+                                            | SWP_ASYNCWINDOWPOS)
             except Exception:
                 pass
 
@@ -679,11 +760,12 @@ class CookieManagerDialog(QDialog):
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
                                       int(ex) | WS_EX_TOOLWINDOW)  # 不进任务栏/Alt-Tab
                 state["overlay"] = True
-                _reposition()
+                _resync()
                 for ms in (150, 400, 1000):
-                    QTimer.singleShot(ms, _reposition)
+                    QTimer.singleShot(ms, _resync)
 
-                # 对话框移动/缩放/激活/最小化时保持贴合（浏览器盖在对话框表面之上）
+                # 对话框激活/失活/移动/缩放/最小化时保持贴合；
+                # 失活时收起贴合层（防主窗口把它压到后面 + 规避嵌套循环冻死组合）
                 class _FollowFilter(QObject):
                     def eventFilter(self, obj, ev):
                         t = ev.type()
@@ -691,12 +773,16 @@ class CookieManagerDialog(QDialog):
                             return False
                         if t == QEvent.WindowStateChange:
                             if dlg.isMinimized():
-                                user32.ShowWindow(state["hwnd"], 0)  # 跟随隐藏
+                                _bw_show(state["hwnd"], False)   # 跟随隐藏
                             else:
-                                user32.ShowWindow(state["hwnd"], 5)   # SW_SHOW
-                                QTimer.singleShot(0, _reposition)
-                        elif t in (QEvent.Move, QEvent.Resize, QEvent.Show,
-                                   QEvent.WindowActivate):
+                                QTimer.singleShot(0, _resync)
+                        elif t == QEvent.WindowActivate:
+                            QTimer.singleShot(0, _resync)   # 回到登录框：弹出+贴合+置顶
+                        elif t == QEvent.WindowDeactivate:
+                            # 焦点去向未知（可能点进浏览器页面打字）→ 延迟
+                            # 判断，前台是浏览器本身就保持显示
+                            QTimer.singleShot(60, _resync)
+                        elif t in (QEvent.Move, QEvent.Resize, QEvent.Show):
                             QTimer.singleShot(0, _reposition)
                         return False
                 filt = _FollowFilter(dlg)
@@ -715,8 +801,11 @@ class CookieManagerDialog(QDialog):
                 with sync_playwright() as p:
                     # 登录浏览器强制直连：全部为国内站点，走系统代理反而会被本地
                     # 代理工具干扰（代理开启时 DNS 解析失败，实测 ERR_NAME_NOT_RESOLVED）；
-                    # 与 app 其余采集器（requests 直连）保持一致
-                    browser = pw_launch(p, headless=False, args=["--no-proxy-server"])
+                    # AutomationControlled：抹掉 navigator.webdriver 自动化标记，
+                    # 部分站点（实测快手）检测到会直接返回白屏
+                    browser = pw_launch(p, headless=False, args=[
+                        "--no-proxy-server",
+                        "--disable-blink-features=AutomationControlled"])
                     ctx = browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -751,6 +840,14 @@ class CookieManagerDialog(QDialog):
                     # 轮询捕获（全量含 HttpOnly；窗口被用户手动关闭时退出）
                     while not state["stop"].is_set():
                         time.sleep(1.5)
+                        if state["reload"].is_set():
+                            state["reload"].clear()
+                            try:  # 白屏/卡死的救急重载，失败保留现状
+                                page.reload(wait_until="domcontentloaded",
+                                            timeout=45000)
+                            except Exception:
+                                pass
+                            continue
                         try:
                             for c in ctx.cookies():
                                 n, val = c.get("name"), c.get("value")
@@ -762,13 +859,9 @@ class CookieManagerDialog(QDialog):
             except Exception as e:
                 def _fail(msg=str(e)):
                     if dlg.isVisible():
-                        QMessageBox.warning(
-                            dlg, "打开失败",
-                            f"浏览器启动失败：\n{msg}\n\n可改用「输入」手动粘贴 Cookie")
-                        # 自动关闭：页面没加载出来时对话框留着也保存不了任何
-                        # Cookie（点「已获取」只会提示「尚未捕获到任何 Cookie」），
-                        # 留着只会误导用户以为还能保存
-                        dlg.close()
+                        _info_box(QMessageBox.Warning, "打开失败",
+                                  f"浏览器启动失败：\n{msg}\n\n可改用「输入」手动粘贴 Cookie",
+                                  on_ok=dlg.close)
                 post_to_main(_fail)
 
         def _pop_out():
@@ -784,7 +877,8 @@ class CookieManagerDialog(QDialog):
                                       int(style) | WS_CAPTION | WS_THICKFRAME)
                 ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE, int(ex) & ~WS_EX_TOOLWINDOW)
-                user32.SetWindowPos(hwnd, 0, 100, 100, 1100, 760, 0x0040)  # SWP_SHOWWINDOW
+                # 尾部 0x4040 = SWP_SHOWWINDOW|SWP_ASYNCWINDOWPOS
+                user32.SetWindowPos(hwnd, 0, 100, 100, 1100, 760, 0x4040)
                 user32.SetForegroundWindow(hwnd)
             except Exception:
                 pass
@@ -793,20 +887,81 @@ class CookieManagerDialog(QDialog):
             state["stop"].set()
             state["overlay"] = False
             if state["hwnd"]:
-                user32.ShowWindow(state["hwnd"], 0)  # goto 阻塞期间避免独立窗口闪现
+                _bw_show(state["hwnd"], False)  # goto 阻塞期间避免独立窗口闪现
 
-        def save_now():
-            if not jar:
-                QMessageBox.warning(dlg, "无 Cookie", "尚未捕获到任何 Cookie，请先在页面完成登录")
-                return
-            if not any(k in jar for k in auth_keys):
-                ret = QMessageBox.question(
-                    dlg, "未检测到登录特征",
-                    f"未检测到登录特征 Cookie（{self_keys}），当前捕获 {len(jar)} 个。\n"
-                    "可能尚未完成登录，仍要保存吗？",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if ret != QMessageBox.Yes:
-                    return
+        def _info_box(icon, title, text, on_ok=None):
+            """非阻塞提示框：show() 代替 exec()。
+
+            模态 exec 的嵌套事件循环在跨进程覆盖层场景下会停摆（主线程冻死、
+            后续点击全被吞——实测 faulthandler 定位），非阻塞方式彻底规避。"""
+            hwnd = state.get("hwnd") or 0
+            hid = False
+            if hwnd and state.get("overlay"):
+                _bw_show(hwnd, False)  # 弹窗期间隐藏浏览器，防止盖住弹窗
+                hid = True
+
+            def _restore():
+                if hid and state.get("overlay") and state.get("hwnd"):
+                    _resync()  # 弹窗关闭：按当前激活状态决定弹出还是保持收起
+
+            b = QMessageBox(dlg)
+            b.setIcon(icon)
+            b.setWindowTitle(title)
+            b.setText(text)
+            b.addButton("知道了", QMessageBox.AcceptRole)
+            b.setWindowModality(Qt.WindowModal)
+            state["box_open"] = True
+
+            def _done(*_a):
+                state["box_open"] = False
+                _restore()
+                b.deleteLater()
+                if on_ok:
+                    on_ok()
+
+            b.buttonClicked.connect(lambda _btn: b.close())
+            b.finished.connect(_done)
+            b.show()
+
+        def _confirm_box(title, text, on_yes):
+            """非阻塞确认框：点「保存」才继续；「取消/ESC」不动作。"""
+            hwnd = state.get("hwnd") or 0
+            hid = False
+            if hwnd and state.get("overlay"):
+                _bw_show(hwnd, False)
+                hid = True
+
+            def _restore():
+                if hid and state.get("overlay") and state.get("hwnd"):
+                    _resync()
+
+            b = QMessageBox(dlg)
+            b.setIcon(QMessageBox.Question)
+            b.setWindowTitle(title)
+            b.setText(text)
+            yes = b.addButton("保存", QMessageBox.YesRole)
+            no = b.addButton("取消", QMessageBox.NoRole)
+            b.setDefaultButton(no)
+            b.setWindowModality(Qt.WindowModal)
+            state["box_open"] = True
+            ok = {"v": False}
+
+            def _done(*_a):
+                state["box_open"] = False
+                _restore()
+                b.deleteLater()
+                if ok["v"]:
+                    on_yes()
+
+            def _click(btn):
+                ok["v"] = (btn is yes)
+                b.close()
+
+            b.buttonClicked.connect(_click)
+            b.finished.connect(_done)
+            b.show()
+
+        def _do_save():
             cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
             try:
                 auth.set_cookie(plat, cookie_str)
@@ -814,9 +969,27 @@ class CookieManagerDialog(QDialog):
                 self._reload()
                 self._notify()
             except Exception as e:
-                QMessageBox.critical(dlg, "保存失败", f"Cookie 写入失败：\n{e}")
+                _info_box(QMessageBox.Critical, "保存失败", f"Cookie 写入失败：\n{e}")
                 return
             dlg.close()
+
+        def save_now():
+            if not jar:
+                _info_box(QMessageBox.Warning, "无 Cookie",
+                          "尚未捕获到任何 Cookie，请先在页面完成登录")
+                return
+            if not any(k in jar for k in auth_keys):
+                # 只有用「无登录特征的捕获」覆盖「已存有效登录」时才确认；
+                # 其余直接保存（旧版每次都弹「仍要保存吗」，且模态弹窗会卡死）
+                stored = auth.load_cookies().get(plat, "")
+                if any(k in stored for k in auth_keys):
+                    _confirm_box(
+                        "覆盖确认",
+                        f"当前捕获 {len(jar)} 个 Cookie，但未检测到登录特征（{self_keys}）。\n"
+                        "保存会覆盖已存的有效登录，确定吗？",
+                        _do_save)
+                    return
+            _do_save()
 
         dlg.closeEvent = lambda ev: _cleanup()
 

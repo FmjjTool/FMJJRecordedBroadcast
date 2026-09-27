@@ -54,7 +54,16 @@ def _balanced_json(html: str, marker: str):
     raw = html[start:j + 1]
     if not raw:
         return None
-    for cand in (raw, re.sub(r",\s*([}\]])", r"\1", raw).replace("undefined", "null")):
+    # SSR 赋值是 JS 语法不是纯 JSON：undefined 值、尾逗号、new Set([])/new Map([])
+    # （登录态页面实测出现；解析失败会被误判成「Cookie 无效/需要登录」）
+    base = re.sub(r",\s*([}\]])", r"\1", raw).replace("undefined", "null")
+    cands = (
+        raw,
+        base,
+        re.sub(r"new (?:Set|Map)\(\s*(\[[^\]]*\])?\s*\)",
+               lambda m: m.group(1) or "[]", base),
+    )
+    for cand in cands:
         try:
             import json
             return json.loads(cand)
@@ -109,22 +118,37 @@ def _fetch(url: str, cookie: str = "") -> str:
     return resp.text
 
 
+def _video_stream_items(note: dict) -> list:
+    """收集笔记全部视频流条目（2026-09 起 stream 键名被混淆为 EF4~EF7，遍历全部键）。"""
+    stream = (((note.get("video") or {}).get("media") or {}).get("stream") or {})
+    items = []
+    for arr in stream.values():
+        if isinstance(arr, list):
+            items.extend(s for s in arr if isinstance(s, dict))
+    return items
+
+
 def _video_url_of(note: dict) -> str:
-    """从笔记 JSON 提取最高清 h264 直链。"""
-    media = ((note.get("video") or {}).get("media") or {})
-    stream = media.get("stream") or {}
+    """从笔记 JSON 提取最高清直链。"""
     cands = []
-    for codec in ("h264", "h265", "av1"):
-        for s in (stream.get(codec) or []):
-            url = s.get("masterUrl") or ""
-            if url:
-                cands.append((int(s.get("height") or 0), url))
-            for b in (s.get("backupUrls") or []):
-                if b:
-                    cands.append((int(s.get("height") or 0) - 1, b))
+    for s in _video_stream_items(note):
+        url = s.get("masterUrl") or ""
+        if url:
+            cands.append((int(s.get("height") or 0), url))
+        for b in (s.get("backupUrls") or []):
+            if b:
+                cands.append((int(s.get("height") or 0) - 1, b))
     if not cands:
         return ""
     return max(cands, key=lambda x: x[0])[1]
+
+
+def _video_duration_of(note: dict) -> int:
+    for s in _video_stream_items(note):
+        d = s.get("videoDuration") or s.get("duration") or 0
+        if d:
+            return int(d) // 1000
+    return 0
 
 
 def _note_to_info(note: dict, raw_url: str = "") -> Optional[VideoInfo]:
@@ -157,9 +181,7 @@ def _note_to_info(note: dict, raw_url: str = "") -> Optional[VideoInfo]:
         comment_count=_parse_cn_count(interact.get("commentCount")),
         share_count=_parse_cn_count(interact.get("shareCount")),
         favorite_count=_parse_cn_count(interact.get("collectedCount")),
-        duration=int(((note.get("video") or {}).get("media") or {})
-                     .get("stream", {}).get("h264", [{}])[0].get("duration", 0) or 0) // 1000
-        if video_url else 0,
+        duration=_video_duration_of(note) if video_url else 0,
         cover_url=images[0] if images else "",
         video_url=video_url,
         publish_time=_ms_to_str(note.get("time")),
@@ -263,9 +285,16 @@ class XiaohongshuParser(PlatformBase):
             data = _balanced_json(html, r"window\.__INITIAL_STATE__")
             if not data:
                 return []
-            notes = ((data.get("user") or {}).get("notes")) or []
+            # 登录态 SSR 的 notes 是按 tab 分组的二维数组 [[card, card], ...]
+            # （游客态是一维空壳）；统一展平成卡片 wrapper 列表
+            flat = []
+            for wrapper in ((data.get("user") or {}).get("notes")) or []:
+                if isinstance(wrapper, list):
+                    flat.extend(w for w in wrapper if isinstance(w, dict))
+                elif isinstance(wrapper, dict):
+                    flat.append(wrapper)
             result = []
-            for wrapper in notes[:max(1, count)]:
+            for wrapper in flat[:max(1, count)]:
                 if not isinstance(wrapper, dict):
                     continue
                 card = wrapper.get("noteCard") or {}

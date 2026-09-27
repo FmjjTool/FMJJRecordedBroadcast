@@ -1,8 +1,10 @@
 """快手 (Kuaishou) 解析器：视频页 + 主页作品列表。
 
-数据源：页面内嵌 window.__APOLLO_STATE__（defaultClient 内 VisionVideoDetail* 键）。
-- 视频页：游客 HTTP 可拿全量（caption/播放/点赞/作者/直链）
-- 主页：游客被登录墙拦截，需 Cookie（Cookie 管理 → 快手）
+- 视频页：内嵌 window.__APOLLO_STATE__（defaultClient 内 VisionVideoDetail* 键），
+  游客 HTTP 可拿全量（caption/播放/点赞/作者/直链）
+- 主页：2026-09 改版后纯客户端渲染（__APOLLO_STATE__ 消失），作品列表由浏览器
+  调 /rest/v/profile/feed（需指纹+签名，HTTP 直连必被拦截）→ Playwright 渲染
+  + 拦截 feed 响应；登录墙(result=109)时需在「Cookie 管理」登录快手
 """
 
 import json
@@ -150,6 +152,63 @@ def _photo_to_info(photo: dict, author: dict, raw_url: str = "") -> VideoInfo:
     )
 
 
+def _best_feed_video_url(photo: dict) -> tuple:
+    """新版 feed 的 photo（manifest/photoUrls 结构）选最高清直链，返回 (url, 秒, 宽, 高)。"""
+    reps = []
+    for key in ("manifest", "manifestH265"):
+        mf = photo.get(key)
+        if not isinstance(mf, dict):
+            continue
+        for a in (mf.get("adaptationSet") or []):
+            for r in (a.get("representation") or []):
+                if r.get("url"):
+                    reps.append((int(r.get("width") or 0), int(r.get("height") or 0), r["url"]))
+    duration = int(photo.get("duration") or 0) // 1000
+    if reps:
+        best = max(reps, key=lambda x: x[0] * x[1])
+        return best[2], duration, best[0], best[1]
+    for pu in (photo.get("photoUrls") or []):
+        u = pu.get("url") if isinstance(pu, dict) else pu
+        if u:
+            return u, duration, 0, 0
+    return "", duration, 0, 0
+
+
+def _feed_item_to_info(item: dict) -> Optional[VideoInfo]:
+    """feed 响应条目 {photo, author} → VideoInfo。"""
+    photo = item.get("photo") or {}
+    author = item.get("author") or {}
+    pid = str(photo.get("id") or "")
+    if not pid:
+        return None
+    video_url, duration, w, h = _best_feed_video_url(photo)
+    if not w and photo.get("width") and photo.get("height"):
+        w, h = int(photo.get("width") or 0), int(photo.get("height") or 0)
+    caption = (photo.get("caption") or "").strip()
+    title = caption.splitlines()[0][:60] if caption else ""
+    tags = re.findall(r"#([^#\s]+)", caption)
+    return VideoInfo(
+        platform="kuaishou",
+        kind="video",
+        video_id=pid,
+        title=title,
+        description=caption,
+        author=author.get("name") or "",
+        author_id=str(author.get("id") or ""),
+        author_face=author.get("headerUrl") or "",
+        play_count=_to_int(photo.get("viewCount")),
+        like_count=_to_int(photo.get("realLikeCount") or photo.get("likeCount")),
+        duration=duration,
+        dimension=f"{w}x{h}" if w and h else "",
+        cover_url=photo.get("coverUrl") or photo.get("animatedCoverUrl") or "",
+        video_url=video_url,
+        publish_time=_ms_to_str(photo.get("timestamp")),
+        tags=[t for t in tags if t][:10],
+        raw_url=f"https://www.kuaishou.com/short-video/{pid}",
+        fetched_at=now_str(),
+    )
+
+
 class KuaishouParser(PlatformBase):
     name = "kuaishou"
 
@@ -177,59 +236,96 @@ class KuaishouParser(PlatformBase):
         info = _photo_to_info(photo, author or {}, raw_url=url)
         return info
 
-    # ==================== 主页作品列表（需 Cookie） ====================
+    # ==================== 主页作品列表（Playwright 拦截） ====================
 
     def fetch_user_posts(self, url: str, count: int = 20, **kwargs) -> list:
         m = _USER_URL_RE.search(url)
         if not m:
             raise ValueError("不是快手主页链接")
-        user_id = m.group(1)
-        # 一级：游客 HTTP（大概率登录墙）
-        try:
-            html = _fetch(url)
-            posts = self._posts_from_apollo(html, count)
-            if posts:
-                return posts
-        except Exception:
-            pass
-        # 二级：接入 Cookie 重试
-        ck = _get_cookie()
-        if ck:
-            html = _fetch(url, cookie=ck)
-            posts = self._posts_from_apollo(html, count)
-            if posts:
-                return posts
-            raise RuntimeError("快手 Cookie 已接入但主页无作品数据（Cookie 可能失效）")
-        raise RuntimeError("快手主页需要登录：请在「Cookie 管理」中登录快手后重试")
+        # 2026-09 改版：主页纯 CSR，作品 API 需浏览器指纹+签名，HTTP 直连无数据
+        return self._posts_via_browser(url, count)
 
-    def _posts_from_apollo(self, html: str, count: int) -> list:
-        data = _balanced_json(html, r"window\.__APOLLO_STATE__")
-        if not data:
-            return []
-        dc = data.get("defaultClient") or {}
-        author = {}
-        feeds = []
-        for k, v in dc.items():
-            if k.startswith("VisionProfileAuthor:") or k.startswith("VisionVideoDetailAuthor:"):
-                author = v
-            elif k.startswith("VisionProfilePhoto:") or k.startswith("VisionVideoDetailPhoto:"):
-                feeds.append(v)
-            elif k.startswith("VisionProfile"):
-                # ROOT_QUERY.visionProfile(...).feeds 为 id 引用列表，跳过
+    def _posts_via_browser(self, url: str, count: int) -> list:
+        """无头浏览器打开主页，拦截 /rest/v/profile/feed 响应（签名由浏览器生成）。"""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            raise RuntimeError("快手主页获取需要 Playwright，请重装应用修复运行环境")
+        from toolbox.browser import launch as pw_launch
+
+        need = max(1, count)
+        feeds: dict = {}
+        state = {"login": False, "no_more": False}
+
+        def on_response(resp):
+            try:
+                if "rest/v/profile/feed" not in resp.url:
+                    return
+                j = resp.json()
+                result = j.get("result")
+                if result == 109:
+                    state["login"] = True
+                    return
+                if result != 1:
+                    return
+                for item in (j.get("feeds") or []):
+                    pid = str((item.get("photo") or {}).get("id") or "")
+                    if pid and pid not in feeds:
+                        feeds[pid] = item
+                if str(j.get("pcursor") or "") == "no_more":
+                    state["no_more"] = True
+            except Exception:
                 pass
-        # ROOT_QUERY 引用顺序优先（feeds 顺序）
-        ordered = []
-        for k, v in dc.items():
-            m = re.match(r"\$ROOT_QUERY\.visionProfile\(.*?\)\.feeds\.(\d+)", k)
-            if m and isinstance(v, dict):
-                ordered.append((int(m.group(1)), v))
-        if ordered:
-            ordered.sort()
-            photos = []
-            for _, ref in ordered:
-                pid = (ref.get("photo") or {}).get("id") or ""
-                if pid.startswith("VisionProfilePhoto:") or pid.startswith("VisionVideoDetailPhoto:"):
-                    photos.append(dc.get(pid) or {})
-            feeds = [p for p in photos if p]
-        result = [_photo_to_info(p, author) for p in feeds[:max(1, count)] if p.get("id")]
-        return result
+
+        with sync_playwright() as p:
+            browser = pw_launch(p, headless=True,
+                                args=["--disable-blink-features=AutomationControlled",
+                                      "--no-sandbox", "--disable-dev-shm-usage"])
+            try:
+                ctx = browser.new_context(user_agent=UA,
+                                          viewport={"width": 1280, "height": 900},
+                                          locale="zh-CN")
+                ck = _get_cookie()
+                for pair in ck.split(";"):
+                    n, eq, v = pair.strip().partition("=")
+                    if n and eq:
+                        ctx.add_cookies([{"name": n, "value": v,
+                                          "domain": ".kuaishou.com", "path": "/"}])
+                page = ctx.new_page()
+                page.on("response", on_response)
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                except Exception:
+                    pass  # domcontentloaded 超时也继续等 feed 响应
+                rounds = 14 if need <= 60 else 40
+                prev, stalls = -1, 0
+                for _ in range(rounds):
+                    page.wait_for_timeout(1500)
+                    if state["login"]:
+                        raise RuntimeError(
+                            "快手主页需要登录：请在「Cookie 管理」中登录快手后重试")
+                    if len(feeds) >= need or state["no_more"]:
+                        break
+                    if len(feeds) == prev:
+                        stalls += 1
+                        if stalls >= 3:  # 连续滚动无新数据 → 已到底
+                            break
+                    else:
+                        stalls = 0
+                    prev = len(feeds)
+                    page.evaluate("window.scrollBy(0, 2500)")
+                if state["login"]:
+                    raise RuntimeError(
+                        "快手主页需要登录：请在「Cookie 管理」中登录快手后重试")
+            finally:
+                browser.close()
+
+        if not feeds:
+            raise RuntimeError(
+                "快手主页未捕获到作品数据（Cookie 可能失效，请在「Cookie 管理」中重新登录快手）")
+        posts = []
+        for item in list(feeds.values())[:need]:
+            info = _feed_item_to_info(item)
+            if info:
+                posts.append(info)
+        return posts

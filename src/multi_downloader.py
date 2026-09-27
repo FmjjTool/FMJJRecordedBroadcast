@@ -263,27 +263,19 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
 
 
 def _parse_xiaohongshu(url: str) -> dict:
-    headers = {"User-Agent": UA_PC, "Referer": "https://www.xiaohongshu.com/"}
-    resp = httpx.get(url, headers=headers, timeout=15)
-    data = _extract_json(resp.text, r"window\.__INITIAL_STATE__\s*=\s*(\{.*\})")
-    if not data:
+    # 复用 platforms 解析器：2026-09 后 SSR 的 consumer.originVideoKey 已消失、
+    # stream 键名混淆为 EF*，且游客态常无 note（需 Cookie 兜底）
+    from platforms.xiaohongshu import XiaohongshuParser
+
+    info = XiaohongshuParser().parse(url)
+    if not info:
         raise ValueError("小红书页面解析失败")
-    note_map = data.get("note", {}).get("noteDetailMap", {})
-    first_id = data.get("note", {}).get("firstNoteId", "")
-    note = note_map.get(first_id, {})
-    n = note.get("note", {})
-    video_url = ""
-    origin_key = ((n.get("video") or {}).get("consumer") or {}).get("originVideoKey", "")
-    if origin_key:
-        video_url = "http://sns-video-bd.xhscdn.com/" + origin_key.replace("\\u002F", "/")
-    images = [i.get("urlDefault", "").replace("\\u002F", "/") for i in (n.get("imageList") or [])]
-    cover = images[0] if images else ""
     return {
         "platform": "小红书",
-        "title": (n.get("title") or "") + (n.get("desc") or ""),
-        "video_url": video_url,
-        "cover_url": cover,
-        "images": images,
+        "title": (info.title or "") + (info.description or ""),
+        "video_url": info.video_url or "",
+        "cover_url": info.cover_url or "",
+        "images": list(info.images or []),
     }
 
 

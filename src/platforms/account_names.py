@@ -168,19 +168,21 @@ def _weibo_name(url: str) -> tuple[str, str]:
 # ==================== 快手 ====================
 
 def _kuaishou_name(url: str) -> tuple[str, str]:
-    from platforms.kuaishou import _balanced_json, _fetch
+    import re
+
+    from platforms.kuaishou import _fetch
 
     ck = _cookie("kuaishou")
     for cookie in (["", ck] if ck else [""]):
         try:
             html = _fetch(url, cookie=cookie)
-            data = _balanced_json(html, r"window\.__APOLLO_STATE__")
-            dc = (data or {}).get("defaultClient") or {}
-            for k, v in dc.items():
-                if k.startswith("VisionProfileAuthor:") and isinstance(v, dict):
-                    name = v.get("name") or v.get("user_name") or ""
-                    if name:
-                        return name, ""
+            # 2026-09 改版后主页无 __APOLLO_STATE__，昵称在 og:title（"昵称 - 快手"）；
+            # 无设备 Cookie 时 og:title 是通用标题「快手」，需跳过
+            m = re.search(r'og:title[^>]*content="([^"]*)"', html)
+            if m:
+                name = m.group(1).split(" - 快手")[0].strip()
+                if name and name != "快手":
+                    return name, ""
         except Exception:
             continue
     return "", "未获取到昵称（快手主页需登录，请在「Cookie 管理」登录快手后重试）"
