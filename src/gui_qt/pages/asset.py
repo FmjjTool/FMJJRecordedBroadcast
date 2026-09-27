@@ -1020,6 +1020,11 @@ class AssetPage(BasePage):
         # 去掉末尾序号 / live序号
         while rest and (rest[-1].isdigit() or (rest[-1].startswith("live") and rest[-1][4:].isdigit())):
             rest = rest[:-1]
+        # 封面文件与正文媒体同组：download_media 存 {stem}_封面.ext，短标题时
+        # 封面组键=标题+封面 → 与正文不同组 → json 只弹一组封面就落单成
+        # 「播放0赞0」的独立行（抖音/快手/小红书/微博通病；长标题因[:20]截断侥幸同组）
+        while rest and rest[-1] == "封面":
+            rest = rest[:-1]
         return date_part, author, "_".join(rest)
 
     @staticmethod
@@ -1257,7 +1262,11 @@ class AssetPage(BasePage):
         self._render_collected_batch()
 
     def _render_collected_row(self, it, index):
-        """渲染一行（点击弹详情窗，双击缩略图播放本地视频）。"""
+        """渲染一行到列表布局（点击弹详情窗，双击缩略图播放本地视频）。"""
+        self.collected_layout.addWidget(self._make_collected_row(it, index))
+
+    def _make_collected_row(self, it, index) -> "QWidget":
+        """构建一行控件（不加入布局；行级刷新原地替换用）。"""
         row = _RowWidget(lambda it=it: self._show_detail(it),
                          lambda pos, it=it: self._row_context_menu(it, pos))
         row.setStyleSheet(
@@ -1343,7 +1352,15 @@ class AssetPage(BasePage):
         if it.get("cover_url") and not it.get("media_files"):
             dl_btn = QPushButton("📥")
             dl_btn.setFixedSize(42, 32)
-            dl_btn.setToolTip("下载封面")
+            # tooltip 与 _download_for_item 路由一致：视频条目实际下的是视频+封面
+            plat0 = it.get("platform", "")
+            vid0 = str(it.get("video_id") or "")
+            if plat0 == "bilibili":
+                is_vid = (self._bili_dynamic_type(it) == "av"
+                          or (bool(vid0) and not vid0.startswith("dyn_")))
+            else:
+                is_vid = plat0 == "douyin" or self._item_has_video(it)
+            dl_btn.setToolTip("下载视频" if is_vid else "下载封面")
             dl_btn.setStyleSheet(common.icon_btn_style(
                 True, "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;"))
             dl_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e))
@@ -1355,7 +1372,7 @@ class AssetPage(BasePage):
             True, "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;"))
         del_btn.clicked.connect(lambda _=False, e=it: self._delete_item(e))
         h.addWidget(del_btn)
-        self.collected_layout.addWidget(row)
+        return row
 
     def _row_context_menu(self, it, global_pos):
         """行右键菜单：复制媒体/链接、打开本地数据文件（MD）/ 打开本地媒体文件——存在哪项才显示哪项。"""
@@ -1442,10 +1459,17 @@ class AssetPage(BasePage):
         微博视频条目的 video_url 常是 m.weibo.cn/detail 网页链接，
         真直链藏在 raw_data（page_info.media_info 或 fid playinfo 顶层），
         需静态检查 raw_data 判断；小红书/快手等平台 video_url 已是直链。
+        例外：小红书账号获取条目的「链接」是笔记页链接（视频流在页内，
+        非直链、raw_data 为空），也按视频条目处理 → 视频下载路径里
+        下载前重新解析笔记页拿新鲜直链（同抖音时效直链模式）。
         """
         from media_downloader import _is_direct_media_url
         if _is_direct_media_url(it.get("video_url") or ""):
             return True
+        if it.get("platform") == "xiaohongshu":
+            if "xiaohongshu.com" in (it.get("video_url") or "") \
+                    or "xiaohongshu.com" in (it.get("raw_url") or ""):
+                return True
         raw = it.get("raw_data") or {}
         if not isinstance(raw, dict):
             return False
@@ -1531,10 +1555,62 @@ class AssetPage(BasePage):
             self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force,
                                            sub_bridge=sub_bridge, cancel_ev=cancel_ev)
 
+    def _refresh_rows_for(self, items):
+        """下载完成后的行级刷新：只重建给定条目的行，不动其他行。
+
+        整列表 _refresh_collected 会重建全部控件 + 骨架闪烁 + 重置滚动位置，
+        单条下载完成时体验太差；这里后台重扫磁盘，仅原地替换受影响条目的行。
+        条目不在当前页（被筛选/其他页）时只更新数据，不重建行。
+        """
+        keys = {self._dl_key(it) for it in items}
+        gen = self._reload_gen  # 不递增：不使进行中的整列表刷新作废
+
+        def work():
+            return self._load_disk_items()
+
+        def done(disk_items, err):
+            if gen != self._reload_gen or err:
+                return  # 整列表刷新已接管/出错 → 交给全量刷新兜底
+            self._disk_items = disk_items or []
+            disk_by_key = {}
+            for d in self._disk_items:
+                k = self._dl_key(d)
+                if k in keys:
+                    disk_by_key[k] = d
+            # 更新 _collected_all_items 里的条目数据（dict 身份不变，筛选排序不动）
+            for it in self._collected_all_items:
+                nd = disk_by_key.get(self._dl_key(it))
+                if nd is not None:
+                    it.update(nd)
+            # 原地替换当前页里这些条目的行控件
+            lay = self.collected_layout
+            total = len(self._collected_all_items)
+            if not total:
+                return
+            total_pages = (total + BATCH - 1) // BATCH
+            page = min(max(1, self._collected_page), total_pages)
+            start = (page - 1) * BATCH
+            row_idx = 0  # 布局结构：[行...] + pager + stretch，行从 0 连续排
+            for i in range(start, min(start + BATCH, total)):
+                it = self._collected_all_items[i]
+                if self._dl_key(it) not in keys:
+                    row_idx += 1
+                    continue
+                if row_idx >= lay.count():
+                    break
+                old = lay.itemAt(row_idx).widget()
+                if old is None:  # pager/stretch 位置，说明行已数完
+                    break
+                lay.insertWidget(row_idx, self._make_collected_row(it, i + 1))
+                old.setParent(None)
+                old.deleteLater()
+                row_idx += 1
+
+        run_bg(work, done)
+
     def _toggle_select_all(self, state):
         """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""
-        checked = bool(state)
-        if checked:
+        if bool(state):
             self._checked_keys = {self._dl_key(it) for it in self._collected_all_items}
         else:
             self._checked_keys.clear()
@@ -1727,7 +1803,7 @@ class AssetPage(BasePage):
                 self.app.toast("✅ 已下载 B站视频" + ("（含封面）" if cover_ok else ""),
                                "success")
             if not quiet:  # 批量模式由 _advance 统一刷新一次，避免逐条骨架闪烁
-                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
+                self._refresh_rows_for([it])
             if on_finished:
                 on_finished()
 
@@ -1808,7 +1884,7 @@ class AssetPage(BasePage):
         def work():
             from platforms.base import VideoInfo, now_str
             from toolbox.config_manager import get_export_subdir
-            from media_downloader import download_media
+            from media_downloader import download_media, _is_direct_media_url
             vurl2 = vurl
             note_images = None
             raw_data = it.get("raw_data") or {}
@@ -1851,6 +1927,34 @@ class AssetPage(BasePage):
                             break
                     except Exception:
                         continue
+            # 小红书：账号获取条目的「链接」是笔记页链接（含 xsec_token），
+            # 视频流在笔记页内且直链 ?sign= 有时效 → 下载前重新解析拿新鲜
+            # 直链；图文笔记则拿全部图片（同抖音 note 模式）。候选依次尝试：
+            # 原始URL（带采集时的 xsec_token）→ 链接 → 无 token 裸笔记页
+            elif it["platform"] == "xiaohongshu":
+                from platforms import get_parser
+                xhs_parser = get_parser("xiaohongshu")
+                xhs_candidates = []
+                for u in (it.get("raw_url") or "", vurl):
+                    if u and u not in xhs_candidates:
+                        xhs_candidates.append(u)
+                if vid:
+                    bare = f"https://www.xiaohongshu.com/discovery/item/{vid}"
+                    if bare not in xhs_candidates:
+                        xhs_candidates.append(bare)
+                for u in xhs_candidates:
+                    try:
+                        new_info = xhs_parser.parse(u)
+                    except Exception:
+                        continue
+                    if not new_info:
+                        continue
+                    if new_info.video_url:
+                        vurl2 = new_info.video_url
+                        break
+                    if new_info.images:
+                        note_images = new_info.images
+                        break
 
             base_dir = str(get_export_subdir("video_data"))
             info = VideoInfo(
@@ -1872,6 +1976,11 @@ class AssetPage(BasePage):
                                       quiet=True)
             if not vurl2:
                 raise ValueError("无可用视频链接")
+            # 小红书兜底：重新解析全部失败时 vurl2 仍是笔记页链接（非直链），
+            # download_media 会静默跳过视频只下封面 —— 显式报错避免误导
+            if it["platform"] == "xiaohongshu" and not note_images \
+                    and not _is_direct_media_url(vurl2):
+                raise ValueError("小红书视频流获取失败：笔记链接可能已失效或被风控，请重新获取该条目")
             # download_images=True 仅为生成「封面」下载任务（images 为空不会多下图）：
             # 资产页缩略图本地优先，封面必须落盘成 {stem}_封面.jpg，
             # 否则只能走网络封面（抖音直链会过期、部分图床 403）
@@ -1913,7 +2022,7 @@ class AssetPage(BasePage):
                     else:
                         self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
             if not quiet:  # 批量模式由 _advance 统一刷新一次
-                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
+                self._refresh_rows_for([it])
             if on_finished:
                 on_finished()
 
@@ -2211,9 +2320,9 @@ class AssetPage(BasePage):
                 if cancelled:
                     msg += "（已取消）"
                 self.app.toast(msg, "success" if not cancelled else "warning")
-            # 刷新列表（重新扫描磁盘，新下载的图会显示本地缩略图）
+            # 刷新该条目（重新扫描磁盘，新下载的图会显示本地缩略图）
             if not quiet:  # 批量模式由 _advance 统一刷新一次
-                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
+                self._refresh_rows_for([it])
             if on_finished:
                 on_finished()
 

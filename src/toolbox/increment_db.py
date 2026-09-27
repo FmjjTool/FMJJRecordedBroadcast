@@ -5,10 +5,9 @@ config/increment.db，每个平台一张表（表名=平台英文标识，首次
 字段逐列存储（获取时间/标题/作者/发布时间/各计数/链接/正文等），
 完整原始数据另存 raw_json 列兜底。
 
-去重两层：
-  1. 表内：dedup_key 唯一（优先用 video_id 稳定 ID，避免抖音 CDN 直链过期导致重复入库）
-  2. 跨表：content_key（标题+作者 归一化）全局唯一——同一内容跨平台（B站作品/B站动态/
-     抖音/微博互发）只留最早一条；纯话题/无标题内容不参与跨表去重
+去重一层：表内 dedup_key 唯一（优先用 video_id 稳定 ID，避免抖音 CDN 直链过期导致重复入库）。
+跨平台互发内容不去重——按平台分表浏览时各表须完整（快手全是互发内容，
+跨表拦截曾把整张快手表拦成 0 行）；content_key 列仍写入（信息性）。
 内部表（_content_keys 全局内容注册表 / _meta 迁移标记）不出现在平台下拉里。
 旧 download/已获取数据/_增量汇总.json 首次使用时自动迁移入库。
 
@@ -115,6 +114,30 @@ _CN_KEY_MAP = {  # to_dict() 中文键 → 字段名（dict 入参用）
 }
 
 
+def _to_int(v) -> int:
+    """计数/时长容错转 int：'0:11'/'01:02:03' 时长文本 → 秒；'1.7万' → 17000；其余原样。"""
+    if v is None or v == "":
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace(",", "")
+    if ":" in s:
+        secs = 0
+        for part in s.split(":"):
+            secs = secs * 60 + int(float(part or 0))
+        return secs
+    m = re.match(r"([\d.]+)\s*万", s)
+    if m:
+        return int(float(m.group(1)) * 10000)
+    m = re.match(r"([\d.]+)\s*亿", s)
+    if m:
+        return int(float(m.group(1)) * 100000000)
+    try:
+        return int(float(s))
+    except ValueError:
+        return 0
+
+
 def _row_of(info, now_str: str) -> tuple:
     if isinstance(info, dict):
         data = {_CN_KEY_MAP.get(k, k): v for k, v in info.items()}
@@ -140,10 +163,10 @@ def _row_of(info, now_str: str) -> tuple:
     row = (
         key, d("fetched_at") or now_str, d("kind"), d("video_id"), d("title"),
         d("author"), d("publish_time"),
-        int(d("play_count") or 0), int(d("like_count") or 0),
-        int(d("comment_count") or 0), int(d("share_count") or 0),
-        int(d("favorite_count") or 0), int(d("danmaku_count") or 0),
-        int(d("coin_count") or 0), int(d("duration") or 0),
+        int(_to_int(d("play_count"))), int(_to_int(d("like_count"))),
+        int(_to_int(d("comment_count"))), int(_to_int(d("share_count"))),
+        int(_to_int(d("favorite_count"))), int(_to_int(d("danmaku_count"))),
+        int(_to_int(d("coin_count"))), int(_to_int(d("duration"))),
         d("description"), d("cover_url"), d("video_url"),
         tags or "", d("category"), d("music"),
         json.dumps(data, ensure_ascii=False) if data else "{}",
@@ -213,23 +236,9 @@ def save_incremental(posts) -> dict:
                 _ensure_migrated(conn)
                 for platform, rows in rows_by_platform.items():
                     _ensure_table(conn, platform)
-                    # 跨表内容去重：全局注册表先占位，占不到说明是重复内容
-                    kept = []
-                    for row in rows:
-                        ck = row[-1]
-                        if ck:
-                            cur = conn.execute(
-                                "INSERT OR IGNORE INTO _content_keys (content_key, platform) "
-                                "VALUES (?, ?)", (ck, platform))
-                            if cur.rowcount == 0:
-                                continue
-                        kept.append(row)
-                    if not kept:
-                        added[platform] = 0
-                        continue
                     cur = conn.executemany(
                         f'INSERT OR IGNORE INTO "{platform}" ({", ".join(_COL_NAMES)}) '
-                        f'VALUES ({", ".join("?" * len(_COL_NAMES))})', kept)
+                        f'VALUES ({", ".join("?" * len(_COL_NAMES))})', rows)
                     added[platform] = cur.rowcount
                 conn.commit()
             finally:
@@ -352,15 +361,8 @@ def delete_row(platform: str, dedup_key: str) -> bool:
         with _lock:
             conn = _connect()
             try:
-                row = conn.execute(
-                    f'SELECT "content_key" FROM "{platform}" WHERE "dedup_key" = ?',
-                    (dedup_key,)).fetchone()
                 cur = conn.execute(
                     f'DELETE FROM "{platform}" WHERE "dedup_key" = ?', (dedup_key,))
-                # 删除后释放内容指纹，下次采集同内容可重新入库
-                if row and row[0]:
-                    conn.execute(
-                        "DELETE FROM _content_keys WHERE content_key = ?", (row[0],))
                 conn.commit()
                 return cur.rowcount > 0
             finally:
