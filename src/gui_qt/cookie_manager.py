@@ -654,6 +654,18 @@ class CookieManagerDialog(QDialog):
                 user32.SetWindowLongW(hwnd, GWL_STYLE,
                                       int(style) & ~(WS_CAPTION | WS_THICKFRAME))
                 user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)  # NOSIZE|NOMOVE|NOZORDER|FRAMECHANGED
+                # 跨进程嵌入的浏览器窗口默认收不到键盘输入：按键全部派发给宿主线程
+                # 输入队列的焦点窗口，浏览器进程自己的队列永远拿不到。合并两个线程
+                # 的输入队列（AttachThreadInput）后把焦点真正落到浏览器窗口，登录
+                # 框才能打字；关闭对话框时在 _cleanup 里解除合并
+                kernel32 = ctypes.windll.kernel32
+                our_tid = kernel32.GetCurrentThreadId()
+                browser_tid = user32.GetWindowThreadProcessId(hwnd, None)
+                if browser_tid and browser_tid != our_tid and \
+                        user32.AttachThreadInput(our_tid, browser_tid, True):
+                    state["input_attached"] = (our_tid, browser_tid)
+                    user32.SetFocus(hwnd)
+                    user32.PostMessageW(hwnd, 0x0006, 1, 0)  # WM_ACTIVATE(WA_ACTIVE)
             except Exception:
                 pass  # 嵌入失败时浏览器以独立窗口显示，登录功能不受影响
             _refresh_cap()
@@ -716,6 +728,13 @@ class CookieManagerDialog(QDialog):
 
         def _cleanup():
             state["stop"].set()
+            # 解除输入队列合并（须在 GUI 线程执行，与 AttachThreadInput 同线程）
+            pair = state.pop("input_attached", None)
+            if pair:
+                try:
+                    user32.AttachThreadInput(pair[0], pair[1], False)
+                except Exception:
+                    pass
             if state["hwnd"]:
                 user32.ShowWindow(state["hwnd"], 0)  # goto 阻塞期间避免独立窗口闪现
 

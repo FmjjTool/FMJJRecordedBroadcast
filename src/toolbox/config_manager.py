@@ -239,6 +239,9 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "remark_info": "抖音：歆慕\n微博：歆慕XINMU\nb站：歆慕XINMU\n使用信息请标明来源",
     # 账号获取「增量模式(写入数据库)」默认勾选状态（切换即保存）
     "inc_db_checked": True,
+    # 账号获取「日期段」过滤范围（YYYY-MM-DD，空 = 该端不限；设置后获取只保留范围内发布内容）
+    "fetch_date_start": "",
+    "fetch_date_end": "",
     # 淘宝登录态远程验证：最近一次采集成功的卖家 userId（whoami 验证用）
     "taobao_verify_seller_id": "",
     # FFmpeg 自定义位置（目录或 ffmpeg.exe 完整路径；空 = 使用系统 PATH）

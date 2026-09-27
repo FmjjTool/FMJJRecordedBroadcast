@@ -14,11 +14,11 @@ import threading
 import time
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
-    QListWidgetItem, QMessageBox, QPushButton, QProgressBar, QScrollArea,
-    QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
+    QLineEdit, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
+    QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import _collect, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
@@ -34,6 +34,76 @@ def _clear_layout(layout):
             w.deleteLater()
         elif item.layout() is not None:
             _clear_layout(item.layout())
+
+
+def _parse_publish_ts(text):
+    """发布时间字符串 → epoch 秒。解析失败返回 None（对应条目保留不过滤）。
+
+    覆盖平台常见格式：绝对时间（2026-09-27 14:30[:59]、2026/9/27、2026年9月27日）
+    与相对时间（刚刚/X秒/分钟/小时/天/周/月前、今天/昨天/前天）。
+    """
+    import re as _re
+    from datetime import datetime as _dt, timedelta as _td
+    s = str(text or "").strip()
+    if not s:
+        return None
+    m = _re.search(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})", s)
+    if m:
+        try:
+            hm = _re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", s[m.end():])
+            if hm:
+                return _dt(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                           int(hm.group(1)), int(hm.group(2)),
+                           int(hm.group(3) or 0)).timestamp()
+            return _dt(int(m.group(1)), int(m.group(2)), int(m.group(3))).timestamp()
+        except ValueError:
+            pass
+    now = _dt.now()
+    if s.startswith(("刚刚", "刚才", "今天")):
+        return now.timestamp()
+    rm = _re.match(r"(\d+)\s*(秒|分钟|分|小时|时|天|日|周|月)前", s)
+    if rm:
+        n = int(rm.group(1))
+        delta = {"秒": _td(seconds=n), "分钟": _td(minutes=n), "分": _td(minutes=n),
+                 "小时": _td(hours=n), "时": _td(hours=n), "天": _td(days=n),
+                 "日": _td(days=n), "周": _td(weeks=n),
+                 "月": _td(days=30 * n)}[rm.group(2)]
+        return (now - delta).timestamp()
+    if s.startswith("昨天"):
+        return (now - _td(days=1)).timestamp()
+    if s.startswith("前天"):
+        return (now - _td(days=2)).timestamp()
+    return None
+
+
+def _date_bound_ts(date_str, is_start):
+    """'YYYY-MM-DD' → epoch 秒（开始=当天 00:00:00，结束=当天 23:59:59）；空/非法 → None。"""
+    from datetime import datetime as _dt, timedelta as _td
+    if not date_str:
+        return None
+    try:
+        d = _dt.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return d.timestamp() if is_start else (d + _td(days=1)).timestamp() - 1
+
+
+def _filter_posts_by_date(posts, lo_ts, hi_ts):
+    """保留发布时间落在 [lo_ts, hi_ts] 的条目；时间解析失败的条目保留（宁多勿漏）。"""
+    if lo_ts is None and hi_ts is None:
+        return posts
+    keep = []
+    for p in posts:
+        ts = _parse_publish_ts(getattr(p, "publish_time", ""))
+        if ts is None:
+            keep.append(p)
+            continue
+        if lo_ts is not None and ts < lo_ts:
+            continue
+        if hi_ts is not None and ts > hi_ts:
+            continue
+        keep.append(p)
+    return keep
 
 
 class InfoAccountsPage(BasePage):
@@ -106,6 +176,8 @@ class InfoAccountsPage(BasePage):
             "抓取结果进入「已获取」与增量数据库</p>"
             "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
             "<p>· <b>⏰ 定时获取</b>：按间隔自动抓取全部账号</p>"
+            "<p>· <b>📅 日期段</b>：日历选择发布时间范围（如 9月1日~9月20日、从头~9月20日），"
+            "获取时只保留范围内的内容，范围持久保存</p>"
             "<p>· <b>📤 同步到追踪</b>：本页账号一键同步到「视频账号追踪」，"
             "已存在的自动跳过，账号名/分组一并带过去（免重复录入）</p>"
             "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
@@ -216,6 +288,11 @@ class InfoAccountsPage(BasePage):
         sec_lbl = QLabel("秒")
         sec_lbl.setStyleSheet("font-size: 11px;")
         strat_row.addWidget(sec_lbl)
+        self.date_btn = QPushButton("📅 日期段: 不限")
+        self.date_btn.clicked.connect(self._show_date_range_dialog)
+        strat_row.addSpacing(16)
+        strat_row.addWidget(self.date_btn)
+        self._load_date_range()
         strat_row.addStretch(1)
         layout.addLayout(strat_row)
 
@@ -628,7 +705,9 @@ class InfoAccountsPage(BasePage):
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
                 incremental=incremental, on_event=self._make_event_bridge(),
-                pause_event=self._pause_evt, cancel_event=self._cancel_evt)
+                pause_event=self._pause_evt, cancel_event=self._cancel_evt,
+                date_start=self._date_range.get("start", ""),
+                date_end=self._date_range.get("end", ""))
 
         def done(result, err):
             self.fetch_btn.setEnabled(True)
@@ -695,7 +774,7 @@ class InfoAccountsPage(BasePage):
             return [], "没有可采集的账号"
         return accounts, None
 
-    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None):
+    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None, date_start="", date_end=""):
         """采集账号最新内容，返回 (total, log)。供手动与定时获取共用。
 
         多账号并发采集（ThreadPoolExecutor，上限 4 线程）：原串行逐个等待，
@@ -707,6 +786,8 @@ class InfoAccountsPage(BasePage):
         incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
         pause_event: threading.Event，clear 时在账号边界停住（在飞账号自然跑完）。
         cancel_event: threading.Event，set 后未开始的账号直接跳过（在飞账号自然跑完）。
+        date_start/date_end: 日期段过滤（'YYYY-MM-DD'，空=该端不限），
+            只保留发布时间落在范围内的条目（时间解析失败的条目保留）。
         """
         from concurrent.futures import ThreadPoolExecutor
         from accounts_manager import infer_kind_from_url
@@ -719,6 +800,12 @@ class InfoAccountsPage(BasePage):
             log.append(line)
             if on_event is not None:
                 on_event({"type": "log", "text": line})
+
+        # 日期段边界（开始 00:00:00 ~ 结束 23:59:59），两端都空 = 不过滤
+        date_lo = _date_bound_ts(date_start, True)
+        date_hi = _date_bound_ts(date_end, False)
+        if date_lo is not None or date_hi is not None:
+            emit(f"🗓 日期段过滤已启用: {date_start or '从头'} ~ {date_end or '到现在'}（只保留该范围内发布的内容）")
 
         n = len(accounts)
         if on_event is not None:
@@ -813,6 +900,12 @@ class InfoAccountsPage(BasePage):
             if error:
                 emit(f"[{i}/{n}] {platform} 失败: {error}")
                 continue
+            # 日期段过滤（时间解析失败的条目保留）
+            if date_lo is not None or date_hi is not None:
+                before_n = len(posts)
+                posts = _filter_posts_by_date(posts, date_lo, date_hi)
+                if len(posts) != before_n:
+                    emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
             emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
             _collect(posts)
             all_posts.extend(posts)
@@ -898,6 +991,143 @@ class InfoAccountsPage(BasePage):
             save_convert_config(cfg)
         except Exception:
             pass
+
+    # ---------- 日期段获取（按发布时间过滤） ----------
+    def _load_date_range(self):
+        """从配置恢复日期段（start/end 为 "" 表示该端不限）。"""
+        self._date_range = {"start": "", "end": ""}
+        try:
+            from toolbox.config_manager import load_convert_config
+            cfg = load_convert_config()
+            self._date_range = {
+                "start": str(cfg.get("fetch_date_start", "") or ""),
+                "end": str(cfg.get("fetch_date_end", "") or ""),
+            }
+        except Exception:
+            pass
+        self._update_date_btn()
+
+    def _save_date_range(self):
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            cfg = load_convert_config()
+            cfg["fetch_date_start"] = self._date_range.get("start", "")
+            cfg["fetch_date_end"] = self._date_range.get("end", "")
+            save_convert_config(cfg)
+        except Exception:
+            pass
+
+    def _update_date_btn(self):
+        s = self._date_range.get("start", "")
+        e = self._date_range.get("end", "")
+        if not s and not e:
+            self.date_btn.setText("📅 日期段: 不限")
+        else:
+            self.date_btn.setText(f"📅 日期段: {s or '从头'} ~ {e or '到现在'}")
+
+    def _date_range_desc(self) -> str:
+        s = self._date_range.get("start", "")
+        e = self._date_range.get("end", "")
+        if not s and not e:
+            return "不限"
+        return f"{s or '从头'} ~ {e or '到现在'}"
+
+    def _show_date_range_dialog(self):
+        """日历选择日期段：两个日历表 + 开始/结束不限勾选；确定后对之后的获取生效。"""
+        win = QDialog(self)
+        win.setWindowTitle("📅 日期段获取（按发布时间过滤）")
+        win.resize(640, 460)
+        v = QVBoxLayout(win)
+        hint = QLabel("选择要保留的发布时间范围（在日历上点选日期；勾「不限」则该端不设边界，"
+                      "如「从头 ~ 2026-09-20」= 从最早的到 9月20日 的全部内容）")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #555; font-size: 11px; padding: 4px;")
+        v.addWidget(hint)
+
+        # 两个日历表并排
+        cal_row = QHBoxLayout()
+        left_v = QVBoxLayout()
+        left_lbl = QLabel("开始日期")
+        left_lbl.setStyleSheet("font-weight: bold;")
+        left_v.addWidget(left_lbl)
+        cal_start = QCalendarWidget()
+        cal_start.setGridVisible(True)
+        left_v.addWidget(cal_start)
+        left_w = QWidget(); left_w.setLayout(left_v)
+        cal_row.addWidget(left_w)
+        right_v = QVBoxLayout()
+        right_lbl = QLabel("结束日期")
+        right_lbl.setStyleSheet("font-weight: bold;")
+        right_v.addWidget(right_lbl)
+        cal_end = QCalendarWidget()
+        cal_end.setGridVisible(True)
+        right_v.addWidget(cal_end)
+        right_w = QWidget(); right_w.setLayout(right_v)
+        cal_row.addWidget(right_w)
+        v.addLayout(cal_row, 1)
+
+        # 不限勾选（勾选后对应日历禁用）
+        opt_row = QHBoxLayout()
+        chk_start_any = QCheckBox("开始不限（从头）")
+        chk_end_any = QCheckBox("结束不限（到现在）")
+        chk_start_any.setChecked(not self._date_range.get("start"))
+        chk_end_any.setChecked(not self._date_range.get("end"))
+        today = QDate.currentDate()
+        cal_start.setSelectedDate(QDate.fromString(self._date_range.get("start"), "yyyy-MM-dd")
+                                  if self._date_range.get("start") else today)
+        cal_end.setSelectedDate(QDate.fromString(self._date_range.get("end"), "yyyy-MM-dd")
+                                if self._date_range.get("end") else today)
+
+        def _sync_cal():
+            cal_start.setEnabled(not chk_start_any.isChecked())
+            cal_end.setEnabled(not chk_end_any.isChecked())
+        chk_start_any.toggled.connect(lambda _c: _sync_cal())
+        chk_end_any.toggled.connect(lambda _c: _sync_cal())
+        _sync_cal()
+        opt_row.addWidget(chk_start_any)
+        opt_row.addStretch(1)
+        opt_row.addWidget(chk_end_any)
+        v.addLayout(opt_row)
+
+        # 按钮行
+        btn_row = QHBoxLayout()
+        clear_btn = QPushButton("清除全部（不限）")
+        clear_btn.setStyleSheet("color: #c62828;")
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        ok_btn = QPushButton("✅ 确定")
+        ok_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(ok_btn)
+        v.addLayout(btn_row)
+
+        def _apply():
+            s = "" if chk_start_any.isChecked() else cal_start.selectedDate().toString("yyyy-MM-dd")
+            e = "" if chk_end_any.isChecked() else cal_end.selectedDate().toString("yyyy-MM-dd")
+            if s and e and s > e:
+                QMessageBox.warning(win, "日期有误", "开始日期不能晚于结束日期", QMessageBox.Ok)
+                return
+            self._date_range = {"start": s, "end": e}
+            self._save_date_range()
+            self._update_date_btn()
+            if s or e:
+                self.app.toast(f"📅 日期段已设为：{s or '从头'} ~ {e or '到现在'}（下次获取生效）", "success")
+            else:
+                self.app.toast("📅 日期段已清除，获取不再按时间过滤", "info")
+            win.accept()
+
+        def _clear():
+            self._date_range = {"start": "", "end": ""}
+            self._save_date_range()
+            self._update_date_btn()
+            self.app.toast("📅 日期段已清除，获取不再按时间过滤", "info")
+            win.accept()
+
+        ok_btn.clicked.connect(lambda *a: _apply())
+        cancel_btn.clicked.connect(win.reject)
+        clear_btn.clicked.connect(lambda *a: _clear())
+        win.exec()
 
     # ---------- 定时获取 ----------
     def _toggle_timer(self):
@@ -985,7 +1215,9 @@ class InfoAccountsPage(BasePage):
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
                 incremental=incremental, on_event=self._make_event_bridge(),
-                pause_event=self._pause_evt, cancel_event=self._cancel_evt)
+                pause_event=self._pause_evt, cancel_event=self._cancel_evt,
+                date_start=self._date_range.get("start", ""),
+                date_end=self._date_range.get("end", ""))
 
         def done(result, err):
             self._set_fetch_ui(False)
