@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
@@ -520,8 +520,9 @@ class CookieManagerDialog(QDialog):
             QMessageBox.critical(self, "清除失败", f"{name} 清除失败：\n{e}")
 
     def _browser_login(self, plat):
-        """内嵌登录：系统浏览器（Edge→Chrome）经 Playwright 有头启动，Win32 句柄
-        嵌入对话框，轮询 context.cookies() 捕获全量 Cookie（含 HttpOnly）。"""
+        """内嵌登录：系统浏览器（Edge→Chrome）经 Playwright 有头启动，去边框后
+        顶层贴合对话框页签区（视觉内嵌、键盘原生可用），轮询 context.cookies()
+        捕获全量 Cookie（含 HttpOnly）。"""
         try:
             from playwright.sync_api import sync_playwright
             from toolbox.browser import launch as pw_launch
@@ -571,8 +572,9 @@ class CookieManagerDialog(QDialog):
             self._reload()
             self._notify()
 
-        # 嵌入宿主：worker 找到浏览器窗口句柄后由主线程嵌入
+        # 贴合宿主：worker 找到浏览器窗口句柄后，由主线程去边框贴合此区域
         host = QWidget()
+        host.setAttribute(Qt.WA_NativeWindow)  # 原生句柄取物理坐标（免 DPI 换算）
         host.setStyleSheet("background: #ffffff;")
         v.addWidget(host, 1)
 
@@ -586,6 +588,12 @@ class CookieManagerDialog(QDialog):
         got_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
         got_btn.clicked.connect(lambda *args: save_now())
         bar.addWidget(got_btn)
+        pop_btn = QPushButton("⌨ 改独立窗口")
+        pop_btn.setStyleSheet("color: #1565c0;")
+        pop_btn.setToolTip("无法在嵌入页面打字时点此：浏览器弹回独立窗口，输入必定可用，Cookie 捕获不受影响")
+        pop_btn.setEnabled(False)  # 嵌入成功后才可用
+        pop_btn.clicked.connect(lambda *args: _pop_out())
+        bar.addWidget(pop_btn)
         cancel_btn = QPushButton("放弃")
         cancel_btn.clicked.connect(dlg.close)
         bar.addWidget(cancel_btn)
@@ -600,10 +608,11 @@ class CookieManagerDialog(QDialog):
             cap_lbl.setText(f"  已捕获 {len(jar)} 个 Cookie" + (f"（✅ 检测到登录特征 {self_keys}）" if hit else f"（登录特征：{self_keys}）"))
             cap_lbl.setStyleSheet("color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
 
-        # ==== Win32 嵌入辅助（Playwright 启动的 Chromium 系窗口类名）====
+        # ==== Win32 覆盖层辅助（Playwright 启动的 Chromium 系窗口类名）====
         import ctypes
         user32 = ctypes.windll.user32
-        GWL_STYLE, WS_CAPTION, WS_THICKFRAME = -16, 0x00C00000, 0x00040000
+        GWL_STYLE, GWL_EXSTYLE = -16, -20
+        WS_CAPTION, WS_THICKFRAME, WS_EX_TOOLWINDOW = 0x00C00000, 0x00040000, 0x00000080
 
         def _win_proc_name(hwnd):
             """窗口所属进程名（小写）；Electron 应用（Trae/QQ 等）类名同为
@@ -638,36 +647,65 @@ class CookieManagerDialog(QDialog):
             user32.EnumWindows(CB(_cb), 0)
             return out
 
-        state = {"stop": threading.Event(), "hwnd": 0}
+        state = {"stop": threading.Event(), "hwnd": 0, "overlay": False}
+
+        def _reposition(*_a):
+            """把无边框浏览器窗口贴到 host 的全局矩形上（含 z 序置顶）。"""
+            hwnd = state.get("hwnd") or 0
+            if not hwnd or not state.get("overlay"):
+                return
+            try:
+                from ctypes import wintypes
+                rc = wintypes.RECT()
+                if user32.GetWindowRect(int(host.winId()), ctypes.byref(rc)):
+                    user32.SetWindowPos(hwnd, 0, rc.left, rc.top,
+                                        rc.right - rc.left, rc.bottom - rc.top,
+                                        0x00C0)  # SWP_SHOWWINDOW|SWP_NOACTIVATE
+            except Exception:
+                pass
 
         def _embed(hwnd):
-            """主线程：把浏览器窗口嵌入宿主并去掉原生标题栏。"""
+            """主线程：浏览器改成无边框顶层窗口，贴合 host 区域（视觉等同内嵌）。
+
+            保持顶层独立窗口是关键：作子窗口嵌入时 Chromium 收不到系统激活
+            消息（WM_ACTIVATE/WM_ACTIVATEAPP），会按「未激活」丢弃按键，登录框
+            完全打不了字（实测）；顶层贴合方案下键盘输入原生可用。"""
             state["hwnd"] = hwnd
             try:
-                from PySide6.QtGui import QWindow
-                qwin = QWindow.fromWinId(int(hwnd))
-                box = QWidget.createWindowContainer(qwin, host)
-                lay = QVBoxLayout(host)
-                lay.setContentsMargins(0, 0, 0, 0)
-                lay.addWidget(box)
                 style = user32.GetWindowLongW(hwnd, GWL_STYLE)
                 user32.SetWindowLongW(hwnd, GWL_STYLE,
                                       int(style) & ~(WS_CAPTION | WS_THICKFRAME))
-                user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)  # NOSIZE|NOMOVE|NOZORDER|FRAMECHANGED
-                # 跨进程嵌入的浏览器窗口默认收不到键盘输入：按键全部派发给宿主线程
-                # 输入队列的焦点窗口，浏览器进程自己的队列永远拿不到。合并两个线程
-                # 的输入队列（AttachThreadInput）后把焦点真正落到浏览器窗口，登录
-                # 框才能打字；关闭对话框时在 _cleanup 里解除合并
-                kernel32 = ctypes.windll.kernel32
-                our_tid = kernel32.GetCurrentThreadId()
-                browser_tid = user32.GetWindowThreadProcessId(hwnd, None)
-                if browser_tid and browser_tid != our_tid and \
-                        user32.AttachThreadInput(our_tid, browser_tid, True):
-                    state["input_attached"] = (our_tid, browser_tid)
-                    user32.SetFocus(hwnd)
-                    user32.PostMessageW(hwnd, 0x0006, 1, 0)  # WM_ACTIVATE(WA_ACTIVE)
+                ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                                      int(ex) | WS_EX_TOOLWINDOW)  # 不进任务栏/Alt-Tab
+                state["overlay"] = True
+                _reposition()
+                for ms in (150, 400, 1000):
+                    QTimer.singleShot(ms, _reposition)
+
+                # 对话框移动/缩放/激活/最小化时保持贴合（浏览器盖在对话框表面之上）
+                class _FollowFilter(QObject):
+                    def eventFilter(self, obj, ev):
+                        t = ev.type()
+                        if not state.get("overlay"):
+                            return False
+                        if t == QEvent.WindowStateChange:
+                            if dlg.isMinimized():
+                                user32.ShowWindow(state["hwnd"], 0)  # 跟随隐藏
+                            else:
+                                user32.ShowWindow(state["hwnd"], 5)   # SW_SHOW
+                                QTimer.singleShot(0, _reposition)
+                        elif t in (QEvent.Move, QEvent.Resize, QEvent.Show,
+                                   QEvent.WindowActivate):
+                            QTimer.singleShot(0, _reposition)
+                        return False
+                filt = _FollowFilter(dlg)
+                dlg.installEventFilter(filt)
+                host.installEventFilter(filt)
+                state["focus_filter"] = filt
+                pop_btn.setEnabled(True)
             except Exception:
-                pass  # 嵌入失败时浏览器以独立窗口显示，登录功能不受影响
+                pass  # 贴合失败时浏览器保持独立窗口，登录功能不受影响
             _refresh_cap()
 
         def worker():
@@ -726,15 +764,27 @@ class CookieManagerDialog(QDialog):
                             f"浏览器启动失败：\n{msg}\n\n可改用「输入」手动粘贴 Cookie")
                 post_to_main(_fail)
 
+        def _pop_out():
+            """⌨ 保底：浏览器恢复普通独立窗口（不再贴合对话框，可随意拖动缩放）。"""
+            hwnd = state.get("hwnd") or 0
+            if not hwnd:
+                return
+            state["overlay"] = False
+            pop_btn.setEnabled(False)
+            try:
+                style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+                user32.SetWindowLongW(hwnd, GWL_STYLE,
+                                      int(style) | WS_CAPTION | WS_THICKFRAME)
+                ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, int(ex) & ~WS_EX_TOOLWINDOW)
+                user32.SetWindowPos(hwnd, 0, 100, 100, 1100, 760, 0x0040)  # SWP_SHOWWINDOW
+                user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+
         def _cleanup():
             state["stop"].set()
-            # 解除输入队列合并（须在 GUI 线程执行，与 AttachThreadInput 同线程）
-            pair = state.pop("input_attached", None)
-            if pair:
-                try:
-                    user32.AttachThreadInput(pair[0], pair[1], False)
-                except Exception:
-                    pass
+            state["overlay"] = False
             if state["hwnd"]:
                 user32.ShowWindow(state["hwnd"], 0)  # goto 阻塞期间避免独立窗口闪现
 
