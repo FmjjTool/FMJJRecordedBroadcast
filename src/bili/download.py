@@ -66,12 +66,13 @@ class DownloadTask:
     """一次批量下载任务：名称 + 文件列表 + 进度回调（线程安全）。"""
 
     def __init__(self, name: str, files: list[dict], base_dir: str,
-                 on_progress=None, on_file_done=None):
+                 on_progress=None, on_file_done=None, on_file_start=None):
         self.name = name
         self.files = files           # [{path, url}]
         self.base_dir = base_dir
         self.on_progress = on_progress       # (done, total)
         self.on_file_done = on_file_done     # (path, err)
+        self.on_file_start = on_file_start   # (path) 下载开始（浮窗槽位绑定用）
         self._stop = threading.Event()
         self.failed: list[str] = []
 
@@ -87,6 +88,11 @@ class DownloadTask:
 
         def _dl(item: dict):
             rel = item["path"]
+            if self.on_file_start:
+                try:
+                    self.on_file_start(rel)
+                except Exception:
+                    pass
             ext = item.get("ext") or url_ext(item["url"])
             full = os.path.join(root, rel if not ext or rel.endswith(f".{ext}") else f"{rel}.{ext}")
             try:

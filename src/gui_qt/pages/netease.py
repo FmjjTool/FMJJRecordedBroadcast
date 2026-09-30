@@ -948,6 +948,8 @@ class NeteasePage(BasePage):
         use_fallback = self.fallback_check.isChecked()
         self.download_btn.setEnabled(False)
         self.status_label.setText("⏳ 下载中..." if not use_fallback else "⏳ 下载中（失败将自动换源）...")
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch(f"音乐下载 · {self.platform}", total=len(selected), threads=4)
 
         def work():
             from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -966,7 +968,12 @@ class NeteasePage(BasePage):
                                     album_name=item.get("album", ""),
                                     duration=(item.get("duration") or 0) // 1000,
                                     platform=self.platform)
-                return download_song_smart(song, out_dir, quality, fallback=use_fallback)
+                name = f"{item.get('name', '')} - {item.get('artists', '')}".strip(" -")
+                card.handle_event("start", name[:40] or f"歌曲 {song.song_id}")
+                r = download_song_smart(song, out_dir, quality, fallback=use_fallback)
+                card.handle_event("done", name[:40] or f"歌曲 {song.song_id}",
+                                  bool(r and r.success))
+                return r
 
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futs = {ex.submit(_one, it): it for it in selected}
@@ -995,6 +1002,7 @@ class NeteasePage(BasePage):
             self.download_btn.setEnabled(True)
             if err:
                 self.status_label.setText(f"❌ {err}")
+                card.finish(f"❌ 下载失败: {str(err)[:50]}")
                 return
             ok, fail, preview, via_cnt, first_err = result
             parts = [f"成功 {ok}"]
@@ -1008,6 +1016,7 @@ class NeteasePage(BasePage):
             if first_err and (fail or preview):
                 tip += f"：{first_err[:40]}"
             self.status_label.setText(tip)
+            card.finish(" / ".join(parts))
 
         run_bg(work, done)
 
@@ -1018,58 +1027,84 @@ class NeteasePage(BasePage):
 
         self.download_btn.setEnabled(False)
         self.status_label.setText("⏳ 下载中...")
+        from gui_qt.download_float import get_float
+        # total 先按歌曲数估（专辑要拉详情后才知道总数，plan 由实际任务数修正）
+        card = get_float().add_batch("音乐下载 · 网易云",
+                                     total=len(selected), threads=4)
 
         def work():
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             from netease import MusicDownloader, COOKIE_FILE, album_detail
             from toolbox.config_manager import get_music_download_dir
             from auth import sync_netease_to_legacy
             sync_netease_to_legacy()
             out_dir = str(get_music_download_dir())
-            dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
-            ok, fail, first_err = 0, 0, ""
-            ids = []
+            jobs = []  # (song_id, 显示名)
+            fail = 0
+            first_err = ""
             if is_albums:
                 cookies = self._cookies()
                 for alb in selected:
                     try:
                         info = album_detail(int(alb["id"]), cookies)
                         for song in info.get("songs", []):
-                            ids.append(song["id"])
+                            jobs.append((song["id"],
+                                         (song.get("name") or f"歌曲{song['id']}")[:40]))
                     except Exception as e:
                         fail += 1
                         if not first_err:
                             first_err = str(e)
-                if not ids and not fail:
+                if not jobs and not fail:
                     first_err = "专辑内无歌曲"
             else:
-                ids = [int(s["id"]) for s in selected]
+                jobs = [(int(s["id"]),
+                         (s.get("name") or f"歌曲{s['id']}")[:40]) for s in selected]
+            card.plan(len(jobs), 4)
 
-            for sid in ids:
+            def _one(job):
+                sid, name = job
+                card.handle_event("start", name)
                 try:
+                    dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
                     r = dl.download_music_file(sid, quality)
-                    if r and r.success:
-                        ok += 1
-                    else:
-                        fail += 1
-                        msg = (r.error_message if r else "失败")
-                        if not first_err:
-                            first_err = msg
+                    okf = bool(r and r.success)
+                    errm = (r.error_message if r else "失败")
                 except Exception as e:
-                    fail += 1
-                    if not first_err:
-                        first_err = str(e)
+                    okf = False
+                    errm = str(e)
+                card.handle_event("done", name, okf)
+                return okf, errm
+
+            ok = 0
+            if jobs:
+                with ThreadPoolExecutor(max_workers=4) as ex:
+                    futs = [ex.submit(_one, j) for j in jobs]
+                    for fut in as_completed(futs):
+                        try:
+                            okf, errm = fut.result()
+                        except Exception as e:
+                            okf, errm = False, str(e)
+                        if okf:
+                            ok += 1
+                        else:
+                            fail += 1
+                            if not first_err:
+                                first_err = errm
             return ok, fail, first_err
 
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
                 self.status_label.setText(f"❌ {err}")
+                card.finish(f"❌ 下载失败: {str(err)[:50]}")
                 return
             ok, fail, first_err = result
             if fail:
                 tip = f"⚠️ 完成（成功 {ok} / 失败 {fail}）" + (f"：{first_err[:50]}" if first_err else "")
                 self.status_label.setText(tip)
+                card.finish(f"成功 {ok} / 失败 {fail}")
             else:
                 self.status_label.setText(f"✅ 下载完成（成功 {ok}）")
+                card.finish(f"✅ 成功 {ok}")
 
         run_bg(work, done)

@@ -777,10 +777,17 @@ class AssetPage(BasePage):
         bar.addWidget(self.sort_sel)
         refresh_btn = icon_button("🔄", "刷新已获取列表", (40, 30), True, "font-size: 15px;", self._refresh_collected)
         bar.addWidget(refresh_btn)
-        # 批量操作：全选 + 下载所选
+        # 批量操作：全选 + 线程数 + 下载所选
         self.select_all_cb = QCheckBox("全选")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
         bar.addWidget(self.select_all_cb)
+        bar.addWidget(QLabel("线程:"))
+        self.batch_thread_sel = QComboBox()
+        self.batch_thread_sel.addItems(common.THREAD_OPTIONS)
+        self.batch_thread_sel.setCurrentText(str(common.CURRENT_THREADS))
+        self.batch_thread_sel.setFixedWidth(70)
+        self.batch_thread_sel.setToolTip("批量下载同时进行的条目数")
+        bar.addWidget(self.batch_thread_sel)
         self.batch_dl_btn = QPushButton("📥 下载所选")
         self.batch_dl_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.batch_dl_btn.clicked.connect(self._batch_download_checked)
@@ -1619,8 +1626,9 @@ class AssetPage(BasePage):
             self._render_collected_batch()
 
     def _batch_download_checked(self):
-        """顺序批量下载所有勾选条目：仅初次下载（本地无媒体）或媒体不完整的才下载；
-        已完整的直接跳过；部分图片缺失时下载内部会自动跳过已存在文件只补缺。"""
+        """并发批量下载所有勾选条目（线程数下拉）：仅初次下载（本地无媒体）或
+        媒体不完整的才下载；已完整的直接跳过；部分图片缺失时下载内部会自动
+        跳过已存在文件只补缺。进度走全局下载浮窗（每条目一个进度槽）。"""
         items = [it for it in self._collected_all_items
                  if self._dl_key(it) in self._checked_keys]
         if not items:
@@ -1638,79 +1646,73 @@ class AssetPage(BasePage):
                 continue
             todo.append(it)
         n = len(todo)
-        cancel_ev = threading.Event()
-        dlg = QProgressDialog(f"批量下载 0/{n}", "取消", 0, max(n, 1), self)
-        dlg.setWindowTitle("批量下载")
-        dlg.setAutoClose(False)
-        dlg.setAutoReset(False)
-        dlg.setMinimumDuration(0)
-        dlg.setMinimumWidth(420)
-        dlg.canceled.connect(cancel_ev.set)
         if skip:
             self.app.toast(f"跳过 {skip} 条（已下载完整），开始下载 {n} 条", "info")
         if not todo:
-            dlg.close()
             return
-        dlg.show()
+        try:
+            threads = max(1, min(int(self.batch_thread_sel.currentText()), n))
+        except (ValueError, RuntimeError):
+            threads = max(1, min(4, n))
 
-        done_n = [0]
-        # 子进度桥：当前条目内部（视频流字节/图片计数）上报 → 合并进总进度条标签
-        sub_bridge = _ProgressBridge()
-        cur_title = [""]
+        cancel_ev = threading.Event()
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("资产管理", total=n, threads=threads,
+                                     cancel_cb=cancel_ev.set)
 
-        def on_sub(done_b, total_b, name):
-            try:
-                if total_b > 100000:  # 字节进度（视频流，MB 展示）
-                    tail = f"  ⬇ {done_b / 1048576:.1f}/{total_b / 1048576:.1f} MB"
-                elif total_b > 0 and name:  # 文件计数（图片/live 图）
-                    tail = f"  ⬇ 文件 {done_b}/{total_b}"
-                else:
-                    return
-                dlg.setLabelText(f"批量下载 {done_n[0] + 1}/{n}  {cur_title[0]}{tail}")
-            except RuntimeError:
-                pass  # 对话框已关
+        # 调度器（全部在主线程跑：_launch 由按钮触发，_one_done 由 run_bg 的
+        # done 回调触发，_download_for_item 的同步短路路径也在主线程）
+        st = {"active": 0, "done": 0, "next": 0, "finished": False}
+        bridges = {}  # name -> _ProgressBridge（防 GC + 完成后释放）
 
-        sub_bridge.updated.connect(on_sub)
+        def _launch():
+            while (not cancel_ev.is_set() and st["active"] < threads
+                   and st["next"] < n):
+                it = todo[st["next"]]
+                i = st["next"] + 1
+                st["next"] += 1
+                key = self._dl_key(it)
+                title = (it.get("title") or it.get("date_part") or "")[:32]
+                name = f"{i}. {title}" if title else f"条目 {i}"
+                bridge = _ProgressBridge()
+                bridges[name] = bridge
 
-        def _advance():
-            done_n[0] += 1
-            try:
-                dlg.setValue(done_n[0])
-            except RuntimeError:
-                pass
-            if cancel_ev.is_set() or done_n[0] >= n:
-                # close() 会触发 closeEvent → emit canceled → cancel_ev 被置位，
-                # 必须先记下用户是否真取消，再 close
-                was_cancelled = cancel_ev.is_set()
-                try:
-                    sub_bridge.updated.disconnect(on_sub)
-                except (RuntimeError, TypeError):
-                    pass
-                try:
-                    dlg.close()
-                except RuntimeError:
-                    pass
-                if was_cancelled:
-                    self.app.toast(f"批量下载已取消（完成 {done_n[0]}/{n}）", "warning")
-                else:
-                    self.app.toast(f"✅ 批量下载完成 {done_n[0]} 条", "success")
-                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
-            else:
-                _step()
+                def on_sub(done_b, total_b, _fname, nm=name):
+                    # 字节进度（视频流 MB）与文件计数（图片张数）都映射到该槽位进度条
+                    card.handle_event("bytes", nm, done_b, total_b)
 
-        def _step():
+                bridge.updated.connect(on_sub)
+
+                def _one_done(nm=name, k=key):
+                    bridges.pop(nm, None)
+                    st["active"] -= 1
+                    st["done"] += 1
+                    # 下载链 done() 在回调前已写 _dl_state：done=成功，None=失败/取消
+                    card.handle_event("done", nm, self._dl_state.get(k) == "done")
+                    if cancel_ev.is_set() or st["done"] >= n:
+                        _all_done()
+                    else:
+                        _launch()
+
+                st["active"] += 1
+                card.handle_event("start", name)
+                self._download_for_item(it, force=False, on_finished=_one_done,
+                                        quiet=True, sub_bridge=bridge,
+                                        cancel_ev=cancel_ev)
+
+        def _all_done():
+            if st["finished"]:
+                return  # 取消时每个在途条目都会走到这：只汇总一次，防重复 toast/刷新
+            st["finished"] = True
             if cancel_ev.is_set():
-                return
-            it = todo[done_n[0]]
-            cur_title[0] = (it.get("title") or "")[:32]
-            try:
-                dlg.setLabelText(f"批量下载 {done_n[0] + 1}/{n}  {cur_title[0]}")
-            except RuntimeError:
-                pass
-            self._download_for_item(it, force=False, on_finished=_advance, quiet=True,
-                                    sub_bridge=sub_bridge, cancel_ev=cancel_ev)
+                card.finish(f"⏹ 已取消（完成 {st['done']}/{n}）")
+                self.app.toast(f"批量下载已取消（完成 {st['done']}/{n}）", "warning")
+            else:
+                card.finish(f"✅ 批量下载完成 {st['done']} 条")
+                self.app.toast(f"✅ 批量下载完成 {st['done']} 条", "success")
+            QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
 
-        _step()
+        _launch()
 
     def _download_bilibili_item(self, it, on_finished=None, quiet=False, force=False,
                                 sub_bridge=None, cancel_ev=None):
@@ -2053,7 +2055,7 @@ class AssetPage(BasePage):
         win = QDialog(self)
         win.setWindowTitle("删除文件")
         win.setModal(True)
-        win.resize(420, 300)
+        win.resize(440, 340)
         v = QVBoxLayout(win)
         v.setSpacing(10)
         v.addWidget(QLabel(f"「{(it.get('title') or '')[:40]}」关联文件："))
@@ -2085,6 +2087,29 @@ class AssetPage(BasePage):
         hint = QLabel("勾选要删除的文件类别，未勾选的保留")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(hint)
+
+        # 独立媒体条目（无 json 数据文件）实时警告：这种条目本身就是那几个
+        # 媒体文件，勾选删光全部媒体 = 条目从列表消失，必须在点确定前看见
+        vanish_lbl = QLabel("")
+        vanish_lbl.setWordWrap(True)
+        vanish_lbl.setStyleSheet("color: #c62828; font-size: 11px; font-weight: bold;")
+        v.addWidget(vanish_lbl)
+
+        def _sync_vanish(*_):
+            remaining = (len(img_files) if not cb_img.isChecked() else 0) \
+                + (len(vid_files) if not cb_vid.isChecked() else 0)
+            if not doc_files and (img_files or vid_files) and remaining == 0:
+                vanish_lbl.setText(
+                    "⚠ 该条目无数据文件（json），当前勾选会删光全部媒体文件——"
+                    "条目就是这些文件，删除后此行将从列表消失！")
+            elif not doc_files and (img_files or vid_files):
+                vanish_lbl.setText("ℹ 该条目为独立媒体条目（无 json），请留意删光媒体会导致条目消失")
+            else:
+                vanish_lbl.setText("")
+
+        for _cb in (cb_img, cb_vid, cb_doc, cb_all):
+            _cb.stateChanged.connect(_sync_vanish)
+        _sync_vanish()
 
         btns = QHBoxLayout()
         btns.addStretch(1)
@@ -2224,6 +2249,18 @@ class AssetPage(BasePage):
                             lives.append(lv)
                 except Exception:
                     pass
+            # 方式5：抖音图集/快手/小红书图文的 images 列表（dict 带 url_list 或纯字符串）
+            if not urls:
+                for im in data.get("images", []) or []:
+                    if isinstance(im, dict):
+                        ul = im.get("url_list") or []
+                        u = ul[0] if ul else (im.get("url") or "")
+                    elif isinstance(im, str):
+                        u = im
+                    else:
+                        u = ""
+                    if u and u not in urls:
+                        urls.append(u)
         except Exception:
             pass
         return urls, lives

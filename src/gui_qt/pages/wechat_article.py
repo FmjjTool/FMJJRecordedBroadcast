@@ -204,18 +204,26 @@ class WechatArticlePage(BasePage):
         self.log_text.clear()
         self._log(f"📰 开始解析 {len(urls)} 篇文章，导出格式: {'/'.join(FORMATS_DICT[f] for f in formats)}")
         self._log(f"📂 导出位置: {self._current_out_dir()}")
+        # 下载浮窗（主线程创建；文章间串行限速，文章内图片并发）
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("公众号解析", total=len(urls), threads=1,
+                                     cancel_cb=self._cancel_run)
         threading.Thread(
-            target=self._worker, args=(urls, formats, self._current_out_dir()),
+            target=self._worker, args=(urls, formats, self._current_out_dir(), card),
             daemon=True).start()
 
     def _cancel_run(self):
         self._cancel = True
         self.status_label.setText("⏳ 正在取消（完成当前请求后停止）...")
 
-    def _worker(self, urls, formats, out_dir):
+    def _worker(self, urls, formats, out_dir, card=None):
         from platforms.wechat_article import fetch_article, download_images
         from exporters import wechat_writer
         import time
+
+        def _evt(*event):
+            if card is not None:
+                card.handle_event(*event)
 
         total = len(urls)
         ok, fail = 0, 0
@@ -224,18 +232,24 @@ class WechatArticlePage(BasePage):
             if self._cancel:
                 break
             post_to_main(self._set_status, f"批量解析 {i + 1}/{total}  ⏳ 抓取页面...")
+            title = f"{i + 1}. {url[-24:]}"
             try:
                 art = fetch_article(url)
+                title = (f"{i + 1}. {art.title}")[:46] if art.title else title
+                _evt("start", title)
                 post_to_main(self._log,
                              f"[{i + 1}/{total}] 📄 {art.title}")
                 post_to_main(self._log,
                              f"  公众号: {art.account or '-'}  发布: {art.publish_time or '-'}  图片: {len(art.images)} 张")
 
-                def img_prog(n, m, title):
+                def img_prog(n, m, t=title):
                     post_to_main(self._set_status,
-                                 f"批量解析 {i + 1}/{total}  {title[:24]}  ⬇ 图片 {n}/{m}")
+                                 f"批量解析 {i + 1}/{total}  {t[:24]}  ⬇ 图片 {n}/{m}")
+                    _evt("bytes", t, n, m)
+
                 download_images(art, progress=img_prog,
-                                should_cancel=lambda: self._cancel)
+                                should_cancel=lambda: self._cancel,
+                                threads=6)
 
                 stem = wechat_writer.build_stem(art)
                 if "html" in formats:
@@ -248,14 +262,19 @@ class WechatArticlePage(BasePage):
                     pdf_jobs.append((wechat_writer.build_full_html(art),
                                      os.path.join(out_dir, stem + ".pdf"), art.title))
                 ok += 1
+                _evt("done", title, True)
                 post_to_main(self._log, "  ✅ 导出完成" + ("（PDF 稍后生成）" if "pdf" in formats else ""))
             except Exception as e:
                 fail += 1
+                _evt("done", title, False)
                 post_to_main(self._log, f"[{i + 1}/{total}] ❌ 失败: {str(e)[:120]}")
             post_to_main(self.progress.setValue, int((i + 1) / total * 100))
             if i < total - 1 and not self._cancel:
                 time.sleep(1.2)  # 批量限速，降低微信风控概率
 
+        if card is not None:
+            tip = f"✅ 完成：成功 {ok} 篇" if not fail else f"⚠️ 完成：成功 {ok} / 失败 {fail}"
+            card.finish(tip)
         post_to_main(self._finish_batch, pdf_jobs, ok, fail, formats)
 
     def _finish_batch(self, pdf_jobs, ok, fail, formats):

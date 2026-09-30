@@ -135,6 +135,7 @@ class URLRecognizer:
             r"douyin\.com/video/(\d+)",
             r"douyin\.com/note/(\d+)",
             r"douyin\.com/user/",
+            r"douyin\.com/search/",
             r"v\.douyin\.com/([a-zA-Z0-9]+)",
             r"iesdouyin\.com/share/video/(\d+)",
         ],

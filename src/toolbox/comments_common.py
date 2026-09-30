@@ -119,33 +119,71 @@ def filter_comments(be, comments: list, keyword: str = "", user: str = "",
 
 # ==================== 保存原始数据 ====================
 
-def save_raw(be, comments: list, out_dir: Path, progress=None) -> dict:
-    """保存原始数据：comments.json / comments.txt / images/。返回统计。"""
+def save_raw(be, comments: list, out_dir: Path, progress=None,
+             task_event=None, threads: int = 4) -> dict:
+    """保存原始数据：comments.json / comments.txt / images/。返回统计。
+
+    评论图片并发下载（threads 控制并发数）；task_event 可选 → 下载浮窗
+    进度（plan/start/done 协议，与 DownloadPanel 一致，任意线程可调）。
+    """
     (out_dir / "images").mkdir(parents=True, exist_ok=True)
     (out_dir / "comments.json").write_text(
         json.dumps(comments, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    lines, n_img, n_dl = [], 0, 0
+    lines, jobs = [], []  # jobs: (url, 落盘路径)
     for c in comments:
         user = be.comment_user(c)
         text = be.comment_text(c).replace("\n", " ")
         lines.append(f"[{user}] {text}")
         for u in be.image_urls(c):
-            n_img += 1
             ext = ".jpg"
             m = re.search(r"\.(jpe?g|png|webp|gif)(?:[?~]|$)", u, re.I)
             if m:
                 ext = "." + m.group(1).lower()
-            path = out_dir / "images" / f"img_{n_img:03d}{ext}"
+            path = out_dir / "images" / f"img_{len(jobs) + 1:03d}{ext}"
+            jobs.append((u, path))
+    n_img = len(jobs)
+
+    def _evt(*event):
+        if task_event is not None:
             try:
-                r = requests.get(u, headers=be.IMG_HEADERS, timeout=30)
-                if r.status_code == 200 and len(r.content) > 1000:
-                    path.write_bytes(r.content)
-                    n_dl += 1
+                task_event(*event)
             except Exception:
                 pass
-            if progress and n_img % 5 == 0:
-                progress(f"图片 {n_dl}/{n_img}", n_img, max(n_img, 1))
+
+    _evt("plan", "parallel", n_img, threads if n_img > 1 else 1)
+
+    def _fetch(job):
+        u, path = job
+        _evt("start", path.name)
+        ok = False
+        try:
+            r = requests.get(u, headers=be.IMG_HEADERS, timeout=30)
+            if r.status_code == 200 and len(r.content) > 1000:
+                path.write_bytes(r.content)
+                ok = True
+        except Exception:
+            pass
+        _evt("done", path.name, ok)
+        return ok
+
+    n_dl = 0
+    if threads > 1 and n_img > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=threads) as ex:
+            futs = [ex.submit(_fetch, j) for j in jobs]
+            for i, fut in enumerate(futs):
+                if fut.result():
+                    n_dl += 1
+                if progress and (i + 1) % 5 == 0:
+                    progress(f"图片 {n_dl}/{i + 1}", i + 1, n_img)
+    else:
+        for i, job in enumerate(jobs):
+            if _fetch(job):
+                n_dl += 1
+            if progress and (i + 1) % 5 == 0:
+                progress(f"图片 {n_dl}/{i + 1}", i + 1, n_img)
+
     (out_dir / "comments.txt").write_text(
         "\n".join(lines) + f"\n\n共 {len(comments)} 条评论，{n_img} 张图片，成功下载 {n_dl} 张",
         encoding="utf-8")

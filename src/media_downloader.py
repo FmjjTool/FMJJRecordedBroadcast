@@ -567,7 +567,9 @@ def download_media(
     _say(f"[bold]开始下载 {len(tasks)} 个文件到 [cyan]{os.path.abspath(base_dir)}[/cyan]...[/bold]")
 
     from auth import get_cookie as _gc
-    # 惰性获取 cookie（避免下载抖音时也触发 weibo cookie 过期警告/无关请求）
+    # 惰性获取 cookie（避免下载抖音时也触发 weibo cookie 过期警告/无关请求）；
+    # 并行下载时多线程共享缓存，加锁防并发重复取 cookie
+    _ck_lock = threading.Lock()
     _dy_ck_cache = [None]
     _wb_ck_cache = [None]
     headers = {
@@ -576,8 +578,9 @@ def download_media(
     }
 
     def _dy_headers():
-        if _dy_ck_cache[0] is None:
-            _dy_ck_cache[0] = _gc("douyin") or ""
+        with _ck_lock:
+            if _dy_ck_cache[0] is None:
+                _dy_ck_cache[0] = _gc("douyin") or ""
         h = dict(headers)
         h["Referer"] = "https://www.douyin.com/"
         if _dy_ck_cache[0]:
@@ -585,8 +588,9 @@ def download_media(
         return h
 
     def _wb_headers():
-        if _wb_ck_cache[0] is None:
-            _wb_ck_cache[0] = _gc("weibo") or ""
+        with _ck_lock:
+            if _wb_ck_cache[0] is None:
+                _wb_ck_cache[0] = _gc("weibo") or ""
         h = dict(headers)
         h["Referer"] = "https://weibo.com/"
         if _wb_ck_cache[0]:

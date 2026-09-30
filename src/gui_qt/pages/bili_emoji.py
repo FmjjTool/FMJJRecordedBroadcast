@@ -19,7 +19,7 @@ from bili import api
 from bili.links import parse_link
 from bili.download import DownloadTask
 from toolbox.config_manager import get_export_dir
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 
 FMT_OPTIONS = [("gif", "GIF（动图）"), ("webp", "WEBP"), ("png", "PNG（静图）"), ("all", "全部格式")]
@@ -88,10 +88,17 @@ class _DlBar(QWidget):
             self._page.app.toast("请先加载表情包", "warning")
             return
         base = os.path.join(str(get_export_dir()), "B站资源", self._sub_dir)
+        # 进度走全局下载浮窗（原页面不再逐文件刷新标签）
+        from gui_qt.download_float import get_float
+        n_files = len(current["files"])
+        card = get_float().add_batch(current["title"][:18] or "B站资源",
+                                     total=n_files, threads=5)
         task = DownloadTask(api.sanitize(current["title"]), current["files"], base,
-                            on_progress=lambda d, t: post_to_main(
-                                lambda d=d, t=t: self.progress.setText(f"下载中 {d}/{t}")))
+                            on_file_start=lambda rel: card.handle_event("start", rel),
+                            on_file_done=lambda rel, err: card.handle_event(
+                                "done", rel, err is None))
         self.dl_btn.setEnabled(False)
+        self.progress.setText(f"下载中 0/{n_files}（进度见下载中心浮窗）")
 
         def job():
             return task.run(5)
@@ -100,10 +107,12 @@ class _DlBar(QWidget):
             self.dl_btn.setEnabled(True)
             if err:
                 self.progress.setText(f"下载出错：{err}")
+                card.finish(f"❌ 下载出错: {str(err)[:60]}")
                 return
             failed = len(result["failed"])
             msg = f"完成 {result['done']}/{result['total']}" + (f"（{failed} 个失败）" if failed else "")
             self.progress.setText(msg)
+            card.finish(("✅ " if not failed else "⚠️ ") + msg)
             self._page.app.toast(msg, "success" if not failed else "warning")
             try:
                 os.startfile(result["dir"])

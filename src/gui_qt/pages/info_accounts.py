@@ -175,6 +175,10 @@ class InfoAccountsPage(BasePage):
             "<p>· <b>获取最新</b>：勾选账号后批量抓取，右下角可⏸暂停 / ✕取消；"
             "抓取结果进入「已获取」与增量数据库</p>"
             "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
+            "<p>· <b>获取后自动下载</b>：勾选后获取→保存→下载一次性完成；"
+            "下载画质/线程数用「已获取」页的全局设置</p>"
+            "<p>· <b>限流</b>：每平台累计抓到设定条数后冷却（同平台后续账号等冷却结束才发请求，"
+            "抖音账号内部翻页同样停顿），防止请求过频触发风控</p>"
             "<p>· <b>⏰ 定时获取</b>：按间隔自动抓取全部账号</p>"
             "<p>· <b>📅 日期段</b>：日历选择发布时间范围（如 9月1日~9月20日、从头~9月20日），"
             "获取时只保留范围内的内容，范围持久保存</p>"
@@ -269,13 +273,21 @@ class InfoAccountsPage(BasePage):
         layout.addLayout(op_row)
         self._on_fetch_mode_change("全部账号")
 
-        # 策略行：增量模式 + 搜索限流
+        # 策略行：增量模式 + 获取后自动下载 + 搜索限流
         strat_row = QHBoxLayout()
         self.inc_check = QCheckBox("增量模式(写入数据库)")
         # 默认勾选 + 记住上次选择（写入 config，重启恢复）
         self.inc_check.setChecked(self._load_inc_checked())
         self.inc_check.toggled.connect(self._save_inc_checked)
         strat_row.addWidget(self.inc_check)
+        strat_row.addSpacing(8)
+        self.auto_dl_check = QCheckBox("获取后自动下载")
+        self.auto_dl_check.setToolTip(
+            "勾选后：获取完成 → 保存（已获取/数据库）→ 自动下载本次获取的内容，"
+            "一次性完成。下载画质/线程数用「已获取」页的全局设置")
+        self.auto_dl_check.setChecked(self._load_auto_dl_checked())
+        self.auto_dl_check.toggled.connect(self._save_auto_dl_checked)
+        strat_row.addWidget(self.auto_dl_check)
         strat_row.addSpacing(8)
         strat_row.addWidget(QLabel("限流:每"))
         self.rate_count_entry = QLineEdit("10")
@@ -554,49 +566,19 @@ class InfoAccountsPage(BasePage):
     def _sync_to_tracker(self):
         """把本页账号一键同步到「视频账号追踪」：按平台+ID去重，已存在跳过；
         账号名/链接/分组一并带过去，分组不存在时按同组号+组名自动创建。"""
-        from accounts_manager import load_accounts as load_fm_accounts, get_groups as fm_groups
-        src_accounts = load_fm_accounts()
-        if not src_accounts:
-            self.app.toast("「账号获取」中暂无账号，先添加账号", "warning")
-            return
-        from tracker.accounts import (parse_url, load_accounts, save_accounts,
-                                      get_groups as tk_groups, save_group)
-        dst_accounts = load_accounts()
-
-        def _key(url):
-            plat, pid = parse_url(url)
-            return (plat, pid) if plat and pid else ("__url__", (url or "").strip())
-
-        existing = {_key(a.get("url", "")) for a in dst_accounts}
-        new_items, skipped, new_gids = [], 0, set()
-        for acc in src_accounts:
-            key = _key(acc.url)
-            if key in existing:
-                skipped += 1
-                continue
-            existing.add(key)
-            gids = [str(g) for g in (acc.group_ids or []) if str(g).strip()]
-            new_gids.update(gids)
-            new_items.append({"name": acc.name or "", "url": acc.url,
-                              "platform": _key(acc.url)[0] or "", "group_ids": gids})
+        from tracker.accounts import plan_sync_from_fm, apply_sync_from_fm
+        new_items, skipped = plan_sync_from_fm()
         if not new_items:
             self.app.toast(f"共 {skipped} 个账号均已存在于「视频账号追踪」，无需同步", "info")
             return
         msg = (f"把「账号获取」的账号同步到「视频账号追踪」？\n\n"
-               f"共 {len(src_accounts)} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
+               f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
                + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
                + ("\n…等" if len(new_items) > 8 else ""))
         if QMessageBox.question(self, "同步到视频账号追踪", msg,
                                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
-        dst_accounts.extend(new_items)
-        save_accounts(dst_accounts)
-        # 分组带过去：追踪侧缺的组按同组号+组名补建
-        src_groups = fm_groups()
-        dst_groups = tk_groups()
-        for gid in new_gids:
-            if gid not in dst_groups and src_groups.get(gid):
-                save_group(gid, src_groups[gid])
+        apply_sync_from_fm(new_items)
         self.app.toast(f"✅ 已同步 {len(new_items)} 个账号到「视频账号追踪」"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
@@ -717,14 +699,18 @@ class InfoAccountsPage(BasePage):
                 self.log_text.append(f"❌ {err}")
                 self.prog_label.setText("❌ 获取失败")
                 return
-            total, _log = result
+            total, _log, new_posts = result
             if self._cancel_evt.is_set():
                 self.log_text.append(f"\n✕ 已取消（本次已获取 {total} 条，已存入「已获取」）")
                 self.prog_label.setText("✕ 已取消")
             else:
                 self.log_text.append(f"\n✅ 共获取 {total} 条（已存入「已获取」）")
-                self.prog_label.setText("✅ 获取完成")
+                if not self.auto_dl_check.isChecked():
+                    self.prog_label.setText("✅ 获取完成")
             refresh_results_count(self.app)
+            # 获取后自动下载（勾选后保存+下载一次性完成）
+            if self.auto_dl_check.isChecked() and new_posts:
+                self._start_auto_download(new_posts)
 
         self._fetching = True
         run_bg(work, done)
@@ -775,14 +761,16 @@ class InfoAccountsPage(BasePage):
         return accounts, None
 
     def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None, date_start="", date_end=""):
-        """采集账号最新内容，返回 (total, log)。供手动与定时获取共用。
+        """采集账号最新内容，返回 (total, log, all_posts)。供手动与定时获取共用。
 
         多账号并发采集（ThreadPoolExecutor，上限 4 线程）：原串行逐个等待，
         账号多时总耗时 ≈ 各账号耗时之和，并发后 ≈ 最慢一个账号的耗时。
 
         on_event(dict)：实时事件回调（后台线程调用），{"type": "log", "text": ...}
         或 {"type": "progress", "done": x, "total": y, "label": ...}。
-        rate_count/rate_interval: 搜索限流（每网站累计抓到 rate_count 个暂停 rate_interval 秒）。
+        rate_count/rate_interval: 搜索限流（每平台累计抓到 rate_count 个后进入
+            rate_interval 秒冷却期，同平台后续账号等冷却结束才发请求；
+            抖音账号内部翻页同样按该节奏停顿）。
         incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
         pause_event: threading.Event，clear 时在账号边界停住（在飞账号自然跑完）。
         cancel_event: threading.Event，set 后未开始的账号直接跳过（在飞账号自然跑完）。
@@ -837,6 +825,42 @@ class InfoAccountsPage(BasePage):
 
         proxy = _TLStdout(sys.stdout)
 
+        # 平台限流（真正作用于请求间隔）：fetched=本周期累计条数，cooldown=冷却截止时间。
+        # 旧实现把 sleep 放在全部账号采完后的统计循环里，请求早已发出，限流形同虚设；
+        # 改为「账号抓取前等冷却 + 抓完计数触发冷却」，并发线程会真正被拉开间隔。
+        plat_lock = threading.Lock()
+        plat_fetched = {}
+        plat_cooldown = {}
+        rate_on = rate_count > 0 and rate_interval > 0
+
+        def _throttle_before(platform: str):
+            """该账号开始抓取前：平台处于冷却期则等到冷却结束。"""
+            if not rate_on:
+                return
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                if pause_event is not None:
+                    pause_event.wait()
+                with plat_lock:
+                    until = plat_cooldown.get(platform, 0.0)
+                remain = until - time.time()
+                if remain <= 0:
+                    return
+                time.sleep(min(remain, 1.0))
+
+        def _throttle_after(platform: str, n_items: int) -> bool:
+            """该账号抓取结束：累计条数，达阈值设冷却期。返回是否触发限流。"""
+            if not rate_on or n_items <= 0:
+                return False
+            with plat_lock:
+                plat_fetched[platform] = plat_fetched.get(platform, 0) + n_items
+                if plat_fetched[platform] >= rate_count:
+                    plat_fetched[platform] = 0
+                    plat_cooldown[platform] = time.time() + rate_interval
+                    return True
+            return False
+
         def _fetch_one(job):
             """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, detail, error)。"""
             i, a = job
@@ -853,12 +877,16 @@ class InfoAccountsPage(BasePage):
             parser = get_parser(platform)
             if not parser or not hasattr(parser, "fetch_user_posts"):
                 return i, a, platform, [], "", "不支持时间线"
+            # 冷却期内等待（限流真正作用于下一个请求的发出时刻）
+            _throttle_before(platform)
             # B站按账号 kind 决定只采视频/只采动态/混合（存量账号 kind 空时按 URL 后缀推断）；其他平台忽略
             account_kind = getattr(a, "kind", "") or infer_kind_from_url(a.url)
+            kwargs = {}
             if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
                 kwargs = {"kind": account_kind}
-            else:
-                kwargs = {}
+            elif platform == "douyin" and rate_on:
+                # 抖音风控最敏感：账号内部翻页也按限流设置停顿（每 rate_count 条停 rate_interval 秒）
+                kwargs = {"pause_every": rate_count, "pause_secs": rate_interval}
             buf = io.StringIO()
             proxy._local.buf = buf
             try:
@@ -867,6 +895,8 @@ class InfoAccountsPage(BasePage):
                 return i, a, platform, [], "", str(e)
             finally:
                 proxy._local.buf = None
+            if _throttle_after(platform, len(posts)):
+                print(f"    ⏸ 限流：{platform} 已抓满 {rate_count} 条，冷却 {rate_interval}s")
             return i, a, platform, posts, buf.getvalue(), ""
 
         old_stdout = sys.stdout
@@ -880,7 +910,7 @@ class InfoAccountsPage(BasePage):
         finally:
             sys.stdout = old_stdout
 
-        per_platform = {}  # 平台 -> 已抓数量（用于限流）
+        per_platform = {}  # 平台 -> 已抓数量（汇总统计用）
         done_cnt = 0
         for i, a, platform, posts, detail, error in outcomes:
             name = a.name or (a.url[:36] if a.url else "未命名")
@@ -910,16 +940,7 @@ class InfoAccountsPage(BasePage):
             _collect(posts)
             all_posts.extend(posts)
             total += len(posts)
-            # 搜索限流：每网站累计抓到 rate_count 个后暂停 rate_interval 秒（暂停门闩优先）
-            if (rate_count > 0 and rate_interval > 0 and posts
-                    and not (cancel_event is not None and cancel_event.is_set())):
-                per_platform[platform] = per_platform.get(platform, 0) + len(posts)
-                if per_platform[platform] >= rate_count:
-                    emit(f"    ⏸ 限流：{platform} 已抓 {per_platform[platform]} 个，暂停 {rate_interval}s")
-                    if pause_event is not None:
-                        pause_event.wait()
-                    time.sleep(rate_interval)
-                    per_platform[platform] = 0
+            per_platform[platform] = per_platform.get(platform, 0) + len(posts)
             # 区分主页作品 / 动态统计
             dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
             videos = len(posts) - dyns
@@ -945,7 +966,7 @@ class InfoAccountsPage(BasePage):
             cancelled = cancel_event is not None and cancel_event.is_set()
             on_event({"type": "progress", "done": n, "total": n,
                       "label": "✕ 已取消" if cancelled else "✅ 全部完成"})
-        return total, log
+        return total, log, all_posts
 
     def _auto_export(self, posts, incremental):
         """抓取完成后自动导出。incremental=True 增量入库（分平台分表），False 单独导出独立文件。"""
@@ -991,6 +1012,61 @@ class InfoAccountsPage(BasePage):
             save_convert_config(cfg)
         except Exception:
             pass
+
+    # ---------- 获取后自动下载勾选持久化 ----------
+    @staticmethod
+    def _load_auto_dl_checked() -> bool:
+        try:
+            from toolbox.config_manager import load_convert_config
+            return bool(load_convert_config().get("auto_dl_checked", False))
+        except Exception:
+            return False
+
+    def _save_auto_dl_checked(self, checked):
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            cfg = load_convert_config()
+            cfg["auto_dl_checked"] = bool(checked)
+            save_convert_config(cfg)
+        except Exception:
+            pass
+
+    # ---------- 获取后自动下载 ----------
+    def _start_auto_download(self, posts):
+        """获取完成后自动下载本次内容（勾选「获取后自动下载」时触发，保存+下载一次性）。"""
+        from gui_qt import common, download_ops
+        quality = common.CURRENT_QUALITY
+        threads = common.CURRENT_THREADS
+
+        def _log(line):
+            post_to_main(lambda t=line: self.log_text.append(t))
+
+        self.log_text.append(f"⏬ 自动下载开始：{len(posts)} 条"
+                             f"（画质 {quality} · {threads} 线程）")
+        self.prog_label.setText("⏬ 自动下载中...")
+        # 下载进度走全局下载浮窗（原页面只保留日志/状态）
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("账号获取·自动下载", total=len(posts),
+                                     threads=threads)
+
+        def work():
+            return download_ops.download_items_mixed(
+                posts, quality_label=quality, threads=threads, log=_log,
+                on_task_event=card.handle_event)
+
+        def done(result, err):
+            if err:
+                self.log_text.append(f"❌ 自动下载失败: {err}")
+                self.prog_label.setText("❌ 自动下载失败")
+                self.app.toast(f"自动下载失败: {str(err)[:60]}", "error")
+                card.finish(f"❌ 下载失败: {str(err)[:60]}")
+                return
+            self.log_text.append(f"✅ 自动下载完成: {result}")
+            self.prog_label.setText("✅ 获取+下载完成")
+            self.app.toast(f"✅ 自动下载完成：{result}", "success")
+            card.finish(f"✅ {result}" if len(result) <= 80 else "✅ " + result[:79] + "…")
+
+        run_bg(work, done)
 
     # ---------- 日期段获取（按发布时间过滤） ----------
     def _load_date_range(self):
@@ -1227,13 +1303,17 @@ class InfoAccountsPage(BasePage):
                 self.log_text.append(f"[{ts}] ⏰ 定时获取失败: {err}")
                 self.prog_label.setText("❌ 定时获取失败")
                 return
-            total, _log = result
+            total, _log, new_posts = result
             if self._cancel_evt.is_set():
                 self.log_text.append(f"[{ts}] ⏰ 定时获取已取消（已获取 {total} 条）")
                 self.prog_label.setText("✕ 已取消")
             else:
                 self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
             refresh_results_count(self.app)
+            # 获取后自动下载（勾选后定时获取也生效：保存+下载一次性）
+            if self.auto_dl_check.isChecked() and new_posts:
+                self._start_auto_download(new_posts)
+                return
             if not self.isVisible():
                 # 用户已切到其他页：提示定时获取仍在后台生效
                 self.app.toast(f"⏰ 定时获取已在后台完成（共 {total} 条）", "info")

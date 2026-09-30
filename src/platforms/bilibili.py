@@ -520,7 +520,7 @@ class BilibiliParser(PlatformBase):
                         duration=self._parse_duration(v.get("length","")),
                         cover_url=v.get("pic",""), video_url=_build_video_url(v),
                         publish_time=normalize_datetime(int(v.get("created",0))),
-                        raw_url=f"https://space.bilibili.com/{mid}", raw_data=v, fetched_at=now_str(),
+                        raw_url=_build_video_url(v), raw_data=v, fetched_at=now_str(),
                         category="视频",
                     ))
                 remaining -= ps; page += 1
@@ -571,7 +571,7 @@ class BilibiliParser(PlatformBase):
                         duration=self._parse_duration(v.get("length","")),
                         cover_url=v.get("pic",""), video_url=_build_video_url(v),
                         publish_time=normalize_datetime(int(v.get("created",0))),
-                        raw_url=f"https://space.bilibili.com/{mid}", raw_data=v, fetched_at=now_str(),
+                        raw_url=_build_video_url(v), raw_data=v, fetched_at=now_str(),
                         category="视频",
                     ))
             except Exception as e:

@@ -60,7 +60,12 @@ class DouyinParser(PlatformBase):
         return m.group(1) if m else ""
 
     def _normalize_url(self, url: str) -> str:
-        if "/user/" in url:
+        """弹窗链接规范化成标准作品页。
+
+        主页搜索弹窗（/user/xxx/search/关键词?...&modal_id=）和全站搜索弹窗
+        （/search/关键词?...&modal_id=）的作品 ID 都在 modal_id query 里——
+        两类都必须重写成 /video/{id}，否则页面解析对搜索页 HTML 无从下手。"""
+        if "/user/" in url or "/search/" in url:
             m = self.MODAL_ID_PATTERN.search(url)
             if m: return f"https://www.douyin.com/video/{m.group(1)}"
         return url
@@ -89,6 +94,23 @@ class DouyinParser(PlatformBase):
             print(f"[抖音] API 请求失败: {e}")
         return None
 
+    @staticmethod
+    def _note_images(item: dict) -> tuple:
+        """图集判定与图片直链提取。返回 (is_note, images)。
+
+        判定同 multi_downloader._parse_douyin：aweme_type=68，或 images 非空
+        且无视频码率档（图文的 video.play_addr 是背景音乐 mp3，不是视频流，
+        绝不能当 video_url 返回——否则下载器只下到封面）。"""
+        images = []
+        for img in (item.get("images") or []):
+            ul = img.get("url_list") or []
+            if ul:
+                images.append(ul[0])
+        video = item.get("video") if isinstance(item.get("video"), dict) else {}
+        is_note = (int(item.get("aweme_type", 0) or 0) == 68
+                   or (bool(images) and not (video.get("bit_rate") or [])))
+        return is_note, images
+
     def _build_from_aweme(self, item: dict, video_id: str) -> VideoInfo:
         author = item.get("author", {})
         stats = item.get("statistics", {})
@@ -112,7 +134,8 @@ class DouyinParser(PlatformBase):
             from datetime import datetime
             try: pub = datetime.fromtimestamp(ct).strftime("%Y-%m-%d %H:%M")
             except: pub = str(ct)
-        return VideoInfo(
+        is_note, note_images = self._note_images(item)
+        info = VideoInfo(
             platform="douyin", video_id=video_id, title=item.get("desc", ""),
             author=author.get("nickname", ""), author_id=str(author.get("uid", "")),
             play_count=int(stats.get("play_count", 0) or 0),
@@ -121,10 +144,14 @@ class DouyinParser(PlatformBase):
             share_count=int(stats.get("share_count", 0) or 0),
             favorite_count=int(stats.get("collect_count", 0) or 0),
             duration=duration, cover_url=cover_url,
-            video_url=self._extract_video_dl_url(item),
+            video_url="" if is_note else self._extract_video_dl_url(item),
             publish_time=pub, tags=[t.get("title", "") for t in item.get("text_extra", [])],
             raw_url=f"https://www.douyin.com/video/{video_id}", raw_data=item, fetched_at=now_str(),
         )
+        if is_note:
+            info.kind = "note"
+            info.images = note_images
+        return info
 
     def _extract_video_dl_url(self, item: dict) -> str:
         """提取真实视频下载 URL（无水印优先）"""
@@ -186,8 +213,19 @@ class DouyinParser(PlatformBase):
                 from datetime import datetime
                 try: pub = datetime.fromtimestamp(ct).strftime("%Y-%m-%d %H:%M")
                 except: pub = str(ct)
-            video_url_real = final_url
-            if video_info and isinstance(video_info, dict) and video_info.get("video"):
+            is_note, note_images = (self._note_images(video_info)
+                                    if isinstance(video_info, dict) else (False, []))
+            if not video_info:
+                # 页面无作品数据（风控中间页/搜索页/纯壳页面）：og:title 与
+                # <title> 只是页面标题，据此构造的"空壳"（无作者无链接全 0）
+                # 会被上游当成功——必须返回 None，走 aweme/detail/Playwright 兜底
+                if "验证码" in html[:2000]:
+                    print("[抖音] 页面命中验证码中间页，视为失败")
+                else:
+                    print("[抖音] 页面无作品数据（风控/非作品页），视为失败")
+                return None
+            video_url_real = "" if is_note else final_url
+            if not is_note and video_info and isinstance(video_info, dict) and video_info.get("video"):
                 video_url_real = self._extract_video_dl_url(video_info)
             info = VideoInfo(
                 platform="douyin", video_id=video_id, title=title or video_info.get("desc", ""),
@@ -202,12 +240,9 @@ class DouyinParser(PlatformBase):
                 video_url=video_url_real, raw_url=url, raw_data=video_info, fetched_at=now_str(),
                 publish_time=pub,
             )
-            if not info.title and not info.author:
-                tr = re.search(r"<title>(.*?)</title>", html)
-                if tr: info.title = tr.group(1).strip()
-            if not video_info and "验证码" in (info.title or ""):
-                print("[抖音] 页面命中验证码中间页，视为失败")
-                return None
+            if is_note:
+                info.kind = "note"
+                info.images = note_images
             return info
         except Exception as e:
             print(f"[抖音] 解析失败: {e}")
@@ -217,9 +252,21 @@ class DouyinParser(PlatformBase):
 
     POST_API = "https://www.douyin.com/aweme/v1/web/aweme/post/"
 
-    def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
+    @staticmethod
+    def _aweme_url(item: dict) -> str:
+        """aweme 条目 → 真实作品页链接（图文 note / 视频 video）。"""
+        vid = str(item.get("aweme_id") or "")
+        if item.get("images"):
+            return f"https://www.douyin.com/note/{vid}"
+        return f"https://www.douyin.com/video/{vid}"
+
+    def fetch_user_posts(self, url_or_id: str, count: int = 10,
+                         pause_every: int = 0, pause_secs: float = 0.0) -> list:
         """用户作品列表。Cookie 是账号凭据但用户时间线属「必须用 Cookie 的接口」
         （游客 aweme/post 常被风控空响应 + 漏最新作品），Cookie 优先、游客兜底。
+
+        pause_every/pause_secs: 账号内部翻页限流（每抓 pause_every 条停 pause_secs 秒），
+        0 = 不限流（仅保留翻页基础间隔）。
 
         层级（2026-09-21 Playwright 页面数据层被安全 SDK 拦死后改为 HTTP 直调优先）：
         ① HTTP 直调 aweme/post + a_bogus 签名（Cookie 优先，游客也试一次）
@@ -234,11 +281,13 @@ class DouyinParser(PlatformBase):
         cookie_str = get_cookie("douyin") or ""
 
         # 一级：HTTP 直调（快且稳，翻页拿足 count 条）
-        results = self._fetch_user_posts_http(sec_uid, count, cookie_str=cookie_str)
+        results = self._fetch_user_posts_http(sec_uid, count, cookie_str=cookie_str,
+                                              pause_every=pause_every, pause_secs=pause_secs)
         if results:
             return results
         if not cookie_str:
-            results = self._fetch_user_posts_http(sec_uid, count, cookie_str="")
+            results = self._fetch_user_posts_http(sec_uid, count, cookie_str="",
+                                                  pause_every=pause_every, pause_secs=pause_secs)
             if results:
                 return results
 
@@ -249,13 +298,16 @@ class DouyinParser(PlatformBase):
             print("[抖音] 未安装 playwright")
             return []
         if cookie_str:
-            results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str)
+            results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str,
+                                          pause_every=pause_every, pause_secs=pause_secs)
             if results:
                 return results
             print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
-        return self._fetch_pw_once(sec_uid, count, cookie_str="")
+        return self._fetch_pw_once(sec_uid, count, cookie_str="",
+                                    pause_every=pause_every, pause_secs=pause_secs)
 
-    def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "") -> list:
+    def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "",
+                               pause_every: int = 0, pause_secs: float = 0.0) -> list:
         """HTTP 直调 aweme/post（a_bogus 签名），max_cursor 链式翻页到 count 条。
 
         空响应=风控拦截；node 缺失导致无签名时直接放弃（返回空，由上层兜底）。
@@ -313,16 +365,23 @@ class DouyinParser(PlatformBase):
                     continue
                 seen.add(vid)
                 info = self._build_from_aweme(a, vid)
-                info.raw_url = f"https://www.douyin.com/user/{sec_uid}"
+                info.raw_url = self._aweme_url(a)
                 results.append(info)
             if len(results) >= count or not d.get("has_more"):
                 break
             cursor = int(d.get("max_cursor") or 0)
-            time.sleep(0.6)
+            # 翻页间隔：限流开启时按「每 pause_every 条停 pause_secs 秒」折算
+            # （一页约 20 条 = 2×10 条 → 停 2×10s）；未开启仅保留基础间隔
+            page_new = len(d.get("aweme_list") or [])
+            if pause_every > 0 and pause_secs > 0 and page_new:
+                time.sleep(pause_secs * page_new / pause_every)
+            else:
+                time.sleep(0.6)
         print(f"[抖音] HTTP 直调获取到 {len(results)} 条")
         return results[:count] if count > 0 else results
 
-    def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "") -> list:
+    def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "",
+                       pause_every: int = 0, pause_secs: float = 0.0) -> list:
         """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
         from playwright.sync_api import sync_playwright
 
@@ -402,6 +461,9 @@ class DouyinParser(PlatformBase):
                     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     page.wait_for_timeout(2000)
                     _merge_html_items()
+                    # 限流：每次滚动加载约一页（20 条），按「每 pause_every 条停 pause_secs 秒」折算
+                    if pause_every > 0 and pause_secs > 0:
+                        page.wait_for_timeout(int(pause_secs * 20 / pause_every * 1000))
 
                 if not collected:
                     page.wait_for_timeout(5000)
@@ -409,7 +471,7 @@ class DouyinParser(PlatformBase):
 
                 for item in collected[:count]:
                     info = self._build_from_aweme(item, str(item.get("aweme_id", "")))
-                    info.raw_url = user_url
+                    info.raw_url = self._aweme_url(item)
                     results.append(info)
 
             except Exception as e:
@@ -473,6 +535,34 @@ class DouyinParser(PlatformBase):
                 result = self._parse_once(url, None, cookie=ck, allow_playwright=False)
         return result
 
+    def _build_from_parsed_dict(self, d: dict, url: str) -> VideoInfo:
+        """multi_downloader._parse_douyin（aweme/detail）结果 → VideoInfo。
+
+        图文 note：kind=note、video_url 置空（其 play_addr 是背景音乐 mp3）、
+        images 带全部图集直链；视频则带所选画质直链。"""
+        is_note = bool(d.get("is_note"))
+        info = VideoInfo(
+            platform="douyin",
+            kind="note" if is_note else "video",
+            video_id=str(d.get("video_id") or self.extract_id(url) or ""),
+            title=d.get("title", ""),
+            description=d.get("title", ""),
+            author=d.get("author", ""),
+            author_id=str(d.get("author_id", "") or ""),
+            play_count=int(d.get("play_count", 0) or 0),
+            like_count=int(d.get("like_count", 0) or 0),
+            comment_count=int(d.get("comment_count", 0) or 0),
+            cover_url=d.get("cover_url", ""),
+            video_url="" if is_note else (d.get("video_url") or ""),
+            publish_time=d.get("publish_time", ""),
+            raw_url=url, fetched_at=now_str(),
+        )
+        if d.get("raw_data"):
+            info.raw_data = d["raw_data"]
+        if is_note or (d.get("images") and not info.video_url):
+            info.images = d.get("images") or []
+        return info
+
     def _parse_once(self, url: str, client: Optional[httpx.Client],
                     cookie: str = "", allow_playwright: bool = True) -> Optional[VideoInfo]:
         close_client = False
@@ -490,25 +580,7 @@ class DouyinParser(PlatformBase):
                     from multi_downloader import parse_video
                     d = parse_video(url)
                     if d.get("title") or d.get("images"):
-                        info = VideoInfo(
-                            platform="douyin",
-                            kind="video",
-                            video_id=d.get("video_id") or self.extract_id(url),
-                            title=d.get("title", ""),
-                            description=d.get("title", ""),
-                            author=d.get("author", ""),
-                            author_id=d.get("author_id", ""),
-                            play_count=d.get("play_count", 0),
-                            like_count=d.get("like_count", 0),
-                            comment_count=d.get("comment_count", 0),
-                            cover_url=d.get("cover_url", ""),
-                            video_url="",  # 图文无视频
-                            publish_time=d.get("publish_time", ""),
-                            raw_url=url,
-                            fetched_at=now_str(),
-                        )
-                        info.images = d.get("images", [])
-                        return info
+                        return self._build_from_parsed_dict(d, url)
                 except Exception as e:
                     print(f"[抖音] note 图文解析失败: {e}")
                 return None
@@ -528,6 +600,18 @@ class DouyinParser(PlatformBase):
             result = self._parse_from_page(url, client)
             if result and (result.title or result.author):
                 return result
+            # 页面解析失败 → aweme/detail + a_bogus 签名接口（比 Playwright 轻，
+            # 游客→Cookie 内部自动兜底；风控期页面/浏览器双挂时实测最可用，
+            # 图集 note 也只有这条链拿得到完整 images）
+            print("[抖音] 页面解析未取到数据，尝试 aweme/detail 接口...")
+            try:
+                from multi_downloader import parse_video
+                d = parse_video(f"https://www.douyin.com/video/{video_id}")
+                if d.get("title") or d.get("images") or d.get("video_url"):
+                    print("[抖音] aweme/detail 获取成功")
+                    return self._build_from_parsed_dict(d, url)
+            except Exception as e:
+                print(f"[抖音] aweme/detail 失败: {e}")
             if not allow_playwright:
                 return None
             print("[抖音] HTTP 方式未能获取有效数据，尝试 Playwright...")

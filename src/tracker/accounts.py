@@ -296,3 +296,50 @@ def load_history(name):
         records.append(rec)
     records.reverse()  # 最新在前
     return records
+
+
+# ==================== 从「账号获取」同步 ====================
+
+def plan_sync_from_fm() -> tuple:
+    """计算「账号获取」→ 追踪的同步计划（不写盘）。
+
+    按平台+ID 去重（识别失败时按整条 URL 去重），返回 (新增条目列表, 跳过数)。
+    """
+    from accounts_manager import load_accounts as load_fm_accounts
+    src_accounts = [a for a in load_fm_accounts() if getattr(a, "url", "")]
+
+    def _key(url):
+        plat, pid = parse_url(url)
+        return (plat, pid) if plat and pid else ("__url__", (url or "").strip())
+
+    dst_accounts = load_accounts()
+    existing = {_key(a.get("url", "")) for a in dst_accounts}
+    new_items, skipped = [], 0
+    for acc in src_accounts:
+        key = _key(acc.url)
+        if key in existing:
+            skipped += 1
+            continue
+        existing.add(key)
+        gids = [str(g) for g in (acc.group_ids or []) if str(g).strip()]
+        new_items.append({"name": acc.name or "", "url": acc.url,
+                          "platform": _key(acc.url)[0] or "", "group_ids": gids})
+    return new_items, skipped
+
+
+def apply_sync_from_fm(new_items: list) -> int:
+    """写入同步计划（plan_sync_from_fm 的结果）：追加账号 + 缺失分组补建。"""
+    if not new_items:
+        return 0
+    dst_accounts = load_accounts()
+    dst_accounts.extend(new_items)
+    save_accounts(dst_accounts)
+    # 分组带过去：追踪侧缺的组按同组号+组名补建
+    from accounts_manager import get_groups as fm_groups
+    new_gids = {g for item in new_items for g in item.get("group_ids", [])}
+    src_groups = fm_groups()
+    dst_groups = get_groups()
+    for gid in new_gids:
+        if gid not in dst_groups and src_groups.get(gid):
+            save_group(gid, src_groups[gid])
+    return len(new_items)

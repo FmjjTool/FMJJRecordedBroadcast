@@ -525,7 +525,7 @@ class WeiboParser(PlatformBase):
                     if taken >= remaining: break
                     mblog = card.get("mblog")
                     if not mblog: continue
-                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", client)
+                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}/{mblog.get('bid') or mblog.get('mid')}", client)
                     if info: results.append(info); taken += 1
                 remaining -= taken; page += 1
                 if taken == 0: break
@@ -586,7 +586,7 @@ class WeiboParser(PlatformBase):
                 ext_client = httpx.Client(headers=h5_headers, timeout=15, follow_redirects=True)
                 try:
                     for mblog in mblogs[:count]:
-                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", ext_client)
+                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}/{mblog.get('bid') or mblog.get('mid')}", ext_client)
                         if info: results.append(info)
                 finally:
                     ext_client.close()
@@ -691,7 +691,7 @@ class WeiboParser(PlatformBase):
                 if posts_from_html:
                     print(f"[微博-Playwright] 从页面内嵌数据提取到 {len(posts_from_html)} 条")
                     for mblog in posts_from_html[:count]:
-                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", ext_client)
+                        info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}/{mblog.get('bid') or mblog.get('mid')}", ext_client)
                         if info: results.append(info)
                     if results:
                         browser.close()
@@ -723,7 +723,7 @@ class WeiboParser(PlatformBase):
                         continue
                     if len(results) >= count:
                         break
-                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}", ext_client)
+                    info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}/{mblog.get('bid') or mblog.get('mid')}", ext_client)
                     if info: results.append(info)
 
                 if not results:

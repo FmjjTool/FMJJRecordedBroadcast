@@ -71,10 +71,16 @@ def parse_url_info(url: str):
         info = parser.parse(url)
         if not info:
             raise ValueError("获取失败（可能反爬，需 Cookie）")
+        # 空壳防护：无标题/作者/图集/封面的"成功"是风控中间页或已删内容，
+        # 不能当结果展示并入库（下载必然 0 个文件，还误导"获取成功"）
+        if not (info.title or info.author or info.images or info.cover_url):
+            raise ValueError("获取失败：内容可能已删除、被风控拦截或需要 Cookie")
         return info
 
     from multi_downloader import parse_video
     d = parse_video(url)  # 无法识别的域名抛 ValueError
+    if not (d.get("title") or d.get("author") or d.get("images") or d.get("video_url")):
+        raise ValueError("获取失败：链接可能不是作品页或内容已被删除")
     info = VideoInfo(
         platform=MULTI_PLATFORM_EN.get(d.get("platform", ""), d.get("platform") or "unknown"),
         kind="video",
@@ -133,14 +139,22 @@ def quality_to_qn(label):
 
 
 def refresh_douyin_urls(items, quality):
-    """抖音条目重新解析拿新直链（存量直链有时效性）+ 按画质选。"""
+    """抖音条目重新解析拿新直链（存量直链有时效性）+ 按画质选。
+
+    图集笔记（is_note）：回填 images 列表；video_url 置空——存量值是
+    背景音乐 mp3 直链，不清掉会被当视频下载。"""
     for info in items:
         if info.platform != "douyin" or not getattr(info, "video_id", ""):
             continue
         try:
             from multi_downloader import parse_video
             d = parse_video(f"https://www.douyin.com/video/{info.video_id}", quality=quality)
-            if d.get("video_url"):
+            if d.get("is_note"):
+                info.kind = "note"
+                info.video_url = ""
+                if d.get("images"):
+                    info.images = d["images"]
+            elif d.get("video_url"):
                 info.video_url = d["video_url"]
         except Exception:
             pass
@@ -361,6 +375,36 @@ def download_media_items(items, log=None, threads=1, on_task_event=None):
                           quiet=True,
                           threads=threads,
                           on_task_event=on_task_event)
+
+
+def download_items_mixed(items, quality_label="最高画质", threads=1,
+                         log=None, on_task_event=None) -> str:
+    """混合条目一键下载（已获取页 / 账号获取自动下载共用）。返回汇总文本。
+
+    B站条目按画质直下（视频走 playurl、DRAW 动态走图片），非 B站先刷新
+    时效直链（抖音/微博/小红书）再走 media_downloader。
+    """
+    bili_items = [i for i in items if i.platform == "bilibili"]
+    non_bili = [i for i in items if i.platform != "bilibili"]
+    if bili_items:
+        bv_items, draw_items = classify_bili(bili_items)
+        quality = quality_to_qn(quality_label)
+        ck = get_bilibili_cookie()
+        paths, draw_stats, other_stats, errors = do_bilibili_download(
+            bv_items, draw_items, non_bili, quality, ck,
+            quality_label=quality_label, log=log, threads=threads,
+            on_task_event=on_task_event)
+        return summarize_download(paths, draw_stats, other_stats, errors)
+    refresh_douyin_urls(items, quality_label)
+    refresh_weibo_urls(items)
+    refresh_xhs_urls(items)
+    stats = download_media_items(items, log=log, threads=threads,
+                                 on_task_event=on_task_event) or {}
+    parts = [f"图片 {stats.get('images', 0)}", f"封面 {stats.get('covers', 0)}",
+             f"Live图 {stats.get('live', 0)}", f"视频 {stats.get('videos', 0)}"]
+    if stats.get("skipped", 0):
+        parts.append(f"跳过已下载 {stats['skipped']}")
+    return " | ".join(parts)
 
 
 def summarize_download(paths, draw_stats, other_stats, errors):

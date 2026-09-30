@@ -1276,29 +1276,45 @@ def _img_ext(url: str) -> str:
     return "." + m.group(1).lower().replace("jpeg", "jpg") if m else ".jpg"
 
 
-def _download_images(urls: list, folder: Path, prefix: str, log=None) -> list:
-    """下载图片到目录（失败跳过不致命），返回本地路径列表。"""
+def _download_images(urls: list, folder: Path, prefix: str, log=None,
+                     threads: int = 6) -> list:
+    """下载图片到目录（失败跳过不致命），返回本地路径列表（保持原顺序）。
+
+    threads>1 时并发下载（httpx.get 每次调用独立连接，线程安全）。
+    """
     if not urls:
         return []
     folder.mkdir(parents=True, exist_ok=True)
-    out = []
+    jobs = []
     for i, u in enumerate(urls, 1):
         if not u:
             continue
         if u.startswith("//"):
             u = "https:" + u
         path = folder / f"{prefix}{i:02d}{_img_ext(u)}"
+        jobs.append((u, path))
+
+    def _fetch(job):
+        u, path = job
         try:
             r = httpx.get(u, timeout=30,
                           headers={"User-Agent": UA_PC,
                                    "Referer": "https://item.taobao.com/"})
             r.raise_for_status()
             path.write_bytes(r.content)
-            out.append(str(path))
+            return True
         except Exception as e:
             if log:
                 log(f"图片下载失败 {u[-40:]}: {str(e)[:40]}")
-    return out
+            return False
+
+    if threads > 1 and len(jobs) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=threads) as ex:
+            results = list(ex.map(_fetch, jobs))
+    else:
+        results = [_fetch(j) for j in jobs]
+    return [str(jobs[i][1]) for i, ok in enumerate(results) if ok]
 
 
 def _safe_folder_name(s: str, maxlen: int = 40) -> str:
@@ -1307,8 +1323,9 @@ def _safe_folder_name(s: str, maxlen: int = 40) -> str:
     return s[:maxlen] or "未命名"
 
 
-def download_item_images(detail: TaobaoItemDetail, base_dir, log=None) -> TaobaoItemDetail:
-    """下载主图 / SKU 图 / 图文详情长图。
+def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
+                         threads: int = 6) -> TaobaoItemDetail:
+    """下载主图 / SKU 图 / 图文详情长图（图内并发下载）。
 
     目录：base_dir/{商品标题}_{商品ID}_{获取时间 YYYYMMDD_HHMMSS}/{main,sku,desc}/
     """
@@ -1318,15 +1335,16 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None) -> Taobao
     if log:
         log(f"下载图片到 {base} ...")
     detail.local_main = _download_images(detail.main_images, base / "main",
-                                         "主图", log=log)
+                                         "主图", log=log, threads=threads)
     sku_urls = []
     for grp in detail.sku_props:
         for v in grp.get("values") or []:
             if v.get("image"):
                 sku_urls.append(v["image"])
-    detail.local_sku = _download_images(sku_urls, base / "sku", "规格", log=log)
+    detail.local_sku = _download_images(sku_urls, base / "sku", "规格",
+                                        log=log, threads=threads)
     detail.local_desc = _download_images(detail.desc_images, base / "desc",
-                                         "详情", log=log)
+                                         "详情", log=log, threads=threads)
     if detail.local_main or detail.local_sku or detail.local_desc:
         detail.image_dir = str(base)
     if log:

@@ -137,7 +137,12 @@ class DouyinPlaywrightParser(PlatformBase):
             music = m["title"]
             if m.get("author"): music += f" - {m['author']}"
 
-        return VideoInfo(
+        # 图集判定（同 douyin.py._note_images）：图文的 video.play_addr 是背景
+        # 音乐 mp3，绝不能当视频链接返回（否则下载器只下得到封面）
+        from .douyin import DouyinParser
+        is_note, note_images = DouyinParser._note_images(aweme)
+
+        info = VideoInfo(
             platform="douyin", video_id=video_id,
             title=aweme.get("desc", ""), description="",
             author=author_info.get("nickname", ""),
@@ -148,12 +153,16 @@ class DouyinPlaywrightParser(PlatformBase):
             share_count=int(stats.get("share_count", 0) or 0),
             favorite_count=int(stats.get("collect_count", 0) or 0),
             duration=duration, cover_url=cover_url,
-            video_url=self._extract_video_dl_url(aweme),
+            video_url="" if is_note else self._extract_video_dl_url(aweme),
             publish_time=publish_time,
             tags=[t.get("tag_name", "") for t in aweme.get("text_extra", [])],
             music=music,
             raw_url=url, raw_data=aweme, fetched_at=now_str(),
         )
+        if is_note:
+            info.kind = "note"
+            info.images = note_images
+        return info
 
     def _extract_video_dl_url(self, item: dict) -> str:
         """提取真实视频下载 URL（无水印优先）"""

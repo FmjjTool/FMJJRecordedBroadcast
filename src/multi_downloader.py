@@ -97,10 +97,15 @@ def recognize_platform(url: str) -> str | None:
 
 
 def _get_video_id(url: str) -> str:
-    """从 URL 提取视频 ID（优先 query 参数，其次路径末段）。"""
+    """从 URL 提取视频 ID（优先 query 参数，其次路径末段）。
+
+    modal_id：搜索页/主页弹窗链接（/search/xxx?...&modal_id=123 或
+    /user/xxx/search/yyy?...&modal_id=123）的作品 ID 在 query 里——按路径
+    末段取会拿到搜索关键词（如"三角洲表情包"），当 aweme_id 发请求必然
+    返回空详情，还白打风控计数。"""
     parsed = urlparse(url)
     q = parse_qs(parsed.query)
-    for key in ("vid", "id"):
+    for key in ("vid", "id", "modal_id"):
         if q.get(key):
             return q[key][0]
     seg = parsed.path.strip("/").split("/")
@@ -153,6 +158,10 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
     此时 video_url 置空（play_addr 指向 douyinstatic 封面图 CDN，不是真视频流）。
     """
     aweme_id = _get_video_id(url)
+    if not aweme_id or not aweme_id.isdigit():
+        # 抖音作品 ID 纯数字；拿不到说明链接不是作品页（如搜索页没带
+        # modal_id、或路径被解析成了关键词）——直接报错，不发无效请求
+        raise ValueError(f"无法从链接提取抖音作品ID：{url[:80]}")
     base = ("https://www.douyin.com/aweme/v1/web/aweme/detail/?"
             "device_platform=webapp&aid=6383&channel=channel_pc_web"
             f"&aweme_id={aweme_id}&update_version_code=170400&pc_client_type=1"
@@ -259,6 +268,7 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
         "comment_count": int(stats.get("comment_count", 0) or 0),
         "publish_time": publish_time,
         "is_note": is_note,
+        "raw_data": detail,
     }
 
 

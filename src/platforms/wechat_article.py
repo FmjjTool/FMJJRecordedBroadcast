@@ -203,18 +203,19 @@ def _clean_content(soup, content, art: WechatArticle):
 
 def download_images(art: WechatArticle, session: Optional[requests.Session] = None,
                     progress: Optional[Callable[[int, int, str], None]] = None,
-                    should_cancel: Optional[Callable[[], bool]] = None) -> Tuple[int, int]:
-    """下载文章全部图片到内存。返回 (成功数, 失败数)。"""
+                    should_cancel: Optional[Callable[[], bool]] = None,
+                    threads: int = 1) -> Tuple[int, int]:
+    """下载文章全部图片到内存。返回 (成功数, 失败数)。
+
+    threads>1 时图片并发下载（requests.Session 非线程安全，每任务独立会话）；
+    progress 按完成顺序回调 (i+1, total, title)，与串行版行为一致。
+    """
     s = session or _make_session()
     total = len(art.images)
-    ok = fail = 0
-    for i, img in enumerate(art.images):
-        if should_cancel and should_cancel():
-            break
-        if progress:
-            progress(i + 1, total, art.title)
+
+    def _fetch(img, use_session):
         try:
-            resp = s.get(img.url, timeout=20)
+            resp = use_session.get(img.url, timeout=20)
             resp.raise_for_status()
             data = resp.content
             fmt = _detect_fmt(img.url, data)
@@ -228,8 +229,37 @@ def download_images(art: WechatArticle, session: Optional[requests.Session] = No
                     img.width, img.height = im.size
             except Exception:
                 pass
-            ok += 1
+            return True
         except Exception:
+            return False
+
+    ok = fail = 0
+    if threads > 1 and total > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        cancel = should_cancel or (lambda: False)
+        with ThreadPoolExecutor(max_workers=threads) as ex:
+            futs = []
+            for img in art.images:
+                if cancel():
+                    break
+                futs.append(ex.submit(_fetch, img, _make_session()))
+            for i, fut in enumerate(futs):
+                if progress:
+                    progress(i + 1, total, art.title)
+                if fut.result():
+                    ok += 1
+                else:
+                    fail += 1
+        return ok, fail
+
+    for i, img in enumerate(art.images):
+        if should_cancel and should_cancel():
+            break
+        if progress:
+            progress(i + 1, total, art.title)
+        if _fetch(img, s):
+            ok += 1
+        else:
             fail += 1
     return ok, fail
 

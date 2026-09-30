@@ -141,7 +141,17 @@ class TrackerPage(BasePage):
         outer.setSpacing(6)
         title = QLabel("⚙️ 追踪账号设置")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        outer.addWidget(title)
+        # 标题行右侧：从「账号获取」一键同步账号（与账号获取页的「同步到追踪」同源逻辑）
+        trow = QHBoxLayout()
+        trow.addWidget(title)
+        trow.addStretch(1)
+        sync_fm_btn = QPushButton("📥 从账号获取同步")
+        sync_fm_btn.setToolTip(
+            "把「账号获取」页的账号一键同步过来：按平台+ID去重，已存在跳过；\n"
+            "账号名/链接/分组一并带过来，分组不存在时按同组号+组名自动创建")
+        sync_fm_btn.clicked.connect(self._sync_from_fm_accounts)
+        trow.addWidget(sync_fm_btn)
+        outer.addLayout(trow)
 
         # 添加追踪账号（账号名 + 链接，可选归属分组）
         add_card = QFrame()
@@ -748,6 +758,28 @@ class TrackerPage(BasePage):
         self.add_name.clear()
         self.add_url.clear()
         self.reload_accounts()
+
+    # ---------- 从「账号获取」同步账号 ----------
+    def _sync_from_fm_accounts(self):
+        """把「账号获取」页的账号一键同步到本页：按平台+ID去重，已存在跳过；
+        分组一并带过来，缺失分组按同组号+组名自动创建。"""
+        from tracker.accounts import plan_sync_from_fm, apply_sync_from_fm
+        new_items, skipped = plan_sync_from_fm()
+        if not new_items:
+            self.app.toast(f"共 {skipped} 个账号均已存在，无需同步", "info")
+            return
+        msg = (f"把「账号获取」的账号同步到「网媒账号追踪」？\n\n"
+               f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
+               + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
+               + ("\n…等" if len(new_items) > 8 else ""))
+        if QMessageBox.question(self, "从账号获取同步", msg,
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        apply_sync_from_fm(new_items)
+        self.reload_accounts()
+        self._reload_group_list()
+        self.app.toast(f"✅ 已同步 {len(new_items)} 个账号"
+                       + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     def _delete_account(self, index):
         from tracker.accounts import load_accounts, save_accounts

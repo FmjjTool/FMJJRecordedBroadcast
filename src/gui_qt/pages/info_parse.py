@@ -18,11 +18,8 @@ from PySide6.QtWidgets import (
 
 from gui_qt import common, download_ops
 from gui_qt.common import _collect, _info_text, post_to_main, refresh_results_count, run_bg
-from gui_qt.download_panel import DownloadPanel
+from gui_qt.common import THREAD_OPTIONS
 from gui_qt.pages.base import BasePage
-
-# 线程数选项（全局共享，与批量导入页一致）
-THREAD_OPTIONS = ["2", "4", "8", "16", "32", "64"]
 
 # 搜索模式平台下拉值 → video_search 平台名
 SEARCH_PLATFORMS = [("全部平台", "all"), ("B站", "bilibili"), ("抖音", "douyin"), ("微博", "weibo")]
@@ -99,10 +96,6 @@ class InfoParsePage(BasePage):
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText("解析结果将显示在这里")
         layout.addWidget(self.result_text, 1)
-
-        # IDM 风格下载进度面板（单文件：文件名 + 分段条；多文件：文件名槽位）
-        self.dl_panel = DownloadPanel()
-        layout.addWidget(self.dl_panel)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
@@ -294,14 +287,16 @@ class InfoParsePage(BasePage):
         self.download_btn.setEnabled(False)
         self._log(f"⏳ 开始下载 [{info.platform}] {(info.title or info.video_id)[:40]}"
                   f"（{self._threads()} 线程）...")
-        self.dl_panel.begin()
+        # 进度走全局下载浮窗（原页面内嵌面板不再占用页面 UI）
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("单个解析")
         bili_items, non_bili = download_ops.resolve_items([info])
         if bili_items:
-            self._download_bilibili(bili_items, non_bili)
+            self._download_bilibili(bili_items, non_bili, card)
         else:
-            self._download_media([info])
+            self._download_media([info], card)
 
-    def _download_media(self, items):
+    def _download_media(self, items, card):
         quality_label = self.quality_sel.currentText()
         threads = self._threads()
 
@@ -311,12 +306,12 @@ class InfoParsePage(BasePage):
             download_ops.refresh_xhs_urls(items)
             return download_ops.download_media_items(
                 items, log=self._log, threads=threads,
-                on_task_event=self.dl_panel.handle_event)
+                on_task_event=card.handle_event)
 
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
-                self.dl_panel.finish(f"❌ 下载失败: {str(err)[:60]}")
+                card.finish(f"❌ 下载失败: {str(err)[:60]}")
                 self._log(f"❌ 下载失败: {err}")
                 return
             stats = result or {}
@@ -326,11 +321,11 @@ class InfoParsePage(BasePage):
             if stats.get("skipped", 0):
                 msg += f" | 跳过已下载 {stats['skipped']}"
             self._log(msg)
-            self.dl_panel.finish(msg if len(msg) <= 80 else msg[:79] + "…")
+            card.finish(msg if len(msg) <= 80 else msg[:79] + "…")
 
         run_bg(work, done)
 
-    def _download_bilibili(self, bili_items, non_bili):
+    def _download_bilibili(self, bili_items, non_bili, card):
         ck = download_ops.get_bilibili_cookie()
         bv_items, draw_items = download_ops.classify_bili(bili_items)
         quality = download_ops.quality_to_qn(self.quality_sel.currentText())
@@ -341,18 +336,18 @@ class InfoParsePage(BasePage):
             return download_ops.do_bilibili_download(
                 bv_items, draw_items, non_bili, quality, ck,
                 quality_label=quality_label, log=self._log,
-                threads=threads, on_task_event=self.dl_panel.handle_event)
+                threads=threads, on_task_event=card.handle_event)
 
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
-                self.dl_panel.finish(f"❌ 下载失败: {str(err)[:60]}")
+                card.finish(f"❌ 下载失败: {str(err)[:60]}")
                 self._log(f"❌ 下载失败: {err}")
                 return
             paths, draw_stats, other_stats, errors = result
             msg = download_ops.summarize_download(paths, draw_stats, other_stats, errors)
             self._log(f"✅ {msg}")
-            self.dl_panel.finish(f"✅ {msg}" if len(msg) <= 80 else "✅ " + msg[:79] + "…")
+            card.finish(f"✅ {msg}" if len(msg) <= 80 else "✅ " + msg[:79] + "…")
             if errors:
                 self._log("失败列表:\n" + "\n".join(errors[:5]))
 

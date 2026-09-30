@@ -7,6 +7,7 @@
 - 下载：B站按画质直下（视频走 playurl、DRAW 动态走图片），非 B站走 media_downloader
 """
 
+import re
 import webbrowser
 from datetime import datetime
 
@@ -267,6 +268,16 @@ class InfoResultsPage(BasePage):
         self.quality_sel.setCurrentText(common.CURRENT_QUALITY)
         self.quality_sel.currentTextChanged.connect(self._on_quality_change)
         head.addWidget(self.quality_sel)
+        head.addWidget(QLabel("线程:"))
+        self.thread_sel = QComboBox()
+        self.thread_sel.addItems(common.THREAD_OPTIONS)
+        self.thread_sel.setToolTip(
+            "下载线程数：多个文件按线程数并行下载（进度面板显示各文件槽位）；\n"
+            "单个大文件按线程数分段并行下载（与单个解析/批量导入页共享设置）")
+        self.thread_sel.setCurrentText(str(common.CURRENT_THREADS))
+        self.thread_sel.setFixedWidth(64)
+        self.thread_sel.currentTextChanged.connect(self._on_threads_change)
+        head.addWidget(self.thread_sel)
         layout.addLayout(head)
 
         # 导出格式（对所有栏生效；勾选状态持久化）
@@ -385,6 +396,26 @@ class InfoResultsPage(BasePage):
             grouped[key].sort(key=_parse_pub, reverse=True)
             self._render_column(key, grouped[key])
 
+    @staticmethod
+    def _openable_url(info) -> str:
+        """条目可打开链接：优先真实作品页（raw_url）；存量数据里时间线
+        采集的主页链接（抖音 /user、微博裸 uid、B站 space）回退构造作品页。"""
+        ru = (getattr(info, "raw_url", "") or "").strip()
+        plat = (getattr(info, "platform", "") or "").strip()
+        vid = str(getattr(info, "video_id", "") or "").strip()
+        if plat == "douyin" and "/user/" in ru and vid:
+            is_note = getattr(info, "kind", "") == "image" or (
+                getattr(info, "images", None) and not info.video_url)
+            return f"https://www.douyin.com/note/{vid}" if is_note \
+                else f"https://www.douyin.com/video/{vid}"
+        if plat == "weibo" and vid and re.fullmatch(r"https?://weibo\.com/u?\d+/?", ru):
+            m = re.search(r"weibo\.com/u?(\d+)", ru)
+            if m:
+                return f"https://weibo.com/{m.group(1)}/{vid}"
+        if plat == "bilibili" and vid and "space.bilibili.com" in ru:
+            return f"https://www.bilibili.com/video/{vid}"
+        return ru or (getattr(info, "video_url", "") or "")
+
     def _render_column(self, key, songs):
         col = self.cols[key]
         lst = col["list"]
@@ -401,7 +432,7 @@ class InfoResultsPage(BasePage):
             author = info.author or "-"
             if getattr(info, "kind", "") == "dynamic":
                 kind_tag = "动态"
-            elif getattr(info, "kind", "") == "image" or (
+            elif getattr(info, "kind", "") in ("image", "note") or (
                     getattr(info, "images", None) and not info.video_url):
                 kind_tag = "图文"
             else:
@@ -409,7 +440,7 @@ class InfoResultsPage(BasePage):
             _dt, date_str = _parse_pub(info)
             # 两行展示：标题一行（不截断），日期/作者/数据一行；超宽自动换行
             meta = f"📅 {date_str}  @{author}  播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}"
-            url = info.video_url or info.raw_url
+            url = self._openable_url(info)
             if url:
                 meta += "  🔗"
             text = f"[{i}] [{kind_tag}] {title}\n{meta}"
@@ -517,21 +548,6 @@ class InfoResultsPage(BasePage):
         """三平台一次导出：聚合三栏勾选项统一导出。"""
         self._export_items(self._all_selected(), "三栏均无勾选条目，请先勾选要导出的内容")
 
-    def _download_items(self, items):
-        """按条目下载（不弹任何二级窗）：B站图文动态直接下图片，视频按 head 画质下拉下载。"""
-        if not items:
-            return
-        bili_items = [i for i in items if i.platform == "bilibili"]
-        non_bili = [i for i in items if i.platform != "bilibili"]
-        if bili_items:
-            # 直接下载，不弹窗（动态图片走 draw 分支）
-            bv_items, draw_items = download_ops.classify_bili(bili_items)
-            quality = download_ops.quality_to_qn(self.quality_sel.currentText())
-            ck = download_ops.get_bilibili_cookie()
-            self._do_bilibili_download(bv_items, draw_items, non_bili, quality, ck)
-        else:
-            self._download_media(items)
-
     def _col_download(self, key):
         items = self._selected(key)
         if not items:
@@ -551,44 +567,43 @@ class InfoResultsPage(BasePage):
         """清晰度改变时同步到全局（供资产管理/视频下载页复用）。"""
         common.CURRENT_QUALITY = value
 
-    def _download_media(self, items):
-        """下载图片/live图/视频（media_downloader，非 B站）。抖音按画质重新解析。"""
-        quality = self.quality_sel.currentText() if hasattr(self, "quality_sel") else "最高画质"
+    def _on_threads_change(self, value):
+        """线程数改变时同步到全局（单个解析/批量导入页共用）。"""
+        try:
+            common.CURRENT_THREADS = int(value)
+        except ValueError:
+            pass
+
+    def _threads(self) -> int:
+        try:
+            return int(self.thread_sel.currentText())
+        except ValueError:
+            return common.CURRENT_THREADS
+
+    def _download_items(self, items):
+        """按条目下载（不弹任何二级窗）：B站图文动态直接下图片，视频按 head 画质下拉下载；
+        多条目按线程数并行，进度走全局下载浮窗。"""
+        if not items:
+            return
+        quality = self.quality_sel.currentText()
+        threads = self._threads()
+        # 进度走全局下载浮窗（原页面内嵌面板不再占用页面 UI）
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("已获取")
 
         def work():
-            download_ops.refresh_douyin_urls(items, quality)
-            download_ops.refresh_weibo_urls(items)
-            download_ops.refresh_xhs_urls(items)
-            return download_ops.download_media_items(items)
+            return download_ops.download_items_mixed(
+                items, quality_label=quality, threads=threads,
+                on_task_event=card.handle_event)
 
         def done(result, err):
             if err:
+                card.finish(f"❌ 下载失败: {str(err)[:60]}")
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
                 return
-            stats = result or {}
-            msg = (f"图片 {stats.get('images', 0)} | 封面 {stats.get('covers', 0)} | "
-                   f"Live图 {stats.get('live', 0)} | "
-                   f"视频 {stats.get('videos', 0)}")
-            if stats.get("skipped", 0):
-                msg += f" | 跳过已下载 {stats['skipped']}"
+            msg = result or "无内容下载"
+            card.finish(msg if len(msg) <= 80 else msg[:79] + "…")
             self.app.toast(msg, "success")
-
-        run_bg(work, done)
-
-    def _do_bilibili_download(self, bv_items, draw_items, non_bili, quality, ck):
-        quality_label = self.quality_sel.currentText() if hasattr(self, "quality_sel") else "最高画质"
-
-        def work():
-            return download_ops.do_bilibili_download(
-                bv_items, draw_items, non_bili, quality, ck, quality_label=quality_label)
-
-        def done(result, err):
-            if err:
-                self.app.toast(f"下载失败: {str(err)[:60]}", "error")
-                return
-            paths, draw_stats, other_stats, errors = result
-            msg = download_ops.summarize_download(paths, draw_stats, other_stats, errors)
-            self.app.toast(msg, "success" if not errors else "warning")
 
         run_bg(work, done)
 
@@ -602,15 +617,27 @@ class InfoResultsPage(BasePage):
     # ==================== 删除条目 ====================
 
     def _row_menu(self, key, pos):
-        """右键条目菜单：删除该条目（从已获取列表移除，不动本地文件）。"""
+        """右键条目菜单：打开/复制作品链接、删除该条目（从已获取列表移除，不动本地文件）。"""
         lst = self.cols[key]["list"]
         row = lst.indexAt(pos).row()
         if row < 0 or row >= len(self.cols[key]["songs"]):
             return
         info = self.cols[key]["songs"][row]
+        url = self._openable_url(info)
         menu = QMenu(self)
+        act_open = act_copy = None
+        if url:
+            act_open = menu.addAction("🔗 打开链接")
+            act_copy = menu.addAction("📋 复制链接")
+            menu.addSeparator()
         act = menu.addAction("🗑 删除该条目…")
-        if menu.exec(lst.viewport().mapToGlobal(pos)) is act:
+        chosen = menu.exec(lst.viewport().mapToGlobal(pos))
+        if chosen is act_open:
+            self._open_url(url)
+        elif chosen is act_copy:
+            QApplication.clipboard().setText(url)
+            self.app.toast("链接已复制", "success")
+        elif chosen is act:
             self._delete_items([info])
 
     def _delete_selected(self):

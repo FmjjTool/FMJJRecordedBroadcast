@@ -786,6 +786,9 @@ class ShoppingPage(BasePage):
         self.export_btn.setEnabled(False)
         self.parse_btn.setEnabled(False)
         self.detail_btn.setEnabled(False)
+        # 下载浮窗（主线程创建；商品详情请求串行限速，图片并发）
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("购物解析 · 商品图片", total=total, threads=1)
 
         def work():
             import time
@@ -796,6 +799,8 @@ class ShoppingPage(BasePage):
             items, failed = [], []
             for n, r in enumerate(checked, 1):
                 pr = self._products[r]
+                name = f"{n}. {pr.title[:36]}"
+                card.handle_event("start", name)
                 self._log(f"导出进度 {n}/{total}：{pr.title[:26]}")
                 if n > 1:
                     time.sleep(3)   # 件间隔：连续请求会触发淘宝风控
@@ -821,6 +826,7 @@ class ShoppingPage(BasePage):
                 if d is not None:
                     self._detail_cache[pr.item_id] = d
                 items.append((pr, d))
+                card.handle_event("done", name, d is not None)
             return items, failed
 
         def done(result, err):
@@ -831,8 +837,11 @@ class ShoppingPage(BasePage):
             if err:
                 self.status_label.setText("")
                 self.app.toast(f"导出失败: {str(err)[:80]}", "error")
+                card.finish(f"❌ 导出失败: {str(err)[:50]}")
                 return
             items, failed = result
+            card.finish(f"✅ 导出 {len(items) - len(failed)} 件"
+                        + (f" / 失败 {len(failed)}" if failed else ""))
             products_json = []
             for pr, d in items:
                 if d is not None:

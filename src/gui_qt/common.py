@@ -53,9 +53,12 @@ COLLECTED = []
 # 全局清晰度设置（已获取页 / 视频下载页 / 资产管理 共享）
 CURRENT_QUALITY = "最高画质"
 
-# 全局下载线程数（单个解析 / 批量导入页共享；2/4/8/16/32/64）
+# 全局下载线程数（单个解析 / 批量导入 / 已获取页共享；2/4/8/16/32/64）
 # 单文件大文件 = 分段数（IDM 风格）；批量 = 同时在下的文件数
 CURRENT_THREADS = 8
+
+# 线程数下拉选项（各下载页共用）
+THREAD_OPTIONS = ["2", "4", "8", "16", "32", "64"]
 
 
 # ==================== 后台线程 ====================
@@ -202,9 +205,11 @@ def stable_sort(items, key, desc):
 def _info_text(info) -> str:
     """将 VideoInfo 格式化为展示文本。"""
     view = "阅览量" if info.platform == "weibo" else "播放量"
+    kind = getattr(info, "kind", "")
+    type_label = {"dynamic": "动态", "note": "图文/笔记"}.get(kind, "视频/作品")
     lines = [
         f"平台: {info.platform}",
-        f"类型: {'动态' if getattr(info, 'kind', '') == 'dynamic' else '视频/作品'}",
+        f"类型: {type_label}",
         f"标题: {info.title or '(无标题)'}",
     ]
     if info.description:
@@ -227,6 +232,8 @@ def _info_text(info) -> str:
         lines.append(f"发布时间: {info.publish_time}")
     if info.tags:
         lines.append(f"标签: {', '.join(info.tags)}")
+    if getattr(info, "images", None):
+        lines.append(f"图片: {len(info.images)} 张")
     lines.append(f"链接: {info.video_url or info.raw_url}")
     return "\n".join(lines)
 

@@ -409,20 +409,26 @@ class VideoCommentsPage(BasePage):
             return
         out = self._export_dir() / f"评论区_{v['id']}"
         self._set_busy(True, "⏳ 保存原始数据中（下载评论图片）...")
+        # 下载浮窗（主线程创建；评论图片 4 线程并发下载）
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("评论区图片")
 
         def progress(msg, cur=0, total=0):
             self._say(f"⏳ {msg}")
 
         def work():
-            return self._be().save_raw(v["comments"], out, progress=progress)
+            return self._be().save_raw(v["comments"], out, progress=progress,
+                                       task_event=card.handle_event, threads=4)
 
         def done(stats, err):
             self._set_busy(False)
             if err:
                 self.status_label.setText(f"❌ 保存失败：{err}")
+                card.finish(f"❌ 保存失败: {str(err)[:50]}")
                 return
             self.status_label.setText(
                 f"✅ 已保存 {stats['comments']} 条评论 / {stats['downloaded']}/{stats['images']} 张图片")
+            card.finish(f"✅ 图片 {stats['downloaded']}/{stats['images']}")
             self.app.toast(
                 f"评论区原始数据已保存：{stats['comments']} 条 / 图片 {stats['downloaded']}/{stats['images']}",
                 "success")

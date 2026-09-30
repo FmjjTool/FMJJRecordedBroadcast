@@ -214,8 +214,10 @@ def filter_comments(comments: list, keyword: str = "", user: str = "",
                                image_mode, min_likes, sort_by)
 
 
-def save_raw(comments: list, out_dir: Path, progress=None) -> dict:
-    return _cc.save_raw(sys.modules[__name__], comments, out_dir, progress)
+def save_raw(comments: list, out_dir: Path, progress=None,
+             task_event=None, threads: int = 4) -> dict:
+    return _cc.save_raw(sys.modules[__name__], comments, out_dir, progress,
+                        task_event=task_event, threads=threads)
 
 
 def export_comments_png(comments: list, meta: dict, out_path: Path,
