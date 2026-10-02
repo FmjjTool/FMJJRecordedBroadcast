@@ -43,6 +43,19 @@ class VideoInfo:
     images: list[str] = field(default_factory=list)        # 图片URL列表（原图）
     live_photos: list[str] = field(default_factory=list)   # live图视频URL列表
 
+    def public_url(self) -> str:
+        """适合展示/分享/导出的作品源地址。
+
+        抖音的 video_url 是采集时解析出的 CDN 时效直链（douyinvod，几小时~
+        几天后 403 失效），存进 json/数据库后用户点开就是死链——展示与导出
+        一律替换为标准作品页 /video/{id}（永久有效）。其余平台 video_url
+        本身就是网页地址，原样返回。下载不依赖此字段：抖音下载前总是用
+        video_id 重新解析拿新鲜直链（gui_qt/pages/asset.py _download_video_item）。
+        """
+        if self.platform == "douyin" and self.video_id:
+            return f"https://www.douyin.com/video/{self.video_id}"
+        return self.video_url
+
     def to_dict(self) -> dict:
         """转为字典（用于导出），字段名中文化，raw_data 完整透传"""
         view_label = "阅览量" if self.platform == "weibo" else "播放量"
@@ -65,7 +78,7 @@ class VideoInfo:
             "投币数": self.coin_count if self.coin_count else 0,
             "时长": "",
             "封面URL": self.cover_url,
-            "链接": self.video_url,
+            "链接": self.public_url(),
             "发布时间": self.publish_time,
             "标签": self.tags,
             "分类": self.category,

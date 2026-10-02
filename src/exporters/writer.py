@@ -117,7 +117,7 @@ def export_xlsx(info_list: list, output_path: Optional[str] = None) -> str:
                 info.author or "", info.author_id or "",
                 info.play_count, info.like_count,
                 info.comment_count, info.share_count, info.favorite_count,
-                _fmt_duration(info.duration), info.cover_url, info.video_url,
+                _fmt_duration(info.duration), info.cover_url, info.public_url(),
                 info.publish_time or "", ", ".join(info.tags) if info.tags else "",
                 info.raw_url or "", info.fetched_at or ""]
         row_fill = even_fill if ri % 2 == 0 else PatternFill()
@@ -197,7 +197,7 @@ def export_md(info_list: list, output_path: Optional[str] = None) -> str:
             if info.tags: rows.append(("标签", ", ".join(info.tags)))
             if info.category: rows.append(("分类/地区", info.category))
             if info.music: rows.append(("音乐", info.music))
-            rows.extend([("封面URL", info.cover_url), ("链接", info.video_url), ("原始URL", info.raw_url)])
+            rows.extend([("封面URL", info.cover_url), ("链接", info.public_url()), ("原始URL", info.raw_url)])
             for k, v in rows: lines.append(f"| {k} | {v} |")
             lines.append("")
     content = "\n".join(lines)

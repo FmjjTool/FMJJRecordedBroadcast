@@ -283,6 +283,17 @@ def _norm_subdir(subdir: str) -> str:
     return norm_platform_dir(subdir)
 
 
+def _norm_dy_source_link(platform: str, video_id: str, url: str) -> str:
+    """旧数据兜底：抖音「链接」存的是采集时的 CDN 时效直链（douyinvod，
+    几小时~几天后 403 失效），打开/复制全是死链——统一替换为标准作品页
+    /video/{id}（永久有效）。非直链（网页地址/空）原样返回。
+    下载不受影响：抖音下载前总是用 video_id 重新解析拿新鲜直链。"""
+    if platform == "douyin" and video_id and url \
+            and "douyin.com" not in url:
+        return f"https://www.douyin.com/video/{video_id}"
+    return url or ""
+
+
 def scan_assets(folder: str, limit: int = 0) -> list:
     """扫描文件夹里的图片/视频/音频，返回文件信息列表。limit=0 表示无上限。"""
     results = []
@@ -906,7 +917,9 @@ class AssetPage(BasePage):
                     "cover_url": data.get("封面URL", "") or "",
                     "duration": _parse_duration_text(data.get("时长", "")),
                     "publish_time": data.get("发布时间", "") or "",
-                    "video_url": data.get("链接", "") or "",
+                    "video_url": _norm_dy_source_link(platform,
+                                                      str(data.get("视频ID", "") or ""),
+                                                      data.get("链接", "") or ""),
                     "raw_url": data.get("原始URL", "") or "",
                     "raw_data": data.get("原始数据") if isinstance(data.get("原始数据"), dict) else {},
                     "fetched_at": data.get("获取时间", "") or "",
@@ -2899,7 +2912,7 @@ class AssetPage(BasePage):
                 self.db_table.setItem(r, 0, chk)
                 vals = [row[1], {"dynamic": "动态", "image": "图文"}.get(row[2], "视频"),
                         row[4], row[5], row[6], _fmt(row[7]), _fmt(row[8]), _fmt(row[9]),
-                        row[17]]
+                        _norm_dy_source_link(plat, str(row[3] or ""), row[17] or "")]
                 for c, text in enumerate(vals):
                     item = QTableWidgetItem(str(text or ""))
                     if c == 2:
@@ -3080,7 +3093,8 @@ class AssetPage(BasePage):
                     "发布时间": row[6], "播放量": row[7], "点赞数": row[8],
                     "评论数": row[9], "分享数": row[10], "收藏数": row[11],
                     "弹幕数": row[12], "投币数": row[13], "时长": row[14],
-                    "正文": row[15], "封面URL": row[16], "链接": row[17],
+                    "正文": row[15], "封面URL": row[16],
+                    "链接": _norm_dy_source_link(plat, str(row[3] or ""), row[17] or ""),
                     "标签": row[18], "分类": row[19], "音乐": row[20],
                 })
                 out.append(rec)
@@ -3103,10 +3117,17 @@ class AssetPage(BasePage):
         rows = sorted({i.row() for i in self.db_table.selectedIndexes()})
         return [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
 
+    def _db_link(self, row) -> str:
+        """db 行的展示用链接：抖音旧数据「链接」列是时效 CDN 直链，规范化为作品页。"""
+        return _norm_dy_source_link(self._db_platform(),
+                                    str(row[3] or ""), row[17] or "")
+
     def _db_open_link(self, index):
         row = self._db_rows[index.row()] if 0 <= index.row() < len(self._db_rows) else None
-        if row and row[17]:
-            QDesktopServices.openUrl(QUrl(row[17]))
+        if row:
+            link = self._db_link(row)
+            if link:
+                QDesktopServices.openUrl(QUrl(link))
 
     def _db_context_menu(self, pos):
         sel = self._db_selected_row()
@@ -3126,10 +3147,12 @@ class AssetPage(BasePage):
         act = menu.exec(self.db_table.viewport().mapToGlobal(pos))
         if act == act_open:
             for row in sel:
-                if row[17]:
-                    QDesktopServices.openUrl(QUrl(row[17]))
+                link = self._db_link(row)
+                if link:
+                    QDesktopServices.openUrl(QUrl(link))
         elif act == act_copy:
-            QApplication.clipboard().setText("\n".join(r[17] for r in sel if r[17]))
+            QApplication.clipboard().setText(
+                "\n".join(l for l in (self._db_link(r) for r in sel) if l))
             self.app.toast("已复制链接", "success")
         elif act_author is not None and act == act_author:
             self._db_set_author_filter(author)
