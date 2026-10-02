@@ -27,6 +27,8 @@ _PLATFORMS = [
     ("weibo", "🔴 微博"),
 ]
 _PLATFORM_NAMES = dict(_PLATFORMS)
+# 导出目录的平台分层名（评论区/{平台}/{视频ID}/）
+_PLATFORM_DIRS = {"douyin": "抖音", "bili": "B站", "weibo": "微博"}
 _BACKENDS = {"douyin": dc, "bili": bc, "weibo": wc}
 # 平台是否支持作者模式（输入作者主页链接抓最新 N 个视频）
 _AUTHOR_OK = {"douyin": True, "bili": False, "weibo": False}
@@ -353,6 +355,11 @@ class VideoCommentsPage(BasePage):
         from toolbox.config_manager import get_export_subdir
         return get_export_subdir("video_comments")
 
+    def _layered_dir(self, video_id: str):
+        """导出分层目录：评论区/{平台}/{视频ID}（长图与原始数据同层）。"""
+        plat = _PLATFORM_DIRS.get(self._platform(), self._platform())
+        return self._export_dir() / plat / str(video_id)
+
     def export_png(self):
         v = self._current_video()
         if not v:
@@ -379,7 +386,7 @@ class VideoCommentsPage(BasePage):
             "filter_desc": "、".join(desc_parts) if desc_parts else "未筛选",
             "stats": {"total": len(v["comments"])},
         }
-        out = self._export_dir() / f"评论区_{v['id']}.png"
+        out = self._layered_dir(v["id"]) / f"评论区_{v['id']}.png"
         self._set_busy(True, "⏳ 导出长图中（下载头像与图片中）...")
 
         def progress(msg, cur=0, total=0):
@@ -407,7 +414,7 @@ class VideoCommentsPage(BasePage):
         if not v:
             self.status_label.setText("❌ 请先抓取评论")
             return
-        out = self._export_dir() / f"评论区_{v['id']}"
+        out = self._layered_dir(v["id"])
         self._set_busy(True, "⏳ 保存原始数据中（下载评论图片）...")
         # 下载浮窗（主线程创建；评论图片 4 线程并发下载）
         from gui_qt.download_float import get_float
