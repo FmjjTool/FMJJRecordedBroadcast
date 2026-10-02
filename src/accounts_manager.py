@@ -152,12 +152,21 @@ def add_account(url: str, name: str = "", group_id: str = "", group_name: str = 
     return True
 
 
-def update_account(url: str, name=None, group_id: str = "", group_name: str = "", note=None, kind=None) -> bool:
-    """按 URL 更新账号的账号名/分组/备注/采集类型。传 None 表示不修改。"""
+def update_account(url: str, name=None, group_id: str = "", group_name: str = "", note=None, kind=None, new_url: str = "") -> bool:
+    """按 URL 更新账号的账号名/链接/分组/备注/采集类型。传 None 表示不修改。
+    new_url 非空且与原 URL 不同时改链接（已有同链接账号则失败）；
+    此时 kind 未显式指定的按新链接重新推断（平台可能变了）。"""
     group_name = (group_name or "").replace("|", " ")
+    new_url = (new_url or "").strip()
     accounts = load_accounts()
     for acc in accounts:
         if acc.url == url:
+            if new_url and new_url != url:
+                if any(a.url == new_url for a in accounts):
+                    return False  # 链接已存在，拒绝（同 URL 是账号主键）
+                acc.url = new_url
+                if kind is None:
+                    acc.kind = infer_kind_from_url(new_url)
             if name is not None:
                 acc.name = name.replace("|", " ")
             if note is not None:

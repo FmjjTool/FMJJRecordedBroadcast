@@ -225,9 +225,11 @@ class InfoAccountsPage(BasePage):
         sel_bar.addWidget(self.sync_btn)
         layout.addLayout(sel_bar)
 
-        # 账号列表（复选框，固定高度滚动）
+        # 账号列表（复选框，固定高度滚动；右键 打开/复制链接、修改、删除）
         self.acc_list = RowCheckList()
         self.acc_list.setFixedHeight(170)
+        self.acc_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.acc_list.customContextMenuRequested.connect(self._acc_list_context_menu)
         layout.addWidget(self.acc_list)
 
         # 采集行
@@ -763,8 +765,9 @@ class InfoAccountsPage(BasePage):
     def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None, date_start="", date_end=""):
         """采集账号最新内容，返回 (total, log, all_posts)。供手动与定时获取共用。
 
-        多账号并发采集（ThreadPoolExecutor，上限 4 线程）：原串行逐个等待，
-        账号多时总耗时 ≈ 各账号耗时之和，并发后 ≈ 最慢一个账号的耗时。
+        多账号并发采集（ThreadPoolExecutor，上限 4 线程）：as_completed 逐个处理
+        完成的账号——进度/日志/入库实时可见，采集器 print 也逐行实时进日志
+        （带账号名前缀），不再等最慢账号收尾后一次性倾倒。
 
         on_event(dict)：实时事件回调（后台线程调用），{"type": "log", "text": ...}
         或 {"type": "progress", "done": x, "total": y, "label": ...}。
@@ -823,6 +826,36 @@ class InfoAccountsPage(BasePage):
             def flush(self):
                 pass
 
+        class _LiveBuf(io.TextIOBase):
+            """采集器 stdout 缓冲：累积完整文本的同时，把完成的行实时推送 emit。
+            多账号并发时行与行会交错，所以每行带账号名前缀标识来源。"""
+
+            def __init__(self, on_line, prefix):
+                self._buf = io.StringIO()
+                self._pending = ""
+                self._on_line = on_line
+                self._prefix = prefix
+
+            def write(self, s):
+                self._buf.write(s)
+                self._pending += s
+                self._drain()
+                return len(s)
+
+            def _drain(self):
+                while "\n" in self._pending:
+                    line, self._pending = self._pending.split("\n", 1)
+                    if line.strip():
+                        self._on_line(f"{self._prefix}{line.rstrip()}")
+
+            def flush_pending(self):
+                if self._pending.strip():
+                    self._on_line(f"{self._prefix}{self._pending.strip()}")
+                self._pending = ""
+
+            def getvalue(self):
+                return self._buf.getvalue()
+
         proxy = _TLStdout(sys.stdout)
 
         # 平台限流（真正作用于请求间隔）：fetched=本周期累计条数，cooldown=冷却截止时间。
@@ -862,21 +895,21 @@ class InfoAccountsPage(BasePage):
             return False
 
         def _fetch_one(job):
-            """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, detail, error)。"""
+            """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, error)。"""
             i, a = job
             # 暂停门闩：clear 时阻塞在账号边界，set 后继续（在飞账号自然跑完）
             if pause_event is not None:
                 pause_event.wait()
             # 已取消：还没开始的账号直接跳过（线程池排队任务快速返回）
             if cancel_event is not None and cancel_event.is_set():
-                return i, a, "", [], "", "__cancelled__"
+                return i, a, "", [], "__cancelled__"
             platform = URLRecognizer.recognize(a.url)
             name = a.name or (a.url[:36] if a.url else "未命名")
             if not platform:
-                return i, a, "", [], "", "无法识别链接"
+                return i, a, "", [], "无法识别链接"
             parser = get_parser(platform)
             if not parser or not hasattr(parser, "fetch_user_posts"):
-                return i, a, platform, [], "", "不支持时间线"
+                return i, a, platform, [], "不支持时间线"
             # 冷却期内等待（限流真正作用于下一个请求的发出时刻）
             _throttle_before(platform)
             # B站按账号 kind 决定只采视频/只采动态/混合（存量账号 kind 空时按 URL 后缀推断）；其他平台忽略
@@ -887,76 +920,89 @@ class InfoAccountsPage(BasePage):
             elif platform == "douyin" and rate_on:
                 # 抖音风控最敏感：账号内部翻页也按限流设置停顿（每 rate_count 条停 rate_interval 秒）
                 kwargs = {"pause_every": rate_count, "pause_secs": rate_interval}
-            buf = io.StringIO()
+            # 实时日志缓冲：采集器的 print 逐行实时进日志（前缀=账号名），不再等全部账号收尾后倾倒
+            name_s = (name[:16] + "…") if len(name) > 16 else name
+            buf = _LiveBuf(emit, f"    [{name_s}] ")
             proxy._local.buf = buf
             try:
                 posts = parser.fetch_user_posts(a.url, count=fetch_count, **kwargs)
             except Exception as e:  # noqa: BLE001
-                return i, a, platform, [], "", str(e)
+                return i, a, platform, [], str(e)
             finally:
                 proxy._local.buf = None
+                buf.flush_pending()
             if _throttle_after(platform, len(posts)):
-                print(f"    ⏸ 限流：{platform} 已抓满 {rate_count} 条，冷却 {rate_interval}s")
-            return i, a, platform, posts, buf.getvalue(), ""
+                emit(f"    [{name_s}] ⏸ 限流：{platform} 已抓满 {rate_count} 条，冷却 {rate_interval}s")
+            return i, a, platform, posts, ""
 
         old_stdout = sys.stdout
         sys.stdout = proxy
+        per_platform = {}  # 平台 -> 已抓数量（汇总统计用）
+        done_order = []    # 完成顺序的 i 列表（日志/进度按实际完成推送）
+        results = {}       # i -> (a, platform, posts, error)（导出前按账号序重排，顺序稳定）
         try:
             # 并发上限 4：过高并发容易触发平台风控，且 Playwright 兜底时资源开销大
             workers = min(4, max(1, n))
+            from concurrent.futures import as_completed
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                # map 按账号顺序产出结果（日志顺序与串行版一致），任务本身并发执行
-                outcomes = list(ex.map(_fetch_one, list(enumerate(accounts, 1))))
+                # as_completed：每个账号一完成立即处理（进度/日志/入库实时可见），
+                # 不再像旧 ex.map 那样等最慢账号收尾后一次性倾倒（多线程"假串行"观感的根因）
+                futs = [ex.submit(_fetch_one, job) for job in enumerate(accounts, 1)]
+                for fut in as_completed(futs):
+                    i, a, platform, posts, error = fut.result()
+                    results[i] = (a, platform, posts, error)
+                    done_order.append(i)
+                    done_cnt = len(done_order)
+                    name = a.name or (a.url[:36] if a.url else "未命名")
+                    if on_event is not None:
+                        on_event({"type": "progress", "done": done_cnt, "total": n,
+                                  "label": f"[{done_cnt}/{n}] {platform} · {name}"})
+                    if error == "__cancelled__":
+                        emit(f"[{i}/{n}] ⊘ 已取消，跳过")
+                        continue
+                    if error == "无法识别链接":
+                        emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
+                        continue
+                    if error == "不支持时间线":
+                        emit(f"[{i}/{n}] {platform} 不支持时间线")
+                        continue
+                    if error:
+                        emit(f"[{i}/{n}] {platform} 失败: {error}")
+                        continue
+                    # 日期段过滤（时间解析失败的条目保留）
+                    if date_lo is not None or date_hi is not None:
+                        before_n = len(posts)
+                        posts = _filter_posts_by_date(posts, date_lo, date_hi)
+                        if len(posts) != before_n:
+                            emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
+                    emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
+                    _collect(posts)
+                    all_posts.extend(posts)
+                    total += len(posts)
+                    per_platform[platform] = per_platform.get(platform, 0) + len(posts)
+                    # 区分主页作品 / 动态统计
+                    dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
+                    videos = len(posts) - dyns
+                    kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(
+                        getattr(a, "kind", "") or infer_kind_from_url(a.url), "")
+                    if dyns and videos:
+                        emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
+                    elif dyns:
+                        emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
+                    else:
+                        emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
+                    # 具体内容：列出条目「发布时间 标题」（最多 8 条，多则折算），日期段/数量一目了然
+                    for p in posts[:8]:
+                        t = (getattr(p, "title", "") or "").strip()
+                        d = (getattr(p, "publish_time", "") or "").strip()
+                        line = f"      · {d} {t}" if d else f"      · {t}"
+                        emit(line[:120] if line.strip() != "·" else "      ·（无标题）")
+                    if len(posts) > 8:
+                        emit(f"      …等共 {len(posts)} 条")
         finally:
             sys.stdout = old_stdout
-
-        per_platform = {}  # 平台 -> 已抓数量（汇总统计用）
-        done_cnt = 0
-        for i, a, platform, posts, detail, error in outcomes:
-            name = a.name or (a.url[:36] if a.url else "未命名")
-            done_cnt += 1
-            if on_event is not None:
-                on_event({"type": "progress", "done": done_cnt, "total": n,
-                          "label": f"[{i}/{n}] {platform} · {name}"})
-            if error == "__cancelled__":
-                emit(f"[{i}/{n}] ⊘ 已取消，跳过")
-                continue
-            if error == "无法识别链接":
-                emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
-                continue
-            if error == "不支持时间线":
-                emit(f"[{i}/{n}] {platform} 不支持时间线")
-                continue
-            if error:
-                emit(f"[{i}/{n}] {platform} 失败: {error}")
-                continue
-            # 日期段过滤（时间解析失败的条目保留）
-            if date_lo is not None or date_hi is not None:
-                before_n = len(posts)
-                posts = _filter_posts_by_date(posts, date_lo, date_hi)
-                if len(posts) != before_n:
-                    emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
-            emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
-            _collect(posts)
-            all_posts.extend(posts)
-            total += len(posts)
-            per_platform[platform] = per_platform.get(platform, 0) + len(posts)
-            # 区分主页作品 / 动态统计
-            dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
-            videos = len(posts) - dyns
-            kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(
-                getattr(a, "kind", "") or infer_kind_from_url(a.url), "")
-            if dyns and videos:
-                emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
-            elif dyns:
-                emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
-            else:
-                emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
-            if detail:
-                for line in detail.splitlines():
-                    line = line.strip()
-                    if line:
-                        emit(f"    {line}")
+        # 导出按账号顺序（列表勾选顺序）而非完成顺序，产物稳定可复现
+        all_posts = [p for i in sorted(results) for p in results[i][2]]
         # 自动导出（增量 or 单独）
         if all_posts:
             export_msg = self._auto_export(all_posts, incremental)
@@ -1446,6 +1492,10 @@ class InfoAccountsPage(BasePage):
             self._acct_set_rows.append((a.url, gsel, ksel, gsel.selected(), ksel.currentText()))
             gsel.changed.connect(lambda b=self.save_all_btn: self._mark_set_dirty(b))
             ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
+            # 修改账号名/链接（对话框；分组/采集类型仍用行内控件）
+            edit_btn = icon_button("✏️", "修改账号名/链接", (30, 26), True, "font-size: 12px;")
+            edit_btn.clicked.connect(lambda _=False, u=a.url: self._edit_account_row(u))
+            h.addWidget(edit_btn)
             # 上移/下移（直接改 accounts.txt 顺序，立即生效）
             up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;")
             up_btn.setEnabled(i > 1)
@@ -1503,6 +1553,102 @@ class InfoAccountsPage(BasePage):
         QTimer.singleShot(150, self._reload_account_list)
         QTimer.singleShot(150, self._reload_account_settings)
         QTimer.singleShot(150, self._reload_group_list)
+
+    def _edit_account_row(self, url):
+        """编辑账号名/链接（改链接=替换账号主键，去重校验；平台变化时采集类型按新链接重推）。"""
+        from PySide6.QtWidgets import QFormLayout
+        from accounts_manager import load_accounts, update_account
+        acc = next((a for a in load_accounts() if a.url == url), None)
+        if not acc:
+            self.app.toast("账号不存在（可能已被删除）", "warning")
+            return
+        win = QDialog(self)
+        win.setWindowTitle("✏️ 修改账号")
+        win.resize(560, 190)
+        v = QVBoxLayout(win)
+        form = QFormLayout()
+        name_ed = QLineEdit(acc.name or "")
+        name_ed.setPlaceholderText("留空则显示链接")
+        url_ed = QLineEdit(acc.url)
+        url_ed.setPlaceholderText("https://…（修改链接即更换账号指向）")
+        form.addRow("账号名", name_ed)
+        form.addRow("链接", url_ed)
+        v.addLayout(form)
+        from platforms import URLRecognizer
+        plat_lbl = QLabel(f"平台：{URLRecognizer.recognize(url) or '?'}")
+        plat_lbl.setStyleSheet("color: #888; font-size: 11px;")
+
+        def _sync_plat(_t=""):
+            p = URLRecognizer.recognize(url_ed.text().strip())
+            plat_lbl.setText(f"平台：{p or '?'}")
+        url_ed.textChanged.connect(_sync_plat)
+        v.addWidget(plat_lbl)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        ok_btn = QPushButton("保存")
+        ok_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
+        cancel_btn = QPushButton("取消")
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        v.addLayout(btn_row)
+        ok_btn.clicked.connect(win.accept)
+        cancel_btn.clicked.connect(win.reject)
+        if win.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_url = url_ed.text().strip()
+        new_name = name_ed.text().strip()
+        if not new_url:
+            self.app.toast("链接不能为空", "warning")
+            return
+        if new_url != url and any(a.url == new_url for a in load_accounts()):
+            self.app.toast("该链接已存在于账号列表（链接是账号唯一标识）", "error")
+            return
+        if new_url == url and new_name == (acc.name or ""):
+            self.app.toast("没有修改", "info")
+            return
+        if update_account(url, name=new_name, new_url=new_url):
+            suffix = f"（链接：{new_url[:40]}）" if new_url != url else ""
+            self.app.toast(f"✅ 已修改账号{suffix}", "success")
+        else:
+            self.app.toast("❌ 修改失败（账号不存在）", "error")
+            return
+        QTimer.singleShot(150, self._reload_account_list)
+        QTimer.singleShot(150, self._reload_account_settings)
+        QTimer.singleShot(150, self._reload_group_list)
+
+    def _acc_list_context_menu(self, pos):
+        """功能页账号列表右键：打开链接（浏览器）/ 复制链接 / 修改账号 / 删除账号。"""
+        from PySide6.QtWidgets import QApplication, QMenu
+        item = self.acc_list.itemAt(pos)
+        if item is None:
+            return
+        row = self.acc_list.row(item)
+        if not (0 <= row < len(getattr(self, "acc_accounts", []))):
+            return
+        acc = self.acc_accounts[row]
+        url = (acc.url or "").strip()
+        menu = QMenu(self)
+        act_open = menu.addAction("🌐 打开链接（浏览器）")
+        act_copy = menu.addAction("📋 复制链接")
+        menu.addSeparator()
+        act_edit = menu.addAction("✏️ 修改账号")
+        act_del = menu.addAction("🗑 删除账号…")
+        act = menu.exec(self.acc_list.viewport().mapToGlobal(pos))
+        if act == act_open:
+            if url:
+                import webbrowser
+                webbrowser.open(url)
+        elif act == act_copy:
+            if url:
+                QApplication.clipboard().setText(url)
+                self.app.toast("已复制链接", "success")
+        elif act == act_edit:
+            self._edit_account_row(url)
+        elif act == act_del:
+            label = acc.name or url[:40]
+            if QMessageBox.question(self, "删除账号", f"确定删除「{label}」？",
+                                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+                self._delete_account_row(url)
 
     def _delete_account_row(self, url):
         from accounts_manager import remove_account

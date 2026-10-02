@@ -109,6 +109,27 @@ def move_account(index: int, delta: int) -> bool:
     return True
 
 
+def update_account_at(index: int, name: str = "", url: str = "") -> bool:
+    """按下标更新账号的名称/链接（platform 按新链接重推）。
+    url 为空或与其他账号重复时失败；历史数据按旧 URL 关联，不随链接变更迁移。"""
+    accounts = load_accounts()
+    if not (0 <= index < len(accounts)):
+        return False
+    url = (url or "").strip()
+    if not url:
+        return False
+    if any(a.get("url") == url for i, a in enumerate(accounts) if i != index):
+        return False
+    if url != accounts[index].get("url"):
+        plat, _pid = parse_url(url)
+        accounts[index]["url"] = url
+        if plat:
+            accounts[index]["platform"] = plat
+    accounts[index]["name"] = (name or "").strip()
+    save_accounts(accounts)
+    return True
+
+
 # ==================== 分组 ====================
 
 def get_groups():

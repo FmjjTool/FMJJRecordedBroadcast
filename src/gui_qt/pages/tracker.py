@@ -781,6 +781,70 @@ class TrackerPage(BasePage):
         self.app.toast(f"✅ 已同步 {len(new_items)} 个账号"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
+    def _acc_row_menu(self, row, pos, url):
+        """设置页账号行右键：打开链接（浏览器）/ 复制链接。"""
+        from PySide6.QtWidgets import QApplication, QMenu
+        if not url:
+            return
+        menu = QMenu(row)
+        act_open = menu.addAction("🌐 打开链接（浏览器）")
+        act_copy = menu.addAction("📋 复制链接")
+        act = menu.exec(row.mapToGlobal(pos))
+        if act == act_open:
+            import webbrowser
+            webbrowser.open(url)
+        elif act == act_copy:
+            QApplication.clipboard().setText(url)
+            self.app.toast("已复制链接", "success")
+
+    def _edit_account(self, index):
+        """编辑追踪账号的名称/链接（改链接=换账号，platform 按新链接重推）。"""
+        from PySide6.QtWidgets import QFormLayout
+        from tracker.accounts import load_accounts, update_account_at, parse_url
+        accounts = load_accounts()
+        if not (0 <= index < len(accounts)):
+            return
+        acc = accounts[index]
+        win = QDialog(self)
+        win.setWindowTitle("✏️ 修改追踪账号")
+        win.resize(560, 180)
+        v = QVBoxLayout(win)
+        form = QFormLayout()
+        name_ed = QLineEdit(acc.get("name", ""))
+        url_ed = QLineEdit(acc.get("url", ""))
+        url_ed.setPlaceholderText("https://…（修改链接即更换追踪的账号）")
+        form.addRow("账号名", name_ed)
+        form.addRow("链接", url_ed)
+        v.addLayout(form)
+        plat_lbl = QLabel(f"平台：{PLATFORM_NAMES.get(parse_url(acc.get('url', ''))[0], '?')}")
+        plat_lbl.setStyleSheet("color: #888; font-size: 11px;")
+
+        def _sync_plat(_t=""):
+            p, _ = parse_url(url_ed.text().strip())
+            plat_lbl.setText(f"平台：{PLATFORM_NAMES.get(p, p or '?')}")
+        url_ed.textChanged.connect(_sync_plat)
+        v.addWidget(plat_lbl)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        ok_btn = QPushButton("保存")
+        ok_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
+        cancel_btn = QPushButton("取消")
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        v.addLayout(btn_row)
+        ok_btn.clicked.connect(win.accept)
+        cancel_btn.clicked.connect(win.reject)
+        if win.exec() != QDialog.DialogCode.Accepted:
+            return
+        if not url_ed.text().strip():
+            self.app.toast("链接不能为空", "warning")
+            return
+        if not update_account_at(index, name_ed.text().strip(), url_ed.text().strip()):
+            self.app.toast("❌ 修改失败：链接为空或与其他账号重复", "error")
+            return
+        self.app.toast("✅ 已修改账号（历史数据仍挂在原链接下）", "success")
+        self.reload_accounts()
+
     def _delete_account(self, index):
         from tracker.accounts import load_accounts, save_accounts
         accounts = load_accounts()
@@ -826,6 +890,14 @@ class TrackerPage(BasePage):
             self._acc_rows.append((i, gsel, gsel.selected()))
             gsel.changed.connect(
                 lambda b=None: self._acc_save_btn.setEnabled(True))
+            # 行右键：打开链接（浏览器）/ 复制链接
+            row.setContextMenuPolicy(Qt.CustomContextMenu)
+            row.customContextMenuRequested.connect(
+                lambda pos, u=acc.get("url", ""): self._acc_row_menu(row, pos, u))
+            # 修改账号名/链接（对话框；分组仍用行内控件）
+            edit_btn = icon_button("✏️", "修改账号名/链接", (30, 26), True, "font-size: 12px;",
+                                   on_click=lambda idx=i: self._edit_account(idx))
+            h.addWidget(edit_btn)
             # 上移/下移（直接改账号顺序，立即生效）
             up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;",
                                  on_click=lambda idx=i: self._move_account(idx, -1))
