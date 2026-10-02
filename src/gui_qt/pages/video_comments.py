@@ -41,7 +41,7 @@ _SORT_NAMES = dict(_SORT_MODES)
 _PLACEHOLDERS = {
     ("douyin", False): "抖音视频链接 / aweme_id",
     ("douyin", True): "作者主页链接 / sec_uid（抓最新 N 个视频的评论）",
-    ("bili", False): "B站视频链接 / BV号 / av号（支持 b23.tv 短链）",
+    ("bili", False): "B站视频链接 / BV号 / av号 / 动态链接（t.bilibili.com、opus）",
     ("weibo", False): "微博视频链接（tv/show） / 普通微博链接 / 视频号 1034:xxx",
 }
 
@@ -235,11 +235,27 @@ class VideoCommentsPage(BasePage):
             self._say(f"⏳ {msg}")
 
         def work():
+            # plan 元素: (fetch_id, desc, ctype)。ctype=None 用各后端默认
+            # （视频路径）；仅 B 站 fetch_comments 支持 ctype（动态评论坐标）
             if kind == "sec_uid":
                 self._say("⏳ 获取作者视频列表...")
                 targets = be.fetch_author_videos(vid, count)
                 if not targets:
                     raise RuntimeError("未获取到作者视频列表（链接无效或被风控拦截）")
+                plan = [(vid2, desc, None) for vid2, desc in targets]
+            elif kind == "dynamic":
+                # B站动态（t.bilibili.com/{id} / opus/{id}）：详情预检拿权威
+                # 评论坐标——图文/转发动态的评论挂相簿（type=1/11）或源动态下，
+                # 只有纯文字动态才是 type=17 + 动态 ID 本身
+                self._say("⏳ 校验动态...")
+                vinfo = be.fetch_dynamic_info(vid)
+                if not vinfo.get("exists") and not vinfo.get("unknown"):
+                    raise RuntimeError(f"动态不存在（ID {vid}），请检查链接是否完整")
+                if vinfo.get("unknown"):
+                    self._say("⚠️ 动态预检被风控跳过，直接尝试抓取评论...")
+                plan = [(vinfo.get("comment_id") or vid,
+                         vinfo.get("desc") or "",
+                         vinfo.get("comment_type") or 17)]
             else:
                 # 预检视频存在性（风控误判时不阻断，直接尝试抓评论）
                 self._say("⏳ 校验视频...")
@@ -248,16 +264,20 @@ class VideoCommentsPage(BasePage):
                     raise RuntimeError(f"视频不存在（ID {vid}），请检查链接是否完整")
                 if vinfo.get("unknown"):
                     self._say("⚠️ 视频预检被风控跳过，直接尝试抓取评论...")
-                targets = [(vid, vinfo.get("desc") or "")]
+                plan = [(vid, vinfo.get("desc") or "", None)]
             results = []
-            for i, (vid2, desc) in enumerate(targets):
+            for i, (fetch_id, desc, ctype) in enumerate(plan):
                 if self._stop:
                     break
-                self._say(f"⏳ 视频 {i + 1}/{len(targets)}：{desc or vid2}")
-                comments = be.fetch_comments(
-                    vid2, pages=pages, progress=progress,
-                    should_stop=lambda: self._stop)
-                results.append({"id": str(vid2), "desc": desc,
+                self._say(f"⏳ 视频 {i + 1}/{len(plan)}：{desc or fetch_id}")
+                kwargs = {"pages": pages, "progress": progress,
+                          "should_stop": lambda: self._stop}
+                if ctype is not None:
+                    kwargs["ctype"] = ctype
+                comments = be.fetch_comments(fetch_id, **kwargs)
+                # 展示/导出目录用用户输入的动态 ID（fetch_id 可能是相簿 ID）
+                display_id = vid if kind == "dynamic" else fetch_id
+                results.append({"id": str(display_id), "desc": desc,
                                "comments": comments})
             return results
 

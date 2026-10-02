@@ -17,6 +17,7 @@ import httpx
 from bili.wbi import UA, build_cookie_header, sign_wbi
 
 VIEW_API = "https://api.bilibili.com/x/web-interface/view"
+DYN_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
 REPLY_API = "https://api.bilibili.com/x/v2/reply"
 PAGE_SIZE = 20
 IMG_HEADERS = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
@@ -41,10 +42,11 @@ def _headers() -> dict:
 # ==================== 输入解析 ====================
 
 def parse_input(text: str) -> tuple[str, str]:
-    """解析输入 → (kind, id)。kind: bvid / aid / ''。
+    """解析输入 → (kind, id)。kind: bvid / aid / dynamic / ''。
 
     支持：视频链接（bilibili.com/video/BV... 或 b23.tv 短链，短链在此网络跳转解析）、
-    纯 BV 号、纯 av 号/纯数字 aid、含 ?bvid= 的链接。
+    动态链接（t.bilibili.com/{id}、bilibili.com/opus/{id}，含动态短链）、
+    纯 BV 号、纯 av 号/纯数字 aid、含 ?bvid= 的链接、纯动态 ID（长数字）。
     """
     s = (text or "").strip()
     if not s:
@@ -70,6 +72,13 @@ def parse_input(text: str) -> tuple[str, str]:
         return "bvid", m.group(1)
     if re.fullmatch(r"\d{5,12}", s):
         return "aid", s
+    # 动态：t.bilibili.com/{id}、/opus/{id}、/dynamic/{id}；纯长数字动态 ID
+    m = (re.search(r"t\.bilibili\.com/(\d{5,20})", s)
+         or re.search(r"bilibili\.com/(?:opus|dynamic)/(\d{5,20})", s))
+    if m:
+        return "dynamic", m.group(1)
+    if re.fullmatch(r"\d{13,20}", s):
+        return "dynamic", s
     return "", ""
 
 
@@ -104,14 +113,88 @@ def fetch_video_info(ident: str, cookie: str = "") -> dict:
     return out
 
 
+def fetch_dynamic_info(dynamic_id: str, cookie: str = "") -> dict:
+    """动态详情预检（t.bilibili.com/{id} / opus/{id}）。
+
+    接口：/x/polymer/web-dynamic/v1/detail，参数名必须是 **id**（用
+    dynamic_id 会被 Gaia 风控拦 4101139），游客 + buvid Cookie 可查。
+    返回 {exists, unknown, desc, author, comment_count, comment_id,
+    comment_type}。comment_id/comment_type 是该动态评论区的权威坐标
+    （basic.comment_id_str/comment_type）：图文/转发动态的评论挂在相簿
+    （type=1/11）或源动态下，只有纯文字动态才是 type=17 + 动态 ID 本身。
+    """
+    out = {"exists": False, "unknown": False, "desc": "", "author": "",
+           "comment_count": 0, "comment_id": "", "comment_type": 0}
+    try:
+        with httpx.Client(timeout=15, headers=_headers()) as c:
+            ck = cookie or build_cookie_header(c, _login_cookie())
+            r = c.get(DYN_API, params={
+                "id": dynamic_id, "platform": "web",
+                "features": "itemOpusStyle,opusBigCover,onlyfanVote"},
+                headers={"Cookie": ck,
+                         "Referer": "https://www.bilibili.com/"})
+            d = r.json()
+    except Exception:
+        return {**out, "unknown": True}
+    code = d.get("code")
+    if code != 0:
+        if code in _RISK_CODES or code == 4101139:
+            out["unknown"] = True
+        return out
+    item = d.get("data", {}).get("item") or {}
+    if not item:
+        return out
+    basic = item.get("basic") or {}
+    author, desc = "", ""
+    comment_count = 0
+    # modules 新版是 dict（module_author/module_dynamic/module_stat），
+    # 旧版是 list——双兼容
+    mods = item.get("modules") or {}
+    if isinstance(mods, dict):
+        ma = mods.get("module_author") or {}
+        md = mods.get("module_dynamic") or {}
+        ms = mods.get("module_stat") or {}
+    else:
+        ma, md, ms = {}, {}, {}
+        for m in mods if isinstance(mods, list) else []:
+            if m.get("module_author"):
+                ma = m["module_author"]
+            elif m.get("module_dynamic"):
+                md = m["module_dynamic"]
+            elif m.get("module_stat"):
+                ms = m["module_stat"]
+    author = ma.get("name") or ""
+    # 正文：文字动态 desc / 图文 opus 标题或描述 / 转发动态 desc.text
+    major_opus = (md.get("major") or {}).get("opus") or {}
+    desc = ((md.get("desc") or {}).get("text")
+            or major_opus.get("title")
+            or ((major_opus.get("description") or {}).get("text") or ""))
+    cc = ms.get("comment")
+    if isinstance(cc, dict):
+        cc = cc.get("count")
+    try:
+        comment_count = int(cc or 0)
+    except (TypeError, ValueError):
+        comment_count = 0
+    out.update({
+        "exists": True, "desc": desc, "author": author,
+        "comment_count": comment_count,
+        "comment_id": str(basic.get("comment_id_str") or ""),
+        "comment_type": int(basic.get("comment_type") or 0),
+    })
+    return out
+
+
 def fetch_comments(oid: str, cookie: str = "", pages: int = 10,
-                   progress=None, should_stop=None) -> list:
+                   progress=None, should_stop=None, ctype: int = 1) -> list:
     """翻页抓顶层评论（含图片）。返回原始 reply dict 列表。
 
-    oid 支持 aid 或 BV 号（自动转 aid）。热评排序（sort=2）。
-    游客可翻前若干页，深翻页 B 站要求登录（会返回空 replies）。
+    oid 支持 aid 或 BV 号（自动转 aid）；视频评论 ctype=1（默认），
+    动态评论 ctype 取 fetch_dynamic_info 返回的 comment_type（1/11/17），
+    oid 为其 comment_id（图文/转发动态的评论挂在相簿或源动态下）。
+    热评排序（sort=2）。游客可翻前若干页，深翻页 B 站要求登录（会返回空 replies）。
     """
-    if not oid.isdigit():
+    if ctype == 1 and not oid.isdigit():
         info = fetch_video_info(oid, cookie)
         oid = info.get("aid") or ""
         if not oid:
@@ -124,7 +207,7 @@ def fetch_comments(oid: str, cookie: str = "", pages: int = 10,
         for pn in range(1, pages + 1):
             if should_stop and should_stop():
                 break
-            params = {"type": 1, "oid": int(oid), "pn": pn,
+            params = {"type": ctype, "oid": int(oid), "pn": pn,
                       "ps": PAGE_SIZE, "sort": 2}
             try:
                 url = sign_wbi(REPLY_API, params, c)
@@ -137,9 +220,13 @@ def fetch_comments(oid: str, cookie: str = "", pages: int = 10,
                 break
             code = d.get("code")
             if code != 0:
+                hint = "（游客深翻页需登录 Cookie）" if pn > 1 else ""
+                if code == -404:
+                    hint = "（评论区不存在：动态/视频已删除或未开启评论）"
+                elif code == 4101139 or code in _RISK_CODES:
+                    hint = "（被风控拦截，稍后重试或配置 B 站 Cookie）"
                 if progress:
-                    progress(f"第{pn}页 code={code}，停止"
-                             + ("（游客深翻页需登录 Cookie）" if pn > 1 else ""), pn, pages)
+                    progress(f"第{pn}页 code={code}，停止{hint}", pn, pages)
                 break
             data = d.get("data") or {}
             replies = data.get("replies") or []
