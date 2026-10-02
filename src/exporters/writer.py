@@ -7,13 +7,39 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 def _sanitize_filename(name: str, max_len: int = 60) -> str:
     """安全文件名（统一实现见 toolbox.utils.sanitize_filename）"""
     from toolbox.utils import sanitize_filename
     return sanitize_filename(name, max_len, "untitled")
+
+def _atomic_write(path: str, write: Callable) -> None:
+    """先写同目录唯一临时文件再 os.replace：并行导出同名文件时永不交错写坏。"""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            write(f)
+        os.replace(tmp, path)
+    except Exception:
+        try: os.remove(tmp)
+        except OSError: pass
+        raise
+
+def _existing_video_id(path: str) -> Optional[str]:
+    """读取已导出 json 的视频ID。文件缺失/损坏（旧版并发写坏）/无ID 返回 None。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        return str(data.get("视频ID") or "") or None
+    except Exception:
+        return None
 
 
 def _fmt_duration(sec: int) -> str:
@@ -43,9 +69,8 @@ def export_json(info_list: list, output_path: Optional[str] = None, pretty: bool
     data = _prepare_data(info_list)
     if not output_path:
         output_path = f"video_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2 if pretty else None)
+    _atomic_write(output_path, lambda f: json.dump(
+        data, f, ensure_ascii=False, indent=2 if pretty else None))
     return os.path.abspath(output_path)
 
 
@@ -123,8 +148,17 @@ def export_xlsx(info_list: list, output_path: Optional[str] = None) -> str:
 
     if not output_path:
         output_path = f"video_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    wb.save(output_path)
+    d = os.path.dirname(output_path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".xlsx")
+    os.close(fd)
+    try:
+        wb.save(tmp)
+        os.replace(tmp, output_path)
+    except Exception:
+        try: os.remove(tmp)
+        except OSError: pass
+        raise
     return os.path.abspath(output_path)
 
 
@@ -167,8 +201,7 @@ def export_md(info_list: list, output_path: Optional[str] = None) -> str:
             for k, v in rows: lines.append(f"| {k} | {v} |")
             lines.append("")
     content = "\n".join(lines)
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f: f.write(content)
+    _atomic_write(output_path, lambda f: f.write(content))
     return os.path.abspath(output_path)
 
 
@@ -198,17 +231,42 @@ def export_per_video(info_list: list, output_dir: Optional[str] = None, formats:
     os.makedirs(base_dir, exist_ok=True)
     from toolbox.utils import platform_cn, DATA_DIR_SUFFIX
 
-    def _export_one(info):
+    # 批内同名预分配：不同条目撞同一 stem（B站动态与视频同日同标题最典型——
+    # 动态正文常与视频标题一致）时，后到者追加视频ID后缀，
+    # 否则并行导出会写同一文件互相覆盖/交错损坏
+    taken: dict[str, str] = {}   # stem → 首个占用者的视频ID
+    jobs: list[tuple] = []
+    for info in info_list:
+        stem = _build_stem(info)
+        my_id = str(info.video_id or "")
+        owner = taken.get(stem)
+        if owner is not None and owner != my_id:
+            stem = f"{stem}_{_sanitize_filename(my_id, 24) or 'x'}"
+        elif owner is None:
+            taken[stem] = my_id
+        jobs.append((info, stem))
+
+    def _export_one(job):
+        info, stem = job
         paths: list[str] = []
         skipped_local: list[str] = []
-        stem = _build_stem(info)
         # 按平台分文件夹: video_data/抖音_文件/, video_data/B站_文件/ ...（媒体在对应 {平台}_媒体/）
         plat_dir = os.path.join(base_dir, platform_cn(info.platform) + DATA_DIR_SUFFIX)
         os.makedirs(plat_dir, exist_ok=True)
+        my_id = str(info.video_id or "")
+        # 磁盘同名占位：{stem}.json 属于另一条目（视频ID不同）→ 追加自身ID后缀
+        # （分批导出时批内预分配管不到的历史文件）
+        jpath = os.path.join(plat_dir, f"{stem}.json")
+        if os.path.exists(jpath):
+            other = _existing_video_id(jpath)
+            if other is not None and other != my_id:
+                stem = f"{stem}_{_sanitize_filename(my_id, 24) or 'x'}"
+                jpath = os.path.join(plat_dir, f"{stem}.json")
+        # json 健康且同ID才整体跳过；损坏的旧文件（历史并发写坏）覆盖重写自愈
+        same_saved = _existing_video_id(jpath) == my_id
         for fmt in formats:
             path = os.path.join(plat_dir, f"{stem}.{fmt}")
-            # 已存在则跳过（用户移走/删除/改名后路径不存在，会重新保存）
-            if skip_existing and os.path.exists(path):
+            if skip_existing and os.path.exists(path) and (fmt != "json" or same_saved):
                 skipped_local.append(path)
                 continue
             if fmt == "json":
@@ -221,12 +279,12 @@ def export_per_video(info_list: list, output_dir: Optional[str] = None, formats:
             paths.append(path)
         return info.platform, paths, skipped_local
 
-    if len(info_list) > 4:
+    if len(jobs) > 4:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=min(8, len(info_list))) as ex:
-            outcomes = list(ex.map(_export_one, info_list))
+        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+            outcomes = list(ex.map(_export_one, jobs))
     else:
-        outcomes = [_export_one(info) for info in info_list]
+        outcomes = [_export_one(job) for job in jobs]
 
     results: dict[str, list[str]] = {}
     skipped: list[str] = []
@@ -238,9 +296,7 @@ def export_per_video(info_list: list, output_dir: Optional[str] = None, formats:
 
 def _export_raw_json(info, path: str):
     raw = info.raw_data if isinstance(info.raw_data, dict) else {}
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(raw, f, ensure_ascii=False, indent=2)
+    _atomic_write(path, lambda f: json.dump(raw, f, ensure_ascii=False, indent=2))
 
 
 def export_per_video_flat(info_list: list, output_dir: Optional[str] = None, formats: Optional[list[str]] = None, skip_existing: bool = True) -> tuple[list[str], list[str]]:

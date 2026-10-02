@@ -147,7 +147,7 @@ class DownloadFloatWindow(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setMaximumHeight(360)
+        self._scroll.setMaximumHeight(560)
         host = QWidget()
         self._cards_lay = QVBoxLayout(host)
         self._cards_lay.setContentsMargins(0, 0, 0, 0)

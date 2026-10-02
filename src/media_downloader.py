@@ -598,7 +598,10 @@ def download_media(
         return h
 
     stats = {"images": 0, "covers": 0, "live": 0, "videos": 0, "total": len(tasks),
-             "failed": 0, "skipped": 0, "cancelled": False}
+             "failed": 0, "skipped": 0, "cancelled": False,
+             # 成功/跳过任务的 (最终路径, 类型)：调用方直接把文件挂到 UI 行，
+             # 免去下载完成后全量重扫磁盘（曾致 GUI 未响应）
+             "paths": []}
     if progress_callback:
         progress_callback(0, len(tasks), "")
 
@@ -678,6 +681,8 @@ def download_media(
         # 已下载自动跳过（原图）：本地文件与原图大小一致 → 不发下载请求
         if skip_existing and _should_skip_download(url, fpath, hdrs):
             _bump("skipped")
+            with _lock:
+                stats["paths"].append((_find_existing_media(fpath) or fpath, mtype))
             progress.update(pbar, description=f"[dim]已下载，跳过 {name}[/dim]")
             progress.advance(pbar)
             _evt("skip", name)
@@ -729,6 +734,10 @@ def download_media(
                     stats["covers"] += 1
                 elif mtype == "视频":
                     stats["videos"] += 1
+                # 416 快速跳过（Range 起点超文件尾=已完整）时路径未按
+                # Content-Type 调整过扩展名，用 _find_existing_media 兜底
+                stats["paths"].append(
+                    (_find_existing_media(filepath) or filepath, mtype))
             _evt("done", name, True)
         else:
             # 大文件中途取消：半截文件保留供续传，计失败但标记取消

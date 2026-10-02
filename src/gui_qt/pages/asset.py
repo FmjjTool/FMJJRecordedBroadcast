@@ -14,6 +14,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +45,36 @@ BATCH = 20  # 懒加载：每批渲染数量
 
 # 平台筛选下拉显示中文名 -> 英文标识（筛选用英文键）
 _CN2EN = {cn: en for en, cn in PLATFORM_CN.items()}
+
+
+def _no_dl_store_path() -> Path:
+    """「不可下载」标记的持久化文件（config/no_download_keys.json）。"""
+    from toolbox.config_manager import get_config_dir
+    return get_config_dir() / "no_download_keys.json"
+
+
+def _load_no_dl() -> dict:
+    """载入不可下载标记：auto=纯文本自动标记 manual=用户手动标记 allow=用户解除后豁免。"""
+    try:
+        data = json.loads(_no_dl_store_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {
+                "auto": set(data.get("auto") or []),
+                "manual": set(data.get("manual") or []),
+                "allow": set(data.get("allow") or []),
+            }
+    except Exception:
+        pass
+    return {"auto": set(), "manual": set(), "allow": set()}
+
+
+def _save_no_dl(store):
+    try:
+        _no_dl_store_path().write_text(json.dumps(
+            {k: sorted(v) for k, v in store.items()}, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+    except Exception:
+        pass
 
 
 class _ProgressBridge(QObject):
@@ -355,6 +386,7 @@ class AssetPage(BasePage):
         self._collected_all_items = []  # 当前平台筛选后的列表
         self._collected_page = 1        # 当前页码（分页渲染）
         self._dl_state = {}             # 条目下载状态：'downloading' / 'done'
+        self._no_dl = _load_no_dl()     # 不可下载标记（auto/manual/allow，持久化）
         self._search_var = ""           # 搜索关键词
         self._checked_keys = set()      # 勾选条目键（批量下载用）
         self._reload_gen = 0            # 骨架加载代数守卫（中途刷新作废旧轮）
@@ -888,66 +920,78 @@ class AssetPage(BasePage):
                     link = entry["video_url"]
                     entry["is_dynamic"] = (vid.startswith("dyn_")
                                            or "t.bilibili.com" in link)
-                # 匹配媒体（date + 标题双向子串 + 平台一致）
-                # 平台归属由文件夹 {平台}_{文件|媒体} 决定：媒体的平台目录必须与
-                # json 的平台一致才可合并（同内容双平台各发一份时，跨平台匹配会把
-                # B站下载的媒体抢给抖音条目——json 平台列与实际媒体张冠李戴）
-                title_norm = _sanitize_title_key(title).strip("_")
-                json_platform = _norm_subdir(path.parent.name) or platform
-
-                def _match(m_t):
-                    m_t = m_t.strip("_") if m_t else ""
-                    if not m_t or not title_norm:
-                        return False
-                    if len(m_t) < 4:  # 太短的标题片段不匹配（避免误配）
-                        return False
-                    return m_t in title_norm or title_norm[:40] in m_t
-
-                # 第1轮：同日期 + 同平台（最精确）
-                for (m_date, m_title, m_sub), mfs in list(media_map.items()):
-                    if mfs and mfs[0].get("pkg"):
-                        continue  # B站资源包整体条目，不参与 json 匹配
-                    if m_date != date_part or m_sub != json_platform:
-                        continue
-                    if _match(m_title):
-                        entry["media_files"] = media_map.pop((m_date, m_title, m_sub))
-                        break
-                # 第2轮：同日期 + 无平台目录的旧平铺媒体（根目录旧 mp4/jpg）；
-                # 不允许跨平台匹配（B站媒体绝不给抖音条目）
-                if not entry["media_files"]:
-                    for (m_date, m_title, m_sub), mfs in list(media_map.items()):
-                        if mfs and mfs[0].get("pkg"):
-                            continue
-                        if m_date != date_part or m_sub:
-                            continue
-                        if _match(m_title):
-                            entry["media_files"] = media_map.pop((m_date, m_title, m_sub))
-                            break
-                # 第3轮：无日期也无平台目录的旧格式媒体，只按标题兜底
-                if not entry["media_files"]:
-                    for (m_date, m_title, m_sub), mfs in list(media_map.items()):
-                        if mfs and mfs[0].get("pkg"):
-                            continue
-                        if m_date or m_sub:  # 只处理完全旧格式的媒体
-                            continue
-                        if _match(m_title):
-                            entry["media_files"] = media_map.pop((m_date, m_title, m_sub))
-                            break
-                # 预期图片数（从 raw json 提取 pics，用于"下载不完整"筛选）
-                try:
-                    entry["expected_imgs"] = len(self._extract_pic_urls(entry)[0])
-                except Exception:
-                    entry["expected_imgs"] = 0
-                # 存量数据兜底：json 无时长（B站动态视频 duration_text 采集端曾漏提）
-                # 但本地有视频文件 → ffprobe 读实际时长
-                if not entry.get("duration"):
-                    vd = next((m["path"] for m in entry["media_files"]
-                               if m["type"] == "video" and os.path.exists(m["path"])), "")
-                    if vd:
-                        entry["duration"] = _probe_video_duration(vd)
+                # 匹配用的规范化标题/平台（匹配挪到全部 json 解析完后统一做：
+                # 文件名倒序逐条匹配时，先处理的长标题 json（如「封茗囧菌 都先
+                # 好好休息——！辛苦啦」）会按子串抢走短标题 json（「封茗囧菌」）
+                # 的媒体组——精确匹配必须先于任何子串匹配、跨条目全局生效）
+                entry["_tn"] = _sanitize_title_key(title).strip("_")
+                entry["_jp"] = _norm_subdir(path.parent.name) or platform
                 results.append(entry)
             except Exception:
                 continue
+
+        # 2.1 媒体匹配：平台一致 + 日期一致 + 标题「精确 → 子串」两级。
+        # 平台归属由文件夹 {平台}_{文件|媒体} 决定：媒体的平台目录必须与
+        # json 的平台一致才可合并（同内容双平台各发一份时，跨平台匹配会把
+        # B站下载的媒体抢给抖音条目——json 平台列与实际媒体张冠李戴）。
+        # 轮次优先级：①同日期+同平台 → ②同日期+旧平铺无平台目录 → ③旧格式
+        # 无日期无平台目录；每轮先全局精确匹配再全局子串兜底。
+        _owner = {}  # 媒体组 key → 抢到该组的 entry（同名条目共享判定用）
+
+        def _exact(tn, m_t):
+            return bool(tn) and len(tn) >= 2 and (m_t or "").strip("_") == tn
+
+        def _sub(tn, m_t):
+            m_t = m_t.strip("_") if m_t else ""
+            if not m_t or not tn or len(m_t) < 4:  # 太短的标题片段不匹配（避免误配）
+                return False
+            return m_t in tn or tn[:40] in m_t
+
+        def _phase(matcher, m_date_ok, m_sub_ok):
+            for entry in results:
+                if entry["media_files"]:
+                    continue
+                tn, jp, dp = entry["_tn"], entry["_jp"], entry["date_part"]
+                for key, mfs in list(media_map.items()):
+                    if not mfs or mfs[0].get("pkg"):
+                        continue  # B站资源包整体条目，不参与 json 匹配
+                    m_date, m_title, m_sub = key
+                    if not (m_date_ok(m_date, dp) and m_sub_ok(m_sub, jp)):
+                        continue
+                    if matcher(tn, m_title):
+                        entry["media_files"] = media_map.pop(key)
+                        _owner[key] = entry
+                        break
+
+        _phase(_exact, lambda md, dp: md == dp, lambda ms, jp: ms == jp)
+        _phase(_sub, lambda md, dp: md == dp, lambda ms, jp: ms == jp)
+        _phase(_exact, lambda md, dp: md == dp, lambda ms, jp: not ms)
+        _phase(_sub, lambda md, dp: md == dp, lambda ms, jp: not ms)
+        _phase(_exact, lambda md, dp: not md, lambda ms, jp: not ms)
+        _phase(_sub, lambda md, dp: not md, lambda ms, jp: not ms)
+
+        # 2.2 同名条目共享：同日期+同平台+标题完全一致的多条 json（B站转发动态
+        # 与原视频同标题同日发布最典型——同一份媒体两边都是正主），没抢到媒体
+        # 组的条目从抢到的条目共享一份（列表独立，互不影响删除）
+        for it in results:
+            if not it.get("media_files") and len(it["_tn"]) >= 4:
+                for owner in _owner.values():
+                    if (owner["_tn"] == it["_tn"] and owner["_jp"] == it["_jp"]
+                            and owner["date_part"] == it["date_part"]):
+                        it["media_files"] = list(owner["media_files"])
+                        break
+
+        # 2.3 预期图片数（时长探测已移除：ffprobe 子进程逐视频探测曾是
+        # 扫描的主要耗时（实测 20 次探测 4.07s / 全扫描 4.6s），且每次下载
+        # 完成/切页都触发扫描，子进程风暴+GIL 竞争导致界面未响应——
+        # 时长改为详情窗打开时按需后台探测）
+        for entry in results:
+            try:
+                entry["expected_imgs"] = len(self._extract_pic_urls(entry)[0])
+            except Exception:
+                entry["expected_imgs"] = 0
+            entry.pop("_tn", None)
+            entry.pop("_jp", None)
 
         # 3. 剩余未匹配媒体（无对应 json）→ 独立条目
         for (date_part, tk, subdir), mfs in media_map.items():
@@ -964,7 +1008,7 @@ class AssetPage(BasePage):
                 "play_count": 0, "like_count": 0, "comment_count": 0,
                 "cover_url": imgs[0]["path"] if imgs else (vids[0]["path"] if vids else ""),
                 "publish_time": "", "video_url": "",
-                "duration": _probe_video_duration(vids[0]["path"]) if vids else 0,
+                "duration": 0,
                 "fetched_at": "",
                 "date_part": date_part,
                 "file_path": (mfs[0] or {}).get("path", "") if mfs else "",
@@ -972,6 +1016,18 @@ class AssetPage(BasePage):
                 "expected_imgs": len(imgs),  # 独立媒体条目本身完整
             })
         results.sort(key=lambda r: (r.get("date_part") or ""), reverse=True)
+        # 纯文本条目自动写入「不可下载」标记（用户解除过的在 allow 豁免集里不再自动加回）
+        changed = False
+        for it in results:
+            key = self._dl_key(it)
+            if (key and key not in self._no_dl["allow"]
+                    and key not in self._no_dl["manual"]
+                    and key not in self._no_dl["auto"]
+                    and self._item_is_text_only(it)):
+                self._no_dl["auto"].add(key)
+                changed = True
+        if changed:
+            _save_no_dl(self._no_dl)
         return results
 
     def _scan_media_files(self, root, media_map):
@@ -1090,12 +1146,18 @@ class AssetPage(BasePage):
                          or kw in (it.get("author") or "").lower()
                          or kw in (it.get("video_id") or "").lower()
                          or kw in (it.get("description") or "").lower()]
-            # 时间排序（正序/倒序；空日期始终排最后）
-            placeholder = "00000000" if desc else "99999999"
+            # 时间排序（正序/倒序；按发布日期+时间，无发布时间回退文件名日期，空值始终排最后）
+            placeholder = "00000000000000" if desc else "99999999999999"
 
             def _sort_key(it):
+                # 发布时间数字位（分钟级 12 位 / 带秒 14 位 / 纯日期 8 位）右补零
+                # 对齐 14 位——此前要求恰好 14 位，分钟级 "2026-10-01 23:18"
+                # 只有 12 位全部判失败回退纯日期，时间序从未生效
+                t = re.sub(r"\D", "", it.get("publish_time") or "")
+                if len(t) >= 8:
+                    return (t + "0" * 14)[:14]
                 d = it.get("date_part") or ""
-                return d if d else placeholder
+                return (d + "0" * 14)[:14] if d else placeholder
             self._collected_all_items = sorted(items, key=_sort_key, reverse=desc)
             if not keep_page:
                 self._collected_page = 1
@@ -1330,6 +1392,10 @@ class AssetPage(BasePage):
             media_str += f" 🖼{imgs}"
         if vids:
             media_str += f" 🎬{vids}"
+        no_dl = self._no_dl_flagged(key)
+        if no_dl:
+            media_str += (' <span style="color:#e53935;">⛔不可下载'
+                          '（右键解除）</span>')
 
         def _esc(s):
             return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1351,12 +1417,16 @@ class AssetPage(BasePage):
         # 右侧按钮：重新下载 / 下载封面（有封面无媒体时）/ 删除（42×32，原 32×28 不好点）
         redo_btn = QPushButton("↻")
         redo_btn.setFixedSize(42, 32)
-        redo_btn.setToolTip("重新下载（忽略已下载状态）")
+        if no_dl:
+            redo_btn.setEnabled(False)
+            redo_btn.setToolTip("已标记不可下载（纯文本无媒体），右键行可解除限制")
+        else:
+            redo_btn.setToolTip("重新下载（忽略已下载状态）")
         redo_btn.setStyleSheet(common.icon_btn_style(
             False, "background: transparent; border: 1px solid #c8cdd6; color: #2e7d32; font-size: 15px;"))
         redo_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e, force=True))
         h.addWidget(redo_btn)
-        if it.get("cover_url") and not it.get("media_files"):
+        if it.get("cover_url") and not it.get("media_files") and not no_dl:
             dl_btn = QPushButton("📥")
             dl_btn.setFixedSize(42, 32)
             # tooltip 与 _download_for_item 路由一致：视频条目实际下的是视频+封面
@@ -1413,6 +1483,13 @@ class AssetPage(BasePage):
             menu.addAction("🔗 复制视频链接").triggered.connect(
                 lambda _=False: (QApplication.clipboard().setText(url),
                                  self.app.toast("已复制视频链接", "success")))
+            menu.addAction("🌐 打开链接").triggered.connect(
+                lambda _=False: QDesktopServices.openUrl(QUrl(url)))
+            shown = True
+        elif (it.get("raw_url") or "").strip():
+            raw = it.get("raw_url").strip()
+            menu.addAction("🌐 打开链接").triggered.connect(
+                lambda _=False: QDesktopServices.openUrl(QUrl(raw)))
             shown = True
         if shown:
             menu.addSeparator()
@@ -1437,7 +1514,59 @@ class AssetPage(BasePage):
             shown = True
         if not shown:
             menu.addAction("（该条目没有本地 MD / 媒体文件）").setEnabled(False)
+        # 下载限制：纯文本自动标记可解除；正常条目可手动标记为不可下载
+        menu.addSeparator()
+        key = self._dl_key(it)
+        if self._no_dl_flagged(key):
+            menu.addAction("🔓 解除下载限制（允许下载）").triggered.connect(
+                lambda _=False, k=key: self._unset_no_dl(k))
+        else:
+            menu.addAction("🔒 标记为不可下载").triggered.connect(
+                lambda _=False, k=key: self._set_no_dl_manual(k))
         menu.exec(global_pos)
+
+    def _set_no_dl_manual(self, key):
+        """用户手动标记某条目不可下载（持久化 + 行级刷新）。"""
+        self._no_dl["manual"].add(key)
+        self._no_dl["auto"].discard(key)
+        self._no_dl["allow"].discard(key)
+        _save_no_dl(self._no_dl)
+        self.app.toast("已标记为不可下载（右键行可解除限制）", "info")
+        self._refresh_flagged_rows(key)
+
+    def _unset_no_dl(self, key):
+        """解除不可下载限制：移除标记并写入 allow 豁免（之后扫描不再自动加回）。"""
+        self._no_dl["auto"].discard(key)
+        self._no_dl["manual"].discard(key)
+        self._no_dl["allow"].add(key)
+        _save_no_dl(self._no_dl)
+        self.app.toast("已解除下载限制，该条目可重新下载", "success")
+        self._refresh_flagged_rows(key)
+
+    def _refresh_flagged_rows(self, key):
+        """下载限制变化后原地刷新对应行（不重扫磁盘，直接重建当前页受影响行）。"""
+        lay = self.collected_layout
+        total = len(self._collected_all_items)
+        if not total or not key:
+            return
+        total_pages = (total + BATCH - 1) // BATCH
+        page = min(max(1, self._collected_page), total_pages)
+        start = (page - 1) * BATCH
+        row_idx = 0
+        for i in range(start, min(start + BATCH, total)):
+            it = self._collected_all_items[i]
+            if self._dl_key(it) != key:
+                row_idx += 1
+                continue
+            if row_idx >= lay.count():
+                break
+            old = lay.itemAt(row_idx).widget()
+            if old is None:
+                break
+            lay.insertWidget(row_idx, self._make_collected_row(it, i + 1))
+            old.setParent(None)
+            old.deleteLater()
+            break
 
     def _open_media_video(self, it):
         """双击缩略图：优先播放本地视频文件，无则打开链接。"""
@@ -1525,10 +1654,45 @@ class AssetPage(BasePage):
             return n_imgs > 0 or any(m["type"] == "video" for m in mfs)
         return True
 
+    def _item_is_text_only(self, it) -> bool:
+        """纯文本条目：无任何可下载媒体源（无视频源、无图片/live、无封面、本地无媒体文件）。"""
+        if it.get("media_files"):
+            return False
+        vid = str(it.get("video_id") or "")
+        plat = it.get("platform", "")
+        if plat == "douyin" and vid:
+            return False
+        if plat == "bilibili" and (vid and not vid.startswith("dyn_")
+                                  or self._bili_dynamic_type(it) == "av"):
+            return False
+        if self._item_has_video(it):
+            return False
+        if (it.get("cover_url") or "").strip():
+            return False
+        try:
+            pics, lives = self._extract_pic_urls(it)
+        except Exception:
+            pics, lives = [], []
+        return not pics and not lives
+
+    def _no_dl_flagged(self, key) -> bool:
+        """该条目是否被标记为不可下载（auto 纯文本自动 / manual 用户手动）。"""
+        return key in self._no_dl["auto"] or key in self._no_dl["manual"]
+
     def _quality_to_qn(self, label):
         """全局清晰度 → B站 qn 编号（最高画质返回 None，B站自动选最高逐级降）。"""
         return {"8K": 127, "杜比视界": 126, "HDR": 125, "4K": 120,
                 "1080P60": 116, "1080P": 80, "720P": 64, "480P": 32}.get(label)
+
+    def _dl_threads(self, quiet: bool) -> int:
+        """单条下载的线程数：批量模式条目间已并发（每条内部单流防请求风暴）；
+        单条点击取「线程」下拉的值（图片并行下 / 大视频 IDM 分段）。"""
+        if quiet:
+            return 1
+        try:
+            return max(1, int(self.batch_thread_sel.currentText()))
+        except (ValueError, RuntimeError, AttributeError):
+            return 4
 
     def _download_for_item(self, it, force=False, on_finished=None, quiet=False,
                            sub_bridge=None, cancel_ev=None):
@@ -1537,6 +1701,11 @@ class AssetPage(BasePage):
         quiet=True（批量）：sub_bridge 上报当前文件进度给总进度条，cancel_ev 联动取消。
         """
         key = self._dl_key(it)
+        if self._no_dl_flagged(key):
+            self.app.toast("该条目已标记为不可下载（纯文本无媒体），右键行可解除限制", "warning")
+            if on_finished:
+                on_finished()
+            return
         state = self._dl_state.get(key)
         if state == "downloading":
             self.app.toast("文件下载中，请稍后再试", "warning")
@@ -1562,15 +1731,36 @@ class AssetPage(BasePage):
             self._download_images_for_item(it, on_finished=on_finished, quiet=quiet, force=force,
                                            sub_bridge=sub_bridge, cancel_ev=cancel_ev)
 
-    def _refresh_rows_for(self, items):
+    def _refresh_rows_for(self, items, new_paths=None):
         """下载完成后的行级刷新：只重建给定条目的行，不动其他行。
 
-        整列表 _refresh_collected 会重建全部控件 + 骨架闪烁 + 重置滚动位置，
-        单条下载完成时体验太差；这里后台重扫磁盘，仅原地替换受影响条目的行。
-        条目不在当前页（被筛选/其他页）时只更新数据，不重建行。
+        new_paths=[(path, 类型中文), ...]（download_media stats["paths"]）时
+        直接把文件挂到条目——不触发全量磁盘扫描（_load_disk_items 要读
+        全部 json+raw，曾致下载完成后界面未响应）；无 paths 时回退全量扫描。
         """
         keys = {self._dl_key(it) for it in items}
         gen = self._reload_gen  # 不递增：不使进行中的整列表刷新作废
+
+        if new_paths:
+            # 轻量路径：下载结果已知，直接构造 media_files（与 _scan_media_files
+            # 的条目结构一致），毫秒级完成。单条下载场景 items 只有一条，
+            # 视频流+封面等全部路径都挂到该条
+            target = items[0]
+            existing = {m["path"] for m in target.get("media_files", [])}
+            for path, _mtype in new_paths:
+                if not path or not os.path.exists(path) or path in existing:
+                    continue
+                ext = os.path.splitext(path)[1].lower()
+                target.setdefault("media_files", []).append({
+                    "path": path, "name": os.path.basename(path),
+                    "type": "image" if ext in self._IMG_EXTS else "video",
+                    "date_part": target.get("date_part", ""),
+                    "author": target.get("author", ""),
+                    "subdir": target.get("platform", ""),
+                })
+                existing.add(path)
+            self._replace_rows_for_keys(keys)
+            return
 
         def work():
             return self._load_disk_items()
@@ -1589,31 +1779,34 @@ class AssetPage(BasePage):
                 nd = disk_by_key.get(self._dl_key(it))
                 if nd is not None:
                     it.update(nd)
-            # 原地替换当前页里这些条目的行控件
-            lay = self.collected_layout
-            total = len(self._collected_all_items)
-            if not total:
-                return
-            total_pages = (total + BATCH - 1) // BATCH
-            page = min(max(1, self._collected_page), total_pages)
-            start = (page - 1) * BATCH
-            row_idx = 0  # 布局结构：[行...] + pager + stretch，行从 0 连续排
-            for i in range(start, min(start + BATCH, total)):
-                it = self._collected_all_items[i]
-                if self._dl_key(it) not in keys:
-                    row_idx += 1
-                    continue
-                if row_idx >= lay.count():
-                    break
-                old = lay.itemAt(row_idx).widget()
-                if old is None:  # pager/stretch 位置，说明行已数完
-                    break
-                lay.insertWidget(row_idx, self._make_collected_row(it, i + 1))
-                old.setParent(None)
-                old.deleteLater()
-                row_idx += 1
+            self._replace_rows_for_keys(keys)
 
         run_bg(work, done)
+
+    def _replace_rows_for_keys(self, keys):
+        """原地替换当前页里这些条目的行控件（不重建整页）。"""
+        lay = self.collected_layout
+        total = len(self._collected_all_items)
+        if not total:
+            return
+        total_pages = (total + BATCH - 1) // BATCH
+        page = min(max(1, self._collected_page), total_pages)
+        start = (page - 1) * BATCH
+        row_idx = 0  # 布局结构：[行...] + pager + stretch，行从 0 连续排
+        for i in range(start, min(start + BATCH, total)):
+            it = self._collected_all_items[i]
+            if self._dl_key(it) not in keys:
+                row_idx += 1
+                continue
+            if row_idx >= lay.count():
+                break
+            old = lay.itemAt(row_idx).widget()
+            if old is None:  # pager/stretch 位置，说明行已数完
+                break
+            lay.insertWidget(row_idx, self._make_collected_row(it, i + 1))
+            old.setParent(None)
+            old.deleteLater()
+            row_idx += 1
 
     def _toggle_select_all(self, state):
         """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""
@@ -1634,9 +1827,12 @@ class AssetPage(BasePage):
         if not items:
             self.app.toast("请先勾选要下载的条目", "info")
             return
-        todo, skip = [], 0
+        todo, skip, skip_no_dl = [], 0, 0
         for it in items:
             key = self._dl_key(it)
+            if self._no_dl_flagged(key):  # 不可下载标记（纯文本/手动）→ 跳过
+                skip_no_dl += 1
+                continue
             if self._dl_state.get(key) == "downloading":
                 skip += 1
                 continue
@@ -1646,8 +1842,12 @@ class AssetPage(BasePage):
                 continue
             todo.append(it)
         n = len(todo)
-        if skip:
+        if skip and skip_no_dl:
+            self.app.toast(f"跳过 {skip} 条已完整、{skip_no_dl} 条不可下载，开始下载 {n} 条", "info")
+        elif skip:
             self.app.toast(f"跳过 {skip} 条（已下载完整），开始下载 {n} 条", "info")
+        elif skip_no_dl:
+            self.app.toast(f"跳过 {skip_no_dl} 条不可下载（纯文本），开始下载 {n} 条", "info")
         if not todo:
             return
         try:
@@ -1741,27 +1941,24 @@ class AssetPage(BasePage):
 
         cancel_ev = cancel_ev or threading.Event()
         bridge = _ProgressBridge()
-        dlg = None
+        card = None
         if not quiet:
-            dlg = _make_progress_dlg(self, "下载 B站视频", 1, cancel_ev)
-            dlg.setLabelText("正在解析视频流...")
+            th = self._dl_threads(quiet)
+            from gui_qt.download_float import get_float
+            card = get_float().add_batch(
+                f"资产 · {(it.get('title') or 'B站视频')[:24]}", threads=th,
+                cancel_cb=cancel_ev.set)
+            # 手动声明 segments 模式：B站链路是视频流+音频流（自带 IDM 分段），
+            # 不走 download_media 的 plan 事件，浮窗按分段条 + N 线程显示
+            card.handle_event("plan", "segments", 1, th)
+            card.handle_event("start", (it.get("title") or vid)[:40])
+
+            def on_prog(done_n, total_n, name):
+                card.handle_event("bytes", name or "视频流", int(done_n), int(total_n))
+
+            bridge.updated.connect(on_prog)
         elif sub_bridge is not None:
             bridge = sub_bridge  # 批量模式：进度上报给总进度条
-
-        def on_prog(done_n, total_n, name):
-            if dlg is None:
-                return
-            if total_n != dlg.maximum():
-                dlg.setMaximum(max(total_n, 1))
-            dlg.setValue(done_n)
-            if total_n > 100000:  # 字节进度（视频流）
-                dlg.setLabelText(
-                    f"下载中 {done_n / 1048576:.1f}/{total_n / 1048576:.1f} MB")
-            else:
-                dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
-
-        if dlg is not None:
-            bridge.updated.connect(on_prog)
 
         def work():
             from bilibili_download import download_bilibili_by_bvid
@@ -1773,7 +1970,10 @@ class AssetPage(BasePage):
                 cookie=get_cookie("bilibili") or "",
                 out_dir=out_dir, title=it.get("title", ""),
                 author=it.get("author", ""), publish_time=it.get("publish_time", ""),
+                threads=self._dl_threads(quiet),
                 progress_cb=(lambda d, t: bridge.emit_progress(int(d), int(t), "视频流")),
+                seg_progress_cb=(lambda i, d, t: card.handle_event("seg", int(i), int(d), int(t)))
+                if card is not None else None,
             )
             # 同步下载官方封面：与视频同名 .jpg（改名索引），列表即可显示本地缩略图
             cover = (it.get("cover_url") or "").strip()
@@ -1792,20 +1992,30 @@ class AssetPage(BasePage):
             return vpath
 
         def done(result, err):
-            if dlg is not None and dlg.isVisible():
-                dlg.close()
+            ok = (err is None) and bool(result) and os.path.exists(result)
+            if card is not None:
+                card.handle_event("done", (it.get("title") or vid)[:40], ok)
+                card.finish("✅ B站视频已下载" if ok else "❌ B站视频下载失败/取消")
+            paths = []
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
-            else:
+            elif result:
                 self._dl_state[self._dl_key(it)] = "done"
-                stem = os.path.splitext(result)[0] if result else ""
-                cover_ok = bool(stem) and any(
-                    os.path.exists(stem + e) for e in (".jpg", ".jpeg", ".png", ".webp"))
+                stem = os.path.splitext(result)[0]
+                cover_ok = False
+                for e in (".jpg", ".jpeg", ".png", ".webp"):
+                    if os.path.exists(stem + e):
+                        cover_ok = True
+                        paths.append((stem + e, "封面"))
+                        break
+                if os.path.exists(result):
+                    paths.append((result, "视频"))
                 self.app.toast("✅ 已下载 B站视频" + ("（含封面）" if cover_ok else ""),
                                "success")
             if not quiet:  # 批量模式由 _advance 统一刷新一次，避免逐条骨架闪烁
-                self._refresh_rows_for([it])
+                # 轻量刷新：视频/封面路径已知，直接挂行（不触发全量磁盘扫描）
+                self._refresh_rows_for([it], new_paths=paths or None)
             if on_finished:
                 on_finished()
 
@@ -1863,23 +2073,16 @@ class AssetPage(BasePage):
 
         cancel_ev = cancel_ev or threading.Event()
         bridge = _ProgressBridge()
-        dlg = None
+        card = None
         if not quiet:
-            dlg = _make_progress_dlg(self, "下载视频", 1, cancel_ev)
-            dlg.setLabelText("正在解析链接...")
-
-            def on_prog(done_n, total_n, name):
-                if total_n != dlg.maximum():
-                    dlg.setMaximum(max(total_n, 1))
-                dlg.setValue(done_n)
-                # 字节进度（视频流边下边走）与 B站弹窗同款 MB 展示
-                if total_n > 100000:
-                    dlg.setLabelText(
-                        f"下载中 {done_n / 1048576:.1f}/{total_n / 1048576:.1f} MB  {name[:40]}")
-                else:
-                    dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
-
-            bridge.updated.connect(on_prog)
+            th = self._dl_threads(quiet)
+            from gui_qt.download_float import get_float
+            # 不传 total：模式由 download_media 自己的 plan 事件声明——
+            # 图文 note=parallel 多槽、单视频=segments（IDM 分段条），浮窗
+            # 统一显示分段条/槽位/速度/N 线程（此前弹模态框看不到线程数）
+            card = get_float().add_batch(
+                f"资产 · {(it.get('title') or '视频')[:24]}", threads=th,
+                cancel_cb=cancel_ev.set)
         elif sub_bridge is not None:
             bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
@@ -1968,13 +2171,15 @@ class AssetPage(BasePage):
                 raw_data=raw_data,
                 raw_url="", fetched_at=now_str(),
             )
-            # 图文 note：下图片
+            # 图文 note：下图片（多图 parallel，浮窗显示 N 槽位并行）
             if note_images:
                 info.images = note_images
                 return download_media([info], base_dir=base_dir,
                                       download_images=True, download_live=False, download_videos=False,
+                                      threads=self._dl_threads(quiet),
                                       progress_callback=bridge.emit_progress,
                                       wait_range=(0.5, 1.5), cancel_event=cancel_ev,
+                                      on_task_event=(card.handle_event if card is not None else None),
                                       quiet=True)
             if not vurl2:
                 raise ValueError("无可用视频链接")
@@ -1983,30 +2188,95 @@ class AssetPage(BasePage):
             if it["platform"] == "xiaohongshu" and not note_images \
                     and not _is_direct_media_url(vurl2):
                 raise ValueError("小红书视频流获取失败：笔记链接可能已失效或被风控，请重新获取该条目")
-            # download_images=True 仅为生成「封面」下载任务（images 为空不会多下图）：
-            # 资产页缩略图本地优先，封面必须落盘成 {stem}_封面.jpg，
-            # 否则只能走网络封面（抖音直链会过期、部分图床 403）
-            # 字节进度：视频流边下边报，弹窗显示实际大小（B站同款）
-            return download_media([info], base_dir=base_dir,
-                                  download_images=True, download_live=False, download_videos=True,
-                                  progress_callback=bridge.emit_progress,
-                                  byte_progress_callback=bridge.emit_bytes,
-                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev,
-                                  quiet=True)
+            # 视频任务单独一批：若封面并入同一批，任务数 2 → parallel 模式 →
+            # 视频文件本体退化为单流（这正是「选了 N 线程但视频还是 1 线程」
+            # 的根因）；单视频任务 + threads>1 → segments 模式，视频按 N 段
+            # IDM 并行下载，浮窗显示分段条 + 速度 + N 线程
+            res = download_media([info], base_dir=base_dir,
+                                 download_images=False, download_live=False, download_videos=True,
+                                 threads=self._dl_threads(quiet),
+                                 progress_callback=bridge.emit_progress,
+                                 byte_progress_callback=bridge.emit_bytes,
+                                 wait_range=(0.5, 1.5), cancel_event=cancel_ev,
+                                 on_task_event=(card.handle_event if card is not None else None),
+                                 quiet=True)
+            # 封面单独落盘（与 download_media 同名规则 {stem}_封面.jpg，
+            # 缩略图本地优先，抖音直链会过期、部分图床 403）
+            cov = (info.cover_url or "").strip()
+            if (cov and (res.get("videos") or res.get("skipped"))
+                    and not res.get("cancelled")):
+                try:
+                    from media_downloader import (_sanitize_filename, _PLATFORM_CN,
+                                                  MEDIA_DIR_SUFFIX, _url_path,
+                                                  _download_one)
+                    author = _sanitize_filename(info.author or "未知")
+                    date_str = re.sub(r'[^0-9]', '', (info.publish_time or "")[:10]) \
+                        or time.strftime("%Y%m%d")
+                    title = _sanitize_filename(info.title or "", 50)
+                    plat_cn = _PLATFORM_CN.get(info.platform, info.platform)
+                    user_dir = os.path.join(base_dir, plat_cn + MEDIA_DIR_SUFFIX, author)
+                    stem = (f"{date_str}_{author}_{title}" if title
+                            else f"{date_str}_{author}_{(info.video_id or '')[:8]}")
+                    if cov.startswith("//"):
+                        cov = "https:" + cov
+                    cov_ext = os.path.splitext(_url_path(cov))[1].lower()
+                    if cov_ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                        cov_ext = ".jpg"
+                    cpath = os.path.join(user_dir, f"{stem}_封面{cov_ext}")
+                    # 已有封面（扩展名可能被 Content-Type 改成 .png 等）直接复用
+                    for e in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                        if os.path.exists(os.path.join(user_dir, f"{stem}_封面{e}")):
+                            cpath = os.path.join(user_dir, f"{stem}_封面{e}")
+                            break
+                    else:
+                        h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                           "AppleWebKit/537.36"}
+                        for dom, ref in (("douyin", "https://www.douyin.com/"),
+                                         ("sinaimg", "https://weibo.com/"),
+                                         ("weibo", "https://weibo.com/"),
+                                         ("xhscdn", "https://www.xiaohongshu.com/"),
+                                         ("xiaohongshu", "https://www.xiaohongshu.com/")):
+                            if dom in cov:
+                                h["Referer"] = ref
+                                break
+                        _cpath, ok_cov = _download_one(cov, cpath, h)
+                        if ok_cov:
+                            cpath = _cpath
+                            res["covers"] = res.get("covers", 0) + 1
+                    if os.path.exists(cpath):
+                        res.setdefault("paths", []).append((cpath, "封面"))
+                except Exception:
+                    pass
+            return res
 
         def done(result, err):
-            if dlg is not None and dlg.isVisible():
-                dlg.close()
-                bridge.updated.disconnect(on_prog)
+            stats = result or {}
+            ok_img = stats.get("images", 0)
+            ok_vid = stats.get("videos", 0) or stats.get("skipped", 0)
+            if card is not None:
+                if err:
+                    card.handle_event("done", "视频", False)
+                    card.finish("❌ 下载失败")
+                elif ok_img:
+                    card.finish(f"✅ 图片 {ok_img} 张"
+                                + (f" + 封面 {stats.get('covers', 0)} 张"
+                                   if stats.get("covers") else ""))
+                elif ok_vid:
+                    card.finish(f"✅ 视频 1 个"
+                                + (f" + 封面 {stats.get('covers', 0)} 张"
+                                   if stats.get("covers") else ""))
+                else:
+                    card.finish("⚠ 下载取消/失败")
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
             else:
-                n_img = (result or {}).get("images", 0)
-                n_vid = (result or {}).get("videos", 0)
-                n_cov = (result or {}).get("covers", 0)
-                f = (result or {}).get("failed", 0)
-                cancelled = (result or {}).get("cancelled", False)
+                n_img = stats.get("images", 0)
+                n_vid = stats.get("videos", 0)
+                n_skip = stats.get("skipped", 0)
+                n_cov = stats.get("covers", 0)
+                f = stats.get("failed", 0)
+                cancelled = stats.get("cancelled", False)
                 if n_img:
                     self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
                     self.app.toast(f"✅ 已下载图片 {n_img} 张" + ("（已取消）" if cancelled else ""),
@@ -2017,6 +2287,11 @@ class AssetPage(BasePage):
                     if n_cov:
                         msg += f" + 封面 {n_cov} 张"
                     self.app.toast(msg, "success")
+                elif n_skip and not cancelled:
+                    # 视频本体已下载过自动跳过（skip_existing），封面可能补齐
+                    self._dl_state[self._dl_key(it)] = "done"
+                    self.app.toast(f"✅ 视频已下载过，自动跳过"
+                                   + (f"（补齐封面 {n_cov} 张）" if n_cov else ""), "success")
                 else:
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
                     if cancelled:
@@ -2024,7 +2299,8 @@ class AssetPage(BasePage):
                     else:
                         self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
             if not quiet:  # 批量模式由 _advance 统一刷新一次
-                self._refresh_rows_for([it])
+                # 轻量刷新：stats["paths"] 已带下载文件路径，直接挂行
+                self._refresh_rows_for([it], new_paths=stats.get("paths") or None)
             if on_finished:
                 on_finished()
 
@@ -2288,22 +2564,15 @@ class AssetPage(BasePage):
 
         cancel_ev = cancel_ev or threading.Event()
         bridge = _ProgressBridge()
-        dlg = None
+        card = None
         if not quiet:
-            dlg = _make_progress_dlg(self, "下载图片", len(pics) + len(lives), cancel_ev)
-
-            def on_prog(done_n, total_n, name):
-                if total_n != dlg.maximum():
-                    dlg.setMaximum(max(total_n, 1))
-                dlg.setValue(done_n)
-                # 字节进度（Live图视频流）与视频下载弹窗同款 MB 展示
-                if total_n > 100000:
-                    dlg.setLabelText(
-                        f"下载中 {done_n / 1048576:.1f}/{total_n / 1048576:.1f} MB  {name[:40]}")
-                else:
-                    dlg.setLabelText(f"下载中 {done_n}/{total_n}  {name[:48]}")
-
-            bridge.updated.connect(on_prog)
+            th = self._dl_threads(quiet)
+            from gui_qt.download_float import get_float
+            # 不传 total：模式由 download_media 的 plan 事件声明（多图 parallel
+            # → 浮窗 N 槽位并行 + N 线程，替代原先只显示 X/Y 的模态进度框）
+            card = get_float().add_batch(
+                f"资产 · {(it.get('title') or '图片')[:24]}", threads=th,
+                cancel_cb=cancel_ev.set)
         elif sub_bridge is not None:
             bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
@@ -2325,24 +2594,42 @@ class AssetPage(BasePage):
             base_dir = str(get_export_subdir("video_data"))
             return download_media([info], base_dir=base_dir,
                                   download_images=True, download_live=True, download_videos=False,
+                                  threads=self._dl_threads(quiet),
                                   progress_callback=bridge.emit_progress,
                                   byte_progress_callback=bridge.emit_bytes,
                                   wait_range=(0.5, 1.5), cancel_event=cancel_ev,
-                                  skip_existing=not force, quiet=True)
+                                  skip_existing=not force,
+                                  on_task_event=(card.handle_event if card is not None else None),
+                                  quiet=True)
 
         def done(result, err):
-            if dlg is not None and dlg.isVisible():
-                dlg.close()
-                bridge.updated.disconnect(on_prog)
+            stats = result or {}
+            if card is not None:
+                n_ok = stats.get("images", 0) + stats.get("covers", 0) + stats.get("live", 0)
+                n_skip = stats.get("skipped", 0)
+                if err:
+                    card.handle_event("done", "图片", False)
+                    card.finish("❌ 下载失败")
+                elif stats.get("cancelled"):
+                    card.finish("⚠ 已取消")
+                elif n_ok or n_skip:
+                    parts = []
+                    if n_ok:
+                        parts.append(f"✅ {n_ok} 个文件")
+                    if n_skip:
+                        parts.append(f"跳过 {n_skip} 个已下载")
+                    card.finish(" · ".join(parts))
+                else:
+                    card.finish("❌ 下载失败")
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
             else:
-                n = (result or {}).get("images", 0)
-                n_cov = (result or {}).get("covers", 0)
-                n_live = (result or {}).get("live", 0)
-                n_skip = (result or {}).get("skipped", 0)
-                cancelled = (result or {}).get("cancelled", False)
+                n = stats.get("images", 0)
+                n_cov = stats.get("covers", 0)
+                n_live = stats.get("live", 0)
+                n_skip = stats.get("skipped", 0)
+                cancelled = stats.get("cancelled", False)
                 self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
                 if not n and not n_live and not n_cov and n_skip:
                     msg = f"✅ {n_skip} 个文件已下载过，自动跳过"
@@ -2357,9 +2644,9 @@ class AssetPage(BasePage):
                 if cancelled:
                     msg += "（已取消）"
                 self.app.toast(msg, "success" if not cancelled else "warning")
-            # 刷新该条目（重新扫描磁盘，新下载的图会显示本地缩略图）
+            # 刷新该条目：stats["paths"] 已带新下载文件路径，直接挂行显示本地缩略图
             if not quiet:  # 批量模式由 _advance 统一刷新一次
-                self._refresh_rows_for([it])
+                self._refresh_rows_for([it], new_paths=stats.get("paths") or None)
             if on_finished:
                 on_finished()
 
@@ -2393,7 +2680,12 @@ class AssetPage(BasePage):
         run_bg(load, done)
 
     def _fill_net_thumb(self, lbl, url, w, h):
-        """后台加载网络封面到已有缩略图 label。"""
+        """后台加载网络封面到已有缩略图 label。
+
+        下载与 PIL 解码缩放都在后台线程完成，主线程只 setPixmap——
+        大封面（几 MB 原图）若在主线程 QImage 解码，整页 20 行齐刷
+        刷新时主线程连解码数秒 → 窗口「未响应」。
+        """
 
         def load():
             try:
@@ -2412,7 +2704,13 @@ class AssetPage(BasePage):
                 else:
                     url2 = url
                 resp = requests.get(url2, timeout=8, headers=h)
-                return resp.content
+                resp.raise_for_status()
+                from PIL import Image
+                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                img.thumbnail((w, h), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return buf.getvalue()
             except Exception:
                 return None
 
@@ -2885,6 +3183,16 @@ class AssetPage(BasePage):
         self._add_detail_cover(v, item)
         # (行名, 显示值, 复制原文, 复制菜单名 None=不提供复制, 是否时间字段)
         dur = _fmt_duration_cn(item.get("duration"))
+        # 时长缺失但本地有视频：显示「探测中…」占位，点击详情时才后台
+        # ffprobe（此前扫描期逐视频探测，20 次子进程 ≈ 4s/轮，每次下载
+        # 完成/切页都触发 → 进程风暴 + GIL 竞争 = 界面未响应）
+        probe_path = ""
+        if not dur:
+            probe_path = next(
+                (m["path"] for m in item.get("media_files", [])
+                 if m["type"] == "video" and os.path.exists(m["path"])), "")
+            if probe_path:
+                dur = "探测中…"
         info_lines = [
             ("平台", plat_cn, plat_cn, "平台", False),
             ("作者", "@" + (item.get("author") or "-"),
@@ -2910,6 +3218,7 @@ class AssetPage(BasePage):
             ("原始URL", item.get("raw_url") or "-",
              item.get("raw_url") or "", "原始链接", False),
         ])
+        dur_lbl = None
         for k, val, raw, copy_title, is_time in info_lines:
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
@@ -2927,7 +3236,22 @@ class AssetPage(BasePage):
             row_f.addWidget(wl, 1)
             if copy_title:
                 self._attach_copy_menu(wl, raw, copy_title, is_time)
+            if k == "时长" and probe_path:
+                dur_lbl = wl
             v.addLayout(row_f)
+        if probe_path and dur_lbl is not None:
+            def _probe_work():
+                return _probe_video_duration(probe_path)
+
+            def _probe_done(sec, err):
+                if sec:
+                    item["duration"] = sec  # 回填条目，同条目再开详情不再探测
+                    try:
+                        dur_lbl.setText(_fmt_duration_cn(sec))
+                    except RuntimeError:
+                        pass  # 详情窗已关闭
+
+            run_bg(_probe_work, _probe_done)
         desc = item.get("description") or ""
         if desc:
             dh = QLabel("正文")
@@ -3020,21 +3344,32 @@ class AssetPage(BasePage):
                     img = Image.open(local).convert("RGB")
                     buf = io.BytesIO()
                     img.save(buf, format="PNG")
-                    return buf.getvalue()
-                import requests
-                h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                   "Chrome/126.0.0.0 Safari/537.36"}
-                # 图床防盗链：与列表缩略图同源的 Referer 规则
-                if "hdslb" in url or "bilibili" in url:
-                    h["Referer"] = "https://www.bilibili.com/"
-                elif "sinaimg" in url or "weibo" in url:
-                    h["Referer"] = "https://weibo.com/"
-                elif "xhscdn" in url or "xiaohongshu" in url:
-                    h["Referer"] = "https://www.xiaohongshu.com/"
-                resp = requests.get(("https:" + url) if url.startswith("//") else url,
-                                    timeout=8, headers=h)
-                return resp.content if resp.ok else None
+                    full = buf.getvalue()
+                else:
+                    import requests
+                    h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                       "Chrome/126.0.0.0 Safari/537.36"}
+                    # 图床防盗链：与列表缩略图同源的 Referer 规则
+                    if "hdslb" in url or "bilibili" in url:
+                        h["Referer"] = "https://www.bilibili.com/"
+                    elif "sinaimg" in url or "weibo" in url:
+                        h["Referer"] = "https://weibo.com/"
+                    elif "xhscdn" in url or "xiaohongshu" in url:
+                        h["Referer"] = "https://www.xiaohongshu.com/"
+                    resp = requests.get(("https:" + url) if url.startswith("//") else url,
+                                        timeout=8, headers=h)
+                    if not resp.ok:
+                        return None
+                    full = resp.content
+                # 显示用小图在后台缩好（大封面主线程解码会卡 UI）；原图字节
+                # 存 state 供「复制图片」时再解码（用户单次操作，无卡顿感）
+                from PIL import Image
+                img = Image.open(io.BytesIO(full)).convert("RGB")
+                img.thumbnail((320, 200), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return full, buf.getvalue()
             except Exception:
                 return None
 
@@ -3043,11 +3378,12 @@ class AssetPage(BasePage):
                 if not data:
                     lbl.setText("🖼 封面不可用")
                     return
-                qimg = QImage.fromData(data)
+                full, small = data
+                qimg = QImage.fromData(small)
                 if qimg.isNull():
                     lbl.setText("🖼 封面不可用")
                     return
-                state["img"] = qimg
+                state["data"] = full
                 lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
                     320, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             except RuntimeError:
@@ -3056,15 +3392,17 @@ class AssetPage(BasePage):
         def menu(pos):
             m = QMenu(lbl)
             act_img = m.addAction("📋 复制图片")
-            act_img.setEnabled(state["img"] is not None)
+            act_img.setEnabled(state.get("data") is not None)
             act_url = m.addAction("🔗 复制封面链接")
             act_url.setEnabled(bool(url))
             act_open = m.addAction("📂 打开媒体位置")
             act_open.setEnabled(bool(local) and os.path.exists(local))
             act = m.exec(lbl.mapToGlobal(pos))
-            if act is act_img and state["img"] is not None:
-                QApplication.clipboard().setImage(state["img"])
-                self.app.toast("已复制封面图片", "success")
+            if act is act_img and state.get("data") is not None:
+                img = QImage.fromData(state["data"])
+                if not img.isNull():
+                    QApplication.clipboard().setImage(img)
+                    self.app.toast("已复制封面图片", "success")
             elif act is act_url and url:
                 QApplication.clipboard().setText(
                     ("https:" + url) if url.startswith("//") else url)
