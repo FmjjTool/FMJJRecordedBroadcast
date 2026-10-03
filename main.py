@@ -182,7 +182,30 @@ def main():
     except Exception:
         pass
 
-    sys.exit(app.exec())
+    code = app.exec()
+
+    # —— 退出兜底：确保 python 进程必然结束（根治退出后 CLI 窗口残留）——
+    # Python 3.9+ 起 ThreadPoolExecutor 的工作线程是「非 daemon」线程：解释器
+    # 退出时 concurrent.futures 注册的 _python_exit 会对它们做无超时 join。
+    # 只要还有一个采集/下载任务卡在网络读上（无超时请求、count=0 全量 9999 页
+    # 翻页、Playwright 兜底滚动），python.exe 就永远退不出去——开发模式下被
+    # 最小化到任务栏的控制台窗口（cmd / PseudoConsole）会一直挂着，直到手动
+    # 关闭（GUI 已消失但进程未死）。
+    # closeEvent 已同步完成所有必须落盘的清理（停录制并同步打包回放包、终止
+    # 启动器进程树），这里显式执行 atexit 收尾（日志落盘、回放临时目录清理）
+    # 后强制结束进程：后台残余线程（守护线程 + 卡住的 executor 工作线程）一并
+    # 带走，SQLite 落库本身是事务性写入，强退不伤数据。
+    try:
+        import atexit as _atexit
+        _atexit._run_exitfuncs()  # 私有 API 但 3.8~3.13 稳定存在；幂等可重入
+    except Exception:
+        pass
+    try:
+        import logging
+        logging.shutdown()
+    except Exception:
+        pass
+    os._exit(code if isinstance(code, int) else 0)
 
 
 if __name__ == "__main__":

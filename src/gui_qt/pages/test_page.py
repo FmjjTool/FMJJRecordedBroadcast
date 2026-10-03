@@ -915,7 +915,12 @@ class TestPage(BasePage):
         self._recording = True
         self._refresh_record_ui()
 
-    def _stop_recording(self, package=True):
+    def _stop_recording(self, package=True, sync=False):
+        """停止录制并打包回放包。
+
+        sync=True：在当前线程同步写完 zip 再返回（软件退出路径专用——
+        main.py 退出时会强制结束进程，后台 daemon 线程打包会被拦腰截断，
+        产出残缺 zip；退出必须等包落盘完成）。"""
         self._recording = False
         path = None
         rec_meta = None
@@ -928,7 +933,8 @@ class TestPage(BasePage):
             self.recorder = None
         self._refresh_record_ui()
         if package and path and os.path.exists(path) and os.path.getsize(path) > 1024:
-            self._export_replay_zip(video_path=path, rec_meta=rec_meta, quiet=True)
+            self._export_replay_zip(video_path=path, rec_meta=rec_meta,
+                                     quiet=True, sync=sync)
         elif package and path:
             try:
                 os.remove(path)
@@ -2807,12 +2813,15 @@ class TestPage(BasePage):
         self.shutdown()
 
     def shutdown(self):
-        """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。"""
+        """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。
+
+        退出路径停录制必须 sync=True：进程退出时 main.py 会强制结束残余
+        线程，异步打包的 zip 会被截断成残缺文件。"""
         was_active = self.connected or self.fetcher or self.video_player or self._recording
         self._rec_switched_away = False
         self._rec_resume_pending = False
         if self._recording:
-            self._stop_recording()
+            self._stop_recording(sync=True)
         self._stop_replay()
         self._stop_live_preview()
         if self.connected or self.fetcher or self.stats_collector:

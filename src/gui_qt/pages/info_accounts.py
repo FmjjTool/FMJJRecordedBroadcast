@@ -113,7 +113,11 @@ class InfoAccountsPage(BasePage):
         self._timer_interval = 3600
         self._fetching = False
         self._timer = None
+        # 采集轮次号：每轮 +1。取消会立即释放 UI（在飞账号后台收尾），
+        # 旧轮的 done()/事件流凭轮次号识别为过期，不再动新一轮的 UI
+        self._fetch_round = 0
         # 暂停门闩：set=放行 / clear=暂停（采集线程在账号边界等待）
+        # 每轮获取开始时重建，旧轮的暂停/取消标记不会被新轮复位
         self._pause_evt = threading.Event()
         self._pause_evt.set()
         # 取消标记：set 后未开始的账号直接跳过（在飞账号自然跑完不硬中断）
@@ -632,15 +636,22 @@ class InfoAccountsPage(BasePage):
             self.prog_label.setText("继续采集中...")
 
     def _cancel_fetch(self):
-        """取消当前获取：未开始的账号直接跳过，在飞账号自然跑完（不硬中断线程）。"""
+        """取消当前获取：未开始的账号直接跳过，UI 立即释放——可马上开始
+        新一轮获取，不必等在飞账号自然跑完（旧轮由后台线程收尾，数据仍
+        正常入库/导出，不硬中断线程）。"""
         if not self._fetching:
             return
         self._cancel_evt.set()
         # 若正卡在暂停门闩，先放行让线程看到取消标记后快速退出
         self._pause_evt.set()
-        self.cancel_btn.setEnabled(False)
-        self.log_text.append("✕ 已请求取消（在飞账号自然结束，未开始的账号跳过）")
-        self.prog_label.setText("✕ 正在取消...")
+        # 立即释放获取锁与按钮：旧轮 done() 回来时凭轮次号识别为过期，
+        # 只刷新计数不再动 UI；用户可立即开始新一轮（旧轮在飞账号继续
+        # 后台收尾，两轮并发不超过 4+4 个请求线程）
+        self._fetching = False
+        self.fetch_btn.setEnabled(True)
+        self._set_fetch_ui(False)
+        self.log_text.append("✕ 已取消（未开始的账号跳过；在飞账号后台自然收尾，可立即开始新获取）")
+        self.prog_label.setText("✕ 已取消")
 
     def _set_fetch_ui(self, running: bool):
         """获取开始/结束时同步暂停/取消按钮状态（手动与定时获取共用）。"""
@@ -679,6 +690,15 @@ class InfoAccountsPage(BasePage):
         rate_interval = self._read_float(self.rate_interval_entry, 0)
         incremental = self.inc_check.isChecked()
         self.fetch_btn.setEnabled(False)
+        # 每轮独立事件：上一轮取消后即使还有在飞账号在后台收尾，也不会被
+        # 新一轮的启动复位（旧轮的取消标记保持 set，未开始的账号照样跳过）
+        self._fetch_round += 1
+        round_id = self._fetch_round
+        pause_evt = threading.Event()
+        pause_evt.set()
+        cancel_evt = threading.Event()
+        self._pause_evt = pause_evt
+        self._cancel_evt = cancel_evt
         self._set_fetch_ui(True)
         self.log_text.setPlainText(f"⏳ 开始获取 {len(accounts)} 个账号的最新内容...\n")
         self.progress_bar.setRange(0, max(len(accounts), 1))
@@ -688,12 +708,17 @@ class InfoAccountsPage(BasePage):
         def work():
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
-                incremental=incremental, on_event=self._make_event_bridge(),
-                pause_event=self._pause_evt, cancel_event=self._cancel_evt,
+                incremental=incremental, on_event=self._make_event_bridge(round_id),
+                pause_event=pause_evt, cancel_event=cancel_evt,
                 date_start=self._date_range.get("start", ""),
                 date_end=self._date_range.get("end", ""))
 
         def done(result, err):
+            if round_id != self._fetch_round:
+                # 过期轮次（取消后已提前释放 UI，或已被更新一轮顶替）：
+                # 数据在 worker 内已入库/导出，这里只刷新计数，不再动 UI
+                refresh_results_count(self.app)
+                return
             self.fetch_btn.setEnabled(True)
             self._set_fetch_ui(False)
             self._fetching = False
@@ -702,7 +727,7 @@ class InfoAccountsPage(BasePage):
                 self.prog_label.setText("❌ 获取失败")
                 return
             total, _log, new_posts = result
-            if self._cancel_evt.is_set():
+            if cancel_evt.is_set():
                 self.log_text.append(f"\n✕ 已取消（本次已获取 {total} 条，已存入「已获取」）")
                 self.prog_label.setText("✕ 已取消")
             else:
@@ -710,16 +735,21 @@ class InfoAccountsPage(BasePage):
                 if not self.auto_dl_check.isChecked():
                     self.prog_label.setText("✅ 获取完成")
             refresh_results_count(self.app)
-            # 获取后自动下载（勾选后保存+下载一次性完成）
-            if self.auto_dl_check.isChecked() and new_posts:
+            # 获取后自动下载（勾选后保存+下载一次性完成；已取消的轮次不触发）
+            if not cancel_evt.is_set() and self.auto_dl_check.isChecked() and new_posts:
                 self._start_auto_download(new_posts)
 
         self._fetching = True
         run_bg(work, done)
 
-    def _make_event_bridge(self):
-        """后台线程事件 → 主线程实时更新日志/进度条。"""
+    def _make_event_bridge(self, round_id):
+        """后台线程事件 → 主线程实时更新日志/进度条。
+
+        轮次过期（取消后旧轮仍在后台收尾）的事件直接丢弃，避免旧轮的
+        收尾输出覆盖新一轮的日志/进度条。"""
         def on_event(event):
+            if round_id != self._fetch_round:
+                return
             post_to_main(self._on_fetch_event, event)
         return on_event
 
@@ -1332,16 +1362,29 @@ class InfoAccountsPage(BasePage):
         rate_count = self._read_int(self.rate_count_entry, 0)
         rate_interval = self._read_float(self.rate_interval_entry, 0)
         incremental = self.inc_check.isChecked()
+        # 与手动获取同款：每轮独立事件 + 轮次守卫（取消立即释放 UI 后，
+        # 旧轮收尾的 done()/事件不会干扰新一轮）
+        self._fetch_round += 1
+        round_id = self._fetch_round
+        pause_evt = threading.Event()
+        pause_evt.set()
+        cancel_evt = threading.Event()
+        self._pause_evt = pause_evt
+        self._cancel_evt = cancel_evt
 
         def work():
             return self._collect_accounts_worker(
                 accounts, count, rate_count=rate_count, rate_interval=rate_interval,
-                incremental=incremental, on_event=self._make_event_bridge(),
-                pause_event=self._pause_evt, cancel_event=self._cancel_evt,
+                incremental=incremental, on_event=self._make_event_bridge(round_id),
+                pause_event=pause_evt, cancel_event=cancel_evt,
                 date_start=self._date_range.get("start", ""),
                 date_end=self._date_range.get("end", ""))
 
         def done(result, err):
+            if round_id != self._fetch_round:
+                # 过期轮次：数据已在 worker 内入库/导出，只刷新计数
+                refresh_results_count(self.app)
+                return
             self._set_fetch_ui(False)
             self._fetching = False
             ts = datetime.now().strftime("%H:%M:%S")
@@ -1350,14 +1393,14 @@ class InfoAccountsPage(BasePage):
                 self.prog_label.setText("❌ 定时获取失败")
                 return
             total, _log, new_posts = result
-            if self._cancel_evt.is_set():
+            if cancel_evt.is_set():
                 self.log_text.append(f"[{ts}] ⏰ 定时获取已取消（已获取 {total} 条）")
                 self.prog_label.setText("✕ 已取消")
             else:
                 self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
             refresh_results_count(self.app)
             # 获取后自动下载（勾选后定时获取也生效：保存+下载一次性）
-            if self.auto_dl_check.isChecked() and new_posts:
+            if self.auto_dl_check.isChecked() and new_posts and not cancel_evt.is_set():
                 self._start_auto_download(new_posts)
                 return
             if not self.isVisible():
@@ -1367,6 +1410,12 @@ class InfoAccountsPage(BasePage):
         self._fetching = True
         self._set_fetch_ui(True)
         run_bg(work, done)
+
+    def shutdown(self):
+        """软件退出：标记取消当前采集轮（未开始的账号跳过；在飞账号的数据
+        仍在后台入库，进程退出由 main.py 统一兜底，不会残留 CLI 窗口）。"""
+        self._cancel_evt.set()
+        self._pause_evt.set()
 
     # ---------- 分组管理（设置页） ----------
     def _reload_group_list(self):
