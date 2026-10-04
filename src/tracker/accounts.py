@@ -364,3 +364,64 @@ def apply_sync_from_fm(new_items: list) -> int:
         if gid not in dst_groups and src_groups.get(gid):
             save_group(gid, src_groups[gid])
     return len(new_items)
+
+
+# ==================== 反向：同步到「账号获取」 ====================
+
+def plan_sync_to_fm() -> tuple:
+    """计算追踪 → 「账号获取」的同步计划（不写盘）。
+
+    按平台+ID 去重（识别失败时按整条 URL 去重），返回 (新增条目列表, 跳过数)。
+    条目结构：{name, url, group_ids}。
+    """
+    from accounts_manager import load_accounts as load_fm_accounts
+    src_accounts = [a for a in load_accounts() if (a.get("url") or "").strip()]
+
+    def _key(url):
+        plat, pid = parse_url(url)
+        return (plat, pid) if plat and pid else ("__url__", (url or "").strip())
+
+    dst_accounts = [a for a in load_fm_accounts() if getattr(a, "url", "")]
+    existing = {_key(a.url) for a in dst_accounts}
+    new_items, skipped = [], 0
+    for acc in src_accounts:
+        key = _key(acc.get("url", ""))
+        if key in existing:
+            skipped += 1
+            continue
+        existing.add(key)
+        gids = [str(g) for g in (acc.get("group_ids") or []) if str(g).strip()]
+        new_items.append({"name": acc.get("name") or "", "url": acc["url"],
+                          "group_ids": gids})
+    return new_items, skipped
+
+
+def apply_sync_to_fm(new_items: list) -> int:
+    """写入反向同步计划（plan_sync_to_fm 的结果）：
+    追加到 accounts.txt（B站链接自动带 video/dynamic 采集类型）+ 缺失分组补建。"""
+    if not new_items:
+        return 0
+    from accounts_manager import (Account, infer_kind_from_url,
+                                  load_accounts as load_fm_accounts,
+                                  save_accounts as save_fm_accounts,
+                                  get_groups as fm_groups,
+                                  save_group as fm_save_group)
+    dst_accounts = load_fm_accounts()
+    src_groups = get_groups()  # 追踪侧分组 {组号: 组名}
+    dst_groups = fm_groups()
+    new_gids = set()
+    for item in new_items:
+        gids = [g for g in item.get("group_ids", []) if GROUP_ID_PATTERN.match(g)]
+        gname = src_groups.get(gids[0], "") if gids else ""
+        dst_accounts.append(Account(
+            url=item["url"], name=item.get("name", ""),
+            group_ids=gids, group_name=gname,
+            kind=infer_kind_from_url(item["url"]),
+        ))
+        new_gids.update(gids)
+    save_fm_accounts(dst_accounts)
+    # 分组带过去：账号获取侧缺的组按同组号+组名补建
+    for gid in new_gids:
+        if gid not in dst_groups and src_groups.get(gid):
+            fm_save_group(gid, src_groups[gid])
+    return len(new_items)

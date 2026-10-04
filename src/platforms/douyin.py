@@ -261,12 +261,14 @@ class DouyinParser(PlatformBase):
         return f"https://www.douyin.com/video/{vid}"
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10,
-                         pause_every: int = 0, pause_secs: float = 0.0) -> list:
+                         pause_every: int = 0, pause_secs: float = 0.0,
+                         stop_check=None) -> list:
         """用户作品列表。Cookie 是账号凭据但用户时间线属「必须用 Cookie 的接口」
         （游客 aweme/post 常被风控空响应 + 漏最新作品），Cookie 优先、游客兜底。
 
         pause_every/pause_secs: 账号内部翻页限流（每抓 pause_every 条停 pause_secs 秒），
         0 = 不限流（仅保留翻页基础间隔）。
+        stop_check: 返回 True 时停止翻页并保留已获取的部分（取消时断点保留）。
 
         层级（2026-09-21 Playwright 页面数据层被安全 SDK 拦死后改为 HTTP 直调优先）：
         ① HTTP 直调 aweme/post + a_bogus 签名（Cookie 优先，游客也试一次）
@@ -282,12 +284,14 @@ class DouyinParser(PlatformBase):
 
         # 一级：HTTP 直调（快且稳，翻页拿足 count 条）
         results = self._fetch_user_posts_http(sec_uid, count, cookie_str=cookie_str,
-                                              pause_every=pause_every, pause_secs=pause_secs)
+                                              pause_every=pause_every, pause_secs=pause_secs,
+                                              stop_check=stop_check)
         if results:
             return results
         if not cookie_str:
             results = self._fetch_user_posts_http(sec_uid, count, cookie_str="",
-                                                  pause_every=pause_every, pause_secs=pause_secs)
+                                                  pause_every=pause_every, pause_secs=pause_secs,
+                                                  stop_check=stop_check)
             if results:
                 return results
 
@@ -299,15 +303,18 @@ class DouyinParser(PlatformBase):
             return []
         if cookie_str:
             results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str,
-                                          pause_every=pause_every, pause_secs=pause_secs)
+                                          pause_every=pause_every, pause_secs=pause_secs,
+                                          stop_check=stop_check)
             if results:
                 return results
             print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
         return self._fetch_pw_once(sec_uid, count, cookie_str="",
-                                    pause_every=pause_every, pause_secs=pause_secs)
+                                    pause_every=pause_every, pause_secs=pause_secs,
+                                    stop_check=stop_check)
 
     def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "",
-                               pause_every: int = 0, pause_secs: float = 0.0) -> list:
+                               pause_every: int = 0, pause_secs: float = 0.0,
+                               stop_check=None) -> list:
         """HTTP 直调 aweme/post（a_bogus 签名），max_cursor 链式翻页到 count 条。
 
         空响应=风控拦截；node 缺失导致无签名时直接放弃（返回空，由上层兜底）。
@@ -328,7 +335,14 @@ class DouyinParser(PlatformBase):
         results = []
         cursor = 0
         seen = set()
-        for _page in range(50):  # 单页 ~20 条，50 页足够 0=无上限的 9999
+        label = "抖音-Cookie" if cookie_str else "抖音"
+        # 有限目标 50 页护栏；0=无上限（count≥10^12）翻到底（has_more=False 自然停）
+        max_pages = 2500 if count >= 10**12 else 50
+        for _page in range(max_pages):
+            if stop_check is not None and stop_check():
+                if results:
+                    print(f"[{label}] 收到停止信号，保留已获取 {len(results)} 条")
+                break
             params = {
                 "device_platform": "webapp", "aid": "6383", "sec_user_id": sec_uid,
                 "max_cursor": str(cursor), "locate_query": "false",
@@ -370,6 +384,9 @@ class DouyinParser(PlatformBase):
             if len(results) >= count or not d.get("has_more"):
                 break
             cursor = int(d.get("max_cursor") or 0)
+            if (_page + 1) % 5 == 0:
+                target = "无上限" if count >= 10**12 else f"目标 {count}"
+                print(f"[{label}] 已翻 {_page + 1} 页 · 累计 {len(results)} 条（{target}），继续...")
             # 翻页间隔：限流开启时按「每 pause_every 条停 pause_secs 秒」折算
             # （一页约 20 条 = 2×10 条 → 停 2×10s）；未开启仅保留基础间隔
             page_new = len(d.get("aweme_list") or [])
@@ -381,7 +398,8 @@ class DouyinParser(PlatformBase):
         return results[:count] if count > 0 else results
 
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "",
-                       pause_every: int = 0, pause_secs: float = 0.0) -> list:
+                       pause_every: int = 0, pause_secs: float = 0.0,
+                       stop_check=None) -> list:
         """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
         from playwright.sync_api import sync_playwright
 
@@ -454,13 +472,28 @@ class DouyinParser(PlatformBase):
                 if collected:
                     print(f"[抖音-Playwright] 首屏获取到 {len(collected)} 条")
 
-                # 滚动触发 API 翻页加载，凑够 count 条即停
-                for i in range(5):
+                # 滚动触发 API 翻页加载，凑够 count 条即停；0=无上限（count≥10^12）
+                # 放开轮数护栏，靠停滞检测收尾（连续 3 轮无新数据 = 已到底）
+                rounds = 400 if count >= 10**12 else 5
+                prev, stalls = -1, 0
+                for i in range(rounds):
                     if len(collected) >= count:
+                        break
+                    if stop_check is not None and stop_check():
+                        print(f"[抖音-Playwright] 收到停止信号，保留已获取 {len(collected)} 条")
                         break
                     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     page.wait_for_timeout(2000)
                     _merge_html_items()
+                    if len(collected) == prev:
+                        stalls += 1
+                        if stalls >= 3:
+                            break
+                    else:
+                        stalls = 0
+                    prev = len(collected)
+                    if (i + 1) % 10 == 0:
+                        print(f"[抖音-Playwright] 已滚动 {i + 1} 轮 · 累计 {len(collected)} 条，继续...")
                     # 限流：每次滚动加载约一页（20 条），按「每 pause_every 条停 pause_secs 秒」折算
                     if pause_every > 0 and pause_secs > 0:
                         page.wait_for_timeout(int(pause_secs * 20 / pause_every * 1000))

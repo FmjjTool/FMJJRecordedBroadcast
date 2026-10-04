@@ -236,12 +236,39 @@ def _qq(cookie: str) -> dict:
 
 
 def _kuaishou(cookie: str) -> dict:
+    # graphql userInfo 已失效（2026-10 实测登录态也返回 null）——改为 Cookie
+    # 票据判定：web_st(30天)/webday7_st(7天) 存在即登录态；QQ 授权残留的
+    # ptnick_XXX 可提昵称；userId 游客也有不能单独作准
+    import urllib.parse
+
+    for key in ("kuaishou.server.web_st", "kuaishou.server.webday7_st"):
+        if _cookie_field(cookie, key):
+            import re
+            m = re.search(r"ptnick_\d+=([^;]+)", cookie)
+            if m:
+                raw = m.group(1).strip()
+                nick = ""
+                # 实测 ptnick 是纯 hex 的 UTF-8（如 e6ad86e68595），也可能是 URL 编码
+                try:
+                    if re.fullmatch(r"[0-9a-fA-F]+", raw) and len(raw) % 6 == 0:
+                        nick = bytes.fromhex(raw).decode("utf-8", "ignore")
+                    elif raw.startswith("%") or raw.startswith("%25"):
+                        nick = urllib.parse.unquote(raw)
+                except Exception:
+                    nick = ""
+                if nick:
+                    return {"ok": True, "username": nick}
+            uid = _cookie_field(cookie, "userId")
+            return {"ok": True, "username": f"快手用户 {uid}" if uid else "已登录"}
     import requests
 
     h = _headers(cookie)
     h["Referer"] = "https://www.kuaishou.com/"
     q = {"query": "query { userInfo { id name } }", "variables": {}}
-    d = requests.post("https://www.kuaishou.com/graphql", json=q, headers=h, timeout=10).json()
+    try:
+        d = requests.post("https://www.kuaishou.com/graphql", json=q, headers=h, timeout=10).json()
+    except Exception:
+        d = {}
     user = ((d.get("data") or {}).get("userInfo")) or {}
     if user.get("name"):
         return {"ok": True, "username": user["name"]}

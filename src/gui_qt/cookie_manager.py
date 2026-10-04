@@ -545,12 +545,20 @@ class CookieManagerDialog(QDialog):
                       ("userid",), "账号密码登录（支持酷狗账号）"),
             "xiaohongshu": ("https://www.xiaohongshu.com/", "小红书登录（软件内）",
                             ("web_session",), "点击「登录」→ 扫码或短信验证"),
-            "kuaishou": ("https://www.kuaishou.com/", "快手登录（软件内）",
-                         ("kuaishou.server.web_st",),  # userId 游客也有，不能用
-                         "点击「登录」→ 扫码或手机号登录"),
+            "kuaishou": ("https://www.kuaishou.com/account/login", "快手登录（软件内）",
+                         # web_st=30天票；webday7_st=7天票（新版常见，只认前者会误报未登录）
+                         ("kuaishou.server.web_st", "kuaishou.server.webday7_st"),
+                         "扫码 / 手机号验证码登录（直达登录页，避开首页登录按钮被备案号遮挡）"),
             "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
                        ("cookie2", "unb", "sg"),
                        "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
+        }
+        # 快手登录浏览器回种白名单：只保留设备/环境字段。
+        # 登录态票（*_st/passToken/userId）过期后回种会同名覆盖新票；
+        # pt_*/p_*/qrsig 等是 QQ 互联残留，会干扰快手登录流程。
+        _KS_LOGIN_KEEP = {
+            "did", "didv", "clientid", "kpf", "kpn",
+            "_bl_uid", "__aegis_uid", "kwfv1", "ktrace-context",
         }
         if plat not in configs:
             QMessageBox.information(self, "提示", f"{plat} 暂不支持浏览器登录，请使用「输入」")
@@ -760,6 +768,13 @@ class CookieManagerDialog(QDialog):
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
                                       int(ex) | WS_EX_TOOLWINDOW)  # 不进任务栏/Alt-Tab
                 state["overlay"] = True
+                # 激活一次浏览器窗口：NOACTIVATE 贴入的窗口从未被激活过，
+                # Chromium 在非激活状态下会丢弃按钮点击的事件派发（实测快手
+                # 验证码登录「获取验证码」点击零请求、无倒计时，激活后恢复）
+                try:
+                    user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
                 _resync()
                 for ms in (150, 400, 1000):
                     QTimer.singleShot(ms, _resync)
@@ -809,11 +824,29 @@ class CookieManagerDialog(QDialog):
                     ctx = browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                        viewport={"width": 1080, "height": 660},
+                        # 高度 760：快手新版首页在 660 视口下侧栏「立即登录」按钮会被
+                        # 备案号盒子叠住（实测 elementFromPoint 命中备案按钮），加高错开
+                        viewport={"width": 1080, "height": 760},
                         locale="zh-CN",
                     )
+                    # --disable-blink-features=AutomationControlled 抹不掉
+                    # navigator.webdriver（实测仍为 true），必须 init script 覆写；
+                    # 快手等站点检测到自动化标记会发无效票据（表面登录成功、
+                    # 跳主页即掉登录态）
+                    ctx.add_init_script(
+                        "Object.defineProperty(navigator, 'webdriver', "
+                        "{get: () => undefined});")
                     # 回种已存 Cookie：页面自动保持登录，用户可直接点「已获取」
                     stored = auth.load_cookies().get(plat, "")
+                    if plat == "kuaishou":
+                        # 快手特例：过期的登录态票（web*_st/passToken/userId）与
+                        # QQ 互联残留（pt_*/p_*/qrsig 等）回种后会同名覆盖新登录
+                        # 种下的票，收割拿到假 Cookie（2026-10 实测）。只回种
+                        # 设备/环境字段，登录态全靠本次新种。
+                        keep = _KS_LOGIN_KEEP
+                        stored = "; ".join(
+                            p.strip() for p in stored.split(";")
+                            if p.strip().split("=")[0].strip() in keep)
                     if stored:
                         from urllib.parse import urlparse
                         h = urlparse(url).hostname or ""

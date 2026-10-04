@@ -243,10 +243,13 @@ class KuaishouParser(PlatformBase):
         if not m:
             raise ValueError("不是快手主页链接")
         # 2026-09 改版：主页纯 CSR，作品 API 需浏览器指纹+签名，HTTP 直连无数据
-        return self._posts_via_browser(url, count)
+        return self._posts_via_browser(url, count, stop_check=kwargs.get("stop_check"))
 
-    def _posts_via_browser(self, url: str, count: int) -> list:
-        """无头浏览器打开主页，拦截 /rest/v/profile/feed 响应（签名由浏览器生成）。"""
+    def _posts_via_browser(self, url: str, count: int, stop_check=None) -> list:
+        """无头浏览器打开主页，拦截 /rest/v/profile/feed 响应（签名由浏览器生成）。
+
+        stop_check: 返回 True 时停止滚动并保留已捕获的部分（取消时断点保留）。
+        """
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -297,13 +300,24 @@ class KuaishouParser(PlatformBase):
                     page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 except Exception:
                     pass  # domcontentloaded 超时也继续等 feed 响应
-                rounds = 14 if need <= 60 else 40
+                # 有限目标 14/40 轮护栏；0=无上限（need≥10^12）放开到 2000 轮，
+                # 靠停滞检测（连续 3 轮无新数据）提前收尾
+                if need <= 60:
+                    rounds = 14
+                elif need >= 10**12:
+                    rounds = 2000
+                else:
+                    rounds = 40
                 prev, stalls = -1, 0
-                for _ in range(rounds):
+                for r in range(rounds):
                     page.wait_for_timeout(1500)
                     if state["login"]:
                         raise RuntimeError(
                             "快手主页需要登录：请在「Cookie 管理」中登录快手后重试")
+                    if stop_check is not None and stop_check():
+                        if feeds:
+                            print(f"[快手] 收到停止信号，保留已捕获 {len(feeds)} 条")
+                        break
                     if len(feeds) >= need or state["no_more"]:
                         break
                     if len(feeds) == prev:
@@ -313,6 +327,8 @@ class KuaishouParser(PlatformBase):
                     else:
                         stalls = 0
                     prev = len(feeds)
+                    if (r + 1) % 10 == 0:
+                        print(f"[快手] 已滚动 {r + 1} 轮 · 累计 {len(feeds)} 条，继续...")
                     page.evaluate("window.scrollBy(0, 2500)")
                 if state["login"]:
                     raise RuntimeError(

@@ -441,12 +441,17 @@ class WeiboParser(PlatformBase):
         m = self.USER_UID_PATTERN.search(url)
         return m.group(1) if m else ""
 
-    def fetch_user_posts(self, url_or_id: str, count: int = 10) -> list:
+    def fetch_user_posts(self, url_or_id: str, count: int = 10,
+                         pause_every: int = 0, pause_secs: float = 0.0,
+                         stop_check=None) -> list:
         """多级回退：① 访客通行证 API（不足量且配置了 Cookie 时接入续抓）→ ② HTTP 页面
         → ③ 接入用户 Cookie → ④ Playwright 兜底。
 
         Cookie 是账号凭据，能不用就不用（降低风控/封号风险）：
         访客拿满 count 不动 Cookie；拿不满（如条数=0 无上限）才接入 Cookie 续翻合并。
+        pause_every/pause_secs: 深翻页限流（每抓 pause_every 条停 pause_secs 秒，
+            按上一页实际条数折算）；0 = 不限流（仅保留 0.5s 基础间隔）。
+        stop_check: 返回 True 时停止翻页并保留已获取的部分（取消时断点保留）。
         """
         uid = self.extract_user_id(url_or_id)
         if not uid: return []
@@ -467,8 +472,13 @@ class WeiboParser(PlatformBase):
                 if ck and len(api_results) < count:
                     cookie_headers = dict(self.HEADERS)
                     cookie_headers["Cookie"] = ck
-                    print(f"[微博] 访客仅 {len(api_results)} 条（不足 {count}），接入 Cookie 续抓...")
-                    more = self._try_api_fetch(uid, count, cookie_headers)
+                    target = "无上限" if count >= 10**12 else count
+                    print(f"[微博] 访客仅 {len(api_results)} 条（目标 {target}），接入 Cookie 续抓...")
+                    more = self._try_api_fetch(uid, count, cookie_headers,
+                                               pause_every=pause_every,
+                                               pause_secs=pause_secs,
+                                               stop_check=stop_check,
+                                               label="微博-Cookie")
                     if more:
                         seen = {r.video_id for r in api_results}
                         for r in more:
@@ -491,7 +501,11 @@ class WeiboParser(PlatformBase):
             print("[微博] 游客方式未获取到数据，接入 Cookie 重试...")
             cookie_headers = dict(self.HEADERS)
             cookie_headers["Cookie"] = ck
-            api_results = self._try_api_fetch(uid, count, cookie_headers)
+            api_results = self._try_api_fetch(uid, count, cookie_headers,
+                                              pause_every=pause_every,
+                                              pause_secs=pause_secs,
+                                              stop_check=stop_check,
+                                              label="微博-Cookie")
             if api_results:
                 return api_results
             page_results = self._fetch_http_page(uid, count, cookie_headers)
@@ -502,15 +516,30 @@ class WeiboParser(PlatformBase):
         print("[微博] 尝试 Playwright...")
         return self._fetch_pw(uid, count)
 
-    def _try_api_fetch(self, uid: str, count: int, headers: dict) -> list:
-        """使用指定 headers 尝试 API 分页获取"""
+    def _try_api_fetch(self, uid: str, count: int, headers: dict,
+                       pause_every: int = 0, pause_secs: float = 0.0,
+                       stop_check=None, label: str = "微博") -> list:
+        """使用指定 headers 尝试 API 分页获取。
+
+        pause_every/pause_secs: 限流停顿（每抓 pause_every 条停 pause_secs 秒，
+            按上一页实际条数折算）；未配置时保留 0.5s 基础间隔。
+        stop_check: 返回 True 时停止翻页并保留已获取的部分（取消时断点保留）。
+        深翻页每 5 页打一条进度日志（登录态全量翻页可能几百页，不能静默）。
+        """
         results = []
-        remaining = count; page = 1
+        remaining = count; page = 1; last_taken = 0
         client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
         try:
             while remaining > 0:
+                if stop_check is not None and stop_check():
+                    if results:
+                        print(f"[{label}] 收到停止信号，保留已获取 {len(results)} 条")
+                    break
                 if page > 1:
-                    time.sleep(0.5)  # 分页间隔，登录态深翻页时降低风控概率
+                    if pause_every > 0 and pause_secs > 0 and last_taken:
+                        time.sleep(pause_secs * last_taken / pause_every)
+                    else:
+                        time.sleep(0.5)  # 分页间隔，登录态深翻页时降低风控概率
                 params = {"type":"uid","value":uid,"containerid":f"107603{uid}","page":page}
                 resp = client.get(self.USER_API, params=params)
                 if resp.status_code != 200 or not resp.text.strip():
@@ -527,8 +556,11 @@ class WeiboParser(PlatformBase):
                     if not mblog: continue
                     info = self._build_info(mblog, mblog.get("mid",""), f"https://weibo.com/{uid}/{mblog.get('bid') or mblog.get('mid')}", client)
                     if info: results.append(info); taken += 1
-                remaining -= taken; page += 1
+                remaining -= taken; last_taken = taken; page += 1
                 if taken == 0: break
+                if (page - 1) % 5 == 0:
+                    target = "无上限" if count >= 10**12 else f"目标 {count}"
+                    print(f"[{label}] 已翻 {page - 1} 页 · 累计 {len(results)} 条（{target}），继续...")
         except Exception:
             pass
         finally:

@@ -151,6 +151,12 @@ class TrackerPage(BasePage):
             "账号名/链接/分组一并带过来，分组不存在时按同组号+组名自动创建")
         sync_fm_btn.clicked.connect(self._sync_from_fm_accounts)
         trow.addWidget(sync_fm_btn)
+        sync_to_fm_btn = QPushButton("📤 同步到账号获取")
+        sync_to_fm_btn.setToolTip(
+            "把本页追踪账号一键同步到「账号获取」页：按平台+ID去重，已存在跳过；\n"
+            "账号名/链接/分组一并带过去，分组不存在时按同组号+组名自动创建")
+        sync_to_fm_btn.clicked.connect(self._sync_to_fm_accounts)
+        trow.addWidget(sync_to_fm_btn)
         outer.addLayout(trow)
 
         # 添加追踪账号（账号名 + 链接，可选归属分组）
@@ -779,6 +785,32 @@ class TrackerPage(BasePage):
         self.reload_accounts()
         self._reload_group_list()
         self.app.toast(f"✅ 已同步 {len(new_items)} 个账号"
+                       + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
+
+    # ---------- 反向：同步到「账号获取」 ----------
+    def _sync_to_fm_accounts(self):
+        """把本页追踪账号一键同步到「账号获取」：按平台+ID去重，已存在跳过；
+        分组一并带过去，缺失分组按同组号+组名自动创建。同步后刷新账号获取页。"""
+        from tracker.accounts import plan_sync_to_fm, apply_sync_to_fm
+        new_items, skipped = plan_sync_to_fm()
+        if not new_items:
+            self.app.toast(f"共 {skipped} 个账号均已存在于「账号获取」，无需同步", "info")
+            return
+        msg = (f"把「网媒账号追踪」的账号同步到「账号获取」？\n\n"
+               f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
+               + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
+               + ("\n…等" if len(new_items) > 8 else ""))
+        if QMessageBox.question(self, "同步到账号获取", msg,
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        apply_sync_to_fm(new_items)
+        # 账号获取页若已实例化，同步刷新其列表/分组
+        page = (getattr(self.app, "pages", {}) or {}).get("info_accounts")
+        if page is not None:
+            page._reload_account_list()
+            page._reload_group_list()
+            page._reload_account_settings()
+        self.app.toast(f"✅ 已同步 {len(new_items)} 个账号到「账号获取」"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     def _acc_row_menu(self, row, pos, url):

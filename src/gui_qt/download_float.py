@@ -38,10 +38,10 @@ class BatchCard(QFrame):
         head = QHBoxLayout()
         head.setSpacing(6)
         title = QLabel(f"📦 {source}")
-        title.setStyleSheet("font-weight: bold; font-size: 12px;")
+        title.setStyleSheet("font-weight: bold; font-size: 14px;")
         head.addWidget(title)
         self.summary_label = QLabel("")
-        self.summary_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.summary_label.setStyleSheet("color: #888; font-size: 12px;")
         head.addWidget(self.summary_label, 1)
         if cancel_cb is not None:
             self.cancel_btn = QPushButton("取消")
@@ -111,7 +111,7 @@ class DownloadFloatWindow(QWidget):
         self._main_window = main_window
         self._user_moved = False   # 用户拖动过则不再自动贴角
         self._drag_pos = None
-        self.setFixedWidth(430)
+        self.setFixedWidth(640)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 10)
@@ -143,11 +143,15 @@ class DownloadFloatWindow(QWidget):
         tlay.addWidget(tclose)
         root.addWidget(self._title_bar)
 
-        # 卡片滚动区
+        # 卡片滚动区：按屏幕可用高度自适应（QScrollArea 的 sizeHint 极小，
+        # 不给 minimumHeight 时浮窗整体只会缩成一条 ~118px 窄缝，完全看不清）
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setMaximumHeight(560)
+        screen = QApplication.primaryScreen()
+        avail_h = screen.availableGeometry().height() if screen else 1040
+        self._scroll.setMinimumHeight(max(320, int(avail_h * 0.42)))
+        self._scroll.setMaximumHeight(max(560, int(avail_h * 0.72)))
         host = QWidget()
         self._cards_lay = QVBoxLayout(host)
         self._cards_lay.setContentsMargins(0, 0, 0, 0)

@@ -19,81 +19,56 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt import common, theme
 from gui_qt.toolbox_common import has_date_subfolders
-from gui_qt.pages.settings import GlobalSettingsPage
-from gui_qt.pages.info_parse import InfoParsePage
-from gui_qt.pages.info_batch import InfoBatchPage
-from gui_qt.pages.info_accounts import InfoAccountsPage
-from gui_qt.pages.info_results import InfoResultsPage
-from gui_qt.pages.douyin_index import DouyinIndexPage
-from gui_qt.pages.asset import AssetPage
-from gui_qt.pages.subtitle import SubtitlePage
-from gui_qt.pages.organize import OrganizePage
-from gui_qt.pages.convert import ConvertPage
-from gui_qt.pages.rename import RenamePage
-from gui_qt.pages.audio import AudioPage
-from gui_qt.pages.lyrics_tool import LyricsToolPage
-from gui_qt.pages.launcher import LauncherPage
-from gui_qt.pages.music_unlock import MusicUnlockPage
-from gui_qt.pages.music_tag import MusicTagPage
-from gui_qt.pages.calendar import CalendarPage
-from gui_qt.pages.migrate import MigratePage
-from gui_qt.pages.music_info import MusicInfoPage
-from gui_qt.pages.netease import NeteasePage
-from gui_qt.pages.tracker import TrackerPage
-from gui_qt.pages.music_tracker import MusicTrackerPage
-from gui_qt.pages.test_page import TestPage
-from gui_qt.pages.bili_resource import BiliResourcePage
-from gui_qt.pages.file_time import FileTimePage
-from gui_qt.pages.rename_batch import RenameBatchPage
-from gui_qt.pages.tickets_page import TicketsPage
-from gui_qt.pages.shopping_page import ShoppingPage
-from gui_qt.pages.bili_danmaku import BiliDanmakuPage
-from gui_qt.pages.image_crop import ImageCropPage
-from gui_qt.pages.cover_maker import CoverMakerPage
-from gui_qt.pages.image_sorter import ImageSorterPage
-from gui_qt.pages.media_compress import MediaCompressPage
-from gui_qt.pages.video_comments import VideoCommentsPage
-from gui_qt.pages.wechat_article import WechatArticlePage
+from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
 
-# 页面注册：key -> 页面类
+# 页面注册：key -> (模块路径, 类名)。
+# 懒导入：首次切到该页才 import（启动只加载首个页面，避免 36 个页面模块
+# 全量 import 拖慢启动、也避免把各页的重依赖提前拉起）。
 PAGE_CLASSES = {
-    "info_parse": InfoParsePage,
-    "info_batch": InfoBatchPage,
-    "info_accounts": InfoAccountsPage,
-    "info_results": InfoResultsPage,
-    "douyin_index": DouyinIndexPage,
-    "wechat_article": WechatArticlePage,
-    "asset": AssetPage,
-    "toolbox_organize": OrganizePage,
-    "toolbox_convert": ConvertPage,
-    "toolbox_rename": RenamePage,
-    "toolbox_audio": AudioPage,
-    "toolbox_subtitle": SubtitlePage,
-    "lyrics_tool": LyricsToolPage,
-    "toolbox_launcher": LauncherPage,
-    "toolbox_calendar": CalendarPage,
-    "toolbox_migrate": MigratePage,
-    "music_info": MusicInfoPage,
-    "netease": NeteasePage,
-    "unlock_music": MusicUnlockPage,
-    "music_tag": MusicTagPage,
-    "tracker": TrackerPage,
-    "music_tracker": MusicTrackerPage,
-    "test_page": TestPage,
-    "bili_resource": BiliResourcePage,
-    "video_comments": VideoCommentsPage,
-    "file_time": FileTimePage,
-    "rename_batch": RenameBatchPage,
-    "tickets": TicketsPage,
-    "shopping": ShoppingPage,
-    "bili_danmaku": BiliDanmakuPage,
-    "image_crop": ImageCropPage,
-    "cover_maker": CoverMakerPage,
-    "image_sorter": ImageSorterPage,
-    "media_compress": MediaCompressPage,
-    "global_settings": GlobalSettingsPage,
+    "info_parse": ("gui_qt.pages.info_parse", "InfoParsePage"),
+    "info_batch": ("gui_qt.pages.info_batch", "InfoBatchPage"),
+    "info_accounts": ("gui_qt.pages.info_accounts", "InfoAccountsPage"),
+    "info_results": ("gui_qt.pages.info_results", "InfoResultsPage"),
+    "douyin_index": ("gui_qt.pages.douyin_index", "DouyinIndexPage"),
+    "wechat_article": ("gui_qt.pages.wechat_article", "WechatArticlePage"),
+    "asset": ("gui_qt.pages.asset", "AssetPage"),
+    "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
+    "toolbox_convert": ("gui_qt.pages.convert", "ConvertPage"),
+    "toolbox_rename": ("gui_qt.pages.rename", "RenamePage"),
+    "toolbox_audio": ("gui_qt.pages.audio", "AudioPage"),
+    "toolbox_subtitle": ("gui_qt.pages.subtitle", "SubtitlePage"),
+    "lyrics_tool": ("gui_qt.pages.lyrics_tool", "LyricsToolPage"),
+    "toolbox_launcher": ("gui_qt.pages.launcher", "LauncherPage"),
+    "toolbox_calendar": ("gui_qt.pages.calendar", "CalendarPage"),
+    "toolbox_migrate": ("gui_qt.pages.migrate", "MigratePage"),
+    "music_info": ("gui_qt.pages.music_info", "MusicInfoPage"),
+    "netease": ("gui_qt.pages.netease", "NeteasePage"),
+    "unlock_music": ("gui_qt.pages.music_unlock", "MusicUnlockPage"),
+    "music_tag": ("gui_qt.pages.music_tag", "MusicTagPage"),
+    "tracker": ("gui_qt.pages.tracker", "TrackerPage"),
+    "music_tracker": ("gui_qt.pages.music_tracker", "MusicTrackerPage"),
+    "test_page": ("gui_qt.pages.test_page", "TestPage"),
+    "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
+    "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
+    "file_time": ("gui_qt.pages.file_time", "FileTimePage"),
+    "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
+    "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
+    "shopping": ("gui_qt.pages.shopping_page", "ShoppingPage"),
+    "bili_danmaku": ("gui_qt.pages.bili_danmaku", "BiliDanmakuPage"),
+    "image_crop": ("gui_qt.pages.image_crop", "ImageCropPage"),
+    "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
+    "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
+    "media_compress": ("gui_qt.pages.media_compress", "MediaCompressPage"),
+    "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
 }
+
+
+def _page_class(key):
+    """按注册表懒导入页面类。"""
+    import importlib
+    mod_name, cls_name = PAGE_CLASSES[key]
+    return getattr(importlib.import_module(mod_name), cls_name)
 
 NAV_GROUPS = [
     ("📊 信息获取", [
@@ -243,25 +218,37 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         app.installEventFilter(self)
 
-        # 默认显示第一个页面
+        # 骨架加载：先显示骨架占位页（窗口立即可见），真实首页/重依赖初始化
+        # 延迟到事件循环启动后（QTimer.singleShot(0)），避免启动期间界面空白转圈
+        self._theme_dirty = set()  # 主题切换后待刷新的页面 key
+        self.skeleton = SkeletonPage()
+        self.stack.addWidget(self.skeleton)
+        self.stack.setCurrentWidget(self.skeleton)
         first_key = NAV_GROUPS[0][1][0][0]
-        self.show_page(first_key)
-
-        # 延迟刷新 Cookie 状态（内部 import auth 等重依赖，避免阻塞启动）
-        self._refresh_cookie_status()
-
-        # 恢复上次「已获取」的数据（config/collected.json，重启不丢）
-        common.load_collected()
-
-        # 保存了深色主题时，把构造期内联样式统一适配（含 styleSheet= 关键字参数）
-        if theme.is_dark():
-            theme.adapt(self)
+        QTimer.singleShot(0, lambda: self._deferred_boot(first_key))
 
         # 主题定时开关：启动对齐一次 + 每 10 秒强制对齐（到点即变，无需手动触发）
         self._check_theme_schedule()
         self._theme_timer = QTimer(self)
         self._theme_timer.timeout.connect(self._check_theme_schedule)
         self._theme_timer.start(10_000)
+
+    def _deferred_boot(self, first_key):
+        """事件循环就绪后的启动收尾：构造首个真实页面 + 重依赖初始化。"""
+        if first_key in PAGE_CLASSES:
+            self.show_page(first_key)
+        # 骨架退场
+        if self.skeleton is not None:
+            self.stack.removeWidget(self.skeleton)
+            self.skeleton.deleteLater()
+            self.skeleton = None
+        # 延迟刷新 Cookie 状态（内部 import auth 等重依赖，避免阻塞启动）
+        self._refresh_cookie_status()
+        # 恢复上次「已获取」的数据（config/collected.json，重启不丢）
+        common.load_collected()
+        # 保存了深色主题时，把构造期内联样式统一适配（含 styleSheet= 关键字参数）
+        if theme.is_dark():
+            theme.adapt(self)
 
     # ==================== 侧栏 ====================
 
@@ -317,7 +304,7 @@ class MainWindow(QMainWindow):
     def _toggle_theme(self):
         name = theme.toggle_theme()
         theme.apply_theme()
-        theme.retheme_all()
+        theme.retheme_all(self)
         self._notify_theme_changed()
         self._update_theme_btn()
         msg = f"已切换到{'深色' if name == 'dark' else '浅色'}主题"
@@ -356,17 +343,22 @@ class MainWindow(QMainWindow):
         if not name:
             return
         theme.apply_theme()
-        theme.retheme_all()
+        theme.retheme_all(self)
         self._notify_theme_changed()
         self._update_theme_btn()
         label = "🖥 已跟随系统" if src == "system" else "⏰ 已定时"
         show_toast(self, f"{label}切换到{'深色' if name == 'dark' else '浅色'}主题", "info")
 
     def _notify_theme_changed(self):
-        """主题切换后：通知各页面刷新自绘 HTML 内容（样式表已由 retheme_all 重映射，
-        但 QTextBrowser 等富文本内容色需页面自行重建）。"""
-        for page in self.pages.values():
+        """主题切换后：只通知当前页刷新自绘 HTML 内容（QTextBrowser 等富文本
+        内容色需页面自行重建）；未激活页记入 _theme_dirty，切回时在 show_page 补通知，
+        避免一次切换唤醒全部已加载页面的重建逻辑。"""
+        current_page = self.pages.get(self.current_page)
+        for key, page in self.pages.items():
             if page is None:
+                continue
+            if page is not current_page:
+                self._theme_dirty.add(key)
                 continue
             try:
                 cb = getattr(page, "on_theme_changed", None)
@@ -468,7 +460,7 @@ class MainWindow(QMainWindow):
 
         # 懒加载
         if key not in self.pages:
-            page = PAGE_CLASSES[key](self)
+            page = _page_class(key)(self)
             self.stack.addWidget(page)
             self.pages[key] = page
             # 功能型复选框：点击时右下角 toast「已开启/已关闭 XXX」
@@ -479,6 +471,15 @@ class MainWindow(QMainWindow):
         self.current_page = key
         # 主题自适应：构造期 styleSheet= 关键字参数与动态新增的行在此兜底
         theme.adapt(page)
+        # 主题切换期间未激活（跳过了 on_theme_changed 通知）的页：切回时补通知
+        if key in self._theme_dirty:
+            self._theme_dirty.discard(key)
+            try:
+                cb = getattr(page, "on_theme_changed", None)
+                if cb:
+                    cb()
+            except Exception:
+                pass
         # 触发页面刷新钩子（如「已获取」页切回时刷新列表）
         if hasattr(page, "on_show"):
             page.on_show()

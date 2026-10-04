@@ -186,7 +186,7 @@ class InfoAccountsPage(BasePage):
             "<p>· <b>⏰ 定时获取</b>：按间隔自动抓取全部账号</p>"
             "<p>· <b>📅 日期段</b>：日历选择发布时间范围（如 9月1日~9月20日、从头~9月20日），"
             "获取时只保留范围内的内容，范围持久保存</p>"
-            "<p>· <b>📤 同步到追踪</b>：本页账号一键同步到「视频账号追踪」，"
+            "<p>· <b>📤/📥 双向同步</b>：本页账号 ⇄「视频账号追踪」互相同步，"
             "已存在的自动跳过，账号名/分组一并带过去（免重复录入）</p>"
             "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
             "<p>· Cookie 统一由侧栏「Cookie 管理」维护，抓取时自动套用</p>")))
@@ -227,6 +227,10 @@ class InfoAccountsPage(BasePage):
             "📤", "同步到追踪：把本页账号一键同步到「视频账号追踪」（按平台+ID去重，已存在跳过；分组一并带过去）",
             (36, 24), True, "font-size: 13px;", self._sync_to_tracker)
         sel_bar.addWidget(self.sync_btn)
+        self.sync_from_btn = icon_button(
+            "📥", "从追踪同步：把「视频账号追踪」的账号一键同步到本页（按平台+ID去重，已存在跳过；分组一并带过来）",
+            (36, 24), True, "font-size: 13px;", self._sync_from_tracker)
+        sel_bar.addWidget(self.sync_from_btn)
         layout.addLayout(sel_bar)
 
         # 账号列表（复选框，固定高度滚动；右键 打开/复制链接、修改、删除）
@@ -585,7 +589,35 @@ class InfoAccountsPage(BasePage):
                                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         apply_sync_from_fm(new_items)
+        # 追踪页若已实例化，同步刷新其卡片/分组
+        page = (getattr(self.app, "pages", {}) or {}).get("tracker")
+        if page is not None:
+            page.reload_accounts()
+            page._reload_group_list()
         self.app.toast(f"✅ 已同步 {len(new_items)} 个账号到「视频账号追踪」"
+                       + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
+
+    # ---------- 从「视频账号追踪」反向同步 ----------
+    def _sync_from_tracker(self):
+        """把「视频账号追踪」的账号一键同步到本页：按平台+ID去重，已存在跳过；
+        分组一并带过来，缺失分组按同组号+组名自动创建（与「📤 同步到追踪」构成双向）。"""
+        from tracker.accounts import plan_sync_to_fm, apply_sync_to_fm
+        new_items, skipped = plan_sync_to_fm()
+        if not new_items:
+            self.app.toast(f"共 {skipped} 个账号均已存在，无需同步", "info")
+            return
+        msg = (f"把「视频账号追踪」的账号同步到「账号获取」？\n\n"
+               f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
+               + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
+               + ("\n…等" if len(new_items) > 8 else ""))
+        if QMessageBox.question(self, "从追踪同步", msg,
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        apply_sync_to_fm(new_items)
+        self._reload_account_list()
+        self._reload_group_list()
+        self._reload_account_settings()
+        self.app.toast(f"✅ 已从追踪同步 {len(new_items)} 个账号"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     # ---------- 自动获取账号名 ----------
@@ -832,8 +864,9 @@ class InfoAccountsPage(BasePage):
         if on_event is not None:
             on_event({"type": "progress", "done": 0, "total": n, "label": "准备中..."})
         all_posts = []
-        # 0 = 无上限（抓完所有分页）
-        fetch_count = count if count > 0 else 9999
+        # 0 = 无上限（抓完所有分页/翻到底）：传天文数字给采集器，
+        # 各平台以 10^12 为界识别为「无上限」（翻到时间线尽头/停滞检测自然停）
+        fetch_count = count if count > 0 else 99999999999999
 
         # 线程安全 stdout 捕获：redirect_stdout 是全局替换，多线程并发采集会互相覆盖，
         # 改用 thread-local 代理——各采集线程的 print 只进自己的缓冲区
@@ -946,10 +979,16 @@ class InfoAccountsPage(BasePage):
             account_kind = getattr(a, "kind", "") or infer_kind_from_url(a.url)
             kwargs = {}
             if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
-                kwargs = {"kind": account_kind}
-            elif platform == "douyin" and rate_on:
-                # 抖音风控最敏感：账号内部翻页也按限流设置停顿（每 rate_count 条停 rate_interval 秒）
-                kwargs = {"pause_every": rate_count, "pause_secs": rate_interval}
+                kwargs["kind"] = account_kind
+            if rate_on and platform in ("douyin", "weibo", "bilibili"):
+                # 账号内部深翻页也按限流设置停顿（每 rate_count 条停 rate_interval 秒，
+                # 按每页实际条数折算）；快手浏览器滚动自带 1.5s 节奏、小红书首批
+                # SSR 无翻页，不接
+                kwargs["pause_every"] = rate_count
+                kwargs["pause_secs"] = rate_interval
+            if platform in ("douyin", "weibo", "bilibili", "kuaishou") and cancel_event is not None:
+                # 取消信号可打断在飞账号的深翻页/浏览器滚动，已抓部分保留（断点续获取）
+                kwargs["stop_check"] = cancel_event.is_set
             # 实时日志缓冲：采集器的 print 逐行实时进日志（前缀=账号名），不再等全部账号收尾后倾倒
             name_s = (name[:16] + "…") if len(name) > 16 else name
             buf = _LiveBuf(emit, f"    [{name_s}] ")
@@ -970,6 +1009,8 @@ class InfoAccountsPage(BasePage):
         per_platform = {}  # 平台 -> 已抓数量（汇总统计用）
         done_order = []    # 完成顺序的 i 列表（日志/进度按实际完成推送）
         results = {}       # i -> (a, platform, posts, error)（导出前按账号序重排，顺序稳定）
+        total_added = {}   # 增量模式：平台 -> 本轮新增条数（汇总用）
+        total_files = 0    # 单独导出模式：本轮写出文件数（汇总用）
         try:
             # 并发上限 4：过高并发容易触发平台风控，且 Playwright 兜底时资源开销大
             workers = min(4, max(1, n))
@@ -1007,6 +1048,15 @@ class InfoAccountsPage(BasePage):
                             emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
                     emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
                     _collect(posts)
+                    # 逐账号即时入库/导出：不等全部账号收尾——中途崩溃/退出/取消
+                    # 只丢在飞账号，已完成账号的数据都已在库（断点续获取的落点）
+                    save_msg, saved = self._export_one_batch(posts, incremental)
+                    emit(f"[{i}/{n}] {save_msg}")
+                    if incremental and isinstance(saved, dict):
+                        for p, cnt in saved.items():
+                            total_added[p] = total_added.get(p, 0) + cnt
+                    elif not incremental and isinstance(saved, int):
+                        total_files += saved
                     all_posts.extend(posts)
                     total += len(posts)
                     per_platform[platform] = per_platform.get(platform, 0) + len(posts)
@@ -1033,43 +1083,53 @@ class InfoAccountsPage(BasePage):
             sys.stdout = old_stdout
         # 导出按账号顺序（列表勾选顺序）而非完成顺序，产物稳定可复现
         all_posts = [p for i in sorted(results) for p in results[i][2]]
-        # 自动导出（增量 or 单独）
+        # 汇总一行（数据已逐账号即时入库/导出，这里只报去向与总量）
         if all_posts:
-            export_msg = self._auto_export(all_posts, incremental)
-            if export_msg:
-                emit(export_msg)
+            if incremental:
+                from toolbox import increment_db
+                if any(total_added.values()):
+                    parts = "、".join(f"{p} +{v}" for p, v in total_added.items() if v)
+                    emit(f"💾 已增量写入数据库: {increment_db.db_path()}（{parts}）")
+                else:
+                    emit(f"💾 无新增（已全部在库中）: {increment_db.db_path()}")
+            else:
+                from toolbox.config_manager import get_export_subdir
+                emit(f"💾 已单独导出 {total_files} 个文件到 {get_export_subdir('video_data')}")
         if on_event is not None:
             cancelled = cancel_event is not None and cancel_event.is_set()
             on_event({"type": "progress", "done": n, "total": n,
                       "label": "✕ 已取消" if cancelled else "✅ 全部完成"})
         return total, log, all_posts
 
-    def _auto_export(self, posts, incremental):
-        """抓取完成后自动导出。incremental=True 增量入库（分平台分表），False 单独导出独立文件。"""
+    def _export_one_batch(self, posts, incremental):
+        """单账号结果即时入库/导出（账号一完成就保存，不等全部收尾）。
+
+        incremental=True 增量入库（分平台分表、按去重键忽略重复，重复保存幂等），
+        False 单独导出独立文件（已存在则跳过，用户移走/删除/改名后重新保存）。
+        返回 (短消息, 增量模式=平台->新增数 dict / 导出模式=写出文件数 int)。
+        """
         try:
             if incremental:
                 # 增量：写入增量数据库（config/increment.db，分平台分表、按去重键忽略重复）
                 from toolbox import increment_db
                 added = increment_db.save_incremental(posts)
-                if any(added.values()):
-                    parts = "、".join(f"{p} +{n}" for p, n in added.items() if n)
-                    return f"💾 已增量写入数据库: {increment_db.db_path()}（{parts}）"
-                return f"💾 无新增（已全部在库中）: {increment_db.db_path()}"
+                parts = "、".join(f"{p} +{n}" for p, n in added.items() if n)
+                msg = f"💾 已入库 {parts}" if parts else "💾 无新增（已全部在库中）"
+                return msg, added
             else:
-                # 单独导出独立文件（已存在则跳过，用户移走/删除/改名后重新保存）
                 from toolbox.config_manager import get_export_subdir
                 out_dir = str(get_export_subdir("video_data"))
                 from exporters import export_per_video_flat
                 paths, skipped = export_per_video_flat(posts, output_dir=out_dir,
                                                        formats=["json", "md"], skip_existing=True)
                 if skipped and not paths:
-                    return f"⚠️ 文件已存在，请勿重复保存（{len(skipped)} 个）"
-                msg = f"💾 已单独导出 {len(paths)} 个文件到 {out_dir}"
+                    return f"⚠️ 文件已存在，跳过（{len(skipped)} 个）", len(paths)
+                msg = f"💾 已导出 {len(paths)} 个文件"
                 if skipped:
                     msg += f"（跳过 {len(skipped)} 个已存在）"
-                return msg
+                return msg, len(paths)
         except Exception as e:
-            return f"⚠️ 自动导出失败: {e}"
+            return f"⚠️ 保存失败: {e}", {}
 
     # ---------- 增量模式勾选持久化 ----------
     @staticmethod

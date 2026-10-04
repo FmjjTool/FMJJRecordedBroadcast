@@ -392,8 +392,14 @@ class BilibiliParser(PlatformBase):
 
     # ========== 用户时间线 (HTTP + Playwright) ==========
 
-    def fetch_user_posts(self, url_or_id: str, count: int = 10, kind: str = "all") -> list:
-        """获取用户最新内容。kind: "video"=只视频、"dynamic"=只动态、"all"=全部"""
+    def fetch_user_posts(self, url_or_id: str, count: int = 10, kind: str = "all",
+                         pause_every: int = 0, pause_secs: float = 0.0,
+                         stop_check=None) -> list:
+        """获取用户最新内容。kind: "video"=只视频、"dynamic"=只动态、"all"=全部
+
+        pause_every/pause_secs: 翻页限流（每抓 pause_every 条停 pause_secs 秒）；
+        stop_check: 返回 True 时停止翻页并保留已获取的部分（取消时断点保留）。
+        """
         mid = self.extract_user_id(url_or_id)
         if not mid:
             print(f"[B站] 无法提取用户ID: {url_or_id}")
@@ -402,7 +408,7 @@ class BilibiliParser(PlatformBase):
         # 按 kind 决定只拉视频 / 只拉动态 / 混合
         if kind in ("all", "video"):
             n = count if kind == "video" else (count // 2 + 1)
-            results.extend(self._fetch_user_videos(mid, n))
+            results.extend(self._fetch_user_videos(mid, n, pause_every, pause_secs, stop_check))
         if kind in ("all", "dynamic"):
             if kind == "dynamic":
                 n = count
@@ -410,7 +416,7 @@ class BilibiliParser(PlatformBase):
                 # 已抓的视频数（按非 dynamic 计）保证合计接近 count
                 existing_videos = sum(1 for r in results if getattr(r, "kind", "") != "dynamic")
                 n = count - existing_videos + 2
-            dyn = self._fetch_dynamics(mid, n)
+            dyn = self._fetch_dynamics(mid, n, pause_every, pause_secs, stop_check)
             if kind == "all":
                 # 混合模式：投稿动态与视频列表是同一内容两条，按 bvid 去掉动态侧
                 # （转发他人视频/超出视频列表抓取范围的不受影响，仍保留为动态）
@@ -438,21 +444,32 @@ class BilibiliParser(PlatformBase):
         unique.sort(key=lambda x: x.publish_time or "", reverse=True)
         return unique[:count]
 
-    def _fetch_user_videos(self, mid: str, count: int = 10) -> list:
+    def _fetch_user_videos(self, mid: str, count: int = 10,
+                           pause_every: int = 0, pause_secs: float = 0.0,
+                           stop_check=None) -> list:
         """三级回退：① 游客HTTP（内部失败切游客Playwright）→ ② 接入Cookie重试。"""
-        results = self._fetch_user_videos_once(mid, count, cookie="")
+        results = self._fetch_user_videos_once(mid, count, cookie="",
+                                               pause_every=pause_every,
+                                               pause_secs=pause_secs,
+                                               stop_check=stop_check)
         if results:
             return results
         from auth import get_cookie
         ck = get_cookie("bilibili")
         if ck:
             print("[B站] 游客方式未获取到视频，接入Cookie重试...")
-            results = self._fetch_user_videos_once(mid, count, cookie=ck)
+            results = self._fetch_user_videos_once(mid, count, cookie=ck,
+                                                   pause_every=pause_every,
+                                                   pause_secs=pause_secs,
+                                                   stop_check=stop_check)
         return results
 
-    def _fetch_user_videos_once(self, mid: str, count: int = 10, cookie: str = "") -> list:
+    def _fetch_user_videos_once(self, mid: str, count: int = 10, cookie: str = "",
+                                pause_every: int = 0, pause_secs: float = 0.0,
+                                stop_check=None) -> list:
         results = []
-        page = 1; remaining = count
+        page = 1; remaining = count; last_n = 0
+        label = "B站-Cookie" if cookie else "B站"
         headers = dict(self.HEADERS)
         if cookie: headers["Cookie"] = cookie
         client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
@@ -465,6 +482,16 @@ class BilibiliParser(PlatformBase):
             mixin_key = None
         try:
             while remaining > 0:
+                if stop_check is not None and stop_check():
+                    if results:
+                        print(f"[{label}] 收到停止信号，保留已获取 {len(results)} 条")
+                    break
+                if page > 1:
+                    if pause_every > 0 and pause_secs > 0 and last_n:
+                        # 限流停顿：按上一页实际条数折算（每 pause_every 条停 pause_secs 秒）
+                        time.sleep(pause_secs * last_n / pause_every)
+                    else:
+                        time.sleep(0.3)  # 翻页基础间隔，深翻页时降低风控概率
                 ps = min(remaining, 30)
                 params = {"mid":mid,"ps":ps,"pn":page,"order":"pubdate","tid":"0","keyword":""}
                 if mixin_key:
@@ -523,8 +550,11 @@ class BilibiliParser(PlatformBase):
                         raw_url=_build_video_url(v), raw_data=v, fetched_at=now_str(),
                         category="视频",
                     ))
-                remaining -= ps; page += 1
+                remaining -= ps; page += 1; last_n = len(vlist)
                 if len(vlist) < ps: break
+                if (page - 1) % 5 == 0:
+                    target = "无上限" if count >= 10**12 else f"目标 {count}"
+                    print(f"[{label}] 已翻 {page - 1} 页 · 累计 {len(results)} 条（{target}），继续...")
             return results
         except Exception as e:
             print(f"[B站] 异常: {e}，切 Playwright...")
@@ -584,9 +614,14 @@ class BilibiliParser(PlatformBase):
 
     # ========== 动态 (含图文) ==========
 
-    def _fetch_dynamics(self, mid: str, count: int = 10) -> list:
+    def _fetch_dynamics(self, mid: str, count: int = 10,
+                        pause_every: int = 0, pause_secs: float = 0.0,
+                        stop_check=None) -> list:
         """获取用户动态（支持图文、转发视频等）。游客HTTP→游客Playwright→Cookie 三级回退。"""
-        results = self._fetch_dynamics_once(mid, count, cookie="")
+        results = self._fetch_dynamics_once(mid, count, cookie="",
+                                            pause_every=pause_every,
+                                            pause_secs=pause_secs,
+                                            stop_check=stop_check)
         if results:
             return results
         print("[B站] 游客HTTP未获取到动态，切Playwright...")
@@ -597,7 +632,10 @@ class BilibiliParser(PlatformBase):
         ck = get_cookie("bilibili")
         if ck:
             print("[B站] Playwright也未获取到动态，接入Cookie重试...")
-            results = self._fetch_dynamics_once(mid, count, cookie=ck)
+            results = self._fetch_dynamics_once(mid, count, cookie=ck,
+                                                pause_every=pause_every,
+                                                pause_secs=pause_secs,
+                                                stop_check=stop_check)
         return results
 
     def _fetch_dynamics_playwright(self, mid: str, count: int = 10) -> list:
@@ -646,15 +684,28 @@ class BilibiliParser(PlatformBase):
                 browser.close()
         return results[:count] if count > 0 else results
 
-    def _fetch_dynamics_once(self, mid: str, count: int = 10, cookie: str = "") -> list:
+    def _fetch_dynamics_once(self, mid: str, count: int = 10, cookie: str = "",
+                             pause_every: int = 0, pause_secs: float = 0.0,
+                             stop_check=None) -> list:
         results = []
+        label = "B站-动态-Cookie" if cookie else "B站-动态"
         headers = dict(self.HEADERS)
         headers["Referer"] = f"https://space.bilibili.com/{mid}/dynamic"
         if cookie: headers["Cookie"] = cookie
         client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
         offset = ""
+        pages = 0; last_n = 0
         try:
             while len(results) < count + 5:
+                if stop_check is not None and stop_check():
+                    if results:
+                        print(f"[{label}] 收到停止信号，保留已获取 {len(results)} 条")
+                    break
+                if pages > 0:
+                    if pause_every > 0 and pause_secs > 0 and last_n:
+                        time.sleep(pause_secs * last_n / pause_every)
+                    else:
+                        time.sleep(0.3)
                 params = {
                     "host_mid": mid,
                     "timezone_offset": "-480",
@@ -671,6 +722,10 @@ class BilibiliParser(PlatformBase):
                 for item in items:
                     results.append(self._build_dynamic_info(item))
 
+                pages += 1; last_n = len(items)
+                if pages % 5 == 0:
+                    target = "无上限" if count >= 10**12 else f"目标 {count}"
+                    print(f"[{label}] 已翻 {pages} 页 · 累计 {len(results)} 条（{target}），继续...")
                 offset = data.get("data", {}).get("offset", "")
                 has_more = data.get("data", {}).get("has_more", False)
                 if not has_more or not offset:

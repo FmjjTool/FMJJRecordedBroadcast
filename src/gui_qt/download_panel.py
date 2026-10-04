@@ -52,7 +52,7 @@ class SegmentBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(18)
+        self.setMinimumHeight(22)
         self._segs: list[tuple[int, int]] = []
 
     def set_count(self, n: int):
@@ -98,23 +98,23 @@ class _SlotRow(QWidget):
 
     def __init__(self, idx: int, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(26)
+        self.setFixedHeight(34)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(2, 1, 2, 1)
-        lay.setSpacing(6)
+        lay.setSpacing(8)
         self.no_label = QLabel(f"{idx + 1}")
-        self.no_label.setFixedWidth(18)
-        self.no_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.no_label.setFixedWidth(22)
+        self.no_label.setStyleSheet("color: #888; font-size: 13px;")
         self.name_label = QLabel("—")
-        self.name_label.setStyleSheet("font-size: 12px;")
+        self.name_label.setStyleSheet("font-size: 14px;")
         self.bar = QProgressBar()
-        self.bar.setFixedHeight(14)
-        self.bar.setFixedWidth(110)
+        self.bar.setFixedHeight(16)
+        self.bar.setMinimumWidth(240)
         self.bar.setStyleSheet(
-            "QProgressBar { font-size: 10px; border-radius: 4px; }")
+            "QProgressBar { font-size: 12px; border-radius: 4px; }")
         self.state_label = QLabel("")
-        self.state_label.setFixedWidth(70)
-        self.state_label.setStyleSheet("font-size: 11px; color: #888;")
+        self.state_label.setFixedWidth(96)
+        self.state_label.setStyleSheet("font-size: 13px; color: #888;")
         lay.addWidget(self.no_label)
         lay.addWidget(self.name_label, 1)
         lay.addWidget(self.bar)
@@ -178,10 +178,10 @@ class DownloadPanel(QFrame):
         self._single_name_label.setWordWrap(False)
         self._seg_bar = SegmentBar()
         self._single_stats = QLabel("")
-        self._single_stats.setStyleSheet("color: #888; font-size: 12px;")
+        self._single_stats.setStyleSheet("color: #888; font-size: 13px;")
         # 批量模式控件
         self._batch_head = QLabel("")
-        self._batch_head.setStyleSheet("color: #888; font-size: 12px;")
+        self._batch_head.setStyleSheet("color: #888; font-size: 13px;")
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
@@ -353,6 +353,7 @@ class DownloadPanel(QFrame):
     def _build_placeholder(self):
         self._clear_layout()
         self._root.addWidget(self._placeholder)
+        self._placeholder.show()  # 被 _clear_layout hide 过，重新入局需显式复位
         self.setFixedHeight(56)
         self.setVisible(True)
 
@@ -362,10 +363,10 @@ class DownloadPanel(QFrame):
             self._seg_bar.set_count(threads)
             self._single_name_label.setText("")
             self._single_stats.setText("")
-            self._root.addWidget(self._single_name_label)
-            self._root.addWidget(self._seg_bar)
-            self._root.addWidget(self._single_stats)
-            self.setFixedHeight(104)
+            for w in (self._single_name_label, self._seg_bar, self._single_stats):
+                self._root.addWidget(w)
+                w.show()  # _clear_layout 的 hide() 需显式复位，否则二次构建后永久不可见
+            self.setFixedHeight(110)
         else:
             # 重建槽位行
             for w in (self._rows):
@@ -378,7 +379,13 @@ class DownloadPanel(QFrame):
             self._batch_head.setText("⬇ 准备下载…")
             self._root.addWidget(self._batch_head)
             self._root.addWidget(self._scroll)
-            self.setFixedHeight(min(46 + nslots * 30, 196))
+            # 复用控件被 _clear_layout hide() 过，重新入局后必须 show()
+            # （自动下载批次：add_batch 预 plan 一次 + 下载函数 plan 一次 =
+            #  二次 _build_ui，不 show 则面板永久空白）
+            self._batch_head.show()
+            self._scroll.show()
+            # 槽位全展开（浮窗滚动区统一管理总高度）；仅线程特别多时内部截断
+            self.setFixedHeight(min(46 + nslots * 40, 760))
         self.setVisible(True)
 
     def _single_started(self, name: str):
