@@ -1,7 +1,9 @@
 """启动骨架占位页（2026-10 性能重构）。
 
-主窗口构造完成即显示本页（模拟真实界面布局的灰块骨架 + 呼吸动画），
+主窗口构造完成即显示本页（内容区灰块骨架 + 呼吸动画），
 窗口秒开不白屏；真实首页懒加载完成后由 _deferred_boot 移除。
+只占位右侧内容区——真实左侧导航在 __init__ 同步构建，骨架显示时已就位，
+不再画导航灰块（否则假导航列会挤进内容区，视觉错位）。
 颜色取自当前 QPalette 角色，天然跟随浅/深主题，无需进主题映射表。
 """
 
@@ -28,34 +30,15 @@ class SkeletonPage(QWidget):
         block2 = pal.midlight().color().name()       # 次级灰块
         text = pal.windowText().color().name()       # 提示文字（placeholderText 在深色下对比不足）
 
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         # 骨架容器（整体做呼吸动画）
         body = QWidget()
         root.addWidget(body)
-        h = QHBoxLayout(body)
-        h.setContentsMargins(12, 12, 12, 12)
-        h.setSpacing(12)
-
-        # 左侧导航占位
-        nav = QWidget()
-        nav.setFixedWidth(180)
-        nv = QVBoxLayout(nav)
-        nv.setContentsMargins(0, 0, 0, 0)
-        nv.setSpacing(10)
-        nv.addWidget(_Block(block2, 26, 8))
-        nv.addSpacing(12)
-        for w in (150, 132, 158, 120, 144, 126, 138):
-            nv.addWidget(_Block(block, 22, 6))
-        nv.addStretch(1)
-        h.addWidget(nav)
-
-        # 右侧内容占位
-        content = QWidget()
-        cv = QVBoxLayout(content)
-        cv.setContentsMargins(0, 0, 0, 0)
+        cv = QVBoxLayout(body)
+        cv.setContentsMargins(12, 12, 12, 12)
         cv.setSpacing(12)
         cv.addWidget(_Block(block2, 28, 8))
         row = QHBoxLayout()
@@ -66,7 +49,6 @@ class SkeletonPage(QWidget):
         cv.addLayout(row)
         main_block = _Block(block, 60, 10)
         cv.addWidget(main_block, 1)
-        h.addWidget(content, 1)
 
         # 中央提示（放动画组外，文字恒定清晰）
         tip = QLabel("⏳ 正在启动，请稍候…", self)
