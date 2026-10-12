@@ -77,6 +77,32 @@ def _save(content: bytes, base_name: str, ext: str, out_dir: str) -> str:
     return path
 
 
+_COVER_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _download_cover(cover_url: str, referer: str, audio_path: str) -> str:
+    """下载封面存为与音频同名的图片文件；失败静默，不影响歌曲下载。"""
+    if not cover_url:
+        return ""
+    from urllib.parse import urlparse
+    ext = os.path.splitext(urlparse(cover_url).path)[1].lower()
+    if ext not in _COVER_EXTS:
+        ext = ".jpg"
+    path = os.path.splitext(audio_path)[0] + ext
+    if os.path.exists(path):
+        return path
+    try:
+        with get_client(timeout=15) as client:
+            resp = client.get(cover_url, headers=make_headers(referer=referer))
+        if resp.status_code != 200 or len(resp.content) < 100:
+            return ""
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
+    except Exception:
+        return ""
+
+
 def _download_to(url: str, referer: str, base_name: str, ext: str, out_dir: str,
                  expected_seconds: int = 0) -> DownloadResult:
     with get_client(timeout=60) as client:
@@ -238,7 +264,10 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
     base = f"{_safe_name(song.singer)} - {_safe_name(song.song_name)}".strip()
     base = re.sub(r"\s+", " ", base)
     referer = got.referer or _REFERERS[song.platform]
-    return _download_to(got.url, referer, base, got.ext, out_dir, song.duration)
+    result = _download_to(got.url, referer, base, got.ext, out_dir, song.duration)
+    if result.success and song.cover_url:
+        _download_cover(song.cover_url, referer, result.file_path)
+    return result
 
 
 def platform_downloadable(platform: str) -> bool:

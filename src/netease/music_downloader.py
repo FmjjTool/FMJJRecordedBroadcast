@@ -8,6 +8,7 @@
 - 异步下载支持
 """
 
+import os
 import re
 import time
 from typing import Optional
@@ -258,6 +259,7 @@ class MusicDownloader:
             if file_path.exists():
                 actual_size = file_path.stat().st_size
                 if not music_info.file_size or actual_size >= music_info.file_size:
+                    self._ensure_cover_file(file_path, music_info)
                     return DownloadResult(
                         success=True,
                         file_path=str(file_path),
@@ -294,8 +296,12 @@ class MusicDownloader:
             else:
                 raise DownloadException(f"下载失败（服务器多次中断连接）: {last_err}")
 
+            # 封面字节只下载一次：内嵌标签与独立封面文件共用
+            cover_bytes = self._fetch_cover_bytes(music_info.pic_url)
+
             # 写入音乐标签
-            self._write_music_tags(file_path, music_info)
+            self._write_music_tags(file_path, music_info, cover_bytes)
+            self._ensure_cover_file(file_path, music_info, cover_bytes)
             
             return DownloadResult(
                 success=True,
@@ -320,111 +326,134 @@ class MusicDownloader:
     
     
     
-    def _write_music_tags(self, file_path: Path, music_info: MusicInfo) -> None:
+    @staticmethod
+    def _fetch_cover_bytes(pic_url: str) -> Optional[bytes]:
+        """下载封面图片字节；失败返回 None（不影响主流程）。"""
+        if not pic_url:
+            return None
+        try:
+            r = requests.get(pic_url, timeout=10)
+            r.raise_for_status()
+            return r.content or None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ensure_cover_file(file_path: Path, music_info: MusicInfo,
+                           cover_bytes: Optional[bytes] = None) -> None:
+        """把封面另存为与音频同名的图片文件（已存在则跳过，失败静默）。"""
+        if not music_info.pic_url:
+            return
+        from urllib.parse import urlparse
+        ext = os.path.splitext(urlparse(music_info.pic_url).path)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            ext = ".jpg"
+        cover_path = file_path.with_name(file_path.stem + ext)
+        if cover_path.exists():
+            return
+        if cover_bytes is None:
+            cover_bytes = MusicDownloader._fetch_cover_bytes(music_info.pic_url)
+        if not cover_bytes:
+            return
+        try:
+            cover_path.write_bytes(cover_bytes)
+        except Exception:
+            pass
+
+    def _write_music_tags(self, file_path: Path, music_info: MusicInfo,
+                          cover_bytes: Optional[bytes] = None) -> None:
         """写入音乐标签信息
-        
+
         Args:
             file_path: 音乐文件路径
             music_info: 音乐信息
+            cover_bytes: 封面图片字节（None 则不内嵌封面）
         """
         try:
             file_ext = file_path.suffix.lower()
-            
+
             if file_ext == '.mp3':
-                self._write_mp3_tags(file_path, music_info)
+                self._write_mp3_tags(file_path, music_info, cover_bytes)
             elif file_ext == '.flac':
-                self._write_flac_tags(file_path, music_info)
+                self._write_flac_tags(file_path, music_info, cover_bytes)
             elif file_ext == '.m4a':
-                self._write_m4a_tags(file_path, music_info)
-                
+                self._write_m4a_tags(file_path, music_info, cover_bytes)
+
         except Exception as e:
             print(f"写入音乐标签失败: {e}")
-    
-    def _write_mp3_tags(self, file_path: Path, music_info: MusicInfo) -> None:
+
+    def _write_mp3_tags(self, file_path: Path, music_info: MusicInfo,
+                        cover_bytes: Optional[bytes] = None) -> None:
         """写入MP3标签"""
         try:
             audio = MP3(str(file_path), ID3=ID3)
-            
+
             # 添加ID3标签
             audio.tags.add(TIT2(encoding=3, text=music_info.name))
             audio.tags.add(TPE1(encoding=3, text=music_info.artists))
             audio.tags.add(TALB(encoding=3, text=music_info.album))
-            
+
             if music_info.track_number > 0:
                 audio.tags.add(TRCK(encoding=3, text=str(music_info.track_number)))
-            
-            # 下载并添加封面
-            if music_info.pic_url:
-                try:
-                    pic_response = requests.get(music_info.pic_url, timeout=10)
-                    pic_response.raise_for_status()
-                    audio.tags.add(APIC(
-                        encoding=3,
-                        mime='image/jpeg',
-                        type=3,
-                        desc='Cover',
-                        data=pic_response.content
-                    ))
-                except:
-                    pass  # 封面下载失败不影响主流程
-            
+
+            # 添加封面
+            if cover_bytes:
+                audio.tags.add(APIC(
+                    encoding=3,
+                    mime='image/jpeg',
+                    type=3,
+                    desc='Cover',
+                    data=cover_bytes
+                ))
+
             audio.save()
         except Exception as e:
             print(f"写入MP3标签失败: {e}")
-    
-    def _write_flac_tags(self, file_path: Path, music_info: MusicInfo) -> None:
+
+    def _write_flac_tags(self, file_path: Path, music_info: MusicInfo,
+                         cover_bytes: Optional[bytes] = None) -> None:
         """写入FLAC标签"""
         try:
             audio = FLAC(str(file_path))
-            
+
             audio['TITLE'] = music_info.name
             audio['ARTIST'] = music_info.artists
             audio['ALBUM'] = music_info.album
-            
+
             if music_info.track_number > 0:
                 audio['TRACKNUMBER'] = str(music_info.track_number)
-            
-            # 下载并添加封面
-            if music_info.pic_url:
-                try:
-                    pic_response = requests.get(music_info.pic_url, timeout=10)
-                    pic_response.raise_for_status()
-                    
-                    from mutagen.flac import Picture
-                    picture = Picture()
-                    picture.type = 3  # Cover (front)
-                    picture.mime = 'image/jpeg'
-                    picture.desc = 'Cover'
-                    picture.data = pic_response.content
-                    audio.add_picture(picture)
-                except:
-                    pass  # 封面下载失败不影响主流程
-            
+
+            # 添加封面
+            if cover_bytes:
+                from mutagen.flac import Picture
+                picture = Picture()
+                picture.type = 3  # Cover (front)
+                picture.mime = 'image/jpeg'
+                picture.desc = 'Cover'
+                picture.data = cover_bytes
+                audio.add_picture(picture)
+
             audio.save()
         except Exception as e:
             print(f"写入FLAC标签失败: {e}")
-    
-    def _write_m4a_tags(self, file_path: Path, music_info: MusicInfo) -> None:
+
+    def _write_m4a_tags(self, file_path: Path, music_info: MusicInfo,
+                        cover_bytes: Optional[bytes] = None) -> None:
         """写入M4A标签"""
         try:
             audio = MP4(str(file_path))
-            
+
             audio['\xa9nam'] = music_info.name
             audio['\xa9ART'] = music_info.artists
             audio['\xa9alb'] = music_info.album
-            
+
             if music_info.track_number > 0:
                 audio['trkn'] = [(music_info.track_number, 0)]
-            
-            # 下载并添加封面
-            if music_info.pic_url:
-                try:
-                    pic_response = requests.get(music_info.pic_url, timeout=10)
-                    pic_response.raise_for_status()
-                    audio['covr'] = [pic_response.content]
-                except:
-                    pass  # 封面下载失败不影响主流程
-            
+
+            # 添加封面
+            if cover_bytes:
+                audio['covr'] = [cover_bytes]
+
             audio.save()
         except Exception as e:
             print(f"写入M4A标签失败: {e}")

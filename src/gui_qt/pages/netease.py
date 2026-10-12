@@ -967,6 +967,7 @@ class NeteasePage(BasePage):
                                     singer=item.get("artists", ""),
                                     album_name=item.get("album", ""),
                                     duration=(item.get("duration") or 0) // 1000,
+                                    cover_url=item.get("picUrl") or "",
                                     platform=self.platform)
                 name = f"{item.get('name', '')} - {item.get('artists', '')}".strip(" -")
                 card.handle_event("start", name[:40] or f"歌曲 {song.song_id}")
