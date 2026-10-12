@@ -869,25 +869,3 @@ def _danmaku_token_playwright(room_id: str) -> dict:
             except Exception:
                 pass
     return out
-
-
-def parse_room_id_input(text: str) -> str:
-    """输入清洗：纯数字房间号 / live.bilibili.com 链接 / b23.tv 短链（跟随跳转）。"""
-    text = (text or "").strip()
-    if "b23.tv/" in text:
-        m = re.search(r"b23\.tv/([0-9A-Za-z]+)", text)
-        if m:
-            try:
-                with httpx.Client(timeout=6, follow_redirects=True) as c:
-                    r = c.get(f"https://b23.tv/{m.group(1)}",
-                              headers={"User-Agent": UA})
-                    text = str(r.url) or text
-            except Exception:
-                pass
-    m = re.search(r"live\.bilibili\.com/(?:h5/)?(\d+)", text)
-    if m:
-        return m.group(1)
-    m = re.match(r"^(\d+)$", text)
-    if m:
-        return m.group(1)
-    return text

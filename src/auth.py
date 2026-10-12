@@ -1,5 +1,5 @@
 """
-认证模块 - Cookie 管理 / 内置浏览器登录
+认证模块 - Cookie 管理
 """
 
 import json
@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 from rich.console import Console
 
 from toolbox.config_manager import get_config_dir
-from toolbox.browser import launch as pw_launch
 
 console = Console()
 
@@ -315,82 +314,3 @@ def get_cookie_age(platform: str) -> str:
             return "刚刚"
     except ValueError:
         return ""
-
-
-# ============================================================
-#  内置浏览器登录
-# ============================================================
-
-def browser_login(platform: str, blocking: bool = True) -> Optional[str]:
-    """启动可见浏览器，用户扫码/登录后自动保存 Cookie。
-    blocking=False 时自动轮询 Cookie（适用于 Web UI，无需按 Enter）"""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        console.print("[red]需要 Playwright: pip install playwright && playwright install chromium[/red]")
-        return None
-
-    configs = {
-        "weibo": {"url": "https://m.weibo.cn/", "title": "微博"},
-        "douyin": {"url": "https://www.douyin.com/", "title": "抖音"},
-        "bilibili": {"url": "https://www.bilibili.com/", "title": "B站"},
-    }
-    cfg = configs.get(platform)
-    if not cfg:
-        return None
-
-    console.print(f"\n[bold cyan]🔑 {cfg['title']} 内置浏览器登录[/bold cyan]")
-    if blocking:
-        console.print("[dim]浏览器窗口将打开 → 请扫码或输入账号登录 → 完成后按 [bold]Enter[/bold] 自动保存 Cookie[/dim]")
-    else:
-        console.print("[dim]浏览器窗口打开 → 请扫码登录 → 将自动检测并保存 Cookie（最长等待 3 分钟）[/dim]")
-
-    with sync_playwright() as p:
-        # 可见窗口登录走统一浏览器层（Edge → Chrome → 默认）
-        browser = pw_launch(p, headless=False)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800},
-        )
-        page = context.new_page()
-        try:
-            page.goto(cfg["url"], wait_until="domcontentloaded", timeout=30000)
-            console.print(f"[green]V 浏览器已打开 {cfg['url']}[/green]")
-
-            if blocking:
-                input("\n[bold]登录完成后按 Enter 捕获 Cookie...[/bold]")
-                cookies = context.cookies()
-            else:
-                import time as _t
-                cookies = []
-                # 自动轮询 3 分钟（90 次 × 2 秒），检测到登录就提前保存
-                for _ in range(90):
-                    _t.sleep(2)
-                    cookies = context.cookies()
-                    has_auth = any(
-                        c["name"] in ("SUB", "SESSDATA", "bili_jct", "sessionid", "passport")
-                        or len(c.get("value", "")) > 20
-                        for c in cookies
-                    )
-                    if has_auth and len(cookies) >= 3:
-                        console.print("[green]V 检测到登录 Cookie，自动保存...[/green]")
-                        break
-                else:
-                    console.print("[yellow]! 超时未检测到登录，请确认已登录[/yellow]")
-            if cookies:
-                parts = [f"{c['name']}={c['value']}" for c in cookies]
-                cookie_str = "; ".join(parts)
-                set_cookie(platform, cookie_str)
-                console.print(f"[green]V {cfg['title']} Cookie 已保存 ({len(cookies)} 个)[/green]")
-                return cookie_str
-            else:
-                console.print("[yellow]! 未检测到 Cookie，请确认已登录[/yellow]")
-        except Exception as e:
-            console.print(f"[red]浏览器登录失败: {e}[/red]")
-        finally:
-            browser.close()
-    return None
-
-
-def douyin_browser_login() -> Optional[str]:
-    return browser_login("douyin")

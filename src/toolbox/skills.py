@@ -5,7 +5,6 @@ skill 资源位于 src/skills/<skill-name>/（SKILL.md + 任意子目录），
 「下载」= 把选中 skill 的整个目录复制到用户指定的位置，供 AI 助手挂载使用。
 """
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -80,7 +79,3 @@ def skill_total_size_text() -> str:
     """所有内置 skill 的总大小（KB 文本，用于设置页概览）。"""
     total = sum(m.get("size_bytes", 0) for m in list_skills())
     return f"{total / 1024:.0f} KB"
-
-
-def open_in_explorer(path: str):
-    os.startfile(path)

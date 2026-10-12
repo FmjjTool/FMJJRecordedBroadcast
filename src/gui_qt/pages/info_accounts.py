@@ -1237,13 +1237,6 @@ class InfoAccountsPage(BasePage):
         else:
             self.date_btn.setText(f"📅 日期段: {s or '从头'} ~ {e or '到现在'}")
 
-    def _date_range_desc(self) -> str:
-        s = self._date_range.get("start", "")
-        e = self._date_range.get("end", "")
-        if not s and not e:
-            return "不限"
-        return f"{s or '从头'} ~ {e or '到现在'}"
-
     def _show_date_range_dialog(self):
         """日历选择日期段：两个日历表 + 开始/结束不限勾选；确定后对之后的获取生效。"""
         win = QDialog(self)

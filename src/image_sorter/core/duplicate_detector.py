@@ -208,31 +208,6 @@ class DuplicateDetector:
 
     # ==================== 查询接口 ====================
 
-    def get_files_to_keep(self, duplicate_group: List[Path], keep_rule: str = 'latest') -> Optional[Path]:
-        """
-        获取重复组中要保留的文件
-
-        Args:
-            duplicate_group: 重复文件组
-            keep_rule: 保留规则，'latest' 自动保留最新创建的，'manual' 需用户手动选择
-
-        Returns:
-            要保留的文件路径；manual 模式下返回 None 表示需用户手动决定
-        """
-        if not duplicate_group:
-            return None
-
-        if keep_rule == 'latest':
-            # 返回创建时间最新的文件（已排序，第一个即为最新）
-            return duplicate_group[0]
-
-        # manual 规则由用户手动选择，无法自动决定保留项
-        return None
-
-    def is_duplicate(self, file_path: Path) -> bool:
-        """检查文件是否为重复文件"""
-        return file_path in self._duplicate_files
-
     @property
     def duplicate_groups(self) -> List[List[Path]]:
         """获取重复文件组"""

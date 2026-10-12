@@ -173,22 +173,6 @@ class SQLiteCacheStore:
         except Exception as e:
             logger.log_exception(e, f"写入SQLite MD5缓存失败: {file_path}")
 
-    def mark_classified_md5(self, md5_hash: str):
-        if not md5_hash:
-            return
-        try:
-            with closing(self._connect()) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO classified_md5(md5, added_at)
-                    VALUES(?, ?)
-                    ON CONFLICT(md5) DO NOTHING
-                    """,
-                    (str(md5_hash), time.time()),
-                )
-        except Exception as e:
-            logger.log_exception(e, "写入SQLite已分类MD5失败")
-
     def mark_classified_md5_batch(self, md5_hashes: Iterable[str]):
         rows = [(str(h), time.time()) for h in md5_hashes if isinstance(h, str) and h]
         if not rows:
@@ -221,13 +205,6 @@ class SQLiteCacheStore:
                 conn.execute("DELETE FROM media_md5_cache")
         except Exception as e:
             logger.log_exception(e, "清理SQLite MD5缓存失败")
-
-    def clear_classified_md5(self):
-        try:
-            with closing(self._connect()) as conn:
-                conn.execute("DELETE FROM classified_md5")
-        except Exception as e:
-            logger.log_exception(e, "清理SQLite已分类MD5失败")
 
     @staticmethod
     def _normalize_path_str(path: Path) -> str:

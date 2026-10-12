@@ -51,15 +51,6 @@ class MediaHashManager:
         )
         return md5_value
 
-    def build_hash_set(self, file_paths: Iterable[Path]) -> Set[str]:
-        """批量构建哈希集合"""
-        hashes: Set[str] = set()
-        for file_path in file_paths:
-            md5_value = self.calculate_md5(file_path)
-            if md5_value:
-                hashes.add(md5_value)
-        return hashes
-
     @staticmethod
     def _compute_md5_stream(file_path: Path) -> str:
         """流式读取计算 MD5"""

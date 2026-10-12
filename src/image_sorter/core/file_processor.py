@@ -160,20 +160,6 @@ class FileProcessor:
         return records
 
     @staticmethod
-    def copy_files_batch(source_files: List[Path], target_folder: Path) -> int:
-        """
-        批量复制文件
-
-        Args:
-            source_files: 源文件路径列表
-            target_folder: 目标文件夹路径
-
-        Returns:
-            成功复制的文件数量
-        """
-        return len(FileProcessor.transfer_files_batch(source_files, target_folder, mode="copy"))
-
-    @staticmethod
     def _get_unique_filename(folder: Path, filename: str) -> Path:
         """
         获取唯一文件名，避免重名覆盖

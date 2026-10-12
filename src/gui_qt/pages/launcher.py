@@ -477,19 +477,6 @@ class LauncherPage(BasePage):
             entry.setText(path)
             self.items[idx]["path"] = path
 
-    def _browse_icon(self, idx):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择图标", "", "图片 (*.png *.ico *.jpg);;所有文件 (*.*)")
-        if path and 0 <= idx < len(self.items):
-            self.items[idx]["icon"] = path
-            self._refresh_config_cards()  # 刷新显示
-
-    def _clear_icon(self, idx):
-        """清除该项图标（恢复默认 emoji 兜底），点「保存并刷新面板」生效。"""
-        if 0 <= idx < len(self.items) and self.items[idx].get("icon"):
-            self.items[idx]["icon"] = ""
-            self._refresh_config_cards()
-
     def _clear_item(self, idx):
         """🆑 清空按钮：清空该项的 name/path/icon，linked 保留默认 True。
 

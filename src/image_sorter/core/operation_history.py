@@ -217,7 +217,3 @@ class OperationHistory:
         """清空历史记录"""
         self.history.clear()
         logger.info("已清空操作历史")
-
-    def get_history_count(self) -> int:
-        """获取历史记录数量"""
-        return len(self.history)

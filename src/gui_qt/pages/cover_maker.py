@@ -13,7 +13,6 @@
   字体下拉可直接输入字体名识别（无效字体名自动回退）；颜色选择用内置
   主题色板（预设色 + 十六进制 / RGB 输入），不弹系统原生黑窗
 - 导出：PNG / JPG（质量 60~100）
-- 集成：主程序经 create_cover_module() 获取 QWidget 实例（亦可作为普通页面注册）
 """
 
 import json
@@ -1883,11 +1882,3 @@ class CoverMakerPage(BasePage):
             pass
         super().shutdown()
 
-
-def create_cover_module(app=None, bg_folder=None) -> CoverMakerPage:
-    """主程序集成入口：返回「套版封面制作」组件实例（QWidget）。
-
-    app: 宿主窗口（可选，提供 toast 等能力，独立运行时可传 None）
-    bg_folder: 底图文件夹绝对路径（可选，默认 download/封面底图 或持久化值）
-    """
-    return CoverMakerPage(app, bg_folder=bg_folder)

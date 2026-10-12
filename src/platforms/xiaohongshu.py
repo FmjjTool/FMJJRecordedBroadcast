@@ -237,39 +237,6 @@ class XiaohongshuParser(PlatformBase):
                 raise RuntimeError(entry.get("errorMsg") or "小红书笔记数据为空（xsec_token 可能已失效）")
         raise RuntimeError("小红书页面解析失败（可能需要 Cookie，或链接含失效 xsec_token）")
 
-    # ==================== 账号数据（主页信息） ====================
-
-    def fetch_profile(self, url: str) -> dict:
-        """主页 → 账号信息 dict（昵称/简介/粉丝数等）。"""
-        html = _fetch(url)
-        data = _balanced_json(html, r"window\.__INITIAL_STATE__")
-        if not data:
-            raise RuntimeError("小红书主页解析失败（可能需要 Cookie）")
-        user = data.get("user") or {}
-        upd = user.get("userPageData") or {}
-        basic = upd.get("basicInfo") or {}
-        if not basic:
-            raise RuntimeError("小红书主页无用户数据（可能需要 Cookie）")
-        fans = following = likes = 0
-        for it in (upd.get("interactions") or []):
-            t = it.get("type")
-            if t == "fans":
-                fans = _parse_cn_count(it.get("count"))
-            elif t == "follows":
-                following = _parse_cn_count(it.get("count"))
-            elif t == "interaction":
-                likes = _parse_cn_count(it.get("count"))
-        return {
-            "platform": "xiaohongshu",
-            "name": basic.get("nickname") or "",
-            "fans": fans,
-            "following": following,
-            "likes": likes,
-            "sign": basic.get("desc") or "",
-            "avatar": basic.get("imageb") or basic.get("images") or "",
-            "uid": basic.get("redId") or "",
-        }
-
     # ==================== 主页作品列表 ====================
 
     def fetch_user_posts(self, url: str, count: int = 20, **kwargs) -> list:

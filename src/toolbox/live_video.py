@@ -5,11 +5,9 @@
   固定画布（scale+pad 16:9）保证帧大小确定；后台读帧线程 + 主线程定时渲染，
   支持直播 / 本地文件、seek、倍速、播放位置推算。
 - StreamRecorder: ffmpeg -c copy 直接转存 FLV 直播流（无损、低 CPU）。
-- probe_duration: ffprobe 探测本地视频时长（秒）。
 """
 
 import os
-import shutil
 import subprocess
 import threading
 import time
@@ -89,33 +87,6 @@ def find_ffmpeg():
     if fallback:
         _ffmpeg_path[0] = fallback
     return fallback
-
-
-def find_ffprobe():
-    """定位 ffprobe（与 ffmpeg 同目录优先）。"""
-    exe = find_ffmpeg()
-    if exe:
-        probe = os.path.join(os.path.dirname(exe), "ffprobe.exe")
-        if os.path.exists(probe):
-            return probe
-    return shutil.which("ffprobe")
-
-
-def probe_duration(path):
-    """探测本地视频时长（秒），失败返回 None。"""
-    exe = find_ffprobe()
-    if not exe:
-        return None
-    try:
-        r = subprocess.run(
-            [exe, "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, timeout=15)
-        if r.returncode == 0:
-            return float(r.stdout.decode(errors="ignore").strip())
-    except Exception:
-        pass
-    return None
 
 
 class VideoStreamPlayer:
@@ -214,16 +185,6 @@ class VideoStreamPlayer:
         if self._source and not self._is_live:
             self.start(self._source, is_live=False,
                        start_sec=max(0.0, sec), speed=self._speed)
-
-    def set_speed(self, speed):
-        if abs(speed - self._speed) < 0.01:
-            return
-        speed = max(0.1, speed)
-        if self._source and not self._is_live:
-            pos = self.video_pos_sec() or 0.0
-            self.start(self._source, is_live=False, start_sec=pos, speed=speed)
-        else:
-            self._speed = speed
 
     # ---------- 位置 ----------
     def video_pos_sec(self):

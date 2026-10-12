@@ -168,12 +168,6 @@ def detect_shopping_platform(url: str):
     return None, None
 
 
-def _shop_base(url: str) -> str:
-    """提取店铺 base URL。"""
-    m = re.search(r"https?://[\w.-]+\.taobao\.com", url or "")
-    return m.group(0) if m else ""
-
-
 # ==================== 店铺信息（游客 HTTP） ====================
 
 def fetch_taobao_shop_info(url: str) -> ShopInfo:

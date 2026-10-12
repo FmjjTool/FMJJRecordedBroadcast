@@ -818,12 +818,6 @@ class FolderPanel(QWidget):
             folders.append((folder_name, is_builtin, absolute_path, relative_path))
         return folders
 
-    def clear_selection(self):
-        self._selected_folder = None
-        self.folder_list.clearSelection()
-        for i in range(self.folder_list.count()):
-            self.folder_list.item(i).setBackground(Qt.GlobalColor.transparent)
-
     def select_folder_by_index(self, index: int) -> bool:
         """根据显示索引选中文件夹（用于数字角标快速定位）。"""
         if index < 0 or index >= self.folder_list.count():

@@ -716,10 +716,6 @@ class FileListPanel(QWidget):
         """兼容旧调用"""
         self.clear_files()
 
-    def refresh_list(self):
-        """兼容旧调用：刷新列表显示"""
-        self.file_list.viewport().update()
-
     def show_loading(self, show: bool = True):
         """显示/隐藏加载动画"""
         self.loading_widget.setVisible(show)
@@ -2440,9 +2436,6 @@ class FileInfoPanel(QWidget):
 
     # ---------- 状态同步 ----------
 
-    def get_current_file(self) -> Optional[Path]:
-        return self._current_file
-
     def update_current_file_path(self, file_path: Optional[Path]):
         """更新当前文件路径（清空信息显示）"""
         self._current_file = file_path
@@ -2467,10 +2460,6 @@ class FileInfoPanel(QWidget):
 
         self.auto_rename_checkbox.setChecked(self._auto_rename_enabled)
         self.auto_rename_fields_input.setText(self._auto_rename_pattern)
-
-    def get_auto_rename_config(self) -> tuple:
-        """读取面板当前自动重命名配置（未保存状态）。"""
-        return self.auto_rename_checkbox.isChecked(), self.auto_rename_fields_input.text().strip()
 
     def _sync_rename_fields(self, file_path: Optional[Path]):
         """同步重命名区域显示"""

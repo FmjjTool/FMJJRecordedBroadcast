@@ -39,19 +39,6 @@ class CacheManager:
         self.sqlite_store: Optional[SQLiteCacheStore] = None
         self._refresh_paths()
 
-    def set_base_dir(self, base_dir: Path):
-        """切换缓存根目录"""
-        self.base_dir = Path(base_dir)
-        self._refresh_paths()
-
-    def clear_all(self):
-        """清空全部缓存"""
-        try:
-            if self.base_dir.exists():
-                shutil.rmtree(self.base_dir, ignore_errors=True)
-        finally:
-            self._refresh_paths()
-
     def clear_scan_cache(self):
         """清空导入扫描缓存"""
         try:
@@ -75,14 +62,6 @@ class CacheManager:
                 self.sqlite_store.clear_md5_cache()
         except Exception as e:
             logger.log_exception(e, "清理MD5缓存失败")
-
-    def clear_classified_md5_cache(self):
-        """清空已分类 MD5 记录"""
-        try:
-            if self.sqlite_store is not None:
-                self.sqlite_store.clear_classified_md5()
-        except Exception as e:
-            logger.log_exception(e, "清理已分类MD5记录失败")
 
     def load_scan_cache(
         self,
@@ -210,14 +189,6 @@ class CacheManager:
         self.scan_cache_dir.mkdir(parents=True, exist_ok=True)
         self.thumbnail_cache_dir.mkdir(parents=True, exist_ok=True)
         self.sqlite_store = SQLiteCacheStore(self.sqlite_cache_file)
-
-    def mark_md5_classified(self, md5_hash: str):
-        """将一个 MD5 标记为已分类（持久化到 SQLite，清空文件夹后仍然有效）"""
-        try:
-            if self.sqlite_store is not None:
-                self.sqlite_store.mark_classified_md5(md5_hash)
-        except Exception as e:
-            logger.log_exception(e, "保存已分类MD5集合失败")
 
     def mark_md5_classified_batch(self, md5_hashes):
         """批量标记 MD5 为已分类"""

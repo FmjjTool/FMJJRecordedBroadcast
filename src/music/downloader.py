@@ -270,10 +270,6 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
     return result
 
 
-def platform_downloadable(platform: str) -> bool:
-    return platform in ("kugou", "kuwo", "5sing", "kugou_lite")
-
-
 def quality_options(platform: str) -> list[tuple[str, str]]:
     """(值, 显示名) 列表。"""
     if platform == "5sing":

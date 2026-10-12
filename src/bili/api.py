@@ -49,11 +49,6 @@ def _cache_put(url: str, data):
         _api_cache[url] = (time.time() + CACHE_TTL, data)
 
 
-def clear_cache():
-    with _cache_lock:
-        _api_cache.clear()
-
-
 def api_get(url: str, params: dict | None = None, *,
             wbi_sign: bool = False, app_sign: bool = False,
             use_cache: bool = True, login_required: bool = False) -> dict:
