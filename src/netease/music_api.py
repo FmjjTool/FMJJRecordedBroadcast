@@ -93,44 +93,56 @@ class CryptoUtils:
 
 class HTTPClient:
     """HTTP客户端类"""
-    
+
+    # 网易会随机掐断新建的连接（实测约 30% 在 TLS 握手阶段被断开），
+    # 但已建立的长连接不会被掐 → 复用 Session + 小退避重试兜底
+    RETRY_TIMES = 4
+    _session: Optional["requests.Session"] = None
+
+    @staticmethod
+    def get_session() -> requests.Session:
+        """进程级长连接（避免每次请求重建连接被服务器掐断，同时省去握手延迟）"""
+        if HTTPClient._session is None:
+            HTTPClient._session = requests.Session()
+        return HTTPClient._session
+
+    @staticmethod
+    def post_retry(url: str, data: Dict[str, Any],
+                   cookies: Optional[Dict[str, str]] = None) -> requests.Response:
+        """通用POST请求：连接被服务器掐断时自动重试"""
+        headers = {
+            'User-Agent': APIConstants.USER_AGENT,
+            'Referer': APIConstants.REFERER,
+        }
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(HTTPClient.RETRY_TIMES):
+            try:
+                response = HTTPClient.get_session().post(
+                    url, headers=headers, cookies=cookies, data=data, timeout=30)
+                response.raise_for_status()
+                return response
+            except (requests.ConnectionError, requests.Timeout) as e:
+                last_exc = e
+                if attempt < HTTPClient.RETRY_TIMES - 1:
+                    time.sleep(2 ** attempt)
+            except requests.RequestException as e:
+                raise APIException(f"HTTP请求失败: {e}")
+        raise APIException(f"HTTP请求失败（重试{HTTPClient.RETRY_TIMES}次后仍被服务器断开）: {last_exc}")
+
     @staticmethod
     def post_request(url: str, params: str, cookies: Dict[str, str]) -> str:
-        """发送POST请求并返回文本响应"""
-        headers = {
-            'User-Agent': APIConstants.USER_AGENT,
-            'Referer': APIConstants.REFERER,
-        }
-        
+        """发送eapi加密POST请求并返回文本响应"""
         request_cookies = APIConstants.DEFAULT_COOKIES.copy()
         request_cookies.update(cookies)
-        
-        try:
-            response = requests.post(url, headers=headers, cookies=request_cookies, 
-                                   data={"params": params}, timeout=30)
-            response.raise_for_status()
-            return response.text
-        except requests.RequestException as e:
-            raise APIException(f"HTTP请求失败: {e}")
-    
+        return HTTPClient.post_retry(url, {"params": params}, request_cookies).text
+
     @staticmethod
     def post_request_full(url: str, params: str, cookies: Dict[str, str]) -> requests.Response:
-        """发送POST请求并返回完整响应对象"""
-        headers = {
-            'User-Agent': APIConstants.USER_AGENT,
-            'Referer': APIConstants.REFERER,
-        }
-        
+        """发送eapi加密POST请求并返回完整响应对象"""
         request_cookies = APIConstants.DEFAULT_COOKIES.copy()
         request_cookies.update(cookies)
-        
-        try:
-            response = requests.post(url, headers=headers, cookies=request_cookies, 
-                                   data={"params": params}, timeout=30)
-            response.raise_for_status()
-            return response
-        except requests.RequestException as e:
-            raise APIException(f"HTTP请求失败: {e}")
+        return HTTPClient.post_retry(url, {"params": params}, request_cookies)
 
 
 class APIException(Exception):
@@ -199,8 +211,7 @@ class NeteaseAPI:
         """
         try:
             data = {'c': json.dumps([{"id": song_id, "v": 0}])}
-            response = requests.post(APIConstants.SONG_DETAIL_V3, data=data, timeout=30)
-            response.raise_for_status()
+            response = HTTPClient.post_retry(APIConstants.SONG_DETAIL_V3, data)
 
             result = response.json()
             if result.get('code') != 200:
@@ -239,14 +250,7 @@ class NeteaseAPI:
                 'yrv': '0'
             }
 
-            headers = {
-                'User-Agent': APIConstants.USER_AGENT,
-                'Referer': APIConstants.REFERER
-            }
-
-            response = requests.post(APIConstants.LYRIC_API, data=data,
-                                   headers=headers, cookies=cookies, timeout=30)
-            response.raise_for_status()
+            response = HTTPClient.post_retry(APIConstants.LYRIC_API, data, cookies)
 
             result = response.json()
             if result.get('code') != 200:
@@ -384,11 +388,9 @@ class NeteaseAPI:
             for i in range(0, len(track_ids), 100):
                 batch_ids = track_ids[i:i+100]
                 song_data = {'c': json.dumps([{'id': int(sid), 'v': 0} for sid in batch_ids])}
-                
-                song_resp = requests.post(APIConstants.SONG_DETAIL_V3, data=song_data, 
-                                        headers=headers, cookies=cookies, timeout=30)
-                song_resp.raise_for_status()
-                
+
+                song_resp = HTTPClient.post_retry(APIConstants.SONG_DETAIL_V3, song_data, cookies)
+
                 song_result = song_resp.json()
                 for song in song_result.get('songs', []):
                     # 登录态下 VIP/下架歌曲的 ar/al 可能是 [{name: null}] 占位 → 全字段防 None

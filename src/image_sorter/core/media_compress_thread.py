@@ -9,9 +9,11 @@ Media compression worker thread based on ffmpeg.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import threading
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
@@ -24,6 +26,7 @@ class MediaCompressThread(QThread):
     """后台媒体压缩线程（图片/视频统一 ffmpeg）。"""
 
     progress = Signal(str)
+    progress_detail = Signal(float, str)  # percent(0~100，-1=时长未知)，speed 文本（如 "1.25x"）
     finished_ok = Signal(dict)
     failed = Signal(str)
     IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
@@ -54,16 +57,9 @@ class MediaCompressThread(QThread):
             output_path = self._build_output_path(self.file_path, self.options, is_video)
             cmd = self._build_ffmpeg_command(ffmpeg_bin, self.file_path, output_path, is_video, self.options)
 
-            completed = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                check=False,
-            )
-            if completed.returncode != 0:
-                message = completed.stderr.strip() or completed.stdout.strip() or "ffmpeg 执行失败"
+            returncode, stderr_text = self._execute_ffmpeg(cmd, is_video, before_info)
+            if returncode != 0:
+                message = (stderr_text or "").strip()[-2000:] or "ffmpeg 执行失败"
                 raise RuntimeError(message)
 
             if not output_path.exists():
@@ -89,6 +85,121 @@ class MediaCompressThread(QThread):
         except Exception as e:
             logger.log_exception(e, f"媒体压缩失败: {self.file_path}")
             self.failed.emit(str(e))
+
+    # ==================== ffmpeg 执行与进度 ====================
+
+    def _execute_ffmpeg(self, cmd, is_video: bool, before_info: Optional[Dict]) -> Tuple[int, str]:
+        """执行 ffmpeg 命令，返回 (returncode, stderr 文本)。
+
+        视频走 `-progress pipe:1` 流式解析（约每 0.5s 一个进度块），
+        逐块发射 progress_detail(percent, speed)；图片转码瞬间完成，直接阻塞执行。
+        """
+        if not is_video:
+            return self._run_plain(cmd)
+
+        total_seconds = self._duration_of(before_info)
+        progress_cmd = [cmd[0], "-y", "-progress", "pipe:1", "-nostats"] + cmd[2:]
+        returncode, stderr_text = self._run_with_progress(progress_cmd, total_seconds)
+        if returncode != 0 and "failed to open progress url" in (stderr_text or "").lower():
+            # 精简构建 ffmpeg 不含 pipe 协议：去掉进度流重跑（压缩本身不受影响）
+            self.progress.emit("当前 ffmpeg 不支持进度输出，已切换普通模式...")
+            return self._run_plain(cmd)
+        return returncode, stderr_text
+
+    @staticmethod
+    def _run_plain(cmd) -> Tuple[int, str]:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=False,
+        )
+        return completed.returncode, (completed.stderr or "") + (completed.stdout or "")
+
+    def _run_with_progress(self, cmd, total_seconds: float) -> Tuple[int, str]:
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=creationflags,
+        )
+
+        # stderr 由独立线程持续排空，防止管道写满导致 ffmpeg 卡死
+        stderr_lines: list = []
+
+        def _drain_stderr():
+            try:
+                for line in proc.stderr:
+                    stderr_lines.append(line)
+            except Exception:
+                pass
+
+        drain = threading.Thread(target=_drain_stderr, daemon=True)
+        drain.start()
+
+        try:
+            out_time_us = 0
+            speed_text = ""
+            for raw_line in proc.stdout:
+                line = raw_line.strip()
+                if line.startswith("out_time_us="):
+                    value = self._to_int(line.split("=", 1)[1])
+                    if value is not None:
+                        out_time_us = value
+                elif line.startswith("out_time="):
+                    # 兜底：旧版 ffmpeg 无 out_time_us，解析 HH:MM:SS.micro 文本
+                    seconds = self._parse_hms(line.split("=", 1)[1])
+                    if seconds >= 0:
+                        out_time_us = int(seconds * 1_000_000)
+                elif line.startswith("speed="):
+                    candidate = line.split("=", 1)[1].strip()
+                    if candidate and candidate != "N/A":
+                        speed_text = candidate
+                elif line.startswith("progress="):
+                    percent = -1.0
+                    if total_seconds > 0 and out_time_us > 0:
+                        is_end = line.split("=", 1)[1].strip() == "end"
+                        ratio = (out_time_us / 1_000_000.0) / total_seconds
+                        percent = min(ratio * 100.0, 100.0 if is_end else 99.9)
+                    self.progress_detail.emit(percent, speed_text)
+            returncode = proc.wait()
+        finally:
+            drain.join(timeout=2)
+        return returncode, "".join(stderr_lines)
+
+    @staticmethod
+    def _duration_of(before_info: Optional[Dict]) -> float:
+        if not isinstance(before_info, dict):
+            return 0.0
+        return max(MediaCompressThread._parse_hms(str(before_info.get("时长", ""))), 0.0)
+
+    @staticmethod
+    def _parse_hms(text: str) -> float:
+        """解析 HH:MM:SS(.frac) / MM:SS / 纯秒文本，失败返回 -1。"""
+        parts = str(text or "").strip().split(":")
+        if not parts or len(parts) > 3:
+            return -1.0
+        try:
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+            return float(parts[0])
+        except ValueError:
+            return -1.0
+
+    @staticmethod
+    def _to_int(text: str) -> Optional[int]:
+        try:
+            return int(str(text).strip())
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _build_output_path(src: Path, options: Dict, is_video: bool) -> Path:
@@ -215,6 +326,13 @@ class MediaCompressThread(QThread):
                 cmd += ["-q:v", str(max(1, min(quality, 100)))]
             if vf:
                 cmd += ["-vf", vf]
+
+        # CPU 占用限制：按逻辑核心百分比换算编码线程数（copy 纯封装不吃 CPU，跳过）
+        cpu_limit = int(options.get("cpu_limit_percent", 0) or 0)
+        if 0 < cpu_limit < 100 and (not is_video or target_codec != "copy"):
+            cores = os.cpu_count() or 4
+            threads = max(1, round(cores * cpu_limit / 100.0))
+            cmd += ["-threads", str(threads), "-filter_threads", str(threads)]
 
         cmd.append(str(out))
         return cmd

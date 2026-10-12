@@ -533,6 +533,9 @@ class MediaCompressPage(BasePage):
         self._stop_requested = False
         self._done_ok = 0
         self._done_fail = 0
+        self._total_files = 0
+        self._done_count = 0
+        self._current_task_label = ""
         self._total_before = 0
         self._total_after = 0
         self._info_token = 0
@@ -631,6 +634,29 @@ class MediaCompressPage(BasePage):
         self.video_group = _ParamGroup("video", scroll_body)
         scroll_layout.addWidget(self.video_group)
 
+        # CPU 占用限制（图片/视频共用，压缩是逐文件串行，一个全局值即可）
+        cpu_row = QHBoxLayout()
+        cpu_label = QLabel("⚙ CPU 占用限制")
+        cpu_label.setStyleSheet("font-weight: 600; color: #5a6474;")
+        cpu_label.setToolTip(
+            "按逻辑核心百分比限制 ffmpeg 编码线程数，降低压缩时的 CPU 占用。\n"
+            "100% = 不限制（默认全速）；建议 50~60% 保持电脑流畅"
+        )
+        cpu_row.addWidget(cpu_label)
+
+        self.cpu_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cpu_slider.setRange(20, 100)
+        self.cpu_slider.setValue(55)
+        self.cpu_slider.setToolTip(cpu_label.toolTip())
+        self.cpu_slider.valueChanged.connect(self._on_cpu_value_changed)
+        self.cpu_slider.sliderReleased.connect(self._on_cpu_released)
+        cpu_row.addWidget(self.cpu_slider, 1)
+
+        self.cpu_value_label = QLabel("")
+        self.cpu_value_label.setStyleSheet("color: #6b7280;")
+        cpu_row.addWidget(self.cpu_value_label)
+        scroll_layout.addLayout(cpu_row)
+
         hint = QLabel("勾选左侧文件后点击「压缩勾选」批量执行；图片/视频分别使用各自参数。预估仅供参考，实际以 ffmpeg 输出为准。")
         hint.setWordWrap(True)
         hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
@@ -673,6 +699,7 @@ class MediaCompressPage(BasePage):
                 cfg.get_str("compress_video_preset", "均衡(推荐)"),
                 cfg.get_dict("compress_video_options"),
             )
+            self.cpu_slider.setValue(max(20, min(cfg.get_int("compress_cpu_limit_percent", 55), 100)))
         except Exception as e:
             logger.log_exception(e, "恢复媒体压缩配置失败")
 
@@ -682,8 +709,23 @@ class MediaCompressPage(BasePage):
             cfg.set_dict("compress_image_options", self.image_group.collect_options())
             cfg.set_setting("compress_video_preset", self.video_group.current_preset())
             cfg.set_dict("compress_video_options", self.video_group.collect_options())
+            cfg.set_setting("compress_cpu_limit_percent", int(self.cpu_slider.value()))
         except Exception as e:
             logger.log_exception(e, "保存媒体压缩配置失败")
+
+    def _on_cpu_value_changed(self, value: int):
+        if value >= 100:
+            self.cpu_value_label.setText("100%（不限制）")
+            return
+        cores = os.cpu_count() or 4
+        threads = max(1, round(cores * value / 100.0))
+        self.cpu_value_label.setText(f"{value}%（约 {threads}/{cores} 线程）")
+
+    def _on_cpu_released(self):
+        try:
+            cfg.set_setting("compress_cpu_limit_percent", int(self.cpu_slider.value()))
+        except Exception:
+            pass
 
     # ==================== 文件列表 ====================
 
@@ -895,10 +937,15 @@ class MediaCompressPage(BasePage):
         self._stop_requested = False
         self._done_ok = 0
         self._done_fail = 0
+        self._total_files = len(checked)
+        self._done_count = 0
+        self._current_task_label = ""
         self._total_before = 0
         self._total_after = 0
-        self.progress_bar.setRange(0, len(checked))
+        # 进度条细分到单文件：每个文件占 100 格，压缩中实时推进
+        self.progress_bar.setRange(0, len(checked) * 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.clear_btn.setEnabled(False)
@@ -925,7 +972,8 @@ class MediaCompressPage(BasePage):
         if media_type is None:
             self._done_fail += 1
             self.result_edit.append(f"[失败] {path.name}: 不支持的文件类型\n")
-            self.progress_bar.setValue(self.progress_bar.value() + 1)
+            self._done_count += 1
+            self.progress_bar.setValue(self._done_count * 100)
             self._compress_next()
             return
 
@@ -939,26 +987,42 @@ class MediaCompressPage(BasePage):
             "file_path": str(path),
             "media_type": media_type,
             "preset": group.current_preset(),
+            "cpu_limit_percent": int(self.cpu_slider.value()),
             **options,
             "estimated_after_size": int(
                 _estimate_size_bytes(media_type, src_size, options, {}) or 0
             ),
         }
 
-        total = self.progress_bar.maximum()
-        current = total - len(self._queue)
-        self.status_label.setText(f"正在压缩 {current}/{total}: {path.name}")
+        self._current_task_label = (
+            f"正在压缩 {self._done_count + 1}/{self._total_files}: {path.name}"
+        )
+        self.status_label.setText(self._current_task_label)
 
         thread = MediaCompressThread(file_path=path, options=payload, parent=self)
         self._thread = thread
         thread.progress.connect(self._on_compress_progress)
+        thread.progress_detail.connect(self._on_compress_progress_detail)
         thread.finished_ok.connect(self._on_compress_finished)
         thread.failed.connect(lambda msg, p=path: self._on_compress_failed(p, msg))
         thread.start()
 
     def _on_compress_progress(self, message: str):
-        if message:
-            self.status_label.setText(message)
+        # 通用阶段消息不覆盖带文件名/百分比的实时状态（视频压缩中由 progress_detail 维护）
+        if not message or message == "正在执行压缩...":
+            return
+        self.status_label.setText(message)
+
+    def _on_compress_progress_detail(self, percent: float, speed: str):
+        parts = [self._current_task_label or "正在压缩"]
+        if percent >= 0:
+            parts.append(f"{percent:.0f}%")
+        if speed:
+            parts.append(f"速度 {speed}")
+        self.status_label.setText(" · ".join(parts))
+        if percent >= 0:
+            value = int(self._done_count * 100 + percent)
+            self.progress_bar.setValue(min(value, self._total_files * 100))
 
     def _on_compress_finished(self, result: dict):
         try:
@@ -978,7 +1042,8 @@ class MediaCompressPage(BasePage):
             self._mark_item(src_name, "✅")
             self._mark_output_classified(out_path)
         finally:
-            self.progress_bar.setValue(self.progress_bar.value() + 1)
+            self._done_count += 1
+            self.progress_bar.setValue(self._done_count * 100)
             self._thread = None
             self._compress_next()
 
@@ -988,7 +1053,8 @@ class MediaCompressPage(BasePage):
             self.result_edit.append(f"[失败] {path.name}: {error_message}\n")
             self._mark_item(path.name, "❌")
         finally:
-            self.progress_bar.setValue(self.progress_bar.value() + 1)
+            self._done_count += 1
+            self.progress_bar.setValue(self._done_count * 100)
             self._thread = None
             self._compress_next()
 

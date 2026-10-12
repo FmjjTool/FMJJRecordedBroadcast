@@ -36,6 +36,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "compress_image_options": {},
     "compress_video_preset": "均衡(推荐)",
     "compress_video_options": {},
+    "compress_cpu_limit_percent": 55,
     "source_folders": [],
     "classified_target_folders": [],
     "rename_templates": {},          # 重命名模板 {名称: 模板内容}

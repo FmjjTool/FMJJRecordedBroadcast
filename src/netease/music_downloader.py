@@ -9,6 +9,7 @@
 """
 
 import re
+import time
 from typing import Optional
 from pathlib import Path
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, APIC
 from mutagen.mp4 import MP4
 
-from .music_api import NeteaseAPI, APIException
+from .music_api import NeteaseAPI, APIException, HTTPClient
 from .cookie_manager import CookieManager
 
 
@@ -251,26 +252,48 @@ class MusicDownloader:
             # 确定文件扩展名
             file_ext = self._determine_file_extension(music_info.download_url)
             file_path = self.download_dir / f"{safe_filename}{file_ext}"
-            
-            # 检查文件是否已存在
+
+            # 检查文件是否已存在：不小于 API 返回的大小才算完整
+            # （写入标签/封面后文件只会变大；半截文件必然更小 → 自动重下）
             if file_path.exists():
-                return DownloadResult(
-                    success=True,
-                    file_path=str(file_path),
-                    file_size=file_path.stat().st_size,
-                    music_info=music_info
-                )
-            
-            # 下载文件
-            response = requests.get(music_info.download_url, stream=True, timeout=30)
-            response.raise_for_status()
-            
-            # 写入文件
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-            
+                actual_size = file_path.stat().st_size
+                if not music_info.file_size or actual_size >= music_info.file_size:
+                    return DownloadResult(
+                        success=True,
+                        file_path=str(file_path),
+                        file_size=actual_size,
+                        music_info=music_info
+                    )
+
+            # 下载到 .part 临时文件，校验完整后再落成正式文件。
+            # 网易 CDN 会随机中途掐断传输（留下半截文件），失败自动重试
+            part_path = file_path.with_name(file_path.name + ".part")
+            last_err: Optional[Exception] = None
+            for attempt in range(4):
+                try:
+                    response = HTTPClient.get_session().get(
+                        music_info.download_url, stream=True, timeout=30)
+                    response.raise_for_status()
+
+                    with open(part_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+
+                    actual_size = part_path.stat().st_size
+                    if music_info.file_size and actual_size != music_info.file_size:
+                        raise DownloadException(
+                            f"下载不完整（{actual_size}/{music_info.file_size} 字节）")
+                    part_path.replace(file_path)
+                    break
+                except (requests.RequestException, DownloadException) as e:
+                    part_path.unlink(missing_ok=True)
+                    last_err = e
+                    if attempt < 3:
+                        time.sleep(2 ** attempt)
+            else:
+                raise DownloadException(f"下载失败（服务器多次中断连接）: {last_err}")
+
             # 写入音乐标签
             self._write_music_tags(file_path, music_info)
             

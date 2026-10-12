@@ -424,7 +424,8 @@ class AssetPage(BasePage):
         head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
             "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
             "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
-            "支持平台/状态筛选（未下载/已下载/下载不完整）、关键词搜索、时间排序、分页浏览；"
+            "支持平台/状态筛选（未下载不含「不可下载」纯文本条目/已下载/下载不完整）、"
+            "关键词搜索、时间排序、分页浏览；"
             "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
             "媒体文件（存在哪项才显示哪项）</p>"
             "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
@@ -810,6 +811,9 @@ class AssetPage(BasePage):
         bar.addWidget(self.search_entry)
         self.status_sel = QComboBox()
         self.status_sel.addItems(["全部状态", "未下载", "已下载", "下载不完整"])
+        self.status_sel.setToolTip(
+            "未下载：本地无媒体文件且未标记「不可下载」的条目（纯文本等\n"
+            "不可下载条目不在此列，右键行可手动标记/解除）")
         self.status_sel.setFixedWidth(110)
         self.status_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
         bar.addWidget(self.status_sel)
@@ -1146,7 +1150,11 @@ class AssetPage(BasePage):
             items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
             # 状态筛选
             if status == "未下载":
-                items = [it for it in items if not it.get("media_files")]
+                # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
+                # 媒体文件，混在未下载里会把可重试条目淹没（实测 1700+ 条
+                # 微博纯文本常驻此筛选，批量下载时也只是被跳过）
+                items = [it for it in items if not it.get("media_files")
+                         and not self._no_dl_flagged(self._dl_key(it))]
             elif status == "已下载":
                 items = [it for it in items if it.get("media_files")]
             elif status == "下载不完整":
@@ -2309,8 +2317,13 @@ class AssetPage(BasePage):
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
                     if cancelled:
                         self.app.toast("⚠ 下载已取消（半截文件下次续传）", "warning")
-                    else:
+                    elif f:
+                        # 拿到直链但下载失败（CDN 链接过期 403 等）
                         self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
+                    else:
+                        # 0 失败 0 成功 = 一个任务都没建出来：重新解析没拿到
+                        # 直链（风控/作品失效）且存量链接不是直链，压根没尝试
+                        self.app.toast("❌ 视频未下载：未获取到可用直链（解析被拦或作品失效），可重试", "error")
             if not quiet:  # 批量模式由 _advance 统一刷新一次
                 # 轻量刷新：stats["paths"] 已带下载文件路径，直接挂行
                 self._refresh_rows_for([it], new_paths=stats.get("paths") or None)
