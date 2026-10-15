@@ -1,0 +1,24 @@
+# 构建产物
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# 运行时目录（与 Python 版一致：隐私数据不进仓库）
+config/
+download/
+logs/
+
+# 日志
+*.log
+
+# 打包输出
+dist-java/
+*.msi
+*.exe
