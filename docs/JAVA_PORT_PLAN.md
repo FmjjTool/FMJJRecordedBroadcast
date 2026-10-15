@@ -28,8 +28,8 @@
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
-| **M1 骨架 + 纵切** | Maven/JavaFX 构建、主窗口 9 组 35 页导航、懒加载、生命周期钩子、双主题、Toast、字幕引擎+页、歌词引擎+页、WBI 签名、跨语言测试 | ✅ 本次完成 |
-| **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ⬜ |
+| **M1 骨架 + 纵切** | Maven/JavaFX 构建、主窗口 9 组 35 页导航、懒加载、生命周期钩子、双主题、Toast、字幕引擎+页、歌词引擎+页、WBI 签名、跨语言测试 | ✅ 完成 |
+| **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
 | **M3 网络与账号体系** | HttpClient 封装（UA/cookie/重试/限流）、WBI 网络层（nav 取 key、buvid、bili_ticket）、Cookie 仓库（JCE 移植 Fernet 语义：AES-CBC + HMAC + 机器 GUID 派生密钥，sqlite 存储）、扫码/浏览器登录入口 | ⬜ |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ⬜ |
 | **M5 解析与下载** | B站/抖音/微博/快手/小红书 解析器（游客→兜底→Cookie 降级链）、媒体批量落盘、DASH 下载 + ffmpeg 合并、a_bogus（见难点）、已获取数据 SQLite 持久化（xerial sqlite-jdbc） | ⬜ |
@@ -46,10 +46,10 @@
 |---|---|---|---|
 | 字幕转换 ✅ | toolbox/subtitle_engine | M1 | — |
 | 歌词转换 ✅ | toolbox/lyrics_engine | M1 | — |
-| 文件时间修改 | toolbox/file_time | M2 | 低 |
-| 批量重命名 | toolbox/rename_* | M2 | 低 |
-| 自动整理 | toolbox/organize_engine | M2 | 低 |
-| 全局设置 | toolbox/config_manager | M2 | 低 |
+| 批量重命名 ✅ | rename_batch 规则引擎 | M2 | 低 |
+| 自动整理 ✅ | toolbox/organize_engine | M2 | 低 |
+| 文件时间修改 ✅ | file_time（含 ctime 限制） | M2 | 中 |
+| 全局设置 ✅ | config_manager（子集） | M2 | 低 |
 | 音频提取 | toolbox/audio_engine (ffmpeg) | M4 | 中 |
 | 视频转换 | toolbox/convert_engine (ffmpeg) | M4 | 中 |
 | 文件迁移 / 日历浏览 / 继续操作 | toolbox/migrate, calendar, launcher | M4 | 低-中 |
@@ -65,6 +65,19 @@
 | 抖音弹幕姬 / B站弹幕姬 | 直播录制（WebSocket / FLV） | M8 | 高 |
 | 票务解析 / 购物解析 | tickets, shopping | M8 | 中 |
 | 图片裁切 / 封面制作 / 媒体筛选 / 媒体压缩 | imgcut / image-sorter 系移植 | M8 | 高（图像） |
+
+## 3.5 M2 已知怪葩与差距（bug 级一致的保留项）
+
+1. **重命名冲突双加序号**：Python `_refresh` 的跨项撞名按列表索引身份判断，
+   两个同名文件会**互相**触发冲突（a.mp4/a.mp4 → a_1.mp4/a_2.mp4），已按原样保留。
+2. **规则撞名不去重**：规则把 x1/x2 都改成 x.mp4 时，原版不会加序号（`used` 表
+   只在撞「已登记名/已存在原名」时才写入）→ 执行时后写覆盖先写。已保留原行为，
+   待与作者确认是否在后续里程碑修正（届时需要同步改两个语言版本）。
+3. **文件时间 ctime**：Python 用 win32file/ctypes 写 Windows 创建时间；Java NIO
+   大多平台不可写 → 引擎尽力而为，UI 状态标注「创建时间不支持」。
+4. **批量重命名文本模式 tab**（逐行直接编辑新名）未做，M3 前补或确认砍掉。
+5. **Settings 只移植全局设置页相关键**（目录/主题/ffmpeg），其余 60+ 配置键
+   随各自页面里程碑补齐；主题的跟随系统/定时切换 M6 落地。
 
 ## 4. 依赖映射（Python → Java）
 

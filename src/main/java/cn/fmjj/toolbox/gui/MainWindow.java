@@ -2,8 +2,13 @@ package cn.fmjj.toolbox.gui;
 
 import cn.fmjj.toolbox.core.AppPaths;
 import cn.fmjj.toolbox.core.Log;
+import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.gui.pages.BasePage;
+import cn.fmjj.toolbox.gui.pages.FileTimePage;
+import cn.fmjj.toolbox.gui.pages.GlobalSettingsPage;
 import cn.fmjj.toolbox.gui.pages.LyricsPage;
+import cn.fmjj.toolbox.gui.pages.OrganizePage;
+import cn.fmjj.toolbox.gui.pages.RenameBatchPage;
 import cn.fmjj.toolbox.gui.pages.StubPage;
 import cn.fmjj.toolbox.gui.pages.SubtitlePage;
 import javafx.css.PseudoClass;
@@ -46,6 +51,11 @@ public class MainWindow {
     public record NavGroup(String title, List<NavItem> items) {}
 
     private static final PseudoClass SELECTED = PseudoClass.getPseudoClass("selected");
+
+    /** 全部导航页 key（冒烟自检用）。 */
+    public static List<String> allPageKeys() {
+        return NAV_GROUPS.stream().flatMap(g -> g.items().stream()).map(NavItem::key).toList();
+    }
 
     /** 侧栏分组与页面（与 Python 版 NAV_GROUPS 一致，9 组 35 页）。 */
     public static final List<NavGroup> NAV_GROUPS = List.of(
@@ -112,7 +122,7 @@ public class MainWindow {
 
     public MainWindow(Stage stage) {
         this.stage = stage;
-        this.workDir = AppPaths.downloadDir();
+        this.workDir = Settings.load().effectiveWorkDir();
         registerPages();
         buildSidebar();
         root.setCenter(wrapContent());
@@ -148,6 +158,11 @@ public class MainWindow {
         // 已移植（M1）
         pageFactories.put("toolbox_subtitle", SubtitlePage::new);
         pageFactories.put("lyrics_tool", LyricsPage::new);
+        // 已移植（M2）
+        pageFactories.put("rename_batch", RenameBatchPage::new);
+        pageFactories.put("toolbox_organize", OrganizePage::new);
+        pageFactories.put("file_time", FileTimePage::new);
+        pageFactories.put("global_settings", () -> new GlobalSettingsPage(this));
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
             for (NavItem item : group.items()) {

@@ -6,7 +6,7 @@
 把原 Python 工具箱（引擎层 3.3 万行 + PySide6 GUI 4.1 万行，共约 7.6 万行）
 整体迁移到 **Java 21 + JavaFX** 技术栈。本仓库是独立的新工程，与 Python 版并行维护。
 
-## 当前进度（M1：架构骨架 + 首个功能纵切）
+## 当前进度（M2：基础工具四件套完成）
 
 | 范围 | 状态 |
 |---|---|
@@ -18,7 +18,11 @@
 | 字幕转换引擎 + 页面（BCC/ASS/SRT/TXT ↔ 文字/时间轴/LRC/ASS/SRT，可落盘） | ✅ |
 | 歌词转换引擎 + 页面（LRC/KRC/KSC/QRC/TRC/纯文本 ↔ TXT/LRC/SRT/ASS/KSC，KRC 加解密，KRCD 工具） | ✅ |
 | WBI 签名（mixin/w_rid/app sign，跨语言测试向量对齐 Python 原版） | ✅ |
-| 其余 33 个页面 | 🚧 占位中，按路线图逐个替换 |
+| 批量重命名（7 标签规则叠加 + 预览冲突加序号 + 撤销） | ✅ M2 |
+| 自动整理（按日期扫描/分组/执行，同名 _N 防覆盖） | ✅ M2 |
+| 文件时间修改（指定时间/偏移量/文件名时间三模式） | ✅ M2 |
+| 全局设置（工作目录/导出目录/主题/FFmpeg 路径，JSON 持久化） | ✅ M2 |
+| 其余 29 个页面 | 🚧 占位中，按路线图逐个替换 |
 
 **移植正确性保障**：所有引擎级单元测试的期望值均由 Python 原版运行时生成
 （见 `src/test/java/.../` 测试类的注释），不是手写近似值——包括
@@ -40,17 +44,24 @@ FMJJRecordedBroadcast_JAVA/
     │   │   └── bili/
     │   │       └── WbiSigner.java   WBI/App 签名（纯函数，网络层 M3 补）
     │   ├── engine/             ★ 引擎层（零 GUI 依赖，与 Python 版分层一致）
-    │   │   ├── subtitle/SubtitleEngine.java
-    │   │   └── lyrics/LyricsEngine.java
+    │   │   ├── subtitle/SubtitleEngine.java        # 字幕格式互转
+    │   │   ├── lyrics/LyricsEngine.java            # 歌词互转 + KRC 加解密
+    │   │   ├── rename/BatchRenameEngine.java       # 批量重命名 8 类规则
+    │   │   ├── organize/OrganizeEngine.java        # 按日期自动整理
+    │   │   └── filetime/FileTimeEngine.java        # 文件时间三模式
     │   └── gui/
     │       ├── MainWindow.java     侧栏导航 + 懒加载 + 钩子分发
     │       ├── Theme.java          浅色/深色切换
     │       ├── Toast.java          右下角提示
     │       └── pages/
-    │           ├── BasePage.java   生命周期基类
-    │           ├── SubtitlePage.java   字幕转换（已移植，可用）
-    │           ├── LyricsPage.java     歌词转换（已移植，可用）
-    │           └── StubPage.java       其余页面占位
+    │           ├── BasePage.java           生命周期基类
+    │           ├── SubtitlePage.java       字幕转换（可用）
+    │           ├── LyricsPage.java         歌词转换（可用）
+    │           ├── RenameBatchPage.java    批量重命名（可用）
+    │           ├── OrganizePage.java       自动整理（可用）
+    │           ├── FileTimePage.java       文件时间修改（可用）
+    │           ├── GlobalSettingsPage.java 全局设置（可用）
+    │           └── StubPage.java           其余页面占位
     └── main/resources/cn/fmjj/toolbox/gui/
         ├── light.css / dark.css
     └── test/java/cn/fmjj/toolbox/   # 跨语言一致性测试

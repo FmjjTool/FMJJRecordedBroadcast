@@ -4,8 +4,11 @@ import cn.fmjj.toolbox.core.AppPaths;
 import cn.fmjj.toolbox.core.Log;
 import cn.fmjj.toolbox.gui.MainWindow;
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
+
+import java.util.List;
 
 /**
  * 入口。对应 Python 版 main.py 的初始化序列：
@@ -24,6 +27,16 @@ public class ToolboxApp extends Application {
         window.attachScene(scene);
         stage.setScene(scene);
         stage.setTitle("封茗囧菌数据汇总库 · 统一维护工具箱 Java 2.9.1");
+
+        // 无头冒烟自检：逐个构造全部页面后退出（FMJJ_SMOKE=1 或 -Dfmjj.smoke=true）
+        if (Boolean.getBoolean("fmjj.smoke") || System.getenv("FMJJ_SMOKE") != null) {
+            List<String> keys = MainWindow.allPageKeys();
+            for (String key : keys) window.navigate(key);
+            Log.info("冒烟自检：全部 " + keys.size() + " 个页面构造成功");
+            Platform.exit();
+            return;
+        }
+
         stage.show();
     }
 
