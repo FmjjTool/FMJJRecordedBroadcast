@@ -55,6 +55,7 @@ PAGE_CLASSES = {
     "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
     "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
     "shopping": ("gui_qt.pages.shopping_page", "ShoppingPage"),
+    "douyin_shop": ("gui_qt.pages.douyin_shop_page", "DouyinShopPage"),
     "bili_danmaku": ("gui_qt.pages.bili_danmaku", "BiliDanmakuPage"),
     "image_crop": ("gui_qt.pages.image_crop", "ImageCropPage"),
     "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
@@ -97,6 +98,7 @@ NAV_GROUPS = [
     ("🎫 票务购物", [
         ("tickets", "🎫 票务解析"),
         ("shopping", "🛒 购物解析"),
+        ("douyin_shop", "🏬 抖音商品"),
     ]),
     ("🎵 音乐服务", [
         ("music_info", "🎵 音乐信息获取"),
