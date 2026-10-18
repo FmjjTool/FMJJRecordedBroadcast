@@ -1396,6 +1396,151 @@ class DouyinLiveFetcher:
         return cls._has_acrawler(page)
 
     @staticmethod
+    def _arm_im_capture(page):
+        """在页面发请求前布好 im/fetch 响应捕获，返回收集列表。
+
+        注意：handler 里只存 response 对象，**不读 body**（sync API 在事件
+        回调里读 body 会重入报错）；body 由 _prep_from_capture 延后读取。
+        """
+        holder = []
+
+        def _on_resp(resp):
+            try:
+                if "/webcast/im/fetch/" in resp.url and resp.status == 200:
+                    holder.append(resp)
+            except Exception:
+                pass
+
+        try:
+            page.on("response", _on_resp)
+        except Exception:
+            pass
+        return holder
+
+    @staticmethod
+    def _parse_im_body(body):
+        """从 im/fetch 响应体（Response protobuf）取 cursor/internalExt/pushServer。
+
+        字段号与 _PREP_JS 里一致：2=cursor 5=internalExt 10=pushServer。
+        """
+        out = {}
+        r = _Reader(body)
+        try:
+            while r.pos < len(body):
+                tag = r.varint()
+                f, w = tag >> 3, tag & 7
+                if w == 2:
+                    ln = r.varint()
+                    if f == 2:
+                        out["cursor"] = r.str_(ln)
+                    elif f == 5:
+                        out["internalExt"] = r.str_(ln)
+                    elif f == 10:
+                        out["pushServer"] = r.str_(ln)
+                    else:
+                        r.skip(ln)
+                elif w == 0:
+                    r.varint()
+                elif w == 1:
+                    r.skip(8)
+                elif w == 5:
+                    r.skip(4)
+                else:
+                    break
+        except Exception:
+            return {}
+        return out
+
+    @classmethod
+    def _prep_from_capture(cls, page, holder, info, wait=12.0):
+        """截页面自身 im/fetch 的响应，解析出 WS 连接参数（含 did）。
+
+        为什么不再自己 fetch：2026-10 起抖音对 im/fetch 的 a_bogus 与
+        user_unique_id 校验收紧——自己拼参数（a_bogus 占位 '00000000'、
+        user_unique_id 用固定值）只会拿到 200 + application/json + **空体**，
+        cursor/internalExt/pushServer 全缺，于是旧路径直接报
+        「连接参数不完整（可能被抖音风控拦截）」。而页面自己发的那条请求
+        签名与 did 都是真的，直接截它的响应体解析即可。
+        """
+        want = str(info.get("roomId") or "")
+        deadline = time.time() + wait
+        resp = None
+        while time.time() < deadline:
+            for r in list(holder):
+                try:
+                    if want and f"room_id={want}" not in r.url:
+                        continue
+                except Exception:
+                    continue
+                resp = r
+                break
+            if resp is not None:
+                break
+            try:
+                page.wait_for_timeout(200)
+            except Exception:
+                break
+        if resp is None:
+            return {}
+        try:
+            body = resp.body()
+        except Exception:
+            return {}
+        if not body or len(body) < 32:
+            return {}
+        parsed = cls._parse_im_body(body)
+        if not (parsed.get("cursor") and parsed.get("internalExt")
+                and parsed.get("pushServer")):
+            return {}
+        # did：页面自己的 user_unique_id（internalExt 的 wss_push_did 最可靠，
+        # 退而求其次从请求 URL 取）——WS 的 user_unique_id 必须与 fetch 时一致
+        did = ""
+        m = _re.search(r"wss_push_did:(\d+)", parsed.get("internalExt") or "")
+        if m:
+            did = m.group(1)
+        if not did:
+            try:
+                import urllib.parse as _up
+                q = _up.parse_qs(resp.url.split("?", 1)[1])
+                did = (q.get("user_unique_id") or [""])[0]
+            except Exception:
+                did = ""
+        parsed["did"] = did
+        return parsed
+
+    @classmethod
+    def _prep_ws_params(cls, page, holder, info, md5hex):
+        """拿 WS 连接参数：优先截页面自身的 im/fetch 响应，失败回退旧的自造请求。
+
+        返回 cursor/internalExt/pushServer/signature/uniqueId/screenW/H；
+        失败时带 result='missing'（或 error），由调用方统一报错。
+        """
+        cap = cls._prep_from_capture(page, holder, info)
+        if cap:
+            did = cap.get("did") or info["uniqueId"]
+            # 握手签名与 user_unique_id 必须同源：用同一个 did 重算 stub md5
+            md5hex2 = stub_md5(info["roomId"], did)
+            sig, sw, sh = "", 1920, 1080
+            try:
+                sig, sw, sh = page.evaluate(
+                    """m => { const s = window.byted_acrawler.frontierSign({'X-MS-STUB': m});
+                              return [s['X-Bogus'], screen.width, screen.height]; }""",
+                    md5hex2)
+            except Exception as e:
+                print(f"[抖音直播] 握手签名生成失败: {e}")
+            if sig:
+                return {"cursor": cap["cursor"], "internalExt": cap["internalExt"],
+                        "pushServer": cap["pushServer"], "signature": sig,
+                        "uniqueId": did, "screenWidth": sw, "screenHeight": sh}
+        # 旧路径兜底：自己拼参数发 im/fetch（风控期会拿到空体 → missing）
+        try:
+            return page.evaluate(_PREP_JS, {"roomId": info["roomId"],
+                                            "uniqueId": info["uniqueId"],
+                                            "md5hex": md5hex})
+        except Exception as e:
+            return {"error": f"参数获取异常: {e}"}
+
+    @staticmethod
     def _format_line(name, nickname, content):
         """构建 '[昵称]：内容' 格式字符串（不含时间戳，时间戳由 UI 端加）。
 
@@ -1457,6 +1602,9 @@ class DouyinLiveFetcher:
                 ctx = browser.new_context(**ctx_kwargs)
                 _inject_cookie(ctx)
                 page = ctx.new_page()
+                # 页面自己那条 im/fetch 响应是连接参数的可靠来源，必须在
+                # goto 之前就挂上监听（页面加载后会自动发起）
+                cap = self._arm_im_capture(page)
                 # commit 即返回（DOM 未就绪由下方 acrawler 轮询兜底），
                 # domcontentloaded 要等整个 DOM 解析完成，实测多耗 1.5~2s
                 try:
@@ -1476,6 +1624,7 @@ class DouyinLiveFetcher:
                     ctx = browser.new_context(**ctx_kwargs)
                     _inject_cookie(ctx)
                     page = ctx.new_page()
+                    cap = self._arm_im_capture(page)
                     try:
                         page.goto(f"https://live.douyin.com/{self.room_num}", wait_until="domcontentloaded", timeout=30000)
                     except Exception:
@@ -1492,7 +1641,7 @@ class DouyinLiveFetcher:
                         pass
                     self._emit(self.on_status, "connecting", "验证通过，继续连接...")
 
-                result = page.evaluate(_PREP_JS, {"roomId": info["roomId"], "uniqueId": info["uniqueId"], "md5hex": md5hex})
+                result = self._prep_ws_params(page, cap, info, md5hex)
                 if result.get("error"):
                     browser.close()
                     self._emit(self.on_status, "error", f"连接失败: {result['error']}")
@@ -1557,7 +1706,8 @@ class DouyinLiveFetcher:
         """
         import websocket
         ws_url = build_ws_url(
-            params["pushServer"], info["roomId"], info["uniqueId"],
+            params["pushServer"], info["roomId"],
+            params.get("uniqueId") or info["uniqueId"],
             params["cursor"], params["internalExt"], params["signature"],
             screen_h=params.get("screenHeight") or 1080,
             screen_w=params.get("screenWidth") or 1920)
