@@ -37,3 +37,16 @@ _dyx_debug/
 _probe_*
 _test_ks_*
 _tmp_*
+
+# 项目记忆/工作区数据（本地保留，不进仓库）
+.workbuddy-ai/
+
+# 一次性数据导出与抓取产物（本地保留，不进仓库）
+peachring_export/
+
+# 抖音直播录制/解析产物（封面图、主播数据，仅本地）
+/*_cover.png
+/*_主播数据.txt
+
+# 冒烟测试运行截图
+_smoke_*.png
