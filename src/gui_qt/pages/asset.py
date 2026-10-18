@@ -2209,6 +2209,12 @@ class AssetPage(BasePage):
             if it["platform"] == "xiaohongshu" and not note_images \
                     and not _is_direct_media_url(vurl2):
                 raise ValueError("小红书视频流获取失败：笔记链接可能已失效或被风控，请重新获取该条目")
+            # 抖音兜底：重新解析（aweme/detail → 浏览器接口兜底）全失败时 vurl2
+            # 还是作品页链接，download_media 建不出任务（0 成功 0 失败）→ 显式
+            # 报错，别让用户只看到一句「未获取到可用直链」猜原因
+            if it["platform"] == "douyin" and not note_images \
+                    and "douyin.com" in vurl2 and not _is_direct_media_url(vurl2):
+                raise ValueError("抖音直链获取失败（接口风控 + 浏览器兜底均未拿到直链），稍后重试")
             # 视频任务单独一批：若封面并入同一批，任务数 2 → parallel 模式 →
             # 视频文件本体退化为单流（这正是「选了 N 线程但视频还是 1 线程」
             # 的根因）；单视频任务 + threads>1 → segments 模式，视频按 N 段

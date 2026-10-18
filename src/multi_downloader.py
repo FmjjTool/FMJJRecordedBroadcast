@@ -87,6 +87,77 @@ def _douyin_abogus(query: str, user_agent: str = UA_PC) -> str:
         return ""
 
 
+_DY_DETAIL_PARAMS = ("device_platform=webapp&aid=6383&channel=channel_pc_web"
+                     "&pc_client_type=1&version_code=190500&version_name=19.5.0"
+                     "&cookie_enabled=true&platform=PC")
+
+# 本次进程内 aweme/detail 是否已被 Argus 风控拦死（返回过 403）。
+# 一旦确认，后续条目直接走浏览器兜底，不再白打两次 403 请求（既省 2s/条，
+# 也避免持续给风控计数加码）。
+_DY_API_BLOCKED = False
+
+
+def _douyin_detail_by_browser(aweme_id: str, timeout_ms: int = 30000) -> dict:
+    """Playwright 兜底：在浏览器上下文内 fetch aweme/detail，返回 aweme_detail。
+
+    2026-10 起抖音该接口对纯 HTTP 客户端（游客 / 带 Cookie / 带 a_bogus 签名）
+    一律 403「Blocked by ArgusSecurityPlugin Uifid Not Found」——Argus 校验的是
+    浏览器指纹与 secsdk 票据（TLS 指纹、sec-ch-ua、x-secsdk-csrf-token 等），
+    httpx 无法伪造，a_bogus 再正确也过不去。而在页面上下文里 fetch 会自带
+    全套指纹与票据，实测 200 返回完整 aweme_detail（含 bit_rate 各画质直链）。
+
+    失败返回空 dict，不抛异常（调用方按"解析失败"处理）。
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        from toolbox.browser import launch as pw_launch
+    except Exception as e:  # noqa: BLE001 - 未安装/打包缺失都按不可用处理
+        print(f"[抖音] Playwright 不可用，跳过浏览器兜底: {e}")
+        return {}
+    api = (f"https://www.douyin.com/aweme/v1/web/aweme/detail/?{_DY_DETAIL_PARAMS}"
+           f"&aweme_id={aweme_id}")
+    try:
+        with sync_playwright() as p:
+            browser = pw_launch(
+                p, headless=True,
+                args=["--disable-blink-features=AutomationControlled",
+                      "--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            try:
+                ctx = browser.new_context(
+                    user_agent=UA_PC, viewport={"width": 1920, "height": 1080},
+                    locale="zh-CN",
+                )
+                ctx.add_init_script(
+                    "Object.defineProperty(navigator,'webdriver',{get:()=>false});")
+                page = ctx.new_page()
+                # 先开首页：跑完 __ac_nonce JS 挑战、下发 ttwid / UIFID 等票据，
+                # 没有这一步直接 fetch 同样是 403
+                page.goto("https://www.douyin.com/", wait_until="domcontentloaded",
+                          timeout=timeout_ms)
+                page.wait_for_timeout(2500)
+                res = [0, ""]
+                # 票据落地有快有慢：403 时再等一会儿重试一次，别一次抖动就放弃
+                for attempt in range(2):
+                    res = page.evaluate(
+                        """async (u) => {
+                            const r = await fetch(u, {credentials: 'include'});
+                            const t = await r.text();
+                            return [r.status, t];
+                        }""", api)
+                    if res and res[0] == 200:
+                        return (json.loads(res[1]) or {}).get("aweme_detail") or {}
+                    if attempt == 0:
+                        page.wait_for_timeout(2000)
+                print(f"[抖音] 浏览器接口返回 HTTP {res[0] if res else '?'}")
+                return {}
+            finally:
+                browser.close()
+    except Exception as e:  # noqa: BLE001 - 浏览器异常一律降级
+        print(f"[抖音] 浏览器兜底失败: {e}")
+        return {}
+
+
 def recognize_platform(url: str) -> str | None:
     """根据 URL 识别平台名。"""
     try:
@@ -157,6 +228,7 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
     支持视频（/video/）和图文（/note/）：图文 aweme_type=68，只有 images 无视频，
     此时 video_url 置空（play_addr 指向 douyinstatic 封面图 CDN，不是真视频流）。
     """
+    global _DY_API_BLOCKED
     aweme_id = _get_video_id(url)
     if not aweme_id or not aweme_id.isdigit():
         # 抖音作品 ID 纯数字；拿不到说明链接不是作品页（如搜索页没带
@@ -185,7 +257,10 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
             h = dict(headers)
             h["Cookie"] = cookie
             try:
-                return httpx.get(full_url, headers=h, timeout=15).json()
+                r = httpx.get(full_url, headers=h, timeout=15)
+                if r.status_code == 403:
+                    blocked[0] = True
+                return r.json()
             except Exception:
                 return {}
         # 游客：先访问首页拿 ttwid 等游客票据，否则接口直接拒绝
@@ -195,22 +270,34 @@ def _parse_douyin(url: str, quality: str | None = None) -> dict:
             except Exception:
                 pass
             try:
-                return c.get(full_url).json()
+                r = c.get(full_url)
+                if r.status_code == 403:
+                    blocked[0] = True
+                return r.json()
             except Exception:
                 return {}
 
+    blocked = [False]
     # 游客优先；拿不到详情才接入登录 Cookie（三级兜底）
-    data = _detail("")
+    data = {} if _DY_API_BLOCKED else _detail("")
     if not (data.get("aweme_detail") or {}):
         try:
             from auth import get_cookie
             ck = get_cookie("douyin")
         except Exception:
             ck = ""
-        if ck:
+        if ck and not _DY_API_BLOCKED:
             print("[抖音下载] 游客解析失败，接入Cookie重试...")
             data = _detail(ck)
     detail = data.get("aweme_detail", {}) or {}
+    if not detail:
+        if blocked[0]:
+            # Argus 已确认拦截：本次运行后续条目直接走浏览器，省掉两次 403 往返
+            _DY_API_BLOCKED = True
+        # 三级兜底：浏览器内 fetch（Argus 风控下唯一稳定的纯解析通道，
+        # 见 _douyin_detail_by_browser 注释）
+        print("[抖音下载] 接口 403/无数据，改用浏览器接口兜底...")
+        detail = _douyin_detail_by_browser(aweme_id)
     video = detail.get("video", {}) or {}
 
     # 图文判定：aweme_type=68（图集），或 images 非空且无视频码率档
