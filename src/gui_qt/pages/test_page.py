@@ -12,6 +12,7 @@ import atexit
 import html
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -27,12 +28,20 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
+from gui_qt import common
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.theme import is_dark
 
 # 回放包解压出的临时目录（recording.flv），进程退出兜底清理
 _replay_tmp_dirs = []
+
+# ==================== 会员/粉丝团类礼物的打赏榜口径 ====================
+# 「点亮粉丝团 / 粉丝团灯牌 / 加入会员」这类礼物网页端推送常缺 diamondCount，
+# 价值算出来是 0，排到榜单末尾等于没计入。按官方最低档 1 抖币兜底。
+FANSCLUB_PRICE_FALLBACK = 1
+FANSCLUB_NAME_RE = re.compile(
+    r"粉丝团|灯牌|点亮|会员|守护|团票|续费|入团|团卡|粉丝牌|粉丝徽章|贵族|会员卡")
 
 # ==================== 表情/礼物图标本地缓存 ====================
 # QTextBrowser 不会自动加载远程图片（<img src="https://..."> 只显示占位纸片图标），
@@ -141,8 +150,14 @@ class TestPage(BasePage):
         "<p>· <b>实时数据</b>：弹幕 / 礼物 / 进场 / 点赞 / 关注，主播信息卡实时刷新；"
         "礼物打赏榜、消息类别可开关（礼物/聊天/点赞/进入/日志）</p>"
         "<p>· <b>四种模式</b>：正常（视频+弹幕）/ 仅视频 / 仅弹幕 / 回放</p>"
-        "<p>· <b>视频与录制</b>：直播画面预览 + 画质切换；⏺ 手动录播 / 勾选自动录播；"
+        "<p>· <b>视频与回放包录制</b>：直播画面预览 + 画质切换；"
+        "⏺ 回放包录制（视频 + 全量弹幕打包成 zip）/ 勾选自动回放包录制；"
         "切页后台保持连接，切回自动恢复</p>"
+        "<p>· <b>⏺ 录播（顶栏右侧）</b>：打开「直播录制」二级窗口——抖音 / B站 同源列表，"
+        "窗口底部切换平台；支持开播自动录制、断流自动重连续录、按时间/大小分段、"
+        "录满自动停，多个直播间同时录</p>"
+        "<p>· <b>实时落盘</b>：每条弹幕/礼物到达即写入「导出目录/弹幕文件/实时记录/"
+        "房间号_日期.jsonl」，切页、误关、进程崩溃都不丢；切页回来搜索条件与历史保留</p>"
         "<p>· <b>🔁 轮询等开播</b>：未开播按间隔自动重试，主播开播自动接入；"
         "下播后若开关仍开着自动恢复轮询</p>"
         "<p>· <b>搜索</b>：弹幕区关键字/按人筛选，事件区（点赞/进入/关注/横幅/系统）独立筛选</p>"
@@ -193,6 +208,11 @@ class TestPage(BasePage):
         # ④框搜索：完整事件日志（点赞/进入/关注/横幅/系统）+ 当前筛选关键字
         self._event_log = []
         self._event_filter = ""
+        # 实时落盘：每条弹幕/礼物到达即追加写入 JSONL（进程崩溃/切页也不丢）
+        self._rt_fp = None
+        self._rt_path = None
+        self._rt_room = ""
+        self._resume_keep = False   # 切页自动重连：保留本场弹幕/搜索状态
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -263,7 +283,27 @@ class TestPage(BasePage):
         link_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
         link_btn.clicked.connect(self._open_link_paste)
         top_l.addWidget(link_btn)
+        self.account_pick_btn = QPushButton("📇 已存账号")
+        self.account_pick_btn.setToolTip(
+            "从本机已存账号/录播用户里选直播间（账号获取 accounts.txt、\n"
+            "直播录制列表、抖音房间缓存、最近连接）；B站空间/抖音主页可解析")
+        self.account_pick_btn.setStyleSheet(
+            icon_btn_style(True, "font-size: 12px; padding: 3px 8px;"))
+        self.account_pick_btn.clicked.connect(self._open_room_picker)
+        top_l.addWidget(self.account_pick_btn)
         top_l.addStretch(1)
+        # 录播：打开「直播录制」二级界面（抖音/B站同源，独立窗口，底部切换平台）
+        # 位置按需求放在顶栏右侧、清空按钮左边
+        self.record_win_btn = QPushButton("⏺ 录播")
+        self.record_win_btn.setToolTip(
+            "打开「直播录制」二级窗口：\n"
+            "· 抖音 / B站 两套列表，窗口底部按钮切换，录制任务互不影响\n"
+            "· 开播自动录制、断流自动重连续录、按时间/大小分段、录满自动停\n"
+            "· 窗口独立（可随便拖动/最大化），但不是独立程序，随主程序退出")
+        self.record_win_btn.setStyleSheet(
+            icon_btn_style(True, "font-size: 12px; padding: 3px 8px;"))
+        self.record_win_btn.clicked.connect(self._open_live_record)
+        top_l.addWidget(self.record_win_btn)
         clear_btn = QPushButton("🗑")
         clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
                              "保留房间号、WS 地址等配置")
@@ -298,10 +338,12 @@ class TestPage(BasePage):
         tb.addWidget(self.save_stats_var)
         # 自动录播：勾选后拿到直播流即自动开始录制（最高画质）；取消则只手动录
         # （放工具栏而非视频控制行：仅弹幕模式下视频行隐藏，工具栏各模式恒可见）
-        self.auto_record_var = QCheckBox("⏺ 自动录播")
+        self.auto_record_var = QCheckBox("⏺ 自动回放包录制")
         self.auto_record_var.setToolTip(
-            "勾选后：连接直播间拿到直播流即自动开始录制（默认最高画质，各模式均可）；\n"
-            "取消勾选：仅点「⏺ 录播」按钮手动录制。")
+            "勾选后：连接直播间拿到直播流即自动开始录制（默认最高画质，各模式均可），"
+            "停止时打包成回放包；\n"
+            "取消勾选：仅点「⏺ 回放包录制」按钮手动录制。\n"
+            "（多房间批量录播请用顶栏「⏺ 录播」打开的直播录制窗口）")
         self.auto_record_var.setChecked(bool(self.settings.get("auto_record", False)))
         self.auto_record_var.toggled.connect(self._on_auto_record_toggle)
         tb.addWidget(self.auto_record_var)
@@ -389,6 +431,46 @@ class TestPage(BasePage):
         """✕ 按钮：一键清空房间号并聚焦，方便快速输入新房间。"""
         self.room_entry.clear()
         self.room_entry.setFocus()
+
+    def _open_room_picker(self):
+        """📇 从本机已存账号 / 录播用户里挑直播间，填入房间号。"""
+        try:
+            from gui_qt.room_picker import RoomPickerDialog
+        except Exception as e:  # noqa: BLE001
+            self.app.toast(f"账号选择器加载失败：{e}", "error")
+            return
+        plat = "bili" if self._BACKEND.endswith("bili_live") else "douyin"
+        e = RoomPickerDialog(self, platform=plat).exec_get()
+        if not e:
+            return
+        label = "B站" if e.platform == "bili" else "抖音"
+        if e.platform != plat:
+            # 平台不一致：自动切到对应的弹幕姬页再填入
+            target = "bili_danmaku" if e.platform == "bili" else "test_page"
+            try:
+                self.app.show_page(target)
+                page = self.app.pages.get(target)
+                if page is not None:
+                    page.room_entry.setText(e.room)
+                self.app.toast(f"该账号属于{label}，已切到{label}弹幕姬并填入房间号 {e.room}",
+                               "info")
+            except Exception as ex:  # noqa: BLE001
+                self.app.toast(f"切换页面失败：{ex}", "warning")
+            return
+        self.room_entry.setText(e.room)
+        self.app.toast(f"已填入「{e.name or label}」房间号 {e.room}，点「连接」开始",
+                       "success")
+
+    def _open_live_record(self):
+        """⏺ 录播：打开「直播录制」二级界面，带上当前平台与房间号。"""
+        try:
+            from gui_qt.live_record_window import open_live_record_window
+        except Exception as e:  # noqa: BLE001
+            self.app.toast(f"录制窗口加载失败：{e}", "error")
+            return
+        platform = "bili" if self._BACKEND.endswith("bili_live") else "douyin"
+        room = self.room_entry.text().strip() or self._default_room()
+        open_live_record_window(self.app, platform=platform, room=room)
 
     # ---- 🔗 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
 
@@ -657,7 +739,10 @@ class TestPage(BasePage):
         self.quality_combo.setMinimumWidth(110)
         self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
         self.live_ctrl_row.addWidget(self.quality_combo)
-        self.record_btn = QPushButton("⏺ 录播")
+        self.record_btn = QPushButton("⏺ 回放包录制")
+        self.record_btn.setToolTip(
+            "只为本页的回放包录制视频（停止后自动打包 zip：视频 + 全量弹幕）。\n"
+            "要批量/多房间录播，用顶栏右侧「⏺ 录播」打开「直播录制」二级窗口。")
         self.record_btn.setStyleSheet("background: #8e24aa; color: white;")
         self.record_btn.clicked.connect(self._toggle_record)
         self.live_ctrl_row.addWidget(self.record_btn)
@@ -943,13 +1028,13 @@ class TestPage(BasePage):
 
     def _refresh_record_ui(self):
         if self._recording:
-            self.record_btn.setText("⏹ 停止录播")
+            self.record_btn.setText("⏹ 停止回放包录制")
             self.record_btn.setStyleSheet("background: #c62828; color: white;")
             if not self._rec_timer_on:
                 self._rec_timer_on = True
                 self._tick_record()
         else:
-            self.record_btn.setText("⏺ 录播")
+            self.record_btn.setText("⏺ 回放包录制")
             self.record_btn.setStyleSheet("background: #8e24aa; color: white;")
             self.rec_time_lbl.setText("")
 
@@ -1555,6 +1640,16 @@ class TestPage(BasePage):
         self.room_entry.setText(_last_room)
         self.room_entry.returnPressed.connect(self._connect)
         row1.addWidget(self.room_entry, 1)
+        room_pick_btn = QPushButton("📇")
+        room_pick_btn.setFixedSize(26, 26)
+        room_pick_btn.setToolTip("从本机已存账号 / 录播用户里选直播间\n"
+                                 "（账号获取、直播录制列表、抖音房间缓存、最近连接）")
+        room_pick_btn.setFlat(True)
+        room_pick_btn.setStyleSheet(
+            icon_btn_style(False, "color: #1976d2; border: none; font-size: 13px;"))
+        room_pick_btn.clicked.connect(self._open_room_picker)
+        room_pick_btn.setFocusPolicy(Qt.NoFocus)
+        row1.addWidget(room_pick_btn)
         room_clear_btn = QPushButton("✕")
         room_clear_btn.setFixedSize(26, 26)
         room_clear_btn.setToolTip("清空房间号，快速输入新房间")
@@ -1673,6 +1768,10 @@ class TestPage(BasePage):
         v.addWidget(QLabel(
             f"自动导出回放包到：{self._backend()._danmaku_dir()}"
             "（断开连接 / 退出软件时自动打包 zip，含全量弹幕与分类 TXT）",
+            styleSheet="color: #888; font-size: 11px;"))
+        v.addWidget(QLabel(
+            "实时记录（每条即写，切页/崩溃不丢）："
+            f"{self._backend()._danmaku_dir() / '实时记录'}",
             styleSheet="color: #888; font-size: 11px;"))
 
         # 开关类
@@ -1887,26 +1986,51 @@ class TestPage(BasePage):
             room = self._default_room()
             self.room_entry.setText(room)
             self.app.toast(f"未填房间号，已自动填入默认 {room}", "info")
+        # 切页自动重连（同房间、本场已有数据）：保留弹幕日志/搜索条件/打赏榜，
+        # 只把显示区按当前筛选条件重建——否则「切出去再回来搜索记录全没了」。
+        resume = bool(self._resume_keep and self._chat_log
+                      and room == str(self.settings.get("last_room") or room))
+        self._resume_keep = False
         self._manual_stop = False   # 发起新连接：清除手动停止标记
         self.connected = True
-        self._start_ts = time.time()
-        self._like_count = 0
-        self._gift_rank = {}
-        self._gift_sessions = {}
-        self._session_casts = []
-        self.gift_table.setRowCount(0)
-        self.like_label.setText("0")
-        self.anchor_fields["like_count"].setText("0")
+        if not resume:
+            self._start_ts = time.time()
+            self._like_count = 0
+            self._gift_rank = {}
+            self._gift_sessions = {}
+            self._session_casts = []
+            self.gift_table.setRowCount(0)
+            self.like_label.setText("0")
+            self.anchor_fields["like_count"].setText("0")
         # 记住本次房间号（切走自动断开后，切回可自动重连）
         self.settings["last_room"] = room
         self._save_settings()
-        # 清空两个弹幕框的初始占位 + 封面/主播占位
-        self.chat_gift_box.clear()
-        self.event_box.setPlainText("")
-        self._cover_bytes = None
-        self.cover_label.setText("暂无封面")
-        for key in ("anchor_name", "anchor_fans", "online_count", "total_viewers"):
-            self.anchor_fields[key].setText("…")
+        # 实时落盘文件（追加模式，切页重连继续写同一个文件）
+        self._rt_open(room)
+        if resume:
+            # 只清显示、按当前筛选重建（含搜索关键字），数据一行不丢
+            self._render_chat_rows(self._visible_chat_entries()[-500:])
+            self._update_search_count()
+            self.event_box.setPlainText("")
+            for t in self._visible_event_rows()[-500:]:
+                self.event_box.appendPlainText(t)
+            self._update_event_count()
+            self._refresh_gift_rank()
+            self.like_label.setText(f"{self._like_count:,}")
+        else:
+            # 清空两个弹幕框的初始占位 + 封面/主播占位
+            self.chat_gift_box.clear()
+            self.event_box.setPlainText("")
+            self._chat_log = []
+            self._event_log = []
+            self._cover_bytes = None
+            self.cover_label.setText("暂无封面")
+            for key in ("anchor_name", "anchor_fans", "online_count", "total_viewers"):
+                self.anchor_fields[key].setText("…")
+            # 从今天的实时记录恢复历史（切页/重启/崩溃都不丢；没有文件则 0 条）
+            n = self._rt_load_tail(room)
+            if n:
+                self.app.toast(f"已恢复今日弹幕记录 {n} 条", "info")
         self._set_action_btn("连接中…", "connect", enabled=False)
         self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
         self.status_label.setText(f"连接中 · 房间 {room}")
@@ -1940,6 +2064,7 @@ class TestPage(BasePage):
         self._waiting_live = False
         self._manual_stop = True    # 手动断开：fetcher 异步回报 disconnected 时不进入自动等待
         self._timer_running = False
+        self._rt_close()            # 实时落盘文件收尾（数据早已逐条 flush）
         if self._poll_timer:
             self._poll_timer.stop()
             self._poll_timer = None
@@ -2015,12 +2140,17 @@ class TestPage(BasePage):
         self._poll_timer.start(interval * 1000)
 
     def _poll_reconnect(self):
-        """轮询到点：仍在等待开播 → 重试连接（开播即接入）。"""
+        """轮询到点：仍在等待开播 → 重试连接（开播即接入）。
+
+        自动重连（轮询等开播）保留本场弹幕历史与搜索条件：主播下播后再开播
+        接入时，之前搜到的记录不能凭空消失（用户反馈的「切页回来搜索记录没了」）。
+        """
         if not self.poll_btn.isChecked():
             return
         if self.connected:
             return
         if self._waiting_live:
+            self._resume_keep = True
             self._connect()
 
     # ======================== 保存弹幕 / 统计 / 开播监控 ========================
@@ -2129,6 +2259,10 @@ class TestPage(BasePage):
         在线人数/粉丝数等统计字段，与弹幕姬 DyMessage 对齐）。
         """
         m = m or {}
+        # 会员/粉丝团类礼物价格兜底放在记录之前：回放包/实时 JSONL 与打赏榜同口径
+        if (m.get("giftName") and not m.get("giftPrice")
+                and FANSCLUB_NAME_RE.search(str(m.get("giftName")))):
+            m["giftPrice"] = FANSCLUB_PRICE_FALLBACK
         self._record_cast(name, text, m)
         t = datetime.now()
         post_to_main(lambda: self._apply_message(name, text, m, t))
@@ -2152,6 +2286,123 @@ class TestPage(BasePage):
                 g["repeatEnd"] = 1
             c["gift"] = g
         self._session_casts.append(c)
+        self._rt_write(c)
+
+    # ---- 实时落盘（JSONL，一条一行，收到即 flush）----
+
+    def _rt_file_path(self, room):
+        """实时记录文件：导出目录/弹幕文件/实时记录/<房间号>_<日期>.jsonl。
+
+        和「断开/退出才打包 zip」互补：进程被强杀、切页、误关窗口都不会丢弹幕。
+        """
+        try:
+            base = self._backend()._danmaku_dir() / "实时记录"
+        except Exception:
+            from pathlib import Path
+            base = Path(__file__).resolve().parent.parent.parent / "download" / "弹幕文件" / "实时记录"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / f"{room or 'room'}_{datetime.now().strftime('%Y%m%d')}.jsonl"
+
+    def _rt_open(self, room):
+        """连接时打开（追加模式）；同房间同日复用同一文件。"""
+        if self._rt_fp and self._rt_room == room:
+            return
+        self._rt_close()
+        try:
+            p = self._rt_file_path(room)
+            self._rt_fp = open(p, "a", encoding="utf-8", buffering=1)
+            self._rt_path = str(p)
+            self._rt_room = room
+        except Exception:
+            self._rt_fp = None
+
+    def _rt_write(self, cast):
+        """一条消息写一行 JSONL 并 flush（缓冲=1 已是行缓冲，这里再显式 flush）。"""
+        fp = self._rt_fp
+        if not fp:
+            return
+        try:
+            fp.write(json.dumps(cast, ensure_ascii=False) + "\n")
+            fp.flush()
+        except Exception:
+            self._rt_close()
+
+    def _rt_close(self):
+        fp, self._rt_fp = self._rt_fp, None
+        if fp:
+            try:
+                fp.flush()
+                fp.close()
+            except Exception:
+                pass
+
+    # 只恢复「弹幕/礼物」类记录；点赞/进场等事件不占聊天区
+    _RT_CHAT_METHODS = ("WebcastChatMessage", "WebcastEmojiChatMessage",
+                        "WebcastGiftMessage", "WebcastBindingGiftMessage",
+                        "DANMU_MSG", "DANMU_MSG_EMOJI", "SEND_GIFT",
+                        "SUPER_CHAT_MESSAGE", "GUARD_BUY")
+
+    def _rt_load_tail(self, room, limit=2000):
+        """连接时从今天的实时记录里恢复最近 N 条（切页/重启/崩溃后历史不丢）。
+
+        只在「本页还没有任何日志」时执行：正常直播中重连走 resume 分支，
+        不会重复加载。返回恢复条数。
+        """
+        if self._chat_log:
+            return 0
+        try:
+            p = self._rt_file_path(room)
+            if not p.exists() or p.stat().st_size <= 0:
+                return 0
+            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[-limit * 2:]
+        except Exception:
+            return 0
+        casts, chat = [], []
+        for ln in lines:
+            try:
+                c = json.loads(ln)
+            except Exception:
+                continue
+            if not isinstance(c, dict):
+                continue
+            casts.append(c)
+            if (c.get("method") or "") not in self._RT_CHAT_METHODS:
+                continue
+            ts_ms = c.get("timestamp") or 0
+            try:
+                ts = datetime.fromtimestamp(ts_ms / 1000).strftime("%H:%M:%S.%f")[:-3]
+            except Exception:
+                ts = "--:--:--.---"
+            g = c.get("gift") or {}
+            m = {"nickname": (c.get("user") or {}).get("name") or "",
+                 "content": c.get("content") or "",
+                 "rtf": c.get("rtfContent") or None}
+            if g:
+                m.update({"giftName": g.get("name"), "giftCount": g.get("count") or 1,
+                          "giftPrice": g.get("price") or 0,
+                          "giftIcon": g.get("icon") or ""})
+                chat.append({"ts": ts, "kind": "礼物", "m": m, "text": ""})
+            else:
+                chat.append({"ts": ts, "kind": "弹幕", "m": m, "text": ""})
+        if not chat:
+            return 0
+        chat = chat[-limit:]
+        self._chat_log = chat
+        self._session_casts = casts[-5000:]
+        # 打赏榜按恢复的礼物重算（refresh=False，末尾统一刷新）
+        for e in chat:
+            if e["kind"] == "礼物":
+                try:
+                    t = datetime.combine(datetime.now().date(),
+                                         datetime.strptime(e["ts"], "%H:%M:%S.%f").time())
+                except Exception:
+                    t = datetime.now()
+                self._add_gift_rank(dict(e["m"]), t, refresh=False)
+        self._refresh_gift_rank()
+        self._render_chat_rows(self._visible_chat_entries()[-500:],
+                               f"已从今日实时记录恢复 {len(chat)} 条（{p.name}）")
+        self._update_search_count()
+        return len(chat)
 
     def _apply_message(self, name, text, m, t, rank=True):
         """主线程：渲染一条消息到界面（直播与回放共用；rank=False 跳过打赏榜）。"""
@@ -2160,9 +2411,11 @@ class TestPage(BasePage):
         def set_field(key, value):
             self.anchor_fields[key].setText(f"{int(value):,}")
 
-        if name == "礼物":
+        if name == "礼物" or (m.get("giftName") and name not in ("弹幕", "表情弹幕")):
             # 打赏榜：礼物数累计、价值=数量×抖币价；记录与计算永远进行，
-            # 「礼物」复选框只是显示过滤器（取消=隐藏不丢弃）
+            # 「礼物」复选框只是显示过滤器（取消=隐藏不丢弃）。
+            # 除标准礼物消息外，任何带 giftName 的消息（粉丝团/会员加入等
+            # 变体类型）也按礼物计入，避免「送了但榜上没有」。
             self._add_gift_rank(m, t, refresh=rank)
             if m.get("_delta") == 0:
                 pass  # 纯重推帧（连击进度重复推送，榜单无增量）：不记录不显示
@@ -2176,6 +2429,24 @@ class TestPage(BasePage):
             if self.chat_var.isChecked() and not self._chat_filter:
                 self._append_rich(self.chat_gift_box, self._chat_urls(name, m),
                                   lambda res: self._chat_html(ts, m, text, res))
+        elif name == "粉丝团":
+            # 加入粉丝团 / 点亮粉丝团 / 续费会员：这类消息没有 GiftStruct 价格字段，
+            # 但本质是付费动作，按「会员礼物」计入打赏榜（价值按最低档兜底），
+            # 否则打赏榜里永远看不到会员加入的人。
+            if text and re.search(r"加入|开通|续费|点亮|加入粉丝团", text):
+                gname = "加入粉丝团" if "加入" in text else "点亮粉丝团"
+                mg = dict(m)
+                mg["giftName"] = gname
+                mg["giftCount"] = 1
+                mg["giftPrice"] = m.get("giftPrice") or FANSCLUB_PRICE_FALLBACK
+                mg["content"] = f"送出了{gname} x1"
+                self._add_gift_rank(mg, t, refresh=rank)
+                self._log_chat(ts, "礼物", mg, "")
+                if self.gift_var.isChecked() and not self._chat_filter:
+                    self._append_rich(self.chat_gift_box, self._chat_urls("礼物", mg),
+                                      lambda res: self._gift_html(ts, mg, res))
+            else:
+                self._log_event(f"{ts} [{name}] {text}")
         elif name == "进场":
             if m.get("memberCount"):
                 set_field("online_count", m["memberCount"])
@@ -2475,6 +2746,11 @@ class TestPage(BasePage):
             price = int(m.get("giftPrice") or 0)
         except (TypeError, ValueError):
             price = 0
+        # 会员/粉丝团类礼物（点亮粉丝团 / 粉丝团灯牌 / 加入会员）网页端推送常缺
+        # diamondCount → 价值恒为 0，榜单里排在末尾等于「没计入」。按官方最低档
+        # 1 抖币兜底；有真实价格时仍用真实价格。
+        if price <= 0 and FANSCLUB_NAME_RE.search(str(gift_name)):
+            price = FANSCLUB_PRICE_FALLBACK
         try:
             now = t.timestamp()
         except Exception:
@@ -2487,13 +2763,20 @@ class TestPage(BasePage):
         if sess and now - sess["t"] > 15:
             sess = None
         settled = sess["settled"] if sess else 0
-        delta = count - settled
-        if delta < 0:
-            delta = count
+        if count > settled:
+            delta = count - settled
+        elif count == 1:
+            # 非连击礼物（repeatEnd 缺失）同一人 15 秒内再送一次同款：
+            # 服务器推的仍是 x1，不能当成重推帧丢掉——这是「会员加入/灯牌
+            # 反复送却不进榜」的直接原因。x1 一律按新一轮 1 个计。
+            delta = 1
+        else:
+            delta = 0  # 同一连击会话的重复推送帧（count 未增长）
         if m.get("repeatEnd"):
             self._gift_sessions.pop(key, None)
         else:
-            self._gift_sessions[key] = {"settled": count, "t": now}
+            self._gift_sessions[key] = {
+                "settled": count if count > settled else max(settled, 1), "t": now}
         value_delta = delta * price
         m["_delta"] = delta  # 显示层用：本帧实际新增（+0=纯重推帧）
         m["_combo"] = count  # 显示层用：本帧连击累计值
@@ -2537,18 +2820,33 @@ class TestPage(BasePage):
         return (f'<a href="user:{href}" style="color:{color};'
                 f'text-decoration:none"><b>{html.escape(nick)}</b></a>：')
 
+    def _emoji_h(self):
+        """表情/礼物图标的行内高度 = 聊天框当前字体的行高。
+
+        QTextBrowser 的 <img height="20"> 会把整行撑到 20px，而 12px 字体的
+        文本行只有 14px——表情一多，同一屏里行高忽高忽低（用户反馈的
+        「表情包UI与正常高度相差太大」）。按字体行高取图，表情行与文字行
+        等高；礼物图标 +2px 让图标略突出但不撑行。
+        """
+        try:
+            h = self.chat_gift_box.fontMetrics().height()
+        except Exception:
+            h = 14
+        return max(12, min(24, int(h)))
+
     def _chat_html(self, ts, m, text, resolve=None):
         """弹幕行：富文本表情用本地缓存图片内嵌（QTextBrowser 不加载远程图，
         缓存未命中的按文字占位）；无 rtf 退回纯文本。"""
         if resolve is None:
             resolve = _img_src
+        eh = self._emoji_h()
         parts = []
         for p in (m.get("rtf") or []):
             if p.get("url"):
                 alt = html.escape(p.get("text") or "表情")
                 src = resolve(p["url"])
                 if src:
-                    parts.append(f'<img src="{html.escape(src)}" height="20" alt="[{alt}]">')
+                    parts.append(f'<img src="{html.escape(src)}" height="{eh}" alt="[{alt}]">')
                 else:
                     parts.append(f'<span style="color:#9aa0a6">[{alt}]</span>')
             elif p.get("text"):
@@ -2568,7 +2866,7 @@ class TestPage(BasePage):
             alt = html.escape(m.get("giftName") or "礼物")
             src = resolve(icon)
             if src:
-                icon_h = f'<img src="{html.escape(src)}" height="22" alt="{alt}"> '
+                icon_h = f'<img src="{html.escape(src)}" height="{self._emoji_h() + 2}" alt="{alt}"> '
             else:
                 icon_h = f'<span style="color:#9aa0a6">[{alt}]</span> '
         body = html.escape(m.get("content") or "")
@@ -2643,6 +2941,7 @@ class TestPage(BasePage):
                 # 再按「手动停止 / 轮询开关」决定是否进入等待开播（等待检测为游客态，不占 Cookie）
                 self.connected = False
                 self._timer_running = False
+                self._rt_close()
                 if self.stats_collector:
                     self.stats_collector.stop()
                     self.stats_collector = None
@@ -2766,6 +3065,7 @@ class TestPage(BasePage):
         room = self.room_entry.text().strip()
         if room and self._auto_stopped:
             self._auto_stopped = False
+            self._resume_keep = True   # 切页自动重连：保留本场弹幕与搜索状态
             self._connect()
 
     def _restart_recording_after_switch(self):

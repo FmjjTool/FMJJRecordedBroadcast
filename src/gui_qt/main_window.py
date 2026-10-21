@@ -495,6 +495,14 @@ class MainWindow(QMainWindow):
                     fn()
                 except Exception:
                     pass
+        # 直播录制二级窗口（独立窗口，随主程序一起收尾）
+        lrw = getattr(self, "live_record_win", None)
+        if lrw is not None:
+            try:
+                lrw.shutdown()
+                lrw.close()
+            except Exception:
+                pass
         super().closeEvent(event)
 
     # ==================== 回车键统一分发 ====================
