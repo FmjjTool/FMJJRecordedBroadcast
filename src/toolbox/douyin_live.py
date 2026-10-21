@@ -995,6 +995,43 @@ _USER_FIELD_MAP = {
 # 按礼物处理的消息类型（GiftMessage 同构：f5/f6=数量 f7=user f15=GiftStruct）
 _GIFT_TYPES = ("WebcastGiftMessage", "WebcastBindingGiftMessage")
 
+# 会员/粉丝团类礼物的兜底抖币价。
+# 背景：点亮粉丝团、粉丝团灯牌这类「会员加入」动作在网页端推送的 GiftStruct 里
+# diamondCount 常缺失（f12=0），打赏榜价值算出来是 0，被排到 150 名之后，
+# 表现就是「会员加入没计入打赏榜」。官方最低档 1 抖币，按 1 兜底；
+# 有真实价格时永远用真实价格（下面的逻辑只在 price<=0 时才套用）。
+_FANSCLUB_PRICE_FALLBACK = 1
+_FANSCLUB_NAME_RE = _re.compile(
+    r"粉丝团|灯牌|点亮|会员|守护|团票|续费|入团|团卡|粉丝牌|粉丝徽章|贵族|会员卡")
+
+
+def _clean_gift_name(s):
+    """把托盘文案洗成纯礼物名。
+
+    trayDisplayText 常是「送出了点亮粉丝团 x1」「送出 粉丝团灯牌 ×3」这种整句，
+    直接当 giftName 会让打赏榜按「送出了点亮粉丝团 x1」分组，同款礼物被拆成
+    多个 key（同一个人反复送就永远累计不起来）。这里只保留礼物名本身。
+    """
+    if not s:
+        return ""
+    t = str(s).strip()
+    t = _re.sub(r"^送出了?\s*", "", t)
+    t = _re.sub(r"\s*[x×]\s*\d+\s*$", "", t)
+    return t.strip()
+
+
+def _gift_price_or_fallback(name, price):
+    """礼物抖币价：有真实价用真实价；会员/粉丝团类缺失时按最低档兜底。"""
+    try:
+        p = int(price or 0)
+    except (TypeError, ValueError):
+        p = 0
+    if p > 0:
+        return p
+    if name and _FANSCLUB_NAME_RE.search(str(name)):
+        return _FANSCLUB_PRICE_FALLBACK
+    return p
+
 
 _BANNER_TYPE_NAMES = {
     "fans": "粉丝团", "ai_gift": "AI 礼物", "tier": "周榜任务", "activity": "活动",
@@ -1250,9 +1287,13 @@ def extract_msg(m):
         # 显示行与 giftCount 统一取值优先级，保证界面显示与打赏榜统计一致。
         # BindingGift（捆绑礼物如 66个小心心）同构：f15 GiftStruct 含真实价格
         cnt = repeat_count if repeat_count is not None else (combo_count if combo_count is not None else 1)
-        gname = gift_name or tray_text or "礼物"
+        # 礼物名：GiftStruct.name 优先；缺失时用托盘文案洗出纯名
+        # （托盘常是「送出了点亮粉丝团 x1」整句，不洗会让打赏榜同款礼物被拆成多个 key）
         if not gift_name and tray_text:
-            gift_name = tray_text  # 统计与显示用同名（防显示赠送但打赏榜漏计）
+            gift_name = _clean_gift_name(tray_text)
+        gname = gift_name or "礼物"
+        # 会员/粉丝团类礼物价格缺失 → 按最低档兜底，保证能计入打赏榜价值
+        gift_price = _gift_price_or_fallback(gname, gift_price)
         out_content = f"送出了{gname} x{cnt}"
     elif mtype == "WebcastMemberMessage":
         out_content = action or "进入直播间"
