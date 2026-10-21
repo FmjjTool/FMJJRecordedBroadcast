@@ -34,7 +34,9 @@ from .config_manager import get_config_dir, get_export_dir
 MANIFEST = "backup_manifest.json"
 
 # config/ 目录内排除项：资产库（归资产备份）、日志、缓存图片目录、SQLite 临时/备份文件
-_CONFIG_EXCLUDE_FILES = {"collected.db", "increment.db", "rename_log.log"}
+# asset_index.db（资产管理扫描索引）是本地可再生缓存，不进备份、导入时也不合并
+_CONFIG_EXCLUDE_FILES = {"collected.db", "increment.db", "rename_log.log",
+                         "asset_index.db"}
 _CONFIG_EXCLUDE_DIRS = {"cache"}
 _CONFIG_EXCLUDE_SUFFIXES = (".db-wal", ".db-shm", ".bak")
 

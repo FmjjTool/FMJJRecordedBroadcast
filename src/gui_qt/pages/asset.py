@@ -16,6 +16,7 @@ import re
 import threading
 import time
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import (QMimeData, QObject, QPoint, QPointF, QRect, QSize,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import QLayout
 from gui_qt import common
 from gui_qt.common import _fmt, icon_button, run_bg
 from gui_qt.pages.base import BasePage
+from toolbox import asset_index
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import PLATFORM_CN, platform_cn
 
@@ -277,6 +279,13 @@ def _sanitize_title_key(title: str) -> str:
     return re.sub(r'_', '', s)
 
 
+def _json_stem(path: str) -> str:
+    """文件名去扩展名（路径字符串版，避免为 6500+ 个文件构造 Path 对象）。"""
+    name = os.path.basename(path)
+    return name[:-5] if name.lower().endswith(".json") else os.path.splitext(name)[0]
+
+
+@lru_cache(maxsize=8192)
 def _norm_subdir(subdir: str) -> str:
     """规范化平台子目录名（新旧结构/中英文统一为英文 platform）。"""
     from toolbox.utils import norm_platform_dir
@@ -867,7 +876,12 @@ class AssetPage(BasePage):
     _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
     def _load_disk_items(self) -> list:
-        """扫描数据 json + 实际媒体文件，按「日期+标题」合并为一个条目。"""
+        """扫描数据 json + 实际媒体文件，按「日期+标题」合并为一个条目。
+
+        性能：json 解析结果按 (路径, mtime, size) 缓存在 config/asset_index.db
+        （toolbox.asset_index），未改动直接命中缓存、只有新增/改动才重新解析；
+        「预期图片数」等派生字段随缓存一起走，不再二次读 *_raw.json。
+        """
         from toolbox.config_manager import get_export_subdir, get_export_dir
         video_dir = get_export_subdir("video_data")   # download/已获取数据
         download_root = get_export_dir()              # download/
@@ -882,131 +896,24 @@ class AssetPage(BasePage):
                 self._scan_media_files(scan_root, media_map)
 
         # 2. 扫 json（根目录旧平铺 + 所有平台一级子目录，新旧目录名均兼容）
-        json_paths = list(video_dir.glob("*.json"))
-        if video_dir.is_dir():
-            for sub in video_dir.iterdir():
-                if sub.is_dir() and _norm_subdir(sub.name):
-                    json_paths.extend(sub.glob("*.json"))
-        json_paths = sorted(set(json_paths), key=lambda p: p.name, reverse=True)
+        # 用 scandir 一次枚举连 mtime/size 一起拿（Windows 上 DirEntry 复用目录
+        # 枚举结果，无额外 stat 开销），缓存命中判定不再逐个 os.stat。
+        files = self._list_json_files(video_dir)   # {路径: (mtime, size)}，含 *_raw.json
+        json_paths = sorted((p for p in files if not _json_stem(p).endswith("_raw")),
+                            key=os.path.basename, reverse=True)
 
-        results = []
-        for path in json_paths:
-            if path.stem.endswith("_raw"):
-                continue
-            # 平台：子目录从目录名（新旧结构均可），根目录旧平铺从文件名末段
-            platform = _norm_subdir(path.parent.name)
-            if not platform:
-                from toolbox.utils import norm_platform_dir
-                parts = path.stem.rsplit("_", 1)
-                platform = norm_platform_dir(parts[1]) if len(parts) == 2 else ""
-                platform = platform or "unknown"
-            date_part = path.stem[:8] if len(path.stem) >= 8 and path.stem[:8].isdigit() else ""
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, list):
-                    data = data[0] if data else {}
-                if not isinstance(data, dict):
-                    continue
-                play = int(data.get("阅览量", 0) or 0) if platform == "weibo" else int(data.get("播放量", 0) or 0)
-                title = data.get("标题", "") or ""
-                entry = {
-                    "platform": platform,
-                    "video_id": data.get("视频ID", "") or "",
-                    "title": title,
-                    "description": data.get("正文") or "",
-                    "author": data.get("作者", "") or "",
-                    "play_count": play,
-                    "like_count": int(data.get("点赞数", 0) or 0),
-                    "comment_count": int(data.get("评论数", 0) or 0),
-                    "cover_url": data.get("封面URL", "") or "",
-                    "duration": _parse_duration_text(data.get("时长", "")),
-                    "publish_time": data.get("发布时间", "") or "",
-                    "video_url": _norm_dy_source_link(platform,
-                                                      str(data.get("视频ID", "") or ""),
-                                                      data.get("链接", "") or ""),
-                    "raw_url": data.get("原始URL", "") or "",
-                    "raw_data": data.get("原始数据") if isinstance(data.get("原始数据"), dict) else {},
-                    "fetched_at": data.get("获取时间", "") or "",
-                    "date_part": date_part,
-                    "file_path": str(path),
-                    "media_files": [],
-                }
-                # B站类型标记：动态 video_id=dyn_*（或 t.bilibili.com 链接），视频 BV/av 开头
-                if platform == "bilibili":
-                    vid = str(entry["video_id"])
-                    link = entry["video_url"]
-                    entry["is_dynamic"] = (vid.startswith("dyn_")
-                                           or "t.bilibili.com" in link)
-                # 匹配用的规范化标题/平台（匹配挪到全部 json 解析完后统一做：
-                # 文件名倒序逐条匹配时，先处理的长标题 json（如「封茗囧菌 都先
-                # 好好休息——！辛苦啦」）会按子串抢走短标题 json（「封茗囧菌」）
-                # 的媒体组——精确匹配必须先于任何子串匹配、跨条目全局生效）
-                entry["_tn"] = _sanitize_title_key(title).strip("_")
-                entry["_jp"] = _norm_subdir(path.parent.name) or platform
-                results.append(entry)
-            except Exception:
-                continue
+        results, fresh = self._load_entries(json_paths, files)
+        if fresh:
+            asset_index.upsert_many(fresh)
+        asset_index.prune(json_paths)
 
-        # 2.1 媒体匹配：平台一致 + 日期一致 + 标题「精确 → 子串」两级。
-        # 平台归属由文件夹 {平台}_{文件|媒体} 决定：媒体的平台目录必须与
-        # json 的平台一致才可合并（同内容双平台各发一份时，跨平台匹配会把
-        # B站下载的媒体抢给抖音条目——json 平台列与实际媒体张冠李戴）。
-        # 轮次优先级：①同日期+同平台 → ②同日期+旧平铺无平台目录 → ③旧格式
-        # 无日期无平台目录；每轮先全局精确匹配再全局子串兜底。
-        _owner = {}  # 媒体组 key → 抢到该组的 entry（同名条目共享判定用）
+        # 2.1/2.2 媒体匹配 + 同名条目共享（见 _match_media，已按日期/平台分桶）
+        self._match_media(results, media_map)
 
-        def _exact(tn, m_t):
-            return bool(tn) and len(tn) >= 2 and (m_t or "").strip("_") == tn
-
-        def _sub(tn, m_t):
-            m_t = m_t.strip("_") if m_t else ""
-            if not m_t or not tn or len(m_t) < 4:  # 太短的标题片段不匹配（避免误配）
-                return False
-            return m_t in tn or tn[:40] in m_t
-
-        def _phase(matcher, m_date_ok, m_sub_ok):
-            for entry in results:
-                if entry["media_files"]:
-                    continue
-                tn, jp, dp = entry["_tn"], entry["_jp"], entry["date_part"]
-                for key, mfs in list(media_map.items()):
-                    if not mfs or mfs[0].get("pkg"):
-                        continue  # B站资源包整体条目，不参与 json 匹配
-                    m_date, m_title, m_sub = key
-                    if not (m_date_ok(m_date, dp) and m_sub_ok(m_sub, jp)):
-                        continue
-                    if matcher(tn, m_title):
-                        entry["media_files"] = media_map.pop(key)
-                        _owner[key] = entry
-                        break
-
-        _phase(_exact, lambda md, dp: md == dp, lambda ms, jp: ms == jp)
-        _phase(_sub, lambda md, dp: md == dp, lambda ms, jp: ms == jp)
-        _phase(_exact, lambda md, dp: md == dp, lambda ms, jp: not ms)
-        _phase(_sub, lambda md, dp: md == dp, lambda ms, jp: not ms)
-        _phase(_exact, lambda md, dp: not md, lambda ms, jp: not ms)
-        _phase(_sub, lambda md, dp: not md, lambda ms, jp: not ms)
-
-        # 2.2 同名条目共享：同日期+同平台+标题完全一致的多条 json（B站转发动态
-        # 与原视频同标题同日发布最典型——同一份媒体两边都是正主），没抢到媒体
-        # 组的条目从抢到的条目共享一份（列表独立，互不影响删除）
-        for it in results:
-            if not it.get("media_files") and len(it["_tn"]) >= 4:
-                for owner in _owner.values():
-                    if (owner["_tn"] == it["_tn"] and owner["_jp"] == it["_jp"]
-                            and owner["date_part"] == it["date_part"]):
-                        it["media_files"] = list(owner["media_files"])
-                        break
-
-        # 2.3 预期图片数（时长探测已移除：ffprobe 子进程逐视频探测曾是
-        # 扫描的主要耗时（实测 20 次探测 4.07s / 全扫描 4.6s），且每次下载
-        # 完成/切页都触发扫描，子进程风暴+GIL 竞争导致界面未响应——
-        # 时长改为详情窗打开时按需后台探测）
+        # 2.3 预期图片数已在 _load_entries 里算好并随缓存复用（旧实现每次加载
+        # 都要把 6500+ 个 *_raw.json 再读一遍算图片数，实测 5~7s；时长探测更早
+        # 已移除——ffprobe 子进程风暴会拖住界面，改详情窗按需后台探测）
         for entry in results:
-            try:
-                entry["expected_imgs"] = len(self._extract_pic_urls(entry)[0])
-            except Exception:
-                entry["expected_imgs"] = 0
             entry.pop("_tn", None)
             entry.pop("_jp", None)
 
@@ -1048,17 +955,20 @@ class AssetPage(BasePage):
         return results
 
     def _scan_media_files(self, root, media_map):
-        """递归扫描 download 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。
+        """递归扫描 root 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。
 
         B站资源（download/B站资源/<类别>/<资源包名>/...）整个资源包聚合成一个条目，
         不再按文件名拆散（否则一个收藏集会变成 N 条散行）。
 
         root 只会是 已获取数据/ 或 B站资源/（调用方已收窄，无需黑名单过滤）。
+        用 os.scandir 递归代替 Path.rglob：rglob 每个条目都要一次 is_file()
+        stat，4 万文件光 stat 就 4s+；scandir 的 DirEntry 在 Windows 上直接复用
+        目录枚举结果，不再有额外系统调用。
         """
-        for p in root.rglob("*"):
-            if not p.is_file() or p.suffix.lower() not in self._MEDIA_EXTS:
-                continue
-            parts = list(p.parts)
+        for full in self._iter_media_paths(root):
+            parts = full.split(os.sep)
+            name = parts[-1]
+            ext = os.path.splitext(name)[1].lower()
             if "B站资源" in parts:
                 i = parts.index("B站资源")
                 category = parts[i + 1] if len(parts) > i + 1 else ""
@@ -1067,28 +977,307 @@ class AssetPage(BasePage):
                     continue
                 base = _sanitize_title_key(pkg)[:20] or "B站资源"
                 key = ("", base, "bilibili")
-                mtype = "image" if p.suffix.lower() in self._IMG_EXTS else "video"
+                mtype = "image" if ext in self._IMG_EXTS else "video"
                 media_map.setdefault(key, []).append({
-                    "path": str(p), "name": p.name, "type": mtype,
+                    "path": full, "name": name, "type": mtype,
                     "date_part": "", "author": category, "subdir": "bilibili",
                     "pkg": pkg,
                 })
                 continue
             # 平台子目录（取路径中第一个匹配的子目录名，规范化为英文，否则空）
             subdir = ""
-            for part in p.parts:
+            for part in parts:
                 n = _norm_subdir(part)
                 if n:
                     subdir = n
                     break
-            date_part, author, title_key = self._parse_media_name(p.name)
+            date_part, author, title_key = self._parse_media_name(name)
             base = _sanitize_title_key(title_key)[:20] if title_key else ""
             key = (date_part, base, subdir)
-            mtype = "image" if p.suffix.lower() in self._IMG_EXTS else "video"
+            mtype = "image" if ext in self._IMG_EXTS else "video"
             media_map.setdefault(key, []).append({
-                "path": str(p), "name": p.name, "type": mtype,
+                "path": full, "name": name, "type": mtype,
                 "date_part": date_part, "author": author, "subdir": subdir,
             })
+
+    @classmethod
+    def _iter_media_paths(cls, root):
+        """递归产出 root 下媒体文件的绝对路径。
+
+        按「目录自身 mtime」缓存每个目录的内容（媒体文件名 + 子目录名）：
+        文件增删/改名/新增子目录都会更新父目录 mtime，未变的目录直接复用上次
+        的枚举结果。已获取数据/ 下 4 万文件，原 Path.rglob 全量遍历光 stat 要
+        4.5s；现在只有真的变过的目录才重新枚举，重复加载几乎零成本。
+
+        顺序：目录内按名排序 + 目录先进先出（保证「封茗囧菌」目录整体排在
+        「封茗囧菌咨讯站」之前，缩略图取哪一张稳定可预期）。
+        """
+        from collections import deque
+        from toolbox import asset_index
+        cache = asset_index.fetch_media_dirs()
+        fresh, visited = [], set()
+        out = []
+        queue = deque([(str(root), None)])   # (目录, 目录自身 mtime，根目录无)
+        while queue:
+            d, dm = queue.popleft()
+            visited.add(d)
+            hit = cache.get(d) if dm is not None else None
+            if hit and hit[0] == dm:
+                names, subs = hit[1], hit[2]
+            else:
+                names, subs = [], []
+                try:
+                    with os.scandir(d) as it:
+                        entries = sorted(it, key=lambda e: e.name)
+                except OSError:
+                    continue
+                for e in entries:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            subs.append((e.name, e.stat().st_mtime))
+                        elif (e.is_file(follow_symlinks=False)
+                              and os.path.splitext(e.name)[1].lower() in cls._MEDIA_EXTS):
+                            names.append(e.name)
+                    except OSError:
+                        continue
+                if dm is not None:
+                    fresh.append((d, dm, names, subs))
+            out.extend(os.path.join(d, n) for n in names)
+            queue.extend((os.path.join(d, n), m) for n, m in subs)
+        asset_index.upsert_media_dirs(fresh)
+        asset_index.prune_media_dirs(visited)
+        return out
+
+    def _list_json_files(self, video_dir):
+        """返回 {json 绝对路径: (mtime, size)}（含 *_raw.json，只扫根目录 + 平台一级子目录）。
+
+        mtime/size 直接取 DirEntry.stat()（Windows 上来自目录枚举，无额外 stat），
+        用于 json 索引缓存的失效判定。
+        """
+        out = {}
+        try:
+            with os.scandir(video_dir) as it:
+                top = list(it)
+        except OSError:
+            return out
+        for e in top:
+            try:
+                if e.is_file():
+                    if e.name.lower().endswith(".json"):
+                        st = e.stat()
+                        out[e.path] = (st.st_mtime, st.st_size)
+                elif e.is_dir() and _norm_subdir(e.name):
+                    with os.scandir(e.path) as it:
+                        for f in it:
+                            if not f.name.lower().endswith(".json"):
+                                continue
+                            st = f.stat()
+                            out[f.path] = (st.st_mtime, st.st_size)
+            except OSError:
+                continue
+        return out
+
+    def _load_entries(self, json_paths, files):
+        """解析（或命中索引缓存取回）全部 json → (条目列表, 待回写缓存行)。"""
+        cache = asset_index.fetch_all()
+        results, pending = [], []
+        for path in json_paths:
+            sig = files.get(path)
+            if not sig:
+                continue
+            raw_sig = files.get(path[:-5] + "_raw.json")
+            rm, rs = raw_sig if raw_sig else (None, None)
+            hit = cache.get(os.path.normcase(path))
+            if (hit and hit[0] == sig[0] and hit[1] == sig[1]
+                    and hit[2] == rm and hit[3] == rs):
+                try:
+                    entry = json.loads(hit[4])
+                except Exception:
+                    entry = None
+                if isinstance(entry, dict) and entry.get("_v") == asset_index.VER:
+                    entry["file_path"] = path
+                    entry["raw_data"] = {}      # 原始数据不进缓存，用到时 _ensure_raw 现读
+                    entry["media_files"] = []
+                    results.append(entry)
+                    continue
+            pending.append((path, sig[0], sig[1], rm, rs))
+
+        if not pending:
+            return results, []
+        built = None
+        if len(pending) > 24:
+            # 首次建索引/新增较多时并行读盘解析（json 解码在 C 层，IO 才是瓶颈）
+            try:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    built = list(ex.map(self._build_entry, [t[0] for t in pending]))
+            except Exception:
+                built = None
+        if built is None:
+            built = [self._build_entry(t[0]) for t in pending]
+
+        fresh = []
+        for entry, (path, mt, sz, rm, rs) in zip(built, pending):
+            if not entry:
+                continue
+            results.append(entry)
+            fresh.append((path, mt, sz, rm, rs, json.dumps(entry, ensure_ascii=False)))
+        # 恢复 json_paths 顺序（缓存命中的先追加、新解析的后追加，不恢复的话
+        # 同一天的条目会全排在更新过的条目之前）
+        order = {p: i for i, p in enumerate(json_paths)}
+        results.sort(key=lambda e: order.get(e.get("file_path", ""), -1))
+        return results, fresh
+
+    def _build_entry(self, path):
+        """解析单个 json → 条目（含缓存用派生字段）；解析失败/格式不符返回 None。"""
+        name = os.path.basename(path)
+        stem = name[:-5] if name.lower().endswith(".json") else os.path.splitext(name)[0]
+        dir_name = os.path.basename(os.path.dirname(path))
+        # 平台：子目录从目录名（新旧结构均可），根目录旧平铺从文件名末段
+        platform = _norm_subdir(dir_name)
+        if not platform:
+            from toolbox.utils import norm_platform_dir
+            parts = stem.rsplit("_", 1)
+            platform = norm_platform_dir(parts[1]) if len(parts) == 2 else ""
+            platform = platform or "unknown"
+        date_part = stem[:8] if len(stem) >= 8 and stem[:8].isdigit() else ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            if not isinstance(data, dict):
+                return None
+            play = int(data.get("阅览量", 0) or 0) if platform == "weibo" else int(data.get("播放量", 0) or 0)
+            title = data.get("标题", "") or ""
+            entry = {
+                "platform": platform,
+                "video_id": data.get("视频ID", "") or "",
+                "title": title,
+                "description": data.get("正文") or "",
+                "author": data.get("作者", "") or "",
+                "play_count": play,
+                "like_count": int(data.get("点赞数", 0) or 0),
+                "comment_count": int(data.get("评论数", 0) or 0),
+                "cover_url": data.get("封面URL", "") or "",
+                "duration": _parse_duration_text(data.get("时长", "")),
+                "publish_time": data.get("发布时间", "") or "",
+                "video_url": _norm_dy_source_link(platform,
+                                                  str(data.get("视频ID", "") or ""),
+                                                  data.get("链接", "") or ""),
+                "raw_url": data.get("原始URL", "") or "",
+                "raw_data": {},     # 占 json 体积 95%，不进缓存；需要时 _ensure_raw 现读
+                "fetched_at": data.get("获取时间", "") or "",
+                "date_part": date_part,
+                "file_path": path,
+                "media_files": [],
+                "_v": asset_index.VER,
+            }
+        except Exception:
+            return None
+        # B站类型标记：动态 video_id=dyn_*（或 t.bilibili.com 链接），视频 BV/av 开头
+        if platform == "bilibili":
+            vid = str(entry["video_id"])
+            link = entry["video_url"]
+            entry["is_dynamic"] = (vid.startswith("dyn_") or "t.bilibili.com" in link)
+        # 匹配用的规范化标题/平台（匹配挪到全部 json 解析完后统一做：
+        # 文件名倒序逐条匹配时，先处理的长标题 json（如「封茗囧菌 都先
+        # 好好休息——！辛苦啦」）会按子串抢走短标题 json（「封茗囧菌」）
+        # 的媒体组——精确匹配必须先于任何子串匹配、跨条目全局生效）
+        entry["_tn"] = _sanitize_title_key(title).strip("_")
+        entry["_jp"] = _norm_subdir(dir_name) or platform
+        # 派生字段一次算好、随缓存复用（旧实现每次加载都重读 *_raw.json 现算）
+        try:
+            pics, lives = self._extract_pic_urls(entry)
+        except Exception:
+            pics, lives = [], []
+        entry["expected_imgs"] = len(pics)
+        entry["_pic_n"] = len(pics)
+        entry["_live_n"] = len(lives)
+        entry["_raw_video"] = self._raw_has_video(
+            data.get("原始数据") if isinstance(data.get("原始数据"), dict) else {})
+        return entry
+
+    @staticmethod
+    def _raw_has_video(raw) -> bool:
+        """raw_data 里是否含视频直链（微博 page_info.media_info / fid playinfo）。"""
+        if not isinstance(raw, dict):
+            return False
+        mi = (raw.get("page_info") or {}).get("media_info") or {}
+        if isinstance(mi, dict) and (mi.get("stream_url") or mi.get("stream_url_hd")):
+            return True
+        if isinstance(raw.get("urls"), dict) and raw.get("urls"):
+            return True
+        return bool(raw.get("stream_url"))
+
+    def _match_media(self, results, media_map):
+        """把媒体组挂到 json 条目上（平台 + 日期 + 标题：精确 → 子串两级）。
+
+        平台归属由文件夹 {平台}_{文件|媒体} 决定：媒体的平台目录必须与
+        json 的平台一致才可合并（同内容双平台各发一份时，跨平台匹配会把
+        B站下载的媒体抢给抖音条目——json 平台列与实际媒体张冠李戴）。
+        轮次优先级：①同日期+同平台 → ②同日期+旧平铺无平台目录 → ③旧格式
+        无日期无平台目录；每轮先全局精确匹配再全局子串兜底。
+
+        原实现是「每个条目 × 全部媒体组」双循环（6500×6500×6 轮 ≈ 2.5 亿次
+        比较，实测 6.6s）；这里按 (日期, 平台) 分桶 + 精确匹配建哈希表，轮次
+        优先级与匹配顺序（先插入的媒体组优先）完全不变，复杂度降到 O(条目数)。
+        """
+        _owner = {}
+
+        def _sub(tn, m_t):
+            m_t = m_t.strip("_") if m_t else ""
+            if not m_t or not tn or len(m_t) < 4:  # 太短的标题片段不匹配（避免误配）
+                return False
+            return m_t in tn or tn[:40] in m_t
+
+        exact_idx, buckets = {}, {}
+        for key, mfs in media_map.items():
+            if not mfs or mfs[0].get("pkg"):
+                continue  # B站资源包整体条目，不参与 json 匹配
+            m_date, m_title, m_sub = key
+            t = (m_title or "").strip("_")
+            exact_idx.setdefault((m_date, m_sub, t), key)
+            buckets.setdefault((m_date, m_sub), []).append((t, key))
+
+        def _phase(is_exact, date_same, sub_same):
+            for entry in results:
+                if entry["media_files"]:
+                    continue
+                tn, jp, dp = entry["_tn"], entry["_jp"], entry["date_part"]
+                d = dp if date_same else ""
+                s = jp if sub_same else ""
+                if is_exact:
+                    if not tn or len(tn) < 2:
+                        continue
+                    k = exact_idx.get((d, s, tn))
+                    if k is not None and k in media_map:
+                        entry["media_files"] = media_map.pop(k)
+                        _owner.setdefault((tn, jp, dp), entry)
+                    continue
+                for t, k in buckets.get((d, s), ()):
+                    if k not in media_map:
+                        continue
+                    if _sub(tn, t):
+                        entry["media_files"] = media_map.pop(k)
+                        _owner.setdefault((tn, jp, dp), entry)
+                        break
+
+        _phase(True, True, True)
+        _phase(False, True, True)
+        _phase(True, True, False)
+        _phase(False, True, False)
+        _phase(True, False, False)
+        _phase(False, False, False)
+
+        # 同名条目共享：同日期+同平台+标题完全一致的多条 json（B站转发动态
+        # 与原视频同标题同日发布最典型——同一份媒体两边都是正主），没抢到媒体
+        # 组的条目从抢到的条目共享一份（列表独立，互不影响删除）
+        for it in results:
+            if not it.get("media_files") and len(it["_tn"]) >= 4:
+                owner = _owner.get((it["_tn"], it["_jp"], it["date_part"]))
+                if owner is not None:
+                    it["media_files"] = list(owner["media_files"])
 
     def _parse_media_name(self, name):
         """从媒体文件名解析 (date, author, title_key)。命名 {date}_{author}_{title}_{i}.ext"""
@@ -1627,15 +1816,34 @@ class AssetPage(BasePage):
             if "xiaohongshu.com" in (it.get("video_url") or "") \
                     or "xiaohongshu.com" in (it.get("raw_url") or ""):
                 return True
-        raw = it.get("raw_data") or {}
-        if not isinstance(raw, dict):
-            return False
-        mi = (raw.get("page_info") or {}).get("media_info") or {}
-        if isinstance(mi, dict) and (mi.get("stream_url") or mi.get("stream_url_hd")):
-            return True
-        if isinstance(raw.get("urls"), dict) and raw.get("urls"):
-            return True  # fid 条目的 h5 playinfo（清晰度标签 → 直链）
-        return bool(raw.get("stream_url"))
+        raw = it.get("raw_data")
+        if isinstance(raw, dict) and raw:
+            return AssetPage._raw_has_video(raw)
+        # 列表条目 raw_data 未随缓存加载（「原始数据」占 json 体积 95% 不进索引），
+        # 用建索引时算好的 _raw_video 标记，判定口径与 _raw_has_video 完全一致
+        if "_raw_video" in it:
+            return bool(it.get("_raw_video"))
+        return False
+
+    def _ensure_raw(self, it) -> dict:
+        """按需加载条目的「原始数据」（索引缓存不存它，下载/详情才需要）。"""
+        raw = it.get("raw_data")
+        if isinstance(raw, dict) and raw:
+            return raw
+        fp = it.get("file_path") or ""
+        raw = {}
+        if fp and os.path.exists(fp):
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    data = data[0] if data else {}
+                if isinstance(data, dict) and isinstance(data.get("原始数据"), dict):
+                    raw = data["原始数据"]
+            except Exception:
+                raw = {}
+        it["raw_data"] = raw
+        return raw
 
     def _item_media_complete(self, it) -> bool:
         """本地媒体是否已完整（批量下载跳过判定）。
@@ -1690,6 +1898,9 @@ class AssetPage(BasePage):
             return False
         if (it.get("cover_url") or "").strip():
             return False
+        # 索引缓存里已有预期图片/live 数（建索引时读 *_raw.json 算好）→ 直接用
+        if "_pic_n" in it or "_live_n" in it:
+            return not it.get("_pic_n") and not it.get("_live_n")
         try:
             pics, lives = self._extract_pic_urls(it)
         except Exception:
@@ -2113,7 +2324,7 @@ class AssetPage(BasePage):
             from media_downloader import download_media, _is_direct_media_url
             vurl2 = vurl
             note_images = None
-            raw_data = it.get("raw_data") or {}
+            raw_data = self._ensure_raw(it)   # 索引缓存不存原始数据，下载前按需读
             # 抖音：json 里的「链接」是采集时生成的时效直链（几天后 403），
             # 下载前用 video_id 重新解析拿新直链；图文 note 则拿到 images 下图片
             if it["platform"] == "douyin" and vid:
