@@ -1,11 +1,12 @@
 """字幕格式转换页（PySide6 版）：批量导入 + 勾选转换。"""
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
     QPushButton, QTextEdit, QVBoxLayout,
 )
 
@@ -46,12 +47,20 @@ class SubtitlePage(BasePage):
         frow = QHBoxLayout()
         frow.addWidget(self._btn("📄 选择文件", self._select_files))
         frow.addWidget(self._btn("📁 选择文件夹", self._select_folder))
-        frow.addWidget(self._btn("📅 扫描日期文件夹", self._scan_date_folders))
+        # 日期文件夹：当天一键 / 指定日期 / 全部
+        frow.addWidget(self._btn("📅 当天", self._scan_today))
+        self.date_combo = QComboBox()
+        self.date_combo.setMinimumWidth(118)
+        self.date_combo.setToolTip("工作目录下的日期文件夹（YYYYMMDD），选中后点「扫描」只处理这一天")
+        frow.addWidget(self.date_combo)
+        frow.addWidget(self._btn("🔍 扫描", self._scan_selected_date))
+        frow.addWidget(self._btn("📚 全部日期", self._scan_date_folders))
         self.file_count_label = QLabel("未选择文件")
         self.file_count_label.setStyleSheet("color: #888;")
         frow.addWidget(self.file_count_label)
         frow.addStretch(1)
         layout.addLayout(frow)
+        self._refresh_date_combo()
 
         # 输出格式（持久化）
         fmt_row = QHBoxLayout()
@@ -103,6 +112,10 @@ class SubtitlePage(BasePage):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         layout.addWidget(self.log_text, 1)
+
+    def on_show(self):
+        """切回本页：工作目录可能变了 / 今天可能新建了日期文件夹 → 刷新日期下拉。"""
+        self._refresh_date_combo()
 
     def _btn(self, text, slot, small=False, danger=False):
         b = QPushButton(text)
@@ -205,6 +218,71 @@ class SubtitlePage(BasePage):
         self._log_scanned()
         if not self.input_files:
             self._log(f"⚠️ 日期文件夹中未找到字幕文件\n   支持: {', '.join(sorted(self.EXTS))}")
+
+    # ---- 日期筛选：当天 / 指定某一天（日期文件夹 = YYYYMMDD）----
+
+    def _refresh_date_combo(self):
+        """把工作目录下已有的日期文件夹填进下拉框（新的在前），默认选中今天。"""
+        try:
+            folders = [n for n, _ in scan_date_folders(self.app.work_dir)]
+        except Exception:
+            folders = []
+        today = datetime.now().strftime("%Y%m%d")
+        cur = self.date_combo.currentData()
+        self.date_combo.blockSignals(True)
+        self.date_combo.clear()
+        for name in sorted(folders, reverse=True):
+            self.date_combo.addItem(name, name)
+        # 默认选中今天；没有今天的文件夹则选最新一天
+        idx = self.date_combo.findData(cur) if cur else -1
+        if idx < 0:
+            idx = self.date_combo.findData(today)
+        if idx < 0 and self.date_combo.count():
+            idx = 0
+        if idx >= 0:
+            self.date_combo.setCurrentIndex(idx)
+        self.date_combo.blockSignals(False)
+
+    def _scan_today(self):
+        """只扫「当天」的日期文件夹（工作目录/YYYYMMDD）。"""
+        today = datetime.now().strftime("%Y%m%d")
+        idx = self.date_combo.findData(today)
+        if idx >= 0:
+            self.date_combo.setCurrentIndex(idx)
+        if not os.path.isdir(os.path.join(self.app.work_dir, today)):
+            self.input_files = []
+            self._refresh_list()
+            self.file_count_label.setText("当天无日期文件夹")
+            self.log_text.setPlainText(
+                f"⚠️ 工作目录下没有今天的日期文件夹：{today}\n"
+                f"   当前目录: {self.app.work_dir}\n"
+                "   可改用「📚 全部日期」或下拉框选择其他日期")
+            return
+        self._scan_one_date(today)
+
+    def _scan_selected_date(self):
+        """按下拉框选中的日期扫描；未选中（空）时退回全部日期。"""
+        name = self.date_combo.currentData()
+        if not name:
+            self._scan_date_folders()
+            return
+        self._scan_one_date(name)
+
+    def _scan_one_date(self, folder_name):
+        self.input_files = []
+        folder_path = os.path.join(self.app.work_dir, folder_name)
+        if os.path.isdir(folder_path):
+            for f in sorted(os.listdir(folder_path)):
+                fp = os.path.join(folder_path, f)
+                if os.path.isfile(fp) and os.path.splitext(f)[1].lower() in self.EXTS:
+                    self.input_files.append(fp)
+        self.file_count_label.setText(
+            f"{folder_name}：{len(self.input_files)} 个文件" if self.input_files
+            else f"{folder_name}：无字幕文件")
+        self._log_scanned()
+        if not self.input_files:
+            self._log(f"⚠️ {folder_name} 中没有字幕文件\n"
+                      f"   支持: {', '.join(sorted(self.EXTS))}")
 
     def _log_scanned(self):
         self.log_text.clear()
