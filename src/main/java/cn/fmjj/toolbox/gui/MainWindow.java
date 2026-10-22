@@ -4,10 +4,15 @@ import cn.fmjj.toolbox.core.AppPaths;
 import cn.fmjj.toolbox.core.Log;
 import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.gui.dialogs.CookieManagerDialog;
+import cn.fmjj.toolbox.gui.pages.AudioPage;
 import cn.fmjj.toolbox.gui.pages.BasePage;
+import cn.fmjj.toolbox.gui.pages.CalendarPage;
+import cn.fmjj.toolbox.gui.pages.ConvertPage;
 import cn.fmjj.toolbox.gui.pages.FileTimePage;
 import cn.fmjj.toolbox.gui.pages.GlobalSettingsPage;
+import cn.fmjj.toolbox.gui.pages.LauncherPage;
 import cn.fmjj.toolbox.gui.pages.LyricsPage;
+import cn.fmjj.toolbox.gui.pages.MigratePage;
 import cn.fmjj.toolbox.gui.pages.OrganizePage;
 import cn.fmjj.toolbox.gui.pages.RenameBatchPage;
 import cn.fmjj.toolbox.gui.pages.StubPage;
@@ -174,6 +179,12 @@ public class MainWindow {
         pageFactories.put("toolbox_organize", OrganizePage::new);
         pageFactories.put("file_time", FileTimePage::new);
         pageFactories.put("global_settings", () -> new GlobalSettingsPage(this));
+        // 已移植（M4）
+        pageFactories.put("toolbox_convert", ConvertPage::new);
+        pageFactories.put("toolbox_audio", AudioPage::new);
+        pageFactories.put("toolbox_migrate", MigratePage::new);
+        pageFactories.put("toolbox_calendar", CalendarPage::new);
+        pageFactories.put("toolbox_launcher", LauncherPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
             for (NavItem item : group.items()) {

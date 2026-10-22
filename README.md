@@ -6,25 +6,23 @@
 把原 Python 工具箱（引擎层 3.3 万行 + PySide6 GUI 4.1 万行，共约 7.6 万行）
 整体迁移到 **Java 21 + JavaFX** 技术栈。本仓库是独立的新工程，与 Python 版并行维护。
 
-## 当前进度（M3：网络与账号体系完成）
+## 当前进度（M4：录播工具箱完成）
 
 | 范围 | 状态 |
 |---|---|
 | 构建体系（Maven / Java 27 / JavaFX 27 / Jackson / JUnit5 / zxing） | ✅ |
-| 路径与日志（config / download / logs 三件套，与 Python 版目录约定一致） | ✅ |
-| 主窗口（9 组 35 页侧栏导航、懒加载、生命周期钩子、Enter/Esc 分发、工作目录广播） | ✅ |
-| 主题（浅色 / 深色两套 JavaFX CSS，侧栏底部手动切换） | ✅ |
-| Toast 右下角提示 | ✅ |
-| 字幕转换引擎 + 页面 | ✅ |
-| 歌词转换引擎 + 页面（KRC 加解密、KRCD 工具） | ✅ |
-| WBI 签名（mixin/w_rid/app sign，跨语言测试向量对齐） | ✅ |
+| 路径与日志 / 主窗口（9 组 35 页）/ 双主题 / Toast | ✅ |
+| 字幕转换 / 歌词转换（KRC 加解密） | ✅ M1 |
+| WBI 签名（跨语言测试向量对齐） | ✅ M1 |
 | 批量重命名 / 自动整理 / 文件时间修改 / 全局设置 | ✅ M2 |
-| 网络层（java.net.http 封装：UA/JSON/重试/表单） | ✅ M3 |
-| Cookie 仓库（12 平台，Fernet **与 Python 版逐字节互通**，旧 cookies.json 直接可用） | ✅ M3 |
-| Cookie 管理界面（总开关 / 状态 / 扫码 / 浏览器+粘贴 / 清除） | ✅ M3 |
-| B站扫码登录（generate → 轮询 → Set-Cookie 落盘） | ✅ M3 |
-| B站鉴权网络层（nav 取 WBI key / buvid / bili_ticket / cookie header） | ✅ M3 |
-| 其余 29 个页面 | 🚧 占位中，按路线图逐个替换 |
+| 网络层 / Cookie 仓库（与 Python 版互通）/ B站扫码登录 | ✅ M3 |
+| **视频转换**（无损封装优先 → 转码兜底 → 重试 → 跳过已存在） | ✅ M4 |
+| **音频提取**（`-acodec copy` → .m4a，可选删源进回收站） | ✅ M4 |
+| **文件迁移**（日期文件夹批量移动/复制，冲突合并 `_N`） | ✅ M4 |
+| **日历浏览**（年→月→日三级下钻，双击打开） | ✅ M4 |
+| **继续操作**（常用目录 + 最近日期文件夹快捷卡片） | ✅ M4 |
+| ffmpeg 定位（PATH → 设置 → bin/） | ✅ M4 |
+| 其余 24 个页面 | 🚧 占位中，按路线图逐个替换 |
 
 **移植正确性保障**：所有引擎级单元测试的期望值均由 Python 原版运行时生成
 （见 `src/test/java/.../` 测试类的注释），不是手写近似值——包括
@@ -55,6 +53,10 @@ FMJJRecordedBroadcast_JAVA/
     │   │   ├── organize/OrganizeEngine.java        # 按日期自动整理
     │   │   ├── filetime/FileTimeEngine.java        # 文件时间三模式
     │   │   ├── net/HttpClient.java                 # java.net.http 封装（重试/JSON/表单）
+    │   │   ├── media/
+    │   │   │   ├── Ffmpeg.java                     # ffmpeg 定位 + 子进程 + 错误分类
+    │   │   │   ├── ConvertEngine.java              # 无损/转码/重试/缓存
+    │   │   │   └── AudioEngine.java                # 音频提取 / 日期分组 / 回收站删除
     │   │   └── auth/
     │   │       ├── FernetCompat.java               # Fernet 逐字节兼容 Python
     │   │       └── CookieStore.java                # 12 平台 Cookie 仓库
@@ -74,6 +76,11 @@ FMJJRecordedBroadcast_JAVA/
     │           ├── OrganizePage.java       自动整理（可用）
     │           ├── FileTimePage.java       文件时间修改（可用）
     │           ├── GlobalSettingsPage.java 全局设置（可用）
+    │           ├── ConvertPage.java        视频转换（可用）
+    │           ├── AudioPage.java          音频提取（可用）
+    │           ├── MigratePage.java        文件迁移（可用）
+    │           ├── CalendarPage.java       日历浏览（可用）
+    │           ├── LauncherPage.java       继续操作（可用）
     │           └── StubPage.java           其余页面占位
     └── main/resources/cn/fmjj/toolbox/gui/
         ├── light.css / dark.css

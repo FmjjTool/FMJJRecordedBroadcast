@@ -31,7 +31,7 @@
 | **M1 骨架 + 纵切** | Maven/JavaFX 构建、主窗口 9 组 35 页导航、懒加载、生命周期钩子、双主题、Toast、字幕引擎+页、歌词引擎+页、WBI 签名、跨语言测试 | ✅ 完成 |
 | **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
 | **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
-| **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ⬜ |
+| **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
 | **M5 解析与下载** | B站/抖音/微博/快手/小红书 解析器（游客→兜底→Cookie 降级链）、媒体批量落盘、DASH 下载 + ffmpeg 合并、a_bogus（见难点）、已获取数据 SQLite 持久化（xerial sqlite-jdbc） | ⬜ |
 | **M6 信息/资产/追踪页** | 单个/批量解析、账号获取、已获取、抖音指数、B站资源、资产管理；音乐 5 平台搜索/下载；账号追踪卡片 + PNG 导出；主题自动切换（跟随系统/定时） | ⬜ |
 | **M7 音乐高级** | 30+ 加密音乐解密（ncm/qmc/mgg/kgm/kwm…逐一移植）、音乐标签编辑（JAudiotagger）、网络匹配 | ⬜ |
@@ -93,6 +93,17 @@
    token 双向互通，**原版 cookies.json 可直接复用，登录态零迁移成本**。
 4. **JDK 要求提升到 27**：FFM 正式 API（22+）+ JavaFX 27（配 JDK 27）。
    若将来要支持 JDK 21，需要把 FernetCompat 的注册表读取换成 JNA 并回退 JavaFX 21。
+
+## 3.7 M4 决策与差距
+
+1. **ffmpeg 仍是外部依赖**：定位顺序 = PATH → 全局设置自定义路径 → `bin/` 内置 →
+   裸 `ffmpeg`（与原版一致）。`Ffmpeg.available()` 供 UI 提示；内置分发留 M9。
+2. **文件迁移勾选方式**：原版是每行 CheckBox；Java 版用多选行 + 全选/反选
+   （交互差异，功能等价）。目标已存在时逐文件合并、同名加 `_N`。
+3. **继续操作页**：先给「系统目录 + 最近 8 个日期文件夹」的快捷卡片；
+   原版的自定义条目（launcher_items 持久化）随 M6 全局设置补。
+4. **回收站**：Python 用 send2trash；Java 用 `Desktop.moveToTrash`
+   （不可用时退化永久删除，页面会提示）。
 
 ## 4. 依赖映射（Python → Java）
 
