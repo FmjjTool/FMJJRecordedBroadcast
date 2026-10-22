@@ -23,6 +23,8 @@ public final class WbiSigner {
 
     public static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
 
+    public static final String REFERER_BILI = "https://www.bilibili.com/";
+
     private static final int[] MIXIN_KEY_ENC_TAB = {
             46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
             27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,

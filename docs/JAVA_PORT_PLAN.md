@@ -30,7 +30,7 @@
 |---|---|---|
 | **M1 骨架 + 纵切** | Maven/JavaFX 构建、主窗口 9 组 35 页导航、懒加载、生命周期钩子、双主题、Toast、字幕引擎+页、歌词引擎+页、WBI 签名、跨语言测试 | ✅ 完成 |
 | **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
-| **M3 网络与账号体系** | HttpClient 封装（UA/cookie/重试/限流）、WBI 网络层（nav 取 key、buvid、bili_ticket）、Cookie 仓库（JCE 移植 Fernet 语义：AES-CBC + HMAC + 机器 GUID 派生密钥，sqlite 存储）、扫码/浏览器登录入口 | ⬜ |
+| **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ⬜ |
 | **M5 解析与下载** | B站/抖音/微博/快手/小红书 解析器（游客→兜底→Cookie 降级链）、媒体批量落盘、DASH 下载 + ffmpeg 合并、a_bogus（见难点）、已获取数据 SQLite 持久化（xerial sqlite-jdbc） | ⬜ |
 | **M6 信息/资产/追踪页** | 单个/批量解析、账号获取、已获取、抖音指数、B站资源、资产管理；音乐 5 平台搜索/下载；账号追踪卡片 + PNG 导出；主题自动切换（跟随系统/定时） | ⬜ |
@@ -66,7 +66,7 @@
 | 票务解析 / 购物解析 | tickets, shopping | M8 | 中 |
 | 图片裁切 / 封面制作 / 媒体筛选 / 媒体压缩 | imgcut / image-sorter 系移植 | M8 | 高（图像） |
 
-## 3.5 M2 已知怪葩与差距（bug 级一致的保留项）
+## 3.5 M2/M3 已知怪癖与差距（bug 级一致的保留项）
 
 1. **重命名冲突双加序号**：Python `_refresh` 的跨项撞名按列表索引身份判断，
    两个同名文件会**互相**触发冲突（a.mp4/a.mp4 → a_1.mp4/a_2.mp4），已按原样保留。
@@ -78,6 +78,21 @@
 4. **批量重命名文本模式 tab**（逐行直接编辑新名）未做，M3 前补或确认砍掉。
 5. **Settings 只移植全局设置页相关键**（目录/主题/ffmpeg），其余 60+ 配置键
    随各自页面里程碑补齐；主题的跟随系统/定时切换 M6 落地。
+
+## 3.6 M3 决策与差距
+
+1. **WebView 不可用**：本机 JDK 27 移除了 `jdk.jsobject`（66 个 jmod 里没有），
+   JavaFX 21/27 的 `javafx.web` 都起不来（`Module jdk.jsobject not found`）。
+   因此浏览器登录退化为「系统浏览器登录 + 粘贴 Cookie」（带登录特征校验），
+   **M5 引入 playwright-java 后恢复自动捕获**（与原版一致）。
+2. **扫码登录仅 B站**：完整链路（generate → 2 秒轮询 → Set-Cookie 收集 → 落盘）
+   已落地；网易云/QQ/酷狗概念版扫码依赖各自加密 API，随 M6/M7 补齐。
+3. **Fernet 完全互通**：密钥 = `urlsafe_b64encode(sha256("fmjj-cookie-v1:"+MachineGuid))`，
+   token 为 0x80+ts+IV+AES128CBC+HMAC-SHA256。Java 用 FFM 直调 advapi32 读
+   MachineGuid（不依赖 reg.exe，避免被安全软件拦）。测试含 Python 生成的 5 条
+   token 双向互通，**原版 cookies.json 可直接复用，登录态零迁移成本**。
+4. **JDK 要求提升到 27**：FFM 正式 API（22+）+ JavaFX 27（配 JDK 27）。
+   若将来要支持 JDK 21，需要把 FernetCompat 的注册表读取换成 JNA 并回退 JavaFX 21。
 
 ## 4. 依赖映射（Python → Java）
 

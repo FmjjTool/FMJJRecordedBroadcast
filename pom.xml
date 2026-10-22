@@ -13,9 +13,11 @@
   <description>封茗囧菌数据汇总库 · 统一维护工具箱 Java 全栈版（PySide6 版的 Java 移植）</description>
 
   <properties>
-    <maven.compiler.release>21</maven.compiler.release>
+    <!-- 需 JDK 27+：JDK 27 移除了 jdk.jsobject，JavaFX 21 的 WebView 无法运行；
+         JavaFX 27 与之配套，且 FFM 已是正式 API（FernetCompat 读注册表用） -->
+    <maven.compiler.release>27</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <javafx.version>21.0.5</javafx.version>
+    <javafx.version>27.0.1</javafx.version>
     <jackson.version>2.17.2</jackson.version>
     <junit.version>5.11.3</junit.version>
     <mainClass>cn.fmjj.toolbox.ToolboxApp</mainClass>
@@ -34,6 +36,15 @@
       <artifactId>javafx-graphics</artifactId>
       <version>${javafx.version}</version>
       <classifier>win</classifier>
+    </dependency>
+    <!-- 注意：不引入 javafx-web —— JDK 27 已移除 jdk.jsobject，WebView 无法启动。
+         浏览器登录改为「系统浏览器 + 粘贴 Cookie」，自动捕获在 M5 用 playwright-java 落地。 -->
+
+    <!-- 二维码生成（B站扫码登录） -->
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>core</artifactId>
+      <version>3.5.3</version>
     </dependency>
 
     <!-- JSON（BCC 字幕 / 配置读写 / 平台 API 解析） -->

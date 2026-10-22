@@ -3,6 +3,7 @@ package cn.fmjj.toolbox.gui;
 import cn.fmjj.toolbox.core.AppPaths;
 import cn.fmjj.toolbox.core.Log;
 import cn.fmjj.toolbox.core.settings.Settings;
+import cn.fmjj.toolbox.gui.dialogs.CookieManagerDialog;
 import cn.fmjj.toolbox.gui.pages.BasePage;
 import cn.fmjj.toolbox.gui.pages.FileTimePage;
 import cn.fmjj.toolbox.gui.pages.GlobalSettingsPage;
@@ -119,6 +120,16 @@ public class MainWindow {
     private Scene scene;
     private BasePage current;
     private Path workDir;
+    private Label cookieCountLabel;
+
+    /** 侧栏 Cookie 状态（已登录平台数 / 总开关状态）。 */
+    private void refreshCookieStatus() {
+        if (cookieCountLabel == null) return;
+        var cookies = cn.fmjj.toolbox.engine.auth.CookieStore.loadCookies();
+        long loggedIn = cookies.values().stream().filter(v -> !v.isEmpty()).count();
+        boolean enabled = cn.fmjj.toolbox.engine.auth.CookieStore.isEnabled();
+        cookieCountLabel.setText(enabled ? "🍪 已登录 " + loggedIn + " 个平台" : "🍪 Cookie 已关闭");
+    }
 
     public MainWindow(Stage stage) {
         this.stage = stage;
@@ -200,7 +211,7 @@ public class MainWindow {
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         scroll.getStyleClass().add("sidebar-scroll");
 
-        // 底部：主题切换 + Cookie 状态占位
+        // 底部：主题切换 + Cookie 管理入口
         ToggleButton themeBtn = new ToggleButton("☀️ 浅色");
         themeBtn.getStyleClass().add("theme-toggle");
         themeBtn.setMaxWidth(Double.MAX_VALUE);
@@ -208,12 +219,18 @@ public class MainWindow {
             boolean nowDark = Theme.toggle(scene);
             themeBtn.setText(nowDark ? "🌙 深色" : "☀️ 浅色");
         });
-        Label cookieStatus = new Label("🍪 Cookie 管理（M3 移植）");
+        Button cookieBtn = new Button("🍪 Cookie 管理");
+        cookieBtn.getStyleClass().add("theme-toggle");
+        cookieBtn.setMaxWidth(Double.MAX_VALUE);
+        cookieBtn.setOnAction(e -> CookieManagerDialog.show(stage, this::refreshCookieStatus));
+        Label cookieStatus = new Label();
         cookieStatus.getStyleClass().add("cookie-status");
+        this.cookieCountLabel = cookieStatus;
 
-        VBox sidebarBottom = new VBox(6, themeBtn, cookieStatus);
+        VBox sidebarBottom = new VBox(6, themeBtn, cookieBtn, cookieStatus);
         sidebarBottom.getStyleClass().add("sidebar-bottom");
         sidebarBottom.setPadding(new Insets(8));
+        refreshCookieStatus();
 
         BorderPane sidebarPane = new BorderPane(scroll);
         sidebarPane.setTop(header);

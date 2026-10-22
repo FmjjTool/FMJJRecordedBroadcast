@@ -8,6 +8,8 @@ import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 
+import java.net.CookieHandler;
+import java.net.CookieManager;
 import java.util.List;
 
 /**
@@ -21,6 +23,11 @@ public class ToolboxApp extends Application {
         Log.setup();
         AppPaths.ensureDirs();
         Log.info("FengMingToolbox Java 2.9.1 启动");
+
+        // WebView 的 Cookie 需要默认 CookieHandler 才能被读取（浏览器登录用）
+        if (CookieHandler.getDefault() == null) {
+            CookieHandler.setDefault(new CookieManager());
+        }
 
         MainWindow window = new MainWindow(stage);
         Scene scene = new Scene(window.root(), 1240, 800);

@@ -6,22 +6,24 @@
 把原 Python 工具箱（引擎层 3.3 万行 + PySide6 GUI 4.1 万行，共约 7.6 万行）
 整体迁移到 **Java 21 + JavaFX** 技术栈。本仓库是独立的新工程，与 Python 版并行维护。
 
-## 当前进度（M2：基础工具四件套完成）
+## 当前进度（M3：网络与账号体系完成）
 
 | 范围 | 状态 |
 |---|---|
-| 构建体系（Maven / Java 21 / JavaFX 21 / Jackson / JUnit5） | ✅ |
+| 构建体系（Maven / Java 27 / JavaFX 27 / Jackson / JUnit5 / zxing） | ✅ |
 | 路径与日志（config / download / logs 三件套，与 Python 版目录约定一致） | ✅ |
 | 主窗口（9 组 35 页侧栏导航、懒加载、生命周期钩子、Enter/Esc 分发、工作目录广播） | ✅ |
 | 主题（浅色 / 深色两套 JavaFX CSS，侧栏底部手动切换） | ✅ |
 | Toast 右下角提示 | ✅ |
-| 字幕转换引擎 + 页面（BCC/ASS/SRT/TXT ↔ 文字/时间轴/LRC/ASS/SRT，可落盘） | ✅ |
-| 歌词转换引擎 + 页面（LRC/KRC/KSC/QRC/TRC/纯文本 ↔ TXT/LRC/SRT/ASS/KSC，KRC 加解密，KRCD 工具） | ✅ |
-| WBI 签名（mixin/w_rid/app sign，跨语言测试向量对齐 Python 原版） | ✅ |
-| 批量重命名（7 标签规则叠加 + 预览冲突加序号 + 撤销） | ✅ M2 |
-| 自动整理（按日期扫描/分组/执行，同名 _N 防覆盖） | ✅ M2 |
-| 文件时间修改（指定时间/偏移量/文件名时间三模式） | ✅ M2 |
-| 全局设置（工作目录/导出目录/主题/FFmpeg 路径，JSON 持久化） | ✅ M2 |
+| 字幕转换引擎 + 页面 | ✅ |
+| 歌词转换引擎 + 页面（KRC 加解密、KRCD 工具） | ✅ |
+| WBI 签名（mixin/w_rid/app sign，跨语言测试向量对齐） | ✅ |
+| 批量重命名 / 自动整理 / 文件时间修改 / 全局设置 | ✅ M2 |
+| 网络层（java.net.http 封装：UA/JSON/重试/表单） | ✅ M3 |
+| Cookie 仓库（12 平台，Fernet **与 Python 版逐字节互通**，旧 cookies.json 直接可用） | ✅ M3 |
+| Cookie 管理界面（总开关 / 状态 / 扫码 / 浏览器+粘贴 / 清除） | ✅ M3 |
+| B站扫码登录（generate → 轮询 → Set-Cookie 落盘） | ✅ M3 |
+| B站鉴权网络层（nav 取 WBI key / buvid / bili_ticket / cookie header） | ✅ M3 |
 | 其余 29 个页面 | 🚧 占位中，按路线图逐个替换 |
 
 **移植正确性保障**：所有引擎级单元测试的期望值均由 Python 原版运行时生成
@@ -40,19 +42,30 @@ FMJJRecordedBroadcast_JAVA/
     │   ├── ToolboxApp.java     JavaFX 入口（日志→目录→主窗口→主题）
     │   ├── core/
     │   │   ├── AppPaths.java   config/download/logs 目录定位
+    │   │   ├── JsonMapper.java 全局 ObjectMapper（字段级可见性）
     │   │   ├── Log.java        轻量日志（logs/app_yyyyMMdd.log）
+    │   │   ├── settings/Settings.java   settings.json 持久化
     │   │   └── bili/
-    │   │       └── WbiSigner.java   WBI/App 签名（纯函数，网络层 M3 补）
+    │   │       ├── WbiSigner.java   WBI/App 签名（纯函数）
+    │   │       └── BiliAuth.java    WBI 网络层 + buvid/ticket + 扫码登录
     │   ├── engine/             ★ 引擎层（零 GUI 依赖，与 Python 版分层一致）
     │   │   ├── subtitle/SubtitleEngine.java        # 字幕格式互转
     │   │   ├── lyrics/LyricsEngine.java            # 歌词互转 + KRC 加解密
     │   │   ├── rename/BatchRenameEngine.java       # 批量重命名 8 类规则
     │   │   ├── organize/OrganizeEngine.java        # 按日期自动整理
-    │   │   └── filetime/FileTimeEngine.java        # 文件时间三模式
+    │   │   ├── filetime/FileTimeEngine.java        # 文件时间三模式
+    │   │   ├── net/HttpClient.java                 # java.net.http 封装（重试/JSON/表单）
+    │   │   └── auth/
+    │   │       ├── FernetCompat.java               # Fernet 逐字节兼容 Python
+    │   │       └── CookieStore.java                # 12 平台 Cookie 仓库
     │   └── gui/
     │       ├── MainWindow.java     侧栏导航 + 懒加载 + 钩子分发
     │       ├── Theme.java          浅色/深色切换
     │       ├── Toast.java          右下角提示
+    │       ├── dialogs/
+    │       │   ├── CookieManagerDialog.java   12 平台 Cookie 管理
+    │       │   ├── QrLoginDialog.java         B站扫码登录（zxing）
+    │       │   └── BrowserLoginDialog.java    系统浏览器 + 粘贴 Cookie
     │       └── pages/
     │           ├── BasePage.java           生命周期基类
     │           ├── SubtitlePage.java       字幕转换（可用）
@@ -72,7 +85,7 @@ FMJJRecordedBroadcast_JAVA/
 
 ## 构建与运行
 
-要求：JDK 21+（开发用的是 JDK 27），Maven 3.9+。
+要求：**JDK 27+**（JavaFX 27 配套；FernetCompat 用 JDK 22+ 的 FFM 直调 advapi32 读 MachineGuid），Maven 3.9+。
 
 ```bash
 # 编译 + 单元测试
