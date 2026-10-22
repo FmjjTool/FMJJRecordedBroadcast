@@ -45,7 +45,11 @@ COOKIE_PLATFORMS = [
 # 登录特征 = 登录后才出现、能一眼认出来的 Cookie 名；判不准的平台另见
 # REMOTE_VERIFY_PLATFORMS（再问一次站内接口，tracker.whoami.verify）
 BROWSER_LOGIN_CONFIGS = {
-    "weibo": ("https://m.weibo.cn/", "微博登录（软件内）", ("SUB",), ""),
+    # 微博：直达 passport SSO 登录页（扫码 / 手机验证码 / 账号密码都能用），
+    # url 参数登录后跳回 m.weibo.cn（采集侧用的是 m 站接口与 SUB 票）
+    "weibo": ("https://passport.weibo.com/sso/signin?entry=wapsso&source=wapsso"
+              "&url=https%3A%2F%2Fm.weibo.cn%2F", "微博登录（软件内）", ("SUB",),
+              "扫码 / 手机验证码 / 账号密码登录（直达 passport 登录页）"),
     "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",), ""),
     "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",), ""),
     "qq": ("https://y.qq.com/", "QQ音乐登录（软件内）",

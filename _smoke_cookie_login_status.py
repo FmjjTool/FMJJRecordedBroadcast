@@ -104,6 +104,11 @@ fs = BROWSER_LOGIN_CONFIGS["5sing"]
 check("5sing 认 5sing_auth（登录后才种）", "5sing_auth" in fs[2], fs[2])
 check("5sing 仍要站内接口复核", "5sing" in REMOTE_VERIFY_PLATFORMS)
 check("5sing 走 http 登录页", fs[0].startswith("http://"), fs[0])
+wb = BROWSER_LOGIN_CONFIGS["weibo"]
+check("微博直达 passport SSO 登录页",
+      wb[0].startswith("https://passport.weibo.com/sso/signin"), wb[0])
+check("微博登录后跳回 m.weibo.cn", "url=https%3A%2F%2Fm.weibo.cn%2F" in wb[0], wb[0])
+check("微博登录特征仍认 SUB", "SUB" in wb[2], wb[2])
 
 print("[7] whoami 注册表")
 for p in ("kugou", "5sing", "weibo", "xiaohongshu"):
