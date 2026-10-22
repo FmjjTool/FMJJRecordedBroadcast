@@ -29,7 +29,8 @@ public final class LinkRouter {
     public record Target(String platform, String id, String kind) {
         /** 当前是否有解析器（抖音/快手/小红书解析待 M5 后续刀）。 */
         public boolean parsable() {
-            return "bilibili".equals(platform) || "weibo".equals(platform);
+            return "bilibili".equals(platform) || "weibo".equals(platform)
+                    || "douyin".equals(platform) || "kuaishou".equals(platform);
         }
     }
 

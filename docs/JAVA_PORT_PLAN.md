@@ -222,8 +222,15 @@
 - 耗时：首次约 51s（含 HTTP 尝试 + 冷启动），优化后 **约 14s**（降 virtual-time-budget 到 5000）。
 - 代价：需要目标机有 Edge/Chrome（Windows 自带 Edge，满足）；比 Python 版 Playwright 轻（不下载 Chromium）。
 
-**快手（暂缓）**：`v.m.chenzhongtech.com/fw/photo/{id}` 返回 200 但页面只有
-`__CDN_DISPATCH__`/`__KCONF__` 空壳，数据在 `kuaishou.com/graphql`（需 cookie + 签名）。
+**快手（已实现，待真实链接验证）**：
+- `v.m.chenzhongtech.com/fw/photo/{id}` 是空壳；但 `www.kuaishou.com/short-video/{id}`
+  在**带完整请求头**（`Accept: text/html...` + `Accept-Language: zh-CN`）时返回 75KB SSR 页面，
+  内含 `window.__APOLLO_STATE__`（Apollo GraphQL 缓存）—— 纯 HTTP 可读，不需要浏览器。
+- 坑：只带 UA + Referer 时返回 `{"result":2,"error_msg":null}`（风控），加 `Accept`/`Accept-Language` 就好。
+- 解析策略：Apollo 缓存 key 形态会变（`Photo:xxx` / `VisionVideoDetailPhoto:xxx`），
+  所以用 **DFS 找「含 caption 且有视频地址」的对象**，不写死路径；
+  视频直链优先 `manifest.adaptationSet[].representation[].url` 里的非 H265。
+- **未验证**：本机拿不到真实 photoId（首页/发现页是 CSR，无 ID），需要一条真实快手链接。
 
 **小红书（暂缓）**：`xiaohongshu.com/explore/{id}` 无 xsec_token 时 302 跳登录，
 数据需登录态 + `__INITIAL_STATE__`（登录页不返回）。

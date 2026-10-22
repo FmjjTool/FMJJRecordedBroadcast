@@ -11,6 +11,7 @@ import cn.fmjj.toolbox.engine.platform.bili.BiliParser;
 import cn.fmjj.toolbox.engine.net.HttpClient;
 import cn.fmjj.toolbox.engine.platform.douyin.DouyinLink;
 import cn.fmjj.toolbox.engine.platform.douyin.DouyinParser;
+import cn.fmjj.toolbox.engine.platform.kuaishou.KuaishouParser;
 import cn.fmjj.toolbox.engine.platform.weibo.WeiboParser;
 import cn.fmjj.toolbox.engine.store.MediaStore;
 import javafx.application.Platform;
@@ -44,7 +45,7 @@ import java.util.function.Consumer;
  */
 public class InfoParsePage extends BasePage {
 
-    private enum Site { BILIBILI, WEIBO, DOUYIN, UNKNOWN }
+    private enum Site { BILIBILI, WEIBO, DOUYIN, KUAISHOU, UNKNOWN }
 
     private final TextField linkField = new TextField();
     private final ComboBox<String> qualityBox = new ComboBox<>();
@@ -70,6 +71,8 @@ public class InfoParsePage extends BasePage {
     private List<BiliParser.Quality> qualities = new ArrayList<>();
     private MediaItem weiboItem;
     private DouyinParser.DouyinVideo douyinVideo;
+    private KuaishouParser.KuaishouVideo kuaishouVideo;
+    private final KuaishouParser kuaishouParser = new KuaishouParser();
     private final DouyinParser douyinParser = new DouyinParser();
 
     private Consumer<String> toast;
@@ -179,7 +182,14 @@ public class InfoParsePage extends BasePage {
             return;
         }
 
-        status.setText("无法识别的链接（支持 B站 / 微博 / 抖音）");
+        String ksId = KuaishouParser.extractId(text);
+        if (!ksId.isEmpty()) {
+            site = Site.KUAISHOU;
+            parseKuaishou(ksId);
+            return;
+        }
+
+        status.setText("无法识别的链接（支持 B站 / 微博 / 抖音 / 快手）");
     }
 
     /** 抖音：短链先展开，再抓分享页 SSR 数据。 */
@@ -318,6 +328,7 @@ public class InfoParsePage extends BasePage {
         if (site == Site.BILIBILI && videoInfo != null) downloadBili();
         else if (site == Site.WEIBO && weiboItem != null) downloadWeibo();
         else if (site == Site.DOUYIN && douyinVideo != null) downloadDouyin();
+        else if (site == Site.KUAISHOU && kuaishouVideo != null) downloadKuaishou();
         else status.setText("请先解析");
     }
 
@@ -386,6 +397,97 @@ public class InfoParsePage extends BasePage {
             status.setText("下载异常：" + task.getException().getMessage());
         });
         new Thread(task, "douyin-download").start();
+    }
+
+    // ==================== 快手 ====================
+
+    private void parseKuaishou(String photoId) {
+        parseBtn.setDisable(true);
+        status.setText("解析中…");
+        javafx.concurrent.Task<KuaishouParser.KuaishouVideo> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected KuaishouParser.KuaishouVideo call() throws Exception {
+                return kuaishouParser.parse(photoId);
+            }
+        };
+        task.setOnSucceeded(e -> {
+            parseBtn.setDisable(false);
+            applyKuaishou(task.getValue());
+        });
+        task.setOnFailed(e -> {
+            parseBtn.setDisable(false);
+            status.setText("解析失败：" + task.getException().getMessage());
+        });
+        new Thread(task, "kuaishou-parse").start();
+    }
+
+    private void applyKuaishou(KuaishouParser.KuaishouVideo v) {
+        this.kuaishouVideo = v;
+        infoTitle.setText(v.title());
+        infoMeta.setText("作者：" + (v.author().isBlank() ? "—" : v.author())
+                + "　时长：" + formatDuration(v.durationSeconds())
+                + "　ID：" + v.photoId());
+        qualityBox.setItems(FXCollections.observableArrayList("原画"));
+        qualityBox.getSelectionModel().select(0);
+        qualityBox.setDisable(true);
+        downloadBtn.setDisable(v.videoUrl().isEmpty());
+        appendLog("✅ 解析成功：" + v.title());
+    }
+
+    private void downloadKuaishou() {
+        KuaishouParser.KuaishouVideo v = kuaishouVideo;
+        Path outDir = Settings.load().effectiveExportDir()
+                .resolve("快手_媒体")
+                .resolve(BiliParser.sanitizeFilename(v.author().isBlank() ? "未知" : v.author(), 80, "未知"));
+        Path target = outDir.resolve(BiliParser.sanitizeFilename(
+                (v.author().isBlank() ? "" : v.author() + " - ") + v.title(), 100, v.photoId()) + ".mp4");
+        stopFlag.set(false);
+        downloadBtn.setDisable(true);
+        progress.setProgress(0);
+        status.setText("下载中…");
+
+        javafx.concurrent.Task<FileDownloader.Result> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected FileDownloader.Result call() {
+                return fileDownloader.download(List.of(v.videoUrl()), target,
+                        Map.of("Referer", "https://www.kuaishou.com/", "User-Agent", HttpClient.UA_CHROME),
+                        p -> {
+                            if (p.total() > 0) Platform.runLater(() -> progress.setProgress(p.ratio()));
+                        }, stopFlag::get);
+            }
+        };
+        task.setOnSucceeded(e -> {
+            var r = task.getValue();
+            downloadBtn.setDisable(false);
+            progress.setProgress(r.success() ? 1 : 0);
+            if (r.success()) {
+                status.setText("下载完成：" + r.path().getFileName());
+                appendLog("🎉 " + r.path());
+                recordKuaishou(v, outDir.toString());
+                toast("快手视频已下载：" + r.path().getFileName());
+            } else {
+                status.setText("下载失败：" + r.error());
+                appendLog("❌ " + r.error());
+            }
+        });
+        task.setOnFailed(e -> {
+            downloadBtn.setDisable(false);
+            status.setText("下载异常：" + task.getException().getMessage());
+        });
+        new Thread(task, "kuaishou-download").start();
+    }
+
+    private void recordKuaishou(KuaishouParser.KuaishouVideo v, String savedDir) {
+        try (MediaStore store = new MediaStore()) {
+            List<MediaItem.Stream> streams = new ArrayList<>();
+            streams.add(new MediaItem.Stream("video", "原画", v.videoUrl(), List.of(), 0));
+            MediaItem item = MediaItem.of("kuaishou", v.photoId(), v.title(), v.author(),
+                    v.cover(), "", v.durationSeconds(), v.caption(), streams, v.rawJson());
+            store.upsert(item, savedDir);
+            appendLog("📦 已写入已获取库");
+        } catch (Exception e) {
+            appendLog("⚠️ 入库失败：" + e.getMessage());
+        }
     }
 
     private void recordDouyin(DouyinParser.DouyinVideo v, String savedDir) {

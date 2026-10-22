@@ -39,12 +39,13 @@ class LinkRouterTest {
     }
 
     @Test
-    @DisplayName("parsable：当前仅 B站/微博可解析")
+    @DisplayName("parsable：B站/微博/抖音/快手可解析，小红书待支持")
     void parsable() {
         assertTrue(LinkRouter.route("https://www.bilibili.com/video/BV1xx411c7mD").parsable());
         assertTrue(LinkRouter.route("https://m.weibo.cn/detail/5012345678901234").parsable());
-        assertFalse(LinkRouter.route("https://www.douyin.com/video/7412345678901234567").parsable());
-        assertFalse(LinkRouter.route("https://www.kuaishou.com/short-video/abc").parsable());
+        assertTrue(LinkRouter.route("https://www.douyin.com/video/7412345678901234567").parsable());
+        assertTrue(LinkRouter.route("https://www.kuaishou.com/short-video/3xabc").parsable());
+        assertFalse(LinkRouter.route("https://www.xiaohongshu.com/explore/65f0a1b2c3d4e5f6a7b8c9d0").parsable());
     }
 
     @Test
