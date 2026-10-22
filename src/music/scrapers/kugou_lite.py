@@ -68,7 +68,7 @@ def session_file() -> Path:
 
 
 def load_session() -> dict:
-    """读取已存会话：{guid, mid, token, userid}，无/损坏返回空 dict。"""
+    """读取已存会话：{guid, mid, token, userid[, nickname]}，无/损坏返回空 dict。"""
     f = session_file()
     if not f.exists():
         return {}
@@ -79,11 +79,16 @@ def load_session() -> dict:
         return {}
 
 
-def save_session(guid: str, mid: str, token: str, userid) -> None:
+def save_session(guid: str, mid: str, token: str, userid, nickname: str = "") -> None:
+    """写会话；nickname 是扫码登录时接口返回的昵称（概念版没有可用的用户信息接口，
+    不存下来状态行就只能显示用户ID）。"""
     f = session_file()
     f.parent.mkdir(parents=True, exist_ok=True)
+    old = load_session()
+    nick = nickname or old.get("nickname") or ""
     f.write_text(json.dumps({
         "guid": guid, "mid": mid, "token": token, "userid": userid,
+        "nickname": nick,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -110,6 +115,7 @@ class KuGouLiteClient:
         self.dfid = "-"      # 未注册设备；v5/url 按源码用随机 dfid
         self.token = ""
         self.userid = 0
+        self.nickname = ""
         self._load_session()
 
     # ---- 会话持久化 ----
@@ -120,9 +126,10 @@ class KuGouLiteClient:
             self.mid = d.get("mid") or _calc_mid(self.guid)
             self.token = d.get("token") or ""
             self.userid = d.get("userid") or 0
+            self.nickname = d.get("nickname") or ""
 
     def _save_session(self):
-        save_session(self.guid, self.mid, self.token, self.userid)
+        save_session(self.guid, self.mid, self.token, self.userid, self.nickname)
 
     # ---- 请求封装（仿 KuGouMusicApi request.js 参数注入） ----
     def _request(self, method: str, url: str, extra_params: dict,
@@ -192,6 +199,10 @@ class KuGouLiteClient:
         if st == 4:
             self.token = data.get("token") or ""
             self.userid = data.get("userid") or 0
+            ui = data.get("userinfo") or data.get("user_info") or {}
+            self.nickname = (data.get("nickname") or data.get("NickName")
+                             or ui.get("nickname") or ui.get("NickName")
+                             or ui.get("user_name") or self.nickname or "")
             if self.token:
                 self._save_session()
                 return {"status": 4, "message": "登录成功", "logged_in": True}

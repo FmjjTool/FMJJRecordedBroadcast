@@ -99,50 +99,46 @@ def _taobao(cookie: str) -> dict:
         return fallback
 
 
+def _xhs_state(html: str) -> dict:
+    """取页面内嵌的 window.__INITIAL_STATE__（复用笔记解析的花括号配平逻辑）。"""
+    try:
+        from platforms.xiaohongshu import _balanced_json
+        d = _balanced_json(html, r"window\.__INITIAL_STATE__")
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
 def _xiaohongshu(cookie: str) -> dict:
+    # 登录态在探索页 SSR 的 user.loggedIn / user.userInfo 里；
+    # 首页（www.xiaohongshu.com/）是 JS 壳，没有 __INITIAL_STATE__，
+    # 旧实现只抓首页再正则，永远解析不到 → 恒显示「无法验证」
     import requests
 
-    r = requests.get("https://www.xiaohongshu.com/",
-                     headers=_headers(cookie), timeout=12)
-    import re
-    import json
-    m = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>",
-                  r.text, re.S)
-    if not m:
-        return {"ok": None, "username": ""}
-    try:
-        d = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(1)).replace("undefined", "null"))
-    except Exception:
-        return {"ok": None, "username": ""}
-    user = d.get("user") or {}
-
-    def _find_nick(obj, depth=0):
-        if depth > 4:
-            return ""
-        if isinstance(obj, dict):
-            for k in ("nickname", "nickName", "nick_name"):
-                v = obj.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-            for v in obj.values():
-                r = _find_nick(v, depth + 1)
-                if r:
-                    return r
-        elif isinstance(obj, list):
-            for v in obj:
-                r = _find_nick(v, depth + 1)
-                if r:
-                    return r
-        return ""
-
-    nick = _find_nick(user)
-    logged_in = bool(user.get("loggedIn") is True or user.get("loginInfo")
-                     or (user.get("userInfo") and nick))
-    if logged_in and nick:
-        return {"ok": True, "username": nick}
-    if nick:
-        return {"ok": True, "username": nick}
-    return {"ok": None, "username": ""}
+    h = _headers(cookie)
+    h["Referer"] = "https://www.xiaohongshu.com/"
+    for url in ("https://www.xiaohongshu.com/explore",
+                "https://www.xiaohongshu.com/"):
+        try:
+            html = requests.get(url, headers=h, timeout=15).text
+        except Exception:
+            continue
+        st = _xhs_state(html)
+        if not st:
+            continue
+        user = st.get("user") or {}
+        info = user.get("userInfo") or {}
+        nick = (info.get("nickname") or info.get("nickName")
+                or info.get("nick_name") or "").strip()
+        guest = info.get("guest")
+        if user.get("loggedIn") is True and guest is not True:
+            return {"ok": True, "username": nick}
+        if user.get("loggedIn") is False:
+            return {"ok": False, "username": ""}
+        if nick and guest is False:
+            return {"ok": True, "username": nick}
+        return {"ok": False, "username": ""}
+    return {"ok": None, "username": ""}  # 页面没拿到 state：无法判定
 
 
 def _bili(cookie: str) -> dict:
@@ -183,10 +179,20 @@ def _weibo(cookie: str) -> dict:
     d = requests.get("https://m.weibo.cn/api/config",
                      headers=_headers(cookie), timeout=10).json()
     data = d.get("data") or {}
-    if data.get("login"):
-        user = data.get("user") or {}
-        return {"ok": True, "username": user.get("screen_name") or ""}
-    return {"ok": False, "username": ""}
+    if not data.get("login"):
+        return {"ok": False, "username": ""}
+    user = data.get("user") or {}
+    name = (user.get("screen_name") or "").strip()
+    uid = data.get("uid") or user.get("id")
+    if not name and uid:
+        # 2026-10 实测 config 里 user 恒为 null（只剩 uid），昵称改问 users/show
+        try:
+            u = requests.get(f"https://m.weibo.cn/api/users/show?uid={uid}",
+                             headers=_headers(cookie), timeout=10).json()
+            name = ((u.get("data") or {}).get("screen_name") or "").strip()
+        except Exception:
+            name = ""
+    return {"ok": True, "username": name}
 
 
 def _netease(cookie: str) -> dict:
@@ -442,6 +448,19 @@ def _fivesing(cookie: str) -> dict:
     if r is not None:
         return r
     return {"ok": None, "username": ""}  # 接口不可达：无法判定（不当成未登录）
+
+
+def kugou_nick_for(userid) -> str:
+    """同 userid 的酷狗昵称（酷狗概念版没有可用的用户信息接口，借主账号 Cookie）。"""
+    import auth
+
+    try:
+        kg = _kugoo_fields(auth.load_cookies().get("kugou", ""))
+        if userid and str(kg.get("KugooID") or "") == str(userid):
+            return _kugou_nick(kg.get("NickName") or "")
+    except Exception:
+        pass
+    return ""
 
 
 _VERIFIERS = {

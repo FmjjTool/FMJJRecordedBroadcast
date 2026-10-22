@@ -77,15 +77,24 @@ REMOTE_VERIFY_PLATFORMS = {"5sing"}
 
 
 def _kugou_lite_state() -> tuple[bool, str]:
-    """酷狗概念版登录态：会话文件判断 + userid 展示。返回 (已登录, userid文本)。"""
+    """酷狗概念版登录态 + 展示名。返回 (已登录, 名字文本)。
+
+    名字来源优先级：会话文件里的 nickname（扫码登录时存）→ 同 userid 的酷狗
+    主账号昵称 → 「用户ID xxx」。概念版没有可用的用户信息接口，只能这样取。
+    """
     try:
         from music.scrapers.kugou_lite import load_session
         d = load_session()
-        if d.get("token"):
-            return True, str(d.get("userid") or "")
+        if not d.get("token"):
+            return False, ""
+        uid = str(d.get("userid") or "")
+        name = str(d.get("nickname") or "").strip()
+        if not name and uid:
+            from tracker import whoami
+            name = whoami.kugou_nick_for(uid)
+        return True, name or (f"用户ID {uid}" if uid else "")
     except Exception:
-        pass
-    return False, ""
+        return False, ""
 
 
 def _kugou_lite_age() -> str:
@@ -360,18 +369,19 @@ class CookieManagerDialog(QDialog):
         cookies = auth.load_cookies()
         netease_has = bool(auth.get_netease_cookie_stored().strip())
         for plat, name, can_qr, can_browser in COOKIE_PLATFORMS:
+            lite_name = ""  # 概念版的展示名（会话文件/同账号酷狗昵称）
             if plat == "netease":
                 has = netease_has
                 age = auth.get_cookie_age("netease") if has else ""
             elif plat == "kugou_lite":
-                has, _uid = _kugou_lite_state()
+                has, lite_name = _kugou_lite_state()
                 age = _kugou_lite_age() if has else ""
             else:
                 has = bool(cookies.get(plat, "") and len(cookies.get(plat, "")) > 10)
                 age = auth.get_cookie_age(plat)
             row = QHBoxLayout()
             row.addWidget(QLabel(name, styleSheet="font-weight: bold;"))
-            sl = QLabel(self._status_text(plat, has, age))
+            sl = QLabel(self._status_text(plat, has, age, lite_name))
             sl.setStyleSheet(self._status_color(plat, has))
             row.addWidget(sl)
             row.addStretch(1)
@@ -405,23 +415,27 @@ class CookieManagerDialog(QDialog):
         s = s or ""
         return s if len(s) <= limit else s[:limit - 3] + "..."
 
-    def _status_text(self, plat, has, age):
+    def _status_text(self, plat, has, age, name=""):
+        """name：非 Cookie 平台的展示名（如酷狗概念版来自会话文件）。"""
         if not has:
             return "🔴 未登录"
         info = self._whoami_cache.get(plat)
         if info is None:
-            return "🟢 已登录" + (f" · {age}" if age else "")
+            shown = f" · {self._short(name)}" if name else ""
+            return "🟢 已登录" + shown + (f" · {age}" if age else "")
         if info == "probing":
             return "🟢 已登录 · ⏳ 验证中…" + (f" · {age}" if age else "")
         base = "🟢 已登录"
         if info["ok"] is False:
             base = "🟠 已保存 · 验证失败"
-        elif info["ok"] is None and not info.get("username"):
+        elif info["ok"] is None and not (info.get("username") or name):
             # 接口不可达/该平台无验证通道：别硬说"已登录"（酷狗、5sing 曾因此
             # 游客态也显示绿色已登录）
             base = "🟡 已保存 · 无法验证"
-        elif info.get("username"):
-            base = f"🟢 已登录 · {self._short(info['username'])}"
+        else:
+            shown = info.get("username") or name
+            if shown:
+                base = f"🟢 已登录 · {self._short(shown)}"
         return base + (f" · {age}" if age else "")
 
     def _status_color(self, plat, has):
@@ -464,16 +478,17 @@ class CookieManagerDialog(QDialog):
                 continue
             labels = w.findChildren(QLabel)
             if labels and labels[0].text() == auth.PLATFORM_NAMES.get(plat):
+                lite_name = ""
                 if plat == "netease":
                     has = bool(auth.get_netease_cookie_stored().strip())
                     age = auth.get_cookie_age(plat) if has else ""
                 elif plat == "kugou_lite":
-                    has, _uid = _kugou_lite_state()
+                    has, lite_name = _kugou_lite_state()
                     age = _kugou_lite_age() if has else ""
                 else:
                     has = bool((auth.load_cookies().get(plat, "") or "").strip())
                     age = auth.get_cookie_age(plat) if has else ""
-                labels[1].setText(self._status_text(plat, has, age))
+                labels[1].setText(self._status_text(plat, has, age, lite_name))
                 labels[1].setStyleSheet(self._status_color(plat, has))
                 return
 
@@ -493,10 +508,11 @@ class CookieManagerDialog(QDialog):
         def run():
             info = {"ok": None, "username": ""}
             msg = ""
+            _has, lite_name = _kugou_lite_state()
             try:
                 from music.scrapers.kugou_lite import KuGouLiteClient
                 ok, msg = KuGouLiteClient().verify_session()
-                info = {"ok": ok, "username": ""}
+                info = {"ok": ok, "username": lite_name}
             except Exception as e:  # noqa: BLE001 - 网络异常按验证失败展示
                 info = {"ok": False, "username": ""}
                 msg = str(e)

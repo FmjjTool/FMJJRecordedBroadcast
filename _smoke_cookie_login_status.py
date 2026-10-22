@@ -1,9 +1,12 @@
-"""冒烟：酷狗 / 5sing 登录态识别（Cookie 管理弹窗 + whoami 验证）。
+"""冒烟：Cookie 管理弹窗的登录态识别（whoami 验证 + 状态行文案）。
 
 覆盖：
   1. 酷狗 KuGoo Cookie 解析（昵称 / %uXXXX / 老式 KugooID+t / 游客）
   2. 5sing 站内 checkstatus 接口判定（游客态 → 未登录）
-  3. Cookie 管理弹窗的登录特征配置（酷狗认 KuGoo、5sing 走接口）
+  3. 微博：config.user 恒 null 时改问 users/show 取昵称
+  4. 小红书：探索页 SSR state（首页是 JS 壳，旧实现恒「无法验证」）
+  5. 酷狗概念版：会话文件 / 同账号酷狗昵称
+  6. 弹窗登录特征配置 + 状态行文案
 """
 import os
 import sys
@@ -48,7 +51,24 @@ r = whoami.verify("5sing", guest)
 check("游客 Cookie → 未登录或接口不可达", r.get("ok") in (False, None), r)
 check("游客 Cookie 不误报已登录", r.get("ok") is not True, r)
 
-print("[3] Cookie 管理弹窗配置")
+print("[3] 微博昵称（config.user 已置空）")
+r = whoami.verify("weibo", "SUB=_2A25fake; SUBP=0033WrSXqPxfM725; _T_WM=abc")
+check("伪造 Cookie → 未登录或无法验证", r.get("ok") in (False, None), r)
+check("伪造 Cookie 不误报已登录", r.get("ok") is not True, r)
+
+print("[4] 小红书（探索页 SSR state）")
+r = whoami.verify("xiaohongshu", "a1=fake; web_session=fake")
+check("伪造 Cookie → 未登录或无法验证", r.get("ok") in (False, None), r)
+check("伪造 Cookie 不误报已登录", r.get("ok") is not True, r)
+html = ('<script>window.__INITIAL_STATE__={"user":{"loggedIn":true,"userInfo":'
+        '{"guest":false,"nickname":"小红薯ABC"}},"note":{}}</script>')
+st = whoami._xhs_state(html)
+check("能从 SSR 文本解析 state", st.get("user", {}).get("userInfo", {}).get("nickname") == "小红薯ABC", st)
+
+print("[5] 酷狗概念版昵称")
+check("userid 不匹配时不借昵称", whoami.kugou_nick_for(0) == "", whoami.kugou_nick_for(0))
+
+print("[6] Cookie 管理弹窗配置")
 from gui_qt.cookie_manager import (  # noqa: E402
     BROWSER_LOGIN_CONFIGS, REMOTE_VERIFY_PLATFORMS,
 )
@@ -61,11 +81,11 @@ check("5sing 认 5sing_auth（登录后才种）", "5sing_auth" in fs[2], fs[2])
 check("5sing 仍要站内接口复核", "5sing" in REMOTE_VERIFY_PLATFORMS)
 check("5sing 走 http 登录页", fs[0].startswith("http://"), fs[0])
 
-print("[4] whoami 注册表")
-check("kugou/5sing 都在验证表内",
-      "kugou" in whoami._VERIFIERS and "5sing" in whoami._VERIFIERS)
+print("[7] whoami 注册表")
+for p in ("kugou", "5sing", "weibo", "xiaohongshu"):
+    check(f"{p} 在验证表内", p in whoami._VERIFIERS)
 
-print("[5] 列表状态文案（不能把「无法验证」说成「已登录」）")
+print("[8] 列表状态文案")
 from gui_qt.cookie_manager import CookieManagerDialog  # noqa: E402
 
 
@@ -77,14 +97,19 @@ class _Fake:
 
 
 cases = [
-    ("5sing", {"ok": None, "username": ""}, "🟡 已保存 · 无法验证"),
-    ("5sing", {"ok": False, "username": ""}, "🟠 已保存 · 验证失败"),
-    ("5sing", {"ok": True, "username": "歌慕XINMU"}, "🟢 已登录 · 歌慕XINMU"),
-    ("kugou", {"ok": None, "username": "用户ID 123"}, "🟢 已登录 · 用户ID 123"),
+    ("5sing", {"ok": None, "username": ""}, "", "🟡 已保存 · 无法验证"),
+    ("5sing", {"ok": False, "username": ""}, "", "🟠 已保存 · 验证失败"),
+    ("5sing", {"ok": True, "username": "歌慕XINMU"}, "", "🟢 已登录 · 歌慕XINMU"),
+    ("kugou", {"ok": None, "username": "用户ID 123"}, "", "🟢 已登录 · 用户ID 123"),
+    # 概念版：没有 whoami 探测，名字由会话文件/酷狗昵称提供
+    ("kugou_lite", None, "歆慕", "🟢 已登录 · 歆慕"),
+    ("kugou_lite", {"ok": True, "username": ""}, "歆慕", "🟢 已登录 · 歆慕"),
+    ("kugou_lite", {"ok": None, "username": ""}, "用户ID 678", "🟢 已登录 · 用户ID 678"),
 ]
-for plat, info, want in cases:
-    got = CookieManagerDialog._status_text(_Fake({plat: info}), plat, True, "")
-    check(f"{plat} {info} → {want}", got == want, got)
+for plat, info, name, want in cases:
+    cache = {} if info is None else {plat: info}
+    got = CookieManagerDialog._status_text(_Fake(cache), plat, True, "", name)
+    check(f"{plat} {info} name={name!r} → {want}", got == want, got)
 
 if FAILS:
     print(f"\n{len(FAILS)} 项失败：{FAILS}")
