@@ -1,4 +1,4 @@
-"""Cookie 身份验证：用已保存 Cookie 拉取当前登录用户名（10 平台）。
+"""Cookie 身份验证：用已保存 Cookie 拉取当前登录用户名（11 平台）。
 
 probe(platform) 返回：
     {"ok": True,  "username": "昵称"}  Cookie 有效且拿到用户名
@@ -6,6 +6,9 @@ probe(platform) 返回：
     {"ok": None,  "username": "用户ID xxx"} 无法远程验证，展示 Cookie 中的 ID
     {"ok": None,  "username": ""}      该平台暂不支持自动验证
     {"ok": False, "username": ""}      Cookie 已失效/未登录
+
+verify(platform, cookie) 是同一套判定，但用传入的 Cookie 串（Cookie 管理弹窗
+捕获过程中即时校验用，不落盘）。
 """
 
 from __future__ import annotations
@@ -36,17 +39,17 @@ def probe(platform: str) -> dict:
         cookie = (auth.get_netease_cookie_stored() or "").strip()
     else:
         cookie = (auth.load_cookies().get(platform, "") or "").strip()
+    return verify(platform, cookie)
+
+
+def verify(platform: str, cookie: str) -> dict:
+    """用指定 Cookie 串验证登录态（不读存储；弹窗捕获中即时校验用）。"""
+    cookie = (cookie or "").strip()
     if not cookie:
         return {"ok": False, "username": ""}
-
-    fn = {
-        "bilibili": _bili, "douyin": _douyin, "weibo": _weibo,
-        "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
-        "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
-        "taobao": _taobao,
-    }.get(platform)
+    fn = _VERIFIERS.get(platform)
     if fn is None:
-        return {"ok": None, "username": ""}  # 5sing 暂不支持
+        return {"ok": None, "username": ""}  # 该平台暂不支持自动验证
     try:
         return fn(cookie)
     except Exception:
@@ -329,20 +332,121 @@ def _kw_uname3(cookie: str) -> str:
     return v if v and "%" not in v else ""
 
 
+def _kugou_nick(v: str) -> str:
+    """解码酷狗 NickName（URL 百分号编码；老账号可能是 %uXXXX 或 GBK）。"""
+    import re
+    from urllib.parse import unquote
+
+    v = (v or "").strip()
+    if not v:
+        return ""
+    m = re.findall(r"%u([0-9a-fA-F]{4})", v)  # JS escape 编码（酷狗老账号）
+    if m:
+        return "".join(chr(int(x, 16)) for x in m)
+    for _ in range(2):  # 至多剥两层（%25E6… → %E6… → 汉字）
+        if "%" not in v:
+            break
+        for enc in ("utf-8", "gbk"):
+            try:
+                d = unquote(v, encoding=enc, errors="strict")
+            except Exception:
+                continue
+            if d and d != v:
+                v = d
+                break
+        else:
+            break
+    return v
+
+
+def _kugoo_fields(cookie: str) -> dict:
+    """解析酷狗登录态 Cookie `KuGoo`（形如 KugooID=123&NickName=%E6%AD%8C&Pic=…）。
+
+    酷狗网页端 cmhead.min.js 的 islogined() 就是读这个 Cookie，登录态和昵称
+    全在里面，并不存在独立的 KugooID Cookie——旧实现只找 KugooID 字段，导致
+    明明登录了也判成"无法验证"。
+    """
+    raw = _cookie_field(cookie, "KuGoo")
+    if not raw:
+        return {}
+    out = {}
+    for part in raw.split("&"):
+        k, _, v = part.partition("=")
+        k = k.strip()
+        if k:
+            out[k] = v
+    return out
+
+
 def _kugou(cookie: str) -> dict:
     # 远程用户接口全被拦（userservice 404/passport 403/mobilecdn Access Deny），
-    # 用 Cookie 内登录凭据判定：KugooID（注意双 o，KugouID 拼法查不到值）+
-    # 登录态 Cookie（KuGoo 会话 / t 令牌）同时存在才算有效登录
-    uid = (_cookie_field(cookie, "KugooID")
+    # 只能解析 Cookie：KuGoo（登录态本体，含 KugooID/NickName）→ 老式 KugooID+t
+    kg = _kugoo_fields(cookie)
+    uid = (kg.get("KugooID") or kg.get("KugouID")
+           or _cookie_field(cookie, "KugooID")
            or _cookie_field(cookie, "KugouID")
            or _cookie_field(cookie, "userid"))
-    logged = bool(uid and (_cookie_field(cookie, "KuGoo")
-                           or _cookie_field(cookie, "t")))
-    name = _cookie_field(cookie, "UserName")
-    if logged and name and name != f"kgopen{uid}":
-        return {"ok": True, "username": name}
-    if logged:
+    nick = (_kugou_nick(kg.get("NickName") or kg.get("UserName") or "")
+            or _kugou_nick(_cookie_field(cookie, "UserName")))
+    if nick and nick != f"kgopen{uid}":
+        return {"ok": True, "username": nick}
+    if uid and (kg or _cookie_field(cookie, "t")):
         return {"ok": True, "username": f"用户ID {uid}"}
     if uid:
         return {"ok": None, "username": f"用户ID {uid}"}
-    return {"ok": None, "username": ""}
+    # 连 uid / KuGoo 都没有 = 明确的游客态（不是"无法验证"）
+    return {"ok": False, "username": ""}
+
+
+def _five_checkstatus(cookie: str) -> dict | None:
+    """5sing 站内登录态接口（页面自己用的那个）。不可达返回 None。"""
+    import requests
+
+    h = _headers(cookie)
+    h["Referer"] = "http://5sing.kugou.com/"
+    for url in ("http://service.5sing.kugou.com/user/checkstatus",
+                "https://5sservice.kugou.com/user/checkstatus"):
+        try:
+            d = requests.get(url, headers=h, timeout=12).json()
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if not d.get("isLogin"):
+            return {"ok": False, "username": ""}
+        nick = ""
+        for k in ("NickName", "nickName", "nickname", "UserName", "userName",
+                  "username", "name"):
+            v = d.get(k)
+            if isinstance(v, str) and v.strip():
+                nick = v.strip()
+                break
+        if not nick:
+            uid = d.get("UserId") or d.get("userid")
+            if uid:
+                nick = f"用户ID {uid}"
+        if not nick:
+            nick = _find_nick(d)  # 返回体可能把用户信息套在子对象里
+        return {"ok": True, "username": nick}
+    return None
+
+
+def _fivesing(cookie: str) -> dict:
+    """5sing 登录态：只能问站内 user/checkstatus 接口。
+
+    5sing 的登录态在服务端会话里（sl-session 这类 HttpOnly 会话 Cookie 游客也有），
+    Cookie 名上没有可靠的"登录特征"；个人中心页 /my/ 的 HTML 是 JS 渲染的空壳，
+    游客标记恒在，不能用它判断——只有 checkstatus 是页面自己用的登录态接口。
+    """
+    r = _five_checkstatus(cookie)
+    if r is not None:
+        return r
+    return {"ok": None, "username": ""}  # 接口不可达：无法判定（不当成未登录）
+
+
+_VERIFIERS = {
+    "bilibili": _bili, "douyin": _douyin, "weibo": _weibo,
+    "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
+    "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
+    "taobao": _taobao, "5sing": _fivesing,
+}

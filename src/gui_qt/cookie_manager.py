@@ -41,6 +41,41 @@ COOKIE_PLATFORMS = [
 ]
 
 
+# 浏览器登录入口配置：(url, 标题, 登录特征 Cookie, 登录操作提示)
+# 登录特征 = 登录后才出现、能一眼认出来的 Cookie 名；判不准的平台另见
+# REMOTE_VERIFY_PLATFORMS（再问一次站内接口，tracker.whoami.verify）
+BROWSER_LOGIN_CONFIGS = {
+    "weibo": ("https://m.weibo.cn/", "微博登录（软件内）", ("SUB",), ""),
+    "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",), ""),
+    "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",), ""),
+    "qq": ("https://y.qq.com/", "QQ音乐登录（软件内）",
+           ("uin", "qm_keyst"), "点击右上角「登录」→ 扫码或账号登录"),
+    # 酷狗网页端把整个登录态塞在 KuGoo Cookie 里（KugooID=..&NickName=..&Pic=..），
+    # 没有独立的 KugooID Cookie（旧版写成 KugouID 单 o，更找不到）
+    "kugou": ("https://www.kugou.com/", "酷狗登录（软件内）",
+              ("KuGoo", "KugooID", "userid"), "点击右上角「登录」→ 扫码或账号登录"),
+    "kuwo": ("https://www.kuwo.cn/", "酷我登录（软件内）",
+             ("userid",), "点击顶部「登录」→ 手机号验证码登录"),
+    # 5sing 登录后种 5sing_auth / 5sing_ssid（游客没有），但没有它们也不代表没登录，
+    # 最终以站内 user/checkstatus 接口为准（见 REMOTE_VERIFY_PLATFORMS）
+    "5sing": ("http://5sing.kugou.com/login", "5sing登录（软件内）",
+              ("5sing_auth", "5sing_ssid"), "账号密码登录（支持酷狗账号）"),
+    "xiaohongshu": ("https://www.xiaohongshu.com/", "小红书登录（软件内）",
+                    ("web_session",), "点击「登录」→ 扫码或短信验证"),
+    "kuaishou": ("https://www.kuaishou.com/account/login", "快手登录（软件内）",
+                 # web_st=30天票；webday7_st=7天票（新版常见，只认前者会误报未登录）
+                 ("kuaishou.server.web_st", "kuaishou.server.webday7_st"),
+                 "扫码 / 手机号验证码登录（直达登录页，避开首页登录按钮被备案号遮挡）"),
+    "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
+               ("cookie2", "unb", "sg"),
+               "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
+}
+
+# Cookie 名判不准、需要额外问站内接口确认登录态的平台
+# （5sing 的会话 Cookie 游客也有，只有 user/checkstatus 说得准）
+REMOTE_VERIFY_PLATFORMS = {"5sing"}
+
+
 def _kugou_lite_state() -> tuple[bool, str]:
     """酷狗概念版登录态：会话文件判断 + userid 展示。返回 (已登录, userid文本)。"""
     try:
@@ -381,6 +416,10 @@ class CookieManagerDialog(QDialog):
         base = "🟢 已登录"
         if info["ok"] is False:
             base = "🟠 已保存 · 验证失败"
+        elif info["ok"] is None and not info.get("username"):
+            # 接口不可达/该平台无验证通道：别硬说"已登录"（酷狗、5sing 曾因此
+            # 游客态也显示绿色已登录）
+            base = "🟡 已保存 · 无法验证"
         elif info.get("username"):
             base = f"🟢 已登录 · {self._short(info['username'])}"
         return base + (f" · {age}" if age else "")
@@ -391,6 +430,8 @@ class CookieManagerDialog(QDialog):
         info = self._whoami_cache.get(plat)
         if info and info != "probing" and info["ok"] is False:
             return "color: #ef6c00;"
+        if info and info != "probing" and info["ok"] is None and not info.get("username"):
+            return "color: #eab308;"
         return "color: #4caf50;"
 
     def _start_probe(self, plat):
@@ -530,29 +571,7 @@ class CookieManagerDialog(QDialog):
             QMessageBox.warning(self, "不可用", "浏览器组件（Playwright）未安装，请改用「输入」手动粘贴 Cookie")
             return
 
-        # (url, 标题, 登录特征 Cookie, 登录操作提示)
-        configs = {
-            "weibo": ("https://m.weibo.cn/", "微博登录（软件内）", ("SUB",), ""),
-            "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",), ""),
-            "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",), ""),
-            "qq": ("https://y.qq.com/", "QQ音乐登录（软件内）",
-                   ("uin", "qm_keyst"), "点击右上角「登录」→ 扫码或账号登录"),
-            "kugou": ("https://www.kugou.com/", "酷狗登录（软件内）",
-                      ("KugouID", "userid", "token"), "点击右上角「登录」→ 扫码或账号登录"),
-            "kuwo": ("https://www.kuwo.cn/", "酷我登录（软件内）",
-                     ("userid",), "点击顶部「登录」→ 手机号验证码登录"),
-            "5sing": ("https://5sing.kugou.com/login", "5sing登录（软件内）",
-                      ("userid",), "账号密码登录（支持酷狗账号）"),
-            "xiaohongshu": ("https://www.xiaohongshu.com/", "小红书登录（软件内）",
-                            ("web_session",), "点击「登录」→ 扫码或短信验证"),
-            "kuaishou": ("https://www.kuaishou.com/account/login", "快手登录（软件内）",
-                         # web_st=30天票；webday7_st=7天票（新版常见，只认前者会误报未登录）
-                         ("kuaishou.server.web_st", "kuaishou.server.webday7_st"),
-                         "扫码 / 手机号验证码登录（直达登录页，避开首页登录按钮被备案号遮挡）"),
-            "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
-                       ("cookie2", "unb", "sg"),
-                       "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
-        }
+        configs = BROWSER_LOGIN_CONFIGS
         # 快手登录浏览器回种白名单：只保留设备/环境字段。
         # 登录态票（*_st/passToken/userId）过期后回种会同名覆盖新票；
         # pt_*/p_*/qrsig 等是 QQ 互联残留，会干扰快手登录流程。
@@ -564,6 +583,8 @@ class CookieManagerDialog(QDialog):
             QMessageBox.information(self, "提示", f"{plat} 暂不支持浏览器登录，请使用「输入」")
             return
         url, title, auth_keys, login_hint = configs[plat]
+        # Cookie 名判不准的平台：登录态由站内接口确认（底部提示会显示结论）
+        need_remote = plat in REMOTE_VERIFY_PLATFORMS
 
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
@@ -571,6 +592,7 @@ class CookieManagerDialog(QDialog):
         v = QVBoxLayout(dlg)
         v.setContentsMargins(0, 0, 0, 0)
         hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（页面已自动登录时可直接点击）"
+                      + ("　🔍 登录态会自动向站内接口确认" if need_remote else "")
                       + (f"　💡 {login_hint}" if login_hint else ""))
         hint.setStyleSheet("color: #555; padding: 4px; background: #ffffff;")
         v.addWidget(hint)
@@ -590,7 +612,9 @@ class CookieManagerDialog(QDialog):
         # 底部操作栏：只有用户点「已获取」才保存，不自动不超时
         bar = QHBoxLayout()
         self_keys = "/".join(auth_keys)
-        cap_lbl = QLabel(f"  已捕获 {0} 个 Cookie（登录特征：{self_keys}）")
+        cap_lbl = QLabel("  已捕获 0 个 Cookie" + (
+            "（登录态：等待页面加载后向站内接口确认）" if need_remote
+            else f"（登录特征：{self_keys}）"))
         cap_lbl.setStyleSheet("color: #888; padding: 4px;")
         bar.addWidget(cap_lbl, 1)
         reload_btn = QPushButton("🔄 刷新")
@@ -616,11 +640,107 @@ class CookieManagerDialog(QDialog):
         v.addWidget(bar_w)
 
         jar: dict[str, str] = {}
+        # 同名不同域 Cookie（如 5sing 的会话 Cookie 可能同时挂在 5sing.kugou.com
+        # 与 .kugou.com 上）：主值验证不过时逐个换着试
+        jar_alt: dict[str, list[str]] = {}
+        probe = {"ok": None, "name": "", "running": False, "last": 0.0,
+                 "sig": -1, "best": ""}
+
+        def _jar_str(d: dict) -> str:
+            return "; ".join(f"{k}={v}" for k, v in d.items())
+
+        def _variants():
+            """捕获到的 Cookie 串候选：主值 + 同名备选（一次只换一个名）。"""
+            yield _jar_str(jar)
+            for name, alts in jar_alt.items():
+                for v in alts[:2]:
+                    d = dict(jar)
+                    d[name] = v
+                    yield _jar_str(d)
+
+        def _paint_cap():
+            n = len(jar)
+            cap_lbl.setToolTip("、".join(sorted(jar)))
+            hit = any(k in jar for k in auth_keys)
+            if not need_remote:
+                cap_lbl.setText(f"  已捕获 {n} 个 Cookie" + (
+                    f"（✅ 检测到登录特征 {self_keys}）" if hit
+                    else f"（登录特征：{self_keys}）"))
+                cap_lbl.setStyleSheet(
+                    "color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
+                return
+            # 需要站内接口确认：接口结论优先，接口没结论时才用 Cookie 名兜底
+            ok, name = probe["ok"], probe["name"]
+            if ok is True:
+                txt, color = (f"  已捕获 {n} 个 Cookie（✅ 已登录"
+                              + (f"：{name}" if name else "") + "）"), "#2e7d32"
+            elif ok is False:
+                txt, color = ((f"  已捕获 {n} 个 Cookie（🟠 检测到登录 Cookie，"
+                               "但站内接口判定未登录）") if hit else
+                              (f"  已捕获 {n} 个 Cookie"
+                               "（⚠️ 站内接口判定未登录，请先在页面完成登录）")), "#ef6c00"
+            elif probe["running"]:
+                txt, color = (f"  已捕获 {n} 个 Cookie"
+                              + ("（✅ 检测到登录 Cookie，正在向站内接口确认…）" if hit
+                                 else "（⏳ 正在向站内接口确认登录态…）")), (
+                    "#2e7d32" if hit else "#888")
+            elif hit:
+                txt, color = (f"  已捕获 {n} 个 Cookie（✅ 检测到登录特征 {self_keys}，"
+                              "接口不可达未能确认昵称）"), "#2e7d32"
+            elif n:
+                txt, color = (f"  已捕获 {n} 个 Cookie"
+                              "（站内接口不可达，无法自动确认；可直接保存）"), "#888"
+            else:
+                txt, color = "  已捕获 0 个 Cookie（等待页面加载…）", "#888"
+            cap_lbl.setText(txt)
+            cap_lbl.setStyleSheet(f"color: {color}; padding: 4px;")
+
+        def _remote_check(force=False):
+            """Cookie 名判不准的平台：拿捕获到的 Cookie 直接问站内接口。
+
+            在页面里跑 JSONP 会受页面协议/CORS 限制，这里在后台线程请求接口；
+            主值不通过时把同名不同域的备选值也试一遍。
+            """
+            if not need_remote or not jar or probe["running"]:
+                return
+            now = time.time()
+            sig = len(jar)
+            if not force and sig == probe["sig"] and now - probe["last"] < 5:
+                return
+            probe["sig"], probe["last"], probe["running"] = sig, now, True
+            candidates = list(_variants())[:4]
+            _paint_cap()
+
+            def run():
+                from tracker import whoami
+                info, best = {"ok": None, "username": ""}, ""
+                for ck in candidates:
+                    r = whoami.verify(plat, ck)
+                    if r.get("ok") is True:
+                        info, best = r, ck
+                        break
+                    if r.get("ok") is False and info.get("ok") is None:
+                        info = r
+
+                def done():
+                    probe["running"] = False
+                    probe["ok"] = info.get("ok")
+                    probe["name"] = info.get("username") or ""
+                    probe["best"] = best
+                    _paint_cap()
+                post_to_main(done)
+
+            threading.Thread(target=run, daemon=True).start()
+
+        def _captured_login() -> bool:
+            """本次捕获是否已经拿到登录态（供「已获取」判断要不要确认覆盖）。"""
+            if any(k in jar for k in auth_keys):
+                return True
+            return need_remote and probe["ok"] is True
 
         def _refresh_cap():
-            hit = any(k in jar for k in auth_keys)
-            cap_lbl.setText(f"  已捕获 {len(jar)} 个 Cookie" + (f"（✅ 检测到登录特征 {self_keys}）" if hit else f"（登录特征：{self_keys}）"))
-            cap_lbl.setStyleSheet("color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
+            _paint_cap()
+            _remote_check()
 
         # ==== Win32 覆盖层辅助（Playwright 启动的 Chromium 系窗口类名）====
         import ctypes
@@ -885,6 +1005,11 @@ class CookieManagerDialog(QDialog):
                             for c in ctx.cookies():
                                 n, val = c.get("name"), c.get("value")
                                 if n and val:
+                                    prev = jar.get(n)
+                                    if prev is not None and prev != val:
+                                        alts = jar_alt.setdefault(n, [])
+                                        if prev not in alts:
+                                            alts.append(prev)
                                     jar[n] = val
                             post_to_main(_refresh_cap)
                         except Exception:
@@ -995,7 +1120,8 @@ class CookieManagerDialog(QDialog):
             b.show()
 
         def _do_save():
-            cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
+            # 站内接口验证通过的那一组候选优先（同名不同域时才是对的会话 Cookie）
+            cookie_str = probe["best"] or _jar_str(jar)
             try:
                 auth.set_cookie(plat, cookie_str)
                 self._whoami_cache.pop(plat, None)
@@ -1011,14 +1137,19 @@ class CookieManagerDialog(QDialog):
                 _info_box(QMessageBox.Warning, "无 Cookie",
                           "尚未捕获到任何 Cookie，请先在页面完成登录")
                 return
-            if not any(k in jar for k in auth_keys):
-                # 只有用「无登录特征的捕获」覆盖「已存有效登录」时才确认；
+            if not _captured_login():
+                # 只有用「没拿到登录态的捕获」覆盖「已存有效登录」时才确认；
                 # 其余直接保存（旧版每次都弹「仍要保存吗」，且模态弹窗会卡死）
                 stored = auth.load_cookies().get(plat, "")
-                if any(k in stored for k in auth_keys):
+                had_login = (any(k in stored for k in auth_keys) if auth_keys
+                             else bool(stored.strip()))
+                if had_login:
+                    why = f"登录特征 {self_keys}" if auth_keys else "站内接口"
+                    if need_remote:
+                        why += "／站内接口"
                     _confirm_box(
                         "覆盖确认",
-                        f"当前捕获 {len(jar)} 个 Cookie，但未检测到登录特征（{self_keys}）。\n"
+                        f"当前捕获 {len(jar)} 个 Cookie，但未检测到登录态（{why}）。\n"
                         "保存会覆盖已存的有效登录，确定吗？",
                         _do_save)
                     return
