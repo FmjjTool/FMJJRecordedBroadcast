@@ -181,6 +181,15 @@ def run_pyinstaller(name: str):
         # （QtWebEngine 已移除：登录改走系统浏览器 + Playwright 嵌入）
         "--hidden-import", "qrcode",                        # 扫码登录二维码
     ]
+    # 页面是懒加载的（main_window._page_class 用 importlib 按字符串导入），静态分析
+    # 看不到 gui_qt.pages.*。注意 --collect-submodules 在 spec 执行阶段 sys.path 里
+    # 还没有 src，收集结果为空（实测打包后切页报 ModuleNotFoundError: gui_qt.pages），
+    # 所以这里直接按目录列出全部页面模块。
+    pages_dir = ROOT / "src" / "gui_qt" / "pages"
+    if pages_dir.is_dir():
+        for f in sorted(pages_dir.glob("*.py")):
+            if f.stem != "__init__":
+                cmd += ["--hidden-import", f"gui_qt.pages.{f.stem}"]
     icon = ROOT / "icon.ico"
     if icon.exists():
         cmd += ["--icon", str(icon)]
