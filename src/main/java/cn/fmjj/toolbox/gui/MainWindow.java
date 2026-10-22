@@ -16,6 +16,7 @@ import cn.fmjj.toolbox.gui.pages.InfoResultsPage;
 import cn.fmjj.toolbox.gui.pages.LauncherPage;
 import cn.fmjj.toolbox.gui.pages.LyricsPage;
 import cn.fmjj.toolbox.gui.pages.MigratePage;
+import cn.fmjj.toolbox.gui.pages.MusicSearchPage;
 import cn.fmjj.toolbox.gui.pages.MusicTagPage;
 import cn.fmjj.toolbox.gui.pages.MusicUnlockPage;
 import cn.fmjj.toolbox.gui.pages.OrganizePage;
@@ -195,14 +196,34 @@ public class MainWindow {
         // 已移植（M5 第三刀）
         pageFactories.put("info_batch", InfoBatchPage::new);
         // 已移植（M7 第一刀）
-        pageFactories.put("music_unlock", MusicUnlockPage::new);
+        pageFactories.put("unlock_music", MusicUnlockPage::new);
         pageFactories.put("music_tag", MusicTagPage::new);
+        // 已移植（M6 第一刀）
+        pageFactories.put("netease", MusicSearchPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
             for (NavItem item : group.items()) {
                 pageFactories.putIfAbsent(item.key(), () -> new StubPage(item.label()));
             }
+        }
+        validateRegistry();
+    }
+
+    /**
+     * 注册表校验：已移植页面的 key 必须命中导航项，否则用户永远点不到（静默失效）。
+     * 曾经踩过 `music_unlock` vs `unlock_music` 的坑，这里主动报警。
+     */
+    private void validateRegistry() {
+        List<String> navKeys = allPageKeys();
+        List<String> orphans = pageFactories.keySet().stream()
+                .filter(k -> !navKeys.contains(k))
+                .sorted()
+                .toList();
+        if (!orphans.isEmpty()) {
+            Log.warn("页面注册表与导航不一致（这些页面不会显示）：" + orphans);
+        } else {
+            Log.info("页面注册表校验通过：" + pageFactories.size() + " 个页面全部命中导航");
         }
     }
 

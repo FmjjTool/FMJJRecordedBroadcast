@@ -102,6 +102,28 @@ public final class HttpClient {
 
     // ==================== 便捷方法 ====================
 
+    /** 不跟随重定向的结果（用于拿 302 Location 直链，如酷我 antiserver）。 */
+    public record RedirectResult(int status, String location, String body) {}
+
+    /**
+     * GET 但不跟随重定向，返回状态码 + Location。
+     * 酷我等 CDN 的 302 目标证书较弱，直接读 Location 可避免 TLS 校验失败。
+     */
+    public RedirectResult getRedirect(String url, Map<String, String> headers) throws IOException, InterruptedException {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(20))
+                .GET();
+        b.header("User-Agent", UA_FIREFOX);
+        if (headers != null) headers.forEach(b::header);
+        var noRedirect = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
+                .build();
+        var resp = noRedirect.send(b.build(), HttpResponse.BodyHandlers.ofString());
+        return new RedirectResult(resp.statusCode(),
+                resp.headers().firstValue("Location").orElse(""), resp.body());
+    }
+
     public HttpResponse<String> get(String url, Map<String, String> headers)
             throws IOException, InterruptedException {
         return send(base(url, headers).GET().build());

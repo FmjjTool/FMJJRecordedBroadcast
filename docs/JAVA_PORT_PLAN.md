@@ -169,6 +169,23 @@
    测试用 ffmpeg 现场生成 1 秒静音 mp3/flac，写入→读回断言（含封面 1x1 PNG）。
 5. **未做**：xlsx 批量匹配、网络补全封面（原版右侧功能），随 M6 音乐搜索一起。
 
+## 3.13 M6 第一刀（酷我搜索下载）说明
+
+1. **真实链路已验证**（`FMJJ_NET_TEST=1 mvn test -Dtest=KuwoNetworkIT`）：
+   `searchSong("起风了 周深")` → 5 首周深；`getPlayUrl` → `https://kw-bj.kuwo.cn/...mp3`；
+   `getLyric` → 1247 字符 LRC。
+2. **直链关键技巧**：`antiserver.kuwo.cn` 返回 302，**不跟随重定向**直接读 `Location`
+   就是 mp3 地址。这样避开了目标 CDN 的弱证书（Python urllib 会报
+   `CERTIFICATE_VERIFY_FAILED: EE certificate key too weak`）。
+   为此给 HttpClient 加了 `getRedirect()`（`Redirect.NEVER`）。
+3. **歌词接口要 `m.kuwo.cn` 的 Referer**（用 www 的 Referer 返回空）。
+4. **`_match_any` 语义**：最长片段必须命中；其余片段「至少命中一个」即通过
+   （不是全部命中）—— 一开始写错，用 Python 向量才发现。
+5. **注册表校验**：`MainWindow.validateRegistry()` 在启动时比对 pageFactories 与 NAV_GROUPS，
+   不一致就 WARN。起因是踩了 `music_unlock` vs `unlock_music` 的键名错，页面静默失效。
+6. **未移植**：网易云（eapi/weapi 加密）、QQ（musicu sign）、酷狗（签名）、5sing；
+   抖音指数/B站资源/资产管理/账号追踪。
+
 ## 3.12 桌面启动器与 exe 打包
 
 - `jpackage --type app-image` 生成 `dist/FengMingToolboxJava/`（含精简 JRE，148MB，目标机**不需要装 Java**）。
