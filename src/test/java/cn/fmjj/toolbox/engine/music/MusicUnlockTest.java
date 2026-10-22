@@ -85,6 +85,34 @@ class MusicUnlockTest {
     }
 
     @Test
+    @DisplayName("XM（虾米）：ifmt 头 + 减法/XOR（0x10 起、offset 之后）")
+    void xm(@TempDir Path tmp) throws Exception {
+        var r = MusicUnlock.decrypt(tempCopy("sample.xm", tmp));
+        assertArrayEquals(res("sample.xm.expected"), r.audio());
+        assertEquals("flac", r.ext());
+    }
+
+    @Test
+    @DisplayName("TM（喜马拉雅）：仅修复前 8 字节为 ftyp 头")
+    void tm(@TempDir Path tmp) throws Exception {
+        var r = MusicUnlock.decrypt(tempCopy("sample.tm0", tmp));
+        assertArrayEquals(res("sample.tm0.expected"), r.audio());
+        assertEquals("m4a", r.ext());
+    }
+
+    @Test
+    @DisplayName("x2m / x3m（喜马拉雅 xmly）：前 1024 字节索引重排 + XOR")
+    void xmly(@TempDir Path tmp) throws Exception {
+        var r2 = MusicUnlock.decrypt(tempCopy("sample.x2m", tmp));
+        assertArrayEquals(res("sample.x2m.expected"), r2.audio());
+        assertEquals("m4a", r2.ext());
+
+        var r3 = MusicUnlock.decrypt(tempCopy("sample.x3m", tmp));
+        assertArrayEquals(res("sample.x3m.expected"), r3.audio());
+        assertEquals("m4a", r3.ext());
+    }
+
+    @Test
     @DisplayName("detect_format：魔数识别 flac/ogg/m4a/mp3")
     void detectFormat() {
         assertEquals("flac", MusicUnlock.detectFormat("fLaC....".getBytes()));

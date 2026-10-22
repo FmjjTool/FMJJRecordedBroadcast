@@ -54,6 +54,13 @@
       <version>${jackson.version}</version>
     </dependency>
 
+    <!-- 音乐标签读写（对应 Python 版 mutagen） -->
+    <dependency>
+      <groupId>net.jthink</groupId>
+      <artifactId>jaudiotagger</artifactId>
+      <version>3.0.1</version>
+    </dependency>
+
     <!-- 已获取数据持久化（config/collected.db） -->
     <dependency>
       <groupId>org.xerial</groupId>

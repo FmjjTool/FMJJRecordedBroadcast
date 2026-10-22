@@ -151,8 +151,58 @@ def gen_qmc_vectors():
     print("qmc vectors:", lines)
 
 
+def gen_xm():
+    """虾米 xm：((e - key) & 0xFF) ^ 0xFF = p  →  e = ((p ^ 0xFF) + key) & 0xFF。"""
+    key = 0x5A
+    offset = 0x20
+    plain = b"fLaC" + bytes(range(180))
+    enc = bytearray(plain)
+    for cur in range(offset, len(enc)):
+        enc[cur] = ((plain[cur] ^ 0xFF) + key) & 0xFF
+    header = bytearray(0x10)
+    header[0:4] = b"ifmt"
+    header[4:8] = b"FLAC"
+    header[8:12] = b"\xfe\xfe\xfe\xfe"
+    header[0xC] = offset & 0xFF
+    header[0xD] = (offset >> 8) & 0xFF
+    header[0xE] = (offset >> 16) & 0xFF
+    header[0xF] = key
+    write("sample.xm", bytes(header) + bytes(enc))
+    write("sample.xm.expected", plain)
+    print("xm:", 0x10 + len(enc), "bytes")
+
+
+def gen_tm():
+    """喜马拉雅 tm：仅修复前 8 字节为 ftyp 头。"""
+    plain = b"\x00\x00\x00\x20ftyp" + bytes(range(100))
+    data = b"\x11\x22\x33\x44\x55\x66\x77\x88" + plain[8:]
+    write("sample.tm0", data)
+    write("sample.tm0.expected", plain)
+    print("tm0:", len(data), "bytes")
+
+
+def gen_xmly():
+    """x2m/x3m：前 1024 字节按 table 重排 + XOR（可逆构造）。"""
+    for ext, table_name, xor in (("x2m", "XMLY_X2M_AE", b"xmly"),
+                                 ("x3m", "XMLY_X3M_OE", b"3989d111aad5613940f4fc44b639b292")):
+        table = KEYS[table_name]
+        plain = b"\x00\x00\x00\x20ftyp" + bytes((i * 7 + 3) & 0xFF for i in range(1500))
+        n = min(1024, len(plain))
+        orig = bytearray(plain[:n])
+        # 解密: data[i] = orig[table[i]] ^ xor[i%k] = plain[i]
+        for i in range(n):
+            orig[table[i]] = plain[i] ^ xor[i % len(xor)]
+        data = bytes(orig) + plain[n:]
+        write(f"sample.{ext}", data)
+        write(f"sample.{ext}.expected", plain)
+        print(ext + ":", len(data), "bytes")
+
+
 if __name__ == "__main__":
     gen_ncm()
     gen_kgm()
     gen_kwm()
     gen_qmc_vectors()
+    gen_xm()
+    gen_tm()
+    gen_xmly()

@@ -47,6 +47,13 @@ public final class MusicUnlock {
             Map.entry("bkcflac", "flac"), Map.entry("bkcwav", "wav"));
 
     private static final Set<String> KGM_EXTS = Set.of("kgm", "kgma", "vpr");
+    private static final Set<String> TM_EXTS = Set.of("tm0", "tm2", "tm3", "tm6");
+    private static final Set<String> XMLY_EXTS = Set.of("x2m", "x3m");
+
+    /** XM（虾米）类型映射。 */
+    private static final Map<String, String> XM_TYPE_MAP = Map.of(
+            " WAV", "wav", "FLAC", "flac", " MP3", "mp3", " A4M", "m4a");
+    private static final byte[] TM_HEADER = {0, 0, 0, 0x20, 'f', 't', 'y', 'p'};
 
     private MusicUnlock() {}
 
@@ -57,7 +64,9 @@ public final class MusicUnlock {
     public static Set<String> supportedExts() {
         Set<String> all = new java.util.HashSet<>(QMC_EXT_MAP.keySet());
         all.addAll(KGM_EXTS);
-        all.addAll(Set.of("ncm", "kwm"));
+        all.addAll(TM_EXTS);
+        all.addAll(XMLY_EXTS);
+        all.addAll(Set.of("ncm", "kwm", "xm"));
         return all;
     }
 
@@ -74,6 +83,9 @@ public final class MusicUnlock {
         Result r;
         if ("ncm".equals(ext)) r = decryptNcm(data);
         else if ("kwm".equals(ext)) r = decryptKwm(data);
+        else if ("xm".equals(ext)) r = decryptXm(data);
+        else if (TM_EXTS.contains(ext)) r = decryptTm(data);
+        else if (XMLY_EXTS.contains(ext)) r = decryptXmly(data, ext);
         else if (KGM_EXTS.contains(ext)) r = decryptKgm(data, ext);
         else if (QMC_EXT_MAP.containsKey(ext)) r = decryptQmc(data, ext);
         else throw new IllegalArgumentException("不支持的格式: ." + ext);
@@ -451,6 +463,53 @@ public final class MusicUnlock {
             audio[i] ^= mask[i % 0x20];
         }
         return new Result(audio, new LinkedHashMap<>(), "");
+    }
+
+    // ==================== XM（虾米） ====================
+
+    static Result decryptXm(byte[] data) {
+        if (data.length < 0x10
+                || !(data[0] == 'i' && data[1] == 'f' && data[2] == 'm' && data[3] == 't')
+                || !(data[8] == (byte) 0xFE && data[9] == (byte) 0xFE
+                     && data[10] == (byte) 0xFE && data[11] == (byte) 0xFE)) {
+            throw new IllegalArgumentException("不是有效的 xm 文件");
+        }
+        String typeText = new String(java.util.Arrays.copyOfRange(data, 4, 8), StandardCharsets.ISO_8859_1);
+        String outExt = XM_TYPE_MAP.get(typeText);
+        if (outExt == null) throw new IllegalArgumentException("未知的 xm 文件类型: " + typeText);
+
+        int key = data[0xF] & 0xFF;
+        int offset = (data[0xC] & 0xFF) | ((data[0xD] & 0xFF) << 8) | ((data[0xE] & 0xFF) << 16);
+        byte[] audio = java.util.Arrays.copyOfRange(data, 0x10, data.length);
+        for (int cur = offset; cur < audio.length; cur++) {
+            audio[cur] = (byte) (((((audio[cur] & 0xFF) - key) & 0xFF) ^ 0xFF));
+        }
+        return new Result(audio, new LinkedHashMap<>(), outExt);
+    }
+
+    // ==================== TM（喜马拉雅） ====================
+
+    static Result decryptTm(byte[] data) {
+        byte[] audio = data.clone();
+        System.arraycopy(TM_HEADER, 0, audio, 0, 8);
+        return new Result(audio, new LinkedHashMap<>(), "m4a");
+    }
+
+    // ==================== x2m / x3m（喜马拉雅 xmly） ====================
+
+    static Result decryptXmly(byte[] data, String ext) {
+        byte[] audio = data.clone();
+        int[] table = UnlockKeys.get("x2m".equals(ext) ? "XMLY_X2M_AE" : "XMLY_X3M_OE");
+        byte[] xorKey = ("x2m".equals(ext) ? "xmly" : "3989d111aad5613940f4fc44b639b292")
+                .getBytes(StandardCharsets.US_ASCII);
+        int n = Math.min(1024, audio.length);
+        byte[] orig = java.util.Arrays.copyOfRange(audio, 0, n);
+        for (int i = 0; i < n; i++) {
+            int idx = table[i];
+            if (idx >= n) throw new IllegalArgumentException("x2m/x3m 索引越界");
+            audio[i] = (byte) (orig[idx] ^ xorKey[i % xorKey.length]);
+        }
+        return new Result(audio, new LinkedHashMap<>(), "m4a");
     }
 
     // ==================== 工具 ====================
