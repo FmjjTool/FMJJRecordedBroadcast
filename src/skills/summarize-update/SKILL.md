@@ -57,6 +57,13 @@ python build.py
 - 产物：`dist/installer/FengMingToolbox_Setup_{新版本}.exe`（约 92MB，**文件名无 v 前缀**，轻量版定版后体积从 275MB 降至此；PyInstaller + Inno Setup）
 - 耗时 3 分钟级：后台运行 + 等待完成通知，不要前台死等
 - build.py 内置隐私扫描（Cookie/配置/账号进包自动中止）——扫描失败立即**中止整个流程**并报告，严禁绕过
+- **打包后必须真的跑一次 exe**（隐私扫描 + 体积检查发现不了「能启动但切页就炸」）：
+  `cd dist/FengMingToolbox && QT_QPA_PLATFORM=offscreen timeout 12 ./FengMingToolbox.exe`，
+  退出码 124（跑到超时）= 正常；stderr 出现 Traceback 即中止流程。跑完删掉它生成的
+  `config/ download/ logs/` 再压缩/上传（否则把本机数据打进包）。
+  实测坑：页面是懒加载的（`importlib` 按字符串导入），PyInstaller 静态分析看不到
+  `gui_qt.pages.*`，`--collect-submodules` 在 spec 阶段 sys.path 无 src 时收集为空——
+  必须在 build.py 里按 `src/gui_qt/pages/*.py` 目录生成 hidden-import。
 - 打包失败：中止流程并报告错误，不执行后续步骤
 
 ### 第 4 步：更新 README
@@ -90,13 +97,18 @@ git push origin main
 
 ```powershell
 $in = "protocol=https`nhost=github.com`n`n"
-$out = $in | & "C:/Users/$env:USERNAME/.workbuddy/binaries/PortableGit/versions/1.2.0/mingw64/bin/git-credential-manager.exe" get
+$out = $in | & "C:/Users/$env:USERNAME/.workbuddy/binaries/PortableGit/versions/1.3.0/mingw64/bin/git-credential-manager.exe" get
 $tok = ""
 foreach ($l in ($out -split "`n")) {
   if ($l -match "^password=(.+)$") { $tok = $Matches[1].Trim() }
 }
 $H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json" }
 ```
+
+> PortableGit 版本目录会随客户端升级变化（实测 1.2.0 → 1.3.0）。先
+> `ls ~/.workbuddy/binaries/PortableGit/versions/` 取当前版本；找不到时退回
+> `D:/Program File/WorkbuddyAI/resources/vendor/PortableGit/mingw64/bin/git-credential-manager.exe`
+> （即 `git config credential.helper` 指向的那个）。
 
 **执行方式注意（实测坑）**：
 - 必须把 PowerShell 代码写成 `.ps1` 文件后 `powershell -ExecutionPolicy Bypass -File xxx.ps1` 执行——不能 `powershell -Command "..."`（外层双引号会吞掉 `$` 变量），也不能 `cmd /c`（工具宿主禁用）
