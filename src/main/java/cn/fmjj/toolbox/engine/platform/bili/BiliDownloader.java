@@ -22,11 +22,20 @@ public final class BiliDownloader {
 
     private final BiliParser parser = new BiliParser();
     private final FileDownloader downloader = new FileDownloader();
+    private final cn.fmjj.toolbox.engine.download.SegmentedDownloader segmented =
+            new cn.fmjj.toolbox.engine.download.SegmentedDownloader();
 
-    /** 画质 0 表示最高可用画质。 */
+    /** 画质 0 表示最高可用画质；threads>1 时视频/音频流走分段并行下载。 */
     public Outcome download(String idOrBvid, int targetQn, String cookie, Path outRoot,
                             Consumer<String> log, Consumer<FileDownloader.Progress> progress,
                             BooleanSupplier stop) {
+        return download(idOrBvid, targetQn, cookie, outRoot, log, progress, stop, 1);
+    }
+
+    /** 画质 0 表示最高可用画质；threads>1 时视频/音频流走分段并行下载。 */
+    public Outcome download(String idOrBvid, int targetQn, String cookie, Path outRoot,
+                            Consumer<String> log, Consumer<FileDownloader.Progress> progress,
+                            BooleanSupplier stop, int threads) {
         Consumer<String> logger = log == null ? s -> {} : log;
         Path tmpDir = null;
         try {
@@ -47,15 +56,15 @@ public final class BiliDownloader {
             Path videoTmp = tmpDir.resolve("video.m4s");
             Path audioTmp = tmpDir.resolve("audio.m4s");
 
-            var vr = downloader.download(video.urls(), videoTmp,
-                    BiliParser.headers(info.bvid(), cookie), progress, stop);
+            var vr = fetchStream(video.urls(), videoTmp, BiliParser.headers(info.bvid(), cookie),
+                    progress, stop, threads, logger, "视频流");
             if (!vr.success()) return new Outcome(false, null, "视频流下载失败：" + vr.error(), info, qn);
             logger.accept("✅ 视频流完成（" + (vr.bytes() / 1024 / 1024) + " MB）");
 
             boolean hasAudio = false;
             if (audio != null && !audio.urls().isEmpty()) {
-                var ar = downloader.download(audio.urls(), audioTmp,
-                        BiliParser.headers(info.bvid(), cookie), progress, stop);
+                var ar = fetchStream(audio.urls(), audioTmp, BiliParser.headers(info.bvid(), cookie),
+                        progress, stop, threads, logger, "音频流");
                 if (!ar.success()) return new Outcome(false, null, "音频流下载失败：" + ar.error(), info, qn);
                 hasAudio = true;
                 logger.accept("✅ 音频流完成（" + (ar.bytes() / 1024 / 1024) + " MB）");
@@ -88,6 +97,37 @@ public final class BiliDownloader {
         } finally {
             if (tmpDir != null) deleteTree(tmpDir);
         }
+    }
+
+    /**
+     * 单流下载：threads>1 且远端支持 Range 时走分段并行，否则单流（含镜像回退）。
+     * 对应 Python _download_to_file 的 threads 分支。
+     */
+    private FileDownloader.Result fetchStream(List<String> urls, Path target,
+                                              java.util.Map<String, String> headers,
+                                              Consumer<FileDownloader.Progress> progress,
+                                              BooleanSupplier stop, int threads,
+                                              Consumer<String> log, String label) {
+        if (threads > 1 && !urls.isEmpty()) {
+            try {
+                var probe = segmented.probe(urls.get(0), headers);
+                if (probe.canSegment(threads)) {
+                    log.accept("⚡ " + label + "分段下载（" + threads + " 线程，"
+                            + (probe.total() / 1024 / 1024) + " MB）");
+                    var segResult = segmented.download(urls.get(0), target, headers, threads,
+                            probe.total(), p -> {
+                                if (progress != null) progress.accept(new FileDownloader.Progress(p.done(), p.total()));
+                            }, stop);
+                    if (segResult.success()) {
+                        return new FileDownloader.Result(true, target, "", segResult.bytes());
+                    }
+                    log.accept("⚠️ 分段失败，回退单流：" + segResult.error());
+                }
+            } catch (Exception ignored) {
+                // 分段异常 → 回退单流
+            }
+        }
+        return downloader.download(urls, target, headers, progress, stop);
     }
 
     private static String tail(String s, int max) {
