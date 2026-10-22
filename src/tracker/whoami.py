@@ -15,6 +15,11 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
+try:
+    from . import nick_cache
+except ImportError:  # 直接以顶层模块方式导入（个别脚本 sys.path 指到 tracker/）
+    import nick_cache  # type: ignore[no-redef]
+
 
 def _cookie_field(cookie: str, name: str) -> str:
     for part in (cookie or "").split(";"):
@@ -239,6 +244,11 @@ def _qq(cookie: str) -> dict:
         nick = _find_nick(req.get("data") or {})
         return {"ok": True, "username": nick}
     uin = _cookie_field(cookie, "uin")
+    # 微信登录的账号走不通 musicu 用户接口（恒 500003），昵称只有扫码登录时
+    # 换票接口给的那一份，读缓存补上（未远程复核 → ok 保持 None）
+    cached = nick_cache.get("qq", uin) if uin else ""
+    if cached:
+        return {"ok": None, "username": cached}
     if uin:
         return {"ok": None, "username": f"QQ {uin}"}
     return {"ok": False, "username": ""}
@@ -268,6 +278,9 @@ def _kuaishou(cookie: str) -> dict:
                 if nick:
                     return {"ok": True, "username": nick}
             uid = _cookie_field(cookie, "userId")
+            cached = nick_cache.get("kuaishou", uid) if uid else ""
+            if cached:
+                return {"ok": True, "username": cached}
             return {"ok": True, "username": f"快手用户 {uid}" if uid else "已登录"}
     import requests
 

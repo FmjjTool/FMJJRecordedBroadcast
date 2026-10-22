@@ -71,6 +71,37 @@ BROWSER_LOGIN_CONFIGS = {
                "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
 }
 
+# 登录窗里"顺手抓昵称"的 JS（接口风控严、只有页面上下文问得到的平台）
+# 返回字符串；抓不到返回空串（不猜 DOM，免得把别人的昵称存进来）
+_NICK_FETCH_JS = {
+    "kuaishou": """async () => {
+      try {
+        const r = await fetch('/rest/wd/user/profile', {credentials: 'include',
+          headers: {'Accept': 'application/json'}});
+        const j = await r.json();
+        const u = (j && (j.userProfile || j.data)) || j || {};
+        return (u.user_name || u.userName || u.name || '').toString().trim();
+      } catch (e) { return ''; }
+    }""",
+}
+
+
+def _looks_logged_in(plat: str, jar: dict) -> bool:
+    """登录窗里判断"可以抓昵称了"：出现登录票据 Cookie 才算，避免抓游客空数据。"""
+    if plat == "kuaishou":
+        return any(k.startswith("kuaishou.server.web") or k == "passToken" for k in jar)
+    return True
+
+
+def _save_nick(plat: str, userid, name: str) -> None:
+    """把登录时抓到的昵称写进缓存（whoami 取不到昵称时用它展示）。"""
+    try:
+        from tracker import nick_cache
+        nick_cache.save(plat, userid, name)
+    except Exception:
+        pass
+
+
 # Cookie 名判不准、需要额外问站内接口确认登录态的平台
 # （5sing 的会话 Cookie 游客也有，只有 user/checkstatus 说得准）
 REMOTE_VERIFY_PLATFORMS = {"5sing"}
@@ -566,6 +597,8 @@ class CookieManagerDialog(QDialog):
         name = PLATFORM_NAMES.get(plat, plat)
         try:
             auth.clear_cookie(plat)
+            from tracker import nick_cache
+            nick_cache.drop(plat)  # 昵称缓存跟着登录态一起清
             if plat == "kugou_lite":
                 # 概念版登录态在会话文件（非 Cookie 统一存储），需一并清除
                 from music.scrapers.kugou_lite import clear_session
@@ -1007,8 +1040,22 @@ class CookieManagerDialog(QDialog):
                     if hwnd is not None:
                         post_to_main(lambda: _embed(hwnd))
                     # 轮询捕获（全量含 HttpOnly；窗口被用户手动关闭时退出）
+                    nick_tries = 0  # 昵称抓取次数（接口风控严，只在登录窗里问得到）
+                    poll_i = 0
                     while not state["stop"].is_set():
                         time.sleep(1.5)
+                        poll_i += 1
+                        # 见到登录票据后再问、6s 一次、最多 12 次（登录往往要等一会儿）
+                        if (plat in _NICK_FETCH_JS and nick_tries < 12
+                                and poll_i % 4 == 0 and _looks_logged_in(plat, jar)):
+                            nick_tries += 1
+                            try:
+                                got = page.evaluate(_NICK_FETCH_JS[plat])
+                            except Exception:
+                                got = ""
+                            if isinstance(got, str) and got.strip():
+                                _save_nick(plat, jar.get("userId") or "", got)
+                                nick_tries = 99  # 拿到了就不再问
                         if state["reload"].is_set():
                             state["reload"].clear()
                             try:  # 白屏/卡死的救急重载，失败保留现状
@@ -1368,6 +1415,10 @@ class CookieManagerDialog(QDialog):
         musickey = user.get("musickey") or user.get("music_key") or ""
         if not musicid or not musickey:
             return ""
+        # 微信登录的账号日后问不到昵称（musicu 用户接口恒 500003），登录这一刻存下来
+        nick = (user.get("nick") or user.get("nickname") or user.get("str_nick")
+                or user.get("name") or "")
+        _save_nick("qq", musicid, nick)
         return (f"uin={musicid}; qqmusic_key={musickey}; qm_keyst={musickey}; "
                 f"tmeLoginType=1; wxuin={musicid};")
 

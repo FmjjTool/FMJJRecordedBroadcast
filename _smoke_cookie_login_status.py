@@ -68,6 +68,30 @@ check("能从 SSR 文本解析 state", st.get("user", {}).get("userInfo", {}).ge
 print("[5] 酷狗概念版昵称")
 check("userid 不匹配时不借昵称", whoami.kugou_nick_for(0) == "", whoami.kugou_nick_for(0))
 
+print("[5b] 昵称缓存（QQ音乐/快手 登录时抓的那份）")
+import pathlib  # noqa: E402
+import tempfile  # noqa: E402
+
+from tracker import nick_cache  # noqa: E402
+
+_tmp = pathlib.Path(tempfile.mkdtemp()) / "nick_cache.json"
+nick_cache._file = lambda: _tmp  # 别动用户真实配置
+nick_cache.save("qq", "1152921505019484995", "缓存昵称QQ")
+nick_cache.save("kuaishou", "1942705834", "缓存昵称KS")
+check("qq 缓存生效", whoami.verify("qq", "uin=1152921505019484995; qm_keyst=x")
+      .get("username") == "缓存昵称QQ")
+check("快手缓存生效", whoami.verify(
+    "kuaishou", "kuaishou.server.web_st=1; userId=1942705834").get("username") == "缓存昵称KS")
+check("换号后不张冠李戴", whoami.verify("qq", "uin=999; qm_keyst=x")
+      .get("username") == "QQ 999")
+nick_cache.drop("qq")
+check("清除后回到 uin 兜底", whoami.verify("qq", "uin=1152921505019484995; qm_keyst=x")
+      .get("username") == "QQ 1152921505019484995")
+nick_cache.save("qq", "1152921505019484995", "已注销")
+check("占位名「已注销」不入缓存",
+      whoami.verify("qq", "uin=1152921505019484995; qm_keyst=x")
+      .get("username") == "QQ 1152921505019484995")
+
 print("[6] Cookie 管理弹窗配置")
 from gui_qt.cookie_manager import (  # noqa: E402
     BROWSER_LOGIN_CONFIGS, REMOTE_VERIFY_PLATFORMS,
