@@ -87,6 +87,12 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.1</version>
+        <configuration>
+          <systemPropertyVariables>
+            <!-- 测试隔离：绝不碰真实 config/（否则 CookieStoreTest 会删掉用户 cookies.json） -->
+            <fmjj.home>${project.build.directory}/test-home</fmjj.home>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
       <!-- mvn javafx:run 可直接启动（自动拼 module-path） -->
       <plugin>

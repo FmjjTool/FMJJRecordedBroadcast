@@ -48,7 +48,8 @@ class SettingsTest {
         Settings s = new Settings();
         Path p = s.effectiveWorkDir();
         assertTrue(p.toString().replace('\\', '/').endsWith("download"), p.toString());
-        // appRoot 在测试环境 = target/test-classes
-        assertTrue(p.toString().contains("target"), p.toString());
+        // appRoot 可能是自身 target（首次运行）或兄弟目录的 Python 版（共享登录态），
+        // 只校验目录真实存在，不绑定具体位置
+        assertTrue(java.nio.file.Files.isDirectory(p), p.toString());
     }
 }

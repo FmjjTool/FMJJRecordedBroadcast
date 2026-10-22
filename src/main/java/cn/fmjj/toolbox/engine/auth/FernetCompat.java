@@ -130,7 +130,12 @@ public final class FernetCompat {
     public static String machineGuid() {
         if (cachedGuid != null) return cachedGuid;
         String guid = windowsRegistryGuid();
-        if (guid == null || guid.isBlank()) guid = macNodeFallback();
+        if (guid == null || guid.isBlank()) guid = regQueryGuid();
+        if (guid == null || guid.isBlank()) guid = powershellGuid();
+        if (guid == null || guid.isBlank()) {
+            cn.fmjj.toolbox.core.Log.warn("读取 MachineGuid 失败，退化为 MAC 兜底（与 Python 版 Cookie 将不互通）");
+            guid = macNodeFallback();
+        }
         if (guid == null || guid.isBlank()) guid = "local-default";
         cachedGuid = guid;
         return guid;
@@ -162,7 +167,9 @@ public final class FernetCompat {
             MemorySegment valueName = arena.allocateFrom("MachineGuid", StandardCharsets.UTF_16LE);
             MemorySegment hKeySlot = arena.allocate(ValueLayout.JAVA_LONG);
 
-            long status = (long) (Long) regOpenKeyEx.invokeExact(
+            // 注意：这里不能写成 (long)(Long) —— (Long) 装箱强转会改变 invokeExact 的
+            // 期望签名（返回 Long 而非 long），运行时抛 WrongMethodTypeException
+            long status = (long) regOpenKeyEx.invokeExact(
                     0x80000002L, subKey, 0, 0x20019, hKeySlot); // HKLM, KEY_READ
             if (status != 0) return null;
             long hKey = hKeySlot.get(ValueLayout.JAVA_LONG, 0);
@@ -170,7 +177,7 @@ public final class FernetCompat {
                 MemorySegment data = arena.allocate(512);
                 MemorySegment size = arena.allocate(ValueLayout.JAVA_INT);
                 size.set(ValueLayout.JAVA_INT, 0, 512);
-                long qs = (long) (Long) regQueryValueEx.invokeExact(
+                long qs = (long) regQueryValueEx.invokeExact(
                         hKey, valueName, MemorySegment.NULL, MemorySegment.NULL, data, size);
                 if (qs != 0) return null;
                 int bytes = size.get(ValueLayout.JAVA_INT, 0);
@@ -181,7 +188,53 @@ public final class FernetCompat {
                 regCloseKey.invokeExact(hKey);
             }
         } catch (Throwable t) {
-            return null; // FFM 不可用 → 落 MAC 回退
+            cn.fmjj.toolbox.core.Log.warn("FFM 读取 MachineGuid 失败，尝试 reg query：" + t);
+            return null;
+        }
+    }
+
+    /**
+     * 兜底 2：PowerShell 读注册表。
+     * 部分环境会拦 reg.exe（安全软件/沙箱黑名单），PowerShell 通常仍可用。
+     */
+    private static String powershellGuid() {
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        if (!os.contains("win")) return null;
+        try {
+            Process p = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid")
+                    .redirectErrorStream(true).start();
+            byte[] out = p.getInputStream().readAllBytes();
+            p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            String text = new String(out, java.nio.charset.StandardCharsets.ISO_8859_1).trim();
+            // 输出形如 6e9cd39c-8e44-4a0a-9345-0a4663bf27e1
+            var m = java.util.regex.Pattern.compile("([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
+                    .matcher(text);
+            return m.find() ? m.group(1) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 兜底：调 reg.exe 读 MachineGuid。
+     * FFM 在某些 JDK/安全软件环境下受限（restricted method），必须有这条退路，
+     * 否则会落到 MAC 兜底 → 密钥与 Python 版不一致 → 已保存的 Cookie 全部解不开。
+     */
+    private static String regQueryGuid() {
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        if (!os.contains("win")) return null;
+        try {
+            Process p = new ProcessBuilder("reg", "query",
+                    "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid")
+                    .redirectErrorStream(true).start();
+            byte[] out = p.getInputStream().readAllBytes();
+            p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            String text = new String(out, java.nio.charset.StandardCharsets.ISO_8859_1);
+            var m = java.util.regex.Pattern.compile("MachineGuid\\s+REG_SZ\\s+(\\S+)").matcher(text);
+            return m.find() ? m.group(1).trim() : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 

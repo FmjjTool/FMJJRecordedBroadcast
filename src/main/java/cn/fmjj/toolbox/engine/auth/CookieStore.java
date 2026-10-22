@@ -85,8 +85,15 @@ public final class CookieStore {
     }
 
     private static synchronized void saveRaw(ObjectNode raw) {
+        Path f = file();
         try {
-            JSON.writerWithDefaultPrettyPrinter().writeValue(file().toFile(), raw);
+            // 写前备份：任何写入都把旧文件留一份 cookies.json.bak
+            // （曾经出过事故：单元测试直接删了真实 cookies.json，无备份无法恢复）
+            if (Files.isRegularFile(f)) {
+                Files.copy(f, f.resolveSibling("cookies.json.bak"),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            JSON.writerWithDefaultPrettyPrinter().writeValue(f.toFile(), raw);
         } catch (IOException ignored) {
             // 只读场景由调用方处理
         }
