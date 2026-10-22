@@ -8,7 +8,9 @@ import cn.fmjj.toolbox.engine.platform.MediaItem;
 import cn.fmjj.toolbox.engine.platform.bili.BiliDownloader;
 import cn.fmjj.toolbox.engine.platform.bili.BiliLink;
 import cn.fmjj.toolbox.engine.platform.bili.BiliParser;
+import cn.fmjj.toolbox.engine.net.HttpClient;
 import cn.fmjj.toolbox.engine.platform.douyin.DouyinLink;
+import cn.fmjj.toolbox.engine.platform.douyin.DouyinParser;
 import cn.fmjj.toolbox.engine.platform.weibo.WeiboParser;
 import cn.fmjj.toolbox.engine.store.MediaStore;
 import javafx.application.Platform;
@@ -29,6 +31,7 @@ import javafx.scene.layout.VBox;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -41,7 +44,7 @@ import java.util.function.Consumer;
  */
 public class InfoParsePage extends BasePage {
 
-    private enum Site { BILIBILI, WEIBO, DOUYIN_UNSUPPORTED, UNKNOWN }
+    private enum Site { BILIBILI, WEIBO, DOUYIN, UNKNOWN }
 
     private final TextField linkField = new TextField();
     private final ComboBox<String> qualityBox = new ComboBox<>();
@@ -66,6 +69,8 @@ public class InfoParsePage extends BasePage {
     private BiliParser.PlayInfo playInfo;
     private List<BiliParser.Quality> qualities = new ArrayList<>();
     private MediaItem weiboItem;
+    private DouyinParser.DouyinVideo douyinVideo;
+    private final DouyinParser douyinParser = new DouyinParser();
 
     private Consumer<String> toast;
 
@@ -168,14 +173,56 @@ public class InfoParsePage extends BasePage {
 
         var douyin = DouyinLink.parseText(text);
         if (douyin != null) {
-            site = Site.DOUYIN_UNSUPPORTED;
-            status.setText("抖音链接已识别，但解析需浏览器上下文（Argus 风控），将在 M5 第三刀（playwright）支持");
-            infoTitle.setText("抖音链接：" + (douyin.shortLink() ? "分享短链" : douyin.id()));
-            infoMeta.setText("当前替代：用浏览器下载后放进工作目录，再用「视频转换 / 音频提取」处理");
+            site = Site.DOUYIN;
+            parseDouyin(text, douyin);
             return;
         }
 
-        status.setText("无法识别的链接（支持 B站 / 微博）");
+        status.setText("无法识别的链接（支持 B站 / 微博 / 抖音）");
+    }
+
+    /** 抖音：短链先展开，再抓分享页 SSR 数据。 */
+    private void parseDouyin(String rawText, DouyinLink.LinkInfo link) {
+        parseBtn.setDisable(true);
+        status.setText("解析中…");
+        javafx.concurrent.Task<DouyinParser.DouyinVideo> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected DouyinParser.DouyinVideo call() throws Exception {
+                DouyinLink.LinkInfo resolved = link;
+                if (link.shortLink()) {
+                    resolved = DouyinLink.resolve(rawText, new HttpClient());
+                    if (resolved == null) throw new IllegalStateException("短链展开失败（链接可能已失效）");
+                }
+                if (resolved.type() != DouyinLink.Type.VIDEO) {
+                    throw new IllegalStateException("该链接类型（" + resolved.type()
+                            + "）暂不支持，请用作品链接");
+                }
+                return douyinParser.parse(resolved.id());
+            }
+        };
+        task.setOnSucceeded(e -> {
+            parseBtn.setDisable(false);
+            applyDouyin(task.getValue());
+        });
+        task.setOnFailed(e -> {
+            parseBtn.setDisable(false);
+            status.setText("解析失败：" + task.getException().getMessage());
+        });
+        new Thread(task, "douyin-parse").start();
+    }
+
+    private void applyDouyin(DouyinParser.DouyinVideo v) {
+        this.douyinVideo = v;
+        infoTitle.setText(v.title());
+        var m = DouyinParser.summary(v);
+        infoMeta.setText("作者：" + m.get("作者") + "　时长：" + m.get("时长")
+                + "　点赞：" + m.get("点赞") + "　评论：" + m.get("评论") + "　" + m.get("类型"));
+        qualityBox.setItems(FXCollections.observableArrayList(
+                v.isImagePost() ? "图集（原图）" : "原画（无水印）"));
+        qualityBox.getSelectionModel().select(0);
+        qualityBox.setDisable(true);
+        downloadBtn.setDisable(v.isImagePost() ? v.images().isEmpty() : v.videoUrl().isEmpty());
+        appendLog("✅ 解析成功：" + m.get("类型") + "，作者 " + m.get("作者"));
     }
 
     private void parseBili(String id) {
@@ -269,7 +316,92 @@ public class InfoParsePage extends BasePage {
     private void download() {
         if (site == Site.BILIBILI && videoInfo != null) downloadBili();
         else if (site == Site.WEIBO && weiboItem != null) downloadWeibo();
+        else if (site == Site.DOUYIN && douyinVideo != null) downloadDouyin();
         else status.setText("请先解析");
+    }
+
+    /** 抖音：视频单文件 / 图集逐张。 */
+    private void downloadDouyin() {
+        DouyinParser.DouyinVideo v = douyinVideo;
+        Path outDir = Settings.load().effectiveExportDir()
+                .resolve("抖音_媒体")
+                .resolve(BiliParser.sanitizeFilename(v.author().isBlank() ? "未知" : v.author(), 80, "未知"));
+        stopFlag.set(false);
+        downloadBtn.setDisable(true);
+        progress.setProgress(0);
+        status.setText("下载中…");
+
+        javafx.concurrent.Task<int[]> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected int[] call() {
+                int ok = 0, fail = 0;
+                Map<String, String> headers = Map.of(
+                        "Referer", "https://www.douyin.com/",
+                        "User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                                + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1");
+                if (v.isImagePost()) {
+                    for (int i = 0; i < v.images().size(); i++) {
+                        if (stopFlag.get()) break;
+                        Path target = outDir.resolve(v.awemeId() + "_" + (i + 1) + ".jpg");
+                        var r = fileDownloader.download(List.of(v.images().get(i)), target, headers,
+                                p -> { }, stopFlag::get);
+                        if (r.success()) {
+                            ok++;
+                            appendLog("✅ " + target.getFileName());
+                        } else {
+                            fail++;
+                            appendLog("❌ " + target.getFileName() + "：" + r.error());
+                        }
+                    }
+                } else {
+                    Path target = outDir.resolve(v.awemeId() + ".mp4");
+                    var r = fileDownloader.download(List.of(v.videoUrl()), target, headers,
+                            p -> {
+                                if (p.total() > 0) Platform.runLater(() -> progress.setProgress(p.ratio()));
+                            }, stopFlag::get);
+                    if (r.success()) {
+                        ok++;
+                        appendLog("🎉 " + target);
+                    } else {
+                        fail++;
+                        appendLog("❌ " + r.error());
+                    }
+                }
+                return new int[] {ok, fail};
+            }
+        };
+        task.setOnSucceeded(e -> {
+            int[] r = task.getValue();
+            downloadBtn.setDisable(false);
+            progress.setProgress(1);
+            status.setText("下载完成：成功 " + r[0] + "，失败 " + r[1]);
+            if (r[0] > 0) {
+                recordDouyin(v, outDir.toString());
+                toast("抖音媒体已下载：" + r[0] + " 个");
+            }
+        });
+        task.setOnFailed(e -> {
+            downloadBtn.setDisable(false);
+            status.setText("下载异常：" + task.getException().getMessage());
+        });
+        new Thread(task, "douyin-download").start();
+    }
+
+    private void recordDouyin(DouyinParser.DouyinVideo v, String savedDir) {
+        try (MediaStore store = new MediaStore()) {
+            List<MediaItem.Stream> streams = new ArrayList<>();
+            if (v.isImagePost()) {
+                for (String u : v.images()) streams.add(new MediaItem.Stream("image", "原图", u, List.of(), 0));
+            } else {
+                streams.add(new MediaItem.Stream("video", "原画", v.videoUrl(), List.of(), 0));
+            }
+            MediaItem item = MediaItem.of("douyin", v.awemeId(), v.title(), v.author(),
+                    v.cover(), "", v.durationSeconds(), v.desc(), streams, v.rawJson());
+            store.upsert(item, savedDir);
+            appendLog("📦 已写入已获取库");
+        } catch (Exception e) {
+            appendLog("⚠️ 入库失败：" + e.getMessage());
+        }
     }
 
     private void downloadBili() {

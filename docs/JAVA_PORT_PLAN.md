@@ -32,7 +32,7 @@
 | **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
 | **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
-| **M5 解析与下载** | ✅ 第一刀：B站解析/下载/入库/解析页；✅ 第二刀：多线程分段下载 + 微博解析 + 抖音链接识别；✅ 第三刀-A：批量导入页 + 已获取页 + 五平台链接路由；⬜ 剩余：抖音解析（playwright）、快手/小红书解析 | 🚧 进行中 |
+| **M5 解析与下载** | ✅ B站/微博/**抖音（SSR 分享页）**解析下载、多线程分段、批量导入、已获取、SQLite；⬜ 剩余：快手/小红书（需签名或登录，见 3.15） | ✅ 基本完成 |
 | **M6 信息/资产/追踪页** | 🚧 已完成：单个/批量解析、已获取、酷我搜索下载、**资产管理**；⬜ 剩余：账号获取、抖音指数、B站资源、网易云/QQ/酷狗/5sing、账号追踪卡片 + PNG 导出、主题自动切换 | 🚧 进行中 |
 | **M7 音乐高级** | ✅ 完成：NCM/QMC(v1+v2)/KGM/KWM/XM/TM/X2M/X3M 解密 + 标签读写（JAudiotagger）；⬜ 剩余：网络匹配/封面补全（随 M6 音乐搜索） | ✅ 完成 |
 | **M8 票务购物与直播** | 大麦/秀动/会员购、淘宝商品、抖音弹幕姬（WebSocket）、B站弹幕姬（纯 HTTP FLV 录制 + 弹幕 XML）、图片裁切、封面制作、媒体筛选（MD5 去重）、媒体压缩 | ⬜ |
@@ -199,6 +199,25 @@
      暂缓，先做能验证的功能。
 3. 原版 asset 页的「原始数据」列依赖 `asset_index.db` 缓存（扫描 json + 媒体目录），
    Java 版暂未移植该缓存层；当前统计口径只按扩展名分类。
+
+## 3.15 抖音 SSR 路线 + 快手/小红书探测结论
+
+**抖音（已实现，不需要 playwright）**：
+- 实测 `https://www.iesdouyin.com/share/video/{id}/` 返回 200，页面内嵌
+  `window._ROUTER_DATA = {...}`，`loaderData["video_(id)/page"].videoInfoRes.item_list[0]`
+  就是完整 aweme 对象（desc/author/video/statistics/images）。
+- 这比 Python 版的 Playwright 路线**更轻**（原版走浏览器是因为 `aweme/detail` 被 Argus 拦，
+  但分享页 SSR 是另一条路）。
+- 实现：`DouyinParser`（平衡括号提取 JSON + 字段映射 + `playwm`→`play` 去水印）；
+  短链由 `DouyinLink.resolve` 展开。图集与视频都支持下载。
+- **未验证项**：本机拿不到真实 aweme_id（热榜 aweme 接口返回空、搜索接口 `Url doesn't match`），
+  解析器只用离线 fixture 验证过结构；真实链接请在页面上粘一条试。
+
+**快手（暂缓）**：`v.m.chenzhongtech.com/fw/photo/{id}` 返回 200 但页面只有
+`__CDN_DISPATCH__`/`__KCONF__` 空壳，数据在 `kuaishou.com/graphql`（需 cookie + 签名）。
+
+**小红书（暂缓）**：`xiaohongshu.com/explore/{id}` 无 xsec_token 时 302 跳登录，
+数据需登录态 + `__INITIAL_STATE__`（登录页不返回）。
 
 ## 3.12 桌面启动器与 exe 打包
 
