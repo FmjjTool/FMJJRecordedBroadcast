@@ -22,3 +22,6 @@ logs/
 dist-java/
 *.msi
 *.exe
+
+# jpackage 产物（148MB，不进仓库）
+dist/

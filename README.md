@@ -23,8 +23,21 @@
 | **单个解析页**（B站/微博入口 → 解析 → 下载 → 自动入库；抖音给出明确提示） | ✅ M5 |
 | **批量导入页**（多行链接 → 五平台识别 → 逐条解析下载 → 实时状态） | ✅ M5 |
 | **已获取页**（平台筛选 / 打开 / 删除 / 导出 CSV） | ✅ M5 |
+| **音乐解密**（NCM / QMC v1+v2 / KGM / KWM，跨语言样本验证） | ✅ M7 |
 | 抖音解析（playwright）、快手/小红书解析 | 🚧 M5 后续 |
-| 其余 21 个页面 | 🚧 占位中 |
+| XM/TM/XMLY 解密、音乐标签、音乐搜索下载 | 🚧 M7 后续 |
+| 其余 20 个页面 | 🚧 占位中 |
+
+## 双击运行（Windows）
+
+`jpackage` 打的 app-image 自带精简 JRE，**目标机不用装 Java**：
+
+```
+dist\FengMingToolboxJava\FengMingToolboxJava.exe      # 直接双击
+桌面\封茗工具箱 Java版.vbs                             # 桌面启动器（推荐）
+```
+
+重新打包：`package_exe.bat`（需 JDK 27 + Maven）。exe 依赖同目录 `runtime/`、`app/`，不能单独复制。
 
 **移植正确性保障**：所有引擎级单元测试的期望值均由 Python 原版运行时生成
 （见 `src/test/java/.../` 测试类的注释），不是手写近似值——包括

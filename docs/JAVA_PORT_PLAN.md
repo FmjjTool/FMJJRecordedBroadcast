@@ -34,7 +34,7 @@
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
 | **M5 解析与下载** | ✅ 第一刀：B站解析/下载/入库/解析页；✅ 第二刀：多线程分段下载 + 微博解析 + 抖音链接识别；✅ 第三刀-A：批量导入页 + 已获取页 + 五平台链接路由；⬜ 剩余：抖音解析（playwright）、快手/小红书解析 | 🚧 进行中 |
 | **M6 信息/资产/追踪页** | 单个/批量解析、账号获取、已获取、抖音指数、B站资源、资产管理；音乐 5 平台搜索/下载；账号追踪卡片 + PNG 导出；主题自动切换（跟随系统/定时） | ⬜ |
-| **M7 音乐高级** | 30+ 加密音乐解密（ncm/qmc/mgg/kgm/kwm…逐一移植）、音乐标签编辑（JAudiotagger）、网络匹配 | ⬜ |
+| **M7 音乐高级** | ✅ 第一刀：NCM/QMC(v1+v2)/KGM/KWM 解密引擎 + 解密页；⬜ 剩余：XM/TM/XMLY、音乐标签编辑（JAudiotagger）、网络匹配 | 🚧 进行中 |
 | **M8 票务购物与直播** | 大麦/秀动/会员购、淘宝商品、抖音弹幕姬（WebSocket）、B站弹幕姬（纯 HTTP FLV 录制 + 弹幕 XML）、图片裁切、封面制作、媒体筛选（MD5 去重）、媒体压缩 | ⬜ |
 | **M9 打包分发** | jpackage 打包（Windows msi/exe）、FFmpeg 检测与自定义路径、check_deps 自检、隐私扫描（config/download/logs 不入包） | ⬜ |
 
@@ -139,6 +139,31 @@
    导出 CSV（UTF-8 BOM，Excel 直接打开不乱码）。
 4. **仍待办**：抖音解析（需 playwright-java + a_bogus，见难点清单）、
    快手/小红书解析（签名/Cookie 体系）、已获取页的分页与批量导出。
+
+## 3.11 M7 第一刀（音乐解密）说明
+
+1. **已移植 4 族算法**（逐行对照 Python music_unlock.py）：
+   - NCM：AES-128-ECB keybox（`hzHRAmso5kInbaxW`）+ 256 字节 RC4 变体密钥流 + meta（`163 key(Don't modify):` 外层 / `music163:` 内层）
+   - QMC：v1 静态表（`offset²+27`）、v2 Map 密码（`offset²+71214` 旋转）、v2 RC4 分段（首段 0x80 / 段 5120）
+   - KGM/KGMA/VPR：动态 mask（272 表 + `T(x)=x^((x&0xF)<<4)` 变换，T 是自逆）
+   - KWM：`yeelion-kuwo-*` 头 + 文件密钥 XOR（0x400 偏移）
+   - TEA（TarsCpp TCTEA CBC）用于 QMC EncV2 主密钥
+2. **密钥表**：`_unlock_keys.json` 原样放进 resources（QMC/KGM 共 11 张表）。
+3. **跨语言验证**：`tools/gen_music_samples.py` 用 Python + pycryptodome 按原版算法**加密**生成
+   sample.ncm / sample.kgm / sample.kwm + QMC mask 向量，Java 解密后与 `.expected` 逐字节比对
+   （8 个测试全绿）。这比"能解一个真实文件"更能证明算法一致。
+4. **未移植**：XM（虾米）/ TM（喜马拉雅）/ XMLY（x2m/x3m 索引重排）—— 算法独立，随 M7 第二刀。
+5. **已知差异**：QMC 的 `STag`（未写密钥）与 `QTag`（KeySize BE）分支已实现但无样本验证；
+   真实 QTag 文件需人工验证一次。
+
+## 3.12 桌面启动器与 exe 打包
+
+- `jpackage --type app-image` 生成 `dist/FengMingToolboxJava/`（含精简 JRE，148MB，目标机**不需要装 Java**）。
+- 桌面放 `封茗工具箱 Java版.vbs`（双击启动，无控制台窗口）。**不能只复制 exe**：
+  app-image 的 exe 依赖同目录 `runtime/` 与 `app/`。
+- 重新打包：`package_exe.bat`（或手动 `mvn package` → 复制 jar 到 target/lib → jpackage）。
+  注意 .bat 必须是 CRLF 换行，否则 cmd 解析错乱。
+- 主类用 `cn.fmjj.toolbox.Launcher`（非 Application 子类），规避 classpath 启动的 JavaFX 模块检查。
 
 ## 4. 依赖映射（Python → Java）
 

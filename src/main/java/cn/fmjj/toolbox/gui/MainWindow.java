@@ -16,6 +16,7 @@ import cn.fmjj.toolbox.gui.pages.InfoResultsPage;
 import cn.fmjj.toolbox.gui.pages.LauncherPage;
 import cn.fmjj.toolbox.gui.pages.LyricsPage;
 import cn.fmjj.toolbox.gui.pages.MigratePage;
+import cn.fmjj.toolbox.gui.pages.MusicUnlockPage;
 import cn.fmjj.toolbox.gui.pages.OrganizePage;
 import cn.fmjj.toolbox.gui.pages.RenameBatchPage;
 import cn.fmjj.toolbox.gui.pages.StubPage;
@@ -192,6 +193,8 @@ public class MainWindow {
         pageFactories.put("info_parse", InfoParsePage::new);
         // 已移植（M5 第三刀）
         pageFactories.put("info_batch", InfoBatchPage::new);
+        // 已移植（M7 第一刀）
+        pageFactories.put("music_unlock", MusicUnlockPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
