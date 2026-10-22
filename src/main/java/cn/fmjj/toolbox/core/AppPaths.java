@@ -15,15 +15,12 @@ import java.nio.file.Paths;
  *     logs/      运行日志
  * </pre>
  *
- * appRoot 解析优先级：
- * <ol>
- *   <li>环境变量 {@code FMJJ_HOME}（显式指定）</li>
- *   <li>自身目录（jar 所在目录）下已有 config/ → 独立运行</li>
- *   <li>兄弟目录 {@code ../FMJJRecordedBroadcast}（Python 版）→ **共享登录态与数据**</li>
- *   <li>兜底：自身目录</li>
- * </ol>
- * 第 3 条是为了「Java 版与原版共用同一份 cookies.json」，否则用户在 Python 版扫码登录后
- * Java 版读不到（曾经踩过：CookieStore.get 返回空，误判成解密失败）。
+ * <p><b>边界</b>：Java 版**只用自己的目录**，绝不读写 Python 版仓库的任何文件。
+ * （曾经为了「登录态互通」去探测兄弟目录 {@code ../FMJJRecordedBroadcast/config}，
+ * 结果单元测试里的 deleteIfExists 直接删掉了用户真实的 cookies.json —— 不可恢复。
+ * 结论：跨仓库共享数据是红线，宁可让用户手动导入，也不能隐式串味。）
+ *
+ * <p>如需自定义位置，设环境变量 {@code FMJJ_HOME}；测试用系统属性 {@code fmjj.home}（优先级更高）。
  */
 public final class AppPaths {
 
@@ -52,26 +49,15 @@ public final class AppPaths {
     }
 
     /**
-     * 根目录选择（纯函数，便于测试）：显式 env → 自身/上级有 cookies.json →
-     * 兄弟目录 FMJJRecordedBroadcast 有 cookies.json → 自身。
+     * 根目录选择（纯函数，便于测试）：显式指定 → 自身目录。
+     * **不探测兄弟目录**（跨仓库共享数据是红线，见类注释）。
      */
     static Path pickRoot(Path self, String envHome) {
         if (envHome != null && !envHome.isBlank()) {
             Path p = Paths.get(envHome);
             if (Files.isDirectory(p)) return p.toAbsolutePath().normalize();
         }
-        Path probe = self;
-        for (int i = 0; i < 5 && probe != null; i++) {
-            if (hasCookieFile(probe)) return probe;
-            Path sibling = probe.resolveSibling("FMJJRecordedBroadcast");
-            if (hasCookieFile(sibling)) return sibling.toAbsolutePath().normalize();
-            probe = probe.getParent();
-        }
         return self;
-    }
-
-    private static boolean hasCookieFile(Path dir) {
-        return dir != null && Files.isRegularFile(dir.resolve("config").resolve("cookies.json"));
     }
 
     /** jar/classes 所在目录。 */
