@@ -32,7 +32,7 @@
 | **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
 | **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
-| **M5 解析与下载** | B站/抖音/微博/快手/小红书 解析器（游客→兜底→Cookie 降级链）、媒体批量落盘、DASH 下载 + ffmpeg 合并、a_bogus（见难点）、已获取数据 SQLite 持久化（xerial sqlite-jdbc） | ⬜ |
+| **M5 解析与下载** | ✅ 第一刀：B站解析（view/playurl/选流）+ 单流下载（镜像回退/断点续传）+ ffmpeg DASH 合并 + SQLite 入库 + 单个解析页；⬜ 剩余：抖音/微博/快手/小红书、a_bogus、多线程分段下载、批量导入/已获取页 | 🚧 进行中 |
 | **M6 信息/资产/追踪页** | 单个/批量解析、账号获取、已获取、抖音指数、B站资源、资产管理；音乐 5 平台搜索/下载；账号追踪卡片 + PNG 导出；主题自动切换（跟随系统/定时） | ⬜ |
 | **M7 音乐高级** | 30+ 加密音乐解密（ncm/qmc/mgg/kgm/kwm…逐一移植）、音乐标签编辑（JAudiotagger）、网络匹配 | ⬜ |
 | **M8 票务购物与直播** | 大麦/秀动/会员购、淘宝商品、抖音弹幕姬（WebSocket）、B站弹幕姬（纯 HTTP FLV 录制 + 弹幕 XML）、图片裁切、封面制作、媒体筛选（MD5 去重）、媒体压缩 | ⬜ |
@@ -104,6 +104,18 @@
    原版的自定义条目（launcher_items 持久化）随 M6 全局设置补。
 4. **回收站**：Python 用 send2trash；Java 用 `Desktop.moveToTrash`
    （不可用时退化永久删除，页面会提示）。
+
+## 3.8 M5 第一刀（B站链路）说明
+
+1. **已验证真实链路**：`BiliParser.videoInfo/playInfo` 对线上 API 调通
+   （游客身份：5 档画质 / 6 条视频流 / 3 条音频流，AVC 优先命中 480P；
+   登录 Cookie 后可得 1080P+，与 B站权限模型一致）。
+2. **下载器**：镜像回退 + `.part` + Range 断点续传已实现；
+   IDM 风格多线程分段（Python `media_downloader._download_ranged`）留第二刀。
+3. **链接类型**：只处理 video/user/liveroom/dynamic 四类；
+   装扮/收藏集/漫展（lottery/suit/blackboard）属 M6「B站资源」页。
+4. **入库**：`config/collected.db` 的 media 表（platform+media_id 唯一，UPSERT）。
+   与 Python 的增量库表结构不同（原版按平台分表），M6 做「已获取」页时统一对齐。
 
 ## 4. 依赖映射（Python → Java）
 
