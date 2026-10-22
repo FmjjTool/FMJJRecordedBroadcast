@@ -4,6 +4,7 @@ import cn.fmjj.toolbox.core.AppPaths;
 import cn.fmjj.toolbox.core.Log;
 import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.gui.dialogs.CookieManagerDialog;
+import cn.fmjj.toolbox.gui.pages.AssetPage;
 import cn.fmjj.toolbox.gui.pages.AudioPage;
 import cn.fmjj.toolbox.gui.pages.BasePage;
 import cn.fmjj.toolbox.gui.pages.CalendarPage;
@@ -200,6 +201,7 @@ public class MainWindow {
         pageFactories.put("music_tag", MusicTagPage::new);
         // 已移植（M6 第一刀）
         pageFactories.put("netease", MusicSearchPage::new);
+        pageFactories.put("asset", AssetPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
