@@ -82,7 +82,7 @@ public class InfoParsePage extends BasePage {
 
     @Override
     protected Node build() {
-        linkField.setPromptText("粘贴链接或分享文本（B站 / 微博；抖音待支持）");
+        linkField.setPromptText("粘贴链接或分享文本（B站 / 微博 / 抖音）");
         linkField.setOnAction(e -> parse());
         downloadBtn.setDisable(true);
         progress.setPrefWidth(200);
@@ -111,7 +111,8 @@ public class InfoParsePage extends BasePage {
         Label pageTitle = new Label(title());
         pageTitle.getStyleClass().add("page-title");
         Label hint = new Label("B站：详情 + 画质 + DASH 音视频合并（可多线程分段下载）；"
-                + "微博：图文/视频媒体下载；解析结果自动入库（config/collected.db）");
+                + "微博：图文/视频媒体下载；抖音：走系统 Edge/Chrome 渲染（约 10-15 秒）；"
+                + "解析结果自动入库（config/collected.db）");
         hint.getStyleClass().add("stub-desc");
         hint.setWrapText(true);
 

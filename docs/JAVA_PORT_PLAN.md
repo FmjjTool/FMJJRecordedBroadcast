@@ -200,18 +200,27 @@
 3. 原版 asset 页的「原始数据」列依赖 `asset_index.db` 缓存（扫描 json + 媒体目录），
    Java 版暂未移植该缓存层；当前统计口径只按扩展名分类。
 
-## 3.15 抖音 SSR 路线 + 快手/小红书探测结论
+## 3.15 抖音解析路线（已实现：系统浏览器 dump-dom）
 
-**抖音（已实现，不需要 playwright）**：
-- 实测 `https://www.iesdouyin.com/share/video/{id}/` 返回 200，页面内嵌
-  `window._ROUTER_DATA = {...}`，`loaderData["video_(id)/page"].videoInfoRes.item_list[0]`
-  就是完整 aweme 对象（desc/author/video/statistics/images）。
-- 这比 Python 版的 Playwright 路线**更轻**（原版走浏览器是因为 `aweme/detail` 被 Argus 拦，
-  但分享页 SSR 是另一条路）。
-- 实现：`DouyinParser`（平衡括号提取 JSON + 字段映射 + `playwm`→`play` 去水印）；
-  短链由 `DouyinLink.resolve` 展开。图集与视频都支持下载。
-- **未验证项**：本机拿不到真实 aweme_id（热榜 aweme 接口返回空、搜索接口 `Url doesn't match`），
-  解析器只用离线 fixture 验证过结构；真实链接请在页面上粘一条试。
+**结论：纯 HTTP 不可行，用系统 Edge/Chrome 的 `--dump-dom` 可行。**
+
+实测数据（2026-10-23，样本 aweme `7415554945589513513`）：
+
+| 路线 | 结果 |
+|---|---|
+| 分享页 `iesdouyin.com/share/video/{id}/` | 200，32KB，**`videoInfoRes` 缺失**（假 ID 页面反而有骨架，真实 ID 没有数据） |
+| PC 页 `douyin.com/video/{id}` | 200，72KB 空壳，无 `RENDER_DATA`/`__INITIAL_STATE__`/`_ROUTER_DATA` |
+| 老接口 `iteminfo` / `snssdk` / `m.douyin` | **200 + 空体**（Argus 特征） |
+| **Edge `--headless=new --dump-dom`** | ✅ 1.1MB 渲染后 DOM：`<source src>` 直链、`data-e2e-aweme-id`、`<title>`、`data-e2e="user-info"` 内昵称 |
+
+实现要点：
+- `DouyinBrowser`：按 Edge(x86/x64) → Chrome 顺序找浏览器，`--virtual-time-budget=5000`，
+  临时 profile，读完 stdout 后删目录；可用 `FMJJ_BROWSER` 环境变量覆盖路径。
+- `DouyinParser.parse()`：先试 HTTP 分享页（有 SSR 就直接用），失败降级浏览器；`fromDom()` 解析 DOM。
+- **提取坑**：`user-info` 区块内昵称藏在多层 `<a><span>` 里，且外层 style 很长，
+  用「正则去标签 + split」会残留 `<div`；改为 `firstTextNode()` 逐标签跳过取第一个非空文本节点。
+- 耗时：首次约 51s（含 HTTP 尝试 + 冷启动），优化后 **约 14s**（降 virtual-time-budget 到 5000）。
+- 代价：需要目标机有 Edge/Chrome（Windows 自带 Edge，满足）；比 Python 版 Playwright 轻（不下载 Chromium）。
 
 **快手（暂缓）**：`v.m.chenzhongtech.com/fw/photo/{id}` 返回 200 但页面只有
 `__CDN_DISPATCH__`/`__KCONF__` 空壳，数据在 `kuaishou.com/graphql`（需 cookie + 签名）。

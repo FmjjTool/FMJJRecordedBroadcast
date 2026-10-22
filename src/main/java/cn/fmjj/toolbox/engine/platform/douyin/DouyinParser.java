@@ -44,26 +44,130 @@ public final class DouyinParser {
 
     public DouyinParser(HttpClient http) { this.http = http; }
 
-    /** 抓分享页并解析。 */
+    /** 抓分享页并解析：先试 HTTP（有 SSR 就用），否则用系统浏览器渲染。 */
     public DouyinVideo parse(String awemeId) throws Exception {
         String url = String.format(SHARE_URL, awemeId);
-        String html = http.getText(url, Map.of(
-                "User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-                        + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-                "Referer", "https://www.douyin.com/"));
-        return fromRouterData(html);
+        String httpError = null;
+        try {
+            String html = http.getText(url, Map.of(
+                    "User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                            + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+                    "Referer", "https://www.douyin.com/"));
+            return fromRouterData(html);
+        } catch (Exception e) {
+            httpError = e.getMessage();
+        }
+        // 降级：系统浏览器渲染（DOM 里有 <source src> 直链与 aweme_id）
+        if (!DouyinBrowser.available()) {
+            throw new IllegalStateException("抖音解析需要浏览器渲染，但未找到 Edge/Chrome。"
+                    + "（HTTP 直连失败原因：" + httpError + "）");
+        }
+        String dom = DouyinBrowser.fetchDom("https://www.douyin.com/video/" + awemeId, 45);
+        return fromDom(dom);
+    }
+
+    // ==================== DOM 解析（浏览器渲染后） ====================
+
+    private static final java.util.regex.Pattern P_AWEME_ID =
+            java.util.regex.Pattern.compile("data-e2e-aweme-id=\"(\\d+)\"");
+    private static final java.util.regex.Pattern P_TITLE =
+            java.util.regex.Pattern.compile("<title>(.*?)</title>", java.util.regex.Pattern.DOTALL);
+    private static final java.util.regex.Pattern P_AUTHOR =
+            java.util.regex.Pattern.compile("data-e2e=\"user-info\"[^>]*>([\\s\\S]{0,3000})");
+    private static final java.util.regex.Pattern P_SOURCE =
+            java.util.regex.Pattern.compile("<source[^>]*src=\"([^\"]+)\"");
+    private static final java.util.regex.Pattern P_USER_LINK =
+            java.util.regex.Pattern.compile("//www\\.douyin\\.com/user/([A-Za-z0-9_-]{10,})");
+    private static final java.util.regex.Pattern P_IMG =
+            java.util.regex.Pattern.compile("<img[^>]*src=\"(https://[^\"]*douyinpic\\.com/[^\"]+)\"");
+
+    /** 解析浏览器渲染后的 DOM（可离线测试）。 */
+    public static DouyinVideo fromDom(String html) {
+        if (html == null || html.isBlank()) throw new IllegalStateException("页面为空");
+
+        String awemeId = "";
+        var mId = P_AWEME_ID.matcher(html);
+        if (mId.find()) awemeId = mId.group(1);
+
+        String title = "";
+        var mTitle = P_TITLE.matcher(html);
+        if (mTitle.find()) {
+            title = unescape(mTitle.group(1)).strip();
+            if (title.endsWith(" - 抖音")) title = title.substring(0, title.length() - 4).strip();
+        }
+
+        // 作者：user-info 区块里第一个"非空文本节点"（昵称），后面依次是"认证徽章/音乐人/粉丝…"
+        String author = "";
+        var mAuthor = P_AUTHOR.matcher(html);
+        if (mAuthor.find()) author = firstTextNode(mAuthor.group(1));
+        String authorId = "";
+        var mUid = P_USER_LINK.matcher(html);
+        if (mUid.find()) authorId = mUid.group(1);
+
+        // 视频直链：多条 CDN 镜像，第一条为主
+        List<String> sources = new ArrayList<>();
+        var mSrc = P_SOURCE.matcher(html);
+        while (mSrc.find()) {
+            String u = unescape(mSrc.group(1));
+            if (u.startsWith("http") && !sources.contains(u)) sources.add(u);
+        }
+        String videoUrl = sources.isEmpty() ? "" : sources.get(0);
+
+        String cover = "";
+        var mImg = P_IMG.matcher(html);
+        if (mImg.find()) cover = unescape(mImg.group(1));
+
+        if (awemeId.isEmpty() && title.isEmpty() && videoUrl.isEmpty()) {
+            throw new IllegalStateException("页面里没有作品数据（可能已删除/私密，或未加载完成）");
+        }
+        String desc = title.isEmpty() ? "" : title;
+        return new DouyinVideo(awemeId, desc, author, authorId, cover, videoUrl,
+                List.of(), 0, 0, 0, 0, 0, "");
+    }
+
+    private static String unescape(String s) {
+        return s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'")
+                .replace("&lt;", "<").replace("&gt;", ">");
+    }
+
+    /**
+     * 取 HTML 片段里第一个非空文本节点。
+     * 不能用「去标签 + split 空格」：长 style 属性会让 `&lt;[^&gt;]+&gt;` 匹配不完整，残留 `&lt;div`。
+     */
+    static String firstTextNode(String block) {
+        if (block == null) return "";
+        int i = 0;
+        while (i < block.length()) {
+            int lt = block.indexOf('<', i);
+            if (lt < 0) break;
+            int gt = block.indexOf('>', lt);
+            if (gt < 0) break;
+            int nextLt = block.indexOf('<', gt + 1);
+            if (nextLt < 0) break;
+            String text = unescape(block.substring(gt + 1, nextLt)).strip();
+            if (!text.isEmpty()) return text;
+            i = nextLt;
+        }
+        return "";
     }
 
     /** 纯解析：HTML → DouyinVideo（可离线测试）。 */
     public static DouyinVideo fromRouterData(String html) throws Exception {
         String json = extractRouterData(html);
-        if (json == null) throw new IllegalStateException("页面里没有 _ROUTER_DATA（可能被风控或链接无效）");
+        if (json == null) {
+            // 实测：真实视频的分享页 / PC 页都是 72KB 左右空壳（JS 渲染 + 风控），不含任何数据
+            boolean shellPage = html != null && html.length() > 1000;
+            throw new IllegalStateException(shellPage
+                    ? "抖音对纯 HTTP 请求返回空壳页面（JS 渲染 + 风控），需要浏览器上下文才能解析。"
+                      + "当前版本暂不支持抖音解析，请用原 Python 版处理，或等待浏览器方案（路线图 M5-浏览器）"
+                    : "页面内容异常（可能链接无效）");
+        }
         JsonNode root = HttpClient.parseJson(json);
         JsonNode page = root.path("loaderData").path("video_(id)/page");
         JsonNode res = page.path("videoInfoRes");
         if (!res.has("item_list") || res.path("item_list").isEmpty()) {
             String filter = res.path("filter_list").toString();
-            throw new IllegalStateException("视频信息为空（可能已删除/私密/风控）"
+            throw new IllegalStateException("视频信息为空（作品可能已删除/私密，或该请求未获得 SSR 数据）"
                     + (filter.isEmpty() || "[]".equals(filter) ? "" : "：" + filter));
         }
         return fromItem(res.path("item_list").get(0));

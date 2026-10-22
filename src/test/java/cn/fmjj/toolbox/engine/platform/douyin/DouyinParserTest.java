@@ -100,11 +100,49 @@ class DouyinParserTest {
     }
 
     @Test
-    @DisplayName("无 _ROUTER_DATA：明确报错")
+    @DisplayName("空壳页面：给出「需要浏览器上下文」的明确诊断")
     void noRouterData() {
+        String shell = "<html><body>" + "x".repeat(2000) + "</body></html>";
+        var e = assertThrows(IllegalStateException.class, () -> DouyinParser.fromRouterData(shell));
+        assertTrue(e.getMessage().contains("浏览器"), e.getMessage());
+
+        var e2 = assertThrows(IllegalStateException.class,
+                () -> DouyinParser.fromRouterData("<html></html>"));
+        assertTrue(e2.getMessage().contains("链接无效"), e2.getMessage());
+    }
+
+    @Test
+    @DisplayName("fromDom（浏览器渲染后 DOM）：标题/作者/作者ID/直链/封面")
+    void fromDom() throws Exception {
+        String html;
+        try (var in = getClass().getResourceAsStream("/douyin/dom_sample.html")) {
+            html = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        var v = DouyinParser.fromDom(html);
+        assertEquals("7415554945589513513", v.awemeId());
+        assertEquals("#封茗囧菌 #现场 祝大家中秋快乐！#桃花庵", v.title());
+        assertEquals("封茗囧菌", v.author());
+        assertEquals("MS4wLjABAAAA0Wk4gxp3AYFnqoqo-IBF6lbdLnrxgjy__DdhPBNBkws", v.authorId());
+        // &amp; 需还原
+        assertTrue(v.videoUrl().contains("&br=1118"), v.videoUrl());
+        assertTrue(v.videoUrl().startsWith("https://v95-aw-web.douyinvod.com/"));
+        assertTrue(v.cover().startsWith("https://p3-sign.douyinpic.com/"));
+    }
+
+    @Test
+    @DisplayName("fromDom：无数据页面报错")
+    void fromDomEmpty() {
         var e = assertThrows(IllegalStateException.class,
-                () -> DouyinParser.fromRouterData("<html><body>verify</body></html>"));
-        assertTrue(e.getMessage().contains("_ROUTER_DATA"));
+                () -> DouyinParser.fromDom("<html><body>空</body></html>"));
+        assertTrue(e.getMessage().contains("没有作品数据"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("firstTextNode：跳过空标签取第一个非空文本")
+    void firstTextNode() {
+        assertEquals("昵称", DouyinParser.firstTextNode("<div><span></span><b>昵称</b></div>"));
+        assertEquals("", DouyinParser.firstTextNode("<div><span></span></div>"));
+        assertEquals("A&B", DouyinParser.firstTextNode("<i>A&amp;B</i>"));
     }
 
     @Test
