@@ -11,7 +11,9 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
@@ -67,8 +69,7 @@ public class BiliResourcePage extends BasePage {
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         // 顺序对齐原版 _FLAT：表情包搜索/装扮搜索/装扮表情包/直播表情/装扮ID详情/收藏集/空间/综合搜索
         tabs.getTabs().addAll(
-                stubTab("🗃 表情包搜索", "浏览 B站全部表情包（需登录），按名字搜索、滚动加载更多，可批量下载",
-                        "需移植 bili_emoji.py（555 行）：表情包搜索接口 + 详情 + 批量下载"),
+                buildEmoteTab(),
                 stubTab("🔍 装扮搜索", "关键词搜装扮/收藏集（白菜、UP主名等），无需登录",
                         "需移植 bili_garb.py（623 行）：装扮搜索接口"),
                 stubTab("🆔 装扮表情包", "输入表情包/装扮 ID 下载，自动识别普通表情包 → 装扮表情 → 收藏集",
@@ -94,6 +95,179 @@ public class BiliResourcePage extends BasePage {
         root.setPadding(new Insets(12));
         VBox.setVgrow(tabs, Priority.ALWAYS);
         return root;
+    }
+
+    // ==================== 🗃 表情包搜索（已实现） ====================
+
+    private final java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Package> emotePkgs =
+            new java.util.ArrayList<>();
+    private final javafx.scene.layout.FlowPane emoteGrid = new javafx.scene.layout.FlowPane(8, 8);
+    private final Label emoteStatus = new Label("");
+    private final TextField emoteSearchField = new TextField();
+    private final ComboBox<String> emotePkgBox = new ComboBox<>();
+    private final cn.fmjj.toolbox.engine.platform.bili.BiliEmote emoteApi =
+            new cn.fmjj.toolbox.engine.platform.bili.BiliEmote();
+
+    private Tab buildEmoteTab() {
+        emoteSearchField.setPromptText("按表情名/包名搜索");
+        emoteSearchField.setPrefWidth(220);
+        emoteSearchField.setOnAction(e -> renderEmotes());
+        emoteSearchField.textProperty().addListener((o, a, b) -> renderEmotes());
+        emotePkgBox.setPrefWidth(240);
+        emotePkgBox.setOnAction(e -> renderEmotes());
+        Button load = new Button("🔄 加载表情包");
+        load.setOnAction(e -> loadEmotes(load));
+        Button dlAll = new Button("⬇ 下载当前列表");
+        dlAll.setOnAction(e -> downloadAllEmotes());
+        emoteStatus.setStyle("-fx-text-fill: #888;");
+
+        HBox bar = new HBox(6, load, emotePkgBox, emoteSearchField, dlAll, emoteStatus);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(emoteStatus, Priority.ALWAYS);
+
+        ScrollPane scroll = new ScrollPane(emoteGrid);
+        scroll.setFitToWidth(true);
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+        emoteGrid.setPadding(new Insets(8));
+
+        VBox box = new VBox(6, bar, scroll);
+        box.setPadding(new Insets(10));
+        return new Tab("🗃 表情包搜索", box);
+    }
+
+    private void loadEmotes(Button btn) {
+        btn.setDisable(true);
+        emoteStatus.setText("加载中…");
+        javafx.concurrent.Task<java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Package>> task =
+                new javafx.concurrent.Task<>() {
+                    @Override
+                    protected java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Package> call()
+                            throws Exception {
+                        return emoteApi.fetchPackages(CookieStore.get("bilibili"));
+                    }
+                };
+        task.setOnSucceeded(e -> {
+            btn.setDisable(false);
+            emotePkgs.clear();
+            emotePkgs.addAll(task.getValue());
+            var names = new java.util.ArrayList<String>();
+            names.add("全部（" + cn.fmjj.toolbox.engine.platform.bili.BiliEmote.flatten(emotePkgs).size() + "）");
+            for (var p : emotePkgs) names.add(p.name() + "（" + p.emotes().size() + "）");
+            emotePkgBox.getItems().setAll(names);
+            emotePkgBox.getSelectionModel().selectFirst();
+            renderEmotes();
+            emoteStatus.setText("已加载 " + emotePkgs.size() + " 个表情包");
+        });
+        task.setOnFailed(e -> {
+            btn.setDisable(false);
+            emoteStatus.setText("加载失败：" + task.getException().getMessage());
+        });
+        new Thread(task, "bili-emote").start();
+    }
+
+    private void renderEmotes() {
+        emoteGrid.getChildren().clear();
+        if (emotePkgs.isEmpty()) {
+            Label hint = new Label("点「🔄 加载表情包」拉取（需 B站 登录 Cookie）");
+            hint.setStyle("-fx-text-fill: #888;");
+            emoteGrid.getChildren().add(hint);
+            return;
+        }
+        int pkgIdx = emotePkgBox.getSelectionModel().getSelectedIndex();
+        java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Emote> list;
+        String kw = emoteSearchField.getText();
+        if (kw != null && !kw.isBlank()) {
+            list = cn.fmjj.toolbox.engine.platform.bili.BiliEmote.search(emotePkgs, kw);
+        } else if (pkgIdx > 0 && pkgIdx <= emotePkgs.size()) {
+            list = emotePkgs.get(pkgIdx - 1).emotes();
+        } else {
+            list = cn.fmjj.toolbox.engine.platform.bili.BiliEmote.flatten(emotePkgs);
+        }
+        int shown = 0;
+        for (var em : list) {
+            if (shown++ >= 300) break;   // 只渲染前 300 个，避免卡顿
+            emoteGrid.getChildren().add(emoteCell(em));
+        }
+        emoteStatus.setText("显示 " + Math.min(list.size(), 300) + " / " + list.size() + " 个表情");
+    }
+
+    private Node emoteCell(cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Emote em) {
+        Label name = new Label(em.text());
+        name.setStyle("-fx-font-size: 10px;");
+        name.setWrapText(true);
+        name.setMaxWidth(80);
+        javafx.scene.image.ImageView iv = new javafx.scene.image.ImageView();
+        iv.setFitWidth(56);
+        iv.setFitHeight(56);
+        iv.setPreserveRatio(true);
+        VBox cell = new VBox(2, iv, name);
+        cell.setAlignment(Pos.CENTER);
+        cell.setPrefWidth(88);
+        cell.setStyle("-fx-border-color: #eee; -fx-border-radius: 4; -fx-padding: 4;");
+        cell.setOnMouseClicked(e -> downloadEmote(em));
+        javafx.scene.control.Tooltip.install(cell, new javafx.scene.control.Tooltip("点击下载：" + em.text()));
+        // 异步加载缩略图
+        new Thread(() -> {
+            try {
+                var img = new javafx.scene.image.Image(em.bestUrl(), true);
+                javafx.application.Platform.runLater(() -> iv.setImage(img));
+            } catch (Exception ignored) {
+            }
+        }, "emote-thumb").start();
+        return cell;
+    }
+
+    private void downloadEmote(cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Emote em) {
+        java.nio.file.Path dir = cn.fmjj.toolbox.core.settings.Settings.load()
+                .effectiveExportDir().resolve("B站资源").resolve("表情包")
+                .resolve(cn.fmjj.toolbox.engine.platform.bili.BiliEmote.safeName(em, 0)
+                        .replaceAll("\\.[a-z]+$", ""));
+        new Thread(() -> {
+            var r = new cn.fmjj.toolbox.engine.download.FileDownloader().download(
+                    java.util.List.of(em.bestUrl()),
+                    dir.resolve(cn.fmjj.toolbox.engine.platform.bili.BiliEmote.safeName(em, 0)),
+                    java.util.Map.of("Referer", "https://www.bilibili.com/"), p -> { }, () -> false);
+            javafx.application.Platform.runLater(() -> emoteStatus.setText(
+                    r.success() ? "已下载：" + em.text() : "下载失败：" + em.text()));
+        }, "emote-dl").start();
+    }
+
+    private void downloadAllEmotes() {
+        int pkgIdx = emotePkgBox.getSelectionModel().getSelectedIndex();
+        java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Emote> list;
+        String kw = emoteSearchField.getText();
+        if (kw != null && !kw.isBlank()) {
+            list = cn.fmjj.toolbox.engine.platform.bili.BiliEmote.search(emotePkgs, kw);
+        } else if (pkgIdx > 0 && pkgIdx <= emotePkgs.size()) {
+            list = emotePkgs.get(pkgIdx - 1).emotes();
+        } else {
+            list = cn.fmjj.toolbox.engine.platform.bili.BiliEmote.flatten(emotePkgs);
+        }
+        if (list.isEmpty()) { emoteStatus.setText("没有可下载的表情"); return; }
+        emoteStatus.setText("开始下载 " + list.size() + " 个表情…");
+        java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliEmote.Emote> batch = list;
+        new Thread(() -> {
+            int ok = 0, fail = 0;
+            var dl = new cn.fmjj.toolbox.engine.download.FileDownloader();
+            for (int i = 0; i < batch.size(); i++) {
+                var em = batch.get(i);
+                java.nio.file.Path dir = cn.fmjj.toolbox.core.settings.Settings.load()
+                        .effectiveExportDir().resolve("B站资源").resolve("表情包")
+                        .resolve(em.packageName().replaceAll("[\\\\/:*?\"<>|]", "_"));
+                var r = dl.download(java.util.List.of(em.bestUrl()),
+                        dir.resolve(cn.fmjj.toolbox.engine.platform.bili.BiliEmote.safeName(em, i)),
+                        java.util.Map.of("Referer", "https://www.bilibili.com/"), p -> { }, () -> false);
+                if (r.success()) ok++; else fail++;
+                int n = i + 1;
+                javafx.application.Platform.runLater(() ->
+                        emoteStatus.setText("下载中… " + n + "/" + batch.size()));
+            }
+            int fok = ok, ffail = fail;
+            javafx.application.Platform.runLater(() -> {
+                emoteStatus.setText("下载完成：成功 " + fok + "，失败 " + ffail);
+                toast("表情包下载完成：" + fok + " 个");
+            });
+        }, "emote-dl-all").start();
     }
 
     /** 未实现 tab 的占位：明确说明缺什么，不放假控件。 */
