@@ -490,6 +490,38 @@ Java 已实现纯本地全链路：
 - 4 个测试（平台识别 / 历史追加去重与涨跌 / 配置往返 / 卡片尺寸）
 - **坑**：`5sing.kugou.com` 必须先于 `kugou.com` 判断，否则被酷狗抢先命中
 
+## 3.23 B站弹幕姬：打通了！（根因 = 取 token 与握手必须用同一份完整设备 Cookie）
+
+**根因（对比 Python 逐层排查得出）**：
+1. Python `build_cookie_header` 返回 **4 段 cookie（366 字节）**：
+   `buvid3` + `buvid4`（都来自 `x/frontend/finger/spi` 的 `b_3`/`b_4`）+ `b_nut`（当前秒）
+   + `bili_ticket`（`GenWebTicket`，HMAC-SHA256("XgwSnGZ1p", "ts"+ts) 签名）
+2. Java 之前只带 `buvid3`（71 字节）→ 握手 1006
+3. **更关键**：`getDanmuInfo` 取 token 时也必须带**同一份**完整 cookie。
+   只带 buvid3 拿到的 token，在握手时会被拒（即使握手带了完整 cookie）。
+
+**修复后实测**：
+```
+devCookieLen=326（buvid3 + buvid4 + b_nut + bili_ticket）
+tokenLen=256
+[status] 弹幕通道已打开，正在鉴权…
+[status] 已发起认证（房间 7734200）
+[status] 已连接弹幕通道 ✅
+TOTAL=7（收到事件）
+[status] 弹幕连接已关闭（1000）
+```
+
+**实现**：
+- `BiliLiveClient.guestCookie()`：spi 取 b_3/b_4 → b_nut=当前秒 → GenWebTicket 取 ticket →
+  拼 4 段 cookie（进程内缓存 1 小时）
+- `danmakuAuth(roomId, cookie, buvid, deviceCookie)` 重载：取 token 时带同一份设备 cookie
+- `BiliDanmakuPage`：房间号 + 🔌连接/⏹断开 + 实时弹幕列表（最多 500 条）+ 房间信息
+  （标题/在线/是否直播中）+ 切页自动断开
+
+**排错历程（供后人少走弯路）**：先怀疑 JDK WebSocket → 换 Java-WebSocket 仍 1006 →
+再怀疑 buvid 来源 → 再怀疑握手 Cookie → 最后发现**取 token 的 Cookie 不一致**才是真因。
+库从来不是问题。
+
 ## 3.22 B站弹幕：换库后仍 1006 —— 结论修正为「认证内容差异」
 
 按计划把 JDK `java.net.http.WebSocket` 换成 **Java-WebSocket 1.5.7**（纯 Java，约 200KB），

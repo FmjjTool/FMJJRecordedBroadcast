@@ -87,22 +87,58 @@ public final class BiliLiveClient {
     }
 
     /**
-     * 游客设备 Cookie（首页 Set-Cookie 全集：buvid3/buvid4/_uuid 等）。
-     * 弹幕握手若只带 buvid3，服务端可能直接断开。
+     * 游客设备 Cookie（对应 Python 版 bili/wbi.build_cookie_header）。
+     *
+     * <p>拼四段：`buvid3` + `buvid4`（都来自 finger/spi 的 b_3/b_4）+ `b_nut`（当前秒）
+     * + `bili_ticket`（GenWebTicket，HMAC-SHA256 签名，约 3 天有效）。
+     * **只带 buvid3 会被弹幕服务直接 1006 断开**。
      */
     public String guestCookie() {
-        StringBuilder sb = new StringBuilder();
+        String cached = guestCookieCache;
+        if (cached != null && System.currentTimeMillis() < guestCookieExpireAt) return cached;
+        String b3 = "", b4 = "";
         try {
-            var resp = http.get("https://www.bilibili.com/", headers(""));
-            for (String c : resp.headers().allValues("Set-Cookie")) {
-                String kv = c.split(";")[0].strip();
-                if (kv.isEmpty()) continue;
-                if (sb.length() > 0) sb.append("; ");
-                sb.append(kv);
-            }
+            JsonNode d = http.getJson(BUVID_API, headers(""));
+            b3 = d.path("data").path("b_3").asText("");
+            b4 = d.path("data").path("b_4").asText("");
         } catch (Exception ignored) {
         }
-        return sb.toString();
+        if (b3.isEmpty()) b3 = guestBuvid();
+        long ts = System.currentTimeMillis() / 1000;
+        String ticket = biliTicket(b3, b4, ts);
+        StringBuilder sb = new StringBuilder();
+        sb.append("buvid3=").append(b3);
+        if (!b4.isEmpty()) sb.append("; buvid4=").append(b4);
+        sb.append("; b_nut=").append(ts);
+        if (!ticket.isEmpty()) sb.append("; bili_ticket=").append(ticket);
+        guestCookieCache = sb.toString();
+        // ticket 约 3 天有效，这里保守缓存 1 小时
+        guestCookieExpireAt = System.currentTimeMillis() + 3600_000L;
+        return guestCookieCache;
+    }
+
+    private volatile String guestCookieCache;
+    private volatile long guestCookieExpireAt;
+
+    /** GenWebTicket：HMAC-SHA256("XgwSnGZ1p", "ts"+ts) → POST 拿 ticket。 */
+    private String biliTicket(String buvid3, String buvid4, long ts) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(
+                    "XgwSnGZ1p".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] sign = mac.doFinal(("ts" + ts).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : sign) hex.append(String.format("%02x", b));
+            String url = "https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket"
+                    + "?key_id=ec02&hexsign=" + hex + "&context%5Bts%5D=" + ts + "&csrf=";
+            Map<String, String> h = headers("");
+            h.put("Cookie", "buvid3=" + buvid3 + (buvid4.isEmpty() ? "" : "; buvid4=" + buvid4));
+            JsonNode d = http.postFormJson(url, new LinkedHashMap<>(), h);
+            return d.path("data").path("ticket").asText("");
+        } catch (Exception e) {
+            Log.warn("取 bili_ticket 失败：" + e.getMessage());
+            return "";
+        }
     }
 
     /**
@@ -135,12 +171,32 @@ public final class BiliLiveClient {
     public record Auth(String token, String host) {}
 
     public Auth danmakuAuth(String roomId, String cookie, String buvid) throws Exception {
+        return danmakuAuth(roomId, cookie, buvid, "");
+    }
+
+    /**
+     * 取弹幕 token（带完整设备 Cookie）。
+     *
+     * <p>**关键**：取 token 时的 Cookie 必须与 WS 握手一致（buvid3+buvid4+b_nut+bili_ticket），
+     * 只带 buvid3 拿到的 token 在握手时会被拒（1006）。
+     */
+    public Auth danmakuAuth(String roomId, String cookie, String buvid, String deviceCookie) throws Exception {
         var keys = fetchWbiKeys(cookie);
         Map<String, String> params = new LinkedHashMap<>();
         params.put("id", roomId);
         params.put("type", "0");
         String url = WbiSigner.signUrl(DANMU_INFO_API, params, keys);
-        JsonNode d = http.getJson(url, headers(cookie, buvid));
+        Map<String, String> hh = headers(cookie);
+        StringBuilder ck2 = new StringBuilder();
+        if (deviceCookie != null && !deviceCookie.isEmpty()) ck2.append(deviceCookie);
+        if (buvid != null && !buvid.isEmpty()) {
+            if (ck2.indexOf("buvid3=") < 0) {
+                if (ck2.length() > 0) ck2.append("; ");
+                ck2.append("buvid3=").append(buvid);
+            }
+        }
+        if (ck2.length() > 0) hh.put("Cookie", ck2.toString());
+        JsonNode d = http.getJson(url, hh);
         if (d.path("code").asInt(-1) != 0) {
             throw new IllegalStateException("getDanmuInfo 失败：" + d.path("code").asInt()
                     + " " + d.path("message").asText());

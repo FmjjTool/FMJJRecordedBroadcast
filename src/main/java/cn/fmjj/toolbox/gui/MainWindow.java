@@ -8,6 +8,7 @@ import cn.fmjj.toolbox.gui.pages.AssetPage;
 import cn.fmjj.toolbox.gui.pages.AudioPage;
 import cn.fmjj.toolbox.gui.pages.BasePage;
 import cn.fmjj.toolbox.gui.pages.CalendarPage;
+import cn.fmjj.toolbox.gui.pages.BiliDanmakuPage;
 import cn.fmjj.toolbox.gui.pages.BiliResourcePage;
 import cn.fmjj.toolbox.gui.pages.ConvertPage;
 import cn.fmjj.toolbox.gui.pages.CoverMakerPage;
@@ -226,6 +227,7 @@ public class MainWindow {
         pageFactories.put("music_info", MusicInfoPage::new);
         pageFactories.put("tracker", TrackerPage::new);
         pageFactories.put("music_tracker", MusicTrackerPage::new);
+        pageFactories.put("bili_danmaku", BiliDanmakuPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
