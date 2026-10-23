@@ -6,6 +6,7 @@ import cn.fmjj.toolbox.engine.download.FileDownloader;
 import cn.fmjj.toolbox.engine.media.AudioEngine;
 import cn.fmjj.toolbox.engine.platform.MediaItem;
 import cn.fmjj.toolbox.engine.platform.bili.BiliDownloader;
+import cn.fmjj.toolbox.engine.platform.bili.BiliResource;
 import cn.fmjj.toolbox.engine.platform.bili.BiliLink;
 import cn.fmjj.toolbox.engine.platform.bili.BiliParser;
 import cn.fmjj.toolbox.engine.net.HttpClient;
@@ -24,6 +25,8 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
@@ -52,8 +55,13 @@ public class InfoParsePage extends BasePage {
     private final ComboBox<String> qualityBox = new ComboBox<>();
     private final ComboBox<String> threadsBox = new ComboBox<>(
             FXCollections.observableArrayList("单线程", "4 线程", "8 线程"));
-    private final Label infoTitle = new Label("尚未解析");
-    private final Label infoMeta = new Label("");
+    private final ComboBox<String> modeBox = new ComboBox<>(FXCollections.observableArrayList(
+            "🔗 链接模式", "🔎 搜索模式"));
+    private final ComboBox<String> searchPlatBox = new ComboBox<>(FXCollections.observableArrayList(
+            "全部平台", "B站", "抖音", "微博"));
+    private final TextArea resultArea = new TextArea();
+    private String resultTitle = "尚未解析";
+    private String resultMeta = "";
     private final TextArea log = new TextArea();
     private final ProgressBar progress = new ProgressBar(0);
     private final Label status = new Label("就绪");
@@ -74,6 +82,7 @@ public class InfoParsePage extends BasePage {
     private DouyinParser.DouyinVideo douyinVideo;
     private KuaishouParser.KuaishouVideo kuaishouVideo;
     private final KuaishouParser kuaishouParser = new KuaishouParser();
+    private final BiliResource biliResource = new BiliResource();
     private final DouyinParser douyinParser = new DouyinParser();
 
     private Consumer<String> toast;
@@ -86,49 +95,196 @@ public class InfoParsePage extends BasePage {
 
     @Override
     protected Node build() {
-        linkField.setPromptText("粘贴链接或分享文本（B站 / 微博 / 抖音）");
-        linkField.setOnAction(e -> parse());
+        linkField.setPromptText("https://www.bilibili.com/video/BV...");
+        linkField.setOnAction(e -> submit());
         downloadBtn.setDisable(true);
-        progress.setPrefWidth(200);
         log.setEditable(false);
-        log.setPrefRowCount(8);
+        log.setPrefRowCount(5);
+        log.setMinHeight(110);
+        log.setMaxHeight(110);
+        log.setPromptText("下载日志");
         threadsBox.getSelectionModel().select(1);
+        qualityBox.getSelectionModel().selectFirst();
+        qualityBox.setPrefWidth(110);
+        threadsBox.setPrefWidth(64);
 
-        infoTitle.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
-        infoTitle.setWrapText(true);
-        infoMeta.setStyle("-fx-text-fill: #6b7280;");
-        infoMeta.setWrapText(true);
+        resultArea.setEditable(false);
+        resultArea.setPromptText("解析结果将显示在这里");
+        resultArea.setWrapText(true);
 
-        parseBtn.setOnAction(e -> parse());
+        // 模式切换：链接模式 / 搜索模式（搜索模式才显示平台下拉）
+        modeBox.setPrefWidth(104);
+        modeBox.setTooltip(new javafx.scene.control.Tooltip(
+                "链接模式：粘贴链接解析；搜索模式：输入关键词全局搜索视频"));
+        modeBox.getSelectionModel().selectFirst();
+        searchPlatBox.setPrefWidth(90);
+        searchPlatBox.setTooltip(new javafx.scene.control.Tooltip("搜索的平台范围（全部=多平台并发）"));
+        searchPlatBox.setVisible(false);
+        searchPlatBox.setManaged(false);
+        modeBox.setOnAction(e -> onModeChange());
+
+        parseBtn.setStyle("-fx-background-color: #2e7d32; -fx-text-fill: white;");
+        parseBtn.setOnAction(e -> submit());
+        downloadBtn.setStyle("-fx-background-color: #2e7d32; -fx-text-fill: white;");
+        downloadBtn.setTooltip(new javafx.scene.control.Tooltip(
+                "下载最近一次解析成功的条目（B站按画质直下，其余走媒体下载）"));
         downloadBtn.setOnAction(e -> download());
-        Button openDir = new Button("📁 打开导出目录");
-        openDir.setOnAction(e -> AudioEngine.openInExplorer(Settings.load().effectiveExportDir()));
-
-        HBox inputRow = new HBox(8, new Label("链接"), linkField, parseBtn);
-        inputRow.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(linkField, Priority.ALWAYS);
-
-        HBox actionRow = new HBox(10, new Label("画质"), qualityBox,
-                new Label("下载线程"), threadsBox, downloadBtn, openDir, progress, status);
-        actionRow.setAlignment(Pos.CENTER_LEFT);
 
         Label pageTitle = new Label(title());
-        pageTitle.getStyleClass().add("page-title");
-        Label hint = new Label("B站：详情 + 画质 + DASH 音视频合并（可多线程分段下载）；"
-                + "微博：图文/视频媒体下载；抖音：走系统 Edge/Chrome 渲染（约 10-15 秒）；"
-                + "解析结果自动入库（config/collected.db）");
-        hint.getStyleClass().add("stub-desc");
-        hint.setWrapText(true);
+        pageTitle.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
 
-        VBox infoCard = new VBox(6, infoTitle, infoMeta);
-        infoCard.getStyleClass().add("page-root");
-        infoCard.setPadding(new Insets(12));
+        HBox row = new HBox(8, modeBox, searchPlatBox, linkField, parseBtn);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(linkField, Priority.ALWAYS);
 
-        VBox root = new VBox(10, pageTitle, hint, inputRow, infoCard, actionRow, log);
+        HBox dlRow = new HBox(8, downloadBtn, spacer(),
+                new Label("画质:"), qualityBox, new Label("线程:"), threadsBox, progress, status);
+        dlRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(status, Priority.ALWAYS);
+
+        VBox root = new VBox(8, pageTitle, row, dlRow, resultArea, log);
         root.getStyleClass().add("page-wrapper");
         root.setPadding(new Insets(12));
-        VBox.setVgrow(log, Priority.ALWAYS);
+        VBox.setVgrow(resultArea, Priority.ALWAYS);
         return root;
+    }
+
+    private static Node spacer() {
+        HBox h = new HBox();
+        HBox.setHgrow(h, Priority.ALWAYS);
+        return h;
+    }
+
+    private void onModeChange() {
+        boolean search = modeBox.getSelectionModel().getSelectedIndex() == 1;
+        searchPlatBox.setVisible(search);
+        searchPlatBox.setManaged(search);
+        linkField.setPromptText(search ? "输入关键词（如：封茗囧菌 翻唱）"
+                : "https://www.bilibili.com/video/BV...");
+        parseBtn.setText(search ? "🔎 搜索" : "🔍 解析");
+    }
+
+    /** 按钮/回车统一入口：按模式分流。 */
+    private void submit() {
+        if (modeBox.getSelectionModel().getSelectedIndex() == 1) searchVideos();
+        else parse();
+    }
+
+    // ==================== 搜索模式 ====================
+
+    /** 搜索模式：目前支持 B站（综合搜索）；抖音/微博搜索待补。 */
+    private void searchVideos() {
+        String kw = linkField.getText() == null ? "" : linkField.getText().trim();
+        if (kw.isEmpty()) { status.setText("请输入搜索关键词"); return; }
+        String plat = searchPlatBox.getValue();
+        if (plat != null && !"全部平台".equals(plat) && !"B站".equals(plat)) {
+            status.setText(plat + " 搜索暂未支持（当前支持 B站）");
+            appendLog("ℹ️ " + plat + " 搜索未实现，已跳过");
+            return;
+        }
+        parseBtn.setDisable(true);
+        setResultTitle("⏳ 搜索中：" + kw);
+        setResultMeta("");
+
+        javafx.concurrent.Task<java.util.List<BiliResource.SearchItem>> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected java.util.List<BiliResource.SearchItem> call() throws Exception {
+                return biliResource.searchAll(kw, 1, CookieStore.get("bilibili"));
+            }
+        };
+        task.setOnSucceeded(e -> {
+            parseBtn.setDisable(false);
+            var items = task.getValue();
+            setResultTitle("✅ 搜索「" + kw + "」获取 " + items.size() + " 条");
+            setResultMeta("=".repeat(40) + "\n双击结果弹窗中的条目即可自动解析下载");
+            status.setText("搜索完成：" + items.size() + " 条");
+            if (!items.isEmpty()) showSearchResults(items);
+        });
+        task.setOnFailed(e -> {
+            parseBtn.setDisable(false);
+            setResultTitle("❌ 搜索失败：" + task.getException().getMessage());
+            status.setText("搜索失败");
+        });
+        new Thread(task, "bili-search").start();
+    }
+
+    /** 搜索结果弹窗：7 列（平台/标题/作者/播放/时长/发布时间/链接），双击回填并解析。 */
+    private void showSearchResults(java.util.List<BiliResource.SearchItem> items) {
+        javafx.scene.control.Dialog<Void> dlg = new javafx.scene.control.Dialog<>();
+        dlg.setTitle("搜索结果（双击条目解析）");
+        dlg.setResizable(true);
+
+        Label head = new Label("双击条目（或选中后点「解析选中」）→ 自动填入链接并解析");
+        head.setStyle("-fx-text-fill: #666;");
+
+        TableView<BiliResource.SearchItem> table = new TableView<>();
+        String[] cols = {"平台", "标题", "作者", "播放", "时长", "发布时间", "链接"};
+        for (int i = 0; i < cols.length; i++) {
+            final int idx = i;
+            TableColumn<BiliResource.SearchItem, String> c = new TableColumn<>(cols[i]);
+            c.setCellValueFactory(d -> new javafx.beans.property.SimpleStringProperty(cell(d.getValue(), idx)));
+            c.setPrefWidth(idx == 1 ? 320 : idx == 6 ? 280 : 100);
+            table.getColumns().add(c);
+        }
+        table.setItems(FXCollections.observableArrayList(items));
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        table.setPrefSize(980, 460);
+
+        Button parseSel = new Button("🔍 解析选中");
+        parseSel.setOnAction(e -> {
+            var sel = table.getSelectionModel().getSelectedItem();
+            if (sel == null) return;
+            dlg.close();
+            linkField.setText(sel.url());
+            modeBox.getSelectionModel().selectFirst();
+            onModeChange();
+            parse();
+        });
+        Button close = new Button("关闭");
+        close.setOnAction(e -> dlg.close());
+        HBox btns = new HBox(8, parseSel, spacer(), close);
+
+        table.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                var sel = table.getSelectionModel().getSelectedItem();
+                if (sel == null) return;
+                dlg.close();
+                linkField.setText(sel.url());
+                modeBox.getSelectionModel().selectFirst();
+                onModeChange();
+                parse();
+            }
+        });
+
+        VBox box = new VBox(8, head, table, btns);
+        box.setPadding(new Insets(12));
+        dlg.getDialogPane().setContent(box);
+        dlg.getDialogPane().getButtonTypes().add(javafx.scene.control.ButtonType.CLOSE);
+        dlg.showAndWait();
+    }
+
+    private static String cell(BiliResource.SearchItem it, int idx) {
+        return switch (idx) {
+            case 0 -> "B站";
+            case 1 -> it.title() == null ? "" : (it.title().length() > 60 ? it.title().substring(0, 60) : it.title());
+            case 2 -> it.author() == null ? "" : it.author();
+            case 6 -> it.url() == null ? "" : it.url();
+            default -> "—";
+        };
+    }
+
+    private void setResultTitle(String t) {
+        resultTitle = t == null ? "" : t;
+        refreshResult();
+    }
+
+    private void setResultMeta(String m) {
+        resultMeta = m == null ? "" : m;
+        refreshResult();
+    }
+
+    private void refreshResult() {
+        resultArea.setText(resultTitle + (resultMeta.isEmpty() ? "" : "\n" + resultMeta));
     }
 
     private void toast(String msg) {
@@ -232,9 +388,9 @@ public class InfoParsePage extends BasePage {
 
     private void applyDouyin(DouyinParser.DouyinVideo v) {
         this.douyinVideo = v;
-        infoTitle.setText(v.title());
+        setResultTitle(v.title());
         var m = DouyinParser.summary(v);
-        infoMeta.setText("作者：" + m.get("作者") + "　时长：" + m.get("时长")
+        setResultMeta("作者：" + m.get("作者") + "　时长：" + m.get("时长")
                 + "　点赞：" + m.get("点赞") + "　评论：" + m.get("评论") + "　" + m.get("类型"));
         qualityBox.setItems(FXCollections.observableArrayList(
                 v.isImagePost() ? "图集（原图）" : "原画（无水印）"));
@@ -272,8 +428,8 @@ public class InfoParsePage extends BasePage {
         this.videoInfo = info;
         this.playInfo = play;
         this.qualities = play.qualities();
-        infoTitle.setText(info.title());
-        infoMeta.setText("UP：" + info.owner()
+        setResultTitle(info.title());
+        setResultMeta("UP：" + info.owner()
                 + "　时长：" + formatDuration(info.duration())
                 + "　发布：" + (info.publishText().isEmpty() ? "—" : info.publishText())
                 + "　BV：" + info.bvid());
@@ -315,8 +471,8 @@ public class InfoParsePage extends BasePage {
 
         long videos = item.streams().stream().filter(s -> "video".equals(s.kind())).count();
         long images = item.streams().stream().filter(s -> "image".equals(s.kind())).count();
-        infoTitle.setText(item.title().isEmpty() ? "（无正文）" : item.title());
-        infoMeta.setText("作者：" + item.author()
+        setResultTitle(item.title().isEmpty() ? "（无正文）" : item.title());
+        setResultMeta("作者：" + item.author()
                 + "　视频：" + videos + "　图片：" + images
                 + "　发布：" + (item.publishTime().isEmpty() ? "—" : item.publishTime())
                 + "　正文 " + item.description().length() + " 字");
@@ -417,8 +573,8 @@ public class InfoParsePage extends BasePage {
         String token = XiaohongshuParser.extractXsecToken(text);
         this.xhsUrl = "https://www.xiaohongshu.com/explore/" + noteId
                 + (token.isEmpty() ? "" : "?xsec_token=" + token + "&xsec_source=pc_share");
-        infoTitle.setText("小红书笔记：" + noteId);
-        infoMeta.setText("已识别笔记 ID" + (token.isEmpty() ? "（链接里没有 xsec_token）" : "（含 xsec_token）")
+        setResultTitle("小红书笔记：" + noteId);
+        setResultMeta("已识别笔记 ID" + (token.isEmpty() ? "（链接里没有 xsec_token）" : "（含 xsec_token）")
                 + "　媒体下载需 x-s 签名，当前版本未实现");
         downloadBtn.setDisable(true);
         status.setText("小红书暂不支持直接下载，可点下方按钮在浏览器查看");
@@ -451,8 +607,8 @@ public class InfoParsePage extends BasePage {
 
     private void applyKuaishou(KuaishouParser.KuaishouVideo v) {
         this.kuaishouVideo = v;
-        infoTitle.setText(v.title());
-        infoMeta.setText("作者：" + (v.author().isBlank() ? "—" : v.author())
+        setResultTitle(v.title());
+        setResultMeta("作者：" + (v.author().isBlank() ? "—" : v.author())
                 + "　时长：" + formatDuration(v.durationSeconds())
                 + "　ID：" + v.photoId());
         qualityBox.setItems(FXCollections.observableArrayList("原画"));
