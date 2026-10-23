@@ -339,15 +339,30 @@ Java 已实现 `BiliEmote` + 该 tab：
 
 **仍占位**：装扮搜索 / 装扮表情包 / 直播表情 / 装扮ID详情 / 收藏集（5 个，需 bili_garb 623 行 + 表情包详情）
 
+### B站装扮搜索（bili_garb.py 的「装扮搜索」）— 新实现
+接口：`x/garb/v2/mall/home/search?key_word=&pn=`（**免签名**，游客可用）。
+
+**关键结构坑**：结果条目在 **`data.list`**，不是 `data.items`（后者恒为空）；
+每条含 `name / item_id / group_name / properties.dlc_act_id`；
+**收藏集要用 `dlc_act_id` 跳转**（item_id 对收藏集无效）。
+
+Java 已实现 `BiliGarb` + 该 tab：
+- `search()`（关键词 + 页码）/ `parseSearch()`（跳过空条目、`jumpKey()` 优先 dlc_act_id）
+- `suitDetail()`（`x/garb/v2/user/suit/benefit?item_id=&part=cards`，含表情/头像框/粉丝牌等资源）
+- 页面：搜索框 + 🔍搜索 + 4 列表格（名称 / item_id / 分组 / 收藏集 act_id）
+- 2 个测试（解析与跳转键、空数据）
+
+**仍占位**：装扮表情包 / 直播表情 / 装扮ID详情 / 收藏集（4 个）
+
 ### B站资源（bili_resource.py 聚合 8 tab）— Tab 结构已对齐
 原版是 8 个功能 tab 平铺（顺序交错）：🗃 表情包搜索 / 🔍 装扮搜索 / 🆔 装扮表情包 /
 📺 直播表情 / 👕 装扮ID详情 / 🎁 收藏集 / 👤 空间 / 🔍 综合搜索。
 
 Java 已按同顺序建 8 个 tab：
-- ✅ 可用：**👤 空间**（`x/web-interface/card` 免签名，头像/背景/头像框下载）、
-  **🔍 综合搜索**（`wbi/search/all/v2`，7 列结果弹窗双击解析）
-- ⚠️ 其余 5 个 tab 是**明确占位**（说明缺哪个模块、原版多少行），不放假控件：
-  需移植 bili_garb.py（623 行，装扮搜索/装扮ID详情/收藏集）与 bili_emoji 剩余部分（装扮表情包/直播表情）
+- ✅ 可用 4 个：**🗃 表情包搜索**（11 包 × 20 表情）、**🔍 装扮搜索**、
+  **👤 空间**、**🔍 综合搜索**
+- ⚠️ 其余 4 个 tab 是**明确占位**（说明缺哪个模块、原版多少行），不放假控件：
+  需移植 bili_garb 剩余（装扮ID详情/收藏集）与 bili_emoji 剩余（装扮表情包/直播表情）
 
 ### 公众号解析（wechat_article.py，306 行）— 已重排
 原版自上而下：标题(18px)+帮助 → 输入框（**最大高 110**，placeholder 两行示例）→

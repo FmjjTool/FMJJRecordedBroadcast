@@ -70,8 +70,7 @@ public class BiliResourcePage extends BasePage {
         // 顺序对齐原版 _FLAT：表情包搜索/装扮搜索/装扮表情包/直播表情/装扮ID详情/收藏集/空间/综合搜索
         tabs.getTabs().addAll(
                 buildEmoteTab(),
-                stubTab("🔍 装扮搜索", "关键词搜装扮/收藏集（白菜、UP主名等），无需登录",
-                        "需移植 bili_garb.py（623 行）：装扮搜索接口"),
+                buildGarbSearchTab(),
                 stubTab("🆔 装扮表情包", "输入表情包/装扮 ID 下载，自动识别普通表情包 → 装扮表情 → 收藏集",
                         "需移植 bili_emoji.py：ID 解析与三态识别"),
                 stubTab("📺 直播表情", "输入房间号加载直播间专属表情 / UP主大表情 / 通用表情",
@@ -95,6 +94,73 @@ public class BiliResourcePage extends BasePage {
         root.setPadding(new Insets(12));
         VBox.setVgrow(tabs, Priority.ALWAYS);
         return root;
+    }
+
+    // ==================== 🔍 装扮搜索（已实现） ====================
+
+    private final TableView<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item> garbTable = new TableView<>();
+    private final Label garbStatus = new Label("");
+    private final TextField garbSearchField = new TextField();
+    private final cn.fmjj.toolbox.engine.platform.bili.BiliGarb garbApi =
+            new cn.fmjj.toolbox.engine.platform.bili.BiliGarb();
+
+    private Tab buildGarbSearchTab() {
+        garbSearchField.setPromptText("关键词（UP主名 / 装扮名 / 白菜）");
+        garbSearchField.setPrefWidth(280);
+        garbSearchField.setOnAction(e -> searchGarb());
+        Button search = new Button("🔍 搜索");
+        search.setOnAction(e -> searchGarb());
+        garbStatus.setStyle("-fx-text-fill: #888;");
+        HBox bar = new HBox(6, garbSearchField, search, garbStatus);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(garbStatus, Priority.ALWAYS);
+
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item, String> cName =
+                new TableColumn<>("名称");
+        cName.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().name()));
+        cName.setPrefWidth(360);
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item, String> cId =
+                new TableColumn<>("item_id");
+        cId.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().itemId()));
+        cId.setPrefWidth(110);
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item, String> cGroup =
+                new TableColumn<>("分组");
+        cGroup.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().groupName()));
+        cGroup.setPrefWidth(260);
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item, String> cAct =
+                new TableColumn<>("收藏集 act_id");
+        cAct.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().actId()));
+        cAct.setPrefWidth(120);
+        garbTable.getColumns().addAll(List.of(cName, cId, cGroup, cAct));
+        garbTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        garbTable.setPlaceholder(new Label("输入关键词搜索装扮（免签名，游客可用）"));
+
+        VBox box = new VBox(6, bar, garbTable);
+        box.setPadding(new Insets(10));
+        VBox.setVgrow(garbTable, Priority.ALWAYS);
+        return new Tab("🔍 装扮搜索", box);
+    }
+
+    private void searchGarb() {
+        String kw = garbSearchField.getText() == null ? "" : garbSearchField.getText().trim();
+        if (kw.isEmpty()) { garbStatus.setText("请输入关键词"); return; }
+        garbStatus.setText("搜索中…");
+        javafx.concurrent.Task<java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item>> task =
+                new javafx.concurrent.Task<>() {
+                    @Override
+                    protected java.util.List<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Item> call()
+                            throws Exception {
+                        return garbApi.search(kw, 1, CookieStore.get("bilibili"));
+                    }
+                };
+        task.setOnSucceeded(e -> {
+            var items = task.getValue();
+            garbTable.setItems(FXCollections.observableArrayList(items));
+            garbStatus.setText("找到 " + items.size() + " 条"
+                    + (items.isEmpty() ? "（换个关键词试试）" : ""));
+        });
+        task.setOnFailed(e -> garbStatus.setText("搜索失败：" + task.getException().getMessage()));
+        new Thread(task, "bili-garb").start();
     }
 
     // ==================== 🗃 表情包搜索（已实现） ====================
