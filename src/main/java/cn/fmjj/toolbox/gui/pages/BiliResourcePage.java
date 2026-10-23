@@ -72,9 +72,12 @@ public class BiliResourcePage extends BasePage {
                 buildEmoteTab(),
                 buildGarbSearchTab(),
                 stubTab("🆔 装扮表情包", "输入表情包/装扮 ID 下载，自动识别普通表情包 → 装扮表情 → 收藏集",
-                        "需移植 bili_emoji.py：ID 解析与三态识别"),
+                        "已探明：装扮详情 suit_items.emoji_package 只给包封面（properties.image），"
+                        + "表情明细 properties.item_emoji_list 在 part=cards / part=emote 下都为空，"
+                        + "需进一步逆向正确的 part 参数或改用 emote/package 接口（ids 要传表情包 ID 而非装扮 item_id）"),
                 stubTab("📺 直播表情", "输入房间号加载直播间专属表情 / UP主大表情 / 通用表情",
-                        "需移植 bili_emoji.py：直播间表情接口"),
+                        "已试 x/emote/user/panel/web?business=live → code=-400（参数不被接受）；"
+                        + "直播表情的正确接口/参数待查（可能需要 room_id + 特定 business 值）"),
                 buildSuitTab(),
                 buildActTab(),
                 buildSpaceTab(), buildSearchTab());

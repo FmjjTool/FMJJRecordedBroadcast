@@ -388,6 +388,22 @@ Java 已实现 `BiliGarb.parseAct()` + 该 tab：
 - 落 `导出目录/B站资源/收藏集/{活动名}/`
 - 2 个测试（资源抽取与过滤、空数据）
 
+### B站资源剩下 2 个 tab：接口探明但未通（占位文案已写准）
+试了这两条路，都卡在接口层，**保持占位并写清已探明的边界**（不放假控件）：
+
+**🆔 装扮表情包**
+- 装扮详情 `suit_items.emoji_package[0].properties` 只给**包封面** `image`，
+  表情明细 `item_emoji_list` 在 `part=cards` 和 `part=emote` 下**都为空**
+- `x/emote/package?ids=<装扮item_id>&business=reply` 返回 code=0 但 `packages` 为空
+  —— `ids` 要的是**表情包 ID**，不是装扮 item_id
+- 待办：找到「装扮 → 表情包 ID」的映射，或用正确的 part 参数
+
+**📺 直播表情**
+- `x/emote/user/panel/web?business=live` → **code=-400**（参数不被接受）
+- 待办：查直播表情的正确接口（可能需要 room_id + 特定 business 值）
+
+**B站资源 8 tab 最终状态：可用 6 / 占位 2**（本轮不再钻这两个）
+
 ### B站资源（bili_resource.py 聚合 8 tab）— Tab 结构已对齐
 原版是 8 个功能 tab 平铺（顺序交错）：🗃 表情包搜索 / 🔍 装扮搜索 / 🆔 装扮表情包 /
 📺 直播表情 / 👕 装扮ID详情 / 🎁 收藏集 / 👤 空间 / 🔍 综合搜索。
