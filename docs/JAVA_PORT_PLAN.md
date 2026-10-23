@@ -490,6 +490,38 @@ Java 已实现纯本地全链路：
 - 4 个测试（平台识别 / 历史追加去重与涨跌 / 配置往返 / 卡片尺寸）
 - **坑**：`5sing.kugou.com` 必须先于 `kugou.com` 判断，否则被酷狗抢先命中
 
+## 3.24 抖音弹幕姬：CDP 基础设施打通（页面 JS + X-Bogus 签名）
+
+**为什么需要浏览器**：抖音弹幕不是纯 WebSocket —— 连接参数（cursor/internalExt/pushServer）
+必须在**页面上下文**里跑 `fetch('/webcast/im/fetch/')` 才能拿到，签名靠
+`window.byted_acrawler.frontierSign({'X-MS-STUB': md5})['X-Bogus']`（纯 HTTP 伪造不了）。
+
+**方案选择**：不加 Playwright（~50MB + 额外下载浏览器），改用**系统 Edge + CDP**：
+`msedge --headless=new --remote-debugging-port=<port> --user-data-dir=<tmp>`，
+用已有的 Java-WebSocket 连 CDP，`Runtime.evaluate` 跑 JS。
+
+**新增 `engine/browser/CdpClient`**（约 300 行）：
+- `findBrowser()`：按顺序找 Edge/Chrome（Program Files (x86) → Program Files → Chrome）
+- `launch(port, timeout)`：起进程 → 轮询 `/json/list` → **筛 `type=page` 且非 `chrome-extension://`**
+  （踩坑：不筛会连到扩展后台页，JS 全部 undefined）→ 连 CDP → `Page.enable` + `Runtime.enable`
+- `navigate(url)`：`Page.navigate` + 轮询 `document.readyState`
+- `evalJson/evalString`：`Runtime.evaluate`（awaitPromise + returnByValue，异常带 description）
+- `cookies()` / `currentUrl()` / `close()`（销毁进程 + 删临时 profile）
+
+**实测**：
+```
+browser=C://Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+launched OK
+url=https://live.douyin.com/
+acrawler=object          ← window.byted_acrawler 可用
+frontier=function        ← frontierSign 可用
+sigLen=16  sig=6sZQqOiiEPAmBnLA   ← X-Bogus 签名拿到了
+```
+
+**下一步**：`roomId` 要先用 HTTP `room/web/enter` 拿（页面 DOM/RSC 里取不到），
+再执行完整 PREP_JS（fetch im/fetch → 解析 protobuf 的 cursor/internalExt/pushServer），
+最后 Java 直连 WS + protobuf 解弹幕。
+
 ## 3.23 B站弹幕姬：打通了！（根因 = 取 token 与握手必须用同一份完整设备 Cookie）
 
 **根因（对比 Python 逐层排查得出）**：
