@@ -410,6 +410,30 @@ Java 已实现纯本地全链路：
 - 4 个测试（平台识别 / 历史追加去重与涨跌 / 配置往返 / 卡片尺寸）
 - **坑**：`5sing.kugou.com` 必须先于 `kugou.com` 判断，否则被酷狗抢先命中
 
+## 3.22 B站弹幕：换库后仍 1006 —— 结论修正为「认证内容差异」
+
+按计划把 JDK `java.net.http.WebSocket` 换成 **Java-WebSocket 1.5.7**（纯 Java，约 200KB），
+`connect()` 重写为 `WebSocketClient` 匿名子类（onOpen 发认证包 + 心跳，onMessage 喂 drain()），
+其余（WBI 鉴权、封包、zlib 解压、事件分发）一行未改。
+
+**结果：仍然 `1006` 关闭，收不到 `op=8`。**
+
+| 变量 | 试过的值 | 结果 |
+|---|---|---|
+| WebSocket 库 | JDK 内置 / Java-WebSocket 1.5.7 | 都是 1006 |
+| buvid 来源 | 首页 Set-Cookie / finger-spi b_3 | 都 1006 |
+| 握手 Cookie | 不带 / 带设备 Cookie（71 字节） | 都 1006 |
+| host | host_list[0] / 默认 broadcastlv | 都 1006 |
+| 发送延迟 | 0 / 150ms | 都 1006 |
+
+**结论修正**：之前判断「JDK WebSocket 与该服务端不兼容」是错的 —— **换库同样失败**，
+说明问题在**认证内容**（token 或 buvid 与 Python 版存在差异，Python 用同一套协议能收到 `op=8 code=0`）。
+
+**下一步要做的**：抓 Python 版实际发出的 WS 认证帧（原始字节）与 Java 的逐字节对比，
+重点看 `token` 字段（Python 侧 256 字符，Java 侧 260-264 字符，长度就对不上）与 `buvid`。
+
+**当前状态**：依赖与实现保留（Java-WebSocket 比 JDK 实现更好用），页面仍未接。
+
 ## 3.21 UI 对齐原则（用户实测反馈后确立）
 
 用户实测反馈：「UI 差别还挺大」→ 确立迁移标准：**布局/交互优先贴近原版，功能对齐其次**。

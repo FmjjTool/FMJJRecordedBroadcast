@@ -54,6 +54,13 @@
       <version>${jackson.version}</version>
     </dependency>
 
+    <!-- WebSocket 客户端（B站/抖音弹幕；JDK 自带实现与该服务端握手不兼容） -->
+    <dependency>
+      <groupId>org.java-websocket</groupId>
+      <artifactId>Java-WebSocket</artifactId>
+      <version>1.5.7</version>
+    </dependency>
+
     <!-- HTML 解析（公众号文章等页面解析，对应 Python 版 BeautifulSoup） -->
     <dependency>
       <groupId>org.jsoup</groupId>

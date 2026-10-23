@@ -62,7 +62,7 @@ public final class BiliLiveClient {
     }
 
     private final HttpClient http = new HttpClient();
-    private volatile WebSocket ws;
+    private volatile org.java_websocket.client.WebSocketClient wsClient;
     private ScheduledExecutorService heartbeat;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -84,6 +84,25 @@ public final class BiliLiveClient {
                 data.path("user_cover").asText(data.path("keyframe").asText("")),
                 data.path("live_status").asText("0"),
                 data.path("online").asLong(0));
+    }
+
+    /**
+     * 游客设备 Cookie（首页 Set-Cookie 全集：buvid3/buvid4/_uuid 等）。
+     * 弹幕握手若只带 buvid3，服务端可能直接断开。
+     */
+    public String guestCookie() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            var resp = http.get("https://www.bilibili.com/", headers(""));
+            for (String c : resp.headers().allValues("Set-Cookie")) {
+                String kv = c.split(";")[0].strip();
+                if (kv.isEmpty()) continue;
+                if (sb.length() > 0) sb.append("; ");
+                sb.append(kv);
+            }
+        } catch (Exception ignored) {
+        }
+        return sb.toString();
     }
 
     /**
@@ -179,6 +198,12 @@ public final class BiliLiveClient {
      * @param realRoomId 真实房间号（不是短号）
      */
     public void connect(long realRoomId, String token, String host, String buvid, Listener l) throws Exception {
+        connect(realRoomId, token, host, buvid, "", l);
+    }
+
+    /** 带完整设备 Cookie 的连接（弹幕握手更稳）。 */
+    public void connect(long realRoomId, String token, String host, String buvid,
+                        String deviceCookie, Listener l) throws Exception {
         this.listener = l;
         running.set(true);
         buffer.reset();
@@ -186,68 +211,62 @@ public final class BiliLiveClient {
         String url = host == null || host.isEmpty() ? DANMAKU_WS
                 : (host.startsWith("wss://") ? host : "wss://" + host + "/sub");
 
-        // 显式禁用代理：系统代理会破坏 WebSocket 升级握手（1006 断开）
-        var builder = java.net.http.HttpClient.newBuilder()
-                .connectTimeout(java.time.Duration.ofSeconds(10))
-                .proxy(java.net.ProxySelector.of(null))
-                .followRedirects(Redirect.NORMAL);
-        var client = builder.build();
-
-        WebSocket.Listener wsListener = new WebSocket.Listener() {
+        java.net.URI uri = java.net.URI.create(url);
+        Map<String, String> handshake = new LinkedHashMap<>();
+        handshake.put("User-Agent", WbiSigner.UA);
+        handshake.put("Origin", "https://live.bilibili.com");
+        if (deviceCookie != null && !deviceCookie.isEmpty()) handshake.put("Cookie", deviceCookie);
+        var wsClient = new org.java_websocket.client.WebSocketClient(uri, handshake) {
             @Override
-            public void onOpen(WebSocket webSocket) {
+            public void onOpen(org.java_websocket.handshake.ServerHandshake handshake) {
                 l.onStatus("弹幕通道已打开，正在鉴权…");
-                webSocket.request(1);
+                try {
+                    Map<String, Object> auth = new LinkedHashMap<>();
+                    auth.put("uid", 0);
+                    auth.put("roomid", realRoomId);
+                    auth.put("protover", 2);
+                    auth.put("buvid", buvid == null ? "" : buvid);
+                    auth.put("platform", "web");
+                    auth.put("type", 2);
+                    auth.put("key", token == null ? "" : token);
+                    send(pack(7, JSON.writeValueAsString(auth).getBytes(StandardCharsets.UTF_8)));
+                    send(pack(2, new byte[0]));
+                    l.onStatus("已发起认证（房间 " + realRoomId + "）");
+                } catch (Exception e) {
+                    l.onError("发送认证包失败：" + e.getMessage());
+                }
             }
 
             @Override
-            public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
-                byte[] chunk = new byte[data.remaining()];
-                data.get(chunk);
+            public void onMessage(java.nio.ByteBuffer bytes) {
+                byte[] chunk = new byte[bytes.remaining()];
+                bytes.get(chunk);
                 buffer.write(chunk, 0, chunk.length);
                 drain();
-                webSocket.request(1);
-                return null;
             }
 
             @Override
-            public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-                webSocket.request(1);
-                return null;
+            public void onMessage(String message) {
+                // 弹幕通道只发二进制，文本忽略
             }
 
             @Override
-            public void onError(WebSocket webSocket, Throwable error) {
-                if (running.get()) l.onError("弹幕连接异常：" + error.getMessage());
-            }
-
-            @Override
-            public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            public void onClose(int code, String reason, boolean remote) {
                 running.set(false);
-                l.onStatus("弹幕连接已关闭（" + statusCode + "）");
-                return null;
+                l.onStatus("弹幕连接已关闭（" + code + (reason == null || reason.isEmpty() ? "" : " " + reason) + "）");
+            }
+
+            @Override
+            public void onError(Exception ex) {
+                if (running.get()) l.onError("弹幕连接异常：" + ex.getMessage());
             }
         };
-
-        ws = client.newWebSocketBuilder()
-                .header("User-Agent", WbiSigner.UA)
-                .header("Origin", "https://live.bilibili.com")
-                .buildAsync(URI.create(url), wsListener)
-                .get(15, TimeUnit.SECONDS);
-
-        // 认证包
-        Map<String, Object> auth = new LinkedHashMap<>();
-        auth.put("uid", 0);
-        auth.put("roomid", realRoomId);
-        auth.put("protover", 2);
-        auth.put("buvid", buvid == null ? "" : buvid);
-        auth.put("platform", "web");
-        auth.put("type", 2);
-        auth.put("key", token == null ? "" : token);
-        // 少数服务端在 101 完成后需要极短延迟才接受首帧，否则直接 RST
-        Thread.sleep(150);
-        send(7, JSON.writeValueAsString(auth).getBytes(StandardCharsets.UTF_8));
-        send(2, new byte[0]);
+        wsClient.setConnectionLostTimeout(0);   // 自己管心跳，不让库自动断开
+        this.wsClient = wsClient;
+        if (!wsClient.connectBlocking(15, java.util.concurrent.TimeUnit.SECONDS)) {
+            running.set(false);
+            throw new IllegalStateException("弹幕通道连接超时（15s）");
+        }
 
         heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "bili-danmaku-heartbeat");
@@ -257,35 +276,31 @@ public final class BiliLiveClient {
         heartbeat.scheduleAtFixedRate(() -> {
             if (!running.get()) return;
             try {
-                send(2, new byte[0]);
+                wsClient.send(pack(2, new byte[0]));
             } catch (Exception e) {
                 running.set(false);
             }
         }, HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS);
-
-        l.onStatus("已发起认证（房间 " + realRoomId + "）");
     }
 
     public void close() {
         running.set(false);
         if (heartbeat != null) heartbeat.shutdownNow();
-        if (ws != null) {
+        if (wsClient != null) {
             try {
-                ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye");
+                wsClient.closeBlocking();
             } catch (Exception ignored) {
             }
-            ws.abort();
         }
     }
 
     public boolean isRunning() { return running.get(); }
 
     private void send(int op, byte[] body) {
-        WebSocket w = ws;
+        var w = wsClient;
         if (w == null) return;
-        byte[] packet = pack(op, body);
         try {
-            w.sendBinary(ByteBuffer.wrap(packet), true).get(5, TimeUnit.SECONDS);
+            w.send(pack(op, body));
         } catch (Exception e) {
             Log.warn("弹幕发包失败 op=" + op + "：" + e.getMessage());
         }
