@@ -35,7 +35,7 @@
 | **M5 解析与下载** | ✅ B站/微博/抖音/快手 解析下载、多线程分段、批量导入、已获取、SQLite；⚠️ 小红书：能读探索流元信息，**媒体下载需 x-s 签名**（见 3.18） | ✅ 完成（小红书受限） |
 | **M6 信息/资产/追踪页** | 🚧 已完成：单个/批量解析、已获取、酷我搜索下载、资产管理、**B站资源（空间+综合搜索）**；⬜ 剩余：账号获取、抖音指数、B站表情包/装扮（6 tab）、网易云/QQ/酷狗/5sing、账号追踪、主题自动切换 | 🚧 进行中 |
 | **M7 音乐高级** | ✅ 完成：NCM/QMC(v1+v2)/KGM/KWM/XM/TM/X2M/X3M 解密 + 标签读写（JAudiotagger）；⬜ 剩余：网络匹配/封面补全（随 M6 音乐搜索） | ✅ 完成 |
-| **M8 票务购物与直播** | ✅ 第一刀：图片裁切/封面制作/媒体筛选（MD5 去重）/媒体压缩；⬜ 剩余：大麦/秀动/会员购、淘宝商品、抖音弹幕姬、B站弹幕姬 | 🚧 进行中 |
+| **M8 票务购物与直播** | ✅ 媒体工具 4 页；🚧 B站弹幕：协议已实现但 JDK WebSocket 被拒（见 3.19，需换库）；⬜ 剩余：大麦/秀动/会员购、淘宝商品、抖音弹幕姬 | 🚧 进行中 |
 | **M9 打包分发** | ✅ jpackage app-image（自带 JRE）、FFmpeg 检测+自定义路径、环境自检（7 项）、隐私校验（自用包/分发包）；⬜ msi/exe 安装器需 WiX | ✅ 完成 |
 
 建议每 1-2 个里程碑发一次内部测试版；M5 之后可考虑对原版做双写灰度。
@@ -199,6 +199,28 @@
      暂缓，先做能验证的功能。
 3. 原版 asset 页的「原始数据」列依赖 `asset_index.db` 缓存（扫描 json + 媒体目录），
    Java 版暂未移植该缓存层；当前统计口径只按扩展名分类。
+
+## 3.19 B站弹幕姬：协议已通，JDK WebSocket 握手被拒（未接页面）
+
+**已实现的（`BiliLiveClient`）**：
+- 房间信息 `room/v1/Room/get_info`（实测：房间 6 → real 7734200 / live=1 / 20 万在线）
+- 游客 buvid3：优先 B站首页 `Set-Cookie`（与 Python `build_cookie_header` 一致），
+  退回 `x/frontend/finger/spi` 的 `b_3`
+- 弹幕鉴权 `getDanmuInfo`：**必须 WBI 签名**（不签名 -352），实测能拿到 token（256-264 字符）+ host
+- 协议封包/解包：`>IHHII`（总长/16/1/op/1）+ body；op=7 认证 / op=2 心跳 / op=8 回执 / op=5 消息；
+  protover=2 用 zlib（`Inflater`）解压后拆内部帧；单测覆盖封包字节布局与解压往返
+
+**卡住的**：JDK `java.net.http.WebSocket` 在 open 后发送认证帧，服务端立即
+`1006` / `Connection reset`，收不到 `op=8`。对照实验：
+- **Python websocket-client 用同样的 URL、同样的认证体、同样的 token 格式 → 成功**
+  （`op=8 {"code":0}` + 4 个 op=5 消息帧）
+- 已排除：token 长度（260 字符正常）、buvid 来源（首页 Set-Cookie 与 spi 都试过）、
+  代理（显式 `ProxySelector.of(null)`）、发送延迟（150ms）、host_list 与默认地址
+- 结论：**JDK WebSocket 实现与该服务端不兼容**，换库（Java-WebSocket / OkHttp / Netty）大概率可解
+
+**替代路线也空**：`xlive/web-room/v1/dM/gethistory` 返回 `code=0` 但 `room_size=0`（该房间无历史缓存）
+
+**当前状态**：页面**未接**（避免用户点了没反应）；引擎与协议单测保留，换库后可直接复用。
 
 ## 3.18 M5 收尾：小红书能力边界（实测）
 
