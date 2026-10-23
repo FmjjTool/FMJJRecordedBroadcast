@@ -40,4 +40,35 @@ class BiliGarbTest {
         assertTrue(BiliGarb.parseSearch(JSON.readTree("{}")).isEmpty());
         assertTrue(BiliGarb.parseSearch(JSON.readTree("{\"list\":[]}")).isEmpty());
     }
+
+    @Test
+    @DisplayName("parseResources：按类别抽资源，只认图片/视频 URL")
+    void parseResources() throws Exception {
+        String json = """
+                {"card":[{"name":"桃味白菜","properties":{
+                    "image":"//i0.hdslb.com/bfs/garb/a.png",
+                    "fans_image":"https://i0.hdslb.com/bfs/garb/b.png",
+                    "fan_no_color":"#FF0000",
+                    "package_md5":"abc123"}}],
+                 "space_bg":[{"name":"背景","properties":{
+                    "image1_landscape":"//i0.hdslb.com/bfs/garb/c.jpg",
+                    "space_1_mp4_horizontal":"//i0.hdslb.com/bfs/garb/d.mp4"}}],
+                 "thumbup":[{"name":"点赞","properties":{"image_ani":"//i0.hdslb.com/x.gif"}}]}
+                """;
+        var list = BiliGarb.parseResources(JSON.readTree(json));
+        // card 2 张图 + space_bg 1 图 1 视频 + thumbup 1 gif = 5
+        assertEquals(5, list.size(), "颜色和 md5 应被排除：" + list);
+        assertTrue(list.stream().allMatch(r -> r.url().startsWith("https://")), "// 应补 https");
+        assertTrue(list.stream().anyMatch(r -> r.categoryCn().equals("空间背景")));
+        assertTrue(list.stream().anyMatch(r -> r.url().endsWith(".mp4")));
+    }
+
+    @Test
+    @DisplayName("categoryName：8 类中文名")
+    void categoryName() {
+        assertEquals("卡片", BiliGarb.categoryName("card"));
+        assertEquals("表情包", BiliGarb.categoryName("emoji_package"));
+        assertEquals("点赞动画", BiliGarb.categoryName("thumbup"));
+        assertEquals("unknown", BiliGarb.categoryName("unknown"));
+    }
 }

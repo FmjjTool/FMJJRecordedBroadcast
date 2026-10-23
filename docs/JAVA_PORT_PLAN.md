@@ -354,15 +354,33 @@ Java 已实现 `BiliGarb` + 该 tab：
 
 **仍占位**：装扮表情包 / 直播表情 / 装扮ID详情 / 收藏集（4 个）
 
+### B站装扮ID详情（bili_garb.py 的「装扮ID详情」）— 新实现
+接口：`x/garb/v2/user/suit/benefit?item_id=&part=cards`（免签名）。
+
+**实测**：`item_id=336202401` → 名称「桃味白菜个性装扮」，抽出 **52 个资源**。
+
+**结构**：`data.suit_items` 是**对象**，8 个键各一类，值为数组，元素含 `name` + `properties`；
+资源 URL 藏在 `properties` 的各种字段里（`image` / `fans_image` / `image1_landscape` /
+`space_1_mp4_horizontal` / `image_ani` / `loading_url` / `image_cover` …）。
+
+8 类：`card` 卡片 / `card_bg` 卡片背景 / `emoji_package` 表情包 / `loading` 加载动画 /
+`play_icon` 播放图标 / `skin` 皮肤 / `space_bg` 空间背景 / `thumbup` 点赞动画。
+
+Java 已实现 `BiliGarb.parseResources()` + 该 tab：
+- 遍历 8 类 → 每个元素 → properties 里**只收图片/视频 URL**（排除颜色值、md5）
+- 页面：输入 item_id + 🔍加载 + ⬇下载全部资源 + 3 列表格（类别 / 名称 / 资源地址）；
+  双击单条下载；批量按 `类别_名称_hash` 命名落 `导出目录/B站资源/装扮/{装扮名}/`
+- 2 个新增测试（资源抽取与过滤、8 类中文名）
+
 ### B站资源（bili_resource.py 聚合 8 tab）— Tab 结构已对齐
 原版是 8 个功能 tab 平铺（顺序交错）：🗃 表情包搜索 / 🔍 装扮搜索 / 🆔 装扮表情包 /
 📺 直播表情 / 👕 装扮ID详情 / 🎁 收藏集 / 👤 空间 / 🔍 综合搜索。
 
 Java 已按同顺序建 8 个 tab：
-- ✅ 可用 4 个：**🗃 表情包搜索**（11 包 × 20 表情）、**🔍 装扮搜索**、
-  **👤 空间**、**🔍 综合搜索**
-- ⚠️ 其余 4 个 tab 是**明确占位**（说明缺哪个模块、原版多少行），不放假控件：
-  需移植 bili_garb 剩余（装扮ID详情/收藏集）与 bili_emoji 剩余（装扮表情包/直播表情）
+- ✅ 可用 5 个：**🗃 表情包搜索**（11 包 × 20 表情）、**🔍 装扮搜索**、
+  **👕 装扮ID详情**（52 个资源）、**👤 空间**、**🔍 综合搜索**
+- ⚠️ 其余 3 个 tab 是**明确占位**（说明缺哪个模块、原版多少行），不放假控件：
+  需移植 bili_garb 剩余（收藏集）与 bili_emoji 剩余（装扮表情包/直播表情）
 
 ### 公众号解析（wechat_article.py，306 行）— 已重排
 原版自上而下：标题(18px)+帮助 → 输入框（**最大高 110**，placeholder 两行示例）→

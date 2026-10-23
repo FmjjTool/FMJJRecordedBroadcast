@@ -75,8 +75,7 @@ public class BiliResourcePage extends BasePage {
                         "需移植 bili_emoji.py：ID 解析与三态识别"),
                 stubTab("📺 直播表情", "输入房间号加载直播间专属表情 / UP主大表情 / 通用表情",
                         "需移植 bili_emoji.py：直播间表情接口"),
-                stubTab("👕 装扮ID详情", "输入装扮 item_id，加载套装全部资源（背景/粉丝牌/评论背景/表情/加载动画等）",
-                        "需移植 bili_garb.py：装扮详情接口"),
+                buildSuitTab(),
                 stubTab("🎁 收藏集", "输入活动 act_id，加载活动视觉 / 勋章 / 全部收藏集卡牌图与卡牌视频",
                         "需移植 bili_garb.py：收藏集接口"),
                 buildSpaceTab(), buildSearchTab());
@@ -94,6 +93,123 @@ public class BiliResourcePage extends BasePage {
         root.setPadding(new Insets(12));
         VBox.setVgrow(tabs, Priority.ALWAYS);
         return root;
+    }
+
+    // ==================== 👕 装扮ID详情（已实现） ====================
+
+    private final TableView<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Resource> suitTable =
+            new TableView<>();
+    private final TextField suitIdField = new TextField();
+    private final Label suitStatus = new Label("");
+    private String suitName = "";
+
+    private Tab buildSuitTab() {
+        suitIdField.setPromptText("装扮 item_id（如 336202401）");
+        suitIdField.setPrefWidth(220);
+        suitIdField.setOnAction(e -> loadSuit());
+        Button load = new Button("🔍 加载");
+        load.setOnAction(e -> loadSuit());
+        Button dlAll = new Button("⬇ 下载全部资源");
+        dlAll.setOnAction(e -> downloadSuitAll());
+        suitStatus.setStyle("-fx-text-fill: #888;");
+        HBox bar = new HBox(6, suitIdField, load, dlAll, suitStatus);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(suitStatus, Priority.ALWAYS);
+
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Resource, String> cCat =
+                new TableColumn<>("类别");
+        cCat.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().categoryCn()));
+        cCat.setPrefWidth(100);
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Resource, String> cName =
+                new TableColumn<>("名称");
+        cName.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().name()));
+        cName.setPrefWidth(260);
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Resource, String> cUrl =
+                new TableColumn<>("资源地址");
+        cUrl.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().url()));
+        cUrl.setPrefWidth(460);
+        suitTable.getColumns().addAll(List.of(cCat, cName, cUrl));
+        suitTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        suitTable.setPlaceholder(new Label("输入装扮 item_id 加载（免签名）"));
+        suitTable.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                var r = suitTable.getSelectionModel().getSelectedItem();
+                if (r != null) downloadSuitResource(r);
+            }
+        });
+
+        VBox box = new VBox(6, bar, suitTable);
+        box.setPadding(new Insets(10));
+        VBox.setVgrow(suitTable, Priority.ALWAYS);
+        return new Tab("👕 装扮ID详情", box);
+    }
+
+    private void loadSuit() {
+        String id = suitIdField.getText() == null ? "" : suitIdField.getText().trim();
+        if (id.isEmpty()) { suitStatus.setText("请输入 item_id"); return; }
+        suitStatus.setText("加载中…");
+        javafx.concurrent.Task<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.SuitDetail> task =
+                new javafx.concurrent.Task<>() {
+                    @Override
+                    protected cn.fmjj.toolbox.engine.platform.bili.BiliGarb.SuitDetail call()
+                            throws Exception {
+                        return garbApi.detail(id, CookieStore.get("bilibili"));
+                    }
+                };
+        task.setOnSucceeded(e -> {
+            var d = task.getValue();
+            suitName = d.name();
+            suitTable.setItems(FXCollections.observableArrayList(d.resources()));
+            suitStatus.setText("「" + d.name() + "」共 " + d.resources().size() + " 个资源");
+        });
+        task.setOnFailed(e -> suitStatus.setText("加载失败：" + task.getException().getMessage()));
+        new Thread(task, "bili-suit").start();
+    }
+
+    private void downloadSuitResource(cn.fmjj.toolbox.engine.platform.bili.BiliGarb.Resource r) {
+        new Thread(() -> {
+            String fileName = r.name().replaceAll("[\\\\/:*?\"<>|]", "_") + "_"
+                    + Math.abs(r.url().hashCode() % 1000)
+                    + (r.url().toLowerCase().contains(".mp4") ? ".mp4" : ".png");
+            java.nio.file.Path dir = cn.fmjj.toolbox.core.settings.Settings.load()
+                    .effectiveExportDir().resolve("B站资源").resolve("装扮")
+                    .resolve(suitName.isEmpty() ? "未知" : suitName.replaceAll("[\\\\/:*?\"<>|]", "_"));
+            var res = new cn.fmjj.toolbox.engine.download.FileDownloader().download(
+                    java.util.List.of(r.url()), dir.resolve(fileName),
+                    java.util.Map.of("Referer", "https://www.bilibili.com/"), p -> { }, () -> false);
+            javafx.application.Platform.runLater(() -> suitStatus.setText(
+                    res.success() ? "已下载：" + fileName : "下载失败：" + r.name()));
+        }, "suit-dl").start();
+    }
+
+    private void downloadSuitAll() {
+        if (suitTable.getItems().isEmpty()) { suitStatus.setText("请先加载装扮"); return; }
+        var list = new java.util.ArrayList<>(suitTable.getItems());
+        suitStatus.setText("开始下载 " + list.size() + " 个资源…");
+        new Thread(() -> {
+            int ok = 0, fail = 0;
+            var dl = new cn.fmjj.toolbox.engine.download.FileDownloader();
+            for (int i = 0; i < list.size(); i++) {
+                var r = list.get(i);
+                String fileName = r.category() + "_" + r.name().replaceAll("[\\\\/:*?\"<>|]", "_")
+                        + "_" + Math.abs(r.url().hashCode() % 1000)
+                        + (r.url().toLowerCase().contains(".mp4") ? ".mp4" : ".png");
+                java.nio.file.Path dir = cn.fmjj.toolbox.core.settings.Settings.load()
+                        .effectiveExportDir().resolve("B站资源").resolve("装扮")
+                        .resolve(suitName.isEmpty() ? "未知" : suitName.replaceAll("[\\\\/:*?\"<>|]", "_"));
+                var res = dl.download(java.util.List.of(r.url()), dir.resolve(fileName),
+                        java.util.Map.of("Referer", "https://www.bilibili.com/"), p -> { }, () -> false);
+                if (res.success()) ok++; else fail++;
+                int n = i + 1;
+                javafx.application.Platform.runLater(() ->
+                        suitStatus.setText("下载中… " + n + "/" + list.size()));
+            }
+            int fok = ok, ffail = fail;
+            javafx.application.Platform.runLater(() -> {
+                suitStatus.setText("下载完成：成功 " + fok + "，失败 " + ffail);
+                toast("装扮资源下载完成：" + fok + " 个");
+            });
+        }, "suit-dl-all").start();
     }
 
     // ==================== 🔍 装扮搜索（已实现） ====================

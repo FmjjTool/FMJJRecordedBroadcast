@@ -68,6 +68,79 @@ public final class BiliGarb {
         return out;
     }
 
+
+    /** 装扮资源（按类别）。 */
+    public record Resource(String category, String categoryCn, String name, String url) {}
+
+    /** 类别中文名。 */
+    public static String categoryName(String key) {
+        return switch (key) {
+            case "card" -> "卡片";
+            case "card_bg" -> "卡片背景";
+            case "emoji_package" -> "表情包";
+            case "loading" -> "加载动画";
+            case "play_icon" -> "播放图标";
+            case "skin" -> "皮肤";
+            case "space_bg" -> "空间背景";
+            case "thumbup" -> "点赞动画";
+            default -> key;
+        };
+    }
+
+    /**
+     * 从 suit_items 抽出全部资源 URL。
+     *
+     * <p>结构：`suit_items` 是对象，每个键是一类（card/card_bg/emoji_package/loading/
+     * play_icon/skin/space_bg/thumbup），值是数组，元素含 name + properties；
+     * 资源 URL 藏在 properties 的各种 `*image*` / `*url*` 字段里。
+     */
+    public static List<Resource> parseResources(JsonNode suitItems) {
+        List<Resource> out = new ArrayList<>();
+        var cats = suitItems.fieldNames();
+        while (cats.hasNext()) {
+            String cat = cats.next();
+            String cn = categoryName(cat);
+            JsonNode arr = suitItems.path(cat);
+            if (!arr.isArray()) continue;
+            for (JsonNode item : arr) {
+                String name = item.path("name").asText("");
+                JsonNode props = item.path("properties");
+                var pf = props.fieldNames();
+                while (pf.hasNext()) {
+                    String key = pf.next();
+                    String val = props.path(key).asText("");
+                    if (!isResourceUrl(val)) continue;
+                    out.add(new Resource(cat, cn, name.isEmpty() ? cat : name, norm(val)));
+                }
+            }
+        }
+        return out;
+    }
+
+    /** 只认图片/视频 URL，排除 md5、颜色等。 */
+    private static boolean isResourceUrl(String v) {
+        if (v == null || v.isEmpty()) return false;
+        String u = v.startsWith("//") ? "https:" + v : v;
+        if (!u.startsWith("http")) return false;
+        String lower = u.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+                || lower.endsWith(".gif") || lower.endsWith(".webp")
+                || lower.endsWith(".mp4") || lower.contains(".png?") || lower.contains(".jpg?");
+    }
+
+    private static String norm(String u) {
+        return u.startsWith("//") ? "https:" + u : u;
+    }
+
+    /** 取装扮详情 + 资源清单。 */
+    public record SuitDetail(String itemId, String name, List<Resource> resources) {}
+
+    public SuitDetail detail(String itemId, String cookie) throws Exception {
+        JsonNode data = suitDetail(itemId, cookie);
+        return new SuitDetail(itemId, data.path("name").asText(""),
+                parseResources(data.path("suit_items")));
+    }
+
     /** 装扮详情（suit_items 里含表情/头像框/粉丝牌等资源）。 */
     public JsonNode suitDetail(String itemId, String cookie) throws Exception {
         String url = SUIT_API + "?item_id=" + HttpClient.urlEncode(itemId) + "&part=cards";
