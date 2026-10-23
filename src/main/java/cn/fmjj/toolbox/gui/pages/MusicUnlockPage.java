@@ -4,54 +4,41 @@ import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.engine.media.AudioEngine;
 import cn.fmjj.toolbox.engine.music.MusicUnlock;
 import javafx.application.Platform;
-import javafx.beans.property.SimpleStringProperty;
+import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.ProgressBar;
-import javafx.scene.control.TableColumn;
-import javafx.scene.control.TableView;
-import javafx.scene.control.TextField;
+import javafx.scene.control.ListView;
+import javafx.scene.control.TextArea;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
-import javafx.stage.DirectoryChooser;
-import javafx.stage.Window;
+import javafx.stage.FileChooser;
 
 import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 /**
- * 🔓 音乐解密页：批量解密加密音乐（网易云 NCM / QQ音乐 QMC / 酷狗 KGM / 酷我 KWM）。
- * 移植自 Python 版 gui_qt/pages/music_unlock.py 的核心链路。
+ * 🔓 音乐解密（对齐 Python 版 music_unlock.py 的极简结构）。
+ *
+ * <p>布局：`🔓 音乐解密`(18px) + 伸展 + `❓ 帮助` → 工具行（`📁 选择文件` + `🗑 清空` +
+ * 伸展 + `🔓 开始解密`(绿, padding 6 16)）→ 文件列表（**最大高 200**）→ 日志（只读，伸展）。
+ *
+ * <p>与原版一致：**选择文件**（多选文件对话框，不是选目录），全程本地解密。
  */
 public class MusicUnlockPage extends BasePage {
 
-    private static final class Row {
-        final Path file;
-        String status = "";
-        Row(Path file) { this.file = file; }
-    }
-
-    private final TextField dirField = new TextField();
-    private final TableView<Row> table = new TableView<>();
-    private final CheckBox deleteSource = new CheckBox("解密成功后删除原加密文件（进回收站）");
-    private final CheckBox recursive = new CheckBox("包含子文件夹");
-    private final Label status = new Label("就绪");
-    private final ProgressBar progress = new ProgressBar(0);
-    private final Button runBtn = new Button("🔓 开始解密");
-    private final AtomicBoolean stopFlag = new AtomicBoolean(false);
+    private final ListView<String> fileList = new ListView<>();
+    private final TextArea log = new TextArea();
+    private final Button decryptBtn = new Button("🔓 开始解密");
+    private final List<Path> files = new ArrayList<>();
 
     private Consumer<String> toast;
 
@@ -59,155 +46,143 @@ public class MusicUnlockPage extends BasePage {
     public String title() { return "🔓 音乐解密"; }
 
     @Override
-    public void bindToast(Consumer<String> toastSink) { this.toast = toastSink; }
-
-    @Override
-    protected Node build() {
-        progress.setPrefWidth(200);
-        recursive.setSelected(true);
-
-        Button browse = new Button("📂 浏览");
-        browse.setOnAction(e -> chooseDir());
-        Button scan = new Button("🔍 扫描");
-        scan.setOnAction(e -> scan());
-        Button openOut = new Button("📁 打开输出目录");
-        openOut.setOnAction(e -> AudioEngine.openInExplorer(outDir()));
-
-        HBox top = new HBox(8, new Label("目录"), dirField, browse, scan, openOut);
-        top.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(dirField, Priority.ALWAYS);
-
-        TableColumn<Row, String> cName = new TableColumn<>("文件");
-        cName.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().file.getFileName().toString()));
-        TableColumn<Row, String> cSize = new TableColumn<>("大小");
-        cSize.setCellValueFactory(d -> new SimpleStringProperty(
-                AudioEngine.formatSize(AudioEngine.sizeOf(d.getValue().file))));
-        TableColumn<Row, String> cStatus = new TableColumn<>("状态");
-        cStatus.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().status));
-        table.getColumns().addAll(List.of(cName, cSize, cStatus));
-        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
-
-        runBtn.setOnAction(e -> run());
-        Button stop = new Button("⏹ 停止");
-        stop.setOnAction(e -> stopFlag.set(true));
-        HBox actions = new HBox(10, runBtn, stop, deleteSource, recursive, progress, status);
-        actions.setAlignment(Pos.CENTER_LEFT);
-
-        Label pageTitle = new Label(title());
-        pageTitle.getStyleClass().add("page-title");
-        Label hint = new Label("支持：NCM（网易云）/ QMC 系列（QQ音乐 v1+v2）/ KGM·KGMA·VPR（酷狗）/ KWM（酷我）；"
-                + "输出按歌曲元数据命名到「导出目录/解密音乐」");
-        hint.getStyleClass().add("stub-desc");
-        hint.setWrapText(true);
-
-        VBox root = new VBox(10, pageTitle, hint, top, table, actions);
-        root.getStyleClass().add("page-wrapper");
-        root.setPadding(new Insets(12));
-        VBox.setVgrow(table, Priority.ALWAYS);
-
-        dirField.setText(Settings.load().effectiveWorkDir().toString());
-        return root;
-    }
-
-    private Path outDir() {
-        return Settings.load().effectiveExportDir().resolve("解密音乐");
-    }
-
-    private Window owner() {
-        return table.getScene() == null ? null : table.getScene().getWindow();
-    }
+    public void bindToast(Consumer<String> sink) { this.toast = sink; }
 
     private void toast(String msg) {
         if (toast != null) toast.accept(msg);
     }
 
-    private void chooseDir() {
-        DirectoryChooser chooser = new DirectoryChooser();
-        chooser.setTitle("选择含加密音乐的目录");
-        File d = chooser.showDialog(owner());
-        if (d != null) {
-            dirField.setText(d.getAbsolutePath());
-            scan();
-        }
+    private void appendLog(String s) {
+        Platform.runLater(() -> {
+            log.appendText(s + "\n");
+            log.setScrollTop(Double.MAX_VALUE);
+        });
     }
 
-    private void scan() {
-        String dir = dirField.getText().trim();
-        if (dir.isEmpty()) {
-            status.setText("请先选择目录");
-            return;
-        }
-        List<Row> rows = new ArrayList<>();
-        try (Stream<Path> s = Files.walk(Paths.get(dir), recursive.isSelected() ? Integer.MAX_VALUE : 1)) {
-            s.filter(Files::isRegularFile)
-                    .filter(p -> MusicUnlock.isSupported(extOf(p)))
-                    .sorted()
-                    .forEach(p -> rows.add(new Row(p)));
-        } catch (IOException e) {
-            status.setText("扫描失败：" + e.getMessage());
-            return;
-        }
-        table.getItems().setAll(rows);
-        status.setText("扫描到 " + rows.size() + " 个加密文件");
+    @Override
+    protected Node build() {
+        Label pageTitle = new Label("🔓 音乐解密");
+        pageTitle.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
+        Button help = new Button("❓ 帮助");
+        help.setOnAction(e -> showHelp());
+        HBox titleRow = new HBox(8, pageTitle, spacer(), help);
+        titleRow.setAlignment(Pos.CENTER_LEFT);
+
+        Button selectBtn = new Button("📁 选择文件");
+        selectBtn.setOnAction(e -> selectFiles());
+        Button clearBtn = new Button("🗑 清空");
+        clearBtn.setOnAction(e -> {
+            files.clear();
+            renderFiles();
+        });
+        decryptBtn.setStyle("-fx-background-color: #2e7d32; -fx-text-fill: white; "
+                + "-fx-padding: 6 16 6 16; -fx-background-radius: 4;");
+        decryptBtn.setOnAction(e -> decryptAll());
+        HBox bar = new HBox(6, selectBtn, clearBtn, spacer(), decryptBtn);
+        bar.setAlignment(Pos.CENTER_LEFT);
+
+        fileList.setMaxHeight(200);
+        fileList.setPrefHeight(200);
+        fileList.setPlaceholder(new Label("尚未选择文件（点「📁 选择文件」）"));
+
+        log.setEditable(false);
+        log.setPromptText("解密日志");
+
+        VBox root = new VBox(6, titleRow, bar, fileList, log);
+        root.getStyleClass().add("page-wrapper");
+        root.setPadding(new Insets(12));
+        VBox.setVgrow(log, Priority.ALWAYS);
+        return root;
     }
 
-    private static String extOf(Path p) {
-        String n = p.getFileName().toString();
-        int dot = n.lastIndexOf('.');
-        return dot > 0 ? n.substring(dot + 1) : "";
+    private static Node spacer() {
+        HBox h = new HBox();
+        HBox.setHgrow(h, Priority.ALWAYS);
+        return h;
     }
 
-    private void run() {
-        if (table.getItems().isEmpty()) {
-            status.setText("请先扫描出待解密文件");
+    private void showHelp() {
+        javafx.scene.control.Alert a = new javafx.scene.control.Alert(
+                javafx.scene.control.Alert.AlertType.INFORMATION);
+        a.setTitle("音乐解密 · 功能介绍");
+        a.setHeaderText("🔓 一键批量解密各平台加密音乐");
+        a.setContentText("""
+                支持格式：
+                · ncm（网易云）
+                · qmc0/qmc2/qmc3/qmc4/qmc6/qmc8/qmcflac/qmcogg/mflac/mflac0/mgg/mgg0/mgg1/tkm（QQ音乐）
+                · kgm/kgma/vpr（酷狗）
+                · kwm（酷我）
+                · xm（虾米）、tm0/tm2/tm3/tm6（喜马拉雅）、x2m/x3m（喜马拉雅）
+
+                操作：📁 选择文件（可多选）→ 🔓 开始解密
+                输出：统一导出目录/解密音乐/（有元数据时按「标题 - 歌手」命名）
+                全程本地解密，不上传、无需 Cookie
+                """);
+        a.showAndWait();
+    }
+
+    private void selectFiles() {
+        FileChooser c = new FileChooser();
+        c.setTitle("选择加密音乐文件");
+        c.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("加密音乐",
+                        "*.ncm", "*.qmc0", "*.qmc2", "*.qmc3", "*.qmc4", "*.qmc6", "*.qmc8",
+                        "*.qmcflac", "*.qmcogg", "*.mflac", "*.mflac0", "*.mgg", "*.mgg0", "*.mgg1",
+                        "*.tkm", "*.kgm", "*.kgma", "*.vpr", "*.kwm", "*.xm",
+                        "*.tm0", "*.tm2", "*.tm3", "*.tm6", "*.x2m", "*.x3m"),
+                new FileChooser.ExtensionFilter("所有文件", "*.*"));
+        List<File> picked = c.showOpenMultipleDialog(fileList.getScene() == null
+                ? null : fileList.getScene().getWindow());
+        if (picked == null || picked.isEmpty()) return;
+        Set<Path> all = new LinkedHashSet<>(files);
+        for (File f : picked) all.add(f.toPath());
+        files.clear();
+        files.addAll(all);
+        renderFiles();
+    }
+
+    private void renderFiles() {
+        fileList.setItems(FXCollections.observableArrayList(
+                files.stream().map(p -> p.getFileName().toString()).toList()));
+    }
+
+    private void decryptAll() {
+        if (files.isEmpty()) {
+            appendLog("⚠️ 请先选择文件");
             return;
         }
-        stopFlag.set(false);
-        runBtn.setDisable(true);
-        progress.setProgress(0);
-        List<Row> rows = new ArrayList<>(table.getItems());
-        Path out = outDir();
-        boolean remove = deleteSource.isSelected();
+        decryptBtn.setDisable(true);
+        Path outDir = Settings.load().effectiveExportDir().resolve("解密音乐");
+        List<Path> batch = new ArrayList<>(files);
+        appendLog("🔓 开始解密 " + batch.size() + " 个文件 → " + outDir);
 
         javafx.concurrent.Task<int[]> task = new javafx.concurrent.Task<>() {
             @Override
             protected int[] call() {
                 int ok = 0, fail = 0;
-                for (int i = 0; i < rows.size(); i++) {
-                    if (stopFlag.get()) break;
-                    Row row = rows.get(i);
+                for (Path p : batch) {
                     try {
-                        Path saved = MusicUnlock.decryptTo(row.file, out);
-                        row.status = "✅ " + saved.getFileName();
+                        Path saved = MusicUnlock.decryptTo(p, outDir);
+                        appendLog("✅ " + p.getFileName() + " → " + saved.getFileName());
                         ok++;
-                        if (remove) {
-                            var del = AudioEngine.deleteFilesSafe(List.of(row.file));
-                            if (del.ok() == 0) row.status += "（源删除失败）";
-                        }
                     } catch (Exception e) {
-                        row.status = "❌ " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                        appendLog("❌ " + p.getFileName() + "：" + e.getMessage());
                         fail++;
                     }
-                    int idx = i;
-                    Platform.runLater(() -> {
-                        table.refresh();
-                        progress.setProgress((double) (idx + 1) / rows.size());
-                        status.setText("解密中… " + (idx + 1) + "/" + rows.size());
-                    });
                 }
                 return new int[] {ok, fail};
             }
         };
         task.setOnSucceeded(e -> {
             int[] r = task.getValue();
-            runBtn.setDisable(false);
-            progress.setProgress(1);
-            status.setText("完成：成功 " + r[0] + "，失败 " + r[1]);
+            decryptBtn.setDisable(false);
+            appendLog("完成：成功 " + r[0] + "，失败 " + r[1]);
             toast("解密完成：" + r[0] + " 个成功 / " + r[1] + " 失败");
+            if (r[0] > 0) AudioEngine.openInExplorer(outDir);
         });
         task.setOnFailed(e -> {
-            runBtn.setDisable(false);
-            status.setText("解密异常：" + task.getException().getMessage());
+            decryptBtn.setDisable(false);
+            appendLog("❌ 异常：" + task.getException().getMessage());
         });
         new Thread(task, "music-unlock").start();
     }
