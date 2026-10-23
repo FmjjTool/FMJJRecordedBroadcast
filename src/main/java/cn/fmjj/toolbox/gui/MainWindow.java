@@ -24,6 +24,7 @@ import cn.fmjj.toolbox.gui.pages.MediaSorterPage;
 import cn.fmjj.toolbox.gui.pages.MigratePage;
 import cn.fmjj.toolbox.gui.pages.MusicSearchPage;
 import cn.fmjj.toolbox.gui.pages.MusicTagPage;
+import cn.fmjj.toolbox.gui.pages.WechatArticlePage;
 import cn.fmjj.toolbox.gui.pages.MusicUnlockPage;
 import cn.fmjj.toolbox.gui.pages.OrganizePage;
 import cn.fmjj.toolbox.gui.pages.RenameBatchPage;
@@ -214,6 +215,7 @@ public class MainWindow {
         pageFactories.put("media_compress", MediaCompressPage::new);
         // 已移植（M6 第二刀）
         pageFactories.put("bili_resource", BiliResourcePage::new);
+        pageFactories.put("wechat_article", WechatArticlePage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {

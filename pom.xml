@@ -54,6 +54,13 @@
       <version>${jackson.version}</version>
     </dependency>
 
+    <!-- HTML 解析（公众号文章等页面解析，对应 Python 版 BeautifulSoup） -->
+    <dependency>
+      <groupId>org.jsoup</groupId>
+      <artifactId>jsoup</artifactId>
+      <version>1.18.1</version>
+    </dependency>
+
     <!-- 音乐标签读写（对应 Python 版 mutagen） -->
     <dependency>
       <groupId>net.jthink</groupId>
