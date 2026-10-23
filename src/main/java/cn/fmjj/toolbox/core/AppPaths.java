@@ -53,9 +53,17 @@ public final class AppPaths {
      * **不探测兄弟目录**（跨仓库共享数据是红线，见类注释）。
      */
     static Path pickRoot(Path self, String envHome) {
+        // 显式指定即权威：不要求目录已存在（首次运行/测试时它还不存在，
+        // 曾经因为 isDirectory 校验导致 fmjj.home 被忽略 → 测试写进真实 config）
         if (envHome != null && !envHome.isBlank()) {
-            Path p = Paths.get(envHome);
-            if (Files.isDirectory(p)) return p.toAbsolutePath().normalize();
+            return Paths.get(envHome).toAbsolutePath().normalize();
+        }
+        // 开发模式（target/classes 或 target/test-classes）→ 项目根，
+        // 否则 mvn clean 会把 config/（含登录态）一起删掉
+        Path parent = self.getParent();
+        if (parent != null && "target".equals(String.valueOf(parent.getFileName()))) {
+            Path root = parent.getParent();
+            if (root != null) return root;
         }
         return self;
     }

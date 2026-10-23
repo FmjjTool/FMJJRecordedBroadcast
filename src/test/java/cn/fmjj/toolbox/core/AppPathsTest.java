@@ -36,7 +36,7 @@ class AppPathsTest {
     @DisplayName("红线：兄弟目录是 Python 版也不碰")
     void neverTouchSiblingPythonHome(@TempDir Path tmp) throws IOException {
         Path javaHome = Files.createDirectories(tmp.resolve("FMJJRecordedBroadcast_JAVA"));
-        Path self = Files.createDirectories(javaHome.resolve("target").resolve("classes"));
+        Path self = Files.createDirectories(javaHome.resolve("bin"));
         touchCookies(tmp.resolve("FMJJRecordedBroadcast"));   // 兄弟目录（Python 版）
         assertEquals(self, AppPaths.pickRoot(self, null));
     }
@@ -44,13 +44,21 @@ class AppPathsTest {
     @Test
     @DisplayName("红线：上级目录有 config 也不碰")
     void neverWalkUp(@TempDir Path tmp) throws IOException {
-        Path self = Files.createDirectories(tmp.resolve("target").resolve("classes"));
+        Path self = Files.createDirectories(tmp.resolve("build").resolve("classes"));
         touchCookies(tmp);
         assertEquals(self, AppPaths.pickRoot(self, null));
     }
 
     @Test
-    @DisplayName("FMJJ_HOME 显式指定才生效（用户主动选择共享）")
+    @DisplayName("开发模式：target/classes → 项目根（避免 mvn clean 删掉 config）")
+    void devModeUsesProjectRoot(@TempDir Path tmp) throws IOException {
+        Path project = Files.createDirectories(tmp.resolve("proj"));
+        Path self = Files.createDirectories(project.resolve("target").resolve("classes"));
+        assertEquals(project, AppPaths.pickRoot(self, null));
+    }
+
+    @Test
+    @DisplayName("FMJJ_HOME 显式指定才生效（用户主动选择）")
     void envHomeWins(@TempDir Path tmp) throws IOException {
         Path self = Files.createDirectories(tmp.resolve("app"));
         Path envHome = Files.createDirectories(tmp.resolve("custom-home"));
@@ -58,9 +66,10 @@ class AppPathsTest {
     }
 
     @Test
-    @DisplayName("FMJJ_HOME 指向不存在的目录 → 忽略，用自身")
-    void envHomeInvalid(@TempDir Path tmp) throws IOException {
+    @DisplayName("FMJJ_HOME 指向不存在的目录 → 仍然采用（首次运行/测试常见）")
+    void envHomeNotYetCreated(@TempDir Path tmp) throws IOException {
         Path self = Files.createDirectories(tmp.resolve("app"));
-        assertEquals(self, AppPaths.pickRoot(self, tmp.resolve("nope").toString()));
+        Path notYet = tmp.resolve("fresh-home");
+        assertEquals(notYet.toAbsolutePath().normalize(), AppPaths.pickRoot(self, notYet.toString()));
     }
 }

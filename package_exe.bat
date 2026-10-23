@@ -17,6 +17,13 @@ if exist dist rmdir /s /q dist
   --main-class cn.fmjj.toolbox.Launcher --dest dist --app-version 2.9.1 ^
   --vendor FMJJ --java-options "-Dfile.encoding=UTF-8" || goto :err
 
+rem 保留登录态：dist 每次重建，从仓库根 config/ 复制回 app/config/
+if exist config\cookies.json (
+  if not exist dist\FengMingToolboxJava\app\config mkdir dist\FengMingToolboxJava\app\config
+  copy /y config\cookies.json dist\FengMingToolboxJava\app\config\cookies.json >nul
+  echo 已恢复登录态：app\config\cookies.json
+)
+
 echo.
 echo 完成：dist\FengMingToolboxJava\FengMingToolboxJava.exe
 echo 桌面快捷启动脚本：桌面\封茗工具箱 Java版.vbs
