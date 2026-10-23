@@ -17,11 +17,27 @@ if exist dist rmdir /s /q dist
   --main-class cn.fmjj.toolbox.Launcher --dest dist --app-version 2.9.1 ^
   --vendor FMJJ --java-options "-Dfile.encoding=UTF-8" || goto :err
 
-rem 保留登录态：dist 每次重建，从仓库根 config/ 复制回 app/config/
-if exist config\cookies.json (
-  if not exist dist\FengMingToolboxJava\app\config mkdir dist\FengMingToolboxJava\app\config
-  copy /y config\cookies.json dist\FengMingToolboxJava\app\config\cookies.json >nul
-  echo 已恢复登录态：app\config\cookies.json
+rem ---- 隐私校验：分发包不应含用户数据 ----
+set LEAK=0
+for %%D in (config download logs) do (
+  if exist dist\FengMingToolboxJava\app\%%D (
+    if /i not "%%D"=="config" (
+      echo [警告] 包里含 %%D 目录，请清理后再分发
+      set LEAK=1
+    )
+  )
+)
+
+rem ---- 登录态：自用包才复制（package_exe.bat keep）----
+if /i "%1"=="keep" (
+  if exist config\cookies.json (
+    if not exist dist\FengMingToolboxJava\app\config mkdir dist\FengMingToolboxJava\app\config
+    copy /y config\cookies.json dist\FengMingToolboxJava\app\config\cookies.json >nul
+    echo 已恢复登录态（自用包）：app\config\cookies.json
+  )
+) else (
+  if exist dist\FengMingToolboxJava\app\config\cookies.json del /q dist\FengMingToolboxJava\app\config\cookies.json
+  echo 分发包：不含登录态（自用请执行 package_exe.bat keep）
 )
 
 echo.

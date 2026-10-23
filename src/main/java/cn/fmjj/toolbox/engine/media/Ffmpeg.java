@@ -47,6 +47,21 @@ public final class Ffmpeg {
         return exe;
     }
 
+    /** FFmpeg 版本首行（环境自检用）；取不到返回空串。 */
+    public static String version() {
+        try {
+            Process p = new ProcessBuilder(ffmpegExe(), "-version")
+                    .redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            String first = out.lines().findFirst().orElse("").strip();
+            return first.length() > 140 ? first.substring(0, 140) : first;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     /** Python: find_ffprobe_exe（自定义位置同目录 → ffmpeg 同目录）。 */
     public static String ffprobeExe() {
         if (cachedFfprobe != null) return cachedFfprobe;

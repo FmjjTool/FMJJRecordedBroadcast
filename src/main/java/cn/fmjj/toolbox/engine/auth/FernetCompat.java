@@ -185,7 +185,11 @@ public final class FernetCompat {
                 return new String(data.toArray(java.lang.foreign.ValueLayout.JAVA_BYTE), 0, bytes - 2,
                         StandardCharsets.UTF_16LE).trim();
             } finally {
-                regCloseKey.invokeExact(hKey);
+                // RegCloseKey 返回 LONG，必须接收（否则 invokeExact 期望 void → WrongMethodTypeException）
+                long closed = (long) regCloseKey.invokeExact(hKey);
+                if (closed != 0) {
+                    cn.fmjj.toolbox.core.Log.warn("RegCloseKey 返回 " + closed);
+                }
             }
         } catch (Throwable t) {
             cn.fmjj.toolbox.core.Log.warn("FFM 读取 MachineGuid 失败，尝试 reg query：" + t);

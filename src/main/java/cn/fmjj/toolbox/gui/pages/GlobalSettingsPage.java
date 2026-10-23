@@ -1,15 +1,18 @@
 package cn.fmjj.toolbox.gui.pages;
 
 import cn.fmjj.toolbox.core.settings.Settings;
+import cn.fmjj.toolbox.engine.diagnostics.EnvironmentCheck;
 import cn.fmjj.toolbox.gui.MainWindow;
 import cn.fmjj.toolbox.gui.Theme;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -66,6 +69,8 @@ public class GlobalSettingsPage extends BasePage {
         Button exportBrowse = new Button("📂 浏览");
         exportBrowse.setOnAction(e -> exportDir.setText(pickDir("选择统一导出目录")));
 
+        Button envCheck = new Button("🔍 环境自检");
+        envCheck.setOnAction(e -> showEnvironmentCheck());
         Button save = new Button("💾 保存设置");
         save.setDefaultButton(true);
         save.setOnAction(e -> save());
@@ -85,10 +90,29 @@ public class GlobalSettingsPage extends BasePage {
         Label pageTitle = new Label(title());
         pageTitle.getStyleClass().add("page-title");
         VBox root = new VBox(12, pageTitle, dirSection, themeSection, ffmpegSection,
-                new HBox(10, save, status));
+                new HBox(10, save, envCheck, status));
         root.getStyleClass().add("page-wrapper");
         root.setPadding(new Insets(12));
         return root;
+    }
+
+    /** 环境自检弹窗：依赖是否齐全、目录可写、磁盘、登录态。 */
+    private void showEnvironmentCheck() {
+        var items = EnvironmentCheck.run();
+        StringBuilder sb = new StringBuilder();
+        for (var it : items) {
+            sb.append(it.icon()).append(' ').append(it.name()).append('：')
+              .append(it.detail()).append('\n');
+        }
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle("环境自检");
+        alert.setHeaderText(EnvironmentCheck.allOk(items) ? "全部通过 ✅" : "有需要处理的项（见下方 ❌ / ⚠️）");
+        TextArea area = new TextArea(sb.toString());
+        area.setEditable(false);
+        area.setWrapText(true);
+        area.setPrefSize(700, 320);
+        alert.getDialogPane().setContent(area);
+        alert.showAndWait();
     }
 
     private static String nvl(String s) { return s == null ? "" : s; }

@@ -9,13 +9,17 @@ import cn.fmjj.toolbox.gui.pages.AudioPage;
 import cn.fmjj.toolbox.gui.pages.BasePage;
 import cn.fmjj.toolbox.gui.pages.CalendarPage;
 import cn.fmjj.toolbox.gui.pages.ConvertPage;
+import cn.fmjj.toolbox.gui.pages.CoverMakerPage;
 import cn.fmjj.toolbox.gui.pages.FileTimePage;
 import cn.fmjj.toolbox.gui.pages.GlobalSettingsPage;
+import cn.fmjj.toolbox.gui.pages.ImageCropPage;
 import cn.fmjj.toolbox.gui.pages.InfoBatchPage;
 import cn.fmjj.toolbox.gui.pages.InfoParsePage;
 import cn.fmjj.toolbox.gui.pages.InfoResultsPage;
 import cn.fmjj.toolbox.gui.pages.LauncherPage;
 import cn.fmjj.toolbox.gui.pages.LyricsPage;
+import cn.fmjj.toolbox.gui.pages.MediaCompressPage;
+import cn.fmjj.toolbox.gui.pages.MediaSorterPage;
 import cn.fmjj.toolbox.gui.pages.MigratePage;
 import cn.fmjj.toolbox.gui.pages.MusicSearchPage;
 import cn.fmjj.toolbox.gui.pages.MusicTagPage;
@@ -202,6 +206,11 @@ public class MainWindow {
         // 已移植（M6 第一刀）
         pageFactories.put("netease", MusicSearchPage::new);
         pageFactories.put("asset", AssetPage::new);
+        // 已移植（M8 媒体工具）
+        pageFactories.put("image_crop", ImageCropPage::new);
+        pageFactories.put("cover_maker", CoverMakerPage::new);
+        pageFactories.put("image_sorter", MediaSorterPage::new);
+        pageFactories.put("media_compress", MediaCompressPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
