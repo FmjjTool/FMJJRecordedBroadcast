@@ -65,12 +65,27 @@ public class BiliResourcePage extends BasePage {
     protected Node build() {
         TabPane tabs = new TabPane();
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        tabs.getTabs().addAll(buildSpaceTab(), buildSearchTab());
+        // 顺序对齐原版 _FLAT：表情包搜索/装扮搜索/装扮表情包/直播表情/装扮ID详情/收藏集/空间/综合搜索
+        tabs.getTabs().addAll(
+                stubTab("🗃 表情包搜索", "浏览 B站全部表情包（需登录），按名字搜索、滚动加载更多，可批量下载",
+                        "需移植 bili_emoji.py（555 行）：表情包搜索接口 + 详情 + 批量下载"),
+                stubTab("🔍 装扮搜索", "关键词搜装扮/收藏集（白菜、UP主名等），无需登录",
+                        "需移植 bili_garb.py（623 行）：装扮搜索接口"),
+                stubTab("🆔 装扮表情包", "输入表情包/装扮 ID 下载，自动识别普通表情包 → 装扮表情 → 收藏集",
+                        "需移植 bili_emoji.py：ID 解析与三态识别"),
+                stubTab("📺 直播表情", "输入房间号加载直播间专属表情 / UP主大表情 / 通用表情",
+                        "需移植 bili_emoji.py：直播间表情接口"),
+                stubTab("👕 装扮ID详情", "输入装扮 item_id，加载套装全部资源（背景/粉丝牌/评论背景/表情/加载动画等）",
+                        "需移植 bili_garb.py：装扮详情接口"),
+                stubTab("🎁 收藏集", "输入活动 act_id，加载活动视觉 / 勋章 / 全部收藏集卡牌图与卡牌视频",
+                        "需移植 bili_garb.py：收藏集接口"),
+                buildSpaceTab(), buildSearchTab());
 
         Label pageTitle = new Label(title());
         pageTitle.getStyleClass().add("page-title");
-        Label hint = new Label("空间：输入 UID 看资料并下载头像/背景/头像框（免签名）；"
-                + "综合搜索：WBI 签名搜索用户与视频；表情包/装扮（6 个 tab）随 M6 后续");
+        Label hint = new Label("8 个 tab 与原版一致：表情包搜索 / 装扮搜索 / 装扮表情包 / 直播表情 / "
+                + "装扮ID详情 / 收藏集 / 空间 / 综合搜索。当前可用：**空间**（免签名，头像/背景/头像框下载）"
+                + "与**综合搜索**（WBI 签名）；其余 6 个 tab 待移植 bili_emoji / bili_garb。");
         hint.getStyleClass().add("stub-desc");
         hint.setWrapText(true);
 
@@ -79,6 +94,19 @@ public class BiliResourcePage extends BasePage {
         root.setPadding(new Insets(12));
         VBox.setVgrow(tabs, Priority.ALWAYS);
         return root;
+    }
+
+    /** 未实现 tab 的占位：明确说明缺什么，不放假控件。 */
+    private Tab stubTab(String name, String what, String needs) {
+        Label title = new Label(what);
+        title.setWrapText(true);
+        title.setStyle("-fx-font-size: 13px;");
+        Label need = new Label("⚠️ 未实现：" + needs);
+        need.setWrapText(true);
+        need.setStyle("-fx-text-fill: #c62828;");
+        VBox box = new VBox(10, title, need);
+        box.setPadding(new Insets(16));
+        return new Tab(name, box);
     }
 
     // ==================== 空间 ====================
