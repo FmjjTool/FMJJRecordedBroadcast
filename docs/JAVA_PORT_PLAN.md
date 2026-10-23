@@ -33,7 +33,7 @@
 | **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
 | **M5 解析与下载** | ✅ B站/微博/**抖音（SSR 分享页）**解析下载、多线程分段、批量导入、已获取、SQLite；⬜ 剩余：快手/小红书（需签名或登录，见 3.15） | ✅ 基本完成 |
-| **M6 信息/资产/追踪页** | 🚧 已完成：单个/批量解析、已获取、酷我搜索下载、**资产管理**；⬜ 剩余：账号获取、抖音指数、B站资源、网易云/QQ/酷狗/5sing、账号追踪卡片 + PNG 导出、主题自动切换 | 🚧 进行中 |
+| **M6 信息/资产/追踪页** | 🚧 已完成：单个/批量解析、已获取、酷我搜索下载、资产管理、**B站资源（空间+综合搜索）**；⬜ 剩余：账号获取、抖音指数、B站表情包/装扮（6 tab）、网易云/QQ/酷狗/5sing、账号追踪、主题自动切换 | 🚧 进行中 |
 | **M7 音乐高级** | ✅ 完成：NCM/QMC(v1+v2)/KGM/KWM/XM/TM/X2M/X3M 解密 + 标签读写（JAudiotagger）；⬜ 剩余：网络匹配/封面补全（随 M6 音乐搜索） | ✅ 完成 |
 | **M8 票务购物与直播** | ✅ 第一刀：图片裁切/封面制作/媒体筛选（MD5 去重）/媒体压缩；⬜ 剩余：大麦/秀动/会员购、淘宝商品、抖音弹幕姬、B站弹幕姬 | 🚧 进行中 |
 | **M9 打包分发** | ✅ jpackage app-image（自带 JRE）、FFmpeg 检测+自定义路径、环境自检（7 项）、隐私校验（自用包/分发包）；⬜ msi/exe 安装器需 WiX | ✅ 完成 |
@@ -199,6 +199,20 @@
      暂缓，先做能验证的功能。
 3. 原版 asset 页的「原始数据」列依赖 `asset_index.db` 缓存（扫描 json + 媒体目录），
    Java 版暂未移植该缓存层；当前统计口径只按扩展名分类。
+
+## 3.17 M6 第二刀（B站资源：空间 + 综合搜索）
+
+- `BiliResource`：`x/web-interface/card`（免签名）+ `x/web-interface/wbi/search/all/v2`（WBI 签名）
+- **WBI keys 自取**：`WbiSigner` 只做签名，keys 要自己从 `x/web-interface/nav` 的
+  `data.wbi_img.img_url / sub_url` 取 basename（去扩展名）；`fetchKeys()` 已补上
+- 搜索结果是「分组」结构（`result[].result_type` + `data[]`），只保留 `video` / `bili_user`，
+  其余类型（番剧/影视/专栏）忽略；标题里的 `<em>` 高亮要剥掉，`//` 开头图片补 `https:`
+- 页面 `BiliResourcePage` 用 TabPane 装 2 个 tab（空间 / 综合搜索），原版 8 tab 的
+  表情包×3、装扮×3 待补
+- **真实验证**（`FMJJ_NET_TEST=1 mvn test -Dtest=BiliResourceNetworkIT`）：
+  UID 2 → 碧诗 143.2 万粉 Lv6；WBI keys 正常；搜索「封茗囧菌」→ 21 条（含「【囧菌翻唱】东京不太热」）
+- 注意：surefire 用 `fmjj.home=target/test-home`，所以网络 IT 里 `CookieStore.get` 返回空是**预期**
+  （游客态也能用 card/search，登录态只在页面运行时生效）
 
 ## 3.16 M8 第一刀（媒体工具）+ M9（打包分发）
 

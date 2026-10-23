@@ -8,6 +8,7 @@ import cn.fmjj.toolbox.gui.pages.AssetPage;
 import cn.fmjj.toolbox.gui.pages.AudioPage;
 import cn.fmjj.toolbox.gui.pages.BasePage;
 import cn.fmjj.toolbox.gui.pages.CalendarPage;
+import cn.fmjj.toolbox.gui.pages.BiliResourcePage;
 import cn.fmjj.toolbox.gui.pages.ConvertPage;
 import cn.fmjj.toolbox.gui.pages.CoverMakerPage;
 import cn.fmjj.toolbox.gui.pages.FileTimePage;
@@ -211,6 +212,8 @@ public class MainWindow {
         pageFactories.put("cover_maker", CoverMakerPage::new);
         pageFactories.put("image_sorter", MediaSorterPage::new);
         pageFactories.put("media_compress", MediaCompressPage::new);
+        // 已移植（M6 第二刀）
+        pageFactories.put("bili_resource", BiliResourcePage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
