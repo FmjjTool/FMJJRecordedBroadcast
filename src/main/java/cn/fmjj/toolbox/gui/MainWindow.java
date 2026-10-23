@@ -22,6 +22,7 @@ import cn.fmjj.toolbox.gui.pages.LyricsPage;
 import cn.fmjj.toolbox.gui.pages.MediaCompressPage;
 import cn.fmjj.toolbox.gui.pages.MediaSorterPage;
 import cn.fmjj.toolbox.gui.pages.MigratePage;
+import cn.fmjj.toolbox.gui.pages.MusicInfoPage;
 import cn.fmjj.toolbox.gui.pages.MusicSearchPage;
 import cn.fmjj.toolbox.gui.pages.MusicTagPage;
 import cn.fmjj.toolbox.gui.pages.RenamePage;
@@ -220,6 +221,7 @@ public class MainWindow {
         pageFactories.put("wechat_article", WechatArticlePage::new);
         pageFactories.put("video_comments", VideoCommentsPage::new);
         pageFactories.put("toolbox_rename", RenamePage::new);
+        pageFactories.put("music_info", MusicInfoPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
