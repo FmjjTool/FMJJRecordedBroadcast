@@ -71,4 +71,36 @@ class BiliGarbTest {
         assertEquals("点赞动画", BiliGarb.categoryName("thumbup"));
         assertEquals("unknown", BiliGarb.categoryName("unknown"));
     }
+
+    @Test
+    @DisplayName("parseAct：活动主图/横竖卡牌/卡池，非 URL 字段被排除")
+    void parseAct() throws Exception {
+        String json = """
+                {"act_title":"封茗囧菌·不同的你",
+                 "act_y_img":"https://i0.hdslb.com/bfs/garb/main.png",
+                 "horizontal_card_light_url":"https://i0.hdslb.com/bfs/b/hl.png",
+                 "horizontal_card_shadow_url":"https://i0.hdslb.com/bfs/garb/hs.png",
+                 "vertical_card_light_url":"https://i0.hdslb.com/bfs/b/vl.png",
+                 "vertical_card_shadow_url":"https://i0.hdslb.com/bfs/garb/vs.png",
+                 "total_buy_cnt":123,
+                 "animation_info":{"bg":"https://i0.hdslb.com/bfs/garb/anim.mp4"},
+                 "lottery_list":[{"lottery_name":"不同的你",
+                    "lottery_image":"https://i0.hdslb.com/bfs/garb/pool.png"}]}
+                """;
+        var info = BiliGarb.parseAct("113100", JSON.readTree(json));
+        assertEquals("封茗囧菌·不同的你", info.title());
+        assertEquals(7, info.resources().size(), "5 张卡牌/主图 + 1 动画 + 1 卡池：" + info.resources());
+        assertTrue(info.resources().stream().anyMatch(r -> r.label().equals("活动主图")));
+        assertTrue(info.resources().stream().anyMatch(r -> r.label().startsWith("卡池-")));
+        assertTrue(info.resources().stream().anyMatch(r -> r.url().endsWith(".mp4")));
+        assertTrue(info.resources().stream().allMatch(r -> r.url().startsWith("https://")));
+    }
+
+    @Test
+    @DisplayName("parseAct：空数据不崩")
+    void parseActEmpty() throws Exception {
+        var info = BiliGarb.parseAct("1", JSON.readTree("{}"));
+        assertEquals("", info.title());
+        assertTrue(info.resources().isEmpty());
+    }
 }

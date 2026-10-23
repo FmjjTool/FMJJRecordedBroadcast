@@ -76,8 +76,7 @@ public class BiliResourcePage extends BasePage {
                 stubTab("📺 直播表情", "输入房间号加载直播间专属表情 / UP主大表情 / 通用表情",
                         "需移植 bili_emoji.py：直播间表情接口"),
                 buildSuitTab(),
-                stubTab("🎁 收藏集", "输入活动 act_id，加载活动视觉 / 勋章 / 全部收藏集卡牌图与卡牌视频",
-                        "需移植 bili_garb.py：收藏集接口"),
+                buildActTab(),
                 buildSpaceTab(), buildSearchTab());
 
         Label pageTitle = new Label(title());
@@ -93,6 +92,119 @@ public class BiliResourcePage extends BasePage {
         root.setPadding(new Insets(12));
         VBox.setVgrow(tabs, Priority.ALWAYS);
         return root;
+    }
+
+    // ==================== 🎁 收藏集（已实现） ====================
+
+    private final TableView<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.ActResource> actTable =
+            new TableView<>();
+    private final TextField actIdField = new TextField();
+    private final Label actStatus = new Label("");
+    private String actTitle = "";
+
+    private Tab buildActTab() {
+        actIdField.setPromptText("收藏集活动 act_id（如 113100）");
+        actIdField.setPrefWidth(240);
+        actIdField.setOnAction(e -> loadAct());
+        Button load = new Button("🔍 加载");
+        load.setOnAction(e -> loadAct());
+        Button dlAll = new Button("⬇ 下载全部");
+        dlAll.setOnAction(e -> downloadActAll());
+        actStatus.setStyle("-fx-text-fill: #888;");
+        HBox bar = new HBox(6, actIdField, load, dlAll, actStatus);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(actStatus, Priority.ALWAYS);
+
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.ActResource, String> cLabel =
+                new TableColumn<>("资源");
+        cLabel.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().label()));
+        cLabel.setPrefWidth(260);
+        TableColumn<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.ActResource, String> cUrl =
+                new TableColumn<>("地址");
+        cUrl.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().url()));
+        cUrl.setPrefWidth(520);
+        actTable.getColumns().addAll(List.of(cLabel, cUrl));
+        actTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        actTable.setPlaceholder(new Label("输入 act_id 加载（免签名；act_id 可从「装扮搜索」的收藏集列取）"));
+        actTable.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                var r = actTable.getSelectionModel().getSelectedItem();
+                if (r != null) downloadActResource(r);
+            }
+        });
+
+        VBox box = new VBox(6, bar, actTable);
+        box.setPadding(new Insets(10));
+        VBox.setVgrow(actTable, Priority.ALWAYS);
+        return new Tab("🎁 收藏集", box);
+    }
+
+    private void loadAct() {
+        String id = actIdField.getText() == null ? "" : actIdField.getText().trim();
+        if (id.isEmpty()) { actStatus.setText("请输入 act_id"); return; }
+        actStatus.setText("加载中…");
+        javafx.concurrent.Task<cn.fmjj.toolbox.engine.platform.bili.BiliGarb.ActInfo> task =
+                new javafx.concurrent.Task<>() {
+                    @Override
+                    protected cn.fmjj.toolbox.engine.platform.bili.BiliGarb.ActInfo call()
+                            throws Exception {
+                        return garbApi.fetchAct(id, CookieStore.get("bilibili"));
+                    }
+                };
+        task.setOnSucceeded(e -> {
+            var info = task.getValue();
+            actTitle = info.title();
+            actTable.setItems(FXCollections.observableArrayList(info.resources()));
+            actStatus.setText("「" + info.title() + "」共 " + info.resources().size() + " 个资源");
+        });
+        task.setOnFailed(e -> actStatus.setText("加载失败：" + task.getException().getMessage()));
+        new Thread(task, "bili-act").start();
+    }
+
+    private java.nio.file.Path actDir() {
+        String safe = (actTitle.isEmpty() ? "收藏集" : actTitle).replaceAll("[\\\\/:*?\"<>|]", "_");
+        return cn.fmjj.toolbox.core.settings.Settings.load()
+                .effectiveExportDir().resolve("B站资源").resolve("收藏集").resolve(safe);
+    }
+
+    private void downloadActResource(cn.fmjj.toolbox.engine.platform.bili.BiliGarb.ActResource r) {
+        new Thread(() -> {
+            String fileName = r.label().replaceAll("[\\\\/:*?\"<>|]", "_") + "_"
+                    + Math.abs(r.url().hashCode() % 1000)
+                    + (r.url().toLowerCase().contains(".mp4") ? ".mp4" : ".png");
+            var res = new cn.fmjj.toolbox.engine.download.FileDownloader().download(
+                    java.util.List.of(r.url()), actDir().resolve(fileName),
+                    java.util.Map.of("Referer", "https://www.bilibili.com/"), p -> { }, () -> false);
+            javafx.application.Platform.runLater(() -> actStatus.setText(
+                    res.success() ? "已下载：" + fileName : "下载失败：" + r.label()));
+        }, "act-dl").start();
+    }
+
+    private void downloadActAll() {
+        if (actTable.getItems().isEmpty()) { actStatus.setText("请先加载收藏集"); return; }
+        var list = new java.util.ArrayList<>(actTable.getItems());
+        actStatus.setText("开始下载 " + list.size() + " 个资源…");
+        new Thread(() -> {
+            int ok = 0, fail = 0;
+            var dl = new cn.fmjj.toolbox.engine.download.FileDownloader();
+            for (int i = 0; i < list.size(); i++) {
+                var r = list.get(i);
+                String fileName = r.label().replaceAll("[\\\\/:*?\"<>|]", "_") + "_"
+                        + Math.abs(r.url().hashCode() % 1000)
+                        + (r.url().toLowerCase().contains(".mp4") ? ".mp4" : ".png");
+                var res = dl.download(java.util.List.of(r.url()), actDir().resolve(fileName),
+                        java.util.Map.of("Referer", "https://www.bilibili.com/"), p -> { }, () -> false);
+                if (res.success()) ok++; else fail++;
+                int n = i + 1;
+                javafx.application.Platform.runLater(() ->
+                        actStatus.setText("下载中… " + n + "/" + list.size()));
+            }
+            int fok = ok, ffail = fail;
+            javafx.application.Platform.runLater(() -> {
+                actStatus.setText("下载完成：成功 " + fok + "，失败 " + ffail);
+                toast("收藏集下载完成：" + fok + " 个");
+            });
+        }, "act-dl-all").start();
     }
 
     // ==================== 👕 装扮ID详情（已实现） ====================

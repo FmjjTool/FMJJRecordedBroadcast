@@ -141,6 +141,65 @@ public final class BiliGarb {
                 parseResources(data.path("suit_items")));
     }
 
+
+    // ==================== 收藏集 ====================
+
+    /** 收藏集活动资源。 */
+    public record ActResource(String label, String url) {}
+
+    /** 收藏集活动信息。 */
+    public record ActInfo(String actId, String title, List<ActResource> resources) {}
+
+    private static final String ACT_BASIC_API = "https://api.bilibili.com/x/vas/dlc_act/act/basic";
+
+    /** 取收藏集活动（活动视觉 + 卡池图）。 */
+    public ActInfo fetchAct(String actId, String cookie) throws Exception {
+        JsonNode d = http.getJson(ACT_BASIC_API + "?act_id=" + HttpClient.urlEncode(actId),
+                headers(cookie));
+        if (d.path("code").asInt(-1) != 0) {
+            throw new IllegalStateException("收藏集加载失败：" + d.path("message").asText());
+        }
+        return parseAct(actId, d.path("data"));
+    }
+
+    /** 纯解析（可离线测试）。 */
+    public static ActInfo parseAct(String actId, JsonNode data) {
+        List<ActResource> out = new ArrayList<>();
+        String title = data.path("act_title").asText("");
+
+        // 活动视觉（字段名自带语义，直接标注）
+        addIfUrl(out, "活动主图", data.path("act_y_img").asText(""));
+        addIfUrl(out, "横版卡牌(亮)", data.path("horizontal_card_light_url").asText(""));
+        addIfUrl(out, "横版卡牌(暗)", data.path("horizontal_card_shadow_url").asText(""));
+        addIfUrl(out, "竖版卡牌(亮)", data.path("vertical_card_light_url").asText(""));
+        addIfUrl(out, "竖版卡牌(暗)", data.path("vertical_card_shadow_url").asText(""));
+
+        // 动画信息里的图
+        JsonNode anim = data.path("animation_info");
+        if (anim.isObject()) {
+            var f = anim.fieldNames();
+            while (f.hasNext()) {
+                String k = f.next();
+                addIfUrl(out, "动画-" + k, anim.path(k).asText(""));
+            }
+        }
+
+        // 卡池（每个 lottery 的封面 + 名称）
+        JsonNode lotteries = data.path("lottery_list");
+        if (lotteries.isArray()) {
+            for (JsonNode l : lotteries) {
+                String name = l.path("lottery_name").asText("");
+                if (name.isEmpty()) name = l.path("goods_name").asText("卡池");
+                addIfUrl(out, "卡池-" + name, l.path("lottery_image").asText(""));
+            }
+        }
+        return new ActInfo(actId, title, out);
+    }
+
+    private static void addIfUrl(List<ActResource> out, String label, String url) {
+        if (isResourceUrl(url)) out.add(new ActResource(label, norm(url)));
+    }
+
     /** 装扮详情（suit_items 里含表情/头像框/粉丝牌等资源）。 */
     public JsonNode suitDetail(String itemId, String cookie) throws Exception {
         String url = SUIT_API + "?item_id=" + HttpClient.urlEncode(itemId) + "&part=cards";
