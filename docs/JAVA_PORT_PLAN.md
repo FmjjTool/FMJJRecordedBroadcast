@@ -490,6 +490,29 @@ Java 已实现纯本地全链路：
 - 4 个测试（平台识别 / 历史追加去重与涨跌 / 配置往返 / 卡片尺寸）
 - **坑**：`5sing.kugou.com` 必须先于 `kugou.com` 判断，否则被酷狗抢先命中
 
+### 抖音房间解析 + PREP_JS（新实现，差最后一步验证）
+新增 `engine/platform/douyin/DouyinLive`：
+- `ttwid(webRid)`：访问直播间页，从 **Set-Cookie** 抓 ttwid（HttpOnly，`document.cookie` 读不到），缓存 6h
+- `roomInfo(webRid)`：`live.douyin.com/webcast/room/web/enter/` → roomId / title / status / online / cover
+- `stubMd5(roomId, uniqueId)`：拼 `live_id=1,aid=6383,...` 串取 md5
+- `prepJs(roomId, uniqueId, md5)`：页面内 JS —— frontierSign 取 X-Bogus → fetch `/webcast/im/fetch/`
+  → 手写 protobuf reader 解 `cursor`(f2) / `internalExt`(f5) / `pushServer`(f10)
+
+**实测（webRid=582775732015）**：
+```
+ttwidLen=127
+roomId=7698701141241711370   ← 拿到了
+title=owo…
+status=4（已结束）
+md5=caa7082e812006f67ef7adf6f0df904a
+acrawler=object
+signature=16                 ← X-Bogus 正常
+cursor=0 / internalExt=0 / pushServer=（空）
+```
+
+**为什么 pushServer 是空**：该房间 `status=4`（未开播），`im/fetch` 不返回游标。
+**只差一个在播房间做最终验证**；抖音首页推荐要登录才渲染（无登录时 DOM 里没有房间链接）。
+
 ## 3.24 抖音弹幕姬：CDP 基础设施打通（页面 JS + X-Bogus 签名）
 
 **为什么需要浏览器**：抖音弹幕不是纯 WebSocket —— 连接参数（cursor/internalExt/pushServer）
