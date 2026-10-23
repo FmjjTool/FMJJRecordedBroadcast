@@ -99,6 +99,63 @@ public final class MusicTagEngine {
         }
     }
 
+
+    /**
+     * 完整字段（对齐 Python 版 music_tag 的 12 字段表单）：
+     * 标题/艺术家/专辑/年份/风格/专辑艺术家/作曲家/作词家/注释/音轨号/碟号 + 歌词 + 封面。
+     */
+    public record TagFields(String title, String artist, String album, String year, String genre,
+                            String albumArtist, String composer, String lyricist, String comment,
+                            String track, String disc, String lyrics, boolean hasCover) {
+        public static TagFields empty() {
+            return new TagFields("", "", "", "", "", "", "", "", "", "", "", "", false);
+        }
+    }
+
+    /** 读取完整字段（读不到的一律空串）。 */
+    public static TagFields readFields(Path file) {
+        try {
+            AudioFile f = AudioFileIO.read(file.toFile());
+            Tag tag = f.getTag();
+            if (tag == null) return TagFields.empty();
+            return new TagFields(
+                    nz(tag.getFirst(FieldKey.TITLE)),
+                    nz(tag.getFirst(FieldKey.ARTIST)),
+                    nz(tag.getFirst(FieldKey.ALBUM)),
+                    nz(tag.getFirst(FieldKey.YEAR)),
+                    nz(tag.getFirst(FieldKey.GENRE)),
+                    nz(tag.getFirst(FieldKey.ALBUM_ARTIST)),
+                    nz(tag.getFirst(FieldKey.COMPOSER)),
+                    nz(tag.getFirst(FieldKey.LYRICIST)),
+                    nz(tag.getFirst(FieldKey.COMMENT)),
+                    nz(tag.getFirst(FieldKey.TRACK)),
+                    nz(tag.getFirst(FieldKey.DISC_NO)),
+                    nz(tag.getFirst(FieldKey.LYRICS)),
+                    tag.getFirstArtwork() != null);
+        } catch (Exception e) {
+            return TagFields.empty();
+        }
+    }
+
+    /** 写入完整字段（空串＝清除该字段）。 */
+    public static void writeFields(Path file, TagFields f) throws Exception {
+        AudioFile af = AudioFileIO.read(file.toFile());
+        Tag tag = af.getTagOrCreateAndSetDefault();
+        setOrRemove(tag, FieldKey.TITLE, f.title());
+        setOrRemove(tag, FieldKey.ARTIST, f.artist());
+        setOrRemove(tag, FieldKey.ALBUM, f.album());
+        setOrRemove(tag, FieldKey.YEAR, f.year());
+        setOrRemove(tag, FieldKey.GENRE, f.genre());
+        setOrRemove(tag, FieldKey.ALBUM_ARTIST, f.albumArtist());
+        setOrRemove(tag, FieldKey.COMPOSER, f.composer());
+        setOrRemove(tag, FieldKey.LYRICIST, f.lyricist());
+        setOrRemove(tag, FieldKey.COMMENT, f.comment());
+        setOrRemove(tag, FieldKey.TRACK, f.track());
+        setOrRemove(tag, FieldKey.DISC_NO, f.disc());
+        setOrRemove(tag, FieldKey.LYRICS, f.lyrics());
+        af.commit();
+    }
+
     private static void setOrRemove(Tag tag, FieldKey key, String value) throws Exception {
         String v = value == null ? "" : value.strip();
         if (v.isEmpty()) {
