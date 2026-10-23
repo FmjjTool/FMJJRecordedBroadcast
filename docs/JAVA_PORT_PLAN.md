@@ -32,7 +32,7 @@
 | **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
 | **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
-| **M5 解析与下载** | ✅ B站/微博/**抖音（SSR 分享页）**解析下载、多线程分段、批量导入、已获取、SQLite；⬜ 剩余：快手/小红书（需签名或登录，见 3.15） | ✅ 基本完成 |
+| **M5 解析与下载** | ✅ B站/微博/抖音/快手 解析下载、多线程分段、批量导入、已获取、SQLite；⚠️ 小红书：能读探索流元信息，**媒体下载需 x-s 签名**（见 3.18） | ✅ 完成（小红书受限） |
 | **M6 信息/资产/追踪页** | 🚧 已完成：单个/批量解析、已获取、酷我搜索下载、资产管理、**B站资源（空间+综合搜索）**；⬜ 剩余：账号获取、抖音指数、B站表情包/装扮（6 tab）、网易云/QQ/酷狗/5sing、账号追踪、主题自动切换 | 🚧 进行中 |
 | **M7 音乐高级** | ✅ 完成：NCM/QMC(v1+v2)/KGM/KWM/XM/TM/X2M/X3M 解密 + 标签读写（JAudiotagger）；⬜ 剩余：网络匹配/封面补全（随 M6 音乐搜索） | ✅ 完成 |
 | **M8 票务购物与直播** | ✅ 第一刀：图片裁切/封面制作/媒体筛选（MD5 去重）/媒体压缩；⬜ 剩余：大麦/秀动/会员购、淘宝商品、抖音弹幕姬、B站弹幕姬 | 🚧 进行中 |
@@ -199,6 +199,24 @@
      暂缓，先做能验证的功能。
 3. 原版 asset 页的「原始数据」列依赖 `asset_index.db` 缓存（扫描 json + 媒体目录），
    Java 版暂未移植该缓存层；当前统计口径只按扩展名分类。
+
+## 3.18 M5 收尾：小红书能力边界（实测）
+
+**能做的**（纯 HTTP + Cookie，已实现 `XiaohongshuParser`）：
+- `GET /explore`（带 Cookie）→ `__INITIAL_STATE__.feed.feeds`：**推荐流 34-35 条笔记**
+  （id / displayTitle / 作者 / type / 时长 / 封面 / xsecToken）
+- 登录态：`user.loggedIn` + `userInfo.nickname`
+- **坑**：SSR 里含 JS 的 `undefined`，Jackson 直接解析会失败 → 必须 `.replace("undefined","null")`
+
+**做不了的**（硬门槛）：
+- 笔记详情页 `/explore/{id}?xsec_token=` 的 SSR **不含笔记数据**（只有 UI 配置 + 搜索提示）
+- 媒体（视频直链 / 图片原图）只能走 `edith.xiaohongshu.com/api/sns/web/v1/feed`，
+  该接口要 **x-s 签名**（前端 `_webmsxyw` JS 生成，含 x-t/x-s-common）
+- headless 浏览器访问 `/explore` 直接被「安全限制」页拦（85KB 验证页）
+- 结论：小红书下载 = 逆向 x-s 或真实浏览器（非 headless）+ 登录态，工作量明显大于抖音/快手
+
+**当前实现**：解析页识别小红书链接 → 展示 noteId / 是否有 xsec_token → 提示「媒体下载未实现」，
+不假装能下载。探索流列表能力已进引擎，可随时接到 UI。
 
 ## 3.17 M6 第二刀（B站资源：空间 + 综合搜索）
 

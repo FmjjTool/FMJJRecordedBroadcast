@@ -12,6 +12,7 @@ import cn.fmjj.toolbox.engine.net.HttpClient;
 import cn.fmjj.toolbox.engine.platform.douyin.DouyinLink;
 import cn.fmjj.toolbox.engine.platform.douyin.DouyinParser;
 import cn.fmjj.toolbox.engine.platform.kuaishou.KuaishouParser;
+import cn.fmjj.toolbox.engine.platform.xiaohongshu.XiaohongshuParser;
 import cn.fmjj.toolbox.engine.platform.weibo.WeiboParser;
 import cn.fmjj.toolbox.engine.store.MediaStore;
 import javafx.application.Platform;
@@ -45,7 +46,7 @@ import java.util.function.Consumer;
  */
 public class InfoParsePage extends BasePage {
 
-    private enum Site { BILIBILI, WEIBO, DOUYIN, KUAISHOU, UNKNOWN }
+    private enum Site { BILIBILI, WEIBO, DOUYIN, KUAISHOU, XIAOHONGSHU, UNKNOWN }
 
     private final TextField linkField = new TextField();
     private final ComboBox<String> qualityBox = new ComboBox<>();
@@ -182,6 +183,13 @@ public class InfoParsePage extends BasePage {
             return;
         }
 
+        String xhsId = XiaohongshuParser.extractNoteId(text);
+        if (!xhsId.isEmpty()) {
+            site = Site.XIAOHONGSHU;
+            parseXhs(text, xhsId);
+            return;
+        }
+
         String ksId = KuaishouParser.extractId(text);
         if (!ksId.isEmpty()) {
             site = Site.KUAISHOU;
@@ -189,7 +197,7 @@ public class InfoParsePage extends BasePage {
             return;
         }
 
-        status.setText("无法识别的链接（支持 B站 / 微博 / 抖音 / 快手）");
+        status.setText("无法识别的链接（支持 B站 / 微博 / 抖音 / 快手 / 小红书）");
     }
 
     /** 抖音：短链先展开，再抓分享页 SSR 数据。 */
@@ -398,6 +406,26 @@ public class InfoParsePage extends BasePage {
         });
         new Thread(task, "douyin-download").start();
     }
+
+    // ==================== 小红书 ====================
+
+    /**
+     * 小红书：笔记详情页 SSR 不含笔记数据（媒体走 edith 接口，需 x-s 签名），
+     * 这里只做「识别 + 打开原链接」，不假装能下载。
+     */
+    private void parseXhs(String text, String noteId) {
+        String token = XiaohongshuParser.extractXsecToken(text);
+        this.xhsUrl = "https://www.xiaohongshu.com/explore/" + noteId
+                + (token.isEmpty() ? "" : "?xsec_token=" + token + "&xsec_source=pc_share");
+        infoTitle.setText("小红书笔记：" + noteId);
+        infoMeta.setText("已识别笔记 ID" + (token.isEmpty() ? "（链接里没有 xsec_token）" : "（含 xsec_token）")
+                + "　媒体下载需 x-s 签名，当前版本未实现");
+        downloadBtn.setDisable(true);
+        status.setText("小红书暂不支持直接下载，可点下方按钮在浏览器查看");
+        appendLog("ℹ️ 小红书：详情接口需 x-s 签名，媒体下载暂缓（探索页只能拿元信息）");
+    }
+
+    private String xhsUrl;
 
     // ==================== 快手 ====================
 
