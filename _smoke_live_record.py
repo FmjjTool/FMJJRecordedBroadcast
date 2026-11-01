@@ -329,6 +329,9 @@ def test_live_record_window():
     dlg = RecordSettingsDialog(pane, pane.manager)
     check("录制设置含分段模式", dlg.cb_seg.count() == 3)
     check("录制设置含录制方式", dlg.cb_mode.count() == 2)
+    check("录制设置含输出格式", dlg.cb_fmt.count() == 3, str(dlg.cb_fmt.count()))
+    check("输出格式默认自动", dlg.cb_fmt.currentText().startswith("自动"),
+          dlg.cb_fmt.currentText())
     check("录制设置含标题过滤", hasattr(dlg, "ed_title_filter"))
     check("二级窗口有菜单栏", win.menuBar() is not None and len(win.menuBar().actions()) >= 4,
           str([a.text() for a in win.menuBar().actions()]))

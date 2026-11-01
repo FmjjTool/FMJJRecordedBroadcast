@@ -5,13 +5,15 @@
   1. 文件尾部被截断 → 最后一个 tag 只有半个，播放器解析到一半报错；
   2. 断流重连后时间戳回退/跳变（第二段从 0 开始）→ 播放器卡住或进度条错乱；
   3. PreviousTagSize 字段与实际数据长度不一致（某些 CDN 分片拼接导致）；
-  4. 中间夹了非法 tag（类型不是 8/9/18）→ 后续全部无法解析。
+  4. 中间夹了非法 tag（类型不是 8/9/18）→ 后续全部无法解析；
+  5. 断流拼接处缺关键帧 → 解码器拿到没有参考帧的 P 帧，画面花屏/绿块。
 
 处理方式（无损，只重排时间戳与长度字段，不转码、不动音视频数据）：
   · 丢掉尾部不完整的 tag，保证文件以完整 tag 收尾；
   · 时间戳改为单调递增：回退按 0 处理，超过 10 秒的跳变压到 100ms；
   · 重新计算每个 tag 后的 PreviousTagSize；
-  · 遇到非法 tag 时向后扫描重新对齐（最多 64KB），失败则在该点截断并报告。
+  · 遇到非法 tag 时向后扫描重新对齐（最多 64KB），失败则在该点截断并报告；
+  · 时间戳跳变点之后丢弃非关键帧视频帧（连同音频），把「花屏段」变成干净切口。
 
 参考：BililiveRecorder.Flv（Tag 读写 / 时间戳修正思路），本实现为纯 Python 流式处理，
 大文件不会一次性读进内存。
@@ -93,10 +95,30 @@ def _find_next_tag(f, start, limit=64 * 1024):
     return -1
 
 
+def _video_key(payload):
+    """视频 tag 是否关键帧：True / False；判断不了（非 AVC、配置帧）返回 None。"""
+    if not payload:
+        return None
+    flag = payload[0]
+    if flag & 0x80:                       # enhanced FLV（HEVC / AV1）
+        if len(payload) > 1 and (flag & 0x0F) == 0:
+            return None                   # sequence start
+        return (flag >> 4) & 0x07 == 1
+    if (flag & 0x0F) != 7:                # 非 AVC：不做关键帧过滤
+        return None
+    if len(payload) > 1 and payload[1] == 0:
+        return None                       # AVC sequence header（配置帧，不是画面）
+    return (flag >> 4) == 1
+
+
 def repair_flv(src, dst=None, on_progress=None):
-    """修复 FLV。返回统计 dict：ok / tags / dropped / ts_fixed / resync / out / error。"""
+    """修复 FLV。返回统计 dict：ok / tags / dropped / ts_fixed / resync / out / error。
+
+    seam_dropped = 断流拼接处被丢掉的非关键帧数量（这些帧就是「花屏」来源：
+    解码器缺少参考帧，只能解出马赛克/绿块）。
+    """
     st = {"ok": False, "tags": 0, "dropped": 0, "ts_fixed": 0,
-          "resync": 0, "out": dst or "", "error": ""}
+          "resync": 0, "seam_dropped": 0, "out": dst or "", "error": ""}
     if dst is None:
         root, ext = os.path.splitext(src)
         dst = root + "_修复" + (ext or ".flv")
@@ -105,6 +127,7 @@ def repair_flv(src, dst=None, on_progress=None):
         st["error"] = "输出文件不能覆盖源文件"
         return st
     total = max(1, os.path.getsize(src))
+    need_key = False
     try:
         with open(src, "rb") as fi, open(dst, "wb") as fo:
             head = fi.read(_FLV_HEADER)
@@ -144,10 +167,23 @@ def repair_flv(src, dst=None, on_progress=None):
                     if delta < 0:
                         delta = 0
                         st["ts_fixed"] += 1
+                        need_key = True       # 断流重连：进入等关键帧状态
                     elif delta > _MAX_JUMP_MS:
                         delta = _JUMP_FIX_MS
                         st["ts_fixed"] += 1
+                        need_key = True
                     out_ts += delta
+                # 接缝对齐：丢掉缺参考帧的 P 帧（这些帧播出来就是花屏）
+                if need_key and ttype in (8, 9):
+                    if ttype == 8:
+                        st["seam_dropped"] += 1
+                        continue
+                    key = _video_key(data)
+                    if key is False:
+                        st["seam_dropped"] += 1
+                        continue
+                    if key is True:
+                        need_key = False
                 prev_src_ts = src_ts
                 ext = (out_ts >> 24) & 0xFF
                 fo.write(bytes((ttype,)) + size.to_bytes(3, "big")

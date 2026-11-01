@@ -1146,11 +1146,20 @@ class RecordSettingsDialog(QDialog):
 
         g1 = QGroupBox("录制")
         f1 = QFormLayout(g1)
+        self.cb_fmt = QComboBox()
+        self.cb_fmt.addItems(list(LR.OUTPUT_FORMATS))
+        self.cb_fmt.setCurrentText(s.get("output_format") or LR.OUTPUT_FORMAT_AUTO)
+        self.cb_fmt.setToolTip(
+            "自动（默认）：抖音写 TS、B站写 FLV\n"
+            "抖音断流多、时间戳是服务器绝对时钟，TS 每个 PES 自带 PTS，\n"
+            "断流拼接也不会花屏；B站 FLV 直连稳定，写 FLV 最省事。")
+        f1.addRow("输出格式", self.cb_fmt)
+
         self.cb_mode = QComboBox()
         self.cb_mode.addItems(["下载流", "录制流"])
         self.cb_mode.setCurrentText(s.get("mode") or "下载流")
-        self.cb_mode.setToolTip("下载流：直接下载 FLV，断线自动续传（推荐）\n"
-                                "录制流：ffmpeg -c copy，兼容 HLS / 音频录制")
+        self.cb_mode.setToolTip("下载流：直接下载 FLV，断流自动缝接（B站推荐）\n"
+                                "录制流：ffmpeg -c copy，兼容 HLS / 音频 / TS 输出")
         f1.addRow("录制方式", self.cb_mode)
 
         seg = QWidget()
@@ -1202,7 +1211,7 @@ class RecordSettingsDialog(QDialog):
         b2.clicked.connect(lambda: _open_dir(self.ed_dir.text().strip()))
         rl.addWidget(b2)
         f2.addRow("保存目录", row)
-        hint = QLabel("录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.flv（音频为 .ts）")
+        hint = QLabel("录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.ts（抖音）/ .flv（B站）")
         hint.setStyleSheet("color:#888;")
         f2.addRow("", hint)
         self.sp_interval = QSpinBox()
@@ -1266,6 +1275,7 @@ class RecordSettingsDialog(QDialog):
     def _ok(self):
         self.manager.settings.update({
             "mode": self.cb_mode.currentText(),
+            "output_format": self.cb_fmt.currentText(),
             "segment_mode": self.cb_seg.currentText(),
             "segment_minutes": self.sp_seg_min.value(),
             "segment_mb": self.sp_seg_mb.value(),
@@ -1712,13 +1722,13 @@ class LiveRecordWindow(QMainWindow):
             "1. ＋添加主播：填房间号或直播间链接，可直接添加（识别只是补名称/状态）\n"
             "2. 打开「是否监控」→ 点「▶ 开启监控录制」，开播即自动录制\n"
             "3. 「是否录制」控制该主播开播时是否自动录；右键/批量修改可批量设置\n"
-            "4. 录制设置：录制方式（下载流/录制流）、分段（按时间/按大小）、录满停止、"
-            "保存目录、断流重连间隔、标题过滤、弹幕录制、封面保存\n"
+            "4. 录制设置：输出格式（自动＝抖音 TS / B站 FLV）、录制方式（下载流/录制流）、"
+            "分段（按时间/按大小）、录满停止、保存目录、断流重连间隔、标题过滤、弹幕录制、封面保存\n"
             "5. 独立设置：单个主播的录制内容/清晰度/分段/录满/提醒/备注\n"
             "6. 推送设置：企业微信/钉钉/飞书/自定义 WebHook，按事件推送\n"
-            "7. 工具 → FLV 修复：修复截断或时间戳错乱的录制文件\n"
+            "7. 工具 → FLV 修复：修复截断、时间戳错乱、断流拼接处花屏的录制文件\n"
             "8. 底部按钮切换抖音 / B站，两套列表与录制任务互不影响\n"
-            "9. 录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.flv（音频为 .ts）")
+            "9. 录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.ts（抖音）/ .flv（B站）")
 
     def _show_about(self):
         QMessageBox.information(
