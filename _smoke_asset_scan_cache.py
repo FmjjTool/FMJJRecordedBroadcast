@@ -89,8 +89,11 @@ print("== 3. 命中与首扫结果逐字段一致 ==")
 def norm(items):
     out = []
     for it in items:
+        # src_dir/src_dirs 是「文件夹」筛选新增的派生字段（不在原实现里），
+        # 等价性对比时排除；其余字段必须逐字相同。
         d = {k: v for k, v in it.items()
-             if k not in ("raw_data", "_raw_video", "_pic_n", "_live_n", "_v")}
+             if k not in ("raw_data", "_raw_video", "_pic_n", "_live_n", "_v",
+                          "src_dir", "src_dirs")}
         # 同组媒体文件按路径排序后比较：组内顺序只影响缩略图取哪一张，
         # 原实现顺序由 Path.rglob 的文件系统枚举顺序决定（不可复现），
         # 新版为「目录内按名排序 + 先进先出」的确定性顺序。

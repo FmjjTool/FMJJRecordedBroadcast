@@ -436,6 +436,7 @@ class AssetPage(BasePage):
         self._folder = ""
         self._local_dir = ""            # 本地资源「文件夹」筛选（相对路径，"" = 全部）
         self._cur_group = None          # 本地列表当前分组标题（懒加载跨批次延续）
+        self._dir_locked = False        # 本地资源目录是否锁定（只读 + 持久化恢复）
         self._disk_items = []           # 磁盘已下载数据全量
         self._collected_all_items = []  # 当前平台筛选后的列表
         self._collected_page = 1        # 当前页码（分页渲染）
@@ -478,7 +479,9 @@ class AssetPage(BasePage):
             "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，右键打开链接/筛选作者）</p>"
             "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频，"
             "<b>「深度」可选逐级读取子文件夹</b>（默认全部层级），结果按文件夹分组，"
-            "「文件夹」下拉可下钻到任一层；缩略图懒加载预览，支持扫描上限与增量索引</p>"
+            "「文件夹」下拉可下钻到任一层；选定的目录会<b>记忆并锁定</b>（🔒 后路径只读，"
+            "下次启动自动恢复），📌 可把下钻到的子目录直接锁定为扫描根；"
+            "缩略图懒加载预览，支持扫描上限与增量索引</p>"
             "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
             "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
         layout.addLayout(head)
@@ -624,14 +627,22 @@ class AssetPage(BasePage):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         v.addWidget(title)
 
-        # 选文件夹行
+        # 选文件夹行：路径 + 选择 + 锁定（锁定后路径只读，防误改，且下次启动照样恢复）
         row = QHBoxLayout()
         self.dir_entry = QLineEdit()
-        self.dir_entry.setPlaceholderText("资源文件夹路径")
+        self.dir_entry.setPlaceholderText("资源文件夹路径（选定后会被记住并锁定）")
+        self.dir_entry.setToolTip(
+            "选定的目录会写入配置，下次打开/重启自动恢复；\n"
+            "点右侧 🔓/🔒 可切换「锁定」——锁定后路径不可编辑，避免误改扫错目录")
+        self.dir_entry.editingFinished.connect(self._on_dir_edited)
         row.addWidget(self.dir_entry, 1)
-        pick_btn = QPushButton("📂 选择")
-        pick_btn.clicked.connect(self._pick_folder)
-        row.addWidget(pick_btn)
+        self.pick_btn = QPushButton("📂 选择")
+        self.pick_btn.clicked.connect(self._pick_folder)
+        row.addWidget(self.pick_btn)
+        self.dir_lock_btn = icon_button(
+            "🔓", "锁定当前目录（锁定后路径只读，下次启动自动恢复该目录）",
+            (36, 30), False, "font-size: 15px;", self._toggle_dir_lock)
+        row.addWidget(self.dir_lock_btn)
         v.addLayout(row)
 
         # 策略行：扫描深度 / 分批间隔 / 增量模式
@@ -681,12 +692,18 @@ class AssetPage(BasePage):
         frow.addWidget(QLabel("文件夹:"))
         self.local_dir_sel = QComboBox()
         self.local_dir_sel.addItem("全部文件夹", "")
-        self.local_dir_sel.setMinimumWidth(240)
+        self.local_dir_sel.setFixedWidth(340)
         self.local_dir_sel.setToolTip(
             "按扫描到的子文件夹筛选（选中父文件夹会包含其下所有层级）；\n"
             "扫描完成后这里列出全部目录，按层级缩进，可逐级下钻")
         self.local_dir_sel.currentIndexChanged.connect(self._on_local_dir_changed)
-        frow.addWidget(self.local_dir_sel, 1)
+        frow.addWidget(self.local_dir_sel)
+        # 把当前下钻到的子文件夹直接设成扫描根目录（「锁定目录」——之后扫描/筛选都从这层算）
+        self.pin_dir_btn = icon_button(
+            "📌", "锁定此目录为扫描根目录（把这个子文件夹设为当前工作目录并重新扫描）",
+            (36, 30), False, "font-size: 15px;", self._pin_local_dir)
+        frow.addWidget(self.pin_dir_btn)
+        frow.addStretch(1)
         v.addLayout(frow)
 
         self.local_status = QLabel("")
@@ -697,6 +714,7 @@ class AssetPage(BasePage):
         self.local_scroll, _, self.local_layout = self._make_scroll()
         v.addWidget(self.local_scroll, 1)
         self._restore_depth_var()
+        self._restore_dir_var()
         return f
 
     def _save_inc_var(self, checked):
@@ -707,6 +725,87 @@ class AssetPage(BasePage):
             save_convert_config(cfg)
         except Exception:
             pass
+
+    # ---------- 目录锁定（记住并固定扫描根目录） ----------
+
+    def _save_dir_var(self, folder=None):
+        """目录写入配置：下次启动/切页自动恢复（「锁定目录」的持久化部分）。"""
+        try:
+            cfg = load_convert_config()
+            cfg["local_folder"] = str(
+                folder if folder is not None else (self._folder or ""))
+            cfg["local_folder_locked"] = bool(getattr(self, "_dir_locked", False))
+            save_convert_config(cfg)
+        except Exception:
+            pass
+
+    def _restore_dir_var(self):
+        """启动时恢复上次的锁定目录；目录已不存在则清空并说明，不静默沿用。"""
+        try:
+            cfg = load_convert_config()
+            folder = str(cfg.get("local_folder") or "")
+            locked = bool(cfg.get("local_folder_locked", False))
+        except Exception:
+            folder, locked = "", False
+        if folder:
+            if os.path.isdir(folder):
+                self._folder = folder
+                self.dir_entry.setText(folder)
+            else:
+                locked = False
+                self.local_status.setText(f"（上次锁定的目录已不存在：{folder}）")
+        self._set_dir_locked(locked)
+
+    def _set_dir_locked(self, locked: bool):
+        """切换锁定外观：锁定后路径只读、选择按钮禁用（防误改扫错目录）。"""
+        self._dir_locked = bool(locked)
+        self.dir_entry.setReadOnly(self._dir_locked)
+        self.pick_btn.setEnabled(not self._dir_locked)
+        self.dir_lock_btn.setText("🔒" if self._dir_locked else "🔓")
+        self.dir_lock_btn.setToolTip(
+            "已锁定：路径只读、选择按钮禁用，下次启动自动恢复该目录（点此解锁）"
+            if self._dir_locked else
+            "锁定当前目录（锁定后路径只读，下次启动自动恢复该目录）")
+
+    def _toggle_dir_lock(self):
+        self._set_dir_locked(not getattr(self, "_dir_locked", False))
+        self._save_dir_var()
+        self.app.toast("已锁定当前目录" if self._dir_locked else "已解锁，可重新选择目录",
+                       "info")
+
+    def _on_dir_edited(self):
+        """手输/粘贴路径后回车：校验目录有效才保存（无效则还原上次的目录）。"""
+        if getattr(self, "_dir_locked", False):
+            return
+        path = self.dir_entry.text().strip()
+        if not path:
+            return
+        if os.path.isdir(path):
+            self._folder = path
+            self._save_dir_var(path)
+        else:
+            self.app.toast("目录不存在", "warning")
+            self.dir_entry.setText(self._folder or "")
+
+    def _pin_local_dir(self):
+        """把「文件夹」下拉里下钻到的子目录锁定为扫描根目录，并立即重扫。"""
+        rel = self._local_dir or ""
+        if not rel:
+            self.app.toast("请先在「文件夹」下拉里选一个子文件夹", "warning")
+            return
+        root = self._folder or self.dir_entry.text().strip()
+        if not root or not os.path.isdir(root):
+            self.app.toast("请先选择有效文件夹", "warning")
+            return
+        target = os.path.join(root, *rel.split("/"))
+        if not os.path.isdir(target):
+            self.app.toast("该子文件夹已不存在，请重新扫描", "error")
+            return
+        self.dir_entry.setText(target)
+        self._folder = target
+        self._set_dir_locked(True)
+        self._save_dir_var(target)
+        self._scan()
 
     def _save_depth_var(self, _idx=0):
         """本地资源「扫描深度」选择写入 config（下次打开保持上次的层级）。"""
@@ -761,10 +860,16 @@ class AssetPage(BasePage):
         return scroll, container, lay
 
     def _pick_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "选择资源文件夹")
-        if path:
-            self._folder = path
-            self.dir_entry.setText(path)
+        """选目录 → 立即记忆并扫描（选完还要再点一次扫描的旧流程已去掉）。"""
+        path = QFileDialog.getExistingDirectory(
+            self, "选择资源文件夹",
+            self.dir_entry.text().strip() or self._folder or "")
+        if not path:
+            return
+        self._folder = path
+        self.dir_entry.setText(path)
+        self._save_dir_var(path)
+        self._scan()
 
     def _scan(self):
         folder = self.dir_entry.text().strip() or self._folder
@@ -782,6 +887,7 @@ class AssetPage(BasePage):
         depth = self.depth_sel.currentData()
         depth = -1 if depth is None else int(depth)
         self._folder = folder
+        self._save_dir_var(folder)      # 扫过的目录即记忆（下次启动自动恢复）
         inc = self.inc_var.isChecked()
         self.local_status.setText("⏳ 正在扫描（含子文件夹）…")
 
@@ -833,10 +939,11 @@ class AssetPage(BasePage):
         self._local_dir = ""
 
     def _update_local_status(self):
-        """状态行：资源总数 / 分类计数 / 涉及文件夹数 / 当前筛选范围。"""
+        """状态行：锁定标记 / 资源总数 / 分类计数 / 涉及文件夹数 / 当前筛选范围。"""
         files = self._all_files
+        lock = "🔒 " if getattr(self, "_dir_locked", False) else ""
         if not files:
-            self.local_status.setText("（未扫描到资源，可调高「深度」让子文件夹一起读）")
+            self.local_status.setText(f"{lock}（未扫描到资源，可调高「深度」让子文件夹一起读）")
             return
         imgs = sum(1 for x in files if x["type"] == "image")
         vids = sum(1 for x in files if x["type"] == "video")
@@ -847,7 +954,7 @@ class AssetPage(BasePage):
         if self._local_dir:
             scope = f" · 当前筛选「{self._local_dir}」{len(view)} 个"
         self.local_status.setText(
-            f"共 {len(files)} 个资源（图片 {imgs} / 视频 {vids} / 音频 {auds}）"
+            f"{lock}共 {len(files)} 个资源（图片 {imgs} / 视频 {vids} / 音频 {auds}）"
             + (f"，分布在 {dirs_n} 个文件夹" if dirs_n > 1 else "")
             + scope
             + ("，已增量写入索引" if self.inc_var.isChecked() else ""))
@@ -980,7 +1087,7 @@ class AssetPage(BasePage):
         bar.addWidget(QLabel("文件夹:"))
         self.folder_sel = QComboBox()
         self.folder_sel.addItem("全部文件夹", "")
-        self.folder_sel.setFixedWidth(150)
+        self.folder_sel.setFixedWidth(132)
         self.folder_sel.setToolTip(
             "按条目所在文件夹筛选（如 抖音_媒体/封茗囧菌、B站资源/收藏夹）；\n"
             "选中父文件夹会包含其下所有层级，可逐级下钻定位")
@@ -988,7 +1095,7 @@ class AssetPage(BasePage):
         bar.addWidget(self.folder_sel)
         self.search_entry = QLineEdit()
         self.search_entry.setPlaceholderText("🔍 搜索标题/作者/ID...")
-        self.search_entry.setMinimumWidth(200)  # 可随窗口拉伸（原固定 200 不自适应）
+        self.search_entry.setMinimumWidth(150)  # 可随窗口拉伸（原固定 200 不自适应）
         # 防抖：停止输入 300ms 后才触发过滤，避免每敲一个字符就重扫
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -1119,9 +1226,22 @@ class AssetPage(BasePage):
             })
         # 3.1 来源文件夹（相对 已获取数据/ 的目录）——「文件夹」筛选/ 行内标注用。
         # 每次现算成本可忽略（一次 relpath），且不污染 json 索引缓存的 payload。
+        # src_dir  = json 所在目录（条目主归属，行内展示）
+        # src_dirs = 主目录 + 各媒体文件所在目录（下载后的图/视频在
+        #            {平台}_媒体/作者 下，只按 json 目录筛就永远筛不到作者，
+        #            用户按「封茗囧菌」这类媒体文件夹筛选必须能命中该条目）
         for entry in results:
-            entry["src_dir"] = self._rel_src_dir(
+            dirs = []
+            primary = self._rel_src_dir(
                 entry.get("file_path"), video_dir, download_root)
+            if primary:
+                dirs.append(primary)
+            for m in entry.get("media_files") or []:
+                d = self._rel_src_dir(m.get("path"), video_dir, download_root)
+                if d and d not in dirs:
+                    dirs.append(d)
+            entry["src_dir"] = primary or (dirs[0] if dirs else "")
+            entry["src_dirs"] = dirs
 
         results.sort(key=lambda r: (r.get("date_part") or ""), reverse=True)
         # 纯文本条目自动写入「不可下载」标记（用户解除过的在 allow 豁免集里不再自动加回）
@@ -1144,19 +1264,27 @@ class AssetPage(BasePage):
 
         返回 posix 风格相对路径（"" 表示就在基准目录根下），取不到返回 ""。
         已获取数据/ 内的 {平台}_文件、{平台}_媒体/作者 会原样保留；B站资源包
-        位于 download/B站资源/类别/包/，回落到 download/ 基准得到「B站资源/类别」。
+        位于 download/B站资源/类别/包/，回落到 download/ 基准得到
+        「B站资源/类别/包」。
+
+        用纯字符串前缀判断代替 os.path.relpath：列表每次刷新要为 6600+ 条目
+        及其全部媒体文件算一遍（上万次调用），relpath 的 abspath/normcase
+        开销实测能把刷新拖慢 10%+。
         """
         if not path:
             return ""
+        low = path.lower()
         for base in bases:
-            try:
-                rel = os.path.relpath(str(path), str(base))
-            except ValueError:
+            b = str(base).rstrip("\\/")
+            if not b:
                 continue
-            if rel.startswith(".."):
-                continue
-            d = os.path.dirname(rel)
-            return "" if d in ("", ".") else d.replace(os.sep, "/")
+            if low == b.lower():
+                return ""
+            bl = b.lower()
+            if low.startswith(bl + os.sep) or low.startswith(bl + "/"):
+                rel = path[len(b) + 1:]
+                d = os.path.dirname(rel)
+                return "" if d in ("", ".") else d.replace(os.sep, "/").replace("\\", "/")
         return ""
 
     @staticmethod
@@ -1167,6 +1295,16 @@ class AssetPage(BasePage):
         src = src or ""
         return src == folder or src.startswith(folder + "/")
 
+    @classmethod
+    def _item_in_folder(cls, it, folder: str) -> bool:
+        """条目是否属于某文件夹：json 目录或任一媒体目录命中即算。"""
+        if not folder:
+            return True
+        dirs = it.get("src_dirs")
+        if not dirs:
+            dirs = [it.get("src_dir") or ""]
+        return any(cls._dir_under(d, folder) for d in dirs)
+
     def _rebuild_folder_options(self, items) -> str:
         """按条目来源目录重建「文件夹」下拉，返回实际生效的筛选值。
 
@@ -1175,12 +1313,14 @@ class AssetPage(BasePage):
         """
         dirs = set()
         for it in items:
-            rel = it.get("src_dir") or ""
-            if not rel:
-                continue
-            parts = rel.split("/")
-            for i in range(1, len(parts) + 1):
-                dirs.add("/".join(parts[:i]))
+            srcs = it.get("src_dirs") or ([it.get("src_dir") or ""] if it.get("src_dir") else [])
+            for rel in srcs:
+                rel = rel or ""
+                if not rel:
+                    continue
+                parts = rel.split("/")
+                for i in range(1, len(parts) + 1):
+                    dirs.add("/".join(parts[:i]))
         ordered = sorted(dirs, key=lambda p: [s.lower() for s in p.split("/")])
         sel = self.folder_sel
         cur = sel.currentData() or ""
@@ -1581,8 +1721,7 @@ class AssetPage(BasePage):
             folder_f = self._rebuild_folder_options(self._disk_items)
             items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
             if folder_f:
-                items = [it for it in items
-                         if self._dir_under(it.get("src_dir") or "", folder_f)]
+                items = [it for it in items if self._item_in_folder(it, folder_f)]
             # 状态筛选
             if status == "未下载":
                 # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
@@ -1866,8 +2005,10 @@ class AssetPage(BasePage):
         # 来源文件夹（相对 已获取数据/）：一眼看出条目属于哪个平台目录/作者目录，
         # 与「文件夹」下拉的筛选项对得上（旧平铺数据在根目录下则为空，不显示）
         src_dir = (it.get("src_dir") or "").strip()
-        dir_str = (f'  📁 <span style="color:#6b7280;">{_esc(src_dir)}</span>'
-                   if src_dir else "")
+        # 只显示尾部（深层目录最右侧才是有效信息），全量留在 tooltip
+        src_short = src_dir if len(src_dir) <= 26 else "…" + src_dir[-25:]
+        dir_str = (f'  📁 <span style="color:#6b7280;">{_esc(src_short)}</span>'
+                   if src_short else "")
         text = (f"[{index}] {plat_tag}{_esc(title)} "
                 f'<span style="color:#555;">@{_esc(author_disp)}</span>{media_str}<br>'
                 f"播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}<br>"

@@ -217,6 +217,10 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "subtitle_use_same_dir": True,
     # 资产页本地资源「增量模式(写入索引)」
     "local_inc_enabled": False,
+    # 资产页本地资源：锁定的扫描根目录 + 锁定态 + 扫描深度（0=仅当前层，-1=全部层级）
+    "local_folder": "",
+    "local_folder_locked": False,
+    "local_scan_depth": -1,
     # 音乐下载页「自动换源」
     "music_fallback_enabled": True,
     # 音乐下载页「导出位置」双选项：默认位置(统一导出目录) / 固定位置
