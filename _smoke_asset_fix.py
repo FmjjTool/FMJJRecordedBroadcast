@@ -60,12 +60,18 @@ items = page._collected_all_items
 assert len(items) > 50, f"collected items too few: {len(items)}"
 
 
+ORDER_DESC = page.sort_sel.currentText() == "时间倒序"
+# 无发布时间的条目实现里是「按方向兜到最后」：倒序→最小、正序→最大，
+# 断言用的 placeholder 必须跟着方向走，否则空值条目一定被判非单调。
+EMPTY_KEY = "00000000000000" if ORDER_DESC else "99999999999999"
+
+
 def sort_key(it):
     t = re.sub(r"\D", "", it.get("publish_time") or "")
     if len(t) >= 8:
         return (t + "0" * 14)[:14]
     d = it.get("date_part") or ""
-    return (d + "0" * 14)[:14] if d else "99999999999999"
+    return (d + "0" * 14)[:14] if d else EMPTY_KEY
 
 
 keys = [sort_key(it) for it in items]
