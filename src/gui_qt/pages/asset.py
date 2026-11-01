@@ -446,7 +446,7 @@ class AssetPage(BasePage):
         self._checked_keys = set()      # 勾选条目键（批量下载用）
         self._reload_gen = 0            # 骨架加载代数守卫（中途刷新作废旧轮）
         self._view_mode = "entries"     # entries=已获取条目 / files=下载目录文件清单
-        self._plain_files = []          # files 视图的数据源
+        self._plain_groups = []         # files 视图的数据源（按一次导出的产物聚合）
         self._plain_dir = ""            # files 视图对应的 download 子目录名
         self._db_page = 1               # 数据库浏览当前页码
         self._db_total = 0              # 数据库浏览总条数
@@ -473,9 +473,10 @@ class AssetPage(BasePage):
             "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
             "支持平台/<b>文件夹</b>筛选、状态筛选（未下载不含「不可下载」纯文本条目/已下载/"
             "下载不完整）、关键词搜索、时间排序、分页浏览；"
-            "<b>「文件夹」下拉分两组</b>：📦 download 下的分类目录（弹幕文件/歌曲文件/"
-            "淘宝商品/公众号文章…，选中即列出该目录的文件清单，可打开/定位）与 "
-            "📁 已获取数据内目录（抖音_媒体/作者 等，按来源筛条目，父目录含子层级）；"
+            "<b>「文件夹」下拉分两级</b>：顶级是 download 下的分类目录（公众号文章/淘宝商品/"
+            "弹幕文件/歌曲文件…），选中后按<b>一次导出的产物聚合成条目</b>（文档数 + 图片数 + "
+            "总大小，同一天的 csv/zip、同篇文章的 md/图片合成一条）；选「已获取数据」再进入"
+            "子级按 平台/作者 目录筛条目（📁 抖音_媒体/封茗囧菌 …，父目录含子层级）；"
             "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
             "媒体文件（存在哪项才显示哪项）</p>"
             "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
@@ -1094,11 +1095,11 @@ class AssetPage(BasePage):
         self.folder_sel.addItem("全部文件夹", "")
         self.folder_sel.setFixedWidth(150)
         self.folder_sel.setToolTip(
-            "① download/ 下的分类目录（弹幕文件 / 歌曲文件 / 淘宝商品 / 公众号文章 …）\n"
-            "   —— 选中后列表变成该目录的文件清单（图片缩略图/视频音频图标，可打开）\n"
-            "② 已获取数据/ 内的目录（抖音_媒体/作者、B站资源/类别 …）\n"
-            "   —— 按来源目录筛条目，选父文件夹包含其下所有层级")
-        self.folder_sel.currentIndexChanged.connect(lambda _: self._refresh_collected())
+            "① 顶级：download/ 下的分类目录（公众号文章 / 淘宝商品 / 弹幕文件 / 歌曲文件 …）\n"
+            "   —— 选中后列表按「一次导出的产物」聚合成条目（文档数 + 图片数 + 总大小）\n"
+            "② 选「已获取数据」进入子级：按 平台/作者 目录（📁 抖音_媒体 / 封茗囧菌 …）\n"
+            "   筛条目，父目录包含其下所有层级；「⬅ 返回全部分类」回到顶级")
+        self.folder_sel.currentIndexChanged.connect(self._on_folder_changed)
         bar.addWidget(self.folder_sel)
         self.search_entry = QLineEdit()
         self.search_entry.setPlaceholderText("🔍 搜索标题/作者/ID...")
@@ -1312,42 +1313,22 @@ class AssetPage(BasePage):
             dirs = [it.get("src_dir") or ""]
         return any(cls._dir_under(d, folder) for d in dirs)
 
-    def _rebuild_folder_options(self, items) -> str:
-        """重建「文件夹」下拉，返回实际生效的筛选值。
+    def _rebuild_folder_options(self, items, cur=None) -> str:
+        """重建「文件夹」下拉（两级上下文），返回实际生效的筛选值。
 
-        两级结构：
-        ① <b>下载目录</b>（download/ 下的分类文件夹：弹幕文件 / 歌曲文件 / 淘宝商品 /
-          公众号文章 / 票务演出 …）——选中后列表切换成该目录的「文件清单」；
-          值前缀 "dir:"，不含 已获取数据/（它的内容就是条目列表本身）。
-        ② <b>已获取数据内目录</b>（{平台}_文件、{平台}_媒体/作者、B站资源/类别）
-          ——条目视图按来源目录过滤；值前缀 "sub:"，含各级父目录、树序 + 缩进。
-
-        保留用户原选择；选中项已不存在则回到「全部文件夹」。
+        顶级：`全部文件夹` + download/ 下的分类目录（📦 公众号文章 / 淘宝商品 / 弹幕文件 …），
+        选中分类 → 列表切「文件清单（已按一次导出聚合）」。
+        选中「已获取数据」→ 切到子目录上下文：`⬅ 返回全部分类` + 该目录内的
+        平台/作者目录（📁 抖音_媒体 / 　📁 封茗囧菌 …）——作者目录属于已获取数据的
+        子类，不再和顶级分类平铺在一起。
         """
         from toolbox.config_manager import get_export_dir
         sel = self.folder_sel
-        cur = sel.currentData() or ""
-        sel.blockSignals(True)
-        sel.clear()
-        sel.addItem("全部文件夹", "")
+        if cur is None:
+            cur = sel.currentData() or ""
+        in_sub = cur.startswith("sub:") or cur == "dir:已获取数据"
 
-        # ① download/ 下的分类目录 → 文件清单视图
-        try:
-            download_root = get_export_dir()
-            tops = sorted((d for d in os.listdir(download_root)
-                           if os.path.isdir(os.path.join(download_root, d))),
-                          key=lambda s: s.lower())
-        except Exception:
-            tops = []
-        for name in tops:
-            if name == "已获取数据":
-                continue   # 其内容由下面的条目视图呈现（选它就是「全部」）
-            sel.addItem(f"📦 {name}", f"dir:{name}")
-            sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
-        if tops:
-            sel.insertSeparator(sel.count())
-
-        # ② 已获取数据/ 内的细分目录 → 条目视图过滤
+        # 已获取数据内的目录集合（含各级父目录，树序）
         dirs = set()
         for it in items:
             srcs = it.get("src_dirs") or ([it.get("src_dir") or ""] if it.get("src_dir") else [])
@@ -1359,13 +1340,39 @@ class AssetPage(BasePage):
                 for i in range(1, len(parts) + 1):
                     dirs.add("/".join(parts[:i]))
         ordered = sorted(dirs, key=lambda p: [s.lower() for s in p.split("/")])
-        for p in ordered:
-            sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], "sub:" + p)
-            sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
+
+        sel.blockSignals(True)
+        sel.clear()
+        if in_sub:
+            sel.addItem("⬅ 返回全部分类", "__back")
+            sel.addItem("📦 已获取数据（全部条目）", "dir:已获取数据")
+            sel.setItemData(1, "已获取数据", Qt.ToolTipRole)
+            for p in ordered:
+                sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], "sub:" + p)
+                sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
+        else:
+            sel.addItem("全部文件夹", "")
+            try:
+                download_root = get_export_dir()
+                tops = sorted((d for d in os.listdir(download_root)
+                               if os.path.isdir(os.path.join(download_root, d))),
+                              key=lambda s: s.lower())
+            except Exception:
+                tops = []
+            for name in tops:
+                sel.addItem(f"📦 {name}", f"dir:{name}")
+                sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
         idx = sel.findData(cur) if cur else 0
         sel.setCurrentIndex(idx if idx >= 0 else 0)
         sel.blockSignals(False)
         return sel.currentData() or ""
+
+    def _on_folder_changed(self, _idx=0):
+        """「文件夹」下拉切换：`⬅ 返回` 回到顶级分类，其余按新值刷新列表。"""
+        val = self.folder_sel.currentData() or ""
+        if val == "__back":
+            self._rebuild_folder_options(self._disk_items, cur="")
+        self._refresh_collected()
 
     @staticmethod
     def _split_folder_value(val):
@@ -1377,19 +1384,39 @@ class AssetPage(BasePage):
             return "", val[4:]
         return "", ""
 
-    def _scan_plain_files(self, root, limit: int = 20000) -> list:
-        """递归列出 root 下全部文件（下载目录的文件清单视图用）。
+    @staticmethod
+    def _group_date(text) -> str:
+        """从标题/文件名提取 YYYYMMDD（兼容 20260923 与 2026-09-23 两种写法）。"""
+        t = text or ""
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", t)
+        if m:
+            return "".join(m.groups())
+        m = re.search(r"(20\d{2})(\d{2})(\d{2})", t)
+        if m:
+            return "".join(m.groups())
+        return ""
 
-        与 scan_assets 的区别：不筛扩展名（json/md/xlsx/弹幕 txt 也要能看到），
-        每项带 kind（image/video/audio/other）用于缩略图或图标，带 rel_dir 便于定位。
-        limit 兜底防止误选超大目录把内存打满。
+    def _load_dir_groups(self, root, limit_files: int = 20000) -> list:
+        """把 download 分类目录的文件按「一次导出的产物」聚合成条目（类 B站/抖音行）。
+
+        聚合规则对齐真实目录结构：
+        - 有子目录的（公众号文章 / 淘宝商品 / 票务演出 都是 <分类>/<标题目录>/…）：
+          按相对路径第一段分组，组内 图片/desc/main/sku 等子目录的文件全归这一条；
+        - 直接放在分类根下的（弹幕文件 / 导出的图片）：
+          能提取日期的按日期合并（同一天的 csv + zip 合成一条），提取不到按去扩展名主干。
+
+        limit_files 兜底防误选超大目录把内存打满。
         """
-        out = []
         root = str(root)
+        files_scan, top_dirs = [], {}
+        total = 0
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if d.lower() not in SCAN_SKIP_DIRS)
             rel = os.path.relpath(dirpath, root)
             rel = "" if rel in (".", "") else rel.replace(os.sep, "/")
+            if rel:
+                head = rel.split("/")[0]
+                top_dirs.setdefault(head.lower(), head)
             for fn in sorted(filenames):
                 full = os.path.join(dirpath, fn)
                 try:
@@ -1400,14 +1427,62 @@ class AssetPage(BasePage):
                 kind = ("image" if ext in IMAGE_EXTS else
                         "video" if ext in VIDEO_EXTS else
                         "audio" if ext in AUDIO_EXTS else "other")
-                out.append({
-                    "path": full, "name": fn, "size": st.st_size, "type": kind,
-                    "rel_dir": rel,
-                    "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                })
-                if limit and len(out) >= limit:
-                    return out
-        return out
+                files_scan.append((rel, fn, full, st, kind))
+                total += 1
+                if limit_files and total >= limit_files:
+                    break
+            if limit_files and total >= limit_files:
+                break
+
+        buckets, order = {}, []
+        for rel, fn, full, st, kind in files_scan:
+            if rel:
+                key = rel.split("/")[0]
+            else:
+                # 根目录下的单文件（.docx/.html/.pdf）若与同层产物目录同名，
+                # 归到那条目录组里 —— 公众号一篇文章的 md/图片 在目录内、
+                # docx/html/pdf 在根下同名前缀，不合并就会拆成两条
+                stem = os.path.splitext(fn)[0]
+                key = top_dirs.get(stem.lower()) or self._group_date(stem) or stem
+            g = buckets.get(key)
+            if g is None:
+                g = buckets[key] = {
+                    "title": key, "files": [], "dirs": set(),
+                    "n_img": 0, "n_vid": 0, "n_aud": 0, "n_doc": 0,
+                    "size": 0, "mtime": "",
+                    "cover": "", "root_dir": os.path.join(root, key),
+                    "date": self._group_date(key),
+                }
+                order.append(key)
+            g["files"].append({
+                "path": full, "name": fn, "size": st.st_size, "type": kind, "rel_dir": rel,
+            })
+            g["dirs"].add(rel)
+            g["size"] += st.st_size
+            mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+            if mt > g["mtime"]:
+                g["mtime"] = mt
+            if kind == "image":
+                g["n_img"] += 1
+                if not g["cover"]:
+                    g["cover"] = full
+            elif kind == "video":
+                g["n_vid"] += 1
+            elif kind == "audio":
+                g["n_aud"] += 1
+            else:
+                g["n_doc"] += 1
+
+        groups = [buckets[k] for k in order]
+        for g in groups:
+            g["dirs"] = sorted(g["dirs"])
+            if not os.path.isdir(str(g["root_dir"])):
+                g["root_dir"] = root      # 没有同名目录 → 打开分类根
+            if not g["date"]:
+                g["date"] = self._group_date(os.path.basename(str(g["root_dir"])))
+        # 日期倒序（无日期回退最后修改时间），与条目视图的「时间倒序」口径一致
+        groups.sort(key=lambda g: (g["date"] or "", g["mtime"]), reverse=True)
+        return groups
 
     def _scan_media_files(self, root, media_map):
         """递归扫描 root 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。
@@ -1778,6 +1853,8 @@ class AssetPage(BasePage):
         kw = (self._search_var or "").strip().lower()
         dir_name, _ = self._split_folder_value(
             self.folder_sel.currentData() or "")
+        if dir_name == "已获取数据":
+            dir_name = ""    # 它本身就是条目列表的数据源，不是文件清单
 
         self._reload_gen += 1
         gen = self._reload_gen
@@ -1787,26 +1864,30 @@ class AssetPage(BasePage):
         self._view_mode = "files" if dir_name else "entries"
         self._render_skeleton(8)
 
-        # 选了 download/ 下的分类目录 → 文件清单视图（这些目录只有文件、没有 json 条目）
+        # 选了 download/ 下的分类目录 → 文件清单视图（按一次导出的产物聚合成条目）
         if dir_name:
             self._plain_dir = dir_name
+            self._plain_groups = []      # 先清空：避免等待方读到上一个目录的旧数据
             self._set_batch_enabled(False)
 
             def work_files():
                 from toolbox.config_manager import get_export_dir
-                return self._scan_plain_files(get_export_dir() / dir_name)
+                return self._load_dir_groups(get_export_dir() / dir_name)
 
-            def done_files(files, err):
+            def done_files(groups, err):
                 if gen != self._reload_gen:
                     return
-                files = files or []
-                # 搜索/排序对文件清单同样生效（按文件名 + 相对目录）
+                groups = groups or []
+                # 搜索/排序对分组条目同样生效（标题 + 组内文件名 + 目录）
                 if kw:
-                    files = [f for f in files
-                             if kw in (f.get("name") or "").lower()
-                             or kw in (f.get("rel_dir") or "").lower()]
-                files.sort(key=lambda f: f.get("mtime") or "", reverse=desc)
-                self._plain_files = files
+                    groups = [g for g in groups
+                              if kw in (g.get("title") or "").lower()
+                              or any(kw in (f.get("name") or "").lower()
+                                     for f in g.get("files") or [])
+                              or any(kw in (d or "").lower() for d in g.get("dirs") or [])]
+                if not desc:
+                    groups = list(reversed(groups))
+                self._plain_groups = groups
                 if not keep_page:
                     self._collected_page = 1
                 self._render_collected_batch()
@@ -1815,7 +1896,7 @@ class AssetPage(BasePage):
             return
 
         self._view_mode = "entries"
-        self._plain_files = []
+        self._plain_groups = []
         self._set_batch_enabled(True)
 
         def work():
@@ -1968,9 +2049,9 @@ class AssetPage(BasePage):
         return row
 
     def _current_view_items(self):
-        """当前视图的数据源：entry 视图 = 条目列表；files 视图 = 下载目录的文件清单。"""
+        """当前视图的数据源：entry 视图 = 条目列表；files 视图 = 聚合后的目录条目。"""
         if getattr(self, "_view_mode", "entries") == "files":
-            return self._plain_files
+            return self._plain_groups
         return self._collected_all_items
 
     def _render_collected_batch(self):
@@ -2005,46 +2086,50 @@ class AssetPage(BasePage):
         lay.addStretch(1)
 
     def _render_files_batch(self, lay):
-        """download 分类目录的文件清单（图片缩略图 / 视频音频图标 / 其它文档）。"""
-        files = self._plain_files
-        if not files:
+        """download 分类目录：按「一次导出的产物」聚合的条目（类 B站/抖音行）。"""
+        groups = self._plain_groups
+        if not groups:
             lbl = QLabel(f"（download/{self._plain_dir}/ 里没有文件）")
             lbl.setStyleSheet("color: gray;")
             lbl.setContentsMargins(8, 10, 8, 10)
             lay.addWidget(lbl)
             lay.addStretch(1)
             return
-        total_pages = (len(files) + BATCH - 1) // BATCH
+        total_pages = (len(groups) + BATCH - 1) // BATCH
         page = min(max(1, self._collected_page), total_pages)
         self._collected_page = page
         start = (page - 1) * BATCH
-        for i in range(start, min(start + BATCH, len(files))):
-            lay.addWidget(self._make_file_row(files[i], i + 1))
-        lay.addWidget(self._make_pager(len(files), page, total_pages))
+        for i in range(start, min(start + BATCH, len(groups))):
+            lay.addWidget(self._make_group_row(groups[i], i + 1))
+        lay.addWidget(self._make_pager(len(groups), page, total_pages))
         lay.addStretch(1)
 
-    def _make_file_row(self, it, index) -> QWidget:
-        """文件清单行：缩略图/图标 + 名称 + 相对目录 + 大小时间 + 打开/定位。
+    def _make_group_row(self, g, index) -> QWidget:
+        """聚合条目行：代表缩略图 + 标题 + 文档/图片计数 + 总大小 + 打开/定位。
 
-        双击缩略图直接打开文件；右键可打开、在资源管理器中显示、复制路径。
+        与已获取条目行同一套视觉语言（B站/抖音条目长什么样，这里就什么样），
+        单击打开产物目录，右键可打开目录 / 首个文件 / 复制路径。
         """
-        row = _RowWidget(lambda: None,          # 单击不动作（防误触打开），双击缩略图才打开
-                         lambda pos, it=it: self._file_row_menu(it, pos))
+        files = g.get("files") or []
+        root_dir = g.get("root_dir") or ""
+        row = _RowWidget(lambda: None,
+                         lambda pos, g=g: self._group_menu(g, pos))
         row.setStyleSheet(
             "_RowWidget { background: #ffffff; border-radius: 6px; }"
             "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(6, 4, 6, 4)
-        kind = it["type"]
-        thumb = _ThumbLabel(lambda it=it: self._open_media(it["path"]))
+
+        thumb = _ThumbLabel(lambda: self._open_group(g))
         thumb.setFixedSize(96, 64)
         thumb.setAlignment(Qt.AlignCenter)
         thumb.setStyleSheet("background: #eef1f5; border-radius: 4px;")
-        thumb.setToolTip(it["path"])
-        if kind == "image":
-            self._fill_local_thumb(thumb, it["path"], 96, 64)
+        thumb.setToolTip(f"双击打开（{len(files)} 个文件）")
+        if g.get("cover"):
+            self._fill_local_thumb(thumb, g["cover"], 96, 64)
         else:
-            icon = {"video": "🎬", "audio": "🎵"}.get(kind, "📄")
+            icon = ("🎬" if g.get("n_vid") else
+                    "🎵" if g.get("n_aud") else "📄")
             thumb.setText(icon)
             thumb.setStyleSheet(
                 "background: #eef1f5; border-radius: 4px; font-size: 28px;")
@@ -2053,44 +2138,78 @@ class AssetPage(BasePage):
         def _esc(s):
             return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        name = it["name"]
-        # 中文长文件名无空格可断行，不截断会把行撑宽到必须横向滚动（完整名在 tooltip）
-        name_disp = name if len(name) <= 46 else name[:45] + "…"
-        rel = it.get("rel_dir") or ""
-        rel_short = rel if len(rel) <= 26 else "…" + rel[-25:]
-        rel_str = (f'  📁 <span style="color:#6b7280;">{_esc(rel_short)}</span>' if rel else "")
-        text = (f"[{index}] {_esc(name_disp)}<br>"
-                f"{_fmt_size(it['size'])}  ·  {it['mtime']}{rel_str}")
+        title = g.get("title") or "(未命名)"
+        title_disp = title if len(title) <= 52 else title[:51] + "…"
+        counts = ""
+        if g.get("n_doc"):
+            counts += f" 📄{g['n_doc']}"
+        if g.get("n_img"):
+            counts += f" 🖼{g['n_img']}"
+        if g.get("n_vid"):
+            counts += f" 🎬{g['n_vid']}"
+        if g.get("n_aud"):
+            counts += f" 🎵{g['n_aud']}"
+        dirs = g.get("dirs") or []
+        dir_str = ""
+        if dirs and dirs[0]:
+            d0 = dirs[0] if len(dirs[0]) <= 40 else "…" + dirs[0][-39:]
+            extra = f" +{len(dirs) - 1}" if len(dirs) > 1 else ""
+            dir_str = f'  📁 <span style="color:#6b7280;">{_esc(d0)}{extra}</span>'
+        text = (f"[{index}] <b>{_esc(title_disp)}</b>"
+                f'<span style="color:#2e7d32;">{counts}</span><br>'
+                f"{_fmt_size(g.get('size', 0))}  ·  {g.get('mtime') or '-'}<br>"
+                f"📅 {g.get('date') or '-'}{dir_str}")
         txt = QLabel(text)
         txt.setTextFormat(Qt.RichText)
         txt.setStyleSheet("font-size: 11px;")
         txt.setWordWrap(True)
-        txt.setToolTip(it["path"])
+        txt.setToolTip(f"{title}\n\n共 {len(files)} 个文件 · {_fmt_size(g.get('size', 0))}"
+                       f"\n{root_dir}")
         h.addWidget(txt, 1)
 
         open_btn = QPushButton("📂")
         open_btn.setFixedSize(42, 32)
-        open_btn.setToolTip("打开该文件")
+        open_btn.setToolTip("打开该目录")
         open_btn.setStyleSheet(common.icon_btn_style(
             False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
-        open_btn.clicked.connect(lambda _=False, p=it["path"]: self._open_media(p))
+        open_btn.clicked.connect(lambda _=False, g=g: self._open_group(g))
         h.addWidget(open_btn)
 
         rev_btn = QPushButton("📁")
         rev_btn.setFixedSize(42, 32)
         rev_btn.setToolTip("在资源管理器中显示")
+        first = files[0]["path"] if files else root_dir
         rev_btn.setStyleSheet(common.icon_btn_style(
             True, "background: transparent; border: 1px solid #c8cdd6; color: white;"))
-        rev_btn.clicked.connect(lambda _=False, p=it["path"]: self._reveal_media(p))
+        rev_btn.clicked.connect(lambda _=False, p=first: self._reveal_media(p))
         h.addWidget(rev_btn)
         return row
 
-    def _file_row_menu(self, it, global_pos):
-        """文件清单行右键菜单。"""
+    def _open_group(self, g):
+        """打开聚合条目的代表位置：产物目录优先，否则首个文件。"""
+        root_dir = g.get("root_dir") or ""
+        if root_dir and os.path.isdir(root_dir):
+            self._open_media(root_dir)
+            return
+        files = g.get("files") or []
+        if files:
+            self._open_media(files[0]["path"])
+
+    def _group_menu(self, g, global_pos):
+        """聚合条目右键菜单：打开目录 / 首个文件 / 复制路径。"""
         m = QMenu(self)
-        m.addAction("📂 打开文件", lambda: self._open_media(it["path"]))
-        m.addAction("📁 在资源管理器中显示", lambda: self._reveal_media(it["path"]))
-        m.addAction("📋 复制路径", lambda: QApplication.clipboard().setText(it["path"]))
+        root_dir = g.get("root_dir") or ""
+        files = g.get("files") or []
+        if root_dir and os.path.isdir(root_dir):
+            m.addAction("📂 打开目录", lambda: self._open_media(root_dir))
+            m.addAction("📋 复制目录路径", lambda: QApplication.clipboard().setText(root_dir))
+        if files:
+            m.addAction("📄 打开首个文件", lambda: self._open_media(files[0]["path"]))
+            m.addAction("📋 复制首个文件路径",
+                        lambda: QApplication.clipboard().setText(files[0]["path"]))
+        m.addSeparator()
+        m.addAction(f"ℹ️ 共 {len(g.get('files') or [])} 个文件 · {_fmt_size(g.get('size', 0))}",
+                    lambda: None).setEnabled(False)
         m.exec(global_pos)
 
     def _set_batch_enabled(self, enabled: bool):

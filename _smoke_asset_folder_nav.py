@@ -147,91 +147,115 @@ while time.time() < deadline:
     time.sleep(0.02)
 n = len(page._collected_all_items or [])
 check("列表渲染出数据", n > 0, f"{n} 条")
-opts = [page.folder_sel.itemData(i) for i in range(page.folder_sel.count())]
-opts = [o for o in opts if isinstance(o, str)]   # 跳过 insertSeparator 的空项
-dir_opts = [o for o in opts if o.startswith("dir:")]
-sub_opts = [o for o in opts if o.startswith("sub:")]
-check("下拉含 download 分类目录", len(dir_opts) >= 5, str(dir_opts[:6]))
-check("下拉含已获取数据内目录", len(sub_opts) > 5, f"{len(sub_opts)} 项")
+
+
+def wait_until(cond, timeout=60):
+    dl = time.time() + timeout
+    while time.time() < dl:
+        qapp.processEvents()
+        if cond():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def folder_opts():
+    vals = [page.folder_sel.itemData(i) for i in range(page.folder_sel.count())]
+    return [v for v in vals if isinstance(v, str)]   # 跳过 insertSeparator 的空项
+
+
+top = folder_opts()
+check("顶级下拉只有 download 分类目录",
+      all(o == "" or o.startswith("dir:") for o in top), str(top[:5]))
+check("顶级没把作者目录平铺出来", not any(o.startswith("sub:") for o in top))
+check("顶级含 已获取数据", "dir:已获取数据" in top, str(top[-3:]))
 check("条目都带 src_dir/src_dirs 字段",
       all("src_dir" in it and "src_dirs" in it for it in page._collected_all_items[:50]))
-pick_sub = next((o for o in sub_opts if "/" in o), sub_opts[0] if sub_opts else None)
+
+# 进入「已获取数据」子级 → 出现 平台/作者 目录
+page.folder_sel.setCurrentIndex(page.folder_sel.findData("dir:已获取数据"))
+wait_until(lambda: len(folder_opts()) > 5 and any(o.startswith("sub:") for o in folder_opts()))
+subs = [o for o in folder_opts() if o.startswith("sub:")]
+check("已获取数据子级出现平台/作者目录", len(subs) > 5, f"{len(subs)} 项")
+check("子级有返回上级项", "__back" in folder_opts())
+check("已获取数据=全部条目", len(page._collected_all_items) == n,
+      f"{len(page._collected_all_items)} vs {n}")
+
+pick_sub = next((o for o in subs if "/" in o), subs[0] if subs else None)
 if pick_sub:
     rel = pick_sub[4:]
     page.folder_sel.setCurrentIndex(page.folder_sel.findData(pick_sub))
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        qapp.processEvents()
-        if page._collected_all_items:
-            break
-        time.sleep(0.02)
+    wait_until(lambda: page._collected_all_items
+               and all(page._item_in_folder(it, rel) for it in page._collected_all_items))
     got = page._collected_all_items
-    ok = all(page._item_in_folder(it, rel) for it in got)
-    check(f"选「{rel}」后条目都命中该目录", ok and len(got) > 0, f"{len(got)} 条")
-    page.folder_sel.setCurrentIndex(0)
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        qapp.processEvents()
-        if len(page._collected_all_items) >= n:
-            break
-        time.sleep(0.02)
-    check("切回全部文件夹恢复条目数", len(page._collected_all_items) == n,
-          f"{len(page._collected_all_items)} vs {n}")
+    check(f"选「{rel}」后条目都命中该目录",
+          got and all(page._item_in_folder(it, rel) for it in got), f"{len(got)} 条")
 
-print("== 6. download 分类目录 → 文件清单视图 ==")
+# 返回全部分类 → 回到顶级
+page.folder_sel.setCurrentIndex(page.folder_sel.findData("__back"))
+wait_until(lambda: not any(o.startswith("sub:") for o in folder_opts())
+           and len(page._collected_all_items) == n)
+check("⬅ 返回后回到顶级分类", "dir:公众号文章" in folder_opts(), str(folder_opts()[:4]))
+check("返回后条目数恢复", len(page._collected_all_items) == n,
+      f"{len(page._collected_all_items)} vs {n}")
+
+print("== 6. download 分类目录 → 按一次导出聚合成条目 ==")
 from toolbox.config_manager import get_export_dir
 
 dl_root = get_export_dir()
-cand = [o[4:] for o in dir_opts]
-cand = [c for c in cand if c != "已获取数据"]
-check("找到可测的下载目录", bool(cand), str(cand[:4]))
-if cand:
-    target_dir = cand[0]
-    idx = [i for i in range(page.folder_sel.count())
-           if page.folder_sel.itemData(i) == f"dir:{target_dir}"][0]
+idx = page.folder_sel.findData("dir:公众号文章")
+check("顶级有 公众号文章 分类", idx > 0)
+if idx > 0:
+    want_files = sum(len(fs) for _, _, fs in os.walk(os.path.join(str(dl_root), "公众号文章")))
     page.folder_sel.setCurrentIndex(idx)
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        qapp.processEvents()
-        if page._view_mode == "files" and page._plain_files:
-            break
-        time.sleep(0.02)
+    wait_until(lambda: page._view_mode == "files" and page._plain_groups)
+    groups = page._plain_groups
     check("切到 files 视图", page._view_mode == "files", page._view_mode)
-    check(f"列出 {target_dir} 的文件", len(page._plain_files) > 0, f"{len(page._plain_files)} 个")
-    check("文件项字段齐全",
-          all(k in page._plain_files[0] for k in ("path", "name", "size", "type", "rel_dir")))
+    check("同一次导出聚合成 1 条", len(groups) == 1, f"{len(groups)} 条")
+    if groups:
+        g = groups[0]
+        check("组内文件数 = 目录文件数", len(g["files"]) == want_files,
+              f"{len(g['files'])} vs {want_files}")
+        check("组内含文档 + 图片", g["n_doc"] >= 1 and g["n_img"] >= 1,
+              f"doc={g['n_doc']} img={g['n_img']}")
+        check("组带日期与总大小", bool(g["date"]) and g["size"] > 0,
+              f"{g['date']} / {g['size']}")
+        check("组带代表缩略图", bool(g["cover"]), g["cover"][-30:])
     check("批量下载按钮已禁用", not page.batch_dl_btn.isEnabled())
-    check("列表渲染出文件行", page.collected_layout.count() > 1,
+    check("列表渲染出分组行", page.collected_layout.count() > 1,
           f"布局项 {page.collected_layout.count()}")
-    # 搜索过滤对文件清单生效
+    # 搜索对聚合条目生效（组内文件名）
     page.search_entry.setText("zzz_不存在的名字")
     page._apply_search()
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        qapp.processEvents()
-        if not page._plain_files:
-            break
-        time.sleep(0.02)
-    check("搜索对文件清单生效", len(page._plain_files) == 0, f"{len(page._plain_files)} 个")
+    wait_until(lambda: not page._plain_groups, 20)
+    check("搜索对聚合条目生效", len(page._plain_groups) == 0, f"{len(page._plain_groups)} 组")
+    page.search_entry.setText("001.png")
+    page._apply_search()
+    wait_until(lambda: page._plain_groups, 20)
+    check("按组内文件名也能搜到", len(page._plain_groups) == 1, f"{len(page._plain_groups)} 组")
     page.search_entry.setText("")
     page._apply_search()
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        qapp.processEvents()
-        if page._plain_files:
-            break
-        time.sleep(0.02)
-    # 切回条目视图
-    page.folder_sel.setCurrentIndex(0)
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        qapp.processEvents()
-        if page._view_mode == "entries" and page._collected_all_items:
-            break
-        time.sleep(0.02)
-    check("切回条目视图", page._view_mode == "entries" and len(page._collected_all_items) == n,
-          f"{page._view_mode} / {len(page._collected_all_items)}")
-    check("批量下载按钮恢复可用", page.batch_dl_btn.isEnabled())
+    wait_until(lambda: page._plain_groups, 20)
+
+# 弹幕文件：同一天的 csv + zip 合并成一条
+idx2 = page.folder_sel.findData("dir:弹幕文件")
+if idx2 > 0:
+    page.folder_sel.setCurrentIndex(idx2)
+    wait_until(lambda: page._view_mode == "files" and page._plain_groups)
+    dg = page._plain_groups
+    merged = [g for g in dg if len(g["files"]) > 1]
+    check("同一天的 csv+zip 合并成一条", bool(merged),
+          f"{len(dg)} 组，其中多文件组 {len(merged)}")
+    if merged:
+        check("合并组内是 csv 与 zip",
+              {os.path.splitext(f["name"])[1].lower() for f in merged[0]["files"]} >= {".csv", ".zip"},
+              str([f["name"] for f in merged[0]["files"]])[:80])
+
+page.folder_sel.setCurrentIndex(0)
+wait_until(lambda: page._view_mode == "entries" and len(page._collected_all_items) == n)
+check("切回条目视图", page._view_mode == "entries" and len(page._collected_all_items) == n,
+      f"{page._view_mode} / {len(page._collected_all_items)}")
+check("批量下载按钮恢复可用", page.batch_dl_btn.isEnabled())
 
 print()
 print("== 7. 本地资源：目录锁定（记住 + 只读 + 重启恢复 + 固定子目录） ==")

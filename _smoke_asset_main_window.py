@@ -132,11 +132,16 @@ def _step_local():
         deadline = time.time() + 30
         while time.time() < deadline:
             app.processEvents()
-            if page._view_mode == "files" and page._plain_files:
+            if page._view_mode == "files" and page._plain_groups:
                 break
             time.sleep(0.03)
         check("切到文件清单视图", page._view_mode == "files", page._view_mode)
-        check("列出弹幕文件目录内容", len(page._plain_files) > 0, f"{len(page._plain_files)} 个")
+        check("按一次导出聚合成条目", len(page._plain_groups) > 0,
+              f"{len(page._plain_groups)} 条")
+        g0 = page._plain_groups[0] if page._plain_groups else {}
+        check("条目带文件计数/大小/日期",
+              all(k in g0 for k in ("title", "files", "size", "date", "n_img", "n_doc")),
+              f"{g0.get('title', '')[:20]} doc={g0.get('n_doc')} img={g0.get('n_img')}")
         check("批量下载按钮在文件视图置灰", not page.batch_dl_btn.isEnabled())
         page.folder_sel.setCurrentIndex(0)
         deadline = time.time() + 30
