@@ -115,6 +115,38 @@ def _step_local():
     check("列表出现文件夹分组标题", len(headers) >= 1, str(headers[:3]))
     print("  状态行：" + page.local_status.text(), flush=True)
 
+    # download 分类目录 → 文件清单视图（用户要的「按 download 下这些文件夹筛选」）
+    page.tabs.setCurrentIndex(0)
+    deadline = time.time() + 60     # 首次列表扫描（骨架 → 真实数据）跑完下拉才有目录项
+    while time.time() < deadline:
+        app.processEvents()
+        if page.folder_sel.count() > 1:
+            break
+        time.sleep(0.03)
+    idx = page.folder_sel.findData("dir:弹幕文件")
+    check("文件夹下拉含 download 分类目录",
+          page.folder_sel.findData("dir:弹幕文件") > 0,
+          str([page.folder_sel.itemData(i) for i in range(min(6, page.folder_sel.count()))]))
+    if idx > 0:
+        page.folder_sel.setCurrentIndex(idx)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            app.processEvents()
+            if page._view_mode == "files" and page._plain_files:
+                break
+            time.sleep(0.03)
+        check("切到文件清单视图", page._view_mode == "files", page._view_mode)
+        check("列出弹幕文件目录内容", len(page._plain_files) > 0, f"{len(page._plain_files)} 个")
+        check("批量下载按钮在文件视图置灰", not page.batch_dl_btn.isEnabled())
+        page.folder_sel.setCurrentIndex(0)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            app.processEvents()
+            if page._view_mode == "entries":
+                break
+            time.sleep(0.03)
+        check("切回条目视图", page._view_mode == "entries", page._view_mode)
+
     img = win.grab().toImage()
     out = os.path.join(ROOT, "_smoke_asset_main_window.png")
     img.save(out)

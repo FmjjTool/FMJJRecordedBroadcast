@@ -445,6 +445,9 @@ class AssetPage(BasePage):
         self._search_var = ""           # 搜索关键词
         self._checked_keys = set()      # 勾选条目键（批量下载用）
         self._reload_gen = 0            # 骨架加载代数守卫（中途刷新作废旧轮）
+        self._view_mode = "entries"     # entries=已获取条目 / files=下载目录文件清单
+        self._plain_files = []          # files 视图的数据源
+        self._plain_dir = ""            # files 视图对应的 download 子目录名
         self._db_page = 1               # 数据库浏览当前页码
         self._db_total = 0              # 数据库浏览总条数
         self._db_rows = []              # 当前页原始行（含 dedup_key）
@@ -468,9 +471,11 @@ class AssetPage(BasePage):
         head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
             "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
             "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
-            "支持平台/<b>文件夹</b>筛选（可逐级下钻到 抖音_媒体/作者 这类子目录）、"
-            "状态筛选（未下载不含「不可下载」纯文本条目/已下载/下载不完整）、"
-            "关键词搜索、时间排序、分页浏览；"
+            "支持平台/<b>文件夹</b>筛选、状态筛选（未下载不含「不可下载」纯文本条目/已下载/"
+            "下载不完整）、关键词搜索、时间排序、分页浏览；"
+            "<b>「文件夹」下拉分两组</b>：📦 download 下的分类目录（弹幕文件/歌曲文件/"
+            "淘宝商品/公众号文章…，选中即列出该目录的文件清单，可打开/定位）与 "
+            "📁 已获取数据内目录（抖音_媒体/作者 等，按来源筛条目，父目录含子层级）；"
             "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
             "媒体文件（存在哪项才显示哪项）</p>"
             "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
@@ -1087,10 +1092,12 @@ class AssetPage(BasePage):
         bar.addWidget(QLabel("文件夹:"))
         self.folder_sel = QComboBox()
         self.folder_sel.addItem("全部文件夹", "")
-        self.folder_sel.setFixedWidth(132)
+        self.folder_sel.setFixedWidth(150)
         self.folder_sel.setToolTip(
-            "按条目所在文件夹筛选（如 抖音_媒体/封茗囧菌、B站资源/收藏夹）；\n"
-            "选中父文件夹会包含其下所有层级，可逐级下钻定位")
+            "① download/ 下的分类目录（弹幕文件 / 歌曲文件 / 淘宝商品 / 公众号文章 …）\n"
+            "   —— 选中后列表变成该目录的文件清单（图片缩略图/视频音频图标，可打开）\n"
+            "② 已获取数据/ 内的目录（抖音_媒体/作者、B站资源/类别 …）\n"
+            "   —— 按来源目录筛条目，选父文件夹包含其下所有层级")
         self.folder_sel.currentIndexChanged.connect(lambda _: self._refresh_collected())
         bar.addWidget(self.folder_sel)
         self.search_entry = QLineEdit()
@@ -1306,11 +1313,41 @@ class AssetPage(BasePage):
         return any(cls._dir_under(d, folder) for d in dirs)
 
     def _rebuild_folder_options(self, items) -> str:
-        """按条目来源目录重建「文件夹」下拉，返回实际生效的筛选值。
+        """重建「文件夹」下拉，返回实际生效的筛选值。
 
-        选项含各级父目录（选中「抖音_媒体」即可看其下所有作者文件夹），
-        按树序排列 + 全角空格缩进；保留用户原选择，选中项已消失则回到「全部」。
+        两级结构：
+        ① <b>下载目录</b>（download/ 下的分类文件夹：弹幕文件 / 歌曲文件 / 淘宝商品 /
+          公众号文章 / 票务演出 …）——选中后列表切换成该目录的「文件清单」；
+          值前缀 "dir:"，不含 已获取数据/（它的内容就是条目列表本身）。
+        ② <b>已获取数据内目录</b>（{平台}_文件、{平台}_媒体/作者、B站资源/类别）
+          ——条目视图按来源目录过滤；值前缀 "sub:"，含各级父目录、树序 + 缩进。
+
+        保留用户原选择；选中项已不存在则回到「全部文件夹」。
         """
+        from toolbox.config_manager import get_export_dir
+        sel = self.folder_sel
+        cur = sel.currentData() or ""
+        sel.blockSignals(True)
+        sel.clear()
+        sel.addItem("全部文件夹", "")
+
+        # ① download/ 下的分类目录 → 文件清单视图
+        try:
+            download_root = get_export_dir()
+            tops = sorted((d for d in os.listdir(download_root)
+                           if os.path.isdir(os.path.join(download_root, d))),
+                          key=lambda s: s.lower())
+        except Exception:
+            tops = []
+        for name in tops:
+            if name == "已获取数据":
+                continue   # 其内容由下面的条目视图呈现（选它就是「全部」）
+            sel.addItem(f"📦 {name}", f"dir:{name}")
+            sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
+        if tops:
+            sel.insertSeparator(sel.count())
+
+        # ② 已获取数据/ 内的细分目录 → 条目视图过滤
         dirs = set()
         for it in items:
             srcs = it.get("src_dirs") or ([it.get("src_dir") or ""] if it.get("src_dir") else [])
@@ -1322,18 +1359,55 @@ class AssetPage(BasePage):
                 for i in range(1, len(parts) + 1):
                     dirs.add("/".join(parts[:i]))
         ordered = sorted(dirs, key=lambda p: [s.lower() for s in p.split("/")])
-        sel = self.folder_sel
-        cur = sel.currentData() or ""
-        sel.blockSignals(True)
-        sel.clear()
-        sel.addItem("全部文件夹", "")
         for p in ordered:
-            sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], p)
+            sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], "sub:" + p)
             sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
         idx = sel.findData(cur) if cur else 0
         sel.setCurrentIndex(idx if idx >= 0 else 0)
         sel.blockSignals(False)
         return sel.currentData() or ""
+
+    @staticmethod
+    def _split_folder_value(val):
+        """「文件夹」下拉值 → (下载目录名, 已获取数据内目录)；非对应模式返回空串。"""
+        val = val or ""
+        if val.startswith("dir:"):
+            return val[4:], ""
+        if val.startswith("sub:"):
+            return "", val[4:]
+        return "", ""
+
+    def _scan_plain_files(self, root, limit: int = 20000) -> list:
+        """递归列出 root 下全部文件（下载目录的文件清单视图用）。
+
+        与 scan_assets 的区别：不筛扩展名（json/md/xlsx/弹幕 txt 也要能看到），
+        每项带 kind（image/video/audio/other）用于缩略图或图标，带 rel_dir 便于定位。
+        limit 兜底防止误选超大目录把内存打满。
+        """
+        out = []
+        root = str(root)
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d.lower() not in SCAN_SKIP_DIRS)
+            rel = os.path.relpath(dirpath, root)
+            rel = "" if rel in (".", "") else rel.replace(os.sep, "/")
+            for fn in sorted(filenames):
+                full = os.path.join(dirpath, fn)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                ext = os.path.splitext(fn)[1].lower()
+                kind = ("image" if ext in IMAGE_EXTS else
+                        "video" if ext in VIDEO_EXTS else
+                        "audio" if ext in AUDIO_EXTS else "other")
+                out.append({
+                    "path": full, "name": fn, "size": st.st_size, "type": kind,
+                    "rel_dir": rel,
+                    "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                })
+                if limit and len(out) >= limit:
+                    return out
+        return out
 
     def _scan_media_files(self, root, media_map):
         """递归扫描 root 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。
@@ -1702,13 +1776,47 @@ class AssetPage(BasePage):
         status = self.status_sel.currentText()
         desc = self.sort_sel.currentText() == "时间倒序"
         kw = (self._search_var or "").strip().lower()
+        dir_name, _ = self._split_folder_value(
+            self.folder_sel.currentData() or "")
 
         self._reload_gen += 1
         gen = self._reload_gen
         self._collected_all_items = []
         if not keep_page:
             self._collected_page = 1
+        self._view_mode = "files" if dir_name else "entries"
         self._render_skeleton(8)
+
+        # 选了 download/ 下的分类目录 → 文件清单视图（这些目录只有文件、没有 json 条目）
+        if dir_name:
+            self._plain_dir = dir_name
+            self._set_batch_enabled(False)
+
+            def work_files():
+                from toolbox.config_manager import get_export_dir
+                return self._scan_plain_files(get_export_dir() / dir_name)
+
+            def done_files(files, err):
+                if gen != self._reload_gen:
+                    return
+                files = files or []
+                # 搜索/排序对文件清单同样生效（按文件名 + 相对目录）
+                if kw:
+                    files = [f for f in files
+                             if kw in (f.get("name") or "").lower()
+                             or kw in (f.get("rel_dir") or "").lower()]
+                files.sort(key=lambda f: f.get("mtime") or "", reverse=desc)
+                self._plain_files = files
+                if not keep_page:
+                    self._collected_page = 1
+                self._render_collected_batch()
+
+            run_bg(work_files, done_files)
+            return
+
+        self._view_mode = "entries"
+        self._plain_files = []
+        self._set_batch_enabled(True)
 
         def work():
             return self._load_disk_items()
@@ -1719,9 +1827,10 @@ class AssetPage(BasePage):
             self._disk_items = disk_items or []
             # 文件夹下拉随数据重建：返回实际生效值，保证「下拉显示」与「列表过滤」一致
             folder_f = self._rebuild_folder_options(self._disk_items)
+            _, sub_f = self._split_folder_value(folder_f)
             items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
-            if folder_f:
-                items = [it for it in items if self._item_in_folder(it, folder_f)]
+            if sub_f:
+                items = [it for it in items if self._item_in_folder(it, sub_f)]
             # 状态筛选
             if status == "未下载":
                 # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
@@ -1818,7 +1927,8 @@ class AssetPage(BasePage):
         self._clear_layout(lay)
         for _ in range(n):
             lay.addWidget(self._make_skeleton_row())
-        tip = QLabel("⏳ 正在扫描已获取数据...")
+        tip = QLabel("⏳ 正在读取目录文件..." if getattr(self, "_view_mode", "entries") == "files"
+                     else "⏳ 正在扫描已获取数据...")
         tip.setStyleSheet("color: gray;")
         tip.setContentsMargins(8, 10, 8, 10)
         lay.addWidget(tip)
@@ -1857,10 +1967,21 @@ class AssetPage(BasePage):
             h.addWidget(btn)
         return row
 
+    def _current_view_items(self):
+        """当前视图的数据源：entry 视图 = 条目列表；files 视图 = 下载目录的文件清单。"""
+        if getattr(self, "_view_mode", "entries") == "files":
+            return self._plain_files
+        return self._collected_all_items
+
     def _render_collected_batch(self):
-        """分页渲染已获取资源：每页 BATCH 条，底部页码导航（首页/上一页/跳页/下一页/末页）。"""
+        """分页渲染：每页 BATCH 条，底部页码导航（首页/上一页/跳页/下一页/末页）。
+
+        两种视图共用分页条：entry（已获取条目）/ files（download 分类目录的文件清单）。
+        """
         lay = self.collected_layout
         self._clear_layout(lay)
+        if getattr(self, "_view_mode", "entries") == "files":
+            return self._render_files_batch(lay)
         items = self._collected_all_items
         if not items:
             if not self._disk_items:
@@ -1882,6 +2003,107 @@ class AssetPage(BasePage):
             self._render_collected_row(items[i], i + 1)
         lay.addWidget(self._make_pager(len(items), page, total_pages))
         lay.addStretch(1)
+
+    def _render_files_batch(self, lay):
+        """download 分类目录的文件清单（图片缩略图 / 视频音频图标 / 其它文档）。"""
+        files = self._plain_files
+        if not files:
+            lbl = QLabel(f"（download/{self._plain_dir}/ 里没有文件）")
+            lbl.setStyleSheet("color: gray;")
+            lbl.setContentsMargins(8, 10, 8, 10)
+            lay.addWidget(lbl)
+            lay.addStretch(1)
+            return
+        total_pages = (len(files) + BATCH - 1) // BATCH
+        page = min(max(1, self._collected_page), total_pages)
+        self._collected_page = page
+        start = (page - 1) * BATCH
+        for i in range(start, min(start + BATCH, len(files))):
+            lay.addWidget(self._make_file_row(files[i], i + 1))
+        lay.addWidget(self._make_pager(len(files), page, total_pages))
+        lay.addStretch(1)
+
+    def _make_file_row(self, it, index) -> QWidget:
+        """文件清单行：缩略图/图标 + 名称 + 相对目录 + 大小时间 + 打开/定位。
+
+        双击缩略图直接打开文件；右键可打开、在资源管理器中显示、复制路径。
+        """
+        row = _RowWidget(lambda: None,          # 单击不动作（防误触打开），双击缩略图才打开
+                         lambda pos, it=it: self._file_row_menu(it, pos))
+        row.setStyleSheet(
+            "_RowWidget { background: #ffffff; border-radius: 6px; }"
+            "QLabel { background: transparent; }")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(6, 4, 6, 4)
+        kind = it["type"]
+        thumb = _ThumbLabel(lambda it=it: self._open_media(it["path"]))
+        thumb.setFixedSize(96, 64)
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+        thumb.setToolTip(it["path"])
+        if kind == "image":
+            self._fill_local_thumb(thumb, it["path"], 96, 64)
+        else:
+            icon = {"video": "🎬", "audio": "🎵"}.get(kind, "📄")
+            thumb.setText(icon)
+            thumb.setStyleSheet(
+                "background: #eef1f5; border-radius: 4px; font-size: 28px;")
+        h.addWidget(thumb)
+
+        def _esc(s):
+            return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        name = it["name"]
+        # 中文长文件名无空格可断行，不截断会把行撑宽到必须横向滚动（完整名在 tooltip）
+        name_disp = name if len(name) <= 46 else name[:45] + "…"
+        rel = it.get("rel_dir") or ""
+        rel_short = rel if len(rel) <= 26 else "…" + rel[-25:]
+        rel_str = (f'  📁 <span style="color:#6b7280;">{_esc(rel_short)}</span>' if rel else "")
+        text = (f"[{index}] {_esc(name_disp)}<br>"
+                f"{_fmt_size(it['size'])}  ·  {it['mtime']}{rel_str}")
+        txt = QLabel(text)
+        txt.setTextFormat(Qt.RichText)
+        txt.setStyleSheet("font-size: 11px;")
+        txt.setWordWrap(True)
+        txt.setToolTip(it["path"])
+        h.addWidget(txt, 1)
+
+        open_btn = QPushButton("📂")
+        open_btn.setFixedSize(42, 32)
+        open_btn.setToolTip("打开该文件")
+        open_btn.setStyleSheet(common.icon_btn_style(
+            False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
+        open_btn.clicked.connect(lambda _=False, p=it["path"]: self._open_media(p))
+        h.addWidget(open_btn)
+
+        rev_btn = QPushButton("📁")
+        rev_btn.setFixedSize(42, 32)
+        rev_btn.setToolTip("在资源管理器中显示")
+        rev_btn.setStyleSheet(common.icon_btn_style(
+            True, "background: transparent; border: 1px solid #c8cdd6; color: white;"))
+        rev_btn.clicked.connect(lambda _=False, p=it["path"]: self._reveal_media(p))
+        h.addWidget(rev_btn)
+        return row
+
+    def _file_row_menu(self, it, global_pos):
+        """文件清单行右键菜单。"""
+        m = QMenu(self)
+        m.addAction("📂 打开文件", lambda: self._open_media(it["path"]))
+        m.addAction("📁 在资源管理器中显示", lambda: self._reveal_media(it["path"]))
+        m.addAction("📋 复制路径", lambda: QApplication.clipboard().setText(it["path"]))
+        m.exec(global_pos)
+
+    def _set_batch_enabled(self, enabled: bool):
+        """文件清单视图下，批量勾选/下载（面向 JSON 条目）无意义 → 置灰。"""
+        for w in (getattr(self, "select_all_cb", None),
+                  getattr(self, "batch_thread_sel", None),
+                  getattr(self, "batch_dl_btn", None)):
+            if w is not None:
+                w.setEnabled(enabled)
+        if not enabled and getattr(self, "select_all_cb", None) is not None:
+            self.select_all_cb.setToolTip("当前是「下载目录」文件清单视图，批量下载只对条目视图有效")
+        elif getattr(self, "select_all_cb", None) is not None:
+            self.select_all_cb.setToolTip("")
 
     def _make_pager(self, total, page, total_pages):
         """页码导航条（浏览器式）：⏮ ◀ 第N/M页(跳页输入) ▶ ⏭ + 总数。"""
@@ -1923,7 +2145,7 @@ class AssetPage(BasePage):
         return bar
 
     def _goto_collected_page(self, page):
-        total = len(self._collected_all_items)
+        total = len(self._current_view_items())
         total_pages = (total + BATCH - 1) // BATCH if total else 1
         self._collected_page = min(max(1, page), total_pages)
         self._render_collected_batch()

@@ -148,13 +148,17 @@ while time.time() < deadline:
 n = len(page._collected_all_items or [])
 check("列表渲染出数据", n > 0, f"{n} 条")
 opts = [page.folder_sel.itemData(i) for i in range(page.folder_sel.count())]
-check("文件夹下拉含媒体作者目录", len(opts) > 5 and any("/" in o for o in opts if o),
-      f"{len(opts)} 项：{opts[:8]}")
+opts = [o for o in opts if isinstance(o, str)]   # 跳过 insertSeparator 的空项
+dir_opts = [o for o in opts if o.startswith("dir:")]
+sub_opts = [o for o in opts if o.startswith("sub:")]
+check("下拉含 download 分类目录", len(dir_opts) >= 5, str(dir_opts[:6]))
+check("下拉含已获取数据内目录", len(sub_opts) > 5, f"{len(sub_opts)} 项")
 check("条目都带 src_dir/src_dirs 字段",
       all("src_dir" in it and "src_dirs" in it for it in page._collected_all_items[:50]))
-pick = next((o for o in opts[1:] if o and "/" in o), None) or next((o for o in opts[1:] if o), None)
-if pick:
-    page.folder_sel.setCurrentIndex(opts.index(pick))
+pick_sub = next((o for o in sub_opts if "/" in o), sub_opts[0] if sub_opts else None)
+if pick_sub:
+    rel = pick_sub[4:]
+    page.folder_sel.setCurrentIndex(page.folder_sel.findData(pick_sub))
     deadline = time.time() + 60
     while time.time() < deadline:
         qapp.processEvents()
@@ -162,8 +166,8 @@ if pick:
             break
         time.sleep(0.02)
     got = page._collected_all_items
-    ok = all(page._item_in_folder(it, pick) for it in got)
-    check(f"选「{pick}」后条目都命中该目录", ok and len(got) > 0, f"{len(got)} 条")
+    ok = all(page._item_in_folder(it, rel) for it in got)
+    check(f"选「{rel}」后条目都命中该目录", ok and len(got) > 0, f"{len(got)} 条")
     page.folder_sel.setCurrentIndex(0)
     deadline = time.time() + 60
     while time.time() < deadline:
@@ -174,8 +178,63 @@ if pick:
     check("切回全部文件夹恢复条目数", len(page._collected_all_items) == n,
           f"{len(page._collected_all_items)} vs {n}")
 
+print("== 6. download 分类目录 → 文件清单视图 ==")
+from toolbox.config_manager import get_export_dir
+
+dl_root = get_export_dir()
+cand = [o[4:] for o in dir_opts]
+cand = [c for c in cand if c != "已获取数据"]
+check("找到可测的下载目录", bool(cand), str(cand[:4]))
+if cand:
+    target_dir = cand[0]
+    idx = [i for i in range(page.folder_sel.count())
+           if page.folder_sel.itemData(i) == f"dir:{target_dir}"][0]
+    page.folder_sel.setCurrentIndex(idx)
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        qapp.processEvents()
+        if page._view_mode == "files" and page._plain_files:
+            break
+        time.sleep(0.02)
+    check("切到 files 视图", page._view_mode == "files", page._view_mode)
+    check(f"列出 {target_dir} 的文件", len(page._plain_files) > 0, f"{len(page._plain_files)} 个")
+    check("文件项字段齐全",
+          all(k in page._plain_files[0] for k in ("path", "name", "size", "type", "rel_dir")))
+    check("批量下载按钮已禁用", not page.batch_dl_btn.isEnabled())
+    check("列表渲染出文件行", page.collected_layout.count() > 1,
+          f"布局项 {page.collected_layout.count()}")
+    # 搜索过滤对文件清单生效
+    page.search_entry.setText("zzz_不存在的名字")
+    page._apply_search()
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        qapp.processEvents()
+        if not page._plain_files:
+            break
+        time.sleep(0.02)
+    check("搜索对文件清单生效", len(page._plain_files) == 0, f"{len(page._plain_files)} 个")
+    page.search_entry.setText("")
+    page._apply_search()
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        qapp.processEvents()
+        if page._plain_files:
+            break
+        time.sleep(0.02)
+    # 切回条目视图
+    page.folder_sel.setCurrentIndex(0)
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        qapp.processEvents()
+        if page._view_mode == "entries" and page._collected_all_items:
+            break
+        time.sleep(0.02)
+    check("切回条目视图", page._view_mode == "entries" and len(page._collected_all_items) == n,
+          f"{page._view_mode} / {len(page._collected_all_items)}")
+    check("批量下载按钮恢复可用", page.batch_dl_btn.isEnabled())
+
 print()
-print("== 6. 本地资源：目录锁定（记住 + 只读 + 重启恢复 + 固定子目录） ==")
+print("== 7. 本地资源：目录锁定（记住 + 只读 + 重启恢复 + 固定子目录） ==")
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 _cfg_backup = load_convert_config()
