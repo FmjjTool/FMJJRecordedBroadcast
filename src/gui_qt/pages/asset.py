@@ -303,24 +303,56 @@ def _norm_dy_source_link(platform: str, video_id: str, url: str) -> str:
     return url or ""
 
 
-def scan_assets(folder: str, limit: int = 0) -> list:
-    """扫描文件夹里的图片/视频/音频，返回文件信息列表。limit=0 表示无上限。"""
+# 递归扫描时跳过的目录（缓存/版本库/系统还原点，扫进来只会是垃圾条目）
+SCAN_SKIP_DIRS = {"__pycache__", ".git", ".svn", ".idea", ".vscode",
+                  "node_modules", "$recycle.bin", "system volume information"}
+
+
+def scan_assets(folder: str, limit: int = 0, depth: int = 0) -> list:
+    """扫描文件夹里的图片/视频/音频，返回文件信息列表。limit=0 表示无上限。
+
+    depth: 0=只扫当前层；N>0=向下递归 N 层；负数=不限深度（逐级全扫）。
+    每项带 rel_dir（相对 folder 的目录，根目录为 ""），供列表按文件夹分组/筛选。
+    输出顺序：先本层文件，再逐个进入子目录递归——同一目录的结果始终连续，
+    分组渲染和「文件夹」筛选都不会把目录打散。
+    """
     results = []
-    try:
-        for name in sorted(os.listdir(folder)):
-            full = os.path.join(folder, name)
-            if not os.path.isfile(full):
+
+    def walk(path, level, rel):
+        try:
+            with os.scandir(path) as it:
+                entries = sorted(it, key=lambda e: e.name.lower())
+        except OSError:
+            return False
+        subdirs = []
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if e.name.lower() not in SCAN_SKIP_DIRS and (depth < 0 or level < depth):
+                        subdirs.append(e)
+                    continue
+                if not e.is_file(follow_symlinks=False):
+                    continue
+                kind = _classify(e.name)
+                if not kind:
+                    continue
+                st = e.stat()
+            except OSError:
                 continue
-            kind = _classify(name)
-            if not kind:
-                continue
-            st = os.stat(full)
             results.append({
-                "path": full, "name": name, "size": st.st_size,
-                "type": kind, "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "path": e.path, "name": e.name, "size": st.st_size,
+                "type": kind, "rel_dir": rel,
+                "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
             })
             if limit and len(results) >= limit:
-                break
+                return True
+        for e in subdirs:
+            if walk(e.path, level + 1, f"{rel}/{e.name}" if rel else e.name):
+                return True
+        return False
+
+    try:
+        walk(folder, 0, "")
     except Exception:
         pass
     return results
@@ -402,6 +434,8 @@ class AssetPage(BasePage):
         self._all_files = []            # 本地扫描结果全量
         self._shown = 0                 # 已渲染数量
         self._folder = ""
+        self._local_dir = ""            # 本地资源「文件夹」筛选（相对路径，"" = 全部）
+        self._cur_group = None          # 本地列表当前分组标题（懒加载跨批次延续）
         self._disk_items = []           # 磁盘已下载数据全量
         self._collected_all_items = []  # 当前平台筛选后的列表
         self._collected_page = 1        # 当前页码（分页渲染）
@@ -433,7 +467,8 @@ class AssetPage(BasePage):
         head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
             "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
             "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
-            "支持平台/状态筛选（未下载不含「不可下载」纯文本条目/已下载/下载不完整）、"
+            "支持平台/<b>文件夹</b>筛选（可逐级下钻到 抖音_媒体/作者 这类子目录）、"
+            "状态筛选（未下载不含「不可下载」纯文本条目/已下载/下载不完整）、"
             "关键词搜索、时间排序、分页浏览；"
             "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
             "媒体文件（存在哪项才显示哪项）</p>"
@@ -441,8 +476,9 @@ class AssetPage(BasePage):
             "勾选后批量下载（已完整的自动跳过，大文件显示字节进度，可取消）</p>"
             "<p>· <b>删除</b>：可选删除 json/md/xlsx/_raw/媒体文件</p>"
             "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，右键打开链接/筛选作者）</p>"
-            "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频，缩略图懒加载预览，"
-            "支持扫描上限与增量索引</p>"
+            "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频，"
+            "<b>「深度」可选逐级读取子文件夹</b>（默认全部层级），结果按文件夹分组，"
+            "「文件夹」下拉可下钻到任一层；缩略图懒加载预览，支持扫描上限与增量索引</p>"
             "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
             "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
         layout.addLayout(head)
@@ -598,8 +634,19 @@ class AssetPage(BasePage):
         row.addWidget(pick_btn)
         v.addLayout(row)
 
-        # 策略行：扫描上限 / 分批间隔 / 增量模式
+        # 策略行：扫描深度 / 分批间隔 / 增量模式
         cfg = QHBoxLayout()
+        cfg.addWidget(QLabel("深度:"))
+        self.depth_sel = QComboBox()
+        for label, val in (("仅当前层", 0), ("1 层子目录", 1), ("2 层子目录", 2),
+                           ("3 层子目录", 3), ("全部层级", -1)):
+            self.depth_sel.addItem(label, val)
+        self.depth_sel.setFixedWidth(110)
+        self.depth_sel.setToolTip(
+            "是否进入子文件夹读取（逐级扫描）：\n"
+            "「仅当前层」只扫选中目录本身；「全部层级」递归到底")
+        cfg.addWidget(self.depth_sel)
+        cfg.addSpacing(8)
         cfg.addWidget(QLabel("上限:"))
         self.limit_entry = QLineEdit()
         self.limit_entry.setFixedWidth(50)
@@ -629,6 +676,19 @@ class AssetPage(BasePage):
         cfg.addWidget(scan_btn)
         v.addLayout(cfg)
 
+        # 文件夹筛选行：扫描结果按目录分组后，可逐级进入某个子文件夹查看
+        frow = QHBoxLayout()
+        frow.addWidget(QLabel("文件夹:"))
+        self.local_dir_sel = QComboBox()
+        self.local_dir_sel.addItem("全部文件夹", "")
+        self.local_dir_sel.setMinimumWidth(240)
+        self.local_dir_sel.setToolTip(
+            "按扫描到的子文件夹筛选（选中父文件夹会包含其下所有层级）；\n"
+            "扫描完成后这里列出全部目录，按层级缩进，可逐级下钻")
+        self.local_dir_sel.currentIndexChanged.connect(self._on_local_dir_changed)
+        frow.addWidget(self.local_dir_sel, 1)
+        v.addLayout(frow)
+
         self.local_status = QLabel("")
         self.local_status.setStyleSheet("color: #888;")
         v.addWidget(self.local_status)
@@ -636,6 +696,7 @@ class AssetPage(BasePage):
         # 懒加载列表（滚动区）
         self.local_scroll, _, self.local_layout = self._make_scroll()
         v.addWidget(self.local_scroll, 1)
+        self._restore_depth_var()
         return f
 
     def _save_inc_var(self, checked):
@@ -646,6 +707,46 @@ class AssetPage(BasePage):
             save_convert_config(cfg)
         except Exception:
             pass
+
+    def _save_depth_var(self, _idx=0):
+        """本地资源「扫描深度」选择写入 config（下次打开保持上次的层级）。"""
+        try:
+            d = self.depth_sel.currentData()
+            cfg = load_convert_config()
+            cfg["local_scan_depth"] = -1 if d is None else int(d)
+            save_convert_config(cfg)
+        except Exception:
+            pass
+
+    def _restore_depth_var(self):
+        """启动时恢复上次的扫描深度（默认「全部层级」：逐级读到底）。"""
+        try:
+            d = int(load_convert_config().get("local_scan_depth", -1))
+        except Exception:
+            d = -1
+        idx = self.depth_sel.findData(d)
+        if idx >= 0:
+            self.depth_sel.blockSignals(True)
+            self.depth_sel.setCurrentIndex(idx)
+            self.depth_sel.blockSignals(False)
+
+    def _on_local_dir_changed(self, _idx=0):
+        """「文件夹」下拉切换：按所选目录（含子层级）重新渲染本地资源列表。"""
+        self._local_dir = self.local_dir_sel.currentData() or ""
+        self._shown = 0
+        self._cur_group = None
+        self._render_local_batch()
+        self._update_local_status()
+
+    def _local_view(self) -> list:
+        """当前「文件夹」筛选后的可见文件列表（选父目录含其下所有层级）。"""
+        d = self._local_dir
+        if not d:
+            return self._all_files
+        pre = d + "/"
+        return [f for f in self._all_files
+                if (f.get("rel_dir") or "") == d
+                or (f.get("rel_dir") or "").startswith(pre)]
 
     def _make_scroll(self):
         """构造滚动区：QScrollArea + QWidget 容器 + 垂直布局。"""
@@ -678,12 +779,15 @@ class AssetPage(BasePage):
             interval = float(self.batch_entry.text().strip() or "0")
         except ValueError:
             interval = 0
+        depth = self.depth_sel.currentData()
+        depth = -1 if depth is None else int(depth)
         self._folder = folder
         inc = self.inc_var.isChecked()
+        self.local_status.setText("⏳ 正在扫描（含子文件夹）…")
 
         def work():
             import time
-            files = scan_assets(folder, limit=limit)
+            files = scan_assets(folder, limit=limit, depth=depth)
             # 分批限流：每 BATCH 个暂停 interval 秒（模拟/控制扫描节奏）
             if interval > 0 and len(files) > BATCH:
                 for i in range(BATCH, len(files), BATCH):
@@ -699,15 +803,54 @@ class AssetPage(BasePage):
             files, folder = result
             self._all_files = files
             self._shown = 0
+            self._cur_group = None
+            self._rebuild_local_dirs(files)   # 重建「文件夹」下拉（默认全部）
             self._render_local_batch()
-            imgs = sum(1 for x in files if x["type"] == "image")
-            vids = sum(1 for x in files if x["type"] == "video")
-            auds = sum(1 for x in files if x["type"] == "audio")
-            self.local_status.setText(
-                f"共 {len(files)} 个资源（图片 {imgs} / 视频 {vids} / 音频 {auds}）"
-                + ("，已增量写入索引" if inc else ""))
+            self._update_local_status()
 
         run_bg(work, done)
+
+    def _rebuild_local_dirs(self, files):
+        """按扫描结果重建「文件夹」下拉：含各级父目录，树序排列 + 层级缩进。"""
+        dirs = set()
+        for f in files:
+            rel = f.get("rel_dir") or ""
+            if not rel:
+                continue
+            parts = rel.split("/")
+            for i in range(1, len(parts) + 1):
+                dirs.add("/".join(parts[:i]))
+        ordered = sorted(dirs, key=lambda p: [s.lower() for s in p.split("/")])
+        sel = self.local_dir_sel
+        sel.blockSignals(True)
+        sel.clear()
+        sel.addItem("全部文件夹", "")
+        for p in ordered:
+            sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], p)
+            sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
+        sel.setCurrentIndex(0)
+        sel.blockSignals(False)
+        self._local_dir = ""
+
+    def _update_local_status(self):
+        """状态行：资源总数 / 分类计数 / 涉及文件夹数 / 当前筛选范围。"""
+        files = self._all_files
+        if not files:
+            self.local_status.setText("（未扫描到资源，可调高「深度」让子文件夹一起读）")
+            return
+        imgs = sum(1 for x in files if x["type"] == "image")
+        vids = sum(1 for x in files if x["type"] == "video")
+        auds = sum(1 for x in files if x["type"] == "audio")
+        dirs_n = len({f.get("rel_dir") or "" for f in files})
+        view = self._local_view()
+        scope = ""
+        if self._local_dir:
+            scope = f" · 当前筛选「{self._local_dir}」{len(view)} 个"
+        self.local_status.setText(
+            f"共 {len(files)} 个资源（图片 {imgs} / 视频 {vids} / 音频 {auds}）"
+            + (f"，分布在 {dirs_n} 个文件夹" if dirs_n > 1 else "")
+            + scope
+            + ("，已增量写入索引" if self.inc_var.isChecked() else ""))
 
     def _clear_layout(self, lay):
         while lay.count():
@@ -719,24 +862,50 @@ class AssetPage(BasePage):
                 self._clear_layout(item.layout())
 
     def _render_local_batch(self):
-        """懒加载：每次渲染 BATCH 个，最后挂「加载更多」按钮。"""
+        """懒加载：每次渲染 BATCH 个，最后挂「加载更多」按钮。
+
+        列表用 self._local_view()（受「文件夹」下拉筛选）而不是全量，
+        目录变化处插一条文件夹小标题 —— 逐级扫描后一眼能看出文件在哪一层。
+        """
         lay = self.local_layout
+        view = self._local_view()
+        if not view:
+            self._clear_layout(lay)
+            tip = QLabel("（该文件夹下没有可预览的图片/视频/音频）"
+                         if self._all_files else "（尚未扫描，选好文件夹后点 🔍 扫描）")
+            tip.setStyleSheet("color: gray; padding: 8px;")
+            lay.addWidget(tip)
+            lay.addStretch(1)
+            return
         if self._shown == 0:
             self._clear_layout(lay)
             lay.addStretch(1)
+            self._cur_group = None
         # 移除末尾 stretch 以便按顺序插入
         lay.takeAt(lay.count() - 1)
-        end = min(self._shown + BATCH, len(self._all_files))
-        for item in self._all_files[self._shown:end]:
+        end = min(self._shown + BATCH, len(view))
+        for item in view[self._shown:end]:
+            self._add_local_group_header(lay, item)
             self._render_local_item(item)
         self._shown = end
-        if self._shown < len(self._all_files):
-            more = QPushButton(f"加载更多（{len(self._all_files) - self._shown} 个）")
+        if self._shown < len(view):
+            more = QPushButton(f"加载更多（{len(view) - self._shown} 个）")
             more.setStyleSheet(
                 "background: transparent; border: 1px solid #c8cdd6; color: #6b7280; padding: 4px;")
             more.clicked.connect(self._render_local_batch)
             lay.addWidget(more)
         lay.addStretch(1)
+
+    def _add_local_group_header(self, lay, item):
+        """目录变化时插入文件夹小标题（根目录 / 子目录相对路径）。"""
+        rel = item.get("rel_dir") or ""
+        if rel == getattr(self, "_cur_group", None):
+            return
+        self._cur_group = rel
+        lbl = QLabel(("📁 " + rel) if rel else "📁 (根目录)")
+        lbl.setStyleSheet("color: #6b7280; font-size: 11px; padding: 5px 2px 1px 2px;")
+        lbl.setToolTip(item.get("path", ""))
+        lay.addWidget(lbl)
 
     def _render_local_item(self, item):
         row = QFrame()
@@ -808,6 +977,15 @@ class AssetPage(BasePage):
         self.plat_sel.setFixedWidth(120)
         self.plat_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
         bar.addWidget(self.plat_sel)
+        bar.addWidget(QLabel("文件夹:"))
+        self.folder_sel = QComboBox()
+        self.folder_sel.addItem("全部文件夹", "")
+        self.folder_sel.setFixedWidth(150)
+        self.folder_sel.setToolTip(
+            "按条目所在文件夹筛选（如 抖音_媒体/封茗囧菌、B站资源/收藏夹）；\n"
+            "选中父文件夹会包含其下所有层级，可逐级下钻定位")
+        self.folder_sel.currentIndexChanged.connect(lambda _: self._refresh_collected())
+        bar.addWidget(self.folder_sel)
         self.search_entry = QLineEdit()
         self.search_entry.setPlaceholderText("🔍 搜索标题/作者/ID...")
         self.search_entry.setMinimumWidth(200)  # 可随窗口拉伸（原固定 200 不自适应）
@@ -939,6 +1117,12 @@ class AssetPage(BasePage):
                 "media_files": mfs,
                 "expected_imgs": len(imgs),  # 独立媒体条目本身完整
             })
+        # 3.1 来源文件夹（相对 已获取数据/ 的目录）——「文件夹」筛选/ 行内标注用。
+        # 每次现算成本可忽略（一次 relpath），且不污染 json 索引缓存的 payload。
+        for entry in results:
+            entry["src_dir"] = self._rel_src_dir(
+                entry.get("file_path"), video_dir, download_root)
+
         results.sort(key=lambda r: (r.get("date_part") or ""), reverse=True)
         # 纯文本条目自动写入「不可下载」标记（用户解除过的在 allow 豁免集里不再自动加回）
         changed = False
@@ -953,6 +1137,63 @@ class AssetPage(BasePage):
         if changed:
             _save_no_dl(self._no_dl)
         return results
+
+    @staticmethod
+    def _rel_src_dir(path, *bases):
+        """文件路径 → 相对基准目录（已获取数据/ 优先，其次 download/）的父目录。
+
+        返回 posix 风格相对路径（"" 表示就在基准目录根下），取不到返回 ""。
+        已获取数据/ 内的 {平台}_文件、{平台}_媒体/作者 会原样保留；B站资源包
+        位于 download/B站资源/类别/包/，回落到 download/ 基准得到「B站资源/类别」。
+        """
+        if not path:
+            return ""
+        for base in bases:
+            try:
+                rel = os.path.relpath(str(path), str(base))
+            except ValueError:
+                continue
+            if rel.startswith(".."):
+                continue
+            d = os.path.dirname(rel)
+            return "" if d in ("", ".") else d.replace(os.sep, "/")
+        return ""
+
+    @staticmethod
+    def _dir_under(src: str, folder: str) -> bool:
+        """src 是否属于 folder 或其子层级（folder 为空表示不过滤）。"""
+        if not folder:
+            return True
+        src = src or ""
+        return src == folder or src.startswith(folder + "/")
+
+    def _rebuild_folder_options(self, items) -> str:
+        """按条目来源目录重建「文件夹」下拉，返回实际生效的筛选值。
+
+        选项含各级父目录（选中「抖音_媒体」即可看其下所有作者文件夹），
+        按树序排列 + 全角空格缩进；保留用户原选择，选中项已消失则回到「全部」。
+        """
+        dirs = set()
+        for it in items:
+            rel = it.get("src_dir") or ""
+            if not rel:
+                continue
+            parts = rel.split("/")
+            for i in range(1, len(parts) + 1):
+                dirs.add("/".join(parts[:i]))
+        ordered = sorted(dirs, key=lambda p: [s.lower() for s in p.split("/")])
+        sel = self.folder_sel
+        cur = sel.currentData() or ""
+        sel.blockSignals(True)
+        sel.clear()
+        sel.addItem("全部文件夹", "")
+        for p in ordered:
+            sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], p)
+            sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
+        idx = sel.findData(cur) if cur else 0
+        sel.setCurrentIndex(idx if idx >= 0 else 0)
+        sel.blockSignals(False)
+        return sel.currentData() or ""
 
     def _scan_media_files(self, root, media_map):
         """递归扫描 root 下实际媒体文件，按 (date, title_key, subdir) 分组进 media_map。
@@ -1336,7 +1577,12 @@ class AssetPage(BasePage):
             if gen != self._reload_gen:
                 return  # 中途又触发了刷新，本轮作废
             self._disk_items = disk_items or []
+            # 文件夹下拉随数据重建：返回实际生效值，保证「下拉显示」与「列表过滤」一致
+            folder_f = self._rebuild_folder_options(self._disk_items)
             items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
+            if folder_f:
+                items = [it for it in items
+                         if self._dir_under(it.get("src_dir") or "", folder_f)]
             # 状态筛选
             if status == "未下载":
                 # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
@@ -1478,8 +1724,11 @@ class AssetPage(BasePage):
         self._clear_layout(lay)
         items = self._collected_all_items
         if not items:
-            tip = ("（download/已获取数据/ 目录为空）" if not self._disk_items
-                   else f"（该平台无数据，共 {len(self._disk_items)} 条其他平台数据）")
+            if not self._disk_items:
+                tip = "（download/已获取数据/ 目录为空）"
+            else:
+                tip = (f"（当前筛选无结果：共 {len(self._disk_items)} 条数据，"
+                       f"可切回「全部」平台 / 全部文件夹）")
             lbl = QLabel(tip)
             lbl.setStyleSheet("color: gray;")
             lbl.setContentsMargins(8, 10, 8, 10)
@@ -1614,15 +1863,21 @@ class AssetPage(BasePage):
         # 次行只留数据统计（作者不再重复）
         author = (it.get("author") or "").strip() or "-"
         author_disp = author[:20] + ("…" if len(author) > 20 else "")
+        # 来源文件夹（相对 已获取数据/）：一眼看出条目属于哪个平台目录/作者目录，
+        # 与「文件夹」下拉的筛选项对得上（旧平铺数据在根目录下则为空，不显示）
+        src_dir = (it.get("src_dir") or "").strip()
+        dir_str = (f'  📁 <span style="color:#6b7280;">{_esc(src_dir)}</span>'
+                   if src_dir else "")
         text = (f"[{index}] {plat_tag}{_esc(title)} "
                 f'<span style="color:#555;">@{_esc(author_disp)}</span>{media_str}<br>'
                 f"播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}<br>"
-                f"📅 {date_str}  📄 {_esc(fname)}")
+                f"📅 {date_str}{dir_str}  📄 {_esc(fname)}")
         txt = QLabel(text)
         txt.setTextFormat(Qt.RichText)
         txt.setStyleSheet("font-size: 11px;")
         txt.setWordWrap(True)
-        txt.setToolTip(f"{full_title}\n\n📄 {os.path.basename(it['file_path'])}")
+        txt.setToolTip(f"{full_title}\n\n📁 {src_dir or '(根目录)'}\n"
+                       f"📄 {os.path.basename(it['file_path'])}")
         h.addWidget(txt, 1)
         # 右侧按钮：重新下载 / 下载封面（有封面无媒体时）/ 删除（42×32，原 32×28 不好点）
         redo_btn = QPushButton("↻")
