@@ -283,7 +283,6 @@ DEFAULT_SETTINGS = {
     "last_room": "582775732015",  # 默认房号
     "poll_enabled": True,       # 轮询开关（顶栏）
     "mode": "danmaku_only",     # 弹幕方式：默认仅弹幕
-    "auto_record": False,       # 自动录播（勾选后拿到流即录）
     "auto_save_danmaku": True,  # 自动导出回放包
 }
 

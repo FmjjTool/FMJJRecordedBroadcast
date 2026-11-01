@@ -1,11 +1,14 @@
 """抖音弹幕实时数据接入页（PySide6 版，对应原版 gui/test_page.py）。
 
 三栏布局：左主播信息（首行直播标题）/ 中弹幕聊天礼物 / 右4块垂直（房间号/WS/打赏榜/弹幕信息2）。
-- 顶栏：轮询 / 模式 / 设置 / 清空内容
-- 工具栏：保存弹幕 / 导出导入回放包 / 保存统计 / 自动录播
+- 顶栏：轮询 / 模式（仅弹幕 / 回放）/ 录播 / 设置 / 清空内容
+- 工具栏：保存弹幕 / 导出导入合并回放包 / 保存统计
 - 连接控制：房间号右侧唯一按钮（未连接「连接」/ 已连接「断开」/ 等待开播「立即重试」）
 - 底栏：状态点 + 状态文本 + 计时 + 本场点赞
 - 真实抓取：DouyinLiveFetcher / StatsCollector（开播等待走轮询）
+
+视频录制（含自动回放包录制）已全部迁到顶栏「⏺ 录播」里的「直播录制」窗口，
+本页只负责【仅弹幕】实时抓取与【回放】已导出的回放包。
 """
 
 import atexit
@@ -144,18 +147,15 @@ def _cleanup_replay_tmp():
 class TestPage(BasePage):
     # 功能介绍浮层文案（B站弹幕姬子类覆写）
     HELP_INTRO = (
-        "<p><b>抖音直播弹幕姬：真实接入直播间，实时数据 + 录制 + 回放一体。</b></p>"
+        "<p><b>抖音直播弹幕姬：真实接入直播间，实时数据 + 回放一体。</b></p>"
         "<p>· <b>连接</b>：输入房间号或直播间链接（留空自动填默认房间号），"
         "房间号右侧按钮点击连接；连接成功后变为「断开」，再点即断开</p>"
         "<p>· <b>实时数据</b>：弹幕 / 礼物 / 进场 / 点赞 / 关注，主播信息卡实时刷新；"
         "礼物打赏榜、消息类别可开关（礼物/聊天/点赞/进入/日志）</p>"
-        "<p>· <b>四种模式</b>：正常（视频+弹幕）/ 仅视频 / 仅弹幕 / 回放</p>"
-        "<p>· <b>视频与回放包录制</b>：直播画面预览 + 画质切换；"
-        "⏺ 回放包录制（视频 + 全量弹幕打包成 zip）/ 勾选自动回放包录制；"
-        "切页后台保持连接，切回自动恢复</p>"
-        "<p>· <b>⏺ 录播（顶栏右侧）</b>：打开「直播录制」二级窗口——抖音 / B站 同源列表，"
-        "窗口底部切换平台；支持开播自动录制、断流自动重连续录、按时间/大小分段、"
-        "录满自动停，多个直播间同时录</p>"
+        "<p>· <b>两种模式</b>：仅弹幕（只抓弹幕，不拉视频）/ 回放（导入回放包重演整场）</p>"
+        "<p>· <b>⏺ 录播（顶栏右侧）</b>：视频录制全部在「直播录制」二级窗口——"
+        "抖音 / B站 同源列表，窗口底部切换平台；支持开播自动录制、断流自动重连续录、"
+        "按时间/大小分段、录满自动停，多个直播间同时录</p>"
         "<p>· <b>实时落盘</b>：每条弹幕/礼物到达即写入「导出目录/弹幕文件/实时记录/"
         "房间号_日期.jsonl」，切页、误关、进程崩溃都不丢；切页回来搜索条件与历史保留</p>"
         "<p>· <b>🔁 轮询等开播</b>：未开播按间隔自动重试，主播开播自动接入；"
@@ -179,22 +179,17 @@ class TestPage(BasePage):
         self.fetcher = None
         self.stats_collector = None
         self.settings = self._load_settings()
-        # 视频预览 / 录制 / 模式 / 回放
-        self.mode = "normal"            # normal / video_only / danmaku_only / replay
-        self.video_player = None
-        self.recorder = None
-        self._recording = False
-        self._streams = {}              # 清晰度 → FLV URL
+        # 模式 / 回放（视频录制已迁到「直播录制」窗口，本页不再录视频）
+        self.mode = "danmaku_only"      # danmaku_only（仅弹幕）/ replay（回放）
+        self.video_player = None        # 仅回放用（回放包里的视频）
+        self._streams = {}              # 清晰度 → FLV URL（后端回调带入，仅供展示/备用）
         self._current_stream = None
-        self._quality_manual = False    # 用户手动切换过清晰度（否则始终默认最高）
         self._session_casts = []        # 本场消息快照（含毫秒时间戳，用于导出回放包）
         self._replay = None             # 回放状态 dict
         self._replay_timer = None
         self._auto_stopped = False      # 因切走页面被自动断开（切回时自动重连）
         self._waiting_live = False      # 未开播/已下播（轮询开着则等开播自动接入）
         self._manual_stop = False       # 手动断开（下播后的 disconnected 不自动进入等待）
-        self._rec_switched_away = False  # 录播中切走页面（切回时重新开始录制）
-        self._rec_resume_pending = False  # 切回时未连上 → 待拿到直播流自动重开录制
         # 轮询：按设置间隔反复重访直播间（断开→重连，保留本场数据）
         self._poll_timer = None
         # 表情/礼物图标：待图片缓存就绪的富文本消息队列（保序）+ 后台下载状态
@@ -261,17 +256,19 @@ class TestPage(BasePage):
         self._countdown_timer = QTimer(self)
         self._countdown_timer.timeout.connect(self._update_poll_countdown)
         self._countdown_timer.start(1000)
-        # 模式切换：正常（视频+弹幕）/ 仅视频 / 仅弹幕 / 回放
+        # 模式切换：仅弹幕 / 回放（视频录制已迁到「直播录制」窗口，本页不再拉直播视频）
         top_l.addWidget(QLabel("模式:"))
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("正常模式", "normal")
-        self.mode_combo.addItem("仅视频模式", "video_only")
         self.mode_combo.addItem("仅弹幕模式", "danmaku_only")
         self.mode_combo.addItem("回放模式", "replay")
+        self.mode_combo.setToolTip(
+            "仅弹幕模式：只抓弹幕，不拉视频流（最省资源）\n"
+            "回放模式：导入回放包，弹幕与视频按时间轴同步重演\n"
+            "（要录直播视频请在顶栏「⏺ 录播」里开，本页不再录视频）")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         top_l.addWidget(self.mode_combo)
         settings_btn = QPushButton("⚙")
-        settings_btn.setToolTip("打开本页详细设置（轮询间隔、画质、录制、过滤等）")
+        settings_btn.setToolTip("打开本页详细设置（轮询间隔、导出、过滤等）")
         settings_btn.setFixedWidth(36)
         settings_btn.setStyleSheet(icon_btn_style(True, "font-size: 16px;"))
         settings_btn.clicked.connect(self._open_settings)
@@ -328,7 +325,7 @@ class TestPage(BasePage):
         import_btn.clicked.connect(self._pick_replay_zip)
         tb.addWidget(import_btn)
         merge_btn = QPushButton("🧩 合并回放包")
-        merge_btn.setToolTip("选择多个回放包 zip（断线重连产生的多段），按时间排序去重后\n"
+        merge_btn.setToolTip("选择多个回放包 zip（分几次导出的多段），按时间排序去重后\n"
                              "合并成一个完整回放包（弹幕/礼物/统计数据；视频文件不参与合并）")
         merge_btn.clicked.connect(self._merge_replay_zips_dialog)
         tb.addWidget(merge_btn)
@@ -336,17 +333,6 @@ class TestPage(BasePage):
         self.save_stats_var.setChecked(bool(self.settings.get("save_stats", False)))
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
         tb.addWidget(self.save_stats_var)
-        # 自动录播：勾选后拿到直播流即自动开始录制（最高画质）；取消则只手动录
-        # （放工具栏而非视频控制行：仅弹幕模式下视频行隐藏，工具栏各模式恒可见）
-        self.auto_record_var = QCheckBox("⏺ 自动回放包录制")
-        self.auto_record_var.setToolTip(
-            "勾选后：连接直播间拿到直播流即自动开始录制（默认最高画质，各模式均可），"
-            "停止时打包成回放包；\n"
-            "取消勾选：仅点「⏺ 回放包录制」按钮手动录制。\n"
-            "（多房间批量录播请用顶栏「⏺ 录播」打开的直播录制窗口）")
-        self.auto_record_var.setChecked(bool(self.settings.get("auto_record", False)))
-        self.auto_record_var.toggled.connect(self._on_auto_record_toggle)
-        tb.addWidget(self.auto_record_var)
         tb.addStretch(1)
         cookie_hint = QLabel("Cookie 由侧栏「Cookie 管理」统一提供（自动套用）",
                              styleSheet="color: #666; font-size: 11px;")
@@ -384,13 +370,12 @@ class TestPage(BasePage):
         bottom.addStretch(1)
         outer.addWidget(bottom_card)
 
-        # 恢复上次弹幕方式（持久化；面板已建好，切换信号会同步触发 _apply_mode）
-        _mode = str(self.settings.get("mode", "") or "danmaku_only")
-        _idx = self.mode_combo.findData(_mode)
-        if _idx < 0:
-            _idx = self.mode_combo.findData("danmaku_only")
-        if _idx >= 0 and _idx != self.mode_combo.currentIndex():
-            self.mode_combo.setCurrentIndex(_idx)
+        # 固定从「仅弹幕」起步：回放是临时查看状态，不该被记住（否则下次开机
+        # 空着回放卡等人拖包）。老版本存的 normal / video_only 也不再考虑。
+        self.mode = "danmaku_only"
+        if self.mode_combo.currentIndex() != 0:
+            self.mode_combo.setCurrentIndex(0)
+        self._apply_mode()      # 默认项不会触发 currentIndexChanged，这里兜底刷新一次
 
     # ======================== 平台后端（B站弹幕姬子类替换此模块） ========================
     _BACKEND = "toolbox.douyin_live"
@@ -595,7 +580,7 @@ class TestPage(BasePage):
         )
 
     def _rec_dir(self):
-        """录播文件目录。"""
+        """录播文件目录（本页已不录视频，保留给「打开录制目录」类入口用）。"""
         return self._backend()._danmaku_dir().parent / "直播录制"
 
 
@@ -711,13 +696,13 @@ class TestPage(BasePage):
         wrap = QVBoxLayout()
         wrap.setSpacing(4)
 
-        # ---- 视频卡片 ----
+        # ---- 视频卡片（仅回放模式显示：播放回放包里录好的视频）----
         self.video_card = QFrame()
         self.video_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         vv = QVBoxLayout(self.video_card)
         vv.setContentsMargins(10, 8, 10, 8)
         head = QHBoxLayout()
-        self.video_title = QLabel("📺 直播预览（仅播放，不录制）",
+        self.video_title = QLabel("🎬 回放（拖入 zip 回放包，弹幕与视频同步）",
                                   styleSheet="font-weight: bold;")
         head.addWidget(self.video_title)
         head.addStretch(1)
@@ -725,32 +710,12 @@ class TestPage(BasePage):
         head.addWidget(self.video_status_lbl)
         vv.addLayout(head)
 
-        self.video_label = QLabel("等待连接…")
+        self.video_label = QLabel("将 zip 回放包拖入窗口\n或点击「📂 导入回放包」")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumHeight(260)
         self.video_label.setStyleSheet(
             "background: #000; border-radius: 4px; color: #666; font-size: 14px;")
         vv.addWidget(self.video_label, 1)
-
-        # 直播控制行：清晰度 + 录播
-        self.live_ctrl_row = QHBoxLayout()
-        self.live_ctrl_row.addWidget(QLabel("清晰度:", styleSheet="color: #888;"))
-        self.quality_combo = QComboBox()
-        self.quality_combo.setMinimumWidth(110)
-        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
-        self.live_ctrl_row.addWidget(self.quality_combo)
-        self.record_btn = QPushButton("⏺ 回放包录制")
-        self.record_btn.setToolTip(
-            "只为本页的回放包录制视频（停止后自动打包 zip：视频 + 全量弹幕）。\n"
-            "要批量/多房间录播，用顶栏右侧「⏺ 录播」打开「直播录制」二级窗口。")
-        self.record_btn.setStyleSheet("background: #8e24aa; color: white;")
-        self.record_btn.clicked.connect(self._toggle_record)
-        self.live_ctrl_row.addWidget(self.record_btn)
-        self.rec_time_lbl = QLabel("", styleSheet="color: #e91e63; font-size: 11px;")
-        self.live_ctrl_row.addWidget(self.rec_time_lbl)
-        self.live_ctrl_row.addStretch(1)
-        self.live_ctrl_row_widget = self._wrap_h(self.live_ctrl_row)
-        vv.addWidget(self.live_ctrl_row_widget)
 
         # 回放控制行：播放/暂停 + 进度条 + 时间 + 倍速
         self.replay_row = QHBoxLayout()
@@ -847,96 +812,25 @@ class TestPage(BasePage):
         self._apply_mode()
 
     def _apply_mode(self):
-        """按当前模式刷新中部布局与视频状态。"""
-        normal = self.mode == "normal"
-        video_only = self.mode == "video_only"
-        danmaku_only = self.mode == "danmaku_only"
+        """按当前模式刷新中部布局（仅弹幕 / 回放）。"""
         replay = self.mode == "replay"
-        # 仅视频隐藏弹幕卡；仅弹幕隐藏视频卡（弹幕卡占满中部）
-        self.chat_card.setVisible(not video_only)
-        self.video_card.setVisible(normal or video_only or replay)
-        self.live_ctrl_row_widget.setVisible(normal or video_only)
+        # 仅弹幕：视频卡整体隐藏，弹幕卡占满中部；回放：显示视频卡 + 回放控制行
+        self.chat_card.setVisible(True)
+        self.video_card.setVisible(replay)
         self.replay_row_widget.setVisible(replay)
         if replay:
             self.video_title.setText("🎬 回放（拖入 zip 回放包，弹幕与视频同步）")
-            self._stop_live_preview()
             if not self._replay:
                 self.video_label.setText("将 zip 回放包拖入窗口\n或点击「📂 导入回放包」")
-        elif danmaku_only:
-            # 仅弹幕：不拉视频流，弹幕抓取照常
-            self._stop_live_preview()
-            self._stop_replay()
         else:
-            self.video_title.setText("📺 直播预览（仅播放，不录制）")
             self._stop_replay()
-            # 已连接且有流 → 自动起预览
-            if self.connected and self._streams and not (self.video_player and self.video_player.is_running()):
-                self._start_live_preview()
-        self._refresh_record_ui()
 
-    # ======================== 直播预览 / 清晰度 / 录播 ========================
-    QUALITY_NAMES = {"FULL_HD1": "1080P", "HD1": "720P", "SD1": "540P",
-                     "SD2": "360P", "LD": "360P", "_origin": "原画", "_md": "蓝光"}
-    # 画质优先级：原画最高（录播默认自动录最高流）
-    QUALITY_ORDER = {"_origin": 100, "_md": 95, "FULL_HD1": 90, "UHD": 85, "HD1": 80,
-                     "SD1": 70, "SD2": 60, "LD": 50}
+    # ======================== 房间流（仅供信息展示；录播在「直播录制」窗口） ========================
 
     def _on_room_streams(self, streams):
-        """房间信息带回清晰度列表 → 按画质排序填充，默认选中最高并起预览。"""
+        """后端带回清晰度列表：记下来即可，本页不预览、不录制。"""
         self._streams = streams or {}
-        keys = sorted(self._streams, key=lambda k: -self.QUALITY_ORDER.get(k, 0))
-        # 手动切换过 → 记住用户选择；否则默认最高
-        prev = self.quality_combo.currentData() if self._quality_manual else None
-        self.quality_combo.blockSignals(True)
-        self.quality_combo.clear()
-        for q in keys:
-            self.quality_combo.addItem(self.QUALITY_NAMES.get(q, q), q)
-        idx = self.quality_combo.findData(prev) if prev in self._streams else 0
-        self.quality_combo.setCurrentIndex(max(0, idx))
-        self.quality_combo.blockSignals(False)
-        if keys:
-            q = self.quality_combo.currentData() or keys[0]
-            self._current_stream = self._streams.get(q)
-        if self._streams and self.mode in ("normal", "video_only"):
-            self._start_live_preview()
-        # 自动录制：勾选「自动录播」或切页返回后待重开 → 拿到流立即录最高画质
-        # （正常/仅视频/仅弹幕均可自动录；回放模式除外）
-        if (self.mode != "replay" and not self._recording
-                and (self.settings.get("auto_record", False) or self._rec_resume_pending)):
-            self._rec_resume_pending = False
-            self._start_recording()
-
-    def _on_quality_changed(self, _index=None):
-        """用户手动切换清晰度 → 预览与录制流跟随（除非手动切换，否则始终最高）。"""
-        self._quality_manual = True
-        q = self.quality_combo.currentData()
-        if q and self._streams.get(q):
-            self._current_stream = self._streams[q]
-        if self.mode in ("normal", "video_only") and self._streams:
-            self._start_live_preview()
-
-    def _start_live_preview(self):
-        if not self._streams or self.mode == "replay":
-            return
-        q = self.quality_combo.currentData()
-        if not q:
-            q = next(iter(self._streams))
-        url = self._streams.get(q)
-        if not url:
-            return
-        self._current_stream = url
-        from toolbox.live_video import VideoStreamPlayer
-        if self.video_player:
-            self.video_player.stop()
-        self.video_player = VideoStreamPlayer(
-            on_frame=self._on_video_frame,
-            on_status=self._on_video_status)
-        self.video_player.start(url, is_live=True)
-
-    def _stop_live_preview(self):
-        if self.video_player:
-            self.video_player.stop()
-            self.video_player = None
+        self._current_stream = next(iter(self._streams.values()), None)
 
     def _on_video_frame(self, w, h, data):
         img = QImage(data, w, h, w * 3, QImage.Format_RGB888)
@@ -948,105 +842,14 @@ class TestPage(BasePage):
         self.video_label.setPixmap(pix)
 
     def _on_video_status(self, state, detail):
+        """回放视频状态（本页只播回放包里的视频，不再拉直播流）。"""
         if state == "connecting":
-            self.video_label.setText(detail or "正在获取直播流...")
+            self.video_label.setText(detail or "正在加载回放视频...")
             self.video_label.setPixmap(QPixmap())
         elif state == "error":
-            self.video_label.setText(detail or "直播流获取失败")
+            self.video_label.setText(detail or "回放视频加载失败")
             self.video_label.setPixmap(QPixmap())
-        if self.mode == "replay":
-            return
         self.video_status_lbl.setText(detail or "")
-
-    def _on_auto_record_toggle(self, checked):
-        """自动录播开关：持久化；勾选时若已拿到流且未在录 → 立即开始录。"""
-        self.settings["auto_record"] = bool(checked)
-        self._save_settings()
-        if checked and self.connected and self._streams and not self._recording:
-            self._start_recording()
-
-    def _toggle_record(self):
-        if self._recording:
-            # 手动停止：清掉切页自动重开标志（用户明确不录了）
-            self._rec_switched_away = False
-            self._rec_resume_pending = False
-            self._stop_recording()
-        else:
-            self._start_recording()
-
-    def _start_recording(self):
-        # 录制流跟随清晰度选择：默认最高画质；手动切换过则录切换后的流
-        if not self._current_stream and self._streams:
-            best = sorted(self._streams, key=lambda k: -self.QUALITY_ORDER.get(k, 0))[0]
-            self._current_stream = self._streams[best]
-        if not self._current_stream:
-            self.app.toast("无可用直播流（需先连接并获取清晰度）", "warning")
-            return
-        d = self._rec_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        room = self.room_entry.text().strip() or "room"
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = str(d / f"{room}_{ts}.flv")
-        n = 1
-        while os.path.exists(path):  # 同秒内重开（切页返回）防同名覆盖
-            path = str(d / f"{room}_{ts}_{n}.flv")
-            n += 1
-        from toolbox.live_video import StreamRecorder
-        self.recorder = StreamRecorder(on_status=lambda s, p: None)
-        if not self.recorder.start(self._current_stream, path):
-            self.app.toast("录制启动失败（未找到支持 https 的完整版 FFmpeg）", "error")
-            self.recorder = None
-            return
-        self._recording = True
-        self._refresh_record_ui()
-
-    def _stop_recording(self, package=True, sync=False):
-        """停止录制并打包回放包。
-
-        sync=True：在当前线程同步写完 zip 再返回（软件退出路径专用——
-        main.py 退出时会强制结束进程，后台 daemon 线程打包会被拦腰截断，
-        产出残缺 zip；退出必须等包落盘完成）。"""
-        self._recording = False
-        path = None
-        rec_meta = None
-        if self.recorder:
-            rec_meta = {"startTimestamp": self.recorder.start_ts,
-                        "endTimestamp": int(time.time() * 1000),
-                        "file": "recording.flv"}
-            self.recorder.stop()
-            path = self.recorder.path
-            self.recorder = None
-        self._refresh_record_ui()
-        if package and path and os.path.exists(path) and os.path.getsize(path) > 1024:
-            self._export_replay_zip(video_path=path, rec_meta=rec_meta,
-                                     quiet=True, sync=sync)
-        elif package and path:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-    def _refresh_record_ui(self):
-        if self._recording:
-            self.record_btn.setText("⏹ 停止回放包录制")
-            self.record_btn.setStyleSheet("background: #c62828; color: white;")
-            if not self._rec_timer_on:
-                self._rec_timer_on = True
-                self._tick_record()
-        else:
-            self.record_btn.setText("⏺ 回放包录制")
-            self.record_btn.setStyleSheet("background: #8e24aa; color: white;")
-            self.rec_time_lbl.setText("")
-
-    _rec_timer_on = False
-
-    def _tick_record(self):
-        if not self._recording or not self.recorder:
-            self._rec_timer_on = False
-            return
-        secs = int((time.time() * 1000 - self.recorder.start_ts) / 1000)
-        self.rec_time_lbl.setText(f"录制中 {secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
-        QTimer.singleShot(1000, self._tick_record)
 
     # ======================== 导出 / 导入回放包 ========================
     # dycast castTypeMap 同款分类（method → 分类 TXT 文件名）
@@ -2074,10 +1877,9 @@ class TestPage(BasePage):
         if self.stats_collector:
             self.stats_collector.stop()
             self.stats_collector = None
-        # 手动断开：停视频预览（彻底断开房间），且不再自动重连
-        self._stop_live_preview()
+        # 手动断开：停回放（若在回放），且不再自动重连
+        self._stop_replay()
         self._auto_stopped = False
-        self._quality_manual = False
         self.like_label.setText("0")
         self._set_action_btn("连接", "connect")
         self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
@@ -2933,11 +2735,11 @@ class TestPage(BasePage):
                 if self.stats_collector:
                     self.stats_collector.stop()
                     self.stats_collector = None
-                self._stop_live_preview()
+                self._stop_replay()
                 self._set_action_btn("连接", "connect")
                 self._setup_poll_timer()
             elif status == "disconnected":
-                # 下播/连接断开：先清资源（统计采集/视频预览/录制）+ 自动导出本场弹幕，
+                # 下播/连接断开：先清资源（统计采集/回放）+ 自动导出本场弹幕，
                 # 再按「手动停止 / 轮询开关」决定是否进入等待开播（等待检测为游客态，不占 Cookie）
                 self.connected = False
                 self._timer_running = False
@@ -2945,9 +2747,7 @@ class TestPage(BasePage):
                 if self.stats_collector:
                     self.stats_collector.stop()
                     self.stats_collector = None
-                self._stop_live_preview()
-                if self._recording:
-                    self._stop_recording()
+                self._stop_replay()
                 if not self._manual_stop and self.settings.get("auto_save_danmaku", True):
                     self._auto_save_danmaku()
                 if self._manual_stop:
@@ -3046,47 +2846,16 @@ class TestPage(BasePage):
 
     # ======================== 页面生命周期（全局同步：进自动启 / 出自动停） ========================
     def on_show(self):
-        """切到本页：录制中恢复预览；录播中切走的重新开始录制；
-        上次因切走被自动断开（且有房间号）→ 自动重连。"""
+        """切到本页：上次因切走被自动断开（且有房间号）→ 自动重连。"""
         # 备注信息可能已在弹幕姬设置弹窗里改过 → 每次切回刷新
         self.refresh_remark_info()
         if self.connected or self.fetcher:
-            # 后台保持运作中（如录制中切走再切回）：恢复视频预览渲染
-            if self._streams and self.mode in ("normal", "video_only") \
-                    and not (self.video_player and self.video_player.is_running()):
-                self._start_live_preview()
-            # 录播中切走的 → 重新开始录制（切走期间的段落自动打包，起一个新文件）
-            self._restart_recording_after_switch()
-            return
-        if self._rec_switched_away:
-            # 切走期间录制已被断连停止（如主播下播）→ 待重连拿到流后自动重开
-            self._rec_switched_away = False
-            self._rec_resume_pending = True
+            return          # 后台一直在抓，切回即用，无需重连
         room = self.room_entry.text().strip()
         if room and self._auto_stopped:
             self._auto_stopped = False
             self._resume_keep = True   # 切页自动重连：保留本场弹幕与搜索状态
             self._connect()
-
-    def _restart_recording_after_switch(self):
-        """返回页面：录播中切走过的 → 重新开始录制。
-
-        后台仍在录的：停掉并自动打包切走期间的段落，再起一个新文件；
-        切走期间因下播/断连已停录的：已重连就直接重开，否则待拿到流后自动重开。
-        """
-        if not self._rec_switched_away:
-            return
-        self._rec_switched_away = False
-        if self.mode == "replay":
-            return
-        if self._recording:
-            self._stop_recording()  # 切走期间的录制段自动打包（不足 1KB 的清理掉）
-        if not (self.connected and self._streams):
-            self._rec_resume_pending = True  # 等待重连/开播，拿到流自动重开
-            return
-        self._start_recording()
-        if self._recording:
-            self.app.toast("已重新开始录制（新文件）", "info")
 
     def on_theme_changed(self):
         """主题切换（手动/自动）后：重建聊天区富文本——昵称/礼物等内联 HTML
@@ -3095,35 +2864,17 @@ class TestPage(BasePage):
             self._apply_chat_filter()
 
     def on_hide(self):
-        """切离本页：连接中（含录制中）弹幕抓取与统计保持后台运作（WS 握手后
-        不占 Cookie），仅停 UI 渲染（视频预览/回放）；未连接才全停。"""
-        if self._recording:
-            # 录制中切页面：维持弹幕抓取与录制，只停视频预览渲染与回放；
-            # 返回页面时重新开始录制（见 _restart_recording_after_switch）
-            self._rec_switched_away = True
-            self._stop_replay()
-            self._stop_live_preview()
-            return
+        """切离本页：连接中弹幕抓取与统计保持后台运作（WS 握手后不占 Cookie），
+        仅停 UI 渲染（回放视频）；未连接才全停。"""
         if self.connected or self.fetcher:
-            # 连接中切走（未录视频）：弹幕抓取/统计继续后台跑，切回时列表
-            # 数据仍在；仅停视频预览渲染与回放
             self._stop_replay()
-            self._stop_live_preview()
             return
         self.shutdown()
 
     def shutdown(self):
-        """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。
-
-        退出路径停录制必须 sync=True：进程退出时 main.py 会强制结束残余
-        线程，异步打包的 zip 会被截断成残缺文件。"""
-        was_active = self.connected or self.fetcher or self.video_player or self._recording
-        self._rec_switched_away = False
-        self._rec_resume_pending = False
-        if self._recording:
-            self._stop_recording(sync=True)
+        """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。"""
+        was_active = self.connected or self.fetcher or self.video_player
         self._stop_replay()
-        self._stop_live_preview()
         if self.connected or self.fetcher or self.stats_collector:
             self._disconnect()
         self._auto_stopped = bool(was_active)
