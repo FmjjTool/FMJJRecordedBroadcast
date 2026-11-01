@@ -50,3 +50,7 @@ peachring_export/
 
 # 冒烟测试运行截图
 _smoke_*.png
+
+# 冒烟测试脚本（开发自测用，仅本地保留，一律不进仓库）
+_smoke/
+/_smoke_*.py
