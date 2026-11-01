@@ -155,7 +155,7 @@ class TicketsPage(BasePage):
 
         def work():
             # URL 优先；识别不出但像纯关键词 → 三平台关键词搜索
-            # （B站 API + 大麦 Playwright 游客搜索 + 秀动 HTTP SSR）
+            # （B站 API + 大麦 Playwright 游客搜索 + 秀动 Web 客户端接口）
             kind, _ = tickets_mod.detect_ticket_platform(url)
             if kind:
                 return tickets_mod.parse_ticket_url(url)

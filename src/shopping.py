@@ -323,12 +323,29 @@ def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
     tk, ck = _taobao_get_token(cookie)
     api = "mtop.taobao.wireless.shop.index.wandering.get"
 
+    def _call(data):
+        """mtop 调用；_m_h5_tk 过期（FAIL_SYS_*TOKEN*）时刷新 token 重试一次。
+
+        Cookie 里的 _m_h5_tk 有效期只有数小时，过期后 wandering 直接返回
+        FAIL_SYS_TOKEN_EXOIRED/TOKEN_EMPTY，表现和「店铺没商品」一模一样，
+        必须刷新后重签，否则整条 mtop 通道白跑。
+        """
+        nonlocal tk, ck
+        resp = _taobao_mtop(api, "1.0", data, ck, tk)
+        ret = str(resp.get("ret") or "")
+        if "TOKEN" in ret.upper():
+            if log:
+                log(f"  token 过期（{ret[:40]}），刷新后重试 ...")
+            tk, ck = _taobao_get_token(cookie)
+            resp = _taobao_mtop(api, "1.0", data, ck, tk)
+        return resp
+
     def _one_page(cur_page, pre_item_id):
         """单页请求，返回 (page_items, hasNext, ok)；风控/空页 ok=False。"""
         data = {"direction": 1, "userId": sid, "pageSize": 20,
                 "needPreNew": True, "id": 0, "curPage": cur_page,
                 "preItemId": pre_item_id}
-        resp = _taobao_mtop(api, "1.0", data, ck, tk)
+        resp = _call(data)
         ret = str(resp.get("ret") or "")
         if "SUCCESS" not in ret:
             if log:
@@ -346,7 +363,8 @@ def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
     pre_item_id = 0
     page_fail = 0
     # 每页 20 件，最多翻 10 页；连续请求会触发风控（RECOMMEND_EMPTY/RGV587
-    # 假响应——实测连拉 3 次后返回 0 件），失败等待后原地重试，最多 2 次
+    # 假响应——实测连拉 3 次后返回 0 件），失败等待后原地重试，最多 3 次
+    # （首屏被风控是最常见的「解析无结果」诱因，等待时间递增给风控留冷却）
     while len(raw) < count and cur_page <= 10:
         if log:
             log(f"mtop wandering 第 {cur_page} 页 ...")
@@ -360,11 +378,12 @@ def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
             if raw:
                 break        # 已有数据，翻页失败就停（够用）
             page_fail += 1   # 首页空——可能被风控，等待重试
-            if page_fail > 2:
+            if page_fail > 3:
                 break
+            wait = (6, 10, 15)[min(page_fail - 1, 2)]
             if log:
-                log(f"  首页为空/失败，等待 6 秒重试（{page_fail}/2）...")
-            time.sleep(6)
+                log(f"  首页为空/失败，等待 {wait} 秒重试（{page_fail}/3）...")
+            time.sleep(wait)
             continue
         raw.extend(page_items)
         if log:
@@ -474,11 +493,13 @@ def _playwright_fetch_products(shop_info: ShopInfo, cookie: str,
     """注入 Cookie 多 URL 多 UA 渲染店铺页 → [ShopProduct]（兜底策略）。
 
     淘宝商品列表页需要登录且会触发反爬验证，按以下顺序尝试（命中即返回）：
-    1. {domain}/search.htm?orderType=hotsell (PC UA + cookie)
+    1. {domain}/search.htm?orderType=hotsell (PC UA + cookie) —— 实测最稳：
+       登录态下能直接渲染出商品卡片流
     2. {domain}/search.htm (PC UA)
-    3. shop.m.taobao.com/shop/shop_index.htm?shop_id=XXX (移动 UA + cookie)
-    4. {domain}/search.htm?orderType=newinsell (PC UA，换排序)
-    5. {domain}/shop/view_shop.htm (店铺首页兜底)
+    3. {domain}/shop/view_shop.htm (店铺首页兜底)
+    4. shop.m.taobao.com/shop/shop_index.htm?shop_id=XXX (移动 UA + cookie，
+       常被跳转到 m 站壳页，命中率低于 PC 页)
+    5. {domain}/search.htm?orderType=newinsell (PC UA，换排序)
 
     失败时在 _taobao_debug/ 下保存截图与 HTML 用于排查。
     """
@@ -496,15 +517,15 @@ def _playwright_fetch_products(shop_info: ShopInfo, cookie: str,
     domain = m.group(0) if m else (shop_info.url or "")
     shop_id = shop_info.shop_id or ""
 
-    # ★ 移动版优先：mobile 版淘宝对 headless 反爬更松，且 shop_index.htm 不强制登录跳转
-    # ★ mtop 拦截的 PC 搜索页即使拿到 API 响应，也常因 secSDK 风控被强制登录
+    # ★ PC search.htm 优先：实测登录 Cookie 下 hotsell 排序页能直接出卡片；
+    #   m 站 shop_index.htm 会跳到 shop{id}.m.taobao.com 壳页，DOM 里没有商品
     candidates = [
-        (f"https://shop.m.taobao.com/shop/shop_index.htm?shop_id={shop_id}", UA_M,
-         "M+shop_index"),
         (f"{domain}/search.htm?orderType=hotsell", UA_PC, "PC+hotsell"),
         (f"{domain}/search.htm", UA_PC, "PC+search"),
-        (f"{domain}/search.htm?orderType=newinsell", UA_PC, "PC+newinsell"),
         (f"{domain}/shop/view_shop.htm", UA_PC, "PC+view_shop"),
+        (f"https://shop.m.taobao.com/shop/shop_index.htm?shop_id={shop_id}", UA_M,
+         "M+shop_index"),
+        (f"{domain}/search.htm?orderType=newinsell", UA_PC, "PC+newinsell"),
     ]
 
     DEBUG_DIR.mkdir(exist_ok=True)
@@ -657,6 +678,17 @@ def _playwright_one(url: str, ua: str, cookie: str, count: int, log) -> tuple:
         try:
             # 等页面"看似"稳定后再操作
             page.wait_for_timeout(3000)
+            # 商品卡片异步渲染：先等首个商品锚点出现（最多 8s），
+            # 拿不到再走 tab 点击 + 滚动兜底（首页被风控时这里会超时但无害）
+            try:
+                page.wait_for_selector(
+                    "a[href*='item.htm?id='], a[href*='item.taobao.com/item.htm']",
+                    timeout=8000)
+                if log:
+                    log("  商品卡片已出现")
+            except Exception:
+                if log:
+                    log("  等待商品卡片超时，继续滚动兜底")
             # 尝试点击 "全部宝贝" 等 tab 触发商品列表
             _try_click_tabs(page, log)
             # 滚动触发懒加载

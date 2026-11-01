@@ -203,7 +203,9 @@ class ShoppingPage(BasePage):
         def work():
             import auth
             cookie = auth.get_cookie("taobao") or ""
-            return shopping_mod.parse_shopping_url(url, cookie=cookie, log=self._log)
+            shop, products = shopping_mod.parse_shopping_url(
+                url, cookie=cookie, log=self._log)
+            return shop, products, bool(cookie)
 
         def done(result, err):
             self.parse_btn.setEnabled(True)
@@ -211,7 +213,7 @@ class ShoppingPage(BasePage):
             if err:
                 self._show_parse_error(err)
                 return
-            shop, products = result
+            shop, products, has_cookie = result
             self._shop = shop
             self._products = products
             self._detail = None
@@ -223,9 +225,13 @@ class ShoppingPage(BasePage):
                 self.status_label.setText(
                     f"✅ {shop.shop_name or '店铺'}：获取到 {len(products)} 件商品；"
                     f"勾选后「导出商品 JSON」全量导出，或选中一行拉详情")
-            else:
+            elif not has_cookie:
                 self.status_label.setText(
                     "✅ 店铺信息获取成功（未配置淘宝 Cookie，商品列表需登录后获取）")
+            else:
+                self.status_label.setText(
+                    f"⚠️ {shop.shop_name or '店铺'}：店铺信息已拿到，但未取到商品"
+                    "（店铺暂无在售商品，或淘宝风控拦住了列表，可稍后重试）")
             self.export_btn.setEnabled(bool(products))
 
         run_bg(work, done)

@@ -424,10 +424,21 @@ def parse_showstart_event(event_id: str) -> ShowEvent:
         title = f"秀动演出 {event_id}"
     # ====== 时间（多种兜底） ======
     stime = ""
-    m = re.search(r"演出时间：([^<｜|]{4,40})", _strip_tags(html).replace("|", "｜")) or \
+    plain = _strip_tags(html).replace("|", "｜")
+    m = re.search(r"演出时间：([^<｜|]{4,40})", plain) or \
         re.search(r"showTime[\"']?\s*[:=]\s*[\"']([^\"']+)", html)
     if m:
         stime = m.group(1).strip()
+    # 正文是「演出时间：06月12日 20:20-06月12日 23:00 艺人： xxx 场地： xxx」
+    # 连排，截到下一个字段名之前，别把「艺人：」拼进时间
+    if stime:
+        stime = re.split(r"\s*(?:艺人|场地|地址|票价|主办方|演出时间)\s*[：:]",
+                         stime)[0].strip()
+    # 城市：正文里「场地: 北京 场馆名」的第一段即城市
+    city_s = ""
+    cm = re.search(r"场地\s*[：:]\s*(\S+?)\s", plain)
+    if cm:
+        city_s = cm.group(1).strip()
     # ====== 演出介绍（HTML/纯文本） ======
     desc_html = ""
     desc_text = ""
@@ -537,6 +548,7 @@ def parse_showstart_event(event_id: str) -> ShowEvent:
         event_id=str(event_id),
         title=title,
         artists="、".join(x for x in performers if x and x != "/")[:200],
+        city=city_s,
         venue=venue,
         address=addr,
         show_time=stime,
@@ -1101,13 +1113,112 @@ def _damai_search_keyword(keyword: str, log=None) -> list:
     return hits
 
 
-def _showstart_search_keyword(keyword: str, log=None) -> list:
-    """秀动游客关键词搜索 → [ShowEvent]（HTTP SSR 解析，无需浏览器）。
+# 秀动 Web 列表页：SSR 只给城市/风格字典，演出卡片全部由客户端接口拉取
+_SHOWSTART_LIST_PAGE = "https://www.showstart.com/event/list?cityCode=10"
 
-    https://www.showstart.com/event/list?keyword=... 游客可用（Nuxt SSR）。
-    卡片结构：<a href="/event/{id}"> <div class="title"> <div class="artist">
-    艺人：... <div class="price"><span>¥180起 <div class="time">时间：...
-    <div class="addr">[苏州]场馆名
+# /api/web/activity/list 的固定参数骨架（字段少一个就返回「参数不全」）
+_SHOWSTART_LIST_BODY = {
+    "pageNo": 1, "pageSize": 20,
+    "cityCode": "",          # 空串 = 全国；填 10 = 只给北京，会漏掉外地演出
+    "activityIds": "", "coupon": "", "keyword": "", "organizerId": "",
+    "performerId": "", "showStyle": "", "showTime": "", "showType": "",
+    "siteId": "", "sortType": "", "themeId": "", "timeRange": "",
+    "tourId": "", "type": "", "tag": "",
+}
+
+
+def _showstart_events_from_api(items: list) -> list:
+    """activity/list 返回的 result 列表 → [ShowEvent]。"""
+    events = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        eid = str(it.get("id") or "").strip()
+        title = str(it.get("title") or "").strip()
+        if not eid or not title:
+            continue
+        events.append(ShowEvent(
+            platform="showstart", platform_cn="秀动",
+            event_id=eid,
+            title=title,
+            artists=str(it.get("performers") or ""),
+            city=str(it.get("cityName") or ""),
+            venue=str(it.get("siteName") or ""),
+            show_time=str(it.get("showTime") or ""),
+            price_range=str(it.get("price") or ""),
+            status="已售罄" if str(it.get("soldOut") or "") == "1" else "",
+            cover=str(it.get("poster") or ""),
+            url=f"https://www.showstart.com/event/{eid}",
+        ))
+    return events
+
+
+def _showstart_api_search(keyword: str, pages: int = 1, log=None) -> tuple:
+    """秀动关键词搜索（Web 客户端接口）→ ([ShowEvent], totalCount)。
+
+    秀动已把演出列表改成纯客户端渲染：`/event/list?keyword=` 的 SSR HTML
+    不再内嵌任何演出卡片（只剩城市/风格字典），真实数据来自
+    `POST /api/web/activity/list`，且请求头必须带 crpsign/cusid/cusat/
+    crrtraceid 等签名（前端 axios 拦截器生成）。HTTP 直调只能拿到
+    「参数不全」，所以这里必须借助真实浏览器。
+
+    做法：Playwright 打开一次列表页拿到 Nuxt 运行时，再复用
+    `window.$nuxt.$axios` 发请求——拦截器自动补签名，等价于站内搜索框。
+    """
+    from playwright.sync_api import sync_playwright
+
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return [], 0
+
+    events: list = []
+    total = 0
+    with sync_playwright() as p:
+        browser = pw_launch(p, headless=True, args=[
+            "--disable-blink-features=AutomationControlled", "--no-sandbox"])
+        try:
+            ctx = browser.new_context(
+                user_agent=UA, viewport={"width": 1400, "height": 900},
+                locale="zh-CN", timezone_id="Asia/Shanghai")
+            page = ctx.new_page()
+            page.goto(_SHOWSTART_LIST_PAGE, wait_until="domcontentloaded",
+                      timeout=45000)
+            page.wait_for_timeout(2500)
+            if not page.evaluate("!!(window.$nuxt && window.$nuxt.$axios)"):
+                raise RuntimeError("秀动页面 axios 未就绪（页面结构可能再变）")
+            for pg_no in range(1, max(1, pages) + 1):
+                body = dict(_SHOWSTART_LIST_BODY)
+                body["pageNo"] = pg_no
+                body["keyword"] = keyword
+                data = page.evaluate(
+                    """async (body) => {
+                        const r = await window.$nuxt.$axios.post(
+                            '/web/activity/list', body);
+                        return r.data || {};
+                    }""", body)
+                if not isinstance(data, dict) or str(data.get("state")) != "1":
+                    if log:
+                        log(f"  秀动接口异常: {str(data)[:120]}")
+                    break
+                res = data.get("result") or {}
+                total = int(res.get("totalCount") or 0)
+                pg_events = _showstart_events_from_api(res.get("result") or [])
+                events.extend(pg_events)
+                if len(pg_events) < 20 or len(events) >= total:
+                    break
+        finally:
+            browser.close()
+    if log:
+        log(f"  秀动接口命中 {len(events)} 场（total={total}）")
+    return events, total
+
+
+def _showstart_search_keyword_ssr(keyword: str, log=None) -> list:
+    """秀动关键词搜索（旧 HTTP SSR 解析，已失效，仅作无浏览器环境兜底）。
+
+    2025 年底秀动把列表页改成客户端渲染后，`/event/list?keyword=` 的 SSR
+    HTML 里已经没有演出卡片（恒返回 0 条），保留此函数只为 Playwright
+    不可用时给出「通道不可用」的明确报错。
     """
     from urllib.parse import quote
 
@@ -1142,6 +1253,25 @@ def _showstart_search_keyword(keyword: str, log=None) -> list:
     return events
 
 
+def _showstart_search_keyword(keyword: str, log=None) -> list:
+    """秀动关键词搜索 → [ShowEvent]（走 Web 客户端接口，需浏览器）。
+
+    接口必须带前端签名头，HTTP 直调只会拿到「参数不全」，因此主通道是
+    Playwright + 页面内的 $nuxt.$axios（详见 _showstart_api_search）。
+    Playwright 不可用或接口异常时退回旧 SSR 解析（恒为 0，但不会崩）。
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return []
+    try:
+        events, _total = _showstart_api_search(keyword, log=log)
+        return events
+    except Exception as e:
+        if log:
+            log(f"  秀动接口通道失败，退回 SSR 解析: {str(e)[:100]}")
+        return _showstart_search_keyword_ssr(keyword, log=log)
+
+
 def search_tickets_by_keyword(keyword: str, *,
                               platform: str = "all",
                               damai_artist_id: str = "",
@@ -1154,8 +1284,9 @@ def search_tickets_by_keyword(keyword: str, *,
     - B站会员购：纯 API 关键词搜索，**无需登录**，覆盖率最高
     - 大麦：游客 Playwright 搜索（_damai_search_keyword）；命中艺人 ID 映射表或
             调用方显式传 damai_artist_id 时走艺人详情页（数据更全）
-    - 秀动：HTTP SSR 解析 event/list?keyword=...（游客可用）；显式
-            showstart_artist_id 时走艺人页
+    - 秀动：Web 客户端接口 activity/list（Playwright 复用页面 $nuxt.$axios
+            自动补 crpsign 签名，cityCode 全国）；显式 showstart_artist_id
+            时走艺人页 SSR
 
     失败时不抛错，会把错误信息塞到第二项 dict 里，方便 UI 多平台结果汇总展示。
     """
@@ -1194,7 +1325,7 @@ def search_tickets_by_keyword(keyword: str, *,
             except Exception as e:
                 diag["damai"] = f"❌ {str(e)[:80]}"
 
-    # 3. 秀动：显式艺人 ID / 命中映射表 → 艺人页通道；否则 HTTP SSR 关键词搜索
+    # 3. 秀动：显式艺人 ID / 命中映射表 → 艺人页通道；否则客户端接口关键词搜索
     if platform in ("all", "showstart"):
         sid = showstart_artist_id or _SHOWSTART_ARTIST_ID_HINTS.get(keyword) or ""
         if sid:
@@ -1209,7 +1340,7 @@ def search_tickets_by_keyword(keyword: str, *,
                 events_ss = _showstart_search_keyword(keyword)
                 results.extend(events_ss)
                 diag["showstart"] = (len(events_ss) if events_ss
-                                     else "⚠️ 秀动无结果")
+                                     else "⚠️ 秀动全国无在售演出")
             except Exception as e:
                 diag["showstart"] = f"❌ {str(e)[:80]}"
 
