@@ -30,7 +30,10 @@ DEAD = [
     "mark_classified_md5", "clear_classified_md5",
 ]
 r = subprocess.run(
-    ["git", "grep", "-n", "-E", "\\b(" + "|".join(DEAD) + ")\\b"],
+    # 只查产品代码（src/ 下的 *.py）：Progress/*.md 是删除记录文档、冒烟脚本自身要列出
+    # 这些符号名，两者都不算「代码残留」，否则每次都会误报。
+    ["git", "grep", "-n", "-E", "\\b(" + "|".join(DEAD) + ")\\b",
+     "--", "src/*.py", "src/**/*.py"],
     cwd=os.path.dirname(os.path.abspath(__file__)),
     capture_output=True, text=True)
 leftover = [l for l in (r.stdout or "").splitlines() if l.strip()]

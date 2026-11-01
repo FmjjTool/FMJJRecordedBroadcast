@@ -384,12 +384,16 @@ def append_index(folder: str, files: list):
 
 
 class _RowWidget(QWidget):
-    """可点击行：点击任意位置触发 clicked 回调（对应原版整行 <Button-1>）；右键弹菜单。"""
+    """可点击行：点击任意位置触发 clicked 回调（对应原版整行 <Button-1>）；右键弹菜单。
 
-    def __init__(self, on_click, on_context=None, parent=None):
+    on_double 不为空时，双击行任意位置也触发（聚合条目行用它打开二级目录）。
+    """
+
+    def __init__(self, on_click, on_context=None, parent=None, on_double=None):
         super().__init__(parent)
         self._on_click = on_click
         self._on_context = on_context
+        self._on_double = on_double
 
     def mousePressEvent(self, event):
         # 列表刷新时行已被 deleteLater，但点击事件仍在派发队列中——直接忽略
@@ -397,6 +401,16 @@ class _RowWidget(QWidget):
             if event.button() == Qt.LeftButton and self._on_click:
                 self._on_click()
             super().mousePressEvent(event)
+        except RuntimeError:
+            pass
+
+    def mouseDoubleClickEvent(self, event):
+        try:
+            if event.button() == Qt.LeftButton and self._on_double:
+                self._on_double()
+                event.accept()
+                return
+            super().mouseDoubleClickEvent(event)
         except RuntimeError:
             pass
 
@@ -437,6 +451,8 @@ class AssetPage(BasePage):
         self._local_dir = ""            # 本地资源「文件夹」筛选（相对路径，"" = 全部）
         self._cur_group = None          # 本地列表当前分组标题（懒加载跨批次延续）
         self._dir_locked = False        # 本地资源目录是否锁定（只读 + 持久化恢复）
+        self._local_scanning = False    # 本地资源扫描进行中（自动扫描去重用）
+        self._scanned_folder = ""       # 最近一次扫描完成的目录（切页回来不重复扫）
         self._disk_items = []           # 磁盘已下载数据全量
         self._collected_all_items = []  # 当前平台筛选后的列表
         self._collected_page = 1        # 当前页码（分页渲染）
@@ -473,21 +489,19 @@ class AssetPage(BasePage):
             "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
             "支持平台/<b>文件夹</b>筛选、状态筛选（未下载不含「不可下载」纯文本条目/已下载/"
             "下载不完整）、关键词搜索、时间排序、分页浏览；"
-            "<b>「文件夹」下拉分两级</b>：顶级是 download 下的分类目录（公众号文章/淘宝商品/"
+            "<b>「文件夹」下拉列出 download 下的分类目录</b>（公众号文章/淘宝商品/"
             "弹幕文件/歌曲文件…），选中后按<b>一次导出的产物聚合成条目</b>（文档数 + 图片数 + "
-            "总大小，同一天的 csv/zip、同篇文章的 md/图片合成一条）；选「已获取数据」再进入"
-            "子级按 平台/作者 目录筛条目（📁 抖音_媒体/封茗囧菌 …，父目录含子层级）；"
+            "总大小，同一天的 csv/zip、同篇文章的 md/docx/图片合成一条，双击打开二级目录）；"
             "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
             "媒体文件（存在哪项才显示哪项）</p>"
             "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
             "勾选后批量下载（已完整的自动跳过，大文件显示字节进度，可取消）</p>"
             "<p>· <b>删除</b>：可选删除 json/md/xlsx/_raw/媒体文件</p>"
             "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，右键打开链接/筛选作者）</p>"
-            "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频，"
-            "<b>「深度」可选逐级读取子文件夹</b>（默认全部层级），结果按文件夹分组，"
-            "「文件夹」下拉可下钻到任一层；选定的目录会<b>记忆并锁定</b>（🔒 后路径只读，"
-            "下次启动自动恢复），📌 可把下钻到的子目录直接锁定为扫描根；"
-            "缩略图懒加载预览，支持扫描上限与增量索引</p>"
+            "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频（固定<b>逐级读取全部子文件夹</b>），"
+            "结果按文件夹分组，「文件夹」下拉可下钻到任一层；选定的目录会<b>记忆并锁定</b>"
+            "（🔒 后路径只读，下次启动自动恢复），📌 可把下钻到的子目录直接锁定为扫描根；"
+            "<b>切到本页会自动扫描</b>，不用每次手点；缩略图懒加载预览，支持扫描上限与增量索引</p>"
             "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
             "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
         layout.addLayout(head)
@@ -502,8 +516,11 @@ class AssetPage(BasePage):
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
     def _on_tab_changed(self, idx: int):
-        if 0 <= idx < self.tabs.count() and self.tabs.tabText(idx) == "数据库浏览":
+        name = self.tabs.tabText(idx) if 0 <= idx < self.tabs.count() else ""
+        if name == "数据库浏览":
             self._db_reload_tables()
+        elif name == "本地资源":
+            self._auto_scan_local()
 
     # ==================== 资产备份（导出 / 导入） ====================
 
@@ -651,19 +668,8 @@ class AssetPage(BasePage):
         row.addWidget(self.dir_lock_btn)
         v.addLayout(row)
 
-        # 策略行：扫描深度 / 分批间隔 / 增量模式
+        # 策略行：扫描上限 / 分批间隔 / 增量模式（扫描深度固定「全部层级」，不再暴露）
         cfg = QHBoxLayout()
-        cfg.addWidget(QLabel("深度:"))
-        self.depth_sel = QComboBox()
-        for label, val in (("仅当前层", 0), ("1 层子目录", 1), ("2 层子目录", 2),
-                           ("3 层子目录", 3), ("全部层级", -1)):
-            self.depth_sel.addItem(label, val)
-        self.depth_sel.setFixedWidth(110)
-        self.depth_sel.setToolTip(
-            "是否进入子文件夹读取（逐级扫描）：\n"
-            "「仅当前层」只扫选中目录本身；「全部层级」递归到底")
-        cfg.addWidget(self.depth_sel)
-        cfg.addSpacing(8)
         cfg.addWidget(QLabel("上限:"))
         self.limit_entry = QLineEdit()
         self.limit_entry.setFixedWidth(50)
@@ -719,7 +725,6 @@ class AssetPage(BasePage):
         # 懒加载列表（滚动区）
         self.local_scroll, _, self.local_layout = self._make_scroll()
         v.addWidget(self.local_scroll, 1)
-        self._restore_depth_var()
         self._restore_dir_var()
         return f
 
@@ -813,28 +818,6 @@ class AssetPage(BasePage):
         self._save_dir_var(target)
         self._scan()
 
-    def _save_depth_var(self, _idx=0):
-        """本地资源「扫描深度」选择写入 config（下次打开保持上次的层级）。"""
-        try:
-            d = self.depth_sel.currentData()
-            cfg = load_convert_config()
-            cfg["local_scan_depth"] = -1 if d is None else int(d)
-            save_convert_config(cfg)
-        except Exception:
-            pass
-
-    def _restore_depth_var(self):
-        """启动时恢复上次的扫描深度（默认「全部层级」：逐级读到底）。"""
-        try:
-            d = int(load_convert_config().get("local_scan_depth", -1))
-        except Exception:
-            d = -1
-        idx = self.depth_sel.findData(d)
-        if idx >= 0:
-            self.depth_sel.blockSignals(True)
-            self.depth_sel.setCurrentIndex(idx)
-            self.depth_sel.blockSignals(False)
-
     def _on_local_dir_changed(self, _idx=0):
         """「文件夹」下拉切换：按所选目录（含子层级）重新渲染本地资源列表。"""
         self._local_dir = self.local_dir_sel.currentData() or ""
@@ -890,16 +873,16 @@ class AssetPage(BasePage):
             interval = float(self.batch_entry.text().strip() or "0")
         except ValueError:
             interval = 0
-        depth = self.depth_sel.currentData()
-        depth = -1 if depth is None else int(depth)
         self._folder = folder
         self._save_dir_var(folder)      # 扫过的目录即记忆（下次启动自动恢复）
         inc = self.inc_var.isChecked()
+        self._local_scanning = True
         self.local_status.setText("⏳ 正在扫描（含子文件夹）…")
 
         def work():
             import time
-            files = scan_assets(folder, limit=limit, depth=depth)
+            # 深度固定「全部层级」：本地资源就是要逐级读到子文件夹
+            files = scan_assets(folder, limit=limit, depth=-1)
             # 分批限流：每 BATCH 个暂停 interval 秒（模拟/控制扫描节奏）
             if interval > 0 and len(files) > BATCH:
                 for i in range(BATCH, len(files), BATCH):
@@ -909,10 +892,13 @@ class AssetPage(BasePage):
             return files, folder
 
         def done(result, err):
+            self._local_scanning = False
             if err:
+                self._scanned_folder = ""
                 self.app.toast(str(err), "error")
                 return
             files, folder = result
+            self._scanned_folder = folder
             self._all_files = files
             self._shown = 0
             self._cur_group = None
@@ -921,6 +907,21 @@ class AssetPage(BasePage):
             self._update_local_status()
 
         run_bg(work, done)
+
+    def _auto_scan_local(self):
+        """切到本地资源页时自动扫描锁定的目录（不必每次手点「扫描」）。
+
+        已扫过同一目录则不重复扫；有正在进行的扫描直接跳过。
+        """
+        if getattr(self, "_local_scanning", False):
+            return
+        folder = self.dir_entry.text().strip() or self._folder
+        if not folder or not os.path.isdir(folder):
+            return
+        if self._all_files and getattr(self, "_scanned_folder", "") == folder:
+            return
+        self._folder = folder
+        self._scan()
 
     def _rebuild_local_dirs(self, files):
         """按扫描结果重建「文件夹」下拉：含各级父目录，树序排列 + 层级缩进。"""
@@ -1232,24 +1233,18 @@ class AssetPage(BasePage):
                 "media_files": mfs,
                 "expected_imgs": len(imgs),  # 独立媒体条目本身完整
             })
-        # 3.1 来源文件夹（相对 已获取数据/ 的目录）——「文件夹」筛选/ 行内标注用。
-        # 每次现算成本可忽略（一次 relpath），且不污染 json 索引缓存的 payload。
-        # src_dir  = json 所在目录（条目主归属，行内展示）
-        # src_dirs = 主目录 + 各媒体文件所在目录（下载后的图/视频在
-        #            {平台}_媒体/作者 下，只按 json 目录筛就永远筛不到作者，
-        #            用户按「封茗囧菌」这类媒体文件夹筛选必须能命中该条目）
+        # 3.1 来源文件夹（相对 已获取数据/ 的目录）：主归属取 json 所在目录，
+        # json 缺失时回退媒体目录；仅用于行内 📁 标注（筛选走「平台」下拉与分类目录）
         for entry in results:
-            dirs = []
             primary = self._rel_src_dir(
                 entry.get("file_path"), video_dir, download_root)
-            if primary:
-                dirs.append(primary)
-            for m in entry.get("media_files") or []:
-                d = self._rel_src_dir(m.get("path"), video_dir, download_root)
-                if d and d not in dirs:
-                    dirs.append(d)
-            entry["src_dir"] = primary or (dirs[0] if dirs else "")
-            entry["src_dirs"] = dirs
+            if not primary:
+                for m in entry.get("media_files") or []:
+                    d = self._rel_src_dir(m.get("path"), video_dir, download_root)
+                    if d:
+                        primary = d
+                        break
+            entry["src_dir"] = primary
 
         results.sort(key=lambda r: (r.get("date_part") or ""), reverse=True)
         # 纯文本条目自动写入「不可下载」标记（用户解除过的在 allow 豁免集里不再自动加回）
@@ -1295,83 +1290,37 @@ class AssetPage(BasePage):
                 return "" if d in ("", ".") else d.replace(os.sep, "/").replace("\\", "/")
         return ""
 
-    @staticmethod
-    def _dir_under(src: str, folder: str) -> bool:
-        """src 是否属于 folder 或其子层级（folder 为空表示不过滤）。"""
-        if not folder:
-            return True
-        src = src or ""
-        return src == folder or src.startswith(folder + "/")
-
-    @classmethod
-    def _item_in_folder(cls, it, folder: str) -> bool:
-        """条目是否属于某文件夹：json 目录或任一媒体目录命中即算。"""
-        if not folder:
-            return True
-        dirs = it.get("src_dirs")
-        if not dirs:
-            dirs = [it.get("src_dir") or ""]
-        return any(cls._dir_under(d, folder) for d in dirs)
-
     def _rebuild_folder_options(self, items, cur=None) -> str:
-        """重建「文件夹」下拉（两级上下文），返回实际生效的筛选值。
+        """重建「文件夹」下拉：`全部文件夹` + download/ 下的分类目录。
 
-        顶级：`全部文件夹` + download/ 下的分类目录（📦 公众号文章 / 淘宝商品 / 弹幕文件 …），
-        选中分类 → 列表切「文件清单（已按一次导出聚合）」。
-        选中「已获取数据」→ 切到子目录上下文：`⬅ 返回全部分类` + 该目录内的
-        平台/作者目录（📁 抖音_媒体 / 　📁 封茗囧菌 …）——作者目录属于已获取数据的
-        子类，不再和顶级分类平铺在一起。
+        分类目录（公众号文章 / 淘宝商品 / 弹幕文件 …）选中后走聚合条目视图。
+        「已获取数据」不再展开子级——平台/作者维度已有独立的「平台」下拉，
+        重复列出只会让菜单变成几百项；选它与「全部文件夹」等价（都是条目列表）。
         """
         from toolbox.config_manager import get_export_dir
         sel = self.folder_sel
         if cur is None:
             cur = sel.currentData() or ""
-        in_sub = cur.startswith("sub:") or cur == "dir:已获取数据"
-
-        # 已获取数据内的目录集合（含各级父目录，树序）
-        dirs = set()
-        for it in items:
-            srcs = it.get("src_dirs") or ([it.get("src_dir") or ""] if it.get("src_dir") else [])
-            for rel in srcs:
-                rel = rel or ""
-                if not rel:
-                    continue
-                parts = rel.split("/")
-                for i in range(1, len(parts) + 1):
-                    dirs.add("/".join(parts[:i]))
-        ordered = sorted(dirs, key=lambda p: [s.lower() for s in p.split("/")])
-
         sel.blockSignals(True)
         sel.clear()
-        if in_sub:
-            sel.addItem("⬅ 返回全部分类", "__back")
-            sel.addItem("📦 已获取数据（全部条目）", "dir:已获取数据")
-            sel.setItemData(1, "已获取数据", Qt.ToolTipRole)
-            for p in ordered:
-                sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], "sub:" + p)
-                sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
-        else:
-            sel.addItem("全部文件夹", "")
-            try:
-                download_root = get_export_dir()
-                tops = sorted((d for d in os.listdir(download_root)
-                               if os.path.isdir(os.path.join(download_root, d))),
-                              key=lambda s: s.lower())
-            except Exception:
-                tops = []
-            for name in tops:
-                sel.addItem(f"📦 {name}", f"dir:{name}")
-                sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
+        sel.addItem("全部文件夹", "")
+        try:
+            download_root = get_export_dir()
+            tops = sorted((d for d in os.listdir(download_root)
+                           if os.path.isdir(os.path.join(download_root, d))),
+                          key=lambda s: s.lower())
+        except Exception:
+            tops = []
+        for name in tops:
+            sel.addItem(f"📦 {name}", f"dir:{name}")
+            sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
         idx = sel.findData(cur) if cur else 0
         sel.setCurrentIndex(idx if idx >= 0 else 0)
         sel.blockSignals(False)
         return sel.currentData() or ""
 
     def _on_folder_changed(self, _idx=0):
-        """「文件夹」下拉切换：`⬅ 返回` 回到顶级分类，其余按新值刷新列表。"""
-        val = self.folder_sel.currentData() or ""
-        if val == "__back":
-            self._rebuild_folder_options(self._disk_items, cur="")
+        """「文件夹」下拉切换：按新值刷新列表。"""
         self._refresh_collected()
 
     @staticmethod
@@ -1906,12 +1855,9 @@ class AssetPage(BasePage):
             if gen != self._reload_gen:
                 return  # 中途又触发了刷新，本轮作废
             self._disk_items = disk_items or []
-            # 文件夹下拉随数据重建：返回实际生效值，保证「下拉显示」与「列表过滤」一致
-            folder_f = self._rebuild_folder_options(self._disk_items)
-            _, sub_f = self._split_folder_value(folder_f)
+            # 文件夹下拉随数据重建（保留当前选择；分类目录被删则回到「全部文件夹」）
+            self._rebuild_folder_options(self._disk_items)
             items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
-            if sub_f:
-                items = [it for it in items if self._item_in_folder(it, sub_f)]
             # 状态筛选
             if status == "未下载":
                 # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
@@ -2113,7 +2059,8 @@ class AssetPage(BasePage):
         files = g.get("files") or []
         root_dir = g.get("root_dir") or ""
         row = _RowWidget(lambda: None,
-                         lambda pos, g=g: self._group_menu(g, pos))
+                         lambda pos, g=g: self._group_menu(g, pos),
+                         on_double=lambda g=g: self._open_group(g))
         row.setStyleSheet(
             "_RowWidget { background: #ffffff; border-radius: 6px; }"
             "QLabel { background: transparent; }")
@@ -3709,6 +3656,9 @@ class AssetPage(BasePage):
     def on_show(self):
         self._refresh_collected()
         self._db_reload_tables()
+        if 0 <= self.tabs.currentIndex() < self.tabs.count() \
+                and self.tabs.tabText(self.tabs.currentIndex()) == "本地资源":
+            self._auto_scan_local()
 
     # ==================== 数据库浏览（增量采集库） ====================
 

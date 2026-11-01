@@ -131,13 +131,11 @@ for p, want in cases.items():
     check(f"src_dir({p.replace(root, '…')})", got == want, f"{got!r} != {want!r}")
 check("空路径安全", page._rel_src_dir("", video_dir, download_root) == "")
 
-print("== 4. _dir_under 前缀匹配 ==")
-check("同目录命中", page._dir_under("抖音_媒体", "抖音_媒体"))
-check("子目录命中", page._dir_under("抖音_媒体/封茗囧菌", "抖音_媒体"))
-check("不误配同前缀目录", not page._dir_under("抖音_媒体2", "抖音_媒体"))
-check("空筛选全通过", page._dir_under("任意", ""))
+print("== 4. 已获取数据内目录不再作为子级展开 ==")
+# _dir_under 已随子级筛选一起移除（平台维度由「平台」下拉负责）
+check("_item_in_folder 已移除", not hasattr(page, "_item_in_folder"))
 
-print("== 5. 端到端：已获取资源列表 + 文件夹筛选 ==")
+print("== 5. 端到端：已获取资源列表 + 文件夹下拉 ==")
 page.on_show()
 deadline = time.time() + 60
 while time.time() < deadline:
@@ -165,39 +163,24 @@ def folder_opts():
 
 
 top = folder_opts()
-check("顶级下拉只有 download 分类目录",
+check("下拉只有「全部」+ download 分类目录",
       all(o == "" or o.startswith("dir:") for o in top), str(top[:5]))
-check("顶级没把作者目录平铺出来", not any(o.startswith("sub:") for o in top))
-check("顶级含 已获取数据", "dir:已获取数据" in top, str(top[-3:]))
-check("条目都带 src_dir/src_dirs 字段",
-      all("src_dir" in it and "src_dirs" in it for it in page._collected_all_items[:50]))
+check("没有展开的子级（sub:）项", not any(o.startswith("sub:") for o in top))
+check("没有返回上级项", "__back" not in top)
+check("含 已获取数据 分类", "dir:已获取数据" in top, str(top[-3:]))
+check("条目都带 src_dir 字段",
+      all("src_dir" in it for it in page._collected_all_items[:50]))
 
-# 进入「已获取数据」子级 → 出现 平台/作者 目录
+# 选「已获取数据」= 条目视图全部（不展开、不筛选）
 page.folder_sel.setCurrentIndex(page.folder_sel.findData("dir:已获取数据"))
-wait_until(lambda: len(folder_opts()) > 5 and any(o.startswith("sub:") for o in folder_opts()))
-subs = [o for o in folder_opts() if o.startswith("sub:")]
-check("已获取数据子级出现平台/作者目录", len(subs) > 5, f"{len(subs)} 项")
-check("子级有返回上级项", "__back" in folder_opts())
-check("已获取数据=全部条目", len(page._collected_all_items) == n,
+wait_until(lambda: len(page._collected_all_items) == n)
+check("选已获取数据=全部条目", len(page._collected_all_items) == n,
       f"{len(page._collected_all_items)} vs {n}")
-
-pick_sub = next((o for o in subs if "/" in o), subs[0] if subs else None)
-if pick_sub:
-    rel = pick_sub[4:]
-    page.folder_sel.setCurrentIndex(page.folder_sel.findData(pick_sub))
-    wait_until(lambda: page._collected_all_items
-               and all(page._item_in_folder(it, rel) for it in page._collected_all_items))
-    got = page._collected_all_items
-    check(f"选「{rel}」后条目都命中该目录",
-          got and all(page._item_in_folder(it, rel) for it in got), f"{len(got)} 条")
-
-# 返回全部分类 → 回到顶级
-page.folder_sel.setCurrentIndex(page.folder_sel.findData("__back"))
-wait_until(lambda: not any(o.startswith("sub:") for o in folder_opts())
-           and len(page._collected_all_items) == n)
-check("⬅ 返回后回到顶级分类", "dir:公众号文章" in folder_opts(), str(folder_opts()[:4]))
-check("返回后条目数恢复", len(page._collected_all_items) == n,
-      f"{len(page._collected_all_items)} vs {n}")
+check("仍停留在条目视图", page._view_mode == "entries", page._view_mode)
+check("下拉没有被展开成子级", not any(o.startswith("sub:") for o in folder_opts()),
+      str(folder_opts()[:5]))
+page.folder_sel.setCurrentIndex(0)
+wait_until(lambda: len(page._collected_all_items) == n)
 
 print("== 6. download 分类目录 → 按一次导出聚合成条目 ==")
 from toolbox.config_manager import get_export_dir
@@ -221,6 +204,9 @@ if idx > 0:
         check("组带日期与总大小", bool(g["date"]) and g["size"] > 0,
               f"{g['date']} / {g['size']}")
         check("组带代表缩略图", bool(g["cover"]), g["cover"][-30:])
+        check("二级目录存在（双击能打开）", os.path.isdir(g["root_dir"]), g["root_dir"])
+        row = page._make_group_row(g, 1)
+        check("聚合行绑定了双击打开", callable(getattr(row, "_on_double", None)))
     check("批量下载按钮已禁用", not page.batch_dl_btn.isEnabled())
     check("列表渲染出分组行", page.collected_layout.count() > 1,
           f"布局项 {page.collected_layout.count()}")
@@ -260,8 +246,20 @@ check("批量下载按钮恢复可用", page.batch_dl_btn.isEnabled())
 print()
 print("== 7. 本地资源：目录锁定（记住 + 只读 + 重启恢复 + 固定子目录） ==")
 from toolbox.config_manager import load_convert_config, save_convert_config
+import gui_qt.pages.asset as _asset_mod
 
 _cfg_backup = load_convert_config()
+# 配置读写隔离到内存：本节会反复新建/解锁页面，真实 config 会被其它页面的后台
+# 任务同时写（互相覆盖 → 偶发「写了读不回」），也不该污染用户的本地目录设置。
+_store = {"cfg": dict(_cfg_backup)}
+_asset_mod.load_convert_config = lambda: dict(_store["cfg"])
+
+
+def _save_cfg(c):
+    _store["cfg"] = dict(c)
+
+
+_asset_mod.save_convert_config = _save_cfg
 _root = tempfile.mkdtemp(prefix="fmjj_lock_probe_")
 try:
     os.makedirs(os.path.join(_root, "重要文件", "封面"), exist_ok=True)
@@ -274,7 +272,7 @@ try:
     page._folder = inner
     page._set_dir_locked(True)
     page._save_dir_var(inner)
-    cfg = load_convert_config()
+    cfg = dict(_store["cfg"])
     check("锁定状态写入配置",
           cfg.get("local_folder") == inner and cfg.get("local_folder_locked") is True,
           str(cfg.get("local_folder"))[:60])
@@ -285,7 +283,7 @@ try:
     check("锁定时选择按钮禁用", not page2.pick_btn.isEnabled())
     page2._toggle_dir_lock()
     check("解锁后路径可编辑", not page2.dir_entry.isReadOnly() and page2.pick_btn.isEnabled())
-    check("解锁写回配置", load_convert_config().get("local_folder_locked") is False)
+    check("解锁写回配置", _store["cfg"].get("local_folder_locked") is False)
 
     # 目录不存在：不静默沿用
     page3 = AssetPage(_StubApp())
@@ -320,10 +318,32 @@ try:
     check("📌 后重新扫描该子目录",
           [f["name"] for f in page5._all_files] == ["c1.jpg"],
           str([f["name"] for f in page5._all_files]))
-    check("📌 写入配置", load_convert_config().get("local_folder") == os.path.join(inner, "封面"))
+    check("📌 写入配置", _store["cfg"].get("local_folder") == os.path.join(inner, "封面"))
 finally:
     shutil.rmtree(_root, ignore_errors=True)
     save_convert_config(_cfg_backup)   # 还原用户真实配置
+
+print("== 8. 本地资源：切页自动扫描 + 深度下拉已移除 ==")
+check("深度下拉已移除", not hasattr(page, "depth_sel"))
+_REAL = r"D:/封茗囧菌/_重要文件_"
+if os.path.isdir(_REAL):
+    page.dir_entry.setText(_REAL)
+    page._folder = _REAL
+    page._all_files = []
+    page._scanned_folder = ""
+    page.tabs.setCurrentIndex(2)          # 切到本地资源 → 自动扫描
+    ok = wait_until(lambda: len(page._all_files) > 100, 40)
+    check("切到本地资源页自动扫描", ok, f"{len(page._all_files)} 个资源")
+    check("自动扫描更新状态行", "个资源" in page.local_status.text(),
+          page.local_status.text())
+    n_before = len(page._all_files)
+    page.tabs.setCurrentIndex(0)
+    qapp.processEvents()
+    page.tabs.setCurrentIndex(2)          # 同一目录再切回来不应重复扫描
+    qapp.processEvents()
+    check("同目录不重复扫描", len(page._all_files) == n_before, f"{len(page._all_files)}")
+else:
+    print(f"  [SKIP] 测试目录不存在：{_REAL}")
 
 print()
 if _fails:

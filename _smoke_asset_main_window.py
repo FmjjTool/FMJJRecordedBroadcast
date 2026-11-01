@@ -81,20 +81,31 @@ def _step_local():
     if not pages:
         return _finish()
     page = pages[0]
-    check("深度下拉存在（默认全部层级）",
-          hasattr(page, "depth_sel") and page.depth_sel.currentData() == -1,
-          str(page.depth_sel.currentData()) if hasattr(page, "depth_sel") else "-")
+    check("深度下拉已移除（固定逐级扫描）", not hasattr(page, "depth_sel"))
     check("文件夹下拉存在", hasattr(page, "local_dir_sel"))
     check("锁定按钮存在", hasattr(page, "dir_lock_btn") and hasattr(page, "pin_dir_btn"))
 
-    page.tabs.setCurrentIndex(2)
     if not os.path.isdir(TARGET):
         check(f"测试目录不存在：{TARGET}", False)
         return _finish()
     page.dir_entry.setText(TARGET)
     page._folder = TARGET
     page._set_dir_locked(True)
-    page._scan()
+    page._save_dir_var(TARGET)
+    # 切到本地资源 Tab → 应当自动开始扫描（不再需要手点「扫描」）
+    page.tabs.setCurrentIndex(2)
+    auto = False
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        app.processEvents()
+        if page._local_scanning or page._all_files or page._scanned_folder:
+            auto = True
+            break
+        time.sleep(0.03)
+    check("切到本地资源页自动扫描", auto,
+          f"scanning={page._local_scanning} files={len(page._all_files)}")
+    if not page._all_files and not page._local_scanning:
+        page._scan()
 
     deadline = time.time() + 60
     while time.time() < deadline:
