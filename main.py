@@ -8,6 +8,17 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
+# 定时任务入口：打包后的 exe 带 --tcdoc-collect 参数时只跑一次腾讯文档采集，
+# 不创建窗口、也不加载 Qt（Windows 计划任务每天调起）。必须在 PySide6 导入前拦截。
+if "--tcdoc-collect" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.tcdoc.job import main as _tcdoc_job
+
+    sys.exit(_tcdoc_job())
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow

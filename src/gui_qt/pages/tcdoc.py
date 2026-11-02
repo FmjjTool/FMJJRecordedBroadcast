@@ -1,0 +1,700 @@
+"""信息获取 · 腾讯文档监控页：浏览量 / 文档成员数 每日自动记录。
+
+与工具箱其它页面保持同一套视觉语言：标题行 + ❓功能介绍浮层 + 白卡片 + 表格 +
+底部设置行，功能按钮带 emoji 图标。
+
+功能：
+- 文档下拉切换（每个文档独立记录），扫码登录一次长期复用
+- 立即采集（接口优先、界面兜底），每次采集追加一行并算增量，各自出 Excel
+- 三个 Tab：历史记录 / 采集明细 / 文档管理（自定义文档增删改 + 诊断包）
+- 底部：每日定时采集时间 + 计划任务安装/删除 + 采集时隐藏浏览器窗口
+"""
+
+from __future__ import annotations
+
+import time
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
+    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+)
+
+from gui_qt.common import post_to_main, run_bg
+from gui_qt.pages.base import BasePage
+from toolbox.tcdoc import collector, config as tc_cfg, job, storage, task
+
+DAILY_COLS = [("日期", 110), ("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
+              ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
+SNAP_COLS = [("采集时间", 170), ("状态", 90), ("浏览量", 110), ("成员数", 110),
+             ("说明", 420)]
+DOC_COLS = [("名称", 260), ("类型", 100), ("记录数", 90), ("最近采集", 170), ("链接", 300)]
+
+
+def _cell(text, center=True, tip=""):
+    item = QTableWidgetItem(str(text))
+    if center:
+        item.setTextAlignment(Qt.AlignCenter)
+    if tip:
+        item.setToolTip(tip)
+    return item
+
+
+def _fmt_delta(value) -> str:
+    if value is None:
+        return "-"
+    return f"+{value}" if value > 0 else str(value)
+
+
+class _DocDialog(QDialog):
+    """添加 / 编辑文档：名称 + 链接，保存前校验并可后续自定义任意文档。"""
+
+    def __init__(self, parent, doc: dict | None = None, exists=()):
+        super().__init__(parent)
+        self.setWindowTitle("编辑文档" if doc else "添加文档")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self._exists = list(exists)      # 已有文档的 (key, url)，用于查重
+        self._edit_key = (doc or {}).get("key")
+        self.result_doc: dict | None = None
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(6)
+        v.addWidget(QLabel("文档名称（显示在列表，并作为报表文件名）"))
+        self.name_edit = QLineEdit((doc or {}).get("name", ""))
+        self.name_edit.setPlaceholderText("如：封茗囧菌数据汇总库")
+        v.addWidget(self.name_edit)
+        v.addSpacing(4)
+        v.addWidget(QLabel("文档链接（支持 /sheet/、/smartsheet/、/aio/、/doc/ 等）"))
+        self.url_edit = QLineEdit((doc or {}).get("url", ""))
+        self.url_edit.setPlaceholderText("https://docs.qq.com/sheet/文档ID")
+        v.addWidget(self.url_edit)
+        hint = QLabel("保存后写入配置，数量不设上限；同一链接不能重复添加。")
+        hint.setStyleSheet("color: #888;")
+        v.addWidget(hint)
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        ok = QPushButton("保存")
+        ok.setStyleSheet("background: #2e7d32; color: white; padding: 5px 18px;")
+        ok.clicked.connect(self._submit)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+        self.url_edit.returnPressed.connect(self._submit)
+        self.name_edit.setFocus()
+
+    def _submit(self):
+        parsed = tc_cfg.parse_url(self.url_edit.text())
+        if not parsed:
+            QMessageBox.warning(self, "链接格式",
+                                "请填写腾讯文档链接，例如：\nhttps://docs.qq.com/sheet/文档ID")
+            return
+        key, kind, url = parsed
+        for other_key, other_url in self._exists:
+            same = (other_key == key or other_url == url)
+            if same and key != self._edit_key:
+                QMessageBox.warning(self, "文档已存在", "该链接已在清单中，无需重复添加。")
+                return
+        name = self.name_edit.text().strip() or key
+        self.result_doc = {"key": key, "name": name, "url": url, "kind": kind}
+        self.accept()
+
+
+class TcDocPage(BasePage):
+    def __init__(self, app):
+        super().__init__(app)
+        self.docs: list[dict] = []
+        self._busy = False
+        self._ready_done = False
+        self._task_checked_at = 0.0
+        self._migrate_note = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # ---------- 标题行 ----------
+        title = QLabel("📄 腾讯文档监控")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title_row = QHBoxLayout()
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        title_row.addWidget(attach_help_overlay(self, "❓ 腾讯文档监控 · 功能介绍", (
+            "<p><b>自动记录腾讯文档的浏览量、文档成员数（附已查看人数），"
+            "每个文档独立存档并生成 Excel 报表。</b></p>"
+            "<p>· <b>扫码登录</b>：首次使用点「🔐 扫码登录」，在弹出浏览器里扫码，"
+            "登录态保存在本地，之后不必重复登录（直到失效）</p>"
+            "<p>· <b>立即采集</b>：采集当前全部文档，每次采集追加一行，"
+            "浏览/成员增量相对上一次采集计算；同一个文档可一天多次采集</p>"
+            "<p>· <b>文档管理</b>：支持添加任意腾讯文档（表格 / 智能表格 / AI 文档 / "
+            "文档 / 幻灯片 / 收集表），可编辑、删除、生成页面诊断包</p>"
+            "<p>· <b>定时采集</b>：底部填时间后「🕓 安装/更新定时任务」，"
+            "由 Windows 计划任务每天自动跑（任务名 FengMingTCDocMonitor）</p>"
+            "<p>· <b>数据位置</b>：download/腾讯文档数据/"
+            "（tcdoc.db 历史库 + 报表/*.xlsx + 日志）</p>"
+            "<p>· AI 文档（/aio/）本身不提供浏览量，只记录成员数；"
+            "Excel 若正被 WPS/Office 打开会写入失败，采集前请先关闭</p>")))
+        layout.addLayout(title_row)
+
+        # ---------- 顶部卡片：文档切换 + 操作 ----------
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(10, 8, 10, 8)
+        cv.setSpacing(6)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("文档"))
+        self.doc_combo = QComboBox()
+        self.doc_combo.setMinimumWidth(230)
+        self.doc_combo.setToolTip("切换文档：每个文档的历史记录、报表互相独立")
+        self.doc_combo.currentIndexChanged.connect(self._on_doc_changed)
+        row.addWidget(self.doc_combo)
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet("color: #888;")
+        row.addWidget(self.state_label)
+        row.addStretch(1)
+
+        self.login_btn = QPushButton("🔐 扫码登录")
+        self.login_btn.setToolTip("打开浏览器扫码登录腾讯文档，登录态本地保存长期复用")
+        self.login_btn.clicked.connect(self._login)
+        self.collect_btn = QPushButton("🔄 立即采集")
+        self.collect_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.collect_btn.setToolTip("采集全部文档的浏览量 / 成员数，写入数据库并刷新各自报表")
+        self.collect_btn.clicked.connect(self._collect)
+        self.report_btn = QPushButton("📊 打开报表")
+        self.report_btn.setToolTip("打开当前文档的 Excel 报表（不存在时按库里数据即时生成）")
+        self.report_btn.clicked.connect(self._open_report)
+        self.dir_btn = QPushButton("📂 打开数据目录")
+        self.dir_btn.setToolTip("打开 download/腾讯文档数据/（数据库、报表、日志、调试）")
+        self.dir_btn.clicked.connect(self._open_data_dir)
+        for btn in (self.login_btn, self.collect_btn, self.report_btn, self.dir_btn):
+            row.addWidget(btn)
+        cv.addLayout(row)
+
+        self.url_label = QLabel("")
+        self.url_label.setStyleSheet("color: #888;")
+        self.url_label.setWordWrap(True)
+        cv.addWidget(self.url_label)
+        self.latest_label = QLabel("")
+        self.latest_label.setStyleSheet("color: #2f3440;")
+        cv.addWidget(self.latest_label)
+        layout.addWidget(card)
+
+        # ---------- 三个 Tab ----------
+        self.tabs = QTabWidget()
+        self.table_daily = self._make_table(DAILY_COLS, stretch_all=True)
+        self.table_daily.setToolTip("每次采集追加一行；增量相对该文档上一次采集")
+        self.tabs.addTab(self._wrap(self.table_daily), "📈 历史记录")
+
+        self.table_snap = self._make_table(SNAP_COLS)
+        self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
+        self.tabs.addTab(self._wrap(self.table_snap), "🧾 采集明细")
+
+        self.tabs.addTab(self._build_doc_tab(), "🗂 文档管理")
+        layout.addWidget(self.tabs, 1)
+
+        # ---------- 底部设置行 ----------
+        bottom = QHBoxLayout()
+        bottom.setSpacing(6)
+        bottom.addWidget(QLabel("定时采集：每天"))
+        self.time_edit = QLineEdit(str(tc_cfg.load_cfg().get("tcdoc_collect_time") or "23:50"))
+        self.time_edit.setFixedWidth(66)
+        self.time_edit.setAlignment(Qt.AlignCenter)
+        self.time_edit.setToolTip("24 小时制，如 23:50")
+        bottom.addWidget(self.time_edit)
+        self.install_btn = QPushButton("🕓 安装/更新定时任务")
+        self.install_btn.setToolTip("注册 Windows 每日计划任务（任务名 FengMingTCDocMonitor）")
+        self.install_btn.clicked.connect(self._install_task)
+        bottom.addWidget(self.install_btn)
+        self.uninstall_btn = QPushButton("🗑 删除定时任务")
+        self.uninstall_btn.clicked.connect(self._uninstall_task)
+        bottom.addWidget(self.uninstall_btn)
+        self.headless_cb = QCheckBox("采集时隐藏浏览器窗口")
+        self.headless_cb.setToolTip("勾选：后台静默采集；取消：弹出浏览器窗口便于观察")
+        self.headless_cb.setChecked(bool(tc_cfg.load_cfg().get("tcdoc_headless", True)))
+        self.headless_cb.toggled.connect(self._toggle_headless)
+        bottom.addWidget(self.headless_cb)
+        self.task_label = QLabel("")
+        self.task_label.setStyleSheet("color: #888;")
+        bottom.addWidget(self.task_label, 1)
+        layout.addLayout(bottom)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #888;")
+        layout.addWidget(self.status_label)
+
+    # ==================== 界面拼装辅助 ====================
+
+    def _make_table(self, columns, stretch_all=False) -> QTableWidget:
+        table = QTableWidget(0, len(columns))
+        table.setHorizontalHeaderLabels([c[0] for c in columns])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        header = table.horizontalHeader()
+        for idx, (_name, width) in enumerate(columns):
+            table.setColumnWidth(idx, width)
+            header.setSectionResizeMode(
+                idx, QHeaderView.Stretch if stretch_all else QHeaderView.Interactive)
+        # 列宽均匀铺满（历史记录页数字列多，避免最后一列被拉成一大片空白色块）
+        header.setStretchLastSection(not stretch_all)
+        return table
+
+    def _wrap(self, table: QTableWidget) -> QWidget:
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 8, 6, 6)
+        v.addWidget(table)
+        return box
+
+    def _build_doc_tab(self) -> QWidget:
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 8, 6, 6)
+        v.setSpacing(6)
+
+        self.doc_table = QTableWidget(0, len(DOC_COLS))
+        self.doc_table.setHorizontalHeaderLabels([c[0] for c in DOC_COLS])
+        self.doc_table.verticalHeader().setVisible(False)
+        self.doc_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.doc_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.doc_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        for idx, (_name, width) in enumerate(DOC_COLS):
+            self.doc_table.setColumnWidth(idx, width)
+            self.doc_table.horizontalHeader().setSectionResizeMode(
+                idx, QHeaderView.Stretch if idx == 0 else QHeaderView.Interactive)
+        self.doc_table.itemSelectionChanged.connect(self._on_doc_row_selected)
+        self.doc_table.cellDoubleClicked.connect(lambda _r, _c: self._edit_doc())
+        v.addWidget(self.doc_table, 1)
+
+        btns = QHBoxLayout()
+        self.add_btn = QPushButton("➕ 添加文档")
+        self.add_btn.setToolTip("添加任意腾讯文档（自定义文档，数量不设上限）")
+        self.add_btn.clicked.connect(self._add_doc)
+        self.edit_btn = QPushButton("✏️ 编辑")
+        self.edit_btn.setToolTip("修改文档名称 / 链接（双击行同效）")
+        self.edit_btn.clicked.connect(self._edit_doc)
+        self.del_btn = QPushButton("🗑 删除")
+        self.del_btn.setToolTip("从清单移除文档（可选同时删除其历史记录）")
+        self.del_btn.clicked.connect(self._delete_doc)
+        self.probe_btn = QPushButton("🩺 生成诊断包")
+        self.probe_btn.setToolTip("页面改版导致采集失败时，打开浏览器抓取入口信息存到 调试/")
+        self.probe_btn.clicked.connect(self._probe)
+        for btn in (self.add_btn, self.edit_btn, self.del_btn, self.probe_btn):
+            btns.addWidget(btn)
+        btns.addStretch(1)
+        self.rebuild_btn = QPushButton("🧾 重建全部报表")
+        self.rebuild_btn.setToolTip("按数据库重新生成所有文档的 Excel（历史增量一并重算）")
+        self.rebuild_btn.clicked.connect(self._rebuild_reports)
+        btns.addWidget(self.rebuild_btn)
+        v.addLayout(btns)
+
+        hint = QLabel("添加文档后可立即采集；切换文档在「历史记录」里查看各自曲线，"
+                      "每个文档一份独立 Excel。")
+        hint.setStyleSheet("color: #888;")
+        v.addWidget(hint)
+        return box
+
+    # ==================== 生命周期 ====================
+
+    def on_show(self):
+        self._ensure_ready()
+        self.reload()
+        if time.time() - self._task_checked_at > 8:
+            self._refresh_task()
+
+    def _ensure_ready(self):
+        """首次进入时建库 + 导入旧版历史数据（只跑一次）。"""
+        if self._ready_done:
+            return
+        try:
+            self._migrate_note = job.ensure_ready()
+        except Exception as exc:  # noqa: BLE001
+            self.app.toast(f"初始化失败：{exc}"[:120], "error")
+            self._migrate_note = ""
+        self._ready_done = True
+        if self._migrate_note:
+            self.app.toast(self._migrate_note, "info")
+
+    # ==================== 刷新 ====================
+
+    def reload(self):
+        self._reload_docs()
+        self._refresh_state()
+        self._refresh_tables()
+        self._refresh_summary()
+
+    def _reload_docs(self):
+        current = self.current_doc()
+        self.docs = tc_cfg.load_docs()
+        self.doc_combo.blockSignals(True)
+        self.doc_combo.clear()
+        for doc in self.docs:
+            self.doc_combo.addItem(doc["name"], doc["key"])
+        if current:
+            idx = next((i for i, d in enumerate(self.docs) if d["key"] == current["key"]), 0)
+        else:
+            idx = 0
+        if self.docs:
+            self.doc_combo.setCurrentIndex(idx)
+        self.doc_combo.blockSignals(False)
+        self._fill_doc_table()
+
+    def _fill_doc_table(self):
+        db = tc_cfg.db_path()
+        self.doc_table.setRowCount(0)
+        for doc in self.docs:
+            count, last = storage.doc_stats(db, doc["key"])
+            r = self.doc_table.rowCount()
+            self.doc_table.insertRow(r)
+            self.doc_table.setItem(r, 0, QTableWidgetItem(doc["name"]))
+            self.doc_table.setItem(r, 1, _cell(tc_cfg.kind_label(doc.get("kind"))))
+            self.doc_table.setItem(r, 2, _cell(count))
+            self.doc_table.setItem(r, 3, _cell(last or "-"))
+            self.doc_table.setItem(r, 4, _cell(doc["url"], center=False, tip=doc["url"]))
+
+    def _refresh_state(self):
+        if not self.docs:
+            self.state_label.setText("未配置文档")
+            return
+        saved = tc_cfg.state_path().exists()
+        self.state_label.setText("登录态：已保存" if saved else "登录态：未登录")
+
+    def _refresh_tables(self):
+        doc = self.current_doc()
+        self.table_daily.setRowCount(0)
+        self.table_snap.setRowCount(0)
+        if not doc:
+            return
+        db = tc_cfg.db_path()
+        for row in reversed(storage.all_daily(db, doc["key"])):
+            r = self.table_daily.rowCount()
+            self.table_daily.insertRow(r)
+            self.table_daily.setItem(r, 0, _cell(row["date"]))
+            self.table_daily.setItem(r, 1, _cell(row["ts"]))
+            self.table_daily.setItem(r, 2, _cell("-" if row["views"] is None else row["views"]))
+            self.table_daily.setItem(r, 3, _cell(_fmt_delta(row["views_delta"])))
+            self.table_daily.setItem(r, 4, _cell(row["members"]))
+            self.table_daily.setItem(r, 5, _cell(_fmt_delta(row["members_delta"])))
+            self.table_daily.setItem(
+                r, 6, _cell("-" if row["readers"] is None else row["readers"]))
+
+        for row in reversed(storage.all_snapshots(db, doc["key"], limit=2000)):
+            r = self.table_snap.rowCount()
+            self.table_snap.insertRow(r)
+            self.table_snap.setItem(r, 0, _cell(row["ts"]))
+            self.table_snap.setItem(r, 1, _cell("✅ 成功" if row["ok"] else "❌ 失败"))
+            self.table_snap.setItem(r, 2, _cell("-" if row["views"] is None else row["views"]))
+            self.table_snap.setItem(r, 3, _cell("-" if row["members"] is None else row["members"]))
+            self.table_snap.setItem(r, 4, _cell(row["message"] or "", center=False,
+                                                tip=row["message"] or ""))
+
+    def _refresh_summary(self):
+        doc = self.current_doc()
+        if not doc:
+            self.url_label.setText("尚未配置文档，可在「🗂 文档管理」里添加")
+            self.latest_label.setText("")
+            return
+        self.url_label.setText(f"链接：{doc['url']}")
+        row = storage.latest(tc_cfg.db_path(), doc["key"])
+        if not row:
+            self.latest_label.setText("该文档暂无记录，点「🔄 立即采集」开始")
+            return
+        views = "-" if row["views"] is None else row["views"]
+        self.latest_label.setText(
+            f"最新记录：{row['date']}　浏览量 {views}　成员 {row['members']}"
+            f"　已查看 {row['readers'] if row['readers'] is not None else '-'}")
+
+    def _refresh_task(self):
+        self._task_checked_at = time.time()
+
+        def work():
+            return task.next_run_text()
+
+        def done(text, err):
+            self.task_label.setText(text if not err else f"定时任务状态未知：{err}")
+
+        run_bg(work, done)
+
+    # ==================== 状态 ====================
+
+    def current_doc(self) -> dict | None:
+        if not self.docs:
+            return None
+        idx = self.doc_combo.currentIndex()
+        if 0 <= idx < len(self.docs):
+            return self.docs[idx]
+        return self.docs[0]
+
+    def _on_doc_changed(self, _index):
+        self._refresh_tables()
+        self._refresh_summary()
+
+    def _set_busy(self, busy: bool, text: str = ""):
+        self._busy = busy
+        for btn in (self.login_btn, self.collect_btn, self.report_btn,
+                    self.install_btn, self.uninstall_btn, self.add_btn,
+                    self.edit_btn, self.del_btn, self.probe_btn, self.rebuild_btn):
+            btn.setEnabled(not busy)
+        self.status_label.setText(text)
+
+    # ==================== 登录 / 采集 ====================
+
+    def _login(self):
+        if self._busy:
+            return
+        if not self.docs:
+            self.app.toast("请先添加至少一个腾讯文档", "warning")
+            return
+        self._set_busy(True, "⏳ 正在打开浏览器，请扫码登录……")
+        docs = list(self.docs)
+
+        def work():
+            return collector.login(
+                docs, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+
+        def done(ok, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"登录失败：{err}"[:120], "error")
+                return
+            if ok:
+                self._refresh_state()
+                self.app.toast("登录成功，登录态已保存", "success")
+            else:
+                self.app.toast("未检测到登录状态（超时或窗口被关闭），可重试", "warning")
+
+        run_bg(work, done)
+
+    def _collect(self):
+        if self._busy:
+            return
+        if not self.docs:
+            self.app.toast("请先添加至少一个腾讯文档", "warning")
+            return
+        self._set_busy(True, "⏳ 正在采集……")
+
+        def work():
+            return job.collect_all(
+                on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"),
+                debug=True)
+
+        def done(results, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"采集失败：{err}"[:120], "error")
+                return
+            ok = [r for r in results if r.get("ok")]
+            failed = [r for r in results if not r.get("ok")]
+            report_err = [r for r in ok if r.get("report_error")]
+            self.reload()
+            self.status_label.setText(
+                f"✅ 采集完成：成功 {len(ok)}/{len(results)}，已写入数据库与报表")
+            if failed:
+                detail = "\n".join(f"· {r['name']}：{r.get('error') or '未知错误'}" for r in failed)
+                QMessageBox.warning(self, "部分文档采集失败",
+                                    f"成功 {len(ok)}/{len(results)}。\n\n{detail}")
+                self.app.toast(f"{len(failed)} 个文档采集失败", "warning")
+            elif report_err:
+                self.app.toast("数据已入库，但报表写入失败（文件可能被打开）", "warning")
+            else:
+                self.app.toast(f"采集完成 {len(ok)}/{len(results)}", "success")
+
+        run_bg(work, done)
+
+    # ==================== 报表 / 目录 ====================
+
+    def _open_report(self):
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先添加腾讯文档", "warning")
+            return
+        try:
+            path = job.report_path(doc)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "打开报表失败",
+                                f"{exc}\n\nExcel 若正被 WPS / Office 打开，请先关闭再试。")
+
+    def _rebuild_reports(self):
+        if self._busy:
+            return
+        self._set_busy(True, "⏳ 正在重建全部报表……")
+
+        def done(count, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"重建失败：{err}"[:120], "error")
+                return
+            self.reload()
+            self.app.toast(f"已重建 {count} 个文档的报表", "success")
+
+        run_bg(job.rebuild_reports, done)
+
+    def _open_data_dir(self):
+        path = tc_cfg.data_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self.app.toast(f"打开失败：{path}", "warning")
+
+    # ==================== 文档管理 ====================
+
+    def _selected_doc(self) -> dict | None:
+        row = self.doc_table.currentRow()
+        if 0 <= row < len(self.docs):
+            return self.docs[row]
+        return None
+
+    def _on_doc_row_selected(self):
+        doc = self._selected_doc()
+        if doc is None:
+            return
+        idx = next((i for i, d in enumerate(self.docs) if d["key"] == doc["key"]), None)
+        if idx is not None and idx != self.doc_combo.currentIndex():
+            self.doc_combo.setCurrentIndex(idx)
+
+    def _add_doc(self):
+        dialog = _DocDialog(self, None, [(d["key"], d["url"]) for d in self.docs])
+        if dialog.exec() != QDialog.Accepted or not dialog.result_doc:
+            return
+        doc = dialog.result_doc
+        docs = self.docs + [doc]
+        tc_cfg.save_docs(docs)
+        self.reload()
+        idx = next((i for i, d in enumerate(self.docs) if d["key"] == doc["key"]), None)
+        if idx is not None:
+            self.doc_combo.setCurrentIndex(idx)
+        self.app.toast(f"已添加文档「{doc['name']}」，可直接采集", "success")
+
+    def _edit_doc(self):
+        doc = self._selected_doc() or self.current_doc()
+        if not doc:
+            self.app.toast("请先选择要编辑的文档", "warning")
+            return
+        dialog = _DocDialog(self, doc, [(d["key"], d["url"]) for d in self.docs])
+        if dialog.exec() != QDialog.Accepted or not dialog.result_doc:
+            return
+        new = dialog.result_doc
+        docs = []
+        for item in self.docs:
+            if item["key"] == doc["key"]:
+                docs.append(new)
+            else:
+                docs.append(item)
+        tc_cfg.save_docs(docs)
+        self.reload()
+        self.app.toast(f"已保存「{new['name']}」", "success")
+
+    def _delete_doc(self):
+        doc = self._selected_doc() or self.current_doc()
+        if not doc:
+            self.app.toast("请先选择要删除的文档", "warning")
+            return
+        count, _last = storage.doc_stats(tc_cfg.db_path(), doc["key"])
+        box = QMessageBox(self)
+        box.setWindowTitle("删除文档")
+        box.setIcon(QMessageBox.Question)
+        box.setText(f"确定从清单中删除「{doc['name']}」？")
+        box.setInformativeText(f"该文档现有 {count} 条历史记录；不勾选下面的选项时记录会保留"
+                               "（重新添加同一文档即可找回）。")
+        del_data = QCheckBox("同时删除该文档的历史记录与采集明细")
+        box.setCheckBox(del_data)
+        yes = box.addButton("删除", QMessageBox.YesRole)
+        box.addButton("取消", QMessageBox.NoRole)
+        box.exec()
+        if box.clickedButton() is not yes:
+            return
+        tc_cfg.save_docs([d for d in self.docs if d["key"] != doc["key"]])
+        if del_data.isChecked():
+            removed = storage.clear_doc(tc_cfg.db_path(), doc["key"])
+            self.app.toast(f"已删除文档与其 {removed} 条历史记录", "success")
+        else:
+            self.app.toast(f"已删除文档「{doc['name']}」", "success")
+        self.reload()
+
+    def _probe(self):
+        doc = self._selected_doc() or self.current_doc()
+        if not doc or self._busy:
+            self.app.toast("请先选择要诊断的文档", "warning")
+            return
+        self._set_busy(True, "⏳ 正在生成诊断包（会打开浏览器窗口）……")
+
+        def work():
+            return collector.probe(
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+
+        def done(path, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"诊断失败：{err}"[:120], "error")
+                return
+            self.status_label.setText(f"✅ 诊断包已生成：{path}")
+            self.app.toast(f"诊断包已保存到 调试/{path.name}", "success")
+
+        run_bg(work, done)
+
+    # ==================== 定时任务 ====================
+
+    def _toggle_headless(self, checked):
+        tc_cfg.save_cfg(tcdoc_headless=bool(checked))
+
+    def _install_task(self):
+        text = self.time_edit.text().strip()
+        parts = text.split(":")
+        valid = (len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
+                 and 0 <= int(parts[0]) < 24 and 0 <= int(parts[1]) < 60)
+        if not valid:
+            QMessageBox.warning(self, "时间格式", "请填写 24 小时制时间，例如 23:50")
+            return
+        hhmm = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        if self._busy:
+            return
+        self._set_busy(True, f"⏳ 正在安装定时任务（每天 {hhmm}）……")
+
+        def work():
+            ok, msg = task.install(hhmm)
+            if ok:
+                tc_cfg.save_cfg(tcdoc_collect_time=hhmm)
+            return ok, msg
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"安装失败：{err}"[:120], "error")
+                return
+            ok, msg = result
+            if ok:
+                self.time_edit.setText(hhmm)
+                self.app.toast(f"定时任务已安装：{msg}", "success")
+                self._refresh_task()
+            else:
+                QMessageBox.warning(self, "安装失败", msg)
+
+        run_bg(work, done)
+
+    def _uninstall_task(self):
+        if self._busy:
+            return
+        self._set_busy(True, "⏳ 正在删除定时任务……")
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"删除失败：{err}"[:120], "error")
+                return
+            ok, msg = result
+            if ok:
+                self.app.toast(msg, "success")
+                self._refresh_task()
+            else:
+                QMessageBox.warning(self, "删除失败", msg)
+
+        run_bg(task.uninstall, done)

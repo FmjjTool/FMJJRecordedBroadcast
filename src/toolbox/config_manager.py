@@ -253,6 +253,12 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     # 全局设置：文件夹锁定（锁定后拖入文件夹不改变，直到解锁）
     "work_dir_locked": False,
     "export_dir_locked": False,
+    # 腾讯文档监控页：文档清单（None = 从未配置过，此时用预置 4 个文档；
+    # 用户删空清单会写成 []，不会再复活预置项）+ 定时采集 + 旧版数据迁移标记
+    "tcdocs": None,
+    "tcdoc_collect_time": "23:50",
+    "tcdoc_headless": True,
+    "tcdoc_legacy_migrated": False,
 }
 
 
@@ -457,6 +463,7 @@ EXPORT_CATEGORIES = {
     "wechat": "公众号文章",
     "douyin_index": "抖音指数",
     "douyin_shop": "抖音商品",
+    "tcdoc": "腾讯文档数据",
 }
 
 

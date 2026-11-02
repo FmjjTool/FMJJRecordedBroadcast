@@ -51,6 +51,7 @@ PAGE_CLASSES = {
     "test_page": ("gui_qt.pages.test_page", "TestPage"),
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
+    "tcdoc": ("gui_qt.pages.tcdoc", "TcDocPage"),
     "file_time": ("gui_qt.pages.file_time", "FileTimePage"),
     "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
     "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
@@ -81,6 +82,7 @@ NAV_GROUPS = [
         ("wechat_article", "📰 公众号解析"),
         ("bili_resource", "🎁 B站资源"),
         ("video_comments", "💬 视频评论区"),
+        ("tcdoc", "📄 腾讯文档监控"),
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
