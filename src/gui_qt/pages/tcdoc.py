@@ -6,8 +6,8 @@
 功能：
 - 文档下拉切换（每个文档独立记录），扫码登录一次长期复用
 - 立即采集（接口优先、界面兜底），每次采集追加一行并算增量，各自出 Excel
-- 三个 Tab：历史记录 / 采集明细 / 文档管理（自定义文档增删改 + 诊断包）
-- 底部：每日定时采集时间 + 计划任务安装/删除 + 采集时隐藏浏览器窗口
+- 四个 Tab：历史记录 / 采集明细 / 表格同步 / 文档管理（自定义文档增删改 + 诊断包）
+- 底部：每日定时采集时间 + 计划任务安装/删除 + 采集时隐藏浏览器窗口 + 表格同步开关
 """
 
 from __future__ import annotations
@@ -24,13 +24,14 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from toolbox.tcdoc import collector, config as tc_cfg, job, storage, task
+from toolbox.tcdoc import collector, config as tc_cfg, job, storage, tables, task
 
 DAILY_COLS = [("日期", 110), ("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
               ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
 SNAP_COLS = [("采集时间", 170), ("状态", 90), ("浏览量", 110), ("成员数", 110),
              ("说明", 420)]
 DOC_COLS = [("名称", 260), ("类型", 100), ("记录数", 90), ("最近采集", 170), ("链接", 300)]
+CHANGE_COLS = [("时间", 160), ("工作表", 150), ("变更", 70), ("记录", 100), ("内容", 300)]
 
 
 def _cell(text, center=True, tip=""):
@@ -135,10 +136,13 @@ class TcDocPage(BasePage):
             "浏览/成员增量相对上一次采集计算；同一个文档可一天多次采集</p>"
             "<p>· <b>文档管理</b>：支持添加任意腾讯文档（表格 / 智能表格 / AI 文档 / "
             "文档 / 幻灯片 / 收集表），可编辑、删除、生成页面诊断包</p>"
+            "<p>· <b>表格同步</b>：把智能表格里的数据抓到本地库，按记录比对"
+            "新增/修改/删除，可导出 Excel（每张工作表一个 sheet）。"
+            "普通表格、图表页、文章页不是同一套数据协议，会自动跳过并提示</p>"
             "<p>· <b>定时采集</b>：底部填时间后「🕓 安装/更新定时任务」，"
             "由 Windows 计划任务每天自动跑（任务名 FengMingTCDocMonitor）</p>"
             "<p>· <b>数据位置</b>：download/腾讯文档数据/"
-            "（tcdoc.db 历史库 + 报表/*.xlsx + 日志）</p>"
+            "（tcdoc.db 浏览量库 + tables.db 表格库 + 报表/ + 表格数据/ + 日志）</p>"
             "<p>· AI 文档（/aio/）本身不提供浏览量，只记录成员数；"
             "Excel 若正被 WPS/Office 打开会写入失败，采集前请先关闭</p>")))
         layout.addLayout(title_row)
@@ -199,6 +203,7 @@ class TcDocPage(BasePage):
         self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
         self.tabs.addTab(self._wrap(self.table_snap), "🧾 采集明细")
 
+        self.tabs.addTab(self._build_sheet_tab(), "📋 表格同步")
         self.tabs.addTab(self._build_doc_tab(), "🗂 文档管理")
         layout.addWidget(self.tabs, 1)
 
@@ -223,6 +228,12 @@ class TcDocPage(BasePage):
         self.headless_cb.setChecked(bool(tc_cfg.load_cfg().get("tcdoc_headless", True)))
         self.headless_cb.toggled.connect(self._toggle_headless)
         bottom.addWidget(self.headless_cb)
+        self.sync_tables_cb = QCheckBox("同时同步表格数据")
+        self.sync_tables_cb.setToolTip("勾选：采集浏览量时顺带把智能表格内容同步到本地"
+                                       "（占用时间更长，单个大表可能十几秒）")
+        self.sync_tables_cb.setChecked(bool(tc_cfg.load_cfg().get("tcdoc_sync_tables", True)))
+        self.sync_tables_cb.toggled.connect(self._toggle_sync_tables)
+        bottom.addWidget(self.sync_tables_cb)
         self.task_label = QLabel("")
         self.task_label.setStyleSheet("color: #888;")
         bottom.addWidget(self.task_label, 1)
@@ -304,6 +315,83 @@ class TcDocPage(BasePage):
         v.addWidget(hint)
         return box
 
+    def _build_sheet_tab(self) -> QWidget:
+        """表格同步：工作表切换 + 数据预览 + 分页 + 变更记录。"""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 8, 6, 6)
+        v.setSpacing(6)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        bar.addWidget(QLabel("工作表"))
+        self.sheet_combo = QComboBox()
+        self.sheet_combo.setMinimumWidth(220)
+        self.sheet_combo.setToolTip("切换该文档下的工作表（普通表格 / 图表页不支持同步）")
+        self.sheet_combo.currentIndexChanged.connect(lambda _i: self._load_sheet_page(reset=True))
+        bar.addWidget(self.sheet_combo)
+        self.sheet_info = QLabel("")
+        self.sheet_info.setStyleSheet("color: #888;")
+        bar.addWidget(self.sheet_info)
+        bar.addStretch(1)
+
+        self.sync_btn = QPushButton("🔄 同步表格")
+        self.sync_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.sync_btn.setToolTip("只同步当前文档的表格数据（不动浏览量），可免登录读公开文档")
+        self.sync_btn.clicked.connect(self._sync_tables)
+        bar.addWidget(self.sync_btn)
+        self.sheet_excel_btn = QPushButton("📊 导出 Excel")
+        self.sheet_excel_btn.setToolTip("把该文档的全部工作表导出成一个 Excel（每表一个 sheet）")
+        self.sheet_excel_btn.clicked.connect(self._open_sheet_excel)
+        bar.addWidget(self.sheet_excel_btn)
+
+        self.prev_btn = QPushButton("◀")
+        self.prev_btn.setToolTip("上一页")
+        self.prev_btn.setFixedWidth(34)
+        self.prev_btn.clicked.connect(lambda: self._load_sheet_page(delta=-1))
+        bar.addWidget(self.prev_btn)
+        self.page_label = QLabel("-/-")
+        self.page_label.setAlignment(Qt.AlignCenter)
+        self.page_label.setMinimumWidth(66)
+        bar.addWidget(self.page_label)
+        self.next_btn = QPushButton("▶")
+        self.next_btn.setToolTip("下一页")
+        self.next_btn.setFixedWidth(34)
+        self.next_btn.clicked.connect(lambda: self._load_sheet_page(delta=1))
+        bar.addWidget(self.next_btn)
+        v.addLayout(bar)
+
+        self.table_data = QTableWidget(0, 0)
+        self.table_data.verticalHeader().setVisible(True)
+        self.table_data.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_data.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.table_data.setAlternatingRowColors(True)
+        self.table_data.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table_data.setToolTip("本地存档的表格数据（每次同步按记录逐行比对增量）")
+        v.addWidget(self.table_data, 1)
+
+        v.addWidget(QLabel("最近变更（新增 / 修改 / 删除）"))
+        self.table_changes = QTableWidget(0, len(CHANGE_COLS))
+        self.table_changes.setHorizontalHeaderLabels([c[0] for c in CHANGE_COLS])
+        self.table_changes.verticalHeader().setVisible(False)
+        self.table_changes.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_changes.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_changes.setMaximumHeight(150)
+        for idx, (_name, width) in enumerate(CHANGE_COLS):
+            self.table_changes.setColumnWidth(idx, width)
+        self.table_changes.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(self.table_changes)
+
+        self.sheet_hint = QLabel("点「🔄 同步表格」把文档里的表格内容抓到本地；"
+                                "「立即采集」时也会顺带同步（看底部开关）。")
+        self.sheet_hint.setStyleSheet("color: #888;")
+        v.addWidget(self.sheet_hint)
+
+        self._sheet_columns: list[str] = []
+        self._sheet_offset = 0
+        self._sheet_total = 0
+        return box
+
     # ==================== 生命周期 ====================
 
     def on_show(self):
@@ -332,6 +420,7 @@ class TcDocPage(BasePage):
         self._refresh_state()
         self._refresh_tables()
         self._refresh_summary()
+        self._refresh_sheet_tabs()
 
     def _reload_docs(self):
         current = self.current_doc()
@@ -438,13 +527,178 @@ class TcDocPage(BasePage):
     def _on_doc_changed(self, _index):
         self._refresh_tables()
         self._refresh_summary()
+        self._refresh_sheet_tabs()
+
+    # ==================== 表格同步 ====================
+
+    def _refresh_sheet_tabs(self):
+        """按当前文档刷新工作表下拉（含被跳过的非表格页提示）。"""
+        doc = self.current_doc()
+        sheets = tables.sheets_of(doc["key"]) if doc else []
+        keep = self._current_tab_id()
+        self.sheet_combo.blockSignals(True)
+        self.sheet_combo.clear()
+        for sheet in sheets:
+            if sheet["skipped"]:
+                continue
+            self.sheet_combo.addItem(f"{sheet['tab_name']}（{sheet['n_rows']} 行）",
+                                     sheet["tab_id"])
+        self.sheet_combo.blockSignals(False)
+
+        skipped = [s for s in sheets if s["skipped"]]
+        if keep:
+            idx = next((i for i, s in enumerate(
+                [x for x in sheets if not x["skipped"]]) if s["tab_id"] == keep), None)
+            if idx is not None:
+                self.sheet_combo.blockSignals(True)
+                self.sheet_combo.setCurrentIndex(idx)
+                self.sheet_combo.blockSignals(False)
+
+        if not doc:
+            self.sheet_hint.setText("尚未配置文档")
+        elif not sheets:
+            self.sheet_hint.setText("该文档还没有本地表格数据，点「🔄 同步表格」开始")
+        elif skipped:
+            names = "、".join(s["tab_name"] for s in skipped[:6])
+            more = " 等" if len(skipped) > 6 else ""
+            self.sheet_hint.setText(f"已跳过 {len(skipped)} 个非表格页：{names}{more}"
+                                    "（普通表格 / 图表页 / 文章页不支持同步）")
+        else:
+            self.sheet_hint.setText("点「🔄 同步表格」把文档里的表格内容抓到本地；"
+                                    "「立即采集」时也会顺带同步（看底部开关）。")
+        self._sheet_offset = 0
+        self._load_sheet_page(reset=True)
+        self._refresh_changes()
+
+    def _current_tab_id(self) -> str:
+        data = self.sheet_combo.currentData()
+        return str(data) if data else ""
+
+    def _current_sheet(self) -> dict | None:
+        doc, tab_id = self.current_doc(), self._current_tab_id()
+        if not doc or not tab_id:
+            return None
+        return next((s for s in tables.sheets_of(doc["key"]) if s["tab_id"] == tab_id), None)
+
+    def _load_sheet_page(self, reset: bool = False, delta: int = 0):
+        doc, tab_id = self.current_doc(), self._current_tab_id()
+        if not doc or not tab_id:
+            self.table_data.setRowCount(0)
+            self.table_data.setColumnCount(0)
+            self.page_label.setText("-/-")
+            self.sheet_info.setText("")
+            return
+        page_size = max(20, int(tc_cfg.load_cfg().get("tcdoc_table_page") or 200))
+        sheet = self._current_sheet() or {}
+        if reset:
+            self._sheet_offset = 0
+        if delta:
+            self._sheet_offset = max(0, self._sheet_offset + delta * page_size)
+        rows, total = tables.rows_page(doc["key"], tab_id, self._sheet_offset, page_size)
+        if not rows and total and self._sheet_offset:
+            self._sheet_offset = max(0, (total - 1) // page_size * page_size)
+            rows, total = tables.rows_page(doc["key"], tab_id, self._sheet_offset, page_size)
+        self._sheet_total = total
+
+        names = [c["name"] for c in sheet.get("columns", [])]
+        self._sheet_columns = names
+        self.table_data.setColumnCount(len(names))
+        self.table_data.setHorizontalHeaderLabels(names)
+        self.table_data.setRowCount(0)
+        for row in rows:
+            r = self.table_data.rowCount()
+            self.table_data.insertRow(r)
+            self.table_data.setVerticalHeaderItem(r, QTableWidgetItem(str(row["row_no"])))
+            for c, name in enumerate(names):
+                value = str(row["values"].get(name, "") or "")
+                item = QTableWidgetItem(value.replace("\n", " ⏎ ")[:200])
+                if value:
+                    item.setToolTip(value[:1500])
+                self.table_data.setItem(r, c, item)
+        pages = max(1, (total + page_size - 1) // page_size)
+        current = self._sheet_offset // page_size + 1 if total else 0
+        self.page_label.setText(f"{current}/{pages}")
+        self.prev_btn.setEnabled(self._sheet_offset > 0)
+        self.next_btn.setEnabled(self._sheet_offset + page_size < total)
+        stamp = sheet.get("fetched_at") or "-"
+        self.sheet_info.setText(f"{len(names)} 列 · {total} 行 · 同步于 {stamp}")
+
+    def _refresh_changes(self):
+        doc = self.current_doc()
+        self.table_changes.setRowCount(0)
+        if not doc:
+            return
+        for row in tables.recent_changes(doc["key"], limit=60):
+            r = self.table_changes.rowCount()
+            self.table_changes.insertRow(r)
+            self.table_changes.setItem(r, 0, _cell(row["ts"]))
+            self.table_changes.setItem(r, 1, QTableWidgetItem(row["tab_name"] or ""))
+            self.table_changes.setItem(r, 2, _cell(row["kind"]))
+            self.table_changes.setItem(r, 3, _cell(row["record_id"] or ""))
+            self.table_changes.setItem(r, 4, QTableWidgetItem(row["summary"] or ""))
+
+    def _sync_tables(self):
+        if self._busy:
+            return
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先添加腾讯文档", "warning")
+            return
+        if (doc.get("kind") or "").lower() not in tables.SYNC_KINDS:
+            self.app.toast("只有「表格 / 智能表格」类型能同步数据", "warning")
+            return
+        self._set_busy(True, "⏳ 正在同步表格数据……")
+
+        def work():
+            return job.sync_tables(
+                [doc], on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+
+        def done(results, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"同步失败：{err}"[:120], "error")
+                return
+            self._refresh_sheet_tabs()
+            item = results[0] if results else {}
+            if not item.get("ok"):
+                QMessageBox.warning(self, "同步失败", item.get("error") or "未知错误")
+                return
+            if item.get("tables_error"):
+                self.app.toast(item["tables_error"][:120], "warning")
+                return
+            added = sum(t["added"] for t in item.get("tables_delta") or [])
+            updated = sum(t["updated"] for t in item.get("tables_delta") or [])
+            removed = sum(t["removed"] for t in item.get("tables_delta") or [])
+            self.status_label.setText(
+                f"✅ 表格同步完成：新增 {added}　修改 {updated}　删除 {removed}")
+            self.app.toast(f"表格同步完成：+{added} ~{updated} -{removed}", "success")
+
+        run_bg(work, done)
+
+    def _open_sheet_excel(self):
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先添加腾讯文档", "warning")
+            return
+        try:
+            path = job.tables_excel_path(doc)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "导出失败",
+                                f"{exc}\n\nExcel 若正被 WPS / Office 打开，请先关闭再试。")
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
         for btn in (self.login_btn, self.collect_btn, self.report_btn,
                     self.install_btn, self.uninstall_btn, self.add_btn,
-                    self.edit_btn, self.del_btn, self.probe_btn, self.rebuild_btn):
+                    self.edit_btn, self.del_btn, self.probe_btn, self.rebuild_btn,
+                    self.sync_btn, self.sheet_excel_btn):
             btn.setEnabled(not busy)
+        if busy:
+            self.prev_btn.setEnabled(False)
+            self.next_btn.setEnabled(False)
+        else:
+            self._load_sheet_page()
         self.status_label.setText(text)
 
     # ==================== 登录 / 采集 ====================
@@ -496,9 +750,12 @@ class TcDocPage(BasePage):
             ok = [r for r in results if r.get("ok")]
             failed = [r for r in results if not r.get("ok")]
             report_err = [r for r in ok if r.get("report_error")]
+            sheet_err = [r for r in ok if r.get("tables_error") or r.get("tables_excel_error")]
+            table_rows = sum(r.get("tables_rows") or 0 for r in ok)
             self.reload()
+            tail = f"，表格 {table_rows} 行" if table_rows else ""
             self.status_label.setText(
-                f"✅ 采集完成：成功 {len(ok)}/{len(results)}，已写入数据库与报表")
+                f"✅ 采集完成：成功 {len(ok)}/{len(results)}，已写入数据库与报表{tail}")
             if failed:
                 detail = "\n".join(f"· {r['name']}：{r.get('error') or '未知错误'}" for r in failed)
                 QMessageBox.warning(self, "部分文档采集失败",
@@ -506,8 +763,15 @@ class TcDocPage(BasePage):
                 self.app.toast(f"{len(failed)} 个文档采集失败", "warning")
             elif report_err:
                 self.app.toast("数据已入库，但报表写入失败（文件可能被打开）", "warning")
+            elif sheet_err:
+                names = "、".join(r["name"] for r in sheet_err)
+                QMessageBox.warning(
+                    self, "表格同步未完成",
+                    f"浏览量已入库，但以下文档的表格数据没同步完：\n\n{names}\n\n"
+                    + "\n".join(f"· {r['name']}：{r.get('tables_error') or r.get('tables_excel_error')}"
+                                for r in sheet_err))
             else:
-                self.app.toast(f"采集完成 {len(ok)}/{len(results)}", "success")
+                self.app.toast(f"采集完成 {len(ok)}/{len(results)}{tail}", "success")
 
         run_bg(work, done)
 
@@ -615,7 +879,9 @@ class TcDocPage(BasePage):
         tc_cfg.save_docs([d for d in self.docs if d["key"] != doc["key"]])
         if del_data.isChecked():
             removed = storage.clear_doc(tc_cfg.db_path(), doc["key"])
-            self.app.toast(f"已删除文档与其 {removed} 条历史记录", "success")
+            table_rows = tables.clear_doc(doc["key"])
+            self.app.toast(f"已删除文档与其 {removed} 条历史记录"
+                           f"（表格数据 {table_rows} 行）", "success")
         else:
             self.app.toast(f"已删除文档「{doc['name']}」", "success")
         self.reload()
@@ -645,6 +911,9 @@ class TcDocPage(BasePage):
 
     def _toggle_headless(self, checked):
         tc_cfg.save_cfg(tcdoc_headless=bool(checked))
+
+    def _toggle_sync_tables(self, checked):
+        tc_cfg.save_cfg(tcdoc_sync_tables=bool(checked))
 
     def _install_task(self):
         text = self.time_edit.text().strip()

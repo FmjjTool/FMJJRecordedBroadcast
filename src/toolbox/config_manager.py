@@ -259,6 +259,9 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_collect_time": "23:50",
     "tcdoc_headless": True,
     "tcdoc_legacy_migrated": False,
+    # 智能表格数据同步：采集时顺带把表格内容落到本地 SQLite 并导出 Excel
+    "tcdoc_sync_tables": True,
+    "tcdoc_table_page": 200,
 }
 
 

@@ -12,7 +12,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from . import collector, config as cfg_mod, report, storage
+from . import collector, config as cfg_mod, report, storage, tables
 
 LOG_MAX_BYTES = 2 * 1024 * 1024
 
@@ -86,13 +86,16 @@ def collect_all(on_status=None, debug: bool = True) -> list[dict]:
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
     db = cfg_mod.db_path()
+    sync_tables = bool(cfg.get("tcdoc_sync_tables", True))
 
-    log(f"开始采集，共 {len(docs)} 个文档，headless={bool(cfg.get('tcdoc_headless', True))}")
+    log(f"开始采集，共 {len(docs)} 个文档，headless={bool(cfg.get('tcdoc_headless', True))}，"
+        f"表格同步={sync_tables}")
     results = collector.collect(
         docs,
         headless=bool(cfg.get("tcdoc_headless", True)),
         on_status=on_status,
         debug=debug,
+        sync_tables=sync_tables,
     )
 
     ts, day = storage.now_str(), storage.today_str()
@@ -125,9 +128,83 @@ def collect_all(on_status=None, debug: bool = True) -> list[dict]:
             f"成员数={row['members']}({mdelta}) 已查看={item.get('readers')} "
             f"来源={item.get('source')}")
 
+        if item.get("tables"):
+            _store_tables(item)
+
     ok_n = sum(1 for item in results if item.get("ok"))
     log(f"采集结束：成功 {ok_n}，失败 {len(results) - ok_n}")
     return results
+
+
+def _store_tables(item: dict, info: dict | None = None) -> None:
+    """把采集到的表格数据落库并导出 Excel（失败只记录，不影响浏览量结果）。
+
+    item 是带 doc_key / name 的结果字典；info 是 tables.collect_* 的返回，
+    不传时取 item["tables"]（浏览量采集顺带同步的场景）。
+    """
+    info = info or item.get("tables") or {}
+    if not info.get("ok"):
+        item["tables_error"] = info.get("error") or "表格同步失败"
+        log(f"[{item['name']}] 表格同步失败：{item['tables_error']}")
+        return
+    try:
+        stats = tables.save_doc(info)
+        item["tables_delta"] = stats["tabs"]
+        detail = "  ".join(f"{t['tab_name']}({t['rows']})" for t in stats["tabs"][:6])
+        added = sum(t["added"] for t in stats["tabs"])
+        updated = sum(t["updated"] for t in stats["tabs"])
+        removed = sum(t["removed"] for t in stats["tabs"])
+        pending = sum(t.get("pending") or 0 for t in stats["tabs"])
+        partial = [t["tab_name"] for t in stats["tabs"] if not t.get("complete", True)]
+        if partial:
+            # 没拉全的表一律不删本地数据，避免接口截断导致误删
+            item["tables_partial"] = "、".join(partial[:6])
+            log(f"[{item['name']}] 注意：{'、'.join(partial)} 本次未拉全，"
+                f"{pending} 条已保留（未执行删除）")
+        log(f"[{item['name']}] 表格同步：{len(stats['tabs'])} 张 / "
+            f"新增 {added} 修改 {updated} 删除 {removed}｜{detail}")
+        item["tables_rows"] = sum(t["rows"] for t in stats["tabs"])
+        try:
+            item["tables_excel"] = str(tables.export_excel(item["doc_key"], item["name"]))
+        except Exception as exc:  # noqa: BLE001 - Excel 被占用
+            item["tables_excel_error"] = f"表格 Excel 写入失败：{exc}"
+            log(f"[{item['name']}] {item['tables_excel_error']}")
+    except Exception as exc:  # noqa: BLE001
+        item["tables_error"] = f"表格落库失败：{exc}"
+        log(f"[{item['name']}] {item['tables_error']}")
+
+
+def sync_tables(docs: list[dict] | None = None, on_status=None) -> list[dict]:
+    """只同步表格数据（不动浏览量）。公开文档不需要登录态也能读。"""
+    ensure_ready()
+    docs = docs or [d for d in cfg_mod.load_docs()
+                    if (d.get("kind") or "").lower() in tables.SYNC_KINDS]
+    if not docs:
+        raise RuntimeError("清单里没有可同步的表格文档（需要「表格」或「智能表格」类型）")
+    cfg = cfg_mod.load_cfg()
+    log(f"开始同步表格，共 {len(docs)} 个文档")
+    results = tables.collect_docs(
+        docs,
+        headless=bool(cfg.get("tcdoc_headless", True)),
+        on_status=on_status,
+        state=cfg_mod.state_path(),
+    )
+    for item in results:
+        if item.get("ok"):
+            _store_tables(item, item)
+        else:
+            log(f"[{item.get('name')}] 表格同步失败：{item.get('error')}")
+    ok_n = sum(1 for item in results if item.get("ok"))
+    log(f"表格同步结束：成功 {ok_n}，失败 {len(results) - ok_n}")
+    return results
+
+
+def tables_excel_path(doc: dict) -> Path:
+    """取（或按库里数据即时生成）该文档的表格 Excel。"""
+    path = cfg_mod.table_file(doc)
+    if not path.exists():
+        tables.export_excel(doc["key"], doc["name"], target=path)
+    return path
 
 
 def rebuild_reports() -> int:

@@ -199,14 +199,19 @@ def import_legacy(legacy_db_path: Path, target_db: Path) -> tuple[int, int]:
         return (0, 0)
 
     init_db(target_db)
+    # ts 在旧库可能是 INTEGER（daily.ts 在本库是 TEXT），统一按字符串比对，
+    # 否则 int 1759000000 与 '1759000000' 不等 → 每次导入都重复插入。
+    def _mark(row) -> tuple:
+        return (row["doc_key"], str(row["ts"]))
+
     with _connect(target_db) as conn:
-        exist_daily = {(row["doc_key"], row["ts"]) for row in conn.execute(
+        exist_daily = {_mark(row) for row in conn.execute(
             "SELECT doc_key, ts FROM daily")}
-        exist_snap = {(row["doc_key"], row["ts"]) for row in conn.execute(
+        exist_snap = {_mark(row) for row in conn.execute(
             "SELECT doc_key, ts FROM snapshots")}
         for row in daily_rows:
             keys = row.keys()
-            mark = (row["doc_key"], row["ts"])
+            mark = _mark(row)
             if mark in exist_daily:
                 continue
             conn.execute(
@@ -224,7 +229,7 @@ def import_legacy(legacy_db_path: Path, target_db: Path) -> tuple[int, int]:
             keys = row.keys()
             if "doc_key" not in keys:
                 continue
-            mark = (row["doc_key"], row["ts"])
+            mark = _mark(row)
             if mark in exist_snap:
                 continue
             conn.execute(

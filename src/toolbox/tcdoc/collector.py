@@ -20,6 +20,7 @@ from pathlib import Path
 from toolbox.browser import launch as pw_launch
 
 from . import config as cfg_mod
+from . import tables
 
 PAGE_TIMEOUT = 90_000
 LOGIN_TIMEOUT = 900
@@ -372,8 +373,12 @@ def login(docs: list[dict], on_status=None, timeout: int = LOGIN_TIMEOUT) -> boo
 
 
 def collect(docs: list[dict], headless: bool = True, on_status=None,
-            debug: bool = True) -> list[dict]:
-    """批量采集多个文档，共用一次浏览器会话；单文档失败不影响其它文档。"""
+            debug: bool = True, sync_tables: bool = False) -> list[dict]:
+    """批量采集多个文档，共用一次浏览器会话；单文档失败不影响其它文档。
+
+    sync_tables=True 时，在同一会话里顺带把智能表格数据抓下来（省一次浏览器启动），
+    结果挂在每个结果的 tables 字段上，由 job 负责落库与导出。
+    """
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
     state = cfg_mod.state_path()
@@ -389,7 +394,10 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
             total = len(docs)
             for index, doc in enumerate(docs, start=1):
                 _emit(on_status, f"（{index}/{total}）正在采集：{doc['name']}")
-                results.append(_collect_one(context, doc, debug))
+                result = _collect_one(context, doc, debug)
+                results.append(result)
+                if sync_tables and (doc.get("kind") or "").lower() in tables.SYNC_KINDS:
+                    _sync_tables_one(context, doc, result, on_status)
             try:
                 context.storage_state(path=str(state))
             except Exception:  # noqa: BLE001 - 刷新登录态失败不影响本次结果
@@ -400,6 +408,15 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
             finally:
                 browser.close()
     return results
+
+
+def _sync_tables_one(context, doc: dict, result: dict, on_status=None) -> None:
+    """在既有会话里抓该文档的智能表格；失败只记录，不影响浏览量采集结果。"""
+    try:
+        _emit(on_status, f"同步表格：{doc['name']}")
+        result["tables"] = tables.collect_in_context(context, [doc], on_status)[0]
+    except Exception as exc:  # noqa: BLE001 - 表格同步失败不影响主流程
+        result["tables_error"] = str(exc)
 
 
 def _collect_one(context, doc: dict, debug: bool) -> dict:

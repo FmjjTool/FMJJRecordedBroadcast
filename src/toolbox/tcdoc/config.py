@@ -6,10 +6,14 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
   tcdoc_collect_time     每日定时采集时间 "HH:MM"
   tcdoc_headless         采集时隐藏浏览器窗口
   tcdoc_legacy_migrated  是否已尝试导入旧版「腾讯文档数据保存」的历史数据
+  tcdoc_sync_tables      采集时是否顺带同步智能表格数据（本地 SQLite + Excel）
+  tcdoc_table_page       表格同步页每页显示行数
 
 路径约定（全部跟随全局统一导出目录，见 config_manager.get_export_dir）：
-  download/腾讯文档数据/tcdoc.db      SQLite 历史存档
-  download/腾讯文档数据/报表/*.xlsx   每个文档一份 Excel
+  download/腾讯文档数据/tcdoc.db      SQLite 历史存档（浏览量 / 成员数）
+  download/腾讯文档数据/tables.db     SQLite 智能表格数据（逐表逐行 + 变更记录）
+  download/腾讯文档数据/报表/*.xlsx   每个文档一份浏览量报表
+  download/腾讯文档数据/表格数据/*.xlsx  每个文档一份表格数据（每表一个 sheet）
   download/腾讯文档数据/日志/         采集日志
   download/腾讯文档数据/调试/         页面改版时的诊断包
 登录态含账号凭证，单独放 config/tcdoc_state.json（不进导出目录）。
@@ -167,6 +171,15 @@ def db_path() -> Path:
     return data_dir() / "tcdoc.db"
 
 
+def tables_db_path() -> Path:
+    """智能表格数据独立建库（结构跟浏览量存档完全不同，不混表）。"""
+    return data_dir() / "tables.db"
+
+
+def tables_dir() -> Path:
+    return _ensure(data_dir() / "表格数据")
+
+
 def reports_dir() -> Path:
     return _ensure(data_dir() / "报表")
 
@@ -191,6 +204,11 @@ def state_path() -> Path:
 def report_file(doc: dict) -> Path:
     """每个文档一份独立报表，文件名为文档名。"""
     return reports_dir() / f"{safe_name(doc.get('name'), doc.get('key') or '文档')}.xlsx"
+
+
+def table_file(doc: dict) -> Path:
+    """表格数据导出文件（每张工作表一个 sheet）。"""
+    return tables_dir() / f"{safe_name(doc.get('name'), doc.get('key') or '文档')}.xlsx"
 
 
 def find_legacy_dir() -> Path | None:
