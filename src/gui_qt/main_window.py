@@ -130,21 +130,8 @@ NAV_GROUPS = [
     ]),
 ]
 
-# Cookie 管理平台列表：(key, 中文名, 是否支持扫码登录, 是否支持浏览器登录)
-# 酷狗概念版登录态是会话文件（非 Cookie），计数时单独判断
-COOKIE_PLATFORMS = [
-    ("bilibili", "B站", True, True),
-    ("douyin", "抖音", False, True),
-    ("weibo", "微博", False, True),
-    ("netease", "网易云", True, False),
-    ("qq", "QQ音乐", True, True),
-    ("kugou", "酷狗", False, True),
-    ("kugou_lite", "酷狗概念版", True, False),
-    ("kuwo", "酷我", False, True),
-    ("5sing", "5sing", False, True),
-    ("xiaohongshu", "小红书", False, True),
-    ("kuaishou", "快手", False, True),
-]
+# Cookie 管理平台列表取自 gui_qt.cookie_manager.COOKIE_PLATFORMS（单一事实来源），
+# 这里不再复制一份：以前两处各写一遍，新增平台时计数口径会悄悄对不上。
 
 # 回车键分发时，这些控件的回车留给控件自身处理（对应原版 event.widget 判断）
 _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 import 全部控件类型）
@@ -412,9 +399,10 @@ class MainWindow(QMainWindow):
             enabled = is_cookie_enabled()
             cookies = load_cookies()
             netease_ok = bool(get_netease_cookie_stored().strip())
+            from gui_qt.cookie_manager import COOKIE_PLATFORMS as _PLATFORMS
             logged = 0
-            total = len(COOKIE_PLATFORMS)
-            for plat, _name, _qr, _browser in COOKIE_PLATFORMS:
+            total = len(_PLATFORMS)
+            for plat, _name, _qr, _browser in _PLATFORMS:
                 if plat == "netease":
                     ok = netease_ok
                 elif plat == "kugou_lite":

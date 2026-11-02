@@ -4,7 +4,7 @@
 底部设置行，功能按钮带 emoji 图标。
 
 功能：
-- 文档下拉切换（每个文档独立记录），扫码登录一次长期复用
+- 文档下拉切换（每个文档独立记录），登录态统一由 Cookie 管理器持有（平台：腾讯文档）
 - 立即采集（接口优先、界面兜底），每次采集追加一行并算增量，各自出 Excel
 - 四个 Tab：历史记录 / 采集明细 / 表格同步 / 文档管理（自定义文档增删改 + 诊断包）
 - 底部：每日定时采集时间 + 计划任务安装/删除 + 采集时隐藏浏览器窗口 + 表格同步开关
@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from toolbox.tcdoc import collector, config as tc_cfg, job, storage, tables, task
+from toolbox.tcdoc import (
+    collector, config as tc_cfg, job, session, storage, tables, task)
 
 DAILY_COLS = [("日期", 110), ("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
               ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
@@ -130,8 +131,9 @@ class TcDocPage(BasePage):
         title_row.addWidget(attach_help_overlay(self, "❓ 腾讯文档监控 · 功能介绍", (
             "<p><b>自动记录腾讯文档的浏览量、文档成员数（附已查看人数），"
             "每个文档独立存档并生成 Excel 报表。</b></p>"
-            "<p>· <b>扫码登录</b>：首次使用点「🔐 扫码登录」，在弹出浏览器里扫码，"
-            "登录态保存在本地，之后不必重复登录（直到失效）</p>"
+            "<p>· <b>登录</b>：点「🔐 登录」打开 <b>Cookie 管理器</b>，在「腾讯文档」一行"
+            "点「浏览器登录」扫码即可。登录态与其它平台统一存在 Cookie 管理器里，"
+            "也能在那边清除或重新登录，之后不必重复登录（直到失效）</p>"
             "<p>· <b>立即采集</b>：采集当前全部文档，每次采集追加一行，"
             "浏览/成员增量相对上一次采集计算；同一个文档可一天多次采集</p>"
             "<p>· <b>文档管理</b>：支持添加任意腾讯文档（表格 / 智能表格 / AI 文档 / "
@@ -167,8 +169,9 @@ class TcDocPage(BasePage):
         row.addWidget(self.state_label)
         row.addStretch(1)
 
-        self.login_btn = QPushButton("🔐 扫码登录")
-        self.login_btn.setToolTip("打开浏览器扫码登录腾讯文档，登录态本地保存长期复用")
+        self.login_btn = QPushButton("🔐 登录")
+        self.login_btn.setToolTip(
+            "打开 Cookie 管理器登录腾讯文档（登录态与其它平台统一管理，可随时清除/重登）")
         self.login_btn.clicked.connect(self._login)
         self.collect_btn = QPushButton("🔄 立即采集")
         self.collect_btn.setStyleSheet("background: #2e7d32; color: white;")
@@ -471,8 +474,14 @@ class TcDocPage(BasePage):
         if not self.docs:
             self.state_label.setText("未配置文档")
             return
-        saved = tc_cfg.state_path().exists()
-        self.state_label.setText("登录态：已保存" if saved else "登录态：未登录")
+        session.sync_from_state()  # 有本地快照但管理器没登记时补一次
+        if session.has_login():
+            source = session.login_source()
+            self.state_label.setText(f"登录态：已保存（{source}）" if source else "登录态：已保存")
+            self.state_label.setToolTip("登录态由 Cookie 管理器统一持有，点「🔐 登录」管理")
+        else:
+            self.state_label.setText("登录态：未登录")
+            self.state_label.setToolTip("点「🔐 登录」在 Cookie 管理器里登录腾讯文档")
 
     def _refresh_tables(self):
         doc = self.current_doc()
@@ -720,30 +729,22 @@ class TcDocPage(BasePage):
     # ==================== 登录 / 采集 ====================
 
     def _login(self):
+        """登录统一走 Cookie 管理器（腾讯文档只是其中一个平台）。"""
         if self._busy:
             return
-        if not self.docs:
-            self.app.toast("请先添加至少一个腾讯文档", "warning")
+        try:
+            from gui_qt.cookie_manager import CookieManagerDialog
+        except Exception as exc:  # noqa: BLE001
+            self.app.toast(f"打开 Cookie 管理器失败：{exc}"[:120], "error")
             return
-        self._set_busy(True, "⏳ 正在打开浏览器，请扫码登录……")
-        docs = list(self.docs)
+        dlg = CookieManagerDialog(self.app, on_changed=self._on_login_changed)
+        dlg.exec()
+        self._on_login_changed()
 
-        def work():
-            return collector.login(
-                docs, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
-
-        def done(ok, err):
-            self._set_busy(False)
-            if err:
-                self.app.toast(f"登录失败：{err}"[:120], "error")
-                return
-            if ok:
-                self._refresh_state()
-                self.app.toast("登录成功，登录态已保存", "success")
-            else:
-                self.app.toast("未检测到登录状态（超时或窗口被关闭），可重试", "warning")
-
-        run_bg(work, done)
+    def _on_login_changed(self):
+        """Cookie 管理器里登录/清除后回调：刷新登录态与当前表。"""
+        self._refresh_state()
+        self._refresh_sheet_tabs()
 
     def _collect(self):
         if self._busy:

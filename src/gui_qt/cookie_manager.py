@@ -38,6 +38,7 @@ COOKIE_PLATFORMS = [
     ("xiaohongshu", "小红书", False, True),
     ("kuaishou", "快手", False, True),
     ("taobao", "淘宝", False, True),
+    ("tcdoc", "腾讯文档", False, True),
 ]
 
 
@@ -73,6 +74,11 @@ BROWSER_LOGIN_CONFIGS = {
     "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
                ("cookie2", "unb", "sg"),
                "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
+    # 腾讯文档：浏览器登录后除 Cookie 外还要存 localStorage（文档页的登录信息也存这里），
+    # 所以登录完成时额外落一份 Playwright storage_state（见 _do_save 的 tcdoc 分支）
+    "tcdoc": ("https://docs.qq.com/desktop", "腾讯文档登录（软件内）",
+              ("uid", "uid_key", "DOC_SID"),
+              "扫码 / 微信 / QQ 登录（登录后回文档列表即算成功）"),
 }
 
 # 登录窗里"顺手抓昵称"的 JS（接口风控严、只有页面上下文问得到的平台）
@@ -607,6 +613,11 @@ class CookieManagerDialog(QDialog):
                 # 概念版登录态在会话文件（非 Cookie 统一存储），需一并清除
                 from music.scrapers.kugou_lite import clear_session
                 clear_session()
+            if plat == "tcdoc":
+                # 腾讯文档还有一份 Playwright storage_state 快照，一起删掉
+                # （否则清了 Cookie 但快照还在，采集侧仍认为已登录）
+                from toolbox.tcdoc import session as tc_session
+                tc_session.clear()
             self._whoami_cache.pop(plat, None)
             self._reload()
             self._notify()
@@ -1078,6 +1089,14 @@ class CookieManagerDialog(QDialog):
                                         if prev not in alts:
                                             alts.append(prev)
                                     jar[n] = val
+                            # 腾讯文档：登录信息有一部分在 localStorage，
+                            # 只存 Cookie 会「看着登录了、打开文档又要登录」，
+                            # 所以每 6 秒抓一份完整 storage_state 备着
+                            if plat == "tcdoc" and poll_i % 4 == 0:
+                                try:
+                                    state["storage_state"] = ctx.storage_state()
+                                except Exception:
+                                    pass
                             post_to_main(_refresh_cap)
                         except Exception:
                             break
@@ -1191,6 +1210,11 @@ class CookieManagerDialog(QDialog):
             cookie_str = probe["best"] or _jar_str(jar)
             try:
                 auth.set_cookie(plat, cookie_str)
+                if plat == "tcdoc":
+                    # 腾讯文档登录态还要 localStorage 那一半，顺手落一份
+                    # Playwright storage_state（采集侧直接用它开浏览器）
+                    from toolbox.tcdoc import session as tc_session
+                    tc_session.save_state_snapshot(state.get("storage_state"))
                 self._whoami_cache.pop(plat, None)
                 self._reload()
                 self._notify()

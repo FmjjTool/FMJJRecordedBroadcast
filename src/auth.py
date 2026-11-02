@@ -84,6 +84,7 @@ COOKIE_TTL_DAYS = {
     "xiaohongshu": 0,
     "kuaishou": 0,
     "taobao": 0,
+    "tcdoc": 0,
 }
 
 # 平台 key -> 中文名（用于 UI 展示）
@@ -100,6 +101,7 @@ PLATFORM_NAMES = {
     "xiaohongshu": "小红书",
     "kuaishou": "快手",
     "taobao": "淘宝",
+    "tcdoc": "腾讯文档",
 }
 
 

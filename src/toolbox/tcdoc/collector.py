@@ -20,7 +20,7 @@ from pathlib import Path
 from toolbox.browser import launch as pw_launch
 
 from . import config as cfg_mod
-from . import tables
+from . import session, tables
 
 PAGE_TIMEOUT = 90_000
 LOGIN_TIMEOUT = 900
@@ -77,6 +77,7 @@ def _sync_api():
 
 
 def _new_context(browser, state: Path | None):
+    """建浏览器上下文：先套登录快照，再叠 Cookie 管理器里的票（以管理器为准）。"""
     kwargs = {
         "locale": "zh-CN",
         "timezone_id": "Asia/Shanghai",
@@ -84,7 +85,11 @@ def _new_context(browser, state: Path | None):
     }
     if state and Path(state).exists():
         kwargs["storage_state"] = str(state)
-    return browser.new_context(**kwargs)
+    context = browser.new_context(**kwargs)
+    # Cookie 管理器里的登录态优先级最高：用户在管理器里重新登录/粘贴后，
+    # 即使本地快照里还是旧票，也以管理器为准（同名覆盖）
+    session.apply_to_context(context)
+    return context
 
 
 def _emit(on_status, text: str) -> None:
@@ -333,7 +338,7 @@ def _open_share_panel(page) -> bool:
 # ==================== 对外接口 ====================
 
 def login(docs: list[dict], on_status=None, timeout: int = LOGIN_TIMEOUT) -> bool:
-    """打开有界面浏览器，用户扫码登录后自动检测并保存登录态。"""
+    """打开有界面浏览器扫码登录，成功后写回 Cookie 管理器（唯一事实来源）。"""
     if not docs:
         raise RuntimeError("请先添加至少一个腾讯文档")
     state = cfg_mod.state_path()
@@ -365,7 +370,7 @@ def login(docs: list[dict], on_status=None, timeout: int = LOGIN_TIMEOUT) -> boo
         ok = (not page.is_closed()) and (not _is_login_required(page))
         if ok:
             try:
-                context.storage_state(path=str(state))
+                session.save_from_context(context)
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"登录成功但保存登录态失败：{exc}") from exc
         browser.close()
@@ -382,14 +387,15 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
     state = cfg_mod.state_path()
-    if not state.exists():
-        raise LoginRequired("尚未保存登录态：请先点击「扫码登录」完成登录")
+    if not session.has_login():
+        raise LoginRequired(
+            "尚未登录腾讯文档：请到「Cookie 管理器」登录（或点本页「🔐 登录」）")
     sync_playwright = _sync_api()
 
     results: list[dict] = []
     with sync_playwright() as p:
         browser = pw_launch(p, headless=headless, args=_LAUNCH_ARGS)
-        context = _new_context(browser, state)
+        context = _new_context(browser, state if state.exists() else None)
         try:
             total = len(docs)
             for index, doc in enumerate(docs, start=1):
@@ -399,7 +405,8 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
                 if sync_tables and (doc.get("kind") or "").lower() in tables.SYNC_KINDS:
                     _sync_tables_one(context, doc, result, on_status)
             try:
-                context.storage_state(path=str(state))
+                # 刷新登录快照 + 同步回 Cookie 管理器（票续期后两边都更新）
+                session.save_from_context(context)
             except Exception:  # noqa: BLE001 - 刷新登录态失败不影响本次结果
                 pass
         finally:
@@ -433,7 +440,7 @@ def _collect_one(context, doc: dict, debug: bool) -> dict:
         page.goto(doc["url"], wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
         _wait_ready(page)
         if _is_login_required(page):
-            raise LoginRequired("登录态已失效：请重新点击「扫码登录」完成登录")
+            raise LoginRequired("登录态已失效：请到「Cookie 管理器」重新登录腾讯文档")
 
         is_aio = (doc.get("kind") or "").lower() == "aio"
         api = _wait_api(page, responses)

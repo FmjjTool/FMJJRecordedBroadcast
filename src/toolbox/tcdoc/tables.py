@@ -470,6 +470,12 @@ def collect_docs(docs: list[dict], headless: bool = True, on_status=None,
         if state and Path(state).exists():
             kwargs["storage_state"] = str(state)
         context = browser.new_context(**kwargs)
+        # 登录 Cookie 来自 Cookie 管理器，覆盖快照里的旧票
+        try:
+            from . import session as _session
+            _session.apply_to_context(context)
+        except Exception:  # noqa: BLE001 - 公开文档不带票也能读
+            pass
         try:
             return collect_in_context(context, docs, on_status)
         finally:

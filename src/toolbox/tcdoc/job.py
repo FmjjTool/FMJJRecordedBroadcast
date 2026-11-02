@@ -12,7 +12,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from . import collector, config as cfg_mod, report, storage, tables
+from . import collector, config as cfg_mod, report, session, storage, tables
 
 LOG_MAX_BYTES = 2 * 1024 * 1024
 
@@ -64,6 +64,8 @@ def _migrate_legacy_once() -> str:
                 messages.append("已继承旧版登录态（无需重新扫码）")
             except OSError:
                 pass
+    # 已有本地登录快照但 Cookie 管理器里还没登记 → 补登记，登录态统一到管理器
+    session.sync_from_state()
     cfg_mod.save_cfg(tcdoc_legacy_migrated=True)
     if messages:
         log("旧版数据导入：" + "；".join(messages))
@@ -73,7 +75,10 @@ def _migrate_legacy_once() -> str:
 def ensure_ready() -> str:
     """建库 + 一次性旧数据导入，返回迁移说明（可能为空串）。"""
     storage.init_db(cfg_mod.db_path())
-    return _migrate_legacy_once()
+    note = _migrate_legacy_once()
+    # 幂等：只在「有快照、无 Cookie」时补登记一次，不会覆盖用户在管理器里的新票
+    session.sync_from_state()
+    return note
 
 
 # ==================== 采集 ====================
