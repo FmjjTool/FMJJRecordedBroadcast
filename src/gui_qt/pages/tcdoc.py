@@ -18,8 +18,8 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -363,24 +363,40 @@ class TcDocPage(BasePage):
 
         self.table_data = QTableWidget(0, 0)
         self.table_data.verticalHeader().setVisible(True)
+        self.table_data.verticalHeader().setDefaultSectionSize(26)
         self.table_data.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_data.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.table_data.setAlternatingRowColors(True)
+        self.table_data.setWordWrap(False)
         self.table_data.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table_data.setToolTip("本地存档的表格数据（每次同步按记录逐行比对增量）")
-        v.addWidget(self.table_data, 1)
 
-        v.addWidget(QLabel("最近变更（新增 / 修改 / 删除）"))
+        change_box = QWidget()
+        cv = QVBoxLayout(change_box)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(3)
+        cv.addWidget(QLabel("最近变更（新增 / 修改 / 删除）"))
         self.table_changes = QTableWidget(0, len(CHANGE_COLS))
         self.table_changes.setHorizontalHeaderLabels([c[0] for c in CHANGE_COLS])
         self.table_changes.verticalHeader().setVisible(False)
+        self.table_changes.verticalHeader().setDefaultSectionSize(24)
         self.table_changes.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_changes.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_changes.setMaximumHeight(150)
+        self.table_changes.setWordWrap(False)
         for idx, (_name, width) in enumerate(CHANGE_COLS):
             self.table_changes.setColumnWidth(idx, width)
         self.table_changes.horizontalHeader().setStretchLastSection(True)
-        v.addWidget(self.table_changes)
+        cv.addWidget(self.table_changes, 1)
+
+        # 上下可拖动分栏：预览表与变更记录各自独立伸缩，避免预览把变更区压成一条缝
+        body = QSplitter(Qt.Vertical)
+        body.setChildrenCollapsible(False)
+        body.addWidget(self.table_data)
+        body.addWidget(change_box)
+        body.setStretchFactor(0, 3)
+        body.setStretchFactor(1, 1)
+        body.setSizes([430, 170])
+        v.addWidget(body, 1)
 
         self.sheet_hint = QLabel("点「🔄 同步表格」把文档里的表格内容抓到本地；"
                                 "「立即采集」时也会顺带同步（看底部开关）。")
