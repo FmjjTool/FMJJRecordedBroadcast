@@ -257,6 +257,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     # 用户删空清单会写成 []，不会再复活预置项）+ 定时采集 + 旧版数据迁移标记
     "tcdocs": None,
     "tcdoc_collect_time": "23:50",
+    "tcdoc_schedule_mode": "daily",
+    "tcdoc_interval_minutes": 30,
     "tcdoc_headless": True,
     "tcdoc_legacy_migrated": False,
     "tcdoc_table_page": 200,

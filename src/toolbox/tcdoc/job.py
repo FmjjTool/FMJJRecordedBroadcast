@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 from . import collector, config as cfg_mod, report, session, storage, tables
 
 LOG_MAX_BYTES = 2 * 1024 * 1024
+PARALLEL_WORKERS = 2   # 定时任务同时占用的浏览器数（历史/表格混合）
 
 
 # ==================== 日志 ====================
@@ -90,7 +92,6 @@ def collect_all(on_status=None, debug: bool = True) -> list[dict]:
     docs = cfg_mod.load_docs()
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
-    db = cfg_mod.db_path()
 
     log(f"开始采集历史记录，共 {len(docs)} 个文档，"
         f"headless={bool(cfg.get('tcdoc_headless', True))}")
@@ -100,7 +101,12 @@ def collect_all(on_status=None, debug: bool = True) -> list[dict]:
         on_status=on_status,
         debug=debug,
     )
+    return _store_history_results(results)
 
+
+def _store_history_results(results: list[dict]) -> list[dict]:
+    """把历史采集结果落库并出报表；调用方保证在主线程/单线程执行。"""
+    db = cfg_mod.db_path()
     ts, day = storage.now_str(), storage.today_str()
     for item in results:
         if not item.get("ok"):
@@ -172,6 +178,18 @@ def _store_tables(item: dict, info: dict) -> None:
         log(f"[{item['name']}] {item['tables_error']}")
 
 
+def _store_table_results(results: list[dict]) -> list[dict]:
+    """把表格同步结果逐篇落库/导出；调用方保证在主线程/单线程执行。"""
+    for item in results:
+        if item.get("ok"):
+            _store_tables(item, item)
+        else:
+            log(f"[{item.get('name')}] 表格同步失败：{item.get('error')}")
+    ok_n = sum(1 for item in results if item.get("ok"))
+    log(f"表格同步结束：成功 {ok_n}，失败 {len(results) - ok_n}")
+    return results
+
+
 def sync_tables(docs: list[dict] | None = None, on_status=None) -> list[dict]:
     """只同步表格数据（不动浏览量）。公开文档不需要登录态也能读。"""
     ensure_ready()
@@ -187,14 +205,7 @@ def sync_tables(docs: list[dict] | None = None, on_status=None) -> list[dict]:
         on_status=on_status,
         state=cfg_mod.state_path(),
     )
-    for item in results:
-        if item.get("ok"):
-            _store_tables(item, item)
-        else:
-            log(f"[{item.get('name')}] 表格同步失败：{item.get('error')}")
-    ok_n = sum(1 for item in results if item.get("ok"))
-    log(f"表格同步结束：成功 {ok_n}，失败 {len(results) - ok_n}")
-    return results
+    return _store_table_results(results)
 
 
 def tables_excel_path(doc: dict) -> Path:
@@ -228,11 +239,95 @@ def report_path(doc: dict) -> Path:
 
 # ==================== 定时任务入口 ====================
 
+def _fetch_history_one(doc: dict, headless: bool) -> dict:
+    """定时任务的一个历史采集任务（独立浏览器，不写登录快照）。"""
+    try:
+        items = collector.collect([doc], headless=headless, debug=True,
+                                  save_session=False)
+        if items:
+            return items[0]
+        return {"doc_key": doc.get("key"), "name": doc.get("name"),
+                "url": doc.get("url"), "ok": False, "error": "采集无返回"}
+    except Exception as exc:  # noqa: BLE001 - 单篇失败不影响其它任务
+        return {"doc_key": doc.get("key"), "name": doc.get("name"),
+                "url": doc.get("url"), "ok": False, "error": str(exc)}
+
+
+def _fetch_table_one(doc: dict, headless: bool) -> dict:
+    """定时任务的一个表格同步任务（独立浏览器，只抓不落库）。"""
+    try:
+        items = tables.collect_docs([doc], headless=headless,
+                                    state=cfg_mod.state_path())
+        if items:
+            return items[0]
+        return {"doc_key": doc.get("key"), "name": doc.get("name"),
+                "url": doc.get("url"), "ok": False, "error": "同步无返回",
+                "sheets": [], "skipped": []}
+    except Exception as exc:  # noqa: BLE001 - 单篇失败不影响其它任务
+        return {"doc_key": doc.get("key"), "name": doc.get("name"),
+                "url": doc.get("url"), "ok": False, "error": str(exc),
+                "sheets": [], "skipped": []}
+
+
+def run_scheduled() -> int:
+    """定时任务：历史记录 + 表格数据并线采集。
+
+    历史与表格任务交错提交到同一个线程池（默认 2 路并发）：
+    两个任务同时只各占一个浏览器，既能让历史/表格同时开跑，也能让多篇文档并行，
+    同时避免开太多浏览器把机器拖慢。抓取在线程池里做，写库/报表统一回主线程串行，
+    避免 SQLite 并发写和登录态快照互相覆盖。
+    """
+    ensure_ready()
+    docs = cfg_mod.load_docs()
+    if not docs:
+        log("定时采集失败：尚未配置任何腾讯文档")
+        return 1
+    cfg = cfg_mod.load_cfg()
+    headless = bool(cfg.get("tcdoc_headless", True))
+    table_docs = [d for d in docs
+                  if (d.get("kind") or "").lower() in tables.SYNC_KINDS]
+
+    tasks: list[tuple[str, dict]] = []
+    for i in range(max(len(docs), len(table_docs))):
+        if i < len(docs):
+            tasks.append(("history", docs[i]))
+        if i < len(table_docs):
+            tasks.append(("table", table_docs[i]))
+
+    log(f"定时任务开始：历史 {len(docs)} 篇，表格 {len(table_docs)} 篇，"
+        f"并发 {PARALLEL_WORKERS}")
+    history_results: list[dict] = []
+    table_results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
+        futures = {}
+        for kind, doc in tasks:
+            fn = _fetch_history_one if kind == "history" else _fetch_table_one
+            futures[pool.submit(fn, doc, headless)] = (kind, doc)
+        for fut in as_completed(futures):
+            kind, doc = futures[fut]
+            try:
+                item = fut.result()
+            except Exception as exc:  # noqa: BLE001 - 兜底，正常已在 helper 内捕获
+                item = {"doc_key": doc.get("key"), "name": doc.get("name"),
+                        "url": doc.get("url"), "ok": False, "error": str(exc)}
+            label = "历史" if kind == "history" else "表格"
+            state = "成功" if item.get("ok") else (item.get("error") or "失败")
+            log(f"[{doc.get('name')}] {label}采集{state}")
+            (history_results if kind == "history" else table_results).append(item)
+
+    _store_history_results(history_results)
+    _store_table_results(table_results)
+    ok_h = sum(1 for item in history_results if item.get("ok"))
+    ok_t = sum(1 for item in table_results if item.get("ok"))
+    log(f"定时任务结束：历史 {ok_h}/{len(history_results)}，"
+        f"表格 {ok_t}/{len(table_results)}")
+    return 0 if ok_h == len(history_results) and ok_t == len(table_results) else 1
+
+
 def main() -> int:
     """无界面采集（Windows 计划任务 / 打包 exe --tcdoc-collect 调用）。"""
     try:
-        results = collect_all()
+        return run_scheduled()
     except Exception as exc:  # noqa: BLE001
         log(f"定时采集失败：{exc}")
         return 1
-    return 0 if all(item.get("ok") for item in results) else 1

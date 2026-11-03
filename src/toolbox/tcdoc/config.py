@@ -4,6 +4,8 @@
 toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取时会被过滤）：
   tcdocs                 文档清单 [{key, name, url, kind}]，数量不设上限（自定义文档）
   tcdoc_collect_time     每日定时采集时间 "HH:MM"
+  tcdoc_schedule_mode    定时模式：daily（每天一次）/ interval（按间隔）
+  tcdoc_interval_minutes 按间隔模式的最小间隔
   tcdoc_headless         采集时隐藏浏览器窗口
   tcdoc_legacy_migrated  是否已尝试导入旧版「腾讯文档数据保存」的历史数据
   tcdoc_table_page       表格同步页每页显示行数

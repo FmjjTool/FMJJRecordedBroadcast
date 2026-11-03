@@ -718,11 +718,12 @@ def login(docs: list[dict], on_status=None, timeout: int = LOGIN_TIMEOUT) -> boo
 
 
 def collect(docs: list[dict], headless: bool = True, on_status=None,
-            debug: bool = True) -> list[dict]:
+            debug: bool = True, save_session: bool = True) -> list[dict]:
     """批量采集多个文档的浏览量 / 成员数，共用一次浏览器会话。
 
     只负责历史记录；智能表格数据由 tables / job.sync_tables 单独同步。
-    单文档失败不影响其它文档。
+    单文档失败不影响其它文档。定时任务并行采集时传 save_session=False，
+    避免多个浏览器线程同时改写登录快照。
     """
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
@@ -743,8 +744,9 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
                 result = _collect_one(context, doc, debug)
                 results.append(result)
             try:
-                # 刷新登录快照 + 同步回 Cookie 管理器（票续期后两边都更新）
-                session.save_from_context(context)
+                if save_session:
+                    # 刷新登录快照 + 同步回 Cookie 管理器（票续期后两边都更新）
+                    session.save_from_context(context)
             except Exception:  # noqa: BLE001 - 刷新登录态失败不影响本次结果
                 pass
         finally:

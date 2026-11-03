@@ -9,7 +9,8 @@
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
 - 其余 Tab：历史记录 / 采集明细 / 文档管理（自定义文档增删改 + 诊断包）
-- 底部：每日定时采集时间 + 计划任务安装/删除 + 采集时隐藏浏览器窗口 + 表格同步开关
+- 底部：定时采集（每天一次 / 按间隔几分钟或几小时）+ 计划任务安装/删除
+  + 采集时隐藏浏览器窗口
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QTableWidget,
+    QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -441,20 +442,22 @@ class TcDocPage(BasePage):
             "之后不必重复登录（直到失效）</p>"
             "<p>· <b>立即采集</b>：只采集全部文档的浏览量 / 成员数历史，每次追加一行，"
             "增量相对上一次采集计算；不包含表格同步，速度更快</p>"
-            "<p>· <b>管理</b>：顶部「管理」菜单可快速添加 / 编辑 / 删除当前文档的名称与链接；"
-            "「🗂 文档管理」Tab 提供完整列表、诊断包和重建报表</p>"
-            "<p>· <b>表格同步</b>：与历史采集相互独立，在内容 Tab 里单独点「🔄 同步表格」"
-            "把智能表格数据抓到本地库，按记录比对新增/修改/删除，每次同步自动生成 Excel"
-            "（每张工作表一个 sheet，存在 表格数据/，可点「📂 打开数据目录」查看）。"
+            "<p>· <b>文档管理</b>：在「🗂 文档管理」Tab 添加 / 编辑 / 删除任意腾讯文档"
+            "（表格 / 智能表格 / AI 文档 / 文档 / 幻灯片 / 收集表），可生成页面诊断包</p>"
+            "<p>· <b>表格同步</b>：手动同步当前文档的智能表格数据；"
+            "定时任务会自动并线同步全部表格文档。同步按记录比对"
+            "新增/修改/删除，每次同步自动生成 Excel（每张工作表一个 sheet，"
+            "存在 表格数据/，可点「📂 打开数据目录」查看）。"
             "普通表格、图表页、文章页不是同一套数据协议，会自动跳过并提示</p>"
             "<p>· <b>内容 Tab</b>：表格类型显示「📋 表格同步」，文档 / AI 文档 / "
             "幻灯片等自动切换为「📖 正文预览」。AI 文档会展开并抓取全部子页面，"
             "可下拉切换单篇或合并查看，支持导出 Markdown / TXT；"
             "每次抓取自动存档：正文逐页写 pages.db（新增/修改/删除留痕），"
             "并更新 正文存档/文档名.md</p>"
-            "<p>· <b>定时采集</b>：底部填时间后「🕓 安装/更新定时任务」，"
-            "由 Windows 计划任务每天自动跑历史记录（任务名 FengMingTCDocMonitor）；"
-            "表格数据需在内容 Tab 里手动同步</p>"
+            "<p>· <b>定时采集</b>：底部可选「每天一次」或「按间隔」（几分钟 / 几小时），"
+            "由 Windows 计划任务自动跑（任务名 FengMingTCDocMonitor）；"
+            "定时任务会后台并线采集历史记录和表格数据（默认 2 路并发，"
+            "避免一次开太多浏览器）</p>"
             "<p>· <b>数据位置</b>：download/腾讯文档数据/"
             "（tcdoc.db 浏览量库 + tables.db 表格库 + pages.db 正文库 + 报表/ + "
             "表格数据/ + 正文存档/ + 日志）</p>"
@@ -471,16 +474,7 @@ class TcDocPage(BasePage):
         cv.setSpacing(6)
 
         row = QHBoxLayout()
-        self.manage_btn = QPushButton("管理")
-        self.manage_btn.setToolTip("添加 / 编辑 / 删除文档（名称与链接）")
-        manage_menu = QMenu(self.manage_btn)
-        manage_menu.addAction("➕ 添加文档…", lambda *_: self._add_doc())
-        manage_menu.addAction("✏️ 编辑当前文档…", lambda *_: self._edit_current_doc())
-        manage_menu.addAction("🗑 删除当前文档…", lambda *_: self._delete_current_doc())
-        manage_menu.addSeparator()
-        manage_menu.addAction("📋 打开文档管理", lambda *_: self._show_doc_tab())
-        self.manage_btn.setMenu(manage_menu)
-        row.addWidget(self.manage_btn)
+        row.addWidget(QLabel("文档"))
         self.doc_combo = QComboBox()
         self.doc_combo.setMinimumWidth(230)
         self.doc_combo.setToolTip("切换文档：每个文档的历史记录、报表互相独立")
@@ -527,22 +521,40 @@ class TcDocPage(BasePage):
         self.content_stack.addWidget(self.preview_panel)
         self.tabs.addTab(self.content_stack, "📋 表格同步")
         self.content_tab_index = self.tabs.count() - 1
-        self.doc_tab = self._build_doc_tab()
-        self.tabs.addTab(self.doc_tab, "🗂 文档管理")
+        self.tabs.addTab(self._build_doc_tab(), "🗂 文档管理")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
         # ---------- 底部设置行 ----------
+        cfg = tc_cfg.load_cfg()
         bottom = QHBoxLayout()
         bottom.setSpacing(6)
-        bottom.addWidget(QLabel("定时采集：每天"))
-        self.time_edit = QLineEdit(str(tc_cfg.load_cfg().get("tcdoc_collect_time") or "23:50"))
+        bottom.addWidget(QLabel("定时采集："))
+        self.schedule_mode = QComboBox()
+        self.schedule_mode.addItem("每天一次", "daily")
+        self.schedule_mode.addItem("按间隔", "interval")
+        bottom.addWidget(self.schedule_mode)
+        self.time_edit = QLineEdit(str(cfg.get("tcdoc_collect_time") or "23:50"))
         self.time_edit.setFixedWidth(66)
         self.time_edit.setAlignment(Qt.AlignCenter)
         self.time_edit.setToolTip("24 小时制，如 23:50")
         bottom.addWidget(self.time_edit)
+        self.interval_combo = QComboBox()
+        for label, minutes in (("每 5 分钟", 5), ("每 10 分钟", 10),
+                               ("每 15 分钟", 15), ("每 30 分钟", 30),
+                               ("每 1 小时", 60), ("每 2 小时", 120),
+                               ("每 3 小时", 180), ("每 6 小时", 360),
+                               ("每 12 小时", 720), ("自定义…", -1)):
+            self.interval_combo.addItem(label, minutes)
+        bottom.addWidget(self.interval_combo)
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(1, 1439)
+        self.interval_spin.setSuffix(" 分钟")
+        self.interval_spin.setFixedWidth(92)
+        self.interval_spin.setToolTip("自定义间隔：1 ~ 1439 分钟（24 小时请用每天模式）")
+        bottom.addWidget(self.interval_spin)
         self.install_btn = QPushButton("🕓 安装/更新定时任务")
-        self.install_btn.setToolTip("注册 Windows 每日计划任务（任务名 FengMingTCDocMonitor）")
+        self.install_btn.setToolTip("注册 Windows 计划任务（每天或按间隔，任务名 FengMingTCDocMonitor）")
         self.install_btn.clicked.connect(self._install_task)
         bottom.addWidget(self.install_btn)
         self.uninstall_btn = QPushButton("🗑 删除定时任务")
@@ -550,9 +562,24 @@ class TcDocPage(BasePage):
         bottom.addWidget(self.uninstall_btn)
         self.headless_cb = QCheckBox("采集时隐藏浏览器窗口")
         self.headless_cb.setToolTip("勾选：后台静默采集；取消：弹出浏览器窗口便于观察")
-        self.headless_cb.setChecked(bool(tc_cfg.load_cfg().get("tcdoc_headless", True)))
+        self.headless_cb.setChecked(bool(cfg.get("tcdoc_headless", True)))
         self.headless_cb.toggled.connect(self._toggle_headless)
         bottom.addWidget(self.headless_cb)
+        try:
+            interval_minutes = int(cfg.get("tcdoc_interval_minutes") or 30)
+        except (TypeError, ValueError):
+            interval_minutes = 30
+        interval_minutes = max(1, min(1439, interval_minutes))
+        self.interval_spin.setValue(interval_minutes)
+        mode = str(cfg.get("tcdoc_schedule_mode") or "daily")
+        self.schedule_mode.setCurrentIndex(max(0, self.schedule_mode.findData(mode)))
+        choice = self.interval_combo.findData(interval_minutes)
+        if choice < 0:
+            choice = self.interval_combo.findData(-1)
+        self.interval_combo.setCurrentIndex(max(0, choice))
+        self.schedule_mode.currentIndexChanged.connect(self._on_schedule_mode_changed)
+        self.interval_combo.currentIndexChanged.connect(self._on_interval_choice_changed)
+        self._on_schedule_mode_changed()
         self.task_label = QLabel("")
         self.task_label.setStyleSheet("color: #888;")
         bottom.addWidget(self.task_label, 1)
@@ -1029,9 +1056,9 @@ class TcDocPage(BasePage):
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
-        for btn in (self.collect_btn, self.manage_btn, self.install_btn,
-                    self.uninstall_btn, self.add_btn, self.edit_btn, self.del_btn,
-                    self.probe_btn, self.rebuild_btn, self.sync_btn):
+        for btn in (self.collect_btn, self.install_btn, self.uninstall_btn,
+                    self.add_btn, self.edit_btn, self.del_btn, self.probe_btn,
+                    self.rebuild_btn, self.sync_btn):
             btn.setEnabled(not busy)
         self.preview_panel.set_enabled(not busy)
         if busy:
@@ -1103,23 +1130,6 @@ class TcDocPage(BasePage):
 
     # ==================== 文档管理 ====================
 
-    def _show_doc_tab(self):
-        self.tabs.setCurrentWidget(self.doc_tab)
-
-    def _edit_current_doc(self):
-        doc = self.current_doc()
-        if not doc:
-            self.app.toast("请先选择文档", "warning")
-            return
-        self._edit_doc(doc)
-
-    def _delete_current_doc(self):
-        doc = self.current_doc()
-        if not doc:
-            self.app.toast("请先选择文档", "warning")
-            return
-        self._delete_doc(doc)
-
     def _selected_doc(self) -> dict | None:
         row = self.doc_table.currentRow()
         if 0 <= row < len(self.docs):
@@ -1147,8 +1157,8 @@ class TcDocPage(BasePage):
             self.doc_combo.setCurrentIndex(idx)
         self.app.toast(f"已添加文档「{doc['name']}」，可直接采集", "success")
 
-    def _edit_doc(self, doc=None):
-        doc = doc or self._selected_doc() or self.current_doc()
+    def _edit_doc(self):
+        doc = self._selected_doc() or self.current_doc()
         if not doc:
             self.app.toast("请先选择要编辑的文档", "warning")
             return
@@ -1166,8 +1176,8 @@ class TcDocPage(BasePage):
         self.reload()
         self.app.toast(f"已保存「{new['name']}」", "success")
 
-    def _delete_doc(self, doc=None):
-        doc = doc or self._selected_doc() or self.current_doc()
+    def _delete_doc(self):
+        doc = self._selected_doc() or self.current_doc()
         if not doc:
             self.app.toast("请先选择要删除的文档", "warning")
             return
@@ -1223,26 +1233,59 @@ class TcDocPage(BasePage):
 
     # ==================== 定时任务 ====================
 
+    def _on_schedule_mode_changed(self, *_args):
+        daily = self.schedule_mode.currentData() == "daily"
+        self.time_edit.setVisible(daily)
+        self.interval_combo.setVisible(not daily)
+        self.interval_spin.setVisible(
+            not daily and self.interval_combo.currentData() == -1)
+
+    def _on_interval_choice_changed(self, *_args):
+        custom = self.interval_combo.currentData() == -1
+        self.interval_spin.setVisible(
+            self.schedule_mode.currentData() == "interval" and custom)
+
+    def _schedule_minutes(self) -> int:
+        minutes = self.interval_combo.currentData()
+        if minutes == -1:
+            minutes = self.interval_spin.value()
+        return max(1, min(1439, int(minutes)))
+
     def _toggle_headless(self, checked):
         tc_cfg.save_cfg(tcdoc_headless=bool(checked))
 
     def _install_task(self):
-        text = self.time_edit.text().strip()
-        parts = text.split(":")
-        valid = (len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
-                 and 0 <= int(parts[0]) < 24 and 0 <= int(parts[1]) < 60)
-        if not valid:
-            QMessageBox.warning(self, "时间格式", "请填写 24 小时制时间，例如 23:50")
-            return
-        hhmm = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
         if self._busy:
             return
-        self._set_busy(True, f"⏳ 正在安装定时任务（每天 {hhmm}）……")
+        daily = self.schedule_mode.currentData() == "daily"
+        hhmm, minutes = "", 0
+        if daily:
+            text = self.time_edit.text().strip()
+            parts = text.split(":")
+            valid = (len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
+                     and 0 <= int(parts[0]) < 24 and 0 <= int(parts[1]) < 60)
+            if not valid:
+                QMessageBox.warning(self, "时间格式", "请填写 24 小时制时间，例如 23:50")
+                return
+            hhmm = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+            desc = f"每天 {hhmm}"
+        else:
+            minutes = self._schedule_minutes()
+            desc = (f"每 {minutes // 60} 小时" if minutes % 60 == 0
+                    else f"每 {minutes} 分钟")
+        self._set_busy(True, f"⏳ 正在安装定时任务（{desc}）……")
 
         def work():
-            ok, msg = task.install(hhmm)
-            if ok:
-                tc_cfg.save_cfg(tcdoc_collect_time=hhmm)
+            if daily:
+                ok, msg = task.install_daily(hhmm)
+                if ok:
+                    tc_cfg.save_cfg(tcdoc_schedule_mode="daily",
+                                    tcdoc_collect_time=hhmm)
+            else:
+                ok, msg = task.install_interval(minutes)
+                if ok:
+                    tc_cfg.save_cfg(tcdoc_schedule_mode="interval",
+                                    tcdoc_interval_minutes=minutes)
             return ok, msg
 
         def done(result, err):
@@ -1252,7 +1295,10 @@ class TcDocPage(BasePage):
                 return
             ok, msg = result
             if ok:
-                self.time_edit.setText(hhmm)
+                if daily:
+                    self.time_edit.setText(hhmm)
+                else:
+                    self.interval_spin.setValue(minutes)
                 self.app.toast(f"定时任务已安装：{msg}", "success")
                 self._refresh_task()
             else:

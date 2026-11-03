@@ -1,4 +1,4 @@
-"""腾讯文档监控 · Windows 计划任务（每日定时采集）。
+"""腾讯文档监控 · Windows 计划任务（每天 / 按间隔定时采集）。
 
 任务名固定 FengMingTCDocMonitor，与其他工具的定时任务互不影响。
 命令：
@@ -35,14 +35,31 @@ def _runner_command() -> str:
     return f'"{exe}" "{script}"'
 
 
-def install(time_str: str) -> tuple[bool, str]:
-    """安装 / 更新每日定时采集任务，返回 (是否成功, 提示)。"""
+def install_daily(time_str: str) -> tuple[bool, str]:
+    """安装 / 更新每天定时采集任务，返回 (是否成功, 提示)。"""
     command = _runner_command()
     result = _run(["schtasks", "/Create", "/TN", TASK_NAME, "/TR", command,
                    "/SC", "DAILY", "/ST", time_str, "/F"])
     if result.returncode != 0:
         return False, (result.stdout or result.stderr or "未知错误").strip()
     return True, f"每天 {time_str} 自动采集"
+
+
+def install_interval(minutes: int) -> tuple[bool, str]:
+    """安装 / 更新按分钟间隔重复的采集任务（60 的倍数会显示成小时）。"""
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return False, "间隔分钟数无效"
+    if not 1 <= minutes <= 1439:
+        return False, "间隔需在 1 ~ 1439 分钟之间（24 小时请用每天模式）"
+    command = _runner_command()
+    result = _run(["schtasks", "/Create", "/TN", TASK_NAME, "/TR", command,
+                   "/SC", "MINUTE", "/MO", str(minutes), "/ST", "00:00", "/F"])
+    if result.returncode != 0:
+        return False, (result.stdout or result.stderr or "未知错误").strip()
+    desc = f"每 {minutes // 60} 小时" if minutes % 60 == 0 else f"每 {minutes} 分钟"
+    return True, f"{desc}自动采集"
 
 
 def uninstall() -> tuple[bool, str]:
