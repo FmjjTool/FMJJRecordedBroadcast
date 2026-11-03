@@ -1708,6 +1708,7 @@ class AssetPage(BasePage):
         """
         root = str(root)
         cat = os.path.basename(root.rstrip("\\/"))
+        self._dir_group_truncated = False
         files_scan, top_dirs = [], {}
         total = 0
         for dirpath, dirnames, filenames in os.walk(root):
@@ -1718,6 +1719,8 @@ class AssetPage(BasePage):
                 head = rel.split("/")[0]
                 top_dirs.setdefault(head.lower(), head)
             for fn in sorted(filenames):
+                if fn.startswith("."):
+                    continue  # .stem_owners.json 等内部文件不参与聚合
                 full = os.path.join(dirpath, fn)
                 try:
                     st = os.stat(full)
@@ -1733,6 +1736,8 @@ class AssetPage(BasePage):
                     break
             if limit_files and total >= limit_files:
                 break
+
+        self._dir_group_truncated = bool(limit_files and total >= limit_files)
 
         rule_kind, rule_depth = self._DIR_GROUP_RULES.get(cat, ("dir", 1))
         buckets, order = {}, []
@@ -2425,6 +2430,11 @@ class AssetPage(BasePage):
         page = min(max(1, self._collected_page), total_pages)
         self._collected_page = page
         start = (page - 1) * BATCH
+        if getattr(self, "_dir_group_truncated", False):
+            warn = QLabel("⚠️ 目录文件超过 20000 个，仅显示前 20000 个")
+            warn.setStyleSheet("color: #b26a00; padding: 2px 8px;")
+            warn.setToolTip("先在文件管理器里清理/归档一部分文件，或缩小到子目录再看")
+            lay.addWidget(warn)
         for i in range(start, min(start + BATCH, len(groups))):
             lay.addWidget(self._make_group_row(groups[i], i + 1))
         lay.addWidget(self._make_pager(len(groups), page, total_pages))

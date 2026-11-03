@@ -37,9 +37,17 @@ def build_stem(art) -> str:
     return f"{digits}_{acct}_{title}"
 
 
-def build_article_dir(art) -> str:
-    """公众号名/文章名 → 该文章的导出文件夹（所有格式统一存放，图片在 图片/）。"""
-    return str(Path(build_account_dir(art)) / build_stem(art))
+def build_article_dir(art, out_dir: str) -> str:
+    """公众号名/文章名 → 相对 out_dir 的文章目录。
+
+    同一公众号下同日期同标题的不同文章（用 URL 区分）自动加短后缀，
+    重复导出同一篇仍命中原目录；归属记录在账号目录的 .stem_owners.json。
+    """
+    from toolbox.utils import claim_output_stem
+    acct = build_account_dir(art)
+    stem = claim_output_stem(str(Path(out_dir) / acct), build_stem(art),
+                             art.url or art.title)
+    return str(Path(acct) / stem)
 
 
 def _meta_lines(art) -> str:
