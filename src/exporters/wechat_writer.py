@@ -26,28 +26,46 @@ def build_account_dir(art) -> str:
     return sanitize_filename(art.account or "未识别公众号", 48, "未识别公众号")
 
 
-def build_stem(art) -> str:
+def build_stem(art, title_max: int = 48) -> str:
     from toolbox.utils import sanitize_filename
     digits = re.sub(r"\D", "", (art.publish_time or "")[:10])[:8]
     if len(digits) < 8:
         from datetime import datetime
         digits = datetime.now().strftime("%Y%m%d")
     acct = sanitize_filename(art.account or "公众号", 24)
-    title = sanitize_filename(art.title, 48)
+    title = sanitize_filename(art.title, title_max)
     return f"{digits}_{acct}_{title}"
 
 
-def build_article_dir(art, out_dir: str) -> str:
-    """公众号名/文章名 → 相对 out_dir 的文章目录。
+_MAX_OUT_PATH = 240      # Windows 260 的余量（给临时文件/后缀留空间）
+_HASH_RESERVE = 8        # claim_output_stem 撞名后缀 ~xxxxxx
+
+
+def _fit_stem(art, out_dir: str, account: str) -> str:
+    """按目标路径长度收缩标题，避免 Windows 260 字符上限导致导出失败。"""
+    prefix = len(str(Path(out_dir) / account)) + 1
+    # 文章目录名与文件名共用 stem：prefix\{stem}\{stem}.docx
+    budget = (_MAX_OUT_PATH - prefix - len(".docx") - _HASH_RESERVE) // 2
+    budget = max(24, budget)
+    stem = build_stem(art)
+    if len(stem) <= budget:
+        return stem
+    title_max = max(8, 48 - (len(stem) - budget))
+    stem = build_stem(art, title_max)
+    return stem[:budget].rstrip("_ .~")
+
+
+def build_article_path(art, out_dir: str) -> tuple[str, str]:
+    """返回 (相对 out_dir 的文章目录, 实际文件 stem)。
 
     同一公众号下同日期同标题的不同文章（用 URL 区分）自动加短后缀，
     重复导出同一篇仍命中原目录；归属记录在账号目录的 .stem_owners.json。
     """
     from toolbox.utils import claim_output_stem
     acct = build_account_dir(art)
-    stem = claim_output_stem(str(Path(out_dir) / acct), build_stem(art),
-                             art.url or art.title)
-    return str(Path(acct) / stem)
+    stem = _fit_stem(art, out_dir, acct)
+    stem = claim_output_stem(str(Path(out_dir) / acct), stem, art.url or art.title)
+    return str(Path(acct) / stem), stem
 
 
 def _meta_lines(art) -> str:
@@ -145,8 +163,8 @@ def render_pdf(html: str, out_path: str) -> str:
 
 def export_markdown(art, folder: str) -> str:
     """导出 Markdown + 图片文件夹到文章目录：folder/{stem}.md + folder/图片/N.ext"""
-    stem = build_stem(art)
     folder = Path(folder)
+    stem = folder.name      # 文章目录名即实际 stem（长路径可能已缩短）
     img_dir = folder / "图片"
     img_dir.mkdir(parents=True, exist_ok=True)
 

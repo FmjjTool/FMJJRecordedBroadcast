@@ -254,8 +254,8 @@ class WechatArticlePage(BasePage):
                                 should_cancel=lambda: self._cancel,
                                 threads=6)
 
-                stem = wechat_writer.build_stem(art)
-                art_dir = os.path.join(out_dir, wechat_writer.build_article_dir(art, out_dir))
+                rel_dir, stem = wechat_writer.build_article_path(art, out_dir)
+                art_dir = os.path.join(out_dir, rel_dir)
                 os.makedirs(art_dir, exist_ok=True)
                 if "html" in formats:
                     wechat_writer.export_html(art, os.path.join(art_dir, stem + ".html"))

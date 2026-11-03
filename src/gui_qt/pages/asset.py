@@ -1631,7 +1631,7 @@ class AssetPage(BasePage):
         「已获取数据」不再展开子级——平台/作者维度已有独立的「平台」下拉，
         重复列出只会让菜单变成几百项；选它与「全部文件夹」等价（都是条目列表）。
         """
-        from toolbox.config_manager import get_export_dir
+        from toolbox.config_manager import get_export_dir, load_convert_config
         sel = self.folder_sel
         if cur is None:
             cur = sel.currentData() or ""
@@ -1648,6 +1648,21 @@ class AssetPage(BasePage):
         for name in tops:
             sel.addItem(f"📦 {name}", f"dir:{name}")
             sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
+        # 页面里选了「固定位置」的导出目录也列出来（否则资产页完全看不到）
+        try:
+            cfg = load_convert_config()
+        except Exception:
+            cfg = {}
+        custom = (
+            ("📌 公众号导出（固定位置）", "公众号文章",
+             cfg.get("wechat_custom_dir") if cfg.get("wechat_use_custom_dir") else ""),
+            ("📌 歌曲下载（固定位置）", "歌曲文件",
+             cfg.get("music_download_custom_dir") if cfg.get("music_download_use_custom") else ""),
+        )
+        for label, cat, path in custom:
+            if path and os.path.isdir(path):
+                sel.addItem(label, f"path:{cat}|{path}")
+                sel.setItemData(sel.count() - 1, path, Qt.ToolTipRole)
         idx = sel.findData(cur) if cur else 0
         sel.setCurrentIndex(idx if idx >= 0 else 0)
         sel.blockSignals(False)
@@ -1659,13 +1674,16 @@ class AssetPage(BasePage):
 
     @staticmethod
     def _split_folder_value(val):
-        """「文件夹」下拉值 → (下载目录名, 已获取数据内目录)；非对应模式返回空串。"""
+        """「文件夹」下拉值 → (下载目录名, 已获取数据内目录, 自定义根, 分类提示)。"""
         val = val or ""
         if val.startswith("dir:"):
-            return val[4:], ""
+            return val[4:], "", "", ""
         if val.startswith("sub:"):
-            return "", val[4:]
-        return "", ""
+            return "", val[4:], "", ""
+        if val.startswith("path:"):
+            cat, _, root = val[5:].partition("|")
+            return "", "", root, cat
+        return "", "", "", ""
 
     @staticmethod
     def _group_date(text) -> str:
@@ -1690,7 +1708,7 @@ class AssetPage(BasePage):
             return "".join(m.groups())
         return ""
 
-    def _load_dir_groups(self, root, limit_files: int = 20000) -> list:
+    def _load_dir_groups(self, root, limit_files: int = 20000, cat: str = "") -> list:
         """把 download 分类目录的文件按「一次导出的产物」聚合成条目（类 B站/抖音行）。
 
         聚合方式按分类配置（_DIR_GROUP_RULES）：
@@ -1707,7 +1725,7 @@ class AssetPage(BasePage):
         limit_files 兜底防误选超大目录把内存打满。
         """
         root = str(root)
-        cat = os.path.basename(root.rstrip("\\/"))
+        cat = cat or os.path.basename(root.rstrip("\\/"))
         self._dir_group_truncated = False
         files_scan, top_dirs = [], {}
         total = 0
@@ -2185,26 +2203,29 @@ class AssetPage(BasePage):
         status = self.status_sel.currentText()
         desc = self.sort_sel.currentText() == "时间倒序"
         kw = (self._search_var or "").strip().lower()
-        dir_name, _ = self._split_folder_value(
+        dir_name, _sub, custom_root, cat_hint = self._split_folder_value(
             self.folder_sel.currentData() or "")
         if dir_name == "已获取数据":
             dir_name = ""    # 它本身就是条目列表的数据源，不是文件清单
+        is_files = bool(dir_name or custom_root)
 
         self._reload_gen += 1
         gen = self._reload_gen
         self._collected_all_items = []
         if not keep_page:
             self._collected_page = 1
-        self._view_mode = "files" if dir_name else "entries"
+        self._view_mode = "files" if is_files else "entries"
         self._render_skeleton(8)
 
-        # 选了 download/ 下的分类目录 → 文件清单视图（按一次导出的产物聚合成条目）
-        if dir_name:
-            self._plain_dir = dir_name
+        # 选了 download/ 分类目录或固定位置 → 文件清单视图（按产物聚合）
+        if is_files:
+            self._plain_dir = custom_root or dir_name
             self._plain_groups = []      # 先清空：避免等待方读到上一个目录的旧数据
             self._set_batch_enabled(False)
 
             def work_files():
+                if custom_root:
+                    return self._load_dir_groups(custom_root, cat=cat_hint)
                 from toolbox.config_manager import get_export_dir
                 return self._load_dir_groups(get_export_dir() / dir_name)
 
@@ -2420,7 +2441,9 @@ class AssetPage(BasePage):
         """download 分类目录：按「一次导出的产物」聚合的条目（类 B站/抖音行）。"""
         groups = self._plain_groups
         if not groups:
-            lbl = QLabel(f"（download/{self._plain_dir}/ 里没有文件）")
+            where = self._plain_dir
+            where_disp = where if os.path.isabs(where) else f"download/{where}/"
+            lbl = QLabel(f"（{where_disp} 里没有文件）")
             lbl.setStyleSheet("color: gray;")
             lbl.setContentsMargins(8, 10, 8, 10)
             lay.addWidget(lbl)
