@@ -432,7 +432,7 @@ def main():
         return
 
     build_installer(name, ver)
-    print("\n全部完成 ✓")
+    print("\n全部完成")
     print(f"  绿色版：dist\\{name}\\{name}.exe（无 CMD 窗口，双击即用）")
     print(f"  安装器：dist\\installer\\{name}_Setup_{ver['APP_VERSION']}.exe（可选目录/注册表/可卸载）")
 
