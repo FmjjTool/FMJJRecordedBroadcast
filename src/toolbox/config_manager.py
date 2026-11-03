@@ -231,6 +231,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "wechat_custom_dir": "",
     # 已获取页导出格式
     "export_formats": ["json", "xlsx", "md"],
+    # 已获取页：导出微博帖子时附带评论区聊天记录的前 N 页（0 = 不抓）
+    "weibo_comment_pages": 2,
     "launcher_items": [],
     "migrate_target_dir": "",
     "max_log_files": 50,

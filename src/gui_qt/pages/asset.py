@@ -1527,7 +1527,8 @@ class AssetPage(BasePage):
         # 用 scandir 一次枚举连 mtime/size 一起拿（Windows 上 DirEntry 复用目录
         # 枚举结果，无额外 stat 开销），缓存命中判定不再逐个 os.stat。
         files = self._list_json_files(video_dir)   # {路径: (mtime, size)}，含 *_raw.json
-        json_paths = sorted((p for p in files if not _json_stem(p).endswith("_raw")),
+        json_paths = sorted((p for p in files
+                             if not _json_stem(p).endswith(("_raw", "_comments"))),
                             key=os.path.basename, reverse=True)
 
         results, fresh = self._load_entries(json_paths, files)
@@ -3963,7 +3964,7 @@ class AssetPage(BasePage):
         # 文本文件只认 json/md/xlsx 本体（独立媒体条目的 file_path 是媒体
         # 文件本身，绝不能归入"文本"类别——否则勾"文本"实际删的是图片/视频）
         doc_files = [fp] if fp.lower().endswith((".json", ".md", ".xlsx")) else []
-        for ext in (".md", ".xlsx", "_raw.json"):
+        for ext in (".md", ".xlsx", "_raw.json", "_comments.json", "_comments.txt"):
             cand = stem + ext
             if os.path.exists(cand):
                 doc_files.append(cand)
@@ -3997,7 +3998,7 @@ class AssetPage(BasePage):
 
         cb_img, _ = _mk_row("🖼", "图片文件", img_files, "#1976d2")
         cb_vid, _ = _mk_row("🎬", "视频文件", vid_files, "#6a1b9a")
-        cb_doc, _ = _mk_row("📄", "文本文件（json/md/xlsx/raw）", doc_files, "#e65100")
+        cb_doc, _ = _mk_row("📄", "文本文件（json/md/xlsx/raw/评论）", doc_files, "#e65100")
         cb_all = QCheckBox("🗑 全部删除（含文本，条目将消失）")
         cb_all.setStyleSheet("color: #c62828; font-weight: bold;")
         v.addWidget(cb_all)

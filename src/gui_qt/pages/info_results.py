@@ -2,6 +2,7 @@
 
 对应原版 gui/info_pages.py 的 InfoResultsPage：
 - 顶部：画质下拉（全局共享）+ 🗑 全部清空 + 📤 全部导出 + 📥 全部下载 + 导出格式复选
+  + 微博评论页数（导出微博帖子时附带评论区聊天记录，0 = 不抓）
 - 三栏（抖音/B站/微博）：计数标签 + 全选/反选/清除/📤 导出/📥 下载 + 复选行 + 🔗 打开链接
 - 每行显示发布日期，默认按发布日期倒序（最新在前）
 - 下载：B站按画质直下（视频走 playurl、DRAW 动态走图片），非 B站走 media_downloader
@@ -15,12 +16,12 @@ from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
-    QMenu, QMessageBox, QPushButton, QListView, QStyledItemDelegate, QStyle,
+    QMenu, QMessageBox, QPushButton, QListView, QSpinBox, QStyledItemDelegate, QStyle,
     QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
-from gui_qt.common import _fmt, run_bg
+from gui_qt.common import _fmt, post_to_main, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
@@ -280,12 +281,17 @@ class InfoResultsPage(BasePage):
         head.addWidget(self.thread_sel)
         layout.addLayout(head)
 
-        # 导出格式（对所有栏生效；勾选状态持久化）
+        # 导出格式（对所有栏生效；勾选状态持久化）+ 微博评论页数（帖子导出带聊天记录）
         saved_fmts = set()
+        saved_comment_pages = 2
         try:
             from toolbox.config_manager import load_convert_config
-            saved_fmts = set(load_convert_config().get("export_formats",
-                                                      ["json", "xlsx", "md"]))
+            cfg = load_convert_config()
+            saved_fmts = set(cfg.get("export_formats", ["json", "xlsx", "md"]))
+            try:
+                saved_comment_pages = int(cfg.get("weibo_comment_pages", 2))
+            except (TypeError, ValueError):
+                saved_comment_pages = 2
         except Exception:
             saved_fmts = {"json", "xlsx", "md"}
         fmt_row = QHBoxLayout()
@@ -300,7 +306,21 @@ class InfoResultsPage(BasePage):
             cb.toggled.connect(lambda _c: self._save_fmt_settings())
             fmt_row.addWidget(cb)
             fmt_row.addSpacing(6)
+        fmt_row.addWidget(QLabel("微博评论页数:"))
+        self.comment_pages_spin = QSpinBox()
+        self.comment_pages_spin.setRange(0, 50)
+        self.comment_pages_spin.setValue(max(0, min(50, saved_comment_pages)))
+        self.comment_pages_spin.setFixedWidth(56)
+        self.comment_pages_spin.setToolTip(
+            "导出微博帖子时附带评论区聊天记录：每帖抓取前 N 页（约 N×20 条），0 = 不抓。\n"
+            "评论存为帖子同目录的 _comments.json / _comments.txt，并写入 JSON/XLSX/MD。")
+        self.comment_pages_spin.valueChanged.connect(lambda _v: self._save_comment_pages())
+        fmt_row.addWidget(self.comment_pages_spin)
         fmt_row.addStretch(1)
+        self.export_status = QLabel("")
+        self.export_status.setStyleSheet("color: #666; font-size: 11px;")
+        self.export_status.setMaximumWidth(420)
+        fmt_row.addWidget(self.export_status)
         layout.addLayout(fmt_row)
 
         # 三栏
@@ -324,6 +344,16 @@ class InfoResultsPage(BasePage):
             if self.fmt_md.isChecked():
                 fmts.append("md")
             cfg["export_formats"] = fmts
+            save_convert_config(cfg)
+        except Exception:
+            pass
+
+    def _save_comment_pages(self):
+        """微博评论页数写入 config（下次启动保持）。"""
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            cfg = load_convert_config()
+            cfg["weibo_comment_pages"] = self.comment_pages_spin.value()
             save_convert_config(cfg)
         except Exception:
             pass
@@ -516,27 +546,38 @@ class InfoResultsPage(BasePage):
         if not fmts:
             self.app.toast("请至少选择一种导出格式", "warning")
             return
+        self.export_status.setText("⏳ 正在导出…")
+
+        def progress(msg):
+            post_to_main(self.export_status.setText, f"⏳ {msg}")
 
         def work():
             from exporters import export_per_video_flat
             from toolbox.config_manager import get_export_subdir
             import os
             out_dir = str(get_export_subdir("video_data"))
+            pages = self.comment_pages_spin.value()
             paths, skipped = export_per_video_flat(items, output_dir=out_dir,
-                                                   formats=fmts, skip_existing=True)
+                                                   formats=fmts, skip_existing=True,
+                                                   comments_pages=pages,
+                                                   progress=progress)
             return paths, skipped, os.path.abspath(out_dir)
 
         def done(result, err):
             if err:
+                self.export_status.setText(f"❌ {str(err)[:60]}")
                 self.app.toast(str(err), "error")
                 return
             paths, skipped, out_dir = result
             if skipped and not paths:
+                self.export_status.setText("已存在，已跳过")
                 self.app.toast("文件已存在，请勿重复保存", "info")
                 return
             msg = f"已导出 {len(paths)} 个文件到 {out_dir}"
             if skipped:
                 msg += f"（跳过 {len(skipped)} 个已存在）"
+            self.export_status.setText(
+                f"✅ 已导出 {len(paths)}" + (f"（跳过 {len(skipped)}）" if skipped else ""))
             self.app.toast(msg, "success")
 
         run_bg(work, done)
