@@ -1,10 +1,10 @@
 ﻿# 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.9.3** · 制作：歆慕
+> **FengMingToolbox v2.9.4** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.9.3>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.9.4>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -658,7 +658,7 @@ A：不会。普通文件遇到同名则**跳过**（新项目数据优先）；
 ```python
 APP_NAME         = "FengMingToolbox"
 APP_DISPLAY_NAME = "封茗囧菌数据汇总库 统一维护工具箱"
-APP_VERSION      = "2.8.4"
+APP_VERSION      = "2.9.4"
 APP_PUBLISHER    = "歆慕"
 ```
 
@@ -681,7 +681,7 @@ APP_PUBLISHER    = "歆慕"
 
 ### 更新日志
 
-#### 未发布（2026-11-03）
+#### v2.9.4（2026-11-03）
 
 - **公众号文章导出按账号/文章归档**：导出根目录下自动创建 `公众号名/文章名/` 两级文件夹，同一篇文章的 HTML / PDF / Word / Markdown 与图片统一收进该文章文件夹，不再散落；默认位置与固定位置均生效。
 - **资产管理补齐内容二级弹窗**：「已获取资源」文件夹分类视图单击聚合条目即可查看内容（公众号按篇列出，支持 Markdown / HTML / DOCX 正文渲染、内嵌图片、媒体缩略图与文件清单）；「数据库浏览」双击行查看完整内容（封面/统计/正文/标签/链接）；「本地资源」单击行预览图片大图或视频首帧，附播放与定位按钮。
