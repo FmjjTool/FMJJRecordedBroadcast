@@ -143,7 +143,7 @@ def check_pyinstaller() -> bool:
         r = subprocess.run([sys.executable, "-m", "PyInstaller", "--version"],
                            capture_output=True, text=True, timeout=60)
         if r.returncode == 0:
-            print(f"PyInstaller {r.stdout.strip()} ✓")
+            print(f"PyInstaller {r.stdout.strip()} OK")
             return True
     except Exception:
         pass
