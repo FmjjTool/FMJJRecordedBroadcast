@@ -1,4 +1,4 @@
-"""Cookie 身份验证：用已保存 Cookie 拉取当前登录用户名（11 平台）。
+"""Cookie 身份验证：用已保存 Cookie 拉取当前登录用户名（12 平台）。
 
 probe(platform) 返回：
     {"ok": True,  "username": "昵称"}  Cookie 有效且拿到用户名
@@ -463,6 +463,25 @@ def _fivesing(cookie: str) -> dict:
     return {"ok": None, "username": ""}  # 接口不可达：无法判定（不当成未登录）
 
 
+def _tcdoc(cookie: str) -> dict:
+    """腾讯文档：user_info 接口的 login 字段（游客态也可能带 uid Cookie，不能只看名字）。"""
+    import requests
+
+    h = _headers(cookie)
+    h["Referer"] = "https://docs.qq.com/desktop"
+    d = requests.get("https://docs.qq.com/cgi-bin/online_docs/user_info?u=",
+                     headers=h, timeout=10).json()
+    if not isinstance(d, dict):
+        return {"ok": None, "username": ""}
+    if d.get("login") is True:
+        nick = (d.get("nick") or d.get("wx_nick") or d.get("qq_nick") or "").strip()
+        return {"ok": True, "username": nick}
+    # 票失效时接口不带 login 字段，只回 12100 /「尚未登录」
+    if d.get("login") is False or d.get("retcode") == 12100 or d.get("cgicode") == 12100:
+        return {"ok": False, "username": ""}
+    return {"ok": None, "username": ""}
+
+
 def kugou_nick_for(userid) -> str:
     """同 userid 的酷狗昵称（酷狗概念版没有可用的用户信息接口，借主账号 Cookie）。"""
     import auth
@@ -480,5 +499,5 @@ _VERIFIERS = {
     "bilibili": _bili, "douyin": _douyin, "weibo": _weibo,
     "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
-    "taobao": _taobao, "5sing": _fivesing,
+    "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
 }

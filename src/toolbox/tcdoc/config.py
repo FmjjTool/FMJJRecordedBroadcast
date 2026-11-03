@@ -6,14 +6,15 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
   tcdoc_collect_time     每日定时采集时间 "HH:MM"
   tcdoc_headless         采集时隐藏浏览器窗口
   tcdoc_legacy_migrated  是否已尝试导入旧版「腾讯文档数据保存」的历史数据
-  tcdoc_sync_tables      采集时是否顺带同步智能表格数据（本地 SQLite + Excel）
   tcdoc_table_page       表格同步页每页显示行数
 
 路径约定（全部跟随全局统一导出目录，见 config_manager.get_export_dir）：
   download/腾讯文档数据/tcdoc.db      SQLite 历史存档（浏览量 / 成员数）
   download/腾讯文档数据/tables.db     SQLite 智能表格数据（逐表逐行 + 变更记录）
+  download/腾讯文档数据/pages.db      SQLite 正文存档（AI 文档逐页正文 + 变更记录）
   download/腾讯文档数据/报表/*.xlsx   每个文档一份浏览量报表
   download/腾讯文档数据/表格数据/*.xlsx  每个文档一份表格数据（每表一个 sheet）
+  download/腾讯文档数据/正文存档/*.md    每个文档一份自动更新的正文快照
   download/腾讯文档数据/日志/         采集日志
   download/腾讯文档数据/调试/         页面改版时的诊断包
 登录态含账号凭证，单独放 config/tcdoc_state.json（不进导出目录）。
@@ -176,8 +177,18 @@ def tables_db_path() -> Path:
     return data_dir() / "tables.db"
 
 
+def pages_db_path() -> Path:
+    """正文预览独立建库（逐页正文 + 变更记录）。"""
+    return data_dir() / "pages.db"
+
+
 def tables_dir() -> Path:
     return _ensure(data_dir() / "表格数据")
+
+
+def docs_dir() -> Path:
+    """正文自动快照目录（每次预览更新，每篇文档一个 .md）。"""
+    return _ensure(data_dir() / "正文存档")
 
 
 def reports_dir() -> Path:

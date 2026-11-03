@@ -84,23 +84,21 @@ def ensure_ready() -> str:
 # ==================== 采集 ====================
 
 def collect_all(on_status=None, debug: bool = True) -> list[dict]:
-    """采集全部文档并落库 / 出报表。单个文档失败不影响其它文档。"""
+    """采集全部文档的浏览/成员历史并落库 / 出报表；表格数据单独同步。"""
     ensure_ready()
     cfg = cfg_mod.load_cfg()
     docs = cfg_mod.load_docs()
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
     db = cfg_mod.db_path()
-    sync_tables = bool(cfg.get("tcdoc_sync_tables", True))
 
-    log(f"开始采集，共 {len(docs)} 个文档，headless={bool(cfg.get('tcdoc_headless', True))}，"
-        f"表格同步={sync_tables}")
+    log(f"开始采集历史记录，共 {len(docs)} 个文档，"
+        f"headless={bool(cfg.get('tcdoc_headless', True))}")
     results = collector.collect(
         docs,
         headless=bool(cfg.get("tcdoc_headless", True)),
         on_status=on_status,
         debug=debug,
-        sync_tables=sync_tables,
     )
 
     ts, day = storage.now_str(), storage.today_str()
@@ -112,8 +110,11 @@ def collect_all(on_status=None, debug: bool = True) -> list[dict]:
             log(f"[{item['name']}] 采集失败：{item.get('error') or '未知错误'}")
             continue
 
+        note = ""
+        if item.get("views") is None and "未读取到浏览量" in (item.get("source") or ""):
+            note = item["source"]
         storage.add_snapshot(db, item["doc_key"], ts, item["views"], item["members"],
-                             item.get("readers"), True, "")
+                             item.get("readers"), True, note)
         storage.append_daily(db, item["doc_key"], ts, day,
                              item["views"], item["members"], item.get("readers"))
         item["date"] = day
@@ -133,21 +134,13 @@ def collect_all(on_status=None, debug: bool = True) -> list[dict]:
             f"成员数={row['members']}({mdelta}) 已查看={item.get('readers')} "
             f"来源={item.get('source')}")
 
-        if item.get("tables"):
-            _store_tables(item)
-
     ok_n = sum(1 for item in results if item.get("ok"))
-    log(f"采集结束：成功 {ok_n}，失败 {len(results) - ok_n}")
+    log(f"历史采集结束：成功 {ok_n}，失败 {len(results) - ok_n}")
     return results
 
 
-def _store_tables(item: dict, info: dict | None = None) -> None:
-    """把采集到的表格数据落库并导出 Excel（失败只记录，不影响浏览量结果）。
-
-    item 是带 doc_key / name 的结果字典；info 是 tables.collect_* 的返回，
-    不传时取 item["tables"]（浏览量采集顺带同步的场景）。
-    """
-    info = info or item.get("tables") or {}
+def _store_tables(item: dict, info: dict) -> None:
+    """把表格同步结果落库并导出 Excel（失败只记录，不影响历史采集）。"""
     if not info.get("ok"):
         item["tables_error"] = info.get("error") or "表格同步失败"
         log(f"[{item['name']}] 表格同步失败：{item['tables_error']}")

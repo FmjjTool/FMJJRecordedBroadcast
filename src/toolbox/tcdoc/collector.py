@@ -16,11 +16,12 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from toolbox.browser import launch as pw_launch
 
 from . import config as cfg_mod
-from . import session, tables
+from . import session
 
 PAGE_TIMEOUT = 90_000
 LOGIN_TIMEOUT = 900
@@ -316,6 +317,55 @@ def _wait_api(page, responses, timeout: float = 25.0, data: dict | None = None) 
         page.wait_for_timeout(700)
 
 
+def _fetch_web_views(page) -> dict:
+    """直接调文档自己的统计接口取浏览量 / 已查看人数。
+
+    智能表格新版分享面板已经不展示「浏览记录」，等页面自己发 browser_list 请求
+    会不稳定；这里用 opendoc 拿到真实 padId，再直接请求 browser_list。
+    """
+    try:
+        info = page.evaluate("""async () => {
+            const m = document.cookie.match(/(?:^|; )TOK=([^;]+)/);
+            const tok = m ? decodeURIComponent(m[1]) : '';
+            const key = location.pathname.split('/').filter(Boolean).pop() || '';
+            const r = await fetch('/dop-api/opendoc?u=&noEscape=1&id='
+                + encodeURIComponent(key) + '&normal=1&outformat=1&wb=1&nowb=0',
+                {credentials: 'include'});
+            if (!r.ok) return null;
+            const raw = (await r.text()).trim();
+            let data;
+            try {
+                // 大部分是纯 JSON；旧版接口可能包成 JSONP，先看首字符再剥壳
+                if (raw[0] === '{' || raw[0] === '[') {
+                    data = JSON.parse(raw);
+                } else {
+                    const i = raw.indexOf('('), j = raw.lastIndexOf(')');
+                    data = JSON.parse(i >= 0 && j > i ? raw.slice(i + 1, j) : raw);
+                }
+            } catch (e) { return null; }
+            const cv = data.clientVars || {};
+            if (!cv.padId) return null;
+            const url = '/cgi-bin/online_docs/browser_list?domain_id='
+                + encodeURIComponent(cv.domainId || '300000000')
+                + '&pad_id=' + encodeURIComponent(cv.padId)
+                + '&start=0&limit=15&xsrf=' + encodeURIComponent(tok);
+            const r2 = await fetch(url, {credentials: 'include'});
+            if (!r2.ok) return null;
+            const d2 = await r2.json();
+            return {views: d2.views, readers: d2.total, pad: cv.padId};
+        }""")
+    except Exception:  # noqa: BLE001 - 接口失败继续走界面兜底
+        return {}
+    if not isinstance(info, dict):
+        return {}
+    out = {}
+    if isinstance(info.get("views"), int):
+        out["views"] = info["views"]
+    if isinstance(info.get("readers"), int):
+        out["readers"] = info["readers"]
+    return out
+
+
 def _open_share_panel(page) -> bool:
     """智能表格 / AI 文档等类型打开「分享」面板才会请求浏览统计接口。"""
     try:
@@ -333,6 +383,296 @@ def _open_share_panel(page) -> bool:
         except Exception:  # noqa: BLE001
             continue
     return False
+
+
+# 文档正文预览：不同文档类型的正文容器（取不到就回退到整页文本）
+PREVIEW_SELECTORS = {
+    "aio": ("#sc-page-content", "#sc-page-edit-content", "#grid-root"),
+    "doc": ("#workbench-content-container", "#grid-root"),
+    "slide": ("#workbench-content-container",),
+    "form": ("#workbench-content-container",),
+    "pdf": ("#workbench-content-container",),
+}
+_ZW_SPACE = "\u200b\u200c\u200d\ufeff"
+
+
+_PREVIEW_TEXT_JS = """(selector) => {
+    const box = document.querySelector(selector);
+    if (!box) return null;
+    // 代码块的行号栏不属于正文：读取时临时隐藏，避免正文里混进 1/2/3…
+    const gutters = Array.from(box.querySelectorAll(
+        '.sc-code-linenumber-wrapper, .sc-block-code-linenumber-wrapper, .sc-code-linenumber-item'));
+    const saved = gutters.map(el => el.style.display);
+    try {
+        gutters.forEach(el => { el.style.display = 'none'; });
+        return box.innerText || '';
+    } finally {
+        gutters.forEach((el, i) => { el.style.display = saved[i]; });
+    }
+}"""
+
+
+def _preview_text(page, selectors) -> str:
+    """按候选顺序取第一个存在的正文容器（容器未渲染时返回空串，外层会重试）。"""
+    for selector in selectors:
+        try:
+            text = page.evaluate(_PREVIEW_TEXT_JS, selector)
+        except Exception:  # noqa: BLE001 - 选择器/页面异常
+            continue
+        if text is not None:
+            return text or ""
+    return ""
+
+
+def _clean_preview_text(text: str) -> str:
+    """去掉零宽字符与连续空行，避免预览框里出现大片空白。"""
+    lines: list[str] = []
+    for raw in str(text or "").translate({ord(ch): None for ch in _ZW_SPACE}).splitlines():
+        line = raw.strip()
+        if not line:
+            if lines and lines[-1]:
+                lines.append("")
+            continue
+        lines.append(line)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+# ==================== AI 文档多页面预览 ====================
+# /aio/ 是「一篇文档里挂着很多子页面」的结构，左侧页面树里每个节点对应 ?p=<id>。
+# 展开整棵树后逐页点击读取，才能拿到用户真正需要的全部正文。
+
+AIO_SIDEBAR = "#sc-sidebar-section"
+AIO_TREE_NODE = f"{AIO_SIDEBAR} .sc-tree-node"
+_AIO_EXPANDED_CLASS = "css-xxkc6x"  # 展开态箭头（哈希类名，改版时靠点击前后节点数兜底判断）
+
+
+def _aio_pages(page) -> list[dict]:
+    """侧栏页面树 → [{id,title,level}]（调用前需先展开全部节点）。"""
+    try:
+        return page.evaluate("""() => Array.from(
+            document.querySelectorAll('#sc-sidebar-section .sc-tree-node')
+        ).map(e => {
+            const wrap = e.closest('[data-block-id]');
+            const title = e.querySelector('.sc-page-item-rich-title');
+            const pad = parseInt(getComputedStyle(e).paddingLeft) || 8;
+            return {
+                id: wrap ? wrap.getAttribute('data-block-id') : '',
+                title: title ? (title.innerText || '').trim() : '',
+                level: Math.max(0, Math.round((pad - 8) / 12)),
+            };
+        }).filter(x => x.id)""")
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _expand_aio_tree(page) -> tuple[int, bool]:
+    """展开左侧页面树（含多级子页面），返回 (页面节点数, 是否完整展开)。"""
+    done: set[str] = set()
+    complete = True
+    for _ in range(300):
+        nodes = page.query_selector_all(AIO_TREE_NODE)
+        target = None
+        for index, node in enumerate(nodes):
+            arrow = node.query_selector(':scope > div > [data-tid="sc-button"]')
+            if arrow is None:
+                continue
+            pid = node.evaluate(
+                "e => { const w = e.closest('[data-block-id]');"
+                " return w ? w.getAttribute('data-block-id') : ''; }")
+            key = pid or f"__anon_{index}"
+            if key in done:
+                continue
+            target = (arrow, key)
+            break
+        if target is None:
+            break
+        arrow, key = target
+        try:
+            if _AIO_EXPANDED_CLASS in (arrow.get_attribute("class") or ""):
+                done.add(key)
+                continue
+            before = len(nodes)
+            arrow.click()
+            after = before
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                page.wait_for_timeout(150)
+                after = len(page.query_selector_all(AIO_TREE_NODE))
+                if after != before:
+                    break
+            if after < before:
+                # 误点了展开态：再点一次恢复，避免把已显示的子页面收起来
+                arrow.click()
+                page.wait_for_timeout(450)
+        except Exception:  # noqa: BLE001 - 单个节点异常不影响整体展开
+            complete = False
+        done.add(key)
+    else:
+        complete = False  # 节点太多没展开完：本次不做删除判定
+
+    try:
+        fully_expanded = page.evaluate("""() => Array.from(
+            document.querySelectorAll('#sc-sidebar-section .sc-tree-node')
+        ).every(e => {
+            const arrow = e.querySelector(':scope > div > [data-tid="sc-button"]');
+            return !arrow || arrow.className.includes('css-xxkc6x');
+        })""")
+    except Exception:  # noqa: BLE001 - 类名改版时按不完整处理（宁可不删）
+        fully_expanded = False
+    return len(page.query_selector_all(AIO_TREE_NODE)), bool(complete and fully_expanded)
+
+
+def _aio_page_text(page, selectors, prev_text: str) -> str:
+    """切页后等正文渲染完：内容非空、与上一篇不同，并稳定一小段时间再取。
+
+    子页面里的代码块 / 附件 / 子页面列表是分批渲染的，看到第一段文字就返回会截断，
+    所以用「连续几次读到的内容一致」作为完成信号。
+    """
+    start = time.time()
+    last, stable_since = "", 0.0
+    while True:
+        text = _preview_text(page, selectors)
+        now = time.time()
+        elapsed = now - start
+        if text.strip() and text != prev_text:
+            if text == last:
+                if now - stable_since >= 0.4 and elapsed >= 0.85:
+                    return text
+            else:
+                last, stable_since = text, now
+        elif text.strip() and text == prev_text and elapsed >= 2.5:
+            return text  # 两篇内容完全相同（少见）：别无限等下去
+        if elapsed > 2.5 and not text.strip():
+            try:
+                if page.query_selector("#sc-page-content") is not None:
+                    return ""  # 容器已渲染但确实没有正文
+            except Exception:  # noqa: BLE001
+                pass
+        if elapsed > 10:
+            return text
+        page.wait_for_timeout(150)
+
+
+def _read_aio_pages(page, pages: list[dict], on_status) -> list[dict]:
+    """逐页点击侧栏切换，抓取每篇正文（进度通过 on_status 汇报）。"""
+    selectors = PREVIEW_SELECTORS["aio"] + ("#workbench-content-container",)
+    results: list[dict] = []
+    prev = ""
+    total = len(pages)
+    for i, item in enumerate(pages, 1):
+        title = item.get("title") or f"第 {i} 篇"
+        _emit(on_status, f"正在读取第 {i}/{total} 篇：{title}")
+        text, error = "", ""
+        try:
+            entry = page.query_selector(
+                f'#sc-sidebar-section [data-block-id="{item["id"]}"] .sc-page-item-rich-title')
+            if entry is None:
+                raise RuntimeError("侧栏中找不到该页面")
+            entry.click()
+            page.wait_for_function(
+                "pid => location.search.includes('p=' + pid)",
+                arg=item["id"], timeout=8000)
+            text = _aio_page_text(page, selectors, prev)
+            prev = text or prev
+        except Exception as exc:  # noqa: BLE001 - 单页失败继续抓其余页面
+            error = str(exc)[:120]
+        results.append({**item, "text": _clean_preview_text(text), "error": error})
+    return results
+
+
+def join_pages(pages: list[dict]) -> str:
+    """多篇正文合并成一段可滚动的文本，篇与篇之间带标题分隔。"""
+    chunks = []
+    for i, item in enumerate(pages, 1):
+        title = item.get("title") or f"第 {i} 篇"
+        body = item.get("error") or item.get("text") or "（空白页）"
+        chunks.append(f"━━━━━━━━ {i}. {title} ━━━━━━━━\n{body}")
+    return "\n\n".join(chunks)
+
+
+def _finish_preview(doc: dict, page, text: str, pages: list[dict],
+                    complete: bool) -> dict:
+    """组装预览结果，并自动存档（落库 + Markdown 快照）；存档失败不影响预览。"""
+    result = {"ok": True, "title": doc.get("name") or page.title(),
+              "url": doc.get("url") or page.url, "text": text, "pages": pages}
+    try:
+        from . import archive
+        result["save"] = archive.save_preview(doc, pages, text, complete=complete)
+    except Exception as exc:  # noqa: BLE001 - 本地存档失败不能挡住预览
+        result["save_error"] = str(exc)[:200]
+    return result
+
+
+def preview(doc: dict, on_status=None) -> dict:
+    """打开文档并提取正文（软件内只读预览；表格类请在「表格同步」里看）。"""
+    sync_playwright = _sync_api()
+    state = cfg_mod.state_path()
+    _emit(on_status, "正在打开文档……")
+    with sync_playwright() as p:
+        browser = pw_launch(p, headless=True, args=_LAUNCH_ARGS)
+        context = _new_context(browser, state if state.exists() else None)
+        try:
+            page = context.new_page()
+            page.set_default_timeout(20_000)
+            page.goto(doc["url"], wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+            # 预览不需要等完整初始化：给标题栏 15 秒，正文由下面的轮询等待
+            try:
+                page.wait_for_selector("#workbench-titlebar", timeout=15_000)
+            except Exception:  # noqa: BLE001 - 页面结构可能改版
+                pass
+            page.wait_for_timeout(1200)
+            if _is_login_required(page):
+                raise LoginRequired("登录态已失效：请到「Cookie 管理器」重新登录腾讯文档")
+
+            _emit(on_status, "正在读取正文……")
+            kind = (doc.get("kind") or "").lower()
+            selectors = PREVIEW_SELECTORS.get(kind, ()) + ("#workbench-content-container",)
+
+            # AI 文档：展开左侧页面树，逐篇抓取（只抓当前页会漏掉其余子页面）
+            tree_complete = False
+            if kind == "aio":
+                try:
+                    _emit(on_status, "正在展开文档页面列表……")
+                    _, tree_complete = _expand_aio_tree(page)
+                    pages = _aio_pages(page)
+                    if len(pages) > 1:
+                        _emit(on_status, f"发现 {len(pages)} 篇页面，正在逐篇读取……")
+                        results = _read_aio_pages(page, pages, on_status)
+                        return _finish_preview(doc, page, join_pages(results),
+                                               results, complete=tree_complete)
+                except Exception:  # noqa: BLE001 - 页面树异常时退回单篇预览
+                    tree_complete = False
+
+            text = ""
+            deadline = time.time() + 15
+            while True:
+                text = _preview_text(page, selectors)
+                if len(text.strip()) >= 80 or time.time() > deadline:
+                    break
+                page.wait_for_timeout(800)
+            if not text.strip():
+                text = _body_text(page, 200_000)
+            text = _clean_preview_text(text)
+            if not text:
+                raise RuntimeError("没有读取到文档正文，页面可能尚未加载完成或结构已改版")
+
+            page_id = "main"
+            if kind == "aio":
+                try:
+                    page_id = (parse_qs(urlparse(page.url).query).get("p") or ["main"])[0]
+                except Exception:  # noqa: BLE001
+                    page_id = "main"
+            page_item = {"id": page_id, "title": doc.get("name") or page.title(),
+                         "level": 0, "text": text, "error": ""}
+            return _finish_preview(doc, page, text, [page_item],
+                                   complete=(kind != "aio"))
+        finally:
+            try:
+                context.close()
+            finally:
+                browser.close()
 
 
 # ==================== 对外接口 ====================
@@ -378,18 +718,18 @@ def login(docs: list[dict], on_status=None, timeout: int = LOGIN_TIMEOUT) -> boo
 
 
 def collect(docs: list[dict], headless: bool = True, on_status=None,
-            debug: bool = True, sync_tables: bool = False) -> list[dict]:
-    """批量采集多个文档，共用一次浏览器会话；单文档失败不影响其它文档。
+            debug: bool = True) -> list[dict]:
+    """批量采集多个文档的浏览量 / 成员数，共用一次浏览器会话。
 
-    sync_tables=True 时，在同一会话里顺带把智能表格数据抓下来（省一次浏览器启动），
-    结果挂在每个结果的 tables 字段上，由 job 负责落库与导出。
+    只负责历史记录；智能表格数据由 tables / job.sync_tables 单独同步。
+    单文档失败不影响其它文档。
     """
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
     state = cfg_mod.state_path()
     if not session.has_login():
         raise LoginRequired(
-            "尚未登录腾讯文档：请到「Cookie 管理器」登录（或点本页「🔐 登录」）")
+            "尚未登录腾讯文档：请到「Cookie 管理器」的「腾讯文档」一行登录")
     sync_playwright = _sync_api()
 
     results: list[dict] = []
@@ -402,8 +742,6 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
                 _emit(on_status, f"（{index}/{total}）正在采集：{doc['name']}")
                 result = _collect_one(context, doc, debug)
                 results.append(result)
-                if sync_tables and (doc.get("kind") or "").lower() in tables.SYNC_KINDS:
-                    _sync_tables_one(context, doc, result, on_status)
             try:
                 # 刷新登录快照 + 同步回 Cookie 管理器（票续期后两边都更新）
                 session.save_from_context(context)
@@ -415,15 +753,6 @@ def collect(docs: list[dict], headless: bool = True, on_status=None,
             finally:
                 browser.close()
     return results
-
-
-def _sync_tables_one(context, doc: dict, result: dict, on_status=None) -> None:
-    """在既有会话里抓该文档的智能表格；失败只记录，不影响浏览量采集结果。"""
-    try:
-        _emit(on_status, f"同步表格：{doc['name']}")
-        result["tables"] = tables.collect_in_context(context, [doc], on_status)[0]
-    except Exception as exc:  # noqa: BLE001 - 表格同步失败不影响主流程
-        result["tables_error"] = str(exc)
 
 
 def _collect_one(context, doc: dict, debug: bool) -> dict:
@@ -443,7 +772,10 @@ def _collect_one(context, doc: dict, debug: bool) -> dict:
             raise LoginRequired("登录态已失效：请到「Cookie 管理器」重新登录腾讯文档")
 
         is_aio = (doc.get("kind") or "").lower() == "aio"
-        api = _wait_api(page, responses)
+        # 分享面板改版后不再主动请求浏览量；先直接查统计接口，再退回页面监听/界面兜底
+        api = {} if is_aio else _fetch_web_views(page)
+        api = _wait_api(page, responses,
+                        timeout=15 if api.get("views") is not None else 25, data=api)
         if api.get("views") is None and not is_aio:
             if _open_share_panel(page):
                 api = _wait_api(page, responses, timeout=10, data=api)
@@ -454,9 +786,12 @@ def _collect_one(context, doc: dict, debug: bool) -> dict:
             members = _read_members(page)
             source = "界面兜底"
         if views is None and not is_aio:
-            views = _read_views(page)
-            source = "界面兜底"
-        if views is None:
+            try:
+                views = _read_views(page)
+                source = "界面兜底"
+            except Exception:  # noqa: BLE001 - 浏览量缺失不应让整篇文档失败
+                source = "未读取到浏览量（按无浏览量记录）"
+        if views is None and is_aio:
             source = "接口（该文档无浏览量）"
 
         result.update(ok=True, views=views, members=members,
