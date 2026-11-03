@@ -9,6 +9,8 @@
 - 详情窗：完整信息 + 正文 + 媒体文件网格（5 列）+ 📷 导出预览图（紫色渐变拼贴）
 """
 
+import base64
+import html as html_lib
 import io
 import json
 import os
@@ -22,12 +24,13 @@ from pathlib import Path
 from PySide6.QtCore import (QMimeData, QObject, QPoint, QPointF, QRect, QSize,
                             Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
-                           QPen, QPixmap, QPolygonF)
+                           QPen, QPixmap, QPolygonF, QTextCursor)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
-    QMessageBox, QProgressDialog, QPushButton, QScrollArea, QSpinBox, QTabWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressDialog,
+    QPushButton, QScrollArea, QSpinBox, QTabWidget, QTableWidget,
+    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 from PySide6.QtWidgets import QLayout
 
@@ -262,6 +265,150 @@ class _FlowLayout(QLayout):
         return y + line_h - rect.y() + m.bottom()
 
 
+class _ContentBrowser(QTextBrowser):
+    """内容预览：支持公众号 HTML 导出里的 base64 data URI 图片。"""
+
+    def loadResource(self, rtype, url):
+        try:
+            if url.scheme() == "data":
+                header, _, payload = url.toString().partition(",")
+                if "base64" in header:
+                    img = QImage.fromData(base64.b64decode(payload))
+                    if not img.isNull():
+                        return img
+        except Exception:
+            pass
+        return super().loadResource(rtype, url)
+
+
+def _read_text_file(path: str) -> str:
+    """读文本文件（UTF-8 优先，GBK/GB18030 兜底）。"""
+    data = Path(path).read_bytes()
+    for enc in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _md_to_html(text: str, base_dir: str) -> str:
+    """公众号 MD 导出 → 可预览 HTML（标题/引用/加粗/图片）。
+
+    只覆盖本项目自己产出的 Markdown 语法，不引入第三方解析库。
+    """
+    lines = text.splitlines()
+    out, para, quote = [], [], []
+
+    def flush_para():
+        if para:
+            out.append("<p>" + "<br>".join(para) + "</p>")
+            para.clear()
+
+    def flush_quote():
+        if quote:
+            out.append("<blockquote>" + "".join(f"<p>{x}</p>" for x in quote)
+                       + "</blockquote>")
+            quote.clear()
+
+    def inline(s: str) -> str:
+        s = html_lib.escape(s)
+        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+        s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", s)
+        s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        return s
+
+    for raw in lines:
+        line = raw.strip()
+        m_img = re.match(r"^!\[([^\]]*)\]\(([^)]+)\)$", line)
+        if m_img:
+            flush_para()
+            flush_quote()
+            alt, src = m_img.group(1), m_img.group(2)
+            if not re.match(r"^(https?:|data:|file:)", src, re.I):
+                local = os.path.abspath(os.path.normpath(
+                    os.path.join(base_dir, src)))
+                src = QUrl.fromLocalFile(local).toString()
+            out.append(f'<p><img src="{html_lib.escape(src, quote=True)}" '
+                       f'alt="{html_lib.escape(alt, quote=True)}"></p>')
+            continue
+        m_h = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if m_h:
+            flush_para()
+            flush_quote()
+            level = min(len(m_h.group(1)) + 1, 6)
+            out.append(f"<h{level}>{inline(m_h.group(2))}</h{level}>")
+            continue
+        if line in ("---", "***", "___"):
+            flush_para()
+            flush_quote()
+            out.append("<hr>")
+            continue
+        if line.startswith(">"):
+            flush_para()
+            text_q = line.lstrip(">").strip()
+            if text_q:
+                quote.append(inline(text_q))
+            continue
+        if not line:
+            flush_para()
+            flush_quote()
+            continue
+        para.append(inline(line))
+    flush_para()
+    flush_quote()
+    return "".join(out)
+
+
+def _html_to_content(html_text: str):
+    """公众号 HTML 导出 → (标题, 正文 HTML)。"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html_text, "html.parser")
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    node = soup.find("div", class_="content") or soup.body or soup
+    for tag in node.find_all(["script", "style"]):
+        tag.decompose()
+    return title, node.decode_contents()
+
+
+def _docx_to_html(path: str) -> str:
+    """docx 正文提取（最小 OOXML 读取，失败返回空串）。"""
+    import zipfile
+    from xml.sax.saxutils import unescape as xml_unescape
+    try:
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    except Exception:
+        return ""
+    out = []
+    for p in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
+        texts = re.findall(r"<w:t[^>]*>(.*?)</w:t>", p, re.S)
+        line = xml_unescape("".join(texts)).strip()
+        if line:
+            out.append(f"<p>{html_lib.escape(line)}</p>")
+    return "".join(out)
+
+
+def _text_preview_html(text: str, limit: int = 200000) -> str:
+    text = text[:limit]
+    style = ("white-space:pre-wrap; font-family:Consolas,'Microsoft YaHei';"
+             " font-size:12px; color:#333;")
+    return f'<pre style="{style}">' + html_lib.escape(text) + "</pre>"
+
+
+def _files_summary_html(files: list, empty_tip: str = "（没有可预览的文档）") -> str:
+    if not files:
+        return f'<p style="color:#888;">{empty_tip}</p>'
+    rows = []
+    for f in files[:300]:
+        name = html_lib.escape(f.get("name") or "")
+        size = _fmt_size(f.get("size", 0))
+        rows.append(f"<li>{name} <span style='color:#888;'>{size}</span></li>")
+    more = "" if len(files) <= 300 else f"<p style='color:#888;'>… 其余 {len(files) - 300} 个文件</p>"
+    return ("<p style='color:#666;'>该条目没有可内嵌预览的正文，包含以下文件：</p><ul>"
+            + "".join(rows) + "</ul>" + more)
+
+
 def _classify(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext in IMAGE_EXTS:
@@ -492,15 +639,18 @@ class AssetPage(BasePage):
             "<b>「文件夹」下拉列出 download 下的分类目录</b>（公众号文章/淘宝商品/"
             "弹幕文件/歌曲文件…），选中后按<b>一次导出的产物聚合成条目</b>（文档数 + 图片数 + "
             "总大小，同一天的 csv/zip、同篇文章的 md/docx/图片合成一条，双击打开二级目录）；"
+            "<b>单击聚合条目弹出内容详情窗</b>（公众号按篇列出、直接阅读正文与配图）；"
             "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
             "媒体文件（存在哪项才显示哪项）</p>"
             "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
             "勾选后批量下载（已完整的自动跳过，大文件显示字节进度，可取消）</p>"
             "<p>· <b>删除</b>：可选删除 json/md/xlsx/_raw/媒体文件</p>"
-            "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，右键打开链接/筛选作者）</p>"
+            "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，<b>双击行查看内容详情</b>，"
+            "右键打开链接/筛选作者）</p>"
             "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频（固定<b>逐级读取全部子文件夹</b>），"
             "结果按文件夹分组，「文件夹」下拉可下钻到任一层；选定的目录会<b>记忆并锁定</b>"
             "（🔒 后路径只读，下次启动自动恢复），📌 可把下钻到的子目录直接锁定为扫描根；"
+            "<b>单击任意资源行弹出预览窗</b>（图片大图 / 视频首帧 + 播放），"
             "<b>切到本页会自动扫描</b>，不用每次手点；缩略图懒加载预览，支持扫描上限与增量索引</p>"
             "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
             "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
@@ -1022,8 +1172,12 @@ class AssetPage(BasePage):
         lay.addWidget(lbl)
 
     def _render_local_item(self, item):
-        row = QFrame()
-        row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        row = _RowWidget(lambda item=item: self._show_local_detail(item))
+        row.setCursor(Qt.PointingHandCursor)
+        row.setToolTip("单击查看预览")
+        row.setStyleSheet(
+            "_RowWidget { background: #ffffff; border-radius: 6px; }"
+            "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(6, 4, 6, 4)
         kind = item["type"]
@@ -1042,7 +1196,142 @@ class AssetPage(BasePage):
         info.setStyleSheet("font-size: 11px;")
         info.setWordWrap(True)
         h.addWidget(info, 1)
+        view_btn = QPushButton("🔍")
+        view_btn.setFixedSize(42, 32)
+        view_btn.setToolTip("查看预览（二级弹窗）")
+        view_btn.setStyleSheet(common.icon_btn_style(
+            False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
+        view_btn.clicked.connect(
+            lambda _=False, it=item: self._show_local_detail(it))
+        h.addWidget(view_btn)
         self.local_layout.addWidget(row)
+
+    def _show_local_detail(self, item):
+        """本地资源 → 二级预览弹窗（图片大图 / 视频首帧 + 文件信息）。"""
+        kind = item.get("type")
+        win = QDialog(self)
+        win.setWindowTitle(f"预览 · {(item.get('name') or '')[:40]}")
+        win.resize(920, 720)
+        win.setMinimumSize(740, 520)
+
+        outer = QVBoxLayout(win)
+        outer.setContentsMargins(10, 10, 10, 6)
+        title_lbl = QLabel(item.get("name") or "")
+        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold;")
+        title_lbl.setWordWrap(True)
+        title_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        outer.addWidget(title_lbl)
+
+        preview = QLabel("⏳ 预览加载中…")
+        preview.setAlignment(Qt.AlignCenter)
+        preview.setFixedSize(820, 440)
+        preview.setStyleSheet(
+            "background: #eef1f5; border-radius: 6px; color: #9aa1ad;"
+            " font-size: 44px;")
+        outer.addWidget(preview, 1, Qt.AlignHCenter)
+
+        icon = {"video": "🎬", "audio": "🎵"}.get(kind, "🖼")
+
+        def work():
+            if kind == "image":
+                from PIL import Image
+                img = Image.open(item["path"]).convert("RGB")
+                img.thumbnail((820, 440), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return buf.getvalue()
+            if kind == "video":
+                from toolbox.live_video import find_ffmpeg
+                exe = find_ffmpeg()
+                if not exe:
+                    return None
+                import subprocess
+                for ss in ("0.5", "0"):
+                    r = subprocess.run(
+                        [exe, "-hide_banner", "-loglevel", "error", "-ss", ss,
+                         "-i", item["path"], "-vframes", "1", "-f", "image2",
+                         "pipe:1"],
+                        capture_output=True, timeout=20)
+                    if r.returncode == 0 and len(r.stdout) > 100:
+                        return r.stdout
+                return None
+            return None
+
+        def done(data, err):
+            try:
+                if not data:
+                    preview.setText(icon)
+                    return
+                qimg = QImage.fromData(data)
+                if qimg.isNull():
+                    preview.setText(icon)
+                    return
+                preview.setText("")
+                preview.setPixmap(QPixmap.fromImage(qimg).scaled(
+                    820, 440, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            except RuntimeError:
+                pass  # 弹窗已关闭
+
+        run_bg(work, done)
+
+        info_box = QVBoxLayout()
+        info_box.setSpacing(2)
+        dur_lbl = None
+        rows = [
+            ("类型", {"image": "图片", "video": "视频", "audio": "音频"}.get(kind, kind or "-")),
+            ("大小", _fmt_size(item.get("size", 0))),
+            ("修改时间", item.get("mtime") or "-"),
+            ("所在目录", item.get("rel_dir") or "(根目录)"),
+            ("完整路径", item.get("path") or "-"),
+        ]
+        if kind == "video":
+            rows.insert(2, ("时长", "探测中…"))
+        for k, val in rows:
+            row_f = QHBoxLayout()
+            kl = QLabel(f"{k}:")
+            kl.setFixedWidth(72)
+            kl.setStyleSheet("color: #6b7280; font-size: 12px;")
+            row_f.addWidget(kl)
+            wl = QLabel(_wrappable(str(val)))
+            wl.setWordWrap(True)
+            wl.setTextFormat(Qt.PlainText)
+            wl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            wl.setMinimumSize(1, 1)
+            wl.setStyleSheet("font-size: 12px;")
+            row_f.addWidget(wl, 1)
+            if k in ("完整路径", "所在目录"):
+                self._attach_copy_menu(wl, str(val), k)
+            if k == "时长":
+                dur_lbl = wl
+            info_box.addLayout(row_f)
+        outer.addLayout(info_box)
+
+        if kind == "video" and dur_lbl is not None:
+            def probe_done(sec, err):
+                try:
+                    dur_lbl.setText(_fmt_duration_cn(sec) if sec else "-")
+                except RuntimeError:
+                    pass
+
+            run_bg(lambda: _probe_video_duration(item["path"]), probe_done)
+
+        bottom = QHBoxLayout()
+        tip = QLabel("按 ESC 关闭")
+        tip.setStyleSheet("color: #888; font-size: 11px;")
+        bottom.addWidget(tip)
+        bottom.addStretch(1)
+        open_btn = QPushButton("▶ 播放" if kind in ("video", "audio") else "📂 打开")
+        open_btn.clicked.connect(lambda: self._open_media(item["path"]))
+        bottom.addWidget(open_btn)
+        reveal_btn = QPushButton("📂 打开所在位置")
+        reveal_btn.clicked.connect(lambda: self._reveal_media(item["path"]))
+        bottom.addWidget(reveal_btn)
+        copy_btn = QPushButton("📋 复制路径")
+        copy_btn.clicked.connect(
+            lambda: QApplication.clipboard().setText(item.get("path") or ""))
+        bottom.addWidget(copy_btn)
+        outer.addLayout(bottom)
+        win.exec()
 
     def _load_local_thumb(self, path, w, h):
         """后台加载本地图片缩略图，回主线程设置 pixmap。"""
@@ -1168,6 +1457,51 @@ class AssetPage(BasePage):
 
     _MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mov", ".mp4", ".m4v"}
     _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    # 目录聚合视图的「一篇/一条」文档扩展名（公众号导出产物）
+    _ARTICLE_DOC_EXTS = {".md", ".html", ".htm", ".docx", ".doc", ".pdf"}
+    _RENDER_DOC_EXTS = {".md", ".html", ".htm", ".docx"}
+    _TEXT_PREVIEW_EXTS = {".txt", ".csv", ".json", ".log", ".srt", ".ass", ".xml"}
+
+    # 目录聚合视图：分类目录 → (聚合方式, 深度)
+    #   dir     按相对路径前 N 段目录聚合成一条（账号/文章、平台/视频）
+    #   stem    每个产物集合一条（目录 + 去附属后缀的文件主干）
+    #   stem_flat 每个产物集合一条（忽略子目录，腾讯文档报表/表格/正文合并）
+    #   danmaku 弹幕：房间号 + 日期一条（同房间同天的 csv/zip/jsonl 合并）
+    # 未登记的分类保持旧行为：按第一层目录聚合。
+    _DIR_GROUP_RULES = {
+        "公众号文章": ("dir", 2),
+        "评论区": ("dir", 2),
+        "B站资源": ("dir", 2),
+        "淘宝商品": ("dir", 1),
+        "票务演出": ("dir", 1),
+        "抖音商品": ("dir", 1),
+        "抖音指数": ("dir", 1),
+        "音乐信息": ("dir", 1),
+        "直播录制": ("stem", 0),
+        "歌曲文件": ("stem", 0),
+        "音乐账号数据": ("stem", 0),
+        "账号追踪数据": ("stem", 0),
+        "导出的图片": ("stem", 0),
+        "字幕文件": ("stem", 0),
+        "腾讯文档数据": ("stem_flat", 0),
+        "封面底图": ("stem", 0),
+        "套版封面": ("stem", 0),
+        "图片裁切": ("stem", 0),
+        "弹幕文件": ("danmaku", 0),
+        "弹幕文件B站": ("danmaku", 0),
+    }
+
+    @staticmethod
+    def _group_stem(fn: str) -> str:
+        """文件名 → 产物主干（去掉封面/弹幕/raw/live 等附属后缀）。"""
+        s = os.path.splitext(fn or "")[0]
+        while True:
+            s2 = re.sub(r"_(封面|弹幕|raw)$", "", s, flags=re.I)
+            s2 = re.sub(r"_live\d*$", "", s2, flags=re.I)
+            if s2 == s:
+                break
+            s = s2
+        return s or fn
 
     def _load_disk_items(self) -> list:
         """扫描数据 json + 实际媒体文件，按「日期+标题」合并为一个条目。
@@ -1335,28 +1669,45 @@ class AssetPage(BasePage):
 
     @staticmethod
     def _group_date(text) -> str:
-        """从标题/文件名提取 YYYYMMDD（兼容 20260923 与 2026-09-23 两种写法）。"""
+        """从标题/文件名提取 YYYYMMDD（兼容 20260923 与 2026-09-23）。
+
+        只认独立成段且月/日合法的日期：商品 ID、视频 ID 这类长数字里
+        随机出现的 20xxxxxx 不再被当成日期（否则排序和分组都会错）。
+        """
         t = text or ""
-        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", t)
-        if m:
+
+        def _ok(y, m, d):
+            return 1 <= int(m) <= 12 and 1 <= int(d) <= 31
+
+        m = re.match(r"^(20\d{2})(\d{2})(\d{2})(?!\d)", t)
+        if m and _ok(*m.groups()):
             return "".join(m.groups())
-        m = re.search(r"(20\d{2})(\d{2})(\d{2})", t)
-        if m:
+        m = re.search(r"(?<!\d)(20\d{2})-(\d{2})-(\d{2})(?!\d)", t)
+        if m and _ok(*m.groups()):
+            return "".join(m.groups())
+        m = re.search(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)", t)
+        if m and _ok(*m.groups()):
             return "".join(m.groups())
         return ""
 
     def _load_dir_groups(self, root, limit_files: int = 20000) -> list:
         """把 download 分类目录的文件按「一次导出的产物」聚合成条目（类 B站/抖音行）。
 
-        聚合规则对齐真实目录结构：
-        - 有子目录的（公众号文章 / 淘宝商品 / 票务演出 都是 <分类>/<标题目录>/…）：
-          按相对路径第一段分组，组内 图片/desc/main/sku 等子目录的文件全归这一条；
-        - 直接放在分类根下的（弹幕文件 / 导出的图片）：
-          能提取日期的按日期合并（同一天的 csv + zip 合成一条），提取不到按去扩展名主干。
+        聚合方式按分类配置（_DIR_GROUP_RULES）：
+        - dir：按相对路径前 N 段目录聚合，公众号/评论区为 2 段（账号/文章、
+          平台/视频），淘宝/票务/抖音商品/抖音指数/音乐信息为 1 段；
+        - stem：按「目录 + 文件主干」聚合，直播录制、歌曲、追踪数据、
+          导出的图片、腾讯文档数据等每个产物一条（封面/弹幕/raw/live 等
+          附属文件跟随主文件）；
+        - danmaku：弹幕按「房间号 + 日期」聚合，同房间同天的 csv/zip/jsonl
+          合并，不同房间不再混在一起。
+        未登记的分类仍按第一层目录聚合。根目录单文件不再按日期合并
+        （同一天多次独立导出会被误并成一条），只与同层同名产物目录合并。
 
         limit_files 兜底防误选超大目录把内存打满。
         """
         root = str(root)
+        cat = os.path.basename(root.rstrip("\\/"))
         files_scan, top_dirs = [], {}
         total = 0
         for dirpath, dirnames, filenames in os.walk(root):
@@ -1383,24 +1734,45 @@ class AssetPage(BasePage):
             if limit_files and total >= limit_files:
                 break
 
+        rule_kind, rule_depth = self._DIR_GROUP_RULES.get(cat, ("dir", 1))
         buckets, order = {}, []
         for rel, fn, full, st, kind in files_scan:
-            if rel:
-                key = rel.split("/")[0]
-            else:
-                # 根目录下的单文件（.docx/.html/.pdf）若与同层产物目录同名，
-                # 归到那条目录组里 —— 公众号一篇文章的 md/图片 在目录内、
-                # docx/html/pdf 在根下同名前缀，不合并就会拆成两条
+            title = ""
+            group_root = root
+            if rule_kind in ("stem", "stem_flat"):
+                stem = self._group_stem(fn)
+                # stem_flat：忽略子目录合并（腾讯文档的报表/表格/正文同名同文档）
+                key = f"{rel}/{stem}" if rel and rule_kind == "stem" else stem
+                title = stem
+                group_root = os.path.dirname(full)
+            elif rule_kind == "danmaku":
                 stem = os.path.splitext(fn)[0]
-                key = top_dirs.get(stem.lower()) or self._group_date(stem) or stem
+                date = self._group_date(stem) or self._group_date(rel)
+                room = re.search(r"\d{6,}", stem)
+                key = f"{room.group(0)}_{date}" if room and date else stem
+                title = key
+                group_root = os.path.dirname(full)
+            elif rel:
+                parts = rel.split("/")
+                take = min(rule_depth, len(parts))
+                key = "/".join(parts[:take])
+                title = parts[take - 1]
+                group_root = os.path.join(root, key)
+            else:
+                # 根目录下的单文件：与同层产物目录同名才合并（旧版公众号把
+                # docx/html/pdf 放分类根、md/图片在目录内），否则各自成条
+                stem = os.path.splitext(fn)[0]
+                key = top_dirs.get(stem.lower()) or stem
+                title = key
+                group_root = os.path.join(root, key)
             g = buckets.get(key)
             if g is None:
                 g = buckets[key] = {
-                    "title": key, "files": [], "dirs": set(),
+                    "title": title or key, "files": [], "dirs": set(),
                     "n_img": 0, "n_vid": 0, "n_aud": 0, "n_doc": 0,
                     "size": 0, "mtime": "",
-                    "cover": "", "root_dir": os.path.join(root, key),
-                    "date": self._group_date(key),
+                    "cover": "", "root_dir": group_root,
+                    "date": self._group_date(title or key),
                 }
                 order.append(key)
             g["files"].append({
@@ -1429,6 +1801,12 @@ class AssetPage(BasePage):
                 g["root_dir"] = root      # 没有同名目录 → 打开分类根
             if not g["date"]:
                 g["date"] = self._group_date(os.path.basename(str(g["root_dir"])))
+            if not g["date"]:
+                # 账号目录没有日期前缀：从组内文件名取最新日期（公众号新归档结构）
+                dates = [self._group_date(f.get("name") or "") for f in g["files"]]
+                dates = [d for d in dates if d]
+                if dates:
+                    g["date"] = max(dates)
         # 日期倒序（无日期回退最后修改时间），与条目视图的「时间倒序」口径一致
         groups.sort(key=lambda g: (g["date"] or "", g["mtime"]), reverse=True)
         return groups
@@ -1773,7 +2151,9 @@ class AssetPage(BasePage):
         # 「播放0赞0」的独立行（抖音/快手/小红书/微博通病；长标题因[:20]截断侥幸同组）
         while rest and rest[-1] == "封面":
             rest = rest[:-1]
-        return date_part, author, "_".join(rest)
+        # 同目录同名产物独占后缀（toolbox.utils.claim_output_stem 的 ~xxxxxx）
+        title = re.sub(r"~[0-9a-f]{6}\d*$", "", "_".join(rest))
+        return date_part, author, title
 
     @staticmethod
     def _media_platform(mfs):
@@ -2058,9 +2438,10 @@ class AssetPage(BasePage):
         """
         files = g.get("files") or []
         root_dir = g.get("root_dir") or ""
-        row = _RowWidget(lambda: None,
+        row = _RowWidget(lambda g=g: self._show_group_detail(g),
                          lambda pos, g=g: self._group_menu(g, pos),
                          on_double=lambda g=g: self._open_group(g))
+        row.setCursor(Qt.PointingHandCursor)
         row.setStyleSheet(
             "_RowWidget { background: #ffffff; border-radius: 6px; }"
             "QLabel { background: transparent; }")
@@ -2111,8 +2492,16 @@ class AssetPage(BasePage):
         txt.setStyleSheet("font-size: 11px;")
         txt.setWordWrap(True)
         txt.setToolTip(f"{title}\n\n共 {len(files)} 个文件 · {_fmt_size(g.get('size', 0))}"
-                       f"\n{root_dir}")
+                       f"\n{root_dir}\n\n单击查看内容 · 双击缩略图打开目录")
         h.addWidget(txt, 1)
+
+        detail_btn = QPushButton("📄")
+        detail_btn.setFixedSize(42, 32)
+        detail_btn.setToolTip("查看内容（二级弹窗）")
+        detail_btn.setStyleSheet(common.icon_btn_style(
+            False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
+        detail_btn.clicked.connect(lambda _=False, g=g: self._show_group_detail(g))
+        h.addWidget(detail_btn)
 
         open_btn = QPushButton("📂")
         open_btn.setFixedSize(42, 32)
@@ -2147,6 +2536,8 @@ class AssetPage(BasePage):
         m = QMenu(self)
         root_dir = g.get("root_dir") or ""
         files = g.get("files") or []
+        m.addAction("📄 查看内容（二级弹窗）", lambda: self._show_group_detail(g))
+        m.addSeparator()
         if root_dir and os.path.isdir(root_dir):
             m.addAction("📂 打开目录", lambda: self._open_media(root_dir))
             m.addAction("📋 复制目录路径", lambda: QApplication.clipboard().setText(root_dir))
@@ -2158,6 +2549,302 @@ class AssetPage(BasePage):
         m.addAction(f"ℹ️ 共 {len(g.get('files') or [])} 个文件 · {_fmt_size(g.get('size', 0))}",
                     lambda: None).setEnabled(False)
         m.exec(global_pos)
+
+    # ==================== 目录聚合条目·内容二级弹窗 ====================
+
+    def _group_articles(self, g) -> list:
+        """聚合目录里的文件 → 文章/条目列表（公众号按篇，其他目录按产物）。
+
+        新导出结构：公众号名/日期_公众号_标题/ 一篇文章一个目录，
+        html/docx/pdf/md 与 图片/ 都在目录内；旧的单层账号目录
+        （账号/日期_账号_标题.{html,docx,pdf} + 同名前缀 MD 目录）仍按主干拆篇。
+        只有纯媒体子目录（图片/desc/main/sku）且没有正文文档时，整条退回单条「附件」视图。
+        """
+        files = g.get("files") or []
+        root_dir = g.get("root_dir") or ""
+
+        def rel_of(f):
+            path = f.get("path") or ""
+            if root_dir and path:
+                try:
+                    rel = os.path.relpath(os.path.dirname(path), root_dir)
+                    if not rel.startswith(".."):
+                        return "" if rel == "." else rel.replace(os.sep, "/")
+                except ValueError:
+                    pass
+            return (f.get("rel_dir") or "").strip()
+
+        # 第一遍：确定「文章」键——根目录文档主干 + 含文档的子目录名
+        root_stems, candidates, ordered = {}, set(), []
+        for f in files:
+            rel = rel_of(f)
+            ext = os.path.splitext(f.get("name") or "")[1].lower()
+            if rel:
+                first = rel.split("/")[0]
+                if ext in self._ARTICLE_DOC_EXTS and first not in candidates:
+                    candidates.add(first)
+                    ordered.append(first)
+            elif ext in self._ARTICLE_DOC_EXTS:
+                stem = os.path.splitext(f.get("name") or "")[0]
+                key = stem.lower()
+                if key not in root_stems:
+                    root_stems[key] = stem
+                    ordered.append(stem)
+        known = [root_stems[k] for k in root_stems] + [
+            c for c in candidates
+            if c.lower() not in root_stems]
+        known_low = {k.lower() for k in known}
+
+        arts, order = {}, []
+
+        def add(key):
+            ent = arts.get(key)
+            if ent is None:
+                ent = arts[key] = {"key": key, "files": [], "docs": []}
+                order.append(key)
+            return ent
+
+        # 第二遍：归属文件（子目录名与根文档同名 → 同一篇；纯媒体目录归入唯一文章）
+        for f in files:
+            rel = rel_of(f)
+            name = f.get("name") or ""
+            ext = os.path.splitext(name)[1].lower()
+            if not rel:
+                if ext not in self._ARTICLE_DOC_EXTS:
+                    continue
+                key = root_stems.get(os.path.splitext(name)[0].lower())
+                if not key:
+                    continue
+            else:
+                first = rel.split("/")[0]
+                if first.lower() in root_stems:
+                    key = root_stems[first.lower()]
+                elif first in candidates:
+                    key = first
+                elif len(known_low) == 1:
+                    key = known[0]  # 唯一文章的配图/子目录
+                else:
+                    continue
+            ent = add(key)
+            ent["files"].append(f)
+            if ext in self._RENDER_DOC_EXTS:
+                ent["docs"].append(f)
+
+        if not order:
+            ent = add(g.get("title") or "files")
+            ent["files"] = list(files)
+            ent["docs"] = [f for f in files
+                           if os.path.splitext(f.get("name") or "")[1].lower()
+                           in self._TEXT_PREVIEW_EXTS]
+        return [arts[k] for k in order]
+
+    @staticmethod
+    def _pretty_article_title(key: str, prefix: str = "") -> str:
+        """文件名主干 → 列表显示标题（去掉日期前缀/公众号名前缀）。"""
+        t = key or ""
+        m = re.match(r"^\d{8}[_\- ]+(.+)$", t)
+        if m:
+            t = m.group(1)
+        if prefix and t.startswith(prefix + "_"):
+            t = t[len(prefix) + 1:]
+        return (t or key).replace("_", " ") or key
+
+    def _article_content(self, art):
+        """一篇内容 → (标题, HTML)，在后台线程执行。"""
+        docs = sorted(art.get("docs") or [],
+                      key=lambda f: {".md": 0, ".html": 1, ".htm": 1,
+                                     ".docx": 2}.get(
+                          os.path.splitext(f.get("name") or "")[1].lower(), 9))
+        if not docs:
+            pdfs = [f for f in art.get("files") or []
+                    if os.path.splitext(f.get("name") or "")[1].lower() == ".pdf"]
+            if pdfs:
+                names = "、".join(html_lib.escape(f["name"]) for f in pdfs[:3])
+                return "", (f"<p>该篇只有 PDF 文件：{names}</p>"
+                            "<p style='color:#888;'>点底部「打开首个文件」用系统阅读器查看。</p>")
+            return "", _files_summary_html(art.get("files") or [])
+        doc = docs[0]
+        path = doc.get("path") or ""
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == ".md":
+                text = _read_text_file(path)
+                title = next((ln[2:].strip() for ln in text.splitlines()
+                              if ln.startswith("# ")), "")
+                body = _md_to_html(text, os.path.dirname(path))
+            elif ext in (".html", ".htm"):
+                title, body = _html_to_content(_read_text_file(path))
+                if title:
+                    body = f"<h2>{html_lib.escape(title)}</h2>" + body
+            elif ext == ".docx":
+                title, body = "", _docx_to_html(path)
+            else:
+                title, body = "", _text_preview_html(_read_text_file(path))
+        except Exception as e:
+            return "", f"<p style='color:#c62828;'>读取失败：{html_lib.escape(str(e))}</p>"
+        wrapper = ('<div style="font-family:\'Microsoft YaHei\',sans-serif;'
+                   'font-size:15px; line-height:1.75; color:#333;">'
+                   + body + "</div>")
+        return title, wrapper
+
+    def _show_group_detail(self, g):
+        """目录聚合条目 → 二级内容弹窗（公众号可直接阅读正文）。"""
+        files = g.get("files") or []
+        if not files:
+            self.app.toast("该条目没有文件", "warning")
+            return
+        win = QDialog(self)
+        win.setWindowTitle(f"详情 · {(g.get('title') or '')[:30]}")
+        win.resize(1120, 760)
+        win.setMinimumSize(720, 480)
+
+        outer = QVBoxLayout(win)
+        outer.setContentsMargins(10, 10, 10, 6)
+        title_lbl = QLabel(g.get("title") or "(未命名)")
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title_lbl.setWordWrap(True)
+        outer.addWidget(title_lbl)
+        articles = self._group_articles(g)
+        meta = QLabel(
+            f"📅 {g.get('date') or '-'} · {_fmt_size(g.get('size', 0))}"
+            f" · {len(articles)} 篇 / {len(files)} 个文件"
+            f" · 📄{g.get('n_doc', 0)} 🖼{g.get('n_img', 0)} 🎬{g.get('n_vid', 0)}")
+        meta.setStyleSheet("color: #6b7280; font-size: 12px;")
+        outer.addWidget(meta)
+        root_lbl = QLabel(_wrappable(g.get("root_dir") or ""))
+        root_lbl.setStyleSheet("color: #9aa1ad; font-size: 11px;")
+        root_lbl.setWordWrap(True)
+        outer.addWidget(root_lbl)
+
+        body = QHBoxLayout()
+        art_list = None
+        if len(articles) > 1:
+            art_list = QListWidget()
+            art_list.setFixedWidth(260)
+            art_list.setStyleSheet("QListWidget { font-size: 12px; }")
+            for art in articles:
+                it = QListWidgetItem(
+                    self._pretty_article_title(art["key"], g.get("title")))
+                it.setToolTip(art["key"])
+                art_list.addItem(it)
+            body.addWidget(art_list)
+
+        tabs = QTabWidget()
+        content = _ContentBrowser()
+        content.setOpenExternalLinks(True)
+        content.setStyleSheet(
+            "QTextBrowser { background: #ffffff; border: 1px solid #e5e7eb;"
+            " color: #222; }")
+        content.document().setDefaultStyleSheet(
+            "body { font-family:'Microsoft YaHei'; font-size:15px; color:#333; }"
+            "blockquote { color:#666; } code { background:#f3f4f6; }")
+        tabs.addTab(content, "📄 内容")
+
+        media_files = [f for f in files
+                       if f.get("type") in ("image", "video", "audio")]
+        if media_files:
+            mscroll = QScrollArea()
+            mscroll.setWidgetResizable(True)
+            mbody = QWidget()
+            flow = _FlowLayout(mbody, spacing=4)
+            for mf in media_files[:150]:
+                if mf.get("type") == "audio":
+                    cell = QLabel("🎵")
+                    cell.setFixedSize(128, 128)
+                    cell.setAlignment(Qt.AlignCenter)
+                    cell.setStyleSheet(
+                        "background: #eef1f5; border-radius: 4px; font-size: 36px;")
+                    cell.setToolTip(mf["path"])
+                else:
+                    cell = self._load_local_thumb_cell(
+                        mf["path"], 128, is_video=mf.get("type") == "video")
+                flow.addWidget(cell)
+            if len(media_files) > 150:
+                more_lbl = QLabel(f"… 其余 {len(media_files) - 150} 个见「文件」页")
+                more_lbl.setStyleSheet("color: #888; padding: 8px;")
+                flow.addWidget(more_lbl)
+            mscroll.setWidget(mbody)
+            tabs.addTab(mscroll, f"🖼 媒体（{len(media_files)}）")
+
+        fw = QTableWidget(len(files), 4)
+        fw.setHorizontalHeaderLabels(["名称", "类型", "大小", "所在目录"])
+        fw.verticalHeader().setVisible(False)
+        fw.setEditTriggers(QTableWidget.NoEditTriggers)
+        fw.setSelectionBehavior(QAbstractItemView.SelectRows)
+        fw.setSelectionMode(QAbstractItemView.SingleSelection)
+        hdr = fw.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col, w in ((1, 60), (2, 90)):
+            fw.setColumnWidth(col, w)
+        type_cn = {"image": "图片", "video": "视频", "audio": "音频"}
+        for r, f in enumerate(files):
+            rel_dir = f.get("rel_dir") or "(根目录)"
+            for c, text in enumerate((f.get("name") or "",
+                                      type_cn.get(f.get("type"), "文档"),
+                                      _fmt_size(f.get("size", 0)), rel_dir)):
+                it = QTableWidgetItem(str(text))
+                it.setToolTip(f.get("path") or "")
+                fw.setItem(r, c, it)
+        fw.doubleClicked.connect(
+            lambda idx, fl=files: self._open_media(fl[idx.row()]["path"]))
+        tabs.addTab(fw, f"📁 文件（{len(files)}）")
+        body.addWidget(tabs, 1)
+        outer.addLayout(body, 1)
+
+        bottom = QHBoxLayout()
+        tip = QLabel("单击左侧文章切换内容 · 按 ESC 关闭")
+        tip.setStyleSheet("color: #888; font-size: 11px;")
+        bottom.addWidget(tip)
+        bottom.addStretch(1)
+        root_dir = g.get("root_dir") or ""
+        open_dir_btn = QPushButton("📂 打开目录")
+        open_dir_btn.clicked.connect(
+            lambda: self._open_media(root_dir if os.path.isdir(root_dir)
+                                     else os.path.dirname(files[0]["path"])))
+        bottom.addWidget(open_dir_btn)
+        open_first_btn = QPushButton("📄 打开首个文件")
+        open_first_btn.clicked.connect(lambda: self._open_media(files[0]["path"]))
+        bottom.addWidget(open_first_btn)
+        copy_btn = QPushButton("📋 复制路径")
+        copy_btn.clicked.connect(
+            lambda: QApplication.clipboard().setText(root_dir or files[0]["path"]))
+        bottom.addWidget(copy_btn)
+        outer.addLayout(bottom)
+
+        seq = {"n": 0}
+
+        def show_article(art):
+            seq["n"] += 1
+            token = seq["n"]
+            content.setHtml('<p style="color:#888;">正在读取内容…</p>')
+
+            def work():
+                return self._article_content(art)
+
+            def done(result, err):
+                if seq["n"] != token:
+                    return  # 已切换文章，旧结果作废
+                try:
+                    if err:
+                        content.setHtml(
+                            f'<p style="color:#c62828;">读取失败：{html_lib.escape(err)}</p>')
+                        return
+                    _title, html = result
+                    content.setHtml(html or "<p style='color:#888;'>（没有可预览的内容）</p>")
+                    content.moveCursor(QTextCursor.Start)
+                except RuntimeError:
+                    pass  # 弹窗已关闭
+
+            run_bg(work, done)
+
+        if art_list is not None:
+            art_list.currentRowChanged.connect(
+                lambda r: show_article(articles[r])
+                if 0 <= r < len(articles) else None)
+            art_list.setCurrentRow(0)
+        else:
+            show_article(articles[0])
+        win.exec()
 
     def _set_batch_enabled(self, enabled: bool):
         """文件清单视图下，批量勾选/下载（面向 JSON 条目）无意义 → 置灰。"""
@@ -3131,6 +3818,7 @@ class AssetPage(BasePage):
                     from media_downloader import (_sanitize_filename, _PLATFORM_CN,
                                                   MEDIA_DIR_SUFFIX, _url_path,
                                                   _download_one)
+                    from toolbox.utils import claim_output_stem
                     author = _sanitize_filename(info.author or "未知")
                     date_str = re.sub(r'[^0-9]', '', (info.publish_time or "")[:10]) \
                         or time.strftime("%Y%m%d")
@@ -3139,6 +3827,8 @@ class AssetPage(BasePage):
                     user_dir = os.path.join(base_dir, plat_cn + MEDIA_DIR_SUFFIX, author)
                     stem = (f"{date_str}_{author}_{title}" if title
                             else f"{date_str}_{author}_{(info.video_id or '')[:8]}")
+                    # 与 download_media 用同一套同名独占规则，避免封面写到别的帖
+                    stem = claim_output_stem(user_dir, stem, str(info.video_id or ""))
                     if cov.startswith("//"):
                         cov = "https:" + cov
                     cov_ext = os.path.splitext(_url_path(cov))[1].lower()
@@ -3707,6 +4397,8 @@ class AssetPage(BasePage):
         self.db_sel_inv_btn.clicked.connect(self._db_invert_checks)
         self.db_sel_clr_btn = QPushButton("✖ 清除")
         self.db_sel_clr_btn.clicked.connect(lambda: self._db_set_all_checks(False))
+        self.db_detail_btn = QPushButton("📄 查看详情")
+        self.db_detail_btn.clicked.connect(self._db_show_selected_detail)
         self.db_exp_btn = QPushButton("📤 导出选中")
         self.db_exp_btn.clicked.connect(self._db_export_checked)
         self.db_del_btn = QPushButton("🗑 删除选中")
@@ -3716,7 +4408,7 @@ class AssetPage(BasePage):
         self.db_check_lbl = QLabel("已勾选 0 条")
         self.db_check_lbl.setStyleSheet("color: #888;")
         for w in (self.db_sel_all_btn, self.db_sel_inv_btn, self.db_sel_clr_btn,
-                  self.db_exp_btn, self.db_del_btn):
+                  self.db_detail_btn, self.db_exp_btn, self.db_del_btn):
             selbar.addWidget(w)
         selbar.addStretch(1)
         selbar.addWidget(self.db_check_lbl)
@@ -3730,7 +4422,7 @@ class AssetPage(BasePage):
         self.db_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.db_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.db_table.customContextMenuRequested.connect(self._db_context_menu)
-        self.db_table.doubleClicked.connect(self._db_open_link)
+        self.db_table.doubleClicked.connect(self._db_show_detail_by_index)
         self.db_table.cellClicked.connect(self._db_on_cell_clicked)
         self.db_table.itemChanged.connect(self._on_db_item_changed)
         hdr = self.db_table.horizontalHeader()
@@ -3845,7 +4537,7 @@ class AssetPage(BasePage):
             label = plat if not author else f"{plat} · 作者「{author}」"
             self.db_page_lbl.setText(
                 f"{label} · 共 {total} 条 · 第 {self._db_page}/{pages} 页 · "
-                f"点击作者筛选，双击打开链接，右键更多")
+                f"点击作者筛选，双击查看详情，右键更多")
 
         run_bg(work, done)
 
@@ -4034,6 +4726,13 @@ class AssetPage(BasePage):
         rows = sorted({i.row() for i in self.db_table.selectedIndexes()})
         return [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
 
+    def _db_show_selected_detail(self):
+        rows = self._db_selected_row()
+        if not rows:
+            self.app.toast("请先选中一行（点击表格行）", "warning")
+            return
+        self._show_db_detail(rows[0])
+
     def _db_link(self, row) -> str:
         """db 行的展示用链接：抖音旧数据「链接」列是时效 CDN 直链，规范化为作品页。"""
         return _norm_dy_source_link(self._db_platform(),
@@ -4046,11 +4745,129 @@ class AssetPage(BasePage):
             if link:
                 QDesktopServices.openUrl(QUrl(link))
 
+    def _db_show_detail_by_index(self, index):
+        """双击表格行 → 内容详情二级弹窗（作者列双击仍是快速筛选）。"""
+        if index.column() == 4:
+            return
+        if 0 <= index.row() < len(self._db_rows):
+            self._show_db_detail(self._db_rows[index.row()])
+
+    def _show_db_detail(self, row):
+        """数据库行 → 完整内容弹窗（封面/统计/正文/标签/链接）。"""
+        plat = self._db_platform()
+        kind_cn = {"dynamic": "动态", "image": "图文"}.get(row[2], "视频")
+        win = QDialog(self)
+        win.setWindowTitle(f"详情 · {(row[4] or '')[:30]}")
+        win.resize(980, 740)
+        win.setMinimumSize(640, 420)
+
+        outer = QVBoxLayout(win)
+        outer.setContentsMargins(10, 10, 10, 6)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(4)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+
+        title_lbl = QLabel(row[4] or "(无标题)")
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title_lbl.setWordWrap(True)
+        title_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(title_lbl)
+        self._attach_copy_menu(title_lbl, row[4] or "", "标题")
+        self._add_detail_cover(v, {"cover_url": row[16] or "", "media_files": []})
+
+        link = self._db_link(row)
+        dur = _fmt_duration_cn(_parse_duration_text(row[14]))
+        info_lines = [
+            ("平台", plat or "-", "", None, False),
+            ("类型", kind_cn, "", None, False),
+            ("作者", "@" + (row[5] or "-"), row[5] or "", "发布者", False),
+            ("获取时间", row[1] or "-", row[1] or "", "获取时间", True),
+            ("发布时间", row[6] or "-", row[6] or "", "发布时间", True),
+        ]
+        if dur:
+            info_lines.append(("时长", dur, dur, "时长", False))
+        info_lines.extend([
+            ("播放/阅览", _fmt(row[7] or 0), str(row[7] or 0), "播放/阅览", False),
+            ("点赞", _fmt(row[8] or 0), str(row[8] or 0), "点赞", False),
+            ("评论", _fmt(row[9] or 0), str(row[9] or 0), "评论", False),
+            ("分享", _fmt(row[10] or 0), str(row[10] or 0), "分享", False),
+            ("收藏", _fmt(row[11] or 0), str(row[11] or 0), "收藏", False),
+            ("弹幕", _fmt(row[12] or 0), str(row[12] or 0), "弹幕", False),
+            ("投币", _fmt(row[13] or 0), str(row[13] or 0), "投币", False),
+            ("标签", row[18] or "-", row[18] or "", "标签", False),
+            ("分类", row[19] or "-", row[19] or "", "分类", False),
+            ("音乐", row[20] or "-", row[20] or "", "音乐", False),
+            ("链接", link or "-", link or "", "链接", False),
+        ])
+        for k, val, raw, copy_title, is_time in info_lines:
+            row_f = QHBoxLayout()
+            kl = QLabel(f"{k}:")
+            kl.setFixedWidth(84)
+            kl.setStyleSheet("color: #6b7280; font-size: 12px;")
+            row_f.addWidget(kl)
+            wl = QLabel(_wrappable(str(val)))
+            wl.setWordWrap(True)
+            wl.setTextFormat(Qt.PlainText)
+            wl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            wl.setMinimumSize(1, 1)
+            wl.setStyleSheet("font-size: 12px;")
+            row_f.addWidget(wl, 1)
+            if copy_title:
+                self._attach_copy_menu(wl, raw, copy_title, is_time)
+            v.addLayout(row_f)
+
+        desc = row[15] or ""
+        dh = QLabel("正文")
+        dh.setStyleSheet("color: #6b7280; font-weight: bold;")
+        v.addWidget(dh)
+        desc_view = _ContentBrowser()
+        desc_view.setFixedHeight(260)
+        desc_view.setOpenExternalLinks(True)
+        desc_view.setStyleSheet(
+            "QTextBrowser { background: #ffffff; border: 1px solid #e5e7eb;"
+            " color: #222; }")
+        if desc:
+            desc_view.setHtml(
+                "<div style='font-size:13px; line-height:1.7; color:#333;'>"
+                + html_lib.escape(desc).replace("\n", "<br>") + "</div>")
+        else:
+            desc_view.setHtml("<p style='color:#888;'>（无正文）</p>")
+        v.addWidget(desc_view)
+        v.addStretch(1)
+
+        bottom = QHBoxLayout()
+        tip = QLabel("按 ESC 关闭")
+        tip.setStyleSheet("color: #888; font-size: 11px;")
+        bottom.addWidget(tip)
+        bottom.addStretch(1)
+        open_btn = QPushButton("🌐 打开链接")
+        open_btn.setEnabled(bool(link))
+        open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(link)))
+        bottom.addWidget(open_btn)
+        copy_title_btn = QPushButton("📋 复制标题")
+        copy_title_btn.clicked.connect(
+            lambda: QApplication.clipboard().setText(row[4] or ""))
+        bottom.addWidget(copy_title_btn)
+        copy_desc_btn = QPushButton("📋 复制正文")
+        copy_desc_btn.setEnabled(bool(desc))
+        copy_desc_btn.clicked.connect(
+            lambda: QApplication.clipboard().setText(desc))
+        bottom.addWidget(copy_desc_btn)
+        outer.addLayout(bottom)
+        win.exec()
+
     def _db_context_menu(self, pos):
         sel = self._db_selected_row()
         if not sel:
             return
         menu = QMenu(self)
+        act_detail = menu.addAction("📄 查看内容详情")
+        menu.addSeparator()
         act_open = menu.addAction("🌐 打开链接")
         act_copy = menu.addAction("📋 复制链接")
         menu.addSeparator()
@@ -4062,7 +4879,9 @@ class AssetPage(BasePage):
         menu.addSeparator()
         act_del = menu.addAction(f"🗑 删除选中（{len(sel)} 条）")
         act = menu.exec(self.db_table.viewport().mapToGlobal(pos))
-        if act == act_open:
+        if act == act_detail:
+            self._show_db_detail(sel[0])
+        elif act == act_open:
             for row in sel:
                 link = self._db_link(row)
                 if link:

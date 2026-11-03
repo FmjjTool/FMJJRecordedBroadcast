@@ -258,7 +258,8 @@ def collect_account(account):
 # ==================== xlsx 长期缓存 ====================
 
 def _xlsx_path(name):
-    safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+    from toolbox.utils import sanitize_filename
+    safe = sanitize_filename(str(name or ""), 120, "账号", collapse_ws=False)
     try:
         from toolbox.config_manager import get_export_subdir
         data_dir = get_export_subdir("tracker")

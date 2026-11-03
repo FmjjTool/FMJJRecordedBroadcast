@@ -14,7 +14,7 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
   download/腾讯文档数据/tcdoc.db      SQLite 历史存档（浏览量 / 成员数）
   download/腾讯文档数据/tables.db     SQLite 智能表格数据（逐表逐行 + 变更记录）
   download/腾讯文档数据/pages.db      SQLite 正文存档（AI 文档逐页正文 + 变更记录）
-  download/腾讯文档数据/报表/*.xlsx   每个文档一份浏览量报表
+  download/腾讯文档数据/报表/*.xlsx   每个文档一份浏览量报表（文档名_key短哈希）
   download/腾讯文档数据/表格数据/*.xlsx  每个文档一份表格数据（每表一个 sheet）
   download/腾讯文档数据/正文存档/*.md    每个文档一份自动更新的正文快照
   download/腾讯文档数据/日志/         采集日志
@@ -24,6 +24,7 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -155,9 +156,18 @@ def kind_label(kind: str) -> str:
 # ==================== 路径 ====================
 
 def safe_name(name: str, fallback: str = "文档") -> str:
-    """文件名安全化（报表文件用文档名）。"""
-    cleaned = re.sub(r'[\\/:*?"<>|]', "_", str(name or "")).strip()
-    return cleaned[:80] or fallback
+    """文件名安全化（统一走 toolbox.utils.sanitize_filename）。"""
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(name or ""), 80, fallback)
+
+
+def doc_stem(doc: dict) -> str:
+    """文档文件名主干：文档名 + key 短哈希，同名文档各占一份互不覆盖。"""
+    name = safe_name(doc.get("name"), doc.get("key") or "文档")
+    key = str(doc.get("key") or "")
+    if not key:
+        return name
+    return f"{name}_{hashlib.md5(key.encode('utf-8')).hexdigest()[:6]}"
 
 
 def data_dir() -> Path:
@@ -215,13 +225,13 @@ def state_path() -> Path:
 
 
 def report_file(doc: dict) -> Path:
-    """每个文档一份独立报表，文件名为文档名。"""
-    return reports_dir() / f"{safe_name(doc.get('name'), doc.get('key') or '文档')}.xlsx"
+    """每个文档一份独立报表，文件名为文档名 + key 短哈希。"""
+    return reports_dir() / f"{doc_stem(doc)}.xlsx"
 
 
 def table_file(doc: dict) -> Path:
     """表格数据导出文件（每张工作表一个 sheet）。"""
-    return tables_dir() / f"{safe_name(doc.get('name'), doc.get('key') or '文档')}.xlsx"
+    return tables_dir() / f"{doc_stem(doc)}.xlsx"
 
 
 def find_legacy_dir() -> Path | None:

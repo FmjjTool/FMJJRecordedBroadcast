@@ -1344,9 +1344,9 @@ def _download_images(urls: list, folder: Path, prefix: str, log=None,
 
 
 def _safe_folder_name(s: str, maxlen: int = 40) -> str:
-    """商品标题 → 合法目录名（去 Windows 非法字符，截断长度）。"""
-    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "", str(s or "")).strip(" ._")
-    return s[:maxlen] or "未命名"
+    """商品标题 → 合法目录名（统一走 toolbox.utils.sanitize_filename）。"""
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(s or ""), maxlen, "未命名", collapse_ws=False)
 
 
 def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
@@ -1358,6 +1358,7 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder_name = f"{_safe_folder_name(detail.title)}_{detail.item_id}_{ts}"
     base = Path(base_dir) / folder_name
+    base.mkdir(parents=True, exist_ok=True)
     if log:
         log(f"下载图片到 {base} ...")
     detail.local_main = _download_images(detail.main_images, base / "main",
@@ -1371,8 +1372,8 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
                                         log=log, threads=threads)
     detail.local_desc = _download_images(detail.desc_images, base / "desc",
                                          "详情", log=log, threads=threads)
-    if detail.local_main or detail.local_sku or detail.local_desc:
-        detail.image_dir = str(base)
+    # 图片全失败也保留商品目录：Excel 固定落在同一目录，不再散到分类根
+    detail.image_dir = str(base)
     if log:
         log(f"图片下载完成：主图 {len(detail.local_main)} / 规格 "
             f"{len(detail.local_sku)} / 详情 {len(detail.local_desc)}")
@@ -1400,6 +1401,7 @@ def export_item_xlsx(detail: TaobaoItemDetail, path: str) -> str:
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
     head_fill = PatternFill("solid", fgColor="FFF1E6")
     head_font = Font(bold=True)

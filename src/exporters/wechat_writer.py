@@ -20,6 +20,12 @@ MIME = {"jpeg": "image/jpeg", "jpg": "image/jpeg", "png": "image/png", "gif": "i
 
 # ==================== 公共 ====================
 
+def build_account_dir(art) -> str:
+    """公众号名 → 该账号的导出子文件夹名（同一公众号的文章统一归档）。"""
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(art.account or "未识别公众号", 48, "未识别公众号")
+
+
 def build_stem(art) -> str:
     from toolbox.utils import sanitize_filename
     digits = re.sub(r"\D", "", (art.publish_time or "")[:10])[:8]
@@ -29,6 +35,11 @@ def build_stem(art) -> str:
     acct = sanitize_filename(art.account or "公众号", 24)
     title = sanitize_filename(art.title, 48)
     return f"{digits}_{acct}_{title}"
+
+
+def build_article_dir(art) -> str:
+    """公众号名/文章名 → 该文章的导出文件夹（所有格式统一存放，图片在 图片/）。"""
+    return str(Path(build_account_dir(art)) / build_stem(art))
 
 
 def _meta_lines(art) -> str:
@@ -124,10 +135,10 @@ def render_pdf(html: str, out_path: str) -> str:
 
 # ==================== Markdown（图片文本） ====================
 
-def export_markdown(art, out_dir: str) -> str:
-    """导出 Markdown + 图片文件夹：out_dir/{stem}/{stem}.md + out_dir/{stem}/图片/N.ext"""
+def export_markdown(art, folder: str) -> str:
+    """导出 Markdown + 图片文件夹到文章目录：folder/{stem}.md + folder/图片/N.ext"""
     stem = build_stem(art)
-    folder = Path(out_dir) / stem
+    folder = Path(folder)
     img_dir = folder / "图片"
     img_dir.mkdir(parents=True, exist_ok=True)
 

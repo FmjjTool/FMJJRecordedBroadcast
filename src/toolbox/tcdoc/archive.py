@@ -162,7 +162,7 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
 
 
 def snapshot_path(doc: dict) -> Path:
-    return cfg_mod.docs_dir() / f"{cfg_mod.safe_name(doc.get('name'))}.md"
+    return cfg_mod.docs_dir() / f"{cfg_mod.doc_stem(doc)}.md"
 
 
 def export_snapshot(doc: dict, text: str, path=None) -> Path:

@@ -2,7 +2,8 @@
 
 - 链接输入区：支持单个 / 批量（每行一个 mp.weixin.qq.com 链接，自动提取去重）
 - 导出格式：HTML（自包含）/ PDF / Word / 图片文本(Markdown)，可多选
-- 导出位置：默认位置（统一导出目录/公众号文章）与固定位置双选项（持久化）
+- 导出位置：默认位置（统一导出目录/公众号文章）与固定位置双选项（持久化），
+  两者都按 公众号名/文章名 建两级文件夹，HTML/PDF/Word/MD 与图片统一存放在文章文件夹内
 - 后台线程逐篇解析下载图片，进度按「第 N/M 篇 + 当前图片 K/L」显示；
   PDF 由 Qt 主线程渲染（QTextDocument → QPdfWriter）
 - 取消按钮：打断当前文章（网络请求间检测），已完成的导出保留
@@ -130,6 +131,8 @@ class WechatArticlePage(BasePage):
             "<p>· <b>Word</b>：docx 格式，可继续编辑</p>"
             "<p>· <b>图片文本(MD)</b>：Markdown 文件 + 图片文件夹，文字与图片分离存放</p>"
             "<p>· 导出位置可选「默认位置」（统一导出目录/公众号文章）或「固定位置」</p>"
+            "<p>· 两种位置都按 <b>公众号名/文章名</b> 建文件夹，"
+            "HTML/PDF/Word/MD 与图片统一存放在同一文章文件夹内</p>"
             "<p style='color:#888'>仅支持 mp.weixin.qq.com 图文消息；付费/加密文章、"
             "已被删除文章无法解析；批量解析会自动限速避免微信风控</p>"
         )
@@ -252,18 +255,23 @@ class WechatArticlePage(BasePage):
                                 threads=6)
 
                 stem = wechat_writer.build_stem(art)
+                art_dir = os.path.join(out_dir, wechat_writer.build_article_dir(art))
+                os.makedirs(art_dir, exist_ok=True)
                 if "html" in formats:
-                    wechat_writer.export_html(art, os.path.join(out_dir, stem + ".html"))
+                    wechat_writer.export_html(art, os.path.join(art_dir, stem + ".html"))
                 if "docx" in formats:
-                    wechat_writer.export_docx(art, os.path.join(out_dir, stem + ".docx"))
+                    wechat_writer.export_docx(art, os.path.join(art_dir, stem + ".docx"))
                 if "md" in formats:
-                    wechat_writer.export_markdown(art, out_dir)
+                    wechat_writer.export_markdown(art, art_dir)
                 if "pdf" in formats:
                     pdf_jobs.append((wechat_writer.build_full_html(art),
-                                     os.path.join(out_dir, stem + ".pdf"), art.title))
+                                     os.path.join(art_dir, stem + ".pdf"), art.title))
                 ok += 1
                 _evt("done", title, True)
-                post_to_main(self._log, "  ✅ 导出完成" + ("（PDF 稍后生成）" if "pdf" in formats else ""))
+                post_to_main(self._log,
+                             "  ✅ 导出完成 → "
+                             + os.path.relpath(art_dir, out_dir).replace(os.sep, "/") + "/"
+                             + ("（PDF 稍后生成）" if "pdf" in formats else ""))
             except Exception as e:
                 fail += 1
                 _evt("done", title, False)

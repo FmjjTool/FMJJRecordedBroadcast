@@ -225,10 +225,9 @@ def parse_many(text: str, progress=None) -> tuple[list[DouyinProduct], list[tupl
 # ==================== 本地落盘 ====================
 
 def _safe_name(name: str, max_len: int = 50) -> str:
-    """文件名安全化：去掉路径非法字符（与项目其他模块一致的朴素做法）。"""
-    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", (name or "").strip())
-    s = re.sub(r"\s+", " ", s).strip(" .")
-    return s[:max_len] or "未命名"
+    """文件名安全化（统一走 toolbox.utils.sanitize_filename）。"""
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(name or ""), max_len, "未命名", collapse_ws=False)
 
 
 def shop_dir() -> Path:
@@ -243,6 +242,14 @@ def product_dir(p: DouyinProduct, create: bool = True) -> Path:
     d = shop_dir() / name
     if create:
         d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def batch_dir(ts: str = "") -> Path:
+    """整批列表产物目录：download/抖音商品/批次_<时间戳>/（不与单商品目录混放）。"""
+    ts = ts or datetime.now().strftime("%Y%m%d_%H%M%S")
+    d = shop_dir() / f"批次_{ts}"
+    d.mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -274,10 +281,10 @@ def save_product_json(p: DouyinProduct, dest_dir: Path | None = None) -> Path:
 
 
 def save_products_json(products: list[DouyinProduct], path: Path | None = None) -> Path:
-    """保存整批商品 JSON（默认 download/抖音商品/抖音商品列表_时间戳.json）。"""
+    """保存整批商品 JSON（默认 download/抖音商品/批次_<时间戳>/）。"""
     if path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = shop_dir() / f"抖音商品列表_{ts}.json"
+        path = batch_dir(ts) / f"抖音商品列表_{ts}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps([p.to_dict() for p in products], ensure_ascii=False, indent=2),
@@ -294,7 +301,7 @@ def export_products_xlsx(products: list[DouyinProduct], path: Path | None = None
 
     if path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = shop_dir() / f"抖音商品列表_{ts}.xlsx"
+        path = batch_dir(ts) / f"抖音商品列表_{ts}.xlsx"
     path.parent.mkdir(parents=True, exist_ok=True)
 
     wb = Workbook()

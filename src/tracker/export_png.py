@@ -7,7 +7,6 @@
 用 PIL 绘制深色主题对比图，涨绿跌红，保存到统一导出目录（账号追踪数据）。
 """
 
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -184,7 +183,8 @@ def _plat_of(account, rec):
 
 
 def _safe_name(name):
-    return re.sub(r'[\\/:*?"<>|]', "_", name)
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(name or ""), 120, "账号", collapse_ws=False)
 
 
 def _resolve_output_dir(output_dir):

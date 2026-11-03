@@ -1,10 +1,12 @@
 """工具函数 - 公共工具函数"""
+import hashlib
+import json
 import os
 import re
-import sys
-import json
 import shutil
 import subprocess
+import sys
+import threading
 import ctypes
 from pathlib import Path
 from typing import Tuple, Optional
@@ -67,17 +69,94 @@ def norm_platform_dir(name: str) -> str:
 
 # ==================== 文件大小格式化 ====================
 
-def sanitize_filename(name: str, max_len: int = 60, fallback: str = "untitled") -> str:
+# Windows 保留设备名：同名文件/目录无法创建
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+
+
+def sanitize_filename(name: str, max_len: int = 60, fallback: str = "untitled",
+                      collapse_ws: bool = True) -> str:
     """清理文件名为安全文件名（防路径遍历 + 替换非法字符 + 截断）。
 
     统一 media_downloader / exporters / bilibili_download 里重复的实现。
+    额外处理 Windows 尾部点/空格（无法创建）与 CON/COM1 等保留名。
+    collapse_ws=False 时保留内部空格（用于「歌手 - 歌名」这类组合名）。
     """
     name = re.sub(r'[<>:"/\\|?*\n\r\t]', '_', name or "")
     name = re.sub(r'\.\.', '_', name)  # 防路径遍历
-    name = re.sub(r'[_\s]+', '_', name).strip('_ ')
+    if collapse_ws:
+        name = re.sub(r'[_\s]+', '_', name)
+    else:
+        name = re.sub(r'[ \t]+', ' ', name)
+    name = name.strip('_ .')
     if len(name) > max_len:
-        name = name[:max_len].rstrip('_')
-    return name or fallback
+        name = name[:max_len].rstrip('_ .')
+    if not name:
+        return fallback
+    if name.split(".", 1)[0].upper() in _WIN_RESERVED:
+        name = "_" + name
+    return name
+
+
+# ==================== 同名产物独占 ====================
+
+_STEM_OWNER_FILE = ".stem_owners.json"
+_stem_owner_cache: dict[str, dict[str, str]] = {}
+_stem_owner_lock = threading.RLock()
+
+
+def _load_stem_owners(directory: str) -> dict[str, str]:
+    with _stem_owner_lock:
+        if directory in _stem_owner_cache:
+            return _stem_owner_cache[directory]
+        path = os.path.join(directory, _STEM_OWNER_FILE)
+        data: dict[str, str] = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                data = {str(k): str(v) for k, v in raw.items() if k and v}
+        except (OSError, ValueError):
+            pass
+        _stem_owner_cache[directory] = data
+        return data
+
+
+def claim_output_stem(directory: str, stem: str, owner_id: str) -> str:
+    """同一目录下为不同 owner 分配互不覆盖的 stem。
+
+    首个占用者保持原 stem；后来者追加 owner_id 的 6 位哈希后缀。
+    归属记录在同目录 .stem_owners.json，重复下载同一 owner 仍命中原文件；
+    旧文件没有归属记录时归当前 owner（兼容历史数据，不产生重复文件）。
+    """
+    owner_id = str(owner_id or "")
+    if not owner_id:
+        return stem
+    with _stem_owner_lock:
+        owners = _load_stem_owners(directory)
+        cand = stem
+        if owners.get(cand) not in (None, owner_id):
+            suffix = hashlib.md5(owner_id.encode("utf-8")).hexdigest()[:6]
+            cand = f"{stem}~{suffix}"
+            n = 2
+            while owners.get(cand) not in (None, owner_id):
+                cand = f"{stem}~{suffix}{n}"
+                n += 1
+        if owners.get(cand) != owner_id:
+            owners[cand] = owner_id
+            target = os.path.join(directory, _STEM_OWNER_FILE)
+            tmp = target + ".tmp"
+            try:
+                os.makedirs(directory, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(owners, f, ensure_ascii=False, indent=0)
+                os.replace(tmp, target)
+            except OSError:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        return cand
 
 
 def format_size(size_bytes: int) -> str:

@@ -17,7 +17,6 @@
 import base64
 import json
 import math
-import re
 from pathlib import Path
 
 from Crypto.Cipher import AES
@@ -147,7 +146,8 @@ def _detect_format(audio: bytes) -> str:
 
 
 def _safe_name(name: str) -> str:
-    return re.sub(r'[<>:"/\\|?*\n\r\t]', "_", str(name)).strip() or "未命名"
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(name or ""), 80, "未命名", collapse_ws=False)
 
 
 # ==================== NCM（网易云）====================

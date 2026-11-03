@@ -43,13 +43,12 @@ class _UrlResult:
     referer: str = ""
 
 
-_INVALID_FS = re.compile(r'[\\/:*?"<>|\r\n\t]')
 _PREVIEW_SECONDS = 15  # 短于此且原曲更长 → 视为试听片段
 
 
 def _safe_name(text: str, maxlen: int = 80) -> str:
-    text = _INVALID_FS.sub(" ", (text or "").strip()).strip()
-    return (text[:maxlen].strip() or "未知") + " "
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(text, maxlen, "未知", collapse_ws=False)
 
 
 def _detect_preview(content: bytes, expected_seconds: int) -> bool:

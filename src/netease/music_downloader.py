@@ -96,26 +96,16 @@ class MusicDownloader:
         }
     
     def _sanitize_filename(self, filename: str) -> str:
-        """清理文件名，移除非法字符
-        
+        """清理文件名（统一走 toolbox.utils.sanitize_filename）。
+
         Args:
             filename: 原始文件名
-            
+
         Returns:
             清理后的安全文件名
         """
-        # 移除或替换非法字符
-        illegal_chars = r'[<>:"/\\|?*]'
-        filename = re.sub(illegal_chars, '_', filename)
-        
-        # 移除前后空格和点
-        filename = filename.strip(' .')
-        
-        # 限制长度
-        if len(filename) > 200:
-            filename = filename[:200]
-        
-        return filename or "unknown"
+        from toolbox.utils import sanitize_filename
+        return sanitize_filename(filename, 200, "unknown", collapse_ws=False)
     
     def _determine_file_extension(self, url: str, content_type: str = "") -> str:
         """根据URL和Content-Type确定文件扩展名
@@ -246,13 +236,27 @@ class MusicDownloader:
             # 获取音乐信息
             music_info = self.get_music_info(music_id, quality)
             
-            # 生成文件名
+            # 生成文件名：带歌曲 ID，避免同名不同曲（原版/Live/Remix）互相覆盖
             filename = f"{music_info.artists} - {music_info.name}"
             safe_filename = self._sanitize_filename(filename)
-            
+
             # 确定文件扩展名
             file_ext = self._determine_file_extension(music_info.download_url)
-            file_path = self.download_dir / f"{safe_filename}{file_ext}"
+            file_path = self.download_dir / f"{safe_filename} [{music_id}]{file_ext}"
+            legacy_path = self.download_dir / f"{safe_filename}{file_ext}"
+
+            # 旧的无 ID 命名：大小校验通过才复用，避免重复下载；
+            # 校验不通过视为别的歌，继续下载到带 ID 的新路径，不覆盖旧文件
+            if not file_path.exists() and legacy_path.exists():
+                legacy_size = legacy_path.stat().st_size
+                if not music_info.file_size or legacy_size >= music_info.file_size:
+                    self._ensure_cover_file(legacy_path, music_info)
+                    return DownloadResult(
+                        success=True,
+                        file_path=str(legacy_path),
+                        file_size=legacy_size,
+                        music_info=music_info
+                    )
 
             # 检查文件是否已存在：不小于 API 返回的大小才算完整
             # （写入标签/封面后文件只会变大；半截文件必然更小 → 自动重下）

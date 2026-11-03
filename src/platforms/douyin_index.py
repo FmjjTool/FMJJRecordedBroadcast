@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -284,7 +283,8 @@ def fetch_daren_all(uid: str, days: int = 30, progress=None) -> dict:
 # ==================== 本地保存 ====================
 
 def _safe_name(name: str) -> str:
-    return re.sub(r'[\\/:*?"<>|]', "_", str(name or "").strip()) or "未知达人"
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(name or ""), 80, "未知达人", collapse_ws=False)
 
 
 def index_dir() -> Path:

@@ -1361,9 +1361,9 @@ def search_tickets_by_keyword(keyword: str, *,
 # ==================== 图片下载 ====================
 
 def _safe_folder_name(s: str, maxlen: int = 40) -> str:
-    """演出标题 → 合法目录名（去 Windows 非法字符，截断长度）。"""
-    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "", str(s or "")).strip(" ._")
-    return s[:maxlen] or "未命名"
+    """演出标题 → 合法目录名（统一走 toolbox.utils.sanitize_filename）。"""
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(s or ""), maxlen, "未命名", collapse_ws=False)
 
 
 def _img_ext(url: str) -> str:

@@ -83,10 +83,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 def safe_name(s):
     """文件名安全化（主播名可能带 : / * 等非法字符）。"""
-    s = str(s or "").strip() or "未知主播"
-    for ch in '<>:"/\\|?*':
-        s = s.replace(ch, "_")
-    return s[:80]
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(s or ""), 80, "未知主播", collapse_ws=False)
 
 
 def fmt_duration(sec):

@@ -225,7 +225,9 @@ def download_bilibili_video(
     title_safe = _sanitize_filename(title or bvid)
     user_dir = os.path.join(out_dir, "B站_媒体", author_safe)
     os.makedirs(user_dir, exist_ok=True)
-    out_path = os.path.join(user_dir, f"{date_str}_{author_safe}_{title_safe}.mp4")
+    from toolbox.utils import claim_output_stem
+    stem = claim_output_stem(user_dir, f"{date_str}_{author_safe}_{title_safe}", bvid)
+    out_path = os.path.join(user_dir, f"{stem}.mp4")
 
     headers = _headers(bvid, cookie)
 

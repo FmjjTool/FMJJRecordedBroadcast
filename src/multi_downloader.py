@@ -500,5 +500,5 @@ def parse_video(url: str, quality: str | None = None) -> dict:
 
 
 def _safe_name(name: str, max_len: int = 60) -> str:
-    name = re.sub(r'[<>:"/\\|?*\n\r\t]', "_", str(name)).strip()
-    return name[:max_len] or "video"
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(str(name or ""), max_len, "video")

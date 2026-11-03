@@ -23,7 +23,7 @@ console = Console()
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
 
 # 平台英文标识 -> 中文文件夹名（公共映射见 toolbox.utils.PLATFORM_CN）
-from toolbox.utils import PLATFORM_CN as _PLATFORM_CN, MEDIA_DIR_SUFFIX
+from toolbox.utils import PLATFORM_CN as _PLATFORM_CN, MEDIA_DIR_SUFFIX, claim_output_stem
 
 
 def _sanitize_filename(name: str, max_len: int = 60) -> str:
@@ -469,6 +469,7 @@ def download_media(
 
         # 封面（视频帖独有：抖音/B站等封面不在 images 里；图文帖封面=首图自动去重）
         if download_images and info.cover_url and info.cover_url not in info.images:
+            stem = claim_output_stem(user_dir, stem, str(info.video_id or ""))
             cov_ext = os.path.splitext(_url_path(info.cover_url))[1].lower()
             if cov_ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
                 cov_ext = ".jpg"
@@ -477,12 +478,14 @@ def download_media(
 
         # 图片
         if download_images and info.images:
+            stem = claim_output_stem(user_dir, stem, str(info.video_id or ""))
             for i, img_url in enumerate(info.images, 1):
                 fname = f"{stem}.jpg" if len(info.images) == 1 else f"{stem}_{i}.jpg"
                 tasks.append((img_url, os.path.join(user_dir, fname), "图片"))
 
         # live 图（扩展名跟随 URL：B站实况图 .mp4 / 微博 .mov）
         if download_live and info.live_photos:
+            stem = claim_output_stem(user_dir, stem, str(info.video_id or ""))
             for i, lv_url in enumerate(info.live_photos, 1):
                 ext = os.path.splitext(_url_path(lv_url))[1].lower()
                 if ext not in (".mov", ".mp4"):
@@ -556,6 +559,7 @@ def download_media(
                 if _is_direct_media_url(info.video_url):
                     vurl = info.video_url
             if vurl:
+                stem = claim_output_stem(user_dir, stem, str(info.video_id or ""))
                 fname = f"{stem}.mp4"
                 tasks.append((vurl, os.path.join(user_dir, fname), "视频"))
 

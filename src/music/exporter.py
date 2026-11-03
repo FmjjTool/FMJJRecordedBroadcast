@@ -470,9 +470,8 @@ def _export_markdown(result: SearchResult, filepath: str):
 
 # ================================================================
 def _safe(name: str) -> str:
-    for ch in '/\\:*?"<>|':
-        name = name.replace(ch, "-")
-    return name or "unknown"
+    from toolbox.utils import sanitize_filename
+    return sanitize_filename(name, 80, "unknown", collapse_ws=False)
 
 def _esc(text: str) -> str:
     return (text or "").replace("|", "\\|").replace("\n", " ")
