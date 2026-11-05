@@ -1,10 +1,10 @@
 ﻿# 封茗囧菌数据汇总库 · 统一维护工具箱（PySide6 版）
 
-> **FengMingToolbox v2.9.4** · 制作：歆慕
+> **FengMingToolbox v2.9.5** · 制作：歆慕
 >
 > 录播工具箱一体化工具，封茗囧菌维护组专用软件程序
 >
-> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.9.4>
+> 项目地址：<https://github.com/FmjjTool/FMJJRecordedBroadcast> · 当前版本下载：<https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/2.9.5>
 
 一套面向「封茗囧菌数据汇总库」的**桌面一体化工具箱**，把内容采集、录播后期、音乐服务、直播录制、账号追踪、票务/购物解析等散落能力整合进同一个窗口。
 
@@ -658,7 +658,7 @@ A：不会。普通文件遇到同名则**跳过**（新项目数据优先）；
 ```python
 APP_NAME         = "FengMingToolbox"
 APP_DISPLAY_NAME = "封茗囧菌数据汇总库 统一维护工具箱"
-APP_VERSION      = "2.9.4"
+APP_VERSION      = "2.9.5"
 APP_PUBLISHER    = "歆慕"
 ```
 
@@ -680,6 +680,17 @@ APP_PUBLISHER    = "歆慕"
 - Cookie 总开关可一键停用（`cookie_enabled`），停用后所有采集按游客态走
 
 ### 更新日志
+
+#### v2.9.5（2026-11-05）
+
+- **B站小店解析（新功能）**：新增「🛍 B站小店」页，粘贴 b23.tv 短链、mall.bilibili.com 小店链接、UP 主主页或 UID 即可解析小店信息与商品列表；支持综合 / 销量 / 价格 / 新品排序，右侧查看封面与详情；结果自动落盘 `download/B站小店/`，可导出 Excel。游客可用（自动获取访客 buvid）。
+- **粉丝群查询（新功能）**：新增「👥 粉丝群查询」页，支持抖音 / 微博 / B站三平台公开粉丝群查询；默认按平台带出封茗囧菌已保存主页链接，切平台同步切换；展示群号、群名、成员数、入群门槛与群标签，需登录 Cookie。
+- **抖音账号追踪 · 直播历史**：账号历史二级窗口新增「🎥 直播历史」页签；点「采集」时顺带抓取抖音直播动态（公开接口，按房间号去重合并），状态栏显示总场次与本次新增；直播历史与指标数据分开存放，采集失败不影响指标结果。
+- **微博帖子导出 · 评论区**：已获取页新增「微博评论页数」（0-50，默认 2，配置持久化）；导出微博帖子时串行抓取前 N 页评论，落 `_comments.json` / `_comments.txt`（聊天记录格式），同时写入 JSON、XLSX 第二个 Sheet 与 Markdown；页数调大自动补抓，调小复用，补抓失败保留旧评论；资产页跳过评论 JSON 索引，删除条目时一并清理。
+- **直播总结 skill · 内置资料库**：`fengming-livestream-summary` 内置「封茗囧菌数据汇总库」纯 Markdown 快照（247 个文件，含完整歌曲 692 首、歌曲片段 199 条、直播记录 404 场及历史 AI 摘要、线下活动 117 场、周边 107 条、奖讯 4 条、更新日志 24 条、官方动态 5005 条），按年 / 年-月拆分，AI 按索引选读；不含 xlsx、人数统计与图片链接。
+- **微博超话抓取脚本**：新增 `weibo_super_export/` 独立脚本，支持 meta / posts / detail / comments / reposts / users / export 分阶段全量抓取，支持并发、断点续跑与分层落盘。
+- **账号获取体验**：采集模式默认改为「选中账号」；已获取在采集过程中逐账号实时刷新，保留勾选与滚动位置。
+- **工程修复**：PyInstaller 补充 `tracker.*` / `tracker.collectors.*` 隐藏导入，修复打包后抖音直播历史等模块缺失；打包完成提示兼容 GBK 控制台，移除不兼容的 ✓ 符号。
 
 #### v2.9.4（2026-11-03）
 
