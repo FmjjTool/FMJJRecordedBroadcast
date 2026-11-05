@@ -1,0 +1,178 @@
+# 官方动态索引（5005 条）
+
+> 来源：腾讯文档「封茗囧菌数据汇总库」·「官方动态」表。
+> 按「年-月」分文件存放；用于核对官宣、新歌、联动、活动等公开信息。
+> 查某段时间的动态：先在本索引定位月份，再读 `official-posts/<年-月>.md`。
+
+
+## 2026 年
+- [2026-11（1 条）](official-posts/2026-11.md)
+- [2026-10（15 条）](official-posts/2026-10.md)
+- [2026-09（40 条）](official-posts/2026-09.md)
+- [2026-08（48 条）](official-posts/2026-08.md)
+- [2026-07（71 条）](official-posts/2026-07.md)
+- [2026-06（69 条）](official-posts/2026-06.md)
+- [2026-05（58 条）](official-posts/2026-05.md)
+- [2026-04（23 条）](official-posts/2026-04.md)
+- [2026-03（33 条）](official-posts/2026-03.md)
+- [2026-02（42 条）](official-posts/2026-02.md)
+- [2026-01（56 条）](official-posts/2026-01.md)
+
+## 2025 年
+- [2025-12（78 条）](official-posts/2025-12.md)
+- [2025-11（69 条）](official-posts/2025-11.md)
+- [2025-10（44 条）](official-posts/2025-10.md)
+- [2025-09（28 条）](official-posts/2025-09.md)
+- [2025-08（119 条）](official-posts/2025-08.md)
+- [2025-07（78 条）](official-posts/2025-07.md)
+- [2025-06（62 条）](official-posts/2025-06.md)
+- [2025-05（60 条）](official-posts/2025-05.md)
+- [2025-04（46 条）](official-posts/2025-04.md)
+- [2025-03（47 条）](official-posts/2025-03.md)
+- [2025-02（39 条）](official-posts/2025-02.md)
+- [2025-01（45 条）](official-posts/2025-01.md)
+
+## 2024 年
+- [2024-12（53 条）](official-posts/2024-12.md)
+- [2024-11（52 条）](official-posts/2024-11.md)
+- [2024-10（43 条）](official-posts/2024-10.md)
+- [2024-09（41 条）](official-posts/2024-09.md)
+- [2024-08（67 条）](official-posts/2024-08.md)
+- [2024-07（70 条）](official-posts/2024-07.md)
+- [2024-06（61 条）](official-posts/2024-06.md)
+- [2024-05（58 条）](official-posts/2024-05.md)
+- [2024-04（48 条）](official-posts/2024-04.md)
+- [2024-03（67 条）](official-posts/2024-03.md)
+- [2024-02（30 条）](official-posts/2024-02.md)
+- [2024-01（30 条）](official-posts/2024-01.md)
+
+## 2023 年
+- [2023-12（37 条）](official-posts/2023-12.md)
+- [2023-11（35 条）](official-posts/2023-11.md)
+- [2023-10（29 条）](official-posts/2023-10.md)
+- [2023-09（19 条）](official-posts/2023-09.md)
+- [2023-08（42 条）](official-posts/2023-08.md)
+- [2023-07（47 条）](official-posts/2023-07.md)
+- [2023-06（40 条）](official-posts/2023-06.md)
+- [2023-05（29 条）](official-posts/2023-05.md)
+- [2023-04（23 条）](official-posts/2023-04.md)
+- [2023-03（40 条）](official-posts/2023-03.md)
+- [2023-02（20 条）](official-posts/2023-02.md)
+- [2023-01（44 条）](official-posts/2023-01.md)
+
+## 2022 年
+- [2022-12（28 条）](official-posts/2022-12.md)
+- [2022-11（36 条）](official-posts/2022-11.md)
+- [2022-10（34 条）](official-posts/2022-10.md)
+- [2022-09（25 条）](official-posts/2022-09.md)
+- [2022-08（36 条）](official-posts/2022-08.md)
+- [2022-07（40 条）](official-posts/2022-07.md)
+- [2022-06（36 条）](official-posts/2022-06.md)
+- [2022-05（42 条）](official-posts/2022-05.md)
+- [2022-04（42 条）](official-posts/2022-04.md)
+- [2022-03（49 条）](official-posts/2022-03.md)
+- [2022-02（48 条）](official-posts/2022-02.md)
+- [2022-01（41 条）](official-posts/2022-01.md)
+
+## 2021 年
+- [2021-12（35 条）](official-posts/2021-12.md)
+- [2021-11（29 条）](official-posts/2021-11.md)
+- [2021-10（35 条）](official-posts/2021-10.md)
+- [2021-09（22 条）](official-posts/2021-09.md)
+- [2021-08（31 条）](official-posts/2021-08.md)
+- [2021-07（23 条）](official-posts/2021-07.md)
+- [2021-06（30 条）](official-posts/2021-06.md)
+- [2021-05（26 条）](official-posts/2021-05.md)
+- [2021-04（32 条）](official-posts/2021-04.md)
+- [2021-03（34 条）](official-posts/2021-03.md)
+- [2021-02（30 条）](official-posts/2021-02.md)
+- [2021-01（34 条）](official-posts/2021-01.md)
+
+## 2020 年
+- [2020-12（30 条）](official-posts/2020-12.md)
+- [2020-11（25 条）](official-posts/2020-11.md)
+- [2020-10（34 条）](official-posts/2020-10.md)
+- [2020-09（44 条）](official-posts/2020-09.md)
+- [2020-08（35 条）](official-posts/2020-08.md)
+- [2020-07（23 条）](official-posts/2020-07.md)
+- [2020-06（31 条）](official-posts/2020-06.md)
+- [2020-05（31 条）](official-posts/2020-05.md)
+- [2020-04（37 条）](official-posts/2020-04.md)
+- [2020-03（80 条）](official-posts/2020-03.md)
+- [2020-02（41 条）](official-posts/2020-02.md)
+- [2020-01（34 条）](official-posts/2020-01.md)
+
+## 2019 年
+- [2019-12（40 条）](official-posts/2019-12.md)
+- [2019-11（58 条）](official-posts/2019-11.md)
+- [2019-10（45 条）](official-posts/2019-10.md)
+- [2019-09（27 条）](official-posts/2019-09.md)
+- [2019-08（48 条）](official-posts/2019-08.md)
+- [2019-07（58 条）](official-posts/2019-07.md)
+- [2019-06（46 条）](official-posts/2019-06.md)
+- [2019-05（30 条）](official-posts/2019-05.md)
+- [2019-04（23 条）](official-posts/2019-04.md)
+- [2019-03（27 条）](official-posts/2019-03.md)
+- [2019-02（39 条）](official-posts/2019-02.md)
+- [2019-01（30 条）](official-posts/2019-01.md)
+
+## 2018 年
+- [2018-12（26 条）](official-posts/2018-12.md)
+- [2018-11（32 条）](official-posts/2018-11.md)
+- [2018-10（46 条）](official-posts/2018-10.md)
+- [2018-09（37 条）](official-posts/2018-09.md)
+- [2018-08（57 条）](official-posts/2018-08.md)
+- [2018-07（55 条）](official-posts/2018-07.md)
+- [2018-06（44 条）](official-posts/2018-06.md)
+- [2018-05（53 条）](official-posts/2018-05.md)
+- [2018-04（43 条）](official-posts/2018-04.md)
+- [2018-03（35 条）](official-posts/2018-03.md)
+- [2018-02（32 条）](official-posts/2018-02.md)
+- [2018-01（43 条）](official-posts/2018-01.md)
+
+## 2017 年
+- [2017-12（38 条）](official-posts/2017-12.md)
+- [2017-11（21 条）](official-posts/2017-11.md)
+- [2017-10（30 条）](official-posts/2017-10.md)
+- [2017-09（22 条）](official-posts/2017-09.md)
+- [2017-08（14 条）](official-posts/2017-08.md)
+- [2017-07（13 条）](official-posts/2017-07.md)
+- [2017-06（13 条）](official-posts/2017-06.md)
+- [2017-05（10 条）](official-posts/2017-05.md)
+- [2017-04（14 条）](official-posts/2017-04.md)
+- [2017-03（21 条）](official-posts/2017-03.md)
+- [2017-02（26 条）](official-posts/2017-02.md)
+- [2017-01（24 条）](official-posts/2017-01.md)
+
+## 2016 年
+- [2016-12（31 条）](official-posts/2016-12.md)
+- [2016-11（15 条）](official-posts/2016-11.md)
+- [2016-10（26 条）](official-posts/2016-10.md)
+- [2016-09（19 条）](official-posts/2016-09.md)
+- [2016-08（24 条）](official-posts/2016-08.md)
+- [2016-07（29 条）](official-posts/2016-07.md)
+- [2016-06（28 条）](official-posts/2016-06.md)
+- [2016-05（10 条）](official-posts/2016-05.md)
+- [2016-04（9 条）](official-posts/2016-04.md)
+- [2016-03（20 条）](official-posts/2016-03.md)
+- [2016-02（17 条）](official-posts/2016-02.md)
+- [2016-01（24 条）](official-posts/2016-01.md)
+
+## 2015 年
+- [2015-12（17 条）](official-posts/2015-12.md)
+- [2015-11（11 条）](official-posts/2015-11.md)
+- [2015-10（17 条）](official-posts/2015-10.md)
+- [2015-09（8 条）](official-posts/2015-09.md)
+- [2015-08（2 条）](official-posts/2015-08.md)
+- [2015-07（3 条）](official-posts/2015-07.md)
+- [2015-06（1 条）](official-posts/2015-06.md)
+- [2015-05（4 条）](official-posts/2015-05.md)
+- [2015-04（2 条）](official-posts/2015-04.md)
+- [2015-03（1 条）](official-posts/2015-03.md)
+
+## 2014 年
+- [2014-11（2 条）](official-posts/2014-11.md)
+- [2014-10（2 条）](official-posts/2014-10.md)
+
+## 日期未知
+- [未知（4 条）](official-posts/未知.md)
