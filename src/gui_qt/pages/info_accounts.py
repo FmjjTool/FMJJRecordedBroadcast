@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import _collect, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
+from gui_qt.common import _collect, _db_insert, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
 
@@ -122,6 +122,12 @@ class InfoAccountsPage(BasePage):
         self._pause_evt.set()
         # 取消标记：set 后未开始的账号直接跳过（在飞账号自然跑完不硬中断）
         self._cancel_evt = threading.Event()
+        # 结果揭示队列：采集线程先落库，主线程每 150ms 揭示一条作品，
+        # 避免多个账号/一页数据同时完成时「已获取」一次性全部刷出
+        self._reveal_queue = []
+        self._reveal_timer = QTimer(self)
+        self._reveal_timer.setSingleShot(True)
+        self._reveal_timer.timeout.connect(self._drain_reveal)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -714,6 +720,7 @@ class InfoAccountsPage(BasePage):
         if self._fetching:
             self.app.toast("正在获取中，请稍候", "warning")
             return
+        self._flush_reveal_queue()
         accounts, err = self._resolve_target_accounts()
         if err:
             self.app.toast(err, "warning")
@@ -744,7 +751,7 @@ class InfoAccountsPage(BasePage):
                 incremental=incremental, on_event=self._make_event_bridge(round_id),
                 pause_event=pause_evt, cancel_event=cancel_evt,
                 date_start=self._date_range.get("start", ""),
-                date_end=self._date_range.get("end", ""))
+                date_end=self._date_range.get("end", ""), round_id=round_id)
 
         def done(result, err):
             if round_id != self._fetch_round:
@@ -767,7 +774,8 @@ class InfoAccountsPage(BasePage):
                 self.log_text.append(f"\n✅ 共获取 {total} 条（已存入「已获取」）")
                 if not self.auto_dl_check.isChecked():
                     self.prog_label.setText("✅ 获取完成")
-            refresh_results_count(self.app)
+            if not self._reveal_queue:
+                refresh_results_count(self.app)
             # 获取后自动下载（勾选后保存+下载一次性完成；已取消的轮次不触发）
             if not cancel_evt.is_set() and self.auto_dl_check.isChecked() and new_posts:
                 self._start_auto_download(new_posts)
@@ -801,6 +809,44 @@ class InfoAccountsPage(BasePage):
             if label:
                 self.prog_label.setText(label)
 
+    # ---------- 结果逐账号揭示 ----------
+    def _enqueue_reveal(self, posts, round_id):
+        """采集线程 → 主线程：把结果按单条作品排队，逐条揭示到「已获取」。
+
+        数据已在采集线程落库；这里只负责 UI 节奏。旧轮次的结果仍进内存
+        （不能丢），但不刷新当前轮 UI。
+        """
+        if not posts:
+            return
+        if round_id != self._fetch_round:
+            _collect(posts, persist=False)
+            return
+        self._reveal_queue.extend(posts)
+        if not self._reveal_timer.isActive():
+            self._reveal_timer.start(0)
+
+    def _drain_reveal(self):
+        """每次只放一条作品进「已获取」，连续拿到多条时也能逐条出现。"""
+        if not self._reveal_queue:
+            return
+        item = self._reveal_queue.pop(0)
+        added = _collect([item], persist=False)
+        if added:
+            refresh_results_count(self.app)
+        if self._reveal_queue:
+            # 重复条目（抖音 on_items 已提前抛过）不占 150ms 节奏
+            self._reveal_timer.start(150 if added else 0)
+
+    def _flush_reveal_queue(self):
+        """新一轮开始前清空旧队列：全部并入内存，避免旧结果卡在队列里。"""
+        self._reveal_timer.stop()
+        pending = self._reveal_queue
+        self._reveal_queue = []
+        if not pending:
+            return
+        _collect(pending, persist=False)
+        refresh_results_count(self.app)
+
     def _resolve_target_accounts(self):
         """根据采集模式解析目标账号列表。返回 (accounts, err_msg)。"""
         from accounts_manager import load_accounts, get_accounts_by_group
@@ -825,7 +871,7 @@ class InfoAccountsPage(BasePage):
             return [], "没有可采集的账号"
         return accounts, None
 
-    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None, date_start="", date_end=""):
+    def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None, date_start="", date_end="", round_id=0):
         """采集账号最新内容，返回 (total, log, all_posts)。供手动与定时获取共用。
 
         多账号并发采集（ThreadPoolExecutor，上限 4 线程）：as_completed 逐个处理
@@ -846,6 +892,8 @@ class InfoAccountsPage(BasePage):
         from concurrent.futures import ThreadPoolExecutor
         from accounts_manager import infer_kind_from_url
         from platforms import URLRecognizer, get_parser
+        if not round_id:
+            round_id = self._fetch_round
         total = 0
         log = []
 
@@ -958,6 +1006,13 @@ class InfoAccountsPage(BasePage):
                     return True
             return False
 
+        def reveal_items(items):
+            """解析器边抓边回调：先落库，再交给主线程逐条揭示。"""
+            if not items:
+                return
+            _db_insert(items)
+            post_to_main(self._enqueue_reveal, items, round_id)
+
         def _fetch_one(job):
             """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, error)。"""
             i, a = job
@@ -981,6 +1036,9 @@ class InfoAccountsPage(BasePage):
             kwargs = {}
             if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
                 kwargs["kind"] = account_kind
+            if platform == "douyin":
+                # 抖音接口/Playwright 拿到首批数据就回调，不等整账号抓完
+                kwargs["on_items"] = reveal_items
             if rate_on and platform in ("douyin", "weibo", "bilibili"):
                 # 账号内部深翻页也按限流设置停顿（每 rate_count 条停 rate_interval 秒，
                 # 按每页实际条数折算）；快手浏览器滚动自带 1.5s 节奏、小红书首批
@@ -1048,10 +1106,10 @@ class InfoAccountsPage(BasePage):
                         if len(posts) != before_n:
                             emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
                     emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
-                    added = _collect(posts)
-                    if added:
-                        # 逐账号通知「已获取」刷新，边采边显示，不等整轮结束
-                        post_to_main(refresh_results_count, self.app)
+                    # 先落库保证断点安全；界面结果统一走揭示队列，逐条出现。
+                    # 抖音解析器已通过 on_items 提前抛过首批的，重复项由 _collect 去重。
+                    _db_insert(posts)
+                    post_to_main(self._enqueue_reveal, posts, round_id)
                     # 逐账号即时入库/导出：不等全部账号收尾——中途崩溃/退出/取消
                     # 只丢在飞账号，已完成账号的数据都已在库（断点续获取的落点）
                     save_msg, saved = self._export_one_batch(posts, incremental)
@@ -1411,6 +1469,7 @@ class InfoAccountsPage(BasePage):
             return
         if self._fetching:
             return  # 上次获取未完成，跳过本轮
+        self._flush_reveal_queue()
         accounts, err = self._resolve_target_accounts()
         if err:
             return  # 静默跳过（定时任务不弹窗）
@@ -1435,7 +1494,7 @@ class InfoAccountsPage(BasePage):
                 incremental=incremental, on_event=self._make_event_bridge(round_id),
                 pause_event=pause_evt, cancel_event=cancel_evt,
                 date_start=self._date_range.get("start", ""),
-                date_end=self._date_range.get("end", ""))
+                date_end=self._date_range.get("end", ""), round_id=round_id)
 
         def done(result, err):
             if round_id != self._fetch_round:
@@ -1455,7 +1514,8 @@ class InfoAccountsPage(BasePage):
                 self.prog_label.setText("✕ 已取消")
             else:
                 self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
-            refresh_results_count(self.app)
+            if not self._reveal_queue:
+                refresh_results_count(self.app)
             # 获取后自动下载（勾选后定时获取也生效：保存+下载一次性）
             if self.auto_dl_check.isChecked() and new_posts and not cancel_evt.is_set():
                 self._start_auto_download(new_posts)

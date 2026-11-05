@@ -257,8 +257,12 @@ def _dedup_key(info) -> str:
             or getattr(info, "raw_url", "") or "").strip()
 
 
-def _collect(infos):
-    """批量加入共享列表（自动去重，SQLite 增量落库），返回新增条数。"""
+def _collect(infos, persist=True):
+    """批量加入共享列表（自动去重，默认 SQLite 增量落库），返回新增条数。
+
+    persist=False 只进内存列表、不写数据库：用于采集线程已先行落库后，
+    主线程按节奏把结果揭示到「已获取」页，避免重复写库。
+    """
     existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
     new_items = []
     for i in infos:
@@ -273,7 +277,8 @@ def _collect(infos):
     if not new_items:
         return 0
     COLLECTED.extend(new_items)
-    _db_insert(new_items)
+    if persist:
+        _db_insert(new_items)
     return len(new_items)
 
 

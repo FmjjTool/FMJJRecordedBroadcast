@@ -262,7 +262,7 @@ class DouyinParser(PlatformBase):
 
     def fetch_user_posts(self, url_or_id: str, count: int = 10,
                          pause_every: int = 0, pause_secs: float = 0.0,
-                         stop_check=None) -> list:
+                         stop_check=None, on_items=None) -> list:
         """用户作品列表。Cookie 是账号凭据但用户时间线属「必须用 Cookie 的接口」
         （游客 aweme/post 常被风控空响应 + 漏最新作品），Cookie 优先、游客兜底。
 
@@ -285,13 +285,13 @@ class DouyinParser(PlatformBase):
         # 一级：HTTP 直调（快且稳，翻页拿足 count 条）
         results = self._fetch_user_posts_http(sec_uid, count, cookie_str=cookie_str,
                                               pause_every=pause_every, pause_secs=pause_secs,
-                                              stop_check=stop_check)
+                                              stop_check=stop_check, on_items=on_items)
         if results:
             return results
         if not cookie_str:
             results = self._fetch_user_posts_http(sec_uid, count, cookie_str="",
                                                   pause_every=pause_every, pause_secs=pause_secs,
-                                                  stop_check=stop_check)
+                                                  stop_check=stop_check, on_items=on_items)
             if results:
                 return results
 
@@ -304,17 +304,17 @@ class DouyinParser(PlatformBase):
         if cookie_str:
             results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str,
                                           pause_every=pause_every, pause_secs=pause_secs,
-                                          stop_check=stop_check)
+                                          stop_check=stop_check, on_items=on_items)
             if results:
                 return results
             print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
         return self._fetch_pw_once(sec_uid, count, cookie_str="",
                                     pause_every=pause_every, pause_secs=pause_secs,
-                                    stop_check=stop_check)
+                                    stop_check=stop_check, on_items=on_items)
 
     def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "",
                                pause_every: int = 0, pause_secs: float = 0.0,
-                               stop_check=None) -> list:
+                               stop_check=None, on_items=None) -> list:
         """HTTP 直调 aweme/post（a_bogus 签名），max_cursor 链式翻页到 count 条。
 
         空响应=风控拦截；node 缺失导致无签名时直接放弃（返回空，由上层兜底）。
@@ -373,6 +373,7 @@ class DouyinParser(PlatformBase):
             if d.get("status_code") != 0:
                 print(f"[抖音] aweme/post status_code={d.get('status_code')}")
                 return []
+            page_infos = []
             for a in d.get("aweme_list") or []:
                 vid = str(a.get("aweme_id") or "")
                 if not vid or vid in seen:
@@ -381,6 +382,18 @@ class DouyinParser(PlatformBase):
                 info = self._build_from_aweme(a, vid)
                 info.raw_url = self._aweme_url(a)
                 results.append(info)
+                page_infos.append(info)
+            # 有上限时只回调本次目标数量，避免一页 20 条超出用户填的 10 条
+            if page_infos and on_items is not None:
+                callback_items = page_infos
+                if count > 0:
+                    remain = count - (len(results) - len(page_infos))
+                    callback_items = page_infos[:max(0, remain)]
+                if callback_items:
+                    try:
+                        on_items(callback_items)
+                    except Exception:
+                        pass
             if len(results) >= count or not d.get("has_more"):
                 break
             cursor = int(d.get("max_cursor") or 0)
@@ -399,7 +412,7 @@ class DouyinParser(PlatformBase):
 
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "",
                        pause_every: int = 0, pause_secs: float = 0.0,
-                       stop_check=None) -> list:
+                       stop_check=None, on_items=None) -> list:
         """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
         from playwright.sync_api import sync_playwright
 
@@ -437,6 +450,30 @@ class DouyinParser(PlatformBase):
 
             page = context.new_page()
             collected = []
+            revealed = 0
+
+            def _reveal(raw_items):
+                """把新解析到的作品立即回调给采集层（主线程按账号节奏揭示）。"""
+                nonlocal revealed
+                if on_items is None:
+                    return
+                items = []
+                for a in raw_items:
+                    if count > 0 and revealed + len(items) >= count:
+                        break
+                    try:
+                        info = self._build_from_aweme(a, str(a.get("aweme_id", "")))
+                        info.raw_url = self._aweme_url(a)
+                        items.append(info)
+                    except Exception:
+                        pass
+                if not items:
+                    return
+                revealed += len(items)
+                try:
+                    on_items(items)
+                except Exception:
+                    pass
 
             def on_response(response):
                 if response.status != 200:
@@ -447,9 +484,13 @@ class DouyinParser(PlatformBase):
                     try:
                         data = response.json()
                         aweme_list = data.get("aweme_list", [])
+                        new_raw = []
                         for a in aweme_list:
                             if a not in collected:
                                 collected.append(a)
+                                new_raw.append(a)
+                        if new_raw:
+                            _reveal(new_raw)
                     except Exception:
                         pass
 
@@ -464,9 +505,13 @@ class DouyinParser(PlatformBase):
                 # 页面内嵌数据（RENDER_DATA/SSR 首屏）合并进 collected（与 API 拦截去重）
                 def _merge_html_items():
                     html = page.content()
+                    new_raw = []
                     for item in self._extract_aweme_list_from_html(html):
                         if item not in collected:
                             collected.append(item)
+                            new_raw.append(item)
+                    if new_raw:
+                        _reveal(new_raw)
 
                 _merge_html_items()
                 if collected:
