@@ -468,6 +468,8 @@ EXPORT_CATEGORIES = {
     "wechat": "公众号文章",
     "douyin_index": "抖音指数",
     "douyin_shop": "抖音商品",
+    "bili_shop": "B站小店",
+    "fan_groups": "粉丝群",
     "tcdoc": "腾讯文档数据",
 }
 

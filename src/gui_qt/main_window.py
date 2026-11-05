@@ -57,6 +57,8 @@ PAGE_CLASSES = {
     "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
     "shopping": ("gui_qt.pages.shopping_page", "ShoppingPage"),
     "douyin_shop": ("gui_qt.pages.douyin_shop_page", "DouyinShopPage"),
+    "bili_shop": ("gui_qt.pages.bili_shop_page", "BiliShopPage"),
+    "fan_groups": ("gui_qt.pages.fan_groups_page", "FanGroupsPage"),
     "bili_danmaku": ("gui_qt.pages.bili_danmaku", "BiliDanmakuPage"),
     "image_crop": ("gui_qt.pages.image_crop", "ImageCropPage"),
     "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
@@ -101,6 +103,7 @@ NAV_GROUPS = [
         ("tickets", "🎫 票务解析"),
         ("shopping", "🛒 购物解析"),
         ("douyin_shop", "🏬 抖音商品"),
+        ("bili_shop", "🛍 B站小店"),
     ]),
     ("🎵 音乐服务", [
         ("music_info", "🎵 音乐信息获取"),
@@ -110,6 +113,7 @@ NAV_GROUPS = [
     ("👥 账户追踪", [
         ("music_tracker", "🎼 音乐账号追踪"),
         ("tracker", "📈 网媒账号追踪"),
+        ("fan_groups", "👥 粉丝群查询"),
     ]),
     ("🔴 直播弹幕录制", [
         ("test_page", "📺 抖音弹幕姬"),
