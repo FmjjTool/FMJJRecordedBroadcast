@@ -415,6 +415,10 @@ class InfoResultsPage(BasePage):
     # ==================== 渲染 ====================
 
     def refresh(self):
+        # 刷新前记住勾选与滚动位置：采集过程中逐账号刷新也保留用户当前操作
+        checked = {key: self._checked_keys(key) for key, _ in PLATFORMS_3}
+        scrolls = {key: self.cols[key]["list"].verticalScrollBar().value()
+                   for key, _ in PLATFORMS_3}
         # 按平台分到四栏（快手/小红书等归入「其他」），默认按发布日期倒序（最新在前）
         grouped = {key: [] for key, _ in PLATFORMS_3}
         for info in common.COLLECTED:
@@ -424,7 +428,20 @@ class InfoResultsPage(BasePage):
             grouped[plat].append(info)
         for key, _name in PLATFORMS_3:
             grouped[key].sort(key=_parse_pub, reverse=True)
-            self._render_column(key, grouped[key])
+            self._render_column(key, grouped[key], checked[key])
+            self.cols[key]["list"].verticalScrollBar().setValue(scrolls[key])
+
+    def _checked_keys(self, key):
+        """当前栏已勾选条目的去重键（刷新后用于还原勾选）。"""
+        result = set()
+        col = self.cols[key]
+        for row in range(col["list"].count()):
+            item = col["list"].item(row)
+            if item.checkState() == Qt.Checked and row < len(col["songs"]):
+                k = common._dedup_key(col["songs"][row])
+                if k:
+                    result.add(k)
+        return result
 
     @staticmethod
     def _openable_url(info) -> str:
@@ -446,9 +463,10 @@ class InfoResultsPage(BasePage):
             return f"https://www.bilibili.com/video/{vid}"
         return ru or (getattr(info, "video_url", "") or "")
 
-    def _render_column(self, key, songs):
+    def _render_column(self, key, songs, checked_keys=None):
         col = self.cols[key]
         lst = col["list"]
+        checked_keys = checked_keys or set()
         lst.clear()
         col["songs"] = songs
         col["count_label"].setText(f"{len(songs)} 条")
@@ -476,13 +494,17 @@ class InfoResultsPage(BasePage):
             text = f"[{i}] [{kind_tag}] {title}\n{meta}"
             item = QListWidgetItem(text)
             item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            item.setCheckState(Qt.Unchecked)
+            item.setCheckState(
+                Qt.Checked if common._dedup_key(info) in checked_keys else Qt.Unchecked)
             item.setData(Qt.UserRole, url or "")
             item.setToolTip(f"{title}\n{author}  {date_str}\n{url or ''}")
             lst.addItem(item)
 
     def refresh_count(self):
-        self.refresh()
+        # 账号采集每完成一个账号都会通知一次：正在看本页时立即刷新，
+        # 不在本页则等切回时由 on_show 刷新，避免隐藏页反复重建列表
+        if self.isVisible():
+            self.refresh()
 
     def on_show(self):
         self.refresh()

@@ -281,7 +281,8 @@ class InfoAccountsPage(BasePage):
         op_row.addWidget(self.timer_dot)
         op_row.addStretch(1)
         layout.addLayout(op_row)
-        self._on_fetch_mode_change("全部账号")
+        self.fetch_mode.setCurrentText("选中账号")
+        self._on_fetch_mode_change("选中账号")
 
         # 策略行：增量模式 + 获取后自动下载 + 搜索限流
         strat_row = QHBoxLayout()
@@ -1047,7 +1048,10 @@ class InfoAccountsPage(BasePage):
                         if len(posts) != before_n:
                             emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
                     emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
-                    _collect(posts)
+                    added = _collect(posts)
+                    if added:
+                        # 逐账号通知「已获取」刷新，边采边显示，不等整轮结束
+                        post_to_main(refresh_results_count, self.app)
                     # 逐账号即时入库/导出：不等全部账号收尾——中途崩溃/退出/取消
                     # 只丢在飞账号，已完成账号的数据都已在库（断点续获取的落点）
                     save_msg, saved = self._export_one_batch(posts, incremental)
