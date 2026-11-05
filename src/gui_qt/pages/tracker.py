@@ -486,10 +486,16 @@ class TrackerPage(BasePage):
         run_bg(work, done)
 
     def _open_history(self, acc):
-        """打开二级窗口：完整历史数据（指标当列、时间点当行、可横向滚动）。"""
-        from tracker.accounts import load_history
+        """打开二级窗口：完整历史数据（指标当列、时间点当行、可横向滚动）。
+        抖音账号额外带「直播历史」页签（直播场次记录）。"""
+        from tracker.accounts import load_history, parse_url
+        from tracker.douyin_live import load_live_history
         history = load_history(acc.get("name", ""))
-        if not history:
+        live = []
+        platform = (acc.get("platform") or "").strip() or parse_url(acc.get("url", ""))[0]
+        if platform == "douyin":
+            live = load_live_history(acc.get("name", ""))
+        if not history and not live:
             self.app.toast("暂无历史数据", "info")
             return
 
@@ -501,11 +507,31 @@ class TrackerPage(BasePage):
         win.resize(980, 520)
         v = QVBoxLayout(win)
         v.setContentsMargins(10, 12, 10, 10)
-        head = QLabel(f"👤 {acc.get('name', '')} 历史数据（共 {len(history)} 次采集，最新在前）")
+        head = QLabel(f"👤 {acc.get('name', '')} 历史数据（最新在前）")
         head.setStyleSheet("font-size: 14px; font-weight: bold;")
         v.addWidget(head)
 
-        # 列 = 指标，行 = 时间点（"当前" 或 "2026-08-13 14:30"）
+        metrics_w = self._history_metrics_widget(history)
+        if not live:
+            v.addWidget(metrics_w, 1)
+        else:
+            tabs = QTabWidget()
+            tabs.addTab(metrics_w, f"📊 指标数据（{len(history)}）")
+            tabs.addTab(self._history_live_widget(live), f"🎥 直播历史（{len(live)}）")
+            v.addWidget(tabs, 1)
+        win.exec()
+
+    def _history_metrics_widget(self, history):
+        """指标数据表：列 = 指标，行 = 时间点（"当前" 或 "2026-08-13 14:30"）。"""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 4, 0, 0)
+        if not history:
+            lbl = QLabel("（尚未采集指标数据）")
+            lbl.setStyleSheet("color: gray;")
+            lbl.setAlignment(Qt.AlignCenter)
+            v.addWidget(lbl)
+            return w
         table = QTableWidget(len(history), len(METRICS))
         table.setHorizontalHeaderLabels([name for name, _f in METRICS])
         table.verticalHeader().setVisible(True)
@@ -532,7 +558,33 @@ class TrackerPage(BasePage):
         hint.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(hint)
         v.addWidget(table, 1)
-        win.exec()
+        return w
+
+    def _history_live_widget(self, live):
+        """直播历史表：最新在前，标题列自动拉伸。"""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 4, 0, 0)
+        if not live:
+            lbl = QLabel("（暂无直播历史，点「📥 采集」自动抓取）")
+            lbl.setStyleSheet("color: gray;")
+            lbl.setAlignment(Qt.AlignCenter)
+            v.addWidget(lbl)
+            return w
+        table = QTableWidget(len(live), 5)
+        table.setHorizontalHeaderLabels(["开播时间", "结束时间", "时长(分钟)", "标题", "房间号"])
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        for i, r in enumerate(live):
+            for j, key in enumerate(["start", "end", "dur", "title", "room_id"]):
+                table.setItem(i, j, QTableWidgetItem(str(r.get(key, ""))))
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        hint = QLabel("直播历史来自抖音「直播动态」公开接口（按房间号去重合并）；官方回放为 App 专属，网页端不提供")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        v.addWidget(hint)
+        v.addWidget(table, 1)
+        return w
 
     @staticmethod
     def _num_delta(prev, curr, fields):
@@ -569,10 +621,16 @@ class TrackerPage(BasePage):
         card["status"].setStyleSheet("color: #eab308;")
 
         def work():
-            from tracker.accounts import collect_account, save_history
+            from tracker.accounts import collect_account, save_history, parse_url
+            from tracker.douyin_live import collect_and_save
             record = collect_account(acc)
             save_history(acc.get("name", "未命名"), record)
-            return record
+            # 抖音账号顺带抓直播历史（独立链路，失败不影响指标采集结果）
+            platform = (acc.get("platform") or "").strip() or parse_url(acc.get("url", ""))[0]
+            live = None
+            if platform == "douyin":
+                live = collect_and_save(acc, record.get("uid"))
+            return record, live
 
         def done(result, err):
             card = self._card_for(acc)
@@ -582,12 +640,22 @@ class TrackerPage(BasePage):
                     card["status"].setText(f"❌ {err}")
                     card["status"].setStyleSheet("color: #ff5252;")
                 else:
+                    record, live = result
                     from tracker.accounts import load_history
                     history = load_history(acc.get("name", "未命名"))
                     self._render_preview(card["preview"], history[:2])
                     if len(history) >= 2:
                         self._render_diff(card["diff_frame"], history[1], history[0])
-                    card["status"].setText("✅ 完成")
+                    if live is None:
+                        card["status"].setText("✅ 完成")
+                        card["status"].setToolTip("")
+                    elif live.get("error"):
+                        card["status"].setText("✅ 完成 · 🎥⚠")
+                        card["status"].setToolTip(f"直播历史采集失败：{live['error']}")
+                    else:
+                        card["status"].setText(f"✅ 完成 · 🎥{live['total']}场")
+                        card["status"].setToolTip(
+                            f"直播历史已缓存 {live['total']} 场（本次新增 {live['new']} 场，按房间号去重）")
                     card["status"].setStyleSheet("color: #4caf50;")
             if on_done:
                 on_done()

@@ -190,6 +190,17 @@ def run_pyinstaller(name: str):
         for f in sorted(pages_dir.glob("*.py")):
             if f.stem != "__init__":
                 cmd += ["--hidden-import", f"gui_qt.pages.{f.stem}"]
+    # tracker 包同属函数体内懒加载（tracker 页里 from tracker.accounts 等动态 import），
+    # 静态分析收不到，按包+子包目录显式声明（含 douyin_live 直播历史模块）
+    tracker_dir = ROOT / "src" / "tracker"
+    if tracker_dir.is_dir():
+        for f in sorted(tracker_dir.glob("*.py")):
+            if f.stem != "__init__":
+                cmd += ["--hidden-import", f"tracker.{f.stem}"]
+        collectors_dir = tracker_dir / "collectors"
+        for f in sorted(collectors_dir.glob("*.py")):
+            if f.stem != "__init__":
+                cmd += ["--hidden-import", f"tracker.collectors.{f.stem}"]
     icon = ROOT / "icon.ico"
     if icon.exists():
         cmd += ["--icon", str(icon)]
