@@ -1466,6 +1466,7 @@ class AssetPage(BasePage):
     #   dir     按相对路径前 N 段目录聚合成一条（账号/文章、平台/视频）
     #   stem    每个产物集合一条（目录 + 去附属后缀的文件主干）
     #   stem_flat 每个产物集合一条（忽略子目录，腾讯文档报表/表格/正文合并）
+    #   tcdoc   腾讯文档：忽略子目录按文档聚合，图片/ 下取文档目录名与产物合并
     #   danmaku 弹幕：房间号 + 日期一条（同房间同天的 csv/zip/jsonl 合并）
     # 未登记的分类保持旧行为：按第一层目录聚合。
     _DIR_GROUP_RULES = {
@@ -1483,7 +1484,7 @@ class AssetPage(BasePage):
         "账号追踪数据": ("stem", 0),
         "导出的图片": ("stem", 0),
         "字幕文件": ("stem", 0),
-        "腾讯文档数据": ("stem_flat", 0),
+        "腾讯文档数据": ("tcdoc", 0),
         "封面底图": ("stem", 0),
         "套版封面": ("stem", 0),
         "图片裁切": ("stem", 0),
@@ -1716,8 +1717,8 @@ class AssetPage(BasePage):
         - dir：按相对路径前 N 段目录聚合，公众号/评论区为 2 段（账号/文章、
           平台/视频），淘宝/票务/抖音商品/抖音指数/音乐信息为 1 段；
         - stem：按「目录 + 文件主干」聚合，直播录制、歌曲、追踪数据、
-          导出的图片、腾讯文档数据等每个产物一条（封面/弹幕/raw/live 等
-          附属文件跟随主文件）；
+          导出的图片等每个产物一条（封面/弹幕/raw/live 等附属文件跟随主文件）；
+        - tcdoc：腾讯文档按文档目录聚合，报表 / 表格 / 正文 / 图片合并为一条；
         - danmaku：弹幕按「房间号 + 日期」聚合，同房间同天的 csv/zip/jsonl
           合并，不同房间不再混在一起。
         未登记的分类仍按第一层目录聚合。根目录单文件不再按日期合并
@@ -1763,9 +1764,14 @@ class AssetPage(BasePage):
         for rel, fn, full, st, kind in files_scan:
             title = ""
             group_root = root
-            if rule_kind in ("stem", "stem_flat"):
-                stem = self._group_stem(fn)
-                # stem_flat：忽略子目录合并（腾讯文档的报表/表格/正文同名同文档）
+            if rule_kind in ("stem", "stem_flat", "tcdoc"):
+                if rule_kind == "tcdoc" and rel.startswith("图片/"):
+                    # 图片按文档目录聚合：图片/<文档目录>/<工作表>/<字段>/<文件>
+                    parts = rel.split("/")
+                    stem = parts[1] if len(parts) > 1 and parts[1] else os.path.splitext(fn)[0]
+                else:
+                    stem = self._group_stem(fn)
+                # stem_flat/tcdoc：忽略子目录合并（腾讯文档的报表/表格/正文/图片同文档）
                 key = f"{rel}/{stem}" if rel and rule_kind == "stem" else stem
                 title = stem
                 group_root = os.path.dirname(full)
