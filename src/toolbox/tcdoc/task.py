@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,9 +19,13 @@ TASK_NAME = "FengMingTCDocMonitor"
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     """调用 schtasks；被系统策略/权限拦住时返回失败结果而不是抛异常。"""
+    # pythonw / 无控制台 exe 里直接启动 schtasks 会闪一个控制台窗口
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         return subprocess.run(args, capture_output=True, text=True,
-                              encoding="gbk", errors="ignore")
+                              encoding="gbk", errors="ignore", **kwargs)
     except (OSError, ValueError) as exc:
         return subprocess.CompletedProcess(args, 1, "", f"无法调用系统计划任务：{exc}")
 

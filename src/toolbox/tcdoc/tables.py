@@ -1,10 +1,11 @@
 """腾讯文档监控 · 智能表格数据同步到本地。
 
-链路：打开文档 → dop-api/opendoc 取工作表清单 → 逐表取数 → 解码结构化 →
-落本地 SQLite（增量对比新增/修改/删除）→ 每个文档一份 Excel。
+链路：dop-api/opendoc 取工作表清单（纯 HTTP，只需 Referer）→ 逐表取数 →
+解码结构化 → 落本地 SQLite（增量对比新增/修改/删除）→ 每个文档一份 Excel；
+图片字段的 URL 同步登记到 images 表，由 images 模块增量下载到 图片/。
 
 协议要点（都是实测踩出来的，别改）：
-1. 接口返回 JSONP，要剥壳；必须在页面上下文里 fetch（带 credentials）。
+1. 接口返回 JSONP，要剥壳；HTTP 直连只校验 Referer，浏览器版靠页面上下文带 credentials。
 2. 载荷两种形态：小响应 base64+zlib（腾讯不给 `=` padding），大响应直接是 JSON 文本。
 3. 键名两套：`{"1":..}` 与 `{"k1":..}`，统一用 deep_unkey 归一化。
 4. 列顺序在 `view["3"]["2"]`，行顺序在 `view["3"]["1"]`。
@@ -62,6 +63,8 @@ CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT,
     doc_key TEXT, tab_id TEXT, tab_name TEXT,
     kind TEXT, record_id TEXT, summary TEXT, before_json TEXT, after_json TEXT);
+CREATE TABLE IF NOT EXISTS doc_meta (
+    doc_key TEXT PRIMARY KEY, rev TEXT DEFAULT '', updated_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_rows_page ON rows (doc_key, tab_id, row_no);
 CREATE INDEX IF NOT EXISTS idx_changes_doc ON changes (doc_key, ts);
 """
@@ -499,12 +502,39 @@ def init_db(path=None) -> Path:
     return path
 
 
+def get_rev(doc_key: str, path=None) -> str:
+    """该文档上次成功同步的版本号（没有则空串）。"""
+    path = init_db(path)
+    with sqlite3.connect(path) as conn:
+        row = conn.execute("SELECT rev FROM doc_meta WHERE doc_key=?",
+                           (str(doc_key),)).fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def set_rev(doc_key: str, rev: str, path=None) -> None:
+    path = init_db(path)
+    now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT OR REPLACE INTO doc_meta (doc_key, rev, updated_at) "
+                     "VALUES (?,?,?)", (str(doc_key), str(rev or ""), now))
+        conn.commit()
+
+
+def has_data(doc_key: str, path=None) -> bool:
+    """本地是否已有该文档的表格数据（rev 跳过必须以此为前提）。"""
+    path = init_db(path)
+    with sqlite3.connect(path) as conn:
+        return conn.execute(
+            "SELECT 1 FROM sheets WHERE doc_key=? AND skipped=0 LIMIT 1",
+            (str(doc_key),)).fetchone() is not None
+
+
 def _row_hash(values: dict) -> str:
     return hashlib.md5(json.dumps(values, ensure_ascii=False, sort_keys=True)
                        .encode("utf-8")).hexdigest()
 
 
-def _summary(values: dict) -> str:
+def row_summary(values: dict) -> str:
     for key in ("歌曲名称", "演出名称", "无料名", "标题", "奖项", "活动名称", "直播标题", "名称"):
         if values.get(key):
             return str(values[key])[:60]
@@ -545,7 +575,7 @@ def save_doc(result: dict, path=None) -> dict:
                         "INSERT INTO changes (ts,doc_key,tab_id,tab_name,kind,record_id,"
                         "summary,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?)",
                         (now, doc_key, tab_id, tab_name, "新增", rid,
-                         _summary(row["values"]), "", payload))
+                         row_summary(row["values"]), "", payload))
                 elif prev[0] != h:
                     updated += 1
                     changed = [k for k in row["values"]
@@ -581,7 +611,7 @@ def save_doc(result: dict, path=None) -> dict:
                     "INSERT INTO changes (ts,doc_key,tab_id,tab_name,kind,record_id,"
                     "summary,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?)",
                     (now, doc_key, tab_id, tab_name, "删除", rid,
-                     _summary(json.loads(before)), before, ""))
+                     row_summary(json.loads(before)), before, ""))
             conn.execute(
                 "INSERT OR REPLACE INTO sheets VALUES (?,?,?,?,?,?,?,?)",
                 (doc_key, tab_id, tab_name, sheet.get("kind") or "smartsheet",
@@ -599,6 +629,17 @@ def save_doc(result: dict, path=None) -> dict:
                 (doc_key, item["tab_id"], item.get("name") or item["tab_id"],
                  item.get("kind") or "", "[]", 0, 1, now))
         conn.commit()
+    try:
+        from . import images
+    except Exception:  # noqa: BLE001 - 图片登记失败不影响表格数据落库
+        return {"doc_key": doc_key, "name": result.get("name"), "tabs": stats}
+    for sheet, stat in zip(result.get("sheets", []), stats):
+        try:
+            images.register_sheet(
+                doc_key, sheet, path,
+                prune=bool(stat.get("complete", True) and sheet.get("columns")))
+        except Exception:  # noqa: BLE001 - 单表登记失败不影响其它表
+            pass
     return {"doc_key": doc_key, "name": result.get("name"), "tabs": stats}
 
 
@@ -679,7 +720,13 @@ def clear_doc(doc_key: str, path=None) -> int:
         conn.execute("DELETE FROM rows WHERE doc_key=?", (doc_key,))
         conn.execute("DELETE FROM sheets WHERE doc_key=?", (doc_key,))
         conn.execute("DELETE FROM changes WHERE doc_key=?", (doc_key,))
+        conn.execute("DELETE FROM doc_meta WHERE doc_key=?", (doc_key,))
         conn.commit()
+    try:
+        from . import images
+        images.clear_doc(doc_key, path)   # 图片文件保留，只清登记避免再次误下载
+    except Exception:  # noqa: BLE001 - 图片登记清理失败不影响表格数据清理
+        pass
     return n
 
 

@@ -1,6 +1,7 @@
 """腾讯文档监控 · 采集编排（GUI 与 Windows 定时任务共用同一条链路）。
 
-链路：读文档清单 → 浏览器采集 → 落库（每日一行 + 采集明细）→ 生成各自 Excel → 写日志。
+链路：读文档清单 → 纯 HTTP 采集（指标 + 表格）→ 落库 → 生成各自 Excel → 写日志。
+登录、正文预览、诊断仍走 Playwright；浏览量和表格同步不再启动浏览器。
 
 首次调用时会把旧版独立工具（腾讯文档数据保存）的历史数据与登录态导进来，
 用户不必重新扫码、历史曲线也不会断。
@@ -13,10 +14,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-from . import collector, config as cfg_mod, report, session, storage, tables
+from . import (config as cfg_mod, http_api, images, report, session, storage,
+               tables)
 
 LOG_MAX_BYTES = 2 * 1024 * 1024
-PARALLEL_WORKERS = 2   # 定时任务同时占用的浏览器数（历史/表格混合）
+PARALLEL_WORKERS = 2   # 定时任务并发路数（历史/表格混合，HTTP 请求）
 
 
 # ==================== 日志 ====================
@@ -85,22 +87,15 @@ def ensure_ready() -> str:
 
 # ==================== 采集 ====================
 
-def collect_all(on_status=None, debug: bool = True) -> list[dict]:
+def collect_all(on_status=None) -> list[dict]:
     """采集全部文档的浏览/成员历史并落库 / 出报表；表格数据单独同步。"""
     ensure_ready()
-    cfg = cfg_mod.load_cfg()
     docs = cfg_mod.load_docs()
     if not docs:
         raise RuntimeError("尚未配置任何腾讯文档，请先在「文档管理」里添加")
 
-    log(f"开始采集历史记录，共 {len(docs)} 个文档，"
-        f"headless={bool(cfg.get('tcdoc_headless', True))}")
-    results = collector.collect(
-        docs,
-        headless=bool(cfg.get("tcdoc_headless", True)),
-        on_status=on_status,
-        debug=debug,
-    )
+    log(f"开始采集历史记录，共 {len(docs)} 个文档（纯 HTTP）")
+    results = http_api.collect_metrics(docs, on_status=on_status)
     return _store_history_results(results)
 
 
@@ -145,11 +140,16 @@ def _store_history_results(results: list[dict]) -> list[dict]:
     return results
 
 
-def _store_tables(item: dict, info: dict) -> None:
+def _store_tables(item: dict, info: dict, on_status=None) -> None:
     """把表格同步结果落库并导出 Excel（失败只记录，不影响历史采集）。"""
     if not info.get("ok"):
         item["tables_error"] = info.get("error") or "表格同步失败"
         log(f"[{item['name']}] 表格同步失败：{item['tables_error']}")
+        return
+    if info.get("unchanged"):
+        item["tables_unchanged"] = True
+        log(f"[{item['name']}] 文档未变化（rev={info.get('rev') or '-'}），跳过拉取")
+        _download_images(item, on_status)
         return
     try:
         stats = tables.save_doc(info)
@@ -168,26 +168,66 @@ def _store_tables(item: dict, info: dict) -> None:
         log(f"[{item['name']}] 表格同步：{len(stats['tabs'])} 张 / "
             f"新增 {added} 修改 {updated} 删除 {removed}｜{detail}")
         item["tables_rows"] = sum(t["rows"] for t in stats["tabs"])
+        excel_ok = True
         try:
             item["tables_excel"] = str(tables.export_excel(item["doc_key"], item["name"]))
         except Exception as exc:  # noqa: BLE001 - Excel 被占用
+            excel_ok = False
             item["tables_excel_error"] = f"表格 Excel 写入失败：{exc}"
             log(f"[{item['name']}] {item['tables_excel_error']}")
+        # Excel 没写成功不记 rev：下次同步重新拉取并重试，避免一直跳过
+        if excel_ok and info.get("rev"):
+            tables.set_rev(item["doc_key"], info["rev"])
+        _download_images(item, on_status)
     except Exception as exc:  # noqa: BLE001
         item["tables_error"] = f"表格落库失败：{exc}"
         log(f"[{item['name']}] {item['tables_error']}")
 
 
-def _store_table_results(results: list[dict]) -> list[dict]:
+def _download_images(item: dict, on_status=None) -> None:
+    """表格同步/未变化时都补采缺失图片（已下载自动跳过）。"""
+    try:
+        image_stats = images.download_doc(item["doc_key"], item["name"],
+                                          on_status=on_status)
+        item["images"] = image_stats
+        if image_stats["total"]:
+            log(f"[{item['name']}] 表格图片：共 {image_stats['total']} 张，"
+                f"本次下载 {image_stats['downloaded']}，失败 {image_stats['failed']}")
+    except Exception as exc:  # noqa: BLE001 - 图片采集失败不影响表格同步
+        item["images_error"] = f"图片采集失败：{exc}"
+        log(f"[{item['name']}] {item['images_error']}")
+
+
+def _store_table_results(results: list[dict], on_status=None) -> list[dict]:
     """把表格同步结果逐篇落库/导出；调用方保证在主线程/单线程执行。"""
     for item in results:
         if item.get("ok"):
-            _store_tables(item, item)
+            _store_tables(item, item, on_status)
         else:
             log(f"[{item.get('name')}] 表格同步失败：{item.get('error')}")
     ok_n = sum(1 for item in results if item.get("ok"))
-    log(f"表格同步结束：成功 {ok_n}，失败 {len(results) - ok_n}")
+    changed_n = sum(1 for item in results
+                    if item.get("ok") and not item.get("tables_unchanged"))
+    log(f"表格同步结束：成功 {ok_n}（变更 {changed_n}，"
+        f"未变化 {ok_n - changed_n}），失败 {len(results) - ok_n}")
     return results
+
+
+def _known_revs(docs: list[dict]) -> dict[str, str]:
+    """只对「本地已有表格数据」的文档使用 rev 跳过，避免空库永远同步不到。"""
+    out: dict[str, str] = {}
+    for doc in docs:
+        key = doc.get("key") or tables.doc_key_of(doc.get("url"))
+        if not key:
+            continue
+        try:
+            if tables.has_data(key):
+                rev = tables.get_rev(key)
+                if rev:
+                    out[key] = rev
+        except Exception:  # noqa: BLE001 - 版本记录异常按首次同步处理
+            continue
+    return out
 
 
 def sync_tables(docs: list[dict] | None = None, on_status=None) -> list[dict]:
@@ -197,15 +237,10 @@ def sync_tables(docs: list[dict] | None = None, on_status=None) -> list[dict]:
                     if (d.get("kind") or "").lower() in tables.SYNC_KINDS]
     if not docs:
         raise RuntimeError("清单里没有可同步的表格文档（需要「表格」或「智能表格」类型）")
-    cfg = cfg_mod.load_cfg()
-    log(f"开始同步表格，共 {len(docs)} 个文档")
-    results = tables.collect_docs(
-        docs,
-        headless=bool(cfg.get("tcdoc_headless", True)),
-        on_status=on_status,
-        state=cfg_mod.state_path(),
-    )
-    return _store_table_results(results)
+    log(f"开始同步表格，共 {len(docs)} 个文档（纯 HTTP）")
+    results = http_api.collect_tables(docs, on_status=on_status,
+                                      known_revs=_known_revs(docs))
+    return _store_table_results(results, on_status=on_status)
 
 
 def tables_excel_path(doc: dict) -> Path:
@@ -239,11 +274,10 @@ def report_path(doc: dict) -> Path:
 
 # ==================== 定时任务入口 ====================
 
-def _fetch_history_one(doc: dict, headless: bool) -> dict:
-    """定时任务的一个历史采集任务（独立浏览器，不写登录快照）。"""
+def _fetch_history_one(doc: dict) -> dict:
+    """定时任务的一个历史指标任务（纯 HTTP）。"""
     try:
-        items = collector.collect([doc], headless=headless, debug=True,
-                                  save_session=False)
+        items = http_api.collect_metrics([doc])
         if items:
             return items[0]
         return {"doc_key": doc.get("key"), "name": doc.get("name"),
@@ -253,14 +287,15 @@ def _fetch_history_one(doc: dict, headless: bool) -> dict:
                 "url": doc.get("url"), "ok": False, "error": str(exc)}
 
 
-def _fetch_table_one(doc: dict, headless: bool) -> dict:
-    """定时任务的一个表格同步任务（独立浏览器，只抓不落库）。"""
+def _fetch_table_one(doc: dict, rev: str = "") -> dict:
+    """定时任务的一个表格同步任务（纯 HTTP，只抓不落库）。"""
     try:
-        items = tables.collect_docs([doc], headless=headless,
-                                    state=cfg_mod.state_path())
+        key = doc.get("key") or tables.doc_key_of(doc.get("url"))
+        known = {key: rev} if key and rev else {}
+        items = http_api.collect_tables([doc], known_revs=known)
         if items:
             return items[0]
-        return {"doc_key": doc.get("key"), "name": doc.get("name"),
+        return {"doc_key": key, "name": doc.get("name"),
                 "url": doc.get("url"), "ok": False, "error": "同步无返回",
                 "sheets": [], "skipped": []}
     except Exception as exc:  # noqa: BLE001 - 单篇失败不影响其它任务
@@ -270,22 +305,19 @@ def _fetch_table_one(doc: dict, headless: bool) -> dict:
 
 
 def run_scheduled() -> int:
-    """定时任务：历史记录 + 表格数据并线采集。
+    """定时任务：历史指标 + 表格数据并行采集（纯 HTTP，不启动浏览器）。
 
-    历史与表格任务交错提交到同一个线程池（默认 2 路并发）：
-    两个任务同时只各占一个浏览器，既能让历史/表格同时开跑，也能让多篇文档并行，
-    同时避免开太多浏览器把机器拖慢。抓取在线程池里做，写库/报表统一回主线程串行，
-    避免 SQLite 并发写和登录态快照互相覆盖。
+    历史与表格任务交错提交到同一个线程池（默认 2 路并发），写库/报表统一
+    回主线程串行，避免 SQLite 并发写；表格按 rev 跳过未变化的文档。
     """
     ensure_ready()
     docs = cfg_mod.load_docs()
     if not docs:
         log("定时采集失败：尚未配置任何腾讯文档")
         return 1
-    cfg = cfg_mod.load_cfg()
-    headless = bool(cfg.get("tcdoc_headless", True))
     table_docs = [d for d in docs
                   if (d.get("kind") or "").lower() in tables.SYNC_KINDS]
+    known = _known_revs(table_docs)
 
     tasks: list[tuple[str, dict]] = []
     for i in range(max(len(docs), len(table_docs))):
@@ -295,14 +327,18 @@ def run_scheduled() -> int:
             tasks.append(("table", table_docs[i]))
 
     log(f"定时任务开始：历史 {len(docs)} 篇，表格 {len(table_docs)} 篇，"
-        f"并发 {PARALLEL_WORKERS}")
+        f"并发 {PARALLEL_WORKERS}（纯 HTTP）")
     history_results: list[dict] = []
     table_results: list[dict] = []
     with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
         futures = {}
         for kind, doc in tasks:
-            fn = _fetch_history_one if kind == "history" else _fetch_table_one
-            futures[pool.submit(fn, doc, headless)] = (kind, doc)
+            if kind == "history":
+                fut = pool.submit(_fetch_history_one, doc)
+            else:
+                key = doc.get("key") or tables.doc_key_of(doc.get("url"))
+                fut = pool.submit(_fetch_table_one, doc, known.get(key, ""))
+            futures[fut] = (kind, doc)
         for fut in as_completed(futures):
             kind, doc = futures[fut]
             try:
@@ -312,6 +348,8 @@ def run_scheduled() -> int:
                         "url": doc.get("url"), "ok": False, "error": str(exc)}
             label = "历史" if kind == "history" else "表格"
             state = "成功" if item.get("ok") else (item.get("error") or "失败")
+            if item.get("tables_unchanged"):
+                state = "未变化"
             log(f"[{doc.get('name')}] {label}采集{state}")
             (history_results if kind == "history" else table_results).append(item)
 

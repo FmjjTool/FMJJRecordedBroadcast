@@ -5,12 +5,13 @@
 
 功能：
 - 文档下拉切换（每个文档独立记录），登录态统一由 Cookie 管理器持有（平台：腾讯文档）
-- 立即采集（接口优先、界面兜底），每次采集追加一行并算增量，各自出 Excel
+- 立即采集（纯 HTTP 接口），每次采集追加一行并算增量，各自出 Excel
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
+- 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
+- 修订记录 / 成员名单：纯 HTTP 全量翻页，分别导出 JSON + Excel
 - 其余 Tab：历史记录 / 采集明细 / 文档管理（自定义文档增删改 + 诊断包）
 - 底部：定时采集（每天一次 / 按间隔几分钟或几小时）+ 计划任务安装/删除
-  + 采集时隐藏浏览器窗口
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
@@ -29,8 +30,10 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.pages.tcdoc_mapping import TcDocMappingPanel
 from toolbox.tcdoc import (
-    archive, collector, config as tc_cfg, job, storage, tables, task)
+    archive, collector, config as tc_cfg, images, job, members, revision,
+    storage, tables, task)
 
 DAILY_COLS = [("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
               ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
@@ -38,6 +41,9 @@ SNAP_COLS = [("采集时间", 170), ("状态", 90), ("浏览量", 110), ("成员
              ("说明", 420)]
 DOC_COLS = [("名称", 260), ("类型", 100), ("记录数", 90), ("最近采集", 170), ("链接", 300)]
 CHANGE_COLS = [("时间", 160), ("工作表", 150), ("变更", 70), ("记录", 100), ("内容", 300)]
+REV_COLS = [("时间", 165), ("版本", 90), ("编辑人", 140), ("修订号", 100), ("类型", 90)]
+MEMBER_COLS = [("昵称", 220), ("权限等级", 110), ("账号来源", 100), ("UID", 210),
+               ("企业", 160)]
 
 
 def _cell(text, center=True, tip=""):
@@ -114,7 +120,8 @@ class _DocDialog(QDialog):
 
 
 class _DocPreviewPanel(QWidget):
-    """正文预览页：内容 Tab 在「表格同步」和「正文预览」之间自动切换。"""
+    """正文预览页：内容 Tab 在「表格同步」和「正文预览」之间自动切换，
+    但正文抓取完全手动（避免进入页面时自动启动浏览器）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -169,7 +176,7 @@ class _DocPreviewPanel(QWidget):
     # ==================== 文档切换 / 本地存档 ====================
 
     def set_doc(self, doc: dict | None):
-        """切文档：优先显示本地存档；没有存档时等 Tab 真正显示再自动抓取。"""
+        """切文档：只读本地存档，不自动启动浏览器；抓取必须手动点按钮。"""
         same = bool(self._doc and doc and self._doc.get("key") == doc.get("key"))
         if same and self._pages:
             self._doc = dict(doc)
@@ -216,11 +223,6 @@ class _DocPreviewPanel(QWidget):
             pages, collector.join_pages(pages),
             f"📂 本地存档于 {last} · 共 {len(pages)} 篇 · 点「🔄 重新抓取」更新",
             snap_tip)
-
-    def ensure_loaded(self):
-        """Tab 真正显示时才抓取；已有本地存档则直接看存档。"""
-        if self._doc and not self._pages and not self._loading:
-            self.load()
 
     def load(self):
         if self._loading or not self._doc:
@@ -441,28 +443,47 @@ class TcDocPage(BasePage):
             "登录态与其它平台统一存在 Cookie 管理器里，也能在那边清除或重新登录，"
             "之后不必重复登录（直到失效）</p>"
             "<p>· <b>立即采集</b>：只采集全部文档的浏览量 / 成员数历史，每次追加一行，"
-            "增量相对上一次采集计算；不包含表格同步，速度更快</p>"
+            "增量相对上一次采集计算；不包含表格同步，速度更快（纯 HTTP 接口，不启动浏览器）</p>"
             "<p>· <b>文档管理</b>：在「🗂 文档管理」Tab 添加 / 编辑 / 删除任意腾讯文档"
             "（表格 / 智能表格 / AI 文档 / 文档 / 幻灯片 / 收集表），可生成页面诊断包</p>"
-            "<p>· <b>表格同步</b>：手动同步当前文档的智能表格数据；"
+            "<p>· <b>表格同步</b>：手动同步当前文档的智能表格数据（纯 HTTP 接口，"
+            "不启动浏览器，文档版本没变化时自动跳过）；"
             "定时任务会自动并线同步全部表格文档。同步按记录比对"
             "新增/修改/删除，每次同步自动生成 Excel（每张工作表一个 sheet，"
             "存在 表格数据/，可点「📂 打开数据目录」查看）。"
             "普通表格、图表页、文章页不是同一套数据协议，会自动跳过并提示</p>"
+            "<p>· <b>表格图片</b>：图片字段里的图片会在同步后自动增量下载到 "
+            "图片/（按文档 / 工作表 / 字段归档，已下载不重复下，图片替换才重下）。"
+            "本地已同步过表格时，也可点「🖼 采集图片」补采，不需要重新同步</p>"
+            "<p>· <b>修订记录</b>：纯 HTTP 全量翻页拉取文档修订历史（接口每页 20 个版本，"
+            "自动翻完），逐条显示时间 / 版本号 / 编辑人昵称；自动存 修订记录/"
+            "（JSON + Excel，SQLite 增量去重）。普通表格 / 智能表格都支持</p>"
+            "<p>· <b>成员名单</b>：纯 HTTP 游标翻页拉取文档全部成员，显示昵称 / "
+            "权限等级（所有者、可编辑、可查看等）/ 账号来源 / UID，按 UID 去重后"
+            "存 成员名单/（JSON + Excel）。需要文档管理权限，"
+            "否则接口返回 0 条</p>"
+            "<p>· <b>映射回写</b>：用官方 OpenAPI 把本地 CSV / Excel / JSON 按字段映射"
+            "写入当前智能表格；先预览新增/更新/不变/错误，确认后按主键批量 upsert，"
+            "不会删除记录。连接后右侧「📋 腾讯表格（只读）」可直接查看现有记录"
+            "（前 20/50/100/200 条，可刷新）。需在「✍️ 映射回写」Tab 内保存"
+            " Client-Id / Access-Token / Open-Id（加密存在本机 Cookie 管理器）</p>"
             "<p>· <b>内容 Tab</b>：表格类型显示「📋 表格同步」，文档 / AI 文档 / "
-            "幻灯片等自动切换为「📖 正文预览」。AI 文档会展开并抓取全部子页面，"
+            "幻灯片等自动切换为「📖 正文预览」。正文抓取完全手动：只有点"
+            "「🔄 抓取正文」才会启动浏览器，进入页面或切换 Tab 不会自动打开浏览器。"
+            "AI 文档会展开并抓取全部子页面，"
             "可下拉切换单篇或合并查看，支持导出 Markdown / TXT；"
             "每次抓取自动存档：正文逐页写 pages.db（新增/修改/删除留痕），"
             "并更新 正文存档/文档名_哈希.md</p>"
             "<p>· <b>定时采集</b>：底部可选「每天一次」或「按间隔」（几分钟 / 几小时），"
             "由 Windows 计划任务自动跑（任务名 FengMingTCDocMonitor）；"
-            "定时任务会后台并线采集历史记录和表格数据（默认 2 路并发，"
-            "避免一次开太多浏览器）</p>"
+            "定时任务会后台并线采集历史记录和表格数据（默认 2 路并发，纯 HTTP 请求，"
+            "表格版本未变化时只发一个轻量探测请求）</p>"
             "<p>· <b>数据位置</b>：download/腾讯文档数据/"
-            "（tcdoc.db 浏览量库 + tables.db 表格库 + pages.db 正文库 + 报表/ + "
-            "表格数据/ + 正文存档/ + 日志）</p>"
-            "<p>· AI 文档（/aio/）本身不提供浏览量，只记录成员数；"
-            "Excel 若正被 WPS/Office 打开会写入失败，采集前请先关闭</p>")))
+            "（tcdoc.db 浏览量库 + tables.db 表格库 + pages.db 正文库 + "
+            "revisions.db 修订库 + members.db 成员库 + 报表/ + 表格数据/ + "
+            "正文存档/ + 修订记录/ + 成员名单/ + 图片/ + 日志）</p>"
+            "<p>· AI 文档（/aio/）同样通过接口记录浏览量 / 成员数；"
+            "正文预览仍需要浏览器；Excel 若正被 WPS/Office 打开会写入失败，采集前请先关闭</p>")))
         layout.addLayout(title_row)
 
         # ---------- 顶部卡片：文档切换 + 操作 ----------
@@ -489,7 +510,7 @@ class TcDocPage(BasePage):
         self.collect_btn.clicked.connect(self._collect)
         self.dir_btn = QPushButton("📂 打开数据目录")
         self.dir_btn.setToolTip(
-            "打开 download/腾讯文档数据/（报表/、表格数据/、正文存档/、数据库与日志）")
+            "打开 download/腾讯文档数据/（报表/、表格数据/、正文存档/、图片/、数据库与日志）")
         self.dir_btn.clicked.connect(self._open_data_dir)
         for btn in (self.collect_btn, self.dir_btn):
             row.addWidget(btn)
@@ -521,7 +542,14 @@ class TcDocPage(BasePage):
         self.content_stack.addWidget(self.preview_panel)
         self.tabs.addTab(self.content_stack, "📋 表格同步")
         self.content_tab_index = self.tabs.count() - 1
+        self.tabs.addTab(self._build_revision_tab(), "📜 修订记录")
+        self.revision_tab_index = self.tabs.count() - 1
+        self.tabs.addTab(self._build_members_tab(), "👥 成员名单")
+        self.members_tab_index = self.tabs.count() - 1
         self.tabs.addTab(self._build_doc_tab(), "🗂 文档管理")
+        self.mapping_panel = TcDocMappingPanel(self, self.current_doc)
+        self.tabs.addTab(self.mapping_panel, "✍️ 映射回写")
+        self.mapping_tab_index = self.tabs.count() - 1
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
@@ -560,11 +588,6 @@ class TcDocPage(BasePage):
         self.uninstall_btn = QPushButton("🗑 删除定时任务")
         self.uninstall_btn.clicked.connect(self._uninstall_task)
         bottom.addWidget(self.uninstall_btn)
-        self.headless_cb = QCheckBox("采集时隐藏浏览器窗口")
-        self.headless_cb.setToolTip("勾选：后台静默采集；取消：弹出浏览器窗口便于观察")
-        self.headless_cb.setChecked(bool(cfg.get("tcdoc_headless", True)))
-        self.headless_cb.toggled.connect(self._toggle_headless)
-        bottom.addWidget(self.headless_cb)
         try:
             interval_minutes = int(cfg.get("tcdoc_interval_minutes") or 30)
         except (TypeError, ValueError):
@@ -686,9 +709,17 @@ class TcDocPage(BasePage):
 
         self.sync_btn = QPushButton("🔄 同步表格")
         self.sync_btn.setStyleSheet("background: #2e7d32; color: white;")
-        self.sync_btn.setToolTip("只同步当前文档的表格数据（不动浏览量），可免登录读公开文档")
+        self.sync_btn.setToolTip(
+            "只同步当前文档的表格数据（纯 HTTP，不动浏览量），公开文档可免登录；"
+            "文档版本未变化时自动跳过")
         self.sync_btn.clicked.connect(self._sync_tables)
         bar.addWidget(self.sync_btn)
+
+        self.images_btn = QPushButton("🖼 采集图片")
+        self.images_btn.setToolTip(
+            "把当前文档全部表格图片字段里的图片增量下载到 图片/（已下载自动跳过）")
+        self.images_btn.clicked.connect(self._collect_images)
+        bar.addWidget(self.images_btn)
 
         self.prev_btn = QPushButton("◀")
         self.prev_btn.setToolTip("上一页")
@@ -744,13 +775,123 @@ class TcDocPage(BasePage):
         v.addWidget(body, 1)
 
         self.sheet_hint = QLabel("点「🔄 同步表格」把文档里的表格内容抓到本地；"
-                                "「立即采集」时也会顺带同步（看底部开关）。")
+                                "图片字段会自动增量下载到 图片/。")
         self.sheet_hint.setStyleSheet("color: #888;")
         v.addWidget(self.sheet_hint)
 
         self._sheet_columns: list[str] = []
         self._sheet_offset = 0
         self._sheet_total = 0
+        return box
+
+    def _build_revision_tab(self) -> QWidget:
+        """修订记录：全量版本 + 每次编辑的时间 / 编辑人。"""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 8, 6, 6)
+        v.setSpacing(6)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self.rev_fetch_btn = QPushButton("🔄 拉取全部修订记录")
+        self.rev_fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.rev_fetch_btn.setToolTip(
+            "纯 HTTP 翻页拉取该文档的全部修订记录（每页 20 个版本，自动翻完）；"
+            "含版本号、每次编辑的时间与编辑人昵称，自动存 修订记录/ JSON + Excel")
+        self.rev_fetch_btn.clicked.connect(self._fetch_revisions)
+        bar.addWidget(self.rev_fetch_btn)
+        self.rev_dir_btn = QPushButton("📂 打开修订记录目录")
+        self.rev_dir_btn.clicked.connect(lambda: self._open_dir(tc_cfg.revisions_dir()))
+        bar.addWidget(self.rev_dir_btn)
+        self.rev_more_btn = QPushButton("⬇ 加载更多")
+        self.rev_more_btn.setToolTip("再加载 2000 条较早的修订记录（滚动到底也会自动加载）")
+        self.rev_more_btn.clicked.connect(lambda: self._load_more_revisions())
+        bar.addWidget(self.rev_more_btn)
+        self.rev_all_btn = QPushButton("⏬ 全部加载")
+        self.rev_all_btn.setToolTip("一次性把本地全部修订记录加载进表格（数据量大时稍慢）")
+        self.rev_all_btn.clicked.connect(self._load_all_revisions)
+        bar.addWidget(self.rev_all_btn)
+        bar.addStretch(1)
+        v.addLayout(bar)
+        self.rev_info = QLabel("")
+        self.rev_info.setStyleSheet("color: #888;")
+        self.rev_info.setWordWrap(True)
+        v.addWidget(self.rev_info)
+
+        self.rev_table = QTableWidget(0, len(REV_COLS))
+        self.rev_table.setHorizontalHeaderLabels([c[0] for c in REV_COLS])
+        self.rev_table.verticalHeader().setVisible(False)
+        self.rev_table.verticalHeader().setDefaultSectionSize(24)
+        self.rev_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.rev_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.rev_table.setAlternatingRowColors(True)
+        for idx, (_name, width) in enumerate(REV_COLS):
+            self.rev_table.setColumnWidth(idx, width)
+        self.rev_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Stretch)
+        self.rev_table.horizontalHeader().setStretchLastSection(True)
+        self.rev_table.verticalScrollBar().valueChanged.connect(self._on_rev_scrolled)
+        v.addWidget(self.rev_table, 1)
+
+        self._rev_loaded = 0
+        self._rev_total = 0
+        self._rev_batch = 2000
+        self._rev_loading = False
+
+        self.rev_hint = QLabel(
+            "点「🔄 拉取全部修订记录」自动翻完全部页面；每行对应一次编辑，"
+            "编辑人昵称来自文档作者接口。表格默认加载最近 2000 条，"
+            "滚动到底自动继续加载，也可点「⬇ 加载更多」或「⏬ 全部加载」。")
+        self.rev_hint.setStyleSheet("color: #888;")
+        self.rev_hint.setWordWrap(True)
+        v.addWidget(self.rev_hint)
+        return box
+
+    def _build_members_tab(self) -> QWidget:
+        """成员名单：文档全部成员 + 权限等级。"""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 8, 6, 6)
+        v.setSpacing(6)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self.mem_fetch_btn = QPushButton("🔄 拉取全部成员")
+        self.mem_fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.mem_fetch_btn.setToolTip(
+            "纯 HTTP 游标翻页拉取该文档的全部成员（每页 100 条，自动翻完）；"
+            "含昵称、权限等级、账号来源、UID，自动存 成员名单/ JSON + Excel")
+        self.mem_fetch_btn.clicked.connect(self._fetch_members)
+        bar.addWidget(self.mem_fetch_btn)
+        self.mem_dir_btn = QPushButton("📂 打开成员名单目录")
+        self.mem_dir_btn.clicked.connect(lambda: self._open_dir(tc_cfg.members_dir()))
+        bar.addWidget(self.mem_dir_btn)
+        bar.addStretch(1)
+        v.addLayout(bar)
+        self.mem_info = QLabel("")
+        self.mem_info.setStyleSheet("color: #888;")
+        self.mem_info.setWordWrap(True)
+        v.addWidget(self.mem_info)
+
+        self.mem_table = QTableWidget(0, len(MEMBER_COLS))
+        self.mem_table.setHorizontalHeaderLabels([c[0] for c in MEMBER_COLS])
+        self.mem_table.verticalHeader().setVisible(False)
+        self.mem_table.verticalHeader().setDefaultSectionSize(24)
+        self.mem_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.mem_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.mem_table.setAlternatingRowColors(True)
+        for idx, (_name, width) in enumerate(MEMBER_COLS):
+            self.mem_table.setColumnWidth(idx, width)
+        self.mem_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.Stretch)
+        self.mem_table.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(self.mem_table, 1)
+
+        self.mem_hint = QLabel(
+            "接口返回的记录会按 UID 去重（腾讯会重复返回同一成员）；"
+            "权限等级：所有者 / 可编辑 / 可查看 等。需要该文档的管理权限。")
+        self.mem_hint.setStyleSheet("color: #888;")
+        v.addWidget(self.mem_hint)
         return box
 
     # ==================== 生命周期 ====================
@@ -782,6 +923,9 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_sheet_tabs()
         self._refresh_content_tab()
+        self._refresh_revisions()
+        self._refresh_members()
+        self.mapping_panel.set_doc(self.current_doc())
 
     def _reload_docs(self):
         current = self.current_doc()
@@ -882,6 +1026,9 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_sheet_tabs()
         self._refresh_content_tab()
+        self._refresh_revisions()
+        self._refresh_members()
+        self.mapping_panel.set_doc(self.current_doc())
 
     def _refresh_content_tab(self):
         """内容 Tab 自动切换：表格类型=表格同步，文档类型=正文预览。"""
@@ -893,16 +1040,23 @@ class TcDocPage(BasePage):
                              "📋 表格同步" if syncable else "📖 正文预览")
         if not syncable:
             self.preview_panel.set_doc(doc)
-            if self.tabs.currentIndex() == self.content_tab_index:
-                self.preview_panel.ensure_loaded()
 
     def _on_tab_changed(self, index):
+        if index == self.mapping_tab_index:
+            self.mapping_panel.refresh()
+            self.mapping_panel.set_doc(self.current_doc())
+            return
+        if index == self.revision_tab_index:
+            self._refresh_revisions()
+            return
+        if index == self.members_tab_index:
+            self._refresh_members()
+            return
         if index != self.content_tab_index:
             return
         doc = self.current_doc()
         if doc and (doc.get("kind") or "").lower() not in tables.SYNC_KINDS:
             self.preview_panel.set_doc(doc)
-            self.preview_panel.ensure_loaded()
 
     # ==================== 表格同步 ====================
 
@@ -942,7 +1096,7 @@ class TcDocPage(BasePage):
                                     "（普通表格 / 图表页 / 文章页不支持同步）")
         else:
             self.sheet_hint.setText("点「🔄 同步表格」把文档里的表格内容抓到本地；"
-                                    "「立即采集」时也会顺带同步（看底部开关）。")
+                                    "图片字段会自动增量下载到 图片/。")
         self._sheet_offset = 0
         self._load_sheet_page(reset=True)
         self._refresh_changes()
@@ -998,7 +1152,17 @@ class TcDocPage(BasePage):
         self.prev_btn.setEnabled(self._sheet_offset > 0)
         self.next_btn.setEnabled(self._sheet_offset + page_size < total)
         stamp = sheet.get("fetched_at") or "-"
-        self.sheet_info.setText(f"{len(names)} 列 · {total} 行 · 同步于 {stamp}")
+        try:
+            image_stats = images.stats(doc["key"], tab_id)
+        except Exception:  # noqa: BLE001 - 图片统计异常不影响表格预览
+            image_stats = {}
+        image_note = ""
+        if image_stats.get("total"):
+            image_note = (f" · 图片 {image_stats.get('done', 0)}/{image_stats['total']}"
+                          + (f"（失败 {image_stats['failed']}）"
+                             if image_stats.get("failed") else ""))
+        self.sheet_info.setText(
+            f"{len(names)} 列 · {total} 行{image_note} · 同步于 {stamp}")
 
     def _refresh_changes(self):
         doc = self.current_doc()
@@ -1044,21 +1208,282 @@ class TcDocPage(BasePage):
             if item.get("tables_error"):
                 self.app.toast(item["tables_error"][:120], "warning")
                 return
+            if item.get("tables_unchanged"):
+                image_stats = item.get("images") or {}
+                note = (f"，补采图片 {image_stats['downloaded']} 张"
+                        if image_stats.get("downloaded") else "")
+                self.status_label.setText(f"✅ 文档未变化，已跳过同步{note}（rev 未变）")
+                self.app.toast(f"文档未变化，已跳过同步{note}", "info")
+                return
             added = sum(t["added"] for t in item.get("tables_delta") or [])
             updated = sum(t["updated"] for t in item.get("tables_delta") or [])
             removed = sum(t["removed"] for t in item.get("tables_delta") or [])
+            image_stats = item.get("images") or {}
+            image_note = ""
+            if image_stats.get("total"):
+                image_note = (f"　图片 {image_stats.get('downloaded', 0)} 张新增"
+                              f"/共 {image_stats['total']} 张")
+                if image_stats.get("failed"):
+                    image_note += f"（失败 {image_stats['failed']}）"
             self.status_label.setText(
                 f"✅ 表格同步完成：新增 {added}　修改 {updated}　删除 {removed}"
-                "　Excel 已更新到 表格数据/")
-            self.app.toast(f"表格同步完成：+{added} ~{updated} -{removed}", "success")
+                f"{image_note}　Excel 已更新到 表格数据/")
+            if item.get("images_error"):
+                self.status_label.setText(
+                    self.status_label.text() + f"　{item['images_error']}")
+            self.app.toast(f"表格同步完成：+{added} ~{updated} -{removed}"
+                           + (f"，图片 +{image_stats.get('downloaded', 0)}"
+                              if image_stats.get("downloaded") else ""), "success")
 
         run_bg(work, done)
+
+    def _collect_images(self):
+        """补采本地已同步表格里的图片字段（不重新抓表格）。"""
+        if self._busy:
+            return
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先添加腾讯文档", "warning")
+            return
+        self._set_busy(True, "⏳ 正在采集表格图片……")
+
+        def work():
+            return images.download_doc(
+                doc["key"], doc["name"],
+                on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self.app.toast(f"图片采集失败：{err}"[:120], "error")
+                return
+            total = int((result or {}).get("total") or 0)
+            downloaded = int((result or {}).get("downloaded") or 0)
+            failed = int((result or {}).get("failed") or 0)
+            if not total:
+                self.status_label.setText("该文档的表格里没有图片字段")
+                self.app.toast("该文档的表格里没有图片字段", "info")
+                return
+            if downloaded:
+                message = (f"✅ 图片采集完成：共 {total} 张，本次下载 {downloaded} 张"
+                           + (f"，失败 {failed} 张" if failed else ""))
+            else:
+                message = f"✅ 图片已是最新：共 {total} 张"
+                if failed:
+                    message += f"，失败 {failed} 张"
+            self.status_label.setText(message + "　（图片/）")
+            self.app.toast(message, "warning" if failed else "success")
+            self._load_sheet_page()
+
+        run_bg(work, done)
+
+    # ==================== 修订记录 / 成员名单 ====================
+
+    def _refresh_revisions(self):
+        self._rev_loaded = 0
+        self._rev_total = 0
+        self.rev_table.setRowCount(0)
+        if not self.current_doc():
+            self.rev_info.setText("")
+            self.rev_more_btn.setEnabled(False)
+            self.rev_all_btn.setEnabled(False)
+            return
+        self._load_more_revisions(reset=True)
+
+    def _load_more_revisions(self, reset: bool = False, count: int | None = None):
+        doc = self.current_doc()
+        if not doc:
+            return
+        if reset:
+            self._rev_loaded = 0
+            self.rev_table.setRowCount(0)
+        if self._rev_total and self._rev_loaded >= self._rev_total:
+            self._update_rev_info()
+            return
+        limit = int(count or self._rev_batch)
+        rows, total = revision.load_rows(
+            doc["key"], limit=limit, offset=self._rev_loaded)
+        self._rev_total = total
+        self.rev_table.setUpdatesEnabled(False)
+        try:
+            for row in rows:
+                r = self.rev_table.rowCount()
+                self.rev_table.insertRow(r)
+                self.rev_table.setItem(r, 0, _cell(row["ts"]))
+                self.rev_table.setItem(
+                    r, 1, _cell(f"第{row['version']}版" if row["version"] else ""))
+                self.rev_table.setItem(r, 2, _cell(row["author"], center=False))
+                self.rev_table.setItem(r, 3, _cell(row["rev"]))
+                self.rev_table.setItem(r, 4, _cell(row["type"]))
+        finally:
+            self.rev_table.setUpdatesEnabled(True)
+        self._rev_loaded += len(rows)
+        self._update_rev_info()
+
+    def _on_rev_scrolled(self, value):
+        bar = self.rev_table.verticalScrollBar()
+        if self._rev_loading or not self._rev_total:
+            return
+        if self._rev_loaded >= self._rev_total:
+            return
+        if bar.maximum() and value >= bar.maximum() - 4:
+            self._rev_loading = True
+            QTimer.singleShot(0, self._load_next_rev_batch)
+
+    def _load_next_rev_batch(self):
+        try:
+            self._load_more_revisions()
+        finally:
+            self._rev_loading = False
+
+    def _load_all_revisions(self):
+        if not self._rev_total or self._rev_loaded >= self._rev_total:
+            return
+        self.setCursor(Qt.WaitCursor)
+        try:
+            self._load_more_revisions(count=self._rev_total - self._rev_loaded)
+        finally:
+            self.unsetCursor()
+
+    def _update_rev_info(self):
+        doc = self.current_doc()
+        if not doc:
+            self.rev_info.setText("")
+            return
+        meta_info = revision.meta(doc["key"])
+        if not meta_info:
+            self.rev_info.setText("暂无本地修订记录，点「🔄 拉取全部修订记录」")
+            self.rev_more_btn.setEnabled(False)
+            self.rev_all_btn.setEnabled(False)
+            return
+        authors = meta_info.get("authors") or []
+        names = "、".join(authors[:6]) + (
+            f" 等 {len(authors)} 人" if len(authors) > 6 else "")
+        note = (f"共 {self._rev_total} 条编辑记录 · {meta_info.get('versions', 0)} 个版本"
+                f" · 编辑人：{names or '-'}"
+                f" · 已加载 {self._rev_loaded}/{self._rev_total} 条")
+        if self._rev_loaded < self._rev_total:
+            note += "（滚动到底自动加载）"
+        if not meta_info.get("complete", True):
+            note += " · ⚠ 上次未拉全"
+        self.rev_info.setText(note)
+        more = self._rev_loaded < self._rev_total
+        self.rev_more_btn.setEnabled(more)
+        self.rev_all_btn.setEnabled(more)
+
+    def _fetch_revisions(self):
+        if self._busy:
+            return
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先添加腾讯文档", "warning")
+            return
+        self._set_busy(True, "⏳ 正在拉取全部修订记录……")
+
+        def work():
+            result = revision.collect(
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+            return revision.save(result)
+
+        def done(saved, err):
+            self._set_busy(False)
+            if err:
+                QMessageBox.warning(self, "修订记录拉取失败", str(err))
+                self.app.toast(f"拉取失败：{err}"[:120], "error")
+                return
+            self._refresh_revisions()
+            message = (f"✅ 修订记录：{saved.get('versions', 0)} 个版本 / "
+                       f"{saved.get('total', 0)} 条编辑（本次新增 {saved.get('added', 0)}）")
+            if saved.get("excel_error"):
+                message += "；Excel 写入失败（文件可能被占用）"
+            self.status_label.setText(message + "　（修订记录/）")
+            self.app.toast(message, "warning" if saved.get("excel_error") else "success")
+
+        run_bg(work, done)
+
+    def _refresh_members(self):
+        doc = self.current_doc()
+        self.mem_table.setRowCount(0)
+        if not doc:
+            self.mem_info.setText("")
+            return
+        users, total = members.load_users(doc["key"], limit=5000)
+        self.mem_table.setUpdatesEnabled(False)
+        for user in users:
+            r = self.mem_table.rowCount()
+            self.mem_table.insertRow(r)
+            self.mem_table.setItem(r, 0, _cell(user["name"], center=False,
+                                               tip=user["name"]))
+            self.mem_table.setItem(r, 1, _cell(user["role"]))
+            self.mem_table.setItem(r, 2, _cell(user["source"]))
+            self.mem_table.setItem(r, 3, _cell(user["uid"], center=False,
+                                               tip=user["uid"]))
+            self.mem_table.setItem(r, 4, _cell(user["corp_name"], center=False))
+        self.mem_table.setUpdatesEnabled(True)
+        meta_info = members.meta(doc["key"])
+        if not meta_info:
+            self.mem_info.setText("暂无本地成员名单，点「🔄 拉取全部成员」")
+            return
+        roles = meta_info.get("roles") or {}
+        dist = " · ".join(f"{k} {v}" for k, v in roles.items())
+        note = (f"共 {meta_info.get('records', total)} 条记录 / {total} 位成员（去重）")
+        if dist:
+            note += " · " + dist
+        if not meta_info.get("complete", True):
+            note += " · ⚠ 上次未拉全"
+        self.mem_info.setText(note)
+
+    def _fetch_members(self):
+        if self._busy:
+            return
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先添加腾讯文档", "warning")
+            return
+        self._set_busy(True, "⏳ 正在拉取全部成员……")
+
+        def work():
+            result = members.collect(
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+            return members.save(result)
+
+        def done(saved, err):
+            self._set_busy(False)
+            if err:
+                QMessageBox.warning(self, "成员名单拉取失败", str(err))
+                self.app.toast(f"拉取失败：{err}"[:120], "error")
+                return
+            self._refresh_members()
+            if not saved.get("records"):
+                message = "该文档没有返回成员名单（需要文档管理权限）"
+                self.status_label.setText(f"⚠ {message}")
+                self.app.toast(message, "warning")
+                return
+            message = (f"✅ 成员名单：{saved.get('records', 0)} 条记录 / "
+                       f"{saved.get('unique', 0)} 位成员（去重，本次新增 {saved.get('added', 0)}）")
+            if saved.get("excel_error"):
+                message += "；Excel 写入失败（文件可能被占用）"
+            self.status_label.setText(message + "　（成员名单/）")
+            self.app.toast(message, "warning" if saved.get("excel_error") else "success")
+
+        run_bg(work, done)
+
+    def _open_dir(self, path):
+        path = Path(path)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self.app.toast(f"打开失败：{path}", "warning")
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
         for btn in (self.collect_btn, self.install_btn, self.uninstall_btn,
                     self.add_btn, self.edit_btn, self.del_btn, self.probe_btn,
-                    self.rebuild_btn, self.sync_btn):
+                    self.rebuild_btn, self.sync_btn, self.images_btn,
+                    self.rev_fetch_btn, self.rev_more_btn, self.rev_all_btn,
+                    self.mem_fetch_btn):
             btn.setEnabled(not busy)
         self.preview_panel.set_enabled(not busy)
         if busy:
@@ -1080,8 +1505,7 @@ class TcDocPage(BasePage):
 
         def work():
             return job.collect_all(
-                on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"),
-                debug=True)
+                on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
 
         def done(results, err):
             self._set_busy(False)
@@ -1205,7 +1629,8 @@ class TcDocPage(BasePage):
             except OSError:
                 pass
             self.app.toast(f"已删除文档与其 {removed} 条历史记录"
-                           f"（表格数据 {table_rows} 行，正文存档 {page_rows} 页）", "success")
+                           f"（表格数据 {table_rows} 行，正文存档 {page_rows} 页；"
+                           "已下载图片文件保留）", "success")
         else:
             self.app.toast(f"已删除文档「{doc['name']}」", "success")
         self.reload()
@@ -1250,9 +1675,6 @@ class TcDocPage(BasePage):
         if minutes == -1:
             minutes = self.interval_spin.value()
         return max(1, min(1439, int(minutes)))
-
-    def _toggle_headless(self, checked):
-        tc_cfg.save_cfg(tcdoc_headless=bool(checked))
 
     def _install_task(self):
         if self._busy:

@@ -1,10 +1,11 @@
-"""腾讯文档监控 · 浏览器采集。
+"""腾讯文档监控 · 浏览器能力（正文预览 / 登录 / 诊断 + 旧版指标兜底）。
 
-采集口径（沿用原独立工具，稳定）：
-1. 先挂响应监听，页面加载时自动请求的统计接口直接取数（get_count → 成员数，
-   browser_list → 浏览量 / 已查看人数）；
-2. 接口没命中才走界面兜底：点「文档成员」「浏览记录」等入口，从弹层文案里扫数字；
-3. AI 文档（/aio/）不提供浏览量，只记录成员数。
+浏览量和表格同步已改走 `http_api` 纯 HTTP 直连，不再启动浏览器；
+本模块保留浏览器用于：
+1. 正文预览（AI 文档逐页抓取，页面交互无法用接口替代）；
+2. Cookie 管理器登录；
+3. 页面改版时的诊断包；
+4. `collect()` 旧版浏览器指标采集，作为接口异常时的备用路径。
 
 浏览器统一走 toolbox.browser.launch（系统 Edge → Chrome → 本地内核），
 不单独维护渠道列表。
@@ -719,9 +720,8 @@ def login(docs: list[dict], on_status=None, timeout: int = LOGIN_TIMEOUT) -> boo
 
 def collect(docs: list[dict], headless: bool = True, on_status=None,
             debug: bool = True, save_session: bool = True) -> list[dict]:
-    """批量采集多个文档的浏览量 / 成员数，共用一次浏览器会话。
+    """旧版浏览器指标采集（保留备用；正常链路走 http_api.collect_metrics）。
 
-    只负责历史记录；智能表格数据由 tables / job.sync_tables 单独同步。
     单文档失败不影响其它文档。定时任务并行采集时传 save_session=False，
     避免多个浏览器线程同时改写登录快照。
     """

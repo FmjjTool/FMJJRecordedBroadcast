@@ -6,7 +6,6 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
   tcdoc_collect_time     每日定时采集时间 "HH:MM"
   tcdoc_schedule_mode    定时模式：daily（每天一次）/ interval（按间隔）
   tcdoc_interval_minutes 按间隔模式的最小间隔
-  tcdoc_headless         采集时隐藏浏览器窗口
   tcdoc_legacy_migrated  是否已尝试导入旧版「腾讯文档数据保存」的历史数据
   tcdoc_table_page       表格同步页每页显示行数
 
@@ -14,9 +13,14 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
   download/腾讯文档数据/tcdoc.db      SQLite 历史存档（浏览量 / 成员数）
   download/腾讯文档数据/tables.db     SQLite 智能表格数据（逐表逐行 + 变更记录）
   download/腾讯文档数据/pages.db      SQLite 正文存档（AI 文档逐页正文 + 变更记录）
+  download/腾讯文档数据/revisions.db SQLite 修订记录（版本 + 每次编辑时间/编辑人）
+  download/腾讯文档数据/members.db  SQLite 文档成员名单（昵称 / 权限等级 / UID）
+  download/腾讯文档数据/修订记录/*.json|*.xlsx 每文档一份全量修订记录与 Excel
+  download/腾讯文档数据/成员名单/*.json|*.xlsx 每文档一份成员名单与 Excel
   download/腾讯文档数据/报表/*.xlsx   每个文档一份浏览量报表（文档名_key短哈希）
   download/腾讯文档数据/表格数据/*.xlsx  每个文档一份表格数据（每表一个 sheet）
   download/腾讯文档数据/正文存档/*.md    每个文档一份自动更新的正文快照
+  download/腾讯文档数据/图片/          智能表格图片字段（按文档/工作表/字段归档）
   download/腾讯文档数据/日志/         采集日志
   download/腾讯文档数据/调试/         页面改版时的诊断包
 登录态含账号凭证，单独放 config/tcdoc_state.json（不进导出目录）。
@@ -194,6 +198,24 @@ def pages_db_path() -> Path:
     return data_dir() / "pages.db"
 
 
+def revisions_db_path() -> Path:
+    """修订记录独立建库（版本 + 逐次编辑，跟表格数据不混表）。"""
+    return data_dir() / "revisions.db"
+
+
+def revisions_dir() -> Path:
+    return _ensure(data_dir() / "修订记录")
+
+
+def members_db_path() -> Path:
+    """文档成员名单独立建库。"""
+    return data_dir() / "members.db"
+
+
+def members_dir() -> Path:
+    return _ensure(data_dir() / "成员名单")
+
+
 def tables_dir() -> Path:
     return _ensure(data_dir() / "表格数据")
 
@@ -201,6 +223,11 @@ def tables_dir() -> Path:
 def docs_dir() -> Path:
     """正文自动快照目录（每次预览更新，每篇文档一个 .md）。"""
     return _ensure(data_dir() / "正文存档")
+
+
+def images_dir() -> Path:
+    """智能表格图片字段的落盘目录（按文档/工作表/字段归档）。"""
+    return _ensure(data_dir() / "图片")
 
 
 def reports_dir() -> Path:
