@@ -183,7 +183,8 @@ def collect_metrics(docs: list[dict], on_status=None) -> list[dict]:
             name = doc.get("name") or doc.get("key")
             _emit(on_status, f"（{i}/{len(docs)}）正在读取指标：{name}")
             key = doc.get("key") or t.doc_key_of(doc.get("url"))
-            base = {"doc_key": key, "name": name, "url": doc.get("url"), "ok": False}
+            base = {"key": key, "doc_key": key, "name": name,
+                    "url": doc.get("url"), "ok": False}
             try:
                 sk = doc_skeleton(client, doc)
                 pad_id = sk["pad_id"]

@@ -1,10 +1,12 @@
 """腾讯文档监控 · SQLite 存档。
 
-两张表，均按 doc_key 分区，同库可容纳任意数量文档：
+三张表，均按 doc_key 分区，同库可容纳任意数量文档：
 - daily     : 每次采集追加一行（同一天多次采集保留多行），增量相对上一次采集
 - snapshots : 每次采集的成功/失败明细（失败原因留档，便于回溯）
+- browsers  : 已查看浏览人明细，按 (doc_key, uid) 增量 upsert
 
-增量计算口径：与该文档「上一次成功采集」比较；首次采集或某一侧缺失时为 NULL。
+增量计算口径：daily 与该文档「上一次成功采集」比较；浏览人按 uid 首次出现 /
+最近浏览时间变化识别新增与更新。
 """
 
 from __future__ import annotations
@@ -40,6 +42,21 @@ CREATE TABLE IF NOT EXISTS snapshots (
 )
 """
 
+BROWSER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS browsers (
+    doc_key     TEXT NOT NULL,
+    uid         TEXT NOT NULL,
+    nick        TEXT,
+    avatar      TEXT,
+    uid_source  INTEGER,
+    last_ts     INTEGER,
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    PRIMARY KEY (doc_key, uid)
+);
+CREATE INDEX IF NOT EXISTS idx_browsers_doc_ts ON browsers (doc_key, last_ts DESC);
+"""
+
 
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -65,6 +82,7 @@ def init_db(db_path: Path) -> None:
     with _connect(db_path) as conn:
         conn.execute(DAILY_SCHEMA)
         conn.execute(SNAPSHOT_SCHEMA)
+        conn.executescript(BROWSER_SCHEMA)
         if "readers" not in _columns(conn, "daily"):
             conn.execute("ALTER TABLE daily ADD COLUMN readers INTEGER")
         if "readers" not in _columns(conn, "snapshots"):
@@ -104,6 +122,42 @@ def append_daily(db_path: Path, doc_key: str, ts: str, day: str,
             " views_delta, members_delta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (doc_key, ts, day, views, members, readers, views_delta, members_delta),
         )
+
+
+def save_browsers(db_path: Path, doc_key: str, rows: list[dict], ts: str) -> dict:
+    """按 uid 增量写入浏览人明细，返回 {added, updated, total}。
+
+    新增 = 该文档首次出现的 uid；更新 = 老 uid 的最近浏览时间变新。
+    昵称 / 头像 / 来源每次覆盖为最新值，first_seen 保留首次采集时间。
+    """
+    added = updated = 0
+    with _connect(db_path) as conn:
+        for row in rows:
+            uid = str(row.get("uid") or "")
+            if not uid:
+                continue
+            last_ts = row.get("last_ts")
+            prev = conn.execute(
+                "SELECT last_ts FROM browsers WHERE doc_key = ? AND uid = ?",
+                (doc_key, uid)).fetchone()
+            if prev is None:
+                conn.execute(
+                    "INSERT INTO browsers (doc_key, uid, nick, avatar, uid_source,"
+                    " last_ts, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (doc_key, uid, row.get("nick"), row.get("avatar"),
+                     row.get("uid_source"), last_ts, ts, ts))
+                added += 1
+                continue
+            if last_ts is not None and (prev["last_ts"] is None
+                                        or last_ts > prev["last_ts"]):
+                updated += 1
+            conn.execute(
+                "UPDATE browsers SET nick = ?, avatar = ?, uid_source = ?,"
+                " last_ts = MAX(COALESCE(last_ts, 0), COALESCE(?, 0)),"
+                " last_seen = ? WHERE doc_key = ? AND uid = ?",
+                (row.get("nick"), row.get("avatar"), row.get("uid_source"),
+                 last_ts, ts, doc_key, uid))
+    return {"added": added, "updated": updated, "total": len(rows)}
 
 
 def refresh_deltas(db_path: Path, doc_key: str) -> None:
@@ -155,6 +209,24 @@ def latest(db_path: Path, doc_key: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def all_browsers(db_path: Path, doc_key: str) -> list[sqlite3.Row]:
+    """该文档全部已查看浏览人（最近浏览时间倒序）。"""
+    with _connect(db_path) as conn:
+        return conn.execute(
+            "SELECT * FROM browsers WHERE doc_key = ?"
+            " ORDER BY COALESCE(last_ts, 0) DESC", (doc_key,)
+        ).fetchall()
+
+
+def browser_stats(db_path: Path, doc_key: str) -> tuple[int, str]:
+    """(浏览人条数, 最近一次采集时间)；无记录返回 (0, "")。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, MAX(last_seen) AS last FROM browsers WHERE doc_key = ?",
+            (doc_key,)).fetchone()
+    return (int(row["n"] or 0), str(row["last"] or "")) if row else (0, "")
+
+
 def doc_stats(db_path: Path, doc_key: str) -> tuple[int, str]:
     """(记录条数, 最近采集时间)；无记录返回 (0, "")。"""
     with _connect(db_path) as conn:
@@ -170,6 +242,7 @@ def clear_doc(db_path: Path, doc_key: str) -> int:
         n = conn.execute("SELECT COUNT(*) FROM daily WHERE doc_key = ?", (doc_key,)).fetchone()[0]
         conn.execute("DELETE FROM daily WHERE doc_key = ?", (doc_key,))
         conn.execute("DELETE FROM snapshots WHERE doc_key = ?", (doc_key,))
+        conn.execute("DELETE FROM browsers WHERE doc_key = ?", (doc_key,))
     return int(n or 0)
 
 

@@ -14,8 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-from . import (config as cfg_mod, http_api, images, report, session, storage,
-               tables)
+from . import (browse, config as cfg_mod, http_api, images, report, session,
+               storage, tables)
 
 LOG_MAX_BYTES = 2 * 1024 * 1024
 PARALLEL_WORKERS = 2   # 定时任务并发路数（历史/表格混合，HTTP 请求）
@@ -88,7 +88,11 @@ def ensure_ready() -> str:
 # ==================== 采集 ====================
 
 def collect_all(on_status=None) -> list[dict]:
-    """采集全部文档的浏览/成员历史并落库 / 出报表；表格数据单独同步。"""
+    """采集全部文档的浏览/成员历史并落库 / 出报表；表格数据单独同步。
+
+    手动入口会额外拉取「已查看」浏览人明细（昵称 + 最近浏览时间），
+    只在这里执行，不进每日定时任务（浏览记录重翻页，耗时约 5 秒/千条）。
+    """
     ensure_ready()
     docs = cfg_mod.load_docs()
     if not docs:
@@ -96,11 +100,33 @@ def collect_all(on_status=None) -> list[dict]:
 
     log(f"开始采集历史记录，共 {len(docs)} 个文档（纯 HTTP）")
     results = http_api.collect_metrics(docs, on_status=on_status)
-    return _store_history_results(results)
+    browse_map = _collect_browse(docs, results, on_status)
+    return _store_history_results(results, browse_map)
 
 
-def _store_history_results(results: list[dict]) -> list[dict]:
+def _collect_browse(docs: list[dict], results: list[dict], on_status=None) -> dict[str, dict]:
+    """逐文档拉浏览人明细；失败只记录，不影响浏览量 / 成员数采集。"""
+    ok_keys = {str(item.get("doc_key") or "") for item in results if item.get("ok")}
+    by_key = {str(item.get("doc_key") or ""): item for item in results}
+    out: dict[str, dict] = {}
+    for doc in docs:
+        key = str(doc.get("key") or tables.doc_key_of(doc.get("url")) or "")
+        if key not in ok_keys:
+            continue
+        try:
+            out[key] = browse.collect(doc, on_status=on_status)
+        except Exception as exc:  # noqa: BLE001 - 浏览记录失败不阻断指标采集
+            item = by_key.get(key)
+            if item is not None:
+                item["browse_error"] = str(exc)
+            log(f"[{doc.get('name')}] 浏览记录采集失败：{exc}")
+    return out
+
+
+def _store_history_results(results: list[dict],
+                           browse_map: dict[str, dict] | None = None) -> list[dict]:
     """把历史采集结果落库并出报表；调用方保证在主线程/单线程执行。"""
+    browse_map = browse_map or {}
     db = cfg_mod.db_path()
     ts, day = storage.now_str(), storage.today_str()
     for item in results:
@@ -110,6 +136,18 @@ def _store_history_results(results: list[dict]) -> list[dict]:
             item["date"] = day
             log(f"[{item['name']}] 采集失败：{item.get('error') or '未知错误'}")
             continue
+
+        browse_info = browse_map.get(str(item.get("doc_key") or ""))
+        if browse_info is not None:
+            try:
+                stats = storage.save_browsers(db, item["doc_key"],
+                                              browse_info.get("rows") or [], ts)
+                item["browse"] = stats
+                log(f"[{item['name']}] 浏览记录：{stats['total']} 人"
+                    f"（新增 {stats['added']}，更新 {stats['updated']}）")
+            except Exception as exc:  # noqa: BLE001 - 浏览人入库失败不影响报表主体
+                item["browse_error"] = f"浏览记录入库失败：{exc}"
+                log(f"[{item['name']}] {item['browse_error']}")
 
         note = ""
         if item.get("views") is None and "未读取到浏览量" in (item.get("source") or ""):
@@ -131,9 +169,12 @@ def _store_history_results(results: list[dict]) -> list[dict]:
         views = "-" if row["views"] is None else row["views"]
         vdelta = "-" if row["views_delta"] is None else f"{row['views_delta']:+d}"
         mdelta = "-" if row["members_delta"] is None else f"{row['members_delta']:+d}"
+        browse = item.get("browse") or {}
+        browse_note = (f" 浏览人={browse.get('total')}(新增 {browse.get('added')}"
+                       f" 更新 {browse.get('updated')})" if browse else "")
         log(f"[{item['name']}] 日期={day} 浏览量={views}({vdelta}) "
             f"成员数={row['members']}({mdelta}) 已查看={item.get('readers')} "
-            f"来源={item.get('source')}")
+            f"来源={item.get('source')}{browse_note}")
 
     ok_n = sum(1 for item in results if item.get("ok"))
     log(f"历史采集结束：成功 {ok_n}，失败 {len(results) - ok_n}")

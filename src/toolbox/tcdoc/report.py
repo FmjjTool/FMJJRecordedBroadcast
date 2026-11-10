@@ -3,17 +3,28 @@
 工作表：
 - 每日记录：日期 / 采集时间 / 浏览量 / 浏览增量 / 成员数 / 成员增量 / 已查看人数
 - 采集明细：采集时间 / 浏览量 / 成员数 / 状态 / 说明
+- 浏览人  ：昵称 / 最近浏览时间 / 来源 / UID / 首次记录（仅手动采集的已查看明细）
 
 增量列用绿色粗体标出正增长（与项目里其它报表的视觉口径一致）。
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import storage
 
 HEADER_BG = "2F5597"
+CST = timezone(timedelta(hours=8))
+UID_SOURCE = {1: "QQ", 2: "微信"}
+
+
+def _ts_text(ts) -> str:
+    try:
+        return datetime.fromtimestamp(int(ts), CST).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return ""
 
 
 def _style_header(ws, columns: list[tuple[str, int]]) -> None:
@@ -79,6 +90,21 @@ def build_report(db_path: Path, xlsx_path: Path, doc_key: str, doc_name: str = "
             cell = ws2.cell(row=r, column=c, value=value)
             cell.border = border
             cell.alignment = center if c <= 4 else Alignment(horizontal="left", vertical="center")
+
+    browsers = storage.all_browsers(db_path, doc_key)
+    if browsers:
+        ws3 = wb.create_sheet("浏览人")
+        _style_header(ws3, [("昵称", 24), ("最近浏览时间", 21), ("来源", 8),
+                            ("UID", 24), ("首次记录", 21)])
+        for r, row in enumerate(browsers, start=2):
+            values = [row["nick"] or "", _ts_text(row["last_ts"]),
+                      UID_SOURCE.get(row["uid_source"], ""), row["uid"],
+                      row["first_seen"] or ""]
+            for c, value in enumerate(values, start=1):
+                cell = ws3.cell(row=r, column=c, value=value)
+                cell.border = border
+                cell.alignment = center
+        ws3.auto_filter.ref = f"A1:E{max(len(browsers) + 1, 2)}"
 
     xlsx_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(xlsx_path)

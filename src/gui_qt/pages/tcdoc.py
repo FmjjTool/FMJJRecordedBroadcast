@@ -438,12 +438,16 @@ class TcDocPage(BasePage):
         from gui_qt.help_overlay import attach_help_overlay
         title_row.addWidget(attach_help_overlay(self, "❓ 腾讯文档监控 · 功能介绍", (
             "<p><b>自动记录腾讯文档的浏览量、文档成员数（附已查看人数），"
+            "手动采集时同时保存已查看浏览人（昵称 + 最近浏览时间），"
             "每个文档独立存档并生成 Excel 报表。</b></p>"
             "<p>· <b>登录</b>：在 <b>Cookie 管理器</b> 的「腾讯文档」一行点「浏览器」扫码即可。"
             "登录态与其它平台统一存在 Cookie 管理器里，也能在那边清除或重新登录，"
             "之后不必重复登录（直到失效）</p>"
-            "<p>· <b>立即采集</b>：只采集全部文档的浏览量 / 成员数历史，每次追加一行，"
-            "增量相对上一次采集计算；不包含表格同步，速度更快（纯 HTTP 接口，不启动浏览器）</p>"
+            "<p>· <b>立即采集</b>：采集全部文档的浏览量 / 成员数历史，并全量翻页拉取"
+            "「已查看」浏览人明细（昵称 / 来源 / 最近浏览时间，写入报表「浏览人」页签，"
+            "按 UID 增量去重）；每次追加一行，增量相对上一次采集计算；"
+            "不包含表格同步，速度更快（纯 HTTP 接口，不启动浏览器）。"
+            "浏览记录只随手动采集执行，不进每天定时任务</p>"
             "<p>· <b>文档管理</b>：在「🗂 文档管理」Tab 添加 / 编辑 / 删除任意腾讯文档"
             "（表格 / 智能表格 / AI 文档 / 文档 / 幻灯片 / 收集表），可生成页面诊断包</p>"
             "<p>· <b>表格同步</b>：手动同步当前文档的智能表格数据（纯 HTTP 接口，"
@@ -506,7 +510,8 @@ class TcDocPage(BasePage):
         self.collect_btn = QPushButton("🔄 立即采集")
         self.collect_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.collect_btn.setToolTip(
-            "采集全部文档的浏览量 / 成员数并写入历史记录与报表（不含表格同步）")
+            "采集全部文档的浏览量 / 成员数 / 已查看浏览人（昵称 + 最近浏览时间），"
+            "写入历史记录与报表（不含表格同步）")
         self.collect_btn.clicked.connect(self._collect)
         self.dir_btn = QPushButton("📂 打开数据目录")
         self.dir_btn.setToolTip(
@@ -1516,8 +1521,13 @@ class TcDocPage(BasePage):
             failed = [r for r in results if not r.get("ok")]
             report_err = [r for r in ok if r.get("report_error")]
             self.reload()
+            browse_total = sum((r.get("browse") or {}).get("total") or 0 for r in ok)
+            browse_added = sum((r.get("browse") or {}).get("added") or 0 for r in ok)
+            browse_note = (f"，浏览人 {browse_total}（新增 {browse_added}）"
+                           if browse_total else "")
             self.status_label.setText(
-                f"✅ 历史采集完成：成功 {len(ok)}/{len(results)}，已写入数据库与报表")
+                f"✅ 历史采集完成：成功 {len(ok)}/{len(results)}"
+                f"，已写入数据库与报表{browse_note}")
             if failed:
                 detail = "\n".join(f"· {r['name']}：{r.get('error') or '未知错误'}" for r in failed)
                 QMessageBox.warning(self, "部分文档采集失败",
