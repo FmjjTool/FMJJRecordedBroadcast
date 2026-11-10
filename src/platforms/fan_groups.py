@@ -17,6 +17,9 @@ B站（2026-11 实测）：
   GET https://api.vc.bilibili.com/link_group/v1/member/my_groups?up_mid=<mid>&...
   - 需登录 Cookie；只返回「当前账号已加入」的应援团
   - 网页端没有 UP 全部群的公开列表；已知 group_id 时可查详情/成员
+
+群头像：三平台列表接口都直接返回头像 URL（group_icon / avatar / group_cover），
+无需额外请求；查询后自动下载到 <群目录>/头像/，文件名 序号_群名_群ID.ext。
 """
 
 from __future__ import annotations
@@ -58,6 +61,7 @@ class FanGroup:
     group_no: str = ""
     owner_uid: str = ""
     avatar: str = ""
+    avatar_path: str = ""
     entry_limit: str = ""
     tags: str = ""
     notice: str = ""
@@ -164,6 +168,23 @@ def _douyin_params(sec_uid: str) -> dict:
     }
 
 
+def _url_of(v) -> str:
+    """头像字段兼容字符串 / {url_list} / 列表三种形态。"""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, dict):
+        for k in ("url_list", "url", "uri"):
+            u = _url_of(v.get(k))
+            if u:
+                return u
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            u = _url_of(x)
+            if u:
+                return u
+    return ""
+
+
 def fetch_douyin(sec_uid: str, timeout: float = 20.0) -> list[FanGroup]:
     from urllib.parse import urlencode
     from multi_downloader import _douyin_abogus
@@ -199,7 +220,7 @@ def fetch_douyin(sec_uid: str, timeout: float = 20.0) -> list[FanGroup]:
             member_count=_int_or_none(g.get("group_member_count")),
             group_no="",
             owner_uid=str(g.get("group_owner_uid") or ""),
-            avatar=str(g.get("group_icon") or ""),
+            avatar=_url_of(g.get("group_icon")),
             entry_limit=str(g.get("entry_limit") or ""),
             tags="、".join(str(t) for t in tags if t),
             notice=str(g.get("group_desc") or ""),
@@ -247,7 +268,7 @@ def fetch_weibo(uid: str, timeout: float = 25.0) -> list[FanGroup]:
             member_limit=_int_or_none(g.get("max_member")),
             group_no=str(g.get("no") or ""),
             owner_uid=str(g.get("owner") or ""),
-            avatar=str(g.get("avatar") or g.get("round_avatar") or ""),
+            avatar=_url_of(g.get("avatar")) or _url_of(g.get("round_avatar")),
             entry_limit=_WEIBO_JOIN.get(jt, "暂不可加入" if jt is None else f"类型 {jt}"),
             tags="、".join(tags),
             notice=str(g.get("summary") or ""),
@@ -286,7 +307,7 @@ def fetch_bili(mid: str, timeout: float = 20.0) -> list[FanGroup]:
             member_count=None,          # my_groups 不返回人数
             group_no="",
             owner_uid=str(g.get("owner_uid") or ""),
-            avatar=str(g.get("group_cover") or ""),
+            avatar=_url_of(g.get("group_cover")),
             entry_limit="",
             tags="",
             notice=str(g.get("group_notice") or ""),
@@ -356,11 +377,9 @@ def diff_members(groups: list[FanGroup], previous: dict | None) -> dict[str, int
     return out
 
 
-def save_snapshot(platform: str, owner_id: str, groups: list[FanGroup],
-                  note: str = "") -> Path:
-    d = group_dir(platform, owner_id)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    payload = {
+def _snapshot_payload(platform: str, owner_id: str, groups: list[FanGroup],
+                      note: str = "") -> dict:
+    return {
         "platform": platform,
         "platform_label": PLATFORM_LABELS.get(platform, platform),
         "owner_id": owner_id,
@@ -368,11 +387,131 @@ def save_snapshot(platform: str, owner_id: str, groups: list[FanGroup],
         "note": note,
         "groups": [g.to_dict() for g in groups],
     }
-    text = json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def save_snapshot(platform: str, owner_id: str, groups: list[FanGroup],
+                  note: str = "") -> Path:
+    d = group_dir(platform, owner_id)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    text = json.dumps(_snapshot_payload(platform, owner_id, groups, note),
+                      ensure_ascii=False, indent=2)
     path = d / f"快照_{ts}.json"
     path.write_text(text, encoding="utf-8")
     (d / "最新.json").write_text(text, encoding="utf-8")
     return path
+
+
+def update_latest(platform: str, owner_id: str, groups: list[FanGroup],
+                  note: str = "") -> None:
+    """只刷新 最新.json（头像刷新等不新增带时间戳的快照）。"""
+    d = group_dir(platform, owner_id)
+    (d / "最新.json").write_text(
+        json.dumps(_snapshot_payload(platform, owner_id, groups, note),
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8")
+
+
+# ==================== 群头像 ====================
+
+_AVATAR_REFERER = {
+    "douyin": "https://www.douyin.com/",
+    "weibo": "https://weibo.com/",
+    "bilibili": "https://space.bilibili.com/",
+}
+_IMG_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif)(?:[?~!]|$)", re.I)
+
+
+def avatar_dir(platform: str, owner_id: str, create: bool = True) -> Path:
+    d = group_dir(platform, owner_id, create=create) / "头像"
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _avatar_ext(url: str, data: bytes) -> str:
+    m = _IMG_EXT_RE.search(url or "")
+    if m:
+        return "." + m.group(1).lower().replace("jpeg", "jpg")
+    if data[:2] == b"\xff\xd8":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:4] == b"GIF8":
+        return ".gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return ".jpg"
+
+
+def _fetch_avatar(url: str, platform: str, timeout: float = 15.0) -> tuple[bytes, str]:
+    url = (url or "").strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    headers = {"User-Agent": UA_PC}
+    referer = _AVATAR_REFERER.get(platform)
+    if referer:
+        headers["Referer"] = referer
+    candidates = [url]
+    if url.startswith("http://"):
+        candidates.append("https://" + url[len("http://"):])
+    last = ""
+    for u in candidates:
+        try:
+            r = requests.get(u, headers=headers, timeout=timeout)
+            if r.status_code == 200 and len(r.content) > 100:
+                return r.content, u
+            last = f"HTTP {r.status_code}"
+        except Exception as e:  # noqa: BLE001
+            last = str(e)
+    raise RuntimeError(last or "下载失败")
+
+
+def _find_avatars(d: Path, group_id: str) -> list[Path]:
+    """按文件名后缀 _<group_id> 找已下载头像（重复查询时复用）。"""
+    if not group_id or not d.exists():
+        return []
+    suffix = "_" + _safe_name(group_id, 40)
+    return [p for p in d.iterdir() if p.is_file() and p.stem.endswith(suffix)]
+
+
+def download_avatars(platform: str, owner_id: str, groups: list[FanGroup],
+                     progress=None, force: bool = False) -> tuple[int, int]:
+    """下载群头像到 <群目录>/头像/，返回 (成功数, 有头像的群数)。
+
+    默认复用已下载文件（按群 ID 匹配）；force=True 重新下载并覆盖。
+    """
+    d = avatar_dir(platform, owner_id)
+    ok = total = 0
+    for idx, g in enumerate(groups, 1):
+        if not g.avatar:
+            g.avatar_path = ""
+            continue
+        total += 1
+        olds = _find_avatars(d, g.group_id)
+        if olds and not force:
+            g.avatar_path = str(olds[0])
+            ok += 1
+            continue
+        if progress:
+            progress(f"下载群头像 {idx}/{len(groups)}：{g.name or g.group_id}")
+        try:
+            data, real_url = _fetch_avatar(g.avatar, platform)
+            for old in olds:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            name = _safe_name(g.name, 30) or "群"
+            gid = _safe_name(g.group_id, 40) or f"{idx:02d}"
+            path = d / f"{idx:02d}_{name}_{gid}{_avatar_ext(real_url, data)}"
+            path.write_bytes(data)
+            g.avatar_path = str(path)
+            ok += 1
+        except Exception as e:  # noqa: BLE001
+            g.avatar_path = ""
+            if progress:
+                progress(f"群头像下载失败（{g.name or g.group_id}）：{str(e)[:50]}")
+    return ok, total
 
 
 # ==================== Excel ====================
@@ -394,7 +533,7 @@ def export_xlsx(platform: str, owner_id: str, groups: list[FanGroup],
     ws = wb.active
     ws.title = "粉丝群"
     headers = ["序号", "群名", "群ID", "群号", "人数", "人数变化", "人数上限",
-               "群主UID", "进群条件", "标签", "公告/简介", "群链接", "采集时间"]
+               "群主UID", "进群条件", "标签", "公告/简介", "群链接", "头像文件", "采集时间"]
     ws.append(headers)
     head_font = Font(bold=True, color="FFFFFF")
     head_fill = PatternFill("solid", fgColor="C2185B")
@@ -404,7 +543,7 @@ def export_xlsx(platform: str, owner_id: str, groups: list[FanGroup],
         cell.fill = head_fill
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    widths = [6, 30, 22, 12, 12, 10, 10, 16, 16, 18, 46, 44, 18]
+    widths = [6, 30, 22, 12, 12, 10, 10, 16, 16, 18, 46, 44, 34, 18]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -412,8 +551,9 @@ def export_xlsx(platform: str, owner_id: str, groups: list[FanGroup],
     for idx, g in enumerate(groups, 1):
         delta = changes.get(g.group_id)
         delta_text = "" if delta is None else (f"+{delta}" if delta > 0 else str(delta))
+        avatar_file = f"头像/{Path(g.avatar_path).name}" if g.avatar_path else ""
         ws.append([idx, g.name, g.group_id, g.group_no, g.member_count,
                    delta_text, g.member_limit, g.owner_uid, g.entry_limit,
-                   g.tags, g.notice, g.url, now])
+                   g.tags, g.notice, g.url, avatar_file, now])
     wb.save(str(path))
     return path

@@ -1,8 +1,10 @@
 """粉丝群查询页（PySide6）：抖音 / 微博 / B站 三平台公开群 ID 与人数。
 
 - 顶部选平台 + 粘贴主页链接/UID → 🔍 查询
-- 表格：群名 / 群ID / 群号 / 人数 / 人数变化 / 进群条件 / 标签
-- 每次查询自动存快照（download/粉丝群/<平台>/<UID>/），并与上次快照对比人数
+- 表格：头像 / 群名 / 群ID / 群号 / 人数 / 人数变化 / 进群条件
+- 查询时自动把群头像下载到 download/粉丝群/<平台>/<UID>/头像/，
+  表格首列显示缩略图，双击行打开原图；「🖼 刷新头像」强制重新下载
+- 每次查询自动存快照，并与上次快照对比人数
 - 导出 Excel / 打开保存目录 / 复制选中或全部群 ID
 
 平台差异：
@@ -15,8 +17,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
@@ -44,7 +46,9 @@ _PLACEHOLDERS = {
     "bilibili": "https://space.bilibili.com/1467772（或 UID）",
 }
 
-_COLUMNS = ["群名", "群ID", "群号", "人数", "变化", "进群条件"]
+_COLUMNS = ["头像", "群名", "群ID", "群号", "人数", "变化", "进群条件"]
+
+_AVATAR_SIZE = 40
 
 _DEFAULT_OWNER = "封茗囧菌"
 _PLATFORM_HOSTS = {
@@ -105,8 +109,10 @@ class FanGroupsPage(BasePage):
             "网页端没有 UP 全部群的公开列表，未加入的群查不到</p>"
             "<p>· <b>人数变化</b>：每次查询自动存快照，与上一次快照对比；"
             "新出现的群标记为「新」</p>"
+            "<p>· <b>群头像</b>：查询时自动下载到 <b>头像/</b> 子目录（已下载的复用），"
+            "表格首列显示缩略图，双击行打开原图；「🖼 刷新头像」强制重新下载</p>"
             "<p>· <b>保存位置</b>：download/粉丝群/&lt;平台&gt;/&lt;UID&gt;/"
-            "（快照_时间.json + 最新.json + 导出的 Excel）</p>"
+            "（头像/ + 快照_时间.json + 最新.json + 导出的 Excel）</p>"
         )))
         layout.addLayout(title_row)
 
@@ -147,6 +153,12 @@ class FanGroupsPage(BasePage):
         self.export_btn.clicked.connect(self._do_export)
         row2.addWidget(self.export_btn)
 
+        self.avatar_btn = QPushButton("🖼 刷新头像")
+        self.avatar_btn.setToolTip("强制重新下载当前列表的群头像（查询时已有文件会自动复用）")
+        self.avatar_btn.setEnabled(False)
+        self.avatar_btn.clicked.connect(self._do_refresh_avatars)
+        row2.addWidget(self.avatar_btn)
+
         self.dir_btn = QPushButton("📂 打开保存目录")
         self.dir_btn.setEnabled(False)
         self.dir_btn.clicked.connect(self._open_dir)
@@ -176,16 +188,21 @@ class FanGroupsPage(BasePage):
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for i, w in enumerate((170, 85, 80, 55, 150), 1):
+        self.table.setIconSize(QSize(_AVATAR_SIZE, _AVATAR_SIZE))
+        self.table.verticalHeader().setDefaultSectionSize(_AVATAR_SIZE + 8)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, _AVATAR_SIZE + 14)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for i, w in enumerate((170, 85, 80, 55, 150), 2):
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)
             self.table.setColumnWidth(i, w)
         self.table.itemSelectionChanged.connect(self._on_select)
+        self.table.cellDoubleClicked.connect(self._open_avatar)
         layout.addWidget(self.table, 1)
 
         self.detail = QTextEdit()
         self.detail.setReadOnly(True)
-        self.detail.setPlaceholderText("选中一行查看群详情")
+        self.detail.setPlaceholderText("选中一行查看群详情（双击行打开群头像）")
         self.detail.setFixedHeight(150)
         layout.addWidget(self.detail)
 
@@ -199,6 +216,7 @@ class FanGroupsPage(BasePage):
         self.platform_box.setEnabled(not busy)
         self.query_btn.setEnabled(not busy)
         self.export_btn.setEnabled((not busy) and bool(self._groups))
+        self.avatar_btn.setEnabled((not busy) and bool(self._groups))
         if text:
             self.status_label.setText(text)
 
@@ -231,10 +249,12 @@ class FanGroupsPage(BasePage):
 
         def work():
             owner_id, groups = fg.fetch_groups(platform, text, progress=prog)
+            av_ok, av_total = fg.download_avatars(platform, owner_id, groups, progress=prog)
             previous = fg.load_latest(platform, owner_id)
             changes = fg.diff_members(groups, previous)
             snap = fg.save_snapshot(platform, owner_id, groups)
-            return owner_id, groups, changes, (previous or {}).get("fetched_at", ""), snap
+            return (owner_id, groups, changes, (previous or {}).get("fetched_at", ""),
+                    snap, av_ok, av_total)
 
         def done(result, err):
             self._set_busy(False)
@@ -242,7 +262,7 @@ class FanGroupsPage(BasePage):
                 self.status_label.setText(f"❌ {err}")
                 self.app.toast(str(err)[:80], "warning")
                 return
-            owner_id, groups, changes, prev_at, snap = result
+            owner_id, groups, changes, prev_at, snap, av_ok, av_total = result
             self._owner_id = owner_id
             self._groups = groups
             self._changes = changes
@@ -253,26 +273,42 @@ class FanGroupsPage(BasePage):
             self.export_btn.setEnabled(bool(groups))
             self.dir_btn.setEnabled(True)
             self.copy_all_btn.setEnabled(bool(groups))
+            self.avatar_btn.setEnabled(bool(groups))
+            avatar_text = f"，头像 {av_ok}/{av_total}" if av_total else ""
             self.status_label.setText(
-                f"✅ {fg.PLATFORM_LABELS[platform]} {owner_id}：{len(groups)} 个群，"
-                f"快照已保存（{os.path.basename(str(snap))}）")
+                f"✅ {fg.PLATFORM_LABELS[platform]} {owner_id}：{len(groups)} 个群"
+                f"{avatar_text}，快照已保存（{os.path.basename(str(snap))}）")
             self.app.toast(f"查到 {len(groups)} 个群", "success")
 
         run_bg(work, done)
 
+    def _avatar_icon(self, g: fg.FanGroup) -> QIcon:
+        path = g.avatar_path
+        if path and os.path.exists(path):
+            pm = QPixmap(path)
+            if not pm.isNull():
+                return QIcon(pm.scaled(_AVATAR_SIZE, _AVATAR_SIZE,
+                                       Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        return QIcon()
+
     def _fill_table(self):
         self.table.setRowCount(len(self._groups))
         for r, g in enumerate(self._groups):
+            av = QTableWidgetItem()
+            av.setIcon(self._avatar_icon(g))
+            av.setToolTip(g.avatar or "无头像")
+            self.table.setItem(r, 0, av)
             it = QTableWidgetItem(g.name)
             it.setToolTip(g.name)
-            self.table.setItem(r, 0, it)
-            self.table.setItem(r, 1, _center(g.group_id))
-            self.table.setItem(r, 2, _center(g.group_no or "-"))
-            self.table.setItem(r, 3, _center(g.member_text))
-            self.table.setItem(r, 4, _center(self._delta_text(g)))
-            self.table.setItem(r, 5, _center(g.entry_limit or "-"))
+            self.table.setItem(r, 1, it)
+            self.table.setItem(r, 2, _center(g.group_id))
+            self.table.setItem(r, 3, _center(g.group_no or "-"))
+            self.table.setItem(r, 4, _center(g.member_text))
+            self.table.setItem(r, 5, _center(self._delta_text(g)))
+            self.table.setItem(r, 6, _center(g.entry_limit or "-"))
         self.export_btn.setEnabled(bool(self._groups))
         self.copy_all_btn.setEnabled(bool(self._groups))
+        self.avatar_btn.setEnabled(bool(self._groups))
 
     def _delta_text(self, g: fg.FanGroup) -> str:
         if g.member_count is None:      # B站应援团不返回人数，无法对比
@@ -311,11 +347,60 @@ class FanGroupsPage(BasePage):
             lines.append(f"标签：{g.tags}")
         if g.owner_uid:
             lines.append(f"群主UID：{g.owner_uid}")
+        if g.avatar:
+            local = g.avatar_path if g.avatar_path and os.path.exists(g.avatar_path) else ""
+            lines.append(f"头像：{local or '未下载'}（双击行打开）")
+            lines.append(f"头像链接：{g.avatar}")
         if g.notice:
             lines.append(f"公告/简介：{g.notice}")
         if g.url:
             lines.append(f"群链接：{g.url}")
         self.detail.setPlainText("\n".join(lines))
+
+    def _open_avatar(self, row: int, _col: int):
+        if not (0 <= row < len(self._groups)):
+            return
+        g = self._groups[row]
+        if g.avatar_path and os.path.exists(g.avatar_path):
+            try:
+                os.startfile(g.avatar_path)
+                return
+            except Exception:
+                pass
+        if g.avatar:
+            QDesktopServices.openUrl(QUrl(g.avatar))
+        else:
+            self.app.toast("该群没有头像", "info")
+
+    # ---------- 头像 ----------
+    def _do_refresh_avatars(self):
+        if not self._groups or self._busy:
+            return
+        platform, owner_id = self._platform, self._owner_id
+        groups = list(self._groups)
+        self._set_busy(True, "⏳ 正在重新下载群头像...")
+
+        def prog(msg):
+            post_to_main(self.status_label.setText, f"⏳ {msg}")
+
+        def work():
+            ok, total = fg.download_avatars(platform, owner_id, groups,
+                                            progress=prog, force=True)
+            fg.update_latest(platform, owner_id, groups, note="头像刷新")
+            return ok, total
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self.status_label.setText(f"❌ 头像下载失败：{err}")
+                self.app.toast(f"头像下载失败：{err}", "warning")
+                return
+            ok, total = result
+            self._fill_table()
+            self.status_label.setText(f"✅ 群头像已更新：{ok}/{total}")
+            self.app.toast(f"群头像 {ok}/{total}", "success")
+
+        run_bg(work, done)
 
     # ---------- 导出 / 复制 ----------
     def _do_export(self):
@@ -374,6 +459,7 @@ class FanGroupsPage(BasePage):
         self.table.setRowCount(0)
         self.detail.clear()
         self.export_btn.setEnabled(False)
+        self.avatar_btn.setEnabled(False)
         self.dir_btn.setEnabled(False)
         self.copy_one_btn.setEnabled(False)
         self.copy_all_btn.setEnabled(False)
