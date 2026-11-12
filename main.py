@@ -19,6 +19,17 @@ if "--tcdoc-collect" in sys.argv:
 
     sys.exit(_tcdoc_job())
 
+# 账号追踪定时任务入口：--tracker-collect（网媒）/ --music-collect（音乐），
+# 同样必须在 PySide6 导入前拦截（无窗口、不加载 Qt）。
+if "--tracker-collect" in sys.argv or "--music-collect" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.account_tracker_job import main as _tracker_job
+
+    sys.exit(_tracker_job("tracker" if "--tracker-collect" in sys.argv else "music"))
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow

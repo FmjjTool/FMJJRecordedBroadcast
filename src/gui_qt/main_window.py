@@ -65,6 +65,7 @@ PAGE_CLASSES = {
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "media_compress": ("gui_qt.pages.media_compress", "MediaCompressPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
+    "tasks": ("gui_qt.pages.tasks", "TasksPage"),
 }
 
 
@@ -130,6 +131,7 @@ NAV_GROUPS = [
         ("lyrics_tool", "🎤 歌词转换"),
     ]),
     ("⚙️ 全局", [
+        ("tasks", "⏰ 定时任务"),
         ("global_settings", "⚙️ 全局设置"),
     ]),
 ]

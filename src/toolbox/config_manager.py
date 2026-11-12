@@ -264,6 +264,13 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_headless": True,
     "tcdoc_legacy_migrated": False,
     "tcdoc_table_page": 200,
+    # 网媒/音乐账号追踪：定时采集（注册 Windows 计划任务，关闭软件也按计划采集）
+    "tracker_schedule_mode": "daily",
+    "tracker_collect_time": "09:00",
+    "tracker_interval_minutes": 60,
+    "music_schedule_mode": "daily",
+    "music_collect_time": "09:00",
+    "music_interval_minutes": 60,
 }
 
 

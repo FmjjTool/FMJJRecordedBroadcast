@@ -17,9 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import (
-    CollectScheduler, ask_collect_schedule, icon_btn_style, icon_button, run_bg,
-)
+from gui_qt.common import ask_collect_schedule, icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 
 # 指标行定义：(显示名, [字段名优先级列表])
@@ -63,7 +61,6 @@ class MusicTrackerPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.cards = []
-        self._scheduler = CollectScheduler(lambda: self._collect_all(silent=True))
         self._collecting = False
 
         layout = QVBoxLayout(self)
@@ -99,7 +96,7 @@ class MusicTrackerPage(BasePage):
         head.addWidget(export_group_btn)
         self.timer_dot = QLabel("○")
         self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
-        self.timer_dot.setToolTip("定时采集未启动")
+        self.timer_dot.setToolTip("定时任务未安装")
         head.addWidget(self.timer_dot)
         timer_btn = QPushButton("⏰ 定时采集")
         timer_btn.setStyleSheet(
@@ -615,11 +612,10 @@ class MusicTrackerPage(BasePage):
 
         run_bg(work, done)
 
-    def _collect_all(self, silent=False):
-        """批量采集：按平台筛选（全部/某平台），4 个一批并发采集。silent=True 用于定时采集。"""
+    def _collect_all(self):
+        """批量采集：按平台筛选（全部/某平台），4 个一批并发采集。"""
         if self._collecting:
-            if not silent:
-                self.app.toast("正在采集中，请稍候", "info")
+            self.app.toast("正在采集中，请稍候", "info")
             return
         plat_map = {"网易云": "netease", "QQ音乐": "qq", "酷狗": "kugou",
                     "酷我": "kuwo", "5sing": "fivesing"}
@@ -629,11 +625,9 @@ class MusicTrackerPage(BasePage):
             if not target_plat or (c["account"].get("platform") or "").strip() == target_plat
         ]
         if not accounts:
-            if not silent:
-                self.app.toast("没有符合条件的账号", "info")
+            self.app.toast("没有符合条件的账号", "info")
             return
-        if not silent:
-            self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
+        self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
         self.batch_prog.setRange(0, max(len(accounts), 1))
         self.batch_prog.setValue(0)
 
@@ -641,7 +635,6 @@ class MusicTrackerPage(BasePage):
         from collections import deque
         queue = deque(accounts)
         state = {"running": 0, "done": 0}
-        total = len(accounts)
 
         def _next_wave():
             while queue and state["running"] < 4:
@@ -657,42 +650,38 @@ class MusicTrackerPage(BasePage):
             if queue:
                 _next_wave()
             elif state["running"] == 0:
-                if not silent:
-                    self.app.toast("✅ 批量采集完成", "info")
-                elif not self.isVisible():
-                    # 定时采集在后台跑完（用户已切到其他页）：提示仍在生效
-                    self.app.toast(f"⏰ 定时采集已在后台完成（{total} 个账号）", "info")
+                self.app.toast("✅ 批量采集完成", "info")
                 self._collecting = False
 
         self._collecting = True
         _next_wave()
 
-    # ---------- 定时采集 ----------
+    # ---------- 定时采集（Windows 计划任务） ----------
+    def on_show(self):
+        # 计划任务在软件外也会采集：切回本页时刷新卡片与任务状态圆点
+        self.reload_accounts()
+        self._refresh_task_status()
+
+    def _refresh_task_status(self):
+        def work():
+            from toolbox.account_tracker_task import status
+            return status("music")
+
+        def done(result, err):
+            installed = bool(result and result[0]) and not err
+            text = result[1] if (result and not err) else "定时任务状态未知"
+            self.timer_dot.setText("●" if installed else "○")
+            self.timer_dot.setStyleSheet(
+                f"color: {'#4caf50' if installed else '#888'}; font-size: 15px;")
+            self.timer_dot.setToolTip(text)
+
+        run_bg(work, done)
+
     def _toggle_collect_timer(self):
-        if self._scheduler.running:
-            self._stop_collect_timer()
-        else:
-            self._start_collect_timer()
-
-    def _start_collect_timer(self):
         ask_collect_schedule(
-            self, self._scheduler,
-            "按当前平台筛选自动采集所有账号（间隔模式启动后先采一次；\n"
-            "每天模式到点采一次，启动时不当场采）",
-            on_started=self._on_timer_started)
-
-    def _on_timer_started(self, sched):
-        self.timer_dot.setText("●")
-        self.timer_dot.setStyleSheet("color: #4caf50; font-size: 15px;")
-        self.timer_dot.setToolTip(f"定时采集中：{sched.describe()}")
-        self.app.toast(f"⏰ 定时采集已启动（{sched.describe()}）", "success")
-
-    def _stop_collect_timer(self):
-        self._scheduler.stop()
-        self.timer_dot.setText("○")
-        self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
-        self.timer_dot.setToolTip("定时采集未启动")
-        self.app.toast("定时采集已停止", "info")
+            self, "music",
+            "按当前平台筛选自动采集所有账号",
+            on_changed=self._refresh_task_status)
 
     # ---------- 设置页：搜索/账号增删 ----------
     def _auto_fetch_name(self):
