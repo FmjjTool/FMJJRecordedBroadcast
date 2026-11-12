@@ -7,8 +7,6 @@
 - 历史窗口：指标当列、时间点当行，可横向滚动
 """
 
-import time
-
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -17,7 +15,9 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import icon_btn_style, icon_button, run_bg
+from gui_qt.common import (
+    CollectScheduler, ask_collect_schedule, icon_btn_style, icon_button, run_bg,
+)
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect
 
@@ -61,8 +61,7 @@ class TrackerPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.cards = []
-        self._timer_running = False
-        self._timer_interval = 3600
+        self._scheduler = CollectScheduler(lambda: self._collect_all(silent=True))
         self._collecting = False
 
         layout = QVBoxLayout(self)
@@ -98,6 +97,7 @@ class TrackerPage(BasePage):
         head.addWidget(export_group_btn)
         self.timer_dot = QLabel("○")
         self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
+        self.timer_dot.setToolTip("定时采集未启动")
         head.addWidget(self.timer_dot)
         timer_btn = QPushButton("⏰ 定时采集")
         timer_btn.setStyleSheet(
@@ -716,77 +716,29 @@ class TrackerPage(BasePage):
 
     # ---------- 定时采集 ----------
     def _toggle_collect_timer(self):
-        if self._timer_running:
+        if self._scheduler.running:
             self._stop_collect_timer()
         else:
             self._start_collect_timer()
 
     def _start_collect_timer(self):
-        win = QDialog(self)
-        win.setWindowTitle("⏰ 定时采集")
-        win.setFixedSize(320, 200)
-        v = QVBoxLayout(win)
-        v.setContentsMargins(16, 14, 16, 14)
-        t1 = QLabel("设置定时采集间隔")
-        t1.setStyleSheet("font-size: 14px; font-weight: bold;")
-        t1.setAlignment(Qt.AlignCenter)
-        v.addWidget(t1)
-        t2 = QLabel("按当前「全部平台」筛选自动采集所有账号")
-        t2.setStyleSheet("color: gray; font-size: 11px;")
-        t2.setAlignment(Qt.AlignCenter)
-        v.addWidget(t2)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("间隔(分钟):"))
-        entry = QLineEdit()
-        entry.setText("60")
-        entry.setFixedWidth(80)
-        row.addWidget(entry)
-        row.addStretch(1)
-        v.addLayout(row)
-        v.addStretch(1)
-        start_btn = QPushButton("▶ 启动")
-        start_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px;")
-        start_btn.clicked.connect(lambda: do_start())
-        v.addWidget(start_btn)
+        ask_collect_schedule(
+            self, self._scheduler,
+            "按当前平台筛选自动采集所有账号（间隔模式启动后先采一次；\n"
+            "每天模式到点采一次，启动时不当场采）",
+            on_started=self._on_timer_started)
 
-        def do_start():
-            try:
-                m = int(entry.text().strip() or "60")
-            except ValueError:
-                m = 60
-            if m < 1:
-                self.app.toast("间隔不能小于 1 分钟", "warning")
-                return
-            self._timer_interval = m * 60
-            self._timer_running = True
-            win.accept()
-            self.timer_dot.setText("●")
-            self.timer_dot.setStyleSheet("color: #4caf50; font-size: 15px;")
-            self.app.toast(f"⏰ 定时采集已启动（每 {m} 分钟）", "success")
-            self._begin_timer_loop()
-
-        win.exec()
-
-    def _begin_timer_loop(self):
-        """后台定时循环：daemon 线程独立于页面可见性运行（切走页面后仍按时采集）。"""
-        import threading
-
-        def loop():
-            from gui_qt.common import post_to_main
-            # 启动后先执行一次，之后每隔 interval 执行一次
-            post_to_main(lambda: self._collect_all(silent=True))
-            while self._timer_running:
-                time.sleep(self._timer_interval)
-                if not self._timer_running:
-                    break
-                post_to_main(lambda: self._collect_all(silent=True))
-
-        threading.Thread(target=loop, daemon=True).start()
+    def _on_timer_started(self, sched):
+        self.timer_dot.setText("●")
+        self.timer_dot.setStyleSheet("color: #4caf50; font-size: 15px;")
+        self.timer_dot.setToolTip(f"定时采集中：{sched.describe()}")
+        self.app.toast(f"⏰ 定时采集已启动（{sched.describe()}）", "success")
 
     def _stop_collect_timer(self):
-        self._timer_running = False
+        self._scheduler.stop()
         self.timer_dot.setText("○")
         self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
+        self.timer_dot.setToolTip("定时采集未启动")
         self.app.toast("定时采集已停止", "info")
 
     # ---------- 设置页：账号增删 ----------

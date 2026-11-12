@@ -6,7 +6,7 @@
 import re
 import threading
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 
 class _MainBridge(QObject):
@@ -90,6 +90,168 @@ def post_to_main(fn, *args):
         _main_bridge.call.emit(lambda: fn(*args))
     else:
         _main_bridge.call.emit(fn)
+
+
+# ==================== 定时采集调度（间隔 / 每日定点） ====================
+
+def seconds_until_daily(hh: int, mm: int) -> float:
+    """距离下一次 HH:MM 的秒数（今天该时刻已过则算明天）。"""
+    import time
+    now = time.time()
+    lt = time.localtime(now)
+    target = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1))
+    if target <= now:
+        target += 86400
+    return target - now
+
+
+class CollectScheduler:
+    """账号追踪页定时采集调度器（daemon 线程，独立于页面可见性）。
+
+    两种模式：
+    - interval：启动后先采一次，之后每隔 interval 秒采一次
+    - daily：每天 HH:MM 采一次（启动不当场采，等下一个定点）
+
+    停止后再次启动换新一代（gen）接管：旧线程到点醒来发现代号不匹配直接退出，
+    不会与新线程重复触发采集。
+    """
+
+    def __init__(self, on_tick):
+        self._on_tick = on_tick
+        self._gen = 0
+        self.running = False
+        self.mode = "interval"   # "interval" | "daily"
+        self.interval = 3600     # 间隔模式：秒
+        self.daily = "09:00"     # 每日模式：HH:MM
+
+    def start(self):
+        self._gen += 1
+        self.running = True
+        threading.Thread(target=self._loop, args=(self._gen,), daemon=True).start()
+
+    def stop(self):
+        self.running = False
+
+    def describe(self) -> str:
+        if self.mode == "daily":
+            return f"每天 {self.daily}"
+        m = max(1, int(round(self.interval / 60)))
+        return f"每 {m // 60} 小时" if m % 60 == 0 else f"每 {m} 分钟"
+
+    def seconds_to_next(self) -> float:
+        if self.mode == "daily":
+            hh, mm = (int(x) for x in self.daily.split(":"))
+            return seconds_until_daily(hh, mm)
+        return self.interval
+
+    def _loop(self, gen):
+        import time
+        if self.mode == "interval":
+            post_to_main(self._on_tick)  # 间隔模式沿用「启动即先采一次」
+        while self.running and self._gen == gen:
+            deadline = time.time() + self.seconds_to_next()
+            # 分段睡：停止/重启能及时退出，不阻塞到下一个整间隔
+            while self.running and self._gen == gen and time.time() < deadline:
+                time.sleep(min(15, max(0.05, deadline - time.time())))
+            if not (self.running and self._gen == gen):
+                break
+            post_to_main(self._on_tick)
+
+
+def ask_collect_schedule(parent, scheduler, hint, on_started=None):
+    """定时采集设置弹窗：选「按间隔」或「每天一次」，确认后启动 scheduler。"""
+    from PySide6.QtCore import QTime
+    from PySide6.QtWidgets import (
+        QButtonGroup, QDialog, QHBoxLayout, QLabel, QPushButton,
+        QRadioButton, QSpinBox, QTimeEdit, QVBoxLayout)
+
+    win = QDialog(parent)
+    win.setWindowTitle("⏰ 定时采集")
+    win.setFixedSize(420, 250)
+    v = QVBoxLayout(win)
+    v.setContentsMargins(16, 14, 16, 14)
+    v.setSpacing(6)
+    t1 = QLabel("设置定时采集方式")
+    t1.setStyleSheet("font-size: 14px; font-weight: bold;")
+    t1.setAlignment(Qt.AlignCenter)
+    v.addWidget(t1)
+    t2 = QLabel(hint)
+    t2.setStyleSheet("color: gray; font-size: 11px;")
+    t2.setWordWrap(True)
+    t2.setAlignment(Qt.AlignCenter)
+    v.addWidget(t2)
+
+    rb_interval = QRadioButton("按间隔：每隔")
+    spin = QSpinBox()
+    spin.setRange(1, 1439)
+    spin.setSuffix(" 分钟")
+    spin.setFixedWidth(100)
+    row1 = QHBoxLayout()
+    row1.addWidget(rb_interval)
+    row1.addWidget(spin)
+    row1.addStretch(1)
+    v.addLayout(row1)
+
+    rb_daily = QRadioButton("每天一次：每天")
+    time_ed = QTimeEdit()
+    time_ed.setDisplayFormat("HH:mm")
+    time_ed.setFixedWidth(80)
+    row2 = QHBoxLayout()
+    row2.addWidget(rb_daily)
+    row2.addWidget(time_ed)
+    row2.addStretch(1)
+    v.addLayout(row2)
+
+    group = QButtonGroup(win)
+    group.addButton(rb_interval)
+    group.addButton(rb_daily)
+    # 回填上一次使用的配置（会话内记忆）
+    spin.setValue(max(1, int(round(scheduler.interval / 60))))
+    time_ed.setTime(QTime.fromString(scheduler.daily, "HH:mm"))
+    if scheduler.mode == "daily":
+        rb_daily.setChecked(True)
+    else:
+        rb_interval.setChecked(True)
+
+    next_lbl = QLabel()
+    next_lbl.setStyleSheet("color: #888; font-size: 11px;")
+    next_lbl.setWordWrap(True)
+    v.addWidget(next_lbl)
+
+    def _sync(*_a):
+        on = rb_interval.isChecked()
+        spin.setEnabled(on)
+        time_ed.setEnabled(not on)
+        if on:
+            next_lbl.setText(f"启动后先采集一次，之后每 {spin.value()} 分钟采集一次")
+        else:
+            next_lbl.setText(f"每天 {time_ed.time().toString('HH:mm')} 自动采集一次"
+                             "（启动时不当场采集，等下一个定点）")
+    rb_interval.toggled.connect(_sync)
+    rb_daily.toggled.connect(_sync)
+    spin.valueChanged.connect(_sync)
+    time_ed.timeChanged.connect(_sync)
+    _sync()
+
+    v.addStretch(1)
+    start_btn = QPushButton("▶ 启动")
+    start_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px;")
+    v.addWidget(start_btn)
+
+    def do_start():
+        if rb_daily.isChecked():
+            scheduler.mode = "daily"
+            scheduler.daily = time_ed.time().toString("HH:mm")
+        else:
+            scheduler.mode = "interval"
+            scheduler.interval = max(1, spin.value()) * 60
+        win.accept()
+        scheduler.start()
+        if on_started:
+            on_started(scheduler)
+
+    start_btn.clicked.connect(do_start)
+    win.exec()
 
 
 # ==================== 仅图标小按钮样式 ====================
