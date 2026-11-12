@@ -201,6 +201,12 @@ def run_pyinstaller(name: str):
         for f in sorted(collectors_dir.glob("*.py")):
             if f.stem != "__init__":
                 cmd += ["--hidden-import", f"tracker.collectors.{f.stem}"]
+    # 音乐账号追踪 + 定时任务：函数体内懒加载 / 无界面入口的模块，显式声明
+    # （music_account.* 由 music_tracker 页动态导入；account_tracker_* 是计划任务入口）
+    for mod in ("music_account.accounts", "music_account.collectors",
+                "music_account.export_png", "toolbox.account_tracker_job",
+                "toolbox.account_tracker_task", "toolbox.task_center"):
+        cmd += ["--hidden-import", mod]
     icon = ROOT / "icon.ico"
     if icon.exists():
         cmd += ["--icon", str(icon)]
