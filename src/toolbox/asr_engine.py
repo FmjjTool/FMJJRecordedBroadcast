@@ -707,11 +707,49 @@ def _repo_file_list(model_key: str) -> List[Dict]:
             and f["Path"] not in ("README.md", "configuration.json")]
 
 
+DOWNLOAD_THREADS = 4  # 大文件分段并行数（复用媒体下载器的 Range 分段实现）
+
+
 def _download_stream(url: str, dst: Path, progress: Callable[[int, str], None],
-                     cancel: CancelCb, label: str, base: int, span: int) -> None:
+                     cancel: CancelCb, label: str, base: int, span: int,
+                     threads: int = DOWNLOAD_THREADS) -> None:
+    """下载单个文件：大文件走多线程分段，其余单流兜底。"""
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"),
+    }
+    if threads > 1:
+        try:
+            from media_downloader import (
+                SEG_MIN_FILE_SIZE, _download_ranged, _probe_range,
+            )
+            total, range_ok, _content_type = _probe_range(url, headers)
+            if range_ok and total and total >= SEG_MIN_FILE_SIZE:
+                last = [0.0]
+
+                def _on_bytes(done: int, total_bytes: int) -> None:
+                    now = time.monotonic()
+                    if now - last[0] < 0.2 and done < total_bytes:
+                        return
+                    last[0] = now
+                    percent = base + int(span * done / max(1, total_bytes))
+                    progress(min(99, percent),
+                             f"{label} {done // 1048576}MB/{total_bytes // 1048576}MB")
+
+                _path, ok = _download_ranged(
+                    url, str(dst), headers, min(threads, 8), total,
+                    progress_cb=_on_bytes, cancel_check=cancel)
+                if ok:
+                    return
+                _check_cancel(cancel)
+        except AsrCancelled:
+            raise
+        except Exception:
+            pass  # 分段不可用/失败 → 单流兜底
+
     tmp = dst.with_suffix(dst.suffix + ".part")
     downloaded = 0
-    with requests.get(url, stream=True, timeout=(15, 120)) as resp:
+    with requests.get(url, stream=True, timeout=(15, 120), headers=headers) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("Content-Length") or 0)
         with open(tmp, "wb") as fh:
