@@ -14,6 +14,9 @@ DATE_FOLDER_RE = re.compile(r"^20\d{6}$")
 
 def extract_audio_one(src: Path, dst: Path) -> Tuple[bool, str]:
     """提取单个视频的音频"""
+    src = Path(src)
+    if not src.exists():
+        return False, "源视频不存在（可能已被移动或改名），请重新扫描"
     cmd = [
         find_ffmpeg_exe(), "-i", str(src),
         "-vn",

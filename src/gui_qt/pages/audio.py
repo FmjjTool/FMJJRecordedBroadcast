@@ -479,22 +479,75 @@ class AudioPage(BasePage):
     def _stop(self):
         self.running = False
 
+    def _relocate_source(self, src):
+        """扫描后文件被移动/改名时，按文件名在工作目录内找回（同名取最新修改的）。
+
+        整批只建一次索引：文件被整理进日期文件夹时，避免每个文件都全盘遍历。
+        """
+        try:
+            if src.exists():
+                return src
+        except OSError:
+            pass
+        root = Path(self.app.work_dir) if self.app.work_dir else None
+        if root is None or not root.is_dir():
+            return None
+        if getattr(self, "_relocate_index", None) is None:
+            index = {}
+            try:
+                for p in root.rglob("*"):
+                    try:
+                        if p.is_file():
+                            index.setdefault(p.name.lower(), []).append(p)
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            self._relocate_index = index
+        matches = self._relocate_index.get(src.name.lower()) or []
+        if not matches:
+            return None
+        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return matches[0]
+
+    def _update_item_path(self, old, new):
+        """把列表项里的旧路径替换成找回后的新路径（主线程执行）。"""
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            if item.data(Qt.UserRole) == old:
+                item.setData(Qt.UserRole, new)
+                break
+
     def _extract_thread(self):
         to_process = self._to_process
         total = len(to_process)
-        stats = {"success": 0, "failed": 0, "skipped": 0,
+        stats = {"success": 0, "failed": 0, "skipped": 0, "missing": 0,
                  "subtitle": 0, "subtitle_failed": 0, "subtitle_skipped": 0}
         opts = getattr(self, "_asr_opts", None)
+        self._relocate_index = None
         for i, src in enumerate(to_process):
             if not self.running:
                 break
+            # 扫描后文件可能被整理/重命名/迁移到日期文件夹，先按文件名找回
+            resolved = self._relocate_source(src)
+            if resolved is None:
+                stats["missing"] += 1
+                post_to_main(self._log,
+                             f"⚠️ 源视频不存在（可能已被移动或改名）: {self._rel(src)}")
+                post_to_main(self._log, "   💡 请重新点「扫描视频」后再开始")
+                post_to_main(self._set_file_progress, i, total, 100)
+                continue
+            if resolved != src:
+                post_to_main(self._log, f"📍 已按文件名找回: {self._rel(resolved)}")
+                post_to_main(self._update_item_path, str(src), str(resolved))
+                src = resolved
             audio = src.with_suffix(".m4a")
             try:
                 if audio.exists():
-                    post_to_main(self._log, f"💾 {src.name} -> 已存在，跳过提取")
+                    post_to_main(self._log, f"💾 {self._rel(src)} -> 已存在，跳过提取")
                     stats["skipped"] += 1
                 else:
-                    post_to_main(self._log, f"📂 {src.name}")
+                    post_to_main(self._log, f"📂 {self._rel(src)}")
                     post_to_main(self._set_file_progress, i, total, 5)
                     ok, err = extract_audio_one(src, audio)
                     if ok:
@@ -521,6 +574,8 @@ class AudioPage(BasePage):
 
         summary = (f"\n✅ 完成: 音频成功{stats['success']}, 失败{stats['failed']}, "
                    f"跳过{stats['skipped']}")
+        if stats["missing"]:
+            summary += f"，源文件缺失{stats['missing']}"
         if opts:
             summary += (f"；字幕 {stats['subtitle']} 个，"
                         f"失败{stats['subtitle_failed']}，"
