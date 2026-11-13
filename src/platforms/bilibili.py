@@ -56,6 +56,53 @@ def sign_params(params: dict, mixin_key: str) -> dict:
     return params
 
 
+# 游客指纹 Cookie 缓存：不带 buvid3/buvid4 时 space 接口（含旧接口）会被 -352 风控。
+_GUEST_COOKIES: dict = {}
+_GUEST_COOKIES_TS = 0.0
+
+
+def get_guest_cookies() -> dict:
+    """获取游客指纹 Cookie（buvid3/buvid4/b_nut），缓存 30 分钟。"""
+    global _GUEST_COOKIES, _GUEST_COOKIES_TS
+    if _GUEST_COOKIES and time.time() - _GUEST_COOKIES_TS < 1800:
+        return dict(_GUEST_COOKIES)
+    cookies = {}
+    try:
+        resp = httpx.get(
+            "https://api.bilibili.com/x/frontend/finger/spi",
+            headers={
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"),
+                "Referer": "https://www.bilibili.com/",
+            },
+            timeout=10, follow_redirects=True)
+        data = (resp.json() or {}).get("data") or {}
+        if data.get("b_3"):
+            cookies["buvid3"] = data["b_3"]
+        if data.get("b_4"):
+            cookies["buvid4"] = data["b_4"]
+        cookies["b_nut"] = str(int(time.time()))
+    except Exception:
+        return {}
+    _GUEST_COOKIES, _GUEST_COOKIES_TS = cookies, time.time()
+    return dict(cookies)
+
+
+# WBI mixin_key 缓存：nav 接口每次拉一次太浪费，30 分钟内复用。
+_MIXIN_KEY_CACHE = {"key": "", "ts": 0.0}
+
+
+def get_mixin_key_cached(headers: dict) -> str:
+    """带缓存的 WBI mixin_key（动态接口游客态签名必需）。"""
+    if _MIXIN_KEY_CACHE["key"] and time.time() - _MIXIN_KEY_CACHE["ts"] < 1800:
+        return _MIXIN_KEY_CACHE["key"]
+    img_key, sub_key = get_wbi_keys(headers)
+    key = get_mixin_key(img_key, sub_key)
+    _MIXIN_KEY_CACHE["key"] = key
+    _MIXIN_KEY_CACHE["ts"] = time.time()
+    return key
+
+
 class BilibiliParser(PlatformBase):
     name = "bilibili"
 
@@ -447,37 +494,44 @@ class BilibiliParser(PlatformBase):
     def _fetch_user_videos(self, mid: str, count: int = 10,
                            pause_every: int = 0, pause_secs: float = 0.0,
                            stop_check=None) -> list:
-        """三级回退：① 游客HTTP（内部失败切游客Playwright）→ ② 接入Cookie重试。"""
-        results = self._fetch_user_videos_once(mid, count, cookie="",
-                                               pause_every=pause_every,
-                                               pause_secs=pause_secs,
-                                               stop_check=stop_check)
-        if results:
-            return results
+        """HTTP 直连：① Cookie（有则优先，游客接口会漏最新内容）→ ② 游客指纹 → ③ Playwright 兜底。"""
         from auth import get_cookie
         ck = get_cookie("bilibili")
         if ck:
-            print("[B站] 游客方式未获取到视频，接入Cookie重试...")
             results = self._fetch_user_videos_once(mid, count, cookie=ck,
                                                    pause_every=pause_every,
                                                    pause_secs=pause_secs,
-                                                   stop_check=stop_check)
-        return results
+                                                   stop_check=stop_check,
+                                                   allow_playwright=False)
+            if results:
+                return results
+            print("[B站] Cookie 方式未获取到视频，回退游客 HTTP...")
+        results = self._fetch_user_videos_once(mid, count, cookie="",
+                                               pause_every=pause_every,
+                                               pause_secs=pause_secs,
+                                               stop_check=stop_check,
+                                               allow_playwright=False)
+        if results:
+            return results
+        print("[B站] HTTP 直连未获取到视频，切 Playwright...")
+        return self._fetch_user_posts_playwright(mid, count)
 
     def _fetch_user_videos_once(self, mid: str, count: int = 10, cookie: str = "",
                                 pause_every: int = 0, pause_secs: float = 0.0,
-                                stop_check=None) -> list:
+                                stop_check=None, allow_playwright: bool = True) -> list:
         results = []
         page = 1; remaining = count; last_n = 0
         label = "B站-Cookie" if cookie else "B站"
         headers = dict(self.HEADERS)
         if cookie: headers["Cookie"] = cookie
-        client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
+        # 游客态补 buvid 指纹，否则 space 接口直接 -352 风控
+        guest_cookies = {} if cookie else get_guest_cookies()
+        client = httpx.Client(headers=headers, timeout=15, follow_redirects=True,
+                              cookies=guest_cookies or None)
         # 尝试获取 WBI 签名密钥（nav 接口），失败则回退旧接口
         mixin_key = None
         try:
-            _img_key, _sub_key = get_wbi_keys(headers)
-            mixin_key = get_mixin_key(_img_key, _sub_key)
+            mixin_key = get_mixin_key_cached(headers)
         except Exception:
             mixin_key = None
         try:
@@ -509,9 +563,10 @@ class BilibiliParser(PlatformBase):
                         data = resp.json()
                         code = data.get("code", 0)
                         if code != 0:
-                            print(f"[B站] API错误: {msg}，切 Playwright...")
-                            pw = self._fetch_user_posts_playwright(mid, count)
-                            results.extend(pw)
+                            print(f"[B站] API错误: {msg}")
+                            if allow_playwright:
+                                print("[B站] 切 Playwright...")
+                                results.extend(self._fetch_user_posts_playwright(mid, count))
                             client.close()
                             return results
                     elif code == -799 or "频繁" in str(msg):
@@ -524,15 +579,17 @@ class BilibiliParser(PlatformBase):
                         resp = client.get(self.USER_API, params=params)
                         data = resp.json()
                         if data.get("code") != 0:
-                            print("[B站] 重试仍失败，切 Playwright...")
-                            pw = self._fetch_user_posts_playwright(mid, count)
-                            results.extend(pw)
+                            print("[B站] 重试仍失败")
+                            if allow_playwright:
+                                print("[B站] 切 Playwright...")
+                                results.extend(self._fetch_user_posts_playwright(mid, count))
                             client.close()
                             return results
                     else:
-                        print(f"[B站] API错误: {msg}，切 Playwright...")
-                        pw = self._fetch_user_posts_playwright(mid, count)
-                        results.extend(pw)
+                        print(f"[B站] API错误: {msg}")
+                        if allow_playwright:
+                            print("[B站] 切 Playwright...")
+                            results.extend(self._fetch_user_posts_playwright(mid, count))
                         client.close()
                         return results
                 vlist = data.get("data",{}).get("list",{}).get("vlist",[])
@@ -557,9 +614,10 @@ class BilibiliParser(PlatformBase):
                     print(f"[{label}] 已翻 {page - 1} 页 · 累计 {len(results)} 条（{target}），继续...")
             return results
         except Exception as e:
-            print(f"[B站] 异常: {e}，切 Playwright...")
-            pw = self._fetch_user_posts_playwright(mid, count)
-            results.extend(pw)
+            print(f"[B站] 异常: {e}")
+            if allow_playwright:
+                print("[B站] 切 Playwright...")
+                results.extend(self._fetch_user_posts_playwright(mid, count))
             return results
         finally:
             client.close()
@@ -617,26 +675,25 @@ class BilibiliParser(PlatformBase):
     def _fetch_dynamics(self, mid: str, count: int = 10,
                         pause_every: int = 0, pause_secs: float = 0.0,
                         stop_check=None) -> list:
-        """获取用户动态（支持图文、转发视频等）。游客HTTP→游客Playwright→Cookie 三级回退。"""
+        """获取用户动态（支持图文、转发视频等）。HTTP 直连：Cookie（有则优先，游客会漏最新内容）→ 游客 → Playwright 兜底。"""
+        from auth import get_cookie
+        ck = get_cookie("bilibili")
+        if ck:
+            results = self._fetch_dynamics_once(mid, count, cookie=ck,
+                                                pause_every=pause_every,
+                                                pause_secs=pause_secs,
+                                                stop_check=stop_check)
+            if results:
+                return results
+            print("[B站] Cookie 方式未获取到动态，回退游客 HTTP...")
         results = self._fetch_dynamics_once(mid, count, cookie="",
                                             pause_every=pause_every,
                                             pause_secs=pause_secs,
                                             stop_check=stop_check)
         if results:
             return results
-        print("[B站] 游客HTTP未获取到动态，切Playwright...")
-        results = self._fetch_dynamics_playwright(mid, count)
-        if results:
-            return results
-        from auth import get_cookie
-        ck = get_cookie("bilibili")
-        if ck:
-            print("[B站] Playwright也未获取到动态，接入Cookie重试...")
-            results = self._fetch_dynamics_once(mid, count, cookie=ck,
-                                                pause_every=pause_every,
-                                                pause_secs=pause_secs,
-                                                stop_check=stop_check)
-        return results
+        print("[B站] HTTP 直连未获取到动态，切 Playwright...")
+        return self._fetch_dynamics_playwright(mid, count)
 
     def _fetch_dynamics_playwright(self, mid: str, count: int = 10) -> list:
         """游客 Playwright 兜底：打开空间动态页，捕获 feed/space 接口响应。"""
@@ -692,7 +749,16 @@ class BilibiliParser(PlatformBase):
         headers = dict(self.HEADERS)
         headers["Referer"] = f"https://space.bilibili.com/{mid}/dynamic"
         if cookie: headers["Cookie"] = cookie
-        client = httpx.Client(headers=headers, timeout=15, follow_redirects=True)
+        guest_cookies = {} if cookie else get_guest_cookies()
+        client = httpx.Client(headers=headers, timeout=15, follow_redirects=True,
+                              cookies=guest_cookies or None)
+        # 游客态动态接口必须带 WBI 签名，否则 -352（登录态不需要）
+        mixin_key = None
+        if not cookie:
+            try:
+                mixin_key = get_mixin_key_cached(headers)
+            except Exception:
+                mixin_key = None
         offset = ""
         pages = 0; last_n = 0
         try:
@@ -712,6 +778,8 @@ class BilibiliParser(PlatformBase):
                     "features": "itemOpusStyle",
                     "offset": offset or "",
                 }
+                if mixin_key:
+                    params = sign_params(params, mixin_key)
                 resp = client.get(self.DYNAMIC_API, params=params)
                 data = resp.json()
                 if data.get("code") != 0:
