@@ -221,6 +221,7 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "asr_local_model": "base",
     "asr_skip_existing": True,
     "asr_output_txt": True,
+    "asr_delete_audio": False,
     "asr_language": "zh",
     "asr_chunk_minutes": 10,
     "asr_concurrency": 3,

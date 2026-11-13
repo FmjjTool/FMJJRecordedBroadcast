@@ -138,6 +138,11 @@ class AudioPage(BasePage):
         self.output_txt_check.setChecked(bool(cfg.get("asr_output_txt", True)))
         self.output_txt_check.toggled.connect(self._on_asr_changed)
         asr_row2.addWidget(self.output_txt_check)
+        self.delete_audio_check = QCheckBox("转录后删除音频")
+        self.delete_audio_check.setToolTip("字幕生成成功后，把提取出的 m4a 音频移入回收站")
+        self.delete_audio_check.setChecked(bool(cfg.get("asr_delete_audio", False)))
+        self.delete_audio_check.toggled.connect(self._on_asr_changed)
+        asr_row2.addWidget(self.delete_audio_check)
         asr_row2.addStretch(1)
         layout.addLayout(asr_row2)
         self._refresh_asr_state()
@@ -346,6 +351,7 @@ class AudioPage(BasePage):
         cfg["asr_local_model"] = self.local_model_combo.currentData() or "base"
         cfg["asr_skip_existing"] = self.skip_sub_check.isChecked()
         cfg["asr_output_txt"] = self.output_txt_check.isChecked()
+        cfg["asr_delete_audio"] = self.delete_audio_check.isChecked()
         save_convert_config(cfg)
         self._refresh_asr_state()
 
@@ -356,6 +362,7 @@ class AudioPage(BasePage):
         enabled = self.asr_check.isChecked()
         self.skip_sub_check.setEnabled(enabled)
         self.output_txt_check.setEnabled(enabled)
+        self.delete_audio_check.setEnabled(enabled)
 
         if not enabled:
             text, color = "未启用", "#888"
@@ -522,7 +529,8 @@ class AudioPage(BasePage):
         to_process = self._to_process
         total = len(to_process)
         stats = {"success": 0, "failed": 0, "skipped": 0, "missing": 0,
-                 "subtitle": 0, "subtitle_failed": 0, "subtitle_skipped": 0}
+                 "subtitle": 0, "subtitle_failed": 0, "subtitle_skipped": 0,
+                 "audio_deleted": 0}
         opts = getattr(self, "_asr_opts", None)
         self._relocate_index = None
         for i, src in enumerate(to_process):
@@ -568,6 +576,15 @@ class AudioPage(BasePage):
                     post_to_main(self._log, f"  💬 已有字幕，跳过（{srt.name}）")
                 elif self._transcribe_one(audio, i, total, opts):
                     stats["subtitle"] += 1
+                    if self.delete_audio_check.isChecked():
+                        deleted, failed = delete_files_safe([audio])
+                        if deleted:
+                            stats["audio_deleted"] += 1
+                            post_to_main(self._log,
+                                         f"  🗑 音频已移入回收站（{audio.name}）")
+                        else:
+                            post_to_main(self._log,
+                                         f"  ⚠️ 音频删除失败: {'; '.join(failed[:1])}")
                 else:
                     stats["subtitle_failed"] += 1
             post_to_main(self._set_file_progress, i, total, 100)
@@ -580,6 +597,8 @@ class AudioPage(BasePage):
             summary += (f"；字幕 {stats['subtitle']} 个，"
                         f"失败{stats['subtitle_failed']}，"
                         f"已有跳过{stats['subtitle_skipped']}")
+            if stats["audio_deleted"]:
+                summary += f"，已删音频{stats['audio_deleted']}"
         post_to_main(self._log, summary)
         post_to_main(self._finish)
 
