@@ -17,15 +17,22 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QListWidgetItem, QProgressBar,
-    QPushButton, QTextEdit, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QListWidgetItem,
+    QProgressBar, QPushButton, QTextEdit, QVBoxLayout,
 )
 
+from toolbox.asr_engine import (
+    ASR_ENGINES, ENGINE_LABELS, ENGINE_LOCAL, ENGINE_WHISPER_API, LOCAL_MODELS,
+    AsrCancelled, local_model_ready, local_program_ready, transcribe_audio,
+    validate_engine, write_subtitles,
+)
 from toolbox.audio_engine import (
     delete_files_safe, extract_audio_one, find_audio_videos, scan_audio_by_date,
 )
+from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size, is_video_file
 
+from gui_qt.asr_settings_dialog import AsrSettingsDialog
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
@@ -88,6 +95,52 @@ class AudioPage(BasePage):
         del_btn.clicked.connect(self._delete_date_audio)
         btn_row.addWidget(del_btn)
         layout.addLayout(btn_row)
+
+        # 字幕：提取后直接联网/本地识别
+        cfg = load_convert_config()
+        asr_row = QHBoxLayout()
+        self.asr_check = QCheckBox("🎬 提取后自动转字幕")
+        self.asr_check.setChecked(bool(cfg.get("asr_enabled", False)))
+        self.asr_check.toggled.connect(self._on_asr_changed)
+        asr_row.addWidget(self.asr_check)
+        asr_row.addWidget(QLabel("引擎:"))
+        self.engine_combo = QComboBox()
+        for key, label in ASR_ENGINES:
+            self.engine_combo.addItem(label, key)
+        idx = self.engine_combo.findData(cfg.get("asr_engine", "bijian"))
+        self.engine_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.engine_combo.currentIndexChanged.connect(self._on_asr_changed)
+        asr_row.addWidget(self.engine_combo)
+        settings_btn = QPushButton("⚙ 语音设置")
+        settings_btn.setStyleSheet("padding: 2px 8px;")
+        settings_btn.clicked.connect(self._open_asr_settings)
+        asr_row.addWidget(settings_btn)
+        asr_row.addStretch(1)
+        self.asr_status = QLabel("")
+        self.asr_status.setStyleSheet("font-size: 11px;")
+        asr_row.addWidget(self.asr_status)
+        layout.addLayout(asr_row)
+
+        asr_row2 = QHBoxLayout()
+        asr_row2.addWidget(QLabel("本地模型:"))
+        self.local_model_combo = QComboBox()
+        for key, label, _size in LOCAL_MODELS:
+            self.local_model_combo.addItem(label.split("（")[0], key)
+        idx = self.local_model_combo.findData(cfg.get("asr_local_model", "base"))
+        self.local_model_combo.setCurrentIndex(idx if idx >= 0 else 1)
+        self.local_model_combo.currentIndexChanged.connect(self._on_asr_changed)
+        asr_row2.addWidget(self.local_model_combo)
+        self.skip_sub_check = QCheckBox("跳过已有字幕")
+        self.skip_sub_check.setChecked(bool(cfg.get("asr_skip_existing", True)))
+        self.skip_sub_check.toggled.connect(self._on_asr_changed)
+        asr_row2.addWidget(self.skip_sub_check)
+        self.output_txt_check = QCheckBox("同时输出 TXT")
+        self.output_txt_check.setChecked(bool(cfg.get("asr_output_txt", True)))
+        self.output_txt_check.toggled.connect(self._on_asr_changed)
+        asr_row2.addWidget(self.output_txt_check)
+        asr_row2.addStretch(1)
+        layout.addLayout(asr_row2)
+        self._refresh_asr_state()
 
         # 扫描后文件复选框列表（默认勾选当天 = 北京 UTC+8）
         head = QHBoxLayout()
@@ -279,6 +332,109 @@ class AudioPage(BasePage):
         self.file_list.blockSignals(False)
         self._refresh_start_btn()
 
+    # ==================== 字幕设置 ====================
+
+    def on_show(self):
+        """切回本页：模型可能在设置弹窗里刚下载完，刷新状态。"""
+        self._refresh_asr_state()
+
+    def _on_asr_changed(self, *_args):
+        """开关/引擎/模型变化：立即持久化并刷新状态提示。"""
+        cfg = load_convert_config()
+        cfg["asr_enabled"] = self.asr_check.isChecked()
+        cfg["asr_engine"] = self.engine_combo.currentData() or "bijian"
+        cfg["asr_local_model"] = self.local_model_combo.currentData() or "base"
+        cfg["asr_skip_existing"] = self.skip_sub_check.isChecked()
+        cfg["asr_output_txt"] = self.output_txt_check.isChecked()
+        save_convert_config(cfg)
+        self._refresh_asr_state()
+
+    def _refresh_asr_state(self):
+        engine = self.engine_combo.currentData()
+        model = self.local_model_combo.currentData()
+        self.local_model_combo.setEnabled(engine == ENGINE_LOCAL)
+        enabled = self.asr_check.isChecked()
+        self.skip_sub_check.setEnabled(enabled)
+        self.output_txt_check.setEnabled(enabled)
+
+        if not enabled:
+            text, color = "未启用", "#888"
+        elif engine == ENGINE_LOCAL:
+            if not local_program_ready():
+                text, color = "本地程序未下载（点 ⚙ 语音设置）", "#c62828"
+            elif not local_model_ready(model):
+                text, color = f"模型 {model} 未下载（点 ⚙ 语音设置）", "#c62828"
+            else:
+                text, color = f"本地就绪 · {model}", "#2e7d32"
+        elif engine == ENGINE_WHISPER_API:
+            cfg = load_convert_config()
+            if (cfg.get("asr_whisper_key") or "").strip():
+                text, color = "Whisper API 已配置", "#2e7d32"
+            else:
+                text, color = "未填 API Key（点 ⚙ 语音设置）", "#c62828"
+        else:
+            text, color = "免费在线识别", "#2e7d32"
+        self.asr_status.setText(text)
+        self.asr_status.setStyleSheet(f"font-size: 11px; color: {color};")
+
+    def _open_asr_settings(self):
+        dlg = AsrSettingsDialog(self)
+        dlg.exec()
+        self._refresh_asr_state()
+
+    def _asr_options(self):
+        """读取当前引擎参数（线程启动时快照）。"""
+        cfg = load_convert_config()
+        return {
+            "engine": self.engine_combo.currentData() or "bijian",
+            "local_model": self.local_model_combo.currentData() or "base",
+            "language": cfg.get("asr_language", "zh"),
+            "chunk_sec": int(float(cfg.get("asr_chunk_minutes", 10)) * 60),
+            "concurrency": int(cfg.get("asr_concurrency", 3)),
+            "whisper_api": {
+                "base_url": cfg.get("asr_whisper_base", ""),
+                "api_key": cfg.get("asr_whisper_key", ""),
+                "model": cfg.get("asr_whisper_model", "whisper-1"),
+            },
+        }
+
+    def _set_file_progress(self, idx, total, percent):
+        overall = int((idx + percent / 100) / max(1, total) * 100)
+        self.progress.setValue(max(0, min(100, overall)))
+
+    def _transcribe_one(self, audio, idx, total, opts):
+        """单个音频转字幕；失败只记日志，不中断整批。"""
+        audio = Path(audio)
+        with_txt = self.output_txt_check.isChecked()
+        self._log_progress = -100
+        post_to_main(self._log, f"  🎬 转字幕（{ENGINE_LABELS.get(opts['engine'], opts['engine'])}）...")
+
+        def on_progress(percent, message):
+            post_to_main(self._set_file_progress, idx, total, 35 + int(percent * 0.65))
+            if percent - self._log_progress >= 15:
+                self._log_progress = percent
+                post_to_main(self._log, f"     {message}")
+
+        try:
+            segments = transcribe_audio(
+                audio, opts["engine"],
+                local_model=opts["local_model"],
+                whisper_api=opts["whisper_api"],
+                language=opts["language"],
+                chunk_sec=opts["chunk_sec"],
+                concurrency=opts["concurrency"],
+                progress=on_progress,
+                cancel=lambda: not self.running,
+            )
+            files = write_subtitles(segments, audio, with_txt=with_txt)
+            post_to_main(self._log, "  ✅ 字幕: " + ", ".join(f.name for f in files))
+            return True
+        except AsrCancelled:
+            post_to_main(self._log, "  ⏹ 字幕识别已停止")
+        except Exception as exc:  # noqa: BLE001
+            post_to_main(self._log, f"  ❌ 字幕失败: {str(exc)[:160]}")
+        return False
+
     # ==================== 提取 ====================
 
     def _selected_videos(self):
@@ -298,14 +454,26 @@ class AudioPage(BasePage):
         if not to_process:
             self._log("⚠️ 未勾选任何文件")
             return
+        asr_enabled = self.asr_check.isChecked()
+        if asr_enabled:
+            opts = self._asr_options()
+            problem = validate_engine(opts["engine"], opts["local_model"],
+                                      opts["whisper_api"])
+            if problem:
+                self._log(f"⚠️ {problem}")
+                self.app.toast(problem, "warning")
+                return
         self.running = True
         self._to_process = to_process
+        self._asr_enabled = asr_enabled
+        self._asr_opts = self._asr_options() if asr_enabled else None
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.scan_btn.setEnabled(False)
         self.progress.setValue(0)
         self.log_text.clear()
-        self._log(f"🎵 开始提取音频（{len(to_process)} 个文件）...")
+        suffix = "（含字幕）" if asr_enabled else ""
+        self._log(f"🎵 开始提取音频{suffix}（{len(to_process)} 个文件）...")
         threading.Thread(target=self._extract_thread, daemon=True).start()
 
     def _stop(self):
@@ -314,31 +482,50 @@ class AudioPage(BasePage):
     def _extract_thread(self):
         to_process = self._to_process
         total = len(to_process)
-        stats = {"success": 0, "failed": 0, "skipped": 0}
+        stats = {"success": 0, "failed": 0, "skipped": 0,
+                 "subtitle": 0, "subtitle_failed": 0, "subtitle_skipped": 0}
+        opts = getattr(self, "_asr_opts", None)
         for i, src in enumerate(to_process):
             if not self.running:
                 break
+            audio = src.with_suffix(".m4a")
             try:
-                dst = src.with_suffix(".m4a")
-                if dst.exists():
-                    post_to_main(self._log, f"💾 {src.name} -> 已存在，跳过")
+                if audio.exists():
+                    post_to_main(self._log, f"💾 {src.name} -> 已存在，跳过提取")
                     stats["skipped"] += 1
                 else:
                     post_to_main(self._log, f"📂 {src.name}")
-                    ok, err = extract_audio_one(src, dst)
+                    post_to_main(self._set_file_progress, i, total, 5)
+                    ok, err = extract_audio_one(src, audio)
                     if ok:
                         stats["success"] += 1
-                        post_to_main(self._log, f"  ✅ 完成 -> {dst.name}")
+                        post_to_main(self._log, f"  ✅ 完成 -> {audio.name}")
                     else:
                         stats["failed"] += 1
                         post_to_main(self._log, f"  ❌ 失败: {err}")
             except Exception as e:
                 stats["failed"] += 1
                 post_to_main(self._log, f"  ❌ 异常: {e}")
-            post_to_main(self.progress.setValue, int((i + 1) / total * 100))
 
-        post_to_main(self._log,
-                     f"\n✅ 完成: 成功{stats['success']}, 失败{stats['failed']}, 跳过{stats['skipped']}")
+            if opts and self.running and audio.exists():
+                srt = audio.with_suffix(".srt")
+                if (self.skip_sub_check.isChecked() and srt.exists()
+                        and srt.stat().st_size > 0):
+                    stats["subtitle_skipped"] += 1
+                    post_to_main(self._log, f"  💬 已有字幕，跳过（{srt.name}）")
+                elif self._transcribe_one(audio, i, total, opts):
+                    stats["subtitle"] += 1
+                else:
+                    stats["subtitle_failed"] += 1
+            post_to_main(self._set_file_progress, i, total, 100)
+
+        summary = (f"\n✅ 完成: 音频成功{stats['success']}, 失败{stats['failed']}, "
+                   f"跳过{stats['skipped']}")
+        if opts:
+            summary += (f"；字幕 {stats['subtitle']} 个，"
+                        f"失败{stats['subtitle_failed']}，"
+                        f"已有跳过{stats['subtitle_skipped']}")
+        post_to_main(self._log, summary)
         post_to_main(self._finish)
 
     def _finish(self):

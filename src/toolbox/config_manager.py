@@ -215,6 +215,18 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     # 字幕页开关（未注册默认键的键会在 load 时被过滤丢弃，必须登记）
     "subtitle_use_date_folder": False,
     "subtitle_use_same_dir": True,
+    # 音频提取页「提取后自动转字幕」（引擎/本地模型/输出开关，切换即保存）
+    "asr_enabled": False,
+    "asr_engine": "bijian",
+    "asr_local_model": "base",
+    "asr_skip_existing": True,
+    "asr_output_txt": True,
+    "asr_language": "zh",
+    "asr_chunk_minutes": 10,
+    "asr_concurrency": 3,
+    "asr_whisper_base": "https://api.openai.com/v1",
+    "asr_whisper_key": "",
+    "asr_whisper_model": "whisper-1",
     # 资产页本地资源「增量模式(写入索引)」
     "local_inc_enabled": False,
     # 资产页本地资源：锁定的扫描根目录 + 锁定态 + 扫描深度（0=仅当前层，-1=全部层级）
