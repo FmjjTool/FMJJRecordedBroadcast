@@ -27,7 +27,8 @@ from toolbox.asr_engine import (
     validate_engine, write_subtitles,
 )
 from toolbox.audio_engine import (
-    delete_files_safe, extract_audio_one, find_audio_videos, scan_audio_by_date,
+    delete_files_safe, extract_audio_tracks, find_audio_videos,
+    plan_audio_outputs, scan_audio_by_date,
 )
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size, is_video_file
@@ -122,6 +123,15 @@ class AudioPage(BasePage):
         layout.addLayout(asr_row)
 
         asr_row2 = QHBoxLayout()
+        asr_row2.addWidget(QLabel("提取内容:"))
+        self.audio_mode_combo = QComboBox()
+        self.audio_mode_combo.addItem("第一条音轨", "first")
+        self.audio_mode_combo.addItem("全部音轨", "all")
+        idx = self.audio_mode_combo.findData(cfg.get("audio_extract_mode", "first"))
+        self.audio_mode_combo.setCurrentIndex(max(0, idx))
+        self.audio_mode_combo.setToolTip("多音轨录制（如游戏+麦克风）可选「全部音轨」分别提取")
+        self.audio_mode_combo.currentIndexChanged.connect(self._on_asr_changed)
+        asr_row2.addWidget(self.audio_mode_combo)
         asr_row2.addWidget(QLabel("本地模型:"))
         self.local_model_combo = QComboBox()
         for key, label, _size in LOCAL_MODELS:
@@ -352,6 +362,7 @@ class AudioPage(BasePage):
         cfg["asr_skip_existing"] = self.skip_sub_check.isChecked()
         cfg["asr_output_txt"] = self.output_txt_check.isChecked()
         cfg["asr_delete_audio"] = self.delete_audio_check.isChecked()
+        cfg["audio_extract_mode"] = self.audio_mode_combo.currentData() or "first"
         save_convert_config(cfg)
         self._refresh_asr_state()
 
@@ -550,23 +561,26 @@ class AudioPage(BasePage):
                 post_to_main(self._update_item_path, str(src), str(resolved))
                 src = resolved
             audio = src.with_suffix(".m4a")
+            audio_outputs = []
+            all_tracks = self.audio_mode_combo.currentData() == "all"
             try:
-                if audio.exists():
+                planned = plan_audio_outputs(src, all_tracks)
+                if planned and all(p.exists() and p.stat().st_size > 0 for p in planned):
+                    audio = planned[0]
+                    audio_outputs = planned
                     post_to_main(self._log, f"💾 {self._rel(src)} -> 已存在，跳过提取")
                     stats["skipped"] += 1
                 else:
                     post_to_main(self._log, f"📂 {self._rel(src)}")
                     post_to_main(self._set_file_progress, i, total, 5)
-                    ok, err = extract_audio_one(src, audio)
-                    if ok:
-                        stats["success"] += 1
-                        post_to_main(self._log, f"  ✅ 完成 -> {audio.name}")
-                    else:
-                        stats["failed"] += 1
-                        post_to_main(self._log, f"  ❌ 失败: {err}")
+                    audio_outputs = extract_audio_tracks(src, all_tracks)
+                    audio = audio_outputs[0]
+                    stats["success"] += 1
+                    for produced in audio_outputs:
+                        post_to_main(self._log, f"  ✅ 完成 -> {produced.name}")
             except Exception as e:
                 stats["failed"] += 1
-                post_to_main(self._log, f"  ❌ 异常: {e}")
+                post_to_main(self._log, f"  ❌ 失败: {e}")
 
             if opts and self.running and audio.exists():
                 srt = audio.with_suffix(".srt")
@@ -576,12 +590,12 @@ class AudioPage(BasePage):
                     post_to_main(self._log, f"  💬 已有字幕，跳过（{srt.name}）")
                 elif self._transcribe_one(audio, i, total, opts):
                     stats["subtitle"] += 1
-                    if self.delete_audio_check.isChecked():
-                        deleted, failed = delete_files_safe([audio])
+                    if self.delete_audio_check.isChecked() and audio_outputs:
+                        deleted, failed = delete_files_safe(audio_outputs)
                         if deleted:
-                            stats["audio_deleted"] += 1
+                            stats["audio_deleted"] += deleted
                             post_to_main(self._log,
-                                         f"  🗑 音频已移入回收站（{audio.name}）")
+                                         f"  🗑 已移入回收站 {deleted} 个音频")
                         else:
                             post_to_main(self._log,
                                          f"  ⚠️ 音频删除失败: {'; '.join(failed[:1])}")

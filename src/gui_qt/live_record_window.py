@@ -1008,7 +1008,7 @@ class AddAnchorDialog(QDialog):
         self.edit.returnPressed.connect(self._resolve)
         row.addWidget(self.edit, 1)
         self.btn_pick = QPushButton("📇 已存账号")
-        self.btn_pick.setToolTip("从账号获取 / 直播录制列表 / 房间缓存里选")
+        self.btn_pick.setToolTip("从信息获取 / 直播录制列表 / 房间缓存里选")
         self.btn_pick.clicked.connect(self._pick_saved)
         row.addWidget(self.btn_pick)
         self.btn_ok = QPushButton("识别")

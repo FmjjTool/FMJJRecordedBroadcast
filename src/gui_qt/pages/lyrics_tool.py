@@ -28,22 +28,7 @@ class LyricsToolPage(BasePage):
         self._enter_stage = 0    # 回车快捷：0=待扫描，1=待转换
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        head = QHBoxLayout()
-        head.addWidget(QLabel("🎤 歌词转换", styleSheet="font-size: 16px; font-weight: bold;"))
-        head.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 歌词转换 · 功能介绍", (
-            "<p><b>歌词格式转换 + 酷狗 KRC 加解密，两个工具。</b></p>"
-            "<p>· <b>🔄 转换</b>：LRC / KRC(酷狗) / KSC(酷我) / QRC(QQ) / TRC·ELRC → "
-            "纯文字 TXT / LRC / SRT / ASS / KSC 逐字</p>"
-            "<p>· <b>输入方式</b>：选择歌词文件 / 选择文件夹（批量）/ ✍️ 直接粘贴歌词文本"
-            "（按 LRC 处理）；可指定工作目录，输出统一存到工作目录</p>"
-            "<p>· 支持同目录/日期文件夹等输出选项（按 config 持久化）</p>"
-            "<p>· <b>🔑 KRCD工具</b>：KRC（酷狗加密）↔ KRCD（明文）双向转换——"
-            "解密为可读明文，或把明文加密回 KRC 放回酷狗</p>"
-            "<p>· 回车快捷：第一次回车=扫描/选择，第二次回车=开始转换</p>")))
-        layout.addLayout(head)
+        layout.setContentsMargins(6, 6, 6, 6)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_convert_tab(), "🔄 转换")
@@ -52,7 +37,7 @@ class LyricsToolPage(BasePage):
     def _build_convert_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.addWidget(QLabel("歌词格式转换", styleSheet="font-size: 16px; font-weight: bold;"))
+        v.setContentsMargins(0, 0, 0, 0)
 
         frow = QHBoxLayout()
         frow.addWidget(QPushButton("📄 选择歌词文件", clicked=self._select_files))
@@ -66,6 +51,17 @@ class LyricsToolPage(BasePage):
         self.work_dir_label.setStyleSheet("color: #888; font-size: 10px;")
         frow.addWidget(self.work_dir_label)
         frow.addStretch(1)
+        from gui_qt.help_overlay import attach_help_overlay
+        frow.addWidget(attach_help_overlay(self, "❓ 歌词转换 · 功能介绍", (
+            "<p><b>歌词格式转换 + 酷狗 KRC 加解密，两个工具。</b></p>"
+            "<p>· <b>🔄 转换</b>：LRC / KRC(酷狗) / KSC(酷我) / QRC(QQ) / TRC·ELRC → "
+            "纯文字 TXT / LRC / SRT / ASS / KSC 逐字</p>"
+            "<p>· <b>输入方式</b>：选择歌词文件 / 选择文件夹（批量）/ ✍️ 直接粘贴歌词文本"
+            "（按 LRC 处理）；可指定工作目录，输出统一存到工作目录</p>"
+            "<p>· 支持同目录/日期文件夹等输出选项（按 config 持久化）</p>"
+            "<p>· <b>🔑 KRCD工具</b>：KRC（酷狗加密）↔ KRCD（明文）双向转换——"
+            "解密为可读明文，或把明文加密回 KRC 放回酷狗</p>"
+            "<p>· 回车快捷：第一次回车=扫描/选择，第二次回车=开始转换</p>")))
         v.addLayout(frow)
 
         # 歌词文字输入区（默认折叠）：直接粘贴 LRC 等文本，走正常转换流程
@@ -138,7 +134,7 @@ class LyricsToolPage(BasePage):
     def _build_krcd_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.addWidget(QLabel("KRCD ↔ KRC 工具", styleSheet="font-size: 16px; font-weight: bold;"))
+        v.setContentsMargins(0, 0, 0, 0)
 
         frow = QHBoxLayout()
         frow.addWidget(QPushButton("📄 选择文件", clicked=self._krcd_select_files))

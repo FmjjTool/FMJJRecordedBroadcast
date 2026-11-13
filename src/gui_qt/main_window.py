@@ -12,7 +12,7 @@ import os
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QLabel, QMainWindow,
-    QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -23,11 +23,10 @@ from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
 
 # 页面注册：key -> (模块路径, 类名)。
-# 懒导入：首次切到该页才 import（启动只加载首个页面，避免 36 个页面模块
-# 全量 import 拖慢启动、也避免把各页的重依赖提前拉起）。
+# 懒导入：首次切到该页才 import（启动只加载首页，避免全部页面模块
+# 一次性 import 拖慢启动、也避免把各页的重依赖提前拉起）。
 PAGE_CLASSES = {
-    "info_parse": ("gui_qt.pages.info_parse", "InfoParsePage"),
-    "info_batch": ("gui_qt.pages.info_batch", "InfoBatchPage"),
+    "home": ("gui_qt.pages.home", "HomePage"),
     "info_accounts": ("gui_qt.pages.info_accounts", "InfoAccountsPage"),
     "info_results": ("gui_qt.pages.info_results", "InfoResultsPage"),
     "douyin_index": ("gui_qt.pages.douyin_index", "DouyinIndexPage"),
@@ -35,24 +34,21 @@ PAGE_CLASSES = {
     "asset": ("gui_qt.pages.asset", "AssetPage"),
     "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
     "toolbox_convert": ("gui_qt.pages.convert", "ConvertPage"),
-    "toolbox_rename": ("gui_qt.pages.rename", "RenamePage"),
+    "toolbox_editor": ("gui_qt.pages.editor", "EditorPage"),
     "toolbox_audio": ("gui_qt.pages.audio", "AudioPage"),
     "toolbox_subtitle": ("gui_qt.pages.subtitle", "SubtitlePage"),
-    "lyrics_tool": ("gui_qt.pages.lyrics_tool", "LyricsToolPage"),
     "toolbox_launcher": ("gui_qt.pages.launcher", "LauncherPage"),
     "toolbox_calendar": ("gui_qt.pages.calendar", "CalendarPage"),
     "toolbox_migrate": ("gui_qt.pages.migrate", "MigratePage"),
-    "music_info": ("gui_qt.pages.music_info", "MusicInfoPage"),
-    "netease": ("gui_qt.pages.netease", "NeteasePage"),
-    "unlock_music": ("gui_qt.pages.music_unlock", "MusicUnlockPage"),
-    "music_tag": ("gui_qt.pages.music_tag", "MusicTagPage"),
+    "music_search_download": ("gui_qt.pages.containers", "MusicSearchDownloadPage"),
+    "music_file_tools": ("gui_qt.pages.music_tag", "MusicTagPage"),
+    "info_tools": ("gui_qt.pages.containers", "InfoToolsPage"),
     "tracker": ("gui_qt.pages.tracker", "TrackerPage"),
     "music_tracker": ("gui_qt.pages.music_tracker", "MusicTrackerPage"),
     "test_page": ("gui_qt.pages.test_page", "TestPage"),
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
     "tcdoc": ("gui_qt.pages.tcdoc", "TcDocPage"),
-    "file_time": ("gui_qt.pages.file_time", "FileTimePage"),
     "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
     "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
     "shopping": ("gui_qt.pages.shopping_page", "ShoppingPage"),
@@ -63,7 +59,6 @@ PAGE_CLASSES = {
     "image_crop": ("gui_qt.pages.image_crop", "ImageCropPage"),
     "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
-    "media_compress": ("gui_qt.pages.media_compress", "MediaCompressPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
 }
@@ -76,16 +71,10 @@ def _page_class(key):
     return getattr(importlib.import_module(mod_name), cls_name)
 
 NAV_GROUPS = [
-    ("📊 信息获取", [
-        ("info_parse", "🔍 单个解析"),
-        ("info_batch", "📋 批量导入"),
-        ("info_accounts", "👥 账号获取"),
+    ("📥 内容采集", [
+        ("info_accounts", "🔍 信息获取"),
         ("info_results", "📦 已获取"),
-        ("douyin_index", "📈 抖音指数"),
-        ("wechat_article", "📰 公众号解析"),
-        ("bili_resource", "🎁 B站资源"),
-        ("video_comments", "💬 视频评论区"),
-        ("tcdoc", "📄 腾讯文档监控"),
+        ("info_tools", "🧰 信息工具"),
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
@@ -93,7 +82,7 @@ NAV_GROUPS = [
     ("🎬 录播工具箱", [
         ("toolbox_organize", "📂 自动整理"),
         ("toolbox_convert", "🔄 视频转换"),
-        ("toolbox_rename", "✏️ 重命名"),
+        ("toolbox_editor", "🎬 视频剪辑"),
         ("toolbox_audio", "🎵 音频提取"),
         ("toolbox_subtitle", "📝 字幕转换"),
         ("toolbox_launcher", "🚀 继续操作"),
@@ -106,10 +95,9 @@ NAV_GROUPS = [
         ("douyin_shop", "🏬 抖音商品"),
         ("bili_shop", "🛍 B站小店"),
     ]),
-    ("🎵 音乐服务", [
-        ("music_info", "🎵 音乐信息获取"),
-        ("netease", "🎧 音乐下载"),
-        ("unlock_music", "🔓 音乐解密"),
+    ("🎵 音乐工具", [
+        ("music_search_download", "🎵 音乐搜索下载"),
+        ("music_file_tools", "🏷 音乐标签"),
     ]),
     ("👥 账户追踪", [
         ("music_tracker", "🎼 音乐账号追踪"),
@@ -120,15 +108,11 @@ NAV_GROUPS = [
         ("test_page", "📺 抖音弹幕姬"),
         ("bili_danmaku", "📺 B站弹幕姬"),
     ]),
-    ("🧰 实用工具", [
+    ("🧰 本地工具", [
         ("image_crop", "🖼 图片裁切"),
         ("cover_maker", "🎨 套版封面制作"),
         ("image_sorter", "🎞 媒体筛选分类"),
-        ("media_compress", "🗜 媒体压缩"),
         ("rename_batch", "✏️ 批量重命名"),
-        ("file_time", "🕓 文件时间修改"),
-        ("music_tag", "🏷 音乐标签"),
-        ("lyrics_tool", "🎤 歌词转换"),
     ]),
     ("⚙️ 全局", [
         ("tasks", "⏰ 定时任务"),
@@ -181,12 +165,26 @@ class MainWindow(QMainWindow):
         nav_v.setContentsMargins(0, 0, 0, 0)
         nav_v.setSpacing(0)
 
+        # 顶部标题：固定在滚动区之外，点击返回首页
+        self.nav_title = QPushButton("📊 数据汇总库 · 工具箱")
+        self.nav_title.setCheckable(True)
+        self.nav_title.setCursor(Qt.PointingHandCursor)
+        self.nav_title.setToolTip("返回首页")
+        self.nav_title.setStyleSheet(
+            "QPushButton { font-weight: bold; font-size: 14px; padding: 14px 4px 10px 12px;"
+            " text-align: left; border: none; background: transparent; color: #2f3440; }"
+            "QPushButton:hover { color: #1976d2; background: transparent; border: none; }"
+            "QPushButton:pressed { color: #1976d2; background: transparent; border: none; }"
+            "QPushButton:checked { color: #1976d2; background: transparent; border: none; }")
+        self.nav_title.clicked.connect(lambda: self.show_page("home"))
+        nav_v.addWidget(self.nav_title)
+
         nav_scroll = QScrollArea()
         nav_scroll.setWidgetResizable(True)
         nav_scroll.setFrameShape(QScrollArea.NoFrame)
         nav_widget = QWidget()
         self.nav_layout = QVBoxLayout(nav_widget)
-        self.nav_layout.setContentsMargins(8, 8, 8, 8)
+        self.nav_layout.setContentsMargins(8, 0, 8, 8)
         self.nav_layout.setSpacing(3)
         nav_scroll.setWidget(nav_widget)
         nav_v.addWidget(nav_scroll, 1)
@@ -221,7 +219,7 @@ class MainWindow(QMainWindow):
         self.skeleton = SkeletonPage()
         self.stack.addWidget(self.skeleton)
         self.stack.setCurrentWidget(self.skeleton)
-        first_key = NAV_GROUPS[0][1][0][0]
+        first_key = "home" if "home" in PAGE_CLASSES else NAV_GROUPS[0][1][0][0]
         QTimer.singleShot(0, lambda: self._deferred_boot(first_key))
 
         # 主题定时开关：启动对齐一次 + 每 10 秒强制对齐（到点即变，无需手动触发）
@@ -250,10 +248,6 @@ class MainWindow(QMainWindow):
     # ==================== 侧栏 ====================
 
     def _build_nav(self, nav_layout):
-        title = QLabel("📊 数据汇总库 · 工具箱")
-        title.setStyleSheet("font-weight: bold; font-size: 14px; padding: 6px 4px 10px 4px;")
-        nav_layout.addWidget(title)
-
         # 「全局」组按钮延迟到主题切换按钮之后再添加（全局设置放深色主题下方）
         bottom_buttons = []
         for group_title, items in NAV_GROUPS:
@@ -270,14 +264,17 @@ class MainWindow(QMainWindow):
             for key, item_title in items:
                 btn = QPushButton(item_title)
                 btn.setCheckable(True)
-                # 底部固定区按钮文字居中（与主题方块同行、缩短让位），导航区左对齐
-                btn.setStyleSheet("text-align: center; padding: 5px 8px;" if is_bottom
-                                  else "text-align: left; padding: 5px 8px;")
-                btn.clicked.connect(lambda checked, k=key: self.show_page(k))
+                # 底部固定区只留图标，三等分；导航区左对齐显示完整文字
                 if is_bottom:
+                    btn.setText(item_title.split(" ", 1)[0])
+                    btn.setToolTip(item_title)
+                    btn.setStyleSheet(
+                        "text-align: center; padding: 4px 0; font-size: 16px;")
                     bottom_buttons.append(btn)
                 else:
+                    btn.setStyleSheet("text-align: left; padding: 5px 8px;")
                     nav_layout.addWidget(btn)
+                btn.clicked.connect(lambda checked, k=key: self.show_page(k))
                 self.nav_buttons[key] = btn
         nav_layout.addStretch(1)
 
@@ -286,15 +283,16 @@ class MainWindow(QMainWindow):
 
         # 主题切换方块（正方形：深色显 🌙 / 浅色显 ☀️，点击切换，持久化）
         theme_row = QHBoxLayout()
-        theme_row.setSpacing(4)
+        theme_row.setSpacing(6)
         for btn in bottom_buttons:
             theme_row.addWidget(btn, 1)
         self.theme_btn = QPushButton("🌙")
-        self.theme_btn.setFixedSize(30, 30)
+        self.theme_btn.setFixedHeight(30)
+        self.theme_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.theme_btn.setStyleSheet(common.icon_btn_style(True, "font-size: 16px;"))
         self.theme_btn.setToolTip("切换 浅色 / 深色 界面（自动保存）")
         self.theme_btn.clicked.connect(self._toggle_theme)
-        theme_row.addWidget(self.theme_btn)
+        theme_row.addWidget(self.theme_btn, 1)
         self.bottom_layout.addLayout(theme_row)
         self._update_theme_btn()
 
@@ -444,7 +442,8 @@ class MainWindow(QMainWindow):
     def show_page(self, key):
         if key not in PAGE_CLASSES:
             return
-        # 高亮当前按钮
+        # 高亮当前按钮（首页不在导航列表里，单独标记标题）
+        self.nav_title.setChecked(key == "home")
         for k, btn in self.nav_buttons.items():
             btn.setChecked(k == key)
 
@@ -551,9 +550,9 @@ class MainWindow(QMainWindow):
 
         # 字幕转换页 / 歌词转换页 / 音乐标签页 / 图片裁切页 / 媒体筛选分类页 / 媒体压缩页
         # / 音频提取页：接受拖放的文件或文件夹（本地列表，不改全局目录）
-        if self.current_page in ("toolbox_subtitle", "lyrics_tool", "toolbox_lyrics",
-                                 "music_tag", "image_crop", "image_sorter",
-                                 "media_compress", "toolbox_audio"):
+        if self.current_page in ("toolbox_subtitle",
+                                 "music_file_tools", "image_crop", "image_sorter",
+                                 "toolbox_audio", "toolbox_editor"):
             p = self.pages.get(self.current_page)
             if p:
                 for d in dirs:

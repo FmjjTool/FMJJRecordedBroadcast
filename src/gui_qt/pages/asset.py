@@ -4521,7 +4521,7 @@ class AssetPage(BasePage):
                 self.db_author_sel.addItems(["全部作者"])
                 self.db_author_sel.blockSignals(False)
                 self.db_page_lbl.setText(
-                    "暂无数据 · 请在「账号获取」页开启「增量模式」并点「获取最新」")
+                    "暂无数据 · 请在「信息获取」页开启「增量模式」并点「获取最新」")
                 return
             self._db_reload_authors()
 

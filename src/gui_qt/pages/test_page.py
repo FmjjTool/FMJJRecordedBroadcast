@@ -282,7 +282,7 @@ class TestPage(BasePage):
         top_l.addWidget(link_btn)
         self.account_pick_btn = QPushButton("📇 已存账号")
         self.account_pick_btn.setToolTip(
-            "从本机已存账号/录播用户里选直播间（账号获取 accounts.txt、\n"
+            "从本机已存账号/录播用户里选直播间（信息获取 accounts.txt、\n"
             "直播录制列表、抖音房间缓存、最近连接）；B站空间/抖音主页可解析")
         self.account_pick_btn.setStyleSheet(
             icon_btn_style(True, "font-size: 12px; padding: 3px 8px;"))
@@ -1446,7 +1446,7 @@ class TestPage(BasePage):
         room_pick_btn = QPushButton("📇")
         room_pick_btn.setFixedSize(26, 26)
         room_pick_btn.setToolTip("从本机已存账号 / 录播用户里选直播间\n"
-                                 "（账号获取、直播录制列表、抖音房间缓存、最近连接）")
+                                 "（信息获取、直播录制列表、抖音房间缓存、最近连接）")
         room_pick_btn.setFlat(True)
         room_pick_btn.setStyleSheet(
             icon_btn_style(False, "color: #1976d2; border: none; font-size: 13px;"))

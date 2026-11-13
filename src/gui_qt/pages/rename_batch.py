@@ -1,8 +1,9 @@
-"""实用工具 · 批量重命名页（zRenamer 风格）：8 标签规则 + 双列预览 + 撤销。
+"""实用工具 · 批量重命名页（zRenamer 风格）：8 标签规则 + 时间修改 + 双列预览 + 撤销。
 
-标签：整体 / 替换 / 添加 / 删除 / 序号 / 模板 / 文本模式 / 选项
-规则叠加生效：所有标签的规则按 整体→替换→添加→删除→序号→模板 顺序依次应用到文件名，
+标签：整体 / 替换 / 添加 / 删除 / 序号 / 模板 / 文本模式 / 选项 / 时间修改
+规则叠加生效：所有规则标签按 整体→替换→添加→删除→序号→模板 顺序依次应用到文件名，
 最后统一预览（原文件名 → 新文件名），确认后执行；自动记录改名历史支持一键撤销。
+最后的「时间修改」标签内嵌文件时间修改页，与改名规则互不影响。
 """
 
 import os
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.pages.file_time import FileTimePage
 
 
 # ==================== 规则引擎 ====================
@@ -201,6 +203,8 @@ class RenameBatchPage(BasePage):
             "添加（前后缀/指定位置/关键词后）· 删除（类型/位置/关键词）· "
             "序号（起始/增量/位数）· 模板（{名}/{序号}/{日期} 等变量）· "
             "文本模式（逐行直接编辑新名）· 选项（忽略扩展名/同名冲突自动加序号/文件夹改名）</p>"
+            "<p>· <b>时间修改</b>：最后一个标签内嵌文件时间修改，可批量改 创建/修改/访问 时间，"
+            "与改名规则互不影响</p>"
             "<p>· 多规则可同时生效，叠加计算；↩ 撤销上次改名</p>"
             "<p>· 执行前务必核对预览表「新文件名」列；冲突自动加序号防止覆盖</p>")))
         layout.addLayout(head)
@@ -230,6 +234,7 @@ class RenameBatchPage(BasePage):
         self.tabs.addTab(self._tab_template(), "模板")
         self.tabs.addTab(self._tab_textmode(), "文本模式")
         self.tabs.addTab(self._tab_options(), "选项")
+        self.tabs.addTab(FileTimePage(self.app), "时间修改")
         layout.addWidget(self.tabs)
 
         # 预览表

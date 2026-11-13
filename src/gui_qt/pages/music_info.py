@@ -22,12 +22,8 @@ class MusicInfoPage(BasePage):
         self.columns = {}  # key -> {"songs": [], "list": QListWidget}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
-
-        title = QLabel("🎵 音乐信息获取")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
 
         row = QHBoxLayout()
         self.singer_entry = QLineEdit()

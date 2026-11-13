@@ -1,6 +1,6 @@
 """下载共享操作（对应原版 info_pages / download_page 中重复的下载逻辑）。
 
-供「已获取」「单个解析」「批量导入」页共用：条目分组、B站分类、画质映射、
+供「已获取」「账号获取」等页共用：条目分组、B站分类、画质映射、
 抖音直链刷新、多平台 URL 解析、B站下载执行、非 B站媒体下载。
 """
 
@@ -53,7 +53,7 @@ MULTI_PLATFORM_EN = {
 
 
 def parse_url_info(url: str):
-    """解析单条 URL → VideoInfo（单个解析/批量导入共用）。
+    """解析单条 URL → VideoInfo（账号获取页批量输入用）。
 
     B站/抖音/微博走完整解析器（信息全），其余 7 个视频平台（小红书/快手/
     好看/微视/梨视频/皮皮搞笑）走 multi_downloader 构造最小 VideoInfo。
@@ -163,7 +163,7 @@ def refresh_douyin_urls(items, quality):
 def refresh_xhs_urls(items):
     """小红书条目补真实直链。账号获取的卡片条目 video_url 是笔记页链接
     （含 xsec_token），media_downloader 只认 CDN 直链会静默跳过视频。
-    逐条解析笔记页回填视频流/图片/类型；已是直链（单个解析/批量导入路径
+    逐条解析笔记页回填视频流/图片/类型；已是直链（账号获取解析入库路径
     走 parse() 拿到过直链）的条目跳过，不重复请求。"""
     from media_downloader import _is_direct_media_url
     xhs_items = [i for i in items

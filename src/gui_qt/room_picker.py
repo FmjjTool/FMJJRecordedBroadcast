@@ -199,7 +199,7 @@ def load_local_entries():
             if not plat:
                 continue
             note = " / ".join(x for x in (acc.group_name, acc.note) if x)
-            out.append(RoomEntry("账号获取", plat, acc.name or "", room, note,
+            out.append(RoomEntry("信息获取", plat, acc.name or "", room, note,
                                  uid=uid, sec_uid=sec, live_url=acc.url))
     except Exception:
         pass
@@ -285,7 +285,7 @@ class RoomPickerDialog(QDialog):
 
         bar = QHBoxLayout()
         self.btn_bili = QPushButton("解析B站空间→房间号")
-        self.btn_bili.setToolTip("对选中的「账号获取 → B站空间」条目查询直播间号")
+        self.btn_bili.setToolTip("对选中的「信息获取 → B站空间」条目查询直播间号")
         self.btn_bili.clicked.connect(self._resolve_bili)
         bar.addWidget(self.btn_bili)
         self.btn_dy = QPushButton("解析抖音主页（浏览器）")
@@ -383,7 +383,7 @@ class RoomPickerDialog(QDialog):
     def _resolve_bili(self):
         e = self._selected_entry()
         if not e or e.platform != "bili" or not e.uid:
-            self.status.setText("请先选中一条「账号获取 → B站空间」条目")
+            self.status.setText("请先选中一条「信息获取 → B站空间」条目")
             return
         self.status.setText("正在解析 B站空间 %s …" % e.uid)
 
@@ -400,7 +400,7 @@ class RoomPickerDialog(QDialog):
     def _resolve_douyin(self):
         e = self._selected_entry()
         if not e or e.platform != "douyin" or not e.sec_uid:
-            self.status.setText("请先选中一条「账号获取 → 抖音主页」条目")
+            self.status.setText("请先选中一条「信息获取 → 抖音主页」条目")
             return
         self.status.setText("正在用浏览器解析抖音主页（约 10 秒）…")
         self.btn_dy.setEnabled(False)

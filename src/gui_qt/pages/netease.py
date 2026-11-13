@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -124,11 +124,8 @@ class NeteasePage(BasePage):
         self.single_song = None     # 单曲解析时的 SongInfo（四平台）
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        # 只保留功能 Tab：原设置 Tab 的帮助文字搬到功能 Tab 顶部右侧红框
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
-        self.tabs.addTab(self._build_func(), "功能")
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(self._build_func())
 
     # ===================== 公共：Cookie =====================
     def _cookies(self):
@@ -167,21 +164,13 @@ class NeteasePage(BasePage):
         "默认 download/歌曲文件）或固定位置（自选文件夹，音乐解密输出同目录）</p>"
     )
 
-    # ===================== 功能 tab =====================
+    # ===================== 功能页 =====================
     def _build_func(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
-        # 标题 + 顶部右侧红框帮助区，二者在同一行：左边标题，右边红框
-        title_row = QHBoxLayout()
-        title = QLabel("🎧 音乐下载工具箱")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        title_row.addWidget(self._build_help_redbox(), 0, Qt.AlignTop)
-        v.addLayout(title_row)
+        v.setContentsMargins(0, 0, 0, 0)
 
-        # 顶部：平台选择 + 模式按钮
+        # 顶部：平台选择 + 模式按钮 + 使用说明
         top = QHBoxLayout()
         self.platform_menu = QComboBox()
         for _, label, _ in PLATFORMS:
@@ -192,13 +181,17 @@ class NeteasePage(BasePage):
         self.mode_row = QHBoxLayout()
         top.addLayout(self.mode_row)
         top.addStretch(1)
+        top.addWidget(self._build_help_redbox(), 0, Qt.AlignTop)
         v.addLayout(top)
 
         # 输入区（动态，随模式变化）
         self.input_row = QHBoxLayout()
         v.addLayout(self.input_row)
 
-        # 详情区：白底带边框卡片（内部容器透明，否则全局 QWidget 灰底会盖住白底）
+        # 详情区：空白页 + 结果页切换，空态不显示灰框也不留布局空隙
+        self.detail_stack = QStackedWidget()
+        self.empty_page = QWidget()
+        self.detail_stack.addWidget(self.empty_page)
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
         self.detail_scroll.setStyleSheet(
@@ -211,7 +204,8 @@ class NeteasePage(BasePage):
         self.detail_layout.setSpacing(2)
         self.detail_layout.setAlignment(Qt.AlignTop)
         self.detail_scroll.setWidget(self.detail_container)
-        v.addWidget(self.detail_scroll, 1)
+        self.detail_stack.addWidget(self.detail_scroll)
+        v.addWidget(self.detail_stack, 1)
 
         # 底部：操作栏
         bottom = QHBoxLayout()
@@ -408,16 +402,8 @@ class NeteasePage(BasePage):
                         sub.widget().deleteLater()
 
     def _show_empty(self):
-        hints = {
-            "search": "输入「歌手 + 关键词」搜索歌曲",
-            "song": "输入歌曲链接或 ID，查看详情 + 歌词",
-            "playlist": "输入歌单链接或 ID，查看歌单信息 + 歌曲列表",
-            "album": "输入专辑链接 / ID / 专辑名",
-        }
-        lbl = QLabel("💡 " + hints.get(self.mode, ""))
-        lbl.setStyleSheet("color: #888; font-size: 13px; padding: 40px;")
-        lbl.setAlignment(Qt.AlignCenter)
-        self.detail_layout.addWidget(lbl)
+        self._clear_detail()
+        self.detail_stack.setCurrentWidget(self.empty_page)
 
     # ===================== 全选/反选 =====================
     def _sel(self, mode):
@@ -498,6 +484,7 @@ class NeteasePage(BasePage):
                 self._show_empty()
                 return
             kind, data = result
+            self.detail_stack.setCurrentWidget(self.detail_scroll)
             if kind == "songs":
                 self._render_songs(data or [])
             elif kind == "song":

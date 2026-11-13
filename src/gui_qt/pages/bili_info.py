@@ -1,7 +1,7 @@
 """B站资源 · 空间综合搜索页：用户空间 / 综合搜索。
 
 复刻自 BiliResourceDownloader 的 space/[id].vue + search/general.vue
-（下载头像/横幅/空间资源；视频信息走「信息获取 · 单个解析」页，动态详情已并入综合搜索场景）。
+（下载头像/横幅/空间资源；视频信息走「信息获取」页，动态详情已并入综合搜索场景）。
 """
 
 import re
@@ -83,8 +83,8 @@ class BiliInfoPage(BasePage):
             "<p>· <b>👤 用户空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
             "可下载头像/头像框/空间背景图/投稿封面/充电表情/收藏集封面</p>"
             "<p>· <b>🔍 综合搜索</b>：关键词搜B站用户与视频（WBI 签名），"
-            "用户结果点「查看」跳本页空间页；视频结果点「查看」自动填入「单个解析」页解析</p>"
-            "<p>· 全部游客接口，无需登录；视频详情与下载请用「信息获取 · 单个解析」页</p>")))
+            "用户结果点「查看」跳本页空间页；视频结果点「查看」自动填入「信息获取」页解析</p>"
+            "<p>· 全部游客接口，无需登录；视频详情与下载请用「信息获取」页</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
@@ -192,7 +192,7 @@ class BiliInfoPage(BasePage):
         self.search_table2.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.search_table2.setEditTriggers(QTableWidget.NoEditTriggers)
         v.addWidget(self.search_table2, 1)
-        self.search_info2 = QLabel("用户 → 「空间」tab；视频 → 单个解析页（自动填入解析）")
+        self.search_info2 = QLabel("用户 → 「空间」tab；视频 → 信息获取页（自动填入解析）")
         self.search_info2.setStyleSheet("color:#888;")
         v.addWidget(self.search_info2)
         return w
@@ -242,8 +242,8 @@ class BiliInfoPage(BasePage):
             self.space_entry.setText(r["id"])
             self._load_space()
         else:
-            # 视频信息功能已并入「单个解析」页（功能重复，此处直接跳转解析）
-            self.app.show_page("info_parse")
-            page = self.app.pages.get("info_parse")
+            # 视频信息功能已并入「信息获取」页（批量输入作品链接即解析入库）
+            self.app.show_page("info_accounts")
+            page = self.app.pages.get("info_accounts")
             if page is not None:
                 page.open_url(f"https://www.bilibili.com/video/{r['id']}")

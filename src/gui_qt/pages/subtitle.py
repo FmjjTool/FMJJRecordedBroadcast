@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
-    QPushButton, QTextEdit, QVBoxLayout,
+    QPushButton, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox.subtitle_engine import SubtitleConverter
@@ -35,7 +35,8 @@ class SubtitlePage(BasePage):
         use_date_folder = load_convert_config().get("subtitle_use_date_folder", False)
         use_same_dir = load_convert_config().get("subtitle_use_same_dir", True)
 
-        layout = QVBoxLayout(self)
+        container = QWidget()
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(6)
 
@@ -113,9 +114,23 @@ class SubtitlePage(BasePage):
         self.log_text.setReadOnly(True)
         layout.addWidget(self.log_text, 1)
 
+        # 外层页签：字幕转换（原有界面）+ 歌词转换（原独立页并入）
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(container, "📝 字幕转换")
+        from gui_qt.pages.lyrics_tool import LyricsToolPage
+        self.lyrics_page = LyricsToolPage(app)
+        self.tabs.addTab(self.lyrics_page, "🎤 歌词转换")
+        root.addWidget(self.tabs)
+
     def on_show(self):
         """切回本页：工作目录可能变了 / 今天可能新建了日期文件夹 → 刷新日期下拉。"""
         self._refresh_date_combo()
+        if self.tabs.currentWidget() is self.lyrics_page:
+            fn = getattr(self.lyrics_page, "on_show", None)
+            if fn:
+                fn()
 
     def _btn(self, text, slot, small=False, danger=False):
         b = QPushButton(text)
@@ -129,6 +144,11 @@ class SubtitlePage(BasePage):
     # ---- 回车快捷 / 设置持久化 ----
     def on_return_press(self):
         """第一次回车=扫描日期文件夹，第二次回车=按当前配置转换。"""
+        if self.tabs.currentWidget() is self.lyrics_page:
+            fn = getattr(self.lyrics_page, "on_return_press", None)
+            if fn:
+                fn()
+            return
         if self._enter_stage == 0:
             self._enter_stage = 1
             self._scan_date_folders()
@@ -154,6 +174,9 @@ class SubtitlePage(BasePage):
     # ---- 拖放 ----
     def add_dropped_files(self, files):
         """拖放文件处理：按扩展名过滤后追加（去重）"""
+        if self.tabs.currentWidget() is self.lyrics_page:
+            self.lyrics_page.add_dropped_files(files)
+            return
         added_names = []
         for f in files:
             ext = os.path.splitext(f)[1].lower()
@@ -172,6 +195,9 @@ class SubtitlePage(BasePage):
 
     def add_dropped_folder(self, folder):
         """拖放文件夹处理"""
+        if self.tabs.currentWidget() is self.lyrics_page:
+            self.lyrics_page.add_dropped_folder(folder)
+            return
         self._add_folder_files(folder)
         self._log(f"📥 拖放文件夹: {os.path.basename(folder)}")
         self._log_scanned()

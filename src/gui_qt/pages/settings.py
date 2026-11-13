@@ -67,7 +67,7 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- 统一导出目录 ----
-        v.addWidget(self._card_title("📤 统一导出目录（音乐/已获取/账号获取数据导出）"))
+        v.addWidget(self._card_title("📤 统一导出目录（音乐/已获取/信息获取数据导出）"))
         ex_row = QHBoxLayout()
         self.exportdir_entry = QLineEdit()
         self.exportdir_entry.setPlaceholderText("导出目录路径（默认 download/）")

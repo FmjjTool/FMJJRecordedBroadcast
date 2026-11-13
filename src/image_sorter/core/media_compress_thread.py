@@ -215,7 +215,11 @@ class MediaCompressThread(QThread):
         if (not is_video) and ext in MediaCompressThread.VIDEO_TYPES:
             ext = src.suffix.lower()
 
-        out_dir = src.parent
+        out_dir = Path(options.get("output_dir") or src.parent)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            out_dir = src.parent
         stem = src.stem
         suffix = "_compressed_video" if is_video else "_compressed_image"
         candidate = out_dir / f"{stem}{suffix}{ext}"

@@ -358,7 +358,7 @@ class BiliEmojiPage(BasePage):
 
     def _goto_garb(self, act_id: str):
         """切换到本页「收藏集」tab 加载收藏集活动（B站资源聚合页内切换）。"""
-        page = self.app.pages.get("bili_resource")
+        page = getattr(self, "_resource_host", None) or self.app.pages.get("bili_resource")
         if page is not None:
             page.show_garb(act_id)
 

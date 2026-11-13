@@ -274,7 +274,7 @@ class InfoResultsPage(BasePage):
         self.thread_sel.addItems(common.THREAD_OPTIONS)
         self.thread_sel.setToolTip(
             "下载线程数：多个文件按线程数并行下载（进度面板显示各文件槽位）；\n"
-            "单个大文件按线程数分段并行下载（与单个解析/批量导入页共享设置）")
+            "单个大文件按线程数分段并行下载（与信息获取页共享设置）")
         self.thread_sel.setCurrentText(str(common.CURRENT_THREADS))
         self.thread_sel.setFixedWidth(64)
         self.thread_sel.currentTextChanged.connect(self._on_threads_change)
@@ -631,7 +631,7 @@ class InfoResultsPage(BasePage):
         common.CURRENT_QUALITY = value
 
     def _on_threads_change(self, value):
-        """线程数改变时同步到全局（单个解析/批量导入页共用）。"""
+        """线程数改变时同步到全局（账号获取页共用）。"""
         try:
             common.CURRENT_THREADS = int(value)
         except ValueError:

@@ -228,6 +228,21 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "asr_whisper_base": "https://api.openai.com/v1",
     "asr_whisper_key": "",
     "asr_whisper_model": "whisper-1",
+    # 视频合并页：合并方式/输出格式/输出位置
+    "merge_mode": "copy",
+    "merge_out_ext": ".mp4",
+    "merge_same_dir": True,
+    "merge_date_folder": False,
+    # 视频剪辑页：切割/压缩/截图选项
+    "editor_cut_export": "each",
+    "editor_cut_mode": "copy",
+    "editor_cut_same_dir": True,
+    "editor_compress_preset": "normal",
+    "editor_compress_res": "保持原始",
+    "editor_compress_clean": True,
+    "editor_shot_interval": 10,
+    # 音频提取：first=只取第一条音轨 / all=全部音轨
+    "audio_extract_mode": "first",
     # 资产页本地资源「增量模式(写入索引)」
     "local_inc_enabled": False,
     # 资产页本地资源：锁定的扫描根目录 + 锁定态 + 扫描深度（0=仅当前层，-1=全部层级）
@@ -476,6 +491,7 @@ def set_ffmpeg_path(path: str):
 # 导出分类子文件夹名（按文件类型路由）
 EXPORT_CATEGORIES = {
     "subtitle": "字幕文件",
+    "video_merge": "视频合并",
     "music": "歌曲文件",
     "music_info": "音乐信息",
     "tracker": "账号追踪数据",

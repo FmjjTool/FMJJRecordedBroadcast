@@ -30,7 +30,7 @@ _HELP = (
     "<p>· <b>👤 空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
     "可下载头像/头像框/空间背景图/投稿封面/充电表情/收藏集封面</p>"
     "<p>· <b>🔍 综合搜索</b>：关键词搜B站用户与视频（WBI 签名），"
-    "用户结果跳「空间」tab；视频结果自动跳「单个解析」页解析</p>"
+    "用户结果跳「空间」tab；视频结果自动跳「信息获取」页解析</p>"
     "<p>· 表情类接口需要 B站 登录 Cookie（侧栏「Cookie 管理」维护），其余游客接口；"
     "文件列表勾选后下载，支持多选批量</p>"
 )
@@ -68,6 +68,10 @@ class BiliResourcePage(BasePage):
         self.garb_page = BiliGarbPage(app)
         self.info_page = BiliInfoPage(app)
         subs = {"emoji": self.emoji_page, "garb": self.garb_page, "info": self.info_page}
+        for sub in subs.values():
+            # 子页需要切回本页的「收藏集」tab，嵌入 tab 容器后 app.pages 里没有本页，
+            # 因此保留一个宿主引用供子页回跳。
+            sub._resource_host = self
         widgets = {}
         for key, sub in subs.items():
             ws = []

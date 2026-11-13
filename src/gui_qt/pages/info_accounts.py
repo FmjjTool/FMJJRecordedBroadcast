@@ -1,7 +1,8 @@
-"""账号获取页（PySide6 版）：添加账号、批量抓取最新内容（结果自动存入「已获取」）。
+"""信息获取页（PySide6 版，原「账号获取」）：批量输入链接（账号/作品自动识别）+ 账号采集。
 
-对应原版 gui/info_pages.py 的 InfoAccountsPage：
-- 功能页：添加账号行 / 账号勾选列表 / 采集模式（全部/选中/按组）/ 条数 /
+「单个解析」「批量导入」已合并到本页：顶部批量输入框一行一个，
+账号主页链接 → 添加账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」。
+- 功能页：批量输入行 / 账号勾选列表 / 采集模式（全部/选中/按组）/ 条数 /
   定时获取 / 增量模式 / 搜索限流 / 日志
 - 设置页：添加账号（账号名+链接+分组多选）/ 分组管理 / 已配置账号
   （分组多选 + 采集类型下拉 + 保存/删除）
@@ -10,20 +11,48 @@
 import io
 import json
 import os
+import re
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 
 from PySide6.QtCore import QDate, Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
-    QLineEdit, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout,
+    QLabel, QLineEdit, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
     QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from gui_qt import download_ops
 from gui_qt.common import _collect, _db_insert, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
+
+
+def _is_account_url(url: str) -> bool:
+    """账号主页链接判定：命中 → 按账号添加，其余一律按作品链接解析。
+
+    覆盖 B站空间 / 抖音用户 / 微博用户（u/、n/、裸 UID）/ 快手主页 /
+    小红书用户主页；作品页（/video/、/note/、/explore/ 等）不命中。
+    """
+    u = (url or "").strip().lower()
+    if not u:
+        return False
+    if ("space.bilibili.com/" in u or "m.bilibili.com/space/" in u
+            or "douyin.com/user/" in u or "iesdouyin.com/share/user/" in u
+            or "xiaohongshu.com/user/profile/" in u
+            or "kuaishou.com/profile/" in u):
+        return True
+    p = urlparse(u)
+    host, path = p.netloc, p.path.strip("/")
+    if host.endswith("weibo.com"):
+        return (path.startswith(("u/", "n/"))
+                or bool(re.fullmatch(r"\d{5,15}", path)))
+    if host.endswith("weibo.cn"):
+        return path.startswith(("u/", "profile/", "n/"))
+    return False
 
 
 def _clear_layout(layout):
@@ -122,6 +151,11 @@ class InfoAccountsPage(BasePage):
         self._pause_evt.set()
         # 取消标记：set 后未开始的账号直接跳过（在飞账号自然跑完不硬中断）
         self._cancel_evt = threading.Event()
+        # 批量处理（账号添加 / 作品解析）状态：与账号采集互斥，按钮共享进度条
+        self._batch_running = False
+        self._batch_pause_evt = threading.Event()
+        self._batch_pause_evt.set()
+        self._batch_cancel_evt = threading.Event()
         # 结果揭示队列：采集线程先落库，主线程每 150ms 揭示一条作品，
         # 避免多个账号/一页数据同时完成时「已获取」一次性全部刷出
         self._reveal_queue = []
@@ -169,19 +203,14 @@ class InfoAccountsPage(BasePage):
     # ---------- 功能页 ----------
     def _build_func(self, f):
         layout = QVBoxLayout(f)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        title = QLabel("👥 账号获取")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 账号获取 · 功能介绍", (
+        help_btn = attach_help_overlay(self, "❓ 信息获取 · 功能介绍", (
             "<p><b>批量追踪账号主页、一键抓取最新作品/动态，结果自动存入「已获取」。</b></p>"
-            "<p>· <b>添加账号</b>：主页 URL + 账号名 + 组号（可逗号分隔绑多组）；"
-            "支持多平台（B站空间/抖音主页/微博等）</p>"
+            "<p>· <b>批量输入</b>（一行 = 一个条目）：账号主页链接（B站空间/抖音/微博/快手/小红书）"
+            "→ 自动添加为账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」，结果同时进日志</p>"
             "<p>· <b>获取最新</b>：勾选账号后批量抓取，右下角可⏸暂停 / ✕取消；"
             "抓取结果进入「已获取」与增量数据库</p>"
             "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
@@ -195,32 +224,48 @@ class InfoAccountsPage(BasePage):
             "<p>· <b>📤/📥 双向同步</b>：本页账号 ⇄「视频账号追踪」互相同步，"
             "已存在的自动跳过，账号名/分组一并带过去（免重复录入）</p>"
             "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
-            "<p>· Cookie 统一由侧栏「Cookie 管理」维护，抓取时自动套用</p>")))
-        layout.addLayout(title_row)
+            "<p>· Cookie 统一由侧栏「Cookie 管理」维护，抓取时自动套用</p>"))
 
-        # 添加账号行
-        add_row = QHBoxLayout()
-        self.url_entry = QLineEdit()
-        self.url_entry.setPlaceholderText("账号主页 URL")
-        self.url_entry.returnPressed.connect(self._add)
-        add_row.addWidget(self.url_entry, 1)
-        self.name_fetch_btn = icon_button(
-            "🔍", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
-            "font-size: 14px;",
-            lambda: self._auto_fetch_name(self.url_entry, self.name_entry,
-                                          self.name_fetch_btn))
-        add_row.addWidget(self.name_fetch_btn)
-        self.name_entry = QLineEdit()
-        self.name_entry.setPlaceholderText("账号名(留空自动获取)")
-        self.name_entry.setFixedWidth(110)
-        add_row.addWidget(self.name_entry)
+        # 批量输入：一行一个，账号主页 → 添加账号，其余 → 解析存入「已获取」
+        self.batch_text = QTextEdit()
+        self.batch_text.setPlaceholderText(
+            "一行一个，直接粘贴（支持整段分享文案）：\n"
+            "· 账号主页链接（B站空间/抖音/微博/快手/小红书）→ 添加为账号\n"
+            "· 作品/视频链接、纯 BV 号 → 解析并存入「已获取」")
+        self.batch_text.setFixedHeight(88)
+        batch_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.batch_text)
+        batch_shortcut.activated.connect(self._process_batch)
+        layout.addWidget(self.batch_text)
+
+        batch_row = QHBoxLayout()
+        self.process_btn = QPushButton("🚀 开始处理")
+        self.process_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.process_btn.setToolTip(
+            "逐行识别：账号主页 → 添加账号；其余 → 解析作品并存入「已获取」（Ctrl+Enter）")
+        self.process_btn.clicked.connect(self._process_batch)
+        batch_row.addWidget(self.process_btn)
+        self.batch_pause_btn = icon_button(
+            "⏸️", "暂停批量处理：当前行处理完即停住，点「继续」恢复",
+            (40, 30), True, "font-size: 15px;", self._toggle_batch_pause)
+        self.batch_pause_btn.setEnabled(False)
+        batch_row.addWidget(self.batch_pause_btn)
+        self.batch_cancel_btn = icon_button(
+            "❌", "取消批量处理：未开始的行直接跳过", (40, 30), True,
+            "font-size: 15px;", self._cancel_batch)
+        self.batch_cancel_btn.setEnabled(False)
+        batch_row.addWidget(self.batch_cancel_btn)
+        batch_row.addWidget(icon_button(
+            "📁", "从文本文件导入链接列表（每行一个）", (40, 30), True,
+            "font-size: 15px;", self._import_file))
+        batch_row.addStretch(1)
+        batch_row.addWidget(QLabel("账号分组:"))
         self.add_gid_entry = QLineEdit()
         self.add_gid_entry.setPlaceholderText("组号(逗号分隔多组)")
         self.add_gid_entry.setFixedWidth(130)
-        add_row.addWidget(self.add_gid_entry)
-        self.add_btn = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add)
-        add_row.addWidget(self.add_btn)
-        layout.addLayout(add_row)
+        self.add_gid_entry.setToolTip("仅对「账号主页」行生效：添加账号时绑定这些分组")
+        batch_row.addWidget(self.add_gid_entry)
+        batch_row.addWidget(help_btn)
+        layout.addLayout(batch_row)
 
         # 全选/反选/清除
         sel_bar = QHBoxLayout()
@@ -495,47 +540,174 @@ class InfoAccountsPage(BasePage):
     def _on_fetch_mode_change(self, mode):
         self.fetch_group.setEnabled(mode == "按组采集")
 
-    def _add(self):
-        url = self.url_entry.text().strip()
-        if not url:
-            self.app.toast("请输入账号 URL", "warning")
+    # ---------- 批量处理（账号添加 / 作品解析） ----------
+
+    def _import_file(self):
+        """从文本文件导入链接列表（每行一个）。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择链接列表文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
+        if not path:
             return
-        name = self.name_entry.text().strip()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f
+                         if ln.strip() and not ln.strip().startswith("#")]
+        except Exception as e:
+            self.app.toast(f"读取失败: {str(e)[:60]}", "error")
+            return
+        self.batch_text.setPlainText("\n".join(lines))
+
+    def open_url(self, url: str):
+        """供其他页跳转：填入批量框并立即处理（如 B站综合搜索的视频结果）。"""
+        self.batch_text.setPlainText(url)
+        self._process_batch()
+
+    def _toggle_batch_pause(self):
+        if not self._batch_running:
+            return
+        if self._batch_pause_evt.is_set():
+            self._batch_pause_evt.clear()
+            self.batch_pause_btn.setText("▶️")
+            self.batch_pause_btn.setStyleSheet(icon_btn_style(
+                True, "background: #eab308; color: white; font-size: 15px;"))
+            self._log("⏸ 已暂停（当前行处理完成后停住）")
+            self.prog_label.setText("⏸ 已暂停，等待继续...")
+        else:
+            self._batch_pause_evt.set()
+            self.batch_pause_btn.setText("⏸️")
+            self.batch_pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+            self._log("▶ 已继续批量处理")
+            self.prog_label.setText("继续批量处理中...")
+
+    def _cancel_batch(self):
+        if not self._batch_running:
+            return
+        self._batch_cancel_evt.set()
+        self._batch_pause_evt.set()  # 放行暂停中的线程，使其能走到取消检查
+        self._log("❌ 已取消：未处理的行直接跳过")
+
+    def _process_batch(self):
+        """逐行处理批量输入：账号主页→添加账号，其余→解析作品存入「已获取」。
+
+        唯一识别方式：一行 = 一个条目（自动从分享文案中提取链接）。
+        """
+        if self._fetching:
+            self.app.toast("正在获取账号内容，请稍候", "warning")
+            return
+        if self._batch_running:
+            return
+        lines = [ln.strip() for ln in self.batch_text.toPlainText().splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")]
+        if not lines:
+            self.app.toast("请输入账号主页或作品链接（一行一个）", "warning")
+            return
         gid = self.add_gid_entry.text().strip()
-        if name:
-            self._do_add(url, name, gid)
-        else:
-            # 名称留空 → 自动获取「昵称+平台」（如 封茗囧菌抖音）
-            self.app.toast("名称留空，正在自动获取账号名...", "info")
-            self.add_btn.setEnabled(False)
+        self._batch_running = True
+        # 取消后仍在后台收尾的旧采集轮次立即判为过期，避免其日志混进批量处理
+        self._fetch_round += 1
+        self._batch_cancel_evt.clear()
+        self._batch_pause_evt.set()
+        self.process_btn.setEnabled(False)
+        self.batch_pause_btn.setEnabled(True)
+        self.batch_cancel_btn.setEnabled(True)
+        self.fetch_btn.setEnabled(False)
+        self.log_text.setPlainText(f"⏳ 开始批量处理 {len(lines)} 行...\n")
+        self.progress_bar.setFormat("%v / %m 行（%p%）")
+        self._set_batch_progress(0, len(lines), "准备中...")
 
-            def work():
-                from platforms.account_names import fetch_display_name
-                return fetch_display_name(url)
+        def work():
+            from accounts_manager import add_account, get_groups, load_accounts
+            from platforms.account_names import fetch_display_name
+            ok_acc = dup_acc = ok_post = new_posts = fail = 0
+            cancelled = False
+            groups = get_groups()
+            gids = [g.strip() for g in gid.replace("，", ",").split(",") if g.strip()]
+            gname = groups.get(gids[0], "") if gids else ""
+            existing = {a.url for a in load_accounts()}
+            for idx, raw in enumerate(lines, 1):
+                # 暂停门闩：clear 时在行边界停住
+                self._batch_pause_evt.wait()
+                if self._batch_cancel_evt.is_set():
+                    cancelled = True
+                    break
+                prefix = f"[{idx}/{len(lines)}]"
+                post_to_main(self._set_batch_progress, idx - 1, len(lines),
+                             f"{prefix} 处理中...")
+                url = download_ops.extract_share_url(raw)
+                if _is_account_url(url):
+                    if url in existing:
+                        dup_acc += 1
+                        self._log(f"{prefix} 👤 账号已存在，跳过：{url[:60]}")
+                        continue
+                    try:
+                        name, _err = fetch_display_name(url)
+                    except Exception:
+                        name = ""
+                    if add_account(url, name=name, group_id=gid, group_name=gname):
+                        existing.add(url)
+                        ok_acc += 1
+                        self._log(f"{prefix} 👤 已添加账号：{name or url[:60]}")
+                    else:
+                        dup_acc += 1
+                        self._log(f"{prefix} 👤 账号已存在，跳过：{url[:60]}")
+                    continue
+                try:
+                    info = download_ops.parse_url_info(raw)
+                except Exception as e:  # noqa: BLE001
+                    fail += 1
+                    self._log(f"{prefix} ❌ {url[:70]}（{e}）")
+                    continue
+                added = _collect([info])
+                ok_post += 1
+                new_posts += added
+                tag = "✅ 已存入「已获取」" if added else "☑️ 已存在，未重复入库"
+                self._log(f"{prefix} {tag}：{info.summary()}")
+            return ok_acc, dup_acc, ok_post, new_posts, fail, cancelled
 
-            def done(result, err):
-                self.add_btn.setEnabled(True)
-                if err:
-                    self.app.toast(f"自动获取失败：{str(err)[:60]}，已按无名称添加", "warning")
-                auto_name, _ferr = result or ("", "")
-                self._do_add(url, auto_name, gid)
+        def done(result, err):
+            self._batch_running = False
+            self.process_btn.setEnabled(True)
+            self.batch_pause_btn.setEnabled(False)
+            self.batch_cancel_btn.setEnabled(False)
+            self.fetch_btn.setEnabled(True)
+            self._batch_pause_evt.set()
+            self.batch_pause_btn.setText("⏸️")
+            self.batch_pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+            self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
+            if err:
+                self._log(f"❌ 批量处理失败: {err}")
+                self.prog_label.setText("❌ 批量处理失败")
+                return
+            ok_acc, dup_acc, ok_post, new_posts, fail, cancelled = result
+            self._set_batch_progress(len(lines), len(lines),
+                                     "✕ 已取消" if cancelled else "✅ 批量处理完成")
+            head = "⛔ 已取消" if cancelled else "✅ 批量处理完成"
+            self._log(f"{head}：账号新增 {ok_acc}（重复 {dup_acc}） / "
+                      f"作品解析成功 {ok_post}（新增入库 {new_posts}，失败 {fail}）")
+            refresh_results_count(self.app)
+            if ok_acc:
+                # 账号有变化才重建列表/分组下拉（避免无谓重绘）
+                self._reload_account_list()
+                self._reload_group_list()
 
-            run_bg(work, done)
+        run_bg(work, done)
 
-    def _do_add(self, url: str, name: str, gid: str):
-        from accounts_manager import add_account, get_groups
-        groups = get_groups()
-        gids = [g.strip() for g in gid.replace("，", ",").split(",") if g.strip()]
-        gname = groups.get(gids[0], "") if gids else ""
-        if add_account(url, name=name, group_id=gid, group_name=gname):
-            self.url_entry.clear()
-            self.name_entry.clear()
-            self.add_gid_entry.clear()
-            QTimer.singleShot(150, self._reload_account_list)
-            QTimer.singleShot(150, self._reload_account_settings)
-            QTimer.singleShot(150, self._reload_group_list)
-        else:
-            self.app.toast("账号已存在，无需重复添加", "warning")
+    def _set_batch_progress(self, done, total, label):
+        """批量处理进度（主线程调用；与账号采集共用进度条）。"""
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(done)
+        if label:
+            self.prog_label.setText(label)
+
+    def _log(self, text):
+        """线程安全地往日志框追加一行（后台线程经 post_to_main 回主线程）。"""
+        def apply():
+            try:
+                self.log_text.append(text)
+                self.log_text.ensureCursorVisible()
+            except Exception:
+                pass
+        post_to_main(apply)
 
     def _add_set(self):
         """设置页添加账号（账号名 + 链接 + 分组多选）。"""
@@ -588,7 +760,7 @@ class InfoAccountsPage(BasePage):
         if not new_items:
             self.app.toast(f"共 {skipped} 个账号均已存在于「视频账号追踪」，无需同步", "info")
             return
-        msg = (f"把「账号获取」的账号同步到「视频账号追踪」？\n\n"
+        msg = (f"把「信息获取」的账号同步到「视频账号追踪」？\n\n"
                f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
                + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
                + ("\n…等" if len(new_items) > 8 else ""))
@@ -613,7 +785,7 @@ class InfoAccountsPage(BasePage):
         if not new_items:
             self.app.toast(f"共 {skipped} 个账号均已存在，无需同步", "info")
             return
-        msg = (f"把「视频账号追踪」的账号同步到「账号获取」？\n\n"
+        msg = (f"把「视频账号追踪」的账号同步到「信息获取」？\n\n"
                f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
                + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
                + ("\n…等" if len(new_items) > 8 else ""))
@@ -717,6 +889,9 @@ class InfoAccountsPage(BasePage):
             return default
 
     def _fetch(self):
+        if self._batch_running:
+            self.app.toast("正在批量处理中，请稍候", "warning")
+            return
         if self._fetching:
             self.app.toast("正在获取中，请稍候", "warning")
             return
@@ -1244,7 +1419,7 @@ class InfoAccountsPage(BasePage):
         self.prog_label.setText("⏬ 自动下载中...")
         # 下载进度走全局下载浮窗（原页面只保留日志/状态）
         from gui_qt.download_float import get_float
-        card = get_float().add_batch("账号获取·自动下载", total=len(posts),
+        card = get_float().add_batch("信息获取·自动下载", total=len(posts),
                                      threads=threads)
 
         def work():
@@ -1467,8 +1642,8 @@ class InfoAccountsPage(BasePage):
         """定时获取：按当前采集模式（全部/选中/按组）采集最新内容。"""
         if not self._timer_running:
             return
-        if self._fetching:
-            return  # 上次获取未完成，跳过本轮
+        if self._fetching or self._batch_running:
+            return  # 上次获取/批量处理未完成，跳过本轮
         self._flush_reveal_queue()
         accounts, err = self._resolve_target_accounts()
         if err:
