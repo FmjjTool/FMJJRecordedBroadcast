@@ -1,4 +1,4 @@
-"""已获取页（PySide6 版）：三栏分平台展示 COLLECTED，按栏全选/反选/清除、导出、下载。
+"""已获取页（PySide6 版）：分平台展示 COLLECTED，按栏全选/反选/清除、导出、下载。
 
 对应原版 gui/info_pages.py 的 InfoResultsPage：
 - 顶部：画质下拉（全局共享）+ 🗑 全部清空 + 📤 全部导出 + 📥 全部下载 + 导出格式复选
@@ -15,9 +15,9 @@ from datetime import datetime
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem,
-    QMenu, QMessageBox, QPushButton, QListView, QSpinBox, QStyledItemDelegate, QStyle,
-    QStyleOptionViewItem, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidgetItem,
+    QLayout, QMenu, QMessageBox, QPushButton, QListView, QSpinBox, QStyledItemDelegate, QStyle,
+    QSizePolicy, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -25,6 +25,7 @@ from gui_qt.common import _fmt, post_to_main, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
+from gui_qt.toolbox_common import ToolPageHeader
 
 PLATFORMS_3 = [
     ("douyin", "📕 抖音"),
@@ -39,9 +40,9 @@ _KNOWN_COLS = {key for key, _ in PLATFORMS_3}
 _PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
                 "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
 
-# 视频/动态标签配色：常规态 + 选中态（蓝底上的浅色变体）
-TAG_COLORS = {"[视频]": ("#1976d2", "#bbdefb"), "[动态]": ("#e65100", "#ffe0b2"),
-              "[图文]": ("#2e7d32", "#c8e6c9")}
+# 视频/动态标签配色：常规态 + 选中态（选中卡片为浅蓝底，使用较深的文字）。
+TAG_COLORS = {"[视频]": ("#1976d2", "#1258a6"), "[动态]": ("#e65100", "#9a3f00"),
+              "[图文]": ("#2e7d32", "#216326")}
 # 深色主题用亮色变体（选中卡片底也是暗色，选中与否同色即可）
 TAG_COLORS_DARK = {"[视频]": "#64b5f6", "[动态]": "#ffb74d", "[图文]": "#81c784"}
 
@@ -104,10 +105,9 @@ class TagColorDelegate(QStyledItemDelegate):
         doc.setDefaultFont(opt.font)
         doc.setDocumentMargin(0)
         doc.setTextWidth(max(width, 60))
-        # 基础文字颜色取调色板（深色主题浅色/浅色主题深色，选中态用高亮前景）。
+        # 卡片的选中底色为主题内的浅/深蓝 tint，正文仍使用该主题的常规文字色。
         # 不设的话 QTextDocument 默认黑字，深色主题下整行不可读。
-        base = (opt.palette.color(QPalette.HighlightedText) if selected
-                else opt.palette.color(QPalette.Text)).name()
+        base = opt.palette.color(QPalette.Text).name()
         doc.setHtml(f'<span style="color:{base};">'
                     f'{colorize_tag_html(text, selected, self._is_dark(opt))}</span>')
         return doc
@@ -233,43 +233,65 @@ class InfoResultsPage(BasePage):
                      for key, _ in PLATFORMS_3}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        # 旧四列的布局最小宽度不能先夹住 resize，否则无法切换到窄版两列。
+        layout.setSizeConstraint(QLayout.SetNoConstraint)
 
-        # 顶部：标题 + 全部清空 + 画质选择
+        # 标题与操作分开，短窗口也能完整显示所有控件。
         head = QHBoxLayout()
-        title = QLabel("📦 已获取（按平台分栏，按发布日期倒序）")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        head.addWidget(title)
-        head.addStretch(1)
+        head.addWidget(ToolPageHeader("已获取", "按平台整理作品与动态，最新发布的内容排在前面。"), 1)
+        self.export_status = QLabel("")
+        self.export_status.setProperty("role", "caption")
+        self.export_status.setWordWrap(True)
+        self.export_status.setMaximumWidth(260)
+        self.export_status.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.export_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        head.addWidget(self.export_status)
+        layout.addLayout(head)
+
+        toolbar = QFrame()
+        self._toolbar = toolbar
+        toolbar.setProperty("variant", "toolbar")
+        tools = QVBoxLayout(toolbar)
+        tools.setContentsMargins(12, 10, 12, 10)
+        tools.setSpacing(10)
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
         export_all_btn = QPushButton("📤 导出所有勾选")
-        export_all_btn.setStyleSheet("background: #2e7d32; color: white;")
-        export_all_btn.setToolTip("导出三栏内全部勾选条目（一次导出三平台）")
+        export_all_btn.setProperty("variant", "secondary")
+        export_all_btn.setToolTip("导出全部平台栏内的勾选条目")
         export_all_btn.clicked.connect(self._export_all)
-        head.addWidget(export_all_btn)
+        actions.addWidget(export_all_btn)
         dl_all_btn = QPushButton("📥 下载所有勾选")
-        dl_all_btn.setStyleSheet("background: #2e7d32; color: white;")
-        dl_all_btn.setToolTip("下载三栏内全部勾选条目（一次下载三平台）")
+        dl_all_btn.setProperty("variant", "primary")
+        dl_all_btn.setToolTip("下载全部平台栏内的勾选条目")
         dl_all_btn.clicked.connect(self._download_all)
-        head.addWidget(dl_all_btn)
+        actions.addWidget(dl_all_btn)
+        actions.addStretch(1)
         del_sel_btn = QPushButton("🗑 删除所有勾选")
-        del_sel_btn.setStyleSheet("background: #c62828; color: white;")
-        del_sel_btn.setToolTip("从已获取列表移除三栏内全部勾选条目（不影响已下载的本地文件）")
+        del_sel_btn.setProperty("variant", "danger")
+        del_sel_btn.setToolTip("从已获取列表移除全部平台栏内的勾选条目（不影响已下载的本地文件）")
         del_sel_btn.clicked.connect(self._delete_selected)
-        head.addWidget(del_sel_btn)
+        actions.addWidget(del_sel_btn)
         clear_btn = QPushButton("🗑 全部清空")
-        clear_btn.setStyleSheet("background: #c62828; color: white;")
+        clear_btn.setProperty("variant", "danger")
         clear_btn.clicked.connect(self._clear)
-        head.addWidget(clear_btn)
-        head.addWidget(QLabel("画质:"))
+        actions.addWidget(clear_btn)
+        tools.addLayout(actions)
+
+        options = QHBoxLayout()
+        options.setSpacing(6)
+        options.addWidget(QLabel("画质"))
         self.quality_sel = QComboBox()
         self.quality_sel.addItems(
             ["最高画质", "8K", "杜比视界", "HDR", "4K", "1080P60", "1080P", "720P", "480P"])
-        self.quality_sel.setFixedWidth(110)
+        self.quality_sel.setFixedWidth(102)
         self.quality_sel.setCurrentText(common.CURRENT_QUALITY)
         self.quality_sel.currentTextChanged.connect(self._on_quality_change)
-        head.addWidget(self.quality_sel)
-        head.addWidget(QLabel("线程:"))
+        options.addWidget(self.quality_sel)
+        options.addSpacing(6)
+        options.addWidget(QLabel("线程"))
         self.thread_sel = QComboBox()
         self.thread_sel.addItems(common.THREAD_OPTIONS)
         self.thread_sel.setToolTip(
@@ -278,8 +300,8 @@ class InfoResultsPage(BasePage):
         self.thread_sel.setCurrentText(str(common.CURRENT_THREADS))
         self.thread_sel.setFixedWidth(64)
         self.thread_sel.currentTextChanged.connect(self._on_threads_change)
-        head.addWidget(self.thread_sel)
-        layout.addLayout(head)
+        options.addWidget(self.thread_sel)
+        options.addSpacing(10)
 
         # 导出格式（对所有栏生效；勾选状态持久化）+ 微博评论页数（帖子导出带聊天记录）
         saved_fmts = set()
@@ -294,8 +316,7 @@ class InfoResultsPage(BasePage):
                 saved_comment_pages = 2
         except Exception:
             saved_fmts = {"json", "xlsx", "md"}
-        fmt_row = QHBoxLayout()
-        fmt_row.addWidget(QLabel("导出格式:"))
+        options.addWidget(QLabel("格式"))
         self.fmt_json = QCheckBox("JSON")
         self.fmt_json.setChecked("json" in saved_fmts)
         self.fmt_xlsx = QCheckBox("XLSX")
@@ -304,9 +325,11 @@ class InfoResultsPage(BasePage):
         self.fmt_md.setChecked("md" in saved_fmts)
         for cb in (self.fmt_json, self.fmt_xlsx, self.fmt_md):
             cb.toggled.connect(lambda _c: self._save_fmt_settings())
-            fmt_row.addWidget(cb)
-            fmt_row.addSpacing(6)
-        fmt_row.addWidget(QLabel("微博评论页数:"))
+            options.addWidget(cb)
+        options.addSpacing(8)
+        comment_label = QLabel("微博评论")
+        comment_label.setToolTip("导出微博帖子时抓取的评论页数，0 表示不抓取")
+        options.addWidget(comment_label)
         self.comment_pages_spin = QSpinBox()
         self.comment_pages_spin.setRange(0, 50)
         self.comment_pages_spin.setValue(max(0, min(50, saved_comment_pages)))
@@ -315,21 +338,51 @@ class InfoResultsPage(BasePage):
             "导出微博帖子时附带评论区聊天记录：每帖抓取前 N 页（约 N×20 条），0 = 不抓。\n"
             "评论存为帖子同目录的 _comments.json / _comments.txt，并写入 JSON/XLSX/MD。")
         self.comment_pages_spin.valueChanged.connect(lambda _v: self._save_comment_pages())
-        fmt_row.addWidget(self.comment_pages_spin)
-        fmt_row.addStretch(1)
-        self.export_status = QLabel("")
-        self.export_status.setStyleSheet("color: #666; font-size: 11px;")
-        self.export_status.setMaximumWidth(420)
-        fmt_row.addWidget(self.export_status)
-        layout.addLayout(fmt_row)
+        options.addWidget(self.comment_pages_spin)
+        options.addStretch(1)
+        tools.addLayout(options)
+        layout.addWidget(toolbar)
 
-        # 三栏
-        cols = QHBoxLayout()
+        # 宽窗口并排四栏；窄窗口为两行两列，移动原卡片保留勾选与滚动状态。
+        self._columns_layout = QGridLayout()
+        self._columns_layout.setSpacing(10)
+        self._column_widgets = []
+        self._columns_per_row = 0
         for key, name in PLATFORMS_3:
-            cols.addWidget(self._build_column(key, name), 1)
-        layout.addLayout(cols, 1)
+            self._column_widgets.append(self._build_column(key, name))
+        layout.addLayout(self._columns_layout, 1)
+        self._reflow_columns(self.width())
 
         self.refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reflow_columns(event.size().width())
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        if getattr(self, "_column_widgets", None):
+            margins = self.layout().contentsMargins()
+            # 向父级报告本页可支持的两列最小宽度，而非当前四列宽度。
+            columns_width = 2 * max(card.minimumSizeHint().width() for card in self._column_widgets)
+            columns_width += self._columns_layout.horizontalSpacing()
+            hint.setWidth(max(self._toolbar.minimumSizeHint().width(), columns_width)
+                          + margins.left() + margins.right())
+        return hint
+
+    def _reflow_columns(self, width):
+        per_row = 4 if width >= 980 else 2
+        if per_row == self._columns_per_row:
+            return
+        self._columns_per_row = per_row
+        for card in self._column_widgets:
+            self._columns_layout.removeWidget(card)
+        for index, card in enumerate(self._column_widgets):
+            self._columns_layout.addWidget(card, index // per_row, index % per_row)
+        for col in range(4):
+            self._columns_layout.setColumnStretch(col, int(col < per_row))
+        for row in range(2):
+            self._columns_layout.setRowStretch(row, int(row == 0 or per_row == 2))
 
     def _save_fmt_settings(self):
         """导出格式勾选状态写入 config（下次启动保持）。"""
@@ -359,42 +412,51 @@ class InfoResultsPage(BasePage):
             pass
 
     def _build_column(self, key, name):
-        col = QWidget()
-        col.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
+        col = QFrame()
+        col.setProperty("variant", "card")
         v = QVBoxLayout(col)
-        v.setContentsMargins(8, 8, 8, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(6)
 
         head = QHBoxLayout()
-        head.addWidget(QLabel(name))
+        label = QLabel(name)
+        label.setProperty("role", "sectionTitle")
+        head.addWidget(label)
         count = QLabel("0")
-        count.setStyleSheet("color: #1976d2;")
+        count.setProperty("role", "caption")
         head.addStretch(1)
         head.addWidget(count)
         self.cols[key]["count_label"] = count
         v.addLayout(head)
 
         btns = QHBoxLayout()
-        btns.setSpacing(2)
+        btns.setSpacing(4)
         for text, mode in (("全选", "all"), ("反选", "invert"), ("清除", "none")):
             b = QPushButton(text)
-            b.setFixedSize(40, 22)
-            b.setStyleSheet(common.icon_btn_style(False, "font-size: 10px;"))
+            b.setFixedSize(42, 26)
+            b.setProperty("variant", "ghost")
+            b.setStyleSheet("padding: 0px; font-size: 11px;")
             b.clicked.connect(lambda _=False, k=key, m=mode: self._col_select(k, m))
             btns.addWidget(b)
-        export_btn = QPushButton("📤 导出")
-        export_btn.setFixedSize(46, 22)
-        export_btn.setStyleSheet(common.icon_btn_style(True, "font-size: 10px;"))
-        export_btn.clicked.connect(lambda _=False, k=key: self._col_export(k))
-        btns.addWidget(export_btn)
-        dl_btn = QPushButton("📥 下载")
-        dl_btn.setFixedSize(46, 22)
-        dl_btn.setStyleSheet(common.icon_btn_style(True, "font-size: 10px;"))
-        dl_btn.clicked.connect(lambda _=False, k=key: self._col_download(k))
-        btns.addWidget(dl_btn)
+        btns.addStretch(1)
         v.addLayout(btns)
+        transfer = QHBoxLayout()
+        transfer.setSpacing(6)
+        export_btn = QPushButton("📤 导出")
+        export_btn.setProperty("variant", "secondary")
+        export_btn.setStyleSheet("padding: 4px 6px; font-size: 11px;")
+        export_btn.clicked.connect(lambda _=False, k=key: self._col_export(k))
+        transfer.addWidget(export_btn)
+        dl_btn = QPushButton("📥 下载")
+        dl_btn.setProperty("variant", "secondary")
+        dl_btn.setStyleSheet("padding: 4px 6px; font-size: 11px;")
+        dl_btn.clicked.connect(lambda _=False, k=key: self._col_download(k))
+        transfer.addWidget(dl_btn)
+        v.addLayout(transfer)
 
         lst = _SingleItemScrollList()
+        lst.setMinimumWidth(0)
+        lst.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         # 卡片式条目：行间距隔开卡片；按栏宽自动换行，窗口缩放时重新布局重算行高
         lst.setSpacing(4)
         lst.setWordWrap(True)

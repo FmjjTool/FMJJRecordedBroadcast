@@ -11,15 +11,16 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
 from gui_qt.common import run_bg
+from gui_qt.navigation import line_icon, tool_icon_name
 from gui_qt.pages.base import BasePage
 
 # 平台显示名与图表配色
@@ -49,8 +50,6 @@ INFO_TOOLS = [
     ("video_comments", "💬", "视频评论区", "三平台评论抓取与长图"),
     ("tcdoc", "📄", "腾讯文档监控", "浏览量 / 成员数每日记录"),
 ]
-INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
-
 INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
 
 
@@ -119,7 +118,7 @@ class _DonutChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items = []
-        self.setMinimumHeight(210)
+        self.setMinimumHeight(190)
         self.setStyleSheet("background: transparent;")
 
     def set_items(self, items):
@@ -129,7 +128,7 @@ class _DonutChart(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        palette = self.palette()
+        palette = theme.current_palette()
         text_color = palette.color(QPalette.WindowText)
         muted = palette.color(QPalette.PlaceholderText)
         ring_bg = palette.color(QPalette.AlternateBase)
@@ -212,7 +211,7 @@ class _TrendChart(QWidget):
         super().__init__(parent)
         self._labels = []
         self._values = []
-        self.setMinimumHeight(210)
+        self.setMinimumHeight(190)
         self.setStyleSheet("background: transparent;")
 
     def set_data(self, labels, values):
@@ -223,7 +222,7 @@ class _TrendChart(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        palette = self.palette()
+        palette = theme.current_palette()
         text_color = palette.color(QPalette.WindowText)
         muted = palette.color(QPalette.PlaceholderText)
         grid = palette.color(QPalette.Shadow)
@@ -284,46 +283,57 @@ class _TrendChart(QWidget):
                        Qt.AlignCenter, "近 7 天暂无新增")
 
 
-class _ToolCard(QFrame):
-    """首页工具入口卡片。"""
+class _ToolCard(QPushButton):
+    """整卡可点击的工具入口；支持键盘聚焦与回车/空格激活。"""
 
-    def __init__(self, emoji, title, desc, callback, parent=None):
+    def __init__(self, key, title, desc, callback, parent=None):
         super().__init__(parent)
-        self._callback = callback
-        self.setObjectName("toolCard")
+        self._key = key
+        self.setObjectName("workbenchToolCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_Hover, True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(82)
+        self.setMinimumHeight(78)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setAccessibleName(title)
+        self.setToolTip(f"{title}：{desc}")
+        self.clicked.connect(callback)
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(13, 11, 13, 11)
-        v.setSpacing(6)
-
-        top = QHBoxLayout()
-        top.setSpacing(8)
-        icon = QLabel(emoji)
-        icon.setObjectName("toolIcon")
-        icon.setFixedSize(30, 30)
-        icon.setAlignment(Qt.AlignCenter)
-        top.addWidget(icon)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(15, 13, 13, 13)
+        row.setSpacing(12)
+        self.icon_label = QLabel()
+        self.icon_label.setObjectName("workbenchToolIcon")
+        self.icon_label.setFixedSize(36, 36)
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        row.addWidget(self.icon_label)
+        text = QVBoxLayout()
+        text.setSpacing(5)
         name = QLabel(title)
-        name.setObjectName("toolTitle")
-        top.addWidget(name, 1)
-        arrow = QLabel("›")
-        arrow.setObjectName("toolArrow")
-        top.addWidget(arrow)
-        v.addLayout(top)
-
+        name.setObjectName("workbenchToolTitle")
+        text.addWidget(name)
         tip = QLabel(desc)
-        tip.setObjectName("toolDesc")
+        tip.setObjectName("workbenchToolDesc")
         tip.setWordWrap(True)
-        v.addWidget(tip)
+        text.addWidget(tip)
+        row.addLayout(text, 1)
+        arrow = QLabel("›")
+        arrow.setObjectName("workbenchToolArrow")
+        row.addWidget(arrow)
+        for label in self.findChildren(QLabel):
+            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.sync_icon()
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._callback:
-            self._callback()
-        super().mousePressEvent(event)
+    def sync_icon(self):
+        color = theme.current_palette().color(QPalette.Link).name()
+        self.icon_label.setPixmap(line_icon(tool_icon_name(self._key), color, 20).pixmap(20, 20))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class HomePage(BasePage):
@@ -331,60 +341,65 @@ class HomePage(BasePage):
         super().__init__(app)
         self._stat_values = {}
         self._refreshing = False
+        self._tool_grids = []
+        self._last_layout = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
-        scroll = QScrollArea()
+        scroll = self.scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         root.addWidget(scroll)
 
-        body = QWidget()
+        body = self.body = QWidget()
+        body.setObjectName("workbenchHomeBody")
         scroll.setWidget(body)
         v = QVBoxLayout(body)
-        v.setContentsMargins(20, 18, 20, 20)
+        v.setContentsMargins(26, 22, 26, 28)
         v.setSpacing(16)
 
         v.addWidget(self._build_hero())
         v.addLayout(self._build_stats())
-        v.addLayout(self._build_charts())
-
-        v.addWidget(self._section_title("🧰 常用工具", "高频入口，一键直达"))
+        v.addWidget(self._section_title("常用工具", "采集、整理与制作"))
         v.addLayout(self._build_tool_grid(COMMON_TOOLS))
-        v.addWidget(self._section_title("🛰 信息工具", "平台内容、评论与文档监控"))
+        v.addLayout(self._build_charts())
+        v.addWidget(self._section_title("更多信息工具", "平台内容与文档监控"))
         v.addLayout(self._build_tool_grid(INFO_TOOLS))
         v.addStretch(1)
 
         self._apply_theme_styles()
+        self._layout_for_width()
 
     # ==================== UI 构建 ====================
 
     def _build_hero(self):
-        card = QFrame()
-        card.setObjectName("heroCard")
+        card = QWidget()
+        card.setObjectName("workbenchHero")
         h = QHBoxLayout(card)
-        h.setContentsMargins(20, 16, 18, 16)
+        h.setContentsMargins(0, 0, 0, 4)
         h.setSpacing(12)
 
         left = QVBoxLayout()
-        left.setSpacing(4)
-        title = QLabel("数据汇总库 · 工具箱")
-        title.setObjectName("heroTitle")
+        left.setSpacing(6)
+        title = QLabel("工作台")
+        title.setObjectName("workbenchHeroTitle")
         left.addWidget(title)
-        sub = QLabel("常用入口、数据概览与最近采集趋势")
-        sub.setObjectName("heroSub")
+        sub = QLabel("内容采集、录播处理与资料归档，一处完成。")
+        sub.setObjectName("workbenchHomeMuted")
+        sub.setWordWrap(True)
         left.addWidget(sub)
         h.addLayout(left, 1)
 
         right = QVBoxLayout()
         right.setSpacing(6)
         self.date_label = QLabel("")
-        self.date_label.setObjectName("heroDate")
+        self.date_label.setObjectName("workbenchHomeMuted")
         self.date_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         right.addWidget(self.date_label)
-        self.refresh_btn = QPushButton("🔄 刷新数据")
-        self.refresh_btn.setObjectName("refreshBtn")
+        self.refresh_btn = QPushButton("刷新数据")
+        self.refresh_btn.setObjectName("workbenchRefresh")
+        self.refresh_btn.setIconSize(QSize(15, 15))
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.clicked.connect(self._refresh)
         right.addWidget(self.refresh_btn, 0, Qt.AlignRight)
@@ -392,66 +407,65 @@ class HomePage(BasePage):
         return card
 
     def _build_stats(self):
-        row = QHBoxLayout()
+        row = self._stats_grid = QGridLayout()
         row.setSpacing(12)
+        self._stat_cards = []
         cards = [
-            ("total", "已获取条目", "#4b77d3"),
-            ("platforms", "覆盖平台", "#29998b"),
-            ("week", "近 7 天新增", "#8b72d7"),
-            ("today", "今日新增", "#bf8535"),
+            ("total", "已获取条目"),
+            ("platforms", "覆盖平台"),
+            ("week", "近 7 天新增"),
+            ("today", "今日新增"),
         ]
-        for key, caption, accent in cards:
+        for index, (key, caption) in enumerate(cards):
             card = QFrame()
-            card.setObjectName("statCard")
+            card.setObjectName("workbenchStatCard")
             card.setAttribute(Qt.WA_StyledBackground, True)
-            h = QHBoxLayout(card)
-            h.setContentsMargins(12, 10, 14, 10)
-            h.setSpacing(10)
-            bar = QFrame()
-            bar.setFixedWidth(3)
-            bar.setStyleSheet(f"background: {accent}; border-radius: 1px;")
-            h.addWidget(bar)
-            box = QVBoxLayout()
-            box.setSpacing(1)
+            box = QVBoxLayout(card)
+            box.setContentsMargins(18, 13, 18, 13)
+            box.setSpacing(4)
             value = QLabel("—")
-            value.setObjectName("statValue")
+            value.setObjectName("workbenchStatValue")
+            value.setMinimumWidth(0)
+            value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             cap = QLabel(caption)
-            cap.setObjectName("statCap")
+            cap.setObjectName("workbenchStatCaption")
             box.addWidget(cap)
             box.addWidget(value)
-            h.addLayout(box, 1)
             self._stat_values[key] = value
-            row.addWidget(card, 1)
+            self._stat_cards.append(card)
+            row.addWidget(card, 0, index)
+            row.setColumnStretch(index, 1)
         return row
 
     def _build_charts(self):
-        row = QHBoxLayout()
+        row = self._charts_grid = QGridLayout()
         row.setSpacing(12)
 
-        donut_card, donut_box = self._panel("📊 平台分布", "已获取条目按平台占比")
+        donut_card, donut_box = self._panel("内容分布", "已获取条目的平台占比")
         self.donut = _DonutChart()
         donut_box.addWidget(self.donut, 1)
-        row.addWidget(donut_card, 1)
+        row.addWidget(donut_card, 0, 1)
 
-        trend_card, trend_box = self._panel("📈 近 7 天新增", "按入库日期统计")
+        trend_card, trend_box = self._panel("采集趋势", "最近 7 天 · 按入库日期统计")
         self.trend = _TrendChart()
         trend_box.addWidget(self.trend, 1)
-        row.addWidget(trend_card, 1)
+        row.addWidget(trend_card, 0, 0)
+        self._chart_cards = [trend_card, donut_card]
         return row
 
     @staticmethod
     def _panel(title, subtitle):
         card = QFrame()
-        card.setObjectName("panelCard")
+        card.setObjectName("workbenchPanelCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
         box = QVBoxLayout(card)
-        box.setContentsMargins(16, 13, 16, 12)
-        box.setSpacing(2)
+        box.setContentsMargins(18, 16, 18, 12)
+        box.setSpacing(4)
         name = QLabel(title)
-        name.setObjectName("panelTitle")
+        name.setObjectName("workbenchPanelTitle")
         box.addWidget(name)
         sub = QLabel(subtitle)
-        sub.setObjectName("panelSub")
+        sub.setObjectName("workbenchHomeMuted")
         box.addWidget(sub)
         return card, box
 
@@ -462,10 +476,10 @@ class HomePage(BasePage):
         h.setContentsMargins(2, 4, 2, 0)
         h.setSpacing(8)
         name = QLabel(title)
-        name.setObjectName("sectionTitle")
+        name.setObjectName("workbenchSectionTitle")
         h.addWidget(name)
         sub = QLabel(subtitle)
-        sub.setObjectName("sectionSub")
+        sub.setObjectName("workbenchHomeMuted")
         h.addWidget(sub)
         h.addStretch(1)
         return wrap
@@ -474,24 +488,50 @@ class HomePage(BasePage):
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(12)
-        for i, (key, emoji, title, desc) in enumerate(tools):
-            card = _ToolCard(emoji, title, desc, lambda k=key: self._open_tool(k))
+        cards = []
+        for i, (key, _emoji, title, desc) in enumerate(tools):
+            card = _ToolCard(key, title, desc, lambda checked=False, k=key: self._open_tool(k))
+            cards.append(card)
             grid.addWidget(card, i // 3, i % 3)
         for col in range(3):
             grid.setColumnStretch(col, 1)
+        self._tool_grids.append((grid, cards))
         return grid
+
+    @staticmethod
+    def _arrange_grid(grid, widgets, columns):
+        while grid.count():
+            grid.takeAt(0)
+        for column in range(4):
+            grid.setColumnStretch(column, 1 if column < columns else 0)
+        for index, widget in enumerate(widgets):
+            grid.addWidget(widget, index // columns, index % columns)
+
+    def _layout_for_width(self):
+        narrow = self.width() < 820
+        layout_key = (2 if narrow else 3, 2 if self.width() < 740 else 4,
+                      1 if self.width() < 880 else 2)
+        if self._last_layout == layout_key:
+            return
+        self._last_layout = layout_key
+        tools, stats, charts = layout_key
+        for grid, cards in self._tool_grids:
+            self._arrange_grid(grid, cards, tools)
+        self._arrange_grid(self._stats_grid, self._stat_cards, stats)
+        self._arrange_grid(self._charts_grid, self._chart_cards, charts)
+        self.body.layout().setContentsMargins(18 if narrow else 26, 22,
+                                             18 if narrow else 26, 28)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_chart_cards"):
+            self._layout_for_width()
 
     # ==================== 数据刷新 ====================
 
     def _open_tool(self, key):
-        """信息工具走 tab 容器并切到对应页签，其余页面直接跳转。"""
-        if key in INFO_TOOL_KEYS:
-            self.app.show_page("info_tools")
-            page = self.app.pages.get("info_tools")
-            if page is not None:
-                page.open_tab(key)
-        else:
-            self.app.show_page(key)
+        """由主窗口统一路由，搜索、首页和页面内跳转共用同一实例。"""
+        self.app.show_page(key)
 
     def on_show(self):
         self._refresh()
@@ -529,55 +569,41 @@ class HomePage(BasePage):
         self.trend.update()
 
     def _apply_theme_styles(self):
-        dark = theme.is_dark()
-        text = "palette(window-text)"
-        muted = "palette(placeholder-text)"
-        card = "palette(base)"
-        border = "palette(shadow)"
-        hover = "#24344d" if dark else "#f2f6fd"
-        accent = "palette(highlight)"
-        accent_hover = "#5589d7" if dark else "#285ebc"
-        hero = ("qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-                "stop:0 #21314b, stop:1 #1b293e)" if dark else
-                "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-                "stop:0 #eaf1ff, stop:1 #f7faff)")
-        self.setStyleSheet(f"""
-            QFrame#heroCard {{
-                background: {hero};
-                border: 1px solid {border};
-                border-radius: 12px;
-            }}
-            QLabel#heroTitle {{ color: {text}; background: transparent; font-size: 21px; font-weight: bold; }}
-            QLabel#heroSub {{ color: {muted}; background: transparent; font-size: 12px; }}
-            QLabel#heroDate {{ color: {muted}; background: transparent; font-size: 12px; }}
-            QPushButton#refreshBtn {{
-                background: {accent}; color: palette(highlighted-text);
-                border: 1px solid {accent}; border-radius: 7px;
-                padding: 6px 13px; font-size: 12px;
-            }}
-            QPushButton#refreshBtn:hover {{ background: {accent_hover}; color: palette(highlighted-text); }}
-            QPushButton#refreshBtn:disabled {{ background: palette(alternate-base); color: {muted}; border-color: {border}; }}
-            QFrame#statCard {{
-                background: {card}; border: 1px solid {border}; border-radius: 10px;
-            }}
-            QLabel#statValue {{ color: {text}; background: transparent; font-size: 26px; font-weight: bold; }}
-            QLabel#statCap {{ color: {muted}; background: transparent; font-size: 12px; }}
-            QFrame#panelCard {{
-                background: {card}; border: 1px solid {border}; border-radius: 10px;
-            }}
-            QLabel#panelTitle {{ color: {text}; background: transparent; font-size: 14px; font-weight: bold; }}
-            QLabel#panelSub {{ color: {muted}; background: transparent; font-size: 11px; }}
-            QLabel#sectionTitle {{ color: {text}; background: transparent; font-size: 15px; font-weight: bold; }}
-            QLabel#sectionSub {{ color: {muted}; background: transparent; font-size: 11px; }}
-            QFrame#toolCard {{
-                background: {card}; border: 1px solid {border}; border-radius: 10px;
-            }}
-            QFrame#toolCard:hover {{ background: {hover}; border-color: {accent}; }}
-            QLabel#toolIcon {{ background: palette(alternate-base); border-radius: 7px; font-family: "Segoe UI Emoji"; font-size: 18px; }}
-            QLabel#toolTitle {{ color: {text}; background: transparent; font-size: 13px; font-weight: bold; }}
-            QLabel#toolArrow {{ color: {muted}; background: transparent; font-size: 20px; }}
-            QLabel#toolDesc {{ color: {muted}; background: transparent; font-size: 11px; }}
+        self.setStyleSheet("""
+            QWidget#workbenchHomeBody { background: palette(window); }
+            QWidget#workbenchHero { background: transparent; }
+            QLabel#workbenchHeroTitle { color: palette(text); background: transparent; font-size: 27px; font-weight: bold; }
+            QLabel#workbenchHomeMuted { color: palette(placeholder-text); background: transparent; font-size: 11px; }
+            QPushButton#workbenchRefresh {
+                background: palette(base); color: palette(text);
+                border: 1px solid palette(shadow); border-radius: 7px;
+                padding: 6px 11px; font-size: 11px;
+            }
+            QPushButton#workbenchRefresh:hover { background: palette(midlight); color: palette(link); border-color: palette(highlight); }
+            QPushButton#workbenchRefresh:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
+            QFrame#workbenchStatCard, QFrame#workbenchPanelCard {
+                background: palette(base); border: 1px solid palette(shadow); border-radius: 12px;
+            }
+            QLabel#workbenchStatValue { color: palette(text); background: transparent; font-family: "Segoe UI", "Microsoft YaHei"; font-size: 27px; font-weight: bold; }
+            QLabel#workbenchStatCaption { color: palette(placeholder-text); background: transparent; font-size: 11px; }
+            QLabel#workbenchPanelTitle, QLabel#workbenchSectionTitle { color: palette(text); background: transparent; font-size: 14px; font-weight: bold; }
+            QPushButton#workbenchToolCard {
+                background: palette(base); border: 1px solid palette(shadow); border-radius: 10px;
+                padding: 0; text-align: left;
+            }
+            QPushButton#workbenchToolCard:hover { background: palette(alternate-base); border-color: palette(highlight); }
+            QPushButton#workbenchToolCard:pressed { background: palette(midlight); }
+            QPushButton#workbenchToolCard:focus { border-color: palette(highlight); }
+            QLabel#workbenchToolIcon { background: palette(midlight); border-radius: 9px; border: none; }
+            QLabel#workbenchToolTitle { color: palette(text); background: transparent; border: none; font-size: 12px; font-weight: bold; }
+            QLabel#workbenchToolArrow { color: palette(placeholder-text); background: transparent; border: none; font-size: 20px; }
+            QLabel#workbenchToolDesc { color: palette(placeholder-text); background: transparent; border: none; font-size: 10px; }
         """)
+        icon_color = theme.current_palette().color(QPalette.PlaceholderText).name()
+        self.refresh_btn.setIcon(line_icon("refresh", icon_color, 16))
+        for _grid, cards in self._tool_grids:
+            for card in cards:
+                card.sync_icon()
         self.date_label.setText(
             datetime.now().strftime("%Y-%m-%d")
             + "  周" + "一二三四五六日"[datetime.now().weekday()])

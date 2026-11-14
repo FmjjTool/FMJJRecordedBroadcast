@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QWidget
 class BasePage(QWidget):
     def __init__(self, app):
         super().__init__()
+        self.setProperty("pageSurface", True)
         self.app = app  # MainWindow 实例（提供 work_dir / toast 等）
 
     def on_show(self):

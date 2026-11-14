@@ -21,15 +21,27 @@ from urllib.parse import urlparse
 from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout,
-    QLabel, QLineEdit, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
-    QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
+    QLabel, QLineEdit, QListView, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
+    QScrollArea, QSizePolicy, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from gui_qt import download_ops
-from gui_qt.common import _collect, _db_insert, icon_btn_style, icon_button, post_to_main, refresh_results_count, run_bg
+from gui_qt.common import _collect, _db_insert, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
+from gui_qt.toolbox_common import ToolPageHeader
+
+
+def _set_button_variant(button, variant="secondary", compact=False):
+    """保留图标按钮尺寸，颜色交给全局主题；状态切换也使用同一语义样式。"""
+    changed = button.property("variant") != variant
+    button.setProperty("variant", variant)
+    button.setStyleSheet("padding: 0px;" if compact else "")
+    if changed and button.isVisible():
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
 
 
 def _is_account_url(url: str) -> bool:
@@ -240,7 +252,7 @@ class InfoAccountsPage(BasePage):
 
         batch_row = QHBoxLayout()
         self.process_btn = QPushButton("🚀 开始处理")
-        self.process_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.process_btn.setProperty("variant", "primary")
         self.process_btn.setToolTip(
             "逐行识别：账号主页 → 添加账号；其余 → 解析作品并存入「已获取」（Ctrl+Enter）")
         self.process_btn.clicked.connect(self._process_batch)
@@ -288,11 +300,16 @@ class InfoAccountsPage(BasePage):
         # 账号列表（复选框，固定高度滚动；右键 打开/复制链接、修改、删除）
         self.acc_list = RowCheckList()
         self.acc_list.setFixedHeight(170)
+        self.acc_list.setMinimumWidth(0)
+        self.acc_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.acc_list.setWordWrap(True)
+        self.acc_list.setResizeMode(QListView.Adjust)
+        self.acc_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.acc_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.acc_list.customContextMenuRequested.connect(self._acc_list_context_menu)
         layout.addWidget(self.acc_list)
 
-        # 采集行
+        # 范围与操作各占一行，窄窗口仍完整展示暂停、取消和定时入口。
         op_row = QHBoxLayout()
         op_row.addWidget(QLabel("采集:"))
         self.fetch_mode = QComboBox()
@@ -304,39 +321,43 @@ class InfoAccountsPage(BasePage):
         self.fetch_group.setFixedWidth(110)
         op_row.addWidget(self.fetch_group)
         cnt_lbl = QLabel("条数:")
-        cnt_lbl.setStyleSheet("padding-left: 10px;")
         op_row.addWidget(cnt_lbl)
         self.count_entry = QLineEdit("10")
         self.count_entry.setFixedWidth(56)
         op_row.addWidget(self.count_entry)
         zero_lbl = QLabel("(0=无上限)")
-        zero_lbl.setStyleSheet("color: #888; font-size: 10px;")
+        zero_lbl.setProperty("role", "caption")
         op_row.addWidget(zero_lbl)
+        op_row.addStretch(1)
+        layout.addLayout(op_row)
+        fetch_row = QHBoxLayout()
         self.fetch_btn = QPushButton("获取最新")
+        self.fetch_btn.setProperty("variant", "primary")
         self.fetch_btn.clicked.connect(self._fetch)
-        op_row.addWidget(self.fetch_btn)
+        fetch_row.addWidget(self.fetch_btn)
         self.pause_btn = icon_button(
             "⏸️", "暂停后当前账号采集完即停住，点「继续」恢复",
             (40, 30), True, "font-size: 15px;", self._toggle_pause)
         self.pause_btn.setEnabled(False)
-        op_row.addWidget(self.pause_btn)
+        fetch_row.addWidget(self.pause_btn)
         self.cancel_btn = icon_button(
             "❌", "取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束",
             (40, 30), True, "font-size: 15px;", self._cancel_fetch)
         self.cancel_btn.setEnabled(False)
-        op_row.addWidget(self.cancel_btn)
+        fetch_row.addWidget(self.cancel_btn)
         self.timer_btn = QPushButton("⏰ 定时获取")
         self.timer_btn.clicked.connect(self._toggle_timer)
-        op_row.addWidget(self.timer_btn)
+        fetch_row.addWidget(self.timer_btn)
         self.timer_dot = QLabel("○")
-        self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
-        op_row.addWidget(self.timer_dot)
-        op_row.addStretch(1)
-        layout.addLayout(op_row)
+        self.timer_dot.setProperty("role", "caption")
+        self.timer_dot.setStyleSheet("font-size: 15px;")
+        fetch_row.addWidget(self.timer_dot)
+        fetch_row.addStretch(1)
+        layout.addLayout(fetch_row)
         self.fetch_mode.setCurrentText("选中账号")
         self._on_fetch_mode_change("选中账号")
 
-        # 策略行：增量模式 + 获取后自动下载 + 搜索限流
+        # 策略与限流/日期分开，保存的长日期范围不再撑宽窗口。
         strat_row = QHBoxLayout()
         self.inc_check = QCheckBox("增量模式(写入数据库)")
         # 默认勾选 + 记住上次选择（写入 config，重启恢复）
@@ -351,31 +372,36 @@ class InfoAccountsPage(BasePage):
         self.auto_dl_check.setChecked(self._load_auto_dl_checked())
         self.auto_dl_check.toggled.connect(self._save_auto_dl_checked)
         strat_row.addWidget(self.auto_dl_check)
-        strat_row.addSpacing(8)
-        strat_row.addWidget(QLabel("限流:每"))
-        self.rate_count_entry = QLineEdit("10")
-        self.rate_count_entry.setFixedWidth(40)
-        strat_row.addWidget(self.rate_count_entry)
-        strat_row.addWidget(QLabel("个停"))
-        self.rate_interval_entry = QLineEdit("10")
-        self.rate_interval_entry.setFixedWidth(40)
-        strat_row.addWidget(self.rate_interval_entry)
-        sec_lbl = QLabel("秒")
-        sec_lbl.setStyleSheet("font-size: 11px;")
-        strat_row.addWidget(sec_lbl)
-        self.date_btn = QPushButton("📅 日期段: 不限")
-        self.date_btn.clicked.connect(self._show_date_range_dialog)
-        strat_row.addSpacing(16)
-        strat_row.addWidget(self.date_btn)
-        self._load_date_range()
         strat_row.addStretch(1)
         layout.addLayout(strat_row)
+        limit_row = QHBoxLayout()
+        limit_row.addWidget(QLabel("限流:每"))
+        self.rate_count_entry = QLineEdit("10")
+        self.rate_count_entry.setFixedWidth(40)
+        limit_row.addWidget(self.rate_count_entry)
+        limit_row.addWidget(QLabel("个停"))
+        self.rate_interval_entry = QLineEdit("10")
+        self.rate_interval_entry.setFixedWidth(40)
+        limit_row.addWidget(self.rate_interval_entry)
+        sec_lbl = QLabel("秒")
+        sec_lbl.setProperty("role", "caption")
+        limit_row.addWidget(sec_lbl)
+        self.date_btn = QPushButton("📅 日期段: 不限")
+        self.date_btn.clicked.connect(self._show_date_range_dialog)
+        limit_row.addSpacing(12)
+        limit_row.addWidget(self.date_btn)
+        self._load_date_range()
+        limit_row.addStretch(1)
+        layout.addLayout(limit_row)
 
         # 进度条行（实时显示当前抓到第几个账号）
         prog_row = QHBoxLayout()
         self.prog_label = QLabel("空闲")
-        self.prog_label.setStyleSheet("color: #5a6072; font-size: 11px;")
-        self.prog_label.setFixedWidth(260)
+        self.prog_label.setProperty("role", "caption")
+        self.prog_label.setMinimumWidth(150)
+        self.prog_label.setMaximumWidth(220)
+        self.prog_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.prog_label.setWordWrap(True)
         prog_row.addWidget(self.prog_label)
         self.progress_bar = QProgressBar()
         self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
@@ -388,24 +414,28 @@ class InfoAccountsPage(BasePage):
         self.log_text.setReadOnly(True)
         layout.addWidget(self.log_text, 1)
 
+        for button in f.findChildren(QPushButton):
+            variant = ("primary" if button in (self.process_btn, self.fetch_btn)
+                       else "danger" if button in (self.batch_cancel_btn, self.cancel_btn)
+                       else "secondary")
+            _set_button_variant(button, variant, button.maximumWidth() < 80)
+
     # ---------- 设置页 ----------
     def _build_settings(self, f):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(6)
 
-        title = QLabel("⚙️ 账号管理设置")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        outer.addWidget(title)
+        outer.addWidget(ToolPageHeader("账号管理设置", "添加账号、整理分组，统一保存分组与采集类型。"))
 
         # 添加账号卡片
-        add_card = QWidget()
-        add_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
+        add_card = QFrame()
+        add_card.setProperty("variant", "card")
         ac = QVBoxLayout(add_card)
         ac.setContentsMargins(10, 10, 10, 10)
         ac.setSpacing(4)
         t1 = QLabel("添加账号（账号名 + 链接 + 组号）")
-        t1.setStyleSheet("font-weight: bold; background: transparent;")
+        t1.setProperty("role", "sectionTitle")
         ac.addWidget(t1)
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("账号名:"))
@@ -433,18 +463,20 @@ class InfoAccountsPage(BasePage):
         outer.addWidget(add_card)
 
         # 分组管理卡片（列表独立滚动，⬆⬇ 调整显示顺序）
-        grp_card = QWidget()
-        grp_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
+        grp_card = QFrame()
+        grp_card.setProperty("variant", "card")
         gc = QVBoxLayout(grp_card)
         gc.setContentsMargins(10, 10, 10, 10)
         gc.setSpacing(4)
         t2 = QLabel("分组管理（组编号 + 组名，组号用于绑定账号）")
-        t2.setStyleSheet("font-weight: bold; background: transparent;")
+        t2.setProperty("role", "sectionTitle")
+        t2.setWordWrap(True)
         gc.addWidget(t2)
         self.group_list_frame = QScrollArea()
         self.group_list_frame.setWidgetResizable(True)
+        self.group_list_frame.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.group_list_frame.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid #e3e7ee; border-radius: 6px; }")
+            "QScrollArea { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
         gcontainer = QWidget()
         gcontainer.setStyleSheet("background: transparent;")
         self.group_list_layout = QVBoxLayout(gcontainer)
@@ -460,27 +492,27 @@ class InfoAccountsPage(BasePage):
         addg.addWidget(self.gid_entry)
         self.gname_entry = QLineEdit()
         self.gname_entry.setPlaceholderText("组名")
-        self.gname_entry.setFixedWidth(140)
-        addg.addWidget(self.gname_entry)
+        self.gname_entry.setMinimumWidth(80)
+        addg.addWidget(self.gname_entry, 1)
         newg_btn = icon_button("➕", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
         addg.addWidget(newg_btn)
-        addg.addStretch(1)
         gc.addLayout(addg)
         outer.addWidget(grp_card)
 
         # 已配置账号（列表独立滚动，底部保存栏固定不随列表滚动）
-        acct_card = QWidget()
-        acct_card.setStyleSheet("QWidget { background: #ffffff; border-radius: 8px; }")
+        acct_card = QFrame()
+        acct_card.setProperty("variant", "card")
         acc = QVBoxLayout(acct_card)
         acc.setContentsMargins(10, 10, 10, 10)
         acc.setSpacing(4)
         t3 = QLabel("已配置账号")
-        t3.setStyleSheet("font-weight: bold; background: transparent;")
+        t3.setProperty("role", "sectionTitle")
         acc.addWidget(t3)
         self.acct_set_frame = QScrollArea()
         self.acct_set_frame.setWidgetResizable(True)
+        self.acct_set_frame.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.acct_set_frame.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid #e3e7ee; border-radius: 6px; }")
+            "QScrollArea { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
         acontainer = QWidget()
         acontainer.setStyleSheet("background: transparent;")
         self.acct_set_layout = QVBoxLayout(acontainer)
@@ -493,6 +525,10 @@ class InfoAccountsPage(BasePage):
         self.acct_save_bar = QHBoxLayout()
         acc.addLayout(self.acct_save_bar)
         outer.addWidget(acct_card, 1)
+
+        for button in f.findChildren(QPushButton):
+            _set_button_variant(button, "primary" if button is self.set_add_btn else "secondary",
+                                button.maximumWidth() < 80)
 
     # ---------- 账号列表 ----------
     # B站采集类型标签（其他平台无此概念）
@@ -569,14 +605,13 @@ class InfoAccountsPage(BasePage):
         if self._batch_pause_evt.is_set():
             self._batch_pause_evt.clear()
             self.batch_pause_btn.setText("▶️")
-            self.batch_pause_btn.setStyleSheet(icon_btn_style(
-                True, "background: #eab308; color: white; font-size: 15px;"))
+            _set_button_variant(self.batch_pause_btn, "primary", compact=True)
             self._log("⏸ 已暂停（当前行处理完成后停住）")
             self.prog_label.setText("⏸ 已暂停，等待继续...")
         else:
             self._batch_pause_evt.set()
             self.batch_pause_btn.setText("⏸️")
-            self.batch_pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+            _set_button_variant(self.batch_pause_btn, compact=True)
             self._log("▶ 已继续批量处理")
             self.prog_label.setText("继续批量处理中...")
 
@@ -673,7 +708,7 @@ class InfoAccountsPage(BasePage):
             self.fetch_btn.setEnabled(True)
             self._batch_pause_evt.set()
             self.batch_pause_btn.setText("⏸️")
-            self.batch_pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+            _set_button_variant(self.batch_pause_btn, compact=True)
             self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
             if err:
                 self._log(f"❌ 批量处理失败: {err}")
@@ -836,14 +871,13 @@ class InfoAccountsPage(BasePage):
         if self._pause_evt.is_set():
             self._pause_evt.clear()
             self.pause_btn.setText("▶️")
-            self.pause_btn.setStyleSheet(icon_btn_style(
-                True, "background: #eab308; color: white; font-size: 15px;"))
+            _set_button_variant(self.pause_btn, "primary", compact=True)
             self.log_text.append("⏸ 已暂停（当前账号采集完成后停住）")
             self.prog_label.setText("⏸ 已暂停，等待继续...")
         else:
             self._pause_evt.set()
             self.pause_btn.setText("⏸️")
-            self.pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+            _set_button_variant(self.pause_btn, compact=True)
             self.log_text.append("▶ 已继续采集")
             self.prog_label.setText("继续采集中...")
 
@@ -874,7 +908,7 @@ class InfoAccountsPage(BasePage):
         else:
             self._pause_evt.set()  # 复位门闩，避免下轮启动即处于暂停态
             self.pause_btn.setText("⏸️")
-            self.pause_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+            _set_button_variant(self.pause_btn, compact=True)
 
     # ---------- 获取 ----------
     def _read_int(self, edit, default):
@@ -1611,9 +1645,9 @@ class InfoAccountsPage(BasePage):
             self._timer_running = True
             win.accept()
             self.timer_btn.setText("⏹ 停止定时")
-            self.timer_btn.setStyleSheet("background: #c62828; color: white;")
+            _set_button_variant(self.timer_btn, "danger")
             self.timer_dot.setText("●")
-            self.timer_dot.setStyleSheet("color: #4caf50; font-size: 15px;")
+            self.timer_dot.setStyleSheet("color: palette(link); font-size: 15px;")
             self.app.toast(f"⏰ 定时获取已启动（每 {m} 分钟）", "success")
             # 启动后先执行一次，之后每隔 interval 执行一次（QTimer 替代后台 sleep 循环）
             self._run_timer_fetch()
@@ -1634,9 +1668,9 @@ class InfoAccountsPage(BasePage):
             self._timer.stop()
             self._timer = None
         self.timer_btn.setText("⏰ 定时获取")
-        self.timer_btn.setStyleSheet("")
+        _set_button_variant(self.timer_btn)
         self.timer_dot.setText("○")
-        self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
+        self.timer_dot.setStyleSheet("font-size: 15px;")
         self.app.toast("定时获取已停止", "info")
 
     def _run_timer_fetch(self):
@@ -1719,7 +1753,7 @@ class InfoAccountsPage(BasePage):
         n = len(groups)
         if not groups:
             lbl = QLabel("（暂无分组）")
-            lbl.setStyleSheet("color: #888;")
+            lbl.setProperty("role", "muted")
             self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
             self.group_list_layout.addWidget(lbl)
             self.group_list_layout.addStretch(1)
@@ -1727,16 +1761,20 @@ class InfoAccountsPage(BasePage):
             gids = list(groups.keys())
             for pos, gid in enumerate(gids):
                 gname = groups[gid]
-                row = QWidget()
-                row.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
+                row = QFrame()
+                row.setProperty("variant", "card")
                 h = QHBoxLayout(row)
                 h.setContentsMargins(8, 4, 6, 4)
                 h.setSpacing(4)
                 gid_lbl = QLabel(f"{gid}")
                 gid_lbl.setFixedWidth(44)
-                gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2; background: transparent;")
+                gid_lbl.setProperty("role", "sectionTitle")
                 h.addWidget(gid_lbl)
-                h.addWidget(QLabel(gname), 1)
+                name_label = QLabel(gname)
+                name_label.setWordWrap(True)
+                name_label.setMinimumWidth(0)
+                name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+                h.addWidget(name_label, 1)
                 up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
                 up_btn.setEnabled(pos > 0)
                 up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
@@ -1750,6 +1788,9 @@ class InfoAccountsPage(BasePage):
                     "background: #c62828; color: white; font-size: 13px;",
                     lambda _=False, g=gid: self._delete_group(g))
                 h.addWidget(del_btn)
+                for button in (up_btn, down_btn, del_btn):
+                    _set_button_variant(button, "danger" if button is del_btn else "ghost",
+                                        compact=True)
                 self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
                 self.group_list_layout.addWidget(row)
                 self.group_list_layout.addStretch(1)
@@ -1798,38 +1839,65 @@ class InfoAccountsPage(BasePage):
         self.acct_set_layout.addStretch(1)
         self._acct_set_rows = []
         self.save_all_btn = QPushButton("💾 保存全部修改")
-        self.save_all_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
+        self.save_all_btn.setProperty("variant", "primary")
+        # 保存栏始终保留在卡片底部，列表为空时也不会留下上一轮的控件。
+        _clear_layout(self.acct_save_bar)
+        self.save_all_btn.setEnabled(False)
+        self.save_all_btn.clicked.connect(self._save_all_account_rows)
+        self.acct_save_bar.addWidget(self.save_all_btn)
+        self.acct_save_bar.addStretch(1)
+        hint = QLabel("修改组号/采集类型后点此一次性保存")
+        hint.setProperty("role", "caption")
+        hint.setWordWrap(True)
+        hint.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        hint.setMaximumWidth(280)
+        self.acct_save_bar.addWidget(hint)
         accounts = [a for a in load_accounts() if a.url]  # 过滤分组占位账号
         groups = get_groups()
         if not accounts:
             lbl = QLabel("（暂无账号）")
-            lbl.setStyleSheet("color: #888;")
+            lbl.setProperty("role", "muted")
             self.acct_set_layout.takeAt(self.acct_set_layout.count() - 1)
             self.acct_set_layout.addWidget(lbl)
             self.acct_set_layout.addStretch(1)
             return
         for i, a in enumerate(accounts, 1):
-            row = QWidget()
-            row.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
-            h = QHBoxLayout(row)
-            h.setContentsMargins(8, 4, 6, 4)
+            row = QFrame()
+            row.setProperty("variant", "card")
+            v = QVBoxLayout(row)
+            v.setContentsMargins(8, 8, 8, 8)
+            v.setSpacing(6)
+            h = QHBoxLayout()
             h.setSpacing(4)
             plat = URLRecognizer.recognize(a.url) or "?"
             name = a.name or ""
             info = f"{name}  [{plat}]  {a.url[:40]}" if name else f"[{plat}]  {a.url[:50]}"
-            h.addWidget(QLabel(info), 1)
+            identity = QLabel(info)
+            identity.setWordWrap(True)
+            identity.setMinimumWidth(0)
+            identity.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            identity.setToolTip(f"{name}\n{a.url}")
+            h.addWidget(identity, 1)
+            v.addLayout(h)
+            settings = QHBoxLayout()
+            settings.setSpacing(6)
+            settings.addWidget(QLabel("分组"))
             # 分组多选（当前绑定的全部组）
             gsel = GroupMultiSelect(width=110)
             gsel.set_groups(groups)
             gsel.set_selected(a.group_ids)
-            h.addWidget(gsel)
+            settings.addWidget(gsel)
+            settings.addSpacing(8)
+            settings.addWidget(QLabel("采集类型"))
             # 采集类型下拉（B站生效）
             cur_kind = a.kind or infer_kind_from_url(a.url)
             ksel = QComboBox()
             ksel.addItems([kind_label.get(k, k) for k in kind_options])
             ksel.setCurrentText(kind_label.get(cur_kind, "自动"))
             ksel.setFixedWidth(80)
-            h.addWidget(ksel)
+            settings.addWidget(ksel)
+            settings.addStretch(1)
+            v.addLayout(settings)
             # 记录行控件与初始值，改动后启用底部「保存全部修改」
             self._acct_set_rows.append((a.url, gsel, ksel, gsel.selected(), ksel.currentText()))
             gsel.changed.connect(lambda b=self.save_all_btn: self._mark_set_dirty(b))
@@ -1852,18 +1920,12 @@ class InfoAccountsPage(BasePage):
                 "background: #c62828; color: white; font-size: 13px;",
                 lambda _=False, u=a.url: self._delete_account_row(u))
             h.addWidget(del_btn)
+            for button in (gsel, edit_btn, up_btn, down_btn, del_btn):
+                _set_button_variant(button, "danger" if button is del_btn else "secondary",
+                                    compact=button is not gsel)
             self.acct_set_layout.takeAt(self.acct_set_layout.count() - 1)
             self.acct_set_layout.addWidget(row)
             self.acct_set_layout.addStretch(1)
-        # 底部统一保存按钮（固定在卡片底栏，不随列表滚动）
-        _clear_layout(self.acct_save_bar)
-        self.save_all_btn.setEnabled(False)
-        self.save_all_btn.clicked.connect(self._save_all_account_rows)
-        self.acct_save_bar.addWidget(self.save_all_btn)
-        self.acct_save_bar.addStretch(1)
-        hint = QLabel("修改组号/采集类型后点此一次性保存")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
-        self.acct_save_bar.addWidget(hint)
 
     @staticmethod
     def _mark_set_dirty(btn):

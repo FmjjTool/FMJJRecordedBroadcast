@@ -6,6 +6,7 @@
 
 import re
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 from bili import api
 from toolbox.config_manager import get_export_dir
 from gui_qt.common import run_bg
+from gui_qt.help_overlay import refresh_browser_colors
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_emoji import _DlBar, render_files
 
@@ -109,6 +111,9 @@ class BiliInfoPage(BasePage):
         v.addLayout(row)
         self.space_view = QTextBrowser()
         self.space_view.setOpenExternalLinks(True)
+        # 聚合页会把本页 tab 提升出去；监听实际浏览器，主题切换无需
+        # 依赖逻辑宿主是否可见、或外层是否转发 on_theme_changed。
+        self.space_view.installEventFilter(self)
         v.addWidget(self.space_view, 1)
         self.space_table = QTableWidget(0, 2)
         self.space_table.setHorizontalHeaderLabels(["文件", "目录"])
@@ -165,12 +170,21 @@ class BiliInfoPage(BasePage):
                 f"<p><a href='https://space.bilibili.com/{mid}'>打开空间</a></p>"
             )
             self.space_view.setHtml(html)
+            self._refresh_space_colors()
             self._space_current = {"title": f"{api.sanitize(name)} 空间",
                                    "files": space_files(d["card"], d["appinfo"], d["emotes"])}
             render_files(self.space_table, QLabel(""), self._space_current)
             self.space_bar.progress.setText(f"{len(self._space_current['files'])} 个资源就绪")
 
         run_bg(job, done)
+
+    def _refresh_space_colors(self):
+        refresh_browser_colors(self.space_view, ("#666666", "#888888"))
+
+    def eventFilter(self, obj, event):
+        if obj is self.space_view and event.type() in (QEvent.PaletteChange, QEvent.Show):
+            self._refresh_space_colors()
+        return super().eventFilter(obj, event)
 
     # ---------- 综合搜索 ----------
     def _build_search_tab(self):

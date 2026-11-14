@@ -1,31 +1,24 @@
-"""全局明暗主题（黑白可切换）。
+"""统一主题：语义配色、完整 QSS 切换及旧页面样式兼容。
 
-方案（2026-10 性能重构）：
-- 全局外观：一套与主题无关的 NEUTRAL_QSS（颜色全部走 palette() 角色），
-  启动时设置一次；主题色由浅/深两套 QPalette 承载，切换 = app.setPalette
-  （实测 36 页全加载：setStyleSheet 全量 repolish 15~20s，setPalette ≈0.03s）
-- 页面内联样式：install_auto_remap() 给 QWidget.setStyleSheet 打补丁，
-  按当前主题自动重映射 background/border/color 里的十六进制色值
-  （属性感知：`color:` 只走文字色映射，避免误伤按钮白字；
-   选择器安全：QPushButton:hover 等不会被改写）
-- 切换时：retheme_all() 重映射可见控件（主窗口未激活的懒加载页跳过，
-  show_page 切回时再 adapt，幂等），避免几十个页面全量重映射卡顿
-- 持久化：config["theme"] = "light" | "dark"
-- 定时开关：check_auto_switch() 按配置时间/系统深浅色自动黑白（主窗口 QTimer 周期调用）
-
-注意：刻意在两种主题下保持不变的色值（强调绿/红/蓝、视频区纯黑、
-终端预览深底等）不进映射表，也不走 palette 角色。
+Qt 的样式表会缓存 palette() 的解析结果，仅 setPalette 不能让现有控件
+正确换色。本模块将样式规范为稳定的配色角色模板，切换时重新 polish
+可见控件，隐藏页在显示前更新；避免全应用 repolish 带来的长时间卡顿。
+内联样式保留原文，不从上次渲染结果反向猜测颜色，避免多次切换后漂移。
+Polish/Show 事件同时覆盖构造参数 styleSheet=、懒加载页面和新弹窗。
 """
 
 import re
 import sys
 from datetime import datetime
+from functools import lru_cache
+from weakref import WeakKeyDictionary, WeakSet
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 # 选中指示器交给 Qt 原生绘制，避免给 :checked 覆盖背景后丢失勾号/圆点。
 NEUTRAL_QSS = """
-QMainWindow, QWidget { background-color: palette(window); color: palette(window-text); font-family: "Microsoft YaHei"; font-size: 13px; }
+QWidget { background-color: transparent; color: palette(window-text); font-family: "Microsoft YaHei", "Segoe UI Emoji", "Segoe UI Symbol"; font-size: 13px; }
+QMainWindow, QDialog, QMessageBox, QStackedWidget, QWidget[pageSurface="true"], QWidget[windowSurface="true"] { background-color: palette(window); }
 QScrollArea { border: none; background: palette(window); }
 QPushButton { background: palette(button); color: palette(button-text); padding: 6px 12px; border: 1px solid palette(shadow); border-radius: 6px; text-align: center; }
 QPushButton:hover { background: palette(midlight); color: palette(link); border-color: palette(highlight); }
@@ -90,6 +83,22 @@ QPushButton#navigationButton:hover { background: palette(alternate-base); color:
 QPushButton#navigationButton:checked { background: palette(midlight); color: palette(link); border-left-color: palette(link); font-weight: bold; }
 QPushButton#navigationButton:focus { border-top-color: palette(highlight); border-right-color: palette(highlight); border-bottom-color: palette(highlight); }
 QWidget#cookiePanel { background: palette(window); border: 1px solid palette(shadow); border-radius: 9px; }
+QFrame[variant="card"] { background: palette(base); border: 1px solid palette(shadow); border-radius: 12px; }
+QFrame[variant="subtle"] { background: palette(alternate-base); border: 1px solid palette(shadow); border-radius: 10px; }
+QFrame[variant="toolbar"] { background: palette(base); border: 1px solid palette(shadow); border-radius: 10px; }
+QLabel[role="title"] { color: palette(window-text); font-size: 23px; font-weight: bold; background: transparent; }
+QLabel[role="subtitle"], QLabel[role="muted"] { color: palette(placeholder-text); background: transparent; }
+QLabel[role="caption"] { color: palette(placeholder-text); font-size: 11px; background: transparent; }
+QLabel[role="sectionTitle"] { color: palette(window-text); font-size: 14px; font-weight: bold; background: transparent; }
+QPushButton[variant="primary"] { background: palette(highlight); color: palette(highlighted-text); border-color: palette(highlight); font-weight: bold; padding: 7px 14px; }
+QPushButton[variant="primary"]:hover { background: theme(accent_hover); border-color: theme(accent_hover); color: palette(highlighted-text); }
+QPushButton[variant="danger"] { background: theme(danger_soft); color: theme(danger); border-color: theme(danger_border); }
+QPushButton[variant="danger"]:hover { background: theme(danger); border-color: theme(danger); color: palette(window); }
+QPushButton[variant="secondary"] { background: palette(button); color: palette(button-text); border-color: palette(shadow); }
+QPushButton[variant="secondary"]:hover { background: palette(midlight); border-color: palette(highlight); color: palette(link); }
+QPushButton[variant="ghost"] { background: transparent; color: palette(placeholder-text); border-color: transparent; }
+QPushButton[variant="ghost"]:hover { background: palette(midlight); color: palette(link); }
+QPushButton[variant="primary"]:disabled, QPushButton[variant="danger"]:disabled, QPushButton[variant="secondary"]:disabled, QPushButton[variant="ghost"]:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
 """
 
 # ==================== 浅色 / 深色调色板 ====================
@@ -117,7 +126,41 @@ _PALETTE_SPEC = {
     "ToolTipText": ("#263449", "#dce5f3"),
     # 禁用态文字灰（原生控件用；QSS 管理的控件走 :disabled 规则）
     "DisabledText": ("#8b9aae", "#6e809b"),
+    "BrightText": ("#b93842", "#ff969f"),
+    "LinkVisited": ("#18754e", "#7cd6af"),
+    "Light": ("#fff1f2", "#38252e"),
 }
+
+_COLOR_ROLES = {
+    "window": "Window", "surface": "Base", "surface_alt": "AlternateBase",
+    "text": "WindowText", "muted": "PlaceholderText", "border": "Shadow",
+    "accent": "Highlight", "accent_soft": "Midlight", "on_accent": "HighlightedText",
+    "link": "Link",
+}
+_COLORS = {
+    "accent_hover": ("#275bc1", "#568fe5"),
+    "success": ("#18754e", "#7cd6af"),
+    "warning": ("#99600c", "#edc478"),
+    "danger": ("#b93842", "#ff969f"),
+    "danger_soft": ("#fff1f2", "#38252e"),
+    "danger_border": ("#f0cbd0", "#69404b"),
+}
+
+_TOKEN_PALETTE = {
+    "window": "window", "surface": "base", "surface_alt": "alternate-base",
+    "text": "window-text", "muted": "placeholder-text", "border": "shadow",
+    "accent": "highlight", "accent_soft": "midlight", "on_accent": "highlighted-text",
+    "link": "link", "danger": "bright-text", "danger_soft": "light",
+    "danger_border": "mid", "success": "link-visited", "accent_hover": "highlight",
+}
+
+
+def color(name: str, dark: bool | None = None) -> str:
+    """语义颜色供图表/富文本使用；普通控件优先使用 variant/role 属性。"""
+    if dark is None:
+        dark = is_dark()
+    colors = _PALETTE_SPEC[_COLOR_ROLES[name]] if name in _COLOR_ROLES else _COLORS[name]
+    return colors[1 if dark else 0]
 
 
 def build_palette(dark: bool):
@@ -204,6 +247,18 @@ _TEXT_L2D = {
     "#2e7d32": "#81c784",   # 绿 → 浅绿（已安装标记）
 }
 
+# 兼容旧页面常用的文字/表面色；保留视频纯黑和有意使用的强调背景。
+_TEXT_L2D.update({
+    **dict.fromkeys(("#111111", "#222222", "#333333", "#374151", "#1f2328"), "#dce5f3"),
+    **dict.fromkeys(("#999999", "#9aa1ad", "#9aa0b0", "#6b7280", "#777777"), "#9caec5"),
+})
+_SURFACE_L2D.update({
+    **dict.fromkeys(("#fffdf8", "#fff7f7", "#fafafa", "#f8f9fa", "#f9fafb",
+                    "#f7f8fa", "#f5f6f8", "#f7f9fc", "#f4f6f8", "#f4f6f9"), "#1d2737"),
+    **dict.fromkeys(("#f3f4f6", "#f5f5f5", "#e4e7ec", "#e3e7ee"), "#243044"),
+    **dict.fromkeys(("#e5e7eb", "#dddddd", "#eeeeee", "#cccccc", "#f1c0c0"), "#3a4b63"),
+})
+
 _SURFACE_D2L = {v: k for k, v in _SURFACE_L2D.items()}
 _TEXT_D2L = {v: k for k, v in _TEXT_L2D.items()}
 
@@ -213,6 +268,10 @@ _TEXT_PROPS = {"color", "selection-color"}
 
 _DECL_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9\-]*)\s*:\s*([^;{}]+?)(?=\s*[;}]|$)")
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+_TOKEN_RE = re.compile(r"theme\(\s*([\w_]+)\s*\)", re.I)
+_STYLE_LITERAL_RE = re.compile(
+    r"url\(\s*(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^)])*\)"
+    r"|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|/\*.*?\*/", re.I | re.S)
 
 
 def _norm_hex(h):
@@ -225,7 +284,30 @@ def _norm_hex(h):
 def _remap_hex_value(val, mapping):
     def sub(m):
         return mapping.get(_norm_hex(m.group(0)), m.group(0))
-    return _HEX_RE.sub(sub, val)
+    # 图片路径、引号文本及注释中的 #fff 等片段不是颜色。
+    out, start = [], 0
+    for literal in _STYLE_LITERAL_RE.finditer(val):
+        out.append(_HEX_RE.sub(sub, val[start:literal.start()]))
+        out.append(literal.group(0))
+        start = literal.end()
+    out.append(_HEX_RE.sub(sub, val[start:]))
+    return "".join(out)
+
+
+def _protect_literals(source):
+    literals = []
+
+    def remember(match):
+        literals.append(match.group(0))
+        return f"\x00{len(literals) - 1}\x00"
+
+    return _STYLE_LITERAL_RE.sub(remember, source), literals
+
+
+def _restore_literals(source, literals):
+    if not literals:
+        return source
+    return re.sub(r"\x00(\d+)\x00", lambda m: literals[int(m.group(1))], source)
 
 
 def remap_stylesheet(ss, to_dark):
@@ -243,13 +325,78 @@ def remap_stylesheet(ss, to_dark):
             return m.group(0)
         return f"{prop}: {new_val}"
 
-    return _DECL_RE.sub(repl, ss)
+    # 整段先保护字面量，路径里的分号、花括号也不能切断声明解析。
+    protected, literals = _protect_literals(ss)
+    return _restore_literals(_DECL_RE.sub(repl, protected), literals)
+
+
+def _legacy_role(prop, value):
+    """把旧页面中性常量变成稳定配色角色，强调背景/视频黑底保留。"""
+    value = _norm_hex(value)
+    if prop in _TEXT_PROPS:
+        if value in ("#1976d2", "#64b5f6", "#1565c0", "#285ebc", "#93bcff"):
+            return "link"
+        if value in ("#2e7d32", "#81c784", "#18754e", "#7cd6af"):
+            return "link-visited"
+        if value in ("#d32f2f", "#ef5350", "#c62828", "#b93842", "#ff969f"):
+            return "bright-text"
+        if value in ("#263449", "#dce5f3", "#c6cbd6", "#2f3440", "#111111",
+                     "#222222", "#333333", "#374151", "#1f2328"):
+            return "window-text"
+        if value in _TEXT_L2D or value in _TEXT_D2L or value in ("#6e7f96", "#9caec5"):
+            return "placeholder-text"
+        return None
+    if value in ("#151c29", "#f3f5f9", "#f4f5f7", "#1a1d27", "#14161d", "#eceff3"):
+        return "window"
+    if value in _SURFACE_L2D or value in _SURFACE_D2L:
+        if prop.startswith("border") or prop in ("outline", "gridline-color"):
+            return "mid" if value in ("#c8cdd6", "#333333", "#333340") else "shadow"
+        if value in ("#d8e7f6", "#2a3b52", "#e8effc", "#293d5c"):
+            return "midlight"
+        if value in ("#ffffff", "#23262f", "#1d2737", "#fffdf8", "#fafafa",
+                     "#f8f9fa", "#f9fafb", "#f7f8fa", "#f7f9fc"):
+            return "base"
+        return "alternate-base"
+    if value in ("#dce3ed", "#303e52") and prop.startswith("border"):
+        return "shadow"
+    return None
+
+
+@lru_cache(maxsize=4096)
+def _theme_template(source, legacy=True):
+    """一次性规范原始样式；输出不随当前主题改变。"""
+    protected, literals = _protect_literals(source)
+    if legacy:
+        def declaration(match):
+            prop, value = match.group(1).lower(), match.group(2)
+
+            def replace_color(m):
+                role = _legacy_role(prop, m.group(0))
+                return f"palette({role})" if role else m.group(0)
+
+            value = _HEX_RE.sub(replace_color, value)
+            if prop in _TEXT_PROPS:
+                value = re.sub(r"(?i)\b(?:gray|grey)\b", "palette(placeholder-text)", value)
+            return f"{match.group(1)}: {value}"
+
+        protected = _DECL_RE.sub(declaration, protected)
+    protected = _TOKEN_RE.sub(
+        lambda m: f"palette({_TOKEN_PALETTE[m.group(1).lower()]})"
+        if m.group(1).lower() in _TOKEN_PALETTE else m.group(0), protected)
+    return _restore_literals(protected, literals)
 
 
 # ==================== 主题状态与持久化 ====================
 
 _state = {}
 _orig_set_stylesheet = None
+_style_sources = WeakKeyDictionary()
+_auto_window_surfaces = WeakSet()
+_widget_themes = WeakKeyDictionary()
+_theme_filter = None
+_applying = False
+_refreshing = WeakSet()
+_applied_dark = None
 
 
 def init_theme():
@@ -398,89 +545,190 @@ _applied_qss = None
 
 
 def apply_theme(app=None):
-    """应用当前主题：中性 QSS 只设置一次（内容不变时跳过，全量 repolish 很贵），
-    主题色由 QPalette 切换承载（毫秒级）。
+    """把当前完整主题应用到已有与随后创建的控件。
 
-    QApplication 不是 QWidget 子类，其 setStyleSheet 未被补丁接管，
-    直接调用即可（不会触发二次重映射）。
+    模板只安装一次；更新调色板后重新 polish 可见控件来清除 Qt 的颜色
+    缓存。隐藏页在 Show 前处理，避免切换时重刷整个应用。更新期间抑制
+    窗口重绘，完成后一次呈现，不重建页面或触发采集。
     """
-    global _applied_qss
+    global _applied_qss, _applied_dark, _applying
     from PySide6.QtWidgets import QApplication
     if app is None:
         app = QApplication.instance()
     if app is None:
         return
-    if _applied_qss != NEUTRAL_QSS:
-        app.setStyleSheet(NEUTRAL_QSS)
-        _applied_qss = NEUTRAL_QSS
-    app.setPalette(current_palette())
+    install_auto_remap()
+    dark = is_dark()
+    qss = _theme_template(NEUTRAL_QSS, legacy=False)
+    template_changed = _applied_qss != qss or app.styleSheet() != qss
+    if not template_changed and _applied_dark == dark:
+        return
+    roots = [(w, w.updatesEnabled()) for w in app.topLevelWidgets() if w.isVisible()]
+    _applying = True
+    try:
+        for w, enabled in roots:
+            if enabled:
+                w.setUpdatesEnabled(False)
+        app.setPalette(build_palette(dark))
+        if template_changed:
+            app.setStyleSheet(qss)
+            _applied_qss = qss
+            _widget_themes.clear()
+        _applied_dark = dark
+        for w, _enabled in roots:
+            adapt(w)
+            _set_native_titlebar(w, dark)
+    finally:
+        _applying = False
+        for w, enabled in roots:
+            try:
+                if enabled:
+                    w.setUpdatesEnabled(True)
+                    w.update()
+            except RuntimeError:
+                pass  # 应用主题期间关闭的临时弹窗
 
 
 # ==================== setStyleSheet 自动重映射补丁 ====================
 
 def install_auto_remap():
-    """给 QWidget.setStyleSheet 打补丁：所有内联样式按当前主题自动换色。
+    """兼容旧页面的样式写入，同时记录可恢复的原始样式。"""
+    global _orig_set_stylesheet, _theme_filter
+    from PySide6.QtCore import QEvent, QObject
+    from PySide6.QtWidgets import QApplication, QWidget
+    if _orig_set_stylesheet is None:
+        _orig_set_stylesheet = QWidget.setStyleSheet
 
-    覆盖构造期与运行期（定时刷新/动态加行/弹窗）的全部 setStyleSheet 调用；
-    构造函数 styleSheet= 关键字参数不走 Python 层，由 adapt()/show_page 兜底。
-    """
-    global _orig_set_stylesheet
-    if _orig_set_stylesheet is not None:
+        def _patched(self, ss=None):
+            source = ss or ""
+            previous = _style_sources.get(self)
+            # 重复设置 styleSheet() 时保留源文本，不能把渲染结果当新源。
+            if previous and source == previous[1]:
+                source = previous[0]
+            rendered = _theme_template(source)
+            _style_sources[self] = (source, rendered)
+            if self.styleSheet() != rendered:
+                _widget_themes.pop(self, None)
+                _orig_set_stylesheet(self, rendered)
+
+        QWidget.setStyleSheet = _patched
+
+    app = QApplication.instance()
+    if app is not None and _theme_filter is None:
+        class _ThemeFilter(QObject):
+            def eventFilter(self, obj, event):
+                if not _applying and isinstance(obj, QWidget) and obj not in _refreshing:
+                    if event.type() in (QEvent.Polish, QEvent.ParentChange, QEvent.DynamicPropertyChange):
+                        if event.type() in (QEvent.ParentChange, QEvent.DynamicPropertyChange):
+                            _widget_themes.pop(obj, None)
+                        if event.type() != QEvent.DynamicPropertyChange:
+                            _adapt_widget(obj)
+                        elif obj.isVisible():
+                            _refresh_widget(obj)
+                    elif event.type() == QEvent.Show:
+                        adapt(obj)
+                        if obj.isWindow():
+                            _set_native_titlebar(obj, is_dark())
+                return False
+
+        _theme_filter = _ThemeFilter(app)
+        app.installEventFilter(_theme_filter)
+
+
+def _adapt_widget(widget):
+    """刷新一个控件的内联样式；构造参数首次出现时也记录原文。"""
+    from PySide6.QtCore import Qt
+    # 普通独立 QWidget 窗口也要有不透明底色，子控件则保持透明，避免标签
+    # 像截图中那样各自画一个深色矩形。媒体/浮层的透明窗口仍由页面控制。
+    if (widget.isWindow() and not widget.testAttribute(Qt.WA_TranslucentBackground)
+            and widget.property("windowSurface") is None):
+        _auto_window_surfaces.add(widget)
+        widget.setProperty("windowSurface", True)
+    elif widget in _auto_window_surfaces and (
+            not widget.isWindow() or widget.testAttribute(Qt.WA_TranslucentBackground)):
+        _auto_window_surfaces.discard(widget)
+        if widget.property("windowSurface") is True:
+            widget.setProperty("windowSurface", None)
+    current = widget.styleSheet()
+    previous = _style_sources.get(widget)
+    if previous is None or current != previous[1]:
+        source = current
+    else:
+        source = previous[0]
+    if not source and previous is None:
         return
+    rendered = _theme_template(source)
+    _style_sources[widget] = (source, rendered)
+    if rendered != current:
+        setter = _orig_set_stylesheet
+        if setter is None:
+            from PySide6.QtWidgets import QWidget
+            setter = QWidget.setStyleSheet
+        setter(widget, rendered)
+
+
+def _visible_widgets(root):
+    """只遍历当前将显示的分支，隐藏根的子控件用 isVisibleTo(root) 判断。"""
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QWidget
-    _orig_set_stylesheet = QWidget.setStyleSheet
+    yield root
+    for child in root.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
+        if child.isWindow() or not child.isVisibleTo(root):
+            continue
+        yield from _visible_widgets(child)
 
-    def _patched(self, ss=None):
-        try:
-            if ss and is_dark():
-                ss = remap_stylesheet(ss, True)
-        except Exception:
-            pass
-        _orig_set_stylesheet(self, ss or "")
 
-    QWidget.setStyleSheet = _patched
+def _refresh_widget(widget):
+    if widget in _refreshing:
+        return
+    dark = is_dark()
+    _refreshing.add(widget)
+    try:
+        _adapt_widget(widget)
+        if _widget_themes.get(widget) == dark:
+            return
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
+        _widget_themes[widget] = dark
+    finally:
+        _refreshing.discard(widget)
+
+
+def _set_native_titlebar(widget, dark):
+    """Windows 标题栏随应用主题，失败时保留系统默认装饰。"""
+    if sys.platform != "win32" or not widget.isVisible():
+        return
+    try:
+        from PySide6.QtWidgets import QApplication
+        if QApplication.platformName() != "windows":
+            return
+        import ctypes
+        value = ctypes.c_int(bool(dark))
+        hwnd = ctypes.c_void_p(int(widget.winId()))
+        dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        result = dwm(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        if result:
+            dwm(hwnd, 19, ctypes.byref(value), ctypes.sizeof(value))
+    except (AttributeError, OSError, RuntimeError):
+        pass
 
 
 def adapt(root, skip_subtrees=()):
-    """把 root 子树上所有已设置的内联样式重映射到当前主题（幂等）。
-
-    skip_subtrees: 跳过的子树根节点集合（如主窗口里未激活的懒加载页，
-    由 show_page 切回时再补 adapt），避免一次重映射几十个页面。"""
+    """刷新即将显示的分支，可安全重复调用；隐藏子树在 Show 时预热。"""
     if root is None:
         return
-    from PySide6.QtWidgets import QWidget
-    dark = is_dark()
-    skip = None
-    for s in skip_subtrees or ():
-        if s is None:
+    skip = set(s for s in skip_subtrees or () if s is not None)
+    for w in _visible_widgets(root):
+        if w in skip or any(s.isAncestorOf(w) for s in skip):
             continue
-        if skip is None:
-            skip = set()
-        skip.add(s)
-        skip.update(s.findChildren(QWidget))
-    widgets = [root] + root.findChildren(QWidget)
-    for w in widgets:
-        if skip is not None and w in skip:
-            continue
-        ss = w.styleSheet()
-        if not ss:
-            continue
-        new = remap_stylesheet(ss, dark)
-        if new != ss:
-            w.setStyleSheet(new)
+        _refresh_widget(w)
 
 
 def retheme_all(main_window=None):
-    """主题切换后：重映射顶层控件的现有样式（含主窗口、已打开弹窗）。
-
-    main_window 传入时，其懒加载未激活页跳过（show_page 切回时再 adapt），
-    避免几十个页面全量重映射造成长卡顿。"""
+    """刷新可见窗口；隐藏页面显示前由事件过滤器同步。"""
     from PySide6.QtWidgets import QApplication
     for w in QApplication.topLevelWidgets():
-        if main_window is not None and w is main_window:
-            pages = getattr(main_window, "pages", {}) or {}
-            current = main_window.stack.currentWidget()
-            hidden = [p for p in pages.values() if p is not None and p is not current]
-            adapt(w, skip_subtrees=hidden)
-        else:
+        if w.isVisible():
             adapt(w)

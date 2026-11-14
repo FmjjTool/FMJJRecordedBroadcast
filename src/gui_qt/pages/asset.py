@@ -1,4 +1,4 @@
-"""资产管理页（PySide6 版）：已获取资源磁盘扫描 + 本地资源文件夹扫描，双标签。
+"""资产管理页（PySide6 版）：已获取资源、数据库浏览与本地资源。
 
 对应原版 gui/asset_page.py：
 - 已获取资源：自动扫描 download/已获取数据/ 下历史导出（封面/本地媒体缩略图 + 摘要），
@@ -21,20 +21,20 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import (QMimeData, QObject, QPoint, QPointF, QRect, QSize,
+from PySide6.QtCore import (QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QSize,
                             Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
-                           QPen, QPixmap, QPolygonF, QTextCursor)
+                           QPalette, QPen, QPixmap, QPolygonF, QTextCursor, QTextFormat)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressDialog,
-    QPushButton, QScrollArea, QSpinBox, QTabWidget, QTableWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 from PySide6.QtWidgets import QLayout
 
-from gui_qt import common
+from gui_qt import common, theme
 from gui_qt.common import _fmt, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox import asset_index
@@ -50,6 +50,73 @@ BATCH = 20  # 懒加载：每批渲染数量
 
 # 平台筛选下拉显示中文名 -> 英文标识（筛选用英文键）
 _CN2EN = {cn: en for en, cn in PLATFORM_CN.items()}
+
+
+def _asset_styles() -> str:
+    """页面自己的视觉角色；颜色切换不重建资源行或再次加载缩略图。"""
+    return """
+    QFrame#assetToolbar { background: palette(base); border: 1px solid palette(shadow); border-radius: 12px; }
+    QFrame#assetToolbar QLabel, QFrame#assetToolbar QCheckBox { background: transparent; border: none; }
+    QLabel#assetHeading { color: palette(window-text); font-size: 22px; font-weight: bold; background: transparent; }
+    QLabel#assetSubtitle, QLabel#assetMeta { color: palette(placeholder-text); background: transparent; border: none; font-size: 12px; }
+    QLabel#assetSectionTitle { color: palette(window-text); font-size: 15px; font-weight: bold; background: transparent; }
+    QWidget#assetRow { background: palette(base); border: 1px solid palette(shadow); border-radius: 12px; }
+    QWidget#assetRow:hover { border-color: palette(highlight); }
+    QWidget#assetRow QLabel, QWidget#assetRow QCheckBox { background: transparent; border: none; }
+    QLabel#assetRowTitle { color: palette(window-text); font-size: 14px; font-weight: bold; }
+    QLabel#assetBadge, QWidget#assetRow QLabel#assetBadge { color: palette(link); background: palette(alternate-base); border: none; border-radius: 5px; padding: 3px 7px; font-size: 11px; }
+    QLabel#assetThumbnail, QWidget#assetRow QLabel#assetThumbnail { background: palette(alternate-base); border: none; border-radius: 8px; font-size: 27px; }
+    QPushButton#assetPrimary { background: palette(highlight); color: palette(highlighted-text); border: 1px solid palette(highlight); padding: 6px 12px; border-radius: 7px; }
+    QPushButton#assetPrimary:hover { background: palette(link); }
+    QPushButton#assetPrimary:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
+    QPushButton#assetAction { background: transparent; color: palette(link); border: 1px solid palette(mid); border-radius: 7px; padding: 4px 9px; }
+    QPushButton#assetAction:hover { background: palette(midlight); border-color: palette(highlight); }
+    QPushButton#assetAction:disabled { color: palette(placeholder-text); border-color: palette(shadow); }
+    QWidget[assetTone="danger"], QLabel#assetMeta[assetTone="danger"] { color: theme(danger); }
+    QWidget[assetTone="accent"] { color: palette(link); }
+    QPushButton[assetTone="danger"] { background: transparent; border: 1px solid palette(shadow); border-radius: 7px; padding: 4px 9px; }
+    QPushButton[assetTone="danger"]:hover { border-color: theme(danger); background: palette(alternate-base); }
+    QWidget[assetTone="danger"]:disabled { color: palette(placeholder-text); }
+    QTableWidget#assetTable { border: 1px solid palette(shadow); border-radius: 10px; gridline-color: palette(shadow); }
+    QTableWidget#assetTable::item { padding: 7px 6px; }
+    """
+
+
+def _asset_label(text, name="assetMeta", *, wrap=False):
+    label = QLabel(str(text))
+    label.setObjectName(name)
+    label.setProperty("role", {"assetHeading": "title", "assetSubtitle": "subtitle",
+                               "assetSectionTitle": "sectionTitle", "assetRowTitle": "sectionTitle"}.get(name, "muted"))
+    label.setTextFormat(Qt.PlainText)
+    label.setWordWrap(wrap)
+    label.setMinimumWidth(0)
+    label.setSizePolicy(QSizePolicy.Ignored if wrap else QSizePolicy.Preferred,
+                        QSizePolicy.Preferred)
+    return label
+
+
+def _asset_toolbar(layout):
+    panel = QFrame()
+    panel.setObjectName("assetToolbar")
+    panel.setProperty("variant", "toolbar")
+    box = QVBoxLayout(panel)
+    box.setContentsMargins(12, 11, 12, 11)
+    box.setSpacing(9)
+    layout.addWidget(panel)
+    return box
+
+
+def _asset_action(text, callback, *, primary=False, danger=False, tip=""):
+    button = QPushButton(text)
+    button.setObjectName("assetDanger" if danger else "assetPrimary" if primary else "assetAction")
+    button.setProperty("variant", "danger" if danger else "primary" if primary else "secondary")
+    if danger:
+        button.setProperty("assetTone", "danger")
+    button.setCursor(Qt.PointingHandCursor)
+    button.setMinimumHeight(30)
+    button.setToolTip(tip)
+    button.clicked.connect(callback)
+    return button
 
 
 def _no_dl_store_path() -> Path:
@@ -267,6 +334,88 @@ class _FlowLayout(QLayout):
 
 class _ContentBrowser(QTextBrowser):
     """内容预览：支持公众号 HTML 导出里的 base64 data URI 图片。"""
+
+    _TEXT_ROLE = QTextFormat.UserProperty + 81
+    _BACKGROUND_ROLE = QTextFormat.UserProperty + 82
+
+    def setHtml(self, text):
+        super().setHtml(text)
+        self._asset_theme_signature = None
+        self.refresh_theme()
+
+    def refresh_theme(self):
+        """只改已加载文本格式，保留图片资源、正文、选择及滚动位置。"""
+        signature = tuple(theme.color(role) for role in ("text", "muted", "surface", "link", "danger"))
+        if getattr(self, "_asset_theme_signature", None) == signature:
+            return
+        text_roles = {
+            "#000000": "text",
+            "#222222": "text", "#333333": "text", "#555555": "text",
+            "#666666": "muted", "#888888": "muted", "#999999": "muted",
+            "#6b7280": "muted", "#c62828": "danger",
+        }
+        formats = []
+        block_formats = []
+        block = self.document().begin()
+        while block.isValid():
+            block_format = block.blockFormat()
+            if self._theme_background(block_format):
+                block_formats.append((block.position(), block_format))
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                fmt = fragment.charFormat()
+                if fragment.isValid() and not fmt.isImageFormat():
+                    role = ("link" if fmt.isAnchor() else fmt.property(self._TEXT_ROLE)
+                            or text_roles.get(fmt.foreground().color().name()))
+                    background = fmt.property(self._BACKGROUND_ROLE)
+                    if not background and fmt.background().style() != Qt.NoBrush \
+                            and fmt.background().color().name() in ("#ffffff", "#f3f4f6", "#eef1f5"):
+                        background = "surface"
+                    if role or background:
+                        if role:
+                            fmt.setProperty(self._TEXT_ROLE, role)
+                            fmt.setForeground(QColor(theme.color(role)))
+                        if background:
+                            fmt.setProperty(self._BACKGROUND_ROLE, background)
+                            fmt.setBackground(QColor(theme.color(background)))
+                        formats.append((fragment.position(), fragment.length(), fmt))
+                iterator += 1
+            block = block.next()
+        cursor = QTextCursor(self.document())
+        cursor.beginEditBlock()
+        for start, length, fmt in formats:
+            cursor.setPosition(start)
+            cursor.setPosition(start + length, QTextCursor.KeepAnchor)
+            cursor.setCharFormat(fmt)
+        for start, fmt in block_formats:
+            cursor.setPosition(start)
+            cursor.setBlockFormat(fmt)
+        cursor.endEditBlock()
+        frames = [self.document().rootFrame()]
+        while frames:
+            frame = frames.pop()
+            frames.extend(frame.childFrames())
+            fmt = frame.frameFormat()
+            if self._theme_background(fmt):
+                frame.setFrameFormat(fmt)
+        self._asset_theme_signature = signature
+
+    def _theme_background(self, fmt):
+        role = fmt.property(self._BACKGROUND_ROLE)
+        if not role and fmt.background().style() != Qt.NoBrush \
+                and fmt.background().color().name() in ("#ffffff", "#f3f4f6", "#eef1f5"):
+            role = "surface"
+        if role:
+            fmt.setProperty(self._BACKGROUND_ROLE, role)
+            fmt.setBackground(QColor(theme.color(role)))
+            return True
+        return False
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self.refresh_theme()
 
     def loadResource(self, rtype, url):
         try:
@@ -538,6 +687,9 @@ class _RowWidget(QWidget):
 
     def __init__(self, on_click, on_context=None, parent=None, on_double=None):
         super().__init__(parent)
+        self.setObjectName("assetRow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
         self._on_click = on_click
         self._on_context = on_context
         self._on_double = on_double
@@ -592,6 +744,8 @@ class _ThumbLabel(QLabel):
 class AssetPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
+        self.setObjectName("assetPage")
+        self.setStyleSheet(_asset_styles())
         self._all_files = []            # 本地扫描结果全量
         self._shown = 0                 # 已渲染数量
         self._folder = ""
@@ -621,8 +775,12 @@ class AssetPage(BasePage):
         layout.setSpacing(0)
 
         head = QHBoxLayout()
-        head.setContentsMargins(8, 6, 8, 0)
-        head.addWidget(QLabel("🗂 资产管理", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.setContentsMargins(16, 12, 16, 12)
+        heading = QVBoxLayout()
+        heading.setSpacing(3)
+        heading.addWidget(_asset_label("资产管理", "assetHeading"))
+        heading.addWidget(_asset_label("整理已获取内容、浏览数据库与本地媒体", "assetSubtitle"))
+        head.addLayout(heading)
         head.addStretch(1)
         backup_btn = QPushButton("💾 备份")
         backup_btn.setToolTip(
@@ -654,16 +812,33 @@ class AssetPage(BasePage):
             "<b>切到本页会自动扫描</b>，不用每次手点；缩略图懒加载预览，支持扫描上限与增量索引</p>"
             "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
             "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
+        help_button = head.itemAt(head.count() - 1).widget()
+        help_button.setText("使用指南")
+        help_button.setProperty("variant", "ghost")
+        help_button.setStyleSheet("")
         layout.addLayout(head)
 
         # 顺序：已获取资源 | 数据库浏览（中间） | 本地资源
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("assetTabs")
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_collected_tab(), "已获取资源")
         self.tabs.addTab(self._build_db_tab(), "数据库浏览")
         self.tabs.addTab(self._build_local_tab(), "本地资源")
         # 切到数据库浏览 Tab 时刷新（采集后无需切页面，直接切 Tab 即可见新数据）
         self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def on_theme_changed(self):
+        """刷新已有控件的颜色，不扫描磁盘、不重建资源行或重新加载图片。"""
+        self.setStyleSheet(_asset_styles())
+        if hasattr(self, "db_table"):
+            accent = QBrush(QColor(theme.color("link")))
+            for row in range(self.db_table.rowCount()):
+                item = self.db_table.item(row, 4)
+                if item is not None:
+                    item.setForeground(accent)
+        for browser in self.findChildren(_ContentBrowser):
+            browser.refresh_theme()
 
     def _on_tab_changed(self, idx: int):
         name = self.tabs.tabText(idx) if 0 <= idx < self.tabs.count() else ""
@@ -794,85 +969,72 @@ class AssetPage(BasePage):
     def _build_local_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(10, 10, 10, 10)
-        v.setSpacing(6)
-        title = QLabel("📁 本地资源")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        v.addWidget(title)
-
-        # 选文件夹行：路径 + 选择 + 锁定（锁定后路径只读，防误改，且下次启动照样恢复）
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(10)
+        toolbar = _asset_toolbar(v)
         row = QHBoxLayout()
+        row.setSpacing(8)
         self.dir_entry = QLineEdit()
-        self.dir_entry.setPlaceholderText("资源文件夹路径（选定后会被记住并锁定）")
+        self.dir_entry.setMinimumWidth(100)
+        self.dir_entry.setPlaceholderText("选择要浏览的媒体文件夹")
         self.dir_entry.setToolTip(
-            "选定的目录会写入配置，下次打开/重启自动恢复；\n"
-            "点右侧 🔓/🔒 可切换「锁定」——锁定后路径不可编辑，避免误改扫错目录")
+            "选定目录会记住并锁定，下次打开自动恢复；\n"
+            "点击锁定按钮可切换只读状态，避免误改扫描目录")
         self.dir_entry.editingFinished.connect(self._on_dir_edited)
         row.addWidget(self.dir_entry, 1)
-        self.pick_btn = QPushButton("📂 选择")
-        self.pick_btn.clicked.connect(self._pick_folder)
+        self.pick_btn = _asset_action("选择文件夹", self._pick_folder)
         row.addWidget(self.pick_btn)
         self.dir_lock_btn = icon_button(
-            "🔓", "锁定当前目录（锁定后路径只读，下次启动自动恢复该目录）",
-            (36, 30), False, "font-size: 15px;", self._toggle_dir_lock)
+            "🔓", "锁定当前目录（只读并在下次启动恢复）",
+            (36, 32), False, "font-size: 15px;", self._toggle_dir_lock)
         row.addWidget(self.dir_lock_btn)
-        v.addLayout(row)
+        toolbar.addLayout(row)
 
-        # 策略行：扫描上限 / 分批间隔 / 增量模式（扫描深度固定「全部层级」，不再暴露）
         cfg = QHBoxLayout()
-        cfg.addWidget(QLabel("上限:"))
-        self.limit_entry = QLineEdit()
-        self.limit_entry.setFixedWidth(50)
-        self.limit_entry.setText("0")
+        cfg.setSpacing(8)
+        cfg.addWidget(_asset_label("上限"))
+        self.limit_entry = QLineEdit("0")
+        self.limit_entry.setFixedWidth(48)
+        self.limit_entry.setToolTip("扫描文件数量上限，0 表示全部")
         cfg.addWidget(self.limit_entry)
-        cfg.addWidget(QLabel("(0=全部)"))
-        cfg.addSpacing(8)
-        cfg.addWidget(QLabel("分批间隔(秒):"))
-        self.batch_entry = QLineEdit()
-        self.batch_entry.setFixedWidth(40)
-        self.batch_entry.setText("0")
+        cfg.addWidget(_asset_label("0 = 全部"))
+        cfg.addSpacing(4)
+        cfg.addWidget(_asset_label("间隔 / 秒"))
+        self.batch_entry = QLineEdit("0")
+        self.batch_entry.setFixedWidth(44)
+        self.batch_entry.setToolTip("每批文件之间等待的秒数，0 表示不等待")
         cfg.addWidget(self.batch_entry)
-        cfg.addSpacing(8)
-        self.inc_var = QCheckBox("增量模式(写入索引)")
-        # 勾选状态持久化（下次启动保持）
+        self.inc_var = QCheckBox("增量模式")
+        self.inc_var.setToolTip("扫描结果增量写入索引，下次启动保留此设置")
         try:
-            self.inc_var.setChecked(
-                bool(load_convert_config().get("local_inc_enabled", False)))
+            self.inc_var.setChecked(bool(load_convert_config().get("local_inc_enabled", False)))
         except Exception:
             pass
         self.inc_var.toggled.connect(self._save_inc_var)
         cfg.addWidget(self.inc_var)
         cfg.addStretch(1)
-        scan_btn = QPushButton("🔍 扫描")
-        scan_btn.setStyleSheet("background: #2e7d32; color: white;")
-        scan_btn.clicked.connect(self._scan)
-        cfg.addWidget(scan_btn)
-        v.addLayout(cfg)
+        cfg.addWidget(_asset_action("扫描资源", self._scan, primary=True))
+        toolbar.addLayout(cfg)
 
-        # 文件夹筛选行：扫描结果按目录分组后，可逐级进入某个子文件夹查看
         frow = QHBoxLayout()
-        frow.addWidget(QLabel("文件夹:"))
+        frow.setSpacing(8)
+        frow.addWidget(_asset_label("文件夹"))
         self.local_dir_sel = QComboBox()
         self.local_dir_sel.addItem("全部文件夹", "")
-        self.local_dir_sel.setFixedWidth(340)
-        self.local_dir_sel.setToolTip(
-            "按扫描到的子文件夹筛选（选中父文件夹会包含其下所有层级）；\n"
-            "扫描完成后这里列出全部目录，按层级缩进，可逐级下钻")
+        self.local_dir_sel.setMinimumWidth(120)
+        self.local_dir_sel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.local_dir_sel.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.local_dir_sel.setMinimumContentsLength(8)
+        self.local_dir_sel.setToolTip("筛选当前目录及其全部子目录；扫描结果按文件夹分组")
         self.local_dir_sel.currentIndexChanged.connect(self._on_local_dir_changed)
-        frow.addWidget(self.local_dir_sel)
-        # 把当前下钻到的子文件夹直接设成扫描根目录（「锁定目录」——之后扫描/筛选都从这层算）
+        frow.addWidget(self.local_dir_sel, 1)
         self.pin_dir_btn = icon_button(
-            "📌", "锁定此目录为扫描根目录（把这个子文件夹设为当前工作目录并重新扫描）",
-            (36, 30), False, "font-size: 15px;", self._pin_local_dir)
+            "📌", "把此子目录锁定为扫描根目录并重新扫描",
+            (36, 32), False, "font-size: 15px;", self._pin_local_dir)
         frow.addWidget(self.pin_dir_btn)
-        frow.addStretch(1)
-        v.addLayout(frow)
-
-        self.local_status = QLabel("")
-        self.local_status.setStyleSheet("color: #888;")
+        toolbar.addLayout(frow)
+        self.local_status = _asset_label("", wrap=True)
         v.addWidget(self.local_status)
-
-        # 懒加载列表（滚动区）
         self.local_scroll, _, self.local_layout = self._make_scroll()
         v.addWidget(self.local_scroll, 1)
         self._restore_dir_var()
@@ -989,11 +1151,13 @@ class AssetPage(BasePage):
     def _make_scroll(self):
         """构造滚动区：QScrollArea + QWidget 容器 + 垂直布局。"""
         scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         container = QWidget()
         lay = QVBoxLayout(container)
-        lay.setContentsMargins(2, 2, 2, 2)
-        lay.setSpacing(2)
+        lay.setContentsMargins(1, 2, 5, 4)
+        lay.setSpacing(9)
         lay.addStretch(1)
         scroll.setWidget(container)
         return scroll, container, lay
@@ -1100,7 +1264,7 @@ class AssetPage(BasePage):
         files = self._all_files
         lock = "🔒 " if getattr(self, "_dir_locked", False) else ""
         if not files:
-            self.local_status.setText(f"{lock}（未扫描到资源，可调高「深度」让子文件夹一起读）")
+            self.local_status.setText(f"{lock}尚未扫描到资源，请检查目录与扫描上限；所有子文件夹都会包含在内")
             return
         imgs = sum(1 for x in files if x["type"] == "image")
         vids = sum(1 for x in files if x["type"] == "video")
@@ -1121,6 +1285,9 @@ class AssetPage(BasePage):
             item = lay.takeAt(0)
             w = item.widget()
             if w:
+                # deleteLater 要等事件循环收尾才销毁；先隐藏，快速刷新时旧卡片
+                # 不会留在原坐标覆盖新列表或分页条。
+                w.hide()
                 w.deleteLater()
             elif item.layout():
                 self._clear_layout(item.layout())
@@ -1137,7 +1304,7 @@ class AssetPage(BasePage):
             self._clear_layout(lay)
             tip = QLabel("（该文件夹下没有可预览的图片/视频/音频）"
                          if self._all_files else "（尚未扫描，选好文件夹后点 🔍 扫描）")
-            tip.setStyleSheet("color: gray; padding: 8px;")
+            tip.setStyleSheet("color: palette(placeholder-text); padding: 8px;")
             lay.addWidget(tip)
             lay.addStretch(1)
             return
@@ -1155,7 +1322,7 @@ class AssetPage(BasePage):
         if self._shown < len(view):
             more = QPushButton(f"加载更多（{len(view) - self._shown} 个）")
             more.setStyleSheet(
-                "background: transparent; border: 1px solid #c8cdd6; color: #6b7280; padding: 4px;")
+                "background: transparent; border: 1px solid palette(mid); color: palette(placeholder-text); padding: 4px;")
             more.clicked.connect(self._render_local_batch)
             lay.addWidget(more)
         lay.addStretch(1)
@@ -1167,43 +1334,35 @@ class AssetPage(BasePage):
             return
         self._cur_group = rel
         lbl = QLabel(("📁 " + rel) if rel else "📁 (根目录)")
-        lbl.setStyleSheet("color: #6b7280; font-size: 11px; padding: 5px 2px 1px 2px;")
+        lbl.setStyleSheet("color: palette(placeholder-text); font-size: 11px; padding: 5px 2px 1px 2px;")
         lbl.setToolTip(item.get("path", ""))
         lay.addWidget(lbl)
 
     def _render_local_item(self, item):
         row = _RowWidget(lambda item=item: self._show_local_detail(item))
-        row.setCursor(Qt.PointingHandCursor)
         row.setToolTip("单击查看预览")
-        row.setStyleSheet(
-            "_RowWidget { background: #ffffff; border-radius: 6px; }"
-            "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
-        h.setContentsMargins(6, 4, 6, 4)
+        h.setContentsMargins(12, 12, 12, 12)
+        h.setSpacing(12)
         kind = item["type"]
         if kind == "image":
-            lbl = self._load_local_thumb(item["path"], 90, 60)
-            h.addWidget(lbl)
+            thumb = self._load_local_thumb(item["path"], 90, 60)
         else:
-            icon = "🎬" if kind == "video" else "🎵"
-            lbl = QLabel(icon)
-            lbl.setFixedSize(90, 60)
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet(
-                "background: #eef1f5; border-radius: 4px; font-size: 28px;")
-            h.addWidget(lbl)
-        info = QLabel(f"{item['name']}\n类型: {kind}  大小: {_fmt_size(item['size'])}  {item['mtime']}")
-        info.setStyleSheet("font-size: 11px;")
-        info.setWordWrap(True)
-        h.addWidget(info, 1)
-        view_btn = QPushButton("🔍")
-        view_btn.setFixedSize(42, 32)
-        view_btn.setToolTip("查看预览（二级弹窗）")
-        view_btn.setStyleSheet(common.icon_btn_style(
-            False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
-        view_btn.clicked.connect(
-            lambda _=False, it=item: self._show_local_detail(it))
-        h.addWidget(view_btn)
+            thumb = QLabel("🎬" if kind == "video" else "🎵")
+            thumb.setFixedSize(90, 60)
+            thumb.setAlignment(Qt.AlignCenter)
+        thumb.setObjectName("assetThumbnail")
+        h.addWidget(thumb)
+        info = QVBoxLayout()
+        info.setSpacing(5)
+        title = _asset_label(_wrappable(item["name"]), "assetRowTitle", wrap=True)
+        title.setToolTip(item["name"])
+        info.addWidget(title)
+        kind_name = {"image": "图片", "video": "视频", "audio": "音频"}.get(kind, kind)
+        info.addWidget(_asset_label(f"{kind_name}  ·  {_fmt_size(item['size'])}  ·  {item['mtime']}", wrap=True))
+        h.addLayout(info, 1)
+        h.addWidget(_asset_action("预览", lambda _=False, it=item: self._show_local_detail(it),
+                                  tip="查看预览（二级弹窗）"))
         self.local_layout.addWidget(row)
 
     def _show_local_detail(self, item):
@@ -1226,7 +1385,7 @@ class AssetPage(BasePage):
         preview.setAlignment(Qt.AlignCenter)
         preview.setFixedSize(820, 440)
         preview.setStyleSheet(
-            "background: #eef1f5; border-radius: 6px; color: #9aa1ad;"
+            "background: palette(alternate-base); border-radius: 6px; color: palette(placeholder-text);"
             " font-size: 44px;")
         outer.addWidget(preview, 1, Qt.AlignHCenter)
 
@@ -1290,7 +1449,7 @@ class AssetPage(BasePage):
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
             kl.setFixedWidth(72)
-            kl.setStyleSheet("color: #6b7280; font-size: 12px;")
+            kl.setStyleSheet("color: palette(placeholder-text); font-size: 12px;")
             row_f.addWidget(kl)
             wl = QLabel(_wrappable(str(val)))
             wl.setWordWrap(True)
@@ -1317,7 +1476,7 @@ class AssetPage(BasePage):
 
         bottom = QHBoxLayout()
         tip = QLabel("按 ESC 关闭")
-        tip.setStyleSheet("color: #888; font-size: 11px;")
+        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
         open_btn = QPushButton("▶ 播放" if kind in ("video", "audio") else "📂 打开")
@@ -1338,7 +1497,7 @@ class AssetPage(BasePage):
         lbl = QLabel("🖼")
         lbl.setFixedSize(w, h)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+        lbl.setStyleSheet("background: palette(alternate-base); border-radius: 4px;")
         lbl.setToolTip(path)
 
         def load():
@@ -1367,80 +1526,79 @@ class AssetPage(BasePage):
     def _build_collected_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(10, 10, 10, 10)
-        v.setSpacing(6)
-        title = QLabel("📦 已获取资源")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        v.addWidget(title)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(10)
+        toolbar = _asset_toolbar(v)
 
-        bar = QHBoxLayout()
-        bar.addWidget(QLabel("平台:"))
+        # 过滤与操作分两行，在最小窗口下仍给文件夹与关键词留出空间。
+        filters = QHBoxLayout()
+        filters.setSpacing(8)
+        filters.addWidget(_asset_label("平台"))
         self.plat_sel = QComboBox()
         self.plat_sel.addItems(["全部"] + list(PLATFORM_CN.values()))
-        self.plat_sel.setFixedWidth(120)
+        self.plat_sel.setMinimumWidth(92)
+        self.plat_sel.setMaximumWidth(132)
         self.plat_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
-        bar.addWidget(self.plat_sel)
-        bar.addWidget(QLabel("文件夹:"))
+        filters.addWidget(self.plat_sel)
+        filters.addWidget(_asset_label("文件夹"))
         self.folder_sel = QComboBox()
         self.folder_sel.addItem("全部文件夹", "")
-        self.folder_sel.setFixedWidth(150)
+        self.folder_sel.setMinimumWidth(110)
+        self.folder_sel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.folder_sel.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.folder_sel.setMinimumContentsLength(7)
         self.folder_sel.setToolTip(
             "① 顶级：download/ 下的分类目录（公众号文章 / 淘宝商品 / 弹幕文件 / 歌曲文件 …）\n"
-            "   —— 选中后列表按「一次导出的产物」聚合成条目（文档数 + 图片数 + 总大小）\n"
-            "② 选「已获取数据」进入子级：按 平台/作者 目录（📁 抖音_媒体 / 封茗囧菌 …）\n"
-            "   筛条目，父目录包含其下所有层级；「⬅ 返回全部分类」回到顶级")
+            "   —— 选中后按一次导出的产物聚合（文档数 + 图片数 + 总大小）\n"
+            "② 已获取数据：按平台 / 作者目录筛选，父目录包含其下所有层级；\n"
+            "   选择「⬅ 返回全部分类」回到顶级")
         self.folder_sel.currentIndexChanged.connect(self._on_folder_changed)
-        bar.addWidget(self.folder_sel)
+        filters.addWidget(self.folder_sel, 1)
         self.search_entry = QLineEdit()
-        self.search_entry.setPlaceholderText("🔍 搜索标题/作者/ID...")
-        self.search_entry.setMinimumWidth(150)  # 可随窗口拉伸（原固定 200 不自适应）
-        # 防抖：停止输入 300ms 后才触发过滤，避免每敲一个字符就重扫
+        self.search_entry.setPlaceholderText("搜索标题、作者或 ID")
+        self.search_entry.setClearButtonEnabled(True)
+        self.search_entry.setMinimumWidth(130)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)
         self._search_timer.timeout.connect(self._apply_search)
         self.search_entry.textChanged.connect(self._on_search_key)
-        bar.addWidget(self.search_entry)
+        filters.addWidget(self.search_entry, 2)
+        toolbar.addLayout(filters)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.status_sel = QComboBox()
         self.status_sel.addItems(["全部状态", "未下载", "已下载", "下载不完整"])
         self.status_sel.setToolTip(
-            "未下载：本地无媒体文件且未标记「不可下载」的条目（纯文本等\n"
-            "不可下载条目不在此列，右键行可手动标记/解除）")
-        self.status_sel.setFixedWidth(110)
+            "未下载：本地无媒体文件且未标记不可下载；\n"
+            "纯文本等不可下载条目不在此列，可右键手动标记或解除")
+        self.status_sel.setMinimumWidth(106)
         self.status_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
-        bar.addWidget(self.status_sel)
+        actions.addWidget(self.status_sel)
         self.sort_sel = QComboBox()
         self.sort_sel.addItems(["时间倒序", "时间正序"])
-        self.sort_sel.setFixedWidth(90)
+        self.sort_sel.setMinimumWidth(100)
         self.sort_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
-        bar.addWidget(self.sort_sel)
-        refresh_btn = icon_button("🔄", "刷新已获取列表", (40, 30), True, "font-size: 15px;", self._refresh_collected)
-        bar.addWidget(refresh_btn)
-        # 批量操作：全选 + 线程数 + 下载所选
+        actions.addWidget(self.sort_sel)
+        actions.addWidget(_asset_action("刷新", self._refresh_collected, tip="刷新已获取列表"))
+        actions.addStretch(1)
         self.select_all_cb = QCheckBox("全选")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
-        bar.addWidget(self.select_all_cb)
-        bar.addWidget(QLabel("线程:"))
+        actions.addWidget(self.select_all_cb)
+        actions.addWidget(_asset_label("线程"))
         self.batch_thread_sel = QComboBox()
         self.batch_thread_sel.addItems(common.THREAD_OPTIONS)
         self.batch_thread_sel.setCurrentText(str(common.CURRENT_THREADS))
-        self.batch_thread_sel.setFixedWidth(70)
+        self.batch_thread_sel.setFixedWidth(64)
         self.batch_thread_sel.setToolTip("批量下载同时进行的条目数")
-        bar.addWidget(self.batch_thread_sel)
-        self.batch_dl_btn = QPushButton("📥 下载所选")
-        self.batch_dl_btn.setStyleSheet("background: #2e7d32; color: white;")
-        self.batch_dl_btn.clicked.connect(self._batch_download_checked)
-        bar.addWidget(self.batch_dl_btn)
-        # 搜索框伸展吃掉剩余空间：窗口越宽搜索框越长（原固定 200px 导致右侧大片空白）
-        bar.setStretchFactor(self.search_entry, 1)
-        v.addLayout(bar)
+        actions.addWidget(self.batch_thread_sel)
+        self.batch_dl_btn = _asset_action("下载所选", self._batch_download_checked, primary=True)
+        actions.addWidget(self.batch_dl_btn)
+        toolbar.addLayout(actions)
 
         self.collected_scroll, _, self.collected_layout = self._make_scroll()
-        # 禁横向滚动：行内文字自动换行自适应宽度，保证右侧下载/删除按钮不滑走
-        self.collected_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         v.addWidget(self.collected_scroll, 1)
-
-        # 首次扫描（后台，避免阻塞界面）
         QTimer.singleShot(0, self._refresh_collected)
         return f
 
@@ -2369,42 +2527,40 @@ class AssetPage(BasePage):
             lay.addWidget(self._make_skeleton_row())
         tip = QLabel("⏳ 正在读取目录文件..." if getattr(self, "_view_mode", "entries") == "files"
                      else "⏳ 正在扫描已获取数据...")
-        tip.setStyleSheet("color: gray;")
+        tip.setStyleSheet("color: palette(placeholder-text);")
         tip.setContentsMargins(8, 10, 8, 10)
         lay.addWidget(tip)
         lay.addStretch(1)
 
     def _make_skeleton_row(self) -> QWidget:
-        """骨架行：勾选框 + 灰缩略图 + 三行文字条 + 三个按钮位（固定高，防跳动）。"""
+        """与资源卡片等宽的轻量占位，不固定文本栏宽度。"""
         row = QFrame()
-        row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
-        row.setFixedHeight(72)
+        row.setObjectName("assetRow")
+        row.setFixedHeight(112)
         h = QHBoxLayout(row)
-        h.setContentsMargins(6, 4, 6, 4)
-        h.setSpacing(8)
+        h.setContentsMargins(12, 12, 12, 12)
+        h.setSpacing(12)
         cb = QCheckBox()
         cb.setEnabled(False)
         h.addWidget(cb)
         thumb = QLabel()
         thumb.setFixedSize(96, 64)
-        thumb.setStyleSheet("background: #e4e7ec; border-radius: 4px;")
+        thumb.setObjectName("assetThumbnail")
         h.addWidget(thumb)
         bars = QVBoxLayout()
-        bars.setSpacing(7)
-        bars.setContentsMargins(0, 6, 0, 6)
-        for w in (140, 220, 160):
+        bars.setSpacing(9)
+        for width in (260, 210, 160):
             bar = QLabel()
-            bar.setFixedSize(w, 10)
-            bar.setStyleSheet("background: #e4e7ec; border-radius: 5px;")
+            bar.setFixedHeight(9)
+            bar.setMaximumWidth(width)
+            bar.setMinimumWidth(20)
+            bar.setStyleSheet("background: palette(alternate-base); border-radius: 4px;")
             bars.addWidget(bar)
-        wrap = QWidget()
-        wrap.setLayout(bars)
-        h.addWidget(wrap, 1)
-        for _ in range(3):
-            btn = QLabel()
-            btn.setFixedSize(42, 32)
-            btn.setStyleSheet("background: #e4e7ec; border-radius: 4px;")
-            h.addWidget(btn)
+        h.addLayout(bars, 1)
+        action = QLabel()
+        action.setFixedSize(72, 30)
+        action.setStyleSheet("background: palette(alternate-base); border-radius: 7px;")
+        h.addWidget(action)
         return row
 
     def _current_view_items(self):
@@ -2430,7 +2586,7 @@ class AssetPage(BasePage):
                 tip = (f"（当前筛选无结果：共 {len(self._disk_items)} 条数据，"
                        f"可切回「全部」平台 / 全部文件夹）")
             lbl = QLabel(tip)
-            lbl.setStyleSheet("color: gray;")
+            lbl.setStyleSheet("color: palette(placeholder-text);")
             lbl.setContentsMargins(8, 10, 8, 10)
             lay.addWidget(lbl)
             lay.addStretch(1)
@@ -2451,7 +2607,7 @@ class AssetPage(BasePage):
             where = self._plain_dir
             where_disp = where if os.path.isabs(where) else f"download/{where}/"
             lbl = QLabel(f"（{where_disp} 里没有文件）")
-            lbl.setStyleSheet("color: gray;")
+            lbl.setStyleSheet("color: palette(placeholder-text);")
             lbl.setContentsMargins(8, 10, 8, 10)
             lay.addWidget(lbl)
             lay.addStretch(1)
@@ -2462,7 +2618,7 @@ class AssetPage(BasePage):
         start = (page - 1) * BATCH
         if getattr(self, "_dir_group_truncated", False):
             warn = QLabel("⚠️ 目录文件超过 20000 个，仅显示前 20000 个")
-            warn.setStyleSheet("color: #b26a00; padding: 2px 8px;")
+            warn.setStyleSheet("color: palette(link); padding: 2px 8px;")
             warn.setToolTip("先在文件管理器里清理/归档一部分文件，或缩小到子目录再看")
             lay.addWidget(warn)
         for i in range(start, min(start + BATCH, len(groups))):
@@ -2471,94 +2627,55 @@ class AssetPage(BasePage):
         lay.addStretch(1)
 
     def _make_group_row(self, g, index) -> QWidget:
-        """聚合条目行：代表缩略图 + 标题 + 文档/图片计数 + 总大小 + 打开/定位。
-
-        与已获取条目行同一套视觉语言（B站/抖音条目长什么样，这里就什么样），
-        单击打开产物目录，右键可打开目录 / 首个文件 / 复制路径。
-        """
+        """聚合条目：保留内容预览、打开目录、定位与右键操作。"""
         files = g.get("files") or []
         root_dir = g.get("root_dir") or ""
         row = _RowWidget(lambda g=g: self._show_group_detail(g),
                          lambda pos, g=g: self._group_menu(g, pos),
                          on_double=lambda g=g: self._open_group(g))
-        row.setCursor(Qt.PointingHandCursor)
-        row.setStyleSheet(
-            "_RowWidget { background: #ffffff; border-radius: 6px; }"
-            "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
-        h.setContentsMargins(6, 4, 6, 4)
-
+        h.setContentsMargins(12, 12, 12, 12)
+        h.setSpacing(12)
         thumb = _ThumbLabel(lambda: self._open_group(g))
         thumb.setFixedSize(96, 64)
         thumb.setAlignment(Qt.AlignCenter)
-        thumb.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+        thumb.setObjectName("assetThumbnail")
         thumb.setToolTip(f"双击打开（{len(files)} 个文件）")
         if g.get("cover"):
             self._fill_local_thumb(thumb, g["cover"], 96, 64)
         else:
-            icon = ("🎬" if g.get("n_vid") else
-                    "🎵" if g.get("n_aud") else "📄")
-            thumb.setText(icon)
-            thumb.setStyleSheet(
-                "background: #eef1f5; border-radius: 4px; font-size: 28px;")
+            thumb.setText("🎬" if g.get("n_vid") else "🎵" if g.get("n_aud") else "📄")
         h.addWidget(thumb)
-
-        def _esc(s):
-            return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
+        info = QVBoxLayout()
+        info.setSpacing(5)
         title = g.get("title") or "(未命名)"
         title_disp = title if len(title) <= 52 else title[:51] + "…"
-        counts = ""
-        if g.get("n_doc"):
-            counts += f" 📄{g['n_doc']}"
-        if g.get("n_img"):
-            counts += f" 🖼{g['n_img']}"
-        if g.get("n_vid"):
-            counts += f" 🎬{g['n_vid']}"
-        if g.get("n_aud"):
-            counts += f" 🎵{g['n_aud']}"
+        title_label = _asset_label(_wrappable(title_disp), "assetRowTitle", wrap=True)
+        title_label.setToolTip(f"{title}\n\n{root_dir}\n单击查看内容 · 双击缩略图打开目录")
+        info.addWidget(title_label)
+        counts = [f"{label} {g[key]}" for key, label in
+                  (("n_doc", "文档"), ("n_img", "图片"), ("n_vid", "视频"), ("n_aud", "音频")) if g.get(key)]
+        info.addWidget(_asset_label(f"#{index}  ·  " + "  ·  ".join(counts) +
+                                    f"  ·  {_fmt_size(g.get('size', 0))}", wrap=True))
         dirs = g.get("dirs") or []
-        dir_str = ""
+        directory = ""
         if dirs and dirs[0]:
-            d0 = dirs[0] if len(dirs[0]) <= 40 else "…" + dirs[0][-39:]
-            extra = f" +{len(dirs) - 1}" if len(dirs) > 1 else ""
-            dir_str = f'  📁 <span style="color:#6b7280;">{_esc(d0)}{extra}</span>'
-        text = (f"[{index}] <b>{_esc(title_disp)}</b>"
-                f'<span style="color:#2e7d32;">{counts}</span><br>'
-                f"{_fmt_size(g.get('size', 0))}  ·  {g.get('mtime') or '-'}<br>"
-                f"📅 {g.get('date') or '-'}{dir_str}")
-        txt = QLabel(text)
-        txt.setTextFormat(Qt.RichText)
-        txt.setStyleSheet("font-size: 11px;")
-        txt.setWordWrap(True)
-        txt.setToolTip(f"{title}\n\n共 {len(files)} 个文件 · {_fmt_size(g.get('size', 0))}"
-                       f"\n{root_dir}\n\n单击查看内容 · 双击缩略图打开目录")
-        h.addWidget(txt, 1)
-
-        detail_btn = QPushButton("📄")
-        detail_btn.setFixedSize(42, 32)
-        detail_btn.setToolTip("查看内容（二级弹窗）")
-        detail_btn.setStyleSheet(common.icon_btn_style(
-            False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
-        detail_btn.clicked.connect(lambda _=False, g=g: self._show_group_detail(g))
-        h.addWidget(detail_btn)
-
-        open_btn = QPushButton("📂")
-        open_btn.setFixedSize(42, 32)
-        open_btn.setToolTip("打开该目录")
-        open_btn.setStyleSheet(common.icon_btn_style(
-            False, "background: transparent; border: 1px solid #c8cdd6; color: #374151;"))
-        open_btn.clicked.connect(lambda _=False, g=g: self._open_group(g))
-        h.addWidget(open_btn)
-
-        rev_btn = QPushButton("📁")
-        rev_btn.setFixedSize(42, 32)
-        rev_btn.setToolTip("在资源管理器中显示")
+            directory = dirs[0] if len(dirs[0]) <= 40 else "…" + dirs[0][-39:]
+            if len(dirs) > 1:
+                directory += f" +{len(dirs) - 1}"
+        info.addWidget(_asset_label(_wrappable(
+            f"日期 {g.get('date') or '-'}  ·  更新 {g.get('mtime') or '-'}"), wrap=True))
+        if directory:
+            info.addWidget(_asset_label(_wrappable(directory), wrap=True))
+        h.addLayout(info, 1)
+        actions = QVBoxLayout()
+        actions.setSpacing(5)
+        actions.addWidget(_asset_action("查看内容", lambda _=False, g=g: self._show_group_detail(g)))
+        actions.addWidget(_asset_action("打开目录", lambda _=False, g=g: self._open_group(g)))
         first = files[0]["path"] if files else root_dir
-        rev_btn.setStyleSheet(common.icon_btn_style(
-            True, "background: transparent; border: 1px solid #c8cdd6; color: white;"))
-        rev_btn.clicked.connect(lambda _=False, p=first: self._reveal_media(p))
-        h.addWidget(rev_btn)
+        actions.addWidget(_asset_action("定位文件", lambda _=False, p=first: self._reveal_media(p),
+                                        tip="在资源管理器中显示"))
+        h.addLayout(actions)
         return row
 
     def _open_group(self, g):
@@ -2749,10 +2866,10 @@ class AssetPage(BasePage):
             f"📅 {g.get('date') or '-'} · {_fmt_size(g.get('size', 0))}"
             f" · {len(articles)} 篇 / {len(files)} 个文件"
             f" · 📄{g.get('n_doc', 0)} 🖼{g.get('n_img', 0)} 🎬{g.get('n_vid', 0)}")
-        meta.setStyleSheet("color: #6b7280; font-size: 12px;")
+        meta.setStyleSheet("color: palette(placeholder-text); font-size: 12px;")
         outer.addWidget(meta)
         root_lbl = QLabel(_wrappable(g.get("root_dir") or ""))
-        root_lbl.setStyleSheet("color: #9aa1ad; font-size: 11px;")
+        root_lbl.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         root_lbl.setWordWrap(True)
         outer.addWidget(root_lbl)
 
@@ -2773,8 +2890,8 @@ class AssetPage(BasePage):
         content = _ContentBrowser()
         content.setOpenExternalLinks(True)
         content.setStyleSheet(
-            "QTextBrowser { background: #ffffff; border: 1px solid #e5e7eb;"
-            " color: #222; }")
+            "QTextBrowser { background: palette(base); border: 1px solid palette(shadow);"
+            " color: palette(text); }")
         content.document().setDefaultStyleSheet(
             "body { font-family:'Microsoft YaHei'; font-size:15px; color:#333; }"
             "blockquote { color:#666; } code { background:#f3f4f6; }")
@@ -2793,7 +2910,7 @@ class AssetPage(BasePage):
                     cell.setFixedSize(128, 128)
                     cell.setAlignment(Qt.AlignCenter)
                     cell.setStyleSheet(
-                        "background: #eef1f5; border-radius: 4px; font-size: 36px;")
+                        "background: palette(alternate-base); border-radius: 4px; font-size: 36px;")
                     cell.setToolTip(mf["path"])
                 else:
                     cell = self._load_local_thumb_cell(
@@ -2801,7 +2918,7 @@ class AssetPage(BasePage):
                 flow.addWidget(cell)
             if len(media_files) > 150:
                 more_lbl = QLabel(f"… 其余 {len(media_files) - 150} 个见「文件」页")
-                more_lbl.setStyleSheet("color: #888; padding: 8px;")
+                more_lbl.setStyleSheet("color: palette(placeholder-text); padding: 8px;")
                 flow.addWidget(more_lbl)
             mscroll.setWidget(mbody)
             tabs.addTab(mscroll, f"🖼 媒体（{len(media_files)}）")
@@ -2833,7 +2950,7 @@ class AssetPage(BasePage):
 
         bottom = QHBoxLayout()
         tip = QLabel("单击左侧文章切换内容 · 按 ESC 关闭")
-        tip.setStyleSheet("color: #888; font-size: 11px;")
+        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
         root_dir = g.get("root_dir") or ""
@@ -2911,19 +3028,19 @@ class AssetPage(BasePage):
             b.setToolTip(tip)
             b.setEnabled(1 <= target <= total_pages and target != page)
             b.setStyleSheet(
-                "QPushButton { background: transparent; border: 1px solid #c8cdd6;"
-                " color: #374151; }"
-                "QPushButton:disabled { color: #c3c8d0; border-color: #e5e8ee; }")
+                "QPushButton { background: transparent; border: 1px solid palette(mid);"
+                " color: palette(window-text); }"
+                "QPushButton:disabled { color: palette(placeholder-text); border-color: palette(shadow); }")
             b.clicked.connect(lambda _=False, t=target: self._goto_collected_page(t))
             return b
 
-        h.addWidget(nav_btn("⏮", "第一页", 1))
-        h.addWidget(nav_btn("◀", "上一页", page - 1))
+        h.addWidget(nav_btn("«", "第一页", 1))
+        h.addWidget(nav_btn("‹", "上一页", page - 1))
         info = QLabel(f"第 {page} / {total_pages} 页 · 共 {total} 条")
-        info.setStyleSheet("color: #6b7280;")
+        info.setStyleSheet("color: palette(placeholder-text);")
         h.addWidget(info)
-        h.addWidget(nav_btn("▶", "下一页", page + 1))
-        h.addWidget(nav_btn("⏭", "最后一页", total_pages))
+        h.addWidget(nav_btn("›", "下一页", page + 1))
+        h.addWidget(nav_btn("»", "最后一页", total_pages))
         h.addSpacing(8)
         h.addWidget(QLabel("跳至"))
         spin = QSpinBox()
@@ -2948,29 +3065,23 @@ class AssetPage(BasePage):
         self.collected_layout.addWidget(self._make_collected_row(it, index))
 
     def _make_collected_row(self, it, index) -> "QWidget":
-        """构建一行控件（不加入布局；行级刷新原地替换用）。"""
+        """构建资源卡片；行级刷新仍只替换这一行，主题更新不触发加载。"""
         row = _RowWidget(lambda it=it: self._show_detail(it),
                          lambda pos, it=it: self._row_context_menu(it, pos))
-        row.setStyleSheet(
-            "_RowWidget { background: #ffffff; border-radius: 6px; }"
-            "QLabel { background: transparent; }")
         h = QHBoxLayout(row)
-        h.setContentsMargins(6, 4, 6, 4)
-        # 批量勾选框（记住勾选状态，重渲染后恢复）
+        h.setContentsMargins(12, 12, 12, 12)
+        h.setSpacing(12)
         key = self._dl_key(it)
         cb = QCheckBox()
-        if key in self._checked_keys:
-            cb.setChecked(True)
+        cb.setChecked(key in self._checked_keys)
         cb.stateChanged.connect(
             lambda st, k=key: (self._checked_keys.add(k) if st else self._checked_keys.discard(k)))
         cb.setToolTip("勾选后可批量下载")
         h.addWidget(cb)
-        # 缩略图：优先本地媒体图，其次网络封面（放大到 96×64，原 72×50 太小看不清）
-        # 双击缩略图播放本地视频（无本地视频则打开链接）
         thumb = _ThumbLabel(lambda it=it: self._open_media_video(it))
         thumb.setFixedSize(96, 64)
         thumb.setAlignment(Qt.AlignCenter)
-        thumb.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+        thumb.setObjectName("assetThumbnail")
         thumb.setToolTip("双击播放视频")
         local_img = next((m["path"] for m in it.get("media_files", []) if m["type"] == "image"), None)
         if local_img:
@@ -2979,97 +3090,64 @@ class AssetPage(BasePage):
             self._fill_net_thumb(thumb, it["cover_url"], 96, 64)
         else:
             thumb.setText("🎬")
-            thumb.setStyleSheet("background: #eef1f5; border-radius: 4px; font-size: 28px;")
         h.addWidget(thumb)
-        # 文本（中间 expand）
-        plat_cn = platform_cn(it["platform"])
-        # 显示层截断 + 自动换行：长标题/长文件名会把行的最小宽度撑爆，
-        # 导致必须横向滚动才能看到右侧的下载/删除按钮（完整内容在 tooltip）
+
+        info = QVBoxLayout()
+        info.setSpacing(5)
         full_title = it["title"] or "-"
         title = full_title[:60] + ("…" if len(full_title) > 60 else "")
-        fname = os.path.basename(it["file_path"])
-        fname = fname[:44] + ("…" if len(fname) > 44 else "")
-        date_str = it["date_part"] if it["date_part"] else ""
-        # B站条目带类型彩色标签（蓝=视频 橙=动态，与已获取页一致）；其他平台原样
+        title_label = _asset_label(_wrappable(title), "assetRowTitle", wrap=True)
+        src_dir = (it.get("src_dir") or "").strip()
+        title_label.setToolTip(f"{full_title}\n\n📁 {src_dir or '(根目录)'}\n📄 {os.path.basename(it['file_path'])}")
+        info.addWidget(title_label)
+        plat = platform_cn(it["platform"])
         if it["platform"] == "bilibili" and "is_dynamic" in it:
-            if it["is_dynamic"]:
-                plat_tag = '<span style="color:#e65100; font-weight:bold;">[B站·动态]</span> '
-            else:
-                plat_tag = '<span style="color:#1976d2; font-weight:bold;">[B站·视频]</span> '
-        else:
-            plat_tag = f"[{plat_cn}] "
-        imgs = sum(1 for m in it.get("media_files", []) if m["type"] == "image")
-        vids = sum(1 for m in it.get("media_files", []) if m["type"] == "video")
-        media_str = ""
-        if imgs:
-            media_str += f" 🖼{imgs}"
-        if vids:
-            media_str += f" 🎬{vids}"
-        no_dl = self._no_dl_flagged(key)
-        if no_dl:
-            media_str += (' <span style="color:#e53935;">⛔不可下载'
-                          '（右键解除）</span>')
-
-        def _esc(s):
-            return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-        # 行格式：{序号}{类别}{标题}{发布者}——发布者放首行一眼可见，
-        # 次行只留数据统计（作者不再重复）
+            plat += " · 动态" if it["is_dynamic"] else " · 视频"
         author = (it.get("author") or "").strip() or "-"
         author_disp = author[:20] + ("…" if len(author) > 20 else "")
-        # 来源文件夹（相对 已获取数据/）：一眼看出条目属于哪个平台目录/作者目录，
-        # 与「文件夹」下拉的筛选项对得上（旧平铺数据在根目录下则为空，不显示）
-        src_dir = (it.get("src_dir") or "").strip()
-        # 只显示尾部（深层目录最右侧才是有效信息），全量留在 tooltip
-        src_short = src_dir if len(src_dir) <= 26 else "…" + src_dir[-25:]
-        dir_str = (f'  📁 <span style="color:#6b7280;">{_esc(src_short)}</span>'
-                   if src_short else "")
-        text = (f"[{index}] {plat_tag}{_esc(title)} "
-                f'<span style="color:#555;">@{_esc(author_disp)}</span>{media_str}<br>'
-                f"播放{_fmt(it['play_count'])}  赞{_fmt(it['like_count'])}<br>"
-                f"📅 {date_str}{dir_str}  📄 {_esc(fname)}")
-        txt = QLabel(text)
-        txt.setTextFormat(Qt.RichText)
-        txt.setStyleSheet("font-size: 11px;")
-        txt.setWordWrap(True)
-        txt.setToolTip(f"{full_title}\n\n📁 {src_dir or '(根目录)'}\n"
-                       f"📄 {os.path.basename(it['file_path'])}")
-        h.addWidget(txt, 1)
-        # 右侧按钮：重新下载 / 下载封面（有封面无媒体时）/ 删除（42×32，原 32×28 不好点）
-        redo_btn = QPushButton("↻")
-        redo_btn.setFixedSize(42, 32)
+        info.addWidget(_asset_label(f"#{index}  ·  {plat}  ·  @{author_disp}", wrap=True))
+        imgs = sum(1 for media in it.get("media_files", []) if media["type"] == "image")
+        vids = sum(1 for media in it.get("media_files", []) if media["type"] == "video")
+        media_parts = []
+        if imgs:
+            media_parts.append(f"图片 {imgs}")
+        if vids:
+            media_parts.append(f"视频 {vids}")
+        media_text = "  ·  " + " / ".join(media_parts) if media_parts else ""
+        info.addWidget(_asset_label(f"播放 {_fmt(it['play_count'])}  ·  获赞 {_fmt(it['like_count'])}{media_text}", wrap=True))
+        fname = os.path.basename(it["file_path"])
+        fname = fname[:44] + ("…" if len(fname) > 44 else "")
+        date = it["date_part"] if it["date_part"] else "-"
+        source = src_dir if len(src_dir) <= 26 else "…" + src_dir[-25:]
+        location = f"日期 {date}  ·  {source + ' / ' if source else ''}{fname}"
+        info.addWidget(_asset_label(_wrappable(location), wrap=True))
+        no_dl = self._no_dl_flagged(key)
+        if no_dl:
+            flag = _asset_label("不可下载 · 右键可解除", wrap=True)
+            flag.setProperty("assetTone", "danger")
+            info.addWidget(flag)
+        h.addLayout(info, 1)
+
+        actions = QVBoxLayout()
+        actions.setSpacing(6)
+        redo_btn = _asset_action("重新下载", lambda _=False, e=it: self._download_for_item(e, force=True),
+                                 tip="重新下载（忽略已下载状态）")
         if no_dl:
             redo_btn.setEnabled(False)
             redo_btn.setToolTip("已标记不可下载（纯文本无媒体），右键行可解除限制")
-        else:
-            redo_btn.setToolTip("重新下载（忽略已下载状态）")
-        redo_btn.setStyleSheet(common.icon_btn_style(
-            False, "background: transparent; border: 1px solid #c8cdd6; color: #2e7d32; font-size: 15px;"))
-        redo_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e, force=True))
-        h.addWidget(redo_btn)
+        actions.addWidget(redo_btn)
         if it.get("cover_url") and not it.get("media_files") and not no_dl:
-            dl_btn = QPushButton("📥")
-            dl_btn.setFixedSize(42, 32)
-            # tooltip 与 _download_for_item 路由一致：视频条目实际下的是视频+封面
-            plat0 = it.get("platform", "")
-            vid0 = str(it.get("video_id") or "")
+            plat0, vid0 = it.get("platform", ""), str(it.get("video_id") or "")
             if plat0 == "bilibili":
                 is_vid = (self._bili_dynamic_type(it) == "av"
                           or (bool(vid0) and not vid0.startswith("dyn_")))
             else:
                 is_vid = plat0 == "douyin" or self._item_has_video(it)
-            dl_btn.setToolTip("下载视频" if is_vid else "下载封面")
-            dl_btn.setStyleSheet(common.icon_btn_style(
-                True, "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;"))
-            dl_btn.clicked.connect(lambda _=False, e=it: self._download_for_item(e))
-            h.addWidget(dl_btn)
-        del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(42, 32)
-        del_btn.setToolTip("删除该条目")
-        del_btn.setStyleSheet(common.icon_btn_style(
-            True, "background: transparent; border: 1px solid #c8cdd6; color: white; font-size: 15px;"))
-        del_btn.clicked.connect(lambda _=False, e=it: self._delete_item(e))
-        h.addWidget(del_btn)
+            actions.addWidget(_asset_action("下载视频" if is_vid else "下载封面",
+                                            lambda _=False, e=it: self._download_for_item(e)))
+        actions.addWidget(_asset_action("删除", lambda _=False, e=it: self._delete_item(e),
+                                        danger=True, tip="选择要删除的关联文件"))
+        h.addLayout(actions)
         return row
 
     def _row_context_menu(self, it, global_pos):
@@ -3993,20 +4071,22 @@ class AssetPage(BasePage):
         v.setSpacing(10)
         v.addWidget(QLabel(f"「{(it.get('title') or '')[:40]}」关联文件："))
 
-        def _mk_row(emoji, label, files, color):
+        def _mk_row(emoji, label, files):
             cb = QCheckBox(f"{emoji} {label}（{len(files)} 个）")
-            cb.setStyleSheet(f"color: {color}; font-weight: bold;")
+            cb.setProperty("assetTone", "accent")
+            cb.setStyleSheet("font-weight: bold;")
             cb.setEnabled(bool(files))
             if not files:
-                cb.setStyleSheet("color: #999;")
+                cb.setStyleSheet("color: palette(placeholder-text);")
             v.addWidget(cb)
             return cb, files
 
-        cb_img, _ = _mk_row("🖼", "图片文件", img_files, "#1976d2")
-        cb_vid, _ = _mk_row("🎬", "视频文件", vid_files, "#6a1b9a")
-        cb_doc, _ = _mk_row("📄", "文本文件（json/md/xlsx/raw/评论）", doc_files, "#e65100")
+        cb_img, _ = _mk_row("🖼", "图片文件", img_files)
+        cb_vid, _ = _mk_row("🎬", "视频文件", vid_files)
+        cb_doc, _ = _mk_row("📄", "文本文件（json/md/xlsx/raw/评论）", doc_files)
         cb_all = QCheckBox("🗑 全部删除（含文本，条目将消失）")
-        cb_all.setStyleSheet("color: #c62828; font-weight: bold;")
+        cb_all.setProperty("assetTone", "danger")
+        cb_all.setStyleSheet("font-weight: bold;")
         v.addWidget(cb_all)
 
         def _sync_all(checked):
@@ -4018,14 +4098,15 @@ class AssetPage(BasePage):
 
         cb_all.stateChanged.connect(_sync_all)
         hint = QLabel("勾选要删除的文件类别，未勾选的保留")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
 
         # 独立媒体条目（无 json 数据文件）实时警告：这种条目本身就是那几个
         # 媒体文件，勾选删光全部媒体 = 条目从列表消失，必须在点确定前看见
         vanish_lbl = QLabel("")
         vanish_lbl.setWordWrap(True)
-        vanish_lbl.setStyleSheet("color: #c62828; font-size: 11px; font-weight: bold;")
+        vanish_lbl.setProperty("assetTone", "danger")
+        vanish_lbl.setStyleSheet("font-size: 11px; font-weight: bold;")
         v.addWidget(vanish_lbl)
 
         def _sync_vanish(*_):
@@ -4051,7 +4132,7 @@ class AssetPage(BasePage):
         cancel.clicked.connect(win.reject)
         ok = QPushButton("删除")
         ok.setFixedWidth(72)
-        ok.setStyleSheet("background: #c62828; color: white; font-weight: bold;")
+        ok.setProperty("variant", "danger")
         ok.clicked.connect(win.accept)
         btns.addWidget(cancel)
         btns.addWidget(ok)
@@ -4399,64 +4480,61 @@ class AssetPage(BasePage):
     def _build_db_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(10, 10, 10, 10)
-        v.setSpacing(6)
-        title = QLabel("🗄 数据库浏览")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        v.addWidget(title)
-
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(10)
+        toolbar = _asset_toolbar(v)
         bar = QHBoxLayout()
-        bar.addWidget(QLabel("平台表:"))
+        bar.setSpacing(8)
+        bar.addWidget(_asset_label("平台表"))
         self.db_plat_sel = QComboBox()
-        self.db_plat_sel.setFixedWidth(150)
+        self.db_plat_sel.setMinimumWidth(102)
+        self.db_plat_sel.setMaximumWidth(146)
         self.db_plat_sel.currentIndexChanged.connect(lambda _: self._db_on_platform_changed())
         bar.addWidget(self.db_plat_sel)
-        bar.addWidget(QLabel("作者:"))
+        bar.addWidget(_asset_label("作者"))
         self.db_author_sel = QComboBox()
-        self.db_author_sel.setFixedWidth(170)
+        self.db_author_sel.setMinimumWidth(105)
+        self.db_author_sel.setMaximumWidth(165)
+        self.db_author_sel.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.db_author_sel.setMinimumContentsLength(7)
         self.db_author_sel.currentIndexChanged.connect(lambda _: self._db_reload())
-        bar.addWidget(self.db_author_sel)
+        bar.addWidget(self.db_author_sel, 1)
         self.db_search = QLineEdit()
-        self.db_search.setPlaceholderText("🔍 搜索标题/作者/正文/ID...")
-        # 防抖 300ms（与已获取页同款）
+        self.db_search.setMinimumWidth(100)
+        self.db_search.setPlaceholderText("搜索标题、作者、正文或 ID")
+        self.db_search.setClearButtonEnabled(True)
         self._db_search_timer = QTimer(self)
         self._db_search_timer.setSingleShot(True)
         self._db_search_timer.setInterval(300)
         self._db_search_timer.timeout.connect(self._db_reload)
         self.db_search.textChanged.connect(self._db_search_timer.start)
-        bar.addWidget(self.db_search, 1)
-        refresh_btn = icon_button("🔄", "刷新数据库表", (40, 30), True, "font-size: 15px;", self._db_reload_tables)
-        bar.addWidget(refresh_btn)
-        v.addLayout(bar)
+        bar.addWidget(self.db_search, 2)
+        bar.addWidget(_asset_action("刷新", self._db_reload_tables, tip="刷新数据库表"))
+        toolbar.addLayout(bar)
 
-        # 勾选工具行（购物/票务页同款）：全选/反选/清除 + 导出/删除选中 + 已勾选计数
         selbar = QHBoxLayout()
-        self.db_sel_all_btn = QPushButton("☑ 全选")
-        self.db_sel_all_btn.clicked.connect(lambda: self._db_set_all_checks(True))
-        self.db_sel_inv_btn = QPushButton("☯ 反选")
-        self.db_sel_inv_btn.clicked.connect(self._db_invert_checks)
-        self.db_sel_clr_btn = QPushButton("✖ 清除")
-        self.db_sel_clr_btn.clicked.connect(lambda: self._db_set_all_checks(False))
-        self.db_detail_btn = QPushButton("📄 查看详情")
-        self.db_detail_btn.clicked.connect(self._db_show_selected_detail)
-        self.db_exp_btn = QPushButton("📤 导出选中")
-        self.db_exp_btn.clicked.connect(self._db_export_checked)
-        self.db_del_btn = QPushButton("🗑 删除选中")
-        self.db_del_btn.clicked.connect(self._db_delete_checked)
-        self.db_del_btn.setStyleSheet(
-            "QPushButton { color: #c62828; }")
-        self.db_check_lbl = QLabel("已勾选 0 条")
-        self.db_check_lbl.setStyleSheet("color: #888;")
+        selbar.setSpacing(6)
+        self.db_sel_all_btn = _asset_action("全选", lambda: self._db_set_all_checks(True))
+        self.db_sel_inv_btn = _asset_action("反选", self._db_invert_checks)
+        self.db_sel_clr_btn = _asset_action("清除", lambda: self._db_set_all_checks(False))
+        self.db_detail_btn = _asset_action("查看详情", self._db_show_selected_detail)
+        self.db_exp_btn = _asset_action("导出所选", self._db_export_checked)
+        self.db_del_btn = _asset_action("删除所选", self._db_delete_checked, danger=True)
+        self.db_check_lbl = _asset_label("已勾选 0 条")
         for w in (self.db_sel_all_btn, self.db_sel_inv_btn, self.db_sel_clr_btn,
                   self.db_detail_btn, self.db_exp_btn, self.db_del_btn):
             selbar.addWidget(w)
         selbar.addStretch(1)
         selbar.addWidget(self.db_check_lbl)
-        v.addLayout(selbar)
+        toolbar.addLayout(selbar)
 
         self.db_table = QTableWidget(0, len(self._DB_HEADERS))
+        self.db_table.setObjectName("assetTable")
         self.db_table.setHorizontalHeaderLabels(self._DB_HEADERS)
         self.db_table.verticalHeader().setVisible(False)
+        self.db_table.verticalHeader().setDefaultSectionSize(38)
+        self.db_table.setAlternatingRowColors(True)
+        self.db_table.setShowGrid(False)
         self.db_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.db_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.db_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -4466,23 +4544,19 @@ class AssetPage(BasePage):
         self.db_table.cellClicked.connect(self._db_on_cell_clicked)
         self.db_table.itemChanged.connect(self._on_db_item_changed)
         hdr = self.db_table.horizontalHeader()
-        hdr.setSectionResizeMode(3, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.Interactive)
+        self.db_table.setColumnWidth(3, 240)
+        hdr.setMinimumSectionSize(34)
         self.db_table.setColumnWidth(0, 34)
-        for col, w in ((1, 130), (2, 56), (4, 110), (5, 130), (6, 80), (7, 56), (8, 56)):
-            self.db_table.setColumnWidth(col, w)
+        for col, width in ((1, 130), (2, 56), (4, 110), (5, 130), (6, 80), (7, 56), (8, 56)):
+            self.db_table.setColumnWidth(col, width)
         v.addWidget(self.db_table, 1)
-
         pager = QHBoxLayout()
-        prev_btn = QPushButton("◀ 上一页")
-        prev_btn.clicked.connect(lambda: self._db_turn(-1))
-        next_btn = QPushButton("下一页 ▶")
-        next_btn.clicked.connect(lambda: self._db_turn(1))
-        self.db_page_lbl = QLabel("0 条")
-        self.db_page_lbl.setStyleSheet("color: #888;")
-        pager.addWidget(prev_btn)
-        pager.addWidget(next_btn)
-        pager.addStretch(1)
-        pager.addWidget(self.db_page_lbl)
+        pager.setSpacing(8)
+        pager.addWidget(_asset_action("上一页", lambda: self._db_turn(-1)))
+        pager.addWidget(_asset_action("下一页", lambda: self._db_turn(1)))
+        self.db_page_lbl = _asset_label("0 条", wrap=True)
+        pager.addWidget(self.db_page_lbl, 1)
         v.addLayout(pager)
         return f
 
@@ -4568,7 +4642,7 @@ class AssetPage(BasePage):
                         item.setToolTip(str(row[15] or "")[:400])
                     elif c == 3:  # 作者列：点击即筛选
                         item.setToolTip("点击按该作者筛选")
-                        item.setForeground(QBrush(QColor("#1565C0")))
+                        item.setForeground(QBrush(QColor(theme.color("link"))))
                         item.setData(Qt.UserRole, "author")
                     self.db_table.setItem(r, c + 1, item)
             self._db_filling = False
@@ -4848,7 +4922,7 @@ class AssetPage(BasePage):
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
             kl.setFixedWidth(84)
-            kl.setStyleSheet("color: #6b7280; font-size: 12px;")
+            kl.setStyleSheet("color: palette(placeholder-text); font-size: 12px;")
             row_f.addWidget(kl)
             wl = QLabel(_wrappable(str(val)))
             wl.setWordWrap(True)
@@ -4863,14 +4937,14 @@ class AssetPage(BasePage):
 
         desc = row[15] or ""
         dh = QLabel("正文")
-        dh.setStyleSheet("color: #6b7280; font-weight: bold;")
+        dh.setStyleSheet("color: palette(placeholder-text); font-weight: bold;")
         v.addWidget(dh)
         desc_view = _ContentBrowser()
         desc_view.setFixedHeight(260)
         desc_view.setOpenExternalLinks(True)
         desc_view.setStyleSheet(
-            "QTextBrowser { background: #ffffff; border: 1px solid #e5e7eb;"
-            " color: #222; }")
+            "QTextBrowser { background: palette(base); border: 1px solid palette(shadow);"
+            " color: palette(text); }")
         if desc:
             desc_view.setHtml(
                 "<div style='font-size:13px; line-height:1.7; color:#333;'>"
@@ -4882,7 +4956,7 @@ class AssetPage(BasePage):
 
         bottom = QHBoxLayout()
         tip = QLabel("按 ESC 关闭")
-        tip.setStyleSheet("color: #888; font-size: 11px;")
+        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
         open_btn = QPushButton("🌐 打开链接")
@@ -5022,7 +5096,7 @@ class AssetPage(BasePage):
             row_f = QHBoxLayout()
             kl = QLabel(f"{k}:")
             kl.setFixedWidth(84)
-            kl.setStyleSheet("color: #6b7280; font-size: 12px;")
+            kl.setStyleSheet("color: palette(placeholder-text); font-size: 12px;")
             row_f.addWidget(kl)
             wl = QLabel(_wrappable(str(val)))
             wl.setWordWrap(True)
@@ -5054,7 +5128,7 @@ class AssetPage(BasePage):
         desc = item.get("description") or ""
         if desc:
             dh = QLabel("正文")
-            dh.setStyleSheet("color: #6b7280; font-weight: bold;")
+            dh.setStyleSheet("color: palette(placeholder-text); font-weight: bold;")
             v.addWidget(dh)
             dl = QLabel(desc)
             dl.setWordWrap(True)
@@ -5074,7 +5148,7 @@ class AssetPage(BasePage):
             imgs = [m for m in mfs if m["type"] == "image"]
             vids = [m for m in mfs if m["type"] == "video"]
             mh = QLabel(f"🖼 媒体文件（{len(imgs)} 图 / {len(vids)} 视频）")
-            mh.setStyleSheet("color: #6b7280; font-weight: bold;")
+            mh.setStyleSheet("color: palette(placeholder-text); font-weight: bold;")
             v.addWidget(mh)
             if imgs or vids:
                 # 流式布局：缩略图按窗口宽度自动换行（窄窗多行，不出横向滚动条）
@@ -5092,11 +5166,11 @@ class AssetPage(BasePage):
         # 底部操作栏
         bottom = QHBoxLayout()
         tip = QLabel("按 ESC 退出（拖动窗口边缘可调整大小）")
-        tip.setStyleSheet("color: #888; font-size: 11px;")
+        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
         exp_btn = QPushButton("📷 导出预览图")
-        exp_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px;")
+        exp_btn.setProperty("variant", "primary")
         exp_btn.clicked.connect(lambda: self._export_preview_image(item))
         bottom.addWidget(exp_btn)
         outer.addLayout(bottom)
@@ -5133,7 +5207,7 @@ class AssetPage(BasePage):
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setFixedSize(320, 200)
         lbl.setStyleSheet(
-            "background: #eef1f5; border-radius: 6px; color: #9aa1ad;")
+            "background: palette(alternate-base); border-radius: 6px; color: palette(placeholder-text);")
         v.addWidget(lbl)
 
         def load():
@@ -5226,7 +5300,7 @@ class AssetPage(BasePage):
             lbl.setText("🖼")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #eef1f5; border-radius: 4px;")
+        lbl.setStyleSheet("background: palette(alternate-base); border-radius: 4px;")
         lbl.setToolTip(path)
 
         # 右键缩略图 → 复制文件（可粘贴到文件夹/聊天软件）/ 打开媒体位置
