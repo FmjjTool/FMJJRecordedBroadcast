@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -79,7 +80,7 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def init_db(db_path: Path) -> None:
     """建表；早期库缺列（readers）时自动补列，老库数据不丢。"""
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         conn.execute(DAILY_SCHEMA)
         conn.execute(SNAPSHOT_SCHEMA)
         conn.executescript(BROWSER_SCHEMA)
@@ -93,7 +94,7 @@ def init_db(db_path: Path) -> None:
 
 def add_snapshot(db_path: Path, doc_key: str, ts: str, views, members,
                  readers, ok: bool, message: str = "") -> None:
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         conn.execute(
             "INSERT INTO snapshots (doc_key, ts, views, members, readers, ok, message)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -102,7 +103,7 @@ def add_snapshot(db_path: Path, doc_key: str, ts: str, views, members,
 
 
 def previous_entry(db_path: Path, doc_key: str) -> sqlite3.Row | None:
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         return conn.execute(
             "SELECT * FROM daily WHERE doc_key = ? ORDER BY ts DESC, id DESC LIMIT 1", (doc_key,)
         ).fetchone()
@@ -116,7 +117,7 @@ def append_daily(db_path: Path, doc_key: str, ts: str, day: str,
                    if (prev and views is not None and prev["views"] is not None) else None)
     members_delta = (members - prev["members"]
                      if (prev and members is not None and prev["members"] is not None) else None)
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         conn.execute(
             "INSERT INTO daily (doc_key, ts, date, views, members, readers,"
             " views_delta, members_delta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -131,7 +132,7 @@ def save_browsers(db_path: Path, doc_key: str, rows: list[dict], ts: str) -> dic
     昵称 / 头像 / 来源每次覆盖为最新值，first_seen 保留首次采集时间。
     """
     added = updated = 0
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         for row in rows:
             uid = str(row.get("uid") or "")
             if not uid:
@@ -162,7 +163,7 @@ def save_browsers(db_path: Path, doc_key: str, rows: list[dict], ts: str) -> dic
 
 def refresh_deltas(db_path: Path, doc_key: str) -> None:
     """按采集顺序补算增量（历史数据被修正 / 导入后保持一致）。"""
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         rows = conn.execute(
             "SELECT id, views, members FROM daily WHERE doc_key = ?"
             " ORDER BY ts, id", (doc_key,)
@@ -187,14 +188,14 @@ def refresh_deltas(db_path: Path, doc_key: str) -> None:
 # ==================== 读取 ====================
 
 def all_daily(db_path: Path, doc_key: str) -> list[sqlite3.Row]:
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         return conn.execute(
             "SELECT * FROM daily WHERE doc_key = ? ORDER BY ts, id", (doc_key,)
         ).fetchall()
 
 
 def all_snapshots(db_path: Path, doc_key: str, limit: int = 5000) -> list[sqlite3.Row]:
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         rows = conn.execute(
             "SELECT * FROM snapshots WHERE doc_key = ? ORDER BY id DESC LIMIT ?",
             (doc_key, limit),
@@ -203,7 +204,7 @@ def all_snapshots(db_path: Path, doc_key: str, limit: int = 5000) -> list[sqlite
 
 
 def latest(db_path: Path, doc_key: str) -> sqlite3.Row | None:
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         return conn.execute(
             "SELECT * FROM daily WHERE doc_key = ? ORDER BY ts DESC, id DESC LIMIT 1", (doc_key,)
         ).fetchone()
@@ -211,7 +212,7 @@ def latest(db_path: Path, doc_key: str) -> sqlite3.Row | None:
 
 def all_browsers(db_path: Path, doc_key: str) -> list[sqlite3.Row]:
     """该文档全部已查看浏览人（最近浏览时间倒序）。"""
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         return conn.execute(
             "SELECT * FROM browsers WHERE doc_key = ?"
             " ORDER BY COALESCE(last_ts, 0) DESC", (doc_key,)
@@ -220,7 +221,7 @@ def all_browsers(db_path: Path, doc_key: str) -> list[sqlite3.Row]:
 
 def browser_stats(db_path: Path, doc_key: str) -> tuple[int, str]:
     """(浏览人条数, 最近一次采集时间)；无记录返回 (0, "")。"""
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n, MAX(last_seen) AS last FROM browsers WHERE doc_key = ?",
             (doc_key,)).fetchone()
@@ -229,7 +230,7 @@ def browser_stats(db_path: Path, doc_key: str) -> tuple[int, str]:
 
 def doc_stats(db_path: Path, doc_key: str) -> tuple[int, str]:
     """(记录条数, 最近采集时间)；无记录返回 (0, "")。"""
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n, MAX(ts) AS last FROM daily WHERE doc_key = ?", (doc_key,)
         ).fetchone()
@@ -238,7 +239,7 @@ def doc_stats(db_path: Path, doc_key: str) -> tuple[int, str]:
 
 def clear_doc(db_path: Path, doc_key: str) -> int:
     """删除某文档的全部历史（文档清单里移除文档时可选）。返回删除行数。"""
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn, conn:
         n = conn.execute("SELECT COUNT(*) FROM daily WHERE doc_key = ?", (doc_key,)).fetchone()[0]
         conn.execute("DELETE FROM daily WHERE doc_key = ?", (doc_key,))
         conn.execute("DELETE FROM snapshots WHERE doc_key = ?", (doc_key,))
@@ -260,7 +261,7 @@ def import_legacy(legacy_db_path: Path, target_db: Path) -> tuple[int, int]:
         return (0, 0)
     daily_n = snap_n = 0
     try:
-        with sqlite3.connect(f"file:{legacy}?mode=ro", uri=True) as src:
+        with closing(sqlite3.connect(f"file:{legacy}?mode=ro", uri=True)) as src, src:
             src.row_factory = sqlite3.Row
             tables = {row["name"] for row in src.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -277,7 +278,7 @@ def import_legacy(legacy_db_path: Path, target_db: Path) -> tuple[int, int]:
     def _mark(row) -> tuple:
         return (row["doc_key"], str(row["ts"]))
 
-    with _connect(target_db) as conn:
+    with closing(_connect(target_db)) as conn, conn:
         exist_daily = {_mark(row) for row in conn.execute(
             "SELECT doc_key, ts FROM daily")}
         exist_snap = {_mark(row) for row in conn.execute(

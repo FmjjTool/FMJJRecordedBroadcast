@@ -19,14 +19,18 @@ def _sync_collect(user_id=None) -> dict:
                    "Accept-Language": "zh-CN,zh;q=0.9"}
         if cookie:
             headers["Cookie"] = cookie
-        resp = httpx.get(url, headers=headers, timeout=20, follow_redirects=True)
-        if resp.status_code != 200:
-            return None, f"HTTP {resp.status_code}"
-        data = _balanced_json(resp.text, r"window\.__INITIAL_STATE__")
-        if not data:
-            return None, "页面解析失败（可能需要 Cookie）"
-        upd = (data.get("user") or {}).get("userPageData") or {}
-        return (upd.get("basicInfo") or {}), upd, None
+        try:
+            resp = httpx.get(url, headers=headers, timeout=20, follow_redirects=True)
+            if resp.status_code != 200:
+                return None, {}, f"HTTP {resp.status_code}"
+            data = _balanced_json(resp.text, r"window\.__INITIAL_STATE__")
+            if not data:
+                return None, {}, "页面解析失败（可能需要 Cookie）"
+            upd = (data.get("user") or {}).get("userPageData") or {}
+            return (upd.get("basicInfo") or {}), upd, None
+        except Exception as exc:
+            # 各种失败统一三元组，游客网络/解析异常也能接上 Cookie 回退。
+            return None, {}, str(exc) or type(exc).__name__
 
     basic, upd, err = _pull()
     if not basic:

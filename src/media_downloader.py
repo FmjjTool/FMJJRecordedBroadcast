@@ -193,16 +193,17 @@ def _probe_range(url: str, headers: dict):
     h = dict(headers)
     h["Range"] = "bytes=0-0"
     try:
-        r = httpx.get(url, headers=h, timeout=20, follow_redirects=True)
-        ct = r.headers.get("content-type", "")
-        if r.status_code == 206:
-            cr = r.headers.get("content-range", "")  # "bytes 0-0/12345"
-            total = int(cr.rsplit("/", 1)[-1]) if "/" in cr else None
-            if total and total > 0:
-                return total, True, ct
-        if r.status_code == 200:
-            cl = r.headers.get("content-length", "")
-            return (int(cl) if cl.isdigit() else None), False, ct
+        # 仅需响应头；不支持 Range 的服务器可能返回整个文件，避免探测时完整下载。
+        with httpx.stream("GET", url, headers=h, timeout=20, follow_redirects=True) as r:
+            ct = r.headers.get("content-type", "")
+            if r.status_code == 206:
+                cr = r.headers.get("content-range", "")  # "bytes 0-0/12345"
+                total = int(cr.rsplit("/", 1)[-1]) if "/" in cr else None
+                if total and total > 0:
+                    return total, True, ct
+            if r.status_code == 200:
+                cl = r.headers.get("content-length", "")
+                return (int(cl) if cl.isdigit() else None), False, ct
     except Exception:
         pass
     return None, False, ""

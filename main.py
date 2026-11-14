@@ -180,37 +180,42 @@ def main():
     win = MainWindow()
     win.show()
 
-    # ffmpeg / 浏览器检测延后到事件循环启动后跑：此前同步夹在 show() 与 exec()
-    # 之间会阻塞骨架页首帧渲染（ffmpeg 探测最坏 5s）；此时窗口已可交互
+    # 延后启动检查，并在后台探测 ffmpeg：仅用 singleShot 延后仍会在
+    # 主线程等待子进程（最坏 5s），期间窗口无法响应。
     def _post_startup_checks():
-        # ffmpeg 检测（缺失时提示，不影响启动）
-        try:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
-        except Exception:
-            QMessageBox.warning(
-                win, "⚠️ 依赖缺失",
-                "未检测到 ffmpeg！\n\n视频转换和音频提取功能将不可用。\n"
-                "请安装 ffmpeg 并添加到系统 PATH。\n下载: https://ffmpeg.org/download.html"
-            )
+        from gui_qt.common import run_bg
 
-        # 启动时检测浏览器环境（注册表读取，毫秒级）：Edge/Chrome 版本记日志，
-        # 三者全缺时提示一次（采集需要浏览器内核，可在 Cookie 管理里按需下载）
-        try:
-            import logging
-            from toolbox.browser import detect
-            env = detect()
-            logging.getLogger("startup").info(
-                "浏览器环境：Edge=%s Chrome=%s 采集引擎=%s",
-                env["edge"] or "无", env["chrome"] or "无",
-                "已下载" if env["shell"] else "未下载")
-            if not (env["edge"] or env["chrome"] or env["shell"]):
-                QMessageBox.information(
-                    win, "浏览器环境",
-                    "未检测到系统 Edge / Chrome，也未下载过采集引擎。\n\n"
-                    "数据采集功能需要浏览器内核，首次使用时会提示下载（约 91 MB），\n"
-                    "也可现在到「Cookie 管理 → 下载采集引擎」提前下载。")
-        except Exception:
-            pass
+        def _probe_ffmpeg():
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+
+        def _on_ffmpeg_checked(_result, err):
+            # run_bg 的完成回调回到主线程，提示框及浏览器检查保持原顺序。
+            if err is not None:
+                QMessageBox.warning(
+                    win, "⚠️ 依赖缺失",
+                    "未检测到 ffmpeg！\n\n视频转换和音频提取功能将不可用。\n"
+                    "请安装 ffmpeg 并添加到系统 PATH。\n下载: https://ffmpeg.org/download.html"
+                )
+
+            # 浏览器环境只读注册表等本地信息，耗时很短。
+            try:
+                import logging
+                from toolbox.browser import detect
+                env = detect()
+                logging.getLogger("startup").info(
+                    "浏览器环境：Edge=%s Chrome=%s 采集引擎=%s",
+                    env["edge"] or "无", env["chrome"] or "无",
+                    "已下载" if env["shell"] else "未下载")
+                if not (env["edge"] or env["chrome"] or env["shell"]):
+                    QMessageBox.information(
+                        win, "浏览器环境",
+                        "未检测到系统 Edge / Chrome，也未下载过采集引擎。\n\n"
+                        "数据采集功能需要浏览器内核，首次使用时会提示下载（约 91 MB），\n"
+                        "也可现在到「Cookie 管理 → 下载采集引擎」提前下载。")
+            except Exception:
+                pass
+
+        run_bg(_probe_ffmpeg, _on_ffmpeg_checked)
 
     from PySide6.QtCore import QTimer
     QTimer.singleShot(1200, _post_startup_checks)

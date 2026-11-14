@@ -23,8 +23,8 @@ class SQLiteCacheStore:
         self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        # isolation_level=None（autocommit）：本类所有写都是单语句，closing() 关闭
-        # 连接不会提交事务——源项目因此导致 MD5 缓存/已分类标记从未真正落盘
+        # 单条写入保留 autocommit；closing() 关闭连接本身不会提交事务。
+        # 批量已分类标记另开显式事务，避免 executemany 逐条提交。
         conn = sqlite3.connect(str(self.db_file), timeout=30.0, isolation_level=None)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -179,14 +179,20 @@ class SQLiteCacheStore:
             return
         try:
             with closing(self._connect()) as conn:
-                conn.executemany(
-                    """
-                    INSERT INTO classified_md5(md5, added_at)
-                    VALUES(?, ?)
-                    ON CONFLICT(md5) DO NOTHING
-                    """,
-                    rows,
-                )
+                conn.execute("BEGIN")
+                try:
+                    conn.executemany(
+                        """
+                        INSERT INTO classified_md5(md5, added_at)
+                        VALUES(?, ?)
+                        ON CONFLICT(md5) DO NOTHING
+                        """,
+                        rows,
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
         except Exception as e:
             logger.log_exception(e, "批量写入SQLite已分类MD5失败")
 

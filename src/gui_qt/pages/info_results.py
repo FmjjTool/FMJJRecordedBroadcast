@@ -427,8 +427,10 @@ class InfoResultsPage(BasePage):
                 plat = "other"
             grouped[plat].append(info)
         for key, _name in PLATFORMS_3:
-            grouped[key].sort(key=_parse_pub, reverse=True)
-            self._render_column(key, grouped[key], checked[key])
+            # 本次刷新内复用日期解析结果，排序与行文本不再各解析一遍。
+            pub_dates = {id(info): _parse_pub(info) for info in grouped[key]}
+            grouped[key].sort(key=lambda info: pub_dates[id(info)], reverse=True)
+            self._render_column(key, grouped[key], checked[key], pub_dates)
             self.cols[key]["list"].verticalScrollBar().setValue(scrolls[key])
 
     def _checked_keys(self, key):
@@ -463,7 +465,7 @@ class InfoResultsPage(BasePage):
             return f"https://www.bilibili.com/video/{vid}"
         return ru or (getattr(info, "video_url", "") or "")
 
-    def _render_column(self, key, songs, checked_keys=None):
+    def _render_column(self, key, songs, checked_keys=None, pub_dates=None):
         col = self.cols[key]
         lst = col["list"]
         checked_keys = checked_keys or set()
@@ -485,7 +487,8 @@ class InfoResultsPage(BasePage):
                 kind_tag = "图文"
             else:
                 kind_tag = "视频"
-            _dt, date_str = _parse_pub(info)
+            _dt, date_str = (pub_dates[id(info)] if pub_dates is not None
+                             else _parse_pub(info))
             # 两行展示：标题一行（不截断），日期/作者/数据一行；超宽自动换行
             meta = f"📅 {date_str}  @{author}  播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}"
             url = self._openable_url(info)

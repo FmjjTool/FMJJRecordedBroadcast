@@ -5,29 +5,37 @@ from toolbox.browser import launch as pw_launch
 
 
 def _sync_collect(sec_uid=None) -> dict:
-    """三级回退：① 游客 HTTP → ② 游客 Playwright → ③ 接入 Cookie。
-
-    Cookie 是账号凭据，能不用就不用（降低风控/封号风险）；
-    只有游客方式实在连不上才接入，Cookie 固定放第三级。
-    """
-    from auth import get_cookie
-
-    cookie = get_cookie("douyin")
+    """游客 HTTP → 已启用的 Cookie HTTP → 游客 Playwright。"""
+    def _attempt(collect_fn, **kwargs):
+        try:
+            return collect_fn(sec_uid, **kwargs)
+        except Exception as exc:
+            return {"platform": "douyin", "error": str(exc) or type(exc).__name__}
 
     # 一级：无 Cookie 游客 HTTP（内部先访问首页取 ttwid 游客票据）
-    r = _http_collect(sec_uid, cookie="")
+    r = _attempt(_http_collect, cookie="")
     if not r.get("error"):
         return r
 
-    # 二级：无 Cookie Playwright 游客浏览器（未安装组件则立即跳过）
-    r = _playwright_collect(sec_uid)
-    if not r.get("error"):
-        return r
-
-    # 三级：接入 Cookie 直采
+    # 游客失败才读取已启用的登录态，HTTP 成功时无需启动浏览器。
+    try:
+        from auth import get_cookie
+        cookie = get_cookie("douyin") or ""
+    except Exception:
+        cookie = ""
+    cookie_result = None
     if cookie:
         print("[抖音采集] 游客方式失败，接入 Cookie 重试")
-        return _http_collect(sec_uid, cookie=cookie)
+        cookie_result = _attempt(_http_collect, cookie=cookie)
+        if not cookie_result.get("error"):
+            return cookie_result
+
+    # 末级：HTTP 均失败后才启动原有游客浏览器兜底。
+    r = _attempt(_playwright_collect)
+    if not r.get("error"):
+        return r
+    if cookie_result is not None:
+        return cookie_result
     return {"platform": "douyin", "error": "游客与 Cookie 方式均失败：请在「Cookie 管理」中登录抖音后重试"}
 
 
@@ -51,21 +59,21 @@ def _http_collect(sec_uid=None, cookie: str = "") -> dict:
         return {"platform": "douyin", "error": "a_bogus 签名失败（需要本机安装 node.js）"}
 
     url = f"https://www.douyin.com/aweme/v1/web/user/profile/other/?{query}&a_bogus={a_bogus}"
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": UA_PC,
-        "Referer": "https://www.douyin.com/",
-    })
-    if cookie:
-        s.headers["Cookie"] = cookie
-    else:
-        # 游客态：先访问首页拿 ttwid 等游客 cookie，否则接口直接拒绝
-        try:
-            s.get("https://www.douyin.com/", timeout=15)
-        except Exception:
-            pass
+    with requests.Session() as s:
+        s.headers.update({
+            "User-Agent": UA_PC,
+            "Referer": "https://www.douyin.com/",
+        })
+        if cookie:
+            s.headers["Cookie"] = cookie
+        else:
+            # 游客态：先访问首页拿 ttwid 等游客 cookie，否则接口直接拒绝
+            try:
+                s.get("https://www.douyin.com/", timeout=15)
+            except Exception:
+                pass
 
-    r = s.get(url, timeout=15)
+        r = s.get(url, timeout=15)
     try:
         data = r.json()
     except ValueError:

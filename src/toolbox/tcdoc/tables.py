@@ -25,6 +25,7 @@ import json
 import re
 import sqlite3
 import zlib
+from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -497,7 +498,7 @@ def db_path() -> Path:
 def init_db(path=None) -> Path:
     path = Path(path or db_path())
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.executescript(_SCHEMA)
     return path
 
@@ -505,7 +506,7 @@ def init_db(path=None) -> Path:
 def get_rev(doc_key: str, path=None) -> str:
     """该文档上次成功同步的版本号（没有则空串）。"""
     path = init_db(path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         row = conn.execute("SELECT rev FROM doc_meta WHERE doc_key=?",
                            (str(doc_key),)).fetchone()
     return str(row[0] or "") if row else ""
@@ -514,7 +515,7 @@ def get_rev(doc_key: str, path=None) -> str:
 def set_rev(doc_key: str, rev: str, path=None) -> None:
     path = init_db(path)
     now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("INSERT OR REPLACE INTO doc_meta (doc_key, rev, updated_at) "
                      "VALUES (?,?,?)", (str(doc_key), str(rev or ""), now))
         conn.commit()
@@ -523,7 +524,7 @@ def set_rev(doc_key: str, rev: str, path=None) -> None:
 def has_data(doc_key: str, path=None) -> bool:
     """本地是否已有该文档的表格数据（rev 跳过必须以此为前提）。"""
     path = init_db(path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         return conn.execute(
             "SELECT 1 FROM sheets WHERE doc_key=? AND skipped=0 LIMIT 1",
             (str(doc_key),)).fetchone() is not None
@@ -550,7 +551,7 @@ def save_doc(result: dict, path=None) -> dict:
     now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
     doc_key = result["doc_key"]
     stats = []
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         for sheet in result.get("sheets", []):
             tab_id, tab_name = sheet["tab_id"], sheet["tab_name"]
             old = {row[0]: (row[1], row[2]) for row in conn.execute(
@@ -646,7 +647,7 @@ def save_doc(result: dict, path=None) -> dict:
 def sheets_of(doc_key: str, path=None) -> list[dict]:
     """该文档的全部工作表（含被跳过的），按界面顺序返回。"""
     path = init_db(path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         rows = conn.execute(
             "SELECT tab_id, tab_name, kind, cols_json, n_rows, skipped, fetched_at "
             "FROM sheets WHERE doc_key=? ORDER BY rowid", (doc_key,)).fetchall()
@@ -665,7 +666,7 @@ def sheets_of(doc_key: str, path=None) -> list[dict]:
 def rows_page(doc_key: str, tab_id: str, offset: int = 0, limit: int = 200, path=None):
     """分页取行，返回 (rows[{row_no, values}], 总数)。"""
     path = init_db(path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         total = conn.execute(
             "SELECT COUNT(*) FROM rows WHERE doc_key=? AND tab_id=?",
             (doc_key, tab_id)).fetchone()[0]
@@ -693,7 +694,7 @@ def recent_changes(doc_key: str, limit: int = 100, tab_id: str | None = None,
         args.append(tab_id)
     sql += " ORDER BY id DESC LIMIT ?"
     args.append(limit)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         rows = conn.execute(sql, args).fetchall()
     return [{"ts": r[0], "tab_name": r[1], "kind": r[2], "record_id": r[3], "summary": r[4]}
             for r in rows]
@@ -702,7 +703,7 @@ def recent_changes(doc_key: str, limit: int = 100, tab_id: str | None = None,
 def stats(doc_key: str, path=None) -> dict:
     """该文档的表格概览：表数 / 行数 / 最近同步时间。"""
     path = init_db(path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         total_sheets = conn.execute(
             "SELECT COUNT(*) FROM sheets WHERE doc_key=? AND skipped=0", (doc_key,)).fetchone()[0]
         total_rows = conn.execute(
@@ -715,7 +716,7 @@ def stats(doc_key: str, path=None) -> dict:
 def clear_doc(doc_key: str, path=None) -> int:
     """删除该文档的全部表格数据与变更记录，返回删除的行数。"""
     path = init_db(path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         n = conn.execute("SELECT COUNT(*) FROM rows WHERE doc_key=?", (doc_key,)).fetchone()[0]
         conn.execute("DELETE FROM rows WHERE doc_key=?", (doc_key,))
         conn.execute("DELETE FROM sheets WHERE doc_key=?", (doc_key,))

@@ -181,17 +181,22 @@
 
 5. **新增页面**：在 `gui_qt/pages/` 写一个 `BasePage` 子类 → 在 `main_window.py` 的 `PAGE_CLASSES` 注册 → 在 `NAV_GROUPS` 加导航项
 
-### 平台的三级/四级回退策略
+### 各平台的 HTTP 与浏览器回退
 
-解析器普遍采用「游客 → 兜底 → Cookie」的降级链，最大限度免登录：
+HTTP 是请求方式，Cookie 是登录或访客状态，二者并不冲突。公开数据优先使用已有 HTTP 链路；站点下发的临时游客票据可自动取得，无需用户手工登录。接口限制或字段不完整时保留原浏览器回退，避免缺少数据。
 
-| 平台 | 单作品 | 用户作品列表 | 加密/风控参数 |
+| 平台 | 单作品 | 用户作品列表 | 账号追踪 |
 |---|---|---|---|
-| **B站** | 游客 HTTP API（**WBI 签名**）→ Cookie | 游客 → Playwright → Cookie | WBI（`w_rid` + `wts`） |
-| **抖音** | 页面解析 → Cookie | **必须 Playwright** → Cookie | `a_bogus`（走 Node.js） |
-| **微博** | m.weibo.cn API → 页面 → Cookie | 访客通行证 → 页面 → Cookie → Playwright | 无（自动获取访客通行证） |
-| **快手** | 游客票据（可用） | **必须 Cookie** | 无 |
-| **小红书** | 游客（可用） | **必须 Cookie** | `xsec_token`（会失效） |
+| **B站** | HTTP API，按接口需要 WBI 签名 | HTTP：已启用 Cookie → 游客指纹 → Playwright；有 Cookie 时优先使用，避免游客接口遗漏最新内容 | HTTP API |
+| **抖音** | 分享页/接口优先 HTTP；部分详情仍需浏览器回退 | HTTP `aweme/post` + `a_bogus`（Node.js）：已启用 Cookie → 游客各试一次，再回退 Playwright | 游客 HTTP → 已启用 Cookie HTTP → 游客 Playwright |
+| **微博** | HTTP API / 页面解析，必要时使用 Cookie | HTTP 访客通行证 → 页面 → 用户 Cookie；必要时 Playwright | 游客 HTTP，接口拒绝时自动取得临时访客票据重试 → 用户 Cookie HTTP → 游客 Playwright |
+| **快手** | HTTP 页面解析，依赖可用的访客票据 | 当前仍依赖浏览器生成指纹/签名，登录限制时需要 Cookie | HTTP GraphQL，但通常需要在网页访问后取得的设备 Cookie |
+| **小红书** | HTTP 页面内嵌数据；游客失败后用 Cookie | HTTP 读取主页首批内嵌数据，游客无数据时用 Cookie；当前不等同于全量翻页 | 游客 HTTP → Cookie HTTP |
+
+- **自动获取抖音昵称**：先走轻量游客 HTTP 资料接口，失败后尝试已启用的 Cookie，最后保留作品列表回退。
+- **音乐平台**：网易云、QQ音乐、酷狗、酷我、5sing 已有 HTTP 主链。部分平台保留浏览器兜底；酷狗 HTTP 缺少粉丝/月听众时仍需尝试补齐，不能直接移除。
+- **腾讯文档**：日常指标与表格同步已走 HTTP；需要权限的数据仍要有效登录态，浏览器用于登录及部分诊断/备用流程。
+- **验证范围**：2026-11-14 对微博账号追踪和 B站公开资料进行了匿名 HTTP 实测；其他平台的链路说明依据当前实现与隔离回归，不表示所有账号、所有接口都能免登录。
 
 ---
 

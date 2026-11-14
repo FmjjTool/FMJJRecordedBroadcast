@@ -11,7 +11,7 @@ import os
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QHBoxLayout, QLabel, QMainWindow,
+    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -160,6 +160,8 @@ class MainWindow(QMainWindow):
 
         # 左侧导航：外部容器 = 上（可滚动导航）+ 下（固定全局区，不随导航滚动）
         nav_panel = QWidget()
+        nav_panel.setObjectName("navigationPanel")
+        nav_panel.setAttribute(Qt.WA_StyledBackground, True)
         nav_panel.setFixedWidth(210)
         nav_v = QVBoxLayout(nav_panel)
         nav_v.setContentsMargins(0, 0, 0, 0)
@@ -167,32 +169,31 @@ class MainWindow(QMainWindow):
 
         # 顶部标题：固定在滚动区之外，点击返回首页
         self.nav_title = QPushButton("📊 数据汇总库 · 工具箱")
+        self.nav_title.setObjectName("navigationTitle")
         self.nav_title.setCheckable(True)
         self.nav_title.setCursor(Qt.PointingHandCursor)
         self.nav_title.setToolTip("返回首页")
-        self.nav_title.setStyleSheet(
-            "QPushButton { font-weight: bold; font-size: 14px; padding: 14px 4px 10px 12px;"
-            " text-align: left; border: none; background: transparent; color: #2f3440; }"
-            "QPushButton:hover { color: #1976d2; background: transparent; border: none; }"
-            "QPushButton:pressed { color: #1976d2; background: transparent; border: none; }"
-            "QPushButton:checked { color: #1976d2; background: transparent; border: none; }")
         self.nav_title.clicked.connect(lambda: self.show_page("home"))
         nav_v.addWidget(self.nav_title)
 
         nav_scroll = QScrollArea()
+        nav_scroll.setObjectName("navigationScroll")
+        nav_scroll.viewport().setObjectName("navigationViewport")
         nav_scroll.setWidgetResizable(True)
         nav_scroll.setFrameShape(QScrollArea.NoFrame)
+        nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         nav_widget = QWidget()
+        nav_widget.setObjectName("navigationItems")
         self.nav_layout = QVBoxLayout(nav_widget)
-        self.nav_layout.setContentsMargins(8, 0, 8, 8)
-        self.nav_layout.setSpacing(3)
+        self.nav_layout.setContentsMargins(10, 0, 8, 10)
+        self.nav_layout.setSpacing(2)
         nav_scroll.setWidget(nav_widget)
         nav_v.addWidget(nav_scroll, 1)
 
         # 底部固定区：Cookie 状态 + 主题切换 + 全局设置入口（全局设置在主题按钮下方）
         self.bottom_layout = QVBoxLayout()
-        self.bottom_layout.setContentsMargins(8, 0, 8, 8)
-        self.bottom_layout.setSpacing(3)
+        self.bottom_layout.setContentsMargins(10, 8, 10, 10)
+        self.bottom_layout.setSpacing(6)
         nav_v.addLayout(self.bottom_layout)
         layout.addWidget(nav_panel)
 
@@ -254,25 +255,27 @@ class MainWindow(QMainWindow):
             # 「全局」组放底部固定区（只留按钮，不再加分组标题），其余放可滚动导航区
             is_bottom = group_title == "⚙️ 全局"
             if is_bottom:
-                sep = QLabel("─" * 14)
-                sep.setStyleSheet("color: #b6bdca; font-size: 11px; padding: 0; background: transparent;")
+                sep = QFrame()
+                sep.setFixedHeight(1)
+                sep.setStyleSheet("background: palette(shadow); border: none;")
                 self.bottom_layout.addWidget(sep)
             else:
                 gl = QLabel(group_title)
-                gl.setStyleSheet("color: #5a6072; font-size: 11px; padding: 10px 4px 2px 4px;")
+                gl.setObjectName("navigationGroup")
                 nav_layout.addWidget(gl)
             for key, item_title in items:
                 btn = QPushButton(item_title)
                 btn.setCheckable(True)
+                btn.setCursor(Qt.PointingHandCursor)
                 # 底部固定区只留图标，三等分；导航区左对齐显示完整文字
                 if is_bottom:
                     btn.setText(item_title.split(" ", 1)[0])
                     btn.setToolTip(item_title)
-                    btn.setStyleSheet(
-                        "text-align: center; padding: 4px 0; font-size: 16px;")
+                    btn.setStyleSheet(common.icon_btn_style(True, "font-size: 16px;"))
+                    btn.setFixedHeight(30)
                     bottom_buttons.append(btn)
                 else:
-                    btn.setStyleSheet("text-align: left; padding: 5px 8px;")
+                    btn.setObjectName("navigationButton")
                     nav_layout.addWidget(btn)
                 btn.clicked.connect(lambda checked, k=key: self.show_page(k))
                 self.nav_buttons[key] = btn
@@ -368,10 +371,11 @@ class MainWindow(QMainWindow):
 
     def _build_cookie_bar(self, nav_layout):
         box = QWidget()
-        box.setStyleSheet("QWidget { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        box.setObjectName("cookiePanel")
+        box.setAttribute(Qt.WA_StyledBackground, True)
         v = QVBoxLayout(box)
-        v.setContentsMargins(8, 6, 8, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(10, 8, 10, 9)
+        v.setSpacing(6)
 
         head = QHBoxLayout()
         lbl = QLabel("🍪 Cookie")
@@ -387,7 +391,7 @@ class MainWindow(QMainWindow):
         self.cookie_status_label = QLabel("加载中...")
         self.cookie_status_label.setWordWrap(True)
         self.cookie_status_label.setStyleSheet(
-            "font-size: 11px; color: #9aa0b4; padding: 0; background: transparent;")
+            "font-size: 11px; color: palette(placeholder-text); padding: 0; background: transparent;")
         v.addWidget(self.cookie_status_label)
 
         mgr_btn = QPushButton("管理 Cookie")

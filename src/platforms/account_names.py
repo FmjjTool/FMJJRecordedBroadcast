@@ -64,8 +64,12 @@ def _douyin_name(url: str) -> tuple[str, str]:
     import requests
     from multi_downloader import UA_PC as _UA, _douyin_abogus
 
-    # profile/other：Cookie 优先（游客态该接口被风控）
-    for cookie in filter(None, [_cookie("douyin"), ""]):
+    # 先用轻量游客 HTTP 查昵称，失败后再读取已启用的 Cookie。
+    # 空串是游客态，不能用 filter(None, ...) 把这一层过滤掉。
+    for attempt in range(2):
+        cookie = _cookie("douyin") if attempt else ""
+        if attempt and not cookie:
+            break
         params = {
             "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
             "publish_video_strategy_type": "2", "source": "channel_pc_web",
@@ -75,13 +79,22 @@ def _douyin_name(url: str) -> tuple[str, str]:
         query = urlencode(params)
         a_bogus = _douyin_abogus(query, _UA)
         if not a_bogus:
-            return "", "a_bogus 签名失败（node 异常）"
+            break  # 仍保留下面作品列表的浏览器兜底
         try:
-            r = requests.get(
-                f"https://www.douyin.com/aweme/v1/web/user/profile/other/?{query}&a_bogus={a_bogus}",
-                headers={"User-Agent": _UA, "Referer": "https://www.douyin.com/",
-                         "Cookie": cookie},
-                timeout=15)
+            with requests.Session() as session:
+                session.headers.update({"User-Agent": _UA,
+                                        "Referer": "https://www.douyin.com/"})
+                if cookie:
+                    session.headers["Cookie"] = cookie
+                else:
+                    # 站点自行下发的游客票据，无需用户登录。
+                    try:
+                        session.get("https://www.douyin.com/", timeout=15)
+                    except Exception:
+                        pass
+                r = session.get(
+                    f"https://www.douyin.com/aweme/v1/web/user/profile/other/?{query}&a_bogus={a_bogus}",
+                    timeout=15)
             if not r.text.strip():
                 continue  # 风控空响应，试下一态
             d = r.json()

@@ -43,51 +43,51 @@ def _precise_counts(uid: str, cookie: str = "") -> dict:
     """
     import requests
 
-    s = requests.Session()
-    s.headers.update({"User-Agent": PC_USER_AGENT})
-    if cookie:
-        s.headers["Cookie"] = cookie
-    else:
-        try:
-            rv = s.post(
-                "https://passport.weibo.com/visitor/genvisitor",
-                data={"cb": "gen_callback",
-                      "fp": json.dumps({"os": "1", "browser": "Chrome134",
-                                        "fonts": "undefined",
-                                        "screenInfo": "1920*1080*24",
-                                        "plugins": ""})},
-                timeout=15)
-            m = re.search(r"\((\{.*\})\)\s*;?\s*$", rv.text, re.S)
-            tid = ((json.loads(m.group(1)).get("data") or {}).get("tid") or "") if m else ""
-            if not tid:
+    with requests.Session() as s:
+        s.headers.update({"User-Agent": PC_USER_AGENT})
+        if cookie:
+            s.headers["Cookie"] = cookie
+        else:
+            try:
+                rv = s.post(
+                    "https://passport.weibo.com/visitor/genvisitor",
+                    data={"cb": "gen_callback",
+                          "fp": json.dumps({"os": "1", "browser": "Chrome134",
+                                            "fonts": "undefined",
+                                            "screenInfo": "1920*1080*24",
+                                            "plugins": ""})},
+                    timeout=15)
+                m = re.search(r"\((\{.*\})\)\s*;?\s*$", rv.text, re.S)
+                tid = ((json.loads(m.group(1)).get("data") or {}).get("tid") or "") if m else ""
+                if not tid:
+                    return {}
+                s.get(f"https://passport.weibo.com/visitor/visitor?a=incarnate&t={tid}"
+                      f"&w=2&c=095&gc=&cb=cross_domain&from=weibo&_rand=0.123",
+                      timeout=15)
+            except Exception:
                 return {}
-            s.get(f"https://passport.weibo.com/visitor/visitor?a=incarnate&t={tid}"
-                  f"&w=2&c=095&gc=&cb=cross_domain&from=weibo&_rand=0.123",
-                  timeout=15)
+        try:
+            r = s.get(f"https://weibo.com/ajax/profile/info?uid={uid}",
+                      headers={"Referer": f"https://weibo.com/u/{uid}/",
+                               "X-Requested-With": "XMLHttpRequest"},
+                      timeout=15)
+            user = ((r.json().get("data") or {}).get("user")) or {}
+            out = {}
+            if isinstance(user.get("followers_count"), int):
+                out["fans"] = user["followers_count"]
+            if isinstance(user.get("friends_count"), int):
+                out["following"] = user["friends_count"]
+            if isinstance(user.get("statuses_count"), int):
+                out["weibo_count"] = user["statuses_count"]
+            # 获赞数（m端接口无此字段）：status_total_counter.like_cnt，
+            # 格式化字符串如 "6,138,945"
+            stc = user.get("status_total_counter") or {}
+            likes = _parse_num(stc.get("like_cnt"))
+            if likes is not None:
+                out["likes"] = likes
+            return out
         except Exception:
             return {}
-    try:
-        r = s.get(f"https://weibo.com/ajax/profile/info?uid={uid}",
-                  headers={"Referer": f"https://weibo.com/u/{uid}/",
-                           "X-Requested-With": "XMLHttpRequest"},
-                  timeout=15)
-        user = ((r.json().get("data") or {}).get("user")) or {}
-        out = {}
-        if isinstance(user.get("followers_count"), int):
-            out["fans"] = user["followers_count"]
-        if isinstance(user.get("friends_count"), int):
-            out["following"] = user["friends_count"]
-        if isinstance(user.get("statuses_count"), int):
-            out["weibo_count"] = user["statuses_count"]
-        # 获赞数（m端接口无此字段）：status_total_counter.like_cnt，
-        # 格式化字符串如 "6,138,945"
-        stc = user.get("status_total_counter") or {}
-        likes = _parse_num(stc.get("like_cnt"))
-        if likes is not None:
-            out["likes"] = likes
-        return out
-    except Exception:
-        return {}
 
 
 def _apply_precise(result: dict, uid: str, cookie: str, raw_followers) -> dict:
@@ -102,29 +102,37 @@ def _apply_precise(result: dict, uid: str, cookie: str, raw_followers) -> dict:
 
 
 def _sync_collect(uid=None) -> dict:
-    """三级回退：① 游客 HTTP → ② 游客 Playwright → ③ 接入 Cookie。
+    """三级回退：① 游客 HTTP（含临时游客票重试）→ ② Cookie HTTP → ③ 游客 Playwright。
 
-    Cookie 是账号凭据，能不用就不用（降低风控/封号风险）；
-    只有游客方式实在连不上才接入，Cookie 固定放第三级。
+    游客成功时不读取已存 Cookie；HTTP 全部失败后才启动浏览器。
     """
-    from auth import get_cookie
+    try:
+        r = _http_collect(uid, cookie="")
+        if not r.get("error"):
+            return r
+    except Exception:
+        pass  # 单层请求/解析异常不能中断后续回退
 
-    cookie = get_cookie("weibo")
-
-    # 一级：无 Cookie 游客 HTTP（内部先取游客 cookie）
-    r = _http_collect(uid, cookie="")
-    if not r.get("error"):
-        return r
-
-    # 二级：无 Cookie Playwright 游客浏览器（未安装组件则立即跳过）
-    r = _playwright_collect(uid)
-    if not r.get("error"):
-        return r
-
-    # 三级：接入 Cookie 直采
+    try:
+        from auth import get_cookie
+        cookie = get_cookie("weibo") or ""  # 仍遵守总开关与有效期
+    except Exception:
+        cookie = ""
     if cookie:
         print("[微博采集] 游客方式失败，接入 Cookie 重试")
-        return _http_collect(uid, cookie=cookie)
+        try:
+            r = _http_collect(uid, cookie=cookie)
+            if not r.get("error"):
+                return r
+        except Exception:
+            pass
+
+    try:
+        r = _playwright_collect(uid)
+        if not r.get("error"):
+            return r
+    except Exception:
+        pass
     return {"platform": "weibo", "error": "游客与 Cookie 方式均失败：请在「Cookie 管理」中登录微博后重试"}
 
 
@@ -137,28 +145,46 @@ def _http_collect(uid=None, cookie: str = "") -> dict:
         "Referer": f"https://m.weibo.cn/u/{uid}/",
         "X-Requested-With": "XMLHttpRequest",
     }
-    s = requests.Session()
-    s.headers.update(headers)
-    if cookie:
-        s.headers["Cookie"] = cookie
-    else:
-        # 游客态：先访问首页拿游客 cookie（mweibo_capid 等），否则接口返回 HTML
-        try:
-            s.get("https://m.weibo.cn/", timeout=15)
-        except Exception:
-            pass
-
     url = f"https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=100505{uid}"
-    r = s.get(url, timeout=15)
-    try:
-        data = r.json()
-    except ValueError:
-        return {"platform": "weibo", "error": "接口返回异常（非 JSON），请在 Cookie 管理中登录微博后重试"}
-    if data.get("ok") != 1:
-        return {"platform": "weibo", "error": "接口拒绝访问，请在 Cookie 管理中登录微博后重试"}
-    ui = (data.get("data") or {}).get("userInfo") or {}
+    ui = {}
+    error = "no user data from API"
+    with requests.Session() as s:
+        s.headers.update(headers)
+        if cookie:
+            s.headers["Cookie"] = cookie
+        else:
+            # 首页票据有时已足够；被拒时再补 SUB/SUBP，避免直接启动浏览器。
+            try:
+                s.get("https://m.weibo.cn/", timeout=15)
+            except Exception:
+                pass
+
+        for attempt in range(1 if cookie else 2):
+            if attempt:
+                try:
+                    from platforms.weibo import WeiboParser
+                    visitor_cookie = WeiboParser()._get_visitor_cookie()
+                except Exception:
+                    visitor_cookie = ""
+                if not visitor_cookie:
+                    break
+                s.headers["Cookie"] = visitor_cookie
+            try:
+                response = s.get(url, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict) or data.get("ok") != 1:
+                    error = "接口拒绝访问，请在 Cookie 管理中登录微博后重试"
+                    continue
+                user = (data.get("data") or {}).get("userInfo")
+                if isinstance(user, dict) and user:
+                    ui = user
+                    break
+                error = "no user data from API"
+            except Exception as exc:
+                error = f"微博资料接口请求失败：{exc}"
     if not ui:
-        return {"platform": "weibo", "error": "no user data from API"}
+        return {"platform": "weibo", "error": error}
 
     followers = _parse_num(ui.get("followers_count"))
     following = _parse_num(ui.get("follow_count"))

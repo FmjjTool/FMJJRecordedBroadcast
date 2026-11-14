@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QVBoxLayout, QWidget,
@@ -119,7 +119,8 @@ class _DonutChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items = []
-        self.setMinimumHeight(230)
+        self.setMinimumHeight(210)
+        self.setStyleSheet("background: transparent;")
 
     def set_items(self, items):
         self._items = list(items or [])
@@ -128,13 +129,22 @@ class _DonutChart(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        dark = theme.is_dark()
-        text_color = QColor("#c6cbd6" if dark else "#2f3440")
-        muted = QColor("#7f8798" if dark else "#9aa0b0")
-        ring_bg = QColor("#2b3040" if dark else "#eef1f6")
+        palette = self.palette()
+        text_color = palette.color(QPalette.WindowText)
+        muted = palette.color(QPalette.PlaceholderText)
+        ring_bg = palette.color(QPalette.AlternateBase)
 
         w, h = self.width(), self.height()
-        size = max(80.0, min(h - 26, w * 0.5))
+        total = sum(item[1] for item in self._items)
+        legend_texts = [f"{label}  {value} · {value / total * 100 if total else 0:.0f}%"
+                        for label, value, _color in self._items]
+        legend_font = QFont(p.font())
+        legend_font.setPointSize(9)
+        p.setFont(legend_font)
+        legend_width = max((p.fontMetrics().horizontalAdvance(text)
+                            for text in legend_texts), default=110) + 22
+        # 窄窗口先给平台名、数量和占比留足位置，再收小圆环。
+        size = max(80.0, min(h - 26, w * 0.46, w - legend_width - 38))
         rect = QRectF(12, (h - size) / 2, size, size)
         thickness = max(16.0, size * 0.115)
 
@@ -142,7 +152,6 @@ class _DonutChart(QWidget):
         p.drawEllipse(rect.adjusted(thickness / 2, thickness / 2,
                                     -thickness / 2, -thickness / 2))
 
-        total = sum(item[1] for item in self._items)
         if total:
             cursor = 90 * 16
             gap = 1.4 * 16
@@ -157,30 +166,30 @@ class _DonutChart(QWidget):
         # 圆心总数
         p.setPen(text_color)
         f = QFont(p.font())
-        f.setPointSize(20)
+        f.setPointSize(20 if size >= 140 else 16)
         f.setBold(True)
         p.setFont(f)
-        p.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignCenter, str(total))
+        if self._items:
+            p.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignCenter, f"{total:,}")
         f.setPointSize(9)
         f.setBold(False)
         p.setFont(f)
         p.setPen(muted)
-        p.drawText(rect.adjusted(0, 24, 0, 24), Qt.AlignCenter, "条")
+        if self._items:
+            p.drawText(rect.adjusted(0, 24, 0, 24), Qt.AlignCenter, "条")
 
         # 右侧图例
-        lx = rect.right() + 20
+        lx = rect.right() + 16
         available = max(90.0, w - lx - 10)
         line_h = 24
         ly = max(14.0, (h - line_h * max(1, len(self._items))) / 2)
-        for label, value, color in self._items:
+        for (_label, _value, color), text in zip(self._items, legend_texts):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(color))
             p.drawRoundedRect(QRectF(lx, ly + 7, 9, 9), 4.5, 4.5)
             p.setPen(text_color)
             f.setPointSize(9)
             p.setFont(f)
-            pct = value / total * 100 if total else 0
-            text = f"{label}  {value} · {pct:.0f}%"
             metrics = p.fontMetrics()
             p.drawText(QRectF(lx + 16, ly, available - 16, line_h),
                        Qt.AlignVCenter | Qt.AlignLeft,
@@ -203,7 +212,8 @@ class _TrendChart(QWidget):
         super().__init__(parent)
         self._labels = []
         self._values = []
-        self.setMinimumHeight(230)
+        self.setMinimumHeight(210)
+        self.setStyleSheet("background: transparent;")
 
     def set_data(self, labels, values):
         self._labels = list(labels or [])
@@ -213,11 +223,11 @@ class _TrendChart(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        dark = theme.is_dark()
-        text_color = QColor("#c6cbd6" if dark else "#2f3440")
-        muted = QColor("#7f8798" if dark else "#9aa0b0")
-        grid = QColor("#2f3442" if dark else "#e8ecf3")
-        accent = QColor("#64b5f6" if dark else "#1976d2")
+        palette = self.palette()
+        text_color = palette.color(QPalette.WindowText)
+        muted = palette.color(QPalette.PlaceholderText)
+        grid = palette.color(QPalette.Shadow)
+        accent = palette.color(QPalette.Highlight)
 
         w, h = self.width(), self.height()
         left, right, top, bottom = 34, 12, 18, 28
@@ -284,20 +294,25 @@ class _ToolCard(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_Hover, True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(76)
+        self.setMinimumHeight(82)
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(14, 11, 14, 11)
-        v.setSpacing(3)
+        v.setContentsMargins(13, 11, 13, 11)
+        v.setSpacing(6)
 
         top = QHBoxLayout()
         top.setSpacing(8)
         icon = QLabel(emoji)
         icon.setObjectName("toolIcon")
+        icon.setFixedSize(30, 30)
+        icon.setAlignment(Qt.AlignCenter)
         top.addWidget(icon)
         name = QLabel(title)
         name.setObjectName("toolTitle")
         top.addWidget(name, 1)
+        arrow = QLabel("›")
+        arrow.setObjectName("toolArrow")
+        top.addWidget(arrow)
         v.addLayout(top)
 
         tip = QLabel(desc)
@@ -328,8 +343,8 @@ class HomePage(BasePage):
         body = QWidget()
         scroll.setWidget(body)
         v = QVBoxLayout(body)
-        v.setContentsMargins(18, 16, 18, 18)
-        v.setSpacing(14)
+        v.setContentsMargins(20, 18, 20, 20)
+        v.setSpacing(16)
 
         v.addWidget(self._build_hero())
         v.addLayout(self._build_stats())
@@ -337,7 +352,7 @@ class HomePage(BasePage):
 
         v.addWidget(self._section_title("🧰 常用工具", "高频入口，一键直达"))
         v.addLayout(self._build_tool_grid(COMMON_TOOLS))
-        v.addWidget(self._section_title("🛰 信息工具", "归入「信息工具」页签，点击直达对应 tab"))
+        v.addWidget(self._section_title("🛰 信息工具", "平台内容、评论与文档监控"))
         v.addLayout(self._build_tool_grid(INFO_TOOLS))
         v.addStretch(1)
 
@@ -354,7 +369,7 @@ class HomePage(BasePage):
 
         left = QVBoxLayout()
         left.setSpacing(4)
-        title = QLabel("🏠 数据汇总库 · 工具箱")
+        title = QLabel("数据汇总库 · 工具箱")
         title.setObjectName("heroTitle")
         left.addWidget(title)
         sub = QLabel("常用入口、数据概览与最近采集趋势")
@@ -380,17 +395,17 @@ class HomePage(BasePage):
         row = QHBoxLayout()
         row.setSpacing(12)
         cards = [
-            ("total", "已获取条目", "#2e7d32"),
-            ("platforms", "覆盖平台", "#1976d2"),
-            ("week", "近 7 天新增", "#7b1fa2"),
-            ("today", "今日新增", "#ef6c00"),
+            ("total", "已获取条目", "#4b77d3"),
+            ("platforms", "覆盖平台", "#29998b"),
+            ("week", "近 7 天新增", "#8b72d7"),
+            ("today", "今日新增", "#bf8535"),
         ]
         for key, caption, accent in cards:
             card = QFrame()
             card.setObjectName("statCard")
             card.setAttribute(Qt.WA_StyledBackground, True)
             h = QHBoxLayout(card)
-            h.setContentsMargins(12, 12, 14, 12)
+            h.setContentsMargins(12, 10, 14, 10)
             h.setSpacing(10)
             bar = QFrame()
             bar.setFixedWidth(3)
@@ -402,8 +417,8 @@ class HomePage(BasePage):
             value.setObjectName("statValue")
             cap = QLabel(caption)
             cap.setObjectName("statCap")
-            box.addWidget(value)
             box.addWidget(cap)
+            box.addWidget(value)
             h.addLayout(box, 1)
             self._stat_values[key] = value
             row.addWidget(card, 1)
@@ -515,36 +530,38 @@ class HomePage(BasePage):
 
     def _apply_theme_styles(self):
         dark = theme.is_dark()
-        text = "#c6cbd6" if dark else "#2f3440"
-        muted = "#888888" if dark else "#9aa0b0"
-        card = "#23262f" if dark else "#ffffff"
-        border = "#333340" if dark else "#e3e9f2"
-        hover = "#2a3040" if dark else "#f5f9ff"
-        accent = "#64b5f6" if dark else "#1976d2"
+        text = "palette(window-text)"
+        muted = "palette(placeholder-text)"
+        card = "palette(base)"
+        border = "palette(shadow)"
+        hover = "#24344d" if dark else "#f2f6fd"
+        accent = "palette(highlight)"
+        accent_hover = "#5589d7" if dark else "#285ebc"
         hero = ("qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-                "stop:0 #1f2433, stop:1 #232a3d)" if dark else
+                "stop:0 #21314b, stop:1 #1b293e)" if dark else
                 "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-                "stop:0 #eef6ff, stop:1 #f7f0ff)")
+                "stop:0 #eaf1ff, stop:1 #f7faff)")
         self.setStyleSheet(f"""
             QFrame#heroCard {{
                 background: {hero};
                 border: 1px solid {border};
                 border-radius: 12px;
             }}
-            QLabel#heroTitle {{ color: {text}; background: transparent; font-size: 20px; font-weight: bold; }}
+            QLabel#heroTitle {{ color: {text}; background: transparent; font-size: 21px; font-weight: bold; }}
             QLabel#heroSub {{ color: {muted}; background: transparent; font-size: 12px; }}
             QLabel#heroDate {{ color: {muted}; background: transparent; font-size: 12px; }}
             QPushButton#refreshBtn {{
-                background: {card}; color: {accent};
-                border: 1px solid {border}; border-radius: 7px;
-                padding: 5px 12px; font-size: 12px;
+                background: {accent}; color: palette(highlighted-text);
+                border: 1px solid {accent}; border-radius: 7px;
+                padding: 6px 13px; font-size: 12px;
             }}
-            QPushButton#refreshBtn:hover {{ background: {hover}; }}
+            QPushButton#refreshBtn:hover {{ background: {accent_hover}; color: palette(highlighted-text); }}
+            QPushButton#refreshBtn:disabled {{ background: palette(alternate-base); color: {muted}; border-color: {border}; }}
             QFrame#statCard {{
                 background: {card}; border: 1px solid {border}; border-radius: 10px;
             }}
-            QLabel#statValue {{ color: {text}; background: transparent; font-size: 24px; font-weight: bold; }}
-            QLabel#statCap {{ color: {muted}; background: transparent; font-size: 11px; }}
+            QLabel#statValue {{ color: {text}; background: transparent; font-size: 26px; font-weight: bold; }}
+            QLabel#statCap {{ color: {muted}; background: transparent; font-size: 12px; }}
             QFrame#panelCard {{
                 background: {card}; border: 1px solid {border}; border-radius: 10px;
             }}
@@ -556,8 +573,9 @@ class HomePage(BasePage):
                 background: {card}; border: 1px solid {border}; border-radius: 10px;
             }}
             QFrame#toolCard:hover {{ background: {hover}; border-color: {accent}; }}
-            QLabel#toolIcon {{ background: transparent; font-size: 19px; }}
+            QLabel#toolIcon {{ background: palette(alternate-base); border-radius: 7px; font-family: "Segoe UI Emoji"; font-size: 18px; }}
             QLabel#toolTitle {{ color: {text}; background: transparent; font-size: 13px; font-weight: bold; }}
+            QLabel#toolArrow {{ color: {muted}; background: transparent; font-size: 20px; }}
             QLabel#toolDesc {{ color: {muted}; background: transparent; font-size: 11px; }}
         """)
         self.date_label.setText(

@@ -23,88 +23,105 @@ from datetime import datetime
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
+# 选中指示器交给 Qt 原生绘制，避免给 :checked 覆盖背景后丢失勾号/圆点。
 NEUTRAL_QSS = """
 QMainWindow, QWidget { background-color: palette(window); color: palette(window-text); font-family: "Microsoft YaHei"; font-size: 13px; }
 QScrollArea { border: none; background: palette(window); }
-QPushButton { background: palette(button); color: palette(button-text); padding: 6px 12px; border: 1px solid palette(shadow); border-radius: 4px; text-align: center; }
-QPushButton:hover { background: #2e7d32; color: #ffffff; border-color: #3a8c3a; }
-QPushButton:pressed { background: #1a5c2a; color: #ffffff; }
-QPushButton:checked { background: #1a5c2a; color: #ffffff; border-color: #2e7d32; }
+QPushButton { background: palette(button); color: palette(button-text); padding: 6px 12px; border: 1px solid palette(shadow); border-radius: 6px; text-align: center; }
+QPushButton:hover { background: palette(midlight); color: palette(link); border-color: palette(highlight); }
+QPushButton:pressed, QPushButton:checked { background: palette(highlight); color: palette(highlighted-text); border-color: palette(highlight); }
+QPushButton:focus { border-color: palette(highlight); }
 QPushButton:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(midlight); }
-QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: palette(base); color: palette(text); border: 1px solid palette(mid); border-radius: 4px; padding: 6px; selection-background-color: palette(highlight); }
+QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: palette(base); color: palette(text); border: 1px solid palette(mid); border-radius: 6px; padding: 6px; selection-background-color: palette(highlight); selection-color: palette(highlighted-text); }
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { border-color: palette(dark); }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid palette(highlight); background: palette(base); }
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
 QListWidget { padding: 2px; }
 QListWidget::item { padding: 3px; border-radius: 3px; }
 QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
 QListWidget::item:hover { background: palette(midlight); }
-QTreeWidget, QTreeView, QTableWidget, QTableView { background: palette(base); color: palette(text); border: 1px solid palette(mid); border-radius: 4px; }
+QTreeWidget, QTreeView, QTableWidget, QTableView { background: palette(base); color: palette(text); border: 1px solid palette(mid); border-radius: 6px; }
 QTreeWidget::item:selected, QTableWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
 QHeaderView::section { background: palette(alternate-base); color: palette(placeholder-text); border: none; border-bottom: 1px solid palette(shadow); padding: 5px; }
-QCheckBox { color: palette(window-text); spacing: 6px; }
-QCheckBox::indicator { width: 16px; height: 16px; }
-QCheckBox::indicator:checked { background: #2e7d32; border: 1px solid #1a5c2a; border-radius: 3px; }
+QCheckBox, QRadioButton { color: palette(window-text); spacing: 6px; }
+QCheckBox:disabled, QRadioButton:disabled { color: palette(placeholder-text); }
+QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
 QCheckBox::indicator:unchecked { background: palette(button); border: 1px solid palette(mid); border-radius: 3px; }
-QRadioButton::indicator:checked { background: palette(highlight); border: 1px solid palette(highlight); border-radius: 8px; }
-QTabBar::tab { background: palette(alternate-base); color: palette(placeholder-text); padding: 8px 16px; border: 1px solid palette(shadow); border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
-QTabBar::tab:selected { background: #1a5c2a; color: #ffffff; }
-QTabBar::tab:hover { background: #2e7d32; color: #ffffff; }
+QCheckBox::indicator:unchecked:disabled { background: palette(alternate-base); border-color: palette(shadow); }
+QTabBar::tab { background: palette(alternate-base); color: palette(placeholder-text); padding: 7px 14px; border: 1px solid palette(shadow); border-bottom: 2px solid transparent; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+QTabBar::tab:hover { background: palette(midlight); color: palette(link); }
+QTabBar::tab:selected { background: palette(base); color: palette(link); border-bottom-color: palette(highlight); }
 QTabWidget::pane { border: 1px solid palette(shadow); background: palette(window); }
 QProgressBar { background: palette(base); border: 1px solid palette(mid); border-radius: 4px; text-align: center; color: palette(text); }
-QProgressBar::chunk { background: #2e7d32; border-radius: 3px; }
-QScrollBar:vertical { background: palette(window); width: 12px; }
-QScrollBar::handle:vertical { background: palette(mid); border-radius: 4px; min-height: 24px; }
+QProgressBar::chunk { background: palette(highlight); border-radius: 3px; }
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical { background: palette(mid); border-radius: 3px; min-height: 28px; }
 QScrollBar::handle:vertical:hover { background: palette(dark); }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: palette(window); height: 12px; }
-QScrollBar::handle:horizontal { background: palette(mid); border-radius: 4px; min-width: 24px; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
+QScrollBar::handle:horizontal { background: palette(mid); border-radius: 3px; min-width: 28px; }
 QScrollBar::handle:horizontal:hover { background: palette(dark); }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QStatusBar { background: palette(window); color: palette(placeholder-text); border-top: 1px solid palette(shadow); }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QStatusBar { background: palette(base); color: palette(placeholder-text); border-top: 1px solid palette(shadow); }
 QStatusBar::item { border: none; }
 QLabel { color: palette(window-text); }
 QMenuBar { background: palette(window); color: palette(window-text); }
-QMenuBar::item:selected { background: #2e7d32; color: #ffffff; }
+QMenuBar::item:selected { background: palette(highlight); color: palette(highlighted-text); }
 QMenu { background: palette(base); color: palette(text); border: 1px solid palette(mid); }
-QMenu::item:selected { background: #2e7d32; color: #ffffff; }
+QMenu::item { padding: 5px 18px; }
+QMenu::item:selected { background: palette(highlight); color: palette(highlighted-text); }
+QToolTip { background: palette(tool-tip-base); color: palette(tool-tip-text); border: 1px solid palette(mid); padding: 5px 7px; }
 QGroupBox { border: 1px solid palette(shadow); border-radius: 6px; margin-top: 10px; padding-top: 6px; }
 QGroupBox::title { color: palette(placeholder-text); subcontrol-origin: margin; left: 10px; }
 QSpinBox, QDoubleSpinBox { padding: 3px 6px; }
 QComboBox QAbstractItemView { background: palette(base); color: palette(text); selection-background-color: palette(highlight); selection-color: palette(highlighted-text); }
 QSlider::groove:horizontal { height: 6px; background: palette(mid); border-radius: 3px; }
-QSlider::sub-page:horizontal { background: #2e7d32; border-radius: 3px; }
+QSlider::sub-page:horizontal { background: palette(highlight); border-radius: 3px; }
 QSlider::handle:horizontal { background: palette(highlighted-text); border: 1px solid #9aa3b0; width: 12px; margin: -4px 0; border-radius: 6px; }
+QWidget#navigationPanel { background: palette(base); border-right: 1px solid palette(shadow); }
+QWidget#navigationItems, QWidget#navigationViewport, QScrollArea#navigationScroll { background: palette(base); border: none; }
+QPushButton#navigationTitle, QPushButton#navigationButton, QLabel#navigationGroup { font-family: "Microsoft YaHei", "Segoe UI Emoji", "Segoe UI Symbol"; }
+QPushButton#navigationTitle { background: transparent; color: palette(window-text); border: none; padding: 16px 10px; text-align: left; font-size: 14px; font-weight: bold; }
+QPushButton#navigationTitle:hover, QPushButton#navigationTitle:checked { color: palette(link); }
+QLabel#navigationGroup { background: transparent; color: palette(placeholder-text); font-size: 11px; font-weight: bold; padding: 12px 8px 4px; }
+QPushButton#navigationButton { background: transparent; color: palette(window-text); border: 1px solid transparent; border-left: 3px solid transparent; border-radius: 7px; text-align: left; padding: 6px 8px; }
+QPushButton#navigationButton:hover { background: palette(alternate-base); color: palette(link); }
+QPushButton#navigationButton:checked { background: palette(midlight); color: palette(link); border-left-color: palette(link); font-weight: bold; }
+QPushButton#navigationButton:focus { border-top-color: palette(highlight); border-right-color: palette(highlight); border-bottom-color: palette(highlight); }
+QWidget#cookiePanel { background: palette(window); border: 1px solid palette(shadow); border-radius: 9px; }
 """
 
 # ==================== 浅色 / 深色调色板 ====================
-# 角色取值对齐旧版 LIGHT_QSS / DARK_QSS 的十六进制色（个别近似）：
+# 通用控件共用的层级配色：页面底色、卡片、边框、次级文字与蓝色交互强调。
 # shadow=按钮边框、mid=输入框边框、dark=滚动条悬停、midlight=列表悬停/禁用边框、
 # alternate-base=表头/标签页底、placeholder-text=次级灰字（状态栏/表头/分组标题）。
 _PALETTE_SPEC = {
     # role: (light, dark)
-    "Window": ("#f4f5f7", "#1a1d27"),
-    "WindowText": ("#2f3440", "#c6cbd6"),
-    "Base": ("#ffffff", "#23262f"),
-    "AlternateBase": ("#eef0f4", "#23262f"),
-    "Text": ("#2f3440", "#c6cbd6"),
-    "Button": ("#ffffff", "#23262f"),
-    "ButtonText": ("#2f3440", "#c6cbd6"),
-    "Midlight": ("#e3e9f2", "#23262f"),
-    "Mid": ("#c8cdd6", "#333340"),
-    "Dark": ("#9fb0c8", "#4a5a8c"),
-    "Shadow": ("#c3c9d4", "#2e3140"),
-    "Highlight": ("#2a6a9c", "#2a5a8c"),
+    "Window": ("#f3f5f9", "#151c29"),
+    "WindowText": ("#263449", "#dce5f3"),
+    "Base": ("#ffffff", "#1d2737"),
+    "AlternateBase": ("#f0f3f8", "#243044"),
+    "Text": ("#263449", "#dce5f3"),
+    "Button": ("#ffffff", "#243044"),
+    "ButtonText": ("#263449", "#dce5f3"),
+    "Midlight": ("#e8effc", "#293d5c"),
+    "Mid": ("#cbd5e3", "#3a4b63"),
+    "Dark": ("#93a7c5", "#6c84a6"),
+    "Shadow": ("#dce3ed", "#303e52"),
+    "Highlight": ("#356bd6", "#447ccf"),
     "HighlightedText": ("#ffffff", "#ffffff"),
-    "Link": ("#1976d2", "#64b5f6"),
-    "PlaceholderText": ("#9aa0b0", "#888888"),
-    "ToolTipBase": ("#ffffff", "#23262f"),
-    "ToolTipText": ("#2f3440", "#c6cbd6"),
+    "Link": ("#285ebc", "#93bcff"),
+    "PlaceholderText": ("#6e7f96", "#9caec5"),
+    "ToolTipBase": ("#ffffff", "#243044"),
+    "ToolTipText": ("#263449", "#dce5f3"),
     # 禁用态文字灰（原生控件用；QSS 管理的控件走 :disabled 规则）
-    "DisabledText": ("#9aa0b0", "#666677"),
+    "DisabledText": ("#8b9aae", "#6e809b"),
 }
 
 
 def build_palette(dark: bool):
-    """按主题构建 QPalette（浅/深两套，颜色对齐旧版 QSS）。"""
+    """按主题构建统一控件配色的 QPalette（浅/深两套）。"""
     from PySide6.QtGui import QPalette, QColor
     pal = QPalette()
     idx = 1 if dark else 0

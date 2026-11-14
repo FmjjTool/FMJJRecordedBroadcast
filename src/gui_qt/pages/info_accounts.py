@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -158,7 +159,7 @@ class InfoAccountsPage(BasePage):
         self._batch_cancel_evt = threading.Event()
         # 结果揭示队列：采集线程先落库，主线程每 150ms 揭示一条作品，
         # 避免多个账号/一页数据同时完成时「已获取」一次性全部刷出
-        self._reveal_queue = []
+        self._reveal_queue = deque()
         self._reveal_timer = QTimer(self)
         self._reveal_timer.setSingleShot(True)
         self._reveal_timer.timeout.connect(self._drain_reveal)
@@ -1004,7 +1005,7 @@ class InfoAccountsPage(BasePage):
         """每次只放一条作品进「已获取」，连续拿到多条时也能逐条出现。"""
         if not self._reveal_queue:
             return
-        item = self._reveal_queue.pop(0)
+        item = self._reveal_queue.popleft()
         added = _collect([item], persist=False)
         if added:
             refresh_results_count(self.app)
@@ -1016,7 +1017,7 @@ class InfoAccountsPage(BasePage):
         """新一轮开始前清空旧队列：全部并入内存，避免旧结果卡在队列里。"""
         self._reveal_timer.stop()
         pending = self._reveal_queue
-        self._reveal_queue = []
+        self._reveal_queue = deque()
         if not pending:
             return
         _collect(pending, persist=False)

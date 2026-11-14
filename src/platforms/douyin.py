@@ -263,8 +263,7 @@ class DouyinParser(PlatformBase):
     def fetch_user_posts(self, url_or_id: str, count: int = 10,
                          pause_every: int = 0, pause_secs: float = 0.0,
                          stop_check=None, on_items=None) -> list:
-        """用户作品列表。Cookie 是账号凭据但用户时间线属「必须用 Cookie 的接口」
-        （游客 aweme/post 常被风控空响应 + 漏最新作品），Cookie 优先、游客兜底。
+        """用户作品列表。已启用的 Cookie 优先，游客 HTTP 与浏览器依次兜底。
 
         pause_every/pause_secs: 账号内部翻页限流（每抓 pause_every 条停 pause_secs 秒），
         0 = 不限流（仅保留翻页基础间隔）。
@@ -279,141 +278,203 @@ class DouyinParser(PlatformBase):
             print(f"[抖音] 无法提取用户ID: {url_or_id}")
             return []
 
-        from auth import get_cookie
-        cookie_str = get_cookie("douyin") or ""
+        def _stopped():
+            return stop_check is not None and stop_check()
 
-        # 一级：HTTP 直调（快且稳，翻页拿足 count 条）
-        results = self._fetch_user_posts_http(sec_uid, count, cookie_str=cookie_str,
-                                              pause_every=pause_every, pause_secs=pause_secs,
-                                              stop_check=stop_check, on_items=on_items)
-        if results:
-            return results
-        if not cookie_str:
-            results = self._fetch_user_posts_http(sec_uid, count, cookie_str="",
-                                                  pause_every=pause_every, pause_secs=pause_secs,
-                                                  stop_check=stop_check, on_items=on_items)
+        if _stopped():
+            return []
+        try:
+            from auth import get_cookie
+            cookie_str = get_cookie("douyin") or ""
+        except Exception:
+            cookie_str = ""
+        cookie_attempts = (cookie_str, "") if cookie_str else ("",)
+        partial = []
+        partial_keys = set()
+
+        def _remember(items):
+            for item in items:
+                key = (getattr(item, "video_id", "") or getattr(item, "raw_url", "")
+                       or getattr(item, "video_url", "") or id(item))
+                if key not in partial_keys:
+                    partial_keys.add(key)
+                    partial.append(item)
+
+        def _partial_result():
+            return partial[:count] if count > 0 else list(partial)
+
+        def _run_stage(fetch, cookie):
+            # 失败仍尝试下一层补足目标；全部失败/取消时再用已经获取的作品兜底。
+            def _on_items(items):
+                _remember(items)
+                if on_items is not None:
+                    on_items(items)
+
+            try:
+                result = fetch(sec_uid, count, cookie_str=cookie,
+                               pause_every=pause_every, pause_secs=pause_secs,
+                               stop_check=stop_check, on_items=_on_items)
+            except Exception as exc:
+                print(f"[抖音] 当前采集方式失败: {exc}")
+                result = []
+            if result:
+                _remember(result)
+            return result
+
+        # 一级：各登录态 HTTP 只试一次，Cookie 不可用时仍尝试游客 HTTP。
+        for cookie in cookie_attempts:
+            if _stopped():
+                return _partial_result()
+            results = _run_stage(self._fetch_user_posts_http, cookie)
+            if _stopped():
+                return _partial_result()
             if results:
                 return results
 
         # 二级：Playwright 兜底
+        if _stopped():
+            return _partial_result()
         try:
             from playwright.sync_api import sync_playwright  # noqa: F401
-        except ImportError:
-            print("[抖音] 未安装 playwright")
-            return []
-        if cookie_str:
-            results = self._fetch_pw_once(sec_uid, count, cookie_str=cookie_str,
-                                          pause_every=pause_every, pause_secs=pause_secs,
-                                          stop_check=stop_check, on_items=on_items)
+        except Exception as exc:
+            print(f"[抖音] Playwright 不可用: {exc}")
+            return _partial_result()
+        for cookie in cookie_attempts:
+            if _stopped():
+                return _partial_result()
+            results = _run_stage(self._fetch_pw_once, cookie)
+            if _stopped():
+                return _partial_result()
             if results:
                 return results
-            print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
-        return self._fetch_pw_once(sec_uid, count, cookie_str="",
-                                    pause_every=pause_every, pause_secs=pause_secs,
-                                    stop_check=stop_check, on_items=on_items)
+            if cookie:
+                print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
+        return _partial_result()
 
     def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "",
                                pause_every: int = 0, pause_secs: float = 0.0,
                                stop_check=None, on_items=None) -> list:
         """HTTP 直调 aweme/post（a_bogus 签名），max_cursor 链式翻页到 count 条。
 
-        空响应=风控拦截；node 缺失导致无签名时直接放弃（返回空，由上层兜底）。
+        空响应或签名失败时返回空，让上层继续尝试；已回调作品由上层留作最终兜底。
         """
+        if stop_check is not None and stop_check():
+            return []
         import requests
         from multi_downloader import UA_PC, _douyin_abogus
 
-        s = requests.Session()
-        s.headers.update({"User-Agent": UA_PC, "Referer": "https://www.douyin.com/"})
-        if cookie_str:
-            s.headers["Cookie"] = cookie_str
-        else:
-            try:
-                s.get("https://www.douyin.com/", timeout=15)
-            except Exception:
-                pass
-
         results = []
+        failed = False
         cursor = 0
         seen = set()
         label = "抖音-Cookie" if cookie_str else "抖音"
         # 有限目标 50 页护栏；0=无上限（count≥10^12）翻到底（has_more=False 自然停）
         max_pages = 2500 if count >= 10**12 else 50
-        for _page in range(max_pages):
-            if stop_check is not None and stop_check():
-                if results:
-                    print(f"[{label}] 收到停止信号，保留已获取 {len(results)} 条")
-                break
-            params = {
-                "device_platform": "webapp", "aid": "6383", "sec_user_id": sec_uid,
-                "max_cursor": str(cursor), "locate_query": "false",
-                "show_live_replay_strategy": "1", "need_time_list": "1",
-                "time_list_query": "0", "whale_cut_token": "", "cut_version": "1",
-                "count": "20",
-            }
-            query = "&".join(f"{k}={v}" for k, v in params.items())
-            d = None
-            # 截断/风控偶发：同参数最多两试（第二试换新签名），两败则放弃本层
-            for _attempt in range(2):
-                a_bogus = _douyin_abogus(query, UA_PC)
-                if not a_bogus:
-                    print("[抖音] a_bogus 签名失败，放弃 HTTP 直调")
-                    return []
-                try:
-                    r = s.get(f"{self.POST_API}?{query}&a_bogus={a_bogus}", timeout=20)
-                    if not r.text.strip():
-                        print("[抖音] HTTP 直调被风控（空响应）")
-                        return []
-                    d = r.json()
-                    break
-                except Exception as e:
-                    print(f"[抖音] HTTP 直调第 {_attempt + 1} 次失败: {e}")
-                    time.sleep(1.0)
-            if d is None:
-                return []
-            if d.get("status_code") != 0:
-                print(f"[抖音] aweme/post status_code={d.get('status_code')}")
-                return []
-            page_infos = []
-            for a in d.get("aweme_list") or []:
-                vid = str(a.get("aweme_id") or "")
-                if not vid or vid in seen:
-                    continue
-                seen.add(vid)
-                info = self._build_from_aweme(a, vid)
-                info.raw_url = self._aweme_url(a)
-                results.append(info)
-                page_infos.append(info)
-            # 有上限时只回调本次目标数量，避免一页 20 条超出用户填的 10 条
-            if page_infos and on_items is not None:
-                callback_items = page_infos
-                if count > 0:
-                    remain = count - (len(results) - len(page_infos))
-                    callback_items = page_infos[:max(0, remain)]
-                if callback_items:
-                    try:
-                        on_items(callback_items)
-                    except Exception:
-                        pass
-            if len(results) >= count or not d.get("has_more"):
-                break
-            cursor = int(d.get("max_cursor") or 0)
-            if (_page + 1) % 5 == 0:
-                target = "无上限" if count >= 10**12 else f"目标 {count}"
-                print(f"[{label}] 已翻 {_page + 1} 页 · 累计 {len(results)} 条（{target}），继续...")
-            # 翻页间隔：限流开启时按「每 pause_every 条停 pause_secs 秒」折算
-            # （一页约 20 条 = 2×10 条 → 停 2×10s）；未开启仅保留基础间隔
-            page_new = len(d.get("aweme_list") or [])
-            if pause_every > 0 and pause_secs > 0 and page_new:
-                time.sleep(pause_secs * page_new / pause_every)
+        with requests.Session() as s:
+            s.headers.update({"User-Agent": UA_PC, "Referer": "https://www.douyin.com/"})
+            if cookie_str:
+                s.headers["Cookie"] = cookie_str
             else:
-                time.sleep(0.6)
+                try:
+                    s.get("https://www.douyin.com/", timeout=15)
+                except Exception:
+                    pass
+            for _page in range(max_pages):
+                if stop_check is not None and stop_check():
+                    if results:
+                        print(f"[{label}] 收到停止信号，保留已获取 {len(results)} 条")
+                    break
+                params = {
+                    "device_platform": "webapp", "aid": "6383", "sec_user_id": sec_uid,
+                    "max_cursor": str(cursor), "locate_query": "false",
+                    "show_live_replay_strategy": "1", "need_time_list": "1",
+                    "time_list_query": "0", "whale_cut_token": "", "cut_version": "1",
+                    "count": "20",
+                }
+                query = "&".join(f"{k}={v}" for k, v in params.items())
+                d = None
+                # 截断/风控偶发：同参数最多两试（第二试换新签名），两败则停止本层
+                for _attempt in range(2):
+                    if stop_check is not None and stop_check():
+                        break
+                    a_bogus = _douyin_abogus(query, UA_PC)
+                    if not a_bogus:
+                        print("[抖音] a_bogus 签名失败，放弃 HTTP 直调")
+                        failed = True
+                        break
+                    if stop_check is not None and stop_check():
+                        break
+                    try:
+                        r = s.get(f"{self.POST_API}?{query}&a_bogus={a_bogus}", timeout=20)
+                        if not r.text.strip():
+                            print("[抖音] HTTP 直调被风控（空响应）")
+                            failed = True
+                            break
+                        d = r.json()
+                        break
+                    except Exception as e:
+                        print(f"[抖音] HTTP 直调第 {_attempt + 1} 次失败: {e}")
+                        if stop_check is None or not stop_check():
+                            time.sleep(1.0)
+                if d is None:
+                    if stop_check is None or not stop_check():
+                        failed = True
+                    break
+                if d.get("status_code") != 0:
+                    print(f"[抖音] aweme/post status_code={d.get('status_code')}")
+                    failed = True
+                    break
+                page_infos = []
+                for a in d.get("aweme_list") or []:
+                    try:
+                        vid = str(a.get("aweme_id") or "")
+                        if not vid or vid in seen:
+                            continue
+                        info = self._build_from_aweme(a, vid)
+                        info.raw_url = self._aweme_url(a)
+                    except Exception as exc:
+                        print(f"[{label}] 跳过无法解析的作品: {exc}")
+                        continue
+                    seen.add(vid)
+                    results.append(info)
+                    page_infos.append(info)
+                # 有上限时只回调本次目标数量，避免一页 20 条超出用户填的 10 条
+                if page_infos and on_items is not None:
+                    callback_items = page_infos
+                    if count > 0:
+                        remain = count - (len(results) - len(page_infos))
+                        callback_items = page_infos[:max(0, remain)]
+                    if callback_items:
+                        try:
+                            on_items(callback_items)
+                        except Exception:
+                            pass
+                if len(results) >= count or not d.get("has_more"):
+                    break
+                if stop_check is not None and stop_check():
+                    break
+                cursor = int(d.get("max_cursor") or 0)
+                if (_page + 1) % 5 == 0:
+                    target = "无上限" if count >= 10**12 else f"目标 {count}"
+                    print(f"[{label}] 已翻 {_page + 1} 页 · 累计 {len(results)} 条（{target}），继续...")
+                # 翻页间隔：限流开启时按「每 pause_every 条停 pause_secs 秒」折算
+                # （一页约 20 条 = 2×10 条 → 停 2×10s）；未开启仅保留基础间隔
+                page_new = len(d.get("aweme_list") or [])
+                if pause_every > 0 and pause_secs > 0 and page_new:
+                    time.sleep(pause_secs * page_new / pause_every)
+                else:
+                    time.sleep(0.6)
         print(f"[抖音] HTTP 直调获取到 {len(results)} 条")
+        if failed:
+            return []
         return results[:count] if count > 0 else results
 
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "",
                        pause_every: int = 0, pause_secs: float = 0.0,
                        stop_check=None, on_items=None) -> list:
         """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
+        if stop_check is not None and stop_check():
+            return []
         from playwright.sync_api import sync_playwright
 
         results = []
@@ -543,7 +604,7 @@ class DouyinParser(PlatformBase):
                     if pause_every > 0 and pause_secs > 0:
                         page.wait_for_timeout(int(pause_secs * 20 / pause_every * 1000))
 
-                if not collected:
+                if not collected and (stop_check is None or not stop_check()):
                     page.wait_for_timeout(5000)
                     _merge_html_items()
 
