@@ -15,14 +15,15 @@ class ToolPageHeader(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        self.title_label = QLabel(title)
+        self.title_label = QLabel(title, self)
         self.title_label.setProperty("role", "title")
         layout.addWidget(self.title_label)
-        self.description_label = QLabel(description)
+        self.description_label = QLabel(description, self)
         self.description_label.setProperty("role", "subtitle")
         self.description_label.setWordWrap(True)
-        self.description_label.setVisible(bool(description))
         layout.addWidget(self.description_label)
+        # 设置可见性前先归属页面，避免无父 QLabel 被 Qt 当作独立窗口弹出。
+        self.description_label.setVisible(bool(description))
 
 
 class ToolSectionCard(QFrame):
