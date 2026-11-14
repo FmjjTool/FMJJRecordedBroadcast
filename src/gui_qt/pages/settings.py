@@ -244,19 +244,22 @@ class GlobalSettingsPage(BasePage):
             lambda: self._open_site("微博主页", "https://weibo.com/u/7262942477")))
         v.addLayout(maker_row)
 
-        for name, url in [
+        # 四个站点直接做成按钮（3 个官方站点 + 数据库 Wiki）
+        sites = [
             ("封茗囧菌数据汇总库", "https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr"),
             ("无料周边汇总", "https://docs.qq.com/smartsheet/DRkZIbkZtQ0taTHd4"),
             ("用户协议与编辑须知",
              "https://docs.qq.com/aio/p/scisutrcci3apy1?p=w5TSrLIyhtOn7j9KjoGXP3"),
-        ]:
+            ("数据库 Wiki", "https://mandisa.wiki"),
+        ]
+        for start in (0, 2):
             site_row = QHBoxLayout()
-            site_lbl = QLabel(f"📋 官方网站：{name}")
-            site_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
-            site_row.addWidget(site_lbl)
-            site_row.addStretch(1)
-            site_row.addWidget(self._btn(
-                "🔗 打开", lambda n=name, u=url: self._open_site(n, u)))
+            for name, url in sites[start:start + 2]:
+                b = self._btn(
+                    f"📋 {name}", lambda n=name, u=url: self._open_site(n, u))
+                b.setToolTip(url)
+                b.setCursor(Qt.PointingHandCursor)
+                site_row.addWidget(b, 1)
             v.addLayout(site_row)
 
         about = QLabel(

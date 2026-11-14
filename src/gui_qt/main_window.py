@@ -10,7 +10,7 @@
 import os
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QKeySequence, QPalette, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
@@ -23,6 +23,20 @@ from gui_qt.navigation import line_icon, tool_icon_name
 from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
+
+
+def _brand_icon_pixmap():
+    """侧栏品牌图标：优先项目根 icon.ico，打包环境回落到应用窗口图标。"""
+    root_icon = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "icon.ico")
+    icon = QIcon(root_icon) if os.path.exists(root_icon) else QApplication.windowIcon()
+    if icon.isNull():
+        return None
+    # QIcon.pixmap 已按屏幕 DPR 放大物理像素并自带 devicePixelRatio，
+    # 这里只传逻辑尺寸 34；再乘 DPR 会把 51 逻辑像素塞进 34 的 QLabel 被裁掉。
+    return icon.pixmap(QSize(34, 34))
+
 
 # 页面注册：key -> (模块路径, 类名)。
 # 懒导入：首次切到该页才 import（启动只加载首页，避免全部页面模块
@@ -138,9 +152,9 @@ _SHELL_QSS = """
 QWidget#workbenchSidebar { background: palette(base); border-right: 1px solid palette(shadow); }
 QWidget#workbenchNavItems, QWidget#workbenchNavViewport, QScrollArea#workbenchNavScroll,
 QWidget#workbenchNavGroups, QWidget#workbenchSearchResults { background: transparent; border: none; }
-QPushButton#workbenchBrand { background: transparent; color: palette(text); border: none; text-align: left; font-size: 17px; font-weight: bold; padding: 0; }
+QPushButton#workbenchBrand { background: transparent; color: palette(text); border: none; text-align: left; font-size: 16px; font-weight: bold; padding: 0; }
 QPushButton#workbenchBrand:hover { color: palette(link); }
-QLabel#workbenchBrandMark { background: palette(highlight); color: palette(highlighted-text); border: none; border-radius: 10px; font-family: "Segoe UI"; font-size: 18px; font-weight: bold; }
+QLabel#workbenchBrandMark { background: transparent; border: none; }
 QLabel#workbenchBrandSub { background: transparent; color: palette(placeholder-text); border: none; font-size: 10px; }
 QLineEdit#workbenchSearch { background: palette(window); border: 1px solid palette(shadow); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
 QLineEdit#workbenchSearch:focus { border-color: palette(highlight); }
@@ -216,21 +230,26 @@ class MainWindow(QMainWindow):
         brand_row = QHBoxLayout(brand)
         brand_row.setContentsMargins(18, 23, 14, 18)
         brand_row.setSpacing(10)
-        mark = QLabel("F")
+        mark = QLabel()
         mark.setObjectName("workbenchBrandMark")
         mark.setFixedSize(34, 34)
         mark.setAlignment(Qt.AlignCenter)
+        brand_pixmap = _brand_icon_pixmap()
+        if brand_pixmap is not None:
+            mark.setPixmap(brand_pixmap)
+        else:
+            mark.setText("F")
         brand_row.addWidget(mark)
         brand_text = QVBoxLayout()
         brand_text.setSpacing(1)
-        self.nav_title = QPushButton("封茗工作台")
+        self.nav_title = QPushButton("封茗囧菌数据汇总库")
         self.nav_title.setObjectName("workbenchBrand")
         self.nav_title.setCheckable(True)
         self.nav_title.setCursor(Qt.PointingHandCursor)
         self.nav_title.setToolTip("返回首页")
         self.nav_title.clicked.connect(lambda: self.show_page("home"))
         brand_text.addWidget(self.nav_title)
-        brand_sub = QLabel(f"数据汇总库  /  v{APP_VERSION}")
+        brand_sub = QLabel(f"统一维护工具箱 - v{APP_VERSION}")
         brand_sub.setObjectName("workbenchBrandSub")
         brand_text.addWidget(brand_sub)
         brand_row.addLayout(brand_text, 1)
