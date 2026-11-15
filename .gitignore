@@ -22,6 +22,8 @@ _taobao_debug/
 .workbuddy/
 # TRAE 工具生成的 HTML 分享包缓存（不进仓库）
 .trae-html-share-packages/
+# TRAE 本地工作区配置与规则（仅本地保留，不进仓库）
+.trae/
 # 外部参考项目源码（BililiveRecorder 等，仅本地学习用，不进仓库）
 _ref/
 BililiveRecorder-dev.zip
