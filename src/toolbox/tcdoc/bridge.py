@@ -83,6 +83,18 @@ def _date_key(value) -> str:
         return ""
 
 
+def _datetime_text(value) -> str:
+    """发布时间 → YYYY-MM-DD HH:MM（腾讯日期字段支持时分）。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        from platforms.base import normalize_datetime
+        return normalize_datetime(text)
+    except Exception:  # noqa: BLE001 - 归一化失败时保留原值
+        return text
+
+
 def _first(value) -> str:
     parts = _split_multi(value)
     return parts[0] if parts else ""
@@ -500,7 +512,6 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
     content = longest("description")
     author = next((str(item.get("author") or "") for item in items
                    if item.get("author")), "")
-    day = _date_key(base.get("publish_time"))
     durations = []
     for item in items:
         try:
@@ -526,7 +537,7 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
         "发布账号": author,
         "封面图": "",
         "动态类型": type_value,
-        "发布时间": day,
+        "发布时间": _datetime_text(base.get("publish_time")),
         "发布平台": PLATFORM_TO_CN.get(plat, plat),
         "发布位置": pos_value,
         "作品时长": _duration_text(duration),
