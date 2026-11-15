@@ -457,6 +457,10 @@ class TcDocPage(BasePage):
             "新增/修改/删除，每次同步自动生成 Excel（每张工作表一个 sheet，"
             "存在 表格数据/，可点「📂 打开数据目录」查看）。"
             "普通表格、图表页、文章页不是同一套数据协议，会自动跳过并提示</p>"
+            "<p>· <b>🧩 中间层同步</b>：比对本地「已获取」+ 增量库与当前表格，"
+            "按链接 / 平台 ID / 标题+日期三级匹配，列出尚未上传的条目；"
+            "按官方动态列标准生成表格，一键复制后到腾讯文档手动粘贴上传。"
+            "只提示和复制，不会自动写入腾讯文档</p>"
             "<p>· <b>表格图片</b>：图片字段里的图片会在同步后自动增量下载到 "
             "图片/（按文档 / 工作表 / 字段归档，已下载不重复下，图片替换才重下）。"
             "本地已同步过表格时，也可点「🖼 采集图片」补采，不需要重新同步</p>"
@@ -728,6 +732,13 @@ class TcDocPage(BasePage):
             "把当前文档全部表格图片字段里的图片增量下载到 图片/（已下载自动跳过）")
         self.images_btn.clicked.connect(self._collect_images)
         bar.addWidget(self.images_btn)
+
+        self.bridge_btn = QPushButton("🧩 中间层同步")
+        self.bridge_btn.setToolTip(
+            "比对本地「已获取」与当前腾讯表格，列出尚未上传的条目；"
+            "按官方动态列标准生成表格，一键复制后手动粘贴上传（不会自动写入）")
+        self.bridge_btn.clicked.connect(self._open_bridge)
+        bar.addWidget(self.bridge_btn)
 
         self.prev_btn = QPushButton("◀")
         self.prev_btn.setToolTip("上一页")
@@ -1228,6 +1239,7 @@ class TcDocPage(BasePage):
                         if image_stats.get("downloaded") else "")
                 self.status_label.setText(f"✅ 文档未变化，已跳过同步{note}（rev 未变）")
                 self.app.toast(f"文档未变化，已跳过同步{note}", "info")
+                self._refresh_bridge_hint()
                 return
             added = sum(t["added"] for t in item.get("tables_delta") or [])
             updated = sum(t["updated"] for t in item.get("tables_delta") or [])
@@ -1248,6 +1260,40 @@ class TcDocPage(BasePage):
             self.app.toast(f"表格同步完成：+{added} ~{updated} -{removed}"
                            + (f"，图片 +{image_stats.get('downloaded', 0)}"
                               if image_stats.get("downloaded") else ""), "success")
+            self._refresh_bridge_hint()
+
+        run_bg(work, done)
+
+    def _open_bridge(self):
+        """打开中间层同步器：比对本地已获取与腾讯表格，一键复制待同步行。"""
+        doc = self.current_doc()
+        from gui_qt.pages.tcdoc_bridge import TcDocBridgeDialog
+        TcDocBridgeDialog(self, self.app,
+                          prefer_doc_key=(doc or {}).get("key", "")).exec()
+
+    def _refresh_bridge_hint(self):
+        """表格同步完成后，在底部提示本地还有多少行尚未上传。"""
+        doc = self.current_doc()
+        if not doc:
+            return
+        from gui_qt import common
+        collected = list(common.COLLECTED)  # 主线程快照，避免采集线程并发追加
+
+        def work():
+            from toolbox.tcdoc import bridge
+            return bridge.default_pending_count(doc.get("key"), collected=collected)
+
+        def done(count, err):
+            if err or count < 0:
+                return
+            if count:
+                self.sheet_hint.setText(
+                    f"🔎 本地有 {count} 行尚未同步到当前腾讯表格 · "
+                    "点「🧩 中间层同步」查看并一键复制")
+            else:
+                self.sheet_hint.setText(
+                    "✅ 本地与当前腾讯表格已对齐（默认时间范围/账号）· "
+                    "点「🧩 中间层同步」可查看明细")
 
         run_bg(work, done)
 

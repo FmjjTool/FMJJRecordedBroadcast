@@ -334,6 +334,36 @@ def query_rows(platform: str, keyword: str = "", author: str = "",
     return rows, total
 
 
+def iter_items(since_date: str = "") -> list:
+    """读取全部平台表的条目（dict 形式，附 platform 字段）。
+
+    since_date: 按发布时间过滤（YYYY-MM-DD，空 = 不过滤）；用于中间层同步器
+    一次性取全量数据做匹配，避免逐平台分页调用。
+    """
+    out = []
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                _ensure_migrated(conn)
+                cols = ", ".join(f'"{name}"' for name in _COL_NAMES)
+                for table in _platform_tables(conn):
+                    sql = f'SELECT {cols} FROM "{table}"'
+                    params = []
+                    if since_date:
+                        sql += ' WHERE "publish_time" >= ?'
+                        params.append(since_date)
+                    for row in conn.execute(sql, params):
+                        item = dict(zip(_COL_NAMES, row))
+                        item["platform"] = table
+                        out.append(item)
+            finally:
+                conn.close()
+    except Exception:
+        return out
+    return out
+
+
 def list_authors(platform: str) -> list:
     """平台表内作者分布 [(作者, 条数)]，按条数降序（作者快速筛选用）。"""
     if not (platform or "").strip():

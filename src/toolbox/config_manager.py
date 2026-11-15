@@ -292,6 +292,11 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_headless": True,
     "tcdoc_legacy_migrated": False,
     "tcdoc_table_page": 200,
+    # 腾讯文档「中间层同步器」：上次选择的目标表格 + 时间范围 + 账号勾选
+    "tcdoc_bridge_doc_key": "",
+    "tcdoc_bridge_tab_id": "",
+    "tcdoc_bridge_days": 30,
+    "tcdoc_bridge_accounts": [],
     # 本地资料站：webwiki / webwiki-api 代码目录、GitHub 登录、2 个本地端口
     "webwiki_dir": "",
     "webwiki_backend_port": 8000,

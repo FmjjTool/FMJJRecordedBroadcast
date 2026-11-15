@@ -14,8 +14,8 @@
 - task      : Windows 计划任务安装 / 删除 / 查询
 """
 
-from . import (archive, browse, collector, config, http_api, images, job, report,
-               storage, tables, task)  # noqa: F401
+from . import (archive, bridge, browse, collector, config, http_api, images, job,
+               report, storage, tables, task)  # noqa: F401
 
-__all__ = ["archive", "browse", "collector", "config", "http_api", "images", "job",
-           "report", "storage", "tables", "task"]
+__all__ = ["archive", "bridge", "browse", "collector", "config", "http_api", "images",
+           "job", "report", "storage", "tables", "task"]
