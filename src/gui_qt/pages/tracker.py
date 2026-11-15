@@ -499,9 +499,10 @@ class TrackerPage(BasePage):
         history = load_history(acc.get("name", ""))
         live = []
         platform = (acc.get("platform") or "").strip() or parse_url(acc.get("url", ""))[0]
-        if platform == "douyin":
+        is_douyin = platform == "douyin"
+        if is_douyin:
             live = load_live_history(acc.get("name", ""))
-        if not history and not live:
+        if not history and not live and not is_douyin:
             self.app.toast("暂无历史数据", "info")
             return
 
@@ -518,12 +519,16 @@ class TrackerPage(BasePage):
         v.addWidget(head)
 
         metrics_w = self._history_metrics_widget(history)
-        if not live:
+        if not is_douyin:
             v.addWidget(metrics_w, 1)
         else:
+            # 抖音账号固定显示「直播历史」二级页签：即使 0 场也能在页签内一键获取
             tabs = QTabWidget()
             tabs.addTab(metrics_w, f"📊 指标数据（{len(history)}）")
-            tabs.addTab(self._history_live_widget(live), f"🎥 直播历史（{len(live)}）")
+            live_w = self._history_live_widget(
+                live, acc,
+                on_count=lambda n: tabs.setTabText(1, f"🎥 直播历史（{n}）"))
+            tabs.addTab(live_w, f"🎥 直播历史（{len(live)}）")
             v.addWidget(tabs, 1)
         win.exec()
 
@@ -566,30 +571,82 @@ class TrackerPage(BasePage):
         v.addWidget(table, 1)
         return w
 
-    def _history_live_widget(self, live):
-        """直播历史表：最新在前，标题列自动拉伸。"""
+    def _history_live_widget(self, live, acc=None, on_count=None):
+        """直播历史表：最新在前；抖音账号可在页签内一键获取/刷新。"""
+        from tracker.douyin_live import load_live_history
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 4, 0, 0)
-        if not live:
-            lbl = QLabel("（暂无直播历史，点顶部「🎥 抖音直播历史」一键获取）")
-            lbl.setStyleSheet("color: gray;")
-            lbl.setAlignment(Qt.AlignCenter)
-            v.addWidget(lbl)
-            return w
-        table = QTableWidget(len(live), 5)
+        head = QHBoxLayout()
+        status = QLabel("")
+        status.setStyleSheet("color: #888; font-size: 12px;")
+        head.addWidget(status)
+        head.addStretch(1)
+        fetch_btn = None
+        if acc is not None:
+            fetch_btn = QPushButton("🔄 获取直播历史")
+            fetch_btn.setStyleSheet(
+                "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
+            fetch_btn.setToolTip(
+                "重新抓取该账号的抖音「直播动态」（只抓直播场次，不采集粉丝/获赞指标）")
+            head.addWidget(fetch_btn)
+        v.addLayout(head)
+
+        table = QTableWidget(0, 5)
         table.setHorizontalHeaderLabels(["开播时间", "结束时间", "时长(分钟)", "标题", "房间号"])
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        for i, r in enumerate(live):
-            for j, key in enumerate(["start", "end", "dur", "title", "room_id"]):
-                table.setItem(i, j, QTableWidgetItem(str(r.get(key, ""))))
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        hint = QLabel("直播历史来自抖音「直播动态」公开接口（按房间号去重合并）；官方回放为 App 专属，网页端不提供")
+        v.addWidget(table, 1)
+        hint = QLabel("")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(hint)
-        v.addWidget(table, 1)
+
+        def _fill(rows, extra=""):
+            table.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                for j, key in enumerate(["start", "end", "dur", "title", "room_id"]):
+                    table.setItem(i, j, QTableWidgetItem(str(r.get(key, ""))))
+            table.resizeColumnsToContents()
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+            suffix = f" · {extra}" if extra else ""
+            if rows:
+                status.setText(f"共 {len(rows)} 场（最新在前）{suffix}")
+                status.setStyleSheet("color: #4caf50; font-size: 12px;")
+                hint.setText("直播历史来自抖音「直播动态」公开接口（按房间号去重合并）；"
+                             "官方回放为 App 专属，网页端不提供")
+            else:
+                status.setText(f"暂无直播历史{suffix}")
+                status.setStyleSheet("color: #ff9800; font-size: 12px;")
+                hint.setText("该账号在抖音「直播动态」中没有可读取的场次"
+                             "（抖音仅保留最近一年；未开播或已隐藏的账号为空）")
+            if on_count:
+                on_count(len(rows))
+
+        def _refresh():
+            if self._collecting or self._live_collecting:
+                self.app.toast("正在采集中，请稍候", "info")
+                return
+            fetch_btn.setEnabled(False)
+            fetch_btn.setText("⏳ 获取中...")
+            status.setText("正在获取直播历史...")
+            status.setStyleSheet("color: #eab308; font-size: 12px;")
+
+            def done(result, err):
+                fetch_btn.setEnabled(True)
+                fetch_btn.setText("🔄 获取直播历史")
+                if err or (result or {}).get("error"):
+                    msg = err or (result or {}).get("error") or "未知错误"
+                    status.setText(f"获取失败：{msg}")
+                    status.setStyleSheet("color: #ff5252; font-size: 12px;")
+                    return
+                rows = load_live_history(acc.get("name", ""))
+                _fill(rows, f"本次新增 {result.get('new', 0)} 场")
+
+            self._fetch_live_for(acc, done)
+
+        if fetch_btn is not None:
+            fetch_btn.clicked.connect(_refresh)
+        _fill(live)
         return w
 
     @staticmethod
