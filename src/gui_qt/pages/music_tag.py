@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMenuBar,
     QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QStyle,
-    QTableWidget, QTableWidgetItem, QTextBrowser, QToolBar, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -54,20 +54,6 @@ DEFAULT_SETTINGS = {
     "overwrite": {},
     "columns": {},
 }
-
-HELP_HTML = (
-    "<p><b>音频标签（Tag）查看与批量编辑：右侧文件列表 + 左侧标签表单。</b></p>"
-    "<p>· <b>文件</b>：文件菜单 → 添加文件 / 添加文件夹（递归），支持 "
-    "FLAC/MP3/M4A/OGG/OPUS/WAV/APE/WV/WMA/AIFF/DSF 等</p>"
-    "<p>· <b>字段</b>：标题/艺术家/专辑/专辑艺术家/年份/风格/作曲家/作词家/注释/"
-    "音轨(号+总数)/碟号(号+总数) + 多图封面 + 歌词</p>"
-    "<p>· <b>保存</b>：保存标签 / 全部保存；只写有变化的字段，保留无关标签与封面</p>"
-    "<p>· <b>标签源</b>：网络匹配（手动选候选）/ 自动匹配（四源相似度）/ "
-    "封面搜索 / 歌词搜索</p>"
-    "<p>· <b>批量</b>：XLSX 表格匹配 / 按标签改名 / 提取封面 / 歌词时间轴处理</p>"
-    "<p>· <b>工具</b>：编码修复（乱码重解码）/ 标签历史 / 设置"
-    "（ID3v2.3 UTF-16 或 v2.4 UTF-8）</p>"
-)
 
 EDIT_FIELDS = [
     ("title", "标题"), ("artist", "艺术家"), ("album", "专辑"),
@@ -496,10 +482,6 @@ class MusicTagPage(BasePage):
             action = self._act(label, lambda: None)
             action.setEnabled(False)
             lang_menu.addAction(action)
-
-        help_menu = bar.addMenu("帮助(&H)")
-        help_menu.addAction(self._act("功能介绍", self._show_help, icon="read_tags"))
-        help_menu.addAction(self._act("关于", self._about))
         return bar
 
     def _build_toolbar(self):
@@ -549,7 +531,6 @@ class MusicTagPage(BasePage):
         add("批量改名", "filename_rel", self._batch_rename, "按 @1~@8 标签占位符批量改名")
         tb.addSeparator()
         add("设置", "options", self._open_settings, "ID3v2 版本、连接符、自动匹配并发")
-        std_icon("帮助", QStyle.SP_DialogHelpButton, self._show_help, "功能介绍")
         return tb
 
     def _build_decrypt_bar(self):
@@ -749,33 +730,6 @@ class MusicTagPage(BasePage):
         if self._edit_targets:
             self._fill_form(self._rows[self._edit_targets[0]])
         self.app.toast(f"已导入歌词到 {len(rows)} 个文件（记得保存）", "success")
-
-    def _show_help(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("音乐标签 · 功能介绍")
-        dlg.resize(720, 560)
-        v = QVBoxLayout(dlg)
-        browser = QTextBrowser()
-        browser.setHtml(HELP_HTML)
-        v.addWidget(browser, 1)
-        bar = QHBoxLayout()
-        bar.addStretch(1)
-        bar.addWidget(QPushButton("关闭", clicked=dlg.accept))
-        v.addLayout(bar)
-        dlg.exec()
-
-    def _about(self):
-        try:
-            from version import APP_VERSION
-        except Exception:
-            APP_VERSION = ""
-        QMessageBox.information(
-            self, "关于 音乐标签",
-            "音乐标签编辑器\n"
-            "行为对齐 musictag（TagLibSharp）：四平台标签/歌词/封面搜索、"
-            "自动匹配、批量改名、编码修复、标签历史。\n\n"
-            f"工具箱版本：{APP_VERSION}")
-
 
     def _build_body(self):
         sp = QSplitter(Qt.Horizontal)
