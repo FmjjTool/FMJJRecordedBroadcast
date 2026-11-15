@@ -274,6 +274,15 @@ def _tracked_accounts_snapshot():
     return accounts
 
 
+def _load_account_history(account):
+    """读取单个账号最新两次采集记录（最新在前）。"""
+    if account["source"] == "tracker":
+        from tracker.accounts import load_history
+    else:
+        from music_account.accounts import load_history
+    return (load_history(account["name"]) or [])[:2]
+
+
 def _watched_account_keys():
     """已保存的观察账号 key 集合；None 表示尚未配置（默认全部观察）。"""
     try:
@@ -615,6 +624,8 @@ class HomePage(BasePage):
         self._refreshing = False
         self._tool_grids = []
         self._last_layout = None
+        self._drawer_mode = ""
+        self._account_seq = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -727,6 +738,7 @@ class HomePage(BasePage):
         frame = QFrame()
         frame.setObjectName("workbenchDrawer")
         frame.setAttribute(Qt.WA_StyledBackground, True)
+        frame.setMinimumHeight(360)
         frame.setMaximumHeight(430)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -740,10 +752,6 @@ class HomePage(BasePage):
         self.drawer_sub.setObjectName("workbenchHomeMuted")
         head.addWidget(self.drawer_sub)
         head.addStretch(1)
-        close_btn = QPushButton("✕ 收起")
-        close_btn.setObjectName("workbenchDrawerClose")
-        close_btn.clicked.connect(self._close_drawer)
-        head.addWidget(close_btn)
         layout.addLayout(head)
 
         self.drawer_stack = QStackedWidget()
@@ -761,8 +769,8 @@ class HomePage(BasePage):
         v.setSpacing(6)
 
         bar = QHBoxLayout()
-        hint = QLabel("勾选要观察的账号；保存后首页「追踪账号」按已观察数量统计。"
-                      "新增 / 编辑账号请到对应追踪页。")
+        hint = QLabel("第一列勾选要观察的账号，表格显示各自最新采集数据；"
+                      "保存后首页「追踪账号」按已观察数量统计。")
         hint.setObjectName("workbenchHomeMuted")
         hint.setWordWrap(True)
         bar.addWidget(hint, 1)
@@ -783,16 +791,20 @@ class HomePage(BasePage):
         bar.addWidget(save_btn)
         v.addLayout(bar)
 
-        self.account_grid_host = QWidget()
-        self.account_grid = QGridLayout(self.account_grid_host)
-        self.account_grid.setContentsMargins(0, 0, 0, 0)
-        self.account_grid.setHorizontalSpacing(18)
-        self.account_grid.setVerticalSpacing(4)
-        account_scroll = QScrollArea()
-        account_scroll.setWidgetResizable(True)
-        account_scroll.setFrameShape(QScrollArea.NoFrame)
-        account_scroll.setWidget(self.account_grid_host)
-        v.addWidget(account_scroll, 1)
+        self.account_table = QTableWidget(0, 8)
+        self.account_table.setHorizontalHeaderLabels(
+            ["观察", "账号", "平台", "最新采集", "粉丝", "关注", "获赞/播放", "作品"])
+        self.account_table.verticalHeader().setVisible(False)
+        self.account_table.verticalHeader().setDefaultSectionSize(28)
+        self.account_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.account_table.setSelectionMode(QTableWidget.NoSelection)
+        self.account_table.setAlternatingRowColors(True)
+        self.account_table.setWordWrap(False)
+        header = self.account_table.horizontalHeader()
+        for index, width in enumerate([52, 175, 80, 150, 95, 85, 100]):
+            header.resizeSection(index, width)
+        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        v.addWidget(self.account_table, 1)
 
         self.account_status = QLabel("")
         self.account_status.setObjectName("workbenchHomeMuted")
@@ -839,62 +851,128 @@ class HomePage(BasePage):
 
     def _open_drawer(self, key):
         if key in ACCOUNT_DRAWER_KEYS:
-            self.drawer_title.setText("观察账号")
-            self.drawer_sub.setText("网媒 + 音乐账号 · 勾选后保存观察范围")
-            self.drawer_stack.setCurrentWidget(self.account_drawer_page)
-            self._refresh_account_drawer()
+            mode = "accounts"
         elif key in TCDOC_DRAWER_KEYS:
-            self.drawer_title.setText("腾讯文档 · 成员名单历史")
-            self.drawer_sub.setText(
-                "浏览量 / 增量 / 成员数 / 增量 / 已查看人数 / 修订记录次数")
-            self.drawer_stack.setCurrentWidget(self.tcdoc_drawer_page)
-            self._refresh_tcdoc_docs()
+            mode = "tcdoc"
         else:
             return
+        # 同一张卡片再点一次 = 收起；切换到另一张卡片 = 直接换抽屉内容
+        if self.drawer.isVisible() and self._drawer_mode == mode:
+            self._close_drawer()
+            return
+        self._drawer_mode = mode
+        if mode == "accounts":
+            self.drawer_title.setText("追踪账号")
+            self.drawer_sub.setText(
+                "网媒 + 音乐账号 · 勾选观察范围并查看最新数据（再次点卡片收起）")
+            self.drawer_stack.setCurrentWidget(self.account_drawer_page)
+            self._refresh_account_drawer()
+        else:
+            self.drawer_title.setText("腾讯文档 · 成员名单历史")
+            self.drawer_sub.setText(
+                "浏览量 / 增量 / 成员数 / 增量 / 已查看人数 / 修订记录次数"
+                "（再次点卡片收起）")
+            self.drawer_stack.setCurrentWidget(self.tcdoc_drawer_page)
+            self._refresh_tcdoc_docs()
         self.drawer.show()
         self.scroll.ensureWidgetVisible(self.drawer, 0, 16)
 
     def _close_drawer(self):
         self.drawer.hide()
+        self._drawer_mode = ""
 
     def _refresh_account_drawer(self):
-        while self.account_grid.count():
-            item = self.account_grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-        self._account_checks = {}
-
         accounts = _tracked_accounts_snapshot()
         watched = _watched_account_keys()
         all_keys = {account["key"] for account in accounts}
         selected = all_keys if watched is None else (watched & all_keys)
+        self._account_checks = {}
+
+        table = self.account_table
+        table.setRowCount(len(accounts))
         if not accounts:
-            label = QLabel("暂无配置账号，请到「网媒账号追踪」或「音乐账号追踪」添加。")
-            label.setObjectName("workbenchHomeMuted")
-            self.account_grid.addWidget(label, 0, 0, 1, 2)
-            self.account_status.setText("未读取到账号配置")
+            self.account_status.setText("未读取到账号配置，请到对应追踪页添加")
             return
 
-        row = 0
-        for source, title in (("tracker", "网媒账号"), ("music", "音乐账号")):
-            items = [item for item in accounts if item["source"] == source]
-            if not items:
-                continue
-            group = QLabel(f"{title}（{len(items)}）")
-            group.setStyleSheet("font-weight: bold;")
-            self.account_grid.addWidget(group, row, 0, 1, 2)
-            row += 1
-            for index, account in enumerate(items):
-                check = QCheckBox(f'{account["name"]} · {account["platform_label"]}')
-                check.setChecked(account["key"] in selected)
-                check.setToolTip(account.get("url") or account["name"])
-                self._account_checks[account["key"]] = check
-                self.account_grid.addWidget(check, row + index // 2, index % 2)
-            row += (len(items) + 1) // 2
-        self.account_grid.setRowStretch(row, 1)
-        self.account_status.setText(f"已观察 {len(selected)} / 共 {len(accounts)} 个账号")
+        for row, account in enumerate(accounts):
+            check = QCheckBox()
+            check.setChecked(account["key"] in selected)
+            holder = QWidget()
+            h = QHBoxLayout(holder)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setAlignment(Qt.AlignCenter)
+            h.addWidget(check)
+            table.setCellWidget(row, 0, holder)
+            table.setItem(row, 1, QTableWidgetItem(account["name"]))
+            table.setItem(row, 2, QTableWidgetItem(account["platform_label"]))
+            table.setItem(row, 3, QTableWidgetItem("读取中…"))
+            for column in range(4, 8):
+                table.setItem(row, column, QTableWidgetItem("…"))
+            tip = account.get("url") or account["name"]
+            for column in range(1, 8):
+                item = table.item(row, column)
+                if item is not None:
+                    item.setToolTip(tip)
+            self._account_checks[account["key"]] = check
+
+        self._account_seq += 1
+        seq = self._account_seq
+        self.account_status.setText(
+            f"已观察 {len(selected)} / 共 {len(accounts)} 个账号 · 正在读取最新数据…")
+
+        def work():
+            result = {}
+            for account in accounts:
+                try:
+                    result[account["key"]] = _load_account_history(account)
+                except Exception:
+                    result[account["key"]] = []
+            return result
+
+        def done(histories, err):
+            if seq != self._account_seq or self._drawer_mode != "accounts":
+                return
+            if err:
+                self.account_status.setText(f"读取账号数据失败：{err}")
+                return
+            for row, account in enumerate(accounts):
+                history = (histories or {}).get(account["key"]) or []
+                self._fill_account_row(row, account, history)
+            self.account_status.setText(
+                f"已观察 {len(selected)} / 共 {len(accounts)} 个账号")
+
+        run_bg(work, done)
+
+    def _fill_account_row(self, row, account, history):
+        latest = history[0] if history else {}
+        previous = history[1] if len(history) > 1 else {}
+        table = self.account_table
+        time_text = (latest.get("_time") or "")[:16]
+        table.setItem(row, 3, QTableWidgetItem(time_text or "尚未采集"))
+        if account["source"] == "music":
+            other_field, works_field = "listens", "works"
+        else:
+            other_field = "likes"
+            works_field = ("weibo_count" if account["platform"] == "weibo"
+                           else "video_count")
+        self._set_metric(row, 4, latest, previous, "fans")
+        self._set_metric(row, 5, latest, previous, "following")
+        self._set_metric(row, 6, latest, previous, other_field)
+        self._set_metric(row, 7, latest, previous, works_field)
+
+    def _set_metric(self, row, column, latest, previous, field):
+        value = latest.get(field)
+        item = QTableWidgetItem(self._num_text(value))
+        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        if previous:
+            try:
+                delta = int(float(value)) - int(float(previous.get(field)))
+            except (TypeError, ValueError):
+                delta = None
+            if delta:
+                item.setToolTip(
+                    f"上次 {self._num_text(previous.get(field))} · 变化 {delta:+d}")
+        self.account_table.setItem(row, column, item)
 
     def _select_all_accounts(self, checked):
         for check in self._account_checks.values():
@@ -1161,14 +1239,6 @@ class HomePage(BasePage):
             }
             QLabel#workbenchDrawerTitle {
                 color: palette(text); background: transparent; font-size: 15px; font-weight: bold;
-            }
-            QPushButton#workbenchDrawerClose {
-                background: transparent; color: palette(placeholder-text);
-                border: 1px solid palette(shadow); border-radius: 6px;
-                padding: 4px 10px; font-size: 11px;
-            }
-            QPushButton#workbenchDrawerClose:hover {
-                color: palette(link); border-color: palette(highlight);
             }
             QLabel#workbenchStatValue { color: palette(text); background: transparent; font-family: "Segoe UI", "Microsoft YaHei"; font-size: 27px; font-weight: bold; }
             QLabel#workbenchStatCaption { color: palette(placeholder-text); background: transparent; font-size: 11px; }
