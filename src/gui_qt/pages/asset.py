@@ -3498,7 +3498,12 @@ class AssetPage(BasePage):
         return True
 
     def _item_is_text_only(self, it) -> bool:
-        """纯文本条目：无任何可下载媒体源（无视频源、无图片/live、无封面、本地无媒体文件）。"""
+        """纯文本条目：无任何可下载媒体源（无视频源、无图片/live、本地无媒体文件）。
+
+        微博生日/活动自动帖的封面是 pc.us.sinaimg.cn 下的卡片占位图，
+        不能算作可下载媒体；这类条目按纯文本处理，避免列表里出现
+        「重新下载/下载封面」按钮、点下去才提示无图可下。
+        """
         if it.get("media_files"):
             return False
         vid = str(it.get("video_id") or "")
@@ -3510,7 +3515,9 @@ class AssetPage(BasePage):
             return False
         if self._item_has_video(it):
             return False
-        if (it.get("cover_url") or "").strip():
+        cover = (it.get("cover_url") or "").strip()
+        placeholder = plat == "weibo" and "pc.us.sinaimg.cn" in cover
+        if cover and not placeholder:
             return False
         # 索引缓存里已有预期图片/live 数（建索引时读 *_raw.json 算好）→ 直接用
         if "_pic_n" in it or "_live_n" in it:
