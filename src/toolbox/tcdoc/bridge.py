@@ -293,6 +293,44 @@ def _remote_index(rows: list[dict]) -> dict:
 
 # ==================== 作品链接 ====================
 
+def _item_images(item) -> list[str]:
+    """本地条目 → 图片 URL 列表（封面 + 多图，去重保序）。"""
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(value):
+        if isinstance(value, (list, tuple)):
+            for part in value:
+                add(part)
+            return
+        if not isinstance(value, str):
+            return
+        for part in re.split(r"[\s,，]+", value):
+            part = part.strip()
+            if part.startswith("//"):
+                part = "https:" + part
+            if part.startswith(("http://", "https://")) and part not in seen:
+                seen.add(part)
+                urls.append(part)
+
+    add(item.get("cover_url"))
+    add(item.get("images"))
+    raw = item.get("raw_data")
+    if isinstance(raw, dict):
+        add(raw.get("images"))
+        add(raw.get("image_urls"))
+    raw_json = item.get("raw_json")
+    if isinstance(raw_json, str):
+        try:
+            raw = json.loads(raw_json)
+        except (TypeError, ValueError):
+            raw = None
+        if isinstance(raw, dict):
+            add(raw.get("images"))
+            add(raw.get("image_urls"))
+    return urls
+
+
 def _author_id(item) -> str:
     raw = item.get("raw_json")
     if isinstance(raw, str):
@@ -530,6 +568,12 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
         kind_group = "dynamic"
     type_value, pos_value = _type_position(index, plat, kind_group)
 
+    images: list[str] = []
+    for item in items:
+        for url in _item_images(item):
+            if url not in images:
+                images.append(url)
+
     return {
         "作品标题": title or content[:80],
         "发布距今": "",
@@ -543,6 +587,8 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
         "作品时长": _duration_text(duration),
         "作品链接": page,
         "动态链接(b站)": dyn,
+        # UI 用：检测/复制图片，不参与 TSV 列
+        "_images": images,
     }
 
 
@@ -584,6 +630,8 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
         pending.append(_row_from_group(items, index))
     pending.sort(key=lambda row: (row.get("发布时间") or "",
                                   row.get("发布平台") or ""), reverse=True)
+    with_images = sum(1 for row in pending if row.get("_images"))
+    image_count = sum(len(row.get("_images") or []) for row in pending)
 
     return {
         "rows": pending,
@@ -595,6 +643,9 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
             "local_groups": len(groups),
             "synced_groups": synced,
             "pending": len(pending),
+            "with_images": with_images,
+            "without_images": len(pending) - with_images,
+            "image_count": image_count,
             "remote_rows": len(remote),
             "since": _since_date(days),
         },

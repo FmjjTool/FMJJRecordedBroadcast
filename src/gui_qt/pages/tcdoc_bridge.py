@@ -21,10 +21,12 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import bridge
 
 _DAYS = (("近 7 天", 7), ("近 30 天", 30), ("近 90 天", 90), ("全部历史", 0))
+_DISPLAY_COLUMNS = list(bridge.COLUMNS) + ["图片"]
 _WIDTHS = {
     "作品标题": 240, "发布距今": 90, "作品内容": 240, "发布账号": 110,
     "封面图": 80, "动态类型": 90, "发布时间": 140, "发布平台": 90,
     "发布位置": 80, "作品时长": 90, "作品链接": 220, "动态链接(b站)": 220,
+    "图片": 90,
 }
 
 
@@ -99,8 +101,8 @@ class TcDocBridgePanel(QWidget):
         self.summary.setStyleSheet("font-weight: 600; color: #1e3a8a;")
         layout.addWidget(self.summary)
 
-        self.table = QTableWidget(0, len(bridge.COLUMNS))
-        self.table.setHorizontalHeaderLabels(list(bridge.COLUMNS))
+        self.table = QTableWidget(0, len(_DISPLAY_COLUMNS))
+        self.table.setHorizontalHeaderLabels(_DISPLAY_COLUMNS)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -110,7 +112,7 @@ class TcDocBridgePanel(QWidget):
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
-        for index, name in enumerate(bridge.COLUMNS):
+        for index, name in enumerate(_DISPLAY_COLUMNS):
             self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
@@ -124,6 +126,12 @@ class TcDocBridgePanel(QWidget):
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: #888;")
         bottom.addWidget(self.status, 1)
+        self.copy_images_btn = QPushButton("🖼 复制全部图片")
+        self.copy_images_btn.setToolTip(
+            "把待同步行检测到的图片链接逐行复制（有多少张复制多少张，不参与 TSV 粘贴）")
+        self.copy_images_btn.setEnabled(False)
+        self.copy_images_btn.clicked.connect(self._copy_all_images)
+        bottom.addWidget(self.copy_images_btn)
         self.copy_row_btn = QPushButton("📋 复制选中行")
         self.copy_row_btn.setToolTip("复制表格里选中的行（Ctrl+C 同样可用，可多选），不含表头")
         self.copy_row_btn.setEnabled(False)
@@ -315,15 +323,21 @@ class TcDocBridgePanel(QWidget):
             self._fill_table(result["rows"])
             stats = result["stats"]
             scope = stats["since"] or "全部历史"
+            image_note = ""
+            if stats["pending"]:
+                image_note = (f"（有图片 {stats['with_images']} 行 / "
+                              f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
             self.summary.setText(
                 f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
-                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行")
+                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}")
             self.copy_btn.setEnabled(bool(result["rows"]))
+            self.copy_images_btn.setEnabled(stats["image_count"] > 0)
             self._refresh_accounts(result)
             if result["rows"]:
                 self.status.setText(
                     f"📋 共 {len(result['rows'])} 行待同步（不含表头；"
-                    "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单。")
+                    "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
+                    "图片可点「复制全部图片」。")
             else:
                 self.status.setText(
                     "✅ 没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
@@ -352,14 +366,25 @@ class TcDocBridgePanel(QWidget):
         try:
             self.table.setRowCount(len(rows))
             for r, row in enumerate(rows):
-                for c, column in enumerate(bridge.COLUMNS):
-                    text = str(row.get(column) or "")
-                    item = QTableWidgetItem(text)
-                    item.setToolTip(text[:600])
+                for c, column in enumerate(_DISPLAY_COLUMNS):
+                    if column == "图片":
+                        images = row.get("_images") or []
+                        text = f"有 {len(images)} 张" if images else "无"
+                        item = QTableWidgetItem(text)
+                        tip = "\n".join(images[:20])
+                        if len(images) > 20:
+                            tip += "\n…"
+                        item.setToolTip(tip)
+                    else:
+                        text = str(row.get(column) or "")
+                        item = QTableWidgetItem(text)
+                        item.setToolTip(text[:600])
                     self.table.setItem(r, c, item)
         finally:
             self.table.setUpdatesEnabled(True)
         self._update_copy_row_btn()
+        self.copy_images_btn.setEnabled(
+            any(row.get("_images") for row in self._rows))
 
     # ==================== 复制 ====================
 
@@ -381,6 +406,36 @@ class TcDocBridgePanel(QWidget):
         if not rows:
             return
         self._copy_rows(rows, f"全部 {len(rows)} 行")
+
+    def _copy_all_images(self) -> None:
+        urls: list[str] = []
+        for row in self._rows:
+            for url in row.get("_images") or []:
+                if url not in urls:
+                    urls.append(url)
+        if not urls:
+            self.status.setText("没有检测到可复制的图片")
+            return
+        QApplication.clipboard().setText("\r\n".join(urls))
+        self.status.setText(f"✅ 已复制 {len(urls)} 张图片链接（每行一张）")
+        if self.app is not None:
+            try:
+                self.app.toast(f"✅ 已复制 {len(urls)} 张图片链接", "success")
+            except Exception:  # noqa: BLE001 - 提示失败不影响复制
+                pass
+
+    def _copy_row_images(self, row: dict, row_index: int) -> None:
+        urls = row.get("_images") or []
+        if not urls:
+            self.status.setText(f"第 {row_index + 1} 行没有检测到图片")
+            return
+        QApplication.clipboard().setText("\r\n".join(urls))
+        self.status.setText(f"✅ 已复制第 {row_index + 1} 行的 {len(urls)} 张图片链接")
+        if self.app is not None:
+            try:
+                self.app.toast(f"✅ 已复制 {len(urls)} 张图片链接", "success")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _copy_selected_rows(self, *_args) -> None:
         rows = self._selected_rows()
@@ -428,6 +483,9 @@ class TcDocBridgePanel(QWidget):
 
         menu = QMenu(self.table)
         act_row = menu.addAction("📋 复制该行（TSV）")
+        images = row.get("_images") or []
+        act_images = menu.addAction("🖼 复制该行图片")
+        act_images.setEnabled(bool(images))
         act_page = menu.addAction("🔗 复制作品链接")
         act_page.setEnabled(bool(page or dyn))
         act_dyn = None
@@ -436,6 +494,8 @@ class TcDocBridgePanel(QWidget):
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == act_row:
             self._copy_rows([row], f"第 {row_index + 1} 行")
+        elif chosen == act_images:
+            self._copy_row_images(row, row_index)
         elif chosen == act_page:
             if page:
                 self._copy_text(page, "作品链接")
