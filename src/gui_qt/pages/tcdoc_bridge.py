@@ -42,6 +42,8 @@ class TcDocBridgePanel(QWidget):
         self._account_names: list[str] = []
         self._account_actions: dict[str, object] = {}
         self._busy = False
+        self._image_busy = False
+        self._image_temp_dir = None
 
         self._acc_timer = QTimer(self)
         self._acc_timer.setSingleShot(True)
@@ -128,7 +130,8 @@ class TcDocBridgePanel(QWidget):
         bottom.addWidget(self.status, 1)
         self.copy_images_btn = QPushButton("🖼 复制全部图片")
         self.copy_images_btn.setToolTip(
-            "把待同步行检测到的图片链接逐行复制（有多少张复制多少张，不参与 TSV 粘贴）")
+            "把检测到的图片下载后复制到剪贴板，可直接粘贴到腾讯文档"
+            "（有多少张复制多少张，不参与 TSV 粘贴）")
         self.copy_images_btn.setEnabled(False)
         self.copy_images_btn.clicked.connect(self._copy_all_images)
         bottom.addWidget(self.copy_images_btn)
@@ -413,29 +416,117 @@ class TcDocBridgePanel(QWidget):
             for url in row.get("_images") or []:
                 if url not in urls:
                     urls.append(url)
+        self._prepare_and_copy_images(urls, "全部行")
+
+    def _copy_row_images(self, row: dict, row_index: int) -> None:
+        self._prepare_and_copy_images(row.get("_images") or [], f"第 {row_index + 1} 行")
+
+    def _prepare_and_copy_images(self, urls: list[str], label: str) -> None:
+        """把图片下载到临时目录后按文件列表写入剪贴板，可直接粘贴到腾讯文档。"""
+        urls = [str(url).strip() for url in urls if str(url).strip()]
         if not urls:
             self.status.setText("没有检测到可复制的图片")
             return
-        QApplication.clipboard().setText("\r\n".join(urls))
-        self.status.setText(f"✅ 已复制 {len(urls)} 张图片链接（每行一张）")
-        if self.app is not None:
-            try:
-                self.app.toast(f"✅ 已复制 {len(urls)} 张图片链接", "success")
-            except Exception:  # noqa: BLE001 - 提示失败不影响复制
-                pass
-
-    def _copy_row_images(self, row: dict, row_index: int) -> None:
-        urls = row.get("_images") or []
-        if not urls:
-            self.status.setText(f"第 {row_index + 1} 行没有检测到图片")
+        if self._image_busy:
             return
-        QApplication.clipboard().setText("\r\n".join(urls))
-        self.status.setText(f"✅ 已复制第 {row_index + 1} 行的 {len(urls)} 张图片链接")
-        if self.app is not None:
+        self._image_busy = True
+        self.copy_images_btn.setEnabled(False)
+        self.status.setText(f"⏳ 正在准备{label}的 {len(urls)} 张图片…")
+
+        def work():
+            return self._download_images(urls)
+
+        def done(result, err):
+            self._image_busy = False
+            self.copy_images_btn.setEnabled(
+                any(row.get("_images") for row in self._rows))
+            if err:
+                self.status.setText(f"❌ 图片处理失败：{err}")
+                return
+            paths, failed = result or ([], 0)
+            if not paths:
+                self.status.setText("❌ 图片下载失败，未能复制")
+                return
+            self._set_image_clipboard(paths)
+            note = f"，失败 {failed} 张" if failed else ""
+            self.status.setText(
+                f"✅ 已复制{label} {len(paths)} 张图片内容，可直接到腾讯文档粘贴{note}")
+            if self.app is not None:
+                try:
+                    self.app.toast(f"✅ 已复制 {len(paths)} 张图片", "success")
+                except Exception:  # noqa: BLE001 - 提示失败不影响复制
+                    pass
+
+        run_bg(work, done)
+
+    def _download_images(self, urls: list[str]):
+        """并发下载图片到临时目录，返回 (路径列表, 失败数)。"""
+        import mimetypes
+        import shutil
+        import tempfile
+        from concurrent.futures import ThreadPoolExecutor
+        from datetime import datetime
+        from pathlib import Path
+
+        import httpx
+
+        if self._image_temp_dir is not None:
+            shutil.rmtree(self._image_temp_dir, ignore_errors=True)
+        root = (Path(tempfile.gettempdir()) / "fmjj_tcdoc_images"
+                / datetime.now().strftime("%Y%m%d_%H%M%S"))
+        root.mkdir(parents=True, exist_ok=True)
+        self._image_temp_dir = root
+
+        def referer(url: str) -> str:
+            host = url.lower()
+            for key, ref in (("hdslb", "https://www.bilibili.com/"),
+                             ("bilibili", "https://www.bilibili.com/"),
+                             ("sinaimg", "https://weibo.com/"),
+                             ("weibo", "https://weibo.com/"),
+                             ("douyin", "https://www.douyin.com/"),
+                             ("kuaishou", "https://www.kuaishou.com/"),
+                             ("xiaohongshu", "https://www.xiaohongshu.com/"),
+                             ("xhscdn", "https://www.xiaohongshu.com/")):
+                if key in host:
+                    return ref
+            return "https://www.bilibili.com/"
+
+        def fetch(item):
+            index, url = item
             try:
-                self.app.toast(f"✅ 已复制 {len(urls)} 张图片链接", "success")
-            except Exception:  # noqa: BLE001
-                pass
+                response = httpx.get(
+                    url, timeout=20, follow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0", "Referer": referer(url)})
+                response.raise_for_status()
+                content_type = (response.headers.get("content-type") or "").split(";")[0].strip()
+                ext = mimetypes.guess_extension(content_type) or Path(url.split("?")[0]).suffix
+                if not ext or len(ext) > 6:
+                    ext = ".jpg"
+                if ext.lower() in (".jpe", ".jpeg"):
+                    ext = ".jpg"
+                target = root / f"{index:03d}{ext.lower()}"
+                target.write_bytes(response.content)
+                return str(target)
+            except Exception:  # noqa: BLE001 - 单张失败不影响其余图片
+                return None
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(fetch, enumerate(urls, 1)))
+        paths = [path for path in results if path]
+        return paths, len(urls) - len(paths)
+
+    def _set_image_clipboard(self, paths: list[str]) -> None:
+        """文件列表写剪贴板；单张图片再附带图片数据，兼容只接收图片的目标。"""
+        from PySide6.QtCore import QMimeData, QUrl
+        from PySide6.QtGui import QImage
+
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(path) for path in paths])
+        if len(paths) == 1:
+            image = QImage(paths[0])
+            if not image.isNull():
+                mime.setImageData(image)
+        QApplication.clipboard().setMimeData(mime)
 
     def _copy_selected_rows(self, *_args) -> None:
         rows = self._selected_rows()

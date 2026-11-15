@@ -306,7 +306,7 @@ def _item_images(item) -> list[str]:
         if not isinstance(value, str):
             return
         for part in re.split(r"[\s,，]+", value):
-            part = part.strip()
+            part = html.unescape(part.strip())
             if part.startswith("//"):
                 part = "https:" + part
             if part.startswith(("http://", "https://")) and part not in seen:
