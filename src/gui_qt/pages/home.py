@@ -46,6 +46,8 @@ ACCOUNT_PLATFORM_LABELS = {
 }
 ACCOUNT_DRAWER_KEYS = {"tracked_accounts"}
 TCDOC_DRAWER_KEYS = {"tcdoc_rows", "doc_views", "doc_members", "doc_readers"}
+# 下钻抽屉表格最多显示的行数，超出后表格内部滚动；高度按实际行数自适应
+DRAWER_MAX_ROWS = 10
 
 # 常用工具：(key, 图标, 标题, 说明)
 COMMON_TOOLS = [
@@ -812,8 +814,8 @@ class HomePage(BasePage):
         frame = QFrame()
         frame.setObjectName("workbenchDrawer")
         frame.setAttribute(Qt.WA_StyledBackground, True)
-        frame.setMinimumHeight(360)
-        frame.setMaximumHeight(430)
+        # 高度由 _fit_drawer_height 按表格实际行数决定，不再固定留白
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
@@ -871,7 +873,7 @@ class HomePage(BasePage):
         for index, width in enumerate([185, 80, 150, 100, 90, 110]):
             header.resizeSection(index, width)
         header.setSectionResizeMode(6, QHeaderView.Stretch)
-        v.addWidget(self.account_table, 1)
+        v.addWidget(self.account_table)
 
         self.account_status = QLabel("")
         self.account_status.setObjectName("workbenchHomeMuted")
@@ -912,7 +914,7 @@ class HomePage(BasePage):
                             (4, "相对上一条记录的成员数增量"),
                             (6, "按采集日期统计的当天修订记录条数")):
             self.tcdoc_table.horizontalHeaderItem(column).setToolTip(tip)
-        v.addWidget(self.tcdoc_table, 1)
+        v.addWidget(self.tcdoc_table)
         return page
 
     def _open_drawer(self, key):
@@ -941,11 +943,40 @@ class HomePage(BasePage):
             self.drawer_stack.setCurrentWidget(self.tcdoc_drawer_page)
             self._refresh_tcdoc_docs()
         self.drawer.show()
+        self._fit_drawer_height()
         self.scroll.ensureWidgetVisible(self.drawer, 0, 16)
 
     def _close_drawer(self):
         self.drawer.hide()
         self._drawer_mode = ""
+
+    def _fit_drawer_height(self):
+        """按当前页表格的实际行数收紧抽屉高度，避免数据少时留一大片空白。"""
+        stack = getattr(self, "drawer_stack", None)
+        if stack is None:
+            return
+        page = stack.currentWidget()
+        table = (self.account_table if page is self.account_drawer_page
+                 else self.tcdoc_table)
+        rows = max(1, min(table.rowCount(), DRAWER_MAX_ROWS))
+        row_h = table.verticalHeader().defaultSectionSize()
+        header_h = max(22, table.horizontalHeader().sizeHint().height())
+        table.setFixedHeight(header_h + row_h * rows + 2 * table.frameWidth() + 2)
+        layout = self.drawer.layout()
+        if layout is None:
+            return
+        layout.activate()
+        height = max(layout.sizeHint().height(), layout.minimumSize().height())
+        # 自动换行的提示文字在窄窗口下会多占一行，sizeHint 算不到，按实际宽度补差
+        inner = page.layout()
+        if inner is not None:
+            for widget in page.findChildren(QLabel):
+                if not widget.wordWrap() or widget.width() <= 0:
+                    continue
+                need = widget.heightForWidth(widget.width())
+                if need > 0:
+                    height += max(0, need - widget.height())
+        self.drawer.setFixedHeight(height)
 
     def _refresh_account_drawer(self):
         accounts = _tracked_accounts_snapshot()
@@ -958,10 +989,12 @@ class HomePage(BasePage):
         table.setRowCount(len(display))
         if not accounts:
             self.account_status.setText("未读取到账号配置，请到对应追踪页添加")
+            self._fit_drawer_height()
             return
         if not display:
             self.account_status.setText(
                 "当前未勾选观察账号，点「⚙ 配置观察账号」选择")
+            self._fit_drawer_height()
             return
 
         for row, account in enumerate(display):
@@ -982,6 +1015,7 @@ class HomePage(BasePage):
         self.account_status.setText(
             f"已观察 {len(selected)} / 共 {len(accounts)} 个账号{limit_note}"
             " · 正在读取最新数据…")
+        self._fit_drawer_height()
 
         def work():
             result = {}
@@ -1003,6 +1037,7 @@ class HomePage(BasePage):
                 self._fill_account_row(row, account, history)
             self.account_status.setText(
                 f"已观察 {len(selected)} / 共 {len(accounts)} 个账号{limit_note}")
+            self._fit_drawer_height()
 
         run_bg(work, done)
 
@@ -1085,12 +1120,14 @@ class HomePage(BasePage):
         if not doc_key:
             self.tcdoc_table.setRowCount(0)
             self.tcdoc_status.setText("暂无腾讯文档")
+            self._fit_drawer_height()
             return
         try:
             result = _load_tcdoc_history(doc_key)
         except Exception as exc:
             self.tcdoc_table.setRowCount(0)
             self.tcdoc_status.setText(f"读取失败：{exc}")
+            self._fit_drawer_height()
             return
         rows = result.get("rows") or []
         revisions = result.get("revisions") or {}
@@ -1124,6 +1161,7 @@ class HomePage(BasePage):
                 f" / 已查看 {self._num_text(latest.get('readers'))}")
         else:
             self.tcdoc_status.setText("暂无历史记录，请先到「腾讯文档监控」采集")
+        self._fit_drawer_height()
 
     @staticmethod
     def _num_text(value):
