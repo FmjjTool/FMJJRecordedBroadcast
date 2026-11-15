@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from . import config, imgcache, runner
+from . import config, imgcache, localimages, runner
 
 
 class DeployError(RuntimeError):
@@ -184,8 +184,13 @@ def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
         "Accept": "image/webp,image/*,*/*;q=0.8",
     }
 
+    local_ready = sum(1 for original, _url in items if localimages.find(original))
+
     def fetch(item: tuple[str, str]) -> bool:
         original, url = item
+        if localimages.find(original):
+            # 腾讯文档监控已经下过原图：直接生成本地缩略图，完全不走网络
+            return bool(localimages.serve(root, original, 320))
         for trust_env in (False, True):
             try:
                 with httpx.Client(trust_env=trust_env, timeout=20,
@@ -201,7 +206,8 @@ def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
     with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
         results = list(pool.map(fetch, items))
     ok = sum(1 for item in results if item)
-    log(f"预热首屏封面 {ok}/{len(items)} 张（首次打开更快）")
+    extra = f"，其中本地图片 {local_ready} 张" if local_ready else ""
+    log(f"预热首屏封面 {ok}/{len(items)} 张{extra}（首次打开更快）")
     return f"{ok}/{len(items)}"
 
 

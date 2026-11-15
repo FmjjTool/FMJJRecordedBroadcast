@@ -22,7 +22,9 @@ from PySide6.QtWidgets import (
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.tcdoc import config as tcdoc_cfg
-from toolbox.webwiki import auth, config as wiki_cfg, deploy, gitops, server
+from toolbox.webwiki import (
+    auth, config as wiki_cfg, deploy, gitops, localimages, server,
+)
 
 
 class _GitHubLoginDialog(QDialog):
@@ -474,6 +476,9 @@ class LocalWikiPage(BasePage):
             "约 76KB 的探测请求；有变化才逐表拉取，行级哈希去重。"
             "修订记录按上次拉取位置增量翻页，并逐条校验内容；"
             "同版本不同编辑人会全部保留。</p>"
+            "<p><b>本地图片</b><br>「腾讯文档监控 → 采集图片」下载过的图片会优先生效："
+            "站点封面直接读本地文件并生成缩略图，不再走网络；"
+            "没下载过的图片才回退到图床缓存。</p>"
             "<p><b>端口</b><br>只监听 127.0.0.1，不对外网开放。"
             "端口被占用时在「目录与端口」里换一个再启动。</p>")
 
@@ -579,11 +584,17 @@ class LocalWikiPage(BasePage):
         self.repo_status.setText("　".join(lines))
 
         status = deploy.data_status()
+        try:
+            local_images = localimages.available_count()
+        except Exception:  # noqa: BLE001
+            local_images = 0
         if status.get("exists"):
-            self.data_status.setText(
-                f"已同步 {status.get('mtime')} · 歌曲 {status.get('songs', 0)}"
-                f" / 活动 {status.get('events', 0)} / 周边 {status.get('goods', 0)}"
-                f" / 动态 {status.get('posts', 0)}")
+            text = (f"已同步 {status.get('mtime')} · 歌曲 {status.get('songs', 0)}"
+                    f" / 活动 {status.get('events', 0)} / 周边 {status.get('goods', 0)}"
+                    f" / 动态 {status.get('posts', 0)}")
+            if local_images:
+                text += f" · 本地图片 {local_images} 张优先"
+            self.data_status.setText(text)
         else:
             self.data_status.setText("尚未同步（点「同步腾讯文档」或「一键部署」）")
         self.path_label.setText(str(wiki_cfg.root_dir()))

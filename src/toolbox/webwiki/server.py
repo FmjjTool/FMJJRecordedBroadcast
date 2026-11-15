@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
-from . import config, imgcache
+from . import config, imgcache, localimages
 
 UI_HINT = "本地资料站"
 
@@ -114,6 +114,16 @@ class _StaticProxy(BaseHTTPRequestHandler):
         first = str(raw_u).split(" ")[0]
         root = getattr(self.server, "root_dir", "")
         if first and root:
+            # 1) 腾讯文档监控已下载到本地的原图（最高优先级，完全不走网络）
+            local = localimages.serve(root, first, size)
+            if local:
+                body, ctype = local
+                self._send(200, body, ctype, headers=[
+                    ("Cache-Control", "public, max-age=2592000"),
+                    ("X-Local-Image", "1"),
+                ], head=head)
+                return
+            # 2) 之前预热 / 回源留下的缩略图缓存
             cached = imgcache.load(root, first, size)
             if cached:
                 body, ctype = cached
