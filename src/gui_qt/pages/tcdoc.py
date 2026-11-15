@@ -579,16 +579,16 @@ class TcDocPage(BasePage):
         bottom = QHBoxLayout()
         bottom.setSpacing(6)
         bottom.addWidget(QLabel("定时采集："))
-        self.schedule_mode = QComboBox()
+        self.schedule_mode = QComboBox(self)
         self.schedule_mode.addItem("每天一次", "daily")
         self.schedule_mode.addItem("按间隔", "interval")
         bottom.addWidget(self.schedule_mode)
-        self.time_edit = QLineEdit(str(cfg.get("tcdoc_collect_time") or "23:50"))
+        self.time_edit = QLineEdit(str(cfg.get("tcdoc_collect_time") or "23:50"), self)
         self.time_edit.setFixedWidth(66)
         self.time_edit.setAlignment(Qt.AlignCenter)
         self.time_edit.setToolTip("24 小时制，如 23:50")
         bottom.addWidget(self.time_edit)
-        self.interval_combo = QComboBox()
+        self.interval_combo = QComboBox(self)
         for label, minutes in (("每 5 分钟", 5), ("每 10 分钟", 10),
                                ("每 15 分钟", 15), ("每 30 分钟", 30),
                                ("每 1 小时", 60), ("每 2 小时", 120),
@@ -596,7 +596,7 @@ class TcDocPage(BasePage):
                                ("每 12 小时", 720), ("自定义…", -1)):
             self.interval_combo.addItem(label, minutes)
         bottom.addWidget(self.interval_combo)
-        self.interval_spin = QSpinBox()
+        self.interval_spin = QSpinBox(self)
         self.interval_spin.setRange(1, 1439)
         self.interval_spin.setSuffix(" 分钟")
         self.interval_spin.setFixedWidth(92)
@@ -623,11 +623,12 @@ class TcDocPage(BasePage):
         self.interval_combo.setCurrentIndex(max(0, choice))
         self.schedule_mode.currentIndexChanged.connect(self._on_schedule_mode_changed)
         self.interval_combo.currentIndexChanged.connect(self._on_interval_choice_changed)
-        self._on_schedule_mode_changed()
         self.task_label = QLabel("")
         self.task_label.setStyleSheet("color: #888;")
         bottom.addWidget(self.task_label, 1)
         layout.addLayout(bottom)
+        # 先归入页面布局再设置可见性，避免无父控件被 Qt 当成独立窗口闪出。
+        self._on_schedule_mode_changed()
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #888;")
