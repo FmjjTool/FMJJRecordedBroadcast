@@ -106,6 +106,12 @@ NAV_GROUPS = [
         ("toolbox_calendar", "📅 日历浏览"),
         ("toolbox_migrate", "🚚 文件迁移"),
     ]),
+    ("👥 账户追踪", [
+        ("music_tracker", "🎼 音乐账号追踪"),
+        ("tracker", "📈 网媒账号追踪"),
+        ("tcdoc", "📄 腾讯文档监控"),
+        ("fan_groups", "👥 粉丝群查询"),
+    ]),
     ("🎫 票务购物", [
         ("tickets", "🎫 票务解析"),
         ("shopping", "🛒 购物解析"),
@@ -115,11 +121,6 @@ NAV_GROUPS = [
     ("🎵 音乐工具", [
         ("music_search_download", "🎵 音乐搜索下载"),
         ("music_file_tools", "🏷 音乐标签"),
-    ]),
-    ("👥 账户追踪", [
-        ("music_tracker", "🎼 音乐账号追踪"),
-        ("tracker", "📈 网媒账号追踪"),
-        ("fan_groups", "👥 粉丝群查询"),
     ]),
     ("🔴 直播弹幕录制", [
         ("test_page", "📺 抖音弹幕姬"),
@@ -147,7 +148,6 @@ _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 impor
 _EXTRA_TOOLS = {
     "douyin_index": "抖音指数", "wechat_article": "公众号解析",
     "bili_resource": "B站资源", "video_comments": "视频评论区",
-    "tcdoc": "腾讯文档监控",
 }
 
 _SHELL_QSS = """
