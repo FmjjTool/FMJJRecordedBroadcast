@@ -24,7 +24,8 @@ import threading
 _lock = threading.Lock()
 
 # 缓存格式版本：派生字段口径变化时 +1，旧缓存自动全量重建
-VER = 1
+# v2：新增 _bili_bvid（B站动态指向的投稿 bvid，用于列表去重）
+VER = 2
 
 _db_path = None
 

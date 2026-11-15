@@ -575,6 +575,14 @@ def _sanitize_title_key(title: str) -> str:
     return re.sub(r'_', '', s)
 
 
+def _title_match_key(title: str) -> str:
+    """媒体匹配用标题键：去标点后为空（纯符号标题如「'͜'」）时退回原文。
+
+    否则空键永远匹配不上 json 条目，下载的媒体会落成一条独立的「(媒体)」行。
+    """
+    return _sanitize_title_key(title) or (title or "").strip()
+
+
 def _json_stem(path: str) -> str:
     """文件名去扩展名（路径字符串版，避免为 6500+ 个文件构造 Path 对象）。"""
     name = os.path.basename(path)
@@ -1695,6 +1703,10 @@ class AssetPage(BasePage):
             asset_index.upsert_many(fresh)
         asset_index.prune(json_paths)
 
+        # 同一内容的重复采集记录合并（动态存两份 / 动态+视频各一份）：先去重
+        # 再匹配媒体，避免一份下载的媒体被“三条一样的行”分摊
+        results = self._dedupe_entries(results)
+
         # 2.1/2.2 媒体匹配 + 同名条目共享（见 _match_media，已按日期/平台分桶）
         self._match_media(results, media_map)
 
@@ -2037,7 +2049,7 @@ class AssetPage(BasePage):
                     subdir = n
                     break
             date_part, author, title_key = self._parse_media_name(name)
-            base = _sanitize_title_key(title_key)[:20] if title_key else ""
+            base = _title_match_key(title_key)[:20] if title_key else ""
             key = (date_part, base, subdir)
             mtype = "image" if ext in self._IMG_EXTS else "video"
             media_map.setdefault(key, []).append({
@@ -2173,6 +2185,51 @@ class AssetPage(BasePage):
         results.sort(key=lambda e: order.get(e.get("file_path", ""), -1))
         return results, fresh
 
+    @staticmethod
+    def _dedupe_entries(entries):
+        """合并同一内容的重复采集记录（只影响列表展示，磁盘 json 不动）。
+
+        - 同平台 + 同视频ID：B站动态被「动态获取 / 账号追踪」各存一份是常态
+          （实测同一条动态两份 json 一字不差），只保留获取时间最新的一条；
+        - B站 AV 动态与它指向的投稿视频（archive.bvid 相同）：动态那条的
+          标题/封面/日期都和视频一致，列表里就是两行“一模一样”，留视频行。
+        """
+        out, by_id = [], {}
+        for it in entries:
+            vid = str(it.get("video_id") or "")
+            key = (it.get("platform"), vid)
+            if not vid:
+                out.append(it)
+                continue
+            idx = by_id.get(key)
+            if idx is None:
+                by_id[key] = len(out)
+                out.append(it)
+            elif (it.get("fetched_at") or "") > (out[idx].get("fetched_at") or ""):
+                out[idx] = it
+        # B站：动态与对应投稿视频合并（保留 video_id 就是 bvid 的视频条目）。
+        # 只在「同 bvid + 同日期 + 同标题」时合并——跨天/不同标题的转发动态
+        # 是一条独立内容，不能误删。
+        video_idx = {}
+        for i, it in enumerate(out):
+            bvid = it.get("_bili_bvid") or ""
+            if (it.get("platform") == "bilibili" and bvid
+                    and it.get("video_id") == bvid):
+                video_idx.setdefault(
+                    (bvid, it.get("date_part"), it.get("_tn")), i)
+        if video_idx:
+            drop = set()
+            for i, it in enumerate(out):
+                if it.get("platform") != "bilibili":
+                    continue
+                bvid = it.get("_bili_bvid") or ""
+                if (bvid and it.get("video_id") != bvid
+                        and (bvid, it.get("date_part"), it.get("_tn")) in video_idx):
+                    drop.add(i)
+            if drop:
+                out = [it for i, it in enumerate(out) if i not in drop]
+        return out
+
     def _build_entry(self, path):
         """解析单个 json → 条目（含缓存用派生字段）；解析失败/格式不符返回 None。"""
         name = os.path.basename(path)
@@ -2225,11 +2282,20 @@ class AssetPage(BasePage):
             vid = str(entry["video_id"])
             link = entry["video_url"]
             entry["is_dynamic"] = (vid.startswith("dyn_") or "t.bilibili.com" in link)
+            # 动态 json 内嵌原始数据里有它指向的投稿 bvid（AV 动态）：
+            # 记下来供列表去重（同一条内容常被存成「动态」和「视频」两条）
+            bvid = vid if vid.startswith("BV") else ""
+            raw0 = data.get("原始数据")
+            if not bvid and isinstance(raw0, dict):
+                major = (((raw0.get("modules") or {}).get("module_dynamic") or {})
+                         .get("major") or {})
+                bvid = (major.get("archive") or {}).get("bvid") or ""
+            entry["_bili_bvid"] = bvid
         # 匹配用的规范化标题/平台（匹配挪到全部 json 解析完后统一做：
         # 文件名倒序逐条匹配时，先处理的长标题 json（如「封茗囧菌 都先
         # 好好休息——！辛苦啦」）会按子串抢走短标题 json（「封茗囧菌」）
         # 的媒体组——精确匹配必须先于任何子串匹配、跨条目全局生效）
-        entry["_tn"] = _sanitize_title_key(title).strip("_")
+        entry["_tn"] = _title_match_key(title).strip("_")
         entry["_jp"] = _norm_subdir(dir_name) or platform
         # 派生字段一次算好、随缓存复用（旧实现每次加载都重读 *_raw.json 现算）
         try:
@@ -2308,21 +2374,28 @@ class AssetPage(BasePage):
                         _owner.setdefault((tn, jp, dp), entry)
                         break
 
+        def _share():
+            """同名条目共享：同日期+同平台+标题完全一致的多条 json（B站转发动态
+            与原视频同标题同日发布最典型——同一份媒体两边都是正主），没抢到媒体
+            组的条目从抢到的条目共享一份（列表独立，互不影响删除）。"""
+            for it in results:
+                if not it.get("media_files") and len(it["_tn"]) >= 4:
+                    owner = _owner.get((it["_tn"], it["_jp"], it["date_part"]))
+                    if owner is not None:
+                        it["media_files"] = list(owner["media_files"])
+
         _phase(True, True, True)
+        # 精确匹配后先共享，再跑子串轮：否则同标题双胞胎里没抢到媒体组的
+        # 那一条会被子串匹配拉到不相干的媒体（实测 20240930 两条同标题 json：
+        # 一条吃到整组、另一条抓到别的微博图，下载补全后重启又判「下载不完整」）
+        _share()
         _phase(False, True, True)
         _phase(True, True, False)
         _phase(False, True, False)
         _phase(True, False, False)
         _phase(False, False, False)
-
-        # 同名条目共享：同日期+同平台+标题完全一致的多条 json（B站转发动态
-        # 与原视频同标题同日发布最典型——同一份媒体两边都是正主），没抢到媒体
-        # 组的条目从抢到的条目共享一份（列表独立，互不影响删除）
-        for it in results:
-            if not it.get("media_files") and len(it["_tn"]) >= 4:
-                owner = _owner.get((it["_tn"], it["_jp"], it["date_part"]))
-                if owner is not None:
-                    it["media_files"] = list(owner["media_files"])
+        # 兜底共享（媒体组经宽松日期/无平台目录轮次命中的情况）
+        _share()
 
     def _parse_media_name(self, name):
         """从媒体文件名解析 (date, author, title_key)。命名 {date}_{author}_{title}_{i}.ext"""
@@ -2331,8 +2404,12 @@ class AssetPage(BasePage):
         date_part = parts[0] if parts and len(parts[0]) == 8 and parts[0].isdigit() else ""
         author = parts[1] if len(parts) > 1 and date_part else ""
         rest = parts[2:] if date_part else parts
-        # 去掉末尾序号 / live序号
-        while rest and (rest[-1].isdigit() or (rest[-1].startswith("live") and rest[-1][4:].isdigit())):
+        # 去掉末尾序号 / live 后缀（_1、_live、_live2）；单张 live 图存的是
+        # {stem}_live.mov，原先只认「live+数字」，裸 live 留在标题里 → live 视频
+        # 自成一组，子串匹配时先抢走条目、同组图片反而匹配不上（视频条目只剩
+        # 「视频 1」被判下载不完整）。
+        while rest and (rest[-1].isdigit()
+                        or re.fullmatch(r"live\d*", rest[-1].lower())):
             rest = rest[:-1]
         # 封面文件与正文媒体同组：download_media 存 {stem}_封面.ext，短标题时
         # 封面组键=标题+封面 → 与正文不同组 → json 只弹一组封面就落单成
@@ -2428,39 +2505,8 @@ class AssetPage(BasePage):
             self._disk_items = disk_items or []
             # 文件夹下拉随数据重建（保留当前选择；分类目录被删则回到「全部文件夹」）
             self._rebuild_folder_options(self._disk_items)
-            items = [it for it in self._disk_items if plat == "全部" or it["platform"] == plat]
-            # 状态筛选
-            if status == "未下载":
-                # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
-                # 媒体文件，混在未下载里会把可重试条目淹没（实测 1700+ 条
-                # 微博纯文本常驻此筛选，批量下载时也只是被跳过）
-                items = [it for it in items if not it.get("media_files")
-                         and not self._no_dl_flagged(self._dl_key(it))]
-            elif status == "已下载":
-                items = [it for it in items if it.get("media_files")]
-            elif status == "下载不完整":
-                items = [it for it in items
-                         if it.get("expected_imgs", 0) > sum(1 for m in it.get("media_files", []) if m["type"] == "image")]
-            # 关键词过滤（标题/作者/视频ID/正文，大小写不敏感）
-            if kw:
-                items = [it for it in items
-                         if kw in (it.get("title") or "").lower()
-                         or kw in (it.get("author") or "").lower()
-                         or kw in (it.get("video_id") or "").lower()
-                         or kw in (it.get("description") or "").lower()]
-            # 时间排序（正序/倒序；按发布日期+时间，无发布时间回退文件名日期，空值始终排最后）
-            placeholder = "00000000000000" if desc else "99999999999999"
-
-            def _sort_key(it):
-                # 发布时间数字位（分钟级 12 位 / 带秒 14 位 / 纯日期 8 位）右补零
-                # 对齐 14 位——此前要求恰好 14 位，分钟级 "2026-10-01 23:18"
-                # 只有 12 位全部判失败回退纯日期，时间序从未生效
-                t = re.sub(r"\D", "", it.get("publish_time") or "")
-                if len(t) >= 8:
-                    return (t + "0" * 14)[:14]
-                d = it.get("date_part") or ""
-                return (d + "0" * 14)[:14] if d else placeholder
-            self._collected_all_items = sorted(items, key=_sort_key, reverse=desc)
+            self._collected_all_items = self._apply_item_filters(
+                self._disk_items, plat, status, desc, kw)
             if not keep_page:
                 self._collected_page = 1
             # keep_page 时 _render_collected_batch 内部会把越界页码钳回有效范围
@@ -2468,6 +2514,67 @@ class AssetPage(BasePage):
             self._backfill_bili_covers()
 
         run_bg(work, done)
+
+    def _status_match(self, it, status) -> bool:
+        """条目是否符合「状态」筛选（列表加载与下载后即时归类共用同一口径）。"""
+        if status == "未下载":
+            # 排除「不可下载」标记（纯文本自动/手动）：它们永远不会有
+            # 媒体文件，混在未下载里会把可重试条目淹没（实测 1700+ 条
+            # 微博纯文本常驻此筛选，批量下载时也只是被跳过）
+            return (not it.get("media_files")
+                    and not self._no_dl_flagged(self._dl_key(it)))
+        if status == "已下载":
+            return bool(it.get("media_files"))
+        if status == "下载不完整":
+            # 与批量下载跳过判定同口径（_item_media_complete）：只有「本地已有
+            # 媒体、但仍没下全」才算不完整——一张都没有的属于「未下载」；
+            # 视频条目有视频+封面即完整。
+            return bool(it.get("media_files")) and not self._item_media_complete(it)
+        return True
+
+    def _apply_item_filters(self, items, plat, status, desc, kw) -> list:
+        """平台/状态/关键词筛选 + 时间排序（全量加载与下载后即时归类共用）。"""
+        items = [it for it in items if plat == "全部" or it["platform"] == plat]
+        if status != "全部状态":
+            items = [it for it in items if self._status_match(it, status)]
+        # 关键词过滤（标题/作者/视频ID/正文，大小写不敏感）
+        if kw:
+            items = [it for it in items
+                     if kw in (it.get("title") or "").lower()
+                     or kw in (it.get("author") or "").lower()
+                     or kw in (it.get("video_id") or "").lower()
+                     or kw in (it.get("description") or "").lower()]
+        # 时间排序（正序/倒序；按发布日期+时间，无发布时间回退文件名日期，空值始终排最后）
+        placeholder = "00000000000000" if desc else "99999999999999"
+
+        def _sort_key(it):
+            # 发布时间数字位（分钟级 12 位 / 带秒 14 位 / 纯日期 8 位）右补零
+            # 对齐 14 位——此前要求恰好 14 位，分钟级 "2026-10-01 23:18"
+            # 只有 12 位全部判失败回退纯日期，时间序从未生效
+            t = re.sub(r"\D", "", it.get("publish_time") or "")
+            if len(t) >= 8:
+                return (t + "0" * 14)[:14]
+            d = it.get("date_part") or ""
+            return (d + "0" * 14)[:14] if d else placeholder
+        return sorted(items, key=_sort_key, reverse=desc)
+
+    def _reload_from_memory(self, keep_page=False):
+        """不重扫磁盘，按当前筛选条件重算列表（下载完成后的即时归类）。
+
+        单条下载完成后媒体已挂到条目上，「未下载/已下载/下载不完整」的归属
+        已经变化——立即重算筛选并渲染，条目当场移出/进入列表，无需等下次刷新。
+        """
+        if getattr(self, "_view_mode", "entries") != "entries":
+            return
+        plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
+        status = self.status_sel.currentText()
+        desc = self.sort_sel.currentText() == "时间倒序"
+        kw = (self._search_var or "").strip().lower()
+        self._collected_all_items = self._apply_item_filters(
+            self._disk_items, plat, status, desc, kw)
+        if not keep_page:
+            self._collected_page = 1
+        self._render_collected_batch()
 
     def _backfill_bili_covers(self):
         """补齐已下载 B站视频的官方封面（旧版下载的视频没有同名 .jpg 索引）。
@@ -3314,6 +3421,21 @@ class AssetPage(BasePage):
             return bool(it.get("_raw_video"))
         return False
 
+    @staticmethod
+    def _item_known_video(it) -> bool:
+        """确知条目有视频源（直链或 raw 里带视频流），用于完整度判定。
+
+        与 _item_has_video 的区别：小红书笔记页链接可能是图文也可能是视频，
+        仅凭链接不能断言「必须有本地视频」，否则图集已下全仍被判不完整。
+        """
+        from media_downloader import _is_direct_media_url
+        if _is_direct_media_url(it.get("video_url") or ""):
+            return True
+        raw = it.get("raw_data")
+        if isinstance(raw, dict) and raw:
+            return AssetPage._raw_has_video(raw)
+        return bool(it.get("_raw_video"))
+
     def _ensure_raw(self, it) -> dict:
         """按需加载条目的「原始数据」（索引缓存不存它，下载/详情才需要）。"""
         raw = it.get("raw_data")
@@ -3347,11 +3469,15 @@ class AssetPage(BasePage):
         vid = str(it.get("video_id") or "")
         plat = it.get("platform", "")
         dtype = self._bili_dynamic_type(it) if plat == "bilibili" else ""
+        expected = int(it.get("expected_imgs") or 0)
+        # 抖音图集 note 的「视频ID」是作品 id（不是视频源），raw 里是 images 列表、
+        # 下载也走 note 图片分支（download_videos=False）→ 不能按「有无本地视频」
+        # 判定，否则图集已下全仍被判不完整（批量下载每次重下、筛选误报）。
         is_video_item = (
-            (plat == "douyin" and bool(vid))
+            (plat == "douyin" and bool(vid) and expected == 0)
             or (plat == "bilibili" and bool(vid) and not vid.startswith("dyn_"))
             or dtype == "av"
-            or (plat not in ("douyin", "bilibili") and self._item_has_video(it))
+            or (plat not in ("douyin", "bilibili") and self._item_known_video(it))
         )
         if is_video_item:
             if not any(m["type"] == "video" for m in mfs):
@@ -3363,7 +3489,6 @@ class AssetPage(BasePage):
             if not (it.get("cover_url") or "").strip():
                 return True
             return any(m["type"] == "image" for m in mfs)
-        expected = int(it.get("expected_imgs") or 0)
         n_imgs = sum(1 for m in mfs if m["type"] == "image")
         if expected:
             return n_imgs >= expected
@@ -3453,11 +3578,13 @@ class AssetPage(BasePage):
                                            sub_bridge=sub_bridge, cancel_ev=cancel_ev)
 
     def _refresh_rows_for(self, items, new_paths=None):
-        """下载完成后的行级刷新：只重建给定条目的行，不动其他行。
+        """下载完成后的刷新：挂上媒体文件并按当前筛选立即重新归类。
 
         new_paths=[(path, 类型中文), ...]（download_media stats["paths"]）时
         直接把文件挂到条目——不触发全量磁盘扫描（_load_disk_items 要读
         全部 json+raw，曾致下载完成后界面未响应）；无 paths 时回退全量扫描。
+        两种路径最后都走 _reload_from_memory：刚下完的条目当场从「未下载」
+        移到「已下载」，补全的条目从「下载不完整」消失。
         """
         keys = {self._dl_key(it) for it in items}
         gen = self._reload_gen  # 不递增：不使进行中的整列表刷新作废
@@ -3480,7 +3607,7 @@ class AssetPage(BasePage):
                     "subdir": target.get("platform", ""),
                 })
                 existing.add(path)
-            self._replace_rows_for_keys(keys)
+            self._reload_from_memory(keep_page=True)
             return
 
         def work():
@@ -3495,39 +3622,14 @@ class AssetPage(BasePage):
                 k = self._dl_key(d)
                 if k in keys:
                     disk_by_key[k] = d
-            # 更新 _collected_all_items 里的条目数据（dict 身份不变，筛选排序不动）
+            # 更新 _collected_all_items 里的条目数据（dict 身份不变）
             for it in self._collected_all_items:
                 nd = disk_by_key.get(self._dl_key(it))
                 if nd is not None:
                     it.update(nd)
-            self._replace_rows_for_keys(keys)
+            self._reload_from_memory(keep_page=True)
 
         run_bg(work, done)
-
-    def _replace_rows_for_keys(self, keys):
-        """原地替换当前页里这些条目的行控件（不重建整页）。"""
-        lay = self.collected_layout
-        total = len(self._collected_all_items)
-        if not total:
-            return
-        total_pages = (total + BATCH - 1) // BATCH
-        page = min(max(1, self._collected_page), total_pages)
-        start = (page - 1) * BATCH
-        row_idx = 0  # 布局结构：[行...] + pager + stretch，行从 0 连续排
-        for i in range(start, min(start + BATCH, total)):
-            it = self._collected_all_items[i]
-            if self._dl_key(it) not in keys:
-                row_idx += 1
-                continue
-            if row_idx >= lay.count():
-                break
-            old = lay.itemAt(row_idx).widget()
-            if old is None:  # pager/stretch 位置，说明行已数完
-                break
-            lay.insertWidget(row_idx, self._make_collected_row(it, i + 1))
-            old.setParent(None)
-            old.deleteLater()
-            row_idx += 1
 
     def _toggle_select_all(self, state):
         """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""

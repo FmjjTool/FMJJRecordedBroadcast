@@ -50,14 +50,48 @@ def _fmt_duration(sec: int) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
 
 
-def _build_stem(info) -> str:
+def _content_category(info) -> str:
+    """导出文件名用的内容类别：视频 / 图文 / 动态 / 文本。
+
+    只按导出数据里能静态判断的信息分类，判断不了的按平台默认（视频）。
+    """
+    plat = (info.platform or "").lower()
+    vid = str(info.video_id or "")
+    raw = info.raw_data if isinstance(info.raw_data, dict) else {}
+    if plat == "bilibili":
+        # 动态采集 vs 视频采集：动态 ID 统一是 dyn_*（图文动态和 AV 动态都有）
+        return "动态" if vid.startswith("dyn_") else "视频"
+    if plat == "weibo":
+        pi = raw.get("page_info") or {}
+        if pi.get("media_info") or raw.get("urls") or raw.get("stream_url"):
+            return "视频"
+        if info.images or raw.get("pics") or raw.get("pic_ids"):
+            return "图文"
+        return "文本"
+    if plat == "douyin":
+        return "图文" if raw.get("images") else "视频"
+    if plat == "xiaohongshu":
+        return "图文" if (raw.get("images") or raw.get("image_list")) else "视频"
+    if info.images and not info.video_url:
+        return "图文"
+    return "视频"
+
+
+def _build_stem(info, with_category: bool = True) -> str:
+    """导出文件主名：{日期}_{平台}_[类别]_{标题}。
+
+    with_category=False 返回旧命名（{日期}_{平台}_{标题}），仅用于兼容历史文件。
+    """
     date_str = ""
     raw_date = info.publish_time or info.fetched_at or ""
     if raw_date: date_str = re.sub(r'[^0-9]', '', raw_date[:10])
     if not date_str or len(date_str) < 8: date_str = datetime.now().strftime("%Y%m%d")
-    title_part = _sanitize_filename(info.title) if info.title else "untitled"
     platform_part = info.platform or "unknown"
-    return f"{date_str}_{platform_part}_{title_part}"
+    if not with_category:
+        title_part = _sanitize_filename(info.title) if info.title else "untitled"
+        return f"{date_str}_{platform_part}_{title_part}"
+    title_part = _sanitize_filename(info.title, 80) if info.title else "untitled"
+    return f"{date_str}_{platform_part}_[{_content_category(info)}]_{title_part}"
 
 
 def _prepare_data(info_list: list) -> list[dict]:
@@ -324,15 +358,22 @@ def export_per_video(info_list: list, output_dir: Optional[str] = None, formats:
     taken: dict[str, str] = {}   # stem → 首个占用者的视频ID
     jobs: list[dict] = []
     for info in info_list:
-        stem = _build_stem(info)
         my_id = str(info.video_id or "")
+        # 按平台分文件夹: video_data/抖音_文件/, video_data/B站_文件/ ...（媒体在对应 {平台}_媒体/）
+        plat_dir = os.path.join(base_dir, platform_cn(info.platform) + DATA_DIR_SUFFIX)
+        # 历史文件兼容：旧命名（无 [类别]、标题 60 字符）的 json 已存在且视频ID一致
+        # → 继续沿用旧 stem，避免老条目被重新导出成一份新命名的重复文件
+        legacy_stem = _build_stem(info, with_category=False)
+        legacy_path = os.path.join(plat_dir, f"{legacy_stem}.json")
+        if os.path.exists(legacy_path) and _existing_video_id(legacy_path) == my_id:
+            stem = legacy_stem
+        else:
+            stem = _build_stem(info)
         owner = taken.get(stem)
         if owner is not None and owner != my_id:
             stem = f"{stem}_{_sanitize_filename(my_id, 24) or 'x'}"
         elif owner is None:
             taken[stem] = my_id
-        # 按平台分文件夹: video_data/抖音_文件/, video_data/B站_文件/ ...（媒体在对应 {平台}_媒体/）
-        plat_dir = os.path.join(base_dir, platform_cn(info.platform) + DATA_DIR_SUFFIX)
         # 磁盘同名占位：{stem}.json 属于另一条目（视频ID不同）→ 追加自身ID后缀
         # （分批导出时批内预分配管不到的历史文件）
         jpath = os.path.join(plat_dir, f"{stem}.json")
