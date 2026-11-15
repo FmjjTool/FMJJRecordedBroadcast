@@ -137,6 +137,9 @@ def save_live_history(name: str, rows: list) -> int:
                 if row and (row[4] or row[0]):
                     rid = str(row[4] or "")
                     existing.add(rid or f"{row[0]}|{row[3]}")
+                    # 无房间号的历史导入行与接口行可能同场，额外登记时间+标题键防重复
+                    if rid:
+                        existing.add(f"{row[0]}|{row[3]}")
     else:
         wb = openpyxl.Workbook()
         ws0 = wb.active
@@ -199,8 +202,9 @@ def collect_and_save(acc: dict, uid: str = None) -> dict:
             uid = resolve_uid_from_url(acc.get("url", ""))
         rows = fetch_live_history(uid)
         new = save_live_history(acc.get("name", "未命名"), rows)
+        cached = len(load_live_history(acc.get("name", "未命名")))
         _persist_uid(acc, uid)
-        return {"total": len(rows), "new": new, "uid": uid, "error": ""}
+        return {"total": len(rows), "new": new, "cached": cached, "uid": uid, "error": ""}
     except Exception as e:
         return {"total": None, "new": 0, "uid": None, "error": f"{type(e).__name__}: {str(e)[:80]}"}
 

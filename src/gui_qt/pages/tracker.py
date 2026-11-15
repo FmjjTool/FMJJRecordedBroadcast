@@ -810,7 +810,8 @@ class TrackerPage(BasePage):
 
         from collections import deque
         queue = deque(accounts)
-        state = {"running": 0, "done": 0, "ok": 0, "failed": 0, "total": 0, "new": 0}
+        state = {"running": 0, "done": 0, "ok": 0, "failed": 0,
+                 "total": 0, "new": 0, "cached": 0}
 
         def _next():
             while queue and state["running"] < 4:
@@ -828,6 +829,7 @@ class TrackerPage(BasePage):
                 state["ok"] += 1
                 state["total"] += int((result or {}).get("total") or 0)
                 state["new"] += int((result or {}).get("new") or 0)
+                state["cached"] += int((result or {}).get("cached") or 0)
             if queue:
                 _next()
             elif state["running"] == 0:
@@ -839,11 +841,13 @@ class TrackerPage(BasePage):
                 if state["failed"]:
                     self.app.toast(
                         f"⚠ 抖音直播历史：{state['ok']} 个成功 / {state['failed']} 个失败"
-                        f"（共 {state['total']} 场，新增 {state['new']} 场）", "warning")
+                        f"（接口 {state['total']} 场，新增 {state['new']} 场，"
+                        f"本地缓存 {state['cached']} 场）", "warning")
                 else:
                     self.app.toast(
                         f"✅ 抖音直播历史获取完成：{state['ok']} 个账号，"
-                        f"共 {state['total']} 场（新增 {state['new']} 场）", "success")
+                        f"接口 {state['total']} 场（新增 {state['new']} 场），"
+                        f"本地缓存 {state['cached']} 场", "success")
 
         _next()
 
@@ -871,11 +875,22 @@ class TrackerPage(BasePage):
                     card["status"].setStyleSheet("color: #ff9800;")
                     card["status"].setToolTip(f"直播历史获取失败：{result['error']}")
                 else:
-                    card["status"].setText(f"🎥 {result['total']} 场")
-                    card["status"].setStyleSheet("color: #4caf50;")
-                    card["status"].setToolTip(
-                        f"直播历史已缓存 {result['total']} 场"
-                        f"（本次新增 {result['new']} 场，按房间号去重）")
+                    total = int(result.get("total") or 0)
+                    cached = int(result.get("cached") or 0)
+                    if total:
+                        card["status"].setText(f"🎥 {total} 场")
+                        card["status"].setStyleSheet("color: #4caf50;")
+                        card["status"].setToolTip(
+                            f"直播历史已缓存 {cached} 场"
+                            f"（本次接口 {total} 场，新增 {result.get('new', 0)} 场，按房间号去重）")
+                    else:
+                        # 接口只保留最近一年；超期场次仍可从本地历史缓存查看
+                        card["status"].setText(f"🎥 缓存 {cached} 场" if cached else "🎥 0 场")
+                        card["status"].setStyleSheet("color: #4caf50;" if cached else "color: #888;")
+                        card["status"].setToolTip(
+                            f"抖音接口当前返回 0 场（直播动态仅保留最近一年）；"
+                            f"本地已缓存 {cached} 场历史" if cached else
+                            "抖音「直播动态」当前没有可读取的场次")
             if on_done:
                 on_done(result, err)
 
