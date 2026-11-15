@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
     QHeaderView, QLabel, QMenu, QPushButton, QTableWidget, QTableWidgetItem,
@@ -35,6 +36,7 @@ class TcDocBridgePanel(QWidget):
         self._embedded = embedded
         self._targets: list[dict] = []
         self._result: dict | None = None
+        self._rows: list[dict] = []
         self._account_names: list[str] = []
         self._account_actions: dict[str, object] = {}
         self._busy = False
@@ -84,9 +86,9 @@ class TcDocBridgePanel(QWidget):
         top.addWidget(self.compare_btn)
         top.addStretch(1)
 
-        self.copy_btn = QPushButton("📋 一键复制（TSV）")
+        self.copy_btn = QPushButton("📋 复制全部（TSV）")
         self.copy_btn.setProperty("variant", "primary")
-        self.copy_btn.setToolTip("复制待同步行（不含表头），到腾讯文档表格末尾粘贴")
+        self.copy_btn.setToolTip("复制全部待同步行（不含表头），到腾讯文档表格末尾粘贴")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self._copy)
         top.addWidget(self.copy_btn)
@@ -103,19 +105,30 @@ class TcDocBridgePanel(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         for index, name in enumerate(bridge.COLUMNS):
             self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_menu)
+        self.table.itemSelectionChanged.connect(self._update_copy_row_btn)
+        self._copy_shortcut = QShortcut(QKeySequence.Copy, self.table)
+        self._copy_shortcut.activated.connect(self._copy_selected_rows)
         layout.addWidget(self.table, 1)
 
         bottom = QHBoxLayout()
-        self.status = QLabel("复制后到腾讯文档表格末尾粘贴；不会自动上传。")
+        self.status = QLabel("选中行可单行复制，右键行也有复制菜单；不会自动上传。")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: #888;")
         bottom.addWidget(self.status, 1)
+        self.copy_row_btn = QPushButton("📋 复制选中行")
+        self.copy_row_btn.setToolTip("复制表格里选中的行（Ctrl+C 同样可用，可多选），不含表头")
+        self.copy_row_btn.setEnabled(False)
+        self.copy_row_btn.clicked.connect(self._copy_selected_rows)
+        bottom.addWidget(self.copy_row_btn)
         if not self._embedded:
             close_btn = QPushButton("关闭")
             close_btn.clicked.connect(self._close)
@@ -309,8 +322,8 @@ class TcDocBridgePanel(QWidget):
             self._refresh_accounts(result)
             if result["rows"]:
                 self.status.setText(
-                    f"📋 将复制 {len(result['rows'])} 行（不含表头；"
-                    "发布距今/封面图留空占位）；到腾讯文档表格末尾粘贴，不会自动上传。")
+                    f"📋 共 {len(result['rows'])} 行待同步（不含表头；"
+                    "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单。")
             else:
                 self.status.setText(
                     "✅ 没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
@@ -333,6 +346,8 @@ class TcDocBridgePanel(QWidget):
             self._acc_timer.start()
 
     def _fill_table(self, rows: list[dict]) -> None:
+        self._rows = list(rows)
+        self.table.clearSelection()
         self.table.setUpdatesEnabled(False)
         try:
             self.table.setRowCount(len(rows))
@@ -344,20 +359,90 @@ class TcDocBridgePanel(QWidget):
                     self.table.setItem(r, c, item)
         finally:
             self.table.setUpdatesEnabled(True)
+        self._update_copy_row_btn()
 
     # ==================== 复制 ====================
+
+    def _selected_rows(self) -> list[dict]:
+        model = self.table.selectionModel()
+        if model is None:
+            return []
+        indexes = sorted(model.selectedRows(), key=lambda item: item.row())
+        return [self._rows[index.row()] for index in indexes
+                if 0 <= index.row() < len(self._rows)]
+
+    def _update_copy_row_btn(self) -> None:
+        button = getattr(self, "copy_row_btn", None)
+        if button is not None:
+            button.setEnabled(bool(self._selected_rows()))
 
     def _copy(self) -> None:
         rows = (self._result or {}).get("rows") or []
         if not rows:
             return
+        self._copy_rows(rows, f"全部 {len(rows)} 行")
+
+    def _copy_selected_rows(self, *_args) -> None:
+        rows = self._selected_rows()
+        if not rows:
+            self.status.setText("请先在表格里选中一行（可按住 Ctrl 多选）")
+            return
+        label = (f"第 {self.table.currentRow() + 1} 行" if len(rows) == 1
+                 else f"选中的 {len(rows)} 行")
+        self._copy_rows(rows, label)
+
+    def _copy_rows(self, rows: list[dict], label: str) -> None:
+        if not rows:
+            return
         QApplication.clipboard().setText(bridge.to_tsv(rows))
-        self.status.setText(f"✅ 已复制 {len(rows)} 行（不含表头），去腾讯文档粘贴即可。")
+        self.status.setText(f"✅ 已复制{label}（不含表头），去腾讯文档粘贴即可。")
         if self.app is not None:
             try:
-                self.app.toast(f"✅ 已复制 {len(rows)} 行待同步内容", "success")
+                self.app.toast(f"✅ 已复制{label}待同步内容", "success")
             except Exception:  # noqa: BLE001 - 提示失败不影响复制
                 pass
+
+    def _copy_text(self, text: str, label: str) -> None:
+        text = str(text or "").strip()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self.status.setText(f"✅ 已复制{label}")
+        if self.app is not None:
+            try:
+                self.app.toast(f"✅ 已复制{label}", "success")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _table_menu(self, pos) -> None:
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+        row_index = index.row()
+        if not (0 <= row_index < len(self._rows)):
+            return
+        self.table.selectRow(row_index)
+        row = self._rows[row_index]
+        page = str(row.get("作品链接") or "").strip()
+        dyn = str(row.get("动态链接(b站)") or "").strip()
+
+        menu = QMenu(self.table)
+        act_row = menu.addAction("📋 复制该行（TSV）")
+        act_page = menu.addAction("🔗 复制作品链接")
+        act_page.setEnabled(bool(page or dyn))
+        act_dyn = None
+        if dyn:
+            act_dyn = menu.addAction("🔗 复制动态链接(b站)")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == act_row:
+            self._copy_rows([row], f"第 {row_index + 1} 行")
+        elif chosen == act_page:
+            if page:
+                self._copy_text(page, "作品链接")
+            elif dyn:
+                self._copy_text(dyn, "动态链接")
+        elif act_dyn is not None and chosen == act_dyn:
+            self._copy_text(dyn, "动态链接")
 
 
 class TcDocBridgeDialog(QDialog):
