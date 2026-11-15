@@ -6,6 +6,14 @@
 
 完整内容见 [src/skills/convention-skill/SKILL.md](src/skills/convention-skill/SKILL.md)。
 
+## 范围约束 skill（强制阅读）
+
+腾讯文档同步的编辑范围约束见 [src/skills/tcdoc-sync-scope/SKILL.md](src/skills/tcdoc-sync-scope/SKILL.md)。
+
+- 仅允许编辑《封茗囧菌数据汇总库》的「官方动态」（`ss_h2uh2s`）与「直播记录」（`ss_1xgstm`）两张表。
+- 「线下活动」「完整歌曲」「歌曲片段」以及奖讯热榜、周边图鉴、更新日志、官方动态「图集数据库」、囧菌百科等其余全部页面与其他文档，一律禁止编辑。
+- 任何 Agent 在涉及腾讯文档同步、写回、表格增删改、导出覆盖之前，必须先完整阅读该 skill 并通过 `scripts/check_scope.py` 白名单校验；校验不通过立即停止并向用户确认。
+
 ## 约定 1：更新前必须拉取最新代码
 
 - 任何更新动作前，先确认 `origin` 为 `https://github.com/FmjjTool/FMJJRecordedBroadcast.git`，再执行 `git pull origin main`（或先 `git fetch origin` 再合并）。

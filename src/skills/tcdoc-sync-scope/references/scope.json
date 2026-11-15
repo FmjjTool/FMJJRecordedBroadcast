@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "updated": "2026-11-15",
+  "rule": "仅允许编辑 allow 列表内的表；allow 之外的一切页面、表、文档一律禁止编辑。",
+  "principle": "fail-closed：目标不在 allow 内（含未知 tab_id、未知 doc_key）时按禁止处理，必须停止并向用户确认。",
+  "match_by": "tab_id",
+  "docs": {
+    "DRnd3bkhkQUR1aEJr": {
+      "name": "封茗囧菌数据汇总库",
+      "url": "https://docs.qq.com/smartsheet/DRnd3bkhkQUR1aEJr",
+      "allow": [
+        {
+          "tab_id": "ss_h2uh2s",
+          "tab_name": "官方动态",
+          "ops": ["create", "update", "delete"],
+          "note": "动态同步唯一写入目标；新增行必须带发布时间与发布平台以便核对"
+        },
+        {
+          "tab_id": "ss_1xgstm",
+          "tab_name": "直播记录",
+          "ops": ["create", "update", "delete"],
+          "note": "直播同步唯一写入目标；AI 摘要等字段只写本场内容"
+        }
+      ],
+      "deny": [
+        { "tab_id": "ss_ktwk0t", "tab_name": "完整歌曲" },
+        { "tab_id": "ss_rvstfu", "tab_name": "歌曲片段" },
+        { "tab_id": "ss_e1kkm2", "tab_name": "线下活动" },
+        { "tab_id": "ss_m4q6fa", "tab_name": "奖讯热榜" },
+        { "tab_id": "ss_ekd4cz", "tab_name": "周边图鉴" },
+        { "tab_id": "ss_nqkthd", "tab_name": "更新日志" },
+        { "tab_id": "ss_87lt57", "tab_name": "官方动态「图集数据库」" },
+        { "tab_id": "33mt1g", "tab_name": "囧菌百科" }
+      ]
+    }
+  },
+  "deny_docs": {
+    "DRndLZVRmVW1GZExW": "百科用户反馈与收集",
+    "DRkZIbkZtQ0taTHd4": "「封茗囧菌」无料周边汇总",
+    "DRkZHdnJranRIc1hD": "用户协议与编辑须知"
+  },
+  "forbidden_actions": [
+    "在白名单外的表执行 create/update/delete/批量填充/清空/重排",
+    "通过改表名、复制表、新建表变相承载禁写表内容",
+    "修改白名单表的字段结构、视图、关联、公式、权限（需用户单独授权）",
+    "改动禁写表导出产物的数据内容（只读查看不受限）",
+    "把同步范围从两张表扩大到全库",
+    "tab_id 无法确认时猜测目标并写入"
+  ]
+}
