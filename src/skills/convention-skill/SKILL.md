@@ -1,6 +1,6 @@
 ---
 name: convention-skill
-description: "约定skill（强制阅读）。任何 Agent 在执行任何操作前，都必须先阅读并遵守本 skill。当前约定：凡涉及更新前，必须先从 https://github.com/FmjjTool/FMJJRecordedBroadcast 拉取最新代码；拉取失败时禁止直接更新，必须向用户提问或按其他相关 skill 处理。"
+description: "约定skill（强制阅读）。任何 Agent 在执行任何操作前，都必须先阅读并遵守本 skill。当前约定：凡涉及更新前，必须先从 https://github.com/FmjjTool/FMJJRecordedBroadcast 拉取最新代码；拉取失败时禁止直接更新，必须向用户提问或按其他相关 skill 处理；新增或修改 skill 一律只写 Markdown 文档，禁止附带脚本、JSON 等可执行或机器可读文件（用户特别告知的除外）。"
 ---
 
 # 约定skill（强制阅读）
@@ -57,6 +57,24 @@ description: "约定skill（强制阅读）。任何 Agent 在执行任何操作
 3. 向用户汇报本部分改动摘要与提交哈希。
 4. 本地提交不等于推送；推送需用户明确指示或按相关 skill（如 `summarize-update`）执行。
 
+### 约定 3：技能只写 Markdown 文档
+
+**适用范围**：新增 skill、修改 skill、把流程/约定沉淀为 skill 的一切场景。
+
+**执行要求**：
+
+1. skill 只用 Markdown 表达：`src/skills/<skill-name>/SKILL.md`，需要拆分时只用 `.md` 子文档（references、附录等也用 `.md`）。
+2. 禁止附带可执行脚本（`.py`、`.js`、`.ps1`、`.sh`、`.bat` 等）、机器可读配置（`.json`、`.yaml`、`.toml`、`.ini` 等）、二进制或任何需要运行才能生效的校验程序。
+3. 约束、白名单、校验规则全部写在正文里，由 Agent 阅读后逐项人工核对；不得把判断逻辑外包给脚本。
+4. 例外：用户明确告知需要脚本或结构化配置时才可添加，且只对当次需求生效；下一次改动该 skill 时按下述第 5 条清理。
+5. 已存在的非 md 附属文件（历史遗留），在下次改动该 skill 时一并移除。
+
+**禁止事项**：
+
+- 禁止以"提高准确性""方便自动化校验"为由给 skill 加脚本或 JSON。
+- 禁止新增 skill 时携带非 md 文件。
+- 禁止把 md 里的关键规则只写在脚本里、正文不留。
+
 ## 执行检查清单
 
 - [ ] 已阅读本 skill。
@@ -65,6 +83,7 @@ description: "约定skill（强制阅读）。任何 Agent 在执行任何操作
 - [ ] 拉取失败时，已停止操作并向用户提问或按相关 skill 处理。
 - [ ] 改动前已执行 `git status`，无未备份内容（否则已先本地提交）。
 - [ ] 完成后已本地 `git commit` 一次并汇报。
+- [ ] 本次涉及 skill 时，新增/修改内容全部为 `.md`，未附带脚本或 JSON（用户特别告知的除外）。
 
 ## 相关 skill
 
