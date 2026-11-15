@@ -1,4 +1,4 @@
-"""腾讯文档 · 中间层同步器弹窗。
+"""腾讯文档 · 中间层同步器（页签面板 / 弹窗两种形态）。
 
 只读比对本地「已获取」/增量数据库与已同步的腾讯表格，把尚未上传的条目
 按「官方动态」列标准整理成表格，一键复制 TSV 后由用户手动粘贴上传。
@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
     QHeaderView, QLabel, QMenu, QPushButton, QTableWidget, QTableWidgetItem,
-    QVBoxLayout,
+    QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -27,12 +27,12 @@ _WIDTHS = {
 }
 
 
-class TcDocBridgeDialog(QDialog):
-    def __init__(self, parent, app=None, prefer_doc_key: str = ""):
+class TcDocBridgePanel(QWidget):
+    def __init__(self, parent=None, app=None, prefer_doc_key: str = "",
+                 embedded: bool = False):
         super().__init__(parent)
         self.app = app or getattr(parent, "app", None)
-        self.setWindowTitle("🧩 腾讯文档 · 中间层同步器")
-        self.resize(1180, 720)
+        self._embedded = embedded
         self._targets: list[dict] = []
         self._result: dict | None = None
         self._account_names: list[str] = []
@@ -116,12 +116,46 @@ class TcDocBridgeDialog(QDialog):
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: #888;")
         bottom.addWidget(self.status, 1)
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.accept)
-        bottom.addWidget(close_btn)
+        if not self._embedded:
+            close_btn = QPushButton("关闭")
+            close_btn.clicked.connect(self._close)
+            bottom.addWidget(close_btn)
         layout.addLayout(bottom)
 
+    def _close(self) -> None:
+        window = self.window()
+        accept = getattr(window, "accept", None)
+        if callable(accept):
+            accept()
+
     # ==================== 目标 / 配置 ====================
+
+    def set_doc_key(self, doc_key: str) -> None:
+        """页签模式下跟随腾讯文档页当前选中的文档。"""
+        if not doc_key:
+            return
+        for index in range(self.target_combo.count()):
+            data = self.target_combo.itemData(index)
+            if data and data.get("doc_key") == doc_key:
+                if index != self.target_combo.currentIndex():
+                    self.target_combo.setCurrentIndex(index)
+                return
+
+    def refresh(self, reload_targets: bool = False) -> None:
+        """手动/切回页签时重新比对；reload_targets=True 时同时刷新表格清单。"""
+        if reload_targets:
+            self._load_targets(self._preferred_doc_key())
+            return
+        self._run_compare()
+
+    def _preferred_doc_key(self) -> str:
+        data = self.target_combo.currentData()
+        if data:
+            return str(data.get("doc_key") or "")
+        try:
+            return str(load_convert_config().get("tcdoc_bridge_doc_key") or "")
+        except Exception:  # noqa: BLE001 - 配置读取失败时退回自动选择
+            return ""
 
     def _load_targets(self, prefer_doc_key: str = "") -> None:
         self._targets = bridge.list_targets()
@@ -135,7 +169,7 @@ class TcDocBridgeDialog(QDialog):
 
         if not self._targets:
             self.summary.setText(
-                "本地还没有可用的表格数据：请先在「腾讯文档监控」页同步一次表格。")
+                "本地还没有可用的表格数据：请先在「📋 表格同步」页签同步一次表格。")
             self.compare_btn.setEnabled(False)
             self.copy_btn.setEnabled(False)
             return
@@ -324,3 +358,16 @@ class TcDocBridgeDialog(QDialog):
                 self.app.toast(f"✅ 已复制 {len(rows)} 行待同步内容", "success")
             except Exception:  # noqa: BLE001 - 提示失败不影响复制
                 pass
+
+
+class TcDocBridgeDialog(QDialog):
+    """独立弹窗形态（已获取页入口等），内容复用内嵌面板。"""
+
+    def __init__(self, parent, app=None, prefer_doc_key: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("🧩 腾讯文档 · 中间层同步器")
+        self.resize(1180, 720)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.panel = TcDocBridgePanel(self, app=app, prefer_doc_key=prefer_doc_key)
+        layout.addWidget(self.panel)

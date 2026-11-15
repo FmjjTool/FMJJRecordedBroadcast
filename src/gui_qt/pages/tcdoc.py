@@ -6,12 +6,14 @@
 功能：
 - 文档下拉切换（每个文档独立记录），登录态统一由 Cookie 管理器持有（平台：腾讯文档）
 - 立即采集（纯 HTTP 接口），每次采集追加一行并算增量，各自出 Excel
+- 子页签顺序：中间层同步 → 表格同步 → 历史记录 → 采集明细 → 修订记录 →
+  成员名单 → 文档管理 → 映射回写
+- 中间层同步：比对本地已获取与当前表格，列出未上传条目，一键复制 TSV（不自动写入）
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
 - 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
 - 修订记录：纯 HTTP 增量翻页（按上次拉取位置停止，可全量重拉），导出 JSON + Excel
 - 成员名单：纯 HTTP 游标翻页，导出 JSON + Excel
-- 其余 Tab：历史记录 / 采集明细 / 文档管理（自定义文档增删改 + 诊断包）
 - 底部：定时采集（每天一次 / 按间隔几分钟或几小时）+ 计划任务安装/删除
 """
 
@@ -31,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.pages.tcdoc_bridge import TcDocBridgePanel
 from gui_qt.pages.tcdoc_mapping import TcDocMappingPanel
 from toolbox.tcdoc import (
     archive, collector, config as tc_cfg, images, job, members, revision,
@@ -537,15 +540,11 @@ class TcDocPage(BasePage):
         cv.addWidget(self.latest_label)
         layout.addWidget(card)
 
-        # ---------- 三个 Tab ----------
+        # ---------- 子页签：中间层同步 → 表格同步 → 历史/采集/修订/成员/文档/映射 ----------
         self.tabs = QTabWidget()
-        self.table_daily = self._make_table(DAILY_COLS, stretch_all=True, fit_cols=(0,))
-        self.table_daily.setToolTip("每次采集追加一行；增量相对该文档上一次采集")
-        self.tabs.addTab(self._wrap(self.table_daily), "📈 历史记录")
-
-        self.table_snap = self._make_table(SNAP_COLS)
-        self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
-        self.tabs.addTab(self._wrap(self.table_snap), "🧾 采集明细")
+        self.bridge_panel = TcDocBridgePanel(self, self.app)
+        self.tabs.addTab(self.bridge_panel, "🧩 中间层同步")
+        self.bridge_tab_index = self.tabs.count() - 1
 
         self.table_panel = self._build_sheet_tab()
         self.preview_panel = _DocPreviewPanel(self)
@@ -554,6 +553,15 @@ class TcDocPage(BasePage):
         self.content_stack.addWidget(self.preview_panel)
         self.tabs.addTab(self.content_stack, "📋 表格同步")
         self.content_tab_index = self.tabs.count() - 1
+
+        self.table_daily = self._make_table(DAILY_COLS, stretch_all=True, fit_cols=(0,))
+        self.table_daily.setToolTip("每次采集追加一行；增量相对该文档上一次采集")
+        self.tabs.addTab(self._wrap(self.table_daily), "📈 历史记录")
+
+        self.table_snap = self._make_table(SNAP_COLS)
+        self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
+        self.tabs.addTab(self._wrap(self.table_snap), "🧾 采集明细")
+
         self.tabs.addTab(self._build_revision_tab(), "📜 修订记录")
         self.revision_tab_index = self.tabs.count() - 1
         self.tabs.addTab(self._build_members_tab(), "👥 成员名单")
@@ -732,13 +740,6 @@ class TcDocPage(BasePage):
             "把当前文档全部表格图片字段里的图片增量下载到 图片/（已下载自动跳过）")
         self.images_btn.clicked.connect(self._collect_images)
         bar.addWidget(self.images_btn)
-
-        self.bridge_btn = QPushButton("🧩 中间层同步")
-        self.bridge_btn.setToolTip(
-            "比对本地「已获取」与当前腾讯表格，列出尚未上传的条目；"
-            "按官方动态列标准生成表格，一键复制后手动粘贴上传（不会自动写入）")
-        self.bridge_btn.clicked.connect(self._open_bridge)
-        bar.addWidget(self.bridge_btn)
 
         self.prev_btn = QPushButton("◀")
         self.prev_btn.setToolTip("上一页")
@@ -951,6 +952,9 @@ class TcDocPage(BasePage):
         self._refresh_revisions()
         self._refresh_members()
         self.mapping_panel.set_doc(self.current_doc())
+        self.bridge_panel.set_doc_key((self.current_doc() or {}).get("key", ""))
+        if self.tabs.currentIndex() == self.bridge_tab_index:
+            self.bridge_panel.refresh(reload_targets=True)
 
     def _reload_docs(self):
         current = self.current_doc()
@@ -1054,6 +1058,7 @@ class TcDocPage(BasePage):
         self._refresh_revisions()
         self._refresh_members()
         self.mapping_panel.set_doc(self.current_doc())
+        self.bridge_panel.set_doc_key((self.current_doc() or {}).get("key", ""))
 
     def _refresh_content_tab(self):
         """内容 Tab 自动切换：表格类型=表格同步，文档类型=正文预览。"""
@@ -1067,6 +1072,9 @@ class TcDocPage(BasePage):
             self.preview_panel.set_doc(doc)
 
     def _on_tab_changed(self, index):
+        if index == self.bridge_tab_index:
+            self.bridge_panel.refresh(reload_targets=True)
+            return
         if index == self.mapping_tab_index:
             self.mapping_panel.refresh()
             self.mapping_panel.set_doc(self.current_doc())
@@ -1264,13 +1272,6 @@ class TcDocPage(BasePage):
 
         run_bg(work, done)
 
-    def _open_bridge(self):
-        """打开中间层同步器：比对本地已获取与腾讯表格，一键复制待同步行。"""
-        doc = self.current_doc()
-        from gui_qt.pages.tcdoc_bridge import TcDocBridgeDialog
-        TcDocBridgeDialog(self, self.app,
-                          prefer_doc_key=(doc or {}).get("key", "")).exec()
-
     def _refresh_bridge_hint(self):
         """表格同步完成后，在底部提示本地还有多少行尚未上传。"""
         doc = self.current_doc()
@@ -1289,11 +1290,11 @@ class TcDocPage(BasePage):
             if count:
                 self.sheet_hint.setText(
                     f"🔎 本地有 {count} 行尚未同步到当前腾讯表格 · "
-                    "点「🧩 中间层同步」查看并一键复制")
+                    "点上方「🧩 中间层同步」页签查看并一键复制")
             else:
                 self.sheet_hint.setText(
                     "✅ 本地与当前腾讯表格已对齐（默认时间范围/账号）· "
-                    "点「🧩 中间层同步」可查看明细")
+                    "点上方「🧩 中间层同步」页签可查看明细")
 
         run_bg(work, done)
 
