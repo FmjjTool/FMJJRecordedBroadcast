@@ -76,28 +76,51 @@ def build_frontend(root: Path | None = None, log=print) -> Path:
     return dist
 
 
-def sync_docs(root: Path | None = None, log=print, force: bool = False) -> str:
-    """运行 webwiki-api/sync_once.py，把腾讯文档同步进 data/。
+def sync_docs(root: Path | None = None, log=print) -> str:
+    """从「腾讯文档监控」已同步的本地 tables.db 重建站点库（不联网）。
 
-    默认按文档版本号增量：没变化只发一个约 76KB 的探测请求；
-    有变化才逐表拉取，行级哈希去重由 webwiki-api 自身保证。
+    ETL 会全量重建 data/webwiki.db，所以每次都直接读本地最新表格即可，
+    不需要版本号判断、强制全量或重新请求腾讯文档。
     """
     root = Path(root or config.root_dir())
     python = config.venv_python(root)
     api = config.api_dir(root)
     if not python.is_file():
         raise DeployError("Python 依赖未安装，请先点「安装依赖」")
-    if not (api / "sync_once.py").is_file():
-        raise DeployError("webwiki-api/sync_once.py 不存在，请先拉取代码")
-    cmd = [str(python), "sync_once.py"]
-    if force:
-        cmd.append("--force")
-    runner.run_stream(cmd, api, log, title="同步腾讯文档" + ("（强制全量）" if force else "（增量）"))
+    if not (api / "app" / "etl.py").is_file():
+        raise DeployError("webwiki-api 代码不存在，请先拉取代码")
+
+    from toolbox.tcdoc import config as tcdoc_config
+    source = Path(tcdoc_config.tables_db_path())
+    if not source.is_file():
+        raise DeployError(
+            "腾讯文档监控还没有同步过表格：请先到「腾讯文档监控 → 表格同步」同步一次")
+    try:
+        conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=3)
+        try:
+            row_count = conn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise DeployError(f"读取腾讯文档监控本地库失败：{exc}") from exc
+    if not row_count:
+        raise DeployError(
+            "腾讯文档监控的表格库还是空的：请先到「腾讯文档监控 → 表格同步」同步一次")
+
+    log(f"数据来源：{source}（{row_count} 行，直接读本地，不再请求腾讯文档）")
+    code = (
+        "from pathlib import Path\n"
+        "from app import etl\n"
+        f"etl.SRC_DB = Path({str(source)!r})\n"
+        "raise SystemExit(etl.main())\n"
+    )
+    runner.run_stream([str(python), "-c", code], api, log,
+                      title="从腾讯文档监控本地库重建站点数据")
     status = data_status(root)
     if status.get("exists"):
-        return (f"已同步：歌曲 {status.get('songs', 0)} / 活动 {status.get('events', 0)} / "
+        return (f"已重建：歌曲 {status.get('songs', 0)} / 活动 {status.get('events', 0)} / "
                 f"周边 {status.get('goods', 0)} / 动态 {status.get('posts', 0)}")
-    return "同步完成（未找到服务库，可能文档未变化）"
+    return "重建完成（未找到服务库）"
 
 
 def data_status(root: Path | None = None) -> dict:
@@ -211,16 +234,15 @@ def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
     return f"{ok}/{len(items)}"
 
 
-def deploy_all(root: Path | None = None, token: str = "", log=print,
-               force_sync: bool = False) -> Path:
-    """一键部署：拉代码 → 装依赖 → 同步腾讯文档 → 构建前端，返回 venv python。"""
+def deploy_all(root: Path | None = None, token: str = "", log=print) -> Path:
+    """一键部署：拉代码 → 装依赖 → 读监控数据重建站点库 → 构建前端。"""
     from . import gitops
 
     root = Path(root or config.root_dir())
     gitops.ensure_repo("webwiki-api", token, log, root)
     gitops.ensure_repo("webwiki", token, log, root)
     python = ensure_python_env(root, log)
-    sync_docs(root, log, force=force_sync)
+    sync_docs(root, log)
     ensure_node_deps(root, log)
     build_frontend(root, log)
     warm_covers(root, log)

@@ -1,10 +1,10 @@
-"""本地资料站：GitHub 拉取 webwiki / webwiki-api，同步腾讯文档并一键起站。
+"""本地资料站：GitHub 拉取 webwiki / webwiki-api，读取监控数据重建并一键起站。
 
 页面只做服务启动器：
 - GitHub 设备码登录（扫码打开授权页 + 输入设备码），未登录时锁定拉取/部署
-- 拉取代码 → 安装依赖 → 同步腾讯文档 → 构建前端 → 启动本地站点
+- 拉取代码 → 安装依赖 → 读取腾讯文档监控本地表格重建站点库 → 构建前端 → 启动站点
 - 启动后自动打开系统浏览器，也可随时点「打开网站」
-- 腾讯文档预览：直接打开源文档；数据同步默认按版本号/上次拉取位置增量
+- 数据复用「腾讯文档监控」已同步的 tables.db，不重复联网拉取
 """
 
 from __future__ import annotations
@@ -272,7 +272,7 @@ class LocalWikiPage(BasePage):
         title.setObjectName("wikiTitle")
         left.addWidget(title)
         sub = QLabel("本地 Wiki + 腾讯文档预览：拉取 webwiki / webwiki-api，"
-                     "同步源文档后一键起站，浏览器直接访问。")
+                     "复用腾讯文档监控的本地数据重建站点，一键起站。")
         sub.setObjectName("wikiMuted")
         sub.setWordWrap(True)
         left.addWidget(sub)
@@ -329,7 +329,8 @@ class LocalWikiPage(BasePage):
         self.deploy_btn = QPushButton("🚀 一键部署并启动")
         self.deploy_btn.setObjectName("wikiPrimary")
         self.deploy_btn.setMinimumHeight(40)
-        self.deploy_btn.setToolTip("拉取代码 → 安装依赖 → 同步腾讯文档 → 构建前端 → 启动站点")
+        self.deploy_btn.setToolTip(
+            "拉取代码 → 安装依赖 → 读取腾讯文档监控数据重建站点库 → 构建前端 → 启动站点")
         self.deploy_btn.clicked.connect(self._deploy)
         box.addWidget(self.deploy_btn)
         self._task_buttons.append(self.deploy_btn)
@@ -341,7 +342,7 @@ class LocalWikiPage(BasePage):
             ("🔐 登录 GitHub", self._open_login),
             ("⬇ 拉取/更新代码", self._pull),
             ("📦 安装依赖", self._install_deps),
-            ("🔄 同步腾讯文档", self._sync_docs),
+            ("🔄 重建站点数据", self._sync_docs),
             ("🏗 构建前端", self._build_frontend),
             ("▶ 启动服务", self._start_service),
             ("🌐 打开网站", self._open_site),
@@ -376,9 +377,6 @@ class LocalWikiPage(BasePage):
         self.auto_open.setChecked(wiki_cfg.auto_open_browser())
         self.auto_open.toggled.connect(wiki_cfg.set_auto_open_browser)
         opts.addWidget(self.auto_open)
-        self.force_sync = QCheckBox("强制全量同步（忽略文档版本号）")
-        self.force_sync.setToolTip("默认按文档版本号增量同步；只有怀疑数据不对时才需要全量")
-        opts.addWidget(self.force_sync)
         opts.addStretch(1)
         box.addLayout(opts)
         return card
@@ -400,7 +398,9 @@ class LocalWikiPage(BasePage):
         monitor.clicked.connect(lambda: self.app.show_page("tcdoc"))
         row.addWidget(monitor)
         box.addLayout(row)
-        hint = QLabel("预览用系统默认浏览器打开源文档；本站数据由「同步腾讯文档」写入本地库。")
+        hint = QLabel(
+            "预览用系统默认浏览器打开源文档；本站数据直接读取「腾讯文档监控」已同步的本地表格，"
+            "点「重建站点数据」即可，不需要重新联网拉取。")
         hint.setObjectName("wikiMuted")
         hint.setWordWrap(True)
         box.addWidget(hint)
@@ -443,7 +443,7 @@ class LocalWikiPage(BasePage):
         return card
 
     def _build_log_card(self):
-        card, box = self._card("运行日志", "拉取、安装、同步与启动输出")
+        card, box = self._card("运行日志", "拉取、安装、重建与启动输出")
         bar = QHBoxLayout()
         bar.addStretch(1)
         clear = QPushButton("清空日志")
@@ -463,8 +463,8 @@ class LocalWikiPage(BasePage):
         QMessageBox.information(
             self, "本地资料站 · 功能介绍",
             "<p><b>它做什么</b><br>把 <code>webwiki</code>（前端）与 "
-            "<code>webwiki-api</code>（后端/腾讯文档同步）拉到本机，"
-            "同步腾讯文档后启动本地站点，浏览器访问 "
+            "<code>webwiki-api</code>（后端/数据重建）拉到本机，"
+            "读取「腾讯文档监控」已同步的本地表格重建站点库后启动，浏览器访问 "
             "<code>http://127.0.0.1:站点端口/</code>。</p>"
             "<p><b>为什么要登录 GitHub</b><br>项目是私有的；未登录时"
             "「拉取代码」和「一键部署」会锁定，避免被随意拉取。"
@@ -472,10 +472,9 @@ class LocalWikiPage(BasePage):
             "「使用此账户登录」；也可手动填账户 + Personal Access Token。"
             "GitHub 已停用账户密码做 Git / API 认证，密码处必须填 Token。"
             "Token 只存本机 <code>config/webwiki_auth.json</code>。</p>"
-            "<p><b>腾讯文档去重</b><br>同步默认按文档版本号增量：没变化只发一个"
-            "约 76KB 的探测请求；有变化才逐表拉取，行级哈希去重。"
-            "修订记录按上次拉取位置增量翻页，并逐条校验内容；"
-            "同版本不同编辑人会全部保留。</p>"
+            "<p><b>数据来源</b><br>站点数据直接读取「腾讯文档监控 → 表格同步」"
+            "已落地的本地 tables.db，每次重建都全量读取最新本地数据，"
+            "不重新请求腾讯文档，也不需要版本号或强制全量。</p>"
             "<p><b>本地图片</b><br>「腾讯文档监控 → 采集图片」下载过的图片会优先生效："
             "站点封面直接读本地文件并生成缩略图，不再走网络；"
             "没下载过的图片才回退到图床缓存。</p>"
@@ -589,14 +588,14 @@ class LocalWikiPage(BasePage):
         except Exception:  # noqa: BLE001
             local_images = 0
         if status.get("exists"):
-            text = (f"已同步 {status.get('mtime')} · 歌曲 {status.get('songs', 0)}"
+            text = (f"已重建 {status.get('mtime')} · 歌曲 {status.get('songs', 0)}"
                     f" / 活动 {status.get('events', 0)} / 周边 {status.get('goods', 0)}"
                     f" / 动态 {status.get('posts', 0)}")
             if local_images:
                 text += f" · 本地图片 {local_images} 张优先"
             self.data_status.setText(text)
         else:
-            self.data_status.setText("尚未同步（点「同步腾讯文档」或「一键部署」）")
+            self.data_status.setText("尚未重建（点「重建站点数据」或「一键部署」）")
         self.path_label.setText(str(wiki_cfg.root_dir()))
         self._update_service_label()
         self._refresh_actions()
@@ -743,9 +742,8 @@ class LocalWikiPage(BasePage):
 
     def _sync_docs(self):
         root = wiki_cfg.root_dir()
-        force = self.force_sync.isChecked()
-        self._start_task("同步腾讯文档",
-                         lambda log: deploy.sync_docs(root, log, force=force))
+        self._start_task("重建站点数据",
+                         lambda log: deploy.sync_docs(root, log))
 
     def _build_frontend(self):
         root = wiki_cfg.root_dir()
@@ -789,7 +787,6 @@ class LocalWikiPage(BasePage):
             return
         root = wiki_cfg.root_dir()
         token = wiki_cfg.token()
-        force = self.force_sync.isChecked()
 
         def work(log):
             if self.service.running:
@@ -799,7 +796,7 @@ class LocalWikiPage(BasePage):
             gitops.ensure_repo("webwiki-api", token, log, root)
             gitops.ensure_repo("webwiki", token, log, root)
             deploy.ensure_python_env(root, log)
-            deploy.sync_docs(root, log, force=force)
+            deploy.sync_docs(root, log)
             deploy.ensure_node_deps(root, log)
             deploy.build_frontend(root, log)
             try:
