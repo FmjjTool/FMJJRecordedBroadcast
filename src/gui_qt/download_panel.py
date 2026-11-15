@@ -16,7 +16,8 @@ import time
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main
@@ -40,8 +41,28 @@ def _fmt_speed(n: float) -> str:
     return _fmt_bytes(n) + "/s"
 
 
-def _elide(name: str, limit: int = 46) -> str:
-    return name if len(name) <= limit else name[:limit - 1] + "…"
+class _ElidedLabel(QLabel):
+    """按控件实际宽度省略文本（完整文本进 tooltip），避免长文件名撑宽整行。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        # 不把文本长度计入最小宽度，布局才能把标签压缩到可用空间内
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(40)
+
+    def set_full_text(self, text: str):
+        self._full_text = text
+        self.setToolTip(text)
+        self._apply_elide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        self.setText(self.fontMetrics().elidedText(
+            self._full_text, Qt.ElideMiddle, max(24, self.width())))
 
 
 class SegmentBar(QWidget):
@@ -105,11 +126,12 @@ class _SlotRow(QWidget):
         self.no_label = QLabel(f"{idx + 1}")
         self.no_label.setFixedWidth(22)
         self.no_label.setStyleSheet("color: #888; font-size: 13px;")
-        self.name_label = QLabel("—")
+        self.name_label = _ElidedLabel()
         self.name_label.setStyleSheet("font-size: 14px;")
+        self.name_label.set_full_text("—")
         self.bar = QProgressBar()
         self.bar.setFixedHeight(16)
-        self.bar.setMinimumWidth(240)
+        self.bar.setMinimumWidth(160)
         self.bar.setStyleSheet(
             "QProgressBar { font-size: 12px; border-radius: 4px; }")
         self.state_label = QLabel("")
@@ -121,8 +143,7 @@ class _SlotRow(QWidget):
         lay.addWidget(self.state_label)
 
     def bind(self, name: str):
-        self.name_label.setText(_elide(name))
-        self.name_label.setToolTip(name)
+        self.name_label.set_full_text(name)
         self.bar.setRange(0, 100)
         self.bar.setValue(0)
         self.state_label.setText("")
@@ -172,7 +193,7 @@ class DownloadPanel(QFrame):
         self._root.setContentsMargins(10, 8, 10, 8)
         self._root.setSpacing(6)
         # 单文件模式控件
-        self._single_name_label = QLabel("")
+        self._single_name_label = _ElidedLabel()
         self._single_name_label.setStyleSheet(
             "font-size: 14px; font-weight: bold;")
         self._single_name_label.setWordWrap(False)
@@ -185,6 +206,8 @@ class DownloadPanel(QFrame):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
+        # 进度条必须完整可见：内容宽度不产生横向滚动（文件名按宽度省略）
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._slots_host = QWidget()
         self._slots_lay = QVBoxLayout(self._slots_host)
         self._slots_lay.setContentsMargins(0, 0, 0, 0)
@@ -361,7 +384,7 @@ class DownloadPanel(QFrame):
         self._clear_layout()
         if mode == "segments":
             self._seg_bar.set_count(threads)
-            self._single_name_label.setText("")
+            self._single_name_label.set_full_text("")
             self._single_stats.setText("")
             for w in (self._single_name_label, self._seg_bar, self._single_stats):
                 self._root.addWidget(w)
@@ -389,8 +412,7 @@ class DownloadPanel(QFrame):
         self.setVisible(True)
 
     def _single_started(self, name: str):
-        self._single_name_label.setText(f"📄 {_elide(name, 60)}")
-        self._single_name_label.setToolTip(name)
+        self._single_name_label.set_full_text(f"📄 {name}")
         self._seg_bar.set_count(self._threads)
         self._single_stats.setText(f"0% · {self._threads} 线程")
 
