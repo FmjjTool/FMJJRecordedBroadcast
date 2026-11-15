@@ -143,10 +143,10 @@ class InfoToolsPage(TabbedPage):
     """信息工具：原侧栏四个独立信息页合并为一个页签容器。"""
 
     TAB_KEYS = [
-        "douyin_index",
-        "wechat_article",
-        "bili_resource",
         "video_comments",
+        "douyin_index",
+        "bili_resource",
+        "wechat_article",
     ]
 
     def __init__(self, app):
@@ -155,10 +155,10 @@ class InfoToolsPage(TabbedPage):
         from gui_qt.pages.video_comments import VideoCommentsPage
         from gui_qt.pages.wechat_article import WechatArticlePage
         super().__init__(app, [
-            ("📈 抖音指数", DouyinIndexPage),
-            ("📰 公众号解析", WechatArticlePage),
-            ("🎁 B站资源", BiliResourcePage),
             ("💬 视频评论区", VideoCommentsPage),
+            ("📈 抖音指数", DouyinIndexPage),
+            ("🎁 B站资源", BiliResourcePage),
+            ("📰 公众号解析", WechatArticlePage),
         ], lazy=True)
         self._tab_index = {key: i for i, key in enumerate(self.TAB_KEYS)}
 

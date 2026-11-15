@@ -1,4 +1,4 @@
-"""B站资源 · 表情包页：全部表情包（登录）/ 按ID查看 / 直播间表情 / 装扮表情包。
+"""B站资源 · 表情包页：全部表情包（登录）/ 按ID / 装扮表情包 / 直播间表情。
 
 复刻自 BiliResourceDownloader 的 search/emoji.vue + emoji/[id].vue + liveroom 表情部分。
 """
@@ -11,7 +11,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
+    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -159,20 +159,18 @@ class BiliEmojiPage(BasePage):
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
         head.addWidget(attach_help_overlay(self, "❓ 表情包 · 功能介绍", (
-            "<p><b>B站表情包/装扮表情资源下载（三个入口）。</b></p>"
-            "<p>· <b>🗃 全部表情包</b>：浏览B站全部表情包，按名字搜索、滚动到底自动加载更多；"
-            "点「查看」加载详情后⬇ 全部下载（表格缩略图预览，仅显示前 500，下载不受影响）</p>"
-            "<p>· <b>🆔 按ID / 装扮表情包</b>：输入表情包/装扮 ID 下载，"
-            "自动识别普通表情包 → 装扮表情 → 收藏集（命中收藏集自动跳转收藏集页）</p>"
+            "<p><b>B站表情包/装扮表情资源下载（两个入口）。</b></p>"
+            "<p>· <b>🗃 表情包</b>：上半部分浏览全部表情包，按名字搜索、滚动到底自动加载；"
+            "点「查看」加载详情后⬇ 全部下载。下半部分按 ID 下载普通表情包 / 装扮表情包，"
+            "自动识别普通表情 → 装扮表情 → 收藏集（命中收藏集自动跳转收藏集页）</p>"
             "<p>· <b>📺 直播间表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
             "附带主播头像、封面、网页+App背景图、关键帧</p>"
-            "<p>· 可选下载格式，每个 Tab 独立下载进度；表情类接口需要 B站 登录 Cookie"
+            "<p>· 可选下载格式，每个区域独立下载进度；表情类接口需要 B站 登录 Cookie"
             "（侧栏「Cookie 管理」维护）</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_all_tab(), "🗃 全部表情包（需登录）")
-        self.tabs.addTab(self._build_id_tab(), "🆔 按ID / 装扮表情包")
+        self.tabs.addTab(self._build_emoji_tab(), "🗃 表情包")
         self.tabs.addTab(self._build_room_tab(), "📺 直播间表情")
 
     def _switch_tab(self, index: int):
@@ -226,11 +224,23 @@ class BiliEmojiPage(BasePage):
 
         run_bg(job, done)
 
+    # ---------- 表情包（全部搜索 + 按ID / 装扮表情包） ----------
+    def _build_emoji_tab(self):
+        """全部表情包与按 ID 下载合并，避免两个高度重合的 tab。"""
+        split = QSplitter(Qt.Vertical)
+        split.setChildrenCollapsible(False)
+        split.addWidget(self._build_all_tab())
+        split.addWidget(self._build_id_tab())
+        split.setSizes([260, 320])
+        self._emoji_split = split
+        return split
+
     # ---------- Tab1 全部表情包（搜索 + 滚动懒加载） ----------
     def _build_all_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(QLabel("① 浏览 / 搜索全部表情包", styleSheet="font-weight:600;"))
         top = QHBoxLayout()
         top.addWidget(QLabel("搜索："))
         self.all_search = QLineEdit()
@@ -319,9 +329,11 @@ class BiliEmojiPage(BasePage):
         self.all_info.setText(f"已显示 {self._all_shown}/{len(self._all_filtered)} 个表情包（滚动到底继续加载）")
 
     def _view_normal(self, idx):
-        self._switch_tab(1)
+        self._switch_tab(0)
         self.id_entry.setText(str(idx))
         self.id_suit_cb.setChecked(False)
+        if getattr(self, "_emoji_split", None) is not None:
+            self._emoji_split.setSizes([140, 500])
         self._view_by_id()
 
     # ---------- Tab2 按ID（智能识别：链接/普通包/装扮/收藏集自动判断） ----------
@@ -329,6 +341,8 @@ class BiliEmojiPage(BasePage):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(QLabel("② 按 ID 下载（普通表情包 / 装扮表情包）",
+                          styleSheet="font-weight:600;"))
         row = QHBoxLayout()
         row.addWidget(QLabel("表情包/装扮ID："))
         self.id_entry = QLineEdit()

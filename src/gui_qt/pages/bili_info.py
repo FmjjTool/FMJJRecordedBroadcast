@@ -1,7 +1,7 @@
-"""B站资源 · 空间综合搜索页：用户空间 / 综合搜索。
+"""B站资源 · 用户空间页：按 UID 查看用户公开信息并下载空间资源。
 
-复刻自 BiliResourceDownloader 的 space/[id].vue + search/general.vue
-（下载头像/横幅/空间资源；视频信息走「信息获取」页，动态详情已并入综合搜索场景）。
+复刻自 BiliResourceDownloader 的 space/[id].vue
+（下载头像/横幅/空间资源；视频信息与综合搜索已并入「信息获取」）。
 """
 
 import re
@@ -9,8 +9,7 @@ import re
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout,
-    QWidget,
+    QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from bili import api
@@ -61,37 +60,24 @@ def space_files(card: dict, appinfo: dict, emotes: list) -> list[dict]:
 
 
 class BiliInfoPage(BasePage):
-    _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
-    _tab_map = None     # 本页各 tab 在平铺外层的下标表（顺序交错时非连续）
-
-    def _switch_tab(self, index: int):
-        """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
-        if self._flat_tabs is not None:
-            self._flat_tabs.setCurrentIndex(self._tab_map[index])
-        else:
-            self.tabs.setCurrentIndex(index)
-
     def __init__(self, app):
         super().__init__(app)
         self._space_current = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(QLabel("🔍 B站空间综合搜索", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("👤 B站用户空间", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 空间综合搜索 · 功能介绍", (
-            "<p><b>B站用户空间查询与综合搜索（两个入口）。</b></p>"
+        head.addWidget(attach_help_overlay(self, "❓ 用户空间 · 功能介绍", (
+            "<p><b>B站用户空间查询。</b></p>"
             "<p>· <b>👤 用户空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
             "可下载头像/头像框/空间背景图/投稿封面/充电表情/收藏集封面</p>"
-            "<p>· <b>🔍 综合搜索</b>：关键词搜B站用户与视频（WBI 签名），"
-            "用户结果点「查看」跳本页空间页；视频结果点「查看」自动填入「信息获取」页解析</p>"
             "<p>· 全部游客接口，无需登录；视频详情与下载请用「信息获取」页</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._build_space_tab(), "👤 用户空间")
-        self.tabs.addTab(self._build_search_tab(), "🔍 综合搜索")
 
     # ---------- 空间 ----------
     def _build_space_tab(self):
@@ -186,78 +172,4 @@ class BiliInfoPage(BasePage):
             self._refresh_space_colors()
         return super().eventFilter(obj, event)
 
-    # ---------- 综合搜索 ----------
-    def _build_search_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
-        row = QHBoxLayout()
-        self.search_entry2 = QLineEdit()
-        self.search_entry2.setPlaceholderText("综合搜索用户/视频（WBI 签名，无需登录），回车搜索")
-        self.search_entry2.returnPressed.connect(self._search_general)
-        row.addWidget(self.search_entry2, 1)
-        btn = QPushButton("搜索")
-        btn.setStyleSheet("background:#1976d2;color:white;padding:5px 16px;")
-        btn.clicked.connect(self._search_general)
-        row.addWidget(btn)
-        v.addLayout(row)
-        self.search_table2 = QTableWidget(0, 4)
-        self.search_table2.setHorizontalHeaderLabels(["类型", "名称", "信息", "操作"])
-        self.search_table2.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.search_table2.setEditTriggers(QTableWidget.NoEditTriggers)
-        v.addWidget(self.search_table2, 1)
-        self.search_info2 = QLabel("用户 → 「空间」tab；视频 → 信息获取页（自动填入解析）")
-        self.search_info2.setStyleSheet("color:#888;")
-        v.addWidget(self.search_info2)
-        return w
 
-    def _search_general(self):
-        kw = self.search_entry2.text().strip()
-        if not kw:
-            return
-        self.search_info2.setText("搜索中……（WBI 签名）")
-
-        def job():
-            d = api.search_all(kw)
-            rows = []
-            for block in d.get("result", []) or []:
-                rtype = block.get("result_type", "")
-                for item in block.get("data", []) or []:
-                    if rtype in ("user", "bili_user"):
-                        rows.append({"t": "用户", "name": item.get("uname", ""),
-                                     "info": f"粉丝 {item.get('fans', 0)} · {item.get('usign', '')[:30]}",
-                                     "id": str(item.get("mid", "")), "raw": item})
-                    elif rtype == "video":
-                        rows.append({"t": "视频", "name": re.sub(r"<[^>]+>", "", item.get("title", "")),
-                                     "info": f"UP {item.get('author', '')} · 播放 {item.get('play', 0)}",
-                                     "id": item.get("bvid", ""), "raw": item})
-            return rows
-
-        def done(rows, err):
-            if err:
-                self.search_info2.setText(f"搜索失败：{err}")
-                return
-            self.search_table2.setRowCount(0)
-            for i, r in enumerate(rows[:200]):
-                self.search_table2.insertRow(i)
-                self.search_table2.setItem(i, 0, QTableWidgetItem(r["t"]))
-                self.search_table2.setItem(i, 1, QTableWidgetItem(r["name"]))
-                self.search_table2.setItem(i, 2, QTableWidgetItem(r["info"]))
-                btn = QPushButton("查看")
-                btn.clicked.connect(lambda _, ck=r: self._open_search(ck))
-                self.search_table2.setCellWidget(i, 3, btn)
-            self.search_info2.setText(f"共 {len(rows)} 条（用户+视频，最多显示 200）")
-
-        run_bg(job, done)
-
-    def _open_search(self, r):
-        if r["t"] == "用户":
-            self._switch_tab(0)
-            self.space_entry.setText(r["id"])
-            self._load_space()
-        else:
-            # 视频信息功能已并入「信息获取」页（批量输入作品链接即解析入库）
-            self.app.show_page("info_accounts")
-            page = self.app.pages.get("info_accounts")
-            if page is not None:
-                page.open_url(f"https://www.bilibili.com/video/{r['id']}")

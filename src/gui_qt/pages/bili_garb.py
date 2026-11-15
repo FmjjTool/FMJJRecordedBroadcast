@@ -1,4 +1,4 @@
-"""B站资源 · 收藏集页：商城搜索 → 装扮套装详情 / 收藏集活动详情 → 批量下载。
+"""B站资源 · 装扮/收藏集页：搜索 → 装扮详情 / 收藏集活动 → 批量下载。
 
 复刻自 BiliResourceDownloader 的 search/garb.vue + suit/[id].vue + lottery 页，
 字段与目录结构逐一对齐原版 generateDownloadTask：
@@ -10,9 +10,10 @@ lottery_home_detail(卡牌图/卡牌视频镜像/兑换内容/权益资源)。
 import json
 from datetime import datetime
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from bili import api
@@ -356,27 +357,38 @@ class BiliGarbPage(BasePage):
         head.addWidget(QLabel("🎁 B站收藏集", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 收藏集 · 功能介绍", (
-            "<p><b>B站装扮与收藏集资源下载（三个入口）。</b></p>"
-            "<p>· <b>🔍 搜索</b>：关键词搜装扮/收藏集（白菜、UP主名等），"
-            "无需登录；type=ip 是装扮、type=dlc_act 是收藏集，点「查看」跳转对应页</p>"
-            "<p>· <b>👕 装扮详情（按ID）</b>：输入装扮 item_id，加载套装全部资源——"
-            "空间背景 / 粉丝牌 / 评论背景 / 表情包 / 加载动画 / 进度条 / 皮肤 / 点赞动画</p>"
+        head.addWidget(attach_help_overlay(self, "❓ 装扮/收藏集 · 功能介绍", (
+            "<p><b>B站装扮与收藏集资源下载（两个入口）。</b></p>"
+            "<p>· <b>🎁 装扮 / 收藏集</b>：上半部分关键词搜索装扮/收藏集"
+            "（白菜、UP主名等），点「详情」直接加载；下半部分按 item_id 查看装扮详情——"
+            "空间背景 / 粉丝牌 / 评论背景 / 表情包 / 加载动画 / 进度条 / 皮肤 / 点赞动画。"
+            "命中收藏集 ID 会自动跳「收藏集活动」</p>"
             "<p>· <b>🎁 收藏集活动（按ID）</b>：输入活动 act_id，"
             "加载活动视觉 / 勋章 / 全部收藏集卡牌图与卡牌视频</p>"
             "<p>· 文件列表勾选后下载，支持多选批量</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_search_tab(), "🔍 装扮/收藏集搜索")
-        self.tabs.addTab(self._build_suit_tab(), "👕 装扮详情（按ID）")
+        self.tabs.addTab(self._build_garb_tab(), "🎁 装扮 / 收藏集")
         self.tabs.addTab(self._build_lottery_tab(), "🎁 收藏集活动（按ID）")
+
+    # ---------- 装扮 / 收藏集（搜索 + 按ID详情） ----------
+    def _build_garb_tab(self):
+        """搜索与按 ID 详情合并：上半搜索，下半详情，避免两个高度重合的 tab。"""
+        split = QSplitter(Qt.Vertical)
+        split.setChildrenCollapsible(False)
+        split.addWidget(self._build_search_tab())
+        split.addWidget(self._build_suit_tab())
+        split.setSizes([220, 420])
+        self._garb_split = split
+        return split
 
     # ---------- 搜索 ----------
     def _build_search_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(QLabel("① 搜索装扮 / 收藏集", styleSheet="font-weight:600;"))
         row = QHBoxLayout()
         self.search_entry = QLineEdit()
         self.search_entry.setPlaceholderText("装扮/收藏集关键词（如 白菜、UP主名），回车搜索")
@@ -464,6 +476,7 @@ class BiliGarbPage(BasePage):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(QLabel("② 按 ID 查看装扮详情", styleSheet="font-weight:600;"))
         row = QHBoxLayout()
         row.addWidget(QLabel("装扮 item_id："))
         self.suit_entry = QLineEdit()
@@ -490,13 +503,15 @@ class BiliGarbPage(BasePage):
 
     # 跨页入口：从其他页面跳转加载（先 show_page 再调用）
     def open_act(self, act_id: str):
-        self._switch_tab(2)
+        self._switch_tab(1)
         self.lottery_entry.setText(str(act_id))
         self._load_lottery()
 
     def open_suit(self, iid: str):
-        self._switch_tab(1)
+        self._switch_tab(0)
         self.suit_entry.setText(str(iid))
+        if getattr(self, "_garb_split", None) is not None:
+            self._garb_split.setSizes([140, 500])
         self._load_suit()
 
     def _load_suit(self):
