@@ -470,18 +470,6 @@ class MusicTagPage(BasePage):
         tools_menu = bar.addMenu("工具(&T)")
         tools_menu.addAction(self._act("编码修复...", self._encoding_fix, icon="charset"))
         tools_menu.addAction(self._act("标签历史", self._history, icon="history"))
-        tools_menu.addSeparator()
-        tools_menu.addAction(self._act("设置...", self._open_settings, icon="options"))
-
-        lang_menu = bar.addMenu("语言(&L)")
-        zh = self._act("简体中文", lambda: None)
-        zh.setCheckable(True)
-        zh.setChecked(True)
-        lang_menu.addAction(zh)
-        for label in ("繁體中文", "English"):
-            action = self._act(label, lambda: None)
-            action.setEnabled(False)
-            lang_menu.addAction(action)
         return bar
 
     def _build_toolbar(self):
