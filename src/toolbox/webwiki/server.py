@@ -11,16 +11,17 @@ import json
 import mimetypes
 import os
 import subprocess
+import sys
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
-from . import config
+from . import config, imgcache
 
 UI_HINT = "本地资料站"
 
@@ -36,6 +37,20 @@ def _health(port: int, timeout: float = 1.2) -> bool:
             return resp.status_code == 200
     except Exception:  # noqa: BLE001
         return False
+
+
+class _QuietServer(ThreadingHTTPServer):
+    """浏览器关闭连接时不要往日志里刷 ConnectionResetError 堆栈。"""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                            BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class _StaticProxy(BaseHTTPRequestHandler):
@@ -55,6 +70,9 @@ class _StaticProxy(BaseHTTPRequestHandler):
 
     def _handle(self, head: bool):
         parts = urlsplit(self.path)
+        if parts.path == "/api/img":
+            self._image(parts, head)
+            return
         if parts.path.startswith("/api/") or parts.path.startswith("/uploads/"):
             self._proxy(parts, head)
             return
@@ -85,7 +103,28 @@ class _StaticProxy(BaseHTTPRequestHandler):
         self._send(200, body, ctype,
                    headers=[("Cache-Control", cache)], head=head)
 
-    def _proxy(self, parts, head: bool):
+    def _image(self, parts, head: bool):
+        """首屏封面优先走本地缓存，未命中再让后端去图床取。"""
+        query = parse_qs(parts.query)
+        raw_u = (query.get("u") or [""])[0]
+        try:
+            size = int((query.get("size") or ["0"])[0] or 0)
+        except (TypeError, ValueError):
+            size = 0
+        first = str(raw_u).split(" ")[0]
+        root = getattr(self.server, "root_dir", "")
+        if first and root:
+            cached = imgcache.load(root, first, size)
+            if cached:
+                body, ctype = cached
+                self._send(200, body, ctype, headers=[
+                    ("Cache-Control", "public, max-age=2592000"),
+                    ("X-Local-Cache", "1"),
+                ], head=head)
+                return
+        self._proxy(parts, head, cache_hint=(root, first, size))
+
+    def _proxy(self, parts, head: bool, cache_hint=None):
         api_port = int(self.server.api_port)  # type: ignore[attr-defined]
         path = parts.path + (("?" + parts.query) if parts.query else "")
         headers = {}
@@ -101,12 +140,19 @@ class _StaticProxy(BaseHTTPRequestHandler):
             conn.request("HEAD" if head else "GET", path, headers=headers)
             resp = conn.getresponse()
             body = resp.read()
+            ctype = resp.getheader("Content-Type") or "application/octet-stream"
+            if (cache_hint and resp.status == 200 and body
+                    and ctype.startswith("image/")):
+                root, original, size = cache_hint
+                if root and original:
+                    try:
+                        imgcache.save(root, original, size, body)
+                    except OSError:
+                        pass
             out = [(key, value) for key, value in resp.getheaders()
                    if key.lower() not in ("connection", "transfer-encoding",
                                           "content-length", "content-type")]
-            self._send(resp.status, body,
-                       resp.getheader("Content-Type") or "application/octet-stream",
-                       headers=out, head=head)
+            self._send(resp.status, body, ctype, headers=out, head=head)
         except Exception as exc:  # noqa: BLE001 - 后端未起时给前端一个可读错误
             payload = json.dumps(
                 {"detail": f"本地 API 未启动或不可用：{exc}"},
@@ -207,6 +253,10 @@ class SiteService:
         cmd = [str(python), "-m", "uvicorn", "app.main:app",
                "--host", "127.0.0.1", "--port", str(self.api_port)]
         log(f"启动本地 API：127.0.0.1:{self.api_port}")
+        env = config.child_env()
+        # 本机站点图片量很小（缩略图 10~30KB），默认 6 并发在首屏会排队；
+        # 提高到 12，配合 NO_PROXY 直连图床，首屏缩略图从 20s+ 降到几秒。
+        env.setdefault("WEBWIKI_IMG_CONCURRENCY", "12")
         kwargs = {
             "cwd": str(api),
             "stdout": subprocess.PIPE,
@@ -214,7 +264,7 @@ class SiteService:
             "text": True,
             "encoding": "utf-8",
             "errors": "replace",
-            "env": config.child_env(),
+            "env": env,
         }
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -243,15 +293,14 @@ class SiteService:
 
     def _start_static(self, log):
         try:
-            httpd = ThreadingHTTPServer(("127.0.0.1", self.site_port), _StaticProxy)
+            httpd = _QuietServer(("127.0.0.1", self.site_port), _StaticProxy)
         except OSError as exc:
             raise ServerError(
                 f"站点端口 {self.site_port} 无法监听：{exc}\n"
                 "请在页面底部换一个站点端口后重试") from exc
-        httpd.daemon_threads = True
-        httpd.allow_reuse_address = True
         httpd.dist_dir = str(config.dist_dir(self.root))  # type: ignore[attr-defined]
         httpd.api_port = self.api_port  # type: ignore[attr-defined]
+        httpd.root_dir = str(self.root)  # type: ignore[attr-defined]
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self._httpd = httpd

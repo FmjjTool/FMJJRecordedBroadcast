@@ -166,13 +166,36 @@ def system_proxy() -> str:
     return ""
 
 
+# 图片图床走直连：这些域名都在国内，绕开系统代理反而更快；
+# 系统代理通常是给 GitHub 用的，图片再走代理会串行拖慢首屏。
+IMAGE_DIRECT_HOSTS = (
+    ".docs.qq.com", ".hdslb.com", ".bilibili.com", ".douyinpic.com",
+    ".douyincdn.com", ".kwaicdn.com", ".kuaishou.com", ".sinaimg.cn",
+    ".weibo.com", ".xiaohongshu.com", ".xhscdn.com", ".qpic.cn",
+)
+
+
 def child_env() -> dict:
-    """子进程环境：补系统代理 + 强制 UTF-8 输出（避免 emoji 在 GBK 管道里崩）。"""
+    """子进程环境：补系统代理 + 强制 UTF-8 输出（避免 emoji 在 GBK 管道里崩）。
+
+    图片图床加入 NO_PROXY：本地站点经系统代理并发取图时会被串行拖慢
+    （实测 10 张缩略图从 3.5s 变成 20s+），直连国内图床反而快。
+    """
     env = os.environ.copy()
     proxy = system_proxy()
     if proxy:
         for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             env.setdefault(name, proxy)
+    no_proxy = env.get("NO_PROXY") or env.get("no_proxy") or ""
+    parts = [part.strip() for part in no_proxy.split(",") if part.strip()]
+    if "*" not in parts:
+        for host in IMAGE_DIRECT_HOSTS:
+            if host not in parts:
+                parts.append(host)
+    if parts:
+        value = ",".join(parts)
+        env["NO_PROXY"] = value
+        env["no_proxy"] = value
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return env

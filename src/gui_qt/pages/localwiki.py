@@ -746,6 +746,10 @@ class LocalWikiPage(BasePage):
             self.service = server.SiteService(root)
 
         def work(log):
+            try:
+                deploy.warm_covers(root, log)
+            except Exception as exc:  # noqa: BLE001 - 预热失败不影响启动
+                log(f"封面预热跳过：{exc}")
             return self.service.start(log)
 
         def after(url):
@@ -787,6 +791,10 @@ class LocalWikiPage(BasePage):
             deploy.sync_docs(root, log, force=force)
             deploy.ensure_node_deps(root, log)
             deploy.build_frontend(root, log)
+            try:
+                deploy.warm_covers(root, log)
+            except Exception as exc:  # noqa: BLE001 - 预热失败不影响部署
+                log(f"封面预热跳过：{exc}")
             return self.service.start(log)
 
         def after(url):

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from . import config, runner
+import httpx
+
+from . import config, imgcache, runner
 
 
 class DeployError(RuntimeError):
@@ -129,6 +133,78 @@ def data_status(root: Path | None = None) -> dict:
     return result
 
 
+def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
+    """预热歌曲列表首屏封面缩略图。
+
+    腾讯图床的缩略图由源站 COS 按需生成，第一次请求每张约 3~5 秒；
+    启动前并发预热前 12 张，浏览器打开时就不用对着空白封面等。
+    失败只记日志，不影响启动。
+    """
+    root = Path(root or config.root_dir())
+    db = root / "webwiki-api" / "data" / "webwiki.db"
+    if not db.is_file():
+        return ""
+    rows = []
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3)
+        rows = conn.execute(
+            "SELECT cover_url FROM songs ORDER BY release_date DESC, id DESC LIMIT ?",
+            (int(limit),)).fetchall()
+    except sqlite3.Error as exc:
+        log(f"封面预热跳过：读取歌曲库失败（{exc}）")
+        return ""
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+    items: list[tuple[str, str]] = []
+    for (raw,) in rows:
+        first = str(raw or "").strip().split(" ")[0]
+        if not first:
+            continue
+        host = (urlparse(first).hostname or "").lower()
+        base = first.partition("?")[0]
+        if host.endswith("docs.qq.com"):
+            items.append((first, f"{base}?imageMogr2/thumbnail/320x320/format/webp"))
+        elif host.endswith("hdslb.com"):
+            items.append((first, first if "@" in first else first + "@320w.webp"))
+        else:
+            items.append((first, first))
+    if not items:
+        return ""
+
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/152.0.0.0 Safari/537.36"),
+        "Referer": "https://docs.qq.com/",
+        "Accept": "image/webp,image/*,*/*;q=0.8",
+    }
+
+    def fetch(item: tuple[str, str]) -> bool:
+        original, url = item
+        for trust_env in (False, True):
+            try:
+                with httpx.Client(trust_env=trust_env, timeout=20,
+                                  follow_redirects=True, headers=headers) as client:
+                    resp = client.get(url)
+                    if resp.status_code == 200 and resp.content:
+                        imgcache.save(root, original, 320, resp.content)
+                        return True
+            except (httpx.HTTPError, OSError):
+                continue
+        return False
+
+    with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
+        results = list(pool.map(fetch, items))
+    ok = sum(1 for item in results if item)
+    log(f"预热首屏封面 {ok}/{len(items)} 张（首次打开更快）")
+    return f"{ok}/{len(items)}"
+
+
 def deploy_all(root: Path | None = None, token: str = "", log=print,
                force_sync: bool = False) -> Path:
     """一键部署：拉代码 → 装依赖 → 同步腾讯文档 → 构建前端，返回 venv python。"""
@@ -141,4 +217,5 @@ def deploy_all(root: Path | None = None, token: str = "", log=print,
     sync_docs(root, log, force=force_sync)
     ensure_node_deps(root, log)
     build_frontend(root, log)
+    warm_covers(root, log)
     return python
