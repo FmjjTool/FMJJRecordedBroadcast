@@ -60,6 +60,7 @@ class TrackerPage(BasePage):
         super().__init__(app)
         self.cards = []
         self._collecting = False
+        self._live_collecting = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -101,6 +102,14 @@ class TrackerPage(BasePage):
             "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         timer_btn.clicked.connect(self._toggle_collect_timer)
         head.addWidget(timer_btn)
+        live_all_btn = QPushButton("🎥 抖音直播历史")
+        live_all_btn.setStyleSheet(
+            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
+        live_all_btn.setToolTip(
+            "一键获取所有抖音账号的直播历史（直播动态公开接口，按房间号去重合并）\n"
+            "只抓直播场次，不采集粉丝/关注/获赞指标")
+        live_all_btn.clicked.connect(self._collect_douyin_live_all)
+        head.addWidget(live_all_btn)
         fetch_all_btn = QPushButton("⬇ 获取全部")
         fetch_all_btn.setStyleSheet("background: #2e7d32; color: white;")
         fetch_all_btn.clicked.connect(lambda: self._collect_all())
@@ -563,7 +572,7 @@ class TrackerPage(BasePage):
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 4, 0, 0)
         if not live:
-            lbl = QLabel("（暂无直播历史，点「📥 采集」自动抓取）")
+            lbl = QLabel("（暂无直播历史，点顶部「🎥 抖音直播历史」一键获取）")
             lbl.setStyleSheet("color: gray;")
             lbl.setAlignment(Qt.AlignCenter)
             v.addWidget(lbl)
@@ -608,6 +617,11 @@ class TrackerPage(BasePage):
         return None
 
     def _collect_account(self, acc, on_done=None):
+        if self._live_collecting:
+            self.app.toast("正在获取抖音直播历史，请稍候", "info")
+            if on_done:
+                on_done()
+            return
         card = self._card_for(acc)
         if not card:
             if on_done:
@@ -661,6 +675,9 @@ class TrackerPage(BasePage):
 
     def _collect_all(self):
         """批量采集：按平台筛选（全部/某平台），4 个一批并发采集。"""
+        if self._live_collecting:
+            self.app.toast("正在获取抖音直播历史，请稍候", "info")
+            return
         if self._collecting:
             self.app.toast("正在采集中，请稍候", "info")
             return
@@ -702,6 +719,110 @@ class TrackerPage(BasePage):
 
         self._collecting = True
         _next_wave()
+
+    # ---------- 抖音直播历史（一键获取） ----------
+    def _collect_douyin_live_all(self):
+        """一键获取所有抖音账号的直播历史：只抓直播场次，不改指标数据。"""
+        if self._collecting or self._live_collecting:
+            self.app.toast("正在采集中，请稍候", "info")
+            return
+        from tracker.accounts import load_accounts, parse_url
+
+        def _plat(acc):
+            return (acc.get("platform") or "").strip() or parse_url(acc.get("url", ""))[0]
+
+        accounts = [acc for acc in load_accounts() if _plat(acc) == "douyin"]
+        if not accounts:
+            self.app.toast("没有抖音账号，请先在「设置」里添加", "info")
+            return
+        # 有账号正在单独采集时先不启动，避免同一份 xlsx 并发写
+        busy = [c for c in self.cards
+                if _plat(c["account"]) == "douyin" and not c["btn"].isEnabled()]
+        if busy:
+            self.app.toast("有抖音账号正在采集，请稍候", "info")
+            return
+
+        self._live_collecting = True
+        for c in self.cards:  # 直播抓取期间禁用采集，防止同账号并发写缓存
+            if _plat(c["account"]) == "douyin":
+                c["btn"].setEnabled(False)
+        self.batch_prog.setFormat("直播 %v/%m（%p%）")
+        self.batch_prog.setRange(0, len(accounts))
+        self.batch_prog.setValue(0)
+        self.app.toast(f"🎥 开始获取 {len(accounts)} 个抖音账号的直播历史...", "info")
+
+        from collections import deque
+        queue = deque(accounts)
+        state = {"running": 0, "done": 0, "ok": 0, "failed": 0, "total": 0, "new": 0}
+
+        def _next():
+            while queue and state["running"] < 4:
+                acc = queue.popleft()
+                state["running"] += 1
+                self._fetch_live_for(acc, _finish_one)
+
+        def _finish_one(result, err):
+            state["running"] -= 1
+            state["done"] += 1
+            self.batch_prog.setValue(state["done"])
+            if err or (result or {}).get("error"):
+                state["failed"] += 1
+            else:
+                state["ok"] += 1
+                state["total"] += int((result or {}).get("total") or 0)
+                state["new"] += int((result or {}).get("new") or 0)
+            if queue:
+                _next()
+            elif state["running"] == 0:
+                self._live_collecting = False
+                self.batch_prog.setFormat("采集 %v/%m（%p%）")
+                for c in self.cards:
+                    if _plat(c["account"]) == "douyin":
+                        c["btn"].setEnabled(True)
+                if state["failed"]:
+                    self.app.toast(
+                        f"⚠ 抖音直播历史：{state['ok']} 个成功 / {state['failed']} 个失败"
+                        f"（共 {state['total']} 场，新增 {state['new']} 场）", "warning")
+                else:
+                    self.app.toast(
+                        f"✅ 抖音直播历史获取完成：{state['ok']} 个账号，"
+                        f"共 {state['total']} 场（新增 {state['new']} 场）", "success")
+
+        _next()
+
+    def _fetch_live_for(self, acc, on_done):
+        """单账号直播历史：后台抓取并合并到该账号 xlsx 的「直播历史」sheet。"""
+        card = self._card_for(acc)
+        if card:
+            card["status"].setText("🎥 获取直播历史...")
+            card["status"].setStyleSheet("color: #eab308;")
+            card["status"].setToolTip("正在抓取抖音「直播动态」公开接口")
+
+        def work():
+            from tracker.douyin_live import collect_and_save
+            return collect_and_save(acc)
+
+        def done(result, err):
+            card = self._card_for(acc)
+            if card:
+                if err:
+                    card["status"].setText("🎥 ❌")
+                    card["status"].setStyleSheet("color: #ff5252;")
+                    card["status"].setToolTip(f"直播历史获取失败：{err}")
+                elif (result or {}).get("error"):
+                    card["status"].setText("🎥 ⚠")
+                    card["status"].setStyleSheet("color: #ff9800;")
+                    card["status"].setToolTip(f"直播历史获取失败：{result['error']}")
+                else:
+                    card["status"].setText(f"🎥 {result['total']} 场")
+                    card["status"].setStyleSheet("color: #4caf50;")
+                    card["status"].setToolTip(
+                        f"直播历史已缓存 {result['total']} 场"
+                        f"（本次新增 {result['new']} 场，按房间号去重）")
+            if on_done:
+                on_done(result, err)
+
+        run_bg(work, done)
 
     # ---------- 定时采集（Windows 计划任务） ----------
     def on_show(self):
