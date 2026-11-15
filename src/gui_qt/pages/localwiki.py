@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
@@ -26,216 +26,178 @@ from toolbox.webwiki import auth, config as wiki_cfg, deploy, gitops, server
 
 
 class _GitHubLoginDialog(QDialog):
-    """GitHub 设备码登录：二维码 + 设备码 + Token 兜底。"""
+    """GitHub 登录：优先识别本机账户，也可手动填账户 + 密码 / Token。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("登录 GitHub")
         self.setModal(True)
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
         self._closed = False
-        self._device_code = ""
-        self._interval = 5
-        self._expires_at = 0.0
+        self._detected: dict = {}
         self.user: dict = {}
 
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 16, 18, 14)
-        v.setSpacing(8)
+        v.setSpacing(9)
         title = QLabel("GitHub 登录")
         title.setStyleSheet("font-size: 17px; font-weight: bold;")
         v.addWidget(title)
         note = QLabel(
             "私有项目需要先登录 GitHub 才能拉取代码与一键部署。\n"
-            "手机扫码会打开 GitHub 授权页，再输入下方设备码即可；"
-            "授权页显示的应用名为「GitHub CLI」。")
+            "会先识别本机 Git 凭据里的 GitHub 账户；也可以手动填写账户和"
+            "密码 / Personal Access Token。")
         note.setWordWrap(True)
         note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(note)
 
-        body = QHBoxLayout()
-        body.setSpacing(14)
-        self.qr_label = QLabel("正在申请设备码…")
-        self.qr_label.setFixedSize(190, 190)
-        self.qr_label.setAlignment(Qt.AlignCenter)
-        self.qr_label.setStyleSheet(
-            "background: palette(alternate-base); border: 1px solid palette(shadow);"
-            " border-radius: 10px; color: palette(placeholder-text);")
-        body.addWidget(self.qr_label)
+        # ---------- 本机账户识别 ----------
+        detect = QFrame()
+        detect.setObjectName("wikiLoginDetect")
+        detect.setStyleSheet(
+            "QFrame#wikiLoginDetect { background: palette(alternate-base);"
+            " border: 1px solid palette(shadow); border-radius: 9px; }")
+        box = QVBoxLayout(detect)
+        box.setContentsMargins(12, 10, 12, 10)
+        box.setSpacing(5)
+        self.detect_label = QLabel("正在识别本机 GitHub 账户…")
+        self.detect_label.setWordWrap(True)
+        box.addWidget(self.detect_label)
+        self.detect_source = QLabel("")
+        self.detect_source.setWordWrap(True)
+        self.detect_source.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 10px;")
+        box.addWidget(self.detect_source)
+        self.use_local_btn = QPushButton("使用此账户登录")
+        self.use_local_btn.setMinimumHeight(28)
+        self.use_local_btn.setVisible(False)
+        self.use_local_btn.clicked.connect(self._use_local)
+        box.addWidget(self.use_local_btn, 0, Qt.AlignLeft)
+        v.addWidget(detect)
 
-        right = QVBoxLayout()
-        right.setSpacing(6)
-        code_caption = QLabel("设备码（在授权页输入）")
-        code_caption.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        right.addWidget(code_caption)
-        self.code_label = QLabel("— — —")
-        self.code_label.setAlignment(Qt.AlignCenter)
-        self.code_label.setStyleSheet(
-            "font-family: Consolas, 'Microsoft YaHei'; font-size: 25px;"
-            " font-weight: bold; letter-spacing: 3px;")
-        right.addWidget(self.code_label)
-        row = QHBoxLayout()
-        self.open_btn = QPushButton("打开授权页")
-        self.open_btn.clicked.connect(self._open_page)
-        row.addWidget(self.open_btn)
-        self.copy_btn = QPushButton("复制设备码")
-        self.copy_btn.clicked.connect(self._copy_code)
-        row.addWidget(self.copy_btn)
-        right.addLayout(row)
-        self.status_label = QLabel("等待 GitHub 返回设备码…")
+        # ---------- 手动账户密码 ----------
+        form = QGridLayout()
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(7)
+        form.addWidget(QLabel("账户"), 0, 0)
+        self.account_edit = QLineEdit()
+        self.account_edit.setPlaceholderText("GitHub 用户名或邮箱")
+        form.addWidget(self.account_edit, 0, 1)
+        form.addWidget(QLabel("密码 / Token"), 1, 0)
+        self.password_edit = QLineEdit()
+        self.password_edit.setPlaceholderText("Personal Access Token（ghp_… / github_pat_…）")
+        self.password_edit.setEchoMode(QLineEdit.Password)
+        self.password_edit.returnPressed.connect(self._manual_login)
+        form.addWidget(self.password_edit, 1, 1)
+        form.setColumnStretch(1, 1)
+        v.addLayout(form)
+
+        self.show_password = QCheckBox("显示密码")
+        self.show_password.toggled.connect(
+            lambda checked: self.password_edit.setEchoMode(
+                QLineEdit.Normal if checked else QLineEdit.Password))
+        v.addWidget(self.show_password)
+        hint = QLabel(
+            "GitHub 已停用账户密码用于 Git / API 认证，密码处请填 Personal Access Token"
+            "（scope 需包含 repo）。Token 只保存在本机 config/webwiki_auth.json。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
+        v.addWidget(hint)
+
+        self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        right.addWidget(self.status_label)
-        right.addStretch(1)
-        body.addLayout(right, 1)
-        v.addLayout(body)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: palette(shadow);")
-        v.addWidget(line)
-        v.addWidget(QLabel("或使用 Personal Access Token（scope 需包含 repo）"))
-        token_row = QHBoxLayout()
-        self.token_edit = QLineEdit()
-        self.token_edit.setPlaceholderText("ghp_… / github_pat_…")
-        self.token_edit.setEchoMode(QLineEdit.Password)
-        token_row.addWidget(self.token_edit, 1)
-        self.token_btn = QPushButton("用 Token 登录")
-        self.token_btn.clicked.connect(self._token_login)
-        token_row.addWidget(self.token_btn)
-        v.addLayout(token_row)
+        v.addWidget(self.status_label)
 
         bottom = QHBoxLayout()
-        hint = QLabel("Token 只保存在本机 config/webwiki_auth.json")
-        hint.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
-        bottom.addWidget(hint, 1)
+        bottom.addStretch(1)
         cancel = QPushButton("取消")
         cancel.clicked.connect(self.reject)
         bottom.addWidget(cancel)
+        self.login_btn = QPushButton("登录")
+        self.login_btn.setDefault(True)
+        self.login_btn.clicked.connect(self._manual_login)
+        bottom.addWidget(self.login_btn)
         v.addLayout(bottom)
 
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._poll)
-        QTimer.singleShot(0, self._start_flow)
+        QTimer.singleShot(0, self._detect)
 
-    # ---------- 设备码流程 ----------
+    # ---------- 本机账户 ----------
 
-    def _start_flow(self):
+    def _detect(self):
         if self._closed:
             return
-        run_bg(auth.start_device_flow, self._on_flow)
+        run_bg(auth.detect_local_account, self._on_detected)
 
-    def _on_flow(self, data, err):
+    def _on_detected(self, data, err):
         if self._closed:
             return
-        if err or not data:
-            self.status_label.setText(f"申请设备码失败：{err or '未知错误'}")
-            self.qr_label.setText("设备码申请失败\n可改用下方 Token 登录")
+        data = data or {}
+        self._detected = data
+        if err:
+            self.detect_label.setText(f"识别本机账户失败：{err}")
+            self.detect_label.setStyleSheet("color: palette(placeholder-text);")
+            self.status_label.setText("可以在下方手动填写账户和 Token。")
             return
-        self._device_code = str(data.get("device_code") or "")
-        self._interval = max(5, int(data.get("interval") or 5))
-        self._expires_at = datetime.now().timestamp() + int(data.get("expires_in") or 900)
-        code = str(data.get("user_code") or "")
-        self.code_label.setText(code or "— — —")
-        uri = str(data.get("verification_uri") or "https://github.com/login/device")
-        self._render_qr(uri)
-        self.status_label.setText("等待授权：扫码或打开授权页，输入设备码后点 Continue。")
-        self._timer.start(self._interval * 1000)
+        login = str(data.get("login") or "")
+        if data.get("token"):
+            self.detect_label.setText(f"检测到本机 GitHub 账户：@{login}")
+            self.detect_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+            self.detect_source.setText(f"来源：{data.get('source') or '本机 Git 凭据'}")
+            self.use_local_btn.setVisible(True)
+            self.account_edit.setText(login)
+            self.status_label.setText("可直接使用本机账户，或在下方手动填写。")
+        elif login:
+            self.detect_label.setText(f"检测到本机 Git 用户名：{login}，但凭据不可用")
+            self.detect_source.setText(str(data.get("error") or ""))
+            self.account_edit.setText(login)
+            self.status_label.setText("请在下方填写 Personal Access Token 后登录。")
+        else:
+            self.detect_label.setText("未检测到本机 GitHub 凭据")
+            self.detect_source.setText("请在下方手动填写账户和密码 / Token。")
+            self.status_label.setText("")
+        self.layout().activate()
+        self.adjustSize()
 
-    def _render_qr(self, uri: str):
-        try:
-            import io
+    def _use_local(self):
+        token = str(self._detected.get("token") or "")
+        if not token:
+            return
+        self.use_local_btn.setEnabled(False)
+        self.login_btn.setEnabled(False)
+        self.status_label.setText("正在使用本机 GitHub 账户登录…")
+        run_bg(lambda: auth.login_with_token(token), self._on_login)
 
-            import qrcode
+    # ---------- 手动登录 ----------
 
-            image = qrcode.make(uri)
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            pix = QPixmap()
-            pix.loadFromData(buffer.getvalue())
-            self.qr_label.setPixmap(pix.scaled(
-                180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        except Exception:  # noqa: BLE001 - 没装 qrcode 时退化为链接
-            self.qr_label.setText("二维码不可用\n请点「打开授权页」")
-
-    def _poll(self):
-        if self._closed or not self._device_code:
+    def _manual_login(self):
+        account = self.account_edit.text().strip()
+        password = self.password_edit.text().strip()
+        if not password and not account:
+            self.status_label.setText("请填写账户和密码 / Personal Access Token。")
             return
-        if datetime.now().timestamp() > self._expires_at:
-            self._timer.stop()
-            self.status_label.setText("设备码已过期，请关闭窗口重新登录。")
-            return
-        self._timer.stop()
-        code = self._device_code
-        run_bg(lambda: auth.poll_token(code), self._on_poll)
-
-    def _on_poll(self, result, err):
-        if self._closed:
-            return
-        if err or not result:
-            self.status_label.setText(f"轮询失败：{err or '未知错误'}")
-            self._timer.start(self._interval * 1000)
-            return
-        token = str(result.get("token") or "")
-        if token:
-            self.status_label.setText("授权成功，正在读取 GitHub 用户…")
-            run_bg(lambda: auth.finish_device_login(token), self._on_login)
-            return
-        error = str(result.get("error") or "")
-        if error == "authorization_pending":
-            self._timer.start(self._interval * 1000)
-            return
-        if error == "slow_down":
-            self._interval += 5
-            self.status_label.setText("GitHub 要求放慢轮询，继续等待授权…")
-            self._timer.start(self._interval * 1000)
-            return
-        if error == "expired_token":
-            self.status_label.setText("设备码已过期，请关闭窗口重新登录。")
-            return
-        if error == "access_denied":
-            self.status_label.setText("授权被拒绝，可重试或改用 Token 登录。")
-            return
-        self.status_label.setText(f"授权失败：{result.get('message') or error}")
+        self.login_btn.setEnabled(False)
+        self.use_local_btn.setEnabled(False)
+        self.status_label.setText("正在验证 GitHub 凭据…")
+        run_bg(lambda: auth.login_with_account(account, password), self._on_login)
 
     def _on_login(self, user, err):
         if self._closed:
             return
-        self.token_btn.setEnabled(True)
+        self.login_btn.setEnabled(True)
+        self.use_local_btn.setEnabled(bool(self._detected.get("token")))
         if err:
-            self.status_label.setText(f"保存登录态失败：{err}")
+            self.status_label.setText(str(err))
             return
         self.user = user or {}
         self.accept()
 
-    # ---------- 按钮 ----------
-
-    def _open_page(self):
-        QDesktopServices.openUrl(QUrl("https://github.com/login/device"))
-
-    def _copy_code(self):
-        code = self.code_label.text().replace(" ", "")
-        if code and code != "———":
-            QGuiApplication.clipboard().setText(code)
-            self.status_label.setText("设备码已复制，请到授权页粘贴。")
-
-    def _token_login(self):
-        token = self.token_edit.text().strip()
-        if not token:
-            QMessageBox.information(self, "Token 登录", "请先填写 GitHub Token")
-            return
-        self.token_btn.setEnabled(False)
-        self.status_label.setText("正在验证 Token…")
-        run_bg(lambda: auth.login_with_token(token), self._on_login)
-
     def reject(self):
         self._closed = True
-        self._timer.stop()
         super().reject()
 
     def accept(self):
         self._closed = True
-        self._timer.stop()
         super().accept()
 
 
@@ -313,6 +275,7 @@ class LocalWikiPage(BasePage):
         sub.setWordWrap(True)
         left.addWidget(sub)
         note = QLabel("🔒 私有项目：拉取代码与一键部署前必须先登录 GitHub。"
+                      "支持识别本机账户，也可用账户 + Token 登录；"
                       "应用内登录只保护本工具入口，仓库本身请保持在 GitHub 私有。")
         note.setObjectName("wikiWarn")
         note.setWordWrap(True)
@@ -503,7 +466,9 @@ class LocalWikiPage(BasePage):
             "<code>http://127.0.0.1:站点端口/</code>。</p>"
             "<p><b>为什么要登录 GitHub</b><br>项目是私有的；未登录时"
             "「拉取代码」和「一键部署」会锁定，避免被随意拉取。"
-            "登录用 GitHub 设备码：扫码打开授权页，输入页面上的设备码即可，"
+            "登录会先识别本机 Git 凭据里保存的 GitHub 账户，可直接点"
+            "「使用此账户登录」；也可手动填账户 + Personal Access Token。"
+            "GitHub 已停用账户密码做 Git / API 认证，密码处必须填 Token。"
             "Token 只存本机 <code>config/webwiki_auth.json</code>。</p>"
             "<p><b>腾讯文档去重</b><br>同步默认按文档版本号增量：没变化只发一个"
             "约 76KB 的探测请求；有变化才逐表拉取，行级哈希去重。"
@@ -741,7 +706,8 @@ class LocalWikiPage(BasePage):
         QMessageBox.information(
             self, "需要登录 GitHub",
             "这是私有项目：拉取代码与一键部署前必须先登录 GitHub。\n\n"
-            "点「🔐 登录 GitHub」，用手机扫码打开授权页并输入设备码即可。")
+            "点「🔐 登录 GitHub」：会优先识别本机 Git 凭据里的账户，"
+            "可直接使用；也可以手动填账户 + Personal Access Token。")
         return False
 
     # ==================== 各按钮 ====================

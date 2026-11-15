@@ -292,9 +292,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_headless": True,
     "tcdoc_legacy_migrated": False,
     "tcdoc_table_page": 200,
-    # 本地资料站：webwiki / webwiki-api 代码目录、GitHub 设备码登录、2 个本地端口
+    # 本地资料站：webwiki / webwiki-api 代码目录、GitHub 登录、2 个本地端口
     "webwiki_dir": "",
-    "webwiki_github_client_id": "178c6fc778ccc68e1d6a",
     "webwiki_backend_port": 8000,
     "webwiki_site_port": 8090,
     "webwiki_open_browser": True,

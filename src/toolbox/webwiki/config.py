@@ -24,11 +24,6 @@ REPO_URLS = {
     "webwiki-api": "https://github.com/FmjjTool/webwiki-api.git",
 }
 
-# GitHub CLI 的公共 OAuth 客户端：支持设备码登录，普通用户无需自己注册 OAuth App。
-# 授权页显示的应用名是「GitHub CLI」，这是 GitHub 官方客户端的公共标识。
-DEFAULT_GITHUB_CLIENT_ID = "178c6fc778ccc68e1d6a"
-
-
 # ==================== 目录 ====================
 
 def root_dir() -> Path:
@@ -97,11 +92,6 @@ def set_auto_open_browser(enabled: bool) -> None:
     cfg = load_convert_config()
     cfg["webwiki_open_browser"] = bool(enabled)
     save_convert_config(cfg)
-
-
-def github_client_id() -> str:
-    value = str(load_convert_config().get("webwiki_github_client_id") or "").strip()
-    return value or DEFAULT_GITHUB_CLIENT_ID
 
 
 # ==================== GitHub 登录态 ====================

@@ -1,25 +1,31 @@
-"""本地资料站 · GitHub OAuth 设备码登录。
+"""本地资料站 · GitHub 登录。
 
-GitHub 没有「扫一下就自动登录」的公开接口，设备码登录是官方最接近的流程：
-应用申请设备码 → 页面显示二维码（内容为 https://github.com/login/device）+
-8 位设备码 → 手机扫码打开授权页并输入设备码 → 应用轮询拿到 Token。
-Token 只写本机 config/webwiki_auth.json，用于 clone / pull 私有仓库。
+支持两种方式：
+1. 识别本机已保存的 GitHub 账户（Git Credential Manager / ~/.git-credentials）；
+2. 手动填「账户 + 密码 / Personal Access Token」。
+
+GitHub 自 2021 年起已停用账户密码做 Git / API 认证，密码框实际需要填
+Personal Access Token（ghp_… / github_pat_…）；如果填的是账户登录密码，
+GitHub 会返回 401，界面会给出明确提示。
 """
 
 from __future__ import annotations
+
+import os
+import re
+import subprocess
+from pathlib import Path
 
 import httpx
 
 from . import config
 
-DEVICE_CODE_URL = "https://github.com/login/device/code"
-TOKEN_URL = "https://github.com/login/oauth/access_token"
 USER_URL = "https://api.github.com/user"
-SCOPE = "repo"
+TOKEN_PREFIXES = ("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_")
 
 
 class AuthError(RuntimeError):
-    """GitHub 登录失败（网络 / 设备码过期 / 授权被拒 / Token 无效）。"""
+    """GitHub 登录失败（网络 / Token 无效 / 凭据不可用）。"""
 
 
 def _client(timeout: float = 30) -> httpx.Client:
@@ -37,45 +43,18 @@ def _client(timeout: float = 30) -> httpx.Client:
     return httpx.Client(**kwargs)
 
 
-def start_device_flow() -> dict:
-    """申请设备码。返回 {device_code,user_code,verification_uri,expires_in,interval}。"""
-    try:
-        with _client() as client:
-            resp = client.post(DEVICE_CODE_URL, data={
-                "client_id": config.github_client_id(),
-                "scope": SCOPE,
-            })
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as exc:
-        raise AuthError(f"无法连接 GitHub：{exc}") from exc
-    if not data.get("device_code") or not data.get("user_code"):
-        raise AuthError(data.get("error_description") or "GitHub 未返回设备码")
-    return data
-
-
-def poll_token(device_code: str) -> dict:
-    """轮询一次。返回 {token} / {error: authorization_pending|slow_down|...}。"""
-    try:
-        with _client() as client:
-            resp = client.post(TOKEN_URL, data={
-                "client_id": config.github_client_id(),
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            })
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as exc:
-        return {"error": "network", "message": str(exc)}
-    token = str(data.get("access_token") or "")
-    if token:
-        return {"token": token}
-    error = str(data.get("error") or "unknown")
-    return {"error": error, "message": str(data.get("error_description") or error)}
+def _clean_token(value: str) -> str:
+    token = (value or "").strip().strip('"').strip("'")
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
 
 
 def fetch_user(token_value: str) -> dict:
     """验证 Token 并返回 GitHub 用户信息。"""
+    token_value = _clean_token(token_value)
+    if not token_value:
+        raise AuthError("请填写密码 / Personal Access Token")
     try:
         with _client() as client:
             resp = client.get(USER_URL, headers={
@@ -84,9 +63,15 @@ def fetch_user(token_value: str) -> dict:
                 "X-GitHub-Api-Version": "2022-11-28",
             })
             if resp.status_code == 401:
-                raise AuthError("Token 无效或已过期")
+                raise AuthError(
+                    "GitHub 拒绝了这组凭据。\n\n"
+                    "GitHub 已停用账户密码登录，密码处必须填写 "
+                    "Personal Access Token（ghp_… / github_pat_…）。\n"
+                    "也可以直接使用上方识别到的本机 GitHub 账户。")
             resp.raise_for_status()
             data = resp.json()
+    except AuthError:
+        raise
     except httpx.HTTPError as exc:
         raise AuthError(f"获取 GitHub 用户失败：{exc}") from exc
     if not isinstance(data, dict) or not data.get("login"):
@@ -95,23 +80,124 @@ def fetch_user(token_value: str) -> dict:
 
 
 def login_with_token(token_value: str) -> dict:
-    """用 Personal Access Token 登录并保存。"""
-    token_value = (token_value or "").strip()
-    if not token_value:
-        raise AuthError("请填写 GitHub Token")
+    """用 Token 登录并保存到本机。"""
+    token_value = _clean_token(token_value)
     user = fetch_user(token_value)
     config.save_auth(token_value, user)
     return user
 
 
-def finish_device_login(token_value: str) -> dict:
-    """设备码授权成功后收尾：取用户名并保存 Token。"""
-    try:
-        user = fetch_user(token_value)
-    except AuthError:
-        user = {}
+def login_with_account(account: str, password: str) -> dict:
+    """账户 + 密码 / Token 登录。
+
+    account 只用于界面提示和本地核对；真正认证的是 password 里的 Token。
+    如果 Token 实际属于另一个账户，以 GitHub 返回的账户为准。
+    """
+    token_value = _clean_token(password)
+    if not token_value:
+        alt = _clean_token(account)
+        if _looks_like_token(alt):
+            token_value = alt
+        else:
+            raise AuthError("请填写密码 / Personal Access Token")
+    if not _looks_like_token(token_value):
+        # 不把疑似账户密码发送到任何接口，直接给出明确说明
+        raise AuthError(
+            "GitHub 已停用账户密码登录，密码处必须填写 "
+            "Personal Access Token（ghp_… / github_pat_…）。\n"
+            "如果本机已保存 GitHub 凭据，可直接点上方「使用此账户登录」。")
+    user = fetch_user(token_value)
     config.save_auth(token_value, user)
     return user
+
+
+def _looks_like_token(value: str) -> bool:
+    value = _clean_token(value)
+    if not value:
+        return False
+    if value.startswith(TOKEN_PREFIXES):
+        return True
+    # 经典 Personal Access Token 是 40 位十六进制
+    return bool(re.fullmatch(r"[0-9a-fA-F]{40}", value))
+
+
+# ==================== 识别本机账户 ====================
+
+def _credential_from_git() -> tuple[str, str, str]:
+    """从 Git 凭据管理器读取 github.com 的 (token, username, source)。"""
+    try:
+        git = config.find_git()
+    except RuntimeError:
+        return "", "", ""
+    env = config.child_env()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    try:
+        proc = subprocess.run(
+            [git, "-c", "credential.interactive=false", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            text=True, capture_output=True, env=env, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return "", "", ""
+    if proc.returncode:
+        return "", "", ""
+    username = ""
+    token = ""
+    for line in proc.stdout.splitlines():
+        if line.startswith("username="):
+            username = line.split("=", 1)[1].strip()
+        elif line.startswith("password="):
+            token = line.split("=", 1)[1].strip()
+    if token:
+        return token, username, "本机 Git 凭据（Git Credential Manager）"
+    return "", "", ""
+
+
+def _credential_from_file() -> tuple[str, str, str]:
+    """读取 ~/.git-credentials（credential.helper=store 时使用）。"""
+    path = Path.home() / ".git-credentials"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "", "", ""
+    for line in text.splitlines():
+        line = line.strip()
+        if "github.com" not in line:
+            continue
+        match = re.search(r"https?://([^:/@]+):([^@]+)@github\.com", line)
+        if match:
+            return match.group(2), match.group(1), "~/.git-credentials"
+    return "", "", ""
+
+
+def detect_local_account() -> dict:
+    """识别本机 GitHub 账户；没有可用凭据时返回空字典。
+
+    返回 {token, login, name, avatar, source}；token 只放在内存，不写日志。
+    """
+    token, username, source = _credential_from_git()
+    if not token:
+        token, username, source = _credential_from_file()
+    if not token:
+        return {}
+    try:
+        user = fetch_user(token)
+    except AuthError:
+        return {
+            "token": "",
+            "login": username,
+            "name": "",
+            "avatar": "",
+            "source": source,
+            "error": "本机凭据已失效，请手动填写 Token",
+        }
+    return {
+        "token": token,
+        "login": str(user.get("login") or username),
+        "name": str(user.get("name") or ""),
+        "avatar": str(user.get("avatar_url") or ""),
+        "source": source,
+    }
 
 
 def logout() -> None:
