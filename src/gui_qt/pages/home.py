@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QTableWidget,
+    QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+    QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -328,18 +328,21 @@ def _load_tcdoc_history(doc_key):
     base = get_export_subdir("tcdoc")
     rows = []
     revisions = {}
+    total = 0
     path = base / "tcdoc.db"
     if path.exists():
         conn = sqlite3.connect(
             f"file:{str(path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
         try:
+            total = int(conn.execute(
+                "SELECT COUNT(*) FROM daily WHERE doc_key = ?", (doc_key,)).fetchone()[0])
             rows = [dict(zip(
                 ("ts", "date", "views", "views_delta", "members",
                  "members_delta", "readers"), row))
                 for row in conn.execute(
                     "SELECT ts, date, views, views_delta, members, members_delta,"
                     " readers FROM daily WHERE doc_key = ?"
-                    " ORDER BY ts DESC, id DESC LIMIT 500", (doc_key,))]
+                    " ORDER BY ts DESC, id DESC LIMIT 5", (doc_key,))]
         finally:
             conn.close()
     rev_path = base / "revisions.db"
@@ -352,7 +355,7 @@ def _load_tcdoc_history(doc_key):
                 " FROM revision_rows WHERE doc_key = ? GROUP BY d", (doc_key,))}
         finally:
             conn.close()
-    return {"rows": rows, "revisions": revisions}
+    return {"rows": rows, "revisions": revisions, "total": total}
 
 
 def _dist_items(by_source):
@@ -594,6 +597,77 @@ class _ToolCard(QPushButton):
         super().keyPressEvent(event)
 
 
+class _AccountConfigDialog(QDialog):
+    """配置要观察的网媒 / 音乐账号。"""
+
+    def __init__(self, parent, accounts, selected):
+        super().__init__(parent)
+        self._checks = {}
+        self.setWindowTitle("配置观察账号")
+        self.resize(760, 440)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        hint = QLabel("勾选要观察的账号；保存后首页抽屉展示前 5 个已观察账号的最新数据。")
+        hint.setWordWrap(True)
+        hint.setProperty("role", "muted")
+        layout.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        host = QWidget()
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(4)
+        row = 0
+        for source, title in (("tracker", "网媒账号"), ("music", "音乐账号")):
+            items = [item for item in accounts if item["source"] == source]
+            if not items:
+                continue
+            group = QLabel(f"{title}（{len(items)}）")
+            group.setStyleSheet("font-weight: bold;")
+            grid.addWidget(group, row, 0, 1, 2)
+            row += 1
+            for index, account in enumerate(items):
+                check = QCheckBox(f'{account["name"]} · {account["platform_label"]}')
+                check.setChecked(account["key"] in selected)
+                check.setToolTip(account.get("url") or account["name"])
+                self._checks[account["key"]] = check
+                grid.addWidget(check, row + index // 2, index % 2)
+            row += (len(items) + 1) // 2
+        grid.setRowStretch(row, 1)
+        scroll.setWidget(host)
+        layout.addWidget(scroll, 1)
+
+        foot = QHBoxLayout()
+        all_btn = QPushButton("全选")
+        all_btn.clicked.connect(lambda: self._set_all(True))
+        foot.addWidget(all_btn)
+        none_btn = QPushButton("全不选")
+        none_btn.clicked.connect(lambda: self._set_all(False))
+        foot.addWidget(none_btn)
+        foot.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        foot.addWidget(cancel_btn)
+        save_btn = QPushButton("💾 保存")
+        save_btn.setStyleSheet(
+            "background: #2e7d32; color: white; padding: 4px 16px; border-radius: 4px;")
+        save_btn.clicked.connect(self.accept)
+        foot.addWidget(save_btn)
+        layout.addLayout(foot)
+
+    def _set_all(self, checked):
+        for check in self._checks.values():
+            check.setChecked(bool(checked))
+
+    def selected_keys(self):
+        return [key for key, check in self._checks.items() if check.isChecked()]
+
+
 class _StatCard(QFrame):
     """可点击的统计卡：点击后在首页展开二级抽屉。"""
 
@@ -769,31 +843,24 @@ class HomePage(BasePage):
         v.setSpacing(6)
 
         bar = QHBoxLayout()
-        hint = QLabel("第一列勾选要观察的账号，表格显示各自最新采集数据；"
-                      "保存后首页「追踪账号」按已观察数量统计。")
+        hint = QLabel("展示已观察账号的最新采集数据（最多 5 个）；观察范围可在配置里调整。")
         hint.setObjectName("workbenchHomeMuted")
         hint.setWordWrap(True)
         bar.addWidget(hint, 1)
-        for text, checked in (("全选", True), ("全不选", False)):
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda _=False, c=checked: self._select_all_accounts(c))
-            bar.addWidget(btn)
+        config_btn = QPushButton("⚙ 配置观察账号")
+        config_btn.clicked.connect(self._open_account_config)
+        bar.addWidget(config_btn)
         media_btn = QPushButton("网媒账号追踪")
         media_btn.clicked.connect(lambda: self.app.show_page("tracker"))
         bar.addWidget(media_btn)
         music_btn = QPushButton("音乐账号追踪")
         music_btn.clicked.connect(lambda: self.app.show_page("music_tracker"))
         bar.addWidget(music_btn)
-        save_btn = QPushButton("💾 保存观察账号")
-        save_btn.setStyleSheet(
-            "background: #2e7d32; color: white; padding: 4px 12px; border-radius: 4px;")
-        save_btn.clicked.connect(self._save_watch_accounts)
-        bar.addWidget(save_btn)
         v.addLayout(bar)
 
-        self.account_table = QTableWidget(0, 8)
+        self.account_table = QTableWidget(0, 7)
         self.account_table.setHorizontalHeaderLabels(
-            ["观察", "账号", "平台", "最新采集", "粉丝", "关注", "获赞/播放", "作品"])
+            ["账号", "平台", "最新采集", "粉丝", "关注", "获赞/播放", "作品"])
         self.account_table.verticalHeader().setVisible(False)
         self.account_table.verticalHeader().setDefaultSectionSize(28)
         self.account_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -801,15 +868,14 @@ class HomePage(BasePage):
         self.account_table.setAlternatingRowColors(True)
         self.account_table.setWordWrap(False)
         header = self.account_table.horizontalHeader()
-        for index, width in enumerate([52, 175, 80, 150, 95, 85, 100]):
+        for index, width in enumerate([185, 80, 150, 100, 90, 110]):
             header.resizeSection(index, width)
-        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
         v.addWidget(self.account_table, 1)
 
         self.account_status = QLabel("")
         self.account_status.setObjectName("workbenchHomeMuted")
         v.addWidget(self.account_status)
-        self._account_checks = {}
         return page
 
     def _build_tcdoc_drawer_page(self):
@@ -886,43 +952,40 @@ class HomePage(BasePage):
         watched = _watched_account_keys()
         all_keys = {account["key"] for account in accounts}
         selected = all_keys if watched is None else (watched & all_keys)
-        self._account_checks = {}
+        display = [account for account in accounts if account["key"] in selected][:5]
 
         table = self.account_table
-        table.setRowCount(len(accounts))
+        table.setRowCount(len(display))
         if not accounts:
             self.account_status.setText("未读取到账号配置，请到对应追踪页添加")
             return
+        if not display:
+            self.account_status.setText(
+                "当前未勾选观察账号，点「⚙ 配置观察账号」选择")
+            return
 
-        for row, account in enumerate(accounts):
-            check = QCheckBox()
-            check.setChecked(account["key"] in selected)
-            holder = QWidget()
-            h = QHBoxLayout(holder)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.setAlignment(Qt.AlignCenter)
-            h.addWidget(check)
-            table.setCellWidget(row, 0, holder)
-            table.setItem(row, 1, QTableWidgetItem(account["name"]))
-            table.setItem(row, 2, QTableWidgetItem(account["platform_label"]))
-            table.setItem(row, 3, QTableWidgetItem("读取中…"))
-            for column in range(4, 8):
+        for row, account in enumerate(display):
+            table.setItem(row, 0, QTableWidgetItem(account["name"]))
+            table.setItem(row, 1, QTableWidgetItem(account["platform_label"]))
+            table.setItem(row, 2, QTableWidgetItem("读取中…"))
+            for column in range(3, 7):
                 table.setItem(row, column, QTableWidgetItem("…"))
             tip = account.get("url") or account["name"]
-            for column in range(1, 8):
+            for column in range(0, 7):
                 item = table.item(row, column)
                 if item is not None:
                     item.setToolTip(tip)
-            self._account_checks[account["key"]] = check
 
         self._account_seq += 1
         seq = self._account_seq
+        limit_note = " · 仅展示前 5 个" if len(selected) > 5 else ""
         self.account_status.setText(
-            f"已观察 {len(selected)} / 共 {len(accounts)} 个账号 · 正在读取最新数据…")
+            f"已观察 {len(selected)} / 共 {len(accounts)} 个账号{limit_note}"
+            " · 正在读取最新数据…")
 
         def work():
             result = {}
-            for account in accounts:
+            for account in display:
                 try:
                     result[account["key"]] = _load_account_history(account)
                 except Exception:
@@ -935,11 +998,11 @@ class HomePage(BasePage):
             if err:
                 self.account_status.setText(f"读取账号数据失败：{err}")
                 return
-            for row, account in enumerate(accounts):
+            for row, account in enumerate(display):
                 history = (histories or {}).get(account["key"]) or []
                 self._fill_account_row(row, account, history)
             self.account_status.setText(
-                f"已观察 {len(selected)} / 共 {len(accounts)} 个账号")
+                f"已观察 {len(selected)} / 共 {len(accounts)} 个账号{limit_note}")
 
         run_bg(work, done)
 
@@ -948,17 +1011,17 @@ class HomePage(BasePage):
         previous = history[1] if len(history) > 1 else {}
         table = self.account_table
         time_text = (latest.get("_time") or "")[:16]
-        table.setItem(row, 3, QTableWidgetItem(time_text or "尚未采集"))
+        table.setItem(row, 2, QTableWidgetItem(time_text or "尚未采集"))
         if account["source"] == "music":
             other_field, works_field = "listens", "works"
         else:
             other_field = "likes"
             works_field = ("weibo_count" if account["platform"] == "weibo"
                            else "video_count")
-        self._set_metric(row, 4, latest, previous, "fans")
-        self._set_metric(row, 5, latest, previous, "following")
-        self._set_metric(row, 6, latest, previous, other_field)
-        self._set_metric(row, 7, latest, previous, works_field)
+        self._set_metric(row, 3, latest, previous, "fans")
+        self._set_metric(row, 4, latest, previous, "following")
+        self._set_metric(row, 5, latest, previous, other_field)
+        self._set_metric(row, 6, latest, previous, works_field)
 
     def _set_metric(self, row, column, latest, previous, field):
         value = latest.get(field)
@@ -974,12 +1037,18 @@ class HomePage(BasePage):
                     f"上次 {self._num_text(previous.get(field))} · 变化 {delta:+d}")
         self.account_table.setItem(row, column, item)
 
-    def _select_all_accounts(self, checked):
-        for check in self._account_checks.values():
-            check.setChecked(bool(checked))
-
-    def _save_watch_accounts(self):
-        keys = [key for key, check in self._account_checks.items() if check.isChecked()]
+    def _open_account_config(self):
+        accounts = _tracked_accounts_snapshot()
+        if not accounts:
+            self.app.toast("未读取到账号配置，请先到账号追踪页添加", "warning")
+            return
+        watched = _watched_account_keys()
+        selected = ({account["key"] for account in accounts}
+                    if watched is None else (watched & {a["key"] for a in accounts}))
+        dialog = _AccountConfigDialog(self, accounts, selected)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        keys = dialog.selected_keys()
         try:
             from toolbox.config_manager import load_convert_config, save_convert_config
             config = load_convert_config()
@@ -988,13 +1057,14 @@ class HomePage(BasePage):
         except Exception as exc:
             self.app.toast(f"保存观察账号失败：{exc}", "warning")
             return
-        total = len(self._account_checks)
         label = self._stat_values.get("tracked_accounts")
         if label is not None:
             label.setText(f"{len(keys):,}")
-            label.setToolTip(f"已观察 {len(keys)} / 共 {total} 个账号\n点击配置观察账号")
-        self.account_status.setText(f"✅ 已保存：观察 {len(keys)} / 共 {total} 个账号")
-        self.app.toast(f"观察账号已保存：{len(keys)}/{total}", "success")
+            label.setToolTip(
+                f"已观察 {len(keys)} / 共 {len(accounts)} 个账号\n点击配置观察账号")
+        self.app.toast(
+            f"观察账号已保存：{len(keys)}/{len(accounts)}", "success")
+        self._refresh_account_drawer()
 
     def _refresh_tcdoc_docs(self):
         current = self.tcdoc_doc_combo.currentData()
@@ -1046,8 +1116,10 @@ class HomePage(BasePage):
         table.setUpdatesEnabled(True)
         if rows:
             latest = rows[0]
+            total = int(result.get("total") or len(rows))
             self.tcdoc_status.setText(
-                f"共 {len(rows)} 条 ｜ 最新 浏览量 {self._num_text(latest.get('views'))}"
+                f"展示最近 {len(rows)} 条 / 共 {total} 条 ｜ "
+                f"最新 浏览量 {self._num_text(latest.get('views'))}"
                 f" / 成员 {self._num_text(latest.get('members'))}"
                 f" / 已查看 {self._num_text(latest.get('readers'))}")
         else:
