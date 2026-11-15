@@ -3,12 +3,14 @@
 - 输入：超话链接（https://weibo.com/p/100808...）或 100808 开头的超话 ID
 - 频道：从超话头部动态读取 flowId，每个频道可单独设置最大翻页数
 - 采集：沿用游标翻页（moreInfo.params.since_id），跨频道按帖子 ID 去重
+- 入库：每次采集自动写入 config/weibo_chaohua.db（帖子去重 + 指标快照）
 - 导出：download/微博超话/<超话名>超话_数据采集_时间戳.xlsx
 - 边界：阅读量 / 影响力 / 榜单分数网页端不存在；总数只有「4.8万」这类缩略文案
 """
 
 import os
 import threading
+import time
 from datetime import datetime
 
 from PySide6.QtCore import Qt
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import weibo_chaohua as wch
+from platforms import weibo_chaohua_store as chs
 
 
 class WeiboChaohuaPage(BasePage):
@@ -32,6 +35,7 @@ class WeiboChaohuaPage(BasePage):
         self._busy = False
         self._stop_event = threading.Event()
         self._channel_rows = []
+        self._history_seq = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -51,6 +55,8 @@ class WeiboChaohuaPage(BasePage):
             "<p>· <b>频道</b>：从超话头部动态读取 flowId；每个频道可单独勾选并设置最大翻页数</p>"
             "<p>· <b>采集</b>：游标翻页，跨频道按帖子 ID 去重；页面显示当前页数与累计条数</p>"
             "<p>· <b>导出</b>：汇总、频道明细、月度趋势、作者榜、设备/地区/星期/时段、全局 TOP50</p>"
+            "<p>· <b>长效分析</b>：每次采集自动写入 config/weibo_chaohua.db"
+            "（帖子按 ID 去重 + 每次互动指标快照），在「🗄 历史分析」查看累计、新增与点赞增长</p>"
             "<p>· <b>保存位置</b>：download/微博超话/&lt;超话名&gt;超话_数据采集_时间戳.xlsx</p>"
             "<p>· <b>已知边界</b>：阅读量 / 影响力 / 榜单分数网页端不存在；"
             "帖子数、粉丝数只有「4.8万 / 21万」缩略文案；"
@@ -67,8 +73,8 @@ class WeiboChaohuaPage(BasePage):
         row = QHBoxLayout()
         row.addWidget(QLabel("超话链接 / ID"))
         self.input_edit = QLineEdit()
-        self.input_edit.setPlaceholderText(
-            "https://weibo.com/p/10080857b3593b49a1cef3b2585f65295e0419 或 100808...")
+        self.input_edit.setText("https://weibo.com/p/10080857b3593b49a1cef3b2585f65295e0419")
+        self.input_edit.setPlaceholderText("也可粘贴其他超话链接或 100808... 开头的超话 ID")
         self.input_edit.returnPressed.connect(self._do_parse)
         row.addWidget(self.input_edit, 1)
         self.parse_btn = QPushButton("🔎 解析超话")
@@ -156,6 +162,7 @@ class WeiboChaohuaPage(BasePage):
         self.result_tabs = QTabWidget()
         self.result_tabs.addTab(self._build_posts_tab(), "📋 帖子明细")
         self.result_tabs.addTab(self._build_stats_tab(), "📊 统计概览")
+        self.result_tabs.addTab(self._build_history_tab(), "🗄 历史分析")
         layout.addWidget(self.result_tabs, 1)
 
     # ==================== UI 构建 ====================
@@ -204,6 +211,31 @@ class WeiboChaohuaPage(BasePage):
         v.addWidget(self.stats_view)
         return page
 
+    def _build_history_tab(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 6, 4, 4)
+        v.setSpacing(4)
+
+        bar = QHBoxLayout()
+        hint = QLabel("数据来自 config/weibo_chaohua.db（每次采集自动入库）")
+        hint.setProperty("role", "muted")
+        bar.addWidget(hint)
+        bar.addStretch(1)
+        refresh_btn = QPushButton("🔄 刷新历史")
+        refresh_btn.clicked.connect(self._refresh_history)
+        bar.addWidget(refresh_btn)
+        open_db_btn = QPushButton("📂 打开数据库目录")
+        open_db_btn.clicked.connect(self._open_db_dir)
+        bar.addWidget(open_db_btn)
+        v.addLayout(bar)
+
+        self.history_view = QPlainTextEdit()
+        self.history_view.setReadOnly(True)
+        self.history_view.setPlaceholderText("解析超话后显示数据库累计数据与长期趋势")
+        v.addWidget(self.history_view)
+        return page
+
     # ==================== 解析 ====================
     def _do_parse(self):
         if self._busy:
@@ -229,7 +261,7 @@ class WeiboChaohuaPage(BasePage):
                 self.status_label.setText(f"❌ 解析失败：{err}")
                 self.app.toast(f"超话解析失败：{err}", "warning")
                 return
-            self._topic_id = topic_id
+            self._topic_id = info.get("topic_id") or topic_id
             self._info = info
             self._data = {}
             self._set_busy(False)
@@ -246,6 +278,7 @@ class WeiboChaohuaPage(BasePage):
             self.overview_label.setText("\n".join(lines))
             self._populate_channels(info.get("channels") or [])
             self._reset_results()
+            self._refresh_history()
             self.status_label.setText(
                 f'✅ 已解析「{info.get("nick") or topic_id}」，'
                 f'共 {len(info.get("channels") or [])} 个频道，选择后点「开始采集」')
@@ -316,6 +349,8 @@ class WeiboChaohuaPage(BasePage):
             return
 
         topic_id = self._topic_id
+        info = self._info
+        started_at = time.time()
         self._stop_event.clear()
         self._set_busy(True, "⏳ 正在换取访客身份 ...", stoppable=True)
 
@@ -325,15 +360,24 @@ class WeiboChaohuaPage(BasePage):
                 progress=lambda message: post_to_main(self._on_progress, message),
                 stop_event=self._stop_event,
             )
-            return client.crawl(selected)
+            data = client.crawl(selected)
+            try:
+                db_result = chs.save_crawl(
+                    info, data, started_at, time.time(),
+                    status="stopped" if self._stop_event.is_set() else "done")
+            except Exception as exc:  # 数据库失败不影响本次结果展示
+                db_result = {"error": str(exc)}
+            return {"data": data, "db": db_result}
 
-        def done(data, err):
+        def done(payload, err):
             if err:
                 self._set_busy(False)
                 self.status_label.setText(f"❌ 采集失败：{err}")
                 self.app.toast(f"超话采集失败：{err}", "warning")
                 return
-            self._data = data or {}
+            payload = payload or {}
+            self._data = payload.get("data") or {}
+            db = payload.get("db") or {}
             self._set_busy(False)
             for row in self._channel_rows:
                 posts = self._data.get(row["name"])
@@ -346,12 +390,21 @@ class WeiboChaohuaPage(BasePage):
             self._refresh_channel_filter()
             self._refresh_results()
             self._refresh_stats()
+            self._refresh_history()
             unique = len(wch.merge_posts(self._data))
             raw_total = sum(len(posts) for posts in self._data.values())
             stopped = self._stop_event.is_set()
             prefix = "⏹ 已停止" if stopped else "✅ 采集完成"
+            if db.get("error"):
+                db_note = f"；⚠ 数据库保存失败：{db['error']}"
+                self.app.toast(f"数据库保存失败：{db['error']}", "warning")
+            elif db:
+                db_note = (f'；数据库累计 {db.get("total_posts", 0)} 条'
+                           f'（本次新增 {db.get("new_posts", 0)}）')
+            else:
+                db_note = ""
             self.status_label.setText(
-                f"{prefix}：{raw_total} 条（跨频道去重后 {unique} 条），可导出 Excel")
+                f"{prefix}：{raw_total} 条（跨频道去重后 {unique} 条），可导出 Excel{db_note}")
             self.app.toast(
                 f"超话采集{'已停止' if stopped else '完成'}：去重后 {unique} 条", "success")
 
@@ -483,6 +536,37 @@ class WeiboChaohuaPage(BasePage):
             "「最新」频道深翻会混入零星老帖，时间趋势建议只取近期连续区间。",
         ])
         self.stats_view.setPlainText("\n".join(lines))
+
+    # ==================== 历史分析 ====================
+    def _refresh_history(self):
+        if not self._topic_id:
+            self.history_view.setPlainText("解析超话后显示数据库累计数据与长期趋势")
+            return
+        topic_id = self._topic_id
+        self._history_seq += 1
+        seq = self._history_seq
+        self.history_view.setPlainText("⏳ 正在读取数据库...")
+
+        def work():
+            return chs.load_analysis(topic_id)
+
+        def done(result, err):
+            if seq != self._history_seq or topic_id != self._topic_id:
+                return
+            if err:
+                self.history_view.setPlainText(f"❌ 读取历史数据失败：{err}")
+                return
+            self.history_view.setPlainText(chs.format_history(result))
+
+        run_bg(work, done)
+
+    def _open_db_dir(self):
+        try:
+            path = chs.db_path().parent
+            path.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(path))
+        except Exception as exc:
+            self.app.toast(f"打开数据库目录失败：{exc}", "warning")
 
     # ==================== 导出 ====================
     def _do_export(self):

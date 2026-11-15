@@ -111,6 +111,7 @@ NAV_GROUPS = [
         ("music_tracker", "🎼 音乐账号追踪"),
         ("tracker", "📈 网媒账号追踪"),
         ("tcdoc", "📄 腾讯文档监控"),
+        ("weibo_chaohua", "🔴 微博超话"),
         ("fan_groups", "👥 粉丝群查询"),
     ]),
     ("🎫 票务购物", [
@@ -149,7 +150,6 @@ _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 impor
 _EXTRA_TOOLS = {
     "douyin_index": "抖音指数", "wechat_article": "公众号解析",
     "bili_resource": "B站资源", "video_comments": "视频评论区",
-    "weibo_chaohua": "微博超话",
 }
 
 _SHELL_QSS = """

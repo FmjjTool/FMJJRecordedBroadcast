@@ -11,11 +11,12 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+    QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
@@ -28,10 +29,23 @@ PLATFORM_META = {
     "bilibili": ("B站", "#fb7299"),
     "douyin": ("抖音", "#00bcd4"),
     "weibo": ("微博", "#e6a23c"),
+    "weibo_chaohua": ("微博超话", "#ff6b6b"),
+    "tcdoc": ("腾讯文档", "#5b8def"),
+    "assets": ("本地资源", "#26a69a"),
     "xiaohongshu": ("小红书", "#ff4d6d"),
     "kuaishou": ("快手", "#ff8f1f"),
 }
 OTHER_COLOR = "#8b93a7"
+
+# 账号观察抽屉：平台显示名（网媒 + 音乐）
+ACCOUNT_PLATFORM_LABELS = {
+    "bilibili": "B站", "douyin": "抖音", "weibo": "微博",
+    "kuaishou": "快手", "xiaohongshu": "小红书",
+    "netease": "网易云", "qq": "QQ音乐", "kugou": "酷狗",
+    "kuwo": "酷我", "fivesing": "5sing",
+}
+ACCOUNT_DRAWER_KEYS = {"tracked_accounts"}
+TCDOC_DRAWER_KEYS = {"tcdoc_rows", "doc_views", "doc_members", "doc_readers"}
 
 # 常用工具：(key, 图标, 标题, 说明)
 COMMON_TOOLS = [
@@ -48,7 +62,6 @@ INFO_TOOLS = [
     ("wechat_article", "📰", "公众号解析", "文章导出 HTML / PDF / Word"),
     ("bili_resource", "🎁", "B站资源", "表情包、收藏集、空间资源"),
     ("video_comments", "💬", "视频评论区", "三平台评论抓取与长图"),
-    ("weibo_chaohua", "🔴", "微博超话", "超话帖子采集与 Excel 导出"),
     ("tcdoc", "📄", "腾讯文档监控", "浏览量 / 成员数每日记录"),
     ("localwiki", "🌐", "本地资料站", "本地 Wiki + 腾讯文档预览"),
 ]
@@ -56,52 +69,286 @@ INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
 
 
 def _load_dashboard_data():
-    """读取 collected.db：总数、平台分布、近 7 天每日新增。"""
-    from gui_qt.common import _db_path
+    """汇总全功能看板数据：平台内容 / 微博超话 / 腾讯文档 / 资源文件 / 追踪账号。
+
+    - 平台内容：config/increment.db 各平台表
+    - 微博超话：config/weibo_chaohua.db posts（按帖子 ID 去重后的累计）
+    - 腾讯文档：download/腾讯文档数据/tables.db 行数 + tcdoc.db 最新浏览量/成员数
+    - 资源文件：config/asset_index.db asset_json
+    - 追踪账号：download/账号追踪数据、音乐账号数据下的 xlsx 数量
+    """
+    from toolbox.config_manager import get_config_dir, get_export_subdir
 
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     start = today - timedelta(days=6)
-    labels, counts = [], []
-    for i in range(7):
-        d = start + timedelta(days=i)
-        labels.append(d.strftime("%m-%d"))
-        counts.append(0)
+    labels = [(start + timedelta(days=i)).strftime("%m-%d") for i in range(7)]
+    start_str = start.strftime("%Y-%m-%d 00:00:00")
 
-    data = {"total": 0, "by_platform": {}, "labels": labels, "counts": counts}
-    path = _db_path()
-    if not path.exists():
-        return data
-    conn = None
-    try:
-        conn = sqlite3.connect(str(path), timeout=5)
-        data["total"] = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
-        rows = conn.execute(
-            "SELECT platform, COUNT(*) FROM videos GROUP BY platform").fetchall()
-        data["by_platform"] = {str(p or ""): int(n) for p, n in rows}
+    data = {
+        "stats": {
+            "platform_items": 0,
+            "chaohua_posts": 0,
+            "tcdoc_rows": 0,
+            "asset_files": 0,
+            "doc_views": 0,
+            "doc_members": 0,
+            "doc_readers": 0,
+            "doc_count": 0,
+            "tracked_accounts": 0,
+            "tracked_total": 0,
+        },
+        "by_source": {},
+        "labels": labels,
+        "counts": [0] * 7,
+        "week_total": 0,
+        "today_total": 0,
+    }
 
-        trend_rows = conn.execute(
-            "SELECT date(created_at, 'unixepoch', 'localtime') AS d, COUNT(*) "
-            "FROM videos WHERE created_at >= ? GROUP BY d",
-            (start.timestamp(),)).fetchall()
-        trend = {str(d): int(n) for d, n in trend_rows}
-        data["counts"] = [
-            trend.get((start + timedelta(days=i)).strftime("%Y-%m-%d"), 0)
-            for i in range(7)
-        ]
-    except Exception:
-        pass
-    finally:
-        if conn is not None:
+    def connect_ro(path):
+        """只读连接；库不存在或打不开时返回 None，看板其余部分照常展示。"""
+        try:
+            if not path.exists():
+                return None
+            return sqlite3.connect(
+                f"file:{str(path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
+        except Exception:
+            return None
+
+    def add_daily(day, count):
+        try:
+            index = (datetime.strptime(str(day)[:10], "%Y-%m-%d").date()
+                     - start.date()).days
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < 7:
+            data["counts"][index] += int(count or 0)
+
+    def add_daily_rows(rows):
+        for day, count in rows:
+            add_daily(day, count)
+
+    # ---- 平台内容（increment.db 各平台表）----
+    conn = connect_ro(get_config_dir() / "increment.db")
+    if conn is not None:
+        try:
+            tables = [row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            for table in tables:
+                if table.startswith("_") or table.startswith("sqlite_"):
+                    continue
+                try:
+                    count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                    data["stats"]["platform_items"] += int(count)
+                    data["by_source"][table] = int(count)
+                    add_daily_rows(conn.execute(
+                        f'SELECT date(fetched_at) AS d, COUNT(*) FROM "{table}"'
+                        " WHERE fetched_at >= ? GROUP BY d", (start_str,)).fetchall())
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    # ---- 微博超话（去重帖子 + 首次入库日期）----
+    conn = connect_ro(get_config_dir() / "weibo_chaohua.db")
+    if conn is not None:
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            data["stats"]["chaohua_posts"] = int(count)
+            data["by_source"]["weibo_chaohua"] = int(count)
+            add_daily_rows(conn.execute(
+                "SELECT date(first_seen, 'unixepoch', 'localtime') AS d, COUNT(*)"
+                " FROM posts WHERE first_seen >= ? GROUP BY d",
+                (start.timestamp(),)).fetchall())
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    # ---- 腾讯文档（表格行数 + 最新浏览量/成员数/已查看人数）----
+    tcdoc_dir = get_export_subdir("tcdoc")
+    conn = connect_ro(tcdoc_dir / "tables.db")
+    if conn is not None:
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
+            data["stats"]["tcdoc_rows"] = int(count)
+            data["by_source"]["tcdoc"] = int(count)
+            add_daily_rows(conn.execute(
+                "SELECT date(ts) AS d, COUNT(*) FROM changes"
+                " WHERE kind='新增' AND ts >= ? GROUP BY d", (start_str,)).fetchall())
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    conn = connect_ro(tcdoc_dir / "tcdoc.db")
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                "SELECT views, members, readers FROM daily d WHERE id = ("
+                " SELECT id FROM daily x WHERE x.doc_key = d.doc_key"
+                " ORDER BY ts DESC, id DESC LIMIT 1)").fetchall()
+            data["stats"]["doc_count"] = len(rows)
+            data["stats"]["doc_views"] = sum(int(row[0] or 0) for row in rows)
+            data["stats"]["doc_members"] = sum(int(row[1] or 0) for row in rows)
+            data["stats"]["doc_readers"] = sum(int(row[2] or 0) for row in rows)
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    # ---- 资源文件（asset_index 登记的本地资源）----
+    conn = connect_ro(get_config_dir() / "asset_index.db")
+    if conn is not None:
+        try:
+            count = int(conn.execute(
+                "SELECT COUNT(*) FROM asset_json").fetchone()[0])
+            data["stats"]["asset_files"] = count
+            data["by_source"]["assets"] = count
+            add_daily_rows(conn.execute(
+                "SELECT date(CAST(mtime AS REAL), 'unixepoch', 'localtime') AS d,"
+                " COUNT(*) FROM asset_json WHERE CAST(mtime AS REAL) >= ? GROUP BY d",
+                (start.timestamp(),)).fetchall())
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    # ---- 追踪账号（按用户配置的观察范围统计）----
+    accounts = _tracked_accounts_snapshot()
+    if accounts:
+        watched = _watched_account_keys()
+        selected = (set(a["key"] for a in accounts)
+                    if watched is None else watched & set(a["key"] for a in accounts))
+        data["stats"]["tracked_accounts"] = len(selected)
+        data["stats"]["tracked_total"] = len(accounts)
+    else:
+        # 账号配置不可读时回退到已下载的账号 xlsx 数量
+        for category in ("tracker", "music_tracker"):
             try:
-                conn.close()
+                folder = get_export_subdir(category)
+                data["stats"]["tracked_accounts"] += sum(
+                    1 for path in folder.glob("*.xlsx") if not path.name.startswith("~$"))
             except Exception:
-                pass
+                continue
+        data["stats"]["tracked_total"] = data["stats"]["tracked_accounts"]
+
+    data["week_total"] = sum(data["counts"])
+    data["today_total"] = data["counts"][-1] if data["counts"] else 0
     return data
 
 
-def _dist_items(by_platform):
-    """平台计数 → 环形图数据，未知平台合并为「其他」。"""
-    rest = dict(by_platform)
+def _tracked_accounts_snapshot():
+    """读取网媒 + 音乐账号配置，生成抽屉/看板共用的账号快照。"""
+    accounts = []
+    sources = []
+    try:
+        from tracker.accounts import load_accounts as load_media
+        sources.append(("tracker", "网媒", load_media))
+    except Exception:
+        pass
+    try:
+        from music_account.accounts import load_accounts as load_music
+        sources.append(("music", "音乐", load_music))
+    except Exception:
+        pass
+    for source, source_label, loader in sources:
+        try:
+            items = loader() or []
+        except Exception:
+            continue
+        for item in items:
+            name = str(item.get("name") or "").strip() or "未命名账号"
+            platform = str(item.get("platform") or "")
+            url = str(item.get("url") or "")
+            accounts.append({
+                "key": f"{source}|{platform}|{url or name}",
+                "name": name,
+                "platform": platform,
+                "platform_label": ACCOUNT_PLATFORM_LABELS.get(platform, platform or "未知"),
+                "source": source,
+                "source_label": source_label,
+                "url": url,
+            })
+    return accounts
+
+
+def _watched_account_keys():
+    """已保存的观察账号 key 集合；None 表示尚未配置（默认全部观察）。"""
+    try:
+        from toolbox.config_manager import load_convert_config
+        raw = load_convert_config().get("home_watch_accounts")
+        if isinstance(raw, list):
+            return {str(item) for item in raw}
+    except Exception:
+        pass
+    return None
+
+
+def _tcdoc_docs():
+    """腾讯文档清单；配置缺失时回退到 tcdoc.db 中已采集过的 doc_key。"""
+    try:
+        from toolbox.tcdoc.config import load_docs
+        docs = load_docs()
+        if docs:
+            return docs
+    except Exception:
+        pass
+    docs = []
+    try:
+        from toolbox.config_manager import get_export_subdir
+        path = get_export_subdir("tcdoc") / "tcdoc.db"
+        if path.exists():
+            conn = sqlite3.connect(
+                f"file:{str(path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
+            try:
+                docs = [{"key": row[0], "name": row[0]}
+                        for row in conn.execute(
+                            "SELECT DISTINCT doc_key FROM daily ORDER BY doc_key")]
+            finally:
+                conn.close()
+    except Exception:
+        pass
+    return docs
+
+
+def _load_tcdoc_history(doc_key):
+    """读取单文档的历史记录，并统计每天修订记录次数。"""
+    from toolbox.config_manager import get_export_subdir
+    base = get_export_subdir("tcdoc")
+    rows = []
+    revisions = {}
+    path = base / "tcdoc.db"
+    if path.exists():
+        conn = sqlite3.connect(
+            f"file:{str(path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = [dict(zip(
+                ("ts", "date", "views", "views_delta", "members",
+                 "members_delta", "readers"), row))
+                for row in conn.execute(
+                    "SELECT ts, date, views, views_delta, members, members_delta,"
+                    " readers FROM daily WHERE doc_key = ?"
+                    " ORDER BY ts DESC, id DESC LIMIT 500", (doc_key,))]
+        finally:
+            conn.close()
+    rev_path = base / "revisions.db"
+    if rev_path.exists():
+        conn = sqlite3.connect(
+            f"file:{str(rev_path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
+        try:
+            revisions = {str(day): int(count) for day, count in conn.execute(
+                "SELECT date(ts_ms / 1000, 'unixepoch', 'localtime') AS d, COUNT(*)"
+                " FROM revision_rows WHERE doc_key = ? GROUP BY d", (doc_key,))}
+        finally:
+            conn.close()
+    return {"rows": rows, "revisions": revisions}
+
+
+def _dist_items(by_source):
+    """来源计数 → 环形图数据，未知来源合并为「其他」。"""
+    rest = dict(by_source)
     items = []
     for key, (label, color) in PLATFORM_META.items():
         n = rest.pop(key, 0)
@@ -120,7 +367,7 @@ class _DonutChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items = []
-        self.setMinimumHeight(190)
+        self.setMinimumHeight(210)
         self.setStyleSheet("background: transparent;")
 
     def set_items(self, items):
@@ -338,6 +585,29 @@ class _ToolCard(QPushButton):
         super().keyPressEvent(event)
 
 
+class _StatCard(QFrame):
+    """可点击的统计卡：点击后在首页展开二级抽屉。"""
+
+    clicked = Signal(str)
+
+    def __init__(self, key, tip="", clickable=False, parent=None):
+        super().__init__(parent)
+        self._key = key
+        self._clickable = clickable
+        self.setObjectName("workbenchStatCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setProperty("clickable", "true" if clickable else "false")
+        self.setCursor(Qt.PointingHandCursor if clickable else Qt.ArrowCursor)
+        self.setToolTip(tip)
+
+    def mouseReleaseEvent(self, event):
+        if (self._clickable and event.button() == Qt.LeftButton
+                and self.rect().contains(event.position().toPoint())):
+            self.clicked.emit(self._key)
+        super().mouseReleaseEvent(event)
+
+
 class HomePage(BasePage):
     def __init__(self, app):
         super().__init__(app)
@@ -363,6 +633,9 @@ class HomePage(BasePage):
 
         v.addWidget(self._build_hero())
         v.addLayout(self._build_stats())
+        self.drawer = self._build_drawer()
+        v.addWidget(self.drawer)
+        self.drawer.hide()
         v.addWidget(self._section_title("常用工具", "采集、整理与制作"))
         v.addLayout(self._build_tool_grid(COMMON_TOOLS))
         v.addLayout(self._build_charts())
@@ -413,15 +686,22 @@ class HomePage(BasePage):
         row.setSpacing(12)
         self._stat_cards = []
         cards = [
-            ("total", "已获取条目"),
-            ("platforms", "覆盖平台"),
-            ("week", "近 7 天新增"),
-            ("today", "今日新增"),
+            ("platform_items", "平台内容", "B站 / 抖音 / 微博 / 小红书 / 快手内容条目"),
+            ("chaohua_posts", "微博超话帖子", "config/weibo_chaohua.db 累计去重帖子"),
+            ("tcdoc_rows", "腾讯文档行", "腾讯文档智能表格已同步的数据行"),
+            ("asset_files", "资源文件", "asset_index 登记的本地资源文件"),
+            ("doc_views", "文档浏览量", "腾讯文档监控各文档最新浏览量合计"),
+            ("doc_members", "文档成员数", "腾讯文档监控各文档最新成员数合计"),
+            ("doc_readers", "已查看人数", "腾讯文档监控各文档最新已查看人数合计"),
+            ("tracked_accounts", "追踪账号", "网媒账号 + 音乐账号追踪的账号数量"),
         ]
-        for index, (key, caption) in enumerate(cards):
-            card = QFrame()
-            card.setObjectName("workbenchStatCard")
-            card.setAttribute(Qt.WA_StyledBackground, True)
+        for index, (key, caption, tip) in enumerate(cards):
+            clickable = key in ACCOUNT_DRAWER_KEYS or key in TCDOC_DRAWER_KEYS
+            if clickable:
+                tip = f"{tip}\n点击展开详情抽屉"
+            card = _StatCard(key, tip, clickable=clickable)
+            if clickable:
+                card.clicked.connect(self._open_drawer)
             box = QVBoxLayout(card)
             box.setContentsMargins(18, 13, 18, 13)
             box.setSpacing(4)
@@ -429,26 +709,301 @@ class HomePage(BasePage):
             value.setObjectName("workbenchStatValue")
             value.setMinimumWidth(0)
             value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            value.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            value.setToolTip(tip)
             cap = QLabel(caption)
             cap.setObjectName("workbenchStatCaption")
+            cap.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             box.addWidget(cap)
             box.addWidget(value)
             self._stat_values[key] = value
             self._stat_cards.append(card)
-            row.addWidget(card, 0, index)
-            row.setColumnStretch(index, 1)
+            row.addWidget(card, index // 4, index % 4)
+            row.setColumnStretch(index % 4, 1)
         return row
+
+    # ==================== 卡片下钻抽屉 ====================
+    def _build_drawer(self):
+        frame = QFrame()
+        frame.setObjectName("workbenchDrawer")
+        frame.setAttribute(Qt.WA_StyledBackground, True)
+        frame.setMaximumHeight(430)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        head = QHBoxLayout()
+        self.drawer_title = QLabel("详情")
+        self.drawer_title.setObjectName("workbenchDrawerTitle")
+        head.addWidget(self.drawer_title)
+        self.drawer_sub = QLabel("")
+        self.drawer_sub.setObjectName("workbenchHomeMuted")
+        head.addWidget(self.drawer_sub)
+        head.addStretch(1)
+        close_btn = QPushButton("✕ 收起")
+        close_btn.setObjectName("workbenchDrawerClose")
+        close_btn.clicked.connect(self._close_drawer)
+        head.addWidget(close_btn)
+        layout.addLayout(head)
+
+        self.drawer_stack = QStackedWidget()
+        self.account_drawer_page = self._build_account_drawer_page()
+        self.tcdoc_drawer_page = self._build_tcdoc_drawer_page()
+        self.drawer_stack.addWidget(self.account_drawer_page)
+        self.drawer_stack.addWidget(self.tcdoc_drawer_page)
+        layout.addWidget(self.drawer_stack, 1)
+        return frame
+
+    def _build_account_drawer_page(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        bar = QHBoxLayout()
+        hint = QLabel("勾选要观察的账号；保存后首页「追踪账号」按已观察数量统计。"
+                      "新增 / 编辑账号请到对应追踪页。")
+        hint.setObjectName("workbenchHomeMuted")
+        hint.setWordWrap(True)
+        bar.addWidget(hint, 1)
+        for text, checked in (("全选", True), ("全不选", False)):
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda _=False, c=checked: self._select_all_accounts(c))
+            bar.addWidget(btn)
+        media_btn = QPushButton("网媒账号追踪")
+        media_btn.clicked.connect(lambda: self.app.show_page("tracker"))
+        bar.addWidget(media_btn)
+        music_btn = QPushButton("音乐账号追踪")
+        music_btn.clicked.connect(lambda: self.app.show_page("music_tracker"))
+        bar.addWidget(music_btn)
+        save_btn = QPushButton("💾 保存观察账号")
+        save_btn.setStyleSheet(
+            "background: #2e7d32; color: white; padding: 4px 12px; border-radius: 4px;")
+        save_btn.clicked.connect(self._save_watch_accounts)
+        bar.addWidget(save_btn)
+        v.addLayout(bar)
+
+        self.account_grid_host = QWidget()
+        self.account_grid = QGridLayout(self.account_grid_host)
+        self.account_grid.setContentsMargins(0, 0, 0, 0)
+        self.account_grid.setHorizontalSpacing(18)
+        self.account_grid.setVerticalSpacing(4)
+        account_scroll = QScrollArea()
+        account_scroll.setWidgetResizable(True)
+        account_scroll.setFrameShape(QScrollArea.NoFrame)
+        account_scroll.setWidget(self.account_grid_host)
+        v.addWidget(account_scroll, 1)
+
+        self.account_status = QLabel("")
+        self.account_status.setObjectName("workbenchHomeMuted")
+        v.addWidget(self.account_status)
+        self._account_checks = {}
+        return page
+
+    def _build_tcdoc_drawer_page(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("文档"))
+        self.tcdoc_doc_combo = QComboBox()
+        self.tcdoc_doc_combo.setMinimumWidth(260)
+        self.tcdoc_doc_combo.currentIndexChanged.connect(self._refresh_tcdoc_history)
+        bar.addWidget(self.tcdoc_doc_combo, 1)
+        self.tcdoc_status = QLabel("")
+        self.tcdoc_status.setObjectName("workbenchHomeMuted")
+        bar.addWidget(self.tcdoc_status)
+        v.addLayout(bar)
+
+        self.tcdoc_table = QTableWidget(0, 7)
+        self.tcdoc_table.setHorizontalHeaderLabels(
+            ["采集时间", "浏览量", "增量", "成员数", "增量", "已查看人数", "修订记录次数"])
+        self.tcdoc_table.verticalHeader().setVisible(False)
+        self.tcdoc_table.verticalHeader().setDefaultSectionSize(28)
+        self.tcdoc_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tcdoc_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tcdoc_table.setAlternatingRowColors(True)
+        self.tcdoc_table.setWordWrap(False)
+        header = self.tcdoc_table.horizontalHeader()
+        for index, width in enumerate([150, 90, 70, 80, 70, 100]):
+            header.resizeSection(index, width)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
+        for column, tip in ((2, "相对上一条记录的浏览量增量"),
+                            (4, "相对上一条记录的成员数增量"),
+                            (6, "按采集日期统计的当天修订记录条数")):
+            self.tcdoc_table.horizontalHeaderItem(column).setToolTip(tip)
+        v.addWidget(self.tcdoc_table, 1)
+        return page
+
+    def _open_drawer(self, key):
+        if key in ACCOUNT_DRAWER_KEYS:
+            self.drawer_title.setText("观察账号")
+            self.drawer_sub.setText("网媒 + 音乐账号 · 勾选后保存观察范围")
+            self.drawer_stack.setCurrentWidget(self.account_drawer_page)
+            self._refresh_account_drawer()
+        elif key in TCDOC_DRAWER_KEYS:
+            self.drawer_title.setText("腾讯文档 · 成员名单历史")
+            self.drawer_sub.setText(
+                "浏览量 / 增量 / 成员数 / 增量 / 已查看人数 / 修订记录次数")
+            self.drawer_stack.setCurrentWidget(self.tcdoc_drawer_page)
+            self._refresh_tcdoc_docs()
+        else:
+            return
+        self.drawer.show()
+        self.scroll.ensureWidgetVisible(self.drawer, 0, 16)
+
+    def _close_drawer(self):
+        self.drawer.hide()
+
+    def _refresh_account_drawer(self):
+        while self.account_grid.count():
+            item = self.account_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._account_checks = {}
+
+        accounts = _tracked_accounts_snapshot()
+        watched = _watched_account_keys()
+        all_keys = {account["key"] for account in accounts}
+        selected = all_keys if watched is None else (watched & all_keys)
+        if not accounts:
+            label = QLabel("暂无配置账号，请到「网媒账号追踪」或「音乐账号追踪」添加。")
+            label.setObjectName("workbenchHomeMuted")
+            self.account_grid.addWidget(label, 0, 0, 1, 2)
+            self.account_status.setText("未读取到账号配置")
+            return
+
+        row = 0
+        for source, title in (("tracker", "网媒账号"), ("music", "音乐账号")):
+            items = [item for item in accounts if item["source"] == source]
+            if not items:
+                continue
+            group = QLabel(f"{title}（{len(items)}）")
+            group.setStyleSheet("font-weight: bold;")
+            self.account_grid.addWidget(group, row, 0, 1, 2)
+            row += 1
+            for index, account in enumerate(items):
+                check = QCheckBox(f'{account["name"]} · {account["platform_label"]}')
+                check.setChecked(account["key"] in selected)
+                check.setToolTip(account.get("url") or account["name"])
+                self._account_checks[account["key"]] = check
+                self.account_grid.addWidget(check, row + index // 2, index % 2)
+            row += (len(items) + 1) // 2
+        self.account_grid.setRowStretch(row, 1)
+        self.account_status.setText(f"已观察 {len(selected)} / 共 {len(accounts)} 个账号")
+
+    def _select_all_accounts(self, checked):
+        for check in self._account_checks.values():
+            check.setChecked(bool(checked))
+
+    def _save_watch_accounts(self):
+        keys = [key for key, check in self._account_checks.items() if check.isChecked()]
+        try:
+            from toolbox.config_manager import load_convert_config, save_convert_config
+            config = load_convert_config()
+            config["home_watch_accounts"] = keys
+            save_convert_config(config)
+        except Exception as exc:
+            self.app.toast(f"保存观察账号失败：{exc}", "warning")
+            return
+        total = len(self._account_checks)
+        label = self._stat_values.get("tracked_accounts")
+        if label is not None:
+            label.setText(f"{len(keys):,}")
+            label.setToolTip(f"已观察 {len(keys)} / 共 {total} 个账号\n点击配置观察账号")
+        self.account_status.setText(f"✅ 已保存：观察 {len(keys)} / 共 {total} 个账号")
+        self.app.toast(f"观察账号已保存：{len(keys)}/{total}", "success")
+
+    def _refresh_tcdoc_docs(self):
+        current = self.tcdoc_doc_combo.currentData()
+        docs = _tcdoc_docs()
+        self.tcdoc_doc_combo.blockSignals(True)
+        self.tcdoc_doc_combo.clear()
+        for doc in docs:
+            self.tcdoc_doc_combo.addItem(doc.get("name") or doc.get("key") or "文档",
+                                         doc.get("key") or "")
+        if docs:
+            index = self.tcdoc_doc_combo.findData(current) if current else 0
+            self.tcdoc_doc_combo.setCurrentIndex(max(0, index))
+        self.tcdoc_doc_combo.blockSignals(False)
+        self._refresh_tcdoc_history()
+
+    def _refresh_tcdoc_history(self):
+        doc_key = self.tcdoc_doc_combo.currentData()
+        if not doc_key:
+            self.tcdoc_table.setRowCount(0)
+            self.tcdoc_status.setText("暂无腾讯文档")
+            return
+        try:
+            result = _load_tcdoc_history(doc_key)
+        except Exception as exc:
+            self.tcdoc_table.setRowCount(0)
+            self.tcdoc_status.setText(f"读取失败：{exc}")
+            return
+        rows = result.get("rows") or []
+        revisions = result.get("revisions") or {}
+        table = self.tcdoc_table
+        table.setUpdatesEnabled(False)
+        table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            day = str(row.get("date") or str(row.get("ts") or "")[:10])
+            values = [
+                row.get("ts") or "",
+                self._num_text(row.get("views")),
+                self._delta_text(row.get("views_delta")),
+                self._num_text(row.get("members")),
+                self._delta_text(row.get("members_delta")),
+                self._num_text(row.get("readers")),
+                str(revisions.get(day, 0)),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column > 0:
+                    item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_index, column, item)
+        table.setUpdatesEnabled(True)
+        if rows:
+            latest = rows[0]
+            self.tcdoc_status.setText(
+                f"共 {len(rows)} 条 ｜ 最新 浏览量 {self._num_text(latest.get('views'))}"
+                f" / 成员 {self._num_text(latest.get('members'))}"
+                f" / 已查看 {self._num_text(latest.get('readers'))}")
+        else:
+            self.tcdoc_status.setText("暂无历史记录，请先到「腾讯文档监控」采集")
+
+    @staticmethod
+    def _num_text(value):
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError):
+            return "—"
+
+    @staticmethod
+    def _delta_text(value):
+        if value is None:
+            return "—"
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return "—"
+        return f"+{number}" if number > 0 else str(number)
 
     def _build_charts(self):
         row = self._charts_grid = QGridLayout()
         row.setSpacing(12)
 
-        donut_card, donut_box = self._panel("内容分布", "已获取条目的平台占比")
+        donut_card, donut_box = self._panel(
+            "内容分布", "平台内容、微博超话、腾讯文档、本地资源的数据量占比")
         self.donut = _DonutChart()
         donut_box.addWidget(self.donut, 1)
         row.addWidget(donut_card, 0, 1)
 
-        trend_card, trend_box = self._panel("采集趋势", "最近 7 天 · 按入库日期统计")
+        trend_card, trend_box = self._panel("采集趋势", "最近 7 天 · 全功能新增")
+        self.trend_sub = trend_card.subtitle_label
         self.trend = _TrendChart()
         trend_box.addWidget(self.trend, 1)
         row.addWidget(trend_card, 0, 0)
@@ -469,6 +1024,7 @@ class HomePage(BasePage):
         sub = QLabel(subtitle)
         sub.setObjectName("workbenchHomeMuted")
         box.addWidget(sub)
+        card.subtitle_label = sub
         return card, box
 
     @staticmethod
@@ -550,18 +1106,29 @@ class HomePage(BasePage):
         self.refresh_btn.setEnabled(True)
         if err or not data:
             return
-        by_platform = data.get("by_platform", {})
+        stats = data.get("stats") or {}
+        by_source = data.get("by_source") or {}
         counts = data.get("counts") or []
         labels = data.get("labels") or []
 
-        self._stat_values["total"].setText(f"{data.get('total', 0):,}")
-        self._stat_values["platforms"].setText(
-            str(len([n for n in by_platform.values() if n])))
-        self._stat_values["week"].setText(f"{sum(counts):,}")
-        self._stat_values["today"].setText(f"{counts[-1] if counts else 0:,}")
+        for key, label in self._stat_values.items():
+            label.setText(f"{int(stats.get(key, 0)):,}")
+        self._stat_values["doc_views"].setToolTip(
+            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新浏览量合计")
+        self._stat_values["doc_members"].setToolTip(
+            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新成员数合计")
+        self._stat_values["doc_readers"].setToolTip(
+            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新已查看人数合计")
+        self._stat_values["tracked_accounts"].setToolTip(
+            f"已观察 {int(stats.get('tracked_accounts', 0))} / "
+            f"共 {int(stats.get('tracked_total', 0))} 个账号\n点击配置观察账号")
 
-        self.donut.set_items(_dist_items(by_platform))
+        self.donut.set_items(_dist_items(by_source))
         self.trend.set_data(labels, counts)
+        week_total = int(data.get("week_total") or sum(counts))
+        today_total = int(data.get("today_total") or (counts[-1] if counts else 0))
+        self.trend_sub.setText(
+            f"最近 7 天 · 全功能新增 {week_total:,} 条 · 今日 {today_total:,} 条")
 
     # ==================== 主题 ====================
 
@@ -585,6 +1152,23 @@ class HomePage(BasePage):
             QPushButton#workbenchRefresh:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
             QFrame#workbenchStatCard, QFrame#workbenchPanelCard {
                 background: palette(base); border: 1px solid palette(shadow); border-radius: 12px;
+            }
+            QFrame#workbenchStatCard[clickable="true"]:hover {
+                background: palette(alternate-base); border-color: palette(highlight);
+            }
+            QFrame#workbenchDrawer {
+                background: palette(base); border: 1px solid palette(highlight); border-radius: 12px;
+            }
+            QLabel#workbenchDrawerTitle {
+                color: palette(text); background: transparent; font-size: 15px; font-weight: bold;
+            }
+            QPushButton#workbenchDrawerClose {
+                background: transparent; color: palette(placeholder-text);
+                border: 1px solid palette(shadow); border-radius: 6px;
+                padding: 4px 10px; font-size: 11px;
+            }
+            QPushButton#workbenchDrawerClose:hover {
+                color: palette(link); border-color: palette(highlight);
             }
             QLabel#workbenchStatValue { color: palette(text); background: transparent; font-family: "Segoe UI", "Microsoft YaHei"; font-size: 27px; font-weight: bold; }
             QLabel#workbenchStatCaption { color: palette(placeholder-text); background: transparent; font-size: 11px; }

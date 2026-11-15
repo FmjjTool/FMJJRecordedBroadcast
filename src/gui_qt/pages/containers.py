@@ -147,7 +147,6 @@ class InfoToolsPage(TabbedPage):
         "douyin_index",
         "bili_resource",
         "wechat_article",
-        "weibo_chaohua",
     ]
 
     def __init__(self, app):
@@ -155,13 +154,11 @@ class InfoToolsPage(TabbedPage):
         from gui_qt.pages.douyin_index import DouyinIndexPage
         from gui_qt.pages.video_comments import VideoCommentsPage
         from gui_qt.pages.wechat_article import WechatArticlePage
-        from gui_qt.pages.weibo_chaohua import WeiboChaohuaPage
         super().__init__(app, [
             ("💬 视频评论区", VideoCommentsPage),
             ("📈 抖音指数", DouyinIndexPage),
             ("🎁 B站资源", BiliResourcePage),
             ("📰 公众号解析", WechatArticlePage),
-            ("🔴 微博超话", WeiboChaohuaPage),
         ], lazy=True)
         self._tab_index = {key: i for i, key in enumerate(self.TAB_KEYS)}
 
