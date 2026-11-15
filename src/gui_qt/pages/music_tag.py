@@ -506,11 +506,11 @@ class MusicTagPage(BasePage):
         tb = QToolBar()
         tb.setMovable(False)
         tb.setFloatable(False)
-        tb.setIconSize(QSize(22, 22))
+        tb.setIconSize(QSize(16, 16))
         tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
         tb.setStyleSheet(
-            "QToolBar { spacing: 2px; border: none; padding: 1px 0; }"
-            "QToolBar QToolButton { padding: 2px; border: none; border-radius: 3px; }"
+            "QToolBar { spacing: 1px; border: none; padding: 0; }"
+            "QToolBar QToolButton { padding: 1px; margin: 0; border: none; border-radius: 3px; }"
             "QToolBar QToolButton:hover { background: rgba(127,127,127,0.18); }")
 
         def add(text, icon, slot, tip):
