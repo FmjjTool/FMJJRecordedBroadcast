@@ -64,6 +64,7 @@ PAGE_CLASSES = {
     "test_page": ("gui_qt.pages.test_page", "TestPage"),
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
+    "weibo_chaohua": ("gui_qt.pages.weibo_chaohua", "WeiboChaohuaPage"),
     "tcdoc": ("gui_qt.pages.tcdoc", "TcDocPage"),
     "localwiki": ("gui_qt.pages.localwiki", "LocalWikiPage"),
     "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
@@ -148,6 +149,7 @@ _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 impor
 _EXTRA_TOOLS = {
     "douyin_index": "抖音指数", "wechat_article": "公众号解析",
     "bili_resource": "B站资源", "video_comments": "视频评论区",
+    "weibo_chaohua": "微博超话",
 }
 
 _SHELL_QSS = """

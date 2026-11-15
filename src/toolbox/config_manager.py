@@ -517,6 +517,7 @@ EXPORT_CATEGORIES = {
     "bili_shop": "B站小店",
     "fan_groups": "粉丝群",
     "tcdoc": "腾讯文档数据",
+    "weibo_chaohua": "微博超话",
 }
 
 

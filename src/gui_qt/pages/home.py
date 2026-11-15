@@ -48,6 +48,7 @@ INFO_TOOLS = [
     ("wechat_article", "📰", "公众号解析", "文章导出 HTML / PDF / Word"),
     ("bili_resource", "🎁", "B站资源", "表情包、收藏集、空间资源"),
     ("video_comments", "💬", "视频评论区", "三平台评论抓取与长图"),
+    ("weibo_chaohua", "🔴", "微博超话", "超话帖子采集与 Excel 导出"),
     ("tcdoc", "📄", "腾讯文档监控", "浏览量 / 成员数每日记录"),
     ("localwiki", "🌐", "本地资料站", "本地 Wiki + 腾讯文档预览"),
 ]

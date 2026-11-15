@@ -25,7 +25,7 @@ def tool_icon_name(key):
         return "calendar"
     if key in ("image_crop", "image_sorter", "cover_maker", "bili_resource"):
         return "image"
-    if key in ("video_comments", "fan_groups"):
+    if key in ("video_comments", "fan_groups", "weibo_chaohua"):
         return "message"
     if key == "global_settings":
         return "settings"
