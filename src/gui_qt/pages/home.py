@@ -49,6 +49,7 @@ INFO_TOOLS = [
     ("bili_resource", "🎁", "B站资源", "表情包、收藏集、空间资源"),
     ("video_comments", "💬", "视频评论区", "三平台评论抓取与长图"),
     ("tcdoc", "📄", "腾讯文档监控", "浏览量 / 成员数每日记录"),
+    ("localwiki", "🌐", "本地资料站", "本地 Wiki + 腾讯文档预览"),
 ]
 INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
 

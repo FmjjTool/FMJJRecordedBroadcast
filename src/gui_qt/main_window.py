@@ -65,6 +65,7 @@ PAGE_CLASSES = {
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
     "tcdoc": ("gui_qt.pages.tcdoc", "TcDocPage"),
+    "localwiki": ("gui_qt.pages.localwiki", "LocalWikiPage"),
     "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
     "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
     "shopping": ("gui_qt.pages.shopping_page", "ShoppingPage"),
@@ -125,6 +126,7 @@ NAV_GROUPS = [
         ("bili_danmaku", "📺 B站弹幕姬"),
     ]),
     ("🧰 本地工具", [
+        ("localwiki", "🌐 本地资料站"),
         ("image_crop", "🖼 图片裁切"),
         ("cover_maker", "🎨 套版封面制作"),
         ("image_sorter", "🎞 媒体筛选分类"),

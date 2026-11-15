@@ -9,7 +9,8 @@
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
 - 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
-- 修订记录 / 成员名单：纯 HTTP 全量翻页，分别导出 JSON + Excel
+- 修订记录：纯 HTTP 增量翻页（按上次拉取位置停止，可全量重拉），导出 JSON + Excel
+- 成员名单：纯 HTTP 游标翻页，导出 JSON + Excel
 - 其余 Tab：历史记录 / 采集明细 / 文档管理（自定义文档增删改 + 诊断包）
 - 底部：定时采集（每天一次 / 按间隔几分钟或几小时）+ 计划任务安装/删除
 """
@@ -459,9 +460,11 @@ class TcDocPage(BasePage):
             "<p>· <b>表格图片</b>：图片字段里的图片会在同步后自动增量下载到 "
             "图片/（按文档 / 工作表 / 字段归档，已下载不重复下，图片替换才重下）。"
             "本地已同步过表格时，也可点「🖼 采集图片」补采，不需要重新同步</p>"
-            "<p>· <b>修订记录</b>：纯 HTTP 全量翻页拉取文档修订历史（接口每页 20 个版本，"
-            "自动翻完），逐条显示时间 / 版本号 / 编辑人昵称；自动存 修订记录/"
-            "（JSON + Excel，SQLite 增量去重）。普通表格 / 智能表格都支持</p>"
+            "<p>· <b>修订记录</b>：纯 HTTP 增量翻页拉取文档修订历史——从第 1 页开始，"
+            "遇到上次已拉取且内容一致（修订号 + 编辑人 + 时间）的记录就停止，"
+            "不再每次翻完几百页；同版本/同修订号但编辑人不同的记录会全部保留。"
+            "需要重建时可点「♻ 全量重拉」翻完全部页面。逐条显示时间 / 版本号 / "
+            "编辑人昵称，自动存 修订记录/（JSON + Excel）。普通表格 / 智能表格都支持</p>"
             "<p>· <b>成员名单</b>：纯 HTTP 游标翻页拉取文档全部成员，显示昵称 / "
             "权限等级（所有者、可编辑、可查看等）/ 账号来源 / UID，按 UID 去重后"
             "存 成员名单/（JSON + Excel）。需要文档管理权限，"
@@ -790,7 +793,7 @@ class TcDocPage(BasePage):
         return box
 
     def _build_revision_tab(self) -> QWidget:
-        """修订记录：全量版本 + 每次编辑的时间 / 编辑人。"""
+        """修订记录：按上次拉取位置增量，保留同版本不同编辑人。"""
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(6, 8, 6, 6)
@@ -798,13 +801,18 @@ class TcDocPage(BasePage):
 
         bar = QHBoxLayout()
         bar.setSpacing(6)
-        self.rev_fetch_btn = QPushButton("🔄 拉取全部修订记录")
+        self.rev_fetch_btn = QPushButton("🔄 拉取修订记录（增量）")
         self.rev_fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.rev_fetch_btn.setToolTip(
-            "纯 HTTP 翻页拉取该文档的全部修订记录（每页 20 个版本，自动翻完）；"
-            "含版本号、每次编辑的时间与编辑人昵称，自动存 修订记录/ JSON + Excel")
-        self.rev_fetch_btn.clicked.connect(self._fetch_revisions)
+            "从第 1 页开始增量拉取：遇到上次已拉取且内容一致（修订号 + 编辑人 + 时间）"
+            "的记录就停止翻页；同版本/同修订号不同编辑人全部保留")
+        self.rev_fetch_btn.clicked.connect(lambda: self._fetch_revisions(False))
         bar.addWidget(self.rev_fetch_btn)
+        self.rev_full_btn = QPushButton("♻ 全量重拉")
+        self.rev_full_btn.setToolTip(
+            "忽略上次拉取位置，翻完全部页面并逐条校验更新（数据怀疑不一致时使用）")
+        self.rev_full_btn.clicked.connect(lambda: self._fetch_revisions(True))
+        bar.addWidget(self.rev_full_btn)
         self.rev_dir_btn = QPushButton("📂 打开修订记录目录")
         self.rev_dir_btn.clicked.connect(lambda: self._open_dir(tc_cfg.revisions_dir()))
         bar.addWidget(self.rev_dir_btn)
@@ -844,9 +852,10 @@ class TcDocPage(BasePage):
         self._rev_loading = False
 
         self.rev_hint = QLabel(
-            "点「🔄 拉取全部修订记录」自动翻完全部页面；每行对应一次编辑，"
-            "编辑人昵称来自文档作者接口。表格默认加载最近 2000 条，"
-            "滚动到底自动继续加载，也可点「⬇ 加载更多」或「⏬ 全部加载」。")
+            "点「🔄 拉取修订记录（增量）」从第 1 页开始，遇到上次已拉取且内容一致的"
+            "记录就停止；同版本/同修订号不同编辑人会全部保留。"
+            "需要重建时点「♻ 全量重拉」。每行对应一次编辑，编辑人昵称来自文档作者接口。"
+            "表格默认加载最近 2000 条，滚动到底自动继续加载。")
         self.rev_hint.setStyleSheet("color: #888;")
         self.rev_hint.setWordWrap(True)
         v.addWidget(self.rev_hint)
@@ -1376,18 +1385,20 @@ class TcDocPage(BasePage):
         self.rev_more_btn.setEnabled(more)
         self.rev_all_btn.setEnabled(more)
 
-    def _fetch_revisions(self):
+    def _fetch_revisions(self, full: bool = False):
         if self._busy:
             return
         doc = self.current_doc()
         if not doc:
             self.app.toast("请先添加腾讯文档", "warning")
             return
-        self._set_busy(True, "⏳ 正在拉取全部修订记录……")
+        mode = "全量重拉" if full else "增量拉取"
+        self._set_busy(True, f"⏳ 正在{mode}修订记录……")
 
         def work():
             result = revision.collect(
-                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"),
+                incremental=not full)
             return revision.save(result)
 
         def done(saved, err):
@@ -1397,8 +1408,17 @@ class TcDocPage(BasePage):
                 self.app.toast(f"拉取失败：{err}"[:120], "error")
                 return
             self._refresh_revisions()
+            detail = "本次新增"
+            if saved.get("incremental"):
+                detail += f" {saved.get('added', 0)} 条"
+                if saved.get("stopped_at_page"):
+                    detail += f"（第 {saved['stopped_at_page']} 页到上次位置）"
+            else:
+                detail += f" {saved.get('added', 0)} 条 · 全量校验更新 {saved.get('updated', 0)} 条"
             message = (f"✅ 修订记录：{saved.get('versions', 0)} 个版本 / "
-                       f"{saved.get('total', 0)} 条编辑（本次新增 {saved.get('added', 0)}）")
+                       f"{saved.get('total', 0)} 条编辑（{detail}）")
+            if saved.get("skipped_export"):
+                message += "；内容无变化，未重写导出文件"
             if saved.get("excel_error"):
                 message += "；Excel 写入失败（文件可能被占用）"
             self.status_label.setText(message + "　（修订记录/）")

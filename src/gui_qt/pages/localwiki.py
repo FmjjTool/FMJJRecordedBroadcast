@@ -1,0 +1,871 @@
+"""本地资料站：GitHub 拉取 webwiki / webwiki-api，同步腾讯文档并一键起站。
+
+页面只做服务启动器：
+- GitHub 设备码登录（扫码打开授权页 + 输入设备码），未登录时锁定拉取/部署
+- 拉取代码 → 安装依赖 → 同步腾讯文档 → 构建前端 → 启动本地站点
+- 启动后自动打开系统浏览器，也可随时点「打开网站」
+- 腾讯文档预览：直接打开源文档；数据同步默认按版本号/上次拉取位置增量
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+)
+
+from gui_qt.common import post_to_main, run_bg
+from gui_qt.pages.base import BasePage
+from toolbox.tcdoc import config as tcdoc_cfg
+from toolbox.webwiki import auth, config as wiki_cfg, deploy, gitops, server
+
+
+class _GitHubLoginDialog(QDialog):
+    """GitHub 设备码登录：二维码 + 设备码 + Token 兜底。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("登录 GitHub")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self._closed = False
+        self._device_code = ""
+        self._interval = 5
+        self._expires_at = 0.0
+        self.user: dict = {}
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 14)
+        v.setSpacing(8)
+        title = QLabel("GitHub 登录")
+        title.setStyleSheet("font-size: 17px; font-weight: bold;")
+        v.addWidget(title)
+        note = QLabel(
+            "私有项目需要先登录 GitHub 才能拉取代码与一键部署。\n"
+            "手机扫码会打开 GitHub 授权页，再输入下方设备码即可；"
+            "授权页显示的应用名为「GitHub CLI」。")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        v.addWidget(note)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        self.qr_label = QLabel("正在申请设备码…")
+        self.qr_label.setFixedSize(190, 190)
+        self.qr_label.setAlignment(Qt.AlignCenter)
+        self.qr_label.setStyleSheet(
+            "background: palette(alternate-base); border: 1px solid palette(shadow);"
+            " border-radius: 10px; color: palette(placeholder-text);")
+        body.addWidget(self.qr_label)
+
+        right = QVBoxLayout()
+        right.setSpacing(6)
+        code_caption = QLabel("设备码（在授权页输入）")
+        code_caption.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        right.addWidget(code_caption)
+        self.code_label = QLabel("— — —")
+        self.code_label.setAlignment(Qt.AlignCenter)
+        self.code_label.setStyleSheet(
+            "font-family: Consolas, 'Microsoft YaHei'; font-size: 25px;"
+            " font-weight: bold; letter-spacing: 3px;")
+        right.addWidget(self.code_label)
+        row = QHBoxLayout()
+        self.open_btn = QPushButton("打开授权页")
+        self.open_btn.clicked.connect(self._open_page)
+        row.addWidget(self.open_btn)
+        self.copy_btn = QPushButton("复制设备码")
+        self.copy_btn.clicked.connect(self._copy_code)
+        row.addWidget(self.copy_btn)
+        right.addLayout(row)
+        self.status_label = QLabel("等待 GitHub 返回设备码…")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        right.addWidget(self.status_label)
+        right.addStretch(1)
+        body.addLayout(right, 1)
+        v.addLayout(body)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: palette(shadow);")
+        v.addWidget(line)
+        v.addWidget(QLabel("或使用 Personal Access Token（scope 需包含 repo）"))
+        token_row = QHBoxLayout()
+        self.token_edit = QLineEdit()
+        self.token_edit.setPlaceholderText("ghp_… / github_pat_…")
+        self.token_edit.setEchoMode(QLineEdit.Password)
+        token_row.addWidget(self.token_edit, 1)
+        self.token_btn = QPushButton("用 Token 登录")
+        self.token_btn.clicked.connect(self._token_login)
+        token_row.addWidget(self.token_btn)
+        v.addLayout(token_row)
+
+        bottom = QHBoxLayout()
+        hint = QLabel("Token 只保存在本机 config/webwiki_auth.json")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
+        bottom.addWidget(hint, 1)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        bottom.addWidget(cancel)
+        v.addLayout(bottom)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll)
+        QTimer.singleShot(0, self._start_flow)
+
+    # ---------- 设备码流程 ----------
+
+    def _start_flow(self):
+        if self._closed:
+            return
+        run_bg(auth.start_device_flow, self._on_flow)
+
+    def _on_flow(self, data, err):
+        if self._closed:
+            return
+        if err or not data:
+            self.status_label.setText(f"申请设备码失败：{err or '未知错误'}")
+            self.qr_label.setText("设备码申请失败\n可改用下方 Token 登录")
+            return
+        self._device_code = str(data.get("device_code") or "")
+        self._interval = max(5, int(data.get("interval") or 5))
+        self._expires_at = datetime.now().timestamp() + int(data.get("expires_in") or 900)
+        code = str(data.get("user_code") or "")
+        self.code_label.setText(code or "— — —")
+        uri = str(data.get("verification_uri") or "https://github.com/login/device")
+        self._render_qr(uri)
+        self.status_label.setText("等待授权：扫码或打开授权页，输入设备码后点 Continue。")
+        self._timer.start(self._interval * 1000)
+
+    def _render_qr(self, uri: str):
+        try:
+            import io
+
+            import qrcode
+
+            image = qrcode.make(uri)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            pix = QPixmap()
+            pix.loadFromData(buffer.getvalue())
+            self.qr_label.setPixmap(pix.scaled(
+                180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except Exception:  # noqa: BLE001 - 没装 qrcode 时退化为链接
+            self.qr_label.setText("二维码不可用\n请点「打开授权页」")
+
+    def _poll(self):
+        if self._closed or not self._device_code:
+            return
+        if datetime.now().timestamp() > self._expires_at:
+            self._timer.stop()
+            self.status_label.setText("设备码已过期，请关闭窗口重新登录。")
+            return
+        self._timer.stop()
+        code = self._device_code
+        run_bg(lambda: auth.poll_token(code), self._on_poll)
+
+    def _on_poll(self, result, err):
+        if self._closed:
+            return
+        if err or not result:
+            self.status_label.setText(f"轮询失败：{err or '未知错误'}")
+            self._timer.start(self._interval * 1000)
+            return
+        token = str(result.get("token") or "")
+        if token:
+            self.status_label.setText("授权成功，正在读取 GitHub 用户…")
+            run_bg(lambda: auth.finish_device_login(token), self._on_login)
+            return
+        error = str(result.get("error") or "")
+        if error == "authorization_pending":
+            self._timer.start(self._interval * 1000)
+            return
+        if error == "slow_down":
+            self._interval += 5
+            self.status_label.setText("GitHub 要求放慢轮询，继续等待授权…")
+            self._timer.start(self._interval * 1000)
+            return
+        if error == "expired_token":
+            self.status_label.setText("设备码已过期，请关闭窗口重新登录。")
+            return
+        if error == "access_denied":
+            self.status_label.setText("授权被拒绝，可重试或改用 Token 登录。")
+            return
+        self.status_label.setText(f"授权失败：{result.get('message') or error}")
+
+    def _on_login(self, user, err):
+        if self._closed:
+            return
+        self.token_btn.setEnabled(True)
+        if err:
+            self.status_label.setText(f"保存登录态失败：{err}")
+            return
+        self.user = user or {}
+        self.accept()
+
+    # ---------- 按钮 ----------
+
+    def _open_page(self):
+        QDesktopServices.openUrl(QUrl("https://github.com/login/device"))
+
+    def _copy_code(self):
+        code = self.code_label.text().replace(" ", "")
+        if code and code != "———":
+            QGuiApplication.clipboard().setText(code)
+            self.status_label.setText("设备码已复制，请到授权页粘贴。")
+
+    def _token_login(self):
+        token = self.token_edit.text().strip()
+        if not token:
+            QMessageBox.information(self, "Token 登录", "请先填写 GitHub Token")
+            return
+        self.token_btn.setEnabled(False)
+        self.status_label.setText("正在验证 Token…")
+        run_bg(lambda: auth.login_with_token(token), self._on_login)
+
+    def reject(self):
+        self._closed = True
+        self._timer.stop()
+        super().reject()
+
+    def accept(self):
+        self._closed = True
+        self._timer.stop()
+        super().accept()
+
+
+class LocalWikiPage(BasePage):
+    def __init__(self, app):
+        super().__init__(app)
+        self.service = server.SiteService()
+        self._busy = False
+        self._task_buttons: list[QPushButton] = []
+        self._build_ui()
+        self._refresh_status()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(5000)
+
+    # ==================== UI ====================
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        root.addWidget(scroll)
+        body = QWidget()
+        body.setObjectName("wikiBody")
+        scroll.setWidget(body)
+        v = QVBoxLayout(body)
+        v.setContentsMargins(24, 20, 24, 24)
+        v.setSpacing(14)
+
+        v.addWidget(self._build_hero())
+        v.addWidget(self._build_status_card())
+        v.addWidget(self._build_actions_card())
+        v.addWidget(self._build_docs_card())
+        v.addWidget(self._build_path_card())
+        v.addWidget(self._build_log_card())
+        self.status_label = QLabel("就绪")
+        self.status_label.setObjectName("wikiMuted")
+        v.addWidget(self.status_label)
+        v.addStretch(1)
+        self._apply_theme_styles()
+
+    def _card(self, title: str, subtitle: str = ""):
+        card = QFrame()
+        card.setObjectName("wikiCard")
+        box = QVBoxLayout(card)
+        box.setContentsMargins(18, 15, 18, 15)
+        box.setSpacing(8)
+        head = QHBoxLayout()
+        label = QLabel(title)
+        label.setObjectName("wikiCardTitle")
+        head.addWidget(label)
+        if subtitle:
+            sub = QLabel(subtitle)
+            sub.setObjectName("wikiMuted")
+            head.addWidget(sub)
+        head.addStretch(1)
+        box.addLayout(head)
+        return card, box
+
+    def _build_hero(self):
+        card = QFrame()
+        card.setObjectName("wikiHero")
+        h = QHBoxLayout(card)
+        h.setContentsMargins(0, 0, 0, 2)
+        left = QVBoxLayout()
+        left.setSpacing(5)
+        title = QLabel("🌐 本地资料站")
+        title.setObjectName("wikiTitle")
+        left.addWidget(title)
+        sub = QLabel("本地 Wiki + 腾讯文档预览：拉取 webwiki / webwiki-api，"
+                     "同步源文档后一键起站，浏览器直接访问。")
+        sub.setObjectName("wikiMuted")
+        sub.setWordWrap(True)
+        left.addWidget(sub)
+        note = QLabel("🔒 私有项目：拉取代码与一键部署前必须先登录 GitHub。"
+                      "应用内登录只保护本工具入口，仓库本身请保持在 GitHub 私有。")
+        note.setObjectName("wikiWarn")
+        note.setWordWrap(True)
+        left.addWidget(note)
+        h.addLayout(left, 1)
+        help_btn = QPushButton("❓ 功能介绍")
+        help_btn.setObjectName("wikiButton")
+        help_btn.clicked.connect(self._show_help)
+        h.addWidget(help_btn, 0, Qt.AlignTop)
+        return card
+
+    def _build_status_card(self):
+        card, box = self._card("状态", "登录 / 代码 / 数据 / 服务")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(6)
+        self.github_status = QLabel("—")
+        self.repo_status = QLabel("—")
+        self.data_status = QLabel("—")
+        self.service_status = QLabel("—")
+        for row, (caption, widget) in enumerate((
+                ("GitHub", self.github_status),
+                ("代码", self.repo_status),
+                ("腾讯文档", self.data_status),
+                ("本地服务", self.service_status))):
+            cap = QLabel(caption)
+            cap.setObjectName("wikiMuted")
+            cap.setFixedWidth(64)
+            grid.addWidget(cap, row, 0, Qt.AlignTop)
+            widget.setWordWrap(True)
+            grid.addWidget(widget, row, 1)
+        grid.setColumnStretch(1, 1)
+        box.addLayout(grid)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.refresh_btn = QPushButton("刷新状态")
+        self.refresh_btn.setObjectName("wikiButton")
+        self.refresh_btn.clicked.connect(self._refresh_status)
+        row.addWidget(self.refresh_btn)
+        self.logout_btn = QPushButton("退出 GitHub")
+        self.logout_btn.setObjectName("wikiButton")
+        self.logout_btn.clicked.connect(self._logout)
+        row.addWidget(self.logout_btn)
+        box.addLayout(row)
+        return card
+
+    def _build_actions_card(self):
+        card, box = self._card("部署与启动", "登录后点「一键部署」即可全自动完成")
+        self.deploy_btn = QPushButton("🚀 一键部署并启动")
+        self.deploy_btn.setObjectName("wikiPrimary")
+        self.deploy_btn.setMinimumHeight(40)
+        self.deploy_btn.setToolTip("拉取代码 → 安装依赖 → 同步腾讯文档 → 构建前端 → 启动站点")
+        self.deploy_btn.clicked.connect(self._deploy)
+        box.addWidget(self.deploy_btn)
+        self._task_buttons.append(self.deploy_btn)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        buttons = [
+            ("🔐 登录 GitHub", self._open_login),
+            ("⬇ 拉取/更新代码", self._pull),
+            ("📦 安装依赖", self._install_deps),
+            ("🔄 同步腾讯文档", self._sync_docs),
+            ("🏗 构建前端", self._build_frontend),
+            ("▶ 启动服务", self._start_service),
+            ("🌐 打开网站", self._open_site),
+            ("⏹ 停止服务", self._stop_service),
+            ("📂 打开目录", self._open_dir),
+        ]
+        self.login_btn = None
+        self.pull_btn = None
+        self.deps_btn = None
+        self.sync_btn = None
+        self.build_btn = None
+        self.start_btn = None
+        self.open_btn = None
+        self.stop_btn = None
+        self.dir_btn = None
+        for index, (text, slot) in enumerate(buttons):
+            btn = QPushButton(text)
+            btn.setObjectName("wikiButton")
+            btn.setMinimumHeight(34)
+            btn.clicked.connect(slot)
+            grid.addWidget(btn, index // 3, index % 3)
+            self._task_buttons.append(btn)
+            key = ("login", "pull", "deps", "sync", "build",
+                   "start", "open", "stop", "dir")[index]
+            setattr(self, f"{key}_btn", btn)
+        for column in range(3):
+            grid.setColumnStretch(column, 1)
+        box.addLayout(grid)
+
+        opts = QHBoxLayout()
+        self.auto_open = QCheckBox("启动后自动打开浏览器")
+        self.auto_open.setChecked(wiki_cfg.auto_open_browser())
+        self.auto_open.toggled.connect(wiki_cfg.set_auto_open_browser)
+        opts.addWidget(self.auto_open)
+        self.force_sync = QCheckBox("强制全量同步（忽略文档版本号）")
+        self.force_sync.setToolTip("默认按文档版本号增量同步；只有怀疑数据不对时才需要全量")
+        opts.addWidget(self.force_sync)
+        opts.addStretch(1)
+        box.addLayout(opts)
+        return card
+
+    def _build_docs_card(self):
+        card, box = self._card("腾讯文档预览", "站点数据与源文档同源")
+        row = QHBoxLayout()
+        self.doc_combo = QComboBox()
+        self.doc_combo.setMinimumWidth(260)
+        for doc in tcdoc_cfg.load_docs():
+            self.doc_combo.addItem(doc.get("name") or doc.get("key"), doc.get("url") or "")
+        row.addWidget(self.doc_combo, 1)
+        preview = QPushButton("📄 打开预览")
+        preview.setObjectName("wikiButton")
+        preview.clicked.connect(self._open_doc_preview)
+        row.addWidget(preview)
+        monitor = QPushButton("📊 腾讯文档监控页")
+        monitor.setObjectName("wikiButton")
+        monitor.clicked.connect(lambda: self.app.show_page("tcdoc"))
+        row.addWidget(monitor)
+        box.addLayout(row)
+        hint = QLabel("预览用系统默认浏览器打开源文档；本站数据由「同步腾讯文档」写入本地库。")
+        hint.setObjectName("wikiMuted")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
+        return card
+
+    def _build_path_card(self):
+        card, box = self._card("目录与端口", "代码、数据库和构建产物都在这里")
+        row = QHBoxLayout()
+        self.path_label = QLabel(str(wiki_cfg.root_dir()))
+        self.path_label.setObjectName("wikiMuted")
+        self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.path_label.setWordWrap(True)
+        row.addWidget(self.path_label, 1)
+        change = QPushButton("更改目录")
+        change.setObjectName("wikiButton")
+        change.clicked.connect(self._change_dir)
+        row.addWidget(change)
+        box.addLayout(row)
+
+        ports = QHBoxLayout()
+        ports.addWidget(QLabel("API 端口"))
+        self.api_spin = QSpinBox()
+        self.api_spin.setRange(1024, 65535)
+        self.api_spin.setValue(wiki_cfg.ports()[0])
+        self.api_spin.editingFinished.connect(self._save_ports)
+        ports.addWidget(self.api_spin)
+        ports.addSpacing(12)
+        ports.addWidget(QLabel("站点端口"))
+        self.site_spin = QSpinBox()
+        self.site_spin.setRange(1024, 65535)
+        self.site_spin.setValue(wiki_cfg.ports()[1])
+        self.site_spin.editingFinished.connect(self._save_ports)
+        ports.addWidget(self.site_spin)
+        ports.addStretch(1)
+        self.url_label = QLabel("")
+        self.url_label.setObjectName("wikiMuted")
+        self.url_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        ports.addWidget(self.url_label)
+        box.addLayout(ports)
+        return card
+
+    def _build_log_card(self):
+        card, box = self._card("运行日志", "拉取、安装、同步与启动输出")
+        bar = QHBoxLayout()
+        bar.addStretch(1)
+        clear = QPushButton("清空日志")
+        clear.setObjectName("wikiButton")
+        clear.clicked.connect(self._clear_log)
+        bar.addWidget(clear)
+        box.addLayout(bar)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setObjectName("wikiLog")
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(4000)
+        self.log_view.setMinimumHeight(190)
+        box.addWidget(self.log_view)
+        return card
+
+    def _show_help(self):
+        QMessageBox.information(
+            self, "本地资料站 · 功能介绍",
+            "<p><b>它做什么</b><br>把 <code>webwiki</code>（前端）与 "
+            "<code>webwiki-api</code>（后端/腾讯文档同步）拉到本机，"
+            "同步腾讯文档后启动本地站点，浏览器访问 "
+            "<code>http://127.0.0.1:站点端口/</code>。</p>"
+            "<p><b>为什么要登录 GitHub</b><br>项目是私有的；未登录时"
+            "「拉取代码」和「一键部署」会锁定，避免被随意拉取。"
+            "登录用 GitHub 设备码：扫码打开授权页，输入页面上的设备码即可，"
+            "Token 只存本机 <code>config/webwiki_auth.json</code>。</p>"
+            "<p><b>腾讯文档去重</b><br>同步默认按文档版本号增量：没变化只发一个"
+            "约 76KB 的探测请求；有变化才逐表拉取，行级哈希去重。"
+            "修订记录按上次拉取位置增量翻页，并逐条校验内容；"
+            "同版本不同编辑人会全部保留。</p>"
+            "<p><b>端口</b><br>只监听 127.0.0.1，不对外网开放。"
+            "端口被占用时在「目录与端口」里换一个再启动。</p>")
+
+    # ==================== 主题 / 状态 ====================
+
+    def _apply_theme_styles(self):
+        self.setStyleSheet("""
+            QWidget#wikiBody { background: palette(window); }
+            QWidget#wikiHero { background: transparent; }
+            QFrame#wikiCard {
+                background: palette(base); border: 1px solid palette(shadow);
+                border-radius: 12px;
+            }
+            QLabel#wikiTitle { color: palette(text); background: transparent;
+                font-size: 26px; font-weight: bold; }
+            QLabel#wikiMuted { color: palette(placeholder-text); background: transparent;
+                font-size: 11px; }
+            QLabel#wikiWarn { color: palette(link); background: transparent;
+                font-size: 11px; }
+            QLabel#wikiCardTitle { color: palette(text); background: transparent;
+                font-size: 14px; font-weight: bold; }
+            QPushButton#wikiButton {
+                background: palette(base); color: palette(text);
+                border: 1px solid palette(shadow); border-radius: 8px;
+                padding: 6px 10px; font-size: 11px;
+            }
+            QPushButton#wikiButton:hover {
+                background: palette(alternate-base); color: palette(link);
+                border-color: palette(highlight);
+            }
+            QPushButton#wikiButton:disabled {
+                background: palette(alternate-base); color: palette(placeholder-text);
+                border-color: palette(shadow);
+            }
+            QPushButton#wikiPrimary {
+                background: palette(highlight); color: palette(highlighted-text);
+                border: none; border-radius: 9px; font-size: 13px; font-weight: bold;
+            }
+            QPushButton#wikiPrimary:hover { background: palette(link); }
+            QPushButton#wikiPrimary:disabled {
+                background: palette(midlight); color: palette(placeholder-text);
+            }
+            QPlainTextEdit#wikiLog {
+                background: palette(alternate-base); color: palette(text);
+                border: 1px solid palette(shadow); border-radius: 8px;
+                font-family: Consolas, "Microsoft YaHei"; font-size: 11px;
+            }
+        """)
+
+    def on_show(self):
+        self._reload_docs()
+        self._refresh_status()
+
+    def _reload_docs(self):
+        current = self.doc_combo.currentData()
+        self.doc_combo.blockSignals(True)
+        try:
+            self.doc_combo.clear()
+            for doc in tcdoc_cfg.load_docs():
+                self.doc_combo.addItem(doc.get("name") or doc.get("key"),
+                                       doc.get("url") or "")
+            index = self.doc_combo.findData(current) if current else -1
+            if index >= 0:
+                self.doc_combo.setCurrentIndex(index)
+        finally:
+            self.doc_combo.blockSignals(False)
+
+    def shutdown(self):
+        try:
+            self.service.stop(log=lambda _msg: None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _tick(self):
+        if not self._busy:
+            self._update_service_label()
+            self._refresh_actions()
+
+    def _refresh_status(self):
+        if self._busy:
+            return
+        data = wiki_cfg.load_auth()
+        if data.get("token"):
+            login = data.get("login") or "已登录"
+            self.github_status.setText(
+                f"<span style='color:#2e7d32'>● 已登录</span> @{login}")
+        else:
+            self.github_status.setText(
+                "<span style='color:#c62828'>● 未登录</span> 拉取与一键部署已锁定")
+
+        lines = []
+        for name in ("webwiki-api", "webwiki"):
+            try:
+                state = gitops.repo_state(name)
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"{name}：{exc}")
+                continue
+            if state.get("exists"):
+                extra = "（有本地改动）" if state.get("dirty") else ""
+                lines.append(f"{name}@{state.get('commit') or '?'}{extra}")
+            else:
+                lines.append(f"{name}：未拉取")
+        self.repo_status.setText("　".join(lines))
+
+        status = deploy.data_status()
+        if status.get("exists"):
+            self.data_status.setText(
+                f"已同步 {status.get('mtime')} · 歌曲 {status.get('songs', 0)}"
+                f" / 活动 {status.get('events', 0)} / 周边 {status.get('goods', 0)}"
+                f" / 动态 {status.get('posts', 0)}")
+        else:
+            self.data_status.setText("尚未同步（点「同步腾讯文档」或「一键部署」）")
+        self.path_label.setText(str(wiki_cfg.root_dir()))
+        self._update_service_label()
+        self._refresh_actions()
+
+    def _update_service_label(self):
+        if self.service.running:
+            self.service_status.setText(
+                f"<span style='color:#2e7d32'>● 运行中</span> "
+                f"<a href='{self.service.url}'>{self.service.url}</a>")
+            self.service_status.setOpenExternalLinks(True)
+            self.url_label.setText(self.service.url)
+        else:
+            self.service_status.setText("● 未启动")
+            self.url_label.setText("")
+
+    def _refresh_actions(self):
+        auth_ok = bool(wiki_cfg.token())
+        api_ok = (wiki_cfg.api_dir() / ".git").is_dir()
+        web_ok = (wiki_cfg.web_dir() / ".git").is_dir()
+        venv_ok = wiki_cfg.venv_python().is_file()
+        dist_ok = (wiki_cfg.dist_dir() / "index.html").is_file()
+        node_ok = (wiki_cfg.web_dir() / "node_modules").is_dir()
+        running = self.service.running
+        idle = not self._busy
+
+        if self.login_btn:
+            self.login_btn.setEnabled(idle and not auth_ok)
+            self.logout_btn.setEnabled(idle and auth_ok)
+            self.pull_btn.setEnabled(idle and auth_ok)
+            self.deps_btn.setEnabled(idle and api_ok and web_ok)
+            self.sync_btn.setEnabled(idle and api_ok and venv_ok)
+            self.build_btn.setEnabled(idle and web_ok and node_ok)
+            self.start_btn.setEnabled(idle and venv_ok and dist_ok and not running)
+            self.open_btn.setEnabled(idle and running)
+            self.stop_btn.setEnabled(idle and running)
+            self.dir_btn.setEnabled(idle)
+            self.deploy_btn.setEnabled(idle and auth_ok)
+
+    # ==================== 日志 / 任务 ====================
+
+    def _log(self, text):
+        if text is None:
+            return
+        stamp = datetime.now().strftime("%H:%M:%S")
+        for line in str(text).splitlines():
+            if line.strip():
+                self.log_view.appendPlainText(f"[{stamp}] {line}")
+        bar = self.log_view.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _clear_log(self):
+        self.log_view.clear()
+
+    def _set_busy(self, busy: bool, text: str = ""):
+        self._busy = busy
+        if text:
+            self.status_label.setText(text)
+        self._refresh_actions()
+
+    def _start_task(self, title: str, fn, on_ok=None):
+        if self._busy:
+            return
+        self._set_busy(True, f"⏳ {title}…")
+        self._log(f"===== {title} =====")
+
+        def work():
+            return fn(lambda msg: post_to_main(self._log, msg))
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self._log(f"❌ {title}：{err}")
+                self.status_label.setText(f"❌ {title}失败")
+                QMessageBox.warning(self, title, str(err))
+                try:
+                    self.app.toast(f"{title}失败：{err}"[:120], "error")
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                message = f"✅ {title}完成" + (f"：{result}" if result else "")
+                self._log(message)
+                self.status_label.setText(message)
+                try:
+                    self.app.toast(message[:120], "success")
+                except Exception:  # noqa: BLE001
+                    pass
+                if on_ok:
+                    try:
+                        on_ok(result)
+                    except Exception as exc:  # noqa: BLE001
+                        self._log(f"后处理失败：{exc}")
+            self._refresh_status()
+
+        run_bg(work, done)
+
+    # ==================== 登录 ====================
+
+    def _open_login(self):
+        dialog = _GitHubLoginDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            self._log("GitHub 登录成功")
+            self._refresh_status()
+
+    def _logout(self):
+        if not wiki_cfg.token():
+            return
+        if QMessageBox.question(
+                self, "退出 GitHub",
+                "退出后「拉取代码」与「一键部署」会重新锁定，确定退出？") != QMessageBox.Yes:
+            return
+        auth.logout()
+        self._log("已退出 GitHub 登录")
+        self._refresh_status()
+
+    def _require_auth(self) -> bool:
+        if wiki_cfg.token():
+            return True
+        QMessageBox.information(
+            self, "需要登录 GitHub",
+            "这是私有项目：拉取代码与一键部署前必须先登录 GitHub。\n\n"
+            "点「🔐 登录 GitHub」，用手机扫码打开授权页并输入设备码即可。")
+        return False
+
+    # ==================== 各按钮 ====================
+
+    def _pull(self):
+        if not self._require_auth():
+            return
+        token = wiki_cfg.token()
+        self._start_task("拉取代码", lambda log: gitops.pull_all(token, log))
+
+    def _install_deps(self):
+        root = wiki_cfg.root_dir()
+
+        def work(log):
+            if not (wiki_cfg.api_dir(root) / ".git").is_dir():
+                raise RuntimeError("请先拉取代码")
+            deploy.ensure_python_env(root, log)
+            deploy.ensure_node_deps(root, log, force=True)
+            return "Python / Node 依赖已就绪"
+
+        self._start_task("安装依赖", work)
+
+    def _sync_docs(self):
+        root = wiki_cfg.root_dir()
+        force = self.force_sync.isChecked()
+        self._start_task("同步腾讯文档",
+                         lambda log: deploy.sync_docs(root, log, force=force))
+
+    def _build_frontend(self):
+        root = wiki_cfg.root_dir()
+        self._start_task("构建前端", lambda log: str(deploy.build_frontend(root, log)))
+
+    def _start_service(self):
+        root = wiki_cfg.root_dir()
+        if self.service.root != root:
+            self.service = server.SiteService(root)
+
+        def work(log):
+            return self.service.start(log)
+
+        def after(url):
+            if self.auto_open.isChecked():
+                server.open_site(url)
+            self._update_service_label()
+            self._refresh_actions()
+
+        self._start_task("启动服务", work, on_ok=after)
+
+    def _open_site(self):
+        if not self.service.running:
+            QMessageBox.information(self, "打开网站", "服务还没启动，请先点「▶ 启动服务」。")
+            return
+        server.open_site(self.service.url)
+
+    def _stop_service(self):
+        def work(log):
+            self.service.stop(log)
+            return "服务已停止"
+
+        self._start_task("停止服务", work)
+
+    def _deploy(self):
+        if not self._require_auth():
+            return
+        root = wiki_cfg.root_dir()
+        token = wiki_cfg.token()
+        force = self.force_sync.isChecked()
+
+        def work(log):
+            if self.service.running:
+                log("检测到服务正在运行，先停止旧服务…")
+                self.service.stop(log)
+            self.service = server.SiteService(root)
+            gitops.ensure_repo("webwiki-api", token, log, root)
+            gitops.ensure_repo("webwiki", token, log, root)
+            deploy.ensure_python_env(root, log)
+            deploy.sync_docs(root, log, force=force)
+            deploy.ensure_node_deps(root, log)
+            deploy.build_frontend(root, log)
+            return self.service.start(log)
+
+        def after(url):
+            if self.auto_open.isChecked():
+                server.open_site(url)
+            self._update_service_label()
+            self._refresh_actions()
+
+        self._start_task("一键部署", work, on_ok=after)
+
+    # ==================== 目录 / 端口 / 文档 ====================
+
+    def _change_dir(self):
+        if self.service.running:
+            QMessageBox.information(self, "更换目录", "服务运行中，请先停止服务再更换目录。")
+            return
+        path = QFileDialog.getExistingDirectory(
+            self, "选择资料站目录", str(wiki_cfg.root_dir()))
+        if not path:
+            return
+        wiki_cfg.set_root_dir(path)
+        self.service = server.SiteService(wiki_cfg.root_dir())
+        self._log(f"资料站目录已切换到：{path}")
+        self._refresh_status()
+
+    def _open_dir(self):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(wiki_cfg.root_dir())))
+
+    def _save_ports(self):
+        api, site = self.api_spin.value(), self.site_spin.value()
+        if api == site:
+            QMessageBox.warning(self, "端口重复", "API 端口与站点端口不能相同。")
+            self.api_spin.setValue(wiki_cfg.ports()[0])
+            self.site_spin.setValue(wiki_cfg.ports()[1])
+            return
+        if self.service.running:
+            QMessageBox.information(self, "端口修改", "端口已保存，停止并重新启动服务后生效。")
+        wiki_cfg.set_ports(api, site)
+        if not self.service.running:
+            self.service = server.SiteService(wiki_cfg.root_dir())
+        self._update_service_label()
+
+    def _open_doc_preview(self):
+        url = self.doc_combo.currentData()
+        if not url:
+            QMessageBox.information(self, "腾讯文档预览", "文档清单为空，请先到腾讯文档监控页添加文档。")
+            return
+        QDesktopServices.openUrl(QUrl(str(url)))
