@@ -191,7 +191,7 @@ class WorkflowTests(WorkflowFixture):
 class UploadPipelineTests(WorkflowFixture):
     # 测试响应按接口类别返回，真实传输另做小视频验证。
     def test_upos_chunks_csrf_and_duplicate_submission(self):
-        video = self.video(data=b"abcdefghijk")
+        video = self.video("2026-10-02_20-15-30_封茗囧菌_聊天_无弹幕_抖音.mp4", data=b"abcdefghijk")
         history = UploadHistory(self.root / "history.db")
         member, upos = SimpleNamespace(), SimpleNamespace()
         calls = []
@@ -236,7 +236,7 @@ class UploadPipelineTests(WorkflowFixture):
         self.assertNotIn("fake", stored)
 
     def test_submit_response_loss_is_uncertain_and_cannot_retry(self):
-        video = self.video()
+        video = self.video("2026-10-02_20-15-30_封茗囧菌_聊天_无弹幕_抖音.mp4")
         history = UploadHistory(self.root / "history.db")
         uploader = BiliUploader(cookie="SESSDATA=fake; bili_jct=csrf", history=history)
         config = {"tid": 138, "copyright": 1}
@@ -284,7 +284,7 @@ class LivePollingTests(unittest.TestCase):
             page.deleteLater()
             self.qt.processEvents()
 
-    def test_organize_auto_upload_groups_same_date_after_verified_migration(self):
+    def test_organize_migrates_without_upload_even_when_auto_enabled(self):
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(cm, "get_config_dir", return_value=Path(folder) / "config"):
             root = Path(folder)
@@ -308,18 +308,11 @@ class LivePollingTests(unittest.TestCase):
                 self.qt.processEvents()
             page._scan()
             wait()
-            posted = []
-            def run(paths, config):
-                self.assertTrue(all(Path(path).is_file() for path in paths))
-                self.assertTrue(all(time.time_ns() - Path(path).stat().st_mtime_ns > 30 * 10**9 for path in paths))
-                posted.append(paths)
-                return {"title": build_metadata(paths, config)["title"], "state": "published"}
-            uploader = SimpleNamespace(run=run, close=lambda: None)
             with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
-                 patch("toolbox.bili_upload.BiliUploader", return_value=uploader):
+                 patch("toolbox.bili_upload.BiliUploader") as uploader:
                 page._execute()
                 wait()
-            self.assertEqual([len(paths) for paths in posted], [2, 1])
+                uploader.assert_not_called()
             self.assertFalse(list(source.glob("*.mp4")))
             self.assertEqual(len(page._migrated_videos), 3)
             page.close()

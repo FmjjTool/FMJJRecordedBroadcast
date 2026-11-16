@@ -20,7 +20,7 @@ from pathlib import Path
 import threading
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
@@ -319,20 +319,21 @@ class RenamePage(BasePage):
         for t in get_rename_config().live_types:
             it = QListWidgetItem(f"[ ] {t}")
             it.setData(Qt.UserRole, t)
-            it.setForeground(QColor("#888888"))
             self.type_list.addItem(it)
 
     def _rebuild_platform_radios(self):
+        cfg = get_rename_config()
+        current = self._current_platform() or cfg.default_platform
         # 清除旧按钮
         while self.platform_layout.count():
             item = self.platform_layout.takeAt(0)
             wgt = item.widget()
             if wgt:
+                if isinstance(wgt, QRadioButton):
+                    self.platform_group.removeButton(wgt)
                 wgt.deleteLater()
-        cfg = get_rename_config()
         if not cfg.platform_list:
             cfg.platform_list = ["抖音"]
-        current = self._current_platform()
         if current not in cfg.platform_list:
             current = cfg.platform_list[0]
         for p in cfg.platform_list:
@@ -351,10 +352,9 @@ class RenamePage(BasePage):
             if t in self.type_order:
                 idx = self.type_order.index(t) + 1
                 item.setText(f"[{idx}] {t}")
-                item.setForeground(QColor("#1976d2"))
             else:
                 item.setText(f"[ ] {t}")
-                item.setForeground(QColor("#888888"))
+            item.setData(Qt.ForegroundRole, None)
 
     def _on_type_click(self, tname):
         """点击切换选中，按顺序排列"""
@@ -400,7 +400,8 @@ class RenamePage(BasePage):
         if not (0 <= self.current_video_idx < len(self.current_videos)):
             return
         filename = os.path.basename(self.current_videos[self.current_video_idx])
-        if self._is_standard_named(filename):
+        path = self.current_videos[self.current_video_idx]
+        if self._is_standard_named(filename) and path not in self._metadata_failed:
             self._skip_video()
         else:
             self._do_rename()
@@ -456,6 +457,8 @@ class RenamePage(BasePage):
             return
 
         self.current_folder = folder_path
+        self.confirm_btn.setEnabled(False)
+        self.skip_btn.setEnabled(False)
         # 列出视频文件到下方列表
         self.current_videos = []
         for f in sorted(os.listdir(folder_path)):
@@ -537,18 +540,17 @@ class RenamePage(BasePage):
         # 高亮当前文件
         for i in range(self.file_list.count()):
             it = self.file_list.item(i)
-            if i == self.current_video_idx:
-                it.setBackground(QColor("#d8e7f6"))
-                it.setForeground(QColor("#174a78"))
-            else:
-                it.setBackground(QColor("transparent"))
-                it.setForeground(QColor("#2f3440"))
+            it.setData(Qt.BackgroundRole, None)
+            it.setData(Qt.ForegroundRole, None)
+        self.file_list.setCurrentRow(self.current_video_idx)
         self.file_list.scrollToItem(
             self.file_list.item(self.current_video_idx) if self.current_video_idx < self.file_list.count() else None)
 
         # 后台获取视频信息 + 截图
         token = object()
         self._load_token = token
+        self._thumb_pm = None
+        self.thumb_label.clear()
         self.video_info_label.setText(f"📄 {filename}\n⏱ 加载中...")
 
         def work():
@@ -605,30 +607,35 @@ class RenamePage(BasePage):
         if not enabled or not info:
             return True, ""
         path = Path(filepath)
-        before = path.stat()
         try:
+            from toolbox.organize_engine import _locked_reader
             with tempfile.TemporaryDirectory(prefix=".fmjj-meta-", dir=path.parent) as directory:
                 temporary = Path(directory) / ("video" + path.suffix)
-                cmd = [find_ffmpeg_exe(), "-y", "-i", str(path), "-map", "0", "-c", "copy",
-                       "-metadata", f"copyright={info}", "-hide_banner", "-loglevel", "error"]
-                if path.suffix.lower() in (".mp4", ".mov", ".m4v"):
-                    cmd += ["-movflags", "+faststart"]
-                cmd.append(str(temporary))
-                result = subprocess.run(cmd, capture_output=True, timeout=120)
-                if result.returncode or not temporary.is_file() or not temporary.stat().st_size:
-                    return False, "FFmpeg 元数据写入失败，原视频已保留"
-                if get_video_info(str(temporary)).get("error"):
-                    return False, "元数据产物无法解析，原视频已保留"
+                with _locked_reader(path):
+                    before = path.stat()
+                    cmd = [find_ffmpeg_exe(), "-y", "-i", str(path), "-map", "0", "-c", "copy",
+                           "-metadata", f"copyright={info}", "-hide_banner", "-loglevel", "error"]
+                    if path.suffix.lower() in (".mp4", ".mov", ".m4v"):
+                        cmd += ["-movflags", "+faststart"]
+                    cmd.append(str(temporary))
+                    result = subprocess.run(cmd, capture_output=True, timeout=120)
+                    if result.returncode or not temporary.is_file() or not temporary.stat().st_size:
+                        return False, "FFmpeg 元数据写入失败，原视频已保留"
+                    if get_video_info(str(temporary)).get("error"):
+                        return False, "元数据产物无法解析，原视频已保留"
+                    # Windows 的 fsync 要求可写句柄；只同步临时产物。
+                    with open(temporary, "r+b") as stream:
+                        os.fsync(stream.fileno())
+                    os.utime(temporary, ns=(before.st_atime_ns, before.st_mtime_ns))
+                # Windows 替换目标前必须释放自己的读锁，再核对来源是否变化。
                 current = path.stat()
-                if (current.st_size, current.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+                if (current.st_size, current.st_mtime_ns, current.st_ino) != (
+                        before.st_size, before.st_mtime_ns, before.st_ino):
                     return False, "元数据处理期间原视频变化，原视频已保留"
-                with open(temporary, "rb") as stream:
-                    os.fsync(stream.fileno())
-                os.utime(temporary, ns=(before.st_atime_ns, before.st_mtime_ns))
                 os.replace(temporary, path)
                 return True, "版权信息已写入"
         except Exception as error:
-            return False, f"元数据处理失败（{type(error).__name__}），原视频已保留"
+            return False, f"元数据处理失败（{type(error).__name__}: {error}），原视频已保留"
 
     def _skip_video(self):
         """跳过当前视频，加载下一个；未标准命名的跳过项不会被自动投稿。"""
@@ -712,7 +719,8 @@ class RenamePage(BasePage):
     def _set_busy(self, busy):
         self._busy = busy
         for widget in (self.folder_list, self.file_list, self.account_list, self.type_list,
-                       self.auto_upload, self.post_settings_btn, self.post_btn):
+                       self.auto_upload, self.post_settings_btn, self.post_btn, self.sub_tabs,
+                       self.rename_extra_check):
             widget.setEnabled(not busy)
         self.confirm_btn.setEnabled(not busy and self.current_video_idx < len(self.current_videos))
         self.skip_btn.setEnabled(not busy and self.current_video_idx < len(self.current_videos))
@@ -763,13 +771,16 @@ class RenamePage(BasePage):
             if message:
                 self._log(message)
             if metadata_ok:
+                self._metadata_failed.discard(src)
                 self._metadata_failed.discard(dst)
             else:
                 self._metadata_failed.add(dst)
-                self._load_current()
-                return
+                self._log("自动投稿已暂停。可按 Enter 重试；如不需要版权处理，取消勾选后再确认。")
             if root != self.app.work_dir:
                 self._refresh()
+                return
+            if not metadata_ok:
+                self._load_current()
                 return
             self.current_video_idx = index + 1
             self._load_current()
@@ -806,6 +817,11 @@ class RenamePage(BasePage):
             return
         config = {**BU.DEFAULTS, **BU.load_settings().get("upload", {}), "date": ""}
         try:
+            actual = {str(path) for path in Path(self.current_folder).iterdir()
+                      if path.is_file() and is_video_file(str(path))
+                      and path.name.lower().endswith(self.rename_config.video_suffix)}
+            if actual != set(paths):
+                raise ValueError("文件夹的视频已变化，请重新选择文件夹完成重命名")
             BU.validate_renamed_videos(paths)
             metadata = BU.build_metadata(paths, config)
             signature = tuple((path, Path(path).stat().st_size, Path(path).stat().st_mtime_ns) for path in paths)
@@ -832,6 +848,9 @@ class RenamePage(BasePage):
             else:
                 state = "已投稿，等待审核" if result["state"] == "published" else "已上传未投稿"
                 self._log(f"{state}：{result.get('bvid') or result.get('aid') or result['task']}")
+            if self._loaded_root != self.app.work_dir:
+                self._refresh()
+                return
             self.confirm_btn.setEnabled(False)
             self.skip_btn.setEnabled(False)
         run_bg(work, done, owner=self)
@@ -1087,6 +1106,9 @@ class RenamePage(BasePage):
             self._lazy_load()
         if self._loaded_root != self.app.work_dir or not self.folders:
             self._refresh()
+
+    def on_theme_changed(self):
+        self._refresh_type_labels()
 
     def shutdown(self):
         self._post_cancel.set()
