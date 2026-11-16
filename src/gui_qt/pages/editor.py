@@ -106,6 +106,31 @@ class _SeekSlider(QSlider):
 
 
 class EditorPage(BasePage):
+    SESSION_FIELDS = ("files", "current_path", "segments", "detect_points")
+
+    def restore_session_data(self):
+        segments = self.segments
+        points = self.detect_points
+        current = self.current_path
+        self._refresh_files(self.files.index(current) if current in self.files else 0)
+        self.segments = segments
+        self.detect_points = points
+        self._refresh_segments()
+
+    def has_active_tasks(self):
+        return self.running
+
+    def release_view_resources(self):
+        self.player.stop()
+        self.player.setSource(QUrl())
+        self.video.hide()
+
+    def on_show(self):
+        if self.current_path:
+            self.video.show()
+            self.player.setSource(QUrl.fromLocalFile(self.current_path))
+            self.player.pause()
+
     def __init__(self, app):
         super().__init__(app)
         self.files: List[str] = []

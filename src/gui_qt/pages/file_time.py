@@ -82,6 +82,10 @@ def parse_time_from_name(name: str) -> tuple[float, float, float] | None:
 
 
 class FileTimePage(BasePage):
+    def restore_session_data(self):
+        self.files = [p for p in self.files if os.path.isfile(p)]
+        self._render()
+
     def __init__(self, app):
         super().__init__(app)
         self.files: list[str] = []

@@ -25,6 +25,7 @@ class TabbedPage(BasePage):
         self._factories = []
         self._hosts = []
         self._pages = []
+        self._child_states = {}
         self._current_index = -1
         self._current = None
 
@@ -73,6 +74,8 @@ class TabbedPage(BasePage):
             page = self._factories[index](self._app)
             self._pages[index] = page
             self._hosts[index].layout().addWidget(page)
+            from gui_qt.page_lifecycle import restore_page_state
+            restore_page_state(page, self._child_states.pop(("_pages", index), None))
         return page
 
     def _on_tab_changed(self, index):
@@ -93,6 +96,17 @@ class TabbedPage(BasePage):
         self._current_index = self.tabs.currentIndex()
         self._current = page
         self._call(page, "on_show")
+
+    def saved_child_states(self):
+        return self._child_states
+
+    def restore_child_state(self, path, state):
+        self._child_states[path] = state
+
+    def release_view_resources(self):
+        for page in self._pages:
+            if page is not None:
+                self._call(page, "release_view_resources")
 
     def on_hide(self):
         for page in self._pages:
@@ -178,4 +192,4 @@ class MusicSearchDownloadPage(TabbedPage):
         super().__init__(app, [
             ("🎵 音乐信息获取", MusicInfoPage),
             ("🎧 音乐下载", NeteasePage),
-        ])
+        ], lazy=True)

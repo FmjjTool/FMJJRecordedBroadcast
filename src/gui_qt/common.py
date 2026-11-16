@@ -5,6 +5,8 @@
 
 import re
 import threading
+import functools
+from collections import Counter
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 
@@ -63,12 +65,88 @@ THREAD_OPTIONS = ["2", "4", "8", "16", "32", "64"]
 
 # ==================== 后台线程 ====================
 
-def run_bg(fn, on_done):
+class BackgroundTasks:
+    """主程序级任务租约；业务完成和主线程回调完成之后才释放宿主。"""
+
+    def __init__(self):
+        self._owners = Counter()
+        self._lock = threading.RLock()
+
+    def acquire(self, owners):
+        with self._lock:
+            self._owners.update(owners)
+
+    def release(self, owners):
+        with self._lock:
+            for owner in owners:
+                self._owners[owner] -= 1
+                if self._owners[owner] <= 0:
+                    del self._owners[owner]
+
+    def has_owner(self, owner):
+        with self._lock:
+            return self._owners.get(owner, 0) > 0
+
+
+TASKS = BackgroundTasks()
+
+
+def _callback_pages(*callbacks):
+    """识别绑定方法、闭包、默认参数及 partial 中的页面引用。"""
+    from gui_qt.pages.base import BasePage
+    seen, pages = set(), set()
+
+    def visit(value, depth=0):
+        if value is None or id(value) in seen or depth > 6:
+            return
+        seen.add(id(value))
+        if isinstance(value, BasePage):
+            pages.add(value)
+        elif isinstance(value, functools.partial):
+            visit(value.func, depth + 1)
+            for item in value.args:
+                visit(item, depth + 1)
+            for item in (value.keywords or {}).values():
+                visit(item, depth + 1)
+        elif callable(value):
+            visit(getattr(value, "__self__", None), depth + 1)
+            for item in getattr(value, "__defaults__", None) or ():
+                visit(item, depth + 1)
+            for item in (getattr(value, "__kwdefaults__", None) or {}).values():
+                visit(item, depth + 1)
+            for cell in getattr(value, "__closure__", None) or ():
+                try:
+                    visit(cell.cell_contents, depth + 1)
+                except ValueError:
+                    pass
+
+    for callback in callbacks:
+        visit(callback)
+    return tuple(pages)
+
+
+def _callbacks_alive(owners):
+    from shiboken6 import isValid
+    return all(not p._disposed and isValid(p) for p in owners)
+
+def run_bg(fn, on_done, *, owner=None):
     """后台线程执行 fn()，完成后回主线程调用 on_done(result, err)。
 
     信号在 import 时已连接好（QueuedConnection 语义：后台线程 emit 自动排队到主线程），
     每次调用只 emit 携带回调的信号，不再动态 connect/disconnect。
     """
+    owners = _callback_pages(fn, on_done, owner)
+    if not _callbacks_alive(owners):
+        return None
+    TASKS.acquire(owners)
+
+    def done(result, err):
+        try:
+            if _callbacks_alive(owners) and on_done is not None:
+                on_done(result, err)
+        finally:
+            TASKS.release(owners)
+
     def _w():
         result = None
         err = None
@@ -77,19 +155,43 @@ def run_bg(fn, on_done):
         except Exception as e:  # noqa: BLE001
             err = str(e)
         try:
-            _bg_bridge.done.emit(on_done, result, err)
+            _bg_bridge.done.emit(done, result, err)
         except Exception:
-            pass
+            TASKS.release(owners)
 
-    threading.Thread(target=_w, daemon=True).start()
+    thread = threading.Thread(target=_w, daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        TASKS.release(owners)
+        raise
+    return thread
+
+
+def start_page_thread(owner, target, args=()):
+    """原生工作线程统一交给任务管理，切页不终止任务。"""
+    return run_bg(lambda: target(*args), None, owner=owner)
 
 
 def post_to_main(fn, *args):
     """把 fn(*args) 调度到主线程执行（跨线程安全，用于进度更新等轻量回调）。"""
-    if args:
-        _main_bridge.call.emit(lambda: fn(*args))
-    else:
-        _main_bridge.call.emit(fn)
+    owners = _callback_pages(fn)
+    if not _callbacks_alive(owners):
+        return
+    TASKS.acquire(owners)
+
+    def invoke():
+        try:
+            if _callbacks_alive(owners):
+                fn(*args)
+        finally:
+            TASKS.release(owners)
+
+    try:
+        _main_bridge.call.emit(invoke)
+    except Exception:
+        TASKS.release(owners)
+        raise
 
 
 # ==================== 定时采集（Windows 计划任务） ====================

@@ -211,9 +211,9 @@ class WechatArticlePage(BasePage):
         from gui_qt.download_float import get_float
         card = get_float().add_batch("公众号解析", total=len(urls), threads=1,
                                      cancel_cb=self._cancel_run)
-        threading.Thread(
-            target=self._worker, args=(urls, formats, self._current_out_dir(), card),
-            daemon=True).start()
+        from gui_qt.common import start_page_thread
+        start_page_thread(self, self._worker,
+                          (urls, formats, self._current_out_dir(), card))
 
     def _cancel_run(self):
         self._cancel = True

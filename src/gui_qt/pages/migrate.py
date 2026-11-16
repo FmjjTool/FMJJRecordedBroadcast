@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
-from gui_qt.common import post_to_main
+from gui_qt.common import post_to_main, start_page_thread
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import DATE_FOLDER_RE
 
@@ -86,6 +86,12 @@ def _folder_stats(full: str):
 
 
 class MigratePage(BasePage):
+    SESSION_FIELDS = ("pending", "duplicates", "target_dir")
+
+    def restore_session_data(self):
+        if self.pending:
+            self._scan()
+
     def __init__(self, app):
         super().__init__(app)
         self.pending = []       # 待迁移的日期文件夹名列表
@@ -334,7 +340,7 @@ class MigratePage(BasePage):
         self.log_text.clear()
         self.duplicates = []
         # 后台线程执行迁移，避免大文件操作阻塞 UI
-        threading.Thread(target=self._migrate_worker, args=(mode, checked), daemon=True).start()
+        start_page_thread(self, self._migrate_worker, (mode, checked))
 
     def _migrate_worker(self, mode, folders):
         """后台线程：执行迁移（文件操作不阻塞界面）。"""

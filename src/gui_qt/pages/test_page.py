@@ -169,6 +169,10 @@ class TestPage(BasePage):
 
     def __init__(self, app):
         super().__init__(app)
+        self._ui_visible = False
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(1000)
+        self._clock_timer.timeout.connect(self._tick)
         self.connected = False
         self._timer_running = False
         self._start_ts = None
@@ -1645,6 +1649,9 @@ class TestPage(BasePage):
         """后台下载直播间封面（无封面用主播头像），显示到左栏。"""
         if not url:
             return
+        self._cover_url = url
+        if not self._ui_visible:
+            return
         import httpx
 
         def work():
@@ -1659,6 +1666,8 @@ class TestPage(BasePage):
             if err or not data:
                 return
             self._cover_bytes = data
+            if not self._ui_visible:
+                return
             pix = QPixmap()
             if not pix.loadFromData(data):
                 return
@@ -2297,6 +2306,8 @@ class TestPage(BasePage):
         self._event_log.append(text)
         if len(self._event_log) > 4000:
             self._event_log = self._event_log[-2000:]
+        if not self._ui_visible:
+            return
         if self._event_visible(text):
             self._append(self.event_box, text)
         self._update_event_count()
@@ -2356,6 +2367,8 @@ class TestPage(BasePage):
         self._chat_log.append({"ts": ts, "kind": kind, "m": m, "text": text})
         if len(self._chat_log) > 8000:
             self._chat_log = self._chat_log[-4000:]
+        if not self._ui_visible:
+            return
         urls = self._chat_urls(kind, m)
         if self._chat_filter and self._chat_match(self._chat_log[-1], self._chat_filter) \
                 and self._chat_kind_visible(kind):
@@ -2477,6 +2490,8 @@ class TestPage(BasePage):
             self.search_entry.setText("@" + nick)   # textChanged → 防抖后自动筛选
 
     def _append_rich(self, box, urls, build, timeout=6.0):
+        if not self._ui_visible:
+            return
         """带图片的富文本消息：全部图片已缓存 → 立即渲染（缓存套用零延迟）；
         有缺图 → 入队等后台下载，就绪/超时后按到达顺序渲染（缺图按文字占位）。"""
         urls = [u for u in urls if u and str(u).startswith("http")]
@@ -2510,6 +2525,9 @@ class TestPage(BasePage):
         self._img_flush()
 
     def _img_flush(self):
+        if not self._ui_visible:
+            self._img_pending.clear()
+            return
         """按到达顺序渲染已就绪/已超时的排队消息；仍有缺口时安排下一轮下载/冲刷。"""
         now = time.time()
         while self._img_pending:
@@ -2594,6 +2612,8 @@ class TestPage(BasePage):
             self._refresh_gift_rank()
 
     def _refresh_gift_rank(self):
+        if not self._ui_visible:
+            return
         items = sorted(self._gift_rank.items(),
                        key=lambda kv: (-kv[1]["totalValue"], -kv[1]["giftCount"], kv[0]))
         self.gift_table.setRowCount(0)
@@ -2779,8 +2799,12 @@ class TestPage(BasePage):
         post_to_main(apply)
 
     def _tick(self):
+        if not self._ui_visible:
+            self._clock_timer.stop()
+            return
         if not self.connected:
             self._timer_running = False
+            self._clock_timer.stop()
             return
         elapsed = int(time.time() - self._start_ts)
         h, rem = divmod(elapsed, 3600)
@@ -2788,7 +2812,8 @@ class TestPage(BasePage):
         self.timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
         # 左侧时间实时同步（北京时间）
         self.now_label.setText(time.strftime("%Y-%m-%d %H:%M:%S"))
-        QTimer.singleShot(1000, self._tick)
+        if not self._clock_timer.isActive():
+            self._clock_timer.start()
 
     def _clear_all(self):
         """清空内容：清除界面上所有临时内容（弹幕/打赏榜/统计/主播信息/封面/计时/本场快照），
@@ -2832,12 +2857,16 @@ class TestPage(BasePage):
         self.cover_label.setText("暂无封面")
 
     def _append(self, box, text):
+        if not self._ui_visible:
+            return
         box.appendPlainText(text)
         if self.settings.get("keep_scroll", True):
             sb = box.verticalScrollBar()
             sb.setValue(sb.maximum())
 
     def _append_html(self, box, html_str):
+        if not self._ui_visible:
+            return
         sb = box.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 8
         box.append(html_str)
@@ -2847,6 +2876,19 @@ class TestPage(BasePage):
     # ======================== 页面生命周期（全局同步：进自动启 / 出自动停） ========================
     def on_show(self):
         """切到本页：上次因切走被自动断开（且有房间号）→ 自动重连。"""
+        self._ui_visible = True
+        self._countdown_timer.start(1000)
+        self._apply_chat_filter()
+        self._apply_event_filter()
+        self._refresh_gift_rank()
+        self._tick()
+        if getattr(self, "_cover_url", None) and not self._cover_bytes:
+            self._set_cover(self._cover_url)
+        elif getattr(self, "_cover_bytes", None):
+            pix = QPixmap()
+            if pix.loadFromData(self._cover_bytes):
+                self.cover_label.setPixmap(pix.scaled(
+                    96, 96, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
         # 备注信息可能已在弹幕姬设置弹窗里改过 → 每次切回刷新
         self.refresh_remark_info()
         if self.connected or self.fetcher:
@@ -2866,13 +2908,40 @@ class TestPage(BasePage):
     def on_hide(self):
         """切离本页：连接中弹幕抓取与统计保持后台运作（WS 握手后不占 Cookie），
         仅停 UI 渲染（回放视频）；未连接才全停。"""
-        if self.connected or self.fetcher:
+        self._ui_visible = False
+        self._clock_timer.stop()
+        self._countdown_timer.stop()
+        self.release_view_resources()
+        if self.has_critical_services():
             self._stop_replay()
             return
         self.shutdown()
 
+    def has_critical_services(self):
+        return bool(self.connected or self.fetcher or self.stats_collector
+                    or (self._poll_timer and self._poll_timer.isActive()))
+
+    def release_view_resources(self):
+        # 替换文档才能释放 QTextBrowser 内的解码图片缓存；记录和礼物榜留在业务数据中。
+        from PySide6.QtGui import QTextDocument
+        from shiboken6 import isValid
+        self._stop_replay()
+        for box in (self.chat_gift_box, self.event_box):
+            old = box.document()
+            box.setDocument(QTextDocument(box))
+            if isValid(old):
+                old.deleteLater()
+        self.gift_table.setRowCount(0)
+        self.cover_label.clear()
+        self._img_pending.clear()
+        for timer in (self._search_timer, self._event_search_timer):
+            timer.stop()
+
     def shutdown(self):
         """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。"""
+        self._ui_visible = False
+        self._clock_timer.stop()
+        self._countdown_timer.stop()
         was_active = self.connected or self.fetcher or self.video_player
         self._stop_replay()
         if self.connected or self.fetcher or self.stats_collector:

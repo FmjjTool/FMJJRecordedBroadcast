@@ -528,8 +528,20 @@ class LocalWikiPage(BasePage):
         """)
 
     def on_show(self):
+        self._timer.start(5000)
         self._reload_docs()
         self._refresh_status()
+
+    def on_hide(self):
+        self._timer.stop()
+
+    def has_critical_services(self):
+        return self.service.running
+
+    def release_view_resources(self):
+        # 服务不依赖管理页日志；隐藏期间只保留有限文本，不继续轮询站点。
+        self._timer.stop()
+        self.log_view.clear()
 
     def _reload_docs(self):
         current = self.doc_combo.currentData()

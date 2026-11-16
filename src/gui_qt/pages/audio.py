@@ -34,13 +34,19 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size, is_video_file
 
 from gui_qt.asr_settings_dialog import AsrSettingsDialog
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import post_to_main, run_bg, start_page_thread
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 from gui_qt.toolbox_common import count_date_subfolders
 
 
 class AudioPage(BasePage):
+    SESSION_FIELDS = ("videos", "external_paths")
+
+    def restore_session_data(self):
+        self._render_file_checks(self.videos)
+        self._refresh_start_btn()
+
     def __init__(self, app):
         super().__init__(app)
         self.videos = []
@@ -492,7 +498,7 @@ class AudioPage(BasePage):
         self.log_text.clear()
         suffix = "（含字幕）" if asr_enabled else ""
         self._log(f"🎵 开始提取音频{suffix}（{len(to_process)} 个文件）...")
-        threading.Thread(target=self._extract_thread, daemon=True).start()
+        start_page_thread(self, self._extract_thread)
 
     def _stop(self):
         self.running = False

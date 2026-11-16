@@ -450,7 +450,8 @@ class NeteasePage(BasePage):
                 pass
 
         import threading
-        threading.Thread(target=load, daemon=True).start()
+        from gui_qt.common import start_page_thread
+        start_page_thread(self, load)
         return lbl
 
     # ===================== 搜索/解析入口 =====================

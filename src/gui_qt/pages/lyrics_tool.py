@@ -16,6 +16,19 @@ from gui_qt.row_widgets import RowCheckList
 
 
 class LyricsToolPage(BasePage):
+    SESSION_FIELDS = ("input_files", "krcd_files", "work_dir", "krcd_mode")
+
+    def restore_session_data(self):
+        self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件")
+        for path in self.krcd_files:
+            item = QListWidgetItem(os.path.basename(path))
+            item.setData(Qt.UserRole, path)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.krcd_list.addItem(item)
+        self.krcd_count.setText(f"已选择 {len(self.krcd_files)} 个文件")
+
+
     SUPPORTED_EXTS = {'.lrc', '.krc', '.ksc', '.qrc', '.trc', '.elrc'}
     OUTPUT_FORMATS = [("纯文字 TXT", "txt"), ("LRC", "lrc"), ("SRT", "srt"), ("ASS", "ass"), ("KSC 逐字", "ksc")]
 

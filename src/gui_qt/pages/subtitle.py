@@ -20,6 +20,11 @@ from gui_qt.row_widgets import RowCheckList
 
 
 class SubtitlePage(BasePage):
+    SESSION_FIELDS = ("input_files",)
+
+    def restore_session_data(self):
+        self._refresh_list()
+
     EXTS = {'.bcc', '.json', '.ass', '.srt', '.txt'}
     FORMATS = [("纯文字TXT", "text"), ("带时间轴TXT", "timed_text"),
                ("LRC", "lrc"), ("ASS", "ass"), ("SRT", "srt")]

@@ -752,6 +752,37 @@ class CropInputDialog(QDialog):
 
 # ==================== 页面 ====================
 class ImageCropPage(BasePage):
+    SESSION_FIELDS = ("_session_slots", "_active", "_slot_seq")
+
+    def prepare_session_state(self):
+        self._session_slots = [dict(sid=s.sid, path=s.path, crop=s.crop.copy(),
+                                    display_crop=s.display_crop.copy(), history=s.history,
+                                    history_index=s.history_index) for s in self._slots]
+
+    def restore_session_data(self):
+        records = getattr(self, "_session_slots", [])
+        active = self._active
+
+        def work():
+            return [(r, QImage(r["path"])) for r in records]
+
+        def done(result, err):
+            if err:
+                return
+            self._slots = [ImageSlot(
+                sid=r["sid"], path=r["path"], name=os.path.basename(r["path"]),
+                ext=os.path.splitext(r["path"])[1].lower(), image=img,
+                crop=r["crop"], display_crop=r["display_crop"],
+                history=r["history"], history_index=r["history_index"])
+                for r, img in result if not img.isNull()]
+            self._rebuild_list()
+            if self._slots:
+                self._select_slot(max(0, min(active, len(self._slots) - 1)))
+            self._sync_ui()
+
+        if records:
+            run_bg(work, done)
+
     def __init__(self, app):
         super().__init__(app)
         self._slots: list[ImageSlot] = []

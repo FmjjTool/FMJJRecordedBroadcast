@@ -357,6 +357,13 @@ class _XlsxDialog(QDialog):
 # ==================== 页面 ====================
 
 class MusicTagPage(BasePage):
+    SESSION_FIELDS = ("_rows", "_edit_targets", "_pending_encrypted")
+
+    def restore_session_data(self):
+        selected = {self._rows[i]["path"] for i in self._edit_targets
+                    if 0 <= i < len(self._rows)}
+        self._rebuild_table(selected)
+
     def __init__(self, app):
         super().__init__(app)
         self._rows: list[dict] = []

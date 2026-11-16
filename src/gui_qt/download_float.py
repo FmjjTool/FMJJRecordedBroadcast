@@ -14,7 +14,11 @@
 事件协议与 DownloadPanel 一致：plan / start / bytes / seg / done / skip。
 """
 
+import threading
+import weakref
+
 from PySide6.QtCore import QEvent, Qt, QTimer
+from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
@@ -22,6 +26,75 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import icon_btn_style, post_to_main
 from gui_qt.download_panel import DownloadPanel
+
+
+class DownloadBatch:
+    """无控件的下载批次，线程只持有它；窗口卸载不影响下载和取消状态。"""
+
+    def __init__(self, source, cancel_cb=None):
+        self.source = source
+        self._cancel_cb = cancel_cb
+        self._finished = False
+        self.summary = ""
+        self.dismissed = False
+        self._events = []
+        self._progress = {}
+        self._view = None
+        self._lock = threading.RLock()
+        self._version = 0
+
+    def plan(self, total, threads):
+        if total:
+            self.handle_event("plan", "parallel", int(total), max(1, int(threads)))
+
+    def handle_event(self, event, *args):
+        with self._lock:
+            if self._finished:
+                return
+            if event in ("bytes", "seg"):
+                # 高频进度只保存每个文件/分段的最新值，不累积每个网络包。
+                self._progress[(event, args[0] if args else None)] = (event, args)
+            else:
+                self._events.extend(self._progress.values())
+                self._progress.clear()
+                self._events.append((event, args))
+            self._version += 1
+            post_to_main(self._render_event, self._version, event, args)
+
+    def _render_event(self, version, event, args):
+        card = self._view() if self._view else None
+        if card is not None and isValid(card) and version > card._batch_version:
+            card._batch_version = version
+            card.handle_event(event, *args)
+
+    def attach(self, card):
+        with self._lock:
+            self._view = weakref.ref(card)
+            events = [*self._events, *self._progress.values()]
+            card._batch_version = self._version
+        for event, args in events:
+            card.handle_event(event, *args)
+        if self._finished:
+            card._set_summary(self.summary)
+
+    def finish(self, text):
+        with self._lock:
+            self.summary = text
+            self._finished = True
+            self._cancel_cb = None
+        post_to_main(self._render_finish)
+
+    def _render_finish(self):
+        card = self._view() if self._view else None
+        if card is not None and isValid(card):
+            card._set_summary(self.summary)
+
+    def cancel(self):
+        if self._cancel_cb is not None:
+            self._cancel_cb()
+
+
+_BATCHES = []
 
 
 class BatchCard(QFrame):
@@ -32,6 +105,7 @@ class BatchCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self._cancel_cb = cancel_cb
         self._finished = False   # finish() 后置 True（下载中心据此自动收起）
+        self.batch = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 8)
@@ -111,6 +185,8 @@ class BatchCard(QFrame):
         while parent is not None and not isinstance(parent, DownloadFloatWindow):
             parent = parent.parent()
         if isinstance(parent, DownloadFloatWindow):
+            if self.batch is not None:
+                self.batch.dismissed = True
             parent.remove_card(self)
 
 
@@ -128,6 +204,7 @@ class DownloadFloatWindow(QWidget):
 
     def __init__(self, main_window=None):
         super().__init__(main_window)
+        self._unloading = False
         if main_window is None:
             # 极少数没有主窗口的场景（离屏脚本）→ 退化为独立无边框浮窗
             self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
@@ -176,7 +253,7 @@ class DownloadFloatWindow(QWidget):
         tclose.setFixedSize(24, 22)
         tclose.setStyleSheet(icon_btn_style(False))
         tclose.setToolTip("隐藏浮窗（下载继续后台进行）")
-        tclose.clicked.connect(self.hide)
+        tclose.clicked.connect(self.close)
         tlay.addWidget(tclose)
         root.addWidget(self._title_bar)
 
@@ -199,21 +276,47 @@ class DownloadFloatWindow(QWidget):
         self.setStyleSheet(
             "DownloadFloatWindow { background: palette(window);"
             " border: 1px solid palette(shadow); border-radius: 10px; }")
+        for batch in _BATCHES:
+            if not batch.dismissed:
+                self._add_card(batch)
+
+    def _add_card(self, batch):
+        card = BatchCard(batch.source, cancel_cb=batch.cancel if batch._cancel_cb else None,
+                         parent=self)
+        card.batch = batch
+        self._cards_lay.insertWidget(0, card)
+        batch.attach(card)
+        return card
+
+    def closeEvent(self, event):
+        global _FLOAT
+        self._unloading = True
+        if self._main_window is not None:
+            self._main_window.removeEventFilter(self)
+        if _FLOAT is self:
+            _FLOAT = None
+        # 批次只有弱引用，窗口和进度条可以真正删除。
+        self.deleteLater()
+        super().closeEvent(event)
 
     # ==================== 对外（主线程） ====================
 
     def add_batch(self, source: str, total=None, threads: int = 1,
-                  cancel_cb=None) -> BatchCard:
+                  cancel_cb=None) -> DownloadBatch:
         """新建批次卡片并显示浮窗；返回卡片（handle_event 可跨线程调用）。"""
-        card = BatchCard(source, cancel_cb=cancel_cb, parent=self)
-        card.plan(total, threads)
-        self._cards_lay.insertWidget(0, card)
+        batch = DownloadBatch(source, cancel_cb=cancel_cb)
+        # 已结束批次只留少量汇总；活动任务不会随窗口/卡片关闭被移除。
+        finished = [b for b in _BATCHES if b._finished][-19:]
+        active = [b for b in _BATCHES if not b._finished]
+        _BATCHES[:] = [*finished, *active, batch]
+        batch.plan(total, threads)
+        self._add_card(batch)
         self._scroll.setVisible(True)
         self.show()
         self.raise_()
         self._apply_anchor()
         self._update_count()
-        return card
+        return batch
 
     def remove_card(self, card: BatchCard):
         self._cards_lay.removeWidget(card)
@@ -228,6 +331,8 @@ class DownloadFloatWindow(QWidget):
         QTimer.singleShot(self._AUTO_CLOSE_MS, self._auto_close_finished)
 
     def _auto_close_finished(self):
+        if self._unloading:
+            return
         cards = [self._cards_lay.itemAt(i).widget()
                  for i in range(self._cards_lay.count())]
         cards = [c for c in cards if isinstance(c, BatchCard)]
@@ -235,6 +340,8 @@ class DownloadFloatWindow(QWidget):
         if not cards or not all(getattr(c, "_finished", False) for c in cards):
             return
         for c in cards:
+            if c.batch is not None:
+                c.batch.dismissed = True
             self.remove_card(c)
 
     # ==================== 布局 / 拖动 / 缩放 ====================
@@ -243,7 +350,7 @@ class DownloadFloatWindow(QWidget):
         n = max(0, self._cards_lay.count() - 1)  # 减去底部 stretch
         self._count_label.setText(f"{n} 个批次" if n else "")
         if n == 0:
-            self.hide()
+            self.close()
 
     def _toggle_collapse(self):
         vis = not self._scroll.isVisible()
@@ -403,7 +510,7 @@ _FLOAT: DownloadFloatWindow | None = None
 def get_float() -> DownloadFloatWindow:
     """获取全局下载浮窗（首次调用时创建，挂到主窗口上）。必须主线程调用。"""
     global _FLOAT
-    if _FLOAT is None:
+    if _FLOAT is None or not isValid(_FLOAT):
         main_win = None
         for w in QApplication.topLevelWidgets():
             if isinstance(w, QMainWindow):

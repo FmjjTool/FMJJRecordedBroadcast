@@ -180,6 +180,11 @@ def apply_rules(stem: str, ext: str, cfg: dict, index: int, now: datetime) -> tu
 
 
 class RenameBatchPage(BasePage):
+    SESSION_FIELDS = ("files", "history", "cfg")
+
+    def session_restored(self):
+        self._collect()
+
     """zRenamer 风格批量重命名。"""
 
     def __init__(self, app):

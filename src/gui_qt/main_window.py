@@ -23,6 +23,7 @@ from gui_qt.navigation import line_icon, tool_icon_name
 from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
+from gui_qt.page_lifecycle import PageLifecycleManager, restore_page_state
 
 
 def _brand_icon_pixmap():
@@ -204,6 +205,8 @@ class MainWindow(QMainWindow):
 
         # 页面懒加载状态
         self.pages = {}
+        self.task_manager = common.TASKS
+        self.page_lifecycle = PageLifecycleManager(self)
         self.nav_buttons = {}
         self._search_buttons = {}
         self._tool_names = {"home": ("工作台", "总览")}
@@ -682,17 +685,12 @@ class MainWindow(QMainWindow):
         for k, btn in self._search_buttons.items():
             btn.setChecked(k == key)
 
-        # 退出旧页面钩子（全局同步：切走时停后台任务）
-        old_page = self.pages.get(self.current_page)
-        if old_page is not None and self.current_page != key and hasattr(old_page, "on_hide"):
-            try:
-                old_page.on_hide()
-            except Exception:
-                pass
-
-        # 懒加载
+        # 先准备目标页，失败时旧页面仍可使用；构造期任务自动获得宿主租约。
         if key not in self.pages:
-            page = _page_class(key)(self)
+            page = self.page_lifecycle.take(key)
+            if page is None:
+                page = _page_class(key)(self)
+                restore_page_state(page, self.page_lifecycle.states.pop(key, None))
             self.stack.addWidget(page)
             self.pages[key] = page
             if key == "info_tools" and hasattr(page, "tabs"):
@@ -700,9 +698,13 @@ class MainWindow(QMainWindow):
             # 功能型复选框：点击时右下角 toast「已开启/已关闭 XXX」
             common.bind_checkbox_toasts(page)
 
+        old_key = self.current_page
+        old_page = self.pages.get(old_key)
         page = self.pages[key]
         self.stack.setCurrentWidget(page)
         self.current_page = key
+        if old_page is not None and old_key != key:
+            self.page_lifecycle.leave(old_key, old_page)
         self._update_page_context()
         if key not in ("tasks", "global_settings") and not self.nav_search.text().strip():
             button = self.home_btn if key == "home" else self.nav_buttons.get(key)
@@ -724,6 +726,7 @@ class MainWindow(QMainWindow):
             page.on_show()
 
     def closeEvent(self, event):
+        self.page_lifecycle.shutdown()
         # 关闭窗口：对所有已加载页面触发全停（停抓取/录制/回放等）
         for page in self.pages.values():
             fn = getattr(page, "shutdown", None) or getattr(page, "on_hide", None)

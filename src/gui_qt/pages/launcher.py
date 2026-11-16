@@ -311,6 +311,10 @@ class LauncherPage(BasePage):
         """软件退出：跟随进程树的软件整树一并关闭（父关子关）。"""
         self._stop_all_linked_silent()
 
+    def has_active_tasks(self):
+        # 已启动的软件由主程序持有，销毁启动器界面不能顺带杀掉它们。
+        return any(proc.poll() is None for _job, proc in self._linked)
+
     def _stop_all_linked_silent(self):
         for job, proc in self._linked:
             if job is not None:
