@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,9 +20,11 @@ def get_app_root() -> Path:
 def _writable_dir(d: Path) -> bool:
     try:
         d.mkdir(parents=True, exist_ok=True)
-        probe = d / ".write_test"
-        probe.write_text("1", encoding="utf-8")
-        probe.unlink()
+        # 每次检查独占一个临时文件。共享 .write_test 会被其他线程删除，
+        # 将可写目录误判为不可写，使认证模块绑定到另一份 AppData 登录记录。
+        with tempfile.TemporaryFile(mode="w+b", prefix=".write_test-", dir=d) as probe:
+            probe.write(b"1")
+            probe.flush()
         return True
     except OSError:
         return False
@@ -30,7 +33,8 @@ def get_config_dir() -> Path:
     cfg_dir = get_app_root() / "config"
     if not _writable_dir(cfg_dir):
         # exe 旁不可写（如安装在 Program Files）→ 落到用户 AppData，保证 Cookie/配置可保存
-        base = Path(os.environ.get("APPDATA", "")) or (Path.home() / "AppData" / "Roaming")
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
         cfg_dir = base / "FengMingToolbox" / "config"
         cfg_dir.mkdir(parents=True, exist_ok=True)
     return cfg_dir

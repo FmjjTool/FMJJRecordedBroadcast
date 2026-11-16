@@ -224,6 +224,12 @@ class CookieManagerDialog(QDialog):
         self.on_changed = on_changed
 
         layout = QVBoxLayout(self)
+        # 只显示管理层实际绑定的路径，不迁移或导入另一处登录记录。
+        self.storage_location = QLabel(f"登录记录位置：{auth.COOKIE_FILE}")
+        self.storage_location.setWordWrap(True)
+        self.storage_location.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.storage_location.setToolTip("登录数据只从此位置读取；更新不会合并或覆盖其他位置的 Cookie。")
+        layout.addWidget(self.storage_location)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.container = QWidget()
