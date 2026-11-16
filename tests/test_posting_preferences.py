@@ -306,6 +306,51 @@ class PostingPreferencesTests(unittest.TestCase):
         self.assertEqual(dialog.selected_paths(), [str(second)])
         self.assertNotIn(first, [record["path"] for record in dialog._records])
 
+    def test_workspace_scan_merges_different_spellings_of_same_file(self):
+        first = self.video()
+        alias = first.replace("\\", "/")
+        dialog = self.dialog(paths=[alias])
+        self.enter(dialog)
+        self.assertEqual(dialog.files.count(), 1)
+        self.assertEqual(dialog.selected_paths(), [first])
+        self.assertTrue(dialog.multipart_hint.isHidden())
+        dialog.files.item(0).setCheckState(Qt.Unchecked)
+        dialog.load_workspace()
+        self.wait(lambda: not common.TASKS.has_owner(self.parent))
+        self.assertEqual(dialog.files.count(), 1)
+        self.assertEqual(dialog.selected_paths(), [])
+
+    def test_initial_list_and_picker_deduplicate_without_unblocking_failed_file(self):
+        first, second = self.video(), self.video(timecode="21-00-00")
+        alias = first.replace("\\", "/")
+        dot_path = str(Path(first).parent) + os.sep + "." + os.sep + Path(first).name
+        spellings = [first, alias, dot_path]
+        if os.name == "nt":
+            spellings.append(first.upper())
+        dialog = self.dialog(paths=spellings + [second], blocked_paths=[alias])
+        self.enter(dialog)
+        self.assertEqual(dialog.files.count(), 2)
+        self.assertEqual(dialog.selected_paths(), [second])
+        records = [{"path": path, "date": "20261116", "renamed": True} for path in spellings + [second]]
+        picker = VideoSelectionDialog(dialog, str(self.work), records, [alias, second], "20261116", [dot_path])
+        self.dialogs.append(picker)
+        self.assertEqual(picker.files.count(), 2)
+        self.assertEqual(picker.selected_paths(), [second])
+        first_item = picker.files.item(0)
+        self.assertFalse(first_item.flags() & Qt.ItemIsUserCheckable)
+
+    def test_different_files_with_same_name_remain_distinct(self):
+        first = self.video()
+        another_dir = self.work / "另一个来源" / "20261116"
+        another_dir.mkdir(parents=True)
+        second = another_dir / Path(first).name
+        second.write_bytes(b"different-video")
+        dialog = self.dialog(paths=[first])
+        self.enter(dialog)
+        self.assertEqual(dialog.files.count(), 2)
+        self.assertEqual(set(dialog.selected_paths()), {first, str(second)})
+        self.assertFalse(dialog.multipart_hint.isHidden())
+
     def test_beijing_today_uses_explicit_eight_hour_timezone(self):
         from datetime import datetime
         with patch("datetime.datetime") as fake:

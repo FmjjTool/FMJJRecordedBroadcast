@@ -20,7 +20,7 @@ class BiliUploadDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("B站视频上传 · 文案与分P预览")
         self.resize(820, 890)
-        self.paths = list(paths or [])
+        self.paths = BU.unique_video_paths(paths or [])
         self.work_dir = str(work_dir or getattr(getattr(parent, "app", None), "work_dir", ""))
         self.blocked_paths = set(blocked_paths)
         self._selected_day = BU.today_compact()
@@ -176,10 +176,12 @@ class BiliUploadDialog(QDialog):
             QTimer.singleShot(0, self.load_workspace)
 
     def set_video_list(self, records, checked):
+        records = BU.unique_video_records(records)
+        checked = {BU.video_path_key(path) for path in checked}
         self.files.blockSignals(True)
         self.files.clear()
         for record in records:
-            self.files.addItem(video_item(record, self.work_dir, record["path"] in checked, self.blocked_paths))
+            self.files.addItem(video_item(record, self.work_dir, BU.video_path_key(record["path"]) in checked, self.blocked_paths))
         self.files.blockSignals(False)
         self.refresh_preview()
 
@@ -219,9 +221,11 @@ class BiliUploadDialog(QDialog):
             if error:
                 self.status.setText("读取工作目录失败，请检查目录权限")
                 return
-            known = {record["path"] for record in records}
-            records += [record for record in self._records if record["path"] not in known and
-                        record["path"] in self.paths and Path(record["path"]).is_file()]
+            supplied = {BU.video_path_key(path) for path in self.paths}
+            retained = [record for record in self._records if
+                        BU.video_path_key(record["path"]) in supplied and Path(record["path"]).is_file()]
+            # 扫描用Path生成反斜杠路径，重命名页可能传入正斜杠路径；按文件标识合并。
+            records = BU.unique_video_records([*records, *retained])
             self._records = records
             if self.busy:
                 return

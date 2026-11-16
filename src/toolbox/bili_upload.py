@@ -37,6 +37,32 @@ def normalize_platform(value):
     return value if value in SOURCE_PLATFORMS else "抖子"
 
 
+def video_path_key(path):
+    """同一文件的路径标识，统一分隔符、相对段及Windows大小写。"""
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def unique_video_paths(paths):
+    result, seen = [], set()
+    for path in paths:
+        key = video_path_key(path)
+        if key not in seen:
+            seen.add(key)
+            result.append(str(Path(path)))
+    return result
+
+
+def unique_video_records(records):
+    """保留首条记录及顺序；扫描记录优先于旧的传入记录。"""
+    result, seen = [], set()
+    for record in records:
+        key = video_path_key(record["path"])
+        if key not in seen:
+            seen.add(key)
+            result.append({**record, "path": str(Path(record["path"]))})
+    return result
+
+
 def scan_workspace_videos(work_dir):
     """只读当前工作目录的视频，跳过链接、junction 与元数据临时目录。"""
     from toolbox.rename_engine import is_standard_recording_name
