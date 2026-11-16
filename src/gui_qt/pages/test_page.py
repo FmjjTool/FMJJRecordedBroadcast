@@ -468,13 +468,19 @@ class TestPage(BasePage):
     def _show_danmaku_overlay(self):
         from gui_qt.danmaku_overlay import DanmakuOverlay
         if self._overlay is None:
-            self._overlay = DanmakuOverlay(self.title_lbl.text(), self)
+            self._overlay = DanmakuOverlay(self.title_lbl.text(), self,
+                platform="bili" if self._BACKEND.endswith("bili_live") else "douyin")
         self._overlay.set_active(self.connected or bool(self._replay))
         self._overlay.show()
         self._overlay.raise_()
         self._overlay.canvas.messages.clear()
+        self._overlay.set_gift_rank(self._gift_rank)
+        if self._replay:
+            self._overlay.set_clock(self._replay["first"] + self._replay_cur_ms())
+        elif self.connected:
+            self._overlay.set_clock(time.time() * 1000, running=True, external=False)
         for entry in self._chat_log[-self._overlay.canvas.rows:]:
-            self._overlay.add_message(entry["kind"], entry["text"], entry["m"])
+            self._overlay.add_message(entry["kind"], entry["text"], entry["m"], rank=False)
 
     # ---- 🔗 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
 
@@ -1363,8 +1369,9 @@ class TestPage(BasePage):
         r = self._replay
         if not r or r["paused"]:
             return
-        r["paused"] = True
         r["paused_at"] = self._replay_cur_ms()
+        r["paused"] = True
+        self._update_replay_time(r["paused_at"])
         if self._replay_timer:
             self._replay_timer.stop()
         if self.video_player:
@@ -1410,6 +1417,8 @@ class TestPage(BasePage):
     def _update_replay_time(self, cur_ms):
         total = self._replay["total_ms"] if self._replay else 0
         self.replay_time_lbl.setText(f"{self._fmt_ms(cur_ms)} / {self._fmt_ms(total)}")
+        if self._overlay and self._replay:
+            self._overlay.set_clock(self._replay["first"] + cur_ms)
 
     def _finish_replay(self):
         r = self._replay
@@ -1417,6 +1426,7 @@ class TestPage(BasePage):
             return
         r["paused"] = True
         r["paused_at"] = float(r["total_ms"])
+        self._update_replay_time(r["paused_at"])
         if self._replay_timer:
             self._replay_timer.stop()
         self.replay_btn.setText("▶")
@@ -1431,6 +1441,8 @@ class TestPage(BasePage):
             self.video_player.stop()
             self.video_player = None
         r, self._replay = self._replay, None
+        if self._overlay and r:
+            self._overlay.set_active(False)
         if r and r.get("zip_dir"):
             shutil.rmtree(r["zip_dir"], ignore_errors=True)
             try:
@@ -2233,7 +2245,7 @@ class TestPage(BasePage):
     def _apply_message(self, name, text, m, t, rank=True):
         """主线程：渲染一条消息到界面（直播与回放共用；rank=False 跳过打赏榜）。"""
         if self._overlay:
-            self._overlay.add_message(name, text, m)
+            self._overlay.add_message(name, text, m, rank=False)
         ts = t.strftime("%H:%M:%S") + f".{t.microsecond // 1000:03d}"
 
         def set_field(key, value):
@@ -2629,6 +2641,8 @@ class TestPage(BasePage):
             self._refresh_gift_rank()
 
     def _refresh_gift_rank(self):
+        if self._overlay:
+            self._overlay.set_gift_rank(self._gift_rank)
         if not self._ui_visible:
             return
         items = sorted(self._gift_rank.items(),
@@ -2724,6 +2738,7 @@ class TestPage(BasePage):
             if status == "connected":
                 self.connected = True
                 if self._overlay:
+                    self._overlay.set_clock(time.time() * 1000, running=True, external=False)
                     self._overlay.set_active(True)
                 self.status_dot.setStyleSheet("color: #4caf50; font-size: 14px;")
                 self.status_label.setText(msg)
@@ -2864,6 +2879,9 @@ class TestPage(BasePage):
         self.gift_table.setRowCount(0)
         self._gift_rank = {}
         self._gift_sessions = {}
+        if self._overlay:
+            self._overlay.reset_session()
+            self._overlay.set_gift_rank({})
         # 统计：本场点赞 / 快照 / 计时
         self._like_count = 0
         self.like_label.setText("0")

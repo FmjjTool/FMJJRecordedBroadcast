@@ -411,8 +411,9 @@ class PlatformPane(QWidget):
             from gui_qt.danmaku_overlay import DanmakuOverlay
             overlay = self.overlays.get(anchor.key)
             if overlay is None:
-                overlay = DanmakuOverlay(anchor.name or anchor.room, self.win)
+                overlay = DanmakuOverlay(anchor.name or anchor.room, self.win, platform=anchor.platform)
                 self.overlays[anchor.key] = overlay
+            overlay.reset_session(anchor.platform)
             overlay.set_active(True)
             overlay.show()
         elif anchor.key in self.overlays:
