@@ -258,12 +258,15 @@ class RenamePublishingTests(unittest.TestCase):
         dialog = BiliUploadDialog(self.page, [str(original)])
         dialog.start_upload()
         self.assertFalse(dialog.busy)
-        self.assertIn("先完成交互重命名", dialog.status.text())
+        self.assertEqual(dialog.selected_paths(), [])
+        self.assertFalse(dialog.files.item(0).flags() & Qt.ItemIsUserCheckable)
         dialog.close()
         renamed = self.video("202530", standard=True)
-        dialog = BiliUploadDialog(self.page, [str(renamed)])
+        with patch.object(BU, "today_compact", return_value="20261002"):
+            dialog = BiliUploadDialog(self.page, [str(renamed)])
+        dialog._verified_identity = "isolated"
         with patch("gui_qt.bili_upload_dialog.QMessageBox.question",
-                   return_value=QMessageBox.No):
+                   return_value=QMessageBox.No), patch.object(BU, "credential_identity", return_value="isolated"):
             dialog.start_upload()
         self.assertNotIn("先完成交互重命名", dialog.status.text())
         dialog.close()

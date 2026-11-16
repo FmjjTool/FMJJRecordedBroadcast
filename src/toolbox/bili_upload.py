@@ -66,10 +66,14 @@ def credential_identity():
 
 
 def validate_renamed_videos(paths):
-    from toolbox.rename_engine import is_standard_recording_name
-    pending = [Path(path).name for path in paths if not is_standard_recording_name(str(path))]
+    pending = [Path(path).name for path in paths if not is_renamed_video(path)]
     if pending:
         raise ValueError("请先完成交互重命名，再开始投稿：" + "、".join(pending[:3]))
+
+
+def is_renamed_video(path):
+    from toolbox.rename_engine import is_standard_recording_name
+    return is_standard_recording_name(str(path))
 
 
 def load_settings():

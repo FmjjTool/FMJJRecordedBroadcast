@@ -1,39 +1,76 @@
 """可预览文案、选择分P与封面、查看失败记录的 B站投稿入口。"""
 import threading
+from pathlib import Path
 
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSpinBox, QVBoxLayout)
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QInputDialog,
+    QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QScrollArea, QWidget)
 
 from gui_qt.common import run_bg
 from toolbox import bili_upload as BU
+from toolbox.utils import extract_date_from_filename
+from gui_qt.video_selection_dialog import VideoSelectionDialog, video_item, checked_paths
 
 
 class BiliUploadDialog(QDialog):
     progress = Signal(int, str)
 
-    def __init__(self, parent=None, paths=None):
+    def __init__(self, parent=None, paths=None, *, work_dir=None, blocked_paths=()):
         super().__init__(parent)
         self.setWindowTitle("B站视频上传 · 文案与分P预览")
-        self.resize(760, 760)
+        self.resize(820, 890)
         self.paths = list(paths or [])
+        self.work_dir = str(work_dir or getattr(getattr(parent, "app", None), "work_dir", ""))
+        self.blocked_paths = set(blocked_paths)
+        self._selected_day = BU.today_compact()
+        self._records = []
+        self._closed = False
+        self._entered = False
+        self._checking_account = False
+        self._verified_identity = ""
+        self._scan_generation = 0
+        self._selection_modified = False
+        self.account_cancel = threading.Event()
         self.settings = BU.load_settings()
         self.config = {**BU.DEFAULTS, **self.settings.get("upload", {})}
         self.busy = False
         self.cancel = threading.Event()
         self.uploader = None
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+        layout = QVBoxLayout(content)
         hint = QLabel("视频须先完成交互重命名，再开始上传投稿；多个视频按列表顺序组成分P。分区、简介和来源可自行填写。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        templates = QHBoxLayout()
+        templates.addWidget(QLabel("投稿模板"))
+        self.templates = QComboBox()
+        templates.addWidget(self.templates, 1)
+        self.save_as_btn = QPushButton("另存为模板")
+        self.save_as_btn.clicked.connect(self.save_as_template)
+        templates.addWidget(self.save_as_btn)
+        self.delete_template_btn = QPushButton("删除模板")
+        self.delete_template_btn.clicked.connect(self.delete_template)
+        templates.addWidget(self.delete_template_btn)
+        layout.addLayout(templates)
+        variables = QLabel("模板变量：{日期}、{平台}、{文件名}、{P数}、{分P说明}；模板不保存本次日期和视频。")
+        variables.setWordWrap(True)
+        layout.addWidget(variables)
+        self.workspace_label = QLabel("当前工作目录：" + (self.work_dir or "未设置"))
+        self.workspace_label.setWordWrap(True)
+        layout.addWidget(self.workspace_label)
         self.files = QListWidget()
         self.files.setMaximumHeight(100)
         self.files.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         layout.addWidget(self.files)
         row = QHBoxLayout()
-        for text, slot in (("选择视频", self.choose_files), ("移除所选", self.remove_files),
-                           ("检查登录/分区", self.check_account), ("上传历史", self.show_history)):
+        for text, slot in (("选择工作目录视频", self.choose_files), ("刷新视频", self.load_workspace), ("移除所选", self.remove_files),
+                           ("Cookie 管理", self.open_cookie_manager), ("上传历史", self.show_history)):
             button = QPushButton(text)
             button.clicked.connect(slot)
             row.addWidget(button)
@@ -41,9 +78,13 @@ class BiliUploadDialog(QDialog):
         form = QFormLayout()
         self.title = QLineEdit(self.config["title"])
         form.addRow("标题模板", self.title)
-        self.date = QLineEdit(self.config["date"])
+        self.date = QLineEdit(self._selected_day)
         self.date.setPlaceholderText("留空从视频文件名识别；可填 20261002")
         form.addRow("本次直播日期", self.date)
+        self.platform = QComboBox()
+        self.platform.addItems(BU.SOURCE_PLATFORMS)
+        self.platform.setCurrentText(BU.normalize_platform(self.config.get("platform")))
+        form.addRow("直播来源平台", self.platform)
         self.desc = QPlainTextEdit(self.config["desc"])
         self.desc.setMaximumHeight(70)
         form.addRow("简介模板", self.desc)
@@ -55,7 +96,7 @@ class BiliUploadDialog(QDialog):
         self.tid.setValue(int(self.config["tid"] or 0))
         form.addRow("分区 ID", self.tid)
         self.categories = QComboBox()
-        self.categories.addItem("检查登录后可读取账号可用分区", 0)
+        self.categories.addItem("进入窗口后自动读取可用分区", 0)
         self.categories.currentIndexChanged.connect(lambda: self.tid.setValue(int(self.categories.currentData() or 0)))
         form.addRow("账号可用分区", self.categories)
         self.copyright = QComboBox()
@@ -85,6 +126,9 @@ class BiliUploadDialog(QDialog):
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         layout.addWidget(self.bar)
+        self.account_label = QLabel("进入后自动验证 Cookie 管理当前的 B站账号")
+        self.account_label.setWordWrap(True)
+        layout.addWidget(self.account_label)
         self.status = QLabel("就绪")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -93,7 +137,7 @@ class BiliUploadDialog(QDialog):
         self.preview_btn = QPushButton("更新预览")
         self.preview_btn.clicked.connect(self.refresh_preview)
         actions.addWidget(self.preview_btn)
-        self.save_btn = QPushButton("保存配置")
+        self.save_btn = QPushButton("保存模板")
         self.save_btn.clicked.connect(self.save_config)
         actions.addWidget(self.save_btn)
         self.start_btn = QPushButton("开始上传")
@@ -102,34 +146,114 @@ class BiliUploadDialog(QDialog):
         self.cancel_btn = QPushButton("关闭")
         self.cancel_btn.clicked.connect(self.reject)
         actions.addWidget(self.cancel_btn)
-        layout.addLayout(actions)
+        outer.addLayout(actions)
         self.progress.connect(self.on_progress)
-        self.files.addItems(self.paths)
+        self.files.itemChanged.connect(self.on_files_changed)
+        self.files.model().rowsMoved.connect(self.refresh_preview)
+        self._reload_templates(self.settings.get("active_upload_template"))
+        self.templates.currentTextChanged.connect(self.load_template)
+        records = [{"path": str(path), "date": extract_date_from_filename(Path(path).name) or "",
+                    "renamed": BU.is_renamed_video(path)} for path in self.paths]
+        self._records = records
+        self.set_video_list(records, {record["path"] for record in records if record["date"] == self._selected_day})
+        for widget in (self.title, self.date, self.tags, self.source, self.cover):
+            widget.textChanged.connect(self.refresh_preview)
+        self.desc.textChanged.connect(self.refresh_preview)
+        self.platform.currentTextChanged.connect(self.refresh_preview)
+        self.tid.valueChanged.connect(self.refresh_preview)
+        self.copyright.currentIndexChanged.connect(self.refresh_preview)
+        self.load_template(self.templates.currentText())
         self.refresh_preview()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._entered:
+            self._entered = True
+            QTimer.singleShot(0, self.check_account)
+            QTimer.singleShot(0, self.load_workspace)
+
+    def set_video_list(self, records, checked):
+        self.files.blockSignals(True)
+        self.files.clear()
+        for record in records:
+            self.files.addItem(video_item(record, self.work_dir, record["path"] in checked, self.blocked_paths))
+        self.files.blockSignals(False)
+        self.refresh_preview()
+
+    def on_files_changed(self, *_):
+        self._selection_modified = True
+        selected = self.selected_paths()
+        dates = {extract_date_from_filename(Path(path).name) for path in selected}
+        if len(dates) == 1 and next(iter(dates)):
+            self._selected_day = next(iter(dates))
+            self.date.setText(self._selected_day)
+        elif len(dates) > 1:
+            self.date.clear()
+        elif not selected:
+            self.date.setText(self._selected_day)
+        self.refresh_preview()
+
+    def load_workspace(self):
+        if self._closed or self.busy:
+            return
+        root = str(getattr(getattr(self.parentWidget(), "app", None), "work_dir", self.work_dir))
+        if root != self.work_dir:
+            self.paths = []
+            self._records = []
+            self._selection_modified = False
+        self.work_dir = root
+        self.workspace_label.setText("当前工作目录：" + (root or "未设置"))
+        self._scan_generation += 1
+        generation = self._scan_generation
+        def done(records, error):
+            if self._closed or generation != self._scan_generation:
+                return
+            current = str(getattr(getattr(self.parentWidget(), "app", None), "work_dir", self.work_dir))
+            if current != root:
+                self._selection_modified = False
+                self.load_workspace()
+                return
+            if error:
+                self.status.setText("读取工作目录失败，请检查目录权限")
+                return
+            known = {record["path"] for record in records}
+            records += [record for record in self._records if record["path"] not in known and
+                        record["path"] in self.paths and Path(record["path"]).is_file()]
+            self._records = records
+            if self.busy:
+                return
+            visible = [record for record in records if record["date"] == self._selected_day]
+            checked = (set(self.selected_paths()) if self._selection_modified else
+                       {record["path"] for record in visible if record["renamed"]})
+            self.set_video_list(visible, checked)
+            self.status.setText(f"已读取工作目录：{self._selected_day} 共 {len(visible)} 个视频，勾选 {len(self.selected_paths())} 个")
+        run_bg(lambda: BU.scan_workspace_videos(root), done, owner=self.parentWidget())
+
     def selected_paths(self):
-        return [self.files.item(index).text() for index in range(self.files.count())]
+        return checked_paths(self.files)
 
     def current_config(self):
         return {"title": self.title.text(), "date": self.date.text().strip(),
                 "desc": self.desc.toPlainText(), "tags": self.tags.text(), "tid": self.tid.value(),
                 "copyright": self.copyright.currentData(), "source": self.source.text().strip(),
-                "cover": self.cover.text().strip(), "auto_publish": self.publish.isChecked()}
+                "cover": self.cover.text().strip(), "auto_publish": self.publish.isChecked(),
+                "platform": self.platform.currentText()}
 
     def choose_files(self):
         if self.busy:
             return
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择投稿视频（可多选、拖动调整分P顺序）", "",
-             "视频 (*.mp4 *.flv *.mkv *.ts *.mov *.avi *.webm *.m4v *.mpeg *.mpg *.mts *.m2ts *.wmv *.ogv)")
-        known = set(self.selected_paths())
-        self.files.addItems([path for path in paths if path not in known])
-        self.refresh_preview()
+        picker = VideoSelectionDialog(self, self.work_dir, self._records, self.selected_paths(),
+                                      self._selected_day, self.blocked_paths)
+        if picker.exec() == QDialog.Accepted:
+            self._selected_day = picker.date.date().toString("yyyyMMdd")
+            self.set_video_list(picker.visible_records(), set(picker.selected_paths()))
+            self.on_files_changed()
 
     def remove_files(self):
         if not self.busy:
             for item in self.files.selectedItems():
                 self.files.takeItem(self.files.row(item))
-            self.refresh_preview()
+            self.on_files_changed()
 
     def choose_cover(self):
         if not self.busy:
@@ -141,42 +265,137 @@ class BiliUploadDialog(QDialog):
         try:
             metadata = BU.build_metadata(self.selected_paths(), self.current_config())
             self.preview.setPlainText(f"标题：{metadata['title']}\n简介：{metadata['desc']}\n"
-                f"标签：{metadata['tag']}\n分区：{metadata['tid']} · {self.files.count()} P\n来源：{metadata['source']}")
+                f"标签：{metadata['tag']}\n分区：{metadata['tid']} · {len(self.selected_paths())} P\n平台：{self.platform.currentText()}\n来源：{metadata['source']}")
         except (ValueError, TypeError) as error:
             self.preview.setPlainText(str(error))
 
     def save_config(self):
-        config = self.current_config()
-        # 日期仅用于本次手工覆盖，不能把上一场日期固化到自动投稿。
-        config["date"] = ""
+        return self.save_template(self.templates.currentText() or "默认模板")
+
+    def _reload_templates(self, selected=None):
+        saved = BU.load_settings().get("upload_templates", {})
+        self._templates = saved if isinstance(saved, dict) else {}
+        self.templates.blockSignals(True)
+        self.templates.clear()
+        self.templates.addItems(list(self._templates) or ["默认模板"])
+        if selected in self._templates:
+            self.templates.setCurrentText(selected)
+        self.templates.blockSignals(False)
+
+    def load_template(self, name):
+        saved = self._templates.get(name)
+        if not isinstance(saved, dict):
+            return
+        config = {**BU.DEFAULTS, **saved}
+        self.title.setText(config["title"])
+        self.desc.setPlainText(config["desc"])
+        self.tags.setText(config["tags"])
+        self.tid.setValue(int(config["tid"] or 0))
+        self.copyright.setCurrentIndex(0 if config["copyright"] == 2 else 1)
+        self.source.setText(config["source"])
+        self.cover.setText(config["cover"])
+        self.publish.setChecked(bool(config.get("auto_publish", True)))
+        self.platform.setCurrentText(BU.normalize_platform(config.get("platform")))
+        self.refresh_preview()
+
+    def save_template(self, name):
+        config = {**self.current_config(), "date": ""}
         settings = BU.load_settings()
+        templates = settings.get("upload_templates", {})
+        templates = dict(templates) if isinstance(templates, dict) else {}
+        templates[name] = config
+        settings["upload_templates"] = templates
+        settings["active_upload_template"] = name
         settings["upload"] = config
         try:
             BU.save_settings(settings)
-            self.status.setText("配置已保存，直播日期每次从文件名识别")
+            self._reload_templates(name)
+            self.status.setText(f"模板“{name}”已保存；日期与视频每次重新选择")
+            return True
         except OSError:
-            self.status.setText("配置保存失败，请检查写入权限")
+            self.status.setText("模板保存失败，请检查写入权限")
+            return False
 
-    def check_account(self):
+    def save_as_template(self):
         if self.busy:
             return
-        self.busy = True
+        name, ok = QInputDialog.getText(self, "另存为投稿模板", "模板名称")
+        name = name.strip()
+        if ok and name:
+            if name in self._templates and QMessageBox.question(self, "更新已有模板",
+                    f"模板“{name}”已存在，是否更新？", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+            self.save_template(name)
+
+    def delete_template(self):
+        if self.busy:
+            return
+        name = self.templates.currentText()
+        settings = BU.load_settings()
+        templates = settings.get("upload_templates", {})
+        if name not in templates:
+            return
+        if QMessageBox.question(self, "删除模板", f"删除模板“{name}”？",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        del templates[name]
+        settings["upload_templates"] = templates
+        settings["active_upload_template"] = next(iter(templates), "")
+        try:
+            BU.save_settings(settings)
+            self._reload_templates(settings["active_upload_template"])
+            self.load_template(self.templates.currentText())
+            self.status.setText(f"模板“{name}”已删除")
+        except OSError:
+            self.status.setText("模板删除失败，请检查目录权限")
+
+    def open_cookie_manager(self):
+        if self.busy:
+            return
+        from gui_qt.cookie_manager import CookieManagerDialog
+        CookieManagerDialog(self).exec()
+        self._verified_identity = ""
+        self.check_account()
+
+    def check_account(self):
+        if self.busy or self._checking_account or self._closed:
+            return
+        self._checking_account = True
+        self._verified_identity = ""
         self.start_btn.setEnabled(False)
-        self.status.setText("正在检查登录与可用分区…")
+        self.account_label.setText("正在自动验证登录与可用分区…")
+        started_identity = BU.credential_identity()
         def work():
-            uploader = BU.BiliUploader()
+            uploader = BU.BiliUploader(cancel=self.account_cancel)
             try:
-                return uploader.check_account(), uploader.creator_info()
+                account = uploader.check_account()
+                try:
+                    data, category_error = uploader.creator_info(), ""
+                except BU.UploadError as error:
+                    data, category_error = {}, str(error)
+                return account, data, uploader.auth_identity, category_error
             finally:
                 uploader.close()
         def done(result, error):
-            self.busy = False
-            self.start_btn.setEnabled(True)
-            if error:
-                self.status.setText(str(error))
+            self._checking_account = False
+            if self._closed:
                 return
-            account, data = result
-            self.status.setText(f"当前投稿账号：{account['name']}（UID {account['mid']}）")
+            if BU.credential_identity() != started_identity:
+                self.account_label.setText("登录状态已变化，正在重新验证…")
+                QTimer.singleShot(0, self.check_account)
+                return
+            if error:
+                self.account_label.setText(str(error) + "；请前往 Cookie 管理")
+                return
+            account, data, identity, category_error = result
+            if not identity or identity != BU.credential_identity():
+                self.account_label.setText("登录状态已变化，正在重新验证…")
+                QTimer.singleShot(0, self.check_account)
+                return
+            self._verified_identity = identity
+            self.start_btn.setEnabled(True)
+            self.account_label.setText(f"当前投稿账号：{account['name']}（UID {account['mid']}）" +
+                                      ("；分区读取失败，可手工填写分区 ID" if category_error else ""))
             current = self.tid.value()
             self.categories.blockSignals(True)
             self.categories.clear()
@@ -198,7 +417,7 @@ class BiliUploadDialog(QDialog):
             visit(data.get("typelist") or data.get("type_list") or [])
             self.categories.setCurrentIndex(max(0, self.categories.findData(current)))
             self.categories.blockSignals(False)
-        run_bg(work, done)
+        run_bg(work, done, owner=self.parentWidget())
 
     def show_history(self):
         if self.busy:
@@ -246,16 +465,25 @@ class BiliUploadDialog(QDialog):
         except (ValueError, TypeError) as error:
             self.status.setText(str(error))
             return
+        if not self._verified_identity or self._verified_identity != BU.credential_identity():
+            self.status.setText("正在自动验证登录，请稍候再开始上传")
+            self.check_account()
+            return
         action = "上传并自动投稿" if config["auto_publish"] else "仅上传，不投稿"
         if QMessageBox.question(self, "投稿预览", f"{action}\n\n{metadata['title']}\n{len(paths)} P · 分区 {metadata['tid']}\n"
                 f"简介：{metadata['desc']}\n标签：{metadata['tag']}\n\n使用 Cookie 管理当前的 B站账号，确认开始？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
-        self.save_config()
+        if not self.save_config():
+            return
         self.busy = True
         self.cancel.clear()
         self.start_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
+        self.templates.setEnabled(False)
+        self.save_as_btn.setEnabled(False)
+        self.delete_template_btn.setEnabled(False)
+        self.files.setEnabled(False)
         self.cancel_btn.setText("取消任务")
         self.status.setText("开始上传…")
         def work():
@@ -269,6 +497,10 @@ class BiliUploadDialog(QDialog):
             self.busy = False
             self.start_btn.setEnabled(True)
             self.save_btn.setEnabled(True)
+            self.templates.setEnabled(True)
+            self.save_as_btn.setEnabled(True)
+            self.delete_template_btn.setEnabled(True)
+            self.files.setEnabled(True)
             self.cancel_btn.setText("关闭")
             if error:
                 self.status.setText(str(error) + "；可到上传历史核对任务状态")
@@ -276,7 +508,7 @@ class BiliUploadDialog(QDialog):
                 self.bar.setValue(100)
                 self.status.setText("已投稿，等待 B站审核：" + str(result.get("bvid") or result.get("aid") or result["task"])
                                     if result["state"] == "published" else "已上传；可用同一批视频再次进入投稿流程")
-        run_bg(work, done)
+        run_bg(work, done, owner=self.parentWidget())
 
     def on_progress(self, percent, text):
         self.bar.setValue(percent)
@@ -287,6 +519,8 @@ class BiliUploadDialog(QDialog):
             self.cancel.set()
             self.status.setText("正在取消，等待当前网络请求结束；提交阶段请先核对稿件状态")
             return
+        self._closed = True
+        self.account_cancel.set()
         super().reject()
 
     def closeEvent(self, event):
@@ -294,4 +528,6 @@ class BiliUploadDialog(QDialog):
             self.reject()
             event.ignore()
         else:
+            self._closed = True
+            self.account_cancel.set()
             super().closeEvent(event)
