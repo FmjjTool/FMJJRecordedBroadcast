@@ -1,11 +1,15 @@
 ---
 name: cookie-manager
-description: "统一账户登录与认证管理。涉及新增或修改账户登录、Cookie/Token 获取与保存、登录验证、需要认证的业务接口或旧登录态迁移时必读；所有账户接入 Cookie 管理统一入口，业务统一调用管理层接口。"
+description: "统一账户登录与认证管理。涉及登录界面、Cookie/Token 接口、认证业务或旧格式适配时必读；先遵守真实 Cookie 绝对保护禁令，业务只读使用已有有效凭据，写入/清除/迁移能力仅用隔离虚构数据验证。"
 ---
 
 # 统一账户登录与 Cookie 管理
 
 先阅读 [convention-skill](../convention-skill/SKILL.md)。本 skill 规定应用账户管理与业务认证的统一方式；按平台原生认证协议处理 Cookie、Token、会话和浏览器登录快照。
+
+## 最高优先级：真实 Cookie 绝对不能改动
+
+必须先完整阅读 [cookie-data-protection](../cookie-data-protection/SKILL.md)。本 skill 的登录、保存、清除、换号、刷新与迁移均是接口能力说明，不授权 Agent 操作真实已存 Cookie。真实数据不设确认后覆盖或其他例外；下述能力只能在独立临时目录使用虚构数据实现验证，业务请求仅通过已确认无写入副作用的入口只读使用现有有效凭据。
 
 ## 必须遵守的统一规则
 
@@ -13,7 +17,7 @@ description: "统一账户登录与认证管理。涉及新增或修改账户登
 2. 需要登录的功能统一调用认证管理层的有效凭据接口。业务层不另做登录窗口、不直接读取凭据文件、不保存另一份长期登录态、不硬编码 Cookie/Token。
 3. 缺少平台或凭据类型时，先增加管理入口、管理层接口与平台适配，再让业务使用该接口。统一的是账户管理与调用入口，各平台仍使用自己的 Cookie、Bearer Token 或会话协议。
 4. 业务使用当前账号的有效登录态，遵守总开关、过期、清除和账号变化。请求所需的 CSRF/签名字段从同一次有效凭据快照派生；任务启动/重试前重新确认账号与状态，不能混用两次登录的身份。
-5. 未登录、关闭或失效时，按功能需要进入公开/游客流程，或明确提示前往「Cookie 管理」登录。不能偷偷使用旧文件、浏览器 profile 或快照恢复用户已关闭/清除的登录。
+5. 未登录、关闭或失效时，按功能需要进入公开/游客流程，或报告认证不可用；Agent 不代为重新登录、清除、刷新或回写真实 Cookie。不能偷偷使用旧文件、浏览器 profile 或快照恢复登录。
 6. 登录票据只传给对应平台的认证目标；上传/CDN 的临时授权由平台适配处理，不能附带转发账户 Cookie。Cookie、Token、登录快照等敏感内容不进入源码、skill、报告、日志、Git 提交或发行包。
 
 ## 当前代码接口与边界
@@ -24,11 +28,11 @@ description: "统一账户登录与认证管理。涉及新增或修改账户登
 | --- | --- | --- |
 | `src/gui_qt/cookie_manager.py` | `CookieManagerDialog`、`COOKIE_PLATFORMS`、浏览器/扫码/手工输入入口 | 统一登录 UI；新增账户在此接入管理入口 |
 | `src/auth.py` | `get_cookie(platform)` | 普通业务获取有效 Cookie，受总开关和本地有效期规则控制；服务端仍可能判定失效 |
-| `src/auth.py` | `set_cookie(platform, text)`、`clear_cookie(platform)` | 由登录管理与迁移适配调用，业务不直接操作底层登录文件 |
-| `src/auth.py` | `is_cookie_enabled()`、`set_cookie_enabled(enabled)` | 管理层总开关；各凭据类型的业务获取接口都须遵守 |
-| `src/auth.py` | `get_netease_cookie()` | 网易云现有兼容入口；其旧文件迁移与总开关等状态需结合当前实现核对 |
-| `src/auth.py` | `load_cookies()`、`get_netease_cookie_stored()` | 管理 UI 展示/验证等已存凭据用途；不作为业务绕过总开关或过期的获取入口 |
-| `src/toolbox/tcdoc/session.py` | `cookie_string()`、`apply_to_context()`、`save_state_snapshot()`、`clear()` | 腾讯文档平台适配，Cookie 与 localStorage 快照由管理层统一控制 |
+| `src/auth.py` | `set_cookie(platform, text)`、`clear_cookie(platform)` | 现有写入/清除能力；Agent 禁止对真实 Cookie 调用，只能验证隔离虚构数据 |
+| `src/auth.py` | `is_cookie_enabled()`、`set_cookie_enabled(enabled)` | 读取须无写入副作用；写总开关会改同一凭据文件，禁止在真实环境调用 |
+| `src/auth.py` | `get_netease_cookie()` | 可能隐式迁移并写入/删除旧凭据，不作为真实环境纯读取入口 |
+| `src/auth.py` | `load_cookies()`、`get_netease_cookie_stored()` | `load_cookies()` 只用于必要的管理展示，不能绕过有效性规则；后者可能隐式迁移，禁止对真实环境执行 |
+| `src/toolbox/tcdoc/session.py` | `cookie_string()`、`apply_to_context()`、`save_state_snapshot()`、`clear()` | 读取/注入须确认不会回写真实状态；快照保存和清除只在隔离虚构环境验证 |
 | `src/toolbox/webwiki/auth.py`、`config.py`，`src/gui_qt/pages/localwiki.py` | GitHub 登录、Token 存储与独立登录窗口 | 当前仍有独立实现；后续涉及该链路时须迁入统一管理，不作为新增独立登录的范例 |
 
 现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`tcdoc`。引用现有入口时使用实际 key；新增 GitHub 等账户须补实际注册与凭据类型接口，不能假定已经存在。
@@ -39,6 +43,8 @@ GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通�
 
 ## 浏览器快照与旧格式迁移
 
+**本节只规定能力设计与隔离验证，不在真实用户环境迁移、保存或清理凭据；真实已存 Cookie 绝对保护优先。**
+
 - 腾讯文档 `storage_state` 包含 Cookie 与 localStorage，不能只靠 Cookie 字符串保证可重建完整登录。快照仅作管理层控制的补充状态，须匹配当前账号；管理层关闭、清除或换号后旧快照不能继续授权业务。
 - 酷狗概念版等非 Cookie 会话走统一管理中的平台适配。迁移过程中可以保留必要的底层格式，读取、更新和清除须受同一管理层控制，不能形成两套账户状态。
 - 先盘点受影响链路的登录 UI、凭据读写、缓存、profile 和全部业务调用方；读取旧格式与当前管理记录时不输出凭据内容。
@@ -48,7 +54,7 @@ GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通�
 
 ## 验证与收尾
 
-涉及实际迁移/代码修改时，验证受影响业务：管理入口登录后可调用；关闭后认证请求不可用；清除后旧文件/快照不会复活；失效提示一致；重新登录/换号不会混用旧状态；旧用户迁移保留正确账号；多处业务使用同一管理入口。按变更范围运行隔离测试，不为验证发起未授权的发布或数据写回。
+涉及代码/适配能力修改时，在独立临时目录使用虚构凭据验证受影响业务：管理入口登录后可调用；关闭后认证请求不可用；清除后旧文件/快照不会复活；失效提示一致；重新登录/换号不会混用旧状态；模拟旧用户迁移保留正确账号；多处业务使用同一管理入口。禁止复制真实 Cookie 或真实配置，也不启动可能隐式迁移/回写的真实管理窗口；不为验证发起未授权的发布或数据写回。
 
 只维护 skill 文档时，核对接口、引用、规则的一致性和 Markdown 格式即可；明确实际迁移的未完成项，不声称执行了登录或业务验证。任何腾讯文档数据写入还须遵守 [tcdoc-sync-scope](../tcdoc-sync-scope/SKILL.md) 白名单。
 
