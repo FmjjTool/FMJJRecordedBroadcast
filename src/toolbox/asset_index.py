@@ -12,6 +12,8 @@
 - 关联的 *_raw.json 的 mtime/size 一并记录，raw 变了同样判失效
   （否则缓存的「预期图片数」会过期，影响「下载不完整」筛选与批量跳过判定）；
 - 原始数据（「原始数据」字段，占 json 体积 95%）不进缓存，按需现读。
+- 完成媒体匹配后的展示清单单独按来源目录入库；启动先显示上一份清单，
+  后台核对文件变化后事务替换。数据库读取不依赖逐文件扫描。
 
 会被后台线程调用 → 每次操作短连接（开-关），禁止模块级共享连接。
 """
@@ -20,12 +22,14 @@ import json
 import os
 import sqlite3
 import threading
+import time
 
 _lock = threading.Lock()
 
 # 缓存格式版本：派生字段口径变化时 +1，旧缓存自动全量重建
 # v2：新增 _bili_bvid（B站动态指向的投稿 bvid，用于列表去重）
 VER = 2
+VIEW_VER = 1
 
 _db_path = None
 
@@ -53,6 +57,14 @@ def _connect():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS media_dir ("
         "dir TEXT PRIMARY KEY, mtime REAL, names TEXT, subs TEXT)")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS asset_view_state ("
+        "root TEXT, kind TEXT, version INTEGER, updated REAL, count INTEGER, "
+        "metadata TEXT, PRIMARY KEY(root, kind))")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS asset_view_row ("
+        "root TEXT, kind TEXT, ordinal INTEGER, payload TEXT, "
+        "PRIMARY KEY(root, kind, ordinal))")
     return conn
 
 
@@ -99,7 +111,7 @@ def upsert_media_dirs(rows):
         pass
 
 
-def prune_media_dirs(keep_dirs):
+def prune_media_dirs(keep_dirs, root=None):
     """删除已不存在的目录缓存行（keep_dirs 为空时跳过，防目录临时不可读清空）。"""
     keep = {_key(d) for d in keep_dirs}
     if not keep:
@@ -109,8 +121,10 @@ def prune_media_dirs(keep_dirs):
         with _lock:
             conn = _connect()
             try:
+                scope = _key(os.path.abspath(root)) if root is not None else None
                 stale = [r[0] for r in conn.execute("SELECT dir FROM media_dir")
-                         if r[0] not in keep]
+                         if r[0] not in keep and (scope is None or
+                         r[0] == scope or r[0].startswith(scope + os.sep))]
                 if stale:
                     conn.executemany("DELETE FROM media_dir WHERE dir=?",
                                      [(p,) for p in stale])
@@ -126,6 +140,62 @@ def prune_media_dirs(keep_dirs):
 def _key(path):
     """路径归一化为缓存键（Windows 大小写不敏感）。"""
     return os.path.normcase(str(path))
+
+
+def fetch_view(root, kind="entries"):
+    """读取完成的展示清单，不访问资源目录；缺失/损坏返回 None，空清单可命中。"""
+    root = _key(os.path.abspath(root))
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                conn.execute("BEGIN")
+                state = conn.execute(
+                    "SELECT version, updated, count, metadata FROM asset_view_state "
+                    "WHERE root=? AND kind=?", (root, kind)).fetchone()
+                if not state or state[0] != VIEW_VER:
+                    return None
+                items = [json.loads(row[0]) for row in conn.execute(
+                    "SELECT payload FROM asset_view_row WHERE root=? AND kind=? "
+                    "ORDER BY ordinal", (root, kind))]
+                if len(items) != state[2] or any(not isinstance(it, dict) for it in items):
+                    return None
+                metadata = json.loads(state[3])
+                if not isinstance(metadata, dict):
+                    return None
+                return {"items": items, "updated": state[1], "metadata": metadata}
+            finally:
+                conn.close()
+    except Exception:
+        return None
+
+
+def save_view(root, items, kind="entries", metadata=None):
+    """事务替换展示清单；不保存大体积原始数据，失败保留上一份完整清单。"""
+    root = _key(os.path.abspath(root))
+    try:
+        rows = [(root, kind, i, json.dumps(
+            {k: v for k, v in item.items() if k != "raw_data"}, ensure_ascii=False))
+            for i, item in enumerate(items)]
+        meta = json.dumps(metadata or {}, ensure_ascii=False)
+        with _lock:
+            conn = _connect()
+            try:
+                with conn:
+                    conn.execute("DELETE FROM asset_view_row WHERE root=? AND kind=?", (root, kind))
+                    conn.executemany(
+                        "INSERT INTO asset_view_row(root, kind, ordinal, payload) VALUES(?,?,?,?)", rows)
+                    conn.execute(
+                        "INSERT INTO asset_view_state(root,kind,version,updated,count,metadata) "
+                        "VALUES(?,?,?,?,?,?) ON CONFLICT(root,kind) DO UPDATE SET "
+                        "version=excluded.version, updated=excluded.updated, "
+                        "count=excluded.count, metadata=excluded.metadata",
+                        (root, kind, VIEW_VER, time.time(), len(rows), meta))
+            finally:
+                conn.close()
+        return True
+    except Exception:
+        return False
 
 
 def fetch_all() -> dict:
@@ -203,6 +273,8 @@ def clear():
             try:
                 conn.execute("DELETE FROM asset_json")
                 conn.execute("DELETE FROM media_dir")
+                conn.execute("DELETE FROM asset_view_row")
+                conn.execute("DELETE FROM asset_view_state")
                 conn.commit()
             finally:
                 conn.close()
@@ -226,5 +298,6 @@ def stats():
         return 0, 0, 0
 
 
-__all__ = ["VER", "db_path", "fetch_all", "upsert_many", "prune", "clear",
+__all__ = ["VER", "VIEW_VER", "db_path", "fetch_all", "upsert_many", "prune", "clear",
+           "fetch_view", "save_view",
            "stats", "fetch_media_dirs", "upsert_media_dirs", "prune_media_dirs"]

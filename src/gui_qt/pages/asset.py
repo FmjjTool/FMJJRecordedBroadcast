@@ -1,7 +1,7 @@
 """资产管理页（PySide6 版）：已获取资源、数据库浏览与本地资源。
 
 对应原版 gui/asset_page.py：
-- 已获取资源：自动扫描 download/已获取数据/ 下历史导出（封面/本地媒体缩略图 + 摘要），
+- 已获取资源：先读取数据库清单，再后台核对历史导出（封面/本地媒体缩略图 + 摘要），
   支持平台筛选、关键词搜索（防抖）、状态筛选（未下载/已下载/下载不完整）、时间排序、
   点击行弹详情窗、单条下载（B站 draw/av 分发、抖音重解析、图片兜底）、删除（json+md+xlsx+raw+媒体）
 - 本地资源：选文件夹 → 扫描图片/视频/音频 → 缩略图（图片）+ 摘要（视频/音频）懒加载预览，
@@ -773,6 +773,9 @@ class AssetPage(BasePage):
         self._view_mode = "entries"     # entries=已获取条目 / files=下载目录文件清单
         self._plain_groups = []         # files 视图的数据源（按一次导出的产物聚合）
         self._plain_dir = ""            # files 视图对应的 download 子目录名
+        self._loaded_view_scope = None
+        self._loaded_view_items = []
+        self._loaded_view_metadata = {}
         self._db_page = 1               # 数据库浏览当前页码
         self._db_total = 0              # 数据库浏览总条数
         self._db_rows = []              # 当前页原始行（含 dedup_key）
@@ -799,7 +802,8 @@ class AssetPage(BasePage):
         from gui_qt.help_overlay import attach_help_overlay
         head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
             "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
-            "<p>· <b>已获取资源</b>：自动扫描 download/已获取数据/ 下历史导出，"
+            "<p>· <b>已获取资源</b>：先显示数据库保存的清单，再后台核对文件变化；"
+            "首次使用需要建立索引，点击<b>刷新</b>可立即重新核对。"
             "支持平台/<b>文件夹</b>筛选、状态筛选（未下载不含「不可下载」纯文本条目/已下载/"
             "下载不完整）、关键词搜索、时间排序、分页浏览；"
             "<b>「文件夹」下拉列出 download 下的分类目录</b>（公众号文章/淘宝商品/"
@@ -1546,7 +1550,7 @@ class AssetPage(BasePage):
         self.plat_sel.addItems(["全部"] + list(PLATFORM_CN.values()))
         self.plat_sel.setMinimumWidth(92)
         self.plat_sel.setMaximumWidth(132)
-        self.plat_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
+        self.plat_sel.currentTextChanged.connect(lambda _: self._refresh_collected(refresh_disk=False))
         filters.addWidget(self.plat_sel)
         filters.addWidget(_asset_label("文件夹"))
         self.folder_sel = QComboBox()
@@ -1582,14 +1586,14 @@ class AssetPage(BasePage):
             "未下载：本地无媒体文件且未标记不可下载；\n"
             "纯文本等不可下载条目不在此列，可右键手动标记或解除")
         self.status_sel.setMinimumWidth(106)
-        self.status_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
+        self.status_sel.currentTextChanged.connect(lambda _: self._refresh_collected(refresh_disk=False))
         actions.addWidget(self.status_sel)
         self.sort_sel = QComboBox()
         self.sort_sel.addItems(["时间倒序", "时间正序"])
         self.sort_sel.setMinimumWidth(100)
-        self.sort_sel.currentTextChanged.connect(lambda _: self._refresh_collected())
+        self.sort_sel.currentTextChanged.connect(lambda _: self._refresh_collected(refresh_disk=False))
         actions.addWidget(self.sort_sel)
-        actions.addWidget(_asset_action("刷新", self._refresh_collected, tip="刷新已获取列表"))
+        actions.addWidget(_asset_action("刷新", self._refresh_collected, tip="重新核对文件变化并更新清单"))
         actions.addStretch(1)
         self.select_all_cb = QCheckBox("全选")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
@@ -1619,7 +1623,7 @@ class AssetPage(BasePage):
         if text == self._search_var:
             return
         self._search_var = text
-        self._refresh_collected()
+        self._refresh_collected(refresh_disk=False)
 
     _MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mov", ".mp4", ".m4v"}
     _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -1670,16 +1674,20 @@ class AssetPage(BasePage):
             s = s2
         return s or fn
 
-    def _load_disk_items(self) -> list:
+    def _load_disk_items(self, download_root=None) -> list:
         """扫描数据 json + 实际媒体文件，按「日期+标题」合并为一个条目。
 
         性能：json 解析结果按 (路径, mtime, size) 缓存在 config/asset_index.db
         （toolbox.asset_index），未改动直接命中缓存、只有新增/改动才重新解析；
         「预期图片数」等派生字段随缓存一起走，不再二次读 *_raw.json。
         """
-        from toolbox.config_manager import get_export_subdir, get_export_dir
-        video_dir = get_export_subdir("video_data")   # download/已获取数据
-        download_root = get_export_dir()              # download/
+        from toolbox.config_manager import EXPORT_CATEGORIES, get_export_subdir, get_export_dir
+        if download_root is None:
+            video_dir = get_export_subdir("video_data")
+            download_root = get_export_dir()
+        else:
+            download_root = Path(download_root)
+            video_dir = download_root / EXPORT_CATEGORIES["video_data"]
 
         # 1. 扫媒体文件，按 (date, title_key, subdir) 分组
         # 只扫「已获取数据/」（{平台}_文件/_媒体 所在根）+「B站资源/」（资源包整体条目）。
@@ -1842,7 +1850,7 @@ class AssetPage(BasePage):
 
     def _on_folder_changed(self, _idx=0):
         """「文件夹」下拉切换：按新值刷新列表。"""
-        self._refresh_collected()
+        self._refresh_collected(refresh_disk=False)
 
     @staticmethod
     def _split_folder_value(val):
@@ -1901,7 +1909,14 @@ class AssetPage(BasePage):
         self._dir_group_truncated = False
         files_scan, top_dirs = [], {}
         total = 0
-        for dirpath, dirnames, filenames in os.walk(root):
+        def scan_error(error):
+            raise error
+
+        try:
+            os.stat(root)
+        except FileNotFoundError:
+            return []
+        for dirpath, dirnames, filenames in os.walk(root, onerror=scan_error):
             dirnames[:] = sorted(d for d in dirnames if d.lower() not in SCAN_SKIP_DIRS)
             rel = os.path.relpath(dirpath, root)
             rel = "" if rel in (".", "") else rel.replace(os.sep, "/")
@@ -1914,7 +1929,7 @@ class AssetPage(BasePage):
                 full = os.path.join(dirpath, fn)
                 try:
                     st = os.stat(full)
-                except OSError:
+                except FileNotFoundError:
                     continue
                 ext = os.path.splitext(fn)[1].lower()
                 kind = ("image" if ext in IMAGE_EXTS else
@@ -2078,7 +2093,11 @@ class AssetPage(BasePage):
         while queue:
             d, dm = queue.popleft()
             visited.add(d)
-            hit = cache.get(d) if dm is not None else None
+            try:
+                dm = os.stat(d).st_mtime
+            except FileNotFoundError:
+                continue
+            hit = cache.get(os.path.normcase(d))
             if hit and hit[0] == dm:
                 names, subs = hit[1], hit[2]
             else:
@@ -2086,7 +2105,7 @@ class AssetPage(BasePage):
                 try:
                     with os.scandir(d) as it:
                         entries = sorted(it, key=lambda e: e.name)
-                except OSError:
+                except FileNotFoundError:
                     continue
                 for e in entries:
                     try:
@@ -2095,14 +2114,13 @@ class AssetPage(BasePage):
                         elif (e.is_file(follow_symlinks=False)
                               and os.path.splitext(e.name)[1].lower() in cls._MEDIA_EXTS):
                             names.append(e.name)
-                    except OSError:
+                    except FileNotFoundError:
                         continue
-                if dm is not None:
-                    fresh.append((d, dm, names, subs))
+                fresh.append((d, dm, names, subs))
             out.extend(os.path.join(d, n) for n in names)
             queue.extend((os.path.join(d, n), m) for n, m in subs)
         asset_index.upsert_media_dirs(fresh)
-        asset_index.prune_media_dirs(visited)
+        asset_index.prune_media_dirs(visited, root=root)
         return out
 
     def _list_json_files(self, video_dir):
@@ -2115,7 +2133,7 @@ class AssetPage(BasePage):
         try:
             with os.scandir(video_dir) as it:
                 top = list(it)
-        except OSError:
+        except FileNotFoundError:
             return out
         for e in top:
             try:
@@ -2130,7 +2148,7 @@ class AssetPage(BasePage):
                                 continue
                             st = f.stat()
                             out[f.path] = (st.st_mtime, st.st_size)
-            except OSError:
+            except FileNotFoundError:
                 continue
         return out
 
@@ -2431,113 +2449,129 @@ class AssetPage(BasePage):
                     return plat
         return "unknown"
 
-    def _refresh_collected(self, keep_page=False, show_loading=True):
-        """骨架加载：立即渲染灰色占位行，后台扫描磁盘后一次性替换真实列表。
-
-        扫描要读全部 json + 匹配媒体文件（几百条时明显卡顿），
-        与 TrackerPage 同款模式：骨架先行 + run_bg 后台扫描 + 代数守卫防旧轮覆盖。
-        keep_page=True 保持当前页码（删除/下载完成后刷新不打断浏览位置），
-        筛选/搜索/排序/手动刷新走默认重置第 1 页。
-        """
-        if getattr(self, "_collected_loading", False):
-            self._reload_gen += 1  # 当前结果作废，读取结束后执行最新筛选。
-            self._collected_pending = (keep_page, show_loading)
-            return
-        self._collected_loading = True
-        self._collected_pending = None
-
-        def submit(work, apply):
-            def done(result, err):
-                try:
-                    apply(result, err)
-                finally:
-                    self._collected_loading = False
-                    if not err:
-                        self._collected_refreshed_at = time.monotonic()
-                    pending = self._collected_pending
-                    self._collected_pending = None
-                    if pending is not None and not self._disposed:
-                        self._refresh_collected(*pending)
-            run_bg(work, done)
-
-        # 主线程先读筛选条件（后台线程不能碰 Qt 控件）
-        # 下拉显示中文名，过滤用英文标识（"全部"原样保留）
-        plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
-        status = self.status_sel.currentText()
-        desc = self.sort_sel.currentText() == "时间倒序"
-        kw = (self._search_var or "").strip().lower()
-        dir_name, _sub, custom_root, cat_hint = self._split_folder_value(
+    def _collected_scope(self):
+        """在 GUI 线程固定本次来源，防后台读取时切换工作目录或筛选。"""
+        from toolbox.config_manager import get_export_dir
+        dir_name, _sub, custom_root, cat = self._split_folder_value(
             self.folder_sel.currentData() or "")
         if dir_name == "已获取数据":
-            dir_name = ""    # 它本身就是条目列表的数据源，不是文件清单
+            dir_name = ""
+        root = Path(custom_root) if custom_root else get_export_dir() / dir_name
         is_files = bool(dir_name or custom_root)
+        kind = f"files:{cat or root.name}:20000" if is_files else f"entries:{asset_index.VER}"
+        return os.path.normcase(os.path.abspath(root)), kind
 
-        self._reload_gen += 1
-        gen = self._reload_gen
-        if show_loading:
-            self._collected_all_items = []
+    def _apply_collected_view(self, scope, items, metadata, keep_page, refresh_options=True):
+        """按当前条件显示清单；搜索/排序不扫描磁盘，也不保存筛选后的子集。"""
+        self._loaded_view_scope = scope
+        self._loaded_view_items = items
+        self._loaded_view_metadata = metadata
+        is_files = scope[1].startswith("files:")
+        self._view_mode = "files" if is_files else "entries"
+        self._set_batch_enabled(not is_files)
+        kw = (self._search_var or "").strip().lower()
+        desc = self.sort_sel.currentText() == "时间倒序"
+        if is_files:
+            self._plain_dir = scope[0]
+            self._dir_group_truncated = bool(metadata.get("truncated"))
+            groups = items
+            if kw:
+                groups = [g for g in groups
+                          if kw in (g.get("title") or "").lower()
+                          or any(kw in (f.get("name") or "").lower()
+                                 for f in g.get("files") or [])
+                          or any(kw in (d or "").lower() for d in g.get("dirs") or [])]
+            self._plain_groups = groups if desc else list(reversed(groups))
+        else:
+            self._plain_groups = []
+            self._disk_items = items
+            if refresh_options:
+                self._rebuild_folder_options(items)
+            plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
+            self._collected_all_items = self._apply_item_filters(
+                items, plat, self.status_sel.currentText(), desc, kw)
         if not keep_page:
             self._collected_page = 1
-        self._view_mode = "files" if is_files else "entries"
-        if show_loading:
-            self._render_skeleton(8)
+        self._render_collected_batch()
+        if not is_files and self._ever_shown:
+            self._backfill_bili_covers()
 
-        # 选了 download/ 分类目录或固定位置 → 文件清单视图（按产物聚合）
-        if is_files:
-            self._plain_dir = custom_root or dir_name
-            self._plain_groups = []      # 先清空：避免等待方读到上一个目录的旧数据
-            self._set_batch_enabled(False)
-
-            def work_files():
-                if custom_root:
-                    return self._load_dir_groups(custom_root, cat=cat_hint)
-                from toolbox.config_manager import get_export_dir
-                return self._load_dir_groups(get_export_dir() / dir_name)
-
-            def done_files(groups, err):
-                if gen != self._reload_gen:
-                    return
-                groups = groups or []
-                # 搜索/排序对分组条目同样生效（标题 + 组内文件名 + 目录）
-                if kw:
-                    groups = [g for g in groups
-                              if kw in (g.get("title") or "").lower()
-                              or any(kw in (f.get("name") or "").lower()
-                                     for f in g.get("files") or [])
-                              or any(kw in (d or "").lower() for d in g.get("dirs") or [])]
-                if not desc:
-                    groups = list(reversed(groups))
-                self._plain_groups = groups
+    def _refresh_collected(self, keep_page=False, show_loading=True, refresh_disk=True):
+        """先用数据库清单显示，再后台核对；显式刷新/下载/删除直接核对磁盘。"""
+        scope = self._collected_scope()
+        # 筛选只使用当前完整清单，后台核对结束也会读取最新筛选条件。
+        if not refresh_disk and scope == self._loaded_view_scope:
+            self._apply_collected_view(scope, self._loaded_view_items,
+                                       self._loaded_view_metadata, keep_page, refresh_options=False)
+            return
+        if getattr(self, "_collected_loading", False):
+            if not refresh_disk and scope == self._collected_request_scope:
                 if not keep_page:
                     self._collected_page = 1
-                self._render_collected_batch()
-
-            submit(work_files, done_files)
+                return
+            self._reload_gen += 1
+            self._collected_pending = (keep_page, show_loading, refresh_disk)
             return
-
-        self._view_mode = "entries"
-        self._plain_groups = []
-        self._set_batch_enabled(True)
+        self._collected_loading = True
+        self._collected_request_scope = scope
+        self._collected_pending = None
+        self._reload_gen += 1
+        gen = self._reload_gen
+        same_view = scope == self._loaded_view_scope
+        if not keep_page:
+            self._collected_page = 1
+        self._view_mode = "files" if scope[1].startswith("files:") else "entries"
+        if not same_view:
+            self._collected_all_items = []
+            self._plain_groups = []
+            self._set_batch_enabled(self._view_mode == "entries")
+        if show_loading and not same_view:
+            self._render_skeleton(8)
 
         def work():
-            return self._load_disk_items()
+            if not refresh_disk:
+                cached = asset_index.fetch_view(*scope)
+                if cached is not None:
+                    for item in cached["items"]:
+                        if not scope[1].startswith("files:"):
+                            item["raw_data"] = {}
+                    return cached["items"], cached["metadata"], True
+            if scope[1].startswith("files:"):
+                cat = scope[1][len("files:"):].rsplit(":", 1)[0]
+                items = self._load_dir_groups(scope[0], cat=cat)
+                metadata = {"truncated": self._dir_group_truncated}
+            else:
+                items = self._load_disk_items(scope[0])
+                metadata = {}
+            # 失败不替换旧清单；原始文件仍是事实来源，数据库仅保存展示索引。
+            asset_index.save_view(scope[0], items, scope[1], metadata)
+            return items, metadata, False
 
-        def done(disk_items, err):
-            if gen != self._reload_gen:
-                return  # 中途又触发了刷新，本轮作废
-            self._disk_items = disk_items or []
-            # 文件夹下拉随数据重建（保留当前选择；分类目录被删则回到「全部文件夹」）
-            self._rebuild_folder_options(self._disk_items)
-            self._collected_all_items = self._apply_item_filters(
-                self._disk_items, plat, status, desc, kw)
-            if not keep_page:
-                self._collected_page = 1
-            # keep_page 时 _render_collected_batch 内部会把越界页码钳回有效范围
-            self._render_collected_batch()
-            if self._ever_shown:
-                self._backfill_bili_covers()
+        def done(result, err):
+            try:
+                if gen != self._reload_gen or scope != self._collected_scope():
+                    return
+                if err:
+                    if same_view:
+                        self._apply_collected_view(scope, self._loaded_view_items,
+                                                   self._loaded_view_metadata, True)
+                    else:
+                        self._apply_collected_view(scope, [], {}, keep_page)
+                    self.app.toast("资产清单更新失败，请点击刷新重试", "error")
+                    return
+                items, metadata, from_cache = result
+                self._apply_collected_view(scope, items, metadata, keep_page)
+                self._collected_refreshed_at = time.monotonic()
+                if from_cache and self._collected_pending is None:
+                    self._collected_pending = (True, False, True)
+            finally:
+                self._collected_loading = False
+                pending = self._collected_pending
+                self._collected_pending = None
+                if pending is not None and not self._disposed:
+                    self._refresh_collected(*pending)
 
-        submit(work, done)
+        run_bg(work, done)
 
     def _status_match(self, it, status) -> bool:
         """条目是否符合「状态」筛选（列表加载与下载后即时归类共用同一口径）。"""
@@ -3648,6 +3682,8 @@ class AssetPage(BasePage):
             if gen != self._reload_gen or err:
                 return  # 整列表刷新已接管/出错 → 交给全量刷新兜底
             self._disk_items = disk_items or []
+            if self._loaded_view_scope and self._loaded_view_scope[1].startswith("entries:"):
+                self._loaded_view_items = self._disk_items
             disk_by_key = {}
             for d in self._disk_items:
                 k = self._dl_key(d)
@@ -4601,7 +4637,8 @@ class AssetPage(BasePage):
         if not getattr(self, "_collected_loading", False):
             if time.monotonic() - getattr(self, "_collected_refreshed_at", 0) > 30:
                 self._refresh_collected(keep_page=True,
-                                        show_loading=not hasattr(self, "_collected_refreshed_at"))
+                                        show_loading=not hasattr(self, "_collected_refreshed_at"),
+                                        refresh_disk=hasattr(self, "_collected_refreshed_at"))
             else:
                 self._backfill_bili_covers()
         if time.monotonic() - getattr(self, "_db_refreshed_at", 0) > 30:
@@ -4618,7 +4655,7 @@ class AssetPage(BasePage):
 
     def _preload_collected(self):
         if not getattr(self, "_collected_loading", False) and not hasattr(self, "_collected_refreshed_at"):
-            self._refresh_collected()
+            self._refresh_collected(refresh_disk=False)
 
     # ==================== 数据库浏览（增量采集库） ====================
 
