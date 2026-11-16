@@ -80,6 +80,7 @@ PAGE_CLASSES = {
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
+    "performance": ("gui_qt.pages.performance", "PerformancePage"),
 }
 
 
@@ -138,6 +139,7 @@ NAV_GROUPS = [
     ("⚙️ 全局", [
         ("tasks", "⏰ 定时任务"),
         ("global_settings", "⚙️ 全局设置"),
+        ("performance", "📊 性能诊断"),
     ]),
 ]
 
@@ -205,6 +207,7 @@ class MainWindow(QMainWindow):
 
         # 页面懒加载状态
         self.pages = {}
+        self.performance_monitor = None  # 用户开启后才创建，服务归主程序持有。
         self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
         self.page_lifecycle = PageLifecycleManager(self)
@@ -423,7 +426,7 @@ class MainWindow(QMainWindow):
                 btn = self._make_nav_button(key, item_title.split(" ", 1)[-1])
                 if is_bottom:
                     btn.setObjectName("workbenchFooter")
-                    btn.setText("任务" if key == "tasks" else "设置")
+                    btn.setText({"tasks": "任务", "global_settings": "设置", "performance": "性能"}[key])
                     btn.setFixedHeight(34)
                     bottom_buttons.append(btn)
                 else:
@@ -665,6 +668,25 @@ class MainWindow(QMainWindow):
     # ==================== 页面切换 ====================
 
     def show_page(self, key):
+        monitor = self.performance_monitor
+        try:
+            token = monitor.page_started() if monitor is not None and key in PAGE_CLASSES else None
+        except Exception:
+            token = None
+        failed = False
+        try:
+            self._show_page(key)
+        except Exception:
+            failed = True
+            raise
+        finally:
+            if monitor is not None:
+                try:
+                    monitor.page_finished(token, key, failed)
+                except Exception:
+                    pass
+
+    def _show_page(self, key):
         if key == "toolbox_convert":
             self.show_page("toolbox_editor")
             self.pages["toolbox_editor"].open_convert_tab()
@@ -708,7 +730,7 @@ class MainWindow(QMainWindow):
         if old_page is not None and old_key != key:
             self.page_lifecycle.leave(old_key, old_page)
         self._update_page_context()
-        if key not in ("tasks", "global_settings") and not self.nav_search.text().strip():
+        if key not in ("tasks", "global_settings", "performance") and not self.nav_search.text().strip():
             button = self.home_btn if key == "home" else self.nav_buttons.get(key)
             if button is not None:
                 self.nav_scroll.ensureWidgetVisible(button, 0, 24)
@@ -728,6 +750,8 @@ class MainWindow(QMainWindow):
             page.on_show()
 
     def closeEvent(self, event):
+        if self.performance_monitor is not None:
+            self.performance_monitor.stop()
         self.page_lifecycle.shutdown()
         # 关闭窗口：对所有已加载页面触发全停（停抓取/录制/回放等）
         for page in self.pages.values():

@@ -6,6 +6,7 @@
 import re
 import threading
 import functools
+import time
 from collections import Counter
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
@@ -89,6 +90,16 @@ class BackgroundTasks:
 
 
 TASKS = BackgroundTasks()
+PERFORMANCE_RECORDER = None  # 仅用户开启诊断期间连接；默认不采样、不启用追踪。
+
+
+def _performance_call(recorder, method, *args):
+    if recorder is None:
+        return None
+    try:
+        return getattr(recorder, method)(*args)
+    except Exception:
+        return None  # 诊断故障不能影响业务线程或任务租约释放。
 
 
 def _callback_pages(*callbacks):
@@ -139,30 +150,46 @@ def run_bg(fn, on_done, *, owner=None):
     if not _callbacks_alive(owners):
         return None
     TASKS.acquire(owners)
+    recorder = PERFORMANCE_RECORDER
+    token = _performance_call(recorder, "task_started", fn)
 
     def done(result, err):
+        started = time.perf_counter() if token is not None else 0
+        failed = bool(err)
         try:
             if _callbacks_alive(owners) and on_done is not None:
                 on_done(result, err)
+        except Exception:
+            failed = True
+            raise
         finally:
+            if token is not None:
+                _performance_call(recorder, "task_finished", token, "callback", (time.perf_counter() - started) * 1000, failed)
             TASKS.release(owners)
 
     def _w():
         result = None
         err = None
+        started = time.perf_counter() if token is not None else 0
         try:
             result = fn()
         except Exception as e:  # noqa: BLE001
             err = str(e)
+        if token is not None:
+            _performance_call(recorder, "task_finished", token, "worker", (time.perf_counter() - started) * 1000, bool(err))
         try:
             _bg_bridge.done.emit(done, result, err)
         except Exception:
+            if token is not None:
+                _performance_call(recorder, "task_finished", token, "callback", 0, True)
             TASKS.release(owners)
 
     thread = threading.Thread(target=_w, daemon=True)
     try:
         thread.start()
     except Exception:
+        if token is not None:
+            _performance_call(recorder, "task_finished", token, "callback", 0, True)
         TASKS.release(owners)
         raise
     return thread
