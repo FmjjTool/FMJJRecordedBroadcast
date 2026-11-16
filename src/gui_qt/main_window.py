@@ -23,7 +23,7 @@ from gui_qt.navigation import line_icon, tool_icon_name
 from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
-from gui_qt.page_lifecycle import PageLifecycleManager, restore_page_state
+from gui_qt.page_lifecycle import PageLifecycleManager, PagePolicy, restore_page_state
 
 
 def _brand_icon_pixmap():
@@ -205,6 +205,7 @@ class MainWindow(QMainWindow):
 
         # 页面懒加载状态
         self.pages = {}
+        self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
         self.page_lifecycle = PageLifecycleManager(self)
         self.nav_buttons = {}
@@ -690,7 +691,8 @@ class MainWindow(QMainWindow):
             page = self.page_lifecycle.take(key)
             if page is None:
                 page = _page_class(key)(self)
-                restore_page_state(page, self.page_lifecycle.states.pop(key, None))
+                restore_page_state(page, self.page_lifecycle.states.get(key))
+                self.page_lifecycle.states.pop(key, None)
             self.stack.addWidget(page)
             self.pages[key] = page
             if key == "info_tools" and hasattr(page, "tabs"):

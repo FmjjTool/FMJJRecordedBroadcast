@@ -114,6 +114,16 @@ def _song_to_row(s):
 
 
 class NeteasePage(BasePage):
+    SESSION_FIELDS = ("platform", "mode", "_result_snapshot")
+
+    def restore_session_data(self):
+        platform, mode = self.platform, self.mode
+        self._apply_platform(platform)
+        self._switch_mode(mode)
+        snapshot = getattr(self, "_result_snapshot", None)
+        if snapshot:
+            self._render_result(snapshot)
+
     def __init__(self, app):
         super().__init__(app)
         self.platform = "netease"
@@ -484,20 +494,19 @@ class NeteasePage(BasePage):
                 self.status_label.setText(f"❌ {err}")
                 self._show_empty()
                 return
-            kind, data = result
-            self.detail_stack.setCurrentWidget(self.detail_scroll)
-            if kind == "songs":
-                self._render_songs(data or [])
-            elif kind == "song":
-                self._render_single_song(data)
-            elif kind == "playlist":
-                self._render_playlist(data)
-            elif kind == "album":
-                self._render_album(data)
-            elif kind == "albums":
-                self._render_albums(data or [])
+            self._result_snapshot = result
+            self._render_result(result)
 
         run_bg(work, done)
+
+    def _render_result(self, result):
+        kind, data = result
+        self.detail_stack.setCurrentWidget(self.detail_scroll)
+        render = {"songs": self._render_songs, "song": self._render_single_song,
+                  "playlist": self._render_playlist, "album": self._render_album,
+                  "albums": self._render_albums}.get(kind)
+        if render:
+            render(data or [] if kind in ("songs", "albums") else data)
 
     def _work_netease(self, mode, kw, singer):
         from netease import (

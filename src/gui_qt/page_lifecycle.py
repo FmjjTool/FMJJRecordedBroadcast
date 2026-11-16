@@ -50,8 +50,10 @@ def _named_widgets(page):
         yield from walk(value, (name,))
 
 
-def capture_page_state(page):
+def capture_page_state(page, _seen=None):
     """只保留输入和显式业务数据，不复制线程、控件、预览或图片缓存。"""
+    _seen = set() if _seen is None else _seen
+    _seen.add(id(page))
     page.prepare_session_state()
     data = {}
     for name in page.SESSION_FIELDS:
@@ -83,8 +85,8 @@ def capture_page_state(page):
     children = dict(page.saved_child_states())
     from gui_qt.pages.base import BasePage
     for path, child in _named_widgets(page):
-        if isinstance(child, BasePage):
-            children[path] = capture_page_state(child)
+        if isinstance(child, BasePage) and id(child) not in _seen:
+            children[path] = capture_page_state(child, _seen)
     return {"data": data, "inputs": inputs, "children": children}
 
 
@@ -157,7 +159,21 @@ class PageLifecycleManager(QObject):
     @staticmethod
     def _page_tree(page):
         from gui_qt.pages.base import BasePage
-        return [page, *page.findChildren(BasePage)]
+        pages, seen = [], set()
+
+        def visit(p):
+            if id(p) in seen:
+                return
+            seen.add(id(p))
+            pages.append(p)
+            # B站资源等聚合页的逻辑宿主不一定有 Qt parent。
+            children = p.findChildren(BasePage)
+            children.extend(w for _path, w in _named_widgets(p) if isinstance(w, BasePage))
+            for child in children:
+                visit(child)
+
+        visit(page)
+        return pages
 
     def _busy(self, page):
         for child in self._page_tree(page):
@@ -198,7 +214,7 @@ class PageLifecycleManager(QObject):
             for child in self._page_tree(page):
                 child._disposed = True
                 child.on_unload()
-            page.deleteLater()
+                child.deleteLater()
         except Exception:
             # 无法安全收尾时保留宿主并记录原因，不在半清理状态下销毁。
             logging.getLogger(__name__).exception("页面回收失败: %s", key)

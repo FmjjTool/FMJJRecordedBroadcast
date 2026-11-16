@@ -2882,7 +2882,7 @@ class TestPage(BasePage):
         self._apply_event_filter()
         self._refresh_gift_rank()
         self._tick()
-        if getattr(self, "_cover_url", None) and not self._cover_bytes:
+        if getattr(self, "_cover_url", None) and not getattr(self, "_cover_bytes", None):
             self._set_cover(self._cover_url)
         elif getattr(self, "_cover_bytes", None):
             pix = QPixmap()

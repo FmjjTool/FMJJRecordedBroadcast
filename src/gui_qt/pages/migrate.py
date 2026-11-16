@@ -340,14 +340,17 @@ class MigratePage(BasePage):
         self.log_text.clear()
         self.duplicates = []
         # 后台线程执行迁移，避免大文件操作阻塞 UI
-        start_page_thread(self, self._migrate_worker, (mode, checked))
+        start_page_thread(self, self._migrate_worker,
+                          (mode, checked, self.app.work_dir, self.target_dir))
 
-    def _migrate_worker(self, mode, folders):
+    def _migrate_worker(self, mode, folders, source_dir=None, target_dir=None):
         """后台线程：执行迁移（文件操作不阻塞界面）。"""
+        source_dir = source_dir or self.app.work_dir
+        target_dir = target_dir or self.target_dir
         success = fail = 0
         for name in folders:
-            src_dir = os.path.join(self.app.work_dir, name)
-            dst_dir = os.path.join(self.target_dir, name)
+            src_dir = os.path.join(source_dir, name)
+            dst_dir = os.path.join(target_dir, name)
             if not os.path.isdir(src_dir):
                 self._log(f"⏭️ 跳过（源不存在）: {name}")
                 fail += 1
