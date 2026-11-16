@@ -472,6 +472,9 @@ class TestPage(BasePage):
         self._overlay.set_active(self.connected or bool(self._replay))
         self._overlay.show()
         self._overlay.raise_()
+        self._overlay.canvas.messages.clear()
+        for entry in self._chat_log[-self._overlay.canvas.rows:]:
+            self._overlay.add_message(entry["kind"], entry["text"], entry["m"])
 
     # ---- 🔗 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
 
@@ -2145,7 +2148,7 @@ class TestPage(BasePage):
             return
         try:
             # 跨午夜自动换当日文件，重启仍能按日期恢复。
-            if datetime.now().strftime('%Y%m%d') not in str(self._rt_path):
+            if not str(self._rt_path).endswith("_" + datetime.now().strftime('%Y%m%d') + ".jsonl"):
                 self._rt_close()
                 self._rt_open(self._rt_room)
                 fp = self._rt_fp
@@ -2719,6 +2722,7 @@ class TestPage(BasePage):
             if _source is not None and self.fetcher is not _source:
                 return
             if status == "connected":
+                self.connected = True
                 if self._overlay:
                     self._overlay.set_active(True)
                 self.status_dot.setStyleSheet("color: #4caf50; font-size: 14px;")

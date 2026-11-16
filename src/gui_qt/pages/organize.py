@@ -10,21 +10,32 @@
 import os
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox,
+    QPushButton, QTextEdit, QVBoxLayout,
 )
+from PySide6.QtCore import Signal
 
-from toolbox.organize_engine import execute_organize, scan_files
+from toolbox.organize_engine import execute_migration, scan_files, scan_sources
+from toolbox import bili_upload as BU
 from toolbox.utils import format_size
 
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import count_date_subfolders
+from gui_qt.common import run_bg
 
 
 class OrganizePage(BasePage):
+    progress = Signal(str)
+
     def __init__(self, app):
         super().__init__(app)
         self.groups = {}
         self.no_date_files = []
+        self.migration_plan = []
+        self.busy = False
+        self._plan_dir = ""
+        self._generation = 0
+        self._migrated_videos = []
         self._enter_stage = 0  # 回车快捷：0=待扫描，1=待执行
 
         layout = QVBoxLayout(self)
@@ -41,15 +52,45 @@ class OrganizePage(BasePage):
         layout.addLayout(dir_row)
         self._update_dir_date_label()
 
+        layout.addWidget(QLabel("A端来源文件夹（可多个；迁移视频到当前工作目录，日期可识别时放入日期文件夹）"))
+        self.sources = QListWidget()
+        self.sources.setMaximumHeight(95)
+        settings = BU.load_settings()
+        self.sources.addItems(settings.get("sources", []))
+        layout.addWidget(self.sources)
+        source_row = QHBoxLayout()
+        add_source = QPushButton("＋ 添加来源文件夹")
+        add_source.clicked.connect(self._add_source)
+        source_row.addWidget(add_source)
+        remove_source = QPushButton("移除所选来源")
+        remove_source.clicked.connect(self._remove_source)
+        source_row.addWidget(remove_source)
+        self.recursive = QCheckBox("包含来源子文件夹")
+        self.recursive.setChecked(bool(settings.get("recursive", False)))
+        self.recursive.toggled.connect(self._save_sources)
+        source_row.addWidget(self.recursive)
+        source_row.addStretch(1)
+        layout.addLayout(source_row)
+        publish_row = QHBoxLayout()
+        self.auto_upload = QCheckBox("整理成功后按配置自动上传 B站")
+        self.auto_upload.setChecked(bool(settings.get("auto_upload", False)))
+        self.auto_upload.toggled.connect(self._save_sources)
+        publish_row.addWidget(self.auto_upload)
+        upload = QPushButton("B站投稿设置 / 视频上传")
+        upload.clicked.connect(self._open_upload)
+        publish_row.addWidget(upload)
+        publish_row.addStretch(1)
+        layout.addLayout(publish_row)
+
         # 控制按钮
         btn_row = QHBoxLayout()
-        scan_btn = QPushButton("🔍 扫描并预览")
-        scan_btn.clicked.connect(self._scan)
-        btn_row.addWidget(scan_btn)
-        exec_btn = QPushButton("📂 执行整理")
-        exec_btn.setStyleSheet("background: #2e7d32; color: white;")
-        exec_btn.clicked.connect(self._execute)
-        btn_row.addWidget(exec_btn)
+        self.scan_btn = QPushButton("🔍 扫描并预览")
+        self.scan_btn.clicked.connect(self._scan)
+        btn_row.addWidget(self.scan_btn)
+        self.exec_btn = QPushButton("📂 执行迁移 / 整理")
+        self.exec_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.exec_btn.clicked.connect(self._execute)
+        btn_row.addWidget(self.exec_btn)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
@@ -61,6 +102,7 @@ class OrganizePage(BasePage):
         self.log_text.setReadOnly(True)
         self.log_text.setFixedHeight(100)
         layout.addWidget(self.log_text)
+        self.progress.connect(self._log)
 
     # ==================== 回车快捷 ====================
 
@@ -78,6 +120,57 @@ class OrganizePage(BasePage):
     def on_dir_changed(self, path):
         self.dir_label.setText(path)
         self._update_dir_date_label()
+        self._invalidate_plan()
+
+    def _invalidate_plan(self):
+        self._generation += 1
+        self.groups = {}
+        self.migration_plan = []
+        self._plan_dir = ""
+        self._enter_stage = 0
+
+    def _source_paths(self):
+        return [self.sources.item(index).text() for index in range(self.sources.count())]
+
+    def _save_sources(self, *_):
+        self._invalidate_plan()
+        settings = BU.load_settings()
+        settings.update(sources=self._source_paths(), recursive=self.recursive.isChecked(),
+                        auto_upload=self.auto_upload.isChecked())
+        try:
+            BU.save_settings(settings)
+        except OSError:
+            self._log("来源设置保存失败，请检查写入权限")
+
+    def _add_source(self):
+        if self.busy:
+            return
+        path = QFileDialog.getExistingDirectory(self, "选择A端视频来源文件夹")
+        if path and os.path.normcase(os.path.realpath(path)) not in {
+                os.path.normcase(os.path.realpath(item)) for item in self._source_paths()}:
+            self.sources.addItem(path)
+            self._save_sources()
+
+    def _remove_source(self):
+        if not self.busy:
+            for item in self.sources.selectedItems():
+                self.sources.takeItem(self.sources.row(item))
+            self._save_sources()
+
+    def _open_upload(self):
+        if self.busy:
+            return
+        from gui_qt.bili_upload_dialog import BiliUploadDialog
+        dialog = BiliUploadDialog(self, self._migrated_videos)
+        dialog.exec()
+
+    def _set_busy(self, busy):
+        self.busy = busy
+        self.scan_btn.setEnabled(not busy)
+        self.exec_btn.setEnabled(not busy)
+
+    def has_active_tasks(self):
+        return self.busy
 
     def _update_dir_date_label(self):
         count = count_date_subfolders(self.app.work_dir)
@@ -87,11 +180,43 @@ class OrganizePage(BasePage):
     # ==================== 扫描 / 执行 ====================
 
     def _scan(self):
+        if self.busy:
+            return
         if not self.app.work_dir or not os.path.isdir(self.app.work_dir):
             self._log("⚠️ 工作目录不存在，请先在全局设置指定")
             return
-        self.groups, self.no_date_files = scan_files(self.app.work_dir)
+        root = self.app.work_dir
+        sources, recursive = self._source_paths(), self.recursive.isChecked()
+        generation = self._generation
+        self._set_busy(True)
+        self.preview_text.setPlainText("正在扫描视频文件…")
+        def work():
+            return scan_files(root), scan_sources(sources, root, recursive)
+        def done(result, error):
+            self._set_busy(False)
+            if generation != self._generation or root != self.app.work_dir:
+                self._log("目录/来源已变化，请重新扫描")
+                return
+            if error:
+                self._log(f"扫描失败：{error}")
+                return
+            (self.groups, self.no_date_files), (self.migration_plan, skipped) = result
+            self._plan_dir = root
+            self._show_preview(skipped)
+            self._enter_stage = 1
+        run_bg(work, done, owner=self)
+
+    def _show_preview(self, skipped):
         self.preview_text.clear()
+        self.preview_text.append(f"工作目录：{self._plan_dir}\n")
+        if self.migration_plan:
+            self.preview_text.append(f"A端迁移：{len(self.migration_plan)} 个视频")
+            for item in self.migration_plan[:100]:
+                target = os.path.join(self._plan_dir, item["date"], item["name"])
+                self.preview_text.append(f"{item['path']} → {target} ({format_size(item['size'])})")
+            if len(self.migration_plan) > 100:
+                self.preview_text.append(f"…其余 {len(self.migration_plan) - 100} 个视频")
+            self.preview_text.append("")
         total = 0
         for date_str, files in self.groups.items():
             total += len(files)
@@ -101,28 +226,92 @@ class OrganizePage(BasePage):
             if len(files) > 3:
                 self.preview_text.append(f"   ... 还有 {len(files) - 3} 个")
             self.preview_text.append("")
-        self.preview_text.append(f"共 {len(self.groups)} 个日期分组，{total} 个文件")
+        self.preview_text.append(f"工作目录整理：{len(self.groups)} 个日期分组，{total} 个视频")
+        if skipped:
+            self.preview_text.append("\n暂缓/跳过：\n" + "\n".join(skipped[:30]))
         if self.no_date_files:
             self.preview_text.append(f"\n⚠️ 无法识别日期: {len(self.no_date_files)} 个")
             for n in self.no_date_files[:10]:
                 self.preview_text.append(f"   - {n}")
 
     def _execute(self):
-        if not self.groups:
+        if self.busy:
             return
-        n_files = sum(len(v) for v in self.groups.values())
+        if self._plan_dir != self.app.work_dir:
+            self._log("请先扫描当前工作目录")
+            return
+        if not self.groups and not self.migration_plan:
+            self._log("没有待迁移或整理的视频，请先扫描")
+            return
+        root = self._plan_dir
+        plan = list(self.migration_plan) + [dict(item, date=date, source_root=root)
+                for date, items in self.groups.items() for item in items]
+        auto = self.auto_upload.isChecked()
+        upload_config = {**BU.DEFAULTS, **BU.load_settings().get("upload", {}), "date": ""}
+        preview = ""
+        if auto:
+            by_date = {}
+            for item in plan:
+                by_date.setdefault(item.get("date") or "", []).append(item["path"])
+            try:
+                for paths in by_date.values():
+                    meta = BU.build_metadata(paths, upload_config)
+                    preview += f"\n{meta['title']} · {len(paths)} P · 分区 {meta['tid']}"
+            except (ValueError, TypeError) as error:
+                self._log(f"自动上传配置未就绪：{error}，请先打开B站投稿设置")
+                return
+            preview = "\n\n整理完成后将按配置自动上传" + ("并投稿：" if upload_config["auto_publish"] else "（不投稿）：") + preview
         ret = QMessageBox.question(
             self, "确认",
-            f"将整理 {n_files} 个文件到 {len(self.groups)} 个文件夹，确认？",
+            f"将迁移/整理 {len(plan)} 个视频到：\n{root}\n\n同名自动编号，目标校验成功后删除来源。{preview}\n确认执行？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
         self.log_text.clear()
-        success, fail, failed_files = execute_organize(self.app.work_dir, self.groups)
-        self._log(f"✅ 整理完成: 成功 {success}, 失败 {fail}")
-        if failed_files:
-            self._log(f"失败: {', '.join(failed_files[:10])}")
-        self._scan()
+        self._set_busy(True)
+        self._invalidate_plan()
+        def work():
+            results = execute_migration(root, plan, on_progress=lambda current, total, result:
+                self.progress.emit(f"{current}/{total} " + (f"已迁移：{result['target']}" if result['ok'] else f"失败：{result['source']} · {result['error']}")))
+            posts = []
+            if auto:
+                successful = [item["target"] for item in results if item["ok"]]
+                if len(successful) != len(plan):
+                    self.progress.emit("部分视频迁移失败，本批自动上传暂停；请核对完整场次后手工投稿")
+                elif successful:
+                    from toolbox.utils import extract_date_from_filename
+                    groups = {}
+                    for path in successful:
+                        groups.setdefault(extract_date_from_filename(os.path.basename(path)), []).append(path)
+                    try:
+                        uploader = BU.BiliUploader(on_progress=lambda current, total, text:
+                            self.progress.emit(f"B站 {int(current * 100 / max(1, total))}% · {text}"))
+                    except Exception as error:
+                        self.progress.emit(f"B站账号不可用：{error}；迁移成功的视频已保留")
+                        return results, posts
+                    try:
+                        for paths in groups.values():
+                            try:
+                                post = uploader.run(paths, upload_config)
+                                posts.append(post)
+                                self.progress.emit(f"投稿任务完成：{post['title']} · {post['state']}")
+                            except Exception as error:
+                                self.progress.emit(f"B站上传停止：{error}；本地视频已保留")
+                                break
+                    finally:
+                        uploader.close()
+            return results, posts
+        def done(result, error):
+            self._set_busy(False)
+            if error:
+                self._log(f"执行中断：{error}，已完成迁移的视频保留在目标目录")
+                return
+            results, posts = result
+            self._migrated_videos = [item["target"] for item in results if item["ok"]]
+            success = len(self._migrated_videos)
+            self._log(f"✅ 整理完成：成功 {success}，失败 {len(results) - success}，B站完成 {len(posts)} 个任务")
+            self._scan()
+        run_bg(work, done, owner=self)
 
     def _log(self, msg):
         self.log_text.append(str(msg))

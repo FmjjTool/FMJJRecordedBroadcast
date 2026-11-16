@@ -870,6 +870,25 @@ def fetch_info(platform, room, quality=""):
                 "name": "", "online": "", "cover": "", "qualities": {}}
 
 
+def fetch_status(platform, room):
+    """直播中仅检测下播，不反复获取流地址/画质。查询失败不视为下播。"""
+    try:
+        if platform == "bili":
+            from toolbox.bili_live import fetch_room_info
+            info = fetch_room_info(room)
+            field, live_value, online_field = "live_status", 1, "watch_num"
+        else:
+            from toolbox.douyin_live import fetch_room_info
+            info = fetch_room_info(room, login=False)
+            field, live_value, online_field = "status", 2, "online"
+        if info.get("error") or field not in info:
+            return {"error": info.get("error") or "房间状态缺失"}
+        return {"live": int(info[field]) == live_value, "status": info[field],
+                "title": info.get("title") or "", "online": info.get(online_field) or 0}
+    except Exception as error:
+        return {"error": str(error)}
+
+
 # ==================== 录制任务管理 ====================
 
 DEFAULT_SETTINGS = {
@@ -1025,12 +1044,12 @@ class RecordManager:
                 return
             if not a.monitoring:
                 continue
-            self.check_one(a)
+            self.check_one(a, status_only=a.live and a.recording)
         self.poll_finished()
 
     # ---------- 单个主播检测 ----------
-    def check_one(self, a):
-        info = fetch_info(a.platform, a.room, a.quality)
+    def check_one(self, a, status_only=False):
+        info = fetch_status(a.platform, a.room) if status_only else fetch_info(a.platform, a.room, a.quality)
         a.last_check = time.strftime("%Y-%m-%d %H:%M:%S")
         a.error = info.get("error") or ""
         if a.error and info.get("status") is None:
@@ -1072,7 +1091,7 @@ class RecordManager:
                 pass
         # 自动开录
         if a.live and a.monitoring and self._auto_record(a) and not a.recording:
-            self.start_record(a, info)
+            self.start_record(a, info if "stream" in info else None)
         self.changed()
 
     def _auto_record(self, a):

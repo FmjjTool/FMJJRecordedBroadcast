@@ -211,7 +211,7 @@ class AnchorModel(QAbstractTableModel):
         if key == "content":
             return "音频" if int(getattr(a, "content", 0) or 0) == 1 else "视频"
         if key == "monitoring":
-            return "是" if a.monitoring else "否"
+            return ("下播检测" if a.live and a.recording else "等待开播") if a.monitoring else "否"
         if key == "want_record":
             return "是" if getattr(a, "_want_record", False) else "否"
         if key == "quality":
