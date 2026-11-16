@@ -256,16 +256,30 @@ def _download_ranged(url: str, filepath: str, headers: dict, threads: int,
                 pos = s + seg_done[i]
                 h = dict(headers)
                 h["Range"] = f"bytes={pos}-{e}"
+                h["Accept-Encoding"] = "identity"
+                if pos > e:
+                    return seg_done[i] == seg_total
                 try:
                     with httpx.Client(timeout=60, follow_redirects=True,
                                       headers=h) as client:
                         with client.stream("GET", url) as resp:
                             resp.raise_for_status()
+                            match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",
+                                                 resp.headers.get("content-range", ""))
+                            if (resp.status_code != 206 or not match
+                                    or tuple(map(int, match.groups())) != (pos, e, total)
+                                    or resp.headers.get("content-encoding", "identity").lower()
+                                    not in ("", "identity")):
+                                stop[0] = True
+                                return False
                             with open(part_path, "r+b") as f:
                                 f.seek(pos)
                                 for chunk in resp.iter_bytes(chunk_size=262144):
                                     if stop[0] or (cancel_check is not None
                                                    and cancel_check()):
+                                        return False
+                                    if len(chunk) > seg_total - seg_done[i]:
+                                        stop[0] = True
                                         return False
                                     f.write(chunk)
                                     with lock:
@@ -274,7 +288,7 @@ def _download_ranged(url: str, filepath: str, headers: dict, threads: int,
                                             seg_progress_cb(
                                                 i, seg_done[i], seg_total)
                                     _agg()
-                    if seg_done[i] >= seg_total:
+                    if seg_done[i] == seg_total:
                         return True
                 except Exception:
                     continue  # 网络抖动 → 从段内断点重试
@@ -283,10 +297,12 @@ def _download_ranged(url: str, filepath: str, headers: dict, threads: int,
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=threads) as pool:
             futs = [pool.submit(_seg_worker, i, s, e) for i, s, e in segs]
-            ok = all(f.result() for f in futs)
+            results = [f.result() for f in futs]
+            ok = all(results) and all(done == e - s + 1
+                                      for done, (_, s, e) in zip(seg_done, segs))
         if progress_cb is not None:
             progress_cb(sum(seg_done), total)
-        if ok:
+        if ok and os.path.getsize(part_path) == total:
             os.replace(part_path, filepath)
             return filepath, True
         stop[0] = True
@@ -336,10 +352,15 @@ def _download_one(url: str, filepath: str, headers: dict,
                 ext = _ext_guess(ct, url)
                 if not filepath.endswith(ext):
                     filepath = filepath.rsplit(".", 1)[0] + ext
-                return _download_ranged(
+                ranged_result = _download_ranged(
                     url, filepath, headers, threads, total,
                     progress_cb=progress_cb, seg_progress_cb=seg_progress_cb,
                     cancel_check=cancel_check)
+                if ranged_result[1] or (cancel_check is not None and cancel_check()):
+                    return ranged_result
+                # Range 响应异常时，清理分段产物后以单流完整重下。
+                return _download_one(url, filepath, headers, progress_cb=progress_cb,
+                                     cancel_check=cancel_check, threads=1)
         if existing > 0 and upgraded:
             # URL 已升级为原图：旧文件是压缩版，续传会拼出损坏文件，删掉重下
             # （已下载的原图由 download_media 的 _should_skip_download 提前跳过）

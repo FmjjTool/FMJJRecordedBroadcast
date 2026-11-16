@@ -22,6 +22,8 @@ import requests
 API_ROOT = "https://docs.qq.com/openapi"
 BATCH = 50
 CRED_KEY = "tcdoc_openapi"
+WRITABLE_DOC_KEY = "DRnd3bkhkQUR1aEJr"
+WRITABLE_TAB_IDS = frozenset({"ss_h2uh2s", "ss_1xgstm"})
 
 FIELD_TYPES = {
     1: "文本", 2: "数字", 3: "复选框", 4: "日期", 5: "图片", 6: "附件",
@@ -34,6 +36,12 @@ SUPPORTED_TYPES = {1, 2, 3, 4, 8, 9, 17}
 
 class ApiError(RuntimeError):
     pass
+
+
+def validate_write_scope(doc_key: str, tab_id: str) -> None:
+    if doc_key != WRITABLE_DOC_KEY or tab_id not in WRITABLE_TAB_IDS:
+        raise ApiError("禁止回写此目标：仅允许封茗囧菌数据汇总库的官方动态与直播记录"
+                       f"（doc_key={doc_key or '未知'}，tab_id={tab_id or '未知'}）")
 
 
 # ==================== 凭证（加密存 Cookie 管理器） ====================
@@ -93,6 +101,7 @@ class TdClient:
         self.token = token.strip()
         self.open_id = open_id.strip()
         self.sess = requests.Session()
+        self._doc_keys: dict[str, str] = {}
 
     def _headers(self) -> dict:
         return {"Access-Token": self.token, "Client-Id": self.client_id,
@@ -116,7 +125,12 @@ class TdClient:
         file_id = data.get("fileID")
         if not file_id:
             raise ApiError("fileID 转换失败")
+        self._doc_keys[file_id] = encoded_id
         return file_id
+
+    def validate_write_target(self, file_id: str, sheet_id: str) -> None:
+        # 只接受本客户端通过官方转换接口核实过的文档身份。
+        validate_write_scope(self._doc_keys.get(file_id, ""), sheet_id)
 
     def list_sheets(self, file_id: str) -> list[dict]:
         data = self._request(
@@ -128,6 +142,23 @@ class TdClient:
                 f"/sheets/{quote(sheet_id, safe='')}")
 
     def _action(self, file_id: str, sheet_id: str, payload: dict) -> dict:
+        operations = set(payload)
+        if operations - {"getFields", "getRecords"}:
+            self.validate_write_target(file_id, sheet_id)
+            if not operations <= {"addRecords", "updateRecords", "deleteRecords"}:
+                raise ApiError("仅允许行级新增、修改与删除，禁止修改表结构")
+            for op, block in payload.items():
+                if op == "deleteRecords":
+                    ids = block.get("recordIDs") or []
+                    if not ids or not all(isinstance(rid, str) and rid.strip() for rid in ids):
+                        raise ApiError("删除必须明确指定 recordID")
+                else:
+                    records = block.get("records") or []
+                    if not records or not all(isinstance(r, dict) and r.get("values")
+                                               for r in records):
+                        raise ApiError("写入必须明确指定行数据")
+                    if op == "updateRecords" and not all(r.get("recordID") for r in records):
+                        raise ApiError("修改必须明确指定 recordID")
         return self._request("POST", self._sheet_url(file_id, sheet_id), json=payload)
 
     def get_fields(self, file_id: str, sheet_id: str) -> list[dict]:
@@ -451,6 +482,7 @@ def build_actions(headers: list[str], rows: list[dict], mapping: dict[str, str],
 
 def execute_actions(client: TdClient, file_id: str, sheet_id: str,
                     actions: list[dict], log: Callable[[str], None]) -> dict:
+    client.validate_write_target(file_id, sheet_id)
     adds = [{"values": action["values"]} for action in actions
             if action["op"] == "新增"]
     updates = [{"recordID": action["record_id"], "values": action["values"]}

@@ -18,7 +18,7 @@ from typing import Callable, List, Optional, Tuple
 
 from .concat_engine import (
     ConcatCancelled, ConcatError, _ffmpeg_progress_stream, _no_window,
-    concat_media, media_duration, probe_media,
+    concat_media, media_duration, probe_media, unique_output_path,
 )
 from .utils import find_ffmpeg_exe
 
@@ -135,11 +135,19 @@ def _cut_ext(src: Path) -> str:
     return suffix if suffix in _COPY_CONTAINERS else ".mp4"
 
 
+def _check_cut_output(src: Path, out: Path) -> None:
+    if src.resolve() == out.resolve() or (out.exists() and src.samefile(out)):
+        raise EditError("输出文件不能覆盖源视频，请修改文件名或输出目录")
+
+
 def cut_one(src: Path, out: Path, start_ms: int, end_ms: int,
             mode: str = "copy", progress: ProgressCb = None,
             cancel: CancelCb = None, base: int = 0, span: int = 100) -> Path:
     """切割单个片段。mode=copy 无损（关键帧对齐）/ precise 精确重编码。"""
     src, out = Path(src), Path(out)
+    _check_cut_output(src, out)
+    if out.exists():
+        raise EditError(f"输出文件已存在: {out.name}")
     start_ms = max(0, int(start_ms))
     duration_sec = max(0.05, (int(end_ms) - start_ms) / 1000)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +224,14 @@ def cut_segments(src: Path, segments: List[Tuple[int, int]], out_dir: Path,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = _cut_ext(src)
+    final = None
+    if merge:
+        name = merged_name or f"{src.stem}_片段合并{ext}"
+        if Path(name).name != name:
+            raise EditError("合并文件名不能包含目录，请通过输出目录选择位置")
+        final = (out_dir / name).with_suffix(ext)
+        _check_cut_output(src, final)
+        final = unique_output_path(final)
     total = len(segments)
     parts: List[Path] = []
     tmpdir: Optional[Path] = None
@@ -229,30 +245,30 @@ def cut_segments(src: Path, segments: List[Tuple[int, int]], out_dir: Path,
             span = max(1, int((80 if merge else 92) / total))
             if merge:
                 if tmpdir is None:
-                    tmpdir = Path(tempfile.mkdtemp(prefix="fmjj_cut_"))
+                    # 与最终输出同盘，完成后才原子重命名，失败不影响已有文件。
+                    tmpdir = Path(tempfile.mkdtemp(prefix="fmjj_cut_", dir=out_dir))
                 dst = tmpdir / f"part_{idx:03d}{ext}"
             else:
-                dst = out_dir / f"{src.stem}_片段{idx + 1:02d}{ext}"
+                dst = unique_output_path(out_dir / f"{src.stem}_片段{idx + 1:02d}{ext}")
             progress(base, f"切割 {idx + 1}/{total}")
             parts.append(cut_one(src, dst, start, end, mode, progress, cancel,
                                  base=base, span=span))
         if merge:
+            if not parts:
+                raise EditError("没有有效的片段可合并")
+            if cancel and cancel():
+                raise EditCancelled("已停止切割")
             if len(parts) == 1:
-                final = out_dir / (merged_name or f"{src.stem}_片段合并{ext}")
-                if final.suffix.lower() != ext:
-                    final = final.with_suffix(ext)
-                if final.exists():
-                    final.unlink()
-                parts[0].replace(final)
-                return [final]
-            name = merged_name or f"{src.stem}_片段合并{ext}"
-            final = out_dir / name
-            # 片段是无损裁切的同一容器，合并输出沿用它（避免 mp4 装不下字幕轨）
-            if final.suffix.lower() != ext:
-                final = final.with_suffix(ext)
-            if final.exists():
-                final.unlink()
-            concat_media(parts, final, "copy", progress, cancel)
+                staged = parts[0]
+            else:
+                staged = tmpdir / f"merged{ext}"
+                concat_media(parts, staged, "copy", progress, cancel)
+            if cancel and cancel():
+                raise EditCancelled("已停止切割")
+            if not staged.is_file() or staged.stat().st_size == 0:
+                raise EditError("合并输出为空")
+            # Windows rename 拒绝覆盖竞争期间出现的文件。
+            staged.rename(final)
             return [final]
         return parts
     finally:

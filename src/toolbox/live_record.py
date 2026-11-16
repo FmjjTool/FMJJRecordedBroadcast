@@ -799,11 +799,15 @@ def fetch_douyin(room, quality=""):
     streams = info.get("streams") or {}
     qk, url = _pick_douyin_stream(streams, quality)
     status = info.get("status")
-    live = int(status or 0) == 2 and bool(url)
+    live = int(status or 0) == 2
     # 未开播不是错误：只有「开着播却取不到流」才算错误（避免表格里红字误报）
     err = info.get("error") or ""
-    if not live and int(status or 0) != 2:
+    if status is None:
+        err = err or "未读取到直播状态，请稍后重试"
+    elif not live:
         err = ""
+    elif not url:
+        err = err or "未找到可用直播流"
     return {
         "live": live,
         "status": status,
@@ -825,16 +829,21 @@ def fetch_bili(room, qn=10000):
     from toolbox import bili_live
     info = bili_live.fetch_room_info(str(room))
     play = bili_live.fetch_play_url(str(room), qn)
-    live = int(info.get("live_status") or play.get("live_status") or 0) == 1
+    status = info.get("live_status")
+    if status is None:
+        status = play.get("live_status")
+    live = int(status or 0) == 1
     url = play.get("flv") or ""
     err = info.get("error") or ""
-    if not live:
+    if status is None:
+        err = err or play.get("error") or "未读取到直播状态，请稍后重试"
+    elif not live:
         err = ""      # 未开播/轮播不算错误
     elif not url:
         err = play.get("error") or "未找到可用直播流"
     return {
-        "live": live and bool(url),
-        "status": info.get("live_status"),
+        "live": live,
+        "status": status,
         "title": info.get("title") or play.get("title") or "",
         "name": info.get("uname") or "",
         "online": info.get("watch_num") or 0,
@@ -1020,6 +1029,10 @@ class RecordManager:
         info = fetch_info(a.platform, a.room, a.quality)
         a.last_check = time.strftime("%Y-%m-%d %H:%M:%S")
         a.error = info.get("error") or ""
+        if a.error and info.get("status") is None:
+            # 查询失败不是关播；保留上一状态，正常收流的任务继续运行。
+            self.changed()
+            return
         was_live = a.live
         a.live = bool(info.get("live"))
         if info.get("title"):

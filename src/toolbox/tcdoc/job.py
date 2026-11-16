@@ -216,8 +216,10 @@ def _store_tables(item: dict, info: dict, on_status=None) -> None:
             excel_ok = False
             item["tables_excel_error"] = f"表格 Excel 写入失败：{exc}"
             log(f"[{item['name']}] {item['tables_excel_error']}")
-        # Excel 没写成功不记 rev：下次同步重新拉取并重试，避免一直跳过
-        if excel_ok and info.get("rev"):
+        # 未拉全时清除版本缓存：即使远端版本不再变化，下次也必须补采。
+        if partial:
+            tables.set_rev(item["doc_key"], "")
+        elif excel_ok and info.get("rev"):
             tables.set_rev(item["doc_key"], info["rev"])
         _download_images(item, on_status)
     except Exception as exc:  # noqa: BLE001

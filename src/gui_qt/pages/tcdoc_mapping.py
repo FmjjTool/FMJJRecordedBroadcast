@@ -416,6 +416,10 @@ class TcDocMappingPanel(QWidget):
             QMessageBox.warning(self, "没有文档", "请先在页面顶部选择腾讯文档")
             return
         self.set_doc(doc)
+        if doc.get("key") != openapi.WRITABLE_DOC_KEY:
+            QMessageBox.warning(self, "禁止回写此文档",
+                                "映射回写仅允许封茗囧菌数据汇总库的官方动态与直播记录")
+            return
         kind = (doc.get("kind") or "").lower()
         if kind not in ("sheet", "smartsheet"):
             QMessageBox.warning(self, "文档类型不支持",
@@ -435,6 +439,8 @@ class TcDocMappingPanel(QWidget):
             file_id = client.convert_file_id(key)
             post_to_main(self.log, f"fileID = {file_id}")
             sheets = client.list_sheets(file_id)
+            sheets = [sheet for sheet in sheets
+                      if sheet.get("sheetID") in openapi.WRITABLE_TAB_IDS]
             return file_id, sheets
 
         def done(result):
@@ -448,11 +454,11 @@ class TcDocMappingPanel(QWidget):
                     f"{sheet.get('title') or sheet.get('sheetID')}"
                     f"  ({sheet.get('sheetID')})", sheet.get("sheetID"))
             self.sheet_combo.blockSignals(False)
-            self.conn_status.setText(f"已连接 · {len(self.sheets)} 个子表")
+            self.conn_status.setText(f"已连接 · {len(self.sheets)} 个允许回写的子表")
             self.refresh_btn.setEnabled(True)
             self.content_tabs.setCurrentIndex(0)
             if not self.sheets:
-                self.log("文档里没有智能表子表")
+                self.log("文档里没有允许回写的子表")
                 return
             self.load_fields()
 
@@ -797,6 +803,13 @@ class TcDocMappingPanel(QWidget):
     def _validate_ready(self) -> bool:
         if not (self.client and self.file_id and self.sheet_combo.currentData()):
             QMessageBox.warning(self, "未连接", "请先连接当前文档并选择子表")
+            return False
+        try:
+            openapi.validate_write_scope((self.doc or {}).get("key", ""),
+                                         self.sheet_combo.currentData())
+            self.client.validate_write_target(self.file_id, self.sheet_combo.currentData())
+        except openapi.ApiError as exc:
+            QMessageBox.warning(self, "禁止回写此目标", str(exc))
             return False
         if not self.local_headers:
             QMessageBox.warning(self, "没有本地数据", "请先选择 CSV / Excel / JSON 文件")

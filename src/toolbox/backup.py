@@ -86,6 +86,8 @@ def _fmt_size(n):
 
 def _module_file_path(mod: str, name: str) -> Path:
     """账号数据实际位置：源码运行=模块旁；打包后=config/。"""
+    if (mod, name) not in _MODULE_FILES:
+        raise BackupError("备份包含不允许导入的模块文件")
     if getattr(sys, "frozen", False):
         return get_config_dir() / name
     return Path(__file__).resolve().parent.parent / mod / name
@@ -93,7 +95,10 @@ def _module_file_path(mod: str, name: str) -> Path:
 
 def _safe_rel(rel_parts) -> bool:
     """zip/清单内相对路径安全检查：不允许 .. / 绝对路径 / 盘符。"""
-    return bool(rel_parts) and all(p not in ("", ".", "..") for p in rel_parts)
+    return bool(rel_parts) and all(
+        p not in ("", ".", "..") and not p.endswith((" ", "."))
+        and not any(c in p for c in ("/", "\\", ":", "\x00"))
+        for p in rel_parts)
 
 
 # ==================== 配置导出 / 导入 ====================
@@ -155,20 +160,28 @@ def import_config(zip_path: str) -> dict:
         if manifest.get("type") != "config":
             raise BackupError("该备份不是配置备份"
                               + (f"（类型：{manifest.get('type')}）" if manifest.get("type") else ""))
-        count = 0
+        entries = []
         for name in z.namelist():
             if name == MANIFEST or name.endswith("/"):
                 continue
             parts = tuple(name.split("/"))
+            if not _safe_rel(parts):
+                raise BackupError("备份包含不安全的文件路径")
             if len(parts) >= 2 and parts[0] == "config":
                 rel = parts[1:]
-                target = get_config_dir().joinpath(*rel)
+                base = get_config_dir().resolve()
+                target = base.joinpath(*rel)
             elif len(parts) == 3 and parts[0] == "modules":
                 target = _module_file_path(parts[1], parts[2])
+                base = target.parent.resolve()
             else:
                 continue
-            if not _safe_rel(target.name and parts[1:]):
-                continue
+            if not target.resolve().is_relative_to(base):
+                raise BackupError("备份目标路径超出允许目录")
+            entries.append((name, target))
+        # 全包预检完成后再写入，禁止先导入合法文件再发现源码覆盖。
+        count = 0
+        for name, target in entries:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(z.read(name))
             count += 1
