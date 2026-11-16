@@ -229,7 +229,7 @@ class PerformancePage(BasePage):
             self._fill(current, [(p["page"], p["state"], p["widgets"], p["table_slots"])
                                   for p in latest.get("pages", [])])
         elif current is self.event_table:
-            names = {"page_switch": "切换页面", "worker": "后台执行", "callback": "主线程回调",
+            names = {"page_switch": "切换页面", "page_preload": "页面预载", "worker": "后台执行", "callback": "主线程回调",
                      "ui_delay": "界面延迟", "mark": "手动标记"}
             self._fill(current, [(e["seconds"], names.get(e["kind"], e["kind"]), e["label"],
                                   e.get("duration_ms", e.get("lag_ms", "—")), _mb(e.get("rss_delta")),

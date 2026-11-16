@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -464,6 +465,12 @@ class TcDocPage(BasePage):
         self.mapping_panel = None
         self._task_checked_at = 0.0
         self._migrate_note = ""
+        self._last_reload_at = 0.0
+        self._preload_requested = False
+        self._preload_indexes = []
+        self._preload_timer = QTimer(self)
+        self._preload_timer.setSingleShot(True)
+        self._preload_timer.timeout.connect(self._preload_next_panel)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1098,10 +1105,60 @@ class TcDocPage(BasePage):
 
     # ==================== 生命周期 ====================
 
+    def preload_tasks(self):
+        return (self._start_preload,)
+
+    def preload_is_pending(self):
+        bridge = self._panels.get(self.bridge_tab_index)
+        return bool(self._preload_indexes or self._ready_loading or self._local_running
+                    or self._reload_pending or (bridge is not None and
+                    (bridge._busy or bridge._targets_loading)))
+
+    def _start_preload(self):
+        self._preload_requested = True
+        self._preload_indexes = list(range(self.tabs.count()))
+        self._ensure_ready()
+        self._preload_timer.start(100)
+
+    def _preload_next_panel(self):
+        if self._closed or not self._preload_indexes:
+            return
+        if self._ready_loading or self._busy or self._reload_pending:
+            self._preload_timer.start(100)
+            return
+        if not self._ready_done:  # 初始化失败留给显式进入/刷新重试。
+            self._preload_indexes.clear()
+            return
+        index = self._preload_indexes.pop(0)
+        monitor = getattr(self.app, "performance_monitor", None)
+        token = None
+        failed = False
+        try:
+            if monitor is not None:
+                try:
+                    token = monitor.page_started()
+                except Exception:
+                    pass
+            self._refresh_tab(index)
+        except Exception:
+            failed = True
+            logging.getLogger(__name__).exception("腾讯文档面板预载失败: %s", index)
+        finally:
+            if monitor is not None:
+                try:
+                    monitor.page_finished(token, f"tcdoc:{index}", failed, kind="page_preload")
+                except Exception:
+                    pass
+            if self._preload_indexes:
+                self._preload_timer.start(100)
+
     def on_show(self):
         self._page_visible = True
         if self._ready_done:
-            self.reload()
+            if time.monotonic() - self._last_reload_at > 30:
+                self.reload()
+            else:
+                self._refresh_active_tab()
         else:
             self._ensure_ready()
         if time.time() - self._task_checked_at > 8:
@@ -1112,6 +1169,7 @@ class TcDocPage(BasePage):
 
     def shutdown(self):
         self._closed = True
+        self._preload_timer.stop()
         self._page_visible = False
         if self.bridge_tab_index in self._panels:
             self.bridge_panel.shutdown()
@@ -1142,8 +1200,10 @@ class TcDocPage(BasePage):
             self._migrate_note = note or ""
             if note:
                 self.app.toast(note, "info")
-            if self._page_visible:
+            if self._page_visible or self._preload_requested:
                 self.reload()
+                if self._preload_indexes:
+                    self._preload_timer.start(100)
 
         run_bg(work, done)
 
@@ -1166,6 +1226,7 @@ class TcDocPage(BasePage):
         if self._closed:
             return
         self._data_revision += 1
+        self._last_reload_at = time.monotonic()
         self._reload_docs(self._reload_doc_key)
         self._reload_doc_key = ""
         self._refresh_summary()
@@ -1209,9 +1270,10 @@ class TcDocPage(BasePage):
                          lambda rows, done, valid: self._render_table(
                              self.doc_table, rows, items, done, valid))
 
-    def _refresh_tables(self):
-        """只填当前历史/明细页；批量分配行，避免逐行调整表格。"""
-        daily = self.tabs.currentIndex() == self.daily_tab_index
+    def _refresh_tables(self, index=None):
+        """填指定历史/明细页；预载隐藏页时不改变当前页签。"""
+        index = self.tabs.currentIndex() if index is None else index
+        daily = index == self.daily_tab_index
         table = self.table_daily if daily else self.table_snap
         doc = self.current_doc()
         db = tc_cfg.db_path()
@@ -1319,9 +1381,11 @@ class TcDocPage(BasePage):
         self._refresh_active_tab()
 
     def _refresh_active_tab(self):
+        self._refresh_tab(self.tabs.currentIndex())
+
+    def _refresh_tab(self, index):
         if not self._ready_done or self._busy:
             return
-        index = self.tabs.currentIndex()
         if index < 0:
             return
         if index in self._loaded_tabs:
@@ -1346,13 +1410,14 @@ class TcDocPage(BasePage):
         elif index == self.doc_tab_index:
             self._fill_doc_table()
         elif index in (self.daily_tab_index, self.snapshot_tab_index):
-            self._refresh_tables()
+            self._refresh_tables(index)
         elif index == self.content_tab_index:
             self._refresh_content_tab()
             doc = self.current_doc()
             if not doc or (doc.get("kind") or "").lower() in tables.SYNC_KINDS:
                 self._refresh_sheet_tabs()
             else:
+                self.preview_panel.set_doc(doc)
                 self._show_panel(index)
                 self._loaded_tabs.add(index)
 

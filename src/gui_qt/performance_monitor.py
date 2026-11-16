@@ -64,7 +64,9 @@ class PerformanceMonitor(QObject):
             self.recorder.event("monitor_error", "采样失败")
 
     def _sample(self):
-        pages = [(key, page, "已挂载") for key, page in self.app.pages.items()]
+        pages = [(key, page, "当前页面" if key == self.app.current_page else
+                  ("隐藏缓存" if page._ever_shown else "已预载"))
+                 for key, page in self.app.pages.items()]
         pages += [(key, page, "后台保留") for key, page in self.app.page_lifecycle.retained.items()]
         inventory = []
         for key, page, state in pages:
@@ -94,7 +96,7 @@ class PerformanceMonitor(QObject):
             return None
         return self.recorder.session, time.perf_counter(), process_memory()
 
-    def page_finished(self, token, key, failed=False):
+    def page_finished(self, token, key, failed=False, kind="page_switch"):
         if token is None or token[0] != self.recorder.session or not self.recorder.active:
             return
         after = process_memory()
@@ -102,4 +104,4 @@ class PerformanceMonitor(QObject):
         for field in ("rss", "private"):
             before = token[2][field]
             metrics[f"{field}_delta"] = after[field] - before if after[field] is not None and before is not None else None
-        self.recorder.event("page_switch", key, **metrics)
+        self.recorder.event(kind, key, **metrics)

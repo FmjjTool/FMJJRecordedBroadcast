@@ -506,6 +506,15 @@ class InfoResultsPage(BasePage):
             grouped[key].sort(key=lambda info: pub_dates[id(info)], reverse=True)
             self._render_column(key, grouped[key], checked[key], pub_dates)
             self.cols[key]["list"].verticalScrollBar().setValue(scrolls[key])
+        self._render_signature = self._collected_signature()
+
+    @staticmethod
+    def _collected_signature():
+        # 同一批数据切回时保留列表；对象替换或展示字段变化则重新渲染。
+        fields = ("platform", "title", "author", "publish_time", "kind", "video_url",
+                  "video_id", "raw_url", "play_count", "like_count")
+        return tuple((id(info), *(getattr(info, field, None) for field in fields),
+                      bool(getattr(info, "images", None))) for info in common.COLLECTED)
 
     def _checked_keys(self, key):
         """当前栏已勾选条目的去重键（刷新后用于还原勾选）。"""
@@ -584,7 +593,8 @@ class InfoResultsPage(BasePage):
             self.refresh()
 
     def on_show(self):
-        self.refresh()
+        if getattr(self, "_render_signature", None) != self._collected_signature():
+            self.refresh()
 
     def _selected(self, key):
         col = self.cols[key]

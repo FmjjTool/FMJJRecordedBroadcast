@@ -12,7 +12,7 @@
     # 收起方式：再点按钮 / 点「✕ 收起」/ 点击浮层外的任意区域。
 """
 
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QTextBrowser, QVBoxLayout, QWidget)
@@ -68,6 +68,8 @@ class HelpOverlay(QFrame):
         self._page = page
         self._anchor = None
         self._open = False
+        self._app_filter_installed = False
+        self._colors_pending = False
         self.setObjectName("helpOverlay")
         self.setStyleSheet(
             "#helpOverlay { background: #ffffff; border: 1.5px solid #d32f2f;"
@@ -107,10 +109,8 @@ class HelpOverlay(QFrame):
 
         self.hide()
         page.installEventFilter(self)
-        # 点击浮层外的任意区域即收起（应用级过滤器：浮层/锚点按钮内部除外）
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
+        # 应用级鼠标过滤器只在浮层展开时安装；全页预载后，几十个隐藏
+        # 帮助浮层不能逐个处理整个应用的控件/主题事件。
 
     def set_anchor(self, btn: QWidget):
         self._anchor = btn
@@ -118,6 +118,7 @@ class HelpOverlay(QFrame):
     def toggle(self) -> bool:
         """切换显示状态，返回切换后是否展开。"""
         self._open = not self._open
+        self._sync_app_filter()
         self.setVisible(self._open)
         if self._open:
             self._reposition()
@@ -125,12 +126,29 @@ class HelpOverlay(QFrame):
 
     def close_panel(self):
         self._open = False
+        self._sync_app_filter()
         self.hide()
         if self._anchor is not None:
             try:
                 self._anchor.setChecked(False)
             except RuntimeError:
                 pass
+
+    def _sync_app_filter(self):
+        app = QApplication.instance()
+        if app is None:
+            return
+        if self._open and not self._app_filter_installed:
+            app.installEventFilter(self)
+            self._app_filter_installed = True
+        elif not self._open and self._app_filter_installed:
+            app.removeEventFilter(self)
+            self._app_filter_installed = False
+
+    def _refresh_colors(self):
+        self._colors_pending = False
+        if self.browser.isVisible():
+            refresh_browser_colors(self.browser)
 
     def _reposition(self):
         """定位到锚点按钮下方（超界自动钳回页面内）。"""
@@ -150,7 +168,12 @@ class HelpOverlay(QFrame):
     def eventFilter(self, obj, ev):
         t = ev.type()
         if t in (QEvent.PaletteChange, QEvent.Show) and obj is self.browser:
-            refresh_browser_colors(self.browser)
+            # 不在 Qt 全局重设样式的调用栈中编辑 QTextDocument。
+            if self.browser.isVisible() and not self._colors_pending:
+                self._colors_pending = True
+                QTimer.singleShot(0, self._refresh_colors)
+        elif t == QEvent.Hide and obj is self._page:
+            self.close_panel()
         elif t == QEvent.Resize and obj is self._page and self._open:
             self._reposition()
         elif t == QEvent.MouseButtonPress and self._open:

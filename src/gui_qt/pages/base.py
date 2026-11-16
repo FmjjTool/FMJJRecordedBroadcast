@@ -12,6 +12,14 @@ class BasePage(QWidget):
         self.setProperty("pageSurface", True)
         self.app = app  # MainWindow 实例（提供 work_dir / toast 等）
         self._disposed = False
+        self._ever_shown = False
+
+    def preload_tasks(self):
+        """返回分步预载回调；只准备界面/本地数据，不调用采集或播放。"""
+        return ()
+
+    def preload_is_pending(self):
+        return False
 
     def has_active_tasks(self):
         """业务进程仍依赖该宿主时，禁止销毁它。"""

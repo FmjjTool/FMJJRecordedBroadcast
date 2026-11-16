@@ -6,6 +6,8 @@
 任务由对应页面的「定时采集」弹窗注册，本页只做统一查看与删除。
 """
 
+import time
+
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
@@ -64,19 +66,25 @@ class TasksPage(BasePage):
         self.refresh()
 
     def on_show(self):
-        self.refresh()
+        if time.monotonic() - getattr(self, "_refreshed_at", 0) > 8:
+            self.refresh()
 
     # ---------- 数据刷新 ----------
     def refresh(self):
+        if getattr(self, "_refreshing", False):
+            return
+        self._refreshing = True
         def work():
             from toolbox.task_center import list_tasks
             return list_tasks()
 
         def done(tasks, err):
+            self._refreshing = False
             if err:
                 self.app.toast(f"读取定时任务失败：{err}", "error")
                 return
             self._tasks = tasks or []
+            self._refreshed_at = time.monotonic()
             self._render()
 
         run_bg(work, done)

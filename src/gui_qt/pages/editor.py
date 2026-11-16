@@ -128,8 +128,13 @@ class EditorPage(BasePage):
     def on_show(self):
         if self.current_path:
             self.video.show()
-            self.player.setSource(QUrl.fromLocalFile(self.current_path))
+            source = QUrl.fromLocalFile(self.current_path)
+            if self.player.source() != source:
+                self.player.setSource(source)
             self.player.pause()
+
+    def on_hide(self):
+        self.player.pause()
 
     def __init__(self, app):
         super().__init__(app)

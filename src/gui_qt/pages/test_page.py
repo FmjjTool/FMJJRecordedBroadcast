@@ -2911,7 +2911,10 @@ class TestPage(BasePage):
         self._ui_visible = False
         self._clock_timer.stop()
         self._countdown_timer.stop()
-        self.release_view_resources()
+        # 页面缓存后保留 QTextBrowser 文档；反复替换/删除文档会让隐藏页
+        # 再次显示时访问已失效的原生对象。只暂停渲染和搜索计时器。
+        self._search_timer.stop()
+        self._event_search_timer.stop()
         if self.has_critical_services():
             self._stop_replay()
             return

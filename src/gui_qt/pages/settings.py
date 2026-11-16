@@ -307,9 +307,12 @@ class GlobalSettingsPage(BasePage):
         self.ffmpeg_entry.setText(str(load_convert_config().get("ffmpeg_path", "") or ""))
         self._update_ffmpeg_status()
         # 信息
-        self._refresh_info()
+        self._refresh_info(show_toast=False)
         # 依赖检测（每次回到本页都重检一次，不依赖外部信号）
         self._refresh_dependencies()
+
+    def on_hide(self):
+        self._skel_timer.stop()
 
     # ---- 文件夹锁定（锁定后拖入文件夹不改变，直到解锁） ----
     def _refresh_workdir_status(self):

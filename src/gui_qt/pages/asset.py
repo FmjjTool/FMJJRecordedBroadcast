@@ -1607,7 +1607,7 @@ class AssetPage(BasePage):
 
         self.collected_scroll, _, self.collected_layout = self._make_scroll()
         v.addWidget(self.collected_scroll, 1)
-        QTimer.singleShot(0, self._refresh_collected)
+        # 初始读取由预载/首次显示触发，避免构造与 on_show 各扫描一次。
         return f
 
     def _on_search_key(self):
@@ -2431,7 +2431,7 @@ class AssetPage(BasePage):
                     return plat
         return "unknown"
 
-    def _refresh_collected(self, keep_page=False):
+    def _refresh_collected(self, keep_page=False, show_loading=True):
         """骨架加载：立即渲染灰色占位行，后台扫描磁盘后一次性替换真实列表。
 
         扫描要读全部 json + 匹配媒体文件（几百条时明显卡顿），
@@ -2439,6 +2439,27 @@ class AssetPage(BasePage):
         keep_page=True 保持当前页码（删除/下载完成后刷新不打断浏览位置），
         筛选/搜索/排序/手动刷新走默认重置第 1 页。
         """
+        if getattr(self, "_collected_loading", False):
+            self._reload_gen += 1  # 当前结果作废，读取结束后执行最新筛选。
+            self._collected_pending = (keep_page, show_loading)
+            return
+        self._collected_loading = True
+        self._collected_pending = None
+
+        def submit(work, apply):
+            def done(result, err):
+                try:
+                    apply(result, err)
+                finally:
+                    self._collected_loading = False
+                    if not err:
+                        self._collected_refreshed_at = time.monotonic()
+                    pending = self._collected_pending
+                    self._collected_pending = None
+                    if pending is not None and not self._disposed:
+                        self._refresh_collected(*pending)
+            run_bg(work, done)
+
         # 主线程先读筛选条件（后台线程不能碰 Qt 控件）
         # 下拉显示中文名，过滤用英文标识（"全部"原样保留）
         plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
@@ -2453,11 +2474,13 @@ class AssetPage(BasePage):
 
         self._reload_gen += 1
         gen = self._reload_gen
-        self._collected_all_items = []
+        if show_loading:
+            self._collected_all_items = []
         if not keep_page:
             self._collected_page = 1
         self._view_mode = "files" if is_files else "entries"
-        self._render_skeleton(8)
+        if show_loading:
+            self._render_skeleton(8)
 
         # 选了 download/ 分类目录或固定位置 → 文件清单视图（按产物聚合）
         if is_files:
@@ -2489,7 +2512,7 @@ class AssetPage(BasePage):
                     self._collected_page = 1
                 self._render_collected_batch()
 
-            run_bg(work_files, done_files)
+            submit(work_files, done_files)
             return
 
         self._view_mode = "entries"
@@ -2511,9 +2534,10 @@ class AssetPage(BasePage):
                 self._collected_page = 1
             # keep_page 时 _render_collected_batch 内部会把越界页码钳回有效范围
             self._render_collected_batch()
-            self._backfill_bili_covers()
+            if self._ever_shown:
+                self._backfill_bili_covers()
 
-        run_bg(work, done)
+        submit(work, done)
 
     def _status_match(self, it, status) -> bool:
         """条目是否符合「状态」筛选（列表加载与下载后即时归类共用同一口径）。"""
@@ -4574,11 +4598,27 @@ class AssetPage(BasePage):
         run_bg(load, done)
 
     def on_show(self):
-        self._refresh_collected()
-        self._db_reload_tables()
+        if not getattr(self, "_collected_loading", False):
+            if time.monotonic() - getattr(self, "_collected_refreshed_at", 0) > 30:
+                self._refresh_collected(keep_page=True,
+                                        show_loading=not hasattr(self, "_collected_refreshed_at"))
+            else:
+                self._backfill_bili_covers()
+        if time.monotonic() - getattr(self, "_db_refreshed_at", 0) > 30:
+            self._db_reload_tables()
         if 0 <= self.tabs.currentIndex() < self.tabs.count() \
                 and self.tabs.tabText(self.tabs.currentIndex()) == "本地资源":
             self._auto_scan_local()
+
+    def preload_tasks(self):
+        return (self._preload_collected, self._db_reload_tables)
+
+    def preload_is_pending(self):
+        return bool(getattr(self, "_collected_loading", False) or getattr(self, "_db_loading", False))
+
+    def _preload_collected(self):
+        if not getattr(self, "_collected_loading", False) and not hasattr(self, "_collected_refreshed_at"):
+            self._refresh_collected()
 
     # ==================== 数据库浏览（增量采集库） ====================
 
@@ -4678,13 +4718,18 @@ class AssetPage(BasePage):
 
     def _db_reload_tables(self):
         """刷新平台表下拉（含行数），保持当前选择。"""
+        if getattr(self, "_db_loading", False):
+            return
+        self._db_loading = True
         def work():
             from toolbox import increment_db
             return increment_db.list_tables()
 
         def done(tables, err):
+            self._db_loading = False
             if err:
                 return
+            self._db_refreshed_at = time.monotonic()
             tables = tables or []
             prev = self.db_plat_sel.currentText()
             self.db_plat_sel.blockSignals(True)

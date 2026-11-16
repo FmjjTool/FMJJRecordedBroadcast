@@ -1,4 +1,4 @@
-"""PySide6 主窗口：左侧导航 + 右侧 QStackedWidget 懒加载。
+"""PySide6 主窗口：左侧导航 + 右侧 QStackedWidget，首页后分步预载。
 
 与原版（customtkinter）一一对应：
 - 侧栏底部 Cookie 状态区（总开关 + 已登录计数 + 管理入口）
@@ -24,6 +24,7 @@ from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
 from gui_qt.page_lifecycle import PageLifecycleManager, PagePolicy, restore_page_state
+from gui_qt.page_preloader import PagePreloader
 
 
 def _brand_icon_pixmap():
@@ -40,8 +41,7 @@ def _brand_icon_pixmap():
 
 
 # 页面注册：key -> (模块路径, 类名)。
-# 懒导入：首次切到该页才 import（启动只加载首页，避免全部页面模块
-# 一次性 import 拖慢启动、也避免把各页的重依赖提前拉起）。
+# 首页先显示，其余模块随分步预载导入；导航提前点击时立即创建并复用。
 PAGE_CLASSES = {
     "home": ("gui_qt.pages.home", "HomePage"),
     "info_accounts": ("gui_qt.pages.info_accounts", "InfoAccountsPage"),
@@ -207,10 +207,14 @@ class MainWindow(QMainWindow):
 
         # 页面懒加载状态
         self.pages = {}
+        self._closed = False
         self.performance_monitor = None  # 用户开启后才创建，服务归主程序持有。
         self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
         self.page_lifecycle = PageLifecycleManager(self)
+        self.page_preloader = PagePreloader(
+            self, [key for key in PAGE_CLASSES
+                   if key != "toolbox_convert" and key not in _EXTRA_TOOLS])
         self.nav_buttons = {}
         self._search_buttons = {}
         self._tool_names = {"home": ("工作台", "总览")}
@@ -331,6 +335,8 @@ class MainWindow(QMainWindow):
         common.bind_checkbox_toasts(nav_panel)
 
         self.statusBar().showMessage("就绪")
+        self.preload_status = QLabel("页面预载：准备中")
+        self.statusBar().addPermanentWidget(self.preload_status)
 
         # 全局拖放
         self.setAcceptDrops(True)
@@ -356,6 +362,8 @@ class MainWindow(QMainWindow):
 
     def _deferred_boot(self, first_key):
         """事件循环就绪后的启动收尾：构造首个真实页面 + 重依赖初始化。"""
+        if self._closed:
+            return
         if first_key in PAGE_CLASSES:
             self.show_page(first_key)
         # 骨架退场
@@ -370,6 +378,7 @@ class MainWindow(QMainWindow):
         # 保存了深色主题时，把构造期内联样式统一适配（含 styleSheet= 关键字参数）
         if theme.is_dark():
             theme.adapt(self)
+        self.page_preloader.start()
 
     # ==================== 侧栏 ====================
 
@@ -668,6 +677,9 @@ class MainWindow(QMainWindow):
     # ==================== 页面切换 ====================
 
     def show_page(self, key):
+        if self._closed:
+            return
+        self.page_preloader.defer_for_navigation()
         monitor = self.performance_monitor
         try:
             token = monitor.page_started() if monitor is not None and key in PAGE_CLASSES else None
@@ -708,7 +720,34 @@ class MainWindow(QMainWindow):
         for k, btn in self._search_buttons.items():
             btn.setChecked(k == key)
 
-        # 先准备目标页，失败时旧页面仍可使用；构造期任务自动获得宿主租约。
+        page = self._ensure_page(key)
+        if self.current_page == key:
+            return
+
+        old_key = self.current_page
+        old_page = self.pages.get(old_key)
+        self.stack.setCurrentWidget(page)
+        self.current_page = key
+        page._ever_shown = True
+        if old_page is not None:
+            self.page_lifecycle.leave(old_key, old_page)
+        self._update_page_context()
+        if key not in ("tasks", "global_settings", "performance") and not self.nav_search.text().strip():
+            button = self.home_btn if key == "home" else self.nav_buttons.get(key)
+            if button is not None:
+                self.nav_scroll.ensureWidgetVisible(button, 0, 24)
+        theme.adapt(page)
+        if key in self._theme_dirty:
+            self._theme_dirty.discard(key)
+            try:
+                if hasattr(page, "on_theme_changed"):
+                    page.on_theme_changed()
+            except Exception:
+                pass
+        page.on_show()
+
+    def _ensure_page(self, key):
+        """导航与预载共用一个创建入口，不切页、不触发 on_show。"""
         if key not in self.pages:
             page = self.page_lifecycle.take(key)
             if page is None:
@@ -721,46 +760,16 @@ class MainWindow(QMainWindow):
                 page.tabs.currentChanged.connect(self._update_page_context)
             # 功能型复选框：点击时右下角 toast「已开启/已关闭 XXX」
             common.bind_checkbox_toasts(page)
-
-        old_key = self.current_page
-        old_page = self.pages.get(old_key)
-        page = self.pages[key]
-        self.stack.setCurrentWidget(page)
-        self.current_page = key
-        if old_page is not None and old_key != key:
-            self.page_lifecycle.leave(old_key, old_page)
-        self._update_page_context()
-        if key not in ("tasks", "global_settings", "performance") and not self.nav_search.text().strip():
-            button = self.home_btn if key == "home" else self.nav_buttons.get(key)
-            if button is not None:
-                self.nav_scroll.ensureWidgetVisible(button, 0, 24)
-        # 主题自适应：构造期 styleSheet= 关键字参数与动态新增的行在此兜底
-        theme.adapt(page)
-        # 主题切换期间未激活（跳过了 on_theme_changed 通知）的页：切回时补通知
-        if key in self._theme_dirty:
-            self._theme_dirty.discard(key)
-            try:
-                cb = getattr(page, "on_theme_changed", None)
-                if cb:
-                    cb()
-            except Exception:
-                pass
-        # 触发页面刷新钩子（如「已获取」页切回时刷新列表）
-        if hasattr(page, "on_show"):
-            page.on_show()
+            # 构造函数可能启动界面计时器，隐藏预载不能持续渲染或播放。
+            page.on_hide()
+        return self.pages[key]
 
     def closeEvent(self, event):
+        self._closed = True
+        self.page_preloader.stop()
         if self.performance_monitor is not None:
             self.performance_monitor.stop()
         self.page_lifecycle.shutdown()
-        # 关闭窗口：对所有已加载页面触发全停（停抓取/录制/回放等）
-        for page in self.pages.values():
-            fn = getattr(page, "shutdown", None) or getattr(page, "on_hide", None)
-            if fn:
-                try:
-                    fn()
-                except Exception:
-                    pass
         # 直播录制二级窗口（独立窗口，随主程序一起收尾）
         lrw = getattr(self, "live_record_win", None)
         if lrw is not None:

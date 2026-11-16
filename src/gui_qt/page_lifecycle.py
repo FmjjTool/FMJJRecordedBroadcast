@@ -144,7 +144,7 @@ def restore_page_state(page, state):
 
 
 class PageLifecycleManager(QObject):
-    """仅挂载当前页面；必要任务宿主由主程序持有，完成后自动回收。"""
+    """切页保留实例和输入，隐藏钩子暂停界面；程序退出时统一收尾。"""
 
     def __init__(self, app):
         super().__init__(app)
@@ -194,49 +194,19 @@ class PageLifecycleManager(QObject):
 
     def leave(self, key, page):
         page.on_hide()
-        page.release_view_resources()
-        self.app.stack.removeWidget(page)
-        self.app.pages.pop(key, None)
-        self.app._theme_dirty.add(key)
-        page.setParent(self.app)  # 独立于 QStackedWidget，由主程序持有。
         page.hide()
-        protected = page_policy(key) == PagePolicy.PROTECTED and page.has_critical_services()
-        if protected or self._busy(page):
-            self.retained[key] = page
-            self._reaper.start()
-        else:
-            self._dispose(key, page)
-
-    def _dispose(self, key, page):
-        try:
-            self.states[key] = capture_page_state(page)
-            page.shutdown()
-            for child in self._page_tree(page):
-                child._disposed = True
-                child.on_unload()
-                child.deleteLater()
-        except Exception:
-            # 无法安全收尾时保留宿主并记录原因，不在半清理状态下销毁。
-            logging.getLogger(__name__).exception("页面回收失败: %s", key)
-            self.retained[key] = page
-            self._reaper.start()
 
     def reap(self):
-        if self._closed:
-            return
-        for key, page in list(self.retained.items()):
-            protected = page_policy(key) == PagePolicy.PROTECTED and page.has_critical_services()
-            if protected or self._busy(page):
-                continue
-            self.retained.pop(key)
-            self._dispose(key, page)
-        if not self.retained:
-            self._reaper.stop()
+        # 导航不再自动销毁页面，包括后台任务刚完成的宿主。
+        self._reaper.stop()
 
     def shutdown(self):
+        if self._closed:
+            return
         self._closed = True
         self._reaper.stop()
-        for page in list(self.retained.values()):
+        pages = {id(p): p for p in (*self.app.pages.values(), *self.retained.values())}
+        for page in pages.values():
             try:
                 page.shutdown()
                 for child in self._page_tree(page):

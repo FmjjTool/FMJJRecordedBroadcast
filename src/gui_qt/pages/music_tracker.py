@@ -9,6 +9,8 @@
 数据源：网易云/QQ音乐/酷狗/酷我/5sing（游客HTTP→游客Playwright→Cookie 三级回退）。
 """
 
+import time
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -264,6 +266,10 @@ class MusicTrackerPage(BasePage):
 
     # ---------- 账号管理 ----------
     def reload_accounts(self):
+        self._accounts_loading = True
+        self._accounts_refreshed_at = time.monotonic()
+        self._reload_gen = getattr(self, "_reload_gen", 0) + 1
+        gen = self._reload_gen
         self._clear_layout(self.cards_layout)
         self.cards_layout.addStretch(1)
         self.cards = []
@@ -271,6 +277,7 @@ class MusicTrackerPage(BasePage):
         accounts = load_accounts()
         self._reload_acc_list()
         if not accounts:
+            self._accounts_loading = False
             lbl = QLabel("（暂无账号，请在「设置」里搜索或添加）")
             lbl.setStyleSheet("color: gray;")
             lbl.setAlignment(Qt.AlignCenter)
@@ -282,8 +289,6 @@ class MusicTrackerPage(BasePage):
         # 后台批量读各账号 xlsx 历史缓存（openpyxl 逐个读是卡顿根源），
         # 完成后回主线程一次性替换为真实卡片
         skeletons = [self._make_skeleton() for _ in accounts]
-        self._reload_gen = getattr(self, "_reload_gen", 0) + 1
-        gen = self._reload_gen
 
         def work():
             from music_account.accounts import load_history
@@ -292,6 +297,9 @@ class MusicTrackerPage(BasePage):
         def done(histories, err):
             if gen != getattr(self, "_reload_gen", 0):
                 return  # 期间又触发了 reload，本轮结果作废
+            self._accounts_loading = False
+            if err:
+                self._accounts_refreshed_at = 0
             self._clear_layout(self.cards_layout)
             self.cards_layout.addStretch(1)
             if err:
@@ -659,7 +667,9 @@ class MusicTrackerPage(BasePage):
     # ---------- 定时采集（Windows 计划任务） ----------
     def on_show(self):
         # 计划任务在软件外也会采集：切回本页时刷新卡片与任务状态圆点
-        self.reload_accounts()
+        if (not self._accounts_loading
+                and time.monotonic() - self._accounts_refreshed_at > 30):
+            self.reload_accounts()
         self._refresh_task_status()
 
     def _refresh_task_status(self):

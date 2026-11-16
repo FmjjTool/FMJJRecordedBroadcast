@@ -624,7 +624,7 @@ def install_auto_remap():
                         if event.type() != QEvent.DynamicPropertyChange:
                             _adapt_widget(obj)
                         elif obj.isVisible():
-                            _refresh_widget(obj)
+                            _refresh_widget(obj, repolish=True)
                     elif event.type() == QEvent.Show:
                         adapt(obj)
                         if obj.isWindow():
@@ -678,18 +678,20 @@ def _visible_widgets(root):
         yield from _visible_widgets(child)
 
 
-def _refresh_widget(widget):
+def _refresh_widget(widget, repolish=False):
     if widget in _refreshing:
         return
     dark = is_dark()
     _refreshing.add(widget)
     try:
         _adapt_widget(widget)
-        if _widget_themes.get(widget) == dark:
+        if _widget_themes.get(widget) == dark and not repolish:
             return
-        style = widget.style()
-        style.unpolish(widget)
-        style.polish(widget)
+        # Qt 样式表会缓存 palette() 的颜色，需要在主题变化时重算。
+        # unpolish 可能替换 QStyleSheetStyle；不能保存旧 style 再调用
+        # polish，必须重新获取当前对象。相同主题的重复导航由上方缓存跳过。
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
         widget.update()
         _widget_themes[widget] = dark
     finally:

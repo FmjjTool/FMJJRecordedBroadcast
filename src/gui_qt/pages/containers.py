@@ -28,6 +28,7 @@ class TabbedPage(BasePage):
         self._child_states = {}
         self._current_index = -1
         self._current = None
+        self._page_visible = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -76,7 +77,14 @@ class TabbedPage(BasePage):
             self._hosts[index].layout().addWidget(page)
             from gui_qt.page_lifecycle import restore_page_state
             restore_page_state(page, self._child_states.pop(("_pages", index), None))
+            from gui_qt import common, theme
+            common.bind_checkbox_toasts(page)
+            theme.adapt(page)
+            page.on_hide()
         return page
+
+    def preload_tasks(self):
+        return tuple(lambda i=i: self._ensure_page(i) for i in range(len(self._factories)))
 
     def _on_tab_changed(self, index):
         if index == self._current_index:
@@ -86,15 +94,19 @@ class TabbedPage(BasePage):
         page = self._ensure_page(index)
         self._current_index = index
         self._current = page
-        if page is not None:
+        if page is not None and self._page_visible:
+            page._ever_shown = True
             self._call(page, "on_show")
 
     # ==================== 页面钩子转发 ====================
 
     def on_show(self):
+        self._page_visible = True
         page = self._ensure_page(self.tabs.currentIndex())
         self._current_index = self.tabs.currentIndex()
         self._current = page
+        if page is not None:
+            page._ever_shown = True
         self._call(page, "on_show")
 
     def saved_child_states(self):
@@ -109,6 +121,7 @@ class TabbedPage(BasePage):
                 self._call(page, "release_view_resources")
 
     def on_hide(self):
+        self._page_visible = False
         for page in self._pages:
             if page is not None:
                 self._call(page, "on_hide")
