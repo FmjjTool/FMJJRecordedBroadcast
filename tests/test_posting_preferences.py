@@ -176,7 +176,8 @@ class PostingPreferencesTests(unittest.TestCase):
                 dialog.files.item(index).setCheckState(Qt.Unchecked)
         dialog.title.setText("封茗囧菌{日期}{平台}直播全程")
         dialog.platform.setCurrentText("B站")
-        self.assertIn("1 P", dialog.preview.toPlainText())
+        self.assertNotIn(" P", dialog.preview.toPlainText())
+        self.assertIn("视频：1 个", dialog.preview.toPlainText())
         with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
             dialog.start_upload()
             self.wait(lambda: not common.TASKS.has_owner(self.parent))
@@ -184,6 +185,37 @@ class PostingPreferencesTests(unittest.TestCase):
         self.assertEqual(self.posted[0][1]["platform"], "B站")
         metadata = BU.build_metadata([first], self.posted[0][1])
         self.assertIn("20261116B站", metadata["title"])
+
+    def test_multipart_only_today_same_recording_group_and_actual_selection(self):
+        first, second = self.video(), self.video(timecode="21-00-00")
+        dialog = self.dialog()
+        self.enter(dialog)
+        self.assertFalse(dialog.multipart_hint.isHidden())
+        self.assertIn("2 P", dialog.preview.toPlainText())
+        self.assertIn("分P", dialog.windowTitle())
+        dialog.files.item(1).setCheckState(Qt.Unchecked)
+        self.assertTrue(dialog.multipart_hint.isHidden())
+        self.assertNotIn("分P", dialog.windowTitle())
+        self.assertNotIn(" P", dialog.preview.toPlainText())
+        config = {"tid": 266, "copyright": 1}
+        another = Path(self.video(timecode="22-00-00"))
+        other_anchor = another.with_name(another.name.replace("封茗囧菌", "另一主播"))
+        another.rename(other_anchor)
+        for paths in ([first, first], [first, self.video("20261115")],
+                      [self.video("20261115"), self.video("20261115", "21-00-00")],
+                      [first, str(other_anchor)]):
+            self.assertEqual(BU.multipart_count(paths), 0)
+            with self.assertRaises(ValueError):
+                BU.build_metadata(paths, config)
+        other = Path(self.video(timecode="23-00-00"))
+        new = other.with_name(other.name.replace("抖音", "B站"))
+        other.rename(new)
+        self.assertEqual(BU.multipart_count([first, str(new)]), 0)
+        new2 = new.with_name(new.name.replace("B站", "抖音").replace("无弹幕", "有弹幕"))
+        new.rename(new2)
+        self.assertEqual(BU.multipart_count([first, str(new2)]), 0)
+        self.assertEqual(BU.multipart_count([first, second], "20261115"), 0)
+        self.assertEqual(BU.multipart_count([first, second], "20261116"), 2)
 
     def test_disabled_or_cleared_login_never_creates_network_session(self):
         with patch("auth.get_cookie", return_value=""), patch("toolbox.bili_upload.requests.Session") as sessions:

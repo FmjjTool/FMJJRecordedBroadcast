@@ -175,11 +175,12 @@ class WorkflowTests(WorkflowFixture):
             room.assert_called_once_with("123456", login=False)
 
     def test_picture_title_multi_p_and_validation(self):
-        first = self.video()
-        second = self.video("封茗囧菌20261002_2.mp4")
+        first = self.video("2026-10-02_20-15-30_封茗囧菌_聊天_无弹幕_抖音.mp4")
+        second = self.video("2026-10-02_21-00-00_封茗囧菌_游戏_无弹幕_抖音.mp4")
         settings = {"tid": 138, "source": "https://live.douyin.com/123456"}
         self.assertEqual(build_metadata([first], settings)["title"], "封茗囧菌20261002直播全程无弹幕～")
-        self.assertIn("（分两 p）", build_metadata([first, second], settings)["title"])
+        with patch("toolbox.bili_upload.today_compact", return_value="20261002"):
+            self.assertIn("（分两 p）", build_metadata([first, second], settings)["title"])
         with self.assertRaises(ValueError):
             build_metadata([first], {"tid": 138})
         with self.assertRaises(ValueError):
@@ -189,6 +190,27 @@ class WorkflowTests(WorkflowFixture):
 
 
 class UploadPipelineTests(WorkflowFixture):
+    def test_today_recordings_submit_as_two_parts_of_one_video(self):
+        first = self.video("2026-11-16_20-15-30_封茗囧菌_聊天_无弹幕_抖音.mp4")
+        second = self.video("2026-11-16_21-00-00_封茗囧菌_游戏_无弹幕_抖音.mp4")
+        uploader = BiliUploader(cookie="SESSDATA=fictional; bili_jct=fictional-csrf",
+                                history=UploadHistory(self.root / "parts.db"))
+        payloads = []
+        def submit(*args, **kwargs):
+            payloads.append(kwargs["json"])
+            return {"code": 0, "data": {"bvid": "BV-fictional", "aid": 1}}
+        with patch("toolbox.bili_upload.today_compact", return_value="20261116"), \
+                patch.object(uploader, "check_account", return_value={"mid": 1, "name": "测试"}), \
+                patch.object(uploader, "_upload_cover", return_value="fictional-cover"), \
+                patch.object(uploader, "_upload_video", side_effect=[{"filename": "part-one"}, {"filename": "part-two"}]), \
+                patch.object(uploader, "_json", side_effect=submit):
+            result = uploader.run([first, second], {"tid": 138, "copyright": 1})
+        self.assertEqual(result["state"], "published")
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["videos"], [{"filename": "part-one"}, {"filename": "part-two"}])
+        self.assertIn("分两 p", payloads[0]["title"])
+        uploader.close()
+
     # 测试响应按接口类别返回，真实传输另做小视频验证。
     def test_upos_chunks_csrf_and_duplicate_submission(self):
         video = self.video("2026-10-02_20-15-30_封茗囧菌_聊天_无弹幕_抖音.mp4", data=b"abcdefghijk")

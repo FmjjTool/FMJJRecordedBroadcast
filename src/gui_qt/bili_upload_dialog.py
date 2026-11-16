@@ -44,7 +44,7 @@ class BiliUploadDialog(QDialog):
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
         layout = QVBoxLayout(content)
-        hint = QLabel("视频须先完成交互重命名，再开始上传投稿；多个视频按列表顺序组成分P。分区、简介和来源可自行填写。")
+        hint = QLabel("视频须先完成交互重命名，再开始上传投稿。分区、简介和来源可自行填写。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         templates = QHBoxLayout()
@@ -58,9 +58,12 @@ class BiliUploadDialog(QDialog):
         self.delete_template_btn.clicked.connect(self.delete_template)
         templates.addWidget(self.delete_template_btn)
         layout.addLayout(templates)
-        variables = QLabel("模板变量：{日期}、{平台}、{文件名}、{P数}、{分P说明}；模板不保存本次日期和视频。")
-        variables.setWordWrap(True)
-        layout.addWidget(variables)
+        self.variables = QLabel()
+        self.variables.setWordWrap(True)
+        layout.addWidget(self.variables)
+        self.multipart_hint = QLabel()
+        self.multipart_hint.setWordWrap(True)
+        layout.addWidget(self.multipart_hint)
         self.workspace_label = QLabel("当前工作目录：" + (self.work_dir or "未设置"))
         self.workspace_label.setWordWrap(True)
         layout.addWidget(self.workspace_label)
@@ -262,10 +265,20 @@ class BiliUploadDialog(QDialog):
                 self.cover.setText(path)
 
     def refresh_preview(self):
+        paths = self.selected_paths()
+        parts = BU.multipart_count(paths, self.date.text().strip())
+        self.setWindowTitle("B站视频上传 · 文案" + ("与分P预览" if parts else "预览"))
+        self.variables.setText("模板变量：{日期}、{平台}、{文件名}" +
+                               ("、{P数}、{分P说明}" if parts else "") + "；模板不保存本次日期和视频。")
+        self.multipart_hint.setText(f"今天的 {parts} 个录播可组成同一条视频的 {parts} P；拖动列表调整顺序。")
+        self.multipart_hint.setVisible(bool(parts))
+        self.files.setDragDropMode(QListWidget.InternalMove if parts else QListWidget.NoDragDrop)
         try:
-            metadata = BU.build_metadata(self.selected_paths(), self.current_config())
+            metadata = BU.build_metadata(paths, self.current_config())
             self.preview.setPlainText(f"标题：{metadata['title']}\n简介：{metadata['desc']}\n"
-                f"标签：{metadata['tag']}\n分区：{metadata['tid']} · {len(self.selected_paths())} P\n平台：{self.platform.currentText()}\n来源：{metadata['source']}")
+                f"标签：{metadata['tag']}\n分区：{metadata['tid']} · " +
+                (f"{parts} P" if parts else f"视频：{len(paths)} 个") +
+                f"\n平台：{self.platform.currentText()}\n来源：{metadata['source']}")
         except (ValueError, TypeError) as error:
             self.preview.setPlainText(str(error))
 
@@ -470,7 +483,8 @@ class BiliUploadDialog(QDialog):
             self.check_account()
             return
         action = "上传并自动投稿" if config["auto_publish"] else "仅上传，不投稿"
-        if QMessageBox.question(self, "投稿预览", f"{action}\n\n{metadata['title']}\n{len(paths)} P · 分区 {metadata['tid']}\n"
+        count_text = f"{len(paths)} P" if len(paths) > 1 else "1 个视频"
+        if QMessageBox.question(self, "投稿预览", f"{action}\n\n{metadata['title']}\n{count_text} · 分区 {metadata['tid']}\n"
                 f"简介：{metadata['desc']}\n标签：{metadata['tag']}\n\n使用 Cookie 管理当前的 B站账号，确认开始？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return

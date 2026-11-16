@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sqlite3
 import subprocess
 import tempfile
@@ -76,6 +77,34 @@ def is_renamed_video(path):
     return is_standard_recording_name(str(path))
 
 
+def multipart_count(paths, date=""):
+    """只把今天同一主播/平台/弹幕版本的有效录播算作一条稿件的多个 P。"""
+    today = today_compact()
+    if len(paths) < 2 or (date and str(date).replace("-", "") != today):
+        return 0
+    groups, unique = set(), set()
+    for value in paths:
+        path = Path(value)
+        if not is_renamed_video(path) or path.suffix.lower() not in VIDEO_EXTS:
+            return 0
+        if extract_date_from_filename(path.name) != today:
+            return 0
+        # 标准交互命名中，日期/时间后是账户；直播类型和附加标题可以不同。
+        match = re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_([^_]+)(?:_[^_]*)*?_(有弹幕|无弹幕)_([^_]+)(?:_|$)", path.stem)
+        if not match:
+            return 0
+        platform = match[3]
+        platform = "抖子" if platform in ("抖音", "抖子", "douyin") else platform
+        groups.add((match[1], match[2], platform))
+        try:
+            if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+                return 0
+            unique.add(os.path.normcase(str(path.resolve())))
+        except OSError:
+            return 0
+    return len(paths) if len(groups) == 1 and len(unique) == len(paths) else 0
+
+
 def load_settings():
     from toolbox.config_manager import get_config_dir
     try:
@@ -102,9 +131,12 @@ def build_metadata(paths, settings):
     compact = str(date).replace("-", "")
     datetime.strptime(compact, "%Y%m%d")
     count = len(paths)
+    parts = multipart_count(paths, compact)
+    if count > 1 and not parts:
+        raise ValueError("只有今天同一主播、平台、弹幕版本的多个有效录播才可组成一条分P稿件；请按条件分组或单独选择视频")
     values = {"日期": compact, "文件名": Path(paths[0]).stem, "P数": count,
               "平台": normalize_platform(config.get("platform")),
-              "分P说明": (f"（分{'两' if count == 2 else count} p）" if count > 1 else "")}
+              "分P说明": (f"（分{'两' if parts == 2 else parts} p）" if parts else "")}
     try:
         title = config["title"].format(**values).strip()
         desc = config["desc"].format(**values)
