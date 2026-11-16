@@ -50,6 +50,7 @@ PAGE_CLASSES = {
     "wechat_article": ("gui_qt.pages.wechat_article", "WechatArticlePage"),
     "asset": ("gui_qt.pages.asset", "AssetPage"),
     "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
+    "toolbox_rename": ("gui_qt.pages.rename", "RenamePage"),
     "toolbox_convert": ("gui_qt.pages.editor", "EditorPage"),
     "toolbox_editor": ("gui_qt.pages.editor", "EditorPage"),
     "toolbox_audio": ("gui_qt.pages.audio", "AudioPage"),
@@ -101,6 +102,7 @@ NAV_GROUPS = [
     ]),
     ("🎬 录播工具箱", [
         ("toolbox_organize", "📂 自动整理"),
+        ("toolbox_rename", "✏️ 交互重命名 / 投稿"),
         ("toolbox_editor", "🎬 视频操作"),
         ("toolbox_audio", "🎵 音频提取"),
         ("toolbox_subtitle", "📝 字幕转换"),

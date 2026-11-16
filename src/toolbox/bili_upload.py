@@ -25,6 +25,13 @@ DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～",
             "source": "", "cover": "", "date": "", "auto_publish": True}
 
 
+def validate_renamed_videos(paths):
+    from toolbox.rename_engine import is_standard_recording_name
+    pending = [Path(path).name for path in paths if not is_standard_recording_name(str(path))]
+    if pending:
+        raise ValueError("请先完成交互重命名，再开始投稿：" + "、".join(pending[:3]))
+
+
 def load_settings():
     from toolbox.config_manager import get_config_dir
     try:
@@ -285,6 +292,7 @@ class BiliUploader:
             return data["url"]
 
     def run(self, paths, settings):
+        validate_renamed_videos(paths)
         # 在封面/分片/提交期间阻止 Windows 写入，防止暂停写盘的录制视频被当成整场。
         with ExitStack() as readers:
             for path in paths:

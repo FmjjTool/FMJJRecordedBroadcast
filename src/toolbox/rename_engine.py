@@ -31,6 +31,18 @@ DATE_FOLDER_PATTERN = re.compile(r"^(20\d{6})")
 
 # ==================== 时间提取 ====================
 
+def is_standard_recording_name(filename: str) -> bool:
+    """交互重命名生成的日期/时间前缀；投稿统一检查同一规则。"""
+    from datetime import datetime
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_.+", os.path.basename(filename))
+    if not match:
+        return False
+    try:
+        datetime.strptime(match.group(1) + " " + match.group(2), "%Y-%m-%d %H-%M-%S")
+        return True
+    except ValueError:
+        return False
+
 def extract_time_str(file_name: str) -> str:
     """从文件名中提取时间字符串"""
     fname = str(file_name).lower()

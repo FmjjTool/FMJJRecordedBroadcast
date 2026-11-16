@@ -71,16 +71,12 @@ class OrganizePage(BasePage):
         source_row.addWidget(self.recursive)
         source_row.addStretch(1)
         layout.addLayout(source_row)
-        publish_row = QHBoxLayout()
-        self.auto_upload = QCheckBox("整理成功后按配置自动上传 B站")
-        self.auto_upload.setChecked(bool(settings.get("auto_upload", False)))
-        self.auto_upload.toggled.connect(self._save_sources)
-        publish_row.addWidget(self.auto_upload)
-        upload = QPushButton("B站投稿设置 / 视频上传")
-        upload.clicked.connect(self._open_upload)
-        publish_row.addWidget(upload)
-        publish_row.addStretch(1)
-        layout.addLayout(publish_row)
+        rename_row = QHBoxLayout()
+        rename_row.addWidget(QLabel("下一步：视频交互重命名完成后，再在重命名页投稿"), 1)
+        rename_button = QPushButton("✏️ 前往交互重命名 / 投稿")
+        rename_button.clicked.connect(self._open_rename)
+        rename_row.addWidget(rename_button)
+        layout.addLayout(rename_row)
 
         # 控制按钮
         btn_row = QHBoxLayout()
@@ -135,8 +131,7 @@ class OrganizePage(BasePage):
     def _save_sources(self, *_):
         self._invalidate_plan()
         settings = BU.load_settings()
-        settings.update(sources=self._source_paths(), recursive=self.recursive.isChecked(),
-                        auto_upload=self.auto_upload.isChecked())
+        settings.update(sources=self._source_paths(), recursive=self.recursive.isChecked())
         try:
             BU.save_settings(settings)
         except OSError:
@@ -157,12 +152,9 @@ class OrganizePage(BasePage):
                 self.sources.takeItem(self.sources.row(item))
             self._save_sources()
 
-    def _open_upload(self):
-        if self.busy:
-            return
-        from gui_qt.bili_upload_dialog import BiliUploadDialog
-        dialog = BiliUploadDialog(self, self._migrated_videos)
-        dialog.exec()
+    def _open_rename(self):
+        if not self.busy:
+            self.app.show_page("toolbox_rename")
 
     def _set_busy(self, busy):
         self.busy = busy
@@ -246,24 +238,9 @@ class OrganizePage(BasePage):
         root = self._plan_dir
         plan = list(self.migration_plan) + [dict(item, date=date, source_root=root)
                 for date, items in self.groups.items() for item in items]
-        auto = self.auto_upload.isChecked()
-        upload_config = {**BU.DEFAULTS, **BU.load_settings().get("upload", {}), "date": ""}
-        preview = ""
-        if auto:
-            by_date = {}
-            for item in plan:
-                by_date.setdefault(item.get("date") or "", []).append(item["path"])
-            try:
-                for paths in by_date.values():
-                    meta = BU.build_metadata(paths, upload_config)
-                    preview += f"\n{meta['title']} · {len(paths)} P · 分区 {meta['tid']}"
-            except (ValueError, TypeError) as error:
-                self._log(f"自动上传配置未就绪：{error}，请先打开B站投稿设置")
-                return
-            preview = "\n\n整理完成后将按配置自动上传" + ("并投稿：" if upload_config["auto_publish"] else "（不投稿）：") + preview
         ret = QMessageBox.question(
             self, "确认",
-            f"将迁移/整理 {len(plan)} 个视频到：\n{root}\n\n同名自动编号，目标校验成功后删除来源。{preview}\n确认执行？",
+            f"将迁移/整理 {len(plan)} 个视频到：\n{root}\n\n同名自动编号，目标校验成功后删除来源。\n完成后请前往交互重命名页处理，再投稿。\n确认执行？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
@@ -273,43 +250,16 @@ class OrganizePage(BasePage):
         def work():
             results = execute_migration(root, plan, on_progress=lambda current, total, result:
                 self.progress.emit(f"{current}/{total} " + (f"已迁移：{result['target']}" if result['ok'] else f"失败：{result['source']} · {result['error']}")))
-            posts = []
-            if auto:
-                successful = [item["target"] for item in results if item["ok"]]
-                if len(successful) != len(plan):
-                    self.progress.emit("部分视频迁移失败，本批自动上传暂停；请核对完整场次后手工投稿")
-                elif successful:
-                    from toolbox.utils import extract_date_from_filename
-                    groups = {}
-                    for path in successful:
-                        groups.setdefault(extract_date_from_filename(os.path.basename(path)), []).append(path)
-                    try:
-                        uploader = BU.BiliUploader(on_progress=lambda current, total, text:
-                            self.progress.emit(f"B站 {int(current * 100 / max(1, total))}% · {text}"))
-                    except Exception as error:
-                        self.progress.emit(f"B站账号不可用：{error}；迁移成功的视频已保留")
-                        return results, posts
-                    try:
-                        for paths in groups.values():
-                            try:
-                                post = uploader.run(paths, upload_config)
-                                posts.append(post)
-                                self.progress.emit(f"投稿任务完成：{post['title']} · {post['state']}")
-                            except Exception as error:
-                                self.progress.emit(f"B站上传停止：{error}；本地视频已保留")
-                                break
-                    finally:
-                        uploader.close()
-            return results, posts
+            return results
         def done(result, error):
             self._set_busy(False)
             if error:
                 self._log(f"执行中断：{error}，已完成迁移的视频保留在目标目录")
                 return
-            results, posts = result
+            results = result
             self._migrated_videos = [item["target"] for item in results if item["ok"]]
             success = len(self._migrated_videos)
-            self._log(f"✅ 整理完成：成功 {success}，失败 {len(results) - success}，B站完成 {len(posts)} 个任务")
+            self._log(f"✅ 整理完成：成功 {success}，失败 {len(results) - success}。下一步请前往交互重命名页；此处不会上传投稿。")
             self._scan()
         run_bg(work, done, owner=self)
 

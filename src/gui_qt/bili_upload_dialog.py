@@ -24,7 +24,7 @@ class BiliUploadDialog(QDialog):
         self.cancel = threading.Event()
         self.uploader = None
         layout = QVBoxLayout(self)
-        hint = QLabel("复用 Cookie 管理的 B站账号；多个视频按列表顺序组成分P。图片示例未提供分区、简介和来源，请自行填写。")
+        hint = QLabel("视频须先完成交互重命名，再开始上传投稿；多个视频按列表顺序组成分P。分区、简介和来源可自行填写。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.files = QListWidget()
@@ -241,6 +241,7 @@ class BiliUploadDialog(QDialog):
             return
         paths, config = self.selected_paths(), self.current_config()
         try:
+            BU.validate_renamed_videos(paths)
             metadata = BU.build_metadata(paths, config)
         except (ValueError, TypeError) as error:
             self.status.setText(str(error))
