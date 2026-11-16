@@ -12,18 +12,21 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QProgressBar,
-    QPushButton, QSlider, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
+    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QStyle,
+    QStyleOptionSlider, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from image_sorter.core.media_compress_thread import MediaCompressThread
@@ -36,8 +39,8 @@ from toolbox.edit_engine import (
     add_external_audio, add_external_subtitle, complement_segments,
     cut_points_from_ranges, cut_segments, detect_black, detect_scenes,
     detect_silence, export_chapters, export_edl, export_segments_csv,
-    extract_all_tracks, extract_track, import_segments_csv, probe_tracks,
-    read_metadata, remove_tracks, segments_from_points, snapshot,
+    extract_all_tracks, extract_track, frame_bytes, import_segments_csv,
+    probe_tracks, read_metadata, remove_tracks, segments_from_points, snapshot,
     snapshot_every, write_chapters, write_metadata,
 )
 from toolbox.utils import format_size, is_video_file
@@ -69,6 +72,34 @@ def _fmt_ms(ms: int) -> str:
     return f"{m:02d}:{s:02d}.{milli // 100}"
 
 
+class _SeekSlider(QSlider):
+    """可点即跳的进度条：点击轨道任意位置直接跳到该处。
+
+    QSlider 默认只有拖手柄才改值，点击轨道走 pageStep（一次 1/10 时长），
+    用起来像「点不动」。这里把点击位置直接换算成时间点再发 clickedAt。
+    """
+
+    clickedAt = Signal(int)
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt 命名)
+        if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
+            option = QStyleOptionSlider()
+            self.initStyleOption(option)
+            handle = self.style().subControlRect(
+                QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+            if not handle.contains(event.position().toPoint()):
+                span = max(1, self.width() - handle.width())
+                pos = int(event.position().x() - handle.width() / 2)
+                value = QStyle.sliderValueFromPosition(
+                    self.minimum(), self.maximum(), pos, span,
+                    option.upsideDown)
+                self.setValue(value)
+                self.clickedAt.emit(value)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+
 class EditorPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
@@ -80,6 +111,7 @@ class EditorPage(BasePage):
         self.ext_sub_path: Optional[str] = None
         self._pending_start: Optional[int] = None
         self._dragging_slider = False
+        self._last_seek_at = 0.0
         self._duration_ms = 0
         self.running = False
         self._cancel: Optional[threading.Event] = None
@@ -139,7 +171,7 @@ class EditorPage(BasePage):
         right = QVBoxLayout()
         right.setSpacing(4)
         self.video = QVideoWidget()
-        self.video.setMinimumHeight(220)
+        self.video.setMinimumHeight(150)
         self.video.setStyleSheet("background: #000;")
         right.addWidget(self.video, 3)
 
@@ -151,18 +183,49 @@ class EditorPage(BasePage):
         self.player.durationChanged.connect(self._on_duration)
         self.player.errorOccurred.connect(self._on_player_error)
 
-        time_row = QHBoxLayout()
-        self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setStyleSheet("font-family: Consolas, monospace;")
-        time_row.addWidget(self.time_label)
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setOrientation(Qt.Horizontal)
+        # 进度条独立一行并锁死高度：竖直空间不足时普通布局会把它压成不可见，
+        # 固定高度能保证它永远在（拖不动进度条=这条被挤掉）。
+        self.slider = _SeekSlider(Qt.Horizontal)
         self.slider.setRange(0, 0)
+        self.slider.setFixedHeight(20)
+        self.slider.setMinimumWidth(140)
+        self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.slider.setToolTip("点击或拖动进度条定位；拖动时会实时预览画面")
+        self.slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 8px; background: #d6dbe3; border-radius: 4px; }"
+            " QSlider::sub-page:horizontal { height: 8px; background: #2563eb; border-radius: 4px; }"
+            " QSlider::handle:horizontal { width: 16px; height: 16px; margin: -4px 0;"
+            " border-radius: 8px; background: #ffffff; border: 2px solid #2563eb; }"
+            " QSlider::handle:horizontal:hover { background: #dbeafe; }"
+            " QSlider::groove:horizontal:disabled { background: #eef1f5; }"
+        )
+        self.slider.clickedAt.connect(self._seek_to)
         self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderReleased.connect(self._on_slider_released)
         self.slider.sliderMoved.connect(self._on_slider_moved)
-        time_row.addWidget(self.slider, 1)
-        right.addLayout(time_row)
+
+        self.time_label = QLabel("00:00")
+        self.time_label.setStyleSheet("font-family: Consolas, monospace; color: #2563eb;")
+        self.time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.time_label.setFixedWidth(58)
+        self.time_label.setToolTip("当前位置")
+        self.dur_label = QLabel("00:00")
+        self.dur_label.setStyleSheet("font-family: Consolas, monospace; color: #888;")
+        self.dur_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.dur_label.setFixedWidth(58)
+        self.dur_label.setToolTip("总时长")
+
+        seek_row = QHBoxLayout()
+        seek_row.setContentsMargins(0, 0, 0, 0)
+        seek_row.setSpacing(6)
+        seek_row.addWidget(self.time_label)
+        seek_row.addWidget(self.slider, 1)
+        seek_row.addWidget(self.dur_label)
+        seek_wrap = QWidget()
+        seek_wrap.setLayout(seek_row)
+        seek_wrap.setFixedHeight(32)
+        seek_wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        right.addWidget(seek_wrap)
 
         ctrl = QHBoxLayout()
         self.play_btn = QPushButton("▶ 播放")
@@ -210,10 +273,15 @@ class EditorPage(BasePage):
         right.addLayout(jump_row)
 
         self.seg_list = QListWidget()
-        self.seg_list.setMaximumHeight(76)
+        self.seg_list.setMinimumHeight(40)
+        self.seg_list.setMaximumHeight(64)
+        # Ignored：竖直方向不参与「最小高度」争夺，窗口变矮时先压它和日志，
+        # 而不是把视频和进度条一起挤成一条缝。
+        self.seg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         right.addWidget(self.seg_list)
 
         self.tabs = QTabWidget()
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         right.addWidget(self.tabs, 2)
         self._build_merge_tab(cfg)
         self._build_cut_tab(cfg)
@@ -237,7 +305,9 @@ class EditorPage(BasePage):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(110)
+        self.log_text.setMinimumHeight(48)
+        self.log_text.setMaximumHeight(90)
+        self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         right.addWidget(self.log_text)
         body.addLayout(right, 1)
 
@@ -438,24 +508,35 @@ class EditorPage(BasePage):
             self._update_time_label(self.player.position())
 
     def _on_position(self, position: int):
-        if not self._dragging_slider:
-            self.slider.blockSignals(True)
-            self.slider.setValue(position)
-            self.slider.blockSignals(False)
+        # 拖动中不让播放位置反压滑块与时间标签，否则手感是「拖了又弹回去」
+        if self._dragging_slider:
+            return
+        self.slider.blockSignals(True)
+        self.slider.setValue(position)
+        self.slider.blockSignals(False)
         self._update_time_label(position)
 
     def _update_time_label(self, position: int):
-        self.time_label.setText(f"{_fmt_time(position)} / {_fmt_time(self._duration_ms)}")
+        self.time_label.setText(_fmt_time(position))
+        self.dur_label.setText(_fmt_time(self._duration_ms))
 
     def _on_slider_pressed(self):
         self._dragging_slider = True
+        self._last_seek_at = 0.0
 
     def _on_slider_released(self):
         self._dragging_slider = False
+        self._last_seek_at = time.monotonic()
         self.player.setPosition(self.slider.value())
+        self._update_time_label(self.slider.value())
 
     def _on_slider_moved(self, value: int):
         self._update_time_label(value)
+        # 拖动过程中实时预览画面，节流 120ms 防止高频 seek 卡住解码器
+        now = time.monotonic()
+        if now - self._last_seek_at >= 0.12:
+            self._last_seek_at = now
+            self.player.setPosition(int(value))
 
     def _toggle_play(self):
         if not self.current_path or self._duration_ms <= 0:
@@ -849,6 +930,11 @@ class EditorPage(BasePage):
         self.shot_interval.valueChanged.connect(
             lambda val: self._save(editor_shot_interval=val))
         row.addWidget(self.shot_interval)
+        self.shot_copy_cb = QCheckBox("截图后自动复制")
+        self.shot_copy_cb.setChecked(bool(cfg.get("editor_shot_copy", True)))
+        self.shot_copy_cb.setToolTip("截完图顺手进剪贴板，可直接粘到微信 / PS / PR")
+        self.shot_copy_cb.toggled.connect(lambda on: self._save(editor_shot_copy=bool(on)))
+        row.addWidget(self.shot_copy_cb)
         row.addStretch(1)
         v.addLayout(row)
 
@@ -856,6 +942,10 @@ class EditorPage(BasePage):
         self.shot_btn = QPushButton("📷 当前帧")
         self.shot_btn.clicked.connect(self._shot_current)
         row2.addWidget(self.shot_btn)
+        self.shot_copy_btn = QPushButton("📋 复制当前帧")
+        self.shot_copy_btn.setToolTip("不落盘，直接把当前画面以 PNG 复制到剪贴板")
+        self.shot_copy_btn.clicked.connect(self._copy_current_frame)
+        row2.addWidget(self.shot_copy_btn)
         self.shot_all_btn = QPushButton("🎞 按间隔抽帧")
         self.shot_all_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
         self.shot_all_btn.clicked.connect(self._shot_every)
@@ -865,6 +955,9 @@ class EditorPage(BasePage):
         hint = QLabel("截图输出到源文件同目录；按间隔抽帧输出到「<文件名>_frames」文件夹。")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         v.addWidget(hint)
+        hint2 = QLabel("「复制当前帧」不写文件：PNG 无损进剪贴板，可直接粘贴到 PS / PR / 微信。")
+        hint2.setStyleSheet("color: #888; font-size: 11px;")
+        v.addWidget(hint2)
         v.addStretch(1)
         self.tabs.addTab(tab, "📷 截图")
 
@@ -1343,7 +1436,43 @@ class EditorPage(BasePage):
             self.app.toast(f"截图失败: {exc}", "error")
             return
         self._log(f"📷 已截图: {out.name}")
-        self.app.toast(f"截图已保存: {out.name}", "success")
+        if self.shot_copy_cb.isChecked():
+            self._copy_frame(src, position, saved_name=out.name)
+        else:
+            self.app.toast(f"截图已保存: {out.name}", "success")
+
+    # ---------- 复制到剪贴板 ----------
+
+    def _copy_current_frame(self):
+        """把当前播放位置的一帧以 PNG 直接复制到剪贴板（不落盘）。"""
+        if not self.current_path:
+            self.app.toast("先在左侧选择文件", "warning")
+            return
+        self._copy_frame(Path(self.current_path),
+                         self.player.position() or self.slider.value())
+
+    def _copy_frame(self, src: Path, position: int, saved_name: str = ""):
+        def job():
+            return frame_bytes(src, position, "png")
+
+        def done(data, err):
+            if err:
+                self.app.toast(f"复制失败: {err}", "error")
+                return
+            image = QImage()
+            if not image.loadFromData(data or b""):
+                self.app.toast("复制失败：帧数据无法解码", "error")
+                return
+            QApplication.clipboard().setImage(image)
+            size = f"{image.width()}×{image.height()}"
+            if saved_name:
+                self.app.toast(f"截图已保存并复制: {saved_name}", "success")
+                self._log(f"📋 同时复制到剪贴板（{size}）")
+            else:
+                self.app.toast(f"已复制当前帧到剪贴板（{size}）", "success")
+                self._log(f"📋 复制当前帧 {_fmt_time(position)} → 剪贴板（{size}）")
+
+        run_bg(job, done)
 
     def _shot_every(self):
         if self.running:

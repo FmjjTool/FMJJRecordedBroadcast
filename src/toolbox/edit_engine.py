@@ -293,6 +293,28 @@ def snapshot(src: Path, time_ms: int, out_dir: Path = None,
     return out
 
 
+def frame_bytes(src: Path, time_ms: int, image_format: str = "png") -> bytes:
+    """把指定时间点的一帧读进内存（不落盘），用于复制到剪贴板。
+
+    与 snapshot 的区别：ffmpeg 直接把图片写 stdout（image2pipe），
+    不产生临时文件，适合「复制当前帧」这种一次性操作。
+    """
+    src = Path(src)
+    if not src.exists():
+        raise EditError(f"文件不存在: {src.name}")
+    codec = "png" if str(image_format).lower() == "png" else "mjpeg"
+    cmd = [find_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
+           "-ss", f"{max(0, int(time_ms)) / 1000:.3f}", "-i", str(src),
+           "-frames:v", "1", "-f", "image2pipe", "-vcodec", codec, "pipe:1"]
+    proc = subprocess.run(cmd, capture_output=True, timeout=120,
+                          creationflags=_no_window())
+    data = proc.stdout or b""
+    if proc.returncode != 0 or not data:
+        detail = (proc.stderr or b"").decode("utf-8", errors="ignore")[-200:]
+        raise EditError(f"取帧失败: {detail.strip()}")
+    return data
+
+
 def snapshot_every(src: Path, interval_sec: float, out_dir: Path = None,
                    progress: ProgressCb = None,
                    cancel: CancelCb = None) -> List[Path]:

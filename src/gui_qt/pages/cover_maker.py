@@ -31,7 +31,7 @@ from PySide6.QtGui import (
     QPainter, QPalette, QPen, QPixmap, QTextLayout, QTextOption,
 )
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFontComboBox, QGridLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QListView,
     QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
@@ -1521,6 +1521,10 @@ class CoverMakerPage(BasePage):
         self.export_jpg_btn = QPushButton("🖼 导出JPG")
         self.export_jpg_btn.clicked.connect(lambda: self._export_image("JPEG"))
         row2.addWidget(self.export_jpg_btn)
+        self.copy_btn = QPushButton("📋 复制")
+        self.copy_btn.setToolTip("按当前分辨率渲染成品并复制到剪贴板，可直接粘到 PS / PR / 微信")
+        self.copy_btn.clicked.connect(self._copy_image)
+        row2.addWidget(self.copy_btn)
         rv.addLayout(row2)
         return right
 
@@ -1727,6 +1731,24 @@ class CoverMakerPage(BasePage):
         self._persist_state()
         self._toast(f"已导出 {fmt}：{path}", "success")
         return path
+
+    def _copy_image(self) -> bool:
+        """把当前分辨率下的成品复制到剪贴板（不落盘，PNG 质量无损）。"""
+        try:
+            image = self._render_export()
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"复制失败：{exc}", "error")
+            return False
+        if image is None or image.isNull():
+            self._toast("复制失败：没有可用的画面", "error")
+            return False
+        try:
+            QApplication.clipboard().setImage(image)
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"复制失败：{exc}", "error")
+            return False
+        self._toast(f"已复制封面到剪贴板（{image.width()}×{image.height()}）", "success")
+        return True
 
     # ---------- 模板 ----------
 

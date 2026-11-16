@@ -856,6 +856,10 @@ class ImageCropPage(BasePage):
         self.btn_export = QPushButton("💾 导出")
         self.btn_export.clicked.connect(self._export_current)
         bar.addWidget(self.btn_export)
+        self.btn_copy = QPushButton("📋 复制")
+        self.btn_copy.setToolTip("把当前裁切结果复制到剪贴板，可直接粘到 PS / PR / 微信")
+        self.btn_copy.clicked.connect(self._copy_current)
+        bar.addWidget(self.btn_copy)
         self.btn_batch = QPushButton("📦 批量导出")
         self.btn_batch.setToolTip("全部图片按各自裁切区域导出到 download/图片裁切/")
         self.btn_batch.clicked.connect(self._batch_export)
@@ -1193,6 +1197,23 @@ class ImageCropPage(BasePage):
             self.app.toast(f"导出成功：{saved}", "success")
         else:
             self.app.toast("导出失败：图片保存出错", "error")
+
+    def _copy_current(self):
+        """把当前槽位的裁切结果以无损形式复制到剪贴板（不写文件）。"""
+        slot = self.active_slot()
+        if slot is None:
+            self.app.toast("请先导入图片", "warning")
+            return
+        crop = slot.crop
+        if crop.width <= 0 or crop.height <= 0:
+            self.app.toast("裁切区域无效", "warning")
+            return
+        img = slot.image.copy(QRect(crop.left, crop.top, crop.width, crop.height))
+        if img.isNull():
+            self.app.toast("复制失败：裁切结果为空", "error")
+            return
+        QApplication.clipboard().setImage(img)
+        self.app.toast(f"已复制到剪贴板（{img.width()}×{img.height()}）", "success")
 
     def _batch_export(self):
         if self._batch_running:
