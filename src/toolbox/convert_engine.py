@@ -1,5 +1,7 @@
 """视频转换引擎 - 基于 ffmpeg 的视频批量转换"""
 import subprocess
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
@@ -56,16 +58,18 @@ def update_convert_cache(cache: Dict, src: Path, success: bool, output: Path = N
 # ==================== ffmpeg 操作 ====================
 
 def lossless_mux(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
-    """无损封装到 MP4"""
+    """无损封装，默认 MP4，也支持 MKV 与 MOV。"""
     cmd = [find_ffmpeg_exe(), "-i", str(src)]
-    cmd += ["-map", "0:v:0", "-map", "0:a:0"]
+    cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
     if config.get("preserve_metadata", True):
         cmd += ["-map_metadata", "0", "-map_chapters", "0"]
+    out_ext = config.get("output_extension", ".mp4").lower()
+    muxer = {".mp4": "mp4", ".mkv": "matroska", ".mov": "mov"}[out_ext]
+    cmd += ["-c", "copy"]
+    if out_ext in (".mp4", ".mov"):
+        cmd += ["-movflags", "+faststart"]
     cmd += [
-        "-c", "copy",
-        "-bsf:a", "aac_adtstoasc",
-        "-movflags", "+faststart",
-        "-f", "mp4",
+        "-f", muxer,
         "-y",
         "-hide_banner",
         str(dst),
@@ -93,7 +97,7 @@ def lossless_mux(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
 def encode_video(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
     """转码视频"""
     cmd = [find_ffmpeg_exe(), "-i", str(src)]
-    cmd += ["-map", "0:v:0", "-map", "0:a:0"]
+    cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
     if config.get("preserve_metadata", True):
         cmd += ["-map_metadata", "0", "-map_chapters", "0"]
     cmd += [
@@ -105,7 +109,9 @@ def encode_video(src: Path, dst: Path, config: Dict) -> Tuple[bool, str, str]:
         cmd += ["-c:a", "copy"]
     else:
         cmd += ["-c:a", "aac", "-b:a", "192k"]
-    cmd += ["-movflags", "+faststart", "-y", "-hide_banner", str(dst)]
+    if config.get("output_extension", ".mp4").lower() in (".mp4", ".mov"):
+        cmd += ["-movflags", "+faststart"]
+    cmd += ["-y", "-hide_banner", str(dst)]
     
     try:
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -149,7 +155,6 @@ def convert_one_file(
 ) -> ConvertResult:
     """转换单个文件"""
     dst = get_output_path(src, root, config)
-    tmp = dst.parent / (dst.stem + ".tmp.mp4")
     rel = src.relative_to(root)
     
     result = ConvertResult(src=src, dst=dst, rel=rel)
@@ -160,6 +165,11 @@ def convert_one_file(
         if progress_callback:
             progress_callback(f"📂 {rel}\n✅ 已存在，跳过")
         return result
+
+    # 独立临时文件既保证真实容器与扩展名一致，也避免删除同名用户视频。
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{dst.stem}.tmp-", suffix=dst.suffix, dir=dst.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
     
     if tmp.exists():
         try:

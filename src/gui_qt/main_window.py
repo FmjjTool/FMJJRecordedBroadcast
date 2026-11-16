@@ -49,7 +49,7 @@ PAGE_CLASSES = {
     "wechat_article": ("gui_qt.pages.wechat_article", "WechatArticlePage"),
     "asset": ("gui_qt.pages.asset", "AssetPage"),
     "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
-    "toolbox_convert": ("gui_qt.pages.convert", "ConvertPage"),
+    "toolbox_convert": ("gui_qt.pages.editor", "EditorPage"),
     "toolbox_editor": ("gui_qt.pages.editor", "EditorPage"),
     "toolbox_audio": ("gui_qt.pages.audio", "AudioPage"),
     "toolbox_subtitle": ("gui_qt.pages.subtitle", "SubtitlePage"),
@@ -99,8 +99,7 @@ NAV_GROUPS = [
     ]),
     ("🎬 录播工具箱", [
         ("toolbox_organize", "📂 自动整理"),
-        ("toolbox_convert", "🔄 视频转换"),
-        ("toolbox_editor", "🎬 视频剪辑"),
+        ("toolbox_editor", "🎬 视频操作"),
         ("toolbox_audio", "🎵 音频提取"),
         ("toolbox_subtitle", "📝 字幕转换"),
         ("toolbox_launcher", "🚀 继续操作"),
@@ -662,6 +661,10 @@ class MainWindow(QMainWindow):
     # ==================== 页面切换 ====================
 
     def show_page(self, key):
+        if key == "toolbox_convert":
+            self.show_page("toolbox_editor")
+            self.pages["toolbox_editor"].open_convert_tab()
+            return
         if key not in PAGE_CLASSES:
             return
         # 原独立信息页的所有入口都落到同一个容器实例，避免搜索/首页/

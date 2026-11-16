@@ -1,9 +1,9 @@
-"""视频剪辑页（LosslessCut 风格）：预览 + 合并 / 切割 / 压缩 / 轨道提取 / 截图。
+"""视频操作页：批量转换 + 预览 / 合并 / 切割 / 压缩 / 轨道提取 / 截图。
 
 布局：
 - 左侧：文件队列（合并顺序，可拖拽/上移下移）
 - 右上：内嵌播放器 + 时间轴 + 起止点
-- 右下：合并 / 切割 / 压缩 / 轨道 / 截图 五个操作页签
+- 右下：转换 / 合并 / 切割 / 压缩 / 轨道 / 截图 / 元数据页签
 
 合并逻辑与 LC 对齐：concat demuxer + 参数兼容性检查；切割默认无损（关键帧边界），
 需要精确时可选重编码。压缩复用 image_sorter 的 MediaCompressThread。
@@ -23,8 +23,8 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QStyle,
+    QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
 )
@@ -34,7 +34,12 @@ from toolbox.concat_engine import (
     MODE_COPY, MODE_ENCODE, check_compatibility, concat_media, find_videos_in,
     probe_media, unique_output_path,
 )
-from toolbox.config_manager import load_convert_config, save_convert_config
+from toolbox.config_manager import (
+    load_convert_cache, load_convert_config, save_convert_cache, save_convert_config,
+)
+from toolbox.convert_engine import (
+    convert_one_file, find_videos, get_output_path, is_convert_cached, update_convert_cache,
+)
 from toolbox.edit_engine import (
     add_external_audio, add_external_subtitle, complement_segments,
     cut_points_from_ranges, cut_segments, detect_black, detect_scenes,
@@ -124,10 +129,11 @@ class EditorPage(BasePage):
         root.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("🎬 视频剪辑")
+        title = QLabel("🎬 视频操作")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
-        tip = QLabel("预览选段 → 切割 / 合并 / 压缩 / 提取轨道 / 截图")
+        tip = QLabel("转换 / 切割 / 合并 / 压缩 / 提取轨道 / 截图")
+        tip.setWordWrap(True)
         tip.setStyleSheet("color: #888; font-size: 11px;")
         head.addWidget(tip)
         head.addStretch(1)
@@ -162,18 +168,25 @@ class EditorPage(BasePage):
         self.file_label.setStyleSheet("color: #888; font-size: 11px;")
         self.file_label.setWordWrap(True)
         left.addWidget(self.file_label)
-        left_wrap = QWidget()
-        left_wrap.setLayout(left)
-        left_wrap.setFixedWidth(330)
-        body.addWidget(left_wrap)
+        self.left_wrap = QWidget()
+        self.left_wrap.setLayout(left)
+        self.left_wrap.setFixedWidth(330)
+        body.addWidget(self.left_wrap)
 
         # ==================== 右：预览 + 操作 ====================
         right = QVBoxLayout()
         right.setSpacing(4)
+        self.operation_splitter = QSplitter(Qt.Vertical)
+        self.operation_splitter.setChildrenCollapsible(False)
+        preview_area = QWidget()
+        preview_layout = QVBoxLayout(preview_area)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(4)
+        preview_area.setMinimumHeight(260)
         self.video = QVideoWidget()
-        self.video.setMinimumHeight(150)
+        self.video.setMinimumHeight(100)
         self.video.setStyleSheet("background: #000;")
-        right.addWidget(self.video, 3)
+        preview_layout.addWidget(self.video, 3)
 
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
@@ -225,7 +238,7 @@ class EditorPage(BasePage):
         seek_wrap.setLayout(seek_row)
         seek_wrap.setFixedHeight(32)
         seek_wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        right.addWidget(seek_wrap)
+        preview_layout.addWidget(seek_wrap)
 
         ctrl = QHBoxLayout()
         self.play_btn = QPushButton("▶ 播放")
@@ -241,7 +254,7 @@ class EditorPage(BasePage):
                        self.clear_seg_btn, self.shot_current_btn):
             ctrl.addWidget(widget)
         ctrl.addStretch(1)
-        right.addLayout(ctrl)
+        preview_layout.addLayout(ctrl)
 
         # 快捷转跳
         jump_row = QHBoxLayout()
@@ -270,7 +283,7 @@ class EditorPage(BasePage):
         self.jump_btn.clicked.connect(self._jump_to_text)
         jump_row.addWidget(self.jump_btn)
         jump_row.addStretch(1)
-        right.addLayout(jump_row)
+        preview_layout.addLayout(jump_row)
 
         self.seg_list = QListWidget()
         self.seg_list.setMinimumHeight(40)
@@ -278,11 +291,21 @@ class EditorPage(BasePage):
         # Ignored：竖直方向不参与「最小高度」争夺，窗口变矮时先压它和日志，
         # 而不是把视频和进度条一起挤成一条缝。
         self.seg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
-        right.addWidget(self.seg_list)
+        preview_layout.addWidget(self.seg_list)
+        self.operation_splitter.addWidget(preview_area)
 
         self.tabs = QTabWidget()
-        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
-        right.addWidget(self.tabs, 2)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        operation_scroll = QScrollArea()
+        operation_scroll.setWidgetResizable(True)
+        operation_scroll.setMinimumHeight(210)
+        operation_scroll.setWidget(self.tabs)
+        self.operation_splitter.addWidget(operation_scroll)
+        self.operation_splitter.setStretchFactor(0, 3)
+        self.operation_splitter.setStretchFactor(1, 2)
+        self.operation_splitter.setSizes([300, 250])
+        right.addWidget(self.operation_splitter, 1)
+        self._build_convert_tab(cfg)
         self._build_merge_tab(cfg)
         self._build_cut_tab(cfg)
         self._build_compress_tab(cfg)
@@ -305,9 +328,9 @@ class EditorPage(BasePage):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMinimumHeight(48)
+        self.log_text.setMinimumHeight(60)
         self.log_text.setMaximumHeight(90)
-        self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         right.addWidget(self.log_text)
         body.addLayout(right, 1)
 
@@ -586,15 +609,191 @@ class EditorPage(BasePage):
                        *self.jump_buttons):
             widget.setEnabled(enabled)
         self.slider.setEnabled(enabled)
-        for index in range(1, self.tabs.count()):
+        for index in range(2, self.tabs.count()):
             self.tabs.setTabEnabled(index, enabled)
 
     def _refresh_action_buttons(self):
         has_file = bool(self.current_path)
         idle = not self.running
+        self.left_wrap.setEnabled(idle)
+        self.tabs.setEnabled(idle)
         self.merge_btn.setEnabled(len(self.files) >= 2 and idle)
         self.cut_btn.setEnabled(has_file and bool(self.segments) and idle)
         self.cmp_btn.setEnabled(bool(self.files) and idle)
+        self.convert_btn.setEnabled(bool(self.files) and idle)
+        self.convert_scan_btn.setEnabled(idle)
+        self.convert_clear_btn.setEnabled(idle)
+
+    # ==================== 转换页签 ====================
+
+    def _build_convert_tab(self, cfg):
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        content = QWidget()
+        tab.setWidget(content)
+        v = QVBoxLayout(content)
+        v.setContentsMargins(8, 8, 8, 8)
+        hint = QLabel("转换左侧整个文件队列，优先无损封装。成功后队列切换为输出文件，可继续剪辑。")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        row = QHBoxLayout()
+        self.convert_scan_btn = self._btn("扫描待转换视频", self._scan_convert)
+        row.addWidget(self.convert_scan_btn)
+        self.convert_btn = self._btn("开始转换", self._start_convert)
+        self.convert_btn.setProperty("variant", "primary")
+        row.addWidget(self.convert_btn)
+        self.convert_clear_btn = self._btn("清除转换缓存", self._clear_convert_cache)
+        self.convert_clear_btn.setToolTip("只清除转换记录，不删除视频文件。")
+        row.addWidget(self.convert_clear_btn)
+        row.addStretch(1)
+        v.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("输出格式:"))
+        self.convert_ext = QComboBox()
+        self.convert_ext.addItems([".mp4", ".mkv", ".mov"])
+        self.convert_ext.setCurrentText(cfg.get("output_extension", ".mp4"))
+        self.convert_ext.currentTextChanged.connect(lambda t: self._save(output_extension=t))
+        row.addWidget(self.convert_ext)
+        row.addStretch(1)
+        v.addLayout(row)
+        options = QGridLayout()
+        self.convert_options = {}
+        for index, (key, label, default) in enumerate((
+            ("preserve_metadata", "保留元数据", True),
+            ("preserve_timestamps", "保留时间戳", True),
+            ("enable_cache", "启用缓存", True),
+            ("enable_encode_fallback", "无损失败转码", False),
+            ("delete_source_after_success", "成功后删源 ⚠️", False),
+        )):
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(cfg.get(key, default))
+            checkbox.toggled.connect(lambda checked, k=key: self._save(**{k: checked}))
+            options.addWidget(checkbox, index // 3, index % 3)
+            self.convert_options[key] = checkbox
+        self.convert_options["delete_source_after_success"].setToolTip("转换成功后删除原始视频。")
+        v.addLayout(options)
+        self.convert_hint = QLabel()
+        self.convert_hint.setWordWrap(True)
+        self.convert_hint.setMinimumWidth(0)
+        self.convert_hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        v.addWidget(self.convert_hint)
+        v.addStretch(1)
+        self.convert_tab_index = self.tabs.addTab(tab, "🔄 转换")
+        self._refresh_convert_hint()
+
+    def open_convert_tab(self):
+        self.tabs.setCurrentIndex(self.convert_tab_index)
+
+    def on_dir_changed(self, _path):
+        self._refresh_convert_hint()
+
+    def _refresh_convert_hint(self):
+        cfg = self._cfg()
+        extensions = " / ".join(cfg.get("input_extensions", [".flv", ".mkv", ".ts"]))
+        output = cfg.get("output_dir") or "与源文件相同目录"
+        self.convert_hint.setText(f"扫描格式: {extensions}    输出位置: {output}")
+
+    def _scan_convert(self):
+        if self.running:
+            return
+        root = Path(getattr(self.app, "work_dir", "") or "")
+        if not getattr(self.app, "work_dir", "") or not root.is_dir():
+            self.app.toast("请先设置有效的工作目录", "warning")
+            return
+        self._refresh_convert_hint()
+        found = find_videos(root, self._cfg())
+        self._log(f"🔍 扫描完成，共找到 {len(found)} 个待转换视频")
+        self.add_dropped_files([str(p) for p in found])
+
+    def _clear_convert_cache(self):
+        if self.running:
+            return
+        if QMessageBox.question(self, "清除转换缓存", "确定清除转换记录吗？不会删除视频文件。",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            save_convert_cache({})
+            self._log("🗑 转换缓存已清除")
+
+    def _start_convert(self):
+        if self.running or not self.files:
+            return
+        cfg = self._cfg()
+        cfg["output_extension"] = self.convert_ext.currentText()
+        cfg.update({key: widget.isChecked() for key, widget in self.convert_options.items()})
+        paths = [Path(path).resolve() for path in self.files]
+        work_root = Path(self.app.work_dir).resolve() if self.app.work_dir else None
+        self._begin(f"🔄 开始转换 {len(paths)} 个视频", "⏹ 停止将在当前 FFmpeg 操作结束后生效。")
+        cancel = self._cancel
+        # 释放播放器占用，允许 Windows 上转换成功后删除源文件。
+        self.player.stop()
+        self.player.setSource(QUrl())
+
+        def work():
+            cache = load_convert_cache() if cfg.get("enable_cache") else {}
+            stats = {"success": 0, "skipped": 0, "failed": 0}
+            outputs = {}
+            try:
+                for index, src in enumerate(paths):
+                    if cancel.is_set():
+                        break
+                    # 手动添加的文件可在工作目录外；其输出使用文件名而非非法相对路径。
+                    root = work_root if work_root and src.is_relative_to(work_root) else src.parent
+                    try:
+                        dst = get_output_path(src, root, cfg)
+                        if cfg.get("enable_cache") and is_convert_cached(cache, src) and dst.exists():
+                            stats["skipped"] += 1
+                            outputs[str(src)] = str(dst)
+                            post_to_main(self._log, f"💾 缓存命中: {src.name}")
+                        else:
+                            result = convert_one_file(
+                                src, root, cfg,
+                                progress_callback=lambda msg: post_to_main(self._log, msg),
+                                should_stop=cancel.is_set)
+                            if result.interrupted:
+                                break
+                            key = "skipped" if result.mode == "skip" else "success" if result.success else "failed"
+                            stats[key] += 1
+                            if result.success:
+                                outputs[str(src)] = str(result.dst)
+                            if cfg.get("enable_cache"):
+                                update_convert_cache(cache, src, result.success, result.dst)
+                    except Exception as exc:
+                        stats["failed"] += 1
+                        post_to_main(self._log, f"❌ {src.name}: {exc}")
+                    post_to_main(self.progress.setValue, int((index + 1) / len(paths) * 100))
+            finally:
+                if cfg.get("enable_cache"):
+                    save_convert_cache(cache)
+            return stats, outputs
+
+        def done(result, err):
+            stopped = cancel.is_set()
+            self.running = False
+            self._cancel = None
+            self.stop_btn.setEnabled(False)
+            self._refresh_action_buttons()
+            if err:
+                if self.current_path:
+                    self._load_preview(self.current_path)
+                self._log(f"❌ 转换失败: {err}")
+                self.app.toast("转换失败，详情见日志", "error")
+                return
+            stats, outputs = result
+            selected = outputs.get(str(Path(self.current_path).resolve()), self.current_path) if self.current_path else None
+            remaining = [outputs.get(str(Path(path).resolve()), path) for path in self.files]
+            self.files = list(dict.fromkeys(path for path in remaining if Path(path).exists()))
+            self._refresh_files(select=self.files.index(selected) if selected in self.files else 0)
+            self._log(f"{'⏹ 已停止' if stopped else '✅ 转换完成'}: 成功 {stats['success']} / "
+                      f"跳过 {stats['skipped']} / 失败 {stats['failed']}")
+            if not stopped:
+                self.progress.setValue(100)
+
+        run_bg(work, done)
+
+    def shutdown(self):
+        if self._cancel is not None:
+            self._cancel.set()
+        self.player.stop()
+        self.player.setSource(QUrl())
 
     def _on_player_error(self, *_args):
         self._log("⚠️ 该格式无法内嵌预览（不影响切割/合并/提取）")
@@ -1213,6 +1412,7 @@ class EditorPage(BasePage):
         self.cmp_stop.setEnabled(True)
         self.cmp_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self._refresh_action_buttons()
         self._log(f"🗜 开始压缩 {len(self._compress_queue)} 个文件（{preset[0]}）")
         self._compress_next()
 
