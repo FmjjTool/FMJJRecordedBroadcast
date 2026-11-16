@@ -192,7 +192,7 @@ class EditorPage(BasePage):
         self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.slider.setToolTip("点击或拖动进度条定位；拖动时会实时预览画面")
         self.slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 8px; background: #d6dbe3; border-radius: 4px; }"
+            "QSlider::groove:horizontal { height: 8px; background: #cbd2dc; border-radius: 4px; }"
             " QSlider::sub-page:horizontal { height: 8px; background: #2563eb; border-radius: 4px; }"
             " QSlider::handle:horizontal { width: 16px; height: 16px; margin: -4px 0;"
             " border-radius: 8px; background: #ffffff; border: 2px solid #2563eb; }"
@@ -210,7 +210,7 @@ class EditorPage(BasePage):
         self.time_label.setFixedWidth(58)
         self.time_label.setToolTip("当前位置")
         self.dur_label = QLabel("00:00")
-        self.dur_label.setStyleSheet("font-family: Consolas, monospace; color: #888;")
+        self.dur_label.setStyleSheet("font-family: Consolas, monospace; color: #8a93a3;")
         self.dur_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.dur_label.setFixedWidth(58)
         self.dur_label.setToolTip("总时长")
