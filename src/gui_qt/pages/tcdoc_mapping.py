@@ -27,7 +27,7 @@ SUPPORTED_TYPES = openapi.SUPPORTED_TYPES
 
 
 class TcDocMappingPanel(QWidget):
-    def __init__(self, page, get_doc: Callable[[], dict | None]):
+    def __init__(self, page, get_doc: Callable[[], dict | None], credentials=None):
         super().__init__(page)
         self.page = page
         self.get_doc = get_doc
@@ -48,8 +48,8 @@ class TcDocMappingPanel(QWidget):
         self._busy = False
         self._buttons: list[QPushButton] = []
         self._build_ui()
-        self._fill_credentials(openapi.load_credentials())
-        self.refresh()
+        self._fill_credentials(openapi.load_credentials() if credentials is None else credentials)
+        self._update_doc_label()
 
     # ==================== 界面 ====================
 

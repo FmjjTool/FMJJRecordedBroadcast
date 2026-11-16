@@ -7,16 +7,18 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
-    QHeaderView, QLabel, QMenu, QPushButton, QTableWidget, QTableWidgetItem,
+    QHeaderView, QLabel, QMenu, QPushButton, QTableView, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
 from gui_qt.common import run_bg
+from gui_qt.pages.base import BasePage
+from gui_qt.skeleton import LoadingSkeleton
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import bridge
 
@@ -30,11 +32,54 @@ _WIDTHS = {
 }
 
 
+class _PendingModel(QAbstractTableModel):
+    """保留全部行，只为可见单元格生成显示文本。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.rows = []
+
+    def replace(self, rows):
+        self.beginResetModel()
+        self.rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent=None):
+        return 0 if parent is not None and parent.isValid() else len(self.rows)
+
+    def columnCount(self, parent=None):
+        return 0 if parent is not None and parent.isValid() else len(_DISPLAY_COLUMNS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+            return _DISPLAY_COLUMNS[section]
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
+            return None
+        row = self.rows[index.row()]
+        column = _DISPLAY_COLUMNS[index.column()]
+        if column == "图片":
+            images = row.get("_images") or []
+            if role == Qt.DisplayRole:
+                return f"有 {len(images)} 张" if images else "无"
+            return "\n".join(images[:20]) + ("\n…" if len(images) > 20 else "")
+        value = str(row.get(column) or "")
+        return value[:600] if role == Qt.ToolTipRole else value
+
+
 class TcDocBridgePanel(QWidget):
     def __init__(self, parent=None, app=None, prefer_doc_key: str = "",
                  embedded: bool = False, defer_load: bool = False):
         super().__init__(parent)
         self.app = app or getattr(parent, "app", None)
+        self._task_owner = parent
+        ancestor = parent
+        while ancestor is not None:
+            if isinstance(ancestor, BasePage):
+                self._task_owner = ancestor
+                break
+            ancestor = ancestor.parent()
         self._embedded = embedded
         self._targets: list[dict] = []
         self._result: dict | None = None
@@ -44,6 +89,13 @@ class TcDocBridgePanel(QWidget):
         self._busy = False
         self._image_busy = False
         self._image_temp_dir = None
+        self._closed = False
+        self._targets_loading = False
+        self._targets_pending = None
+        self._targets_req = 0
+        self._compare_req = 0
+        self._compare_pending = False
+        self._saved_accounts = []
 
         self._acc_timer = QTimer(self)
         self._acc_timer.setSingleShot(True)
@@ -101,11 +153,13 @@ class TcDocBridgePanel(QWidget):
 
         self.summary = QLabel("加载中…")
         self.summary.setWordWrap(True)
-        self.summary.setStyleSheet("font-weight: 600; color: #1e3a8a;")
+        self.summary.setStyleSheet("font-weight: 600;")
+        self.summary.setTextFormat(Qt.PlainText)
         layout.addWidget(self.summary)
 
-        self.table = QTableWidget(0, len(_DISPLAY_COLUMNS))
-        self.table.setHorizontalHeaderLabels(_DISPLAY_COLUMNS)
+        self.table = QTableView()
+        self._model = _PendingModel(self.table)
+        self.table.setModel(self._model)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -119,10 +173,14 @@ class TcDocBridgePanel(QWidget):
             self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
-        self.table.itemSelectionChanged.connect(self._update_copy_row_btn)
+        self.table.selectionModel().selectionChanged.connect(self._update_copy_row_btn)
         self._copy_shortcut = QShortcut(QKeySequence.Copy, self.table)
         self._copy_shortcut.activated.connect(self._copy_selected_rows)
-        layout.addWidget(self.table, 1)
+        self._table_stack = QStackedWidget()
+        self._table_stack.addWidget(self.table)
+        self._skeleton = LoadingSkeleton(text="正在读取目标表格…")
+        self._table_stack.addWidget(self._skeleton)
+        layout.addWidget(self._table_stack, 1)
 
         bottom = QHBoxLayout()
         self.status = QLabel("选中行可单行复制，右键行也有复制菜单；不会自动上传。")
@@ -165,6 +223,7 @@ class TcDocBridgePanel(QWidget):
                 if index != self.target_combo.currentIndex():
                     self.target_combo.setCurrentIndex(index)
                 return
+        self.refresh(reload_targets=True, prefer_doc_key=doc_key)
 
     def refresh(self, reload_targets: bool = False, prefer_doc_key: str = "") -> None:
         """手动/切回页签时重新比对；reload_targets=True 时同时刷新表格清单。"""
@@ -183,23 +242,65 @@ class TcDocBridgePanel(QWidget):
             return ""
 
     def _load_targets(self, prefer_doc_key: str = "") -> None:
-        self._targets = bridge.list_targets()
+        if self._closed:
+            return
+        self._targets_req += 1
+        self._compare_req += 1
+        self._compare_pending = False
+        self._set_loading("正在读取目标表格…")
+        self.target_combo.setEnabled(False)
+        if self._targets_loading:
+            self._targets_pending = prefer_doc_key
+            return
+        self._start_targets(prefer_doc_key)
+
+    def _start_targets(self, prefer_doc_key):
+        self._targets_loading = True
+        req = self._targets_req
+
+        def work():
+            return bridge.list_targets(), load_convert_config()
+
+        def done(result, err):
+            if self._closed:
+                return
+            self._targets_loading = False
+            if req != self._targets_req:
+                preferred = self._targets_pending
+                self._targets_pending = None
+                self._start_targets(preferred or "")
+                return
+            self.target_combo.setEnabled(True)
+            if err:
+                self._targets = []
+                self.target_combo.blockSignals(True)
+                self.target_combo.clear()
+                self.target_combo.blockSignals(False)
+                self._clear_result()
+                self.summary.setText(f"❌ 表格清单读取失败：{err}；可重新比对重试")
+                self._show_table()
+                return
+            self._targets, cfg = result
+            self._saved_accounts = list(cfg.get("tcdoc_bridge_accounts") or [])
+            self._apply_targets(cfg, prefer_doc_key)
+
+        run_bg(work, done, owner=self._task_owner)
+
+    def _apply_targets(self, cfg, prefer_doc_key):
         self.target_combo.blockSignals(True)
         self.target_combo.clear()
         for target in self._targets:
             self.target_combo.addItem(
                 f"{target['doc_name']} · {target['tab_name']}（{target['n_rows']} 行）",
                 target)
-        self.target_combo.blockSignals(False)
-
         if not self._targets:
+            self.target_combo.blockSignals(False)
+            self._clear_result()
             self.summary.setText(
                 "本地还没有可用的表格数据：请先在「📋 表格同步」页签同步一次表格。")
-            self.compare_btn.setEnabled(False)
-            self.copy_btn.setEnabled(False)
+            self._show_table()
             return
 
-        cfg = load_convert_config()
         doc_key = str(cfg.get("tcdoc_bridge_doc_key") or "")
         tab_id = str(cfg.get("tcdoc_bridge_tab_id") or "")
         index = next((i for i, target in enumerate(self._targets)
@@ -211,6 +312,7 @@ class TcDocBridgePanel(QWidget):
         if index < 0:
             index = 0
         self.target_combo.setCurrentIndex(index)
+        self.target_combo.blockSignals(False)
 
         try:
             days = int(cfg.get("tcdoc_bridge_days", 30) or 30)
@@ -278,7 +380,8 @@ class TcDocBridgePanel(QWidget):
 
     def _after_account_change(self) -> None:
         self._update_account_btn()
-        self._save_cfg(tcdoc_bridge_accounts=self._checked_accounts())
+        self._saved_accounts = self._checked_accounts()
+        self._save_cfg(tcdoc_bridge_accounts=self._saved_accounts)
         self._acc_timer.start()
 
     def _update_account_btn(self) -> None:
@@ -291,21 +394,36 @@ class TcDocBridgePanel(QWidget):
 
     def _selected_accounts(self):
         if not self._account_actions:
-            return "default"
+            return self._saved_accounts or "default"
         checked = self._checked_accounts()
         return checked or None  # 全部取消勾选 = 不过滤账号
 
     # ==================== 比对 ====================
 
     def _run_compare(self, *_args) -> None:
-        if self._busy:
+        if self._closed:
             return
+        if self._targets_loading:
+            self._compare_pending = True
+            return
+        if not self.target_combo.currentData():
+            self._load_targets(self._preferred_doc_key())
+            return
+        self._acc_timer.stop()
+        self._compare_req += 1
+        self._set_loading("正在比对本地数据与腾讯表格…")
+        if self._busy:
+            self._compare_pending = True
+            return
+        self._start_compare()
+
+    def _start_compare(self):
         target = self.target_combo.currentData()
         if not target:
             return
         self._busy = True
-        self.compare_btn.setEnabled(False)
-        self.copy_btn.setEnabled(False)
+        self._compare_pending = False
+        req = self._compare_req
         self.summary.setText("⏳ 正在比对本地数据与腾讯表格…")
         self.status.setText("本地已获取 + 增量数据库合并去重后比对，不会修改腾讯文档。")
 
@@ -319,9 +437,16 @@ class TcDocBridgePanel(QWidget):
                                         accounts=accounts, collected=collected)
 
         def done(result, err):
+            if self._closed:
+                return
             self._busy = False
-            self.compare_btn.setEnabled(True)
+            if req != self._compare_req:
+                if self._compare_pending and not self._targets_loading:
+                    self._start_compare()
+                return
+            self._show_table()
             if err:
+                self._clear_result()
                 self.summary.setText(f"❌ 比对失败：{err}")
                 return
             self._result = result
@@ -336,8 +461,8 @@ class TcDocBridgePanel(QWidget):
                 f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
                 f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}")
             self.copy_btn.setEnabled(bool(result["rows"]))
-            self.copy_images_btn.setEnabled(stats["image_count"] > 0)
-            self._refresh_accounts(result)
+            self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
+            self._refresh_accounts(result, accounts)
             if result["rows"]:
                 self.status.setText(
                     f"📋 共 {len(result['rows'])} 行待同步（不含表头；"
@@ -347,49 +472,50 @@ class TcDocBridgePanel(QWidget):
                 self.status.setText(
                     "✅ 没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
 
-        run_bg(work, done)
+        run_bg(work, done, owner=self._task_owner)
 
-    def _refresh_accounts(self, result: dict) -> None:
+    def _refresh_accounts(self, result: dict, used_accounts) -> None:
         names = sorted(set(result.get("accounts") or []) |
                        set(result.get("local_accounts") or []))
         if names == self._account_names:
             return
         previous = set(self._checked_accounts())
-        saved = set(load_convert_config().get("tcdoc_bridge_accounts") or [])
+        saved = set(self._saved_accounts)
         default_checked = (set(result.get("accounts") or [])
                            & set(result.get("local_accounts") or []))
         checked = previous or (saved & set(names)) or default_checked or set(result.get("accounts") or [])
         self._rebuild_account_menu(names, checked)
-        if previous or saved:
-            # 首次打开时如果配置里已有账号勾选，按新勾选再算一次
+        selected = self._selected_accounts()
+        if (previous or saved) and selected != used_accounts:
             self._acc_timer.start()
 
     def _fill_table(self, rows: list[dict]) -> None:
         self._rows = list(rows)
-        self.table.clearSelection()
-        self.table.setUpdatesEnabled(False)
-        try:
-            self.table.setRowCount(len(rows))
-            for r, row in enumerate(rows):
-                for c, column in enumerate(_DISPLAY_COLUMNS):
-                    if column == "图片":
-                        images = row.get("_images") or []
-                        text = f"有 {len(images)} 张" if images else "无"
-                        item = QTableWidgetItem(text)
-                        tip = "\n".join(images[:20])
-                        if len(images) > 20:
-                            tip += "\n…"
-                        item.setToolTip(tip)
-                    else:
-                        text = str(row.get(column) or "")
-                        item = QTableWidgetItem(text)
-                        item.setToolTip(text[:600])
-                    self.table.setItem(r, c, item)
-        finally:
-            self.table.setUpdatesEnabled(True)
+        self._model.replace(self._rows)
         self._update_copy_row_btn()
         self.copy_images_btn.setEnabled(
-            any(row.get("_images") for row in self._rows))
+            any(row.get("_images") for row in self._rows) and not self._image_busy)
+
+    def _clear_result(self):
+        self._result = None
+        self._fill_table([])
+        self.copy_btn.setEnabled(False)
+
+    def _set_loading(self, text):
+        self._skeleton.setText(text)
+        self._table_stack.setCurrentWidget(self._skeleton)
+        self.compare_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        self.copy_row_btn.setEnabled(False)
+        self.copy_images_btn.setEnabled(False)
+
+    def _show_table(self):
+        self._table_stack.setCurrentWidget(self.table)
+        self.compare_btn.setEnabled(True)
+
+    def shutdown(self):
+        self._closed = True
+        self._acc_timer.stop()
 
     # ==================== 复制 ====================
 
@@ -401,10 +527,11 @@ class TcDocBridgePanel(QWidget):
         return [self._rows[index.row()] for index in indexes
                 if 0 <= index.row() < len(self._rows)]
 
-    def _update_copy_row_btn(self) -> None:
+    def _update_copy_row_btn(self, *_args) -> None:
         button = getattr(self, "copy_row_btn", None)
         if button is not None:
-            button.setEnabled(bool(self._selected_rows()))
+            button.setEnabled(not self._busy and not self._targets_loading
+                              and bool(self._selected_rows()))
 
     def _copy(self) -> None:
         rows = (self._result or {}).get("rows") or []
@@ -439,9 +566,12 @@ class TcDocBridgePanel(QWidget):
             return self._download_images(urls)
 
         def done(result, err):
+            if self._closed:
+                return
             self._image_busy = False
             self.copy_images_btn.setEnabled(
-                any(row.get("_images") for row in self._rows))
+                any(row.get("_images") for row in self._rows)
+                and not self._busy and not self._targets_loading)
             if err:
                 self.status.setText(f"❌ 图片处理失败：{err}")
                 return
@@ -459,7 +589,7 @@ class TcDocBridgePanel(QWidget):
                 except Exception:  # noqa: BLE001 - 提示失败不影响复制
                     pass
 
-        run_bg(work, done)
+        run_bg(work, done, owner=self._task_owner)
 
     def _download_images(self, urls: list[str]):
         """并发下载图片到临时目录，返回 (路径列表, 失败数)。"""
@@ -535,7 +665,7 @@ class TcDocBridgePanel(QWidget):
         if not rows:
             self.status.setText("请先在表格里选中一行（可按住 Ctrl 多选）")
             return
-        label = (f"第 {self.table.currentRow() + 1} 行" if len(rows) == 1
+        label = (f"第 {self.table.currentIndex().row() + 1} 行" if len(rows) == 1
                  else f"选中的 {len(rows)} 行")
         self._copy_rows(rows, label)
 
@@ -608,4 +738,5 @@ class TcDocBridgeDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.panel = TcDocBridgePanel(self, app=app, prefer_doc_key=prefer_doc_key)
+        self.finished.connect(self.panel.shutdown)
         layout.addWidget(self.panel)

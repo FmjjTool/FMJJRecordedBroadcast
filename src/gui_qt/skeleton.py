@@ -7,7 +7,8 @@
 颜色取自当前 QPalette 角色，天然跟随浅/深主题，无需进主题映射表。
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
@@ -60,3 +61,33 @@ class SkeletonPage(QWidget):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._tip.setGeometry(self.rect())
+
+
+class LoadingSkeleton(QWidget):
+    """局部刷新占位：只在尺寸/主题变化时绘制，没有动画和重绘计时器。"""
+
+    def __init__(self, parent=None, text="正在读取本地数据…"):
+        super().__init__(parent)
+        self.setMinimumHeight(100)
+        self.tip = QLabel(text, self)
+        self.tip.setAlignment(Qt.AlignCenter)
+        self.tip.setWordWrap(True)
+
+    def setText(self, text):
+        self.tip.setText(text)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.tip.setGeometry(16, 12, max(0, self.width() - 32), 48)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), self.palette().base())
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.palette().alternateBase())
+        width = max(0, self.width() - 32)
+        for y in range(76, min(self.height() - 12, 340), 34):
+            for col, fraction in enumerate((0.25, 0.34, 0.24)):
+                x = 16 + width * (0, 0.29, 0.67)[col]
+                painter.drawRoundedRect(QRectF(x, y, width * fraction, 18), 5, 5)
