@@ -273,6 +273,8 @@ class Bridge(QObject):
     """监控线程 → GUI 线程。"""
     logged = Signal(str, str)
     changed = Signal()
+    record_state = Signal(object, bool)
+    danmaku = Signal(str, str, str, object)
 
 
 class PlatformPane(QWidget):
@@ -286,11 +288,16 @@ class PlatformPane(QWidget):
         self.bridge = Bridge()
         self.bridge.logged.connect(self._on_log, Qt.ConnectionType.QueuedConnection)
         self.bridge.changed.connect(self._on_changed, Qt.ConnectionType.QueuedConnection)
+        self.bridge.record_state.connect(self._on_record_state, Qt.ConnectionType.QueuedConnection)
+        self.bridge.danmaku.connect(self._on_danmaku, Qt.ConnectionType.QueuedConnection)
+        self.overlays = {}
 
         state = (win.state.get("platforms") or {}).get(platform) or {}
         self.manager = LR.RecordManager(platform, state.get("settings"),
                                         on_event=self.bridge.logged.emit,
-                                        on_change=self.bridge.changed.emit)
+                                        on_change=self.bridge.changed.emit,
+                                        on_record_state=self.bridge.record_state.emit,
+                                        on_danmaku=self.bridge.danmaku.emit)
         self.manager.load_dict(state)
 
         lay = QVBoxLayout(self)
@@ -397,6 +404,25 @@ class PlatformPane(QWidget):
         self.model.refresh_volatile()
         self.btn_mon.setText("■ 停止监控录制" if self.manager.running else "▶ 开启监控录制")
         self.win.refresh_status()
+        self.win.schedule_save()
+
+    def _on_record_state(self, anchor, active):
+        if active and self.manager.settings.get("render_danmaku"):
+            from gui_qt.danmaku_overlay import DanmakuOverlay
+            overlay = self.overlays.get(anchor.key)
+            if overlay is None:
+                overlay = DanmakuOverlay(anchor.name or anchor.room, self.win)
+                self.overlays[anchor.key] = overlay
+            overlay.set_active(True)
+            overlay.show()
+        elif anchor.key in self.overlays:
+            self.overlays[anchor.key].set_active(False)
+            self.overlays[anchor.key].hide()
+
+    def _on_danmaku(self, key, name, text, message):
+        overlay = self.overlays.get(key)
+        if overlay:
+            overlay.add_message(name, text, message)
 
     def _selected(self):
         rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
@@ -1239,6 +1265,9 @@ class RecordSettingsDialog(QDialog):
         self.ck_danmaku = QCheckBox("同时录制弹幕（B站 XML / 抖音 JSONL，与视频同名）")
         self.ck_danmaku.setChecked(bool(s.get("save_danmaku")))
         gl.addWidget(self.ck_danmaku)
+        self.ck_render = QCheckBox("开始录制时自动启动弹幕渲染（透明窗口，复用同一弹幕连接）")
+        self.ck_render.setChecked(bool(s.get("render_danmaku", True)))
+        gl.addWidget(self.ck_render)
         self.ck_cover = QCheckBox("保存直播封面（录制开始时存到该主播目录）")
         self.ck_cover.setChecked(bool(s.get("save_cover", True)))
         gl.addWidget(self.ck_cover)
@@ -1286,6 +1315,7 @@ class RecordSettingsDialog(QDialog):
             "max_retry": self.sp_max_retry.value(),
             "title_filter": self.ed_title_filter.text().strip(),
             "save_danmaku": self.ck_danmaku.isChecked(),
+            "render_danmaku": self.ck_render.isChecked(),
             "save_cover": self.ck_cover.isChecked(),
             "online_threshold": self.sp_online.value(),
         })
@@ -1802,10 +1832,19 @@ class LiveRecordWindow(QMainWindow):
         pane.info.setText(text)
 
     # ---------- 状态保存 / 关闭 ----------
+    def schedule_save(self):
+        if not hasattr(self, "_save_timer"):
+            self._save_timer = QTimer(self)
+            self._save_timer.setSingleShot(True)
+            self._save_timer.timeout.connect(self.save_state)
+        if not self._save_timer.isActive():
+            self._save_timer.start(500)
+
     def save_state(self):
         self.state["platforms"] = {k: p.to_state() for k, p in self.panes.items()}
         self.state["window"] = [self.width(), self.height()]
-        LR.save_state(self.state)
+        if not LR.save_state(self.state):
+            self.toast("录制配置保存失败，请检查目录写入权限", "error")
 
     def toast(self, msg, kind="info"):
         if self.app is not None and hasattr(self.app, "toast"):

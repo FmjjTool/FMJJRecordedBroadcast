@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parent
 
 # 打包后必须随包携带的引擎数据文件：(源路径, 包内相对目录)
 ADD_DATA = [
+    ("icon.ico", "."),  # Qt 窗口与任务栏共用，不只嵌入 exe
     ("src/toolbox/a_bogus.js", "toolbox"),
     ("src/toolbox/abogus_cli.js", "toolbox"),
     ("src/toolbox/_unlock_keys.json", "toolbox"),

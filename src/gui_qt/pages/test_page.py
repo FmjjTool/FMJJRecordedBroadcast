@@ -211,6 +211,7 @@ class TestPage(BasePage):
         self._rt_fp = None
         self._rt_path = None
         self._rt_room = ""
+        self._overlay = None
         self._resume_keep = False   # 切页自动重连：保留本场弹幕/搜索状态
 
         outer = QVBoxLayout(self)
@@ -322,6 +323,9 @@ class TestPage(BasePage):
         save_btn = QPushButton("💾 保存弹幕")
         save_btn.clicked.connect(self._save_danmaku_now)
         tb.addWidget(save_btn)
+        render_btn = QPushButton("💬 渲染当前弹幕")
+        render_btn.clicked.connect(self._show_danmaku_overlay)
+        tb.addWidget(render_btn)
         export_btn = QPushButton("📦 导出回放包")
         export_btn.clicked.connect(self._export_replay_zip)
         tb.addWidget(export_btn)
@@ -460,6 +464,14 @@ class TestPage(BasePage):
         platform = "bili" if self._BACKEND.endswith("bili_live") else "douyin"
         room = self.room_entry.text().strip() or self._default_room()
         open_live_record_window(self.app, platform=platform, room=room)
+
+    def _show_danmaku_overlay(self):
+        from gui_qt.danmaku_overlay import DanmakuOverlay
+        if self._overlay is None:
+            self._overlay = DanmakuOverlay(self.title_lbl.text(), self)
+        self._overlay.set_active(self.connected or bool(self._replay))
+        self._overlay.show()
+        self._overlay.raise_()
 
     # ---- 🔗 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
 
@@ -1857,12 +1869,8 @@ class TestPage(BasePage):
         # 轮询重连竞态防护：旧抓取线程 stop 后仍会异步发 disconnected/error，
         # 若已是新实例则忽略，避免把新连接状态又改回“已断开”
         cur = self.fetcher
-        orig_status = cur.on_status
-
         def guarded_status(status, msg):
-            if self.fetcher is not cur and status in ("disconnected", "error"):
-                return
-            orig_status(status, msg)
+            self._on_status(status, msg, _source=cur)
 
         cur.on_status = guarded_status
         self.fetcher.start()
@@ -1879,6 +1887,7 @@ class TestPage(BasePage):
         self._rt_close()            # 实时落盘文件收尾（数据早已逐条 flush）
         if self._poll_timer:
             self._poll_timer.stop()
+            self._poll_timer.deleteLater()
             self._poll_timer = None
         if self.fetcher:
             self.fetcher.stop()
@@ -1939,6 +1948,7 @@ class TestPage(BasePage):
         连接成功后停止（不打扰直播中）；断开后由 _on_status 恢复等待。"""
         if self._poll_timer:
             self._poll_timer.stop()
+            self._poll_timer.deleteLater()
             self._poll_timer = None
         if not (self.poll_btn.isChecked() and self._waiting_live and not self.connected):
             self._poll_started_at = None
@@ -2121,7 +2131,8 @@ class TestPage(BasePage):
         self._rt_close()
         try:
             p = self._rt_file_path(room)
-            self._rt_fp = open(p, "a", encoding="utf-8", buffering=1)
+            from toolbox.durable_io import JsonlJournal
+            self._rt_fp = JsonlJournal(p)
             self._rt_path = str(p)
             self._rt_room = room
         except Exception:
@@ -2133,8 +2144,13 @@ class TestPage(BasePage):
         if not fp:
             return
         try:
-            fp.write(json.dumps(cast, ensure_ascii=False) + "\n")
-            fp.flush()
+            # 跨午夜自动换当日文件，重启仍能按日期恢复。
+            if datetime.now().strftime('%Y%m%d') not in str(self._rt_path):
+                self._rt_close()
+                self._rt_open(self._rt_room)
+                fp = self._rt_fp
+            if fp:
+                fp.write(cast)
         except Exception:
             self._rt_close()
 
@@ -2142,7 +2158,6 @@ class TestPage(BasePage):
         fp, self._rt_fp = self._rt_fp, None
         if fp:
             try:
-                fp.flush()
                 fp.close()
             except Exception:
                 pass
@@ -2165,15 +2180,12 @@ class TestPage(BasePage):
             p = self._rt_file_path(room)
             if not p.exists() or p.stat().st_size <= 0:
                 return 0
-            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[-limit * 2:]
+            from toolbox.durable_io import read_jsonl_tail
+            records = read_jsonl_tail(p, limit * 2)
         except Exception:
             return 0
         casts, chat = [], []
-        for ln in lines:
-            try:
-                c = json.loads(ln)
-            except Exception:
-                continue
+        for c in records:
             if not isinstance(c, dict):
                 continue
             casts.append(c)
@@ -2217,6 +2229,8 @@ class TestPage(BasePage):
 
     def _apply_message(self, name, text, m, t, rank=True):
         """主线程：渲染一条消息到界面（直播与回放共用；rank=False 跳过打赏榜）。"""
+        if self._overlay:
+            self._overlay.add_message(name, text, m)
         ts = t.strftime("%H:%M:%S") + f".{t.microsecond // 1000:03d}"
 
         def set_field(key, value):
@@ -2699,15 +2713,20 @@ class TestPage(BasePage):
         return (f'{self._ts_html(ts)} 🎁 {self._nick_html(m.get("nickname"))}'
                 f'{icon_h}<span style="color:{gift_col}; font-weight:bold">{body}</span>')
 
-    def _on_status(self, status, msg):
+    def _on_status(self, status, msg, _source=None):
         """后台线程回调：连接状态变化。"""
         def apply():
+            if _source is not None and self.fetcher is not _source:
+                return
             if status == "connected":
+                if self._overlay:
+                    self._overlay.set_active(True)
                 self.status_dot.setStyleSheet("color: #4caf50; font-size: 14px;")
                 self.status_label.setText(msg)
                 self.status_label.setStyleSheet("color: #4caf50;")
                 self._waiting_live = False
                 self._set_action_btn("断开", "disconnect")
+                self._setup_poll_timer()
             elif status == "connecting":
                 self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
                 self.status_label.setText(msg)
@@ -2750,7 +2769,7 @@ class TestPage(BasePage):
                 self.status_label.setText(msg)
                 self.status_label.setStyleSheet("color: #ff5252;")
                 self.connected = False
-                self._waiting_live = False
+                self._waiting_live = bool(self.poll_btn.isChecked() and not self._manual_stop)
                 self._timer_running = False
                 if self.stats_collector:
                     self.stats_collector.stop()
@@ -2759,6 +2778,8 @@ class TestPage(BasePage):
                 self._set_action_btn("连接", "connect")
                 self._setup_poll_timer()
             elif status == "disconnected":
+                if self._overlay:
+                    self._overlay.set_active(False)
                 # 下播/连接断开：先清资源（统计采集/回放）+ 自动导出本场弹幕，
                 # 再按「手动停止 / 轮询开关」决定是否进入等待开播（等待检测为游客态，不占 Cookie）
                 self.connected = False
@@ -2942,6 +2963,8 @@ class TestPage(BasePage):
 
     def shutdown(self):
         """全停（切走且未连接 / 软件退出时调用）：停一切后台任务并自动保存。"""
+        if self._overlay:
+            self._overlay.hide()
         self._ui_visible = False
         self._clock_timer.stop()
         self._countdown_timer.stop()

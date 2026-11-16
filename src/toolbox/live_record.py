@@ -883,7 +883,8 @@ DEFAULT_SETTINGS = {
     "outdir": "",            # 保存目录（空=导出目录/直播录制/<平台>）
     "retry_delay": 6,        # 断流后重连间隔（秒，录播姬 TimingStreamRetry）
     "max_retry": 30,         # 单场最多重试次数
-    "save_danmaku": False,   # 录制时同步保存弹幕（B站 XML / 抖音 JSONL）
+    "save_danmaku": True,    # B站 XML + JSONL / 抖音 JSONL
+    "render_danmaku": True,  # 开录自动启动独立弹幕渲染窗口
     "save_cover": True,      # 录制时保存直播封面（录播姬 SaveStreamCover）
     # 标题命中这些正则时不录（录播姬 TitleFilterPatterns，多个用 ; 分隔）
     "title_filter": "",
@@ -903,12 +904,15 @@ class RecordManager:
     录制任务各自跑在自己的线程/进程里，互不阻塞。
     """
 
-    def __init__(self, platform, settings=None, on_event=None, on_change=None):
+    def __init__(self, platform, settings=None, on_event=None, on_change=None,
+                 on_record_state=None, on_danmaku=None):
         self.platform = platform
         self.settings = {**DEFAULT_SETTINGS, **(settings or {})}
         self.anchors = []
         self._on_event = on_event or (lambda level, text: None)
         self._on_change = on_change or (lambda: None)
+        self._on_record_state = on_record_state or (lambda a, active: None)
+        self._on_danmaku = on_danmaku or (lambda key, name, text, message: None)
         self._tasks = {}       # key -> StreamDownloader / FfmpegRecorder
         self._task_info = {}   # key -> {"kind": "dl"/"ff", "out": path}
         self._danmaku = {}     # key -> DanmakuRecorder（录制时同步存弹幕）
@@ -1169,7 +1173,8 @@ class RecordManager:
             if info.get("cover") and self.settings.get("save_cover", True):
                 self._save_cover(info["cover"], outdir, base)
             # 录播姬的「弹幕录制」：和视频同名，B站 XML / 抖音 JSONL
-            if self.settings.get("save_danmaku"):
+            self._notify_record_state(a, True)
+            if self.settings.get("save_danmaku") or self.settings.get("render_danmaku"):
                 self._start_danmaku(a, outdir, base)
             text = "「%s」开始录制（%s · %s · %s）" % (
                 a.name or a.room, mode, fmt.upper(),
@@ -1181,11 +1186,19 @@ class RecordManager:
             return True, ""
 
     # ---------- 弹幕录制 ----------
+    def _notify_record_state(self, a, active):
+        try:
+            self._on_record_state(a, active)
+        except Exception:
+            pass
+
     def _start_danmaku(self, a, outdir, base):
         try:
             from toolbox.danmaku_recorder import DanmakuRecorder
             rec = DanmakuRecorder(a.platform, a.room, outdir, base,
-                                  on_log=lambda t, lv="info": self.emit(t, lv))
+                                  on_log=lambda t, lv="info": self.emit(t, lv),
+                                  save=bool(self.settings.get("save_danmaku")),
+                                  on_message=lambda n, t, m: self._on_danmaku(a.key, n, t, m))
             if rec.start():
                 self._danmaku[a.key] = rec
         except Exception as e:  # noqa: BLE001
@@ -1226,6 +1239,7 @@ class RecordManager:
             self._retry.pop(a.key, None)
             self._resume.pop(a.key, None)
         self._stop_danmaku(a.key)
+        self._notify_record_state(a, False)
         if task is not None:
             text = "「%s」停止录制%s（已录 %s）" % (
                 a.name or a.room, ("·" + reason) if reason else "",
@@ -1278,6 +1292,7 @@ class RecordManager:
             if self._tasks.get(a.key) is task:
                 self._tasks.pop(a.key, None)
         self._stop_danmaku(a.key)
+        self._notify_record_state(a, False)
         a.recording = False
         a.rec_state = "已停止"
         # TS 直录一个字节都没产出（个别房间推 HEVC / 增强型 FLV，ffmpeg 转封装
@@ -1351,8 +1366,10 @@ class RecordManager:
                 self._reap(a, task)
 
     # ---------- 状态持久化 ----------
-    def to_dict(self):        return {"settings": self.settings,
-                "anchors": [a.to_dict() for a in self.anchors]}
+    def to_dict(self):
+        return {"settings": dict(self.settings),
+                "anchors": [{**a.to_dict(), "want_record": bool(getattr(a, "_want_record", False))}
+                            for a in self.anchors]}
 
     def load_dict(self, d):
         d = d or {}
@@ -1395,11 +1412,16 @@ def load_state():
     return {}
 
 
+_state_lock = threading.RLock()
+
+
 def save_state(state):
     try:
         p = _state_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+        from toolbox.durable_io import atomic_write_json
+        with _state_lock:
+            atomic_write_json(p, state)
         return True
     except Exception:
         return False
