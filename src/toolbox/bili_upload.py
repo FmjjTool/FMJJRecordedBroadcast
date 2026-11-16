@@ -22,7 +22,47 @@ from toolbox.utils import extract_date_from_filename
 UPLOAD_PAGE = "https://member.bilibili.com/platform/upload/video/frame"
 DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～", "desc": "",
             "tags": "封茗囧菌,直播录播", "tid": 0, "copyright": 2,
-            "source": "", "cover": "", "date": "", "auto_publish": True}
+            "source": "", "cover": "", "date": "", "auto_publish": True, "platform": "抖子"}
+SOURCE_PLATFORMS = ("抖子", "B站")
+
+
+def today_compact():
+    from datetime import datetime, timedelta, timezone
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d")
+
+
+def normalize_platform(value):
+    value = "抖子" if value in ("抖音", "douyin") else value
+    return value if value in SOURCE_PLATFORMS else "抖子"
+
+
+def scan_workspace_videos(work_dir):
+    """只读当前工作目录的视频，跳过链接、junction 与元数据临时目录。"""
+    from toolbox.rename_engine import is_standard_recording_name
+    if not work_dir or not Path(work_dir).is_dir():
+        return []
+    root, records = Path(work_dir).resolve(), []
+    for folder, dirs, names in os.walk(root, followlinks=False):
+        dirs[:] = sorted(name for name in dirs if not name.startswith(".fmjj-")
+                         and not (Path(folder) / name).is_symlink()
+                         and not getattr(Path(folder) / name, "is_junction", lambda: False)())
+        for name in sorted(names):
+            path = Path(folder) / name
+            if path.suffix.lower() not in VIDEO_EXTS or path.is_symlink() or not path.is_file():
+                continue
+            date = extract_date_from_filename(name) or extract_date_from_filename(Path(folder).name) or ""
+            records.append({"path": str(path), "date": date,
+                            "renamed": is_standard_recording_name(name)})
+    return sorted(records, key=lambda item: (item["date"], item["path"]))
+
+
+def cookie_identity(cookie):
+    return hashlib.sha256(cookie.encode("utf-8")).hexdigest() if cookie else ""
+
+
+def credential_identity():
+    from auth import get_cookie
+    return cookie_identity(get_cookie("bilibili"))
 
 
 def validate_renamed_videos(paths):
@@ -35,7 +75,8 @@ def validate_renamed_videos(paths):
 def load_settings():
     from toolbox.config_manager import get_config_dir
     try:
-        return json.loads((get_config_dir() / "organize.json").read_text(encoding="utf-8"))
+        result = json.loads((get_config_dir() / "organize.json").read_text(encoding="utf-8"))
+        return result if isinstance(result, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -58,12 +99,13 @@ def build_metadata(paths, settings):
     datetime.strptime(compact, "%Y%m%d")
     count = len(paths)
     values = {"日期": compact, "文件名": Path(paths[0]).stem, "P数": count,
+              "平台": normalize_platform(config.get("platform")),
               "分P说明": (f"（分{'两' if count == 2 else count} p）" if count > 1 else "")}
     try:
         title = config["title"].format(**values).strip()
         desc = config["desc"].format(**values)
     except (KeyError, ValueError, IndexError) as error:
-        raise ValueError("文案模板仅支持 {日期}、{文件名}、{P数}、{分P说明}") from error
+        raise ValueError("文案模板仅支持 {日期}、{平台}、{文件名}、{P数}、{分P说明}") from error
     if not title or len(title) > 80:
         raise ValueError("标题须为 1～80 个字符")
     if len(desc) > 2000:
