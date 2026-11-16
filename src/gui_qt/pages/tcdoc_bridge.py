@@ -32,7 +32,7 @@ _WIDTHS = {
 
 class TcDocBridgePanel(QWidget):
     def __init__(self, parent=None, app=None, prefer_doc_key: str = "",
-                 embedded: bool = False):
+                 embedded: bool = False, defer_load: bool = False):
         super().__init__(parent)
         self.app = app or getattr(parent, "app", None)
         self._embedded = embedded
@@ -51,7 +51,8 @@ class TcDocBridgePanel(QWidget):
         self._acc_timer.timeout.connect(self._run_compare)
 
         self._build_ui()
-        self._load_targets(prefer_doc_key)
+        if not defer_load:
+            self._load_targets(prefer_doc_key)
 
     # ==================== 界面 ====================
 
@@ -165,10 +166,10 @@ class TcDocBridgePanel(QWidget):
                     self.target_combo.setCurrentIndex(index)
                 return
 
-    def refresh(self, reload_targets: bool = False) -> None:
+    def refresh(self, reload_targets: bool = False, prefer_doc_key: str = "") -> None:
         """手动/切回页签时重新比对；reload_targets=True 时同时刷新表格清单。"""
         if reload_targets:
-            self._load_targets(self._preferred_doc_key())
+            self._load_targets(prefer_doc_key or self._preferred_doc_key())
             return
         self._run_compare()
 
@@ -202,7 +203,8 @@ class TcDocBridgePanel(QWidget):
         doc_key = str(cfg.get("tcdoc_bridge_doc_key") or "")
         tab_id = str(cfg.get("tcdoc_bridge_tab_id") or "")
         index = next((i for i, target in enumerate(self._targets)
-                      if target["doc_key"] == doc_key and target["tab_id"] == tab_id), -1)
+                      if target["doc_key"] == doc_key and target["tab_id"] == tab_id
+                      and (not prefer_doc_key or target["doc_key"] == prefer_doc_key)), -1)
         if index < 0 and prefer_doc_key:
             index = next((i for i, target in enumerate(self._targets)
                           if target["doc_key"] == prefer_doc_key), 0)

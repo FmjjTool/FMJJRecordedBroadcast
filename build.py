@@ -191,6 +191,11 @@ def run_pyinstaller(name: str):
         for f in sorted(pages_dir.glob("*.py")):
             if f.stem != "__init__":
                 cmd += ["--hidden-import", f"gui_qt.pages.{f.stem}"]
+    # 腾讯文档子模块按需导入；显式收集，保证打包后首次打开页签仍可加载。
+    tcdoc_dir = ROOT / "src" / "toolbox" / "tcdoc"
+    for f in sorted(tcdoc_dir.glob("*.py")):
+        if f.stem != "__init__":
+            cmd += ["--hidden-import", f"toolbox.tcdoc.{f.stem}"]
     # tracker 包同属函数体内懒加载（tracker 页里 from tracker.accounts 等动态 import），
     # 静态分析收不到，按包+子包目录显式声明（含 douyin_live 直播历史模块）
     tracker_dir = ROOT / "src" / "tracker"

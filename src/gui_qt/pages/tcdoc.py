@@ -34,10 +34,8 @@ from PySide6.QtWidgets import (
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.tcdoc_bridge import TcDocBridgePanel
-from gui_qt.pages.tcdoc_mapping import TcDocMappingPanel
-from toolbox.tcdoc import (
-    archive, collector, config as tc_cfg, images, job, members, revision,
-    storage, tables, task)
+from toolbox import tcdoc as tc_engine
+from toolbox.tcdoc import config as tc_cfg, storage, tables
 
 DAILY_COLS = [("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
               ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
@@ -209,7 +207,7 @@ class _DocPreviewPanel(QWidget):
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("🔄 抓取正文")
         try:
-            cached = archive.pages_of(doc["key"])
+            cached = tc_engine.archive.pages_of(doc["key"])
         except Exception:  # noqa: BLE001 - 存档库异常不应挡住页面
             cached = []
         if not cached:
@@ -219,12 +217,12 @@ class _DocPreviewPanel(QWidget):
                   "text": p["text"], "error": ""} for p in cached]
         last = max((p.get("fetched_at") or "" for p in cached), default="")
         try:
-            snap = archive.snapshot_path(doc)
+            snap = tc_engine.archive.snapshot_path(doc)
             snap_tip = str(snap) if snap.exists() else ""
         except Exception:  # noqa: BLE001
             snap_tip = ""
         self._apply_pages(
-            pages, collector.join_pages(pages),
+            pages, tc_engine.collector.join_pages(pages),
             f"📂 本地存档于 {last} · 共 {len(pages)} 篇 · 点「🔄 重新抓取」更新",
             snap_tip)
 
@@ -244,7 +242,7 @@ class _DocPreviewPanel(QWidget):
         self.text_view.setPlaceholderText("正在抓取正文……")
 
         def work():
-            return collector.preview(
+            return tc_engine.collector.preview(
                 doc, on_status=lambda s: post_to_main(self._on_status, s))
 
         def done(result, err):
@@ -426,6 +424,12 @@ class TcDocPage(BasePage):
         self.docs: list[dict] = []
         self._busy = False
         self._ready_done = False
+        self._ready_loading = False
+        self._page_visible = False
+        self._closed = False
+        self._loaded_tabs = set()
+        self._panels = {}
+        self.mapping_panel = None
         self._task_checked_at = 0.0
         self._migrate_note = ""
 
@@ -543,34 +547,18 @@ class TcDocPage(BasePage):
 
         # ---------- 子页签：中间层同步 → 表格同步 → 历史/采集/修订/成员/文档/映射 ----------
         self.tabs = QTabWidget()
-        self.bridge_panel = TcDocBridgePanel(self, self.app)
-        self.tabs.addTab(self.bridge_panel, "🧩 中间层同步")
-        self.bridge_tab_index = self.tabs.count() - 1
-
-        self.table_panel = self._build_sheet_tab()
-        self.preview_panel = _DocPreviewPanel(self)
-        self.content_stack = QStackedWidget()
-        self.content_stack.addWidget(self.table_panel)
-        self.content_stack.addWidget(self.preview_panel)
-        self.tabs.addTab(self.content_stack, "📋 表格同步")
-        self.content_tab_index = self.tabs.count() - 1
-
-        self.table_daily = self._make_table(DAILY_COLS, stretch_all=True, fit_cols=(0,))
-        self.table_daily.setToolTip("每次采集追加一行；增量相对该文档上一次采集")
-        self.tabs.addTab(self._wrap(self.table_daily), "📈 历史记录")
-
-        self.table_snap = self._make_table(SNAP_COLS)
-        self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
-        self.tabs.addTab(self._wrap(self.table_snap), "🧾 采集明细")
-
-        self.tabs.addTab(self._build_revision_tab(), "📜 修订记录")
-        self.revision_tab_index = self.tabs.count() - 1
-        self.tabs.addTab(self._build_members_tab(), "👥 成员名单")
-        self.members_tab_index = self.tabs.count() - 1
-        self.tabs.addTab(self._build_doc_tab(), "🗂 文档管理")
-        self.mapping_panel = TcDocMappingPanel(self, self.current_doc)
-        self.tabs.addTab(self.mapping_panel, "✍️ 映射回写")
-        self.mapping_tab_index = self.tabs.count() - 1
+        self._panel_builders = (
+            self._build_bridge_panel, self._build_content_panel,
+            self._build_daily_panel, self._build_snapshot_panel,
+            self._build_revision_tab, self._build_members_tab,
+            self._build_doc_tab, self._build_mapping_panel,
+        )
+        for title in ("🧩 中间层同步", "📋 表格同步", "📈 历史记录", "🧾 采集明细",
+                      "📜 修订记录", "👥 成员名单", "🗂 文档管理", "✍️ 映射回写"):
+            self.tabs.addTab(QStackedWidget(), title)
+        (self.bridge_tab_index, self.content_tab_index, self.daily_tab_index,
+         self.snapshot_tab_index, self.revision_tab_index, self.members_tab_index,
+         self.doc_tab_index, self.mapping_tab_index) = range(8)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
@@ -635,6 +623,43 @@ class TcDocPage(BasePage):
         layout.addWidget(self.status_label)
 
     # ==================== 界面拼装辅助 ====================
+
+    def _ensure_panel(self, index):
+        if index not in self._panels:
+            panel = self._panel_builders[index]()
+            self._panels[index] = panel
+            self.tabs.widget(index).addWidget(panel)
+            from gui_qt import common, theme
+            common.bind_checkbox_toasts(panel)
+            theme.adapt(panel)
+        return self._panels[index]
+
+    def _build_bridge_panel(self):
+        self.bridge_panel = TcDocBridgePanel(self, self.app, defer_load=True)
+        return self.bridge_panel
+
+    def _build_content_panel(self):
+        self.table_panel = self._build_sheet_tab()
+        self.preview_panel = _DocPreviewPanel(self)
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self.table_panel)
+        self.content_stack.addWidget(self.preview_panel)
+        return self.content_stack
+
+    def _build_daily_panel(self):
+        self.table_daily = self._make_table(DAILY_COLS, stretch_all=True, fit_cols=(0,))
+        self.table_daily.setToolTip("每次采集追加一行；增量相对该文档上一次采集")
+        return self._wrap(self.table_daily)
+
+    def _build_snapshot_panel(self):
+        self.table_snap = self._make_table(SNAP_COLS)
+        self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
+        return self._wrap(self.table_snap)
+
+    def _build_mapping_panel(self):
+        from gui_qt.pages.tcdoc_mapping import TcDocMappingPanel
+        self.mapping_panel = TcDocMappingPanel(self, self.current_doc)
+        return self.mapping_panel
 
     def _make_table(self, columns, stretch_all=False, fit_cols=()) -> QTableWidget:
         table = QTableWidget(0, len(columns))
@@ -925,38 +950,64 @@ class TcDocPage(BasePage):
     # ==================== 生命周期 ====================
 
     def on_show(self):
-        self._ensure_ready()
-        self.reload()
+        self._page_visible = True
+        if self._ready_done:
+            self.reload()
+        else:
+            self._ensure_ready()
         if time.time() - self._task_checked_at > 8:
             self._refresh_task()
 
+    def on_hide(self):
+        self._page_visible = False
+
+    def shutdown(self):
+        self._closed = True
+        self._page_visible = False
+
     def _ensure_ready(self):
-        """首次进入时建库 + 导入旧版历史数据（只跑一次）。"""
-        if self._ready_done:
+        """后台建库/迁移，让页面框架先显示；失败时下次进入可重试。"""
+        if self._ready_done or self._ready_loading:
             return
-        try:
-            self._migrate_note = job.ensure_ready()
-        except Exception as exc:  # noqa: BLE001
-            self.app.toast(f"初始化失败：{exc}"[:120], "error")
-            self._migrate_note = ""
-        self._ready_done = True
-        if self._migrate_note:
-            self.app.toast(self._migrate_note, "info")
+        self._ready_loading = True
+        self.tabs.setEnabled(False)
+        self.doc_combo.setEnabled(False)
+        self._set_busy(True, "正在读取本地数据…")
+
+        def work():
+            return tc_engine.job.ensure_ready()
+
+        def done(note, err):
+            if self._closed:
+                return
+            self._ready_loading = False
+            self._ready_done = not bool(err)
+            self.tabs.setEnabled(True)
+            self.doc_combo.setEnabled(True)
+            self._set_busy(False, f"初始化失败：{err}" if err else "", refresh=False)
+            if err:
+                self.app.toast(f"初始化失败：{err}"[:120], "error")
+                return
+            self._migrate_note = note or ""
+            if note:
+                self.app.toast(note, "info")
+            if self._page_visible:
+                self.reload()
+
+        run_bg(work, done)
 
     # ==================== 刷新 ====================
 
     def reload(self):
+        if not self._ready_done:
+            return
         self._reload_docs()
-        self._refresh_tables()
         self._refresh_summary()
-        self._refresh_sheet_tabs()
         self._refresh_content_tab()
-        self._refresh_revisions()
-        self._refresh_members()
-        self.mapping_panel.set_doc(self.current_doc())
-        self.bridge_panel.set_doc_key((self.current_doc() or {}).get("key", ""))
-        if self.tabs.currentIndex() == self.bridge_tab_index:
-            self.bridge_panel.refresh(reload_targets=True)
+        self._loaded_tabs.clear()
+        if self.mapping_panel is not None:
+            self.mapping_panel.set_doc(self.current_doc())
+        self._refresh_active_tab()
 
     def _reload_docs(self):
         current = self.current_doc()
@@ -972,7 +1023,6 @@ class TcDocPage(BasePage):
         if self.docs:
             self.doc_combo.setCurrentIndex(idx)
         self.doc_combo.blockSignals(False)
-        self._fill_doc_table()
 
     def _fill_doc_table(self):
         db = tc_cfg.db_path()
@@ -988,32 +1038,35 @@ class TcDocPage(BasePage):
             self.doc_table.setItem(r, 4, _cell(doc["url"], center=False, tip=doc["url"]))
 
     def _refresh_tables(self):
+        """只填当前历史/明细页；批量分配行，避免逐行调整表格。"""
+        daily = self.tabs.currentIndex() == self.daily_tab_index
+        table = self.table_daily if daily else self.table_snap
         doc = self.current_doc()
-        self.table_daily.setRowCount(0)
-        self.table_snap.setRowCount(0)
-        if not doc:
-            return
-        db = tc_cfg.db_path()
-        for row in reversed(storage.all_daily(db, doc["key"])):
-            r = self.table_daily.rowCount()
-            self.table_daily.insertRow(r)
-            self.table_daily.setItem(r, 0, _cell(row["ts"]))
-            self.table_daily.setItem(r, 1, _cell("-" if row["views"] is None else row["views"]))
-            self.table_daily.setItem(r, 2, _cell(_fmt_delta(row["views_delta"])))
-            self.table_daily.setItem(r, 3, _cell(row["members"]))
-            self.table_daily.setItem(r, 4, _cell(_fmt_delta(row["members_delta"])))
-            self.table_daily.setItem(
-                r, 5, _cell("-" if row["readers"] is None else row["readers"]))
-
-        for row in reversed(storage.all_snapshots(db, doc["key"], limit=2000)):
-            r = self.table_snap.rowCount()
-            self.table_snap.insertRow(r)
-            self.table_snap.setItem(r, 0, _cell(row["ts"]))
-            self.table_snap.setItem(r, 1, _cell("✅ 成功" if row["ok"] else "❌ 失败"))
-            self.table_snap.setItem(r, 2, _cell("-" if row["views"] is None else row["views"]))
-            self.table_snap.setItem(r, 3, _cell("-" if row["members"] is None else row["members"]))
-            self.table_snap.setItem(r, 4, _cell(row["message"] or "", center=False,
-                                                tip=row["message"] or ""))
+        data = []
+        if doc:
+            db = tc_cfg.db_path()
+            if daily:
+                for row in reversed(storage.all_daily(db, doc["key"])):
+                    data.append((row["ts"], "-" if row["views"] is None else row["views"],
+                                 _fmt_delta(row["views_delta"]), row["members"],
+                                 _fmt_delta(row["members_delta"]),
+                                 "-" if row["readers"] is None else row["readers"]))
+            else:
+                for row in reversed(storage.all_snapshots(db, doc["key"], limit=2000)):
+                    data.append((row["ts"], "✅ 成功" if row["ok"] else "❌ 失败",
+                                 "-" if row["views"] is None else row["views"],
+                                 "-" if row["members"] is None else row["members"],
+                                 row["message"] or ""))
+        table.setUpdatesEnabled(False)
+        try:
+            table.setRowCount(len(data))
+            for r, values in enumerate(data):
+                for c, value in enumerate(values):
+                    description = not daily and c == 4
+                    table.setItem(r, c, _cell(value, center=not description,
+                                             tip=str(value) if description else ""))
+        finally:
+            table.setUpdatesEnabled(True)
 
     def _refresh_summary(self):
         doc = self.current_doc()
@@ -1035,9 +1088,11 @@ class TcDocPage(BasePage):
         self._task_checked_at = time.time()
 
         def work():
-            return task.next_run_text()
+            return tc_engine.task.next_run_text()
 
         def done(text, err):
+            if self._closed:
+                return
             self.task_label.setText(text if not err else f"定时任务状态未知：{err}")
 
         run_bg(work, done)
@@ -1053,45 +1108,59 @@ class TcDocPage(BasePage):
         return self.docs[0]
 
     def _on_doc_changed(self, _index):
-        self._refresh_tables()
+        if not self._ready_done:
+            return
         self._refresh_summary()
-        self._refresh_sheet_tabs()
         self._refresh_content_tab()
-        self._refresh_revisions()
-        self._refresh_members()
-        self.mapping_panel.set_doc(self.current_doc())
-        self.bridge_panel.set_doc_key((self.current_doc() or {}).get("key", ""))
+        self._loaded_tabs.clear()
+        if self.mapping_panel is not None:
+            self.mapping_panel.set_doc(self.current_doc())
+        self._refresh_active_tab()
 
     def _refresh_content_tab(self):
         """内容 Tab 自动切换：表格类型=表格同步，文档类型=正文预览。"""
         doc = self.current_doc()
         syncable = (not doc) or (doc.get("kind") or "").lower() in tables.SYNC_KINDS
-        self.content_stack.setCurrentWidget(
-            self.table_panel if syncable else self.preview_panel)
         self.tabs.setTabText(self.content_tab_index,
                              "📋 表格同步" if syncable else "📖 正文预览")
-        if not syncable:
-            self.preview_panel.set_doc(doc)
+        if self.content_tab_index in self._panels:
+            self.content_stack.setCurrentWidget(
+                self.table_panel if syncable else self.preview_panel)
+            if not syncable and self.tabs.currentIndex() == self.content_tab_index:
+                self.preview_panel.set_doc(doc)
 
     def _on_tab_changed(self, index):
-        if index == self.bridge_tab_index:
-            self.bridge_panel.refresh(reload_targets=True)
+        self._refresh_active_tab()
+
+    def _refresh_active_tab(self):
+        if not self._ready_done or self._busy:
             return
-        if index == self.mapping_tab_index:
+        index = self.tabs.currentIndex()
+        if index < 0:
+            return
+        self._ensure_panel(index)
+        if index in self._loaded_tabs:
+            return
+        if index == self.bridge_tab_index:
+            self.bridge_panel.refresh(
+                reload_targets=True, prefer_doc_key=(self.current_doc() or {}).get("key", ""))
+        elif index == self.mapping_tab_index:
             self.mapping_panel.refresh()
             self.mapping_panel.set_doc(self.current_doc())
-            return
-        if index == self.revision_tab_index:
+        elif index == self.revision_tab_index:
             self._refresh_revisions()
-            return
-        if index == self.members_tab_index:
+        elif index == self.members_tab_index:
             self._refresh_members()
-            return
-        if index != self.content_tab_index:
-            return
-        doc = self.current_doc()
-        if doc and (doc.get("kind") or "").lower() not in tables.SYNC_KINDS:
-            self.preview_panel.set_doc(doc)
+        elif index == self.doc_tab_index:
+            self._fill_doc_table()
+        elif index in (self.daily_tab_index, self.snapshot_tab_index):
+            self._refresh_tables()
+        elif index == self.content_tab_index:
+            self._refresh_content_tab()
+            doc = self.current_doc()
+            if not doc or (doc.get("kind") or "").lower() in tables.SYNC_KINDS:
+                self._refresh_sheet_tabs()
+        self._loaded_tabs.add(index)
 
     # ==================== 表格同步 ====================
 
@@ -1188,7 +1257,7 @@ class TcDocPage(BasePage):
         self.next_btn.setEnabled(self._sheet_offset + page_size < total)
         stamp = sheet.get("fetched_at") or "-"
         try:
-            image_stats = images.stats(doc["key"], tab_id)
+            image_stats = tc_engine.images.stats(doc["key"], tab_id)
         except Exception:  # noqa: BLE001 - 图片统计异常不影响表格预览
             image_stats = {}
         image_note = ""
@@ -1227,7 +1296,7 @@ class TcDocPage(BasePage):
         self._set_busy(True, "⏳ 正在同步表格数据……")
 
         def work():
-            return job.sync_tables(
+            return tc_engine.job.sync_tables(
                 [doc], on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
 
         def done(results, err):
@@ -1311,7 +1380,7 @@ class TcDocPage(BasePage):
         self._set_busy(True, "⏳ 正在采集表格图片……")
 
         def work():
-            return images.download_doc(
+            return tc_engine.images.download_doc(
                 doc["key"], doc["name"],
                 on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
 
@@ -1364,7 +1433,7 @@ class TcDocPage(BasePage):
             self._update_rev_info()
             return
         limit = int(count or self._rev_batch)
-        rows, total = revision.load_rows(
+        rows, total = tc_engine.revision.load_rows(
             doc["key"], limit=limit, offset=self._rev_loaded)
         self._rev_total = total
         self.rev_table.setUpdatesEnabled(False)
@@ -1413,7 +1482,7 @@ class TcDocPage(BasePage):
         if not doc:
             self.rev_info.setText("")
             return
-        meta_info = revision.meta(doc["key"])
+        meta_info = tc_engine.revision.meta(doc["key"])
         if not meta_info:
             self.rev_info.setText("暂无本地修订记录，点「🔄 拉取全部修订记录」")
             self.rev_more_btn.setEnabled(False)
@@ -1445,10 +1514,10 @@ class TcDocPage(BasePage):
         self._set_busy(True, f"⏳ 正在{mode}修订记录……")
 
         def work():
-            result = revision.collect(
+            result = tc_engine.revision.collect(
                 doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"),
                 incremental=not full)
-            return revision.save(result)
+            return tc_engine.revision.save(result)
 
         def done(saved, err):
             self._set_busy(False)
@@ -1481,7 +1550,7 @@ class TcDocPage(BasePage):
         if not doc:
             self.mem_info.setText("")
             return
-        users, total = members.load_users(doc["key"], limit=5000)
+        users, total = tc_engine.members.load_users(doc["key"], limit=5000)
         self.mem_table.setUpdatesEnabled(False)
         for user in users:
             r = self.mem_table.rowCount()
@@ -1494,7 +1563,7 @@ class TcDocPage(BasePage):
                                                tip=user["uid"]))
             self.mem_table.setItem(r, 4, _cell(user["corp_name"], center=False))
         self.mem_table.setUpdatesEnabled(True)
-        meta_info = members.meta(doc["key"])
+        meta_info = tc_engine.members.meta(doc["key"])
         if not meta_info:
             self.mem_info.setText("暂无本地成员名单，点「🔄 拉取全部成员」")
             return
@@ -1517,9 +1586,9 @@ class TcDocPage(BasePage):
         self._set_busy(True, "⏳ 正在拉取全部成员……")
 
         def work():
-            result = members.collect(
+            result = tc_engine.members.collect(
                 doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
-            return members.save(result)
+            return tc_engine.members.save(result)
 
         def done(saved, err):
             self._set_busy(False)
@@ -1551,20 +1620,24 @@ class TcDocPage(BasePage):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
             self.app.toast(f"打开失败：{path}", "warning")
 
-    def _set_busy(self, busy: bool, text: str = ""):
+    def _set_busy(self, busy: bool, text: str = "", refresh: bool = True):
         self._busy = busy
-        for btn in (self.collect_btn, self.install_btn, self.uninstall_btn,
-                    self.add_btn, self.edit_btn, self.del_btn, self.probe_btn,
-                    self.rebuild_btn, self.sync_btn, self.images_btn,
-                    self.rev_fetch_btn, self.rev_more_btn, self.rev_all_btn,
-                    self.mem_fetch_btn):
-            btn.setEnabled(not busy)
-        self.preview_panel.set_enabled(not busy)
-        if busy:
-            self.prev_btn.setEnabled(False)
-            self.next_btn.setEnabled(False)
-        else:
-            self._load_sheet_page()
+        for name in ("collect_btn", "install_btn", "uninstall_btn",
+                     "add_btn", "edit_btn", "del_btn", "probe_btn",
+                     "rebuild_btn", "sync_btn", "images_btn",
+                     "rev_fetch_btn", "rev_more_btn", "rev_all_btn", "mem_fetch_btn"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn.setEnabled(not busy)
+        if self.content_tab_index in self._panels:
+            self.preview_panel.set_enabled(not busy)
+            if busy:
+                self.prev_btn.setEnabled(False)
+                self.next_btn.setEnabled(False)
+            elif refresh and self.tabs.currentIndex() == self.content_tab_index:
+                self._load_sheet_page()
+        if refresh and not busy and self._page_visible:
+            self._refresh_active_tab()
         self.status_label.setText(text)
 
     # ==================== 采集 ====================
@@ -1578,7 +1651,7 @@ class TcDocPage(BasePage):
         self._set_busy(True, "⏳ 正在采集历史记录……")
 
         def work():
-            return job.collect_all(
+            return tc_engine.job.collect_all(
                 on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
 
         def done(results, err):
@@ -1624,7 +1697,7 @@ class TcDocPage(BasePage):
             self.reload()
             self.app.toast(f"已重建 {count} 个文档的报表", "success")
 
-        run_bg(job.rebuild_reports, done)
+        run_bg(tc_engine.job.rebuild_reports, done)
 
     def _open_data_dir(self):
         path = tc_cfg.data_dir()
@@ -1702,9 +1775,9 @@ class TcDocPage(BasePage):
         if del_data.isChecked():
             removed = storage.clear_doc(tc_cfg.db_path(), doc["key"])
             table_rows = tables.clear_doc(doc["key"])
-            page_rows = archive.clear_doc(doc["key"])
+            page_rows = tc_engine.archive.clear_doc(doc["key"])
             try:
-                archive.snapshot_path(doc).unlink(missing_ok=True)
+                tc_engine.archive.snapshot_path(doc).unlink(missing_ok=True)
             except OSError:
                 pass
             self.app.toast(f"已删除文档与其 {removed} 条历史记录"
@@ -1722,7 +1795,7 @@ class TcDocPage(BasePage):
         self._set_busy(True, "⏳ 正在生成诊断包（会打开浏览器窗口）……")
 
         def work():
-            return collector.probe(
+            return tc_engine.collector.probe(
                 doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
 
         def done(path, err):
@@ -1778,12 +1851,12 @@ class TcDocPage(BasePage):
 
         def work():
             if daily:
-                ok, msg = task.install_daily(hhmm)
+                ok, msg = tc_engine.task.install_daily(hhmm)
                 if ok:
                     tc_cfg.save_cfg(tcdoc_schedule_mode="daily",
                                     tcdoc_collect_time=hhmm)
             else:
-                ok, msg = task.install_interval(minutes)
+                ok, msg = tc_engine.task.install_interval(minutes)
                 if ok:
                     tc_cfg.save_cfg(tcdoc_schedule_mode="interval",
                                     tcdoc_interval_minutes=minutes)
@@ -1824,4 +1897,4 @@ class TcDocPage(BasePage):
             else:
                 QMessageBox.warning(self, "删除失败", msg)
 
-        run_bg(task.uninstall, done)
+        run_bg(tc_engine.task.uninstall, done)

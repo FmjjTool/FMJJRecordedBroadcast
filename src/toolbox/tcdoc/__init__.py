@@ -14,8 +14,15 @@
 - task      : Windows 计划任务安装 / 删除 / 查询
 """
 
-from . import (archive, bridge, browse, collector, config, http_api, images, job,
-               report, storage, tables, task)  # noqa: F401
-
 __all__ = ["archive", "bridge", "browse", "collector", "config", "http_api", "images",
            "job", "report", "storage", "tables", "task"]
+
+
+def __getattr__(name):
+    """按需导入子模块，浏览本地数据时不提前加载网络/报表依赖。"""
+    from importlib import import_module
+    if name not in __all__ and name not in ("members", "revision", "openapi", "session"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(f"{__name__}.{name}")
+    globals()[name] = module
+    return module
