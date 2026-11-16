@@ -186,6 +186,7 @@ class UploadHistory:
 
 class BiliUploader:
     def __init__(self, cookie=None, on_progress=None, cancel=None, history=None):
+        self.managed_auth = cookie is None
         if cookie is None:
             from auth import get_cookie
             cookie = get_cookie("bilibili")
@@ -195,6 +196,7 @@ class BiliUploader:
         if "SESSDATA" not in parsed or "bili_jct" not in parsed:
             raise UploadError("请先在 Cookie 管理登录 B站并启用 Cookie，需要 SESSDATA 与 bili_jct")
         self.csrf = parsed["bili_jct"].value
+        self.auth_identity = cookie_identity(cookie)
         self.member = requests.Session()
         self.member.headers.update({"Cookie": cookie, "User-Agent": "Mozilla/5.0",
                                     "Referer": UPLOAD_PAGE, "Origin": "https://member.bilibili.com"})
@@ -211,6 +213,8 @@ class BiliUploader:
     def _check_cancel(self):
         if self.cancel.is_set():
             raise UploadCancelled("已取消；本地视频保留")
+        if self.managed_auth and credential_identity() != self.auth_identity:
+            raise UploadCancelled("Cookie 管理的登录状态已改变，本任务已停止；请重新进入投稿窗口")
 
     def _json(self, session, method, url, **kwargs):
         self._check_cancel()
@@ -282,6 +286,7 @@ class BiliUploader:
                 if not chunk:
                     raise UploadError("上传期间文件被截断，请重新选择")
                 for attempt in range(3):
+                    self._check_cancel()
                     try:
                         response = self.upos.put(url, data=chunk, headers=headers, timeout=(15, 120),
                             allow_redirects=False, params={"partNumber": number + 1, "uploadId": init["upload_id"],
