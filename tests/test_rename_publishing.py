@@ -37,6 +37,8 @@ class RenamePublishingTests(unittest.TestCase):
             patch.object(cm, "get_config_dir", return_value=self.config_dir),
             patch.object(cm, "get_app_root", return_value=self.root),
             patch.object(cm, "_rename_config", None),
+            # 本测试的直播日为20261002；固定“今天”，继续验证同日两个P完成后才投稿。
+            patch.object(BU, "today_compact", return_value="20261002"),
             patch("gui_qt.pages.rename.get_video_info", return_value={"duration_str": "1秒"}),
             patch("gui_qt.pages.rename.capture_video_frame", return_value=None),
         ]

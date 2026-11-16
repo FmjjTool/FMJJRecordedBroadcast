@@ -833,7 +833,8 @@ class RenamePage(BasePage):
         self._posted_batches.add(signature)
         self._set_busy(True)
         self._post_cancel.clear()
-        self._log(f"全部重命名及元数据处理完成，开始上传：{metadata['title']} · {len(paths)} P")
+        count_text = f"{len(paths)} P" if len(paths) > 1 else "1 个视频"
+        self._log(f"全部重命名及元数据处理完成，开始上传：{metadata['title']} · {count_text}")
         def work():
             uploader = BU.BiliUploader(cancel=self._post_cancel, on_progress=lambda current, total, text:
                 self.post_progress.emit(f"{int(current * 100 / max(1, total))}% · {text}"))
