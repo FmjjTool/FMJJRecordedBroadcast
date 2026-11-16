@@ -31,6 +31,7 @@ class BiliUploadDialog(QDialog):
         self._verified_identity = ""
         self._scan_generation = 0
         self._selection_modified = False
+        self._source_platform_paths = None
         self.account_cancel = threading.Event()
         self.settings = BU.load_settings()
         self.config = {**BU.DEFAULTS, **self.settings.get("upload", {})}
@@ -87,6 +88,7 @@ class BiliUploadDialog(QDialog):
         self.platform = QComboBox()
         self.platform.addItems(BU.SOURCE_PLATFORMS)
         self.platform.setCurrentText(BU.normalize_platform(self.config.get("platform")))
+        self.platform.setToolTip("根据勾选视频的文件名自动识别，可手动调整")
         form.addRow("直播来源平台", self.platform)
         self.desc = QPlainTextEdit(self.config["desc"])
         self.desc.setMaximumHeight(70)
@@ -268,8 +270,20 @@ class BiliUploadDialog(QDialog):
             if path:
                 self.cover.setText(path)
 
+    def _sync_source_platform(self, paths, *, force=False):
+        selection = frozenset(BU.video_path_key(path) for path in paths)
+        if not force and selection == self._source_platform_paths:
+            return
+        self._source_platform_paths = selection
+        platform = BU.detect_source_platform(paths)
+        if platform:
+            blocked = self.platform.blockSignals(True)
+            self.platform.setCurrentText(platform)
+            self.platform.blockSignals(blocked)
+
     def refresh_preview(self):
         paths = self.selected_paths()
+        self._sync_source_platform(paths)
         parts = BU.multipart_count(paths, self.date.text().strip())
         self.setWindowTitle("B站视频上传 · 文案" + ("与分P预览" if parts else "预览"))
         self.variables.setText("模板变量：{日期}、{平台}、{文件名}" +
@@ -313,6 +327,7 @@ class BiliUploadDialog(QDialog):
         self.cover.setText(config["cover"])
         self.publish.setChecked(bool(config.get("auto_publish", True)))
         self.platform.setCurrentText(BU.normalize_platform(config.get("platform")))
+        self._sync_source_platform(self.selected_paths(), force=True)
         self.refresh_preview()
 
     def save_template(self, name):

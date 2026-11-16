@@ -37,6 +37,20 @@ def normalize_platform(value):
     return value if value in SOURCE_PLATFORMS else "抖子"
 
 
+def detect_source_platform(paths):
+    """从标准录播文件名的平台字段识别一致来源；未知或混选时不猜测。"""
+    aliases = {"抖音": "抖子", "抖子": "抖子", "douyin": "抖子",
+               "b站": "B站", "bilibili": "B站"}
+    platforms = set()
+    for path in paths:
+        match = re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[^_]+(?:_[^_]*)*?_(?:有弹幕|无弹幕)_([^_]+)(?:_|$)", Path(path).stem)
+        platform = aliases.get(match[1].casefold()) if match else ""
+        if not platform:
+            return ""
+        platforms.add(platform)
+    return next(iter(platforms)) if len(platforms) == 1 else ""
+
+
 def video_path_key(path):
     """同一文件的路径标识，统一分隔符、相对段及Windows大小写。"""
     return os.path.normcase(str(Path(path).resolve()))

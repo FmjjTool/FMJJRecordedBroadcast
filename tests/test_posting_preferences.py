@@ -81,10 +81,10 @@ class PostingPreferencesTests(unittest.TestCase):
         self.dialogs.append(result)
         return result
 
-    def video(self, date="20261116", timecode="20-15-30", renamed=True):
+    def video(self, date="20261116", timecode="20-15-30", renamed=True, platform="抖音"):
         folder = self.work / date
         folder.mkdir(exist_ok=True)
-        name = (f"{date[:4]}-{date[4:6]}-{date[6:]}_{timecode}_封茗囧菌_聊天_无弹幕_抖音.mp4"
+        name = (f"{date[:4]}-{date[4:6]}-{date[6:]}_{timecode}_封茗囧菌_聊天_无弹幕_{platform}.mp4"
                 if renamed else date + "_尚未重命名.mp4")
         path = folder / name
         path.write_bytes(b"isolated-video")
@@ -292,6 +292,92 @@ class PostingPreferencesTests(unittest.TestCase):
         config["platform"] = "B站"
         self.assertEqual(BU.build_metadata([video], config)["desc"], "B站")
 
+    def test_initial_video_platform_overrides_template_and_updates_copy(self):
+        settings = BU.load_settings()
+        settings["upload_templates"] = {
+            name: {**settings["upload"], "title": "标题{日期}{平台}", "desc": "简介{平台}",
+                   "platform": platform}
+            for name, platform in (("抖子文案", "抖子"), ("B站文案", "B站"))}
+        settings["active_upload_template"] = "B站文案"
+        BU.save_settings(settings)
+        for source, expected in (("抖音", "抖子"), ("B站", "B站")):
+            with self.subTest(source=source):
+                dialog = self.dialog(paths=[self.video(platform=source)])
+                self.assertEqual(dialog.platform.currentText(), expected)
+                for template in ("抖子文案", "B站文案"):
+                    dialog.templates.setCurrentText(template)
+                    self.assertEqual(dialog.platform.currentText(), expected)
+                    self.assertIn(f"标题：标题20261116{expected}", dialog.preview.toPlainText())
+                    self.assertIn(f"简介：简介{expected}", dialog.preview.toPlainText())
+        self.assertEqual(self.dialog().platform.currentText(), "B站")
+        unknown = self.dialog(paths=[self.video(platform="微博_标题提到抖音")])
+        self.assertEqual(unknown.platform.currentText(), "B站")
+
+    def test_detected_platform_follows_selection_and_preserves_manual_changes(self):
+        douyin = self.video()
+        bili = self.video(timecode="21-00-00", platform="B站")
+        dialog = self.dialog()
+        self.enter(dialog)
+        self.assertIn("请按条件分组或单独选择视频", dialog.preview.toPlainText())
+        items = {dialog.files.item(i).data(Qt.UserRole): dialog.files.item(i)
+                 for i in range(dialog.files.count())}
+        for item in items.values():
+            item.setCheckState(Qt.Unchecked)
+        items[douyin].setCheckState(Qt.Checked)
+        self.assertEqual(dialog.platform.currentText(), "抖子")
+        dialog.platform.setCurrentText("B站")
+        dialog.title.setText("手工文案{平台}")
+        dialog.desc.setPlainText("手工简介{平台}")
+        dialog.refresh_preview()
+        self.assertIn("标题：手工文案B站", dialog.preview.toPlainText())
+        dialog.load_workspace()
+        self.wait(lambda: not common.TASKS.has_owner(self.parent))
+        self.assertEqual(dialog.selected_paths(), [douyin])
+        self.assertEqual(dialog.platform.currentText(), "B站")
+        items = {dialog.files.item(i).data(Qt.UserRole): dialog.files.item(i)
+                 for i in range(dialog.files.count())}
+        dialog.platform.setCurrentText("抖子")
+        items[douyin].setCheckState(Qt.Unchecked)
+        items[bili].setCheckState(Qt.Checked)
+        self.assertEqual(dialog.platform.currentText(), "B站")
+        self.assertIn("简介：手工简介B站", dialog.preview.toPlainText())
+        items[bili].setCheckState(Qt.Unchecked)
+        items[douyin].setCheckState(Qt.Checked)
+        self.assertEqual(dialog.platform.currentText(), "抖子")
+
+    def test_detected_bili_platform_is_used_for_upload(self):
+        video = self.video(platform="B站")
+        dialog = self.dialog()
+        self.enter(dialog)
+        dialog.title.setText("封茗囧菌{日期}{平台}直播全程")
+        dialog.desc.setPlainText("简介{平台}")
+        self.assertEqual(dialog.platform.currentText(), "B站")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            dialog.start_upload()
+            self.wait(lambda: not common.TASKS.has_owner(self.parent))
+        paths, config = self.posted[0]
+        self.assertEqual(paths, [video])
+        self.assertEqual(config["platform"], "B站")
+        metadata = BU.build_metadata(paths, config)
+        self.assertIn("20261116B站", metadata["title"])
+        self.assertEqual(metadata["desc"], "简介B站")
+
+    def test_platform_detection_uses_source_field_without_guessing_from_title(self):
+        prefix = "2026-11-16_17-57-09_封茗囧菌_游戏_无弹幕_"
+        for suffix, expected in (("抖音_聊B站", "抖子"), ("抖子", "抖子"),
+                                 ("douyin", "抖子"), ("B站_聊抖音", "B站"),
+                                 ("b站", "B站"), ("bilibili", "B站"),
+                                 ("微博_标题提到抖音", "")):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(BU.detect_source_platform([prefix + suffix + ".mp4"]), expected)
+        douyin, bili = prefix + "抖音.mp4", prefix.replace("无弹幕", "有弹幕") + "B站.mp4"
+        self.assertEqual(BU.detect_source_platform([str(self.work / "B站" / douyin)]), "抖子")
+        self.assertEqual(BU.detect_source_platform([douyin, prefix + "抖子.mp4"]), "抖子")
+        self.assertEqual(BU.detect_source_platform([douyin, bili]), "")
+        self.assertEqual(BU.detect_source_platform([douyin, prefix + "未知.mp4"]), "")
+        self.assertEqual(BU.detect_source_platform(["2026-11-16_17-57-09_标题聊B站.mp4"]), "")
+        self.assertEqual(BU.detect_source_platform([]), "")
+
     def test_work_directory_change_discards_old_candidates(self):
         first = self.video()
         dialog = self.dialog(paths=[first])
@@ -304,6 +390,7 @@ class PostingPreferencesTests(unittest.TestCase):
         dialog.load_workspace()
         self.wait(lambda: not common.TASKS.has_owner(self.parent))
         self.assertEqual(dialog.selected_paths(), [str(second)])
+        self.assertEqual(dialog.platform.currentText(), "B站")
         self.assertNotIn(first, [record["path"] for record in dialog._records])
 
     def test_workspace_scan_merges_different_spellings_of_same_file(self):
