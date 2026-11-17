@@ -50,6 +50,22 @@ class AccountCollectionTests(unittest.TestCase):
                 **kwargs)
         return result, insert_calls, reveal_calls, export_calls, events
 
+    def test_persist_batch_replaces_final_insert_and_export(self):
+        posts = [SimpleNamespace(title="作品", publish_time=self.today, kind="video")]
+        persist_calls = []
+        (total, log, all_posts), inserts, reveals, exports, events = self._run(
+            posts, incremental=True,
+            persist_batch=lambda items, inc: (
+                persist_calls.append((items, inc)) or ("已保存", {"bilibili": 1})))
+
+        self.assertEqual(total, 2)
+        self.assertEqual(len(all_posts), 2)
+        self.assertEqual(len(persist_calls), 2)
+        self.assertTrue(all(inc for _items, inc in persist_calls))
+        self.assertEqual(inserts, [])
+        self.assertEqual(exports, [])
+        self.assertEqual(len(reveals), 2)
+
     def test_collects_and_reports_callbacks(self):
         posts = [SimpleNamespace(title="作品", publish_time=self.today, kind="video")]
         (total, log, all_posts), inserts, reveals, exports, events = self._run(

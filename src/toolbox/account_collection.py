@@ -83,15 +83,17 @@ def collect_accounts(
     rate_count=0, rate_interval=0, incremental=False,
     on_event=None, pause_event=None, cancel_event=None,
     date_start="", date_end="", round_id=0,
-    insert_items=None, reveal_items=None, export_batch=None,
+    insert_items=None, reveal_items=None, export_batch=None, persist_batch=None,
 ):
     """采集账号最新内容，返回 (total, log, all_posts)。
 
     on_event(dict)：实时事件回调，{"type": "log", ...} 或
     {"type": "progress", "done": x, "total": y, "label": ...}。
-    insert_items(items)：采集线程落库回调（可选）。
+    insert_items(items)：采集线程早期落库回调（可选，流式解析的逐条预览用）。
     reveal_items(items, round_id)：主线程逐条揭示回调（可选）。
     export_batch(posts, incremental)：单账号即时导出回调，返回 (msg, saved)（可选）。
+    persist_batch(posts, incremental)：单账号最终入库回调，返回 (msg, saved)；
+    提供时优先于 insert_items / export_batch，主数据与派生投影由它一次完成。
     """
     from accounts_manager import infer_kind_from_url
     from platforms import URLRecognizer, get_parser
@@ -278,15 +280,19 @@ def collect_accounts(
                         emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
                     results[i] = (a, platform, posts, error)
                 emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
-                if insert_items is not None:
-                    insert_items(posts)
+                saved = {}
+                save_msg = ""
+                if persist_batch is not None:
+                    save_msg, saved = persist_batch(posts, incremental)
+                else:
+                    if insert_items is not None:
+                        insert_items(posts)
+                    if export_batch is not None:
+                        save_msg, saved = export_batch(posts, incremental)
                 if reveal_items is not None:
                     reveal_items(posts, round_id)
-                saved = {}
-                if export_batch is not None:
-                    save_msg, saved = export_batch(posts, incremental)
-                    if save_msg:
-                        emit(f"[{i}/{n}] {save_msg}")
+                if save_msg:
+                    emit(f"[{i}/{n}] {save_msg}")
                 if incremental and isinstance(saved, dict):
                     for p, cnt in saved.items():
                         total_added[p] = total_added.get(p, 0) + cnt

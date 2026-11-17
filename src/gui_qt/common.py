@@ -406,168 +406,37 @@ def _collect(infos, persist=True):
     return len(new_items)
 
 
-# ==================== 已获取数据持久化（SQLite 增量存储） ====================
+# ==================== 已获取数据持久化（L3 服务） ====================
 #
-# 归属：config/collected.db 是「已获取」页面展示/导出快照，唯一写入方是本模块；
-# config/increment.db 是账号增量采集的分平台归档，唯一写入方是 toolbox/increment_db.py。
+# 归属：config/collected.db 是「已获取」页面展示/导出快照，唯一写入方是
+# toolbox/collected_store.py；config/increment.db 是它的派生分平台归档，
+# 由 collected_store.ingest_items(..., incremental=True) 投影写入。
 # 两者可承载同一次采集结果但用途不同，暂不合并；去重键统一由 toolbox.dedup.collect_key 提供。
-#
-# 表 videos：
-#   dedup_key TEXT PRIMARY KEY  去重键（video_id/video_url/raw_url）
-#   platform  TEXT              平台（bilibili/douyin/weibo，便于按平台查询）
-#   created_at REAL             入库时间戳
-#   data      TEXT              VideoInfo asdict 的 JSON
-# rowid 隐式自增 → 插入顺序即列表顺序。
-# 旧 collected.json 首次启动自动迁移入库，原文件改名 .bak 保留备份。
-
-_collected_lock = threading.Lock()
 
 
-def _db_path():
-    from toolbox.config_manager import get_config_dir
-    return get_config_dir() / "collected.db"
-
-
-def _collected_path():
-    from toolbox.config_manager import get_config_dir
-    return get_config_dir() / "collected.json"
-
-
-def _db_connect():
-    import sqlite3
-    import os
-    p = _db_path()
-    os.makedirs(p.parent, exist_ok=True)
-    conn = sqlite3.connect(p, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS videos ("
-        " dedup_key TEXT PRIMARY KEY,"
-        " platform  TEXT,"
-        " created_at REAL,"
-        " data      TEXT NOT NULL)")
-    return conn
-
-
-def _row_of(info, now):
-    import json
-    from dataclasses import asdict
-    return (_dedup_key(info), (info.platform or ""), now,
-            json.dumps(asdict(info), ensure_ascii=False))
-
-
-def _db_insert(items):
-    """增量写入：只插新行（主键冲突自动忽略），不再全量重写文件。"""
-    import time
-    try:
-        now = time.time()
-        rows = [_row_of(i, now) for i in items]
-        with _collected_lock:
-            conn = _db_connect()
-            try:
-                conn.executemany(
-                    "INSERT OR IGNORE INTO videos"
-                    " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
-                    rows)
-                conn.commit()
-            finally:
-                conn.close()
-    except Exception:
-        pass
-
-
-def _migrate_from_json(conn):
-    """旧 collected.json → db（仅在 db 为空时执行一次），成功后 json 改名 .bak。"""
-    import json
-    from platforms.base import VideoInfo
-    jp = _collected_path()
-    if not jp.exists():
-        return
-    try:
-        data = json.loads(jp.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    import time
-    now = time.time()
-    fields = set(VideoInfo.__dataclass_fields__)
-    for d in data:
-        if not isinstance(d, dict):
-            continue
-        info = VideoInfo(**{k: v for k, v in d.items() if k in fields})
-        key = _dedup_key(info)
-        if not key:
-            continue
-        conn.execute(
-            "INSERT OR IGNORE INTO videos"
-            " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
-            _row_of(info, now))
-    conn.commit()
-    try:
-        jp.rename(jp.with_suffix(".json.bak"))
-    except OSError:
-        pass
+def _db_insert(items) -> int:
+    """增量写入 collected.db；实际存储逻辑在 toolbox.collected_store。"""
+    from toolbox.collected_store import insert_items
+    return insert_items(items)
 
 
 def save_collected():
-    """全量同步内存列表到 db（清空/重建场景用；日常新增走 _db_insert 增量）。
-
-    保留每条原有的 created_at，按当前列表顺序重排 rowid（列表顺序 = 展示顺序）。
-    """
-    import time
-    from dataclasses import asdict, is_dataclass
-    import json as _json
-    try:
-        items = [i for i in COLLECTED if is_dataclass(i)]
-        with _collected_lock:
-            conn = _db_connect()
-            try:
-                old = dict(conn.execute(
-                    "SELECT dedup_key, created_at FROM videos").fetchall())
-                now = time.time()
-                rows = [(_dedup_key(i), (i.platform or ""),
-                         old.get(_dedup_key(i)) or now,
-                         _json.dumps(asdict(i), ensure_ascii=False))
-                        for i in items]
-                conn.execute("DELETE FROM videos")
-                conn.executemany(
-                    "INSERT OR REPLACE INTO videos"
-                    " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
-                    rows)
-                conn.commit()
-            finally:
-                conn.close()
-    except Exception:
-        pass
+    """全量同步内存列表到 db（清空/重建场景用；日常新增走 _db_insert 增量）。"""
+    from toolbox.collected_store import save_all
+    save_all(COLLECTED)
 
 
 def load_collected():
     """启动时从 config/collected.db 恢复已获取列表（失败静默，保持空列表）。
 
-    首次运行自动把旧 collected.json 迁移入库；按去重键跳过已存在条目，重复调用安全。
+    首次运行由存储服务把旧 collected.json 迁移入库；按去重键跳过已存在条目。
     """
-    import json
-    from platforms.base import VideoInfo
+    from toolbox.collected_store import load_items
     try:
-        import os
-        os.makedirs(_db_path().parent, exist_ok=True)
-        with _collected_lock:
-            conn = _db_connect()
-            try:
-                n = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
-                if n == 0:
-                    _migrate_from_json(conn)
-                rows = conn.execute(
-                    "SELECT data, created_at FROM videos ORDER BY rowid").fetchall()
-            finally:
-                conn.close()
+        items = load_items()
         existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
-        fields = set(VideoInfo.__dataclass_fields__)
         kept = 0
-        for data, _created_at in rows:
-            d = json.loads(data)
-            if not isinstance(d, dict):
-                continue
-            info = VideoInfo(**{k: v for k, v in d.items() if k in fields})
+        for info in items:
             key = _dedup_key(info)
             if key and key in existing:
                 continue
@@ -577,7 +446,7 @@ def load_collected():
             kept += 1
         # 旧库可能存有按会过期的 CDN 直链键写入的重复行（同一 video_id 多行），
         # 加载去重丢过行就把库物理重写成干净键，避免脏行越积越多
-        if kept < len(rows):
+        if kept < len(items):
             save_collected()
     except Exception:
         pass

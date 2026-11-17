@@ -1032,38 +1032,35 @@ class InfoAccountsPage(BasePage):
             insert_items=_db_insert,
             reveal_items=lambda items, rid: post_to_main(
                 self._enqueue_reveal, items, rid),
-            export_batch=self._export_one_batch,
+            persist_batch=self._persist_batch,
         )
 
-    def _export_one_batch(self, posts, incremental):
-        """单账号结果即时入库/导出（账号一完成就保存，不等全部收尾）。
+    def _persist_batch(self, posts, incremental):
+        """单账号最终入库/导出：一次写入 collected 主数据，增量模式再投影 increment。
 
-        incremental=True 增量入库（分平台分表、按去重键忽略重复，重复保存幂等），
-        False 单独导出独立文件（已存在则跳过，用户移走/删除/改名后重新保存）。
+        流式解析的早期预览仍走 insert_items；这里只在账号完成时落最终结果。
         返回 (短消息, 增量模式=平台->新增数 dict / 导出模式=写出文件数 int)。
         """
         try:
+            from toolbox.collected_store import ingest_items
+            added = ingest_items(posts, incremental=incremental)
             if incremental:
-                # increment.db 是 collected.db 的派生归档，统一由投影服务写入
-                from toolbox.collected_projection import project_items
-                added = project_items(posts)
                 parts = "、".join(f"{p} +{n}" for p, n in added.items() if n)
-                msg = f"💾 已入库 {parts}" if parts else "💾 无新增（已全部在库中）"
+                msg = f"已入库 {parts}" if parts else "无新增（已全部在库中）"
                 return msg, added
-            else:
-                from toolbox.config_manager import get_export_subdir
-                out_dir = str(get_export_subdir("video_data"))
-                from exporters import export_per_video_flat
-                paths, skipped = export_per_video_flat(posts, output_dir=out_dir,
-                                                       formats=["json", "md"], skip_existing=True)
-                if skipped and not paths:
-                    return f"⚠️ 文件已存在，跳过（{len(skipped)} 个）", len(paths)
-                msg = f"💾 已导出 {len(paths)} 个文件"
-                if skipped:
-                    msg += f"（跳过 {len(skipped)} 个已存在）"
-                return msg, len(paths)
+            from toolbox.config_manager import get_export_subdir
+            out_dir = str(get_export_subdir("video_data"))
+            from exporters import export_per_video_flat
+            paths, skipped = export_per_video_flat(posts, output_dir=out_dir,
+                                                   formats=["json", "md"], skip_existing=True)
+            if skipped and not paths:
+                return f"文件已存在，跳过（{len(skipped)} 个）", len(paths)
+            msg = f"已导出 {len(paths)} 个文件"
+            if skipped:
+                msg += f"（跳过 {len(skipped)} 个已存在）"
+            return msg, len(paths)
         except Exception as e:
-            return f"⚠️ 保存失败: {e}", {}
+            return f"保存失败: {e}", {}
 
     # ---------- 增量模式勾选持久化 ----------
     @staticmethod

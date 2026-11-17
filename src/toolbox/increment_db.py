@@ -9,8 +9,9 @@ config/increment.db，每个平台一张表（表名=平台英文标识，首次
 跨平台互发内容不去重——按平台分表浏览时各表须完整（快手全是互发内容，
 跨表拦截曾把整张快手表拦成 0 行）；content_key 仅供检索/排查，不参与任何去重。
 
-归属：collected.db 是「已获取」页面展示/导出快照，唯一写入方 gui_qt/common.py；
-increment.db 是账号增量采集的分平台归档，唯一写入方本模块。两者暂不合并。
+归属：collected.db 是「已获取」页面展示/导出快照，唯一写入方
+toolbox/collected_store.py；increment.db 是账号增量采集的分平台归档，
+唯一写入方本模块（由 collected_store.ingest_items 触发投影）。两者暂不合并。
 内部表 _meta 是迁移标记，不出现在平台下拉里；历史 _content_keys 表可能残留在旧库，
 已停止维护且不参与去重。旧 download/已获取数据/_增量汇总.json 首次使用时自动迁移入库。
 

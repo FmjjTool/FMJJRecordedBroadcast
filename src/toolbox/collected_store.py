@@ -1,0 +1,181 @@
+# -*- coding: utf-8 -*-
+"""collected.db 主数据存储与派生投影入口。
+
+collected.db 是「已获取」页面展示/导出快照，唯一写入方本模块；
+increment.db 是它的派生分平台归档，由本模块的 `ingest_items(..., incremental=True)`
+调用 `toolbox.collected_projection` 写入。页面不再直接写 SQLite。
+
+旧 collected.json 首次启动自动迁移入库，原文件改名 .bak 保留备份。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+import time
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+
+from toolbox.dedup import collect_key
+
+_lock = threading.Lock()
+
+_CREATE_TABLE = (
+    "CREATE TABLE IF NOT EXISTS videos ("
+    " dedup_key TEXT PRIMARY KEY,"
+    " platform  TEXT,"
+    " created_at REAL,"
+    " data      TEXT NOT NULL)")
+
+
+def db_path() -> Path:
+    from toolbox.config_manager import get_config_dir
+    return get_config_dir() / "collected.db"
+
+
+def _connect(path=None):
+    p = Path(path) if path is not None else db_path()
+    os.makedirs(p.parent, exist_ok=True)
+    conn = sqlite3.connect(p, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(_CREATE_TABLE)
+    return conn
+
+
+def _row_of(info, now):
+    return (collect_key(info), (info.platform or ""), now,
+            json.dumps(asdict(info), ensure_ascii=False))
+
+
+def insert_items(items, db_path=None) -> int:
+    """增量写入 collected.db，只插新行（主键冲突忽略），返回新增行数。"""
+    rows = []
+    now = time.time()
+    for item in items or []:
+        if item is None:
+            continue
+        try:
+            rows.append(_row_of(item, now))
+        except Exception:
+            continue
+    if not rows:
+        return 0
+    try:
+        with _lock:
+            conn = _connect(db_path)
+            try:
+                before = conn.total_changes
+                conn.executemany(
+                    "INSERT OR IGNORE INTO videos"
+                    " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
+                    rows)
+                conn.commit()
+                return conn.total_changes - before
+            finally:
+                conn.close()
+    except Exception:
+        return 0
+
+
+def save_all(items, db_path=None) -> bool:
+    """全量同步列表到 collected.db（清空/重建场景用），保留原有 created_at。"""
+    try:
+        rows_items = [i for i in items or [] if is_dataclass(i)]
+        with _lock:
+            conn = _connect(db_path)
+            try:
+                old = dict(conn.execute(
+                    "SELECT dedup_key, created_at FROM videos").fetchall())
+                now = time.time()
+                rows = []
+                for item in rows_items:
+                    key = collect_key(item)
+                    rows.append((key, (item.platform or ""), old.get(key) or now,
+                                 json.dumps(asdict(item), ensure_ascii=False)))
+                conn.execute("DELETE FROM videos")
+                conn.executemany(
+                    "INSERT OR REPLACE INTO videos"
+                    " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
+                    rows)
+                conn.commit()
+                return True
+            finally:
+                conn.close()
+    except Exception:
+        return False
+
+
+def _migrate_from_json(conn, path: Path):
+    """旧 collected.json → db（仅在 db 为空时执行一次），成功后 json 改名 .bak。"""
+    from platforms.base import VideoInfo
+    jp = path.parent / "collected.json"
+    if not jp.exists():
+        return
+    try:
+        data = json.loads(jp.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    now = time.time()
+    fields = set(VideoInfo.__dataclass_fields__)
+    for d in data:
+        if not isinstance(d, dict):
+            continue
+        info = VideoInfo(**{k: v for k, v in d.items() if k in fields})
+        if not collect_key(info):
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO videos"
+            " (dedup_key, platform, created_at, data) VALUES (?, ?, ?, ?)",
+            _row_of(info, now))
+    conn.commit()
+    try:
+        jp.rename(jp.with_suffix(".json.bak"))
+    except OSError:
+        pass
+
+
+def load_items(db_path=None) -> list:
+    """读取全部已获取条目（按入库顺序），首次运行自动迁移旧 collected.json。"""
+    from platforms.base import VideoInfo
+    p = Path(db_path) if db_path is not None else db_path()
+    try:
+        with _lock:
+            conn = _connect(p)
+            try:
+                n = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
+                if n == 0:
+                    _migrate_from_json(conn, p)
+                rows = conn.execute(
+                    "SELECT data FROM videos ORDER BY rowid").fetchall()
+            finally:
+                conn.close()
+    except Exception:
+        return []
+    fields = set(VideoInfo.__dataclass_fields__)
+    items = []
+    for (data,) in rows:
+        try:
+            d = json.loads(data)
+            if isinstance(d, dict):
+                items.append(VideoInfo(**{k: v for k, v in d.items() if k in fields}))
+        except Exception:
+            continue
+    return items
+
+
+def ingest_items(items, *, incremental: bool = False, db_path=None, projector=None) -> dict:
+    """运行期唯一入库入口：先写 collected 主数据，增量模式再投影 increment。
+
+    返回 `{平台: 新增条数}`；非增量模式返回空字典。projector 仅供隔离测试注入。
+    """
+    items = list(items or [])
+    if not items:
+        return {}
+    insert_items(items, db_path=db_path)
+    if not incremental:
+        return {}
+    if projector is None:
+        from toolbox.collected_projection import project_items as projector
+    return projector(items)
