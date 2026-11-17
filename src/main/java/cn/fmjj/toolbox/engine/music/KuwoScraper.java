@@ -185,4 +185,121 @@ public final class KuwoScraper {
         }
         return s.matches("\\d+") ? s : "";
     }
+
+    // ==================== 单曲 / 歌单 / 专辑解析 ====================
+
+    /** 单曲详情（songinfoandlrc 同时带歌词，这里只取元信息）。 */
+    public MusicSong songDetail(String rid) {
+        try {
+            Map<String, String> h = new LinkedHashMap<>();
+            h.put("User-Agent", HttpClient.UA_CHROME);
+            h.put("Referer", "https://m.kuwo.cn/");
+            h.put("Accept", "application/json, text/plain, */*");
+            JsonNode d = http.getJson(LYRIC_URL + "?musicId=" + HttpClient.urlEncode(rid)
+                    + "&httpsStatus=1", h);
+            JsonNode wrapper = d.path("data");
+            JsonNode info = wrapper.path("songinfo");
+            if (!info.isObject()) info = wrapper.isObject() ? wrapper : null;
+            if (info == null) return null;
+            String name = info.path("songName").asText("");
+            if (name.isEmpty()) return null;
+            String cover = info.path("pic").asText(info.path("htsPic").asText(""));
+            if (!cover.isEmpty()) cover = cover.replaceFirst("/(\\d+)/", "/700/");
+            int duration = info.path("duration").asInt(0);
+            if (duration > 10000) duration /= 1000;
+            return new MusicSong("kuwo", rid, name, info.path("artist").asText(""),
+                    info.path("album").asText(""), duration, cover,
+                    "https://www.kuwo.cn/play_detail/" + rid);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 歌单曲目（nplserver pl.svc，游客可用，分页）。 */
+    public List<MusicSong> playlistSongs(String playlistId) {
+        List<MusicSong> out = new ArrayList<>();
+        int total = 0;
+        for (int pn = 0; pn <= 50; pn++) {
+            String url = "http://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid="
+                    + HttpClient.urlEncode(playlistId) + "&pn=" + pn
+                    + "&rn=100&encode=utf8&keyset=pl2012&identity=kuwo&pcmp4=1"
+                    + "&vipver=MUSIC_9.0.5.0_W1&newver=1";
+            try {
+                JsonNode d = http.getJson(url, headers());
+                if (pn == 0) total = d.path("total").asInt(0);
+                JsonNode list = d.path("musiclist");
+                if (!list.isArray() || list.isEmpty()) break;
+                for (JsonNode item : list) {
+                    String id = item.path("id").asText("");
+                    if (id.isEmpty()) continue;
+                    String cover = item.path("albumpic").asText(item.path("musicPic").asText(""));
+                    if (!cover.isEmpty()) cover = cover.replaceFirst("/(\\d+)/", "/700/");
+                    int duration = item.path("duration").asInt(0);
+                    if (duration > 10000) duration /= 1000;
+                    out.add(new MusicSong("kuwo", id,
+                            item.path("name").asText(item.path("displaysongname").asText("")),
+                            item.path("artist").asText(item.path("displayartistname").asText("")),
+                            item.path("album").asText(item.path("displayalbumname").asText("")),
+                            duration, cover, "https://www.kuwo.cn/play_detail/" + id));
+                }
+                if (total > 0 && out.size() >= total) break;
+                if (list.size() < 100) break;
+            } catch (Exception e) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    /** 专辑曲目（www albumInfo；接口偶发反爬为空时返回空列表）。 */
+    public List<MusicSong> albumSongs(String albumId) {
+        String url = "http://www.kuwo.cn/api/www/album/albumInfo?albumid="
+                + HttpClient.urlEncode(albumId) + "&pn=1&rn=100&httpsStatus=1";
+        Map<String, String> h = new LinkedHashMap<>();
+        h.put("User-Agent", HttpClient.UA_CHROME);
+        h.put("Referer", "https://www.kuwo.cn/");
+        h.put("Accept", "application/json, text/plain, */*");
+        h.put("csrf", "");
+        h.put("X-Requested-With", "XMLHttpRequest");
+        try {
+            JsonNode d = http.getJson(url, h);
+            if (d.path("code").asInt(-1) != 200) return List.of();
+            JsonNode info = d.path("data");
+            String albumName = info.path("name").asText(info.path("album").asText(""));
+            String cover = info.path("pic").asText(info.path("htsPic").asText(""));
+            List<MusicSong> out = new ArrayList<>();
+            for (JsonNode item : info.path("musicList")) {
+                String rid = item.path("rid").asText("");
+                if (rid.isEmpty()) continue;
+                int duration = item.path("duration").asInt(0);
+                if (duration > 10000) duration /= 1000;
+                out.add(new MusicSong("kuwo", rid, item.path("name").asText(""),
+                        item.path("artist").asText(""), albumName, duration, cover,
+                        "https://www.kuwo.cn/play_detail/" + rid));
+            }
+            return out;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    public static String extractPlaylistId(String text) {
+        String s = text == null ? "" : text.strip();
+        Matcher m = Pattern.compile("playlist_detail/(\\d+)|[?&]pid=(\\d+)|playlist/(\\d+)")
+                .matcher(s);
+        if (m.find()) {
+            for (int i = 1; i <= 3; i++) if (m.group(i) != null) return m.group(i);
+        }
+        return s.matches("\\d+") ? s : "";
+    }
+
+    public static String extractAlbumId(String text) {
+        String s = text == null ? "" : text.strip();
+        Matcher m = Pattern.compile("album_detail/(\\d+)|[?&]albumid=(\\d+)|[?&]albumId=(\\d+)")
+                .matcher(s);
+        if (m.find()) {
+            for (int i = 1; i <= 3; i++) if (m.group(i) != null) return m.group(i);
+        }
+        return s.matches("\\d+") ? s : "";
+    }
 }

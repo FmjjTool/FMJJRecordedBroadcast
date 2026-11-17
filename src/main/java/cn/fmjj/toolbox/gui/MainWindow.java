@@ -12,10 +12,13 @@ import cn.fmjj.toolbox.gui.pages.BiliDanmakuPage;
 import cn.fmjj.toolbox.gui.pages.BiliResourcePage;
 import cn.fmjj.toolbox.gui.pages.ConvertPage;
 import cn.fmjj.toolbox.gui.pages.CoverMakerPage;
+import cn.fmjj.toolbox.gui.pages.DouyinDanmakuPage;
+import cn.fmjj.toolbox.gui.pages.DouyinIndexPage;
 import cn.fmjj.toolbox.gui.pages.FileTimePage;
 import cn.fmjj.toolbox.gui.pages.GlobalSettingsPage;
 import cn.fmjj.toolbox.gui.pages.ImageCropPage;
 import cn.fmjj.toolbox.gui.pages.InfoBatchPage;
+import cn.fmjj.toolbox.gui.pages.InfoAccountsPage;
 import cn.fmjj.toolbox.gui.pages.InfoParsePage;
 import cn.fmjj.toolbox.gui.pages.InfoResultsPage;
 import cn.fmjj.toolbox.gui.pages.LauncherPage;
@@ -28,6 +31,7 @@ import cn.fmjj.toolbox.gui.pages.MusicSearchPage;
 import cn.fmjj.toolbox.gui.pages.MusicTrackerPage;
 import cn.fmjj.toolbox.gui.pages.MusicTagPage;
 import cn.fmjj.toolbox.gui.pages.RenamePage;
+import cn.fmjj.toolbox.gui.pages.ShoppingPage;
 import cn.fmjj.toolbox.gui.pages.TrackerPage;
 import cn.fmjj.toolbox.gui.pages.VideoCommentsPage;
 import cn.fmjj.toolbox.gui.pages.WechatArticlePage;
@@ -36,6 +40,7 @@ import cn.fmjj.toolbox.gui.pages.OrganizePage;
 import cn.fmjj.toolbox.gui.pages.RenameBatchPage;
 import cn.fmjj.toolbox.gui.pages.StubPage;
 import cn.fmjj.toolbox.gui.pages.SubtitlePage;
+import cn.fmjj.toolbox.gui.pages.TicketsPage;
 import javafx.css.PseudoClass;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -206,6 +211,7 @@ public class MainWindow {
         pageFactories.put("toolbox_launcher", LauncherPage::new);
         // 已移植（M5 第一刀）
         pageFactories.put("info_parse", InfoParsePage::new);
+        pageFactories.put("info_accounts", InfoAccountsPage::new);
         // 已移植（M5 第三刀）
         pageFactories.put("info_batch", InfoBatchPage::new);
         // 已移植（M7 第一刀）
@@ -228,6 +234,10 @@ public class MainWindow {
         pageFactories.put("tracker", TrackerPage::new);
         pageFactories.put("music_tracker", MusicTrackerPage::new);
         pageFactories.put("bili_danmaku", BiliDanmakuPage::new);
+        pageFactories.put("douyin_danmaku", DouyinDanmakuPage::new);
+        pageFactories.put("douyin_index", DouyinIndexPage::new);
+        pageFactories.put("tickets", TicketsPage::new);
+        pageFactories.put("shopping", ShoppingPage::new);
         pageFactories.put("info_results", InfoResultsPage::new);
         // 占位（路线图见 docs/JAVA_PORT_PLAN.md）
         for (NavGroup group : NAV_GROUPS) {
@@ -377,6 +387,17 @@ public class MainWindow {
     public BasePage currentPage() { return current; }
 
     public Stage stage() { return stage; }
+
+    /** 软件退出：通知所有已实例化页面停后台任务（弹幕连接/实时落盘/统计等）。 */
+    public void shutdown() {
+        for (BasePage page : pageCache.values()) {
+            try {
+                page.shutdown();
+            } catch (Exception e) {
+                Log.warn("页面退出清理失败：" + page.title() + " → " + e.getMessage());
+            }
+        }
+    }
 
     /** 供页面调用的右下角提示。 */
     public void toast(String msg) { Toast.show(stage, msg); }

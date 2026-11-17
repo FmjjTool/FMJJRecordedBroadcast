@@ -32,10 +32,10 @@
 | **M2 配置与基础工具** | settings(JSON) 持久化、文件时间修改、批量重命名（8 类规则）、自动整理（按日期归档） | ✅ 完成 |
 | **M3 网络与账号体系** | HttpClient 封装（UA/JSON/重试/表单）、WBI 网络层（nav 取 key、buvid、bili_ticket、cookie header）、Cookie 仓库（Fernet 语义逐字节兼容 Python，旧 cookies.json 直接可用）、B站扫码登录、12 平台管理界面 | ✅ 完成 |
 | **M4 录播工具箱** | 音频提取、视频转换（ffmpeg 子进程：`-c copy` 无损优先 + libx264 回退）、文件迁移、日历浏览、继续操作启动器 | ✅ 完成 |
-| **M5 解析与下载** | ✅ B站/微博/抖音/快手 解析下载、多线程分段、批量导入、已获取、SQLite；⚠️ 小红书：能读探索流元信息，**媒体下载需 x-s 签名**（见 3.18） | ✅ 完成（小红书受限） |
-| **M6 信息/资产/追踪页** | 🚧 已完成：单个/批量解析、已获取、酷我搜索下载、资产管理、B站资源（空间+搜索）、**公众号解析**；⬜ 剩余：账号获取、抖音指数、B站表情包/装扮、音乐信息、账号追踪×2、视频评论区 | 🚧 进行中 |
+| **M5 解析与下载** | ✅ B站/微博/抖音/快手/小红书 解析下载、多线程分段、批量导入、已获取、SQLite（小红书媒体走 CDP 笔记页，见 3.18） | ✅ 完成 |
+| **M6 信息/资产/追踪页** | ✅ 已完成：单个/批量解析、已获取、酷我搜索下载、资产管理、B站资源（8 个 tab 全部实现）、公众号解析、视频评论区、音乐信息、账号追踪×2、抖音指数、账号获取 | ✅ 完成 |
 | **M7 音乐高级** | ✅ 完成：NCM/QMC(v1+v2)/KGM/KWM/XM/TM/X2M/X3M 解密 + 标签读写（JAudiotagger）；⬜ 剩余：网络匹配/封面补全（随 M6 音乐搜索） | ✅ 完成 |
-| **M8 票务购物与直播** | ✅ 媒体工具 4 页；🚧 B站弹幕：协议已实现但 JDK WebSocket 被拒（见 3.19，需换库）；⬜ 剩余：大麦/秀动/会员购、淘宝商品、抖音弹幕姬 | 🚧 进行中 |
+| **M8 票务购物与直播** | ✅ 媒体工具 4 页；✅ B站弹幕姬（3.23）；✅ 抖音弹幕姬（3.25，含预览/FLV 录制/回放视频，见 3.31）；✅ 票务解析（3.26）；✅ 购物解析（3.27） | ✅ 完成 |
 | **M9 打包分发** | ✅ jpackage app-image（自带 JRE）、FFmpeg 检测+自定义路径、环境自检（7 项）、隐私校验（自用包/分发包）；⬜ msi/exe 安装器需 WiX | ✅ 完成 |
 
 建议每 1-2 个里程碑发一次内部测试版；M5 之后可考虑对原版做双写灰度。
@@ -100,8 +100,9 @@
    裸 `ffmpeg`（与原版一致）。`Ffmpeg.available()` 供 UI 提示；内置分发留 M9。
 2. **文件迁移勾选方式**：原版是每行 CheckBox；Java 版用多选行 + 全选/反选
    （交互差异，功能等价）。目标已存在时逐文件合并、同名加 `_N`。
-3. **继续操作页**：先给「系统目录 + 最近 8 个日期文件夹」的快捷卡片；
-   原版的自定义条目（launcher_items 持久化）随 M6 全局设置补。
+3. **继续操作页**：已支持自定义软件/链接条目（`config/launcher.json` 持久化）、
+   12 项分页卡片、图标、上下移/删除、「跟随进程树」启动与退出时统一关闭，
+   另保留工作/导出/配置/日志四个系统目录快捷入口。
 4. **回收站**：Python 用 send2trash；Java 用 `Desktop.moveToTrash`
    （不可用时退化永久删除，页面会提示）。
 
@@ -211,8 +212,9 @@
 
 Java 侧已对齐：`modeBox` / `searchPlatBox` / `resultArea`（只读 TextArea）/ 固定高 110 的 log；
 模式切换改 placeholder 与按钮文案（🔍 解析 ↔ 🔎 搜索）。
-搜索模式：B站走 `BiliResource.searchAll`，结果弹窗 7 列（平台/标题/作者/播放/时长/发布时间/链接），
-双击回填链接并解析；抖音/微博搜索未实现（明确提示，不假装）。
+搜索模式：B站走 `BiliResource.searchAll`，微博走 `WeiboParser.search`
+（m.weibo.cn 容器接口），结果弹窗双击回填链接并解析；「全部平台」会合并两边结果。
+抖音搜索在无头浏览器下会落到验证码中间页（CDP 实测），页面明确提示改用作品链接解析。
 
 ### 批量导入（info_batch.py，403 行）— 已重排
 原版结构：标题(18px) → 输入框(**固定高 150**) → 按钮行(`批量解析` + `❌`取消(40×30,禁用) +
@@ -267,7 +269,8 @@ Java 已对齐结构，并扩展引擎：`MusicTagEngine.TagFields`（12 字段�
 （JAudiotagger 的 ALBUM_ARTIST/COMPOSER/LYRICIST/COMMENT/DISC_NO/LYRICS）。
 功能：添加文件/文件夹、表单编辑、保存选中/全部保存、清除标签、移除、清空、过滤、
 歌词弹窗编辑、封面更换/移除（预览 140×140）。
-**未实现**：网络匹配 / 批量匹配 / 表格匹配（需五大音源与 XLSX 解析），点击明确提示。
+**已实现**：网络匹配（五平台候选 + 歌词/封面）、批量匹配（第一候选）、
+XLSX 表格匹配（文件名/标题/艺术家/专辑/年份/音轨/碟/风格/专辑艺术家/歌词列）。
 
 ### 图片裁切（image_crop.py，1287 行）— 已重排
 原版是**画布交互式裁切**：工具栏顺序为 `📁 导入` / `↩` `↪` / `➖ 3x ➕` / `🎯 自动对齐` /
@@ -421,7 +424,9 @@ Java 已按同顺序建 8 个 tab：
 → 进度条 → 状态(灰) → 按钮行（`🔍 解析并导出`(绿) + `⏹ 取消`(红) + `📂 打开导出文件夹`）→ 日志。
 
 Java 已完全对齐该顺序。HTML / MD 导出已实现（图片下载到 `{标题}_files/` 并替换引用）；
-**PDF / Word 未实现**（勾选时日志明确提示「已跳过」，不假装）。
+**已实现 HTML / MD / Word / PDF 导出**：Word 用 POI XWPF（标题/段落 + 已下载图片），
+PDF 用 PDFBox A4 排版（自动加载 Windows 中文字体 msyh/simsun，正文自动换行，
+图片追加在正文后）。
 
 ### 视频评论区（video_comments.py，467 行）— 新实现
 原版结构：平台下拉（抖音/B站/微博）+ 模式下拉 → 输入行（链接/ID + 视频数 + 页数 +
@@ -451,7 +456,8 @@ Java 已实现三栏结构与命名链路：
   （目标已存在会拒绝，成功后刷新并自动选中下一个）
 - 新增 6 个命名规则测试（完整/空字段/类型顺序/非法字符/日期解析/账户猜测）
 
-**未做**：预览截图缩略图、账户/类型/平台配置持久化（原版从 config_manager 读）。
+**未做**：账户/类型/平台配置持久化（原版从 config_manager 读）。
+预览截图已实现：选中视频后用 FFmpeg 截第 1 秒帧（320 宽）显示在右栏。
 
 ### 音乐信息获取（music_info.py，231 行）— 新实现
 原版是**五平台五列对比**：`🎵 音乐信息获取`(18px) → 搜索行（歌手 150 / 歌曲名 伸展 /
@@ -513,6 +519,215 @@ cursor=0 / internalExt=0 / pushServer=（空）
 **为什么 pushServer 是空**：该房间 `status=4`（未开播），`im/fetch` 不返回游标。
 **只差一个在播房间做最终验证**；抖音首页推荐要登录才渲染（无登录时 DOM 里没有房间链接）。
 
+## 3.33 音乐标签页：网络匹配 / 批量匹配 / XLSX 表格匹配
+
+- **网络匹配**：按当前文件「艺术家 + 标题」（缺失时用文件名）搜索，来源可选
+  网易云/QQ/酷我/酷狗/5sing，候选表双击或选中应用；填充标题/艺术家/专辑，
+  后台拉取歌词与封面（封面在「保存选中」时写入）。
+- **批量匹配**：对选中文件逐一搜索（网易云优先，失败依次换源），取第一候选，
+  覆盖标题/艺术家/专辑/歌词并标记 ●。
+- **表格匹配**：POI 读取 XLSX 首表，按表头识别
+  文件名/标题/艺术家/专辑/年份/音轨/碟/风格/专辑艺术家/歌词列，
+  用文件名或标题匹配列表内歌曲，合并字段并标记待保存。
+
+**实测**：搜索/标签写入沿用五平台已验证接口；XLSX 解析由 POI 完成。
+
+## 3.32 音乐下载扩展：酷狗 / 5sing / 网易云 / QQ
+
+**新增 `engine/music/KugouScraper`**（移植自 Python `music/scrapers/kugou.py`）：
+- 搜索：`mobilecdn.kugou.com/api/v3/search/song`（去掉 `<em>` 高亮、时长秒归一、封面 `{size}`→480）。
+- 直链：`m.kugou.com/app/i/getSongInfo.php?cmd=playInfo`（免费歌 128k 全曲；
+  VIP/付费/下架给出明确错误）。
+- 歌词：`m.kugou.com/app/i/krc.php`（LRC 直出；KRC JSON 做 base64+zlib 解压）。
+
+**新增 `engine/music/FiveSingScraper`**（Python `scrapers/fivesing.py` 搜索部分）：
+5sing 主站受 CloudFlare 保护，改用酷狗共享库搜索，按原唱/翻唱/伴奏规则筛选合并，
+歌曲 ID 为酷狗 hash（下载走同一游客直链）。
+
+**新增 `engine/music/NeteaseScraper`**（Python `scrapers/netease.py`）：
+- 搜索：`music.163.com/api/search/get` 表单（ar/al/dt/fee）。
+- 歌词：`/api/song/lyric?lv=-1`。
+- 直链：公开 `song/media/outer/url?id=xxx.mp3` 的 302（免费歌可用）。
+
+**新增 `engine/music/QQMusicScraper`**（Python `scrapers/qq_music.py`）：
+- 搜索：`c.y.qq.com/soso/fcgi-bin/client_search_cp`（songmid/albummid/interval）。
+- 歌词：`fcg_query_lyric_new.fcg`。
+- 直链：pyq 分享接口跳转（部分免费歌可用；VIP/受限时明确报错）。
+
+**下载器**：`MusicDownloader` 按 `MusicSong.platform` 路由到五平台，
+扩展名取自平台返回，歌词写同名 `.lrc`。
+
+**页面**：音乐下载页五平台均可搜索、勾选下载；解析模式：
+- 网易云：单曲 / 歌单 / 专辑；
+- QQ：单曲 / 歌单 / 专辑；
+- 酷我：单曲 / 歌单（专辑 API 有反爬，UI 未开放专辑模式）；
+- 酷狗：单曲 / 歌单；
+- 5sing：单曲（`/m/detail/yc-xxx.html` / `yc/xxx`）与歌单页（`{用户}/dj/{id}.html`，
+  解析页面内 `yc|fc|bz/数字.html` 链接，兼容用户名/数字 uid）。
+酷狗概念版仍提示未移植。
+
+**实测**：酷狗「封茗囧菌」下载 3.95MB；5sing 9 条、下载 3.95MB；
+网易云搜索 3 条、直链 376 字符、歌词 1423、下载 3.49MB；单曲详情/专辑 1 首/
+歌单 200 首解析正常；QQ 搜索 3 条、直链 217 字符、歌词 821、下载 960KB MP3；
+单曲详情、专辑 2 首、歌单 76 首解析正常；酷我歌单 38/218 首、单曲详情正常；
+酷狗歌单 96 首、单曲详情正常；5sing 单曲页解析并下载 4.36MB、歌单 8 首解析正常。
+
+## 3.31 抖音弹幕视频引擎：预览 / FLV 录制 / 回放播放
+
+**新增 `engine/media/LiveVideoEngine`**（移植自 Python `toolbox/live_video.py`）：
+- `Player`：ffmpeg 将直播流或本地视频解码为固定 640x360 RGB24 rawvideo
+  （缩放+黑边填充、15fps、`-fflags nobuffer`），GUI 定时器取最新帧写入
+  `WritableImage`；带浏览器 UA + 平台 Referer，支持停止/重开。
+- `Recorder`：`ffmpeg -c copy -f flv` 无损录制，stop 时向 stdin 写 `q` 优雅收尾。
+
+**抖音直播流**（`DouyinLive.streams`）：解析 `stream_url.flv_pull_url` +
+`live_core_sdk_data.pull_data.stream_data`（原画 `_origin` / 蓝光 `_md`），
+页面按清晰度排序展示（原画/蓝光/1080P/720P/540P/360P/流畅）。
+
+**页面**（`DouyinDanmakuPage`）：
+- 连接成功后自动拉流并预览；切换清晰度即时生效（录制中仅影响预览）；
+- ⏺ 回放包录制：FLV 存 `<导出目录>/直播录制/`，停止/断开自动打包回放包；
+  「自动回放包录制」开关持久化，拿到流即开录；录制计时显示；
+- 📂 导入回放包：解压 `recording.flv/.mp4` 到临时文件，自动切回放模式；
+  「▶ 播放回放 / ⏸ 暂停 / ▶ 继续」+ 进度条拖动跳转 + 0.5x/1x/1.5x/2x 倍速
+  （本地文件用 ffmpeg `-readrate` 按真实时间读取，避免 rawvideo 瞬间解码到结尾）；
+- 回放弹幕同步：按第一条弹幕与 `recording_meta.startTimestamp` 计算视频零点，
+  200ms 心跳按时间戳逐条渲染历史弹幕/礼物/进场/点赞（拖动进度会重建面板，
+  补渲染最近 250 条并重建打赏榜）；无视频的回放包也能仅按弹幕时间轴回放；
+- 📇 已存账号选择器：汇总最近连接 / accounts.txt / 直播录制文件；
+  `douyin.com/user/sec_uid` 主页通过 CDP 页面上下文请求 profile/other 解析 web_rid；
+- 软件退出时录制同步打包，避免后台 daemon 线程被进程结束截断。
+
+**实测**：抖音在播房间获取 6 档清晰度；直播预览成功解出 640x360 帧；
+6 秒 SD 流录制出 ~984KB FLV；本地视频解码正常。
+
+## 3.30 B站资源补齐：装扮表情包 + 直播表情（8/8 tab）
+
+**接口**（`engine/platform/bili/BiliEmote` 扩展）：
+- 表情包详情：`x/emote/package?ids=&business=reply`（普通包，含 gif/webp/png）。
+- 装扮表情：`x/garb/v2/user/suit/benefit?item_id=&part=cards` 的
+  `suit_items.emoji_package[].properties.item_emoji_list`（实测长度 2481，可正常解析）。
+- 直播间：`room/v1/Room/get_info`（真实房号/封面/网页背景/关键帧）+
+  `live_user/v1/Master/info`（主播头像）+ App 签名详情（App 背景图）+
+  `xlive/web-ucenter/v2/emoticon/GetEmoticons`（需登录；返回专属+通用表情包）。
+
+**页面**（`BiliResourceEmoteTabs`）：
+- 装扮表情包：输入普通表情包 ID / 装扮 item_id / 收藏集链接（自动跳「收藏集」），
+  自动识别 + 强制装扮模式；格式 GIF/WEBP/PNG/全部；表情文件清单 + 全部下载。
+- 直播表情：房间号/链接 → 主播头像/封面/网页+App 背景/关键帧 +
+  直播间专属与通用表情（专属在前、通用置底），全部下载到
+  `<导出目录>/B站资源/表情包/`。
+
+**实测**：表情包 11 个包（首个 20 表情）、装扮表情清单、直播间 544820
+（2 个表情包：通用 38 + UP主大表情 20）均获取成功。
+
+## 3.29 账号获取页：B站/微博/抖音时间线 + 账号分组管理
+
+**引擎**：
+- `engine/accounts/AccountStore`：`config/accounts.txt`（组号/组名/账号名/URL/备注/类型）
+  + `config/groups.json`，格式与 Python 版逐字段兼容（含账号名/URL 写反自动纠偏）。
+- `engine/accounts/AccountFeed`：B站（WBI `arc/search` 投稿 + `feed/space` 动态）、
+  微博（`m.weibo.cn/api/container/getIndex` + Cookie）、抖音（CDP 拦截
+  `aweme/v1/web/aweme/post/`）、快手（CDP 拦截 `rest/v/profile/feed`）、
+  小红书（主页 SSR `__INITIAL_STATE__` 花括号配平解析）；统一 Post 模型 → 中文字段 JSON。
+- 日期段过滤：绝对/相对时间解析（刚刚、N 分钟/小时/天/周/月前、昨天、前天），
+  解析失败的条目保留（宁多勿漏）。
+
+**页面**：功能页（全部/选中/按组采集、条数 0=无上限、日期段、增量模式、暂停/取消、
+进度条、实时日志、30 分钟/1/2 小时定时获取）；设置页（添加账号、编辑/删除/上下移、
+分组多选/管理）。增量结果写 `<导出目录>/已获取数据/账号增量/<平台>.jsonl`
+（按作品 ID 去重），独立模式每作品一个 JSON。
+
+**实测**：B站空间 2 的投稿与动态、微博时间线、抖音 sec_uid 主页时间线均成功抓取
+并完成时间归一化；小红书 SSR 解析有跨语言单测（含 undefined/尾逗号/new Set 容错）。
+快手/小红书主页需要登录 Cookie。
+
+**限制**：结果落导出目录，未写入 `collected.db`；定时为固定间隔
+（Python 版支持起止时间对话框）。
+
+## 3.28 购物解析：淘宝店铺商品 + 商品详情 + Excel
+
+**引擎**（`engine/platform/shopping/Shopping`）：
+- 店铺信息：游客 PC 首页（sellerId/shopId/店铺名）。
+- 商品列表：`_m_h5_tk` 令牌 + `mtop.taobao.wireless.shop.index.wandering.get` 分页，
+  字段兼容 wandering/wsearch/经典 PC（价格/销量/优惠券/缩略图去后缀）。
+- 商品详情：`item.htm` SSR `__ICE_APP_CONTEXT__`（标题/主图/SKU/价格/物流/评分/参数）
+  + `mtop.taobao.detail.getdesc` 6.0（参数 + 图文详情长图）；HTTP 失败时 CDP 渲染兜底。
+- 图片：主图/SKU/详情三目录并发下载（6 线程）；Excel 由 `TaobaoXlsx` 用 Apache POI
+  输出五 sheet 并嵌入已下载图片（JPG/PNG/GIF 原字节，WEBP 转 PNG）。
+
+**页面**：店铺模式（勾选/全选/反选、排序、简介预览、逐件详情+Excel+图片）、
+商品直链模式（SKU 表 + 完整详情 + 单商品 Excel）、多选导出全量 JSON（未拉详情的自动补拉）。
+
+**实测**：默认店铺 14 件商品、商品详情（3 主图/SKU/3 参数/6 详情图）、图片下载与
+Excel 导出均成功（POI 为新增依赖）。
+
+## 3.27 票务解析：大麦 / 秀动 / B站会员购
+
+**引擎**（`engine/platform/tickets/Tickets`）：
+- 大麦：mtop 两步令牌（`_m_h5_tk` + MD5 签名，Cookie 罐自动回传），艺人页动态卡片树
+  展开、演出详情（场次/限购/实名/退票规则/嘉宾/介绍 HTML/座位图/FAQ）。
+- 秀动：艺人页/事件页/关键词列表 HTML 解析（Nuxt SSR 字段、票种去重）。
+- B站会员购：公开搜索/详情 API（场次+票档+公告+嘉宾+头图）。
+- 大麦关键词搜索：无损 HTTP 直调被 RGV587 拦 → CDP 移动端页面拦截
+  `mtop.damai.wireless.search.search` 响应（带 RGV587 重试）。
+- 图片下载：封面/海报/宣传/座位/嘉宾头像/艺人海报/场馆图。
+
+**页面**：三平台链接解析 + 跨平台关键词搜索（留空默认「封茗囧菌」）、勾选批量详情、
+表头三态排序、详情文本、单场失败重试、全量 JSON 导出。
+
+**实测**：B站会员购 20 条搜索结果 + 项目详情；大麦艺人页返回演出；秀动关键词接口可用。
+
+## 3.26 抖音指数页：创作者中心达人数据
+
+**引擎**（`engine/platform/douyin/DouyinIndex`）：创作者中心 `api/v2/daren/*`
+（搜索/作者信息/核心指标/稿均指标/达人视频/单视频指数/粉丝画像/相似达人），
+仅需抖音登录 Cookie + referer + appsource；粉丝画像二次 JSON 字符串解析与性别中文化。
+快照保存 `<导出目录>/抖音指数/<达人名>/抖音指数_时间戳.json` + `latest.json`。
+
+**页面**：两步确认搜索（候选表）、统计范围、核心/稿均/每日趋势/达人视频/粉丝画像
+（占比+TGI）/相似达人五个 Tab，双击视频打开、双击相似达人直接抓取。
+
+**实测**：达人搜索与全量抓取均成功（示例达人：6 条视频 / 14 个粉丝画像维度 /
+20 个相似达人，快照 + latest.json 落盘正常）。
+
+## 3.25 抖音弹幕姬：全链路打通（CDP 签名 → WS → protobuf → 页面）
+
+**状态**：`DouyinDanmakuPage` 已替换占位页并注册导航；`mvn clean test` 241 项全绿，
+冒烟自检 35 页全部构造成功。**已用两个在播房间实测收流**（小时榜/直播数据/进场/排行榜等），
+`connected` 后正常打印弹幕消息。
+
+**链路**（`engine/platform/douyin/DouyinLiveClient`）：
+1. `room/web/enter` 取 roomId/主播/标题/在线/封面；未开播直接回 `not_live`（页面轮询负责重试）
+2. 无头 Edge + CDP：**先覆盖 UA（去掉 HeadlessChrome）与视口 1920×1080**，再注入 Cookie 打开直播间
+3. **截页面自身 `im/fetch` 响应**（`Network.responseReceived` + `Network.getResponseBody`）→
+   cursor/internalExt/pushServer；用 internalExt 里的 `wss_push_did`（退回 URL 的
+   `user_unique_id`）重算 X-Bogus，保证签名与 did 同源
+4. 自造 `prepJs` 请求仅作兜底（2026-10 起抖音校验 a_bogus/did，自造请求会拿到空体）
+5. `Network.getCookies` 取 ttwid（HttpOnly，`document.cookie` 读不到）+ sessionid（礼物需要登录态）
+6. Java-WebSocket 连 pushServer（UA/Origin/Cookie）→ gzip 解压 → protobuf PushFrame/Response/Message
+7. 10s 心跳（`3a026862`）+ needAck 回执；确认收到推送后才关浏览器释放 Cookie
+
+**踩坑（两个都会导致 200 + 空响应体）**：
+- 无头 Edge 默认 UA 含 `HeadlessChrome`、视口 800×600 → 抖音直接返回空体；
+  必须 `Emulation.setUserAgentOverride` + `setDeviceMetricsOverride`
+- 自己拼 `a_bogus='00000000'` + 固定 `user_unique_id` 的 im/fetch 也会拿到空体 →
+  改用截获页面自身请求的响应
+
+**页面能力**（对齐 Python `test_page.py` 抖音形态）：
+- 三栏：主播卡（封面/粉丝/在线/累计观看/点赞/备注）；弹幕区（聊天/礼物/点赞/进场开关 +
+  关键字 / @昵称搜索）；右侧（房间号 + WS、打赏榜、事件日志）
+- 打赏榜按**连击会话**增量结算：`repeatEnd` 收尾、反复送 x1 算新一轮、粉丝团名称/价格兜底
+- 实时落盘 `导出目录/弹幕文件/实时记录/{room}_{yyyyMMdd}.jsonl`；连上后回读今日尾巴恢复
+- 📊 统计每 10s 采样写 `弹幕文件/{room}_{yyyyMMdd}.csv`（UTF-8 BOM 表头）
+- 💾 保存弹幕 / 📦 导出回放包 / 📂 导入 / 🧩 合并（dycast 全量格式：data.json +
+  全量弹幕.json + 分类 TXT + cover）
+- 🔁 轮询等开播、自动重连、断开自动保存、软件退出时 `shutdown()` 同步打包
+- `captcha` 状态明确提示（不弹验证窗口）；视频预览/FLV 录制/回放视频见 3.31。
+
+**测试**：`DouyinLiveProtocolTest` 覆盖 protobuf 解码 / 心跳 / 帧解析 / im/fetch 响应解析 /
+did 提取；页面纳入冒烟自检。
+
 ## 3.24 抖音弹幕姬：CDP 基础设施打通（页面 JS + X-Bogus 签名）
 
 **为什么需要浏览器**：抖音弹幕不是纯 WebSocket —— 连接参数（cursor/internalExt/pushServer）
@@ -543,7 +758,7 @@ sigLen=16  sig=6sZQqOiiEPAmBnLA   ← X-Bogus 签名拿到了
 
 **下一步**：`roomId` 要先用 HTTP `room/web/enter` 拿（页面 DOM/RSC 里取不到），
 再执行完整 PREP_JS（fetch im/fetch → 解析 protobuf 的 cursor/internalExt/pushServer），
-最后 Java 直连 WS + protobuf 解弹幕。
+最后 Java 直连 WS + protobuf 解弹幕。（已完成，见 3.25）
 
 ## 3.23 B站弹幕姬：打通了！（根因 = 取 token 与握手必须用同一份完整设备 Cookie）
 
@@ -627,31 +842,17 @@ image_crop / cover_maker / image_sorter / media_compress / bili_resource / wecha
 
 ## 3.20 页面迁移总览（目标：35 页全部真实实现）
 
-**已完成 24 / 35**：
-解析类 info_parse / info_batch / info_results / bili_resource / wechat_article；
-音乐类 netease / unlock_music / music_tag；
+**已完成 35 / 35**：
+解析类 info_parse / info_batch / info_results / info_accounts / bili_resource / wechat_article /
+video_comments；音乐类 netease / unlock_music / music_tag / music_info；
+追踪类 music_tracker / tracker；指数类 douyin_index；
 工具类 toolbox_convert / toolbox_audio / toolbox_migrate / toolbox_calendar / toolbox_launcher /
 toolbox_organize / toolbox_rename / rename_batch / file_time / lyrics_tool / toolbox_subtitle；
-媒体类 image_crop / cover_maker / image_sorter / media_compress；资产 asset；设置 global_settings。
+媒体类 image_crop / cover_maker / image_sorter / media_compress；资产 asset；设置 global_settings；
+直播类 bili_danmaku / douyin_danmaku；票务 tickets；购物 shopping。
 
-**剩余 11 页与预估**：
-
-| 页面 | 原版规模 | 依赖 | 难度 |
-|---|---|---|---|
-| music_info | 231 行 | 多平台音乐接口（网易云/QQ/酷狗） | 中（接口已有部分） |
-| video_comments | 467 行 | B站评论（reply/wbi） | 低（WBI 现成） |
-| music_tracker | 1155 行 | 本地统计 + 平台数据 | 中（统计逻辑多） |
-| tracker | 1114 行 | 本地统计 + PNG 卡片导出 | 中（要 Graphics2D 画卡片） |
-| info_accounts | 1769 行 | 12 平台账号信息接口 | 高（页面最大） |
-| wechat_article | ✅ 已完成（306 行） | — | — |
-| douyin_index | 大 | 抖音接口（风控） | 高 |
-| tickets | 大 | 大麦/秀动/会员购（签名） | 高 |
-| shopping | 大 | 淘宝（签名） | 高 |
-| bili_danmaku | — | JDK WebSocket 被拒（见 3.19） | 需换库 |
-| douyin_danmaku | — | 抖音 WS + 签名 | 高 |
-
-**建议顺序**：video_comments（WBI 现成）→ music_info（复用酷我/网易云）→ music_tracker/tracker（纯本地）
-→ info_accounts（多平台，量大）→ 票务/淘宝/弹幕（签名与 WS，最后）
+**剩余 0 页**。35 个导航页与已知子项（B站资源 8 tab、账号时间线 5 平台、
+抖音弹幕视频预览/录制/回放）均已实现。
 
 ## 3.19 B站弹幕姬：协议已通，JDK WebSocket 握手被拒（未接页面）
 
@@ -690,8 +891,17 @@ toolbox_organize / toolbox_rename / rename_batch / file_time / lyrics_tool / too
 - headless 浏览器访问 `/explore` 直接被「安全限制」页拦（85KB 验证页）
 - 结论：小红书下载 = 逆向 x-s 或真实浏览器（非 headless）+ 登录态，工作量明显大于抖音/快手
 
-**当前实现**：解析页识别小红书链接 → 展示 noteId / 是否有 xsec_token → 提示「媒体下载未实现」，
-不假装能下载。探索流列表能力已进引擎，可随时接到 UI。
+**当前实现**：解析页识别小红书链接 → CDP 启动系统 Edge（注入登录 Cookie）打开笔记页，
+读取 `og:video`（视频直链）与 `#noteContainer` 内的正文图片（含懒加载、按图片 ID 去重、
+排除头像/表情/推荐流封面）→ 下载为 `<noteId>.mp4` / `<noteId>_N.jpg|webp`。
+
+**实测**（`FMJJ_NET_TEST=1 mvn test -Dtest=XiaohongshuProbeIT -Dfmjj.home=<项目根>`）：
+- 视频笔记 → 直链 1.89MB 下载成功，正文图片 0（不混入推荐流）
+- 多图笔记 → 6 张图，首张 126KB 下载成功
+- 无 Cookie 时视频直链仍可读（`og:video` 在 SSR 里），图片笔记需要登录态渲染 `#noteContainer`
+
+**仍未做**：纯 HTTP 的 x-s 签名（`edith.xiaohongshu.com/api/sns/web/v1/feed`），
+目前每次解析会起一次无头 Edge（约 10 秒）；探索流列表能力保留在引擎，未接 UI。
 
 ## 3.17 M6 第二刀（B站资源：空间 + 综合搜索）
 

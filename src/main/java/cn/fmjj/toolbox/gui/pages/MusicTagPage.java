@@ -3,15 +3,27 @@ package cn.fmjj.toolbox.gui.pages;
 import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.engine.image.ImageTools;
 import cn.fmjj.toolbox.engine.media.AudioEngine;
+import cn.fmjj.toolbox.engine.music.FiveSingScraper;
+import cn.fmjj.toolbox.engine.music.KugouScraper;
+import cn.fmjj.toolbox.engine.music.KuwoScraper;
+import cn.fmjj.toolbox.engine.music.MusicSong;
 import cn.fmjj.toolbox.engine.music.MusicTagEngine;
 import cn.fmjj.toolbox.engine.music.MusicTagEngine.TagFields;
+import cn.fmjj.toolbox.engine.music.NeteaseScraper;
+import cn.fmjj.toolbox.engine.music.QQMusicScraper;
+import cn.fmjj.toolbox.engine.net.HttpClient;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TableColumn;
@@ -43,8 +55,8 @@ import java.util.stream.Stream;
  * <p>布局：工具栏（10 个按钮 + 伸展 + ❓）→ SplitPane（左：表单标题 + 12 字段 + 封面区；
  * 右：11 列文件表格）→ 状态栏（状态 + 伸展 + `过滤：` 220 宽）。
  *
- * <p>功能：添加文件/文件夹、表单编辑、保存选中/全部保存、清除标签、移除、清空、过滤。
- * **网络匹配 / 批量匹配 / 表格匹配**（需五大音源与 XLSX 解析）暂未实现，点击会明确提示。
+ * <p>功能：添加文件/文件夹、表单编辑、保存选中/全部保存、清除标签/封面、移除、清空、过滤、
+ * 网络匹配（五平台候选）、批量匹配（自动第一候选）、XLSX 表格匹配。
  */
 public class MusicTagPage extends BasePage {
 
@@ -86,6 +98,12 @@ public class MusicTagPage extends BasePage {
             "添加音频文件开始编辑（支持 FLAC/MP3/M4A/OGG/WAV/WMA/AIFF 等格式）");
     private final TextField filterField = new TextField();
     private Path pendingCover;
+    private final HttpClient http = new HttpClient();
+    private final NeteaseScraper netease = new NeteaseScraper();
+    private final QQMusicScraper qq = new QQMusicScraper();
+    private final KuwoScraper kuwo = new KuwoScraper();
+    private final KugouScraper kugou = new KugouScraper();
+    private final FiveSingScraper fivesing = new FiveSingScraper();
 
     private Consumer<String> toast;
 
@@ -118,9 +136,9 @@ public class MusicTagPage extends BasePage {
                 plainBtn("📂 添加文件夹", "扫描文件夹内全部音频", this::addFolder),
                 colorBtn("💾 保存选中", "把左侧表单内容写入所有选中文件", "#2e7d32", this::saveSelected),
                 colorBtn("💾 全部保存", "保存所有已修改（标记 ●）文件", "#2e7d32", this::saveAll),
-                colorBtn("🌐 网络匹配", "按文件名搜索网络标签", "#1976d2", () -> notImplemented("网络匹配")),
-                colorBtn("⚡ 批量匹配", "对选中文件逐一自动匹配", "#1976d2", () -> notImplemented("批量匹配")),
-                colorBtn("📥 表格匹配", "导入 XLSX 批量填充标签", "#1976d2", () -> notImplemented("表格匹配")),
+                colorBtn("🌐 网络匹配", "按当前选中文件的文件名搜索网络标签，手动选择候选", "#1976d2", this::netMatch),
+                colorBtn("⚡ 批量匹配", "对选中文件逐一自动匹配（取第一候选，覆盖文本标签）", "#1976d2", this::netBatch),
+                colorBtn("📥 表格匹配", "导入 XLSX 表格批量填充标签", "#1976d2", this::tableMatch),
                 plainBtn("✖ 移除选中", "从列表移除（不删文件）", this::removeSelected),
                 plainBtn("🗑 清除标签", "清空选中文件的全部标签与封面", this::clearTags),
                 plainBtn("🧹 清空列表", "", this::clearList));
@@ -149,9 +167,364 @@ public class MusicTagPage extends BasePage {
         return b;
     }
 
-    private void notImplemented(String what) {
-        status.setText(what + " 未实现（需五大音源接口 / XLSX 解析，随 M6 后续）");
-        toast(what + " 暂未实现");
+    // ==================== 网络匹配 / 批量匹配 / 表格匹配 ====================
+
+    private static String sourceKey(String label) {
+        if (label == null) return "netease";
+        if (label.startsWith("QQ")) return "qq";
+        if (label.startsWith("酷我")) return "kuwo";
+        if (label.startsWith("酷狗")) return "kugou";
+        if (label.startsWith("5sing")) return "5sing";
+        return "netease";
+    }
+
+    private List<MusicSong> searchPlatform(String key, String query) {
+        return switch (key) {
+            case "qq" -> qq.searchSong(query, 1, 10);
+            case "kuwo" -> kuwo.searchSong(query, 1, 10);
+            case "kugou" -> kugou.searchSong(query, 1, 10);
+            case "5sing" -> fivesing.searchSong(query, 1, 10);
+            default -> netease.searchSong(query, 1, 10);
+        };
+    }
+
+    private String lyricsFor(MusicSong song) {
+        try {
+            return switch (song.platform()) {
+                case "qq" -> qq.getLyric(song.songId());
+                case "kuwo" -> kuwo.getLyric(song.songId());
+                case "kugou" -> kugou.getLyric(song.songId());
+                case "5sing" -> song.songId().contains("/") ? "" : kugou.getLyric(song.songId());
+                default -> netease.getLyric(song.songId());
+            };
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private Path downloadCover(String url) {
+        if (url == null || url.isBlank()) return null;
+        try {
+            var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+                    .header("User-Agent", HttpClient.UA_CHROME)
+                    .header("Referer", "https://music.163.com/")
+                    .GET().build();
+            byte[] data = http.jdkClient().send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofByteArray()).body();
+            if (data == null || data.length < 500) return null;
+            Path tmp = Files.createTempFile("fmjj-tag-cover-", ".jpg");
+            Files.write(tmp, data);
+            tmp.toFile().deleteOnExit();
+            return tmp;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String guessKeyword(Row row) {
+        String title = row.fields.title() == null ? "" : row.fields.title().strip();
+        String artist = row.fields.artist() == null ? "" : row.fields.artist().strip();
+        if (!title.isEmpty()) return (artist + " " + title).strip();
+        String name = row.fileName();
+        int dot = name.lastIndexOf('.');
+        if (dot > 0) name = name.substring(0, dot);
+        name = name.replace('_', ' ').replaceAll("^\\s*\\d+[\\s.\\-]+", "").strip();
+        return (artist + " " + name).strip();
+    }
+
+    private void applySong(Row row, MusicSong song) {
+        if (row == null || song == null) return;
+        if (!song.songName().isBlank()) edits.get("title").setText(song.songName());
+        if (!song.singer().isBlank()) edits.get("artist").setText(song.singer());
+        if (!song.albumName().isBlank()) edits.get("album").setText(song.albumName());
+        markDirty("title");
+        row.fields = formFields(row.fields.hasCover());
+        status.setText("已填充「" + song.songName() + "」，正在获取歌词/封面…");
+        Thread t = new Thread(() -> {
+            String lrc = lyricsFor(song);
+            Path cover = downloadCover(song.coverUrl());
+            Platform.runLater(() -> {
+                if (table.getSelectionModel().getSelectedItem() != row) return;
+                if (!lrc.isBlank()) lyricsArea.setText(lrc);
+                if (cover != null) applyPendingCover(cover);
+                row.fields = formFields(row.fields.hasCover() || pendingCover != null);
+                row.dirty = true;
+                table.refresh();
+                status.setText("网络匹配完成（记得保存）：" + song.songName());
+                toast("已填充标签：" + song.songName());
+            });
+        }, "music-tag-net");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void netMatch() {
+        Row row = table.getSelectionModel().getSelectedItem();
+        if (row == null) {
+            toast("请先选中一个文件");
+            return;
+        }
+        Dialog<MusicSong> dlg = new Dialog<>();
+        dlg.setTitle("网络匹配标签");
+        dlg.setResizable(true);
+        dlg.getDialogPane().setPrefWidth(760);
+        dlg.getDialogPane().setPrefHeight(480);
+        ButtonType okType = new ButtonType("应用选中", ButtonBar.ButtonData.OK_DONE);
+        dlg.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, okType);
+
+        ComboBox<String> source = new ComboBox<>();
+        source.getItems().addAll("网易云", "QQ音乐", "酷我", "酷狗", "5sing");
+        source.getSelectionModel().selectFirst();
+        source.setPrefWidth(110);
+        TextField query = new TextField(guessKeyword(row));
+        query.setPrefWidth(360);
+        Button search = new Button("🔍 搜索");
+        HBox top = new HBox(6, new Label("来源:"), source, new Label("关键词:"), query, search);
+        top.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(query, Priority.ALWAYS);
+
+        TableView<MusicSong> result = new TableView<>();
+        TableColumn<MusicSong, String> cTitle = new TableColumn<>("歌曲");
+        cTitle.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().songName()));
+        cTitle.setPrefWidth(280);
+        TableColumn<MusicSong, String> cArtist = new TableColumn<>("歌手");
+        cArtist.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().singer()));
+        cArtist.setPrefWidth(180);
+        TableColumn<MusicSong, String> cAlbum = new TableColumn<>("专辑");
+        cAlbum.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().albumName()));
+        cAlbum.setPrefWidth(180);
+        TableColumn<MusicSong, String> cTime = new TableColumn<>("时长");
+        cTime.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().durationText()));
+        cTime.setPrefWidth(70);
+        result.getColumns().addAll(List.of(cTitle, cArtist, cAlbum, cTime));
+        result.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        Label info = new Label("选择来源后点「搜索」；双击候选可直接应用");
+        info.setStyle("-fx-text-fill:#888;");
+        VBox box = new VBox(8, top, info, result);
+        box.setPadding(new Insets(10));
+        VBox.setVgrow(result, Priority.ALWAYS);
+        dlg.getDialogPane().setContent(box);
+        dlg.setResultConverter(bt -> bt == okType
+                ? result.getSelectionModel().getSelectedItem() : null);
+
+        Runnable doSearch = () -> {
+            String q = query.getText() == null ? "" : query.getText().strip();
+            if (q.isEmpty()) {
+                info.setText("请输入关键词");
+                return;
+            }
+            search.setDisable(true);
+            info.setText("⏳ 搜索中…");
+            Thread t = new Thread(() -> {
+                List<MusicSong> songs = searchPlatform(sourceKey(
+                        source.getSelectionModel().getSelectedItem()), q);
+                Platform.runLater(() -> {
+                    search.setDisable(false);
+                    result.setItems(FXCollections.observableArrayList(songs));
+                    info.setText(songs.isEmpty() ? "（无结果，可换来源/关键词重试）"
+                            : "找到 " + songs.size() + " 首，选中后点「应用选中」");
+                });
+            }, "music-tag-search");
+            t.setDaemon(true);
+            t.start();
+        };
+        search.setOnAction(e -> doSearch.run());
+        query.setOnAction(e -> doSearch.run());
+        result.setRowFactory(tv -> {
+            javafx.scene.control.TableRow<MusicSong> tr = new javafx.scene.control.TableRow<>();
+            tr.setOnMouseClicked(e -> {
+                if (e.getClickCount() == 2 && !tr.isEmpty()) {
+                    dlg.setResult(tr.getItem());
+                    dlg.close();
+                }
+            });
+            return tr;
+        });
+        dlg.setOnShown(e -> doSearch.run());
+        dlg.showAndWait().ifPresent(song -> applySong(row, song));
+    }
+
+    private void netBatch() {
+        List<Row> rows = new ArrayList<>(table.getSelectionModel().getSelectedItems());
+        if (rows.isEmpty()) {
+            toast("请先选中要批量匹配的文件行");
+            return;
+        }
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.setTitle("批量匹配");
+        confirm.setHeaderText("对 " + rows.size() + " 个文件按文件名自动匹配");
+        confirm.setContentText("取第一候选，覆盖标题/艺术家/专辑/歌词（封面与其它字段保持不变）。继续？");
+        if (confirm.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+        status.setText("批量匹配中（0/" + rows.size() + "）……");
+        Thread t = new Thread(() -> {
+            int ok = 0;
+            List<String> failed = new ArrayList<>();
+            for (int i = 0; i < rows.size(); i++) {
+                Row r = rows.get(i);
+                String q = guessKeyword(r);
+                MusicSong song = null;
+                for (String key : List.of("netease", "qq", "kugou", "kuwo", "5sing")) {
+                    List<MusicSong> songs = searchPlatform(key, q);
+                    if (!songs.isEmpty()) {
+                        song = songs.get(0);
+                        break;
+                    }
+                }
+                if (song != null) {
+                    TagFields old = r.fields;
+                    String lrc = lyricsFor(song);
+                    r.fields = new TagFields(
+                            song.songName().isBlank() ? old.title() : song.songName(),
+                            song.singer().isBlank() ? old.artist() : song.singer(),
+                            song.albumName().isBlank() ? old.album() : song.albumName(),
+                            old.year(), old.genre(), old.albumArtist(),
+                            old.composer(), old.lyricist(), old.comment(),
+                            old.track(), old.disc(),
+                            lrc.isBlank() ? old.lyrics() : lrc, old.hasCover());
+                    r.dirty = true;
+                    ok++;
+                } else {
+                    failed.add(r.fileName());
+                }
+                int n = i + 1;
+                int okN = ok;
+                Platform.runLater(() -> status.setText("批量匹配中（" + n + "/" + rows.size()
+                        + "），成功 " + okN));
+            }
+            int finalOk = ok;
+            Platform.runLater(() -> {
+                table.refresh();
+                fillForm(table.getSelectionModel().getSelectedItem());
+                status.setText("批量匹配完成：成功 " + finalOk + "/" + rows.size()
+                        + (failed.isEmpty() ? "" : "，失败 " + failed.size())
+                        + "（记得点「全部保存」）");
+                toast("批量匹配成功 " + finalOk + " 个");
+            });
+        }, "music-tag-batch");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void tableMatch() {
+        if (allRows.isEmpty()) {
+            toast("请先添加音频文件，再导入表格匹配");
+            return;
+        }
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("选择 XLSX 表格");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
+                "表格 (*.xlsx)", "*.xlsx"));
+        File file = chooser.showOpenDialog(table.getScene() == null
+                ? null : table.getScene().getWindow());
+        if (file == null) return;
+        status.setText("正在读取表格…");
+        Thread t = new Thread(() -> {
+            int changed = 0;
+            String error = "";
+            try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(file)) {
+                var sheet = wb.getSheetAt(0);
+                var fmt = new org.apache.poi.ss.usermodel.DataFormatter();
+                var header = sheet.getRow(0);
+                if (header == null) throw new IllegalArgumentException("表格为空");
+                Map<String, Integer> cols = new LinkedHashMap<>();
+                for (int c = 0; c < header.getLastCellNum(); c++) {
+                    String h = fmt.formatCellValue(header.getCell(c))
+                            .replace(" ", "").toLowerCase(Locale.ROOT);
+                    if (h.isEmpty()) continue;
+                    if (h.equals("文件名") || h.equals("file") || h.equals("文件") || h.equals("name")) {
+                        cols.put("file", c);
+                    } else if (h.equals("标题") || h.equals("title") || h.equals("歌曲") || h.equals("歌名")) {
+                        cols.put("title", c);
+                    } else if (h.equals("艺术家") || h.equals("歌手") || h.equals("artist") || h.equals("singer")) {
+                        cols.put("artist", c);
+                    } else if (h.equals("专辑") || h.equals("album")) {
+                        cols.put("album", c);
+                    } else if (h.equals("年份") || h.equals("year")) {
+                        cols.put("year", c);
+                    } else if (h.equals("音轨") || h.equals("音轨号") || h.equals("track")) {
+                        cols.put("track", c);
+                    } else if (h.equals("碟") || h.equals("碟号") || h.equals("disc")) {
+                        cols.put("disc", c);
+                    } else if (h.equals("风格") || h.equals("genre")) {
+                        cols.put("genre", c);
+                    } else if (h.equals("专辑艺术家") || h.equals("albumartist")) {
+                        cols.put("albumartist", c);
+                    } else if (h.equals("歌词") || h.equals("lyrics")) {
+                        cols.put("lyrics", c);
+                    }
+                }
+                if (!cols.containsKey("file") && !cols.containsKey("title")) {
+                    throw new IllegalArgumentException("表格缺少「文件名」或「标题」列");
+                }
+                for (int r = 1; r <= sheet.getLastRowNum(); r++) {
+                    var row = sheet.getRow(r);
+                    if (row == null) continue;
+                    String fileName = cell(fmt, row, cols.get("file"));
+                    String title = cell(fmt, row, cols.get("title"));
+                    Row target = findRow(fileName, title);
+                    if (target == null) continue;
+                    TagFields old = target.fields;
+                    target.fields = new TagFields(
+                            pick(title, old.title()),
+                            pick(cell(fmt, row, cols.get("artist")), old.artist()),
+                            pick(cell(fmt, row, cols.get("album")), old.album()),
+                            pick(cell(fmt, row, cols.get("year")), old.year()),
+                            pick(cell(fmt, row, cols.get("genre")), old.genre()),
+                            pick(cell(fmt, row, cols.get("albumartist")), old.albumArtist()),
+                            old.composer(), old.lyricist(), old.comment(),
+                            pick(cell(fmt, row, cols.get("track")), old.track()),
+                            pick(cell(fmt, row, cols.get("disc")), old.disc()),
+                            pick(cell(fmt, row, cols.get("lyrics")), old.lyrics()),
+                            old.hasCover());
+                    target.dirty = true;
+                    changed++;
+                }
+            } catch (Exception e) {
+                error = e.getMessage() == null ? e.toString() : e.getMessage();
+            }
+            int finalChanged = changed;
+            String finalError = error;
+            Platform.runLater(() -> {
+                table.refresh();
+                fillForm(table.getSelectionModel().getSelectedItem());
+                if (finalError.isEmpty()) {
+                    status.setText("表格匹配完成：更新 " + finalChanged + " 个文件（记得点「全部保存」）");
+                    toast("表格匹配更新 " + finalChanged + " 个文件");
+                } else {
+                    status.setText("表格匹配失败：" + finalError);
+                    toast("表格匹配失败：" + finalError);
+                }
+            });
+        }, "music-tag-xlsx");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private Row findRow(String fileName, String title) {
+        String fn = fileName == null ? "" : fileName.strip().toLowerCase(Locale.ROOT);
+        String tt = title == null ? "" : title.strip().toLowerCase(Locale.ROOT);
+        for (Row r : allRows) {
+            String rf = r.fileName().toLowerCase(Locale.ROOT);
+            if (!fn.isEmpty() && (rf.equals(fn) || rf.contains(fn))) return r;
+            if (!tt.isEmpty()) {
+                String rt = r.fields.title() == null ? "" : r.fields.title().strip()
+                        .toLowerCase(Locale.ROOT);
+                if (rt.equals(tt) || rf.contains(tt)) return r;
+            }
+        }
+        return null;
+    }
+
+    private static String cell(org.apache.poi.ss.usermodel.DataFormatter fmt,
+                               org.apache.poi.ss.usermodel.Row row, Integer col) {
+        if (col == null) return "";
+        var c = row.getCell(col);
+        return c == null ? "" : fmt.formatCellValue(c).strip();
+    }
+
+    private static String pick(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private void showHelp() {
@@ -168,7 +541,10 @@ public class MusicTagPage extends BasePage {
                 · 保存：💾 保存选中（表单写入选中文件）/ 💾 全部保存（所有标记 ● 的文件）
                 · 修改过的文件标记 ●，避免误保存；纯本地编辑，不上传
 
-                ⚠️ 网络匹配 / 批量匹配 / 表格匹配：需五大音源接口与 XLSX 解析，暂未实现
+                · 🌐 网络匹配：选择来源（网易云/QQ/酷我/酷狗/5sing）→ 搜索 → 选中候选应用
+                  （标题/艺术家/专辑 + 歌词/封面；封面在保存选中时写入）
+                · ⚡ 批量匹配：对选中文件按文件名自动取第一候选，覆盖文本标签与歌词
+                · 📥 表格匹配：导入 XLSX（文件名/标题/艺术家/专辑/年份/音轨/碟/风格/专辑艺术家/歌词）
                 """);
         a.showAndWait();
     }
@@ -468,10 +844,13 @@ public class MusicTagPage extends BasePage {
     private void saveAll() {
         List<Row> dirty = allRows.stream().filter(r -> r.dirty).toList();
         if (dirty.isEmpty()) { status.setText("没有修改过的文件"); return; }
+        Row current = table.getSelectionModel().getSelectedItem();
         int ok = 0, fail = 0;
         for (Row r : dirty) {
             try {
-                MusicTagEngine.writeFields(r.path, r.fields);
+                boolean cover = r == current && pendingCover != null;
+                MusicTagEngine.writeFields(r.path, cover ? withCover(r.fields) : r.fields);
+                if (cover) MusicTagEngine.writeCover(r.path, pendingCover);
                 r.fields = MusicTagEngine.readFields(r.path);
                 r.dirty = false;
                 ok++;
@@ -479,8 +858,15 @@ public class MusicTagPage extends BasePage {
                 fail++;
             }
         }
+        pendingCover = null;
         table.refresh();
         status.setText("全部保存：成功 " + ok + "，失败 " + fail);
+    }
+
+    private static TagFields withCover(TagFields f) {
+        return new TagFields(f.title(), f.artist(), f.album(), f.year(), f.genre(),
+                f.albumArtist(), f.composer(), f.lyricist(), f.comment(),
+                f.track(), f.disc(), f.lyrics(), true);
     }
 
     private void removeSelected() {
@@ -522,7 +908,11 @@ public class MusicTagPage extends BasePage {
         c.getExtensionFilters().add(new FileChooser.ExtensionFilter("图片", "*.jpg", "*.jpeg", "*.png"));
         File f = c.showOpenDialog(table.getScene() == null ? null : table.getScene().getWindow());
         if (f == null) return;
-        pendingCover = f.toPath();
+        applyPendingCover(f.toPath());
+    }
+
+    private void applyPendingCover(Path path) {
+        pendingCover = path;
         try {
             var img = ImageTools.read(pendingCover);
             var scaled = ImageTools.scale(img, 140, 140);
@@ -533,7 +923,7 @@ public class MusicTagPage extends BasePage {
             }
             coverLabel.setText("");
             coverLabel.setGraphic(new ImageView(wi));
-            coverInfo.setText("待写入：" + f.getName());
+            coverInfo.setText("待写入：" + path.getFileName());
         } catch (Exception e) {
             coverInfo.setText("读取封面失败：" + e.getMessage());
         }

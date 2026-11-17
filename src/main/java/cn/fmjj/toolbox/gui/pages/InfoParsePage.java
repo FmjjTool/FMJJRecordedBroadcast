@@ -172,24 +172,42 @@ public class InfoParsePage extends BasePage {
 
     // ==================== 搜索模式 ====================
 
-    /** 搜索模式：目前支持 B站（综合搜索）；抖音/微博搜索待补。 */
+    /** 搜索模式：支持 B站（综合搜索）、微博（m.weibo.cn）与抖音（CDP 截获搜索）。 */
     private void searchVideos() {
         String kw = linkField.getText() == null ? "" : linkField.getText().trim();
         if (kw.isEmpty()) { status.setText("请输入搜索关键词"); return; }
         String plat = searchPlatBox.getValue();
-        if (plat != null && !"全部平台".equals(plat) && !"B站".equals(plat)) {
-            status.setText(plat + " 搜索暂未支持（当前支持 B站）");
-            appendLog("ℹ️ " + plat + " 搜索未实现，已跳过");
+        boolean all = plat == null || "全部平台".equals(plat);
+        boolean bili = all || "B站".equals(plat);
+        boolean weibo = all || "微博".equals(plat);
+        if ("抖音".equals(plat)) {
+            status.setText("抖音搜索触发验证码，暂不可用（可粘贴作品链接解析）");
+            appendLog("ℹ️ 抖音搜索被验证码拦截，已跳过");
+            return;
+        }
+        if (!bili && !weibo) {
+            status.setText(plat + " 搜索暂未支持");
             return;
         }
         parseBtn.setDisable(true);
         setResultTitle("⏳ 搜索中：" + kw);
         setResultMeta("");
 
+        final boolean doBili = bili;
+        final boolean doWeibo = weibo;
         javafx.concurrent.Task<java.util.List<BiliResource.SearchItem>> task = new javafx.concurrent.Task<>() {
             @Override
             protected java.util.List<BiliResource.SearchItem> call() throws Exception {
-                return biliResource.searchAll(kw, 1, CookieStore.get("bilibili"));
+                java.util.List<BiliResource.SearchItem> out = new ArrayList<>();
+                if (doBili) out.addAll(biliResource.searchAll(kw, 1, CookieStore.get("bilibili")));
+                if (doWeibo) {
+                    for (WeiboParser.SearchHit hit : new WeiboParser().search(
+                            kw, 1, CookieStore.get("weibo"))) {
+                        out.add(new BiliResource.SearchItem("微博", hit.title(),
+                                hit.author(), hit.url(), hit.cover(), hit.desc()));
+                    }
+                }
+                return out;
             }
         };
         task.setOnSucceeded(e -> {
@@ -265,7 +283,8 @@ public class InfoParsePage extends BasePage {
 
     private static String cell(BiliResource.SearchItem it, int idx) {
         return switch (idx) {
-            case 0 -> "B站";
+            case 0 -> it.type() != null && it.type().startsWith("微博") ? "微博"
+                    : it.type() != null && it.type().startsWith("抖音") ? "抖音" : "B站";
             case 1 -> it.title() == null ? "" : (it.title().length() > 60 ? it.title().substring(0, 60) : it.title());
             case 2 -> it.author() == null ? "" : it.author();
             case 6 -> it.url() == null ? "" : it.url();
@@ -493,6 +512,7 @@ public class InfoParsePage extends BasePage {
         else if (site == Site.WEIBO && weiboItem != null) downloadWeibo();
         else if (site == Site.DOUYIN && douyinVideo != null) downloadDouyin();
         else if (site == Site.KUAISHOU && kuaishouVideo != null) downloadKuaishou();
+        else if (site == Site.XIAOHONGSHU && xhsMedia != null) downloadXhs();
         else status.setText("请先解析");
     }
 
@@ -566,22 +586,147 @@ public class InfoParsePage extends BasePage {
     // ==================== 小红书 ====================
 
     /**
-     * 小红书：笔记详情页 SSR 不含笔记数据（媒体走 edith 接口，需 x-s 签名），
-     * 这里只做「识别 + 打开原链接」，不假装能下载。
+     * 小红书：用 CDP 打开笔记页（带登录 Cookie），读取 og:video / og:image 与正文大图。
      */
     private void parseXhs(String text, String noteId) {
         String token = XiaohongshuParser.extractXsecToken(text);
         this.xhsUrl = "https://www.xiaohongshu.com/explore/" + noteId
                 + (token.isEmpty() ? "" : "?xsec_token=" + token + "&xsec_source=pc_share");
-        setResultTitle("小红书笔记：" + noteId);
-        setResultMeta("已识别笔记 ID" + (token.isEmpty() ? "（链接里没有 xsec_token）" : "（含 xsec_token）")
-                + "　媒体下载需 x-s 签名，当前版本未实现");
+        this.xhsMedia = null;
         downloadBtn.setDisable(true);
-        status.setText("小红书暂不支持直接下载，可点下方按钮在浏览器查看");
-        appendLog("ℹ️ 小红书：详情接口需 x-s 签名，媒体下载暂缓（探索页只能拿元信息）");
+        parseBtn.setDisable(true);
+        setResultTitle("小红书笔记：" + noteId);
+        setResultMeta("正在用浏览器读取笔记媒体…");
+        status.setText("解析中…");
+        String url = this.xhsUrl;
+        javafx.concurrent.Task<XiaohongshuParser.NoteMedia> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected XiaohongshuParser.NoteMedia call() {
+                return new XiaohongshuParser().fetchNoteMedia(url, CookieStore.get("xiaohongshu"));
+            }
+        };
+        task.setOnSucceeded(e -> {
+            parseBtn.setDisable(false);
+            XiaohongshuParser.NoteMedia media = task.getValue();
+            if (media == null) {
+                setResultMeta("未能读取笔记媒体（可能被安全校验拦截，或链接需要 xsec_token）");
+                status.setText("小红书解析失败");
+                appendLog("ℹ️ 小红书：笔记页未返回可下载媒体");
+                return;
+            }
+            xhsMedia = media;
+            setResultTitle(media.title().isBlank() ? "小红书笔记：" + noteId : media.title());
+            setResultMeta("笔记：" + noteId
+                    + "　视频：" + (media.videoUrl().isBlank() ? "无" : "有")
+                    + "　图片：" + media.images().size() + " 张"
+                    + (media.desc().isBlank() ? "" : "\n" + media.desc()));
+            qualityBox.setItems(FXCollections.observableArrayList("原画"));
+            qualityBox.getSelectionModel().select(0);
+            qualityBox.setDisable(true);
+            downloadBtn.setDisable(media.videoUrl().isBlank() && media.images().isEmpty());
+            status.setText("解析成功：" + (media.title().isBlank() ? noteId : media.title()));
+            appendLog("✅ 小红书媒体：视频 " + (media.videoUrl().isBlank() ? "0" : "1")
+                    + " 个，图片 " + media.images().size() + " 张");
+        });
+        task.setOnFailed(e -> {
+            parseBtn.setDisable(false);
+            setResultMeta("解析失败：" + task.getException().getMessage());
+            status.setText("解析失败");
+        });
+        new Thread(task, "xhs-media").start();
     }
 
     private String xhsUrl;
+    private XiaohongshuParser.NoteMedia xhsMedia;
+
+    private void downloadXhs() {
+        XiaohongshuParser.NoteMedia media = xhsMedia;
+        if (media == null) {
+            status.setText("请先解析小红书笔记");
+            return;
+        }
+        String noteId = XiaohongshuParser.extractNoteId(xhsUrl);
+        String title = media.title().isBlank() ? noteId : media.title();
+        Path outDir = Settings.load().effectiveExportDir()
+                .resolve("小红书_媒体")
+                .resolve(BiliParser.sanitizeFilename(title, 80, "小红书"));
+        stopFlag.set(false);
+        downloadBtn.setDisable(true);
+        progress.setProgress(0);
+        status.setText("下载中…");
+        javafx.concurrent.Task<int[]> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected int[] call() {
+                int ok = 0, fail = 0;
+                Map<String, String> headers = Map.of(
+                        "Referer", "https://www.xiaohongshu.com/",
+                        "User-Agent", HttpClient.UA_CHROME);
+                if (!media.videoUrl().isBlank()) {
+                    Path target = outDir.resolve(noteId + ".mp4");
+                    var r = fileDownloader.download(List.of(media.videoUrl()), target, headers,
+                            p -> {
+                                if (p.total() > 0) Platform.runLater(() -> progress.setProgress(p.ratio()));
+                            }, stopFlag::get);
+                    if (r.success()) {
+                        ok++;
+                        appendLog("🎉 " + target);
+                    } else {
+                        fail++;
+                        appendLog("❌ " + r.error());
+                    }
+                }
+                for (int i = 0; i < media.images().size(); i++) {
+                    if (stopFlag.get()) break;
+                    String u = media.images().get(i);
+                    String ext = u.toLowerCase(java.util.Locale.ROOT).contains("webp") ? ".webp" : ".jpg";
+                    Path target = outDir.resolve(noteId + "_" + (i + 1) + ext);
+                    var r = fileDownloader.download(List.of(u), target, headers,
+                            p -> { }, stopFlag::get);
+                    if (r.success()) {
+                        ok++;
+                        appendLog("✅ " + target.getFileName());
+                    } else {
+                        fail++;
+                        appendLog("❌ " + target.getFileName() + "：" + r.error());
+                    }
+                }
+                return new int[] {ok, fail};
+            }
+        };
+        task.setOnSucceeded(e -> {
+            int[] r = task.getValue();
+            downloadBtn.setDisable(false);
+            progress.setProgress(1);
+            status.setText("下载完成：成功 " + r[0] + "，失败 " + r[1]);
+            if (r[0] > 0) {
+                recordXhs(media, noteId, outDir.toString());
+                toast("小红书媒体已下载：" + r[0] + " 个");
+            }
+        });
+        task.setOnFailed(e -> {
+            downloadBtn.setDisable(false);
+            status.setText("下载异常：" + task.getException().getMessage());
+        });
+        new Thread(task, "xhs-download").start();
+    }
+
+    private void recordXhs(XiaohongshuParser.NoteMedia media, String noteId, String savedDir) {
+        try (MediaStore store = new MediaStore()) {
+            List<MediaItem.Stream> streams = new ArrayList<>();
+            if (!media.videoUrl().isBlank()) {
+                streams.add(new MediaItem.Stream("video", "原画", media.videoUrl(), List.of(), 0));
+            }
+            for (String u : media.images()) {
+                streams.add(new MediaItem.Stream("image", "原图", u, List.of(), 0));
+            }
+            MediaItem item = MediaItem.of("xiaohongshu", noteId, media.title(), "", media.cover(),
+                    "", 0, media.desc(), streams, "");
+            store.upsert(item, savedDir);
+            appendLog("📦 已写入已获取库");
+        } catch (Exception e) {
+            appendLog("⚠️ 入库失败：" + e.getMessage());
+        }
+    }
 
     // ==================== 快手 ====================
 

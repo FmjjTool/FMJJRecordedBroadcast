@@ -201,6 +201,22 @@ public final class Ffmpeg {
         return new String[] {"转换失败", String.join("\n", tail)};
     }
 
+    /** 截取视频帧（第 sec 秒，缩放到 320 宽）到 out。成功返回 true。 */
+    public static boolean captureFrame(Path video, Path out, double sec) {
+        if (video == null || !Files.isRegularFile(video)) return false;
+        if (!available()) return false;
+        try {
+            if (out.getParent() != null) Files.createDirectories(out.getParent());
+            RunResult r = run(List.of(ffmpegExe(), "-hide_banner", "-loglevel", "error",
+                    "-ss", String.format(java.util.Locale.ROOT, "%.2f", Math.max(0, sec)),
+                    "-i", video.toString(), "-frames:v", "1",
+                    "-vf", "scale=320:-2", "-y", out.toString()), 30);
+            return Files.isRegularFile(out) && Files.size(out) > 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** Python: preserve_timestamps —— 复制修改/访问时间（创建时间平台受限）。 */
     public static boolean preserveTimestamps(Path src, Path dst) {
         try {

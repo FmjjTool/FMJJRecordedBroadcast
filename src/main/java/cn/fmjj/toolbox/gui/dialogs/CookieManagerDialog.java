@@ -1,6 +1,8 @@
 package cn.fmjj.toolbox.gui.dialogs;
 
 import cn.fmjj.toolbox.engine.auth.CookieStore;
+import cn.fmjj.toolbox.engine.music.KugouLiteScraper;
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -87,17 +89,20 @@ public final class CookieManagerDialog {
     private void refresh() {
         Map<String, String> cookies = CookieStore.loadCookies();
         Map<String, String> times = CookieStore.loadTimes();
+        KugouLiteScraper.Session lite = KugouLiteScraper.loadSession();
         long loggedIn = CookieStore.PLATFORM_NAMES.keySet().stream()
                 .filter(p -> !cookies.getOrDefault(p, "").isEmpty()).count();
+        if (lite.loggedIn() && cookies.getOrDefault("kugou_lite", "").isEmpty()) loggedIn++;
         summary.setText("已登录 " + loggedIn + " / " + CookieStore.PLATFORM_NAMES.size() + " 个平台");
 
         listBox.getChildren().clear();
         for (Map.Entry<String, String> entry : CookieStore.PLATFORM_NAMES.entrySet()) {
             String key = entry.getKey();
             String name = entry.getValue();
+            boolean isLite = "kugou_lite".equals(key);
             String cookie = cookies.getOrDefault(key, "");
-            boolean has = !cookie.isEmpty();
-            boolean expired = has && CookieStore.expired(key);
+            boolean has = isLite ? lite.loggedIn() : !cookie.isEmpty();
+            boolean expired = !isLite && has && CookieStore.expired(key);
 
             Label nameLabel = new Label(name);
             nameLabel.setPrefWidth(96);
@@ -108,7 +113,10 @@ public final class CookieManagerDialog {
             statusLabel.setStyle(has ? (expired ? "-fx-text-fill: #b45309;" : "-fx-text-fill: #15803d;")
                     : "-fx-text-fill: #9ca3af;");
 
-            Label timeLabel = new Label(times.getOrDefault(key, "—"));
+            String timeText = isLite
+                    ? (has ? KugouLiteScraper.sessionTime() : "—")
+                    : times.getOrDefault(key, "—");
+            Label timeLabel = new Label(timeText);
             timeLabel.setPrefWidth(150);
             timeLabel.setStyle("-fx-text-fill: #6b7280; -fx-font-size: 11px;");
 
@@ -120,32 +128,84 @@ public final class CookieManagerDialog {
             row.setPadding(new Insets(6, 8, 6, 8));
             row.getStyleClass().add("cookie-row");
 
-            if ("bilibili".equals(key)) {
+            if (isLite) {
                 Button qr = new Button("扫码登录");
-                qr.setOnAction(e -> QrLoginDialog.show(owner, () -> {
+                qr.setOnAction(e -> KugouLiteQrDialog.show(owner, () -> {
                     refresh();
                     fireChanged();
                 }));
                 row.getChildren().add(qr);
-            }
-            if (CookieStore.BROWSER_LOGIN.containsKey(key)) {
-                Button browser = new Button("浏览器/粘贴");
-                browser.setOnAction(e -> BrowserLoginDialog.show(owner, key, () -> {
-                    refresh();
-                    fireChanged();
-                }));
-                row.getChildren().add(browser);
-            }
-            if (has) {
-                Button clear = new Button("清除");
-                clear.setOnAction(e -> {
-                    CookieStore.clear(key);
-                    refresh();
-                    fireChanged();
-                });
-                row.getChildren().add(clear);
+
+                Button vip = new Button("🎁 领VIP");
+                vip.setOnAction(e -> claimLiteVip(vip));
+                row.getChildren().add(vip);
+
+                if (has) {
+                    Button clear = new Button("清除");
+                    clear.setOnAction(e -> {
+                        KugouLiteScraper.clearSession();
+                        refresh();
+                        fireChanged();
+                    });
+                    row.getChildren().add(clear);
+                }
+            } else {
+                if ("bilibili".equals(key)) {
+                    Button qr = new Button("扫码登录");
+                    qr.setOnAction(e -> QrLoginDialog.show(owner, () -> {
+                        refresh();
+                        fireChanged();
+                    }));
+                    row.getChildren().add(qr);
+                }
+                if (CookieStore.BROWSER_LOGIN.containsKey(key)) {
+                    Button browser = new Button("浏览器/粘贴");
+                    browser.setOnAction(e -> BrowserLoginDialog.show(owner, key, () -> {
+                        refresh();
+                        fireChanged();
+                    }));
+                    row.getChildren().add(browser);
+                }
+                if (has) {
+                    Button clear = new Button("清除");
+                    clear.setOnAction(e -> {
+                        CookieStore.clear(key);
+                        refresh();
+                        fireChanged();
+                    });
+                    row.getChildren().add(clear);
+                }
             }
             listBox.getChildren().add(row);
         }
+    }
+
+    private void claimLiteVip(Button button) {
+        if (!KugouLiteScraper.loadSession().loggedIn()) {
+            showInfo("酷狗概念版", "请先扫码登录酷狗概念版");
+            return;
+        }
+        button.setDisable(true);
+        button.setText("领取中…");
+        Thread t = new Thread(() -> {
+            KugouLiteScraper.Claim r = new KugouLiteScraper().claimVip();
+            Platform.runLater(() -> {
+                button.setDisable(false);
+                button.setText("🎁 领VIP");
+                showInfo("酷狗概念版 · 领 VIP", r.message());
+            });
+        }, "kugou-lite-vip");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void showInfo(String title, String message) {
+        javafx.scene.control.Alert a = new javafx.scene.control.Alert(
+                javafx.scene.control.Alert.AlertType.INFORMATION);
+        a.initOwner(owner);
+        a.setTitle(title);
+        a.setHeaderText(null);
+        a.setContentText(message);
+        a.showAndWait();
     }
 }

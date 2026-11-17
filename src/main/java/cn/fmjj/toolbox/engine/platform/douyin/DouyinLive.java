@@ -1,9 +1,14 @@
 package cn.fmjj.toolbox.engine.platform.douyin;
 
 import cn.fmjj.toolbox.core.Log;
+import cn.fmjj.toolbox.engine.auth.CookieStore;
+import cn.fmjj.toolbox.engine.browser.CdpClient;
 import cn.fmjj.toolbox.engine.net.HttpClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
@@ -21,15 +26,17 @@ import java.util.Map;
 public final class DouyinLive {
 
     public static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            + " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+            + " (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
-    /** 直播间信息。 */
+    /** 直播间信息（字段对齐 Python fetch_room_info 的左栏展示口径）。 */
     public record RoomInfo(long roomId, String anchor, String title, int status,
-                           String online, String cover, String error) {}
+                           String online, String cover, String avatar, String fans,
+                           String totalViewers, String likeCount, String error) {}
 
     /** 弹幕连接参数（浏览器里拿到的）。 */
     public record Prep(String cursor, String internalExt, String pushServer,
-                       String signature, String ttwid, String sessionId, String error) {}
+                       String signature, String uniqueId, int screenWidth, int screenHeight,
+                       String error) {}
 
     private final HttpClient http = new HttpClient();
 
@@ -68,6 +75,120 @@ public final class DouyinLive {
         return ttwidCache;
     }
 
+    /** 主播主页 → 直播间（对应 Python room_picker.resolve_douyin_sec，必须页面上下文）。 */
+    public record UserRoom(String nickname, String webRid, boolean live) {}
+
+    public UserRoom resolveUserRoom(String secUid) {
+        if (secUid == null || secUid.isBlank()) return null;
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        } catch (Exception e) {
+            return null;
+        }
+        String api = "https://www.douyin.com/aweme/v1/web/user/profile/other/?"
+                + "device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id="
+                + HttpClient.urlEncode(secUid)
+                + "&publish_video_strategy_type=2&version_code=170400&version_name=17.4.0"
+                + "&cookie_enabled=true&platform=PC&downlink=10";
+        String js = "(async function(){try{const r=await fetch(" + quote(api)
+                + ",{credentials:'include'});const t=await r.text();"
+                + "return JSON.parse(t);}catch(e){return {_error:String(e)};}})()";
+        try (CdpClient browser = CdpClient.launch(port, 25)) {
+            ObjectNode ua = new ObjectMapper().createObjectNode();
+            ua.put("userAgent", UA);
+            ua.put("acceptLanguage", "zh-CN,zh;q=0.9");
+            ua.put("platform", "Win32");
+            browser.call("Emulation.setUserAgentOverride", ua, 10);
+            var metrics = new ObjectMapper().createObjectNode();
+            metrics.put("width", 1280);
+            metrics.put("height", 900);
+            metrics.put("deviceScaleFactor", 1);
+            metrics.put("mobile", false);
+            browser.call("Emulation.setDeviceMetricsOverride", metrics, 10);
+            browser.call("Network.enable", null, 10);
+            String cookie = CookieStore.get("douyin");
+            if (cookie != null && !cookie.isBlank()) {
+                for (String part : cookie.split(";")) {
+                    int eq = part.indexOf('=');
+                    if (eq <= 0) continue;
+                    var p = new ObjectMapper().createObjectNode();
+                    p.put("name", part.substring(0, eq).strip());
+                    p.put("value", part.substring(eq + 1).strip());
+                    p.put("url", "https://www.douyin.com/");
+                    p.put("path", "/");
+                    try {
+                        browser.call("Network.setCookie", p, 10);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            var nav = new ObjectMapper().createObjectNode();
+            nav.put("url", "https://www.douyin.com/");
+            browser.send("Page.navigate", nav);
+            Thread.sleep(2500);
+            JsonNode d = browser.evalJson(js);
+            JsonNode user = d.path("user");
+            if (!user.isObject()) return null;
+            String nick = user.path("nickname").asText("");
+            boolean live = user.path("live_status").asInt(0) != 0;
+            JsonNode room = user.path("room_data");
+            if (room.isTextual() && room.asText("").strip().startsWith("{")) {
+                room = new ObjectMapper().readTree(room.asText());
+            }
+            String webRid = room.path("owner").path("web_rid").asText("");
+            return new UserRoom(nick, webRid, live);
+        } catch (Exception e) {
+            Log.warn("解析抖音主页直播间失败：" + e.getMessage());
+            return null;
+        }
+    }
+
+    /** 直播流地址（清晰度 → FLV URL），供预览与录制。 */
+    public Map<String, String> streams(String webRid) {
+        String ttwid = ttwid(webRid);
+        StringBuilder url = new StringBuilder("https://live.douyin.com/webcast/room/web/enter/?")
+                .append("aid=6383&app_name=douyin_web&live_id=1&device_platform=web")
+                .append("&language=zh-CN&browser_language=zh-CN&browser_platform=Win32")
+                .append("&browser_name=Mozilla&browser_version=")
+                .append(HttpClient.urlEncode(UA))
+                .append("&web_rid=").append(HttpClient.urlEncode(webRid));
+        Map<String, String> out = new LinkedHashMap<>();
+        try {
+            JsonNode d = http.getJson(url.toString(),
+                    headers("https://live.douyin.com/" + webRid, "ttwid=" + ttwid));
+            JsonNode arr = d.path("data").path("data");
+            if (!arr.isArray() || arr.isEmpty()) return out;
+            JsonNode streamUrl = arr.get(0).path("stream_url");
+            for (JsonNode raw : new JsonNode[]{
+                    streamUrl.path("live_core_sdk_data").path("pull_data").path("stream_data"),
+                    streamUrl.path("pull_data").path("stream_data")}) {
+                if (!raw.isTextual() || raw.asText("").isEmpty()) continue;
+                try {
+                    JsonNode sd = HttpClient.parseJson(raw.asText());
+                    JsonNode data = sd.has("data") ? sd.path("data") : sd;
+                    for (String[] pair : new String[][]{{"_origin", "origin"}, {"_md", "md"}}) {
+                        String flv = data.path(pair[1]).path("main").path("flv").asText("");
+                        if (!flv.isEmpty() && !out.containsKey(pair[0])) out.put(pair[0], flv);
+                    }
+                    if (!out.isEmpty()) break;
+                } catch (Exception ignored) {
+                }
+            }
+            JsonNode flv = streamUrl.path("flv_pull_url");
+            if (flv.isObject()) {
+                flv.fields().forEachRemaining(e -> {
+                    if (e.getValue().isTextual() && !e.getValue().asText("").isEmpty()) {
+                        out.put(e.getKey(), e.getValue().asText(""));
+                    }
+                });
+            }
+        } catch (Exception e) {
+            Log.warn("获取抖音直播流失败：" + e.getMessage());
+        }
+        return out;
+    }
+
     /** 解析直播间（web_rid → roomId 等）。 */
     public RoomInfo roomInfo(String webRid) {
         String ttwid = ttwid(webRid);
@@ -83,28 +204,53 @@ public final class DouyinLive {
             JsonNode arr = d.path("data").path("data");
             if (!arr.isArray() || arr.isEmpty()) {
                 String prompt = d.path("data").path("prompts").asText("");
-                return new RoomInfo(0, "", "", 0, "", "",
+                return new RoomInfo(0, "", "", 0, "", "", "", "", "", "",
                         prompt.isEmpty() ? "未获取到房间信息（可能不存在或已结束，"
                                 + "code=" + d.path("status_code").asInt() + "）" : prompt);
             }
             JsonNode room = arr.get(0);
             long roomId = room.path("id_str").asText("").isEmpty()
                     ? room.path("id").asLong(0) : Long.parseLong(room.path("id_str").asText("0"));
-            String cover = "";
-            JsonNode cov = room.path("cover");
-            if (cov.has("url_list") && cov.path("url_list").size() > 0) {
-                cover = cov.path("url_list").get(0).asText("");
-            }
+            String cover = firstUrl(room.path("cover"));
+            if (cover.isEmpty()) cover = firstUrl(room.path("cover_url"));
+            JsonNode owner = room.path("owner");
+            JsonNode stats = room.path("stats");
+            String avatar = firstUrl(owner.path("avatar_thumb"));
+            String fans = fmtCount(firstPresent(owner, "follower_count", "followers"));
+            if (fans.isEmpty()) fans = fmtCount(stats.path("follower_count"));
+            String total = fmtCount(firstPresent(stats, "total_user", "total_user_str",
+                    "total_user_count"));
+            String like = fmtCount(firstPresent(stats, "like_count", "like_count_str"));
             return new RoomInfo(roomId,
-                    room.path("owner").path("nickname").asText(""),
+                    owner.path("nickname").asText(""),
                     room.path("title").asText(""),
                     room.path("status").asInt(0),
-                    room.path("stats").path("user_count_str").asText(
-                            room.path("stats").path("user_count").asText("")),
-                    cover, "");
+                    stats.path("user_count_str").asText(stats.path("user_count").asText("")),
+                    cover, avatar, fans, total, like, "");
         } catch (Exception e) {
-            return new RoomInfo(0, "", "", 0, "", "", "请求失败：" + e.getMessage());
+            return new RoomInfo(0, "", "", 0, "", "", "", "", "", "", "请求失败：" + e.getMessage());
         }
+    }
+
+    private static String firstUrl(JsonNode node) {
+        JsonNode list = node.path("url_list");
+        if (list.isArray() && !list.isEmpty()) return list.get(0).asText("");
+        return "";
+    }
+
+    private static JsonNode firstPresent(JsonNode node, String... keys) {
+        for (String key : keys) {
+            JsonNode v = node.path(key);
+            if (!v.isMissingNode() && !v.isNull()) return v;
+        }
+        return null;
+    }
+
+    /** 对应 Python _fmt_count：数字加千分位，文本原样。 */
+    private static String fmtCount(JsonNode v) {
+        if (v == null || v.isMissingNode() || v.isNull()) return "";
+        if (v.isNumber()) return String.format("%,d", v.asLong());
+        return v.asText("");
     }
 
     /** 拼 X-MS-STUB 的 md5（对应 Python stub_md5）。 */
@@ -148,6 +294,16 @@ public final class DouyinLive {
                 + "out.cursor=cursor||'';out.internalExt=internalExt||'';out.pushServer=pushServer||'';"
                 + "}catch(e){out.error='imfetch:'+e.message;}"
                 + "return out;})()";
+    }
+
+    /**
+     * 只算握手签名 + 屏幕尺寸（截获页面自身 im/fetch 后，用页面真实 did 重算签名）。
+     * 对应 Python `_prep_ws_params` 里的 frontierSign 调用。
+     */
+    public static String signJs(String md5hex) {
+        return "(function(){try{const s=window.byted_acrawler.frontierSign({'X-MS-STUB':"
+                + quote(md5hex) + "});return {signature:s['X-Bogus'],screenWidth:screen.width,"
+                + "screenHeight:screen.height};}catch(e){return {error:String(e&&e.message||e)};}})()";
     }
 
     private static String quote(String s) {

@@ -82,6 +82,20 @@
       <version>3.46.1.0</version>
     </dependency>
 
+    <!-- 单商品 Excel 导出（对应 Python 版 openpyxl，含图片嵌入） -->
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi-ooxml</artifactId>
+      <version>5.4.1</version>
+    </dependency>
+
+    <!-- 公众号文章 / 标签表格导出 PDF -->
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>3.0.4</version>
+    </dependency>
+
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

@@ -1,10 +1,13 @@
 package cn.fmjj.toolbox.engine.platform.xiaohongshu;
 
+import cn.fmjj.toolbox.core.Log;
+import cn.fmjj.toolbox.engine.browser.CdpClient;
 import cn.fmjj.toolbox.engine.net.HttpClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -177,5 +180,104 @@ public final class XiaohongshuParser {
     /** 给 UI 用的空节点（占位）。 */
     static ObjectNode emptyNode() {
         return new ObjectMapper().createObjectNode();
+    }
+
+    // ==================== 笔记媒体（CDP 页面上下文） ====================
+
+    /** 笔记媒体：视频、封面、图集。 */
+    public record NoteMedia(String title, String desc, String videoUrl, String cover,
+                            List<String> images) {}
+
+    /**
+     * 用 CDP 打开笔记页（注入登录 Cookie），读取 og:video / og:image 与正文大图。
+     * 无头浏览器 + 登录 Cookie 实测可正常渲染笔记（不触发安全限制页）。
+     */
+    public NoteMedia fetchNoteMedia(String url, String cookie) {
+        if (url == null || url.isBlank()) return null;
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        } catch (Exception e) {
+            return null;
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        try (CdpClient browser = CdpClient.launch(port, 25)) {
+            ObjectNode ua = mapper.createObjectNode();
+            ua.put("userAgent", HttpClient.UA_CHROME);
+            ua.put("acceptLanguage", "zh-CN,zh;q=0.9");
+            ua.put("platform", "Win32");
+            browser.call("Emulation.setUserAgentOverride", ua, 10);
+            ObjectNode metrics = mapper.createObjectNode();
+            metrics.put("width", 1400);
+            metrics.put("height", 900);
+            metrics.put("deviceScaleFactor", 1);
+            metrics.put("mobile", false);
+            browser.call("Emulation.setDeviceMetricsOverride", metrics, 10);
+            browser.call("Network.enable", null, 10);
+            if (cookie != null && !cookie.isBlank()) {
+                for (String part : cookie.split(";")) {
+                    int eq = part.indexOf('=');
+                    if (eq <= 0) continue;
+                    ObjectNode p = mapper.createObjectNode();
+                    p.put("name", part.substring(0, eq).strip());
+                    p.put("value", part.substring(eq + 1).strip());
+                    p.put("domain", ".xiaohongshu.com");
+                    p.put("path", "/");
+                    try {
+                        browser.call("Network.setCookie", p, 10);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            ObjectNode nav = mapper.createObjectNode();
+            nav.put("url", url);
+            browser.send("Page.navigate", nav);
+            Thread.sleep(9000);
+            String title = browser.evalString(
+                    "(function(){var m=document.querySelector('meta[property=\"og:title\"]');"
+                            + "return (m&&m.content)||document.title||'';})()");
+            String desc = browser.evalString(
+                    "(function(){var m=document.querySelector('meta[property=\"og:description\"]');"
+                            + "return (m&&m.content)||'';})()");
+            String video = browser.evalString(
+                    "(function(){var m=document.querySelector('meta[property=\"og:video\"]');"
+                            + "return (m&&m.content)||'';})()");
+            String poster = browser.evalString(
+                    "(function(){var v=document.querySelector('#noteContainer video');"
+                            + "return (v&&v.poster)||'';})()");
+            String ogImage = browser.evalString(
+                    "(function(){var m=document.querySelector('meta[property=\"og:image\"]');"
+                            + "return (m&&m.content)||'';})()");
+            // 只取笔记容器内的图；推荐流封面在容器外，不能混进来
+            String json = browser.evalString(
+                    "JSON.stringify((function(){var order=[],seen={};"
+                            + "var scope=document.querySelector('#noteContainer')||document.body;"
+                            + "Array.prototype.forEach.call(scope.querySelectorAll('img'),function(i){"
+                            + "var s=i.src||'';if(s.indexOf('http')!==0)return;"
+                            + "if(s.indexOf('sns-avatar')>=0||s.indexOf('picasso-static')>=0)return;"
+                            + "if(!(i.naturalWidth>=300||s.indexOf('notes_pre_post')>=0||s.indexOf('spectrum')>=0))return;"
+                            + "var base=s.split('!')[0],arr=base.split('/'),id=arr[arr.length-1];"
+                            + "if(seen[id]){if(s.indexOf('nd_dft')>=0&&seen[id].indexOf('nd_dft')<0)seen[id]=s;return;}"
+                            + "seen[id]=s;order.push(id);});"
+                            + "return order.map(function(k){return seen[k];});})())");
+            List<String> images = new ArrayList<>();
+            try {
+                JsonNode arr = mapper.readTree(json);
+                if (arr.isArray()) {
+                    for (JsonNode n : arr) {
+                        String u = n.asText("");
+                        if (!u.isEmpty() && !images.contains(u)) images.add(u);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            String t = title.replaceAll("\\s+-\\s+小红书.*$", "").strip();
+            String cover = poster.strip();
+            if (cover.isEmpty() && !ogImage.contains("picasso-static")) cover = ogImage.strip();
+            return new NoteMedia(t, desc.strip(), video.strip(), cover, images);
+        } catch (Exception e) {
+            Log.warn("小红书笔记媒体解析失败：" + e.getMessage());
+            return null;
+        }
     }
 }

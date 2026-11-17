@@ -10,13 +10,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -40,13 +43,21 @@ public final class CdpClient implements AutoCloseable {
     /** 全局共享：匿名 WS 回调在构造前就要用到它。 */
     private static final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
     private final String targetId;
+    private final List<EventListener> eventListeners;
+
+    /** CDP 事件回调（如 Network.responseReceived）。回调在 WS 线程触发，不得阻塞。 */
+    public interface EventListener {
+        void onEvent(String method, JsonNode params);
+    }
 
     private CdpClient(Process process, Path userDataDir,
-                      org.java_websocket.client.WebSocketClient ws, String targetId) {
+                      org.java_websocket.client.WebSocketClient ws, String targetId,
+                      List<EventListener> eventListeners) {
         this.process = process;
         this.userDataDir = userDataDir;
         this.ws = ws;
         this.targetId = targetId;
+        this.eventListeners = eventListeners;
     }
 
     /** 启动无头浏览器并连上第一个页面。 */
@@ -97,6 +108,7 @@ public final class CdpClient implements AutoCloseable {
         }
 
         String finalUrl = wsUrl;
+        var events = new CopyOnWriteArrayList<EventListener>();
         var holder = new org.java_websocket.client.WebSocketClient[1];
         var client = new org.java_websocket.client.WebSocketClient(URI.create(finalUrl)) {
             @Override
@@ -111,6 +123,17 @@ public final class CdpClient implements AutoCloseable {
                     if (id > 0) {
                         CompletableFuture<JsonNode> f = pending.remove(id);
                         if (f != null) f.complete(n);
+                        return;
+                    }
+                    String method = n.path("method").asText("");
+                    if (!method.isEmpty()) {
+                        JsonNode params = n.path("params");
+                        for (EventListener l : events) {
+                            try {
+                                l.onEvent(method, params);
+                            } catch (Exception ignored) {
+                            }
+                        }
                     }
                 } catch (Exception ignored) {
                 }
@@ -129,7 +152,7 @@ public final class CdpClient implements AutoCloseable {
             p.destroyForcibly();
             throw new IllegalStateException("CDP 连接失败");
         }
-        CdpClient cdp = new CdpClient(p, profile, client, wsUrl);
+        CdpClient cdp = new CdpClient(p, profile, client, wsUrl, events);
         cdp.send("Page.enable", null);
         cdp.send("Runtime.enable", null);
         return cdp;
@@ -216,6 +239,27 @@ public final class CdpClient implements AutoCloseable {
     /** 页面当前 URL。 */
     public String currentUrl() throws Exception {
         return evalString("location.href");
+    }
+
+    /** 注册 CDP 事件监听（需先开启对应域，如 Network.enable）。 */
+    public void addEventListener(EventListener listener) {
+        if (listener != null) eventListeners.add(listener);
+    }
+
+    public void removeEventListener(EventListener listener) {
+        eventListeners.remove(listener);
+    }
+
+    /** 取已捕获响应的 body（二进制自动按 base64 解码）。 */
+    public byte[] responseBody(String requestId) throws Exception {
+        ObjectNode p = JSON.createObjectNode();
+        p.put("requestId", requestId);
+        JsonNode res = call("Network.getResponseBody", p, 15);
+        String body = res.path("body").asText("");
+        if (res.path("base64Encoded").asBoolean(false)) {
+            return Base64.getDecoder().decode(body);
+        }
+        return body.getBytes(StandardCharsets.UTF_8);
     }
 
     /** 页面 cookie（`k=v; k=v`）。 */

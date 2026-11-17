@@ -154,6 +154,16 @@ public final class HttpClient {
         return parseJson(postForm(url, form, headers).body());
     }
 
+    /** POST JSON 请求体（引擎层的创作者中心/票务/购物接口用）。 */
+    public HttpResponse<String> postJson(String url, JsonNode body, Map<String, String> headers)
+            throws IOException, InterruptedException {
+        HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.ofString(
+                JSON.writeValueAsString(body), StandardCharsets.UTF_8);
+        return send(base(url, headers)
+                .header("Content-Type", "application/json")
+                .POST(publisher).build());
+    }
+
     public static JsonNode parseJson(String body) throws IOException {
         try {
             return JSON.readTree(body);

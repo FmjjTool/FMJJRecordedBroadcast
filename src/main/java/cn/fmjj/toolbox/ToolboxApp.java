@@ -34,6 +34,8 @@ public class ToolboxApp extends Application {
         window.attachScene(scene);
         stage.setScene(scene);
         stage.setTitle("封茗囧菌数据汇总库 · 统一维护工具箱 Java 2.9.1");
+        // 退出前先让页面停后台任务（弹幕 WS、实时落盘、统计）并自动保存
+        stage.setOnCloseRequest(e -> window.shutdown());
 
         // 无头冒烟自检：逐个构造全部页面后退出（FMJJ_SMOKE=1 或 -Dfmjj.smoke=true）
         if (Boolean.getBoolean("fmjj.smoke") || System.getenv("FMJJ_SMOKE") != null) {

@@ -1,12 +1,22 @@
 package cn.fmjj.toolbox.engine.platform.douyin;
 
+import cn.fmjj.toolbox.core.Log;
+import cn.fmjj.toolbox.engine.auth.CookieStore;
+import cn.fmjj.toolbox.engine.browser.CdpClient;
 import cn.fmjj.toolbox.engine.net.HttpClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 抖音视频解析（分享页 SSR 数据路线）。
@@ -43,6 +53,108 @@ public final class DouyinParser {
     public DouyinParser() { this(new HttpClient()); }
 
     public DouyinParser(HttpClient http) { this.http = http; }
+
+    /** 搜索命中。 */
+    public record SearchHit(String title, String author, String url, String cover, String desc) {}
+
+    /** 抖音视频搜索（CDP 打开搜索页，截获 search/item 响应）。 */
+    public List<SearchHit> search(String keyword, int count) {
+        if (keyword == null || keyword.isBlank()) return List.of();
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        } catch (Exception e) {
+            return List.of();
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        List<SearchHit> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> requestIds = new CopyOnWriteArrayList<>();
+        try (CdpClient browser = CdpClient.launch(port, 25)) {
+            ObjectNode ua = mapper.createObjectNode();
+            ua.put("userAgent", DouyinLive.UA);
+            ua.put("acceptLanguage", "zh-CN,zh;q=0.9");
+            ua.put("platform", "Win32");
+            browser.call("Emulation.setUserAgentOverride", ua, 10);
+            ObjectNode metrics = mapper.createObjectNode();
+            metrics.put("width", 1400);
+            metrics.put("height", 900);
+            metrics.put("deviceScaleFactor", 1);
+            metrics.put("mobile", false);
+            browser.call("Emulation.setDeviceMetricsOverride", metrics, 10);
+            browser.call("Network.enable", null, 10);
+            injectCookies(browser, CookieStore.get("douyin"));
+            CdpClient.EventListener listener = (method, params) -> {
+                if (!"Network.responseReceived".equals(method)) return;
+                String u = params.path("response").path("url").asText("");
+                if (!u.contains("/aweme/v1/web/search/item/")
+                        && !u.contains("/general/search/single/")) return;
+                String rid = params.path("requestId").asText("");
+                if (!rid.isEmpty()) requestIds.add(rid);
+            };
+            browser.addEventListener(listener);
+            ObjectNode nav = mapper.createObjectNode();
+            nav.put("url", "https://www.douyin.com/search/"
+                    + HttpClient.urlEncode(keyword) + "?type=video");
+            browser.send("Page.navigate", nav);
+            Thread.sleep(8000);
+            for (int i = 0; i < 2; i++) {
+                try {
+                    browser.evalString("window.scrollBy(0,1600); String(window.scrollY)");
+                } catch (Exception ignored) {
+                }
+                Thread.sleep(2500);
+            }
+            for (String rid : requestIds) {
+                try {
+                    byte[] body = browser.responseBody(rid);
+                    JsonNode d = mapper.readTree(new String(body, StandardCharsets.UTF_8));
+                    JsonNode arr = d.path("data");
+                    if (!arr.isArray()) continue;
+                    for (JsonNode node : arr) {
+                        JsonNode aweme = node.has("aweme_info") ? node.path("aweme_info") : node;
+                        String id = aweme.path("aweme_id").asText("");
+                        if (id.isEmpty() || !seen.add(id)) continue;
+                        String desc = aweme.path("desc").asText("");
+                        String title = desc.replaceAll("\\s+", " ").strip();
+                        if (title.length() > 80) title = title.substring(0, 80);
+                        String cover = aweme.path("video").path("cover").path("url_list")
+                                .path(0).asText("");
+                        if (cover.isEmpty()) {
+                            cover = aweme.path("images").path(0).path("url_list").path(0).asText("");
+                        }
+                        out.add(new SearchHit(title,
+                                aweme.path("author").path("nickname").asText(""),
+                                "https://www.douyin.com/video/" + id, cover, desc));
+                        if (out.size() >= count) break;
+                    }
+                } catch (Exception ignored) {
+                }
+                if (out.size() >= count) break;
+            }
+        } catch (Exception e) {
+            Log.warn("抖音搜索失败：" + e.getMessage());
+        }
+        return out;
+    }
+
+    private static void injectCookies(CdpClient browser, String cookie) {
+        if (cookie == null || cookie.isBlank()) return;
+        ObjectMapper mapper = new ObjectMapper();
+        for (String part : cookie.split(";")) {
+            int eq = part.indexOf('=');
+            if (eq <= 0) continue;
+            ObjectNode p = mapper.createObjectNode();
+            p.put("name", part.substring(0, eq).strip());
+            p.put("value", part.substring(eq + 1).strip());
+            p.put("url", "https://www.douyin.com/");
+            p.put("path", "/");
+            try {
+                browser.call("Network.setCookie", p, 10);
+            } catch (Exception ignored) {
+            }
+        }
+    }
 
     /** 抓分享页并解析：先试 HTTP（有 SSR 就用），否则用系统浏览器渲染。 */
     public DouyinVideo parse(String awemeId) throws Exception {

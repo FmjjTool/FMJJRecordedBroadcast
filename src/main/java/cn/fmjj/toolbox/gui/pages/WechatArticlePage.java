@@ -35,7 +35,7 @@ import java.util.function.Consumer;
  * `导出格式:` HTML / PDF / Word / 图片文本(MD) → `导出到:` 默认位置/固定位置 + 📁(30×26) + 路径 →
  * 进度条 → 状态(灰) → 按钮行（`🔍 解析并导出`(绿) + `⏹ 取消`(红) + `📂 打开导出文件夹`）→ 日志。
  *
- * <p>已实现 HTML / MD 导出；**PDF / Word 未实现**（勾选会提示，不假装）。
+ * <p>已实现 HTML / MD / Word / PDF 导出。
  */
 public class WechatArticlePage extends BasePage {
 
@@ -146,8 +146,7 @@ public class WechatArticlePage extends BasePage {
         a.setHeaderText("📰 批量抓取公众号正文与图片");
         a.setContentText("""
                 · 链接：每行一个 mp.weixin.qq.com 链接（自动提取去重）
-                · 导出格式：HTML（图片本地化）/ 图片文本(MD) 已实现；
-                  PDF / Word 暂未实现（勾选会提示）
+                · 导出格式：HTML（图片本地化）/ 图片文本(MD) / Word / PDF（可多选）
                 · 导出位置：默认位置 = 统一导出目录/公众号；固定位置 = 自选文件夹
                 · 批量时串行请求，避免触发微信风控（操作频繁/环境异常）
 
@@ -196,12 +195,10 @@ public class WechatArticlePage extends BasePage {
             status.setText("未识别到公众号链接（需 mp.weixin.qq.com）");
             return;
         }
-        if (!fmtHtml.isSelected() && !fmtMd.isSelected()) {
-            status.setText("HTML / MD 至少勾选一种（PDF/Word 未实现）");
+        if (!fmtHtml.isSelected() && !fmtMd.isSelected()
+                && !fmtPdf.isSelected() && !fmtDocx.isSelected()) {
+            status.setText("请至少勾选一种导出格式（HTML / PDF / Word / MD）");
             return;
-        }
-        if (fmtPdf.isSelected() || fmtDocx.isSelected()) {
-            appendLog("ℹ️ PDF / Word 导出未实现，已跳过（仅导出 HTML / MD）");
         }
         Path dir = outDir();
         if (dir == null) {
@@ -210,6 +207,8 @@ public class WechatArticlePage extends BasePage {
         }
         boolean doHtml = fmtHtml.isSelected();
         boolean doMd = fmtMd.isSelected();
+        boolean doPdf = fmtPdf.isSelected();
+        boolean doWord = fmtDocx.isSelected();
 
         running.set(true);
         cancel.set(false);
@@ -251,6 +250,8 @@ public class WechatArticlePage extends BasePage {
                         }
                         if (doHtml) appendLog("   ✅ " + WechatExporter.exportHtml(art, dir, local).getFileName());
                         if (doMd) appendLog("   ✅ " + WechatExporter.exportMarkdown(art, dir, local).getFileName());
+                        if (doWord) appendLog("   ✅ " + WechatExporter.exportWord(art, dir, local).getFileName());
+                        if (doPdf) appendLog("   ✅ " + WechatExporter.exportPdf(art, dir, local).getFileName());
                         ok++;
                     } catch (Exception e) {
                         appendLog("   ❌ " + url + "：" + e.getMessage());

@@ -2,6 +2,7 @@ package cn.fmjj.toolbox.gui.pages;
 
 import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.engine.media.AudioEngine;
+import cn.fmjj.toolbox.engine.media.Ffmpeg;
 import cn.fmjj.toolbox.engine.rename.RenameRule;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -15,8 +16,11 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
 import java.io.IOException;
@@ -53,6 +57,10 @@ public class RenamePage extends BasePage {
     private final ComboBox<String> titleModeBox = new ComboBox<>();
     private final TextField titleField = new TextField();
     private final Label newNameLabel = new Label("");
+    private final ImageView thumbView = new ImageView();
+    private final Label thumbPlaceholder = new Label("（选择视频后显示）");
+    private Path thumbFile;
+    private int thumbSeq;
     private final Label folderCount = new Label("");
     private final Label progressLabel = new Label("");
     private final Label status = new Label("");
@@ -207,11 +215,15 @@ public class RenamePage extends BasePage {
         titleRow.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(titleField, Priority.ALWAYS);
 
-        Label thumb = new Label("📸 预览截图（未实现缩略图）");
+        thumbView.setPreserveRatio(true);
+        thumbView.setFitWidth(360);
+        thumbView.setFitHeight(180);
+        thumbPlaceholder.setAlignment(Pos.CENTER);
+        thumbPlaceholder.setStyle("-fx-text-fill: #888;");
+        StackPane thumb = new StackPane(thumbView, thumbPlaceholder);
         thumb.setMinHeight(120);
         thumb.setMaxWidth(Double.MAX_VALUE);
-        thumb.setAlignment(Pos.CENTER);
-        thumb.setStyle("-fx-background-color: #f2f4f7; -fx-border-color: #d0d6df; -fx-text-fill: #888;");
+        thumb.setStyle("-fx-background-color: #f2f4f7; -fx-border-color: #d0d6df;");
 
         newNameLabel.setWrapText(true);
         newNameLabel.setStyle("-fx-background-color: #eef7ee; -fx-border-color: #2e7d32; "
@@ -251,6 +263,7 @@ public class RenamePage extends BasePage {
     private void loadFiles(int idx) {
         videos.clear();
         typeOrder.clear();
+        resetThumbnail();
         if (idx < 0 || idx >= folders.size()) {
             fileList.getItems().clear();
             return;
@@ -285,14 +298,88 @@ public class RenamePage extends BasePage {
     }
 
     private void onSelectVideo(int idx) {
-        if (idx < 0 || idx >= videos.size()) return;
+        if (idx < 0 || idx >= videos.size()) {
+            resetThumbnail();
+            return;
+        }
         Path p = videos.get(idx);
         String[] dt = RenameRule.parseDateTime(p.getFileName().toString());
         ctxDate = dt[0];
         ctxTime = dt[1];
         autoTitle = RenameRule.guessAccount(p.getFileName().toString());
         status.setText("已选择：" + p.getFileName());
+        loadThumbnail(p);
         updatePreview();
+    }
+
+    private void resetThumbnail() {
+        thumbSeq++;
+        thumbView.setImage(null);
+        thumbPlaceholder.setText("（选择视频后显示）");
+        if (thumbFile != null) {
+            try {
+                Files.deleteIfExists(thumbFile);
+            } catch (Exception ignored) {
+            }
+            thumbFile = null;
+        }
+    }
+
+    private void loadThumbnail(Path video) {
+        int seq = ++thumbSeq;
+        thumbView.setImage(null);
+        thumbPlaceholder.setText(Ffmpeg.available() ? "截图中…" : "未找到 FFmpeg，无法截图");
+        if (!Ffmpeg.available()) return;
+        Thread t = new Thread(() -> {
+            Path out = null;
+            try {
+                out = Files.createTempFile("fmjj-thumb-", ".jpg");
+                boolean ok = Ffmpeg.captureFrame(video, out, 1.0);
+                Path finalOut = ok ? out : null;
+                Platform.runLater(() -> {
+                    if (seq != thumbSeq) {
+                        if (finalOut != null) {
+                            try {
+                                Files.deleteIfExists(finalOut);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                        return;
+                    }
+                    if (finalOut == null) {
+                        thumbPlaceholder.setText("截图失败");
+                        return;
+                    }
+                    Image img = new Image(finalOut.toUri().toString(), false);
+                    if (img.isError()) {
+                        thumbPlaceholder.setText("截图读取失败");
+                    } else {
+                        thumbView.setImage(img);
+                        thumbPlaceholder.setText("");
+                        if (thumbFile != null) {
+                            try {
+                                Files.deleteIfExists(thumbFile);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                        thumbFile = finalOut;
+                        finalOut.toFile().deleteOnExit();
+                    }
+                });
+            } catch (Exception e) {
+                if (out != null) {
+                    try {
+                        Files.deleteIfExists(out);
+                    } catch (Exception ignored) {
+                    }
+                }
+                Platform.runLater(() -> {
+                    if (seq == thumbSeq) thumbPlaceholder.setText("截图失败");
+                });
+            }
+        }, "rename-thumb");
+        t.setDaemon(true);
+        t.start();
     }
 
     private void addAccount() {

@@ -44,6 +44,44 @@ public final class WeiboParser {
 
     public WeiboParser(HttpClient http) { this.http = http; }
 
+    /** 搜索命中（视频/图文微博）。 */
+    public record SearchHit(String title, String author, String url, String cover, String desc) {}
+
+    /** 关键词搜索（m.weibo.cn container getIndex，游客/Cookie 均可尝试）。 */
+    public List<SearchHit> search(String keyword, int page, String cookie) {
+        List<SearchHit> out = new ArrayList<>();
+        try {
+            String container = "100103type=1&q=" + keyword;
+            String url = "https://m.weibo.cn/api/container/getIndex?containerid="
+                    + HttpClient.urlEncode(container) + "&page_type=searchall&page=" + page;
+            Map<String, String> headers = new LinkedHashMap<>(HEADERS);
+            if (cookie != null && !cookie.isEmpty()) headers.put("Cookie", cookie);
+            JsonNode d = http.getJson(url, headers);
+            if (d.path("ok").asInt(0) != 1) return out;
+            for (JsonNode card : d.path("data").path("cards")) {
+                JsonNode mblog = card.path("mblog");
+                if (!mblog.isObject()) continue;
+                String text = cleanRich(mblog.path("text").asText(""));
+                String title = text.replaceAll("\\s+", " ").strip();
+                if (title.length() > 80) title = title.substring(0, 80);
+                JsonNode user = mblog.path("user");
+                String uid = user.path("id").asText("");
+                String bid = mblog.path("bid").asText("");
+                String id = mblog.path("id").asText(mblog.path("mid").asText(""));
+                String pageUrl = bid.isEmpty() ? "https://m.weibo.cn/detail/" + id
+                        : "https://weibo.com/" + uid + "/" + bid;
+                String cover = mblog.path("page_info").path("page_pic").path("url").asText("");
+                if (cover.isEmpty() && mblog.path("pics").isArray() && !mblog.path("pics").isEmpty()) {
+                    cover = mblog.path("pics").get(0).path("url").asText("");
+                }
+                out.add(new SearchHit(title, user.path("screen_name").asText(""),
+                        pageUrl, cover, text));
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
     // ==================== 链接 / 文本工具 ====================
 
     /** Python: extract_id —— detail → status → weibo.cn → weibo.com/{uid}/{bid}。 */

@@ -3,8 +3,13 @@ package cn.fmjj.toolbox.gui.pages;
 import cn.fmjj.toolbox.core.settings.Settings;
 import cn.fmjj.toolbox.engine.download.FileDownloader;
 import cn.fmjj.toolbox.engine.media.AudioEngine;
+import cn.fmjj.toolbox.engine.music.FiveSingScraper;
 import cn.fmjj.toolbox.engine.music.KuwoScraper;
+import cn.fmjj.toolbox.engine.music.KugouScraper;
+import cn.fmjj.toolbox.engine.music.KugouLiteScraper;
 import cn.fmjj.toolbox.engine.music.MusicDownloader;
+import cn.fmjj.toolbox.engine.music.NeteaseScraper;
+import cn.fmjj.toolbox.engine.music.QQMusicScraper;
 import cn.fmjj.toolbox.engine.music.MusicSong;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -39,8 +44,8 @@ import java.util.function.Consumer;
  * 白底带边框详情卡片区（伸展）；底部操作栏（☑全选/🔄反选/□全不选 + □自动换源 +
  * 音质 + 导出位置 + 📁 + `⬇ 下载选中`(绿) + 状态）。
  *
- * <p>当前可下载：**酷我**（搜索/下载/歌词已实现）；网易云/QQ/酷狗/5sing/概念版
- * 接口未移植，切到这些平台时明确提示，不假装可用。
+ * <p>当前六平台均可搜索：酷我 / 酷狗 / 5sing / 网易云 / QQ / 酷狗概念版；可下载免费曲。
+ * 网易云 / QQ / 酷我另支持单曲、歌单、专辑解析；酷狗概念版需扫码登录（Cookie 管理）。
  */
 public class MusicSearchPage extends BasePage {
 
@@ -90,7 +95,12 @@ public class MusicSearchPage extends BasePage {
     private final List<Item> items = new ArrayList<>();
 
     private final KuwoScraper kuwo = new KuwoScraper();
-    private final MusicDownloader downloader = new MusicDownloader(kuwo);
+    private final KugouScraper kugou = new KugouScraper();
+    private final FiveSingScraper fivesing = new FiveSingScraper();
+    private final NeteaseScraper netease = new NeteaseScraper();
+    private final QQMusicScraper qq = new QQMusicScraper();
+    private final KugouLiteScraper kugouLite = new KugouLiteScraper();
+    private final MusicDownloader downloader = new MusicDownloader(kuwo, kugou, netease, qq);
 
     private Consumer<String> toast;
 
@@ -132,7 +142,7 @@ public class MusicSearchPage extends BasePage {
         Button selNone = new Button("□ 全不选");
         selNone.setOnAction(e -> select("none"));
         fallbackCheck.setTooltip(new javafx.scene.control.Tooltip(
-                "下载失败或仅试听时自动到其他平台找同名曲（当前仅酷我可下载）"));
+                "下载失败或仅试听时自动到其他平台找同名曲（当前支持酷我 / 酷狗 / 5sing / 网易云 / QQ）"));
         Button pickDir = new Button("📁");
         pickDir.setMinSize(30, 26);
         pickDir.setMaxSize(30, 26);
@@ -178,8 +188,11 @@ public class MusicSearchPage extends BasePage {
                 平台：网易云 / QQ音乐 / 酷狗 / 酷我 / 5sing / 酷狗概念版
                 模式：歌曲搜索 / 单曲解析 / 歌单解析 / 专辑解析（按平台支持情况显示）
 
-                ✅ 当前可下载：酷我（搜索 → 勾选 → ⬇ 下载选中，自动带同名 .lrc 歌词）
-                ⚠️ 其他平台：接口未移植，切过去会明确提示，不会假装可用
+                ✅ 当前可搜索：酷我 / 酷狗 / 5sing / 网易云 / QQ / 酷狗概念版
+                ✅ 可下载：六平台免费曲（自动带同名 .lrc 歌词；VIP/版权受限会明确报错）
+                🎶 解析模式：网易云/QQ/酷我（单曲·歌单·专辑）、酷狗（单曲·歌单）、5sing（单曲·歌单）
+                🎁 酷狗概念版：需在 Cookie 管理里扫码登录；登录后可「领 VIP」，
+                   再按 128k / 320k / FLAC 下载
 
                 导出：默认位置 = 统一导出目录/音乐/{歌手}/
                 音质：128kmp3 / 320kmp3 / flac
@@ -220,8 +233,13 @@ public class MusicSearchPage extends BasePage {
             }
         }
         buildInputRow();
-        status.setText("当前平台：" + def[1] + ("kuwo".equals(key)
-                ? "（可搜索与下载）" : "（接口未移植，仅界面占位）"));
+        if ("kugou_lite".equals(key)) {
+            status.setText("当前平台：" + def[1] + (kugouLite.isLoggedIn()
+                    ? "（已登录" + (kugouLite.nickname().isBlank() ? "" : "：" + kugouLite.nickname()) + "）"
+                    : "（需先在 Cookie 管理扫码登录）"));
+        } else {
+            status.setText("当前平台：" + def[1] + "（可搜索；下载见平台限制）");
+        }
     }
 
     private void buildInputRow() {
@@ -261,10 +279,21 @@ public class MusicSearchPage extends BasePage {
     // ==================== 搜索 / 解析 ====================
 
     private void doSearch() {
-        if (!"kuwo".equals(currentPlatform)) {
-            setDetail("⚠️ " + platformLabel() + " 的搜索接口未移植\n\n"
-                    + "当前可下载的平台：酷我。请在上方平台下拉里切到「🐼 酷我音乐」。");
+        boolean kugouMode = "kugou".equals(currentPlatform);
+        boolean fiveMode = "5sing".equals(currentPlatform);
+        boolean neteaseMode = "netease".equals(currentPlatform);
+        boolean qqMode = "qq".equals(currentPlatform);
+        boolean liteMode = "kugou_lite".equals(currentPlatform);
+        if (!"kuwo".equals(currentPlatform) && !kugouMode && !fiveMode
+                && !neteaseMode && !qqMode && !liteMode) {
+            setDetail("⚠️ " + platformLabel() + " 的搜索接口未移植");
             status.setText(platformLabel() + " 未实现");
+            return;
+        }
+        if (liteMode && !kugouLite.isLoggedIn()) {
+            setDetail("⚠️ 酷狗概念版需要登录后才能搜索\n\n"
+                    + "打开「Cookie 管理」→ 酷狗概念版 → 扫码登录；登录后还可点「领 VIP」。");
+            status.setText("请先扫码登录酷狗概念版");
             return;
         }
         String singer = singerField.getText() == null ? "" : singerField.getText().trim();
@@ -279,7 +308,12 @@ public class MusicSearchPage extends BasePage {
         javafx.concurrent.Task<List<MusicSong>> task = new javafx.concurrent.Task<>() {
             @Override
             protected List<MusicSong> call() {
-                return kuwo.searchSong(query, 1, 30);
+                return fiveMode ? fivesing.searchSong(query, 1, 30)
+                        : neteaseMode ? netease.searchSong(query, 1, 30)
+                        : qqMode ? qq.searchSong(query, 1, 30)
+                        : kugouMode ? kugou.searchSong(query, 1, 30)
+                        : liteMode ? kugouLite.searchSong(query, 1, 30)
+                        : kuwo.searchSong(query, 1, 30);
             }
         };
         task.setOnSucceeded(e -> {
@@ -290,15 +324,7 @@ public class MusicSearchPage extends BasePage {
                 status.setText("没有搜到：" + query);
                 return;
             }
-            items.clear();
-            detailList.getChildren().clear();
-            for (MusicSong s : songs) {
-                Item it = new Item(s);
-                it.checked.addListener((o, a, b) -> updateStatus());
-                items.add(it);
-                detailList.getChildren().add(card(it));
-            }
-            status.setText("找到 " + songs.size() + " 首（勾选后点「⬇ 下载选中」）");
+            renderSongs(songs, "找到 " + songs.size() + " 首（勾选后点「⬇ 下载选中」）");
         });
         task.setOnFailed(e -> {
             fetchBtn.setDisable(false);
@@ -308,10 +334,109 @@ public class MusicSearchPage extends BasePage {
         new Thread(task, "music-search").start();
     }
 
+    private void renderSongs(List<MusicSong> songs, String statusText) {
+        items.clear();
+        detailList.getChildren().clear();
+        for (MusicSong s : songs) {
+            Item it = new Item(s);
+            it.checked.addListener((o, a, b) -> updateStatus());
+            items.add(it);
+            detailList.getChildren().add(card(it));
+        }
+        status.setText(statusText);
+    }
+
     private void doParseLink() {
-        setDetail("⚠️ " + platformLabel() + " 的「" + MODE_NAMES.get(currentMode) + "」未移植\n\n"
-                + "当前可下载的平台：酷我（歌曲搜索）。");
-        status.setText("该模式未实现");
+        String text = linkField.getText() == null ? "" : linkField.getText().trim();
+        if (text.isEmpty()) {
+            status.setText("请输入歌曲 / 歌单 / 专辑链接或 ID");
+            return;
+        }
+        boolean neteaseMode = "netease".equals(currentPlatform);
+        boolean qqMode = "qq".equals(currentPlatform);
+        boolean kuwoMode = "kuwo".equals(currentPlatform);
+        boolean kugouMode = "kugou".equals(currentPlatform);
+        boolean fiveMode = "5sing".equals(currentPlatform);
+        boolean liteMode = "kugou_lite".equals(currentPlatform);
+        if (!neteaseMode && !qqMode && !kuwoMode && !kugouMode && !fiveMode && !liteMode) {
+            setDetail("⚠️ " + platformLabel() + " 的「" + MODE_NAMES.get(currentMode) + "」未移植\n\n"
+                    + "当前支持解析：网易云 / QQ / 酷我 / 酷狗 / 5sing / 酷狗概念版（见各平台可用模式）。");
+            status.setText("该模式未实现");
+            return;
+        }
+        if (liteMode && !kugouLite.isLoggedIn()) {
+            setDetail("⚠️ 酷狗概念版需要登录后才能取歌曲直链\n\n"
+                    + "打开「Cookie 管理」→ 酷狗概念版 → 扫码登录。");
+            status.setText("请先扫码登录酷狗概念版");
+            return;
+        }
+        String mode = currentMode;
+        fetchBtn.setDisable(true);
+        setDetail("⏳ 正在解析…");
+        javafx.concurrent.Task<List<MusicSong>> task = new javafx.concurrent.Task<>() {
+            @Override
+            protected List<MusicSong> call() throws Exception {
+                if (kugouMode && "album".equals(mode)) {
+                    throw new IllegalArgumentException("酷狗专辑接口不返回曲目列表，暂不支持专辑解析");
+                }
+                if ("song".equals(mode)) {
+                    String id = neteaseMode ? NeteaseScraper.extractSongId(text)
+                            : qqMode ? QQMusicScraper.extractSongId(text)
+                            : kuwoMode ? KuwoScraper.extractSongId(text)
+                            : kugouMode ? KugouScraper.extractSongId(text)
+                            : liteMode ? KugouLiteScraper.extractSongId(text)
+                            : FiveSingScraper.extractSongId(text);
+                    if (id.isEmpty()) throw new IllegalArgumentException("无法识别歌曲 ID / 链接");
+                    MusicSong s = neteaseMode ? netease.songDetail(id)
+                            : qqMode ? qq.songDetail(id)
+                            : kuwoMode ? kuwo.songDetail(id)
+                            : kugouMode ? kugou.songDetail(id)
+                            : liteMode ? kugouLite.songDetail(id)
+                            : fivesing.songDetail(id);
+                    return s == null ? List.of() : List.of(s);
+                }
+                if ("playlist".equals(mode)) {
+                    String id = neteaseMode ? NeteaseScraper.extractPlaylistId(text)
+                            : qqMode ? QQMusicScraper.extractPlaylistId(text)
+                            : kuwoMode ? KuwoScraper.extractPlaylistId(text)
+                            : kugouMode ? KugouScraper.extractPlaylistId(text)
+                            : FiveSingScraper.extractPlaylistId(text);
+                    if (id.isEmpty()) throw new IllegalArgumentException("无法识别歌单 ID / 链接");
+                    return neteaseMode ? netease.playlistSongs(id)
+                            : qqMode ? qq.playlistSongs(id)
+                            : kuwoMode ? kuwo.playlistSongs(id)
+                            : kugouMode ? kugou.playlistSongs(id)
+                            : fivesing.playlistSongs(id);
+                }
+                if ("album".equals(mode)) {
+                    String id = neteaseMode ? NeteaseScraper.extractAlbumId(text)
+                            : qqMode ? QQMusicScraper.extractAlbumId(text)
+                            : KuwoScraper.extractAlbumId(text);
+                    if (id.isEmpty()) throw new IllegalArgumentException("无法识别专辑 ID / 链接");
+                    return neteaseMode ? netease.albumSongs(id)
+                            : qqMode ? qq.albumSongs(id) : kuwo.albumSongs(id);
+                }
+                return List.of();
+            }
+        };
+        task.setOnSucceeded(e -> {
+            fetchBtn.setDisable(false);
+            List<MusicSong> songs = task.getValue();
+            if (songs.isEmpty()) {
+                setDetail("（未解析到歌曲，请检查链接/ID 或确认内容是否下架）");
+                status.setText("解析结果为空");
+                return;
+            }
+            renderSongs(songs, "解析到 " + songs.size() + " 首（勾选后点「⬇ 下载选中」）");
+        });
+        task.setOnFailed(e -> {
+            fetchBtn.setDisable(false);
+            Throwable ex = task.getException();
+            String msg = ex == null ? "解析失败" : ex.getMessage();
+            setDetail("❌ 解析失败：" + msg);
+            status.setText("解析失败");
+        });
+        new Thread(task, "music-parse").start();
     }
 
     private String platformLabel() {
@@ -379,8 +504,10 @@ public class MusicSearchPage extends BasePage {
             status.setText("请先勾选要下载的歌曲");
             return;
         }
-        if (!"kuwo".equals(currentPlatform)) {
-            status.setText(platformLabel() + " 下载未实现（当前仅酷我）");
+        if (!"kuwo".equals(currentPlatform) && !"kugou".equals(currentPlatform)
+                && !"5sing".equals(currentPlatform) && !"netease".equals(currentPlatform)
+                && !"qq".equals(currentPlatform) && !"kugou_lite".equals(currentPlatform)) {
+            status.setText(platformLabel() + " 下载未实现");
             return;
         }
         downloadBtn.setDisable(true);
