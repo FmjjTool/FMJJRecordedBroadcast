@@ -31,8 +31,8 @@ description: "Cookie 数据绝对保护，强制中的强制，所有项目操�
 | --- | --- |
 | `src/auth.py` 的 `COOKIE_FILE` | 由配置目录定位的 `cookies.json`，通常是项目/安装目录的 `config/cookies.json`，也可能是 `%APPDATA%/FengMingToolbox/config/cookies.json` |
 | `src/auth.py` | `save_cookies()`、`set_cookie()`、`clear_cookie()`、`set_cookie_enabled()` 会写真实凭据文件；禁止对真实环境调用 |
-| `src/auth.py` | `get_netease_cookie()`、`get_netease_cookie_stored()` 可能触发 `_netease_legacy_migrate()` 并写入/删除旧文件；`sync_netease_to_legacy()` 会写旧副本，不能当作纯读取 |
-| `src/netease/cookie.txt`、`src/netease/cookie_manager.py` | 旧网易云凭据及其保存/清除链路，不能因迁移/过期而处理真实文件 |
+| `src/auth.py` | `get_netease_cookie()`、`get_netease_cookie_stored()` 当前只读统一加密存储；2026-11-17 起已移除 `_netease_legacy_migrate()` 与 `sync_netease_to_legacy()`，旧文件不再被读取或写入，但仍受本 skill 保护 |
+| `src/netease/cookie.txt`、`src/netease/cookie_manager.py` | 旧网易云凭据文件仍受保护；当前代码构造 `CookieManager` 不再 `touch` 文件，读取/写入/清除旧文件的业务链路已移除，禁止重新引入 |
 | `src/toolbox/tcdoc/session.py` | `save_from_context()`、`save_state_snapshot()`、`sync_from_state()`、`clear()` 可能改 `config/tcdoc_state.json` 或调用统一 Cookie 写入/清除 |
 | `src/gui_qt/cookie_manager.py` | 手工输入、扫码、浏览器保存与清除操作；腾讯文档快照、酷狗概念版会话及浏览器 profile 也纳入相关存储保护 |
 

@@ -31,8 +31,8 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 | `src/auth.py` | `get_cookie(platform)` | 普通业务获取有效 Cookie，受总开关和本地有效期规则控制；服务端仍可能判定失效 |
 | `src/auth.py` | `set_cookie(platform, text)`、`clear_cookie(platform)` | 现有写入/清除能力；Agent 禁止对真实 Cookie 调用，只能验证隔离虚构数据 |
 | `src/auth.py` | `is_cookie_enabled()`、`set_cookie_enabled(enabled)` | 读取须无写入副作用；写总开关会改同一凭据文件，禁止在真实环境调用 |
-| `src/auth.py` | `get_netease_cookie()` | 可能隐式迁移并写入/删除旧凭据，不作为真实环境纯读取入口 |
-| `src/auth.py` | `load_cookies()`、`get_netease_cookie_stored()` | `load_cookies()` 只用于必要的管理展示，不能绕过有效性规则；后者可能隐式迁移，禁止对真实环境执行 |
+| `src/auth.py` | `get_netease_cookie()` | 只读统一加密存储；旧文件隐式迁移已移除 |
+| `src/auth.py` | `load_cookies()`、`get_netease_cookie_stored()` | `load_cookies()` 只用于必要的管理展示，不能绕过有效性规则；后者只读统一存储，不再触发旧文件迁移 |
 | `src/toolbox/tcdoc/session.py` | `cookie_string()`、`apply_to_context()`、`save_state_snapshot()`、`clear()` | 读取/注入须确认不会回写真实状态；快照保存和清除只在隔离虚构环境验证 |
 | `src/toolbox/webwiki/credentials.py`、`auth.py`，`src/gui_qt/cookie_manager.py` | GitHub Token 统一凭据适配与 `_GitHubTokenDialog` | 已迁入统一管理；新文件 `config/github_auth.json`，旧 `config/webwiki_auth.json` 只读兼容；业务不得直接读写凭据文件 |
 
