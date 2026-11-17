@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from gui_qt import common
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.theme import is_dark
+from gui_qt.theme import color as theme_color
 from toolbox.replay_bundle import (
     merge_replay_zips, parse_replay_file, remove_tmp_dir, write_replay_zip,
 )
@@ -223,7 +223,7 @@ class DouyinDanmakuPage(BasePage):
         # 登录态说明：由统一管理层维护（总开关+账号池），连接时自动套用，
         # 本页不再单独提供登录入口。
         top = QFrame()
-        top.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        top.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         top_l = QHBoxLayout(top)
         top_l.setContentsMargins(10, 6, 10, 6)
         # 轮询按钮（点击才开始轮询）：按下=轮询进行中，再点=停止（仅图标，tooltip 说明）
@@ -238,13 +238,13 @@ class DouyinDanmakuPage(BasePage):
             "按钮旁的倒计时显示距下次重试的秒数。")
         self.poll_btn.setStyleSheet(
             icon_btn_style(True, "font-size: 14px;")
-            + "QPushButton:checked { background: #e65100; color: white; }")
+            + "QPushButton:checked { background: palette(bright-text); color: palette(highlighted-text); }")
         self.poll_btn.setFixedWidth(40)
         self.poll_btn.clicked.connect(self._on_poll_toggle)
         top_l.addWidget(self.poll_btn)
         # 轮询倒计时（距下次重访的秒数；未在轮询时隐藏）
         self.poll_countdown = QLabel("")
-        self.poll_countdown.setStyleSheet("color: #e65100; font-size: 11px;")
+        self.poll_countdown.setStyleSheet("color: palette(bright-text); font-size: 11px;")
         self.poll_countdown.setMinimumWidth(34)
         top_l.addWidget(self.poll_countdown)
         self._poll_started_at = None  # 当前轮询周期起点（monotonic）
@@ -307,7 +307,7 @@ class DouyinDanmakuPage(BasePage):
 
         # ===== 工具栏 =====
         toolbar = QFrame()
-        toolbar.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        toolbar.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         tb = QHBoxLayout(toolbar)
         tb.setContentsMargins(10, 4, 10, 4)
         save_btn = QPushButton("💾 保存弹幕")
@@ -346,14 +346,14 @@ class DouyinDanmakuPage(BasePage):
 
         # ===== 底栏：状态 + 计时 + 点赞（卡片框架，浅色模式下也清晰可见） =====
         bottom_card = QFrame()
-        bottom_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        bottom_card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         bottom = QHBoxLayout(bottom_card)
         bottom.setContentsMargins(10, 6, 10, 6)
         self.status_dot = QLabel("●")
-        self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
+        self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
         bottom.addWidget(self.status_dot)
         self.status_label = QLabel("已断开")
-        self.status_label.setStyleSheet("color: #888;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         bottom.addWidget(self.status_label)
         bottom.addWidget(QLabel("│"))
         bottom.addWidget(QLabel("⏱ 计时:"))
@@ -363,7 +363,7 @@ class DouyinDanmakuPage(BasePage):
         bottom.addWidget(QLabel("│"))
         bottom.addWidget(QLabel("🛒 本场点赞:"))
         self.like_label = QLabel("0")
-        self.like_label.setStyleSheet("color: #1976d2; font-weight: bold;")
+        self.like_label.setStyleSheet("color: palette(link); font-weight: bold;")
         bottom.addWidget(self.like_label)
         bottom.addStretch(1)
         outer.addWidget(bottom_card)
@@ -522,7 +522,7 @@ class DouyinDanmakuPage(BasePage):
         tip = QLabel(
             "粘贴抖音 / B站直播间链接（支持带参数的推荐页、首页链接、\n"
             "v.douyin.com / b23.tv 短链），自动提取房间号并填入：")
-        tip.setStyleSheet("color: #888;")
+        tip.setStyleSheet("color: palette(placeholder-text);")
         v.addWidget(tip)
         edit = QPlainTextEdit()
         edit.setPlaceholderText(
@@ -534,7 +534,7 @@ class DouyinDanmakuPage(BasePage):
         edit.setMinimumHeight(110)
         v.addWidget(edit)
         result_lbl = QLabel("")
-        result_lbl.setStyleSheet("color: #2e7d32; font-weight: bold;")
+        result_lbl.setStyleSheet("color: palette(link-visited); font-weight: bold;")
         result_lbl.setWordWrap(True)
         v.addWidget(result_lbl)
 
@@ -556,10 +556,10 @@ class DouyinDanmakuPage(BasePage):
             def show(room):
                 if room:
                     result_lbl.setText(f"✅ 识别到房间号：{room}")
-                    result_lbl.setStyleSheet("color: #2e7d32; font-weight: bold;")
+                    result_lbl.setStyleSheet("color: palette(link-visited); font-weight: bold;")
                 else:
                     result_lbl.setText("❌ 未识别到房间号（检查链接是否完整）")
-                    result_lbl.setStyleSheet("color: #c62828; font-weight: bold;")
+                    result_lbl.setStyleSheet("color: palette(bright-text); font-weight: bold;")
             _resolve_async(edit.toPlainText(), show)
 
         def on_apply():
@@ -577,7 +577,7 @@ class DouyinDanmakuPage(BasePage):
         parse_btn.clicked.connect(on_parse)
         btn_row.addWidget(parse_btn)
         ok_btn = QPushButton("✅ 填入房间号")
-        ok_btn.setStyleSheet("background: #2e7d32; color: white;")
+        ok_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         ok_btn.clicked.connect(on_apply)
         btn_row.addWidget(ok_btn)
         v.addLayout(btn_row)
@@ -602,7 +602,7 @@ class DouyinDanmakuPage(BasePage):
     # ======================== 左：主播信息 ========================
     def _build_anchor_panel(self, parent):
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         v = QVBoxLayout(card)
         v.setContentsMargins(10, 10, 10, 10)
         # 标题「主播信息」靠最右侧，其余内容整体居中
@@ -628,7 +628,7 @@ class DouyinDanmakuPage(BasePage):
         self.cover_label.setFixedSize(96, 96)
         self.cover_label.setAlignment(Qt.AlignCenter)
         self.cover_label.setStyleSheet(
-            "background: #ffffff; border-radius: 6px; color: #555;")
+            "background: palette(base); border-radius: 6px; color: palette(placeholder-text);")
         cover_wrap.addWidget(self.cover_label)
         cover_wrap.addStretch(1)
         v.addLayout(cover_wrap)
@@ -651,10 +651,10 @@ class DouyinDanmakuPage(BasePage):
                 ("在线观众数:", "online_count"), ("累计观看人数:", "total_viewers"),
                 ("本场点赞数:", "like_count")]):
             lbl = QLabel(text)
-            lbl.setStyleSheet("color: #888;")
+            lbl.setStyleSheet("color: palette(placeholder-text);")
             grid.addWidget(lbl, r, 0, Qt.AlignRight)
             val = QLabel("*****")
-            val.setStyleSheet("color: #888;")
+            val.setStyleSheet("color: palette(placeholder-text);")
             grid.addWidget(val, r, 1, Qt.AlignLeft)
             self.anchor_fields[key] = val
         grid_wrap.addLayout(grid)
@@ -664,7 +664,7 @@ class DouyinDanmakuPage(BasePage):
         # 分隔
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: #c9d1dc;")
+        sep.setStyleSheet("color: palette(shadow);")
         v.addWidget(sep)
 
         # 时间/来源
@@ -674,7 +674,7 @@ class DouyinDanmakuPage(BasePage):
         v.addWidget(self.time_label)
         self.now_label = QLabel("--")
         self.now_label.setAlignment(Qt.AlignHCenter)
-        self.now_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.now_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.now_label)
         # 备注信息（弹幕姬「⚙ 设置」弹窗可改；保存/切页时刷新）
         self._remark_container = QWidget()
@@ -700,8 +700,8 @@ class DouyinDanmakuPage(BasePage):
         for i, ln in enumerate(lines):
             last = i == len(lines) - 1
             lbl = QLabel(ln)
-            lbl.setStyleSheet("color: #666; font-size: 10px;" if last
-                              else "color: #888; font-size: 11px;")
+            lbl.setStyleSheet("color: palette(placeholder-text); font-size: 10px;" if last
+                              else "color: palette(placeholder-text); font-size: 11px;")
             lbl.setWordWrap(True)
             lbl.setAlignment(Qt.AlignHCenter)
             self._remark_layout.addWidget(lbl)
@@ -713,7 +713,7 @@ class DouyinDanmakuPage(BasePage):
 
         # ---- 视频卡片（仅回放模式显示：播放回放包里录好的视频）----
         self.video_card = QFrame()
-        self.video_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        self.video_card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         vv = QVBoxLayout(self.video_card)
         vv.setContentsMargins(10, 8, 10, 8)
         head = QHBoxLayout()
@@ -721,7 +721,7 @@ class DouyinDanmakuPage(BasePage):
                                   styleSheet="font-weight: bold;")
         head.addWidget(self.video_title)
         head.addStretch(1)
-        self.video_status_lbl = QLabel("", styleSheet="color: #888; font-size: 11px;")
+        self.video_status_lbl = QLabel("", styleSheet="color: palette(placeholder-text); font-size: 11px;")
         head.addWidget(self.video_status_lbl)
         vv.addLayout(head)
 
@@ -729,7 +729,7 @@ class DouyinDanmakuPage(BasePage):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumHeight(260)
         self.video_label.setStyleSheet(
-            "background: #000; border-radius: 4px; color: #666; font-size: 14px;")
+            "background: #000; border-radius: 4px; color: palette(placeholder-text); font-size: 14px;")
         vv.addWidget(self.video_label, 1)
 
         # 回放控制行：播放/暂停 + 进度条 + 时间 + 倍速
@@ -746,9 +746,9 @@ class DouyinDanmakuPage(BasePage):
         self.replay_slider.sliderReleased.connect(self._on_replay_slider_released)
         self.replay_row.addWidget(self.replay_slider, 1)
         self.replay_time_lbl = QLabel("00:00 / 00:00",
-                                      styleSheet="color: #888; font-family: Consolas;")
+                                      styleSheet="color: palette(placeholder-text); font-family: Consolas;")
         self.replay_row.addWidget(self.replay_time_lbl)
-        self.replay_row.addWidget(QLabel("倍速:", styleSheet="color: #888;"))
+        self.replay_row.addWidget(QLabel("倍速:", styleSheet="color: palette(placeholder-text);"))
         self.replay_speed = QComboBox()
         for s in ("1.0", "2.0", "4.0", "8.0", "16.0"):
             self.replay_speed.addItem(f"{s}x", float(s))
@@ -762,7 +762,7 @@ class DouyinDanmakuPage(BasePage):
 
         # ---- 弹幕卡片（聊天+礼物）----
         self.chat_card = QFrame()
-        self.chat_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        self.chat_card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         v = QVBoxLayout(self.chat_card)
         v.setContentsMargins(10, 10, 10, 10)
         head = QHBoxLayout()
@@ -791,7 +791,7 @@ class DouyinDanmakuPage(BasePage):
         self.search_entry.textChanged.connect(lambda: self._search_timer.start())
         search_row.addWidget(self.search_entry, 1)
         self.search_count = QLabel("")
-        self.search_count.setStyleSheet("color:#6b7280; font-size:12px;")
+        self.search_count.setStyleSheet("color: palette(placeholder-text); font-size:12px;")
         search_row.addWidget(self.search_count)
         v.addLayout(search_row)
         self.chat_gift_box = QTextBrowser()
@@ -799,7 +799,7 @@ class DouyinDanmakuPage(BasePage):
         self.chat_gift_box.setOpenLinks(False)
         self.chat_gift_box.anchorClicked.connect(self._on_chat_anchor)
         self.chat_gift_box.setStyleSheet(
-            "QTextBrowser { background: #ffffff; border: none; color: #2f3440; }")
+            "QTextBrowser { background: palette(base); border: none; color: palette(text); }")
         v.addWidget(self.chat_gift_box, 1)
         wrap.addWidget(self.chat_card, 2)
 
@@ -1271,7 +1271,7 @@ class DouyinDanmakuPage(BasePage):
     # ======================== 右：5 块垂直 ========================
     def _build_right_panel(self, parent):
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         v = QVBoxLayout(card)
         v.setContentsMargins(10, 10, 10, 10)
 
@@ -1294,7 +1294,7 @@ class DouyinDanmakuPage(BasePage):
                                  "（信息获取、直播录制列表、抖音房间缓存、最近连接）")
         room_pick_btn.setFlat(True)
         room_pick_btn.setStyleSheet(
-            icon_btn_style(False, "color: #1976d2; border: none; font-size: 13px;"))
+            icon_btn_style(False, "color: palette(link); border: none; font-size: 13px;"))
         room_pick_btn.clicked.connect(self._open_room_picker)
         room_pick_btn.setFocusPolicy(Qt.NoFocus)
         row1.addWidget(room_pick_btn)
@@ -1303,15 +1303,15 @@ class DouyinDanmakuPage(BasePage):
         room_clear_btn.setToolTip("清空房间号，快速输入新房间")
         room_clear_btn.setFlat(True)
         room_clear_btn.setStyleSheet(
-            icon_btn_style(False, "color: #8a919e; border: none; font-size: 14px;")
-            + "QPushButton:hover { color: #c62828; }")
+            icon_btn_style(False, "color: palette(placeholder-text); border: none; font-size: 14px;")
+            + "QPushButton:hover { color: palette(bright-text); }")
         room_clear_btn.clicked.connect(self._clear_room_entry)
         room_clear_btn.setFocusPolicy(Qt.NoFocus)
         row1.addWidget(room_clear_btn)
         # 连接/断开合一按钮：未连接=「连接」（点击发起连接），已连接=「断开」（点击断开）
         self.connect_btn2 = QPushButton("连接")
         self._action_mode = "connect"
-        self.connect_btn2.setStyleSheet("background: #2e7d32; color: white;")
+        self.connect_btn2.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         self.connect_btn2.clicked.connect(self._on_action_clicked)
         row1.addWidget(self.connect_btn2)
         v.addLayout(row1)
@@ -1337,11 +1337,11 @@ class DouyinDanmakuPage(BasePage):
         self.gift_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.gift_table.setFocusPolicy(Qt.NoFocus)
         self.gift_table.setStyleSheet(
-            "QTableWidget { background: #ffffff; color: #2f3440; border: none;"
-            " gridline-color: #dfe4ec; font-size: 11px; }"
+            "QTableWidget { background: palette(base); color: palette(text); border: none;"
+            " gridline-color: palette(shadow); font-size: 11px; }"
             "QTableWidget::item { padding: 2px 4px; }"
-            "QHeaderView::section { background: #ffffff; color: #888; border: none;"
-            " border-bottom: 1px solid #dfe4ec; padding: 3px 4px; font-size: 11px; }")
+            "QHeaderView::section { background: palette(base); color: palette(placeholder-text); border: none;"
+            " border-bottom: 1px solid palette(shadow); padding: 3px 4px; font-size: 11px; }")
         hh = self.gift_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -1383,7 +1383,7 @@ class DouyinDanmakuPage(BasePage):
         self.event_search.textChanged.connect(lambda: self._event_search_timer.start())
         es_row.addWidget(self.event_search, 1)
         self.event_count = QLabel("")
-        self.event_count.setStyleSheet("color:#6b7280; font-size:12px;")
+        self.event_count.setStyleSheet("color: palette(placeholder-text); font-size:12px;")
         es_row.addWidget(self.event_count)
         v.addLayout(es_row)
         self.event_box = QPlainTextEdit()
@@ -1416,11 +1416,11 @@ class DouyinDanmakuPage(BasePage):
         v.addWidget(QLabel(
             f"自动导出回放包到：{self._backend()._danmaku_dir()}"
             "（断开连接 / 退出软件时自动打包 zip，含全量弹幕与分类 TXT）",
-            styleSheet="color: #888; font-size: 11px;"))
+            styleSheet="color: palette(placeholder-text); font-size: 11px;"))
         v.addWidget(QLabel(
             "实时记录（每条即写，切页/崩溃不丢）："
             f"{self._backend()._danmaku_dir() / '实时记录'}",
-            styleSheet="color: #888; font-size: 11px;"))
+            styleSheet="color: palette(placeholder-text); font-size: 11px;"))
 
         # 开关类
         sw_keep = QCheckBox("保持滚动（强制最新）")
@@ -1480,7 +1480,7 @@ class DouyinDanmakuPage(BasePage):
             self.app.toast("设置已保存", "success")
 
         save_btn = QPushButton("💾 保存")
-        save_btn.setStyleSheet("background: #2e7d32; color: white;")
+        save_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         save_btn.clicked.connect(save)
         v.addWidget(save_btn)
         common.bind_checkbox_toasts(dlg)
@@ -1573,11 +1573,11 @@ class DouyinDanmakuPage(BasePage):
         btn.setText(text)
         btn.setEnabled(enabled)
         if not enabled:
-            btn.setStyleSheet("background: #9e9e9e; color: white;")
+            btn.setStyleSheet("background: palette(mid); color: palette(window-text);")
         elif mode == "disconnect":
-            btn.setStyleSheet("background: #c62828; color: white;")
+            btn.setStyleSheet("background: palette(bright-text); color: palette(highlighted-text);")
         else:
-            btn.setStyleSheet("background: #2e7d32; color: white;")
+            btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
 
     _SHORT_LINK_RE = None    # 延迟编译（re 模块在方法内导入）
 
@@ -1685,9 +1685,9 @@ class DouyinDanmakuPage(BasePage):
             if n:
                 self.app.toast(f"已恢复今日弹幕记录 {n} 条", "info")
         self._set_action_btn("连接中…", "connect", enabled=False)
-        self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
+        self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
         self.status_label.setText(f"连接中 · 房间 {room}")
-        self.status_label.setStyleSheet("color: #eab308;")
+        self.status_label.setStyleSheet("color: palette(bright-text);")
         if not self._timer_running:
             self._timer_running = True
             self._tick()
@@ -1729,9 +1729,9 @@ class DouyinDanmakuPage(BasePage):
         self._auto_stopped = False
         self.like_label.setText("0")
         self._set_action_btn("连接", "connect")
-        self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
+        self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
         self.status_label.setText("已断开")
-        self.status_label.setStyleSheet("color: #888;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         if self.settings.get("auto_save_danmaku", True):
             self._auto_save_danmaku()
 
@@ -1869,7 +1869,7 @@ class DouyinDanmakuPage(BasePage):
         tip.setAlignment(Qt.AlignCenter)
         v.addWidget(tip)
         cont_btn = QPushButton("✅ 验证完成，继续连接")
-        cont_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px;")
+        cont_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 6px;")
         cont_btn.clicked.connect(lambda: self._continue_after_captcha(dlg))
         v.addWidget(cont_btn)
         dlg.show()
@@ -2293,7 +2293,7 @@ class DouyinDanmakuPage(BasePage):
         self._img_pending.clear()
         rows = [self._chat_row_html(e) for e in entries]
         if note:
-            note_col = "#64b5f6" if is_dark() else "#1a73e8"
+            note_col = theme_color("link")
             rows.insert(0, f'<div style="color:{note_col}; font-size:12px">{html.escape(note)}</div>')
         self.chat_gift_box.clear()
         if rows:
@@ -2474,7 +2474,7 @@ class DouyinDanmakuPage(BasePage):
 
     @staticmethod
     def _ts_html(ts):
-        return f'<span style="color:#6b7280">{ts}</span>'
+        return f'<span style="color:{theme_color("muted")}">{ts}</span>'
 
     def _nick_html(self, nick, color=None):
         """昵称：加粗 + 可点击链接（点击=按此人筛选全部弹幕及时间点）。
@@ -2482,7 +2482,7 @@ class DouyinDanmakuPage(BasePage):
         if not nick:
             return ""
         if color is None:
-            color = "#c6cbd6" if is_dark() else "#1f2328"
+            color = theme_color("text")
         href = html.escape(nick, quote=True)
         return (f'<a href="user:{href}" style="color:{color};'
                 f'text-decoration:none"><b>{html.escape(nick)}</b></a>：')
@@ -2515,7 +2515,7 @@ class DouyinDanmakuPage(BasePage):
                 if src:
                     parts.append(f'<img src="{html.escape(src)}" height="{eh}" alt="[{alt}]">')
                 else:
-                    parts.append(f'<span style="color:#9aa0a6">[{alt}]</span>')
+                    parts.append(f'<span style="color:{theme_color("muted")}">[{alt}]</span>')
             elif p.get("text"):
                 parts.append(html.escape(p["text"]))
         body = "".join(parts) or html.escape(m.get("content") or text or "")
@@ -2535,12 +2535,12 @@ class DouyinDanmakuPage(BasePage):
             if src:
                 icon_h = f'<img src="{html.escape(src)}" height="{self._emoji_h() + 2}" alt="{alt}"> '
             else:
-                icon_h = f'<span style="color:#9aa0a6">[{alt}]</span> '
+                icon_h = f'<span style="color:{theme_color("muted")}">[{alt}]</span> '
         body = html.escape(m.get("content") or "")
         d, c = m.get("_delta"), m.get("_combo")
         if d is not None and c is not None and d != c:
             body = f"{body}（+{d}）"
-        gift_col = "#ffd54f" if is_dark() else "#8a6d00"
+        gift_col = theme_color("warning")
         return (f'{self._ts_html(ts)} 🎁 {self._nick_html(m.get("nickname"))}'
                 f'{icon_h}<span style="color:{gift_col}; font-weight:bold">{body}</span>')
 
@@ -2554,26 +2554,26 @@ class DouyinDanmakuPage(BasePage):
                 if self._overlay:
                     self._overlay.set_clock(time.time() * 1000, running=True, external=False)
                     self._overlay.set_active(True)
-                self.status_dot.setStyleSheet("color: #4caf50; font-size: 14px;")
+                self.status_dot.setStyleSheet("color: palette(link-visited); font-size: 14px;")
                 self.status_label.setText(msg)
-                self.status_label.setStyleSheet("color: #4caf50;")
+                self.status_label.setStyleSheet("color: palette(link-visited);")
                 self._waiting_live = False
                 self._set_action_btn("断开", "disconnect")
                 self._setup_poll_timer()
             elif status == "connecting":
-                self.status_dot.setStyleSheet("color: #eab308; font-size: 14px;")
+                self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
                 self.status_label.setText(msg)
-                self.status_label.setStyleSheet("color: #eab308;")
+                self.status_label.setStyleSheet("color: palette(bright-text);")
             elif status == "captcha":
                 # 风控：弹出验证窗口 + 继续按钮，用户过完验证码点继续
-                self.status_dot.setStyleSheet("color: #ff9800; font-size: 14px;")
+                self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
                 self.status_label.setText(msg)
-                self.status_label.setStyleSheet("color: #ff9800;")
+                self.status_label.setStyleSheet("color: palette(bright-text);")
                 self._show_captcha_dialog()
             elif status == "not_live":
                 # 未开播：不硬建连接。轮询开着 → 进入自动重试等待（按钮明示当前状态）
-                self.status_dot.setStyleSheet("color: #ff9800; font-size: 14px;")
-                self.status_label.setStyleSheet("color: #ff9800;")
+                self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
+                self.status_label.setStyleSheet("color: palette(bright-text);")
                 was_waiting = self._waiting_live
                 self._waiting_live = True
                 self.connected = False
@@ -2598,9 +2598,9 @@ class DouyinDanmakuPage(BasePage):
                         self.app.toast("主播当前未开播，未建立连接", "info")
                 self._setup_poll_timer()
             elif status == "error":
-                self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
+                self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
                 self.status_label.setText(msg)
-                self.status_label.setStyleSheet("color: #ff5252;")
+                self.status_label.setStyleSheet("color: palette(bright-text);")
                 self.connected = False
                 self._waiting_live = bool(self.poll_btn.isChecked() and not self._manual_stop)
                 self._timer_running = False
@@ -2627,27 +2627,27 @@ class DouyinDanmakuPage(BasePage):
                 if self._manual_stop:
                     # 手动断开：不自动重连（UI 已由 _disconnect 复位，此处仅兜底）
                     self._waiting_live = False
-                    self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
+                    self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
                     self.status_label.setText(msg)
-                    self.status_label.setStyleSheet("color: #888;")
+                    self.status_label.setStyleSheet("color: palette(placeholder-text);")
                     self._set_action_btn("连接", "connect")
                 elif self.poll_btn.isChecked():
                     # 下播且轮询仍开着 → 恢复等待开播，下次开播自动接入
                     self._waiting_live = True
                     interval = max(15, int(self.settings.get("poll_interval", 60) or 60))
-                    self.status_dot.setStyleSheet("color: #ff9800; font-size: 14px;")
+                    self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
                     self.status_label.setText(
                         f"直播已结束 · 每{interval}秒检测开播中，开播后自动连接")
-                    self.status_label.setStyleSheet("color: #ff9800;")
+                    self.status_label.setStyleSheet("color: palette(bright-text);")
                     self._set_action_btn("立即重试", "connect")
                     self.app.toast(
                         f"直播已结束：每{interval}秒自动检测开播，开播后自动连接", "info")
                 else:
                     # 轮询关着：停在已断开，不自动重连
                     self._waiting_live = False
-                    self.status_dot.setStyleSheet("color: #ff5252; font-size: 14px;")
+                    self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
                     self.status_label.setText("直播已结束（点「🔁 轮询」可自动等待下次开播）")
-                    self.status_label.setStyleSheet("color: #888;")
+                    self.status_label.setStyleSheet("color: palette(placeholder-text);")
                     self._set_action_btn("连接", "connect")
                 self._setup_poll_timer()
         post_to_main(apply)
