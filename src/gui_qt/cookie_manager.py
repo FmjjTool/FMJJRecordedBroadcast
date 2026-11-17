@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 import auth
-from gui_qt.common import post_to_main
+from gui_qt.common import post_to_main, run_bg
 
 # (key, 中文名, 支持扫码, 支持浏览器登录)
 # 扫码：网易云/B站 原生接口，QQ音乐 走微信扫码换 musickey，
@@ -265,6 +265,8 @@ class CookieManagerDialog(QDialog):
         bottom.addWidget(self.pw_status, 1)
         self.openapi_btn = self._btn("腾讯文档 OpenAPI", self._open_openapi_credentials)
         bottom.addWidget(self.openapi_btn)
+        self.github_btn = self._btn("GitHub 账户", self._open_github_account)
+        bottom.addWidget(self.github_btn)
         self.pw_btn = self._btn("📦 下载浏览器组件", self._install_playwright, True)
         bottom.addWidget(self.pw_btn)
         layout.addLayout(bottom)
@@ -273,6 +275,9 @@ class CookieManagerDialog(QDialog):
 
     def _open_openapi_credentials(self):
         _TcdocOpenApiDialog(self).exec()
+
+    def _open_github_account(self):
+        _GitHubTokenDialog(self).exec()
 
     def _refresh_pw_status(self):
         """浏览器环境状态：Playwright 库 + 系统 Edge/Chrome + 本地采集引擎。"""
@@ -1677,3 +1682,115 @@ class _TcdocOpenApiDialog(QDialog):
             QMessageBox.warning(self, "清除失败", str(exc))
             return
         self._fill()
+
+
+class _GitHubTokenDialog(QDialog):
+    """GitHub Token 的统一管理入口。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("GitHub 账户")
+        self.setMinimumWidth(460)
+        from toolbox.webwiki import auth as github_auth, credentials as github_creds
+        self._auth = github_auth
+        self._creds = github_creds
+
+        v = QVBoxLayout(self)
+        hint = QLabel("Token 只保存在本机加密存储；仓库仍需保持私有。")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+        self.status = QLabel("")
+        self.status.setProperty("role", "caption")
+        self.status.setWordWrap(True)
+        v.addWidget(self.status)
+
+        self.token_edit = QLineEdit()
+        self.token_edit.setPlaceholderText("Personal Access Token（ghp_… / github_pat_…）")
+        self.token_edit.setEchoMode(QLineEdit.Password)
+        v.addWidget(self.token_edit)
+        show = QCheckBox("显示 Token")
+        show.toggled.connect(
+            lambda on: self.token_edit.setEchoMode(
+                QLineEdit.Normal if on else QLineEdit.Password))
+        v.addWidget(show)
+
+        row = QHBoxLayout()
+        detect = QPushButton("识别本机账户")
+        detect.clicked.connect(self._detect)
+        save = QPushButton("保存")
+        save.setProperty("variant", "primary")
+        save.clicked.connect(self._save)
+        clear = QPushButton("清除")
+        clear.setProperty("variant", "danger")
+        clear.clicked.connect(self._clear)
+        close = QPushButton("关闭")
+        close.clicked.connect(self.accept)
+        row.addWidget(detect)
+        row.addWidget(save)
+        row.addWidget(clear)
+        row.addStretch(1)
+        row.addWidget(close)
+        v.addLayout(row)
+        self._fill()
+
+    def _fill(self):
+        data = self._creds.load()
+        token = str(data.get("token") or "")
+        login = str(data.get("login") or "")
+        if token:
+            self.status.setText(f"已登录 @{login}" if login else "已登录")
+        else:
+            self.status.setText("未登录")
+        self.token_edit.clear()
+
+    def _detect(self):
+        self.status.setText("正在识别本机 Git 凭据…")
+
+        def done(result, err):
+            data = result or {}
+            if err:
+                self.status.setText(f"识别失败：{err}")
+                return
+            login = str(data.get("login") or "")
+            if data.get("token"):
+                self.token_edit.setText(str(data["token"]))
+                self.status.setText(
+                    f"检测到 @{login}，点保存完成登录" if login
+                    else "检测到本机账户，点保存完成登录")
+            elif login:
+                self.status.setText(f"检测到用户名 @{login}，但凭据不可用")
+            else:
+                self.status.setText("未检测到本机 GitHub 凭据")
+
+        run_bg(self._auth.detect_local_account, done)
+
+    def _save(self):
+        token = self.token_edit.text().strip()
+        if not token:
+            QMessageBox.warning(self, "缺少 Token", "请填写 Personal Access Token")
+            return
+        self.status.setText("正在验证 Token…")
+
+        def done(user, err):
+            if err:
+                self.status.setText(str(err))
+                return
+            login = str((user or {}).get("login") or "")
+            self.status.setText(f"已登录 @{login}" if login else "已登录")
+            self.token_edit.clear()
+
+        run_bg(lambda: self._auth.login_with_token(token), done)
+
+    def _clear(self):
+        if QMessageBox.question(
+                self, "清除", "确认清除本机保存的 GitHub 登录状态？",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            self._creds.clear()
+        except Exception as exc:
+            QMessageBox.warning(self, "清除失败", str(exc))
+            return
+        self._fill()
+        self.status.setText("已清除")

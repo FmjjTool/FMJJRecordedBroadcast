@@ -1,7 +1,7 @@
 """本地资料站：GitHub 拉取 webwiki / webwiki-api，读取监控数据重建并一键起站。
 
 页面只做服务启动器：
-- GitHub 设备码登录（扫码打开授权页 + 输入设备码），未登录时锁定拉取/部署
+- GitHub 登录状态由统一管理入口维护，未登录时锁定拉取/部署
 - 拉取代码 → 安装依赖 → 读取腾讯文档监控本地表格重建站点库 → 构建前端 → 启动站点
 - 启动后自动打开系统浏览器，也可随时点「打开网站」
 - 数据复用「腾讯文档监控」已同步的 tables.db，不重复联网拉取
@@ -15,7 +15,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -25,7 +25,7 @@ from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.tcdoc import config as tcdoc_cfg
 from toolbox.webwiki import (
-    analytics, auth, config as wiki_cfg, deploy, gitops,
+    analytics, config as wiki_cfg, credentials as wiki_creds, deploy, gitops,
     localimages, server,
 )
 
@@ -36,182 +36,6 @@ def _signed(value) -> str:
     except (TypeError, ValueError):
         return "-"
     return f"+{number}" if number > 0 else str(number)
-
-
-class _GitHubLoginDialog(QDialog):
-    """GitHub 登录：优先识别本机账户，也可手动填账户 + 密码 / Token。"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("登录 GitHub")
-        self.setModal(True)
-        self.setMinimumWidth(560)
-        self._closed = False
-        self._detected: dict = {}
-        self.user: dict = {}
-
-        v = QVBoxLayout(self)
-        v.setContentsMargins(18, 16, 18, 14)
-        v.setSpacing(9)
-        title = QLabel("GitHub 登录")
-        title.setStyleSheet("font-size: 17px; font-weight: bold;")
-        v.addWidget(title)
-        note = QLabel(
-            "私有项目需要先登录 GitHub 才能拉取代码与一键部署。\n"
-            "会先识别本机 Git 凭据里的 GitHub 账户；也可以手动填写账户和"
-            "密码 / Personal Access Token。")
-        note.setWordWrap(True)
-        note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(note)
-
-        # ---------- 本机账户识别 ----------
-        detect = QFrame()
-        detect.setObjectName("wikiLoginDetect")
-        detect.setStyleSheet(
-            "QFrame#wikiLoginDetect { background: palette(alternate-base);"
-            " border: 1px solid palette(shadow); border-radius: 9px; }")
-        box = QVBoxLayout(detect)
-        box.setContentsMargins(12, 10, 12, 10)
-        box.setSpacing(5)
-        self.detect_label = QLabel("正在识别本机 GitHub 账户…")
-        self.detect_label.setWordWrap(True)
-        box.addWidget(self.detect_label)
-        self.detect_source = QLabel("")
-        self.detect_source.setWordWrap(True)
-        self.detect_source.setStyleSheet(
-            "color: palette(placeholder-text); font-size: 10px;")
-        box.addWidget(self.detect_source)
-        self.use_local_btn = QPushButton("使用此账户登录")
-        self.use_local_btn.setMinimumHeight(28)
-        self.use_local_btn.setVisible(False)
-        self.use_local_btn.clicked.connect(self._use_local)
-        box.addWidget(self.use_local_btn, 0, Qt.AlignLeft)
-        v.addWidget(detect)
-
-        # ---------- 手动账户密码 ----------
-        form = QGridLayout()
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(7)
-        form.addWidget(QLabel("账户"), 0, 0)
-        self.account_edit = QLineEdit()
-        self.account_edit.setPlaceholderText("GitHub 用户名或邮箱")
-        form.addWidget(self.account_edit, 0, 1)
-        form.addWidget(QLabel("密码 / Token"), 1, 0)
-        self.password_edit = QLineEdit()
-        self.password_edit.setPlaceholderText("Personal Access Token（ghp_… / github_pat_…）")
-        self.password_edit.setEchoMode(QLineEdit.Password)
-        self.password_edit.returnPressed.connect(self._manual_login)
-        form.addWidget(self.password_edit, 1, 1)
-        form.setColumnStretch(1, 1)
-        v.addLayout(form)
-
-        self.show_password = QCheckBox("显示密码")
-        self.show_password.toggled.connect(
-            lambda checked: self.password_edit.setEchoMode(
-                QLineEdit.Normal if checked else QLineEdit.Password))
-        v.addWidget(self.show_password)
-        hint = QLabel(
-            "GitHub 已停用账户密码用于 Git / API 认证，密码处请填 Personal Access Token"
-            "（scope 需包含 repo）。Token 只保存在本机 config/webwiki_auth.json。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
-        v.addWidget(hint)
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(self.status_label)
-
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        bottom.addWidget(cancel)
-        self.login_btn = QPushButton("登录")
-        self.login_btn.setDefault(True)
-        self.login_btn.clicked.connect(self._manual_login)
-        bottom.addWidget(self.login_btn)
-        v.addLayout(bottom)
-
-        QTimer.singleShot(0, self._detect)
-
-    # ---------- 本机账户 ----------
-
-    def _detect(self):
-        if self._closed:
-            return
-        run_bg(auth.detect_local_account, self._on_detected)
-
-    def _on_detected(self, data, err):
-        if self._closed:
-            return
-        data = data or {}
-        self._detected = data
-        if err:
-            self.detect_label.setText(f"识别本机账户失败：{err}")
-            self.detect_label.setStyleSheet("color: palette(placeholder-text);")
-            self.status_label.setText("可以在下方手动填写账户和 Token。")
-            return
-        login = str(data.get("login") or "")
-        if data.get("token"):
-            self.detect_label.setText(f"检测到本机 GitHub 账户：@{login}")
-            self.detect_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
-            self.detect_source.setText(f"来源：{data.get('source') or '本机 Git 凭据'}")
-            self.use_local_btn.setVisible(True)
-            self.account_edit.setText(login)
-            self.status_label.setText("可直接使用本机账户，或在下方手动填写。")
-        elif login:
-            self.detect_label.setText(f"检测到本机 Git 用户名：{login}，但凭据不可用")
-            self.detect_source.setText(str(data.get("error") or ""))
-            self.account_edit.setText(login)
-            self.status_label.setText("请在下方填写 Personal Access Token 后登录。")
-        else:
-            self.detect_label.setText("未检测到本机 GitHub 凭据")
-            self.detect_source.setText("请在下方手动填写账户和密码 / Token。")
-            self.status_label.setText("")
-        self.layout().activate()
-        self.adjustSize()
-
-    def _use_local(self):
-        token = str(self._detected.get("token") or "")
-        if not token:
-            return
-        self.use_local_btn.setEnabled(False)
-        self.login_btn.setEnabled(False)
-        self.status_label.setText("正在使用本机 GitHub 账户登录…")
-        run_bg(lambda: auth.login_with_token(token), self._on_login)
-
-    # ---------- 手动登录 ----------
-
-    def _manual_login(self):
-        account = self.account_edit.text().strip()
-        password = self.password_edit.text().strip()
-        if not password and not account:
-            self.status_label.setText("请填写账户和密码 / Personal Access Token。")
-            return
-        self.login_btn.setEnabled(False)
-        self.use_local_btn.setEnabled(False)
-        self.status_label.setText("正在验证 GitHub 凭据…")
-        run_bg(lambda: auth.login_with_account(account, password), self._on_login)
-
-    def _on_login(self, user, err):
-        if self._closed:
-            return
-        self.login_btn.setEnabled(True)
-        self.use_local_btn.setEnabled(bool(self._detected.get("token")))
-        if err:
-            self.status_label.setText(str(err))
-            return
-        self.user = user or {}
-        self.accept()
-
-    def reject(self):
-        self._closed = True
-        super().reject()
-
-    def accept(self):
-        self._closed = True
-        super().accept()
 
 
 class LocalWikiPage(BasePage):
@@ -288,9 +112,8 @@ class LocalWikiPage(BasePage):
         sub.setObjectName("wikiMuted")
         sub.setWordWrap(True)
         left.addWidget(sub)
-        note = QLabel("🔒 私有项目：拉取代码与一键部署前必须先登录 GitHub。"
-                      "支持识别本机账户，也可用账户 + Token 登录；"
-                      "应用内登录只保护本工具入口，仓库本身请保持在 GitHub 私有。")
+        note = QLabel("🔒 私有项目：拉取代码与一键部署需要有效的 GitHub 登录状态；"
+                      "仓库本身请保持在 GitHub 私有。")
         note.setObjectName("wikiWarn")
         note.setWordWrap(True)
         left.addWidget(note)
@@ -329,10 +152,6 @@ class LocalWikiPage(BasePage):
         self.refresh_btn.setObjectName("wikiButton")
         self.refresh_btn.clicked.connect(self._refresh_status)
         row.addWidget(self.refresh_btn)
-        self.logout_btn = QPushButton("退出 GitHub")
-        self.logout_btn.setObjectName("wikiButton")
-        self.logout_btn.clicked.connect(self._logout)
-        row.addWidget(self.logout_btn)
         box.addLayout(row)
         return card
 
@@ -351,7 +170,6 @@ class LocalWikiPage(BasePage):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
         buttons = [
-            ("🔐 登录 GitHub", self._open_login),
             ("⬇ 拉取/更新代码", self._pull),
             ("📦 安装依赖", self._install_deps),
             ("🔄 重建站点数据", self._sync_docs),
@@ -361,7 +179,6 @@ class LocalWikiPage(BasePage):
             ("⏹ 停止服务", self._stop_service),
             ("📂 打开目录", self._open_dir),
         ]
-        self.login_btn = None
         self.pull_btn = None
         self.deps_btn = None
         self.sync_btn = None
@@ -377,7 +194,7 @@ class LocalWikiPage(BasePage):
             btn.clicked.connect(slot)
             grid.addWidget(btn, index // 3, index % 3)
             self._task_buttons.append(btn)
-            key = ("login", "pull", "deps", "sync", "build",
+            key = ("pull", "deps", "sync", "build",
                    "start", "open", "stop", "dir")[index]
             setattr(self, f"{key}_btn", btn)
         for column in range(3):
@@ -581,12 +398,9 @@ class LocalWikiPage(BasePage):
             "<code>webwiki-api</code>（后端/数据重建）拉到本机，"
             "读取「腾讯文档监控」已同步的本地表格重建站点库后启动，浏览器访问 "
             "<code>http://127.0.0.1:站点端口/</code>。</p>"
-            "<p><b>为什么要登录 GitHub</b><br>项目是私有的；未登录时"
+            "<p><b>GitHub 登录</b><br>项目是私有的；未登录时"
             "「拉取代码」和「一键部署」会锁定，避免被随意拉取。"
-            "登录会先识别本机 Git 凭据里保存的 GitHub 账户，可直接点"
-            "「使用此账户登录」；也可手动填账户 + Personal Access Token。"
-            "GitHub 已停用账户密码做 Git / API 认证，密码处必须填 Token。"
-            "Token 只存本机 <code>config/webwiki_auth.json</code>。</p>"
+            "登录状态由软件统一管理，本页不保存登录信息。</p>"
             "<p><b>数据来源</b><br>站点数据直接读取「腾讯文档监控 → 表格同步」"
             "已落地的本地 tables.db，每次重建都全量读取最新本地数据，"
             "不重新请求腾讯文档，也不需要版本号或强制全量。</p>"
@@ -596,7 +410,7 @@ class LocalWikiPage(BasePage):
             "<p><b>端口</b><br>只监听 127.0.0.1，不对外网开放。"
             "端口被占用时在「目录与端口」里换一个再启动。</p>"
             "<p><b>站点访问监控</b><br>查的是线上站点 mandisa.wiki 的后台统计"
-            "（内部统计接口，只需 /admin 的后台密码，不需要 Cookie）。"
+            "（内部统计接口，只需 /admin 的后台密码，不需要浏览器登录）。"
             "密码加密存在本机 <code>config/webwiki_analytics.json</code>，"
             "只掩码显示、不回显；后台改密后这里要同步改，旧密码立即失效。"
             "点「🔄 采集今日」会把当天数据按「日期 + 口径」写入 "
@@ -712,7 +526,7 @@ class LocalWikiPage(BasePage):
     def _refresh_status(self):
         if self._busy:
             return
-        data = wiki_cfg.load_auth()
+        data = wiki_creds.load()
         if data.get("token"):
             login = data.get("login") or "已登录"
             ok_color = theme.color("success")
@@ -768,7 +582,7 @@ class LocalWikiPage(BasePage):
             self.url_label.setText("")
 
     def _refresh_actions(self):
-        auth_ok = bool(wiki_cfg.token())
+        auth_ok = bool(wiki_creds.token())
         api_ok = (wiki_cfg.api_dir() / ".git").is_dir()
         web_ok = (wiki_cfg.web_dir() / ".git").is_dir()
         venv_ok = wiki_cfg.venv_python().is_file()
@@ -777,18 +591,15 @@ class LocalWikiPage(BasePage):
         running = self.service.running
         idle = not self._busy
 
-        if self.login_btn:
-            self.login_btn.setEnabled(idle and not auth_ok)
-            self.logout_btn.setEnabled(idle and auth_ok)
-            self.pull_btn.setEnabled(idle and auth_ok)
-            self.deps_btn.setEnabled(idle and api_ok and web_ok)
-            self.sync_btn.setEnabled(idle and api_ok and venv_ok)
-            self.build_btn.setEnabled(idle and web_ok and node_ok)
-            self.start_btn.setEnabled(idle and venv_ok and dist_ok and not running)
-            self.open_btn.setEnabled(idle and running)
-            self.stop_btn.setEnabled(idle and running)
-            self.dir_btn.setEnabled(idle)
-            self.deploy_btn.setEnabled(idle and auth_ok)
+        self.pull_btn.setEnabled(idle and auth_ok)
+        self.deps_btn.setEnabled(idle and api_ok and web_ok)
+        self.sync_btn.setEnabled(idle and api_ok and venv_ok)
+        self.build_btn.setEnabled(idle and web_ok and node_ok)
+        self.start_btn.setEnabled(idle and venv_ok and dist_ok and not running)
+        self.open_btn.setEnabled(idle and running)
+        self.stop_btn.setEnabled(idle and running)
+        self.dir_btn.setEnabled(idle)
+        self.deploy_btn.setEnabled(idle and auth_ok)
         # 站点统计控件独立于部署状态：只要有密码就能手动采集
         self.analytics_collect_btn.setEnabled(idle and self._analytics_has_password)
         self.analytics_pwd.setEnabled(idle)
@@ -851,33 +662,14 @@ class LocalWikiPage(BasePage):
 
         run_bg(work, done)
 
-    # ==================== 登录 ====================
-
-    def _open_login(self):
-        dialog = _GitHubLoginDialog(self)
-        if dialog.exec() == QDialog.Accepted:
-            self._log("GitHub 登录成功")
-            self._refresh_status()
-
-    def _logout(self):
-        if not wiki_cfg.token():
-            return
-        if QMessageBox.question(
-                self, "退出 GitHub",
-                "退出后「拉取代码」与「一键部署」会重新锁定，确定退出？") != QMessageBox.Yes:
-            return
-        auth.logout()
-        self._log("已退出 GitHub 登录")
-        self._refresh_status()
+    # ==================== 登录状态 ====================
 
     def _require_auth(self) -> bool:
-        if wiki_cfg.token():
+        if wiki_creds.token():
             return True
         QMessageBox.information(
             self, "需要登录 GitHub",
-            "这是私有项目：拉取代码与一键部署前必须先登录 GitHub。\n\n"
-            "点「🔐 登录 GitHub」：会优先识别本机 Git 凭据里的账户，"
-            "可直接使用；也可以手动填账户 + Personal Access Token。")
+            "这是私有项目：拉取代码与一键部署前需要有效的 GitHub 登录状态。")
         return False
 
     # ==================== 各按钮 ====================
@@ -885,7 +677,7 @@ class LocalWikiPage(BasePage):
     def _pull(self):
         if not self._require_auth():
             return
-        token = wiki_cfg.token()
+        token = wiki_creds.token()
         self._start_task("拉取代码", lambda log: gitops.pull_all(token, log))
 
     def _install_deps(self):
@@ -946,7 +738,7 @@ class LocalWikiPage(BasePage):
         if not self._require_auth():
             return
         root = wiki_cfg.root_dir()
-        token = wiki_cfg.token()
+        token = wiki_creds.token()
 
         def work(log):
             if self.service.running:

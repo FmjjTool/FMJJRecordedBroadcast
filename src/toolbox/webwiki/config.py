@@ -1,7 +1,8 @@
 """本地资料站 · 路径、配置、代理与解释器探测。
 
 仓库默认落在「统一导出目录/本地资料站」下（download/ 已在 .gitignore 里），
-GitHub 登录态单独放 config/webwiki_auth.json，不进导出目录、不进仓库。
+GitHub 登录态由 toolbox.webwiki.credentials 统一管理（新文件
+config/github_auth.json）；旧 config/webwiki_auth.json 仅作只读兼容。
 """
 
 from __future__ import annotations
@@ -125,7 +126,7 @@ def set_analytics_api(url: str) -> None:
     save_convert_config(cfg)
 
 
-# ==================== GitHub 登录态 ====================
+# ==================== GitHub 旧登录态（只读兼容） ====================
 
 def auth_path() -> Path:
     return get_config_dir() / "webwiki_auth.json"
@@ -137,31 +138,6 @@ def load_auth() -> dict:
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
-
-
-def token() -> str:
-    return str(load_auth().get("token") or "")
-
-
-def save_auth(access_token: str, user: dict | None = None) -> dict:
-    user = user or {}
-    data = {
-        "token": str(access_token or ""),
-        "login": str(user.get("login") or ""),
-        "name": str(user.get("name") or ""),
-        "avatar": str(user.get("avatar_url") or ""),
-    }
-    path = auth_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
-
-
-def clear_auth() -> None:
-    try:
-        auth_path().unlink()
-    except OSError:
-        pass
 
 
 # ==================== 系统代理 ====================

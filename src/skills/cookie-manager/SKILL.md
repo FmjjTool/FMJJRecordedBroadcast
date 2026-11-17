@@ -34,15 +34,15 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 | `src/auth.py` | `get_netease_cookie()` | 可能隐式迁移并写入/删除旧凭据，不作为真实环境纯读取入口 |
 | `src/auth.py` | `load_cookies()`、`get_netease_cookie_stored()` | `load_cookies()` 只用于必要的管理展示，不能绕过有效性规则；后者可能隐式迁移，禁止对真实环境执行 |
 | `src/toolbox/tcdoc/session.py` | `cookie_string()`、`apply_to_context()`、`save_state_snapshot()`、`clear()` | 读取/注入须确认不会回写真实状态；快照保存和清除只在隔离虚构环境验证 |
-| `src/toolbox/webwiki/auth.py`、`config.py`，`src/gui_qt/pages/localwiki.py` | GitHub 登录、Token 存储与独立登录窗口 | 当前仍有独立实现；后续涉及该链路时须迁入统一管理，不作为新增独立登录的范例 |
+| `src/toolbox/webwiki/credentials.py`、`auth.py`，`src/gui_qt/cookie_manager.py` | GitHub Token 统一凭据适配与 `_GitHubTokenDialog` | 已迁入统一管理；新文件 `config/github_auth.json`，旧 `config/webwiki_auth.json` 只读兼容；业务不得直接读写凭据文件 |
 
 现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`tcdoc`。引用现有入口时使用实际 key；新增 GitHub 等账户须补实际注册与凭据类型接口，不能假定已经存在。
 
 GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通过管理层适配获取授权，Token 保持 Token 类型，不拼成 Cookie 请求头。正常 Git 工具认证仍使用其原生凭据机制，不在同步命令、远端 URL 或日志里暴露 Token。
 
-**约定 9 的既有待清理项**（本次只记录，未改代码）：`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`shopping_page.py`、`test_page.py`、`video_comments.py`、`localwiki.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。`quark_backup.py`、`quark_download.py`、`netease.py`、`tcdoc.py` 与 `bili_upload_dialog.py` 已在 2026-11-17 的凭据红线批次清理；`tcdoc_credentials.py` 已删除，OpenAPI 三个 ID 改由统一管理对话框维护。
+**约定 9 的既有待清理项**（本次只记录，未改代码）：`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`shopping_page.py`、`test_page.py`、`video_comments.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。`quark_backup.py`、`quark_download.py`、`netease.py`、`tcdoc.py`、`localwiki.py` 与 `bili_upload_dialog.py` 已在 2026-11-17 的凭据红线批次清理；`tcdoc_credentials.py` 已删除，OpenAPI 三个 ID 改由统一管理对话框维护。
 
-当前还需迁移/核对的具体入口：GitHub 的独立 Token 存储与登录 UI；腾讯文档 `has_login()` 仍接受快照文件存在作为登录条件；网易云 `get_netease_cookie()` 在有效凭据为空时仍会尝试旧文件迁移。涉及这些链路时，须消除绕过关闭/清除状态的路径并验证，不能直接沿用它们证明统一规则已满足。
+当前还需迁移/核对的具体入口：腾讯文档 `has_login()` 仍接受快照文件存在作为登录条件。涉及该链路时，须消除绕过关闭/清除状态的路径并验证，不能直接沿用它证明统一规则已满足。
 
 ## 浏览器快照与旧格式迁移
 

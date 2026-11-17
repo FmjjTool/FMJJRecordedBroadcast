@@ -4,6 +4,7 @@
 1. 识别本机已保存的 GitHub 账户（Git Credential Manager / ~/.git-credentials）；
 2. 手动填「账户 + 密码 / Personal Access Token」。
 
+登录态由 credentials 适配层统一保存；旧 webwiki_auth.json 只读兼容。
 GitHub 自 2021 年起已停用账户密码做 Git / API 认证，密码框实际需要填
 Personal Access Token（ghp_… / github_pat_…）；如果填的是账户登录密码，
 GitHub 会返回 401，界面会给出明确提示。
@@ -18,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config
+from . import config, credentials
 
 USER_URL = "https://api.github.com/user"
 TOKEN_PREFIXES = ("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_")
@@ -67,7 +68,7 @@ def fetch_user(token_value: str) -> dict:
                     "GitHub 拒绝了这组凭据。\n\n"
                     "GitHub 已停用账户密码登录，密码处必须填写 "
                     "Personal Access Token（ghp_… / github_pat_…）。\n"
-                    "也可以直接使用上方识别到的本机 GitHub 账户。")
+                    "也可以直接使用本机 Git 凭据中的账户。")
             resp.raise_for_status()
             data = resp.json()
     except AuthError:
@@ -83,7 +84,7 @@ def login_with_token(token_value: str) -> dict:
     """用 Token 登录并保存到本机。"""
     token_value = _clean_token(token_value)
     user = fetch_user(token_value)
-    config.save_auth(token_value, user)
+    credentials.save(token_value, user)
     return user
 
 
@@ -105,9 +106,9 @@ def login_with_account(account: str, password: str) -> dict:
         raise AuthError(
             "GitHub 已停用账户密码登录，密码处必须填写 "
             "Personal Access Token（ghp_… / github_pat_…）。\n"
-            "如果本机已保存 GitHub 凭据，可直接点上方「使用此账户登录」。")
+            "如果本机已保存 GitHub 凭据，可直接使用识别到的本机账户。")
     user = fetch_user(token_value)
-    config.save_auth(token_value, user)
+    credentials.save(token_value, user)
     return user
 
 
@@ -201,4 +202,4 @@ def detect_local_account() -> dict:
 
 
 def logout() -> None:
-    config.clear_auth()
+    credentials.clear()
