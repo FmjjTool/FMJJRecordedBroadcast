@@ -375,10 +375,10 @@ def _file_is_preview(path: str, expected_seconds: int) -> bool:
 def _try_netease(song: SongInfo, out_dir: str) -> Optional[DownloadResult]:
     """网易云兜底：用已存 Cookie 搜索下载（Cookie 在则可用，无则跳过）。"""
     try:
-        from auth import get_netease_cookie, sync_netease_to_legacy
-        from netease import CookieManager, COOKIE_FILE, MusicDownloader, search_music
+        from auth import get_netease_cookie
+        from netease import MusicDownloader, parse_cookie_string, search_music
         content = get_netease_cookie()
-        cookies = CookieManager(COOKIE_FILE).parse_cookie_string(content) if content else {}
+        cookies = parse_cookie_string(content) if content else {}
         keyword = f"{song.song_name} {song.singer}".strip()
         results = search_music(keyword, cookies, limit=20) or []
     except Exception:
@@ -394,8 +394,7 @@ def _try_netease(song: SongInfo, out_dir: str) -> Optional[DownloadResult]:
     if not best:
         return None
     try:
-        sync_netease_to_legacy()
-        dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
+        dl = MusicDownloader(download_dir=out_dir, cookie_string=content)
         r = dl.download_music_file(int(best["id"]), "exhigh")
     except Exception:
         return None

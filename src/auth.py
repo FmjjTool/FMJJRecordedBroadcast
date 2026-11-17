@@ -248,63 +248,17 @@ def clear_cookie(platform: str):
     cookie_times.pop(platform, None)
 
     save_cookies(all_cookies, cookie_times)
-    if platform == "netease":
-        # 同时删旧 netease/cookie.txt，否则下次读取会被迁移逻辑"复活"成刚登录
-        legacy = _netease_legacy_file()
-        try:
-            if os.path.exists(legacy):
-                os.remove(legacy)
-        except OSError:
-            pass
-
-
-def _netease_legacy_file() -> str:
-    """网易云旧 cookie 文件路径（netease/cookie.txt）。"""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "netease", "cookie.txt")
-
-
-def _netease_legacy_migrate() -> str:
-    """旧 netease/cookie.txt 一次性迁移（统一存储从未记录过 netease 才迁）。
-    TTL 过期、用户清除都不会从旧文件复活。"""
-    if "netease" in _load_cookie_times() or "netease" in load_cookies():
-        return ""
-    legacy = _netease_legacy_file()
-    try:
-        if os.path.exists(legacy):
-            content = open(legacy, encoding="utf-8").read().strip()
-            if content:
-                set_cookie("netease", content)  # 迁移到统一存储
-                os.remove(legacy)               # 迁移是一次性的，删掉旧文件
-                return content
-    except Exception:
-        pass
-    return ""
 
 
 def get_netease_cookie() -> str:
-    """获取网易云 cookie（受总开关/TTL 控制，采集使用）。
-    仅当统一存储从未记录过 netease 时，做一次性迁移（旧 netease/cookie.txt）。"""
-    return get_cookie("netease") or _netease_legacy_migrate()
+    """获取网易云 cookie（受总开关/TTL 控制，采集使用）。"""
+    return get_cookie("netease")
 
 
 def get_netease_cookie_stored() -> str:
     """已存储的网易云 Cookie（不看总开关、不校验过期）。
     仅供登录状态展示/用户名探测使用；采集请走 get_netease_cookie()。"""
-    return load_cookies().get("netease", "") or _netease_legacy_migrate()
-
-
-def sync_netease_to_legacy():
-    """把统一存储里的网易云 cookie 写回旧 netease/cookie.txt（供 MusicDownloader 等旧读取方使用）。"""
-    cookie = get_cookie("netease")
-    if not cookie:
-        return
-    legacy = _netease_legacy_file()
-    try:
-        os.makedirs(os.path.dirname(legacy), exist_ok=True)
-        with open(legacy, "w", encoding="utf-8") as f:
-            f.write(cookie)
-    except Exception:
-        pass
+    return load_cookies().get("netease", "")
 
 
 def get_cookie_age(platform: str) -> str:

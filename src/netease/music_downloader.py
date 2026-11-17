@@ -23,7 +23,7 @@ from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, APIC
 from mutagen.mp4 import MP4
 
 from .music_api import NeteaseAPI, APIException, HTTPClient
-from .cookie_manager import CookieManager
+from .cookie_manager import CookieManager, parse_cookie_string
 
 
 class AudioFormat(Enum):
@@ -71,21 +71,23 @@ class DownloadException(Exception):
 class MusicDownloader:
     """音乐下载器主类"""
     
-    def __init__(self, download_dir: str = "download", max_concurrent: int = 3, cookie_file: str = None):
+    def __init__(self, download_dir: str = "download", max_concurrent: int = 3,
+                 cookie_file: str = None, cookie_string: str = None):
         """
         初始化音乐下载器
-        
+
         Args:
             download_dir: 下载目录
             max_concurrent: 最大并发下载数
-            cookie_file: Cookie 文件路径（默认 netease/cookie.txt）
+            cookie_file: 旧 Cookie 文件路径（仅显式传入时读取）
+            cookie_string: 内存中的 Cookie 字符串（优先于 cookie_file）
         """
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(exist_ok=True)
         self.max_concurrent = max_concurrent
-        
-        # 初始化依赖
-        self.cookie_manager = CookieManager(cookie_file) if cookie_file else CookieManager()
+
+        self._cookie_string = cookie_string if cookie_string is not None else ""
+        self.cookie_manager = CookieManager(cookie_file) if cookie_file and cookie_string is None else None
         self.api = NeteaseAPI()
         
         # 支持的文件格式
@@ -165,8 +167,13 @@ class MusicDownloader:
     def _get_music_info_once(self, music_id: int, quality: str) -> MusicInfo:
         """获取音乐详细信息（单次尝试，不降级）。"""
         try:
-            # 获取cookies
-            cookies = self.cookie_manager.parse_cookies()
+            # 获取cookies：优先使用内存凭据，旧文件只在显式传入 cookie_file 时读取
+            if self._cookie_string:
+                cookies = parse_cookie_string(self._cookie_string)
+            elif self.cookie_manager is not None:
+                cookies = self.cookie_manager.parse_cookies()
+            else:
+                cookies = {}
             
             # 获取音乐URL信息
             url_result = self.api.get_song_url(music_id, quality, cookies)

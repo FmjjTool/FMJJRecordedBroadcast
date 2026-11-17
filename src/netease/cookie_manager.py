@@ -18,6 +18,31 @@ class CookieException(Exception):
     pass
 
 
+def parse_cookie_string(cookie_string: str) -> Dict[str, str]:
+    """解析 Cookie 字符串为字典（纯内存，不读写任何文件）。"""
+    if not cookie_string or not cookie_string.strip():
+        return {}
+
+    text = cookie_string.strip()
+    if ';' in text:
+        pairs = text.split(';')
+    elif '\n' in text:
+        pairs = text.split('\n')
+    else:
+        pairs = [text]
+
+    cookies = {}
+    for pair in pairs:
+        pair = pair.strip()
+        if not pair or '=' not in pair:
+            continue
+        key, value = pair.split('=', 1)
+        key, value = key.strip(), value.strip()
+        if key and value:
+            cookies[key] = value
+    return cookies
+
+
 class CookieManager:
     """Cookie管理器主类"""
     
@@ -41,14 +66,7 @@ class CookieManager:
             'WNMCID',       # 客户端标识
         }
         
-        # 确保cookie文件存在
-        self._ensure_cookie_file_exists()
     
-    def _ensure_cookie_file_exists(self) -> None:
-        """确保Cookie文件存在"""
-        if not self.cookie_file.exists():
-            self.cookie_file.touch()
-            self.logger.info(f"创建Cookie文件: {self.cookie_file}")
     
     def read_cookie(self) -> str:
         """读取Cookie文件内容
@@ -100,51 +118,8 @@ class CookieManager:
             raise CookieException(f"解析Cookie失败: {e}")
     
     def parse_cookie_string(self, cookie_string: str) -> Dict[str, str]:
-        """解析Cookie字符串
-        
-        Args:
-            cookie_string: Cookie字符串
-            
-        Returns:
-            Cookie字典
-        """
-        if not cookie_string or not cookie_string.strip():
-            return {}
-        
-        cookies = {}
-        
-        try:
-            # 处理多种Cookie格式
-            cookie_string = cookie_string.strip()
-            
-            # 分割Cookie项
-            cookie_pairs = []
-            if ';' in cookie_string:
-                cookie_pairs = cookie_string.split(';')
-            elif '\n' in cookie_string:
-                cookie_pairs = cookie_string.split('\n')
-            else:
-                cookie_pairs = [cookie_string]
-            
-            for pair in cookie_pairs:
-                pair = pair.strip()
-                if not pair or '=' not in pair:
-                    continue
-                
-                # 分割键值对
-                key, value = pair.split('=', 1)
-                key = key.strip()
-                value = value.strip()
-                
-                if key and value:
-                    cookies[key] = value
-            
-            self.logger.debug(f"解析得到 {len(cookies)} 个Cookie项")
-            return cookies
-            
-        except Exception as e:
-            self.logger.error(f"解析Cookie字符串失败: {e}")
-            return {}
+        """解析Cookie字符串（纯内存，不访问文件）。"""
+        return parse_cookie_string(cookie_string)
     
     def is_cookie_valid(self) -> bool:
         """检查Cookie是否有效
@@ -212,25 +187,6 @@ class CookieManager:
                 'file_exists': False,
                 'is_valid': False
             }
-    
-    
-    
-    def clear_cookie(self) -> bool:
-        """清空Cookie文件
-        
-        Returns:
-            是否清空成功
-        """
-        try:
-            if self.cookie_file.exists():
-                self.cookie_file.write_text("", encoding='utf-8')
-                self.logger.info("Cookie文件已清空")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"清空Cookie文件失败: {e}")
-            return False
-    
     
     
     

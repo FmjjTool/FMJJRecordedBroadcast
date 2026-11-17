@@ -616,8 +616,6 @@ class CookieManagerDialog(QDialog):
             return
         try:
             auth.set_cookie(plat, val.strip())
-            if plat == "netease":
-                auth.sync_netease_to_legacy()
             self._whoami_cache.pop(plat, None)
             self._reload()
             self._notify()
@@ -1497,7 +1495,6 @@ class CookieManagerDialog(QDialog):
                     if code == 803:
                         cookie_str = f"MUSIC_U={cookies.get('MUSIC_U', '')};os=pc;appver=8.9.70;"
                         auth.set_cookie("netease", cookie_str)
-                        auth.sync_netease_to_legacy()
                         self._whoami_cache.pop("netease", None)
                         post_to_main(self._on_qr_success, dlg, "网易云登录成功，Cookie 已保存")
                         return

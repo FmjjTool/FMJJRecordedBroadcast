@@ -137,13 +137,13 @@ class NeteasePage(BasePage):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.addWidget(self._build_func())
 
-    # ===================== 公共：Cookie =====================
+    # ===================== 公共：登录态 =====================
     def _cookies(self):
         from auth import get_netease_cookie
-        from netease import CookieManager, COOKIE_FILE
+        from netease import parse_cookie_string
         try:
             content = get_netease_cookie()
-            return CookieManager(COOKIE_FILE).parse_cookie_string(content) if content else {}
+            return parse_cookie_string(content) if content else {}
         except Exception:
             return {}
 
@@ -157,20 +157,19 @@ class NeteasePage(BasePage):
         "<p>· <b>💿 专辑解析（仅网易云）</b>：输入专辑链接/ID 或专辑名</p>"
         "<p>· <b>🔄 自动换源（默认开启）</b>：下载失败或只拿到试听片段时，"
         "自动到其他平台搜同名曲继续下载，顺序：酷我 → 酷狗 → 酷狗概念版 → 网易云"
-        "（酷狗概念版需扫码登录；网易云换源需已在 Cookie 管理中登录）</p>"
+        "（酷狗概念版需扫码登录；网易云换源需已登录）</p>"
         "<p><b>平台说明</b></p>"
-        "<p>· 网易云音乐：全音质下载，VIP 歌曲需登录 Cookie</p>"
+        "<p>· 网易云音乐：全音质下载，VIP 歌曲需登录</p>"
         "<p>· 酷狗音乐：免费歌 128k 直链（游客上限即 128k）；VIP 付费歌游客无法下载</p>"
         "<p>· 酷我音乐：免费歌 320k MP3 高音质直链，可选 128k WMA；VIP 歌仅 11 秒试听</p>"
         "<p>· 5sing音乐：站内原唱/翻唱/伴奏 192k/128k 全曲可下</p>"
         "<p>· QQ音乐：官方直链接口已关闭，下载靠自动换源到其他平台</p>"
         "<p>· <b>酷狗概念版</b>：扫码登录后可下 128k/320k/FLAC；"
-        "在 Cookie 管理扫码登录后点「🎁 领VIP」可免费领取会员（+3小时/次，每日 8 次），"
+        "登录后点「🎁 领VIP」可免费领取会员（+3小时/次，每日 8 次），"
         "VIP 曲目即可下载</p>"
-        "<p style='color:#888'>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
-        "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录 Cookie 下载。"
-        "网易云 Cookie 文件：netease/cookie.txt；也可左侧底部「🍪 管理 Cookie → 网易云」"
-        "扫码登录或手动输入。下载目录：「导出」处可选默认位置（全局设置的导出目录，"
+        "<p>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
+        "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录账号下载。"
+        "下载目录：「导出」处可选默认位置（全局设置的导出目录，"
         "默认 download/歌曲文件）或固定位置（自选文件夹，音乐解密输出同目录）</p>"
     )
 
@@ -227,7 +226,7 @@ class NeteasePage(BasePage):
         self.fallback_check.toggled.connect(self._save_fallback)
         self.fallback_check.setToolTip(
             "下载失败或仅试听时，自动到其他平台找同名曲：酷我→酷狗→酷狗概念版→网易云\n"
-            "（酷狗概念版需扫码登录；网易云需已在 Cookie 管理中登录）")
+            "（酷狗概念版需扫码登录；网易云需已登录）")
         bottom.addWidget(self.fallback_check)
         bottom.addWidget(QLabel("音质:"))
         self.quality_menu = QComboBox()
@@ -903,12 +902,11 @@ class NeteasePage(BasePage):
         self.status_label.setText("⏳ 下载中...")
 
         def work():
-            from netease import MusicDownloader, COOKIE_FILE
+            from netease import MusicDownloader
             from toolbox.config_manager import get_music_download_dir
-            from auth import sync_netease_to_legacy
-            sync_netease_to_legacy()
+            from auth import get_netease_cookie
             out_dir = str(get_music_download_dir())
-            dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
+            dl = MusicDownloader(download_dir=out_dir, cookie_string=get_netease_cookie())
             try:
                 r = dl.download_music_file(sid, quality)
                 if r and r.success:
@@ -1032,11 +1030,11 @@ class NeteasePage(BasePage):
 
         def work():
             from concurrent.futures import ThreadPoolExecutor, as_completed
-            from netease import MusicDownloader, COOKIE_FILE, album_detail
+            from netease import MusicDownloader, album_detail
             from toolbox.config_manager import get_music_download_dir
-            from auth import sync_netease_to_legacy
-            sync_netease_to_legacy()
+            from auth import get_netease_cookie
             out_dir = str(get_music_download_dir())
+            cookie_string = get_netease_cookie()
             jobs = []  # (song_id, 显示名)
             fail = 0
             first_err = ""
@@ -1063,7 +1061,7 @@ class NeteasePage(BasePage):
                 sid, name = job
                 card.handle_event("start", name)
                 try:
-                    dl = MusicDownloader(download_dir=out_dir, cookie_file=COOKIE_FILE)
+                    dl = MusicDownloader(download_dir=out_dir, cookie_string=cookie_string)
                     r = dl.download_music_file(sid, quality)
                     okf = bool(r and r.success)
                     errm = (r.error_message if r else "失败")
