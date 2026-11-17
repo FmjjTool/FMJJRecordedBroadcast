@@ -248,6 +248,26 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 主题切换：图标会把颜色烘进像素，必须按第六节第 3 条重新生成。页面维护 `(widget, name, role)` 注册表，在 `on_theme_changed()` 里统一重设；参考实现 `src/gui_qt/pages/livestream_summary.py` 的 `_register_icon()` / `_refresh_icons()` / `_icon_color()`。
 
+### 4.5 历史 emoji 的自动转换（运行时）
+
+页面里既有的前导 emoji 由 `src/gui_qt/emoji_icons.py` 在运行期统一转换，不需要逐页改源码；`src/gui_qt/__init__.py` 导入包时自动安装。
+
+| 控件 | 行为 |
+| --- | --- |
+| `QPushButton` / `QToolButton` | 前导 emoji 转 `setIcon`，文案同步去 emoji；主按钮（`variant=primary`）用 `highlighted-text`，其余 `button-text` |
+| `QLabel` | 前导 emoji 转为文字左侧 14px 小图标（子 QLabel 绘制，不改文字颜色与字体）；`role` 为 caption/muted/subtitle 或 `objectName=navigationGroup` 时用 `placeholder-text` |
+| `QCheckBox` / `QRadioButton` | 只去前导 emoji（控件本身不支持图标） |
+| `QComboBox` / `QTabWidget` | 条目 / 页签 emoji 转对应图标（`link` 色） |
+| `ToolSectionCard` | 标题 emoji 自动转 `icon=`，无需页面传参 |
+
+约束与注意事项：
+
+1. 只处理**文本最前面的一个** emoji；句中 emoji 视为正文，保留不转换。
+2. 未登记的 emoji 保持原样。新增 emoji 必须在 `_EMOJI_ICONS` 里登记，且只能指向 `line_icon()` 已存在的图标名。
+3. 显式调用 `setIcon()` 会关闭该控件的自动图标（导航栏等自定义图标不会被运行时转换覆盖）。
+4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。
+5. 新增功能仍按 4.4 显式写图标（`icon=` / `setIcon`），不要把新代码依赖在这层兼容转换上。
+
 ## 五、组件写法
 
 优先用语义属性 + 全局 QSS，不要把样式写成一页一套。
@@ -308,6 +328,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - [ ] 自绘控件每次取 `current_palette()`，并实现了 `on_theme_changed()`
 - [ ] 预生成图标在切主题后重新生成
 - [ ] 结构性图标统一用 `line_icon` 线形图标，未用 emoji / 图片 / 图标字体充当
+- [ ] 依赖 4.5 自动转换时，前导 emoji 已在 `_EMOJI_ICONS` 登记且指向已存在图标
 - [ ] 图标颜色取自主题角色（导航/标题 link、按钮 button-text、主按钮 highlighted-text），未传 hex
 - [ ] 页面内 `setStyleSheet` 选择器带 `objectName`
 - [ ] 仅图标按钮有 tooltip
