@@ -23,6 +23,12 @@ from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect
 from toolbox.tracker_diff import diff_items, num_delta
 
+
+def _status_style(name, size=None):
+    color = theme.color(name)
+    return f"color: {color};" + (f" font-size: {size}px;" if size else "")
+
+
 # 指标行定义：(显示名, [字段名优先级列表])
 METRICS = [
     ("昵称", ["name"]),
@@ -362,12 +368,12 @@ class TrackerPage(BasePage):
         name_lbl.setStyleSheet("font-weight: bold;")
         left.addWidget(name_lbl)
         plat_lbl = QLabel(plat_name)
-        plat_lbl.setStyleSheet("color: #1976d2; font-size: 11px;")
+        plat_lbl.setStyleSheet(_status_style("link", 11))
         left.addWidget(plat_lbl)
         head.addLayout(left)
         head.addStretch(1)
         status = QLabel("")
-        status.setStyleSheet("color: #888;")
+        status.setStyleSheet(_status_style("muted"))
         head.addWidget(status)
         export_btn = QPushButton("📷 导出")
         export_btn.setFixedSize(60, 26)
@@ -571,7 +577,7 @@ class TrackerPage(BasePage):
         v.setContentsMargins(0, 4, 0, 0)
         head = QHBoxLayout()
         status = QLabel("")
-        status.setStyleSheet("color: #888; font-size: 12px;")
+        status.setStyleSheet(_status_style("muted", 12))
         head.addWidget(status)
         head.addStretch(1)
         fetch_btn = None
@@ -589,7 +595,7 @@ class TrackerPage(BasePage):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         v.addWidget(table, 1)
         hint = QLabel("")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet(_status_style("muted", 11))
         v.addWidget(hint)
 
         def _fill(rows, extra=""):
@@ -603,12 +609,12 @@ class TrackerPage(BasePage):
             suffix = f" · {extra}" if extra else ""
             if rows:
                 status.setText(f"共 {len(rows)} 场（最新在前）{suffix}")
-                status.setStyleSheet("color: #4caf50; font-size: 12px;")
+                status.setStyleSheet(_status_style("success", 12))
                 hint.setText("直播历史来自抖音「直播动态」公开接口（按房间号去重合并）；"
                              "官方回放为 App 专属，网页端不提供")
             else:
                 status.setText(f"暂无直播历史{suffix}")
-                status.setStyleSheet("color: #ff9800; font-size: 12px;")
+                status.setStyleSheet(_status_style("warning", 12))
                 hint.setText("该账号在抖音「直播动态」中没有可读取的场次"
                              "（抖音仅保留最近一年；未开播或已隐藏的账号为空）")
             if on_count:
@@ -621,7 +627,7 @@ class TrackerPage(BasePage):
             fetch_btn.setEnabled(False)
             fetch_btn.setText("⏳ 获取中...")
             status.setText("正在获取直播历史...")
-            status.setStyleSheet("color: #eab308; font-size: 12px;")
+            status.setStyleSheet(_status_style("warning", 12))
 
             def done(result, err):
                 fetch_btn.setEnabled(True)
@@ -629,7 +635,7 @@ class TrackerPage(BasePage):
                 if err or (result or {}).get("error"):
                     msg = err or (result or {}).get("error") or "未知错误"
                     status.setText(f"获取失败：{msg}")
-                    status.setStyleSheet("color: #ff5252; font-size: 12px;")
+                    status.setStyleSheet(_status_style("danger", 12))
                     return
                 rows = load_live_history(acc.get("name", ""))
                 _fill(rows, f"本次新增 {result.get('new', 0)} 场")
@@ -664,7 +670,7 @@ class TrackerPage(BasePage):
             return
         card["btn"].setEnabled(False)
         card["status"].setText("⏳ 采集中...")
-        card["status"].setStyleSheet("color: #eab308;")
+        card["status"].setStyleSheet(_status_style("warning"))
 
         def work():
             from tracker.accounts import collect_account, save_history, parse_url
@@ -684,7 +690,7 @@ class TrackerPage(BasePage):
                 card["btn"].setEnabled(True)
                 if err:
                     card["status"].setText(f"❌ {err}")
-                    card["status"].setStyleSheet("color: #ff5252;")
+                    card["status"].setStyleSheet(_status_style("danger"))
                 else:
                     record, live = result
                     from tracker.accounts import load_history
@@ -702,7 +708,7 @@ class TrackerPage(BasePage):
                         card["status"].setText(f"✅ 完成 · 🎥{live['total']}场")
                         card["status"].setToolTip(
                             f"直播历史已缓存 {live['total']} 场（本次新增 {live['new']} 场，按房间号去重）")
-                    card["status"].setStyleSheet("color: #4caf50;")
+                    card["status"].setStyleSheet(_status_style("success"))
             if on_done:
                 on_done()
 
@@ -834,7 +840,7 @@ class TrackerPage(BasePage):
         card = self._card_for(acc)
         if card:
             card["status"].setText("🎥 获取直播历史...")
-            card["status"].setStyleSheet("color: #eab308;")
+            card["status"].setStyleSheet(_status_style("warning"))
             card["status"].setToolTip("正在抓取抖音「直播动态」公开接口")
 
         def work():
@@ -846,25 +852,26 @@ class TrackerPage(BasePage):
             if card:
                 if err:
                     card["status"].setText("🎥 ❌")
-                    card["status"].setStyleSheet("color: #ff5252;")
+                    card["status"].setStyleSheet(_status_style("danger"))
                     card["status"].setToolTip(f"直播历史获取失败：{err}")
                 elif (result or {}).get("error"):
                     card["status"].setText("🎥 ⚠")
-                    card["status"].setStyleSheet("color: #ff9800;")
+                    card["status"].setStyleSheet(_status_style("warning"))
                     card["status"].setToolTip(f"直播历史获取失败：{result['error']}")
                 else:
                     total = int(result.get("total") or 0)
                     cached = int(result.get("cached") or 0)
                     if total:
                         card["status"].setText(f"🎥 {total} 场")
-                        card["status"].setStyleSheet("color: #4caf50;")
+                        card["status"].setStyleSheet(_status_style("success"))
                         card["status"].setToolTip(
                             f"直播历史已缓存 {cached} 场"
                             f"（本次接口 {total} 场，新增 {result.get('new', 0)} 场，按房间号去重）")
                     else:
                         # 接口只保留最近一年；超期场次仍可从本地历史缓存查看
                         card["status"].setText(f"🎥 缓存 {cached} 场" if cached else "🎥 0 场")
-                        card["status"].setStyleSheet("color: #4caf50;" if cached else "color: #888;")
+                        card["status"].setStyleSheet(
+                            _status_style("success" if cached else "muted"))
                         card["status"].setToolTip(
                             f"抖音接口当前返回 0 场（直播动态仅保留最近一年）；"
                             f"本地已缓存 {cached} 场历史" if cached else
@@ -1007,7 +1014,7 @@ class TrackerPage(BasePage):
         form.addRow("链接", url_ed)
         v.addLayout(form)
         plat_lbl = QLabel(f"平台：{PLATFORM_NAMES.get(parse_url(acc.get('url', ''))[0], '?')}")
-        plat_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        plat_lbl.setStyleSheet(_status_style("muted", 11))
 
         def _sync_plat(_t=""):
             p, _ = parse_url(url_ed.text().strip())
@@ -1114,7 +1121,7 @@ class TrackerPage(BasePage):
         bar.addWidget(self._acc_save_btn)
         bar.addStretch(1)
         hint = QLabel("修改组号后点此一次性保存")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet(_status_style("muted", 11))
         bar.addWidget(hint)
         self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
         self.acc_list_layout.addLayout(bar)
@@ -1163,7 +1170,8 @@ class TrackerPage(BasePage):
                 h.setContentsMargins(8, 4, 8, 4)
                 gid_lbl = QLabel(gid)
                 gid_lbl.setFixedWidth(44)
-                gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2;")
+                gid_lbl.setStyleSheet(
+                    f"font-weight: bold; color: {theme.color('link')};")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
                 up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")

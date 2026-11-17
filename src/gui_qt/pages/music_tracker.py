@@ -24,6 +24,12 @@ from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.tracker_diff import diff_items, num_delta
 
+
+def _status_style(name, size=None):
+    color = theme.color(name)
+    return f"color: {color};" + (f" font-size: {size}px;" if size else "")
+
+
 # 指标行定义：(显示名, [字段名优先级列表])
 METRICS = [
     ("昵称", ["name"]),
@@ -368,12 +374,12 @@ class MusicTrackerPage(BasePage):
         name_lbl.setStyleSheet("font-weight: bold;")
         left.addWidget(name_lbl)
         plat_lbl = QLabel(plat_name)
-        plat_lbl.setStyleSheet("color: #1976d2; font-size: 11px;")
+        plat_lbl.setStyleSheet(_status_style("link", 11))
         left.addWidget(plat_lbl)
         head.addLayout(left)
         head.addStretch(1)
         status = QLabel("")
-        status.setStyleSheet("color: #888;")
+        status.setStyleSheet(_status_style("muted"))
         head.addWidget(status)
         export_btn = QPushButton("📷 导出")
         export_btn.setFixedSize(60, 26)
@@ -557,7 +563,7 @@ class MusicTrackerPage(BasePage):
             return
         card["btn"].setEnabled(False)
         card["status"].setText("⏳ 采集中...")
-        card["status"].setStyleSheet("color: #eab308;")
+        card["status"].setStyleSheet(_status_style("warning"))
 
         def work():
             from music_account.accounts import collect_account, save_history
@@ -571,7 +577,7 @@ class MusicTrackerPage(BasePage):
                 card["btn"].setEnabled(True)
                 if err:
                     card["status"].setText(f"❌ {err}")
-                    card["status"].setStyleSheet("color: #ff5252;")
+                    card["status"].setStyleSheet(_status_style("danger"))
                 else:
                     from music_account.accounts import load_history
                     history = load_history(acc.get("name", "未命名"))
@@ -580,10 +586,10 @@ class MusicTrackerPage(BasePage):
                         self._render_diff(card["diff_frame"], history[1], history[0])
                     if result.get("error"):
                         card["status"].setText(f"❌ {result['error']}")
-                        card["status"].setStyleSheet("color: #ff5252;")
+                        card["status"].setStyleSheet(_status_style("danger"))
                     else:
                         card["status"].setText("✅ 完成")
-                        card["status"].setStyleSheet("color: #4caf50;")
+                        card["status"].setStyleSheet(_status_style("success"))
             if on_done:
                 on_done()
 
@@ -885,7 +891,7 @@ class MusicTrackerPage(BasePage):
         bar.addWidget(self._acc_save_btn)
         bar.addStretch(1)
         hint = QLabel("修改组号后点此一次性保存")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet(_status_style("muted", 11))
         bar.addWidget(hint)
         self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
         self.acc_list_layout.addLayout(bar)
@@ -942,7 +948,8 @@ class MusicTrackerPage(BasePage):
                 h.setContentsMargins(8, 4, 8, 4)
                 gid_lbl = QLabel(gid)
                 gid_lbl.setFixedWidth(44)
-                gid_lbl.setStyleSheet("font-weight: bold; color: #1976d2;")
+                gid_lbl.setStyleSheet(
+                    f"font-weight: bold; color: {theme.color('link')};")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
                 up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
