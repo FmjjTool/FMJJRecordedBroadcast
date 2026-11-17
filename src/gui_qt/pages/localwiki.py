@@ -5,6 +5,7 @@
 - 拉取代码 → 安装依赖 → 读取腾讯文档监控本地表格重建站点库 → 构建前端 → 启动站点
 - 启动后自动打开系统浏览器，也可随时点「打开网站」
 - 数据复用「腾讯文档监控」已同步的 tables.db，不重复联网拉取
+- 站点访问监控：查询 mandisa.wiki 后台统计（内部 analytics API），按日期落本地库并支持每日定时
 """
 
 from __future__ import annotations
@@ -14,17 +15,27 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.tcdoc import config as tcdoc_cfg
 from toolbox.webwiki import (
-    auth, config as wiki_cfg, deploy, gitops, localimages, server,
+    analytics, analytics_task, auth, config as wiki_cfg, deploy, gitops,
+    localimages, server,
 )
+
+
+def _signed(value) -> str:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    return f"+{number}" if number > 0 else str(number)
 
 
 class _GitHubLoginDialog(QDialog):
@@ -234,6 +245,7 @@ class LocalWikiPage(BasePage):
         v.addWidget(self._build_hero())
         v.addWidget(self._build_status_card())
         v.addWidget(self._build_actions_card())
+        v.addWidget(self._build_analytics_card())
         v.addWidget(self._build_docs_card())
         v.addWidget(self._build_path_card())
         v.addWidget(self._build_log_card())
@@ -381,6 +393,129 @@ class LocalWikiPage(BasePage):
         box.addLayout(opts)
         return card
 
+    # ---------- 站点访问监控（mandisa.wiki 内部 analytics API） ----------
+
+    def _build_analytics_card(self):
+        card, box = self._card("站点访问监控", "mandisa.wiki 后台访问统计")
+        self._analytics_has_password = analytics.has_password()
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.analytics_pwd = QLineEdit()
+        self.analytics_pwd.setEchoMode(QLineEdit.Password)
+        self.analytics_pwd.setPlaceholderText("后台密码（与 /admin 登录同一个）")
+        self.analytics_pwd.setToolTip(
+            "只加密保存在本机 config/webwiki_analytics.json。\n"
+            "密码连续错 5 次会锁定 15 分钟，不确定时先到 /admin 试一次。")
+        self.analytics_pwd.returnPressed.connect(self._save_analytics_password)
+        row.addWidget(self.analytics_pwd, 1)
+        save_btn = QPushButton("💾 保存密码")
+        save_btn.setObjectName("wikiButton")
+        save_btn.setToolTip("保存后只做掩码显示，界面不会回显密码")
+        save_btn.clicked.connect(self._save_analytics_password)
+        row.addWidget(save_btn)
+        box.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        scope_cap = QLabel("口径")
+        scope_cap.setObjectName("wikiMuted")
+        row2.addWidget(scope_cap)
+        self.analytics_scope = QComboBox()
+        for key, label in analytics.SCOPES:
+            self.analytics_scope.addItem(label, key)
+        self.analytics_scope.setCurrentIndex(
+            max(0, self.analytics_scope.findData(wiki_cfg.analytics_scope())))
+        self.analytics_scope.setToolTip(
+            "严格验证：只算通过 Turnstile 核验的访问（默认）\n"
+            "严格验证 + 行为合格：加上有可信交互的候选\n"
+            "全部分类：含待验证与疑似自动化")
+        self.analytics_scope.currentIndexChanged.connect(self._save_analytics_scope)
+        row2.addWidget(self.analytics_scope)
+        row2.addStretch(1)
+        self.analytics_collect_btn = QPushButton("🔄 采集今日")
+        self.analytics_collect_btn.setObjectName("wikiButton")
+        self.analytics_collect_btn.setToolTip("向站点后台查询今日统计并写入本地库（按日期+口径去重）")
+        self.analytics_collect_btn.clicked.connect(self._collect_analytics)
+        row2.addWidget(self.analytics_collect_btn)
+        admin_btn = QPushButton("🌐 打开后台")
+        admin_btn.setObjectName("wikiButton")
+        admin_btn.setToolTip("在浏览器打开 mandisa.wiki/admin")
+        admin_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(analytics.ADMIN_URL)))
+        row2.addWidget(admin_btn)
+        dir_btn = QPushButton("📂 数据目录")
+        dir_btn.setObjectName("wikiButton")
+        dir_btn.setToolTip("打开 download/站点监控数据（访问统计.db + 采集日志）")
+        dir_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(analytics.data_dir()))))
+        row2.addWidget(dir_btn)
+        box.addLayout(row2)
+
+        tiles = QHBoxLayout()
+        tiles.setSpacing(8)
+        self.analytics_values: dict[str, QLabel] = {}
+        for key, caption in (("visitors", "访客"), ("sessions", "打开次数"),
+                             ("pageviews", "浏览量"), ("online", "实时在线")):
+            tile = QFrame()
+            tile.setObjectName("wikiStat")
+            tile_box = QVBoxLayout(tile)
+            tile_box.setContentsMargins(12, 10, 12, 10)
+            tile_box.setSpacing(2)
+            value = QLabel("—")
+            value.setObjectName("wikiStatValue")
+            cap = QLabel(caption)
+            cap.setObjectName("wikiStatCap")
+            tile_box.addWidget(value)
+            tile_box.addWidget(cap)
+            tiles.addWidget(tile, 1)
+            self.analytics_values[key] = value
+        box.addLayout(tiles)
+
+        self.analytics_note = QLabel("尚未采集：保存密码后点「🔄 采集今日」。")
+        self.analytics_note.setObjectName("wikiMuted")
+        self.analytics_note.setWordWrap(True)
+        box.addWidget(self.analytics_note)
+
+        self.analytics_table = QTableWidget(0, 5)
+        self.analytics_table.setObjectName("wikiTrend")
+        self.analytics_table.setHorizontalHeaderLabels(
+            ["日期", "口径", "访客", "打开", "浏览量"])
+        self.analytics_table.verticalHeader().setVisible(False)
+        self.analytics_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.analytics_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.analytics_table.setAlternatingRowColors(True)
+        self.analytics_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.analytics_table.setMinimumHeight(150)
+        self.analytics_table.setToolTip("本地历史（最多 14 条）：每天一条，按日期+口径去重")
+        box.addWidget(self.analytics_table)
+
+        sched = QHBoxLayout()
+        sched.setSpacing(6)
+        sched_cap = QLabel("每日采集")
+        sched_cap.setObjectName("wikiMuted")
+        sched.addWidget(sched_cap)
+        self.analytics_time = QLineEdit(wiki_cfg.analytics_time())
+        self.analytics_time.setFixedWidth(66)
+        self.analytics_time.setAlignment(Qt.AlignCenter)
+        self.analytics_time.setToolTip("24 小时制，如 09:10")
+        sched.addWidget(self.analytics_time)
+        self.analytics_install_btn = QPushButton("🕓 安装/更新定时")
+        self.analytics_install_btn.setObjectName("wikiButton")
+        self.analytics_install_btn.setToolTip("注册 Windows 计划任务 FengMingWebwikiAnalytics")
+        self.analytics_install_btn.clicked.connect(self._install_analytics_task)
+        sched.addWidget(self.analytics_install_btn)
+        self.analytics_uninstall_btn = QPushButton("🗑 删除定时")
+        self.analytics_uninstall_btn.setObjectName("wikiButton")
+        self.analytics_uninstall_btn.clicked.connect(self._uninstall_analytics_task)
+        sched.addWidget(self.analytics_uninstall_btn)
+        self.analytics_task_label = QLabel("")
+        self.analytics_task_label.setObjectName("wikiMuted")
+        self.analytics_task_label.setWordWrap(True)
+        sched.addWidget(self.analytics_task_label, 1)
+        box.addLayout(sched)
+        return card
+
     def _build_docs_card(self):
         card, box = self._card("腾讯文档预览", "站点数据与源文档同源")
         row = QHBoxLayout()
@@ -479,7 +614,19 @@ class LocalWikiPage(BasePage):
             "站点封面直接读本地文件并生成缩略图，不再走网络；"
             "没下载过的图片才回退到图床缓存。</p>"
             "<p><b>端口</b><br>只监听 127.0.0.1，不对外网开放。"
-            "端口被占用时在「目录与端口」里换一个再启动。</p>")
+            "端口被占用时在「目录与端口」里换一个再启动。</p>"
+            "<p><b>站点访问监控</b><br>查的是线上站点 mandisa.wiki 的后台统计"
+            "（内部统计接口，只需 /admin 的后台密码，不需要 Cookie）。"
+            "密码加密存在本机 <code>config/webwiki_analytics.json</code>，"
+            "只掩码显示、不回显；后台改密后这里要同步改，旧密码立即失效。"
+            "点「🔄 采集今日」会把当天数据按「日期 + 口径」写入 "
+            "<code>download/站点监控数据/访问统计.db</code>，"
+            "同一天重复采集直接覆盖；历史表里能看最近 14 条，"
+            "攒够前一日 / 7 日前的数据后自动显示访客差。"
+            "「🕓 安装/更新定时」注册 Windows 计划任务 "
+            "<code>FengMingWebwikiAnalytics</code>，每天自动采一次，"
+            "关掉工具箱也会跑；失败原因写在 <code>采集日志.log</code>。"
+            "注意：站点默认只保留近 90 天明细，密码错 5 次会锁 15 分钟。</p>")
 
     # ==================== 主题 / 状态 ====================
 
@@ -525,12 +672,26 @@ class LocalWikiPage(BasePage):
                 border: 1px solid palette(shadow); border-radius: 8px;
                 font-family: Consolas, "Microsoft YaHei"; font-size: 11px;
             }
+            QFrame#wikiStat {
+                background: palette(alternate-base); border: 1px solid palette(shadow);
+                border-radius: 10px;
+            }
+            QLabel#wikiStatValue {
+                color: palette(window-text); background: transparent;
+                font-size: 22px; font-weight: bold;
+                font-family: "Segoe UI", "Microsoft YaHei";
+            }
+            QLabel#wikiStatCap {
+                color: palette(placeholder-text); background: transparent; font-size: 11px;
+            }
+            QTableWidget#wikiTrend { font-size: 11px; }
         """)
 
     def on_show(self):
         self._timer.start(5000)
         self._reload_docs()
         self._refresh_status()
+        self._refresh_analytics()
 
     def on_hide(self):
         self._timer.stop()
@@ -574,11 +735,13 @@ class LocalWikiPage(BasePage):
         data = wiki_cfg.load_auth()
         if data.get("token"):
             login = data.get("login") or "已登录"
+            ok_color = theme.color("success")
             self.github_status.setText(
-                f"<span style='color:#2e7d32'>● 已登录</span> @{login}")
+                f"<span style='color:{ok_color}'>● 已登录</span> @{login}")
         else:
+            warn_color = theme.color("danger")
             self.github_status.setText(
-                "<span style='color:#c62828'>● 未登录</span> 拉取与一键部署已锁定")
+                f"<span style='color:{warn_color}'>● 未登录</span> 拉取与一键部署已锁定")
 
         lines = []
         for name in ("webwiki-api", "webwiki"):
@@ -614,8 +777,9 @@ class LocalWikiPage(BasePage):
 
     def _update_service_label(self):
         if self.service.running:
+            color = theme.color("success")
             self.service_status.setText(
-                f"<span style='color:#2e7d32'>● 运行中</span> "
+                f"<span style='color:{color}'>● 运行中</span> "
                 f"<a href='{self.service.url}'>{self.service.url}</a>")
             self.service_status.setOpenExternalLinks(True)
             self.url_label.setText(self.service.url)
@@ -645,6 +809,13 @@ class LocalWikiPage(BasePage):
             self.stop_btn.setEnabled(idle and running)
             self.dir_btn.setEnabled(idle)
             self.deploy_btn.setEnabled(idle and auth_ok)
+        # 站点统计控件独立于部署状态：只要有密码就能手动采集
+        self.analytics_collect_btn.setEnabled(idle and self._analytics_has_password)
+        self.analytics_pwd.setEnabled(idle)
+        self.analytics_scope.setEnabled(idle)
+        self.analytics_time.setEnabled(idle)
+        self.analytics_install_btn.setEnabled(idle)
+        self.analytics_uninstall_btn.setEnabled(idle)
 
     # ==================== 日志 / 任务 ====================
 
@@ -824,6 +995,149 @@ class LocalWikiPage(BasePage):
             self._refresh_actions()
 
         self._start_task("一键部署", work, on_ok=after)
+
+    # ==================== 站点访问监控 ====================
+
+    def _refresh_analytics(self):
+        """读本地历史 + 定时任务状态（后台线程，不阻塞界面）。"""
+        def work():
+            return {
+                "rows": analytics.load_history(limit=14),
+                "task": analytics_task.next_run_text(),
+                "password": analytics.has_password(),
+            }
+
+        def done(result, err):
+            if err:
+                self._log(f"站点统计读取失败：{err}")
+                return
+            self._apply_analytics(result or {})
+
+        run_bg(work, done, owner=self)
+
+    def _apply_analytics(self, state: dict):
+        rows = state.get("rows") or []
+        self._analytics_has_password = bool(state.get("password"))
+        scope = self.analytics_scope.currentData() or "human"
+        row = next((item for item in rows if item.get("scope") == scope), None)
+        if row is None and rows:
+            row = rows[0]
+
+        totals = row or {}
+        for key, label in self.analytics_values.items():
+            label.setText(f"{int(totals.get(key) or 0):,}" if row else "—")
+
+        self.analytics_note.setText(self._analytics_note_text(row, rows))
+        self._fill_analytics_table(rows)
+
+        self.analytics_task_label.setText(state.get("task") or "定时任务未安装")
+        self.analytics_pwd.setPlaceholderText(
+            "已保存（要换密码直接输入新的再保存）" if self._analytics_has_password
+            else "后台密码（与 /admin 登录同一个）")
+        self.analytics_collect_btn.setEnabled(
+            self._analytics_has_password and not self._busy)
+
+    def _analytics_note_text(self, row: dict | None, rows: list[dict]) -> str:
+        if not row:
+            return ("尚未采集：保存密码后点「🔄 采集今日」，"
+                    "或安装每日定时让它自己跑。")
+        prev, week = analytics.deltas(row, rows)
+        fetched = str(row.get("fetched_at") or "-")
+        generated = str(row.get("generated_at") or "-")
+        parts = [f"口径 {analytics.scope_label(row.get('scope'))}",
+                 f"采集 {fetched}", f"接口生成 {generated}"]
+        if prev is not None:
+            parts.append(f"较前一日 {_signed(prev)}")
+        if week is not None:
+            parts.append(f"较 7 日前 {_signed(week)}")
+        note = " · ".join(parts)
+        if prev is None and week is None:
+            note += "（本地还没有前一日数据，定时采集几天后自动出现对比）"
+        return note
+
+    def _fill_analytics_table(self, rows: list[dict]):
+        table = self.analytics_table
+        table.setUpdatesEnabled(False)
+        try:
+            table.setRowCount(len(rows))
+            for index, item in enumerate(rows):
+                values = (str(item.get("stat_date") or "-"),
+                          analytics.scope_label(item.get("scope")),
+                          f"{int(item.get('visitors') or 0):,}",
+                          f"{int(item.get('sessions') or 0):,}",
+                          f"{int(item.get('pageviews') or 0):,}")
+                for column, text in enumerate(values):
+                    cell = QTableWidgetItem(text)
+                    cell.setTextAlignment(Qt.AlignCenter)
+                    cell.setToolTip(f"采集于 {item.get('fetched_at') or '-'}")
+                    table.setItem(index, column, cell)
+        finally:
+            table.setUpdatesEnabled(True)
+
+    def _save_analytics_password(self):
+        text = self.analytics_pwd.text().strip()
+        if not text:
+            QMessageBox.information(
+                self, "保存后台密码",
+                "请输入 mandisa.wiki 后台（/admin）当前使用的密码。\n"
+                "后台改密后这里也要跟着改，旧密码会立即失效。")
+            return
+        try:
+            encrypted = analytics.save_password(text)
+        except OSError as exc:
+            QMessageBox.warning(self, "保存后台密码", f"写入失败：{exc}")
+            return
+        self.analytics_pwd.clear()
+        self._analytics_has_password = True
+        self.analytics_pwd.setPlaceholderText("已保存（要换密码直接输入新的再保存）")
+        if encrypted:
+            self._log("站点后台密码已加密保存到 config/webwiki_analytics.json")
+        else:
+            self._log("站点后台密码已保存，但本机缺少 cryptography 库，当前是明文文件，"
+                      "建议先安装依赖")
+        self.status_label.setText("✅ 站点后台密码已保存")
+        self._refresh_analytics()
+
+    def _save_analytics_scope(self, _index=None):
+        scope = self.analytics_scope.currentData() or "human"
+        wiki_cfg.set_analytics_scope(scope)
+        self._refresh_analytics()
+
+    def _collect_analytics(self):
+        if not self._analytics_has_password:
+            QMessageBox.information(
+                self, "采集站点统计",
+                "还缺后台密码：先在上面填 mandisa.wiki 后台密码并点「💾 保存密码」。")
+            return
+        scope = self.analytics_scope.currentData() or "human"
+        self._start_task("采集站点统计",
+                         lambda log: analytics.collect(scope=scope, log=log),
+                         on_ok=lambda _row: self._refresh_analytics())
+
+    def _install_analytics_task(self):
+        text = self.analytics_time.text().strip() or "09:10"
+        ok, message = analytics_task.install_daily(text)
+        if not ok:
+            QMessageBox.warning(self, "安装定时任务", f"安装失败：{message}")
+            return
+        wiki_cfg.set_analytics_time(text)
+        self._log(f"站点统计定时任务：{message}")
+        self.status_label.setText(f"✅ {message}")
+        self._refresh_analytics()
+
+    def _uninstall_analytics_task(self):
+        if QMessageBox.question(
+                self, "删除定时任务",
+                "删除后不再每天自动采集站点统计（已采集的历史保留）。确定删除？"
+        ) != QMessageBox.Yes:
+            return
+        ok, message = analytics_task.uninstall()
+        if not ok:
+            QMessageBox.warning(self, "删除定时任务", f"删除失败：{message}")
+            return
+        self._log(f"站点统计定时任务：{message}")
+        self.status_label.setText(f"✅ {message}")
+        self._refresh_analytics()
 
     # ==================== 目录 / 端口 / 文档 ====================
 

@@ -94,6 +94,37 @@ def set_auto_open_browser(enabled: bool) -> None:
     save_convert_config(cfg)
 
 
+# ==================== 站点访问统计 ====================
+
+def analytics_scope() -> str:
+    """统计口径：human（严格验证）/ qualified（加行为合格）/ all（全部分类）。"""
+    scope = str(load_convert_config().get("webwiki_analytics_scope") or "human")
+    return scope if scope in ("human", "qualified", "all") else "human"
+
+
+def set_analytics_scope(scope: str) -> None:
+    cfg = load_convert_config()
+    cfg["webwiki_analytics_scope"] = str(scope or "human")
+    save_convert_config(cfg)
+
+
+def analytics_time() -> str:
+    return str(load_convert_config().get("webwiki_analytics_time") or "09:10")
+
+
+def set_analytics_time(text: str) -> None:
+    cfg = load_convert_config()
+    cfg["webwiki_analytics_time"] = str(text or "09:10").strip()
+    save_convert_config(cfg)
+
+
+def set_analytics_api(url: str) -> None:
+    """留空表示用内置的官方接口地址。"""
+    cfg = load_convert_config()
+    cfg["webwiki_analytics_api"] = str(url or "").strip()
+    save_convert_config(cfg)
+
+
 # ==================== GitHub 登录态 ====================
 
 def auth_path() -> Path:

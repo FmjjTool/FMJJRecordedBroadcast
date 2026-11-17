@@ -306,6 +306,10 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "webwiki_backend_port": 8000,
     "webwiki_site_port": 8090,
     "webwiki_open_browser": True,
+    # 本地资料站 · 站点后台访问统计（mandisa.wiki 内部 analytics API）
+    "webwiki_analytics_api": "",        # 空 = 用内置地址
+    "webwiki_analytics_scope": "human",  # human / qualified / all
+    "webwiki_analytics_time": "09:10",   # 每日定时采集时间 HH:MM
     # 网媒/音乐账号追踪：定时采集（注册 Windows 计划任务，关闭软件也按计划采集）
     "tracker_schedule_mode": "daily",
     "tracker_collect_time": "09:00",
@@ -528,6 +532,7 @@ EXPORT_CATEGORIES = {
     "bili_shop": "B站小店",
     "fan_groups": "粉丝群",
     "tcdoc": "腾讯文档数据",
+    "webwiki_monitor": "站点监控数据",
     "weibo_chaohua": "微博超话",
 }
 

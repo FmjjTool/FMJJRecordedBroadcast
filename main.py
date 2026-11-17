@@ -40,6 +40,17 @@ if "--quark-backup" in sys.argv:
 
     sys.exit(_quark_job())
 
+# 站点访问统计定时任务入口：--webwiki-analytics（每日采集 mandisa.wiki 后台统计，
+# 同样在 PySide6 导入前拦截，无窗口）。
+if "--webwiki-analytics" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.webwiki.analytics_job import main as _wiki_analytics_job
+
+    sys.exit(_wiki_analytics_job())
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow
