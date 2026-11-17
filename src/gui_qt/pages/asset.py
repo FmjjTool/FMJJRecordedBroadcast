@@ -43,7 +43,8 @@ from toolbox.asset_content import (
     html_to_content, md_to_html, read_text_file, text_preview_html,
 )
 from toolbox.asset_scan import (
-    AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS, scan_assets,
+    AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
+    append_scan_cache, scan_assets,
 )
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import PLATFORM_CN, platform_cn
@@ -483,29 +484,8 @@ def _norm_dy_source_link(platform: str, video_id: str, url: str) -> str:
 
 
 
-def _index_file() -> str:
-    """本地扫描增量缓存（非「已获取资源」索引；权威来源是扫描目录本身）。"""
-    from toolbox.config_manager import get_export_subdir
-    return str(get_export_subdir("video_data") / "_assets_index.json")
 
 
-def append_index(folder: str, files: list):
-    """增量写入索引文件（追加去重）。"""
-    path = _index_file()
-    existing = []
-    if os.path.exists(path):
-        try:
-            existing = json.load(open(path, encoding="utf-8"))
-        except Exception:
-            existing = []
-    seen = {(e.get("path"), e.get("name")) for e in existing}
-    for f in files:
-        key = (f.get("path"), f.get("name"))
-        if key not in seen:
-            seen.add(key)
-            existing.append(f)
-    with open(path, "w", encoding="utf-8") as fp:
-        json.dump(existing, fp, ensure_ascii=False, indent=2)
 
 
 class _RowWidget(QWidget):
@@ -1035,7 +1015,7 @@ class AssetPage(BasePage):
                 for i in range(BATCH, len(files), BATCH):
                     time.sleep(interval)
             if inc and files:
-                append_index(folder, files)
+                append_scan_cache(files)
             return files, folder
 
         def done(result, err):

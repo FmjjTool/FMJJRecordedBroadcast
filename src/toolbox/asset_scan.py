@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
+
+from toolbox.config_manager import get_export_subdir
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".flv", ".avi", ".ts", ".m4v", ".wmv"}
@@ -22,6 +25,34 @@ def classify(path: str) -> str:
     if ext in AUDIO_EXTS:
         return "audio"
     return ""
+
+
+def scan_cache_path():
+    """本地扫描增量缓存路径（非「已获取资源」索引）。"""
+    return get_export_subdir("video_data") / "_assets_index.json"
+
+
+def append_scan_cache(files: list) -> int:
+    """追加本地扫描结果到 JSON 缓存，按 (path, name) 去重。"""
+    path = scan_cache_path()
+    existing = []
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            existing = data if isinstance(data, list) else []
+        except Exception:
+            existing = []
+    seen = {(e.get("path"), e.get("name")) for e in existing if isinstance(e, dict)}
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        key = (item.get("path"), item.get("name"))
+        if key not in seen:
+            seen.add(key)
+            existing.append(item)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    return len(existing)
 
 
 def scan_assets(folder: str, limit: int = 0, depth: int = 0) -> list:

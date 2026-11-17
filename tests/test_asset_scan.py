@@ -1,6 +1,8 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from toolbox import asset_scan
 
@@ -44,6 +46,19 @@ class AssetScanTests(unittest.TestCase):
     def test_limit(self):
         files = asset_scan.scan_assets(str(self.root), limit=1, depth=1)
         self.assertEqual(len(files), 1)
+
+    def test_append_scan_cache_dedups(self):
+        out = self.root / "video_data"
+        with patch.object(asset_scan, "get_export_subdir", return_value=out):
+            asset_scan.append_scan_cache([
+                {"path": "a", "name": "a.jpg"},
+                {"path": "a", "name": "a.jpg"},
+            ])
+            asset_scan.append_scan_cache([{"path": "b", "name": "b.jpg"}])
+        data = json.loads(
+            (out / "_assets_index.json").read_text(encoding="utf-8"))
+        self.assertEqual([(e["path"], e["name"]) for e in data],
+                         [("a", "a.jpg"), ("b", "b.jpg")])
 
 
 if __name__ == "__main__":
