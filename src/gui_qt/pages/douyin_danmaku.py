@@ -154,7 +154,7 @@ class DouyinDanmakuPage(BasePage):
         "<p>· <b>保存与回放</b>：💾 保存弹幕、📊 保存统计；📦 导出/导入/合并回放包"
         "（含时间戳与表情图标，回放模式可重演整场）；可勾选自动导出回放包</p>"
         "<p>· <b>⚙ 设置</b>：深色模式、保持滚动、自动导出等</p>"
-        "<p>· 弹幕数据游客优先获取，不占用 Cookie，不影响电脑/手机观看直播</p>"
+        "<p>· 弹幕数据游客优先获取，不影响账号登录状态，不影响电脑/手机观看直播</p>"
     )
 
     def __init__(self, app):
@@ -220,8 +220,8 @@ class DouyinDanmakuPage(BasePage):
         outer.addLayout(title_row)
 
         # ===== 顶栏：全局控制 =====
-        # Cookie 说明：凭证统一由侧栏「Cookie 管理」维护（总开关+账号池），
-        # 连接时自动套用其中的抖音 Cookie，本页不再单独提供登录入口。
+        # 登录态说明：由统一管理层维护（总开关+账号池），连接时自动套用，
+        # 本页不再单独提供登录入口。
         top = QFrame()
         top.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
         top_l = QHBoxLayout(top)
@@ -332,9 +332,9 @@ class DouyinDanmakuPage(BasePage):
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
         tb.addWidget(self.save_stats_var)
         tb.addStretch(1)
-        cookie_hint = QLabel("Cookie 由侧栏「Cookie 管理」统一提供（自动套用）",
-                             styleSheet="color: #666; font-size: 11px;")
-        tb.addWidget(cookie_hint)
+        login_hint = QLabel("登录态由软件统一管理（连接时自动套用）")
+        login_hint.setProperty("role", "caption")
+        tb.addWidget(login_hint)
         outer.addWidget(toolbar)
 
         # ===== 主体三栏 =====
@@ -1328,7 +1328,7 @@ class DouyinDanmakuPage(BasePage):
         v.addLayout(row2)
 
         # 3. 累计打赏榜（与弹幕姬一致：排名/昵称/礼物数/价值(抖币)/更新时间，前150名）
-        # sessionid 不再单独录入：握手凭证直接套用「Cookie 管理」里的抖音 Cookie
+        # sessionid 不再单独录入：握手凭证直接套用统一管理层里的抖音登录态
         v.addWidget(QLabel("累计打赏榜", styleSheet="font-weight: bold;"))
         self.gift_table = QTableWidget(0, 5)
         self.gift_table.setHorizontalHeaderLabels(["排名", "昵称", "礼物数", "价值(抖币)", "更新时间"])
@@ -2614,7 +2614,7 @@ class DouyinDanmakuPage(BasePage):
                 if self._overlay:
                     self._overlay.set_active(False)
                 # 下播/连接断开：先清资源（统计采集/回放）+ 自动导出本场弹幕，
-                # 再按「手动停止 / 轮询开关」决定是否进入等待开播（等待检测为游客态，不占 Cookie）
+                # 再按「手动停止 / 轮询开关」决定是否进入等待开播（等待检测为游客态，不占登录态）
                 self.connected = False
                 self._timer_running = False
                 self._rt_close()
@@ -2763,7 +2763,7 @@ class DouyinDanmakuPage(BasePage):
             self._apply_chat_filter()
 
     def on_hide(self):
-        """切离本页：连接中弹幕抓取与统计保持后台运作（WS 握手后不占 Cookie），
+        """切离本页：连接中弹幕抓取与统计保持后台运作（WS 握手后不占登录态），
         仅停 UI 渲染（回放视频）；未连接才全停。"""
         self._ui_visible = False
         self._clock_timer.stop()

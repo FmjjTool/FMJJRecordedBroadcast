@@ -213,9 +213,9 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(self._card_title("💾 配置备份（导出 / 导入）"))
         cb_row = QHBoxLayout()
         cb_info = QLabel(
-            "打包全部设置为 zip（工作目录 / Cookie / 账号列表 / 分组 / 弹幕姬配置等，"
+            "打包全部设置为 zip（工作目录 / 登录状态 / 账号列表 / 分组 / 弹幕姬配置等，"
             "不含已获取资产）；导入会覆盖同名配置文件，重启应用后全部生效")
-        cb_info.setStyleSheet("color: #888; font-size: 11px;")
+        cb_info.setProperty("role", "caption")
         cb_info.setWordWrap(True)
         cb_row.addWidget(cb_info, 1)
         cb_row.addWidget(self._btn("📤 导出配置…", self._export_config))
