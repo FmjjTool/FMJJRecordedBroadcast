@@ -61,7 +61,7 @@ class GlobalSettingsPage(BasePage):
         wd_row.addWidget(self.workdir_lock_cb)
         v.addLayout(wd_row)
         self.workdir_status = QLabel("")
-        self.workdir_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.workdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.workdir_status)
 
         v.addSpacing(12)
@@ -79,7 +79,7 @@ class GlobalSettingsPage(BasePage):
         ex_row.addWidget(self.exportdir_lock_cb)
         v.addLayout(ex_row)
         self.exportdir_status = QLabel("")
-        self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.exportdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.exportdir_status)
         # 文件夹锁定：改动即保存（拖入文件夹不改变，直到解锁）
         self.workdir_lock_cb.toggled.connect(self._on_workdir_lock_changed)
@@ -117,7 +117,7 @@ class GlobalSettingsPage(BasePage):
         ts_row.addWidget(self._btn("💾 保存", self._save_theme_schedule_clicked))
         v.addLayout(ts_row)
         self.sched_status = QLabel("")
-        self.sched_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.sched_status)
         # 改动即时生效：开关/时间一变就写入配置并立刻对齐主题（无需点保存）
         self.follow_sys_cb.toggled.connect(self._on_follow_system_changed)
@@ -130,7 +130,7 @@ class GlobalSettingsPage(BasePage):
         # ---- 配置与依赖检查 ----
         v.addWidget(self._card_title("📦 配置与依赖检查"))
         self.info_label = QLabel("")
-        self.info_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.info_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.info_label.setWordWrap(True)
         v.addWidget(self.info_label)
         info_row = QHBoxLayout()
@@ -140,7 +140,7 @@ class GlobalSettingsPage(BasePage):
         info_row.addStretch(1)
         v.addLayout(info_row)
         self.clean_result_label = QLabel("")
-        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.clean_result_label)
 
         # ---- FFmpeg 位置（可选；系统 PATH 优先，未找到时才用这里指定的位置）----
@@ -153,14 +153,14 @@ class GlobalSettingsPage(BasePage):
         ff_row.addWidget(self._btn("💾 保存", self._save_ffmpeg))
         v.addLayout(ff_row)
         self.ffmpeg_status = QLabel("")
-        self.ffmpeg_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.ffmpeg_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.ffmpeg_status.setWordWrap(True)
         v.addWidget(self.ffmpeg_status)
 
         # 检测依赖与其他强依赖：缺失项标红 + 快捷下载按钮
         self.dependency_frame = QFrame()
         self.dependency_frame.setStyleSheet(
-            "QFrame { background: #ffffff; border: 1px solid #d8dde6; border-radius: 6px; }")
+            "QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 6px; }")
         dep_v = QVBoxLayout(self.dependency_frame)
         dep_v.setContentsMargins(10, 8, 10, 8)
         dep_v.setSpacing(4)
@@ -201,7 +201,7 @@ class GlobalSettingsPage(BasePage):
         skill_info = QLabel(
             f"内置 {skill_count} 个 Skill（{skill_total_size_text()}）：{names}\n"
             "导出后可将 Skill 文件夹放入 AI 助手的 Skill 目录使用（如直播转录总结）")
-        skill_info.setStyleSheet("color: #888; font-size: 11px;")
+        skill_info.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         skill_info.setWordWrap(True)
         skill_row.addWidget(skill_info, 1)
         skill_row.addWidget(self._btn("⬇ 下载 Skill…", self._open_skill_download))
@@ -228,7 +228,7 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(self._card_title("🛠 关于"))
         maker_row = QHBoxLayout()
         maker_lbl = QLabel("🛠 制作：歆慕")
-        maker_lbl.setStyleSheet("color: #1976d2; font-weight: bold;")
+        maker_lbl.setStyleSheet("color: palette(link); font-weight: bold;")
         maker_row.addWidget(maker_lbl)
         maker_row.addStretch(1)
         maker_row.addWidget(self._btn(
@@ -267,7 +267,7 @@ class GlobalSettingsPage(BasePage):
             "依赖: ffmpeg, ffprobe, PySide6"
         )
         about.setWordWrap(True)
-        about.setStyleSheet("color: #888; font-size: 11px;")
+        about.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(about)
 
         v.addStretch(1)
@@ -326,17 +326,17 @@ class GlobalSettingsPage(BasePage):
             hint = "✅ 已检测到日期子文件夹" if ok else "⚠️ 无日期子文件夹"
             self.workdir_status.setText(f"{lock}{hint} · {wd}")
             self.workdir_status.setStyleSheet(
-                "color: #4caf50; font-size: 11px;" if ok else "color: #ff9800; font-size: 11px;")
+                "color: palette(link-visited); font-size: 11px;" if ok else "color: palette(bright-text); font-size: 11px;")
         else:
             self.workdir_status.setText(f"{lock}⚠️ 目录不存在: {wd}")
-            self.workdir_status.setStyleSheet("color: #ff5252; font-size: 11px;")
+            self.workdir_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
 
     def _refresh_exportdir_status(self):
         """导出目录状态行：当前路径 + 锁定标记。"""
         lock = "🔒 已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
         exd = self.exportdir_entry.text().strip() or str(get_export_dir())
         self.exportdir_status.setText(f"{lock}当前: {exd}")
-        self.exportdir_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.exportdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
 
     def _on_workdir_lock_changed(self, checked):
         cfg = load_convert_config()
@@ -386,7 +386,7 @@ class GlobalSettingsPage(BasePage):
             cur = "🌙 深色" if theme.is_dark() else "☀ 浅色"
             self.sched_status.setText(
                 f"已启用跟随系统：系统当前为 {sysd} · 主题已同步 {cur}（每 10 秒检测，系统切换即变）")
-            self.sched_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+            self.sched_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
         elif self.sched_enable.isChecked():
             want = theme.scheduled_theme()
             if want:
@@ -394,13 +394,13 @@ class GlobalSettingsPage(BasePage):
                     f"已启用：当前为{'☀ 浅色' if want == 'light' else '🌙 深色'}时段 · "
                     f"{self.sched_light.time().toString('HH:mm')} 自动切浅色 / "
                     f"{self.sched_dark.time().toString('HH:mm')} 自动切深色（每 10 秒自动检测，到点即变）")
-                self.sched_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+                self.sched_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
             else:
                 self.sched_status.setText("两个时间点相同，定时无效，请修改")
-                self.sched_status.setStyleSheet("color: #e53935; font-size: 11px;")
+                self.sched_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
         else:
             self.sched_status.setText("未启用：手动点击侧栏主题方块（🌙/☀️）切换")
-            self.sched_status.setStyleSheet("color: #888; font-size: 11px;")
+            self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
 
     def _on_follow_system_changed(self):
         """跟随系统一变即保存并立即对齐；与定时切换互斥（程序改勾选需屏蔽信号）。"""
@@ -544,7 +544,7 @@ class GlobalSettingsPage(BasePage):
         set_export_dir(path)
         lock = "🔒 已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
         self.exportdir_status.setText(f"{lock}当前: {path}")
-        self.exportdir_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+        self.exportdir_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
         self.app.toast("导出目录已保存", "success")
 
     def _info_text(self, ffmpeg_ok=None) -> str:
@@ -595,7 +595,7 @@ class GlobalSettingsPage(BasePage):
             self.ffmpeg_status.setText(
                 "⚠️ 未找到 ffmpeg：转换 / 音频提取 / 版权写入 / 直播录制将不可用，"
                 "请安装后加入系统 PATH，或在上方指定位置")
-            self.ffmpeg_status.setStyleSheet("color: #ff5252; font-size: 11px;")
+            self.ffmpeg_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
             return
         import shutil
         src = "系统 PATH"
@@ -604,7 +604,7 @@ class GlobalSettingsPage(BasePage):
                 == os.path.normcase(os.path.abspath(which))):
             src = "自定义位置"
         self.ffmpeg_status.setText(f"当前使用（{src}）: {exe}")
-        self.ffmpeg_status.setStyleSheet("color: #4caf50; font-size: 11px;")
+        self.ffmpeg_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
 
     def _browse_ffmpeg(self):
         d = QFileDialog.getExistingDirectory(
@@ -667,17 +667,17 @@ class GlobalSettingsPage(BasePage):
         def done(result, err):
             if err:
                 self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
-                self.clean_result_label.setStyleSheet("color: #ff5252; font-size: 11px;")
+                self.clean_result_label.setStyleSheet("color: palette(bright-text); font-size: 11px;")
                 return
             d_n, f_n = result or (0, 0)
             scope = " + 工作目录" if len(targets) > 1 else ""
             self.clean_result_label.setText(
                 f"✅ 清理完成: {d_n} 个 __pycache__ 目录, {f_n} 个 .pyc"
                 f"（程序目录{scope}；运行中新生导入会重建，属正常）")
-            self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+            self.clean_result_label.setStyleSheet("color: palette(link-visited); font-size: 11px;")
 
         self.clean_result_label.setText("🧹 清理中...")
-        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         run_bg(work, done)
 
     def _clean_media_sorter_cache(self):
@@ -697,7 +697,7 @@ class GlobalSettingsPage(BasePage):
         def done(result, err):
             if err:
                 self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
-                self.clean_result_label.setStyleSheet("color: #ff5252; font-size: 11px;")
+                self.clean_result_label.setStyleSheet("color: palette(bright-text); font-size: 11px;")
                 self.app.toast(f"清理媒体筛选缓存失败: {str(err)[:40]}", "error")
                 return
             page = self.app.pages.get("image_sorter")
@@ -707,11 +707,11 @@ class GlobalSettingsPage(BasePage):
                 except Exception:
                     pass
             self.clean_result_label.setText("✅ 媒体筛选缓存已清理（导入扫描/缩略图/MD5）")
-            self.clean_result_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+            self.clean_result_label.setStyleSheet("color: palette(link-visited); font-size: 11px;")
             self.app.toast("媒体筛选缓存已清理", "success")
 
         self.clean_result_label.setText("🧹 清理媒体筛选缓存中...")
-        self.clean_result_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         run_bg(work, done)
 
     # ----- 检测依赖 -----
@@ -771,7 +771,7 @@ class GlobalSettingsPage(BasePage):
             if err or result is None:
                 self._clear_dep_rows()
                 tip = QLabel(f"❌ 依赖检测失败: {err or '未知错误'}")
-                tip.setStyleSheet("color: #d32f2f; font-size: 11px; padding: 2px;")
+                tip.setStyleSheet("color: palette(bright-text); font-size: 11px; padding: 2px;")
                 self.dependency_layout.addWidget(tip)
                 return
             self._dep_cache = result
@@ -815,7 +815,7 @@ class GlobalSettingsPage(BasePage):
             h.addWidget(self._skel_bar(), 1)
             self.dependency_layout.addWidget(row)
         tip = QLabel("⏳ 正在检测依赖…")
-        tip.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
+        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px; padding: 2px;")
         self.dependency_layout.addWidget(tip)
         self._skel_phase = 0
         self._skel_timer.start()
@@ -840,7 +840,7 @@ class GlobalSettingsPage(BasePage):
             row.setObjectName("depRow")
             row.setStyleSheet(
                 "QFrame#depRow { background: %s; border-radius: 4px; }" % (
-                    "#ffeaea" if not ok else "#f4faf6"))
+                    "palette(light)" if not ok else "palette(midlight)"))
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
             h.setSpacing(8)
@@ -849,19 +849,19 @@ class GlobalSettingsPage(BasePage):
             mark.setStyleSheet(
                 "color: %s; font-weight: bold; font-size: 12px;"
                 " background: transparent; border: none;" % (
-                    "#d32f2f" if not ok else "#2e7d32"))
+                    "palette(bright-text)" if not ok else "palette(link-visited)"))
             mark.setFixedWidth(70)
             h.addWidget(mark)
             name_lbl = QLabel(f"{name}")
             name_lbl.setStyleSheet(
                 "color: %s; font-weight: bold; font-size: 12px;"
                 " background: transparent; border: none;" % (
-                    "#d32f2f" if not ok else "#2f3440"))
+                    "palette(bright-text)" if not ok else "palette(text)"))
             name_lbl.setFixedWidth(110)
             h.addWidget(name_lbl)
             ver_lbl = QLabel(version or "—")
             ver_lbl.setStyleSheet(
-                "color: #888; font-size: 11px; background: transparent; border: none;")
+                "color: palette(placeholder-text); font-size: 11px; background: transparent; border: none;")
             ver_lbl.setFixedWidth(180)
             if key in ("ffmpeg", "ffprobe"):
                 exe = find_ffmpeg_exe() if key == "ffmpeg" else find_ffprobe_exe()
@@ -876,7 +876,7 @@ class GlobalSettingsPage(BasePage):
             h.addWidget(ver_lbl)
             usage_lbl = QLabel(usage)
             usage_lbl.setStyleSheet(
-                "color: #666; font-size: 11px; background: transparent; border: none;")
+                "color: palette(placeholder-text); font-size: 11px; background: transparent; border: none;")
             usage_lbl.setWordWrap(True)
             h.addWidget(usage_lbl, 1)
             # 缺失项提供快捷下载/安装按钮
@@ -884,9 +884,9 @@ class GlobalSettingsPage(BasePage):
                 install_btn = QPushButton("⬇ 下载" if key in ("ffmpeg", "ffprobe") else "⬇ 安装")
                 install_btn.setCursor(Qt.PointingHandCursor)
                 install_btn.setStyleSheet(
-                    "QPushButton { background: #d32f2f; color: white;"
+                    "QPushButton { background: palette(bright-text); color: white;"
                     " border-radius: 3px; padding: 3px 10px; font-size: 11px; }"
-                    "QPushButton:hover { background: #b71c1c; }")
+                    "QPushButton:hover { background: palette(bright-text); }")
                 # Python 包走 pip 静默安装（标准做法）；二进制下载走浏览器打开官方页
                 if url.startswith("pip install"):
                     install_btn.clicked.connect(
@@ -904,11 +904,11 @@ class GlobalSettingsPage(BasePage):
             summary = QLabel(
                 f"⚠️ 检测完成：{missing} 项缺失（已标红 · 点击「⬇  安装」自动修复或跳转到下载页）")
             summary.setStyleSheet(
-                "color: #d32f2f; font-size: 11px; padding: 2px;")
+                "color: palette(bright-text); font-size: 11px; padding: 2px;")
         else:
             summary = QLabel("✅ 所有依赖已就绪")
             summary.setStyleSheet(
-                "color: #2e7d32; font-size: 11px; padding: 2px;")
+                "color: palette(link-visited); font-size: 11px; padding: 2px;")
         self.dependency_layout.addWidget(summary)
 
     # ----- 依赖检测实现：返回 (ok, version_str) -----
