@@ -11,15 +11,11 @@
 本页只负责【仅弹幕】实时抓取与【回放】已导出的回放包。
 """
 
-import atexit
 import html
 import json
 import os
 import re
-import shutil
-import tempfile
 import time
-import zipfile
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
@@ -35,9 +31,9 @@ from gui_qt import common
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.theme import is_dark
-
-# 回放包解压出的临时目录（recording.flv），进程退出兜底清理
-_replay_tmp_dirs = []
+from toolbox.replay_bundle import (
+    merge_replay_zips, parse_replay_file, remove_tmp_dir, write_replay_zip,
+)
 
 # ==================== 会员/粉丝团类礼物的打赏榜口径 ====================
 # 「点亮粉丝团 / 粉丝团灯牌 / 加入会员」这类礼物网页端推送常缺 diamondCount，
@@ -136,12 +132,6 @@ def _img_src(url):
     """url → 本地缓存 posix 路径（供 <img src>），无缓存返回 None。"""
     p = img_cache_lookup(url)
     return p.as_posix() if p else None
-
-
-@atexit.register
-def _cleanup_replay_tmp():
-    for d in list(_replay_tmp_dirs):
-        shutil.rmtree(d, ignore_errors=True)
 
 
 class TestPage(BasePage):
@@ -877,27 +867,6 @@ class TestPage(BasePage):
         self.video_status_lbl.setText(detail or "")
 
     # ======================== 导出 / 导入回放包 ========================
-    # dycast castTypeMap 同款分类（method → 分类 TXT 文件名）
-    CAST_TXT_TYPES = (
-        ("WebcastChatMessage", "弹幕"),
-        ("WebcastGiftMessage", "礼物"),
-        ("WebcastSocialMessage", "关注"),
-        ("WebcastLikeMessage", "点赞"),
-        ("WebcastMemberMessage", "进入"),
-    )
-
-    @staticmethod
-    def _cast_txt_line(c):
-        """一条弹幕 → dycast TXT 行（HH:mm:ss.SSS|[昵称]：内容）。"""
-        ts = c.get("timestamp") or 0
-        time_str = (datetime.fromtimestamp(ts / 1000).strftime("%H:%M:%S.%f")[:-3]
-                    if ts else "??:??:??.???")
-        name = (c.get("user") or {}).get("name") or "unknown"
-        if c.get("gift"):
-            text = f"送出了 {c['gift'].get('name') or '礼物'} × {c['gift'].get('count') or 1}"
-        else:
-            text = c.get("content") or ""
-        return f"{time_str}|[{name}]：{text}" if text else None
 
     def _export_replay_zip(self, video_path=None, rec_meta=None, quiet=False, sync=False):
         """打包为 dycast 全量格式 zip：data.json + 全量弹幕.json + 分类 TXT +
@@ -914,48 +883,15 @@ class TestPage(BasePage):
         anchor = (self.anchor_fields["anchor_name"].text() or "").strip() or "未知主播"
         ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         out = d / f"{anchor}-{room}-{ts}-{len(casts)}条.zip"
-        bundle = {
-            "_bundle": True,
-            "exportTime": datetime.now().isoformat(),
-            "roomId": room,
-            "nickname": anchor,
-            "avatar": "",
-            "cover": "",
-            "title": self.anchor_fields["live_title"].text().strip(),
-            "likeCount": self._like_count,
-            "casts": casts,
-        }
-        has_video = bool(video_path and os.path.exists(video_path)
-                         and os.path.getsize(video_path) > 1024)
-        if has_video and not rec_meta:
-            rec_meta = {"startTimestamp": casts[0].get("timestamp"), "file": "recording.flv"}
-        meta_json = json.dumps(rec_meta, ensure_ascii=False, indent=1) if rec_meta else None
-        # 分类 TXT（dycast castTypeMap 同款：弹幕/礼物/关注/点赞/进入）
-        txt_files = []
-        for method, label in self.CAST_TXT_TYPES:
-            lines = [ln for c in casts if c.get("method") == method
-                     for ln in [self._cast_txt_line(c)] if ln]
-            if lines:
-                txt_files.append((f"{label}.txt", "\n".join(lines)))
-        cover = getattr(self, "_cover_bytes", None)
-        vpath = video_path if has_video else None
+        title = self.anchor_fields["live_title"].text().strip()
 
         def work():
             try:
-                with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
-                    z.writestr("data.json",
-                               json.dumps(bundle, ensure_ascii=False, indent=1))
-                    z.writestr("全量弹幕.json",
-                               json.dumps(casts, ensure_ascii=False, indent=1))
-                    for name, content in txt_files:
-                        z.writestr(name, content)
-                    if cover:
-                        z.writestr("cover.jpg", cover)
-                    if vpath:
-                        z.write(vpath, "recording.flv")
-                        if meta_json:
-                            z.writestr("recording_meta.json", meta_json)
-                return str(out)
+                return write_replay_zip(
+                    out, casts, room=room, anchor=anchor, title=title,
+                    like_count=self._like_count,
+                    cover_bytes=getattr(self, "_cover_bytes", None),
+                    video_path=video_path, rec_meta=rec_meta)
             except Exception as e:
                 return f"__error__{e}"
 
@@ -996,91 +932,8 @@ class TestPage(BasePage):
         """读取多个回放包 → casts 按毫秒时间戳排序、断线重叠去重 → 重建
         data.json/全量弹幕.json/分类 TXT/封面 → 打包新 zip 到「弹幕文件」目录。"""
         def work():
-            all_casts = []
-            bundles = []
-            cover = None
-            skipped = []
-            for p in paths:
-                try:
-                    if p.lower().endswith(".json"):
-                        d = json.loads(open(p, encoding="utf-8").read())
-                        casts = d.get("casts") if isinstance(d, dict) else d
-                        if isinstance(d, dict) and d.get("_bundle"):
-                            bundles.append(d)
-                    else:
-                        with zipfile.ZipFile(p) as z:
-                            names = z.namelist()
-                            casts = None
-                            if "全量弹幕.json" in names:
-                                casts = json.loads(z.read("全量弹幕.json").decode("utf-8"))
-                            # data.json：既可能是 casts 来源，也携带 bundle 元数据
-                            # （主播名/房间号/点赞数）——与全量弹幕.json 并存时只取元数据
-                            if "data.json" in names:
-                                d = json.loads(z.read("data.json").decode("utf-8"))
-                                if not casts:
-                                    casts = d.get("casts") or []
-                                if d.get("_bundle"):
-                                    bundles.append(d)
-                            if cover is None and "cover.jpg" in names:
-                                cover = z.read("cover.jpg")
-                    if not casts:
-                        skipped.append(os.path.basename(p))
-                        continue
-                    all_casts.extend(c for c in casts
-                                     if isinstance(c, dict) and c.get("timestamp"))
-                except Exception:
-                    skipped.append(os.path.basename(p))
-            if len(all_casts) < 2:
-                return "__error__no_data"
-            # 断线重连会重复拉到重叠窗口的消息（服务器重放，毫秒时间戳相同）：
-            # 按 (时间戳, 类型, 昵称, 内容, 礼物名) 去重
-            all_casts.sort(key=lambda c: c.get("timestamp") or 0)
-            seen = set()
-            merged = []
-            for c in all_casts:
-                key = (c.get("timestamp"), c.get("method"),
-                       (c.get("user") or {}).get("name"), c.get("content"),
-                       (c.get("gift") or {}).get("name"))
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(c)
-            bundles.sort(key=lambda b: b.get("exportTime") or "")
-            first = bundles[0] if bundles else {}
-            anchor = (first.get("nickname") or "未知主播").strip() or "未知主播"
-            room = str(first.get("roomId") or "room").strip() or "room"
-            like = max((int(b.get("likeCount") or 0) for b in bundles), default=0)
             out_dir = self._backend()._danmaku_dir()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            out = out_dir / f"{anchor}-{room}-合并-{ts}-{len(merged)}条.zip"
-            bundle = {
-                "_bundle": True,
-                "exportTime": datetime.now().isoformat(),
-                "mergedFrom": [os.path.basename(p) for p in paths],
-                "roomId": room,
-                "nickname": anchor,
-                "avatar": first.get("avatar") or "",
-                "cover": "",
-                "title": first.get("title") or "",
-                "likeCount": like,
-                "casts": merged,
-            }
-            txt_files = []
-            for method, label in self.CAST_TXT_TYPES:
-                lines = [ln for c in merged if c.get("method") == method
-                         for ln in [self._cast_txt_line(c)] if ln]
-                if lines:
-                    txt_files.append((f"{label}.txt", "\n".join(lines)))
-            with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
-                z.writestr("data.json", json.dumps(bundle, ensure_ascii=False, indent=1))
-                z.writestr("全量弹幕.json", json.dumps(merged, ensure_ascii=False, indent=1))
-                for name, content in txt_files:
-                    z.writestr(name, content)
-                if cover:
-                    z.writestr("cover.jpg", cover)
-            return {"out": str(out), "total": len(all_casts), "merged": len(merged),
-                    "skipped": skipped, "files": len(paths)}
+            return merge_replay_zips(paths, out_dir)
 
         def done(result, err=None):
             if err or not isinstance(result, dict):
@@ -1133,44 +986,7 @@ class TestPage(BasePage):
 
     def _parse_replay_file(self, path):
         """解析回放包 → dict(casts/bundle/video/rec_meta/zip_dir/cover)，失败返回 None。"""
-        try:
-            if path.lower().endswith(".json"):
-                with open(path, "r", encoding="utf-8") as f:
-                    bundle = json.load(f)
-                casts = (bundle or {}).get("casts") if isinstance(bundle, dict) else None
-                if isinstance(casts, list) and casts:
-                    return {"casts": casts, "bundle": bundle}
-                return None
-            with zipfile.ZipFile(path) as z:
-                names = set(z.namelist())
-                if "data.json" not in names:
-                    return None
-                bundle = json.loads(z.read("data.json").decode("utf-8"))
-                casts = bundle.get("casts") if isinstance(bundle, dict) else None
-                if not isinstance(casts, list) or not casts:
-                    return None
-                out = {"casts": casts, "bundle": bundle}
-                if "recording_meta.json" in names:
-                    try:
-                        out["rec_meta"] = json.loads(z.read("recording_meta.json").decode("utf-8"))
-                    except Exception:
-                        pass
-                for n in names:
-                    if n.lower().startswith("cover."):
-                        out["cover"] = z.read(n)
-                        break
-                if "recording.flv" in names:
-                    # 流式解压录制视频到临时目录（ZIP_STORED 近似纯拷贝）
-                    tmp = tempfile.mkdtemp(prefix="replay_")
-                    vpath = os.path.join(tmp, "recording.flv")
-                    with z.open("recording.flv") as src, open(vpath, "wb") as f:
-                        shutil.copyfileobj(src, f, 1024 * 1024)
-                    out["video"] = vpath
-                    out["zip_dir"] = tmp
-                    _replay_tmp_dirs.append(tmp)
-                return out
-        except Exception:
-            return None
+        return parse_replay_file(path)
 
     @staticmethod
     def _norm_cast(c):
@@ -1444,11 +1260,7 @@ class TestPage(BasePage):
         if self._overlay and r:
             self._overlay.set_active(False)
         if r and r.get("zip_dir"):
-            shutil.rmtree(r["zip_dir"], ignore_errors=True)
-            try:
-                _replay_tmp_dirs.remove(r["zip_dir"])
-            except ValueError:
-                pass
+            remove_tmp_dir(r["zip_dir"])
         self.replay_btn.setText("⏸")
         self.replay_slider.setRange(0, 0)
         self.replay_slider.setValue(0)
