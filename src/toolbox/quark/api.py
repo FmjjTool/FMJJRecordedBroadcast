@@ -395,6 +395,31 @@ class QuarkClient:
         self._request("POST", "/file/upload/finish", body={
             "obj_key": pre["obj_key"], "task_id": pre["task_id"]})
 
+    # ==================== 下载 ====================
+
+    def download_links(self, fids: list[str]) -> dict[str, str]:
+        """批量取下载直链：`{fid: url}`。
+
+        直链有分钟级时效，大文件跑到一半就可能 403；调用方拿到 403 要重新
+        调一次本接口，再用 `Range` 从断点续传（见 `download.Downloader`）。
+        只能传文件 fid，目录会走打包任务，不在本工具范围内。
+        """
+        fids = [str(f) for f in fids if f]
+        if not fids:
+            return {}
+        payload = self._request("POST", "/file/download", body={"fids": fids})
+        links: dict[str, str] = {}
+        for item in payload.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            fid = str(item.get("fid") or "")
+            url = str(item.get("download_url") or "")
+            if fid and url:
+                links[fid] = url
+        if not links:
+            raise QuarkError(-1, "未取到下载直链", "/file/download")
+        return links
+
     def delete_files(self, fids: list[str]) -> bool:
         """把指定 fid 删到回收站（用于替换本工具上传过的旧版本）。
 
