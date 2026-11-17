@@ -1,6 +1,6 @@
 """购物页（PySide6 版）：淘宝店铺商品 + 商品详情解析（交互对齐票务页）。
 
-- 淘宝店铺链接 → 商品列表（店铺信息游客可获取；商品列表需淘宝 Cookie）
+- 淘宝店铺链接 → 商品列表（店铺信息游客可获取；商品列表需淘宝登录）
 - 左列表选中商品 → 右侧立即显示商品简介（标题/价格/销量/优惠券 + 主图预览）
 - 「获取选中商品详情」→ 主图 / 选购参数(SKU 价) / 参数信息 / 图文详情长图，
   图片自动下载到 download/淘宝商品/<商品ID>/{main,sku,desc}/
@@ -62,15 +62,15 @@ class ShoppingPage(BasePage):
         from gui_qt.help_overlay import attach_help_overlay
         title_row.addWidget(attach_help_overlay(self, "❓ 购物解析 · 功能介绍", (
             "<p><b>淘宝店铺 / 商品信息采集与导出（图片自动下载 + Excel 连带导出）。</b></p>"
-            "<p>· <b>解析店铺</b>：粘贴淘宝店铺链接（店铺信息游客可获取，商品列表需淘宝 Cookie）；"
+            "<p>· <b>解析店铺</b>：粘贴淘宝店铺链接（店铺信息游客可获取，商品列表需淘宝登录）；"
             "留空回车用默认店铺</p>"
-            "<p>· <b>解析商品</b>：粘贴 item.taobao.com/item.htm?id=xxx 链接（详情需淘宝 Cookie）</p>"
+            "<p>· <b>解析商品</b>：粘贴 item.taobao.com/item.htm?id=xxx 链接（详情需淘宝登录）</p>"
             "<p>· <b>表格</b>：勾选商品（全选/反选/清除）后点「获取选中商品详情」，"
             "逐件拉取主图/选购参数/参数信息/图文详情——图片自动下载到"
             "download/淘宝商品/{标题}_{商品ID}_{时间}/，Excel 连带导出到同目录（不弹窗选位置）</p>"
             "<p>· <b>💾 导出商品 JSON</b>：输出勾选商品的全量数据；未拉过详情的自动逐件拉取</p>"
             "<p>· 单件失败原地重试不中断整批；详情缓存复用，重复导出不重复请求</p>"
-            "<p>· 🍪 淘宝 Cookie 由侧栏「Cookie 管理」维护</p>")))
+            "<p>· 未登录时仅能获取游客可见信息，登录后可获取完整商品列表。</p>")))
         layout.addLayout(title_row)
 
         row = QHBoxLayout()
@@ -227,7 +227,7 @@ class ShoppingPage(BasePage):
                     f"勾选后「导出商品 JSON」全量导出，或选中一行拉详情")
             elif not has_cookie:
                 self.status_label.setText(
-                    "✅ 店铺信息获取成功（未配置淘宝 Cookie，商品列表需登录后获取）")
+                    "✅ 店铺信息获取成功（未登录，商品列表需登录后获取）")
             else:
                 self.status_label.setText(
                     f"⚠️ {shop.shop_name or '店铺'}：店铺信息已拿到，但未取到商品"
@@ -239,14 +239,15 @@ class ShoppingPage(BasePage):
     def _show_parse_error(self, err):
         """解析失败 → 状态栏显示完整原因与修复指引（toast 只做短提醒）。"""
         msg = str(err)
+        safe_msg = msg.replace("Cookie", "登录状态").replace("cookie", "登录状态")
         self.status_label.setWordWrap(True)
         if ("SESSION_EXPIRED" in msg or "登录页" in msg or "RGV587" in msg
-                or "风控" in msg or "Cookie" in msg):
+                or "风控" in msg or "Cookie" in msg or "cookie" in msg):
             self.status_label.setText(
-                "❌ " + msg[:300] + "  → 修复：左下角⚙️全局设置 → Cookie 管理 → 淘宝 →"
-                "「浏览器」重新登录（淘宝会话几天后过期，需定期刷新）")
+                "❌ " + safe_msg[:300] + "  → 请确认淘宝登录状态，必要时重新登录"
+                "（淘宝会话几天后过期，需定期刷新）")
         else:
-            self.status_label.setText("❌ " + msg[:300])
+            self.status_label.setText("❌ " + safe_msg[:300])
         self.app.toast("解析失败，详见页面底部状态栏", "error")
 
     def _parse_item(self, url):
