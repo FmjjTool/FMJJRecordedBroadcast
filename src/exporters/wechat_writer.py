@@ -1,7 +1,7 @@
 """公众号文章多格式导出器：HTML / PDF / Word(docx) / 图片文本(Markdown)。
 
 - HTML：自包含单文件（图片 base64 内嵌，双击即可看）
-- PDF：QTextDocument + QPdfWriter 渲染（须在 Qt 主线程调用 render_pdf）
+- PDF：由 GUI 层 `gui_qt.pdf_render` 渲染（导出引擎不依赖 Qt）
 - Word：内置最小 docx 生成器（zip + OOXML，无第三方依赖）
 - 图片文本：Markdown + 本地图片文件夹（正文文字与图片分离存放）
 """
@@ -138,25 +138,6 @@ def build_full_html(art) -> str:
 
 def escape_text(s: str) -> str:
     return xml_escape(s or "")
-
-
-# ==================== PDF（Qt 主线程调用） ====================
-
-def render_pdf(html: str, out_path: str) -> str:
-    from PySide6.QtCore import QMarginsF, QSizeF
-    from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPdfWriter, QTextDocument
-
-    doc = QTextDocument()
-    doc.setDefaultFont(QFont("Microsoft YaHei", 11))
-    doc.setHtml(html)
-
-    writer = QPdfWriter(out_path)
-    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-    writer.setPageMargins(QMarginsF(16, 14, 14, 14), QPageLayout.Unit.Millimeter)
-    writer.setResolution(96)
-    doc.setPageSize(QSizeF(writer.width(), writer.height()))
-    doc.print_(writer)
-    return out_path
 
 
 # ==================== Markdown（图片文本） ====================

@@ -288,7 +288,7 @@ class WechatArticlePage(BasePage):
     def _finish_batch(self, pdf_jobs, ok, fail, formats):
         """主线程收尾：渲染 PDF（Qt 必须主线程）+ 恢复按钮。"""
         if pdf_jobs and not self._cancel:
-            from exporters.wechat_writer import render_pdf
+            from gui_qt.pdf_render import render_pdf
             total = len(pdf_jobs)
             for i, (html, path, title) in enumerate(pdf_jobs):
                 self.status_label.setText(f"生成 PDF {i + 1}/{total}  {title[:24]}")
