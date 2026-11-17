@@ -1,6 +1,6 @@
 ---
 name: ui-visual-spec
-description: "界面视觉与主题规范（强制阅读）。统一浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式；凡新增或修改任何 PySide6 界面（页面、对话框、浮层、自绘控件、富文本、图表、图标），或改动 theme.py、内联 QSS、背景色、文字色、字号，必须先阅读本 skill 并逐项核对。触发词：深色模式、浅色模式、主题、配色、颜色、背景色、字号、字体、间距、圆角、样式、美化、UI、界面、卡片、按钮样式、对比度。"
+description: "界面视觉与主题规范（强制阅读）。统一浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式；结构性图标统一用 navigation.line_icon 线形图标；凡新增或修改任何 PySide6 界面（页面、对话框、浮层、自绘控件、富文本、图表、图标），或改动 theme.py、内联 QSS、背景色、文字色、字号，必须先阅读本 skill 并逐项核对。触发词：深色模式、浅色模式、主题、配色、颜色、背景色、字号、字体、间距、圆角、样式、美化、UI、界面、卡片、按钮样式、图标、emoji、对比度。"
 ---
 
 # 界面视觉与主题规范
@@ -168,7 +168,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 1. 字重只用 `bold`（或 `600`）。`700`、`900`、`lighter` 不要用。
 2. 页面内不写 `font-family`，除非是等宽内容（路径、命令、日志、时间码）用 `Consolas, "Cascadia Mono", monospace`。中文界面字体只由全局 QSS 提供，页面重复声明会出现同一窗口两种中文字形。
-3. emoji 图标（⬆⬇✕📁 等）需要 `font-family: "Segoe UI Emoji"`，微软雅黑不含部分 emoji 字形——统一走 `common.icon_btn_style()`，不要各页手写。
+3. emoji 只用于正文、toast、日志等文本场景。结构性图标（导航、卡片标题、按钮、下拉项）一律用 `gui_qt.navigation.line_icon()` 线形图标（见 4.4），不得用 emoji 充当；既有页面在涉及改动时逐步替换，不做批量返工。文本中的 emoji 需要 `font-family: "Segoe UI Emoji"`（微软雅黑缺部分字形），历史写法 `common.icon_btn_style()` 只保留给既有页面。
 
 ## 四、间距、圆角、尺寸
 
@@ -212,8 +212,41 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 仅图标小按钮 | 30×26（`common.icon_button` 默认），必须带 tooltip |
 | 图标线宽 | 导航/工具图标 1.65，窗口控制图标 1.4 |
 | 图标绘制 | 2 倍分辨率 + `setDevicePixelRatio(2)`，兼顾高 DPI |
+| 图标统一实现 | `navigation.line_icon()` 自绘，禁止 emoji/图片充当，见 4.4 |
 
 窗口外壳由 `window_chrome.py` 负责：无边框、DWM 圆角、四边/四角热区缩放、顶栏拖动与双击最大化。不要为单个页面重新实现标题栏或缩放逻辑。
+
+### 4.4 线形图标（唯一图标画法）
+
+结构性图标统一由 `src/gui_qt/navigation.py` 的 `line_icon(name, color, size=20)` 用 QPainter 绘制，不使用 emoji、彩色图片或外部图标字体。新图标在该文件的 `elif name == ...` 链里补分支；导航用图标同时补进 `tool_icon_name()` 映射。
+
+绘制协议（新增图标必须一致）：
+
+| 项 | 约定 |
+| --- | --- |
+| 画布 | 24×24 逻辑坐标系，`painter.scale(size / 24, size / 24)` |
+| 描边 | `QPen(1.65, RoundCap, RoundJoin)` + `NoBrush`；窗口控制图标 1.4 |
+| 元素 | 只用 `line()` / `rect()` / `drawEllipse()` / `QPainterPath`，不填充实色块 |
+| 分辨率 | `size * 2` pixmap + `setDevicePixelRatio(2)`，按参数 `lru_cache` 缓存 |
+| 命名 | 全小写英文单词或短横线（`folder`、`clipboard`、`win_close`） |
+
+颜色只传主题角色，不传 hex：
+
+| 位置 | 颜色角色 |
+| --- | --- |
+| 导航项、卡片标题图标 | `palette(link)` |
+| 普通 / 次级按钮图标 | `palette(button-text)` |
+| 主按钮图标 | `palette(highlighted-text)` |
+| 禁用态 | 不单独绘制，依赖 QIcon 自动灰化 |
+
+用法：
+
+- 卡片：`ToolSectionCard(title, description, icon="clipboard")`，或 `card.set_icon(name, color)`。
+- 按钮：`btn.setIcon(line_icon(name, color, 16))` + `btn.setIconSize(QSize(16, 16))`，同时删除文案里的 emoji。
+- 下拉：`combo.setItemIcon(index, line_icon(name, color, 16))`。
+- 仅图标按钮仍必须有 tooltip（见第五节第 5 条）。
+
+主题切换：图标会把颜色烘进像素，必须按第六节第 3 条重新生成。页面维护 `(widget, name, role)` 注册表，在 `on_theme_changed()` 里统一重设；参考实现 `src/gui_qt/pages/livestream_summary.py` 的 `_register_icon()` / `_refresh_icons()` / `_icon_color()`。
 
 ## 五、组件写法
 
@@ -274,6 +307,8 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - [ ] 子控件背景为 `transparent`，未叠出不透明矩形
 - [ ] 自绘控件每次取 `current_palette()`，并实现了 `on_theme_changed()`
 - [ ] 预生成图标在切主题后重新生成
+- [ ] 结构性图标统一用 `line_icon` 线形图标，未用 emoji / 图片 / 图标字体充当
+- [ ] 图标颜色取自主题角色（导航/标题 link、按钮 button-text、主按钮 highlighted-text），未传 hex
 - [ ] 页面内 `setStyleSheet` 选择器带 `objectName`
 - [ ] 仅图标按钮有 tooltip
 - [ ] 弱对比 `placeholder-text` 未承载必读正文
