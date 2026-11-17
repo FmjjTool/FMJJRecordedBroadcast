@@ -595,22 +595,33 @@ class QuarkBackupPage(BasePage):
             self.progress_label.setText("正在停止…")
             self.stop_btn.setEnabled(False)
 
+    @staticmethod
+    def _short_name(name: str, limit: int = 34) -> str:
+        name = name or ""
+        return name if len(name) <= limit else name[:limit - 1] + "…"
+
     def _on_progress(self, payload: dict):
         if not isinstance(payload, dict):
             return
         phase = payload.get("phase")
         percent = int(payload.get("percent") or 0)
         self.progress.setValue(max(0, min(100, percent)))
-        name = payload.get("name") or ""
+        name = self._short_name(payload.get("name") or "")
+        index = int(payload.get("current") or 0)
+        total = int(payload.get("total") or 0)
         if phase == "mapping":
-            index = int(payload.get("index") or 0) + 1
-            total = int(payload.get("total") or 1)
-            self.progress_label.setText(f"第 {index}/{total} 组：{name}")
-        elif phase in ("run", "file"):
-            current = int(payload.get("current") or 0)
-            total = int(payload.get("total") or 0)
-            if total:
-                self.progress_label.setText(f"{current}/{total}  {name}")
+            self.progress_label.setText(f"第 {index + 1}/{total} 组：{name}")
+        elif phase == "hash":
+            size = qbackup.human_size(int(payload.get("size") or 0))
+            self.progress_label.setText(f"🔍 校验中 {index + 1}/{total} · {size} · {name}")
+        elif phase == "file":
+            sent = int(payload.get("sent") or 0)
+            size = int(payload.get("size") or 0)
+            self.progress_label.setText(
+                f"⬆ 上传中 {index + 1}/{total} · "
+                f"{qbackup.human_size(sent)} / {qbackup.human_size(size)} · {name}")
+        elif phase == "run":
+            self.progress_label.setText(f"{index}/{total} {name}")
         elif phase == "done":
             self.progress_label.setText("收尾中…")
 

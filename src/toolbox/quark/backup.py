@@ -82,6 +82,12 @@ def build_client():
     return QuarkClient(cookie)
 
 
+def client_hashes(path: Path) -> tuple[str, str]:
+    """算 (md5, sha1)；单独抽出来是为了让备份引擎不直接依赖 api 模块的其余部分。"""
+    from .api import file_hashes
+    return file_hashes(path)
+
+
 # ==================== 扫描 ====================
 
 def _excluded(rel_path: str, patterns: list[str]) -> bool:
@@ -194,15 +200,34 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
         result.finished_at = _now()
         return result
 
-    remote_cache: dict[str, dict] = {mapping.remote_dir: {}}
-    done_bytes = 0
+    remote_cache: dict[str, dict] = {}
+    index_cache: dict[str, dict] = {}
     total = len(files)
+    # 总字节数用来算全局进度：大文件（几 GB 的视频）靠文件计数看不出进展
+    total_bytes = 0
+    for path, _rel in files:
+        try:
+            total_bytes += path.stat().st_size
+        except OSError:
+            pass
+    done_bytes = 0
+
+    def _percent(sent_extra: int = 0) -> int:
+        if total_bytes <= 0:
+            return 0
+        return int(min(100, (done_bytes + sent_extra) * 100 / total_bytes))
+
+    def _cloud_index(remote_dir: str) -> dict:
+        if remote_dir not in index_cache:
+            index_cache[remote_dir] = client.list_index(remote_dir)
+        return index_cache[remote_dir]
+
     for index, (path, rel) in enumerate(files, start=1):
         if stop_event is not None and stop_event.is_set():
             result.message = "已手动停止"
             break
         _emit(progress, phase="run", current=index - 1, total=total,
-              percent=int((index - 1) * 100 / total), name=rel)
+              percent=_percent(), name=rel)
         try:
             stat = path.stat()
         except OSError as exc:
@@ -212,45 +237,82 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
 
         if mapping.max_file_mb and stat.st_size > mapping.max_file_mb * 1024 * 1024:
             result.skipped += 1
+            done_bytes += stat.st_size
             _say(log, f"跳过（超过 {mapping.max_file_mb} MB）：{rel}")
-            continue
-
-        record = state.get_record(mapping.id, str(path))
-        if record and not force and int(record["size"]) == stat.st_size \
-                and abs(float(record["mtime"]) - stat.st_mtime) < 1e-6:
-            result.skipped += 1
             continue
 
         remote_dir = _remote_path(mapping, rel)
         try:
-            if remote_dir not in remote_cache:
-                remote_cache[remote_dir] = client.list_names(remote_dir)
-            names = remote_cache[remote_dir]
-            if not record and names.get(path.name) == stat.st_size:
-                state.put_record(mapping.id, str(path), remote_dir, stat.st_size,
-                                 stat.st_mtime, "", "")
-                result.skipped += 1
-                _say(log, f"云端已存在同名同大小，补记录：{rel}")
-                continue
-            _emit(progress, phase="file", name=rel, sent=0,
-                  total=total, current=index - 1)
-            # 内容变了：先删掉本工具上次上传的那一份，避免云端攒出 (1)(2) 副本。
-            # 只删状态库里记录的 fid，不碰用户自己的其他文件。
-            if record and mapping.replace_changed and record.get("fid"):
-                if client.delete_files([record["fid"]]):
-                    _say(log, f"已删除云端旧版本：{rel}")
-                else:
-                    _say(log, f"旧版本删除失败，将保留副本：{rel}")
+            cloud_index = _cloud_index(remote_dir)
+        except Exception as exc:  # noqa: BLE001 - 列目录失败按「云端没有」处理
+            cloud_index = {}
+            remote_cache.pop(remote_dir, None)
+            _say(log, f"读取云端目录失败，按新增处理：{remote_dir or '/'}（{exc}）")
+
+        cloud = cloud_index.get(path.name) or {}
+        cloud_size = cloud.get("size")
+        record = state.get_record(mapping.id, str(path))
+        same_meta = bool(record) and int(record["size"]) == stat.st_size \
+            and abs(float(record["mtime"]) - stat.st_mtime) < 1e-6
+
+        # 快路径：本地没动过 + 云端大小一致 → 不算 md5 直接跳过（3 GB 视频也秒过）
+        if not force and same_meta and cloud_size == stat.st_size:
+            result.skipped += 1
+            done_bytes += stat.st_size
+            continue
+
+        # 慢路径：算 md5 判内容。只有内容（或云端那一份）真的变了才重传
+        _emit(progress, phase="hash", name=rel, size=stat.st_size,
+              current=index - 1, total=total, percent=_percent())
+        try:
+            md5, sha1 = client_hashes(path)
+        except OSError as exc:
+            result.failed += 1
+            done_bytes += stat.st_size
+            result.errors.append(f"{rel}：读取失败 {exc}")
+            _say(log, f"校验失败：{rel}（{exc}）")
+            continue
+
+        if not force and cloud_size == stat.st_size and (
+                (record and record.get("md5") == md5) or not record):
+            # 内容一致（或云端同名同大小、本机无记录）：不覆盖，只刷新记录
+            state.put_record(mapping.id, str(path), remote_dir, stat.st_size,
+                             stat.st_mtime, md5, (record or {}).get("fid") or cloud.get("fid", ""))
+            result.skipped += 1
+            done_bytes += stat.st_size
+            _say(log, f"内容一致，跳过：{rel}")
+            continue
+
+        try:
+            _emit(progress, phase="file", name=rel, sent=0, size=stat.st_size,
+                  current=index - 1, total=total, percent=_percent())
+            if stat.st_size >= 100 * 1024 * 1024:
+                _say(log, f"开始上传：{rel}  {human_size(stat.st_size)}（分片上传，进度见进度条）")
+            # 覆盖前先删掉云端同名的那一份（只删同名同路径的，不碰其他文件）
+            if mapping.replace_changed:
+                old_fids = []
+                if cloud.get("fid"):
+                    old_fids.append(cloud["fid"])
+                if record and record.get("fid") and record["fid"] not in old_fids:
+                    old_fids.append(record["fid"])
+                if old_fids:
+                    if client.delete_files(old_fids):
+                        _say(log, f"已删除云端旧版本：{rel}")
+                    else:
+                        _say(log, f"旧版本删除失败，将保留副本：{rel}")
             info = client.upload_file(
-                path, remote_dir,
+                path, remote_dir, hashes=(md5, sha1),
+                on_stage=lambda stage, _name, _size, _rel=rel: _emit(
+                    progress, phase=("hash" if stage == "hash" else "file"),
+                    name=_rel, size=_size, sent=0, current=index - 1,
+                    total=total, percent=_percent()),
                 on_progress=lambda sent, size, _rel=rel: _emit(
                     progress, phase="file", name=_rel, sent=sent, size=size,
-                    current=index - 1, total=total,
-                    percent=int((index - 1) * 100 / total + (sent / max(size, 1)) * 100 / total)),
+                    current=index - 1, total=total, percent=_percent(sent)),
             )
             state.put_record(mapping.id, str(path), remote_dir, stat.st_size,
-                             stat.st_mtime, info.get("md5", ""), info.get("fid", ""))
-            names[path.name] = stat.st_size
+                             stat.st_mtime, info.get("md5", md5), info.get("fid", ""))
+            cloud_index[path.name] = {"fid": info.get("fid", ""), "size": stat.st_size}
             done_bytes += stat.st_size
             result.uploaded += 1
             result.bytes += stat.st_size
@@ -258,10 +320,11 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
             _say(log, f"已上传{note}：{rel}  {human_size(stat.st_size)}")
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不打断整批
             result.failed += 1
+            done_bytes += stat.st_size
             message = f"{rel}：{exc}"
             result.errors.append(message)
             _say(log, f"上传失败：{message}")
-            remote_cache.pop(remote_dir, None)
+            index_cache.pop(remote_dir, None)
 
     result.finished_at = _now()
     if result.failed:

@@ -35,6 +35,8 @@ DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 DEFAULT_PART_SIZE = 4 * 1024 * 1024
 TIMEOUT = 60
+# 单个分片（默认 4 MB）的传输超时：太长会「假死」几分钟没反馈，太短会误杀慢速网络
+PART_TIMEOUT = 150
 
 _AUTH_HINTS = ("未登录", "登录", "token", "授权", "认证")
 
@@ -224,20 +226,29 @@ class QuarkClient:
 
     def list_names(self, remote_dir: str) -> dict[str, int]:
         """云端某目录下的 `文件名 → 大小`（不含子目录），用于补记录判定。"""
+        return {name: item["size"] for name, item in self.list_index(remote_dir).items()}
+
+    def list_index(self, remote_dir: str) -> dict[str, dict]:
+        """云端某目录下的 `文件名 → {fid, size}`（不含子目录）。
+
+        覆盖旧版本时要拿到云端那一份的 fid，光有大小不够。
+        """
         remote_dir = str(remote_dir or "").strip("/")
         if remote_dir in self._name_cache:
             return self._name_cache[remote_dir]
         fid = self.ensure_dir(remote_dir)
-        names: dict[str, int] = {}
+        index: dict[str, dict] = {}
         for item in self.list_dir(fid):
             if item.get("dir"):
                 continue
             try:
-                names[str(item.get("file_name"))] = int(item.get("size") or 0)
+                size = int(item.get("size") or 0)
             except (TypeError, ValueError):
-                names[str(item.get("file_name"))] = 0
-        self._name_cache[remote_dir] = names
-        return names
+                size = 0
+            index[str(item.get("file_name"))] = {
+                "fid": str(item.get("fid") or ""), "size": size}
+        self._name_cache[remote_dir] = index
+        return index
 
     # ==================== 上传 ====================
 
@@ -286,36 +297,50 @@ class QuarkClient:
 
     def _put_part(self, pre: dict, part_number: int, blob: bytes, mime: str,
                   on_progress=None, sent_before: int = 0, total: int = 0) -> str:
-        oss_date = formatdate(time.time(), usegmt=True)
-        obj_key = pre["obj_key"]
-        auth_meta = (
-            f"PUT\n\n{mime}\n{oss_date}\n"
-            f"x-oss-date:{oss_date}\n"
-            f"x-oss-user-agent:{OSS_USER_AGENT}\n"
-            f"/{pre['bucket']}/{obj_key}?partNumber={part_number}&uploadId={pre['upload_id']}"
-        )
-        auth_key = self._auth_key(pre["auth_info"], auth_meta, pre["task_id"])
-        resp = self.session.put(
-            f"{self._oss_base(pre)}/{obj_key}",
-            params={"partNumber": part_number, "uploadId": pre["upload_id"]},
-            data=blob,
-            headers={
-                "Authorization": auth_key,
-                "Content-Type": mime,
-                "Referer": REFERER,
-                "x-oss-date": oss_date,
-                "x-oss-user-agent": OSS_USER_AGENT,
-            },
-            timeout=TIMEOUT * 5,
-        )
-        if resp.status_code != 200:
-            raise QuarkError(resp.status_code, f"分片 {part_number} 上传失败：{resp.text[:200]}")
-        if on_progress is not None:
+        """上传一个分片。网络抖动/超时重试一次，避免 3 GB 文件因一片失败整份重来。"""
+        last_error: Exception | None = None
+        for attempt in range(2):
+            oss_date = formatdate(time.time(), usegmt=True)
+            obj_key = pre["obj_key"]
+            auth_meta = (
+                f"PUT\n\n{mime}\n{oss_date}\n"
+                f"x-oss-date:{oss_date}\n"
+                f"x-oss-user-agent:{OSS_USER_AGENT}\n"
+                f"/{pre['bucket']}/{obj_key}?partNumber={part_number}&uploadId={pre['upload_id']}"
+            )
             try:
-                on_progress(sent_before + len(blob), total)
-            except Exception:  # noqa: BLE001 - 进度回调异常不影响上传
-                pass
-        return resp.headers.get("ETag") or resp.headers.get("Etag") or ""
+                auth_key = self._auth_key(pre["auth_info"], auth_meta, pre["task_id"])
+                resp = self.session.put(
+                    f"{self._oss_base(pre)}/{obj_key}",
+                    params={"partNumber": part_number, "uploadId": pre["upload_id"]},
+                    data=blob,
+                    headers={
+                        "Authorization": auth_key,
+                        "Content-Type": mime,
+                        "Referer": REFERER,
+                        "x-oss-date": oss_date,
+                        "x-oss-user-agent": OSS_USER_AGENT,
+                    },
+                    timeout=PART_TIMEOUT,
+                )
+                if resp.status_code == 200:
+                    if on_progress is not None:
+                        try:
+                            on_progress(sent_before + len(blob), total)
+                        except Exception:  # noqa: BLE001 - 进度回调异常不影响上传
+                            pass
+                    return resp.headers.get("ETag") or resp.headers.get("Etag") or ""
+                last_error = QuarkError(
+                    resp.status_code, f"分片 {part_number} 上传失败：{resp.text[:200]}")
+                if resp.status_code < 500:
+                    raise last_error
+            except QuarkError:
+                raise
+            except (requests.RequestException, OSError) as exc:
+                last_error = exc
+            if attempt == 0:
+                time.sleep(1.5)
+        raise QuarkError(-1, f"分片 {part_number} 重试后仍失败：{last_error}")
 
     def _commit(self, pre: dict, etags: list[str]) -> None:
         body_parts = "".join(
@@ -388,15 +413,23 @@ class QuarkClient:
                 return False
             time.sleep(0.8)
 
-    def upload_file(self, local_path, remote_dir: str, on_progress=None) -> dict:
+    def upload_file(self, local_path, remote_dir: str, on_progress=None,
+                    on_stage=None, hashes: tuple[str, str] | None = None) -> dict:
         """上传一个文件到 `remote_dir`（相对路径，自动建目录）。
 
+        - `on_stage("hash" | "upload", 文件名, 字节数)`：大文件算校验、开始传输时给界面反馈
+        - `hashes=(md5, sha1)`：上层已算过就直接复用，避免 3 GB 视频重复读盘
         返回 `{"fid", "instant", "md5", "size"}`；秒传时 instant=True。
         """
         path = Path(local_path)
         stat = path.stat()
         size = stat.st_size
-        md5, sha1 = file_hashes(path)
+        if hashes:
+            md5, sha1 = hashes
+        else:
+            if on_stage is not None:
+                on_stage("hash", path.name, size)
+            md5, sha1 = file_hashes(path)
         parent_fid = self.ensure_dir(remote_dir)
         pre = self._pre(path, parent_fid, md5, sha1)
         finish, fid = self._hash(md5, sha1, pre["task_id"])
@@ -411,6 +444,8 @@ class QuarkClient:
         part_number = 1
         sent = 0
         mime = _mime_of(path)
+        if on_stage is not None:
+            on_stage("upload", path.name, size)
         with open(path, "rb") as handle:
             while True:
                 blob = handle.read(part_size)
