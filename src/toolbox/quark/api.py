@@ -21,11 +21,15 @@ import base64
 import hashlib
 import json
 import mimetypes
+import os
+import ssl
 import time
 from email.utils import formatdate
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from requests.certs import where as _requests_ca_bundle
 
 API_BASE = "https://drive-pc.quark.cn/1/clouddrive"
 REFERER = "https://pan.quark.cn/"
@@ -39,6 +43,22 @@ TIMEOUT = 60
 PART_TIMEOUT = 150
 
 _AUTH_HINTS = ("未登录", "登录", "token", "授权", "认证")
+
+
+class _QuarkSSLAdapter(HTTPAdapter):
+    """夸克接口证书链含弱密钥，OpenSSL 3 默认 SECLEVEL=2 会拒绝握手。
+
+    仅把安全级别降到 1，证书链与主机名仍完整校验；不是关闭 verify。
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        ca_bundle = (os.environ.get("REQUESTS_CA_BUNDLE")
+                     or os.environ.get("CURL_CA_BUNDLE")
+                     or _requests_ca_bundle())
+        context = ssl.create_default_context(cafile=ca_bundle)
+        context.set_ciphers("DEFAULT@SECLEVEL=1")
+        kwargs["ssl_context"] = context
+        super().init_poolmanager(*args, **kwargs)
 
 
 class QuarkError(RuntimeError):
@@ -82,6 +102,7 @@ class QuarkClient:
         self.cookie = cookie
         self.user_agent = user_agent
         self.session = requests.Session()
+        self.session.mount("https://", _QuarkSSLAdapter())
         self._dir_cache: dict[str, str] = {"": "0", "/": "0"}
         self._name_cache: dict[str, dict[str, int]] = {}
         # (路径, 大小, mtime) → (md5, sha1)：引擎判内容与上传前算校验只读一遍盘
