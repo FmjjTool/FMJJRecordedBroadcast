@@ -2804,7 +2804,7 @@ class AssetPage(BasePage):
             if pdfs:
                 names = "、".join(html_lib.escape(f["name"]) for f in pdfs[:3])
                 return "", (f"<p>该篇只有 PDF 文件：{names}</p>"
-                            "<p style='color:#888;'>点底部「打开首个文件」用系统阅读器查看。</p>")
+                            f"<p style='color:{theme.color('muted')};'>点底部「打开首个文件」用系统阅读器查看。</p>")
             return "", files_summary_html(art.get("files") or [])
         doc = docs[0]
         path = doc.get("path") or ""
@@ -2824,9 +2824,10 @@ class AssetPage(BasePage):
             else:
                 title, body = "", text_preview_html(read_text_file(path))
         except Exception as e:
-            return "", f"<p style='color:#c62828;'>读取失败：{html_lib.escape(str(e))}</p>"
-        wrapper = ('<div style="font-family:\'Microsoft YaHei\',sans-serif;'
-                   'font-size:15px; line-height:1.75; color:#333;">'
+            return "", (f"<p style='color:{theme.color('danger')};'>"
+                        f"读取失败：{html_lib.escape(str(e))}</p>")
+        wrapper = (f'<div style="font-family:\'Microsoft YaHei\',sans-serif;'
+                   f'font-size:15px; line-height:1.75; color:{theme.color("text")};">'
                    + body + "</div>")
         return title, wrapper
 
@@ -2879,8 +2880,10 @@ class AssetPage(BasePage):
             "QTextBrowser { background: palette(base); border: 1px solid palette(shadow);"
             " color: palette(text); }")
         content.document().setDefaultStyleSheet(
-            "body { font-family:'Microsoft YaHei'; font-size:15px; color:#333; }"
-            "blockquote { color:#666; } code { background:#f3f4f6; }")
+            f"body {{ font-family:'Microsoft YaHei'; font-size:15px;"
+            f" color:{theme.color('text')}; }}"
+            f"blockquote {{ color:{theme.color('muted')}; }}"
+            f"code {{ background:{theme.color('surface_alt')}; }}")
         tabs.addTab(content, "📄 内容")
 
         media_files = [f for f in files
@@ -2959,7 +2962,8 @@ class AssetPage(BasePage):
         def show_article(art):
             seq["n"] += 1
             token = seq["n"]
-            content.setHtml('<p style="color:#888;">正在读取内容…</p>')
+            content.setHtml(
+                f'<p style="color:{theme.color("muted")};">正在读取内容…</p>')
 
             def work():
                 return self._article_content(art)
@@ -2970,10 +2974,13 @@ class AssetPage(BasePage):
                 try:
                     if err:
                         content.setHtml(
-                            f'<p style="color:#c62828;">读取失败：{html_lib.escape(err)}</p>')
+                            f'<p style="color:{theme.color("danger")};">'
+                            f"读取失败：{html_lib.escape(err)}</p>")
                         return
                     _title, html = result
-                    content.setHtml(html or "<p style='color:#888;'>（没有可预览的内容）</p>")
+                    content.setHtml(
+                        html or f"<p style='color:{theme.color('muted')};'>"
+                        "（没有可预览的内容）</p>")
                     content.moveCursor(QTextCursor.Start)
                 except RuntimeError:
                     pass  # 弹窗已关闭
@@ -4959,10 +4966,12 @@ class AssetPage(BasePage):
             " color: palette(text); }")
         if desc:
             desc_view.setHtml(
-                "<div style='font-size:13px; line-height:1.7; color:#333;'>"
+                f"<div style='font-size:13px; line-height:1.7;"
+                f" color:{theme.color('text')};'>"
                 + html_lib.escape(desc).replace("\n", "<br>") + "</div>")
         else:
-            desc_view.setHtml("<p style='color:#888;'>（无正文）</p>")
+            desc_view.setHtml(
+                f"<p style='color:{theme.color('muted')};'>（无正文）</p>")
         v.addWidget(desc_view)
         v.addStretch(1)
 
