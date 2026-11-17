@@ -84,6 +84,7 @@ PAGE_CLASSES = {
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
     "quark_backup": ("gui_qt.pages.quark_backup", "QuarkBackupPage"),
+    "quark_download": ("gui_qt.pages.quark_download", "QuarkDownloadPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
     "performance": ("gui_qt.pages.performance", "PerformancePage"),
 }
@@ -104,6 +105,7 @@ NAV_GROUPS = [
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
         ("quark_backup", "☁️ 网盘备份"),
+        ("quark_download", "☁️ 网盘下载"),
     ]),
     ("🎬 录播工具箱", [
         ("toolbox_organize", "📂 自动整理"),

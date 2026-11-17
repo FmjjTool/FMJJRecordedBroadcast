@@ -27,6 +27,7 @@ FengMingToolbox（封茗囧菌数据汇总库 · 统一维护工具箱）在开�
 | beautifulsoup4 | 最新 | MIT | <https://code.launchpad.net/beautifulsoup> |
 | lxml | 最新 | BSD-3-Clause | <https://github.com/lxml/lxml> |
 | playwright | >= 1.40.0（可选） | Apache-2.0 | <https://github.com/microsoft/playwright-python> |
+| 7-Zip（内置 `7z.exe` / `7z.dll`） | 26.06 | LGPL-2.1-or-later（含 unRAR 限制条款） | <https://www.7-zip.org/> |
 
 ### 关于 mutagen 与 GPL-3.0
 
@@ -37,6 +38,15 @@ FengMingToolbox（封茗囧菌数据汇总库 · 统一维护工具箱）在开�
 
 PySide6 采用 LGPL-3.0。本项目以 GPL-3.0 分发，其要求严于 LGPL-3.0，已完整覆盖 LGPL 的
 全部义务（提供完整对应源码、保留声明、允许替换库文件）。发布包中的 Qt 运行库未作任何修改。
+
+### 关于内置 7-Zip
+
+- 文件：`src/toolbox/bin/7z.exe`、`src/toolbox/bin/7z.dll`，许可证原文见同目录 `7-Zip-License.txt`。
+- 版本与来源：7-Zip 26.06 x64 官方发行版，未修改二进制内容。
+- 许可证：主要部分按 **GNU LGPL-2.1-or-later** 分发；其中 unRAR 代码带有额外限制
+  （仅可用于解压 RAR，不得用于开发 RAR 压缩程序），本项目只调用其解压能力。
+- 用途：网盘下载完成后的可选解压，以及项目内的压缩包处理；发布包通过 `build.py`
+  的 `ADD_DATA` 一并携带，未改变其授权条件。
 
 ---
 
