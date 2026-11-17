@@ -1,7 +1,7 @@
 """音乐账号追踪页：单账号单平台，每个账号独立卡片，采集结果存 xlsx 并读取长期缓存。
 
 与「账号追踪」页同构（照搬 UI 换数据源）：
-- 功能页：平台筛选 + 获取全部（回车快捷）+ ⏰ 定时采集（状态圆点）+ 📷 按组导出 + 刷新
+- 功能页：平台筛选 + 获取全部（回车快捷）+ 📷 按组导出 + 刷新（定时任务统一在「任务」页）
   每账号卡片：昵称/平台/状态 + 采集/导出/历史按钮 + 变化提示（涨绿跌红）+ 2行×4列预览
 - 设置页：搜索账号（名称→链接）、添加追踪账号、分组管理、已配置账号
 - 历史窗口：指标当列、时间点当行，可横向滚动
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt.common import ask_collect_schedule, icon_btn_style, icon_button, run_bg
+from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 
 # 指标行定义：(显示名, [字段名优先级列表])
@@ -96,15 +96,6 @@ class MusicTrackerPage(BasePage):
             "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
         export_group_btn.clicked.connect(self._export_group)
         head.addWidget(export_group_btn)
-        self.timer_dot = QLabel("○")
-        self.timer_dot.setStyleSheet("color: #888; font-size: 15px;")
-        self.timer_dot.setToolTip("定时任务未安装")
-        head.addWidget(self.timer_dot)
-        timer_btn = QPushButton("⏰ 定时采集")
-        timer_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
-        timer_btn.clicked.connect(self._toggle_collect_timer)
-        head.addWidget(timer_btn)
         fetch_all_btn = QPushButton("⬇ 获取全部")
         fetch_all_btn.setStyleSheet("background: #2e7d32; color: white;")
         fetch_all_btn.clicked.connect(lambda: self._collect_all())
@@ -664,35 +655,11 @@ class MusicTrackerPage(BasePage):
         self._collecting = True
         _next_wave()
 
-    # ---------- 定时采集（Windows 计划任务） ----------
+    # ---------- 页面生命周期 ----------
     def on_show(self):
-        # 计划任务在软件外也会采集：切回本页时刷新卡片与任务状态圆点
         if (not self._accounts_loading
                 and time.monotonic() - self._accounts_refreshed_at > 30):
             self.reload_accounts()
-        self._refresh_task_status()
-
-    def _refresh_task_status(self):
-        def work():
-            from toolbox.account_tracker_task import status
-            return status("music")
-
-        def done(result, err):
-            installed = bool(result and result[0]) and not err
-            text = result[1] if (result and not err) else "定时任务状态未知"
-            self.timer_dot.setText("●" if installed else "○")
-            self.timer_dot.setStyleSheet(
-                f"color: {'#4caf50' if installed else '#888'}; font-size: 15px;")
-            self.timer_dot.setToolTip(text)
-
-        run_bg(work, done)
-
-    def _toggle_collect_timer(self):
-        ask_collect_schedule(
-            self, "music",
-            "按当前平台筛选自动采集所有账号",
-            on_changed=self._refresh_task_status)
-
     # ---------- 设置页：搜索/账号增删 ----------
     def _auto_fetch_name(self):
         """按链接识别音乐平台并拉取昵称，填充到账号名输入框（后台线程，不卡 UI）。"""

@@ -4,8 +4,8 @@
 把本地目录按「增量追加」备份到夸克网盘的指定文件夹（云端多余文件不删）：
 
 - 映射列表：多组「本地目录 → 云端文件夹」，可逐条启用 / 编辑 / 重传 / 删除
-- 计划：每天或按间隔，注册 Windows 计划任务 `FengMingQuarkBackup`
 - 立即备份：与定时任务同一条引擎（`toolbox.quark.backup`），带进度与日志
+- 计划任务统一在「任务」页面配置，本页只执行立即备份
 
 登录走「Cookie 管理 → 夸克网盘」（项目约定 5），本页不保存任何凭据。
 视觉全部使用主题语义角色与变体属性（ui-visual-spec），不写死颜色。
@@ -17,17 +17,16 @@ import threading
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QTime, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QScrollArea, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import icon_button, post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
-from toolbox import quark_backup_task
 from toolbox.quark import backup as qbackup
 from toolbox.quark import config as qconfig
 from toolbox.quark import state as qstate
@@ -238,61 +237,16 @@ class QuarkBackupPage(BasePage):
 
         right = QVBoxLayout()
         right.setSpacing(12)
-        right.addWidget(self._build_schedule_card())
+        schedule_hint = QLabel("定时备份已统一到「任务」页面，可在那里修改计划并安装 / 删除任务。")
+        schedule_hint.setProperty("role", "caption")
+        schedule_hint.setWordWrap(True)
+        right.addWidget(schedule_hint)
         right.addWidget(self._build_log_card(), 1)
         wrapper = QWidget()
         wrapper.setLayout(right)
         right.setContentsMargins(0, 0, 0, 0)
         body.addWidget(wrapper, 2)
         return body
-
-    def _build_schedule_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("🗓 计划", "注册 Windows 计划任务后，关闭软件也会按计划自动备份。")
-        self.task_status = QLabel("未读取计划任务状态")
-        self.task_status.setProperty("role", "caption")
-        self.task_status.setWordWrap(True)
-        card.heading_layout.addWidget(self.task_status)
-
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        row.addWidget(QLabel("方式"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("每天", "daily")
-        self.mode_combo.addItem("按间隔", "interval")
-        self.mode_combo.setFixedWidth(96)
-        self.mode_combo.currentIndexChanged.connect(self._sync_mode_visibility)
-        row.addWidget(self.mode_combo)
-
-        self.time_edit = QTimeEdit()
-        self.time_edit.setDisplayFormat("HH:mm")
-        self.time_edit.setFixedWidth(84)
-        self.time_edit.setToolTip("每天自动备份的时间点")
-        row.addWidget(self.time_edit)
-
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(1, 1439)
-        self.interval_spin.setSuffix(" 分钟")
-        self.interval_spin.setFixedWidth(110)
-        self.interval_spin.setToolTip("每隔多少分钟备份一次（60 的倍数按小时显示）")
-        row.addWidget(self.interval_spin)
-        row.addStretch(1)
-        card.content_layout.addLayout(row)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(6)
-        self.install_btn = QPushButton("✅ 保存并安装")
-        self.install_btn.setProperty("variant", "primary")
-        self.install_btn.setToolTip("保存计划设置并注册 / 更新 Windows 计划任务")
-        self.install_btn.clicked.connect(self._install_schedule)
-        buttons.addWidget(self.install_btn)
-        self.uninstall_btn = QPushButton("🗑 卸载任务")
-        self.uninstall_btn.setProperty("variant", "secondary")
-        self.uninstall_btn.setToolTip("删除 Windows 计划任务（删除后关闭软件不再自动备份）")
-        self.uninstall_btn.clicked.connect(self._uninstall_schedule)
-        buttons.addWidget(self.uninstall_btn)
-        buttons.addStretch(1)
-        card.content_layout.addLayout(buttons)
-        return card
 
     def _build_log_card(self) -> ToolSectionCard:
         card = ToolSectionCard("📄 本次运行日志", "定时任务的日志另存为 config/quark_backup_task.log。")
@@ -312,8 +266,6 @@ class QuarkBackupPage(BasePage):
     def reload(self):
         self._mappings = qconfig.load_mappings()
         self._render_list()
-        self._load_schedule()
-        self._refresh_task_status()
 
     def _render_list(self):
         while self.list_layout.count():
@@ -432,97 +384,6 @@ class QuarkBackupPage(BasePage):
     def _toggle_mapping(self, mapping: qconfig.Mapping, checked: bool):
         mapping.enabled = bool(checked)
         qconfig.update_mapping(mapping)
-
-    # ==================== 计划 ====================
-
-    def _load_schedule(self):
-        schedule = qconfig.load_schedule()
-        index = 0 if schedule["mode"] != "interval" else 1
-        self.mode_combo.blockSignals(True)
-        self.mode_combo.setCurrentIndex(index)
-        self.mode_combo.blockSignals(False)
-        try:
-            hour, minute = [int(x) for x in str(schedule["time"]).split(":")[:2]]
-        except (TypeError, ValueError):
-            hour, minute = 2, 30
-        self.time_edit.setTime(QTime(hour, minute))
-        self.interval_spin.setValue(int(schedule["interval_minutes"]))
-        self._sync_mode_visibility()
-
-    def _sync_mode_visibility(self):
-        daily = self.mode_combo.currentData() == "daily"
-        self.time_edit.setVisible(daily)
-        self.interval_spin.setVisible(not daily)
-
-    def _current_schedule(self) -> dict:
-        return {
-            "mode": self.mode_combo.currentData() or "daily",
-            "time": self.time_edit.time().toString("HH:mm"),
-            "interval_minutes": int(self.interval_spin.value()),
-        }
-
-    def _install_schedule(self):
-        schedule = self._current_schedule()
-        qconfig.save_schedule(schedule["mode"], schedule["time"],
-                              schedule["interval_minutes"])
-        self.install_btn.setEnabled(False)
-
-        def work():
-            return quark_backup_task.apply_schedule(
-                schedule["mode"], schedule["time"], schedule["interval_minutes"])
-
-        def done(result, err):
-            self.install_btn.setEnabled(True)
-            if err:
-                self.app.toast(f"安装计划任务失败：{err}", "error")
-                return
-            ok, message = result
-            if ok:
-                self.app.toast(f"✅ {message}", "success")
-            else:
-                QMessageBox.warning(self, "安装计划任务失败", message)
-            self._refresh_task_status()
-
-        run_bg(work, done)
-
-    def _uninstall_schedule(self):
-        if QMessageBox.question(
-                self, "卸载计划任务",
-                "删除夸克网盘备份的 Windows 计划任务？\n\n删除后关闭软件就不再自动备份，"
-                "可随时回到本页重新安装。"
-        ) != QMessageBox.Yes:
-            return
-        self.uninstall_btn.setEnabled(False)
-
-        def done(result, err):
-            self.uninstall_btn.setEnabled(True)
-            if err:
-                self.app.toast(f"卸载失败：{err}", "error")
-                return
-            ok, message = result
-            self.app.toast(message if ok else f"卸载失败：{message}",
-                           "success" if ok else "error")
-            self._refresh_task_status()
-
-        run_bg(quark_backup_task.uninstall, done)
-
-    def _refresh_task_status(self):
-        def work():
-            return quark_backup_task.info()
-
-        def done(data, err):
-            if err:
-                self.task_status.setText("计划任务状态读取失败")
-                return
-            if not data:
-                self.task_status.setText("○ 定时任务未安装")
-                self.uninstall_btn.setEnabled(False)
-                return
-            nxt = data.get("Next Run Time") or data.get("下次运行时间") or "-"
-            self.task_status.setText(f"● 已安装 · 下次运行 {nxt}")
-            self.uninstall_btn.setEnabled(True)
-
-        run_bg(work, done)
 
     # ==================== 立即备份 ====================
 

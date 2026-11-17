@@ -140,6 +140,8 @@ def uninstall(task_id: str) -> tuple[bool, str]:
         return _tcdoc.uninstall()
     if task_id == "quark":
         return _quark.uninstall()
+    if task_id == "webwiki":
+        return _webwiki.uninstall()
     if task_id in _acc.TASK_NAMES:
         return _acc.uninstall(task_id)
     return False, f"未知的定时任务：{task_id}"

@@ -257,12 +257,16 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | `QPushButton` / `QToolButton` | 前导 emoji 转 `setIcon`，文案同步去 emoji；主按钮（`variant=primary`）用 `highlighted-text`，其余 `button-text` |
 | `QLabel` | 前导 emoji 转为文字左侧 14px 小图标（子 QLabel 绘制，不改文字颜色与字体）；`role` 为 caption/muted/subtitle 或 `objectName=navigationGroup` 时用 `placeholder-text` |
 | `QCheckBox` / `QRadioButton` | 只去前导 emoji（控件本身不支持图标） |
-| `QComboBox` / `QTabWidget` | 条目 / 页签 emoji 转对应图标（`link` 色） |
+| `QComboBox` / `QTabWidget` | 条目 / 页签 emoji 转对应图标（`link` 色）；动态 `setItemText` / `setTabText` 同样生效 |
+| `QListWidget` / `QTableWidget` / `QTreeWidget` 条目 | 首列前导 emoji 转条目图标，句中 emoji 删除 |
+| `QGroupBox` 标题 | 去掉 emoji（Qt 分组框没有图标位，不加图标） |
+| `QAction` / `QMenu` | 菜单项前导 emoji 转菜单图标；菜单标题与句中 emoji 删除 |
+| 窗口标题 | 去掉 emoji |
 | `ToolSectionCard` | 标题 emoji 自动转 `icon=`，无需页面传参 |
 
 约束与注意事项：
 
-1. 只处理**文本最前面的一个** emoji；句中 emoji 视为正文，保留不转换。
+1. 前导 emoji 转图标；其余位置的 emoji（按钮、标签、页签、条目、菜单文案）直接删除并收拢空白。`QPlainTextEdit` 运行日志里的历史文本不处理。
 2. 未登记的 emoji 保持原样。新增 emoji 必须在 `_EMOJI_ICONS` 里登记，且只能指向 `line_icon()` 已存在的图标名。
 3. 显式调用 `setIcon()` 会关闭该控件的自动图标（导航栏等自定义图标不会被运行时转换覆盖）。
 4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。

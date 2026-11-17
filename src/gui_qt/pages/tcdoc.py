@@ -15,7 +15,7 @@
 - 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
 - 修订记录：纯 HTTP 增量翻页（按上次拉取位置停止，可全量重拉），导出 JSON + Excel
 - 成员名单：纯 HTTP 游标翻页，导出 JSON + Excel
-- 底部：定时采集（每天一次 / 按间隔几分钟或几小时）+ 计划任务安装/删除
+- 定时采集：统一在「任务」页面配置计划任务（本页不再内嵌定时设置）
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
+    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QTableWidget,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -462,7 +462,6 @@ class TcDocPage(BasePage):
         self._reload_doc_key = ""
         self._sheets = []
         self._rev_meta = None
-        self._task_checked_at = 0.0
         self._migrate_note = ""
         self._last_reload_at = 0.0
         self._preload_requested = False
@@ -1282,32 +1281,6 @@ class TcDocPage(BasePage):
 
         run_bg(lambda: storage.latest(db, doc["key"]), done, owner=self)
 
-    def _refresh_task(self):
-        self._task_checked_at = time.time()
-
-        def work():
-            return tc_engine.task.next_run_text()
-
-        def done(text, err):
-            if self._closed:
-                return
-            self.task_label.setText(text if not err else f"定时任务状态未知：{err}")
-
-        run_bg(work, done)
-
-    def _refresh_task(self):
-        self._task_checked_at = time.time()
-
-        def work():
-            return tc_engine.task.next_run_text()
-
-        def done(text, err):
-            if self._closed:
-                return
-            self.task_label.setText(text if not err else f"定时任务状态未知：{err}")
-
-        run_bg(work, done)
-
     # ==================== 状态 ====================
 
     def current_doc(self) -> dict | None:
@@ -2110,94 +2083,3 @@ class TcDocPage(BasePage):
             self.app.toast(f"诊断包已保存到 调试/{path.name}", "success")
 
         run_bg(work, done)
-
-    # ==================== 定时任务 ====================
-
-    def _on_schedule_mode_changed(self, *_args):
-        daily = self.schedule_mode.currentData() == "daily"
-        self.time_edit.setVisible(daily)
-        self.interval_combo.setVisible(not daily)
-        self.interval_spin.setVisible(
-            not daily and self.interval_combo.currentData() == -1)
-
-    def _on_interval_choice_changed(self, *_args):
-        custom = self.interval_combo.currentData() == -1
-        self.interval_spin.setVisible(
-            self.schedule_mode.currentData() == "interval" and custom)
-
-    def _schedule_minutes(self) -> int:
-        minutes = self.interval_combo.currentData()
-        if minutes == -1:
-            minutes = self.interval_spin.value()
-        return max(1, min(1439, int(minutes)))
-
-    def _install_task(self):
-        if self._busy:
-            return
-        daily = self.schedule_mode.currentData() == "daily"
-        hhmm, minutes = "", 0
-        if daily:
-            text = self.time_edit.text().strip()
-            parts = text.split(":")
-            valid = (len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
-                     and 0 <= int(parts[0]) < 24 and 0 <= int(parts[1]) < 60)
-            if not valid:
-                QMessageBox.warning(self, "时间格式", "请填写 24 小时制时间，例如 23:50")
-                return
-            hhmm = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-            desc = f"每天 {hhmm}"
-        else:
-            minutes = self._schedule_minutes()
-            desc = (f"每 {minutes // 60} 小时" if minutes % 60 == 0
-                    else f"每 {minutes} 分钟")
-        self._set_busy(True, f"⏳ 正在安装定时任务（{desc}）……")
-
-        def work():
-            if daily:
-                ok, msg = tc_engine.task.install_daily(hhmm)
-                if ok:
-                    tc_cfg.save_cfg(tcdoc_schedule_mode="daily",
-                                    tcdoc_collect_time=hhmm)
-            else:
-                ok, msg = tc_engine.task.install_interval(minutes)
-                if ok:
-                    tc_cfg.save_cfg(tcdoc_schedule_mode="interval",
-                                    tcdoc_interval_minutes=minutes)
-            return ok, msg
-
-        def done(result, err):
-            self._set_busy(False)
-            if err:
-                self.app.toast(f"安装失败：{err}"[:120], "error")
-                return
-            ok, msg = result
-            if ok:
-                if daily:
-                    self.time_edit.setText(hhmm)
-                else:
-                    self.interval_spin.setValue(minutes)
-                self.app.toast(f"定时任务已安装：{msg}", "success")
-                self._refresh_task()
-            else:
-                QMessageBox.warning(self, "安装失败", msg)
-
-        run_bg(work, done)
-
-    def _uninstall_task(self):
-        if self._busy:
-            return
-        self._set_busy(True, "⏳ 正在删除定时任务……")
-
-        def done(result, err):
-            self._set_busy(False)
-            if err:
-                self.app.toast(f"删除失败：{err}"[:120], "error")
-                return
-            ok, msg = result
-            if ok:
-                self.app.toast(msg, "success")
-                self._refresh_task()
-            else:
-                QMessageBox.warning(self, "删除失败", msg)
-
-        run_bg(tc_engine.task.uninstall, done)

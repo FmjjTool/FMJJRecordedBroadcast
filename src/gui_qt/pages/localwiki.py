@@ -25,7 +25,7 @@ from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.tcdoc import config as tcdoc_cfg
 from toolbox.webwiki import (
-    analytics, analytics_task, auth, config as wiki_cfg, deploy, gitops,
+    analytics, auth, config as wiki_cfg, deploy, gitops,
     localimages, server,
 )
 
@@ -490,30 +490,10 @@ class LocalWikiPage(BasePage):
         self.analytics_table.setToolTip("本地历史（最多 14 条）：每天一条，按日期+口径去重")
         box.addWidget(self.analytics_table)
 
-        sched = QHBoxLayout()
-        sched.setSpacing(6)
-        sched_cap = QLabel("每日采集")
-        sched_cap.setObjectName("wikiMuted")
-        sched.addWidget(sched_cap)
-        self.analytics_time = QLineEdit(wiki_cfg.analytics_time())
-        self.analytics_time.setFixedWidth(66)
-        self.analytics_time.setAlignment(Qt.AlignCenter)
-        self.analytics_time.setToolTip("24 小时制，如 09:10")
-        sched.addWidget(self.analytics_time)
-        self.analytics_install_btn = QPushButton("🕓 安装/更新定时")
-        self.analytics_install_btn.setObjectName("wikiButton")
-        self.analytics_install_btn.setToolTip("注册 Windows 计划任务 FengMingWebwikiAnalytics")
-        self.analytics_install_btn.clicked.connect(self._install_analytics_task)
-        sched.addWidget(self.analytics_install_btn)
-        self.analytics_uninstall_btn = QPushButton("🗑 删除定时")
-        self.analytics_uninstall_btn.setObjectName("wikiButton")
-        self.analytics_uninstall_btn.clicked.connect(self._uninstall_analytics_task)
-        sched.addWidget(self.analytics_uninstall_btn)
-        self.analytics_task_label = QLabel("")
-        self.analytics_task_label.setObjectName("wikiMuted")
-        self.analytics_task_label.setWordWrap(True)
-        sched.addWidget(self.analytics_task_label, 1)
-        box.addLayout(sched)
+        sched_hint = QLabel("每日定时采集已统一到「任务」页面，可在那里修改计划与安装 / 删除任务。")
+        sched_hint.setObjectName("wikiMuted")
+        sched_hint.setWordWrap(True)
+        box.addWidget(sched_hint)
         return card
 
     def _build_docs_card(self):
@@ -623,9 +603,9 @@ class LocalWikiPage(BasePage):
             "<code>download/站点监控数据/访问统计.db</code>，"
             "同一天重复采集直接覆盖；历史表里能看最近 14 条，"
             "攒够前一日 / 7 日前的数据后自动显示访客差。"
-            "「🕓 安装/更新定时」注册 Windows 计划任务 "
-            "<code>FengMingWebwikiAnalytics</code>，每天自动采一次，"
-            "关掉工具箱也会跑；失败原因写在 <code>采集日志.log</code>。"
+            "每天自动采集的 Windows 计划任务 <code>FengMingWebwikiAnalytics</code> "
+            "统一在「任务」页面安装与修改时间，关掉工具箱也会跑；"
+            "失败原因写在 <code>采集日志.log</code>。"
             "注意：站点默认只保留近 90 天明细，密码错 5 次会锁 15 分钟。</p>")
 
     # ==================== 主题 / 状态 ====================
@@ -813,9 +793,6 @@ class LocalWikiPage(BasePage):
         self.analytics_collect_btn.setEnabled(idle and self._analytics_has_password)
         self.analytics_pwd.setEnabled(idle)
         self.analytics_scope.setEnabled(idle)
-        self.analytics_time.setEnabled(idle)
-        self.analytics_install_btn.setEnabled(idle)
-        self.analytics_uninstall_btn.setEnabled(idle)
 
     # ==================== 日志 / 任务 ====================
 
@@ -1003,7 +980,6 @@ class LocalWikiPage(BasePage):
         def work():
             return {
                 "rows": analytics.load_history(limit=14),
-                "task": analytics_task.next_run_text(),
                 "password": analytics.has_password(),
             }
 
@@ -1030,7 +1006,6 @@ class LocalWikiPage(BasePage):
         self.analytics_note.setText(self._analytics_note_text(row, rows))
         self._fill_analytics_table(rows)
 
-        self.analytics_task_label.setText(state.get("task") or "定时任务未安装")
         self.analytics_pwd.setPlaceholderText(
             "已保存（要换密码直接输入新的再保存）" if self._analytics_has_password
             else "后台密码（与 /admin 登录同一个）")
@@ -1040,7 +1015,7 @@ class LocalWikiPage(BasePage):
     def _analytics_note_text(self, row: dict | None, rows: list[dict]) -> str:
         if not row:
             return ("尚未采集：保存密码后点「🔄 采集今日」，"
-                    "或安装每日定时让它自己跑。")
+                    "或到「任务」页面安装每日定时。")
         prev, week = analytics.deltas(row, rows)
         fetched = str(row.get("fetched_at") or "-")
         generated = str(row.get("generated_at") or "-")
@@ -1124,31 +1099,6 @@ class LocalWikiPage(BasePage):
         self._start_task("采集站点统计",
                          lambda log: analytics.collect(scope=scope, log=log),
                          on_ok=lambda _row: self._refresh_analytics())
-
-    def _install_analytics_task(self):
-        text = self.analytics_time.text().strip() or "09:10"
-        ok, message = analytics_task.install_daily(text)
-        if not ok:
-            QMessageBox.warning(self, "安装定时任务", f"安装失败：{message}")
-            return
-        wiki_cfg.set_analytics_time(text)
-        self._log(f"站点统计定时任务：{message}")
-        self.status_label.setText(f"✅ {message}")
-        self._refresh_analytics()
-
-    def _uninstall_analytics_task(self):
-        if QMessageBox.question(
-                self, "删除定时任务",
-                "删除后不再每天自动采集站点统计（已采集的历史保留）。确定删除？"
-        ) != QMessageBox.Yes:
-            return
-        ok, message = analytics_task.uninstall()
-        if not ok:
-            QMessageBox.warning(self, "删除定时任务", f"删除失败：{message}")
-            return
-        self._log(f"站点统计定时任务：{message}")
-        self.status_label.setText(f"✅ {message}")
-        self._refresh_analytics()
 
     # ==================== 目录 / 端口 / 文档 ====================
 
