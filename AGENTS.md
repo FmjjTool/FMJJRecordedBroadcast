@@ -6,6 +6,19 @@
 
 完整内容见 [src/skills/convention-skill/SKILL.md](src/skills/convention-skill/SKILL.md)。
 
+## Skill 分类索引
+
+| 类别 | Skill | 触发 |
+| --- | --- | --- |
+| 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试 |
+| 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
+| 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
+| 视觉 / 输出 | `ui-visual-spec`、`image-output-spec` | 屏幕 UI；导出图/报表图/封面图 |
+| 业务领域 | `recording-toolbox-core`、`tcdoc-sync-scope`、`fengming-livestream-summary`、`summarize-article`、`summarize-update` | 对应领域任务 |
+| 可选 persona | `shaman-jobs` | 非强制，默认不读 |
+
+分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
+
 ## Cookie 数据绝对保护 skill（强制中的强制，所有操作前必读）
 
 完整内容见 [src/skills/cookie-data-protection/SKILL.md](src/skills/cookie-data-protection/SKILL.md)。**所有 Agent 与自动任务绝对不允许改动 Cookie 管理器已保存的真实 Cookie。此条是项目内最高优先级的数据保护禁令，不设置临时授权、确认后覆盖、测试、修复或迁移例外。** 禁止直接/间接写入、覆盖、删除、清空、刷新、迁移、重新加密或修改其保存状态；既有登录、自动同步、备份、清理及核心模块授权均不能放宽本禁令。
@@ -32,11 +45,23 @@
 
 ## 界面视觉与主题规范 skill（涉及任何 UI 改动时强制阅读）
 
-完整内容见 [src/skills/ui-visual-spec/SKILL.md](src/skills/ui-visual-spec/SKILL.md)。浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式均以该 skill 为唯一依据；`theme.py` 是唯一色板来源，页面不得自带第二套配色。凡新增或修改页面、对话框、浮层、自绘控件、富文本、图表、图标，或改动背景色、文字色、字号、内联 QSS、`theme.py`，必须先阅读并逐项核对其中的禁令、铁律与验证路径。该 skill 只管视觉，不构成对核心八模块的改动授权。
+完整内容见 [src/skills/ui-visual-spec/SKILL.md](src/skills/ui-visual-spec/SKILL.md)。浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式均以该 skill 为唯一依据；`theme.py` 是唯一色板来源，页面不得自带第二套配色。凡新增或修改页面、对话框、浮层、自绘控件、富文本、图表、图标，或改动背景色、文字色、字号、内联 QSS、`theme.py`，必须先阅读并逐项核对其中的禁令、铁律与验证路径。该 skill 只管屏幕 UI 视觉；导出图、报表图、封面图等生成图片另见 `image-output-spec`。它不构成对核心八模块的改动授权。
 
 ## 分层约束 skill（新增/重构/跨层调用时强制阅读）
 
 完整内容见 [src/skills/layering-contract/SKILL.md](src/skills/layering-contract/SKILL.md)。项目按「入口/任务编排 → UI 表现 → 应用服务/用例 → 平台适配/领域引擎 → 基础设施/数据」五层 + 横切层组织；只允许上层依赖下层，禁止 UI 直接承载业务、引擎反向依赖 UI、数据层双写与第二套凭据/定时入口。该 skill 不改变既有功能，也不构成录播八模块、Cookie 或腾讯文档写入的改动授权。
+
+## 横向工程 skill（按任务触发）
+
+- **安全基线** [security-baseline](src/skills/security-baseline/SKILL.md)：涉及 Cookie 之外的密钥、日志脱敏、文件导入导出、ZIP、subprocess、网络请求、依赖或打包时必读。
+- **测试与质量门禁** [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md)：任何代码修改、重构、Bug 修复、数据迁移或 UI 改动时必读。
+- **并行协作** [agent-coordination](src/skills/agent-coordination/SKILL.md)：多 Agent/并行进程/用户同时编辑、共享文件或长任务时必读。
+- **数据生命周期** [data-lifecycle](src/skills/data-lifecycle/SKILL.md)：新增/修改数据库、存储、去重、迁移、备份、保留清理时必读。
+- **平台适配** [platform-adapter-policy](src/skills/platform-adapter-policy/SKILL.md)：新增/修改平台接口、登录、下载、回退策略时必读。
+
+## 生成图片规范 skill（涉及导出图/报表图/封面图时强制阅读）
+
+完整内容见 [src/skills/image-output-spec/SKILL.md](src/skills/image-output-spec/SKILL.md)。账号对比 PNG、组图、资产预览图、报表图、封面默认模板等程序生成图片，统一使用共享渲染模块与设计令牌：1080 px 基准宽度、固定页头页脚、统一字体/颜色/数字格式/文件命名；用户自定义封面、裁切图、截图、下载图例外。该 skill 不改变数据与统计口径，也不构成核心八模块的改动授权。
 
 ## 约定 1：更新前获取远端状态，遵循版本领先原则
 

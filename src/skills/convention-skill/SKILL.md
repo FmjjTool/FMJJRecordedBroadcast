@@ -188,6 +188,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [ ] 新增/修改的页面未自建 Cookie 管理器、登录窗口或凭据控件，页面文案不含「Cookie」及同类凭据字样，未放置登录/Cookie 管理引导入口（约定 9）。
 - [ ] 本次涉及定时任务时，计划设置只在「任务」页提供，功能页无内嵌定时控件；新任务已注册到 `toolbox/task_center.py`（约定 10）。
 - [ ] 本次涉及新增/移动/重构模块或跨层调用时，已读 `layering-contract`，新代码放置与依赖方向符合分层约束。
+- [ ] 本次涉及安全/测试/并行协作/数据迁移/平台适配/生成图片时，已读对应横向 skill：`security-baseline` / `testing-quality-gates` / `agent-coordination` / `data-lifecycle` / `platform-adapter-policy` / `image-output-spec`。
 - [ ] 更新前已读 `recording-toolbox-core` 并核对直接/间接影响；未修改八个核心模块，或仅按用户已明确授权的具体范围修改。
 - [ ] 如需认证验证，已确认只读无副作用，或使用独立临时目录和虚构凭据；未复制、输出、备份进 Git 或导出真实 Cookie。
 - [ ] 实际「总结文章」任务已携带可读取文件，并完整读取指定总结 skill 及规则参考；规则维护没有被误判为实际总结。
@@ -202,3 +203,9 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [summarize-article](../summarize-article/SKILL.md)：关键词「总结文章」与文件前置条件，转交指定直播总结指令；总结类任务不自动推送。
 - `tcdoc-sync-scope`：腾讯文档同步的编辑范围强制约束（仅允许「官方动态」「直播记录」两张表，其余全部禁写）。凡触及腾讯文档同步、写回、表格增删改、导出覆盖，必须先读该 skill。
 - [layering-contract](../layering-contract/SKILL.md)：五层 + 横切层的名称、职责、允许依赖与禁止模式；新增/重构/跨层调用前必读。
+- [security-baseline](../security-baseline/SKILL.md)：Cookie 之外的密钥、日志、文件、ZIP、subprocess、网络、依赖与打包安全；不授权真实凭据操作。
+- [testing-quality-gates](../testing-quality-gates/SKILL.md)：测试分层、隔离数据、回归测试与质量门禁。
+- [agent-coordination](../agent-coordination/SKILL.md)：多 Agent/并行进程、文件所有权、WIP 备份、提交拆分与冲突交接。
+- [data-lifecycle](../data-lifecycle/SKILL.md)：存储 owner、schema 迁移、去重、备份、保留清理与 primary/derived。
+- [platform-adapter-policy](../platform-adapter-policy/SKILL.md)：平台 Adapter 契约、能力矩阵、回退、限流、错误分类与契约测试。
+- [image-output-spec](../image-output-spec/SKILL.md)：生成图片的画布、配色、字体、页头页脚、数字格式、命名与共享渲染。

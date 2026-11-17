@@ -7,6 +7,8 @@ description: "界面视觉与主题规范（强制阅读）。统一浅色/深�
 
 先阅读 [convention-skill](../convention-skill/SKILL.md)（拉取、备份、提交、报告约定）与 [recording-toolbox-core](../recording-toolbox-core/SKILL.md)（核心八模块保护）。
 
+屏幕 UI 用本 skill；导出图、报表图、封面图等生成图片用 [image-output-spec](../image-output-spec/SKILL.md)。两者共享颜色语义，但画布、字号与页头页脚规则不同。
+
 本 skill 只管**视觉**：颜色、主题、字号、背景层级、间距、圆角、组件外观。它不给任何模块授权——改动录播工具箱八个核心模块的外观，仍需用户对本次模块与范围明确授权；视觉规范不能作为绕过保护的依据。它也不改变任何业务逻辑、布局结构与交互流程。
 
 本 skill 是纯 Markdown 约束：不含脚本、不含机器可读色板文件。核对由 Agent 阅读后人工完成，不外包给校验程序。
