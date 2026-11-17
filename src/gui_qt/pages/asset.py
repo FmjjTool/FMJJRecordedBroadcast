@@ -46,6 +46,7 @@ from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
 from toolbox.asset_files import collect_asset_files
+from toolbox.asset_media import save_video_cover
 from toolbox.asset_video import resolve_video_source
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
@@ -3791,56 +3792,14 @@ class AssetPage(BasePage):
                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev,
                                  on_task_event=(card.handle_event if card is not None else None),
                                  quiet=True)
-            # 封面单独落盘（与 download_media 同名规则 {stem}_封面.jpg，
-            # 缩略图本地优先，抖音直链会过期、部分图床 403）
+            # 封面单独落盘（命名/复用/Referer 规则由 asset_media 统一维护）
             cov = (info.cover_url or "").strip()
             if (cov and (res.get("videos") or res.get("skipped"))
                     and not res.get("cancelled")):
-                try:
-                    from media_downloader import (_sanitize_filename, _PLATFORM_CN,
-                                                  MEDIA_DIR_SUFFIX, _url_path,
-                                                  _download_one)
-                    from toolbox.utils import claim_output_stem
-                    author = _sanitize_filename(info.author or "未知")
-                    date_str = re.sub(r'[^0-9]', '', (info.publish_time or "")[:10]) \
-                        or time.strftime("%Y%m%d")
-                    title = _sanitize_filename(info.title or "", 50)
-                    plat_cn = _PLATFORM_CN.get(info.platform, info.platform)
-                    user_dir = os.path.join(base_dir, plat_cn + MEDIA_DIR_SUFFIX, author)
-                    stem = (f"{date_str}_{author}_{title}" if title
-                            else f"{date_str}_{author}_{(info.video_id or '')[:8]}")
-                    # 与 download_media 用同一套同名独占规则，避免封面写到别的帖
-                    stem = claim_output_stem(user_dir, stem, str(info.video_id or ""))
-                    if cov.startswith("//"):
-                        cov = "https:" + cov
-                    cov_ext = os.path.splitext(_url_path(cov))[1].lower()
-                    if cov_ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-                        cov_ext = ".jpg"
-                    cpath = os.path.join(user_dir, f"{stem}_封面{cov_ext}")
-                    # 已有封面（扩展名可能被 Content-Type 改成 .png 等）直接复用
-                    for e in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-                        if os.path.exists(os.path.join(user_dir, f"{stem}_封面{e}")):
-                            cpath = os.path.join(user_dir, f"{stem}_封面{e}")
-                            break
-                    else:
-                        h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                           "AppleWebKit/537.36"}
-                        for dom, ref in (("douyin", "https://www.douyin.com/"),
-                                         ("sinaimg", "https://weibo.com/"),
-                                         ("weibo", "https://weibo.com/"),
-                                         ("xhscdn", "https://www.xiaohongshu.com/"),
-                                         ("xiaohongshu", "https://www.xiaohongshu.com/")):
-                            if dom in cov:
-                                h["Referer"] = ref
-                                break
-                        _cpath, ok_cov = _download_one(cov, cpath, h)
-                        if ok_cov:
-                            cpath = _cpath
-                            res["covers"] = res.get("covers", 0) + 1
-                    if os.path.exists(cpath):
-                        res.setdefault("paths", []).append((cpath, "封面"))
-                except Exception:
-                    pass
+                cpath = save_video_cover(info, base_dir)
+                if cpath:
+                    res["covers"] = res.get("covers", 0) + 1
+                    res.setdefault("paths", []).append((cpath, "封面"))
             return res
 
         def done(result, err):
