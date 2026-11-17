@@ -217,7 +217,12 @@ class BaiduClient:
     # ==================== 上传 ====================
 
     def upload_file(self, local_path, remote_dir: str, on_progress=None,
-                    on_stage=None, hashes=None) -> dict:
+                    on_stage=None, hashes=None, resume=None) -> dict:
+        """上传一个文件；`resume` 为 `state.ResumeHandle` 时支持断点续传。
+
+        百度按 `partseq` 顺序传分片，所以断点只需记住「已传到第几片」；
+        `uploadid` 过期时 create/precreate 会报错，这里丢掉断点重来一次。
+        """
         path = Path(local_path)
         size = path.stat().st_size
         if size <= 0:
@@ -230,60 +235,98 @@ class BaiduClient:
             on_stage("hash", path.name, size)
         file_md5, blocks = self._digests(path)
 
-        resp = self.session.post(f"{BASE}/api/precreate", data={
-            "path": remote_path, "size": size, "isdir": 0,
-            "block_list": json.dumps(blocks), "autoinit": 1, "rtype": 3,
-            "bdstoken": self.bdstoken, **self._common()}, timeout=TIMEOUT)
-        pre = self._check(self._json(resp, "/api/precreate"), "/api/precreate")
-        uploadid = str(pre.get("uploadid") or "")
-        if int(pre.get("return_type") or 0) == 2 or not uploadid:
+        saved = resume.load() if resume is not None else {}
+        uploadid = ""
+        done = 0
+        if (saved.get("md5") == file_md5 and int(saved.get("size") or -1) == size
+                and saved.get("uploadid")):
+            uploadid = str(saved["uploadid"])
+            done = max(0, int(saved.get("done") or 0))
+        used_resume = bool(uploadid)
+
+        def _persist() -> None:
+            if resume is not None:
+                resume.save({"md5": file_md5, "size": size,
+                             "uploadid": uploadid, "done": done})
+
+        try:
+            if not uploadid:
+                resp = self.session.post(f"{BASE}/api/precreate", data={
+                    "path": remote_path, "size": size, "isdir": 0,
+                    "block_list": json.dumps(blocks), "autoinit": 1, "rtype": 3,
+                    "bdstoken": self.bdstoken, **self._common()}, timeout=TIMEOUT)
+                pre = self._check(self._json(resp, "/api/precreate"), "/api/precreate")
+                uploadid = str(pre.get("uploadid") or "")
+                if int(pre.get("return_type") or 0) == 2 or not uploadid:
+                    if resume is not None:
+                        resume.clear()
+                    self._index_cache.pop(remote_dir, None)
+                    return {"fid": remote_path, "instant": True,
+                            "md5": file_md5, "size": size}
+                _persist()
+
+            if on_stage is not None:
+                on_stage("upload", path.name, size)
+            total_parts = max(1, -(-size // BLOCK_SIZE))
+            sent = min(done * BLOCK_SIZE, size)
+            if on_progress is not None and sent:
+                try:
+                    on_progress(sent, size)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            with open(path, "rb") as handle:
+                handle.seek(done * BLOCK_SIZE)
+                partseq = done
+                while True:
+                    blob = handle.read(BLOCK_SIZE)
+                    if not blob:
+                        break
+                    last_error = None
+                    for attempt in range(2):
+                        try:
+                            r = self.session.post(
+                                f"{PCS}/rest/2.0/pcs/superfile2",
+                                params={"method": "upload", "type": "tmpfile",
+                                        "path": remote_path, "uploadid": uploadid,
+                                        "partseq": partseq, "app_id": APP_ID},
+                                files={"file": ("blob", blob)}, timeout=PART_TIMEOUT)
+                            if r.status_code == 200:
+                                last_error = None
+                                break
+                            last_error = BaiduError(r.status_code, r.text[:160], "superfile2")
+                            if r.status_code < 500:
+                                break
+                        except (requests.RequestException, OSError) as exc:
+                            last_error = exc
+                        if attempt == 0:
+                            time.sleep(1.5)
+                    if last_error is not None:
+                        raise last_error if isinstance(last_error, BaiduError) else BaiduError(
+                            -1, f"分块 {partseq} 上传失败：{last_error}", "superfile2")
+                    sent = min(sent + len(blob), size)
+                    partseq += 1
+                    done = partseq
+                    _persist()
+                    if on_progress is not None:
+                        try:
+                            on_progress(sent, size)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+            resp = self.session.post(f"{BASE}/api/create", data={
+                "path": remote_path, "size": size, "isdir": 0,
+                "block_list": json.dumps(blocks), "uploadid": uploadid,
+                "bdstoken": self.bdstoken, **self._common()}, timeout=TIMEOUT * 2)
+            created = self._check(self._json(resp, "/api/create"), "/api/create")
+            if resume is not None:
+                resume.clear()
             self._index_cache.pop(remote_dir, None)
-            return {"fid": remote_path, "instant": True, "md5": file_md5, "size": size}
-
-        if on_stage is not None:
-            on_stage("upload", path.name, size)
-        sent = 0
-        with open(path, "rb") as handle:
-            partseq = 0
-            while True:
-                blob = handle.read(BLOCK_SIZE)
-                if not blob:
-                    break
-                last_error = None
-                for attempt in range(2):
-                    try:
-                        r = self.session.post(
-                            f"{PCS}/rest/2.0/pcs/superfile2",
-                            params={"method": "upload", "type": "tmpfile",
-                                    "path": remote_path, "uploadid": uploadid,
-                                    "partseq": partseq, "app_id": APP_ID},
-                            files={"file": ("blob", blob)}, timeout=PART_TIMEOUT)
-                        if r.status_code == 200:
-                            last_error = None
-                            break
-                        last_error = BaiduError(r.status_code, r.text[:160], "superfile2")
-                        if r.status_code < 500:
-                            break
-                    except (requests.RequestException, OSError) as exc:
-                        last_error = exc
-                    if attempt == 0:
-                        time.sleep(1.5)
-                if last_error is not None:
-                    raise last_error if isinstance(last_error, BaiduError) else BaiduError(
-                        -1, f"分块 {partseq} 上传失败：{last_error}", "superfile2")
-                sent += len(blob)
-                partseq += 1
-                if on_progress is not None:
-                    try:
-                        on_progress(min(sent, size), size)
-                    except Exception:  # noqa: BLE001
-                        pass
-
-        resp = self.session.post(f"{BASE}/api/create", data={
-            "path": remote_path, "size": size, "isdir": 0,
-            "block_list": json.dumps(blocks), "uploadid": uploadid,
-            "bdstoken": self.bdstoken, **self._common()}, timeout=TIMEOUT * 2)
-        created = self._check(self._json(resp, "/api/create"), "/api/create")
-        self._index_cache.pop(remote_dir, None)
-        return {"fid": str(created.get("path") or remote_path), "instant": False,
-                "md5": file_md5, "size": size}
+            return {"fid": str(created.get("path") or remote_path), "instant": False,
+                    "md5": file_md5, "size": size}
+        except Exception:
+            if used_resume and resume is not None:
+                resume.clear()
+                return self.upload_file(local_path, remote_dir, on_progress=on_progress,
+                                        on_stage=on_stage, hashes=(file_md5, ""), resume=None)
+            raise

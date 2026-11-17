@@ -307,8 +307,12 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
                         _say(log, f"已删除云端旧版本：{rel}")
                     else:
                         _say(log, f"旧版本删除失败，将保留副本：{rel}")
+            resume = state.ResumeHandle(mapping.provider or "quark", str(path),
+                                        stat.st_size, stat.st_mtime, remote_dir)
+            if resume.load():
+                _say(log, f"从断点续传：{rel}")
             info = client.upload_file(
-                path, remote_dir, hashes=(md5, sha1),
+                path, remote_dir, hashes=(md5, sha1), resume=resume,
                 on_stage=lambda stage, _name, _size, _rel=rel: _emit(
                     progress, phase=("hash" if stage == "hash" else "file"),
                     name=_rel, size=_size, sent=0, current=index - 1,
@@ -352,6 +356,10 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
 def run_all(mappings: list[Mapping] | None = None, progress=None, log=None,
             stop_event=None, force: bool = False) -> list[BackupResult]:
     """按顺序跑全部启用的映射；鉴权失败时只报一次错，不重复请求。"""
+    try:  # 顺手清掉 7 天前的续传记录，避免状态库长期膨胀
+        state.purge_resume(7)
+    except Exception:  # noqa: BLE001
+        pass
     items = [m for m in (mappings if mappings is not None else load_mappings())
              if m.enabled and m.local_dir]
     results: list[BackupResult] = []

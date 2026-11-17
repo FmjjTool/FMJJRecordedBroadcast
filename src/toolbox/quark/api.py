@@ -425,11 +425,14 @@ class QuarkClient:
             time.sleep(0.8)
 
     def upload_file(self, local_path, remote_dir: str, on_progress=None,
-                    on_stage=None, hashes: tuple[str, str] | None = None) -> dict:
+                    on_stage=None, hashes: tuple[str, str] | None = None,
+                    resume=None) -> dict:
         """上传一个文件到 `remote_dir`（相对路径，自动建目录）。
 
         - `on_stage("hash" | "upload", 文件名, 字节数)`：大文件算校验、开始传输时给界面反馈
         - `hashes=(md5, sha1)`：上层已算过就直接复用，避免 3 GB 视频重复读盘
+        - `resume`：`state.ResumeHandle`，分片进度落库；中断后下次从断点续传
+
         返回 `{"fid", "instant", "md5", "size"}`；秒传时 instant=True。
         """
         path = Path(local_path)
@@ -442,36 +445,73 @@ class QuarkClient:
                 on_stage("hash", path.name, size)
             md5, sha1 = file_hashes(path)
         parent_fid = self.ensure_dir(remote_dir)
-        pre = self._pre(path, parent_fid, md5, sha1)
-        finish, fid = self._hash(md5, sha1, pre["task_id"])
-        if finish:
+
+        saved = resume.load() if resume is not None else {}
+        pre: dict = {}
+        etags: dict[int, str] = {}
+        if (saved.get("md5") == md5 and int(saved.get("size") or -1) == size
+                and isinstance(saved.get("pre"), dict) and saved["pre"].get("obj_key")):
+            pre = dict(saved["pre"])
+            etags = {int(k): v for k, v in (saved.get("etags") or {}).items()}
+        used_resume = bool(pre)
+
+        def _persist() -> None:
+            if resume is None:
+                return
+            resume.save({"md5": md5, "size": size, "pre": pre,
+                         "etags": {str(k): v for k, v in etags.items()}})
+
+        try:
+            if not pre:
+                pre = self._pre(path, parent_fid, md5, sha1)
+                finish, fid = self._hash(md5, sha1, pre["task_id"])
+                if finish:
+                    if resume is not None:
+                        resume.clear()
+                    self._name_cache.pop(str(remote_dir or "").strip("/"), None)
+                    return {"fid": fid or str(pre.get("fid") or ""), "instant": True,
+                            "md5": md5, "size": size,
+                            "visible": self._wait_visible(parent_fid, path.name)}
+                _persist()
+
+            part_size = max(1024 * 1024, int(pre.get("_part_size") or DEFAULT_PART_SIZE))
+            total_parts = max(1, -(-size // part_size))
+            mime = _mime_of(path)
+            if on_stage is not None:
+                on_stage("upload", path.name, size)
+            sent = 0
+            with open(path, "rb") as handle:
+                for number in range(1, total_parts + 1):
+                    offset = (number - 1) * part_size
+                    handle.seek(offset)
+                    blob = handle.read(min(part_size, size - offset))
+                    if number in etags:
+                        sent += len(blob)
+                        if on_progress is not None:
+                            try:
+                                on_progress(min(sent, size), size)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        continue
+                    etag = self._put_part(pre, number, blob, mime,
+                                          on_progress=on_progress,
+                                          sent_before=sent, total=size)
+                    etags[number] = etag
+                    sent += len(blob)
+                    _persist()
+            if etags:
+                self._commit(pre, [etags[n] for n in sorted(etags)])
+            self._finish(pre)
+            if resume is not None:
+                resume.clear()
             self._name_cache.pop(str(remote_dir or "").strip("/"), None)
-            return {"fid": fid or str(pre.get("fid") or ""), "instant": True,
+            return {"fid": str(pre.get("fid") or ""), "instant": False,
                     "md5": md5, "size": size,
                     "visible": self._wait_visible(parent_fid, path.name)}
-
-        part_size = max(1024 * 1024, int(pre.get("_part_size") or DEFAULT_PART_SIZE))
-        etags: list[str] = []
-        part_number = 1
-        sent = 0
-        mime = _mime_of(path)
-        if on_stage is not None:
-            on_stage("upload", path.name, size)
-        with open(path, "rb") as handle:
-            while True:
-                blob = handle.read(part_size)
-                if not blob:
-                    break
-                etag = self._put_part(pre, part_number, blob, mime,
-                                      on_progress=on_progress,
-                                      sent_before=sent, total=size)
-                etags.append(etag)
-                sent += len(blob)
-                part_number += 1
-        if etags:
-            self._commit(pre, etags)
-        self._finish(pre)
-        self._name_cache.pop(str(remote_dir or "").strip("/"), None)
-        visible = self._wait_visible(parent_fid, path.name)
-        return {"fid": str(pre.get("fid") or fid), "instant": False,
-                "md5": md5, "size": size, "visible": visible}
+        except Exception:
+            # 续传票据过期等：丢掉断点，从头再来一次（只重试一次）
+            if used_resume and resume is not None:
+                resume.clear()
+                return self.upload_file(local_path, remote_dir, on_progress=on_progress,
+                                        on_stage=on_stage, hashes=(md5, sha1), resume=None)
+            raise

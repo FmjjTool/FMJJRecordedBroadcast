@@ -241,88 +241,146 @@ class Yun139Client:
         return plan
 
     def upload_file(self, local_path, remote_dir: str, on_progress=None,
-                    on_stage=None, hashes=None) -> dict:
+                    on_stage=None, hashes=None, resume=None) -> dict:
+        """上传文件；`resume` 为 `state.ResumeHandle` 时按分片续传。
+
+        续传记录保存 `file_id` / `upload_id` / 分片计划 / 已完成片数。
+        上传地址（uploadUrl）有时效，失效时用 `/file/getUploadUrl` 重新取。
+        """
         path = Path(local_path)
         size = path.stat().st_size
         md5, sha256 = hashes if hashes else self.digest(path)
         if on_stage is not None:
             on_stage("upload", path.name, size)
         parent = self.ensure_dir(remote_dir)
-        plan = self._plan_parts(size)
 
-        data = self._post("/file/create", {
-            "contentHash": sha256,
-            "contentHashAlgorithm": "SHA256",
-            "contentType": "application/octet-stream",
-            "parallelUpload": False,
-            "partInfos": plan[:100],
-            "size": size,
-            "parentFileId": parent,
-            "name": path.name,
-            "type": "file",
-            "fileRenameMode": "auto_rename",
-        })
-        file_id = str(data.get("fileId") or "")
-        upload_id = str(data.get("uploadId") or "")
-        infos = data.get("partInfos") or data.get("uploadPartInfos") or []
-        if not infos:
-            # 秒传：服务端已有同样内容
-            self._index_cache.pop((remote_dir or "").strip("/"), None)
-            return {"fid": file_id, "instant": True, "md5": md5, "size": size}
+        saved = resume.load() if resume is not None else {}
+        file_id = ""
+        upload_id = ""
+        plan: list[dict] = []
+        done = 0
+        if (saved.get("sha256") == sha256 and int(saved.get("size") or -1) == size
+                and saved.get("upload_id") and saved.get("plan")):
+            file_id = str(saved.get("file_id") or "")
+            upload_id = str(saved["upload_id"])
+            plan = list(saved["plan"])
+            done = max(0, int(saved.get("done") or 0))
+        used_resume = bool(upload_id)
+
+        def _persist() -> None:
+            if resume is not None:
+                resume.save({"sha256": sha256, "size": size, "file_id": file_id,
+                             "upload_id": upload_id, "plan": plan, "done": done})
 
         urls: dict[int, str] = {}
-        for index, item in enumerate(infos):
-            urls[int(item.get("partNumber") or index + 1)] = str(item.get("uploadUrl") or "")
 
-        pending = [item for item in plan if int(item["partNumber"]) not in urls]
-        for start in range(0, len(pending), 100):
+        def _fetch_urls(start_index: int) -> None:
+            pending = plan[start_index:start_index + 100]
+            if not pending:
+                return
             more = self._post("/file/getUploadUrl", {
-                "fileId": file_id, "uploadId": upload_id,
-                "partInfos": pending[start:start + 100],
-            })
+                "fileId": file_id, "uploadId": upload_id, "partInfos": pending})
             for index, item in enumerate(more.get("partInfos") or []):
-                urls[int(item.get("partNumber") or index + 1)] = str(item.get("uploadUrl") or "")
+                urls[int(item.get("partNumber") or 0) or (start_index + index + 1)] = str(
+                    item.get("uploadUrl") or "")
 
-        sent = 0
-        with open(path, "rb") as handle:
-            for item in plan:
-                number = int(item["partNumber"])
-                blob = handle.read(int(item["partSize"]))
-                if not blob:
-                    break
-                url = urls.get(number) or ""
-                if not url:
-                    raise Yun139Error(-1, f"第 {number} 片缺少上传地址", "/file/create")
-                last_error = None
-                for attempt in range(2):
-                    try:
-                        resp = self.session.put(
-                            url, data=blob,
-                            headers={"Content-Type": "application/octet-stream",
-                                     "Content-Length": str(len(blob))},
-                            timeout=PART_TIMEOUT)
-                        if resp.status_code in (200, 201, 204):
-                            last_error = None
-                            break
-                        last_error = Yun139Error(resp.status_code, resp.text[:160], "uploadUrl")
-                        if resp.status_code < 500:
-                            break
-                    except (requests.RequestException, OSError) as exc:
-                        last_error = exc
-                    if attempt == 0:
-                        time.sleep(1.5)
-                if last_error is not None:
-                    raise last_error if isinstance(last_error, Yun139Error) else Yun139Error(
-                        -1, f"分片 {number} 上传失败：{last_error}", "uploadUrl")
-                sent += len(blob)
-                if on_progress is not None:
-                    try:
-                        on_progress(min(sent, size), size)
-                    except Exception:  # noqa: BLE001
-                        pass
+        try:
+            if not upload_id:
+                plan = self._plan_parts(size)
+                data = self._post("/file/create", {
+                    "contentHash": sha256,
+                    "contentHashAlgorithm": "SHA256",
+                    "contentType": "application/octet-stream",
+                    "parallelUpload": False,
+                    "partInfos": plan[:100],
+                    "size": size,
+                    "parentFileId": parent,
+                    "name": path.name,
+                    "type": "file",
+                    "fileRenameMode": "auto_rename",
+                })
+                file_id = str(data.get("fileId") or "")
+                upload_id = str(data.get("uploadId") or "")
+                infos = data.get("partInfos") or data.get("uploadPartInfos") or []
+                if not infos:
+                    if resume is not None:
+                        resume.clear()
+                    self._index_cache.pop((remote_dir or "").strip("/"), None)
+                    return {"fid": file_id, "instant": True, "md5": md5, "size": size}
+                for index, item in enumerate(infos):
+                    urls[int(item.get("partNumber") or index + 1)] = str(
+                        item.get("uploadUrl") or "")
+                _persist()
 
-        self._post("/file/complete", {
-            "contentHash": sha256, "contentHashAlgorithm": "SHA256",
-            "fileId": file_id, "uploadId": upload_id})
-        self._index_cache.pop((remote_dir or "").strip("/"), None)
-        return {"fid": file_id, "instant": False, "md5": md5, "size": size}
+            sent = sum(int(plan[i]["partSize"]) for i in range(min(done, len(plan))))
+            if on_progress is not None and sent:
+                try:
+                    on_progress(min(sent, size), size)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            with open(path, "rb") as handle:
+                handle.seek(sent)
+                for offset_index in range(done, len(plan)):
+                    item = plan[offset_index]
+                    number = int(item["partNumber"])
+                    blob = handle.read(int(item["partSize"]))
+                    if not blob:
+                        break
+                    url = urls.get(number) or ""
+                    if not url:
+                        _fetch_urls(offset_index)
+                        url = urls.get(number) or ""
+                    last_error = None
+                    for attempt in range(2):
+                        if not url:
+                            break
+                        try:
+                            resp = self.session.put(
+                                url, data=blob,
+                                headers={"Content-Type": "application/octet-stream",
+                                         "Content-Length": str(len(blob))},
+                                timeout=PART_TIMEOUT)
+                            if resp.status_code in (200, 201, 204):
+                                last_error = None
+                                break
+                            last_error = Yun139Error(resp.status_code, resp.text[:160], "uploadUrl")
+                            if resp.status_code in (401, 403, 404):
+                                # 上传地址过期：重新取一次再试
+                                urls.pop(number, None)
+                                _fetch_urls(offset_index)
+                                url = urls.get(number) or ""
+                                continue
+                            if resp.status_code < 500:
+                                break
+                        except (requests.RequestException, OSError) as exc:
+                            last_error = exc
+                        if attempt == 0:
+                            time.sleep(1.5)
+                    if url and last_error is not None:
+                        raise last_error if isinstance(last_error, Yun139Error) else Yun139Error(
+                            -1, f"分片 {number} 上传失败：{last_error}", "uploadUrl")
+                    if not url:
+                        raise Yun139Error(-1, f"第 {number} 片缺少上传地址", "/file/getUploadUrl")
+                    sent += len(blob)
+                    done = offset_index + 1
+                    _persist()
+                    if on_progress is not None:
+                        try:
+                            on_progress(min(sent, size), size)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+            self._post("/file/complete", {
+                "contentHash": sha256, "contentHashAlgorithm": "SHA256",
+                "fileId": file_id, "uploadId": upload_id})
+            if resume is not None:
+                resume.clear()
+            self._index_cache.pop((remote_dir or "").strip("/"), None)
+            return {"fid": file_id, "instant": False, "md5": md5, "size": size}
+        except Exception:
+            if used_resume and resume is not None:
+                resume.clear()
+                return self.upload_file(local_path, remote_dir, on_progress=on_progress,
+                                        on_stage=on_stage, hashes=(md5, sha256), resume=None)
+            raise

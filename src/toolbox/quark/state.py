@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -31,6 +33,16 @@ CREATE TABLE IF NOT EXISTS uploaded (
     uploaded_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_uploaded_mapping ON uploaded(mapping_id);
+
+CREATE TABLE IF NOT EXISTS resume (
+    token       TEXT PRIMARY KEY,
+    provider    TEXT NOT NULL DEFAULT '',
+    local_path  TEXT NOT NULL DEFAULT '',
+    size        INTEGER NOT NULL DEFAULT 0,
+    mtime       REAL NOT NULL DEFAULT 0,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    updated_at  TEXT NOT NULL DEFAULT ''
+);
 
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,3 +161,58 @@ def recent_runs(limit: int = 20) -> list[dict]:
     keys = ("mapping_id", "local_dir", "remote_dir", "started_at", "finished_at",
             "scanned", "uploaded", "skipped", "failed", "bytes", "ok", "message")
     return [dict(zip(keys, row)) for row in rows]
+
+
+# ==================== 断点续传 ====================
+
+class ResumeHandle:
+    """一条文件的续传句柄：按 (后端, 路径, 大小, mtime, 远端目录) 定位。
+
+    各后端自己决定 payload 结构（任务 id、分片进度、已完成的 etag/序号），
+    引擎只负责创建句柄、成功后 clear()。
+    """
+
+    def __init__(self, provider: str, local_path: str, size: int, mtime: float,
+                 remote_dir: str):
+        raw = f"{provider}|{local_path}|{int(size)}|{float(mtime):.6f}|{remote_dir}"
+        self.token = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+        self.provider = provider
+        self.local_path = str(local_path)
+        self.size = int(size)
+        self.mtime = float(mtime)
+
+    def load(self) -> dict:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM resume WHERE token=?", (self.token,)).fetchone()
+        if not row:
+            return {}
+        try:
+            data = json.loads(row[0] or "{}")
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def save(self, payload: dict) -> None:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO resume (token, provider, local_path, size, mtime, payload,"
+                " updated_at) VALUES (?,?,?,?,?,?,?)"
+                " ON CONFLICT(token) DO UPDATE SET payload=excluded.payload,"
+                " updated_at=excluded.updated_at",
+                (self.token, self.provider, self.local_path, self.size, self.mtime,
+                 json.dumps(payload, ensure_ascii=False), _now()),
+            )
+
+    def clear(self) -> None:
+        with connect() as conn:
+            conn.execute("DELETE FROM resume WHERE token=?", (self.token,))
+
+
+def purge_resume(days: int = 7) -> int:
+    """清掉过期的续传记录（默认 7 天），返回删除条数。"""
+    with connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM resume WHERE updated_at < datetime('now', 'localtime', ?)",
+            (f"-{int(days)} days",))
+        return cur.rowcount or 0
