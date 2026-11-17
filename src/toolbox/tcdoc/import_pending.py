@@ -153,15 +153,20 @@ def stem_images(project: Path, columns: dict) -> list[Path]:
     return covers + plain
 
 
-def make_manifest(project=ROOT, days=30):
-    project = project.resolve()
-    result, sources = pending_result(project, days)
-    catalogue = {}
+def build_catalogue(project: Path, sources: list[dict]) -> dict:
+    """本地条目 → 图片 URL 到候选文件的映射（GUI 与命令行共用）。"""
+    catalogue: dict[str, list[Path]] = {}
     for item in sources:
         for url, paths in _source_paths(project, item).items():
             catalogue.setdefault(url, []).extend(paths)
+    return catalogue
+
+
+def records_from_rows(project: Path, rows: list[dict], catalogue: dict):
+    """中间层待同步行 → 可导入记录（含本地图片路径与缺图槽位）。"""
+    project = Path(project).resolve()
     records, missing = [], []
-    for row in result["rows"]:
+    for row in rows:
         columns = {name: str(row.get(name) or "") for name in bridge.COLUMNS}
         key = link_key(columns["作品链接"] or columns["动态链接(b站)"])
         if not key:
@@ -188,6 +193,14 @@ def make_manifest(project=ROOT, days=30):
                                 "path": candidates[0] if candidates else None})
         records.append({"key": key, "columns": columns, "images": paths,
                         "expected_images": len(row.get("_images") or []), "missing_slots": gaps})
+    return records, missing
+
+
+def make_manifest(project=ROOT, days=30):
+    project = project.resolve()
+    result, sources = pending_result(project, days)
+    catalogue = build_catalogue(project, sources)
+    records, missing = records_from_rows(project, result["rows"], catalogue)
     manifest = {"version": 1, "created_at": datetime.now(BEIJING).isoformat(),
                 "source": {"doc_key": "DRnd3bkhkQUR1aEJr", "tab_id": "ss_h2uh2s", "stats": result["stats"]},
                 "records": records}

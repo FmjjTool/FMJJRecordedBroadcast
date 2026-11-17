@@ -1,8 +1,8 @@
 """腾讯文档 · 中间层同步器（页签面板 / 弹窗两种形态）。
 
-只读比对本地「已获取」/增量数据库与已同步的腾讯表格，把尚未上传的条目
-按「官方动态」列标准整理成表格，一键复制 TSV 后由用户手动粘贴上传。
-不会写腾讯文档，也不会调用任何上传接口。
+比对本地「已获取」/增量数据库与已同步的腾讯表格，把尚未上传的条目按
+「官方动态」列标准整理成表格：可一键复制 TSV 手工粘贴，也可在勾选确认后
+连同本地图片上传到腾讯文档（仅限官方动态 / 直播记录，需用户点击确认）。
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
-    QHeaderView, QLabel, QMenu, QPushButton, QTableView, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QHeaderView, QLabel, QMenu, QMessageBox, QPushButton, QStackedWidget,
+    QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -24,6 +24,7 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import bridge
 
 _DAYS = (("近 7 天", 7), ("近 30 天", 30), ("近 90 天", 90), ("全部历史", 0))
+_UPLOAD_LIMIT = 50
 _DISPLAY_COLUMNS = list(bridge.COLUMNS) + ["图片"]
 _WIDTHS = {
     "作品标题": 240, "发布距今": 90, "作品内容": 240, "发布账号": 110,
@@ -69,6 +70,118 @@ class _PendingModel(QAbstractTableModel):
         return value[:600] if role == Qt.ToolTipRole else value
 
 
+class _UploadDialog(QDialog):
+    """上传前的人工确认清单：默认全选，可逐行取消（复选框冗余保护）。"""
+
+    def __init__(self, records, parent=None):
+        super().__init__(parent)
+        self._records = list(records)
+        self.setWindowTitle("上传到腾讯文档")
+        self.resize(900, 540)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(8)
+
+        tip = QLabel("默认全选；取消勾选可跳过某些行。上传会新增记录并把本地图片一起传到腾讯文档，"
+                     "链接已存在的记录会自动跳过，不会修改或删除表内已有行。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color: #888;")
+        layout.addWidget(tip)
+
+        self.table = QTableWidget(0, 6, self)
+        self.table.setHorizontalHeaderLabels(
+            ["上传", "作品标题", "发布账号", "发布平台", "发布时间", "图片"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        for index, width in enumerate((56, 380, 130, 90, 150, 120)):
+            self.table.setColumnWidth(index, width)
+        for record in self._records:
+            self._add_row(record)
+        layout.addWidget(self.table, 1)
+
+        self.summary = QLabel("")
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+
+        row = QHBoxLayout()
+        self.all_btn = QPushButton("全选")
+        self.none_btn = QPushButton("全不选")
+        self.cancel_btn = QPushButton("取消")
+        self.ok_btn = QPushButton("⬆ 开始上传")
+        self.ok_btn.setProperty("variant", "primary")
+        row.addWidget(self.all_btn)
+        row.addWidget(self.none_btn)
+        row.addStretch(1)
+        row.addWidget(self.cancel_btn)
+        row.addWidget(self.ok_btn)
+        layout.addLayout(row)
+
+        self.all_btn.clicked.connect(lambda: self._set_all(True))
+        self.none_btn.clicked.connect(lambda: self._set_all(False))
+        self.cancel_btn.clicked.connect(self.reject)
+        self.ok_btn.clicked.connect(self.accept)
+        self.table.itemChanged.connect(lambda _item: self._refresh_summary())
+        self._refresh_summary()
+
+    def _add_row(self, record: dict) -> None:
+        columns = record["columns"]
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        blocked = str(record.get("blocked") or "")
+        check = QTableWidgetItem()
+        if blocked:
+            check.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            check.setCheckState(Qt.Unchecked)
+            check.setToolTip(f"不可上传：{blocked}")
+        else:
+            check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            check.setCheckState(Qt.Checked)
+        self.table.setItem(row, 0, check)
+        note = f"{len(record.get('images') or [])} 张"
+        if record.get("missing_slots"):
+            note += f"（缺 {len(record['missing_slots'])}）"
+        if blocked:
+            note += " · 不可上传"
+        texts = [str(columns.get("作品标题") or ""), str(columns.get("发布账号") or ""),
+                 str(columns.get("发布平台") or ""), str(columns.get("发布时间") or ""), note]
+        for index, text in enumerate(texts, start=1):
+            item = QTableWidgetItem(text.replace("\n", " ")[:160])
+            item.setToolTip(text[:1500])
+            self.table.setItem(row, index, item)
+
+    def _set_all(self, checked: bool) -> None:
+        state = Qt.Checked if checked else Qt.Unchecked
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(state)
+        self._refresh_summary()
+
+    def selected_records(self) -> list[dict]:
+        chosen = []
+        for row, record in enumerate(self._records):
+            item = self.table.item(row, 0)
+            if item is not None and item.checkState() == Qt.Checked:
+                chosen.append(record)
+        return chosen
+
+    def _refresh_summary(self) -> None:
+        chosen = self.selected_records()
+        images = sum(len(r.get("images") or []) for r in chosen)
+        gaps = sum(len(r.get("missing_slots") or []) for r in chosen)
+        blocked = sum(1 for r in self._records if r.get("blocked"))
+        note = f"；缺图 {gaps} 张会留空" if gaps else ""
+        block_note = f"；不可上传 {blocked} 条（缺字段或选项）" if blocked else ""
+        self.summary.setText(
+            f"已选 {len(chosen)} / {len(self._records)} 条 · 图片 {images} 张{note}{block_note}")
+        self.ok_btn.setEnabled(bool(chosen))
+
+
 class TcDocBridgePanel(QWidget):
     def __init__(self, parent=None, app=None, prefer_doc_key: str = "",
                  embedded: bool = False, defer_load: bool = False):
@@ -88,6 +201,7 @@ class TcDocBridgePanel(QWidget):
         self._account_names: list[str] = []
         self._account_actions: dict[str, object] = {}
         self._busy = False
+        self._uploading = False
         self._image_busy = False
         self._image_temp_dir = None
         self._closed = False
@@ -144,6 +258,14 @@ class TcDocBridgePanel(QWidget):
         top.addWidget(self.compare_btn)
         top.addStretch(1)
 
+        self.upload_btn = QPushButton("⬆ 上传到腾讯文档")
+        self.upload_btn.setToolTip(
+            "把清单中勾选的记录连同本地图片上传到腾讯文档（仅官方动态 / 直播记录，"
+            "需在弹窗里确认勾选；已有链接的记录自动跳过）")
+        self.upload_btn.setEnabled(False)
+        self.upload_btn.clicked.connect(self._open_upload)
+        top.addWidget(self.upload_btn)
+
         self.copy_btn = QPushButton("📋 复制全部（TSV）")
         self.copy_btn.setProperty("variant", "primary")
         self.copy_btn.setToolTip("复制全部待同步行（不含表头），到腾讯文档表格末尾粘贴")
@@ -184,7 +306,7 @@ class TcDocBridgePanel(QWidget):
         layout.addWidget(self._table_stack, 1)
 
         bottom = QHBoxLayout()
-        self.status = QLabel("选中行可单行复制，右键行也有复制菜单；不会自动上传。")
+        self.status = QLabel("选中行可单行复制；上传需点「⬆ 上传到腾讯文档」并确认勾选。")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: #888;")
         bottom.addWidget(self.status, 1)
@@ -406,6 +528,161 @@ class TcDocBridgePanel(QWidget):
         checked = self._checked_accounts()
         return checked or None  # 全部取消勾选 = 不过滤账号
 
+    # ==================== 上传 ====================
+
+    def _upload_target_ok(self) -> bool:
+        """只允许白名单里的官方动态 / 直播记录，测试表与其它文档一律拒绝。"""
+        target = self.target_combo.currentData()
+        if not target:
+            return False
+        try:
+            from toolbox.tcdoc.import_local import validate_target
+            validate_target(str(target.get("doc_key") or ""), str(target.get("tab_id") or ""))
+        except Exception:  # noqa: BLE001 - 校验失败一律视为不可上传
+            return False
+        return True
+
+    def _open_upload(self) -> None:
+        if self._closed or self._busy or self._uploading:
+            return
+        target = self.target_combo.currentData()
+        if not target:
+            return
+        if not self._upload_target_ok():
+            QMessageBox.warning(
+                self, "范围限制",
+                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」或「直播记录」。")
+            return
+        rows = list((self._result or {}).get("rows") or [])
+        if not rows:
+            QMessageBox.information(self, "没有待同步行", "当前清单为空，无需上传。")
+            return
+        if len(rows) > _UPLOAD_LIMIT:
+            QMessageBox.warning(
+                self, "数量过多",
+                f"一次最多上传 {_UPLOAD_LIMIT} 条，请缩小时间范围或筛选账号后再试。")
+            return
+
+        days = int(self.days_combo.currentData() or 0)
+        collected = list(common.COLLECTED)
+        self._busy = True
+        self.upload_btn.setEnabled(False)
+        self.status.setText("正在准备待上传清单与本地图片…")
+
+        def work():
+            from toolbox.tcdoc import import_pending as pending
+            from toolbox.tcdoc.import_local import LocalImage, LocalImportClient, ManagedAuth
+            import auth as auth_module
+            sources = bridge.collect_local_items(days, collected)
+            catalogue = pending.build_catalogue(pending.ROOT, sources)
+            records, _missing = pending.records_from_rows(pending.ROOT, rows, catalogue)
+            media = pending.ROOT / "download/已获取数据"
+            for record in records:
+                record["_images"] = [LocalImage.inspect(pending.ROOT / p, media)
+                                     for p in record["images"]]
+            # 预检：字段/选项不满足的行标成不可上传，避免上传到一半才中断
+            client = LocalImportClient(
+                ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
+                str(target["doc_key"]), str(target["tab_id"]))
+            client.connect()
+            fields = client.get_fields()
+            for record in records:
+                try:
+                    pending.make_plan(record, fields, available_only=False)
+                except pending.ImportErrorDetail as exc:
+                    record["blocked"] = str(exc)
+            return records
+
+        def done(result, err):
+            self._busy = False
+            if self._closed:
+                return
+            self._restore_buttons()
+            if err:
+                self.status.setText(f"❌ 准备失败：{err}")
+                QMessageBox.warning(self, "准备失败", str(err))
+                return
+            dialog = _UploadDialog(result, self)
+            if dialog.exec() != QDialog.Accepted:
+                self.status.setText("已取消上传。")
+                return
+            chosen = dialog.selected_records()
+            if not chosen:
+                self.status.setText("未勾选任何记录，已取消上传。")
+                return
+            self._start_upload(target, chosen)
+
+        run_bg(work, done, owner=self)
+
+    def _start_upload(self, target: dict, records: list[dict]) -> None:
+        if self._uploading:
+            return
+        self._uploading = True
+        self._busy = True
+        total_images = sum(len(r.get("_images") or []) for r in records)
+        self.status.setText(f"⏳ 正在上传 {len(records)} 条记录 / {total_images} 张图片…")
+        for button in (self.upload_btn, self.copy_btn, self.compare_btn):
+            button.setEnabled(False)
+
+        def emit(event):
+            phase = event.get("phase")
+            if phase == "image_uploaded":
+                common.post_to_main(self.status.setText, f"🖼 上传图片：{event.get('name')}")
+            elif phase == "record_created":
+                common.post_to_main(
+                    self.status.setText,
+                    f"✅ 已新增：{str(event.get('title') or '')[:40]}"
+                    f"（{event.get('image_count')} 张图）")
+            elif phase == "readback":
+                state = "读回校验通过" if event.get("verified") else "读回校验失败"
+                common.post_to_main(self.status.setText,
+                                    f"🔍 {state}：{str(event.get('title') or '')[:40]}")
+            elif phase == "stopped":
+                common.post_to_main(self.status.setText, f"⚠ 已停止：{event.get('error')}")
+
+        def work():
+            from toolbox.tcdoc import import_pending as pending
+            from toolbox.tcdoc.import_local import LocalImportClient, ManagedAuth
+            import auth as auth_module
+            client = LocalImportClient(
+                ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
+                str(target["doc_key"]), str(target["tab_id"]))
+            client.connect()
+            return pending.run(client, records, apply=True, available_only=False, emit=emit)
+
+        def done(receipt, err):
+            self._uploading = False
+            self._busy = False
+            if self._closed:
+                return
+            if err:
+                self.status.setText(f"❌ 上传失败：{err}")
+                QMessageBox.warning(self, "上传失败", str(err))
+                self._restore_buttons()
+                return
+            added = len(receipt.get("added") or [])
+            skipped = len(receipt.get("skipped") or [])
+            failed = [item for item in receipt.get("added") or [] if not item.get("verified")]
+            self.status.setText(
+                f"✅ 上传完成：新增 {added} 条 · 跳过 {skipped} 条 · "
+                f"图片 {receipt.get('uploaded_images', 0)} 张 · "
+                f"缺图 {receipt.get('missing_images', 0)} 张"
+                + (f" · 读回异常 {len(failed)} 条" if failed else ""))
+            if failed:
+                QMessageBox.warning(
+                    self, "读回异常",
+                    "以下记录的读回值不一致，请到表格里核对：\n"
+                    + "\n".join(f"{i.get('record_id')} {i.get('title')}" for i in failed))
+            self.refresh()
+
+        run_bg(work, done, owner=self)
+
+    def _restore_buttons(self) -> None:
+        has_rows = bool((self._result or {}).get("rows"))
+        self.compare_btn.setEnabled(True)
+        self.copy_btn.setEnabled(has_rows)
+        self.upload_btn.setEnabled(has_rows and self._upload_target_ok())
+
     # ==================== 比对 ====================
 
     def _run_compare(self, *_args) -> None:
@@ -476,6 +753,7 @@ class TcDocBridgePanel(QWidget):
                     f"读取本地条目 {timing.get('local', 0):.2f}s · "
                     f"分组去重 {timing.get('match', 0):.2f}s")
             self.copy_btn.setEnabled(bool(result["rows"]))
+            self.upload_btn.setEnabled(bool(result["rows"]) and self._upload_target_ok())
             self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
             self._refresh_accounts(result, accounts)
             if result["rows"]:
@@ -515,12 +793,14 @@ class TcDocBridgePanel(QWidget):
         self._result = None
         self._fill_table([])
         self.copy_btn.setEnabled(False)
+        self.upload_btn.setEnabled(False)
 
     def _set_loading(self, text):
         self._skeleton.setText(text)
         self._table_stack.setCurrentWidget(self._skeleton)
         self.compare_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
+        self.upload_btn.setEnabled(False)
         self.copy_row_btn.setEnabled(False)
         self.copy_images_btn.setEnabled(False)
 
