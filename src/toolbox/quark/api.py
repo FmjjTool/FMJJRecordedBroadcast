@@ -84,6 +84,17 @@ class QuarkClient:
         self.session = requests.Session()
         self._dir_cache: dict[str, str] = {"": "0", "/": "0"}
         self._name_cache: dict[str, dict[str, int]] = {}
+        # (路径, 大小, mtime) → (md5, sha1)：引擎判内容与上传前算校验只读一遍盘
+        self._digest_cache: dict[tuple, tuple[str, str]] = {}
+
+    def digest(self, path) -> tuple[str, str]:
+        """算 (md5, sha1)，同一 (路径, 大小, mtime) 只算一次。"""
+        p = Path(path)
+        stat = p.stat()
+        key = (str(p), stat.st_size, stat.st_mtime)
+        if key not in self._digest_cache:
+            self._digest_cache[key] = file_hashes(p)
+        return self._digest_cache[key]
 
     # ==================== 基础请求 ====================
 

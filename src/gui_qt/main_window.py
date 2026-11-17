@@ -103,7 +103,7 @@ NAV_GROUPS = [
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
-        ("quark_backup", "☁️ 夸克网盘备份"),
+        ("quark_backup", "☁️ 网盘备份"),
     ]),
     ("🎬 录播工具箱", [
         ("toolbox_organize", "📂 自动整理"),

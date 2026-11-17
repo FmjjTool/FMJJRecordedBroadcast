@@ -11,6 +11,9 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+# 备份后端：key → 中文名（界面与日志都用这张表）
+PROVIDERS = {"quark": "夸克网盘", "baidu": "百度网盘"}
+
 CFG_MAPPINGS = "quark_backup_mappings"
 CFG_MODE = "quark_schedule_mode"
 CFG_TIME = "quark_backup_time"
@@ -26,6 +29,8 @@ def _cfg():
 class Mapping:
     """一条「本地目录 → 云端文件夹」映射。"""
 
+    # 存储后端：quark（夸克网盘）/ baidu（百度网盘）
+    provider: str = "quark"
     local_dir: str = ""
     remote_dir: str = ""
     enabled: bool = True
@@ -51,6 +56,7 @@ class Mapping:
         except (TypeError, ValueError):
             max_mb = 0
         return cls(
+            provider=str(data.get("provider") or "quark").strip() or "quark",
             local_dir=str(data.get("local_dir") or "").strip(),
             remote_dir=normalize_remote_dir(data.get("remote_dir") or ""),
             enabled=bool(data.get("enabled", True)),
@@ -67,6 +73,9 @@ class Mapping:
         for sep in (";", "；", "|"):
             raw = raw.replace(sep, "\n")
         return [p.strip().replace("\\", "/") for p in raw.split("\n") if p.strip()]
+
+    def provider_label(self) -> str:
+        return PROVIDERS.get(self.provider, self.provider or "未知")
 
     def title(self) -> str:
         local = self.local_dir or "（未选本地目录）"

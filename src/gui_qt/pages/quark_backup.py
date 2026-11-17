@@ -46,6 +46,15 @@ class MappingDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
+        layout.addWidget(QLabel("备份到哪个网盘"))
+        self.provider_combo = QComboBox()
+        for key, label in qconfig.PROVIDERS.items():
+            self.provider_combo.addItem(label, key)
+        index = self.provider_combo.findData(self._mapping.provider or "quark")
+        self.provider_combo.setCurrentIndex(max(0, index))
+        self.provider_combo.setToolTip("同一份本地目录可以分别备份到不同网盘，各建一条映射")
+        layout.addWidget(self.provider_combo)
+
         layout.addWidget(QLabel("本地目录"))
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -119,6 +128,7 @@ class MappingDialog(QDialog):
 
     def result_mapping(self) -> qconfig.Mapping:
         mapping = self._mapping
+        mapping.provider = self.provider_combo.currentData() or "quark"
         mapping.local_dir = self.local_edit.text().strip()
         mapping.remote_dir = qconfig.normalize_remote_dir(self.remote_edit.text())
         mapping.exclude = self.exclude_edit.text().strip()
@@ -141,9 +151,9 @@ class QuarkBackupPage(BasePage):
         root.setSpacing(12)
 
         root.addWidget(ToolPageHeader(
-            "夸克网盘备份",
-            "把本地目录增量备份到夸克网盘指定文件夹：只传新增与变化的文件，"
-            "云端多余文件一律不删。登录在「Cookie 管理 → 夸克网盘」完成。"))
+            "网盘备份",
+            "把本地目录增量备份到夸克网盘 / 百度网盘指定文件夹：只传新增与变化的文件，"
+            "内容一致不覆盖、内容变了替换旧版本。登录在「Cookie 管理」里完成。"))
 
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
@@ -343,7 +353,7 @@ class QuarkBackupPage(BasePage):
 
         info = QVBoxLayout()
         info.setSpacing(2)
-        title = QLabel(mapping.title())
+        title = QLabel(f"［{mapping.provider_label()}］{mapping.title()}")
         title.setProperty("role", "sectionTitle")
         title.setWordWrap(True)
         info.addWidget(title)

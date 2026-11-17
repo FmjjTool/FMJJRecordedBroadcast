@@ -69,23 +69,27 @@ def _now() -> str:
 
 # ==================== 客户端 ====================
 
-def build_client():
-    """按 Cookie 管理的当前登录态构造客户端（未登录时抛 QuarkAuthError）。"""
+def build_client(provider: str = "quark"):
+    """按 Cookie 管理的当前登录态构造对应后端的客户端。
+
+    各后端的客户端接口一致（list_index / ensure_dir / upload_file / delete_files / digest），
+    所以引擎本身不区分夸克还是百度。
+    """
     from auth import get_cookie
 
-    from .api import QuarkClient
-
-    cookie = get_cookie("quark")
+    provider = (provider or "quark").strip()
+    cookie = get_cookie(provider)
     if not cookie:
+        from .config import PROVIDERS
+        name = PROVIDERS.get(provider, provider)
         raise QuarkAuthError(
-            "夸克网盘未登录或 Cookie 总开关已关闭，请到「Cookie 管理 → 夸克网盘」登录后再试")
+            f"{name}未登录或 Cookie 总开关已关闭，请到「Cookie 管理 → {name}」登录后再试")
+    if provider == "baidu":
+        from toolbox.baidu.api import BaiduClient
+        return BaiduClient(cookie)
+    from .api import QuarkClient
     return QuarkClient(cookie)
 
-
-def client_hashes(path: Path) -> tuple[str, str]:
-    """算 (md5, sha1)；单独抽出来是为了让备份引擎不直接依赖 api 模块的其余部分。"""
-    from .api import file_hashes
-    return file_hashes(path)
 
 
 # ==================== 扫描 ====================
@@ -185,7 +189,7 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
     _say(log, f"[{mapping.remote_dir}] 待处理 {len(files)} 个文件")
     try:
         if client is None:
-            client = build_client()
+            client = build_client(mapping.provider)
         folder_fid = client.ensure_dir(mapping.remote_dir)
     except QuarkAuthError as exc:
         result.ok = False
@@ -265,7 +269,7 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
         _emit(progress, phase="hash", name=rel, size=stat.st_size,
               current=index - 1, total=total, percent=_percent())
         try:
-            md5, sha1 = client_hashes(path)
+            md5, sha1 = client.digest(path)
         except OSError as exc:
             result.failed += 1
             done_bytes += stat.st_size
@@ -351,7 +355,7 @@ def run_all(mappings: list[Mapping] | None = None, progress=None, log=None,
     if not items:
         return results
 
-    client = None
+    clients: dict = {}
     auth_error: str = ""
     total = len(items)
     for index, mapping in enumerate(items):
@@ -367,8 +371,10 @@ def run_all(mappings: list[Mapping] | None = None, progress=None, log=None,
             results.append(failed)
             continue
         try:
-            if client is None:
-                client = build_client()
+            provider = mapping.provider or "quark"
+            if provider not in clients:
+                clients[provider] = build_client(provider)
+            client = clients[provider]
         except QuarkAuthError as exc:
             auth_error = str(exc)
             failed = BackupResult(mapping_id=mapping.id, local_dir=mapping.local_dir,
