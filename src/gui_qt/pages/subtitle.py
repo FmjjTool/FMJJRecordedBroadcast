@@ -61,7 +61,7 @@ class SubtitlePage(BasePage):
         frow.addWidget(self._btn("🔍 扫描", self._scan_selected_date))
         frow.addWidget(self._btn("📚 全部日期", self._scan_date_folders))
         self.file_count_label = QLabel("未选择文件")
-        self.file_count_label.setStyleSheet("color: #888;")
+        self.file_count_label.setProperty("role", "muted")
         frow.addWidget(self.file_count_label)
         frow.addStretch(1)
         layout.addLayout(frow)
@@ -106,7 +106,7 @@ class SubtitlePage(BasePage):
         opt_row.addWidget(self.date_folder)
         opt_row.addStretch(1)
         self.convert_btn = QPushButton("🔄 开始转换")
-        self.convert_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
+        self.convert_btn.setProperty("variant", "primary")
         self.convert_btn.clicked.connect(self._convert)
         opt_row.addWidget(self.convert_btn)
         self.result_label = QLabel("")
@@ -139,10 +139,10 @@ class SubtitlePage(BasePage):
     def _btn(self, text, slot, small=False, danger=False):
         b = QPushButton(text)
         b.clicked.connect(slot)
+        if danger:
+            b.setProperty("variant", "danger")
         if small:
             b.setStyleSheet("padding: 2px 8px;")
-        if danger:
-            b.setStyleSheet("background: #c62828; color: white; padding: 2px 8px; border-radius: 3px;")
         return b
 
     # ---- 回车快捷 / 设置持久化 ----

@@ -61,7 +61,7 @@ class LyricsToolPage(BasePage):
         self.input_toggle.toggled.connect(lambda c: self.input_area.setVisible(c))
         frow.addWidget(self.input_toggle)
         self.work_dir_label = QLabel("（未指定）")
-        self.work_dir_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.work_dir_label.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
         frow.addWidget(self.work_dir_label)
         frow.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
@@ -89,21 +89,21 @@ class LyricsToolPage(BasePage):
         iv.addWidget(self.input_text)
         irow = QHBoxLayout()
         input_btn = QPushButton("🔄 转换输入内容")
-        input_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 12px; border-radius: 4px;")
+        input_btn.setProperty("variant", "primary")
         input_btn.clicked.connect(self._convert_input)
         irow.addWidget(input_btn)
         clr_btn = QPushButton("🗑 清空输入")
         clr_btn.clicked.connect(self.input_text.clear)
         irow.addWidget(clr_btn)
         ihint = QLabel("（粘贴内容按 LRC 处理，输出到工作目录）")
-        ihint.setStyleSheet("color: #888; font-size: 10px;")
+        ihint.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
         irow.addWidget(ihint)
         irow.addStretch(1)
         iv.addLayout(irow)
         self.input_area.setVisible(False)
         v.addWidget(self.input_area)
         self.file_count_label = QLabel("未选择文件")
-        self.file_count_label.setStyleSheet("color: #888;")
+        self.file_count_label.setProperty("role", "muted")
         v.addWidget(self.file_count_label)
 
         fmt_row = QHBoxLayout()
@@ -131,7 +131,7 @@ class LyricsToolPage(BasePage):
 
         conv_row = QHBoxLayout()
         conv_btn = QPushButton("🔄 开始转换")
-        conv_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
+        conv_btn.setProperty("variant", "primary")
         conv_btn.clicked.connect(self._convert)
         conv_row.addWidget(conv_btn)
         self.result_label = QLabel("")
@@ -155,7 +155,7 @@ class LyricsToolPage(BasePage):
         frow.addStretch(1)
         v.addLayout(frow)
         self.krcd_count = QLabel("未选择文件")
-        self.krcd_count.setStyleSheet("color: #888;")
+        self.krcd_count.setProperty("role", "muted")
         v.addWidget(self.krcd_count)
 
         op = QHBoxLayout()
@@ -184,7 +184,7 @@ class LyricsToolPage(BasePage):
 
         run_row = QHBoxLayout()
         run = QPushButton("▶️ 执行")
-        run.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
+        run.setProperty("variant", "primary")
         run.clicked.connect(self._krcd_run)
         run_row.addWidget(run)
         self.krcd_result_label = QLabel("")
@@ -238,7 +238,7 @@ class LyricsToolPage(BasePage):
             return
         self.work_dir = d
         self.work_dir_label.setText(f"📂 {d}")
-        self.work_dir_label.setStyleSheet("color: #1976d2; font-size: 10px;")
+        self.work_dir_label.setStyleSheet("color: palette(link); font-size: 10px;")
         self._scan_dir(d)
 
     def _add_folder_files(self, folder):
@@ -289,7 +289,7 @@ class LyricsToolPage(BasePage):
                     added += 1
         self.work_dir = folder
         self.work_dir_label.setText(f"📂 {folder}")
-        self.work_dir_label.setStyleSheet("color: #1976d2; font-size: 10px;")
+        self.work_dir_label.setStyleSheet("color: palette(link); font-size: 10px;")
         self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件（+{added}）")
         self._log(f"📥 拖放文件夹: {folder}\n   新增 {added} 个歌词文件")
         self._refresh_list()

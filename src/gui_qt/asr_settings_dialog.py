@@ -2,7 +2,7 @@
 
 import threading
 
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QProgressBar, QTableWidget, QTableWidgetItem, QVBoxLayout,
@@ -17,6 +17,7 @@ from toolbox.asr_engine import (
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size
 
+from gui_qt import theme
 from gui_qt.common import post_to_main
 
 
@@ -62,7 +63,7 @@ class AsrSettingsDialog(QDialog):
         # ---------- 本地模型 ----------
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: #d0d6df;")
+        line.setStyleSheet("color: palette(shadow);")
         root.addWidget(line)
 
         local_title = QLabel("本地识别（离线，faster-whisper）")
@@ -93,7 +94,7 @@ class AsrSettingsDialog(QDialog):
         self.progress.setValue(0)
         root.addWidget(self.progress)
         self.hint = QLabel("提示：识别程序约 84MB；模型越大越准也越慢，长录播建议 Base 或 Small。")
-        self.hint.setStyleSheet("color: #888; font-size: 11px;")
+        self.hint.setProperty("role", "caption")
         self.hint.setWordWrap(True)
         root.addWidget(self.hint)
 
@@ -104,7 +105,7 @@ class AsrSettingsDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         bottom.addWidget(cancel_btn)
         ok_btn = QPushButton("保存")
-        ok_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 18px;")
+        ok_btn.setProperty("variant", "primary")
         ok_btn.clicked.connect(self.accept)
         bottom.addWidget(ok_btn)
         root.addLayout(bottom)
@@ -127,11 +128,11 @@ class AsrSettingsDialog(QDialog):
         if local_program_ready():
             size = format_size(local_program_path().stat().st_size)
             self.program_label.setText(f"识别程序：已下载（{size}）")
-            self.program_label.setStyleSheet("color: #2e7d32;")
+            self.program_label.setStyleSheet("color: palette(link-visited);")
             self.program_btn.setText("重新下载")
         else:
             self.program_label.setText("识别程序：未下载（约 84MB）")
-            self.program_label.setStyleSheet("color: #c62828;")
+            self.program_label.setStyleSheet("color: palette(bright-text);")
             self.program_btn.setText("下载识别程序")
 
         self.table.setRowCount(len(LOCAL_MODELS))
@@ -140,7 +141,8 @@ class AsrSettingsDialog(QDialog):
             self.table.setItem(row, 1, QTableWidgetItem(f"约 {size_mb} MB"))
             ready = local_model_ready(key)
             status = QTableWidgetItem("已下载" if ready else "未下载")
-            status.setForeground(Qt.darkGreen if ready else Qt.darkRed)
+            status.setForeground(QBrush(QColor(
+                theme.color("success") if ready else theme.color("danger"))))
             self.table.setItem(row, 2, status)
 
             cell = QWidget()
