@@ -15,7 +15,7 @@ import sys
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
@@ -131,6 +131,28 @@ def _source_paths(project: Path, item: dict) -> dict[str, list[Path]]:
     return mapping
 
 
+def stem_images(project: Path, columns: dict) -> list[Path]:
+    """视频类条目的本地封面兜底：按「日期_账号_标题」定位 _封面 / 同名图片。
+
+    仅在中间层只给出一张图（视频封面）且 URL 精确匹配失败时使用，
+    避免多图微博按标题误配到别的图片。
+    """
+    platform = bridge.CN_TO_PLATFORM.get(str(columns.get("发布平台") or ""))
+    if platform not in PLATFORM_CN:
+        return []
+    author = sanitize_filename(columns.get("发布账号") or "未知")
+    title = sanitize_filename(columns.get("作品标题") or "", 50)
+    day = re.sub(r"[^0-9]", "", str(columns.get("发布时间") or "")[:10])
+    directory = project / "download/已获取数据" / (PLATFORM_CN[platform] + "_媒体") / author
+    if not directory.is_dir():
+        return []
+    suffixes = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+    stem = f"{day}_{author}_{title}"
+    covers = sorted(p for p in directory.glob(stem + "_封面.*") if p.suffix.lower() in suffixes)
+    plain = sorted(p for p in directory.glob(stem + ".*") if p.suffix.lower() in suffixes)
+    return covers + plain
+
+
 def make_manifest(project=ROOT, days=30):
     project = project.resolve()
     result, sources = pending_result(project, days)
@@ -146,9 +168,14 @@ def make_manifest(project=ROOT, days=30):
             raise ImportErrorDetail("待同步行缺少可确定身份的原帖链接")
         paths = []
         gaps = []
-        for slot, url in enumerate(row.get("_images") or [], 1):
+        album = row.get("_images") or []
+        for slot, url in enumerate(album, 1):
             candidates = list(dict.fromkeys(catalogue.get(url, [])))
             existing = [p for p in candidates if p.is_file()]
+            if not existing and len(album) == 1:
+                # 视频条目的封面 URL 带有时效签名，精确匹配常落空；
+                # 单图条目按本地 stem 兜底，多图条目不做模糊匹配。
+                existing = stem_images(project, columns)
             if existing:
                 chosen = existing[0].resolve()
                 if not chosen.is_relative_to(project / "download/已获取数据"):
@@ -283,6 +310,98 @@ def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage]):
     return checks
 
 
+CHOICE_TITLES = ("发布账号", "发布平台", "动态类型", "发布位置")
+
+
+def choice_values(record: dict, fields: list[dict]):
+    """为四个单选列构造写入值：已有同名选项复用其 id，缺失时只给文本由表内快速添加。"""
+    values, skipped = {}, {}
+    for title in CHOICE_TITLES:
+        text = str(record["columns"].get(title) or "").strip()
+        hits = [f for f in fields if f.get("fieldTitle") == title]
+        if len(hits) != 1:
+            skipped[title] = "目标缺少字段"
+            continue
+        field = hits[0]
+        if field.get("fieldType") not in {9, 17}:
+            skipped[title] = "字段不是单选类型"
+            continue
+        if not text:
+            skipped[title] = "本地值为空"
+            continue
+        existing = [o for o in field_options(field) if o.get("text") == text and o.get("id")]
+        values[title] = [{"id": existing[0]["id"], "text": text}] if existing else [{"text": text}]
+    return values, skipped
+
+
+class ChoiceFillClient(LocalImportClient):
+    """仅补写四个单选列：沿用同一身份校验，拒绝其他改动。"""
+
+    def update_records(self, records: list[dict]) -> list[dict]:
+        validate_target(self.doc_key, self.tab_id, self.allow_test)
+        if (self.doc_key, self.tab_id) != TEST_TARGET:
+            raise ImportErrorDetail("补写选项仅允许本次授权测试目标")
+        if not records:
+            return []
+        for record in records:
+            if not str(record.get("recordID") or "") or set(record.get("values") or {}) - set(CHOICE_TITLES):
+                raise ImportErrorDetail("只允许按 recordID 补写四个单选列")
+        path = (f"/smartbook/v2/files/{quote(self.file_id, safe='')}"
+                f"/sheets/{quote(self.tab_id, safe='')}")
+        data = self._request("POST", path, {"updateRecords": {"records": records}}, record_write=True)
+        result = data.get("updateRecords")
+        rows = result.get("records") if isinstance(result, dict) else None
+        if not isinstance(rows, list) or len(rows) != len(records):
+            raise UnknownWriteResult("补写结果缺少逐条回执，请按 recordID 读回核对")
+        return rows
+
+
+def fill_choices(client, records, *, apply=False, emit=lambda event: None):
+    """按中间层清单补写四个单选列，并逐条读回核对文本。"""
+    fields = client.get_fields()
+    before = client.get_records()
+    by_key = {}
+    for row in before:
+        for key, ids in remote_keys([row]).items():
+            by_key.setdefault(key, ids[0])
+    plan, updates = [], []
+    for record in records:
+        rid = by_key.get(record["key"])
+        values, skipped = choice_values(record, fields)
+        plan.append({"key": record["key"], "title": record["columns"]["作品标题"],
+                     "record_id": rid, "values": {k: v[0].get("text") for k, v in values.items()},
+                     "skipped_fields": skipped})
+        if values and rid:
+            updates.append({"recordID": rid, "values": values})
+    emit({"phase": "fill_preview", "apply": apply, "rows_before": len(before),
+          "planned": len(updates), "records": plan})
+    result = {"phase": "fill_complete", "apply": apply, "rows_before": len(before),
+              "updated": 0, "verified": 0, "failed": []}
+    if not apply:
+        return result
+    if client.get_fields() != fields:
+        raise ImportErrorDetail("字段在预览后变化，请重新预览")
+    receipts = client.update_records(updates)
+    result["updated"] = len(receipts)
+    after = {row["recordID"]: row for row in client.get_records()}
+    for item in updates:
+        saved = after.get(item["recordID"])
+        ok = bool(saved)
+        if ok:
+            for title, expected in item["values"].items():
+                actual = [i.get("text") for i in (saved.get("values") or {}).get(title) or [] if isinstance(i, dict)]
+                if actual != [expected[0].get("text")]:
+                    ok = False
+        if ok:
+            result["verified"] += 1
+        else:
+            result["failed"].append(item["recordID"])
+    emit(result)
+    if result["failed"]:
+        raise ImportErrorDetail("补写后读回不一致，请按 record_id 核对")
+    return result
+
+
 def run(client, records, *, apply=False, available_only=False, emit=lambda event: None):
     if available_only and (client.doc_key, client.tab_id) != TEST_TARGET:
         raise ImportErrorDetail("只写可用字段的例外仅允许本次授权测试目标")
@@ -362,12 +481,16 @@ def main(argv=None):
     modes.add_argument("--apply", action="store_true")
     parser.add_argument("--available-fields-only", action="store_true")
     parser.add_argument("--skip-missing-images", action="store_true")
+    parser.add_argument("--fill-choices", action="store_true",
+                        help="按清单补写发布账号/发布平台/动态类型/发布位置四个单选列")
     parser.add_argument("--days", type=int, default=30)
     args = parser.parse_args(argv)
     def emit(event):
         print(json.dumps(event, ensure_ascii=False), flush=True)
     try:
         validate_target(args.doc_key, args.tab_id, args.allow_test_document)
+        if args.snapshot and args.fill_choices:
+            raise ImportErrorDetail("生成清单与补写单选列不能同时执行")
         if args.snapshot:
             if not args.manifest.resolve().is_relative_to(ROOT / "download/腾讯文档数据/中间层"):
                 raise ImportErrorDetail("中间层清单只能保存在专用目录")
@@ -382,9 +505,14 @@ def main(argv=None):
         install_readonly_guard()
         records = load_manifest(args.manifest, skip_missing=args.skip_missing_images)
         auth = ManagedAuth(managed_cookie_reader())
-        client = LocalImportClient(auth, args.doc_key, args.tab_id, args.allow_test_document)
+        client_cls = ChoiceFillClient if args.fill_choices else LocalImportClient
+        client = client_cls(auth, args.doc_key, args.tab_id, args.allow_test_document)
         client.connect()
-        emit(run(client, records, apply=args.apply, available_only=args.available_fields_only, emit=emit))
+        if args.fill_choices:
+            emit(fill_choices(client, records, apply=args.apply, emit=emit))
+        else:
+            emit(run(client, records, apply=args.apply,
+                     available_only=args.available_fields_only, emit=emit))
         return 0
     except ImportErrorDetail as exc:
         emit({"phase": "error", "error": str(exc), "unknown_record_outcome": isinstance(exc, UnknownWriteResult)})
