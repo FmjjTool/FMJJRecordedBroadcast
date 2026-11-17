@@ -930,6 +930,13 @@ class TcDocPage(BasePage):
         self.next_btn.setFixedWidth(34)
         self.next_btn.clicked.connect(lambda: self._load_sheet_page(delta=1))
         bar.addWidget(self.next_btn)
+
+        self.newest_cb = QCheckBox("最新在前")
+        self.newest_cb.setToolTip(
+            "按日期列倒序显示（默认保持表格原顺序；腾讯表的新记录常追加在末尾，"
+            "原顺序下第一页看到的可能是较早的记录）")
+        self.newest_cb.toggled.connect(lambda _on: self._load_sheet_page(reset=True))
+        bar.addWidget(self.newest_cb)
         v.addLayout(bar)
 
         self.table_data = QTableWidget(0, 0)
@@ -970,7 +977,8 @@ class TcDocPage(BasePage):
         v.addWidget(body, 1)
 
         self.sheet_hint = QLabel("点「🔄 同步表格」把文档里的表格内容抓到本地；"
-                                "图片字段会自动增量下载到 图片/。")
+                                "图片字段会自动增量下载到 图片/。默认按表格原顺序显示，"
+                                "新记录常追加在末尾，勾选「最新在前」可按日期倒序。")
         self.sheet_hint.setStyleSheet("color: #888;")
         v.addWidget(self.sheet_hint)
 
@@ -1420,13 +1428,14 @@ class TcDocPage(BasePage):
         doc = self.current_doc()
         keep = self._current_tab_id()
         page_size = max(20, int(tc_cfg.load_cfg().get("tcdoc_table_page") or 200))
+        newest = self._newest_first()
 
         def work():
             sheets = tables.sheets_of(doc["key"]) if doc else []
             available = [sheet for sheet in sheets if not sheet["skipped"]]
             sheet = next((s for s in available if s["tab_id"] == keep),
                          available[0] if available else {})
-            data = self._read_sheet_page(doc, sheet, 0, page_size)
+            data = self._read_sheet_page(doc, sheet, 0, page_size, newest)
             changes = tables.recent_changes(doc["key"], limit=60) if doc else []
             return sheets, data, changes
 
@@ -1483,26 +1492,63 @@ class TcDocPage(BasePage):
             return None
         return next((s for s in self._sheets if s["tab_id"] == tab_id), None)
 
+    def _newest_first(self) -> bool:
+        box = getattr(self, "newest_cb", None)
+        return bool(box is not None and box.isChecked())
+
     def _load_sheet_page(self, reset: bool = False, delta: int = 0):
         doc = self.current_doc()
         sheet = self._current_sheet() or {}
         page_size = max(20, int(tc_cfg.load_cfg().get("tcdoc_table_page") or 200))
         offset = 0 if reset else self._sheet_offset
         offset = max(0, offset + delta * page_size)
+        newest = self._newest_first()
         self._load_local(self.content_tab_index,
-                         lambda: self._read_sheet_page(doc, sheet, offset, page_size),
+                         lambda: self._read_sheet_page(doc, sheet, offset, page_size, newest),
                          lambda data, done, valid: self._apply_sheet_page(
                              data, page_size, done, valid))
 
     @staticmethod
-    def _read_sheet_page(doc, sheet, offset, page_size):
+    def _date_column(sheet, rows) -> str:
+        """挑一列能当日期排序的字段：优先常见时间列名，再按取值形状判断。"""
+        names = [c["name"] for c in sheet.get("columns", [])]
+        for key in ("开始时间", "发布时间", "直播时间", "日期", "时间", "创建时间"):
+            if key in names:
+                return key
+        for name in names:
+            sample = [str(r["values"].get(name) or "") for r in rows[:20]]
+            hits = sum(1 for s in sample
+                       if len(s) >= 10 and s[4] == "-" and s[7] == "-")
+            if hits >= min(5, len([s for s in sample if s])):
+                return name
+        return ""
+
+    @classmethod
+    def _sort_newest_first(cls, rows, sheet):
+        column = cls._date_column(sheet, rows)
+        if not column:
+            return list(reversed(rows))   # 没有日期列：后追加的排在后面，直接倒序
+        def key(row):
+            return str(row["values"].get(column) or "")
+        ordered = sorted(rows, key=key, reverse=True)
+        return [r for r in ordered if key(r)] + [r for r in ordered if not key(r)]
+
+    @classmethod
+    def _read_sheet_page(cls, doc, sheet, offset, page_size, newest=False):
         tab_id = sheet.get("tab_id")
         if not doc or not tab_id:
             return sheet, [], 0, 0, {}
-        rows, total = tables.rows_page(doc["key"], tab_id, offset, page_size)
-        if not rows and total and offset:
-            offset = max(0, (total - 1) // page_size * page_size)
+        if newest:
+            # 排序需要整表：本地存档读取很快，按页在内存里切
+            all_rows, _total = tables.rows_page(doc["key"], tab_id, 0, 1_000_000)
+            ordered = cls._sort_newest_first(all_rows, sheet)
+            total = len(ordered)
+            rows = ordered[offset:offset + page_size]
+        else:
             rows, total = tables.rows_page(doc["key"], tab_id, offset, page_size)
+            if not rows and total and offset:
+                offset = max(0, (total - 1) // page_size * page_size)
+                rows, total = tables.rows_page(doc["key"], tab_id, offset, page_size)
         try:
             image_stats = tc_engine.images.stats(doc["key"], tab_id)
         except Exception:  # noqa: BLE001 - 图片统计异常不影响表格预览

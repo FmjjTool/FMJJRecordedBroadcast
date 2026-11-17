@@ -467,7 +467,14 @@ class TcDocBridgePanel(QWidget):
                               f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
             self.summary.setText(
                 f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
-                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}")
+                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}"
+                f"；用时 {float((stats.get('timing') or {}).get('total') or 0):.2f} 秒")
+            timing = stats.get("timing") or {}
+            if timing:
+                self.status.setToolTip(
+                    f"读取腾讯存档 {timing.get('remote', 0):.2f}s · "
+                    f"读取本地条目 {timing.get('local', 0):.2f}s · "
+                    f"分组去重 {timing.get('match', 0):.2f}s")
             self.copy_btn.setEnabled(bool(result["rows"]))
             self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
             self._refresh_accounts(result, accounts)

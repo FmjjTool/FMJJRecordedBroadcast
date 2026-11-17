@@ -12,9 +12,12 @@ from __future__ import annotations
 import html
 import json
 import re
+import sqlite3
+import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as tc_cfg
@@ -169,13 +172,65 @@ def _in_window(item, since: str) -> bool:
 
 # ==================== 本地作品 ====================
 
-def collect_local_items(days=30, collected=None) -> list[dict]:
-    """已获取列表 + 增量数据库合并（按 video_id/链接去重），返回时间窗内条目。"""
+def _increment_items_ro(since: str) -> list[dict] | None:
+    """只读快照读取增量库；None 表示需要回退到带锁的实现。
+
+    iter_items() 持有模块级写锁并可能触发迁移，采集正在写库时会把比对拖住，
+    所以这里用独立只读连接直接查平台表。
+    """
     from toolbox import increment_db
 
+    try:
+        path = Path(increment_db.db_path())
+    except Exception:  # noqa: BLE001
+        return None
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return None
+    try:
+        conn.execute("PRAGMA busy_timeout=1000")
+        names = [name for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")
+            if not str(name).startswith("_")]
+        out: list[dict] = []
+        for name in names:
+            try:
+                cursor = conn.execute(
+                    f'SELECT * FROM "{name}" WHERE "publish_time" >= ?', (since,))
+            except sqlite3.Error:
+                continue
+            columns = [item[0] for item in cursor.description]
+            for row in cursor:
+                item = dict(zip(columns, row))
+                item["platform"] = name
+                out.append(item)
+        return out
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def _increment_items(since: str) -> list[dict]:
+    from toolbox import increment_db
+
+    # 测试或导入脚本会替换 iter_items 注入虚构数据，此时必须尊重替换结果
+    if getattr(increment_db.iter_items, "__module__", "") != "toolbox.increment_db":
+        return increment_db.iter_items(since)
+    rows = _increment_items_ro(since)
+    if rows is not None:
+        return rows
+    return increment_db.iter_items(since)
+
+
+def collect_local_items(days=30, collected=None) -> list[dict]:
+    """已获取列表 + 增量数据库合并（按 video_id/链接去重），返回时间窗内条目。"""
     since = _since_date(days)
     merged: dict[str, dict] = {}
-    for item in increment_db.iter_items(since):
+    for item in _increment_items(since):
         if not item.get("platform") or item["platform"] == "unknown":
             continue
         key = _item_key(item)
@@ -225,8 +280,52 @@ def list_targets() -> list[dict]:
     return targets
 
 
-def load_remote(doc_key: str, tab_id: str) -> list[dict]:
-    """读取本地存档的整张腾讯工作表。"""
+_REMOTE_CACHE: dict[tuple, tuple[tuple, list[dict], dict]] = {}
+
+
+def _file_stamp(path: Path) -> tuple:
+    try:
+        stat = path.stat()
+        return (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return (0, 0)
+
+
+def _read_remote_ro(doc_key: str, tab_id: str) -> list[dict] | None:
+    """只读快照读取表格存档；None 表示需要回退到旧的分页实现。
+
+    同步任务会持续写 tables.db，旧的 rows_page() 每次调用都跑一遍建表脚本，
+    等于每页都要抢一次写锁；这里改成一次性只读连接，不执行任何 DDL。
+    """
+    try:
+        path = Path(tables.db_path())
+    except Exception:  # noqa: BLE001 - 路径不可用就回退
+        return None
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.5)
+    except sqlite3.Error:
+        return None
+    try:
+        conn.execute("PRAGMA busy_timeout=1500")
+        rows = []
+        for (payload,) in conn.execute(
+                "SELECT data_json FROM rows WHERE doc_key=? AND tab_id=? ORDER BY row_no",
+                (doc_key, tab_id)):
+            try:
+                values = json.loads(payload)
+            except (TypeError, ValueError):
+                values = {}
+            rows.append({"values": values})
+        return rows
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def _iter_remote_pages(doc_key: str, tab_id: str) -> list[dict]:
     rows = []
     offset = 0
     while True:
@@ -238,6 +337,39 @@ def load_remote(doc_key: str, tab_id: str) -> list[dict]:
         if offset >= total:
             break
     return rows
+
+
+def _remote_snapshot(doc_key: str, tab_id: str) -> tuple[list[dict], dict]:
+    """同一份存档只解析一次；表格库被同步写入后按文件戳自动失效。"""
+    try:
+        stamp = _file_stamp(Path(tables.db_path()))
+    except Exception:  # noqa: BLE001
+        stamp = (0, 0)
+    key = (doc_key, tab_id)
+    cached = _REMOTE_CACHE.get(key)
+    if cached and cached[0] == stamp:
+        return cached[1], cached[2]
+    rows = _read_remote_ro(doc_key, tab_id)
+    if rows is None:
+        rows = _iter_remote_pages(doc_key, tab_id)
+    index = _remote_index(rows)
+    if len(_REMOTE_CACHE) > 8:
+        _REMOTE_CACHE.clear()
+    _REMOTE_CACHE[key] = (stamp, rows, index)
+    return rows, index
+
+
+def _index_of(rows: list[dict]) -> dict:
+    """缓存命中时直接复用索引；被替换过的行（测试注入）才重新计算。"""
+    for cached_rows, cached_index in ((v[1], v[2]) for v in _REMOTE_CACHE.values()):
+        if cached_rows is rows:
+            return cached_index
+    return _remote_index(rows)
+
+
+def load_remote(doc_key: str, tab_id: str) -> list[dict]:
+    """读取本地存档的整张腾讯工作表（只读快照 + 内存缓存）。"""
+    return _remote_snapshot(doc_key, tab_id)[0]
 
 
 def _remote_index(rows: list[dict]) -> dict:
@@ -599,9 +731,12 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
     accounts=None 表示不过滤；"default" 表示只保留腾讯表出现过的发布账号；
     传入列表则按列表过滤（空列表同样视为不过滤）。
     """
+    started = time.perf_counter()
     remote = load_remote(doc_key, tab_id)
-    index = _remote_index(remote)
+    index = _index_of(remote)
+    after_remote = time.perf_counter()
     local = collect_local_items(days, collected)
+    after_local = time.perf_counter()
     all_local_accounts = sorted({str(item.get("author") or "") for item in local
                                  if item.get("author")})
 
@@ -632,6 +767,7 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
                                   row.get("发布平台") or ""), reverse=True)
     with_images = sum(1 for row in pending if row.get("_images"))
     image_count = sum(len(row.get("_images") or []) for row in pending)
+    finished = time.perf_counter()
 
     return {
         "rows": pending,
@@ -648,6 +784,12 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
             "image_count": image_count,
             "remote_rows": len(remote),
             "since": _since_date(days),
+            "timing": {
+                "remote": round(after_remote - started, 2),
+                "local": round(after_local - after_remote, 2),
+                "match": round(finished - after_local, 2),
+                "total": round(finished - started, 2),
+            },
         },
     }
 
