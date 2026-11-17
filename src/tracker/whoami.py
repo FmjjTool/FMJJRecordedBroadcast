@@ -502,6 +502,30 @@ def _quark(cookie: str) -> dict:
     return {"ok": False, "username": ""}
 
 
+def _baidu(cookie: str) -> dict:
+    """百度网盘：gettemplatevariable 能拿到 bdstoken 即已登录（顺带取用户名）。
+
+    抓不到 bdstoken 但也没明确报错时返回 ok=None，让界面显示「无法验证」而不是误判失败。
+    """
+    import requests
+
+    h = _headers(cookie)
+    h["Referer"] = "https://pan.baidu.com/disk/main"
+    d = requests.get(
+        "https://pan.baidu.com/api/gettemplatevariable",
+        params={"clienttype": 0, "app_id": 250528, "web": 1,
+                "fields": '["bdstoken","username"]'},
+        headers=h, timeout=10).json()
+    if not isinstance(d, dict):
+        return {"ok": None, "username": ""}
+    result = d.get("result") if isinstance(d.get("result"), dict) else {}
+    if d.get("errno") == 0 and result.get("bdstoken"):
+        return {"ok": True, "username": str(result.get("username") or "")}
+    if d.get("errno") in (-6, 2, 111, 116, -3):
+        return {"ok": False, "username": ""}
+    return {"ok": None, "username": ""}
+
+
 def kugou_nick_for(userid) -> str:
     """同 userid 的酷狗昵称（酷狗概念版没有可用的用户信息接口，借主账号 Cookie）。"""
     import auth
@@ -520,5 +544,5 @@ _VERIFIERS = {
     "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
-    "quark": _quark,
+    "quark": _quark, "baidu": _baidu,
 }

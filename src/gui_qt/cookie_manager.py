@@ -40,6 +40,7 @@ COOKIE_PLATFORMS = [
     ("taobao", "淘宝", False, True),
     ("tcdoc", "腾讯文档", False, True),
     ("quark", "夸克网盘", False, True),
+    ("baidu", "百度网盘", False, True),
 ]
 
 
@@ -85,6 +86,10 @@ BROWSER_LOGIN_CONFIGS = {
     "quark": ("https://pan.quark.cn/", "夸克网盘登录（软件内）",
               ("__puus", "__pus"),
               "打开夸克 App 扫码登录，或手机号 + 验证码登录（进到网盘文件页即算成功）"),
+    # 百度网盘：登录票是 BDUSS / STOKEN，进到文件列表页即算成功
+    "baidu": ("https://pan.baidu.com/disk/main", "百度网盘登录（软件内）",
+              ("BDUSS", "STOKEN"),
+              "扫码 / 账号密码登录（登录后进到网盘文件列表即算成功）"),
 }
 
 # 登录窗里"顺手抓昵称"的 JS（接口风控严、只有页面上下文问得到的平台）
