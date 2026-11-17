@@ -1,9 +1,9 @@
 """已获取页（PySide6 版）：分平台展示 COLLECTED，按栏全选/反选/清除、导出、下载。
 
 对应原版 gui/info_pages.py 的 InfoResultsPage：
-- 顶部：画质下拉（全局共享）+ 🗑 全部清空 + 📤 全部导出 + 📥 全部下载 + 导出格式复选
+- 顶部：画质下拉（全局共享）+ 全部清空 + 全部导出 + 全部下载 + 导出格式复选
   + 微博评论页数（导出微博帖子时附带评论区聊天记录，0 = 不抓）
-- 三栏（抖音/B站/微博）：计数标签 + 全选/反选/清除/📤 导出/📥 下载 + 复选行 + 🔗 打开链接
+- 三栏（抖音/B站/微博）：计数标签 + 全选/反选/清除/导出/下载 + 复选行 + 打开链接
 - 每行显示发布日期，默认按发布日期倒序（最新在前）
 - 下载：B站按画质直下（视频走 playurl、DRAW 动态走图片），非 B站走 media_downloader
 """
@@ -28,10 +28,10 @@ from gui_qt.row_widgets import RowCheckList
 from gui_qt.toolbox_common import ToolPageHeader
 
 PLATFORMS_3 = [
-    ("douyin", "📕 抖音"),
-    ("bilibili", "📺 B站"),
-    ("weibo", "📝 微博"),
-    ("other", "📦 其他"),
+    ("douyin", "抖音"),
+    ("bilibili", "B站"),
+    ("weibo", "微博"),
+    ("other", "其他"),
 ]
 
 # 「其他」栏收纳的平台（快手/小红书/好看/微视等）；未列出的平台也归入 other
@@ -258,23 +258,23 @@ class InfoResultsPage(BasePage):
         tools.setSpacing(10)
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        export_all_btn = QPushButton("📤 导出所有勾选")
+        export_all_btn = QPushButton("导出所有勾选")
         export_all_btn.setProperty("variant", "secondary")
         export_all_btn.setToolTip("导出全部平台栏内的勾选条目")
         export_all_btn.clicked.connect(self._export_all)
         actions.addWidget(export_all_btn)
-        dl_all_btn = QPushButton("📥 下载所有勾选")
+        dl_all_btn = QPushButton("下载所有勾选")
         dl_all_btn.setProperty("variant", "primary")
         dl_all_btn.setToolTip("下载全部平台栏内的勾选条目")
         dl_all_btn.clicked.connect(self._download_all)
         actions.addWidget(dl_all_btn)
         actions.addStretch(1)
-        del_sel_btn = QPushButton("🗑 删除所有勾选")
+        del_sel_btn = QPushButton("删除所有勾选")
         del_sel_btn.setProperty("variant", "danger")
         del_sel_btn.setToolTip("从已获取列表移除全部平台栏内的勾选条目（不影响已下载的本地文件）")
         del_sel_btn.clicked.connect(self._delete_selected)
         actions.addWidget(del_sel_btn)
-        clear_btn = QPushButton("🗑 全部清空")
+        clear_btn = QPushButton("全部清空")
         clear_btn.setProperty("variant", "danger")
         clear_btn.clicked.connect(self._clear)
         actions.addWidget(clear_btn)
@@ -442,12 +442,12 @@ class InfoResultsPage(BasePage):
         v.addLayout(btns)
         transfer = QHBoxLayout()
         transfer.setSpacing(6)
-        export_btn = QPushButton("📤 导出")
+        export_btn = QPushButton("导出")
         export_btn.setProperty("variant", "secondary")
         export_btn.setStyleSheet("padding: 4px 6px; font-size: 11px;")
         export_btn.clicked.connect(lambda _=False, k=key: self._col_export(k))
         transfer.addWidget(export_btn)
-        dl_btn = QPushButton("📥 下载")
+        dl_btn = QPushButton("下载")
         dl_btn.setProperty("variant", "secondary")
         dl_btn.setStyleSheet("padding: 4px 6px; font-size: 11px;")
         dl_btn.clicked.connect(lambda _=False, k=key: self._col_download(k))
@@ -561,10 +561,8 @@ class InfoResultsPage(BasePage):
             _dt, date_str = (pub_dates[id(info)] if pub_dates is not None
                              else _parse_pub(info))
             # 两行展示：标题一行（不截断），日期/作者/数据一行；超宽自动换行
-            meta = f"📅 {date_str}  @{author}  播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}"
+            meta = f"{date_str}  @{author}  播放{_fmt(info.play_count)} 赞{_fmt(info.like_count)}"
             url = self._openable_url(info)
-            if url:
-                meta += "  🔗"
             text = f"[{i}] [{kind_tag}] {title}\n{meta}"
             item = QListWidgetItem(text)
             item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
@@ -610,7 +608,7 @@ class InfoResultsPage(BasePage):
     # ==================== 操作 ====================
 
     def _open_url(self, url):
-        """双击行（行尾 🔗）打开对应链接。"""
+        """双击行打开对应链接。"""
         if not url:
             return
         try:
@@ -643,10 +641,10 @@ class InfoResultsPage(BasePage):
         if not fmts:
             self.app.toast("请至少选择一种导出格式", "warning")
             return
-        self.export_status.setText("⏳ 正在导出…")
+        self.export_status.setText("正在导出…")
 
         def progress(msg):
-            post_to_main(self.export_status.setText, f"⏳ {msg}")
+            post_to_main(self.export_status.setText, f"{msg}")
 
         def work():
             from exporters import export_per_video_flat
@@ -662,7 +660,7 @@ class InfoResultsPage(BasePage):
 
         def done(result, err):
             if err:
-                self.export_status.setText(f"❌ {str(err)[:60]}")
+                self.export_status.setText(f"{str(err)[:60]}")
                 self.app.toast(str(err), "error")
                 return
             paths, skipped, out_dir = result
@@ -674,7 +672,7 @@ class InfoResultsPage(BasePage):
             if skipped:
                 msg += f"（跳过 {len(skipped)} 个已存在）"
             self.export_status.setText(
-                f"✅ 已导出 {len(paths)}" + (f"（跳过 {len(skipped)}）" if skipped else ""))
+                f"已导出 {len(paths)}" + (f"（跳过 {len(skipped)}）" if skipped else ""))
             self.app.toast(msg, "success")
 
         run_bg(work, done)
@@ -736,7 +734,7 @@ class InfoResultsPage(BasePage):
 
         def done(result, err):
             if err:
-                card.finish(f"❌ 下载失败: {str(err)[:60]}")
+                card.finish(f"下载失败: {str(err)[:60]}")
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
                 return
             msg = result or "无内容下载"
@@ -765,10 +763,10 @@ class InfoResultsPage(BasePage):
         menu = QMenu(self)
         act_open = act_copy = None
         if url:
-            act_open = menu.addAction("🔗 打开链接")
-            act_copy = menu.addAction("📋 复制链接")
+            act_open = menu.addAction("打开链接")
+            act_copy = menu.addAction("复制链接")
             menu.addSeparator()
-        act = menu.addAction("🗑 删除该条目…")
+        act = menu.addAction("删除该条目…")
         chosen = menu.exec(lst.viewport().mapToGlobal(pos))
         if chosen is act_open:
             self._open_url(url)

@@ -171,7 +171,7 @@ class _XlsxDialog(QDialog):
         self.info = QLabel("")
         self.info.setStyleSheet("color:#666;")
         row2.addWidget(self.info, 1)
-        apply_btn = QPushButton("✔ 填充匹配文件")
+        apply_btn = QPushButton("填充匹配文件")
         apply_btn.setStyleSheet("background:#2e7d32;color:white;padding:5px 18px;")
         apply_btn.clicked.connect(self._apply)
         row2.addWidget(apply_btn)
@@ -224,7 +224,7 @@ class _XlsxDialog(QDialog):
                 self.table.setItem(i, 1, QTableWidgetItem(desc))
                 self.table.setItem(i, 2, QTableWidgetItem(
                     f"{xlsx_match_score(pr, vals):.0f}"))
-                self.table.setItem(i, 3, QTableWidgetItem("✓ 待填充"))
+                self.table.setItem(i, 3, QTableWidgetItem("待填充"))
         n = sum(1 for m in matches if m >= 0)
         if not self._mapping().get("title") and not self._mapping().get("filename"):
             self.info.setText("请先把某一列映射为「文件名」或「标题」用于匹配")
@@ -439,7 +439,7 @@ class MusicTagPage(BasePage):
         row.setSpacing(8)
         self.decrypt_label = QLabel("")
         row.addWidget(self.decrypt_label, 1)
-        self.decrypt_btn = QPushButton("🔓 音乐解密")
+        self.decrypt_btn = QPushButton("音乐解密")
         self.decrypt_btn.setStyleSheet(
             "background: #2e7d32; color: white; padding: 4px 12px; border-radius: 4px;")
         self.decrypt_btn.setToolTip("解密拖入的加密音乐，完成后自动加入标签列表")
@@ -469,7 +469,7 @@ class MusicTagPage(BasePage):
             return
         files = list(self._pending_encrypted)
         self.decrypt_btn.setEnabled(False)
-        self.decrypt_label.setText(f"⏳ 正在解密 {len(files)} 个文件...")
+        self.decrypt_label.setText(f"正在解密 {len(files)} 个文件...")
         from toolbox.config_manager import get_music_download_dir
         out_dir = str(get_music_download_dir())
 
@@ -486,7 +486,7 @@ class MusicTagPage(BasePage):
         def done(results, err):
             self.decrypt_btn.setEnabled(True)
             if err:
-                self.decrypt_label.setText(f"❌ 解密失败：{err}")
+                self.decrypt_label.setText(f"解密失败：{err}")
                 return
             ok = [out for _p, out, e in results if out and not e]
             failed = [(p, e) for p, out, e in results if e]
@@ -494,7 +494,7 @@ class MusicTagPage(BasePage):
             self._update_decrypt_bar()
             if ok:
                 self._load_files(ok)
-                self.status.setText(f"✅ 已解密 {len(ok)} 个文件，已加入标签列表")
+                self.status.setText(f"已解密 {len(ok)} 个文件，已加入标签列表")
             if failed:
                 self.app.toast(f"解密完成：成功 {len(ok)}，失败 {len(failed)}", "warning")
             elif ok:
@@ -532,7 +532,7 @@ class MusicTagPage(BasePage):
         bar = QHBoxLayout()
         bar.addWidget(QPushButton("全部显示", clicked=lambda: [c.setChecked(True) for c in checks.values()]))
         bar.addStretch(1)
-        ok = QPushButton("✔ 确定")
+        ok = QPushButton("确定")
         ok.setStyleSheet("background:#2e7d32;color:white;padding:4px 16px;")
         bar.addWidget(ok)
         bar.addWidget(QPushButton("取消", clicked=dlg.reject))
@@ -683,7 +683,7 @@ class MusicTagPage(BasePage):
         self.lyr_edit.textChanged.connect(lambda: self._on_edited("lyrics"))
         lyr_row.addWidget(self.lyr_edit, 1)
         lyr_side = QVBoxLayout()
-        lyr_btn = QPushButton("⛶\n展开\n编辑")
+        lyr_btn = QPushButton("展开\n编辑")
         lyr_btn.setFixedWidth(52)
         lyr_btn.setToolTip("打开二级窗口查看/编辑完整歌词")
         lyr_btn.clicked.connect(self._edit_lyrics_dialog)
@@ -706,10 +706,10 @@ class MusicTagPage(BasePage):
         self.cov_info.setStyleSheet("color:#888;")
         cv.addWidget(self.cov_info)
         for text, cb, tip in [
-            ("🖼 更换封面", self._cover_set, "把选中图片设为前置封面"),
-            ("🗂 图片管理", self._manage_pictures, "查看/添加/移除多张内嵌图片"),
-            ("💾 导出封面", self._cover_export, "导出当前前置封面"),
-            ("✖ 移除封面", self._cover_del, "移除所有前置封面图片"),
+            ("更换封面", self._cover_set, "把选中图片设为前置封面"),
+            ("图片管理", self._manage_pictures, "查看/添加/移除多张内嵌图片"),
+            ("导出封面", self._cover_export, "导出当前前置封面"),
+            ("移除封面", self._cover_del, "移除所有前置封面图片"),
         ]:
             b = QPushButton(text)
             b.setToolTip(tip)
@@ -1063,7 +1063,7 @@ class MusicTagPage(BasePage):
                 self.status.setText(f"保存完成 {ok} 个，失败 {len(failed)} 个：" + "；".join(failed[:3]))
                 self.app.toast(f"{ok} 成功 / {len(failed)} 失败", "warning")
             else:
-                self.status.setText(f"已保存 {ok} 个文件 ✓")
+                self.status.setText(f"已保存 {ok} 个文件")
                 self.app.toast(f"已保存 {ok} 个文件", "success")
             self._update_status()
 
@@ -1348,7 +1348,7 @@ class MusicTagPage(BasePage):
         dlg.resize(820, 600)
         v = QVBoxLayout(dlg)
         row = QHBoxLayout()
-        row.addWidget(QPushButton("📥 导入 .lrc", clicked=lambda: self._import_lrc(edit)))
+        row.addWidget(QPushButton("导入 .lrc", clicked=lambda: self._import_lrc(edit)))
         self._lyric_dialog_info = QLabel("")
         self._lyric_dialog_info.setStyleSheet("color:#888;")
         row.addWidget(self._lyric_dialog_info, 1)
@@ -1362,7 +1362,7 @@ class MusicTagPage(BasePage):
         v.addWidget(edit, 1)
         row2 = QHBoxLayout()
         row2.addStretch(1)
-        ok = QPushButton("✔ 写回表单")
+        ok = QPushButton("写回表单")
         ok.setStyleSheet("background:#2e7d32;color:white;padding:5px 18px;")
         ok.clicked.connect(dlg.accept)
         row2.addWidget(ok)
@@ -1548,18 +1548,18 @@ class MusicTagPage(BasePage):
         if not self._edit_targets:
             return
         menu = QMenu(self)
-        menu.addAction("🌐 网络匹配", self._net_match)
-        menu.addAction("⚡ 自动匹配", self._auto_match)
-        menu.addAction("🖼 封面搜索", self._cover_search)
-        menu.addAction("🎵 歌词搜索", self._lyric_search)
+        menu.addAction("网络匹配", self._net_match)
+        menu.addAction("自动匹配", self._auto_match)
+        menu.addAction("封面搜索", self._cover_search)
+        menu.addAction("歌词搜索", self._lyric_search)
         menu.addSeparator()
-        menu.addAction("📋 复制标签", self._copy_tags)
-        menu.addAction("📌 粘贴标签", self._paste_tags)
-        menu.addAction("🕘 标签历史", self._history)
+        menu.addAction("复制标签", self._copy_tags)
+        menu.addAction("粘贴标签", self._paste_tags)
+        menu.addAction("标签历史", self._history)
         menu.addSeparator()
-        menu.addAction("💾 保存选中", self._save_selected)
-        menu.addAction("✖ 移除选中", self._remove_selected)
-        menu.addAction("🗑 清除标签", self._clear_tags)
+        menu.addAction("保存选中", self._save_selected)
+        menu.addAction("移除选中", self._remove_selected)
+        menu.addAction("清除标签", self._clear_tags)
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _column_menu(self, pos):

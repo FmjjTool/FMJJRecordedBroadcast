@@ -40,20 +40,20 @@ class TicketsPage(BasePage):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        title = QLabel("🎫 票务解析")
+        title = QLabel("票务解析")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 票务解析 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "票务解析 · 功能介绍", (
             "<p><b>大麦 / 秀动 / B站会员购 三平台演出检索与详情导出。</b></p>"
             "<p>· <b>搜索</b>：粘贴平台链接（大麦艺人/演出、秀动艺人/事件、B站会员购搜索/项目），"
             "或直接输入艺人名/演出名/场馆关键词——留空回车默认搜「封茗囧菌」，"
             "三平台同时搜索（大麦走真实浏览器约需 20 秒）</p>"
             "<p>· <b>表格</b>：勾选（全选/反选/清除）后点「获取选中演出详情」逐场拉取，"
             "并下载图片（封面/海报/宣传图/座位图/嘉宾头像/场馆图，存 download/票务演出/）</p>"
-            "<p>· <b>💾 导出列表</b>：输出全量 JSON（未拉详情的自动逐场拉取+下载图片）</p>"
+            "<p>· <b>导出列表</b>：输出全量 JSON（未拉详情的自动逐场拉取+下载图片）</p>"
             "<p>· 单件失败自动原地重试，不中断整批；导出时按勾选逐件处理并显示进度</p>"
             "<p>· 采集链路游客优先，降低风控风险</p>")))
         layout.addLayout(title_row)
@@ -64,18 +64,18 @@ class TicketsPage(BasePage):
             "留空直接回车 = 搜索「封茗囧菌」· 或输入 damai/showstart/bilibili 链接或任意关键词")
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
-        self.parse_btn = QPushButton("🔍 解析")
+        self.parse_btn = QPushButton("解析")
         self.parse_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.parse_btn.clicked.connect(self._parse)
         row.addWidget(self.parse_btn)
-        self.detail_btn = QPushButton("🎫 获取选中演出详情")
+        self.detail_btn = QPushButton("获取选中演出详情")
         self.detail_btn.setEnabled(False)
         self.detail_btn.setToolTip(
             "勾选了演出→逐场拉取详情+下载图片（封面/海报/宣传图/座位图/嘉宾头像/"
             "场馆图，存 download/票务演出/）；未勾选→仅当前选中行")
         self.detail_btn.clicked.connect(self._fetch_detail)
         row.addWidget(self.detail_btn)
-        self.export_btn = QPushButton("💾 导出列表")
+        self.export_btn = QPushButton("导出列表")
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip(
             "导出勾选的演出为全量 JSON（场次/票档/须知/嘉宾明细/图片本地路径）；"
@@ -86,7 +86,7 @@ class TicketsPage(BasePage):
 
         # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
         sel_row = QHBoxLayout()
-        self.sel_all_btn = QPushButton("☑ 全选")
+        self.sel_all_btn = QPushButton("全选")
         self.sel_all_btn.setToolTip("勾选全部演出")
         self.sel_all_btn.clicked.connect(lambda: self._set_all_checks(True))
         sel_row.addWidget(self.sel_all_btn)
@@ -94,7 +94,7 @@ class TicketsPage(BasePage):
         self.sel_invert_btn.setToolTip("反转每行勾选状态")
         self.sel_invert_btn.clicked.connect(self._invert_checks)
         sel_row.addWidget(self.sel_invert_btn)
-        self.sel_clear_btn = QPushButton("✖ 清除")
+        self.sel_clear_btn = QPushButton("清除")
         self.sel_clear_btn.setToolTip("清除全部勾选")
         self.sel_clear_btn.clicked.connect(lambda: self._set_all_checks(False))
         sel_row.addWidget(self.sel_clear_btn)
@@ -129,7 +129,7 @@ class TicketsPage(BasePage):
         self.detail_text.setReadOnly(True)
         self.detail_text.setPlaceholderText("选中左侧演出查看详情；点「获取选中演出详情」拉场次/票档")
         rv.addWidget(self.detail_text, 1)
-        self.link_btn = QPushButton("🌐 打开演出页面")
+        self.link_btn = QPushButton("打开演出页面")
         self.link_btn.setEnabled(False)
         self.link_btn.clicked.connect(self._open_link)
         rv.addWidget(self.link_btn)
@@ -151,7 +151,7 @@ class TicketsPage(BasePage):
             self.url_entry.setText(self.DEFAULT_KEYWORD)
             url = self.DEFAULT_KEYWORD
         self.parse_btn.setEnabled(False)
-        self.status_label.setText("⏳ 解析中...")
+        self.status_label.setText("解析中...")
 
         def work():
             # URL 优先；识别不出但像纯关键词 → 三平台关键词搜索
@@ -194,7 +194,7 @@ class TicketsPage(BasePage):
                 if nice:
                     tip = "｜" + " ".join(nice)
             self.status_label.setText(
-                f"✅ 解析到 {len(self._events)} 场演出{tip}")
+                f"解析到 {len(self._events)} 场演出{tip}")
             self.export_btn.setEnabled(bool(self._events))
 
         run_bg(work, done)
@@ -361,7 +361,7 @@ class TicketsPage(BasePage):
         self.detail_btn.setEnabled(False)
         self.parse_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
-        self.status_label.setText(f"⏳ 获取 {total} 场演出详情（含图片下载）...")
+        self.status_label.setText(f"获取 {total} 场演出详情（含图片下载）...")
 
         def work():
             import time
@@ -401,7 +401,7 @@ class TicketsPage(BasePage):
             self._show_cached_or([r for r in rows])
             tip = f"，{len(failed)} 场失败" if failed else ""
             self.status_label.setText(
-                f"✅ 已获取 {len(done_items)} 场详情并下载图片{tip}"
+                f"已获取 {len(done_items)} 场详情并下载图片{tip}"
                 f"（download/票务演出/，每场一个目录）")
 
         run_bg(work, done)
@@ -559,7 +559,7 @@ class TicketsPage(BasePage):
             return
         checked = self._checked_rows()
         if not checked:
-            self.app.toast("请先勾选要导出的演出（表格第一列复选框），或点「☑ 全选」",
+            self.app.toast("请先勾选要导出的演出（表格第一列复选框），或点「全选」",
                            "warning")
             return
         total = len(checked)
@@ -629,13 +629,13 @@ class TicketsPage(BasePage):
                 return
             tip = f"，{len(failed)} 场详情获取失败" if failed else ""
             self.status_label.setText(
-                f"✅ 已导出 {n_export} 场演出全量 JSON{tip}到 {path}")
+                f"已导出 {n_export} 场演出全量 JSON{tip}到 {path}")
 
         run_bg(work, done)
 
     def _log(self, msg):
         def apply():
-            self.status_label.setText(f"⏳ {msg}")
+            self.status_label.setText(f"{msg}")
         try:
             post_to_main(apply)
         except Exception:

@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
     QSpinBox, QTextEdit, QToolTip, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import icon_button, post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 
 try:
@@ -806,7 +808,7 @@ class ImageCropPage(BasePage):
         root.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("🖼 图片裁切")
+        title = QLabel("图片裁切")
         f = QFont()
         f.setPointSize(11)
         f.setBold(True)
@@ -814,24 +816,24 @@ class ImageCropPage(BasePage):
         head.addWidget(title)
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 图片裁切 · 功能介绍", (
+        head.addWidget(attach_help_overlay(self, "图片裁切 · 功能介绍", (
             "<p><b>四边参考线裁图：拖线定位 + 放大镜 + 自动对齐 + 批量导出。</b></p>"
             "<p>· <b>导入</b>：按钮选择或直接拖入图片/文件夹（仅本页列表，不改全局工作目录），"
             "支持 PNG/JPG/JPEG/BMP/WebP/GIF（取首帧）</p>"
             "<p>· <b>裁切</b>：拖动四条参考线围出保留区域；靠近参考线时光标变 ↕/↔，"
-            "拖动时右侧显示像素放大镜（➖/➕ 调倍率）</p>"
+            "拖动时右侧显示像素放大镜（−/+ 调倍率）</p>"
             "<p>· <b>精细模式</b>：鼠标移动 20px 参考线才动 1px，适合像素级定位；"
             "按住 Shift 拖动可临时加速</p>"
             "<p>· <b>边界吸附</b>：参考线靠近内容颜色边缘时自动对齐（后台分析图像边缘）</p>"
             "<p>· <b>自动对齐</b>：识别内容边界一键裁掉黑边/留白</p>"
             "<p>· <b>精确输入</b>：直接输入上/下/左/右像素坐标（或点击尺寸按钮）</p>"
-            "<p>· <b>导出</b>：单张按当前区域导出；📦 批量导出全部图片到 download/图片裁切/，"
+            "<p>· <b>导出</b>：单张按当前区域导出；批量导出全部图片到 download/图片裁切/，"
             "文件名加 _cropped 后缀；Ctrl+Z/Ctrl+Y 撤销重做，右键列表项可删除</p>")))
         root.addLayout(head)
 
         bar = QHBoxLayout()
         bar.setSpacing(4)
-        self.btn_import = QPushButton("📁 导入")
+        self.btn_import = QPushButton("导入")
         self.btn_import.clicked.connect(self._pick_files)
         bar.addWidget(self.btn_import)
 
@@ -843,7 +845,7 @@ class ImageCropPage(BasePage):
         bar.addWidget(self.btn_redo)
         bar.addSpacing(6)
 
-        self.btn_zoom_out = icon_button("➖", "缩小放大镜", (26, 24), emoji=False,
+        self.btn_zoom_out = icon_button("−", "缩小放大镜", (26, 24), emoji=False,
                                         on_click=lambda: self._set_zoom(self.magnifier_zoom - 1))
         self.zoom_label = QLabel(f"{self.magnifier_zoom}x")
         self.zoom_label.setAlignment(Qt.AlignCenter)
@@ -851,18 +853,18 @@ class ImageCropPage(BasePage):
         f = QFont("Consolas")
         f.setPointSize(9)
         self.zoom_label.setFont(f)
-        self.btn_zoom_in = icon_button("➕", "放大放大镜", (26, 24), emoji=False,
+        self.btn_zoom_in = icon_button("+", "放大放大镜", (26, 24), emoji=False,
                                        on_click=lambda: self._set_zoom(self.magnifier_zoom + 1))
         bar.addWidget(self.btn_zoom_out)
         bar.addWidget(self.zoom_label)
         bar.addWidget(self.btn_zoom_in)
         bar.addSpacing(6)
 
-        self.btn_auto = QPushButton("🎯 自动对齐")
+        self.btn_auto = QPushButton("自动对齐")
         self.btn_auto.setToolTip("自动识别内容边界，一键裁掉黑边")
         self.btn_auto.clicked.connect(self._auto_align)
         bar.addWidget(self.btn_auto)
-        self.btn_precise = QPushButton("✏️ 精确输入")
+        self.btn_precise = QPushButton("精确输入")
         self.btn_precise.setToolTip("输入上下左右像素坐标定位参考线")
         self.btn_precise.clicked.connect(self._open_precise_input)
         bar.addWidget(self.btn_precise)
@@ -884,18 +886,19 @@ class ImageCropPage(BasePage):
         self.btn_size.clicked.connect(self._open_precise_input)
         bar.addWidget(self.btn_size)
 
-        self.btn_export = QPushButton("💾 导出")
+        self.btn_export = QPushButton("导出")
         self.btn_export.clicked.connect(self._export_current)
         bar.addWidget(self.btn_export)
-        self.btn_copy = QPushButton("📋 复制")
+        self.btn_copy = QPushButton("复制")
         self.btn_copy.setToolTip("把当前裁切结果复制到剪贴板，可直接粘到 PS / PR / 微信")
         self.btn_copy.clicked.connect(self._copy_current)
         bar.addWidget(self.btn_copy)
-        self.btn_batch = QPushButton("📦 批量导出")
+        self.btn_batch = QPushButton("批量导出")
         self.btn_batch.setToolTip("全部图片按各自裁切区域导出到 download/图片裁切/")
         self.btn_batch.clicked.connect(self._batch_export)
         bar.addWidget(self.btn_batch)
-        self.btn_clear = icon_button("🗑️", "清空全部图片", (32, 26), on_click=self._clear_all)
+        self.btn_clear = icon_button("", "清空全部图片", (32, 26), on_click=self._clear_all)
+        self.btn_clear.setIcon(line_icon("trash", theme.color("text"), 16))
         bar.addWidget(self.btn_clear)
         root.addLayout(bar)
 
@@ -1336,4 +1339,4 @@ class ImageCropPage(BasePage):
             self.status_label.setText(
                 "拖动参考线调整裁切 · Ctrl+Z 撤销 · Ctrl+Y 重做 · Shift 加速拖动"
                 if self._slots else
-                "将图片拖入窗口，或点击「📁 导入」选择图片（支持 PNG/JPG/JPEG/WebP）")
+                "将图片拖入窗口，或点击「导入」选择图片（支持 PNG/JPG/JPEG/WebP）")

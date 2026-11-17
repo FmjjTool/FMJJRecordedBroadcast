@@ -48,23 +48,23 @@ TCDOC_DRAWER_KEYS = {"tcdoc_rows", "doc_views", "doc_members", "doc_readers"}
 # 下钻抽屉表格最多显示的行数，超出后表格内部滚动；高度按实际行数自适应
 DRAWER_MAX_ROWS = 10
 
-# 常用工具：(key, 图标, 标题, 说明)
+# 常用工具：(key, 标题, 说明)
 COMMON_TOOLS = [
-    ("info_accounts", "🔍", "信息获取", "批量链接解析与账号采集"),
-    ("info_results", "📦", "已获取", "结果库、下载与导出"),
-    ("asset", "🗂", "资产管理", "已获取资源与本地扫描"),
-    ("toolbox_editor", "🎬", "视频操作", "转换 / 合并 / 切割 / 压缩"),
-    ("toolbox_subtitle", "📝", "字幕转换", "字幕与歌词格式转换"),
-    ("music_search_download", "🎵", "音乐搜索下载", "五平台信息与歌曲下载"),
+    ("info_accounts", "信息获取", "批量链接解析与账号采集"),
+    ("info_results", "已获取", "结果库、下载与导出"),
+    ("asset", "资产管理", "已获取资源与本地扫描"),
+    ("toolbox_editor", "视频操作", "转换 / 合并 / 切割 / 压缩"),
+    ("toolbox_subtitle", "字幕转换", "字幕与歌词格式转换"),
+    ("music_search_download", "音乐搜索下载", "五平台信息与歌曲下载"),
 ]
 
 INFO_TOOLS = [
-    ("douyin_index", "📈", "抖音指数", "达人指标、作品与粉丝画像"),
-    ("wechat_article", "📰", "公众号解析", "文章导出 HTML / PDF / Word"),
-    ("bili_resource", "🎁", "B站资源", "表情包、收藏集、空间资源"),
-    ("video_comments", "💬", "视频评论区", "三平台评论抓取与长图"),
-    ("tcdoc", "📄", "腾讯文档监控", "浏览量 / 成员数每日记录"),
-    ("localwiki", "🌐", "本地资料站", "本地 Wiki + 腾讯文档预览"),
+    ("douyin_index", "抖音指数", "达人指标、作品与粉丝画像"),
+    ("wechat_article", "公众号解析", "文章导出 HTML / PDF / Word"),
+    ("bili_resource", "B站资源", "表情包、收藏集、空间资源"),
+    ("video_comments", "视频评论区", "三平台评论抓取与长图"),
+    ("tcdoc", "腾讯文档监控", "浏览量 / 成员数每日记录"),
+    ("localwiki", "本地资料站", "本地 Wiki + 腾讯文档预览"),
 ]
 INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
 
@@ -376,7 +376,7 @@ class _AccountConfigDialog(QDialog):
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
         foot.addWidget(cancel_btn)
-        save_btn = QPushButton("💾 保存")
+        save_btn = QPushButton("保存")
         save_btn.setStyleSheet(
             "background: #2e7d32; color: white; padding: 4px 16px; border-radius: 4px;")
         save_btn.clicked.connect(self.accept)
@@ -570,7 +570,7 @@ class HomePage(BasePage):
         hint.setObjectName("workbenchHomeMuted")
         hint.setWordWrap(True)
         bar.addWidget(hint, 1)
-        config_btn = QPushButton("⚙ 配置观察账号")
+        config_btn = QPushButton("配置观察账号")
         config_btn.clicked.connect(self._open_account_config)
         bar.addWidget(config_btn)
         media_btn = QPushButton("网媒账号追踪")
@@ -714,7 +714,7 @@ class HomePage(BasePage):
             return
         if not display:
             self.account_status.setText(
-                "当前未勾选观察账号，点「⚙ 配置观察账号」选择")
+                "当前未勾选观察账号，点「配置观察账号」选择")
             self._fit_drawer_height()
             return
 
@@ -956,7 +956,7 @@ class HomePage(BasePage):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(12)
         cards = []
-        for i, (key, _emoji, title, desc) in enumerate(tools):
+        for i, (key, title, desc) in enumerate(tools):
             card = _ToolCard(key, title, desc, lambda checked=False, k=key: self._open_tool(k))
             cards.append(card)
             grid.addWidget(card, i // 3, i % 3)

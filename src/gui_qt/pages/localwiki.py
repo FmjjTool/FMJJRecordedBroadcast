@@ -104,7 +104,7 @@ class LocalWikiPage(BasePage):
         h.setContentsMargins(0, 0, 0, 2)
         left = QVBoxLayout()
         left.setSpacing(5)
-        title = QLabel("🌐 本地资料站")
+        title = QLabel("本地资料站")
         title.setObjectName("wikiTitle")
         left.addWidget(title)
         sub = QLabel("本地 Wiki + 腾讯文档预览：拉取 webwiki / webwiki-api，"
@@ -112,13 +112,13 @@ class LocalWikiPage(BasePage):
         sub.setObjectName("wikiMuted")
         sub.setWordWrap(True)
         left.addWidget(sub)
-        note = QLabel("🔒 私有项目：拉取代码与一键部署需要有效的 GitHub 登录状态；"
+        note = QLabel("私有项目：拉取代码与一键部署需要有效的 GitHub 登录状态；"
                       "仓库本身请保持在 GitHub 私有。")
         note.setObjectName("wikiWarn")
         note.setWordWrap(True)
         left.addWidget(note)
         h.addLayout(left, 1)
-        help_btn = QPushButton("❓ 功能介绍")
+        help_btn = QPushButton("功能介绍")
         help_btn.setObjectName("wikiButton")
         help_btn.clicked.connect(self._show_help)
         h.addWidget(help_btn, 0, Qt.AlignTop)
@@ -157,7 +157,7 @@ class LocalWikiPage(BasePage):
 
     def _build_actions_card(self):
         card, box = self._card("部署与启动", "登录后点「一键部署」即可全自动完成")
-        self.deploy_btn = QPushButton("🚀 一键部署并启动")
+        self.deploy_btn = QPushButton("一键部署并启动")
         self.deploy_btn.setObjectName("wikiPrimary")
         self.deploy_btn.setMinimumHeight(40)
         self.deploy_btn.setToolTip(
@@ -170,14 +170,14 @@ class LocalWikiPage(BasePage):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
         buttons = [
-            ("⬇ 拉取/更新代码", self._pull),
-            ("📦 安装依赖", self._install_deps),
-            ("🔄 重建站点数据", self._sync_docs),
-            ("🏗 构建前端", self._build_frontend),
+            ("拉取/更新代码", self._pull),
+            ("安装依赖", self._install_deps),
+            ("重建站点数据", self._sync_docs),
+            ("构建前端", self._build_frontend),
             ("▶ 启动服务", self._start_service),
-            ("🌐 打开网站", self._open_site),
-            ("⏹ 停止服务", self._stop_service),
-            ("📂 打开目录", self._open_dir),
+            ("打开网站", self._open_site),
+            ("停止服务", self._stop_service),
+            ("打开目录", self._open_dir),
         ]
         self.pull_btn = None
         self.deps_btn = None
@@ -226,7 +226,7 @@ class LocalWikiPage(BasePage):
             "密码连续错 5 次会锁定 15 分钟，不确定时先到 /admin 试一次。")
         self.analytics_pwd.returnPressed.connect(self._save_analytics_password)
         row.addWidget(self.analytics_pwd, 1)
-        save_btn = QPushButton("💾 保存密码")
+        save_btn = QPushButton("保存密码")
         save_btn.setObjectName("wikiButton")
         save_btn.setToolTip("保存后只做掩码显示，界面不会回显密码")
         save_btn.clicked.connect(self._save_analytics_password)
@@ -250,18 +250,18 @@ class LocalWikiPage(BasePage):
         self.analytics_scope.currentIndexChanged.connect(self._save_analytics_scope)
         row2.addWidget(self.analytics_scope)
         row2.addStretch(1)
-        self.analytics_collect_btn = QPushButton("🔄 采集今日")
+        self.analytics_collect_btn = QPushButton("采集今日")
         self.analytics_collect_btn.setObjectName("wikiButton")
         self.analytics_collect_btn.setToolTip("向站点后台查询今日统计并写入本地库（按日期+口径去重）")
         self.analytics_collect_btn.clicked.connect(self._collect_analytics)
         row2.addWidget(self.analytics_collect_btn)
-        admin_btn = QPushButton("🌐 打开后台")
+        admin_btn = QPushButton("打开后台")
         admin_btn.setObjectName("wikiButton")
         admin_btn.setToolTip("在浏览器打开 mandisa.wiki/admin")
         admin_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(analytics.ADMIN_URL)))
         row2.addWidget(admin_btn)
-        dir_btn = QPushButton("📂 数据目录")
+        dir_btn = QPushButton("数据目录")
         dir_btn.setObjectName("wikiButton")
         dir_btn.setToolTip("打开 download/站点监控数据（访问统计.db + 采集日志）")
         dir_btn.clicked.connect(
@@ -289,7 +289,7 @@ class LocalWikiPage(BasePage):
             self.analytics_values[key] = value
         box.addLayout(tiles)
 
-        self.analytics_note = QLabel("尚未采集：保存密码后点「🔄 采集今日」。")
+        self.analytics_note = QLabel("尚未采集：保存密码后点「采集今日」。")
         self.analytics_note.setObjectName("wikiMuted")
         self.analytics_note.setWordWrap(True)
         box.addWidget(self.analytics_note)
@@ -321,11 +321,11 @@ class LocalWikiPage(BasePage):
         for doc in tcdoc_cfg.load_docs():
             self.doc_combo.addItem(doc.get("name") or doc.get("key"), doc.get("url") or "")
         row.addWidget(self.doc_combo, 1)
-        preview = QPushButton("📄 打开预览")
+        preview = QPushButton("打开预览")
         preview.setObjectName("wikiButton")
         preview.clicked.connect(self._open_doc_preview)
         row.addWidget(preview)
-        monitor = QPushButton("📊 腾讯文档监控页")
+        monitor = QPushButton("腾讯文档监控页")
         monitor.setObjectName("wikiButton")
         monitor.clicked.connect(lambda: self.app.show_page("tcdoc"))
         row.addWidget(monitor)
@@ -413,7 +413,7 @@ class LocalWikiPage(BasePage):
             "（内部统计接口，只需 /admin 的后台密码，不需要浏览器登录）。"
             "密码加密存在本机 <code>config/webwiki_analytics.json</code>，"
             "只掩码显示、不回显；后台改密后这里要同步改，旧密码立即失效。"
-            "点「🔄 采集今日」会把当天数据按「日期 + 口径」写入 "
+            "点「采集今日」会把当天数据按「日期 + 口径」写入 "
             "<code>download/站点监控数据/访问统计.db</code>，"
             "同一天重复采集直接覆盖；历史表里能看最近 14 条，"
             "攒够前一日 / 7 日前的数据后自动显示访客差。"
@@ -629,7 +629,7 @@ class LocalWikiPage(BasePage):
     def _start_task(self, title: str, fn, on_ok=None):
         if self._busy:
             return
-        self._set_busy(True, f"⏳ {title}…")
+        self._set_busy(True, f"{title}…")
         self._log(f"===== {title} =====")
 
         def work():
@@ -638,15 +638,15 @@ class LocalWikiPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self._log(f"❌ {title}：{err}")
-                self.status_label.setText(f"❌ {title}失败")
+                self._log(f"{title}：{err}")
+                self.status_label.setText(f"{title}失败")
                 QMessageBox.warning(self, title, str(err))
                 try:
                     self.app.toast(f"{title}失败：{err}"[:120], "error")
                 except Exception:  # noqa: BLE001
                     pass
             else:
-                message = f"✅ {title}完成" + (f"：{result}" if result else "")
+                message = f"{title}完成" + (f"：{result}" if result else "")
                 self._log(message)
                 self.status_label.setText(message)
                 try:
@@ -806,7 +806,7 @@ class LocalWikiPage(BasePage):
 
     def _analytics_note_text(self, row: dict | None, rows: list[dict]) -> str:
         if not row:
-            return ("尚未采集：保存密码后点「🔄 采集今日」，"
+            return ("尚未采集：保存密码后点「采集今日」，"
                     "或到「任务」页面安装每日定时。")
         prev, week = analytics.deltas(row, rows)
         fetched = str(row.get("fetched_at") or "-")
@@ -862,7 +862,7 @@ class LocalWikiPage(BasePage):
         else:
             self._log("站点后台密码已保存，但本机缺少 cryptography 库，当前是明文文件，"
                       "建议先安装依赖")
-        self.status_label.setText("✅ 站点后台密码已保存")
+        self.status_label.setText("站点后台密码已保存")
         self._refresh_analytics()
 
     def _save_analytics_scope(self, _index=None):

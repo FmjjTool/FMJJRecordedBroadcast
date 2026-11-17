@@ -20,7 +20,9 @@ from toolbox.config_manager import (
     get_export_subdir, load_convert_config, save_convert_config,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 
 FORMATS = [
@@ -44,7 +46,7 @@ class WechatArticlePage(BasePage):
 
         # 标题 + 使用说明
         title_row = QHBoxLayout()
-        title = QLabel("📰 公众号文章解析")
+        title = QLabel("公众号文章解析")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row.addWidget(title)
         title_row.addStretch(1)
@@ -79,7 +81,8 @@ class WechatArticlePage(BasePage):
         self.loc_combo.addItem("固定位置")
         self.loc_combo.currentIndexChanged.connect(self._on_loc_changed)
         loc_row.addWidget(self.loc_combo)
-        pick_btn = QPushButton("📁")
+        pick_btn = QPushButton()
+        pick_btn.setIcon(line_icon("folder", theme.color("link"), 16))
         pick_btn.setFixedSize(30, 26)
         pick_btn.setToolTip("选择固定位置（文件夹）")
         pick_btn.clicked.connect(self._pick_custom_dir)
@@ -99,16 +102,16 @@ class WechatArticlePage(BasePage):
 
         # 操作按钮
         btn_row = QHBoxLayout()
-        self.start_btn = QPushButton("🔍 解析并导出")
+        self.start_btn = QPushButton("解析并导出")
         self.start_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
         self.start_btn.clicked.connect(self._start)
         btn_row.addWidget(self.start_btn)
-        self.cancel_btn = QPushButton("⏹ 取消")
+        self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setStyleSheet("background: #c62828; color: white;")
         self.cancel_btn.clicked.connect(self._cancel_run)
         self.cancel_btn.setEnabled(False)
         btn_row.addWidget(self.cancel_btn)
-        open_btn = QPushButton("📂 打开导出文件夹")
+        open_btn = QPushButton("打开导出文件夹")
         open_btn.clicked.connect(self._open_export_dir)
         btn_row.addWidget(open_btn)
         btn_row.addStretch(1)
@@ -136,7 +139,7 @@ class WechatArticlePage(BasePage):
             "<p style='color:#888'>仅支持 mp.weixin.qq.com 图文消息；付费/加密文章、"
             "已被删除文章无法解析；批量解析会自动限速避免微信风控</p>"
         )
-        return attach_help_overlay(self, "❓ 使用说明", html, btn_text="❓ 使用说明")
+        return attach_help_overlay(self, "使用说明", html, btn_text="使用说明")
 
     # ===================== 导出位置（默认/固定 双选项） =====================
 
@@ -160,7 +163,7 @@ class WechatArticlePage(BasePage):
         save_convert_config(cfg)
         self.loc_combo.setCurrentIndex(1)
         self._refresh_loc_label()
-        self._log(f"📁 固定导出位置: {picked}")
+        self._log(f"固定导出位置: {picked}")
 
     def _current_out_dir(self):
         cfg = self._cfg()
@@ -205,8 +208,8 @@ class WechatArticlePage(BasePage):
         self.cancel_btn.setEnabled(True)
         self.progress.setValue(0)
         self.log_text.clear()
-        self._log(f"📰 开始解析 {len(urls)} 篇文章，导出格式: {'/'.join(FORMATS_DICT[f] for f in formats)}")
-        self._log(f"📂 导出位置: {self._current_out_dir()}")
+        self._log(f"开始解析 {len(urls)} 篇文章，导出格式: {'/'.join(FORMATS_DICT[f] for f in formats)}")
+        self._log(f"导出位置: {self._current_out_dir()}")
         # 下载浮窗（主线程创建；文章间串行限速，文章内图片并发）
         from gui_qt.download_float import get_float
         card = get_float().add_batch("公众号解析", total=len(urls), threads=1,
@@ -217,7 +220,7 @@ class WechatArticlePage(BasePage):
 
     def _cancel_run(self):
         self._cancel = True
-        self.status_label.setText("⏳ 正在取消（完成当前请求后停止）...")
+        self.status_label.setText("正在取消（完成当前请求后停止）...")
 
     def _worker(self, urls, formats, out_dir, card=None):
         from platforms.wechat_article import fetch_article, download_images
@@ -234,20 +237,20 @@ class WechatArticlePage(BasePage):
         for i, url in enumerate(urls):
             if self._cancel:
                 break
-            post_to_main(self._set_status, f"批量解析 {i + 1}/{total}  ⏳ 抓取页面...")
+            post_to_main(self._set_status, f"批量解析 {i + 1}/{total}  抓取页面...")
             title = f"{i + 1}. {url[-24:]}"
             try:
                 art = fetch_article(url)
                 title = (f"{i + 1}. {art.title}")[:46] if art.title else title
                 _evt("start", title)
                 post_to_main(self._log,
-                             f"[{i + 1}/{total}] 📄 {art.title}")
+                             f"[{i + 1}/{total}] {art.title}")
                 post_to_main(self._log,
                              f"  公众号: {art.account or '-'}  发布: {art.publish_time or '-'}  图片: {len(art.images)} 张")
 
                 def img_prog(n, m, t=title):
                     post_to_main(self._set_status,
-                                 f"批量解析 {i + 1}/{total}  {t[:24]}  ⬇ 图片 {n}/{m}")
+                                 f"批量解析 {i + 1}/{total}  {t[:24]}  图片 {n}/{m}")
                     _evt("bytes", t, n, m)
 
                 download_images(art, progress=img_prog,
@@ -269,19 +272,19 @@ class WechatArticlePage(BasePage):
                 ok += 1
                 _evt("done", title, True)
                 post_to_main(self._log,
-                             "  ✅ 导出完成 → "
+                             "  导出完成 → "
                              + os.path.relpath(art_dir, out_dir).replace(os.sep, "/") + "/"
                              + ("（PDF 稍后生成）" if "pdf" in formats else ""))
             except Exception as e:
                 fail += 1
                 _evt("done", title, False)
-                post_to_main(self._log, f"[{i + 1}/{total}] ❌ 失败: {str(e)[:120]}")
+                post_to_main(self._log, f"[{i + 1}/{total}] 失败: {str(e)[:120]}")
             post_to_main(self.progress.setValue, int((i + 1) / total * 100))
             if i < total - 1 and not self._cancel:
                 time.sleep(1.2)  # 批量限速，降低微信风控概率
 
         if card is not None:
-            tip = f"✅ 完成：成功 {ok} 篇" if not fail else f"⚠️ 完成：成功 {ok} / 失败 {fail}"
+            tip = f"完成：成功 {ok} 篇" if not fail else f"完成：成功 {ok} / 失败 {fail}"
             card.finish(tip)
         post_to_main(self._finish_batch, pdf_jobs, ok, fail, formats)
 
@@ -296,14 +299,14 @@ class WechatArticlePage(BasePage):
                 try:
                     render_pdf(html, path)
                 except Exception as e:
-                    self._log(f"  ❌ PDF 生成失败: {e}")
+                    self._log(f"  PDF 生成失败: {e}")
         self.running = False
         self._cancel = False
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        tip = f"✅ 完成：成功 {ok} 篇" if not fail else f"⚠️ 完成：成功 {ok} / 失败 {fail}"
+        tip = f"完成：成功 {ok} 篇" if not fail else f"完成：成功 {ok} / 失败 {fail}"
         if self._cancel:
-            tip = f"⏹ 已取消（成功 {ok} / 失败 {fail}）"
+            tip = f"已取消（成功 {ok} / 失败 {fail}）"
         self.status_label.setText(tip)
         self._log(f"\n{tip}  → {self._current_out_dir()}")
 

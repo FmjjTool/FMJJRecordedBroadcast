@@ -48,7 +48,7 @@ from gui_qt.theme import is_dark
 # ==================== 常量 ====================
 
 FIELD_KEYS = ("title", "date", "remark")
-FIELD_LABELS = {"title": "📌 标题", "date": "📅 日期", "remark": "📝 备注"}
+FIELD_LABELS = {"title": "标题", "date": "日期", "remark": "备注"}
 FIELD_PLACEHOLDERS = {
     "title": "输入标题文字（预览区可直接拖动定位）",
     "date": "输入日期文字，如 2026-09-05",
@@ -1324,23 +1324,23 @@ class CoverMakerPage(BasePage):
         root.setSpacing(8)
 
         head = QHBoxLayout()
-        title = QLabel("🎨 套版封面制作")
+        title = QLabel("套版封面制作")
         font = QFont()
         font.setPointSize(11)
         font.setBold(True)
         title.setFont(font)
         head.addWidget(title)
-        head.addWidget(attach_help_overlay(self, "❓ 套版封面制作 · 功能介绍", HELP_HTML))
+        head.addWidget(attach_help_overlay(self, "套版封面制作 · 功能介绍", HELP_HTML))
         head.addStretch(1)
 
-        self.random_bg_btn = QPushButton("🎲 随机底图")
+        self.random_bg_btn = QPushButton("随机底图")
         self.random_bg_btn.clicked.connect(self._on_random_bg)
         head.addWidget(self.random_bg_btn)
-        self.pick_bg_btn = QPushButton("🖼 选择底图")
+        self.pick_bg_btn = QPushButton("选择底图")
         self.pick_bg_btn.setToolTip("浏览底图文件夹缩略图，指定哪张图片作为当前底图（蒙版）")
         self.pick_bg_btn.clicked.connect(self._on_pick_bg)
         head.addWidget(self.pick_bg_btn)
-        self.upload_btn = QPushButton("📁 上传图片")
+        self.upload_btn = QPushButton("上传图片")
         self.upload_btn.setToolTip("选择本地图片临时替换当前底图（不写入底图文件夹）")
         self.upload_btn.clicked.connect(self._on_upload_bg)
         head.addWidget(self.upload_btn)
@@ -1384,7 +1384,7 @@ class CoverMakerPage(BasePage):
         lv.setSpacing(10)
 
         # 底图组
-        bg_box = QGroupBox("🖼 底图")
+        bg_box = QGroupBox("底图")
         bgv = QVBoxLayout(bg_box)
         bgv.setContentsMargins(8, 8, 8, 8)
         bgv.setSpacing(6)
@@ -1393,10 +1393,10 @@ class CoverMakerPage(BasePage):
         self.folder_label.setStyleSheet("color: #5a6474;")
         bgv.addWidget(self.folder_label)
         row = QHBoxLayout()
-        self.folder_btn = QPushButton("📂 更换底图文件夹")
+        self.folder_btn = QPushButton("更换底图文件夹")
         self.folder_btn.clicked.connect(self._on_change_bg_folder)
         row.addWidget(self.folder_btn, 1)
-        self.rescan_btn = QPushButton("🔄 重新扫描")
+        self.rescan_btn = QPushButton("重新扫描")
         self.rescan_btn.clicked.connect(self._on_rescan)
         row.addWidget(self.rescan_btn)
         bgv.addLayout(row)
@@ -1411,7 +1411,7 @@ class CoverMakerPage(BasePage):
         lv.addWidget(bg_box)
 
         # 同步样式组
-        sync_box = QGroupBox("🔗 同步样式")
+        sync_box = QGroupBox("同步样式")
         sync_box.setStyleSheet("QGroupBox { font-weight: 600; }")
         sh = QVBoxLayout(sync_box)
         sh.setContentsMargins(8, 8, 8, 8)
@@ -1462,10 +1462,10 @@ class CoverMakerPage(BasePage):
 
         # 模板行
         trow = QHBoxLayout()
-        self.save_tpl_btn = QPushButton("💾 保存模板")
+        self.save_tpl_btn = QPushButton("保存模板")
         self.save_tpl_btn.clicked.connect(self._on_save_template)
         trow.addWidget(self.save_tpl_btn, 1)
-        self.load_tpl_btn = QPushButton("📂 加载模板")
+        self.load_tpl_btn = QPushButton("加载模板")
         self.load_tpl_btn.clicked.connect(self._on_load_template)
         trow.addWidget(self.load_tpl_btn, 1)
         lv.addLayout(trow)
@@ -1481,7 +1481,7 @@ class CoverMakerPage(BasePage):
         rv.setSpacing(8)
 
         row0 = QHBoxLayout()
-        self.reset_pos_btn = QPushButton("🎯 重置文字位置")
+        self.reset_pos_btn = QPushButton("重置文字位置")
         self.reset_pos_btn.setToolTip("恢复默认布局：三行垂直居中")
         self.reset_pos_btn.clicked.connect(self._on_reset_positions)
         row0.addWidget(self.reset_pos_btn)
@@ -1515,13 +1515,13 @@ class CoverMakerPage(BasePage):
         row2.addWidget(self.quality_slider)
         row2.addWidget(self.quality_label)
         row2.addStretch(1)
-        self.export_png_btn = QPushButton("💾 导出PNG")
+        self.export_png_btn = QPushButton("导出PNG")
         self.export_png_btn.clicked.connect(lambda: self._export_image("PNG"))
         row2.addWidget(self.export_png_btn)
-        self.export_jpg_btn = QPushButton("🖼 导出JPG")
+        self.export_jpg_btn = QPushButton("导出JPG")
         self.export_jpg_btn.clicked.connect(lambda: self._export_image("JPEG"))
         row2.addWidget(self.export_jpg_btn)
-        self.copy_btn = QPushButton("📋 复制")
+        self.copy_btn = QPushButton("复制")
         self.copy_btn.setToolTip("按当前分辨率渲染成品并复制到剪贴板，可直接粘到 PS / PR / 微信")
         self.copy_btn.clicked.connect(self._copy_image)
         row2.addWidget(self.copy_btn)
@@ -1837,7 +1837,7 @@ class CoverMakerPage(BasePage):
         load_btn = QPushButton("加载")
         load_btn.setDefault(True)
         load_btn.clicked.connect(dlg.accept)
-        del_btn = QPushButton("🗑️ 删除")
+        del_btn = QPushButton("删除")
         del_btn.clicked.connect(lambda: self._delete_template(files, listw, dlg))
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(dlg.reject)
