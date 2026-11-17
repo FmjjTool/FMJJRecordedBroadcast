@@ -1044,9 +1044,9 @@ class InfoAccountsPage(BasePage):
         """
         try:
             if incremental:
-                # 增量：写入增量数据库（config/increment.db，分平台分表、按去重键忽略重复）
-                from toolbox import increment_db
-                added = increment_db.save_incremental(posts)
+                # increment.db 是 collected.db 的派生归档，统一由投影服务写入
+                from toolbox.collected_projection import project_items
+                added = project_items(posts)
                 parts = "、".join(f"{p} +{n}" for p, n in added.items() if n)
                 msg = f"💾 已入库 {parts}" if parts else "💾 无新增（已全部在库中）"
                 return msg, added
