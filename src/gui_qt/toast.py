@@ -30,11 +30,6 @@ class Toast(QFrame):
             f"QLabel {{ color: white; background: transparent; }}")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 8, 14, 8)
-        icon_lbl = QLabel(self._icon(kind))
-        icon_font = QFont()
-        icon_font.setPointSize(14)
-        icon_lbl.setFont(icon_font)
-        layout.addWidget(icon_lbl)
         text_lbl = QLabel(text)
         text_font = QFont()
         text_font.setPointSize(12)
@@ -59,9 +54,6 @@ class Toast(QFrame):
         self._anim_in.start()
         # 定时淡出 + 关闭
         QTimer.singleShot(duration, self._fade_out)
-
-    def _icon(self, kind):
-        return {"info": "ℹ", "success": "✅", "warning": "⚠", "error": "❌"}.get(kind, "ℹ")
 
     def _place(self):
         """贴宿主窗口内部右下角（窗口坐标系，随窗口移动/缩放）。"""

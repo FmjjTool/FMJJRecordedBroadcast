@@ -309,7 +309,7 @@ def _try_mtop_shop_items(shop_id: str, seller_id: str, cookie: str,
 
     主路径 mtop.taobao.wireless.shop.index.wandering.get（移动版店铺首页商品流）：
     按 userId 精确返回该店铺在售商品，curPage/preItemId/hasNext 分页。
-    ⚠️ 勿再用 mtop.taobao.wsearch.appsearch：其 params.s（店铺过滤）已被淘宝
+    勿再用 mtop.taobao.wsearch.appsearch：其 params.s（店铺过滤）已被淘宝
     服务端忽略，返回的是与店铺无关的推荐流（实测拿到的是 Steam CDKEY 类目）。
 
     返回 {"items":[...], "api":...} 或 {}。
@@ -517,7 +517,7 @@ def _playwright_fetch_products(shop_info: ShopInfo, cookie: str,
     domain = m.group(0) if m else (shop_info.url or "")
     shop_id = shop_info.shop_id or ""
 
-    # ★ PC search.htm 优先：实测登录 Cookie 下 hotsell 排序页能直接出卡片；
+    # PC search.htm 优先：实测登录 Cookie 下 hotsell 排序页能直接出卡片；
     #   m 站 shop_index.htm 会跳到 shop{id}.m.taobao.com 壳页，DOM 里没有商品
     candidates = [
         (f"{domain}/search.htm?orderType=hotsell", UA_PC, "PC+hotsell"),

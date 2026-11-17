@@ -235,7 +235,7 @@ def render_cell(cell, field, users) -> str:
     if ftype == 2:  # 数字
         return str(val.get("1", "")) if isinstance(val, dict) else str(val)
     if ftype == 3:  # 复选框
-        return "✓" if val in (True, "true", 1, "1") else ""
+        return "是" if val in (True, "true", 1, "1") else ""
     if ftype == 4:  # 日期
         return _to_date(val)
     if ftype in (12, 13):  # 创建时间 / 最后编辑时间

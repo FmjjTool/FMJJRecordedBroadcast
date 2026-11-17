@@ -350,7 +350,7 @@ def _douyin_search_manual(keyword: str, count: int, cookie: str, notify) -> list
                 page.wait_for_timeout(3000)
                 if "验证" in page.title():
                     if notify:
-                        notify("🔍 抖音搜索触发验证码：请在弹出的浏览器窗口中手动完成验证"
+                        notify("抖音搜索触发验证码：请在弹出的浏览器窗口中手动完成验证"
                                "（3 分钟内有效，完成后自动继续搜索）", "warning")
                     print("[抖音搜索] 等待用户手动完成验证码...")
                     deadline = time.time() + 180
@@ -380,7 +380,7 @@ def _douyin_search_manual(keyword: str, count: int, cookie: str, notify) -> list
                     set_cookie("douyin", merged)
                     print("[抖音搜索] 会话 Cookie 已回存（下次搜索更稳）")
                     if notify and collected:
-                        notify("✅ 抖音验证通过，Cookie 已回存，下次搜索无需再验证", "success")
+                        notify("抖音验证通过，Cookie 已回存，下次搜索无需再验证", "success")
             except Exception:
                 pass
             for a in collected[:count]:

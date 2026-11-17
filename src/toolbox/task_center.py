@@ -1,4 +1,4 @@
-"""本软件注册的 Windows 计划任务总览（供「⏰ 定时任务」管理页使用）。
+"""本软件注册的 Windows 计划任务总览（供「定时任务」管理页使用）。
 
 五类任务各自独立，互不影响：
 - FengMingTCDocMonitor         腾讯文档监控（每天 / 按间隔）
@@ -7,7 +7,7 @@
 - FengMingQuarkBackup          夸克网盘备份（每天 / 按间隔）
 - FengMingWebwikiAnalytics     本地资料站访问统计（每天）
 计划文本取自各页保存的配置，安装状态 / 下次运行取自 schtasks；计划设置统一由
-「⏰ 定时任务」页读写，功能页不再单独提供定时配置。
+「定时任务」页读写，功能页不再单独提供定时配置。
 """
 
 from __future__ import annotations

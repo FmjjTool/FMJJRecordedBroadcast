@@ -314,7 +314,7 @@ class PlatformPane(QWidget):
         bar.addSpacing(10)
         self.btn_mon = self._tbtn(bar, "▶ 开启监控录制", self.on_toggle_monitor,
                                   "按间隔检测开播，开播即自动录制")
-        self._tbtn(bar, "⏹ 一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
+        self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
         self._tbtn(bar, "⟳ 立即检测", self.on_check_now, "立刻检测所有监控中的主播")
         bar.addSpacing(10)
         self._tbtn(bar, "录制设置", self.on_settings)
@@ -1034,7 +1034,7 @@ class AddAnchorDialog(QDialog):
             else "如 582775732015 / https://live.douyin.com/582775732015")
         self.edit.returnPressed.connect(self._resolve)
         row.addWidget(self.edit, 1)
-        self.btn_pick = QPushButton("📇 已存账号")
+        self.btn_pick = QPushButton("已存账号")
         self.btn_pick.setToolTip("从信息获取 / 直播录制列表 / 房间缓存里选")
         self.btn_pick.clicked.connect(self._pick_saved)
         row.addWidget(self.btn_pick)
@@ -1512,7 +1512,7 @@ class PushSettingsDialog(QDialog):
     def _test(self):
         from toolbox.webhook import Pusher
         ok, msg = Pusher(self._current()).test()
-        self.test_label.setText(("✅ 已发送：" if ok else "❌ 失败：") + str(msg)[:200])
+        self.test_label.setText(("已发送：" if ok else "失败：") + str(msg)[:200])
         self.test_label.setStyleSheet("color:%s;" % ("#0A7A0A" if ok else "#C00000"))
 
     def _ok(self):
@@ -1588,7 +1588,7 @@ class FlvRepairDialog(QDialog):
     def _run(self):
         src = self.ed_file.text().strip()
         if not src or not os.path.isfile(src):
-            self._log("❌ 请先选择有效的 FLV 文件")
+            self._log("请先选择有效的 FLV 文件")
             return
         outdir = self.ed_out.text().strip() or os.path.dirname(src)
         os.makedirs(outdir, exist_ok=True)
@@ -1600,11 +1600,11 @@ class FlvRepairDialog(QDialog):
             from toolbox.flv_repair import repair_flv
             st = repair_flv(src, dst)
             if st.get("ok"):
-                self._log(f"✅ 完成：{st['tags']} 个 tag，丢弃 {st['dropped']} 个，"
+                self._log(f"完成：{st['tags']} 个 tag，丢弃 {st['dropped']} 个，"
                           f"时间戳修正 {st['ts_fixed']} 处，重新对齐 {st['resync']} 次")
                 self._log(f"   输出：{st['out']}")
             else:
-                self._log(f"❌ 失败：{st.get('error') or '未知错误'}")
+                self._log(f"失败：{st.get('error') or '未知错误'}")
             self.btn_run.setEnabled(True)
 
         import threading
@@ -1646,8 +1646,7 @@ class LiveRecordWindow(QMainWindow):
         bh.setContentsMargins(10, 5, 10, 5)
         self.plat_btns = {}
         for key in ("douyin", "bili"):
-            b = QPushButton("%s %s" % (LR.PLATFORMS[key]["icon"],
-                                       LR.PLATFORMS[key]["name"]))
+            b = QPushButton(LR.PLATFORMS[key]["name"])
             b.setCheckable(True)
             b.setStyleSheet(
                 "QPushButton{padding:6px 18px;border-radius:4px;}"

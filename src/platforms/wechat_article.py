@@ -173,7 +173,7 @@ def _clean_content(soup, content, art: WechatArticle):
     # 语音占位（mpvoice）
     for v in content.find_all("mpvoice"):
         new_p = soup.new_tag("p")
-        new_p.string = "🎙 语音消息"
+        new_p.string = "语音消息"
         v.replace_with(new_p)
 
     # 图片：data-src → src，收集图片清单（按出现顺序去重）

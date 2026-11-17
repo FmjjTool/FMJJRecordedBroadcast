@@ -267,7 +267,7 @@ class CookieManagerDialog(QDialog):
         bottom.addWidget(self.openapi_btn)
         self.github_btn = self._btn("GitHub 账户", self._open_github_account)
         bottom.addWidget(self.github_btn)
-        self.pw_btn = self._btn("📦 下载浏览器组件", self._install_playwright, True)
+        self.pw_btn = self._btn("下载浏览器组件", self._install_playwright, True)
         bottom.addWidget(self.pw_btn)
         layout.addLayout(bottom)
         self._refresh_pw_status()
@@ -284,10 +284,10 @@ class CookieManagerDialog(QDialog):
         try:
             import playwright  # noqa: F401
         except ImportError:
-            self.pw_status.setText("浏览器组件：❌ Playwright 未安装（采集需要）")
+            self.pw_status.setText("浏览器组件：Playwright 未安装（采集需要）")
             self.pw_status.setStyleSheet("color: #ff5252;")
             self.pw_btn.setEnabled(True)
-            self.pw_btn.setText("📦 下载浏览器组件")
+            self.pw_btn.setText("下载浏览器组件")
             return
         try:
             from toolbox.browser import detect
@@ -297,17 +297,17 @@ class CookieManagerDialog(QDialog):
         edge, chrome, shell = env["edge"], env["chrome"], env["shell"]
         if edge or chrome:
             which = f"Edge {edge}" if edge else f"Chrome {chrome}"
-            self.pw_status.setText(f"浏览器环境：✅ 系统 {which}（采集走系统浏览器，无需下载）")
+            self.pw_status.setText(f"浏览器环境：系统 {which}（采集走系统浏览器，无需下载）")
             self.pw_status.setStyleSheet("color: #4caf50;")
-            self.pw_btn.setText("🔄 检测浏览器环境")
+            self.pw_btn.setText("检测浏览器环境")
         elif shell:
-            self.pw_status.setText("浏览器环境：✅ 本地采集引擎已就绪")
+            self.pw_status.setText("浏览器环境：本地采集引擎已就绪")
             self.pw_status.setStyleSheet("color: #4caf50;")
-            self.pw_btn.setText("🔄 检测浏览器环境")
+            self.pw_btn.setText("检测浏览器环境")
         else:
-            self.pw_status.setText("浏览器环境：⚠️ 无系统 Edge/Chrome，采集需要下载引擎（91 MB）")
+            self.pw_status.setText("浏览器环境：无系统 Edge/Chrome，采集需要下载引擎（91 MB）")
             self.pw_status.setStyleSheet("color: #eab308;")
-            self.pw_btn.setText("⬇️ 下载采集引擎")
+            self.pw_btn.setText("下载采集引擎")
         self.pw_btn.setEnabled(True)
 
     def _pip_install_dialog(self, title, tip, cmds, success_msg, on_ok=None):
@@ -353,7 +353,7 @@ class CookieManagerDialog(QDialog):
                 ok = False
 
             def _finish():
-                append_log("\n完成 ✅" if ok else "\n失败 ❌（可重试或手动执行上面的命令）")
+                append_log("\n完成" if ok else "\n失败（可重试或手动执行上面的命令）")
                 tip_lbl.setText("安装完成，可关闭本窗口" if ok else "安装失败，可重试")
                 if on_ok:
                     on_ok(ok)
@@ -391,11 +391,11 @@ class CookieManagerDialog(QDialog):
                   f"本地采集引擎：{'已就绪' if headless_shell_installed() else '未下载'}\n\n")
         if edge or chrome:
             QMessageBox.information(
-                self, "浏览器环境", status + "✅ 采集将自动使用系统浏览器，无需下载。")
+                self, "浏览器环境", status + "采集将自动使用系统浏览器，无需下载。")
             self._refresh_pw_status()
             return
         if headless_shell_installed():
-            QMessageBox.information(self, "浏览器环境", status + "✅ 采集引擎已就绪。")
+            QMessageBox.information(self, "浏览器环境", status + "采集引擎已就绪。")
             self._refresh_pw_status()
             return
         ret = QMessageBox.question(
@@ -429,7 +429,7 @@ class CookieManagerDialog(QDialog):
             ok = download_headless_shell(log=append_log)
 
             def _finish():
-                append_log("\n完成 ✅ 采集引擎已就绪" if ok else "\n失败 ❌（可重试；也可安装 Edge/Chrome 后使用系统浏览器）")
+                append_log("\n完成，采集引擎已就绪" if ok else "\n失败（可重试；也可安装 Edge/Chrome 后使用系统浏览器）")
                 self._refresh_pw_status()
             post_to_main(_finish)
 
@@ -462,7 +462,7 @@ class CookieManagerDialog(QDialog):
             if has:
                 row.addWidget(self._btn("验证", lambda p=plat: self._verify(p)))
             if plat == "kugou_lite":
-                row.addWidget(self._btn("🎁 领VIP", lambda: self._kugou_lite_claim_vip(), True))
+                row.addWidget(self._btn("领VIP", lambda: self._kugou_lite_claim_vip(), True))
             if can_qr:
                 row.addWidget(self._btn("扫码登录", lambda p=plat: self._qr_login(p), True))
             if can_browser:
@@ -492,24 +492,24 @@ class CookieManagerDialog(QDialog):
     def _status_text(self, plat, has, age, name=""):
         """name：非 Cookie 平台的展示名（如酷狗概念版来自会话文件）。"""
         if not has:
-            return "🔴 未登录"
+            return "未登录"
         info = self._whoami_cache.get(plat)
         if info is None:
             shown = f" · {self._short(name)}" if name else ""
-            return "🟢 已登录" + shown + (f" · {age}" if age else "")
+            return "已登录" + shown + (f" · {age}" if age else "")
         if info == "probing":
-            return "🟢 已登录 · ⏳ 验证中…" + (f" · {age}" if age else "")
-        base = "🟢 已登录"
+            return "已登录 · 验证中…" + (f" · {age}" if age else "")
+        base = "已登录"
         if info["ok"] is False:
-            base = "🟠 已保存 · 验证失败"
+            base = "已保存 · 验证失败"
         elif info["ok"] is None and not (info.get("username") or name):
             # 接口不可达/该平台无验证通道：别硬说"已登录"（酷狗、5sing 曾因此
             # 游客态也显示绿色已登录）
-            base = "🟡 已保存 · 无法验证"
+            base = "已保存 · 无法验证"
         else:
             shown = info.get("username") or name
             if shown:
-                base = f"🟢 已登录 · {self._short(shown)}"
+                base = f"已登录 · {self._short(shown)}"
         return base + (f" · {age}" if age else "")
 
     def _status_color(self, plat, has):
@@ -595,7 +595,7 @@ class CookieManagerDialog(QDialog):
                 self._whoami_cache["kugou_lite"] = info
                 self._render_status("kugou_lite")
                 if info.get("ok") is False:
-                    QMessageBox.warning(self, "酷狗概念版验证", f"❌ {msg}")
+                    QMessageBox.warning(self, "酷狗概念版验证", f"{msg}")
             post_to_main(done)
 
         threading.Thread(target=run, daemon=True).start()
@@ -686,9 +686,9 @@ class CookieManagerDialog(QDialog):
         dlg.resize(1100, 780)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("  在下方页面完成登录后，点击「✅ 已获取」按钮保存 Cookie（页面已自动登录时可直接点击）"
-                      + ("　🔍 登录态会自动向站内接口确认" if need_remote else "")
-                      + (f"　💡 {login_hint}" if login_hint else ""))
+        hint = QLabel("  在下方页面完成登录后，点击「已获取」按钮保存 Cookie（页面已自动登录时可直接点击）"
+                      + ("　登录态会自动向站内接口确认" if need_remote else "")
+                      + (f"　{login_hint}" if login_hint else ""))
         hint.setStyleSheet("color: #555; padding: 4px; background: #ffffff;")
         v.addWidget(hint)
 
@@ -712,12 +712,12 @@ class CookieManagerDialog(QDialog):
             else f"（登录特征：{self_keys}）"))
         cap_lbl.setStyleSheet("color: #888; padding: 4px;")
         bar.addWidget(cap_lbl, 1)
-        reload_btn = QPushButton("🔄 刷新")
+        reload_btn = QPushButton("刷新")
         reload_btn.setStyleSheet("color: #1565c0;")
         reload_btn.setToolTip("页面白屏/卡死/加载异常时点此重新加载（Cookie 捕获不受影响）")
         reload_btn.clicked.connect(lambda *args: state["reload"].set())
         bar.addWidget(reload_btn)
-        got_btn = QPushButton("✅ 已获取（保存 Cookie）")
+        got_btn = QPushButton("已获取（保存 Cookie）")
         got_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
         got_btn.clicked.connect(lambda *args: save_now())
         bar.addWidget(got_btn)
@@ -759,7 +759,7 @@ class CookieManagerDialog(QDialog):
             hit = any(k in jar for k in auth_keys)
             if not need_remote:
                 cap_lbl.setText(f"  已捕获 {n} 个 Cookie" + (
-                    f"（✅ 检测到登录特征 {self_keys}）" if hit
+                    f"（检测到登录特征 {self_keys}）" if hit
                     else f"（登录特征：{self_keys}）"))
                 cap_lbl.setStyleSheet(
                     "color: #2e7d32; padding: 4px;" if hit else "color: #888; padding: 4px;")
@@ -767,20 +767,20 @@ class CookieManagerDialog(QDialog):
             # 需要站内接口确认：接口结论优先，接口没结论时才用 Cookie 名兜底
             ok, name = probe["ok"], probe["name"]
             if ok is True:
-                txt, color = (f"  已捕获 {n} 个 Cookie（✅ 已登录"
+                txt, color = (f"  已捕获 {n} 个 Cookie（已登录"
                               + (f"：{name}" if name else "") + "）"), "#2e7d32"
             elif ok is False:
-                txt, color = ((f"  已捕获 {n} 个 Cookie（🟠 检测到登录 Cookie，"
+                txt, color = ((f"  已捕获 {n} 个 Cookie（检测到登录 Cookie，"
                                "但站内接口判定未登录）") if hit else
                               (f"  已捕获 {n} 个 Cookie"
-                               "（⚠️ 站内接口判定未登录，请先在页面完成登录）")), "#ef6c00"
+                               "（站内接口判定未登录，请先在页面完成登录）")), "#ef6c00"
             elif probe["running"]:
                 txt, color = (f"  已捕获 {n} 个 Cookie"
-                              + ("（✅ 检测到登录 Cookie，正在向站内接口确认…）" if hit
-                                 else "（⏳ 正在向站内接口确认登录态…）")), (
+                              + ("（检测到登录 Cookie，正在向站内接口确认…）" if hit
+                                 else "（正在向站内接口确认登录态…）")), (
                     "#2e7d32" if hit else "#888")
             elif hit:
-                txt, color = (f"  已捕获 {n} 个 Cookie（✅ 检测到登录特征 {self_keys}，"
+                txt, color = (f"  已捕获 {n} 个 Cookie（检测到登录特征 {self_keys}，"
                               "接口不可达未能确认昵称）"), "#2e7d32"
             elif n:
                 txt, color = (f"  已捕获 {n} 个 Cookie"
@@ -1305,7 +1305,7 @@ class CookieManagerDialog(QDialog):
                 client = KuGouLiteClient()
                 key, png = client.qr_create()
                 self._show_qr_bytes(qr_label, png)
-                post_to_main(status.setText, "📱 请用酷狗概念版 App 扫码")
+                post_to_main(status.setText, "请用酷狗概念版 App 扫码")
                 while dlg.isVisible():
                     time.sleep(2)
                     r = client.qr_poll(key)
@@ -1315,17 +1315,17 @@ class CookieManagerDialog(QDialog):
                                     "酷狗概念版登录成功（会话已保存，下次免扫码）")
                         return
                     if st == 4:
-                        post_to_main(status.setText, "❌ 已确认但未返回 token，请重试")
+                        post_to_main(status.setText, "已确认但未返回 token，请重试")
                         return
                     if st == 0:
-                        post_to_main(status.setText, "⚠️ 二维码已失效，请重新登录")
+                        post_to_main(status.setText, "二维码已失效，请重新登录")
                         return
                     if st == 2:
-                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                        post_to_main(status.setText, "扫码成功，请在手机上确认")
                     elif r.get("message") and st != 1:
-                        post_to_main(status.setText, f"⏳ {r['message']}")
+                        post_to_main(status.setText, f"{r['message']}")
             except Exception as e:
-                post_to_main(status.setText, f"❌ {e}")
+                post_to_main(status.setText, f"{e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1351,7 +1351,7 @@ class CookieManagerDialog(QDialog):
             def done():
                 QMessageBox.information(
                     self, "领取 VIP",
-                    f"{'✅' if ok else '❌'} {msg}\n\n"
+                    f"{'成功' if ok else '失败'} {msg}\n\n"
                     "概念版每天可领 8 次（每次 +3 小时），领满 24 小时即可当日无损下载。")
                 self._reload()
             post_to_main(done)
@@ -1368,7 +1368,7 @@ class CookieManagerDialog(QDialog):
         qr_label.setFixedSize(280, 280)
         qr_label.setAlignment(Qt.AlignCenter)
         v.addWidget(qr_label, 0, Qt.AlignHCenter)
-        status = QLabel("⏳ 生成二维码中...")
+        status = QLabel("生成二维码中...")
         status.setStyleSheet("color: #eab308;")
         v.addWidget(status)
         dlg.show()
@@ -1414,16 +1414,16 @@ class CookieManagerDialog(QDialog):
                 }, timeout=20)
                 m = re.search(r"uuid=(.+?)\"", r.text)
                 if not m:
-                    post_to_main(status.setText, "❌ 生成二维码失败")
+                    post_to_main(status.setText, "生成二维码失败")
                     return
                 uuid = m.group(1)
                 img = s.get(f"https://open.weixin.qq.com/connect/qrcode/{uuid}",
                             headers={"Referer": CONNECT}, timeout=20)
                 if not img.content:
-                    post_to_main(status.setText, "❌ 二维码图片获取失败")
+                    post_to_main(status.setText, "二维码图片获取失败")
                     return
                 self._show_qr_bytes(qr_label, img.content)
-                post_to_main(status.setText, "📱 请用微信扫码（QQ音乐登录）")
+                post_to_main(status.setText, "请用微信扫码（QQ音乐登录）")
                 while dlg.isVisible():
                     p = s.get(POLL, params={"uuid": uuid, "_": int(time.time() * 1000)},
                               headers={"Referer": "https://open.weixin.qq.com/"}, timeout=35)
@@ -1433,22 +1433,22 @@ class CookieManagerDialog(QDialog):
                     if err == "405" and m_code and m_code.group(1):
                         cookie_str = self._qq_exchange_wxcode(s, m_code.group(1))
                         if not cookie_str:
-                            post_to_main(status.setText, "❌ 获取登录凭据失败，请重试")
+                            post_to_main(status.setText, "获取登录凭据失败，请重试")
                             return
                         auth.set_cookie("qq", cookie_str)
                         self._whoami_cache.pop("qq", None)
                         post_to_main(self._on_qr_success, dlg, "QQ音乐登录成功，Cookie 已保存")
                         return
                     elif err == "404":
-                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                        post_to_main(status.setText, "扫码成功，请在手机上确认")
                     elif err == "403":
-                        post_to_main(status.setText, "⚠️ 二维码已失效，请重新登录")
+                        post_to_main(status.setText, "二维码已失效，请重新登录")
                         return
                     elif err == "408":
-                        post_to_main(status.setText, "⏳ 等待扫码...")
+                        post_to_main(status.setText, "等待扫码...")
                     time.sleep(2)
             except Exception as e:
-                post_to_main(status.setText, f"❌ {e}")
+                post_to_main(status.setText, f"{e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1490,7 +1490,7 @@ class CookieManagerDialog(QDialog):
                 manager = QRLoginManager()
                 unikey = manager.generate_qr_key()
                 if not unikey:
-                    post_to_main(status.setText, "❌ 生成二维码失败")
+                    post_to_main(status.setText, "生成二维码失败")
                     return
                 import qrcode
                 qr = qrcode.QRCode(border=1)
@@ -1498,7 +1498,7 @@ class CookieManagerDialog(QDialog):
                 qr.make(fit=True)
                 img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
                 self._show_qr(qr_label, img)
-                post_to_main(status.setText, "📱 请用网易云音乐 APP 扫码")
+                post_to_main(status.setText, "请用网易云音乐 APP 扫码")
                 while dlg.isVisible():
                     time.sleep(2)
                     code, cookies = manager.check_qr_login(unikey)
@@ -1509,13 +1509,13 @@ class CookieManagerDialog(QDialog):
                         post_to_main(self._on_qr_success, dlg, "网易云登录成功，Cookie 已保存")
                         return
                     elif code == 801:
-                        post_to_main(status.setText, "⏳ 等待扫码...")
+                        post_to_main(status.setText, "等待扫码...")
                     elif code == 802:
-                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                        post_to_main(status.setText, "扫码成功，请在手机上确认")
                     else:
                         post_to_main(status.setText, f"登录失败，错误码 {code}")
             except Exception as e:
-                post_to_main(status.setText, f"❌ {e}")
+                post_to_main(status.setText, f"{e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1532,7 +1532,7 @@ class CookieManagerDialog(QDialog):
                 s = requests.Session()
                 d = s.get(GEN, headers=UA, timeout=15).json()
                 if d.get("code") != 0:
-                    post_to_main(status.setText, "❌ 生成二维码失败")
+                    post_to_main(status.setText, "生成二维码失败")
                     return
                 url, key = d["data"]["url"], d["data"]["qrcode_key"]
                 qr = qrcode.QRCode(border=1)
@@ -1540,7 +1540,7 @@ class CookieManagerDialog(QDialog):
                 qr.make(fit=True)
                 img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
                 self._show_qr(qr_label, img)
-                post_to_main(status.setText, "📱 请用哔哩哔哩 APP 扫码")
+                post_to_main(status.setText, "请用哔哩哔哩 APP 扫码")
                 while dlg.isVisible():
                     time.sleep(2)
                     pd = s.get(POLL.format(key), headers=UA, timeout=15).json().get("data", {})
@@ -1558,16 +1558,16 @@ class CookieManagerDialog(QDialog):
                         post_to_main(self._on_qr_success, dlg, "B站登录成功，Cookie 已保存")
                         return
                     elif code == 86101:
-                        post_to_main(status.setText, "⏳ 等待扫码...")
+                        post_to_main(status.setText, "等待扫码...")
                     elif code == 86090:
-                        post_to_main(status.setText, "✅ 扫码成功，请在手机上确认")
+                        post_to_main(status.setText, "扫码成功，请在手机上确认")
                     elif code == 86038:
-                        post_to_main(status.setText, "⚠️ 二维码已失效，请重新登录")
+                        post_to_main(status.setText, "二维码已失效，请重新登录")
                         return
                     else:
                         post_to_main(status.setText, f"登录失败，错误码 {code}")
             except Exception as e:
-                post_to_main(status.setText, f"❌ {e}")
+                post_to_main(status.setText, f"{e}")
 
         threading.Thread(target=run, daemon=True).start()
 

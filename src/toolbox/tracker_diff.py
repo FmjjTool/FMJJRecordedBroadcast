@@ -14,7 +14,7 @@ def diff_items(prev: dict, curr: dict, fields: list[tuple[str, str]]) -> list[di
     items = []
     if curr.get("name") and prev.get("name") and curr["name"] != prev["name"]:
         items.append({
-            "text": f"🔄 更名 {prev['name']}→{curr['name']}",
+            "text": f"更名 {prev['name']}→{curr['name']}",
             "direction": "note",
         })
     for label, field in fields:

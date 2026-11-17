@@ -54,8 +54,8 @@ DOUYIN_QUALITY_LABEL = {"_origin": "原画", "_md": "蓝光", "FULL_HD1": "1080P
                         "HD1": "720P", "SD1": "540P", "SD2": "360P", "LD": "360P"}
 
 PLATFORMS = {
-    "douyin": {"name": "抖音直播", "icon": "🎵", "referer": "https://live.douyin.com/"},
-    "bili": {"name": "B站直播", "icon": "📺", "referer": "https://live.bilibili.com/"},
+    "douyin": {"name": "抖音直播", "referer": "https://live.douyin.com/"},
+    "bili": {"name": "B站直播", "referer": "https://live.bilibili.com/"},
 }
 
 # 输出容器：抖音默认 TS、B站默认 FLV（用户可在「录制设置 → 输出格式」里改）

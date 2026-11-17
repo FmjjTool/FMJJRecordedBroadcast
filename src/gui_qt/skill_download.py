@@ -21,7 +21,7 @@ class SkillDownloadDialog(QDialog):
         self.app = app
         self._last_dest = ""
         self._exported_path = ""
-        self.setWindowTitle("⬇ 下载 Skill")
+        self.setWindowTitle("下载 Skill")
         self.resize(640, 520)
 
         v = QVBoxLayout(self)
@@ -48,12 +48,12 @@ class SkillDownloadDialog(QDialog):
         v.addWidget(self.detail_label)
 
         btn_row = QHBoxLayout()
-        self.open_dir_btn = QPushButton("📂 打开导出目录")
+        self.open_dir_btn = QPushButton("打开导出目录")
         self.open_dir_btn.setEnabled(False)
         self.open_dir_btn.clicked.connect(self._open_exported)
         btn_row.addWidget(self.open_dir_btn)
         btn_row.addStretch(1)
-        self.download_btn = QPushButton("⬇ 下载到本地…")
+        self.download_btn = QPushButton("下载到本地…")
         self.download_btn.setStyleSheet(
             "background: #1976d2; color: white; padding: 6px 18px;")
         self.download_btn.clicked.connect(self._download)
@@ -80,7 +80,7 @@ class SkillDownloadDialog(QDialog):
             desc = meta.get("description", "")
             if len(desc) > 60:
                 desc = desc[:60] + "…"
-            item = QListWidgetItem(f"🎁 {meta['display_name']}\n{desc}")
+            item = QListWidgetItem(f"{meta['display_name']}\n{desc}")
             item.setData(Qt.UserRole, meta)
             self.list_widget.addItem(item)
         if self.list_widget.count():
@@ -118,16 +118,16 @@ class SkillDownloadDialog(QDialog):
         try:
             target = export_skill(meta["id"], dest)
         except Exception as e:
-            self.status_label.setText(f"❌ 下载失败: {e}")
+            self.status_label.setText(f"下载失败: {e}")
             self.status_label.setStyleSheet("color: #ff5252; font-size: 11px;")
             self.app.toast(f"Skill 下载失败: {e}", "error")
             return
         self._last_dest = dest
         self._exported_path = str(target)
         self.open_dir_btn.setEnabled(True)
-        self.status_label.setText(f"✅ 已下载到: {target}")
+        self.status_label.setText(f"已下载到: {target}")
         self.status_label.setStyleSheet("color: #4caf50; font-size: 11px;")
-        self.app.toast(f"✅ Skill「{meta['display_name']}」已下载到 {target}", "success")
+        self.app.toast(f"Skill「{meta['display_name']}」已下载到 {target}", "success")
 
     def _open_exported(self):
         if not self._exported_path:

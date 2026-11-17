@@ -224,7 +224,7 @@ def export_xlsx(info_list: list, output_path: Optional[str] = None,
     # 微博评论聊天记录（第二个 Sheet）
     rows_by_id = _comments_by_id(info_list, comments_by_id)
     if rows_by_id:
-        cs = wb.create_sheet("💬 评论记录")
+        cs = wb.create_sheet("评论记录")
         cheaders = ["序号", "帖子ID", "用户", "评论内容", "点赞", "时间"]
         for ci, h in enumerate(cheaders, 1):
             c = cs.cell(row=1, column=ci, value=h)
@@ -274,19 +274,17 @@ def export_md(info_list: list, output_path: Optional[str] = None,
     if not output_path:
         output_path = f"video_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     rows_by_id = _comments_by_id(info_list, comments_by_id) or {}
-    lines = ["# 📊 视频信息报告",
+    lines = ["# 视频信息报告",
              f"\n> 导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
              f"> 总计: {len(info_list)} 条\n"]
     groups: dict[str, list] = {}
     for info in info_list: groups.setdefault(info.platform, []).append(info)
-    lines.append("## 📑 目录\n")
+    lines.append("## 目录\n")
     for plat, items in groups.items():
-        emoji = {"bilibili":"📺","douyin":"🎵","weibo":"📢"}.get(plat,"📄")
-        lines.append(f"- {emoji} **{plat.upper()}** ({len(items)} 条)")
+        lines.append(f"- **{plat.upper()}** ({len(items)} 条)")
     lines.append("")
     for plat, items in groups.items():
-        emoji = {"bilibili":"📺","douyin":"🎵","weibo":"📢"}.get(plat,"📄")
-        lines.append("---\n"); lines.append(f"## {emoji} {plat.upper()} ({len(items)} 条)\n")
+        lines.append("---\n"); lines.append(f"## {plat.upper()} ({len(items)} 条)\n")
         for i, info in enumerate(items, 1):
             view_label = "阅览量" if info.platform == "weibo" else "播放量"
             lines.append(f"### {i}. {info.title or '无标题'}\n")
@@ -309,11 +307,11 @@ def export_md(info_list: list, output_path: Optional[str] = None,
             comments = rows_by_id.get(str(getattr(info, "video_id", "") or "")) or []
             if comments:
                 lines.append("")
-                lines.append(f"**💬 评论记录（{len(comments)} 条）**")
+                lines.append(f"**评论记录（{len(comments)} 条）**")
                 lines.append("")
                 for ci, c in enumerate(comments, 1):
                     text = (c["内容"] or "").replace("\n", " ")
-                    extra = " ".join(x for x in (c["时间"], f"♥{c['点赞']}" if c["点赞"] else "") if x)
+                    extra = " ".join(x for x in (c["时间"], f"赞{c['点赞']}" if c["点赞"] else "") if x)
                     lines.append(f"{ci}. {c['用户']}：{text}" + (f"（{extra}）" if extra else ""))
             lines.append("")
     content = "\n".join(lines)
@@ -530,7 +528,7 @@ def _write_weibo_comments(info, comments: list, stem: str, plat_dir: str,
         ts = wc.comment_time(c)
         likes = wc.comment_likes(c)
         prefix = f"[{ts}] " if ts else ""
-        suffix = f"（♥{likes}）" if likes else ""
+        suffix = f"（赞{likes}）" if likes else ""
         lines.append(f"{prefix}{wc.comment_user(c)}：{text}{suffix}")
     _atomic_write(os.path.join(plat_dir, f"{stem}_comments.txt"),
                   lambda f: f.write("\n".join(lines) + "\n"))

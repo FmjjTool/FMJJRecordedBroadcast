@@ -76,7 +76,7 @@ class AccountCollectionTests(unittest.TestCase):
         self.assertEqual(len(reveals), 2)
         self.assertTrue(all(rid == 7 for _, rid in reveals))
         self.assertEqual(len(exports), 2)
-        self.assertTrue(any(e.get("label") == "✅ 全部完成" for e in events))
+        self.assertTrue(any(e.get("label") == "全部完成" for e in events))
         self.assertTrue(log)
 
     def test_date_filter_keeps_in_range_and_unparsed(self):
@@ -101,7 +101,7 @@ class AccountCollectionTests(unittest.TestCase):
         self.assertEqual((total, all_posts), (0, []))
         self.assertEqual((inserts, reveals, exports), ([], [], []))
         self.assertTrue(any("已取消" in line for line in log))
-        self.assertTrue(any(e.get("label") == "✕ 已取消" for e in events))
+        self.assertTrue(any(e.get("label") == "已取消" for e in events))
 
 
 if __name__ == "__main__":

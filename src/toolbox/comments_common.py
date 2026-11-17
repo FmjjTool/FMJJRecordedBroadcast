@@ -263,7 +263,7 @@ def export_comments_png(be, comments: list, meta: dict, out_path: Path,
 
     # ---- 页头 ----
     dr.rectangle([0, 0, W, head_h], fill=_C_HEAD)
-    dr.text((PAD, 16), f"💬 {meta.get('platform') or ''}评论区", font=_font(22), fill=_C_ACCENT)
+    dr.text((PAD, 16), f"{meta.get('platform') or ''}评论区", font=_font(22), fill=_C_ACCENT)
     y = 52
     for line in head_lines:
         dr.text((PAD, y), line, font=_font(14), fill=_C_NICK)
@@ -286,7 +286,7 @@ def export_comments_png(be, comments: list, meta: dict, out_path: Path,
         # 昵称 + 点赞
         dr.text((CONTENT_X, y + 4), be.comment_user(c)[:24], font=_font(14), fill=_C_NICK)
         likes = be.comment_likes(c)
-        like_txt = f"♥ {likes}" if likes else "♥"
+        like_txt = f"赞 {likes}" if likes else ""
         lw = _font(13).getlength(like_txt)
         dr.text((W - PAD - lw, y + 4), like_txt, font=_font(13), fill=_C_LIKE)
         # 文本

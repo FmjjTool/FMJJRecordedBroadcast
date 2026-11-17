@@ -52,7 +52,7 @@ class SkeletonPage(QWidget):
         cv.addWidget(main_block, 1)
 
         # 中央提示，文字恒定清晰。
-        tip = QLabel("⏳ 正在启动，请稍候…", self)
+        tip = QLabel("正在启动，请稍候…", self)
         tip.setAlignment(Qt.AlignCenter)
         tip.setStyleSheet(
             f"color: {text}; font-size: 15px; font-weight: bold; background: transparent;")

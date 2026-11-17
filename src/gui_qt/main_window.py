@@ -106,59 +106,59 @@ def _page_class(key):
     return getattr(importlib.import_module(mod_name), cls_name)
 
 NAV_GROUPS = [
-    ("📥 内容采集", [
-        ("info_accounts", "🔍 信息获取"),
-        ("info_results", "📦 已获取"),
-        ("info_tools", "🧰 信息工具"),
+    ("内容采集", [
+        ("info_accounts", "信息获取"),
+        ("info_results", "已获取"),
+        ("info_tools", "信息工具"),
     ]),
-    ("🗂 资产管理", [
-        ("asset", "🗂 资产管理"),
-        ("quark_backup", "☁️ 网盘备份"),
-        ("quark_download", "☁️ 网盘下载"),
+    ("资产管理", [
+        ("asset", "资产管理"),
+        ("quark_backup", "网盘备份"),
+        ("quark_download", "网盘下载"),
     ]),
-    ("🎬 录播工具箱", [
-        ("toolbox_organize", "📂 自动整理"),
-        ("toolbox_rename", "✏️ 交互重命名 / 投稿"),
-        ("toolbox_editor", "🎬 视频操作"),
-        ("toolbox_audio", "🎵 音频提取"),
-        ("toolbox_subtitle", "📝 字幕转换"),
-        ("toolbox_launcher", "🚀 继续操作"),
-        ("toolbox_calendar", "📅 日历浏览"),
-        ("toolbox_migrate", "🚚 文件迁移"),
+    ("录播工具箱", [
+        ("toolbox_organize", "自动整理"),
+        ("toolbox_rename", "交互重命名 / 投稿"),
+        ("toolbox_editor", "视频操作"),
+        ("toolbox_audio", "音频提取"),
+        ("toolbox_subtitle", "字幕转换"),
+        ("toolbox_launcher", "继续操作"),
+        ("toolbox_calendar", "日历浏览"),
+        ("toolbox_migrate", "文件迁移"),
     ]),
-    ("👥 账户追踪", [
-        ("music_tracker", "🎼 音乐账号追踪"),
-        ("tracker", "📈 网媒账号追踪"),
-        ("tcdoc", "📄 腾讯文档监控"),
-        ("weibo_chaohua", "🔴 微博超话"),
-        ("fan_groups", "👥 粉丝群查询"),
+    ("账户追踪", [
+        ("music_tracker", "音乐账号追踪"),
+        ("tracker", "网媒账号追踪"),
+        ("tcdoc", "腾讯文档监控"),
+        ("weibo_chaohua", "微博超话"),
+        ("fan_groups", "粉丝群查询"),
     ]),
-    ("🎫 票务购物", [
-        ("tickets", "🎫 票务解析"),
-        ("shopping", "🛒 购物解析"),
-        ("douyin_shop", "🏬 抖音商品"),
-        ("bili_shop", "🛍 B站小店"),
+    ("票务购物", [
+        ("tickets", "票务解析"),
+        ("shopping", "购物解析"),
+        ("douyin_shop", "抖音商品"),
+        ("bili_shop", "B站小店"),
     ]),
-    ("🎵 音乐工具", [
-        ("music_search_download", "🎵 音乐搜索下载"),
-        ("music_file_tools", "🏷 音乐标签"),
+    ("音乐工具", [
+        ("music_search_download", "音乐搜索下载"),
+        ("music_file_tools", "音乐标签"),
     ]),
-    ("🔴 直播弹幕录制", [
-        ("douyin_danmaku", "📺 抖音弹幕姬"),
-        ("bili_danmaku", "📺 B站弹幕姬"),
+    ("直播弹幕录制", [
+        ("douyin_danmaku", "抖音弹幕姬"),
+        ("bili_danmaku", "B站弹幕姬"),
     ]),
-    ("🧰 本地工具", [
-        ("localwiki", "🌐 本地资料站"),
-        ("livestream_summary", "📝 直播总结"),
-        ("image_crop", "🖼 图片裁切"),
-        ("cover_maker", "🎨 套版封面制作"),
-        ("image_sorter", "🎞 媒体筛选分类"),
-        ("rename_batch", "✏️ 批量重命名"),
+    ("本地工具", [
+        ("localwiki", "本地资料站"),
+        ("livestream_summary", "直播总结"),
+        ("image_crop", "图片裁切"),
+        ("cover_maker", "套版封面制作"),
+        ("image_sorter", "媒体筛选分类"),
+        ("rename_batch", "批量重命名"),
     ]),
-    ("⚙️ 全局", [
-        ("tasks", "⏰ 定时任务"),
-        ("global_settings", "⚙️ 全局设置"),
-        ("performance", "📊 性能诊断"),
+    ("全局", [
+        ("tasks", "定时任务"),
+        ("global_settings", "全局设置"),
+        ("performance", "性能诊断"),
     ]),
 ]
 
@@ -252,7 +252,7 @@ class MainWindow(QMainWindow):
         self._tool_names = {"home": ("工作台", "总览")}
         for group_title, items in NAV_GROUPS:
             for key, title in items:
-                self._tool_names[key] = (title.split(" ", 1)[-1], group_title.split(" ", 1)[-1])
+                self._tool_names[key] = (title, group_title)
         self._tool_names.update({key: (title, "信息工具") for key, title in _EXTRA_TOOLS.items()})
         self.current_page = None
 
@@ -473,13 +473,13 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.home_btn)
         bottom_buttons = []
         for group_title, items in NAV_GROUPS:
-            is_bottom = group_title == "⚙️ 全局"
+            is_bottom = group_title == "全局"
             if not is_bottom:
-                gl = QLabel(group_title.split(" ", 1)[-1])
+                gl = QLabel(group_title)
                 gl.setObjectName("workbenchGroup")
                 nav_layout.addWidget(gl)
             for key, item_title in items:
-                btn = self._make_nav_button(key, item_title.split(" ", 1)[-1])
+                btn = self._make_nav_button(key, item_title)
                 if is_bottom:
                     btn.setObjectName("workbenchFooter")
                     btn.setText({"tasks": "任务", "global_settings": "设置", "performance": "性能"}[key])
@@ -622,7 +622,7 @@ class MainWindow(QMainWindow):
         theme.retheme_all(self)
         self._notify_theme_changed()
         self._update_theme_btn()
-        label = "🖥 已跟随系统" if src == "system" else "⏰ 已定时"
+        label = "已跟随系统" if src == "system" else "已定时"
         show_toast(self, f"{label}切换到{'深色' if name == 'dark' else '浅色'}主题", "info")
 
     def _notify_theme_changed(self):
@@ -907,11 +907,11 @@ class MainWindow(QMainWindow):
         # 其他页：拖入文件夹 → 设为工作目录（锁定时拒绝改变，直到解锁）
         target = dirs[0] if dirs else os.path.dirname(file_list[0])
         if load_convert_config().get("work_dir_locked"):
-            self.toast("🔒 默认工作文件夹已锁定，拖入文件夹不改变（可在全局设置解锁）", "info")
+            self.toast("默认工作文件夹已锁定，拖入文件夹不改变（可在全局设置解锁）", "info")
             return
         self.work_dir = target
         self._refresh_all()
-        self.toast(f"✅ 已切换: {target}", "success")
+        self.toast(f"已切换: {target}", "success")
 
     # ==================== 公共方法 ====================
 

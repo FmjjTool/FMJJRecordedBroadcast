@@ -273,7 +273,7 @@ def _fmt_count(v):
 
 # ==================== 设置存储 ====================
 DEFAULT_SETTINGS = {
-    "monitor_interval": 30,     # 开播监控检测间隔（秒，供「👁 开播监控」用）
+    "monitor_interval": 30,     # 开播监控检测间隔（秒，供「开播监控」用）
     "stats_interval": 1,        # 统计数据采集间隔（秒）
     "poll_interval": 60,        # 轮询间隔（秒）
     "save_danmaku": False,      # 保存弹幕到文件

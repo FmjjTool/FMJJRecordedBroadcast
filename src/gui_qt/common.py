@@ -229,7 +229,7 @@ def icon_btn_style(emoji: bool = True, extra: str = "") -> str:
     全局 QSS 给 QPushButton 设了 padding: 6px 12px —— 小尺寸按钮会被内边距
     吃掉图标绘制区（30px 宽只剩 6px，图标被挤成一团）；且全局字体微软雅黑
     不含 emoji 字形。emoji=True 指定 Segoe UI Emoji（真 emoji 图标）；
-    False 只清内边距（↑↓✕■▶↻ 等文本符号雅黑自带）。
+    False 只清内边距（↑↓■▶↻ 等文本符号雅黑自带）。
     extra 追加 color/background/border/font-size 等声明。
     """
     fam = 'font-family: "Segoe UI Emoji"; ' if emoji else ""
@@ -239,7 +239,7 @@ def icon_btn_style(emoji: bool = True, extra: str = "") -> str:
 def icon_button(text, tip="", size=(30, 26), emoji=True, extra="", on_click=None):
     """创建一个仅图标的小按钮（固定尺寸 + icon_btn_style + 悬停提示）。
 
-    统一全应用的 ⬆⬇✕☑️🔄❌📁 等行内小图标按钮；tooltip 必填场景下
+    统一全应用的行内小图标按钮；tooltip 必填场景下
     用户无法从文字得知功能，全靠悬停提示。
     """
     from PySide6.QtWidgets import QPushButton

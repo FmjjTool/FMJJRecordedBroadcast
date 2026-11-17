@@ -9,7 +9,7 @@ class TrackerDiffTests(unittest.TestCase):
         curr = {"name": "新名", "fans": 112, "following": 15, "likes": "x"}
         items = tracker_diff.diff_items(
             prev, curr, [("粉丝", "fans"), ("关注", "following"), ("获赞", "likes")])
-        self.assertEqual(items[0], {"text": "🔄 更名 旧名→新名", "direction": "note"})
+        self.assertEqual(items[0], {"text": "更名 旧名→新名", "direction": "note"})
         self.assertEqual(items[1]["direction"], "up")
         self.assertEqual(items[1]["delta"], 12)
         self.assertEqual(items[2]["direction"], "down")

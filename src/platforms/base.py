@@ -106,7 +106,7 @@ class VideoInfo:
         if self.title: parts.append(self.title[:50])
         if self.author: parts.append(f"@{self.author}")
         if self.play_count: parts.append(f"▶{self._fmt_count(self.play_count)}")
-        if self.like_count: parts.append(f"❤{self._fmt_count(self.like_count)}")
+        if self.like_count: parts.append(f"赞{self._fmt_count(self.like_count)}")
         return " ".join(parts)
 
     @staticmethod

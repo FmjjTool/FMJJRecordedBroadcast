@@ -7,9 +7,9 @@
 
 用法（页面构建函数内）：
     from gui_qt.help_overlay import attach_help_overlay
-    btn = attach_help_overlay(self, "❓ 功能介绍", "<p>…HTML…</p>")
+    btn = attach_help_overlay(self, "功能介绍", "<p>…HTML…</p>")
     # 把 btn 加进标题行布局即可，点击在按钮下方弹出浮层面板。
-    # 收起方式：再点按钮 / 点「✕ 收起」/ 点击浮层外的任意区域。
+    # 收起方式：再点按钮 / 点「收起」/ 点击浮层外的任意区域。
 """
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
@@ -85,7 +85,7 @@ class HelpOverlay(QFrame):
             " background: transparent; border: none;")
         head.addWidget(head_lbl)
         head.addStretch(1)
-        close_btn = QPushButton("✕ 收起")
+        close_btn = QPushButton("收起")
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setFixedHeight(20)
         close_btn.setStyleSheet(
@@ -188,7 +188,7 @@ class HelpOverlay(QFrame):
 
 
 def attach_help_overlay(page: QWidget, title: str, html: str,
-                         btn_text: str = "❓ 功能介绍") -> QPushButton:
+                         btn_text: str = "功能介绍") -> QPushButton:
     """在 page 上挂功能介绍浮层，返回按钮（调用方放进标题行）。"""
     overlay = HelpOverlay(page, title, html)
     btn = QPushButton(btn_text)

@@ -254,7 +254,7 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
 
     def progress_cb(done, total, name):
         if log:
-            log(f"✅ ({done}/{total}) {name}")
+            log(f"({done}/{total}) {name}")
 
     def _evt(*event):
         if on_task_event is not None:
@@ -278,11 +278,11 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
         if wait_mode == "parallel" or (wait_mode == "serial" and idx > 0):
             wait = random.uniform(3, 60)
             if log:
-                log(f"⏳ 随机等待 {wait:.1f}s（防反爬）...")
+                log(f"随机等待 {wait:.1f}s（防反爬）...")
             time.sleep(wait)
         _evt("start", f"{title}.mp4")
         if log:
-            log(f"⬇ 正在下载 {title}...")
+            log(f"正在下载 {title}...")
         try:
             path = download_bilibili_by_bvid(
                 info.video_id, quality=quality, cookie=ck,
@@ -295,12 +295,12 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
             paths.append(path)
             _evt("done", f"{title}.mp4", True)
             if log:
-                log(f"✅ 完成 {title} → {os.path.basename(str(path))}")
+                log(f"完成 {title} → {os.path.basename(str(path))}")
         except Exception as e:
             errors.append(f"{title}: {str(e)[:40]}")
             _evt("done", f"{title}.mp4", False)
             if log:
-                log(f"❌ 失败 {title} → {e}")
+                log(f"失败 {title} → {e}")
 
     if bv_items:
         if len(bv_items) == 1 or threads <= 1:
@@ -319,7 +319,7 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
     draw_stats = None
     if draw_items:
         if log:
-            log(f"⬇ 下载 {len(draw_items)} 个动态图片...")
+            log(f"下载 {len(draw_items)} 个动态图片...")
         try:
             draw_stats = download_media(draw_items, base_dir=out_dir,
                                         download_images=True, download_live=False,
@@ -332,12 +332,12 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
         except Exception as e:
             errors.append(f"动态图片: {str(e)[:40]}")
             if log:
-                log(f"❌ 动态图片失败: {e}")
+                log(f"动态图片失败: {e}")
 
     other_stats = None
     if non_bili:
         if log:
-            log(f"⬇ 下载 {len(non_bili)} 个其他媒体...")
+            log(f"下载 {len(non_bili)} 个其他媒体...")
         try:
             refresh_douyin_urls(non_bili, quality_label)
             refresh_xhs_urls(non_bili)
@@ -350,7 +350,7 @@ def do_bilibili_download(bv_items, draw_items, non_bili, quality, ck,
         except Exception as e:
             errors.append(f"其他: {str(e)[:40]}")
             if log:
-                log(f"❌ 其他失败: {e}")
+                log(f"其他失败: {e}")
     return paths, draw_stats, other_stats, errors
 
 
@@ -367,7 +367,7 @@ def download_media_items(items, log=None, threads=1, on_task_event=None):
 
     def progress_cb(done, total, name):
         if log:
-            log(f"✅ ({done}/{total}) {name}")
+            log(f"({done}/{total}) {name}")
 
     return download_media(items, base_dir=base_dir,
                           progress_callback=progress_cb if log else None,

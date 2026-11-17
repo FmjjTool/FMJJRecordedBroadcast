@@ -159,7 +159,7 @@ class _SlotRow(QWidget):
     def finish(self, ok: bool):
         self.bar.setRange(0, 100)
         self.bar.setValue(100 if ok else 100)
-        self.state_label.setText("✅" if ok else "❌")
+        self.state_label.setText("完成" if ok else "失败")
         self.state_label.setStyleSheet(
             f"font-size: 11px; color: {_ACCENT if ok else _FAIL};")
 
@@ -215,7 +215,7 @@ class DownloadPanel(QFrame):
         self._scroll.setWidget(self._slots_host)
         self._rows: list[_SlotRow] = []
         # 空态
-        self._placeholder = QLabel("⏳ 等待下载任务…")
+        self._placeholder = QLabel("等待下载任务…")
         self._placeholder.setStyleSheet("color: #888;")
         self._root.addWidget(self._placeholder)
 
@@ -353,8 +353,8 @@ class DownloadPanel(QFrame):
             mode = self._mode
         if mode == "segments":
             return
-        text = (f"⬇ 多文件并行下载 · 完成 {done}/{total}"
-                if mode == "parallel" else f"⬇ 下载中 · 完成 {done}/{total}")
+        text = (f"多文件并行下载 · 完成 {done}/{total}"
+                if mode == "parallel" else f"下载中 · 完成 {done}/{total}")
         if mode == "parallel":
             text += f" · {n} 线程"
         post_to_main(lambda: self._batch_head.setText(text))
@@ -399,7 +399,7 @@ class DownloadPanel(QFrame):
                 row = _SlotRow(i)
                 self._slots_lay.addWidget(row)
                 self._rows.append(row)
-            self._batch_head.setText("⬇ 准备下载…")
+            self._batch_head.setText("准备下载…")
             self._root.addWidget(self._batch_head)
             self._root.addWidget(self._scroll)
             # 复用控件被 _clear_layout hide() 过，重新入局后必须 show()
@@ -412,7 +412,7 @@ class DownloadPanel(QFrame):
         self.setVisible(True)
 
     def _single_started(self, name: str):
-        self._single_name_label.set_full_text(f"📄 {name}")
+        self._single_name_label.set_full_text(f"{name}")
         self._seg_bar.set_count(self._threads)
         self._single_stats.setText(f"0% · {self._threads} 线程")
 
@@ -433,9 +433,9 @@ class DownloadPanel(QFrame):
             self._seg_bar.set_count(self._threads)
             for i in range(self._threads):
                 self._seg_bar.set_seg(i, 1, 1)
-            text = f"✅ 下载完成 · {_fmt_bytes(done)} · {self._threads} 线程"
+            text = f"下载完成 · {_fmt_bytes(done)} · {self._threads} 线程"
         else:
-            text = f"❌ 下载失败（已下 {_fmt_bytes(done)}）"
+            text = f"下载失败（已下 {_fmt_bytes(done)}）"
         self._single_stats.setText(text)
 
     def _set_summary(self, text: str):

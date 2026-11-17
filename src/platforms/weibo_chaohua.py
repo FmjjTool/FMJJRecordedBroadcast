@@ -256,7 +256,7 @@ class ChaohuaClient:
                 if self.stop_event.is_set():
                     raise ChaohuaStopped("已停止") from exc
                 if attempt < retries:
-                    self._say(f"⚠ {exc}，重建访客会话后重试（{attempt + 1}/{retries}）")
+                    self._say(f"{exc}，重建访客会话后重试（{attempt + 1}/{retries}）")
                     self._sleep(2.0)
         raise ChaohuaError(f"请求失败：{last_error}") from last_error
 
@@ -345,7 +345,7 @@ class ChaohuaClient:
         total = len(channels)
         for index, channel in enumerate(channels, 1):
             if self.stop_event.is_set():
-                self._say("⏹ 已停止采集")
+                self._say("已停止采集")
                 break
             name = channel.get("name") or "频道"
             flow_id = channel.get("flow_id") or ""

@@ -2,7 +2,7 @@
 
 所有页面的批量下载进度统一到这里展示（不再占原页面 UI）：
 - 主窗口的**子控件**（不是独立顶层窗口）：随主窗口移动/缩放/最小化，
-  拖标题栏可在窗口内移动，拖右下角手柄可调整大小；✕ 仅隐藏不取消任务
+  拖标题栏可在窗口内移动，拖右下角手柄可调整大小；仅隐藏不取消任务
 - 每个下载批次一张卡片：头部（来源 + 汇总 + 关闭卡片）+ 内嵌 DownloadPanel
 - 并发批次各自独立卡片，互不干扰；关闭卡片只隐藏进度，下载继续后台跑
 
@@ -10,7 +10,7 @@
     from gui_qt.download_float import get_float
     card = get_float().add_batch("来源页", total=12, threads=8)  # total 未知传 None
     download(..., on_task_event=card.handle_event)              # 任意线程安全
-    card.finish("✅ 完成 12 条")                                  # 头部显示汇总
+    card.finish("完成 12 条")                                  # 头部显示汇总
 事件协议与 DownloadPanel 一致：plan / start / bytes / seg / done / skip。
 """
 
@@ -113,7 +113,7 @@ class BatchCard(QFrame):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel(f"📦 {source}")
+        title = QLabel(f"{source}")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         head.addWidget(title)
         self.summary_label = QLabel("")
@@ -127,7 +127,7 @@ class BatchCard(QFrame):
             head.addWidget(self.cancel_btn)
         else:
             self.cancel_btn = None
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(24, 20)
         close_btn.setStyleSheet(icon_btn_style(False))
         close_btn.setToolTip("关闭卡片（下载继续后台进行）")
@@ -237,7 +237,7 @@ class DownloadFloatWindow(QWidget):
         tlay = QHBoxLayout(self._title_bar)
         tlay.setContentsMargins(2, 0, 0, 0)
         tlay.setSpacing(6)
-        tlabel = QLabel("⬇ 下载中心")
+        tlabel = QLabel("下载中心")
         tlabel.setStyleSheet("font-weight: bold; font-size: 13px;")
         tlay.addWidget(tlabel)
         self._count_label = QLabel("")
@@ -249,7 +249,7 @@ class DownloadFloatWindow(QWidget):
         self._collapse_btn.setToolTip("收起 / 展开卡片列表")
         self._collapse_btn.clicked.connect(self._toggle_collapse)
         tlay.addWidget(self._collapse_btn)
-        tclose = QPushButton("✕")
+        tclose = QPushButton("×")
         tclose.setFixedSize(24, 22)
         tclose.setStyleSheet(icon_btn_style(False))
         tclose.setToolTip("隐藏浮窗（下载继续后台进行）")

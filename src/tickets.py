@@ -1304,7 +1304,7 @@ def search_tickets_by_keyword(keyword: str, *,
             results.extend(bili)
             diag["bilibili"] = len(bili)
         except Exception as e:
-            diag["bilibili"] = f"❌ {str(e)[:80]}"
+            diag["bilibili"] = f"失败: {str(e)[:80]}"
 
     # 2. 大麦：显式艺人 ID / 命中映射表 → 艺人详情通道（数据全：含场次+票档）；
     #    否则游客 Playwright 关键词搜索（轻量列表）
@@ -1316,14 +1316,14 @@ def search_tickets_by_keyword(keyword: str, *,
                 results.extend(evts)
                 diag["damai"] = len(evts)
             except Exception as e:
-                diag["damai"] = f"❌ {str(e)[:80]}"
+                diag["damai"] = f"失败: {str(e)[:80]}"
         else:
             try:
                 evts = _damai_search_keyword(keyword)
                 results.extend(evts)
-                diag["damai"] = len(evts) if evts else "⚠️ 大麦无结果"
+                diag["damai"] = len(evts) if evts else "大麦无结果"
             except Exception as e:
-                diag["damai"] = f"❌ {str(e)[:80]}"
+                diag["damai"] = f"失败: {str(e)[:80]}"
 
     # 3. 秀动：显式艺人 ID / 命中映射表 → 艺人页通道；否则客户端接口关键词搜索
     if platform in ("all", "showstart"):
@@ -1334,15 +1334,15 @@ def search_tickets_by_keyword(keyword: str, *,
                 results.extend(events_ss)
                 diag["showstart"] = len(events_ss)
             except Exception as e:
-                diag["showstart"] = f"❌ {str(e)[:80]}"
+                diag["showstart"] = f"失败: {str(e)[:80]}"
         else:
             try:
                 events_ss = _showstart_search_keyword(keyword)
                 results.extend(events_ss)
                 diag["showstart"] = (len(events_ss) if events_ss
-                                     else "⚠️ 秀动全国无在售演出")
+                                     else "秀动全国无在售演出")
             except Exception as e:
-                diag["showstart"] = f"❌ {str(e)[:80]}"
+                diag["showstart"] = f"失败: {str(e)[:80]}"
 
     # 去重（按 platform + event_id + title 前缀）
     seen = set()

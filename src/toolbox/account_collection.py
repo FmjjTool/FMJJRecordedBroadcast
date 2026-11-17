@@ -109,7 +109,7 @@ def collect_accounts(
     date_lo = _date_bound_ts(date_start, True)
     date_hi = _date_bound_ts(date_end, False)
     if date_lo is not None or date_hi is not None:
-        emit(f"🗓 日期段过滤已启用: {date_start or '从头'} ~ {date_end or '到现在'}（只保留该范围内发布的内容）")
+        emit(f"日期段过滤已启用: {date_start or '从头'} ~ {date_end or '到现在'}（只保留该范围内发布的内容）")
 
     n = len(accounts)
     if on_event is not None:
@@ -237,7 +237,7 @@ def collect_accounts(
             proxy._local.buf = None
             buf.flush_pending()
         if _throttle_after(platform, len(posts)):
-            emit(f"    [{name_s}] ⏸ 限流：{platform} 已抓满 {rate_count} 条，冷却 {rate_interval}s")
+            emit(f"    [{name_s}] 限流：{platform} 已抓满 {rate_count} 条，冷却 {rate_interval}s")
         return i, a, platform, posts, ""
 
     old_stdout = sys.stdout
@@ -277,9 +277,9 @@ def collect_accounts(
                     before_n = len(posts)
                     posts = _filter_posts_by_date(posts, date_lo, date_hi)
                     if len(posts) != before_n:
-                        emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
+                        emit(f"[{i}/{n}] 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
                     results[i] = (a, platform, posts, error)
-                emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
+                emit(f"[{i}/{n}] {platform} · {name} → 获取到 {len(posts)} 条")
                 saved = {}
                 save_msg = ""
                 if persist_batch is not None:
@@ -306,11 +306,11 @@ def collect_accounts(
                 kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(
                     getattr(a, "kind", "") or infer_kind_from_url(a.url), "")
                 if dyns and videos:
-                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
+                    emit(f"[{i}/{n}] {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
                 elif dyns:
-                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
+                    emit(f"[{i}/{n}] {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
                 else:
-                    emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
+                    emit(f"[{i}/{n}] {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
                 for p in posts[:8]:
                     t = (getattr(p, "title", "") or "").strip()
                     d = (getattr(p, "publish_time", "") or "").strip()
@@ -326,14 +326,14 @@ def collect_accounts(
             from toolbox import increment_db
             if any(total_added.values()):
                 parts = "、".join(f"{p} +{v}" for p, v in total_added.items() if v)
-                emit(f"💾 已增量写入数据库: {increment_db.db_path()}（{parts}）")
+                emit(f"已增量写入数据库: {increment_db.db_path()}（{parts}）")
             else:
-                emit(f"💾 无新增（已全部在库中）: {increment_db.db_path()}")
+                emit(f"无新增（已全部在库中）: {increment_db.db_path()}")
         else:
             from toolbox.config_manager import get_export_subdir
-            emit(f"💾 已单独导出 {total_files} 个文件到 {get_export_subdir('video_data')}")
+            emit(f"已单独导出 {total_files} 个文件到 {get_export_subdir('video_data')}")
     if on_event is not None:
         cancelled = cancel_event is not None and cancel_event.is_set()
         on_event({"type": "progress", "done": n, "total": n,
-                  "label": "✕ 已取消" if cancelled else "✅ 全部完成"})
+                  "label": "已取消" if cancelled else "全部完成"})
     return total, log, all_posts

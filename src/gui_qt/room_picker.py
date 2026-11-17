@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """「已存账号 / 录播用户」选择器：从本机已有文件里直接挑直播间。
 
-弹幕姬房间号旁边点 📇 就打开这个窗口，不用再手打房间号。
+弹幕姬房间号旁边点 就打开这个窗口，不用再手打房间号。
 
 读取来源（都是本机已有数据，不联网也能列出来）：
   1. 直播录制列表 —— config/live_record.json 里两个平台的 anchors（房间号 + 名称）
@@ -247,7 +247,7 @@ class RoomPickerDialog(QDialog):
         lay = QVBoxLayout(self)
         top = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("🔍 搜索名称 / 房间号 / 备注")
+        self.search.setPlaceholderText("搜索名称 / 房间号 / 备注")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._refill)
         top.addWidget(self.search, 1)
