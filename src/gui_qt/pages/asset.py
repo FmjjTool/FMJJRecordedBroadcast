@@ -46,6 +46,7 @@ from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
 from toolbox.asset_files import collect_asset_files
+from toolbox.asset_images import extract_pic_urls
 from toolbox.asset_media import download_item_images, download_item_media
 from toolbox.asset_video import resolve_video_source
 from toolbox.asset_scan import (
@@ -3939,106 +3940,7 @@ class AssetPage(BasePage):
         QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
 
     def _extract_pic_urls(self, it) -> tuple:
-        """从 raw json 提取该条目的所有图片 URL 与 live 图视频 URL。
-
-        返回 (pic_urls, live_urls)：live 图的静态帧照常入 pic_urls，
-        其视频（videoSrc 播放器 URL，内嵌真实 .mov）入 live_urls。
-        """
-        urls, lives = [], []
-        fp = it.get("file_path", "")
-        if not fp:
-            return urls, lives
-        stem = os.path.splitext(fp)[0]
-        raw_candidates = [stem + "_raw.json", stem.replace(".json", "_raw.json")]
-        raw_path = next((c for c in raw_candidates if os.path.exists(c)), "")
-        if not raw_path:
-            return urls, lives
-        try:
-            data = json.load(open(raw_path, encoding="utf-8"))
-            if isinstance(data, list):
-                data = data[0] if data else {}
-            if not isinstance(data, dict):
-                return urls, lives
-            # 方式1：微博 pics 列表（dict 含 large/original/url 或纯字符串）
-            from platforms.weibo import WeiboParser
-            for pic in data.get("pics", []) or []:
-                if isinstance(pic, dict):
-                    u = (pic.get("original", {}).get("url")
-                         or pic.get("largest", {}).get("url")
-                         or pic.get("large", {}).get("url")
-                         or pic.get("url") or "")
-                    # live 图：videoSrc 是播放器页 URL，需解出真实 .mov 直链
-                    lv = pic.get("videoSrc") or ""
-                    if lv:
-                        mov = WeiboParser._extract_livephoto_url(lv)
-                        if mov and mov not in lives:
-                            lives.append(mov)
-                elif isinstance(pic, str):
-                    u = pic
-                else:
-                    u = ""
-                if u and u not in urls:
-                    urls.append(u)
-            # 顶层 live_photo 字段兜底（空格分隔的多个播放器 URL）
-            if not lives and data.get("live_photo"):
-                for lv in str(data["live_photo"]).split():
-                    if lv:
-                        mov = WeiboParser._extract_livephoto_url(lv)
-                        if mov and mov not in lives:
-                            lives.append(mov)
-            # 方式2：微博 pic_ids（图片 ID 列表，构造 sinaimg 大图 URL）
-            if not urls:
-                for pid in data.get("pic_ids", []) or []:
-                    if pid:
-                        urls.append(f"https://wx1.sinaimg.cn/large/{pid}.jpg")
-            # 方式3：B站图文动态 opus.pics（i0.hdslb.com 原图 + 实况图 live_url）
-            if not urls:
-                try:
-                    major = ((data.get("modules", {}) or {}).get("module_dynamic", {}) or {}).get("major", {}) or {}
-                    opus_pics = (major.get("opus", {}) or {}).get("pics", []) or []
-                    for p in opus_pics:
-                        if not isinstance(p, dict):
-                            continue
-                        u = p.get("url", "") or p.get("src", "")
-                        if u and u not in urls:
-                            urls.append(u)
-                        # 实况图：live_url 是 hdslb 视频直链，直接可下
-                        lv = p.get("live_url") or ""
-                        if lv and lv not in lives:
-                            lives.append(lv)
-                except Exception:
-                    pass
-            # 方式4：B站新版图文动态 draw.items（.src + live_url）
-            if not urls:
-                try:
-                    major = ((data.get("modules", {}) or {}).get("module_dynamic", {}) or {}).get("major", {}) or {}
-                    draw_items = (major.get("draw", {}) or {}).get("items", []) or []
-                    for p in draw_items:
-                        if not isinstance(p, dict):
-                            continue
-                        u = p.get("src", "")
-                        if u and u not in urls:
-                            urls.append(u)
-                        lv = p.get("live_url") or ""
-                        if lv and lv not in lives:
-                            lives.append(lv)
-                except Exception:
-                    pass
-            # 方式5：抖音图集/快手/小红书图文的 images 列表（dict 带 url_list 或纯字符串）
-            if not urls:
-                for im in data.get("images", []) or []:
-                    if isinstance(im, dict):
-                        ul = im.get("url_list") or []
-                        u = ul[0] if ul else (im.get("url") or "")
-                    elif isinstance(im, str):
-                        u = im
-                    else:
-                        u = ""
-                    if u and u not in urls:
-                        urls.append(u)
-        except Exception:
-            pass
-        return urls, lives
+        return extract_pic_urls(it)
 
     def _download_images_for_item(self, it, on_finished=None, quiet=False, force=False,
                                   sub_bridge=None, cancel_ev=None):
