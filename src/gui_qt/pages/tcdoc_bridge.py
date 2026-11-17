@@ -695,16 +695,23 @@ class TcDocBridgePanel(QWidget):
             added = len(receipt.get("added") or [])
             skipped = len(receipt.get("skipped") or [])
             failed = [item for item in receipt.get("added") or [] if not item.get("verified")]
+            duplicates = receipt.get("duplicates") or []
             self.status.setText(
                 f"✅ 上传完成：新增 {added} 条 · 跳过 {skipped} 条 · "
                 f"图片 {receipt.get('uploaded_images', 0)} 张 · "
                 f"缺图 {receipt.get('missing_images', 0)} 张"
-                + (f" · 读回异常 {len(failed)} 条" if failed else ""))
+                + (f" · 读回异常 {len(failed)} 条" if failed else "")
+                + (f" · 重复链接 {len(duplicates)} 条" if duplicates else ""))
             if failed:
                 QMessageBox.warning(
                     self, "读回异常",
                     "以下记录的读回值不一致，请到表格里核对：\n"
                     + "\n".join(f"{i.get('record_id')} {i.get('title')}" for i in failed))
+            if duplicates:
+                QMessageBox.warning(
+                    self, "发现重复链接",
+                    "以下原帖链接在表里出现多次，可能是之前已存在或被并发写入，请人工确认：\n"
+                    + "\n".join(duplicates[:10]))
             self._progress_finish(5000)
             self._refresh_archive(target)
 

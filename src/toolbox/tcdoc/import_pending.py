@@ -290,6 +290,15 @@ def make_plan(record: dict, fields: list[dict], available_only=False):
     return values, kinds, skipped
 
 
+def count_remote_keys(rows: list[dict]) -> dict[str, int]:
+    """按原帖链接统计出现次数：>1 说明表里已有重复行。"""
+    counts: dict[str, int] = {}
+    for row in rows:
+        for key in remote_keys([row]):
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def remote_keys(rows: list[dict]):
     keys = {}
     for row in rows:
@@ -487,7 +496,10 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     if pending_verify:
         fresh = client.get_records()
         saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
+        counts = count_remote_keys(fresh)
         for added, values, kinds, images in pending_verify:
+            # 同一原帖链接在表里出现多次 = 之前已存在或被并发写入，标记出来
+            added["duplicate"] = counts.get(added["key"], 0) > 1
             saved = saved_by_id.get(str(added["record_id"]))
             if saved is None:
                 emit({"phase": "readback", **added})
@@ -496,6 +508,7 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
             added.update({"verified": all(checks.values()), "checks": checks})
             emit({"phase": "readback", **added})
         receipt["rows_after"] = len(fresh)
+        receipt["duplicates"] = [item["key"] for item in receipt["added"] if item.get("duplicate")]
     return receipt
 
 
