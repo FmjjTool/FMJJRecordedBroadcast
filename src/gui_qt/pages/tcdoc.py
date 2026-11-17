@@ -527,8 +527,8 @@ class TcDocPage(BasePage):
             "可下拉切换单篇或合并查看，支持导出 Markdown / TXT；"
             "每次抓取自动存档：正文逐页写 pages.db（新增/修改/删除留痕），"
             "并更新 正文存档/文档名_哈希.md</p>"
-            "<p>· <b>定时采集</b>：底部可选「每天一次」或「按间隔」（几分钟 / 几小时），"
-            "由 Windows 计划任务自动跑（任务名 FengMingTCDocMonitor）；"
+            "<p>· <b>定时采集</b>：已统一到「任务」页面，每天一次 / 按间隔与安装、删除均由该页完成"
+            "（任务名 FengMingTCDocMonitor）；"
             "定时任务会后台并线采集历史记录和表格数据（默认 2 路并发，纯 HTTP 请求，"
             "表格版本未变化时只发一个轻量探测请求）</p>"
             "<p>· <b>数据位置</b>：download/腾讯文档数据/"
@@ -541,8 +541,7 @@ class TcDocPage(BasePage):
 
         # ---------- 顶部卡片：文档切换 + 操作 ----------
         card = QFrame()
-        card.setStyleSheet(
-            "QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        card.setProperty("variant", "card")
         cv = QVBoxLayout(card)
         cv.setContentsMargins(10, 8, 10, 8)
         cv.setSpacing(6)
@@ -557,7 +556,7 @@ class TcDocPage(BasePage):
         row.addStretch(1)
 
         self.collect_btn = QPushButton("🔄 立即采集")
-        self.collect_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.collect_btn.setProperty("variant", "primary")
         self.collect_btn.setToolTip(
             "采集全部文档的浏览量 / 成员数 / 已查看浏览人（昵称 + 最近浏览时间），"
             "写入历史记录与报表（不含表格同步）")
@@ -571,11 +570,10 @@ class TcDocPage(BasePage):
         cv.addLayout(row)
 
         self.url_label = QLabel("")
-        self.url_label.setStyleSheet("color: #888;")
+        self.url_label.setProperty("role", "caption")
         self.url_label.setWordWrap(True)
         cv.addWidget(self.url_label)
         self.latest_label = QLabel("")
-        self.latest_label.setStyleSheet("color: #2f3440;")
         cv.addWidget(self.latest_label)
         layout.addWidget(card)
 
@@ -602,12 +600,12 @@ class TcDocPage(BasePage):
 
         # ---------- 底部提示：定时设置已统一到「任务」页 ----------
         hint = QLabel("定时采集已统一到「任务」页面，可在那里修改计划并安装 / 删除 Windows 计划任务。")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setProperty("role", "caption")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #888;")
+        self.status_label.setProperty("role", "caption")
         layout.addWidget(self.status_label)
 
     # ==================== 界面拼装辅助 ====================
@@ -1895,7 +1893,7 @@ class TcDocPage(BasePage):
 
     def _set_busy(self, busy: bool, text: str = "", refresh: bool = True):
         self._busy = busy
-        for name in ("collect_btn", "install_btn", "uninstall_btn",
+        for name in ("collect_btn",
                      "add_btn", "edit_btn", "del_btn", "probe_btn",
                      "rebuild_btn", "sync_btn", "images_btn",
                      "rev_fetch_btn", "rev_more_btn", "rev_all_btn", "mem_fetch_btn"):
