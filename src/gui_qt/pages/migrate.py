@@ -127,7 +127,7 @@ class MigratePage(BasePage):
         if not self.target_dir:
             self.tgt_label.setStyleSheet("color: palette(placeholder-text);")
         tgt_row.addWidget(self.tgt_label, 1)
-        choose_btn = QPushButton("📁 选择目标")
+        choose_btn = QPushButton("选择目标")
         choose_btn.clicked.connect(self._choose_target)
         tgt_row.addWidget(choose_btn)
         top_v.addLayout(tgt_row)
@@ -135,17 +135,17 @@ class MigratePage(BasePage):
         # 操作模式
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("模式:"))
-        self.move_radio = QRadioButton("✂️ 剪切（移动）")
+        self.move_radio = QRadioButton("剪切（移动）")
         self.move_radio.setChecked(True)
         mode_row.addWidget(self.move_radio)
-        self.copy_radio = QRadioButton("📄 复制（保留源）")
+        self.copy_radio = QRadioButton("复制（保留源）")
         mode_row.addWidget(self.copy_radio)
         mode_row.addStretch(1)
         top_v.addLayout(mode_row)
 
         # 控制按钮
         ctrl = QHBoxLayout()
-        scan_btn = QPushButton("🔍 扫描待迁移")
+        scan_btn = QPushButton("扫描待迁移")
         scan_btn.clicked.connect(self._scan)
         ctrl.addWidget(scan_btn)
         all_btn = QPushButton("全选")
@@ -161,7 +161,7 @@ class MigratePage(BasePage):
         self.checked_lbl = QLabel("")
         self.checked_lbl.setProperty("role", "muted")
         ctrl.addWidget(self.checked_lbl)
-        self.migrate_btn = QPushButton("🚚 开始迁移")
+        self.migrate_btn = QPushButton("开始迁移")
         self.migrate_btn.setProperty("variant", "primary")
         self.migrate_btn.clicked.connect(self._migrate)
         ctrl.addWidget(self.migrate_btn)
@@ -207,7 +207,7 @@ class MigratePage(BasePage):
         save_convert_config(cfg)
         self.tgt_label.setText(path)
         self.tgt_label.setStyleSheet("")
-        self._insert_log(f"✅ 目标路径已保存: {path}")
+        self._insert_log(f"目标路径已保存: {path}")
 
     # ==================== 扫描/迁移 ====================
 
@@ -221,26 +221,26 @@ class MigratePage(BasePage):
         self.list_layout.addStretch(1)
         src = self.app.work_dir
         if not os.path.isdir(src):
-            self._list_placeholder("⚠️ 源目录不存在，请先在「全局设置」选择工作目录")
+            self._list_placeholder("源目录不存在，请先在「全局设置」选择工作目录")
             return
         try:
             names = sorted(os.listdir(src))
         except OSError as e:
-            self._list_placeholder(f"⚠️ 无法读取源目录: {e}")
+            self._list_placeholder(f"无法读取源目录: {e}")
             return
         for name in names:
             full = os.path.join(src, name)
             if os.path.isdir(full) and is_date_folder(name):
                 self.pending.append(name)
         if not self.pending:
-            self._list_placeholder("⚠️ 未找到日期文件夹（YYYYMMDD）")
+            self._list_placeholder("未找到日期文件夹（YYYYMMDD）")
             self._refresh_checked_lbl()
             return
         today = today_str()
         for name in self.pending:
             full = os.path.join(src, name)
             cnt, total, mtime = _folder_stats(full)
-            cb = QCheckBox(f"📁 {_format_folder_date(name)}")
+            cb = QCheckBox(f"{_format_folder_date(name)}")
             # 默认勾选当天（前 8 位日期 == 今天）
             cb.setChecked(name[:8] == today)
             cb.stateChanged.connect(self._refresh_checked_lbl)
@@ -263,17 +263,17 @@ class MigratePage(BasePage):
             # 文件数 + 总大小 + 最后修改时间（三段独立信息列对齐）
             meta = QHBoxLayout()
             meta.setSpacing(14)
-            cnt_lbl = QLabel(f"📄 {cnt} 项")
+            cnt_lbl = QLabel(f"{cnt} 项")
             cnt_lbl.setStyleSheet(
                 "color: palette(placeholder-text); font-size: 11px;")
-            size_lbl = QLabel(f"💾 {_format_size(total)}")
+            size_lbl = QLabel(f"{_format_size(total)}")
             size_lbl.setStyleSheet(
                 "color: palette(link); font-size: 11px; font-weight: bold;")
             if mtime:
                 mtime_txt = datetime.fromtimestamp(mtime).strftime("%m-%d %H:%M")
             else:
                 mtime_txt = "--"
-            mtime_lbl = QLabel(f"🕐 {mtime_txt}")
+            mtime_lbl = QLabel(f"{mtime_txt}")
             mtime_lbl.setStyleSheet(
                 "color: palette(placeholder-text); font-size: 11px;")
             meta.addWidget(cnt_lbl)
@@ -355,7 +355,7 @@ class MigratePage(BasePage):
             src_dir = os.path.join(source_dir, name)
             dst_dir = os.path.join(target_dir, name)
             if not os.path.isdir(src_dir):
-                self._log(f"⏭️ 跳过（源不存在）: {name}")
+                self._log(f"跳过（源不存在）: {name}")
                 fail += 1
                 continue
             # 目标文件夹不存在 → 整体迁移
@@ -365,10 +365,10 @@ class MigratePage(BasePage):
                         shutil.copytree(src_dir, dst_dir)
                     else:
                         shutil.move(src_dir, dst_dir)
-                    self._log(f"✅ 成功: {name}")
+                    self._log(f"成功: {name}")
                     success += 1
                 except Exception as e:
-                    self._log(f"❌ 失败: {name} → {e}")
+                    self._log(f"失败: {name} → {e}")
                     fail += 1
                 continue
             # 目标文件夹已存在 → 文件级合并（逐文件比对文件名）
@@ -438,7 +438,7 @@ class MigratePage(BasePage):
                         shutil.move(src_file, dst_file)
                     moved += 1
                 except Exception as e:
-                    self._log(f"❌ 迁移失败: {os.path.relpath(src_file, src_dir)} → {e}")
+                    self._log(f"迁移失败: {os.path.relpath(src_file, src_dir)} → {e}")
                     has_error = True
         # 剪切模式：迁移后清理源中已迁走的空目录（重复文件所在的目录保留）
         if mode == "move":
@@ -447,7 +447,7 @@ class MigratePage(BasePage):
                     os.rmdir(root)
                 except OSError:
                     pass
-        self._log(f"🔀 合并 {folder_name}: 迁移 {moved} 文件, 重复 {dup_count} 文件")
+        self._log(f"合并 {folder_name}: 迁移 {moved} 文件, 重复 {dup_count} 文件")
         return moved, dup_count, has_error
 
     # ==================== 重复项报告 ====================
@@ -468,17 +468,17 @@ class MigratePage(BasePage):
                     shutil.copy2(src, dst)
                 else:
                     shutil.move(src, dst)
-                return True, f"✅ 覆盖目标: {name}"
+                return True, f"覆盖目标: {name}"
             elif action == "delete_local":
                 # 删除本地：目标已有一份，本地这份是重复的
                 if os.path.isdir(src):
                     shutil.rmtree(src)
                 else:
                     os.remove(src)
-                return True, f"🗑 已删除本地: {name}"
+                return True, f"已删除本地: {name}"
         except Exception as e:
-            return False, f"❌ 处理失败: {name} → {e}"
-        return False, f"❌ 未知操作: {name}"
+            return False, f"处理失败: {name} → {e}"
+        return False, f"未知操作: {name}"
 
     def _show_duplicate_report(self):
         """弹出重复项报告窗口，用户对每个重复项选择处理方式（处理一个移除一行，不重建窗口）。"""
@@ -489,7 +489,7 @@ class MigratePage(BasePage):
         win.resize(760, 540)
         v = QVBoxLayout(win)
         v.setContentsMargins(12, 14, 12, 10)
-        self._dup_title_label = QLabel(f"⚠️ 检测到 {len(self.duplicates)} 个重复文件")
+        self._dup_title_label = QLabel(f"检测到 {len(self.duplicates)} 个重复文件")
         self._dup_title_label.setStyleSheet("font-size: 15px; font-weight: bold;")
         v.addWidget(self._dup_title_label)
         hint = QLabel("目标位置已存在同名文件，请选择每个重复项的处理方式")
@@ -537,7 +537,7 @@ class MigratePage(BasePage):
         row.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(8, 6, 8, 6)
-        lbl = QLabel(f"📄 {display}")
+        lbl = QLabel(f"{display}")
         h.addWidget(lbl, 1)
         over_btn = QPushButton("覆盖目标")
         over_btn.setFixedSize(90, 28)
@@ -565,7 +565,7 @@ class MigratePage(BasePage):
             if row:
                 row.deleteLater()
             try:
-                self._dup_title_label.setText(f"⚠️ 检测到 {len(self.duplicates)} 个重复文件")
+                self._dup_title_label.setText(f"检测到 {len(self.duplicates)} 个重复文件")
             except Exception:
                 pass
         if not self.duplicates:
@@ -594,7 +594,7 @@ class MigratePage(BasePage):
         except Exception:
             pass
         if self.duplicates:
-            self._insert_log(f"⚠️ {len(self.duplicates)} 个处理失败，请重试")
+            self._insert_log(f"{len(self.duplicates)} 个处理失败，请重试")
             self._show_duplicate_report()  # 只显示失败的项
         else:
             self._scan()

@@ -70,7 +70,7 @@ class AudioPage(BasePage):
 
         # 控制栏
         ctrl_row = QHBoxLayout()
-        self.scan_btn = QPushButton("🔍 扫描视频")
+        self.scan_btn = QPushButton("扫描视频")
         self.scan_btn.clicked.connect(self._scan)
         ctrl_row.addWidget(self.scan_btn)
         self.count_label = QLabel("")
@@ -86,18 +86,18 @@ class AudioPage(BasePage):
 
         # 操作按钮
         btn_row = QHBoxLayout()
-        self.start_btn = QPushButton("🎵 开始提取")
+        self.start_btn = QPushButton("开始提取")
         self.start_btn.setProperty("variant", "primary")
         self.start_btn.clicked.connect(self._start)
         self.start_btn.setEnabled(False)
         btn_row.addWidget(self.start_btn)
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "danger")
         self.stop_btn.clicked.connect(self._stop)
         self.stop_btn.setEnabled(False)
         btn_row.addWidget(self.stop_btn)
         btn_row.addStretch(1)
-        del_btn = QPushButton("🗑 删除日期内音频")
+        del_btn = QPushButton("删除日期内音频")
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self._delete_date_audio)
         btn_row.addWidget(del_btn)
@@ -106,7 +106,7 @@ class AudioPage(BasePage):
         # 字幕：提取后直接联网/本地识别
         cfg = load_convert_config()
         asr_row = QHBoxLayout()
-        self.asr_check = QCheckBox("🎬 提取后自动转字幕")
+        self.asr_check = QCheckBox("提取后自动转字幕")
         self.asr_check.setChecked(bool(cfg.get("asr_enabled", False)))
         self.asr_check.toggled.connect(self._on_asr_changed)
         asr_row.addWidget(self.asr_check)
@@ -118,7 +118,7 @@ class AudioPage(BasePage):
         self.engine_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.engine_combo.currentIndexChanged.connect(self._on_asr_changed)
         asr_row.addWidget(self.engine_combo)
-        settings_btn = QPushButton("⚙ 语音设置")
+        settings_btn = QPushButton("语音设置")
         settings_btn.setStyleSheet("padding: 2px 8px;")
         settings_btn.clicked.connect(self._open_asr_settings)
         asr_row.addWidget(settings_btn)
@@ -227,7 +227,7 @@ class AudioPage(BasePage):
     def _update_dir_date_label(self):
         count = count_date_subfolders(self.app.work_dir)
         self.dir_date_label.setText(
-            f"📅 {count} 个日期文件夹" if count else "⚠️ 无日期文件夹")
+            f"{count} 个日期文件夹" if count else "无日期文件夹")
 
     # ==================== 扫描 ====================
 
@@ -239,7 +239,7 @@ class AudioPage(BasePage):
 
     def _scan(self):
         if not self.app.work_dir or not os.path.isdir(self.app.work_dir):
-            self._log("⚠️ 工作目录不存在，请先在全局设置指定")
+            self._log("工作目录不存在，请先在全局设置指定")
             return
         root = Path(self.app.work_dir)
         self.videos = find_audio_videos(root)
@@ -247,13 +247,13 @@ class AudioPage(BasePage):
         self.start_btn.setEnabled(False)
         self.log_text.clear()
         if not self.videos:
-            self._log("⚠️ 未找到视频文件")
+            self._log("未找到视频文件")
         else:
-            self._log(f"📂 扫描完成，共找到 {len(self.videos)} 个视频:")
+            self._log(f"扫描完成，共找到 {len(self.videos)} 个视频:")
             for i, v in enumerate(self.videos, 1):
                 size = format_size(v.stat().st_size) if v.exists() else "?"
                 self._log(f"  [{i}] {self._rel(v)}  ({size})")
-            self._log("💡 在下方勾选要提取的文件（默认勾选当天），按「开始提取」")
+            self._log("在下方勾选要提取的文件（默认勾选当天），按「开始提取」")
         self._render_file_checks(self.videos)
         self._refresh_start_btn()
 
@@ -266,7 +266,7 @@ class AudioPage(BasePage):
             self.list_head_label.setText("（扫描后显示文件列表，默认勾选当天）")
         else:
             self.list_head_label.setText(
-                f"📋 扫描到 {len(videos)} 个文件（默认勾选当天 = {self._today_bj_str()}）")
+                f"扫描到 {len(videos)} 个文件（默认勾选当天 = {self._today_bj_str()}）")
         scanned = {str(v) for v in videos}
         for v in videos:
             is_today = self._is_today_bj(v)
@@ -274,7 +274,7 @@ class AudioPage(BasePage):
                 size = format_size(v.stat().st_size) if v.exists() else "?"
             except Exception:
                 size = "?"
-            tag = " 🕐当天" if is_today else ""
+            tag = " 当天" if is_today else ""
             item = QListWidgetItem(f"{self._rel(v)}  ({size}){tag}")
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if is_today else Qt.Unchecked)
@@ -295,7 +295,7 @@ class AudioPage(BasePage):
         under_work = self.app.work_dir and str(path).startswith(
             str(Path(self.app.work_dir).resolve()))
         display = self._rel(Path(path)) if under_work else str(path)
-        tag = "" if under_work else " 📥外部"
+        tag = "" if under_work else " 外部"
         item = QListWidgetItem(f"{display}  ({size}){tag}")
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(check_state)
@@ -319,11 +319,11 @@ class AudioPage(BasePage):
             for f in added:
                 self._append_external_item(f, Qt.Checked)
             self.file_list.blockSignals(False)
-            self._log(f"📥 拖放添加 {len(added)} 个外部视频:")
+            self._log(f"拖放添加 {len(added)} 个外部视频:")
             for f in added:
                 self._log(f"  + {os.path.basename(f)}")
         else:
-            self._log("📥 拖放：无新增视频文件（仅支持视频文件，重复自动忽略）")
+            self._log("拖放：无新增视频文件（仅支持视频文件，重复自动忽略）")
         self._refresh_start_btn()
 
     def add_dropped_folder(self, folder):
@@ -337,7 +337,7 @@ class AudioPage(BasePage):
         if found:
             self.add_dropped_files(found)
         else:
-            self._log(f"📥 拖放文件夹: {folder}（其中没有视频文件）")
+            self._log(f"拖放文件夹: {folder}（其中没有视频文件）")
 
     def _set_all_checks(self, val):
         self.file_list.blockSignals(True)
@@ -386,9 +386,9 @@ class AudioPage(BasePage):
             text, color = "未启用", "palette(placeholder-text)"
         elif engine == ENGINE_LOCAL:
             if not local_program_ready():
-                text, color = "本地程序未下载（点 ⚙ 语音设置）", "palette(bright-text)"
+                text, color = "本地程序未下载（点 语音设置）", "palette(bright-text)"
             elif not local_model_ready(model):
-                text, color = f"模型 {model} 未下载（点 ⚙ 语音设置）", "palette(bright-text)"
+                text, color = f"模型 {model} 未下载（点 语音设置）", "palette(bright-text)"
             else:
                 text, color = f"本地就绪 · {model}", "palette(link-visited)"
         elif engine == ENGINE_WHISPER_API:
@@ -396,7 +396,7 @@ class AudioPage(BasePage):
             if (cfg.get("asr_whisper_key") or "").strip():
                 text, color = "Whisper API 已配置", "palette(link-visited)"
             else:
-                text, color = "未填 API Key（点 ⚙ 语音设置）", "palette(bright-text)"
+                text, color = "未填 API Key（点 语音设置）", "palette(bright-text)"
         else:
             text, color = "免费在线识别", "palette(link-visited)"
         self.asr_status.setText(text)
@@ -432,7 +432,7 @@ class AudioPage(BasePage):
         audio = Path(audio)
         with_txt = self.output_txt_check.isChecked()
         self._log_progress = -100
-        post_to_main(self._log, f"  🎬 转字幕（{ENGINE_LABELS.get(opts['engine'], opts['engine'])}）...")
+        post_to_main(self._log, f"  转字幕（{ENGINE_LABELS.get(opts['engine'], opts['engine'])}）...")
 
         def on_progress(percent, message):
             post_to_main(self._set_file_progress, idx, total, 35 + int(percent * 0.65))
@@ -452,12 +452,12 @@ class AudioPage(BasePage):
                 cancel=lambda: not self.running,
             )
             files = write_subtitles(segments, audio, with_txt=with_txt)
-            post_to_main(self._log, "  ✅ 字幕: " + ", ".join(f.name for f in files))
+            post_to_main(self._log, "  字幕: " + ", ".join(f.name for f in files))
             return True
         except AsrCancelled:
-            post_to_main(self._log, "  ⏹ 字幕识别已停止")
+            post_to_main(self._log, "  字幕识别已停止")
         except Exception as exc:  # noqa: BLE001
-            post_to_main(self._log, f"  ❌ 字幕失败: {str(exc)[:160]}")
+            post_to_main(self._log, f"  字幕失败: {str(exc)[:160]}")
         return False
 
     # ==================== 提取 ====================
@@ -477,7 +477,7 @@ class AudioPage(BasePage):
     def _start(self):
         to_process = self._selected_videos()
         if not to_process:
-            self._log("⚠️ 未勾选任何文件")
+            self._log("未勾选任何文件")
             return
         asr_enabled = self.asr_check.isChecked()
         if asr_enabled:
@@ -485,7 +485,7 @@ class AudioPage(BasePage):
             problem = validate_engine(opts["engine"], opts["local_model"],
                                       opts["whisper_api"])
             if problem:
-                self._log(f"⚠️ {problem}")
+                self._log(f"{problem}")
                 self.app.toast(problem, "warning")
                 return
         self.running = True
@@ -498,7 +498,7 @@ class AudioPage(BasePage):
         self.progress.setValue(0)
         self.log_text.clear()
         suffix = "（含字幕）" if asr_enabled else ""
-        self._log(f"🎵 开始提取音频{suffix}（{len(to_process)} 个文件）...")
+        self._log(f"开始提取音频{suffix}（{len(to_process)} 个文件）...")
         start_page_thread(self, self._extract_thread)
 
     def _stop(self):
@@ -559,12 +559,12 @@ class AudioPage(BasePage):
             if resolved is None:
                 stats["missing"] += 1
                 post_to_main(self._log,
-                             f"⚠️ 源视频不存在（可能已被移动或改名）: {self._rel(src)}")
-                post_to_main(self._log, "   💡 请重新点「扫描视频」后再开始")
+                             f"源视频不存在（可能已被移动或改名）: {self._rel(src)}")
+                post_to_main(self._log, "   请重新点「扫描视频」后再开始")
                 post_to_main(self._set_file_progress, i, total, 100)
                 continue
             if resolved != src:
-                post_to_main(self._log, f"📍 已按文件名找回: {self._rel(resolved)}")
+                post_to_main(self._log, f"已按文件名找回: {self._rel(resolved)}")
                 post_to_main(self._update_item_path, str(src), str(resolved))
                 src = resolved
             audio = src.with_suffix(".m4a")
@@ -575,26 +575,26 @@ class AudioPage(BasePage):
                 if planned and all(p.exists() and p.stat().st_size > 0 for p in planned):
                     audio = planned[0]
                     audio_outputs = planned
-                    post_to_main(self._log, f"💾 {self._rel(src)} -> 已存在，跳过提取")
+                    post_to_main(self._log, f"{self._rel(src)} -> 已存在，跳过提取")
                     stats["skipped"] += 1
                 else:
-                    post_to_main(self._log, f"📂 {self._rel(src)}")
+                    post_to_main(self._log, f"{self._rel(src)}")
                     post_to_main(self._set_file_progress, i, total, 5)
                     audio_outputs = extract_audio_tracks(src, all_tracks)
                     audio = audio_outputs[0]
                     stats["success"] += 1
                     for produced in audio_outputs:
-                        post_to_main(self._log, f"  ✅ 完成 -> {produced.name}")
+                        post_to_main(self._log, f"  完成 -> {produced.name}")
             except Exception as e:
                 stats["failed"] += 1
-                post_to_main(self._log, f"  ❌ 失败: {e}")
+                post_to_main(self._log, f"  失败: {e}")
 
             if opts and self.running and audio.exists():
                 srt = audio.with_suffix(".srt")
                 if (self.skip_sub_check.isChecked() and srt.exists()
                         and srt.stat().st_size > 0):
                     stats["subtitle_skipped"] += 1
-                    post_to_main(self._log, f"  💬 已有字幕，跳过（{srt.name}）")
+                    post_to_main(self._log, f"  已有字幕，跳过（{srt.name}）")
                 elif self._transcribe_one(audio, i, total, opts):
                     stats["subtitle"] += 1
                     if self.delete_audio_check.isChecked() and audio_outputs:
@@ -602,15 +602,15 @@ class AudioPage(BasePage):
                         if deleted:
                             stats["audio_deleted"] += deleted
                             post_to_main(self._log,
-                                         f"  🗑 已移入回收站 {deleted} 个音频")
+                                         f"  已移入回收站 {deleted} 个音频")
                         else:
                             post_to_main(self._log,
-                                         f"  ⚠️ 音频删除失败: {'; '.join(failed[:1])}")
+                                         f"  音频删除失败: {'; '.join(failed[:1])}")
                 else:
                     stats["subtitle_failed"] += 1
             post_to_main(self._set_file_progress, i, total, 100)
 
-        summary = (f"\n✅ 完成: 音频成功{stats['success']}, 失败{stats['failed']}, "
+        summary = (f"\n完成: 音频成功{stats['success']}, 失败{stats['failed']}, "
                    f"跳过{stats['skipped']}")
         if stats["missing"]:
             summary += f"，源文件缺失{stats['missing']}"
@@ -638,12 +638,12 @@ class AudioPage(BasePage):
     def _delete_date_audio(self):
         """弹复选框对话框，让用户确认要删除的音频（默认全选）。"""
         if not os.path.isdir(self.app.work_dir):
-            self._log("⚠️ 工作目录不存在，无法删除")
+            self._log("工作目录不存在，无法删除")
             return
         groups = scan_audio_by_date(Path(self.app.work_dir))
         all_files = [p for paths in groups.values() for p in paths]
         if not all_files:
-            self._log("⚠️ 日期文件夹内未找到音频文件，无需删除")
+            self._log("日期文件夹内未找到音频文件，无需删除")
             return
         self._show_delete_audio_dialog(all_files)
 
@@ -680,7 +680,7 @@ class AudioPage(BasePage):
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(dlg.reject)
         btn_frame.addWidget(cancel_btn)
-        ok_btn = QPushButton("🗑 确认删除选中")
+        ok_btn = QPushButton("确认删除选中")
         ok_btn.setProperty("variant", "danger")
         ok_btn.clicked.connect(lambda: self._do_delete_audio(dlg, lst))
         btn_frame.addWidget(ok_btn)
@@ -696,21 +696,21 @@ class AudioPage(BasePage):
                      if lst.item(i).checkState() == Qt.Checked]
         dlg.accept()
         if not to_delete:
-            self._log("⚠️ 未勾选任何文件，未删除")
+            self._log("未勾选任何文件，未删除")
             return
-        self._log(f"🗑 开始删除 {len(to_delete)} 个音频（移入回收站）...")
+        self._log(f"开始删除 {len(to_delete)} 个音频（移入回收站）...")
 
         def work():
             return delete_files_safe(to_delete)
 
         def done(result, err):
             if err:
-                self._log(f"❌ 删除失败: {err}")
+                self._log(f"删除失败: {err}")
                 return
             ok, failed = result
-            self._log(f"✅ 已删除 {ok} 个音频（移入回收站）")
+            self._log(f"已删除 {ok} 个音频（移入回收站）")
             for f in failed[:20]:
-                self._log(f"  ❌ {f}")
+                self._log(f"  {f}")
             if failed:
                 self._log(f"  （共有 {len(failed)} 个失败）")
 

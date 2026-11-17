@@ -73,17 +73,17 @@ class OrganizePage(BasePage):
         layout.addLayout(source_row)
         rename_row = QHBoxLayout()
         rename_row.addWidget(QLabel("下一步：视频交互重命名完成后，再在重命名页投稿"), 1)
-        rename_button = QPushButton("✏️ 前往交互重命名 / 投稿")
+        rename_button = QPushButton("前往交互重命名 / 投稿")
         rename_button.clicked.connect(self._open_rename)
         rename_row.addWidget(rename_button)
         layout.addLayout(rename_row)
 
         # 控制按钮
         btn_row = QHBoxLayout()
-        self.scan_btn = QPushButton("🔍 扫描并预览")
+        self.scan_btn = QPushButton("扫描并预览")
         self.scan_btn.clicked.connect(self._scan)
         btn_row.addWidget(self.scan_btn)
-        self.exec_btn = QPushButton("📂 执行迁移 / 整理")
+        self.exec_btn = QPushButton("执行迁移 / 整理")
         self.exec_btn.setProperty("variant", "primary")
         self.exec_btn.clicked.connect(self._execute)
         btn_row.addWidget(self.exec_btn)
@@ -167,7 +167,7 @@ class OrganizePage(BasePage):
     def _update_dir_date_label(self):
         count = count_date_subfolders(self.app.work_dir)
         self.dir_date_label.setText(
-            f"📅 {count} 个日期文件夹" if count else "⚠️ 无日期文件夹")
+            f"{count} 个日期文件夹" if count else "无日期文件夹")
 
     # ==================== 扫描 / 执行 ====================
 
@@ -175,7 +175,7 @@ class OrganizePage(BasePage):
         if self.busy:
             return
         if not self.app.work_dir or not os.path.isdir(self.app.work_dir):
-            self._log("⚠️ 工作目录不存在，请先在全局设置指定")
+            self._log("工作目录不存在，请先在全局设置指定")
             return
         root = self.app.work_dir
         sources, recursive = self._source_paths(), self.recursive.isChecked()
@@ -212,7 +212,7 @@ class OrganizePage(BasePage):
         total = 0
         for date_str, files in self.groups.items():
             total += len(files)
-            self.preview_text.append(f"📁 {date_str}/  ({len(files)} 个文件)")
+            self.preview_text.append(f"{date_str}/  ({len(files)} 个文件)")
             for f in files[:3]:
                 self.preview_text.append(f"   - {f['name']}  ({format_size(f['size'])})")
             if len(files) > 3:
@@ -222,7 +222,7 @@ class OrganizePage(BasePage):
         if skipped:
             self.preview_text.append("\n暂缓/跳过：\n" + "\n".join(skipped[:30]))
         if self.no_date_files:
-            self.preview_text.append(f"\n⚠️ 无法识别日期: {len(self.no_date_files)} 个")
+            self.preview_text.append(f"\n无法识别日期: {len(self.no_date_files)} 个")
             for n in self.no_date_files[:10]:
                 self.preview_text.append(f"   - {n}")
 
@@ -259,7 +259,7 @@ class OrganizePage(BasePage):
             results = result
             self._migrated_videos = [item["target"] for item in results if item["ok"]]
             success = len(self._migrated_videos)
-            self._log(f"✅ 整理完成：成功 {success}，失败 {len(results) - success}。下一步请前往交互重命名页；此处不会上传投稿。")
+            self._log(f"整理完成：成功 {success}，失败 {len(results) - success}。下一步请前往交互重命名页；此处不会上传投稿。")
             self._scan()
         run_bg(work, done, owner=self)
 

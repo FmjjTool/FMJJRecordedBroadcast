@@ -50,16 +50,16 @@ class SubtitlePage(BasePage):
 
         # 文件按钮
         frow = QHBoxLayout()
-        frow.addWidget(self._btn("📄 选择文件", self._select_files))
-        frow.addWidget(self._btn("📁 选择文件夹", self._select_folder))
+        frow.addWidget(self._btn("选择文件", self._select_files))
+        frow.addWidget(self._btn("选择文件夹", self._select_folder))
         # 日期文件夹：当天一键 / 指定日期 / 全部
-        frow.addWidget(self._btn("📅 当天", self._scan_today))
+        frow.addWidget(self._btn("当天", self._scan_today))
         self.date_combo = QComboBox()
         self.date_combo.setMinimumWidth(118)
         self.date_combo.setToolTip("工作目录下的日期文件夹（YYYYMMDD），选中后点「扫描」只处理这一天")
         frow.addWidget(self.date_combo)
-        frow.addWidget(self._btn("🔍 扫描", self._scan_selected_date))
-        frow.addWidget(self._btn("📚 全部日期", self._scan_date_folders))
+        frow.addWidget(self._btn("扫描", self._scan_selected_date))
+        frow.addWidget(self._btn("全部日期", self._scan_date_folders))
         self.file_count_label = QLabel("未选择文件")
         self.file_count_label.setProperty("role", "muted")
         frow.addWidget(self.file_count_label)
@@ -83,10 +83,10 @@ class SubtitlePage(BasePage):
         # 文件列表（勾选）
         bar = QHBoxLayout()
         bar.addWidget(QLabel("已识别字幕文件:"))
-        bar.addWidget(self._btn("☑ 全选", lambda: self._sel("all"), small=True))
-        bar.addWidget(self._btn("🔄 反选", lambda: self._sel("invert"), small=True))
+        bar.addWidget(self._btn("全选", lambda: self._sel("all"), small=True))
+        bar.addWidget(self._btn("反选", lambda: self._sel("invert"), small=True))
         bar.addWidget(self._btn("□ 清除", lambda: self._sel("none"), small=True))
-        bar.addWidget(self._btn("🗑 删除选中", self._delete_selected, small=True, danger=True))
+        bar.addWidget(self._btn("删除选中", self._delete_selected, small=True, danger=True))
         bar.addStretch(1)
         layout.addLayout(bar)
 
@@ -96,16 +96,16 @@ class SubtitlePage(BasePage):
 
         # 选项 + 转换
         opt_row = QHBoxLayout()
-        self.same_dir = QCheckBox("📁 转换后放到原地址")
+        self.same_dir = QCheckBox("转换后放到原地址")
         self.same_dir.setChecked(use_same_dir)
         self.same_dir.toggled.connect(lambda _c: self._save_sub_setting())
         opt_row.addWidget(self.same_dir)
-        self.date_folder = QCheckBox("📁 创建日期文件夹")
+        self.date_folder = QCheckBox("创建日期文件夹")
         self.date_folder.setChecked(use_date_folder)
         self.date_folder.toggled.connect(lambda _c: self._save_sub_setting())
         opt_row.addWidget(self.date_folder)
         opt_row.addStretch(1)
-        self.convert_btn = QPushButton("🔄 开始转换")
+        self.convert_btn = QPushButton("开始转换")
         self.convert_btn.setProperty("variant", "primary")
         self.convert_btn.clicked.connect(self._convert)
         opt_row.addWidget(self.convert_btn)
@@ -122,10 +122,10 @@ class SubtitlePage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
-        self.tabs.addTab(container, "📝 字幕转换")
+        self.tabs.addTab(container, "字幕转换")
         from gui_qt.pages.lyrics_tool import LyricsToolPage
         self.lyrics_page = LyricsToolPage(app)
-        self.tabs.addTab(self.lyrics_page, "🎤 歌词转换")
+        self.tabs.addTab(self.lyrics_page, "歌词转换")
         root.addWidget(self.tabs)
 
     def on_show(self):
@@ -190,11 +190,11 @@ class SubtitlePage(BasePage):
         added = len(added_names)
         self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件（+{added}）")
         if added:
-            self._log(f"📥 拖放添加 {added} 个文件:")
+            self._log(f"拖放添加 {added} 个文件:")
             for name in added_names:
                 self._log(f"  + {name}")
         else:
-            self._log("📥 拖放（无新文件）")
+            self._log("拖放（无新文件）")
         self._refresh_list()
 
     def add_dropped_folder(self, folder):
@@ -203,7 +203,7 @@ class SubtitlePage(BasePage):
             self.lyrics_page.add_dropped_folder(folder)
             return
         self._add_folder_files(folder)
-        self._log(f"📥 拖放文件夹: {os.path.basename(folder)}")
+        self._log(f"拖放文件夹: {os.path.basename(folder)}")
         self._log_scanned()
 
     # ---- 文件选择 ----
@@ -232,7 +232,7 @@ class SubtitlePage(BasePage):
         self.input_files = []
         folders = scan_date_folders(self.app.work_dir)
         if not folders:
-            self.log_text.setPlainText(f"⚠️ 工作目录下没有日期文件夹\n   当前目录: {self.app.work_dir}")
+            self.log_text.setPlainText(f"工作目录下没有日期文件夹\n   当前目录: {self.app.work_dir}")
             self.file_count_label.setText("未找到日期文件夹")
             self._refresh_list()
             return
@@ -247,7 +247,7 @@ class SubtitlePage(BasePage):
         self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件")
         self._log_scanned()
         if not self.input_files:
-            self._log(f"⚠️ 日期文件夹中未找到字幕文件\n   支持: {', '.join(sorted(self.EXTS))}")
+            self._log(f"日期文件夹中未找到字幕文件\n   支持: {', '.join(sorted(self.EXTS))}")
 
     # ---- 日期筛选：当天 / 指定某一天（日期文件夹 = YYYYMMDD）----
 
@@ -284,9 +284,9 @@ class SubtitlePage(BasePage):
             self._refresh_list()
             self.file_count_label.setText("当天无日期文件夹")
             self.log_text.setPlainText(
-                f"⚠️ 工作目录下没有今天的日期文件夹：{today}\n"
+                f"工作目录下没有今天的日期文件夹：{today}\n"
                 f"   当前目录: {self.app.work_dir}\n"
-                "   可改用「📚 全部日期」或下拉框选择其他日期")
+                "   可改用「全部日期」或下拉框选择其他日期")
             return
         self._scan_one_date(today)
 
@@ -311,7 +311,7 @@ class SubtitlePage(BasePage):
             else f"{folder_name}：无字幕文件")
         self._log_scanned()
         if not self.input_files:
-            self._log(f"⚠️ {folder_name} 中没有字幕文件\n"
+            self._log(f"{folder_name} 中没有字幕文件\n"
                       f"   支持: {', '.join(sorted(self.EXTS))}")
 
     def _log_scanned(self):
@@ -319,10 +319,10 @@ class SubtitlePage(BasePage):
         self._refresh_list()
         if not self.input_files:
             return
-        self._log(f"📂 已选择 {len(self.input_files)} 个字幕文件:\n")
+        self._log(f"已选择 {len(self.input_files)} 个字幕文件:\n")
         for i, fp in enumerate(self.input_files, 1):
             self._log(f"  [{i}] {os.path.basename(fp)}  ({format_size(os.path.getsize(fp))})")
-        self._log("\n💡 勾选要转换的文件，选择输出格式后按「开始转换」\n")
+        self._log("\n勾选要转换的文件，选择输出格式后按「开始转换」\n")
 
     # ---- 列表 ----
     def _refresh_list(self):
@@ -355,13 +355,13 @@ class SubtitlePage(BasePage):
     def _delete_selected(self):
         selected = self._checked_paths()
         if not selected:
-            self._log("⚠️ 请先勾选要删除的字幕文件")
+            self._log("请先勾选要删除的字幕文件")
             return
         from toolbox.audio_engine import delete_files_safe
         ok, failed = delete_files_safe(selected)
-        self._log(f"🗑 已删除 {ok} 个字幕文件（移入回收站）")
+        self._log(f"已删除 {ok} 个字幕文件（移入回收站）")
         for f in failed[:10]:
-            self._log(f"  ❌ {f}")
+            self._log(f"  {f}")
         deleted = set(selected)
         self.input_files = [f for f in self.input_files if f not in deleted]
         self.file_count_label.setText(f"已选择 {len(self.input_files)} 个文件")
@@ -381,7 +381,7 @@ class SubtitlePage(BasePage):
             return
 
         self.log_text.clear()
-        self._log(f"🔄 开始转换 {len(to_convert)} 个勾选文件...\n")
+        self._log(f"开始转换 {len(to_convert)} 个勾选文件...\n")
 
         use_same_dir = self.same_dir.isChecked()
         output_dir = None
@@ -392,12 +392,12 @@ class SubtitlePage(BasePage):
                 output_dir = output_dir / today_str()
             output_dir.mkdir(parents=True, exist_ok=True)
         else:
-            self._log("📁 输出到原文件地址\n")
+            self._log("输出到原文件地址\n")
 
         success_count = 0
         for filepath in to_convert:
             filename = os.path.basename(filepath)
-            self._log(f"📄 处理: {filename}")
+            self._log(f"处理: {filename}")
             try:
                 with open(filepath, 'rb') as f:
                     content = f.read()
@@ -411,14 +411,14 @@ class SubtitlePage(BasePage):
                         else:
                             with open(out_path, 'wb') as f:
                                 f.write(out_file['content'])
-                        self._log(f"  ✅ {out_file['filename']}")
+                        self._log(f"  {out_file['filename']}")
                     success_count += 1
                 else:
-                    self._log(f"  ❌ {result['message']}")
+                    self._log(f"  {result['message']}")
             except Exception as e:
-                self._log(f"  ❌ 异常: {e}")
+                self._log(f"  异常: {e}")
 
-        self._log(f"\n✅ 转换完成: {success_count}/{len(to_convert)} 成功（每种格式单独输出）")
+        self._log(f"\n转换完成: {success_count}/{len(to_convert)} 成功（每种格式单独输出）")
         self.result_label.setText(f"完成 {success_count}/{len(to_convert)}")
 
     def _log(self, msg):

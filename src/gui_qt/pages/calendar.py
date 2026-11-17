@@ -33,7 +33,7 @@ class DayCell(QFrame):
             "font-size: 14px; font-weight: bold; background: transparent; border: none;")
         v.addWidget(num)
         if file_count is not None:
-            info = QLabel(f"📁 {file_count}")
+            info = QLabel(f"{file_count}")
             info.setStyleSheet("font-size: 11px; background: transparent; border: none;")
             v.addWidget(info)
             v.addStretch(1)
@@ -74,11 +74,11 @@ class CalendarPage(BasePage):
         layout.setSpacing(6)
 
         top = QHBoxLayout()
-        self.back_btn = QPushButton("⬅ 返回")
+        self.back_btn = QPushButton("返回")
         self.back_btn.clicked.connect(self._go_back)
         self.back_btn.setEnabled(False)
         top.addWidget(self.back_btn)
-        top.addWidget(QPushButton("🔄 刷新", clicked=self._scan))
+        top.addWidget(QPushButton("刷新", clicked=self._scan))
         self.breadcrumb = QLabel("年视图")
         self.breadcrumb.setStyleSheet("font-weight: bold; font-size: 14px;")
         top.addWidget(self.breadcrumb)
@@ -132,7 +132,7 @@ class CalendarPage(BasePage):
             lbl = QLabel(f"（未找到日期文件夹）\n当前目录: {self.app.work_dir}")
             lbl.setStyleSheet("color: theme(warning);")
             self.grid.addWidget(lbl, 0, 0)
-            self.breadcrumb.setText("📅 无数据")
+            self.breadcrumb.setText("无数据")
             return
         self.current_level = "year"
         self.current_year = None
@@ -149,7 +149,7 @@ class CalendarPage(BasePage):
 
     def _show_year_view(self):
         self._clear_grid()
-        self.breadcrumb.setText("📅 年视图 — 点击年份进入月份")
+        self.breadcrumb.setText("年视图 — 点击年份进入月份")
         self.back_btn.setEnabled(False)
         data_years = {d.year for d in self.date_map}
         end_year = max([date.today().year, *data_years])
@@ -163,7 +163,7 @@ class CalendarPage(BasePage):
             days = sum(1 for d in self.date_map if d.year == y)
             months = len({d.month for d in self.date_map if d.year == y})
             if days:
-                btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
+                btn = QPushButton(f"{y} 年\n{days} 天 / {months} 个月")
                 btn.setStyleSheet(
                     "QPushButton { background: palette(midlight); color: palette(link);"
                     " font-size: 15px; font-weight: bold; }"
@@ -191,14 +191,14 @@ class CalendarPage(BasePage):
     def _show_month_view(self):
         self._clear_grid()
         y = self.current_year
-        self.breadcrumb.setText(f"📅 {y} 年 — 点击月份进入日期")
+        self.breadcrumb.setText(f"{y} 年 — 点击月份进入日期")
         self.back_btn.setEnabled(True)
         names = ["一月", "二月", "三月", "四月", "五月", "六月",
                  "七月", "八月", "九月", "十月", "十一月", "十二月"]
         for m in range(1, 13):
             days = sum(1 for d in self.date_map if d.year == y and d.month == m)
             if days > 0:
-                btn = QPushButton(f"{m}月\n{names[m - 1]}\n📁 {days} 天")
+                btn = QPushButton(f"{m}月\n{names[m - 1]}\n{days} 天")
                 btn.setStyleSheet(
                     "QPushButton { background: palette(midlight); color: palette(link);"
                     " font-size: 14px; font-weight: bold; }"
@@ -225,7 +225,7 @@ class CalendarPage(BasePage):
     def _show_day_view(self):
         self._clear_grid()
         y, m = self.current_year, self.current_month
-        self.breadcrumb.setText(f"📅 {y}年{m}月 — 双击日期打开文件夹")
+        self.breadcrumb.setText(f"{y}年{m}月 — 双击日期打开文件夹")
         self.back_btn.setEnabled(True)
         for col, wd in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
             self.grid.addWidget(QLabel(wd), 0, col)

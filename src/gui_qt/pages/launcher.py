@@ -14,7 +14,7 @@ import subprocess
 import webbrowser
 
 from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QScrollArea, QSizePolicy,
@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
-from gui_qt import common
+from gui_qt import common, theme
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from toolbox.process_tree import assign_job, create_kill_job, terminate_job
 
@@ -41,19 +42,6 @@ CARD_LINK_QSS = (
 
 # 图标浮动缩放区间：下限保证小窗口也清晰可见，上限防止大窗口溢出卡片
 ICON_MIN, ICON_MAX = 88, 168
-
-
-def _emoji_pixmap(ch: str) -> QPixmap:
-    """无图标项兜底：把 emoji 画成大 pixmap 当图标用（原文字模式 emoji 只有字号大小）。"""
-    pm = QPixmap(ICON_MIN, ICON_MIN)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    f = p.font()
-    f.setPixelSize(ICON_MIN - 12)
-    p.setFont(f)
-    p.drawText(pm.rect(), Qt.AlignCenter, ch)
-    p.end()
-    return pm
 
 
 class _CardButton(QToolButton):
@@ -109,7 +97,7 @@ class LauncherPage(BasePage):
             "color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         tree_row.addWidget(hint, 1)
-        self.stop_all_btn = QPushButton("⏹ 停止已链接软件")
+        self.stop_all_btn = QPushButton("停止已链接软件")
         self.stop_all_btn.setProperty("variant", "danger")
         self.stop_all_btn.clicked.connect(self._stop_all_linked)
         tree_row.addWidget(self.stop_all_btn)
@@ -211,7 +199,8 @@ class LauncherPage(BasePage):
             if icon and os.path.isfile(icon):
                 pix = QPixmap(icon)
             if pix is None or pix.isNull():
-                pix = _emoji_pixmap("🔗" if is_link else "📦")
+                pix = line_icon("link" if is_link else "package",
+                                theme.color("link"), ICON_MIN).pixmap(ICON_MIN, ICON_MIN)
             card.set_icon_pixmap(pix)
             card.setText(name)
             card.clicked.connect(lambda _c=False, idx=abs_idx: self._launch_item(idx))
@@ -354,14 +343,14 @@ class LauncherPage(BasePage):
         v.addWidget(self.cfg_scroll, 1)
 
         bar = QHBoxLayout()
-        add_btn = QPushButton("➕ 添加软件")
+        add_btn = QPushButton("添加软件")
         add_btn.clicked.connect(self._add_item)
         bar.addWidget(add_btn)
-        link_btn = QPushButton("🔗 添加链接")
+        link_btn = QPushButton("添加链接")
         link_btn.setProperty("variant", "secondary")
         link_btn.clicked.connect(self._add_link)
         bar.addWidget(link_btn)
-        save_btn = QPushButton("💾 保存并刷新面板")
+        save_btn = QPushButton("保存并刷新面板")
         save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self._save_and_refresh)
         bar.addWidget(save_btn)
@@ -395,9 +384,9 @@ class LauncherPage(BasePage):
 
     def _refresh_config_cards(self):
         """设置 Tab 行：
-        左侧 checkbox（🌲 跟随进程树） → 📁 浏览 → 📌（强标「高级」入口） →
-        🆑 清空项配置 → ⬆ → ⬇ → ✕ 删除。
-        按钮尺寸已放大，并把浏览按钮显式使用 📁 图标，避免与其他 💾 保存混淆。
+        左侧 checkbox（跟随进程树） → 浏览 → （强标「高级」入口） →
+        清空项配置 → 上移 → 下移 → 删除。
+        按钮尺寸已放大，并给浏览按钮使用统一的文件夹图标。
         """
         while self.cfg_layout.count():
             item = self.cfg_layout.takeAt(0)
@@ -434,7 +423,7 @@ class LauncherPage(BasePage):
 
             # 图标预览（小）
             icon_path = item.get("icon", "")
-            icon_lbl = QLabel("🖼")
+            icon_lbl = QLabel("")
             icon_lbl.setFixedSize(28, 24)
             icon_lbl.setAlignment(Qt.AlignCenter)
             icon_lbl.setStyleSheet("background: transparent; border: none;")
@@ -453,30 +442,30 @@ class LauncherPage(BasePage):
                 lambda t, idx=i: self._on_item_change(idx, "path", t))
             h.addWidget(path_entry, 1)
 
-            # 📁 浏览（路径右侧；放在操作按钮的最左，方便"对准路径"操作）
+            # 浏览（路径右侧；放在操作按钮的最左，方便"对准路径"操作）
             if not is_link:
                 h.addWidget(self._mini_btn(
-                    "📁 浏览", "选择程序文件",
+                    "浏览", "选择程序文件",
                     lambda _c=False, e=path_entry, idx=i: self._browse_file(e, idx)))
-            # 第二位起图标依次：📌(跟随进程树) → 🆑 清空 → ⬆ → ⬇ → ✕
+            # 第二位起依次：跟随进程树 → 清空 → 上移 → 下移 → 删除
             if not is_link:
-                cb = QCheckBox("📌")
+                cb = QCheckBox("跟随进程树")
                 cb.setToolTip("跟随进程树：本工具退出时该项启动的软件整树一并关闭")
                 cb.setChecked(item.get("linked", True))
                 cb.stateChanged.connect(
                     lambda st, idx=i: self._set_item_linked(idx, st))
                 h.addWidget(cb)
             h.addWidget(self._mini_btn(
-                "🆑 清空", "清空该项的名称 / 路径 / 图标等配置",
+                "清空", "清空该项的名称 / 路径 / 图标等配置",
                 lambda _c=False, idx=i: self._clear_item(idx)))
             h.addWidget(self._mini_btn(
-                "⬆ 上移", "与上一项交换位置",
+                "上移", "与上一项交换位置",
                 lambda _c=False, idx=i: self._move_launcher_item(idx, -1)))
             h.addWidget(self._mini_btn(
-                "⬇ 下移", "与下一项交换位置",
+                "下移", "与下一项交换位置",
                 lambda _c=False, idx=i: self._move_launcher_item(idx, 1)))
             h.addWidget(self._mini_btn(
-                "✕ 删除", "删除该项",
+                "删除", "删除该项",
                 lambda _c=False, idx=i: self._delete_launcher_item(idx), danger=True))
 
             self.cfg_layout.addWidget(card)
@@ -493,9 +482,9 @@ class LauncherPage(BasePage):
             self.items[idx]["path"] = path
 
     def _clear_item(self, idx):
-        """🆑 清空按钮：清空该项的 name/path/icon，linked 保留默认 True。
+        """清空按钮：清空该项的 name/path/icon，linked 保留默认 True。
 
-        不弹二次确认（外已有 ✕ 删除按钮做危险操作，避免两个高危动作堆叠）。
+        不弹二次确认（外已有 删除按钮做危险操作，避免两个高危动作堆叠）。
         清空后点「保存并刷新面板」立即生效。
         """
         if not (0 <= idx < len(self.items)):

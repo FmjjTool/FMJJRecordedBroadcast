@@ -70,10 +70,10 @@ class RenamePage(BasePage):
         layout.setSpacing(4)
 
         head = QHBoxLayout()
-        head.addWidget(QLabel("✏️ 交互重命名", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("交互重命名", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 交互重命名 · 使用教程", (
+        head.addWidget(attach_help_overlay(self, "交互重命名 · 使用教程", (
             "<p><b>直播录屏视频逐条重命名为标准命名（三栏工作流）。</b></p>"
             "<p>· <b>左栏</b>：日期文件夹 → 文件列表两级浏览，点击定位视频，"
             "已标准命名的自动跳过（也可手动重命名）</p>"
@@ -83,14 +83,14 @@ class RenamePage(BasePage):
             "标题三模式（自动提取/手动输入/不保留）+ 预览截图 + 新文件名实时预览</p>"
             "<p>· <b>快捷键</b>：Enter 确认重命名；Esc 跳过当前视频</p>"
             "<p>· 可选「写入版权属性」：重命名后用 ffmpeg 把信息写进视频元数据</p>"
-            "<p>· <b>⚙️ 参数设置 Tab</b>：维护账户/类型/平台列表（上移/下移/删除/添加）、"
+            "<p>· <b>参数设置 Tab</b>：维护账户/类型/平台列表（上移/下移/删除/添加）、"
             "视频后缀、匹配阈值、附加信息</p>")))
         layout.addLayout(head)
 
         self.sub_tabs = QTabWidget()
         layout.addWidget(self.sub_tabs, 1)
-        self.sub_tabs.addTab(self._build_rename_tab(), "📁 交互重命名")
-        self.sub_tabs.addTab(self._build_params_tab(), "⚙️ 参数设置")
+        self.sub_tabs.addTab(self._build_rename_tab(), "交互重命名")
+        self.sub_tabs.addTab(self._build_params_tab(), "参数设置")
 
         self._rebuild_account_radios()
         self._rebuild_type_checkboxes()
@@ -120,7 +120,7 @@ class RenamePage(BasePage):
 
         # 顶栏：刷新 + 文件夹计数 + 进度
         top = QHBoxLayout()
-        refresh_btn = QPushButton("🔄 刷新")
+        refresh_btn = QPushButton("刷新")
         refresh_btn.setFixedWidth(80)
         refresh_btn.clicked.connect(self._refresh)
         top.addWidget(refresh_btn)
@@ -138,10 +138,10 @@ class RenamePage(BasePage):
         self.auto_upload.toggled.connect(self._save_post_switch)
         post_row.addWidget(self.auto_upload)
         post_row.addStretch(1)
-        self.post_settings_btn = QPushButton("⚙️ 投稿设置")
+        self.post_settings_btn = QPushButton("投稿设置")
         self.post_settings_btn.clicked.connect(self._open_post_settings)
         post_row.addWidget(self.post_settings_btn)
-        self.post_btn = QPushButton("📤 投稿已重命名视频")
+        self.post_btn = QPushButton("投稿已重命名视频")
         self.post_btn.clicked.connect(self._open_upload)
         post_row.addWidget(self.post_btn)
         v.addLayout(post_row)
@@ -155,11 +155,11 @@ class RenamePage(BasePage):
         c1 = QVBoxLayout(col1)
         c1.setContentsMargins(0, 0, 0, 0)
         c1.setSpacing(3)
-        c1.addWidget(QLabel("📁 日期文件夹"))
+        c1.addWidget(QLabel("日期文件夹"))
         self.folder_list = QListWidget()
         self.folder_list.itemClicked.connect(lambda _it: self._on_folder_click())
         c1.addWidget(self.folder_list, 3)
-        c1.addWidget(QLabel("🎬 文件列表"))
+        c1.addWidget(QLabel("文件列表"))
         self.file_list = QListWidget()
         self.file_list.itemClicked.connect(self._on_file_click)
         c1.addWidget(self.file_list, 4)
@@ -170,15 +170,15 @@ class RenamePage(BasePage):
         c2 = QVBoxLayout(col2)
         c2.setContentsMargins(0, 0, 0, 0)
         c2.setSpacing(3)
-        c2.addWidget(QLabel("👤 直播账户"))
+        c2.addWidget(QLabel("直播账户"))
         self.account_list = QListWidget()
         self.account_list.itemSelectionChanged.connect(self._update_preview)
         c2.addWidget(self.account_list, 1)
-        c2.addWidget(QLabel("🎯 直播类型（多选）"))
+        c2.addWidget(QLabel("直播类型（多选）"))
         self.type_list = QListWidget()
         self.type_list.itemClicked.connect(self._on_type_item_click)
         c2.addWidget(self.type_list, 1)
-        clear_btn = QPushButton("🗑 清除所有选择")
+        clear_btn = QPushButton("清除所有选择")
         clear_btn.clicked.connect(self._clear_all_types)
         c2.addWidget(clear_btn)
         split.addWidget(col2)
@@ -191,7 +191,7 @@ class RenamePage(BasePage):
         c3.setContentsMargins(6, 4, 6, 4)
         c3.setSpacing(5)
 
-        c3.addWidget(QLabel("📹 视频信息"))
+        c3.addWidget(QLabel("视频信息"))
         self.video_info_label = QLabel("请选择左侧文件夹")
         self.video_info_label.setWordWrap(True)
         self.video_info_label.setStyleSheet("font-size: 12px;")
@@ -199,7 +199,7 @@ class RenamePage(BasePage):
 
         # 版本
         ver_row = QHBoxLayout()
-        ver_row.addWidget(QLabel("📋 版本:"))
+        ver_row.addWidget(QLabel("版本:"))
         self.version_group = QButtonGroup(self)
         self.ver_none_radio = QRadioButton("无弹幕")
         self.ver_none_radio.setChecked(True)
@@ -215,7 +215,7 @@ class RenamePage(BasePage):
 
         # 平台
         plat_row = QHBoxLayout()
-        plat_row.addWidget(QLabel("📡 平台:"))
+        plat_row.addWidget(QLabel("平台:"))
         self.platform_group = QButtonGroup(self)
         self.platform_box = QWidget()
         self.platform_layout = QHBoxLayout(self.platform_box)
@@ -224,7 +224,7 @@ class RenamePage(BasePage):
         c3.addLayout(plat_row)
 
         # 标题三模式
-        c3.addWidget(QLabel("🏷 标题:"))
+        c3.addWidget(QLabel("标题:"))
         trow = QHBoxLayout()
         self.title_auto_btn = QPushButton("自动提取")
         self.title_auto_btn.setCheckable(True)
@@ -247,7 +247,7 @@ class RenamePage(BasePage):
         c3.addWidget(self.title_entry)
 
         # 预览截图
-        c3.addWidget(QLabel("📸 预览截图"))
+        c3.addWidget(QLabel("预览截图"))
         self.thumb_label = QLabel("（选择视频后显示）")
         self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setFixedHeight(180)
@@ -257,7 +257,7 @@ class RenamePage(BasePage):
         c3.addWidget(self.thumb_label)
 
         # 新文件名预览
-        c3.addWidget(QLabel("📝 新文件名:"))
+        c3.addWidget(QLabel("新文件名:"))
         self.new_name_label = QLabel("")
         self.new_name_label.setWordWrap(True)
         self.new_name_label.setStyleSheet(
@@ -267,7 +267,7 @@ class RenamePage(BasePage):
 
         # 操作按钮
         action_row = QHBoxLayout()
-        self.confirm_btn = QPushButton("✅ 确认重命名 (Enter)")
+        self.confirm_btn = QPushButton("确认重命名 (Enter)")
         self.confirm_btn.setProperty("variant", "primary")
         self.confirm_btn.setEnabled(False)
         self.confirm_btn.clicked.connect(self._do_rename)
@@ -281,7 +281,7 @@ class RenamePage(BasePage):
 
         # 版权信息开关（与参数设置同步）
         extra_row = QHBoxLayout()
-        self.rename_extra_check = QCheckBox("📋 写入版权属性")
+        self.rename_extra_check = QCheckBox("写入版权属性")
         self.rename_extra_check.setChecked(self.rename_config.append_extra_info)
         self.rename_extra_check.toggled.connect(self._on_extra_toggle)
         extra_row.addWidget(self.rename_extra_check)
@@ -430,15 +430,15 @@ class RenamePage(BasePage):
         self.folder_list.clear()
         if not self.folders:
             self.folder_list.addItem("（未找到日期文件夹）")
-            self.folder_count_label.setText("⚠️ 无日期文件夹")
+            self.folder_count_label.setText("无日期文件夹")
         else:
             for fn, _dt in self.folders:
-                self.folder_list.addItem(f"📁 {fn}")
+                self.folder_list.addItem(f"{fn}")
             self.folder_count_label.setText(f"共 {len(self.folders)} 个文件夹")
         # 清空文件列表
         self.file_list.clear()
         self.file_list.addItem("（请选择文件夹）")
-        self._log(f"📂 扫描到 {len(self.folders)} 个日期文件夹")
+        self._log(f"扫描到 {len(self.folders)} 个日期文件夹")
         # 自动选中第一个文件夹
         if self.folders and self.isVisible():
             self._auto_select_first()
@@ -453,7 +453,7 @@ class RenamePage(BasePage):
         line = item.text().strip()
         if not line or "未找到" in line:
             return
-        folder_name = line.replace("📁 ", "").strip()
+        folder_name = line.strip()
         folder_path = os.path.join(self.app.work_dir, folder_name)
         if not os.path.isdir(folder_path):
             return
@@ -474,7 +474,7 @@ class RenamePage(BasePage):
             self.file_list.addItem("（无匹配视频）")
             return
         for fp in self.current_videos:
-            self.file_list.addItem(f"🎬 {os.path.basename(fp)}")
+            self.file_list.addItem(f"{os.path.basename(fp)}")
 
         self.current_video_idx = 0
         self._reset_type_selection()
@@ -501,17 +501,17 @@ class RenamePage(BasePage):
         if not self.current_videos or self.current_video_idx >= len(self.current_videos):
             total = len(self.current_videos)
             folder_name = os.path.basename(self.current_folder) if self.current_folder else ""
-            self._log(f"✅ 文件夹处理完毕: {folder_name}（共 {total} 个）")
-            self.video_info_label.setText(f"✅ 全部完成！（{total}/{total}）")
+            self._log(f"文件夹处理完毕: {folder_name}（共 {total} 个）")
+            self.video_info_label.setText(f"全部完成！（{total}/{total}）")
             self.confirm_btn.setEnabled(False)
             self.skip_btn.setEnabled(False)
-            self.progress_label.setText(f"✅ 完成 {total} 个")
+            self.progress_label.setText(f"完成 {total} 个")
             if total and self.auto_upload.isChecked():
                 self._post_completed_folder()
             return
         path = self.current_videos[self.current_video_idx]
         if not os.path.exists(path):
-            self._log(f"⚠️ 文件不存在，自动跳过: {os.path.basename(path)}")
+            self._log(f"文件不存在，自动跳过: {os.path.basename(path)}")
             self.current_video_idx += 1
             self._load_current()
             return
@@ -536,7 +536,7 @@ class RenamePage(BasePage):
         self._set_title_mode("none")  # 默认不保留
 
         total = len(self.current_videos)
-        self.progress_label.setText(f"📹 {self.current_video_idx + 1} / {total}")
+        self.progress_label.setText(f"{self.current_video_idx + 1} / {total}")
 
         # 高亮当前文件
         for i in range(self.file_list.count()):
@@ -552,7 +552,7 @@ class RenamePage(BasePage):
         self._load_token = token
         self._thumb_pm = None
         self.thumb_label.clear()
-        self.video_info_label.setText(f"📄 {filename}\n⏱ 加载中...")
+        self.video_info_label.setText(f"{filename}\n加载中...")
 
         def work():
             info = get_video_info(video_path)
@@ -564,13 +564,13 @@ class RenamePage(BasePage):
                 return  # 已切换文件，丢弃过期结果
             info, thumb = result if result else ({}, None)
             if info.get("error"):
-                info_text = f"📄 {filename}\n⏱ 时间: {time_str}\n⚠️ 无法获取视频信息"
+                info_text = f"{filename}\n时间: {time_str}\n无法获取视频信息"
             else:
                 info_text = (
-                    f"📄 {filename}\n⏱ 时间: {time_str}\n"
-                    f"📏 {info.get('resolution', '?')} | {info.get('orientation', '?')}\n"
-                    f"⏳ {info.get('duration_str', '?')} | 🎞 {info.get('fps', '?')} fps\n"
-                    f"📦 {info.get('file_size_str', '?')} | 🎵 {info.get('audio_codec', '?')}"
+                    f"{filename}\n时间: {time_str}\n"
+                    f"{info.get('resolution', '?')} | {info.get('orientation', '?')}\n"
+                    f"{info.get('duration_str', '?')} | {info.get('fps', '?')} fps\n"
+                    f"{info.get('file_size_str', '?')} | {info.get('audio_codec', '?')}"
                 )
             self.video_info_label.setText(info_text)
 
@@ -592,13 +592,13 @@ class RenamePage(BasePage):
 
         # 检测是否已标准命名
         if self._is_standard_named(filename):
-            self.confirm_btn.setText("✏️ 重新命名（点击）")
+            self.confirm_btn.setText("重新命名（点击）")
             self.confirm_btn.setEnabled(True)
             self.skip_btn.setEnabled(True)
             self.skip_btn.setFocus()
-            self._log(f"⚠️ 已是标准命名: {filename}")
+            self._log(f"已是标准命名: {filename}")
         else:
-            self.confirm_btn.setText("✅ 确认重命名 (Enter)")
+            self.confirm_btn.setText("确认重命名 (Enter)")
             self.confirm_btn.setEnabled(True)
             self.skip_btn.setText("⏭ 跳过")
             self.skip_btn.setEnabled(True)
@@ -730,20 +730,20 @@ class RenamePage(BasePage):
         if self._busy or not (0 <= self.current_video_idx < len(self.current_videos)):
             return
         if not self._current_account():
-            self._log("⚠️ 请选择直播账户")
+            self._log("请选择直播账户")
             return
         if not self.type_order:
-            self._log("⚠️ 请至少选择一种直播类型")
+            self._log("请至少选择一种直播类型")
             return
         index = self.current_video_idx
         src = self.current_videos[index]
         new_name = self._build_filename()
         if Path(new_name).name != new_name or any(character in new_name for character in '<>:"/\\|?*'):
-            self._log("⚠️ 新文件名包含非法字符，请检查账户/类型/标题")
+            self._log("新文件名包含非法字符，请检查账户/类型/标题")
             return
         dst = os.path.join(os.path.dirname(src), new_name)
         if src != dst and os.path.exists(dst):
-            self._log(f"⚠️ 目标已存在: {new_name}")
+            self._log(f"目标已存在: {new_name}")
             return
         enabled = self.rename_extra_check.isChecked()
         info = self.rename_config.extra_info.strip()
@@ -761,14 +761,14 @@ class RenamePage(BasePage):
         def done(result, error):
             self._set_busy(False)
             if error:
-                self._log(f"❌ 重命名失败: {error}")
+                self._log(f"重命名失败: {error}")
                 return
             metadata_ok, message = result
             self.current_videos[index] = dst
             item = self.file_list.item(index)
             if item:
-                item.setText(f"🎬 {new_name}")
-            self._log(f"✅ {os.path.basename(src)} → {new_name}")
+                item.setText(f"{new_name}")
+            self._log(f"{os.path.basename(src)} → {new_name}")
             if message:
                 self._log(message)
             if metadata_ok:
@@ -867,9 +867,9 @@ class RenamePage(BasePage):
 
         # 上：账户列表 + 直播类型 + 直播平台 三列（均竖向卡片）
         cols = QHBoxLayout()
-        cols.addWidget(self._build_card_column("👤 账户列表", "account"), 1)
-        cols.addWidget(self._build_card_column("🎯 直播类型", "type"), 1)
-        cols.addWidget(self._build_card_column("📡 直播平台", "platform"), 1)
+        cols.addWidget(self._build_card_column("账户列表", "account"), 1)
+        cols.addWidget(self._build_card_column("直播类型", "type"), 1)
+        cols.addWidget(self._build_card_column("直播平台", "platform"), 1)
         outer.addLayout(cols, 1)
 
         # 其他设置：后缀 / 阈值 / 保存
@@ -886,7 +886,7 @@ class RenamePage(BasePage):
         self.threshold_entry.setText(str(self.rename_config.subtitle_match_threshold))
         of.addWidget(self.threshold_entry)
         of.addStretch(1)
-        save_btn = QPushButton("💾 保存设置")
+        save_btn = QPushButton("保存设置")
         save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self._save_params)
         of.addWidget(save_btn)
@@ -913,7 +913,7 @@ class RenamePage(BasePage):
         lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
         head.addWidget(lbl)
         head.addStretch(1)
-        add_btn = QPushButton("➕ 添加")
+        add_btn = QPushButton("添加")
         add_btn.clicked.connect(
             lambda: self._add_card_item(card_type))
         head.addWidget(add_btn)
@@ -939,14 +939,14 @@ class RenamePage(BasePage):
     def _mini_btn(self, text, slot, danger=False, tip=""):
         """小图标按钮：仅图标（无文字），带可选 tooltip（悬停提示）。
 
-        箭头类按钮的图标统一为 ⬆/⬇（Unicode 单色，符合整套 UI 风格）；
+        箭头类按钮统一使用 ↑/↓ 文字符号（Unicode 单色，符合整套 UI 风格）；
         删除按钮用 × (U+00D7)；尺寸 36×30 确保 × 图标清晰可辨（原 28×24
         字号太小，× 几乎看不见）；tip 不为空时挂 setToolTip。
         """
         b = QPushButton(text)
         b.setFixedSize(36, 30)
         b.setCursor(Qt.PointingHandCursor)
-        # 字号 16 让 ×/⬆/⬇ 在 36×30 框内居中且清晰
+        # 字号 16 让 ×/↑/↓ 在 36×30 框内居中且清晰
         b.setStyleSheet(
             "QPushButton { font-size: 16px; padding: 0px;"
             " border: 1px solid palette(mid); border-radius: 4px;"
@@ -987,12 +987,12 @@ class RenamePage(BasePage):
             name_lbl = QLabel(name)
             name_lbl.setStyleSheet("border: none; background: transparent;")
             h.addWidget(name_lbl, 1)
-            # 上移/下移统一用 ⬆/⬇ 图标，并加悬停提示；其他箭头位也保持一致
+            # 上移/下移用箭头文字，并加悬停提示；其他箭头位也保持一致
             h.addWidget(self._mini_btn(
-                "⬆", lambda _=False, idx=i: self._move_item(card_type, idx, -1),
+                "↑", lambda _=False, idx=i: self._move_item(card_type, idx, -1),
                 tip="上移"))
             h.addWidget(self._mini_btn(
-                "⬇", lambda _=False, idx=i: self._move_item(card_type, idx, 1),
+                "↓", lambda _=False, idx=i: self._move_item(card_type, idx, 1),
                 tip="下移"))
             h.addWidget(self._mini_btn(
                 "×", lambda _=False, nm=name: self._delete_card_item(card_type, nm),

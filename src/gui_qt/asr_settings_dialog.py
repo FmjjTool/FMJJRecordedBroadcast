@@ -235,7 +235,7 @@ class AsrSettingsDialog(QDialog):
 
     def _on_delete_failed(self, error: str):
         self._set_busy(False)
-        self.hint.setText(f"❌ 删除失败：{error[:120]}")
+        self.hint.setText(f"删除失败：{error[:120]}")
 
     def _run_download(self, work, success_msg: str):
         self._set_busy(True)
@@ -260,13 +260,13 @@ class AsrSettingsDialog(QDialog):
         self._cancel = None
         self._set_busy(False)
         self.progress.setValue(100)
-        self.hint.setText(f"✅ {message}")
+        self.hint.setText(f"{message}")
         self._refresh_status()
 
     def _on_failed(self, error: str):
         self._cancel = None
         self._set_busy(False)
-        self.hint.setText(f"❌ 下载失败：{error[:120]}")
+        self.hint.setText(f"下载失败：{error[:120]}")
 
     # ==================== 关闭 ====================
 

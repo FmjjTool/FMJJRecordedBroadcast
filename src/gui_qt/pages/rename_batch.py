@@ -197,10 +197,10 @@ class RenameBatchPage(BasePage):
         self.setAcceptDrops(True)
 
         head = QHBoxLayout()
-        head.addWidget(QLabel("✏️ 批量重命名", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("批量重命名", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 批量重命名 · 功能介绍", (
+        head.addWidget(attach_help_overlay(self, "批量重命名 · 功能介绍", (
             "<p><b>zRenamer 风格批量重命名：八类规则叠加 + 实时预览 + 撤销。</b></p>"
             "<p>· <b>加文件</b>：添加文件/文件夹（可包含子文件夹、支持直接拖入）；"
             "规则实时预览新文件名，确认后才执行</p>"
@@ -216,11 +216,11 @@ class RenameBatchPage(BasePage):
 
         # 工具栏
         bar = QHBoxLayout()
-        for text, fn in [("📄 添加文件", lambda: self._add(False)), ("📂 添加文件夹", lambda: self._add(True)),
-                         ("🧹 清空", self._clear), ("🔄 刷新预览", self._refresh),
+        for text, fn in [("添加文件", lambda: self._add(False)), ("添加文件夹", lambda: self._add(True)),
+                         ("清空", self._clear), ("刷新预览", self._refresh),
                          ("↩ 撤销上次", self._undo)]:
             b = QPushButton(text)
-            if text == "📄 添加文件":
+            if text == "添加文件":
                 b.setStyleSheet("background:#1976d2;color:white;")
             b.clicked.connect(fn)
             bar.addWidget(b)
@@ -256,7 +256,7 @@ class RenameBatchPage(BasePage):
         sel_all.clicked.connect(lambda: self.table.selectAll())
         invert = QPushButton("反选")
         invert.clicked.connect(self._invert)
-        run_btn = QPushButton("✅ 执行改名")
+        run_btn = QPushButton("执行改名")
         run_btn.setStyleSheet("background:#2e7d32;color:white;padding:6px 22px;font-weight:bold;")
         run_btn.clicked.connect(self._run)
         self.status = QLabel("")
@@ -721,16 +721,16 @@ class RenameBatchPage(BasePage):
                 try:
                     if os.path.exists(dst):
                         fail.append((item, "目标已存在"))
-                        item["status"] = "✗ 冲突"
+                        item["status"] = "冲突"
                         continue
                     os.rename(item["path"], dst)
                     self.history.append((dst, item["path"]))   # 撤销用
                     item["path"] = dst
-                    item["status"] = "✔"
+                    item["status"] = "成功"
                     ok += 1
                 except OSError as e:
                     fail.append((item, str(e)))
-                    item["status"] = "✗"
+                    item["status"] = "失败"
             return ok, fail
 
         def done(res, err):

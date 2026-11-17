@@ -163,7 +163,7 @@ def convert_one_file(
         result.success = True
         result.mode = "skip"
         if progress_callback:
-            progress_callback(f"📂 {rel}\n✅ 已存在，跳过")
+            progress_callback(f"{rel}\n已存在，跳过")
         return result
 
     # 独立临时文件既保证真实容器与扩展名一致，也避免删除同名用户视频。
@@ -178,7 +178,7 @@ def convert_one_file(
             pass
     
     if progress_callback:
-        progress_callback(f"📂 {rel}")
+        progress_callback(f"{rel}")
     
     max_retries = config.get("retry_count", 2) + 1
     for attempt in range(max_retries):
@@ -188,7 +188,7 @@ def convert_one_file(
         
         if attempt > 0:
             if progress_callback:
-                progress_callback(f"   🔄 第 {attempt} 次重试...")
+                progress_callback(f"   第 {attempt} 次重试...")
             time.sleep(config.get("retry_delay_seconds", 1))
         
         if tmp.exists():
@@ -223,12 +223,12 @@ def convert_one_file(
             result.success = True
             result.mode = "lossless"
             if progress_callback:
-                progress_callback("✅ 无损完成")
+                progress_callback("无损完成")
             return result
         
         if config.get("enable_encode_fallback", False) and not (should_stop and should_stop()):
             if progress_callback:
-                progress_callback("   ⚠️ 无损失败，转码中...")
+                progress_callback("   无损失败，转码中...")
             
             if tmp.exists():
                 try:
@@ -262,7 +262,7 @@ def convert_one_file(
                 result.success = True
                 result.mode = "encode"
                 if progress_callback:
-                    progress_callback("✅ 转码完成")
+                    progress_callback("转码完成")
                 return result
             else:
                 err_type = err_type_enc
@@ -280,11 +280,11 @@ def convert_one_file(
     if result.interrupted:
         result.mode = "interrupted"
         if progress_callback:
-            progress_callback("⏸️ 已中止")
+            progress_callback("已中止")
     else:
         result.mode = "failed"
         if progress_callback:
-            progress_callback(f"❌ 失败 [{result.error_type}]")
+            progress_callback(f"失败 [{result.error_type}]")
     
     return result
 

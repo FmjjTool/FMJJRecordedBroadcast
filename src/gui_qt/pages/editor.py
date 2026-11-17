@@ -159,7 +159,7 @@ class EditorPage(BasePage):
         root.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("🎬 视频操作")
+        title = QLabel("视频操作")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
         tip = QLabel("转换 / 切割 / 合并 / 压缩 / 提取轨道 / 截图")
@@ -177,15 +177,15 @@ class EditorPage(BasePage):
         left = QVBoxLayout()
         left.setSpacing(4)
         row1 = QHBoxLayout()
-        row1.addWidget(self._btn("🔍 扫描工作目录", self._scan_work_dir))
-        row1.addWidget(self._btn("📄 添加文件", self._add_files))
-        row1.addWidget(self._btn("📁 添加文件夹", self._add_folder))
+        row1.addWidget(self._btn("扫描工作目录", self._scan_work_dir))
+        row1.addWidget(self._btn("添加文件", self._add_files))
+        row1.addWidget(self._btn("添加文件夹", self._add_folder))
         left.addLayout(row1)
         row2 = QHBoxLayout()
-        row2.addWidget(self._btn("🔤 按名排序", self._sort_by_name, small=True))
-        row2.addWidget(self._btn("⬆", lambda: self._move(-1), small=True))
-        row2.addWidget(self._btn("⬇", lambda: self._move(1), small=True))
-        row2.addWidget(self._btn("🗑", self._delete_selected, small=True, danger=True))
+        row2.addWidget(self._btn("按名排序", self._sort_by_name, small=True))
+        row2.addWidget(self._btn("↑", lambda: self._move(-1), small=True))
+        row2.addWidget(self._btn("↓", lambda: self._move(1), small=True))
+        row2.addWidget(self._btn("×", self._delete_selected, small=True, danger=True))
         row2.addWidget(self._btn("清空", self._clear, small=True))
         left.addLayout(row2)
         self.file_list = QListWidget()
@@ -355,7 +355,7 @@ class EditorPage(BasePage):
         self.progress.setValue(0)
         prog_row = QHBoxLayout()
         prog_row.addWidget(self.progress, 1)
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "danger")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_all)
@@ -416,18 +416,18 @@ class EditorPage(BasePage):
                 self.files.append(f)
                 added.append(f)
         if added:
-            self._log(f"📥 添加 {len(added)} 个视频")
+            self._log(f"添加 {len(added)} 个视频")
             self._refresh_files(select=self.files.index(added[0]))
         else:
-            self._log("📥 无新增视频（重复或非视频文件已忽略）")
+            self._log("无新增视频（重复或非视频文件已忽略）")
 
     def add_dropped_folder(self, folder):
         found = [str(p) for p in find_videos_in(folder)]
         if found:
-            self._log(f"📁 从文件夹添加: {folder}")
+            self._log(f"从文件夹添加: {folder}")
             self.add_dropped_files(found)
         else:
-            self._log(f"📁 文件夹内没有视频: {folder}")
+            self._log(f"文件夹内没有视频: {folder}")
 
     def _add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -441,9 +441,9 @@ class EditorPage(BasePage):
         root = self._work_dir_start()
         found = [str(p) for p in find_videos_in(root)]
         if not found:
-            self._log(f"🔍 工作目录内没有视频: {root}")
+            self._log(f"工作目录内没有视频: {root}")
             return
-        self._log(f"🔍 扫描工作目录: {root} → {len(found)} 个视频")
+        self._log(f"扫描工作目录: {root} → {len(found)} 个视频")
         self.add_dropped_files(found)
 
     def _add_folder(self):
@@ -459,7 +459,7 @@ class EditorPage(BasePage):
         self.files.sort(key=lambda p: Path(p).name.lower())
         row = self.files.index(current) if current in self.files else 0
         self._refresh_files(select=row)
-        self._log("🔤 已按文件名排序")
+        self._log("已按文件名排序")
 
     def _delete_selected(self):
         rows = sorted({self.file_list.row(i) for i in self.file_list.selectedItems()},
@@ -605,7 +605,7 @@ class EditorPage(BasePage):
             self.play_btn.setText("▶ 播放")
         else:
             self.player.play()
-            self.play_btn.setText("⏸ 暂停")
+            self.play_btn.setText("暂停")
 
     def _seek_to(self, position_ms: int):
         if not self.current_path:
@@ -699,7 +699,7 @@ class EditorPage(BasePage):
             ("preserve_timestamps", "保留时间戳", True),
             ("enable_cache", "启用缓存", True),
             ("enable_encode_fallback", "无损失败转码", False),
-            ("delete_source_after_success", "成功后删源 ⚠️", False),
+            ("delete_source_after_success", "成功后删源", False),
         )):
             checkbox = QCheckBox(label)
             checkbox.setChecked(cfg.get(key, default))
@@ -714,7 +714,7 @@ class EditorPage(BasePage):
         self.convert_hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         v.addWidget(self.convert_hint)
         v.addStretch(1)
-        self.convert_tab_index = self.tabs.addTab(tab, "🔄 转换")
+        self.convert_tab_index = self.tabs.addTab(tab, "转换")
         self._refresh_convert_hint()
 
     def open_convert_tab(self):
@@ -738,7 +738,7 @@ class EditorPage(BasePage):
             return
         self._refresh_convert_hint()
         found = find_videos(root, self._cfg())
-        self._log(f"🔍 扫描完成，共找到 {len(found)} 个待转换视频")
+        self._log(f"扫描完成，共找到 {len(found)} 个待转换视频")
         self.add_dropped_files([str(p) for p in found])
 
     def _clear_convert_cache(self):
@@ -747,7 +747,7 @@ class EditorPage(BasePage):
         if QMessageBox.question(self, "清除转换缓存", "确定清除转换记录吗？不会删除视频文件。",
                                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             save_convert_cache({})
-            self._log("🗑 转换缓存已清除")
+            self._log("转换缓存已清除")
 
     def _start_convert(self):
         if self.running or not self.files:
@@ -757,7 +757,7 @@ class EditorPage(BasePage):
         cfg.update({key: widget.isChecked() for key, widget in self.convert_options.items()})
         paths = [Path(path).resolve() for path in self.files]
         work_root = Path(self.app.work_dir).resolve() if self.app.work_dir else None
-        self._begin(f"🔄 开始转换 {len(paths)} 个视频", "⏹ 停止将在当前 FFmpeg 操作结束后生效。")
+        self._begin(f"开始转换 {len(paths)} 个视频", "停止将在当前 FFmpeg 操作结束后生效。")
         cancel = self._cancel
         # 释放播放器占用，允许 Windows 上转换成功后删除源文件。
         self.player.stop()
@@ -778,7 +778,7 @@ class EditorPage(BasePage):
                         if cfg.get("enable_cache") and is_convert_cached(cache, src) and dst.exists():
                             stats["skipped"] += 1
                             outputs[str(src)] = str(dst)
-                            post_to_main(self._log, f"💾 缓存命中: {src.name}")
+                            post_to_main(self._log, f"缓存命中: {src.name}")
                         else:
                             result = convert_one_file(
                                 src, root, cfg,
@@ -794,7 +794,7 @@ class EditorPage(BasePage):
                                 update_convert_cache(cache, src, result.success, result.dst)
                     except Exception as exc:
                         stats["failed"] += 1
-                        post_to_main(self._log, f"❌ {src.name}: {exc}")
+                        post_to_main(self._log, f"{src.name}: {exc}")
                     post_to_main(self.progress.setValue, int((index + 1) / len(paths) * 100))
             finally:
                 if cfg.get("enable_cache"):
@@ -810,7 +810,7 @@ class EditorPage(BasePage):
             if err:
                 if self.current_path:
                     self._load_preview(self.current_path)
-                self._log(f"❌ 转换失败: {err}")
+                self._log(f"转换失败: {err}")
                 self.app.toast("转换失败，详情见日志", "error")
                 return
             stats, outputs = result
@@ -818,7 +818,7 @@ class EditorPage(BasePage):
             remaining = [outputs.get(str(Path(path).resolve()), path) for path in self.files]
             self.files = list(dict.fromkeys(path for path in remaining if Path(path).exists()))
             self._refresh_files(select=self.files.index(selected) if selected in self.files else 0)
-            self._log(f"{'⏹ 已停止' if stopped else '✅ 转换完成'}: 成功 {stats['success']} / "
+            self._log(f"{'已停止' if stopped else '转换完成'}: 成功 {stats['success']} / "
                       f"跳过 {stats['skipped']} / 失败 {stats['failed']}")
             if not stopped:
                 self.progress.setValue(100)
@@ -832,13 +832,13 @@ class EditorPage(BasePage):
         self.player.setSource(QUrl())
 
     def _on_player_error(self, *_args):
-        self._log("⚠️ 该格式无法内嵌预览（不影响切割/合并/提取）")
+        self._log("该格式无法内嵌预览（不影响切割/合并/提取）")
 
     # ==================== 片段 ====================
 
     def _set_start(self):
         self._pending_start = self.player.position() or self.slider.value()
-        self._log(f"🟢 起点: {_fmt_ms(self._pending_start)}")
+        self._log(f"起点: {_fmt_ms(self._pending_start)}")
 
     def _set_end(self):
         end = self.player.position() or self.slider.value()
@@ -852,7 +852,7 @@ class EditorPage(BasePage):
         self.segments.sort()
         self._pending_start = None
         self._refresh_segments()
-        self._log(f"✂ 已添加片段 {_fmt_ms(start)} → {_fmt_ms(end)}")
+        self._log(f"已添加片段 {_fmt_ms(start)} → {_fmt_ms(end)}")
 
     def _refresh_segments(self):
         self.seg_list.clear()
@@ -904,14 +904,14 @@ class EditorPage(BasePage):
         self.merge_name = QLineEdit()
         self.merge_name.setPlaceholderText("留空 = 合并_日期_时间")
         name_row.addWidget(self.merge_name, 1)
-        self.merge_btn = QPushButton("🧩 开始合并")
+        self.merge_btn = QPushButton("开始合并")
         self.merge_btn.setProperty("variant", "primary")
         self.merge_btn.clicked.connect(self._start_merge)
         name_row.addWidget(self.merge_btn)
         v.addLayout(name_row)
         v.addWidget(QLabel("合并按左侧列表顺序执行；参数不一致会提示，可改用「兼容转码」。"))
         v.addStretch(1)
-        self.tabs.addTab(tab, "🧩 合并")
+        self.tabs.addTab(tab, "合并")
 
     # ==================== 切割页签 ====================
 
@@ -947,7 +947,7 @@ class EditorPage(BasePage):
         self.cut_name = QLineEdit()
         self.cut_name.setPlaceholderText("留空 = 原文件名_片段合并")
         row2.addWidget(self.cut_name, 1)
-        self.cut_btn = QPushButton("✂ 开始切割")
+        self.cut_btn = QPushButton("开始切割")
         self.cut_btn.setProperty("variant", "primary")
         self.cut_btn.clicked.connect(self._start_cut)
         row2.addWidget(self.cut_btn)
@@ -982,7 +982,7 @@ class EditorPage(BasePage):
         self.det_min.setValue(0.5)
         self.det_min.setSuffix(" 秒")
         det_row.addWidget(self.det_min)
-        det_row.addWidget(self._btn("🔎 检测", self._start_detect, small=True))
+        det_row.addWidget(self._btn("检测", self._start_detect, small=True))
         det_row.addWidget(self._btn("生成片段", self._segments_from_points, small=True))
         det_row.addWidget(self._btn("清空切点", self._clear_points, small=True))
         det_row.addStretch(1)
@@ -1002,7 +1002,7 @@ class EditorPage(BasePage):
         exp_row.addStretch(1)
         v.addLayout(exp_row)
         v.addStretch(1)
-        self.tabs.addTab(tab, "✂ 切割")
+        self.tabs.addTab(tab, "切割")
 
     # ==================== 压缩页签 ====================
 
@@ -1034,11 +1034,11 @@ class EditorPage(BasePage):
         v.addLayout(row)
 
         row2 = QHBoxLayout()
-        self.cmp_btn = QPushButton("🗜 开始压缩")
+        self.cmp_btn = QPushButton("开始压缩")
         self.cmp_btn.setProperty("variant", "primary")
         self.cmp_btn.clicked.connect(self._start_compress)
         row2.addWidget(self.cmp_btn)
-        self.cmp_stop = QPushButton("⏹ 停止（当前文件完成后）")
+        self.cmp_stop = QPushButton("停止（当前文件完成后）")
         self.cmp_stop.setProperty("variant", "danger")
         self.cmp_stop.setEnabled(False)
         self.cmp_stop.clicked.connect(lambda: self._compress_queue.clear())
@@ -1049,7 +1049,7 @@ class EditorPage(BasePage):
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
         v.addStretch(1)
-        self.tabs.addTab(tab, "🗜 压缩")
+        self.tabs.addTab(tab, "压缩")
 
     # ==================== 轨道页签 ====================
 
@@ -1069,15 +1069,15 @@ class EditorPage(BasePage):
         v.addWidget(self.track_table, 1)
 
         row = QHBoxLayout()
-        row.addWidget(self._btn("🔄 重新读取", self._refresh_tracks, small=True))
-        row.addWidget(self._btn("⬇ 提取选中", self._extract_selected_tracks, small=True))
-        row.addWidget(self._btn("⬇ 提取全部", self._extract_all_tracks, small=True))
-        row.addWidget(self._btn("🗑 删除选中轨道", self._remove_tracks, small=True, danger=True))
+        row.addWidget(self._btn("重新读取", self._refresh_tracks, small=True))
+        row.addWidget(self._btn("提取选中", self._extract_selected_tracks, small=True))
+        row.addWidget(self._btn("提取全部", self._extract_all_tracks, small=True))
+        row.addWidget(self._btn("删除选中轨道", self._remove_tracks, small=True, danger=True))
         row.addStretch(1)
         v.addLayout(row)
 
         ext_row = QHBoxLayout()
-        ext_row.addWidget(self._btn("🎵 选择外部音轨", self._pick_ext_audio, small=True))
+        ext_row.addWidget(self._btn("选择外部音轨", self._pick_ext_audio, small=True))
         self.ext_audio_label = QLabel("未选择")
         self.ext_audio_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         ext_row.addWidget(self.ext_audio_label, 1)
@@ -1086,7 +1086,7 @@ class EditorPage(BasePage):
         v.addLayout(ext_row)
 
         sub_row = QHBoxLayout()
-        sub_row.addWidget(self._btn("💬 选择字幕", self._pick_ext_sub, small=True))
+        sub_row.addWidget(self._btn("选择字幕", self._pick_ext_sub, small=True))
         self.ext_sub_label = QLabel("未选择")
         self.ext_sub_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         sub_row.addWidget(self.ext_sub_label, 1)
@@ -1097,7 +1097,7 @@ class EditorPage(BasePage):
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
-        self.tabs.addTab(tab, "🎵 轨道")
+        self.tabs.addTab(tab, "轨道")
 
     # ==================== 元数据页签 ====================
 
@@ -1135,8 +1135,8 @@ class EditorPage(BasePage):
         self.meta_rotation.addItem("270°", 270)
         rot_row.addWidget(self.meta_rotation)
         rot_row.addStretch(1)
-        rot_row.addWidget(self._btn("🔄 读取当前", self._refresh_meta, small=True))
-        rot_row.addWidget(self._btn("💾 写入新文件", self._write_meta, small=True))
+        rot_row.addWidget(self._btn("读取当前", self._refresh_meta, small=True))
+        rot_row.addWidget(self._btn("写入新文件", self._write_meta, small=True))
         v.addLayout(rot_row)
 
         hint = QLabel("写入采用重新封装（-c copy），不改画质；mp4/mkv 支持元数据，"
@@ -1145,7 +1145,7 @@ class EditorPage(BasePage):
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch(1)
-        self.tabs.addTab(tab, "🏷 元数据")
+        self.tabs.addTab(tab, "元数据")
 
     # ==================== 截图页签 ====================
 
@@ -1174,14 +1174,14 @@ class EditorPage(BasePage):
         v.addLayout(row)
 
         row2 = QHBoxLayout()
-        self.shot_btn = QPushButton("📷 当前帧")
+        self.shot_btn = QPushButton("当前帧")
         self.shot_btn.clicked.connect(self._shot_current)
         row2.addWidget(self.shot_btn)
-        self.shot_copy_btn = QPushButton("📋 复制当前帧")
+        self.shot_copy_btn = QPushButton("复制当前帧")
         self.shot_copy_btn.setToolTip("不落盘，直接把当前画面以 PNG 复制到剪贴板")
         self.shot_copy_btn.clicked.connect(self._copy_current_frame)
         row2.addWidget(self.shot_copy_btn)
-        self.shot_all_btn = QPushButton("🎞 按间隔抽帧")
+        self.shot_all_btn = QPushButton("按间隔抽帧")
         self.shot_all_btn.setProperty("variant", "primary")
         self.shot_all_btn.clicked.connect(self._shot_every)
         row2.addWidget(self.shot_all_btn)
@@ -1194,7 +1194,7 @@ class EditorPage(BasePage):
         hint2.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint2)
         v.addStretch(1)
-        self.tabs.addTab(tab, "📷 截图")
+        self.tabs.addTab(tab, "截图")
 
     # ==================== 合并执行 ====================
 
@@ -1219,25 +1219,25 @@ class EditorPage(BasePage):
         paths = [Path(f) for f in self.files]
         mode = self.merge_mode.currentData() or MODE_COPY
         out_path = self._merge_output()
-        self._begin(f"🧩 开始合并 {len(paths)} 个文件（{'无损' if mode == MODE_COPY else '转码'}）",
-                    f"📁 输出: {out_path}")
+        self._begin(f"开始合并 {len(paths)} 个文件（{'无损' if mode == MODE_COPY else '转码'}）",
+                    f"输出: {out_path}")
 
         def work():
             infos = [probe_media(p) for p in paths]
             problems = check_compatibility(infos)
             if problems:
-                post_to_main(self._log, f"⚠️ 检测到 {len(problems)} 项参数差异：")
+                post_to_main(self._log, f"检测到 {len(problems)} 项参数差异：")
                 for p in problems[:10]:
                     post_to_main(self._log, f"   · {p}")
                 if mode == MODE_COPY:
-                    post_to_main(self._log, "⚠️ 无损拼接可能失败/花屏，建议改用「兼容转码」")
+                    post_to_main(self._log, "无损拼接可能失败/花屏，建议改用「兼容转码」")
             else:
-                post_to_main(self._log, "✅ 编码参数一致")
+                post_to_main(self._log, "编码参数一致")
             return concat_media(paths, out_path, mode,
                                 progress=lambda p, m: post_to_main(self._on_progress, p, m),
                                 cancel=self._cancel.is_set)
 
-        self._run(work, lambda r: f"✅ 合并完成: {Path(r).name}")
+        self._run(work, lambda r: f"合并完成: {Path(r).name}")
 
     # ==================== 切割执行 ====================
 
@@ -1266,8 +1266,8 @@ class EditorPage(BasePage):
         if not Path(merged_name).suffix:
             merged_name += ".mp4"
 
-        self._begin(f"✂ 开始切割（{len(segments)} 段，{'精确' if mode == 'precise' else '无损'}）",
-                    f"📁 输出: {out_dir}")
+        self._begin(f"开始切割（{len(segments)} 段，{'精确' if mode == 'precise' else '无损'}）",
+                    f"输出: {out_dir}")
 
         def work():
             return cut_segments(src, segments, out_dir, mode, merge=merge,
@@ -1275,7 +1275,7 @@ class EditorPage(BasePage):
                                 progress=lambda p, m: post_to_main(self._on_progress, p, m),
                                 cancel=self._cancel.is_set)
 
-        self._run(work, lambda r: f"✅ 切割完成: " + ", ".join(p.name for p in r))
+        self._run(work, lambda r: f"切割完成: " + ", ".join(p.name for p in r))
 
     # ==================== 自动检测 / 片段导出 ====================
 
@@ -1308,7 +1308,7 @@ class EditorPage(BasePage):
         threshold = self.det_thresh.value()
         min_sec = self.det_min.value()
         label = self.det_type.currentText()
-        self._begin(f"🔎 检测{label}（阈值 {threshold:g}）", "")
+        self._begin(f"检测{label}（阈值 {threshold:g}）", "")
 
         def work():
             if kind == "silence":
@@ -1335,7 +1335,7 @@ class EditorPage(BasePage):
         self.points_list.clear()
         for idx, point in enumerate(self.detect_points, 1):
             self.points_list.addItem(f"{idx}. {_fmt_ms(point)}")
-        return f"✅ 检测完成：{len(self.detect_points)} 个切点"
+        return f"检测完成：{len(self.detect_points)} 个切点"
 
     def _segments_from_points(self):
         if not self.detect_points:
@@ -1352,7 +1352,7 @@ class EditorPage(BasePage):
             return
         self.segments = segments_from_points(self.detect_points, duration)
         self._refresh_segments()
-        self._log(f"✂ 已按切点生成 {len(self.segments)} 个片段")
+        self._log(f"已按切点生成 {len(self.segments)} 个片段")
 
     def _clear_points(self):
         self.detect_points = []
@@ -1371,7 +1371,7 @@ class EditorPage(BasePage):
         if not path:
             return
         export_segments_csv(self.segments, path)
-        self._log(f"📄 已导出 CSV: {path.name}")
+        self._log(f"已导出 CSV: {path.name}")
         self.app.toast(f"已导出: {path.name}", "success")
 
     def _export_edl(self):
@@ -1379,7 +1379,7 @@ class EditorPage(BasePage):
         if not path:
             return
         export_edl(self.segments, path)
-        self._log(f"📄 已导出 EDL: {path.name}")
+        self._log(f"已导出 EDL: {path.name}")
         self.app.toast(f"已导出: {path.name}", "success")
 
     def _export_chapters(self):
@@ -1387,7 +1387,7 @@ class EditorPage(BasePage):
         if not path:
             return
         export_chapters(self.segments, path)
-        self._log(f"📄 已导出章节文件: {path.name}")
+        self._log(f"已导出章节文件: {path.name}")
         self.app.toast(f"已导出: {path.name}", "success")
 
     def _import_csv(self):
@@ -1401,7 +1401,7 @@ class EditorPage(BasePage):
             self.app.toast(f"导入失败: {exc}", "error")
             return
         self._refresh_segments()
-        self._log(f"📄 已导入 {len(self.segments)} 个片段: {Path(path).name}")
+        self._log(f"已导入 {len(self.segments)} 个片段: {Path(path).name}")
 
     def _write_chapters(self):
         if self.running:
@@ -1413,9 +1413,9 @@ class EditorPage(BasePage):
         ext = src.suffix if src.suffix.lower() in (".mp4", ".mkv", ".mov") else ".mkv"
         out = unique_output_path(self._output_dir() / f"{src.stem}_章节{ext}")
         segments = list(self.segments)
-        self._begin(f"📑 写入章节到视频（{len(segments)} 个片段）", f"📁 输出: {out}")
+        self._begin(f"写入章节到视频（{len(segments)} 个片段）", f"输出: {out}")
         self._run(lambda: write_chapters(src, segments, out),
-                  lambda r: f"✅ 章节已写入: {Path(r).name}")
+                  lambda r: f"章节已写入: {Path(r).name}")
 
     # ==================== 压缩执行 ====================
 
@@ -1449,15 +1449,15 @@ class EditorPage(BasePage):
         self.cmp_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self._refresh_action_buttons()
-        self._log(f"🗜 开始压缩 {len(self._compress_queue)} 个文件（{preset[0]}）")
+        self._log(f"开始压缩 {len(self._compress_queue)} 个文件（{preset[0]}）")
         self._compress_next()
 
     def _compress_next(self):
         if not self._compress_queue or (self._cancel and self._cancel.is_set()):
-            self._finish_run("✅ 压缩结束")
+            self._finish_run("压缩结束")
             return
         path = self._compress_queue.pop(0)
-        self._log(f"📂 压缩: {Path(path).name}")
+        self._log(f"压缩: {Path(path).name}")
         thread = MediaCompressThread(Path(path), self._compress_options, self)
         self._compress_thread = thread
         thread.progress.connect(self._log)
@@ -1476,7 +1476,7 @@ class EditorPage(BasePage):
             self.progress.setFormat(f"{percent:.0f}% {speed}")
 
     def _on_compress_failed(self, message: str):
-        self._log(f"❌ 压缩失败: {message[:160]}")
+        self._log(f"压缩失败: {message[:160]}")
         self._compress_next()
 
     # ==================== 轨道 ====================
@@ -1488,7 +1488,7 @@ class EditorPage(BasePage):
         try:
             tracks = probe_tracks(Path(self.current_path))
         except Exception as exc:  # noqa: BLE001
-            self._log(f"⚠️ 读取轨道失败: {exc}")
+            self._log(f"读取轨道失败: {exc}")
             return
         self.track_table.setRowCount(len(tracks))
         for row, stream in enumerate(tracks):
@@ -1526,8 +1526,8 @@ class EditorPage(BasePage):
                 outputs.append(extract_track(src, stream, out_dir))
             return outputs
 
-        self._begin(f"⬇ 提取 {len(streams)} 条轨道", "")
-        self._run(work, lambda r: "✅ 已提取: " + ", ".join(p.name for p in r))
+        self._begin(f"提取 {len(streams)} 条轨道", "")
+        self._run(work, lambda r: "已提取: " + ", ".join(p.name for p in r))
 
     def _extract_all_tracks(self):
         if not self.current_path:
@@ -1535,12 +1535,12 @@ class EditorPage(BasePage):
             return
         src = Path(self.current_path)
         out_dir = self._output_dir()
-        self._begin("⬇ 提取全部轨道", "")
+        self._begin("提取全部轨道", "")
         self._run(
             lambda: extract_all_tracks(
                 src, out_dir,
                 progress=lambda p, m: post_to_main(self._on_progress, p, m)),
-            lambda r: "✅ 已提取: " + ", ".join(p.name for p in r))
+            lambda r: "已提取: " + ", ".join(p.name for p in r))
 
     # ==================== 轨道增删替换 ====================
 
@@ -1578,10 +1578,10 @@ class EditorPage(BasePage):
         tag = "替换音轨" if replace else "追加音轨"
         out = unique_output_path(self._output_dir() / f"{src.stem}_{tag}{ext}")
         audio_file = Path(self.ext_audio_path)
-        self._begin(f"🎵 {tag}: {audio_file.name}", f"📁 输出: {out}")
+        self._begin(f"{tag}: {audio_file.name}", f"输出: {out}")
         self._run(
             lambda: add_external_audio(src, audio_file, out, replace=replace),
-            lambda r: f"✅ {tag}完成: {Path(r).name}")
+            lambda r: f"{tag}完成: {Path(r).name}")
 
     def _apply_ext_sub(self):
         if self.running:
@@ -1596,9 +1596,9 @@ class EditorPage(BasePage):
         ext = src.suffix if src.suffix.lower() in (".mp4", ".mkv", ".mov") else ".mkv"
         out = unique_output_path(self._output_dir() / f"{src.stem}_加字幕{ext}")
         sub_file = Path(self.ext_sub_path)
-        self._begin(f"💬 添加字幕: {sub_file.name}", f"📁 输出: {out}")
+        self._begin(f"添加字幕: {sub_file.name}", f"输出: {out}")
         self._run(lambda: add_external_subtitle(src, sub_file, out),
-                  lambda r: f"✅ 字幕已添加: {Path(r).name}")
+                  lambda r: f"字幕已添加: {Path(r).name}")
 
     def _remove_tracks(self):
         if self.running:
@@ -1618,9 +1618,9 @@ class EditorPage(BasePage):
         ext = src.suffix if src.suffix.lower() in (".mp4", ".mkv", ".mov") else ".mkv"
         out = unique_output_path(self._output_dir() / f"{src.stem}_删轨{ext}")
         indices = [int(s.get("index")) for s in streams]
-        self._begin(f"🗑 删除 {len(indices)} 条轨道", f"📁 输出: {out}")
+        self._begin(f"删除 {len(indices)} 条轨道", f"输出: {out}")
         self._run(lambda: remove_tracks(src, indices, out),
-                  lambda r: f"✅ 已删除轨道: {Path(r).name}")
+                  lambda r: f"已删除轨道: {Path(r).name}")
 
     # ==================== 元数据 ====================
 
@@ -1630,7 +1630,7 @@ class EditorPage(BasePage):
         try:
             meta = read_metadata(Path(self.current_path))
         except Exception as exc:  # noqa: BLE001
-            self._log(f"⚠️ 读取元数据失败: {exc}")
+            self._log(f"读取元数据失败: {exc}")
             return
         self.meta_title.setText(meta.get("title", ""))
         self.meta_artist.setText(meta.get("artist", ""))
@@ -1655,9 +1655,9 @@ class EditorPage(BasePage):
             "date": self.meta_date.text().strip(),
         }
         rotation = self.meta_rotation.currentData()
-        self._begin("🏷 写入元数据", f"📁 输出: {out}")
+        self._begin("写入元数据", f"输出: {out}")
         self._run(lambda: write_metadata(src, out, tags, rotation),
-                  lambda r: f"✅ 元数据已写入: {Path(r).name}")
+                  lambda r: f"元数据已写入: {Path(r).name}")
 
     # ==================== 截图 ====================
 
@@ -1673,7 +1673,7 @@ class EditorPage(BasePage):
         except Exception as exc:  # noqa: BLE001
             self.app.toast(f"截图失败: {exc}", "error")
             return
-        self._log(f"📷 已截图: {out.name}")
+        self._log(f"已截图: {out.name}")
         if self.shot_copy_cb.isChecked():
             self._copy_frame(src, position, saved_name=out.name)
         else:
@@ -1705,10 +1705,10 @@ class EditorPage(BasePage):
             size = f"{image.width()}×{image.height()}"
             if saved_name:
                 self.app.toast(f"截图已保存并复制: {saved_name}", "success")
-                self._log(f"📋 同时复制到剪贴板（{size}）")
+                self._log(f"同时复制到剪贴板（{size}）")
             else:
                 self.app.toast(f"已复制当前帧到剪贴板（{size}）", "success")
-                self._log(f"📋 复制当前帧 {_fmt_time(position)} → 剪贴板（{size}）")
+                self._log(f"复制当前帧 {_fmt_time(position)} → 剪贴板（{size}）")
 
         run_bg(job, done)
 
@@ -1721,13 +1721,13 @@ class EditorPage(BasePage):
         src = Path(self.current_path)
         interval = self.shot_interval.value()
         out_dir = self._output_dir() / f"{src.stem}_frames"
-        self._begin(f"🎞 按 {interval}s 间隔抽帧", f"📁 输出: {out_dir}")
+        self._begin(f"按 {interval}s 间隔抽帧", f"输出: {out_dir}")
         self._run(
             lambda: snapshot_every(
                 src, interval, out_dir,
                 progress=lambda p, m: post_to_main(self._on_progress, p, m),
                 cancel=self._cancel.is_set),
-            lambda r: f"✅ 已导出 {len(r)} 帧")
+            lambda r: f"已导出 {len(r)} 帧")
 
     # ==================== 运行框架 ====================
 
@@ -1748,7 +1748,7 @@ class EditorPage(BasePage):
             self._cancel.set()
         self._compress_queue.clear()
         self.stop_btn.setEnabled(False)
-        self._log("⏹ 已请求停止...")
+        self._log("已请求停止...")
 
     def _on_progress(self, percent: int, message: str):
         self.progress.setValue(max(0, min(100, int(percent))))
@@ -1766,9 +1766,9 @@ class EditorPage(BasePage):
             self._refresh_action_buttons()
             if err:
                 if "已停止" in str(err):
-                    self._log("⏹ 已停止")
+                    self._log("已停止")
                 else:
-                    self._log(f"❌ 失败: {str(err)[:200]}")
+                    self._log(f"失败: {str(err)[:200]}")
                     self.app.toast("操作失败，详情见日志", "error")
                 return
             self.progress.setValue(100)

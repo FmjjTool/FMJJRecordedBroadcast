@@ -44,8 +44,8 @@ class LyricsToolPage(BasePage):
         layout.setContentsMargins(6, 6, 6, 6)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
-        self.tabs.addTab(self._build_convert_tab(), "🔄 转换")
-        self.tabs.addTab(self._build_krcd_tab(), "🔑 KRCD工具")
+        self.tabs.addTab(self._build_convert_tab(), "转换")
+        self.tabs.addTab(self._build_krcd_tab(), "KRCD工具")
 
     def _build_convert_tab(self):
         w = QWidget()
@@ -53,10 +53,10 @@ class LyricsToolPage(BasePage):
         v.setContentsMargins(0, 0, 0, 0)
 
         frow = QHBoxLayout()
-        frow.addWidget(QPushButton("📄 选择歌词文件", clicked=self._select_files))
-        frow.addWidget(QPushButton("📁 选择文件夹", clicked=self._select_folder))
-        frow.addWidget(QPushButton("📂 指定工作目录", clicked=self._set_work_dir))
-        self.input_toggle = QPushButton("✍️ 输入歌词")
+        frow.addWidget(QPushButton("选择歌词文件", clicked=self._select_files))
+        frow.addWidget(QPushButton("选择文件夹", clicked=self._select_folder))
+        frow.addWidget(QPushButton("指定工作目录", clicked=self._set_work_dir))
+        self.input_toggle = QPushButton("输入歌词")
         self.input_toggle.setCheckable(True)
         self.input_toggle.toggled.connect(lambda c: self.input_area.setVisible(c))
         frow.addWidget(self.input_toggle)
@@ -65,14 +65,14 @@ class LyricsToolPage(BasePage):
         frow.addWidget(self.work_dir_label)
         frow.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        frow.addWidget(attach_help_overlay(self, "❓ 歌词转换 · 功能介绍", (
+        frow.addWidget(attach_help_overlay(self, "歌词转换 · 功能介绍", (
             "<p><b>歌词格式转换 + 酷狗 KRC 加解密，两个工具。</b></p>"
-            "<p>· <b>🔄 转换</b>：LRC / KRC(酷狗) / KSC(酷我) / QRC(QQ) / TRC·ELRC → "
+            "<p>· <b>转换</b>：LRC / KRC(酷狗) / KSC(酷我) / QRC(QQ) / TRC·ELRC → "
             "纯文字 TXT / LRC / SRT / ASS / KSC 逐字</p>"
-            "<p>· <b>输入方式</b>：选择歌词文件 / 选择文件夹（批量）/ ✍️ 直接粘贴歌词文本"
+            "<p>· <b>输入方式</b>：选择歌词文件 / 选择文件夹（批量）/ 直接粘贴歌词文本"
             "（按 LRC 处理）；可指定工作目录，输出统一存到工作目录</p>"
             "<p>· 支持同目录/日期文件夹等输出选项（按 config 持久化）</p>"
-            "<p>· <b>🔑 KRCD工具</b>：KRC（酷狗加密）↔ KRCD（明文）双向转换——"
+            "<p>· <b>KRCD工具</b>：KRC（酷狗加密）↔ KRCD（明文）双向转换——"
             "解密为可读明文，或把明文加密回 KRC 放回酷狗</p>"
             "<p>· 回车快捷：第一次回车=扫描/选择，第二次回车=开始转换</p>")))
         v.addLayout(frow)
@@ -88,11 +88,11 @@ class LyricsToolPage(BasePage):
         self.input_text.setMaximumHeight(120)
         iv.addWidget(self.input_text)
         irow = QHBoxLayout()
-        input_btn = QPushButton("🔄 转换输入内容")
+        input_btn = QPushButton("转换输入内容")
         input_btn.setProperty("variant", "primary")
         input_btn.clicked.connect(self._convert_input)
         irow.addWidget(input_btn)
-        clr_btn = QPushButton("🗑 清空输入")
+        clr_btn = QPushButton("清空输入")
         clr_btn.clicked.connect(self.input_text.clear)
         irow.addWidget(clr_btn)
         ihint = QLabel("（粘贴内容按 LRC 处理，输出到工作目录）")
@@ -120,8 +120,8 @@ class LyricsToolPage(BasePage):
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("已识别歌词文件:"))
-        bar.addWidget(QPushButton("☑ 全选", clicked=lambda: self._sel("all")))
-        bar.addWidget(QPushButton("🔄 反选", clicked=lambda: self._sel("invert")))
+        bar.addWidget(QPushButton("全选", clicked=lambda: self._sel("all")))
+        bar.addWidget(QPushButton("反选", clicked=lambda: self._sel("invert")))
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._sel("none")))
         bar.addStretch(1)
         v.addLayout(bar)
@@ -130,7 +130,7 @@ class LyricsToolPage(BasePage):
         v.addWidget(self.lyr_list)
 
         conv_row = QHBoxLayout()
-        conv_btn = QPushButton("🔄 开始转换")
+        conv_btn = QPushButton("开始转换")
         conv_btn.setProperty("variant", "primary")
         conv_btn.clicked.connect(self._convert)
         conv_row.addWidget(conv_btn)
@@ -150,8 +150,8 @@ class LyricsToolPage(BasePage):
         v.setContentsMargins(0, 0, 0, 0)
 
         frow = QHBoxLayout()
-        frow.addWidget(QPushButton("📄 选择文件", clicked=self._krcd_select_files))
-        frow.addWidget(QPushButton("📁 选择文件夹", clicked=self._krcd_select_folder))
+        frow.addWidget(QPushButton("选择文件", clicked=self._krcd_select_files))
+        frow.addWidget(QPushButton("选择文件夹", clicked=self._krcd_select_folder))
         frow.addStretch(1)
         v.addLayout(frow)
         self.krcd_count = QLabel("未选择文件")
@@ -173,8 +173,8 @@ class LyricsToolPage(BasePage):
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("文件列表:"))
-        bar.addWidget(QPushButton("☑ 全选", clicked=lambda: self._krcd_sel("all")))
-        bar.addWidget(QPushButton("🔄 反选", clicked=lambda: self._krcd_sel("invert")))
+        bar.addWidget(QPushButton("全选", clicked=lambda: self._krcd_sel("all")))
+        bar.addWidget(QPushButton("反选", clicked=lambda: self._krcd_sel("invert")))
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._krcd_sel("none")))
         bar.addStretch(1)
         v.addLayout(bar)
@@ -183,7 +183,7 @@ class LyricsToolPage(BasePage):
         v.addWidget(self.krcd_list)
 
         run_row = QHBoxLayout()
-        run = QPushButton("▶️ 执行")
+        run = QPushButton("▶ 执行")
         run.setProperty("variant", "primary")
         run.clicked.connect(self._krcd_run)
         run_row.addWidget(run)
@@ -237,7 +237,7 @@ class LyricsToolPage(BasePage):
         if not d:
             return
         self.work_dir = d
-        self.work_dir_label.setText(f"📂 {d}")
+        self.work_dir_label.setText(f"{d}")
         self.work_dir_label.setStyleSheet("color: palette(link); font-size: 10px;")
         self._scan_dir(d)
 
@@ -250,7 +250,7 @@ class LyricsToolPage(BasePage):
 
     def _scan_dir(self, d):
         if not os.path.isdir(d):
-            self._log("⚠️ 目录不存在")
+            self._log("目录不存在")
             return
         self.input_files = []
         for root, _d, files in os.walk(d):
@@ -260,7 +260,7 @@ class LyricsToolPage(BasePage):
         self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件")
         self._log_scanned()
         if not self.input_files:
-            self._log(f"⚠️ 该目录下未找到歌词文件\n   支持: {', '.join(sorted(self.SUPPORTED_EXTS))}")
+            self._log(f"该目录下未找到歌词文件\n   支持: {', '.join(sorted(self.SUPPORTED_EXTS))}")
 
     # ---- 拖放 ----
     def add_dropped_files(self, files):
@@ -272,11 +272,11 @@ class LyricsToolPage(BasePage):
                 added.append(os.path.basename(f))
         if added:
             self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件（+{len(added)}）")
-            self._log(f"📥 拖放添加 {len(added)} 个歌词文件:")
+            self._log(f"拖放添加 {len(added)} 个歌词文件:")
             for n in added:
                 self._log(f"  + {n}")
         else:
-            self._log("📥 拖放（无新增歌词文件）")
+            self._log("拖放（无新增歌词文件）")
         self._refresh_list()
 
     def add_dropped_folder(self, folder):
@@ -288,10 +288,10 @@ class LyricsToolPage(BasePage):
                     self.input_files.append(fp)
                     added += 1
         self.work_dir = folder
-        self.work_dir_label.setText(f"📂 {folder}")
+        self.work_dir_label.setText(f"{folder}")
         self.work_dir_label.setStyleSheet("color: palette(link); font-size: 10px;")
         self.file_count_label.setText(f"已识别 {len(self.input_files)} 个文件（+{added}）")
-        self._log(f"📥 拖放文件夹: {folder}\n   新增 {added} 个歌词文件")
+        self._log(f"拖放文件夹: {folder}\n   新增 {added} 个歌词文件")
         self._refresh_list()
 
     def _log_scanned(self):
@@ -299,10 +299,10 @@ class LyricsToolPage(BasePage):
         self._refresh_list()
         if not self.input_files:
             return
-        self._log(f"📂 已选择 {len(self.input_files)} 个歌词文件:")
+        self._log(f"已选择 {len(self.input_files)} 个歌词文件:")
         for i, fp in enumerate(self.input_files, 1):
             self._log(f"  [{i}] {os.path.basename(fp)}")
-        self._log("💡 勾选要转换的文件，选择输出格式后按「开始转换」")
+        self._log("勾选要转换的文件，选择输出格式后按「开始转换」")
 
     def _refresh_list(self):
         self.lyr_list.clear()
@@ -341,11 +341,11 @@ class LyricsToolPage(BasePage):
                     mode = "w" if isinstance(data, str) else "wb"
                     with open(out_path, mode, encoding="utf-8" if mode == "w" else None) as f:
                         f.write(data)
-                    self._log(f"  ✅ {name} → {of['filename']}")
+                    self._log(f"  {name} → {of['filename']}")
                 return True
-            self._log(f"  ❌ {name}: {r['message']}")
+            self._log(f"  {name}: {r['message']}")
         except Exception as e:
-            self._log(f"  ❌ {name}: {e}")
+            self._log(f"  {name}: {e}")
         return False
 
     def _convert_input(self):
@@ -364,13 +364,13 @@ class LyricsToolPage(BasePage):
         with open(src, "w", encoding="utf-8") as f:
             f.write(text + "\n")
         self.log_text.clear()
-        self._log(f"✍️ 已保存输入内容: {src}")
-        self._log(f"🔄 转换输入内容 → {self.fmt_var.upper()} ...")
+        self._log(f"已保存输入内容: {src}")
+        self._log(f"转换输入内容 → {self.fmt_var.upper()} ...")
         ok = self._convert_one(src, self.fmt_var)
         if ok:
-            self._log("\n✅ 输入内容转换完成")
+            self._log("\n输入内容转换完成")
         else:
-            self._log("\n❌ 输入内容转换失败")
+            self._log("\n输入内容转换失败")
         self.result_label.setText("输入转换 " + ("成功" if ok else "失败"))
 
     def _convert(self):
@@ -380,12 +380,12 @@ class LyricsToolPage(BasePage):
             return
         out_fmt = self.fmt_var
         self.log_text.clear()
-        self._log(f"🔄 开始转换 {len(to_convert)} 个文件 → {out_fmt.upper()} ...\n")
+        self._log(f"开始转换 {len(to_convert)} 个文件 → {out_fmt.upper()} ...\n")
         success = 0
         for fp in to_convert:
             if self._convert_one(fp, out_fmt):
                 success += 1
-        self._log(f"\n✅ 转换完成: {success}/{len(to_convert)} 成功")
+        self._log(f"\n转换完成: {success}/{len(to_convert)} 成功")
         self.result_label.setText(f"完成 {success}/{len(to_convert)}")
 
     # ---- KRCD tab ----
@@ -440,7 +440,7 @@ class LyricsToolPage(BasePage):
             return
         mode = self.krcd_mode
         self.krcd_log.clear()
-        self._krcd_log(f"🔄 开始{'解密 KRC→KRCD' if mode == 'decrypt' else '加密 KRCD→KRC'}，共 {len(to_run)} 个文件")
+        self._krcd_log(f"开始{'解密 KRC→KRCD' if mode == 'decrypt' else '加密 KRCD→KRC'}，共 {len(to_run)} 个文件")
         success = 0
         for fp in to_run:
             name = os.path.basename(fp)
@@ -454,7 +454,7 @@ class LyricsToolPage(BasePage):
                         plain = self.converter.krc_to_krcd(f.read())
                     with open(fp + ".krcd", "w", encoding="utf-8") as f:
                         f.write(plain)
-                    self._krcd_log(f"  ✅ {name} → {name}.krcd")
+                    self._krcd_log(f"  {name} → {name}.krcd")
                 else:
                     if ext == ".krc":
                         self._krcd_log(f"  ⏭ {name}: 已是 KRC，跳过")
@@ -465,9 +465,9 @@ class LyricsToolPage(BasePage):
                     out = out + ".krc"
                     with open(out, "wb") as f:
                         f.write(enc)
-                    self._krcd_log(f"  ✅ {name} → {os.path.basename(out)}")
+                    self._krcd_log(f"  {name} → {os.path.basename(out)}")
                 success += 1
             except Exception as e:
-                self._krcd_log(f"  ❌ {name}: {e}")
-        self._krcd_log(f"\n✅ 处理完成: {success}/{len(to_run)} 成功")
+                self._krcd_log(f"  {name}: {e}")
+        self._krcd_log(f"\n处理完成: {success}/{len(to_run)} 成功")
         self.krcd_result_label.setText(f"完成 {success}/{len(to_run)}")
