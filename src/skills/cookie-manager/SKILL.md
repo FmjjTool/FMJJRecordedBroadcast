@@ -27,6 +27,7 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 | 位置 | 已有入口 | 使用规则 |
 | --- | --- | --- |
 | `src/gui_qt/cookie_manager.py` | `CookieManagerDialog`、`COOKIE_PLATFORMS`、浏览器/扫码/手工输入入口 | 统一登录 UI；新增账户在此接入管理入口 |
+| `src/gui_qt/cookie_manager.py` | `_TcdocOpenApiDialog` | 腾讯文档 OpenAPI 三字段（Client-Id / Access-Token / Open-Id）管理；存储沿用 `auth` 加密文件的 `tcdoc_openapi` 键，页面不再提供输入控件 |
 | `src/auth.py` | `get_cookie(platform)` | 普通业务获取有效 Cookie，受总开关和本地有效期规则控制；服务端仍可能判定失效 |
 | `src/auth.py` | `set_cookie(platform, text)`、`clear_cookie(platform)` | 现有写入/清除能力；Agent 禁止对真实 Cookie 调用，只能验证隔离虚构数据 |
 | `src/auth.py` | `is_cookie_enabled()`、`set_cookie_enabled(enabled)` | 读取须无写入副作用；写总开关会改同一凭据文件，禁止在真实环境调用 |
@@ -39,7 +40,7 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 
 GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通过管理层适配获取授权，Token 保持 Token 类型，不拼成 Cookie 请求头。正常 Git 工具认证仍使用其原生凭据机制，不在同步命令、远端 URL 或日志里暴露 Token。
 
-**约定 9 的既有待清理项**（本次只记录，未改代码）：`quark_backup.py`、`quark_download.py` 仍有「打开 Cookie 管理 / Cookie 管理」按钮与提示；`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`netease.py`、`shopping_page.py`、`tcdoc.py`、`tcdoc_credentials.py`、`test_page.py`、`video_comments.py`、`localwiki.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。
+**约定 9 的既有待清理项**（本次只记录，未改代码）：`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`shopping_page.py`、`test_page.py`、`video_comments.py`、`localwiki.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。`quark_backup.py`、`quark_download.py`、`netease.py`、`tcdoc.py` 与 `bili_upload_dialog.py` 已在 2026-11-17 的凭据红线批次清理；`tcdoc_credentials.py` 已删除，OpenAPI 三个 ID 改由统一管理对话框维护。
 
 当前还需迁移/核对的具体入口：GitHub 的独立 Token 存储与登录 UI；腾讯文档 `has_login()` 仍接受快照文件存在作为登录条件；网易云 `get_netease_cookie()` 在有效凭据为空时仍会尝试旧文件迁移。涉及这些链路时，须消除绕过关闭/清除状态的路径并验证，不能直接沿用它们证明统一规则已满足。
 

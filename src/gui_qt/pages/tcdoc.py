@@ -9,7 +9,7 @@
 - 子页签顺序：中间层同步 → 表格同步 → 历史记录 → 采集明细 → 修订记录 →
   成员名单 → 文档管理
 - 中间层同步：比对本地已获取与当前表格，列出未上传条目，一键复制 TSV（不自动写入）；
-  底部收起区保存官方 OpenAPI 三个 ID（Client-Id / Access-Token / Open-Id）
+  OpenAPI 凭证由统一管理入口维护（Client-Id / Access-Token / Open-Id）
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
 - 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
@@ -517,9 +517,8 @@ class TcDocPage(BasePage):
             "权限等级（所有者、可编辑、可查看等）/ 账号来源 / UID，按 UID 去重后"
             "存 成员名单/（JSON + Excel）。需要文档管理权限，"
             "否则接口返回 0 条</p>"
-            "<p>· <b>OpenAPI 凭证与上传</b>：在统一管理入口填写并保存 "
-            "Client-Id / Access-Token / Open-Id（加密保存在本机）。"
-            "中间层清单可勾选后点「⬆ 上传到腾讯文档」，记录与本地图片一起上传；"
+            "<p>· <b>上传</b>：中间层清单可勾选后点「⬆ 上传到腾讯文档」，"
+            "记录与本地图片一起上传；"
             "仅限官方动态 / 直播记录，链接已存在的记录自动跳过，缺字段或选项的行标为不可上传</p>"
             "<p>· <b>内容 Tab</b>：表格类型显示「📋 表格同步」，文档 / AI 文档 / "
             "幻灯片等自动切换为「📖 正文预览」。正文抓取完全手动：只有点"
@@ -1178,8 +1177,6 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_content_tab()
         self._loaded_tabs.clear()
-        if self._bridge_loaded():
-            self.bridge_panel.cred_box.reload()
         self._refresh_active_tab()
 
     def _bridge_loaded(self) -> bool:
@@ -1297,8 +1294,6 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_content_tab()
         self._loaded_tabs.clear()
-        if self._bridge_loaded():
-            self.bridge_panel.cred_box.reload()
         self._refresh_active_tab()
 
     def _refresh_content_tab(self):

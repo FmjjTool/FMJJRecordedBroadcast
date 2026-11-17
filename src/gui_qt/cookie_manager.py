@@ -14,8 +14,8 @@ import time
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QDialog, QGridLayout, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import auth
@@ -263,11 +263,16 @@ class CookieManagerDialog(QDialog):
         bottom = QHBoxLayout()
         self.pw_status = QLabel()
         bottom.addWidget(self.pw_status, 1)
+        self.openapi_btn = self._btn("腾讯文档 OpenAPI", self._open_openapi_credentials)
+        bottom.addWidget(self.openapi_btn)
         self.pw_btn = self._btn("📦 下载浏览器组件", self._install_playwright, True)
         bottom.addWidget(self.pw_btn)
         layout.addLayout(bottom)
         self._refresh_pw_status()
         self._reload()
+
+    def _open_openapi_credentials(self):
+        _TcdocOpenApiDialog(self).exec()
 
     def _refresh_pw_status(self):
         """浏览器环境状态：Playwright 库 + 系统 Edge/Chrome + 本地采集引擎。"""
@@ -1573,3 +1578,102 @@ class CookieManagerDialog(QDialog):
     def _notify(self):
         if self.on_changed:
             self.on_changed()
+
+
+class _TcdocOpenApiDialog(QDialog):
+    """腾讯文档官方 OpenAPI 三个 ID 的统一管理入口。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("腾讯文档 OpenAPI")
+        self.setMinimumWidth(460)
+        from toolbox.tcdoc import openapi
+        self._openapi = openapi
+
+        v = QVBoxLayout(self)
+        hint = QLabel("Client-Id / Access-Token / Open-Id 加密保存在本机。")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        self.client_id = QLineEdit()
+        self.client_id.setPlaceholderText("Client-Id / APPid")
+        self.access_token = QLineEdit()
+        self.access_token.setPlaceholderText("Access-Token")
+        self.access_token.setEchoMode(QLineEdit.Password)
+        self.open_id = QLineEdit()
+        self.open_id.setPlaceholderText("Open-Id")
+        show = QCheckBox("显示 Token")
+        show.toggled.connect(
+            lambda on: self.access_token.setEchoMode(
+                QLineEdit.Normal if on else QLineEdit.Password))
+        grid.addWidget(QLabel("Client-Id"), 0, 0)
+        grid.addWidget(self.client_id, 0, 1)
+        grid.addWidget(QLabel("Access-Token"), 1, 0)
+        grid.addWidget(self.access_token, 1, 1)
+        grid.addWidget(show, 1, 2)
+        grid.addWidget(QLabel("Open-Id"), 2, 0)
+        grid.addWidget(self.open_id, 2, 1)
+        grid.setColumnStretch(1, 1)
+        v.addLayout(grid)
+
+        self.status = QLabel("")
+        self.status.setProperty("role", "caption")
+        self.status.setWordWrap(True)
+        v.addWidget(self.status)
+
+        row = QHBoxLayout()
+        save = QPushButton("保存")
+        save.setProperty("variant", "primary")
+        save.clicked.connect(self._save)
+        clear = QPushButton("清除")
+        clear.setProperty("variant", "danger")
+        clear.clicked.connect(self._clear)
+        close = QPushButton("关闭")
+        close.clicked.connect(self.accept)
+        row.addWidget(save)
+        row.addWidget(clear)
+        row.addStretch(1)
+        row.addWidget(close)
+        v.addLayout(row)
+
+        self._fill()
+
+    def _fill(self):
+        try:
+            creds = self._openapi.load_credentials()
+        except Exception:
+            creds = {}
+        self.client_id.setText(str(creds.get("client_id") or ""))
+        self.access_token.setText(str(creds.get("access_token") or ""))
+        self.open_id.setText(str(creds.get("open_id") or ""))
+        self.status.setText("已保存" if creds.get("access_token") else "未保存")
+
+    def _save(self):
+        client_id = self.client_id.text().strip()
+        token = self.access_token.text().strip()
+        open_id = self.open_id.text().strip()
+        if not (client_id and token and open_id):
+            QMessageBox.warning(self, "信息不完整", "请填写 Client-Id、Access-Token、Open-Id")
+            return
+        try:
+            self._openapi.save_credentials(client_id, token, open_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
+        self.status.setText("已保存")
+        QMessageBox.information(self, "已保存", "OpenAPI 凭证已加密保存到本机")
+
+    def _clear(self):
+        if QMessageBox.question(
+                self, "清除", "确认清除本机保存的 OpenAPI 凭证？",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            self._openapi.clear_credentials()
+        except Exception as exc:
+            QMessageBox.warning(self, "清除失败", str(exc))
+            return
+        self._fill()

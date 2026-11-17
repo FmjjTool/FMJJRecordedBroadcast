@@ -107,7 +107,7 @@ description: "腾讯文档同步编辑范围强制约束（强制阅读）。仅
 ## 相关代码位置
 
 - 同步引擎：`src/toolbox/tcdoc/`（`job.py` 采集编排、`tables.py` 表格落库、`bridge.py` 动态中间层与写回目标筛选、`openapi.py` 开放接口）
-- 界面：`src/gui_qt/pages/tcdoc.py`、`src/gui_qt/pages/tcdoc_bridge.py`、`src/gui_qt/pages/tcdoc_credentials.py`（原 `tcdoc_mapping.py` 映射回写页面已移除，仅保留三个 ID 凭证卡片）
+- 界面：`src/gui_qt/pages/tcdoc.py`、`src/gui_qt/pages/tcdoc_bridge.py`（原 `tcdoc_mapping.py` 映射回写页面已移除；官方 OpenAPI 三个 ID 统一在 `src/gui_qt/cookie_manager.py` 的管理对话框内维护，页面不再提供凭据输入控件）
 - 本地存档：`download/腾讯文档数据/`（`tables.db`、`表格数据/*.xlsx` 等）
 - 内置 skill 发现逻辑：`src/toolbox/skills.py`（扫描 `src/skills/<name>/SKILL.md`，本 skill 自动生效，无需注册）
 
