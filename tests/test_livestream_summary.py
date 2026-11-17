@@ -193,6 +193,70 @@ class ClientTest(unittest.TestCase):
             _content({"choices": [{"message": {"content": ""}}]})
 
 
+class LocalModelTest(unittest.TestCase):
+    def test_chat_base(self):
+        from toolbox.livestream_summary import local_model
+        self.assertEqual(local_model.chat_base_url(), "http://127.0.0.1:11434/v1")
+
+    def test_recommended_models(self):
+        from toolbox.livestream_summary import local_model
+        self.assertTrue(local_model.RECOMMENDED_MODELS)
+        for item in local_model.RECOMMENDED_MODELS:
+            self.assertTrue(item["name"])
+            self.assertTrue(item["label"])
+            self.assertTrue(item["size"])
+
+    def test_parse_pull_event(self):
+        from toolbox.livestream_summary import local_model
+        event = local_model.parse_pull_event(
+            '{"status":"downloading","completed":50,"total":100}')
+        self.assertEqual(event["percent"], 50)
+        self.assertFalse(event["done"])
+        self.assertTrue(local_model.parse_pull_event('{"status":"success"}')["done"])
+        self.assertIn("error", local_model.parse_pull_event('{"error":"not found"}'))
+        self.assertEqual(local_model.parse_pull_event("not json"), {})
+
+    def test_format_size(self):
+        from toolbox.livestream_summary import local_model
+        self.assertEqual(local_model.format_size(2 * 1024 ** 3), "2.0 GB")
+        self.assertEqual(local_model.format_size(512 * 1024 ** 2), "512 MB")
+
+    def test_pull_model_stream(self):
+        from toolbox.livestream_summary import local_model
+        import requests as requests_lib
+
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def iter_lines(self, decode_unicode=True):
+                return iter([
+                    '{"status":"pulling manifest"}',
+                    '{"status":"downloading","completed":50,"total":100}',
+                    '{"status":"success"}',
+                ])
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        seen = []
+        with patch.object(local_model.requests, "post",
+                          return_value=FakeResponse()):
+            local_model.pull_model(
+                "qwen2.5:7b", progress=lambda p, m: seen.append((p, m)))
+        self.assertEqual(seen[-1][0], 50)
+        self.assertEqual(seen[-1][1], "success")
+
+        with patch.object(local_model.requests, "get",
+                          side_effect=requests_lib.RequestException("down")):
+            self.assertFalse(local_model.is_running())
+            with self.assertRaises(local_model.LocalModelError):
+                local_model.list_models()
+
+
 class FileNameTest(unittest.TestCase):
     def test_output_filename(self):
         self.assertEqual(pipeline.output_filename("封茗囧菌 20260817 直播总结"),

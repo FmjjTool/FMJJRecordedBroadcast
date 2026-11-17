@@ -14,10 +14,11 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
-    QVBoxLayout, QWidget,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -25,7 +26,7 @@ from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
 from toolbox import livestream_summary_rule as rule
 from toolbox.livestream_summary import config as ls_config
-from toolbox.livestream_summary import pipeline
+from toolbox.livestream_summary import local_model, pipeline
 from toolbox.livestream_summary.client import ChatClient, is_local_base_url
 
 SUPPORTED_FILTER = "直播转录 (*.txt *.srt);;所有文件 (*)"
@@ -36,6 +37,7 @@ class LivestreamSummaryPage(BasePage):
         super().__init__(app)
         self._running = False
         self._cancel: threading.Event | None = None
+        self._pull_cancel: threading.Event | None = None
         self._source: Path | None = None
         self._result_text = ""
 
@@ -51,6 +53,7 @@ class LivestreamSummaryPage(BasePage):
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
         self._load_settings()
+        self._detect_local()
 
     # ==================== 界面搭建 ====================
 
@@ -114,14 +117,21 @@ class LivestreamSummaryPage(BasePage):
         left = QVBoxLayout()
         left.setSpacing(12)
         left.addWidget(self._build_input_card())
+        left.addWidget(self._build_local_card())
         left.addWidget(self._build_model_card())
         left.addStretch(1)
-        left_wrap = QWidget()
-        left_wrap.setLayout(left)
+        left_host = QWidget()
+        left_host.setLayout(left)
         left.setContentsMargins(0, 0, 0, 0)
-        left_wrap.setMinimumWidth(330)
-        left_wrap.setMaximumWidth(430)
-        body.addWidget(left_wrap)
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setMinimumWidth(340)
+        left_scroll.setMaximumWidth(450)
+        left_scroll.setWidget(left_host)
+        body.addWidget(left_scroll)
 
         right = QVBoxLayout()
         right.setSpacing(12)
@@ -157,6 +167,80 @@ class LivestreamSummaryPage(BasePage):
         hint.setProperty("role", "caption")
         hint.setWordWrap(True)
         card.content_layout.addWidget(hint)
+        return card
+
+    def _build_local_card(self) -> ToolSectionCard:
+        card = ToolSectionCard(
+            "🧩 本机模型（Ollama）",
+            "自动检测本机服务与已安装模型；未安装时只给下载入口，不会静默安装。")
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        self.local_status = QLabel("未检测")
+        self.local_status.setProperty("role", "caption")
+        status_row.addWidget(self.local_status, 1)
+
+        self.local_detect_btn = QPushButton("🔄 检测")
+        self.local_detect_btn.setProperty("variant", "secondary")
+        self.local_detect_btn.setToolTip("检测本机 Ollama 服务与已安装模型")
+        self.local_detect_btn.clicked.connect(self._detect_local)
+        status_row.addWidget(self.local_detect_btn)
+
+        install_btn = QPushButton("🌐 下载 Ollama")
+        install_btn.setProperty("variant", "secondary")
+        install_btn.setToolTip("打开 Ollama 官方下载页；安装后回到本页点检测")
+        install_btn.clicked.connect(self._open_ollama_download)
+        status_row.addWidget(install_btn)
+        card.content_layout.addLayout(status_row)
+
+        self.local_models_combo = QComboBox()
+        self.local_models_combo.addItem("尚未检测到模型", None)
+        card.content_layout.addWidget(self.local_models_combo)
+
+        use_row = QHBoxLayout()
+        use_row.setSpacing(6)
+        self.use_local_btn = QPushButton("✅ 使用这个模型")
+        self.use_local_btn.setProperty("variant", "secondary")
+        self.use_local_btn.setToolTip("把接口地址和模型名自动填到下方设置")
+        self.use_local_btn.setEnabled(False)
+        self.use_local_btn.clicked.connect(self._use_local_model)
+        use_row.addWidget(self.use_local_btn)
+        use_row.addStretch(1)
+        card.content_layout.addLayout(use_row)
+
+        pull_row = QHBoxLayout()
+        pull_row.setSpacing(6)
+        self.recommend_combo = QComboBox()
+        for item in local_model.RECOMMENDED_MODELS:
+            self.recommend_combo.addItem(
+                f"{item['label']} · {item['size']}", item["name"])
+        pull_row.addWidget(self.recommend_combo, 1)
+
+        self.pull_btn = QPushButton("⬇️ 下载模型")
+        self.pull_btn.setProperty("variant", "secondary")
+        self.pull_btn.setToolTip("通过本机 Ollama 下载模型，完成后自动填入配置")
+        self.pull_btn.clicked.connect(self._pull_model)
+        pull_row.addWidget(self.pull_btn)
+
+        self.pull_stop_btn = QPushButton("⏹ 停止")
+        self.pull_stop_btn.setProperty("variant", "ghost")
+        self.pull_stop_btn.setEnabled(False)
+        self.pull_stop_btn.clicked.connect(self._stop_pull)
+        pull_row.addWidget(self.pull_stop_btn)
+        card.content_layout.addLayout(pull_row)
+
+        self.pull_progress = QProgressBar()
+        self.pull_progress.setRange(0, 100)
+        self.pull_progress.setValue(0)
+        self.pull_progress.setFixedHeight(16)
+        self.pull_progress.setVisible(False)
+        card.content_layout.addWidget(self.pull_progress)
+
+        self.install_command = QLabel(
+            f"未安装时可在终端执行：{local_model.INSTALL_COMMAND}")
+        self.install_command.setProperty("role", "caption")
+        self.install_command.setWordWrap(True)
+        card.content_layout.addWidget(self.install_command)
         return card
 
     def _build_model_card(self) -> ToolSectionCard:
@@ -282,6 +366,126 @@ class LivestreamSummaryPage(BasePage):
             " border: 1px solid palette(shadow); border-radius: 8px; padding: 6px; }")
         card.content_layout.addWidget(self.log_view, 1)
         return card
+
+    # ==================== 本机模型 ====================
+
+    def _detect_local(self):
+        self.local_status.setText("检测中…")
+        self.local_detect_btn.setEnabled(False)
+
+        def work():
+            if not local_model.is_running():
+                return {"running": False, "models": []}
+            return {"running": True, "models": local_model.list_models()}
+
+        def done(result, err):
+            self.local_detect_btn.setEnabled(True)
+            if err:
+                self.local_status.setText("检测失败")
+                self.local_models_combo.clear()
+                self.local_models_combo.addItem("检测失败，请确认 Ollama 已启动", None)
+                self.use_local_btn.setEnabled(False)
+                self._append_log(f"本机模型检测失败：{err}")
+                return
+            if not result["running"]:
+                self.local_status.setText("Ollama 未运行 / 未安装")
+                self.local_models_combo.clear()
+                self.local_models_combo.addItem("未检测到 Ollama", None)
+                self.use_local_btn.setEnabled(False)
+                return
+            models = result["models"]
+            self.local_status.setText(f"Ollama 已运行 · {len(models)} 个模型")
+            self.local_models_combo.clear()
+            if models:
+                for item in models:
+                    self.local_models_combo.addItem(
+                        f"{item['name']} · {local_model.format_size(item['size'])}",
+                        item["name"])
+                self.use_local_btn.setEnabled(True)
+            else:
+                self.local_models_combo.addItem("还没有模型，可从上方推荐下载", None)
+                self.use_local_btn.setEnabled(False)
+
+        run_bg(work, done, owner=self)
+
+    def _use_local_model(self):
+        name = self.local_models_combo.currentData()
+        if not name:
+            self.app.toast("请先检测并选择一个已安装模型", "info")
+            return
+        self.mode_combo.setCurrentIndex(0)
+        self.base_url_edit.setText(local_model.chat_base_url())
+        self.model_edit.setText(name)
+        self._refresh_key_status()
+        self._save_settings(quiet=True)
+        self._append_log(f"已切换本机模型：{name}")
+        self.app.toast(f"已使用本机模型：{name}", "success")
+
+    def _pull_model(self):
+        if self._pull_cancel is not None and not self._pull_cancel.is_set():
+            self.app.toast("模型下载正在进行中", "info")
+            return
+        name = self.recommend_combo.currentData()
+        if not name:
+            return
+        self._pull_cancel = threading.Event()
+        self.pull_btn.setEnabled(False)
+        self.pull_stop_btn.setEnabled(True)
+        self.pull_progress.setVisible(True)
+        self.pull_progress.setValue(0)
+        self.local_status.setText(f"正在下载 {name}…")
+        self._append_log(f"开始下载本机模型：{name}")
+
+        def work():
+            if not local_model.is_running():
+                raise local_model.LocalModelError(
+                    "Ollama 未运行，请先安装并启动 Ollama")
+            local_model.pull_model(
+                name,
+                progress=lambda percent, message: post_to_main(
+                    self._on_pull_progress, percent, message),
+                cancel=self._pull_cancel)
+            return name
+
+        def done(result, err):
+            self.pull_btn.setEnabled(True)
+            self.pull_stop_btn.setEnabled(False)
+            self.pull_progress.setVisible(False)
+            self._pull_cancel = None
+            if err:
+                if "已停止" in str(err):
+                    self.local_status.setText("模型下载已停止")
+                    self._append_log("模型下载已停止")
+                else:
+                    self.local_status.setText("模型下载失败")
+                    self._append_log(f"模型下载失败：{err}")
+                    self.app.toast(f"模型下载失败：{err}", "error")
+                return
+            self._append_log(f"模型下载完成：{name}")
+            self.mode_combo.setCurrentIndex(0)
+            self.base_url_edit.setText(local_model.chat_base_url())
+            self.model_edit.setText(name)
+            self._refresh_key_status()
+            self._save_settings(quiet=True)
+            self._detect_local()
+            self.app.toast(f"✅ 模型 {name} 已下载并配置", "success")
+
+        run_bg(work, done, owner=self)
+
+    def _on_pull_progress(self, percent: int, message: str):
+        self.pull_progress.setValue(max(0, min(100, int(percent))))
+        if message:
+            self.local_status.setText(message[:80])
+
+    def _stop_pull(self):
+        if self._pull_cancel is not None:
+            self._pull_cancel.set()
+            self.local_status.setText("正在停止下载…")
+            self.pull_stop_btn.setEnabled(False)
+
+    def _open_ollama_download(self):
+        import webbrowser
+        webbrowser.open(local_model.INSTALL_URL)
 
     # ==================== 设置 ====================
 
@@ -579,8 +783,11 @@ class LivestreamSummaryPage(BasePage):
     # ==================== 生命周期 ====================
 
     def has_active_tasks(self) -> bool:
-        return self._running
+        return self._running or (
+            self._pull_cancel is not None and not self._pull_cancel.is_set())
 
     def shutdown(self):
         self._stop()
+        if self._pull_cancel is not None:
+            self._pull_cancel.set()
         super().shutdown()
