@@ -101,11 +101,11 @@ class MusicTrackerPage(BasePage):
         head.addWidget(refresh_btn)
         export_group_btn = QPushButton("📷 按组导出")
         export_group_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
+            "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         export_group_btn.clicked.connect(self._export_group)
         head.addWidget(export_group_btn)
         fetch_all_btn = QPushButton("⬇ 获取全部")
-        fetch_all_btn.setStyleSheet("background: #2e7d32; color: white;")
+        fetch_all_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         fetch_all_btn.clicked.connect(lambda: self._collect_all())
         head.addWidget(fetch_all_btn)
         self.batch_platform = QComboBox()
@@ -145,7 +145,7 @@ class MusicTrackerPage(BasePage):
 
         # 搜索账号（名称 → 链接；5sing 无搜索通道）
         search_card = QFrame()
-        search_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
+        search_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
         sv = QVBoxLayout(search_card)
         sv.setContentsMargins(10, 10, 10, 10)
         sv.setSpacing(4)
@@ -169,7 +169,7 @@ class MusicTrackerPage(BasePage):
 
         # 添加追踪账号（账号名 + 链接，可选归属分组）
         add_card = QFrame()
-        add_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
+        add_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
         av = QVBoxLayout(add_card)
         av.setContentsMargins(10, 10, 10, 10)
         av.setSpacing(4)
@@ -208,7 +208,7 @@ class MusicTrackerPage(BasePage):
 
         # 分组管理
         group_card = QFrame()
-        group_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
+        group_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
         gv = QVBoxLayout(group_card)
         gv.setContentsMargins(10, 10, 10, 10)
         gv.setSpacing(4)
@@ -218,7 +218,7 @@ class MusicTrackerPage(BasePage):
         self.group_list_frame = QScrollArea()
         self.group_list_frame.setWidgetResizable(True)
         self.group_list_frame.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid #e3e7ee; border-radius: 6px; }")
+            "QScrollArea { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
         gcontainer = QWidget()
         gcontainer.setStyleSheet("background: transparent;")
         self.group_list_layout = QVBoxLayout(gcontainer)
@@ -244,7 +244,7 @@ class MusicTrackerPage(BasePage):
 
         # 已配置账号
         list_card = QFrame()
-        list_card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
+        list_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
         lv = QVBoxLayout(list_card)
         lv.setContentsMargins(10, 10, 10, 10)
         lv.setSpacing(4)
@@ -315,8 +315,8 @@ class MusicTrackerPage(BasePage):
         sk = QFrame()
         sk.setFixedHeight(112)
         sk.setStyleSheet(
-            "QFrame { background: #ffffff; border-radius: 8px; }"
-            "QLabel { background: #dfe3ea; border-radius: 4px; }")
+            "QFrame { background: palette(base); border-radius: 8px; }"
+            "QLabel { background: palette(midlight); border-radius: 4px; }")
         v = QVBoxLayout(sk)
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(6)
@@ -337,7 +337,7 @@ class MusicTrackerPage(BasePage):
         v.addLayout(top)
         grid_bar = QLabel()
         grid_bar.setFixedHeight(54)
-        grid_bar.setStyleSheet("background: #e8ebf0; border-radius: 6px;")
+        grid_bar.setStyleSheet("background: palette(alternate-base); border-radius: 6px;")
         v.addWidget(grid_bar)
         self.cards_layout.takeAt(self.cards_layout.count() - 1)
         self.cards_layout.addWidget(sk)
@@ -356,7 +356,7 @@ class MusicTrackerPage(BasePage):
     def _make_card(self, acc, history=None):
         from music_account.accounts import parse_url, load_history
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #ffffff; border-radius: 8px; }")
+        card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
         cv = QVBoxLayout(card)
         cv.setContentsMargins(8, 6, 8, 4)
         cv.setSpacing(2)
@@ -384,13 +384,13 @@ class MusicTrackerPage(BasePage):
         export_btn = QPushButton("📷 导出")
         export_btn.setFixedSize(60, 26)
         export_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
+            "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         export_btn.clicked.connect(lambda _=False, a=acc: self._export_png(a))
         head.addWidget(export_btn)
         hist_btn = QPushButton("📊 历史")
         hist_btn.setFixedSize(60, 26)
         hist_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #c8cdd6; color: #2f3440;")
+            "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         hist_btn.clicked.connect(lambda _=False, a=acc: self._open_history(a))
         head.addWidget(hist_btn)
         btn = QPushButton("📥 采集")
@@ -406,7 +406,7 @@ class MusicTrackerPage(BasePage):
 
         # 预览：2 行 × 4 列网格
         preview_frame = QWidget()
-        preview_frame.setStyleSheet("background: #e8ebf0; border-radius: 6px;")
+        preview_frame.setStyleSheet("background: palette(alternate-base); border-radius: 6px;")
         # 双击预览区快捷打开完整历史窗口
         preview_frame.setCursor(Qt.PointingHandCursor)
         preview_frame.setToolTip("双击查看完整历史数据")
@@ -742,7 +742,7 @@ class MusicTrackerPage(BasePage):
         table.cellDoubleClicked.connect(lambda _r, _c: _fill())
         bar = QHBoxLayout()
         fill_btn = QPushButton("➡ 填入")
-        fill_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
+        fill_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
         fill_btn.clicked.connect(_fill)
         bar.addStretch(1)
         bar.addWidget(fill_btn)
@@ -843,7 +843,7 @@ class MusicTrackerPage(BasePage):
             return
         for i, acc in enumerate(accounts):
             row = QFrame()
-            row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+            row.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
             plat = PLATFORM_NAMES.get(acc.get("platform"), acc.get("platform") or "自动")
@@ -876,7 +876,7 @@ class MusicTrackerPage(BasePage):
             h.addWidget(down_btn)
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(30, 26)
-            del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
+            del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
             del_btn.clicked.connect(lambda _=False, idx=i: self._delete_account(idx))
             h.addWidget(del_btn)
             self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
@@ -885,7 +885,7 @@ class MusicTrackerPage(BasePage):
         # 底部统一保存按钮（替代逐行 💾）
         bar = QHBoxLayout()
         self._acc_save_btn = QPushButton("💾 保存全部修改")
-        self._acc_save_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 14px;")
+        self._acc_save_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
         self._acc_save_btn.setEnabled(False)
         self._acc_save_btn.clicked.connect(self._save_all_account_groups)
         bar.addWidget(self._acc_save_btn)
@@ -943,7 +943,7 @@ class MusicTrackerPage(BasePage):
             n = len(groups)
             for pos, (gid, gname) in enumerate(groups.items()):
                 row = QFrame()
-                row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+                row.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
                 h = QHBoxLayout(row)
                 h.setContentsMargins(8, 4, 8, 4)
                 gid_lbl = QLabel(gid)
@@ -962,7 +962,7 @@ class MusicTrackerPage(BasePage):
                 h.addWidget(down_btn)
                 del_btn = QPushButton("✕")
                 del_btn.setFixedSize(30, 22)
-                del_btn.setStyleSheet(icon_btn_style(False, "background: #c62828; color: white; font-size: 13px;"))
+                del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
                 del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
                 h.addWidget(del_btn)
                 self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
@@ -1031,7 +1031,7 @@ class MusicTrackerPage(BasePage):
         v.addWidget(sel, 0, Qt.AlignCenter)
         v.addStretch(1)
         export_btn = QPushButton("📷 导出 PNG")
-        export_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px;")
+        export_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 6px;")
         export_btn.clicked.connect(lambda: do_export())
         v.addWidget(export_btn)
 
