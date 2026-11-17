@@ -1,7 +1,7 @@
 """信息获取 · 腾讯文档监控页：浏览量 / 文档成员数 每日自动记录。
 
-与工具箱其它页面保持同一套视觉语言：标题行 + ❓功能介绍浮层 + 白卡片 + 表格 +
-底部设置行，功能按钮带 emoji 图标。
+与工具箱其它页面保持同一套视觉语言：标题行 + 功能介绍浮层 + 白卡片 + 表格 +
+底部设置行，功能按钮使用统一的线形图标。
 
 功能：
 - 文档下拉切换（每个文档独立记录），登录态统一由管理层持有（平台：腾讯文档）
@@ -156,12 +156,12 @@ class _DocPreviewPanel(QWidget):
         self.kind_label.setStyleSheet("color: #888;")
         bar.addWidget(self.kind_label)
         bar.addStretch(1)
-        self.fetch_btn = QPushButton("🔄 抓取正文")
+        self.fetch_btn = QPushButton("抓取正文")
         self.fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.fetch_btn.setToolTip("从腾讯文档读取全部子页面并自动存档（AI 文档约需 1 分钟）")
         self.fetch_btn.clicked.connect(lambda *_: self.load())
         bar.addWidget(self.fetch_btn)
-        self.export_btn = QPushButton("💾 导出")
+        self.export_btn = QPushButton("导出")
         self.export_btn.setToolTip(
             "导出当前预览正文（Markdown / TXT）；多篇 AI 文档可合并或每篇一个文件")
         self.export_btn.setEnabled(False)
@@ -171,7 +171,7 @@ class _DocPreviewPanel(QWidget):
 
         self.text_view = QPlainTextEdit()
         self.text_view.setReadOnly(True)
-        self.text_view.setPlaceholderText("本地暂无正文存档，点「🔄 抓取正文」开始")
+        self.text_view.setPlaceholderText("本地暂无正文存档，点「抓取正文」开始")
         self._text_stack = QStackedWidget()
         self._text_stack.addWidget(self.text_view)
         self._skeleton = LoadingSkeleton(text="正在读取本地正文…")
@@ -204,7 +204,7 @@ class _DocPreviewPanel(QWidget):
         self.page_combo.hide()
         self.export_btn.setEnabled(False)
         self.status.setToolTip("")
-        self.text_view.setPlaceholderText("本地暂无正文存档，点「🔄 抓取正文」开始")
+        self.text_view.setPlaceholderText("本地暂无正文存档，点「抓取正文」开始")
         self.text_view.clear()
         self._text_stack.setCurrentWidget(self.text_view)
         if not doc:
@@ -214,7 +214,7 @@ class _DocPreviewPanel(QWidget):
             return
         self.kind_label.setText(tc_cfg.kind_label(doc.get("kind")))
         self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("🔄 抓取正文")
+        self.fetch_btn.setText("抓取正文")
         req = self._req
         self._loading = True
         self.fetch_btn.setEnabled(False)
@@ -243,7 +243,7 @@ class _DocPreviewPanel(QWidget):
                 self.status.setText("本地暂无存档")
                 return
             self._apply_pages(pages, text,
-                              f"📂 本地存档于 {last} · 共 {len(pages)} 篇 · 点「🔄 重新抓取」更新", tip)
+                              f"本地存档于 {last} · 共 {len(pages)} 篇 · 点「重新抓取」更新", tip)
 
         run_bg(work, done, owner=self._page_owner)
 
@@ -258,7 +258,7 @@ class _DocPreviewPanel(QWidget):
         self._loading_key = key
         self.fetch_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
-        self.status.setText("⏳ 正在打开文档并抓取正文……")
+        self.status.setText("正在打开文档并抓取正文……")
         self.status.setToolTip("")
         self.text_view.setPlaceholderText("正在抓取正文……")
         self._skeleton.setText("正在抓取正文…")
@@ -276,12 +276,12 @@ class _DocPreviewPanel(QWidget):
             if not self._doc or self._doc.get("key") != key:
                 return
             self.fetch_btn.setEnabled(True)
-            self.fetch_btn.setText("🔄 重新抓取")
+            self.fetch_btn.setText("重新抓取")
             self._text_stack.setCurrentWidget(self.text_view)
             if err:
-                self.status.setText(f"❌ {err}"[:200])
+                self.status.setText(f"{err}"[:200])
                 if not self._pages:
-                    self.text_view.setPlaceholderText("抓取失败，可点「🔄 重新抓取」重试")
+                    self.text_view.setPlaceholderText("抓取失败，可点「重新抓取」重试")
                 self.export_btn.setEnabled(bool(self._full_text.strip()))
                 return
             text = result.get("text") or ""
@@ -295,9 +295,9 @@ class _DocPreviewPanel(QWidget):
                 else:
                     save_note = " · 已存档（无变化）"
             else:
-                save_note = " · ⚠ 自动存档失败" if result.get("save_error") else ""
+                save_note = " · 自动存档失败" if result.get("save_error") else ""
             count = f"共 {len(pages)} 篇 · " if len(pages) > 1 else ""
-            summary = (f"✅ {count}{len(text)} 字 · "
+            summary = (f"{count}{len(text)} 字 · "
                        f"{result.get('title') or doc['name']} · "
                        f"{time.strftime('%H:%M:%S')} 抓取{save_note}")
             tip = (f"自动存档：{save['file']}" if save.get("file") else
@@ -314,7 +314,7 @@ class _DocPreviewPanel(QWidget):
         if len(pages) > 1:
             self.page_combo.blockSignals(True)
             self.page_combo.clear()
-            self.page_combo.addItem(f"📚 全部（{len(pages)} 篇）", -1)
+            self.page_combo.addItem(f"全部（{len(pages)} 篇）", -1)
             for i, item in enumerate(pages):
                 indent = "　" * int(item.get("level") or 0)
                 self.page_combo.addItem(
@@ -332,7 +332,7 @@ class _DocPreviewPanel(QWidget):
         self.status.setText(summary)
         self.status.setToolTip(tooltip or "")
         self.export_btn.setEnabled(bool(text.strip()))
-        self.fetch_btn.setText("🔄 重新抓取")
+        self.fetch_btn.setText("重新抓取")
 
     def set_enabled(self, enabled: bool):
         self.fetch_btn.setEnabled(bool(enabled and self._doc and not self._loading))
@@ -358,7 +358,7 @@ class _DocPreviewPanel(QWidget):
 
     def _on_status(self, text: str):
         if self._loading and self._loading_key == (self._doc or {}).get("key", ""):
-            self.status.setText(f"⏳ {text}")
+            self.status.setText(f"{text}")
 
     # ==================== 导出 ====================
 
@@ -369,10 +369,10 @@ class _DocPreviewPanel(QWidget):
         idx = self.page_combo.currentData()
         if len(self._pages) > 1:
             menu = QMenu(self)
-            menu.addAction("📄 导出全部（合并为一个文件）…", self._export_merged)
-            menu.addAction("🗂 导出全部（每篇一个 .md 文件）…", self._export_each_page)
+            menu.addAction("导出全部（合并为一个文件）…", self._export_merged)
+            menu.addAction("导出全部（每篇一个 .md 文件）…", self._export_each_page)
             if idx is not None and 0 <= idx < len(self._pages):
-                menu.addAction("📃 仅导出当前篇…", self._export_current)
+                menu.addAction("仅导出当前篇…", self._export_current)
             menu.exec(self.export_btn.mapToGlobal(self.export_btn.rect().bottomLeft()))
         else:
             self._export_current()
@@ -410,12 +410,12 @@ class _DocPreviewPanel(QWidget):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "导出失败", str(exc))
             return
-        self.status.setText(f"✅ 已导出 {len(self._pages)} 篇到 {out_dir.name}")
+        self.status.setText(f"已导出 {len(self._pages)} 篇到 {out_dir.name}")
         self.status.setToolTip(str(out_dir))
 
     def _save_text(self, name: str, heading: str, text: str):
         if not (text or "").strip():
-            self.status.setText("❌ 当前没有可导出的正文")
+            self.status.setText("当前没有可导出的正文")
             return
         stamp = time.strftime("%Y%m%d_%H%M%S")
         default = tc_cfg.data_dir() / f"{tc_cfg.safe_name(name)}_{stamp}.md"
@@ -431,7 +431,7 @@ class _DocPreviewPanel(QWidget):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "导出失败", str(exc))
             return
-        self.status.setText(f"✅ 已导出：{Path(path).name}")
+        self.status.setText(f"已导出：{Path(path).name}")
         self.status.setToolTip(path)
 
     def _export_body(self, heading: str, text: str, ext: str) -> str:
@@ -475,13 +475,13 @@ class TcDocPage(BasePage):
         layout.setSpacing(8)
 
         # ---------- 标题行 ----------
-        title = QLabel("📄 腾讯文档监控")
+        title = QLabel("腾讯文档监控")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 腾讯文档监控 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "腾讯文档监控 · 功能介绍", (
             "<p><b>自动记录腾讯文档的浏览量、文档成员数（附已查看人数），"
             "手动采集时同时保存已查看浏览人（昵称 + 最近浏览时间），"
             "每个文档独立存档并生成 Excel 报表。</b></p>"
@@ -492,37 +492,37 @@ class TcDocPage(BasePage):
             "按 UID 增量去重）；每次追加一行，增量相对上一次采集计算；"
             "不包含表格同步，速度更快（纯 HTTP 接口，不启动浏览器）。"
             "浏览记录只随手动采集执行，不进每天定时任务</p>"
-            "<p>· <b>文档管理</b>：在「🗂 文档管理」Tab 添加 / 编辑 / 删除任意腾讯文档"
+            "<p>· <b>文档管理</b>：在「文档管理」Tab 添加 / 编辑 / 删除任意腾讯文档"
             "（表格 / 智能表格 / AI 文档 / 文档 / 幻灯片 / 收集表），可生成页面诊断包</p>"
             "<p>· <b>表格同步</b>：手动同步当前文档的智能表格数据（纯 HTTP 接口，"
             "不启动浏览器，文档版本没变化时自动跳过）；"
             "定时任务会自动并线同步全部表格文档。同步按记录比对"
             "新增/修改/删除，每次同步自动生成 Excel（每张工作表一个 sheet，"
-            "存在 表格数据/，可点「📂 打开数据目录」查看）。"
+            "存在 表格数据/，可点「打开数据目录」查看）。"
             "普通表格、图表页、文章页不是同一套数据协议，会自动跳过并提示</p>"
-            "<p>· <b>🧩 中间层同步</b>：比对本地「已获取」+ 增量库与当前表格，"
+            "<p>· <b>中间层同步</b>：比对本地「已获取」+ 增量库与当前表格，"
             "按链接 / 平台 ID / 标题+日期三级匹配，列出尚未上传的条目；"
             "按官方动态列标准生成表格，可一键复制全部，也可选中单行/多行复制；"
             "图片会检测有/无，并可一键复制图片内容到剪贴板，直接粘贴到腾讯文档。"
             "只提示和复制，不会自动写入腾讯文档</p>"
             "<p>· <b>表格图片</b>：图片字段里的图片会在同步后自动增量下载到 "
             "图片/（按文档 / 工作表 / 字段归档，已下载不重复下，图片替换才重下）。"
-            "本地已同步过表格时，也可点「🖼 采集图片」补采，不需要重新同步</p>"
+            "本地已同步过表格时，也可点「采集图片」补采，不需要重新同步</p>"
             "<p>· <b>修订记录</b>：纯 HTTP 增量翻页拉取文档修订历史——从第 1 页开始，"
             "遇到上次已拉取且内容一致（修订号 + 编辑人 + 时间）的记录就停止，"
             "不再每次翻完几百页；同版本/同修订号但编辑人不同的记录会全部保留。"
-            "需要重建时可点「♻ 全量重拉」翻完全部页面。逐条显示时间 / 版本号 / "
+            "需要重建时可点「全量重拉」翻完全部页面。逐条显示时间 / 版本号 / "
             "编辑人昵称，自动存 修订记录/（JSON + Excel）。普通表格 / 智能表格都支持</p>"
             "<p>· <b>成员名单</b>：纯 HTTP 游标翻页拉取文档全部成员，显示昵称 / "
             "权限等级（所有者、可编辑、可查看等）/ 账号来源 / UID，按 UID 去重后"
             "存 成员名单/（JSON + Excel）。需要文档管理权限，"
             "否则接口返回 0 条</p>"
-            "<p>· <b>上传</b>：中间层清单可勾选后点「⬆ 上传到腾讯文档」，"
+            "<p>· <b>上传</b>：中间层清单可勾选后点「上传到腾讯文档」，"
             "记录与本地图片一起上传；"
             "仅限官方动态 / 直播记录，链接已存在的记录自动跳过，缺字段或选项的行标为不可上传</p>"
-            "<p>· <b>内容 Tab</b>：表格类型显示「📋 表格同步」，文档 / AI 文档 / "
-            "幻灯片等自动切换为「📖 正文预览」。正文抓取完全手动：只有点"
-            "「🔄 抓取正文」才会启动浏览器，进入页面或切换 Tab 不会自动打开浏览器。"
+            "<p>· <b>内容 Tab</b>：表格类型显示「表格同步」，文档 / AI 文档 / "
+            "幻灯片等自动切换为「正文预览」。正文抓取完全手动：只有点"
+            "「抓取正文」才会启动浏览器，进入页面或切换 Tab 不会自动打开浏览器。"
             "AI 文档会展开并抓取全部子页面，"
             "可下拉切换单篇或合并查看，支持导出 Markdown / TXT；"
             "每次抓取自动存档：正文逐页写 pages.db（新增/修改/删除留痕），"
@@ -555,13 +555,13 @@ class TcDocPage(BasePage):
         row.addWidget(self.doc_combo)
         row.addStretch(1)
 
-        self.collect_btn = QPushButton("🔄 立即采集")
+        self.collect_btn = QPushButton("立即采集")
         self.collect_btn.setProperty("variant", "primary")
         self.collect_btn.setToolTip(
             "采集全部文档的浏览量 / 成员数 / 已查看浏览人（昵称 + 最近浏览时间），"
             "写入历史记录与报表（不含表格同步）")
         self.collect_btn.clicked.connect(self._collect)
-        self.dir_btn = QPushButton("📂 打开数据目录")
+        self.dir_btn = QPushButton("打开数据目录")
         self.dir_btn.setToolTip(
             "打开 download/腾讯文档数据/（报表/、表格数据/、正文存档/、图片/、数据库与日志）")
         self.dir_btn.clicked.connect(self._open_data_dir)
@@ -585,8 +585,8 @@ class TcDocPage(BasePage):
             self._build_revision_tab, self._build_members_tab,
             self._build_doc_tab,
         )
-        for title in ("🧩 中间层同步", "📋 表格同步", "📈 历史记录", "🧾 采集明细",
-                      "📜 修订记录", "👥 成员名单", "🗂 文档管理"):
+        for title in ("中间层同步", "表格同步", "历史记录", "采集明细",
+                      "修订记录", "成员名单", "文档管理"):
             stack = QStackedWidget()
             skeleton = LoadingSkeleton(text="正在准备页面…")
             stack.addWidget(skeleton)
@@ -800,22 +800,22 @@ class TcDocPage(BasePage):
         v.addWidget(self.doc_table, 1)
 
         btns = QHBoxLayout()
-        self.add_btn = QPushButton("➕ 添加文档")
+        self.add_btn = QPushButton("添加文档")
         self.add_btn.setToolTip("添加任意腾讯文档（自定义文档，数量不设上限）")
         self.add_btn.clicked.connect(self._add_doc)
-        self.edit_btn = QPushButton("✏️ 编辑")
+        self.edit_btn = QPushButton("编辑")
         self.edit_btn.setToolTip("修改文档名称 / 链接（双击行同效）")
         self.edit_btn.clicked.connect(lambda *_: self._edit_doc())
-        self.del_btn = QPushButton("🗑 删除")
+        self.del_btn = QPushButton("删除")
         self.del_btn.setToolTip("从清单移除文档（可选同时删除其历史记录）")
         self.del_btn.clicked.connect(lambda *_: self._delete_doc())
-        self.probe_btn = QPushButton("🩺 生成诊断包")
+        self.probe_btn = QPushButton("生成诊断包")
         self.probe_btn.setToolTip("页面改版导致采集失败时，打开浏览器抓取入口信息存到 调试/")
         self.probe_btn.clicked.connect(self._probe)
         for btn in (self.add_btn, self.edit_btn, self.del_btn, self.probe_btn):
             btns.addWidget(btn)
         btns.addStretch(1)
-        self.rebuild_btn = QPushButton("🧾 重建全部报表")
+        self.rebuild_btn = QPushButton("重建全部报表")
         self.rebuild_btn.setToolTip("按数据库重新生成所有文档的 Excel（历史增量一并重算）")
         self.rebuild_btn.clicked.connect(self._rebuild_reports)
         btns.addWidget(self.rebuild_btn)
@@ -847,7 +847,7 @@ class TcDocPage(BasePage):
         bar.addWidget(self.sheet_info)
         bar.addStretch(1)
 
-        self.sync_btn = QPushButton("🔄 同步表格")
+        self.sync_btn = QPushButton("同步表格")
         self.sync_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.sync_btn.setToolTip(
             "只同步当前文档的表格数据（纯 HTTP，不动浏览量），公开文档可免登录；"
@@ -855,7 +855,7 @@ class TcDocPage(BasePage):
         self.sync_btn.clicked.connect(self._sync_tables)
         bar.addWidget(self.sync_btn)
 
-        self.images_btn = QPushButton("🖼 采集图片")
+        self.images_btn = QPushButton("采集图片")
         self.images_btn.setToolTip(
             "把当前文档全部表格图片字段里的图片增量下载到 图片/（已下载自动跳过）")
         self.images_btn.clicked.connect(self._collect_images)
@@ -921,7 +921,7 @@ class TcDocPage(BasePage):
         body.setSizes([430, 170])
         v.addWidget(body, 1)
 
-        self.sheet_hint = QLabel("点「🔄 同步表格」把文档里的表格内容抓到本地；"
+        self.sheet_hint = QLabel("点「同步表格」把文档里的表格内容抓到本地；"
                                 "图片字段会自动增量下载到 图片/。默认按表格原顺序显示，"
                                 "新记录常追加在末尾，勾选「最新在前」可按日期倒序。")
         self.sheet_hint.setStyleSheet("color: #888;")
@@ -941,26 +941,26 @@ class TcDocPage(BasePage):
 
         bar = QHBoxLayout()
         bar.setSpacing(6)
-        self.rev_fetch_btn = QPushButton("🔄 拉取修订记录（增量）")
+        self.rev_fetch_btn = QPushButton("拉取修订记录（增量）")
         self.rev_fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.rev_fetch_btn.setToolTip(
             "从第 1 页开始增量拉取：遇到上次已拉取且内容一致（修订号 + 编辑人 + 时间）"
             "的记录就停止翻页；同版本/同修订号不同编辑人全部保留")
         self.rev_fetch_btn.clicked.connect(lambda: self._fetch_revisions(False))
         bar.addWidget(self.rev_fetch_btn)
-        self.rev_full_btn = QPushButton("♻ 全量重拉")
+        self.rev_full_btn = QPushButton("全量重拉")
         self.rev_full_btn.setToolTip(
             "忽略上次拉取位置，翻完全部页面并逐条校验更新（数据怀疑不一致时使用）")
         self.rev_full_btn.clicked.connect(lambda: self._fetch_revisions(True))
         bar.addWidget(self.rev_full_btn)
-        self.rev_dir_btn = QPushButton("📂 打开修订记录目录")
+        self.rev_dir_btn = QPushButton("打开修订记录目录")
         self.rev_dir_btn.clicked.connect(lambda: self._open_dir(tc_cfg.revisions_dir()))
         bar.addWidget(self.rev_dir_btn)
-        self.rev_more_btn = QPushButton("⬇ 加载更多")
+        self.rev_more_btn = QPushButton("加载更多")
         self.rev_more_btn.setToolTip("再加载 2000 条较早的修订记录（滚动到底也会自动加载）")
         self.rev_more_btn.clicked.connect(lambda: self._load_more_revisions())
         bar.addWidget(self.rev_more_btn)
-        self.rev_all_btn = QPushButton("⏬ 全部加载")
+        self.rev_all_btn = QPushButton("全部加载")
         self.rev_all_btn.setToolTip("一次性把本地全部修订记录加载进表格（数据量大时稍慢）")
         self.rev_all_btn.clicked.connect(self._load_all_revisions)
         bar.addWidget(self.rev_all_btn)
@@ -992,9 +992,9 @@ class TcDocPage(BasePage):
         self._rev_loading = False
 
         self.rev_hint = QLabel(
-            "点「🔄 拉取修订记录（增量）」从第 1 页开始，遇到上次已拉取且内容一致的"
+            "点「拉取修订记录（增量）」从第 1 页开始，遇到上次已拉取且内容一致的"
             "记录就停止；同版本/同修订号不同编辑人会全部保留。"
-            "需要重建时点「♻ 全量重拉」。每行对应一次编辑，编辑人昵称来自文档作者接口。"
+            "需要重建时点「全量重拉」。每行对应一次编辑，编辑人昵称来自文档作者接口。"
             "表格默认加载最近 2000 条，滚动到底自动继续加载。")
         self.rev_hint.setStyleSheet("color: #888;")
         self.rev_hint.setWordWrap(True)
@@ -1010,14 +1010,14 @@ class TcDocPage(BasePage):
 
         bar = QHBoxLayout()
         bar.setSpacing(6)
-        self.mem_fetch_btn = QPushButton("🔄 拉取全部成员")
+        self.mem_fetch_btn = QPushButton("拉取全部成员")
         self.mem_fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.mem_fetch_btn.setToolTip(
             "纯 HTTP 游标翻页拉取该文档的全部成员（每页 100 条，自动翻完）；"
             "含昵称、权限等级、账号来源、UID，自动存 成员名单/ JSON + Excel")
         self.mem_fetch_btn.clicked.connect(self._fetch_members)
         bar.addWidget(self.mem_fetch_btn)
-        self.mem_dir_btn = QPushButton("📂 打开成员名单目录")
+        self.mem_dir_btn = QPushButton("打开成员名单目录")
         self.mem_dir_btn.clicked.connect(lambda: self._open_dir(tc_cfg.members_dir()))
         bar.addWidget(self.mem_dir_btn)
         bar.addStretch(1)
@@ -1234,7 +1234,7 @@ class TcDocPage(BasePage):
                                  "-" if row["readers"] is None else row["readers"]))
             else:
                 for row in reversed(storage.all_snapshots(db, doc["key"], limit=2000)):
-                    data.append((row["ts"], "✅ 成功" if row["ok"] else "❌ 失败",
+                    data.append((row["ts"], "成功" if row["ok"] else "失败",
                                  "-" if row["views"] is None else row["views"],
                                  "-" if row["members"] is None else row["members"],
                                  row["message"] or ""))
@@ -1252,7 +1252,7 @@ class TcDocPage(BasePage):
     def _refresh_summary(self):
         doc = self.current_doc()
         if not doc:
-            self.url_label.setText("尚未配置文档，可在「🗂 文档管理」里添加")
+            self.url_label.setText("尚未配置文档，可在「文档管理」里添加")
             self.latest_label.setText("")
             return
         self.url_label.setText(f"链接：{doc['url']}")
@@ -1266,7 +1266,7 @@ class TcDocPage(BasePage):
             if err:
                 self.latest_label.setText(f"最新记录读取失败：{err}"[:200])
             elif not row:
-                self.latest_label.setText("该文档暂无记录，点「🔄 立即采集」开始")
+                self.latest_label.setText("该文档暂无记录，点「立即采集」开始")
             else:
                 views = "-" if row["views"] is None else row["views"]
                 self.latest_label.setText(
@@ -1299,7 +1299,7 @@ class TcDocPage(BasePage):
         doc = self.current_doc()
         syncable = (not doc) or (doc.get("kind") or "").lower() in tables.SYNC_KINDS
         self.tabs.setTabText(self.content_tab_index,
-                             "📋 表格同步" if syncable else "📖 正文预览")
+                             "表格同步" if syncable else "正文预览")
         if self.content_tab_index in self._panels:
             self.content_stack.setCurrentWidget(
                 self.table_panel if syncable else self.preview_panel)
@@ -1398,14 +1398,14 @@ class TcDocPage(BasePage):
         elif (doc.get("kind") or "").lower() not in tables.SYNC_KINDS:
             self.sheet_hint.setText("该文档类型没有表格数据，内容 Tab 已自动切换为正文预览")
         elif not sheets:
-            self.sheet_hint.setText("该文档还没有本地表格数据，点「🔄 同步表格」开始")
+            self.sheet_hint.setText("该文档还没有本地表格数据，点「同步表格」开始")
         elif skipped:
             names = "、".join(s["tab_name"] for s in skipped[:6])
             more = " 等" if len(skipped) > 6 else ""
             self.sheet_hint.setText(f"已跳过 {len(skipped)} 个非表格页：{names}{more}"
                                     "（普通表格 / 图表页 / 文章页不支持同步）")
         else:
-            self.sheet_hint.setText("点「🔄 同步表格」把文档里的表格内容抓到本地；"
+            self.sheet_hint.setText("点「同步表格」把文档里的表格内容抓到本地；"
                                     "图片字段会自动增量下载到 图片/。")
 
     def _current_tab_id(self) -> str:
@@ -1551,14 +1551,14 @@ class TcDocPage(BasePage):
             self.app.toast("请先添加腾讯文档", "warning")
             return
         if (doc.get("kind") or "").lower() not in tables.SYNC_KINDS:
-            self.app.toast("只有「表格 / 智能表格」类型能同步数据；文档类型请看「📖 正文预览」",
+            self.app.toast("只有「表格 / 智能表格」类型能同步数据；文档类型请看「正文预览」",
                            "warning")
             return
-        self._set_busy(True, "⏳ 正在同步表格数据……")
+        self._set_busy(True, "正在同步表格数据……")
 
         def work():
             return tc_engine.job.sync_tables(
-                [doc], on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+                [doc], on_status=lambda s: post_to_main(self.status_label.setText, f"{s}"))
 
         def done(results, err):
             self._set_busy(False)
@@ -1577,7 +1577,7 @@ class TcDocPage(BasePage):
                 image_stats = item.get("images") or {}
                 note = (f"，补采图片 {image_stats['downloaded']} 张"
                         if image_stats.get("downloaded") else "")
-                self.status_label.setText(f"✅ 文档未变化，已跳过同步{note}（rev 未变）")
+                self.status_label.setText(f"文档未变化，已跳过同步{note}（rev 未变）")
                 self.app.toast(f"文档未变化，已跳过同步{note}", "info")
                 self._refresh_bridge_hint()
                 return
@@ -1592,7 +1592,7 @@ class TcDocPage(BasePage):
                 if image_stats.get("failed"):
                     image_note += f"（失败 {image_stats['failed']}）"
             self.status_label.setText(
-                f"✅ 表格同步完成：新增 {added}　修改 {updated}　删除 {removed}"
+                f"表格同步完成：新增 {added}　修改 {updated}　删除 {removed}"
                 f"{image_note}　Excel 已更新到 表格数据/")
             if item.get("images_error"):
                 self.status_label.setText(
@@ -1621,12 +1621,12 @@ class TcDocPage(BasePage):
                 return
             if count:
                 self.sheet_hint.setText(
-                    f"🔎 本地有 {count} 行尚未同步到当前腾讯表格 · "
-                    "点上方「🧩 中间层同步」页签查看并一键复制")
+                    f"本地有 {count} 行尚未同步到当前腾讯表格 · "
+                    "点上方「中间层同步」页签查看并一键复制")
             else:
                 self.sheet_hint.setText(
-                    "✅ 本地与当前腾讯表格已对齐（默认时间范围/账号）· "
-                    "点上方「🧩 中间层同步」页签可查看明细")
+                    "本地与当前腾讯表格已对齐（默认时间范围/账号）· "
+                    "点上方「中间层同步」页签可查看明细")
 
         run_bg(work, done)
 
@@ -1638,12 +1638,12 @@ class TcDocPage(BasePage):
         if not doc:
             self.app.toast("请先添加腾讯文档", "warning")
             return
-        self._set_busy(True, "⏳ 正在采集表格图片……")
+        self._set_busy(True, "正在采集表格图片……")
 
         def work():
             return tc_engine.images.download_doc(
                 doc["key"], doc["name"],
-                on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+                on_status=lambda s: post_to_main(self.status_label.setText, f"{s}"))
 
         def done(result, err):
             self._set_busy(False)
@@ -1658,10 +1658,10 @@ class TcDocPage(BasePage):
                 self.app.toast("该文档的表格里没有图片字段", "info")
                 return
             if downloaded:
-                message = (f"✅ 图片采集完成：共 {total} 张，本次下载 {downloaded} 张"
+                message = (f"图片采集完成：共 {total} 张，本次下载 {downloaded} 张"
                            + (f"，失败 {failed} 张" if failed else ""))
             else:
-                message = f"✅ 图片已是最新：共 {total} 张"
+                message = f"图片已是最新：共 {total} 张"
                 if failed:
                     message += f"，失败 {failed} 张"
             self.status_label.setText(message + "　（图片/）")
@@ -1749,7 +1749,7 @@ class TcDocPage(BasePage):
             return
         meta_info = self._rev_meta
         if not meta_info:
-            self.rev_info.setText("暂无本地修订记录，点「🔄 拉取全部修订记录」")
+            self.rev_info.setText("暂无本地修订记录，点「拉取全部修订记录」")
             self.rev_more_btn.setEnabled(False)
             self.rev_all_btn.setEnabled(False)
             return
@@ -1762,7 +1762,7 @@ class TcDocPage(BasePage):
         if self._rev_loaded < self._rev_total:
             note += "（滚动到底自动加载）"
         if not meta_info.get("complete", True):
-            note += " · ⚠ 上次未拉全"
+            note += " · 上次未拉全"
         self.rev_info.setText(note)
         more = self._rev_loaded < self._rev_total
         self.rev_more_btn.setEnabled(more)
@@ -1776,11 +1776,11 @@ class TcDocPage(BasePage):
             self.app.toast("请先添加腾讯文档", "warning")
             return
         mode = "全量重拉" if full else "增量拉取"
-        self._set_busy(True, f"⏳ 正在{mode}修订记录……")
+        self._set_busy(True, f"正在{mode}修订记录……")
 
         def work():
             result = tc_engine.revision.collect(
-                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"),
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"{s}"),
                 incremental=not full)
             return tc_engine.revision.save(result)
 
@@ -1798,7 +1798,7 @@ class TcDocPage(BasePage):
                     detail += f"（第 {saved['stopped_at_page']} 页到上次位置）"
             else:
                 detail += f" {saved.get('added', 0)} 条 · 全量校验更新 {saved.get('updated', 0)} 条"
-            message = (f"✅ 修订记录：{saved.get('versions', 0)} 个版本 / "
+            message = (f"修订记录：{saved.get('versions', 0)} 个版本 / "
                        f"{saved.get('total', 0)} 条编辑（{detail}）")
             if saved.get("skipped_export"):
                 message += "；内容无变化，未重写导出文件"
@@ -1836,7 +1836,7 @@ class TcDocPage(BasePage):
             self.mem_info.setText("")
             return
         if not meta_info:
-            self.mem_info.setText("暂无本地成员名单，点「🔄 拉取全部成员」")
+            self.mem_info.setText("暂无本地成员名单，点「拉取全部成员」")
             return
         roles = meta_info.get("roles") or {}
         dist = " · ".join(f"{k} {v}" for k, v in roles.items())
@@ -1844,7 +1844,7 @@ class TcDocPage(BasePage):
         if dist:
             note += " · " + dist
         if not meta_info.get("complete", True):
-            note += " · ⚠ 上次未拉全"
+            note += " · 上次未拉全"
         self.mem_info.setText(note)
 
     def _fetch_members(self):
@@ -1854,11 +1854,11 @@ class TcDocPage(BasePage):
         if not doc:
             self.app.toast("请先添加腾讯文档", "warning")
             return
-        self._set_busy(True, "⏳ 正在拉取全部成员……")
+        self._set_busy(True, "正在拉取全部成员……")
 
         def work():
             result = tc_engine.members.collect(
-                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"{s}"))
             return tc_engine.members.save(result)
 
         def done(saved, err):
@@ -1870,10 +1870,10 @@ class TcDocPage(BasePage):
             self._refresh_members()
             if not saved.get("records"):
                 message = "该文档没有返回成员名单（需要文档管理权限）"
-                self.status_label.setText(f"⚠ {message}")
+                self.status_label.setText(f"{message}")
                 self.app.toast(message, "warning")
                 return
-            message = (f"✅ 成员名单：{saved.get('records', 0)} 条记录 / "
+            message = (f"成员名单：{saved.get('records', 0)} 条记录 / "
                        f"{saved.get('unique', 0)} 位成员（去重，本次新增 {saved.get('added', 0)}）")
             if saved.get("excel_error"):
                 message += "；Excel 写入失败（文件可能被占用）"
@@ -1919,11 +1919,11 @@ class TcDocPage(BasePage):
         if not self.docs:
             self.app.toast("请先添加至少一个腾讯文档", "warning")
             return
-        self._set_busy(True, "⏳ 正在采集历史记录……")
+        self._set_busy(True, "正在采集历史记录……")
 
         def work():
             return tc_engine.job.collect_all(
-                on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+                on_status=lambda s: post_to_main(self.status_label.setText, f"{s}"))
 
         def done(results, err):
             self._set_busy(False)
@@ -1939,7 +1939,7 @@ class TcDocPage(BasePage):
             browse_note = (f"，浏览人 {browse_total}（新增 {browse_added}）"
                            if browse_total else "")
             self.status_label.setText(
-                f"✅ 历史采集完成：成功 {len(ok)}/{len(results)}"
+                f"历史采集完成：成功 {len(ok)}/{len(results)}"
                 f"，已写入数据库与报表{browse_note}")
             if failed:
                 detail = "\n".join(f"· {r['name']}：{r.get('error') or '未知错误'}" for r in failed)
@@ -1958,7 +1958,7 @@ class TcDocPage(BasePage):
     def _rebuild_reports(self):
         if self._busy:
             return
-        self._set_busy(True, "⏳ 正在重建全部报表……")
+        self._set_busy(True, "正在重建全部报表……")
 
         def done(count, err):
             self._set_busy(False)
@@ -2060,18 +2060,18 @@ class TcDocPage(BasePage):
         if not doc or self._busy:
             self.app.toast("请先选择要诊断的文档", "warning")
             return
-        self._set_busy(True, "⏳ 正在生成诊断包（会打开浏览器窗口）……")
+        self._set_busy(True, "正在生成诊断包（会打开浏览器窗口）……")
 
         def work():
             return tc_engine.collector.probe(
-                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"⏳ {s}"))
+                doc, on_status=lambda s: post_to_main(self.status_label.setText, f"{s}"))
 
         def done(path, err):
             self._set_busy(False)
             if err:
                 self.app.toast(f"诊断失败：{err}"[:120], "error")
                 return
-            self.status_label.setText(f"✅ 诊断包已生成：{path}")
+            self.status_label.setText(f"诊断包已生成：{path}")
             self.app.toast(f"诊断包已保存到 调试/{path.name}", "success")
 
         run_bg(work, done)

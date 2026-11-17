@@ -21,7 +21,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import make_row_clickable
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -38,19 +40,19 @@ QUALITY_NAMES = {
 
 # (platform_id, 显示名, 模式列表) —— netease 走独立模块，其余走 music scrapers
 PLATFORMS = [
-    ("netease", "🎧 网易云音乐", ["search", "song", "playlist", "album"]),
-    ("qq", "🐧 QQ音乐", ["search", "song", "playlist"]),
-    ("kugou", "🐕 酷狗音乐", ["search", "song", "playlist"]),
-    ("kuwo", "🐼 酷我音乐", ["search", "song", "playlist"]),
-    ("5sing", "🎤 5sing音乐", ["search", "song", "playlist"]),
-    ("kugou_lite", "🎶 酷狗概念版", ["search", "song"]),
+    ("netease", "网易云音乐", ["search", "song", "playlist", "album"]),
+    ("qq", "QQ音乐", ["search", "song", "playlist"]),
+    ("kugou", "酷狗音乐", ["search", "song", "playlist"]),
+    ("kuwo", "酷我音乐", ["search", "song", "playlist"]),
+    ("5sing", "5sing音乐", ["search", "song", "playlist"]),
+    ("kugou_lite", "酷狗概念版", ["search", "song"]),
 ]
 
 MODES = [
-    ("search", "🎵 歌曲搜索"),
-    ("song", "🎶 单曲解析"),
-    ("playlist", "📋 歌单解析"),
-    ("album", "💿 专辑解析"),
+    ("search", "歌曲搜索"),
+    ("song", "单曲解析"),
+    ("playlist", "歌单解析"),
+    ("album", "专辑解析"),
 ]
 
 PLACEHOLDERS = {
@@ -148,14 +150,14 @@ class NeteasePage(BasePage):
             return {}
 
     # 原来的「设置 Tab」帮助文字（功能说明 + 平台说明）
-    # 改为浮层展示：点「❓ 使用说明」在按钮下方弹出，收起不占任何布局空间
+    # 改为浮层展示：点「使用说明」在按钮下方弹出，收起不占任何布局空间
     _HELP_HTML = (
         "<p><b>功能说明</b></p>"
-        "<p>· <b>🎵 歌曲搜索</b>：输入「歌名 / 歌手」关键词，可勾选下载</p>"
-        "<p>· <b>🎶 单曲解析</b>：输入歌曲链接或 ID，展示详情 + 歌词 + 封面，可立即下载</p>"
-        "<p>· <b>📋 歌单解析</b>：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载</p>"
-        "<p>· <b>💿 专辑解析（仅网易云）</b>：输入专辑链接/ID 或专辑名</p>"
-        "<p>· <b>🔄 自动换源（默认开启）</b>：下载失败或只拿到试听片段时，"
+        "<p>· <b>歌曲搜索</b>：输入「歌名 / 歌手」关键词，可勾选下载</p>"
+        "<p>· <b>单曲解析</b>：输入歌曲链接或 ID，展示详情 + 歌词 + 封面，可立即下载</p>"
+        "<p>· <b>歌单解析</b>：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载</p>"
+        "<p>· <b>专辑解析（仅网易云）</b>：输入专辑链接/ID 或专辑名</p>"
+        "<p>· <b>自动换源（默认开启）</b>：下载失败或只拿到试听片段时，"
         "自动到其他平台搜同名曲继续下载，顺序：酷我 → 酷狗 → 酷狗概念版 → 网易云"
         "（酷狗概念版需扫码登录；网易云换源需已登录）</p>"
         "<p><b>平台说明</b></p>"
@@ -165,7 +167,7 @@ class NeteasePage(BasePage):
         "<p>· 5sing音乐：站内原唱/翻唱/伴奏 192k/128k 全曲可下</p>"
         "<p>· QQ音乐：官方直链接口已关闭，下载靠自动换源到其他平台</p>"
         "<p>· <b>酷狗概念版</b>：扫码登录后可下 128k/320k/FLAC；"
-        "登录后点「🎁 领VIP」可免费领取会员（+3小时/次，每日 8 次），"
+        "登录后点「领VIP」可免费领取会员（+3小时/次，每日 8 次），"
         "VIP 曲目即可下载</p>"
         "<p>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
         "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录账号下载。"
@@ -218,8 +220,8 @@ class NeteasePage(BasePage):
 
         # 底部：操作栏
         bottom = QHBoxLayout()
-        bottom.addWidget(QPushButton("☑ 全选", clicked=lambda: self._sel("all")))
-        bottom.addWidget(QPushButton("🔄 反选", clicked=lambda: self._sel("invert")))
+        bottom.addWidget(QPushButton("全选", clicked=lambda: self._sel("all")))
+        bottom.addWidget(QPushButton("反选", clicked=lambda: self._sel("invert")))
         bottom.addWidget(QPushButton("□ 全不选", clicked=lambda: self._sel("none")))
         self.fallback_check = QCheckBox("自动换源")
         self.fallback_check.setChecked(self._load_fallback())
@@ -243,12 +245,13 @@ class NeteasePage(BasePage):
             pass
         self.export_loc_combo.currentIndexChanged.connect(self._on_export_loc_changed)
         bottom.addWidget(self.export_loc_combo)
-        pick_dir_btn = QPushButton("📁")
+        pick_dir_btn = QPushButton("")
+        pick_dir_btn.setIcon(line_icon("folder", theme.color("text"), 16))
         pick_dir_btn.setFixedSize(30, 26)
         pick_dir_btn.setToolTip("选择固定导出位置（文件夹）")
         pick_dir_btn.clicked.connect(self._pick_music_dir)
         bottom.addWidget(pick_dir_btn)
-        self.download_btn = QPushButton("⬇ 下载选中")
+        self.download_btn = QPushButton("下载选中")
         self.download_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
         self.download_btn.clicked.connect(self._download_selected)
         bottom.addWidget(self.download_btn)
@@ -262,14 +265,14 @@ class NeteasePage(BasePage):
         return w
 
     def _build_help_redbox(self):
-        """顶部右侧「❓ 使用说明」按钮：浮层面板展示完整说明。
+        """顶部右侧「使用说明」按钮：浮层面板展示完整说明。
 
         展开为覆盖式浮层（不加入布局），点按钮弹出/收起——
         不再挤压搜索区，也不会把下方界面推下去。
         """
         from gui_qt.help_overlay import attach_help_overlay
-        return attach_help_overlay(self, "❓ 使用说明", self._HELP_HTML,
-                                   btn_text="❓ 使用说明")
+        return attach_help_overlay(self, "使用说明", self._HELP_HTML,
+                                   btn_text="使用说明")
 
     # ===================== 自动换源勾选持久化 =====================
     @staticmethod
@@ -388,7 +391,7 @@ class NeteasePage(BasePage):
         self.kw_entry.setPlaceholderText(ph)
         self.kw_entry.returnPressed.connect(self._search)
         self.input_row.addWidget(self.kw_entry, 1)
-        self.search_btn = QPushButton("🔍 获取")
+        self.search_btn = QPushButton("获取")
         self.search_btn.clicked.connect(self._search)
         self.input_row.addWidget(self.search_btn)
         # 清空详情
@@ -427,7 +430,7 @@ class NeteasePage(BasePage):
     # ===================== 封面图（异步加载） =====================
     def _load_image_async(self, url, size, parent_layout):
         """异步加载网络图片，返回占位 QLabel（加载成功后替换 pixmap）。"""
-        lbl = QLabel("🎵")
+        lbl = QLabel("")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet("background: #ffffff; border-radius: 4px; color: #555;")
@@ -472,7 +475,7 @@ class NeteasePage(BasePage):
         singer = self.singer_entry.text().strip() if getattr(self, "singer_entry", None) else ""
 
         self.search_btn.setEnabled(False)
-        self.status_label.setText("⏳ 获取中...")
+        self.status_label.setText("获取中...")
         self._clear_detail()
         self.results = []
         self.check_boxes = []
@@ -490,7 +493,7 @@ class NeteasePage(BasePage):
         def done(result, err):
             self.search_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 self._show_empty()
                 return
             self._result_snapshot = result
@@ -598,7 +601,7 @@ class NeteasePage(BasePage):
             h.addWidget(dur)
             make_row_clickable(row, cb)
             self.detail_layout.addWidget(row)
-        self.status_label.setText(f"✅ 共 {len(songs)} 首，勾选后批量下载")
+        self.status_label.setText(f"共 {len(songs)} 首，勾选后批量下载")
 
     # ===================== 渲染：单曲解析（详情 + 歌词） =====================
     def _render_single_song(self, song):
@@ -615,28 +618,28 @@ class NeteasePage(BasePage):
         h.setContentsMargins(10, 10, 10, 10)
         self._load_image_async(song.cover_url, 120, h)
         lines = [
-            f"🎵 {song.song_name or song.title}",
-            f"👤 歌手: {song.singer or '未知'}",
+            f"{song.song_name or song.title}",
+            f"歌手: {song.singer or '未知'}",
         ]
         if song.album_name:
-            lines.append(f"💿 专辑: {song.album_name}")
+            lines.append(f"专辑: {song.album_name}")
         if song.duration:
-            lines.append(f"⏱ 时长: {song.duration // 60}:{song.duration % 60:02d}")
+            lines.append(f"时长: {song.duration // 60}:{song.duration % 60:02d}")
         if song.mode:
-            lines.append(f"🎙 模式: {song.mode}")
+            lines.append(f"模式: {song.mode}")
         if song.language:
-            lines.append(f"🌐 语种: {song.language}")
+            lines.append(f"语种: {song.language}")
         if song.genre:
-            lines.append(f"🎼 流派: {song.genre}")
+            lines.append(f"流派: {song.genre}")
         if song.release_date:
-            lines.append(f"📅 发行: {song.release_date}")
+            lines.append(f"发行: {song.release_date}")
         if song.pay and song.pay.fee:
-            lines.append("👑 VIP 歌曲（下载可能受限）")
-        lines.append(f"🆔 ID: {song.song_id}")
+            lines.append("VIP 歌曲（下载可能受限）")
+        lines.append(f"ID: {song.song_id}")
         txt = QLabel("\n".join(lines))
         txt.setWordWrap(True)
         h.addWidget(txt, 1)
-        dl_btn = QPushButton("⬇ 立即下载")
+        dl_btn = QPushButton("立即下载")
         dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 12px; border-radius: 4px;")
         dl_btn.clicked.connect(self._download_single_song)
         h.addWidget(dl_btn, 0, Qt.AlignBottom)
@@ -649,7 +652,7 @@ class NeteasePage(BasePage):
             lv = QVBoxLayout(lyric_card)
             lv.setContentsMargins(10, 6, 10, 8)
             lv.setSpacing(2)
-            title_lbl = QLabel("📝 歌词")
+            title_lbl = QLabel("歌词")
             title_lbl.setStyleSheet("font-weight: bold; font-size: 12px; background: transparent; border: none;")
             title_lbl.setFixedHeight(18)
             lv.addWidget(title_lbl)
@@ -668,7 +671,7 @@ class NeteasePage(BasePage):
             lbl = QLabel("（暂无歌词）")
             lbl.setStyleSheet("color: #888; padding: 8px;")
             self.detail_layout.addWidget(lbl)
-        self.status_label.setText("✅ 单曲解析完成，可立即下载或查看歌词")
+        self.status_label.setText("单曲解析完成，可立即下载或查看歌词")
 
     def _render_single_song_netease(self, song):
         self.single_song_id = song.get("id")
@@ -679,16 +682,16 @@ class NeteasePage(BasePage):
         pic = song.get("_picUrl") or (song.get("al") or {}).get("picUrl")
         self._load_image_async(pic, 120, h)
         info_text = (
-            f"🎵 {song.get('name', '')}\n"
-            f"👤 歌手: {song.get('artists', '')}\n"
-            f"💿 专辑: {song.get('album', '')}\n"
-            f"⏱ 时长: {_fmt_duration(song.get('duration', 0))}\n"
-            f"🆔 ID: {song.get('id', '')}"
+            f"{song.get('name', '')}\n"
+            f"歌手: {song.get('artists', '')}\n"
+            f"专辑: {song.get('album', '')}\n"
+            f"时长: {_fmt_duration(song.get('duration', 0))}\n"
+            f"ID: {song.get('id', '')}"
         )
         txt = QLabel(info_text)
         h.addWidget(txt, 1)
         # 单曲下载按钮（独立）
-        dl_btn = QPushButton("⬇ 立即下载")
+        dl_btn = QPushButton("立即下载")
         dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 12px; border-radius: 4px;")
         dl_btn.clicked.connect(self._download_single_song)
         h.addWidget(dl_btn, 0, Qt.AlignBottom)
@@ -703,7 +706,7 @@ class NeteasePage(BasePage):
             lv.setContentsMargins(10, 6, 10, 8)
             lv.setSpacing(2)
             # 标题行：固定小高度，避免占大块
-            title_lbl = QLabel("📝 歌词")
+            title_lbl = QLabel("歌词")
             title_lbl.setStyleSheet("font-weight: bold; font-size: 12px; background: transparent; border: none;")
             title_lbl.setFixedHeight(18)
             lv.addWidget(title_lbl)
@@ -722,7 +725,7 @@ class NeteasePage(BasePage):
             lbl = QLabel("（暂无歌词）")
             lbl.setStyleSheet("color: #888; padding: 8px;")
             self.detail_layout.addWidget(lbl)
-        self.status_label.setText("✅ 单曲解析完成，可立即下载或查看歌词")
+        self.status_label.setText("单曲解析完成，可立即下载或查看歌词")
 
     # ===================== 渲染：歌单解析 =====================
     def _render_playlist(self, pl):
@@ -738,23 +741,23 @@ class NeteasePage(BasePage):
         h.setContentsMargins(10, 10, 10, 10)
         self._load_image_async(pl.cover_url, 96, h)
         lines = [
-            f"📋 {pl.name}",
-            f"👤 创建者: {pl.creator or '未知'}",
-            f"🎵 歌曲数: {pl.song_count}",
+            f"{pl.name}",
+            f"创建者: {pl.creator or '未知'}",
+            f"歌曲数: {pl.song_count}",
         ]
         if pl.play_count:
             lines.append(f"▶ 播放: {pl.play_count:,}")
         if pl.tags:
-            lines.append(f"🏷 标签: {pl.tags}")
+            lines.append(f"标签: {pl.tags}")
         if pl.description:
-            lines.append(f"📝 简介: {pl.description[:90]}")
+            lines.append(f"简介: {pl.description[:90]}")
         txt = QLabel("\n".join(lines))
         txt.setWordWrap(True)
         h.addWidget(txt, 1)
         self.detail_layout.addWidget(info_card)
         self.results = [_song_to_row(s) for s in pl.songs]
         self._render_songs(self.results)
-        self.status_label.setText(f"✅ 歌单「{pl.name}」共 {len(self.results)} 首（{pl.platform_name}）")
+        self.status_label.setText(f"歌单「{pl.name}」共 {len(self.results)} 首（{pl.platform_name}）")
 
     def _render_playlist_netease(self, pl):
         # get_playlist_detail 返回扁平结构：{id, name, coverImgUrl, creator(str), trackCount, description, tracks}
@@ -765,10 +768,10 @@ class NeteasePage(BasePage):
         pic = pl.get("coverImgUrl")
         self._load_image_async(pic, 96, h)
         txt = QLabel(
-            f"📋 {pl.get('name', '')}\n"
-            f"👤 创建者: {pl.get('creator') or ''}\n"
-            f"🎵 歌曲数: {pl.get('trackCount', 0)}\n"
-            f"📝 简介: {(pl.get('description') or '无')[:90]}"
+            f"{pl.get('name', '')}\n"
+            f"创建者: {pl.get('creator') or ''}\n"
+            f"歌曲数: {pl.get('trackCount', 0)}\n"
+            f"简介: {(pl.get('description') or '无')[:90]}"
         )
         txt.setWordWrap(True)
         h.addWidget(txt, 1)
@@ -785,7 +788,7 @@ class NeteasePage(BasePage):
             for t in tracks
         ]
         self._render_songs(self.results)
-        self.status_label.setText(f"✅ 歌单「{pl.get('name', '')}」共 {len(self.results)} 首")
+        self.status_label.setText(f"歌单「{pl.get('name', '')}」共 {len(self.results)} 首")
 
     # ===================== 渲染：专辑解析（专辑详情） =====================
     def _render_album(self, album):
@@ -805,10 +808,10 @@ class NeteasePage(BasePage):
         publish = album_info.get("publishTime", 0)
         pub_str = time.strftime("%Y-%m-%d", time.localtime(publish / 1000)) if publish else "未知"
         txt = QLabel(
-            f"💿 {album_info.get('name', '')}\n"
-            f"👤 歌手: {artist_name}\n"
-            f"🎵 歌曲数: {album_info.get('size', len(songs))}\n"
-            f"📅 发行: {pub_str}"
+            f"{album_info.get('name', '')}\n"
+            f"歌手: {artist_name}\n"
+            f"歌曲数: {album_info.get('size', len(songs))}\n"
+            f"发行: {pub_str}"
         )
         h.addWidget(txt, 1)
         self.detail_layout.addWidget(info_card)
@@ -820,7 +823,7 @@ class NeteasePage(BasePage):
             for s in songs
         ]
         self._render_songs(self.results)
-        self.status_label.setText(f"✅ 专辑「{album_info.get('name', '')}」共 {len(self.results)} 首")
+        self.status_label.setText(f"专辑「{album_info.get('name', '')}」共 {len(self.results)} 首")
 
     # ===================== 渲染：专辑搜索结果（整张专辑下载） =====================
     def _render_albums(self, albums):
@@ -846,11 +849,11 @@ class NeteasePage(BasePage):
             artist = alb.get("artist")
             if isinstance(artist, dict):
                 artist = artist.get("name", "")
-            lbl = QLabel(f"💿 {alb.get('name', '')} - {artist}")
+            lbl = QLabel(f"{alb.get('name', '')} - {artist}")
             h.addWidget(lbl, 1)
             make_row_clickable(row, cb)
             self.detail_layout.addWidget(row)
-        self.status_label.setText(f"✅ 共 {len(albums)} 个专辑，勾选后下载整张专辑")
+        self.status_label.setText(f"共 {len(albums)} 个专辑，勾选后下载整张专辑")
 
     # ===================== 下载：单曲立即下载 =====================
     def _download_single_song(self):
@@ -864,7 +867,7 @@ class NeteasePage(BasePage):
         quality = self.quality_menu.currentData() or ""
         use_fallback = self.fallback_check.isChecked()
         self.download_btn.setEnabled(False)
-        self.status_label.setText("⏳ 下载中..." if not use_fallback else "⏳ 下载中（失败将自动换源）...")
+        self.status_label.setText("下载中..." if not use_fallback else "下载中（失败将自动换源）...")
 
         def work():
             from music.downloader import download_song_smart
@@ -879,16 +882,16 @@ class NeteasePage(BasePage):
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 return
             via = f"（经{result.via_platform}换源）" if result.via_platform else ""
             if result.success:
                 if result.is_preview:
-                    self.status_label.setText(f"⚠️ 仅试听片段：{os.path.basename(result.file_path)}（各平台均为 VIP 付费曲）{via}")
+                    self.status_label.setText(f"仅试听片段：{os.path.basename(result.file_path)}（各平台均为 VIP 付费曲）{via}")
                 else:
-                    self.status_label.setText(f"✅ 已下载 {os.path.basename(result.file_path)}{via}")
+                    self.status_label.setText(f"已下载 {os.path.basename(result.file_path)}{via}")
             else:
-                self.status_label.setText(f"❌ {result.error_message[:80]}")
+                self.status_label.setText(f"{result.error_message[:80]}")
 
         run_bg(work, done)
 
@@ -899,7 +902,7 @@ class NeteasePage(BasePage):
         quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
         sid = int(self.single_song_id)
         self.download_btn.setEnabled(False)
-        self.status_label.setText("⏳ 下载中...")
+        self.status_label.setText("下载中...")
 
         def work():
             from netease import MusicDownloader
@@ -918,13 +921,13 @@ class NeteasePage(BasePage):
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 return
             ok, fname, fmsg = result
             if ok:
-                self.status_label.setText(f"✅ 已下载 {fname}")
+                self.status_label.setText(f"已下载 {fname}")
             else:
-                self.status_label.setText(f"❌ {fmsg[:60]}")
+                self.status_label.setText(f"{fmsg[:60]}")
 
         run_bg(work, done)
 
@@ -942,7 +945,7 @@ class NeteasePage(BasePage):
         quality = self.quality_menu.currentData() or ""
         use_fallback = self.fallback_check.isChecked()
         self.download_btn.setEnabled(False)
-        self.status_label.setText("⏳ 下载中..." if not use_fallback else "⏳ 下载中（失败将自动换源）...")
+        self.status_label.setText("下载中..." if not use_fallback else "下载中（失败将自动换源）...")
         from gui_qt.download_float import get_float
         card = get_float().add_batch(f"音乐下载 · {self.platform}", total=len(selected), threads=4)
 
@@ -997,8 +1000,8 @@ class NeteasePage(BasePage):
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
-                card.finish(f"❌ 下载失败: {str(err)[:50]}")
+                self.status_label.setText(f"{err}")
+                card.finish(f"下载失败: {str(err)[:50]}")
                 return
             ok, fail, preview, via_cnt, first_err = result
             parts = [f"成功 {ok}"]
@@ -1008,7 +1011,7 @@ class NeteasePage(BasePage):
                 parts.append(f"试听 {preview}")
             if fail:
                 parts.append(f"失败 {fail}")
-            tip = ("⚠️ 完成（" + " / ".join(parts) + ")") if (fail or preview) else ("✅ 下载完成（成功 " + str(ok) + "）")
+            tip = ("完成（" + " / ".join(parts) + ")") if (fail or preview) else ("下载完成（成功 " + str(ok) + "）")
             if first_err and (fail or preview):
                 tip += f"：{first_err[:40]}"
             self.status_label.setText(tip)
@@ -1022,7 +1025,7 @@ class NeteasePage(BasePage):
         is_albums = bool(selected) and ("artists" not in selected[0] and "artist" in selected[0])
 
         self.download_btn.setEnabled(False)
-        self.status_label.setText("⏳ 下载中...")
+        self.status_label.setText("下载中...")
         from gui_qt.download_float import get_float
         # total 先按歌曲数估（专辑要拉详情后才知道总数，plan 由实际任务数修正）
         card = get_float().add_batch("音乐下载 · 网易云",
@@ -1091,16 +1094,16 @@ class NeteasePage(BasePage):
         def done(result, err):
             self.download_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
-                card.finish(f"❌ 下载失败: {str(err)[:50]}")
+                self.status_label.setText(f"{err}")
+                card.finish(f"下载失败: {str(err)[:50]}")
                 return
             ok, fail, first_err = result
             if fail:
-                tip = f"⚠️ 完成（成功 {ok} / 失败 {fail}）" + (f"：{first_err[:50]}" if first_err else "")
+                tip = f"完成（成功 {ok} / 失败 {fail}）" + (f"：{first_err[:50]}" if first_err else "")
                 self.status_label.setText(tip)
                 card.finish(f"成功 {ok} / 失败 {fail}")
             else:
-                self.status_label.setText(f"✅ 下载完成（成功 {ok}）")
-                card.finish(f"✅ 成功 {ok}")
+                self.status_label.setText(f"下载完成（成功 {ok}）")
+                card.finish(f"成功 {ok}")
 
         run_bg(work, done)

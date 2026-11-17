@@ -6,7 +6,7 @@
   点击行弹详情窗、单条下载（B站 draw/av 分发、抖音重解析、图片兜底）、删除（json+md+xlsx+raw+媒体）
 - 本地资源：选文件夹 → 扫描图片/视频/音频 → 缩略图（图片）+ 摘要（视频/音频）懒加载预览，
   支持扫描上限（0=全部）、分批间隔（限流）、增量模式（扫描结果增量写入索引文件）
-- 详情窗：完整信息 + 正文 + 媒体文件网格（5 列）+ 📷 导出预览图（紫色渐变拼贴）
+- 详情窗：完整信息 + 正文 + 媒体文件网格（5 列）+ 导出预览图（紫色渐变拼贴）
 """
 
 import base64
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import QLayout
 
 from gui_qt import common, theme
 from gui_qt.common import _fmt, icon_button, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from toolbox import asset_index
 from toolbox.asset_content import (
@@ -593,14 +594,14 @@ class AssetPage(BasePage):
         heading.addWidget(_asset_label("整理已获取内容、浏览数据库与本地媒体", "assetSubtitle"))
         head.addLayout(heading)
         head.addStretch(1)
-        backup_btn = QPushButton("💾 备份")
+        backup_btn = QPushButton("备份")
         backup_btn.setToolTip(
             "备份所有资产（已获取数据 / 媒体文件 / 数据库快照）为 zip 包或文件夹，\n"
             "支持导入恢复（文件不覆盖，数据库按去重键合并）")
         backup_btn.clicked.connect(self._show_backup_menu)
         head.addWidget(backup_btn)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 资产管理 · 功能介绍", (
+        head.addWidget(attach_help_overlay(self, "资产管理 · 功能介绍", (
             "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
             "<p>· <b>已获取资源</b>：先显示数据库保存的清单，再后台核对文件变化；"
             "首次使用需要建立索引，点击<b>刷新</b>可立即重新核对。"
@@ -619,11 +620,11 @@ class AssetPage(BasePage):
             "右键打开链接/筛选作者）</p>"
             "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频（固定<b>逐级读取全部子文件夹</b>），"
             "结果按文件夹分组，「文件夹」下拉可下钻到任一层；选定的目录会<b>记忆并锁定</b>"
-            "（🔒 后路径只读，下次启动自动恢复），📌 可把下钻到的子目录直接锁定为扫描根；"
+            "（锁定后路径只读，下次启动自动恢复），可把下钻到的子目录直接锁定为扫描根；"
             "<b>单击任意资源行弹出预览窗</b>（图片大图 / 视频首帧 + 播放），"
             "<b>切到本页会自动扫描</b>，不用每次手点；缩略图懒加载预览，支持扫描上限与增量索引</p>"
-            "<p>· <b>备份</b>：右上角 💾 导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
-            "<p>· 详情窗支持导出紫色渐变预览拼贴图 📷</p>")))
+            "<p>· <b>备份</b>：右上角「备份」可导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
+            "<p>· 详情窗支持导出紫色渐变预览拼贴图</p>")))
         help_button = head.itemAt(head.count() - 1).widget()
         help_button.setText("使用指南")
         help_button.setProperty("variant", "ghost")
@@ -662,13 +663,13 @@ class AssetPage(BasePage):
     # ==================== 资产备份（导出 / 导入） ====================
 
     def _show_backup_menu(self):
-        """页头 💾 备份 按钮菜单：导出所有资产（zip / 文件夹）+ 导入恢复。"""
+        """页头 备份 按钮菜单：导出所有资产（zip / 文件夹）+ 导入恢复。"""
         m = QMenu(self)
-        m.addAction("📦 导出所有资产（zip 包）…", self._backup_assets_zip)
-        m.addAction("📁 导出所有资产（文件夹）…", self._backup_assets_folder)
+        m.addAction("导出所有资产（zip 包）…", self._backup_assets_zip)
+        m.addAction("导出所有资产（文件夹）…", self._backup_assets_folder)
         m.addSeparator()
-        m.addAction("📥 导入备份（zip 包）…", self._import_backup_zip)
-        m.addAction("📥 导入备份（文件夹）…", self._import_backup_folder)
+        m.addAction("导入备份（zip 包）…", self._import_backup_zip)
+        m.addAction("导入备份（文件夹）…", self._import_backup_folder)
         btn = self.sender()
         m.exec(btn.mapToGlobal(QPoint(0, btn.height())) if btn else None)
 
@@ -797,8 +798,9 @@ class AssetPage(BasePage):
         self.pick_btn = _asset_action("选择文件夹", self._pick_folder)
         row.addWidget(self.pick_btn)
         self.dir_lock_btn = icon_button(
-            "🔓", "锁定当前目录（只读并在下次启动恢复）",
+            "", "锁定当前目录（只读并在下次启动恢复）",
             (36, 32), False, "font-size: 15px;", self._toggle_dir_lock)
+        self.dir_lock_btn.setIcon(line_icon("unlock", theme.color("text"), 16))
         row.addWidget(self.dir_lock_btn)
         toolbar.addLayout(row)
 
@@ -841,8 +843,9 @@ class AssetPage(BasePage):
         self.local_dir_sel.currentIndexChanged.connect(self._on_local_dir_changed)
         frow.addWidget(self.local_dir_sel, 1)
         self.pin_dir_btn = icon_button(
-            "📌", "把此子目录锁定为扫描根目录并重新扫描",
+            "", "把此子目录锁定为扫描根目录并重新扫描",
             (36, 32), False, "font-size: 15px;", self._pin_local_dir)
+        self.pin_dir_btn.setIcon(line_icon("pin", theme.color("text"), 16))
         frow.addWidget(self.pin_dir_btn)
         toolbar.addLayout(frow)
         self.local_status = _asset_label("", wrap=True)
@@ -896,7 +899,8 @@ class AssetPage(BasePage):
         self._dir_locked = bool(locked)
         self.dir_entry.setReadOnly(self._dir_locked)
         self.pick_btn.setEnabled(not self._dir_locked)
-        self.dir_lock_btn.setText("🔒" if self._dir_locked else "🔓")
+        self.dir_lock_btn.setIcon(line_icon(
+            "lock" if self._dir_locked else "unlock", theme.color("text"), 16))
         self.dir_lock_btn.setToolTip(
             "已锁定：路径只读、选择按钮禁用，下次启动自动恢复该目录（点此解锁）"
             if self._dir_locked else
@@ -1003,7 +1007,7 @@ class AssetPage(BasePage):
         self._save_dir_var(folder)      # 扫过的目录即记忆（下次启动自动恢复）
         inc = self.inc_var.isChecked()
         self._local_scanning = True
-        self.local_status.setText("⏳ 正在扫描（含子文件夹）…")
+        self.local_status.setText("正在扫描（含子文件夹）…")
 
         def work():
             import time
@@ -1065,7 +1069,7 @@ class AssetPage(BasePage):
         sel.clear()
         sel.addItem("全部文件夹", "")
         for p in ordered:
-            sel.addItem("　" * p.count("/") + "📁 " + p.split("/")[-1], p)
+            sel.addItem("　" * p.count("/") + p.split("/")[-1], p)
             sel.setItemData(sel.count() - 1, p, Qt.ToolTipRole)
         sel.setCurrentIndex(0)
         sel.blockSignals(False)
@@ -1074,7 +1078,7 @@ class AssetPage(BasePage):
     def _update_local_status(self):
         """状态行：锁定标记 / 资源总数 / 分类计数 / 涉及文件夹数 / 当前筛选范围。"""
         files = self._all_files
-        lock = "🔒 " if getattr(self, "_dir_locked", False) else ""
+        lock = "已锁定 · " if getattr(self, "_dir_locked", False) else ""
         if not files:
             self.local_status.setText(f"{lock}尚未扫描到资源，请检查目录与扫描上限；所有子文件夹都会包含在内")
             return
@@ -1115,7 +1119,7 @@ class AssetPage(BasePage):
         if not view:
             self._clear_layout(lay)
             tip = QLabel("（该文件夹下没有可预览的图片/视频/音频）"
-                         if self._all_files else "（尚未扫描，选好文件夹后点 🔍 扫描）")
+                         if self._all_files else "（尚未扫描，选好文件夹后点 扫描）")
             tip.setStyleSheet("color: palette(placeholder-text); padding: 8px;")
             lay.addWidget(tip)
             lay.addStretch(1)
@@ -1145,7 +1149,7 @@ class AssetPage(BasePage):
         if rel == getattr(self, "_cur_group", None):
             return
         self._cur_group = rel
-        lbl = QLabel(("📁 " + rel) if rel else "📁 (根目录)")
+        lbl = QLabel(rel or "(根目录)")
         lbl.setStyleSheet("color: palette(placeholder-text); font-size: 11px; padding: 5px 2px 1px 2px;")
         lbl.setToolTip(item.get("path", ""))
         lay.addWidget(lbl)
@@ -1160,7 +1164,7 @@ class AssetPage(BasePage):
         if kind == "image":
             thumb = self._load_local_thumb(item["path"], 90, 60)
         else:
-            thumb = QLabel("🎬" if kind == "video" else "🎵")
+            thumb = QLabel("")
             thumb.setFixedSize(90, 60)
             thumb.setAlignment(Qt.AlignCenter)
         thumb.setObjectName("assetThumbnail")
@@ -1193,7 +1197,7 @@ class AssetPage(BasePage):
         title_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         outer.addWidget(title_lbl)
 
-        preview = QLabel("⏳ 预览加载中…")
+        preview = QLabel("预览加载中…")
         preview.setAlignment(Qt.AlignCenter)
         preview.setFixedSize(820, 440)
         preview.setStyleSheet(
@@ -1201,7 +1205,7 @@ class AssetPage(BasePage):
             " font-size: 44px;")
         outer.addWidget(preview, 1, Qt.AlignHCenter)
 
-        icon = {"video": "🎬", "audio": "🎵"}.get(kind, "🖼")
+        icon = {"video": "视频", "audio": "音频"}.get(kind, "")
 
         def work():
             if kind == "image":
@@ -1291,13 +1295,13 @@ class AssetPage(BasePage):
         tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
-        open_btn = QPushButton("▶ 播放" if kind in ("video", "audio") else "📂 打开")
+        open_btn = QPushButton("▶ 播放" if kind in ("video", "audio") else "打开")
         open_btn.clicked.connect(lambda: self._open_media(item["path"]))
         bottom.addWidget(open_btn)
-        reveal_btn = QPushButton("📂 打开所在位置")
+        reveal_btn = QPushButton("打开所在位置")
         reveal_btn.clicked.connect(lambda: self._reveal_media(item["path"]))
         bottom.addWidget(reveal_btn)
-        copy_btn = QPushButton("📋 复制路径")
+        copy_btn = QPushButton("复制路径")
         copy_btn.clicked.connect(
             lambda: QApplication.clipboard().setText(item.get("path") or ""))
         bottom.addWidget(copy_btn)
@@ -1306,7 +1310,7 @@ class AssetPage(BasePage):
 
     def _load_local_thumb(self, path, w, h):
         """后台加载本地图片缩略图，回主线程设置 pixmap。"""
-        lbl = QLabel("🖼")
+        lbl = QLabel("")
         lbl.setFixedSize(w, h)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet("background: palette(alternate-base); border-radius: 4px;")
@@ -1363,7 +1367,7 @@ class AssetPage(BasePage):
             "① 顶级：download/ 下的分类目录（公众号文章 / 淘宝商品 / 弹幕文件 / 歌曲文件 …）\n"
             "   —— 选中后按一次导出的产物聚合（文档数 + 图片数 + 总大小）\n"
             "② 已获取数据：按平台 / 作者目录筛选，父目录包含其下所有层级；\n"
-            "   选择「⬅ 返回全部分类」回到顶级")
+            "   选择「返回全部分类」回到顶级")
         self.folder_sel.currentIndexChanged.connect(self._on_folder_changed)
         filters.addWidget(self.folder_sel, 1)
         self.search_entry = QLineEdit()
@@ -1548,7 +1552,7 @@ class AssetPage(BasePage):
                 "expected_imgs": len(imgs),  # 独立媒体条目本身完整
             })
         # 3.1 来源文件夹（相对 已获取数据/ 的目录）：主归属取 json 所在目录，
-        # json 缺失时回退媒体目录；仅用于行内 📁 标注（筛选走「平台」下拉与分类目录）
+        # json 缺失时回退媒体目录；仅用于行内 标注（筛选走「平台」下拉与分类目录）
         for entry in results:
             primary = self._rel_src_dir(
                 entry.get("file_path"), video_dir, download_root)
@@ -1626,7 +1630,7 @@ class AssetPage(BasePage):
         except Exception:
             tops = []
         for name in tops:
-            sel.addItem(f"📦 {name}", f"dir:{name}")
+            sel.addItem(f"{name}", f"dir:{name}")
             sel.setItemData(sel.count() - 1, f"download/{name}", Qt.ToolTipRole)
         # 页面里选了「固定位置」的导出目录也列出来（否则资产页完全看不到）
         try:
@@ -1634,9 +1638,9 @@ class AssetPage(BasePage):
         except Exception:
             cfg = {}
         custom = (
-            ("📌 公众号导出（固定位置）", "公众号文章",
+            ("公众号导出（固定位置）", "公众号文章",
              cfg.get("wechat_custom_dir") if cfg.get("wechat_use_custom_dir") else ""),
-            ("📌 歌曲下载（固定位置）", "歌曲文件",
+            ("歌曲下载（固定位置）", "歌曲文件",
              cfg.get("music_download_custom_dir") if cfg.get("music_download_use_custom") else ""),
         )
         for label, cat, path in custom:
@@ -2490,8 +2494,8 @@ class AssetPage(BasePage):
         self._clear_layout(lay)
         for _ in range(n):
             lay.addWidget(self._make_skeleton_row())
-        tip = QLabel("⏳ 正在读取目录文件..." if getattr(self, "_view_mode", "entries") == "files"
-                     else "⏳ 正在扫描已获取数据...")
+        tip = QLabel("正在读取目录文件..." if getattr(self, "_view_mode", "entries") == "files"
+                     else "正在扫描已获取数据...")
         tip.setStyleSheet("color: palette(placeholder-text);")
         tip.setContentsMargins(8, 10, 8, 10)
         lay.addWidget(tip)
@@ -2582,7 +2586,7 @@ class AssetPage(BasePage):
         self._collected_page = page
         start = (page - 1) * BATCH
         if getattr(self, "_dir_group_truncated", False):
-            warn = QLabel("⚠️ 目录文件超过 20000 个，仅显示前 20000 个")
+            warn = QLabel("目录文件超过 20000 个，仅显示前 20000 个")
             warn.setStyleSheet("color: palette(link); padding: 2px 8px;")
             warn.setToolTip("先在文件管理器里清理/归档一部分文件，或缩小到子目录再看")
             lay.addWidget(warn)
@@ -2609,7 +2613,7 @@ class AssetPage(BasePage):
         if g.get("cover"):
             self._fill_local_thumb(thumb, g["cover"], 96, 64)
         else:
-            thumb.setText("🎬" if g.get("n_vid") else "🎵" if g.get("n_aud") else "📄")
+            thumb.setText("")
         h.addWidget(thumb)
         info = QVBoxLayout()
         info.setSpacing(5)
@@ -2658,17 +2662,17 @@ class AssetPage(BasePage):
         m = QMenu(self)
         root_dir = g.get("root_dir") or ""
         files = g.get("files") or []
-        m.addAction("📄 查看内容（二级弹窗）", lambda: self._show_group_detail(g))
+        m.addAction("查看内容（二级弹窗）", lambda: self._show_group_detail(g))
         m.addSeparator()
         if root_dir and os.path.isdir(root_dir):
-            m.addAction("📂 打开目录", lambda: self._open_media(root_dir))
-            m.addAction("📋 复制目录路径", lambda: QApplication.clipboard().setText(root_dir))
+            m.addAction("打开目录", lambda: self._open_media(root_dir))
+            m.addAction("复制目录路径", lambda: QApplication.clipboard().setText(root_dir))
         if files:
-            m.addAction("📄 打开首个文件", lambda: self._open_media(files[0]["path"]))
-            m.addAction("📋 复制首个文件路径",
+            m.addAction("打开首个文件", lambda: self._open_media(files[0]["path"]))
+            m.addAction("复制首个文件路径",
                         lambda: QApplication.clipboard().setText(files[0]["path"]))
         m.addSeparator()
-        m.addAction(f"ℹ️ 共 {len(g.get('files') or [])} 个文件 · {_fmt_size(g.get('size', 0))}",
+        m.addAction(f"共 {len(g.get('files') or [])} 个文件 · {_fmt_size(g.get('size', 0))}",
                     lambda: None).setEnabled(False)
         m.exec(global_pos)
 
@@ -2829,9 +2833,9 @@ class AssetPage(BasePage):
         outer.addWidget(title_lbl)
         articles = self._group_articles(g)
         meta = QLabel(
-            f"📅 {g.get('date') or '-'} · {_fmt_size(g.get('size', 0))}"
+            f"{g.get('date') or '-'} · {_fmt_size(g.get('size', 0))}"
             f" · {len(articles)} 篇 / {len(files)} 个文件"
-            f" · 📄{g.get('n_doc', 0)} 🖼{g.get('n_img', 0)} 🎬{g.get('n_vid', 0)}")
+            f" · 文档 {g.get('n_doc', 0)} 图片 {g.get('n_img', 0)} 视频 {g.get('n_vid', 0)}")
         meta.setStyleSheet("color: palette(placeholder-text); font-size: 12px;")
         outer.addWidget(meta)
         root_lbl = QLabel(_wrappable(g.get("root_dir") or ""))
@@ -2863,7 +2867,7 @@ class AssetPage(BasePage):
             f" color:{theme.color('text')}; }}"
             f"blockquote {{ color:{theme.color('muted')}; }}"
             f"code {{ background:{theme.color('surface_alt')}; }}")
-        tabs.addTab(content, "📄 内容")
+        tabs.addTab(content, "内容")
 
         media_files = [f for f in files
                        if f.get("type") in ("image", "video", "audio")]
@@ -2874,7 +2878,7 @@ class AssetPage(BasePage):
             flow = _FlowLayout(mbody, spacing=4)
             for mf in media_files[:150]:
                 if mf.get("type") == "audio":
-                    cell = QLabel("🎵")
+                    cell = QLabel("")
                     cell.setFixedSize(128, 128)
                     cell.setAlignment(Qt.AlignCenter)
                     cell.setStyleSheet(
@@ -2889,7 +2893,7 @@ class AssetPage(BasePage):
                 more_lbl.setStyleSheet("color: palette(placeholder-text); padding: 8px;")
                 flow.addWidget(more_lbl)
             mscroll.setWidget(mbody)
-            tabs.addTab(mscroll, f"🖼 媒体（{len(media_files)}）")
+            tabs.addTab(mscroll, f"媒体（{len(media_files)}）")
 
         fw = QTableWidget(len(files), 4)
         fw.setHorizontalHeaderLabels(["名称", "类型", "大小", "所在目录"])
@@ -2912,7 +2916,7 @@ class AssetPage(BasePage):
                 fw.setItem(r, c, it)
         fw.doubleClicked.connect(
             lambda idx, fl=files: self._open_media(fl[idx.row()]["path"]))
-        tabs.addTab(fw, f"📁 文件（{len(files)}）")
+        tabs.addTab(fw, f"文件（{len(files)}）")
         body.addWidget(tabs, 1)
         outer.addLayout(body, 1)
 
@@ -2922,15 +2926,15 @@ class AssetPage(BasePage):
         bottom.addWidget(tip)
         bottom.addStretch(1)
         root_dir = g.get("root_dir") or ""
-        open_dir_btn = QPushButton("📂 打开目录")
+        open_dir_btn = QPushButton("打开目录")
         open_dir_btn.clicked.connect(
             lambda: self._open_media(root_dir if os.path.isdir(root_dir)
                                      else os.path.dirname(files[0]["path"])))
         bottom.addWidget(open_dir_btn)
-        open_first_btn = QPushButton("📄 打开首个文件")
+        open_first_btn = QPushButton("打开首个文件")
         open_first_btn.clicked.connect(lambda: self._open_media(files[0]["path"]))
         bottom.addWidget(open_first_btn)
-        copy_btn = QPushButton("📋 复制路径")
+        copy_btn = QPushButton("复制路径")
         copy_btn.clicked.connect(
             lambda: QApplication.clipboard().setText(root_dir or files[0]["path"]))
         bottom.addWidget(copy_btn)
@@ -3061,7 +3065,7 @@ class AssetPage(BasePage):
         elif it["cover_url"]:
             self._fill_net_thumb(thumb, it["cover_url"], 96, 64)
         else:
-            thumb.setText("🎬")
+            thumb.setText("")
         h.addWidget(thumb)
 
         info = QVBoxLayout()
@@ -3070,7 +3074,7 @@ class AssetPage(BasePage):
         title = full_title[:60] + ("…" if len(full_title) > 60 else "")
         title_label = _asset_label(_wrappable(title), "assetRowTitle", wrap=True)
         src_dir = (it.get("src_dir") or "").strip()
-        title_label.setToolTip(f"{full_title}\n\n📁 {src_dir or '(根目录)'}\n📄 {os.path.basename(it['file_path'])}")
+        title_label.setToolTip(f"{full_title}\n\n{src_dir or '(根目录)'}\n{os.path.basename(it['file_path'])}")
         info.addWidget(title_label)
         plat = platform_cn(it["platform"])
         if it["platform"] == "bilibili" and "is_dynamic" in it:
@@ -3134,15 +3138,15 @@ class AssetPage(BasePage):
         if media:
             vids = [m["path"] for m in media if m.get("type") == "video"]
             if vids:
-                menu.addAction("📋 复制视频").triggered.connect(
+                menu.addAction("复制视频").triggered.connect(
                     lambda _=False, ps=vids: self._copy_files_to_clipboard(ps))
             elif len(media) == 1:
-                menu.addAction("📋 复制媒体文件").triggered.connect(
+                menu.addAction("复制媒体文件").triggered.connect(
                     lambda _=False, p=media[0]["path"]: self._copy_files_to_clipboard([p]))
             else:
-                sub = menu.addMenu(f"📋 复制媒体文件（{len(media)} 个）")
+                sub = menu.addMenu(f"复制媒体文件（{len(media)} 个）")
                 for m in media:
-                    icon = {"image": "🖼 ", "video": "🎬 "}.get(m.get("type"), "📄 ")
+                    icon = {"image": "", "video": ""}.get(m.get("type"), "")
                     sub.addAction(icon + os.path.basename(m["path"])).triggered.connect(
                         lambda _=False, p=m["path"]: self._copy_files_to_clipboard([p]))
                 sub.addSeparator()
@@ -3151,36 +3155,36 @@ class AssetPage(BasePage):
             shown = True
         url = (it.get("video_url") or "").strip()
         if url:
-            menu.addAction("🔗 复制视频链接").triggered.connect(
+            menu.addAction("复制视频链接").triggered.connect(
                 lambda _=False: (QApplication.clipboard().setText(url),
                                  self.app.toast("已复制视频链接", "success")))
-            menu.addAction("🌐 打开链接").triggered.connect(
+            menu.addAction("打开链接").triggered.connect(
                 lambda _=False: QDesktopServices.openUrl(QUrl(url)))
             shown = True
         elif (it.get("raw_url") or "").strip():
             raw = it.get("raw_url").strip()
-            menu.addAction("🌐 打开链接").triggered.connect(
+            menu.addAction("打开链接").triggered.connect(
                 lambda _=False: QDesktopServices.openUrl(QUrl(raw)))
             shown = True
         if shown:
             menu.addSeparator()
         if md_path and os.path.exists(md_path):
-            menu.addAction("📄 打开数据文件（MD）").triggered.connect(
+            menu.addAction("打开数据文件（MD）").triggered.connect(
                 lambda _=False, p=md_path: os.startfile(p))  # noqa: PTH110
             shown = True
         if media:
             if len(media) == 1:
-                menu.addAction("🎬 打开媒体文件").triggered.connect(
+                menu.addAction("打开媒体文件").triggered.connect(
                     lambda _=False, p=media[0]["path"]: os.startfile(p))  # noqa: PTH110
             else:
-                sub = menu.addMenu(f"🎬 打开媒体文件（{len(media)} 个）")
+                sub = menu.addMenu(f"打开媒体文件（{len(media)} 个）")
                 for m in media:
-                    icon = {"image": "🖼 ", "video": "🎬 "}.get(m.get("type"), "📄 ")
+                    icon = {"image": "", "video": ""}.get(m.get("type"), "")
                     name = os.path.basename(m["path"])
                     sub.addAction(icon + name).triggered.connect(
                         lambda _=False, p=m["path"]: os.startfile(p))  # noqa: PTH110
                 sub.addSeparator()
-                sub.addAction("📂 打开媒体所在文件夹").triggered.connect(
+                sub.addAction("打开媒体所在文件夹").triggered.connect(
                     lambda _=False: os.startfile(os.path.dirname(media[0]["path"])))  # noqa: PTH110
             shown = True
         if not shown:
@@ -3189,10 +3193,10 @@ class AssetPage(BasePage):
         menu.addSeparator()
         key = self._dl_key(it)
         if self._no_dl_flagged(key):
-            menu.addAction("🔓 解除下载限制（允许下载）").triggered.connect(
+            menu.addAction("解除下载限制（允许下载）").triggered.connect(
                 lambda _=False, k=key: self._unset_no_dl(k))
         else:
-            menu.addAction("🔒 标记为不可下载").triggered.connect(
+            menu.addAction("标记为不可下载").triggered.connect(
                 lambda _=False, k=key: self._set_no_dl_manual(k))
         menu.exec(global_pos)
 
@@ -3597,11 +3601,11 @@ class AssetPage(BasePage):
                 return  # 取消时每个在途条目都会走到这：只汇总一次，防重复 toast/刷新
             st["finished"] = True
             if cancel_ev.is_set():
-                card.finish(f"⏹ 已取消（完成 {st['done']}/{n}）")
+                card.finish(f"已取消（完成 {st['done']}/{n}）")
                 self.app.toast(f"批量下载已取消（完成 {st['done']}/{n}）", "warning")
             else:
-                card.finish(f"✅ 批量下载完成 {st['done']} 条")
-                self.app.toast(f"✅ 批量下载完成 {st['done']} 条", "success")
+                card.finish(f"批量下载完成 {st['done']} 条")
+                self.app.toast(f"批量下载完成 {st['done']} 条", "success")
             QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
 
         _launch()
@@ -3669,7 +3673,7 @@ class AssetPage(BasePage):
             ok = (err is None) and bool(result) and os.path.exists(result)
             if card is not None:
                 card.handle_event("done", (it.get("title") or vid)[:40], ok)
-                card.finish("✅ B站视频已下载" if ok else "❌ B站视频下载失败/取消")
+                card.finish("B站视频已下载" if ok else "B站视频下载失败/取消")
             paths = []
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
@@ -3685,7 +3689,7 @@ class AssetPage(BasePage):
                         break
                 if os.path.exists(result):
                     paths.append((result, "视频"))
-                self.app.toast("✅ 已下载 B站视频" + ("（含封面）" if cover_ok else ""),
+                self.app.toast("已下载 B站视频" + ("（含封面）" if cover_ok else ""),
                                "success")
             if not quiet:  # 批量模式由 _advance 统一刷新一次，避免逐条骨架闪烁
                 # 轻量刷新：视频/封面路径已知，直接挂行（不触发全量磁盘扫描）
@@ -3750,17 +3754,17 @@ class AssetPage(BasePage):
             if card is not None:
                 if err:
                     card.handle_event("done", "视频", False)
-                    card.finish("❌ 下载失败")
+                    card.finish("下载失败")
                 elif ok_img:
-                    card.finish(f"✅ 图片 {ok_img} 张"
+                    card.finish(f"图片 {ok_img} 张"
                                 + (f" + 封面 {stats.get('covers', 0)} 张"
                                    if stats.get("covers") else ""))
                 elif ok_vid:
-                    card.finish(f"✅ 视频 1 个"
+                    card.finish(f"视频 1 个"
                                 + (f" + 封面 {stats.get('covers', 0)} 张"
                                    if stats.get("covers") else ""))
                 else:
-                    card.finish("⚠ 下载取消/失败")
+                    card.finish("下载取消/失败")
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
@@ -3773,30 +3777,30 @@ class AssetPage(BasePage):
                 cancelled = stats.get("cancelled", False)
                 if n_img:
                     self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
-                    self.app.toast(f"✅ 已下载图片 {n_img} 张" + ("（已取消）" if cancelled else ""),
+                    self.app.toast(f"已下载图片 {n_img} 张" + ("（已取消）" if cancelled else ""),
                                    "success" if not cancelled else "warning")
                 elif n_vid:
                     self._dl_state[self._dl_key(it)] = "done"
-                    msg = f"✅ 已下载视频 {n_vid} 个"
+                    msg = f"已下载视频 {n_vid} 个"
                     if n_cov:
                         msg += f" + 封面 {n_cov} 张"
                     self.app.toast(msg, "success")
                 elif n_skip and not cancelled:
                     # 视频本体已下载过自动跳过（skip_existing），封面可能补齐
                     self._dl_state[self._dl_key(it)] = "done"
-                    self.app.toast(f"✅ 视频已下载过，自动跳过"
+                    self.app.toast(f"视频已下载过，自动跳过"
                                    + (f"（补齐封面 {n_cov} 张）" if n_cov else ""), "success")
                 else:
                     self._dl_state[self._dl_key(it)] = None  # 失败可重试
                     if cancelled:
-                        self.app.toast("⚠ 下载已取消（半截文件下次续传）", "warning")
+                        self.app.toast("下载已取消（半截文件下次续传）", "warning")
                     elif f:
                         # 拿到直链但下载失败（CDN 链接过期 403 等）
-                        self.app.toast(f"❌ 视频下载失败（{f} 个），直链可能已过期，可重试", "error")
+                        self.app.toast(f"视频下载失败（{f} 个），直链可能已过期，可重试", "error")
                     else:
                         # 0 失败 0 成功 = 一个任务都没建出来：重新解析没拿到
                         # 直链（风控/作品失效）且存量链接不是直链，压根没尝试
-                        self.app.toast("❌ 视频未下载：未获取到可用直链（解析被拦或作品失效），可重试", "error")
+                        self.app.toast("视频未下载：未获取到可用直链（解析被拦或作品失效），可重试", "error")
             if not quiet:  # 批量模式由 _advance 统一刷新一次
                 # 轻量刷新：stats["paths"] 已带下载文件路径，直接挂行
                 self._refresh_rows_for([it], new_paths=stats.get("paths") or None)
@@ -3825,8 +3829,8 @@ class AssetPage(BasePage):
         v.setSpacing(10)
         v.addWidget(QLabel(f"「{(it.get('title') or '')[:40]}」关联文件："))
 
-        def _mk_row(emoji, label, files):
-            cb = QCheckBox(f"{emoji} {label}（{len(files)} 个）")
+        def _mk_row(label, files):
+            cb = QCheckBox(f"{label}（{len(files)} 个）")
             cb.setProperty("assetTone", "accent")
             cb.setStyleSheet("font-weight: bold;")
             cb.setEnabled(bool(files))
@@ -3835,10 +3839,10 @@ class AssetPage(BasePage):
             v.addWidget(cb)
             return cb, files
 
-        cb_img, _ = _mk_row("🖼", "图片文件", img_files)
-        cb_vid, _ = _mk_row("🎬", "视频文件", vid_files)
-        cb_doc, _ = _mk_row("📄", "文本文件（json/md/xlsx/raw/评论）", doc_files)
-        cb_all = QCheckBox("🗑 全部删除（含文本，条目将消失）")
+        cb_img, _ = _mk_row("图片文件", img_files)
+        cb_vid, _ = _mk_row("视频文件", vid_files)
+        cb_doc, _ = _mk_row("文本文件（json/md/xlsx/raw/评论）", doc_files)
+        cb_all = QCheckBox("全部删除（含文本，条目将消失）")
         cb_all.setProperty("assetTone", "danger")
         cb_all.setStyleSheet("font-weight: bold;")
         v.addWidget(cb_all)
@@ -3868,7 +3872,7 @@ class AssetPage(BasePage):
                 + (len(vid_files) if not cb_vid.isChecked() else 0)
             if not doc_files and (img_files or vid_files) and remaining == 0:
                 vanish_lbl.setText(
-                    "⚠ 该条目无数据文件（json），当前勾选会删光全部媒体文件——"
+                    "该条目无数据文件（json），当前勾选会删光全部媒体文件——"
                     "条目就是这些文件，删除后此行将从列表消失！")
             elif not doc_files and (img_files or vid_files):
                 vanish_lbl.setText("ℹ 该条目为独立媒体条目（无 json），请留意删光媒体会导致条目消失")
@@ -3908,7 +3912,7 @@ class AssetPage(BasePage):
         # 删光全部媒体后条目将从列表消失且无法补下
         remaining = (len(img_files) if not cb_img.isChecked() else 0) \
             + (len(vid_files) if not cb_vid.isChecked() else 0)
-        vanish_warn = ("\n\n⚠ 该条目无数据文件（json），删除全部媒体后条目将从列表消失！"
+        vanish_warn = ("\n\n该条目无数据文件（json），删除全部媒体后条目将从列表消失！"
                        if not doc_files and remaining == 0 and (img_files or vid_files) else "")
         if QMessageBox.question(
                 self, "确认删除",
@@ -3988,18 +3992,18 @@ class AssetPage(BasePage):
                 n_skip = stats.get("skipped", 0)
                 if err:
                     card.handle_event("done", "图片", False)
-                    card.finish("❌ 下载失败")
+                    card.finish("下载失败")
                 elif stats.get("cancelled"):
-                    card.finish("⚠ 已取消")
+                    card.finish("已取消")
                 elif n_ok or n_skip:
                     parts = []
                     if n_ok:
-                        parts.append(f"✅ {n_ok} 个文件")
+                        parts.append(f"{n_ok} 个文件")
                     if n_skip:
                         parts.append(f"跳过 {n_skip} 个已下载")
                     card.finish(" · ".join(parts))
                 else:
-                    card.finish("❌ 下载失败")
+                    card.finish("下载失败")
             if err:
                 self._dl_state[self._dl_key(it)] = None  # 失败可重试
                 self.app.toast(f"下载失败: {str(err)[:60]}", "error")
@@ -4011,9 +4015,9 @@ class AssetPage(BasePage):
                 cancelled = stats.get("cancelled", False)
                 self._dl_state[self._dl_key(it)] = "done" if not cancelled else None
                 if not n and not n_live and not n_cov and n_skip:
-                    msg = f"✅ {n_skip} 个文件已下载过，自动跳过"
+                    msg = f"{n_skip} 个文件已下载过，自动跳过"
                 else:
-                    msg = f"✅ 已下载图片 {n} 张"
+                    msg = f"已下载图片 {n} 张"
                     if n_cov:
                         msg += f" + 封面 {n_cov} 张"
                     if n_live:
@@ -4469,7 +4473,7 @@ class AssetPage(BasePage):
             if err or not path:
                 self.app.toast(f"导出失败: {str(err)[:60]}", "error")
                 return
-            self.app.toast(f"✅ 已导出 {len(sel)} 条 → {path}", "success")
+            self.app.toast(f"已导出 {len(sel)} 条 → {path}", "success")
 
         run_bg(work, done)
 
@@ -4598,15 +4602,15 @@ class AssetPage(BasePage):
         tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
-        open_btn = QPushButton("🌐 打开链接")
+        open_btn = QPushButton("打开链接")
         open_btn.setEnabled(bool(link))
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(link)))
         bottom.addWidget(open_btn)
-        copy_title_btn = QPushButton("📋 复制标题")
+        copy_title_btn = QPushButton("复制标题")
         copy_title_btn.clicked.connect(
             lambda: QApplication.clipboard().setText(row[4] or ""))
         bottom.addWidget(copy_title_btn)
-        copy_desc_btn = QPushButton("📋 复制正文")
+        copy_desc_btn = QPushButton("复制正文")
         copy_desc_btn.setEnabled(bool(desc))
         copy_desc_btn.clicked.connect(
             lambda: QApplication.clipboard().setText(desc))
@@ -4619,18 +4623,18 @@ class AssetPage(BasePage):
         if not sel:
             return
         menu = QMenu(self)
-        act_detail = menu.addAction("📄 查看内容详情")
+        act_detail = menu.addAction("查看内容详情")
         menu.addSeparator()
-        act_open = menu.addAction("🌐 打开链接")
-        act_copy = menu.addAction("📋 复制链接")
+        act_open = menu.addAction("打开链接")
+        act_copy = menu.addAction("复制链接")
         menu.addSeparator()
         author = (sel[0][5] or "").strip()
         if author:
-            act_author = menu.addAction(f"🔍 筛选作者「{author}」")
+            act_author = menu.addAction(f"筛选作者「{author}」")
         else:
             act_author = None
         menu.addSeparator()
-        act_del = menu.addAction(f"🗑 删除选中（{len(sel)} 条）")
+        act_del = menu.addAction(f"删除选中（{len(sel)} 条）")
         act = menu.exec(self.db_table.viewport().mapToGlobal(pos))
         if act == act_detail:
             self._show_db_detail(sel[0])
@@ -4786,7 +4790,7 @@ class AssetPage(BasePage):
         if mfs:
             imgs = [m for m in mfs if m["type"] == "image"]
             vids = [m for m in mfs if m["type"] == "video"]
-            mh = QLabel(f"🖼 媒体文件（{len(imgs)} 图 / {len(vids)} 视频）")
+            mh = QLabel(f"媒体文件（{len(imgs)} 图 / {len(vids)} 视频）")
             mh.setStyleSheet("color: palette(placeholder-text); font-weight: bold;")
             v.addWidget(mh)
             if imgs or vids:
@@ -4808,7 +4812,7 @@ class AssetPage(BasePage):
         tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
-        exp_btn = QPushButton("📷 导出预览图")
+        exp_btn = QPushButton("导出预览图")
         exp_btn.setProperty("variant", "primary")
         exp_btn.clicked.connect(lambda: self._export_preview_image(item))
         bottom.addWidget(exp_btn)
@@ -4818,7 +4822,7 @@ class AssetPage(BasePage):
     def _add_detail_cover(self, v, item):
         """详情窗封面预览：本地文件优先（视频同名官方封面/首图），网络封面兜底。
 
-        右键菜单：📋 复制图片（进剪贴板）/ 🔗 复制封面链接 / 📂 打开媒体位置。
+        右键菜单：复制图片（进剪贴板）/ 复制封面链接 / 打开媒体位置。
         无任何封面源时不占位。
         """
         mfs = item.get("media_files") or []
@@ -4842,7 +4846,7 @@ class AssetPage(BasePage):
             return
 
         state = {"img": None}
-        lbl = QLabel("🖼 封面加载中...")
+        lbl = QLabel("封面加载中...")
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setFixedSize(320, 200)
         lbl.setStyleSheet(
@@ -4888,12 +4892,12 @@ class AssetPage(BasePage):
         def done(data, err):
             try:
                 if not data:
-                    lbl.setText("🖼 封面不可用")
+                    lbl.setText("封面不可用")
                     return
                 full, small = data
                 qimg = QImage.fromData(small)
                 if qimg.isNull():
-                    lbl.setText("🖼 封面不可用")
+                    lbl.setText("封面不可用")
                     return
                 state["data"] = full
                 lbl.setPixmap(QPixmap.fromImage(qimg).scaled(
@@ -4903,11 +4907,11 @@ class AssetPage(BasePage):
 
         def menu(pos):
             m = QMenu(lbl)
-            act_img = m.addAction("📋 复制图片")
+            act_img = m.addAction("复制图片")
             act_img.setEnabled(state.get("data") is not None)
-            act_url = m.addAction("🔗 复制封面链接")
+            act_url = m.addAction("复制封面链接")
             act_url.setEnabled(bool(url))
-            act_open = m.addAction("📂 打开媒体位置")
+            act_open = m.addAction("打开媒体位置")
             act_open.setEnabled(bool(local) and os.path.exists(local))
             act = m.exec(lbl.mapToGlobal(pos))
             if act is act_img and state.get("data") is not None:
@@ -4929,14 +4933,14 @@ class AssetPage(BasePage):
     def _load_local_thumb_cell(self, path, size, is_video=False):
         """媒体网格单格：双击图片用系统看图器开大图 / 双击视频缩略图播放。
 
-        视频先用 ffmpeg 抽首帧做封面（live 图 .mov 的静态帧），失败回退 🎬 占位。
+        视频先用 ffmpeg 抽首帧做封面（live 图 .mov 的静态帧），失败回退 占位。
         """
         if is_video:
             lbl = _ThumbLabel(lambda p=path: self._open_media(p))
-            lbl.setText("🎬")
+            lbl.setText("")
         else:
             lbl = _ThumbLabel(lambda p=path: self._open_media(p))
-            lbl.setText("🖼")
+            lbl.setText("")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet("background: palette(alternate-base); border-radius: 4px;")
@@ -4945,8 +4949,8 @@ class AssetPage(BasePage):
         # 右键缩略图 → 复制文件（可粘贴到文件夹/聊天软件）/ 打开媒体位置
         def _thumb_menu(pos):
             menu = QMenu(lbl)
-            act_copy = menu.addAction("📋 复制视频" if is_video else "📋 复制图片文件")
-            act = menu.addAction("📂 打开媒体位置")
+            act_copy = menu.addAction("复制视频" if is_video else "复制图片文件")
+            act = menu.addAction("打开媒体位置")
             chosen = menu.exec(lbl.mapToGlobal(pos))
             if chosen is act_copy:
                 self._copy_files_to_clipboard([path])
@@ -5039,10 +5043,10 @@ class AssetPage(BasePage):
             raw_val = str(raw or "")
             menu = QMenu(w)
             if is_time:
-                act_no = menu.addAction("📋 复制时间（不带秒）")
-                act_yes = menu.addAction("📋 复制时间（带秒）")
+                act_no = menu.addAction("复制时间（不带秒）")
+                act_yes = menu.addAction("复制时间（带秒）")
             else:
-                act_no = menu.addAction(f"📋 复制{title}")
+                act_no = menu.addAction(f"复制{title}")
                 act_yes = None
             if not raw_val.strip():
                 for a in (act_no, act_yes):
@@ -5104,11 +5108,11 @@ class AssetPage(BasePage):
             _EMOJI_RE = re.compile(
                 r'[\U0001F000-\U0001FAFF'      # 各 emoji 区块（含 1FA70+ 扩展）
                 r'\U00002190-\U000021FF'       # 箭头 ←→↑↓
-                r'\U00002300-\U000023FF'       # ⏰⌚⏳ 杂项技术符号
+                r'\U00002300-\U000023FF'       # 杂项技术符号
                 r'\U000025A0-\U000025FF'       # ▶◼● 几何图形（雅黑缺字形会变方框）
-                r'\U00002600-\U000027BF'       # ☀☁❤✂ 杂项符号/装饰符号
-                r'\U00002B00-\U00002BFF'       # ⭐⬆⬇ 杂项符号与箭头
-                r'\U0000FE0E\U0000FE0F'        # 变体选择符（❤️ 等序列尾部）
+                r'\U00002600-\U000027BF'       # 杂项符号/装饰符号
+                r'\U00002B00-\U00002BFF'       # 杂项符号与箭头
+                r'\U0000FE0E\U0000FE0F'        # 变体选择符（等序列尾部）
                 r'\U0000200D\U000020E3]'       # 零宽连接符 / 键帽组合
             )
 
@@ -5250,10 +5254,6 @@ class AssetPage(BasePage):
             plat_cn = platform_cn(item.get("platform"))
             plat_en = {"douyin": "Douyin", "weibo": "Weibo", "bilibili": "bilibili"}.get(
                 item.get("platform"), (item.get("platform") or "").title())
-            plat_emoji = {"douyin": "🎵", "weibo": "💬", "bilibili": "📺",
-                          "xiaohongshu": "📕", "kuaishou": "⚡", "haokan": "👀",
-                          "weishi": "🎥", "pear": "🍐", "pipigx": "😂"}.get(
-                item.get("platform"), "📄")
             plat_accent = {"douyin": ACCENT_RED, "weibo": ACCENT_RED, "bilibili": ACCENT_BLUE}.get(
                 item.get("platform"), ACCENT)
 
@@ -5305,7 +5305,7 @@ class AssetPage(BasePage):
                 bdraw.line([(0, y), (W, y)], fill=(r, g, b))
 
             bdraw.line([(pad, 28), (W - pad, 28)], fill=(255, 255, 255, 80), width=1)
-            _draw_mixed(bdraw, pad, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_small, f_emoji_sm)
+            _draw_mixed(bdraw, pad, 14, plat_cn, TEXT_PRIMARY, f_small, f_emoji_sm)
             title_y = 42
             for tl in title_lines:
                 tl_w = _mixed_len(tl, f_head, f_emoji_head)
@@ -5316,7 +5316,7 @@ class AssetPage(BasePage):
             sub_w = f_info.getlength(subtitle)
             bdraw.text(((W - sub_w) // 2, sub_y), subtitle, fill=TEXT_SECONDARY, font=f_info)
             bdraw.line([(pad, banner_h - 24), (W - pad, banner_h - 24)], fill=(255, 255, 255, 60), width=1)
-            _draw_mixed(bdraw, pad, banner_h - 18, "📊 内容数据预览", TEXT_PRIMARY, f_small, f_emoji_sm)
+            _draw_mixed(bdraw, pad, banner_h - 18, "内容数据预览", TEXT_PRIMARY, f_small, f_emoji_sm)
 
             # ============ 2. 平台数据卡片 ============
             card_x = pad
@@ -5324,13 +5324,13 @@ class AssetPage(BasePage):
             card_h = 150
             data_items = [
                 ("播放", play_count, ACCENT_GREEN, "▶"),
-                ("点赞", like_count, ACCENT_RED, "❤"),
-                ("评论", comment_count, ACCENT_BLUE, "💬"),
+                ("点赞", like_count, ACCENT_RED, ""),
+                ("评论", comment_count, ACCENT_BLUE, ""),
             ]
             stats_card = Image.new("RGB", (card_w, card_h), CARD_BG)
             sdraw = ImageDraw.Draw(stats_card)
 
-            _draw_mixed(sdraw, 20, 14, f"{plat_emoji}  {plat_cn}", TEXT_PRIMARY, f_title, f_emoji_title)
+            _draw_mixed(sdraw, 20, 14, plat_cn, TEXT_PRIMARY, f_title, f_emoji_title)
             try:
                 tag_w = 80
                 tag_h = 22
@@ -5404,8 +5404,8 @@ class AssetPage(BasePage):
                     f_ico = ImageFont.truetype(emoji_file or font_file, 44)
                 except Exception:
                     f_ico = f_title
-                bb = pd.textbbox((0, 0), "🎬", font=f_ico)
-                pd.text(((cell - (bb[2] - bb[0])) // 2, cell // 2 - 40), "🎬",
+                bb = pd.textbbox((0, 0), "▶", font=f_ico)
+                pd.text(((cell - (bb[2] - bb[0])) // 2, cell // 2 - 40), "▶",
                         fill=(255, 255, 255), font=f_ico)
                 label = "视频"
                 bb2 = pd.textbbox((0, 0), label, font=f_info)
@@ -5423,11 +5423,11 @@ class AssetPage(BasePage):
                 grid_card = Image.new("RGB", (card_w, grid_card_h), CARD_BG)
                 gdraw = ImageDraw.Draw(grid_card)
                 if imgs and vids:
-                    head = f"🖼 媒体文件  ({len(imgs)} 图 · {len(vids)} 视频)"
+                    head = f"媒体文件  ({len(imgs)} 图 · {len(vids)} 视频)"
                 elif vids:
-                    head = f"🎬 媒体文件  ({len(vids)} 视频)"
+                    head = f"媒体文件  ({len(vids)} 视频)"
                 else:
-                    head = f"🖼 媒体文件  ({len(imgs)} 图)"
+                    head = f"媒体文件  ({len(imgs)} 图)"
                 _draw_mixed(gdraw, 20, 12, head, TEXT_PRIMARY, f_info, f_emoji)
                 gdraw.line([(20, 42), (card_w - 20, 42)], fill=(60, 64, 80), width=1)
                 inner_w = card_w - 32
@@ -5465,7 +5465,7 @@ class AssetPage(BasePage):
                 desc_card_h = max(70, 60 + len(lines) * line_h_body)
                 desc_card = Image.new("RGB", (card_w, desc_card_h), CARD_BG)
                 ddraw = ImageDraw.Draw(desc_card)
-                _draw_mixed(ddraw, 20, 14, "📝 正文", TEXT_PRIMARY, f_info, f_emoji)
+                _draw_mixed(ddraw, 20, 14, "正文", TEXT_PRIMARY, f_info, f_emoji)
                 ddraw.line([(20, 44), (card_w - 20, 44)], fill=(60, 64, 80), width=1)
                 cy = 56
                 for line in lines:
@@ -5513,7 +5513,7 @@ class AssetPage(BasePage):
             if err:
                 self.app.toast(f"导出预览图失败: {str(err)[:60]}", "error")
             else:
-                self.app.toast("✅ 预览图已导出", "success")
+                self.app.toast("预览图已导出", "success")
                 try:
                     os.startfile(result)
                 except Exception:

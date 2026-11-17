@@ -24,8 +24,9 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from gui_qt import download_ops
+from gui_qt import download_ops, theme
 from gui_qt.common import _collect, _db_insert, icon_button, post_to_main, refresh_results_count, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
 from gui_qt.toolbox_common import ToolPageHeader
@@ -154,21 +155,21 @@ class InfoAccountsPage(BasePage):
         layout.setSpacing(6)
 
         from gui_qt.help_overlay import attach_help_overlay
-        help_btn = attach_help_overlay(self, "❓ 信息获取 · 功能介绍", (
+        help_btn = attach_help_overlay(self, "信息获取 · 功能介绍", (
             "<p><b>批量追踪账号主页、一键抓取最新作品/动态，结果自动存入「已获取」。</b></p>"
             "<p>· <b>批量输入</b>（一行 = 一个条目）：账号主页链接（B站空间/抖音/微博/快手/小红书）"
             "→ 自动添加为账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」，结果同时进日志</p>"
-            "<p>· <b>获取最新</b>：勾选账号后批量抓取，右下角可⏸暂停 / ✕取消；"
+            "<p>· <b>获取最新</b>：勾选账号后批量抓取，右下角可暂停 / 取消；"
             "抓取结果进入「已获取」与增量数据库</p>"
             "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
             "<p>· <b>获取后自动下载</b>：勾选后获取→保存→下载一次性完成；"
             "下载画质/线程数用「已获取」页的全局设置</p>"
             "<p>· <b>限流</b>：每平台累计抓到设定条数后冷却（同平台后续账号等冷却结束才发请求，"
             "抖音账号内部翻页同样停顿），防止请求过频触发风控</p>"
-            "<p>· <b>⏰ 定时获取</b>：按间隔自动抓取全部账号</p>"
-            "<p>· <b>📅 日期段</b>：日历选择发布时间范围（如 9月1日~9月20日、从头~9月20日），"
+            "<p>· <b>定时获取</b>：按间隔自动抓取全部账号</p>"
+            "<p>· <b>日期段</b>：日历选择发布时间范围（如 9月1日~9月20日、从头~9月20日），"
             "获取时只保留范围内的内容，范围持久保存</p>"
-            "<p>· <b>📤/📥 双向同步</b>：本页账号 ⇄「视频账号追踪」互相同步，"
+            "<p>· <b>双向同步</b>：本页账号 ⇄「视频账号追踪」互相同步，"
             "已存在的自动跳过，账号名/分组一并带过去（免重复录入）</p>"
             "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
             "<p>· 登录态由软件统一管理，抓取时自动套用</p>"))
@@ -185,25 +186,27 @@ class InfoAccountsPage(BasePage):
         layout.addWidget(self.batch_text)
 
         batch_row = QHBoxLayout()
-        self.process_btn = QPushButton("🚀 开始处理")
+        self.process_btn = QPushButton("开始处理")
         self.process_btn.setProperty("variant", "primary")
         self.process_btn.setToolTip(
             "逐行识别：账号主页 → 添加账号；其余 → 解析作品并存入「已获取」（Ctrl+Enter）")
         self.process_btn.clicked.connect(self._process_batch)
         batch_row.addWidget(self.process_btn)
         self.batch_pause_btn = icon_button(
-            "⏸️", "暂停批量处理：当前行处理完即停住，点「继续」恢复",
+            "▮▮", "暂停批量处理：当前行处理完即停住，点「继续」恢复",
             (40, 30), True, "font-size: 15px;", self._toggle_batch_pause)
         self.batch_pause_btn.setEnabled(False)
         batch_row.addWidget(self.batch_pause_btn)
         self.batch_cancel_btn = icon_button(
-            "❌", "取消批量处理：未开始的行直接跳过", (40, 30), True,
+            "×", "取消批量处理：未开始的行直接跳过", (40, 30), True,
             "font-size: 15px;", self._cancel_batch)
         self.batch_cancel_btn.setEnabled(False)
         batch_row.addWidget(self.batch_cancel_btn)
-        batch_row.addWidget(icon_button(
-            "📁", "从文本文件导入链接列表（每行一个）", (40, 30), True,
-            "font-size: 15px;", self._import_file))
+        import_btn = icon_button(
+            "", "从文本文件导入链接列表（每行一个）", (40, 30), True,
+            "font-size: 15px;", self._import_file)
+        import_btn.setIcon(line_icon("folder", theme.color("text"), 16))
+        batch_row.addWidget(import_btn)
         batch_row.addStretch(1)
         batch_row.addWidget(QLabel("账号分组:"))
         self.add_gid_entry = QLineEdit()
@@ -216,18 +219,22 @@ class InfoAccountsPage(BasePage):
 
         # 全选/反选/清除
         sel_bar = QHBoxLayout()
-        for text, mode, tip in (("☑️", "all", "全选"), ("🔄", "invert", "反选"), ("❌", "none", "清除选择")):
-            b = icon_button(text, tip, (32, 24), True, "font-size: 12px;",
+        for text, mode, tip in (("", "all", "全选"), ("", "invert", "反选"), ("", "none", "清除选择")):
+            b = icon_button(text, tip, (32, 24), False, "font-size: 12px;",
                             lambda _=False, m=mode: self._acc_select(m))
+            b.setIcon(line_icon({"all": "check", "invert": "refresh", "none": "close"}[mode],
+                                theme.color("text"), 13))
             sel_bar.addWidget(b)
         sel_bar.addStretch(1)
         self.sync_btn = icon_button(
-            "📤", "同步到追踪：把本页账号一键同步到「视频账号追踪」（按平台+ID去重，已存在跳过；分组一并带过去）",
+            "", "同步到追踪：把本页账号一键同步到「视频账号追踪」（按平台+ID去重，已存在跳过；分组一并带过去）",
             (36, 24), True, "font-size: 13px;", self._sync_to_tracker)
+        self.sync_btn.setIcon(line_icon("upload", theme.color("text"), 15))
         sel_bar.addWidget(self.sync_btn)
         self.sync_from_btn = icon_button(
-            "📥", "从追踪同步：把「视频账号追踪」的账号一键同步到本页（按平台+ID去重，已存在跳过；分组一并带过来）",
+            "", "从追踪同步：把「视频账号追踪」的账号一键同步到本页（按平台+ID去重，已存在跳过；分组一并带过来）",
             (36, 24), True, "font-size: 13px;", self._sync_from_tracker)
+        self.sync_from_btn.setIcon(line_icon("download", theme.color("text"), 15))
         sel_bar.addWidget(self.sync_from_btn)
         layout.addLayout(sel_bar)
 
@@ -270,16 +277,16 @@ class InfoAccountsPage(BasePage):
         self.fetch_btn.clicked.connect(self._fetch)
         fetch_row.addWidget(self.fetch_btn)
         self.pause_btn = icon_button(
-            "⏸️", "暂停后当前账号采集完即停住，点「继续」恢复",
+            "▮▮", "暂停后当前账号采集完即停住，点「继续」恢复",
             (40, 30), True, "font-size: 15px;", self._toggle_pause)
         self.pause_btn.setEnabled(False)
         fetch_row.addWidget(self.pause_btn)
         self.cancel_btn = icon_button(
-            "❌", "取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束",
+            "×", "取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束",
             (40, 30), True, "font-size: 15px;", self._cancel_fetch)
         self.cancel_btn.setEnabled(False)
         fetch_row.addWidget(self.cancel_btn)
-        self.timer_btn = QPushButton("⏰ 定时获取")
+        self.timer_btn = QPushButton("定时获取")
         self.timer_btn.clicked.connect(self._toggle_timer)
         fetch_row.addWidget(self.timer_btn)
         self.timer_dot = QLabel("○")
@@ -320,7 +327,7 @@ class InfoAccountsPage(BasePage):
         sec_lbl = QLabel("秒")
         sec_lbl.setProperty("role", "caption")
         limit_row.addWidget(sec_lbl)
-        self.date_btn = QPushButton("📅 日期段: 不限")
+        self.date_btn = QPushButton("日期段: 不限")
         self.date_btn.clicked.connect(self._show_date_range_dialog)
         limit_row.addSpacing(12)
         limit_row.addWidget(self.date_btn)
@@ -386,17 +393,19 @@ class InfoAccountsPage(BasePage):
         self.set_url_entry.setPlaceholderText("账号主页链接（自动识别平台）")
         r2.addWidget(self.set_url_entry, 1)
         self.set_name_fetch_btn = icon_button(
-            "🔍", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
+            "", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
             "font-size: 14px;",
             lambda: self._auto_fetch_name(self.set_url_entry, self.set_name_entry,
                                           self.set_name_fetch_btn))
+        self.set_name_fetch_btn.setIcon(line_icon("search", theme.color("text"), 15))
         r2.addWidget(self.set_name_fetch_btn)
-        self.set_add_btn = icon_button("➕", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
+        self.set_add_btn = icon_button("", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
+        self.set_add_btn.setIcon(line_icon("plus", theme.color("text"), 16))
         r2.addWidget(self.set_add_btn)
         ac.addLayout(r2)
         outer.addWidget(add_card)
 
-        # 分组管理卡片（列表独立滚动，⬆⬇ 调整显示顺序）
+        # 分组管理卡片（列表独立滚动，调整显示顺序）
         grp_card = QFrame()
         grp_card.setProperty("variant", "card")
         gc = QVBoxLayout(grp_card)
@@ -428,7 +437,8 @@ class InfoAccountsPage(BasePage):
         self.gname_entry.setPlaceholderText("组名")
         self.gname_entry.setMinimumWidth(80)
         addg.addWidget(self.gname_entry, 1)
-        newg_btn = icon_button("➕", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
+        newg_btn = icon_button("", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
+        newg_btn.setIcon(line_icon("plus", theme.color("text"), 16))
         addg.addWidget(newg_btn)
         gc.addLayout(addg)
         outer.addWidget(grp_card)
@@ -538,13 +548,13 @@ class InfoAccountsPage(BasePage):
             return
         if self._batch_pause_evt.is_set():
             self._batch_pause_evt.clear()
-            self.batch_pause_btn.setText("▶️")
+            self.batch_pause_btn.setText("▶")
             _set_button_variant(self.batch_pause_btn, "primary", compact=True)
-            self._log("⏸ 已暂停（当前行处理完成后停住）")
-            self.prog_label.setText("⏸ 已暂停，等待继续...")
+            self._log("已暂停（当前行处理完成后停住）")
+            self.prog_label.setText("已暂停，等待继续...")
         else:
             self._batch_pause_evt.set()
-            self.batch_pause_btn.setText("⏸️")
+            self.batch_pause_btn.setText("▮▮")
             _set_button_variant(self.batch_pause_btn, compact=True)
             self._log("▶ 已继续批量处理")
             self.prog_label.setText("继续批量处理中...")
@@ -554,7 +564,7 @@ class InfoAccountsPage(BasePage):
             return
         self._batch_cancel_evt.set()
         self._batch_pause_evt.set()  # 放行暂停中的线程，使其能走到取消检查
-        self._log("❌ 已取消：未处理的行直接跳过")
+        self._log("已取消：未处理的行直接跳过")
 
     def _process_batch(self):
         """逐行处理批量输入：账号主页→添加账号，其余→解析作品存入「已获取」。
@@ -581,7 +591,7 @@ class InfoAccountsPage(BasePage):
         self.batch_pause_btn.setEnabled(True)
         self.batch_cancel_btn.setEnabled(True)
         self.fetch_btn.setEnabled(False)
-        self.log_text.setPlainText(f"⏳ 开始批量处理 {len(lines)} 行...\n")
+        self.log_text.setPlainText(f"开始批量处理 {len(lines)} 行...\n")
         self.progress_bar.setFormat("%v / %m 行（%p%）")
         self._set_batch_progress(0, len(lines), "准备中...")
 
@@ -607,7 +617,7 @@ class InfoAccountsPage(BasePage):
                 if _is_account_url(url):
                     if url in existing:
                         dup_acc += 1
-                        self._log(f"{prefix} 👤 账号已存在，跳过：{url[:60]}")
+                        self._log(f"{prefix} 账号已存在，跳过：{url[:60]}")
                         continue
                     try:
                         name, _err = fetch_display_name(url)
@@ -616,21 +626,21 @@ class InfoAccountsPage(BasePage):
                     if add_account(url, name=name, group_id=gid, group_name=gname):
                         existing.add(url)
                         ok_acc += 1
-                        self._log(f"{prefix} 👤 已添加账号：{name or url[:60]}")
+                        self._log(f"{prefix} 已添加账号：{name or url[:60]}")
                     else:
                         dup_acc += 1
-                        self._log(f"{prefix} 👤 账号已存在，跳过：{url[:60]}")
+                        self._log(f"{prefix} 账号已存在，跳过：{url[:60]}")
                     continue
                 try:
                     info = download_ops.parse_url_info(raw)
                 except Exception as e:  # noqa: BLE001
                     fail += 1
-                    self._log(f"{prefix} ❌ {url[:70]}（{e}）")
+                    self._log(f"{prefix} {url[:70]}（{e}）")
                     continue
                 added = _collect([info])
                 ok_post += 1
                 new_posts += added
-                tag = "✅ 已存入「已获取」" if added else "☑️ 已存在，未重复入库"
+                tag = "已存入「已获取」" if added else "已存在，未重复入库"
                 self._log(f"{prefix} {tag}：{info.summary()}")
             return ok_acc, dup_acc, ok_post, new_posts, fail, cancelled
 
@@ -641,17 +651,17 @@ class InfoAccountsPage(BasePage):
             self.batch_cancel_btn.setEnabled(False)
             self.fetch_btn.setEnabled(True)
             self._batch_pause_evt.set()
-            self.batch_pause_btn.setText("⏸️")
+            self.batch_pause_btn.setText("▮▮")
             _set_button_variant(self.batch_pause_btn, compact=True)
             self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
             if err:
-                self._log(f"❌ 批量处理失败: {err}")
-                self.prog_label.setText("❌ 批量处理失败")
+                self._log(f"批量处理失败: {err}")
+                self.prog_label.setText("批量处理失败")
                 return
             ok_acc, dup_acc, ok_post, new_posts, fail, cancelled = result
             self._set_batch_progress(len(lines), len(lines),
-                                     "✕ 已取消" if cancelled else "✅ 批量处理完成")
-            head = "⛔ 已取消" if cancelled else "✅ 批量处理完成"
+                                     "已取消" if cancelled else "批量处理完成")
+            head = "已取消" if cancelled else "批量处理完成"
             self._log(f"{head}：账号新增 {ok_acc}（重复 {dup_acc}） / "
                       f"作品解析成功 {ok_post}（新增入库 {new_posts}，失败 {fail}）")
             refresh_results_count(self.app)
@@ -714,7 +724,7 @@ class InfoAccountsPage(BasePage):
         if add_account(url, name=name, group_id=gid, group_name=gname):
             self.set_name_entry.clear()
             self.set_url_entry.clear()
-            self.app.toast(f"✅ 已添加账号「{name or url[:30]}」", "success")
+            self.app.toast(f"已添加账号「{name or url[:30]}」", "success")
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
@@ -743,13 +753,13 @@ class InfoAccountsPage(BasePage):
         if page is not None:
             page.reload_accounts()
             page._reload_group_list()
-        self.app.toast(f"✅ 已同步 {len(new_items)} 个账号到「视频账号追踪」"
+        self.app.toast(f"已同步 {len(new_items)} 个账号到「视频账号追踪」"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     # ---------- 从「视频账号追踪」反向同步 ----------
     def _sync_from_tracker(self):
         """把「视频账号追踪」的账号一键同步到本页：按平台+ID去重，已存在跳过；
-        分组一并带过来，缺失分组按同组号+组名自动创建（与「📤 同步到追踪」构成双向）。"""
+        分组一并带过来，缺失分组按同组号+组名自动创建（与「同步到追踪」构成双向）。"""
         from tracker.accounts import plan_sync_to_fm, apply_sync_to_fm
         new_items, skipped = plan_sync_to_fm()
         if not new_items:
@@ -766,7 +776,7 @@ class InfoAccountsPage(BasePage):
         self._reload_account_list()
         self._reload_group_list()
         self._reload_account_settings()
-        self.app.toast(f"✅ 已从追踪同步 {len(new_items)} 个账号"
+        self.app.toast(f"已从追踪同步 {len(new_items)} 个账号"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     # ---------- 自动获取账号名 ----------
@@ -777,7 +787,7 @@ class InfoAccountsPage(BasePage):
             self.app.toast("请先输入链接", "warning")
             return
         btn.setEnabled(False)
-        btn.setText("⏳")
+        btn.setText("")
 
         def work():
             from platforms.account_names import fetch_account_name
@@ -785,14 +795,14 @@ class InfoAccountsPage(BasePage):
 
         def done(result, err):
             btn.setEnabled(True)
-            btn.setText("🔍")
+            btn.setText("")
             if err:
                 self.app.toast(f"获取失败：{err[:60]}", "error")
                 return
             name, ferr = result or ("", "")
             if name:
                 name_entry.setText(name)
-                self.app.toast(f"✅ 已获取账号名「{name}」", "success")
+                self.app.toast(f"已获取账号名「{name}」", "success")
             else:
                 self.app.toast(ferr or "未获取到账号名", "error")
 
@@ -804,13 +814,13 @@ class InfoAccountsPage(BasePage):
             return
         if self._pause_evt.is_set():
             self._pause_evt.clear()
-            self.pause_btn.setText("▶️")
+            self.pause_btn.setText("▶")
             _set_button_variant(self.pause_btn, "primary", compact=True)
-            self.log_text.append("⏸ 已暂停（当前账号采集完成后停住）")
-            self.prog_label.setText("⏸ 已暂停，等待继续...")
+            self.log_text.append("已暂停（当前账号采集完成后停住）")
+            self.prog_label.setText("已暂停，等待继续...")
         else:
             self._pause_evt.set()
-            self.pause_btn.setText("⏸️")
+            self.pause_btn.setText("▮▮")
             _set_button_variant(self.pause_btn, compact=True)
             self.log_text.append("▶ 已继续采集")
             self.prog_label.setText("继续采集中...")
@@ -830,8 +840,8 @@ class InfoAccountsPage(BasePage):
         self._fetching = False
         self.fetch_btn.setEnabled(True)
         self._set_fetch_ui(False)
-        self.log_text.append("✕ 已取消（未开始的账号跳过；在飞账号后台自然收尾，可立即开始新获取）")
-        self.prog_label.setText("✕ 已取消")
+        self.log_text.append("已取消（未开始的账号跳过；在飞账号后台自然收尾，可立即开始新获取）")
+        self.prog_label.setText("已取消")
 
     def _set_fetch_ui(self, running: bool):
         """获取开始/结束时同步暂停/取消按钮状态（手动与定时获取共用）。"""
@@ -841,7 +851,7 @@ class InfoAccountsPage(BasePage):
             self._cancel_evt.clear()  # 每轮获取开始前复位取消标记
         else:
             self._pause_evt.set()  # 复位门闩，避免下轮启动即处于暂停态
-            self.pause_btn.setText("⏸️")
+            self.pause_btn.setText("▮▮")
             _set_button_variant(self.pause_btn, compact=True)
 
     # ---------- 获取 ----------
@@ -884,7 +894,7 @@ class InfoAccountsPage(BasePage):
         self._pause_evt = pause_evt
         self._cancel_evt = cancel_evt
         self._set_fetch_ui(True)
-        self.log_text.setPlainText(f"⏳ 开始获取 {len(accounts)} 个账号的最新内容...\n")
+        self.log_text.setPlainText(f"开始获取 {len(accounts)} 个账号的最新内容...\n")
         self.progress_bar.setRange(0, max(len(accounts), 1))
         self.progress_bar.setValue(0)
         self.prog_label.setText("准备中...")
@@ -907,17 +917,17 @@ class InfoAccountsPage(BasePage):
             self._set_fetch_ui(False)
             self._fetching = False
             if err:
-                self.log_text.append(f"❌ {err}")
-                self.prog_label.setText("❌ 获取失败")
+                self.log_text.append(f"{err}")
+                self.prog_label.setText("获取失败")
                 return
             total, _log, new_posts = result
             if cancel_evt.is_set():
-                self.log_text.append(f"\n✕ 已取消（本次已获取 {total} 条，已存入「已获取」）")
-                self.prog_label.setText("✕ 已取消")
+                self.log_text.append(f"\n已取消（本次已获取 {total} 条，已存入「已获取」）")
+                self.prog_label.setText("已取消")
             else:
-                self.log_text.append(f"\n✅ 共获取 {total} 条（已存入「已获取」）")
+                self.log_text.append(f"\n共获取 {total} 条（已存入「已获取」）")
                 if not self.auto_dl_check.isChecked():
-                    self.prog_label.setText("✅ 获取完成")
+                    self.prog_label.setText("获取完成")
             if not self._reveal_queue:
                 refresh_results_count(self.app)
             # 获取后自动下载（勾选后保存+下载一次性完成；已取消的轮次不触发）
@@ -1108,9 +1118,9 @@ class InfoAccountsPage(BasePage):
         def _log(line):
             post_to_main(lambda t=line: self.log_text.append(t))
 
-        self.log_text.append(f"⏬ 自动下载开始：{len(posts)} 条"
+        self.log_text.append(f"自动下载开始：{len(posts)} 条"
                              f"（画质 {quality} · {threads} 线程）")
-        self.prog_label.setText("⏬ 自动下载中...")
+        self.prog_label.setText("自动下载中...")
         # 下载进度走全局下载浮窗（原页面只保留日志/状态）
         from gui_qt.download_float import get_float
         card = get_float().add_batch("信息获取·自动下载", total=len(posts),
@@ -1123,15 +1133,15 @@ class InfoAccountsPage(BasePage):
 
         def done(result, err):
             if err:
-                self.log_text.append(f"❌ 自动下载失败: {err}")
-                self.prog_label.setText("❌ 自动下载失败")
+                self.log_text.append(f"自动下载失败: {err}")
+                self.prog_label.setText("自动下载失败")
                 self.app.toast(f"自动下载失败: {str(err)[:60]}", "error")
-                card.finish(f"❌ 下载失败: {str(err)[:60]}")
+                card.finish(f"下载失败: {str(err)[:60]}")
                 return
-            self.log_text.append(f"✅ 自动下载完成: {result}")
-            self.prog_label.setText("✅ 获取+下载完成")
-            self.app.toast(f"✅ 自动下载完成：{result}", "success")
-            card.finish(f"✅ {result}" if len(result) <= 80 else "✅ " + result[:79] + "…")
+            self.log_text.append(f"自动下载完成: {result}")
+            self.prog_label.setText("获取+下载完成")
+            self.app.toast(f"自动下载完成：{result}", "success")
+            card.finish(f"{result}" if len(result) <= 80 else result[:79] + "…")
 
         run_bg(work, done)
 
@@ -1164,14 +1174,14 @@ class InfoAccountsPage(BasePage):
         s = self._date_range.get("start", "")
         e = self._date_range.get("end", "")
         if not s and not e:
-            self.date_btn.setText("📅 日期段: 不限")
+            self.date_btn.setText("日期段: 不限")
         else:
-            self.date_btn.setText(f"📅 日期段: {s or '从头'} ~ {e or '到现在'}")
+            self.date_btn.setText(f"日期段: {s or '从头'} ~ {e or '到现在'}")
 
     def _show_date_range_dialog(self):
         """日历选择日期段：两个日历表 + 开始/结束不限勾选；确定后对之后的获取生效。"""
         win = QDialog(self)
-        win.setWindowTitle("📅 日期段获取（按发布时间过滤）")
+        win.setWindowTitle("日期段获取（按发布时间过滤）")
         win.resize(640, 460)
         v = QVBoxLayout(win)
         hint = QLabel("选择要保留的发布时间范围（在日历上点选日期；勾「不限」则该端不设边界，"
@@ -1232,7 +1242,7 @@ class InfoAccountsPage(BasePage):
         btn_row.addWidget(clear_btn)
         btn_row.addStretch(1)
         cancel_btn = QPushButton("取消")
-        ok_btn = QPushButton("✅ 确定")
+        ok_btn = QPushButton("确定")
         ok_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(ok_btn)
@@ -1248,16 +1258,16 @@ class InfoAccountsPage(BasePage):
             self._save_date_range()
             self._update_date_btn()
             if s or e:
-                self.app.toast(f"📅 日期段已设为：{s or '从头'} ~ {e or '到现在'}（下次获取生效）", "success")
+                self.app.toast(f"日期段已设为：{s or '从头'} ~ {e or '到现在'}（下次获取生效）", "success")
             else:
-                self.app.toast("📅 日期段已清除，获取不再按时间过滤", "info")
+                self.app.toast("日期段已清除，获取不再按时间过滤", "info")
             win.accept()
 
         def _clear():
             self._date_range = {"start": "", "end": ""}
             self._save_date_range()
             self._update_date_btn()
-            self.app.toast("📅 日期段已清除，获取不再按时间过滤", "info")
+            self.app.toast("日期段已清除，获取不再按时间过滤", "info")
             win.accept()
 
         ok_btn.clicked.connect(lambda *a: _apply())
@@ -1274,7 +1284,7 @@ class InfoAccountsPage(BasePage):
 
     def _show_timer_dialog(self):
         win = QDialog(self)
-        win.setWindowTitle("⏰ 定时获取")
+        win.setWindowTitle("定时获取")
         win.setFixedSize(320, 210)
         v = QVBoxLayout(win)
         t = QLabel("设置定时获取间隔")
@@ -1303,11 +1313,11 @@ class InfoAccountsPage(BasePage):
             self._timer_interval = m * 60
             self._timer_running = True
             win.accept()
-            self.timer_btn.setText("⏹ 停止定时")
+            self.timer_btn.setText("停止定时")
             _set_button_variant(self.timer_btn, "danger")
             self.timer_dot.setText("●")
             self.timer_dot.setStyleSheet("color: palette(link); font-size: 15px;")
-            self.app.toast(f"⏰ 定时获取已启动（每 {m} 分钟）", "success")
+            self.app.toast(f"定时获取已启动（每 {m} 分钟）", "success")
             # 启动后先执行一次，之后每隔 interval 执行一次（QTimer 替代后台 sleep 循环）
             self._run_timer_fetch()
             self._timer = QTimer(self)
@@ -1326,7 +1336,7 @@ class InfoAccountsPage(BasePage):
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
-        self.timer_btn.setText("⏰ 定时获取")
+        self.timer_btn.setText("定时获取")
         _set_button_variant(self.timer_btn)
         self.timer_dot.setText("○")
         self.timer_dot.setStyleSheet("font-size: 15px;")
@@ -1374,15 +1384,15 @@ class InfoAccountsPage(BasePage):
             self._fetching = False
             ts = datetime.now().strftime("%H:%M:%S")
             if err:
-                self.log_text.append(f"[{ts}] ⏰ 定时获取失败: {err}")
-                self.prog_label.setText("❌ 定时获取失败")
+                self.log_text.append(f"[{ts}] 定时获取失败: {err}")
+                self.prog_label.setText("定时获取失败")
                 return
             total, _log, new_posts = result
             if cancel_evt.is_set():
-                self.log_text.append(f"[{ts}] ⏰ 定时获取已取消（已获取 {total} 条）")
-                self.prog_label.setText("✕ 已取消")
+                self.log_text.append(f"[{ts}] 定时获取已取消（已获取 {total} 条）")
+                self.prog_label.setText("已取消")
             else:
-                self.log_text.append(f"[{ts}] ⏰ 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
+                self.log_text.append(f"[{ts}] 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
             if not self._reveal_queue:
                 refresh_results_count(self.app)
             # 获取后自动下载（勾选后定时获取也生效：保存+下载一次性）
@@ -1391,7 +1401,7 @@ class InfoAccountsPage(BasePage):
                 return
             if not self.isVisible():
                 # 用户已切到其他页：提示定时获取仍在后台生效
-                self.app.toast(f"⏰ 定时获取已在后台完成（共 {total} 条）", "info")
+                self.app.toast(f"定时获取已在后台完成（共 {total} 条）", "info")
 
         self._fetching = True
         self._set_fetch_ui(True)
@@ -1434,16 +1444,16 @@ class InfoAccountsPage(BasePage):
                 name_label.setMinimumWidth(0)
                 name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 h.addWidget(name_label, 1)
-                up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
+                up_btn = icon_button("↑", "上移一位", (28, 24), False, "font-size: 11px;")
                 up_btn.setEnabled(pos > 0)
                 up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
                 h.addWidget(up_btn)
-                down_btn = icon_button("⬇️", "下移一位", (28, 24), True, "font-size: 11px;")
+                down_btn = icon_button("↓", "下移一位", (28, 24), False, "font-size: 11px;")
                 down_btn.setEnabled(pos < n - 1)
                 down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
                 h.addWidget(down_btn)
                 del_btn = icon_button(
-                    "✕", "删除该分组（绑定该组的账号自动解绑）", (30, 24), False,
+                    "×", "删除该分组（绑定该组的账号自动解绑）", (30, 24), False,
                     "background: #c62828; color: white; font-size: 13px;",
                     lambda _=False, g=gid: self._delete_group(g))
                 h.addWidget(del_btn)
@@ -1463,7 +1473,7 @@ class InfoAccountsPage(BasePage):
         from accounts_manager import move_group
         if move_group(gid, delta):
             self._reload_group_list()
-            self.app.toast("✅ 分组顺序已更新", "success")
+            self.app.toast("分组顺序已更新", "success")
 
     def _add_group(self):
         gid = self.gid_entry.text().strip()
@@ -1479,12 +1489,12 @@ class InfoAccountsPage(BasePage):
             self.gid_entry.clear()
             self.gname_entry.clear()
             QTimer.singleShot(150, self._reload_group_list)
-            self.app.toast(f"✅ 已保存分组：{gid} {gname}", "success")
+            self.app.toast(f"已保存分组：{gid} {gname}", "success")
 
     def _delete_group(self, gid):
         from accounts_manager import delete_group
         delete_group(gid)
-        self.app.toast(f"✅ 已删除分组 {gid}（绑定账号已解绑）", "info")
+        self.app.toast(f"已删除分组 {gid}（绑定账号已解绑）", "info")
         QTimer.singleShot(150, self._reload_group_list)
         QTimer.singleShot(150, self._reload_account_list)
         QTimer.singleShot(150, self._reload_account_settings)
@@ -1497,7 +1507,7 @@ class InfoAccountsPage(BasePage):
         _clear_layout(self.acct_set_layout)
         self.acct_set_layout.addStretch(1)
         self._acct_set_rows = []
-        self.save_all_btn = QPushButton("💾 保存全部修改")
+        self.save_all_btn = QPushButton("保存全部修改")
         self.save_all_btn.setProperty("variant", "primary")
         # 保存栏始终保留在卡片底部，列表为空时也不会留下上一轮的控件。
         _clear_layout(self.acct_save_bar)
@@ -1562,20 +1572,21 @@ class InfoAccountsPage(BasePage):
             gsel.changed.connect(lambda b=self.save_all_btn: self._mark_set_dirty(b))
             ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
             # 修改账号名/链接（对话框；分组/采集类型仍用行内控件）
-            edit_btn = icon_button("✏️", "修改账号名/链接", (30, 26), True, "font-size: 12px;")
+            edit_btn = icon_button("", "修改账号名/链接", (30, 26), True, "font-size: 12px;")
+            edit_btn.setIcon(line_icon("edit", theme.color("text"), 14))
             edit_btn.clicked.connect(lambda _=False, u=a.url: self._edit_account_row(u))
             h.addWidget(edit_btn)
             # 上移/下移（直接改 accounts.txt 顺序，立即生效）
-            up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;")
+            up_btn = icon_button("↑", "上移一位", (28, 26), False, "font-size: 12px;")
             up_btn.setEnabled(i > 1)
             up_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, -1))
             h.addWidget(up_btn)
-            down_btn = icon_button("⬇️", "下移一位", (28, 26), True, "font-size: 12px;")
+            down_btn = icon_button("↓", "下移一位", (28, 26), False, "font-size: 12px;")
             down_btn.setEnabled(i < len(accounts))
             down_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, 1))
             h.addWidget(down_btn)
             del_btn = icon_button(
-                "✕", "删除该账号", (30, 26), False,
+                "×", "删除该账号", (30, 26), False,
                 "background: #c62828; color: white; font-size: 13px;",
                 lambda _=False, u=a.url: self._delete_account_row(u))
             h.addWidget(del_btn)
@@ -1607,11 +1618,11 @@ class InfoAccountsPage(BasePage):
                 if update_account(url, group_id=gid, group_name=gname, kind=kind):
                     changed += 1
             if changed:
-                self.app.toast(f"✅ 已保存 {changed} 项账号设置", "success")
+                self.app.toast(f"已保存 {changed} 项账号设置", "success")
             else:
                 self.app.toast("没有需要保存的修改", "info")
         except Exception as e:
-            self.app.toast(f"❌ 保存失败：{str(e)[:60]}", "error")
+            self.app.toast(f"保存失败：{str(e)[:60]}", "error")
         self.save_all_btn.setEnabled(False)
         QTimer.singleShot(150, self._reload_account_list)
         QTimer.singleShot(150, self._reload_account_settings)
@@ -1626,7 +1637,7 @@ class InfoAccountsPage(BasePage):
             self.app.toast("账号不存在（可能已被删除）", "warning")
             return
         win = QDialog(self)
-        win.setWindowTitle("✏️ 修改账号")
+        win.setWindowTitle("修改账号")
         win.resize(560, 190)
         v = QVBoxLayout(win)
         form = QFormLayout()
@@ -1671,9 +1682,9 @@ class InfoAccountsPage(BasePage):
             return
         if update_account(url, name=new_name, new_url=new_url):
             suffix = f"（链接：{new_url[:40]}）" if new_url != url else ""
-            self.app.toast(f"✅ 已修改账号{suffix}", "success")
+            self.app.toast(f"已修改账号{suffix}", "success")
         else:
-            self.app.toast("❌ 修改失败（账号不存在）", "error")
+            self.app.toast("修改失败（账号不存在）", "error")
             return
         QTimer.singleShot(150, self._reload_account_list)
         QTimer.singleShot(150, self._reload_account_settings)
@@ -1691,11 +1702,11 @@ class InfoAccountsPage(BasePage):
         acc = self.acc_accounts[row]
         url = (acc.url or "").strip()
         menu = QMenu(self)
-        act_open = menu.addAction("🌐 打开链接（浏览器）")
-        act_copy = menu.addAction("📋 复制链接")
+        act_open = menu.addAction("打开链接（浏览器）")
+        act_copy = menu.addAction("复制链接")
         menu.addSeparator()
-        act_edit = menu.addAction("✏️ 修改账号")
-        act_del = menu.addAction("🗑 删除账号…")
+        act_edit = menu.addAction("修改账号")
+        act_del = menu.addAction("删除账号…")
         act = menu.exec(self.acc_list.viewport().mapToGlobal(pos))
         if act == act_open:
             if url:
@@ -1716,7 +1727,7 @@ class InfoAccountsPage(BasePage):
     def _delete_account_row(self, url):
         from accounts_manager import remove_account
         if remove_account(url):
-            self.app.toast("✅ 已删除该账号", "info")
+            self.app.toast("已删除该账号", "info")
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
             QTimer.singleShot(150, self._reload_group_list)
@@ -1725,6 +1736,6 @@ class InfoAccountsPage(BasePage):
         """上移/下移已配置账号（顺序即采集顺序，保存后立即生效）。"""
         from accounts_manager import move_account
         if move_account(url, delta):
-            self.app.toast("✅ 账号顺序已更新", "success")
+            self.app.toast("账号顺序已更新", "success")
             QTimer.singleShot(150, self._reload_account_list)
             QTimer.singleShot(150, self._reload_account_settings)
