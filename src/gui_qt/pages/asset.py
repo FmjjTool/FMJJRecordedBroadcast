@@ -46,7 +46,7 @@ from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
 from toolbox.asset_files import collect_asset_files
-from toolbox.asset_media import download_item_media
+from toolbox.asset_media import download_item_images, download_item_media
 from toolbox.asset_video import resolve_video_source
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
@@ -4076,30 +4076,16 @@ class AssetPage(BasePage):
             bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
         def work():
-            from platforms.base import VideoInfo, now_str
             from toolbox.config_manager import get_export_subdir
-            from media_downloader import download_media
-            info = VideoInfo(
-                platform=it["platform"],
-                title=it.get("title") or it.get("date_part") or "未知",
-                author=it.get("author", ""),  # 关键：让下载落到 {平台}_媒体/{作者}/ 子目录
-                cover_url=cover,
-                publish_time=it.get("publish_time", ""),  # 关键：让 date_str 匹配 json date_part
-                raw_url="",
-                fetched_at=now_str(),
+            return download_item_images(
+                it, pics=pics, lives=lives, cover=cover,
+                base_dir=str(get_export_subdir("video_data")),
+                threads=self._dl_threads(quiet),
+                progress_callback=bridge.emit_progress,
+                byte_progress_callback=bridge.emit_bytes,
+                cancel_event=cancel_ev, skip_existing=not force,
+                on_task_event=(card.handle_event if card is not None else None),
             )
-            info.images = pics
-            info.live_photos = lives
-            base_dir = str(get_export_subdir("video_data"))
-            return download_media([info], base_dir=base_dir,
-                                  download_images=True, download_live=True, download_videos=False,
-                                  threads=self._dl_threads(quiet),
-                                  progress_callback=bridge.emit_progress,
-                                  byte_progress_callback=bridge.emit_bytes,
-                                  wait_range=(0.5, 1.5), cancel_event=cancel_ev,
-                                  skip_existing=not force,
-                                  on_task_event=(card.handle_event if card is not None else None),
-                                  quiet=True)
 
         def done(result, err):
             stats = result or {}

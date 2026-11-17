@@ -85,6 +85,28 @@ class AssetMediaTests(unittest.TestCase):
         self.assertTrue(seen["kwargs"]["download_images"])
         self.assertFalse(seen["kwargs"]["download_videos"])
 
+    def test_download_item_images_builds_info_and_flags(self):
+        seen = {}
+
+        def fake_download_media(infos, **kwargs):
+            seen["info"] = infos[0]
+            seen["kwargs"] = kwargs
+            return {"images": 2, "live": 1, "paths": []}
+
+        item = {"platform": "weibo", "title": "图文", "author": "作者",
+                "publish_time": "2026-11-17"}
+        with patch("media_downloader.download_media", side_effect=fake_download_media):
+            result = asset_media.download_item_images(
+                item, pics=["a", "b"], lives=["live"], cover="c",
+                base_dir=str(self.root), threads=2, skip_existing=False)
+        self.assertEqual(result["images"], 2)
+        self.assertEqual(seen["info"].images, ["a", "b"])
+        self.assertEqual(seen["info"].live_photos, ["live"])
+        self.assertTrue(seen["kwargs"]["download_images"])
+        self.assertTrue(seen["kwargs"]["download_live"])
+        self.assertFalse(seen["kwargs"]["download_videos"])
+        self.assertFalse(seen["kwargs"]["skip_existing"])
+
     def test_download_item_media_rejects_missing_or_indirect_url(self):
         item = {"platform": "xiaohongshu", "video_id": "n1"}
         with patch("media_downloader._is_direct_media_url", return_value=False):

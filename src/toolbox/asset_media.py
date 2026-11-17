@@ -7,6 +7,34 @@ import re
 import time
 
 
+def download_item_images(item: dict, *, pics: list, lives: list, cover: str,
+                         base_dir: str, threads: int = 4,
+                         progress_callback=None, byte_progress_callback=None,
+                         cancel_event=None, skip_existing: bool = True,
+                         on_task_event=None) -> dict:
+    """构建 VideoInfo 并下载图片/Live 图视频。"""
+    from platforms.base import VideoInfo, now_str
+    from media_downloader import download_media
+
+    info = VideoInfo(
+        platform=item.get("platform", ""),
+        title=item.get("title") or item.get("date_part") or "未知",
+        author=item.get("author", ""),
+        cover_url=cover,
+        publish_time=item.get("publish_time", ""),
+        raw_url="", fetched_at=now_str(),
+    )
+    info.images = pics
+    info.live_photos = lives
+    return download_media(
+        [info], base_dir=base_dir,
+        download_images=True, download_live=True, download_videos=False,
+        threads=threads, progress_callback=progress_callback,
+        byte_progress_callback=byte_progress_callback,
+        wait_range=(0.5, 1.5), cancel_event=cancel_event,
+        skip_existing=skip_existing, on_task_event=on_task_event, quiet=True)
+
+
 def download_item_media(item: dict, resolved: dict, *, base_dir: str,
                         threads: int = 4, progress_callback=None,
                         byte_progress_callback=None, cancel_event=None,
