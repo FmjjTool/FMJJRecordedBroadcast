@@ -1,7 +1,7 @@
 """音乐账号追踪页：单账号单平台，每个账号独立卡片，采集结果存 xlsx 并读取长期缓存。
 
 与「账号追踪」页同构（照搬 UI 换数据源）：
-- 功能页：平台筛选 + 获取全部（回车快捷）+ 📷 按组导出 + 刷新（定时任务统一在「任务」页）
+- 功能页：平台筛选 + 获取全部（回车快捷）+  按组导出 + 刷新（定时任务统一在「任务」页）
   每账号卡片：昵称/平台/状态 + 采集/导出/历史按钮 + 变化提示（涨绿跌红）+ 2行×4列预览
 - 设置页：搜索账号（名称→链接）、添加追踪账号、分组管理、已配置账号
 - 历史窗口：指标当列、时间点当行，可横向滚动
@@ -28,7 +28,7 @@ from toolbox.tracker_diff import diff_items, num_delta
 
 def _status_style(name, size=None):
     color = theme.color(name)
-    return f"color: {color};" + (f" font-size: {size}px;" if size else "")
+    return f"color: {color};" + (f"font-size: {size}px;" if size else "")
 
 
 # 指标行定义：(显示名, [字段名优先级列表])
@@ -91,19 +91,19 @@ class MusicTrackerPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("🎼 音乐账号追踪")
+        title = QLabel("音乐账号追踪")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
         head.addStretch(1)
-        refresh_btn = QPushButton("🔄 刷新")
+        refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.reload_accounts)
         head.addWidget(refresh_btn)
-        export_group_btn = QPushButton("📷 按组导出")
+        export_group_btn = QPushButton("按组导出")
         export_group_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         export_group_btn.clicked.connect(self._export_group)
         head.addWidget(export_group_btn)
-        fetch_all_btn = QPushButton("⬇ 获取全部")
+        fetch_all_btn = QPushButton("获取全部")
         fetch_all_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         fetch_all_btn.clicked.connect(lambda: self._collect_all())
         head.addWidget(fetch_all_btn)
@@ -138,7 +138,7 @@ class MusicTrackerPage(BasePage):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(6)
-        title = QLabel("⚙️ 音乐账号追踪设置")
+        title = QLabel("音乐账号追踪设置")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         outer.addWidget(title)
 
@@ -160,7 +160,7 @@ class MusicTrackerPage(BasePage):
         self.search_kw.setPlaceholderText("如 封茗囧菌（回车搜索）")
         self.search_kw.returnPressed.connect(self._search_accounts)
         sr.addWidget(self.search_kw, 1)
-        search_btn = QPushButton("🔍 搜索")
+        search_btn = QPushButton("搜索")
         search_btn.clicked.connect(self._search_accounts)
         sr.addWidget(search_btn)
         sv.addLayout(sr)
@@ -193,14 +193,14 @@ class MusicTrackerPage(BasePage):
         self.add_url.returnPressed.connect(self._add_account)
         r2.addWidget(self.add_url, 1)
         self.name_fetch_btn = icon_button(
-            "🔍", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
+            "", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
             "font-size: 14px;", self._auto_fetch_name)
         r2.addWidget(self.name_fetch_btn)
         r2.addWidget(QLabel("组号:"))
         self.add_group_sel = QComboBox()
         self.add_group_sel.setFixedWidth(120)
         r2.addWidget(self.add_group_sel)
-        self.add_acc_btn = icon_button("➕", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
+        self.add_acc_btn = icon_button("", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
         r2.addWidget(self.add_acc_btn)
         av.addLayout(r2)
         outer.addWidget(add_card)
@@ -235,7 +235,7 @@ class MusicTrackerPage(BasePage):
         self.gname_entry.setPlaceholderText("组名")
         self.gname_entry.setFixedWidth(140)
         addg.addWidget(self.gname_entry)
-        newg_btn = icon_button("➕", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
+        newg_btn = icon_button("", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
         addg.addWidget(newg_btn)
         addg.addStretch(1)
         gv.addLayout(addg)
@@ -369,7 +369,7 @@ class MusicTrackerPage(BasePage):
         head = QHBoxLayout()
         left = QVBoxLayout()
         left.setSpacing(0)
-        name_lbl = QLabel(f"👤 {acc.get('name', '未命名')}")
+        name_lbl = QLabel(f"{acc.get('name', '未命名')}")
         name_lbl.setStyleSheet("font-weight: bold;")
         left.addWidget(name_lbl)
         plat_lbl = QLabel(plat_name)
@@ -380,19 +380,19 @@ class MusicTrackerPage(BasePage):
         status = QLabel("")
         status.setStyleSheet(_status_style("muted"))
         head.addWidget(status)
-        export_btn = QPushButton("📷 导出")
+        export_btn = QPushButton("导出")
         export_btn.setFixedSize(60, 26)
         export_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         export_btn.clicked.connect(lambda _=False, a=acc: self._export_png(a))
         head.addWidget(export_btn)
-        hist_btn = QPushButton("📊 历史")
+        hist_btn = QPushButton("历史")
         hist_btn.setFixedSize(60, 26)
         hist_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         hist_btn.clicked.connect(lambda _=False, a=acc: self._open_history(a))
         head.addWidget(hist_btn)
-        btn = QPushButton("📥 采集")
+        btn = QPushButton("采集")
         btn.setFixedSize(70, 26)
         btn.clicked.connect(lambda _=False, a=acc: self._collect_account(a))
         head.addWidget(btn)
@@ -422,7 +422,7 @@ class MusicTrackerPage(BasePage):
         preview = history[:2]
         self._render_preview(grid, preview)
         if history:
-            status.setText("📦 缓存")
+            status.setText("缓存")
             if len(history) >= 2:
                 self._render_diff(diff_frame, history[1], history[0])
         cv.addWidget(preview_frame)
@@ -490,7 +490,7 @@ class MusicTrackerPage(BasePage):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
             else:
-                self.app.toast(f"✅ 已导出 PNG：{result}", "success")
+                self.app.toast(f"已导出 PNG：{result}", "success")
 
         run_bg(work, done)
 
@@ -503,14 +503,14 @@ class MusicTrackerPage(BasePage):
             return
 
         win = QDialog(self)
-        win.setWindowTitle(f"📊 {acc.get('name', '账号')} · 历史数据")
+        win.setWindowTitle(f"{acc.get('name', '账号')} · 历史数据")
         # QDialog 默认只有关闭按钮，补上最小化/最大化（双击标题栏全屏也生效）
         win.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
         win.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         win.resize(980, 520)
         v = QVBoxLayout(win)
         v.setContentsMargins(10, 12, 10, 10)
-        head = QLabel(f"👤 {acc.get('name', '')} 历史数据（共 {len(history)} 次采集，最新在前）")
+        head = QLabel(f"{acc.get('name', '')} 历史数据（共 {len(history)} 次采集，最新在前）")
         head.setStyleSheet("font-size: 14px; font-weight: bold;")
         v.addWidget(head)
 
@@ -561,7 +561,7 @@ class MusicTrackerPage(BasePage):
                 on_done()
             return
         card["btn"].setEnabled(False)
-        card["status"].setText("⏳ 采集中...")
+        card["status"].setText("采集中...")
         card["status"].setStyleSheet(_status_style("warning"))
 
         def work():
@@ -575,7 +575,7 @@ class MusicTrackerPage(BasePage):
             if card:
                 card["btn"].setEnabled(True)
                 if err:
-                    card["status"].setText(f"❌ {err}")
+                    card["status"].setText(f"{err}")
                     card["status"].setStyleSheet(_status_style("danger"))
                 else:
                     from music_account.accounts import load_history
@@ -584,10 +584,10 @@ class MusicTrackerPage(BasePage):
                     if len(history) >= 2:
                         self._render_diff(card["diff_frame"], history[1], history[0])
                     if result.get("error"):
-                        card["status"].setText(f"❌ {result['error']}")
+                        card["status"].setText(f"{result['error']}")
                         card["status"].setStyleSheet(_status_style("danger"))
                     else:
-                        card["status"].setText("✅ 完成")
+                        card["status"].setText("完成")
                         card["status"].setStyleSheet(_status_style("success"))
             if on_done:
                 on_done()
@@ -609,7 +609,7 @@ class MusicTrackerPage(BasePage):
         if not accounts:
             self.app.toast("没有符合条件的账号", "info")
             return
-        self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
+        self.app.toast(f"开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
         self.batch_prog.setRange(0, max(len(accounts), 1))
         self.batch_prog.setValue(0)
 
@@ -632,7 +632,7 @@ class MusicTrackerPage(BasePage):
             if queue:
                 _next_wave()
             elif state["running"] == 0:
-                self.app.toast("✅ 批量采集完成", "info")
+                self.app.toast("批量采集完成", "info")
                 self._collecting = False
 
         self._collecting = True
@@ -651,7 +651,7 @@ class MusicTrackerPage(BasePage):
             self.app.toast("请先输入链接", "warning")
             return
         self.name_fetch_btn.setEnabled(False)
-        self.name_fetch_btn.setText("⏳")
+        self.name_fetch_btn.setText("")
 
         def work():
             from platforms.account_names import fetch_music_account_name
@@ -659,14 +659,14 @@ class MusicTrackerPage(BasePage):
 
         def done(result, err):
             self.name_fetch_btn.setEnabled(True)
-            self.name_fetch_btn.setText("🔍")
+            self.name_fetch_btn.setText("")
             if err:
                 self.app.toast(f"获取失败：{err[:60]}", "error")
                 return
             name, ferr = result or ("", "")
             if name:
                 self.add_name.setText(name)
-                self.app.toast(f"✅ 已获取账号名「{name}」", "success")
+                self.app.toast(f"已获取账号名「{name}」", "success")
             else:
                 self.app.toast(ferr or "未获取到账号名", "error")
 
@@ -701,7 +701,7 @@ class MusicTrackerPage(BasePage):
     def _show_search_results(self, platform, kw, results):
         """搜索结果弹窗：列表选择（双击/选中+添加）→ 填入账号名与链接。"""
         win = QDialog(self)
-        win.setWindowTitle(f"🔍 搜索「{kw}」 · {PLATFORM_NAMES.get(platform, platform)}")
+        win.setWindowTitle(f"搜索「{kw}」 · {PLATFORM_NAMES.get(platform, platform)}")
         win.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
         win.resize(560, 400)
         v = QVBoxLayout(win)
@@ -740,7 +740,7 @@ class MusicTrackerPage(BasePage):
 
         table.cellDoubleClicked.connect(lambda _r, _c: _fill())
         bar = QHBoxLayout()
-        fill_btn = QPushButton("➡ 填入")
+        fill_btn = QPushButton("填入")
         fill_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
         fill_btn.clicked.connect(_fill)
         bar.addStretch(1)
@@ -865,15 +865,15 @@ class MusicTrackerPage(BasePage):
             gsel.currentTextChanged.connect(
                 lambda _t: self._acc_save_btn.setEnabled(True))
             # 上移/下移（直接改账号顺序，立即生效）
-            up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;",
+            up_btn = icon_button("", "上移一位", (28, 26), True, "font-size: 12px;",
                                  on_click=lambda idx=i: self._move_account(idx, -1))
             up_btn.setEnabled(i > 0)
             h.addWidget(up_btn)
-            down_btn = icon_button("⬇️", "下移一位", (28, 26), True, "font-size: 12px;",
+            down_btn = icon_button("", "下移一位", (28, 26), True, "font-size: 12px;",
                                    on_click=lambda idx=i: self._move_account(idx, 1))
             down_btn.setEnabled(i < len(accounts) - 1)
             h.addWidget(down_btn)
-            del_btn = QPushButton("✕")
+            del_btn = QPushButton("")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
             del_btn.clicked.connect(lambda _=False, idx=i: self._delete_account(idx))
@@ -881,9 +881,9 @@ class MusicTrackerPage(BasePage):
             self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
             self.acc_list_layout.addWidget(row)
             self.acc_list_layout.addStretch(1)
-        # 底部统一保存按钮（替代逐行 💾）
+        # 底部统一保存按钮（替代逐行 ）
         bar = QHBoxLayout()
-        self._acc_save_btn = QPushButton("💾 保存全部修改")
+        self._acc_save_btn = QPushButton("保存全部修改")
         self._acc_save_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
         self._acc_save_btn.setEnabled(False)
         self._acc_save_btn.clicked.connect(self._save_all_account_groups)
@@ -910,7 +910,7 @@ class MusicTrackerPage(BasePage):
             changed += 1
         if changed:
             save_accounts(accounts)
-            self.app.toast(f"✅ 已保存 {changed} 项分组修改", "success")
+            self.app.toast(f"已保存 {changed} 项分组修改", "success")
         else:
             self.app.toast("没有需要保存的修改", "info")
         self.reload_accounts()
@@ -920,7 +920,7 @@ class MusicTrackerPage(BasePage):
         """刷新分组列表 + 添加账号/已配置账号的组号下拉菜单。"""
         from music_account.accounts import get_groups
         groups = get_groups()
-        # 刷新「添加账号」的组号下拉（按文件序，⬆️⬇️ 排序即调整该顺序）
+        # 刷新「添加账号」的组号下拉（按文件序， 排序即调整该顺序）
         opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
         cur = self.add_group_sel.currentText()
         self.add_group_sel.clear()
@@ -951,15 +951,15 @@ class MusicTrackerPage(BasePage):
                     f"font-weight: bold; color: {theme.color('link')};")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
-                up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
+                up_btn = icon_button("", "上移一位", (28, 24), True, "font-size: 11px;")
                 up_btn.setEnabled(pos > 0)
                 up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
                 h.addWidget(up_btn)
-                down_btn = icon_button("⬇️", "下移一位", (28, 24), True, "font-size: 11px;")
+                down_btn = icon_button("", "下移一位", (28, 24), True, "font-size: 11px;")
                 down_btn.setEnabled(pos < n - 1)
                 down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
                 h.addWidget(down_btn)
-                del_btn = QPushButton("✕")
+                del_btn = QPushButton("")
                 del_btn.setFixedSize(30, 22)
                 del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
                 del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
@@ -993,7 +993,7 @@ class MusicTrackerPage(BasePage):
             self.gid_entry.clear()
             self.gname_entry.clear()
             self._reload_group_list()
-            self.app.toast(f"✅ 已新建分组：{gid} {gname}", "success")
+            self.app.toast(f"已新建分组：{gid} {gname}", "success")
 
     def _delete_group(self, gid):
         from music_account.accounts import delete_group
@@ -1010,7 +1010,7 @@ class MusicTrackerPage(BasePage):
             self.app.toast("暂无分组，请先在「设置」里新建分组", "warning")
             return
         win = QDialog(self)
-        win.setWindowTitle("📷 按组导出")
+        win.setWindowTitle("按组导出")
         win.setFixedSize(360, 220)
         v = QVBoxLayout(win)
         v.setContentsMargins(16, 16, 16, 14)
@@ -1029,7 +1029,7 @@ class MusicTrackerPage(BasePage):
         sel.setFixedWidth(240)
         v.addWidget(sel, 0, Qt.AlignCenter)
         v.addStretch(1)
-        export_btn = QPushButton("📷 导出 PNG")
+        export_btn = QPushButton("导出 PNG")
         export_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 6px;")
         export_btn.clicked.connect(lambda: do_export())
         v.addWidget(export_btn)
@@ -1052,6 +1052,6 @@ class MusicTrackerPage(BasePage):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
             else:
-                self.app.toast(f"✅ 已导出组 PNG：{result}", "success")
+                self.app.toast(f"已导出组 PNG：{result}", "success")
 
         run_bg(work, done)

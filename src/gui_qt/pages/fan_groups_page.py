@@ -1,9 +1,9 @@
 """粉丝群查询页（PySide6）：抖音 / 微博 / B站 三平台公开群 ID 与人数。
 
-- 顶部选平台 + 粘贴主页链接/UID → 🔍 查询
+- 顶部选平台 + 粘贴主页链接/UID → 查询
 - 表格：头像 / 群名 / 群ID / 群号 / 人数 / 人数变化 / 进群条件
 - 查询时自动把群头像下载到 download/粉丝群/<平台>/<UID>/头像/，
-  表格首列显示缩略图，双击行打开原图；「🖼 刷新头像」强制重新下载
+  表格首列显示缩略图，双击行打开原图；「刷新头像」强制重新下载
 - 每次查询自动存快照，并与上次快照对比人数
 - 导出 Excel / 打开保存目录 / 复制选中或全部群 ID
 
@@ -94,13 +94,13 @@ class FanGroupsPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        title = QLabel("👥 粉丝群查询")
+        title = QLabel("粉丝群查询")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 粉丝群查询 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "粉丝群查询 · 功能介绍", (
             "<p><b>查询抖音 / 微博 / B站账号的公开粉丝群 ID 与人数。</b></p>"
             "<p>· <b>抖音</b>：主页链接 → 全部公开粉丝群（含 VIP 群）。"
             "需要登录态，游客会被 blocked</p>"
@@ -110,7 +110,7 @@ class FanGroupsPage(BasePage):
             "<p>· <b>人数变化</b>：每次查询自动存快照，与上一次快照对比；"
             "新出现的群标记为「新」</p>"
             "<p>· <b>群头像</b>：查询时自动下载到 <b>头像/</b> 子目录（已下载的复用），"
-            "表格首列显示缩略图，双击行打开原图；「🖼 刷新头像」强制重新下载</p>"
+            "表格首列显示缩略图，双击行打开原图；「刷新头像」强制重新下载</p>"
             "<p>· <b>保存位置</b>：download/粉丝群/&lt;平台&gt;/&lt;UID&gt;/"
             "（头像/ + 快照_时间.json + 最新.json + 导出的 Excel）</p>"
         )))
@@ -136,7 +136,7 @@ class FanGroupsPage(BasePage):
         self.input_edit.returnPressed.connect(self._do_query)
         row.addWidget(self.input_edit, 1)
 
-        self.query_btn = QPushButton("🔍 查询")
+        self.query_btn = QPushButton("查询")
         self.query_btn.setStyleSheet(
             "background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
         self.query_btn.clicked.connect(self._do_query)
@@ -148,33 +148,33 @@ class FanGroupsPage(BasePage):
         self.hint_label.setStyleSheet("color: #666;")
         row2.addWidget(self.hint_label, 1)
 
-        self.export_btn = QPushButton("📊 导出 Excel")
+        self.export_btn = QPushButton("导出 Excel")
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._do_export)
         row2.addWidget(self.export_btn)
 
-        self.avatar_btn = QPushButton("🖼 刷新头像")
+        self.avatar_btn = QPushButton("刷新头像")
         self.avatar_btn.setToolTip("强制重新下载当前列表的群头像（查询时已有文件会自动复用）")
         self.avatar_btn.setEnabled(False)
         self.avatar_btn.clicked.connect(self._do_refresh_avatars)
         row2.addWidget(self.avatar_btn)
 
-        self.dir_btn = QPushButton("📂 打开保存目录")
+        self.dir_btn = QPushButton("打开保存目录")
         self.dir_btn.setEnabled(False)
         self.dir_btn.clicked.connect(self._open_dir)
         row2.addWidget(self.dir_btn)
 
-        self.copy_one_btn = QPushButton("📋 复制选中ID")
+        self.copy_one_btn = QPushButton("复制选中ID")
         self.copy_one_btn.setEnabled(False)
         self.copy_one_btn.clicked.connect(self._copy_selected)
         row2.addWidget(self.copy_one_btn)
 
-        self.copy_all_btn = QPushButton("📋 复制全部ID")
+        self.copy_all_btn = QPushButton("复制全部ID")
         self.copy_all_btn.setEnabled(False)
         self.copy_all_btn.clicked.connect(self._copy_all)
         row2.addWidget(self.copy_all_btn)
 
-        clear_btn = QPushButton("🗑 清空")
+        clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self._clear)
         row2.addWidget(clear_btn)
         tv.addLayout(row2)
@@ -206,7 +206,7 @@ class FanGroupsPage(BasePage):
         self.detail.setFixedHeight(150)
         layout.addWidget(self.detail)
 
-        self.status_label = QLabel("选平台 → 粘贴主页链接 → 🔍 查询")
+        self.status_label = QLabel("选平台 → 粘贴主页链接 → 查询")
         self.status_label.setStyleSheet("color: #666;")
         layout.addWidget(self.status_label)
 
@@ -239,13 +239,13 @@ class FanGroupsPage(BasePage):
             return
         text = self.input_edit.text().strip()
         if not text:
-            self.status_label.setText("❌ 请先粘贴主页链接或输入 UID")
+            self.status_label.setText("请先粘贴主页链接或输入 UID")
             return
         platform = self._platform
-        self._set_busy(True, "⏳ 正在查询...")
+        self._set_busy(True, "正在查询...")
 
         def prog(msg):
-            post_to_main(self.status_label.setText, f"⏳ {msg}")
+            post_to_main(self.status_label.setText, f"{msg}")
 
         def work():
             owner_id, groups = fg.fetch_groups(platform, text, progress=prog)
@@ -259,7 +259,7 @@ class FanGroupsPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 self.app.toast(str(err)[:80], "warning")
                 return
             owner_id, groups, changes, prev_at, snap, av_ok, av_total = result
@@ -276,7 +276,7 @@ class FanGroupsPage(BasePage):
             self.avatar_btn.setEnabled(bool(groups))
             avatar_text = f"，头像 {av_ok}/{av_total}" if av_total else ""
             self.status_label.setText(
-                f"✅ {fg.PLATFORM_LABELS[platform]} {owner_id}：{len(groups)} 个群"
+                f"{fg.PLATFORM_LABELS[platform]} {owner_id}：{len(groups)} 个群"
                 f"{avatar_text}，快照已保存（{os.path.basename(str(snap))}）")
             self.app.toast(f"查到 {len(groups)} 个群", "success")
 
@@ -378,10 +378,10 @@ class FanGroupsPage(BasePage):
             return
         platform, owner_id = self._platform, self._owner_id
         groups = list(self._groups)
-        self._set_busy(True, "⏳ 正在重新下载群头像...")
+        self._set_busy(True, "正在重新下载群头像...")
 
         def prog(msg):
-            post_to_main(self.status_label.setText, f"⏳ {msg}")
+            post_to_main(self.status_label.setText, f"{msg}")
 
         def work():
             ok, total = fg.download_avatars(platform, owner_id, groups,
@@ -392,12 +392,12 @@ class FanGroupsPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 头像下载失败：{err}")
+                self.status_label.setText(f"头像下载失败：{err}")
                 self.app.toast(f"头像下载失败：{err}", "warning")
                 return
             ok, total = result
             self._fill_table()
-            self.status_label.setText(f"✅ 群头像已更新：{ok}/{total}")
+            self.status_label.setText(f"群头像已更新：{ok}/{total}")
             self.app.toast(f"群头像 {ok}/{total}", "success")
 
         run_bg(work, done)
@@ -409,7 +409,7 @@ class FanGroupsPage(BasePage):
         platform, owner_id = self._platform, self._owner_id
         groups = list(self._groups)
         changes = dict(self._changes)
-        self._set_busy(True, "⏳ 正在导出 Excel...")
+        self._set_busy(True, "正在导出 Excel...")
 
         def work():
             return fg.export_xlsx(platform, owner_id, groups, changes)
@@ -417,10 +417,10 @@ class FanGroupsPage(BasePage):
         def done(path, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 导出失败：{err}")
+                self.status_label.setText(f"导出失败：{err}")
                 self.app.toast(f"导出失败：{err}", "warning")
                 return
-            self.status_label.setText(f"✅ 已导出：{path}")
+            self.status_label.setText(f"已导出：{path}")
             self.app.toast(f"已导出 {os.path.basename(str(path))}", "success")
 
         run_bg(work, done)
@@ -438,7 +438,7 @@ class FanGroupsPage(BasePage):
         if not g or not g.group_id:
             return
         QGuiApplication.clipboard().setText(g.group_id)
-        self.status_label.setText(f"✅ 已复制群 ID：{g.group_id}")
+        self.status_label.setText(f"已复制群 ID：{g.group_id}")
         self.app.toast("群 ID 已复制", "success")
 
     def _copy_all(self):
@@ -446,7 +446,7 @@ class FanGroupsPage(BasePage):
         if not ids:
             return
         QGuiApplication.clipboard().setText("\n".join(ids))
-        self.status_label.setText(f"✅ 已复制 {len(ids)} 个群 ID")
+        self.status_label.setText(f"已复制 {len(ids)} 个群 ID")
         self.app.toast(f"已复制 {len(ids)} 个群 ID", "success")
 
     def _clear(self):
@@ -463,4 +463,4 @@ class FanGroupsPage(BasePage):
         self.dir_btn.setEnabled(False)
         self.copy_one_btn.setEnabled(False)
         self.copy_all_btn.setEnabled(False)
-        self.status_label.setText("选平台 → 粘贴主页链接 → 🔍 查询")
+        self.status_label.setText("选平台 → 粘贴主页链接 → 查询")

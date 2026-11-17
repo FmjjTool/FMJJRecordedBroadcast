@@ -42,21 +42,21 @@ class WeiboChaohuaPage(BasePage):
         layout.setSpacing(6)
 
         # ---- 标题 ----
-        title = QLabel("🔴 微博超话")
+        title = QLabel("微博超话")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 微博超话 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "微博超话 · 功能介绍", (
             "<p><b>微博超话访客态采集（免登录），支持任意超话 ID。</b></p>"
             "<p>· <b>解析</b>：输入超话链接（https://weibo.com/p/100808...）"
-            "或 100808 开头的超话 ID → 点「🔎 解析超话」</p>"
+            "或 100808 开头的超话 ID → 点「解析超话」</p>"
             "<p>· <b>频道</b>：从超话头部动态读取 flowId；每个频道可单独勾选并设置最大翻页数</p>"
             "<p>· <b>采集</b>：游标翻页，跨频道按帖子 ID 去重；页面显示当前页数与累计条数</p>"
             "<p>· <b>导出</b>：汇总、频道明细、月度趋势、作者榜、设备/地区/星期/时段、全局 TOP50</p>"
             "<p>· <b>长效分析</b>：每次采集自动写入 config/weibo_chaohua.db"
-            "（帖子按 ID 去重 + 每次互动指标快照），在「🗄 历史分析」查看累计、新增与点赞增长</p>"
+            "（帖子按 ID 去重 + 每次互动指标快照），在「历史分析」查看累计、新增与点赞增长</p>"
             "<p>· <b>保存位置</b>：download/微博超话/&lt;超话名&gt;超话_数据采集_时间戳.xlsx</p>"
             "<p>· <b>已知边界</b>：阅读量 / 影响力 / 榜单分数网页端不存在；"
             "帖子数、粉丝数只有「4.8万 / 21万」缩略文案；"
@@ -77,7 +77,7 @@ class WeiboChaohuaPage(BasePage):
         self.input_edit.setPlaceholderText("也可粘贴其他超话链接或 100808... 开头的超话 ID")
         self.input_edit.returnPressed.connect(self._do_parse)
         row.addWidget(self.input_edit, 1)
-        self.parse_btn = QPushButton("🔎 解析超话")
+        self.parse_btn = QPushButton("解析超话")
         self.parse_btn.clicked.connect(self._do_parse)
         row.addWidget(self.parse_btn)
         tv.addLayout(row)
@@ -125,23 +125,23 @@ class WeiboChaohuaPage(BasePage):
         cv.addWidget(self.ch_table)
 
         ops = QHBoxLayout()
-        self.start_btn = QPushButton("🚀 开始采集")
+        self.start_btn = QPushButton("开始采集")
         self.start_btn.setStyleSheet(
             "background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
         self.start_btn.clicked.connect(self._do_start)
         ops.addWidget(self.start_btn)
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._do_stop)
         ops.addWidget(self.stop_btn)
         ops.addStretch(1)
-        self.export_btn = QPushButton("💾 导出 Excel")
+        self.export_btn = QPushButton("导出 Excel")
         self.export_btn.setEnabled(False)
         self.export_btn.setStyleSheet(
             "background: #1565c0; color: white; padding: 5px 14px; border-radius: 4px;")
         self.export_btn.clicked.connect(self._do_export)
         ops.addWidget(self.export_btn)
-        self.open_dir_btn = QPushButton("📂 打开导出目录")
+        self.open_dir_btn = QPushButton("打开导出目录")
         self.open_dir_btn.clicked.connect(self._open_export_dir)
         ops.addWidget(self.open_dir_btn)
         cv.addLayout(ops)
@@ -160,9 +160,9 @@ class WeiboChaohuaPage(BasePage):
 
         # ---- 结果 ----
         self.result_tabs = QTabWidget()
-        self.result_tabs.addTab(self._build_posts_tab(), "📋 帖子明细")
-        self.result_tabs.addTab(self._build_stats_tab(), "📊 统计概览")
-        self.result_tabs.addTab(self._build_history_tab(), "🗄 历史分析")
+        self.result_tabs.addTab(self._build_posts_tab(), "帖子明细")
+        self.result_tabs.addTab(self._build_stats_tab(), "统计概览")
+        self.result_tabs.addTab(self._build_history_tab(), "历史分析")
         layout.addWidget(self.result_tabs, 1)
 
     # ==================== UI 构建 ====================
@@ -222,10 +222,10 @@ class WeiboChaohuaPage(BasePage):
         hint.setProperty("role", "muted")
         bar.addWidget(hint)
         bar.addStretch(1)
-        refresh_btn = QPushButton("🔄 刷新历史")
+        refresh_btn = QPushButton("刷新历史")
         refresh_btn.clicked.connect(self._refresh_history)
         bar.addWidget(refresh_btn)
-        open_db_btn = QPushButton("📂 打开数据库目录")
+        open_db_btn = QPushButton("打开数据库目录")
         open_db_btn.clicked.connect(self._open_db_dir)
         bar.addWidget(open_db_btn)
         v.addLayout(bar)
@@ -242,15 +242,15 @@ class WeiboChaohuaPage(BasePage):
             return
         raw = self.input_edit.text().strip()
         if not raw:
-            self.status_label.setText("❌ 请先输入超话链接或 ID")
+            self.status_label.setText("请先输入超话链接或 ID")
             return
         try:
             topic_id = wch.extract_topic_id(raw)
         except ValueError as exc:
-            self.status_label.setText(f"❌ {exc}")
+            self.status_label.setText(f"{exc}")
             return
 
-        self._set_busy(True, f"⏳ 正在解析超话 {topic_id} ...")
+        self._set_busy(True, f"正在解析超话 {topic_id} ...")
 
         def work():
             return wch.fetch_overview(topic_id)
@@ -258,7 +258,7 @@ class WeiboChaohuaPage(BasePage):
         def done(info, err):
             if err:
                 self._set_busy(False)
-                self.status_label.setText(f"❌ 解析失败：{err}")
+                self.status_label.setText(f"解析失败：{err}")
                 self.app.toast(f"超话解析失败：{err}", "warning")
                 return
             self._topic_id = info.get("topic_id") or topic_id
@@ -269,7 +269,7 @@ class WeiboChaohuaPage(BasePage):
             fans = f'{info.get("fans_label") or "粉丝"} {info.get("fans_str") or "-"}'
             lines = [
                 f'{info.get("nick") or "（未命名超话）"}'
-                + (f" ｜ {labels}" if labels else ""),
+                + (f"｜ {labels}" if labels else ""),
                 f'超话 ID：{topic_id}',
                 f'帖子 {info.get("post_count_str") or "-"} ｜ {fans}',
             ]
@@ -280,7 +280,7 @@ class WeiboChaohuaPage(BasePage):
             self._reset_results()
             self._refresh_history()
             self.status_label.setText(
-                f'✅ 已解析「{info.get("nick") or topic_id}」，'
+                f'已解析「{info.get("nick") or topic_id}」，'
                 f'共 {len(info.get("channels") or [])} 个频道，选择后点「开始采集」')
             self.app.toast(f'超话已解析：{info.get("nick") or topic_id}', "success")
 
@@ -331,7 +331,7 @@ class WeiboChaohuaPage(BasePage):
         if self._busy:
             return
         if not self._info or not self._channel_rows:
-            self.status_label.setText("❌ 请先解析超话")
+            self.status_label.setText("请先解析超话")
             return
         selected = []
         for row in self._channel_rows:
@@ -345,14 +345,14 @@ class WeiboChaohuaPage(BasePage):
                 "max_pages": row["spin"].value(),
             })
         if not selected:
-            self.status_label.setText("❌ 请至少勾选一个频道")
+            self.status_label.setText("请至少勾选一个频道")
             return
 
         topic_id = self._topic_id
         info = self._info
         started_at = time.time()
         self._stop_event.clear()
-        self._set_busy(True, "⏳ 正在换取访客身份 ...", stoppable=True)
+        self._set_busy(True, "正在换取访客身份 ...", stoppable=True)
 
         def work():
             client = wch.ChaohuaClient(
@@ -372,7 +372,7 @@ class WeiboChaohuaPage(BasePage):
         def done(payload, err):
             if err:
                 self._set_busy(False)
-                self.status_label.setText(f"❌ 采集失败：{err}")
+                self.status_label.setText(f"采集失败：{err}")
                 self.app.toast(f"超话采集失败：{err}", "warning")
                 return
             payload = payload or {}
@@ -394,9 +394,9 @@ class WeiboChaohuaPage(BasePage):
             unique = len(wch.merge_posts(self._data))
             raw_total = sum(len(posts) for posts in self._data.values())
             stopped = self._stop_event.is_set()
-            prefix = "⏹ 已停止" if stopped else "✅ 采集完成"
+            prefix = " 已停止" if stopped else " 采集完成"
             if db.get("error"):
-                db_note = f"；⚠ 数据库保存失败：{db['error']}"
+                db_note = f"； 数据库保存失败：{db['error']}"
                 self.app.toast(f"数据库保存失败：{db['error']}", "warning")
             elif db:
                 db_note = (f'；数据库累计 {db.get("total_posts", 0)} 条'
@@ -411,14 +411,14 @@ class WeiboChaohuaPage(BasePage):
         run_bg(work, done)
 
     def _on_progress(self, message):
-        self.status_label.setText(f"⏳ {message}")
+        self.status_label.setText(f"{message}")
 
     def _do_stop(self):
         if not self._busy:
             return
         self._stop_event.set()
         self.stop_btn.setEnabled(False)
-        self.status_label.setText("⏹ 正在停止（等待当前页结束）...")
+        self.status_label.setText("正在停止（等待当前页结束）...")
 
     # ==================== 结果展示 ====================
     def _reset_results(self):
@@ -524,10 +524,10 @@ class WeiboChaohuaPage(BasePage):
             lines.append(f"{name}  {count}")
 
         lines.extend(["", "【发帖时段（0-23 点）】"])
-        lines.append("  ".join(f"{hour:02d}:{count}" for hour, count in enumerate(summary["hours"])))
+        lines.append("".join(f"{hour:02d}:{count}" for hour, count in enumerate(summary["hours"])))
 
         lines.extend(["", "【星期分布】"])
-        lines.append("  ".join(f"{wch.WEEKDAY_NAMES[index]}:{count}"
+        lines.append("".join(f"{wch.WEEKDAY_NAMES[index]}:{count}"
                                for index, count in enumerate(summary["weekdays"])))
 
         lines.extend([
@@ -545,7 +545,7 @@ class WeiboChaohuaPage(BasePage):
         topic_id = self._topic_id
         self._history_seq += 1
         seq = self._history_seq
-        self.history_view.setPlainText("⏳ 正在读取数据库...")
+        self.history_view.setPlainText("正在读取数据库...")
 
         def work():
             return chs.load_analysis(topic_id)
@@ -554,7 +554,7 @@ class WeiboChaohuaPage(BasePage):
             if seq != self._history_seq or topic_id != self._topic_id:
                 return
             if err:
-                self.history_view.setPlainText(f"❌ 读取历史数据失败：{err}")
+                self.history_view.setPlainText(f"读取历史数据失败：{err}")
                 return
             self.history_view.setPlainText(chs.format_history(result))
 
@@ -573,10 +573,10 @@ class WeiboChaohuaPage(BasePage):
         if self._busy:
             return
         if not self._info or not self._data:
-            self.status_label.setText("❌ 请先完成一次采集")
+            self.status_label.setText("请先完成一次采集")
             return
         info, data = self._info, self._data
-        self._set_busy(True, "⏳ 正在生成 Excel ...")
+        self._set_busy(True, "正在生成 Excel ...")
 
         def work():
             return wch.export_xlsx(info, data)
@@ -584,10 +584,10 @@ class WeiboChaohuaPage(BasePage):
         def done(path, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 导出失败：{err}")
+                self.status_label.setText(f"导出失败：{err}")
                 self.app.toast(f"Excel 导出失败：{err}", "warning")
                 return
-            self.status_label.setText(f"✅ Excel 已导出：{path}")
+            self.status_label.setText(f"Excel 已导出：{path}")
             self.status_label.setToolTip(str(path))
             self.app.toast(f"超话数据已导出：{path.name}", "success")
 

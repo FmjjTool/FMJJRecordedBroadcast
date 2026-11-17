@@ -3,7 +3,7 @@
 - 平台切换：顶部下拉选择，链接/ID 自动按平台解析（短链自动跳转）
 - 输入：视频链接/ID；抖音额外支持 作者模式（主页链接/sec_uid 抓最新 N 个视频）
 - 筛选：关键词（评论文本）/ 昵称 / 带图 / 最低点赞 / 排序（默认·点赞·时间）
-- 导出：🖼 评论区长图（PIL 绘制，含头像与评论图片）/ 💾 原始数据（json+txt+图片）
+- 导出： 评论区长图（PIL 绘制，含头像与评论图片）/  原始数据（json+txt+图片）
 """
 
 import os
@@ -22,9 +22,9 @@ from toolbox import douyin_comments as dc
 from toolbox import weibo_comments as wc
 
 _PLATFORMS = [
-    ("douyin", "📱 抖音"),
-    ("bili", "📺 B站"),
-    ("weibo", "🔴 微博"),
+    ("douyin", "抖音"),
+    ("bili", "B站"),
+    ("weibo", "微博"),
 ]
 _PLATFORM_NAMES = dict(_PLATFORMS)
 # 导出目录的平台分层名（评论区/{平台}/{视频ID}/）
@@ -33,8 +33,8 @@ _BACKENDS = {"douyin": dc, "bili": bc, "weibo": wc}
 # 平台是否支持作者模式（输入作者主页链接抓最新 N 个视频）
 _AUTHOR_OK = {"douyin": True, "bili": False, "weibo": False}
 
-_IMAGE_MODES = [("all", "全部"), ("has", "🖼 仅带图"), ("text", "✏️ 仅纯文字")]
-_SORT_MODES = [("default", "默认"), ("likes", "♥ 点赞"), ("time", "🕘 时间")]
+_IMAGE_MODES = [("all", "全部"), ("has", "仅带图"), ("text", "仅纯文字")]
+_SORT_MODES = [("default", "默认"), ("likes", "点赞"), ("time", "时间")]
 _IMAGE_NAMES = dict(_IMAGE_MODES)
 _SORT_NAMES = dict(_SORT_MODES)
 
@@ -71,7 +71,7 @@ class VideoCommentsPage(BasePage):
         self.platform_combo.currentIndexChanged.connect(self._platform_changed)
         row1.addWidget(self.platform_combo)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["🎬 单视频", "👤 作者模式"])
+        self.mode_combo.addItems([" 单视频", "作者模式"])
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         row1.addWidget(self.mode_combo)
         self.input_edit = QLineEdit()
@@ -90,12 +90,12 @@ class VideoCommentsPage(BasePage):
         self.pages_spin.setToolTip("每个视频抓取的评论页数（抖音/B站每页 20 条，微博每页 10 条）")
         row1.addWidget(QLabel("页数"))
         row1.addWidget(self.pages_spin)
-        self.fetch_btn = QPushButton("🔍 抓取评论")
+        self.fetch_btn = QPushButton("抓取评论")
         self.fetch_btn.setStyleSheet(
             "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.fetch_btn.clicked.connect(self.start_fetch)
         row1.addWidget(self.fetch_btn)
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._do_stop)
         row1.addWidget(self.stop_btn)
@@ -107,13 +107,13 @@ class VideoCommentsPage(BasePage):
         self.video_combo.setMinimumWidth(320)
         self.video_combo.currentIndexChanged.connect(self._video_switched)
         row2.addWidget(self.video_combo, 1)
-        self.export_btn = QPushButton("🖼 导出长图")
+        self.export_btn = QPushButton("导出长图")
         self.export_btn.setToolTip("当前视频筛选后的评论导出为 PNG 长图（含头像与评论图片）")
         self.export_btn.setStyleSheet(
             "background: palette(highlight); color: palette(highlighted-text); padding: 5px 14px; border-radius: 4px;")
         self.export_btn.clicked.connect(self.export_png)
         row2.addWidget(self.export_btn)
-        self.save_btn = QPushButton("💾 保存原始数据")
+        self.save_btn = QPushButton("保存原始数据")
         self.save_btn.setToolTip("保存 comments.json（原始数据）/ comments.txt / 图片原图")
         self.save_btn.clicked.connect(self.save_raw)
         row2.addWidget(self.save_btn)
@@ -126,13 +126,13 @@ class VideoCommentsPage(BasePage):
         fv = QHBoxLayout(flt)
         fv.setContentsMargins(10, 6, 10, 6)
         fv.setSpacing(6)
-        fv.addWidget(QLabel("🔍 搜索"))
+        fv.addWidget(QLabel("搜索"))
         self.kw_edit = QLineEdit()
         self.kw_edit.setPlaceholderText("评论文本关键词")
         self.kw_edit.setFixedWidth(150)
         self.kw_edit.textChanged.connect(self.apply_filter)
         fv.addWidget(self.kw_edit)
-        fv.addWidget(QLabel("👤"))
+        fv.addWidget(QLabel(""))
         self.user_edit = QLineEdit()
         self.user_edit.setPlaceholderText("昵称")
         self.user_edit.setFixedWidth(110)
@@ -143,7 +143,7 @@ class VideoCommentsPage(BasePage):
             self.image_combo.addItem(name, v)
         self.image_combo.currentIndexChanged.connect(self.apply_filter)
         fv.addWidget(self.image_combo)
-        fv.addWidget(QLabel("♥ ≥"))
+        fv.addWidget(QLabel("≥"))
         self.likes_spin = QSpinBox()
         self.likes_spin.setRange(0, 999999)
         self.likes_spin.valueChanged.connect(self.apply_filter)
@@ -165,7 +165,7 @@ class VideoCommentsPage(BasePage):
 
         # ---- 评论表格 ----
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["用户", "评论内容", "♥", "图", "时间"])
+        self.table.setHorizontalHeaderLabels(["用户", "评论内容", "", "图", "时间"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         for col, w in ((2, 60), (3, 45), (4, 110)):
@@ -215,14 +215,14 @@ class VideoCommentsPage(BasePage):
         be = self._be()
         raw = self.input_edit.text().strip()
         if not raw:
-            self.status_label.setText("❌ 请先输入视频链接或作者主页链接")
+            self.status_label.setText("请先输入视频链接或作者主页链接")
             return
         kind, vid = be.parse_input(raw)
         if not kind:
-            self.status_label.setText("❌ 无法识别输入（需视频链接/ID）")
+            self.status_label.setText("无法识别输入（需视频链接/ID）")
             return
         self._stop = False
-        self._set_busy(True, "⏳ 抓取中...")
+        self._set_busy(True, "抓取中...")
         self.videos = []
         self.current_index = -1
         self.video_combo.clear()
@@ -232,13 +232,13 @@ class VideoCommentsPage(BasePage):
         count = self.video_count_spin.value() if is_author else 1
 
         def progress(msg, cur=0, total=0):
-            self._say(f"⏳ {msg}")
+            self._say(f"{msg}")
 
         def work():
             # plan 元素: (fetch_id, desc, ctype)。ctype=None 用各后端默认
             # （视频路径）；仅 B 站 fetch_comments 支持 ctype（动态评论坐标）
             if kind == "sec_uid":
-                self._say("⏳ 获取作者视频列表...")
+                self._say("获取作者视频列表...")
                 targets = be.fetch_author_videos(vid, count)
                 if not targets:
                     raise RuntimeError("未获取到作者视频列表（链接无效或被风控拦截）")
@@ -247,29 +247,29 @@ class VideoCommentsPage(BasePage):
                 # B站动态（t.bilibili.com/{id} / opus/{id}）：详情预检拿权威
                 # 评论坐标——图文/转发动态的评论挂相簿（type=1/11）或源动态下，
                 # 只有纯文字动态才是 type=17 + 动态 ID 本身
-                self._say("⏳ 校验动态...")
+                self._say("校验动态...")
                 vinfo = be.fetch_dynamic_info(vid)
                 if not vinfo.get("exists") and not vinfo.get("unknown"):
                     raise RuntimeError(f"动态不存在（ID {vid}），请检查链接是否完整")
                 if vinfo.get("unknown"):
-                    self._say("⚠️ 动态预检被风控跳过，直接尝试抓取评论...")
+                    self._say("动态预检被风控跳过，直接尝试抓取评论...")
                 plan = [(vinfo.get("comment_id") or vid,
                          vinfo.get("desc") or "",
                          vinfo.get("comment_type") or 17)]
             else:
                 # 预检视频存在性（风控误判时不阻断，直接尝试抓评论）
-                self._say("⏳ 校验视频...")
+                self._say("校验视频...")
                 vinfo = be.fetch_video_info(vid)
                 if not vinfo.get("exists") and not vinfo.get("unknown"):
                     raise RuntimeError(f"视频不存在（ID {vid}），请检查链接是否完整")
                 if vinfo.get("unknown"):
-                    self._say("⚠️ 视频预检被风控跳过，直接尝试抓取评论...")
+                    self._say("视频预检被风控跳过，直接尝试抓取评论...")
                 plan = [(vid, vinfo.get("desc") or "", None)]
             results = []
             for i, (fetch_id, desc, ctype) in enumerate(plan):
                 if self._stop:
                     break
-                self._say(f"⏳ 视频 {i + 1}/{len(plan)}：{desc or fetch_id}")
+                self._say(f"视频 {i + 1}/{len(plan)}：{desc or fetch_id}")
                 kwargs = {"pages": pages, "progress": progress,
                           "should_stop": lambda: self._stop}
                 if ctype is not None:
@@ -284,11 +284,11 @@ class VideoCommentsPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 return
             self.videos = result or []
             if not self.videos:
-                self.status_label.setText("❌ 未获取到评论（视频不存在或接口受限）")
+                self.status_label.setText("未获取到评论（视频不存在或接口受限）")
                 return
             self.video_combo.blockSignals(True)
             self.video_combo.clear()
@@ -305,11 +305,11 @@ class VideoCommentsPage(BasePage):
             plat = _PLATFORM_NAMES[self._platform()]
             if total == 0:
                 self.status_label.setText(
-                    "⚠️ 0 条评论：该视频可能无评论，或被风控拦截"
+                    "0 条评论：该视频可能无评论，或被风控拦截"
                     "（稍后重试，或确认该平台登录状态）")
             else:
                 self.status_label.setText(
-                    f"✅ {plat} · 共 {len(self.videos)} 个视频 / {total} 条评论 / {n_img} 张图片")
+                    f"{plat} · 共 {len(self.videos)} 个视频 / {total} 条评论 / {n_img} 张图片")
 
         run_bg(work, done)
 
@@ -346,7 +346,7 @@ class VideoCommentsPage(BasePage):
             likes = be.comment_likes(c)
             items = [
                 be.comment_user(c),
-                be.comment_text(c).replace("\n", " "),
+                be.comment_text(c).replace("\n", ""),
                 str(likes) if likes else "",
                 str(n_img) if n_img else "",
                 be.comment_time(c),
@@ -383,11 +383,11 @@ class VideoCommentsPage(BasePage):
     def export_png(self):
         v = self._current_video()
         if not v:
-            self.status_label.setText("❌ 请先抓取评论")
+            self.status_label.setText("请先抓取评论")
             return
         comments = self._filtered_comments(v)
         if not comments:
-            self.status_label.setText("❌ 筛选后没有评论可导出")
+            self.status_label.setText("筛选后没有评论可导出")
             return
         desc_parts = []
         if self.kw_edit.text().strip():
@@ -407,10 +407,10 @@ class VideoCommentsPage(BasePage):
             "stats": {"total": len(v["comments"])},
         }
         out = self._layered_dir(v["id"]) / f"评论区_{v['id']}.png"
-        self._set_busy(True, "⏳ 导出长图中（下载头像与图片中）...")
+        self._set_busy(True, "导出长图中（下载头像与图片中）...")
 
         def progress(msg, cur=0, total=0):
-            self._say(f"⏳ {msg}")
+            self._say(f"{msg}")
 
         def work():
             return self._be().export_comments_png(comments, meta, out, progress=progress)
@@ -418,9 +418,9 @@ class VideoCommentsPage(BasePage):
         def done(path, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 导出失败：{err}")
+                self.status_label.setText(f"导出失败：{err}")
                 return
-            self.status_label.setText(f"✅ 长图已导出（{len(comments)} 条评论）")
+            self.status_label.setText(f"长图已导出（{len(comments)} 条评论）")
             self.app.toast(f"评论区长图已导出：{path}", "success")
             try:
                 os.startfile(str(path))
@@ -432,16 +432,16 @@ class VideoCommentsPage(BasePage):
     def save_raw(self):
         v = self._current_video()
         if not v:
-            self.status_label.setText("❌ 请先抓取评论")
+            self.status_label.setText("请先抓取评论")
             return
         out = self._layered_dir(v["id"])
-        self._set_busy(True, "⏳ 保存原始数据中（下载评论图片）...")
+        self._set_busy(True, "保存原始数据中（下载评论图片）...")
         # 下载浮窗（主线程创建；评论图片 4 线程并发下载）
         from gui_qt.download_float import get_float
         card = get_float().add_batch("评论区图片")
 
         def progress(msg, cur=0, total=0):
-            self._say(f"⏳ {msg}")
+            self._say(f"{msg}")
 
         def work():
             return self._be().save_raw(v["comments"], out, progress=progress,
@@ -450,12 +450,12 @@ class VideoCommentsPage(BasePage):
         def done(stats, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 保存失败：{err}")
-                card.finish(f"❌ 保存失败: {str(err)[:50]}")
+                self.status_label.setText(f"保存失败：{err}")
+                card.finish(f"保存失败: {str(err)[:50]}")
                 return
             self.status_label.setText(
-                f"✅ 已保存 {stats['comments']} 条评论 / {stats['downloaded']}/{stats['images']} 张图片")
-            card.finish(f"✅ 图片 {stats['downloaded']}/{stats['images']}")
+                f"已保存 {stats['comments']} 条评论 / {stats['downloaded']}/{stats['images']} 张图片")
+            card.finish(f"图片 {stats['downloaded']}/{stats['images']}")
             self.app.toast(
                 f"评论区原始数据已保存：{stats['comments']} 条 / 图片 {stats['downloaded']}/{stats['images']}",
                 "success")
