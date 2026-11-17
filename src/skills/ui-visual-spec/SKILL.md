@@ -264,12 +264,12 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | `QGroupBox` 标题 | 去掉 emoji（Qt 分组框没有图标位，不加图标） |
 | `QAction` / `QMenu` | 菜单项前导 emoji 转菜单图标；菜单标题与句中 emoji 删除 |
 | 窗口标题 | 去掉 emoji |
-| `QPlainTextEdit` / `QTextEdit`（只读日志）/ `QStatusBar` | 删除 emoji，保留原有缩进与排版；`QTextBrowser` 用户正文除外 |
+| `QPlainTextEdit` / `QTextEdit`（只读日志）/ `QStatusBar` | 删除 emoji；只读 `QTextEdit` 日志按级别使用 success/warning/danger/link 字色；`QTextBrowser` 用户正文除外 |
 | `ToolSectionCard` | 标题 emoji 自动转 `icon=`，无需页面传参 |
 
 约束与注意事项：
 
-1. 前导 emoji 转图标；其余位置的 emoji（按钮、标签、页签、条目、菜单文案、只读日志、状态栏、tooltip、占位符、帮助浮层）直接删除并收拢空白；只读 `QPlainTextEdit`/`QTextEdit` 的日志写入、`QStatusBar.showMessage`、`QWidget.setToolTip`、`QLineEdit.setPlaceholderText` 已统一过滤。可编辑输入区与 `QTextBrowser` 用户生成正文不处理。
+1. 前导 emoji 转图标；其余位置的 emoji（按钮、标签、页签、条目、菜单文案、只读日志、状态栏、tooltip、占位符、帮助浮层）直接删除并收拢空白；只读 `QPlainTextEdit`/`QTextEdit` 的日志写入、`QStatusBar.showMessage`、`QWidget.setToolTip`、`QLineEdit.setPlaceholderText` 已统一过滤。只读 `QTextEdit` 日志按提示级别使用 success/warning/danger/link 字色代替 emoji。可编辑输入区与 `QTextBrowser` 用户生成正文不处理。
 2. 未登记的 emoji 保持原样。新增 emoji 必须在 `_EMOJI_ICONS` 里登记，且只能指向 `line_icon()` 已存在的图标名。
 3. 显式调用 `setIcon()` 会关闭该控件的自动图标（导航栏等自定义图标不会被运行时转换覆盖）。
 4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。

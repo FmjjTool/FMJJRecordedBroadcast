@@ -16,6 +16,7 @@ highlighted-text，弱化标签 placeholder-text）；切主题后由 `refresh_a
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 import weakref
 
@@ -894,13 +895,34 @@ def _patch_misc_text():
     QLineEdit.setPlaceholderText = set_placeholder
 
 
+def _log_color(text: str) -> str:
+    if any(k in text for k in ("❌", "失败", "错误", "异常")):
+        return theme.color("danger")
+    if any(k in text for k in ("⚠️", "⚠", "警告", "注意", "跳过", "已存在", "标准命名")):
+        return theme.color("warning")
+    if any(k in text for k in ("✅", "完成", "成功")):
+        return theme.color("success")
+    if any(k in text for k in ("📂", "📁", "扫描", "正在", "信息")):
+        return theme.color("link")
+    return ""
+
+
+def _colored_log(text) -> str:
+    text = str(text)
+    clean = strip_emoji(text)
+    color = _log_color(text)
+    if not color or "<" in text:
+        return clean
+    return f'<span style="color:{color}">{html_lib.escape(clean)}</span>'
+
+
 def _patch_text_edit():
     orig_append = QTextEdit.append
     orig_set = QTextEdit.setPlainText
 
     def append_text(self, text):
         if self.isReadOnly() and not isinstance(self, QTextBrowser):
-            text = strip_emoji(text)
+            text = _colored_log(text)
         return orig_append(self, text)
 
     def set_text(self, text):

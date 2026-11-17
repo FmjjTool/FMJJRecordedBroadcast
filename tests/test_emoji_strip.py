@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QWidget,
 )
 
-from gui_qt import emoji_icons
+from gui_qt import emoji_icons, theme
 
 
 class EmojiStripTests(unittest.TestCase):
@@ -55,6 +55,21 @@ class EmojiStripTests(unittest.TestCase):
         browser = QTextBrowser()
         browser.append("📁 用户正文")
         self.assertIn("📁", browser.toPlainText())
+
+    def test_log_levels_use_theme_colors(self):
+        cases = [
+            ("✅ 完成", "success"),
+            ("⚠️ 注意", "warning"),
+            ("❌ 失败", "danger"),
+            ("📂 扫描文件夹", "link"),
+        ]
+        for text, role in cases:
+            log = QTextEdit()
+            log.setReadOnly(True)
+            log.append(text)
+            html = log.toHtml().lower()
+            self.assertIn(theme.color(role).lower(), html)
+            self.assertNotIn(text[0], log.toPlainText())
 
     def test_tooltip_and_placeholder_have_no_emoji(self):
         widget = QWidget()
