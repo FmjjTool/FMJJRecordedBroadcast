@@ -65,7 +65,7 @@ class BiliShopPage(BasePage):
         layout.addLayout(title_row)
 
         top = QFrame()
-        top.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
         tv = QVBoxLayout(top)
         tv.setContentsMargins(10, 8, 10, 8)
         tv.setSpacing(6)
@@ -85,7 +85,7 @@ class BiliShopPage(BasePage):
 
         self.parse_btn = QPushButton("🔍 解析")
         self.parse_btn.setStyleSheet(
-            "background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
+            "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.parse_btn.clicked.connect(self._do_parse)
         row.addWidget(self.parse_btn)
         tv.addLayout(row)
@@ -94,12 +94,12 @@ class BiliShopPage(BasePage):
         self.avatar_label = QLabel()
         self.avatar_label.setFixedSize(_AVATAR_W, _AVATAR_W)
         self.avatar_label.setStyleSheet(
-            "QLabel { background: #f4f6f8; border: 1px solid #d0d6df; border-radius: 28px; }")
+            "QLabel { background: palette(alternate-base); border: 1px solid palette(shadow); border-radius: 28px; }")
         self.avatar_label.setAlignment(Qt.AlignCenter)
         info_row.addWidget(self.avatar_label)
 
         self.shop_info = QLabel("尚未解析小店")
-        self.shop_info.setStyleSheet("color: #444;")
+        self.shop_info.setStyleSheet("color: palette(text);")
         self.shop_info.setTextFormat(Qt.RichText)
         info_row.addWidget(self.shop_info, 1)
 
@@ -154,7 +154,7 @@ class BiliShopPage(BasePage):
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setFixedSize(_PREVIEW_W, _PREVIEW_H)
         self.preview.setStyleSheet(
-            "QLabel { background: #f4f6f8; border: 1px solid #d0d6df; border-radius: 6px; color: #999; }")
+            "QLabel { background: palette(alternate-base); border: 1px solid palette(shadow); border-radius: 6px; color: palette(placeholder-text); }")
         rv.addWidget(self.preview, 0, Qt.AlignHCenter)
 
         self.detail = QTextEdit()
@@ -179,7 +179,7 @@ class BiliShopPage(BasePage):
         layout.addWidget(splitter, 1)
 
         self.status_label = QLabel("粘贴 B站小店链接或 UP主 UID → 🔍 解析")
-        self.status_label.setStyleSheet("color: #666;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
     # ---------- 状态 ----------

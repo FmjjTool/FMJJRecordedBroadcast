@@ -96,7 +96,7 @@ class _PickDialog(QDialog):
         cancel.clicked.connect(self.reject)
         h.addWidget(cancel)
         ok = QPushButton("确认")
-        ok.setStyleSheet("background: #2e7d32; color: white; padding: 5px 18px; border-radius: 4px;")
+        ok.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 5px 18px; border-radius: 4px;")
         ok.clicked.connect(self._pick_ok)
         h.addWidget(ok)
         v.addLayout(h)
@@ -151,7 +151,7 @@ class DouyinIndexPage(BasePage):
 
         # ---- 顶部输入区 ----
         top = QFrame()
-        top.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
         tv = QVBoxLayout(top)
         tv.setContentsMargins(10, 8, 10, 8)
         tv.setSpacing(6)
@@ -172,7 +172,7 @@ class DouyinIndexPage(BasePage):
         row.addWidget(self.range_combo)
         self.fetch_btn = QPushButton("📊 获取全部数据并保存")
         self.fetch_btn.setStyleSheet(
-            "background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
+            "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.fetch_btn.clicked.connect(self._do_fetch)
         row.addWidget(self.fetch_btn)
         open_btn = QPushButton("📂 打开保存目录")
@@ -196,7 +196,7 @@ class DouyinIndexPage(BasePage):
         layout.addWidget(self.tabs, 1)
 
         self.status_label = QLabel("输入达人名称或抖音号 → 🔍 搜索 → 确认 → 获取全部数据并保存")
-        self.status_label.setStyleSheet("color: #666;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
     # ---------- UI 构建 ----------

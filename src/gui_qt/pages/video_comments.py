@@ -59,7 +59,7 @@ class VideoCommentsPage(BasePage):
 
         # ---- 顶部：输入区 ----
         top = QFrame()
-        top.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
         tv = QVBoxLayout(top)
         tv.setContentsMargins(10, 8, 10, 8)
         tv.setSpacing(6)
@@ -92,7 +92,7 @@ class VideoCommentsPage(BasePage):
         row1.addWidget(self.pages_spin)
         self.fetch_btn = QPushButton("🔍 抓取评论")
         self.fetch_btn.setStyleSheet(
-            "background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
+            "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.fetch_btn.clicked.connect(self.start_fetch)
         row1.addWidget(self.fetch_btn)
         self.stop_btn = QPushButton("⏹ 停止")
@@ -110,7 +110,7 @@ class VideoCommentsPage(BasePage):
         self.export_btn = QPushButton("🖼 导出长图")
         self.export_btn.setToolTip("当前视频筛选后的评论导出为 PNG 长图（含头像与评论图片）")
         self.export_btn.setStyleSheet(
-            "background: #1565c0; color: white; padding: 5px 14px; border-radius: 4px;")
+            "background: palette(highlight); color: palette(highlighted-text); padding: 5px 14px; border-radius: 4px;")
         self.export_btn.clicked.connect(self.export_png)
         row2.addWidget(self.export_btn)
         self.save_btn = QPushButton("💾 保存原始数据")
@@ -122,7 +122,7 @@ class VideoCommentsPage(BasePage):
 
         # ---- 筛选栏 ----
         flt = QFrame()
-        flt.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        flt.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
         fv = QHBoxLayout(flt)
         fv.setContentsMargins(10, 6, 10, 6)
         fv.setSpacing(6)
@@ -159,7 +159,7 @@ class VideoCommentsPage(BasePage):
         fv.addWidget(reset_btn)
         fv.addStretch(1)
         self.status_label = QLabel("选择平台，输入视频链接开始")
-        self.status_label.setStyleSheet("color: #666;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         fv.addWidget(self.status_label)
         layout.addWidget(flt)
 

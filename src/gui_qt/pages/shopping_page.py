@@ -82,7 +82,7 @@ class ShoppingPage(BasePage):
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
         self.parse_btn = QPushButton("🔍 解析")
-        self.parse_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.parse_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         self.parse_btn.clicked.connect(self._parse)
         row.addWidget(self.parse_btn)
         self.detail_btn = QPushButton("🛍 获取选中商品详情")
@@ -116,7 +116,7 @@ class ShoppingPage(BasePage):
         self.sel_clear_btn.clicked.connect(lambda: self._set_all_checks(False))
         sel_row.addWidget(self.sel_clear_btn)
         self.check_count_label = QLabel("已勾选 0 件")
-        self.check_count_label.setStyleSheet("color: #888;")
+        self.check_count_label.setStyleSheet("color: palette(placeholder-text);")
         sel_row.addWidget(self.check_count_label)
         sel_row.addStretch(1)
         layout.addLayout(sel_row)
@@ -152,7 +152,7 @@ class ShoppingPage(BasePage):
         self.pic_label = QLabel("选中商品后显示主图预览")
         self.pic_label.setAlignment(Qt.AlignCenter)
         self.pic_label.setMinimumHeight(180)
-        self.pic_label.setStyleSheet("color: #888;")
+        self.pic_label.setStyleSheet("color: palette(placeholder-text);")
         rv.addWidget(self.pic_label)
         btn_row = QHBoxLayout()
         self.export_xlsx_btn = QPushButton("📊 导出单商品 Excel")
@@ -172,7 +172,7 @@ class ShoppingPage(BasePage):
         layout.addWidget(splitter, 1)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #888;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
     # ==================== 解析 ====================
