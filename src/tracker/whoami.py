@@ -482,6 +482,26 @@ def _tcdoc(cookie: str) -> dict:
     return {"ok": None, "username": ""}
 
 
+def _quark(cookie: str) -> dict:
+    """夸克网盘：account/info 返回昵称即已登录；票失效时 code 非 OK 且无昵称。"""
+    import requests
+
+    h = _headers(cookie)
+    h["Referer"] = "https://pan.quark.cn/"
+    d = requests.get("https://pan.quark.cn/account/info?fr=pc&platform=pc",
+                     headers=h, timeout=10).json()
+    if not isinstance(d, dict):
+        return {"ok": None, "username": ""}
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    nick = str((data or {}).get("nickname") or "").strip()
+    if nick:
+        return {"ok": True, "username": nick}
+    # 未登录时接口 code 为 "KO"/非 OK，data 里没有 nickname
+    if str(d.get("code") or "").upper() in ("KO", "ERROR", "401") or d.get("code") == 401:
+        return {"ok": False, "username": ""}
+    return {"ok": False, "username": ""}
+
+
 def kugou_nick_for(userid) -> str:
     """同 userid 的酷狗昵称（酷狗概念版没有可用的用户信息接口，借主账号 Cookie）。"""
     import auth
@@ -500,4 +520,5 @@ _VERIFIERS = {
     "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
+    "quark": _quark,
 }
