@@ -1,0 +1,539 @@
+# -*- coding: utf-8 -*-
+"""直播总结页（大模型方案）。
+
+把直播转录 TXT / SRT 交给 OpenAI 兼容接口，按内置「封茗囧菌直播总结」规则
+分块提取、合并、生成终稿并做格式校验。
+
+- 规则只读复用 `src/skills/fengming-livestream-summary/`，不在页面里另写一套；
+- API Key 单独加密保存在 `config/livestream_summary.json`，与 Cookie 存储隔离；
+- 纯规则保底仍可用命令行 `toolbox.livestream_summary_rule`。
+"""
+
+from __future__ import annotations
+
+import threading
+from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
+    QVBoxLayout, QWidget,
+)
+
+from gui_qt.common import post_to_main, run_bg
+from gui_qt.pages.base import BasePage
+from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
+from toolbox import livestream_summary_rule as rule
+from toolbox.livestream_summary import config as ls_config
+from toolbox.livestream_summary import pipeline
+from toolbox.livestream_summary.client import ChatClient
+
+SUPPORTED_FILTER = "直播转录 (*.txt *.srt);;所有文件 (*)"
+
+
+class LivestreamSummaryPage(BasePage):
+    def __init__(self, app):
+        super().__init__(app)
+        self._running = False
+        self._cancel: threading.Event | None = None
+        self._source: Path | None = None
+        self._result_text = ""
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        root.addWidget(ToolPageHeader(
+            "直播总结",
+            "把直播转录 TXT / SRT 交给大模型，按内置总结规则生成规范文本。"
+            "分块提取会按转录长度多次请求；模型不可用时可用纯规则保底脚本。"))
+
+        root.addWidget(self._build_toolbar())
+        root.addLayout(self._build_body(), 1)
+        self._load_settings()
+
+    # ==================== 界面搭建 ====================
+
+    def _build_toolbar(self) -> QFrame:
+        bar = QFrame()
+        bar.setProperty("variant", "toolbar")
+        layout = QVBoxLayout(bar)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        file_row = QHBoxLayout()
+        file_row.setSpacing(6)
+        self.file_edit = QLineEdit()
+        self.file_edit.setReadOnly(True)
+        self.file_edit.setPlaceholderText("选择直播转录文件（TXT / SRT）")
+        file_row.addWidget(self.file_edit, 1)
+        pick_btn = QPushButton("📁 选择文件")
+        pick_btn.setProperty("variant", "secondary")
+        pick_btn.setToolTip("选择要总结的直播转录文件")
+        pick_btn.clicked.connect(self._pick_file)
+        file_row.addWidget(pick_btn)
+        self.date_label = QLabel("直播日期：未选择文件")
+        self.date_label.setProperty("role", "caption")
+        self.date_label.setMinimumWidth(190)
+        file_row.addWidget(self.date_label)
+        layout.addLayout(file_row)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.start_btn = QPushButton("▶ 开始总结")
+        self.start_btn.setProperty("variant", "primary")
+        self.start_btn.setToolTip("按当前模型设置执行分块提取、合并与终稿生成")
+        self.start_btn.clicked.connect(self._start)
+        action_row.addWidget(self.start_btn)
+
+        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn.setProperty("variant", "secondary")
+        self.stop_btn.setToolTip("停止当前任务（已生成的中间结果不保存）")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._stop)
+        action_row.addWidget(self.stop_btn)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        self.progress.setFixedHeight(16)
+        action_row.addWidget(self.progress, 1)
+
+        self.status_label = QLabel("空闲")
+        self.status_label.setProperty("role", "caption")
+        self.status_label.setMinimumWidth(240)
+        action_row.addWidget(self.status_label)
+        layout.addLayout(action_row)
+        return bar
+
+    def _build_body(self) -> QHBoxLayout:
+        body = QHBoxLayout()
+        body.setSpacing(12)
+
+        left = QVBoxLayout()
+        left.setSpacing(12)
+        left.addWidget(self._build_input_card())
+        left.addWidget(self._build_model_card())
+        left.addStretch(1)
+        left_wrap = QWidget()
+        left_wrap.setLayout(left)
+        left.setContentsMargins(0, 0, 0, 0)
+        left_wrap.setMinimumWidth(330)
+        left_wrap.setMaximumWidth(430)
+        body.addWidget(left_wrap)
+
+        right = QVBoxLayout()
+        right.setSpacing(12)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.addWidget(self._build_result_card(), 3)
+        right.addWidget(self._build_log_card(), 1)
+        right_wrap = QWidget()
+        right_wrap.setLayout(right)
+        body.addWidget(right_wrap, 1)
+        return body
+
+    def _build_input_card(self) -> ToolSectionCard:
+        card = ToolSectionCard("📄 输入与输出", "转录文件只读；总结另存为 TXT。")
+        self.detail_label = QLabel("尚未选择文件")
+        self.detail_label.setProperty("role", "caption")
+        self.detail_label.setWordWrap(True)
+        card.content_layout.addWidget(self.detail_label)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(QLabel("输出目录"))
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.setPlaceholderText("留空 = 转录文件同目录")
+        row.addWidget(self.output_dir_edit, 1)
+        browse = QPushButton("📁")
+        browse.setProperty("variant", "secondary")
+        browse.setToolTip("选择总结输出目录")
+        browse.clicked.connect(self._pick_output_dir)
+        row.addWidget(browse)
+        card.content_layout.addLayout(row)
+
+        hint = QLabel("结果会同时显示在右侧；文件名取总结标题，可直接修改后再另存。")
+        hint.setProperty("role", "caption")
+        hint.setWordWrap(True)
+        card.content_layout.addWidget(hint)
+        return card
+
+    def _build_model_card(self) -> ToolSectionCard:
+        card = ToolSectionCard(
+            "🤖 模型接口",
+            "OpenAI 兼容 /chat/completions；Key 加密保存在本机。"
+            "上下文较小的模型请把「每块字数」调小。")
+
+        card.content_layout.addWidget(QLabel("接口地址"))
+        self.base_url_edit = QLineEdit()
+        self.base_url_edit.setPlaceholderText(ls_config.DEFAULT_BASE_URL)
+        card.content_layout.addWidget(self.base_url_edit)
+
+        card.content_layout.addWidget(QLabel("API Key"))
+        key_row = QHBoxLayout()
+        key_row.setSpacing(6)
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        key_row.addWidget(self.api_key_edit, 1)
+        clear_btn = QPushButton("清除")
+        clear_btn.setProperty("variant", "ghost")
+        clear_btn.setToolTip("删除本机保存的 API Key")
+        clear_btn.clicked.connect(self._clear_api_key)
+        key_row.addWidget(clear_btn)
+        card.content_layout.addLayout(key_row)
+
+        card.content_layout.addWidget(QLabel("模型名称"))
+        self.model_edit = QLineEdit()
+        self.model_edit.setPlaceholderText("例如 deepseek-chat / gpt-4o-mini")
+        card.content_layout.addWidget(self.model_edit)
+
+        chunk_row = QHBoxLayout()
+        chunk_row.setSpacing(6)
+        chunk_row.addWidget(QLabel("每块字数"))
+        self.chunk_spin = QSpinBox()
+        self.chunk_spin.setRange(2000, 20000)
+        self.chunk_spin.setSingleStep(1000)
+        self.chunk_spin.setSuffix(" 字")
+        self.chunk_spin.setToolTip("转录较长时会按该字数分块提取；太小会增加请求次数")
+        chunk_row.addWidget(self.chunk_spin)
+        chunk_row.addStretch(1)
+        card.content_layout.addLayout(chunk_row)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        save_btn = QPushButton("💾 保存设置")
+        save_btn.setProperty("variant", "primary")
+        save_btn.setToolTip("保存接口地址、模型、分块字数与输入的 Key")
+        save_btn.clicked.connect(self._save_settings)
+        buttons.addWidget(save_btn)
+
+        self.test_btn = QPushButton("🔌 测试连接")
+        self.test_btn.setProperty("variant", "secondary")
+        self.test_btn.setToolTip("发送一次极短的测试请求，会消耗少量额度")
+        self.test_btn.clicked.connect(self._test_connection)
+        buttons.addWidget(self.test_btn)
+        buttons.addStretch(1)
+        card.content_layout.addLayout(buttons)
+
+        self.key_status = QLabel("API Key：未保存")
+        self.key_status.setProperty("role", "caption")
+        self.key_status.setWordWrap(True)
+        card.content_layout.addWidget(self.key_status)
+        return card
+
+    def _build_result_card(self) -> ToolSectionCard:
+        card = ToolSectionCard("📝 总结结果", "纯文本；校验未通过时会在日志里列出具体问题。")
+        self.result_view = QPlainTextEdit()
+        self.result_view.setReadOnly(True)
+        self.result_view.setPlaceholderText("生成的总结会显示在这里")
+        card.content_layout.addWidget(self.result_view, 1)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.copy_btn = QPushButton("📋 复制结果")
+        self.copy_btn.setProperty("variant", "secondary")
+        self.copy_btn.setToolTip("把完整总结复制到剪贴板")
+        self.copy_btn.clicked.connect(self._copy_result)
+        row.addWidget(self.copy_btn)
+
+        self.export_btn = QPushButton("💾 另存为")
+        self.export_btn.setProperty("variant", "secondary")
+        self.export_btn.setToolTip("把总结另存为 TXT")
+        self.export_btn.clicked.connect(self._export_result)
+        row.addWidget(self.export_btn)
+        row.addStretch(1)
+        self.result_stats = QLabel("")
+        self.result_stats.setProperty("role", "caption")
+        row.addWidget(self.result_stats)
+        card.content_layout.addLayout(row)
+        return card
+
+    def _build_log_card(self) -> ToolSectionCard:
+        card = ToolSectionCard("📋 运行日志", "记录每次分块、合并、校验与保存结果。")
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(2000)
+        self.log_view.setPlaceholderText("开始总结后，这里会显示分块与校验过程")
+        self.log_view.setStyleSheet(
+            'QPlainTextEdit { font-family: Consolas, "Cascadia Mono", monospace;'
+            " font-size: 11px; background: palette(base); color: palette(text);"
+            " border: 1px solid palette(shadow); border-radius: 8px; padding: 6px; }")
+        card.content_layout.addWidget(self.log_view, 1)
+        return card
+
+    # ==================== 设置 ====================
+
+    def _load_settings(self):
+        settings = ls_config.load_settings()
+        self.base_url_edit.setText(settings.base_url)
+        self.model_edit.setText(settings.model)
+        self.chunk_spin.setValue(settings.chunk_chars)
+        self.output_dir_edit.setText(settings.output_dir)
+        self._refresh_key_status()
+
+    def _refresh_key_status(self):
+        if ls_config.has_api_key():
+            self.api_key_edit.clear()
+            self.api_key_edit.setPlaceholderText("已保存；留空表示不修改")
+            self.key_status.setText("API Key：已保存（本机加密，与 Cookie 存储隔离）")
+        else:
+            self.api_key_edit.setPlaceholderText("粘贴 API Key")
+            self.key_status.setText("API Key：未保存")
+
+    def _collect_settings(self) -> ls_config.Settings:
+        return ls_config.Settings(
+            base_url=self.base_url_edit.text().strip() or ls_config.DEFAULT_BASE_URL,
+            model=self.model_edit.text().strip(),
+            chunk_chars=int(self.chunk_spin.value()),
+            output_dir=self.output_dir_edit.text().strip(),
+        )
+
+    def _save_settings(self, quiet: bool = False) -> bool:
+        typed_key = self.api_key_edit.text().strip()
+        if typed_key:
+            encrypted = ls_config.save_api_key(typed_key)
+            self.api_key_edit.clear()
+            if not encrypted:
+                self._append_log("提示：本机缺少 cryptography，API Key 以降级方式保存")
+        ls_config.save_settings(self._collect_settings())
+        self._refresh_key_status()
+        if not quiet:
+            self.app.toast("直播总结设置已保存", "success")
+        return True
+
+    def _clear_api_key(self):
+        if QMessageBox.question(
+                self, "清除 API Key",
+                "删除本机保存的直播总结 API Key？\n\n"
+                "只删除该功能的 Key，不影响 Cookie 管理里的任何登录凭据。"
+        ) != QMessageBox.Yes:
+            return
+        ls_config.save_api_key("")
+        self._refresh_key_status()
+        self.app.toast("已清除 API Key", "info")
+
+    # ==================== 文件 ====================
+
+    def _pick_file(self):
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "选择直播转录文件", str(Path.home()), SUPPORTED_FILTER)
+        if not chosen:
+            return
+        self._source = Path(chosen)
+        self.file_edit.setText(str(self._source))
+        self._result_text = ""
+        self.result_view.clear()
+        self.date_label.setText("直播日期：读取中…")
+        self._inspect_source(self._source)
+
+    def _inspect_source(self, path: Path):
+        def work():
+            text = rule.read_transcript(path)
+            body = rule.strip_srt(text)
+            date_text, source = rule.extract_date(path.name, body)
+            return {"chars": len(body), "date": date_text, "source": source}
+
+        def done(result, err):
+            if err:
+                self.date_label.setText("直播日期：读取失败")
+                self._append_log(f"读取转录失败：{err}")
+                return
+            chars = result["chars"]
+            if result["date"]:
+                self.date_label.setText(
+                    f"直播日期：{result['date']}（{result['source']}）")
+            else:
+                self.date_label.setText("直播日期：未识别（按「暂未公开」）")
+            self.detail_label.setText(f"转录正文约 {chars} 字 · {path.name}")
+
+        run_bg(work, done, owner=self)
+
+    def _pick_output_dir(self):
+        start = self.output_dir_edit.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "选择总结输出目录", start)
+        if chosen:
+            self.output_dir_edit.setText(chosen)
+
+    # ==================== 执行 ====================
+
+    def _start(self):
+        if self._running:
+            self.app.toast("总结正在进行中", "info")
+            return
+        if self._source is None or not self._source.is_file():
+            self.app.toast("请先选择直播转录文件", "info")
+            return
+        self._save_settings(quiet=True)
+        settings = self._collect_settings()
+        api_key = ls_config.load_api_key()
+        if not api_key:
+            QMessageBox.warning(self, "缺少 API Key",
+                                "请先在「模型接口」里填写并保存 API Key。")
+            return
+        if not settings.model:
+            QMessageBox.warning(self, "缺少模型名称",
+                                "请填写服务商提供的模型名称，例如 deepseek-chat。")
+            return
+
+        self._running = True
+        self._cancel = threading.Event()
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.test_btn.setEnabled(False)
+        self.progress.setValue(0)
+        self.status_label.setText("准备中…")
+        self._result_text = ""
+        self.result_view.clear()
+        self.result_stats.setText("")
+        self._append_log(
+            f"开始总结：{self._source.name} · 模型 {settings.model} · 每块 {settings.chunk_chars} 字")
+
+        source = self._source
+        cancel = self._cancel
+
+        def work():
+            text = rule.read_transcript(source)
+            client = ChatClient(settings.base_url, api_key, settings.model)
+            return pipeline.run(
+                text, source.name, client,
+                progress=lambda stage, percent, message: post_to_main(
+                    self._on_progress, stage, percent, message),
+                cancel=cancel, chunk_chars=settings.chunk_chars)
+
+        def done(result, err):
+            self._running = False
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.test_btn.setEnabled(True)
+            if err:
+                if "已停止" in str(err):
+                    self.status_label.setText("已停止")
+                    self._append_log("任务已停止")
+                else:
+                    self.status_label.setText("失败")
+                    self._append_log(f"总结失败：{err}")
+                    self.app.toast(f"总结失败：{err}", "error")
+                return
+            self._on_finished(result, source, settings)
+
+        run_bg(work, done, owner=self)
+
+    def _on_finished(self, result: pipeline.PipelineResult, source: Path,
+                     settings: ls_config.Settings):
+        self._result_text = result.text
+        self.result_view.setPlainText(result.text)
+        self.progress.setValue(100)
+        stats = result.stats
+        self.status_label.setText(
+            f"完成：{stats.get('chunks', 0)} 块 · {stats.get('requests', 0)} 次请求")
+        self.result_stats.setText(
+            f"{stats.get('chars', 0)} 字 · 日期 {stats.get('date') or '未识别'}"
+            f"（{stats.get('date_source', '-')}）")
+        self._append_log(
+            f"完成：{stats.get('chunks', 0)} 块 · {stats.get('requests', 0)} 次请求 · "
+            f"校验问题 {len(result.problems)} 处")
+
+        target = pipeline.default_output_path(result.text, source, settings.output_dir)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(result.text, encoding="utf-8")
+            self._append_log(f"已保存：{target}")
+            self.status_label.setText(
+                f"完成：{stats.get('chunks', 0)} 块 · "
+                f"{stats.get('requests', 0)} 次请求 · 已保存")
+        except OSError as exc:
+            self._append_log(f"保存失败：{exc}")
+            self.app.toast(f"总结已生成，但保存失败：{exc}", "error")
+
+        if result.problems:
+            for problem in result.problems:
+                self._append_log(f"⚠ 校验未通过：{problem}")
+            self.app.toast(
+                f"总结已生成，但有 {len(result.problems)} 处格式问题，请查看日志", "warning")
+        else:
+            self.app.toast("✅ 直播总结完成", "success")
+
+    def _stop(self):
+        if self._cancel is not None:
+            self._cancel.set()
+            self.status_label.setText("正在停止…")
+            self.stop_btn.setEnabled(False)
+
+    def _test_connection(self):
+        self._save_settings(quiet=True)
+        settings = self._collect_settings()
+        api_key = ls_config.load_api_key()
+        if not api_key:
+            QMessageBox.warning(self, "缺少 API Key", "请先填写并保存 API Key。")
+            return
+        if not settings.model:
+            QMessageBox.warning(self, "缺少模型名称", "请填写模型名称后再测试。")
+            return
+        self.test_btn.setEnabled(False)
+        self.status_label.setText("正在测试连接…")
+        self._append_log(f"测试连接：{settings.base_url} · {settings.model}")
+
+        def work():
+            return ChatClient(settings.base_url, api_key, settings.model).test_connection()
+
+        def done(result, err):
+            self.test_btn.setEnabled(True)
+            if err:
+                self.status_label.setText("连接失败")
+                self._append_log(f"连接失败：{err}")
+                self.app.toast(f"连接失败：{err}", "error")
+                return
+            self.status_label.setText("连接正常")
+            self._append_log(f"连接正常，模型回复：{str(result)[:60]}")
+            self.app.toast("✅ 模型接口连接正常", "success")
+
+        run_bg(work, done, owner=self)
+
+    # ==================== 结果操作 ====================
+
+    def _copy_result(self):
+        if not self._result_text:
+            self.app.toast("还没有可复制的总结", "info")
+            return
+        QApplication.clipboard().setText(self._result_text)
+        self.app.toast("已复制总结到剪贴板", "success")
+
+    def _export_result(self):
+        if not self._result_text:
+            self.app.toast("还没有可保存的总结", "info")
+            return
+        default_dir = self.output_dir_edit.text().strip() or (
+            str(self._source.parent) if self._source else str(Path.home()))
+        default = str(Path(default_dir) / pipeline.output_filename(self._result_text))
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "另存总结", default, "文本文件 (*.txt)")
+        if not chosen:
+            return
+        try:
+            Path(chosen).write_text(self._result_text, encoding="utf-8")
+        except OSError as exc:
+            self.app.toast(f"保存失败：{exc}", "error")
+            return
+        self._append_log(f"已另存：{chosen}")
+        self.app.toast("总结已保存", "success")
+
+    # ==================== 日志与进度 ====================
+
+    def _append_log(self, message: str):
+        self.log_view.appendPlainText(str(message))
+
+    def _on_progress(self, stage: str, percent: int, message: str):
+        self.progress.setValue(max(0, min(100, int(percent))))
+        self.status_label.setText(message)
+        if stage in ("read", "extract", "merge", "final", "repair", "done"):
+            self._append_log(message)
+
+    # ==================== 生命周期 ====================
+
+    def has_active_tasks(self) -> bool:
+        return self._running
+
+    def shutdown(self):
+        self._stop()
+        super().shutdown()

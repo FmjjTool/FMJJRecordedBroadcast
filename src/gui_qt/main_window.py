@@ -84,6 +84,7 @@ PAGE_CLASSES = {
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
     "quark_backup": ("gui_qt.pages.quark_backup", "QuarkBackupPage"),
+    "livestream_summary": ("gui_qt.pages.livestream_summary", "LivestreamSummaryPage"),
     "quark_download": ("gui_qt.pages.quark_download", "QuarkDownloadPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
     "performance": ("gui_qt.pages.performance", "PerformancePage"),
@@ -140,6 +141,7 @@ NAV_GROUPS = [
     ]),
     ("🧰 本地工具", [
         ("localwiki", "🌐 本地资料站"),
+        ("livestream_summary", "📝 直播总结"),
         ("image_crop", "🖼 图片裁切"),
         ("cover_maker", "🎨 套版封面制作"),
         ("image_sorter", "🎞 媒体筛选分类"),

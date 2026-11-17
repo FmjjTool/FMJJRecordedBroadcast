@@ -324,6 +324,12 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "quark_interval_minutes": 120,
     # 首页看板「追踪账号」下钻抽屉：用户勾选要观察的账号 key；None = 未配置（默认全部观察）
     "home_watch_accounts": None,
+    # 直播总结（大模型方案）：接口地址 / 模型名 / 每块字数 / 输出目录；
+    # API Key 单独加密存 config/livestream_summary.json，不写进 config.json
+    "livestream_summary_base_url": "https://api.openai.com/v1",
+    "livestream_summary_model": "",
+    "livestream_summary_chunk_chars": 6000,
+    "livestream_summary_output_dir": "",
 }
 
 

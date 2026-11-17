@@ -113,6 +113,7 @@
 | 页面 | 说明 |
 |---|---|
 | 🌐 本地资料站 | 本地 Wiki + 腾讯文档预览：自动识别本机 GitHub 凭据（也可账户 + Token 登录）后拉取 `webwiki` / `webwiki-api`，读取腾讯文档监控已同步的本地表格重建站点库、构建前端并一键启动本地站点（只监听 127.0.0.1，启动后自动打开浏览器） |
+| 📝 直播总结 | 读取直播转录 TXT / SRT，按内置「封茗囧菌直播总结」规则分块提取、合并、生成终稿并校验格式；模型接口、模型名与 API Key 独立配置（Key 加密保存）。另附不依赖模型的纯规则保底命令行脚本 |
 | 🖼 图片裁切 | 四边参考线裁图（移植自 imgcut）：多图槽位导入、精细拖线与边界吸附、放大镜、撤销/重做，单张/批量导出 |
 | 🎨 套版封面制作 | 底图 + 三字段文字（标题/日期/备注）封面生成：字体/字号/颜色/对齐独立控制、预览拖动定位、模板记忆、导出 PNG/JPG |
 | 🎞 媒体筛选分类 | 图片/视频三栏分类工作台（移植自 image-sorter）：键盘工作流、MD5 四层去重、视频/LIVP 播放、撤销/复检、页内重命名 |
@@ -283,6 +284,13 @@ PySide6/
 │   │   ├── backup.py            #   扫描 → 增量判定 → 上传 → 记录
 │   │   ├── config.py  state.py  #   多组映射配置 / 增量状态库（config/quark_backup.db）
 │   │   └── job.py               #   无界面备份入口（main.py --quark-backup）
+│   │
+│   ├── livestream_summary/      # 直播总结（大模型方案）
+│   │   ├── rules.py             #   读取内置 skill 规则并拼装提示词
+│   │   ├── client.py            #   OpenAI 兼容 /chat/completions 客户端
+│   │   ├── pipeline.py          #   分块提取 → 合并 → 终稿 → 格式校验
+│   │   └── config.py            #   模型设置 + API Key 本机加密（独立于 Cookie）
+│   ├── livestream_summary_rule.py  # 纯规则保底脚本（TXT/SRT → 模板骨架，不依赖模型）
 │   │
 │   ├── platforms/               # 平台解析层
 │   │   ├── base.py              #   VideoInfo 数据结构 + PlatformBase + URLRecognizer
