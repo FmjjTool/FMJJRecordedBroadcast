@@ -45,6 +45,7 @@ from toolbox.asset_content import (
 from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
+from toolbox.asset_files import collect_asset_files
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
     append_scan_cache, scan_assets,
@@ -3968,20 +3969,10 @@ class AssetPage(BasePage):
 
     def _delete_item(self, it):
         """删除当前资产：按类别选择（图片/视频/文本/全部）。"""
-        fp = it.get("file_path", "")
-        stem = os.path.splitext(fp)[0]
-        # 文本文件只认 json/md/xlsx 本体（独立媒体条目的 file_path 是媒体
-        # 文件本身，绝不能归入"文本"类别——否则勾"文本"实际删的是图片/视频）
-        doc_files = [fp] if fp.lower().endswith((".json", ".md", ".xlsx")) else []
-        for ext in (".md", ".xlsx", "_raw.json", "_comments.json", "_comments.txt"):
-            cand = stem + ext
-            if os.path.exists(cand):
-                doc_files.append(cand)
-        img_files = [m["path"] for m in it.get("media_files", []) if m["type"] == "image"]
-        vid_files = [m["path"] for m in it.get("media_files", []) if m["type"] == "video"]
-        doc_files = [f for f in doc_files if f and os.path.exists(f)]
-        img_files = [f for f in img_files if f and os.path.exists(f)]
-        vid_files = [f for f in vid_files if f and os.path.exists(f)]
+        files = collect_asset_files(it)
+        doc_files = files["docs"]
+        img_files = files["images"]
+        vid_files = files["videos"]
         total = len(doc_files) + len(img_files) + len(vid_files)
         if total == 0:
             self.app.toast("无文件可删除", "info")
