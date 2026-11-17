@@ -85,6 +85,9 @@ COOKIE_TTL_DAYS = {
     "kuaishou": 0,
     "taobao": 0,
     "tcdoc": 0,
+    # 夸克网盘：服务端每次请求会下发新的 __puus（约 3 小时一轮），
+    # 只要在有效期内用过就不该按天数判过期，所以不设 TTL
+    "quark": 0,
 }
 
 # 平台 key -> 中文名（用于 UI 展示）
@@ -102,6 +105,7 @@ PLATFORM_NAMES = {
     "kuaishou": "快手",
     "taobao": "淘宝",
     "tcdoc": "腾讯文档",
+    "quark": "夸克网盘",
 }
 
 

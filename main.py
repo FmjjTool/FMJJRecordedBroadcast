@@ -30,6 +30,16 @@ if "--tracker-collect" in sys.argv or "--music-collect" in sys.argv:
 
     sys.exit(_tracker_job("tracker" if "--tracker-collect" in sys.argv else "music"))
 
+# 夸克网盘备份定时任务入口：--quark-backup（同样在 PySide6 导入前拦截，无窗口）。
+if "--quark-backup" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.quark.job import main as _quark_job
+
+    sys.exit(_quark_job())
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow

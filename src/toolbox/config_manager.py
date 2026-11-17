@@ -313,6 +313,11 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "music_schedule_mode": "daily",
     "music_collect_time": "09:00",
     "music_interval_minutes": 60,
+    # 夸克网盘备份：多组「本地目录 → 云端文件夹」映射 + 定时（注册 Windows 计划任务）
+    "quark_backup_mappings": [],
+    "quark_schedule_mode": "daily",
+    "quark_backup_time": "02:30",
+    "quark_interval_minutes": 120,
     # 首页看板「追踪账号」下钻抽屉：用户勾选要观察的账号 key；None = 未配置（默认全部观察）
     "home_watch_accounts": None,
 }

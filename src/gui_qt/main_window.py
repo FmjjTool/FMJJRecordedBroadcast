@@ -83,6 +83,7 @@ PAGE_CLASSES = {
     "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
+    "quark_backup": ("gui_qt.pages.quark_backup", "QuarkBackupPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
     "performance": ("gui_qt.pages.performance", "PerformancePage"),
 }
@@ -102,6 +103,7 @@ NAV_GROUPS = [
     ]),
     ("🗂 资产管理", [
         ("asset", "🗂 资产管理"),
+        ("quark_backup", "☁️ 夸克网盘备份"),
     ]),
     ("🎬 录播工具箱", [
         ("toolbox_organize", "📂 自动整理"),

@@ -39,6 +39,7 @@ COOKIE_PLATFORMS = [
     ("kuaishou", "快手", False, True),
     ("taobao", "淘宝", False, True),
     ("tcdoc", "腾讯文档", False, True),
+    ("quark", "夸克网盘", False, True),
 ]
 
 
@@ -79,6 +80,11 @@ BROWSER_LOGIN_CONFIGS = {
     "tcdoc": ("https://docs.qq.com/desktop", "腾讯文档登录（软件内）",
               ("uid", "uid_key", "DOC_SID"),
               "扫码 / 微信 / QQ 登录（登录后回文档列表即算成功）"),
+    # 夸克网盘：登录态在 __puus / __pus（约 3 小时一轮，页面活动会自动续期），
+    # 备份任务用同一份 Cookie 直连 drive-pc.quark.cn
+    "quark": ("https://pan.quark.cn/", "夸克网盘登录（软件内）",
+              ("__puus", "__pus"),
+              "打开夸克 App 扫码登录，或手机号 + 验证码登录（进到网盘文件页即算成功）"),
 }
 
 # 登录窗里"顺手抓昵称"的 JS（接口风控严、只有页面上下文问得到的平台）
