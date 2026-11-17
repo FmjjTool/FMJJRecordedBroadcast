@@ -221,6 +221,28 @@ class LocalModelTest(unittest.TestCase):
         self.assertEqual(local_model.format_size(2 * 1024 ** 3), "2.0 GB")
         self.assertEqual(local_model.format_size(512 * 1024 ** 2), "512 MB")
 
+    def test_delete_model(self):
+        from toolbox.livestream_summary import local_model
+
+        class FakeResponse:
+            def __init__(self, status_code=200, text=""):
+                self.status_code = status_code
+                self.text = text
+
+        with patch.object(local_model.requests, "delete",
+                          return_value=FakeResponse()) as delete:
+            local_model.delete_model(" qwen2.5:7b ")
+        delete.assert_called_once_with(
+            local_model.OLLAMA_BASE + "/api/delete",
+            json={"model": "qwen2.5:7b"}, timeout=(15, 120))
+
+        with patch.object(local_model.requests, "delete",
+                          return_value=FakeResponse(404, "missing")):
+            with self.assertRaises(local_model.LocalModelError):
+                local_model.delete_model("missing")
+        with self.assertRaises(local_model.LocalModelError):
+            local_model.delete_model("")
+
     def test_pull_model_stream(self):
         from toolbox.livestream_summary import local_model
         import requests as requests_lib

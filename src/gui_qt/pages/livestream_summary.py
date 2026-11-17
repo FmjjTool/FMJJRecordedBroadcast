@@ -78,6 +78,8 @@ class LivestreamSummaryPage(BasePage):
         pal = theme.current_palette()
         if role == "primary":
             return pal.color(QPalette.HighlightedText).name()
+        if role == "danger":
+            return pal.color(QPalette.BrightText).name()
         if role == "title":
             return pal.color(QPalette.Link).name()
         return pal.color(QPalette.ButtonText).name()
@@ -245,6 +247,7 @@ class LivestreamSummaryPage(BasePage):
 
         self.local_models_combo = QComboBox()
         self.local_models_combo.addItem("尚未检测到模型", None)
+        self.local_models_combo.currentIndexChanged.connect(self._sync_local_actions)
         card.content_layout.addWidget(self.local_models_combo)
 
         use_row = QHBoxLayout()
@@ -257,6 +260,14 @@ class LivestreamSummaryPage(BasePage):
         self._register_icon(self.use_local_btn, "check")
         use_row.addWidget(self.use_local_btn)
         use_row.addStretch(1)
+
+        self.delete_local_btn = QPushButton("删除模型")
+        self.delete_local_btn.setProperty("variant", "danger")
+        self.delete_local_btn.setToolTip("删除当前选中的本机模型，释放磁盘空间")
+        self.delete_local_btn.setEnabled(False)
+        self.delete_local_btn.clicked.connect(self._delete_local_model)
+        self._register_icon(self.delete_local_btn, "trash", "danger")
+        use_row.addWidget(self.delete_local_btn)
         card.content_layout.addLayout(use_row)
 
         pull_row = QHBoxLayout()
@@ -448,14 +459,14 @@ class LivestreamSummaryPage(BasePage):
                 self.local_status.setText("检测失败")
                 self.local_models_combo.clear()
                 self.local_models_combo.addItem("检测失败，请确认 Ollama 已启动", None)
-                self.use_local_btn.setEnabled(False)
+                self._sync_local_actions()
                 self._append_log(f"本机模型检测失败：{err}")
                 return
             if not result["running"]:
                 self.local_status.setText("Ollama 未运行 / 未安装")
                 self.local_models_combo.clear()
                 self.local_models_combo.addItem("未检测到 Ollama", None)
-                self.use_local_btn.setEnabled(False)
+                self._sync_local_actions()
                 return
             models = result["models"]
             self.local_status.setText(f"Ollama 已运行 · {len(models)} 个模型")
@@ -465,12 +476,16 @@ class LivestreamSummaryPage(BasePage):
                     self.local_models_combo.addItem(
                         f"{item['name']} · {local_model.format_size(item['size'])}",
                         item["name"])
-                self.use_local_btn.setEnabled(True)
             else:
                 self.local_models_combo.addItem("还没有模型，可从上方推荐下载", None)
-                self.use_local_btn.setEnabled(False)
+            self._sync_local_actions()
 
         run_bg(work, done, owner=self)
+
+    def _sync_local_actions(self, *_args):
+        has_model = bool(self.local_models_combo.currentData())
+        self.use_local_btn.setEnabled(has_model)
+        self.delete_local_btn.setEnabled(has_model)
 
     def _use_local_model(self):
         name = self.local_models_combo.currentData()
@@ -484,6 +499,53 @@ class LivestreamSummaryPage(BasePage):
         self._save_settings(quiet=True)
         self._append_log(f"已切换本机模型：{name}")
         self.app.toast(f"已使用本机模型：{name}", "success")
+
+    def _delete_local_model(self):
+        name = self.local_models_combo.currentData()
+        if not name:
+            self.app.toast("请先检测并选择一个已安装模型", "info")
+            return
+        if self._running:
+            self.app.toast("总结正在进行中，暂不能删除模型", "info")
+            return
+        if self._pull_cancel is not None and not self._pull_cancel.is_set():
+            self.app.toast("模型下载正在进行中，请稍后再删除", "info")
+            return
+        if QMessageBox.question(
+                self, "删除本机模型",
+                f"从本机 Ollama 删除模型「{name}」？\n\n"
+                "删除后需要重新下载才能使用。"
+        ) != QMessageBox.Yes:
+            return
+        self.delete_local_btn.setEnabled(False)
+        self.local_detect_btn.setEnabled(False)
+        self.local_status.setText(f"正在删除 {name}…")
+        self._append_log(f"开始删除本机模型：{name}")
+
+        def work():
+            local_model.delete_model(name)
+            return name
+
+        def done(result, err):
+            self.local_detect_btn.setEnabled(True)
+            if err:
+                self.local_status.setText("模型删除失败")
+                self._append_log(f"模型删除失败：{err}")
+                self.app.toast(f"模型删除失败：{err}", "error")
+                self._sync_local_actions()
+                return
+            if (self.model_edit.text().strip() == name
+                    and is_local_base_url(self.base_url_edit.text())):
+                self.model_edit.clear()
+                ls_config.save_settings(self._collect_settings())
+                self._append_log(f"已删除模型 {name}，并清空当前模型名")
+            else:
+                self._append_log(f"已删除模型 {name}")
+            self.local_status.setText(f"已删除 {name}")
+            self._detect_local()
+            self.app.toast(f"已删除模型 {name}", "success")
+
+        run_bg(work, done, owner=self)
 
     def _pull_model(self):
         if self._pull_cancel is not None and not self._pull_cancel.is_set():

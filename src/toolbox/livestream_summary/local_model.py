@@ -91,6 +91,25 @@ def list_models(timeout: float = 5.0) -> list[dict]:
     return result
 
 
+def delete_model(model: str) -> None:
+    """删除本机 Ollama 模型。"""
+    model = (model or "").strip()
+    if not model:
+        raise LocalModelError("没有指定模型名称")
+    try:
+        response = requests.delete(
+            f"{OLLAMA_BASE}/api/delete",
+            json={"model": model},
+            timeout=(15, 120),
+        )
+        if response.status_code >= 400:
+            detail = (response.text or "").strip()[:200]
+            raise LocalModelError(
+                f"删除失败：HTTP {response.status_code} {detail}")
+    except requests.RequestException as exc:
+        raise LocalModelError(f"删除请求失败：{exc}") from exc
+
+
 def parse_pull_event(line: str) -> dict:
     """解析 Ollama /api/pull 的一行 NDJSON，返回 percent / message / done / error。"""
     try:

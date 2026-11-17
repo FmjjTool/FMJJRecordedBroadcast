@@ -4,13 +4,15 @@ import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QProgressBar, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QPushButton, QProgressBar, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from toolbox.asr_engine import (
-    LOCAL_MODELS, download_model, download_program, local_model_ready,
-    local_program_path, local_program_ready,
+    LOCAL_MODELS, delete_model, download_model, download_program,
+    local_model_present, local_model_ready, local_program_path,
+    local_program_ready,
 )
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size
@@ -140,10 +142,24 @@ class AsrSettingsDialog(QDialog):
             status = QTableWidgetItem("已下载" if ready else "未下载")
             status.setForeground(Qt.darkGreen if ready else Qt.darkRed)
             self.table.setItem(row, 2, status)
+
+            cell = QWidget()
+            cell_row = QHBoxLayout(cell)
+            cell_row.setContentsMargins(0, 0, 0, 0)
+            cell_row.setSpacing(4)
             btn = QPushButton("重新下载" if ready else "下载")
             btn.setFixedHeight(24)
             btn.clicked.connect(lambda _c=False, k=key: self._download_model(k))
-            self.table.setCellWidget(row, 3, btn)
+            cell_row.addWidget(btn)
+            if local_model_present(key):
+                del_btn = QPushButton("删除")
+                del_btn.setProperty("variant", "danger")
+                del_btn.setFixedHeight(24)
+                del_btn.setToolTip("删除本地模型文件，释放磁盘空间")
+                del_btn.clicked.connect(lambda _c=False, k=key: self._delete_model(k))
+                cell_row.addWidget(del_btn)
+            cell_row.addStretch(1)
+            self.table.setCellWidget(row, 3, cell)
         self.program_btn.setEnabled(not self._busy)
 
     def _set_busy(self, busy: bool):
@@ -186,6 +202,38 @@ class AsrSettingsDialog(QDialog):
             )
 
         self._run_download(work, f"模型 {key} 下载完成")
+
+    def _delete_model(self, key: str):
+        if self._busy:
+            return
+        label = next((text for k, text, _size in LOCAL_MODELS if k == key), key)
+        if QMessageBox.question(
+                self, "删除本地模型",
+                f"删除本地模型「{label}」？\n\n"
+                "将删除已下载的模型文件，之后需要重新下载才能离线识别。"
+        ) != QMessageBox.Yes:
+            return
+        self._set_busy(True)
+        self.hint.setText(f"正在删除模型 {key}…")
+
+        def runner():
+            try:
+                delete_model(key)
+            except Exception as exc:  # noqa: BLE001
+                post_to_main(self._on_delete_failed, str(exc))
+            else:
+                post_to_main(self._on_deleted, key)
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _on_deleted(self, key: str):
+        self._set_busy(False)
+        self.hint.setText(f"已删除本地模型 {key}")
+        self._refresh_status()
+
+    def _on_delete_failed(self, error: str):
+        self._set_busy(False)
+        self.hint.setText(f"❌ 删除失败：{error[:120]}")
 
     def _run_download(self, work, success_msg: str):
         self._set_busy(True)

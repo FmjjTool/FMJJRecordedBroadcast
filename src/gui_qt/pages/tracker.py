@@ -17,9 +17,11 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect
+from toolbox.tracker_diff import diff_items, num_delta
 
 # 指标行定义：(显示名, [字段名优先级列表])
 METRICS = [
@@ -424,7 +426,7 @@ class TrackerPage(BasePage):
         self._clear_layout(grid)
         if not records:
             lbl = QLabel("（尚未采集）")
-            lbl.setStyleSheet("color: gray;")
+            lbl.setStyleSheet(f"color: {theme.color('muted')};")
             grid.addWidget(lbl, 0, 0, 1, 4)
             return
         rows = [((records[0].get("_time") or "")[:16] or "记录1", records[0])]
@@ -433,7 +435,7 @@ class TrackerPage(BasePage):
             rows.append((t or "记录2", records[1]))
         for r, (time_label, rec) in enumerate(rows):
             tl = QLabel(time_label)
-            tl.setStyleSheet("color: #1976d2; font-weight: bold;")
+            tl.setStyleSheet(f"color: {theme.color('link')}; font-weight: bold;")
             grid.addWidget(tl, r, 0)
             for c, field in enumerate(["fans", "following", "likes"]):
                 vl = QLabel(_cell(rec, [field]))
@@ -441,32 +443,22 @@ class TrackerPage(BasePage):
                 grid.addWidget(vl, r, c + 1)
 
     def _diff_items(self, prev, curr):
-        """对比前后两次采集，返回 [(文本, 颜色), ...] 列表（涨绿跌红）。"""
-        items = []
-        if curr.get("name") and prev.get("name") and curr["name"] != prev["name"]:
-            items.append((f"🔄 更名 {prev['name']}→{curr['name']}", "#1976d2"))
-        for label, field in [("粉丝", "fans"), ("关注", "following"), ("获赞", "likes")]:
-            try:
-                c = curr.get(field)
-                p = prev.get(field)
-                if c is None or c == "" or p is None or p == "":
-                    continue
-                c, p = int(float(c)), int(float(p))
-                if c != p:
-                    delta = c - p
-                    arrow = "↑" if delta > 0 else "↓"
-                    color = "#4caf50" if delta > 0 else "#ff5252"  # 涨绿跌红
-                    items.append((f"{label}{arrow}{abs(delta)}", color))
-            except (ValueError, TypeError):
-                continue
-        return items
+        return diff_items(prev, curr, [
+            ("粉丝", "fans"), ("关注", "following"), ("获赞", "likes")])
 
     def _render_diff(self, frame, prev, curr):
         """在 frame（QHBoxLayout）里渲染变化提示（每项独立颜色）。"""
         self._clear_layout(frame)
-        for text, color in self._diff_items(prev, curr):
-            lbl = QLabel(text)
-            lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+        colors = {
+            "up": theme.color("success"),
+            "down": theme.color("danger"),
+            "note": theme.color("link"),
+        }
+        for item in self._diff_items(prev, curr):
+            lbl = QLabel(item["text"])
+            lbl.setStyleSheet(
+                f"color: {colors.get(item.get('direction'), theme.color('muted'))};"
+                " font-size: 11px;")
             frame.addWidget(lbl)
         frame.addStretch(1)
 
@@ -558,14 +550,15 @@ class TrackerPage(BasePage):
                 if delta:
                     arrow = "↑" if delta > 0 else "↓"
                     cell.setText(f"{cell.text()} {arrow}{abs(delta)}")
-                    cell.setForeground(QColor("#4caf50" if delta > 0 else "#ff5252"))
+                    cell.setForeground(QColor(theme.color(
+                        "success" if delta > 0 else "danger")))
                 table.setItem(i, j, cell)
         table.resizeColumnsToContents()
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         # 最后一列拉伸：最大化后不留右侧大片空白
         table.horizontalHeader().setStretchLastSection(True)
         hint = QLabel("颜色说明：与上一条采集对比，绿色=数值增加，红色=数值减少（↑/↓ 后为增减量）")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setProperty("role", "caption")
         v.addWidget(hint)
         v.addWidget(table, 1)
         return w
@@ -650,21 +643,7 @@ class TrackerPage(BasePage):
 
     @staticmethod
     def _num_delta(prev, curr, fields):
-        """数值指标对比：返回 curr - prev（涨正跌负），任一侧缺失/非数值返回 None。"""
-        def _val(rec):
-            for f in fields:
-                v = rec.get(f)
-                if v is None or v == "":
-                    continue
-                try:
-                    return int(float(v))
-                except (ValueError, TypeError):
-                    return None
-            return None
-        c, p = _val(curr), _val(prev)
-        if c is None or p is None:
-            return None
-        return c - p
+        return num_delta(prev, curr, fields)
 
     def _card_for(self, acc):
         for c in self.cards:

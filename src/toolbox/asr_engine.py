@@ -607,6 +607,24 @@ def local_model_ready(model_key: str) -> bool:
             and (folder / "model.bin").exists())
 
 
+def local_model_present(model_key: str) -> bool:
+    """模型目录是否存在（包含未完成下载的残留）。"""
+    return local_model_dir(model_key).exists()
+
+
+def delete_model(model_key: str) -> None:
+    """删除已下载的本地模型目录。"""
+    if model_key not in {key for key, _label, _size in LOCAL_MODELS}:
+        raise AsrError(f"未知的本地模型：{model_key}")
+    folder = local_model_dir(model_key)
+    if not folder.exists():
+        return
+    try:
+        shutil.rmtree(folder)
+    except OSError as exc:
+        raise AsrError(f"删除本地模型失败：{exc}") from exc
+
+
 class LocalWhisperClient:
     """调用 whisper-faster.exe 输出 SRT。"""
 
