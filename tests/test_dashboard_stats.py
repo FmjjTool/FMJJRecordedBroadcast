@@ -68,5 +68,51 @@ class DashboardStatsTests(unittest.TestCase):
         self.assertEqual(data["today_total"], 0)
 
 
+    def test_tcdoc_docs_falls_back_to_local_db(self):
+        tcdoc = self.export_dirs["tcdoc"]
+        with closing(sqlite3.connect(tcdoc / "tcdoc.db")) as conn:
+            conn.execute("CREATE TABLE daily (doc_key TEXT)")
+            conn.executemany("INSERT INTO daily VALUES (?)", [("a",), ("b",)])
+            conn.commit()
+        with patch.object(dashboard_stats, "get_export_subdir", return_value=tcdoc), \
+                patch("toolbox.tcdoc.config.load_docs", return_value=[]):
+            docs = dashboard_stats.tcdoc_docs()
+        self.assertEqual([d["key"] for d in docs], ["a", "b"])
+
+    def test_load_tcdoc_history_reads_daily_and_revisions(self):
+        tcdoc = self.export_dirs["tcdoc"]
+        with closing(sqlite3.connect(tcdoc / "tcdoc.db")) as conn:
+            conn.execute(
+                "CREATE TABLE daily (id INTEGER PRIMARY KEY, doc_key TEXT, ts TEXT,"
+                " date TEXT, views INTEGER, views_delta INTEGER, members INTEGER,"
+                " members_delta INTEGER, readers INTEGER)")
+            conn.executemany(
+                "INSERT INTO daily (doc_key, ts, date, views, views_delta, members,"
+                " members_delta, readers) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [("a", "2026-11-17 10:00:00", "2026-11-17", 10, 1, 5, 0, 3),
+                 ("a", "2026-11-16 10:00:00", "2026-11-16", 9, 1, 5, 0, 2)])
+            conn.commit()
+        with closing(sqlite3.connect(tcdoc / "revisions.db")) as conn:
+            conn.execute(
+                "CREATE TABLE revision_rows (doc_key TEXT, ts_ms INTEGER)")
+            conn.execute("INSERT INTO revision_rows VALUES ('a', 1700000000000)")
+            conn.commit()
+        with patch.object(dashboard_stats, "get_export_subdir", return_value=tcdoc):
+            data = dashboard_stats.load_tcdoc_history("a")
+        self.assertEqual(data["total"], 2)
+        self.assertEqual(len(data["rows"]), 2)
+        self.assertEqual(sum(data["revisions"].values()), 1)
+
+    def test_load_account_history_uses_source_store(self):
+        with patch("tracker.accounts.load_history", return_value=[1, 2, 3]):
+            self.assertEqual(
+                dashboard_stats.load_account_history(
+                    {"source": "tracker", "name": "a"}), [1, 2])
+        with patch("music_account.accounts.load_history", return_value=[4]):
+            self.assertEqual(
+                dashboard_stats.load_account_history(
+                    {"source": "music", "name": "b"}), [4])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,7 +24,7 @@ from gui_qt.common import run_bg
 from gui_qt.navigation import line_icon, tool_icon_name
 from gui_qt.pages.base import BasePage
 from toolbox.dashboard_stats import (
-    load_dashboard_data,
+    load_account_history, load_dashboard_data, load_tcdoc_history, tcdoc_docs,
     tracked_accounts_snapshot as _tracked_accounts_snapshot,
     watched_account_keys as _watched_account_keys,
 )
@@ -73,78 +73,12 @@ INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
 
 
 
-def _load_account_history(account):
-    """读取单个账号最新两次采集记录（最新在前）。"""
-    if account["source"] == "tracker":
-        from tracker.accounts import load_history
-    else:
-        from music_account.accounts import load_history
-    return (load_history(account["name"]) or [])[:2]
 
 
 
 
-def _tcdoc_docs():
-    """腾讯文档清单；配置缺失时回退到 tcdoc.db 中已采集过的 doc_key。"""
-    try:
-        from toolbox.tcdoc.config import load_docs
-        docs = load_docs()
-        if docs:
-            return docs
-    except Exception:
-        pass
-    docs = []
-    try:
-        from toolbox.config_manager import get_export_subdir
-        path = get_export_subdir("tcdoc") / "tcdoc.db"
-        if path.exists():
-            conn = sqlite3.connect(
-                f"file:{str(path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
-            try:
-                docs = [{"key": row[0], "name": row[0]}
-                        for row in conn.execute(
-                            "SELECT DISTINCT doc_key FROM daily ORDER BY doc_key")]
-            finally:
-                conn.close()
-    except Exception:
-        pass
-    return docs
 
 
-def _load_tcdoc_history(doc_key):
-    """读取单文档的历史记录，并统计每天修订记录次数。"""
-    from toolbox.config_manager import get_export_subdir
-    base = get_export_subdir("tcdoc")
-    rows = []
-    revisions = {}
-    total = 0
-    path = base / "tcdoc.db"
-    if path.exists():
-        conn = sqlite3.connect(
-            f"file:{str(path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
-        try:
-            total = int(conn.execute(
-                "SELECT COUNT(*) FROM daily WHERE doc_key = ?", (doc_key,)).fetchone()[0])
-            rows = [dict(zip(
-                ("ts", "date", "views", "views_delta", "members",
-                 "members_delta", "readers"), row))
-                for row in conn.execute(
-                    "SELECT ts, date, views, views_delta, members, members_delta,"
-                    " readers FROM daily WHERE doc_key = ?"
-                    " ORDER BY ts DESC, id DESC LIMIT 5", (doc_key,))]
-        finally:
-            conn.close()
-    rev_path = base / "revisions.db"
-    if rev_path.exists():
-        conn = sqlite3.connect(
-            f"file:{str(rev_path).replace(chr(92), '/')}?mode=ro", uri=True, timeout=5)
-        try:
-            revisions = {str(day): int(count) for day, count in conn.execute(
-                "SELECT date(ts_ms / 1000, 'unixepoch', 'localtime') AS d, COUNT(*)"
-                " FROM revision_rows WHERE doc_key = ? GROUP BY d", (doc_key,))}
-        finally:
-            conn.close()
-    return {"rows": rows, "revisions": revisions, "total": total}
 
 
 def _dist_items(by_source):
@@ -728,7 +662,7 @@ class HomePage(BasePage):
                 "浏览量 / 增量 / 成员数 / 增量 / 已查看人数 / 修订记录次数"
                 "（再次点卡片收起）")
             self.drawer_stack.setCurrentWidget(self.tcdoc_drawer_page)
-            self._refresh_tcdoc_docs()
+            self._refreshtcdoc_docs()
         self.drawer.show()
         self._fit_drawer_height()
         self.scroll.ensureWidgetVisible(self.drawer, 0, 16)
@@ -808,7 +742,7 @@ class HomePage(BasePage):
             result = {}
             for account in display:
                 try:
-                    result[account["key"]] = _load_account_history(account)
+                    result[account["key"]] = load_account_history(account)
                 except Exception:
                     result[account["key"]] = []
             return result
@@ -888,9 +822,9 @@ class HomePage(BasePage):
             f"观察账号已保存：{len(keys)}/{len(accounts)}", "success")
         self._refresh_account_drawer()
 
-    def _refresh_tcdoc_docs(self):
+    def _refreshtcdoc_docs(self):
         current = self.tcdoc_doc_combo.currentData()
-        docs = _tcdoc_docs()
+        docs = tcdoc_docs()
         self.tcdoc_doc_combo.blockSignals(True)
         self.tcdoc_doc_combo.clear()
         for doc in docs:
@@ -910,7 +844,7 @@ class HomePage(BasePage):
             self._fit_drawer_height()
             return
         try:
-            result = _load_tcdoc_history(doc_key)
+            result = load_tcdoc_history(doc_key)
         except Exception as exc:
             self.tcdoc_table.setRowCount(0)
             self.tcdoc_status.setText(f"读取失败：{exc}")
