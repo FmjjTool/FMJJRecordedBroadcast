@@ -25,3 +25,6 @@ dist-java/
 
 # jpackage 产物（148MB，不进仓库）
 dist/
+
+# 事故取证快照（含加密 Cookie 密文，禁止入库）
+_incident_*/

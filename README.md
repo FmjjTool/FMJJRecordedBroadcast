@@ -1,12 +1,24 @@
 # FengMingToolbox Java（封茗囧菌数据汇总库 · 工具箱 Java 全栈版）
 
+> ## 项目状态：已暂停（鸽了）
+>
+> **这条线不往下做了，代码就地存档。** 停更原因很简单：能跑的部分已经能跑，剩下的
+> 硬骨头（抖音完整链路、酷狗概念版、部分平台的登录态）收益远不如直接维护 Python 版；
+> 精力收回主线，Java 版只作技术验证与日后可能的参考。
+>
+> - 本仓库**不再有新提交、不修 bug、不发版**，issue / PR 默认不看。
+> - 代码停在下列进度，**未经完整回归验证，不建议直接用**。
+> - 主线仍在 Python 版（PySide6）：<https://github.com/FmjjTool/FMJJRecordedBroadcast>
+> - 想接着做请先读 `docs/JAVA_PORT_PLAN.md`，那里有逐页映射与踩过的坑。
+
 > Java 全栈移植版 · 对应 Python 原版（PySide6）`FengMingToolbox v2.9.1`
 > 原项目：<https://github.com/FmjjTool/FMJJRecordedBroadcast>
 
 把原 Python 工具箱（引擎层 3.3 万行 + PySide6 GUI 4.1 万行，共约 7.6 万行）
-整体迁移到 **Java 21 + JavaFX** 技术栈。本仓库是独立的新工程，与 Python 版并行维护。
+整体迁移到 **Java 21 + JavaFX** 技术栈。本仓库是独立的新工程，与 Python 版并行维护
+（**现已暂停，见上方状态说明**）。
 
-## 当前进度（35 页全部真实实现）
+## 当前进度（35 页全部真实实现，已随项目暂停冻结）
 
 | 范围 | 状态 |
 |---|---|
