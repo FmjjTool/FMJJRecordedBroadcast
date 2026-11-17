@@ -24,7 +24,9 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import icon_button, post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
 from toolbox.quark import backup as qbackup
@@ -60,7 +62,7 @@ class MappingDialog(QDialog):
         self.local_edit = QLineEdit(self._mapping.local_dir)
         self.local_edit.setPlaceholderText("选择要备份的本地文件夹")
         row.addWidget(self.local_edit, 1)
-        browse = QPushButton("📁 选择")
+        browse = QPushButton("选择")
         browse.setProperty("variant", "secondary")
         browse.setToolTip("选择本地要备份的文件夹")
         browse.clicked.connect(self._pick_dir)
@@ -170,13 +172,13 @@ class QuarkBackupPage(BasePage):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.run_btn = QPushButton("📥 立即备份")
+        self.run_btn = QPushButton("立即备份")
         self.run_btn.setProperty("variant", "primary")
         self.run_btn.setToolTip("按当前启用的映射执行一次增量备份（与定时任务同一条链路）")
         self.run_btn.clicked.connect(self._start_backup)
         row.addWidget(self.run_btn)
 
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
         self.stop_btn.setToolTip("停止当前正在进行的备份（已上传的文件保留）")
         self.stop_btn.setEnabled(False)
@@ -211,7 +213,7 @@ class QuarkBackupPage(BasePage):
         body = QHBoxLayout()
         body.setSpacing(12)
 
-        left = ToolSectionCard("🗂 备份目录", "每一组映射单独判定增量，互不影响。")
+        left = ToolSectionCard("备份目录", "每一组映射单独判定增量，互不影响。")
         self.count_label = QLabel("0 组")
         self.count_label.setProperty("role", "caption")
         left.heading_layout.addWidget(self.count_label)
@@ -243,11 +245,11 @@ class QuarkBackupPage(BasePage):
         return body
 
     def _build_log_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("📄 本次运行日志", "定时任务的日志另存为 config/quark_backup_task.log。")
+        card = ToolSectionCard("本次运行日志", "定时任务的日志另存为 config/quark_backup_task.log。")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
-        self.log_view.setPlaceholderText("点「📥 立即备份」后，这里会显示每个文件的处理结果")
+        self.log_view.setPlaceholderText("点「立即备份」后，这里会显示每个文件的处理结果")
         self.log_view.setStyleSheet(
             'QPlainTextEdit { font-family: Consolas, "Cascadia Mono", monospace;'
             " font-size: 11px; background: palette(base); color: palette(text);"
@@ -328,11 +330,18 @@ class QuarkBackupPage(BasePage):
             info.addWidget(warn)
         layout.addLayout(info, 1)
 
-        layout.addWidget(icon_button("✏", "编辑这条备份目录", on_click=lambda _=False, m=mapping: self._edit_mapping(m)))
-        layout.addWidget(icon_button("♻", "清空同步记录，下次备份重新上传全部文件",
-                                    on_click=lambda _=False, m=mapping: self._reset_mapping(m)))
-        layout.addWidget(icon_button("🗑", "删除这条备份目录（云端文件不受影响）",
-                                    on_click=lambda _=False, m=mapping: self._delete_mapping(m)))
+        icon_color = theme.color("text")
+        edit_btn = icon_button("", "编辑这条备份目录", on_click=lambda _=False, m=mapping: self._edit_mapping(m))
+        edit_btn.setIcon(line_icon("edit", icon_color, 16))
+        layout.addWidget(edit_btn)
+        reset_btn = icon_button("", "清空同步记录，下次备份重新上传全部文件",
+                                on_click=lambda _=False, m=mapping: self._reset_mapping(m))
+        reset_btn.setIcon(line_icon("refresh", icon_color, 16))
+        layout.addWidget(reset_btn)
+        del_btn = icon_button("", "删除这条备份目录（云端文件不受影响）",
+                              on_click=lambda _=False, m=mapping: self._delete_mapping(m))
+        del_btn.setIcon(line_icon("trash", icon_color, 16))
+        layout.addWidget(del_btn)
         return card
 
     # ==================== 映射增删改 ====================
@@ -431,7 +440,7 @@ class QuarkBackupPage(BasePage):
                 self.app.toast(f"备份完成，但有 {len(failed)} 组失败：{failed[0].message}", "error")
             else:
                 self.app.toast(
-                    f"✅ 备份完成：上传 {uploaded} 个文件，{qbackup.human_size(total_bytes)}",
+                    f"备份完成：上传 {uploaded} 个文件，{qbackup.human_size(total_bytes)}",
                     "success")
             self.reload()
 
@@ -471,12 +480,12 @@ class QuarkBackupPage(BasePage):
             self.progress_label.setText(f"第 {index + 1}/{total} 组：{name}")
         elif phase == "hash":
             size = qbackup.human_size(int(payload.get("size") or 0))
-            self.progress_label.setText(f"🔍 校验中 {index + 1}/{total} · {size} · {name}")
+            self.progress_label.setText(f"校验中 {index + 1}/{total} · {size} · {name}")
         elif phase == "file":
             sent = int(payload.get("sent") or 0)
             size = int(payload.get("size") or 0)
             self.progress_label.setText(
-                f"⬆ 上传中 {index + 1}/{total} · "
+                f"上传中 {index + 1}/{total} · "
                 f"{qbackup.human_size(sent)} / {qbackup.human_size(size)} · {name}")
         elif phase == "run":
             self.progress_label.setText(f"{index}/{total} {name}")

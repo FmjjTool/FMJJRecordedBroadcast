@@ -62,9 +62,9 @@ from gui_qt.pages.image_sorter_folder_panel import FolderPanel
 from gui_qt.pages.image_sorter_settings import ShortcutMappingDialog
 
 VIEW_MODES = [
-    ("date", "📅 日期分组"),
-    ("default", "📋 默认列表"),
-    ("random", "🎲 随机抽样"),
+    ("date", "日期分组"),
+    ("default", "默认列表"),
+    ("random", "随机抽样"),
 ]
 
 STAGE_TITLES = {"import": "导入", "thumbnail": "缩略图", "md5": "MD5", "duplicate": "去重"}
@@ -195,9 +195,9 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
         # ---------- 顶栏：源文件夹管理 ----------
         top = QHBoxLayout()
-        add_btn = QPushButton("📂 添加源文件夹")
+        add_btn = QPushButton("添加源文件夹")
         add_btn.clicked.connect(self._pick_source_folder)
-        clear_btn = QPushButton("🧹 清空源")
+        clear_btn = QPushButton("清空源")
         clear_btn.clicked.connect(self._clear_sources)
         self.view_combo = QComboBox()
         for key, text in VIEW_MODES:
@@ -217,7 +217,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
         # ---------- 顶栏二：分类工作流控制 ----------
         classify_bar = QHBoxLayout()
-        self.work_dir_btn = QPushButton("📁 分类目录")
+        self.work_dir_btn = QPushButton("分类目录")
         self.work_dir_btn.clicked.connect(self._on_change_work_dir)
         classify_bar.addWidget(self.work_dir_btn)
         self.work_dir_label = ElidedPathLabel("")
@@ -234,20 +234,20 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         classify_bar.addWidget(QLabel("分类方式:"))
         classify_bar.addWidget(self.op_mode_combo)
 
-        keep_btn = QPushButton("⬇️ 保留(S)")
+        keep_btn = QPushButton("保留(S)")
         keep_btn.clicked.connect(self._on_keep_file)
         classify_bar.addWidget(keep_btn)
-        fav_btn = QPushButton("⭐ 收藏(F)")
+        fav_btn = QPushButton("收藏(F)")
         fav_btn.clicked.connect(self._on_favorite_file)
         classify_bar.addWidget(fav_btn)
-        del_btn = QPushButton("🗑️ 删除(W)")
+        del_btn = QPushButton("删除(W)")
         del_btn.clicked.connect(self._on_delete_file)
         classify_bar.addWidget(del_btn)
-        undo_btn = QPushButton("↩️ 撤销(Ctrl+Z)")
+        undo_btn = QPushButton("↩ 撤销(Ctrl+Z)")
         undo_btn.clicked.connect(self._on_undo)
         classify_bar.addWidget(undo_btn)
 
-        self.settings_btn = QPushButton("⚙️ 设置")
+        self.settings_btn = QPushButton("设置")
         self.settings_btn.clicked.connect(self._toggle_settings_area)
         classify_bar.addWidget(self.settings_btn)
         layout.addLayout(classify_bar)
@@ -340,7 +340,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.autoplay_live_cb.stateChanged.connect(self._on_autoplay_live_toggled)
         area_layout.addWidget(self.autoplay_live_cb)
 
-        shortcut_btn = QPushButton("⌨️ 快捷键映射")
+        shortcut_btn = QPushButton("⌨ 快捷键映射")
         shortcut_btn.clicked.connect(self._on_shortcut_mapping)
         area_layout.addWidget(shortcut_btn)
 
@@ -432,7 +432,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
             return  # 无新增（重复拖入）不触发重扫
         cfg.set_list("source_folders", merged)
         self._reload_sources_label()
-        self.app.toast(f"✅ 已添加 {len(added)} 个源文件夹", "success")
+        self.app.toast(f"已添加 {len(added)} 个源文件夹", "success")
         self._on_folders_dropped(merged, persist_default=False)
 
     def _clear_sources(self):

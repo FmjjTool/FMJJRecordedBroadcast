@@ -1,8 +1,8 @@
 """定时任务管理页：集中查看 / 设置 / 删除本软件注册的 Windows 计划任务。
 
 - 列表：腾讯文档监控 / 网媒账号追踪 / 音乐账号追踪 / 网盘备份 / 站点访问统计
-- 每行：计划（本页统一维护）、安装状态、下次运行（schtasks）、⚙ 设置 / 🗑 删除
-- 顶部：🔄 刷新 / 🗑 全部删除
+- 每行：计划（本页统一维护）、安装状态、下次运行（schtasks）、设置 / 删除
+- 顶部：刷新 / 全部删除
 计划的模式、时间与间隔统一在本页「设置」对话框修改并安装，功能页不再单独提供定时设置。
 """
 
@@ -103,14 +103,14 @@ class TasksPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("⏰ 定时任务管理")
+        title = QLabel("定时任务管理")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
         head.addStretch(1)
-        refresh_btn = QPushButton("🔄 刷新")
+        refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.refresh)
         head.addWidget(refresh_btn)
-        del_all_btn = QPushButton("🗑 全部删除")
+        del_all_btn = QPushButton("全部删除")
         del_all_btn.setProperty("variant", "danger")
         del_all_btn.setToolTip("删除本软件注册的全部 Windows 计划任务")
         del_all_btn.clicked.connect(self._uninstall_all)
@@ -187,12 +187,12 @@ class TasksPage(BasePage):
         h = QHBoxLayout(w)
         h.setContentsMargins(2, 1, 2, 1)
         h.setSpacing(4)
-        set_btn = QPushButton("⚙ 设置")
+        set_btn = QPushButton("设置")
         set_btn.setFixedHeight(24)
         set_btn.setToolTip("修改该任务的计划模式、时间与间隔，并注册 / 更新计划任务")
         set_btn.clicked.connect(lambda _=False, task=t: self._open_schedule(task))
         h.addWidget(set_btn)
-        del_btn = QPushButton("🗑 删除")
+        del_btn = QPushButton("删除")
         del_btn.setFixedHeight(24)
         del_btn.setProperty("variant", "danger")
         del_btn.setEnabled(t["installed"])
@@ -265,7 +265,7 @@ class TasksPage(BasePage):
                 QMessageBox.warning(self, "部分任务删除失败", "\n".join(failed))
             ok_n = len(results) - len(failed)
             if ok_n:
-                self.app.toast(f"🗑 已删除 {ok_n} 个定时任务", "info")
+                self.app.toast(f"已删除 {ok_n} 个定时任务", "info")
             self.refresh()
 
         run_bg(work, done)

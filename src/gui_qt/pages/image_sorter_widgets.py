@@ -1085,12 +1085,8 @@ class FileListPanel(QWidget):
         count = self._folder_total_file_count.get(folder_key, 0)
         collapsed = self._folder_collapsed.get(folder_key, False)
         arrow = "▶" if collapsed else "▼"
-        if str(folder_key).startswith("date/"):
-            icon = "📅"
-        else:
-            icon = "🗂" if depth == 0 else "📂"
         indent = "  " * depth
-        title.setText(f"{indent}{arrow} {icon} {label} ({count})")
+        title.setText(f"{indent}{arrow} {label} ({count})")
         title.setStyleSheet("font-size: 12px; color: #2f3440; font-weight: 600;")
 
     def _cleanup_empty_folders(self, start_folder_key: str):
@@ -1327,7 +1323,7 @@ class MediaViewer(QWidget):
     MIN_ZOOM_LEVEL = 0.0025  # 0.25%
     MAX_ZOOM_LEVEL = 20.0    # 2000%
     PLAY_ICON = "▶"
-    PAUSE_ICON = "⏸"
+    PAUSE_ICON = "▮▮"
 
     playback_failed = Signal(str)  # 视频播放失败（文件名，页面层 toast 提示外部打开）
     livp_play_requested = Signal(Path)  # LIVP 封面中央播放键（页面层负责解包播放）
@@ -2053,14 +2049,14 @@ class FileInfoPanel(QWidget):
         title.setStyleSheet("font-size: 13px; font-weight: 600; color: #2f3440;")
         header.addWidget(title)
         header.addStretch(1)
-        self.copy_all_btn = QPushButton("📋 复制全部")
+        self.copy_all_btn = QPushButton("复制全部")
         self.copy_all_btn.clicked.connect(self._on_copy_all_clicked)
         header.addWidget(self.copy_all_btn)
         info_layout.addLayout(header)
 
-        self.export_txt_btn = QPushButton("📄 导出 TXT")
+        self.export_txt_btn = QPushButton("导出 TXT")
         self.export_txt_btn.clicked.connect(lambda: self._export_current_info("txt"))
-        self.export_json_btn = QPushButton("🧾 导出 JSON")
+        self.export_json_btn = QPushButton("导出 JSON")
         self.export_json_btn.clicked.connect(lambda: self._export_current_info("json"))
 
         btn_row = QHBoxLayout()

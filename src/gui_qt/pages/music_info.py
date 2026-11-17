@@ -34,7 +34,7 @@ class MusicInfoPage(BasePage):
         self.song_entry.setPlaceholderText("歌曲名 / 专辑名")
         self.song_entry.returnPressed.connect(self._search)
         row.addWidget(self.song_entry, 1)
-        self.search_btn = QPushButton("🔍 搜索五平台")
+        self.search_btn = QPushButton("搜索五平台")
         self.search_btn.clicked.connect(self._search)
         row.addWidget(self.search_btn)
         layout.addLayout(row)
@@ -58,7 +58,7 @@ class MusicInfoPage(BasePage):
         layout.addLayout(cols, 1)
 
         bottom = QHBoxLayout()
-        self.get_btn = QPushButton("📥 获取选中歌曲详情并导出")
+        self.get_btn = QPushButton("获取选中歌曲详情并导出")
         self.get_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 16px; border-radius: 4px;")
         self.get_btn.clicked.connect(self._fetch_selected)
         bottom.addWidget(self.get_btn)
@@ -89,7 +89,7 @@ class MusicInfoPage(BasePage):
             self.app.toast("请输入歌曲名", "warning")
             return
         self.search_btn.setEnabled(False)
-        self.status_label.setText("⏳ 搜索中...")
+        self.status_label.setText("搜索中...")
         keyword = f"{singer} {song}"
 
         def work():
@@ -121,7 +121,7 @@ class MusicInfoPage(BasePage):
         def done(result, err):
             self.search_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 return
             for key, _name in PLATFORMS:
                 lst = self.columns[key]["list"]
@@ -141,7 +141,7 @@ class MusicInfoPage(BasePage):
                     # 默认勾选第一首（最匹配结果）
                     it.setCheckState(Qt.Checked if j == 0 else Qt.Unchecked)
                     lst.addItem(it)
-            self.status_label.setText("✅ 搜索完成，勾选歌曲后点「获取」")
+            self.status_label.setText("搜索完成，勾选歌曲后点「获取」")
 
         run_bg(work, done)
 
@@ -158,7 +158,7 @@ class MusicInfoPage(BasePage):
             self.app.toast("请先勾选要获取的歌曲", "warning")
             return
         self.get_btn.setEnabled(False)
-        self.status_label.setText(f"⏳ 获取 {len(selected)} 首详情...")
+        self.status_label.setText(f"获取 {len(selected)} 首详情...")
         singer = self.singer_entry.text().strip() or "封茗囧菌"
         song = self.song_entry.text().strip()
 
@@ -197,7 +197,7 @@ class MusicInfoPage(BasePage):
                 name = names[key]
                 lines.append(f"[{name}] {song_item.song_name}")
                 if err:
-                    lines.append(f"  ⚠️ {err}")
+                    lines.append(f"  {err}")
                 final_songs.append(full or song_item)
                 platforms.append(name)
                 if album:
@@ -212,7 +212,7 @@ class MusicInfoPage(BasePage):
             from toolbox.config_manager import get_export_subdir
             out_dir = str(get_export_subdir("music_info"))
             outputs = export_all_formats(result, out_dir)
-            lines.append("\n📤 导出结果:")
+            lines.append("\n导出结果:")
             for label, path in outputs.items():
                 lines.append(f"  [OK] {label}: {path}")
             return "\n".join(lines), result
@@ -220,8 +220,8 @@ class MusicInfoPage(BasePage):
         def done(result, err):
             self.get_btn.setEnabled(True)
             if err:
-                self.status_label.setText(f"❌ {err}")
+                self.status_label.setText(f"{err}")
                 return
-            self.status_label.setText(f"✅ 已获取并导出 {len(selected)} 首")
+            self.status_label.setText(f"已获取并导出 {len(selected)} 首")
 
         run_bg(work, done)

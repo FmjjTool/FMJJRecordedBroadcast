@@ -94,11 +94,11 @@ class FileTimePage(BasePage):
 
         # 文件选择
         top = QHBoxLayout()
-        add_files = QPushButton("📄 添加文件")
+        add_files = QPushButton("添加文件")
         add_files.clicked.connect(lambda: self._pick_files(False))
-        add_dir = QPushButton("📂 添加文件夹")
+        add_dir = QPushButton("添加文件夹")
         add_dir.clicked.connect(lambda: self._pick_files(True))
-        clear = QPushButton("🧹 清空")
+        clear = QPushButton("清空")
         clear.clicked.connect(self._clear)
         self.cnt = QLabel("0 个文件（可直接拖入）")
         self.cnt.setStyleSheet("color:#888;")
@@ -145,9 +145,9 @@ class FileTimePage(BasePage):
         self.offset_entry.setText("+0h")
         self.offset_entry.setEnabled(False)
         pr.addWidget(self.offset_entry)
-        preview = QPushButton("👁 预览")
+        preview = QPushButton("预览")
         preview.clicked.connect(self._preview)
-        apply_btn = QPushButton("✔ 应用")
+        apply_btn = QPushButton("应用")
         apply_btn.setStyleSheet("background:#2e7d32;color:white;padding:5px 18px;")
         apply_btn.clicked.connect(self._apply)
         pr.addWidget(preview)
@@ -246,7 +246,7 @@ class FileTimePage(BasePage):
             if isinstance(r, str):
                 self.table.setItem(i, 3, QTableWidgetItem(r))
                 self.table.setItem(i, 4, QTableWidgetItem(""))
-                self.table.setItem(i, 5, QTableWidgetItem("✗"))
+                self.table.setItem(i, 5, QTableWidgetItem(""))
             else:
                 fmt = datetime.fromtimestamp(r[1]).strftime("%Y-%m-%d %H:%M:%S")
                 self.table.setItem(i, 3, QTableWidgetItem(fmt))
@@ -289,10 +289,10 @@ class FileTimePage(BasePage):
             fails = [(i, msg) for i, msg in results if msg]
             for i, _msg in fails:
                 if i < self.table.rowCount():
-                    self.table.setItem(i, 5, QTableWidgetItem("✗"))
+                    self.table.setItem(i, 5, QTableWidgetItem("失败"))
             for i, msg in results:
                 if i < self.table.rowCount() and not msg:
-                    self.table.setItem(i, 5, QTableWidgetItem("✔"))
+                    self.table.setItem(i, 5, QTableWidgetItem("成功"))
             only = len(plan) < len(self.files)
             tail = (f"（仅选中 {len(plan)} 项）" if only else "") + \
                 (f"，失败 {len(fails)}" if fails else "")

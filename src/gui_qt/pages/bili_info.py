@@ -66,18 +66,18 @@ class BiliInfoPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(QLabel("👤 B站用户空间", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("B站用户空间", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 用户空间 · 功能介绍", (
+        head.addWidget(attach_help_overlay(self, "用户空间 · 功能介绍", (
             "<p><b>B站用户空间查询。</b></p>"
-            "<p>· <b>👤 用户空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
+            "<p>· <b>用户空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
             "可下载头像/头像框/空间背景图/投稿封面/充电表情/收藏集封面</p>"
             "<p>· 全部游客接口，无需登录；视频详情与下载请用「信息获取」页</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_space_tab(), "👤 用户空间")
+        self.tabs.addTab(self._build_space_tab(), "用户空间")
 
     # ---------- 空间 ----------
     def _build_space_tab(self):
@@ -107,7 +107,7 @@ class BiliInfoPage(BasePage):
         self.space_table.setEditTriggers(QTableWidget.NoEditTriggers)
         v.addWidget(self.space_table, 1)
         self.space_bar = _DlBar(self, lambda: self._space_current, "空间资源", show_fmt=False)
-        self.space_bar.dl_btn.setText("⬇ 下载头像/横幅/表情")
+        self.space_bar.dl_btn.setText("下载头像/横幅/表情")
         v.addWidget(self.space_bar)
         return w
 

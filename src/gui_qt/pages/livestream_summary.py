@@ -594,7 +594,7 @@ class LivestreamSummaryPage(BasePage):
             self._refresh_key_status()
             self._save_settings(quiet=True)
             self._detect_local()
-            self.app.toast(f"✅ 模型 {name} 已下载并配置", "success")
+            self.app.toast(f"模型 {name} 已下载并配置", "success")
 
         run_bg(work, done, owner=self)
 
@@ -822,11 +822,11 @@ class LivestreamSummaryPage(BasePage):
 
         if result.problems:
             for problem in result.problems:
-                self._append_log(f"⚠ 校验未通过：{problem}")
+                self._append_log(f"校验未通过：{problem}")
             self.app.toast(
                 f"总结已生成，但有 {len(result.problems)} 处格式问题，请查看日志", "warning")
         else:
-            self.app.toast("✅ 直播总结完成", "success")
+            self.app.toast("直播总结完成", "success")
 
     def _stop(self):
         if self._cancel is not None:
@@ -863,7 +863,7 @@ class LivestreamSummaryPage(BasePage):
                 return
             self.status_label.setText("连接正常")
             self._append_log(f"连接正常，模型回复：{str(result)[:60]}")
-            self.app.toast("✅ 模型接口连接正常", "success")
+            self.app.toast("模型接口连接正常", "success")
 
         run_bg(work, done, owner=self)
 

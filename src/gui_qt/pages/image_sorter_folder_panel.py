@@ -224,8 +224,6 @@ class FolderPanel(QWidget):
     folder_clear_requested = Signal(str)      # 清空文件夹内容请求（绝对路径）
     file_dropped_to_folder = Signal(list, str)  # 拖拽文件到文件夹（路径列表, 文件夹绝对路径）
 
-    BUILTIN_ICONS = {"默认": "📁", "收藏": "⭐", "删除": "🗑️", "重复文件": "📋"}
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.folder_manager: Optional[FolderManager] = None
@@ -260,7 +258,7 @@ class FolderPanel(QWidget):
 
         # 标题和排序
         header_layout = QHBoxLayout()
-        self.title_label = QLabel("📁 分类文件夹")
+        self.title_label = QLabel("分类文件夹")
         self.title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
@@ -306,27 +304,27 @@ class FolderPanel(QWidget):
 
         # 操作按钮
         button_layout = QHBoxLayout()
-        self.create_btn = QPushButton("➕ 创建")
+        self.create_btn = QPushButton("创建")
         self.create_btn.clicked.connect(self._on_create_folder)
         button_layout.addWidget(self.create_btn)
 
-        self.rename_btn = QPushButton("✏️ 重命名")
+        self.rename_btn = QPushButton("重命名")
         self.rename_btn.clicked.connect(self._on_rename_folder)
         button_layout.addWidget(self.rename_btn)
 
-        self.delete_btn = QPushButton("🗑️ 删除")
+        self.delete_btn = QPushButton("删除")
         self.delete_btn.clicked.connect(self._on_delete_folder)
         button_layout.addWidget(self.delete_btn)
 
-        self.preview_btn = QPushButton("👀 复检此夹")
+        self.preview_btn = QPushButton("复检此夹")
         self.preview_btn.clicked.connect(self._on_preview_folder)
         button_layout.addWidget(self.preview_btn)
 
-        self.restore_btn = QPushButton("↩️ 返回源目录")
+        self.restore_btn = QPushButton("↩ 返回源目录")
         self.restore_btn.clicked.connect(self._on_restore_sources)
         button_layout.addWidget(self.restore_btn)
 
-        self.refresh_btn = QPushButton("🔄 刷新")
+        self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self.refresh_folders)
         button_layout.addWidget(self.refresh_btn)
         layout.addLayout(button_layout)
@@ -453,14 +451,6 @@ class FolderPanel(QWidget):
                     painter.fillRect(0, 0, 120, 120, QColor(76, 175, 80, 100))
             else:
                 painter.fillRect(0, 0, 120, 120, QColor(158, 158, 158, 100))
-
-            # emoji 图标（Segoe UI Emoji 保证彩色字形）
-            icon_font = painter.font()
-            icon_font.setFamily("Segoe UI Emoji")
-            icon_font.setPointSize(44)
-            painter.setFont(icon_font)
-            emoji = self.BUILTIN_ICONS.get(folder_name, "📂") if is_builtin else "📂"
-            painter.drawText(0, 0, 120, 90, Qt.AlignmentFlag.AlignCenter, emoji)
 
             # 名称
             name_font = painter.font()

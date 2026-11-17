@@ -115,7 +115,7 @@ class AutoMatchDialog(QDialog):
 
     def __init__(self, parent, rows: list[dict], settings: dict):
         super().__init__(parent)
-        self.setWindowTitle("⚡ 自动匹配标签")
+        self.setWindowTitle("自动匹配标签")
         self.resize(980, 720)
         self.rows = rows
         self.settings = settings
@@ -323,14 +323,14 @@ class AutoMatchDialog(QDialog):
                 if status == "ok":
                     ok += 1
                     self.updated_rows.append((index, payload))
-                    self._log(f"✓ {os.path.basename(rows[index]['path'])}："
+                    self._log(f"{os.path.basename(rows[index]['path'])}："
                               f"{payload.get('_matched', '')}")
                 elif status == "none":
                     none += 1
                     self._log(f"— {os.path.basename(rows[index]['path'])}：未匹配（{payload}）")
                 else:
                     fail += 1
-                    self._log(f"✗ {os.path.basename(rows[index]['path'])}：{payload}")
+                    self._log(f"{os.path.basename(rows[index]['path'])}：{payload}")
             self.info.setText(f"完成：成功 {ok}，未匹配 {none}，失败 {fail}")
             self.settings.update(self.current_settings())
             self.accepted = True
@@ -429,7 +429,7 @@ class CombinedSearchDialog(QDialog):
 
     def __init__(self, parent, row: dict):
         super().__init__(parent)
-        self.setWindowTitle("🌐 从网络匹配标签")
+        self.setWindowTitle("从网络匹配标签")
         self.resize(1040, 700)
         self.row = row
         self.candidates: list[tag_search.TagCandidate] = []
@@ -450,7 +450,7 @@ class CombinedSearchDialog(QDialog):
         cond.addWidget(QLabel("专辑："))
         self.album_edit = QLineEdit(tags.get("album") or "")
         cond.addWidget(self.album_edit, 1)
-        self.search_btn = _blue("🔍 搜索", self._search)
+        self.search_btn = _blue("搜索", self._search)
         cond.addWidget(self.search_btn)
         v.addLayout(cond)
 
@@ -478,8 +478,8 @@ class CombinedSearchDialog(QDialog):
         self.preview = QLabel("选择候选后点「预览歌词」/「预览封面」")
         self.preview.setStyleSheet("color:#888;")
         bottom.addWidget(self.preview, 1)
-        bottom.addWidget(_plain("🎵 预览歌词", self._preview_lyric))
-        bottom.addWidget(_plain("🖼 预览封面", self._preview_cover))
+        bottom.addWidget(_plain("预览歌词", self._preview_lyric))
+        bottom.addWidget(_plain("预览封面", self._preview_cover))
         v.addLayout(bottom)
 
         fields = QGroupBox("应用字段")
@@ -500,7 +500,7 @@ class CombinedSearchDialog(QDialog):
         self.info = QLabel("")
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
-        bar.addWidget(_green("✔ 应用", self._apply))
+        bar.addWidget(_green("应用", self._apply))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
 
@@ -668,7 +668,7 @@ class CombinedSearchDialog(QDialog):
 class CoverSearchDialog(QDialog):
     def __init__(self, parent, row: dict):
         super().__init__(parent)
-        self.setWindowTitle("🖼 从网络搜索封面")
+        self.setWindowTitle("从网络搜索封面")
         self.resize(860, 640)
         tags = row.get("tags") or {}
         self.cover = b""
@@ -684,7 +684,7 @@ class CoverSearchDialog(QDialog):
         top.addWidget(self.title_edit, 2)
         top.addWidget(QLabel("艺术家："))
         top.addWidget(self.artist_edit, 1)
-        self.search_btn = _blue("🔍 搜索", self._search)
+        self.search_btn = _blue("搜索", self._search)
         top.addWidget(self.search_btn)
         v.addLayout(top)
 
@@ -702,7 +702,7 @@ class CoverSearchDialog(QDialog):
         self.info = QLabel("")
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
-        bar.addWidget(_green("✔ 应用封面", self._apply))
+        bar.addWidget(_green("应用封面", self._apply))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
 
@@ -802,7 +802,7 @@ def clean_lrc(text: str, remove_time: bool = False, remove_blank: bool = False,
 class LyricSearchDialog(QDialog):
     def __init__(self, parent, row: dict):
         super().__init__(parent)
-        self.setWindowTitle("🎵 从网络搜索歌词")
+        self.setWindowTitle("从网络搜索歌词")
         self.resize(980, 700)
         tags = row.get("tags") or {}
         self.candidates: list[tag_search.TagCandidate] = []
@@ -819,7 +819,7 @@ class LyricSearchDialog(QDialog):
         top.addWidget(self.title_edit, 2)
         top.addWidget(QLabel("艺术家："))
         top.addWidget(self.artist_edit, 1)
-        self.search_btn = _blue("🔍 搜索", self._search)
+        self.search_btn = _blue("搜索", self._search)
         top.addWidget(self.search_btn)
         v.addLayout(top)
 
@@ -854,7 +854,7 @@ class LyricSearchDialog(QDialog):
         self.info = QLabel("")
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
-        bar.addWidget(_green("✔ 应用歌词", self._apply))
+        bar.addWidget(_green("应用歌词", self._apply))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
 
@@ -954,7 +954,7 @@ def render_rename_pattern(pattern: str, tags: dict) -> str:
 class BatchRenameDialog(QDialog):
     def __init__(self, parent, rows: list[dict]):
         super().__init__(parent)
-        self.setWindowTitle("✏ 按标签批量改名")
+        self.setWindowTitle("按标签批量改名")
         self.resize(960, 640)
         self.rows = rows
         self.renames: list[tuple[str, str]] = []
@@ -987,7 +987,7 @@ class BatchRenameDialog(QDialog):
         self.info = QLabel("")
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
-        bar.addWidget(_green("✔ 执行改名", self._apply))
+        bar.addWidget(_green("执行改名", self._apply))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
         self._preview()
@@ -1073,7 +1073,7 @@ class BatchRenameDialog(QDialog):
 class FindReplaceDialog(QDialog):
     def __init__(self, parent, rows: list[dict]):
         super().__init__(parent)
-        self.setWindowTitle("🔍 查找与替换")
+        self.setWindowTitle("查找与替换")
         self.resize(680, 460)
         self.rows = rows
         self.result_updates: dict[int, dict] = {}
@@ -1118,7 +1118,7 @@ class FindReplaceDialog(QDialog):
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
         bar.addWidget(_blue("预览", self._preview))
-        bar.addWidget(_green("✔ 应用到选中行", self._apply))
+        bar.addWidget(_green("应用到选中行", self._apply))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
 
@@ -1198,7 +1198,7 @@ class FindReplaceDialog(QDialog):
 class EncodingFixDialog(QDialog):
     def __init__(self, parent, rows: list[dict]):
         super().__init__(parent)
-        self.setWindowTitle("🔤 编码修复（乱码重解码）")
+        self.setWindowTitle("编码修复（乱码重解码）")
         self.resize(760, 380)
         self.rows = rows
         self.updates: dict[int, tuple[str, str]] = {}
@@ -1226,7 +1226,7 @@ class EncodingFixDialog(QDialog):
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
         bar.addWidget(_blue("预览", self._preview))
-        bar.addWidget(_green("✔ 应用到选中行", self._apply))
+        bar.addWidget(_green("应用到选中行", self._apply))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
         self._preview()
@@ -1274,7 +1274,7 @@ class EncodingFixDialog(QDialog):
 class PicturesDialog(QDialog):
     def __init__(self, parent, pictures: list[tags_io.Pic], title: str = ""):
         super().__init__(parent)
-        self.setWindowTitle(f"🖼 图片管理 — {title}" if title else "🖼 图片管理")
+        self.setWindowTitle(f"图片管理 — {title}" if title else "图片管理")
         self.resize(900, 620)
         self.pictures = [tags_io.Pic(p.data, p.mime, p.type, p.desc) for p in pictures]
         self.result_pictures = list(self.pictures)
@@ -1293,9 +1293,9 @@ class PicturesDialog(QDialog):
 
         row = QHBoxLayout()
         row.addWidget(_plain("＋ 添加图片", self._add))
-        row.addWidget(_plain("🗑 移除", self._remove))
-        row.addWidget(_plain("⭐ 设为前置封面", self._front))
-        row.addWidget(_plain("💾 导出", self._export))
+        row.addWidget(_plain("移除", self._remove))
+        row.addWidget(_plain("设为前置封面", self._front))
+        row.addWidget(_plain("导出", self._export))
         row.addStretch(1)
         self.info = QLabel("")
         self.info.setStyleSheet("color:#888;")
@@ -1304,7 +1304,7 @@ class PicturesDialog(QDialog):
 
         bar = QHBoxLayout()
         bar.addStretch(1)
-        bar.addWidget(_green("✔ 确定", self._accept))
+        bar.addWidget(_green("确定", self._accept))
         bar.addWidget(_plain("取消", self.reject))
         v.addLayout(bar)
         self._reload()
@@ -1381,7 +1381,7 @@ class PicturesDialog(QDialog):
 class HistoryDialog(QDialog):
     def __init__(self, parent, path: str):
         super().__init__(parent)
-        self.setWindowTitle(f"🕘 标签历史 — {os.path.basename(path)}")
+        self.setWindowTitle(f"标签历史 — {os.path.basename(path)}")
         self.resize(820, 560)
         self.path = path
         self.restored: dict | None = None
@@ -1435,7 +1435,7 @@ class HistoryDialog(QDialog):
 class TagSettingsDialog(QDialog):
     def __init__(self, parent, settings: dict):
         super().__init__(parent)
-        self.setWindowTitle("⚙ 音乐标签设置")
+        self.setWindowTitle("音乐标签设置")
         self.resize(480, 260)
         self.settings = settings
         v = QVBoxLayout(self)
@@ -1460,7 +1460,7 @@ class TagSettingsDialog(QDialog):
         v.addStretch(1)
         bar = QHBoxLayout()
         bar.addStretch(1)
-        bar.addWidget(_green("✔ 保存", self._save))
+        bar.addWidget(_green("保存", self._save))
         bar.addWidget(_plain("取消", self.reject))
         v.addLayout(bar)
 

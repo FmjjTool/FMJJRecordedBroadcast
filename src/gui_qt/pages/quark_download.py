@@ -99,7 +99,7 @@ class QuarkDownloadPage(BasePage):
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         path_row.addWidget(self.provider_combo)
 
-        self.up_btn = QPushButton("⬆ 上一级")
+        self.up_btn = QPushButton("上一级")
         self.up_btn.setProperty("variant", "secondary")
         self.up_btn.setToolTip("返回上一层云端目录")
         self.up_btn.clicked.connect(self._go_up)
@@ -109,7 +109,7 @@ class QuarkDownloadPage(BasePage):
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         path_row.addWidget(self.path_label, 1)
 
-        self.refresh_btn = QPushButton("🔄 刷新")
+        self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.setProperty("variant", "secondary")
         self.refresh_btn.setToolTip("重新读取当前云端目录")
         self.refresh_btn.clicked.connect(self._refresh)
@@ -122,7 +122,7 @@ class QuarkDownloadPage(BasePage):
         self.local_edit = QLineEdit(self._default_local_dir())
         self.local_edit.setPlaceholderText("选择下载保存的本地文件夹")
         local_row.addWidget(self.local_edit, 1)
-        browse = QPushButton("📁 选择")
+        browse = QPushButton("选择")
         browse.setProperty("variant", "secondary")
         browse.setToolTip("选择下载保存的本地文件夹")
         browse.clicked.connect(self._pick_local_dir)
@@ -133,19 +133,19 @@ class QuarkDownloadPage(BasePage):
         self.select_all.toggled.connect(self._toggle_all)
         local_row.addWidget(self.select_all)
 
-        self.download_btn = QPushButton("⬇ 下载选中")
+        self.download_btn = QPushButton("下载选中")
         self.download_btn.setProperty("variant", "primary")
         self.download_btn.setToolTip("下载已勾选的文件；同名同大小文件会自动跳过")
         self.download_btn.clicked.connect(self._download_selected)
         local_row.addWidget(self.download_btn)
 
-        self.folder_btn = QPushButton("⬇ 下载本文件夹")
+        self.folder_btn = QPushButton("下载本文件夹")
         self.folder_btn.setProperty("variant", "secondary")
         self.folder_btn.setToolTip("递归下载当前目录及其全部子目录")
         self.folder_btn.clicked.connect(self._download_current_folder)
         local_row.addWidget(self.folder_btn)
 
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
         self.stop_btn.setToolTip("停止当前下载（已下载部分保留为 .part，下次自动续传）")
         self.stop_btn.setEnabled(False)
@@ -182,7 +182,7 @@ class QuarkDownloadPage(BasePage):
         body = QHBoxLayout()
         body.setSpacing(12)
 
-        left = ToolSectionCard("☁ 云端文件", "双击文件夹进入；勾选文件后点「下载选中」。")
+        left = ToolSectionCard("云端文件", "双击文件夹进入；勾选文件后点「下载选中」。")
         self.count_label = QLabel("0 项")
         self.count_label.setProperty("role", "caption")
         left.heading_layout.addWidget(self.count_label)
@@ -208,7 +208,7 @@ class QuarkDownloadPage(BasePage):
         left.content_layout.addWidget(self.table, 1)
         body.addWidget(left, 3)
 
-        right = ToolSectionCard("⬇ 下载进度", "中断后重新下载同一个文件会自动从 .part 续传。")
+        right = ToolSectionCard("下载进度", "中断后重新下载同一个文件会自动从 .part 续传。")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
@@ -295,7 +295,7 @@ class QuarkDownloadPage(BasePage):
         self.table.setRowCount(len(entries))
         for row, entry in enumerate(entries):
             is_dir = bool(entry.get("dir"))
-            check_item = QTableWidgetItem("📁" if is_dir else "")
+            check_item = QTableWidgetItem("")
             check_item.setFlags(Qt.ItemIsEnabled)
             if not is_dir:
                 check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
@@ -458,7 +458,7 @@ class QuarkDownloadPage(BasePage):
             if failed:
                 self.app.toast(f"下载完成，但有 {len(failed)} 个文件失败", "error")
             else:
-                self.app.toast(f"✅ 下载完成：{len(ok)} 个文件，{qdownload.human_size(total)}",
+                self.app.toast(f"下载完成：{len(ok)} 个文件，{qdownload.human_size(total)}",
                                "success")
 
         run_bg(work, done, owner=self)
@@ -490,13 +490,13 @@ class QuarkDownloadPage(BasePage):
         percent = int(done * 100 / total) if total else 0
         self.progress.setValue(max(0, min(100, percent)))
         self.status_label.setText(
-            f"⬇ {name} · {qdownload.human_size(done)} / "
+            f"{name} · {qdownload.human_size(done)} / "
             f"{qdownload.human_size(total) if total else '未知'} · "
             f"{qdownload.human_speed(speed)}")
 
     def _on_extract_progress(self, name: str, percent: int):
         self.progress.setValue(max(0, min(100, int(percent))))
-        self.status_label.setText(f"📦 解压中：{name} · {int(percent)}%")
+        self.status_label.setText(f"解压中：{name} · {int(percent)}%")
 
     def _stop(self):
         if self._stop_event is not None:
