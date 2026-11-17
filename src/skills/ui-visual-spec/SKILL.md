@@ -359,7 +359,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 这些改动影响全站观感与既有截图，不在本次范围内，不要顺手改。
 
 1. **字号越级值收敛**（16/17/20/23/26/34/36/44 共 27 处）。建议按页面逐页收敛，不做一次性全局替换。
-2. **`tracker.py` / `music_tracker.py` / `test_page.py` 内联样式下沉**（分别 61 / 50 / 65 处 `setStyleSheet`）。改造风险中等，需逐页授权。
+2. **`tracker.py` / `music_tracker.py` / `douyin_danmaku.py` 内联样式下沉**（分别 61 / 50 / 65 处 `setStyleSheet`）。改造风险中等，需逐页授权。
 3. **浅色 `placeholder-text` 在 `midlight` 上仍是 4.37**。要彻底达标需继续压深或给 `midlight` 提亮，会连带影响弱选中底观感，暂不动；改为「落在 midlight 上的文字不用 muted」。
 
 ### 已完成（2026-11-17）

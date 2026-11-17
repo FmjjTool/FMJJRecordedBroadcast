@@ -66,7 +66,7 @@ PAGE_CLASSES = {
     "info_tools": ("gui_qt.pages.containers", "InfoToolsPage"),
     "tracker": ("gui_qt.pages.tracker", "TrackerPage"),
     "music_tracker": ("gui_qt.pages.music_tracker", "MusicTrackerPage"),
-    "test_page": ("gui_qt.pages.test_page", "TestPage"),
+    "douyin_danmaku": ("gui_qt.pages.douyin_danmaku", "DouyinDanmakuPage"),
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
     "weibo_chaohua": ("gui_qt.pages.weibo_chaohua", "WeiboChaohuaPage"),
@@ -89,6 +89,14 @@ PAGE_CLASSES = {
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
     "performance": ("gui_qt.pages.performance", "PerformancePage"),
 }
+
+
+PAGE_ALIASES = {"test_page": "douyin_danmaku"}
+
+
+def _resolve_page_key(key):
+    """兼容旧配置/外部链接：test_page → douyin_danmaku。"""
+    return PAGE_ALIASES.get(key, key)
 
 
 def _page_class(key):
@@ -136,7 +144,7 @@ NAV_GROUPS = [
         ("music_file_tools", "🏷 音乐标签"),
     ]),
     ("🔴 直播弹幕录制", [
-        ("test_page", "📺 抖音弹幕姬"),
+        ("douyin_danmaku", "📺 抖音弹幕姬"),
         ("bili_danmaku", "📺 B站弹幕姬"),
     ]),
     ("🧰 本地工具", [
@@ -719,6 +727,7 @@ class MainWindow(QMainWindow):
     def show_page(self, key):
         if self._closed:
             return
+        key = _resolve_page_key(key)
         self.page_preloader.defer_for_navigation()
         monitor = self.performance_monitor
         try:
@@ -739,6 +748,7 @@ class MainWindow(QMainWindow):
                     pass
 
     def _show_page(self, key):
+        key = _resolve_page_key(key)
         if key == "toolbox_convert":
             self.show_page("toolbox_editor")
             self.pages["toolbox_editor"].open_convert_tab()
@@ -788,6 +798,7 @@ class MainWindow(QMainWindow):
 
     def _ensure_page(self, key):
         """导航与预载共用一个创建入口，不切页、不触发 on_show。"""
+        key = _resolve_page_key(key)
         if key not in self.pages:
             page = self.page_lifecycle.take(key)
             if page is None:
@@ -885,9 +896,9 @@ class MainWindow(QMainWindow):
                     p.add_dropped_files(file_list)
             return
 
-        # 弹幕测试页：拖入 zip 回放包 → 进入回放模式
-        if self.current_page == "test_page":
-            p = self.pages.get("test_page")
+        # 抖音弹幕姬：拖入 zip 回放包 → 进入回放模式
+        if self.current_page == "douyin_danmaku":
+            p = self.pages.get("douyin_danmaku")
             zips = [f for f in file_list if f.lower().endswith(".zip")]
             if p is not None and zips:
                 p.load_replay_zip(zips[0])

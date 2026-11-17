@@ -1,4 +1,4 @@
-"""抖音弹幕实时数据接入页（PySide6 版，对应原版 gui/test_page.py）。
+"""抖音弹幕实时数据接入页（PySide6 版，对应原版抖音弹幕页）。
 
 三栏布局：左主播信息（首行直播标题）/ 中弹幕聊天礼物 / 右4块垂直（房间号/WS/打赏榜/弹幕信息2）。
 - 顶栏：轮询 / 模式（仅弹幕 / 回放）/ 录播 / 设置 / 清空内容
@@ -134,7 +134,7 @@ def _img_src(url):
     return p.as_posix() if p else None
 
 
-class TestPage(BasePage):
+class DouyinDanmakuPage(BasePage):
     # 功能介绍浮层文案（B站弹幕姬子类覆写）
     HELP_INTRO = (
         "<p><b>抖音直播弹幕姬：真实接入直播间，实时数据 + 回放一体。</b></p>"
@@ -429,7 +429,7 @@ class TestPage(BasePage):
         label = "B站" if e.platform == "bili" else "抖音"
         if e.platform != plat:
             # 平台不一致：自动切到对应的弹幕姬页再填入
-            target = "bili_danmaku" if e.platform == "bili" else "test_page"
+            target = "bili_danmaku" if e.platform == "bili" else "douyin_danmaku"
             try:
                 self.app.show_page(target)
                 page = self.app.pages.get(target)

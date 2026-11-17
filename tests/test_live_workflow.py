@@ -16,7 +16,7 @@ from toolbox.bili_upload import BiliUploader, UploadError, UploadHistory, build_
 from toolbox.durable_io import JsonlJournal, atomic_write_json, read_jsonl_tail
 from toolbox.organize_engine import scan_sources, scan_files, execute_migration
 from toolbox.danmaku_recorder import DanmakuRecorder
-from gui_qt.pages.test_page import TestPage
+from gui_qt.pages.douyin_danmaku import DouyinDanmakuPage
 from gui_qt.pages.organize import OrganizePage
 
 
@@ -283,7 +283,7 @@ class LivePollingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(cm, "get_config_dir", return_value=Path(folder)), \
              patch.object(cm, "get_export_dir", return_value=Path(folder) / "download"):
-            page = TestPage(SimpleNamespace(work_dir=folder, toast=lambda *args: None))
+            page = DouyinDanmakuPage(SimpleNamespace(work_dir=folder, toast=lambda *args: None))
             page._waiting_live = True
             page._setup_poll_timer()
             self.assertTrue(page._poll_timer.isActive())

@@ -869,7 +869,7 @@ APP_PUBLISHER    = "歆慕"
 
 #### v2.8.3（2026-09-01）
 
-- **抖音 / B 站弹幕姬（test_page / bili_danmaku）**：删除「🚀 启动弹幕姬」按钮（dycast 外部 Node 项目仅保留作可选启动器，UI 不再展示入口）。顶栏「🔁 轮询 / ⚙ 设置 / 🗑 清空内容 / ■ 断开 / ▶ 连接」统一改为**仅图标**（保留 tooltip 文字说明）。工具栏（保存弹幕 / 导出 / 导入 / 合并 / 统计 / 录播 / 监控）保留文字便于辨识。
+- **抖音 / B 站弹幕姬（douyin_danmaku / bili_danmaku）**：删除「🚀 启动弹幕姬」按钮（dycast 外部 Node 项目仅保留作可选启动器，UI 不再展示入口）。顶栏「🔁 轮询 / ⚙ 设置 / 🗑 清空内容 / ■ 断开 / ▶ 连接」统一改为**仅图标**（保留 tooltip 文字说明）。工具栏（保存弹幕 / 导出 / 导入 / 合并 / 统计 / 录播 / 监控）保留文字便于辨识。
 - **文件迁移页（migrate）**：中间文件列表行从「📁 YYYYMMDD (N 项)」升级为「📁 2026-09-01 (今天) + 原始名 + 文件数 + 总大小（B/KB/MB/GB）+ 最后修改时间」。新增 `_format_folder_date` / `_format_size` / `_folder_stats` 三个辅助函数。
 - **重命名设置页（rename）**：`_mini_btn` 尺寸 28×24 → 36×30，× 按钮用 `×` (U+00D7) 替代原 `✕` (U+2715)，字号 16px，确保 × 图标清晰可辨（原 28×24 下 × 几乎不可见）。所有方向按钮（⬆ / ⬇ / ×）保持**仅图标、无文字**（tooltip 提供上移 / 下移 / 删除说明）。删除按钮加红色危险色（红底 + 红字 + 加粗）。
 
@@ -883,11 +883,10 @@ APP_PUBLISHER    = "歆慕"
 |---|---|---|---|
 | 1 | `pages/calendar.py` | 面包屑写「双击日期打开文件夹」，实现是**单击** | 仅文案不符 |
 | 2 | `main_window.py` | 状态栏只在初始化时设一次「就绪」，之后无更新 | 形同虚设的占位 |
-| 3 | `pages/test_page.py` | 文件名/key 为历史遗留的 `test_page`，实际是抖音弹幕姬页 | 命名易混淆 |
-| 4 | `platforms/bilibili.py` vs `bili/wbi.py` | WBI 签名有两套实现，`MIXIN_KEY_ENC_TAB` 置换表**尾部不完全一致** | 二者签名结果可能不同，但目前各自链路均可用 |
-| 5 | `tracker/config.py` | `OUTPUT_PATHS` 只有 3 个平台 | 快手/小红书记录不写入 `tracker/data/`（仍写入按账号的 xlsx） |
-| 6 | `src/music/scrapers/fivesing.py` | `get_play_url()` 在文件中定义了两次（实现相同） | 冗余代码，后者生效 |
-| 7 | `check_deps.py` | docstring 写「被 app 启动时自动调用」，实际**无调用点** | 需手动执行 `python check_deps.py` |
+| 3 | `platforms/bilibili.py` vs `bili/wbi.py` | WBI 签名有两套实现，`MIXIN_KEY_ENC_TAB` 置换表**尾部不完全一致** | 二者签名结果可能不同，但目前各自链路均可用 |
+| 4 | `tracker/config.py` | `OUTPUT_PATHS` 只有 3 个平台 | 快手/小红书记录不写入 `tracker/data/`（仍写入按账号的 xlsx） |
+| 5 | `src/music/scrapers/fivesing.py` | `get_play_url()` 在文件中定义了两次（实现相同） | 冗余代码，后者生效 |
+| 6 | `check_deps.py` | docstring 写「被 app 启动时自动调用」，实际**无调用点** | 需手动执行 `python check_deps.py` |
 
 ### 开发约定
 

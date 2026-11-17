@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""B站弹幕姬页：完整复用抖音弹幕姬（TestPage）的 UI 与交互框架，仅替换平台后端。
+"""B站弹幕姬页：完整复用抖音弹幕姬（DouyinDanmakuPage）的 UI 与交互框架，仅替换平台后端。
 
 - 后端：toolbox.bili_live（BiliLiveFetcher 弹幕 WS / 房间信息 / 直播流 / 统计 / 监控）
 - 画质：B站按 qn 档位现取直链（游客会被限档，切档即按该档重新取流）
@@ -8,10 +8,10 @@
 """
 
 from toolbox.bili_live import DEFAULT_ROOM
-from gui_qt.pages.test_page import TestPage
+from gui_qt.pages.douyin_danmaku import DouyinDanmakuPage
 
 
-class BiliDanmakuPage(TestPage):
+class BiliDanmakuPage(DouyinDanmakuPage):
     _BACKEND = "toolbox.bili_live"
 
     HELP_INTRO = (

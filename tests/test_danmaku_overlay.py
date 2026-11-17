@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit, QSpinBox
 from gui_qt import danmaku_overlay as overlay
 from toolbox import config_manager as cm
-from gui_qt.pages.test_page import TestPage
+from gui_qt.pages.douyin_danmaku import DouyinDanmakuPage
 
 
 class OverlayTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class OverlayTests(unittest.TestCase):
 
     def tearDown(self):
         for window in self.windows:
-            if isinstance(window, TestPage):
+            if isinstance(window, DouyinDanmakuPage):
                 window.shutdown()
             window.close()
             window.deleteLater()
@@ -129,7 +129,7 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(set(self.root.iterdir()), {self.root / "danmaku_overlay.json"})
 
     def test_replay_seek_pause_finish_sync_clock_and_rank(self):
-        page = TestPage(SimpleNamespace(work_dir=str(self.root), toast=lambda *args: None))
+        page = DouyinDanmakuPage(SimpleNamespace(work_dir=str(self.root), toast=lambda *args: None))
         self.windows.append(page)
         first = 1778242602000
         casts = [dict(type="WebcastGiftMessage", nickname="观众", giftName="小心心",

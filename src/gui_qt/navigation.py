@@ -15,7 +15,7 @@ def tool_icon_name(key):
         return "folder"
     if key in ("tracker", "music_tracker"):
         return "chart"
-    if key in ("toolbox_convert", "toolbox_editor", "test_page", "bili_danmaku"):
+    if key in ("toolbox_convert", "toolbox_editor", "douyin_danmaku", "bili_danmaku"):
         return "video"
     if key.startswith("music") or key == "toolbox_audio":
         return "music"

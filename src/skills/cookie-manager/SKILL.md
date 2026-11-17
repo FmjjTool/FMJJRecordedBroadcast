@@ -40,7 +40,7 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 
 GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通过管理层适配获取授权，Token 保持 Token 类型，不拼成 Cookie 请求头。正常 Git 工具认证仍使用其原生凭据机制，不在同步命令、远端 URL 或日志里暴露 Token。
 
-**约定 9 的既有待清理项**（本次只记录，未改代码）：`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`shopping_page.py`、`test_page.py`、`video_comments.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。`quark_backup.py`、`quark_download.py`、`netease.py`、`tcdoc.py`、`localwiki.py` 与 `bili_upload_dialog.py` 已在 2026-11-17 的凭据红线批次清理；`tcdoc_credentials.py` 已删除，OpenAPI 三个 ID 改由统一管理对话框维护。
+**约定 9 的既有待清理项**（本次只记录，未改代码）：`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`shopping_page.py`、`douyin_danmaku.py`、`video_comments.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。`quark_backup.py`、`quark_download.py`、`netease.py`、`tcdoc.py`、`localwiki.py` 与 `bili_upload_dialog.py` 已在 2026-11-17 的凭据红线批次清理；`tcdoc_credentials.py` 已删除，OpenAPI 三个 ID 改由统一管理对话框维护。
 
 当前还需迁移/核对的具体入口：腾讯文档 `has_login()` 仍接受快照文件存在作为登录条件。涉及该链路时，须消除绕过关闭/清除状态的路径并验证，不能直接沿用它证明统一规则已满足。
 

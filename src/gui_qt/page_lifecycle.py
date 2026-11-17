@@ -20,7 +20,7 @@ class PagePolicy(Enum):
     CORE = "底层"
 
 
-PROTECTED_PAGES = frozenset({"test_page", "bili_danmaku", "localwiki"})
+PROTECTED_PAGES = frozenset({"douyin_danmaku", "test_page", "bili_danmaku", "localwiki"})
 
 
 def page_policy(key):
