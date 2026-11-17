@@ -1,7 +1,7 @@
 """网媒账号追踪页（PySide6 版）：单账号单平台，每个账号独立卡片，采集结果存 xlsx 并读取长期缓存。
 
 对应原版 gui/tracker_page.py：
-- 功能页：平台筛选 + 获取全部（回车快捷）+ 📷 按组导出 + 刷新（定时任务统一在「任务」页）
+- 功能页：平台筛选 + 获取全部（回车快捷）+ 按组导出 + 刷新（定时任务统一在「任务」页）
   每账号卡片：昵称/平台/状态 + 采集/导出/历史按钮 + 变化提示（涨绿跌红）+ 2行×4列预览
 - 设置页：添加追踪账号（账号名/平台/链接/分组多选）、分组管理（组列表+新建）、已配置账号（分组多选+保存+删除）
 - 历史窗口：指标当列、时间点当行，可横向滚动
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt import theme
 from gui_qt.common import icon_btn_style, icon_button, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect
 from toolbox.platform_names import MEDIA_PLATFORM_NAMES as PLATFORM_NAMES
@@ -90,19 +91,19 @@ class TrackerPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("📈 网媒账号追踪")
+        title = QLabel("网媒账号追踪")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         head.addWidget(title)
         head.addStretch(1)
-        refresh_btn = QPushButton("🔄 刷新")
+        refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.reload_accounts)
         head.addWidget(refresh_btn)
-        export_group_btn = QPushButton("📷 按组导出")
+        export_group_btn = QPushButton("按组导出")
         export_group_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         export_group_btn.clicked.connect(self._export_group)
         head.addWidget(export_group_btn)
-        live_all_btn = QPushButton("🎥 抖音直播历史")
+        live_all_btn = QPushButton("抖音直播历史")
         live_all_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         live_all_btn.setToolTip(
@@ -110,7 +111,7 @@ class TrackerPage(BasePage):
             "只抓直播场次，不采集粉丝/关注/获赞指标")
         live_all_btn.clicked.connect(self._collect_douyin_live_all)
         head.addWidget(live_all_btn)
-        fetch_all_btn = QPushButton("⬇ 获取全部")
+        fetch_all_btn = QPushButton("获取全部")
         fetch_all_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         fetch_all_btn.clicked.connect(lambda: self._collect_all())
         head.addWidget(fetch_all_btn)
@@ -145,19 +146,19 @@ class TrackerPage(BasePage):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(6)
-        title = QLabel("⚙️ 追踪账号设置")
+        title = QLabel("追踪账号设置")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         # 标题行右侧：从「信息获取」一键同步账号（与信息获取页的「同步到追踪」同源逻辑）
         trow = QHBoxLayout()
         trow.addWidget(title)
         trow.addStretch(1)
-        sync_fm_btn = QPushButton("📥 从信息获取同步")
+        sync_fm_btn = QPushButton("从信息获取同步")
         sync_fm_btn.setToolTip(
             "把「信息获取」页的账号一键同步过来：按平台+ID去重，已存在跳过；\n"
             "账号名/链接/分组一并带过来，分组不存在时按同组号+组名自动创建")
         sync_fm_btn.clicked.connect(self._sync_from_fm_accounts)
         trow.addWidget(sync_fm_btn)
-        sync_to_fm_btn = QPushButton("📤 同步到信息获取")
+        sync_to_fm_btn = QPushButton("同步到信息获取")
         sync_to_fm_btn.setToolTip(
             "把本页追踪账号一键同步到「信息获取」页：按平台+ID去重，已存在跳过；\n"
             "账号名/链接/分组一并带过去，分组不存在时按同组号+组名自动创建")
@@ -194,7 +195,8 @@ class TrackerPage(BasePage):
         r2.addWidget(QLabel("分组:"))
         self.add_group_sel = GroupMultiSelect(width=126)
         r2.addWidget(self.add_group_sel)
-        self.add_acc_btn = icon_button("➕", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
+        self.add_acc_btn = icon_button("", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
+        self.add_acc_btn.setIcon(line_icon("plus", theme.color("text"), 16))
         r2.addWidget(self.add_acc_btn)
         av.addLayout(r2)
         outer.addWidget(add_card)
@@ -229,7 +231,8 @@ class TrackerPage(BasePage):
         self.gname_entry.setPlaceholderText("组名")
         self.gname_entry.setFixedWidth(140)
         addg.addWidget(self.gname_entry)
-        newg_btn = icon_button("➕", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
+        newg_btn = icon_button("", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
+        newg_btn.setIcon(line_icon("plus", theme.color("text"), 16))
         addg.addWidget(newg_btn)
         addg.addStretch(1)
         gv.addLayout(addg)
@@ -363,7 +366,7 @@ class TrackerPage(BasePage):
         head = QHBoxLayout()
         left = QVBoxLayout()
         left.setSpacing(0)
-        name_lbl = QLabel(f"👤 {acc.get('name', '未命名')}")
+        name_lbl = QLabel(f"{acc.get('name', '未命名')}")
         name_lbl.setStyleSheet("font-weight: bold;")
         left.addWidget(name_lbl)
         plat_lbl = QLabel(plat_name)
@@ -374,19 +377,19 @@ class TrackerPage(BasePage):
         status = QLabel("")
         status.setStyleSheet(_status_style("muted"))
         head.addWidget(status)
-        export_btn = QPushButton("📷 导出")
+        export_btn = QPushButton("导出")
         export_btn.setFixedSize(60, 26)
         export_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         export_btn.clicked.connect(lambda _=False, a=acc: self._export_png(a))
         head.addWidget(export_btn)
-        hist_btn = QPushButton("📊 历史")
+        hist_btn = QPushButton("历史")
         hist_btn.setFixedSize(60, 26)
         hist_btn.setStyleSheet(
             "background: transparent; border: 1px solid palette(mid); color: palette(text);")
         hist_btn.clicked.connect(lambda _=False, a=acc: self._open_history(a))
         head.addWidget(hist_btn)
-        btn = QPushButton("📥 采集")
+        btn = QPushButton("采集")
         btn.setFixedSize(70, 26)
         btn.clicked.connect(lambda _=False, a=acc: self._collect_account(a))
         head.addWidget(btn)
@@ -416,7 +419,7 @@ class TrackerPage(BasePage):
         preview = history[:2]
         self._render_preview(grid, preview)
         if history:
-            status.setText("📦 缓存")
+            status.setText("缓存")
             if len(history) >= 2:
                 self._render_diff(diff_frame, history[1], history[0])
         cv.addWidget(preview_frame)
@@ -483,7 +486,7 @@ class TrackerPage(BasePage):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
             else:
-                self.app.toast(f"✅ 已导出 PNG：{result}", "success")
+                self.app.toast(f"已导出 PNG：{result}", "success")
 
         run_bg(work, done)
 
@@ -503,14 +506,14 @@ class TrackerPage(BasePage):
             return
 
         win = QDialog(self)
-        win.setWindowTitle(f"📊 {acc.get('name', '账号')} · 历史数据")
+        win.setWindowTitle(f"{acc.get('name', '账号')} · 历史数据")
         # QDialog 默认只有关闭按钮，补上最小化/最大化（双击标题栏全屏也生效）
         win.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
         win.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         win.resize(980, 520)
         v = QVBoxLayout(win)
         v.setContentsMargins(10, 12, 10, 10)
-        head = QLabel(f"👤 {acc.get('name', '')} 历史数据（最新在前）")
+        head = QLabel(f"{acc.get('name', '')} 历史数据（最新在前）")
         head.setStyleSheet("font-size: 14px; font-weight: bold;")
         v.addWidget(head)
 
@@ -520,11 +523,11 @@ class TrackerPage(BasePage):
         else:
             # 抖音账号固定显示「直播历史」二级页签：即使 0 场也能在页签内一键获取
             tabs = QTabWidget()
-            tabs.addTab(metrics_w, f"📊 指标数据（{len(history)}）")
+            tabs.addTab(metrics_w, f"指标数据（{len(history)}）")
             live_w = self._history_live_widget(
                 live, acc,
-                on_count=lambda n: tabs.setTabText(1, f"🎥 直播历史（{n}）"))
-            tabs.addTab(live_w, f"🎥 直播历史（{len(live)}）")
+                on_count=lambda n: tabs.setTabText(1, f"直播历史（{n}）"))
+            tabs.addTab(live_w, f"直播历史（{len(live)}）")
             v.addWidget(tabs, 1)
         win.exec()
 
@@ -581,7 +584,7 @@ class TrackerPage(BasePage):
         head.addStretch(1)
         fetch_btn = None
         if acc is not None:
-            fetch_btn = QPushButton("🔄 获取直播历史")
+            fetch_btn = QPushButton("获取直播历史")
             fetch_btn.setStyleSheet(
                 "background: transparent; border: 1px solid palette(mid); color: palette(text);")
             fetch_btn.setToolTip(
@@ -624,13 +627,13 @@ class TrackerPage(BasePage):
                 self.app.toast("正在采集中，请稍候", "info")
                 return
             fetch_btn.setEnabled(False)
-            fetch_btn.setText("⏳ 获取中...")
+            fetch_btn.setText("获取中...")
             status.setText("正在获取直播历史...")
             status.setStyleSheet(_status_style("warning", 12))
 
             def done(result, err):
                 fetch_btn.setEnabled(True)
-                fetch_btn.setText("🔄 获取直播历史")
+                fetch_btn.setText("获取直播历史")
                 if err or (result or {}).get("error"):
                     msg = err or (result or {}).get("error") or "未知错误"
                     status.setText(f"获取失败：{msg}")
@@ -668,7 +671,7 @@ class TrackerPage(BasePage):
                 on_done()
             return
         card["btn"].setEnabled(False)
-        card["status"].setText("⏳ 采集中...")
+        card["status"].setText("采集中...")
         card["status"].setStyleSheet(_status_style("warning"))
 
         def work():
@@ -688,7 +691,7 @@ class TrackerPage(BasePage):
             if card:
                 card["btn"].setEnabled(True)
                 if err:
-                    card["status"].setText(f"❌ {err}")
+                    card["status"].setText(f"{err}")
                     card["status"].setStyleSheet(_status_style("danger"))
                 else:
                     record, live = result
@@ -698,13 +701,13 @@ class TrackerPage(BasePage):
                     if len(history) >= 2:
                         self._render_diff(card["diff_frame"], history[1], history[0])
                     if live is None:
-                        card["status"].setText("✅ 完成")
+                        card["status"].setText("完成")
                         card["status"].setToolTip("")
                     elif live.get("error"):
-                        card["status"].setText("✅ 完成 · 🎥⚠")
+                        card["status"].setText("完成（直播历史失败）")
                         card["status"].setToolTip(f"直播历史采集失败：{live['error']}")
                     else:
-                        card["status"].setText(f"✅ 完成 · 🎥{live['total']}场")
+                        card["status"].setText(f"完成 · {live['total']}场")
                         card["status"].setToolTip(
                             f"直播历史已缓存 {live['total']} 场（本次新增 {live['new']} 场，按房间号去重）")
                     card["status"].setStyleSheet(_status_style("success"))
@@ -731,7 +734,7 @@ class TrackerPage(BasePage):
         if not accounts:
             self.app.toast("没有符合条件的账号", "info")
             return
-        self.app.toast(f"⬇ 开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
+        self.app.toast(f"开始批量采集 {len(accounts)} 个账号（并发模式）...", "info")
         self.batch_prog.setRange(0, max(len(accounts), 1))
         self.batch_prog.setValue(0)
 
@@ -754,7 +757,7 @@ class TrackerPage(BasePage):
             if queue:
                 _next_wave()
             elif state["running"] == 0:
-                self.app.toast("✅ 批量采集完成", "info")
+                self.app.toast("批量采集完成", "info")
                 self._collecting = False
 
         self._collecting = True
@@ -789,7 +792,7 @@ class TrackerPage(BasePage):
         self.batch_prog.setFormat("直播 %v/%m（%p%）")
         self.batch_prog.setRange(0, len(accounts))
         self.batch_prog.setValue(0)
-        self.app.toast(f"🎥 开始获取 {len(accounts)} 个抖音账号的直播历史...", "info")
+        self.app.toast(f"开始获取 {len(accounts)} 个抖音账号的直播历史...", "info")
 
         from collections import deque
         queue = deque(accounts)
@@ -823,12 +826,12 @@ class TrackerPage(BasePage):
                         c["btn"].setEnabled(True)
                 if state["failed"]:
                     self.app.toast(
-                        f"⚠ 抖音直播历史：{state['ok']} 个成功 / {state['failed']} 个失败"
+                        f"抖音直播历史：{state['ok']} 个成功 / {state['failed']} 个失败"
                         f"（接口 {state['total']} 场，新增 {state['new']} 场，"
                         f"本地缓存 {state['cached']} 场）", "warning")
                 else:
                     self.app.toast(
-                        f"✅ 抖音直播历史获取完成：{state['ok']} 个账号，"
+                        f"抖音直播历史获取完成：{state['ok']} 个账号，"
                         f"接口 {state['total']} 场（新增 {state['new']} 场），"
                         f"本地缓存 {state['cached']} 场", "success")
 
@@ -838,7 +841,7 @@ class TrackerPage(BasePage):
         """单账号直播历史：后台抓取并合并到该账号 xlsx 的「直播历史」sheet。"""
         card = self._card_for(acc)
         if card:
-            card["status"].setText("🎥 获取直播历史...")
+            card["status"].setText("获取直播历史...")
             card["status"].setStyleSheet(_status_style("warning"))
             card["status"].setToolTip("正在抓取抖音「直播动态」公开接口")
 
@@ -850,25 +853,25 @@ class TrackerPage(BasePage):
             card = self._card_for(acc)
             if card:
                 if err:
-                    card["status"].setText("🎥 ❌")
+                    card["status"].setText("直播历史失败")
                     card["status"].setStyleSheet(_status_style("danger"))
                     card["status"].setToolTip(f"直播历史获取失败：{err}")
                 elif (result or {}).get("error"):
-                    card["status"].setText("🎥 ⚠")
+                    card["status"].setText("直播历史异常")
                     card["status"].setStyleSheet(_status_style("warning"))
                     card["status"].setToolTip(f"直播历史获取失败：{result['error']}")
                 else:
                     total = int(result.get("total") or 0)
                     cached = int(result.get("cached") or 0)
                     if total:
-                        card["status"].setText(f"🎥 {total} 场")
+                        card["status"].setText(f"{total} 场")
                         card["status"].setStyleSheet(_status_style("success"))
                         card["status"].setToolTip(
                             f"直播历史已缓存 {cached} 场"
                             f"（本次接口 {total} 场，新增 {result.get('new', 0)} 场，按房间号去重）")
                     else:
                         # 接口只保留最近一年；超期场次仍可从本地历史缓存查看
-                        card["status"].setText(f"🎥 缓存 {cached} 场" if cached else "🎥 0 场")
+                        card["status"].setText(f"缓存 {cached} 场" if cached else "0 场")
                         card["status"].setStyleSheet(
                             _status_style("success" if cached else "muted"))
                         card["status"].setToolTip(
@@ -948,7 +951,7 @@ class TrackerPage(BasePage):
         apply_sync_from_fm(new_items)
         self.reload_accounts()
         self._reload_group_list()
-        self.app.toast(f"✅ 已同步 {len(new_items)} 个账号"
+        self.app.toast(f"已同步 {len(new_items)} 个账号"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     # ---------- 反向：同步到「信息获取」 ----------
@@ -974,7 +977,7 @@ class TrackerPage(BasePage):
             page._reload_account_list()
             page._reload_group_list()
             page._reload_account_settings()
-        self.app.toast(f"✅ 已同步 {len(new_items)} 个账号到「信息获取」"
+        self.app.toast(f"已同步 {len(new_items)} 个账号到「信息获取」"
                        + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
 
     def _acc_row_menu(self, row, pos, url):
@@ -983,8 +986,8 @@ class TrackerPage(BasePage):
         if not url:
             return
         menu = QMenu(row)
-        act_open = menu.addAction("🌐 打开链接（浏览器）")
-        act_copy = menu.addAction("📋 复制链接")
+        act_open = menu.addAction("打开链接（浏览器）")
+        act_copy = menu.addAction("复制链接")
         act = menu.exec(row.mapToGlobal(pos))
         if act == act_open:
             import webbrowser
@@ -1002,7 +1005,7 @@ class TrackerPage(BasePage):
             return
         acc = accounts[index]
         win = QDialog(self)
-        win.setWindowTitle("✏️ 修改追踪账号")
+        win.setWindowTitle("修改追踪账号")
         win.resize(560, 180)
         v = QVBoxLayout(win)
         form = QFormLayout()
@@ -1036,9 +1039,9 @@ class TrackerPage(BasePage):
             self.app.toast("链接不能为空", "warning")
             return
         if not update_account_at(index, name_ed.text().strip(), url_ed.text().strip()):
-            self.app.toast("❌ 修改失败：链接为空或与其他账号重复", "error")
+            self.app.toast("修改失败：链接为空或与其他账号重复", "error")
             return
-        self.app.toast("✅ 已修改账号（历史数据仍挂在原链接下）", "success")
+        self.app.toast("已修改账号（历史数据仍挂在原链接下）", "success")
         self.reload_accounts()
 
     def _delete_account(self, index):
@@ -1091,19 +1094,20 @@ class TrackerPage(BasePage):
             row.customContextMenuRequested.connect(
                 lambda pos, u=acc.get("url", ""): self._acc_row_menu(row, pos, u))
             # 修改账号名/链接（对话框；分组仍用行内控件）
-            edit_btn = icon_button("✏️", "修改账号名/链接", (30, 26), True, "font-size: 12px;",
+            edit_btn = icon_button("", "修改账号名/链接", (30, 26), True, "font-size: 12px;",
                                    on_click=lambda idx=i: self._edit_account(idx))
+            edit_btn.setIcon(line_icon("edit", theme.color("text"), 14))
             h.addWidget(edit_btn)
             # 上移/下移（直接改账号顺序，立即生效）
-            up_btn = icon_button("⬆️", "上移一位", (28, 26), True, "font-size: 12px;",
+            up_btn = icon_button("↑", "上移一位", (28, 26), False, "font-size: 12px;",
                                  on_click=lambda idx=i: self._move_account(idx, -1))
             up_btn.setEnabled(i > 0)
             h.addWidget(up_btn)
-            down_btn = icon_button("⬇️", "下移一位", (28, 26), True, "font-size: 12px;",
+            down_btn = icon_button("↓", "下移一位", (28, 26), False, "font-size: 12px;",
                                    on_click=lambda idx=i: self._move_account(idx, 1))
             down_btn.setEnabled(i < len(accounts) - 1)
             h.addWidget(down_btn)
-            del_btn = QPushButton("✕")
+            del_btn = QPushButton("×")
             del_btn.setFixedSize(30, 26)
             del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
             del_btn.clicked.connect(lambda _=False, idx=i: self._delete_account(idx))
@@ -1111,9 +1115,9 @@ class TrackerPage(BasePage):
             self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
             self.acc_list_layout.addWidget(row)
             self.acc_list_layout.addStretch(1)
-        # 底部统一保存按钮（替代逐行 💾）
+        # 底部统一保存按钮（替代逐行保存按钮）
         bar = QHBoxLayout()
-        self._acc_save_btn = QPushButton("💾 保存全部修改")
+        self._acc_save_btn = QPushButton("保存全部修改")
         self._acc_save_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
         self._acc_save_btn.setEnabled(False)
         self._acc_save_btn.clicked.connect(self._save_all_account_groups)
@@ -1139,7 +1143,7 @@ class TrackerPage(BasePage):
             changed += 1
         if changed:
             save_accounts(accounts)
-            self.app.toast(f"✅ 已保存 {changed} 项分组修改", "success")
+            self.app.toast(f"已保存 {changed} 项分组修改", "success")
         else:
             self.app.toast("没有需要保存的修改", "info")
         self.reload_accounts()
@@ -1149,7 +1153,7 @@ class TrackerPage(BasePage):
         """刷新分组列表 + 添加账号/已配置账号的分组多选菜单。"""
         from tracker.accounts import get_groups
         groups = get_groups()
-        # 刷新「添加账号」的分组多选（按文件序，⬆️⬇️ 排序即调整该顺序）
+        # 刷新「添加账号」的分组多选（按文件序，排序即调整该顺序）
         self.add_group_sel.set_groups(groups)
         # 刷新分组列表
         self._clear_layout(self.group_list_layout)
@@ -1173,15 +1177,15 @@ class TrackerPage(BasePage):
                     f"font-weight: bold; color: {theme.color('link')};")
                 h.addWidget(gid_lbl)
                 h.addWidget(QLabel(gname), 1)
-                up_btn = icon_button("⬆️", "上移一位", (28, 24), True, "font-size: 11px;")
+                up_btn = icon_button("↑", "上移一位", (28, 24), False, "font-size: 11px;")
                 up_btn.setEnabled(pos > 0)
                 up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
                 h.addWidget(up_btn)
-                down_btn = icon_button("⬇️", "下移一位", (28, 24), True, "font-size: 11px;")
+                down_btn = icon_button("↓", "下移一位", (28, 24), False, "font-size: 11px;")
                 down_btn.setEnabled(pos < n - 1)
                 down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
                 h.addWidget(down_btn)
-                del_btn = QPushButton("✕")
+                del_btn = QPushButton("×")
                 del_btn.setFixedSize(30, 22)
                 del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
                 del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
@@ -1215,7 +1219,7 @@ class TrackerPage(BasePage):
             self.gid_entry.clear()
             self.gname_entry.clear()
             self._reload_group_list()
-            self.app.toast(f"✅ 已新建分组：{gid} {gname}", "success")
+            self.app.toast(f"已新建分组：{gid} {gname}", "success")
 
     def _delete_group(self, gid):
         from tracker.accounts import delete_group
@@ -1232,7 +1236,7 @@ class TrackerPage(BasePage):
             self.app.toast("暂无分组，请先在「设置」里新建分组", "warning")
             return
         win = QDialog(self)
-        win.setWindowTitle("📷 按组导出")
+        win.setWindowTitle("按组导出")
         win.setFixedSize(360, 220)
         v = QVBoxLayout(win)
         v.setContentsMargins(16, 16, 16, 14)
@@ -1251,7 +1255,7 @@ class TrackerPage(BasePage):
         sel.setFixedWidth(240)
         v.addWidget(sel, 0, Qt.AlignCenter)
         v.addStretch(1)
-        export_btn = QPushButton("📷 导出 PNG")
+        export_btn = QPushButton("导出 PNG")
         export_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 6px;")
         export_btn.clicked.connect(lambda: do_export())
         v.addWidget(export_btn)
@@ -1274,6 +1278,6 @@ class TrackerPage(BasePage):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
             else:
-                self.app.toast(f"✅ 已导出组 PNG：{result}", "success")
+                self.app.toast(f"已导出组 PNG：{result}", "success")
 
         run_bg(work, done)

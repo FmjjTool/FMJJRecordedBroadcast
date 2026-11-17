@@ -7,7 +7,7 @@
 - 底栏：状态点 + 状态文本 + 计时 + 本场点赞
 - 真实抓取：DouyinLiveFetcher / StatsCollector（开播等待走轮询）
 
-视频录制（含自动回放包录制）已全部迁到顶栏「⏺ 录播」里的「直播录制」窗口，
+视频录制（含自动回放包录制）已全部迁到顶栏「录播」里的「直播录制」窗口，
 本页只负责【仅弹幕】实时抓取与【回放】已导出的回放包。
 """
 
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt import common
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.theme import color as theme_color
 from toolbox.replay_bundle import (
@@ -143,17 +144,17 @@ class DouyinDanmakuPage(BasePage):
         "<p>· <b>实时数据</b>：弹幕 / 礼物 / 进场 / 点赞 / 关注，主播信息卡实时刷新；"
         "礼物打赏榜、消息类别可开关（礼物/聊天/点赞/进入/日志）</p>"
         "<p>· <b>两种模式</b>：仅弹幕（只抓弹幕，不拉视频）/ 回放（导入回放包重演整场）</p>"
-        "<p>· <b>⏺ 录播（顶栏右侧）</b>：视频录制全部在「直播录制」二级窗口——"
+        "<p>· <b>录播（顶栏右侧）</b>：视频录制全部在「直播录制」二级窗口——"
         "抖音 / B站 同源列表，窗口底部切换平台；支持开播自动录制、断流自动重连续录、"
         "按时间/大小分段、录满自动停，多个直播间同时录</p>"
         "<p>· <b>实时落盘</b>：每条弹幕/礼物到达即写入「导出目录/弹幕文件/实时记录/"
         "房间号_日期.jsonl」，切页、误关、进程崩溃都不丢；切页回来搜索条件与历史保留</p>"
-        "<p>· <b>🔁 轮询等开播</b>：未开播按间隔自动重试，主播开播自动接入；"
+        "<p>· <b>轮询等开播</b>：未开播按间隔自动重试，主播开播自动接入；"
         "下播后若开关仍开着自动恢复轮询</p>"
         "<p>· <b>搜索</b>：弹幕区关键字/按人筛选，事件区（点赞/进入/关注/横幅/系统）独立筛选</p>"
-        "<p>· <b>保存与回放</b>：💾 保存弹幕、📊 保存统计；📦 导出/导入/合并回放包"
+        "<p>· <b>保存与回放</b>：保存弹幕、保存统计；导出/导入/合并回放包"
         "（含时间戳与表情图标，回放模式可重演整场）；可勾选自动导出回放包</p>"
-        "<p>· <b>⚙ 设置</b>：深色模式、保持滚动、自动导出等</p>"
+        "<p>· <b>设置</b>：深色模式、保持滚动、自动导出等</p>"
         "<p>· 弹幕数据游客优先获取，不影响账号登录状态，不影响电脑/手机观看直播</p>"
     )
 
@@ -209,14 +210,14 @@ class DouyinDanmakuPage(BasePage):
         outer.setSpacing(4)
 
         # 标题（子类按平台改写文案）
-        self.title_lbl = QLabel("🎬 抖音弹幕 · 实时数据接入",
+        self.title_lbl = QLabel("抖音弹幕 · 实时数据接入",
                                 styleSheet="font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.addWidget(self.title_lbl)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 弹幕姬 · 功能介绍", self.HELP_INTRO))
+        title_row.addWidget(attach_help_overlay(self, "弹幕姬 · 功能介绍", self.HELP_INTRO))
         outer.addLayout(title_row)
 
         # ===== 顶栏：全局控制 =====
@@ -227,7 +228,7 @@ class DouyinDanmakuPage(BasePage):
         top_l = QHBoxLayout(top)
         top_l.setContentsMargins(10, 6, 10, 6)
         # 轮询按钮（点击才开始轮询）：按下=轮询进行中，再点=停止（仅图标，tooltip 说明）
-        self.poll_btn = QPushButton("🔁")
+        self.poll_btn = QPushButton("↻")
         self.poll_btn.setCheckable(True)
         self.poll_btn.setChecked(bool(self.settings.get("poll_enabled", True)))
         self.poll_btn.setToolTip(
@@ -259,23 +260,25 @@ class DouyinDanmakuPage(BasePage):
         self.mode_combo.setToolTip(
             "仅弹幕模式：只抓弹幕，不拉视频流（最省资源）\n"
             "回放模式：导入回放包，弹幕与视频按时间轴同步重演\n"
-            "（要录直播视频请在顶栏「⏺ 录播」里开，本页不再录视频）")
+            "（要录直播视频请在顶栏「录播」里开，本页不再录视频）")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         top_l.addWidget(self.mode_combo)
-        settings_btn = QPushButton("⚙")
+        settings_btn = QPushButton("")
         settings_btn.setToolTip("打开本页详细设置（轮询间隔、导出、过滤等）")
         settings_btn.setFixedWidth(36)
-        settings_btn.setStyleSheet(icon_btn_style(True, "font-size: 16px;"))
+        settings_btn.setStyleSheet(icon_btn_style(False, "font-size: 16px;"))
+        settings_btn.setIcon(line_icon("settings", theme_color("text"), 16))
         settings_btn.clicked.connect(self._open_settings)
         top_l.addWidget(settings_btn)
-        link_btn = QPushButton("🔗")
+        link_btn = QPushButton("")
         link_btn.setToolTip("粘贴直播间链接（支持带一堆参数的推荐页/首页链接），\n"
                             "自动提取房间号并填入")
         link_btn.setFixedWidth(36)
-        link_btn.setStyleSheet(icon_btn_style(True, "font-size: 15px;"))
+        link_btn.setStyleSheet(icon_btn_style(False, "font-size: 15px;"))
+        link_btn.setIcon(line_icon("link", theme_color("text"), 16))
         link_btn.clicked.connect(self._open_link_paste)
         top_l.addWidget(link_btn)
-        self.account_pick_btn = QPushButton("📇 已存账号")
+        self.account_pick_btn = QPushButton("已存账号")
         self.account_pick_btn.setToolTip(
             "从本机已存账号/录播用户里选直播间（信息获取 accounts.txt、\n"
             "直播录制列表、抖音房间缓存、最近连接）；B站空间/抖音主页可解析")
@@ -286,7 +289,7 @@ class DouyinDanmakuPage(BasePage):
         top_l.addStretch(1)
         # 录播：打开「直播录制」二级界面（抖音/B站同源，独立窗口，底部切换平台）
         # 位置按需求放在顶栏右侧、清空按钮左边
-        self.record_win_btn = QPushButton("⏺ 录播")
+        self.record_win_btn = QPushButton("录播")
         self.record_win_btn.setToolTip(
             "打开「直播录制」二级窗口：\n"
             "· 抖音 / B站 两套列表，窗口底部按钮切换，录制任务互不影响\n"
@@ -296,11 +299,12 @@ class DouyinDanmakuPage(BasePage):
             icon_btn_style(True, "font-size: 12px; padding: 3px 8px;"))
         self.record_win_btn.clicked.connect(self._open_live_record)
         top_l.addWidget(self.record_win_btn)
-        clear_btn = QPushButton("🗑")
+        clear_btn = QPushButton("")
         clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
                              "保留房间号、WS 地址等配置")
         clear_btn.setFixedWidth(36)
-        clear_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
+        clear_btn.setStyleSheet(icon_btn_style(False, "font-size: 14px;"))
+        clear_btn.setIcon(line_icon("broom", theme_color("text"), 16))
         clear_btn.clicked.connect(self._clear_all)
         top_l.addWidget(clear_btn)
         outer.addWidget(top)
@@ -310,24 +314,24 @@ class DouyinDanmakuPage(BasePage):
         toolbar.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         tb = QHBoxLayout(toolbar)
         tb.setContentsMargins(10, 4, 10, 4)
-        save_btn = QPushButton("💾 保存弹幕")
+        save_btn = QPushButton("保存弹幕")
         save_btn.clicked.connect(self._save_danmaku_now)
         tb.addWidget(save_btn)
-        render_btn = QPushButton("💬 渲染当前弹幕")
+        render_btn = QPushButton("渲染当前弹幕")
         render_btn.clicked.connect(self._show_danmaku_overlay)
         tb.addWidget(render_btn)
-        export_btn = QPushButton("📦 导出回放包")
+        export_btn = QPushButton("导出回放包")
         export_btn.clicked.connect(self._export_replay_zip)
         tb.addWidget(export_btn)
-        import_btn = QPushButton("📂 导入回放包")
+        import_btn = QPushButton("导入回放包")
         import_btn.clicked.connect(self._pick_replay_zip)
         tb.addWidget(import_btn)
-        merge_btn = QPushButton("🧩 合并回放包")
+        merge_btn = QPushButton("合并回放包")
         merge_btn.setToolTip("选择多个回放包 zip（分几次导出的多段），按时间排序去重后\n"
                              "合并成一个完整回放包（弹幕/礼物/统计数据；视频文件不参与合并）")
         merge_btn.clicked.connect(self._merge_replay_zips_dialog)
         tb.addWidget(merge_btn)
-        self.save_stats_var = QCheckBox("📊 保存统计")
+        self.save_stats_var = QCheckBox("保存统计")
         self.save_stats_var.setChecked(bool(self.settings.get("save_stats", False)))
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
         tb.addWidget(self.save_stats_var)
@@ -356,12 +360,12 @@ class DouyinDanmakuPage(BasePage):
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         bottom.addWidget(self.status_label)
         bottom.addWidget(QLabel("│"))
-        bottom.addWidget(QLabel("⏱ 计时:"))
+        bottom.addWidget(QLabel("计时:"))
         self.timer_label = QLabel("00:00:00")
         self.timer_label.setStyleSheet("font-family: Consolas; font-weight: bold; font-size: 13px;")
         bottom.addWidget(self.timer_label)
         bottom.addWidget(QLabel("│"))
-        bottom.addWidget(QLabel("🛒 本场点赞:"))
+        bottom.addWidget(QLabel("本场点赞:"))
         self.like_label = QLabel("0")
         self.like_label.setStyleSheet("color: palette(link); font-weight: bold;")
         bottom.addWidget(self.like_label)
@@ -411,12 +415,12 @@ class DouyinDanmakuPage(BasePage):
         return "582775732015"
 
     def _clear_room_entry(self):
-        """✕ 按钮：一键清空房间号并聚焦，方便快速输入新房间。"""
+        """按钮：一键清空房间号并聚焦，方便快速输入新房间。"""
         self.room_entry.clear()
         self.room_entry.setFocus()
 
     def _open_room_picker(self):
-        """📇 从本机已存账号 / 录播用户里挑直播间，填入房间号。"""
+        """从本机已存账号 / 录播用户里挑直播间，填入房间号。"""
         try:
             from gui_qt.room_picker import RoomPickerDialog
         except Exception as e:  # noqa: BLE001
@@ -445,7 +449,7 @@ class DouyinDanmakuPage(BasePage):
                        "success")
 
     def _open_live_record(self):
-        """⏺ 录播：打开「直播录制」二级界面，带上当前平台与房间号。"""
+        """录播：打开「直播录制」二级界面，带上当前平台与房间号。"""
         try:
             from gui_qt.live_record_window import open_live_record_window
         except Exception as e:  # noqa: BLE001
@@ -472,7 +476,7 @@ class DouyinDanmakuPage(BasePage):
         for entry in self._chat_log[-self._overlay.canvas.rows:]:
             self._overlay.add_message(entry["kind"], entry["text"], entry["m"], rank=False)
 
-    # ---- 🔗 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
+    # ---- 转房间号：粘贴任意直播间链接，自动提取房号填入 ----
 
     @staticmethod
     def _parse_room_link(text: str) -> str:
@@ -511,12 +515,12 @@ class DouyinDanmakuPage(BasePage):
         return ""
 
     def _open_link_paste(self):
-        """🔗 按钮：粘贴链接 → 提取房间号 → 填入输入框。"""
+        """按钮：粘贴链接 → 提取房间号 → 填入输入框。"""
         from PySide6.QtWidgets import (
             QDialog, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
         )
         dlg = QDialog(self)
-        dlg.setWindowTitle("🔗 转房间号")
+        dlg.setWindowTitle("转房间号")
         dlg.setMinimumWidth(520)
         v = QVBoxLayout(dlg)
         tip = QLabel(
@@ -544,7 +548,7 @@ class DouyinDanmakuPage(BasePage):
             if room or not self._short_link_re().search(txt):
                 cb(room)
                 return
-            result_lbl.setText("⏳ 正在解析短链...")
+            result_lbl.setText("正在解析短链...")
             def run():
                 final = self._resolve_room_text(txt)
                 def done():
@@ -555,10 +559,10 @@ class DouyinDanmakuPage(BasePage):
         def on_parse():
             def show(room):
                 if room:
-                    result_lbl.setText(f"✅ 识别到房间号：{room}")
+                    result_lbl.setText(f"识别到房间号：{room}")
                     result_lbl.setStyleSheet("color: palette(link-visited); font-weight: bold;")
                 else:
-                    result_lbl.setText("❌ 未识别到房间号（检查链接是否完整）")
+                    result_lbl.setText("未识别到房间号（检查链接是否完整）")
                     result_lbl.setStyleSheet("color: palette(bright-text); font-weight: bold;")
             _resolve_async(edit.toPlainText(), show)
 
@@ -573,10 +577,10 @@ class DouyinDanmakuPage(BasePage):
             _resolve_async(edit.toPlainText(), apply)
 
         btn_row = QVBoxLayout()
-        parse_btn = QPushButton("🔍 识别")
+        parse_btn = QPushButton("识别")
         parse_btn.clicked.connect(on_parse)
         btn_row.addWidget(parse_btn)
-        ok_btn = QPushButton("✅ 填入房间号")
+        ok_btn = QPushButton("填入房间号")
         ok_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         ok_btn.clicked.connect(on_apply)
         btn_row.addWidget(ok_btn)
@@ -608,7 +612,7 @@ class DouyinDanmakuPage(BasePage):
         # 标题「主播信息」靠最右侧，其余内容整体居中
         t_row = QHBoxLayout()
         t_row.addStretch(1)
-        t_row.addWidget(QLabel("📺 主播信息", styleSheet="font-weight: bold;"))
+        t_row.addWidget(QLabel("主播信息", styleSheet="font-weight: bold;"))
         v.addLayout(t_row)
 
         self.anchor_fields = {}
@@ -632,7 +636,7 @@ class DouyinDanmakuPage(BasePage):
         cover_wrap.addWidget(self.cover_label)
         cover_wrap.addStretch(1)
         v.addLayout(cover_wrap)
-        cover_btn = QPushButton("💾 保存封面/数据")
+        cover_btn = QPushButton("保存封面/数据")
         cover_btn.clicked.connect(self._save_cover)
         btn_wrap = QHBoxLayout()
         btn_wrap.addStretch(1)
@@ -676,7 +680,7 @@ class DouyinDanmakuPage(BasePage):
         self.now_label.setAlignment(Qt.AlignHCenter)
         self.now_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.now_label)
-        # 备注信息（弹幕姬「⚙ 设置」弹窗可改；保存/切页时刷新）
+        # 备注信息（弹幕姬「设置」弹窗可改；保存/切页时刷新）
         self._remark_container = QWidget()
         self._remark_layout = QVBoxLayout(self._remark_container)
         self._remark_layout.setContentsMargins(0, 0, 0, 0)
@@ -687,7 +691,7 @@ class DouyinDanmakuPage(BasePage):
         parent.addWidget(card, 1)
 
     def refresh_remark_info(self):
-        """按配置重建主播信息卡底部文字（弹幕姬「⚙ 设置」弹窗可改；默认=来源四行）。"""
+        """按配置重建主播信息卡底部文字（弹幕姬「设置」弹窗可改；默认=来源四行）。"""
         from toolbox.config_manager import load_convert_config
         text = str(load_convert_config().get("remark_info") or "")
         lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")
@@ -717,7 +721,7 @@ class DouyinDanmakuPage(BasePage):
         vv = QVBoxLayout(self.video_card)
         vv.setContentsMargins(10, 8, 10, 8)
         head = QHBoxLayout()
-        self.video_title = QLabel("🎬 回放（拖入 zip 回放包，弹幕与视频同步）",
+        self.video_title = QLabel("回放（拖入 zip 回放包，弹幕与视频同步）",
                                   styleSheet="font-weight: bold;")
         head.addWidget(self.video_title)
         head.addStretch(1)
@@ -725,7 +729,7 @@ class DouyinDanmakuPage(BasePage):
         head.addWidget(self.video_status_lbl)
         vv.addLayout(head)
 
-        self.video_label = QLabel("将 zip 回放包拖入窗口\n或点击「📂 导入回放包」")
+        self.video_label = QLabel("将 zip 回放包拖入窗口\n或点击「导入回放包」")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumHeight(260)
         self.video_label.setStyleSheet(
@@ -734,7 +738,7 @@ class DouyinDanmakuPage(BasePage):
 
         # 回放控制行：播放/暂停 + 进度条 + 时间 + 倍速
         self.replay_row = QHBoxLayout()
-        self.replay_btn = QPushButton("⏸")
+        self.replay_btn = QPushButton("▶")
         self.replay_btn.setFixedWidth(40)
         self.replay_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
         self.replay_btn.clicked.connect(self._toggle_replay_pause)
@@ -766,7 +770,7 @@ class DouyinDanmakuPage(BasePage):
         v = QVBoxLayout(self.chat_card)
         v.setContentsMargins(10, 10, 10, 10)
         head = QHBoxLayout()
-        head.addWidget(QLabel("💬 弹幕信息（聊天+礼物）", styleSheet="font-weight: bold;"))
+        head.addWidget(QLabel("弹幕信息（聊天+礼物）", styleSheet="font-weight: bold;"))
         head.addStretch(1)
         self.gift_var = QCheckBox("礼物")
         self.gift_var.setChecked(bool(self.settings.get("filter_gift", True)))
@@ -784,7 +788,7 @@ class DouyinDanmakuPage(BasePage):
         # 搜索栏：关键字搜弹幕/昵称；点击弹幕里的昵称=按此人筛选全部发言及时间点
         search_row = QHBoxLayout()
         self.search_entry = QLineEdit()
-        self.search_entry.setPlaceholderText("🔍 搜索弹幕内容 / 昵称（点击昵称可筛选此人全部发言）")
+        self.search_entry.setPlaceholderText("搜索弹幕内容 / 昵称（点击昵称可筛选此人全部发言）")
         self.search_entry.setClearButtonEnabled(True)
         self._search_timer = QTimer(singleShot=True, interval=300)
         self._search_timer.timeout.connect(self._apply_chat_filter)
@@ -834,9 +838,9 @@ class DouyinDanmakuPage(BasePage):
         self.video_card.setVisible(replay)
         self.replay_row_widget.setVisible(replay)
         if replay:
-            self.video_title.setText("🎬 回放（拖入 zip 回放包，弹幕与视频同步）")
+            self.video_title.setText("回放（拖入 zip 回放包，弹幕与视频同步）")
             if not self._replay:
-                self.video_label.setText("将 zip 回放包拖入窗口\n或点击「📂 导入回放包」")
+                self.video_label.setText("将 zip 回放包拖入窗口\n或点击「导入回放包」")
         else:
             self._stop_replay()
 
@@ -1069,7 +1073,7 @@ class DouyinDanmakuPage(BasePage):
             self.video_player.start(self._replay["video"], is_live=False,
                                     start_sec=self._video_base_sec(),
                                     speed=self._replay["speed"])
-        self.replay_btn.setText("⏸")
+        self.replay_btn.setText("▮▮")
         self._replay_timer = QTimer(self)
         self._replay_timer.timeout.connect(self._replay_tick)
         self._replay_timer.start(200)
@@ -1166,7 +1170,7 @@ class DouyinDanmakuPage(BasePage):
             self.video_player.start(r["video"], is_live=False,
                                     start_sec=self._video_base_sec() + target_ms / 1000.0,
                                     speed=r["speed"])
-        self.replay_btn.setText("⏸")
+        self.replay_btn.setText("▮▮")
         self.replay_slider.setValue(int(target_ms))
         self._update_replay_time(target_ms)
         if not self._replay_timer:
@@ -1263,7 +1267,7 @@ class DouyinDanmakuPage(BasePage):
             self._overlay.set_active(False)
         if r and r.get("zip_dir"):
             remove_tmp_dir(r["zip_dir"])
-        self.replay_btn.setText("⏸")
+        self.replay_btn.setText("▮▮")
         self.replay_slider.setRange(0, 0)
         self.replay_slider.setValue(0)
         self.replay_time_lbl.setText("00:00 / 00:00")
@@ -1288,8 +1292,9 @@ class DouyinDanmakuPage(BasePage):
         self.room_entry.setText(_last_room)
         self.room_entry.returnPressed.connect(self._connect)
         row1.addWidget(self.room_entry, 1)
-        room_pick_btn = QPushButton("📇")
+        room_pick_btn = QPushButton("")
         room_pick_btn.setFixedSize(26, 26)
+        room_pick_btn.setIcon(line_icon("users", theme_color("link"), 15))
         room_pick_btn.setToolTip("从本机已存账号 / 录播用户里选直播间\n"
                                  "（信息获取、直播录制列表、抖音房间缓存、最近连接）")
         room_pick_btn.setFlat(True)
@@ -1298,7 +1303,7 @@ class DouyinDanmakuPage(BasePage):
         room_pick_btn.clicked.connect(self._open_room_picker)
         room_pick_btn.setFocusPolicy(Qt.NoFocus)
         row1.addWidget(room_pick_btn)
-        room_clear_btn = QPushButton("✕")
+        room_clear_btn = QPushButton("×")
         room_clear_btn.setFixedSize(26, 26)
         room_clear_btn.setToolTip("清空房间号，快速输入新房间")
         room_clear_btn.setFlat(True)
@@ -1376,7 +1381,7 @@ class DouyinDanmakuPage(BasePage):
         # 搜索栏：关键字筛点赞/进入/关注/横幅/日志（与中部弹幕搜索同款防抖）
         es_row = QHBoxLayout()
         self.event_search = QLineEdit()
-        self.event_search.setPlaceholderText("🔍 搜索：点赞/进入/关注/横幅/日志")
+        self.event_search.setPlaceholderText("搜索：点赞/进入/关注/横幅/日志")
         self.event_search.setClearButtonEnabled(True)
         self._event_search_timer = QTimer(singleShot=True, interval=300)
         self._event_search_timer.timeout.connect(self._apply_event_filter)
@@ -1398,7 +1403,7 @@ class DouyinDanmakuPage(BasePage):
         dlg.setWindowTitle("弹幕姬设置")
         dlg.resize(500, 660)
         v = QVBoxLayout(dlg)
-        v.addWidget(QLabel("⚙ 弹幕姬设置", styleSheet="font-weight: bold;"))
+        v.addWidget(QLabel("弹幕姬设置", styleSheet="font-weight: bold;"))
 
         def row(label, default):
             r = QHBoxLayout()
@@ -1435,7 +1440,7 @@ class DouyinDanmakuPage(BasePage):
 
         # 备注信息（主播信息卡 UTC+8 时间下方显示的来源文字，可自定义）
         from toolbox.config_manager import load_convert_config, save_convert_config
-        v.addWidget(QLabel("📝 备注信息（显示在主播信息卡 UTC+8 时间下方，每行一条）:",
+        v.addWidget(QLabel("备注信息（显示在主播信息卡 UTC+8 时间下方，每行一条）:",
                            styleSheet="font-weight: bold;"))
         remark_edit = QPlainTextEdit()
         remark_edit.setPlaceholderText("抖音：歆慕\n微博：歆慕XINMU\nb站：歆慕XINMU\n使用信息请标明来源")
@@ -1479,7 +1484,7 @@ class DouyinDanmakuPage(BasePage):
             dlg.accept()
             self.app.toast("设置已保存", "success")
 
-        save_btn = QPushButton("💾 保存")
+        save_btn = QPushButton("保存")
         save_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         save_btn.clicked.connect(save)
         v.addWidget(save_btn)
@@ -1768,7 +1773,7 @@ class DouyinDanmakuPage(BasePage):
         if self._poll_timer and self._poll_started_at is not None:
             interval = max(15, int(self.settings.get("poll_interval", 60) or 60))
             remain = interval - (time.monotonic() - self._poll_started_at)
-            self.poll_countdown.setText(f"⏱ {max(0, int(remain))}s")
+            self.poll_countdown.setText(f"{max(0, int(remain))}s")
         else:
             self.poll_countdown.setText("")
 
@@ -1868,7 +1873,7 @@ class DouyinDanmakuPage(BasePage):
         tip = QLabel("检测到抖音风控\n请在弹出的浏览器窗口中拖动滑块完成验证码\n完成后点击下方按钮继续连接")
         tip.setAlignment(Qt.AlignCenter)
         v.addWidget(tip)
-        cont_btn = QPushButton("✅ 验证完成，继续连接")
+        cont_btn = QPushButton("验证完成，继续连接")
         cont_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 6px;")
         cont_btn.clicked.connect(lambda: self._continue_after_captcha(dlg))
         v.addWidget(cont_btn)
@@ -2104,7 +2109,7 @@ class DouyinDanmakuPage(BasePage):
         elif name == "进场":
             if m.get("memberCount"):
                 set_field("online_count", m["memberCount"])
-            self._log_event(f"{ts} 💚 {text}")
+            self._log_event(f"{ts} [进场] {text}")
         elif name == "点赞":
             # likeTotal 为本场累计点赞总数（弹幕姬行为），缺失时退化为 +1
             if m.get("likeTotal"):
@@ -2113,11 +2118,11 @@ class DouyinDanmakuPage(BasePage):
                 self._like_count += 1
             self.like_label.setText(f"{self._like_count:,}")
             self.anchor_fields["like_count"].setText(f"{self._like_count:,}")
-            self._log_event(f"{ts} 👍 {text}")
+            self._log_event(f"{ts} [点赞] {text}")
         elif name == "关注":
             if m.get("followCount"):
                 set_field("anchor_fans", m["followCount"])
-            self._log_event(f"{ts} ⭐ {text}")
+            self._log_event(f"{ts} {text}")
         elif name == "在线人数":
             # WebcastRoomUserSeqMessage：静默更新左栏统计（真实数字，非"3万"文本）
             # 注意 set_field 内部自行格式化，必须传原始 int（传 "36,680" 字符串
@@ -2138,7 +2143,7 @@ class DouyinDanmakuPage(BasePage):
             # 全量仍进导出快照
             if text and text != self._last_banner_text:
                 self._last_banner_text = text
-                self._log_event(f"{ts} 📢 {text}")
+                self._log_event(f"{ts} {text}")
         else:
             if text:
                 self._log_event(f"{ts} [{name}] {text}")
@@ -2156,11 +2161,11 @@ class DouyinDanmakuPage(BasePage):
         self._update_event_count()
 
     def _event_visible(self, text):
-        """事件行是否显示：类别复选框（👍点赞/💚进入/其余=日志）+ 文字筛选。"""
-        if "👍" in text:
+        """事件行是否显示：类别复选框（点赞/进入/其余=日志）+ 文字筛选。"""
+        if "[点赞]" in text:
             if not self.like_var.isChecked():
                 return False
-        elif "💚" in text:
+        elif "[进场]" in text:
             if not self.enter_var.isChecked():
                 return False
         elif not self.log_var.isChecked():
@@ -2541,7 +2546,7 @@ class DouyinDanmakuPage(BasePage):
         if d is not None and c is not None and d != c:
             body = f"{body}（+{d}）"
         gift_col = theme_color("warning")
-        return (f'{self._ts_html(ts)} 🎁 {self._nick_html(m.get("nickname"))}'
+        return (f'{self._ts_html(ts)} {self._nick_html(m.get("nickname"))}'
                 f'{icon_h}<span style="color:{gift_col}; font-weight:bold">{body}</span>')
 
     def _on_status(self, status, msg, _source=None):
@@ -2590,9 +2595,9 @@ class DouyinDanmakuPage(BasePage):
                     if not was_waiting:
                         self.app.toast(
                             f"主播当前未开播：每{interval}秒自动重试中，开播后自动连接；"
-                            "点「🔁 轮询」可取消等待", "info")
+                            "点「轮询」可取消等待", "info")
                 else:
-                    self.status_label.setText("主播未开播（点「🔁 轮询」可自动等待开播）")
+                    self.status_label.setText("主播未开播（点「轮询」可自动等待开播）")
                     self._set_action_btn("连接", "connect")
                     if not was_waiting:
                         self.app.toast("主播当前未开播，未建立连接", "info")
@@ -2646,7 +2651,7 @@ class DouyinDanmakuPage(BasePage):
                     # 轮询关着：停在已断开，不自动重连
                     self._waiting_live = False
                     self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
-                    self.status_label.setText("直播已结束（点「🔁 轮询」可自动等待下次开播）")
+                    self.status_label.setText("直播已结束（点「轮询」可自动等待下次开播）")
                     self.status_label.setStyleSheet("color: palette(placeholder-text);")
                     self._set_action_btn("连接", "connect")
                 self._setup_poll_timer()

@@ -1,4 +1,4 @@
-"""腾讯文档 · 中间层同步器（内嵌在「腾讯文档监控」的「🧩 中间层同步」页签）。
+"""腾讯文档 · 中间层同步器（内嵌在「腾讯文档监控」的「中间层同步」页签）。
 
 比对本地「已获取」/增量数据库与已同步的腾讯表格，把尚未上传的条目按
 「官方动态」列标准整理成表格：可一键复制 TSV 手工粘贴，也可在勾选确认后
@@ -117,7 +117,7 @@ class _UploadDialog(QDialog):
         self.all_btn = QPushButton("全选")
         self.none_btn = QPushButton("全不选")
         self.cancel_btn = QPushButton("取消")
-        self.ok_btn = QPushButton("⬆ 开始上传")
+        self.ok_btn = QPushButton("开始上传")
         self.ok_btn.setProperty("variant", "primary")
         row.addWidget(self.all_btn)
         row.addWidget(self.none_btn)
@@ -275,12 +275,12 @@ class TcDocBridgePanel(QWidget):
         self.account_btn.setMenu(self._account_menu)
         top.addWidget(self.account_btn)
 
-        self.compare_btn = QPushButton("🔄 重新比对")
+        self.compare_btn = QPushButton("重新比对")
         self.compare_btn.clicked.connect(self._run_compare)
         top.addWidget(self.compare_btn)
         top.addStretch(1)
 
-        self.upload_btn = QPushButton("⬆ 上传到腾讯文档")
+        self.upload_btn = QPushButton("上传到腾讯文档")
         self.upload_btn.setToolTip(
             "把清单中勾选的记录连同本地图片上传到腾讯文档（仅官方动态 / 直播记录，"
             "需在弹窗里确认勾选；已有链接的记录自动跳过）")
@@ -288,7 +288,7 @@ class TcDocBridgePanel(QWidget):
         self.upload_btn.clicked.connect(self._open_upload)
         top.addWidget(self.upload_btn)
 
-        self.copy_btn = QPushButton("📋 复制全部（TSV）")
+        self.copy_btn = QPushButton("复制全部（TSV）")
         self.copy_btn.setProperty("variant", "primary")
         self.copy_btn.setToolTip("复制全部待同步行（不含表头），到腾讯文档表格末尾粘贴")
         self.copy_btn.setEnabled(False)
@@ -343,18 +343,18 @@ class TcDocBridgePanel(QWidget):
         layout.addWidget(self.progress_row)
 
         bottom = QHBoxLayout()
-        self.status = QLabel("选中行可单行复制；上传需点「⬆ 上传到腾讯文档」并确认勾选。")
+        self.status = QLabel("选中行可单行复制；上传需点「上传到腾讯文档」并确认勾选。")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: #888;")
         bottom.addWidget(self.status, 1)
-        self.copy_images_btn = QPushButton("🖼 复制全部图片")
+        self.copy_images_btn = QPushButton("复制全部图片")
         self.copy_images_btn.setToolTip(
             "把检测到的图片下载后复制到剪贴板，可直接粘贴到腾讯文档"
             "（有多少张复制多少张，不参与 TSV 粘贴）")
         self.copy_images_btn.setEnabled(False)
         self.copy_images_btn.clicked.connect(self._copy_all_images)
         bottom.addWidget(self.copy_images_btn)
-        self.copy_row_btn = QPushButton("📋 复制选中行")
+        self.copy_row_btn = QPushButton("复制选中行")
         self.copy_row_btn.setToolTip("复制表格里选中的行（Ctrl+C 同样可用，可多选），不含表头")
         self.copy_row_btn.setEnabled(False)
         self.copy_row_btn.clicked.connect(self._copy_selected_rows)
@@ -438,7 +438,7 @@ class TcDocBridgePanel(QWidget):
                 self.target_combo.clear()
                 self.target_combo.blockSignals(False)
                 self._clear_result()
-                self.summary.setText(f"❌ 表格清单读取失败：{err}；可重新比对重试")
+                self.summary.setText(f"表格清单读取失败：{err}；可重新比对重试")
                 self._show_table()
                 return
             self._targets, cfg = result
@@ -448,7 +448,7 @@ class TcDocBridgePanel(QWidget):
         thread = run_bg(work, done, owner=self._task_owner)
         if thread is None:
             self._targets_loading = False
-            self.summary.setText("❌ 表格清单读取任务未启动，请重试")
+            self.summary.setText("表格清单读取任务未启动，请重试")
             self._show_table()
             return
         self._targets_watchdog.start(self.TARGETS_TIMEOUT_MS)
@@ -464,7 +464,7 @@ class TcDocBridgePanel(QWidget):
             self.target_combo.blockSignals(False)
             self._clear_result()
             self.summary.setText(
-                "本地还没有可用的表格数据：请先在「📋 表格同步」页签同步一次表格。")
+                "本地还没有可用的表格数据：请先在「表格同步」页签同步一次表格。")
             self._show_table()
             return
 
@@ -639,7 +639,7 @@ class TcDocBridgePanel(QWidget):
                 return
             self._restore_buttons()
             if err:
-                self.status.setText(f"❌ 准备失败：{err}")
+                self.status.setText(f"准备失败：{err}")
                 QMessageBox.warning(self, "准备失败", str(err))
                 self._maybe_run_pending_compare()
                 return
@@ -660,7 +660,7 @@ class TcDocBridgePanel(QWidget):
             self._busy = False
             self._hide_progress()
             self._restore_buttons()
-            self.status.setText("❌ 上传准备任务未启动，请重试")
+            self.status.setText("上传准备任务未启动，请重试")
             self._maybe_run_pending_compare()
 
     def _start_upload(self, target: dict, records: list[dict]) -> None:
@@ -673,7 +673,7 @@ class TcDocBridgePanel(QWidget):
         self._upload_records_total = len(records)
         self._upload_images_total = total_images
         self._progress_start(len(records) + total_images)
-        self.status.setText(f"⏳ 正在上传 {len(records)} 条记录 / {total_images} 张图片…")
+        self.status.setText(f"正在上传 {len(records)} 条记录 / {total_images} 张图片…")
         for button in (self.upload_btn, self.copy_btn, self.compare_btn):
             button.setEnabled(False)
 
@@ -681,19 +681,19 @@ class TcDocBridgePanel(QWidget):
             phase = event.get("phase")
             if phase == "image_uploaded":
                 common.post_to_main(self._progress_tick, 0, 1)
-                common.post_to_main(self.status.setText, f"🖼 上传图片：{event.get('name')}")
+                common.post_to_main(self.status.setText, f"上传图片：{event.get('name')}")
             elif phase == "record_created":
                 common.post_to_main(self._progress_tick, 1, 0)
                 common.post_to_main(
                     self.status.setText,
-                    f"✅ 已新增：{str(event.get('title') or '')[:40]}"
+                    f"已新增：{str(event.get('title') or '')[:40]}"
                     f"（{event.get('image_count')} 张图）")
             elif phase == "readback":
                 state = "读回校验通过" if event.get("verified") else "读回校验失败"
                 common.post_to_main(self.status.setText,
-                                    f"🔍 {state}：{str(event.get('title') or '')[:40]}")
+                                    f"{state}：{str(event.get('title') or '')[:40]}")
             elif phase == "stopped":
-                common.post_to_main(self.status.setText, f"⚠ 已停止：{event.get('error')}")
+                common.post_to_main(self.status.setText, f"已停止：{event.get('error')}")
 
         def work():
             from toolbox.tcdoc import import_pending as pending
@@ -712,7 +712,7 @@ class TcDocBridgePanel(QWidget):
             if self._closed:
                 return
             if err:
-                self.status.setText(f"❌ 上传失败：{err}")
+                self.status.setText(f"上传失败：{err}")
                 QMessageBox.warning(self, "上传失败", str(err))
                 self._restore_buttons()
                 self._progress_finish(3000)
@@ -722,7 +722,7 @@ class TcDocBridgePanel(QWidget):
             failed = [item for item in receipt.get("added") or [] if not item.get("verified")]
             duplicates = receipt.get("duplicates") or []
             self.status.setText(
-                f"✅ 上传完成：新增 {added} 条 · 跳过 {skipped} 条 · "
+                f"上传完成：新增 {added} 条 · 跳过 {skipped} 条 · "
                 f"图片 {receipt.get('uploaded_images', 0)} 张 · "
                 f"缺图 {receipt.get('missing_images', 0)} 张"
                 + (f" · 读回异常 {len(failed)} 条" if failed else "")
@@ -746,19 +746,19 @@ class TcDocBridgePanel(QWidget):
             self._busy = False
             self._progress_finish(3000)
             self._restore_buttons()
-            self.status.setText("❌ 上传任务未启动，请重试")
+            self.status.setText("上传任务未启动，请重试")
             self._maybe_run_pending_compare()
 
     def _refresh_archive(self, target: dict) -> None:
         """上传后重新抓一遍该文档，否则中间层仍按旧存档判定「还没同步」。"""
         doc = {"key": target.get("doc_key"), "name": target.get("doc_name") or "",
                "url": target.get("doc_url") or "", "kind": "smartsheet"}
-        self.status.setText("✅ 上传完成，正在刷新本地存档…")
+        self.status.setText("上传完成，正在刷新本地存档…")
 
         def work():
             return tc_engine.job.sync_tables(
                 [doc], on_status=lambda text: common.post_to_main(
-                    self.status.setText, f"⏳ {text}"))
+                    self.status.setText, f"{text}"))
 
         def done(result, err):
             if self._closed:
@@ -766,7 +766,7 @@ class TcDocBridgePanel(QWidget):
             if err:
                 self.status.setText(f"上传已完成，但刷新存档失败：{err}")
             else:
-                self.status.setText("✅ 上传完成，本地存档已刷新。")
+                self.status.setText("上传完成，本地存档已刷新。")
             self.refresh()
 
         run_bg(work, done, owner=self)
@@ -840,12 +840,12 @@ class TcDocBridgePanel(QWidget):
             # 上传/准备等任务还在跑：不切骨架，也不启动第二个比对
             self._compare_pending = True
             if not self._rows:
-                self.status.setText("⏳ 等待当前任务结束后自动比对…")
+                self.status.setText("等待当前任务结束后自动比对…")
             return
         self._compare_req += 1
         if self._rows:
             # 已有结果时保留表格，避免每次重新比对都整块闪骨架
-            self.summary.setText("⏳ 正在重新比对本地数据与腾讯表格…")
+            self.summary.setText("正在重新比对本地数据与腾讯表格…")
             self.compare_btn.setEnabled(False)
         else:
             self._set_loading("正在比对本地数据与腾讯表格…")
@@ -861,7 +861,7 @@ class TcDocBridgePanel(QWidget):
         self._compare_owner = req
 
         try:
-            self.summary.setText("⏳ 正在比对本地数据与腾讯表格…")
+            self.summary.setText("正在比对本地数据与腾讯表格…")
             self.status.setText("本地已获取 + 增量数据库合并去重后比对，不会修改腾讯文档。")
             days = int(self.days_combo.currentData() or 0)
             accounts = self._selected_accounts()
@@ -885,10 +885,10 @@ class TcDocBridgePanel(QWidget):
             self._compare_watchdog.stop()
             if self._rows:
                 self._show_table()
-                self.summary.setText(f"❌ 比对启动失败（保留上次结果）：{exc}")
+                self.summary.setText(f"比对启动失败（保留上次结果）：{exc}")
             else:
                 self._clear_result()
-                self.summary.setText(f"❌ 比对启动失败：{exc}")
+                self.summary.setText(f"比对启动失败：{exc}")
             self._restore_buttons()
             return
         if thread is None:
@@ -897,7 +897,7 @@ class TcDocBridgePanel(QWidget):
             self._compare_watchdog.stop()
             if self._rows:
                 self._show_table()
-            self.summary.setText("❌ 比对任务未启动，请重试")
+            self.summary.setText("比对任务未启动，请重试")
             self._restore_buttons()
             return
         self._compare_watchdog.start(self.COMPARE_TIMEOUT_MS)
@@ -931,11 +931,11 @@ class TcDocBridgePanel(QWidget):
         if err:
             logger.warning("中间层比对失败：%s", err)
             if self._rows:
-                self.summary.setText(f"❌ 比对失败（保留上次结果）：{err}")
+                self.summary.setText(f"比对失败（保留上次结果）：{err}")
                 self._restore_buttons()
             else:
                 self._clear_result()
-                self.summary.setText(f"❌ 比对失败：{err}")
+                self.summary.setText(f"比对失败：{err}")
             return
         self._result = result
         self._fill_table(result["rows"])
@@ -967,12 +967,12 @@ class TcDocBridgePanel(QWidget):
         self._refresh_accounts(result, used_accounts)
         if result["rows"]:
             self.status.setText(
-                f"📋 共 {len(result['rows'])} 行待同步（不含表头；"
+                f"共 {len(result['rows'])} 行待同步（不含表头；"
                 "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
                 "图片可点「复制全部图片」。")
         else:
             self.status.setText(
-                "✅ 没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
+                "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
 
     # ==================== 看门狗 ====================
 
@@ -986,10 +986,10 @@ class TcDocBridgePanel(QWidget):
                        self.TARGETS_TIMEOUT_MS / 1000)
         self._show_table()
         if self._rows:
-            self.summary.setText("❌ 读取表格清单超时，已保留上次结果；请稍后重试")
+            self.summary.setText("读取表格清单超时，已保留上次结果；请稍后重试")
         else:
             self._clear_result()
-            self.summary.setText("❌ 读取表格清单超时；请稍后重新比对重试")
+            self.summary.setText("读取表格清单超时；请稍后重新比对重试")
         self.status.setText("可点「重新比对」重试；若反复超时请查看 logs/app_*.log")
 
     def _on_compare_watchdog(self) -> None:
@@ -1004,11 +1004,11 @@ class TcDocBridgePanel(QWidget):
         self._show_table()
         if self._rows:
             self.summary.setText(
-                f"❌ 比对超时（{seconds} 秒未完成），已保留上次结果，请稍后重试")
+                f"比对超时（{seconds} 秒未完成），已保留上次结果，请稍后重试")
             self._restore_buttons()
         else:
             self._clear_result()
-            self.summary.setText(f"❌ 比对超时（{seconds} 秒未完成），请稍后重试")
+            self.summary.setText(f"比对超时（{seconds} 秒未完成），请稍后重试")
         self.status.setText("可点「重新比对」重试；若反复超时请查看 logs/app_*.log")
 
     def _refresh_accounts(self, result: dict, used_accounts) -> None:
@@ -1101,7 +1101,7 @@ class TcDocBridgePanel(QWidget):
             return
         self._image_busy = True
         self.copy_images_btn.setEnabled(False)
-        self.status.setText(f"⏳ 正在准备{label}的 {len(urls)} 张图片…")
+        self.status.setText(f"正在准备{label}的 {len(urls)} 张图片…")
 
         def work():
             return self._download_images(urls)
@@ -1114,19 +1114,19 @@ class TcDocBridgePanel(QWidget):
                 any(row.get("_images") for row in self._rows)
                 and not self._busy and not self._targets_loading)
             if err:
-                self.status.setText(f"❌ 图片处理失败：{err}")
+                self.status.setText(f"图片处理失败：{err}")
                 return
             paths, failed = result or ([], 0)
             if not paths:
-                self.status.setText("❌ 图片下载失败，未能复制")
+                self.status.setText("图片下载失败，未能复制")
                 return
             self._set_image_clipboard(paths)
             note = f"，失败 {failed} 张" if failed else ""
             self.status.setText(
-                f"✅ 已复制{label} {len(paths)} 张图片内容，可直接到腾讯文档粘贴{note}")
+                f"已复制{label} {len(paths)} 张图片内容，可直接到腾讯文档粘贴{note}")
             if self.app is not None:
                 try:
-                    self.app.toast(f"✅ 已复制 {len(paths)} 张图片", "success")
+                    self.app.toast(f"已复制 {len(paths)} 张图片", "success")
                 except Exception:  # noqa: BLE001 - 提示失败不影响复制
                     pass
 
@@ -1214,10 +1214,10 @@ class TcDocBridgePanel(QWidget):
         if not rows:
             return
         QApplication.clipboard().setText(bridge.to_tsv(rows))
-        self.status.setText(f"✅ 已复制{label}（不含表头），去腾讯文档粘贴即可。")
+        self.status.setText(f"已复制{label}（不含表头），去腾讯文档粘贴即可。")
         if self.app is not None:
             try:
-                self.app.toast(f"✅ 已复制{label}待同步内容", "success")
+                self.app.toast(f"已复制{label}待同步内容", "success")
             except Exception:  # noqa: BLE001 - 提示失败不影响复制
                 pass
 
@@ -1226,10 +1226,10 @@ class TcDocBridgePanel(QWidget):
         if not text:
             return
         QApplication.clipboard().setText(text)
-        self.status.setText(f"✅ 已复制{label}")
+        self.status.setText(f"已复制{label}")
         if self.app is not None:
             try:
-                self.app.toast(f"✅ 已复制{label}", "success")
+                self.app.toast(f"已复制{label}", "success")
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1246,15 +1246,15 @@ class TcDocBridgePanel(QWidget):
         dyn = str(row.get("动态链接(b站)") or "").strip()
 
         menu = QMenu(self.table)
-        act_row = menu.addAction("📋 复制该行（TSV）")
+        act_row = menu.addAction("复制该行（TSV）")
         images = row.get("_images") or []
-        act_images = menu.addAction("🖼 复制该行图片")
+        act_images = menu.addAction("复制该行图片")
         act_images.setEnabled(bool(images))
-        act_page = menu.addAction("🔗 复制作品链接")
+        act_page = menu.addAction("复制作品链接")
         act_page.setEnabled(bool(page or dyn))
         act_dyn = None
         if dyn:
-            act_dyn = menu.addAction("🔗 复制动态链接(b站)")
+            act_dyn = menu.addAction("复制动态链接(b站)")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == act_row:
             self._copy_rows([row], f"第 {row_index + 1} 行")

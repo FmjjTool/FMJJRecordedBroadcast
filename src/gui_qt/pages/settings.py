@@ -35,7 +35,7 @@ class GlobalSettingsPage(BasePage):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
 
-        title = QLabel("⚙️ 全局设置")
+        title = QLabel("全局设置")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         outer.addWidget(title)
 
@@ -49,14 +49,14 @@ class GlobalSettingsPage(BasePage):
         outer.addWidget(scroll)
 
         # ---- 默认工作目录 ----
-        v.addWidget(self._card_title("📁 默认工作文件夹（用于录播工具箱）"))
+        v.addWidget(self._card_title("默认工作文件夹（用于录播工具箱）"))
         wd_row = QHBoxLayout()
         self.workdir_entry = QLineEdit()
         self.workdir_entry.setPlaceholderText("工作目录路径")
         wd_row.addWidget(self.workdir_entry, 1)
-        wd_row.addWidget(self._btn("📂 浏览...", self._browse))
-        wd_row.addWidget(self._btn("💾 保存", self._save))
-        self.workdir_lock_cb = QCheckBox("🔒 锁定工作文件夹")
+        wd_row.addWidget(self._btn("浏览...", self._browse))
+        wd_row.addWidget(self._btn("保存", self._save))
+        self.workdir_lock_cb = QCheckBox("锁定工作文件夹")
         self.workdir_lock_cb.setToolTip("锁定后拖入文件夹不会改变此目录，直到解锁")
         wd_row.addWidget(self.workdir_lock_cb)
         v.addLayout(wd_row)
@@ -67,14 +67,14 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- 统一导出目录 ----
-        v.addWidget(self._card_title("📤 统一导出目录（音乐/已获取/信息获取数据导出）"))
+        v.addWidget(self._card_title("统一导出目录（音乐/已获取/信息获取数据导出）"))
         ex_row = QHBoxLayout()
         self.exportdir_entry = QLineEdit()
         self.exportdir_entry.setPlaceholderText("导出目录路径（默认 download/）")
         ex_row.addWidget(self.exportdir_entry, 1)
-        ex_row.addWidget(self._btn("📂 浏览...", self._browse_export))
-        ex_row.addWidget(self._btn("💾 保存", self._save_export))
-        self.exportdir_lock_cb = QCheckBox("🔒 锁定导出文件夹")
+        ex_row.addWidget(self._btn("浏览...", self._browse_export))
+        ex_row.addWidget(self._btn("保存", self._save_export))
+        self.exportdir_lock_cb = QCheckBox("锁定导出文件夹")
         self.exportdir_lock_cb.setToolTip("锁定后拖入文件夹不会改变此目录，直到解锁")
         ex_row.addWidget(self.exportdir_lock_cb)
         v.addLayout(ex_row)
@@ -88,7 +88,7 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- 主题自动切换（跟随系统 / 定时黑白） ----
-        v.addWidget(self._card_title("🌗 主题自动切换（跟随系统 / 定时黑白）"))
+        v.addWidget(self._card_title("主题自动切换（跟随系统 / 定时黑白）"))
         fs_row = QHBoxLayout()
         self.follow_sys_cb = QCheckBox("跟随系统深浅色")
         self.follow_sys_cb.setToolTip(
@@ -104,17 +104,17 @@ class GlobalSettingsPage(BasePage):
             "启用期间手动切换会在数秒内被拉回目标主题，关闭后手动切换不受影响")
         ts_row.addWidget(self.sched_enable)
         ts_row.addStretch(1)
-        ts_row.addWidget(QLabel("☀ 浅色时间:"))
+        ts_row.addWidget(QLabel("浅色时间:"))
         self.sched_light = QTimeEdit()
         self.sched_light.setDisplayFormat("HH:mm")
         self.sched_light.setFixedWidth(84)
         ts_row.addWidget(self.sched_light)
-        ts_row.addWidget(QLabel("🌙 深色时间:"))
+        ts_row.addWidget(QLabel("深色时间:"))
         self.sched_dark = QTimeEdit()
         self.sched_dark.setDisplayFormat("HH:mm")
         self.sched_dark.setFixedWidth(84)
         ts_row.addWidget(self.sched_dark)
-        ts_row.addWidget(self._btn("💾 保存", self._save_theme_schedule_clicked))
+        ts_row.addWidget(self._btn("保存", self._save_theme_schedule_clicked))
         v.addLayout(ts_row)
         self.sched_status = QLabel("")
         self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
@@ -128,15 +128,15 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- 配置与依赖检查 ----
-        v.addWidget(self._card_title("📦 配置与依赖检查"))
+        v.addWidget(self._card_title("配置与依赖检查"))
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.info_label.setWordWrap(True)
         v.addWidget(self.info_label)
         info_row = QHBoxLayout()
-        info_row.addWidget(self._btn("🔄 刷新信息", self._refresh_info))
-        info_row.addWidget(self._btn("🧹 清理 Python 缓存 (__pycache__)", self._clean_pycache))
-        info_row.addWidget(self._btn("🧹 清理媒体筛选缓存", self._clean_media_sorter_cache))
+        info_row.addWidget(self._btn("刷新信息", self._refresh_info))
+        info_row.addWidget(self._btn("清理 Python 缓存 (__pycache__)", self._clean_pycache))
+        info_row.addWidget(self._btn("清理媒体筛选缓存", self._clean_media_sorter_cache))
         info_row.addStretch(1)
         v.addLayout(info_row)
         self.clean_result_label = QLabel("")
@@ -149,8 +149,8 @@ class GlobalSettingsPage(BasePage):
         self.ffmpeg_entry.setPlaceholderText(
             "留空 = 自动使用系统 PATH；也可填 ffmpeg 所在目录或 ffmpeg.exe 完整路径")
         ff_row.addWidget(self.ffmpeg_entry, 1)
-        ff_row.addWidget(self._btn("📂 浏览...", self._browse_ffmpeg))
-        ff_row.addWidget(self._btn("💾 保存", self._save_ffmpeg))
+        ff_row.addWidget(self._btn("浏览...", self._browse_ffmpeg))
+        ff_row.addWidget(self._btn("保存", self._save_ffmpeg))
         v.addLayout(ff_row)
         self.ffmpeg_status = QLabel("")
         self.ffmpeg_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
@@ -165,11 +165,11 @@ class GlobalSettingsPage(BasePage):
         dep_v.setContentsMargins(10, 8, 10, 8)
         dep_v.setSpacing(4)
         dep_head = QHBoxLayout()
-        dep_title = QLabel("🔍 检测依赖与其他强依赖")
+        dep_title = QLabel("检测依赖与其他强依赖")
         dep_title.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent; border: none;")
         dep_head.addWidget(dep_title)
         dep_head.addStretch(1)
-        self.recheck_btn = QPushButton("🔄 重新检测")
+        self.recheck_btn = QPushButton("重新检测")
         self.recheck_btn.setCursor(Qt.PointingHandCursor)
         self.recheck_btn.clicked.connect(self._refresh_dependencies)
         dep_head.addWidget(self.recheck_btn)
@@ -193,7 +193,7 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- AI Skill 下载（内置 Skill 导出到本地，供 AI 助手使用） ----
-        v.addWidget(self._card_title("🤖 AI Skill 下载（导出内置 Skill 到本地）"))
+        v.addWidget(self._card_title("AI Skill 下载（导出内置 Skill 到本地）"))
         skill_row = QHBoxLayout()
         self._skill_list = list_skills()
         skill_count = len(self._skill_list)
@@ -204,13 +204,13 @@ class GlobalSettingsPage(BasePage):
         skill_info.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         skill_info.setWordWrap(True)
         skill_row.addWidget(skill_info, 1)
-        skill_row.addWidget(self._btn("⬇ 下载 Skill…", self._open_skill_download))
+        skill_row.addWidget(self._btn("下载 Skill…", self._open_skill_download))
         v.addLayout(skill_row)
 
         v.addSpacing(12)
 
         # ---- 配置备份（导出 / 导入） ----
-        v.addWidget(self._card_title("💾 配置备份（导出 / 导入）"))
+        v.addWidget(self._card_title("配置备份（导出 / 导入）"))
         cb_row = QHBoxLayout()
         cb_info = QLabel(
             "打包全部设置为 zip（工作目录 / 登录状态 / 账号列表 / 分组 / 弹幕姬配置等，"
@@ -218,29 +218,29 @@ class GlobalSettingsPage(BasePage):
         cb_info.setProperty("role", "caption")
         cb_info.setWordWrap(True)
         cb_row.addWidget(cb_info, 1)
-        cb_row.addWidget(self._btn("📤 导出配置…", self._export_config))
-        cb_row.addWidget(self._btn("📥 导入配置…", self._import_config))
+        cb_row.addWidget(self._btn("导出配置…", self._export_config))
+        cb_row.addWidget(self._btn("导入配置…", self._import_config))
         v.addLayout(cb_row)
 
         v.addSpacing(12)
 
         # ---- 关于 ----
-        v.addWidget(self._card_title("🛠 关于"))
+        v.addWidget(self._card_title("关于"))
         maker_row = QHBoxLayout()
-        maker_lbl = QLabel("🛠 制作：歆慕")
+        maker_lbl = QLabel("制作：歆慕")
         maker_lbl.setStyleSheet("color: palette(link); font-weight: bold;")
         maker_row.addWidget(maker_lbl)
         maker_row.addStretch(1)
         maker_row.addWidget(self._btn(
-            "🔗 B站主页",
+            "B站主页",
             lambda: self._open_site("B站主页", "https://space.bilibili.com/622821754")))
         maker_row.addWidget(self._btn(
-            "🎵 抖音主页",
+            "抖音主页",
             lambda: self._open_site(
                 "抖音主页",
                 "https://www.douyin.com/user/MS4wLjABAAAANr2f2DlSduMtGo3LtUm2MoxXu9cblLhTs2pJRDDZQHY")))
         maker_row.addWidget(self._btn(
-            "🎤 微博主页",
+            "微博主页",
             lambda: self._open_site("微博主页", "https://weibo.com/u/7262942477")))
         v.addLayout(maker_row)
 
@@ -256,7 +256,7 @@ class GlobalSettingsPage(BasePage):
             site_row = QHBoxLayout()
             for name, url in sites[start:start + 2]:
                 b = self._btn(
-                    f"📋 {name}", lambda n=name, u=url: self._open_site(n, u))
+                    f"{name}", lambda n=name, u=url: self._open_site(n, u))
                 b.setToolTip(url)
                 b.setCursor(Qt.PointingHandCursor)
                 site_row.addWidget(b, 1)
@@ -320,20 +320,20 @@ class GlobalSettingsPage(BasePage):
         wd = self.workdir_entry.text().strip()
         if not wd:
             return
-        lock = "🔒 已锁定 · " if self.workdir_lock_cb.isChecked() else ""
+        lock = "已锁定 · " if self.workdir_lock_cb.isChecked() else ""
         if os.path.isdir(wd):
             ok = has_date_subfolders(wd)
-            hint = "✅ 已检测到日期子文件夹" if ok else "⚠️ 无日期子文件夹"
+            hint = "已检测到日期子文件夹" if ok else "无日期子文件夹"
             self.workdir_status.setText(f"{lock}{hint} · {wd}")
             self.workdir_status.setStyleSheet(
                 "color: palette(link-visited); font-size: 11px;" if ok else "color: palette(bright-text); font-size: 11px;")
         else:
-            self.workdir_status.setText(f"{lock}⚠️ 目录不存在: {wd}")
+            self.workdir_status.setText(f"{lock}目录不存在: {wd}")
             self.workdir_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
 
     def _refresh_exportdir_status(self):
         """导出目录状态行：当前路径 + 锁定标记。"""
-        lock = "🔒 已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
+        lock = "已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
         exd = self.exportdir_entry.text().strip() or str(get_export_dir())
         self.exportdir_status.setText(f"{lock}当前: {exd}")
         self.exportdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
@@ -382,8 +382,8 @@ class GlobalSettingsPage(BasePage):
     def _update_sched_status(self):
         from gui_qt import theme
         if self.follow_sys_cb.isChecked():
-            sysd = "🌙 深色" if theme.system_theme() == "dark" else "☀ 浅色"
-            cur = "🌙 深色" if theme.is_dark() else "☀ 浅色"
+            sysd = "深色" if theme.system_theme() == "dark" else "浅色"
+            cur = "深色" if theme.is_dark() else "浅色"
             self.sched_status.setText(
                 f"已启用跟随系统：系统当前为 {sysd} · 主题已同步 {cur}（每 10 秒检测，系统切换即变）")
             self.sched_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
@@ -391,7 +391,7 @@ class GlobalSettingsPage(BasePage):
             want = theme.scheduled_theme()
             if want:
                 self.sched_status.setText(
-                    f"已启用：当前为{'☀ 浅色' if want == 'light' else '🌙 深色'}时段 · "
+                    f"已启用：当前为{'浅色' if want == 'light' else '深色'}时段 · "
                     f"{self.sched_light.time().toString('HH:mm')} 自动切浅色 / "
                     f"{self.sched_dark.time().toString('HH:mm')} 自动切深色（每 10 秒自动检测，到点即变）")
                 self.sched_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
@@ -399,7 +399,7 @@ class GlobalSettingsPage(BasePage):
                 self.sched_status.setText("两个时间点相同，定时无效，请修改")
                 self.sched_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
         else:
-            self.sched_status.setText("未启用：手动点击侧栏主题方块（🌙/☀️）切换")
+            self.sched_status.setText("未启用：手动点击侧栏主题方块切换")
             self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
 
     def _on_follow_system_changed(self):
@@ -433,7 +433,7 @@ class GlobalSettingsPage(BasePage):
             from gui_qt.common import post_to_main
             post_to_main(self.app._check_theme_schedule)
         if not silent:
-            self.app.toast("✅ 主题自动切换设置已保存", "success")
+            self.app.toast("主题自动切换设置已保存", "success")
         self._update_sched_status()
 
     def _browse(self):
@@ -451,7 +451,7 @@ class GlobalSettingsPage(BasePage):
             self.app.toast(f"已选择导出目录: {d}", "info")
 
     def _open_site(self, label, url):
-        """统一站点打开：所有「🔗 打开官方链接」按钮走这里，加 toast 提示。"""
+        """统一站点打开：所有「打开官方链接」按钮走这里，加 toast 提示。"""
         try:
             os.startfile(url)
             self.app.toast(f"已打开「{label}」", "info")
@@ -542,7 +542,7 @@ class GlobalSettingsPage(BasePage):
                 self.app.toast(f"目录创建失败: {e}", "error")
                 return
         set_export_dir(path)
-        lock = "🔒 已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
+        lock = "已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
         self.exportdir_status.setText(f"{lock}当前: {path}")
         self.exportdir_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
         self.app.toast("导出目录已保存", "success")
@@ -552,8 +552,8 @@ class GlobalSettingsPage(BasePage):
         wd = cfg.get("work_dir", "")
         if ffmpeg_ok is None:
             ffmpeg_ok = self._ffmpeg_ok
-        mark = "⏳ 检测中…" if ffmpeg_ok is None else (
-            "✅" if ffmpeg_ok else "⚠️ 未检测到")
+        mark = "检测中…" if ffmpeg_ok is None else (
+            "正常" if ffmpeg_ok else "未检测到")
         return (
             f"项目根: {get_app_root()}\n"
             f"配置目录: {get_config_dir()}\n"
@@ -593,7 +593,7 @@ class GlobalSettingsPage(BasePage):
         exe = find_ffmpeg_exe()
         if exe == "ffmpeg":
             self.ffmpeg_status.setText(
-                "⚠️ 未找到 ffmpeg：转换 / 音频提取 / 版权写入 / 直播录制将不可用，"
+                "未找到 ffmpeg：转换 / 音频提取 / 版权写入 / 直播录制将不可用，"
                 "请安装后加入系统 PATH，或在上方指定位置")
             self.ffmpeg_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
             return
@@ -666,17 +666,17 @@ class GlobalSettingsPage(BasePage):
 
         def done(result, err):
             if err:
-                self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
+                self.clean_result_label.setText(f"清理失败: {str(err)[:50]}")
                 self.clean_result_label.setStyleSheet("color: palette(bright-text); font-size: 11px;")
                 return
             d_n, f_n = result or (0, 0)
             scope = " + 工作目录" if len(targets) > 1 else ""
             self.clean_result_label.setText(
-                f"✅ 清理完成: {d_n} 个 __pycache__ 目录, {f_n} 个 .pyc"
+                f"清理完成: {d_n} 个 __pycache__ 目录, {f_n} 个 .pyc"
                 f"（程序目录{scope}；运行中新生导入会重建，属正常）")
             self.clean_result_label.setStyleSheet("color: palette(link-visited); font-size: 11px;")
 
-        self.clean_result_label.setText("🧹 清理中...")
+        self.clean_result_label.setText("清理中...")
         self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         run_bg(work, done)
 
@@ -696,7 +696,7 @@ class GlobalSettingsPage(BasePage):
 
         def done(result, err):
             if err:
-                self.clean_result_label.setText(f"❌ 清理失败: {str(err)[:50]}")
+                self.clean_result_label.setText(f"清理失败: {str(err)[:50]}")
                 self.clean_result_label.setStyleSheet("color: palette(bright-text); font-size: 11px;")
                 self.app.toast(f"清理媒体筛选缓存失败: {str(err)[:40]}", "error")
                 return
@@ -706,11 +706,11 @@ class GlobalSettingsPage(BasePage):
                     page.clear_memory_caches()
                 except Exception:
                     pass
-            self.clean_result_label.setText("✅ 媒体筛选缓存已清理（导入扫描/缩略图/MD5）")
+            self.clean_result_label.setText("媒体筛选缓存已清理（导入扫描/缩略图/MD5）")
             self.clean_result_label.setStyleSheet("color: palette(link-visited); font-size: 11px;")
             self.app.toast("媒体筛选缓存已清理", "success")
 
-        self.clean_result_label.setText("🧹 清理媒体筛选缓存中...")
+        self.clean_result_label.setText("清理媒体筛选缓存中...")
         self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         run_bg(work, done)
 
@@ -770,7 +770,7 @@ class GlobalSettingsPage(BasePage):
             self._stop_dep_skeleton()
             if err or result is None:
                 self._clear_dep_rows()
-                tip = QLabel(f"❌ 依赖检测失败: {err or '未知错误'}")
+                tip = QLabel(f"依赖检测失败: {err or '未知错误'}")
                 tip.setStyleSheet("color: palette(bright-text); font-size: 11px; padding: 2px;")
                 self.dependency_layout.addWidget(tip)
                 return
@@ -814,7 +814,7 @@ class GlobalSettingsPage(BasePage):
                 h.addWidget(self._skel_bar(width))
             h.addWidget(self._skel_bar(), 1)
             self.dependency_layout.addWidget(row)
-        tip = QLabel("⏳ 正在检测依赖…")
+        tip = QLabel("正在检测依赖…")
         tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px; padding: 2px;")
         self.dependency_layout.addWidget(tip)
         self._skel_phase = 0
@@ -845,7 +845,7 @@ class GlobalSettingsPage(BasePage):
             h.setContentsMargins(8, 4, 8, 4)
             h.setSpacing(8)
             # 状态指示
-            mark = QLabel("❌ 缺失" if not ok else "✅ 已安装")
+            mark = QLabel("缺失" if not ok else "已安装")
             mark.setStyleSheet(
                 "color: %s; font-weight: bold; font-size: 12px;"
                 " background: transparent; border: none;" % (
@@ -881,7 +881,7 @@ class GlobalSettingsPage(BasePage):
             h.addWidget(usage_lbl, 1)
             # 缺失项提供快捷下载/安装按钮
             if not ok:
-                install_btn = QPushButton("⬇ 下载" if key in ("ffmpeg", "ffprobe") else "⬇ 安装")
+                install_btn = QPushButton("下载" if key in ("ffmpeg", "ffprobe") else "安装")
                 install_btn.setCursor(Qt.PointingHandCursor)
                 install_btn.setStyleSheet(
                     "QPushButton { background: palette(bright-text); color: white;"
@@ -902,11 +902,11 @@ class GlobalSettingsPage(BasePage):
         # 总览标签 —— 通过顶部右侧的依赖卡片对外展示
         if missing:
             summary = QLabel(
-                f"⚠️ 检测完成：{missing} 项缺失（已标红 · 点击「⬇  安装」自动修复或跳转到下载页）")
+                f"检测完成：{missing} 项缺失（已标红 · 点击「安装」自动修复或跳转到下载页）")
             summary.setStyleSheet(
                 "color: palette(bright-text); font-size: 11px; padding: 2px;")
         else:
-            summary = QLabel("✅ 所有依赖已就绪")
+            summary = QLabel("所有依赖已就绪")
             summary.setStyleSheet(
                 "color: palette(link-visited); font-size: 11px; padding: 2px;")
         self.dependency_layout.addWidget(summary)
@@ -1009,7 +1009,7 @@ class GlobalSettingsPage(BasePage):
 
     def _pip_install(self, key, name, cmd):
         """pip install 走 subprocess，后台线程不阻塞 UI；结果 toast 提示。"""
-        self.app.toast(f"⏳ 开始安装 {name} ...", "info")
+        self.app.toast(f"开始安装 {name} ...", "info")
 
         def work():
             import subprocess
@@ -1028,7 +1028,7 @@ class GlobalSettingsPage(BasePage):
             if err or not ok:
                 self.app.toast(f"{name} 安装失败: {msg or err}", "error")
             else:
-                self.app.toast(f"✅ {name} 安装完成", "success")
+                self.app.toast(f"{name} 安装完成", "success")
                 self._refresh_dependencies()
 
         run_bg(work, done)
