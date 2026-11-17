@@ -330,6 +330,7 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "livestream_summary_model": "",
     "livestream_summary_chunk_chars": 6000,
     "livestream_summary_output_dir": "",
+    "livestream_summary_mode": "ai",
 }
 
 

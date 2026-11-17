@@ -37,6 +37,7 @@ class PipelineResult:
     text: str
     stats: dict = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
+    mode: str = "ai"
 
 
 def split_chunks(text: str, chunk_chars: int = 6000) -> list[str]:
@@ -250,6 +251,25 @@ def run(text: str, filename: str, client: ChatClient, *,
     }
     progress("done", 100, "完成")
     return PipelineResult(text=output, stats=stats, problems=problems)
+
+
+def run_rule(text: str, filename: str, max_per_dim: int = 30) -> PipelineResult:
+    """完全本地的纯规则模式：不调用模型，只做清洗、纠错与关键词摘录。"""
+    body = rule.strip_srt(text)
+    if not body.strip():
+        raise ValueError("转录内容为空")
+    date_text, date_source = rule.extract_date(filename, body)
+    output, stats = rule.summarize_text(text, filename, max_per_dim=max_per_dim)
+    problems = validate_output(output, date_text)
+    stats.update({
+        "mode": "rule",
+        "chunks": 0,
+        "requests": 0,
+        "date": date_text or "",
+        "date_source": date_source,
+        "problems": len(problems),
+    })
+    return PipelineResult(text=output, stats=stats, problems=problems, mode="rule")
 
 
 def output_filename(text: str) -> str:

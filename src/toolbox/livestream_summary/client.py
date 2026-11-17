@@ -9,11 +9,24 @@ from __future__ import annotations
 import threading
 import time
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 
 CHAT_TIMEOUT = 600
 CONNECT_TIMEOUT = 15
+
+# 本机模型服务（Ollama / LM Studio / llama.cpp）通常不校验 Key
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def is_local_base_url(base_url: str) -> bool:
+    """接口地址是否指向本机；用于允许不填 API Key 的本地模型。"""
+    try:
+        host = urlparse(str(base_url or "").strip()).hostname
+    except ValueError:
+        return False
+    return bool(host) and host.lower() in LOCAL_HOSTS
 
 
 class ChatError(RuntimeError):
@@ -63,15 +76,16 @@ def _content(payload: dict) -> str:
 
 class ChatClient:
     def __init__(self, base_url: str, api_key: str, model: str,
-                 timeout: int = CHAT_TIMEOUT):
+                 timeout: int = CHAT_TIMEOUT, allow_empty_key: bool = False):
         self.base_url = base_url
         self.api_key = (api_key or "").strip()
         self.model = (model or "").strip()
         self.timeout = timeout
+        self.allow_empty_key = allow_empty_key
         self.requests_made = 0
 
     def _validate(self) -> None:
-        if not self.api_key:
+        if not self.api_key and not self.allow_empty_key:
             raise ChatError("还没有保存 API Key")
         if not self.model:
             raise ChatError("还没有填写模型名称")
@@ -92,7 +106,7 @@ class ChatClient:
             "max_tokens": max_tokens,
         }
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self.api_key or 'local'}",
             "Content-Type": "application/json",
         }
         last_error = ""

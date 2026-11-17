@@ -102,6 +102,13 @@ class PipelineTest(unittest.TestCase):
         # 提取 1 次 + 终稿 1 次 + 修正 1 次
         self.assertEqual(len(client.calls), 3)
 
+    def test_run_rule_local(self):
+        result = pipeline.run_rule("下周我要发布一首新歌。", "20260817_直播.txt")
+        self.assertEqual(result.mode, "rule")
+        self.assertEqual(result.stats["requests"], 0)
+        self.assertTrue(result.text.startswith("封茗囧菌 20260817 直播总结"))
+        self.assertEqual(result.problems, [])
+
 
 class RuleTest(unittest.TestCase):
     def test_rule_bundle(self):
@@ -131,18 +138,22 @@ class ConfigTest(unittest.TestCase):
         with patch.object(ls_config, "load_convert_config",
                           return_value={ls_config.CFG_CHUNK_CHARS: 100}):
             self.assertEqual(ls_config.load_settings().chunk_chars, 2000)
+        with patch.object(ls_config, "load_convert_config",
+                          return_value={ls_config.CFG_MODE: "bad"}):
+            self.assertEqual(ls_config.load_settings().mode, "ai")
 
     def test_save_settings_keys(self):
         with patch.object(ls_config, "load_convert_config", return_value={}), \
                 patch.object(ls_config, "save_convert_config") as save:
             ls_config.save_settings(ls_config.Settings(
                 base_url="https://example.com/v1", model="demo-model",
-                chunk_chars=4000, output_dir="D:/out"))
+                chunk_chars=4000, output_dir="D:/out", mode="rule"))
             saved = save.call_args[0][0]
             self.assertEqual(saved[ls_config.CFG_BASE_URL], "https://example.com/v1")
             self.assertEqual(saved[ls_config.CFG_MODEL], "demo-model")
             self.assertEqual(saved[ls_config.CFG_CHUNK_CHARS], 4000)
             self.assertEqual(saved[ls_config.CFG_OUTPUT_DIR], "D:/out")
+            self.assertEqual(saved[ls_config.CFG_MODE], "rule")
 
 
 class ClientTest(unittest.TestCase):
@@ -156,6 +167,18 @@ class ClientTest(unittest.TestCase):
                          "https://x/v1/chat/completions")
         with self.assertRaises(ChatError):
             _endpoint("")
+
+    def test_local_endpoint(self):
+        from toolbox.livestream_summary.client import is_local_base_url
+        self.assertTrue(is_local_base_url("http://127.0.0.1:11434/v1"))
+        self.assertTrue(is_local_base_url("http://localhost:1234/v1"))
+        self.assertFalse(is_local_base_url("https://api.openai.com/v1"))
+
+    def test_empty_key_allowed_for_local(self):
+        ChatClient("http://127.0.0.1:11434/v1", "", "qwen2.5:7b",
+                   allow_empty_key=True)._validate()
+        with self.assertRaises(ChatError):
+            ChatClient("https://api.openai.com/v1", "", "m")._validate()
 
     def test_missing_key(self):
         with self.assertRaises(ChatError):

@@ -23,9 +23,11 @@ CFG_BASE_URL = "livestream_summary_base_url"
 CFG_MODEL = "livestream_summary_model"
 CFG_CHUNK_CHARS = "livestream_summary_chunk_chars"
 CFG_OUTPUT_DIR = "livestream_summary_output_dir"
+CFG_MODE = "livestream_summary_mode"
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_CHUNK_CHARS = 6000
+MODES = {"ai": "大模型总结", "rule": "本地规则保底"}
 
 
 @dataclass
@@ -34,6 +36,7 @@ class Settings:
     model: str = ""
     chunk_chars: int = DEFAULT_CHUNK_CHARS
     output_dir: str = ""
+    mode: str = "ai"
 
 
 def load_settings() -> Settings:
@@ -42,11 +45,13 @@ def load_settings() -> Settings:
         chunk_chars = int(cfg.get(CFG_CHUNK_CHARS) or DEFAULT_CHUNK_CHARS)
     except (TypeError, ValueError):
         chunk_chars = DEFAULT_CHUNK_CHARS
+    mode = str(cfg.get(CFG_MODE) or "ai").strip()
     return Settings(
         base_url=str(cfg.get(CFG_BASE_URL) or DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL,
         model=str(cfg.get(CFG_MODEL) or "").strip(),
         chunk_chars=max(2000, min(20000, chunk_chars)),
         output_dir=str(cfg.get(CFG_OUTPUT_DIR) or "").strip(),
+        mode=mode if mode in MODES else "ai",
     )
 
 
@@ -56,6 +61,7 @@ def save_settings(settings: Settings) -> None:
     cfg[CFG_MODEL] = settings.model.strip()
     cfg[CFG_CHUNK_CHARS] = max(2000, min(20000, int(settings.chunk_chars)))
     cfg[CFG_OUTPUT_DIR] = settings.output_dir.strip()
+    cfg[CFG_MODE] = settings.mode if settings.mode in MODES else "ai"
     save_convert_config(cfg)
 
 

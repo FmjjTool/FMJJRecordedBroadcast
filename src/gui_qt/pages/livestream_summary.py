@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
@@ -26,7 +26,7 @@ from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
 from toolbox import livestream_summary_rule as rule
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import pipeline
-from toolbox.livestream_summary.client import ChatClient
+from toolbox.livestream_summary.client import ChatClient, is_local_base_url
 
 SUPPORTED_FILTER = "直播转录 (*.txt *.srt);;所有文件 (*)"
 
@@ -45,8 +45,8 @@ class LivestreamSummaryPage(BasePage):
 
         root.addWidget(ToolPageHeader(
             "直播总结",
-            "把直播转录 TXT / SRT 交给大模型，按内置总结规则生成规范文本。"
-            "分块提取会按转录长度多次请求；模型不可用时可用纯规则保底脚本。"))
+            "把直播转录 TXT / SRT 按内置总结规则生成规范文本。"
+            "大模型模式需要接口与 Key；本地规则模式完全离线，只做清洗、纠错与关键词摘录。"))
 
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
@@ -161,16 +161,35 @@ class LivestreamSummaryPage(BasePage):
 
     def _build_model_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
-            "🤖 模型接口",
-            "OpenAI 兼容 /chat/completions；Key 加密保存在本机。"
-            "上下文较小的模型请把「每块字数」调小。")
+            "🧭 总结方式",
+            "大模型总结质量更好，但需要接口与 Key；本地规则完全离线，"
+            "不填任何凭据也能出结果，代价是只做原文摘录。")
 
-        card.content_layout.addWidget(QLabel("接口地址"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("🤖 大模型总结（OpenAI 兼容接口）", "ai")
+        self.mode_combo.addItem("📐 本地规则保底（不联网、不用 Key）", "rule")
+        self.mode_combo.setToolTip("本地规则模式不会发起任何网络请求")
+        self.mode_combo.currentIndexChanged.connect(self._sync_mode)
+        card.content_layout.addWidget(self.mode_combo)
+
+        self.model_box = QWidget()
+        box = QVBoxLayout(self.model_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(10)
+
+        box.addWidget(QLabel("接口地址"))
         self.base_url_edit = QLineEdit()
         self.base_url_edit.setPlaceholderText(ls_config.DEFAULT_BASE_URL)
-        card.content_layout.addWidget(self.base_url_edit)
+        box.addWidget(self.base_url_edit)
 
-        card.content_layout.addWidget(QLabel("API Key"))
+        local_hint = QLabel(
+            "本地模型示例：Ollama 填 http://127.0.0.1:11434/v1，"
+            "LM Studio 填 http://127.0.0.1:1234/v1；本机地址可以不填 Key。")
+        local_hint.setProperty("role", "caption")
+        local_hint.setWordWrap(True)
+        box.addWidget(local_hint)
+
+        box.addWidget(QLabel("API Key"))
         key_row = QHBoxLayout()
         key_row.setSpacing(6)
         self.api_key_edit = QLineEdit()
@@ -181,12 +200,12 @@ class LivestreamSummaryPage(BasePage):
         clear_btn.setToolTip("删除本机保存的 API Key")
         clear_btn.clicked.connect(self._clear_api_key)
         key_row.addWidget(clear_btn)
-        card.content_layout.addLayout(key_row)
+        box.addLayout(key_row)
 
-        card.content_layout.addWidget(QLabel("模型名称"))
+        box.addWidget(QLabel("模型名称"))
         self.model_edit = QLineEdit()
-        self.model_edit.setPlaceholderText("例如 deepseek-chat / gpt-4o-mini")
-        card.content_layout.addWidget(self.model_edit)
+        self.model_edit.setPlaceholderText("例如 qwen2.5:7b / deepseek-chat / gpt-4o-mini")
+        box.addWidget(self.model_edit)
 
         chunk_row = QHBoxLayout()
         chunk_row.setSpacing(6)
@@ -198,7 +217,7 @@ class LivestreamSummaryPage(BasePage):
         self.chunk_spin.setToolTip("转录较长时会按该字数分块提取；太小会增加请求次数")
         chunk_row.addWidget(self.chunk_spin)
         chunk_row.addStretch(1)
-        card.content_layout.addLayout(chunk_row)
+        box.addLayout(chunk_row)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
@@ -210,16 +229,18 @@ class LivestreamSummaryPage(BasePage):
 
         self.test_btn = QPushButton("🔌 测试连接")
         self.test_btn.setProperty("variant", "secondary")
-        self.test_btn.setToolTip("发送一次极短的测试请求，会消耗少量额度")
+        self.test_btn.setToolTip("发送一次极短的测试请求；本地模型也会消耗少量算力")
         self.test_btn.clicked.connect(self._test_connection)
         buttons.addWidget(self.test_btn)
         buttons.addStretch(1)
-        card.content_layout.addLayout(buttons)
+        box.addLayout(buttons)
 
         self.key_status = QLabel("API Key：未保存")
         self.key_status.setProperty("role", "caption")
         self.key_status.setWordWrap(True)
-        card.content_layout.addWidget(self.key_status)
+        box.addWidget(self.key_status)
+
+        card.content_layout.addWidget(self.model_box)
         return card
 
     def _build_result_card(self) -> ToolSectionCard:
@@ -270,13 +291,25 @@ class LivestreamSummaryPage(BasePage):
         self.model_edit.setText(settings.model)
         self.chunk_spin.setValue(settings.chunk_chars)
         self.output_dir_edit.setText(settings.output_dir)
+        index = self.mode_combo.findData(settings.mode)
+        self.mode_combo.setCurrentIndex(max(0, index))
         self._refresh_key_status()
+        self._sync_mode()
+
+    def _sync_mode(self):
+        ai = self.mode_combo.currentData() == "ai"
+        self.model_box.setEnabled(ai)
+        if not self._running:
+            self.test_btn.setEnabled(ai)
 
     def _refresh_key_status(self):
         if ls_config.has_api_key():
             self.api_key_edit.clear()
             self.api_key_edit.setPlaceholderText("已保存；留空表示不修改")
             self.key_status.setText("API Key：已保存（本机加密，与 Cookie 存储隔离）")
+        elif is_local_base_url(self.base_url_edit.text()):
+            self.api_key_edit.setPlaceholderText("本机模型可不填")
+            self.key_status.setText("API Key：本机地址可不填")
         else:
             self.api_key_edit.setPlaceholderText("粘贴 API Key")
             self.key_status.setText("API Key：未保存")
@@ -287,6 +320,7 @@ class LivestreamSummaryPage(BasePage):
             model=self.model_edit.text().strip(),
             chunk_chars=int(self.chunk_spin.value()),
             output_dir=self.output_dir_edit.text().strip(),
+            mode=self.mode_combo.currentData() or "ai",
         )
 
     def _save_settings(self, quiet: bool = False) -> bool:
@@ -367,14 +401,17 @@ class LivestreamSummaryPage(BasePage):
         self._save_settings(quiet=True)
         settings = self._collect_settings()
         api_key = ls_config.load_api_key()
-        if not api_key:
-            QMessageBox.warning(self, "缺少 API Key",
-                                "请先在「模型接口」里填写并保存 API Key。")
-            return
-        if not settings.model:
-            QMessageBox.warning(self, "缺少模型名称",
-                                "请填写服务商提供的模型名称，例如 deepseek-chat。")
-            return
+        allow_empty_key = is_local_base_url(settings.base_url)
+        if settings.mode == "ai":
+            if not api_key and not allow_empty_key:
+                QMessageBox.warning(self, "缺少 API Key",
+                                    "请先填写并保存 API Key；\n"
+                                    "如果使用本机模型，把接口地址改成 127.0.0.1 / localhost 即可不填 Key。")
+                return
+            if not settings.model:
+                QMessageBox.warning(self, "缺少模型名称",
+                                    "请填写服务商或本地模型名称，例如 deepseek-chat / qwen2.5:7b。")
+                return
 
         self._running = True
         self._cancel = threading.Event()
@@ -386,15 +423,22 @@ class LivestreamSummaryPage(BasePage):
         self._result_text = ""
         self.result_view.clear()
         self.result_stats.setText("")
-        self._append_log(
-            f"开始总结：{self._source.name} · 模型 {settings.model} · 每块 {settings.chunk_chars} 字")
+        if settings.mode == "rule":
+            self._append_log(f"开始总结（本地规则，不联网）：{self._source.name}")
+        else:
+            self._append_log(
+                f"开始总结：{self._source.name} · 模型 {settings.model} · "
+                f"每块 {settings.chunk_chars} 字")
 
         source = self._source
         cancel = self._cancel
 
         def work():
             text = rule.read_transcript(source)
-            client = ChatClient(settings.base_url, api_key, settings.model)
+            if settings.mode == "rule":
+                return pipeline.run_rule(text, source.name)
+            client = ChatClient(settings.base_url, api_key, settings.model,
+                                allow_empty_key=allow_empty_key)
             return pipeline.run(
                 text, source.name, client,
                 progress=lambda stage, percent, message: post_to_main(
@@ -405,7 +449,7 @@ class LivestreamSummaryPage(BasePage):
             self._running = False
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
-            self.test_btn.setEnabled(True)
+            self._sync_mode()
             if err:
                 if "已停止" in str(err):
                     self.status_label.setText("已停止")
@@ -425,23 +469,23 @@ class LivestreamSummaryPage(BasePage):
         self.result_view.setPlainText(result.text)
         self.progress.setValue(100)
         stats = result.stats
-        self.status_label.setText(
-            f"完成：{stats.get('chunks', 0)} 块 · {stats.get('requests', 0)} 次请求")
+        if result.mode == "rule":
+            summary = f"完成：本地规则 · {stats.get('chars', 0)} 字"
+        else:
+            summary = (f"完成：{stats.get('chunks', 0)} 块 · "
+                       f"{stats.get('requests', 0)} 次请求")
+        self.status_label.setText(summary)
         self.result_stats.setText(
             f"{stats.get('chars', 0)} 字 · 日期 {stats.get('date') or '未识别'}"
             f"（{stats.get('date_source', '-')}）")
-        self._append_log(
-            f"完成：{stats.get('chunks', 0)} 块 · {stats.get('requests', 0)} 次请求 · "
-            f"校验问题 {len(result.problems)} 处")
+        self._append_log(f"{summary} · 校验问题 {len(result.problems)} 处")
 
         target = pipeline.default_output_path(result.text, source, settings.output_dir)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(result.text, encoding="utf-8")
             self._append_log(f"已保存：{target}")
-            self.status_label.setText(
-                f"完成：{stats.get('chunks', 0)} 块 · "
-                f"{stats.get('requests', 0)} 次请求 · 已保存")
+            self.status_label.setText(summary + " · 已保存")
         except OSError as exc:
             self._append_log(f"保存失败：{exc}")
             self.app.toast(f"总结已生成，但保存失败：{exc}", "error")
@@ -464,8 +508,10 @@ class LivestreamSummaryPage(BasePage):
         self._save_settings(quiet=True)
         settings = self._collect_settings()
         api_key = ls_config.load_api_key()
-        if not api_key:
-            QMessageBox.warning(self, "缺少 API Key", "请先填写并保存 API Key。")
+        allow_empty = is_local_base_url(settings.base_url)
+        if not api_key and not allow_empty:
+            QMessageBox.warning(self, "缺少 API Key",
+                                "请先填写并保存 API Key；本机模型地址可以不填。")
             return
         if not settings.model:
             QMessageBox.warning(self, "缺少模型名称", "请填写模型名称后再测试。")
@@ -475,7 +521,8 @@ class LivestreamSummaryPage(BasePage):
         self._append_log(f"测试连接：{settings.base_url} · {settings.model}")
 
         def work():
-            return ChatClient(settings.base_url, api_key, settings.model).test_connection()
+            return ChatClient(settings.base_url, api_key, settings.model,
+                              allow_empty_key=allow_empty).test_connection()
 
         def done(result, err):
             self.test_btn.setEnabled(True)
