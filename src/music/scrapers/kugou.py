@@ -115,6 +115,24 @@ class KugouScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
+    def resolve_song_id(self, text: str) -> str:
+        """完整歌曲常存 mixsong 短链；先解析短链页面里的 32 位 hash。"""
+        song_id = self.extract_song_id(text)
+        if song_id:
+            return song_id
+        match = re.search(r"/mixsong/([A-Za-z0-9]+)\.html", text or "")
+        if not match:
+            return ""
+        url = f"https://m.kugou.com/mixsong/{match.group(1)}.html"
+        try:
+            with get_client() as client:
+                resp = client.get(url, headers=make_headers(referer="http://m.kugou.com/"))
+            found = re.search(r"hash[\"']?\s*[:=]\s*[\"']([a-fA-F0-9]{32})", resp.text)
+            return found.group(1) if found else ""
+        except Exception:
+            return ""
+
+    # ------------------------------------------------------------------
     def _get_song_info(self, song_hash: str) -> dict:
         """酷狗单曲信息（song/info 接口，游客可用）"""
         params = {"hash": song_hash}

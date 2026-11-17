@@ -2,8 +2,9 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QListWidgetItem,
-    QPushButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QListWidgetItem, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from gui_qt.common import run_bg
@@ -14,6 +15,101 @@ PLATFORMS = [
     ("kugou", "酷狗音乐"), ("qq", "QQ音乐"), ("netease", "网易云音乐"),
     ("kuwo", "酷我音乐"), ("5sing", "5sing音乐"),
 ]
+
+
+class _CompleteSongDialog(QDialog):
+    """从本地腾讯文档「完整歌曲」快照选一首，只读匹配。"""
+
+    def __init__(self, songs, parent=None):
+        super().__init__(parent)
+        self.songs = list(songs)
+        self.setWindowTitle("从完整歌曲选择")
+        self.resize(880, 560)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(8)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索歌曲名 / 演唱者 / 专辑 / 日期")
+        self.search_edit.textChanged.connect(self._filter)
+        layout.addWidget(self.search_edit)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            ["歌曲名称", "演唱者", "首发日期", "时长", "所属专辑"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(False)
+        self.table.setRowCount(len(self.songs))
+        for row, song in enumerate(self.songs):
+            values = (song.get("title"), song.get("singer"), song.get("date"),
+                      song.get("duration"), song.get("album"))
+            for column, value in enumerate(values):
+                text = str(value or "")
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.table.setItem(row, column, item)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for column, width in ((1, 120), (2, 100), (3, 70), (4, 220)):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+            self.table.setColumnWidth(column, width)
+        self.table.cellDoubleClicked.connect(lambda row, _col: self._accept_row(row))
+        self.table.itemSelectionChanged.connect(self._sync_ok)
+        layout.addWidget(self.table, 1)
+
+        self.count_label = QLabel(f"共 {len(self.songs)} 首")
+        self.count_label.setProperty("role", "caption")
+        layout.addWidget(self.count_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        self.ok_btn = QPushButton("使用选中歌曲")
+        self.ok_btn.setProperty("variant", "primary")
+        self.ok_btn.setEnabled(False)
+        self.ok_btn.clicked.connect(self._accept_selected)
+        buttons.addWidget(self.ok_btn)
+        layout.addLayout(buttons)
+
+        self.search_edit.setFocus()
+
+    def _filter(self, text):
+        keyword = text.strip().lower()
+        for row, song in enumerate(self.songs):
+            haystack = " ".join(str(song.get(key) or "") for key in
+                                ("title", "singer", "album", "date")).lower()
+            self.table.setRowHidden(row, bool(keyword) and keyword not in haystack)
+        self._sync_ok()
+
+    def _current_song(self):
+        rows = self.table.selectionModel().selectedRows()
+        row = rows[0].row() if rows else self.table.currentRow()
+        if row < 0 or self.table.isRowHidden(row):
+            return None
+        return self.songs[row]
+
+    def _sync_ok(self):
+        self.ok_btn.setEnabled(self._current_song() is not None)
+
+    def _accept_row(self, row):
+        if row < 0 or self.table.isRowHidden(row):
+            return
+        self.table.selectRow(row)
+        self.accept()
+
+    def _accept_selected(self):
+        if self._current_song() is not None:
+            self.accept()
+
+    def selected_song(self):
+        return self._current_song()
+
 
 
 class MusicInfoPage(BasePage):
@@ -37,6 +133,10 @@ class MusicInfoPage(BasePage):
         self.search_btn = QPushButton("搜索五平台")
         self.search_btn.clicked.connect(self._search)
         row.addWidget(self.search_btn)
+        self.complete_btn = QPushButton("从完整歌曲选择")
+        self.complete_btn.setToolTip("从腾讯文档「完整歌曲」本地快照选歌，优先用歌曲平台链接取详情")
+        self.complete_btn.clicked.connect(self._open_complete_songs)
+        row.addWidget(self.complete_btn)
         layout.addLayout(row)
 
         # 五列
@@ -123,25 +223,67 @@ class MusicInfoPage(BasePage):
             if err:
                 self.status_label.setText(f"{err}")
                 return
-            for key, _name in PLATFORMS:
-                lst = self.columns[key]["list"]
-                lst.clear()
-                songs = result.get(key, [])
-                self.columns[key]["songs"] = songs
-                if not songs:
-                    it = QListWidgetItem("（无结果）")
-                    it.setFlags(Qt.NoItemFlags)
-                    lst.addItem(it)
-                    continue
-                for j, s in enumerate(songs):
-                    dur = f"{s.duration // 60}:{s.duration % 60:02d}" if s.duration else "?:??"
-                    mode = f"[{s.mode}]" if getattr(s, "mode", "") else ""
-                    it = QListWidgetItem(f"{s.song_name}{mode}  {s.singer} {dur}")
-                    it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                    # 默认勾选第一首（最匹配结果）
-                    it.setCheckState(Qt.Checked if j == 0 else Qt.Unchecked)
-                    lst.addItem(it)
-            self.status_label.setText("搜索完成，勾选歌曲后点「获取」")
+            self._show_results(result, "搜索完成，勾选歌曲后点「获取」")
+
+        run_bg(work, done)
+
+    def _show_results(self, result, status):
+        for key, _name in PLATFORMS:
+            lst = self.columns[key]["list"]
+            lst.clear()
+            songs = result.get(key, [])
+            self.columns[key]["songs"] = songs
+            if not songs:
+                it = QListWidgetItem("（无结果）")
+                it.setFlags(Qt.NoItemFlags)
+                lst.addItem(it)
+                continue
+            for j, s in enumerate(songs):
+                dur = f"{s.duration // 60}:{s.duration % 60:02d}" if s.duration else "?:??"
+                mode = f"[{s.mode}]" if getattr(s, "mode", "") else ""
+                it = QListWidgetItem(f"{s.song_name}{mode}  {s.singer} {dur}")
+                it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+                # 默认勾选第一首（最匹配结果）
+                it.setCheckState(Qt.Checked if j == 0 else Qt.Unchecked)
+                lst.addItem(it)
+        self.status_label.setText(status)
+
+    def _open_complete_songs(self):
+        from toolbox.music_complete_songs import load_complete_songs
+        songs = load_complete_songs()
+        if not songs:
+            self.app.toast("没有找到完整歌曲本地快照，请先在腾讯文档页采集", "warning")
+            return
+        dialog = _CompleteSongDialog(songs, self)
+        if dialog.exec() == QDialog.Accepted:
+            selected = dialog.selected_song()
+            if selected:
+                self._fetch_complete_song(selected)
+
+    def _fetch_complete_song(self, song):
+        """完整歌曲 → 五平台：链接优先，缺失平台回退歌名搜索。"""
+        from toolbox.music_complete_songs import fetch_platform_songs
+        self.singer_entry.setText(song.get("singer") or "")
+        self.song_entry.setText(song.get("title") or "")
+        self.search_btn.setEnabled(False)
+        self.complete_btn.setEnabled(False)
+        self.status_label.setText(f"正在按完整歌曲《{song.get('title')}》匹配五平台...")
+
+        def work():
+            return fetch_platform_songs(song)
+
+        def done(result, err):
+            self.search_btn.setEnabled(True)
+            self.complete_btn.setEnabled(True)
+            if err:
+                self.status_label.setText(f"{err}")
+                return
+            found = sum(len(items) for items in result.values())
+            if not found:
+                self.status_label.setText("完整歌曲链接和歌名搜索都没有返回结果")
+                return
+            self._show_results(
+                result, f"完整歌曲匹配完成：{found} 个平台结果（链接优先，缺失平台已回退歌名搜索）")
 
         run_bg(work, done)
 

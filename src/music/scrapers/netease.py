@@ -211,6 +211,20 @@ class NeteaseScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def extract_song_id(text: str) -> str:
+        """从完整歌曲链接解析网易云歌曲 ID。"""
+        value = (text or "").strip()
+        if not value:
+            return ""
+        if value.isdigit():
+            return value
+        if not re.search(r"/song(?:/|#|$|\?)", value):
+            return ""
+        match = re.search(r"[?&]id=(\d+)", value) or re.search(r"/song/(\d+)", value)
+        return match.group(1) if match else ""
+
+    # ------------------------------------------------------------------
     def get_play_url(self, song_id: str) -> str:
         return f"https://music.163.com/song/media/outer/url?id={song_id}.mp3"
 

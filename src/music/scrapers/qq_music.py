@@ -311,7 +311,8 @@ class QQMusicScraper(BaseScraper):
         s = (text or "").strip()
         if not s:
             return ""
-        m = re.search(r"songDetail/([A-Za-z0-9]+)", s) or re.search(r"songmid=([A-Za-z0-9]+)", s)
+        m = (re.search(r"(?:songDetail/|/song/)([A-Za-z0-9]+)(?:\.html)?", s)
+             or re.search(r"songmid=([A-Za-z0-9]+)", s))
         if m:
             return m.group(1)
         if re.fullmatch(r"[A-Za-z0-9]{8,}", s):

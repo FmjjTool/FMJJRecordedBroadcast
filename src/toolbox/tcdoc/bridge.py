@@ -653,9 +653,9 @@ def _duration_text(seconds) -> str:
     try:
         seconds = int(seconds or 0)
     except (TypeError, ValueError):
-        return ""
+        return "0"
     if seconds <= 0:
-        return ""
+        return "0"
     if seconds >= 3600:
         hours, remain = divmod(seconds, 3600)
         minutes, secs = divmod(remain, 60)
