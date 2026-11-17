@@ -92,12 +92,13 @@ def find_ffmpeg():
 class VideoStreamPlayer:
     """FFmpeg 解码播放器：直播流 URL 或本地视频文件 → on_frame(w, h, rgb) 主线程回调。"""
 
-    def __init__(self, on_frame=None, on_status=None, width=640, fps=15):
+    def __init__(self, on_frame=None, on_status=None, width=640, fps=15, schedule=None):
         self.on_frame = on_frame
         self.on_status = on_status
         self.width = width
         self.height = width * 9 // 16
         self.fps = fps
+        self._schedule = schedule or self._default_schedule
         self._proc = None
         self._reader = None
         self._latest = None          # (w, h, bytes) 最新帧，读帧线程覆盖写
@@ -107,6 +108,13 @@ class VideoStreamPlayer:
         self._source = None
         self._is_live = True
         self._closed = False
+
+    @staticmethod
+    def _default_schedule(delay_ms, callback):
+        """非 UI 调用的兜底调度；GUI 应注入 QTimer.singleShot 等主线程调度。"""
+        timer = threading.Timer(delay_ms / 1000.0, callback)
+        timer.daemon = True
+        timer.start()
 
     # ---------- 生命周期 ----------
     def start(self, source, is_live=True, start_sec=0.0, speed=1.0):
@@ -213,8 +221,7 @@ class VideoStreamPlayer:
                                   "视频播放结束" if not self._is_live else "直播流中断")
 
     def _poll_status(self):
-        """主线程定时渲染：拉最新帧 + 存活检查（递归 singleShot 驱动）。"""
-        from PySide6.QtCore import QTimer
+        """定时渲染：拉最新帧 + 存活检查（由注入的调度器递归驱动）。"""
         frame = self._latest
         if frame is not None and self.on_frame:
             w, h, data = frame
@@ -226,7 +233,7 @@ class VideoStreamPlayer:
             self._emit_status("error", "直播流获取失败（可能未开播或已下播）")
             self.stop()
             return
-        QTimer.singleShot(int(1000 / self.fps), self._poll_status)
+        self._schedule(int(1000 / self.fps), self._poll_status)
 
     def _emit_status(self, state, detail):
         if self.on_status:

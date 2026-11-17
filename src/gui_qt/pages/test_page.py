@@ -1064,7 +1064,8 @@ class TestPage(BasePage):
         if self._replay["video"]:
             from toolbox.live_video import VideoStreamPlayer
             self.video_player = VideoStreamPlayer(
-                on_frame=self._on_video_frame, on_status=self._on_video_status)
+                on_frame=self._on_video_frame, on_status=self._on_video_status,
+                schedule=lambda ms, cb: QTimer.singleShot(ms, cb))
             self.video_player.start(self._replay["video"], is_live=False,
                                     start_sec=self._video_base_sec(),
                                     speed=self._replay["speed"])
@@ -1160,7 +1161,8 @@ class TestPage(BasePage):
             if self.video_player:
                 self.video_player.stop()
             self.video_player = VideoStreamPlayer(
-                on_frame=self._on_video_frame, on_status=self._on_video_status)
+                on_frame=self._on_video_frame, on_status=self._on_video_status,
+                schedule=lambda ms, cb: QTimer.singleShot(ms, cb))
             self.video_player.start(r["video"], is_live=False,
                                     start_sec=self._video_base_sec() + target_ms / 1000.0,
                                     speed=r["speed"])
