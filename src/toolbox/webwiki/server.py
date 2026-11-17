@@ -281,7 +281,7 @@ class SiteService:
         proc = subprocess.Popen(cmd, **kwargs)
         self._proc = proc
         try:
-            from gui_qt.process_tree import assign_job, create_kill_job
+            from toolbox.process_tree import assign_job, create_kill_job
             self._job = create_kill_job()
             if self._job:
                 assign_job(self._job, proc)
@@ -346,7 +346,7 @@ class SiteService:
             return
         if job is not None:
             try:
-                from gui_qt.process_tree import terminate_job
+                from toolbox.process_tree import terminate_job
                 terminate_job(job)
             except Exception:  # noqa: BLE001
                 pass

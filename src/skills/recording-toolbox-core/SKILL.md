@@ -18,7 +18,7 @@ description: "录播工具箱核心保护，任何项目更新前必读。自动
 | 视频操作 | `toolbox_editor` / `EditorPage` | `src/gui_qt/pages/editor.py`、`src/toolbox/edit_engine.py`、`src/toolbox/convert_engine.py`、`src/toolbox/concat_engine.py` |
 | 音频提取 | `toolbox_audio` / `AudioPage` | `src/gui_qt/pages/audio.py`、`src/toolbox/audio_engine.py`、`src/toolbox/asr_engine.py`、`src/gui_qt/asr_settings_dialog.py` |
 | 字幕转换 | `toolbox_subtitle` / `SubtitlePage` | `src/gui_qt/pages/subtitle.py`、`src/toolbox/subtitle_engine.py`；内嵌歌词页 `src/gui_qt/pages/lyrics_tool.py`、`src/toolbox/lyrics_engine.py` |
-| 继续操作 | `toolbox_launcher` / `LauncherPage` | `src/gui_qt/pages/launcher.py`；外部程序启动与关联进程管理 `src/gui_qt/process_tree.py` |
+| 继续操作 | `toolbox_launcher` / `LauncherPage` | `src/gui_qt/pages/launcher.py`；外部程序启动与关联进程管理 `src/toolbox/process_tree.py` |
 | 日历浏览 | `toolbox_calendar` / `CalendarPage` | `src/gui_qt/pages/calendar.py`；日期目录读取复用 `src/toolbox/rename_engine.py` |
 | 文件迁移 | `toolbox_migrate` / `MigratePage` | `src/gui_qt/pages/migrate.py` 内的扫描、复制/剪切、重复项处理及任务逻辑 |
 

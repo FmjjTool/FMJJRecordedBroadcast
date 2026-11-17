@@ -25,7 +25,7 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt import common
 from gui_qt.pages.base import BasePage
-from gui_qt.process_tree import assign_job, create_kill_job, terminate_job
+from toolbox.process_tree import assign_job, create_kill_job, terminate_job
 
 CARD_SOFT_QSS = (
     "QToolButton { background: #eceefb; border: 1px solid #c6ccef;"
