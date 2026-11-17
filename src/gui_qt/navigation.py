@@ -138,6 +138,24 @@ def line_icon(name, color, size=20):
         line(5, 12, 19, 12)
         line(14, 7, 19, 12)
         line(14, 17, 19, 12)
+    elif name == "win_min":
+        # 窗口控制图标：线条比导航图标细，贴近系统标题栏按钮的观感
+        painter.setPen(QPen(QColor(color), 1.4, Qt.SolidLine, Qt.RoundCap))
+        line(6, 12, 18, 12)
+    elif name == "win_max":
+        painter.setPen(QPen(QColor(color), 1.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        rect(6.5, 6.5, 11, 11, 1.2)
+    elif name == "win_restore":
+        painter.setPen(QPen(QColor(color), 1.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        path = QPainterPath(QPointF(9.5, 6.5))
+        path.lineTo(17.5, 6.5)
+        path.lineTo(17.5, 14.5)
+        painter.drawPath(path)
+        rect(6.5, 9.5, 8, 8, 1.2)
+    elif name == "win_close":
+        painter.setPen(QPen(QColor(color), 1.4, Qt.SolidLine, Qt.RoundCap))
+        line(6.5, 6.5, 17.5, 17.5)
+        line(17.5, 6.5, 6.5, 17.5)
     else:
         for x in (4, 14):
             for y in (4, 14):

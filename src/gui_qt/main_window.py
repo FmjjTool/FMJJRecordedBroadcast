@@ -25,6 +25,9 @@ from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
 from gui_qt.page_lifecycle import PageLifecycleManager, PagePolicy, restore_page_state
 from gui_qt.page_preloader import PagePreloader
+from gui_qt.window_chrome import (
+    TitleBar, WindowControlBar, apply_round_corners, install_resize_handles,
+)
 
 
 def _brand_icon_pixmap():
@@ -157,6 +160,8 @@ _EXTRA_TOOLS = {
 }
 
 _SHELL_QSS = """
+QWidget#workbenchShell { border: 1px solid palette(shadow); }
+QWidget#workbenchShell[windowMaximized="true"] { border: none; }
 QWidget#workbenchSidebar { background: palette(base); border-right: 1px solid palette(shadow); }
 QWidget#workbenchNavItems, QWidget#workbenchNavViewport, QScrollArea#workbenchNavScroll,
 QWidget#workbenchNavGroups, QWidget#workbenchSearchResults { background: transparent; border: none; }
@@ -172,10 +177,17 @@ QPushButton#workbenchNavButton:hover { background: palette(alternate-base); colo
 QPushButton#workbenchNavButton:checked { background: palette(midlight); color: palette(link); border-color: palette(midlight); font-weight: bold; }
 QPushButton#workbenchNavButton:focus { border-color: palette(highlight); }
 QFrame#workbenchTopbar { background: palette(base); border: none; border-bottom: 1px solid palette(shadow); }
-QLabel#workbenchContext { color: palette(placeholder-text); background: transparent; font-size: 12px; }
-QLabel#workbenchPageTitle { color: palette(text); background: transparent; font-size: 13px; font-weight: bold; }
-QPushButton#workbenchDirectory { background: transparent; color: palette(placeholder-text); border: none; padding: 7px 10px; text-align: right; font-size: 11px; }
-QPushButton#workbenchDirectory:hover { background: palette(alternate-base); color: palette(link); }
+QLabel#workbenchContext { color: palette(placeholder-text); background: transparent; font-size: 11px; }
+QLabel#workbenchPageTitle { color: palette(text); background: transparent; font-size: 14px; font-weight: bold; }
+QPushButton#workbenchDirectory { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 0; }
+QPushButton#workbenchDirectory:hover { background: palette(alternate-base); border-color: palette(shadow); }
+QFrame#workbenchTopbarDivider { background: palette(shadow); border: none; }
+QPushButton#windowControl { background: transparent; border: none; border-radius: 8px; padding: 0; }
+QPushButton#windowControl:hover { background: palette(alternate-base); }
+QPushButton#windowControl:pressed { background: palette(midlight); }
+QPushButton#windowControlClose { background: transparent; border: none; border-radius: 8px; padding: 0; }
+QPushButton#windowControlClose:hover { background: #e81123; }
+QPushButton#windowControlClose:pressed { background: #c42b1c; }
 QWidget#workbenchCookie { background: palette(window); border: 1px solid palette(shadow); border-radius: 10px; }
 QLabel#workbenchCookieTitle { background: transparent; color: palette(text); font-size: 12px; font-weight: bold; border: none; }
 QCheckBox#workbenchCookieToggle { background: transparent; border: none; font-size: 11px; }
@@ -190,6 +202,10 @@ QLabel#workbenchEmptySearch { background: transparent; color: palette(placeholde
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+
+        # 无边框外壳：系统标题栏隐藏，最小化/最大化/关闭收进顶部栏右侧
+        # （顶部栏同时是拖动区，四边/四角热区负责缩放，见 window_chrome）
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint)
 
         from version import APP_VERSION, APP_DISPLAY_NAME
         self.setWindowTitle(f"{APP_DISPLAY_NAME} v{APP_VERSION} · 制作歆慕")
@@ -227,11 +243,16 @@ class MainWindow(QMainWindow):
         self.current_page = None
 
         central = QWidget()
+        central.setObjectName("workbenchShell")
+        central.setAttribute(Qt.WA_StyledBackground, True)
         central.setStyleSheet(_SHELL_QSS)
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        # 无边框后自己补回窗口边缘缩放：透明热区交给系统做原生 resize
+        self._resize_handles = install_resize_handles(self)
 
         # 左侧导航：外部容器 = 上（可滚动导航）+ 下（固定全局区，不随导航滚动）
         nav_panel = self.sidebar = QWidget()
@@ -385,12 +406,12 @@ class MainWindow(QMainWindow):
     # ==================== 侧栏 ====================
 
     def _build_topbar(self):
-        bar = QFrame()
+        bar = TitleBar()
         bar.setObjectName("workbenchTopbar")
-        bar.setFixedHeight(56)
+        bar.setFixedHeight(54)
         row = QHBoxLayout(bar)
-        row.setContentsMargins(24, 0, 22, 0)
-        row.setSpacing(10)
+        row.setContentsMargins(24, 0, 8, 0)
+        row.setSpacing(4)
         self.context_label = QLabel("总览  / ")
         self.context_label.setObjectName("workbenchContext")
         row.addWidget(self.context_label)
@@ -398,20 +419,30 @@ class MainWindow(QMainWindow):
         self.page_title_label.setObjectName("workbenchPageTitle")
         row.addWidget(self.page_title_label)
         row.addStretch(1)
+        # 工作目录只留图标入口（路径进 tooltip），原来「工作目录 xxx」那行文字
+        # 让位给窗口控制按钮；点击仍直达全局设置里的目录管理。
         self.directory_btn = QPushButton()
         self.directory_btn.setObjectName("workbenchDirectory")
         self.directory_btn.setCursor(Qt.PointingHandCursor)
+        self.directory_btn.setFixedSize(32, 30)
+        self.directory_btn.setIconSize(QSize(16, 16))
         self.directory_btn.clicked.connect(lambda: self.show_page("global_settings"))
-        self.directory_btn.setMaximumWidth(260)
         row.addWidget(self.directory_btn)
-        self._update_directory_label()
+        divider = QFrame()
+        divider.setObjectName("workbenchTopbarDivider")
+        divider.setFixedSize(1, 18)
+        row.addWidget(divider)
+        self.window_controls = WindowControlBar(bar)
+        self.window_controls.minimize_requested.connect(self.showMinimized)
+        self.window_controls.maximize_requested.connect(self.toggle_max_restore)
+        self.window_controls.close_requested.connect(self.close)
+        row.addWidget(self.window_controls)
+        self._update_directory_button()
         return bar
 
-    def _update_directory_label(self):
-        name = os.path.basename(os.path.normpath(self.work_dir)) or self.work_dir
-        label = self.directory_btn.fontMetrics().elidedText(name, Qt.ElideMiddle, 145)
-        self.directory_btn.setText(f"工作目录  {label}")
-        self.directory_btn.setToolTip(f"当前工作目录：{self.work_dir}\n点击在全局设置中管理")
+    def _update_directory_button(self):
+        self.directory_btn.setToolTip(
+            f"当前工作目录：{self.work_dir}\n点击在全局设置中管理")
 
     def _make_nav_button(self, key, title):
         button = QPushButton(title)
@@ -529,6 +560,7 @@ class MainWindow(QMainWindow):
             for key, button in buttons.items():
                 button.setIcon(line_icon(tool_icon_name(key), active if button.isChecked() else normal))
         self.directory_btn.setIcon(line_icon("folder", normal, 16))
+        self.window_controls.refresh_icons()
         self._update_theme_btn()
 
     def _toggle_theme(self):
@@ -870,11 +902,52 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "sidebar"):
             self.sidebar.setFixedWidth(200 if self.width() < 1040 else 228)
-        if hasattr(self, "directory_btn"):
-            self.directory_btn.setMaximumWidth(210 if self.width() < 1040 else 300)
+        handles = getattr(self, "_resize_handles", None)
+        if handles is not None:
+            handles.reposition()
+            handles.set_enabled(not (self.isMaximized() or self.isFullScreen()))
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._sync_window_shell()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 窗口四周圆角交给 DWM（Win11）：整窗（含顶栏/侧栏/页面）一起裁，
+        # 最大化时系统自动恢复直角
+        if not getattr(self, "_corners_ready", False):
+            self._corners_ready = apply_round_corners(self)
+        # 状态栏等后创建的兄弟控件会盖住窗口边缘热区，显示后统一压到最上层
+        handles = getattr(self, "_resize_handles", None)
+        if handles is not None:
+            handles.raise_all()
+
+    def toggle_max_restore(self):
+        """最大化 / 还原（顶部栏标题按钮与双击顶栏共用）。"""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_window_shell()
+
+    def _sync_window_shell(self):
+        """同步外壳：最大化图标、缩放热区、窗口边框。"""
+        maximized = self.isMaximized() or self.isFullScreen()
+        controls = getattr(self, "window_controls", None)
+        if controls is not None:
+            controls.set_maximized(maximized)
+        handles = getattr(self, "_resize_handles", None)
+        if handles is not None:
+            handles.set_enabled(not maximized)
+        shell = self.centralWidget()
+        if shell is not None and shell.property("windowMaximized") != maximized:
+            shell.setProperty("windowMaximized", maximized)
+            shell.style().unpolish(shell)
+            shell.style().polish(shell)
 
     def _refresh_all(self):
-        self._update_directory_label()
+        self._update_directory_button()
         for page in self.pages.values():
             fn = getattr(page, "on_dir_changed", None)
             if fn:
