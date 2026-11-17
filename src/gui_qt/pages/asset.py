@@ -42,6 +42,9 @@ from toolbox.asset_content import (
     docx_to_html, files_summary_html, fmt_size as _fmt_size,
     html_to_content, md_to_html, read_text_file, text_preview_html,
 )
+from toolbox.asset_bilibili import (
+    av_bvid, download_video, dynamic_type, quality_to_qn,
+)
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
     append_scan_cache, scan_assets,
@@ -3398,11 +3401,6 @@ class AssetPage(BasePage):
         """该条目是否被标记为不可下载（auto 纯文本自动 / manual 用户手动）。"""
         return key in self._no_dl["auto"] or key in self._no_dl["manual"]
 
-    def _quality_to_qn(self, label):
-        """全局清晰度 → B站 qn 编号（最高画质返回 None，B站自动选最高逐级降）。"""
-        return {"8K": 127, "杜比视界": 126, "HDR": 125, "4K": 120,
-                "1080P60": 116, "1080P": 80, "720P": 64, "480P": 32}.get(label)
-
     def _dl_threads(self, quiet: bool) -> int:
         """单条下载的线程数：批量模式条目间已并发（每条内部单流防请求风暴）；
         单条点击取「线程」下拉的值（图片并行下 / 大视频 IDM 分段）。"""
@@ -3628,7 +3626,7 @@ class AssetPage(BasePage):
             return
         # 视频动态：从 archive.bvid 取真实 BV 号
         if dtype == "av":
-            bvid = self._bili_av_bvid(it)
+            bvid = av_bvid(it)
             if bvid:
                 vid = bvid
         # 仍是 dyn_ 且拿不到 BV 号 → 退化为图片（封面兜底）
@@ -3659,35 +3657,17 @@ class AssetPage(BasePage):
             bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
         def work():
-            from bilibili_download import download_bilibili_by_bvid
             from auth import get_cookie
             from toolbox.config_manager import get_export_subdir
             out_dir = str(get_export_subdir("video_data"))
-            vpath = download_bilibili_by_bvid(
-                vid, quality=self._quality_to_qn(common.CURRENT_QUALITY),
-                cookie=get_cookie("bilibili") or "",
-                out_dir=out_dir, title=it.get("title", ""),
-                author=it.get("author", ""), publish_time=it.get("publish_time", ""),
+            return download_video(
+                it, qn=quality_to_qn(common.CURRENT_QUALITY),
+                cookie=get_cookie("bilibili") or "", out_dir=out_dir,
                 threads=self._dl_threads(quiet),
-                progress_cb=(lambda d, t: bridge.emit_progress(int(d), int(t), "视频流")),
+                progress_cb=lambda d, t: bridge.emit_progress(int(d), int(t), "视频流"),
                 seg_progress_cb=(lambda i, d, t: card.handle_event("seg", int(i), int(d), int(t)))
                 if card is not None else None,
             )
-            # 同步下载官方封面：与视频同名 .jpg（改名索引），列表即可显示本地缩略图
-            cover = (it.get("cover_url") or "").strip()
-            if cover and vpath:
-                try:
-                    from media_downloader import _download_one
-                    if cover.startswith("//"):
-                        cover = "https:" + cover
-                    cpath = os.path.splitext(vpath)[0] + ".jpg"
-                    _download_one(cover, cpath, {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                      "AppleWebKit/537.36",
-                        "Referer": "https://www.bilibili.com/"})
-                except Exception:
-                    pass
-            return vpath
 
         def done(result, err):
             ok = (err is None) and bool(result) and os.path.exists(result)
@@ -3721,39 +3701,7 @@ class AssetPage(BasePage):
         run_bg(work, done)
 
     def _bili_dynamic_type(self, it) -> str:
-        """返回 B站动态类型：'draw'=图文动态 / 'av'=视频动态 / ''=非动态。"""
-        fp = it.get("file_path", "")
-        if not fp:
-            return ""
-        raw = fp.replace(".json", "_raw.json")
-        if not os.path.exists(raw):
-            return ""
-        try:
-            rd = json.load(open(raw, encoding="utf-8"))
-            t = (rd.get("type", "") or "").upper()
-            if "DRAW" in t:
-                return "draw"
-            if "AV" in t or "DYNAMIC" in t:
-                return "av"
-            return ""
-        except Exception:
-            return ""
-
-    def _bili_av_bvid(self, it) -> str:
-        """从 B站视频动态 raw.json 提取 archive.bvid（真实 BV 号）。"""
-        fp = it.get("file_path", "")
-        if not fp:
-            return ""
-        raw = fp.replace(".json", "_raw.json")
-        if not os.path.exists(raw):
-            return ""
-        try:
-            rd = json.load(open(raw, encoding="utf-8"))
-            major = ((rd.get("modules", {}) or {}).get("module_dynamic", {}) or {}).get("major", {}) or {}
-            arch = major.get("archive", {}) or {}
-            return arch.get("bvid", "") or ""
-        except Exception:
-            return ""
+        return dynamic_type(it)
 
     def _download_video_item(self, it, on_finished=None, quiet=False, sub_bridge=None, cancel_ev=None):
         """抖音：直链有时效性（过期 403），下载前用 video_id 重新解析拿新直链。
