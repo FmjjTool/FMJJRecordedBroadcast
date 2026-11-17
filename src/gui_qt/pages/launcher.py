@@ -28,13 +28,16 @@ from gui_qt.pages.base import BasePage
 from toolbox.process_tree import assign_job, create_kill_job, terminate_job
 
 CARD_SOFT_QSS = (
-    "QToolButton { background: #eceefb; border: 1px solid #c6ccef;"
-    " border-radius: 16px; font-size: 12px; color: #3a3f6d; padding: 6px; }"
-    "QToolButton:hover { background: #dfe3f8; }")
+    "QToolButton { background: palette(alternate-base);"
+    " border: 1px solid palette(shadow);"
+    " border-radius: 16px; font-size: 12px; color: palette(text); padding: 6px; }"
+    "QToolButton:hover { background: palette(midlight); }")
 CARD_LINK_QSS = (
-    "QToolButton { background: #e8f5ee; border: 1px solid #b7e0c8;"
-    " border-radius: 16px; font-size: 12px; color: #1d5c3a; padding: 6px; }"
-    "QToolButton:hover { background: #d4eddf; }")
+    "QToolButton { background: palette(midlight);"
+    " border: 1px solid palette(shadow);"
+    " border-radius: 16px; font-size: 12px; color: palette(link-visited); padding: 6px; }"
+    "QToolButton:hover { background: palette(alternate-base);"
+    " border-color: palette(link-visited); }")
 
 # 图标浮动缩放区间：下限保证小窗口也清晰可见，上限防止大窗口溢出卡片
 ICON_MIN, ICON_MAX = 88, 168
@@ -102,14 +105,16 @@ class LauncherPage(BasePage):
         tree_row = QHBoxLayout()
         hint = QLabel("跟随进程树为每项单独设置：在「设置」页配置行勾选，"
                       "勾选项启动后纳入进程树，本工具退出时一并关闭")
-        hint.setStyleSheet("color: #5a6072; font-size: 11px;")
+        hint.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         tree_row.addWidget(hint, 1)
         self.stop_all_btn = QPushButton("⏹ 停止已链接软件")
-        self.stop_all_btn.setStyleSheet("background: #c62828; color: white; padding: 4px 12px;")
+        self.stop_all_btn.setProperty("variant", "danger")
         self.stop_all_btn.clicked.connect(self._stop_all_linked)
         tree_row.addWidget(self.stop_all_btn)
-        self.linked_lbl = QLabel("", styleSheet="color: #5a6072; font-size: 11px;")
+        self.linked_lbl = QLabel(
+            "", styleSheet="color: palette(placeholder-text); font-size: 11px;")
         tree_row.addWidget(self.linked_lbl)
         layout.addLayout(tree_row)
 
@@ -140,7 +145,8 @@ class LauncherPage(BasePage):
         nav.addWidget(self.prev_btn)
         nav.addStretch(1)
         self.page_lbl = QLabel("")
-        self.page_lbl.setStyleSheet("color: #5a6072; font-size: 12px;")
+        self.page_lbl.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 12px;")
         nav.addWidget(self.page_lbl)
         nav.addStretch(1)
         self.next_btn = QPushButton("下一页 ›")
@@ -352,11 +358,11 @@ class LauncherPage(BasePage):
         add_btn.clicked.connect(self._add_item)
         bar.addWidget(add_btn)
         link_btn = QPushButton("🔗 添加链接")
-        link_btn.setStyleSheet("background: #1a5c2a; color: white;")
+        link_btn.setProperty("variant", "secondary")
         link_btn.clicked.connect(self._add_link)
         bar.addWidget(link_btn)
         save_btn = QPushButton("💾 保存并刷新面板")
-        save_btn.setStyleSheet("background: #2e7d32; color: white;")
+        save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self._save_and_refresh)
         bar.addWidget(save_btn)
         bar.addStretch(1)
@@ -373,14 +379,17 @@ class LauncherPage(BasePage):
         b.setCursor(Qt.PointingHandCursor)
         if danger:
             b.setStyleSheet(
-                common.icon_btn_style(True, "background: #fdecea; color: #c62828;"
-                    " border: 1px solid #f2b8b5; border-radius: 4px; font-weight: bold;")
-                + "QPushButton:hover { background: #f9d3d0; }")
+                common.icon_btn_style(True, "background: palette(light);"
+                    " color: palette(bright-text); border: 1px solid palette(mid);"
+                    " border-radius: 4px; font-weight: bold;")
+                + "QPushButton:hover { background: palette(midlight); }")
         else:
             b.setStyleSheet(
-                common.icon_btn_style(True, "background: #ffffff; color: #2f3440;"
-                    " border: 1px solid #c3cad6; border-radius: 4px; font-size: 12px;")
-                + "QPushButton:hover { background: #e9edf3; border-color: #7a8db0; }")
+                common.icon_btn_style(True, "background: palette(base);"
+                    " color: palette(window-text); border: 1px solid palette(mid);"
+                    " border-radius: 4px; font-size: 12px;")
+                + "QPushButton:hover { background: palette(alternate-base);"
+                " border-color: palette(link); }")
         b.clicked.connect(slot)
         return b
 
@@ -401,15 +410,17 @@ class LauncherPage(BasePage):
             card.setObjectName("linkCard" if is_link else "softCard")
             # 用 objectName 限定样式，避免 QWidget 选择器污染子控件
             card.setStyleSheet(
-                "QFrame#linkCard { background: #e8f5ee; border-radius: 6px; }"
+                "QFrame#linkCard { background: palette(midlight); border-radius: 6px; }"
                 if is_link else
-                "QFrame#softCard { background: #eef1f6; border-radius: 6px; }")
+                "QFrame#softCard { background: palette(alternate-base);"
+                " border-radius: 6px; }")
             h = QHBoxLayout(card)
             h.setContentsMargins(10, 6, 8, 6)
             h.setSpacing(6)
 
             drag_lbl = QLabel("⋮⋮")
-            drag_lbl.setStyleSheet("color: #8a93a5; background: transparent; border: none;")
+            drag_lbl.setStyleSheet(
+                "color: palette(placeholder-text); background: transparent; border: none;")
             drag_lbl.setFixedWidth(18)
             h.addWidget(drag_lbl)
 

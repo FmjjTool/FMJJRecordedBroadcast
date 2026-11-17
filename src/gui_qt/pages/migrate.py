@@ -108,7 +108,7 @@ class MigratePage(BasePage):
         # （原代码散开放置，在某些主题下与下方白色列表对比断裂）
         top_frame = QFrame()
         top_frame.setStyleSheet(
-            "QFrame { background: #ffffff; border-radius: 6px; }")
+            "QFrame { background: palette(base); border-radius: 6px; }")
         top_v = QVBoxLayout(top_frame)
         top_v.setContentsMargins(10, 8, 10, 8)
         top_v.setSpacing(6)
@@ -125,7 +125,7 @@ class MigratePage(BasePage):
         tgt_row.addWidget(QLabel("目标:"))
         self.tgt_label = QLabel(self.target_dir or "（未设置，点击右侧选择）")
         if not self.target_dir:
-            self.tgt_label.setStyleSheet("color: #888;")
+            self.tgt_label.setStyleSheet("color: palette(placeholder-text);")
         tgt_row.addWidget(self.tgt_label, 1)
         choose_btn = QPushButton("📁 选择目标")
         choose_btn.clicked.connect(self._choose_target)
@@ -159,10 +159,10 @@ class MigratePage(BasePage):
         ctrl.addWidget(clear_btn)
         ctrl.addStretch(1)
         self.checked_lbl = QLabel("")
-        self.checked_lbl.setStyleSheet("color: #888;")
+        self.checked_lbl.setProperty("role", "muted")
         ctrl.addWidget(self.checked_lbl)
         self.migrate_btn = QPushButton("🚚 开始迁移")
-        self.migrate_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.migrate_btn.setProperty("variant", "primary")
         self.migrate_btn.clicked.connect(self._migrate)
         ctrl.addWidget(self.migrate_btn)
         top_v.addLayout(ctrl)
@@ -173,8 +173,8 @@ class MigratePage(BasePage):
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
         self.list_scroll.setStyleSheet(
-            "QScrollArea { background: #ffffff; border: 1px solid #d0d6df;"
-            " border-radius: 6px; }"
+            "QScrollArea { background: palette(base);"
+            " border: 1px solid palette(mid); border-radius: 6px; }"
             "QScrollArea > QWidget > QWidget { background: transparent; }")
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
@@ -247,7 +247,7 @@ class MigratePage(BasePage):
             row = QFrame()
             # 行加浅边框：列表区已是白底卡片，无边框的话白行会隐没在白底里
             row.setStyleSheet(
-                "QFrame { background: #ffffff; border: 1px solid #d0d6df;"
+                "QFrame { background: palette(base); border: 1px solid palette(mid);"
                 " border-radius: 6px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
@@ -256,7 +256,7 @@ class MigratePage(BasePage):
             # 文件夹名（raw YYYYMMDD 给删除/迁移用，UI 不再展示原始字符串）
             name_lbl = QLabel(name)
             name_lbl.setStyleSheet(
-                "color: #888; font-family: Consolas; font-size: 11px;")
+                "color: palette(placeholder-text); font-family: Consolas; font-size: 11px;")
             name_lbl.setToolTip("原始文件夹名（YYYYMMDD）")
             h.addWidget(name_lbl)
             h.addStretch(1)
@@ -264,15 +264,18 @@ class MigratePage(BasePage):
             meta = QHBoxLayout()
             meta.setSpacing(14)
             cnt_lbl = QLabel(f"📄 {cnt} 项")
-            cnt_lbl.setStyleSheet("color: #555; font-size: 11px;")
+            cnt_lbl.setStyleSheet(
+                "color: palette(placeholder-text); font-size: 11px;")
             size_lbl = QLabel(f"💾 {_format_size(total)}")
-            size_lbl.setStyleSheet("color: #1976d2; font-size: 11px; font-weight: bold;")
+            size_lbl.setStyleSheet(
+                "color: palette(link); font-size: 11px; font-weight: bold;")
             if mtime:
                 mtime_txt = datetime.fromtimestamp(mtime).strftime("%m-%d %H:%M")
             else:
                 mtime_txt = "--"
             mtime_lbl = QLabel(f"🕐 {mtime_txt}")
-            mtime_lbl.setStyleSheet("color: #888; font-size: 11px;")
+            mtime_lbl.setStyleSheet(
+                "color: palette(placeholder-text); font-size: 11px;")
             meta.addWidget(cnt_lbl)
             meta.addWidget(size_lbl)
             meta.addWidget(mtime_lbl)
@@ -287,7 +290,7 @@ class MigratePage(BasePage):
 
     def _list_placeholder(self, text):
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #888;")
+        lbl.setStyleSheet("color: palette(placeholder-text);")
         lbl.setAlignment(Qt.AlignCenter)
         self.list_layout.takeAt(self.list_layout.count() - 1)
         self.list_layout.addWidget(lbl)
@@ -490,7 +493,7 @@ class MigratePage(BasePage):
         self._dup_title_label.setStyleSheet("font-size: 15px; font-weight: bold;")
         v.addWidget(self._dup_title_label)
         hint = QLabel("目标位置已存在同名文件，请选择每个重复项的处理方式")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
 
         scroll = QScrollArea()
@@ -510,16 +513,18 @@ class MigratePage(BasePage):
         # 底部批量操作
         bottom = QHBoxLayout()
         all_over_btn = QPushButton("全部覆盖目标")
-        all_over_btn.setStyleSheet("background: #c62828; color: white;")
+        all_over_btn.setProperty("variant", "danger")
         all_over_btn.clicked.connect(lambda: self._resolve_all("overwrite", win))
         bottom.addWidget(all_over_btn)
         all_del_btn = QPushButton("全部删除本地")
-        all_del_btn.setStyleSheet("background: #ef6c00; color: white;")
+        all_del_btn.setStyleSheet(
+            "background: theme(warning); color: palette(window);")
         all_del_btn.clicked.connect(lambda: self._resolve_all("delete_local", win))
         bottom.addWidget(all_del_btn)
         bottom.addStretch(1)
         skip_btn = QPushButton("跳过全部")
-        skip_btn.setStyleSheet("background: transparent; border: 1px solid #c8cdd6;")
+        skip_btn.setStyleSheet(
+            "background: transparent; border: 1px solid palette(mid);")
         skip_btn.clicked.connect(win.accept)
         bottom.addWidget(skip_btn)
         v.addLayout(bottom)
@@ -529,19 +534,20 @@ class MigratePage(BasePage):
         from PySide6.QtWidgets import QFrame
         display = f"{it['folder']}/{it['name']}" if it.get("folder") else it["name"]
         row = QFrame()
-        row.setStyleSheet("QFrame { background: #ffffff; border-radius: 6px; }")
+        row.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         h = QHBoxLayout(row)
         h.setContentsMargins(8, 6, 8, 6)
         lbl = QLabel(f"📄 {display}")
         h.addWidget(lbl, 1)
         over_btn = QPushButton("覆盖目标")
         over_btn.setFixedSize(90, 28)
-        over_btn.setStyleSheet("background: #c62828; color: white;")
+        over_btn.setProperty("variant", "danger")
         over_btn.clicked.connect(lambda _=False, i=it: self._resolve_one(i, "overwrite", win))
         h.addWidget(over_btn)
         del_btn = QPushButton("删除本地")
         del_btn.setFixedSize(90, 28)
-        del_btn.setStyleSheet("background: #ef6c00; color: white;")
+        del_btn.setStyleSheet(
+            "background: theme(warning); color: palette(window);")
         del_btn.clicked.connect(lambda _=False, i=it: self._resolve_one(i, "delete_local", win))
         h.addWidget(del_btn)
         self._dup_layout.takeAt(self._dup_layout.count() - 1)

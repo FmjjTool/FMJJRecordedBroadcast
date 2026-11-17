@@ -164,7 +164,7 @@ class EditorPage(BasePage):
         head.addWidget(title)
         tip = QLabel("转换 / 切割 / 合并 / 压缩 / 提取轨道 / 截图")
         tip.setWordWrap(True)
-        tip.setStyleSheet("color: #888; font-size: 11px;")
+        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         head.addWidget(tip)
         head.addStretch(1)
         root.addLayout(head)
@@ -195,7 +195,8 @@ class EditorPage(BasePage):
         self.file_list.currentRowChanged.connect(self._on_current_changed)
         left.addWidget(self.file_list, 1)
         self.file_label = QLabel("未选择文件")
-        self.file_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.file_label.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;")
         self.file_label.setWordWrap(True)
         left.addWidget(self.file_label)
         self.left_wrap = QWidget()
@@ -235,12 +236,15 @@ class EditorPage(BasePage):
         self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.slider.setToolTip("点击或拖动进度条定位；拖动时会实时预览画面")
         self.slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 8px; background: #cbd2dc; border-radius: 4px; }"
-            " QSlider::sub-page:horizontal { height: 8px; background: #2563eb; border-radius: 4px; }"
+            "QSlider::groove:horizontal { height: 8px;"
+            " background: palette(mid); border-radius: 4px; }"
+            " QSlider::sub-page:horizontal { height: 8px;"
+            " background: palette(highlight); border-radius: 4px; }"
             " QSlider::handle:horizontal { width: 16px; height: 16px; margin: -4px 0;"
-            " border-radius: 8px; background: #ffffff; border: 2px solid #2563eb; }"
-            " QSlider::handle:horizontal:hover { background: #dbeafe; }"
-            " QSlider::groove:horizontal:disabled { background: #eef1f5; }"
+            " border-radius: 8px; background: palette(base);"
+            " border: 2px solid palette(highlight); }"
+            " QSlider::handle:horizontal:hover { background: palette(midlight); }"
+            " QSlider::groove:horizontal:disabled { background: palette(alternate-base); }"
         )
         self.slider.clickedAt.connect(self._seek_to)
         self.slider.sliderPressed.connect(self._on_slider_pressed)
@@ -248,12 +252,14 @@ class EditorPage(BasePage):
         self.slider.sliderMoved.connect(self._on_slider_moved)
 
         self.time_label = QLabel("00:00")
-        self.time_label.setStyleSheet("font-family: Consolas, monospace; color: #2563eb;")
+        self.time_label.setStyleSheet(
+            "font-family: Consolas, monospace; color: palette(link);")
         self.time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.time_label.setFixedWidth(58)
         self.time_label.setToolTip("当前位置")
         self.dur_label = QLabel("00:00")
-        self.dur_label.setStyleSheet("font-family: Consolas, monospace; color: #8a93a3;")
+        self.dur_label.setStyleSheet(
+            "font-family: Consolas, monospace; color: palette(placeholder-text);")
         self.dur_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.dur_label.setFixedWidth(58)
         self.dur_label.setToolTip("总时长")
@@ -350,7 +356,7 @@ class EditorPage(BasePage):
         prog_row = QHBoxLayout()
         prog_row.addWidget(self.progress, 1)
         self.stop_btn = QPushButton("⏹ 停止")
-        self.stop_btn.setStyleSheet("background: #c62828; color: white;")
+        self.stop_btn.setProperty("variant", "danger")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_all)
         prog_row.addWidget(self.stop_btn)
@@ -370,8 +376,8 @@ class EditorPage(BasePage):
         b = QPushButton(text)
         b.clicked.connect(slot)
         if danger:
-            b.setStyleSheet("background: #c62828; color: white; padding: 2px 8px;")
-        elif small:
+            b.setProperty("variant", "danger")
+        if small:
             b.setStyleSheet("padding: 2px 8px;")
         return b
 
@@ -899,7 +905,7 @@ class EditorPage(BasePage):
         self.merge_name.setPlaceholderText("留空 = 合并_日期_时间")
         name_row.addWidget(self.merge_name, 1)
         self.merge_btn = QPushButton("🧩 开始合并")
-        self.merge_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
+        self.merge_btn.setProperty("variant", "primary")
         self.merge_btn.clicked.connect(self._start_merge)
         name_row.addWidget(self.merge_btn)
         v.addLayout(name_row)
@@ -942,7 +948,7 @@ class EditorPage(BasePage):
         self.cut_name.setPlaceholderText("留空 = 原文件名_片段合并")
         row2.addWidget(self.cut_name, 1)
         self.cut_btn = QPushButton("✂ 开始切割")
-        self.cut_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
+        self.cut_btn.setProperty("variant", "primary")
         self.cut_btn.clicked.connect(self._start_cut)
         row2.addWidget(self.cut_btn)
         v.addLayout(row2)
@@ -950,7 +956,7 @@ class EditorPage(BasePage):
         hint = QLabel("在预览区拖时间轴，点「起点」「终点」添加片段。无损切割以关键帧为界，"
                       "实际起止可能前后偏移；要精确请选「精确」（会转码）。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
 
         # 自动检测（静音/黑帧/场景）→ 切点 → 片段
@@ -1029,18 +1035,18 @@ class EditorPage(BasePage):
 
         row2 = QHBoxLayout()
         self.cmp_btn = QPushButton("🗜 开始压缩")
-        self.cmp_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
+        self.cmp_btn.setProperty("variant", "primary")
         self.cmp_btn.clicked.connect(self._start_compress)
         row2.addWidget(self.cmp_btn)
         self.cmp_stop = QPushButton("⏹ 停止（当前文件完成后）")
-        self.cmp_stop.setStyleSheet("background: #c62828; color: white;")
+        self.cmp_stop.setProperty("variant", "danger")
         self.cmp_stop.setEnabled(False)
         self.cmp_stop.clicked.connect(lambda: self._compress_queue.clear())
         row2.addWidget(self.cmp_stop)
         row2.addStretch(1)
         v.addLayout(row2)
         hint = QLabel("压缩会重新编码，输出到源目录：<原名>_compressed_video.mp4。")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
         v.addStretch(1)
         self.tabs.addTab(tab, "🗜 压缩")
@@ -1073,7 +1079,7 @@ class EditorPage(BasePage):
         ext_row = QHBoxLayout()
         ext_row.addWidget(self._btn("🎵 选择外部音轨", self._pick_ext_audio, small=True))
         self.ext_audio_label = QLabel("未选择")
-        self.ext_audio_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.ext_audio_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         ext_row.addWidget(self.ext_audio_label, 1)
         ext_row.addWidget(self._btn("追加音轨", lambda: self._apply_ext_audio(False), small=True))
         ext_row.addWidget(self._btn("替换全部音轨", lambda: self._apply_ext_audio(True), small=True))
@@ -1082,13 +1088,13 @@ class EditorPage(BasePage):
         sub_row = QHBoxLayout()
         sub_row.addWidget(self._btn("💬 选择字幕", self._pick_ext_sub, small=True))
         self.ext_sub_label = QLabel("未选择")
-        self.ext_sub_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.ext_sub_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         sub_row.addWidget(self.ext_sub_label, 1)
         sub_row.addWidget(self._btn("添加字幕", self._apply_ext_sub, small=True))
         sub_row.addStretch(1)
         v.addLayout(sub_row)
         hint = QLabel("提取不重新编码：音轨按编码落成 m4a/mp3/flac 等，字幕转 SRT（位图字幕保留原格式）。")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
         self.tabs.addTab(tab, "🎵 轨道")
@@ -1135,7 +1141,7 @@ class EditorPage(BasePage):
 
         hint = QLabel("写入采用重新封装（-c copy），不改画质；mp4/mkv 支持元数据，"
                       "旋转对 mp4 的显示矩阵生效，mkv 可能被忽略。")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch(1)
@@ -1176,16 +1182,16 @@ class EditorPage(BasePage):
         self.shot_copy_btn.clicked.connect(self._copy_current_frame)
         row2.addWidget(self.shot_copy_btn)
         self.shot_all_btn = QPushButton("🎞 按间隔抽帧")
-        self.shot_all_btn.setStyleSheet("background: #2e7d32; color: white; padding: 4px 16px;")
+        self.shot_all_btn.setProperty("variant", "primary")
         self.shot_all_btn.clicked.connect(self._shot_every)
         row2.addWidget(self.shot_all_btn)
         row2.addStretch(1)
         v.addLayout(row2)
         hint = QLabel("截图输出到源文件同目录；按间隔抽帧输出到「<文件名>_frames」文件夹。")
-        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
         hint2 = QLabel("「复制当前帧」不写文件：PNG 无损进剪贴板，可直接粘贴到 PS / PR / 微信。")
-        hint2.setStyleSheet("color: #888; font-size: 11px;")
+        hint2.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint2)
         v.addStretch(1)
         self.tabs.addTab(tab, "📷 截图")
@@ -1545,7 +1551,8 @@ class EditorPage(BasePage):
         if path:
             self.ext_audio_path = path
             self.ext_audio_label.setText(Path(path).name)
-            self.ext_audio_label.setStyleSheet("color: #2e7d32; font-size: 11px;")
+            self.ext_audio_label.setStyleSheet(
+                "color: palette(link-visited); font-size: 11px;")
 
     def _pick_ext_sub(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1554,7 +1561,8 @@ class EditorPage(BasePage):
         if path:
             self.ext_sub_path = path
             self.ext_sub_label.setText(Path(path).name)
-            self.ext_sub_label.setStyleSheet("color: #2e7d32; font-size: 11px;")
+            self.ext_sub_label.setStyleSheet(
+                "color: palette(link-visited); font-size: 11px;")
 
     def _apply_ext_audio(self, replace: bool):
         if self.running:

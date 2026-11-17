@@ -39,16 +39,20 @@ class DayCell(QFrame):
             v.addStretch(1)
             num.setStyleSheet(
                 "font-size: 14px; font-weight: bold; background: transparent; "
-                "border: none; color: #ffffff;")
+                "border: none; color: palette(link-visited);")
             info.setStyleSheet(
-                "font-size: 11px; background: transparent; border: none; color: #ffffff;")
+                "font-size: 11px; background: transparent; border: none;"
+                " color: palette(link-visited);")
             self.setStyleSheet(
-                "DayCell { background: #1a5c2a; border-radius: 4px; border: none; }"
-                "DayCell:hover { background: #2a8c3a; }")
+                "DayCell { background: palette(midlight); border-radius: 4px;"
+                " border: 1px solid transparent; }"
+                "DayCell:hover { background: palette(alternate-base);"
+                " border-color: palette(link-visited); }")
         else:
             v.addStretch(1)
             self.setStyleSheet(
-                "DayCell { background: #e8ebf0; border-radius: 4px; border: none; }")
+                "DayCell { background: palette(alternate-base); border-radius: 4px;"
+                " border: 1px solid transparent; }")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.cursor().shape() == Qt.PointingHandCursor:
@@ -114,7 +118,7 @@ class CalendarPage(BasePage):
         if not os.path.isdir(self.app.work_dir):
             self._clear_grid()
             lbl = QLabel("（工作目录不存在，请先设置）")
-            lbl.setStyleSheet("color: #ff9800;")
+            lbl.setStyleSheet("color: theme(warning);")
             self.grid.addWidget(lbl, 0, 0)
             return
         for name, _ in scan_date_folders(self.app.work_dir):
@@ -126,7 +130,7 @@ class CalendarPage(BasePage):
         if not self.date_map:
             self._clear_grid()
             lbl = QLabel(f"（未找到日期文件夹）\n当前目录: {self.app.work_dir}")
-            lbl.setStyleSheet("color: #ff9800;")
+            lbl.setStyleSheet("color: theme(warning);")
             self.grid.addWidget(lbl, 0, 0)
             self.breadcrumb.setText("📅 无数据")
             return
@@ -150,7 +154,7 @@ class CalendarPage(BasePage):
         years = sorted({d.year for d in self.date_map}, reverse=True)
         if not years:
             lbl = QLabel("（无日期文件夹，请检查工作目录）")
-            lbl.setStyleSheet("color: #888;")
+            lbl.setStyleSheet("color: palette(placeholder-text);")
             self.grid.addWidget(lbl, 0, 0)
             return
         for i, y in enumerate(years):
@@ -159,8 +163,10 @@ class CalendarPage(BasePage):
             btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
             btn.setMinimumHeight(70)
             btn.setStyleSheet(
-                "QPushButton { background: #d8e7f6; font-size: 15px; font-weight: bold; }"
-                "QPushButton:hover { background: #2a5a8c; }")
+                "QPushButton { background: palette(midlight); color: palette(link);"
+                " font-size: 15px; font-weight: bold; }"
+                "QPushButton:hover { background: palette(highlight);"
+                " color: palette(highlighted-text); }")
             btn.clicked.connect(lambda checked, yr=y: self._open_year(yr))
             # 3 列 n 行排列（用户要求；原 4 列）
             self.grid.addWidget(btn, i // 3, i % 3)
@@ -184,12 +190,16 @@ class CalendarPage(BasePage):
             if days > 0:
                 btn = QPushButton(f"{m}月\n{names[m - 1]}\n📁 {days} 天")
                 btn.setStyleSheet(
-                    "QPushButton { background: #d8e7f6; font-size: 14px; font-weight: bold; }"
-                    "QPushButton:hover { background: #2a5a8c; }")
+                    "QPushButton { background: palette(midlight); color: palette(link);"
+                    " font-size: 14px; font-weight: bold; }"
+                    "QPushButton:hover { background: palette(highlight);"
+                    " color: palette(highlighted-text); }")
                 btn.clicked.connect(lambda checked, mo=m: self._open_month(mo))
             else:
                 btn = QPushButton(f"{m}月\n{names[m - 1]}\n无数据")
-                btn.setStyleSheet("QPushButton { background: #e8ebf0; font-size: 14px; }")
+                btn.setStyleSheet(
+                    "QPushButton { background: palette(alternate-base);"
+                    " color: palette(placeholder-text); font-size: 14px; }")
                 btn.setEnabled(False)
             btn.setMinimumHeight(70)
             self.grid.addWidget(btn, (m - 1) // 4, (m - 1) % 4)

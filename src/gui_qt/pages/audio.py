@@ -63,7 +63,7 @@ class AudioPage(BasePage):
         self.dir_label = QLabel(app.work_dir)
         dir_row.addWidget(self.dir_label, 1)
         self.dir_date_label = QLabel("")
-        self.dir_date_label.setStyleSheet("color: #888;")
+        self.dir_date_label.setProperty("role", "muted")
         dir_row.addWidget(self.dir_date_label)
         layout.addLayout(dir_row)
         self._update_dir_date_label()
@@ -87,18 +87,18 @@ class AudioPage(BasePage):
         # 操作按钮
         btn_row = QHBoxLayout()
         self.start_btn = QPushButton("🎵 开始提取")
-        self.start_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.start_btn.setProperty("variant", "primary")
         self.start_btn.clicked.connect(self._start)
         self.start_btn.setEnabled(False)
         btn_row.addWidget(self.start_btn)
         self.stop_btn = QPushButton("⏹ 停止")
-        self.stop_btn.setStyleSheet("background: #c62828; color: white;")
+        self.stop_btn.setProperty("variant", "danger")
         self.stop_btn.clicked.connect(self._stop)
         self.stop_btn.setEnabled(False)
         btn_row.addWidget(self.stop_btn)
         btn_row.addStretch(1)
         del_btn = QPushButton("🗑 删除日期内音频")
-        del_btn.setStyleSheet("background: #8e3b2f; color: white;")
+        del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self._delete_date_audio)
         btn_row.addWidget(del_btn)
         layout.addLayout(btn_row)
@@ -166,7 +166,8 @@ class AudioPage(BasePage):
         # 扫描后文件复选框列表（默认勾选当天 = 北京 UTC+8）
         head = QHBoxLayout()
         self.list_head_label = QLabel("（扫描后显示文件列表，默认勾选当天）")
-        self.list_head_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.list_head_label.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;")
         head.addWidget(self.list_head_label)
         head.addStretch(1)
         head.addWidget(self._mini_btn("全选", lambda: self._set_all_checks(True)))
@@ -382,22 +383,22 @@ class AudioPage(BasePage):
         self.delete_audio_check.setEnabled(enabled)
 
         if not enabled:
-            text, color = "未启用", "#888"
+            text, color = "未启用", "palette(placeholder-text)"
         elif engine == ENGINE_LOCAL:
             if not local_program_ready():
-                text, color = "本地程序未下载（点 ⚙ 语音设置）", "#c62828"
+                text, color = "本地程序未下载（点 ⚙ 语音设置）", "palette(bright-text)"
             elif not local_model_ready(model):
-                text, color = f"模型 {model} 未下载（点 ⚙ 语音设置）", "#c62828"
+                text, color = f"模型 {model} 未下载（点 ⚙ 语音设置）", "palette(bright-text)"
             else:
-                text, color = f"本地就绪 · {model}", "#2e7d32"
+                text, color = f"本地就绪 · {model}", "palette(link-visited)"
         elif engine == ENGINE_WHISPER_API:
             cfg = load_convert_config()
             if (cfg.get("asr_whisper_key") or "").strip():
-                text, color = "Whisper API 已配置", "#2e7d32"
+                text, color = "Whisper API 已配置", "palette(link-visited)"
             else:
-                text, color = "未填 API Key（点 ⚙ 语音设置）", "#c62828"
+                text, color = "未填 API Key（点 ⚙ 语音设置）", "palette(bright-text)"
         else:
-            text, color = "免费在线识别", "#2e7d32"
+            text, color = "免费在线识别", "palette(link-visited)"
         self.asr_status.setText(text)
         self.asr_status.setStyleSheet(f"font-size: 11px; color: {color};")
 
@@ -680,7 +681,7 @@ class AudioPage(BasePage):
         cancel_btn.clicked.connect(dlg.reject)
         btn_frame.addWidget(cancel_btn)
         ok_btn = QPushButton("🗑 确认删除选中")
-        ok_btn.setStyleSheet("background: #c62828; color: white;")
+        ok_btn.setProperty("variant", "danger")
         ok_btn.clicked.connect(lambda: self._do_delete_audio(dlg, lst))
         btn_frame.addWidget(ok_btn)
         v.addLayout(btn_frame)

@@ -128,7 +128,7 @@ class RenamePage(BasePage):
         top.addWidget(self.folder_count_label)
         top.addStretch(1)
         self.progress_label = QLabel("")
-        self.progress_label.setStyleSheet("color: #1976d2;")
+        self.progress_label.setStyleSheet("color: palette(link);")
         top.addWidget(self.progress_label)
         v.addLayout(top)
 
@@ -252,23 +252,23 @@ class RenamePage(BasePage):
         self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setFixedHeight(180)
         self.thumb_label.setStyleSheet(
-            "background: #0a0a1a; border-radius: 6px; color: #666;")
+            "background: palette(alternate-base); border-radius: 6px;"
+            " color: palette(placeholder-text);")
         c3.addWidget(self.thumb_label)
 
         # 新文件名预览
         c3.addWidget(QLabel("📝 新文件名:"))
         self.new_name_label = QLabel("")
         self.new_name_label.setWordWrap(True)
-        # 深绿底必须配浅色文字：不指定 color 时浅色主题用黑字，黑字绿底看不清
         self.new_name_label.setStyleSheet(
-            "background: #0a2a0a; color: #b9f6ca; border-radius: 6px; "
-            "padding: 6px; font-size: 12px;")
+            "background: palette(alternate-base); color: palette(link-visited);"
+            " border-radius: 6px; padding: 6px; font-size: 12px;")
         c3.addWidget(self.new_name_label)
 
         # 操作按钮
         action_row = QHBoxLayout()
         self.confirm_btn = QPushButton("✅ 确认重命名 (Enter)")
-        self.confirm_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.confirm_btn.setProperty("variant", "primary")
         self.confirm_btn.setEnabled(False)
         self.confirm_btn.clicked.connect(self._do_rename)
         action_row.addWidget(self.confirm_btn)
@@ -286,7 +286,8 @@ class RenamePage(BasePage):
         self.rename_extra_check.toggled.connect(self._on_extra_toggle)
         extra_row.addWidget(self.rename_extra_check)
         self.extra_preview_label = QLabel("")
-        self.extra_preview_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.extra_preview_label.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 10px;")
         extra_row.addWidget(self.extra_preview_label, 1)
         c3.addLayout(extra_row)
         c3.addStretch(1)
@@ -886,7 +887,7 @@ class RenamePage(BasePage):
         of.addWidget(self.threshold_entry)
         of.addStretch(1)
         save_btn = QPushButton("💾 保存设置")
-        save_btn.setStyleSheet("background: #2e7d32; color: white;")
+        save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self._save_params)
         of.addWidget(save_btn)
         outer.addLayout(of)
@@ -948,18 +949,19 @@ class RenamePage(BasePage):
         # 字号 16 让 ×/⬆/⬇ 在 36×30 框内居中且清晰
         b.setStyleSheet(
             "QPushButton { font-size: 16px; padding: 0px;"
-            " border: 1px solid #c3cad6; border-radius: 4px;"
-            " background: #ffffff; color: #2f3440; }"
-            "QPushButton:hover { background: #e9edf3; border-color: #7a8db0; }")
+            " border: 1px solid palette(mid); border-radius: 4px;"
+            " background: palette(base); color: palette(window-text); }"
+            "QPushButton:hover { background: palette(alternate-base);"
+            " border-color: palette(link); }")
         if tip:
             b.setToolTip(tip)
         if danger:
-            # 危险色覆盖原白底样式（红色背景 + 白 ×）
             b.setStyleSheet(
                 "QPushButton { font-size: 18px; padding: 0px;"
-                " border: 1px solid #f2b8b5; border-radius: 4px;"
-                " background: #fdecea; color: #c62828; font-weight: bold; }"
-                "QPushButton:hover { background: #f9d3d0; }")
+                " border: 1px solid palette(mid); border-radius: 4px;"
+                " background: palette(light); color: palette(bright-text);"
+                " font-weight: bold; }"
+                "QPushButton:hover { background: palette(midlight); }")
         b.clicked.connect(slot)
         return b
 
@@ -973,12 +975,13 @@ class RenamePage(BasePage):
         for i, name in enumerate(items):
             card = QFrame()
             card.setStyleSheet(
-                "QFrame { background: #eef1f6; border-radius: 6px; }")
+                "QFrame { background: palette(alternate-base); border-radius: 6px; }")
             h = QHBoxLayout(card)
             h.setContentsMargins(8, 3, 4, 3)
             h.setSpacing(2)
             drag_lbl = QLabel("⋮⋮")
-            drag_lbl.setStyleSheet("color: #666; border: none; background: transparent;")
+            drag_lbl.setStyleSheet(
+                "color: palette(placeholder-text); border: none; background: transparent;")
             drag_lbl.setFixedWidth(20)
             h.addWidget(drag_lbl)
             name_lbl = QLabel(name)
