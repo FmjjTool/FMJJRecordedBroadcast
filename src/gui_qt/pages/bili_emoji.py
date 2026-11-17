@@ -71,7 +71,7 @@ class _DlBar(QWidget):
             for key, label in FMT_OPTIONS:
                 self.fmt_cb.addItem(label, key)
             row.addWidget(self.fmt_cb)
-        self.dl_btn = QPushButton("⬇ 全部下载")
+        self.dl_btn = QPushButton("全部下载")
         self.dl_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);padding:5px 18px;")
         row.addWidget(self.dl_btn)
         self.progress = QLabel("")
@@ -107,12 +107,12 @@ class _DlBar(QWidget):
             self.dl_btn.setEnabled(True)
             if err:
                 self.progress.setText(f"下载出错：{err}")
-                card.finish(f"❌ 下载出错: {str(err)[:60]}")
+                card.finish(f"下载出错: {str(err)[:60]}")
                 return
             failed = len(result["failed"])
             msg = f"完成 {result['done']}/{result['total']}" + (f"（{failed} 个失败）" if failed else "")
             self.progress.setText(msg)
-            card.finish(("✅ " if not failed else "⚠️ ") + msg)
+            card.finish(("" if not failed else "注意：") + msg)
             self._page.app.toast(msg, "success" if not failed else "warning")
             try:
                 os.startfile(result["dir"])
@@ -155,22 +155,22 @@ class BiliEmojiPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(QLabel("😀 B站表情包", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("B站表情包", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ 表情包 · 功能介绍", (
+        head.addWidget(attach_help_overlay(self, "表情包 · 功能介绍", (
             "<p><b>B站表情包/装扮表情资源下载（两个入口）。</b></p>"
-            "<p>· <b>🗃 表情包</b>：上半部分浏览全部表情包，按名字搜索、滚动到底自动加载；"
-            "点「查看」加载详情后⬇ 全部下载。下半部分按 ID 下载普通表情包 / 装扮表情包，"
+            "<p>· <b>表情包</b>：上半部分浏览全部表情包，按名字搜索、滚动到底自动加载；"
+            "点「查看」加载详情后全部下载。下半部分按 ID 下载普通表情包 / 装扮表情包，"
             "自动识别普通表情 → 装扮表情 → 收藏集（命中收藏集自动跳转收藏集页）</p>"
-            "<p>· <b>📺 直播间表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
+            "<p>· <b>直播间表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
             "附带主播头像、封面、网页+App背景图、关键帧</p>"
             "<p>· 可选下载格式，每个区域独立下载进度；表情类接口需要 B站 登录</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_emoji_tab(), "🗃 表情包")
-        self.tabs.addTab(self._build_room_tab(), "📺 直播间表情")
+        self.tabs.addTab(self._build_emoji_tab(), "表情包")
+        self.tabs.addTab(self._build_room_tab(), "直播间表情")
 
     def _switch_tab(self, index: int):
         """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
@@ -246,7 +246,7 @@ class BiliEmojiPage(BasePage):
         self.all_search.setPlaceholderText("输入要搜索的表情包名字，回车或点击搜索按钮过滤")
         self.all_search.returnPressed.connect(self._search_all)
         top.addWidget(self.all_search, 1)
-        btn = QPushButton("🔍 搜索")
+        btn = QPushButton("搜索")
         btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);padding:5px 16px;")
         btn.clicked.connect(self._search_all)
         top.addWidget(btn)

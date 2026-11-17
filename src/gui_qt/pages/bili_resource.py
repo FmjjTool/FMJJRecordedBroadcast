@@ -3,7 +3,7 @@
 三个子页实例只作为逻辑宿主（控件属性与网络回调挂在其上），内层 tab
 被平铺提升到本页顶部一级；搜索、按 ID 详情、装扮表情包等重合功能已在
 各子页内合并。子页自身的头部与内层 QTabWidget 不再展示。
-导航入口位于「📊 信息获取」组。
+导航入口位于「信息获取」组。
 """
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QTabWidget, QVBoxLayout
@@ -15,18 +15,18 @@ from gui_qt.pages.bili_info import BiliInfoPage
 
 _HELP = (
     "<p><b>B站资源下载（5 个功能入口）。</b></p>"
-    "<p>· <b>🗃 表情包</b>：上半部分浏览全部表情包（需登录），按名字搜索、滚动到底自动加载；"
-    "点「查看」加载详情后⬇ 全部下载。下半部分按 ID 下载普通表情包 / 装扮表情包，"
+    "<p>· <b>表情包</b>：上半部分浏览全部表情包（需登录），按名字搜索、滚动到底自动加载；"
+    "点「查看」加载详情后全部下载。下半部分按 ID 下载普通表情包 / 装扮表情包，"
     "自动识别普通表情 → 装扮表情 → 收藏集（命中收藏集自动跳「收藏集」tab）</p>"
-    "<p>· <b>📺 直播表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
+    "<p>· <b>直播表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
     "附带主播头像、封面、网页+App背景图、关键帧</p>"
-    "<p>· <b>🎁 装扮 / 收藏集</b>：上半部分关键词搜索装扮/收藏集（白菜、UP主名等），"
+    "<p>· <b>装扮 / 收藏集</b>：上半部分关键词搜索装扮/收藏集（白菜、UP主名等），"
     "点「详情」直接加载；下半部分输入装扮 item_id 查看套装全部资源——"
     "空间背景 / 粉丝牌 / 评论背景 / 表情包 / 加载动画 / 进度条 / 皮肤 / 点赞动画。"
     "命中收藏集 ID 会自动跳「收藏集活动」</p>"
-    "<p>· <b>🎁 收藏集活动</b>：输入活动 act_id，"
+    "<p>· <b>收藏集活动</b>：输入活动 act_id，"
     "加载活动视觉 / 勋章 / 全部收藏集卡牌图与卡牌视频</p>"
-    "<p>· <b>👤 空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
+    "<p>· <b>空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
     "可下载头像/头像框/空间背景图/投稿封面/充电表情/收藏集封面</p>"
     "<p>· 表情类接口需要 B站 登录，其余游客接口；"
     "文件列表勾选后下载，支持多选批量。综合搜索与视频信息已统一由「信息获取」处理</p>"
@@ -34,11 +34,11 @@ _HELP = (
 
 # 平铺顺序与命名：(子页键, 内层 tab 下标, 顶部标签)
 _FLAT = [
-    ("emoji", 0, "🗃 表情包"),
-    ("emoji", 1, "📺 直播表情"),
-    ("garb", 0, "🎁 装扮 / 收藏集"),
-    ("garb", 1, "🎁 收藏集活动"),
-    ("info", 0, "👤 空间"),
+    ("emoji", 0, "表情包"),
+    ("emoji", 1, "直播表情"),
+    ("garb", 0, "装扮 / 收藏集"),
+    ("garb", 1, "收藏集活动"),
+    ("info", 0, "空间"),
 ]
 
 
@@ -48,10 +48,10 @@ class BiliResourcePage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(QLabel("🎁 B站资源", styleSheet="font-size: 16px; font-weight: bold;"))
+        head.addWidget(QLabel("B站资源", styleSheet="font-size: 16px; font-weight: bold;"))
         head.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "❓ B站资源 · 功能介绍", _HELP))
+        head.addWidget(attach_help_overlay(self, "B站资源 · 功能介绍", _HELP))
         layout.addLayout(head)
 
         self.tabs = QTabWidget()
