@@ -1104,10 +1104,21 @@ class LocalWikiPage(BasePage):
         self._refresh_analytics()
 
     def _collect_analytics(self):
+        typed = self.analytics_pwd.text().strip()
+        if typed:
+            # 刚填了密码就点采集：先自动保存，省一次「保存密码」
+            try:
+                analytics.save_password(typed)
+            except OSError as exc:
+                QMessageBox.warning(self, "保存后台密码", f"写入失败：{exc}")
+                return
+            self.analytics_pwd.clear()
+            self._analytics_has_password = True
+            self.analytics_pwd.setPlaceholderText("已保存（要换密码直接输入新的再保存）")
         if not self._analytics_has_password:
             QMessageBox.information(
                 self, "采集站点统计",
-                "还缺后台密码：先在上面填 mandisa.wiki 后台密码并点「💾 保存密码」。")
+                "还缺后台密码：先在上面填 mandisa.wiki 后台密码并保存。")
             return
         scope = self.analytics_scope.currentData() or "human"
         self._start_task("采集站点统计",
