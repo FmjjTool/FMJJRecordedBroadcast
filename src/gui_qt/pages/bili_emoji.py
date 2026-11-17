@@ -165,8 +165,7 @@ class BiliEmojiPage(BasePage):
             "自动识别普通表情 → 装扮表情 → 收藏集（命中收藏集自动跳转收藏集页）</p>"
             "<p>· <b>📺 直播间表情</b>：输入房间号加载直播间专属表情 / UP主大表情 / 通用表情，"
             "附带主播头像、封面、网页+App背景图、关键帧</p>"
-            "<p>· 可选下载格式，每个区域独立下载进度；表情类接口需要 B站 登录 Cookie"
-            "（侧栏「Cookie 管理」维护）</p>")))
+            "<p>· 可选下载格式，每个区域独立下载进度；表情类接口需要 B站 登录</p>")))
         layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
@@ -262,7 +261,7 @@ class BiliEmojiPage(BasePage):
         self.all_table.verticalScrollBar().valueChanged.connect(self._all_scroll)
         v.addWidget(self.all_table, 1)
 
-        self.all_info = QLabel("需要 B站 登录 Cookie（侧栏 Cookie 管理）。输入名字搜索，列表滚动到底自动加载更多")
+        self.all_info = QLabel("需要 B站 登录。输入名字搜索，列表滚动到底自动加载更多")
         self.all_info.setStyleSheet("color:#888;")
         v.addWidget(self.all_info)
 

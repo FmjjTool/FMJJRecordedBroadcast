@@ -306,7 +306,7 @@ class VideoCommentsPage(BasePage):
             if total == 0:
                 self.status_label.setText(
                     "⚠️ 0 条评论：该视频可能无评论，或被风控拦截"
-                    "（稍后重试，或到 Cookie 管理配置该平台 Cookie）")
+                    "（稍后重试，或确认该平台登录状态）")
             else:
                 self.status_label.setText(
                     f"✅ {plat} · 共 {len(self.videos)} 个视频 / {total} 条评论 / {n_img} 张图片")

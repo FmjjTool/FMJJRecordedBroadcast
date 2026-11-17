@@ -5,7 +5,7 @@
 分块提取、合并、生成终稿并做格式校验。
 
 - 规则只读复用 `src/skills/fengming-livestream-summary/`，不在页面里另写一套；
-- API Key 单独加密保存在 `config/livestream_summary.json`，与 Cookie 存储隔离；
+- API Key 单独加密保存在 `config/livestream_summary.json`，与登录态存储隔离；
 - 纯规则保底仍可用命令行 `toolbox.livestream_summary_rule`。
 """
 
@@ -636,7 +636,7 @@ class LivestreamSummaryPage(BasePage):
         if ls_config.has_api_key():
             self.api_key_edit.clear()
             self.api_key_edit.setPlaceholderText("已保存；留空表示不修改")
-            self.key_status.setText("API Key：已保存（本机加密，与 Cookie 存储隔离）")
+            self.key_status.setText("API Key：已保存（本机加密，与登录态存储隔离）")
         elif is_local_base_url(self.base_url_edit.text()):
             self.api_key_edit.setPlaceholderText("本机模型可不填")
             self.key_status.setText("API Key：本机地址可不填")
@@ -670,7 +670,7 @@ class LivestreamSummaryPage(BasePage):
         if QMessageBox.question(
                 self, "清除 API Key",
                 "删除本机保存的直播总结 API Key？\n\n"
-                "只删除该功能的 Key，不影响 Cookie 管理里的任何登录凭据。"
+                "只删除该功能的 Key，不影响其他登录信息。"
         ) != QMessageBox.Yes:
             return
         ls_config.save_api_key("")
