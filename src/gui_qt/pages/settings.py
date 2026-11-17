@@ -793,7 +793,7 @@ class GlobalSettingsPage(BasePage):
         bar.setFixedHeight(14)
         if width:
             bar.setFixedWidth(width)
-        bar.setStyleSheet("background: #dfe4ea; border-radius: 4px;")
+        bar.setStyleSheet("background: palette(midlight); border-radius: 4px;")
         self._skel_bars.append(bar)
         return bar
 
@@ -805,7 +805,8 @@ class GlobalSettingsPage(BasePage):
             row = QFrame()
             row.setObjectName("depSkelRow")
             row.setStyleSheet(
-                "QFrame#depSkelRow { background: #f4f6f9; border-radius: 4px; }")
+                "QFrame#depSkelRow { background: palette(alternate-base);"
+                " border-radius: 4px; }")
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
             h.setSpacing(8)
@@ -821,7 +822,7 @@ class GlobalSettingsPage(BasePage):
 
     def _pulse_dep_skeleton(self):
         self._skel_phase = 1 - self._skel_phase
-        color = "#e7ebf1" if self._skel_phase else "#d7dde6"
+        color = "palette(shadow)" if self._skel_phase else "palette(midlight)"
         for bar in self._skel_bars:
             bar.setStyleSheet(f"background: {color}; border-radius: 4px;")
 

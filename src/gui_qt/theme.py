@@ -7,6 +7,7 @@ Qt 的样式表会缓存 palette() 的解析结果，仅 setPalette 不能让现
 Polish/Show 事件同时覆盖构造参数 styleSheet=、懒加载页面和新弹窗。
 """
 
+import logging
 import re
 import sys
 from datetime import datetime
@@ -14,6 +15,8 @@ from functools import lru_cache
 from weakref import WeakKeyDictionary, WeakSet
 
 from toolbox.config_manager import load_convert_config, save_convert_config
+
+_log = logging.getLogger(__name__)
 
 # 选中指示器交给 Qt 原生绘制，避免给 :checked 覆盖背景后丢失勾号/圆点。
 NEUTRAL_QSS = """
@@ -118,10 +121,14 @@ _PALETTE_SPEC = {
     "Mid": ("#cbd5e3", "#3a4b63"),
     "Dark": ("#93a7c5", "#6c84a6"),
     "Shadow": ("#dce3ed", "#303e52"),
-    "Highlight": ("#356bd6", "#447ccf"),
+    "Highlight": ("#356bd6", "#3f76c9"),
     "HighlightedText": ("#ffffff", "#ffffff"),
+    # Accent 是 Qt 6.6+ 新增角色，本项目仅用它承载 accent_hover：主按钮 hover
+    # 需要与 Highlight 不同的实色，而 QSS 的 palette() 只能引用 QPalette 角色，
+    # 这是唯一空闲槽位。若 Qt 版本过低，_audit_theme_tokens 会报警而不是静默失效。
+    "Accent": ("#275bc1", "#568fe5"),
     "Link": ("#285ebc", "#93bcff"),
-    "PlaceholderText": ("#6e7f96", "#9caec5"),
+    "PlaceholderText": ("#5f7089", "#9caec5"),
     "ToolTipBase": ("#ffffff", "#243044"),
     "ToolTipText": ("#263449", "#dce5f3"),
     # 禁用态文字灰（原生控件用；QSS 管理的控件走 :disabled 规则）
@@ -135,10 +142,10 @@ _COLOR_ROLES = {
     "window": "Window", "surface": "Base", "surface_alt": "AlternateBase",
     "text": "WindowText", "muted": "PlaceholderText", "border": "Shadow",
     "accent": "Highlight", "accent_soft": "Midlight", "on_accent": "HighlightedText",
-    "link": "Link",
+    "link": "Link", "accent_hover": "Accent",
 }
+# 没有语义 palette 角色的强调色（QSS 侧按主题注入实色，见 _theme_template）。
 _COLORS = {
-    "accent_hover": ("#275bc1", "#568fe5"),
     "success": ("#18754e", "#7cd6af"),
     "warning": ("#99600c", "#edc478"),
     "danger": ("#b93842", "#ff969f"),
@@ -151,7 +158,7 @@ _TOKEN_PALETTE = {
     "text": "window-text", "muted": "placeholder-text", "border": "shadow",
     "accent": "highlight", "accent_soft": "midlight", "on_accent": "highlighted-text",
     "link": "link", "danger": "bright-text", "danger_soft": "light",
-    "danger_border": "mid", "success": "link-visited", "accent_hover": "highlight",
+    "danger_border": "mid", "success": "link-visited", "accent_hover": "accent",
 }
 
 
@@ -343,7 +350,8 @@ def _legacy_role(prop, value):
         if value in ("#263449", "#dce5f3", "#c6cbd6", "#2f3440", "#111111",
                      "#222222", "#333333", "#374151", "#1f2328"):
             return "window-text"
-        if value in _TEXT_L2D or value in _TEXT_D2L or value in ("#6e7f96", "#9caec5"):
+        if value in _TEXT_L2D or value in _TEXT_D2L or value in (
+                "#5f7089", "#6e7f96", "#9caec5"):
             return "placeholder-text"
         return None
     if value in ("#151c29", "#f3f5f9", "#f4f5f7", "#1a1d27", "#14161d", "#eceff3"):
@@ -362,9 +370,28 @@ def _legacy_role(prop, value):
     return None
 
 
+_warned_tokens = set()
+
+
+def _warn_unknown_token(name):
+    """未知 token 在 QSS 里会被 Qt 整条丢弃，必须显式报出而不是静默通过。"""
+    if name in _warned_tokens:
+        return
+    _warned_tokens.add(name)
+    _log.warning(
+        "theme(%s) 没有对应颜色角色，该声明会被 Qt 静默忽略；可用名称见 "
+        "_TOKEN_PALETTE（映射到 palette 角色）与 _COLORS（按主题注入实色）", name)
+
+
+def _theme_template(source, legacy=True, dark=None):
+    """规范原始样式；含无槽位语义色（warning）时结果随主题变化，故按主题缓存。"""
+    if dark is None:
+        dark = is_dark()
+    return _theme_template_cached(source, legacy, dark)
+
+
 @lru_cache(maxsize=4096)
-def _theme_template(source, legacy=True):
-    """一次性规范原始样式；输出不随当前主题改变。"""
+def _theme_template_cached(source, legacy, dark):
     protected, literals = _protect_literals(source)
     if legacy:
         def declaration(match):
@@ -380,10 +407,48 @@ def _theme_template(source, legacy=True):
             return f"{match.group(1)}: {value}"
 
         protected = _DECL_RE.sub(declaration, protected)
-    protected = _TOKEN_RE.sub(
-        lambda m: f"palette({_TOKEN_PALETTE[m.group(1).lower()]})"
-        if m.group(1).lower() in _TOKEN_PALETTE else m.group(0), protected)
+
+    def resolve_token(match):
+        name = match.group(1).lower()
+        role = _TOKEN_PALETTE.get(name)
+        if role is not None:
+            return f"palette({role})"
+        colors = _COLORS.get(name)
+        if colors is not None:
+            # 无对应 QPalette 角色（如 warning）：按目标主题注入实色。缓存键含
+            # dark，切主题后由 _adapt_widget 重新渲染替换。
+            return colors[1 if dark else 0]
+        _warn_unknown_token(name)
+        return match.group(0)
+
+    protected = _TOKEN_RE.sub(resolve_token, protected)
     return _restore_literals(protected, literals)
+
+
+# ==================== 角色自检 ====================
+
+_audited = False
+
+
+def _audit_theme_tokens():
+    """启动自检：确认 token 目标角色在当前 Qt 真实存在。
+
+    QPalette 角色随 Qt 版本变化（Accent 为 6.6+ 新增）。角色缺失时 QSS 的
+    palette(...) 会静默回退到默认色，所以这里提前报出来，而不是等肉眼发现。
+    """
+    global _audited
+    if _audited:
+        return
+    _audited = True
+    try:
+        from PySide6.QtGui import QPalette
+    except ImportError:
+        return
+    missing = [f"{token} -> palette({role})" for token, role in _TOKEN_PALETTE.items()
+               if getattr(QPalette, "".join(p.title() for p in role.split("-")), None) is None]
+    if missing:
+        _log.warning("当前 Qt 缺少以下 palette 角色，对应 theme() 会静默失效：%s",
+                     "、".join(missing))
 
 
 # ==================== 主题状态与持久化 ====================
@@ -558,8 +623,9 @@ def apply_theme(app=None):
     if app is None:
         return
     install_auto_remap()
+    _audit_theme_tokens()
     dark = is_dark()
-    qss = _theme_template(NEUTRAL_QSS, legacy=False)
+    qss = _theme_template(NEUTRAL_QSS, legacy=False, dark=dark)
     template_changed = _applied_qss != qss or app.styleSheet() != qss
     if not template_changed and _applied_dark == dark:
         return
@@ -605,7 +671,7 @@ def install_auto_remap():
             # 重复设置 styleSheet() 时保留源文本，不能把渲染结果当新源。
             if previous and source == previous[1]:
                 source = previous[0]
-            rendered = _theme_template(source)
+            rendered = _theme_template(source, dark=is_dark())
             _style_sources[self] = (source, rendered)
             if self.styleSheet() != rendered:
                 _widget_themes.pop(self, None)
@@ -657,7 +723,7 @@ def _adapt_widget(widget):
         source = previous[0]
     if not source and previous is None:
         return
-    rendered = _theme_template(source)
+    rendered = _theme_template(source, dark=is_dark())
     _style_sources[widget] = (source, rendered)
     if rendered != current:
         setter = _orig_set_stylesheet

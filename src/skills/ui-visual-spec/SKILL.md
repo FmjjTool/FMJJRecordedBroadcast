@@ -52,9 +52,10 @@ QSS 内只用下列角色名。括号内为浅色 / 深色实际值，仅供核�
 | --- | --- | --- |
 | `palette(window-text)` | `#263449` / `#dce5f3` | 正文、标题 |
 | `palette(text)` | `#263449` / `#dce5f3` | 同正文（输入框/列表内文本） |
-| `palette(placeholder-text)` | `#6e7f96` / `#9caec5` | 辅助文字、常态图标、表头字 |
-| `palette(highlight)` | `#356bd6` / `#447ccf` | 主操作底、进度条、焦点框、选中底 |
+| `palette(placeholder-text)` | `#5f7089` / `#9caec5` | 辅助文字、常态图标、表头字 |
+| `palette(highlight)` | `#356bd6` / `#3f76c9` | 主操作底、进度条、焦点框、选中底 |
 | `palette(highlighted-text)` | `#ffffff` / `#ffffff` | 主操作上的文字 |
+| `palette(accent)` | `#275bc1` / `#568fe5` | 主操作悬停底（**仅此用途**，见 2.7） |
 | `palette(link)` | `#285ebc` / `#93bcff` | 链接、激活图标、悬停强调、次级强调 |
 | `palette(shadow)` | `#dce3ed` / `#303e52` | 默认边框、分隔线 |
 | `palette(mid)` | `#cbd5e3` / `#3a4b63` | 输入框边框、滚动条 |
@@ -67,8 +68,12 @@ QSS 内只用下列角色名。括号内为浅色 / 深色实际值，仅供核�
 Python 侧（自绘、富文本、表格刷色）用 `theme.color(name)`，可选名：
 `window` `surface` `surface_alt` `text` `muted` `border` `accent` `accent_soft` `on_accent` `link` `accent_hover` `success` `warning` `danger` `danger_soft` `danger_border`。
 
-QSS 侧（`theme(token)` 内联函数）只支持 15 个，**没有 `warning`**：
-`window` `surface` `surface_alt` `text` `muted` `border` `accent` `accent_soft` `on_accent` `link` `danger` `danger_soft` `danger_border` `success` `accent_hover`。
+QSS 侧（`theme(token)` 内联函数）支持上表全部 16 个名字，走两条解析路径：
+
+1. **转 palette 角色**（15 个）：`window` `surface` `surface_alt` `text` `muted` `border` `accent` `accent_soft` `on_accent` `link` `danger` `danger_soft` `danger_border` `success` `accent_hover`。解析结果与实际主题无关，所以 `NEUTRAL_QSS` 生成的模板恒定，切主题只换 QPalette。
+2. **按主题注入实色**（1 个）：`warning` → `#99600c` / `#edc478`。QPalette 没有警告色角色，只能把当前主题的十六进制值写进样式串；渲染结果与 `dark` 绑定并进缓存键，切主题后由 `_adapt_widget` 重新渲染。
+
+两条路径都不需要手写 hex。未登记的 token（如 `theme(warningn)`）不会静默通过：`_theme_template` 会保留原文并打一条 warning 日志，列出可用名称。启动时 `_audit_theme_tokens()` 还会检查每个 token 的目标角色在当前 Qt 是否真实存在（`Accent` 是 Qt 6.6+ 新增，低版本会缺），缺失即报警。
 
 ### 2.3 对比度基线（已实测）
 
@@ -79,13 +84,15 @@ QSS 侧（`theme(token)` 内联函数）只支持 15 个，**没有 `warning`**�
 | text on window | 11.52 | 13.45 | 达标 |
 | text on base | 12.58 | 11.84 | 达标 |
 | link on base | 6.14 | 7.78 | 达标 |
-| white on highlight | 4.97 | 4.18 | 达标 / AA 大字 |
-| muted on base | **4.09** | 6.64 | 浅色未达 4.5 |
-| muted on window | **3.74** | 7.54 | 浅色未达 4.5 |
-| danger on base | 5.62 | 7.24 | 达标 |
+| white on highlight | 4.97 | 4.52 | 达标 |
+| muted on base | 5.04 | 6.64 | 达标 |
+| muted on window | 4.62 | 7.54 | 达标 |
+| muted on alternate-base | 4.53 | 5.87 | 达标（余量仅 0.03） |
+| muted on midlight | **4.37** | 4.84 | 浅色未达 4.5 |
+| danger on base | 5.66 | 7.24 | 达标 |
 | success on base | 5.13 | 8.65 | 达标 |
 
-结论：**浅色 `placeholder-text` 属弱对比**，只用于辅助说明（分组标题、表头、状态行、图标），不得承载用户必须读到的正文、错误原因、金额、统计值。需要更强的次级文字用 `window-text` 加小字号，而不是继续压灰。
+结论：浅色 `placeholder-text` 已在 `base` / `window` / `alternate-base` 三种主用底色上达到 4.5，但 **`midlight`（弱选中底）上仍为 4.37**。因此约束不变：`placeholder-text` 只承载辅助说明（分组标题、表头、状态行、图标），不得承载用户必须读到的正文、错误原因、金额、统计值；需要更强的次级文字用 `window-text` 加小字号。落在 `midlight` 底色上的文字改用 `palette(text)` 或 `palette(link)`。
 
 ### 2.4 颜色禁令
 
@@ -99,20 +106,32 @@ QSS 侧（`theme(token)` 内联函数）只支持 15 个，**没有 `warning`**�
 
 唯一允许的硬编码色：窗口关闭按钮悬停 `#e81123` / 按下 `#c42b1c`（Windows 系统语义，两个主题一致），以及 toast 的四种提示底色（见 2.6）。
 
+另有一种**非手写**的十六进制值：`theme(warning)` 由主题层按当前主题注入（见 2.2），它由 `theme.py` 生成、随主题重算、不受页面控制，不算违反本禁令。但页面代码里仍然不允许自己写 `#99600c` 这类值去模拟它——那样切主题不会变。
+
 ### 2.5 已知偏差（不要依靠这些写法）
 
 这些是当前实现的真实行为，写代码时若依赖会踩坑：
 
-1. QSS 里 `theme(accent_hover)` 会被解析成 `palette(highlight)`，与 `theme.color("accent_hover")` 的 `#275bc1` / `#568fe5` **不是同一个颜色**。后果：`QPushButton[variant="primary"]:hover` 与常态同色，悬停无视觉反馈。
-   → 主按钮需要 hover 层次时写 `palette(link)`（两个主题下都比 `highlight` 更深/更亮，层次成立），不要写 `theme(accent_hover)`。
-2. QSS 里 `theme(danger_border)` 解析成 `palette(mid)`，不是 `theme.color("danger_border")` 的粉红边框。
+1. QSS 里 `theme(danger_border)` 解析成 `palette(mid)`，不是 `theme.color("danger_border")` 的粉红边框。
    → 危险按钮边框用 `palette(mid)` 或 `palette(shadow)`，要靠 `theme.color("danger_border")` 就拿不到。
-3. QSS 里写 `theme(warning)` **静默失效**（无映射，原样残留，Qt 忽略该声明）。警告色只能通过 `theme.color("warning")` 用在自绘、富文本、图表，QSS 侧用 `bright-text` 近似或改用图标表达。
-4. `_SURFACE_L2D` / `_TEXT_L2D` 只覆盖历史页面里出现过的有限色值。新写 `#fafbfc`、`#eef2f7` 这类"没登记"的浅色，深色下不会被映射，直接留白。**兼容层不是规范**：它能救旧页面，不能给新代码兜底。
+2. `_SURFACE_L2D` / `_TEXT_L2D` 只覆盖历史页面里出现过的有限色值。新写 `#fafbfc`、`#eef2f7` 这类"没登记"的浅色，深色下不会被映射，直接留白。**兼容层不是规范**：它能救旧页面，不能给新代码兜底。
+   → 实例：`settings.py` 依赖检测骨架条曾用 `#e7ebf1` / `#d7dde6` / `#dfe4ea`，三个值都不在映射表，深色下整块留成白条；已改为 `palette(midlight)` / `palette(shadow)` / `palette(alternate-base)`。
+   → 判断方法：写完 `grep -n "#[0-9a-fA-F]\{3,8\}"`，出现即先查 `_SURFACE_L2D` / `_TEXT_L2D` 是否登记；没登记就只能改角色引用。
 
 ### 2.6 固定配色组件
 
 toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种语义 `info #2a5a8c` / `success #2e7d32` / `warning #b8860b` / `error #c62828`。不要把它改成 `palette(base)`，浅色下会与页面底混在一起失去提示性。
+
+### 2.7 `palette(accent)` 与主按钮悬停
+
+`accent_hover` 需要一个能和 `Highlight` 区分开的实色，但 QSS 的 `palette()` 只能引用 QPalette 角色。`QPalette` 全部角色中，本主题体系的 20 个已各有所属，**只剩 `Accent`**（Qt 6.6+ 新增）空闲，因此：
+
+- `_PALETTE_SPEC["Accent"] = ("#275bc1", "#568fe5")`，与 `_COLORS` 合并为单一来源，`theme.color("accent_hover")` 与 `theme(accent_hover)` 现在取同一个值。
+- `NEUTRAL_QSS` 的 `QPushButton[variant="primary"]:hover` 因此真正生效：浅色 `#356bd6 → #275bc1`（变深），深色 `#3f76c9 → #568fe5`（变亮）。
+- `Accent` **只用于主按钮 hover**。不要把它当第二强调色，也不要写进页面样式；Qt 6.6+ 的原生控件（复选框、滑块等）会读这个角色，设成别的语义色会让原生绘制跑偏。
+- 悬停态白字对比度：浅色 6.26（达标），深色 3.25（仅过 3:1 大字线）。hover 是瞬时反馈，可接受；**但如果某个 primary 按钮的文案必须随时可读，就不要依赖悬停加深来传达状态**。
+
+**升级注意**：低于 Qt 6.6 的环境没有 `Accent` 角色，`palette(accent)` 会回退到默认色（浅灰）。`_audit_theme_tokens()` 在首次 `apply_theme()` 时会打出 warning 提示缺失，此时应升级 PySide6，而不是在页面里写死颜色兜底。
 
 ## 三、字号与字体
 
@@ -277,8 +296,16 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 这些改动影响全站观感与既有截图，不在本次范围内，不要顺手改。
 
-1. **浅色 `placeholder-text` 对比度不足**（4.09 / 3.74，低于 4.5）。若要达标，浅色值需从 `#6e7f96` 调到 `#5f7089`（白底 5.04 / 页面底 4.62）。代价：全站辅助文字变深，视觉更"重"。
-2. **深色主按钮白字对比度 4.18**（略低于 4.5）。若要达标，`Highlight` 深色值需从 `#447ccf` 调到 `#3f76c9`（白字 4.52）。
-3. **`primary` 按钮 hover 无差异**（见 2.5 第 1 条）。修 `_TOKEN_PALETTE["accent_hover"]` 可让 `NEUTRAL_QSS` 的 hover 规则真正生效，属 `theme.py` 全局行为变更，需单独确认。
-4. **字号越级值收敛**（16/17/20/23/26/34/36/44 共 27 处）。建议按页面逐页收敛，不做一次性全局替换。
-5. **`tracker.py` / `music_tracker.py` / `test_page.py` 内联样式下沉**（分别 61 / 50 / 65 处 `setStyleSheet`）。改造风险中等，需逐页授权。
+1. **字号越级值收敛**（16/17/20/23/26/34/36/44 共 27 处）。建议按页面逐页收敛，不做一次性全局替换。
+2. **`tracker.py` / `music_tracker.py` / `test_page.py` 内联样式下沉**（分别 61 / 50 / 65 处 `setStyleSheet`）。改造风险中等，需逐页授权。
+3. **浅色 `placeholder-text` 在 `midlight` 上仍是 4.37**。要彻底达标需继续压深或给 `midlight` 提亮，会连带影响弱选中底观感，暂不动；改为「落在 midlight 上的文字不用 muted」。
+
+### 已完成（2026-11-17）
+
+以下三项曾列在这里，现已实施并验证：
+
+| 项 | 改动 | 结果 |
+| --- | --- | --- |
+| 浅色辅助文字对比度 | `PlaceholderText` `#6e7f96` → `#5f7089` | base 4.09 → 5.04，window 3.74 → 4.62，alternate-base 4.53 |
+| 深色主按钮白字 | `Highlight` 深色 `#447ccf` → `#3f76c9` | 4.18 → 4.52 |
+| primary 按钮 hover 无差异 | `accent_hover` 改由新增的 `palette(accent)` 承载 | 浅色 `#356bd6 → #275bc1`，深色 `#3f76c9 → #568fe5` |
