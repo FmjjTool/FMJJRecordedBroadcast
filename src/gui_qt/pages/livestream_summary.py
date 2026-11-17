@@ -14,14 +14,17 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
 from toolbox import livestream_summary_rule as rule
@@ -40,6 +43,7 @@ class LivestreamSummaryPage(BasePage):
         self._pull_cancel: threading.Event | None = None
         self._source: Path | None = None
         self._result_text = ""
+        self._icons: list[tuple[QWidget, str, str]] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -54,6 +58,42 @@ class LivestreamSummaryPage(BasePage):
         root.addLayout(self._build_body(), 1)
         self._load_settings()
         self._detect_local()
+
+    # ==================== 图标 ====================
+
+    def _register_icon(self, widget, name: str, role: str = "button"):
+        self._icons.append((widget, name, role))
+        self._apply_icon(widget, name, role)
+
+    def _apply_icon(self, widget, name: str, role: str):
+        color = self._icon_color(role)
+        if isinstance(widget, ToolSectionCard):
+            widget.set_icon(name, color)
+            return
+        widget.setIcon(line_icon(name, color, 16))
+        widget.setIconSize(QSize(16, 16))
+
+    @staticmethod
+    def _icon_color(role: str) -> str:
+        pal = theme.current_palette()
+        if role == "primary":
+            return pal.color(QPalette.HighlightedText).name()
+        if role == "title":
+            return pal.color(QPalette.Link).name()
+        return pal.color(QPalette.ButtonText).name()
+
+    def _refresh_icons(self):
+        for widget, name, role in self._icons:
+            self._apply_icon(widget, name, role)
+        self._refresh_mode_icons()
+
+    def _refresh_mode_icons(self):
+        color = theme.current_palette().color(QPalette.Link).name()
+        for index, name in ((0, "robot"), (1, "document")):
+            self.mode_combo.setItemIcon(index, line_icon(name, color, 16))
+
+    def on_theme_changed(self):
+        self._refresh_icons()
 
     # ==================== 界面搭建 ====================
 
@@ -70,10 +110,11 @@ class LivestreamSummaryPage(BasePage):
         self.file_edit.setReadOnly(True)
         self.file_edit.setPlaceholderText("选择直播转录文件（TXT / SRT）")
         file_row.addWidget(self.file_edit, 1)
-        pick_btn = QPushButton("📁 选择文件")
+        pick_btn = QPushButton("选择文件")
         pick_btn.setProperty("variant", "secondary")
         pick_btn.setToolTip("选择要总结的直播转录文件")
         pick_btn.clicked.connect(self._pick_file)
+        self._register_icon(pick_btn, "folder")
         file_row.addWidget(pick_btn)
         self.date_label = QLabel("直播日期：未选择文件")
         self.date_label.setProperty("role", "caption")
@@ -83,17 +124,19 @@ class LivestreamSummaryPage(BasePage):
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
-        self.start_btn = QPushButton("▶ 开始总结")
+        self.start_btn = QPushButton("开始总结")
         self.start_btn.setProperty("variant", "primary")
         self.start_btn.setToolTip("按当前模型设置执行分块提取、合并与终稿生成")
         self.start_btn.clicked.connect(self._start)
+        self._register_icon(self.start_btn, "play", "primary")
         action_row.addWidget(self.start_btn)
 
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
         self.stop_btn.setToolTip("停止当前任务（已生成的中间结果不保存）")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop)
+        self._register_icon(self.stop_btn, "stop")
         action_row.addWidget(self.stop_btn)
 
         self.progress = QProgressBar()
@@ -144,7 +187,8 @@ class LivestreamSummaryPage(BasePage):
         return body
 
     def _build_input_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("📄 输入与输出", "转录文件只读；总结另存为 TXT。")
+        card = ToolSectionCard("输入与输出", "转录文件只读；总结另存为 TXT。", icon="document")
+        self._register_icon(card, "document", "title")
         self.detail_label = QLabel("尚未选择文件")
         self.detail_label.setProperty("role", "caption")
         self.detail_label.setWordWrap(True)
@@ -156,10 +200,12 @@ class LivestreamSummaryPage(BasePage):
         self.output_dir_edit = QLineEdit()
         self.output_dir_edit.setPlaceholderText("留空 = 转录文件同目录")
         row.addWidget(self.output_dir_edit, 1)
-        browse = QPushButton("📁")
+        browse = QPushButton()
         browse.setProperty("variant", "secondary")
         browse.setToolTip("选择总结输出目录")
+        browse.setFixedWidth(38)
         browse.clicked.connect(self._pick_output_dir)
+        self._register_icon(browse, "folder")
         row.addWidget(browse)
         card.content_layout.addLayout(row)
 
@@ -171,8 +217,10 @@ class LivestreamSummaryPage(BasePage):
 
     def _build_local_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
-            "🧩 本机模型（Ollama）",
-            "自动检测本机服务与已安装模型；未安装时只给下载入口，不会静默安装。")
+            "本机模型（Ollama）",
+            "自动检测本机服务与已安装模型；未安装时只给下载入口，不会静默安装。",
+            icon="chip")
+        self._register_icon(card, "chip", "title")
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
@@ -180,16 +228,18 @@ class LivestreamSummaryPage(BasePage):
         self.local_status.setProperty("role", "caption")
         status_row.addWidget(self.local_status, 1)
 
-        self.local_detect_btn = QPushButton("🔄 检测")
+        self.local_detect_btn = QPushButton("检测")
         self.local_detect_btn.setProperty("variant", "secondary")
         self.local_detect_btn.setToolTip("检测本机 Ollama 服务与已安装模型")
         self.local_detect_btn.clicked.connect(self._detect_local)
+        self._register_icon(self.local_detect_btn, "refresh")
         status_row.addWidget(self.local_detect_btn)
 
-        install_btn = QPushButton("🌐 下载 Ollama")
+        install_btn = QPushButton("下载 Ollama")
         install_btn.setProperty("variant", "secondary")
         install_btn.setToolTip("打开 Ollama 官方下载页；安装后回到本页点检测")
         install_btn.clicked.connect(self._open_ollama_download)
+        self._register_icon(install_btn, "globe")
         status_row.addWidget(install_btn)
         card.content_layout.addLayout(status_row)
 
@@ -199,11 +249,12 @@ class LivestreamSummaryPage(BasePage):
 
         use_row = QHBoxLayout()
         use_row.setSpacing(6)
-        self.use_local_btn = QPushButton("✅ 使用这个模型")
+        self.use_local_btn = QPushButton("使用这个模型")
         self.use_local_btn.setProperty("variant", "secondary")
         self.use_local_btn.setToolTip("把接口地址和模型名自动填到下方设置")
         self.use_local_btn.setEnabled(False)
         self.use_local_btn.clicked.connect(self._use_local_model)
+        self._register_icon(self.use_local_btn, "check")
         use_row.addWidget(self.use_local_btn)
         use_row.addStretch(1)
         card.content_layout.addLayout(use_row)
@@ -216,16 +267,18 @@ class LivestreamSummaryPage(BasePage):
                 f"{item['label']} · {item['size']}", item["name"])
         pull_row.addWidget(self.recommend_combo, 1)
 
-        self.pull_btn = QPushButton("⬇️ 下载模型")
+        self.pull_btn = QPushButton("下载模型")
         self.pull_btn.setProperty("variant", "secondary")
         self.pull_btn.setToolTip("通过本机 Ollama 下载模型，完成后自动填入配置")
         self.pull_btn.clicked.connect(self._pull_model)
+        self._register_icon(self.pull_btn, "download")
         pull_row.addWidget(self.pull_btn)
 
-        self.pull_stop_btn = QPushButton("⏹ 停止")
+        self.pull_stop_btn = QPushButton("停止")
         self.pull_stop_btn.setProperty("variant", "ghost")
         self.pull_stop_btn.setEnabled(False)
         self.pull_stop_btn.clicked.connect(self._stop_pull)
+        self._register_icon(self.pull_stop_btn, "stop")
         pull_row.addWidget(self.pull_stop_btn)
         card.content_layout.addLayout(pull_row)
 
@@ -245,15 +298,18 @@ class LivestreamSummaryPage(BasePage):
 
     def _build_model_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
-            "🧭 总结方式",
+            "总结方式",
             "大模型总结质量更好，但需要接口与 Key；本地规则完全离线，"
-            "不填任何凭据也能出结果，代价是只做原文摘录。")
+            "不填任何凭据也能出结果，代价是只做原文摘录。",
+            icon="compass")
+        self._register_icon(card, "compass", "title")
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("🤖 大模型总结（OpenAI 兼容接口）", "ai")
-        self.mode_combo.addItem("📐 本地规则保底（不联网、不用 Key）", "rule")
+        self.mode_combo.addItem("大模型总结（OpenAI 兼容接口）", "ai")
+        self.mode_combo.addItem("本地规则保底（不联网、不用 Key）", "rule")
         self.mode_combo.setToolTip("本地规则模式不会发起任何网络请求")
         self.mode_combo.currentIndexChanged.connect(self._sync_mode)
+        self._refresh_mode_icons()
         card.content_layout.addWidget(self.mode_combo)
 
         self.model_box = QWidget()
@@ -305,16 +361,18 @@ class LivestreamSummaryPage(BasePage):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
-        save_btn = QPushButton("💾 保存设置")
+        save_btn = QPushButton("保存设置")
         save_btn.setProperty("variant", "primary")
         save_btn.setToolTip("保存接口地址、模型、分块字数与输入的 Key")
         save_btn.clicked.connect(self._save_settings)
+        self._register_icon(save_btn, "save", "primary")
         buttons.addWidget(save_btn)
 
-        self.test_btn = QPushButton("🔌 测试连接")
+        self.test_btn = QPushButton("测试连接")
         self.test_btn.setProperty("variant", "secondary")
         self.test_btn.setToolTip("发送一次极短的测试请求；本地模型也会消耗少量算力")
         self.test_btn.clicked.connect(self._test_connection)
+        self._register_icon(self.test_btn, "pulse")
         buttons.addWidget(self.test_btn)
         buttons.addStretch(1)
         box.addLayout(buttons)
@@ -328,7 +386,9 @@ class LivestreamSummaryPage(BasePage):
         return card
 
     def _build_result_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("📝 总结结果", "纯文本；校验未通过时会在日志里列出具体问题。")
+        card = ToolSectionCard(
+            "总结结果", "纯文本；校验未通过时会在日志里列出具体问题。", icon="edit")
+        self._register_icon(card, "edit", "title")
         self.result_view = QPlainTextEdit()
         self.result_view.setReadOnly(True)
         self.result_view.setPlaceholderText("生成的总结会显示在这里")
@@ -336,16 +396,18 @@ class LivestreamSummaryPage(BasePage):
 
         row = QHBoxLayout()
         row.setSpacing(6)
-        self.copy_btn = QPushButton("📋 复制结果")
+        self.copy_btn = QPushButton("复制结果")
         self.copy_btn.setProperty("variant", "secondary")
         self.copy_btn.setToolTip("把完整总结复制到剪贴板")
         self.copy_btn.clicked.connect(self._copy_result)
+        self._register_icon(self.copy_btn, "copy")
         row.addWidget(self.copy_btn)
 
-        self.export_btn = QPushButton("💾 另存为")
+        self.export_btn = QPushButton("另存为")
         self.export_btn.setProperty("variant", "secondary")
         self.export_btn.setToolTip("把总结另存为 TXT")
         self.export_btn.clicked.connect(self._export_result)
+        self._register_icon(self.export_btn, "download")
         row.addWidget(self.export_btn)
         row.addStretch(1)
         self.result_stats = QLabel("")
@@ -355,7 +417,9 @@ class LivestreamSummaryPage(BasePage):
         return card
 
     def _build_log_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("📋 运行日志", "记录每次分块、合并、校验与保存结果。")
+        card = ToolSectionCard(
+            "运行日志", "记录每次分块、合并、校验与保存结果。", icon="clipboard")
+        self._register_icon(card, "clipboard", "title")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)

@@ -3,7 +3,12 @@
 import os
 import re
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+from gui_qt import theme
+from gui_qt.navigation import line_icon
 
 
 class ToolPageHeader(QWidget):
@@ -29,7 +34,8 @@ class ToolPageHeader(QWidget):
 class ToolSectionCard(QFrame):
     """工具页内容卡片，标题行可放状态，content_layout 放原有功能控件。"""
 
-    def __init__(self, title: str, description: str = "", parent=None):
+    def __init__(self, title: str, description: str = "", parent=None,
+                 icon: str | None = None):
         super().__init__(parent)
         self.setObjectName("toolSectionCard")
         self.setProperty("variant", "card")
@@ -38,6 +44,13 @@ class ToolSectionCard(QFrame):
         layout.setSpacing(10)
         self.heading_layout = QHBoxLayout()
         self.heading_layout.setContentsMargins(0, 0, 0, 0)
+        self.icon_label: QLabel | None = None
+        if icon:
+            self.icon_label = QLabel()
+            self.icon_label.setFixedSize(18, 18)
+            self.icon_label.setAlignment(Qt.AlignCenter)
+            self.heading_layout.addWidget(self.icon_label)
+            self.set_icon(icon)
         self.title_label = QLabel(title)
         self.title_label.setProperty("role", "sectionTitle")
         self.heading_layout.addWidget(self.title_label)
@@ -52,6 +65,13 @@ class ToolSectionCard(QFrame):
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(10)
         layout.addLayout(self.content_layout, 1)
+
+    def set_icon(self, name: str, color: str | None = None):
+        if self.icon_label is None:
+            return
+        if color is None:
+            color = theme.current_palette().color(QPalette.Link).name()
+        self.icon_label.setPixmap(line_icon(name, color, 16).pixmap(16, 16))
 
 
 # 日期文件夹正则（YYYYMMDD）
