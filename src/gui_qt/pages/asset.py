@@ -38,6 +38,10 @@ from gui_qt import common, theme
 from gui_qt.common import _fmt, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox import asset_index
+from toolbox.asset_content import (
+    docx_to_html, files_summary_html, fmt_size as _fmt_size,
+    html_to_content, md_to_html, read_text_file, text_preview_html,
+)
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import PLATFORM_CN, platform_cn
 
@@ -174,14 +178,6 @@ def _make_progress_dlg(parent, title: str, total: int, cancel_event: threading.E
     return dlg
 
 
-def _fmt_size(n):
-    if n < 1024:
-        return f"{n} B"
-    if n < 1024 * 1024:
-        return f"{n/1024:.1f} KB"
-    if n < 1024 * 1024 * 1024:
-        return f"{n/1024/1024:.1f} MB"
-    return f"{n/1024/1024/1024:.2f} GB"
 
 
 def _parse_duration_text(text) -> int:
@@ -430,132 +426,16 @@ class _ContentBrowser(QTextBrowser):
         return super().loadResource(rtype, url)
 
 
-def _read_text_file(path: str) -> str:
-    """读文本文件（UTF-8 优先，GBK/GB18030 兜底）。"""
-    data = Path(path).read_bytes()
-    for enc in ("utf-8-sig", "utf-8", "gb18030"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
 
 
-def _md_to_html(text: str, base_dir: str) -> str:
-    """公众号 MD 导出 → 可预览 HTML（标题/引用/加粗/图片）。
-
-    只覆盖本项目自己产出的 Markdown 语法，不引入第三方解析库。
-    """
-    lines = text.splitlines()
-    out, para, quote = [], [], []
-
-    def flush_para():
-        if para:
-            out.append("<p>" + "<br>".join(para) + "</p>")
-            para.clear()
-
-    def flush_quote():
-        if quote:
-            out.append("<blockquote>" + "".join(f"<p>{x}</p>" for x in quote)
-                       + "</blockquote>")
-            quote.clear()
-
-    def inline(s: str) -> str:
-        s = html_lib.escape(s)
-        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
-        s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", s)
-        s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
-        return s
-
-    for raw in lines:
-        line = raw.strip()
-        m_img = re.match(r"^!\[([^\]]*)\]\(([^)]+)\)$", line)
-        if m_img:
-            flush_para()
-            flush_quote()
-            alt, src = m_img.group(1), m_img.group(2)
-            if not re.match(r"^(https?:|data:|file:)", src, re.I):
-                local = os.path.abspath(os.path.normpath(
-                    os.path.join(base_dir, src)))
-                src = QUrl.fromLocalFile(local).toString()
-            out.append(f'<p><img src="{html_lib.escape(src, quote=True)}" '
-                       f'alt="{html_lib.escape(alt, quote=True)}"></p>')
-            continue
-        m_h = re.match(r"^(#{1,6})\s+(.*)$", line)
-        if m_h:
-            flush_para()
-            flush_quote()
-            level = min(len(m_h.group(1)) + 1, 6)
-            out.append(f"<h{level}>{inline(m_h.group(2))}</h{level}>")
-            continue
-        if line in ("---", "***", "___"):
-            flush_para()
-            flush_quote()
-            out.append("<hr>")
-            continue
-        if line.startswith(">"):
-            flush_para()
-            text_q = line.lstrip(">").strip()
-            if text_q:
-                quote.append(inline(text_q))
-            continue
-        if not line:
-            flush_para()
-            flush_quote()
-            continue
-        para.append(inline(line))
-    flush_para()
-    flush_quote()
-    return "".join(out)
 
 
-def _html_to_content(html_text: str):
-    """公众号 HTML 导出 → (标题, 正文 HTML)。"""
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(html_text, "html.parser")
-    title = soup.title.get_text(strip=True) if soup.title else ""
-    node = soup.find("div", class_="content") or soup.body or soup
-    for tag in node.find_all(["script", "style"]):
-        tag.decompose()
-    return title, node.decode_contents()
 
 
-def _docx_to_html(path: str) -> str:
-    """docx 正文提取（最小 OOXML 读取，失败返回空串）。"""
-    import zipfile
-    from xml.sax.saxutils import unescape as xml_unescape
-    try:
-        with zipfile.ZipFile(path) as z:
-            xml = z.read("word/document.xml").decode("utf-8", "ignore")
-    except Exception:
-        return ""
-    out = []
-    for p in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
-        texts = re.findall(r"<w:t[^>]*>(.*?)</w:t>", p, re.S)
-        line = xml_unescape("".join(texts)).strip()
-        if line:
-            out.append(f"<p>{html_lib.escape(line)}</p>")
-    return "".join(out)
 
 
-def _text_preview_html(text: str, limit: int = 200000) -> str:
-    text = text[:limit]
-    style = ("white-space:pre-wrap; font-family:Consolas,'Microsoft YaHei';"
-             " font-size:12px; color:#333;")
-    return f'<pre style="{style}">' + html_lib.escape(text) + "</pre>"
 
 
-def _files_summary_html(files: list, empty_tip: str = "（没有可预览的文档）") -> str:
-    if not files:
-        return f'<p style="color:#888;">{empty_tip}</p>'
-    rows = []
-    for f in files[:300]:
-        name = html_lib.escape(f.get("name") or "")
-        size = _fmt_size(f.get("size", 0))
-        rows.append(f"<li>{name} <span style='color:#888;'>{size}</span></li>")
-    more = "" if len(files) <= 300 else f"<p style='color:#888;'>… 其余 {len(files) - 300} 个文件</p>"
-    return ("<p style='color:#666;'>该条目没有可内嵌预览的正文，包含以下文件：</p><ul>"
-            + "".join(rows) + "</ul>" + more)
 
 
 def _classify(path: str) -> str:
@@ -2984,24 +2864,24 @@ class AssetPage(BasePage):
                 names = "、".join(html_lib.escape(f["name"]) for f in pdfs[:3])
                 return "", (f"<p>该篇只有 PDF 文件：{names}</p>"
                             "<p style='color:#888;'>点底部「打开首个文件」用系统阅读器查看。</p>")
-            return "", _files_summary_html(art.get("files") or [])
+            return "", files_summary_html(art.get("files") or [])
         doc = docs[0]
         path = doc.get("path") or ""
         ext = os.path.splitext(path)[1].lower()
         try:
             if ext == ".md":
-                text = _read_text_file(path)
+                text = read_text_file(path)
                 title = next((ln[2:].strip() for ln in text.splitlines()
                               if ln.startswith("# ")), "")
-                body = _md_to_html(text, os.path.dirname(path))
+                body = md_to_html(text, os.path.dirname(path))
             elif ext in (".html", ".htm"):
-                title, body = _html_to_content(_read_text_file(path))
+                title, body = html_to_content(read_text_file(path))
                 if title:
                     body = f"<h2>{html_lib.escape(title)}</h2>" + body
             elif ext == ".docx":
-                title, body = "", _docx_to_html(path)
+                title, body = "", docx_to_html(path)
             else:
-                title, body = "", _text_preview_html(_read_text_file(path))
+                title, body = "", text_preview_html(read_text_file(path))
         except Exception as e:
             return "", f"<p style='color:#c62828;'>读取失败：{html_lib.escape(str(e))}</p>"
         wrapper = ('<div style="font-family:\'Microsoft YaHei\',sans-serif;'
