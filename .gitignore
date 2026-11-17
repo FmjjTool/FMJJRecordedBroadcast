@@ -76,3 +76,7 @@ skills-lock.json
 
 # 根目录待办草稿（内容仅本地保留，不入库）
 task.md
+
+# 测试与开发文档不随仓库上传（仅本地保留）
+tests/
+docs/
