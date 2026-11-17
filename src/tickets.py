@@ -998,8 +998,11 @@ _DAMAI_ARTIST_ID_HINTS = {
 }
 
 # 已知常用艺人对应秀动艺人 ID（同样手动维护）。
+# 关键词接口只返回在售/即将开演场次；艺人页同时保留历史演出，
+# 因此常查艺人走艺人页通道，避免「全国无在售演出」时完全没有结果。
 _SHOWSTART_ARTIST_ID_HINTS = {
-    # "封茗囧菌": "8982311",
+    "封茗囧菌": "8982311",
+    "封茗囧菌咨讯站": "8982311",
 }
 
 
@@ -1286,7 +1289,7 @@ def search_tickets_by_keyword(keyword: str, *,
             调用方显式传 damai_artist_id 时走艺人详情页（数据更全）
     - 秀动：Web 客户端接口 activity/list（Playwright 复用页面 $nuxt.$axios
             自动补 crpsign 签名，cityCode 全国）；显式 showstart_artist_id
-            时走艺人页 SSR
+            或命中艺人映射表时走艺人页 SSR（含历史演出）
 
     失败时不抛错，会把错误信息塞到第二项 dict 里，方便 UI 多平台结果汇总展示。
     """
