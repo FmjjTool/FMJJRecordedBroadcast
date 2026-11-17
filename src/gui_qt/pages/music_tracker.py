@@ -9,6 +9,7 @@
 数据源：网易云/QQ音乐/酷狗/酷我/5sing（游客HTTP→游客Playwright→登录态三级回退）。
 """
 
+import os
 import time
 
 from PySide6.QtCore import Qt
@@ -489,8 +490,12 @@ class MusicTrackerPage(BasePage):
         def done(result, err):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
-            else:
-                self.app.toast(f"已导出 PNG：{result}", "success")
+                return
+            self.app.toast(f"已导出 PNG：{result}", "success")
+            try:
+                os.startfile(str(result))
+            except Exception:
+                pass
 
         run_bg(work, done)
 
@@ -1051,7 +1056,11 @@ class MusicTrackerPage(BasePage):
         def done(result, err):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
-            else:
-                self.app.toast(f"已导出组 PNG：{result}", "success")
+                return
+            self.app.toast(f"已导出组 PNG：{result}", "success")
+            try:
+                os.startfile(str(result))
+            except Exception:
+                pass
 
         run_bg(work, done)

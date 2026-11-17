@@ -7,6 +7,7 @@
 - 历史窗口：指标当列、时间点当行，可横向滚动
 """
 
+import os
 import time
 
 from PySide6.QtCore import Qt
@@ -485,8 +486,12 @@ class TrackerPage(BasePage):
         def done(result, err):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
-            else:
-                self.app.toast(f"已导出 PNG：{result}", "success")
+                return
+            self.app.toast(f"已导出 PNG：{result}", "success")
+            try:
+                os.startfile(str(result))
+            except Exception:
+                pass
 
         run_bg(work, done)
 
@@ -1277,7 +1282,11 @@ class TrackerPage(BasePage):
         def done(result, err):
             if err:
                 self.app.toast(f"导出失败：{err}", "error")
-            else:
-                self.app.toast(f"已导出组 PNG：{result}", "success")
+                return
+            self.app.toast(f"已导出组 PNG：{result}", "success")
+            try:
+                os.startfile(str(result))
+            except Exception:
+                pass
 
         run_bg(work, done)
