@@ -170,7 +170,7 @@
 
 ### 关键设计约定
 
-1. **分层解耦**：`toolbox/` 只依赖标准库 + 系统 ffmpeg/ffprobe，不依赖 GUI、不依赖网络框架
+1. **分层解耦**：`toolbox/` 以标准库 + 系统 ffmpeg/ffprobe 为主；部分平台采集/适配模块使用 requests/httpx/Playwright/websocket；不依赖 GUI（PDF 渲染在 GUI 层，进程树在 `toolbox/process_tree.py`）
 2. **懒加载**：页面在首次点击时才 `PAGE_CLASSES[key](app)` 实例化；页面内重依赖（PIL、openpyxl 等）在函数内延迟 import，控制启动开销
 3. **线程桥**：后台任务统一走 `common.run_bg(fn, on_done)`，`on_done(result, err)` 自动排回主线程；轻量进度用 `post_to_main`
 4. **页面生命周期钩子**（`BasePage` 可选实现，由主窗口反射调用）：
@@ -248,7 +248,7 @@ PySide6/
 │   │       ├── containers.py    #     页签容器（信息工具 / 音乐搜索下载）
 │   │       └── editor.py        #     视频操作（转换 / 切割 / 合并 / 压缩 / 轨道 / 截图）
 │   │
-│   ├── toolbox/                 # 录播工具箱引擎（仅依赖标准库 + ffmpeg）
+│   ├── toolbox/                 # 录播工具箱引擎（标准库 + ffmpeg 为主，部分采集适配依赖网络库）
 │   │   ├── config_manager.py    #   配置中枢（config.json / cache.json / 导出目录）
 │   │   ├── utils.py             #   文件名清洗 / ffmpeg 错误分类 / 视频信息探测
 │   │   ├── convert_engine.py    #   视频转换（无损封装 → 转码回退 + 缓存）

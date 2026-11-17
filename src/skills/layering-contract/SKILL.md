@@ -25,7 +25,7 @@ description: "分层约束（新增/重构/跨层调用前必读）。定义入�
 | **L2** | UI 表现层 | 主窗口、导航、页面、对话框、浮层、主题应用、输入校验、结果渲染、调用 L3；只持有界面状态 | `src/gui_qt/main_window.py`、`src/gui_qt/pages/`、`src/gui_qt/theme.py`、`src/gui_qt/navigation.py`、`src/gui_qt/toast.py` |
 | **L3** | 应用服务 / 用例层 | 采集、同步、备份、追踪、导出、资产、统计、报告等用例编排；事务边界、去重、重试、限流、进度事件、账号解析、失败回退策略 | `toolbox/tcdoc/job.py`、`toolbox/quark/backup.py`、`toolbox/account_tracker_job.py`、`tracker/accounts.py` 的服务部分、`music/downloader.py`、`exporters/`、`toolbox/livestream_summary/pipeline.py` |
 | **L4** | 平台适配 / 领域引擎层 | 平台协议、签名、解析、格式转换、媒体/ASR/ffmpeg 引擎、网盘 API、平台采集器；返回领域对象或 DTO | `platforms/`、`bili/`、`netease/`、`music/scrapers/`、`tracker/collectors/`、`toolbox/*_engine.py`、`toolbox/tcdoc/http_api.py`、`toolbox/quark/api.py`、`baidu/`、`yun139/` |
-| **L5** | 基础设施 / 数据层 | 配置、日志、SQLite 存储与索引、文件 IO、浏览器、进程树、Windows 计划任务适配、加密原语、通用工具 | `toolbox/config_manager.py`、`app_logger.py`、`toolbox/durable_io.py`、`toolbox/increment_db.py`、`toolbox/asset_index.py`、`toolbox/browser.py`、`toolbox/*_task.py`、`src/gui_qt/process_tree.py`（应迁出 GUI 包） |
+| **L5** | 基础设施 / 数据层 | 配置、日志、SQLite 存储与索引、文件 IO、浏览器、进程树、Windows 计划任务适配、加密原语、通用工具 | `toolbox/config_manager.py`、`app_logger.py`、`toolbox/durable_io.py`、`toolbox/increment_db.py`、`toolbox/asset_index.py`、`toolbox/browser.py`、`toolbox/*_task.py`、`toolbox/process_tree.py` |
 | **X** | 横切层 | 主题、账户/Cookie 管理、定时任务中心、线程桥、日志、toast 等跨层能力 | `src/gui_qt/theme.py`、`src/auth.py`、`toolbox/task_center.py`、`src/gui_qt/common.py` 的 `run_bg/post_to_main`、`src/gui_qt/toast.py` |
 
 ## 每层必须与禁止
@@ -119,8 +119,8 @@ L1 入口/任务编排
 
 以下是审计中反复出现的模式，不代表已经自动修复；涉及对应模块时逐项确认现状，不要批量返工：
 
-- **L2 承载 L3**：`info_accounts` 的账号采集线程池/限流、`home` 的多库统计、`asset` 的扫描/下载/导出、`test_page` 的回放包处理、`tracker`/`music_tracker` 的涨跌对比、`music_tag` 的表格匹配。
-- **L3/L4 反向依赖 UI**：`exporters/wechat_writer.py` 的 Qt PDF、`toolbox/live_video.py` 的 `QTimer`、`toolbox/webwiki/server.py` 对 `gui_qt.process_tree` 的依赖。
+- **L2 承载 L3（剩余）**：`asset` 的目录扫描/平台下载/记录导出/资产索引；信息获取采集、首页统计、回放包、账号 diff、标签匹配已完成服务下沉。
+- **已修复（2026-11-17 P4）**：`exporters/wechat_writer.py` 的 PDF 已上移 GUI；`toolbox/live_video.py` 改注入调度；`toolbox/webwiki/server.py` 改用 `toolbox.process_tree`。
 - **L5 数据多轨**：`collected.db` 与 `increment.db`、`asset_index.db` 与 `_assets_index.json`、网媒/音乐/信息获取三套账号存储。
 - 这些偏差不因本 skill 新增而自动回滚；只在新代码或触及该链路时按授权范围收敛，保留既有行为并补测试。
 
