@@ -21,6 +21,7 @@ from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.tcdoc_credentials import OpenApiCredentialsBox
 from gui_qt.skeleton import LoadingSkeleton
+from toolbox import tcdoc as tc_engine
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import bridge
 
@@ -677,7 +678,8 @@ class TcDocBridgePanel(QWidget):
                 ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
                 str(target["doc_key"]), str(target["tab_id"]))
             client.connect()
-            return pending.run(client, records, apply=True, available_only=False, emit=emit)
+            return pending.run(client, records, apply=True, available_only=False,
+                               verify_each=False, emit=emit)
 
         def done(receipt, err):
             self._uploading = False
@@ -704,6 +706,28 @@ class TcDocBridgePanel(QWidget):
                     "以下记录的读回值不一致，请到表格里核对：\n"
                     + "\n".join(f"{i.get('record_id')} {i.get('title')}" for i in failed))
             self._progress_finish(5000)
+            self._refresh_archive(target)
+
+        run_bg(work, done, owner=self)
+
+    def _refresh_archive(self, target: dict) -> None:
+        """上传后重新抓一遍该文档，否则中间层仍按旧存档判定「还没同步」。"""
+        doc = {"key": target.get("doc_key"), "name": target.get("doc_name") or "",
+               "url": target.get("doc_url") or "", "kind": "smartsheet"}
+        self.status.setText("✅ 上传完成，正在刷新本地存档…")
+
+        def work():
+            return tc_engine.job.sync_tables(
+                [doc], on_status=lambda text: common.post_to_main(
+                    self.status.setText, f"⏳ {text}"))
+
+        def done(result, err):
+            if self._closed:
+                return
+            if err:
+                self.status.setText(f"上传已完成，但刷新存档失败：{err}")
+            else:
+                self.status.setText("✅ 上传完成，本地存档已刷新。")
             self.refresh()
 
         run_bg(work, done, owner=self)

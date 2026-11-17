@@ -243,7 +243,8 @@ class LocalImportClient:
     def get_records(self) -> list[dict]:
         out, seen, offset = [], set(), 0
         for _ in range(1000):
-            block = self._action("getRecords", {"offset": offset, "limit": 100})
+            # 服务端单页上限 1000；用 100 行翻 5000 行要 51 次请求，太慢
+            block = self._action("getRecords", {"offset": offset, "limit": 1000})
             rows = block.get("records")
             if not isinstance(rows, list):
                 raise ImportErrorDetail("记录清单格式异常")

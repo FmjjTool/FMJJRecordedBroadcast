@@ -415,32 +415,36 @@ def fill_choices(client, records, *, apply=False, emit=lambda event: None):
     return result
 
 
-def run(client, records, *, apply=False, available_only=False, emit=lambda event: None):
+def run(client, records, *, apply=False, available_only=False, verify_each=True,
+        emit=lambda event: None):
+    """预览并导入记录。
+
+    verify_each=True（命令行默认）逐条新增后立刻读回，异常即停；
+    界面批量上传传 False：整批新增完只读回一次，避免每条都翻完整张表。
+    """
     if available_only and (client.doc_key, client.tab_id) != TEST_TARGET:
         raise ImportErrorDetail("只写可用字段的例外仅允许本次授权测试目标")
     fields = client.get_fields()
     plans = [(record, *make_plan(record, fields, available_only)) for record in records]
     before = client.get_records()
-    keys = remote_keys(before)
+    known = set(remote_keys(before))
     emit({"phase": "preview", "apply": apply, "doc_key": client.doc_key, "tab_id": client.tab_id,
           "records": [{"key": r["key"], "title": r["columns"]["作品标题"], "images": len(r["_images"]),
                        "missing_images": len(r["missing_slots"]), "skipped_fields": skipped,
-                       "operation": "skip" if r["key"] in keys else "add"} for r, v, k, skipped in plans]})
+                       "operation": "skip" if r["key"] in known else "add"}
+                      for r, v, k, skipped in plans]})
     receipt = {"phase": "complete", "doc_key": client.doc_key, "tab_id": client.tab_id, "apply": apply,
                "rows_before": len(before), "rows_after": len(before), "added": [], "skipped": [],
                "uploaded_images": 0, "missing_images": sum(len(r["missing_slots"]) for r in records),
                "updated": 0, "deleted": 0}
     if not apply:
         return receipt
+
+    pending_verify = []
     for record, values, kinds, skipped in plans:
         try:
-            if client.get_fields() != fields:
-                raise ImportErrorDetail("字段在预览后变化，请重新预览")
-            existing = client.get_records()
-            current_keys = remote_keys(existing)
-            if record["key"] in current_keys:
-                receipt["skipped"].append({"key": record["key"], "record_ids": current_keys[record["key"]]})
-                receipt["rows_after"] = len(existing)
+            if record["key"] in known:
+                receipt["skipped"].append({"key": record["key"], "record_ids": []})
                 continue
             images = record["_images"]
             for image in images:
@@ -451,35 +455,47 @@ def run(client, records, *, apply=False, available_only=False, emit=lambda event
                 receipt["uploaded_images"] += 1
                 emit({"phase": "image_uploaded", "key": record["key"], "name": image.path.name})
             values = copy.deepcopy(values)
-            image_title = next(title for title, kind in kinds.items() if kind == 5)
             if tickets:
+                image_title = next(title for title, kind in kinds.items() if kind == 5)
                 values[image_title] = [{"imageID": ticket} for ticket in tickets]
-            latest = client.get_records()
-            if record["key"] in remote_keys(latest):
-                receipt["skipped"].append({"key": record["key"], "record_ids": remote_keys(latest)[record["key"]]})
-                continue
-            if client.get_fields() != fields:
-                raise ImportErrorDetail("上传期间字段变化，未新增记录")
             rid = client.add_record(values)
+            known.add(record["key"])
             added = {"key": record["key"], "title": record["columns"]["作品标题"], "record_id": rid,
                      "image_count": len(images), "missing_images": len(record["missing_slots"]),
                      "skipped_fields": skipped, "verified": False}
             receipt["added"].append(added)
+            receipt["rows_after"] = receipt["rows_before"] + len(receipt["added"])
             emit({"phase": "record_created", **added})
-            fresh = client.get_records()
-            saved = [r for r in fresh if r.get("recordID") == rid]
-            if len(saved) != 1:
-                raise ImportErrorDetail("新增记录未查回，请按 record_id 核对")
-            checks = verify(saved[0], values, kinds, images)
-            added.update({"verified": all(checks.values()), "checks": checks})
-            receipt["rows_after"] = len(fresh)
-            emit({"phase": "readback", **added})
-            if not added["verified"]:
-                raise ImportErrorDetail("读回不一致，停止后续条目")
+            if verify_each:
+                fresh = client.get_records()
+                saved = [row for row in fresh if row.get("recordID") == rid]
+                if len(saved) != 1:
+                    raise ImportErrorDetail("新增记录未查回，请按 record_id 核对")
+                checks = verify(saved[0], values, kinds, images)
+                added.update({"verified": all(checks.values()), "checks": checks})
+                receipt["rows_after"] = len(fresh)
+                emit({"phase": "readback", **added})
+                if not added["verified"]:
+                    raise ImportErrorDetail("读回不一致，停止后续条目")
+            else:
+                pending_verify.append((added, values, kinds, images))
         except ImportErrorDetail as exc:
             emit({**receipt, "phase": "stopped", "key": record["key"], "error": str(exc),
                   "unknown_record_outcome": isinstance(exc, UnknownWriteResult)})
             raise
+
+    if pending_verify:
+        fresh = client.get_records()
+        saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
+        for added, values, kinds, images in pending_verify:
+            saved = saved_by_id.get(str(added["record_id"]))
+            if saved is None:
+                emit({"phase": "readback", **added})
+                continue
+            checks = verify(saved, values, kinds, images)
+            added.update({"verified": all(checks.values()), "checks": checks})
+            emit({"phase": "readback", **added})
+        receipt["rows_after"] = len(fresh)
     return receipt
 
 
