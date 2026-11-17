@@ -5,11 +5,14 @@ config/increment.db，每个平台一张表（表名=平台英文标识，首次
 字段逐列存储（获取时间/标题/作者/发布时间/各计数/链接/正文等），
 完整原始数据另存 raw_json 列兜底。
 
-去重一层：表内 dedup_key 唯一（优先用 video_id 稳定 ID，避免抖音 CDN 直链过期导致重复入库）。
+去重规则：仅表内按 dedup_key 去重（优先用 video_id 稳定 ID，避免抖音 CDN 直链过期导致重复入库）。
 跨平台互发内容不去重——按平台分表浏览时各表须完整（快手全是互发内容，
-跨表拦截曾把整张快手表拦成 0 行）；content_key 列仍写入（信息性）。
-内部表（_content_keys 全局内容注册表 / _meta 迁移标记）不出现在平台下拉里。
-旧 download/已获取数据/_增量汇总.json 首次使用时自动迁移入库。
+跨表拦截曾把整张快手表拦成 0 行）；content_key 仅供检索/排查，不参与任何去重。
+
+归属：collected.db 是「已获取」页面展示/导出快照，唯一写入方 gui_qt/common.py；
+increment.db 是账号增量采集的分平台归档，唯一写入方本模块。两者暂不合并。
+内部表 _meta 是迁移标记，不出现在平台下拉里；历史 _content_keys 表可能残留在旧库，
+已停止维护且不参与去重。旧 download/已获取数据/_增量汇总.json 首次使用时自动迁移入库。
 
 会被后台线程调用 → 每次操作短连接（开-关），禁止模块级共享连接。
 """
@@ -20,6 +23,8 @@ import sqlite3
 import threading
 import time
 from dataclasses import asdict, is_dataclass
+
+from toolbox.dedup import collect_key
 
 _lock = threading.Lock()
 
@@ -90,9 +95,9 @@ def _norm_platform(platform: str) -> str:
 
 
 def _content_key(title: str, author: str) -> str:
-    """跨平台内容指纹：标题+作者 归一化（去【】前缀/#话题/空白标点，小写）。
+    """内容指纹：标题+作者 归一化（去【】前缀/#话题/空白标点，小写）。
 
-    无有效标题（纯话题/空）返回 ""，不参与跨表去重（按 dedup_key 表内去重）。
+    仅写入 content_key 列供检索/排查，不参与跨平台去重；无有效标题返回 ""。
     """
     t = title or ""
     t = re.sub(r"【[^】]*】", "", t)     # 【作者名】前缀（B站标题习惯）
@@ -141,14 +146,10 @@ def _to_int(v) -> int:
 def _row_of(info, now_str: str) -> tuple:
     if isinstance(info, dict):
         data = {_CN_KEY_MAP.get(k, k): v for k, v in info.items()}
-        # 键优先级：video_id（稳定，如抖音 aweme_id）→ video_url → raw_url
-        # 抖音 video_url 是带过期时间戳的 CDN 直链，做键会导致重复入库
-        key = (data.get("video_id") or data.get("video_url")
-               or data.get("raw_url") or "").strip()
+        key = collect_key(data)
         platform = data.get("platform") or ""
     else:
-        key = (getattr(info, "video_id", "") or getattr(info, "video_url", "")
-               or getattr(info, "raw_url", "") or "").strip()
+        key = collect_key(info)
         platform = getattr(info, "platform", "") or ""
         data = asdict(info) if is_dataclass(info) else {}
     if not key:
@@ -176,13 +177,15 @@ def _row_of(info, now_str: str) -> tuple:
 
 
 def _ensure_migrated(conn):
-    """一次性迁移：老表补列回填 + 跨表去重 + 清理空 unknown 残留表。幂等。"""
+    """历史表结构迁移：补 content_key 列并回填，不删除任何行。幂等。
+
+    dedup_v1 是历史迁移标记，名称保留；旧版本曾在该标记下执行跨表删重，
+    本次起不再删除重复行，已删除的历史行无法恢复。
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT)")
     if conn.execute("SELECT 1 FROM _meta WHERE key='dedup_v1'").fetchone():
         return
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS _content_keys (content_key TEXT PRIMARY KEY, platform TEXT)")
     # 空表 unknown 是旧版空平台查询时误建的残留
     try:
         if conn.execute('SELECT COUNT(*) FROM "unknown"').fetchone()[0] == 0:
@@ -191,29 +194,25 @@ def _ensure_migrated(conn):
         pass
     for name in _platform_tables(conn):
         _ensure_table(conn, name)
-        drop_rowids = []
+        updates = []
         for rid, title, author in conn.execute(
                 f'SELECT rowid, "title", "author" FROM "{name}" ORDER BY rowid'):
             ck = _content_key(title, author)
-            if not ck:
-                continue
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO _content_keys (content_key, platform) VALUES (?, ?)",
-                (ck, name))
-            if cur.rowcount == 0:
-                drop_rowids.append(rid)     # 跨表/表内重复内容 → 删后到的
-        if drop_rowids:
+            if ck:
+                updates.append((ck, rid))
+        if updates:
             conn.executemany(
-                f'DELETE FROM "{name}" WHERE rowid = ?', [(r,) for r in drop_rowids])
+                f'UPDATE "{name}" SET content_key=? WHERE rowid=?'
+                ' AND ("content_key" IS NULL OR "content_key"="")', updates)
     conn.execute("INSERT OR REPLACE INTO _meta (key, value) VALUES ('dedup_v1', ?)",
                  (str(int(time.time())),))
     conn.commit()
 
 
 def save_incremental(posts) -> dict:
-    """批量入库（分平台分表，两层去重）。posts: VideoInfo 或 to_dict() 字典列表。
+    """批量入库（分平台分表，表内按 dedup_key 去重，跨平台不去重）。
 
-    返回 {平台: 新增条数}。
+    posts: VideoInfo 或 to_dict() 字典列表。返回 {平台: 新增条数}。
     """
     from datetime import datetime
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -279,7 +278,7 @@ def migrate_from_summary() -> int:
 
 
 def list_tables() -> list:
-    """[(表名, 行数)]，按表名排序；首次调用顺带迁移旧汇总 json 与历史去重。"""
+    """[(表名, 行数)]，按表名排序；首次调用顺带迁移旧汇总 json 与历史表结构。"""
     try:
         migrate_from_summary()
     except Exception:

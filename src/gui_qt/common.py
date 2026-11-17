@@ -376,14 +376,9 @@ def _fmt(n):
 
 
 def _dedup_key(info) -> str:
-    """用于去重的唯一标识：video_id（稳定，如抖音 aweme_id/B站 bvid/微博 status id）
-    优先，其次 video_url，最后 raw_url——与 increment_db 键序一致。
-
-    抖音 CDN 直链带签名/过期参数（每次抓取都变）不能当键；用户作品条目的
-    raw_url 是主页链接（同账号所有条目相同）也不能当键（曾因此整列重复入库）。
-    """
-    return (getattr(info, "video_id", "") or getattr(info, "video_url", "")
-            or getattr(info, "raw_url", "") or "").strip()
+    """「已获取」列表的去重键；统一由 toolbox.dedup.collect_key 提供。"""
+    from toolbox.dedup import collect_key
+    return collect_key(info)
 
 
 def _collect(infos, persist=True):
@@ -413,8 +408,12 @@ def _collect(infos, persist=True):
 
 # ==================== 已获取数据持久化（SQLite 增量存储） ====================
 #
-# config/collected.db 表 videos：
-#   dedup_key TEXT PRIMARY KEY  去重键（video_url/raw_url/video_id）
+# 归属：config/collected.db 是「已获取」页面展示/导出快照，唯一写入方是本模块；
+# config/increment.db 是账号增量采集的分平台归档，唯一写入方是 toolbox/increment_db.py。
+# 两者可承载同一次采集结果但用途不同，暂不合并；去重键统一由 toolbox.dedup.collect_key 提供。
+#
+# 表 videos：
+#   dedup_key TEXT PRIMARY KEY  去重键（video_id/video_url/raw_url）
 #   platform  TEXT              平台（bilibili/douyin/weibo，便于按平台查询）
 #   created_at REAL             入库时间戳
 #   data      TEXT              VideoInfo asdict 的 JSON
