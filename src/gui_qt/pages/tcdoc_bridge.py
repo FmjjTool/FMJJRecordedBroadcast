@@ -225,6 +225,7 @@ class TcDocBridgePanel(QWidget):
         self._targets_pending = None
         self._targets_req = 0
         self._compare_req = 0
+        self._compare_owner = 0
         self._compare_pending = False
         self._saved_accounts = []
 
@@ -610,6 +611,7 @@ class TcDocBridgePanel(QWidget):
         days = int(self.days_combo.currentData() or 0)
         collected = list(common.COLLECTED)
         self._busy = True
+        self._compare_owner = 0
         self.upload_btn.setEnabled(False)
         self.status.setText("正在准备待上传清单与本地图片…")
         self._progress_start()
@@ -674,6 +676,7 @@ class TcDocBridgePanel(QWidget):
             return
         self._uploading = True
         self._busy = True
+        self._compare_owner = 0
         total_images = sum(len(r.get("_images") or []) for r in records)
         self._upload_records_total = len(records)
         self._upload_images_total = total_images
@@ -863,10 +866,11 @@ class TcDocBridgePanel(QWidget):
         self._busy = True
         self._compare_pending = False
         req = self._compare_req
-        self.summary.setText("⏳ 正在比对本地数据与腾讯表格…")
-        self.status.setText("本地已获取 + 增量数据库合并去重后比对，不会修改腾讯文档。")
+        self._compare_owner = req
 
         try:
+            self.summary.setText("⏳ 正在比对本地数据与腾讯表格…")
+            self.status.setText("本地已获取 + 增量数据库合并去重后比对，不会修改腾讯文档。")
             days = int(self.days_combo.currentData() or 0)
             accounts = self._selected_accounts()
             doc_key, tab_id = target["doc_key"], target["tab_id"]
@@ -885,6 +889,7 @@ class TcDocBridgePanel(QWidget):
         except Exception as exc:  # noqa: BLE001 - 启动失败必须解除忙碌态
             logger.exception("中间层比对启动失败")
             self._busy = False
+            self._compare_owner = 0
             self._compare_watchdog.stop()
             if self._rows:
                 self._show_table()
@@ -896,6 +901,7 @@ class TcDocBridgePanel(QWidget):
             return
         if thread is None:
             self._busy = False
+            self._compare_owner = 0
             self._compare_watchdog.stop()
             if self._rows:
                 self._show_table()
@@ -908,7 +914,12 @@ class TcDocBridgePanel(QWidget):
         if self._closed:
             return
         if req != self._compare_req:
-            # 迟到的旧结果：不碰当前忙碌态和看门狗，只补跑等待中的请求
+            # 迟到结果：结果丢弃，但它若还占着忙碌态就必须释放，
+            # 否则等待中的比对永远等不到，界面一直停在骨架。
+            if req == self._compare_owner:
+                self._busy = False
+                self._compare_owner = 0
+                self._compare_watchdog.stop()
             if (self._compare_pending and not self._busy
                     and not self._targets_loading):
                 self._compare_pending = False
@@ -916,6 +927,7 @@ class TcDocBridgePanel(QWidget):
                 self._start_compare()
             return
         self._busy = False
+        self._compare_owner = 0
         self._compare_watchdog.stop()
         if self._compare_pending and not self._targets_loading:
             # 比对期间又收到新的比对请求：按最新条件重跑一次
@@ -992,6 +1004,7 @@ class TcDocBridgePanel(QWidget):
         if self._closed or not self._busy:
             return
         self._busy = False
+        self._compare_owner = 0
         self._compare_pending = False
         self._compare_req += 1  # 丢弃迟到结果，避免覆盖当前界面
         seconds = int(self.COMPARE_TIMEOUT_MS / 1000)

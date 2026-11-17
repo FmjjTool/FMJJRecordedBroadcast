@@ -175,6 +175,13 @@ def _paint_button_icon(button):
 def _apply_button(button):
     if getattr(button, "_line_busy", False):
         return
+    try:
+        _apply_button_impl(button)
+    except Exception:  # noqa: BLE001 - 图标装饰失败不能影响按钮文字与点击
+        return
+
+
+def _apply_button_impl(button):
     name, clean = split_leading_emoji(button.text())
     if name is None:
         if getattr(button, "_line_auto", False):
@@ -195,6 +202,13 @@ def _apply_button(button):
 def _apply_check(button):
     if getattr(button, "_line_busy", False):
         return
+    try:
+        _apply_check_impl(button)
+    except Exception:  # noqa: BLE001 - 同上，勾选控件的文字优先
+        return
+
+
+def _apply_check_impl(button):
     name, clean = split_leading_emoji(button.text())
     if name is not None and clean != button.text():
         button._line_busy = True
@@ -240,7 +254,8 @@ def _clear_label_icon(label):
     child.deleteLater()
     base = getattr(label, "_line_base_margins", None)
     if base is not None:
-        label.setContentsMargins(*base)
+        # QMargins 不可迭代，必须逐个取；这里抛异常会从 QLabel.setText 冒到业务代码
+        label.setContentsMargins(base.left(), base.top(), base.right(), base.bottom())
     label.updateGeometry()
     label._line_icon_name = None
 
@@ -282,6 +297,13 @@ def _ensure_label_icon(label):
 def _apply_label(label):
     if getattr(label, "_line_busy", False):
         return
+    try:
+        _apply_label_impl(label)
+    except Exception:  # noqa: BLE001 - 图标装饰失败不能影响标签文字与业务回调
+        return
+
+
+def _apply_label_impl(label):
     label._line_skip = False
     name, clean = split_leading_emoji(label.text())
     if name is None:
