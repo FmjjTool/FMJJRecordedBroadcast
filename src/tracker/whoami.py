@@ -502,6 +502,35 @@ def _quark(cookie: str) -> dict:
     return {"ok": False, "username": ""}
 
 
+def _yun139(cookie: str) -> dict:
+    """移动云盘：用签名接口列一次根目录，能列通就算登录有效。
+
+    它的用户信息接口同样要 mcloud-sign，所以拿「读一次目录」当探活；
+    展示名用 Cookie 里已打码的账号（ORCHES-I-ACCOUNT-SIMPLIFY，形如 138****8113）。
+    """
+    from urllib.parse import unquote
+
+    account = ""
+    for part in (cookie or "").split(";"):
+        if "=" not in part:
+            continue
+        key, _, value = part.partition("=")
+        if key.strip() == "ORCHES-I-ACCOUNT-SIMPLIFY":
+            account = unquote(value.strip())
+            break
+    try:
+        from toolbox.yun139.api import Yun139Client, Yun139Error
+    except Exception:
+        return {"ok": None, "username": account}
+    try:
+        Yun139Client(cookie).list_dir("/")
+        return {"ok": True, "username": account}
+    except Yun139Error as exc:
+        return {"ok": False, "username": ""} if exc.is_auth else {"ok": None, "username": account}
+    except Exception:
+        return {"ok": None, "username": account}
+
+
 def _baidu(cookie: str) -> dict:
     """百度网盘：gettemplatevariable 能拿到 bdstoken 即已登录（顺带取用户名）。
 
@@ -544,5 +573,5 @@ _VERIFIERS = {
     "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
-    "quark": _quark, "baidu": _baidu,
+    "quark": _quark, "baidu": _baidu, "yun139": _yun139,
 }
