@@ -1,6 +1,6 @@
 """抖音商品页（PySide6）：抖音商城分享文案 → 商品信息（无需登录）。
 
-- 粘贴分享文案（可一次粘多条，每行一条）→ 🔍 解析全部
+- 粘贴分享文案（可一次粘多条，每行一条）→ 解析全部
 - 左侧商品列表（标题/价格区间/销量/商品ID/店铺ID），选中行 → 右侧主图 + 详情
 - 默认解析后自动下载商品主图并保存单商品 JSON 到
   download/抖音商品/<标题>_<商品ID>/
@@ -49,21 +49,21 @@ class DouyinShopPage(BasePage):
         layout.setSpacing(6)
 
         # ---- 标题行 + 帮助 ----
-        title = QLabel("🏬 抖音商品")
+        title = QLabel("抖音商品")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 抖音商品 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "抖音商品 · 功能介绍", (
             "<p><b>解析抖音商城（抖音小店）商品分享链接，<b>无需登录</b>。</b></p>"
             "<p>· <b>用法</b>：把分享文案整段粘贴到输入框（含 v.douyin.com 短链），"
-            "一行一条，可一次粘多条 → 点「🔍 解析全部」</p>"
+            "一行一条，可一次粘多条 → 点「解析全部」</p>"
             "<p>· <b>能拿到</b>：商品标题 / 商品ID / 价格区间 / 销量 / 主图 / "
             "店铺ID / 带货达人ID / 分享来源</p>"
             "<p>· <b>拿不到</b>：店铺名称、SKU 规格库存、详情图（抖音对非 App 打开的分享链"
             "只返回「商品预览」数据，商品页 H5 在网页端一律提示「请进入抖音查看」）。"
-            "要看得点「📋 复制链接」粘到抖音 App 里打开</p>"
+            "要看得点「复制链接」粘到抖音 App 里打开</p>"
             "<p>· <b>保存位置</b>：download/抖音商品/&lt;标题&gt;_&lt;商品ID&gt;/"
             "（主图 + 单商品 JSON）；整批列表可导出 Excel 到 download/抖音商品/</p>"
         )))
@@ -84,7 +84,7 @@ class DouyinShopPage(BasePage):
         tv.addWidget(self.input_edit)
 
         row = QHBoxLayout()
-        self.parse_btn = QPushButton("🔍 解析全部")
+        self.parse_btn = QPushButton("解析全部")
         self.parse_btn.setStyleSheet(
             "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.parse_btn.clicked.connect(self._do_parse)
@@ -97,18 +97,18 @@ class DouyinShopPage(BasePage):
 
         row.addStretch(1)
 
-        self.export_btn = QPushButton("📊 导出 Excel")
+        self.export_btn = QPushButton("导出 Excel")
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip("把当前商品列表导出为 xlsx（已下载的主图会插入表格）")
         self.export_btn.clicked.connect(self._do_export)
         row.addWidget(self.export_btn)
 
-        open_dir_btn = QPushButton("📂 打开保存目录")
+        open_dir_btn = QPushButton("打开保存目录")
         open_dir_btn.setToolTip("打开 download/抖音商品/")
         open_dir_btn.clicked.connect(self._open_dir)
         row.addWidget(open_dir_btn)
 
-        clear_btn = QPushButton("🗑 清空")
+        clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self._clear)
         row.addWidget(clear_btn)
         tv.addLayout(row)
@@ -150,17 +150,17 @@ class DouyinShopPage(BasePage):
         self.detail.setPlaceholderText("商品字段详情")
         rv.addWidget(self.detail, 1)
         btn_row = QHBoxLayout()
-        self.open_btn = QPushButton("🌐 打开商品页")
+        self.open_btn = QPushButton("打开商品页")
         self.open_btn.setEnabled(False)
         self.open_btn.setToolTip("用浏览器打开抖音商城商品页（分享链在网页端只给预览，完整详情需 App）")
         self.open_btn.clicked.connect(self._open_detail)
         btn_row.addWidget(self.open_btn)
-        self.copy_btn = QPushButton("📋 复制链接")
+        self.copy_btn = QPushButton("复制链接")
         self.copy_btn.setEnabled(False)
         self.copy_btn.setToolTip("复制商品链接，粘到抖音 App 里打开即可看到店铺与详情图")
         self.copy_btn.clicked.connect(self._copy_link)
         btn_row.addWidget(self.copy_btn)
-        self.folder_btn = QPushButton("📁 打开该商品目录")
+        self.folder_btn = QPushButton("打开该商品目录")
         self.folder_btn.setEnabled(False)
         self.folder_btn.clicked.connect(self._open_product_dir)
         btn_row.addWidget(self.folder_btn)
@@ -171,7 +171,7 @@ class DouyinShopPage(BasePage):
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)
 
-        self.status_label = QLabel("粘贴分享文案 → 🔍 解析全部")
+        self.status_label = QLabel("粘贴分享文案 → 解析全部")
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
@@ -199,15 +199,15 @@ class DouyinShopPage(BasePage):
     def _do_parse(self):
         text = self.input_edit.toPlainText().strip()
         if not text:
-            self.status_label.setText("❌ 请先粘贴抖音商城分享文案")
+            self.status_label.setText("请先粘贴抖音商城分享文案")
             return
         if self._busy:
             return
         autosave = self.autosave_cb.isChecked()
-        self._set_busy(True, "⏳ 正在解析...")
+        self._set_busy(True, "正在解析...")
 
         def prog(msg):
-            post_to_main(self.status_label.setText, f"⏳ {msg}")
+            post_to_main(self.status_label.setText, f"{msg}")
 
         def work():
             products, errs = ds.parse_many(text, progress=prog)
@@ -224,7 +224,7 @@ class DouyinShopPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 解析失败：{err}")
+                self.status_label.setText(f"解析失败：{err}")
                 return
             products, errs = result
             self._products = products
@@ -233,11 +233,11 @@ class DouyinShopPage(BasePage):
                 self.table.selectRow(0)
             parts = []
             if products:
-                parts.append(f"✅ 成功 {len(products)} 条")
+                parts.append(f"成功 {len(products)} 条")
             if errs:
-                parts.append(f"⚠️ 失败 {len(errs)} 条：" +
+                parts.append(f"失败 {len(errs)} 条：" +
                              "；".join(f"{src} → {msg}" for src, msg in errs[:3]))
-            self.status_label.setText("  ".join(parts) or "❌ 没找到抖音链接")
+            self.status_label.setText("".join(parts) or " 没找到抖音链接")
             if products:
                 saved = "，主图与 JSON 已保存" if autosave else ""
                 self.app.toast(f"解析完成：{len(products)} 个商品{saved}", "success")
@@ -289,7 +289,7 @@ class DouyinShopPage(BasePage):
             f"采集时间：{p.parsed_at or '-'}",
             "",
             "提示：抖音对非 App 打开的分享链只返回「商品预览」数据，",
-            "所以店铺名称、SKU 规格、详情图需要点「📋 复制链接」粘到抖音 App 里查看。",
+            "所以店铺名称、SKU 规格、详情图需要点「复制链接」粘到抖音 App 里查看。",
         ]
         if p.local_dir:
             lines.append(f"本地目录：{p.local_dir}")
@@ -306,7 +306,7 @@ class DouyinShopPage(BasePage):
             self.preview.setText("（该商品没有主图）")
             self.preview.setPixmap(QPixmap())
             return
-        self.preview.setText("⏳ 加载主图...")
+        self.preview.setText("加载主图...")
         self.preview.setPixmap(QPixmap())
         want = p.product_id or p.main_image
 
@@ -346,7 +346,7 @@ class DouyinShopPage(BasePage):
         if not self._products or self._busy:
             return
         products = list(self._products)
-        self._set_busy(True, "⏳ 正在导出 Excel...")
+        self._set_busy(True, "正在导出 Excel...")
 
         def work():
             return ds.export_products_xlsx(products)
@@ -354,10 +354,10 @@ class DouyinShopPage(BasePage):
         def done(path, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 导出失败：{err}")
+                self.status_label.setText(f"导出失败：{err}")
                 self.app.toast(f"导出失败：{err}", "warning")
                 return
-            self.status_label.setText(f"✅ 已导出：{path}")
+            self.status_label.setText(f"已导出：{path}")
             self.app.toast(f"已导出 {os.path.basename(str(path))}", "success")
 
         run_bg(work, done)
@@ -388,7 +388,7 @@ class DouyinShopPage(BasePage):
             return
         link = p.share_url or p.detail_url
         QGuiApplication.clipboard().setText(link)
-        self.status_label.setText("✅ 链接已复制 → 粘到抖音 App 打开可看店铺与详情图")
+        self.status_label.setText("链接已复制 → 粘到抖音 App 打开可看店铺与详情图")
         self.app.toast("链接已复制，粘到抖音 App 里打开即可看完整详情", "success")
 
     def _clear(self):
@@ -404,4 +404,4 @@ class DouyinShopPage(BasePage):
         self.copy_btn.setEnabled(False)
         self.folder_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
-        self.status_label.setText("粘贴分享文案 → 🔍 解析全部")
+        self.status_label.setText("粘贴分享文案 → 解析全部")

@@ -55,13 +55,13 @@ class ShoppingPage(BasePage):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        title = QLabel("🛒 购物解析")
+        title = QLabel("购物解析")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 购物解析 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "购物解析 · 功能介绍", (
             "<p><b>淘宝店铺 / 商品信息采集与导出（图片自动下载 + Excel 连带导出）。</b></p>"
             "<p>· <b>解析店铺</b>：粘贴淘宝店铺链接（店铺信息游客可获取，商品列表需淘宝登录）；"
             "留空回车用默认店铺</p>"
@@ -69,7 +69,7 @@ class ShoppingPage(BasePage):
             "<p>· <b>表格</b>：勾选商品（全选/反选/清除）后点「获取选中商品详情」，"
             "逐件拉取主图/选购参数/参数信息/图文详情——图片自动下载到"
             "download/淘宝商品/{标题}_{商品ID}_{时间}/，Excel 连带导出到同目录（不弹窗选位置）</p>"
-            "<p>· <b>💾 导出商品 JSON</b>：输出勾选商品的全量数据；未拉过详情的自动逐件拉取</p>"
+            "<p>· <b> 导出商品 JSON</b>：输出勾选商品的全量数据；未拉过详情的自动逐件拉取</p>"
             "<p>· 单件失败原地重试不中断整批；详情缓存复用，重复导出不重复请求</p>"
             "<p>· 未登录时仅能获取游客可见信息，登录后可获取完整商品列表。</p>")))
         layout.addLayout(title_row)
@@ -81,18 +81,18 @@ class ShoppingPage(BasePage):
             "https://item.taobao.com/item.htm?id=123456")
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
-        self.parse_btn = QPushButton("🔍 解析")
+        self.parse_btn = QPushButton("解析")
         self.parse_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
         self.parse_btn.clicked.connect(self._parse)
         row.addWidget(self.parse_btn)
-        self.detail_btn = QPushButton("🛍 获取选中商品详情")
+        self.detail_btn = QPushButton("获取选中商品详情")
         self.detail_btn.setEnabled(False)
         self.detail_btn.setToolTip(
             "勾选了商品→逐件拉取主图/选购参数/参数信息/图文详情（图片自动下载、"
             "Excel 连带导出到商品目录）；未勾选→只拉当前选中行")
         self.detail_btn.clicked.connect(self._fetch_detail)
         row.addWidget(self.detail_btn)
-        self.export_btn = QPushButton("💾 导出商品 JSON")
+        self.export_btn = QPushButton("导出商品 JSON")
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip(
             "导出勾选的商品为全量 JSON（主图/规格参数/选购参数/参数信息/图文详情/"
@@ -103,7 +103,7 @@ class ShoppingPage(BasePage):
 
         # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
         sel_row = QHBoxLayout()
-        self.sel_all_btn = QPushButton("☑ 全选")
+        self.sel_all_btn = QPushButton("全选")
         self.sel_all_btn.setToolTip("勾选全部商品")
         self.sel_all_btn.clicked.connect(lambda: self._set_all_checks(True))
         sel_row.addWidget(self.sel_all_btn)
@@ -111,7 +111,7 @@ class ShoppingPage(BasePage):
         self.sel_invert_btn.setToolTip("反转每行勾选状态")
         self.sel_invert_btn.clicked.connect(self._invert_checks)
         sel_row.addWidget(self.sel_invert_btn)
-        self.sel_clear_btn = QPushButton("✖ 清除")
+        self.sel_clear_btn = QPushButton("清除")
         self.sel_clear_btn.setToolTip("清除全部勾选")
         self.sel_clear_btn.clicked.connect(lambda: self._set_all_checks(False))
         sel_row.addWidget(self.sel_clear_btn)
@@ -155,13 +155,13 @@ class ShoppingPage(BasePage):
         self.pic_label.setStyleSheet("color: palette(placeholder-text);")
         rv.addWidget(self.pic_label)
         btn_row = QHBoxLayout()
-        self.export_xlsx_btn = QPushButton("📊 导出单商品 Excel")
+        self.export_xlsx_btn = QPushButton("导出单商品 Excel")
         self.export_xlsx_btn.setEnabled(False)
         self.export_xlsx_btn.setToolTip(
             "导出右侧商品的 xlsx（图片已插入），默认存在商品图片同目录，不弹窗")
         self.export_xlsx_btn.clicked.connect(self._export_xlsx)
         btn_row.addWidget(self.export_xlsx_btn)
-        self.link_btn = QPushButton("🌐 打开商品页面")
+        self.link_btn = QPushButton("打开商品页面")
         self.link_btn.setEnabled(False)
         self.link_btn.clicked.connect(self._open_item_btn)
         btn_row.addWidget(self.link_btn)
@@ -191,7 +191,7 @@ class ShoppingPage(BasePage):
 
     def _log(self, msg):
         def apply():
-            self.status_label.setText(f"⏳ {msg}")
+            self.status_label.setText(f"{msg}")
         try:
             post_to_main(apply)
         except Exception:
@@ -199,7 +199,7 @@ class ShoppingPage(BasePage):
 
     def _parse_shop(self, url):
         self.parse_btn.setEnabled(False)
-        self.status_label.setText("⏳ 解析中...")
+        self.status_label.setText("解析中...")
 
         def work():
             import auth
@@ -224,14 +224,14 @@ class ShoppingPage(BasePage):
             self._reset_right_panel()
             if products:
                 self.status_label.setText(
-                    f"✅ {shop.shop_name or '店铺'}：获取到 {len(products)} 件商品；"
+                    f"{shop.shop_name or '店铺'}：获取到 {len(products)} 件商品；"
                     f"勾选后「导出商品 JSON」全量导出，或选中一行拉详情")
             elif not has_cookie:
                 self.status_label.setText(
-                    "✅ 店铺信息获取成功（未登录，商品列表需登录后获取）")
+                    "店铺信息获取成功（未登录，商品列表需登录后获取）")
             else:
                 self.status_label.setText(
-                    f"⚠️ {shop.shop_name or '店铺'}：店铺信息已拿到，但未取到商品"
+                    f"{shop.shop_name or '店铺'}：店铺信息已拿到，但未取到商品"
                     "（店铺暂无在售商品，或淘宝风控拦住了列表，可稍后重试）")
             self.export_btn.setEnabled(bool(products))
 
@@ -245,16 +245,16 @@ class ShoppingPage(BasePage):
         if ("SESSION_EXPIRED" in msg or "登录页" in msg or "RGV587" in msg
                 or "风控" in msg or "Cookie" in msg or "cookie" in msg):
             self.status_label.setText(
-                "❌ " + safe_msg[:300] + "  → 请确认淘宝登录状态，必要时重新登录"
+                "" + safe_msg[:300] + "  → 请确认淘宝登录状态，必要时重新登录"
                 "（淘宝会话几天后过期，需定期刷新）")
         else:
-            self.status_label.setText("❌ " + safe_msg[:300])
+            self.status_label.setText("" + safe_msg[:300])
         self.app.toast("解析失败，详见页面底部状态栏", "error")
 
     def _parse_item(self, url):
         """直接解析商品链接 → 列表填 SKU 档位，右侧显示完整详情。"""
         self.parse_btn.setEnabled(False)
-        self.status_label.setText("⏳ 解析商品详情中...")
+        self.status_label.setText("解析商品详情中...")
 
         def work():
             import auth
@@ -283,7 +283,7 @@ class ShoppingPage(BasePage):
                     f" / 规格 {len(detail.local_sku)}"
                     f" / 详情 {len(detail.local_desc) or len(detail.desc_images)}")
             self.status_label.setText(
-                f"✅ {detail.title[:40]}｜图片已下载（{imgs}），Excel 已连带导出到商品目录")
+                f"{detail.title[:40]}｜图片已下载（{imgs}），Excel 已连带导出到商品目录")
             self.export_btn.setEnabled(False)
 
         run_bg(work, done)
@@ -554,7 +554,7 @@ class ShoppingPage(BasePage):
         self.detail_btn.setEnabled(False)
         self.parse_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
-        self.status_label.setText(f"⏳ 获取 {total} 件商品详情（件间隔 3 秒防风控）...")
+        self.status_label.setText(f"获取 {total} 件商品详情（件间隔 3 秒防风控）...")
 
         def work():
             import time
@@ -574,12 +574,12 @@ class ShoppingPage(BasePage):
                         shopping_mod.download_item_images(d, base, log=self._log)
                         xlsx = shopping_mod.default_item_xlsx_path(d, base)
                         shopping_mod.export_item_xlsx(d, xlsx)
-                        self._log(f"  Excel 已导出：{Path(xlsx).name}")
+                        self._log(f"Excel 已导出：{Path(xlsx).name}")
                         done_items.append(d)
                         break
                     except Exception as e:
                         if attempt == 1:
-                            self._log(f"  {pr.title[:16]} 失败，10 秒后重试...")
+                            self._log(f"{pr.title[:16]} 失败，10 秒后重试...")
                             time.sleep(10)
                         else:
                             failed.append((pr.title, str(e)[:60]))
@@ -600,7 +600,7 @@ class ShoppingPage(BasePage):
             self._show_cached_or([r for r, _ in todo])
             tip = f"，{len(failed)} 件失败" if failed else ""
             self.status_label.setText(
-                f"✅ 已获取 {len(done_items)} 件详情并连带导出 Excel{tip}"
+                f"已获取 {len(done_items)} 件详情并连带导出 Excel{tip}"
                 f"（download/淘宝商品/，每件一个目录）")
 
         run_bg(work, done)
@@ -635,7 +635,7 @@ class ShoppingPage(BasePage):
             lines.append(f"优惠券：减 ¥{pr.coupon}")
         lines.append(f"商品ID：{pr.item_id}")
         lines.append("")
-        lines.append("点「🛍 获取选中商品详情」拉取")
+        lines.append("点「获取选中商品详情」拉取")
         lines.append("主图 / 选购参数 / 参数信息 / 图文详情（图片自动下载）")
         return "\n".join(lines)
 
@@ -666,7 +666,7 @@ class ShoppingPage(BasePage):
             lines.append("═══ 规格参数 ═══")
             for grp in d.sku_props:
                 vals = " / ".join(v.get("name") or "" for v in grp.get("values") or [])
-                lines.append(f"  {grp.get('name') or '规格'}：{vals}")
+                lines.append(f"{grp.get('name') or '规格'}：{vals}")
         if d.skus:
             lines.append("")
             lines.append(f"═══ 选购参数（{len(d.skus)} 档）═══")
@@ -674,22 +674,22 @@ class ShoppingPage(BasePage):
                 parts = [s.names or "-", s.price or ""]
                 if s.quantity:
                     parts.append(f"库存 {s.quantity}")
-                lines.append("  · " + " | ".join(parts))
+                lines.append("· " + " | ".join(parts))
         if d.params:
             lines.append("")
             lines.append(f"═══ 参数信息（{len(d.params)} 项）═══")
             for n, v in d.params:
-                lines.append(f"  {n}：{v}")
+                lines.append(f"{n}：{v}")
         if d.main_images:
             lines.append("")
             lines.append(f"═══ 主图（{len(d.main_images)} 张）═══")
             for i, u in enumerate(d.main_images[:8], 1):
-                lines.append(f"  [{i}] {u}")
+                lines.append(f"[{i}] {u}")
         if d.desc_images:
             lines.append("")
             lines.append(f"═══ 图文详情（{len(d.desc_images)} 张长图）═══")
             for i, u in enumerate(d.desc_images[:10], 1):
-                lines.append(f"  [{i}] {u}")
+                lines.append(f"[{i}] {u}")
         dl = [f"主图 {len(d.local_main)}", f"规格 {len(d.local_sku)}",
               f"详情 {len(d.local_desc)}"]
         lines.append("")
@@ -777,7 +777,7 @@ class ShoppingPage(BasePage):
             return
         checked = self._checked_rows()
         if not checked:
-            self.app.toast("请先勾选要导出的商品（表格第一列复选框），或点「☑ 全选」",
+            self.app.toast("请先勾选要导出的商品（表格第一列复选框），或点「全选」",
                            "warning")
             return
         total = len(checked)
@@ -822,7 +822,7 @@ class ShoppingPage(BasePage):
                             d = None
                             err = str(e)[:60]
                             if attempt == 1:
-                                self._log(f"  {pr.title[:16]} 失败，10 秒后重试...")
+                                self._log(f"{pr.title[:16]} 失败，10 秒后重试...")
                                 time.sleep(10)
                             else:
                                 failed.append((pr.title, err))
@@ -840,11 +840,11 @@ class ShoppingPage(BasePage):
             if err:
                 self.status_label.setText("")
                 self.app.toast(f"导出失败: {str(err)[:80]}", "error")
-                card.finish(f"❌ 导出失败: {str(err)[:50]}")
+                card.finish(f"导出失败: {str(err)[:50]}")
                 return
             items, failed = result
-            card.finish(f"✅ 导出 {len(items) - len(failed)} 件"
-                        + (f" / 失败 {len(failed)}" if failed else ""))
+            card.finish(f"导出 {len(items) - len(failed)} 件"
+                        + (f"/ 失败 {len(failed)}" if failed else ""))
             products_json = []
             for pr, d in items:
                 if d is not None:
@@ -869,7 +869,7 @@ class ShoppingPage(BasePage):
                 return
             tip = f"，{len(failed)} 件详情获取失败" if failed else ""
             self.status_label.setText(
-                f"✅ 已导出 {len(products_json)} 件商品全量 JSON{tip}到 {path}")
+                f"已导出 {len(products_json)} 件商品全量 JSON{tip}到 {path}")
 
         run_bg(work, done)
 
@@ -893,4 +893,4 @@ class ShoppingPage(BasePage):
         except Exception as e:
             self.app.toast(f"导出失败: {str(e)[:80]}", "error")
             return
-        self.status_label.setText(f"✅ 已导出单商品 Excel：{path}")
+        self.status_label.setText(f"已导出单商品 Excel：{path}")

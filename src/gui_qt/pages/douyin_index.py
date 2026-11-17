@@ -124,17 +124,17 @@ class DouyinIndexPage(BasePage):
         layout.setSpacing(6)
 
         # ---- 标题行 + 帮助 ----
-        title = QLabel("📈 抖音指数")
+        title = QLabel("抖音指数")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ 抖音指数 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "抖音指数 · 功能介绍", (
             "<p><b>创作者中心「抖音指数」达人数据全量抓取（作者分析 / 作品分析 / 粉丝分析），"
             "每次抓取自动在本地存一份完整 JSON。</b></p>"
             "<p>· <b>需要抖音登录</b>（创作者中心接口需登录态）</p>"
-            "<p>· <b>搜索</b>：输入达人名称或抖音号 → 🔍 搜索 → 候选列表中双击或确认选择（两步确认）</p>"
+            "<p>· <b>搜索</b>：输入达人名称或抖音号 → 搜索 → 候选列表中双击或确认选择（两步确认）</p>"
             "<p>· <b>核心指标</b>：新增点赞/净增粉丝/新增分享/新增评论/新增作品，"
             "昨日·近7天·近15天·近30天 四档 + 各档环比 + 涨粉里程碑</p>"
             "<p>· <b>稿均指标</b>：稿均点赞/涨粉/分享/评论（近7天、近30天 + 环比）</p>"
@@ -161,7 +161,7 @@ class DouyinIndexPage(BasePage):
         self.input_edit.setPlaceholderText("输入达人名称或抖音号（如：封茗囧菌 / mandisasa）")
         self.input_edit.returnPressed.connect(self._do_search)
         row.addWidget(self.input_edit, 1)
-        self.search_btn = QPushButton("🔍 搜索")
+        self.search_btn = QPushButton("搜索")
         self.search_btn.clicked.connect(self._do_search)
         row.addWidget(self.search_btn)
         row.addWidget(QLabel("统计范围"))
@@ -170,12 +170,12 @@ class DouyinIndexPage(BasePage):
             self.range_combo.addItem(name, days)
         self.range_combo.setToolTip("达人视频列表与视频指数的统计时间范围（核心指标各时间窗一次全部返回）")
         row.addWidget(self.range_combo)
-        self.fetch_btn = QPushButton("📊 获取全部数据并保存")
+        self.fetch_btn = QPushButton("获取全部数据并保存")
         self.fetch_btn.setStyleSheet(
             "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.fetch_btn.clicked.connect(self._do_fetch)
         row.addWidget(self.fetch_btn)
-        open_btn = QPushButton("📂 打开保存目录")
+        open_btn = QPushButton("打开保存目录")
         open_btn.setToolTip("打开 download/抖音指数/（每次抓取的完整数据都保存在这里）")
         open_btn.clicked.connect(self._open_dir)
         row.addWidget(open_btn)
@@ -188,14 +188,14 @@ class DouyinIndexPage(BasePage):
 
         # ---- 数据展示 Tabs ----
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_core_tab(), "📊 核心指标")
-        self.tabs.addTab(self._build_trend_tab(), "📅 每日趋势")
-        self.tabs.addTab(self._build_videos_tab(), "🎬 达人视频")
-        self.tabs.addTab(self._build_fans_tab(), "👥 粉丝分析")
-        self.tabs.addTab(self._build_similar_tab(), "🔗 相似达人")
+        self.tabs.addTab(self._build_core_tab(), "核心指标")
+        self.tabs.addTab(self._build_trend_tab(), "每日趋势")
+        self.tabs.addTab(self._build_videos_tab(), "达人视频")
+        self.tabs.addTab(self._build_fans_tab(), "粉丝分析")
+        self.tabs.addTab(self._build_similar_tab(), "相似达人")
         layout.addWidget(self.tabs, 1)
 
-        self.status_label = QLabel("输入达人名称或抖音号 → 🔍 搜索 → 确认 → 获取全部数据并保存")
+        self.status_label = QLabel("输入达人名称或抖音号 → 搜索 → 确认 → 获取全部数据并保存")
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
@@ -289,9 +289,9 @@ class DouyinIndexPage(BasePage):
     def _do_search(self):
         kw = self.input_edit.text().strip()
         if not kw:
-            self.status_label.setText("❌ 请输入达人名称或抖音号")
+            self.status_label.setText("请输入达人名称或抖音号")
             return
-        self._set_busy(True, f"⏳ 搜索「{kw}」...")
+        self._set_busy(True, f"搜索「{kw}」...")
 
         def work():
             return dxi.search_daren(kw)
@@ -299,10 +299,10 @@ class DouyinIndexPage(BasePage):
         def done(users, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 搜索失败：{err}")
+                self.status_label.setText(f"搜索失败：{err}")
                 return
             if not users:
-                self.status_label.setText(f"❌ 未找到「{kw}」相关的达人")
+                self.status_label.setText(f"未找到「{kw}」相关的达人")
                 return
             dlg = _PickDialog(self, users)
             if dlg.exec() == QDialog.Accepted and dlg.picked is not None:
@@ -314,7 +314,7 @@ class DouyinIndexPage(BasePage):
                     f" · 粉丝 {dxi.fmt_count(u.get('follow_count'))}"
                     f" · 总获赞 {dxi.fmt_count(u.get('like_count'))}"
                     f" · 作品 {u.get('item_count')}")
-                self.status_label.setText(f"✅ 已选择「{self._name}」→ 点「📊 获取全部数据并保存」")
+                self.status_label.setText(f"已选择「{self._name}」→ 点「获取全部数据并保存」")
                 self.fetch_btn.setFocus()
 
         run_bg(work, done)
@@ -322,16 +322,16 @@ class DouyinIndexPage(BasePage):
     # ---------- 抓取 ----------
     def _do_fetch(self):
         if not self._uid:
-            self.status_label.setText("❌ 请先搜索并确认达人")
+            self.status_label.setText("请先搜索并确认达人")
             return
         if self._busy:
             return
         days = self.range_combo.currentData() or 30
         uid, name = self._uid, self._name
-        self._set_busy(True, f"⏳ 正在抓取「{name}」的抖音指数...")
+        self._set_busy(True, f"正在抓取「{name}」的抖音指数...")
 
         def prog(msg):
-            post_to_main(self.status_label.setText, f"⏳ {msg}")
+            post_to_main(self.status_label.setText, f"{msg}")
 
         def work():
             data = dxi.fetch_daren_all(uid, days=days, progress=prog)
@@ -341,13 +341,13 @@ class DouyinIndexPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 抓取失败：{err}")
+                self.status_label.setText(f"抓取失败：{err}")
                 self.app.toast(f"抖音指数抓取失败：{err}", "warning")
                 return
             data, path = result
             self._data = data
             self._render(data)
-            self.status_label.setText(f"✅ 「{name}」数据已保存：{path}")
+            self.status_label.setText(f"「{name}」数据已保存：{path}")
             self.app.toast(f"抖音指数已保存：{os.path.basename(path)}", "success")
 
         run_bg(work, done)
@@ -361,7 +361,7 @@ class DouyinIndexPage(BasePage):
         self._render_fans(data.get("fans_profile") or {})
         self._render_similar(data.get("similar_users") or [])
         author = data.get("author") or {}
-        intro = (author.get("user_introduction") or "").replace("\n", " · ")
+        intro = (author.get("user_introduction") or "").replace("\n", "· ")
         if len(intro) > 120:
             intro = intro[:120] + "..."
         ms = author.get("fans_milestone") or {}
@@ -494,7 +494,7 @@ class DouyinIndexPage(BasePage):
             self._uid = u.get("user_id", "")
             self._name = u.get("user_name", "")
             self.input_edit.setText(self._name)
-            self.status_label.setText(f"✅ 已切换到「{self._name}」→ 正在抓取...")
+            self.status_label.setText(f"已切换到「{self._name}」→ 正在抓取...")
             self._do_fetch()
 
     def _open_dir(self):

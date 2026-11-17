@@ -47,16 +47,16 @@ class BiliShopPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        title = QLabel("🛍 B站小店")
+        title = QLabel("B站小店")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
         from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "❓ B站小店 · 功能介绍", (
+        title_row.addWidget(attach_help_overlay(self, "B站小店 · 功能介绍", (
             "<p><b>解析 B站 UP主小店，游客可用（无需登录）。</b></p>"
             "<p>· <b>用法</b>：粘贴 b23.tv 小店短链、mall.bilibili.com 小店链接、"
-            "space.bilibili.com 主页或纯 UID → 点「🔍 解析」</p>"
+            "space.bilibili.com 主页或纯 UID → 点「解析」</p>"
             "<p>· <b>能拿到</b>：小店名 / 头像 / 粉丝数 / 商品数 + 每件商品的 "
             "ID / 标题 / 价格 / 封面 / 跳转链 / 来源类型</p>"
             "<p>· <b>保存位置</b>：download/B站小店/&lt;小店名&gt;_&lt;UID&gt;/"
@@ -83,7 +83,7 @@ class BiliShopPage(BasePage):
         self.sort_box.setFixedWidth(80)
         row.addWidget(self.sort_box)
 
-        self.parse_btn = QPushButton("🔍 解析")
+        self.parse_btn = QPushButton("解析")
         self.parse_btn.setStyleSheet(
             "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
         self.parse_btn.clicked.connect(self._do_parse)
@@ -103,17 +103,17 @@ class BiliShopPage(BasePage):
         self.shop_info.setTextFormat(Qt.RichText)
         info_row.addWidget(self.shop_info, 1)
 
-        self.export_btn = QPushButton("📊 导出 Excel")
+        self.export_btn = QPushButton("导出 Excel")
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._do_export)
         info_row.addWidget(self.export_btn)
 
-        self.dir_btn = QPushButton("📂 打开保存目录")
+        self.dir_btn = QPushButton("打开保存目录")
         self.dir_btn.setEnabled(False)
         self.dir_btn.clicked.connect(self._open_dir)
         info_row.addWidget(self.dir_btn)
 
-        clear_btn = QPushButton("🗑 清空")
+        clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self._clear)
         info_row.addWidget(clear_btn)
         tv.addLayout(info_row)
@@ -163,11 +163,11 @@ class BiliShopPage(BasePage):
         rv.addWidget(self.detail, 1)
 
         btn_row = QHBoxLayout()
-        self.open_btn = QPushButton("🌐 打开商品页")
+        self.open_btn = QPushButton("打开商品页")
         self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self._open_item)
         btn_row.addWidget(self.open_btn)
-        self.copy_btn = QPushButton("📋 复制商品ID")
+        self.copy_btn = QPushButton("复制商品ID")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self._copy_item_id)
         btn_row.addWidget(self.copy_btn)
@@ -178,7 +178,7 @@ class BiliShopPage(BasePage):
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)
 
-        self.status_label = QLabel("粘贴 B站小店链接或 UP主 UID → 🔍 解析")
+        self.status_label = QLabel("粘贴 B站小店链接或 UP主 UID → 解析")
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
@@ -205,13 +205,13 @@ class BiliShopPage(BasePage):
             return
         text = self.input_edit.text().strip()
         if not text:
-            self.status_label.setText("❌ 请先粘贴 B站小店链接或 UP主 UID")
+            self.status_label.setText("请先粘贴 B站小店链接或 UP主 UID")
             return
         sort = self.sort_box.currentData() or "total_rank"
-        self._set_busy(True, "⏳ 正在解析...")
+        self._set_busy(True, "正在解析...")
 
         def prog(msg):
-            post_to_main(self.status_label.setText, f"⏳ {msg}")
+            post_to_main(self.status_label.setText, f"{msg}")
 
         def work():
             shop = bs.fetch_shop(text, sort=sort, progress=prog)
@@ -221,7 +221,7 @@ class BiliShopPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 解析失败：{err}")
+                self.status_label.setText(f"解析失败：{err}")
                 self.app.toast(f"解析失败：{err}"[:100], "warning")
                 return
             shop, path = result
@@ -234,12 +234,12 @@ class BiliShopPage(BasePage):
             self.dir_btn.setEnabled(True)
             if shop.items:
                 self.status_label.setText(
-                    f"✅ {shop.name or shop.mid}：{len(shop.items)} 件商品，"
+                    f"{shop.name or shop.mid}：{len(shop.items)} 件商品，"
                     f"已保存 {os.path.basename(str(path))}")
                 self.app.toast(f"解析完成：{len(shop.items)} 件商品", "success")
             else:
                 self.status_label.setText(
-                    f"⚠️ {shop.name or shop.mid}：该排序下没有商品，换「综合」或「价格」再试")
+                    f"{shop.name or shop.mid}：该排序下没有商品，换「综合」或「价格」再试")
                 self.app.toast("该排序下没有商品", "warning")
             if shop.avatar:
                 self._load_image(shop.avatar, self.avatar_label, "_avatar")
@@ -307,7 +307,7 @@ class BiliShopPage(BasePage):
     # ---------- 图片 ----------
     def _load_image(self, url: str, label: QLabel, want: str, scaled: bool = False):
         if scaled:
-            label.setText("⏳ 加载封面...")
+            label.setText("加载封面...")
             label.setPixmap(QPixmap())
 
         def work():
@@ -343,7 +343,7 @@ class BiliShopPage(BasePage):
         if not self._shop or not self._shop.items or self._busy:
             return
         shop = self._shop
-        self._set_busy(True, "⏳ 正在导出 Excel...")
+        self._set_busy(True, "正在导出 Excel...")
 
         def work():
             return bs.export_items_xlsx(shop)
@@ -351,10 +351,10 @@ class BiliShopPage(BasePage):
         def done(path, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"❌ 导出失败：{err}")
+                self.status_label.setText(f"导出失败：{err}")
                 self.app.toast(f"导出失败：{err}", "warning")
                 return
-            self.status_label.setText(f"✅ 已导出：{path}")
+            self.status_label.setText(f"已导出：{path}")
             self.app.toast(f"已导出 {os.path.basename(str(path))}", "success")
 
         run_bg(work, done)
@@ -377,7 +377,7 @@ class BiliShopPage(BasePage):
         if not it or not it.item_id:
             return
         QGuiApplication.clipboard().setText(it.item_id)
-        self.status_label.setText(f"✅ 已复制商品 ID：{it.item_id}")
+        self.status_label.setText(f"已复制商品 ID：{it.item_id}")
         self.app.toast("商品 ID 已复制", "success")
 
     def _clear(self):
@@ -395,4 +395,4 @@ class BiliShopPage(BasePage):
         self.copy_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
         self.dir_btn.setEnabled(False)
-        self.status_label.setText("粘贴 B站小店链接或 UP主 UID → 🔍 解析")
+        self.status_label.setText("粘贴 B站小店链接或 UP主 UID → 解析")
