@@ -6,7 +6,9 @@
 - `QPushButton` / `QToolButton`：去掉文案前导 emoji，改为 `setIcon`；
 - `QLabel`：去掉前导 emoji，在文字左侧绘制小图标（保留原文字颜色与字体）；
 - `QCheckBox` / `QRadioButton`：只去掉前导 emoji（Qt 复选框不支持图标）；
-- `QComboBox` / `QTabWidget`：去掉条目前导 emoji，改为条目图标。
+- `QComboBox` / `QTabWidget`：去掉条目前导 emoji，改为条目图标；
+- 只读 `QPlainTextEdit` / `QTextEdit` 日志与 `QStatusBar`：统一删除 emoji；
+  可编辑输入区、`QTextBrowser` 用户正文不改。
 
 颜色始终取自主题角色（标题/条目 link，普通按钮 button-text，主按钮
 highlighted-text，弱化标签 placeholder-text）；切主题后由 `refresh_all()` 重新生成。
@@ -21,8 +23,9 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QPalette
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QCheckBox, QComboBox, QGroupBox, QLabel,
-    QListWidget, QListWidgetItem, QMenu, QPushButton, QRadioButton, QTableWidget,
-    QTableWidgetItem, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton,
+    QRadioButton, QStatusBar, QTableWidget, QTableWidgetItem, QTabWidget,
+    QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem,
     QTreeWidgetItemIterator, QWidget,
 )
 
@@ -145,6 +148,13 @@ def strip_inline_emoji(text: str) -> str:
     cleaned = re.sub(r"([「（(【\[])[ \t]+", r"\1", cleaned)
     cleaned = re.sub(r"[ \t]+([」）)】\]])", r"\1", cleaned)
     return cleaned.strip()
+
+
+def strip_emoji(text: str) -> str:
+    """只删除 emoji，不改空白与缩进（供日志等保留排版的场景使用）。"""
+    if not text:
+        return text
+    return _INLINE_EMOJI_RE.sub("", str(text))
 
 
 def clean_text(text: str) -> tuple[str | None, str]:
@@ -870,6 +880,59 @@ def refresh_all():
             pass
 
 
+def _patch_misc_text():
+    orig_tip = QWidget.setToolTip
+    orig_placeholder = QLineEdit.setPlaceholderText
+
+    def set_tooltip(self, text):
+        return orig_tip(self, strip_inline_emoji(text))
+
+    def set_placeholder(self, text):
+        return orig_placeholder(self, strip_inline_emoji(text))
+
+    QWidget.setToolTip = set_tooltip
+    QLineEdit.setPlaceholderText = set_placeholder
+
+
+def _patch_text_edit():
+    orig_append = QTextEdit.append
+    orig_set = QTextEdit.setPlainText
+
+    def append_text(self, text):
+        if self.isReadOnly() and not isinstance(self, QTextBrowser):
+            text = strip_emoji(text)
+        return orig_append(self, text)
+
+    def set_text(self, text):
+        if self.isReadOnly() and not isinstance(self, QTextBrowser):
+            text = strip_emoji(text)
+        return orig_set(self, text)
+
+    QTextEdit.append = append_text
+    QTextEdit.setPlainText = set_text
+
+
+def _patch_plain_text():
+    orig_append = QPlainTextEdit.appendPlainText
+    orig_set = QPlainTextEdit.setPlainText
+    orig_status = QStatusBar.showMessage
+
+    def append_plain(self, text):
+        return orig_append(self, strip_emoji(text))
+
+    def set_plain(self, text):
+        if self.isReadOnly():
+            text = strip_emoji(text)
+        return orig_set(self, text)
+
+    def show_message(self, message, timeout=0):
+        return orig_status(self, strip_inline_emoji(message), timeout)
+
+    QPlainTextEdit.appendPlainText = append_plain
+    QPlainTextEdit.setPlainText = set_plain
+    QStatusBar.showMessage = show_message
+
+
 def install():
     global _installed, _orig_abstract_set_text
     if _installed:
@@ -886,4 +949,7 @@ def install():
     _patch_group_boxes()
     _patch_actions()
     _patch_window_titles()
+    _patch_plain_text()
+    _patch_text_edit()
+    _patch_misc_text()
     _patch_set_property()

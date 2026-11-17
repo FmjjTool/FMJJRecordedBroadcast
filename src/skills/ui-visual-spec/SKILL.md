@@ -1,6 +1,6 @@
 ---
 name: ui-visual-spec
-description: "界面视觉与主题规范（强制阅读）。统一浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式；结构性图标统一用 navigation.line_icon 线形图标；凡新增或修改任何 PySide6 界面（页面、对话框、浮层、自绘控件、富文本、图表、图标），或改动 theme.py、内联 QSS、背景色、文字色、字号，必须先阅读本 skill 并逐项核对。触发词：深色模式、浅色模式、主题、配色、颜色、背景色、字号、字体、间距、圆角、样式、美化、UI、界面、卡片、按钮样式、图标、emoji、对比度。"
+description: "界面视觉与主题规范（强制阅读）。统一浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式；结构性图标统一用 navigation.line_icon 线形图标；整个软件 UI 文案与只读日志统一去 emoji（用户生成正文除外）；凡新增或修改任何 PySide6 界面（页面、对话框、浮层、自绘控件、富文本、图表、图标），或改动 theme.py、内联 QSS、背景色、文字色、字号，必须先阅读本 skill 并逐项核对。触发词：深色模式、浅色模式、主题、配色、颜色、背景色、字号、字体、间距、圆角、样式、美化、UI、界面、卡片、按钮样式、图标、emoji、对比度。"
 ---
 
 # 界面视觉与主题规范
@@ -170,7 +170,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 1. 字重只用 `bold`（或 `600`）。`700`、`900`、`lighter` 不要用。
 2. 页面内不写 `font-family`，除非是等宽内容（路径、命令、日志、时间码）用 `Consolas, "Cascadia Mono", monospace`。中文界面字体只由全局 QSS 提供，页面重复声明会出现同一窗口两种中文字形。
-3. emoji 只用于正文、toast、日志等文本场景。结构性图标（导航、卡片标题、按钮、下拉项）一律用 `gui_qt.navigation.line_icon()` 线形图标（见 4.4），不得用 emoji 充当；既有页面在涉及改动时逐步替换，不做批量返工。文本中的 emoji 需要 `font-family: "Segoe UI Emoji"`（微软雅黑缺部分字形），历史写法 `common.icon_btn_style()` 只保留给既有页面。
+3. 整个软件 UI 文案（按钮、标签、日志、toast、状态栏、tooltip、占位符、帮助浮层）不得使用 emoji。结构性图标（导航、卡片标题、按钮、下拉项）一律用 `gui_qt.navigation.line_icon()` 线形图标（见 4.4），不得用 emoji 充当；既有页面在涉及改动时逐步替换，不做批量返工。只读日志与状态栏由 `emoji_icons` 运行期统一删除 emoji；用户生成正文（弹幕、文章正文、文件名等数据）保留原样。
 
 ## 四、间距、圆角、尺寸
 
@@ -264,11 +264,12 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | `QGroupBox` 标题 | 去掉 emoji（Qt 分组框没有图标位，不加图标） |
 | `QAction` / `QMenu` | 菜单项前导 emoji 转菜单图标；菜单标题与句中 emoji 删除 |
 | 窗口标题 | 去掉 emoji |
+| `QPlainTextEdit` / `QTextEdit`（只读日志）/ `QStatusBar` | 删除 emoji，保留原有缩进与排版；`QTextBrowser` 用户正文除外 |
 | `ToolSectionCard` | 标题 emoji 自动转 `icon=`，无需页面传参 |
 
 约束与注意事项：
 
-1. 前导 emoji 转图标；其余位置的 emoji（按钮、标签、页签、条目、菜单文案）直接删除并收拢空白。`QPlainTextEdit` 运行日志里的历史文本不处理。
+1. 前导 emoji 转图标；其余位置的 emoji（按钮、标签、页签、条目、菜单文案、只读日志、状态栏、tooltip、占位符、帮助浮层）直接删除并收拢空白；只读 `QPlainTextEdit`/`QTextEdit` 的日志写入、`QStatusBar.showMessage`、`QWidget.setToolTip`、`QLineEdit.setPlaceholderText` 已统一过滤。可编辑输入区与 `QTextBrowser` 用户生成正文不处理。
 2. 未登记的 emoji 保持原样。新增 emoji 必须在 `_EMOJI_ICONS` 里登记，且只能指向 `line_icon()` 已存在的图标名。
 3. 显式调用 `setIcon()` 会关闭该控件的自动图标（导航栏等自定义图标不会被运行时转换覆盖）。
 4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。

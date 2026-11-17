@@ -98,6 +98,8 @@ class HelpOverlay(QFrame):
         outer.addLayout(head)
 
         self.browser = QTextBrowser()
+        from gui_qt.emoji_icons import strip_emoji
+        html = strip_emoji(html)
         self.browser.setOpenExternalLinks(True)
         self.browser.setHtml(html)
         self.browser.setStyleSheet(
