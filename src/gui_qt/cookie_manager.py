@@ -41,6 +41,7 @@ COOKIE_PLATFORMS = [
     ("tcdoc", "腾讯文档", False, True),
     ("quark", "夸克网盘", False, True),
     ("baidu", "百度网盘", False, True),
+    ("yun139", "移动云盘", False, True),
 ]
 
 
@@ -86,6 +87,11 @@ BROWSER_LOGIN_CONFIGS = {
     "quark": ("https://pan.quark.cn/", "夸克网盘登录（软件内）",
               ("__puus", "__pus"),
               "打开夸克 App 扫码登录，或手机号 + 验证码登录（进到网盘文件页即算成功）"),
+    # 移动云盘：网页登录会把会话写进 Cookie（token / skey / auth_token），
+    # 带上它们就能调 /orchestration/... 的云盘接口
+    "yun139": ("https://yun.139.com/", "移动云盘登录（软件内）",
+               ("token", "skey"),
+               "手机号 + 验证码 / 密码登录（进到「我的云盘」文件列表即算成功）"),
     # 百度网盘：登录票是 BDUSS / STOKEN，进到文件列表页即算成功
     "baidu": ("https://pan.baidu.com/disk/main", "百度网盘登录（软件内）",
               ("BDUSS", "STOKEN"),

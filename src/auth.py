@@ -90,6 +90,8 @@ COOKIE_TTL_DAYS = {
     "quark": 0,
     # 百度网盘：BDUSS 长期有效，失效只能重新登录，不按天数判过期
     "baidu": 0,
+    # 移动云盘：网页登录后 token / skey 存在 Cookie 里，过期只能重新登录
+    "yun139": 0,
 }
 
 # 平台 key -> 中文名（用于 UI 展示）
@@ -109,6 +111,7 @@ PLATFORM_NAMES = {
     "tcdoc": "腾讯文档",
     "quark": "夸克网盘",
     "baidu": "百度网盘",
+    "yun139": "移动云盘",
 }
 
 
