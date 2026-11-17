@@ -155,6 +155,62 @@ class BaiduClient:
             start += 100
         return items
 
+    def list_entries(self, remote_path: str = "/") -> list[dict]:
+        """下载页使用的统一结构。
+
+        `fid` 用路径（进入目录靠路径），`download_id` 用 fs_id
+        （百度 filemetas 的 targets 对中文路径会报 errno 2，必须用 fsids）。
+        """
+        entries: list[dict] = []
+        for item in self.list_dir(remote_path or "/"):
+            try:
+                size = int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            path = str(item.get("path") or "")
+            entries.append({
+                "file_name": str(item.get("server_filename") or ""),
+                "fid": path,
+                "download_id": str(item.get("fs_id") or ""),
+                "dir": str(item.get("isdir")) == "1",
+                "size": size,
+                "updated_at": item.get("server_mtime") or item.get("local_mtime") or "",
+            })
+        return entries
+
+    def download_links(self, fsids: list[str]) -> dict[str, str]:
+        """按 fs_id 批量取 dlink；返回值 `{fs_id: dlink}`。"""
+        ids: list[int] = []
+        for value in fsids:
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return {}
+        resp = self.session.get(f"{BASE}/api/filemetas", params={
+            **self._common(), "fsids": json.dumps(ids), "dlink": 1,
+            "bdstoken": self.bdstoken}, timeout=TIMEOUT)
+        data = self._check(self._json(resp, "/api/filemetas"), "/api/filemetas")
+        links: dict[str, str] = {}
+        for index, item in enumerate(data.get("info") or []):
+            fid = str(item.get("fs_id") or (ids[index] if index < len(ids) else ""))
+            url = str(item.get("dlink") or "")
+            if fid and url:
+                links[fid] = url
+        if not links:
+            raise BaiduError(-1, "未取到下载直链", "/api/filemetas")
+        return links
+
+    def download_headers(self) -> dict:
+        """直链下载头；UA 必须是 `pan.baidu.com`，浏览器 UA 会被 31326 拒绝。"""
+        return {
+            "Cookie": self.cookie,
+            "User-Agent": "pan.baidu.com",
+            "Referer": f"{BASE}/",
+            "Accept": "*/*",
+        }
+
     def list_index(self, remote_dir: str) -> dict[str, dict]:
         """`文件名 → {fid: 路径, size}`（百度按路径删除，fid 直接放路径）。"""
         remote_dir = (remote_dir or "").strip("/")

@@ -194,6 +194,34 @@ class QuarkClient:
             page += 1
         return items
 
+    def list_entries(self, fid: str = "0") -> list[dict]:
+        """下载页使用的统一结构，与百度 / 移动云盘字段对齐。"""
+        entries: list[dict] = []
+        for item in self.list_dir(fid):
+            try:
+                size = int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            file_id = str(item.get("fid") or "")
+            entries.append({
+                "file_name": str(item.get("file_name") or ""),
+                "fid": file_id,
+                "download_id": file_id,
+                "dir": bool(item.get("dir")),
+                "size": size,
+                "updated_at": item.get("updated_at") or item.get("created_at") or "",
+            })
+        return entries
+
+    def download_headers(self) -> dict:
+        """直链下载头；夸克直链要求 Cookie + Referer。"""
+        return {
+            "Cookie": self.cookie,
+            "Referer": REFERER,
+            "User-Agent": self.user_agent or DEFAULT_UA,
+            "Accept": "*/*",
+        }
+
     def mkdir(self, parent_fid: str, name: str) -> str:
         """建目录；同名已存在时返回已有 fid。"""
         payload = self._request("POST", "/file", body={

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""夸克网盘下载页。
+"""网盘下载页（夸克 / 百度 / 移动云盘）。
 
-浏览夸克网盘目录，把选中的文件或整个文件夹下载到本地：
+浏览三大网盘目录，把选中的文件或整个文件夹下载到本地：
 
 - 单线程 + Range 断点续传：直链过期自动重新申请，网络中断后从 `.part` 接着下；
 - 已存在的同名同大小文件自动跳过，不重复消耗流量；
 - 可选下载完成后用内置 7-Zip 解压 rar / 7z / zip 等压缩包。
 
-登录走「Cookie 管理 → 夸克网盘」（项目约定 5），本页不保存任何凭据。
+登录走「Cookie 管理」对应的网盘入口（项目约定 5），本页不保存任何凭据。
 视觉全部使用主题语义角色（ui-visual-spec），不写死颜色。
 """
 
@@ -19,9 +19,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import post_to_main, run_bg
@@ -29,11 +29,21 @@ from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
 from toolbox import sevenzip
 from toolbox.quark import backup as qbackup
+from toolbox.quark import config as qconfig
 from toolbox.quark import download as qdownload
+
+# 各网盘根目录标识：夸克用 fid "0"，百度 / 移动云盘用 "/"
+ROOT_IDS = {"quark": "0", "baidu": "/", "yun139": "/"}
 
 
 def _fmt_time(value) -> str:
-    """夸克返回的更新时间可能是秒 / 毫秒时间戳或字符串。"""
+    """更新时间可能是秒 / 毫秒时间戳，或移动云盘的 ISO 字符串。"""
+    if isinstance(value, str) and "T" in value:
+        try:
+            return datetime.fromisoformat(
+                value.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            return value[:16].replace("T", " ")
     try:
         num = int(value)
     except (TypeError, ValueError):
@@ -64,8 +74,8 @@ class QuarkDownloadPage(BasePage):
 
         root.addWidget(ToolPageHeader(
             "网盘下载",
-            "浏览夸克网盘，勾选文件或整个文件夹下载到本地。大文件单线程断点续传："
-            "直链失效会自动换链，网络中断后重新下载会从断点接着来。"))
+            "浏览夸克 / 百度 / 移动云盘，勾选文件或整个文件夹下载到本地。"
+            "大文件单线程断点续传：直链失效会自动换链，网络中断后重新下载会从断点接着来。"))
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
 
@@ -80,6 +90,15 @@ class QuarkDownloadPage(BasePage):
 
         path_row = QHBoxLayout()
         path_row.setSpacing(6)
+        path_row.addWidget(QLabel("网盘"))
+        self.provider_combo = QComboBox()
+        for key, label in qconfig.PROVIDERS.items():
+            self.provider_combo.addItem(label, key)
+        self.provider_combo.setFixedWidth(112)
+        self.provider_combo.setToolTip("切换要浏览的网盘；登录都在「Cookie 管理」里完成")
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        path_row.addWidget(self.provider_combo)
+
         self.up_btn = QPushButton("⬆ 上一级")
         self.up_btn.setProperty("variant", "secondary")
         self.up_btn.setToolTip("返回上一层云端目录")
@@ -98,7 +117,7 @@ class QuarkDownloadPage(BasePage):
 
         self.login_btn = QPushButton("🔑 Cookie 管理")
         self.login_btn.setProperty("variant", "ghost")
-        self.login_btn.setToolTip("夸克网盘登录 / 重新登录（统一由 Cookie 管理负责）")
+        self.login_btn.setToolTip("夸克 / 百度 / 移动云盘登录（统一由 Cookie 管理负责）")
         self.login_btn.clicked.connect(self._open_cookie_manager)
         path_row.addWidget(self.login_btn)
         layout.addLayout(path_row)
@@ -233,6 +252,24 @@ class QuarkDownloadPage(BasePage):
         except Exception as exc:  # noqa: BLE001 - 管理入口异常不阻断页面
             QMessageBox.warning(self, "打开 Cookie 管理失败", str(exc))
 
+    # ==================== 网盘切换 ====================
+
+    def _current_provider(self) -> str:
+        return str(self.provider_combo.currentData() or "quark")
+
+    def _provider_root(self) -> str:
+        return ROOT_IDS.get(self._current_provider(), "0")
+
+    def _on_provider_changed(self, _index: int = 0):
+        """切换网盘：目录栈回到该网盘的根，再重新列目录。"""
+        self._crumbs = [(self._provider_root(), "根目录")]
+        self._entries = []
+        self.table.setRowCount(0)
+        self.count_label.setText("0 项")
+        self.path_label.setText("根目录")
+        self.up_btn.setEnabled(False)
+        self._refresh()
+
     # ==================== 目录浏览 ====================
 
     def _refresh(self):
@@ -240,15 +277,18 @@ class QuarkDownloadPage(BasePage):
             return
         self._loading = True
         self.refresh_btn.setEnabled(False)
+        self.provider_combo.setEnabled(False)
         fid = self._crumbs[-1][0]
+        provider = self._current_provider()
 
         def work():
-            client = qbackup.build_client("quark")
-            return client.list_dir(fid)
+            client = qbackup.build_client(provider)
+            return client.list_entries(fid)
 
         def done(entries, err):
             self._loading = False
             self.refresh_btn.setEnabled(True)
+            self.provider_combo.setEnabled(True)
             if err:
                 self.status_label.setText("列目录失败")
                 self._append_log(f"列目录失败：{err}")
@@ -357,6 +397,7 @@ class QuarkDownloadPage(BasePage):
             name=str(entry.get("file_name") or ""),
             size=int(entry.get("size") or 0),
             updated=str(entry.get("updated_at") or ""),
+            download_id=str(entry.get("download_id") or entry.get("fid") or ""),
         ) for entry in entries]
         self._start_download(lambda _downloader: items,
                              f"下载选中 {len(items)} 个文件")
@@ -385,14 +426,16 @@ class QuarkDownloadPage(BasePage):
         self.download_btn.setEnabled(False)
         self.folder_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.provider_combo.setEnabled(False)
         self.progress.setValue(0)
         self.status_label.setText("准备中…")
         self._append_log(f"开始{title}")
         auto_extract = self.extract_cb.isChecked()
         stop_event = self._stop_event
+        provider = self._current_provider()
 
         def work():
-            client = qbackup.build_client("quark")
+            client = qbackup.build_client(provider)
             downloader = qdownload.Downloader(
                 client, local,
                 on_progress=lambda *args: post_to_main(self._on_progress, *args),
@@ -412,6 +455,7 @@ class QuarkDownloadPage(BasePage):
             self.download_btn.setEnabled(True)
             self.folder_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
+            self.provider_combo.setEnabled(True)
             if err:
                 self.status_label.setText("失败")
                 self._append_log(f"下载异常终止：{err}")

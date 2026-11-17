@@ -149,6 +149,47 @@ class Yun139Client:
                 break
         return items
 
+    def list_entries(self, file_id: str = "/") -> list[dict]:
+        """下载页使用的统一结构；`fid` 与 `download_id` 都是 fileId。"""
+        entries: list[dict] = []
+        for item in self.list_dir(file_id or "/"):
+            is_dir = item.get("type") == "folder"
+            try:
+                size = int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            file_key = str(item.get("fileId") or "")
+            entries.append({
+                "file_name": str(item.get("name") or ""),
+                "fid": file_key,
+                "download_id": file_key,
+                "dir": is_dir,
+                "size": 0 if is_dir else size,
+                "updated_at": item.get("updatedAt") or item.get("createdAt") or "",
+            })
+        return entries
+
+    def download_links(self, file_ids: list[str]) -> dict[str, str]:
+        """逐个取下载地址（接口一次只接受一个 fileId，返回 data.url）。"""
+        links: dict[str, str] = {}
+        for fid in [str(f) for f in file_ids if f]:
+            data = self._post("/file/getDownloadUrl", {"fileId": fid})
+            url = str(data.get("url") or "")
+            if url:
+                links[fid] = url
+        if not links:
+            raise Yun139Error(-1, "未取到下载直链", "/file/getDownloadUrl")
+        return links
+
+    def download_headers(self) -> dict:
+        """直链下载头；139 直链需要登录态 Cookie。"""
+        return {
+            "Cookie": self.cookie,
+            "User-Agent": self.user_agent or UA,
+            "Referer": "https://yun.139.com/",
+            "Accept": "*/*",
+        }
+
     def list_index(self, remote_dir: str) -> dict[str, dict]:
         remote_dir = (remote_dir or "").strip("/")
         if remote_dir in self._index_cache:

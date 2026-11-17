@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-"""夸克网盘下载引擎：目录递归 + Range 断点续传。
+"""网盘下载引擎（夸克 / 百度 / 移动云盘）：目录递归 + Range 断点续传。
+
+各后端的客户端只需提供同一组接口：
+`list_entries(fid)` / `download_links(ids)` / `download_headers()` / `session`。
 
 大文件的三个真实难点，以及各自对策：
 
-1. **直链有分钟级时效** —— 一个 20 GB 文件跑到一半链接就废了。
-   对策：403/过期时自动重新申请直链，再用 `Range: bytes=N-` 从断点续传。
+1. **直链有时效** —— 大文件跑到一半链接就废了。
+   对策：401/403 时自动重新申请直链，再用 `Range: bytes=N-` 从断点续传。
 2. **长连接必断** —— 单连接跑几十 GB 几乎不可能一次成功。
    对策：`.part` 文件本身就是断点（文件系统记已下载字节，不用额外数据库），
    中断后下次启动自动从 `.part` 长度接着要。
@@ -21,8 +24,6 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-from .api import DEFAULT_UA, REFERER, QuarkClient, QuarkError
 
 CHUNK = 1024 * 1024          # 1 MB 一块，进度与写入的平衡点
 MAX_RETRY = 6                # 单个文件最多换链重试次数
@@ -70,13 +71,22 @@ def human_speed(bps: float) -> str:
 
 @dataclass
 class DownloadItem:
-    """一个待下载的远端文件。"""
+    """一个待下载的远端文件。
+
+    `fid` 用于下载页内部；`download_id` 是取直链用的标识（百度必须用 fs_id，
+    夸克 / 移动云盘与 fid 相同）。
+    """
 
     fid: str
     name: str
     size: int = 0
     rel_dir: str = ""          # 云端相对目录（不含文件名），用于在本地复刻层级
     updated: str = ""
+    download_id: str = ""
+
+    @property
+    def link_id(self) -> str:
+        return self.download_id or self.fid
 
     @property
     def rel_path(self) -> str:
@@ -141,8 +151,8 @@ class Downloader:
             return []
         items: list[DownloadItem] = []
         try:
-            listing = self.client.list_dir(fid)
-        except QuarkError as exc:
+            listing = self.client.list_entries(fid)
+        except Exception as exc:  # noqa: BLE001 - 三个后端的异常类型不同
             self._log(f"列目录失败 {rel_dir or '/'}：{exc}")
             return []
         for entry in listing:
@@ -161,19 +171,21 @@ class Downloader:
             items.append(DownloadItem(
                 fid=sub_fid, name=name, size=size, rel_dir=rel_dir,
                 updated=str(entry.get("updated_at") or ""),
+                download_id=str(entry.get("download_id") or sub_fid),
             ))
         return items
 
     # ==================== 直链 ====================
 
-    def _link(self, fid: str, refresh: bool = False) -> str:
-        if not refresh and fid in self._link_cache:
-            return self._link_cache[fid]
-        links = self.client.download_links([fid])
-        url = links.get(fid, "")
+    def _link(self, item: DownloadItem, refresh: bool = False) -> str:
+        key = item.link_id
+        if not refresh and key in self._link_cache:
+            return self._link_cache[key]
+        links = self.client.download_links([key])
+        url = links.get(key, "") or next(iter(links.values()), "")
         if not url:
             raise DownloadError("未取到下载直链（可能需要在 Cookie 管理里重新登录）")
-        self._link_cache[fid] = url
+        self._link_cache[key] = url
         return url
 
     # ==================== 单个文件 ====================
@@ -212,13 +224,13 @@ class Downloader:
             if self._stopped():
                 raise DownloadError("已停止")
             try:
-                url = self._link(item.fid, refresh=attempt > 0)
+                url = self._link(item, refresh=attempt > 0)
                 done, speed = self._stream(url, part, item, done)
                 break
             except _LinkExpired as exc:
                 last_error = str(exc)
                 attempt += 1
-                self._link_cache.pop(item.fid, None)
+                self._link_cache.pop(item.link_id, None)
                 if attempt > MAX_RETRY:
                     raise DownloadError(f"直链多次失效，重试 {MAX_RETRY} 次仍失败")
                 self._log(f"直链失效，重新申请（第 {attempt} 次）：{item.name}")
@@ -247,12 +259,7 @@ class Downloader:
     def _stream(self, url: str, part: Path, item: DownloadItem,
                 done: int) -> tuple[int, float]:
         """把直链内容写进 .part，返回 (总字节, 末速)。"""
-        headers = {
-            "Cookie": self.client.cookie,
-            "Referer": REFERER,
-            "User-Agent": self.client.user_agent or DEFAULT_UA,
-            "Accept": "*/*",
-        }
+        headers = dict(self.client.download_headers())
         if done:
             headers["Range"] = f"bytes={done}-"
         try:
@@ -318,7 +325,7 @@ class Downloader:
                 result = self.download_one(item, overwrite=overwrite)
             except DownloadError as exc:
                 result = DownloadResult(False, item.name, message=str(exc))
-            except QuarkError as exc:
+            except Exception as exc:  # noqa: BLE001 - 三个后端的业务异常类型不同
                 result = DownloadResult(False, item.name, message=str(exc))
             results.append(result)
             self._log(result.summary())
