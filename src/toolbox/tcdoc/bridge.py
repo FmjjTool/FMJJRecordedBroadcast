@@ -380,6 +380,9 @@ def _remote_index(rows: list[dict]) -> dict:
     titles: set[tuple] = set()
     votes: dict[tuple, Counter] = defaultdict(Counter)
     accounts: Counter = Counter()
+    types_seen: set[str] = set()
+    positions_seen: set[str] = set()
+    plat_types: dict[str, Counter] = defaultdict(Counter)
 
     for row in rows:
         values = row.get("values") or {}
@@ -418,9 +421,16 @@ def _remote_index(rows: list[dict]) -> dict:
         pos_value = _first(values.get("发布位置"))
         if type_value or pos_value:
             votes[(plat, kind_group)][(type_value, pos_value)] += 1
+        if type_value:
+            types_seen.add(type_value)
+            plat_types[plat][type_value] += 1
+        if pos_value:
+            positions_seen.add(pos_value)
 
     return {"urls": urls, "ids": ids, "texts": texts, "titles": titles,
-            "votes": votes, "accounts": accounts}
+            "votes": votes, "accounts": accounts,
+            "types": types_seen, "positions": positions_seen,
+            "plat_types": plat_types}
 
 
 # ==================== 作品链接 ====================
@@ -646,14 +656,45 @@ def _duration_text(seconds) -> str:
     return f"{seconds}秒"
 
 
-def _type_position(index: dict, plat: str, kind_group: str) -> tuple[str, str]:
+def _pick_type(index: dict, plat: str, kind_group: str, has_images: bool) -> str:
+    """投票不可用时按内容挑一个「表里确实存在」的动态类型，避免凭空造选项。"""
+    valid = index.get("types") or set()
+    if not valid:
+        return ""
+    if kind_group == "video":
+        preferred = "视频投稿"
+    elif kind_group == "weibo":
+        preferred = "图文" if has_images else "文字"
+    else:
+        preferred = "图文" if has_images else _FALLBACK_TYPE.get(kind_group, ("",))[0]
+    if preferred in valid:
+        return preferred
+    per_platform = index.get("plat_types") or {}
+    for text, _count in (per_platform.get(plat) or Counter()).most_common():
+        if text in valid:
+            return text
+    return ""
+
+
+def _type_position(index: dict, plat: str, kind_group: str,
+                   has_images: bool = False) -> tuple[str, str]:
+    """动态类型 / 发布位置：优先用同平台同类行的多数值，且必须是表里已有的选项。
+
+    旧数据里微博等平台大量行的「动态类型」为空，直接兜底成「动态」会写出
+    表里根本没有的选项，上传时被判为非法值；这里改为按内容挑现有选项。
+    """
     fallback = _FALLBACK_TYPE.get(kind_group, ("", ""))
+    valid_types = index.get("types") or set()
+    valid_positions = index.get("positions") or set()
+    type_value = pos_value = ""
     counter = index["votes"].get((plat, kind_group))
     if counter:
         (type_value, pos_value), _count = counter.most_common(1)[0]
-        # 旧数据里常有动态类型为空的行，按字段各自兜底
-        return type_value or fallback[0], pos_value or fallback[1]
-    return fallback
+    if not type_value or (valid_types and type_value not in valid_types):
+        type_value = _pick_type(index, plat, kind_group, has_images)
+    if not pos_value or (valid_positions and pos_value not in valid_positions):
+        pos_value = fallback[1] if (not valid_positions or fallback[1] in valid_positions) else ""
+    return type_value, pos_value
 
 
 def _row_from_group(items: list[dict], index: dict) -> dict:
@@ -698,13 +739,13 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
         kind_group = "video"
     else:
         kind_group = "dynamic"
-    type_value, pos_value = _type_position(index, plat, kind_group)
 
     images: list[str] = []
     for item in items:
         for url in _item_images(item):
             if url not in images:
                 images.append(url)
+    type_value, pos_value = _type_position(index, plat, kind_group, bool(images))
 
     return {
         "作品标题": title or content[:80],
