@@ -34,6 +34,10 @@
 
 完整内容见 [src/skills/ui-visual-spec/SKILL.md](src/skills/ui-visual-spec/SKILL.md)。浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式均以该 skill 为唯一依据；`theme.py` 是唯一色板来源，页面不得自带第二套配色。凡新增或修改页面、对话框、浮层、自绘控件、富文本、图表、图标，或改动背景色、文字色、字号、内联 QSS、`theme.py`，必须先阅读并逐项核对其中的禁令、铁律与验证路径。该 skill 只管视觉，不构成对核心八模块的改动授权。
 
+## 分层约束 skill（新增/重构/跨层调用时强制阅读）
+
+完整内容见 [src/skills/layering-contract/SKILL.md](src/skills/layering-contract/SKILL.md)。项目按「入口/任务编排 → UI 表现 → 应用服务/用例 → 平台适配/领域引擎 → 基础设施/数据」五层 + 横切层组织；只允许上层依赖下层，禁止 UI 直接承载业务、引擎反向依赖 UI、数据层双写与第二套凭据/定时入口。该 skill 不改变既有功能，也不构成录播八模块、Cookie 或腾讯文档写入的改动授权。
+
 ## 约定 1：更新前获取远端状态，遵循版本领先原则
 
 - 前置顺序：完整阅读约定 → `git status` → 按约定 2 本地提交备份已有改动 → 确认 `origin` 为 `https://github.com/FmjjTool/FMJJRecordedBroadcast.git` → `git fetch origin` → 比较 `HEAD` 与 `origin/main`。状态检查、备份和同步是本次编辑前的准备动作。
