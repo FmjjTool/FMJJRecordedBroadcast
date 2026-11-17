@@ -25,6 +25,7 @@ from gui_qt.common import first_number, post_to_main, run_bg, sales_number, stab
 from gui_qt.pages.base import BasePage
 
 import shopping as shopping_mod
+from toolbox.image_fetch import fetch_image
 
 
 class ShoppingPage(BasePage):
@@ -721,12 +722,7 @@ class ShoppingPage(BasePage):
             return
 
         def work():
-            import httpx
-            r = httpx.get(url, timeout=15,
-                          headers={"User-Agent": "Mozilla/5.0",
-                                   "Referer": "https://www.taobao.com/"})
-            r.raise_for_status()
-            return r.content
+            return fetch_image(url, referer="https://www.taobao.com/", timeout=15)
 
         def done(data, err):
             if seq != self._preview_seq:

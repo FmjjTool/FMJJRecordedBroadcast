@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import douyin_shop as ds
+from toolbox.image_fetch import fetch_image
 
 _PREVIEW_W = 260
 _PREVIEW_H = 260
@@ -310,11 +311,7 @@ class DouyinShopPage(BasePage):
         want = p.product_id or p.main_image
 
         def work():
-            import httpx
-            with httpx.Client(timeout=30.0, follow_redirects=True) as cli:
-                r = cli.get(p.main_image, headers={"User-Agent": ds.UA_MOBILE})
-                r.raise_for_status()
-                return r.content
+            return fetch_image(p.main_image, user_agent=ds.UA_MOBILE)
 
         def done(data, err):
             # 用户可能已经切到别的商品了：只认当前选中的那条

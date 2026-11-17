@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import bili_shop as bs
+from toolbox.image_fetch import fetch_image
 
 _PREVIEW_W = 240
 _PREVIEW_H = 240
@@ -310,12 +311,8 @@ class BiliShopPage(BasePage):
             label.setPixmap(QPixmap())
 
         def work():
-            import httpx
-            with httpx.Client(timeout=30.0, follow_redirects=True) as cli:
-                r = cli.get(url, headers={"User-Agent": bs.UA_MOBILE,
-                                          "Referer": "https://www.bilibili.com/"})
-                r.raise_for_status()
-                return r.content
+            return fetch_image(url, user_agent=bs.UA_MOBILE,
+                               referer="https://www.bilibili.com/")
 
         def done(data, err):
             if scaled:
