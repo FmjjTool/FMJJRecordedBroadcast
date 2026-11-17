@@ -8,12 +8,10 @@
   （分组多选 + 采集类型下拉 + 保存/删除）
 """
 
-import io
 import json
 import os
 import re
 import threading
-import time
 from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse
@@ -78,74 +76,10 @@ def _clear_layout(layout):
             _clear_layout(item.layout())
 
 
-def _parse_publish_ts(text):
-    """发布时间字符串 → epoch 秒。解析失败返回 None（对应条目保留不过滤）。
-
-    覆盖平台常见格式：绝对时间（2026-09-27 14:30[:59]、2026/9/27、2026年9月27日）
-    与相对时间（刚刚/X秒/分钟/小时/天/周/月前、今天/昨天/前天）。
-    """
-    import re as _re
-    from datetime import datetime as _dt, timedelta as _td
-    s = str(text or "").strip()
-    if not s:
-        return None
-    m = _re.search(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})", s)
-    if m:
-        try:
-            hm = _re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", s[m.end():])
-            if hm:
-                return _dt(int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                           int(hm.group(1)), int(hm.group(2)),
-                           int(hm.group(3) or 0)).timestamp()
-            return _dt(int(m.group(1)), int(m.group(2)), int(m.group(3))).timestamp()
-        except ValueError:
-            pass
-    now = _dt.now()
-    if s.startswith(("刚刚", "刚才", "今天")):
-        return now.timestamp()
-    rm = _re.match(r"(\d+)\s*(秒|分钟|分|小时|时|天|日|周|月)前", s)
-    if rm:
-        n = int(rm.group(1))
-        delta = {"秒": _td(seconds=n), "分钟": _td(minutes=n), "分": _td(minutes=n),
-                 "小时": _td(hours=n), "时": _td(hours=n), "天": _td(days=n),
-                 "日": _td(days=n), "周": _td(weeks=n),
-                 "月": _td(days=30 * n)}[rm.group(2)]
-        return (now - delta).timestamp()
-    if s.startswith("昨天"):
-        return (now - _td(days=1)).timestamp()
-    if s.startswith("前天"):
-        return (now - _td(days=2)).timestamp()
-    return None
 
 
-def _date_bound_ts(date_str, is_start):
-    """'YYYY-MM-DD' → epoch 秒（开始=当天 00:00:00，结束=当天 23:59:59）；空/非法 → None。"""
-    from datetime import datetime as _dt, timedelta as _td
-    if not date_str:
-        return None
-    try:
-        d = _dt.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        return None
-    return d.timestamp() if is_start else (d + _td(days=1)).timestamp() - 1
 
 
-def _filter_posts_by_date(posts, lo_ts, hi_ts):
-    """保留发布时间落在 [lo_ts, hi_ts] 的条目；时间解析失败的条目保留（宁多勿漏）。"""
-    if lo_ts is None and hi_ts is None:
-        return posts
-    keep = []
-    for p in posts:
-        ts = _parse_publish_ts(getattr(p, "publish_time", ""))
-        if ts is None:
-            keep.append(p)
-            continue
-        if lo_ts is not None and ts < lo_ts:
-            continue
-        if hi_ts is not None and ts > hi_ts:
-            continue
-        keep.append(p)
-    return keep
 
 
 class InfoAccountsPage(BasePage):
@@ -1082,296 +1016,24 @@ class InfoAccountsPage(BasePage):
         return accounts, None
 
     def _collect_accounts_worker(self, accounts, count, rate_count=0, rate_interval=0, incremental=False, on_event=None, pause_event=None, cancel_event=None, date_start="", date_end="", round_id=0):
-        """采集账号最新内容，返回 (total, log, all_posts)。供手动与定时获取共用。
+        """采集账号最新内容；并发/限流/stdout/日期过滤由 L3 服务执行。
 
-        多账号并发采集（ThreadPoolExecutor，上限 4 线程）：as_completed 逐个处理
-        完成的账号——进度/日志/入库实时可见，采集器 print 也逐行实时进日志
-        （带账号名前缀），不再等最慢账号收尾后一次性倾倒。
-
-        on_event(dict)：实时事件回调（后台线程调用），{"type": "log", "text": ...}
-        或 {"type": "progress", "done": x, "total": y, "label": ...}。
-        rate_count/rate_interval: 搜索限流（每平台累计抓到 rate_count 个后进入
-            rate_interval 秒冷却期，同平台后续账号等冷却结束才发请求；
-            抖音账号内部翻页同样按该节奏停顿）。
-        incremental: 增量模式（True=追加到默认汇总文件，False=单独导出独立文件）。
-        pause_event: threading.Event，clear 时在账号边界停住（在飞账号自然跑完）。
-        cancel_event: threading.Event，set 后未开始的账号直接跳过（在飞账号自然跑完）。
-        date_start/date_end: 日期段过滤（'YYYY-MM-DD'，空=该端不限），
-            只保留发布时间落在范围内的条目（时间解析失败的条目保留）。
+        本方法只把 UI 侧的落库、逐条揭示与导出回调接入服务。
         """
-        from concurrent.futures import ThreadPoolExecutor
-        from accounts_manager import infer_kind_from_url
-        from platforms import URLRecognizer, get_parser
+        from toolbox.account_collection import collect_accounts
         if not round_id:
             round_id = self._fetch_round
-        total = 0
-        log = []
-
-        def emit(line):
-            # 逐行实时推送 + 保留完整日志（定时模式结束后打印汇总）
-            log.append(line)
-            if on_event is not None:
-                on_event({"type": "log", "text": line})
-
-        # 日期段边界（开始 00:00:00 ~ 结束 23:59:59），两端都空 = 不过滤
-        date_lo = _date_bound_ts(date_start, True)
-        date_hi = _date_bound_ts(date_end, False)
-        if date_lo is not None or date_hi is not None:
-            emit(f"🗓 日期段过滤已启用: {date_start or '从头'} ~ {date_end or '到现在'}（只保留该范围内发布的内容）")
-
-        n = len(accounts)
-        if on_event is not None:
-            on_event({"type": "progress", "done": 0, "total": n, "label": "准备中..."})
-        all_posts = []
-        # 0 = 无上限（抓完所有分页/翻到底）：传天文数字给采集器，
-        # 各平台以 10^12 为界识别为「无上限」（翻到时间线尽头/停滞检测自然停）
-        fetch_count = count if count > 0 else 99999999999999
-
-        # 线程安全 stdout 捕获：redirect_stdout 是全局替换，多线程并发采集会互相覆盖，
-        # 改用 thread-local 代理——各采集线程的 print 只进自己的缓冲区
-        import sys
-        import threading
-
-        class _TLStdout(io.TextIOBase):
-            def __init__(self, orig):
-                self._local = threading.local()
-                self._orig = orig
-
-            def write(self, s):
-                buf = getattr(self._local, "buf", None)
-                if buf is not None:
-                    buf.write(s)
-                else:
-                    self._orig.write(s)
-                return len(s)
-
-            def flush(self):
-                pass
-
-        class _LiveBuf(io.TextIOBase):
-            """采集器 stdout 缓冲：累积完整文本的同时，把完成的行实时推送 emit。
-            多账号并发时行与行会交错，所以每行带账号名前缀标识来源。"""
-
-            def __init__(self, on_line, prefix):
-                self._buf = io.StringIO()
-                self._pending = ""
-                self._on_line = on_line
-                self._prefix = prefix
-
-            def write(self, s):
-                self._buf.write(s)
-                self._pending += s
-                self._drain()
-                return len(s)
-
-            def _drain(self):
-                while "\n" in self._pending:
-                    line, self._pending = self._pending.split("\n", 1)
-                    if line.strip():
-                        self._on_line(f"{self._prefix}{line.rstrip()}")
-
-            def flush_pending(self):
-                if self._pending.strip():
-                    self._on_line(f"{self._prefix}{self._pending.strip()}")
-                self._pending = ""
-
-            def getvalue(self):
-                return self._buf.getvalue()
-
-        proxy = _TLStdout(sys.stdout)
-
-        # 平台限流（真正作用于请求间隔）：fetched=本周期累计条数，cooldown=冷却截止时间。
-        # 旧实现把 sleep 放在全部账号采完后的统计循环里，请求早已发出，限流形同虚设；
-        # 改为「账号抓取前等冷却 + 抓完计数触发冷却」，并发线程会真正被拉开间隔。
-        plat_lock = threading.Lock()
-        plat_fetched = {}
-        plat_cooldown = {}
-        rate_on = rate_count > 0 and rate_interval > 0
-
-        def _throttle_before(platform: str):
-            """该账号开始抓取前：平台处于冷却期则等到冷却结束。"""
-            if not rate_on:
-                return
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    return
-                if pause_event is not None:
-                    pause_event.wait()
-                with plat_lock:
-                    until = plat_cooldown.get(platform, 0.0)
-                remain = until - time.time()
-                if remain <= 0:
-                    return
-                time.sleep(min(remain, 1.0))
-
-        def _throttle_after(platform: str, n_items: int) -> bool:
-            """该账号抓取结束：累计条数，达阈值设冷却期。返回是否触发限流。"""
-            if not rate_on or n_items <= 0:
-                return False
-            with plat_lock:
-                plat_fetched[platform] = plat_fetched.get(platform, 0) + n_items
-                if plat_fetched[platform] >= rate_count:
-                    plat_fetched[platform] = 0
-                    plat_cooldown[platform] = time.time() + rate_interval
-                    return True
-            return False
-
-        def reveal_items(items):
-            """解析器边抓边回调：先落库，再交给主线程逐条揭示。"""
-            if not items:
-                return
-            _db_insert(items)
-            post_to_main(self._enqueue_reveal, items, round_id)
-
-        def _fetch_one(job):
-            """单个账号采集任务（线程池内执行）。返回 (i, a, platform, posts, error)。"""
-            i, a = job
-            # 暂停门闩：clear 时阻塞在账号边界，set 后继续（在飞账号自然跑完）
-            if pause_event is not None:
-                pause_event.wait()
-            # 已取消：还没开始的账号直接跳过（线程池排队任务快速返回）
-            if cancel_event is not None and cancel_event.is_set():
-                return i, a, "", [], "__cancelled__"
-            platform = URLRecognizer.recognize(a.url)
-            name = a.name or (a.url[:36] if a.url else "未命名")
-            if not platform:
-                return i, a, "", [], "无法识别链接"
-            parser = get_parser(platform)
-            if not parser or not hasattr(parser, "fetch_user_posts"):
-                return i, a, platform, [], "不支持时间线"
-            # 冷却期内等待（限流真正作用于下一个请求的发出时刻）
-            _throttle_before(platform)
-            # B站按账号 kind 决定只采视频/只采动态/混合（存量账号 kind 空时按 URL 后缀推断）；其他平台忽略
-            account_kind = getattr(a, "kind", "") or infer_kind_from_url(a.url)
-            kwargs = {}
-            if platform == "bilibili" and account_kind in ("video", "dynamic", "all"):
-                kwargs["kind"] = account_kind
-            if platform == "douyin":
-                # 抖音接口/Playwright 拿到首批数据就回调，不等整账号抓完
-                kwargs["on_items"] = reveal_items
-            if rate_on and platform in ("douyin", "weibo", "bilibili"):
-                # 账号内部深翻页也按限流设置停顿（每 rate_count 条停 rate_interval 秒，
-                # 按每页实际条数折算）；快手浏览器滚动自带 1.5s 节奏、小红书首批
-                # SSR 无翻页，不接
-                kwargs["pause_every"] = rate_count
-                kwargs["pause_secs"] = rate_interval
-            if platform in ("douyin", "weibo", "bilibili", "kuaishou") and cancel_event is not None:
-                # 取消信号可打断在飞账号的深翻页/浏览器滚动，已抓部分保留（断点续获取）
-                kwargs["stop_check"] = cancel_event.is_set
-            # 实时日志缓冲：采集器的 print 逐行实时进日志（前缀=账号名），不再等全部账号收尾后倾倒
-            name_s = (name[:16] + "…") if len(name) > 16 else name
-            buf = _LiveBuf(emit, f"    [{name_s}] ")
-            proxy._local.buf = buf
-            try:
-                posts = parser.fetch_user_posts(a.url, count=fetch_count, **kwargs)
-            except Exception as e:  # noqa: BLE001
-                return i, a, platform, [], str(e)
-            finally:
-                proxy._local.buf = None
-                buf.flush_pending()
-            if _throttle_after(platform, len(posts)):
-                emit(f"    [{name_s}] ⏸ 限流：{platform} 已抓满 {rate_count} 条，冷却 {rate_interval}s")
-            return i, a, platform, posts, ""
-
-        old_stdout = sys.stdout
-        sys.stdout = proxy
-        per_platform = {}  # 平台 -> 已抓数量（汇总统计用）
-        done_order = []    # 完成顺序的 i 列表（日志/进度按实际完成推送）
-        results = {}       # i -> (a, platform, posts, error)（导出前按账号序重排，顺序稳定）
-        total_added = {}   # 增量模式：平台 -> 本轮新增条数（汇总用）
-        total_files = 0    # 单独导出模式：本轮写出文件数（汇总用）
-        try:
-            # 并发上限 4：过高并发容易触发平台风控，且 Playwright 兜底时资源开销大
-            workers = min(4, max(1, n))
-            from concurrent.futures import as_completed
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                # as_completed：每个账号一完成立即处理（进度/日志/入库实时可见），
-                # 不再像旧 ex.map 那样等最慢账号收尾后一次性倾倒（多线程"假串行"观感的根因）
-                futs = [ex.submit(_fetch_one, job) for job in enumerate(accounts, 1)]
-                for fut in as_completed(futs):
-                    i, a, platform, posts, error = fut.result()
-                    results[i] = (a, platform, posts, error)
-                    done_order.append(i)
-                    done_cnt = len(done_order)
-                    name = a.name or (a.url[:36] if a.url else "未命名")
-                    if on_event is not None:
-                        on_event({"type": "progress", "done": done_cnt, "total": n,
-                                  "label": f"[{done_cnt}/{n}] {platform} · {name}"})
-                    if error == "__cancelled__":
-                        emit(f"[{i}/{n}] ⊘ 已取消，跳过")
-                        continue
-                    if error == "无法识别链接":
-                        emit(f"[{i}/{n}] 无法识别: {a.url[:50]}")
-                        continue
-                    if error == "不支持时间线":
-                        emit(f"[{i}/{n}] {platform} 不支持时间线")
-                        continue
-                    if error:
-                        emit(f"[{i}/{n}] {platform} 失败: {error}")
-                        continue
-                    # 日期段过滤（时间解析失败的条目保留）
-                    if date_lo is not None or date_hi is not None:
-                        before_n = len(posts)
-                        posts = _filter_posts_by_date(posts, date_lo, date_hi)
-                        if len(posts) != before_n:
-                            emit(f"[{i}/{n}] 🗓 日期段过滤: {before_n} → {len(posts)} 条（范围外 {before_n - len(posts)} 条）")
-                    emit(f"[{i}/{n}] ⏳ {platform} · {name} → 获取到 {len(posts)} 条")
-                    # 先落库保证断点安全；界面结果统一走揭示队列，逐条出现。
-                    # 抖音解析器已通过 on_items 提前抛过首批的，重复项由 _collect 去重。
-                    _db_insert(posts)
-                    post_to_main(self._enqueue_reveal, posts, round_id)
-                    # 逐账号即时入库/导出：不等全部账号收尾——中途崩溃/退出/取消
-                    # 只丢在飞账号，已完成账号的数据都已在库（断点续获取的落点）
-                    save_msg, saved = self._export_one_batch(posts, incremental)
-                    emit(f"[{i}/{n}] {save_msg}")
-                    if incremental and isinstance(saved, dict):
-                        for p, cnt in saved.items():
-                            total_added[p] = total_added.get(p, 0) + cnt
-                    elif not incremental and isinstance(saved, int):
-                        total_files += saved
-                    all_posts.extend(posts)
-                    total += len(posts)
-                    per_platform[platform] = per_platform.get(platform, 0) + len(posts)
-                    # 区分主页作品 / 动态统计
-                    dyns = sum(1 for p in posts if getattr(p, "kind", "") == "dynamic")
-                    videos = len(posts) - dyns
-                    kind_tag = {"video": "[作品] ", "dynamic": "[动态] "}.get(
-                        getattr(a, "kind", "") or infer_kind_from_url(a.url), "")
-                    if dyns and videos:
-                        emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos} / 动态 {dyns}）")
-                    elif dyns:
-                        emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（动态 {dyns}）")
-                    else:
-                        emit(f"[{i}/{n}] ✅ {kind_tag}{platform} 获取到 {len(posts)} 条（作品 {videos}）")
-                    # 具体内容：列出条目「发布时间 标题」（最多 8 条，多则折算），日期段/数量一目了然
-                    for p in posts[:8]:
-                        t = (getattr(p, "title", "") or "").strip()
-                        d = (getattr(p, "publish_time", "") or "").strip()
-                        line = f"      · {d} {t}" if d else f"      · {t}"
-                        emit(line[:120] if line.strip() != "·" else "      ·（无标题）")
-                    if len(posts) > 8:
-                        emit(f"      …等共 {len(posts)} 条")
-        finally:
-            sys.stdout = old_stdout
-        # 导出按账号顺序（列表勾选顺序）而非完成顺序，产物稳定可复现
-        all_posts = [p for i in sorted(results) for p in results[i][2]]
-        # 汇总一行（数据已逐账号即时入库/导出，这里只报去向与总量）
-        if all_posts:
-            if incremental:
-                from toolbox import increment_db
-                if any(total_added.values()):
-                    parts = "、".join(f"{p} +{v}" for p, v in total_added.items() if v)
-                    emit(f"💾 已增量写入数据库: {increment_db.db_path()}（{parts}）")
-                else:
-                    emit(f"💾 无新增（已全部在库中）: {increment_db.db_path()}")
-            else:
-                from toolbox.config_manager import get_export_subdir
-                emit(f"💾 已单独导出 {total_files} 个文件到 {get_export_subdir('video_data')}")
-        if on_event is not None:
-            cancelled = cancel_event is not None and cancel_event.is_set()
-            on_event({"type": "progress", "done": n, "total": n,
-                      "label": "✕ 已取消" if cancelled else "✅ 全部完成"})
-        return total, log, all_posts
+        return collect_accounts(
+            accounts, count,
+            rate_count=rate_count, rate_interval=rate_interval,
+            incremental=incremental, on_event=on_event,
+            pause_event=pause_event, cancel_event=cancel_event,
+            date_start=date_start, date_end=date_end, round_id=round_id,
+            insert_items=_db_insert,
+            reveal_items=lambda items, rid: post_to_main(
+                self._enqueue_reveal, items, rid),
+            export_batch=self._export_one_batch,
+        )
 
     def _export_one_batch(self, posts, incremental):
         """单账号结果即时入库/导出（账号一完成就保存，不等全部收尾）。
