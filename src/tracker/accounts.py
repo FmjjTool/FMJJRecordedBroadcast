@@ -2,6 +2,9 @@
 
 每个账号：{name: 昵称, url: 链接, platform: bilibili/douyin/weibo(可空，采集时自动识别)}。
 采集结果追加保存到 tracker/data/<昵称>.xlsx，并支持读取长期缓存。
+
+归属：accounts.json 是「网媒账号追踪」的主数据，唯一写入方为本模块；
+与「信息获取」accounts.txt 的同步只通过显式 plan/apply 接口执行。
 """
 
 import json

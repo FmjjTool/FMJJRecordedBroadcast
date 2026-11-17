@@ -7,6 +7,10 @@
   11|游戏主播|抖音大号|https://www.douyin.com/xxx  → 组号|组名|备注|URL
 
 组号规范: 必须为重复数字，如 11、22、33 ... 99
+
+归属：config/accounts.txt 是「信息获取」账号的主数据，唯一写入方为本模块；
+tracker/accounts.json 与 music_accounts.json 分别是网媒/音乐追踪的独立主数据。
+三者不互为镜像，跨页同步只通过显式 plan/apply 接口执行。
 """
 
 import os

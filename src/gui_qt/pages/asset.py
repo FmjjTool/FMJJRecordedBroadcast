@@ -484,7 +484,7 @@ def _norm_dy_source_link(platform: str, video_id: str, url: str) -> str:
 
 
 def _index_file() -> str:
-    """资产管理索引文件（增量模式写入）。"""
+    """本地扫描增量缓存（非「已获取资源」索引；权威来源是扫描目录本身）。"""
     from toolbox.config_manager import get_export_subdir
     return str(get_export_subdir("video_data") / "_assets_index.json")
 

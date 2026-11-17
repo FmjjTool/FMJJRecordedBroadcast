@@ -3,6 +3,8 @@
 每个账号：{name: 昵称, url: 链接, platform: netease/qq/kugou/kuwo/fivesing,
           kind: user/artist/singer（可空，采集时从链接识别）}。
 采集结果追加保存到 导出目录/音乐账号数据/<昵称>.xlsx。
+
+归属：music_accounts.json 是「音乐账号追踪」的主数据，唯一写入方为本模块。
 """
 
 import json
