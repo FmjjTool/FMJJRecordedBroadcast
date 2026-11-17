@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QVBoxLayout, QWidget,
 )
 
+from toolbox import image_render
 from toolbox.config_manager import get_config_dir, get_export_dir
 
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
@@ -47,6 +48,10 @@ from gui_qt.theme import is_dark
 
 # ==================== 常量 ====================
 
+# 默认模板取导出图 token；底图/用户自定义颜色仍以用户选择为准。
+_CANVAS_TOKENS = image_render.tokens("dark")
+DEFAULT_TEXT_COLOR = _CANVAS_TOKENS["text"]
+CANVAS_BG_FALLBACK = _CANVAS_TOKENS["bg"]   # 无底图/留白时的画布底色
 FIELD_KEYS = ("title", "date", "remark")
 FIELD_LABELS = {"title": "标题", "date": "日期", "remark": "备注"}
 FIELD_PLACEHOLDERS = {
@@ -71,9 +76,8 @@ ALIGN_ITEMS = [("居中", "center"), ("左对齐", "left"), ("右对齐", "right
 EXPORT_RESOLUTIONS = ["1920x1080", "2560x1440", "3840x2160", "1280x720"]
 JPG_QUALITY_MIN, JPG_QUALITY_MAX, JPG_QUALITY_DEFAULT = 60, 100, 95
 
-CANVAS_BG_FALLBACK = "#181a20"   # 无底图/留白时的画布底色
 PREVIEW_LETTERBOX = "#101216"   # 预览组件画框底色（深浅主题固定）
-DRAG_HINT_COLOR = "#f2c14e"
+DRAG_HINT_COLOR = _CANVAS_TOKENS["warning"]
 
 # 滚轮拦截/弹窗主题控件（见 NoWheelMixin / force_combo_popup_theme）
 COMBO_POPUP_BG = {"light": "#ffffff", "dark": "#23262f"}
@@ -114,7 +118,7 @@ class FieldState:
     text: str = ""
     font_family: str = DEFAULT_FONT_FAMILY
     font_size_ratio: float = 48.0 / CANVAS_REF_H   # 字号 = 画布高度 x 比例
-    color: str = "#ffffff"
+    color: str = DEFAULT_TEXT_COLOR
     bold: bool = False
     italic: bool = False
     alignment: str = "center"   # left/center/right
@@ -809,13 +813,14 @@ class ColorPickerDialog(QDialog):
     RGB 数字框不响应滚轮（滚轮不改变值），输入即可识别。
     """
 
-    def __init__(self, current: str = "#ffffff", parent: Optional[QWidget] = None):
+    def __init__(self, current: str = DEFAULT_TEXT_COLOR,
+                 parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("选择文字颜色")
         self.setMinimumWidth(380)
         self._updating = False
         color = QColor(current)
-        self._color = color if color.isValid() else QColor("#ffffff")
+        self._color = color if color.isValid() else QColor(DEFAULT_TEXT_COLOR)
 
         v = QVBoxLayout(self)
 
@@ -1040,7 +1045,7 @@ class FieldPanel(QWidget):
 
     def _refresh_color_icon(self):
         pm = QPixmap(20, 14)
-        pm.fill(QColor(self.state.color if self.state else "#ffffff"))
+        pm.fill(QColor(self.state.color if self.state else DEFAULT_TEXT_COLOR))
         self.color_btn.setIcon(QIcon(pm))
         self.color_btn.setIconSize(QSize(20, 14))
 

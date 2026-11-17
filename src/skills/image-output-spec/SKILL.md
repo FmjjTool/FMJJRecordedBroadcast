@@ -39,6 +39,15 @@ description: "生成图片输出规范（账号对比 PNG、资产预览图、�
 3. 页面/业务模块不得自带第二套图片色板、字号表、页头页脚或数字格式；只传数据与少量布局选项。
 4. `tracker/export_png.py` 与 `music_account/export_png.py` 目前是两份近似重复实现，迁移时先合并到共享渲染模块，再改样式。
 
+### 实现状态（2026-11-17）
+
+- 已新增 `src/toolbox/image_render.py`：品牌 token、字体缓存、混排 emoji 文本、页头/页脚、卡片、表格、数字格式、原子写入与分页。
+- `src/tracker/export_png.py`、`src/music_account/export_png.py` 已改为薄适配层，统一调用共享渲染；宽度 1080，默认 brand-light，支持 `theme="dark"`。
+- 已新增 `src/toolbox/asset_preview.py`；`asset.py:_export_preview_image` 只调用该服务，不再自带紫色渐变/私有色板。
+- `cover_maker.py` 的默认画布底色、默认文字色与拖拽提示色改取共享 token；交互式预览仍使用 Qt `QPainter`（用户自定义封面/模板保持自由），不强行改成 Pillow。
+- 视频评论区长图等后续生成器尚未迁移，新增时必须直接使用共享模块。
+
+
 ## 画布与布局
 
 | 项 | 标准 |
