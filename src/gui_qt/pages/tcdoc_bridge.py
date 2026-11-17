@@ -11,8 +11,9 @@ from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
-    QHeaderView, QLabel, QMenu, QMessageBox, QPushButton, QStackedWidget,
-    QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QHeaderView, QLabel, QMenu, QMessageBox, QProgressBar, QPushButton,
+    QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from gui_qt import common
@@ -202,6 +203,12 @@ class TcDocBridgePanel(QWidget):
         self._account_actions: dict[str, object] = {}
         self._busy = False
         self._uploading = False
+        self._upload_steps = 0
+        self._upload_steps_total = 0
+        self._upload_records = 0
+        self._upload_images = 0
+        self._upload_records_total = 0
+        self._upload_images_total = 0
         self._image_busy = False
         self._image_temp_dir = None
         self._closed = False
@@ -304,6 +311,21 @@ class TcDocBridgePanel(QWidget):
         self._skeleton = LoadingSkeleton(text="正在读取目标表格…")
         self._table_stack.addWidget(self._skeleton)
         layout.addWidget(self._table_stack, 1)
+
+        self.progress_row = QWidget(self)
+        progress_layout = QHBoxLayout(self.progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(8)
+        self.upload_progress = QProgressBar(self)
+        self.upload_progress.setFixedHeight(14)
+        self.upload_progress.setTextVisible(True)
+        self.upload_progress.setFormat("%p%")
+        progress_layout.addWidget(self.upload_progress, 1)
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color: #888;")
+        progress_layout.addWidget(self.progress_label)
+        self.progress_row.setVisible(False)
+        layout.addWidget(self.progress_row)
 
         bottom = QHBoxLayout()
         self.status = QLabel("选中行可单行复制；上传需点「⬆ 上传到腾讯文档」并确认勾选。")
@@ -568,6 +590,7 @@ class TcDocBridgePanel(QWidget):
         self._busy = True
         self.upload_btn.setEnabled(False)
         self.status.setText("正在准备待上传清单与本地图片…")
+        self._progress_start()
 
         def work():
             from toolbox.tcdoc import import_pending as pending
@@ -595,6 +618,7 @@ class TcDocBridgePanel(QWidget):
 
         def done(result, err):
             self._busy = False
+            self._hide_progress()
             if self._closed:
                 return
             self._restore_buttons()
@@ -620,6 +644,9 @@ class TcDocBridgePanel(QWidget):
         self._uploading = True
         self._busy = True
         total_images = sum(len(r.get("_images") or []) for r in records)
+        self._upload_records_total = len(records)
+        self._upload_images_total = total_images
+        self._progress_start(len(records) + total_images)
         self.status.setText(f"⏳ 正在上传 {len(records)} 条记录 / {total_images} 张图片…")
         for button in (self.upload_btn, self.copy_btn, self.compare_btn):
             button.setEnabled(False)
@@ -627,8 +654,10 @@ class TcDocBridgePanel(QWidget):
         def emit(event):
             phase = event.get("phase")
             if phase == "image_uploaded":
+                common.post_to_main(self._progress_tick, 0, 1)
                 common.post_to_main(self.status.setText, f"🖼 上传图片：{event.get('name')}")
             elif phase == "record_created":
+                common.post_to_main(self._progress_tick, 1, 0)
                 common.post_to_main(
                     self.status.setText,
                     f"✅ 已新增：{str(event.get('title') or '')[:40]}"
@@ -659,6 +688,7 @@ class TcDocBridgePanel(QWidget):
                 self.status.setText(f"❌ 上传失败：{err}")
                 QMessageBox.warning(self, "上传失败", str(err))
                 self._restore_buttons()
+                self._progress_finish(3000)
                 return
             added = len(receipt.get("added") or [])
             skipped = len(receipt.get("skipped") or [])
@@ -673,9 +703,49 @@ class TcDocBridgePanel(QWidget):
                     self, "读回异常",
                     "以下记录的读回值不一致，请到表格里核对：\n"
                     + "\n".join(f"{i.get('record_id')} {i.get('title')}" for i in failed))
+            self._progress_finish(5000)
             self.refresh()
 
         run_bg(work, done, owner=self)
+
+    def _progress_start(self, total_steps: int = 0) -> None:
+        self._upload_steps = 0
+        self._upload_records = 0
+        self._upload_images = 0
+        self._upload_steps_total = max(0, int(total_steps))
+        self.progress_row.setVisible(True)
+        if self._upload_steps_total:
+            self.upload_progress.setRange(0, self._upload_steps_total)
+            self.upload_progress.setValue(0)
+            self.upload_progress.setFormat("%p%")
+        else:
+            self.upload_progress.setRange(0, 0)
+            self.upload_progress.setFormat("准备中…")
+        self.progress_label.setText("")
+
+    def _progress_tick(self, records: int = 0, images: int = 0) -> None:
+        self._upload_records += records
+        self._upload_images += images
+        self._upload_steps += records + images
+        if self._upload_steps_total:
+            self.upload_progress.setValue(min(self._upload_steps, self._upload_steps_total))
+            self.progress_label.setText(
+                f"记录 {self._upload_records}/{self._upload_records_total} · "
+                f"图片 {self._upload_images}/{self._upload_images_total}")
+        else:
+            self.progress_label.setText("正在连接腾讯文档…")
+
+    def _progress_finish(self, hide_ms: int = 5000) -> None:
+        if self._upload_steps_total:
+            self.upload_progress.setRange(0, self._upload_steps_total)
+            self.upload_progress.setValue(self._upload_steps_total)
+        self._hide_progress_later(hide_ms)
+
+    def _hide_progress_later(self, delay_ms: int) -> None:
+        QTimer.singleShot(delay_ms, lambda: self.progress_row.setVisible(False))
+
+    def _hide_progress(self) -> None:
+        self.progress_row.setVisible(False)
 
     def _restore_buttons(self) -> None:
         has_rows = bool((self._result or {}).get("rows"))
