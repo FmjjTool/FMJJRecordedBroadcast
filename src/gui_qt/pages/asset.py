@@ -48,6 +48,9 @@ from toolbox.asset_bilibili import (
 from toolbox.asset_files import collect_asset_files
 from toolbox.asset_images import extract_pic_urls
 from toolbox.asset_media import download_item_images, download_item_media
+from toolbox.asset_records import (
+    export_rows_json, norm_dy_source_link as _norm_dy_source_link,
+)
 from toolbox.asset_video import resolve_video_source
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
@@ -473,17 +476,6 @@ def _norm_subdir(subdir: str) -> str:
     """规范化平台子目录名（新旧结构/中英文统一为英文 platform）。"""
     from toolbox.utils import norm_platform_dir
     return norm_platform_dir(subdir)
-
-
-def _norm_dy_source_link(platform: str, video_id: str, url: str) -> str:
-    """旧数据兜底：抖音「链接」存的是采集时的 CDN 时效直链（douyinvod，
-    几小时~几天后 403 失效），打开/复制全是死链——统一替换为标准作品页
-    /video/{id}（永久有效）。非直链（网页地址/空）原样返回。
-    下载不受影响：抖音下载前总是用 video_id 重新解析拿新鲜直链。"""
-    if platform == "douyin" and video_id and url \
-            and "douyin.com" not in url:
-        return f"https://www.douyin.com/video/{video_id}"
-    return url or ""
 
 
 # 递归扫描时跳过的目录（缓存/版本库/系统还原点，扫进来只会是垃圾条目）
@@ -4470,34 +4462,8 @@ class AssetPage(BasePage):
         sel = [self._db_rows[r] for r in rows if 0 <= r < len(self._db_rows)]
 
         def work():
-            import json as _json
             from toolbox.config_manager import get_export_subdir
-            out = []
-            for row in sel:
-                rec = {}
-                # raw_json 是采集时的完整 asdict（中文键），优先取全量
-                try:
-                    rec = _json.loads(row[21]) if row[21] else {}
-                except Exception:
-                    rec = {}
-                # DB 列字段（英文键）补齐/覆盖核心信息
-                rec.update({
-                    "平台": plat, "获取时间": row[1], "类型": row[2],
-                    "视频ID": row[3], "标题": row[4], "作者": row[5],
-                    "发布时间": row[6], "播放量": row[7], "点赞数": row[8],
-                    "评论数": row[9], "分享数": row[10], "收藏数": row[11],
-                    "弹幕数": row[12], "投币数": row[13], "时长": row[14],
-                    "正文": row[15], "封面URL": row[16],
-                    "链接": _norm_dy_source_link(plat, str(row[3] or ""), row[17] or ""),
-                    "标签": row[18], "分类": row[19], "音乐": row[20],
-                })
-                out.append(rec)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            fname = f"数据库导出_{plat}_{len(out)}条_{ts}.json"
-            path = get_export_subdir("video_data") / fname
-            path.write_text(_json.dumps(out, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
-            return str(path)
+            return export_rows_json(sel, plat, get_export_subdir("video_data"))
 
         def done(path, err):
             if err or not path:
