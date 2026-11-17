@@ -630,15 +630,8 @@ def set_work_dir(path: str) -> bool:
 
 def has_date_subfolders(directory: str) -> bool:
     """检查目录下是否存在日期格式（20XXXXXX）的子文件夹。"""
-    import re
-    pat = re.compile(r"^(20\d{6})")
-    base = Path(directory)
-    if not base.is_dir():
-        return False
-    for p in base.iterdir():
-        if p.is_dir() and pat.match(p.name):
-            return True
-    return False
+    from .date_folders import has_date_subfolders as _has_date_subfolders
+    return _has_date_subfolders(directory)
 
 
 # ==================== 初始化 ====================

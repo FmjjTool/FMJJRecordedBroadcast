@@ -1,8 +1,5 @@
 """录播工具箱页面共享常量与工具函数（对应原版 gui/toolbox_common.py）。"""
 
-import os
-import re
-
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -10,6 +7,9 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from gui_qt import theme
 from gui_qt.emoji_icons import split_leading_emoji
 from gui_qt.navigation import line_icon
+from toolbox.date_folders import (  # 兼容旧导入路径，单一来源在 toolbox.date_folders
+    DATE_FOLDER_RE, count_date_subfolders, has_date_subfolders,
+)
 
 
 class ToolPageHeader(QWidget):
@@ -78,30 +78,3 @@ class ToolSectionCard(QFrame):
         if color is None:
             color = theme.current_palette().color(QPalette.Link).name()
         self.icon_label.setPixmap(line_icon(name, color, 16).pixmap(16, 16))
-
-
-# 日期文件夹正则（YYYYMMDD）
-DATE_FOLDER_RE = re.compile(r"^(20\d{6})")
-
-
-def has_date_subfolders(directory: str) -> bool:
-    """检查目录下是否存在日期格式的二级文件夹"""
-    if not os.path.isdir(directory):
-        return False
-    for name in os.listdir(directory):
-        full = os.path.join(directory, name)
-        if os.path.isdir(full) and DATE_FOLDER_RE.match(name):
-            return True
-    return False
-
-
-def count_date_subfolders(directory: str) -> int:
-    """统计目录下日期格式的二级文件夹数量"""
-    if not os.path.isdir(directory):
-        return 0
-    count = 0
-    for name in os.listdir(directory):
-        full = os.path.join(directory, name)
-        if os.path.isdir(full) and DATE_FOLDER_RE.match(name):
-            count += 1
-    return count

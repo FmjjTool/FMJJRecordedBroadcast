@@ -1,9 +1,8 @@
 """重命名引擎 - 文件批量重命名核心逻辑"""
 import os
 import re
-from typing import List, Tuple
 
-from .config_manager import get_rename_config
+from .date_folders import scan_date_folders  # noqa: F401  兼容旧导入路径
 from .utils import clean_special_chars
 
 
@@ -19,7 +18,6 @@ DATE_STAMP_PATTERN = re.compile(r"20\d{6}-\d{6}|20\d{12}")
 DATE_DASH_PATTERN = re.compile(r"20\d{2}[-./]\d{1,2}[-./]\d{1,2}")
 TIME_CLEAN_PATTERN = re.compile(r"(?<!20)\b\d{2}-\d{2}-\d{2}\b")
 PURE_DIGIT6_PATTERN = re.compile(r"\d{6}")
-DATE_FOLDER_PATTERN = re.compile(r"^(20\d{6})")
 
 
 # ==================== 数据类 ====================
@@ -93,29 +91,7 @@ def extract_file_title(file_name: str) -> str:
 
 # ==================== 扫描文件夹 ====================
 
-def scan_date_folders(root: str) -> List[Tuple[str, str]]:
-    """扫描日期文件夹"""
-    cfg = get_rename_config()
-    result = []
-    if not os.path.isdir(root):
-        return result
-    try:
-        for name in os.listdir(root):
-            full_path = os.path.join(root, name)
-            if not os.path.isdir(full_path):
-                continue
-            if name in cfg.skip_subfolders:
-                continue
-            m = DATE_FOLDER_PATTERN.match(name)
-            if m:
-                dt_str = m.group(1)
-                dt = dt_str[:4] + "-" + dt_str[4:6] + "-" + dt_str[6:8]
-                result.append((name, dt))
-    except Exception:
-        pass
-    result.sort(key=lambda x: x[0])
-    return result
-
+# scan_date_folders 由 toolbox.date_folders 提供（skip_subfolders 读重命名配置）。
 
 # ==================== 缓存操作 ====================
 

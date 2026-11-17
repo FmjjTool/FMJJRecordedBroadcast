@@ -21,19 +21,19 @@ from PySide6.QtWidgets import (
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
+from toolbox.date_folders import date_folder_value, is_date_folder, today_str
 
 from gui_qt.common import post_to_main, start_page_thread
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import DATE_FOLDER_RE
 
 
 def _format_folder_date(name: str) -> str:
     """YYYYMMDD → '2026-09-01 (今天)' / '(昨天)' / '(N天前)' / 原始回退。"""
-    m = DATE_FOLDER_RE.match(name)
-    if not m:
+    value = date_folder_value(name)
+    if not value:
         return name
     try:
-        d = datetime.strptime(m.group(1), "%Y%m%d").date()
+        d = datetime.strptime(value, "%Y%m%d").date()
     except ValueError:
         return name
     today = datetime.now().date()
@@ -230,13 +230,13 @@ class MigratePage(BasePage):
             return
         for name in names:
             full = os.path.join(src, name)
-            if os.path.isdir(full) and DATE_FOLDER_RE.match(name):
+            if os.path.isdir(full) and is_date_folder(name):
                 self.pending.append(name)
         if not self.pending:
             self._list_placeholder("⚠️ 未找到日期文件夹（YYYYMMDD）")
             self._refresh_checked_lbl()
             return
-        today = datetime.now().strftime("%Y%m%d")
+        today = today_str()
         for name in self.pending:
             full = os.path.join(src, name)
             cnt, total, mtime = _folder_stats(full)

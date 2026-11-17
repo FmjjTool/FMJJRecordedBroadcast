@@ -1,7 +1,6 @@
 """字幕格式转换页（PySide6 版）：批量导入 + 勾选转换。"""
 
 import os
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -11,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from toolbox.subtitle_engine import SubtitleConverter
-from toolbox.rename_engine import scan_date_folders
+from toolbox.date_folders import scan_date_folders, today_str
 from toolbox.utils import format_size
 from toolbox.config_manager import load_convert_config, save_convert_config
 
@@ -258,7 +257,7 @@ class SubtitlePage(BasePage):
             folders = [n for n, _ in scan_date_folders(self.app.work_dir)]
         except Exception:
             folders = []
-        today = datetime.now().strftime("%Y%m%d")
+        today = today_str()
         cur = self.date_combo.currentData()
         self.date_combo.blockSignals(True)
         self.date_combo.clear()
@@ -276,7 +275,7 @@ class SubtitlePage(BasePage):
 
     def _scan_today(self):
         """只扫「当天」的日期文件夹（工作目录/YYYYMMDD）。"""
-        today = datetime.now().strftime("%Y%m%d")
+        today = today_str()
         idx = self.date_combo.findData(today)
         if idx >= 0:
             self.date_combo.setCurrentIndex(idx)
@@ -390,8 +389,7 @@ class SubtitlePage(BasePage):
             from toolbox.config_manager import get_export_subdir
             output_dir = get_export_subdir("subtitle")
             if self.date_folder.isChecked():
-                from datetime import datetime
-                output_dir = output_dir / datetime.now().strftime("%Y%m%d")
+                output_dir = output_dir / today_str()
             output_dir.mkdir(parents=True, exist_ok=True)
         else:
             self._log("📁 输出到原文件地址\n")

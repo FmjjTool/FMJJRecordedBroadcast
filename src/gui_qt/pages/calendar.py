@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from toolbox.rename_engine import scan_date_folders
+from toolbox.date_folders import scan_date_folders
 
 from gui_qt.pages.base import BasePage
 

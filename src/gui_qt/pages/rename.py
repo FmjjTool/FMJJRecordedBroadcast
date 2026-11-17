@@ -29,8 +29,9 @@ from PySide6.QtWidgets import (
 )
 
 from toolbox.config_manager import get_rename_config, save_rename_config
+from toolbox.date_folders import date_folder_value, scan_date_folders
 from toolbox.rename_engine import (
-    extract_file_title, extract_time_str, scan_date_folders, is_standard_recording_name,
+    extract_file_title, extract_time_str, is_standard_recording_name,
 )
 from toolbox.utils import (
     capture_video_frame, clean_special_chars, find_ffmpeg_exe, get_video_info,
@@ -523,8 +524,7 @@ class RenamePage(BasePage):
         """加载单个视频的详细信息 + 截图（后台线程执行，避免卡 UI）"""
         filename = os.path.basename(video_path)
         folder_date = os.path.basename(self.current_folder)
-        m = re.match(r"^(\d{8})", folder_date)
-        date_str = m.group(1) if m else folder_date[:8]
+        date_str = date_folder_value(folder_date) or folder_date[:8]
         fmt_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}" if len(date_str) >= 8 else date_str
 
         time_str = extract_time_str(filename)
