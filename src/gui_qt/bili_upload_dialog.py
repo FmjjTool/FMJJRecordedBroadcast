@@ -73,8 +73,8 @@ class BiliUploadDialog(QDialog):
         self.files.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         layout.addWidget(self.files)
         row = QHBoxLayout()
-        for text, slot in (("选择工作目录视频", self.choose_files), ("刷新视频", self.load_workspace), ("移除所选", self.remove_files),
-                           ("Cookie 管理", self.open_cookie_manager), ("上传历史", self.show_history)):
+        for text, slot in (("选择工作目录视频", self.choose_files), ("刷新视频", self.load_workspace),
+                           ("移除所选", self.remove_files), ("上传历史", self.show_history)):
             button = QPushButton(text)
             button.clicked.connect(slot)
             row.addWidget(button)
@@ -131,7 +131,7 @@ class BiliUploadDialog(QDialog):
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         layout.addWidget(self.bar)
-        self.account_label = QLabel("进入后自动验证 Cookie 管理当前的 B站账号")
+        self.account_label = QLabel("进入后自动验证当前 B站账号")
         self.account_label.setWordWrap(True)
         layout.addWidget(self.account_label)
         self.status = QLabel("就绪")
@@ -381,14 +381,6 @@ class BiliUploadDialog(QDialog):
         except OSError:
             self.status.setText("模板删除失败，请检查目录权限")
 
-    def open_cookie_manager(self):
-        if self.busy:
-            return
-        from gui_qt.cookie_manager import CookieManagerDialog
-        CookieManagerDialog(self).exec()
-        self._verified_identity = ""
-        self.check_account()
-
     def check_account(self):
         if self.busy or self._checking_account or self._closed:
             return
@@ -417,7 +409,7 @@ class BiliUploadDialog(QDialog):
                 QTimer.singleShot(0, self.check_account)
                 return
             if error:
-                self.account_label.setText(str(error) + "；请前往 Cookie 管理")
+                self.account_label.setText(str(error) + "；请检查当前登录状态")
                 return
             account, data, identity, category_error = result
             if not identity or identity != BU.credential_identity():
@@ -504,7 +496,7 @@ class BiliUploadDialog(QDialog):
         action = "上传并自动投稿" if config["auto_publish"] else "仅上传，不投稿"
         count_text = f"{len(paths)} P" if len(paths) > 1 else "1 个视频"
         if QMessageBox.question(self, "投稿预览", f"{action}\n\n{metadata['title']}\n{count_text} · 分区 {metadata['tid']}\n"
-                f"简介：{metadata['desc']}\n标签：{metadata['tag']}\n\n使用 Cookie 管理当前的 B站账号，确认开始？",
+                f"简介：{metadata['desc']}\n标签：{metadata['tag']}\n\n使用当前 B站账号，确认开始？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         if not self.save_config():

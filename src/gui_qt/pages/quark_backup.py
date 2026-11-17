@@ -7,7 +7,7 @@
 - 立即备份：与定时任务同一条引擎（`toolbox.quark.backup`），带进度与日志
 - 计划任务统一在「任务」页面配置，本页只执行立即备份
 
-登录走「Cookie 管理 → 夸克网盘」（项目约定 5），本页不保存任何凭据。
+登录状态由软件统一管理，本页不保存任何凭据。
 视觉全部使用主题语义角色与变体属性（ui-visual-spec），不写死颜色。
 """
 
@@ -152,7 +152,7 @@ class QuarkBackupPage(BasePage):
         root.addWidget(ToolPageHeader(
             "网盘备份",
             "把本地目录增量备份到夸克网盘 / 百度网盘指定文件夹：只传新增与变化的文件，"
-            "内容一致不覆盖、内容变了替换旧版本。登录在「Cookie 管理」里完成。"))
+            "内容一致不覆盖、内容变了替换旧版本。"))
 
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
@@ -189,12 +189,6 @@ class QuarkBackupPage(BasePage):
         self.add_btn.clicked.connect(self._add_mapping)
         row.addWidget(self.add_btn)
         row.addStretch(1)
-
-        self.login_btn = QPushButton("🔑 打开 Cookie 管理")
-        self.login_btn.setProperty("variant", "ghost")
-        self.login_btn.setToolTip("夸克网盘登录 / 重新登录（统一由 Cookie 管理负责）")
-        self.login_btn.clicked.connect(self._open_cookie_manager)
-        row.addWidget(self.login_btn)
         layout.addLayout(row)
 
         progress_row = QHBoxLayout()
@@ -386,13 +380,6 @@ class QuarkBackupPage(BasePage):
         qconfig.update_mapping(mapping)
 
     # ==================== 立即备份 ====================
-
-    def _open_cookie_manager(self):
-        try:
-            from gui_qt.cookie_manager import CookieManagerDialog
-            CookieManagerDialog(self, on_changed=self.reload).exec()
-        except Exception as exc:  # noqa: BLE001 - 管理入口异常不阻断页面
-            QMessageBox.warning(self, "打开 Cookie 管理失败", str(exc))
 
     def _start_backup(self):
         if self._running:

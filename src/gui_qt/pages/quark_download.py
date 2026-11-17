@@ -7,7 +7,7 @@
 - 已存在的同名同大小文件自动跳过，不重复消耗流量；
 - 可选下载完成后用内置 7-Zip 解压 rar / 7z / zip 等压缩包。
 
-登录走「Cookie 管理」对应的网盘入口（项目约定 5），本页不保存任何凭据。
+登录状态由软件统一管理，本页不保存任何凭据。
 视觉全部使用主题语义角色（ui-visual-spec），不写死颜色。
 """
 
@@ -95,7 +95,7 @@ class QuarkDownloadPage(BasePage):
         for key, label in qconfig.PROVIDERS.items():
             self.provider_combo.addItem(label, key)
         self.provider_combo.setFixedWidth(112)
-        self.provider_combo.setToolTip("切换要浏览的网盘；登录都在「Cookie 管理」里完成")
+        self.provider_combo.setToolTip("切换要浏览的网盘")
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         path_row.addWidget(self.provider_combo)
 
@@ -114,12 +114,6 @@ class QuarkDownloadPage(BasePage):
         self.refresh_btn.setToolTip("重新读取当前云端目录")
         self.refresh_btn.clicked.connect(self._refresh)
         path_row.addWidget(self.refresh_btn)
-
-        self.login_btn = QPushButton("🔑 Cookie 管理")
-        self.login_btn.setProperty("variant", "ghost")
-        self.login_btn.setToolTip("夸克 / 百度 / 移动云盘登录（统一由 Cookie 管理负责）")
-        self.login_btn.clicked.connect(self._open_cookie_manager)
-        path_row.addWidget(self.login_btn)
         layout.addLayout(path_row)
 
         local_row = QHBoxLayout()
@@ -244,13 +238,6 @@ class QuarkDownloadPage(BasePage):
             return work
         fallback = Path.home() / "Downloads"
         return str(fallback if fallback.is_dir() else Path.home())
-
-    def _open_cookie_manager(self):
-        try:
-            from gui_qt.cookie_manager import CookieManagerDialog
-            CookieManagerDialog(self, on_changed=self._refresh).exec()
-        except Exception as exc:  # noqa: BLE001 - 管理入口异常不阻断页面
-            QMessageBox.warning(self, "打开 Cookie 管理失败", str(exc))
 
     # ==================== 网盘切换 ====================
 
