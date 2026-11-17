@@ -151,7 +151,9 @@ class CalendarPage(BasePage):
         self._clear_grid()
         self.breadcrumb.setText("📅 年视图 — 点击年份进入月份")
         self.back_btn.setEnabled(False)
-        years = sorted({d.year for d in self.date_map}, reverse=True)
+        data_years = {d.year for d in self.date_map}
+        end_year = max([date.today().year, *data_years])
+        years = sorted(set(range(2015, end_year + 1)) | data_years, reverse=True)
         if not years:
             lbl = QLabel("（无日期文件夹，请检查工作目录）")
             lbl.setStyleSheet("color: palette(placeholder-text);")
@@ -160,15 +162,22 @@ class CalendarPage(BasePage):
         for i, y in enumerate(years):
             days = sum(1 for d in self.date_map if d.year == y)
             months = len({d.month for d in self.date_map if d.year == y})
-            btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
+            if days:
+                btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
+                btn.setStyleSheet(
+                    "QPushButton { background: palette(midlight); color: palette(link);"
+                    " font-size: 15px; font-weight: bold; }"
+                    "QPushButton:hover { background: palette(highlight);"
+                    " color: palette(highlighted-text); }")
+                btn.clicked.connect(lambda checked, yr=y: self._open_year(yr))
+            else:
+                btn = QPushButton(f"{y} 年\n无数据")
+                btn.setStyleSheet(
+                    "QPushButton { background: palette(alternate-base);"
+                    " color: palette(placeholder-text); font-size: 15px; }")
+                btn.setEnabled(False)
             btn.setMinimumHeight(70)
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            btn.setStyleSheet(
-                "QPushButton { background: palette(midlight); color: palette(link);"
-                " font-size: 15px; font-weight: bold; }"
-                "QPushButton:hover { background: palette(highlight);"
-                " color: palette(highlighted-text); }")
-            btn.clicked.connect(lambda checked, yr=y: self._open_year(yr))
             # 3 列 n 行排列（用户要求；原 4 列）
             self.grid.addWidget(btn, i // 3, i % 3)
         rows = (len(years) + 2) // 3
