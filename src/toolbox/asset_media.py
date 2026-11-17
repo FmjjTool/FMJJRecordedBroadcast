@@ -1,10 +1,64 @@
-"""资产媒体辅助（L3）：视频封面的命名、复用与下载。"""
+"""资产媒体辅助（L3）：视频/图文下载编排与封面命名、复用、下载。"""
 
 from __future__ import annotations
 
 import os
 import re
 import time
+
+
+def download_item_media(item: dict, resolved: dict, *, base_dir: str,
+                        threads: int = 4, progress_callback=None,
+                        byte_progress_callback=None, cancel_event=None,
+                        on_task_event=None) -> dict:
+    """构建 VideoInfo 并调用 download_media；视频/图文 note 共用入口。"""
+    from platforms.base import VideoInfo, now_str
+    from media_downloader import download_media, _is_direct_media_url
+
+    video_url = resolved.get("video_url")
+    raw_data = resolved.get("raw_data")
+    note_images = resolved.get("note_images")
+    platform = item.get("platform", "")
+    info = VideoInfo(
+        platform=platform, video_id=item.get("video_id", ""),
+        title=item.get("title") or item.get("date_part") or "未知",
+        author=item.get("author", ""),
+        video_url=video_url, cover_url=item.get("cover_url", ""),
+        publish_time=item.get("publish_time", ""),
+        raw_data=raw_data, raw_url="", fetched_at=now_str(),
+    )
+    if note_images:
+        info.images = note_images
+        return download_media(
+            [info], base_dir=base_dir,
+            download_images=True, download_live=False, download_videos=False,
+            threads=threads, progress_callback=progress_callback,
+            wait_range=(0.5, 1.5), cancel_event=cancel_event,
+            on_task_event=on_task_event, quiet=True)
+
+    if not video_url:
+        raise ValueError("无可用视频链接")
+    if platform == "xiaohongshu" and not _is_direct_media_url(video_url):
+        raise ValueError("小红书视频流获取失败：笔记链接可能已失效或被风控，请重新获取该条目")
+    if platform == "douyin" and "douyin.com" in video_url \
+            and not _is_direct_media_url(video_url):
+        raise ValueError("抖音直链获取失败（接口风控 + 浏览器兜底均未拿到直链），稍后重试")
+
+    result = download_media(
+        [info], base_dir=base_dir,
+        download_images=False, download_live=False, download_videos=True,
+        threads=threads, progress_callback=progress_callback,
+        byte_progress_callback=byte_progress_callback,
+        wait_range=(0.5, 1.5), cancel_event=cancel_event,
+        on_task_event=on_task_event, quiet=True)
+    cover = (info.cover_url or "").strip()
+    if (cover and (result.get("videos") or result.get("skipped"))
+            and not result.get("cancelled")):
+        cpath = save_video_cover(info, base_dir)
+        if cpath:
+            result["covers"] = result.get("covers", 0) + 1
+            result.setdefault("paths", []).append((cpath, "封面"))
+    return result
 
 
 def save_video_cover(info, base_dir: str):

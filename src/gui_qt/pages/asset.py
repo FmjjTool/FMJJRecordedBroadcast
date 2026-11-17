@@ -46,7 +46,7 @@ from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
 from toolbox.asset_files import collect_asset_files
-from toolbox.asset_media import save_video_cover
+from toolbox.asset_media import download_item_media
 from toolbox.asset_video import resolve_video_source
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
@@ -3736,71 +3736,19 @@ class AssetPage(BasePage):
             bridge = sub_bridge  # 批量模式：进度上报给总进度条
 
         def work():
-            from platforms.base import VideoInfo, now_str
             from toolbox.config_manager import get_export_subdir
-            from media_downloader import download_media, _is_direct_media_url
             raw_data = self._ensure_raw(it)   # 索引缓存不存原始数据，下载前按需读
             resolved = resolve_video_source(
                 it, video_url=vurl, video_id=vid, raw_data=raw_data,
                 quality=common.CURRENT_QUALITY)
-            vurl2 = resolved["video_url"]
-            raw_data = resolved["raw_data"]
-            note_images = resolved["note_images"]
-
-            base_dir = str(get_export_subdir("video_data"))
-            info = VideoInfo(
-                platform=it["platform"], video_id=vid,
-                title=it.get("title") or it.get("date_part") or "未知",
-                author=it.get("author", ""),  # 关键：让下载落到 {平台}_媒体/{作者}/ 子目录
-                video_url=vurl2, cover_url=it.get("cover_url", ""),
-                publish_time=it.get("publish_time", ""),  # 关键：让 date_str 匹配 json date_part
-                raw_data=raw_data,
-                raw_url="", fetched_at=now_str(),
+            return download_item_media(
+                it, resolved, base_dir=str(get_export_subdir("video_data")),
+                threads=self._dl_threads(quiet),
+                progress_callback=bridge.emit_progress,
+                byte_progress_callback=bridge.emit_bytes,
+                cancel_event=cancel_ev,
+                on_task_event=(card.handle_event if card is not None else None),
             )
-            # 图文 note：下图片（多图 parallel，浮窗显示 N 槽位并行）
-            if note_images:
-                info.images = note_images
-                return download_media([info], base_dir=base_dir,
-                                      download_images=True, download_live=False, download_videos=False,
-                                      threads=self._dl_threads(quiet),
-                                      progress_callback=bridge.emit_progress,
-                                      wait_range=(0.5, 1.5), cancel_event=cancel_ev,
-                                      on_task_event=(card.handle_event if card is not None else None),
-                                      quiet=True)
-            if not vurl2:
-                raise ValueError("无可用视频链接")
-            # 小红书兜底：重新解析全部失败时 vurl2 仍是笔记页链接（非直链），
-            # download_media 会静默跳过视频只下封面 —— 显式报错避免误导
-            if it["platform"] == "xiaohongshu" and not note_images \
-                    and not _is_direct_media_url(vurl2):
-                raise ValueError("小红书视频流获取失败：笔记链接可能已失效或被风控，请重新获取该条目")
-            # 抖音兜底：重新解析（aweme/detail → 浏览器接口兜底）全失败时 vurl2
-            # 还是作品页链接，download_media 建不出任务（0 成功 0 失败）→ 显式
-            # 报错，别让用户只看到一句「未获取到可用直链」猜原因
-            if it["platform"] == "douyin" and not note_images \
-                    and "douyin.com" in vurl2 and not _is_direct_media_url(vurl2):
-                raise ValueError("抖音直链获取失败（接口风控 + 浏览器兜底均未拿到直链），稍后重试")
-            # 视频任务单独一批：若封面并入同一批，任务数 2 → parallel 模式 →
-            # 视频文件本体退化为单流（这正是「选了 N 线程但视频还是 1 线程」
-            # 的根因）；单视频任务 + threads>1 → segments 模式，视频按 N 段
-            # IDM 并行下载，浮窗显示分段条 + 速度 + N 线程
-            res = download_media([info], base_dir=base_dir,
-                                 download_images=False, download_live=False, download_videos=True,
-                                 threads=self._dl_threads(quiet),
-                                 progress_callback=bridge.emit_progress,
-                                 byte_progress_callback=bridge.emit_bytes,
-                                 wait_range=(0.5, 1.5), cancel_event=cancel_ev,
-                                 on_task_event=(card.handle_event if card is not None else None),
-                                 quiet=True)
-            # 封面单独落盘（命名/复用/Referer 规则由 asset_media 统一维护）
-            cov = (info.cover_url or "").strip()
-            if (cov and (res.get("videos") or res.get("skipped"))
-                    and not res.get("cancelled")):
-                cpath = save_video_cover(info, base_dir)
-                if cpath:
-                    res["covers"] = res.get("covers", 0) + 1
-                    res.setdefault("paths", []).append((cpath, "封面"))
-            return res
 
         def done(result, err):
             stats = result or {}
