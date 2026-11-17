@@ -46,6 +46,7 @@ from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
 from toolbox.asset_files import collect_asset_files
+from toolbox.asset_video import resolve_video_source
 from toolbox.asset_scan import (
     AUDIO_EXTS, IMAGE_EXTS, SCAN_SKIP_DIRS, VIDEO_EXTS,
     append_scan_cache, scan_assets,
@@ -3737,76 +3738,13 @@ class AssetPage(BasePage):
             from platforms.base import VideoInfo, now_str
             from toolbox.config_manager import get_export_subdir
             from media_downloader import download_media, _is_direct_media_url
-            vurl2 = vurl
-            note_images = None
             raw_data = self._ensure_raw(it)   # 索引缓存不存原始数据，下载前按需读
-            # 抖音：json 里的「链接」是采集时生成的时效直链（几天后 403），
-            # 下载前用 video_id 重新解析拿新直链；图文 note 则拿到 images 下图片
-            if it["platform"] == "douyin" and vid:
-                try:
-                    from multi_downloader import parse_video
-                    d = parse_video(f"https://www.douyin.com/video/{vid}",
-                                    quality=common.CURRENT_QUALITY)
-                    if d.get("is_note") or (d.get("images") and not d.get("video_url")):
-                        note_images = d.get("images") or []
-                    elif d.get("video_url"):
-                        vurl2 = d["video_url"]
-                except Exception:
-                    pass  # 重新解析失败就用旧直链（可能已过期，下载会失败）
-            # 微博：weibocdn 直链带 Expires 签名（几天后 403），下载前重新
-            # 解析拿新直链 + 新 raw_data（media_downloader 微博分支从 raw_data
-            # 挖清晰度直链，不更新会一直用过期的旧链接）。候选链接依次尝试：
-            # 原始URL（fid 播放器页/详情页链接）→ detail/{video_id}（时间线
-            # 批量采集的条目 raw_url 常是用户主页链接，解析不了单条，video_id
-            # 才是微博 mid）
-            elif it["platform"] == "weibo":
-                from platforms import get_parser
-                parser = get_parser("weibo")
-                ru = it.get("raw_url") or ""
-                candidates = []
-                if ru and any(k in ru for k in
-                              ("fid=", "/detail/", "/status/", "/tv/show/", "h5.video.weibo.com")):
-                    candidates.append(ru)
-                if vid and vid.isdigit():
-                    candidates.append(f"https://m.weibo.cn/detail/{vid}")
-                for u in candidates:
-                    try:
-                        new_info = parser.parse(u)
-                        if new_info and new_info.video_url:
-                            vurl2 = new_info.video_url
-                            if new_info.raw_data:
-                                raw_data = new_info.raw_data
-                            break
-                    except Exception:
-                        continue
-            # 小红书：账号获取条目的「链接」是笔记页链接（含 xsec_token），
-            # 视频流在笔记页内且直链 ?sign= 有时效 → 下载前重新解析拿新鲜
-            # 直链；图文笔记则拿全部图片（同抖音 note 模式）。候选依次尝试：
-            # 原始URL（带采集时的 xsec_token）→ 链接 → 无 token 裸笔记页
-            elif it["platform"] == "xiaohongshu":
-                from platforms import get_parser
-                xhs_parser = get_parser("xiaohongshu")
-                xhs_candidates = []
-                for u in (it.get("raw_url") or "", vurl):
-                    if u and u not in xhs_candidates:
-                        xhs_candidates.append(u)
-                if vid:
-                    bare = f"https://www.xiaohongshu.com/discovery/item/{vid}"
-                    if bare not in xhs_candidates:
-                        xhs_candidates.append(bare)
-                for u in xhs_candidates:
-                    try:
-                        new_info = xhs_parser.parse(u)
-                    except Exception:
-                        continue
-                    if not new_info:
-                        continue
-                    if new_info.video_url:
-                        vurl2 = new_info.video_url
-                        break
-                    if new_info.images:
-                        note_images = new_info.images
-                        break
+            resolved = resolve_video_source(
+                it, video_url=vurl, video_id=vid, raw_data=raw_data,
+                quality=common.CURRENT_QUALITY)
+            vurl2 = resolved["video_url"]
+            raw_data = resolved["raw_data"]
+            note_images = resolved["note_images"]
 
             base_dir = str(get_export_subdir("video_data"))
             info = VideoInfo(
