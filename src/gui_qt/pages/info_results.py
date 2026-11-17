@@ -268,13 +268,6 @@ class InfoResultsPage(BasePage):
         dl_all_btn.setToolTip("下载全部平台栏内的勾选条目")
         dl_all_btn.clicked.connect(self._download_all)
         actions.addWidget(dl_all_btn)
-        bridge_btn = QPushButton("🧩 腾讯文档同步")
-        bridge_btn.setProperty("variant", "secondary")
-        bridge_btn.setToolTip(
-            "把本地已获取中尚未同步到腾讯文档「官方动态」的条目整理成表格，"
-            "一键复制后手动粘贴上传（不会自动写入腾讯文档）")
-        bridge_btn.clicked.connect(self._open_tcdoc_bridge)
-        actions.addWidget(bridge_btn)
         actions.addStretch(1)
         del_sel_btn = QPushButton("🗑 删除所有勾选")
         del_sel_btn.setProperty("variant", "danger")
@@ -417,11 +410,6 @@ class InfoResultsPage(BasePage):
             save_convert_config(cfg)
         except Exception:
             pass
-
-    def _open_tcdoc_bridge(self):
-        """打开腾讯文档中间层同步器：只读比对 + 一键复制，不自动上传。"""
-        from gui_qt.pages.tcdoc_bridge import TcDocBridgeDialog
-        TcDocBridgeDialog(self, getattr(self, "app", None)).exec()
 
     def _build_column(self, key, name):
         col = QFrame()

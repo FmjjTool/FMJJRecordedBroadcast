@@ -1,4 +1,4 @@
-"""腾讯文档 · 中间层同步器（页签面板 / 弹窗两种形态）。
+"""腾讯文档 · 中间层同步器（内嵌在「腾讯文档监控」的「🧩 中间层同步」页签）。
 
 比对本地「已获取」/增量数据库与已同步的腾讯表格，把尚未上传的条目按
 「官方动态」列标准整理成表格：可一键复制 TSV 手工粘贴，也可在勾选确认后
@@ -1122,17 +1122,3 @@ class TcDocBridgePanel(QWidget):
                 self._copy_text(dyn, "动态链接")
         elif act_dyn is not None and chosen == act_dyn:
             self._copy_text(dyn, "动态链接")
-
-
-class TcDocBridgeDialog(QDialog):
-    """独立弹窗形态（已获取页入口等），内容复用内嵌面板。"""
-
-    def __init__(self, parent, app=None, prefer_doc_key: str = ""):
-        super().__init__(parent)
-        self.setWindowTitle("🧩 腾讯文档 · 中间层同步器")
-        self.resize(1180, 720)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.panel = TcDocBridgePanel(self, app=app, prefer_doc_key=prefer_doc_key)
-        self.finished.connect(self.panel.shutdown)
-        layout.addWidget(self.panel)
