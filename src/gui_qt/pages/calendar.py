@@ -7,7 +7,7 @@ from datetime import date
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from toolbox.date_folders import scan_date_folders
@@ -74,15 +74,15 @@ class CalendarPage(BasePage):
         layout.setSpacing(6)
 
         top = QHBoxLayout()
+        self.back_btn = QPushButton("⬅ 返回")
+        self.back_btn.clicked.connect(self._go_back)
+        self.back_btn.setEnabled(False)
+        top.addWidget(self.back_btn)
         top.addWidget(QPushButton("🔄 刷新", clicked=self._scan))
         self.breadcrumb = QLabel("年视图")
         self.breadcrumb.setStyleSheet("font-weight: bold; font-size: 14px;")
         top.addWidget(self.breadcrumb)
         top.addStretch(1)
-        self.back_btn = QPushButton("⬅ 返回")
-        self.back_btn.clicked.connect(self._go_back)
-        self.back_btn.setEnabled(False)
-        top.addWidget(self.back_btn)
         layout.addLayout(top)
 
         self.grid_area = QScrollArea()
@@ -162,6 +162,7 @@ class CalendarPage(BasePage):
             months = len({d.month for d in self.date_map if d.year == y})
             btn = QPushButton(f"{y} 年\n📁 {days} 天 / {months} 个月")
             btn.setMinimumHeight(70)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             btn.setStyleSheet(
                 "QPushButton { background: palette(midlight); color: palette(link);"
                 " font-size: 15px; font-weight: bold; }"
@@ -202,6 +203,7 @@ class CalendarPage(BasePage):
                     " color: palette(placeholder-text); font-size: 14px; }")
                 btn.setEnabled(False)
             btn.setMinimumHeight(70)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.grid.addWidget(btn, (m - 1) // 4, (m - 1) % 4)
         # 12 个月撑满：4 列 × 3 行均分拉伸（原挤在顶部，下方大片空白）
         self._stretch_grid(3, 4)
