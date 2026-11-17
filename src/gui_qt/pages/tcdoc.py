@@ -7,8 +7,9 @@
 - 文档下拉切换（每个文档独立记录），登录态统一由 Cookie 管理器持有（平台：腾讯文档）
 - 立即采集（纯 HTTP 接口），每次采集追加一行并算增量，各自出 Excel
 - 子页签顺序：中间层同步 → 表格同步 → 历史记录 → 采集明细 → 修订记录 →
-  成员名单 → 文档管理 → 映射回写
-- 中间层同步：比对本地已获取与当前表格，列出未上传条目，一键复制 TSV（不自动写入）
+  成员名单 → 文档管理
+- 中间层同步：比对本地已获取与当前表格，列出未上传条目，一键复制 TSV（不自动写入）；
+  底部收起区保存官方 OpenAPI 三个 ID（Client-Id / Access-Token / Open-Id）
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
 - 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
@@ -459,10 +460,8 @@ class TcDocPage(BasePage):
         self._data_revision = 0
         self._reload_pending = False
         self._reload_doc_key = ""
-        self._mapping_credentials = None
         self._sheets = []
         self._rev_meta = None
-        self.mapping_panel = None
         self._task_checked_at = 0.0
         self._migrate_note = ""
         self._last_reload_at = 0.0
@@ -520,11 +519,10 @@ class TcDocPage(BasePage):
             "权限等级（所有者、可编辑、可查看等）/ 账号来源 / UID，按 UID 去重后"
             "存 成员名单/（JSON + Excel）。需要文档管理权限，"
             "否则接口返回 0 条</p>"
-            "<p>· <b>映射回写</b>：用官方 OpenAPI 把本地 CSV / Excel / JSON 按字段映射"
-            "写入当前智能表格；先预览新增/更新/不变/错误，确认后按主键批量 upsert，"
-            "不会删除记录。连接后右侧「📋 腾讯表格（只读）」可直接查看现有记录"
-            "（前 20/50/100/200 条，可刷新）。需在「✍️ 映射回写」Tab 内保存"
-            " Client-Id / Access-Token / Open-Id（加密存在本机 Cookie 管理器）</p>"
+            "<p>· <b>OpenAPI 凭证</b>：在「🧩 中间层同步」Tab 底部收起区填写 "
+            "Client-Id / Access-Token / Open-Id 并保存（加密存在本机 Cookie 管理器），"
+            "官方接口按需读取。字段映射回写界面已移除，写入统一走中间层待同步清单"
+            "与批量导入脚本，不再在页面内直接 upsert</p>"
             "<p>· <b>内容 Tab</b>：表格类型显示「📋 表格同步」，文档 / AI 文档 / "
             "幻灯片等自动切换为「📖 正文预览」。正文抓取完全手动：只有点"
             "「🔄 抓取正文」才会启动浏览器，进入页面或切换 Tab 不会自动打开浏览器。"
@@ -584,16 +582,16 @@ class TcDocPage(BasePage):
         cv.addWidget(self.latest_label)
         layout.addWidget(card)
 
-        # ---------- 子页签：中间层同步 → 表格同步 → 历史/采集/修订/成员/文档/映射 ----------
+        # ---------- 子页签：中间层同步 → 表格同步 → 历史/采集/修订/成员/文档 ----------
         self.tabs = QTabWidget()
         self._panel_builders = (
             self._build_bridge_panel, self._build_content_panel,
             self._build_daily_panel, self._build_snapshot_panel,
             self._build_revision_tab, self._build_members_tab,
-            self._build_doc_tab, self._build_mapping_panel,
+            self._build_doc_tab,
         )
         for title in ("🧩 中间层同步", "📋 表格同步", "📈 历史记录", "🧾 采集明细",
-                      "📜 修订记录", "👥 成员名单", "🗂 文档管理", "✍️ 映射回写"):
+                      "📜 修订记录", "👥 成员名单", "🗂 文档管理"):
             stack = QStackedWidget()
             skeleton = LoadingSkeleton(text="正在准备页面…")
             stack.addWidget(skeleton)
@@ -601,7 +599,7 @@ class TcDocPage(BasePage):
             self.tabs.addTab(stack, title)
         (self.bridge_tab_index, self.content_tab_index, self.daily_tab_index,
          self.snapshot_tab_index, self.revision_tab_index, self.members_tab_index,
-         self.doc_tab_index, self.mapping_tab_index) = range(8)
+         self.doc_tab_index) = range(7)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
@@ -810,12 +808,6 @@ class TcDocPage(BasePage):
         self.table_snap = self._make_table(SNAP_COLS)
         self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
         return self._wrap(self.table_snap)
-
-    def _build_mapping_panel(self):
-        from gui_qt.pages.tcdoc_mapping import TcDocMappingPanel
-        self.mapping_panel = TcDocMappingPanel(self, self.current_doc,
-                                               credentials=self._mapping_credentials)
-        return self.mapping_panel
 
     def _make_table(self, columns, stretch_all=False, fit_cols=()) -> QTableWidget:
         table = QTableWidget(0, len(columns))
@@ -1232,9 +1224,12 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_content_tab()
         self._loaded_tabs.clear()
-        if self.mapping_panel is not None:
-            self.mapping_panel.set_doc(self.current_doc())
+        if self._bridge_loaded():
+            self.bridge_panel.cred_box.reload()
         self._refresh_active_tab()
+
+    def _bridge_loaded(self) -> bool:
+        return getattr(self, "bridge_panel", None) is not None
 
     def _reload_docs(self, prefer_doc_key=""):
         current = self.current_doc()
@@ -1361,8 +1356,8 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_content_tab()
         self._loaded_tabs.clear()
-        if self.mapping_panel is not None:
-            self.mapping_panel.set_doc(self.current_doc())
+        if self._bridge_loaded():
+            self.bridge_panel.cred_box.reload()
         self._refresh_active_tab()
 
     def _refresh_content_tab(self):
@@ -1394,9 +1389,6 @@ class TcDocPage(BasePage):
         request = self._local_requests.get(index)
         if request is not None and request[0] == self._data_revision:
             return
-        if index == self.mapping_tab_index:
-            self._refresh_mapping()
-            return
         self._ensure_panel(index)
         if index == self.bridge_tab_index:
             self.bridge_panel.refresh(
@@ -1420,29 +1412,6 @@ class TcDocPage(BasePage):
                 self.preview_panel.set_doc(doc)
                 self._show_panel(index)
                 self._loaded_tabs.add(index)
-
-    def _refresh_mapping(self):
-        panel = self.mapping_panel
-        read_credentials = panel is None or (not panel.client_id_edit.text()
-                                             and not panel.token_edit.text())
-
-        def work():
-            # 只导入类声明与读取本地凭证；控件仍在主线程创建。
-            from gui_qt.pages import tcdoc_mapping
-            return tcdoc_mapping.openapi.load_credentials() if read_credentials else None
-
-        def apply(credentials, done, valid):
-            self._mapping_credentials = credentials
-            try:
-                self._ensure_panel(self.mapping_tab_index)
-            finally:
-                self._mapping_credentials = None
-            if credentials is not None:
-                self.mapping_panel._fill_credentials(credentials)
-            self.mapping_panel.set_doc(self.current_doc())
-            done()
-
-        self._load_local(self.mapping_tab_index, work, apply)
 
     # ==================== 表格同步 ====================
 

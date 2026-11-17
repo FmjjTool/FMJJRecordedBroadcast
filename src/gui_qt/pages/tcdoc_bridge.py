@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from gui_qt import common
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.pages.tcdoc_credentials import OpenApiCredentialsBox
 from gui_qt.skeleton import LoadingSkeleton
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import bridge
@@ -204,6 +205,13 @@ class TcDocBridgePanel(QWidget):
             close_btn.clicked.connect(self._close)
             bottom.addWidget(close_btn)
         layout.addLayout(bottom)
+
+        self.cred_box = OpenApiCredentialsBox(self, log=self._cred_log)
+        layout.addWidget(self.cred_box)
+
+    def _cred_log(self, text: str) -> None:
+        """凭证保存/清除的结果统一写在底部状态栏，不再单独开日志区。"""
+        self.status.setText(text)
 
     def _close(self) -> None:
         window = self.window()
