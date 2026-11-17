@@ -214,16 +214,30 @@ def _increment_items_ro(since: str) -> list[dict] | None:
         conn.close()
 
 
+class SourceBusyError(RuntimeError):
+    """本地存档暂时读不到（多因其它任务正在写入），提示用户稍后重试。"""
+
+
 def _increment_items(since: str) -> list[dict]:
     from toolbox import increment_db
 
     # 测试或导入脚本会替换 iter_items 注入虚构数据，此时必须尊重替换结果
     if getattr(increment_db.iter_items, "__module__", "") != "toolbox.increment_db":
         return increment_db.iter_items(since)
-    rows = _increment_items_ro(since)
-    if rows is not None:
-        return rows
-    return increment_db.iter_items(since)
+    try:
+        path = Path(increment_db.db_path())
+    except Exception:  # noqa: BLE001 - 路径不可用按空库处理
+        return []
+    if not path.is_file():
+        return []
+    # 只读直查失败时短暂重试；不再回退到持有模块写锁的 iter_items()，
+    # 否则采集正在写库时比对会无限等待，界面一直停在“正在比对”。
+    for attempt in range(3):
+        rows = _increment_items_ro(since)
+        if rows is not None:
+            return rows
+        time.sleep(0.2 * (attempt + 1))
+    raise SourceBusyError("本地增量数据库暂时无法读取（可能正在写入），请稍后重试")
 
 
 def collect_local_items(days=30, collected=None) -> list[dict]:
@@ -325,33 +339,29 @@ def _read_remote_ro(doc_key: str, tab_id: str) -> list[dict] | None:
         conn.close()
 
 
-def _iter_remote_pages(doc_key: str, tab_id: str) -> list[dict]:
-    rows = []
-    offset = 0
-    while True:
-        page, total = tables.rows_page(doc_key, tab_id, offset, 1000)
-        if not page:
-            break
-        rows.extend(page)
-        offset += len(page)
-        if offset >= total:
-            break
-    return rows
-
-
 def _remote_snapshot(doc_key: str, tab_id: str) -> tuple[list[dict], dict]:
     """同一份存档只解析一次；表格库被同步写入后按文件戳自动失效。"""
     try:
-        stamp = _file_stamp(Path(tables.db_path()))
+        db_file = Path(tables.db_path())
+        stamp = _file_stamp(db_file)
     except Exception:  # noqa: BLE001
-        stamp = (0, 0)
+        db_file, stamp = None, (0, 0)
     key = (doc_key, tab_id)
     cached = _REMOTE_CACHE.get(key)
     if cached and cached[0] == stamp:
         return cached[1], cached[2]
-    rows = _read_remote_ro(doc_key, tab_id)
+    if db_file is None or not db_file.is_file():
+        return [], _remote_index([])
+    # 只读快照失败时短暂重试；不再回退到 rows_page()，那条路径每次都跑
+    # 建表脚本、需要写锁，表格同步期间会把比对无限拖住。
+    rows = None
+    for attempt in range(3):
+        rows = _read_remote_ro(doc_key, tab_id)
+        if rows is not None:
+            break
+        time.sleep(0.2 * (attempt + 1))
     if rows is None:
-        rows = _iter_remote_pages(doc_key, tab_id)
+        raise SourceBusyError("腾讯表格本地存档暂时无法读取（可能正在同步），请稍后重试")
     index = _remote_index(rows)
     if len(_REMOTE_CACHE) > 8:
         _REMOTE_CACHE.clear()

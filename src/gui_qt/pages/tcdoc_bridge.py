@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -24,6 +26,8 @@ from gui_qt.skeleton import LoadingSkeleton
 from toolbox import tcdoc as tc_engine
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import bridge
+
+logger = logging.getLogger(__name__)
 
 _DAYS = (("近 7 天", 7), ("近 30 天", 30), ("近 90 天", 90), ("全部历史", 0))
 _UPLOAD_LIMIT = 50
@@ -185,6 +189,10 @@ class _UploadDialog(QDialog):
 
 
 class TcDocBridgePanel(QWidget):
+    # 后台任务看门狗：正常比对 <1 秒（全部历史约 3 秒），超时只用于解除卡住状态
+    COMPARE_TIMEOUT_MS = 20000
+    TARGETS_TIMEOUT_MS = 15000
+
     def __init__(self, parent=None, app=None, prefer_doc_key: str = "",
                  embedded: bool = False, defer_load: bool = False):
         super().__init__(parent)
@@ -224,6 +232,12 @@ class TcDocBridgePanel(QWidget):
         self._acc_timer.setSingleShot(True)
         self._acc_timer.setInterval(250)
         self._acc_timer.timeout.connect(self._run_compare)
+        self._compare_watchdog = QTimer(self)
+        self._compare_watchdog.setSingleShot(True)
+        self._compare_watchdog.timeout.connect(self._on_compare_watchdog)
+        self._targets_watchdog = QTimer(self)
+        self._targets_watchdog.setSingleShot(True)
+        self._targets_watchdog.timeout.connect(self._on_targets_watchdog)
 
         self._build_ui()
         if not defer_load:
@@ -418,6 +432,7 @@ class TcDocBridgePanel(QWidget):
             if self._closed:
                 return
             self._targets_loading = False
+            self._targets_watchdog.stop()
             if req != self._targets_req:
                 preferred = self._targets_pending
                 self._targets_pending = None
@@ -437,7 +452,13 @@ class TcDocBridgePanel(QWidget):
             self._saved_accounts = list(cfg.get("tcdoc_bridge_accounts") or [])
             self._apply_targets(cfg, prefer_doc_key)
 
-        run_bg(work, done, owner=self._task_owner)
+        thread = run_bg(work, done, owner=self._task_owner)
+        if thread is None:
+            self._targets_loading = False
+            self.summary.setText("❌ 表格清单读取任务未启动，请重试")
+            self._show_table()
+            return
+        self._targets_watchdog.start(self.TARGETS_TIMEOUT_MS)
 
     def _apply_targets(self, cfg, prefer_doc_key):
         self.target_combo.blockSignals(True)
@@ -626,18 +647,27 @@ class TcDocBridgePanel(QWidget):
             if err:
                 self.status.setText(f"❌ 准备失败：{err}")
                 QMessageBox.warning(self, "准备失败", str(err))
+                self._maybe_run_pending_compare()
                 return
             dialog = _UploadDialog(result, self)
             if dialog.exec() != QDialog.Accepted:
                 self.status.setText("已取消上传。")
+                self._maybe_run_pending_compare()
                 return
             chosen = dialog.selected_records()
             if not chosen:
                 self.status.setText("未勾选任何记录，已取消上传。")
+                self._maybe_run_pending_compare()
                 return
             self._start_upload(target, chosen)
 
-        run_bg(work, done, owner=self)
+        thread = run_bg(work, done, owner=self)
+        if thread is None:
+            self._busy = False
+            self._hide_progress()
+            self._restore_buttons()
+            self.status.setText("❌ 上传准备任务未启动，请重试")
+            self._maybe_run_pending_compare()
 
     def _start_upload(self, target: dict, records: list[dict]) -> None:
         if self._uploading:
@@ -715,7 +745,14 @@ class TcDocBridgePanel(QWidget):
             self._progress_finish(5000)
             self._refresh_archive(target)
 
-        run_bg(work, done, owner=self)
+        thread = run_bg(work, done, owner=self)
+        if thread is None:
+            self._uploading = False
+            self._busy = False
+            self._progress_finish(3000)
+            self._restore_buttons()
+            self.status.setText("❌ 上传任务未启动，请重试")
+            self._maybe_run_pending_compare()
 
     def _refresh_archive(self, target: dict) -> None:
         """上传后重新抓一遍该文档，否则中间层仍按旧存档判定「还没同步」。"""
@@ -784,6 +821,14 @@ class TcDocBridgePanel(QWidget):
         self.copy_btn.setEnabled(has_rows)
         self.upload_btn.setEnabled(has_rows and self._upload_target_ok())
 
+    def _maybe_run_pending_compare(self) -> None:
+        """其它后台任务结束后，补跑等待中的比对请求。"""
+        if (self._closed or self._busy or self._targets_loading
+                or not self._compare_pending):
+            return
+        self._compare_pending = False
+        self._run_compare()
+
     # ==================== 比对 ====================
 
     def _run_compare(self, *_args) -> None:
@@ -796,11 +841,19 @@ class TcDocBridgePanel(QWidget):
             self._load_targets(self._preferred_doc_key())
             return
         self._acc_timer.stop()
-        self._compare_req += 1
-        self._set_loading("正在比对本地数据与腾讯表格…")
         if self._busy:
+            # 上传/准备等任务还在跑：不切骨架，也不启动第二个比对
             self._compare_pending = True
+            if not self._rows:
+                self.status.setText("⏳ 等待当前任务结束后自动比对…")
             return
+        self._compare_req += 1
+        if self._rows:
+            # 已有结果时保留表格，避免每次重新比对都整块闪骨架
+            self.summary.setText("⏳ 正在重新比对本地数据与腾讯表格…")
+            self.compare_btn.setEnabled(False)
+        else:
+            self._set_loading("正在比对本地数据与腾讯表格…")
         self._start_compare()
 
     def _start_compare(self):
@@ -813,60 +866,145 @@ class TcDocBridgePanel(QWidget):
         self.summary.setText("⏳ 正在比对本地数据与腾讯表格…")
         self.status.setText("本地已获取 + 增量数据库合并去重后比对，不会修改腾讯文档。")
 
-        days = int(self.days_combo.currentData() or 0)
-        accounts = self._selected_accounts()
-        doc_key, tab_id = target["doc_key"], target["tab_id"]
-        collected = list(common.COLLECTED)  # 主线程快照，避免采集线程并发追加
+        try:
+            days = int(self.days_combo.currentData() or 0)
+            accounts = self._selected_accounts()
+            doc_key, tab_id = target["doc_key"], target["tab_id"]
+            collected = list(common.COLLECTED)  # 主线程快照，避免采集线程并发追加
 
-        def work():
-            return bridge.build_pending(doc_key, tab_id, days=days,
-                                        accounts=accounts, collected=collected)
+            def work():
+                return bridge.build_pending(doc_key, tab_id, days=days,
+                                            accounts=accounts, collected=collected)
 
-        def done(result, err):
-            if self._closed:
-                return
+            def done(result, err):
+                self._finish_compare(req, result, err, accounts)
+
+            logger.info("中间层比对开始：doc=%s tab=%s days=%s accounts=%s",
+                        doc_key, tab_id, days, accounts)
+            thread = run_bg(work, done, owner=self._task_owner)
+        except Exception as exc:  # noqa: BLE001 - 启动失败必须解除忙碌态
+            logger.exception("中间层比对启动失败")
             self._busy = False
-            if req != self._compare_req:
-                if self._compare_pending and not self._targets_loading:
-                    self._start_compare()
-                return
-            self._show_table()
-            if err:
+            self._compare_watchdog.stop()
+            if self._rows:
+                self._show_table()
+                self.summary.setText(f"❌ 比对启动失败（保留上次结果）：{exc}")
+            else:
+                self._clear_result()
+                self.summary.setText(f"❌ 比对启动失败：{exc}")
+            self._restore_buttons()
+            return
+        if thread is None:
+            self._busy = False
+            self._compare_watchdog.stop()
+            if self._rows:
+                self._show_table()
+            self.summary.setText("❌ 比对任务未启动，请重试")
+            self._restore_buttons()
+            return
+        self._compare_watchdog.start(self.COMPARE_TIMEOUT_MS)
+
+    def _finish_compare(self, req, result, err, used_accounts):
+        if self._closed:
+            return
+        if req != self._compare_req:
+            # 迟到的旧结果：不碰当前忙碌态和看门狗，只补跑等待中的请求
+            if (self._compare_pending and not self._busy
+                    and not self._targets_loading):
+                self._compare_pending = False
+                self._compare_req += 1
+                self._start_compare()
+            return
+        self._busy = False
+        self._compare_watchdog.stop()
+        if self._compare_pending and not self._targets_loading:
+            # 比对期间又收到新的比对请求：按最新条件重跑一次
+            self._compare_pending = False
+            self._compare_req += 1
+            self._start_compare()
+            return
+        self._show_table()
+        if err:
+            logger.warning("中间层比对失败：%s", err)
+            if self._rows:
+                self.summary.setText(f"❌ 比对失败（保留上次结果）：{err}")
+                self._restore_buttons()
+            else:
                 self._clear_result()
                 self.summary.setText(f"❌ 比对失败：{err}")
-                return
-            self._result = result
-            self._fill_table(result["rows"])
-            stats = result["stats"]
-            scope = stats["since"] or "全部历史"
-            image_note = ""
-            if stats["pending"]:
-                image_note = (f"（有图片 {stats['with_images']} 行 / "
-                              f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
-            self.summary.setText(
-                f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
-                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}"
-                f"；用时 {float((stats.get('timing') or {}).get('total') or 0):.2f} 秒")
-            timing = stats.get("timing") or {}
-            if timing:
-                self.status.setToolTip(
-                    f"读取腾讯存档 {timing.get('remote', 0):.2f}s · "
-                    f"读取本地条目 {timing.get('local', 0):.2f}s · "
-                    f"分组去重 {timing.get('match', 0):.2f}s")
-            self.copy_btn.setEnabled(bool(result["rows"]))
-            self.upload_btn.setEnabled(bool(result["rows"]) and self._upload_target_ok())
-            self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
-            self._refresh_accounts(result, accounts)
-            if result["rows"]:
-                self.status.setText(
-                    f"📋 共 {len(result['rows'])} 行待同步（不含表头；"
-                    "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
-                    "图片可点「复制全部图片」。")
-            else:
-                self.status.setText(
-                    "✅ 没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
+            return
+        self._result = result
+        self._fill_table(result["rows"])
+        stats = result["stats"]
+        timing = stats.get("timing") or {}
+        logger.info(
+            "中间层比对完成：用时=%.2fs remote=%.2fs local=%.2fs match=%.2fs "
+            "本地=%s 待同步=%s", float(timing.get("total") or 0),
+            float(timing.get("remote") or 0), float(timing.get("local") or 0),
+            float(timing.get("match") or 0), stats.get("local_items"),
+            stats.get("pending"))
+        scope = stats["since"] or "全部历史"
+        image_note = ""
+        if stats["pending"]:
+            image_note = (f"（有图片 {stats['with_images']} 行 / "
+                          f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
+        self.summary.setText(
+            f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
+            f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}"
+            f"；用时 {float(timing.get('total') or 0):.2f} 秒")
+        if timing:
+            self.status.setToolTip(
+                f"读取腾讯存档 {timing.get('remote', 0):.2f}s · "
+                f"读取本地条目 {timing.get('local', 0):.2f}s · "
+                f"分组去重 {timing.get('match', 0):.2f}s")
+        self.copy_btn.setEnabled(bool(result["rows"]))
+        self.upload_btn.setEnabled(bool(result["rows"]) and self._upload_target_ok())
+        self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
+        self._refresh_accounts(result, used_accounts)
+        if result["rows"]:
+            self.status.setText(
+                f"📋 共 {len(result['rows'])} 行待同步（不含表头；"
+                "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
+                "图片可点「复制全部图片」。")
+        else:
+            self.status.setText(
+                "✅ 没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
 
-        run_bg(work, done, owner=self._task_owner)
+    # ==================== 看门狗 ====================
+
+    def _on_targets_watchdog(self) -> None:
+        if self._closed or not self._targets_loading:
+            return
+        self._targets_loading = False
+        self._targets_req += 1
+        self.target_combo.setEnabled(True)
+        logger.warning("读取腾讯表格清单超过 %s 秒未完成，已解除等待",
+                       self.TARGETS_TIMEOUT_MS / 1000)
+        self._show_table()
+        if self._rows:
+            self.summary.setText("❌ 读取表格清单超时，已保留上次结果；请稍后重试")
+        else:
+            self._clear_result()
+            self.summary.setText("❌ 读取表格清单超时；请稍后重新比对重试")
+        self.status.setText("可点「重新比对」重试；若反复超时请查看 logs/app_*.log")
+
+    def _on_compare_watchdog(self) -> None:
+        if self._closed or not self._busy:
+            return
+        self._busy = False
+        self._compare_pending = False
+        self._compare_req += 1  # 丢弃迟到结果，避免覆盖当前界面
+        seconds = int(self.COMPARE_TIMEOUT_MS / 1000)
+        logger.warning("中间层比对超过 %s 秒未完成，已解除等待", seconds)
+        self._show_table()
+        if self._rows:
+            self.summary.setText(
+                f"❌ 比对超时（{seconds} 秒未完成），已保留上次结果，请稍后重试")
+            self._restore_buttons()
+        else:
+            self._clear_result()
+            self.summary.setText(f"❌ 比对超时（{seconds} 秒未完成），请稍后重试")
+        self.status.setText("可点「重新比对」重试；若反复超时请查看 logs/app_*.log")
 
     def _refresh_accounts(self, result: dict, used_accounts) -> None:
         names = sorted(set(result.get("accounts") or []) |
@@ -912,6 +1050,8 @@ class TcDocBridgePanel(QWidget):
     def shutdown(self):
         self._closed = True
         self._acc_timer.stop()
+        self._compare_watchdog.stop()
+        self._targets_watchdog.stop()
 
     # ==================== 复制 ====================
 
