@@ -227,7 +227,7 @@ class PostingPreferencesTests(unittest.TestCase):
             dialog.show()
             self.wait(lambda: "Cookie 已关闭" in dialog.account_label.text() and not common.TASKS.has_owner(self.parent))
         self.assertFalse(dialog.start_btn.isEnabled())
-        self.assertIn("Cookie 管理", dialog.account_label.text())
+        self.assertIn("请检查当前登录状态", dialog.account_label.text())
 
     def test_account_change_discards_old_verification_and_rechecks(self):
         state = {"identity": "old"}
