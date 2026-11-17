@@ -87,6 +87,9 @@ def build_client(provider: str = "quark"):
     if provider == "baidu":
         from toolbox.baidu.api import BaiduClient
         return BaiduClient(cookie)
+    if provider == "yun139":
+        from toolbox.yun139.api import Yun139Client
+        return Yun139Client(cookie)
     from .api import QuarkClient
     return QuarkClient(cookie)
 
