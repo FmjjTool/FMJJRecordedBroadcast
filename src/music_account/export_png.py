@@ -33,8 +33,7 @@ NUM_METRICS = [
     ("MV数", "mvs"),
 ]
 
-PLATFORM_NAMES = {"netease": "网易云", "qq": "QQ音乐", "kugou": "酷狗",
-                  "kuwo": "酷我", "fivesing": "5sing"}
+from toolbox.platform_names import MUSIC_PLATFORM_NAMES as PLATFORM_NAMES
 
 _FONT_CANDIDATES = [
     "C:/Windows/Fonts/msyh.ttc",

@@ -44,8 +44,7 @@ NE_PROVINCES = {
     "65": "新疆", "71": "台湾", "81": "香港", "82": "澳门",
 }
 
-PLATFORM_NAMES = {"netease": "网易云", "qq": "QQ音乐", "kugou": "酷狗",
-                  "kuwo": "酷我", "fivesing": "5sing"}
+from toolbox.platform_names import MUSIC_PLATFORM_NAMES as PLATFORM_NAMES
 
 
 def _client(referer, cookie="", ua=UA, timeout=15):

@@ -10,13 +10,9 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from toolbox.config_manager import get_config_dir, get_export_subdir
+from toolbox.platform_names import ALL_PLATFORM_NAMES
 
-ACCOUNT_PLATFORM_LABELS = {
-    "bilibili": "B站", "douyin": "抖音", "weibo": "微博",
-    "kuaishou": "快手", "xiaohongshu": "小红书",
-    "netease": "网易云", "qq": "QQ音乐", "kugou": "酷狗",
-    "kuwo": "酷我", "fivesing": "5sing",
-}
+ACCOUNT_PLATFORM_LABELS = ALL_PLATFORM_NAMES
 
 
 def tracked_accounts_snapshot():

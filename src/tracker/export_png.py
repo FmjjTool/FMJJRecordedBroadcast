@@ -31,8 +31,7 @@ NUM_METRICS = [
     ("内容数", "video_count", "weibo_count"),
 ]
 
-PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
-                  "kuaishou": "快手", "xiaohongshu": "小红书"}
+from toolbox.platform_names import MEDIA_PLATFORM_NAMES as PLATFORM_NAMES
 
 _FONT_CANDIDATES = [
     "C:/Windows/Fonts/msyh.ttc",

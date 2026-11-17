@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from gui_qt import theme
 from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
+from toolbox.platform_names import MUSIC_PLATFORM_NAMES as PLATFORM_NAMES
 from toolbox.tracker_diff import diff_items, num_delta
 
 
@@ -45,8 +46,6 @@ METRICS = [
     ("生日", ["birthday"]),
 ]
 
-PLATFORM_NAMES = {"netease": "网易云", "qq": "QQ音乐", "kugou": "酷狗",
-                  "kuwo": "酷我", "fivesing": "5sing"}
 _NUM_FIELDS = {"fans", "following", "listens", "songs", "albums", "mvs", "works"}
 
 

@@ -14,6 +14,8 @@ import asyncio
 from pathlib import Path
 from datetime import datetime
 
+from toolbox.platform_names import MEDIA_PLATFORM_NAMES
+
 BASE_DIR = Path(__file__).parent
 
 
@@ -32,8 +34,7 @@ ACCOUNTS_FILE = _data_dir() / "accounts.json"
 GROUPS_FILE = _data_dir() / "groups.json"
 DATA_DIR = BASE_DIR / "data"
 
-PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
-                  "kuaishou": "快手", "xiaohongshu": "小红书"}
+PLATFORM_NAMES = MEDIA_PLATFORM_NAMES
 
 # 组号规范（与「账号获取」一致）：必须为重复数字，如 11、22、33 ... 99
 GROUP_ID_PATTERN = re.compile(r"^(\d)\1$")

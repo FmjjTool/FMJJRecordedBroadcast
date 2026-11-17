@@ -13,6 +13,7 @@ from typing import Tuple, Optional
 from datetime import date
 
 from .config_manager import load_convert_config
+from .platform_names import DIRECTORY_PLATFORM_NAMES as PLATFORM_CN
 
 if sys.platform == "win32":
     from ctypes import wintypes
@@ -20,18 +21,7 @@ if sys.platform == "win32":
 
 # ==================== 平台目录命名 ====================
 
-# 平台英文标识 -> 中文目录名（导出/媒体目录统一用它命名）
-PLATFORM_CN = {
-    "bilibili": "B站",
-    "douyin": "抖音",
-    "weibo": "微博",
-    "xiaohongshu": "小红书",
-    "kuaishou": "快手",
-    "haokan": "好看视频",
-    "weishi": "微视",
-    "pear": "梨视频",
-    "pipigx": "皮皮搞笑",
-}
+# 平台英文标识 -> 中文目录名由 toolbox.platform_names 统一提供。
 
 # 已获取数据目录后缀：{平台}_文件 存数据导出（json/md/xlsx），{平台}_媒体 存媒体（视频/图片/音频）
 DATA_DIR_SUFFIX = "_文件"

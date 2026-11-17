@@ -13,10 +13,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from toolbox.platform_names import MUSIC_PLATFORM_NAMES
+
 BASE_DIR = Path(__file__).parent
 
-PLATFORM_NAMES = {"netease": "网易云", "qq": "QQ音乐", "kugou": "酷狗",
-                  "kuwo": "酷我", "fivesing": "5sing"}
+PLATFORM_NAMES = MUSIC_PLATFORM_NAMES
 
 # 组号规范（与「账号追踪」一致）：必须为重复数字，如 11、22、33 ... 99
 GROUP_ID_PATTERN = re.compile(r"^(\d)\1$")

@@ -21,6 +21,7 @@ from gui_qt import theme
 from gui_qt.common import icon_btn_style, icon_button, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect
+from toolbox.platform_names import MEDIA_PLATFORM_NAMES as PLATFORM_NAMES
 from toolbox.tracker_diff import diff_items, num_delta
 
 
@@ -41,8 +42,6 @@ METRICS = [
     ("等级", ["level"]),
 ]
 
-PLATFORM_NAMES = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
-                  "kuaishou": "快手", "xiaohongshu": "小红书"}
 _NUM_FIELDS = {"fans", "following", "likes", "video_count", "weibo_count", "level"}
 
 
