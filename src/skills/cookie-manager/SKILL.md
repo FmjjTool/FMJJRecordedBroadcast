@@ -1,6 +1,6 @@
 ---
 name: cookie-manager
-description: "统一账户登录与认证管理。涉及登录界面、Cookie/Token 接口、认证业务或旧格式适配时必读；先遵守真实 Cookie 绝对保护禁令，业务只读使用已有有效凭据，写入/清除/迁移能力仅用隔离虚构数据验证。"
+description: "统一账户登录与认证管理。涉及登录界面、Cookie/Token 接口、认证业务或旧格式适配时必读；页面不得自建 Cookie 管理器、不得出现 Cookie 字样，登录只走统一入口；先遵守真实 Cookie 绝对保护禁令，业务只读使用已有有效凭据，写入/清除/迁移能力仅用隔离虚构数据验证。"
 ---
 
 # 统一账户登录与 Cookie 管理
@@ -13,7 +13,7 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 
 ## 必须遵守的统一规则
 
-1. 所有需要登录的账户统一放在「Cookie 管理」中管理，覆盖现有平台、新增平台和 GitHub 等 Token 账户。登录、重新登录、账号选择/切换、验证和清除使用同一管理入口；业务页只负责提示或打开该入口。
+1. 所有需要登录的账户统一放在「Cookie 管理」中管理，覆盖现有平台、新增平台和 GitHub 等 Token 账户。登录、重新登录、账号选择/切换、验证和清除只使用该管理入口。任何页面、对话框、浮层、子窗口不得另行创建 Cookie 管理器、登录窗口、凭据输入/保存控件或第二套凭据列表；页面文案不得出现「Cookie」「cookie」及同类凭据字样，也不得放置「打开 Cookie 管理」「去登录」等引导入口，用户自行前往总管理器（项目约定 9）。
 2. 需要登录的功能统一调用认证管理层的有效凭据接口。业务层不另做登录窗口、不直接读取凭据文件、不保存另一份长期登录态、不硬编码 Cookie/Token。
 3. 缺少平台或凭据类型时，先增加管理入口、管理层接口与平台适配，再让业务使用该接口。统一的是账户管理与调用入口，各平台仍使用自己的 Cookie、Bearer Token 或会话协议。
 4. 业务使用当前账号的有效登录态，遵守总开关、过期、清除和账号变化。请求所需的 CSRF/签名字段从同一次有效凭据快照派生；任务启动/重试前重新确认账号与状态，不能混用两次登录的身份。
@@ -38,6 +38,8 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`tcdoc`。引用现有入口时使用实际 key；新增 GitHub 等账户须补实际注册与凭据类型接口，不能假定已经存在。
 
 GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通过管理层适配获取授权，Token 保持 Token 类型，不拼成 Cookie 请求头。正常 Git 工具认证仍使用其原生凭据机制，不在同步命令、远端 URL 或日志里暴露 Token。
+
+**约定 9 的既有待清理项**（本次只记录，未改代码）：`quark_backup.py`、`quark_download.py` 仍有「打开 Cookie 管理 / Cookie 管理」按钮与提示；`bili_emoji.py`、`bili_resource.py`、`bili_danmaku.py`、`bili_shop_page.py`、`douyin_index.py`、`info_accounts.py`、`netease.py`、`shopping_page.py`、`tcdoc.py`、`tcdoc_credentials.py`、`test_page.py`、`video_comments.py`、`localwiki.py`、`livestream_summary.py`、`settings.py`、`music_tracker.py` 等页面仍有 Cookie 字样或登录引导。涉及这些页面改动时按约定 9 清理，不能借新增规则批量修改。
 
 当前还需迁移/核对的具体入口：GitHub 的独立 Token 存储与登录 UI；腾讯文档 `has_login()` 仍接受快照文件存在作为登录条件；网易云 `get_netease_cookie()` 在有效凭据为空时仍会尝试旧文件迁移。涉及这些链路时，须消除绕过关闭/清除状态的路径并验证，不能直接沿用它们证明统一规则已满足。
 
