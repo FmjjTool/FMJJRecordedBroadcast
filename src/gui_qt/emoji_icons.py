@@ -15,12 +15,15 @@ highlighted-text，弱化标签 placeholder-text）；切主题后由 `refresh_a
 from __future__ import annotations
 
 import re
+import weakref
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QAction, QIcon, QPalette
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QCheckBox, QComboBox, QLabel, QPushButton,
-    QRadioButton, QTabWidget, QToolButton, QWidget,
+    QAbstractButton, QApplication, QCheckBox, QComboBox, QGroupBox, QLabel,
+    QListWidget, QListWidgetItem, QMenu, QPushButton, QRadioButton, QTableWidget,
+    QTableWidgetItem, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem,
+    QTreeWidgetItemIterator, QWidget,
 )
 
 from gui_qt import theme
@@ -28,7 +31,9 @@ from gui_qt.navigation import line_icon
 
 _ICON_SIZE_BUTTON = 16
 _ICON_SIZE_LABEL = 14
+_ICON_SIZE_ITEM = 16
 _LABEL_GAP = 4
+_ITEM_ICON_ROLE = Qt.UserRole + 977
 
 # emoji → line_icon 名称；变体选择符/零宽连接符在匹配前统一丢弃。
 _EMOJI_ICONS = {
@@ -106,6 +111,10 @@ _VARIATION = dict.fromkeys(map(ord, "\ufe0f\ufe0e\u200d\u20e3"), None)
 _EMOJI_ICONS = {key.translate(_VARIATION): value for key, value in _EMOJI_ICONS.items()}
 
 _TOKEN_RE = re.compile(r"^(?P<token>[^\w\s\u4e00-\u9fff]+)(?P<rest>.*)$", re.S)
+# 句中 emoji 直接删除（不含箭头等普通符号），避免界面文案里混入彩色表情。
+_INLINE_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2300-\u23FF]"
+    "[\ufe0f\ufe0e\u200d\U0001F3FB-\U0001F3FF]*")
 
 _installed = False
 _orig_abstract_set_text = None
@@ -113,10 +122,35 @@ _orig_label_set_text = None
 _orig_label_set_pixmap = None
 _orig_push_set_icon = None
 _orig_tool_set_icon = None
+_orig_list_set_text = None
+_orig_table_set_text = None
+_orig_tree_set_text = None
+_orig_group_set_title = None
+_auto_actions = weakref.WeakSet()
 
 
 def _norm(text: str) -> str:
     return text.translate(_VARIATION)
+
+
+def strip_inline_emoji(text: str) -> str:
+    """删除句中的 emoji（保留“→”“×”等普通排版符号），并收拢残留空白。"""
+    if not text:
+        return text
+    cleaned = _INLINE_EMOJI_RE.sub("", text)
+    if cleaned == text:
+        return text
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]*\n[ \t]*", "\n", cleaned)
+    cleaned = re.sub(r"([「（(【\[])[ \t]+", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]+([」）)】\]])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def clean_text(text: str) -> tuple[str | None, str]:
+    """返回 (前导 emoji 对应的图标名, 去 emoji 文本)；句中 emoji 一并删除。"""
+    name, clean = split_leading_emoji(text)
+    return name, strip_inline_emoji(clean if name is not None else text)
 
 
 def split_leading_emoji(text: str) -> tuple[str | None, str]:
@@ -182,13 +216,21 @@ def _apply_button(button):
 
 
 def _apply_button_impl(button):
-    name, clean = split_leading_emoji(button.text())
+    original = button.text()
+    name, clean = split_leading_emoji(original)
+    clean = strip_inline_emoji(clean if name is not None else original)
     if name is None:
+        if clean != original:
+            button._line_busy = True
+            try:
+                _orig_abstract_set_text(button, clean)
+            finally:
+                button._line_busy = False
         if getattr(button, "_line_auto", False):
             button._line_auto = False
             button._line_icon_name = None
         return
-    if clean != button.text():
+    if clean != original:
         button._line_busy = True
         try:
             _orig_abstract_set_text(button, clean)
@@ -209,8 +251,10 @@ def _apply_check(button):
 
 
 def _apply_check_impl(button):
-    name, clean = split_leading_emoji(button.text())
-    if name is not None and clean != button.text():
+    original = button.text()
+    name, clean = split_leading_emoji(original)
+    clean = strip_inline_emoji(clean if name is not None else original)
+    if clean != original:
         button._line_busy = True
         try:
             _orig_abstract_set_text(button, clean)
@@ -305,16 +349,18 @@ def _apply_label(label):
 
 def _apply_label_impl(label):
     label._line_skip = False
-    name, clean = split_leading_emoji(label.text())
-    if name is None:
-        _clear_label_icon(label)
-        return
-    if clean != label.text():
+    original = label.text()
+    name, clean = split_leading_emoji(original)
+    clean = strip_inline_emoji(clean if name is not None else original)
+    if clean != original:
         label._line_busy = True
         try:
             _orig_label_set_text(label, clean)
         finally:
             label._line_busy = False
+    if name is None:
+        _clear_label_icon(label)
+        return
     label._line_icon_name = name
     _ensure_label_icon(label)
 
@@ -408,12 +454,13 @@ def _patch_combos():
     original_add = QComboBox.addItem
     original_insert = QComboBox.insertItem
     original_clear = QComboBox.clear
+    original_set_item_text = QComboBox.setItemText
 
     def add_item(self, *args):
         name = None
         if args and isinstance(args[0], str):
-            name, clean = split_leading_emoji(args[0])
-            if name is not None:
+            name, clean = clean_text(args[0])
+            if clean != args[0]:
                 args = (clean,) + args[1:]
         original_add(self, *args)
         if name is not None:
@@ -426,8 +473,8 @@ def _patch_combos():
     def insert_item(self, index, *args):
         name = None
         if args and isinstance(args[0], str):
-            name, clean = split_leading_emoji(args[0])
-            if name is not None:
+            name, clean = clean_text(args[0])
+            if clean != args[0]:
                 args = (clean,) + args[1:]
         original_insert(self, index, *args)
         if name is not None:
@@ -436,6 +483,18 @@ def _patch_combos():
             icons[index] = name
             self._line_item_icons = icons
             self.setItemIcon(index, line_icon(name, _color("title"), 16))
+
+    def set_item_text(self, index, text):
+        name, clean = clean_text(text)
+        original_set_item_text(self, index, clean)
+        icons = dict(getattr(self, "_line_item_icons", {}))
+        if name is not None:
+            icons[index] = name
+            self.setItemIcon(index, line_icon(name, _color("title"), 16))
+        elif index in icons:
+            icons.pop(index, None)
+            self.setItemIcon(index, QIcon())
+        self._line_item_icons = icons
 
     def add_items(self, texts):
         for text in texts:
@@ -451,6 +510,7 @@ def _patch_combos():
 
     QComboBox.addItem = add_item
     QComboBox.insertItem = insert_item
+    QComboBox.setItemText = set_item_text
     QComboBox.addItems = add_items
     QComboBox.insertItems = insert_items
     QComboBox.clear = clear
@@ -460,10 +520,11 @@ def _patch_tabs():
     original_add = QTabWidget.addTab
     original_insert = QTabWidget.insertTab
     original_remove = QTabWidget.removeTab
+    original_set_text = QTabWidget.setTabText
 
     def add_tab(self, widget, label):
-        name, clean = split_leading_emoji(label)
-        index = original_add(self, widget, clean if name else label)
+        name, clean = clean_text(label)
+        index = original_add(self, widget, clean)
         if name:
             icons = dict(getattr(self, "_line_tab_icons", {}))
             icons[index] = name
@@ -472,14 +533,26 @@ def _patch_tabs():
         return index
 
     def insert_tab(self, index, widget, label):
-        name, clean = split_leading_emoji(label)
-        original_insert(self, index, widget, clean if name else label)
+        name, clean = clean_text(label)
+        original_insert(self, index, widget, clean)
         if name:
             icons = {i + (1 if i >= index else 0): n
                      for i, n in getattr(self, "_line_tab_icons", {}).items()}
             icons[index] = name
             self._line_tab_icons = icons
             self.setTabIcon(index, line_icon(name, _color("title"), 16))
+
+    def set_tab_text(self, index, label):
+        name, clean = clean_text(label)
+        original_set_text(self, index, clean)
+        icons = dict(getattr(self, "_line_tab_icons", {}))
+        if name:
+            icons[index] = name
+            self.setTabIcon(index, line_icon(name, _color("title"), 16))
+        elif index in icons:
+            icons.pop(index, None)
+            self.setTabIcon(index, QIcon())
+        self._line_tab_icons = icons
 
     def remove_tab(self, index):
         original_remove(self, index)
@@ -489,7 +562,235 @@ def _patch_tabs():
 
     QTabWidget.addTab = add_tab
     QTabWidget.insertTab = insert_tab
+    QTabWidget.setTabText = set_tab_text
     QTabWidget.removeTab = remove_tab
+
+
+def _apply_flat_item(item):
+    original = item.text()
+    name, clean = clean_text(original)
+    if clean != original:
+        setter = (_orig_list_set_text if isinstance(item, QListWidgetItem)
+                  else _orig_table_set_text)
+        setter(item, clean)
+    if name is None:
+        if item.data(_ITEM_ICON_ROLE) is not None:
+            item.setData(_ITEM_ICON_ROLE, None)
+            item.setIcon(QIcon())
+        return
+    if not item.icon().isNull() and item.data(_ITEM_ICON_ROLE) is None:
+        return
+    item.setData(_ITEM_ICON_ROLE, name)
+    item.setIcon(line_icon(name, _color("title"), _ICON_SIZE_ITEM))
+
+
+def _apply_tree_item(item):
+    original = item.text(0)
+    name, clean = clean_text(original)
+    if clean != original:
+        _orig_tree_set_text(item, 0, clean)
+    if name is None:
+        if item.data(0, _ITEM_ICON_ROLE) is not None:
+            item.setData(0, _ITEM_ICON_ROLE, None)
+            item.setIcon(0, QIcon())
+        return
+    if not item.icon(0).isNull() and item.data(0, _ITEM_ICON_ROLE) is None:
+        return
+    item.setData(0, _ITEM_ICON_ROLE, name)
+    item.setIcon(0, line_icon(name, _color("title"), _ICON_SIZE_ITEM))
+
+
+def _patch_item_types():
+    global _orig_list_set_text, _orig_table_set_text, _orig_tree_set_text
+
+    for cls in (QListWidgetItem, QTableWidgetItem):
+        original_init = cls.__init__
+        original_set = cls.setText
+        if cls is QListWidgetItem:
+            _orig_list_set_text = original_set
+        else:
+            _orig_table_set_text = original_set
+
+        def item_init(self, *args, _original=original_init, **kwargs):
+            _original(self, *args, **kwargs)
+            try:
+                _apply_flat_item(self)
+            except Exception:  # noqa: BLE001 - 图标装饰失败不能影响条目文本
+                pass
+
+        def item_set_text(self, text, _original=original_set):
+            _original(self, text)
+            try:
+                _apply_flat_item(self)
+            except Exception:  # noqa: BLE001
+                pass
+
+        cls.__init__ = item_init
+        cls.setText = item_set_text
+
+    _orig_tree_set_text = QTreeWidgetItem.setText
+    original_tree_init = QTreeWidgetItem.__init__
+
+    def tree_init(self, *args, **kwargs):
+        original_tree_init(self, *args, **kwargs)
+        try:
+            _apply_tree_item(self)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def tree_set_text(self, column, text):
+        _orig_tree_set_text(self, column, text)
+        try:
+            if column == 0:
+                _apply_tree_item(self)
+            else:
+                clean = strip_inline_emoji(text)
+                if clean != self.text(column):
+                    _orig_tree_set_text(self, column, clean)
+        except Exception:  # noqa: BLE001
+            pass
+
+    QTreeWidgetItem.__init__ = tree_init
+    QTreeWidgetItem.setText = tree_set_text
+
+
+def _patch_item_widgets():
+    original_add = QListWidget.addItem
+    original_insert = QListWidget.insertItem
+
+    def add_item(self, item):
+        if isinstance(item, str):
+            item = QListWidgetItem(item)
+        original_add(self, item)
+
+    def add_items(self, texts):
+        for text in texts:
+            add_item(self, text)
+
+    def insert_item(self, row, item):
+        if isinstance(item, str):
+            item = QListWidgetItem(item)
+        original_insert(self, row, item)
+
+    def insert_items(self, row, texts):
+        for offset, text in enumerate(texts):
+            insert_item(self, row + offset, text)
+
+    QListWidget.addItem = add_item
+    QListWidget.addItems = add_items
+    QListWidget.insertItem = insert_item
+    QListWidget.insertItems = insert_items
+
+
+def _apply_group_title(box):
+    original = box.title()
+    _name, clean = clean_text(original)
+    if clean != original:
+        _orig_group_set_title(box, clean)
+
+
+def _patch_group_boxes():
+    global _orig_group_set_title
+    _orig_group_set_title = QGroupBox.setTitle
+    original_init = QGroupBox.__init__
+
+    def group_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        try:
+            _apply_group_title(self)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_title(self, title):
+        _name, clean = clean_text(title)
+        _orig_group_set_title(self, clean)
+
+    QGroupBox.__init__ = group_init
+    QGroupBox.setTitle = set_title
+
+
+def _apply_action(action):
+    original = action.text()
+    name, clean = clean_text(original)
+    if clean != original:
+        action._line_busy = True
+        try:
+            _orig_action_set_text(action, clean)
+        finally:
+            action._line_busy = False
+    if name:
+        action._line_icon_name = name
+        action._line_auto = True
+        action.setIcon(line_icon(name, _color("button"), _ICON_SIZE_BUTTON))
+        _auto_actions.add(action)
+
+
+def _patch_actions():
+    global _orig_action_set_text
+    _orig_action_set_text = QAction.setText
+    original_init = QAction.__init__
+
+    def action_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        try:
+            _apply_action(self)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def action_set_text(self, text):
+        if getattr(self, "_line_busy", False):
+            _orig_action_set_text(self, text)
+            return
+        _orig_action_set_text(self, text)
+        try:
+            _apply_action(self)
+        except Exception:  # noqa: BLE001
+            pass
+
+    QAction.__init__ = action_init
+    QAction.setText = action_set_text
+
+    original_add_action = QMenu.addAction
+
+    def add_action(self, *args):
+        result = original_add_action(self, *args)
+        if isinstance(result, QAction):
+            try:
+                _apply_action(result)
+            except Exception:  # noqa: BLE001
+                pass
+        return result
+
+    original_add_menu = QMenu.addMenu
+
+    def add_menu(self, *args):
+        if args and isinstance(args[0], str):
+            name, clean = clean_text(args[0])
+            menu = original_add_menu(self, *((clean,) + args[1:]))
+            if name:
+                menu.menuAction().setIcon(
+                    line_icon(name, _color("button"), _ICON_SIZE_BUTTON))
+            return menu
+        return original_add_menu(self, *args)
+
+    original_set_title = QMenu.setTitle
+
+    def set_title(self, title):
+        _name, clean = clean_text(title)
+        original_set_title(self, clean)
+
+    QMenu.addAction = add_action
+    QMenu.addMenu = add_menu
+    QMenu.setTitle = set_title
+
+
+def _patch_window_titles():
+    original = QWidget.setWindowTitle
+
+    def set_window_title(self, title):
+        original(self, strip_inline_emoji(title))
+
+    QWidget.setWindowTitle = set_window_title
 
 
 def _patch_set_property():
@@ -502,6 +803,18 @@ def _patch_set_property():
         return result
 
     QWidget.setProperty = set_property
+
+
+def _refresh_item_icon(item):
+    name = item.data(_ITEM_ICON_ROLE)
+    if name:
+        item.setIcon(line_icon(name, _color("title"), _ICON_SIZE_ITEM))
+
+
+def _refresh_tree_icon(item):
+    name = item.data(0, _ITEM_ICON_ROLE)
+    if name:
+        item.setIcon(0, line_icon(name, _color("title"), _ICON_SIZE_ITEM))
 
 
 def _refresh(widget):
@@ -521,6 +834,22 @@ def _refresh(widget):
             for index, name in getattr(widget, "_line_tab_icons", {}).items():
                 if 0 <= index < widget.count():
                     widget.setTabIcon(index, line_icon(name, _color("title"), 16))
+        elif isinstance(widget, QListWidget):
+            for i in range(widget.count()):
+                item = widget.item(i)
+                if item is not None:
+                    _refresh_item_icon(item)
+        elif isinstance(widget, QTableWidget):
+            for row in range(widget.rowCount()):
+                for column in range(widget.columnCount()):
+                    item = widget.item(row, column)
+                    if item is not None:
+                        _refresh_item_icon(item)
+        elif isinstance(widget, QTreeWidget):
+            iterator = QTreeWidgetItemIterator(widget)
+            while iterator.value() is not None:
+                _refresh_tree_icon(iterator.value())
+                iterator += 1
     except RuntimeError:
         pass
 
@@ -532,6 +861,13 @@ def refresh_all():
         return
     for widget in app.allWidgets():
         _refresh(widget)
+    for action in list(_auto_actions):
+        try:
+            name = getattr(action, "_line_icon_name", None)
+            if name and getattr(action, "_line_auto", False):
+                action.setIcon(line_icon(name, _color("button"), _ICON_SIZE_BUTTON))
+        except RuntimeError:
+            pass
 
 
 def install():
@@ -545,4 +881,9 @@ def install():
     _patch_labels()
     _patch_combos()
     _patch_tabs()
+    _patch_item_types()
+    _patch_item_widgets()
+    _patch_group_boxes()
+    _patch_actions()
+    _patch_window_titles()
     _patch_set_property()

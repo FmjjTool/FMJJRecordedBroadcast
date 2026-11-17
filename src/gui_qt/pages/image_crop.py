@@ -458,7 +458,7 @@ class CropCanvas(QWidget):
             f.setPointSize(11)
             p.setFont(f)
             p.drawText(self.rect(), Qt.AlignCenter,
-                       "将图片拖入窗口，或点击「📁 导入」选择图片\n\n"
+                       "将图片拖入窗口，或点击「导入」选择图片\n\n"
                        "支持 PNG / JPG / JPEG / WebP，可多选批量导入")
             return
         lay = self._layout()

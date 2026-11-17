@@ -1,26 +1,36 @@
 """本软件注册的 Windows 计划任务总览（供「⏰ 定时任务」管理页使用）。
 
-四类任务各自独立，互不影响：
+五类任务各自独立，互不影响：
 - FengMingTCDocMonitor         腾讯文档监控（每天 / 按间隔）
 - FengMingTrackerMonitor       网媒账号追踪（每天 / 按间隔）
 - FengMingMusicTrackerMonitor  音乐账号追踪（每天 / 按间隔）
 - FengMingQuarkBackup          夸克网盘备份（每天 / 按间隔）
-计划文本取自各页保存的配置，安装状态 / 下次运行取自 schtasks。
+- FengMingWebwikiAnalytics     本地资料站访问统计（每天）
+计划文本取自各页保存的配置，安装状态 / 下次运行取自 schtasks；计划设置统一由
+「⏰ 定时任务」页读写，功能页不再单独提供定时配置。
 """
 
 from __future__ import annotations
 
 from toolbox import account_tracker_task as _acc
 from toolbox import quark_backup_task as _quark
-from toolbox.config_manager import load_convert_config
+from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import task as _tcdoc
+from toolbox.webwiki import analytics_task as _webwiki
 
-# 任务 id → (配置键前缀, 模式键, 时间键, 间隔键)
+# 任务 id → (模式键, 时间键, 间隔键)；模式键为 None 表示只支持每天
 _CFG_KEYS = {
     "tcdoc": ("tcdoc_schedule_mode", "tcdoc_collect_time", "tcdoc_interval_minutes"),
     "tracker": ("tracker_schedule_mode", "tracker_collect_time", "tracker_interval_minutes"),
     "music": ("music_schedule_mode", "music_collect_time", "music_interval_minutes"),
     "quark": ("quark_schedule_mode", "quark_backup_time", "quark_interval_minutes"),
+    "webwiki": (None, "webwiki_analytics_time", None),
+}
+
+# 任务 id → 页面 key（仅用于展示来源，不再作为设置入口）
+_PAGE_KEYS = {
+    "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
+    "quark": "quark_backup", "webwiki": "localwiki",
 }
 
 
@@ -33,7 +43,7 @@ def _interval_text(value) -> str:
 
 
 def _schedule_text(cfg: dict, mode_key: str, time_key: str, interval_key: str) -> str:
-    if str(cfg.get(mode_key) or "daily") == "interval":
+    if mode_key and str(cfg.get(mode_key) or "daily") == "interval":
         return _interval_text(cfg.get(interval_key))
     return f"每天 {cfg.get(time_key) or '09:00'}"
 
@@ -46,29 +56,83 @@ def list_tasks() -> list[dict]:
     """返回本软件注册的全部计划任务（含未安装项），供管理页展示。"""
     cfg = load_convert_config()
     rows = [
-        ("tcdoc", "腾讯文档监控", "文档浏览量 / 成员数定时采集", "tcdoc",
+        ("tcdoc", "腾讯文档监控", "文档浏览量 / 成员数定时采集",
          _tcdoc.TASK_NAME, _tcdoc.info()),
-        ("tracker", "网媒账号追踪", "粉丝 / 关注 / 获赞等指标定时采集", "tracker",
+        ("tracker", "网媒账号追踪", "粉丝 / 关注 / 获赞等指标定时采集",
          _acc.TASK_NAMES["tracker"], _acc.info("tracker")),
-        ("music", "音乐账号追踪", "网易云 / QQ音乐 / 酷狗等指标定时采集", "music",
+        ("music", "音乐账号追踪", "网易云 / QQ音乐 / 酷狗等指标定时采集",
          _acc.TASK_NAMES["music"], _acc.info("music")),
-        ("quark", "夸克网盘备份", "本地目录增量备份到夸克网盘指定文件夹", "quark_backup",
+        ("quark", "夸克网盘备份", "本地目录增量备份到网盘指定文件夹",
          _quark.TASK_NAME, _quark.info()),
+        ("webwiki", "站点访问统计", "mandisa.wiki 后台访问统计每日采集",
+         _webwiki.TASK_NAME, _webwiki.info()),
     ]
     out = []
-    for tid, label, usage, page, task_name, data in rows:
+    for tid, label, usage, task_name, data in rows:
         mode_key, time_key, interval_key = _CFG_KEYS[tid]
         out.append({
             "id": tid,
             "label": label,
             "usage": usage,
-            "page": page,
+            "page": _PAGE_KEYS[tid],
             "task_name": task_name,
             "schedule": _schedule_text(cfg, mode_key, time_key, interval_key),
             "installed": bool(data),
             "next_run": _next_run(data) if data else "-",
         })
     return out
+
+
+def get_schedule(task_id: str) -> dict:
+    """读取某任务的计划设置：{mode: daily/interval, time: HH:MM, interval: 分钟}。"""
+    mode_key, time_key, interval_key = _CFG_KEYS[task_id]
+    cfg = load_convert_config()
+    mode = str(cfg.get(mode_key) or "daily") if mode_key else "daily"
+    if mode not in ("daily", "interval"):
+        mode = "daily"
+    try:
+        interval = max(1, min(1439, int(cfg.get(interval_key) or 30)))
+    except (TypeError, ValueError):
+        interval = 30
+    return {
+        "mode": mode if interval_key else "daily",
+        "time": str(cfg.get(time_key) or "09:00"),
+        "interval": interval,
+        "interval_supported": bool(interval_key),
+    }
+
+
+def save_schedule(task_id: str, mode: str, time_text: str, interval: int) -> None:
+    """保存计划设置到全局配置（是否安装由 install() 负责）。"""
+    mode_key, time_key, interval_key = _CFG_KEYS[task_id]
+    cfg = load_convert_config()
+    if mode_key:
+        cfg[mode_key] = "interval" if mode == "interval" and interval_key else "daily"
+    cfg[time_key] = str(time_text or "09:00").strip()
+    if interval_key:
+        try:
+            cfg[interval_key] = max(1, min(1439, int(interval)))
+        except (TypeError, ValueError):
+            cfg[interval_key] = 30
+    save_convert_config(cfg)
+
+
+def install(task_id: str, mode: str, time_text: str, interval: int) -> tuple[bool, str]:
+    """保存并注册 / 更新指定任务的 Windows 计划任务。"""
+    save_schedule(task_id, mode, time_text, interval)
+    if task_id == "webwiki":
+        return _webwiki.install_daily(time_text)
+    use_interval = mode == "interval" and _CFG_KEYS[task_id][2] is not None
+    if task_id == "tcdoc":
+        return (_tcdoc.install_interval(interval) if use_interval
+                else _tcdoc.install_daily(time_text))
+    if task_id == "quark":
+        return (_quark.install_interval(interval) if use_interval
+                else _quark.install_daily(time_text))
+    if task_id in _acc.TASK_NAMES:
+        return (_acc.install_interval(task_id, interval) if use_interval
+                else _acc.install_daily(task_id, time_text))
+    return False, f"未知的定时任务：{task_id}"
 
 
 def uninstall(task_id: str) -> tuple[bool, str]:

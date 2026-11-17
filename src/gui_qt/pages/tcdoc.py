@@ -603,61 +603,11 @@ class TcDocPage(BasePage):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
-        # ---------- 底部设置行 ----------
-        cfg = tc_cfg.load_cfg()
-        bottom = QHBoxLayout()
-        bottom.setSpacing(6)
-        bottom.addWidget(QLabel("定时采集："))
-        self.schedule_mode = QComboBox(self)
-        self.schedule_mode.addItem("每天一次", "daily")
-        self.schedule_mode.addItem("按间隔", "interval")
-        bottom.addWidget(self.schedule_mode)
-        self.time_edit = QLineEdit(str(cfg.get("tcdoc_collect_time") or "23:50"), self)
-        self.time_edit.setFixedWidth(66)
-        self.time_edit.setAlignment(Qt.AlignCenter)
-        self.time_edit.setToolTip("24 小时制，如 23:50")
-        bottom.addWidget(self.time_edit)
-        self.interval_combo = QComboBox(self)
-        for label, minutes in (("每 5 分钟", 5), ("每 10 分钟", 10),
-                               ("每 15 分钟", 15), ("每 30 分钟", 30),
-                               ("每 1 小时", 60), ("每 2 小时", 120),
-                               ("每 3 小时", 180), ("每 6 小时", 360),
-                               ("每 12 小时", 720), ("自定义…", -1)):
-            self.interval_combo.addItem(label, minutes)
-        bottom.addWidget(self.interval_combo)
-        self.interval_spin = QSpinBox(self)
-        self.interval_spin.setRange(1, 1439)
-        self.interval_spin.setSuffix(" 分钟")
-        self.interval_spin.setFixedWidth(92)
-        self.interval_spin.setToolTip("自定义间隔：1 ~ 1439 分钟（24 小时请用每天模式）")
-        bottom.addWidget(self.interval_spin)
-        self.install_btn = QPushButton("🕓 安装/更新定时任务")
-        self.install_btn.setToolTip("注册 Windows 计划任务（每天或按间隔，任务名 FengMingTCDocMonitor）")
-        self.install_btn.clicked.connect(self._install_task)
-        bottom.addWidget(self.install_btn)
-        self.uninstall_btn = QPushButton("🗑 删除定时任务")
-        self.uninstall_btn.clicked.connect(self._uninstall_task)
-        bottom.addWidget(self.uninstall_btn)
-        try:
-            interval_minutes = int(cfg.get("tcdoc_interval_minutes") or 30)
-        except (TypeError, ValueError):
-            interval_minutes = 30
-        interval_minutes = max(1, min(1439, interval_minutes))
-        self.interval_spin.setValue(interval_minutes)
-        mode = str(cfg.get("tcdoc_schedule_mode") or "daily")
-        self.schedule_mode.setCurrentIndex(max(0, self.schedule_mode.findData(mode)))
-        choice = self.interval_combo.findData(interval_minutes)
-        if choice < 0:
-            choice = self.interval_combo.findData(-1)
-        self.interval_combo.setCurrentIndex(max(0, choice))
-        self.schedule_mode.currentIndexChanged.connect(self._on_schedule_mode_changed)
-        self.interval_combo.currentIndexChanged.connect(self._on_interval_choice_changed)
-        self.task_label = QLabel("")
-        self.task_label.setStyleSheet("color: #888;")
-        bottom.addWidget(self.task_label, 1)
-        layout.addLayout(bottom)
-        # 先归入页面布局再设置可见性，避免无父控件被 Qt 当成独立窗口闪出。
-        self._on_schedule_mode_changed()
+        # ---------- 底部提示：定时设置已统一到「任务」页 ----------
+        hint = QLabel("定时采集已统一到「任务」页面，可在那里修改计划并安装 / 删除 Windows 计划任务。")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #888;")
@@ -1161,8 +1111,6 @@ class TcDocPage(BasePage):
                 self._refresh_active_tab()
         else:
             self._ensure_ready()
-        if time.time() - self._task_checked_at > 8:
-            self._refresh_task()
 
     def on_hide(self):
         self._page_visible = False
@@ -1333,6 +1281,19 @@ class TcDocPage(BasePage):
                     f"　已查看 {row['readers'] if row['readers'] is not None else '-'}")
 
         run_bg(lambda: storage.latest(db, doc["key"]), done, owner=self)
+
+    def _refresh_task(self):
+        self._task_checked_at = time.time()
+
+        def work():
+            return tc_engine.task.next_run_text()
+
+        def done(text, err):
+            if self._closed:
+                return
+            self.task_label.setText(text if not err else f"定时任务状态未知：{err}")
+
+        run_bg(work, done)
 
     def _refresh_task(self):
         self._task_checked_at = time.time()

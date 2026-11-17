@@ -1,22 +1,97 @@
-"""定时任务管理页：集中查看 / 删除本软件注册的 Windows 计划任务。
+"""定时任务管理页：集中查看 / 设置 / 删除本软件注册的 Windows 计划任务。
 
-- 列表：腾讯文档监控 / 网媒账号追踪 / 音乐账号追踪
-- 每行：计划（各页保存的配置）、安装状态、下次运行（schtasks）、⚙ 设置 / 🗑 删除
+- 列表：腾讯文档监控 / 网媒账号追踪 / 音乐账号追踪 / 网盘备份 / 站点访问统计
+- 每行：计划（本页统一维护）、安装状态、下次运行（schtasks）、⚙ 设置 / 🗑 删除
 - 顶部：🔄 刷新 / 🗑 全部删除
-任务由对应页面的「定时采集」弹窗注册，本页只做统一查看与删除。
+计划的模式、时间与间隔统一在本页「设置」对话框修改并安装，功能页不再单独提供定时设置。
 """
 
+import re
 import time
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 
 _COLS = ["任务", "用途", "计划", "状态", "下次运行", "操作"]
+_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+
+
+class _ScheduleDialog(QDialog):
+    """统一修改某个任务的计划模式、时间与间隔。"""
+
+    def __init__(self, parent, task):
+        super().__init__(parent)
+        from toolbox import task_center
+        self._task_id = task["id"]
+        self._schedule = task_center.get_schedule(task["id"])
+        self.setWindowTitle(f"计划设置 · {task['label']}")
+        form = QFormLayout(self)
+        form.setContentsMargins(16, 14, 16, 12)
+        form.setSpacing(8)
+
+        self.mode = QComboBox(self)
+        self.mode.addItem("每天一次", "daily")
+        self.mode.addItem("按间隔", "interval")
+        if not self._schedule["interval_supported"]:
+            self.mode.setEnabled(False)
+            self.mode.setToolTip("该任务只支持每天执行")
+
+        self.time_edit = QLineEdit(self._schedule["time"], self)
+        self.time_edit.setFixedWidth(80)
+        self.time_edit.setAlignment(Qt.AlignCenter)
+        self.time_edit.setToolTip("24 小时制，如 09:10")
+
+        self.interval_spin = QSpinBox(self)
+        self.interval_spin.setRange(1, 1439)
+        self.interval_spin.setSuffix(" 分钟")
+        self.interval_spin.setValue(int(self._schedule["interval"]))
+        self.interval_spin.setToolTip("1 ~ 1439 分钟；24 小时请用每天模式")
+
+        form.addRow("执行方式", self.mode)
+        form.addRow("每天时间", self.time_edit)
+        form.addRow("间隔", self.interval_spin)
+
+        hint = QLabel("保存后立即注册 / 更新 Windows 计划任务；关闭软件也会按计划执行。", self)
+        hint.setWordWrap(True)
+        hint.setProperty("role", "caption")
+        form.addRow(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
+        buttons.button(QDialogButtonBox.Ok).setText("保存并安装")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+        self.mode.setCurrentIndex(max(0, self.mode.findData(self._schedule["mode"])))
+        self.mode.currentIndexChanged.connect(self._sync_mode)
+        self._sync_mode()
+        self.resize(360, 210)
+
+    def _sync_mode(self):
+        interval = self.mode.currentData() == "interval"
+        self.interval_spin.setEnabled(interval)
+        self.time_edit.setEnabled(not interval)
+
+    def values(self) -> tuple[str, str, int]:
+        return (self.mode.currentData() or "daily",
+                self.time_edit.text().strip(), int(self.interval_spin.value()))
+
+    def accept(self):
+        mode, time_text, _interval = self.values()
+        if mode == "daily" and not _TIME_RE.match(time_text):
+            QMessageBox.warning(self, "时间格式不正确",
+                                "请输入 24 小时制时间，例如 09:10 / 23:50。")
+            return
+        super().accept()
 
 
 class TasksPage(BasePage):
@@ -42,8 +117,8 @@ class TasksPage(BasePage):
         head.addWidget(del_all_btn)
         v.addLayout(head)
 
-        hint = QLabel("这些任务由 Windows 计划任务执行：关闭软件后也会按计划自动采集；"
-                      "删除任务后不再自动采集，可到对应页面的「⏰ 定时采集」重新注册")
+        hint = QLabel("这些任务由 Windows 计划任务执行：关闭软件后也会按计划自动运行；"
+                      "计划模式、时间与间隔统一在本页「设置」里修改，功能页不再单独提供定时设置。")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -111,8 +186,8 @@ class TasksPage(BasePage):
         h.setSpacing(4)
         set_btn = QPushButton("⚙ 设置")
         set_btn.setFixedHeight(24)
-        set_btn.setToolTip("跳到对应页面，注册 / 修改定时采集")
-        set_btn.clicked.connect(lambda _=False, p=t["page"]: self.app.show_page(p))
+        set_btn.setToolTip("修改该任务的计划模式、时间与间隔，并注册 / 更新计划任务")
+        set_btn.clicked.connect(lambda _=False, task=t: self._open_schedule(task))
         h.addWidget(set_btn)
         del_btn = QPushButton("🗑 删除")
         del_btn.setFixedHeight(24)
@@ -125,6 +200,31 @@ class TasksPage(BasePage):
         h.addWidget(del_btn)
         h.addStretch(1)
         return w
+
+    # ---------- 计划设置 ----------
+    def _open_schedule(self, task):
+        dialog = _ScheduleDialog(self, task)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        mode, time_text, interval = dialog.values()
+        task_id = task["id"]
+
+        def work():
+            from toolbox import task_center
+            return task_center.install(task_id, mode, time_text, interval)
+
+        def done(result, err):
+            if err:
+                self.app.toast(f"安装定时任务失败：{err}", "error")
+                return
+            ok, message = result
+            if not ok:
+                QMessageBox.warning(self, "安装定时任务", f"安装失败：{message}")
+                return
+            self.app.toast(f"已保存并安装：{message}", "success")
+            self.refresh()
+
+        run_bg(work, done)
 
     # ---------- 删除 ----------
     def _uninstall_one(self, task):
