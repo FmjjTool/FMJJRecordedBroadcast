@@ -8,10 +8,9 @@
 from __future__ import annotations
 
 import logging
-import re
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QAbstractTableModel
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QProgressBar, QPushButton,
@@ -207,237 +206,6 @@ class _UploadDialog(QDialog):
         self.ok_btn.setEnabled(bool(chosen))
 
 
-class _SongCompareDialog(QDialog):
-    """输入歌曲名 → 五平台检索 → 交叉比较结果（只读，不写腾讯文档）。"""
-
-    PLATFORMS = (("qq", "QQ音乐"), ("netease", "网易云音乐"), ("kugou", "酷狗音乐"),
-                 ("kuwo", "酷我音乐"), ("5sing", "5sing音乐"))
-    HEADERS = ("平台", "匹配", "歌曲名称", "演唱者", "专辑", "时长",
-               "发行日期", "完整歌曲表", "链接")
-
-    def __init__(self, singer: str, title: str, parent=None, app=None):
-        super().__init__(parent)
-        self.app = app
-        self._rows: list[dict] = []
-        self._closed = False
-        self.setWindowTitle("完整歌曲 · 多平台交叉比较")
-        self.resize(1180, 620)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 10)
-        layout.setSpacing(8)
-
-        top = QHBoxLayout()
-        top.addWidget(QLabel("歌手"))
-        self.singer_edit = QLineEdit(singer or "封茗囧菌")
-        self.singer_edit.setFixedWidth(150)
-        top.addWidget(self.singer_edit)
-        top.addWidget(QLabel("歌曲"))
-        self.title_edit = QLineEdit(title)
-        self.title_edit.setPlaceholderText("输入歌曲名，回车重新检索")
-        self.title_edit.returnPressed.connect(self._search)
-        top.addWidget(self.title_edit, 1)
-        self.search_btn = QPushButton("多平台检索")
-        self.search_btn.clicked.connect(self._search)
-        top.addWidget(self.search_btn)
-        layout.addLayout(top)
-
-        self.summary = QLabel("")
-        self.summary.setWordWrap(True)
-        self.summary.setStyleSheet("font-weight: 600;")
-        layout.addWidget(self.summary)
-
-        self.table = QTableWidget(0, len(self.HEADERS), self)
-        self.table.setHorizontalHeaderLabels(list(self.HEADERS))
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(26)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.setWordWrap(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        for index, width in enumerate((90, 70, 250, 150, 180, 70, 100, 130, 320)):
-            self.table.setColumnWidth(index, width)
-        self.table.cellDoubleClicked.connect(self._open_link)
-        layout.addWidget(self.table, 1)
-
-        bottom = QHBoxLayout()
-        self.copy_btn = QPushButton("复制对比结果")
-        self.copy_btn.setEnabled(False)
-        self.copy_btn.clicked.connect(self._copy_rows)
-        bottom.addWidget(self.copy_btn)
-        bottom.addStretch(1)
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.accept)
-        bottom.addWidget(close_btn)
-        layout.addLayout(bottom)
-
-        self._search()
-
-    def _search(self) -> None:
-        title = self.title_edit.text().strip()
-        if not title:
-            self.summary.setText("请输入歌曲名")
-            return
-        singer = self.singer_edit.text().strip() or "封茗囧菌"
-        self.search_btn.setEnabled(False)
-        self.copy_btn.setEnabled(False)
-        self.summary.setText(f"正在检索五平台：{singer} - {title} …")
-
-        def work():
-            from toolbox.music_complete_songs import fetch_platform_songs, load_complete_songs
-            results = fetch_platform_songs(
-                {"title": title, "singer": singer, "links": {}}, limit=8)
-            return results, load_complete_songs()
-
-        def done(result, err):
-            if self._closed:
-                return
-            self.search_btn.setEnabled(True)
-            if err:
-                self.summary.setText(f"检索失败：{err}")
-                return
-            results, songs = result
-            self._show(results, songs, singer, title)
-
-        run_bg(work, done, owner=self)
-
-    @staticmethod
-    def _album_of(item) -> dict:
-        album = (getattr(item, "extra", None) or {}).get("_album")
-        return album if isinstance(album, dict) else {}
-
-    @classmethod
-    def _date_of(cls, item) -> str:
-        album = cls._album_of(item)
-        text = str(getattr(item, "release_date", "") or album.get("release_date") or "")
-        match = re.search(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", text)
-        return (f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
-                if match else text)
-
-    @classmethod
-    def _album_name_of(cls, item) -> str:
-        return str(getattr(item, "album_name", "") or cls._album_of(item).get("album_name") or "")
-
-    @staticmethod
-    def _duration_text(seconds) -> str:
-        try:
-            seconds = int(seconds or 0)
-        except (TypeError, ValueError):
-            return ""
-        return f"{seconds // 60}:{seconds % 60:02d}" if seconds else ""
-
-    @staticmethod
-    def _score(item, target: str, singer: str) -> int:
-        name = bridge._song_title_key(getattr(item, "song_name", ""))
-        score = 0
-        if name and name == target:
-            score += 100
-        elif name and target and (target in name or name in target):
-            score += 60
-        if singer and singer in str(getattr(item, "singer", "") or ""):
-            score += 30
-        if getattr(item, "duration", 0):
-            score += 2
-        return score
-
-    def _show(self, results: dict, songs: list, singer: str, title: str) -> None:
-        target = bridge._song_title_key(title)
-        in_table = next((song for song in songs
-                         if bridge._song_title_key(song.get("title")) == target), None)
-        table_note = (f"已收录（首发 {in_table.get('date') or '日期空'}）"
-                      if in_table else "未收录")
-        rows, best_items = [], []
-        for key, name in self.PLATFORMS:
-            items = list(results.get(key) or [])
-            if "伴奏" not in title:
-                items = [item for item in items
-                         if not bridge._ACCOMPANIMENT_RE.search(
-                             str(getattr(item, "song_name", "") or ""))]
-            scored = sorted(((self._score(item, target, singer), index, item)
-                             for index, item in enumerate(items)),
-                            key=lambda part: (-part[0], part[1]))
-            chosen = [(score, item) for score, _index, item in scored[:3]
-                      if score >= 60] or [(-1, scored[0][2])] if scored else []
-            if not chosen:
-                rows.append({"平台": name, "匹配": "无结果", "歌曲名称": "",
-                             "演唱者": "", "专辑": "", "时长": "", "发行日期": "",
-                             "完整歌曲表": "", "链接": ""})
-                continue
-            best_items.append(chosen[0][1])
-            for index, (score, item) in enumerate(chosen):
-                platform_column = name if index == 0 else ""
-                mark = ("最佳" if score >= 60 else "平台推荐") if index == 0 else "备选"
-                rows.append({
-                    "平台": platform_column,
-                    "匹配": mark,
-                    "歌曲名称": str(getattr(item, "song_name", "") or ""),
-                    "演唱者": str(getattr(item, "singer", "") or ""),
-                    "专辑": self._album_name_of(item),
-                    "时长": self._duration_text(getattr(item, "duration", 0)),
-                    "发行日期": self._date_of(item),
-                    "完整歌曲表": "",
-                    "链接": str(getattr(item, "url", "") or ""),
-                })
-        if rows:
-            rows[0]["完整歌曲表"] = table_note
-        self._fill(rows)
-
-        durations = [self._duration_text(getattr(item, "duration", 0))
-                     for item in best_items if getattr(item, "duration", 0)]
-        matched = sum(1 for item in best_items
-                      if bridge._song_title_key(getattr(item, "song_name", "")) == target)
-        duration_note = ("时长一致" if len(set(durations)) == 1 else f"时长 {len(set(durations))} 种")
-        if not durations:
-            duration_note = "时长为空"
-        dates = sorted({self._date_of(item) for item in best_items if self._date_of(item)})
-        date_note = "日期一致" if len(dates) == 1 else (f"日期 {len(dates)} 种" if dates else "日期为空")
-        self.summary.setText(
-            f"五平台返回 {len(best_items)}/5 · 歌名完全一致 {matched}/5 · "
-            f"{duration_note} · {date_note} · 完整歌曲表：{table_note} · "
-            f"共 {len(rows)} 行（每平台最多 3 个候选）")
-
-    def _fill(self, rows: list[dict]) -> None:
-        self._rows = rows
-        self.table.setRowCount(len(rows))
-        for row_index, row in enumerate(rows):
-            best = row.get("匹配") in ("最佳", "平台推荐")
-            for column, name in enumerate(self.HEADERS):
-                text = str(row.get(name) or "")
-                item = QTableWidgetItem(text)
-                item.setToolTip(text)
-                if best:
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                if name == "链接":
-                    item.setData(Qt.UserRole, text)
-                self.table.setItem(row_index, column, item)
-        self.copy_btn.setEnabled(bool(rows))
-
-    def _open_link(self, row: int, _column: int) -> None:
-        if 0 <= row < len(self._rows):
-            url = str(self._rows[row].get("链接") or "")
-            if url.startswith(("http://", "https://")):
-                QDesktopServices.openUrl(QUrl(url))
-
-    def _copy_rows(self) -> None:
-        if not self._rows:
-            return
-        lines = ["\t".join(self.HEADERS)]
-        for row in self._rows:
-            values = [str(row.get(name) or "").replace("\t", " ").replace("\n", " ")
-                      for name in self.HEADERS]
-            lines.append("\t".join(values))
-        QApplication.clipboard().setText("\r\n".join(lines))
-        self.summary.setText("对比结果已复制到剪贴板")
-
-    def closeEvent(self, event) -> None:
-        self._closed = True
-        super().closeEvent(event)
-
-
 class TcDocBridgePanel(QWidget):
     # 后台任务看门狗：正常比对 <1 秒（全部历史约 3 秒），超时只用于解除卡住状态
     COMPARE_TIMEOUT_MS = 20000
@@ -561,10 +329,10 @@ class TcDocBridgePanel(QWidget):
         search_layout.addWidget(self.song_singer_edit)
         self.song_title_edit = QLineEdit()
         self.song_title_edit.setPlaceholderText("输入歌曲名，回车或多平台检索")
-        self.song_title_edit.returnPressed.connect(self._open_song_compare)
+        self.song_title_edit.returnPressed.connect(self._search_song)
         search_layout.addWidget(self.song_title_edit, 1)
         self.song_search_btn = QPushButton("多平台检索")
-        self.song_search_btn.clicked.connect(self._open_song_compare)
+        self.song_search_btn.clicked.connect(self._search_song)
         search_layout.addWidget(self.song_search_btn)
         self.song_search_row.setVisible(False)
         layout.addWidget(self.song_search_row)
@@ -814,6 +582,7 @@ class TcDocBridgePanel(QWidget):
         self._compare_pending = False
         self._compare_req += 1
         self._clear_result()
+        self._fill_table([], list(bridge.song_columns()), append_images=False)
         self._show_table()
         self.compare_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
@@ -821,13 +590,14 @@ class TcDocBridgePanel(QWidget):
         self.copy_images_btn.setEnabled(False)
         self.copy_row_btn.setEnabled(False)
         self.account_btn.setText("全部")
-        self.summary.setText("完整歌曲：输入歌名，五平台检索并交叉比较（不读写腾讯表格）")
+        self.summary.setText("完整歌曲：输入歌名，五平台检索后生成按表头对齐的录入行（不读写腾讯表格）")
         self.status.setText(
-            "输入歌曲名后点「多平台检索」：显示各平台最佳匹配、专辑、时长、发行日期、链接，"
-            "并标注完整歌曲表内是否已收录。")
+            "输入歌曲名后点「多平台检索」：生成一行与完整歌曲表头完全一致的数据，"
+            "QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 链接分别填入对应列；"
+            "复制后从表格第一列粘贴。")
 
-    def _open_song_compare(self, *_args) -> None:
-        if self._closed or not self._songs_mode:
+    def _search_song(self, *_args) -> None:
+        if self._closed or not self._songs_mode or not self.song_search_btn.isEnabled():
             return
         title = self.song_title_edit.text().strip()
         if not title:
@@ -835,9 +605,85 @@ class TcDocBridgePanel(QWidget):
             self.song_title_edit.setFocus()
             return
         singer = self.song_singer_edit.text().strip() or "封茗囧菌"
-        dialog = _SongCompareDialog(singer, title, self, app=self.app)
-        dialog.exec()
-        dialog.deleteLater()
+        self.song_search_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        self.copy_row_btn.setEnabled(False)
+        self.summary.setText(f"正在检索五平台：{singer} - {title} …")
+        self.status.setText("QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 并行检索中…")
+
+        def work():
+            from toolbox.music_complete_songs import fetch_platform_songs
+            results = fetch_platform_songs(
+                {"title": title, "singer": singer, "links": {}}, limit=8)
+            matches = bridge.best_platform_songs(results, title, singer)
+            return matches, bridge.song_row_from_matches(matches, title, singer)
+
+        def done(result, err):
+            if self._closed:
+                return
+            self.song_search_btn.setEnabled(True)
+            if err:
+                self.summary.setText(f"检索失败：{err}")
+                self.status.setText("可稍后重试；不会读写腾讯表格。")
+                self.copy_btn.setEnabled(bool(self._rows))
+                self._update_copy_row_btn()
+                return
+            matches, row = result
+            self._show_song_row(row, matches)
+
+        thread = run_bg(work, done, owner=self._task_owner)
+        if thread is None:
+            self.song_search_btn.setEnabled(True)
+            self.summary.setText("检索任务未启动，请重试")
+
+    def _show_song_row(self, row: dict, matches: dict) -> None:
+        columns = list(bridge.song_columns())
+        self._result = {"profile": "songs_row", "rows": [row], "columns": columns,
+                        "link_columns": list(bridge.SONG_LINK_COLUMNS)}
+        self._fill_table([row], columns, append_images=False)
+        self.table.selectRow(0)
+        self._show_table()
+        self.compare_btn.setEnabled(False)
+        self.upload_btn.setEnabled(False)
+        self.copy_btn.setEnabled(True)
+        self.copy_row_btn.setEnabled(True)
+        self.copy_images_btn.setEnabled(bool(row.get("_images")))
+
+        present = [(label, matches[key]) for key, label in bridge.SONG_PLATFORM_ORDER
+                   if key in matches]
+        missing = [label for key, label in bridge.SONG_PLATFORM_ORDER if key not in matches]
+        links = sum(1 for column in bridge.SONG_LINK_COLUMNS if row.get(column))
+        durations, dates = set(), set()
+        for _label, item in present:
+            duration = int(bridge._item_value(item, "duration", 0) or 0)
+            if duration:
+                durations.add(duration)
+            day = bridge._date_key(bridge._item_value(item, "release_date")
+                                   or bridge._item_album(item).get("release_date"))
+            if day:
+                dates.add(day)
+        duration_note = "时长一致" if len(durations) == 1 else f"时长 {len(durations)} 种"
+        date_note = "日期一致" if len(dates) == 1 else f"日期 {len(dates)} 种"
+        self.summary.setText(
+            f"已生成 1 行，43 列与完整歌曲表头一致；链接 {links}/5 已填入对应列；"
+            f"平台匹配 {len(present)}/5，{duration_note}，{date_note}"
+            + (f"；缺 {'、'.join(missing)}" if missing else "；五平台链接齐全")
+            + "。复制后从表格第一列粘贴。")
+
+        lines = []
+        for key, label in bridge.SONG_PLATFORM_ORDER:
+            item = matches.get(key)
+            if item is None:
+                lines.append(f"{label}：未匹配到同名歌曲（链接留空）")
+                continue
+            duration = int(bridge._item_value(item, "duration", 0) or 0)
+            day = bridge._date_key(bridge._item_value(item, "release_date")
+                                   or bridge._item_album(item).get("release_date"))
+            lines.append(
+                f"{label}：{bridge._item_value(item, 'song_name')} · "
+                f"{bridge._item_value(item, 'singer')} · "
+                f"{bridge._mmss(duration) or '时长?'} · {day or '日期?'} · 链接已填入")
+        self.status.setText("\n".join(lines))
 
     def _on_days_changed(self, *_args) -> None:
         self._save_cfg(tcdoc_bridge_days=int(self.days_combo.currentData() or 0))
@@ -1396,9 +1242,10 @@ class TcDocBridgePanel(QWidget):
         if (previous or saved) and selected != used_accounts:
             self._acc_timer.start()
 
-    def _fill_table(self, rows: list[dict], columns=None) -> None:
+    def _fill_table(self, rows: list[dict], columns=None,
+                    append_images: bool = True) -> None:
         if columns:
-            display = list(columns) + ["图片"]
+            display = list(columns) + (["图片"] if append_images else [])
             if display != self._model.columns:
                 self._model.set_columns(display)
                 for index, name in enumerate(display):
@@ -1620,7 +1467,7 @@ class TcDocBridgePanel(QWidget):
         self.table.selectRow(row_index)
         row = self._rows[row_index]
         profile = str((self._result or {}).get("profile") or "posts")
-        if profile == "songs":
+        if profile in ("songs", "songs_row"):
             links = [str(row.get(column) or "").strip()
                      for column in (self._result or {}).get("link_columns") or []]
             page = next((link for link in links if link), "")
@@ -1634,7 +1481,7 @@ class TcDocBridgePanel(QWidget):
         images = row.get("_images") or []
         act_images = menu.addAction("复制该行图片")
         act_images.setEnabled(bool(images))
-        act_page = menu.addAction("复制歌曲链接" if profile == "songs" else "复制作品链接")
+        act_page = menu.addAction("复制歌曲链接" if profile in ("songs", "songs_row") else "复制作品链接")
         act_page.setEnabled(bool(page or dyn))
         act_dyn = None
         if dyn:

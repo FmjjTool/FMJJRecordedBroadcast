@@ -53,10 +53,14 @@ SONG_FALLBACK_COLUMNS = (
     "其他平台#2",
 )
 SONG_LINK_COLUMNS = ("QQ音乐", "网易云音乐", "酷狗音乐", "酷我音乐", "5sing", "汽水音乐")
+SONG_PLATFORM_ORDER = (("qq", "QQ音乐"), ("netease", "网易云音乐"),
+                       ("kugou", "酷狗音乐"), ("kuwo", "酷我音乐"),
+                       ("5sing", "5sing音乐"))
 _SONG_COLUMNS_CACHE: dict[str, tuple] = {}
 
 _SONG_PLATFORM_COLUMNS = {"qq": "QQ音乐", "netease": "网易云音乐", "kugou": "酷狗音乐",
-                          "kuwo": "酷我音乐", "fivesing": "5sing", "soda": "汽水音乐"}
+                          "kuwo": "酷我音乐", "fivesing": "5sing", "5sing": "5sing",
+                          "soda": "汽水音乐"}
 _SONG_PLATFORM_CN = {"QQ音乐": "qq", "网易云音乐": "netease", "酷狗音乐": "kugou",
                      "酷我音乐": "kuwo", "5sing": "fivesing", "汽水音乐": "soda"}
 _SONG_LANGUAGE = {"国语": "汉语（CN）", "普通话": "汉语（CN）", "粤语": "汉语（CN）",
@@ -604,6 +608,164 @@ def build_song_pending(root: Path | None = None) -> dict:
             },
         },
     }
+
+
+def _item_value(item, name: str, default=""):
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _item_album(item) -> dict:
+    extra = _item_value(item, "extra", {}) or {}
+    album = extra.get("_album") if isinstance(extra, dict) else None
+    return album if isinstance(album, dict) else {}
+
+
+def _most_common_text(values) -> str:
+    counts = Counter(str(value).strip() for value in values
+                     if str(value or "").strip())
+    if not counts:
+        return ""
+    best = max(counts.values())
+    return max((text for text, count in counts.items() if count == best), key=len)
+
+
+def _most_common_int(values) -> int:
+    counts = Counter()
+    for value in values:
+        try:
+            number = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            counts[number] += 1
+    return counts.most_common(1)[0][0] if counts else 0
+
+
+def _best_release_date(values) -> str:
+    counts = Counter(day for value in values for day in (_date_key(value),) if day)
+    if not counts:
+        return ""
+    best = max(counts.values())
+    return min(day for day, count in counts.items() if count == best)
+
+
+def _language_text(values) -> str:
+    for value in values:
+        text = str(value or "")
+        for key, mapped in _SONG_LANGUAGE.items():
+            if key in text:
+                return mapped
+    return ""
+
+
+def _normalize_singer_text(text) -> str:
+    names: list[str] = []
+    for part in re.split(r"[、,，/&;；]|\s+(?:feat|ft)\.?\s+", str(text or ""), flags=re.I):
+        part = part.strip()
+        if part and part not in names:
+            names.append(part)
+    return "、".join(names)
+
+
+def _mmss(seconds: int) -> str:
+    if not seconds:
+        return ""
+    if seconds >= 3600:
+        hours, remain = divmod(seconds, 3600)
+        minutes, secs = divmod(remain, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def best_platform_songs(results: dict, title: str, singer: str) -> dict[str, object]:
+    """五平台搜索结果 → 每平台一首歌名匹配的最佳结果（伴奏默认排除）。"""
+    target = _song_title_key(title)
+    matches: dict[str, object] = {}
+    for key, _label in SONG_PLATFORM_ORDER:
+        items = list(results.get(key) or [])
+        if "伴奏" not in str(title):
+            items = [item for item in items
+                     if not _ACCOMPANIMENT_RE.search(
+                         str(_item_value(item, "song_name") or ""))]
+        ranked = []
+        for index, item in enumerate(items):
+            name = _song_title_key(_item_value(item, "song_name"))
+            score = 100 if name and name == target else (
+                60 if name and target and (target in name or name in target) else 0)
+            if score and singer and str(singer) in str(_item_value(item, "singer") or ""):
+                score += 30
+            ranked.append((score, -index, item))
+        ranked.sort(reverse=True, key=lambda part: (part[0], part[1]))
+        if ranked and ranked[0][0] >= 60:
+            matches[key] = ranked[0][2]
+    return matches
+
+
+def song_row_from_matches(matches: dict, title: str, singer: str,
+                          columns=None) -> dict:
+    """多平台匹配结果 → 一行「完整歌曲」数据，键严格按表头列名。"""
+    columns = tuple(columns or song_columns())
+    row = {name: "" for name in columns}
+    items = [item for item in matches.values() if item is not None]
+    target = _song_title_key(title)
+    titled = [item for item in items
+              if _song_title_key(_item_value(item, "song_name")) == target]
+    base = titled or items
+
+    row["歌曲名称"] = _most_common_text(
+        _item_value(item, "song_name") for item in base) or str(title or "")
+    singer_text = _normalize_singer_text(
+        _most_common_text(_item_value(item, "singer") for item in base) or singer)
+    row["演唱者"] = singer_text
+    singers = [part for part in singer_text.split("、") if part]
+    row["合唱形式"] = {1: "单人演唱", 2: "双人合唱"}.get(
+        len(singers), "多人合唱" if len(singers) > 2 else "")
+
+    lyrics = max((str(_item_value(item, "lyrics") or "") for item in items),
+                 key=len, default="")
+    lyrics = _LYRIC_TIMESTAMP_RE.sub("", lyrics)
+    lyrics = re.sub(r"\n{3,}", "\n\n", lyrics).strip()
+    row["完整歌词"] = lyrics
+    credits = _song_credits(lyrics)
+    row["作词人"] = credits.get("作词人", "")
+    row["作曲人"] = credits.get("作曲人", "")
+
+    row["歌曲时长"] = _mmss(_most_common_int(
+        _item_value(item, "duration") for item in items))
+    row["首发日期"] = _best_release_date(
+        value for item in items
+        for value in (_item_value(item, "release_date"),
+                      _item_album(item).get("release_date")))
+    row["语言"] = _language_text(
+        value for item in items
+        for value in (_item_value(item, "language"),
+                      _item_album(item).get("language")))
+
+    album = _most_common_text(
+        _item_value(item, "album_name") or _item_album(item).get("album_name")
+        for item in items)
+    row["所属专辑"] = "" if not album else (
+        album if album.startswith("《") and album.endswith("》") else f"《{album}》")
+    company = _most_common_text(_item_album(item).get("company") for item in items)
+    row["出品方"] = "" if company == "-" else company
+    track = _most_common_int(_item_value(item, "track_no") for item in items)
+    row["音轨号"] = str(track) if track else ""
+
+    for key, item in matches.items():
+        column = _SONG_PLATFORM_COLUMNS.get(key)
+        url = str(_item_value(item, "url") or "").strip()
+        if column in row and url.startswith(("http://", "https://")):
+            row[column] = url
+
+    cover = next((str(_item_value(item, "cover_url") or "").strip() for item in items
+                  if str(_item_value(item, "cover_url") or "").startswith(
+                      ("http://", "https://"))), "")
+    row["_images"] = [cover] if cover else []
+    row["_cover_url"] = cover
+    return row
 
 
 # ==================== 腾讯表格 ====================
