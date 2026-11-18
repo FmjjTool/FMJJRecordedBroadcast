@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
+from gui_qt.toolbox_common import ToolSectionCard
 from toolbox import sevenzip
 from toolbox.quark import backup as qbackup
 from toolbox.quark import config as qconfig
@@ -72,10 +72,6 @@ class QuarkDownloadPage(BasePage):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        root.addWidget(ToolPageHeader(
-            "网盘下载",
-            "浏览夸克 / 百度 / 移动云盘，勾选文件或整个文件夹下载到本地。"
-            "大文件单线程断点续传：直链失效会自动换链，网络中断后重新下载会从断点接着来。"))
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
 

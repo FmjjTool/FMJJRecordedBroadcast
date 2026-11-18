@@ -123,32 +123,6 @@ class DouyinIndexPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # ---- 标题行 + 帮助 ----
-        title = QLabel("抖音指数")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "抖音指数 · 功能介绍", (
-            "<p><b>创作者中心「抖音指数」达人数据全量抓取（作者分析 / 作品分析 / 粉丝分析），"
-            "每次抓取自动在本地存一份完整 JSON。</b></p>"
-            "<p>· <b>需要抖音登录</b>（创作者中心接口需登录态）</p>"
-            "<p>· <b>搜索</b>：输入达人名称或抖音号 → 搜索 → 候选列表中双击或确认选择（两步确认）</p>"
-            "<p>· <b>核心指标</b>：新增点赞/净增粉丝/新增分享/新增评论/新增作品，"
-            "昨日·近7天·近15天·近30天 四档 + 各档环比 + 涨粉里程碑</p>"
-            "<p>· <b>稿均指标</b>：稿均点赞/涨粉/分享/评论（近7天、近30天 + 环比）</p>"
-            "<p>· <b>每日趋势</b>：接口返回范围内每天的五个指标序列</p>"
-            "<p>· <b>达人视频</b>：发布日期/内容/点赞/评论/分享/收藏/视频指数（双击行打开视频页）；"
-            "「统计范围」下拉控制视频列表与视频指数的时间范围</p>"
-            "<p>· <b>粉丝分析</b>：省份/城市级别/城市/年龄/性别/手机品牌/手机价格/兴趣标签，"
-            "全部带占比 + TGI 偏好指数（TGI&gt;100 表示该人群偏好度高于大盘）</p>"
-            "<p>· <b>相似达人</b>：同赛道达人榜（双击行直接抓取该达人）</p>"
-            "<p>· <b>保存位置</b>：download/抖音指数/&lt;达人名&gt;/抖音指数_时间戳.json"
-            "（另存 latest.json 为最新一份快照）</p>"
-        )))
-        layout.addLayout(title_row)
-
         # ---- 顶部输入区 ----
         top = QFrame()
         top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")

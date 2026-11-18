@@ -47,23 +47,6 @@ class BiliShopPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        title = QLabel("B站小店")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "B站小店 · 功能介绍", (
-            "<p><b>解析 B站 UP主小店，游客可用（无需登录）。</b></p>"
-            "<p>· <b>用法</b>：粘贴 b23.tv 小店短链、mall.bilibili.com 小店链接、"
-            "space.bilibili.com 主页或纯 UID → 点「解析」</p>"
-            "<p>· <b>能拿到</b>：小店名 / 头像 / 粉丝数 / 商品数 + 每件商品的 "
-            "ID / 标题 / 价格 / 封面 / 跳转链 / 来源类型</p>"
-            "<p>· <b>保存位置</b>：download/B站小店/&lt;小店名&gt;_&lt;UID&gt;/"
-            "（小店信息.json；商品列表可导出 Excel）</p>"
-        )))
-        layout.addLayout(title_row)
-
         top = QFrame()
         top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
         tv = QVBoxLayout(top)

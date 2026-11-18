@@ -104,24 +104,12 @@ class LocalWikiPage(BasePage):
         h.setContentsMargins(0, 0, 0, 2)
         left = QVBoxLayout()
         left.setSpacing(5)
-        title = QLabel("本地资料站")
-        title.setObjectName("wikiTitle")
-        left.addWidget(title)
-        sub = QLabel("本地 Wiki + 腾讯文档预览：拉取 webwiki / webwiki-api，"
-                     "复用腾讯文档监控的本地数据重建站点，一键起站。")
-        sub.setObjectName("wikiMuted")
-        sub.setWordWrap(True)
-        left.addWidget(sub)
         note = QLabel("私有项目：拉取代码与一键部署需要有效的 GitHub 登录状态；"
                       "仓库本身请保持在 GitHub 私有。")
         note.setObjectName("wikiWarn")
         note.setWordWrap(True)
         left.addWidget(note)
         h.addLayout(left, 1)
-        help_btn = QPushButton("功能介绍")
-        help_btn.setObjectName("wikiButton")
-        help_btn.clicked.connect(self._show_help)
-        h.addWidget(help_btn, 0, Qt.AlignTop)
         return card
 
     def _build_status_card(self):
@@ -390,37 +378,6 @@ class LocalWikiPage(BasePage):
         self.log_view.setMinimumHeight(190)
         box.addWidget(self.log_view)
         return card
-
-    def _show_help(self):
-        QMessageBox.information(
-            self, "本地资料站 · 功能介绍",
-            "<p><b>它做什么</b><br>把 <code>webwiki</code>（前端）与 "
-            "<code>webwiki-api</code>（后端/数据重建）拉到本机，"
-            "读取「腾讯文档监控」已同步的本地表格重建站点库后启动，浏览器访问 "
-            "<code>http://127.0.0.1:站点端口/</code>。</p>"
-            "<p><b>GitHub 登录</b><br>项目是私有的；未登录时"
-            "「拉取代码」和「一键部署」会锁定，避免被随意拉取。"
-            "登录状态由软件统一管理，本页不保存登录信息。</p>"
-            "<p><b>数据来源</b><br>站点数据直接读取「腾讯文档监控 → 表格同步」"
-            "已落地的本地 tables.db，每次重建都全量读取最新本地数据，"
-            "不重新请求腾讯文档，也不需要版本号或强制全量。</p>"
-            "<p><b>本地图片</b><br>「腾讯文档监控 → 采集图片」下载过的图片会优先生效："
-            "站点封面直接读本地文件并生成缩略图，不再走网络；"
-            "没下载过的图片才回退到图床缓存。</p>"
-            "<p><b>端口</b><br>只监听 127.0.0.1，不对外网开放。"
-            "端口被占用时在「目录与端口」里换一个再启动。</p>"
-            "<p><b>站点访问监控</b><br>查的是线上站点 mandisa.wiki 的后台统计"
-            "（内部统计接口，只需 /admin 的后台密码，不需要浏览器登录）。"
-            "密码加密存在本机 <code>config/webwiki_analytics.json</code>，"
-            "只掩码显示、不回显；后台改密后这里要同步改，旧密码立即失效。"
-            "点「采集今日」会把当天数据按「日期 + 口径」写入 "
-            "<code>download/站点监控数据/访问统计.db</code>，"
-            "同一天重复采集直接覆盖；历史表里能看最近 14 条，"
-            "攒够前一日 / 7 日前的数据后自动显示访客差。"
-            "每天自动采集的 Windows 计划任务 <code>FengMingWebwikiAnalytics</code> "
-            "统一在「任务」页面安装与修改时间，关掉工具箱也会跑；"
-            "失败原因写在 <code>采集日志.log</code>。"
-            "注意：站点默认只保留近 90 天明细，密码错 5 次会锁 15 分钟。</p>")
 
     # ==================== 主题 / 状态 ====================
 

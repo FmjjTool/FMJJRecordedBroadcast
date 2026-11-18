@@ -158,17 +158,6 @@ class EditorPage(BasePage):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
-        head = QHBoxLayout()
-        title = QLabel("视频操作")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        head.addWidget(title)
-        tip = QLabel("转换 / 切割 / 合并 / 压缩 / 提取轨道 / 截图")
-        tip.setWordWrap(True)
-        tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        head.addWidget(tip)
-        head.addStretch(1)
-        root.addLayout(head)
-
         body = QHBoxLayout()
         body.setSpacing(8)
         root.addLayout(body, 1)

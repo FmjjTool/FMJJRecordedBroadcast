@@ -35,10 +35,6 @@ class GlobalSettingsPage(BasePage):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
 
-        title = QLabel("全局设置")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        outer.addWidget(title)
-
         # 可滚动内容
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

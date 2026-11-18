@@ -14,8 +14,7 @@ from PySide6.QtWidgets import (
 
 from bili import api
 from toolbox.config_manager import get_export_dir
-from gui_qt.common import run_bg
-from gui_qt.help_overlay import refresh_browser_colors
+from gui_qt.common import refresh_browser_colors, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_emoji import _DlBar, render_files
 
@@ -65,16 +64,6 @@ class BiliInfoPage(BasePage):
         self._space_current = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        head = QHBoxLayout()
-        head.addWidget(QLabel("B站用户空间", styleSheet="font-size: 16px; font-weight: bold;"))
-        head.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "用户空间 · 功能介绍", (
-            "<p><b>B站用户空间查询。</b></p>"
-            "<p>· <b>用户空间</b>：输入 UID 查看用户公开信息——关注/粉丝/获赞/签名/直播房间，"
-            "可下载头像/头像框/空间背景图/投稿封面/充电表情/收藏集封面</p>"
-            "<p>· 全部游客接口，无需登录；视频详情与下载请用「信息获取」页</p>")))
-        layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._build_space_tab(), "用户空间")

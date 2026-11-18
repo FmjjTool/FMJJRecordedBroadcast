@@ -48,27 +48,6 @@ class DouyinShopPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # ---- 标题行 + 帮助 ----
-        title = QLabel("抖音商品")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "抖音商品 · 功能介绍", (
-            "<p><b>解析抖音商城（抖音小店）商品分享链接，<b>无需登录</b>。</b></p>"
-            "<p>· <b>用法</b>：把分享文案整段粘贴到输入框（含 v.douyin.com 短链），"
-            "一行一条，可一次粘多条 → 点「解析全部」</p>"
-            "<p>· <b>能拿到</b>：商品标题 / 商品ID / 价格区间 / 销量 / 主图 / "
-            "店铺ID / 带货达人ID / 分享来源</p>"
-            "<p>· <b>拿不到</b>：店铺名称、SKU 规格库存、详情图（抖音对非 App 打开的分享链"
-            "只返回「商品预览」数据，商品页 H5 在网页端一律提示「请进入抖音查看」）。"
-            "要看得点「复制链接」粘到抖音 App 里打开</p>"
-            "<p>· <b>保存位置</b>：download/抖音商品/&lt;标题&gt;_&lt;商品ID&gt;/"
-            "（主图 + 单商品 JSON）；整批列表可导出 Excel 到 download/抖音商品/</p>"
-        )))
-        layout.addLayout(title_row)
-
         # ---- 输入区 ----
         top = QFrame()
         top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")

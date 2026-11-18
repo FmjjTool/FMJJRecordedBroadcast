@@ -55,25 +55,6 @@ class ShoppingPage(BasePage):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        title = QLabel("购物解析")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "购物解析 · 功能介绍", (
-            "<p><b>淘宝店铺 / 商品信息采集与导出（图片自动下载 + Excel 连带导出）。</b></p>"
-            "<p>· <b>解析店铺</b>：粘贴淘宝店铺链接（店铺信息游客可获取，商品列表需淘宝登录）；"
-            "留空回车用默认店铺</p>"
-            "<p>· <b>解析商品</b>：粘贴 item.taobao.com/item.htm?id=xxx 链接（详情需淘宝登录）</p>"
-            "<p>· <b>表格</b>：勾选商品（全选/反选/清除）后点「获取选中商品详情」，"
-            "逐件拉取主图/选购参数/参数信息/图文详情——图片自动下载到"
-            "download/淘宝商品/{标题}_{商品ID}_{时间}/，Excel 连带导出到同目录（不弹窗选位置）</p>"
-            "<p>· <b> 导出商品 JSON</b>：输出勾选商品的全量数据；未拉过详情的自动逐件拉取</p>"
-            "<p>· 单件失败原地重试不中断整批；详情缓存复用，重复导出不重复请求</p>"
-            "<p>· 未登录时仅能获取游客可见信息，登录后可获取完整商品列表。</p>")))
-        layout.addLayout(title_row)
-
         row = QHBoxLayout()
         self.url_entry = QLineEdit()
         self.url_entry.setPlaceholderText(

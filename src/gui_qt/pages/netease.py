@@ -149,39 +149,13 @@ class NeteasePage(BasePage):
         except Exception:
             return {}
 
-    # 原来的「设置 Tab」帮助文字（功能说明 + 平台说明）
-    # 改为浮层展示：点「使用说明」在按钮下方弹出，收起不占任何布局空间
-    _HELP_HTML = (
-        "<p><b>功能说明</b></p>"
-        "<p>· <b>歌曲搜索</b>：输入「歌名 / 歌手」关键词，可勾选下载</p>"
-        "<p>· <b>单曲解析</b>：输入歌曲链接或 ID，展示详情 + 歌词 + 封面，可立即下载</p>"
-        "<p>· <b>歌单解析</b>：输入歌单链接或 ID，展示歌单信息 + 歌曲列表，可批量下载</p>"
-        "<p>· <b>专辑解析（仅网易云）</b>：输入专辑链接/ID 或专辑名</p>"
-        "<p>· <b>自动换源（默认开启）</b>：下载失败或只拿到试听片段时，"
-        "自动到其他平台搜同名曲继续下载，顺序：酷我 → 酷狗 → 酷狗概念版 → 网易云"
-        "（酷狗概念版需扫码登录；网易云换源需已登录）</p>"
-        "<p><b>平台说明</b></p>"
-        "<p>· 网易云音乐：全音质下载，VIP 歌曲需登录</p>"
-        "<p>· 酷狗音乐：免费歌 128k 直链（游客上限即 128k）；VIP 付费歌游客无法下载</p>"
-        "<p>· 酷我音乐：免费歌 320k MP3 高音质直链，可选 128k WMA；VIP 歌仅 11 秒试听</p>"
-        "<p>· 5sing音乐：站内原唱/翻唱/伴奏 192k/128k 全曲可下</p>"
-        "<p>· QQ音乐：官方直链接口已关闭，下载靠自动换源到其他平台</p>"
-        "<p>· <b>酷狗概念版</b>：扫码登录后可下 128k/320k/FLAC；"
-        "登录后点「领VIP」可免费领取会员（+3小时/次，每日 8 次），"
-        "VIP 曲目即可下载</p>"
-        "<p>版权歌曲（VIP/付费）游客接口拿不到完整直链，自动换源会尝试"
-        "其他平台的免费版本；若各平台均需付费，建议在网易云平台用已登录账号下载。"
-        "下载目录：「导出」处可选默认位置（全局设置的导出目录，"
-        "默认 download/歌曲文件）或固定位置（自选文件夹，音乐解密输出同目录）</p>"
-    )
-
     # ===================== 功能页 =====================
     def _build_func(self):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
 
-        # 顶部：平台选择 + 模式按钮 + 使用说明
+        # 顶部：平台选择 + 模式按钮
         top = QHBoxLayout()
         self.platform_menu = QComboBox()
         for _, label, _ in PLATFORMS:
@@ -192,7 +166,6 @@ class NeteasePage(BasePage):
         self.mode_row = QHBoxLayout()
         top.addLayout(self.mode_row)
         top.addStretch(1)
-        top.addWidget(self._build_help_redbox(), 0, Qt.AlignTop)
         v.addLayout(top)
 
         # 输入区（动态，随模式变化）
@@ -263,16 +236,6 @@ class NeteasePage(BasePage):
         # 默认平台/模式
         self._apply_platform("netease")
         return w
-
-    def _build_help_redbox(self):
-        """顶部右侧「使用说明」按钮：浮层面板展示完整说明。
-
-        展开为覆盖式浮层（不加入布局），点按钮弹出/收起——
-        不再挤压搜索区，也不会把下方界面推下去。
-        """
-        from gui_qt.help_overlay import attach_help_overlay
-        return attach_help_overlay(self, "使用说明", self._HELP_HTML,
-                                   btn_text="使用说明")
 
     # ===================== 自动换源勾选持久化 =====================
     @staticmethod

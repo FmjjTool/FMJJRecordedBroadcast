@@ -12,26 +12,6 @@ from toolbox.date_folders import (  # 兼容旧导入路径，单一来源在 to
 )
 
 
-class ToolPageHeader(QWidget):
-    """工具页标题与说明；颜色由全局主题的语义角色统一提供。"""
-
-    def __init__(self, title: str, description: str = "", parent=None):
-        super().__init__(parent)
-        self.setObjectName("toolPageHeader")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        self.title_label = QLabel(title, self)
-        self.title_label.setProperty("role", "title")
-        layout.addWidget(self.title_label)
-        self.description_label = QLabel(description, self)
-        self.description_label.setProperty("role", "subtitle")
-        self.description_label.setWordWrap(True)
-        layout.addWidget(self.description_label)
-        # 设置可见性前先归属页面，避免无父 QLabel 被 Qt 当作独立窗口弹出。
-        self.description_label.setVisible(bool(description))
-
-
 class ToolSectionCard(QFrame):
     """工具页内容卡片，标题行可放状态，content_layout 放原有功能控件。"""
 

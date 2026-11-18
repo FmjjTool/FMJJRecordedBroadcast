@@ -44,10 +44,6 @@ class SubtitlePage(BasePage):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(6)
 
-        title = QLabel("字幕格式转换")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
-
         # 文件按钮
         frow = QHBoxLayout()
         frow.addWidget(self._btn("选择文件", self._select_files))

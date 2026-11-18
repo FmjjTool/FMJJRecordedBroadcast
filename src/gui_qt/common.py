@@ -10,6 +10,50 @@ import time
 from collections import Counter
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtWidgets import QTextBrowser
+
+
+def refresh_browser_colors(browser: QTextBrowser, muted_colors=()):
+    """原地更新链接/次级文字，保留正文、图片资源、选区和滚动位置。"""
+    from gui_qt import theme
+
+    muted_colors = set(muted_colors)
+    if muted_colors:
+        muted_colors.update((theme.color("muted", False), theme.color("muted", True)))
+    link_color, muted_color = theme.color("link"), theme.color("muted")
+    edits = []
+    block = browser.document().firstBlock()
+    while block.isValid():
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if fragment.isValid():
+                fmt = fragment.charFormat()
+                current = fmt.foreground().color().name()
+                target = link_color if fmt.isAnchor() else (
+                    muted_color if current in muted_colors else None)
+                if target is not None and target != current:
+                    edits.append((fragment.position(), fragment.length(), target))
+            iterator += 1
+        block = block.next()
+    if not edits:
+        return
+    selection = browser.textCursor()
+    scroll_x = browser.horizontalScrollBar().value()
+    scroll_y = browser.verticalScrollBar().value()
+    cursor = QTextCursor(browser.document())
+    cursor.beginEditBlock()
+    for start, length, target in edits:
+        cursor.setPosition(start)
+        cursor.setPosition(start + length, QTextCursor.KeepAnchor)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(target))
+        cursor.mergeCharFormat(fmt)
+    cursor.endEditBlock()
+    browser.setTextCursor(selection)
+    browser.horizontalScrollBar().setValue(scroll_x)
+    browser.verticalScrollBar().setValue(scroll_y)
 
 
 class _MainBridge(QObject):

@@ -70,13 +70,6 @@ class PerformancePage(BasePage):
         self._snapshot_busy = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
-        title = QLabel("性能诊断")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(title)
-        hint = QLabel("开始检测 → 切到耗内存或卡顿的页面复现 → 返回查看或导出。"
-                      "先记一次 Python 快照，再复现，再记一次，可查看新增分配位置。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
         bar = QHBoxLayout()
         self.trace_cb = QCheckBox("追踪 Python 分配（较慢）")
         self.trace_cb.setToolTip("仅追踪开启后的 Python 分配；Qt、解码图片及子进程内存不在其覆盖范围内")

@@ -94,28 +94,6 @@ class FanGroupsPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        title = QLabel("粉丝群查询")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "粉丝群查询 · 功能介绍", (
-            "<p><b>查询抖音 / 微博 / B站账号的公开粉丝群 ID 与人数。</b></p>"
-            "<p>· <b>抖音</b>：主页链接 → 全部公开粉丝群（含 VIP 群）。"
-            "需要登录态，游客会被 blocked</p>"
-            "<p>· <b>微博</b>：主页链接 → 全部公开粉丝群，附带群号 / 人数 / 人数上限</p>"
-            "<p>· <b>B站</b>：输入 UP 主 UID → 当前账号<b>已加入</b>的应援团。"
-            "网页端没有 UP 全部群的公开列表，未加入的群查不到</p>"
-            "<p>· <b>人数变化</b>：每次查询自动存快照，与上一次快照对比；"
-            "新出现的群标记为「新」</p>"
-            "<p>· <b>群头像</b>：查询时自动下载到 <b>头像/</b> 子目录（已下载的复用），"
-            "表格首列显示缩略图，双击行打开原图；「刷新头像」强制重新下载</p>"
-            "<p>· <b>保存位置</b>：download/粉丝群/&lt;平台&gt;/&lt;UID&gt;/"
-            "（头像/ + 快照_时间.json + 最新.json + 导出的 Excel）</p>"
-        )))
-        layout.addLayout(title_row)
-
         top = QFrame()
         top.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
         tv = QVBoxLayout(top)

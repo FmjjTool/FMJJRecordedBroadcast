@@ -353,20 +353,6 @@ class BiliGarbPage(BasePage):
         self._current = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        head = QHBoxLayout()
-        head.addWidget(QLabel("B站收藏集", styleSheet="font-size: 16px; font-weight: bold;"))
-        head.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "装扮/收藏集 · 功能介绍", (
-            "<p><b>B站装扮与收藏集资源下载（两个入口）。</b></p>"
-            "<p>· <b>装扮 / 收藏集</b>：上半部分关键词搜索装扮/收藏集"
-            "（白菜、UP主名等），点「详情」直接加载；下半部分按 item_id 查看装扮详情——"
-            "空间背景 / 粉丝牌 / 评论背景 / 表情包 / 加载动画 / 进度条 / 皮肤 / 点赞动画。"
-            "命中收藏集 ID 会自动跳「收藏集活动」</p>"
-            "<p>· <b>收藏集活动（按ID）</b>：输入活动 act_id，"
-            "加载活动视觉 / 勋章 / 全部收藏集卡牌图与卡牌视频</p>"
-            "<p>· 文件列表勾选后下载，支持多选批量</p>")))
-        layout.addLayout(head)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._build_garb_tab(), "装扮 / 收藏集")

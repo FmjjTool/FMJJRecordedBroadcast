@@ -92,9 +92,6 @@ class MusicTrackerPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("音乐账号追踪")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        head.addWidget(title)
         head.addStretch(1)
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.reload_accounts)
@@ -139,9 +136,6 @@ class MusicTrackerPage(BasePage):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(6)
-        title = QLabel("音乐账号追踪设置")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        outer.addWidget(title)
 
         # 搜索账号（名称 → 链接；5sing 无搜索通道）
         search_card = QFrame()

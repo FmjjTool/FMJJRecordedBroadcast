@@ -44,15 +44,6 @@ class WechatArticlePage(BasePage):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        # 标题 + 使用说明
-        title_row = QHBoxLayout()
-        title = QLabel("公众号文章解析")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        title_row.addWidget(self._build_help())
-        layout.addLayout(title_row)
-
         # 链接输入区
         self.input_edit = QPlainTextEdit()
         self.input_edit.setPlaceholderText(
@@ -123,23 +114,6 @@ class WechatArticlePage(BasePage):
         layout.addWidget(self.log_text, 1)
 
         self._refresh_loc_label()
-
-    def _build_help(self):
-        from gui_qt.help_overlay import attach_help_overlay
-        html = (
-            "<p><b>功能说明</b></p>"
-            "<p>· 输入公众号文章链接（每行一个），点「解析并导出」自动抓取正文与图片</p>"
-            "<p>· <b>HTML</b>：自包含单文件，图片内嵌，双击即可打开</p>"
-            "<p>· <b>PDF</b>：A4 排版，适合打印与存档</p>"
-            "<p>· <b>Word</b>：docx 格式，可继续编辑</p>"
-            "<p>· <b>图片文本(MD)</b>：Markdown 文件 + 图片文件夹，文字与图片分离存放</p>"
-            "<p>· 导出位置可选「默认位置」（统一导出目录/公众号文章）或「固定位置」</p>"
-            "<p>· 两种位置都按 <b>公众号名/文章名</b> 建文件夹，"
-            "HTML/PDF/Word/MD 与图片统一存放在同一文章文件夹内</p>"
-            "<p style='color:#888'>仅支持 mp.weixin.qq.com 图文消息；付费/加密文章、"
-            "已被删除文章无法解析；批量解析会自动限速避免微信风控</p>"
-        )
-        return attach_help_overlay(self, "使用说明", html, btn_text="使用说明")
 
     # ===================== 导出位置（默认/固定 双选项） =====================
 

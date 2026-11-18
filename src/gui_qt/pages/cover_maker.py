@@ -42,7 +42,6 @@ from toolbox import image_render
 from toolbox.config_manager import get_config_dir, get_export_dir
 
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
-from gui_qt.help_overlay import attach_help_overlay
 from gui_qt.pages.base import BasePage
 from gui_qt.theme import is_dark
 
@@ -87,26 +86,6 @@ COMBO_POPUP_SEL = {"light": "#2a6a9c", "dark": "#2a5a8c"}
 TEMPLATE_VERSION = 1
 _CONFIG_SECTION = "cover_maker"
 
-HELP_HTML = (
-    "<p><b>套版封面制作：随机底图 + 标题/日期/备注三段文字，快速产出静态封面。</b></p>"
-    "<p>· <b>底图</b>：从底图文件夹递归扫描随机抽取；「上传图片」临时替换当前底图；"
-    "适配模式支持裁剪填充（默认）或完整包含（留白）</p>"
-    "<p>· <b>文字</b>：三组字段独立设置字体/字号/颜色/加粗/斜体/对齐；"
-    "「同步样式」可按字体、颜色、字号单项同步到全部字段</p>"
-    "<p>· <b>定位</b>：预览区直接拖动文字块；「重置文字位置」恢复三行垂直居中；"
-    "Y轴微调整体上下平移（画布高度比例）</p>"
-    "<p>· <b>分辨率</b>：所有字号与位置按画布比例存储，预览 960x540，"
-    "导出可切 1080p/2K/4K 不乱版；超长文字自动换行（不超过 70% 画布宽）并自动缩小防溢出</p>"
-    "<p>· <b>导出</b>：PNG 无损 / JPG 质量可调（60~100），保存到 download/套版封面/</p>"
-    "<p>· <b>模板</b>：保存三字段样式与位置比例，并记忆当时所用底图（文件仍在时加载"
-    "自动切换），不保存文字内容；存放在 config/cover_templates/，字体缺失自动回退并提示</p>"
-    "<p>· <b>选择底图</b>：方块平铺缩略图浏览底图文件夹全部图片，按名称筛选，"
-    "指定哪张作为当前底图（蒙版）</p>"
-    "<p>· <b>交互规范</b>：下拉/滑条/数字框不响应滚轮改值（滚轮专用于滚动页面）；"
-    "字体下拉可直接输入字体名回车识别，输入无效字体名自动回退原字体；"
-    "颜色选择为内置主题色板（48 预设色双击直接应用 + 十六进制 / RGB 输入），"
-    "跟随应用明暗主题，不弹系统原生黑窗</p>"
-)
 
 
 # ==================== 数据模型 ====================
@@ -1335,7 +1314,6 @@ class CoverMakerPage(BasePage):
         font.setBold(True)
         title.setFont(font)
         head.addWidget(title)
-        head.addWidget(attach_help_overlay(self, "套版封面制作 · 功能介绍", HELP_HTML))
         head.addStretch(1)
 
         self.random_bg_btn = QPushButton("随机底图")

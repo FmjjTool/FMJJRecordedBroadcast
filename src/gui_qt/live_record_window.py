@@ -1759,25 +1759,7 @@ class LiveRecordWindow(QMainWindow):
                 lambda _c=False, k=key: self.switch_platform(k)))
 
         m = mb.addMenu("帮助(&H)")
-        m.addAction(self._act("使用说明", self._show_help))
         m.addAction(self._act("关于", self._show_about))
-
-    def _show_help(self):
-        QMessageBox.information(
-            self, "使用说明",
-            "1. ＋添加主播：填房间号或直播间链接，可直接添加（识别只是补名称/状态）\n"
-            "2. 打开「是否监控」→ 点「▶ 开启监控录制」，开播即自动录制\n"
-            "3. 「是否录制」控制该主播开播时是否自动录；右键/批量修改可批量设置\n"
-            "4. 录制设置：输出格式（自动＝抖音 TS / B站 FLV）、录制方式（下载流/录制流）、"
-            "分段（按时间/按大小）、录满停止、保存目录、断流重连间隔、标题过滤、弹幕录制、封面保存\n"
-            "5. 独立设置：单个主播的录制内容/清晰度/分段/录满/提醒/备注\n"
-            "6. 推送设置：企业微信/钉钉/飞书/自定义 WebHook，按事件推送\n"
-            "7. 工具 → FLV 修复：修复截断、时间戳错乱、断流拼接处花屏的录制文件\n"
-            "8. 底部按钮切换平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云），"
-            "各平台列表与录制任务互不影响\n"
-            "9. 录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.ts（抖音与新增平台）/ .flv（B站）\n"
-            "10. 快手可游客取流；微博/小红书/网易云会启动无头浏览器嗅探页面直播流，"
-            "已登录的账号会自动带上登录态")
 
     def _show_about(self):
         QMessageBox.information(

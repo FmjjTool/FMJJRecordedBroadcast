@@ -133,7 +133,7 @@ def load_tcdoc_history(doc_key):
 
 
 def load_dashboard_data():
-    """汇总全功能看板数据：平台内容 / 微博超话 / 腾讯文档 / 资源文件 / 追踪账号。"""
+    """汇总全功能看板数据：平台内容 / 微博超话 / 腾讯文档 / 资源文件 / 追踪账号 / 站点访问。"""
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     start = today - timedelta(days=6)
     labels = [(start + timedelta(days=i)).strftime("%m-%d") for i in range(7)]
@@ -151,6 +151,14 @@ def load_dashboard_data():
             "doc_count": 0,
             "tracked_accounts": 0,
             "tracked_total": 0,
+            "site_visitors": 0,
+            "site_sessions": 0,
+            "site_pageviews": 0,
+            "site_online": 0,
+            "site_collected": 0,
+            "site_scope": "",
+            "site_date": "",
+            "site_fetched_at": "",
         },
         "by_source": {},
         "labels": labels,
@@ -288,6 +296,25 @@ def load_dashboard_data():
             except Exception:
                 continue
         data["stats"]["tracked_total"] = data["stats"]["tracked_accounts"]
+
+    # ---- 站点访问（只读最近一次本地快照，不联网、不读密码）----
+    try:
+        from toolbox.webwiki import analytics as wiki_analytics
+        from toolbox.webwiki import config as wiki_cfg
+
+        snap = wiki_analytics.load_latest_ro()
+        data["stats"]["site_scope"] = wiki_analytics.scope_label(
+            (snap or {}).get("scope") or wiki_cfg.analytics_scope())
+        if snap:
+            data["stats"]["site_visitors"] = int(snap.get("visitors") or 0)
+            data["stats"]["site_sessions"] = int(snap.get("sessions") or 0)
+            data["stats"]["site_pageviews"] = int(snap.get("pageviews") or 0)
+            data["stats"]["site_online"] = int(snap.get("online") or 0)
+            data["stats"]["site_collected"] = 1
+            data["stats"]["site_date"] = str(snap.get("stat_date") or "")
+            data["stats"]["site_fetched_at"] = str(snap.get("fetched_at") or "")
+    except Exception:  # noqa: BLE001 - 统计库缺失或损坏不影响看板
+        pass
 
     data["week_total"] = sum(data["counts"])
     data["today_total"] = data["counts"][-1] if data["counts"] else 0

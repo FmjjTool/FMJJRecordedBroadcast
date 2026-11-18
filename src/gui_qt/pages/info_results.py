@@ -25,7 +25,6 @@ from gui_qt.common import _fmt, post_to_main, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
-from gui_qt.toolbox_common import ToolPageHeader
 
 PLATFORMS_3 = [
     ("douyin", "抖音"),
@@ -238,17 +237,12 @@ class InfoResultsPage(BasePage):
         # 旧四列的布局最小宽度不能先夹住 resize，否则无法切换到窄版两列。
         layout.setSizeConstraint(QLayout.SetNoConstraint)
 
-        # 标题与操作分开，短窗口也能完整显示所有控件。
-        head = QHBoxLayout()
-        head.addWidget(ToolPageHeader("已获取", "按平台整理作品与动态，最新发布的内容排在前面。"), 1)
         self.export_status = QLabel("")
         self.export_status.setProperty("role", "caption")
         self.export_status.setWordWrap(True)
         self.export_status.setMaximumWidth(260)
         self.export_status.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.export_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        head.addWidget(self.export_status)
-        layout.addLayout(head)
 
         toolbar = QFrame()
         self._toolbar = toolbar
@@ -340,6 +334,7 @@ class InfoResultsPage(BasePage):
         self.comment_pages_spin.valueChanged.connect(lambda _v: self._save_comment_pages())
         options.addWidget(self.comment_pages_spin)
         options.addStretch(1)
+        options.addWidget(self.export_status)
         tools.addLayout(options)
         layout.addWidget(toolbar)
 

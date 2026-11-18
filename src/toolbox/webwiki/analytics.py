@@ -289,6 +289,99 @@ def save_snapshot(data: dict, scope: str) -> dict:
     }
 
 
+def _db_path_ro() -> Path:
+    """只读定位统计库，不创建目录或空库。"""
+    from toolbox.config_manager import get_export_dir
+
+    return Path(get_export_dir()) / "站点监控数据" / DB_NAME
+
+
+def load_latest_ro(scope: str | None = None) -> dict:
+    """只读最近一次快照（优先当前口径）；不建库、不联网、不读取密码。"""
+    from toolbox.webwiki import config as wiki_cfg
+
+    scope = scope or wiki_cfg.analytics_scope()
+    try:
+        path = _db_path_ro()
+    except Exception:  # noqa: BLE001 - 路径不可用按无数据处理
+        return {}
+    if not path.is_file():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=2)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return {}
+    try:
+        row = conn.execute(
+            "SELECT stat_date, scope, generated_at, visitors, sessions, pageviews,"
+            " online, fetched_at FROM snapshots WHERE scope=?"
+            " ORDER BY stat_date DESC, fetched_at DESC LIMIT 1", (scope,)).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT stat_date, scope, generated_at, visitors, sessions, pageviews,"
+                " online, fetched_at FROM snapshots"
+                " ORDER BY stat_date DESC, fetched_at DESC LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return dict(row) if row else {}
+
+
+def load_history_ro(limit: int = 14, scope: str | None = None) -> list[dict]:
+    """只读历史快照；不建库、不联网、不读取密码。"""
+    try:
+        path = _db_path_ro()
+    except Exception:  # noqa: BLE001 - 路径不可用按无历史处理
+        return []
+    if not path.is_file():
+        return []
+    sql = ("SELECT stat_date, scope, generated_at, visitors, sessions, pageviews,"
+           " online, fetched_at FROM snapshots")
+    params: list = []
+    if scope:
+        sql += " WHERE scope = ?"
+        params.append(scope)
+    sql += " ORDER BY stat_date DESC, fetched_at DESC LIMIT ?"
+    params.append(max(1, int(limit)))
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=2)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return []
+    try:
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def load_fetch_log_ro(limit: int = 50) -> list[dict]:
+    """只读采集历史（每次尝试的成功/失败记录）；不建库、不联网。"""
+    try:
+        path = _db_path_ro()
+    except Exception:  # noqa: BLE001 - 路径不可用按无记录处理
+        return []
+    if not path.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=2)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT at, stat_date, scope, ok, message FROM fetch_log"
+            " ORDER BY id DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
 def load_history(limit: int = 14, scope: str | None = None) -> list[dict]:
     sql = ("SELECT stat_date, scope, generated_at, visitors, sessions, pageviews,"
            " online, fetched_at FROM snapshots")

@@ -92,9 +92,6 @@ class TrackerPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("网媒账号追踪")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        head.addWidget(title)
         head.addStretch(1)
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.reload_accounts)
@@ -147,11 +144,8 @@ class TrackerPage(BasePage):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(6)
-        title = QLabel("追踪账号设置")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
         # 标题行右侧：从「信息获取」一键同步账号（与信息获取页的「同步到追踪」同源逻辑）
         trow = QHBoxLayout()
-        trow.addWidget(title)
         trow.addStretch(1)
         sync_fm_btn = QPushButton("从信息获取同步")
         sync_fm_btn.setToolTip(

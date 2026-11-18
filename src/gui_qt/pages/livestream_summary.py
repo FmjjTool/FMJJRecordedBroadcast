@@ -26,7 +26,7 @@ from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
+from gui_qt.toolbox_common import ToolSectionCard
 from toolbox import livestream_summary_rule as rule
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import local_model, pipeline
@@ -48,11 +48,6 @@ class LivestreamSummaryPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
-
-        root.addWidget(ToolPageHeader(
-            "直播总结",
-            "把直播转录 TXT / SRT 按内置总结规则生成规范文本。"
-            "大模型模式需要接口与 Key；本地规则模式完全离线，只做清洗、纠错与关键词摘录。"))
 
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)

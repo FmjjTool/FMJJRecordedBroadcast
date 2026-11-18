@@ -149,16 +149,18 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 13px | **正文默认** | 全局基线，页面内不要再声明 |
 | 14px | 小标题 | 顶栏页标题、区块标题、行标题、`role="sectionTitle"` |
 | 15px | 卡片标题 | 抽屉标题、资产页 sectionTitle |
-| 18px | 页面标题 | 二级页主标题 |
-| 22px | 大标题 | 资产页 `assetHeading` |
-| 27px | 首屏主标题 / 统计数字 | 首页 hero、`workbenchStatValue` |
+| 18px | 对话框 / 独立窗口标题 | 弹窗、二级窗口；页面顶端不再使用 |
+| 22px | 局部大标题 | 卡片或详情内的强调标题，非页面顶端 |
+| 27px | 统计数字 | `workbenchStatValue` 等数字展示 |
 
 规则：
 
 1. 只从表里取值。16 / 17 / 20 / 23 / 26 / 34 / 36 / 44px 是历史遗留越级值，**新代码一律不得新增**；改到某页时顺手归位。
 2. 同一页面主标题只出现一次，层级靠「标题大一号 + 辅助文字小一号 + 留白」建立，不靠颜色深浅堆叠。
-3. 数字（统计值、计数、时间码）可与界面字体不同族，用 `font-family: "Segoe UI", "Microsoft YaHei"` 让数字等宽易读（首页统计卡已如此）。
-4. `QFont.setPointSize()` 与 QSS px 不等价（96 DPI 下 1pt ≈ 1.333px）。QSS 里用 px，`paintEvent` 自绘里用 pt，两者不要混算出"看起来差不多大"。
+3. **页面顶端不再显示页面标题与说明文字。** 页面身份由顶栏（分组 / 页名）和侧栏导航提供；页面内容从第一块功能卡片或工具栏开始，顶部只保留必要的状态/日期与操作控件：状态/日期可左对齐，操作按钮右对齐；全局操作（如备份）并入标签栏右上角（`QTabWidget.setCornerWidget`）或工具栏右侧，不单独占一整行。
+4. 不得在页面内新增「标题 + 副标题」头部，也不得恢复 `ToolPageHeader` 或等价组件；功能说明统一维护在 [software-feature-guide](../software-feature-guide/SKILL.md)。
+5. 数字（统计值、计数、时间码）可与界面字体不同族，用 `font-family: "Segoe UI", "Microsoft YaHei"` 让数字等宽易读（首页统计卡已如此）。
+6. `QFont.setPointSize()` 与 QSS px 不等价（96 DPI 下 1pt ≈ 1.333px）。QSS 里用 px，`paintEvent` 自绘里用 pt，两者不要混算出"看起来差不多大"。
 
 ### 3.2 现状与收敛
 

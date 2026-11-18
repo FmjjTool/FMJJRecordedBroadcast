@@ -103,9 +103,6 @@ class TasksPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("定时任务管理")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        head.addWidget(title)
         head.addStretch(1)
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.refresh)

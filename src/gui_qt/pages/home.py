@@ -9,14 +9,16 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QPen
+from PySide6.QtCore import QDate, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QLinearGradient,
+                           QPainter, QPalette, QPen)
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-    QLabel, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
@@ -45,6 +47,7 @@ OTHER_COLOR = "#8b93a7"
 # 账号观察抽屉：键集合（网媒 + 音乐）
 ACCOUNT_DRAWER_KEYS = {"tracked_accounts"}
 TCDOC_DRAWER_KEYS = {"tcdoc_rows", "doc_views", "doc_members", "doc_readers"}
+SITE_STAT_KEYS = {"site_visitors", "site_sessions", "site_pageviews", "site_online"}
 # 下钻抽屉表格最多显示的行数，超出后表格内部滚动；高度按实际行数自适应
 DRAWER_MAX_ROWS = 10
 
@@ -422,7 +425,9 @@ class HomePage(BasePage):
         self._tool_grids = []
         self._last_layout = None
         self._drawer_mode = ""
+        self._drawer_key = ""
         self._account_seq = 0
+        self._site_busy = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -436,8 +441,8 @@ class HomePage(BasePage):
         body.setObjectName("workbenchHomeBody")
         scroll.setWidget(body)
         v = QVBoxLayout(body)
-        v.setContentsMargins(26, 22, 26, 28)
-        v.setSpacing(16)
+        v.setContentsMargins(26, 14, 26, 28)
+        v.setSpacing(14)
 
         v.addWidget(self._build_hero())
         v.addLayout(self._build_stats())
@@ -460,33 +465,21 @@ class HomePage(BasePage):
         card = QWidget()
         card.setObjectName("workbenchHero")
         h = QHBoxLayout(card)
-        h.setContentsMargins(0, 0, 0, 4)
+        h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(12)
 
-        left = QVBoxLayout()
-        left.setSpacing(6)
-        title = QLabel("工作台")
-        title.setObjectName("workbenchHeroTitle")
-        left.addWidget(title)
-        sub = QLabel("内容采集、录播处理与资料归档，一处完成。")
-        sub.setObjectName("workbenchHomeMuted")
-        sub.setWordWrap(True)
-        left.addWidget(sub)
-        h.addLayout(left, 1)
-
-        right = QVBoxLayout()
-        right.setSpacing(6)
         self.date_label = QLabel("")
         self.date_label.setObjectName("workbenchHomeMuted")
-        self.date_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        right.addWidget(self.date_label)
+        self.date_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        h.addWidget(self.date_label)
+        h.addStretch(1)
+
         self.refresh_btn = QPushButton("刷新数据")
         self.refresh_btn.setObjectName("workbenchRefresh")
         self.refresh_btn.setIconSize(QSize(15, 15))
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.clicked.connect(self._refresh)
-        right.addWidget(self.refresh_btn, 0, Qt.AlignRight)
-        h.addLayout(right)
+        h.addWidget(self.refresh_btn, 0, Qt.AlignRight)
         return card
 
     def _build_stats(self):
@@ -502,11 +495,17 @@ class HomePage(BasePage):
             ("doc_members", "文档成员数", "腾讯文档监控各文档最新成员数合计"),
             ("doc_readers", "已查看人数", "腾讯文档监控各文档最新已查看人数合计"),
             ("tracked_accounts", "追踪账号", "网媒账号 + 音乐账号追踪的账号数量"),
+            ("site_visitors", "站点访客", "mandisa.wiki 最近一次采集的访客"),
+            ("site_sessions", "站点会话", "mandisa.wiki 最近一次采集的会话"),
+            ("site_pageviews", "站点浏览量", "mandisa.wiki 最近一次采集的浏览量"),
+            ("site_online", "站点在线", "最近一次采集时的在线人数"),
         ]
         for index, (key, caption, tip) in enumerate(cards):
-            clickable = key in ACCOUNT_DRAWER_KEYS or key in TCDOC_DRAWER_KEYS
+            clickable = (key in ACCOUNT_DRAWER_KEYS or key in TCDOC_DRAWER_KEYS
+                         or key in SITE_STAT_KEYS)
             if clickable:
-                tip = f"{tip}\n点击展开详情抽屉"
+                tip = (f"{tip}\n点击展开站点访问历史与采集" if key in SITE_STAT_KEYS
+                       else f"{tip}\n点击展开详情抽屉")
             card = _StatCard(key, tip, clickable=clickable)
             if clickable:
                 card.clicked.connect(self._open_drawer)
@@ -554,8 +553,10 @@ class HomePage(BasePage):
         self.drawer_stack = QStackedWidget()
         self.account_drawer_page = self._build_account_drawer_page()
         self.tcdoc_drawer_page = self._build_tcdoc_drawer_page()
+        self.site_drawer_page = self._build_site_drawer_page()
         self.drawer_stack.addWidget(self.account_drawer_page)
         self.drawer_stack.addWidget(self.tcdoc_drawer_page)
+        self.drawer_stack.addWidget(self.site_drawer_page)
         layout.addWidget(self.drawer_stack, 1)
         return frame
 
@@ -638,31 +639,356 @@ class HomePage(BasePage):
         v.addWidget(self.tcdoc_table)
         return page
 
+    def _build_site_drawer_page(self):
+        from toolbox.webwiki import analytics, config as wiki_cfg
+
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(QLabel("后台密码"))
+        self.site_password_edit = QLineEdit()
+        self.site_password_edit.setEchoMode(QLineEdit.Password)
+        self.site_password_edit.setPlaceholderText(
+            "已保存（输入新密码可替换）" if analytics.has_password()
+            else "后台密码（与 /admin 登录同一个）")
+        self.site_password_edit.setToolTip(
+            "只加密保存在本机 config/webwiki_analytics.json；界面不回显密码。\n"
+            "密码连续错 5 次会锁定 15 分钟。")
+        self.site_password_edit.returnPressed.connect(self._save_site_password)
+        row.addWidget(self.site_password_edit, 1)
+        save_btn = QPushButton("保存密码")
+        save_btn.clicked.connect(self._save_site_password)
+        row.addWidget(save_btn)
+        v.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addWidget(QLabel("口径"))
+        self.site_scope_combo = QComboBox()
+        for key, label in analytics.SCOPES:
+            self.site_scope_combo.addItem(label, key)
+        self.site_scope_combo.setCurrentIndex(
+            max(0, self.site_scope_combo.findData(wiki_cfg.analytics_scope())))
+        self.site_scope_combo.setToolTip(
+            "严格验证：只算通过 Turnstile 核验的访问（默认）\n"
+            "严格验证 + 行为合格：加上有可信交互的候选\n"
+            "全部分类：含待验证与疑似自动化")
+        self.site_scope_combo.currentIndexChanged.connect(self._on_site_scope_changed)
+        row2.addWidget(self.site_scope_combo)
+        self.site_collect_btn = QPushButton("采集今日")
+        self.site_collect_btn.setToolTip("向站点后台查询今日统计并写入本地库（按日期+口径去重）")
+        self.site_collect_btn.clicked.connect(self._collect_site_analytics)
+        row2.addWidget(self.site_collect_btn)
+        admin_btn = QPushButton("打开后台")
+        admin_btn.setToolTip("在浏览器打开 mandisa.wiki/admin")
+        admin_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(analytics.ADMIN_URL)))
+        row2.addWidget(admin_btn)
+        refresh_btn = QPushButton("刷新历史")
+        refresh_btn.clicked.connect(self._refresh_site_drawer)
+        row2.addWidget(refresh_btn)
+        row2.addStretch(1)
+        v.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.setSpacing(6)
+        row3.addWidget(QLabel("补采日期"))
+        self.site_date_edit = QDateEdit(QDate.currentDate().addDays(-1))
+        self.site_date_edit.setCalendarPopup(True)
+        self.site_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.site_date_edit.setMaximumDate(QDate.currentDate())
+        self.site_date_edit.setFixedWidth(120)
+        self.site_date_edit.setToolTip("选择要补采的历史日期（站点只保留近 90 天明细）")
+        row3.addWidget(self.site_date_edit)
+        self.site_date_btn = QPushButton("采集该日")
+        self.site_date_btn.setToolTip("向站点查询所选日期的统计并写入本地库")
+        self.site_date_btn.clicked.connect(self._collect_site_date)
+        row3.addWidget(self.site_date_btn)
+        self.site_backfill_btn = QPushButton("补采最近 7 天")
+        self.site_backfill_btn.setToolTip("从昨天起往前补采 7 天；已有日期会按最新结果覆盖")
+        self.site_backfill_btn.clicked.connect(self._backfill_site_analytics)
+        row3.addWidget(self.site_backfill_btn)
+        row3.addStretch(1)
+        v.addLayout(row3)
+
+        self.site_status = QLabel("")
+        self.site_status.setObjectName("workbenchHomeMuted")
+        self.site_status.setWordWrap(True)
+        v.addWidget(self.site_status)
+
+        self.site_schedule = QLabel("")
+        self.site_schedule.setObjectName("workbenchHomeMuted")
+        self.site_schedule.setWordWrap(True)
+        v.addWidget(self.site_schedule)
+
+        self.site_history_table = QTableWidget(0, 7)
+        self.site_history_table.setHorizontalHeaderLabels(
+            ["日期", "口径", "访客", "会话", "浏览量", "在线", "采集时间"])
+        self.site_history_table.verticalHeader().setVisible(False)
+        self.site_history_table.verticalHeader().setDefaultSectionSize(28)
+        self.site_history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.site_history_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.site_history_table.setAlternatingRowColors(True)
+        self.site_history_table.setWordWrap(False)
+        header = self.site_history_table.horizontalHeader()
+        for index, width in enumerate([95, 120, 80, 80, 90, 70]):
+            header.resizeSection(index, width)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
+        self.site_history_table.setToolTip("本地历史（最多 14 条）：每天一条，按日期+口径去重")
+        v.addWidget(self.site_history_table)
+
+        log_cap = QLabel("采集历史（最近 50 次）")
+        log_cap.setObjectName("workbenchHomeMuted")
+        v.addWidget(log_cap)
+        self.site_log_table = QTableWidget(0, 5)
+        self.site_log_table.setHorizontalHeaderLabels(
+            ["时间", "日期", "口径", "结果", "说明"])
+        self.site_log_table.verticalHeader().setVisible(False)
+        self.site_log_table.verticalHeader().setDefaultSectionSize(26)
+        self.site_log_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.site_log_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.site_log_table.setAlternatingRowColors(True)
+        self.site_log_table.setWordWrap(False)
+        log_header = self.site_log_table.horizontalHeader()
+        for index, width in enumerate([140, 95, 120, 60]):
+            log_header.resizeSection(index, width)
+        log_header.setSectionResizeMode(4, QHeaderView.Stretch)
+        self.site_log_table.setToolTip("每次采集尝试的记录：成功或失败原因（最多 50 条）")
+        v.addWidget(self.site_log_table)
+        return page
+
+    def _save_site_password(self):
+        from toolbox.webwiki import analytics
+
+        text = self.site_password_edit.text().strip()
+        if not text:
+            self.site_status.setText("请输入 mandisa.wiki 后台密码")
+            return
+        try:
+            encrypted = analytics.save_password(text)
+        except OSError as exc:
+            self.site_status.setText(f"密码写入失败：{exc}")
+            return
+        self.site_password_edit.clear()
+        self.site_password_edit.setPlaceholderText("已保存（输入新密码可替换）")
+        self.site_status.setText("后台密码已保存" if encrypted
+                                 else "密码已保存（本机缺少 cryptography，暂为明文）")
+        for button in (self.site_collect_btn, self.site_date_btn,
+                       self.site_backfill_btn):
+            button.setEnabled(not self._site_busy)
+
+    def _on_site_scope_changed(self, _index=None):
+        from toolbox.webwiki import config as wiki_cfg
+
+        wiki_cfg.set_analytics_scope(self.site_scope_combo.currentData() or "human")
+        self._refresh_site_drawer()
+        self._refresh()
+
+    def _ensure_site_password(self) -> bool:
+        from toolbox.webwiki import analytics
+
+        typed = self.site_password_edit.text().strip()
+        if typed:
+            try:
+                analytics.save_password(typed)
+            except OSError as exc:
+                self.site_status.setText(f"密码写入失败：{exc}")
+                return False
+            self.site_password_edit.clear()
+            self.site_password_edit.setPlaceholderText("已保存（输入新密码可替换）")
+        if not analytics.has_password():
+            self.site_status.setText("还缺后台密码：先填写 mandisa.wiki 后台密码并保存")
+            return False
+        return True
+
+    def _site_scope(self) -> str:
+        return self.site_scope_combo.currentData() or "human"
+
+    def _begin_site_task(self, text: str) -> None:
+        self._site_busy = True
+        for button in (self.site_collect_btn, self.site_date_btn,
+                       self.site_backfill_btn):
+            button.setEnabled(False)
+        self.site_status.setText(text)
+
+    def _finish_site_task(self) -> None:
+        self._site_busy = False
+        self._refresh_site_drawer()
+        self._refresh()
+
+    def _collect_site_analytics(self):
+        if self._site_busy:
+            return
+        if not self._ensure_site_password():
+            return
+        self._start_site_collect(None, "今日")
+
+    def _collect_site_date(self):
+        if self._site_busy:
+            return
+        if not self._ensure_site_password():
+            return
+        target = self.site_date_edit.date().toString("yyyy-MM-dd")
+        self._start_site_collect(target, target)
+
+    def _start_site_collect(self, date: str | None, label: str) -> None:
+        from toolbox.webwiki import analytics
+
+        scope = self._site_scope()
+        self._begin_site_task(f"正在采集{label}站点统计…")
+
+        def work():
+            return analytics.collect(scope=scope, date=date)
+
+        def done(row, err):
+            self._finish_site_task()
+            if err:
+                self.site_status.setText(f"采集{label}失败：{err}")
+                return
+            row = row or {}
+            self.site_status.setText(
+                f"采集完成（{label}）：{row.get('stat_date') or ''} · "
+                f"访客 {int(row.get('visitors') or 0):,} · "
+                f"会话 {int(row.get('sessions') or 0):,} · "
+                f"浏览量 {int(row.get('pageviews') or 0):,}")
+
+        run_bg(work, done, owner=self)
+
+    def _backfill_site_analytics(self):
+        if self._site_busy:
+            return
+        if not self._ensure_site_password():
+            return
+        from toolbox.webwiki import analytics
+
+        try:
+            base = datetime.strptime(analytics.today(), "%Y-%m-%d").date()
+        except ValueError:
+            base = datetime.now().date()
+        days = [(base - timedelta(days=offset)).strftime("%Y-%m-%d")
+                for offset in range(1, 8)]
+        scope = self._site_scope()
+        self._begin_site_task(
+            f"正在补采最近 7 天（{days[-1]} ~ {days[0]}）…")
+
+        def work():
+            ok, fail, errors = 0, 0, []
+            for day in days:
+                try:
+                    analytics.collect(scope=scope, date=day)
+                    ok += 1
+                except Exception as exc:  # noqa: BLE001 - 单日失败继续补采
+                    fail += 1
+                    errors.append(f"{day}: {exc}")
+                time.sleep(0.4)
+            return ok, fail, errors
+
+        def done(result, err):
+            self._finish_site_task()
+            if err:
+                self.site_status.setText(f"补采失败：{err}")
+                return
+            ok, fail, errors = result
+            message = f"补采完成：成功 {ok}/7，失败 {fail}"
+            if errors:
+                message += f"；{errors[0]}"
+            self.site_status.setText(message)
+
+        run_bg(work, done, owner=self)
+
+    def _refresh_site_drawer(self):
+        from toolbox.webwiki import analytics
+
+        rows = analytics.load_history_ro(limit=14)
+        self.site_history_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = (
+                str(row.get("stat_date") or ""),
+                analytics.scope_label(row.get("scope")),
+                f"{int(row.get('visitors') or 0):,}",
+                f"{int(row.get('sessions') or 0):,}",
+                f"{int(row.get('pageviews') or 0):,}",
+                f"{int(row.get('online') or 0):,}",
+                str(row.get("fetched_at") or ""),
+            )
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                if 2 <= column <= 5:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.site_history_table.setItem(index, column, item)
+        logs = analytics.load_fetch_log_ro(limit=50)
+        self.site_log_table.setRowCount(len(logs))
+        for index, row in enumerate(logs):
+            values = (
+                str(row.get("at") or ""),
+                str(row.get("stat_date") or ""),
+                analytics.scope_label(row.get("scope")),
+                "成功" if int(row.get("ok") or 0) else "失败",
+                str(row.get("message") or ""),
+            )
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.site_log_table.setItem(index, column, item)
+        try:
+            from toolbox.webwiki import analytics_task
+
+            self.site_schedule.setText(
+                f"定时采集：{analytics_task.next_run_text()}（计划在「任务」页修改）")
+        except Exception:  # noqa: BLE001 - 计划任务查询失败不影响历史展示
+            self.site_schedule.setText("定时采集：状态不可用（计划在「任务」页查看）")
+        self._fit_table_height(self.site_log_table, 6)
+        self._fit_drawer_height()
+        for button in (self.site_collect_btn, self.site_date_btn,
+                       self.site_backfill_btn):
+            button.setEnabled(not self._site_busy)
+        if rows:
+            latest = rows[0]
+            latest_at = str(latest.get("fetched_at") or latest.get("stat_date") or "")
+            self.site_status.setText(
+                f"本地历史 {len(rows)} 条 · 最近采集 {latest_at} · 采集记录 {len(logs)} 条".rstrip())
+        else:
+            self.site_status.setText(
+                "尚无历史数据：保存后台密码后点「采集今日」，或等每日任务运行")
+
     def _open_drawer(self, key):
-        if key in ACCOUNT_DRAWER_KEYS:
+        if key in SITE_STAT_KEYS:
+            mode = "site"
+        elif key in ACCOUNT_DRAWER_KEYS:
             mode = "accounts"
         elif key in TCDOC_DRAWER_KEYS:
             mode = "tcdoc"
         else:
             return
         # 同一张卡片再点一次 = 收起；切换到另一张卡片 = 直接换抽屉内容
-        if self.drawer.isVisible() and self._drawer_mode == mode:
+        if self.drawer.isVisible() and self._drawer_key == key:
             self._close_drawer()
             return
         self._drawer_mode = mode
+        self._drawer_key = key
         if mode == "accounts":
             self.drawer_title.setText("追踪账号")
             self.drawer_sub.setText(
                 "网媒 + 音乐账号 · 勾选观察范围并查看最新数据（再次点卡片收起）")
             self.drawer_stack.setCurrentWidget(self.account_drawer_page)
             self._refresh_account_drawer()
-        else:
+        elif mode == "tcdoc":
             self.drawer_title.setText("腾讯文档 · 成员名单历史")
             self.drawer_sub.setText(
                 "浏览量 / 增量 / 成员数 / 增量 / 已查看人数 / 修订记录次数"
                 "（再次点卡片收起）")
             self.drawer_stack.setCurrentWidget(self.tcdoc_drawer_page)
             self._refreshtcdoc_docs()
+        else:
+            self.drawer_title.setText("站点访问 · mandisa.wiki")
+            self.drawer_sub.setText(
+                "后台密码、采集今日与本地历史（再次点卡片收起）")
+            self.drawer_stack.setCurrentWidget(self.site_drawer_page)
+            self._refresh_site_drawer()
         self.drawer.show()
         self._fit_drawer_height()
         self.scroll.ensureWidgetVisible(self.drawer, 0, 16)
@@ -670,15 +996,29 @@ class HomePage(BasePage):
     def _close_drawer(self):
         self.drawer.hide()
         self._drawer_mode = ""
+        self._drawer_key = ""
+
+    @staticmethod
+    def _fit_table_height(table, max_rows: int = 6) -> None:
+        rows = max(1, min(table.rowCount(), max_rows))
+        row_h = table.verticalHeader().defaultSectionSize()
+        header_h = max(22, table.horizontalHeader().sizeHint().height())
+        table.setFixedHeight(header_h + row_h * rows + 2 * table.frameWidth() + 2)
 
     def _fit_drawer_height(self):
         """按当前页表格的实际行数收紧抽屉高度，避免数据少时留一大片空白。"""
         stack = getattr(self, "drawer_stack", None)
-        if stack is None:
+        if stack is None or getattr(self, "drawer", None) is None:
             return
         page = stack.currentWidget()
-        table = (self.account_table if page is self.account_drawer_page
-                 else self.tcdoc_table)
+        if page is self.account_drawer_page:
+            table = self.account_table
+        elif page is self.tcdoc_drawer_page:
+            table = self.tcdoc_table
+        elif page is self.site_drawer_page:
+            table = self.site_history_table
+        else:
+            return
         rows = max(1, min(table.rowCount(), DRAWER_MAX_ROWS))
         row_h = table.verticalHeader().defaultSectionSize()
         header_h = max(22, table.horizontalHeader().sizeHint().height())
@@ -1032,6 +1372,27 @@ class HomePage(BasePage):
             f"已观察 {int(stats.get('tracked_accounts', 0))} / "
             f"共 {int(stats.get('tracked_total', 0))} 个账号\n点击配置观察账号")
 
+        scope = str(stats.get("site_scope") or "严格验证")
+        if int(stats.get("site_collected", 0)):
+            fetched = str(stats.get("site_fetched_at") or "")
+            stat_date = str(stats.get("site_date") or "")
+            head = f"mandisa.wiki 站点访问 · {scope}"
+            if stat_date:
+                head += f"\n统计日期：{stat_date}"
+            if fetched:
+                head += f"\n采集时间：{fetched}"
+            for key, label in (("site_visitors", "访客"),
+                               ("site_sessions", "会话"),
+                               ("site_pageviews", "浏览量"),
+                               ("site_online", "在线")):
+                self._stat_values[key].setToolTip(
+                    f"{head}\n{label}：{int(stats.get(key, 0)):,}\n点击展开站点访问历史与采集")
+        else:
+            for key in SITE_STAT_KEYS:
+                self._stat_values[key].setText("—")
+                self._stat_values[key].setToolTip(
+                    f"尚无站点访问统计（口径：{scope}）\n点击展开站点访问历史与采集")
+
         self.donut.set_items(_dist_items(by_source))
         self.trend.set_data(labels, counts)
         week_total = int(data.get("week_total") or sum(counts))
@@ -1050,7 +1411,6 @@ class HomePage(BasePage):
         self.setStyleSheet("""
             QWidget#workbenchHomeBody { background: palette(window); }
             QWidget#workbenchHero { background: transparent; }
-            QLabel#workbenchHeroTitle { color: palette(text); background: transparent; font-size: 27px; font-weight: bold; }
             QLabel#workbenchHomeMuted { color: palette(placeholder-text); background: transparent; font-size: 11px; }
             QPushButton#workbenchRefresh {
                 background: palette(base); color: palette(text);

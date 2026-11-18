@@ -41,29 +41,6 @@ class WeiboChaohuaPage(BasePage):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # ---- 标题 ----
-        title = QLabel("微博超话")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        title_row = QHBoxLayout()
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        title_row.addWidget(attach_help_overlay(self, "微博超话 · 功能介绍", (
-            "<p><b>微博超话访客态采集（免登录），支持任意超话 ID。</b></p>"
-            "<p>· <b>解析</b>：输入超话链接（https://weibo.com/p/100808...）"
-            "或 100808 开头的超话 ID → 点「解析超话」</p>"
-            "<p>· <b>频道</b>：从超话头部动态读取 flowId；每个频道可单独勾选并设置最大翻页数</p>"
-            "<p>· <b>采集</b>：游标翻页，跨频道按帖子 ID 去重；页面显示当前页数与累计条数</p>"
-            "<p>· <b>导出</b>：汇总、频道明细、月度趋势、作者榜、设备/地区/星期/时段、全局 TOP50</p>"
-            "<p>· <b>长效分析</b>：每次采集自动写入 config/weibo_chaohua.db"
-            "（帖子按 ID 去重 + 每次互动指标快照），在「历史分析」查看累计、新增与点赞增长</p>"
-            "<p>· <b>保存位置</b>：download/微博超话/&lt;超话名&gt;超话_数据采集_时间戳.xlsx</p>"
-            "<p>· <b>已知边界</b>：阅读量 / 影响力 / 榜单分数网页端不存在；"
-            "帖子数、粉丝数只有「4.8万 / 21万」缩略文案；"
-            "「最新」频道深翻会混入零星老帖，时间趋势建议只取近期连续区间。</p>"
-        )))
-        layout.addLayout(title_row)
-
         # ---- 输入卡片 ----
         top = QFrame()
         top.setProperty("variant", "card")

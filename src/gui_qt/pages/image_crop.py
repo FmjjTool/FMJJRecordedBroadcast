@@ -815,20 +815,6 @@ class ImageCropPage(BasePage):
         title.setFont(f)
         head.addWidget(title)
         head.addStretch(1)
-        from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "图片裁切 · 功能介绍", (
-            "<p><b>四边参考线裁图：拖线定位 + 放大镜 + 自动对齐 + 批量导出。</b></p>"
-            "<p>· <b>导入</b>：按钮选择或直接拖入图片/文件夹（仅本页列表，不改全局工作目录），"
-            "支持 PNG/JPG/JPEG/BMP/WebP/GIF（取首帧）</p>"
-            "<p>· <b>裁切</b>：拖动四条参考线围出保留区域；靠近参考线时光标变 ↕/↔，"
-            "拖动时右侧显示像素放大镜（−/+ 调倍率）</p>"
-            "<p>· <b>精细模式</b>：鼠标移动 20px 参考线才动 1px，适合像素级定位；"
-            "按住 Shift 拖动可临时加速</p>"
-            "<p>· <b>边界吸附</b>：参考线靠近内容颜色边缘时自动对齐（后台分析图像边缘）</p>"
-            "<p>· <b>自动对齐</b>：识别内容边界一键裁掉黑边/留白</p>"
-            "<p>· <b>精确输入</b>：直接输入上/下/左/右像素坐标（或点击尺寸按钮）</p>"
-            "<p>· <b>导出</b>：单张按当前区域导出；批量导出全部图片到 download/图片裁切/，"
-            "文件名加 _cropped 后缀；Ctrl+Z/Ctrl+Y 撤销重做，右键列表项可删除</p>")))
         root.addLayout(head)
 
         bar = QHBoxLayout()

@@ -29,7 +29,6 @@ from gui_qt.common import _collect, _db_insert, icon_button, post_to_main, refre
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
-from gui_qt.toolbox_common import ToolPageHeader
 
 
 def _set_button_variant(button, variant="secondary", compact=False):
@@ -154,26 +153,6 @@ class InfoAccountsPage(BasePage):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        from gui_qt.help_overlay import attach_help_overlay
-        help_btn = attach_help_overlay(self, "信息获取 · 功能介绍", (
-            "<p><b>批量追踪账号主页、一键抓取最新作品/动态，结果自动存入「已获取」。</b></p>"
-            "<p>· <b>批量输入</b>（一行 = 一个条目）：账号主页链接（B站空间/抖音/微博/快手/小红书）"
-            "→ 自动添加为账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」，结果同时进日志</p>"
-            "<p>· <b>获取最新</b>：勾选账号后批量抓取，右下角可暂停 / 取消；"
-            "抓取结果进入「已获取」与增量数据库</p>"
-            "<p>· <b>增量模式</b>：只入库新内容（数据库去重），勾选后写入数据库</p>"
-            "<p>· <b>获取后自动下载</b>：勾选后获取→保存→下载一次性完成；"
-            "下载画质/线程数用「已获取」页的全局设置</p>"
-            "<p>· <b>限流</b>：每平台累计抓到设定条数后冷却（同平台后续账号等冷却结束才发请求，"
-            "抖音账号内部翻页同样停顿），防止请求过频触发风控</p>"
-            "<p>· <b>定时获取</b>：按间隔自动抓取全部账号</p>"
-            "<p>· <b>日期段</b>：日历选择发布时间范围（如 9月1日~9月20日、从头~9月20日），"
-            "获取时只保留范围内的内容，范围持久保存</p>"
-            "<p>· <b>双向同步</b>：本页账号 ⇄「视频账号追踪」互相同步，"
-            "已存在的自动跳过，账号名/分组一并带过去（免重复录入）</p>"
-            "<p>· <b>设置</b>：账号分组管理（组号+组名）、账号编辑（名称/URL/分组/排序）</p>"
-            "<p>· 登录态由软件统一管理，抓取时自动套用</p>"))
-
         # 批量输入：一行一个，账号主页 → 添加账号，其余 → 解析存入「已获取」
         self.batch_text = QTextEdit()
         self.batch_text.setPlaceholderText(
@@ -214,7 +193,6 @@ class InfoAccountsPage(BasePage):
         self.add_gid_entry.setFixedWidth(130)
         self.add_gid_entry.setToolTip("仅对「账号主页」行生效：添加账号时绑定这些分组")
         batch_row.addWidget(self.add_gid_entry)
-        batch_row.addWidget(help_btn)
         layout.addLayout(batch_row)
 
         # 全选/反选/清除
@@ -366,8 +344,6 @@ class InfoAccountsPage(BasePage):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(6)
-
-        outer.addWidget(ToolPageHeader("账号管理设置", "添加账号、整理分组，统一保存分组与采集类型。"))
 
         # 添加账号卡片
         add_card = QFrame()

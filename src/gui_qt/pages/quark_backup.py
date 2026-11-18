@@ -28,7 +28,7 @@ from gui_qt import theme
 from gui_qt.common import icon_button, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolPageHeader, ToolSectionCard
+from gui_qt.toolbox_common import ToolSectionCard
 from toolbox.quark import backup as qbackup
 from toolbox.quark import config as qconfig
 from toolbox.quark import state as qstate
@@ -150,11 +150,6 @@ class QuarkBackupPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
-
-        root.addWidget(ToolPageHeader(
-            "网盘备份",
-            "把本地目录增量备份到夸克网盘 / 百度网盘指定文件夹：只传新增与变化的文件，"
-            "内容一致不覆盖、内容变了替换旧版本。"))
 
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)

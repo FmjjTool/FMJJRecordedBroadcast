@@ -580,57 +580,19 @@ class AssetPage(BasePage):
         self._db_filling = False        # 数据库表填充中（抑制勾选计数刷新）
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(0)
 
-        head = QHBoxLayout()
-        head.setContentsMargins(16, 12, 16, 12)
-        heading = QVBoxLayout()
-        heading.setSpacing(3)
-        heading.addWidget(_asset_label("资产管理", "assetHeading"))
-        heading.addWidget(_asset_label("整理已获取内容、浏览数据库与本地媒体", "assetSubtitle"))
-        head.addLayout(heading)
-        head.addStretch(1)
         backup_btn = QPushButton("备份")
         backup_btn.setToolTip(
             "备份所有资产（已获取数据 / 媒体文件 / 数据库快照）为 zip 包或文件夹，\n"
             "支持导入恢复（文件不覆盖，数据库按去重键合并）")
         backup_btn.clicked.connect(self._show_backup_menu)
-        head.addWidget(backup_btn)
-        from gui_qt.help_overlay import attach_help_overlay
-        head.addWidget(attach_help_overlay(self, "资产管理 · 功能介绍", (
-            "<p><b>已获取内容与本地媒体资产的统一管理中心（三个 Tab）。</b></p>"
-            "<p>· <b>已获取资源</b>：先显示数据库保存的清单，再后台核对文件变化；"
-            "首次使用需要建立索引，点击<b>刷新</b>可立即重新核对。"
-            "支持平台/<b>文件夹</b>筛选、状态筛选（未下载不含「不可下载」纯文本条目/已下载/"
-            "下载不完整）、关键词搜索、时间排序、分页浏览；"
-            "<b>「文件夹」下拉列出 download 下的分类目录</b>（公众号文章/淘宝商品/"
-            "弹幕文件/歌曲文件…），选中后按<b>一次导出的产物聚合成条目</b>（文档数 + 图片数 + "
-            "总大小，同一天的 csv/zip、同篇文章的 md/docx/图片合成一条，双击打开二级目录）；"
-            "<b>单击聚合条目弹出内容详情窗</b>（公众号按篇列出、直接阅读正文与配图）；"
-            "点击行看详情、双击缩略图播放本地视频；<b>右键行</b>可打开本地 MD 数据文件/"
-            "媒体文件（存在哪项才显示哪项）</p>"
-            "<p>· <b>下载</b>：单条 ↻ 重新下载（B站视频/图文、抖音视频、图片、封面兜底），"
-            "勾选后批量下载（已完整的自动跳过，大文件显示字节进度，可取消）</p>"
-            "<p>· <b>删除</b>：可选删除 json/md/xlsx/_raw/媒体文件</p>"
-            "<p>· <b>数据库浏览</b>：直查已获取数据库（筛选/排序/勾选导出，<b>双击行查看内容详情</b>，"
-            "右键打开链接/筛选作者）</p>"
-            "<p>· <b>本地资源</b>：选择文件夹扫描图片/视频/音频（固定<b>逐级读取全部子文件夹</b>），"
-            "结果按文件夹分组，「文件夹」下拉可下钻到任一层；选定的目录会<b>记忆并锁定</b>"
-            "（锁定后路径只读，下次启动自动恢复），可把下钻到的子目录直接锁定为扫描根；"
-            "<b>单击任意资源行弹出预览窗</b>（图片大图 / 视频首帧 + 播放），"
-            "<b>切到本页会自动扫描</b>，不用每次手点；缩略图懒加载预览，支持扫描上限与增量索引</p>"
-            "<p>· <b>备份</b>：右上角「备份」可导出所有资产（zip 包 / 文件夹）或导入恢复</p>"
-            "<p>· 详情窗支持导出紫色渐变预览拼贴图</p>")))
-        help_button = head.itemAt(head.count() - 1).widget()
-        help_button.setText("使用指南")
-        help_button.setProperty("variant", "ghost")
-        help_button.setStyleSheet("")
-        layout.addLayout(head)
 
         # 顺序：已获取资源 | 数据库浏览（中间） | 本地资源
         self.tabs = QTabWidget()
         self.tabs.setObjectName("assetTabs")
+        self.tabs.setCornerWidget(backup_btn, Qt.TopRightCorner)
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_collected_tab(), "已获取资源")
         self.tabs.addTab(self._build_db_tab(), "数据库浏览")
