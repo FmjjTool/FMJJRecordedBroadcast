@@ -21,6 +21,8 @@ pillow-heif>=0.13.0  # 图片筛选页 HEIC/实况图解码
 numpy>=1.24.0  # 图片筛选页边界吸附/自动对齐提速（缺失时纯 Python 回退）
 pywin32>=306; sys_platform == "win32"  # 文件时间页改创建时间（缺失时回退 ctypes）
 send2trash>=1.8.0  # 音频删除走系统回收站（缺失时退化为永久删除）
+python-docx>=1.1.0  # 证书生成器读 docx 协议（缺失时只支持 txt/md/pdf）
+PyMuPDF>=1.24.0  # 证书生成器读 pdf 协议（缺失时提示改用 txt/docx）
 
 # 可选依赖（缺失时引擎自动降级）
 playwright>=1.40.0

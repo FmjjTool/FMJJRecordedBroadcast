@@ -82,3 +82,7 @@ task.md
 # 测试与开发文档不随仓库上传（仅本地保留）
 tests/
 docs/
+
+# Agent 输入附件（截图 / 临时文件，不进仓库）
+.qoder-input-files/
+.qoder-input-images/

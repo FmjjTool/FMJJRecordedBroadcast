@@ -19,7 +19,8 @@ def tool_icon_name(key):
         return "video"
     if key.startswith("music") or key == "toolbox_audio":
         return "music"
-    if key in ("toolbox_subtitle", "tcdoc", "localwiki", "wechat_article", "rename_batch"):
+    if key in ("toolbox_subtitle", "tcdoc", "localwiki", "wechat_article", "rename_batch",
+               "certificate_maker"):
         return "document"
     if key in ("tasks", "toolbox_calendar"):
         return "calendar"
