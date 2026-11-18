@@ -42,6 +42,9 @@ class DanmakuRecorder:
 
     # ---------- 生命周期 ----------
     def start(self):
+        if self.platform not in ("bili", "douyin"):
+            self.on_log("该平台暂不支持弹幕录制（不影响视频）", "info")
+            return False
         try:
             os.makedirs(self.out_dir, exist_ok=True)
             if self.save:

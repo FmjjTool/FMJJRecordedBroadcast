@@ -56,9 +56,16 @@ DOUYIN_QUALITY_LABEL = {"_origin": "原画", "_md": "蓝光", "FULL_HD1": "1080P
 PLATFORMS = {
     "douyin": {"name": "抖音直播", "referer": "https://live.douyin.com/"},
     "bili": {"name": "B站直播", "referer": "https://live.bilibili.com/"},
+    "kuaishou": {"name": "快手直播", "referer": "https://live.kuaishou.com/"},
+    "weibo": {"name": "微博直播", "referer": "https://weibo.com/"},
+    "xiaohongshu": {"name": "小红书直播", "referer": "https://www.xiaohongshu.com/"},
+    "netease": {"name": "网易云直播", "referer": "https://look.163.com/"},
 }
 
-# 输出容器：抖音默认 TS、B站默认 FLV（用户可在「录制设置 → 输出格式」里改）
+# 弹幕接入目前只有 B站 / 抖音有对应 fetcher，其余平台不启动弹幕任务
+DANMAKU_PLATFORMS = ("bili", "douyin")
+
+# 输出容器：抖音与新增平台默认 TS、B站默认 FLV（用户可在「录制设置 → 输出格式」里改）
 OUTPUT_FORMAT_AUTO = "自动（抖音 TS · B站 FLV）"
 OUTPUT_FORMATS = (OUTPUT_FORMAT_AUTO, "TS（MPEG-TS）", "FLV")
 
@@ -69,13 +76,23 @@ def resolve_format(platform, settings=None):
     为什么分平台默认：抖音 CDN 断流频繁、时间戳用的是服务器绝对时钟，FLV
     一旦拼接就会花屏，TS 天然能容忍（每个 PES 自带 PTS，可任意拼接）；B站
     FLV 直连稳定、时间戳从 0 起，写 FLV 可以直接落盘、断点续录代价最小。
+    快手/微博/小红书/网易云以 HLS 为主，只能走 ffmpeg 转封装到 TS。
     """
     v = str((settings or {}).get("output_format") or OUTPUT_FORMAT_AUTO)
     if v.startswith("TS"):
         return "ts"
     if v.startswith("FLV"):
         return "flv"
-    return "ts" if platform == "douyin" else "flv"
+    return "flv" if platform == "bili" else "ts"
+
+
+def supports_danmaku(platform):
+    return platform in DANMAKU_PLATFORMS
+
+
+def supports_flv_download(platform):
+    """下载流（FLV tag 直写）只适用于原生 FLV 平台；HLS 平台必须走 ffmpeg。"""
+    return platform in ("douyin", "bili")
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
@@ -768,7 +785,10 @@ class Anchor:
     def live_url(self):
         if self.platform == "bili":
             return "https://live.bilibili.com/%s" % self.room
-        return "https://live.douyin.com/%s" % self.room
+        if self.platform == "douyin":
+            return "https://live.douyin.com/%s" % self.room
+        from toolbox import live_stream
+        return live_stream.live_url(self.platform, self.room)
 
     def to_dict(self):
         return {k: getattr(self, k) for k in self.FIELDS}
@@ -864,7 +884,10 @@ def fetch_info(platform, room, quality=""):
             if quality and str(quality).isdigit():
                 qn = int(quality)
             return fetch_bili(room, qn)
-        return fetch_douyin(room, quality)
+        if platform == "douyin":
+            return fetch_douyin(room, quality)
+        from toolbox import live_stream
+        return live_stream.fetch(platform, room, quality)
     except Exception as e:  # noqa: BLE001
         return {"live": False, "error": str(e), "stream": "", "title": "",
                 "name": "", "online": "", "cover": "", "qualities": {}}
@@ -877,10 +900,13 @@ def fetch_status(platform, room):
             from toolbox.bili_live import fetch_room_info
             info = fetch_room_info(room)
             field, live_value, online_field = "live_status", 1, "watch_num"
-        else:
+        elif platform == "douyin":
             from toolbox.douyin_live import fetch_room_info
             info = fetch_room_info(room, login=False)
             field, live_value, online_field = "status", 2, "online"
+        else:
+            from toolbox import live_stream
+            return live_stream.fetch_status(platform, room)
         if info.get("error") or field not in info:
             return {"error": info.get("error") or "房间状态缺失"}
         return {"live": int(info[field]) == live_value, "status": info[field],
@@ -1139,7 +1165,8 @@ class RecordManager:
             base = "%s_%s" % (safe_name(a.name or a.room), ts)
             audio_only = int(getattr(a, "content", 0) or 0) == 1
             fmt = resolve_format(a.platform, self.settings)   # 抖音 ts / B站 flv
-            if getattr(a, "_force_flv", False) and not audio_only:
+            if (getattr(a, "_force_flv", False) and not audio_only
+                    and supports_flv_download(a.platform)):
                 fmt = "flv"        # 本场 TS 直录失败过 → 退回 FLV 原样下载
             ext = ".ts" if (audio_only or fmt == "ts") else ".flv"
             path = os.path.join(outdir, base + ext)
@@ -1212,6 +1239,10 @@ class RecordManager:
             pass
 
     def _start_danmaku(self, a, outdir, base):
+        if not supports_danmaku(a.platform):
+            self.emit("「%s」该平台暂不支持弹幕录制（不影响视频）"
+                      % (a.name or a.room), "info")
+            return
         try:
             from toolbox.danmaku_recorder import DanmakuRecorder
             rec = DanmakuRecorder(a.platform, a.room, outdir, base,
@@ -1318,8 +1349,8 @@ class RecordManager:
         # 失败）→ 本场自动降级成 FLV 原样下载，保证不空手
         try:
             out = task.output_of()
-            if (getattr(task, "fmt", "") == "ts" and out and os.path.exists(out)
-                    and os.path.getsize(out) == 0):
+            if (getattr(task, "fmt", "") == "ts" and supports_flv_download(a.platform)
+                    and out and os.path.exists(out) and os.path.getsize(out) == 0):
                 a._force_flv = True
                 self.emit("「%s」TS 直录没有产出，本场改用 FLV 原样下载"
                           % (a.name or a.room), "warn")

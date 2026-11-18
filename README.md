@@ -107,6 +107,7 @@
 |---|---|
 | 📺 抖音弹幕姬 | 抖音直播间实时接入：弹幕/礼物/进场/点赞/关注抓取、模式精简为「仅弹幕 / 回放」、回放包导出/导入/合并、开播监控、打赏榜；视频录制统一由页内「⏺ 录播」窗口承担 |
 | 📺 B站弹幕姬 | B站直播实时接入：弹幕/礼物/SC/舰长等抓取，**纯 HTTP FLV 流式录制（不依赖 ffmpeg）**，可同步录制弹幕为 BililiveRecorder 同款 XML，断流自动重连续录 |
+| ⏺ 直播录制 | 多平台开播监控与自动录制：抖音 / B站 / 快手 / 微博 / 小红书 / 网易云六套列表互相独立；新增平台以无头浏览器嗅探页面直播流，统一由 ffmpeg 转封装为 TS，支持断流重连、分段、封面、WebHook 推送（弹幕录制仍限抖音 / B站） |
 
 ### 8. 🧰 本地工具
 
@@ -265,6 +266,7 @@ PySide6/
 │   │   ├── live_video.py        #   ffmpeg 拉流预览 + FLV 录制
 │   │   ├── bili_live.py         #   B站直播录制（纯 HTTP FLV + WS 弹幕 → XML）
 │   │   ├── douyin_live.py       #   抖音直播抓取（Playwright 签名 + WS protobuf）
+│   │   ├── live_stream.py       #   快手/微博/小红书/网易云直播流解析（HTTP + 浏览器嗅探）
 │   │   ├── increment_db.py      #   增量采集 SQLite 库（分平台分表 + 两层去重）
 │   │   ├── a_bogus.js           #   抖音 a_bogus 签名算法（JS）
 │   │   ├── abogus_cli.js        #   签名 CLI 包装（Python subprocess 调用）

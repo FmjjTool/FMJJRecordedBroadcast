@@ -33,7 +33,8 @@ from PySide6.QtWidgets import (
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
 
-PLATFORM_LABEL = {"douyin": "抖音", "bili": "B站"}
+PLATFORM_LABEL = {"douyin": "抖音", "bili": "B站", "kuaishou": "快手",
+                  "weibo": "微博", "xiaohongshu": "小红书", "netease": "网易云"}
 
 
 class RoomEntry:
@@ -81,6 +82,19 @@ def parse_account_url(url):
     m = re.search(r"douyin\.com/user/([A-Za-z0-9_\-]+)", u)
     if m:
         return "douyin", "", "", m.group(1)
+    m = re.search(r"live\.kuaishou\.com/u/([0-9A-Za-z_\-]+)", u)
+    if m:
+        return "kuaishou", m.group(1), "", ""
+    m = (re.search(r"weibo\.com/l/wblive/p/show/([0-9A-Za-z:_\-]+)", u)
+         or re.search(r"live\.weibo\.com/(?:show|room)\?(?:[^#]*&)?id=([0-9A-Za-z:_\-]+)", u))
+    if m:
+        return "weibo", m.group(1), "", ""
+    m = re.search(r"xiaohongshu\.com/livestream/([0-9A-Za-z_\-]+)", u)
+    if m:
+        return "xiaohongshu", m.group(1), "", ""
+    m = re.search(r"(?:look|music)\.163\.com/live\?(?:[^#]*&)?id=([0-9A-Za-z_\-]+)", u)
+    if m:
+        return "netease", m.group(1), "", ""
     return "", "", "", ""
 
 
@@ -253,8 +267,8 @@ class RoomPickerDialog(QDialog):
         top.addWidget(self.search, 1)
         self.cb_platform = QComboBox()
         self.cb_platform.addItem("全部平台", "")
-        self.cb_platform.addItem("抖音", "douyin")
-        self.cb_platform.addItem("B站", "bili")
+        for key, label in PLATFORM_LABEL.items():
+            self.cb_platform.addItem(label, key)
         if platform:
             i = self.cb_platform.findData(platform)
             if i >= 0:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""直播录制 · 二级界面（抖音 / B站 同源）。
+"""直播录制 · 二级界面（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）。
 
 界面结构对齐参考项目「江湖录播」（D:/PythonApps/Python版全量/ui/main_window.py）：
   菜单栏（文件 / 主播 / 工具 / 设置 / 帮助）
@@ -71,6 +71,10 @@ QUALITY_PRESETS = {
     "bili": [("自动（最高可用）", ""), ("原画", "10000"), ("蓝光", "400"),
              ("超清", "250"), ("高清", "150"), ("流畅", "80"),
              ("4K", "20000"), ("HDR", "25000"), ("杜比", "30000")],
+    "kuaishou": [("自动（最高可用）", "")],
+    "weibo": [("自动（最高可用）", "")],
+    "xiaohongshu": [("自动（最高可用）", "")],
+    "netease": [("自动（最高可用）", "")],
 }
 
 
@@ -87,6 +91,9 @@ def _parse_room(platform, text):
     s = (text or "").strip()
     if not s:
         return ""
+    if platform not in ("douyin", "bili"):
+        from toolbox import live_stream
+        return live_stream.parse_room(platform, s)
     if s.isdigit():
         return s
     if platform == "bili":
@@ -407,7 +414,8 @@ class PlatformPane(QWidget):
         self.win.schedule_save()
 
     def _on_record_state(self, anchor, active):
-        if active and self.manager.settings.get("render_danmaku"):
+        if (active and self.manager.settings.get("render_danmaku")
+                and LR.supports_danmaku(anchor.platform)):
             from gui_qt.danmaku_overlay import DanmakuOverlay
             overlay = self.overlays.get(anchor.key)
             if overlay is None:
@@ -1029,9 +1037,14 @@ class AddAnchorDialog(QDialog):
         lay.addWidget(QLabel("房间号或直播间链接："))
         row = QHBoxLayout()
         self.edit = QLineEdit()
-        self.edit.setPlaceholderText(
-            "如 544820 / https://live.bilibili.com/544820" if platform == "bili"
-            else "如 582775732015 / https://live.douyin.com/582775732015")
+        if platform == "bili":
+            hint = "如 544820 / https://live.bilibili.com/544820"
+        elif platform == "douyin":
+            hint = "如 582775732015 / https://live.douyin.com/582775732015"
+        else:
+            from toolbox import live_stream
+            hint = live_stream.room_hint(platform)
+        self.edit.setPlaceholderText(hint)
         self.edit.returnPressed.connect(self._resolve)
         row.addWidget(self.edit, 1)
         self.btn_pick = QPushButton("已存账号")
@@ -1094,9 +1107,9 @@ class AddAnchorDialog(QDialog):
         if not e:
             return
         if e.platform != self.platform:
-            self.info.setPlainText("该账号属于%s，请切到%s面板添加"
-                                   % ("B站" if e.platform == "bili" else "抖音",
-                                      "B站" if e.platform == "bili" else "抖音"))
+            other = LR.PLATFORMS.get(e.platform, {}).get("name") or e.platform
+            here = LR.PLATFORMS.get(self.platform, {}).get("name") or self.platform
+            self.info.setPlainText("该账号属于%s，请切到%s面板添加" % (other, here))
             return
         self.edit.setText(e.room)
         self._resolve()
@@ -1177,9 +1190,10 @@ class RecordSettingsDialog(QDialog):
         self.cb_fmt.addItems(list(LR.OUTPUT_FORMATS))
         self.cb_fmt.setCurrentText(s.get("output_format") or LR.OUTPUT_FORMAT_AUTO)
         self.cb_fmt.setToolTip(
-            "自动（默认）：抖音写 TS、B站写 FLV\n"
+            "自动（默认）：抖音与快手/微博/小红书/网易云写 TS，B站写 FLV\n"
             "抖音断流多、时间戳是服务器绝对时钟，TS 每个 PES 自带 PTS，\n"
-            "断流拼接也不会花屏；B站 FLV 直连稳定，写 FLV 最省事。")
+            "断流拼接也不会花屏；B站 FLV 直连稳定，写 FLV 最省事。\n"
+            "新增平台以 HLS 为主，需要 ffmpeg 转封装，不能走 FLV 下载流。")
         f1.addRow("输出格式", self.cb_fmt)
 
         self.cb_mode = QComboBox()
@@ -1614,13 +1628,13 @@ class FlvRepairDialog(QDialog):
 # ==================== 主窗口 ====================
 
 class LiveRecordWindow(QMainWindow):
-    """直播录制二级界面：底部切换 抖音 / B站，两套列表互不影响。"""
+    """直播录制二级界面：底部切换六个平台，各平台列表互不影响。"""
 
     def __init__(self, app=None, platform="douyin", room=""):
         super().__init__()
         self.app = app
         self.state = LR.load_state() or {}
-        self.setWindowTitle("直播录制 · 抖音 / B站（同源录制）")
+        self.setWindowTitle("直播录制 · 多平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）")
         size = self.state.get("window") or [1360, 760]
         self.resize(int(size[0]), int(size[1]))
         self.setMinimumSize(1080, 600)
@@ -1628,7 +1642,7 @@ class LiveRecordWindow(QMainWindow):
         self.panes = {}
         self.current = "douyin"
         self.stack = QStackedWidget()
-        for key in ("douyin", "bili"):
+        for key in LR.PLATFORMS:
             pane = PlatformPane(self, key)
             self.panes[key] = pane
             self.stack.addWidget(pane)
@@ -1645,17 +1659,17 @@ class LiveRecordWindow(QMainWindow):
         bh = QHBoxLayout(bottom)
         bh.setContentsMargins(10, 5, 10, 5)
         self.plat_btns = {}
-        for key in ("douyin", "bili"):
+        for key in LR.PLATFORMS:
             b = QPushButton(LR.PLATFORMS[key]["name"])
             b.setCheckable(True)
             b.setStyleSheet(
-                "QPushButton{padding:6px 18px;border-radius:4px;}"
+                "QPushButton{padding:6px 14px;border-radius:4px;}"
                 "QPushButton:checked{background:#1976d2;color:white;font-weight:bold;}")
             b.clicked.connect(lambda _c=False, k=key: self.switch_platform(k))
             self.plat_btns[key] = b
             bh.addWidget(b)
         bh.addStretch(1)
-        self.plat_hint = QLabel("两个平台的列表与录制任务互相独立，切换不会中断录制")
+        self.plat_hint = QLabel("各平台的列表与录制任务互相独立，切换不会中断录制")
         self.plat_hint.setStyleSheet("color:#777;font-size:11px;")
         bh.addWidget(self.plat_hint)
         v.addWidget(bottom)
@@ -1739,8 +1753,10 @@ class LiveRecordWindow(QMainWindow):
         m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
         m.addAction(self._act("推送设置…", lambda: self.pane.on_push_settings()))
         m.addSeparator()
-        m.addAction(self._act("切换平台：抖音直播", lambda: self.switch_platform("douyin")))
-        m.addAction(self._act("切换平台：B站直播", lambda: self.switch_platform("bili")))
+        for key in LR.PLATFORMS:
+            m.addAction(self._act(
+                "切换平台：%s" % LR.PLATFORMS[key]["name"],
+                lambda _c=False, k=key: self.switch_platform(k)))
 
         m = mb.addMenu("帮助(&H)")
         m.addAction(self._act("使用说明", self._show_help))
@@ -1757,16 +1773,21 @@ class LiveRecordWindow(QMainWindow):
             "5. 独立设置：单个主播的录制内容/清晰度/分段/录满/提醒/备注\n"
             "6. 推送设置：企业微信/钉钉/飞书/自定义 WebHook，按事件推送\n"
             "7. 工具 → FLV 修复：修复截断、时间戳错乱、断流拼接处花屏的录制文件\n"
-            "8. 底部按钮切换抖音 / B站，两套列表与录制任务互不影响\n"
-            "9. 录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.ts（抖音）/ .flv（B站）")
+            "8. 底部按钮切换平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云），"
+            "各平台列表与录制任务互不影响\n"
+            "9. 录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.ts（抖音与新增平台）/ .flv（B站）\n"
+            "10. 快手可游客取流；微博/小红书/网易云会启动无头浏览器嗅探页面直播流，"
+            "已登录的账号会自动带上登录态")
 
     def _show_about(self):
         QMessageBox.information(
             self, "关于",
-            "直播录制 · 抖音 / B站 同源\n\n"
+            "直播录制 · 多平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）\n\n"
             "界面与交互参考：江湖录播（DY直播数据分析）\n"
             "录制特性参考：BililiveRecorder 2.20.0\n"
-            "（断线续传 / 分段 / 断流重连 / 弹幕录制 / 封面 / 标题过滤 / FLV 修复）")
+            "（断线续传 / 分段 / 断流重连 / 弹幕录制 / 封面 / 标题过滤 / FLV 修复）\n"
+            "快手 / 微博 / 小红书 / 网易云取流来自页面自身接口，"
+            "视频统一由 ffmpeg 转封装为 TS")
 
     # ---------- 平台切换 ----------
     def switch_platform(self, key):
@@ -1789,8 +1810,8 @@ class LiveRecordWindow(QMainWindow):
         if len(panes) < 2:
             return
         parts = []
-        for key in ("douyin", "bili"):
-            m = self.panes[key].manager
+        for key, pane in self.panes.items():
+            m = pane.manager
             parts.append("%s %d 个（录 %d）" % (
                 LR.PLATFORMS[key]["name"], len(m.anchors), m.active_count()))
         cur = self.pane.manager
