@@ -35,6 +35,11 @@ _WIDTHS = {
     "作品标题": 240, "发布距今": 90, "作品内容": 240, "发布账号": 110,
     "封面图": 80, "动态类型": 90, "发布时间": 140, "发布平台": 90,
     "发布位置": 80, "作品时长": 90, "作品链接": 220, "动态链接(b站)": 220,
+    "歌曲名称": 240, "演唱者": 110, "完整歌词": 240, "歌曲时长": 90,
+    "作词人": 130, "作曲人": 130, "出品方": 130, "首发日期": 110,
+    "语言": 110, "合唱形式": 90, "所属专辑": 160,
+    "QQ音乐": 200, "网易云音乐": 200, "酷狗音乐": 200, "酷我音乐": 200,
+    "5sing": 180, "汽水音乐": 200,
     "图片": 90,
 }
 
@@ -45,27 +50,33 @@ class _PendingModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.rows = []
+        self.columns = list(_DISPLAY_COLUMNS)
 
     def replace(self, rows):
         self.beginResetModel()
         self.rows = rows
         self.endResetModel()
 
+    def set_columns(self, columns):
+        self.beginResetModel()
+        self.columns = list(columns)
+        self.endResetModel()
+
     def rowCount(self, parent=None):
         return 0 if parent is not None and parent.isValid() else len(self.rows)
 
     def columnCount(self, parent=None):
-        return 0 if parent is not None and parent.isValid() else len(_DISPLAY_COLUMNS)
+        return 0 if parent is not None and parent.isValid() else len(self.columns)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
-            return _DISPLAY_COLUMNS[section]
+            return self.columns[section]
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
             return None
         row = self.rows[index.row()]
-        column = _DISPLAY_COLUMNS[index.column()]
+        column = self.columns[index.column()]
         if column == "图片":
             images = row.get("_images") or []
             if role == Qt.DisplayRole:
@@ -78,7 +89,7 @@ class _PendingModel(QAbstractTableModel):
 class _UploadDialog(QDialog):
     """上传前的人工确认清单：默认全选，可逐行取消（复选框冗余保护）。"""
 
-    def __init__(self, records, parent=None):
+    def __init__(self, records, parent=None, profile="posts"):
         super().__init__(parent)
         self._records = list(records)
         self.setWindowTitle("上传到腾讯文档")
@@ -87,15 +98,20 @@ class _UploadDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 10)
         layout.setSpacing(8)
 
-        tip = QLabel("默认全选；取消勾选可跳过某些行。上传会新增记录并把本地图片一起传到腾讯文档，"
-                     "链接已存在的记录会自动跳过，不会修改或删除表内已有行。")
+        if profile == "songs":
+            note = ("默认全选；取消勾选可跳过某些歌曲。上传会新增歌曲记录并上传封面图，"
+                    "同名歌曲会自动跳过，不会修改或删除表内已有行。")
+        else:
+            note = ("默认全选；取消勾选可跳过某些行。上传会新增记录并把本地图片一起传到腾讯文档，"
+                    "链接已存在的记录会自动跳过，不会修改或删除表内已有行。")
+        tip = QLabel(note)
         tip.setWordWrap(True)
         tip.setStyleSheet("color: #888;")
         layout.addWidget(tip)
 
         self.table = QTableWidget(0, 6, self)
         self.table.setHorizontalHeaderLabels(
-            ["上传", "作品标题", "发布账号", "发布平台", "发布时间", "图片"])
+            ["上传", "标题", "账号", "平台", "时间", "图片"])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -152,8 +168,11 @@ class _UploadDialog(QDialog):
             note += f"（缺 {len(record['missing_slots'])}）"
         if blocked:
             note += " · 不可上传"
-        texts = [str(columns.get("作品标题") or ""), str(columns.get("发布账号") or ""),
-                 str(columns.get("发布平台") or ""), str(columns.get("发布时间") or ""), note]
+        texts = [str(record.get("title") or columns.get("作品标题") or columns.get("歌曲名称") or ""),
+                 str(record.get("account") or columns.get("发布账号") or columns.get("演唱者") or ""),
+                 str(record.get("platform") or columns.get("发布平台") or ""),
+                 str(record.get("time") or columns.get("发布时间") or columns.get("首发日期") or ""),
+                 note]
         for index, text in enumerate(texts, start=1):
             item = QTableWidgetItem(text.replace("\n", " ")[:160])
             item.setToolTip(text[:1500])
@@ -227,6 +246,8 @@ class TcDocBridgePanel(QWidget):
         self._compare_owner = 0
         self._compare_pending = False
         self._saved_accounts = []
+        self._songs_mode = False
+        self._posts_days_index = None
 
         self._acc_timer = QTimer(self)
         self._acc_timer.setSingleShot(True)
@@ -282,8 +303,8 @@ class TcDocBridgePanel(QWidget):
 
         self.upload_btn = QPushButton("上传到腾讯文档")
         self.upload_btn.setToolTip(
-            "把清单中勾选的记录连同本地图片上传到腾讯文档（仅官方动态 / 直播记录，"
-            "需在弹窗里确认勾选；已有链接的记录自动跳过）")
+            "把清单中勾选的记录连同本地图片上传到腾讯文档（官方动态 / 直播记录可新增，"
+            "完整歌曲仅新增、不改不删；需在弹窗里确认勾选，已存在的自动跳过）")
         self.upload_btn.setEnabled(False)
         self.upload_btn.clicked.connect(self._open_upload)
         top.addWidget(self.upload_btn)
@@ -377,12 +398,17 @@ class TcDocBridgePanel(QWidget):
         """页签模式下跟随腾讯文档页当前选中的文档。"""
         if not doc_key:
             return
-        for index in range(self.target_combo.count()):
-            data = self.target_combo.itemData(index)
-            if data and data.get("doc_key") == doc_key:
-                if index != self.target_combo.currentIndex():
-                    self.target_combo.setCurrentIndex(index)
-                return
+        current = self.target_combo.currentData()
+        if current and current.get("doc_key") == doc_key:
+            return
+        indexes = [index for index in range(self.target_combo.count())
+                   if (self.target_combo.itemData(index) or {}).get("doc_key") == doc_key]
+        if indexes:
+            index = next((i for i in indexes
+                          if (self.target_combo.itemData(i) or {}).get("profile") == "posts"),
+                         indexes[0])
+            self.target_combo.setCurrentIndex(index)
+            return
         self.refresh(reload_targets=True, prefer_doc_key=doc_key)
 
     def refresh(self, reload_targets: bool = False, prefer_doc_key: str = "") -> None:
@@ -477,7 +503,8 @@ class TcDocBridgePanel(QWidget):
             index = next((i for i, target in enumerate(self._targets)
                           if target["doc_key"] == prefer_doc_key), 0)
         if index < 0:
-            index = 0
+            index = next((i for i, target in enumerate(self._targets)
+                          if target.get("profile") == "posts"), 0)
         self.target_combo.setCurrentIndex(index)
         self.target_combo.blockSignals(False)
 
@@ -505,6 +532,21 @@ class TcDocBridgePanel(QWidget):
         if target:
             self._save_cfg(tcdoc_bridge_doc_key=target["doc_key"],
                            tcdoc_bridge_tab_id=target["tab_id"])
+        songs = str((target or {}).get("profile") or "") == "songs"
+        if songs and not self._songs_mode:
+            self._posts_days_index = self.days_combo.currentIndex()
+        if songs:
+            index = self.days_combo.findData(0)
+            self.days_combo.blockSignals(True)
+            self.days_combo.setCurrentIndex(index if index >= 0 else len(_DAYS) - 1)
+            self.days_combo.blockSignals(False)
+        elif self._songs_mode and self._posts_days_index is not None:
+            self.days_combo.blockSignals(True)
+            self.days_combo.setCurrentIndex(self._posts_days_index)
+            self.days_combo.blockSignals(False)
+        self._songs_mode = songs
+        self.days_combo.setEnabled(not songs)
+        self.account_btn.setEnabled(not songs)
         self._run_compare()
 
     def _on_days_changed(self, *_args) -> None:
@@ -588,7 +630,8 @@ class TcDocBridgePanel(QWidget):
         if not self._upload_target_ok():
             QMessageBox.warning(
                 self, "范围限制",
-                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」或「直播记录」。")
+                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」，"
+                "或「完整歌曲」（完整歌曲仅新增，不改不删）。")
             return
         rows = list((self._result or {}).get("rows") or [])
         if not rows:
@@ -602,6 +645,7 @@ class TcDocBridgePanel(QWidget):
 
         days = int(self.days_combo.currentData() or 0)
         collected = list(common.COLLECTED)
+        profile = str(target.get("profile") or "posts")
         self._busy = True
         self._compare_owner = 0
         self.upload_btn.setEnabled(False)
@@ -612,13 +656,16 @@ class TcDocBridgePanel(QWidget):
             from toolbox.tcdoc import import_pending as pending
             from toolbox.tcdoc.import_local import LocalImage, LocalImportClient, ManagedAuth
             import auth as auth_module
-            sources = bridge.collect_local_items(days, collected)
-            catalogue = pending.build_catalogue(pending.ROOT, sources)
-            records, _missing = pending.records_from_rows(pending.ROOT, rows, catalogue)
-            media = pending.ROOT / "download/已获取数据"
-            for record in records:
-                record["_images"] = [LocalImage.inspect(pending.ROOT / p, media)
-                                     for p in record["images"]]
+            if profile == "songs":
+                records = pending.song_records_from_rows(pending.ROOT, rows)
+            else:
+                sources = bridge.collect_local_items(days, collected)
+                catalogue = pending.build_catalogue(pending.ROOT, sources)
+                records, _missing = pending.records_from_rows(pending.ROOT, rows, catalogue)
+                media = pending.ROOT / "download/已获取数据"
+                for record in records:
+                    record["_images"] = [LocalImage.inspect(pending.ROOT / p, media)
+                                         for p in record["images"]]
             # 预检：字段/选项不满足的行标成不可上传，避免上传到一半才中断
             client = LocalImportClient(
                 ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
@@ -627,7 +674,10 @@ class TcDocBridgePanel(QWidget):
             fields = client.get_fields()
             for record in records:
                 try:
-                    pending.make_plan(record, fields, available_only=False)
+                    if profile == "songs":
+                        pending.make_song_plan(record, fields)
+                    else:
+                        pending.make_plan(record, fields, available_only=False)
                 except pending.ImportErrorDetail as exc:
                     record["blocked"] = str(exc)
             return records
@@ -643,7 +693,7 @@ class TcDocBridgePanel(QWidget):
                 QMessageBox.warning(self, "准备失败", str(err))
                 self._maybe_run_pending_compare()
                 return
-            dialog = _UploadDialog(result, self)
+            dialog = _UploadDialog(result, self, profile=profile)
             if dialog.exec() != QDialog.Accepted:
                 self.status.setText("已取消上传。")
                 self._maybe_run_pending_compare()
@@ -704,7 +754,8 @@ class TcDocBridgePanel(QWidget):
                 str(target["doc_key"]), str(target["tab_id"]))
             client.connect()
             return pending.run(client, records, apply=True, available_only=False,
-                               verify_each=False, emit=emit)
+                               verify_each=False, emit=emit,
+                               profile=str(target.get("profile") or "posts"))
 
         def done(receipt, err):
             self._uploading = False
@@ -938,24 +989,35 @@ class TcDocBridgePanel(QWidget):
                 self.summary.setText(f"比对失败：{err}")
             return
         self._result = result
-        self._fill_table(result["rows"])
+        self._fill_table(result["rows"], result.get("columns"))
         stats = result["stats"]
         timing = stats.get("timing") or {}
+        profile = str(result.get("profile") or "posts")
         logger.info(
-            "中间层比对完成：用时=%.2fs remote=%.2fs local=%.2fs match=%.2fs "
-            "本地=%s 待同步=%s", float(timing.get("total") or 0),
+            "中间层比对完成：profile=%s 用时=%.2fs remote=%.2fs local=%.2fs match=%.2fs "
+            "本地=%s 待同步=%s", profile, float(timing.get("total") or 0),
             float(timing.get("remote") or 0), float(timing.get("local") or 0),
             float(timing.get("match") or 0), stats.get("local_items"),
             stats.get("pending"))
-        scope = stats["since"] or "全部历史"
         image_note = ""
         if stats["pending"]:
-            image_note = (f"（有图片 {stats['with_images']} 行 / "
-                          f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
-        self.summary.setText(
-            f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
-            f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}"
-            f"；用时 {float(timing.get('total') or 0):.2f} 秒")
+            if profile == "songs":
+                image_note = (f"（有封面 {stats['with_images']} 首 / "
+                              f"{stats['image_count']} 张，无封面 {stats['without_images']} 首）")
+            else:
+                image_note = (f"（有图片 {stats['with_images']} 行 / "
+                              f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
+        if profile == "songs":
+            self.summary.setText(
+                f"本地音乐信息导出 {stats['local_items']} 首 → 去重 {stats['local_groups']} 首；"
+                f"已同步 {stats['synced_groups']} 首，待同步 {stats['pending']} 首{image_note}"
+                f"；用时 {float(timing.get('total') or 0):.2f} 秒")
+        else:
+            scope = stats["since"] or "全部历史"
+            self.summary.setText(
+                f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
+                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}"
+                f"；用时 {float(timing.get('total') or 0):.2f} 秒")
         if timing:
             self.status.setToolTip(
                 f"读取腾讯存档 {timing.get('remote', 0):.2f}s · "
@@ -966,12 +1028,19 @@ class TcDocBridgePanel(QWidget):
         self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
         self._refresh_accounts(result, used_accounts)
         if result["rows"]:
-            self.status.setText(
-                f"共 {len(result['rows'])} 行待同步（不含表头；"
-                "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
-                "图片可点「复制全部图片」。")
+            if profile == "songs":
+                self.status.setText(
+                    f"共 {len(result['rows'])} 首待同步歌曲（按歌曲名称比对，不含表头）；"
+                    "上传只新增、不改不删；选中行可复制，图片可点「复制全部图片」。")
+            else:
+                self.status.setText(
+                    f"共 {len(result['rows'])} 行待同步（不含表头；"
+                    "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
+                    "图片可点「复制全部图片」。")
         else:
             self.status.setText(
+                "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
+                if profile == "songs" else
                 "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
 
     # ==================== 看门狗 ====================
@@ -1026,7 +1095,13 @@ class TcDocBridgePanel(QWidget):
         if (previous or saved) and selected != used_accounts:
             self._acc_timer.start()
 
-    def _fill_table(self, rows: list[dict]) -> None:
+    def _fill_table(self, rows: list[dict], columns=None) -> None:
+        if columns:
+            display = list(columns) + ["图片"]
+            if display != self._model.columns:
+                self._model.set_columns(display)
+                for index, name in enumerate(display):
+                    self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
         self._rows = list(rows)
         self._model.replace(self._rows)
         self._update_copy_row_btn()
@@ -1213,7 +1288,8 @@ class TcDocBridgePanel(QWidget):
     def _copy_rows(self, rows: list[dict], label: str) -> None:
         if not rows:
             return
-        QApplication.clipboard().setText(bridge.to_tsv(rows))
+        columns = (self._result or {}).get("columns") or bridge.COLUMNS
+        QApplication.clipboard().setText(bridge.to_tsv(rows, columns))
         self.status.setText(f"已复制{label}（不含表头），去腾讯文档粘贴即可。")
         if self.app is not None:
             try:
@@ -1242,15 +1318,22 @@ class TcDocBridgePanel(QWidget):
             return
         self.table.selectRow(row_index)
         row = self._rows[row_index]
-        page = str(row.get("作品链接") or "").strip()
-        dyn = str(row.get("动态链接(b站)") or "").strip()
+        profile = str((self._result or {}).get("profile") or "posts")
+        if profile == "songs":
+            links = [str(row.get(column) or "").strip()
+                     for column in (self._result or {}).get("link_columns") or []]
+            page = next((link for link in links if link), "")
+            dyn = ""
+        else:
+            page = str(row.get("作品链接") or "").strip()
+            dyn = str(row.get("动态链接(b站)") or "").strip()
 
         menu = QMenu(self.table)
         act_row = menu.addAction("复制该行（TSV）")
         images = row.get("_images") or []
         act_images = menu.addAction("复制该行图片")
         act_images.setEnabled(bool(images))
-        act_page = menu.addAction("复制作品链接")
+        act_page = menu.addAction("复制歌曲链接" if profile == "songs" else "复制作品链接")
         act_page.setEnabled(bool(page or dyn))
         act_dyn = None
         if dyn:

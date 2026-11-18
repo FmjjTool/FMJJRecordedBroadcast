@@ -24,11 +24,11 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from toolbox import increment_db
-from toolbox.tcdoc import bridge
+from toolbox.tcdoc import bridge, config as tc_cfg
 from toolbox.tcdoc.import_local import (
-    ALIASES, BEIJING, CHOICE_COLUMNS, ImportErrorDetail, LocalImage, LocalImportClient,
-    ManagedAuth, TEST_TARGET, UnknownWriteResult, field_options, install_readonly_guard,
-    managed_cookie_reader, validate_target, weibo_key,
+    ALIASES, BEIJING, CHOICE_COLUMNS, MAX_IMAGE_BYTES, ImportErrorDetail, LocalImage,
+    LocalImportClient, ManagedAuth, TEST_TARGET, UnknownWriteResult, field_options,
+    image_mime, install_readonly_guard, managed_cookie_reader, validate_target, weibo_key,
 )
 from toolbox.utils import PLATFORM_CN, sanitize_filename
 
@@ -194,6 +194,184 @@ def records_from_rows(project: Path, rows: list[dict], catalogue: dict):
         records.append({"key": key, "columns": columns, "images": paths,
                         "expected_images": len(row.get("_images") or []), "missing_slots": gaps})
     return records, missing
+
+
+# ==================== 完整歌曲：封面下载 + 记录 ====================
+
+_MIME_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+             "image/bmp": ".bmp", "image/webp": ".webp"}
+_COVER_REFERERS = (("gtimg.cn", "https://y.qq.com/"), ("music.126.net", "https://music.163.com/"),
+                   ("kugou.com", "https://www.kugou.com/"), ("kuwo.cn", "https://www.kuwo.cn/"),
+                   ("sinaimg.cn", "https://weibo.com/"))
+
+
+def _cover_referer(url: str) -> str:
+    host = urlsplit(url).hostname or ""
+    for key, referer in _COVER_REFERERS:
+        if host.endswith(key):
+            return referer
+    return "https://y.qq.com/"
+
+
+def _cover_path(url: str, cache: Path) -> Path | None:
+    for ext in _MIME_EXT.values():
+        path = cache / (hashlib.sha1(url.encode("utf-8")).hexdigest()[:20] + ext)
+        if path.is_file():
+            return path
+    return None
+
+
+def _fetch_cover(url: str, cache: Path) -> Path | None:
+    """下载完整歌曲封面到缓存目录；失败返回 None，不输出 URL。"""
+    if not url.startswith(("https://", "http://")):
+        return None
+    cached = _cover_path(url, cache)
+    if cached:
+        return cached
+    try:
+        import httpx
+
+        cache.mkdir(parents=True, exist_ok=True)
+        response = httpx.get(url, timeout=20, follow_redirects=True,
+                             headers={"User-Agent": "Mozilla/5.0",
+                                      "Referer": _cover_referer(url)})
+        response.raise_for_status()
+        content = response.content
+        if not content or len(content) > MAX_IMAGE_BYTES:
+            return None
+        ext = _MIME_EXT[image_mime(content)]
+        path = cache / (hashlib.sha1(url.encode("utf-8")).hexdigest()[:20] + ext)
+        path.write_bytes(content)
+        return path
+    except Exception:  # noqa: BLE001 - 单张封面失败按缺图处理
+        return None
+
+
+def song_records_from_rows(project: Path, rows: list[dict]) -> list[dict]:
+    """完整歌曲待同步行 → 可导入记录（封面下载到本地缓存）。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    project = Path(project).resolve()
+    cache = tc_cfg.data_dir() / "中间层" / "封面缓存"
+
+    def fetch(row):
+        url = str(row.get("_cover_url") or "").strip()
+        return _fetch_cover(url, cache) if url else None
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        covers = list(pool.map(fetch, rows))
+    records = []
+    for row, cover in zip(rows, covers):
+        columns = {name: str(row.get(name) or "") for name in bridge.SONG_COLUMNS}
+        key = "song:" + bridge._song_title_key(columns["歌曲名称"])
+        if key == "song:":
+            raise ImportErrorDetail("待同步歌曲缺少歌曲名称")
+        expected = 1 if str(row.get("_cover_url") or "").strip() else 0
+        images, gaps = [], []
+        if cover is not None:
+            try:
+                image = LocalImage.inspect(cover, cache)
+            except ImportErrorDetail:
+                image = None
+            if image is not None:
+                images.append(image)
+            else:
+                gaps.append(1)
+        elif expected:
+            gaps.append(1)
+        records.append({
+            "key": key,
+            "title": columns["歌曲名称"],
+            "account": columns["演唱者"],
+            "platform": "多平台",
+            "time": columns["首发日期"],
+            "columns": columns,
+            "images": [str(image.path) for image in images],
+            "expected_images": expected,
+            "missing_slots": gaps,
+            "_images": images,
+        })
+    return records
+
+
+SONG_TEXT_FIELDS = ("歌曲名称", "演唱者", "完整歌词", "歌曲时长",
+                    "作词人", "作曲人", "出品方", "所属专辑")
+SONG_CHOICE_FIELDS = ("语言", "合唱形式")
+SONG_DATE_FIELDS = ("首发日期",)
+
+
+def make_song_plan(record: dict, fields: list[dict]):
+    """完整歌曲字段计划：只写明确支持的文本/日期/单选/链接/封面字段。"""
+    columns = record["columns"]
+    by_title: dict[str, list[dict]] = {}
+    for field in fields:
+        by_title.setdefault(str(field.get("fieldTitle") or ""), []).append(field)
+
+    def unique(name: str) -> dict:
+        hits = by_title.get(name) or []
+        if len(hits) != 1:
+            raise ImportErrorDetail(f"字段无法唯一匹配：{name}")
+        return hits[0]
+
+    values, kinds, skipped = {}, {}, {}
+    names = SONG_TEXT_FIELDS + SONG_CHOICE_FIELDS + SONG_DATE_FIELDS + bridge.SONG_LINK_COLUMNS
+    for name in names:
+        value = str(columns.get(name) or "").strip()
+        if not value:
+            continue
+        field = unique(name)
+        kind = field.get("fieldType")
+        if name in SONG_TEXT_FIELDS and kind == 1:
+            encoded = [{"type": "text", "text": value}]
+        elif name in SONG_DATE_FIELDS and kind == 4:
+            try:
+                date = datetime.fromisoformat(value)
+            except ValueError:
+                raise ImportErrorDetail(f"{name}无法识别") from None
+            date = date.replace(tzinfo=BEIJING) if date.tzinfo is None else date.astimezone(BEIJING)
+            encoded = str(int(date.timestamp() * 1000))
+        elif name in SONG_CHOICE_FIELDS and kind in {9, 17}:
+            options = [o for o in field_options(field) if o.get("text") == value and o.get("id")]
+            if len(options) != 1:
+                skipped[name] = "没有匹配的既有选项"
+                continue
+            encoded = [options[0]]
+        elif name in bridge.SONG_LINK_COLUMNS and kind == 8:
+            parts = urlsplit(value)
+            if parts.scheme not in {"http", "https"} or not parts.hostname:
+                skipped[name] = "链接无法识别"
+                continue
+            encoded = [{"type": "url", "text": value, "link": value}]
+        else:
+            skipped[name] = "字段类型不匹配"
+            continue
+        values[field["fieldTitle"]] = encoded
+        kinds[field["fieldTitle"]] = kind
+
+    if record.get("_images"):
+        field = unique("封面图")
+        if field.get("fieldType") != 5:
+            raise ImportErrorDetail("封面图字段不是图片类型")
+        kinds[field["fieldTitle"]] = field["fieldType"]
+
+    if "歌曲名称" not in values:
+        raise ImportErrorDetail("必需字段无法写入：歌曲名称")
+    return values, kinds, skipped
+
+
+def song_remote_keys(rows: list[dict]) -> dict[str, list]:
+    """远端完整歌曲按歌曲名建立身份键，用于跳过已存在歌曲。"""
+    keys: dict[str, list] = {}
+    for row in rows:
+        values = row.get("values") or {}
+        key = bridge._song_title_key(bridge._song_cell_text(values.get("歌曲名称")))
+        if key:
+            keys.setdefault(key, []).append(row.get("recordID"))
+    return keys
+
+
+def count_song_title_keys(rows: list[dict]) -> dict[str, int]:
+    return {key: len(ids) for key, ids in song_remote_keys(rows).items()}
 
 
 def make_manifest(project=ROOT, days=30):
@@ -424,21 +602,31 @@ def fill_choices(client, records, *, apply=False, emit=lambda event: None):
     return result
 
 
+def _record_title(record: dict) -> str:
+    return str(record.get("title") or record["columns"].get("歌曲名称")
+               or record["columns"].get("作品标题") or "")
+
+
 def run(client, records, *, apply=False, available_only=False, verify_each=True,
-        emit=lambda event: None):
+        emit=lambda event: None, profile="posts"):
     """预览并导入记录。
 
     verify_each=True（命令行默认）逐条新增后立刻读回，异常即停；
     界面批量上传传 False：整批新增完只读回一次，避免每条都翻完整张表。
+    profile="songs" 仅用于完整歌曲：按歌曲名去重，只新增。
     """
     if available_only and (client.doc_key, client.tab_id) != TEST_TARGET:
         raise ImportErrorDetail("只写可用字段的例外仅允许本次授权测试目标")
     fields = client.get_fields()
-    plans = [(record, *make_plan(record, fields, available_only)) for record in records]
+    if profile == "songs":
+        plans = [(record, *make_song_plan(record, fields)) for record in records]
+    else:
+        plans = [(record, *make_plan(record, fields, available_only)) for record in records]
     before = client.get_records()
-    known = set(remote_keys(before))
+    known = ({"song:" + key for key in song_remote_keys(before)}
+             if profile == "songs" else set(remote_keys(before)))
     emit({"phase": "preview", "apply": apply, "doc_key": client.doc_key, "tab_id": client.tab_id,
-          "records": [{"key": r["key"], "title": r["columns"]["作品标题"], "images": len(r["_images"]),
+          "records": [{"key": r["key"], "title": _record_title(r), "images": len(r["_images"]),
                        "missing_images": len(r["missing_slots"]), "skipped_fields": skipped,
                        "operation": "skip" if r["key"] in known else "add"}
                       for r, v, k, skipped in plans]})
@@ -469,7 +657,7 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                 values[image_title] = [{"imageID": ticket} for ticket in tickets]
             rid = client.add_record(values)
             known.add(record["key"])
-            added = {"key": record["key"], "title": record["columns"]["作品标题"], "record_id": rid,
+            added = {"key": record["key"], "title": _record_title(record), "record_id": rid,
                      "image_count": len(images), "missing_images": len(record["missing_slots"]),
                      "skipped_fields": skipped, "verified": False}
             receipt["added"].append(added)
@@ -496,10 +684,12 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     if pending_verify:
         fresh = client.get_records()
         saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
-        counts = count_remote_keys(fresh)
+        counts = (count_song_title_keys(fresh) if profile == "songs"
+                  else count_remote_keys(fresh))
         for added, values, kinds, images in pending_verify:
-            # 同一原帖链接在表里出现多次 = 之前已存在或被并发写入，标记出来
-            added["duplicate"] = counts.get(added["key"], 0) > 1
+            # 同一原帖链接/歌曲名在表里出现多次 = 之前已存在或被并发写入，标记出来
+            lookup = added["key"][5:] if profile == "songs" else added["key"]
+            added["duplicate"] = counts.get(lookup, 0) > 1
             saved = saved_by_id.get(str(added["record_id"]))
             if saved is None:
                 emit({"phase": "readback", **added})

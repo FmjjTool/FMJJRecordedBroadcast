@@ -37,6 +37,29 @@ CN_TO_PLATFORM = {"bilibili": "bilibili", "b站": "bilibili",
 REQUIRED_COLUMNS = ("作品标题", "发布时间", "发布平台", "发布账号")
 LINK_COLUMNS = ("作品链接", "动态链接(b站)")
 
+# 完整歌曲：只比对/新增，不改不删；本地来源是「音乐信息」页导出结果
+SONG_DOC_KEY = "DRnd3bkhkQUR1aEJr"
+SONG_TAB_ID = "ss_ktwk0t"
+SONG_REQUIRED_COLUMNS = ("歌曲名称", "演唱者", "首发日期")
+SONG_COLUMNS = ("封面图", "歌曲名称", "演唱者", "完整歌词", "歌曲时长",
+                "作词人", "作曲人", "出品方", "首发日期", "语言", "合唱形式",
+                "所属专辑", "QQ音乐", "网易云音乐", "酷狗音乐", "酷我音乐",
+                "5sing", "汽水音乐")
+SONG_LINK_COLUMNS = ("QQ音乐", "网易云音乐", "酷狗音乐", "酷我音乐", "5sing", "汽水音乐")
+
+_SONG_PLATFORM_COLUMNS = {"qq": "QQ音乐", "netease": "网易云音乐", "kugou": "酷狗音乐",
+                          "kuwo": "酷我音乐", "fivesing": "5sing", "soda": "汽水音乐"}
+_SONG_PLATFORM_CN = {"QQ音乐": "qq", "网易云音乐": "netease", "酷狗音乐": "kugou",
+                     "酷我音乐": "kuwo", "5sing": "fivesing", "汽水音乐": "soda"}
+_SONG_LANGUAGE = {"国语": "汉语（CN）", "普通话": "汉语（CN）", "粤语": "汉语（CN）",
+                  "英语": "英语（EN）", "日语": "日语（JP）", "韩语": "韩语（KP）"}
+_ACCOMPANIMENT_RE = re.compile(r"伴奏|off\s*vocal|instrumental", re.I)
+_LYRIC_TIMESTAMP_RE = re.compile(r"^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]\s?", re.M)
+_SONG_CREDIT_RES = (
+    ("作词人", re.compile(r"作词[^：:\n]{0,12}[：:]\s*([^\n]+)")),
+    ("作曲人", re.compile(r"作曲[^：:\n]{0,12}[：:]\s*([^\n]+)")),
+)
+
 _ID_PATTERNS = (
     r"/video/(BV[0-9A-Za-z]+)",
     r"/video/av(\d+)",
@@ -260,6 +283,277 @@ def collect_local_items(days=30, collected=None) -> list[dict]:
     return [item for item in merged.values() if _in_window(item, since)]
 
 
+# ==================== 完整歌曲：本地导出 + 比对 ====================
+
+def _song_title_key(title) -> str:
+    """歌曲名归一化：去括号补充、空白与标点，用于按歌曲名比对。"""
+    text = str(title or "").lower()
+    text = re.sub(r"[（(【\[][^）)】\]]*[）)】\]]", "", text)
+    text = re.sub(r"[\s\u3000]+", "", text)
+    text = re.sub(r"[^\w\u4e00-\u9fff]", "", text)
+    return text
+
+
+def _song_cell_text(value) -> str:
+    if isinstance(value, list):
+        return "、".join(part for part in (_song_cell_text(i) for i in value) if part)
+    if isinstance(value, dict):
+        return str(value.get("text") or value.get("name") or "").strip()
+    return str(value or "").strip()
+
+
+def _music_info_root() -> Path:
+    from toolbox.config_manager import get_export_dir
+    return Path(get_export_dir()) / "音乐信息"
+
+
+def _load_song_exports(root: Path) -> list[dict]:
+    exports = []
+    if not root.is_dir():
+        return exports
+    for path in sorted(root.glob("*/translated/*_full.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            exports.append(data)
+    return exports
+
+
+def _song_singers(entries: list[dict]) -> list[str]:
+    names: list[str] = []
+    for entry in entries:
+        value = str(entry.get("歌手") or "")
+        for part in re.split(r"[、,，/&;；]|\s+(?:feat|ft)\.?\s+", value, flags=re.I):
+            part = part.strip()
+            if part and part not in names:
+                names.append(part)
+    return names
+
+
+def _song_lyrics(entries: list[dict]) -> str:
+    best = ""
+    for entry in entries:
+        text = str(entry.get("歌词") or "")
+        if len(text) > len(best):
+            best = text
+    text = _LYRIC_TIMESTAMP_RE.sub("", best)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _song_credits(lyrics: str) -> dict[str, str]:
+    credits = {}
+    head = "\n".join(lyrics.splitlines()[:40])
+    for name, pattern in _SONG_CREDIT_RES:
+        match = pattern.search(head)
+        if match:
+            value = match.group(1).strip().strip("：:;；,， ")
+            if value:
+                credits[name] = value[:60]
+    return credits
+
+
+def _song_duration(entries: list[dict]) -> str:
+    counts = Counter()
+    for entry in entries:
+        try:
+            seconds = int(entry.get("时长(秒)") or 0)
+        except (TypeError, ValueError):
+            seconds = 0
+        if seconds > 0:
+            counts[seconds] += 1
+    if not counts:
+        return ""
+    seconds = counts.most_common(1)[0][0]
+    if seconds >= 3600:
+        hours, remain = divmod(seconds, 3600)
+        minutes, secs = divmod(remain, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _song_date(entries: list[dict]) -> str:
+    days = [day for day in (_date_key(entry.get("发行时间")) for entry in entries) if day]
+    return min(days) if days else ""
+
+
+def _song_album(entries: list[dict]) -> str:
+    counts = Counter(str(entry.get("专辑名") or "").strip()
+                     for entry in entries if str(entry.get("专辑名") or "").strip())
+    if not counts:
+        return ""
+    album = counts.most_common(1)[0][0]
+    return album if album.startswith("《") and album.endswith("》") else f"《{album}》"
+
+
+def _song_company(albums: list[dict], album: str) -> str:
+    if not album:
+        return ""
+    key = _song_title_key(album.strip("《》"))
+    candidates = []
+    for item in albums:
+        if _song_title_key(item.get("专辑名")) != key:
+            continue
+        company = str(item.get("发行公司") or "").strip()
+        if company and company != "-":
+            candidates.append((company, str(item.get("平台标识") or "")))
+    if not candidates:
+        return ""
+    for company, platform in candidates:
+        if platform == "qq":
+            return company
+    return Counter(company for company, _ in candidates).most_common(1)[0][0]
+
+
+def _song_cover(entries: list[dict]) -> str:
+    for entry in entries:
+        url = str(entry.get("歌曲图片") or "").strip()
+        if url.startswith("https://"):
+            return url
+    for entry in entries:
+        url = str(entry.get("歌曲图片") or "").strip()
+        if url.startswith("http://"):
+            return url
+    return ""
+
+
+def _song_language(entries: list[dict]) -> str:
+    for entry in entries:
+        value = str(entry.get("语种") or "").strip()
+        if value in _SONG_LANGUAGE:
+            return _SONG_LANGUAGE[value]
+    return ""
+
+
+def _song_links(entries: list[dict]) -> dict[str, str]:
+    links: dict[str, str] = {}
+    for entry in entries:
+        platform = str(entry.get("平台标识") or "").strip().lower()
+        if platform not in _SONG_PLATFORM_COLUMNS:
+            platform = _SONG_PLATFORM_CN.get(str(entry.get("平台") or "").strip(), "")
+        url = str(entry.get("URL链接") or "").strip()
+        if not platform or not url.startswith(("https://", "http://")):
+            continue
+        column = _SONG_PLATFORM_COLUMNS[platform]
+        links.setdefault(column, url)
+    return links
+
+
+def _row_from_song_group(entries: list[dict], albums: list[dict]) -> dict:
+    title = Counter(str(entry.get("歌曲名") or "").strip()
+                    for entry in entries if str(entry.get("歌曲名") or "").strip())
+    title = title.most_common(1)[0][0] if title else ""
+    singers = _song_singers(entries)
+    lyrics = _song_lyrics(entries)
+    credits = _song_credits(lyrics)
+    album = _song_album(entries)
+    links = _song_links(entries)
+    cover = _song_cover(entries)
+
+    row = {name: "" for name in SONG_COLUMNS}
+    row.update({
+        "歌曲名称": title,
+        "演唱者": "、".join(singers),
+        "完整歌词": lyrics,
+        "歌曲时长": _song_duration(entries),
+        "作词人": credits.get("作词人", ""),
+        "作曲人": credits.get("作曲人", ""),
+        "出品方": _song_company(albums, album),
+        "首发日期": _song_date(entries),
+        "语言": _song_language(entries),
+        "合唱形式": {1: "单人演唱", 2: "双人合唱"}.get(
+            len(singers), "多人合唱" if len(singers) > 2 else ""),
+        "所属专辑": album,
+    })
+    row.update({column: links.get(column, "") for column in SONG_LINK_COLUMNS})
+    row["_images"] = [cover] if cover else []
+    row["_cover_url"] = cover
+    return row
+
+
+def collect_local_songs(root: Path | None = None) -> list[dict]:
+    """音乐信息页导出结果 → 本地歌曲行（按歌曲名去重，排除伴奏条目）。"""
+    exports = _load_song_exports(Path(root) if root else _music_info_root())
+    groups: dict[str, dict] = {}
+    albums: list[dict] = []
+    for data in exports:
+        entries = [item for item in data.get("歌曲列表") or [] if isinstance(item, dict)]
+        albums.extend(item for item in data.get("专辑列表") or [] if isinstance(item, dict))
+        buckets: dict[str, list[dict]] = defaultdict(list)
+        for entry in entries:
+            title = str(entry.get("歌曲名") or "")
+            key = _song_title_key(title)
+            if not key or _ACCOMPANIMENT_RE.search(title):
+                continue
+            buckets[key].append(entry)
+        for key, items in buckets.items():
+            groups.setdefault(key, {"entries": []})["entries"].extend(items)
+    rows = []
+    for group in groups.values():
+        row = _row_from_song_group(group["entries"], albums)
+        if row["歌曲名称"]:
+            rows.append(row)
+    return rows
+
+
+def _song_remote_keys(remote: list[dict]) -> set[str]:
+    keys = set()
+    for row in remote:
+        values = row.get("values") or {}
+        key = _song_title_key(_song_cell_text(values.get("歌曲名称")))
+        if key:
+            keys.add(key)
+    return keys
+
+
+def build_song_pending(root: Path | None = None) -> dict:
+    """完整歌曲：本地音乐信息导出 vs 腾讯表，按歌曲名比对。"""
+    started = time.perf_counter()
+    remote = load_remote(SONG_DOC_KEY, SONG_TAB_ID)
+    remote_keys = _song_remote_keys(remote)
+    after_remote = time.perf_counter()
+    local = collect_local_songs(root)
+    after_local = time.perf_counter()
+    groups: dict[str, dict] = {}
+    for row in local:
+        key = _song_title_key(row.get("歌曲名称"))
+        if key:
+            groups.setdefault(key, row)
+    pending = [row for key, row in groups.items() if key not in remote_keys]
+    pending.sort(key=lambda row: (row.get("首发日期") or "", row.get("歌曲名称") or ""),
+                 reverse=True)
+    with_images = sum(1 for row in pending if row.get("_images"))
+    image_count = sum(len(row.get("_images") or []) for row in pending)
+    finished = time.perf_counter()
+    return {
+        "profile": "songs",
+        "rows": pending,
+        "columns": list(SONG_COLUMNS),
+        "accounts": [],
+        "local_accounts": [],
+        "link_columns": list(SONG_LINK_COLUMNS),
+        "stats": {
+            "local_items": len(local),
+            "local_groups": len(groups),
+            "synced_groups": len(groups) - len(pending),
+            "pending": len(pending),
+            "with_images": with_images,
+            "without_images": len(pending) - with_images,
+            "image_count": image_count,
+            "remote_rows": len(remote),
+            "since": "",
+            "timing": {
+                "remote": round(after_remote - started, 2),
+                "local": round(after_local - after_remote, 2),
+                "match": round(finished - after_local, 2),
+                "total": round(finished - started, 2),
+            },
+        },
+    }
+
+
 # ==================== 腾讯表格 ====================
 
 def _is_sync_sheet(sheet: dict) -> bool:
@@ -268,8 +562,13 @@ def _is_sync_sheet(sheet: dict) -> bool:
         name in names for name in LINK_COLUMNS)
 
 
+def _is_song_sheet(sheet: dict) -> bool:
+    names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
+    return all(name in names for name in SONG_REQUIRED_COLUMNS)
+
+
 def list_targets() -> list[dict]:
-    """本地已同步、且字段像「官方动态」的工作表清单。"""
+    """本地已同步的目标表：官方动态（含直播记录结构）+ 完整歌曲。"""
     targets = []
     for doc in tc_cfg.load_docs():
         key = str(doc.get("key") or tables.doc_key_of(doc.get("url")) or "")
@@ -280,7 +579,15 @@ def list_targets() -> list[dict]:
         except Exception:  # noqa: BLE001 - 单个文档异常不影响其它文档
             continue
         for sheet in sheets:
-            if sheet.get("skipped") or not _is_sync_sheet(sheet):
+            if sheet.get("skipped"):
+                continue
+            if key == SONG_DOC_KEY and sheet["tab_id"] == SONG_TAB_ID:
+                if not _is_song_sheet(sheet):
+                    continue
+                profile = "songs"
+            elif _is_sync_sheet(sheet):
+                profile = "posts"
+            else:
                 continue
             targets.append({
                 "doc_key": key,
@@ -290,6 +597,7 @@ def list_targets() -> list[dict]:
                 "tab_name": sheet["tab_name"],
                 "n_rows": sheet.get("n_rows") or 0,
                 "columns": sheet.get("columns") or [],
+                "profile": profile,
             })
     return targets
 
@@ -782,6 +1090,8 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
     accounts=None 表示不过滤；"default" 表示只保留腾讯表出现过的发布账号；
     传入列表则按列表过滤（空列表同样视为不过滤）。
     """
+    if (doc_key, tab_id) == (SONG_DOC_KEY, SONG_TAB_ID):
+        return build_song_pending()
     started = time.perf_counter()
     remote = load_remote(doc_key, tab_id)
     index = _index_of(remote)
@@ -821,8 +1131,10 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
     finished = time.perf_counter()
 
     return {
+        "profile": "posts",
         "rows": pending,
         "columns": list(COLUMNS),
+        "link_columns": list(LINK_COLUMNS),
         "accounts": sorted(index["accounts"]),
         "local_accounts": all_local_accounts,
         "stats": {
@@ -845,11 +1157,12 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
     }
 
 
-def to_tsv(rows: list[dict]) -> str:
+def to_tsv(rows: list[dict], columns=None) -> str:
     """待同步行 → 制表符分隔文本（不含表头，可直接粘贴）。"""
+    columns = tuple(columns or COLUMNS)
     lines = []
     for row in rows:
-        values = [_clean_cell(row.get(column, "")) for column in COLUMNS]
+        values = [_clean_cell(row.get(column, "")) for column in columns]
         lines.append("\t".join(values))
     return "\r\n".join(lines)
 
@@ -868,7 +1181,8 @@ def default_pending_count(doc_key: str, collected=None) -> int:
     """
     try:
         target = next((item for item in list_targets()
-                       if item["doc_key"] == doc_key), None)
+                       if item["doc_key"] == doc_key
+                       and item.get("profile") == "posts"), None)
         if not target:
             return -1
         cfg = tc_cfg.load_cfg()
