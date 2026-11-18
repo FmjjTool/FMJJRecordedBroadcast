@@ -8,12 +8,13 @@
 from __future__ import annotations
 
 import logging
+import re
 
-from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QTimer, QUrl, QAbstractTableModel
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
-    QHeaderView, QLabel, QMenu, QMessageBox, QProgressBar, QPushButton,
+    QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QProgressBar, QPushButton,
     QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
@@ -206,6 +207,237 @@ class _UploadDialog(QDialog):
         self.ok_btn.setEnabled(bool(chosen))
 
 
+class _SongCompareDialog(QDialog):
+    """输入歌曲名 → 五平台检索 → 交叉比较结果（只读，不写腾讯文档）。"""
+
+    PLATFORMS = (("qq", "QQ音乐"), ("netease", "网易云音乐"), ("kugou", "酷狗音乐"),
+                 ("kuwo", "酷我音乐"), ("5sing", "5sing音乐"))
+    HEADERS = ("平台", "匹配", "歌曲名称", "演唱者", "专辑", "时长",
+               "发行日期", "完整歌曲表", "链接")
+
+    def __init__(self, singer: str, title: str, parent=None, app=None):
+        super().__init__(parent)
+        self.app = app
+        self._rows: list[dict] = []
+        self._closed = False
+        self.setWindowTitle("完整歌曲 · 多平台交叉比较")
+        self.resize(1180, 620)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("歌手"))
+        self.singer_edit = QLineEdit(singer or "封茗囧菌")
+        self.singer_edit.setFixedWidth(150)
+        top.addWidget(self.singer_edit)
+        top.addWidget(QLabel("歌曲"))
+        self.title_edit = QLineEdit(title)
+        self.title_edit.setPlaceholderText("输入歌曲名，回车重新检索")
+        self.title_edit.returnPressed.connect(self._search)
+        top.addWidget(self.title_edit, 1)
+        self.search_btn = QPushButton("多平台检索")
+        self.search_btn.clicked.connect(self._search)
+        top.addWidget(self.search_btn)
+        layout.addLayout(top)
+
+        self.summary = QLabel("")
+        self.summary.setWordWrap(True)
+        self.summary.setStyleSheet("font-weight: 600;")
+        layout.addWidget(self.summary)
+
+        self.table = QTableWidget(0, len(self.HEADERS), self)
+        self.table.setHorizontalHeaderLabels(list(self.HEADERS))
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        for index, width in enumerate((90, 70, 250, 150, 180, 70, 100, 130, 320)):
+            self.table.setColumnWidth(index, width)
+        self.table.cellDoubleClicked.connect(self._open_link)
+        layout.addWidget(self.table, 1)
+
+        bottom = QHBoxLayout()
+        self.copy_btn = QPushButton("复制对比结果")
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._copy_rows)
+        bottom.addWidget(self.copy_btn)
+        bottom.addStretch(1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        bottom.addWidget(close_btn)
+        layout.addLayout(bottom)
+
+        self._search()
+
+    def _search(self) -> None:
+        title = self.title_edit.text().strip()
+        if not title:
+            self.summary.setText("请输入歌曲名")
+            return
+        singer = self.singer_edit.text().strip() or "封茗囧菌"
+        self.search_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        self.summary.setText(f"正在检索五平台：{singer} - {title} …")
+
+        def work():
+            from toolbox.music_complete_songs import fetch_platform_songs, load_complete_songs
+            results = fetch_platform_songs(
+                {"title": title, "singer": singer, "links": {}}, limit=8)
+            return results, load_complete_songs()
+
+        def done(result, err):
+            if self._closed:
+                return
+            self.search_btn.setEnabled(True)
+            if err:
+                self.summary.setText(f"检索失败：{err}")
+                return
+            results, songs = result
+            self._show(results, songs, singer, title)
+
+        run_bg(work, done, owner=self)
+
+    @staticmethod
+    def _album_of(item) -> dict:
+        album = (getattr(item, "extra", None) or {}).get("_album")
+        return album if isinstance(album, dict) else {}
+
+    @classmethod
+    def _date_of(cls, item) -> str:
+        album = cls._album_of(item)
+        text = str(getattr(item, "release_date", "") or album.get("release_date") or "")
+        match = re.search(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", text)
+        return (f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+                if match else text)
+
+    @classmethod
+    def _album_name_of(cls, item) -> str:
+        return str(getattr(item, "album_name", "") or cls._album_of(item).get("album_name") or "")
+
+    @staticmethod
+    def _duration_text(seconds) -> str:
+        try:
+            seconds = int(seconds or 0)
+        except (TypeError, ValueError):
+            return ""
+        return f"{seconds // 60}:{seconds % 60:02d}" if seconds else ""
+
+    @staticmethod
+    def _score(item, target: str, singer: str) -> int:
+        name = bridge._song_title_key(getattr(item, "song_name", ""))
+        score = 0
+        if name and name == target:
+            score += 100
+        elif name and target and (target in name or name in target):
+            score += 60
+        if singer and singer in str(getattr(item, "singer", "") or ""):
+            score += 30
+        if getattr(item, "duration", 0):
+            score += 2
+        return score
+
+    def _show(self, results: dict, songs: list, singer: str, title: str) -> None:
+        target = bridge._song_title_key(title)
+        in_table = next((song for song in songs
+                         if bridge._song_title_key(song.get("title")) == target), None)
+        table_note = (f"已收录（首发 {in_table.get('date') or '日期空'}）"
+                      if in_table else "未收录")
+        rows, best_items = [], []
+        for key, name in self.PLATFORMS:
+            items = list(results.get(key) or [])
+            if "伴奏" not in title:
+                items = [item for item in items
+                         if not bridge._ACCOMPANIMENT_RE.search(
+                             str(getattr(item, "song_name", "") or ""))]
+            scored = sorted(((self._score(item, target, singer), index, item)
+                             for index, item in enumerate(items)),
+                            key=lambda part: (-part[0], part[1]))
+            chosen = [(score, item) for score, _index, item in scored[:3]
+                      if score >= 60] or [(-1, scored[0][2])] if scored else []
+            if not chosen:
+                rows.append({"平台": name, "匹配": "无结果", "歌曲名称": "",
+                             "演唱者": "", "专辑": "", "时长": "", "发行日期": "",
+                             "完整歌曲表": "", "链接": ""})
+                continue
+            best_items.append(chosen[0][1])
+            for index, (score, item) in enumerate(chosen):
+                platform_column = name if index == 0 else ""
+                mark = ("最佳" if score >= 60 else "平台推荐") if index == 0 else "备选"
+                rows.append({
+                    "平台": platform_column,
+                    "匹配": mark,
+                    "歌曲名称": str(getattr(item, "song_name", "") or ""),
+                    "演唱者": str(getattr(item, "singer", "") or ""),
+                    "专辑": self._album_name_of(item),
+                    "时长": self._duration_text(getattr(item, "duration", 0)),
+                    "发行日期": self._date_of(item),
+                    "完整歌曲表": "",
+                    "链接": str(getattr(item, "url", "") or ""),
+                })
+        if rows:
+            rows[0]["完整歌曲表"] = table_note
+        self._fill(rows)
+
+        durations = [self._duration_text(getattr(item, "duration", 0))
+                     for item in best_items if getattr(item, "duration", 0)]
+        matched = sum(1 for item in best_items
+                      if bridge._song_title_key(getattr(item, "song_name", "")) == target)
+        duration_note = ("时长一致" if len(set(durations)) == 1 else f"时长 {len(set(durations))} 种")
+        if not durations:
+            duration_note = "时长为空"
+        dates = sorted({self._date_of(item) for item in best_items if self._date_of(item)})
+        date_note = "日期一致" if len(dates) == 1 else (f"日期 {len(dates)} 种" if dates else "日期为空")
+        self.summary.setText(
+            f"五平台返回 {len(best_items)}/5 · 歌名完全一致 {matched}/5 · "
+            f"{duration_note} · {date_note} · 完整歌曲表：{table_note} · "
+            f"共 {len(rows)} 行（每平台最多 3 个候选）")
+
+    def _fill(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            best = row.get("匹配") in ("最佳", "平台推荐")
+            for column, name in enumerate(self.HEADERS):
+                text = str(row.get(name) or "")
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                if best:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                if name == "链接":
+                    item.setData(Qt.UserRole, text)
+                self.table.setItem(row_index, column, item)
+        self.copy_btn.setEnabled(bool(rows))
+
+    def _open_link(self, row: int, _column: int) -> None:
+        if 0 <= row < len(self._rows):
+            url = str(self._rows[row].get("链接") or "")
+            if url.startswith(("http://", "https://")):
+                QDesktopServices.openUrl(QUrl(url))
+
+    def _copy_rows(self) -> None:
+        if not self._rows:
+            return
+        lines = ["\t".join(self.HEADERS)]
+        for row in self._rows:
+            values = [str(row.get(name) or "").replace("\t", " ").replace("\n", " ")
+                      for name in self.HEADERS]
+            lines.append("\t".join(values))
+        QApplication.clipboard().setText("\r\n".join(lines))
+        self.summary.setText("对比结果已复制到剪贴板")
+
+    def closeEvent(self, event) -> None:
+        self._closed = True
+        super().closeEvent(event)
+
+
 class TcDocBridgePanel(QWidget):
     # 后台任务看门狗：正常比对 <1 秒（全部历史约 3 秒），超时只用于解除卡住状态
     COMPARE_TIMEOUT_MS = 20000
@@ -246,6 +478,7 @@ class TcDocBridgePanel(QWidget):
         self._compare_owner = 0
         self._compare_pending = False
         self._saved_accounts = []
+        self._account_checked: dict[str, bool] = {}
         self._songs_mode = False
         self._posts_days_index = None
 
@@ -316,6 +549,25 @@ class TcDocBridgePanel(QWidget):
         self.copy_btn.clicked.connect(self._copy)
         top.addWidget(self.copy_btn)
         layout.addLayout(top)
+
+        self.song_search_row = QWidget(self)
+        search_layout = QHBoxLayout(self.song_search_row)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(6)
+        search_layout.addWidget(QLabel("歌曲检索"))
+        self.song_singer_edit = QLineEdit()
+        self.song_singer_edit.setPlaceholderText("歌手（默认封茗囧菌）")
+        self.song_singer_edit.setFixedWidth(150)
+        search_layout.addWidget(self.song_singer_edit)
+        self.song_title_edit = QLineEdit()
+        self.song_title_edit.setPlaceholderText("输入歌曲名，回车或多平台检索")
+        self.song_title_edit.returnPressed.connect(self._open_song_compare)
+        search_layout.addWidget(self.song_title_edit, 1)
+        self.song_search_btn = QPushButton("多平台检索")
+        self.song_search_btn.clicked.connect(self._open_song_compare)
+        search_layout.addWidget(self.song_search_btn)
+        self.song_search_row.setVisible(False)
+        layout.addWidget(self.song_search_row)
 
         self.summary = QLabel("加载中…")
         self.summary.setWordWrap(True)
@@ -547,7 +799,45 @@ class TcDocBridgePanel(QWidget):
         self._songs_mode = songs
         self.days_combo.setEnabled(not songs)
         self.account_btn.setEnabled(not songs)
-        self._run_compare()
+        self.song_search_row.setVisible(songs)
+        if songs:
+            self._show_song_search()
+        else:
+            self._update_account_btn()
+            self._run_compare()
+
+    def _show_song_search(self) -> None:
+        """完整歌曲模式：不做表格比对，提示输入歌曲走五平台检索。"""
+        self._acc_timer.stop()
+        self._busy = False
+        self._compare_owner = 0
+        self._compare_pending = False
+        self._compare_req += 1
+        self._clear_result()
+        self._show_table()
+        self.compare_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        self.upload_btn.setEnabled(False)
+        self.copy_images_btn.setEnabled(False)
+        self.copy_row_btn.setEnabled(False)
+        self.account_btn.setText("全部")
+        self.summary.setText("完整歌曲：输入歌名，五平台检索并交叉比较（不读写腾讯表格）")
+        self.status.setText(
+            "输入歌曲名后点「多平台检索」：显示各平台最佳匹配、专辑、时长、发行日期、链接，"
+            "并标注完整歌曲表内是否已收录。")
+
+    def _open_song_compare(self, *_args) -> None:
+        if self._closed or not self._songs_mode:
+            return
+        title = self.song_title_edit.text().strip()
+        if not title:
+            self.status.setText("请先输入歌曲名")
+            self.song_title_edit.setFocus()
+            return
+        singer = self.song_singer_edit.text().strip() or "封茗囧菌"
+        dialog = _SongCompareDialog(singer, title, self, app=self.app)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _on_days_changed(self, *_args) -> None:
         self._save_cfg(tcdoc_bridge_days=int(self.days_combo.currentData() or 0))
@@ -557,13 +847,15 @@ class TcDocBridgePanel(QWidget):
 
     def _rebuild_account_menu(self, names: list[str], checked: set[str]) -> None:
         self._account_names = list(names)
+        self._account_checked = {name: name in checked for name in names}
         self._account_menu.clear()
         self._account_actions = {}
         for name in names:
             action = self._account_menu.addAction(name)
             action.setCheckable(True)
             action.setChecked(name in checked)
-            action.toggled.connect(self._on_account_toggled)
+            action.toggled.connect(
+                lambda state, account=name: self._on_account_toggled(account, state))
             self._account_actions[name] = action
         if names:
             self._account_menu.addSeparator()
@@ -574,17 +866,22 @@ class TcDocBridgePanel(QWidget):
         self._update_account_btn()
 
     def _checked_accounts(self) -> list[str]:
-        return [name for name, action in self._account_actions.items()
-                if action.isChecked()]
+        return [name for name, checked in self._account_checked.items() if checked]
 
     def _set_all_accounts(self, checked: bool) -> None:
+        for name in self._account_checked:
+            self._account_checked[name] = checked
         for action in self._account_actions.values():
-            action.blockSignals(True)
-            action.setChecked(checked)
-            action.blockSignals(False)
+            try:
+                action.blockSignals(True)
+                action.setChecked(checked)
+                action.blockSignals(False)
+            except RuntimeError:  # 菜单重建后旧 QAction 已销毁
+                continue
         self._after_account_change()
 
-    def _on_account_toggled(self, _checked: bool) -> None:
+    def _on_account_toggled(self, name: str, checked: bool) -> None:
+        self._account_checked[name] = bool(checked)
         self._after_account_change()
 
     def _after_account_change(self) -> None:
@@ -602,7 +899,7 @@ class TcDocBridgePanel(QWidget):
             self.account_btn.setText(f"已选 {checked}/{total}")
 
     def _selected_accounts(self):
-        if not self._account_actions:
+        if not self._account_checked:
             return self._saved_accounts or "default"
         checked = self._checked_accounts()
         return checked or None  # 全部取消勾选 = 不过滤账号
@@ -869,7 +1166,7 @@ class TcDocBridgePanel(QWidget):
 
     def _maybe_run_pending_compare(self) -> None:
         """其它后台任务结束后，补跑等待中的比对请求。"""
-        if (self._closed or self._busy or self._targets_loading
+        if (self._closed or self._songs_mode or self._busy or self._targets_loading
                 or not self._compare_pending):
             return
         self._compare_pending = False
@@ -879,6 +1176,9 @@ class TcDocBridgePanel(QWidget):
 
     def _run_compare(self, *_args) -> None:
         if self._closed:
+            return
+        if self._songs_mode:
+            self._show_song_search()
             return
         if self._targets_loading:
             self._compare_pending = True
@@ -954,7 +1254,7 @@ class TcDocBridgePanel(QWidget):
         self._compare_watchdog.start(self.COMPARE_TIMEOUT_MS)
 
     def _finish_compare(self, req, result, err, used_accounts):
-        if self._closed:
+        if self._closed or self._songs_mode:
             return
         if req != self._compare_req:
             # 迟到结果：结果丢弃，但它若还占着忙碌态就必须释放，
@@ -1084,6 +1384,7 @@ class TcDocBridgePanel(QWidget):
         names = sorted(set(result.get("accounts") or []) |
                        set(result.get("local_accounts") or []))
         if names == self._account_names:
+            self._update_account_btn()
             return
         previous = set(self._checked_accounts())
         saved = set(self._saved_accounts)
