@@ -53,6 +53,7 @@ PAGE_CLASSES = {
     "douyin_index": ("gui_qt.pages.douyin_index", "DouyinIndexPage"),
     "wechat_article": ("gui_qt.pages.wechat_article", "WechatArticlePage"),
     "asset": ("gui_qt.pages.asset", "AssetPage"),
+    "backup_center": ("gui_qt.pages.backup_center", "BackupCenterPage"),
     "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
     "toolbox_rename": ("gui_qt.pages.rename", "RenamePage"),
     "toolbox_convert": ("gui_qt.pages.editor", "EditorPage"),
@@ -84,7 +85,6 @@ PAGE_CLASSES = {
     "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
-    "quark_backup": ("gui_qt.pages.quark_backup", "QuarkBackupPage"),
     "livestream_summary": ("gui_qt.pages.livestream_summary", "LivestreamSummaryPage"),
     "quark_download": ("gui_qt.pages.quark_download", "QuarkDownloadPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
@@ -92,7 +92,7 @@ PAGE_CLASSES = {
 }
 
 
-PAGE_ALIASES = {"test_page": "douyin_danmaku"}
+PAGE_ALIASES = {"test_page": "douyin_danmaku", "quark_backup": "backup_center"}
 
 
 def _resolve_page_key(key):
@@ -114,7 +114,7 @@ NAV_GROUPS = [
     ]),
     ("资产管理", [
         ("asset", "资产管理"),
-        ("quark_backup", "网盘备份"),
+        ("backup_center", "备份与恢复"),
         ("quark_download", "网盘下载"),
     ]),
     ("录播工具箱", [

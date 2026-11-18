@@ -261,17 +261,15 @@ class GlobalSettingsPage(BasePage):
 
         v.addSpacing(12)
 
-        # ---- 配置备份（导出 / 导入） ----
-        v.addWidget(self._card_title("配置备份（导出 / 导入）"))
+        # ---- 备份与恢复 ----
+        v.addWidget(self._card_title("备份与恢复"))
         cb_row = QHBoxLayout()
         cb_info = QLabel(
-            "打包全部设置为 zip（工作目录 / 登录状态 / 账号列表 / 分组 / 弹幕姬配置等，"
-            "不含已获取资产）；导入会覆盖同名配置文件，重启应用后全部生效")
+            "配置、资产与网盘备份统一在「备份与恢复」页；计划任务仍在「任务」页管理。")
         cb_info.setProperty("role", "caption")
         cb_info.setWordWrap(True)
         cb_row.addWidget(cb_info, 1)
-        cb_row.addWidget(self._btn("导出配置…", self._export_config))
-        cb_row.addWidget(self._btn("导入配置…", self._import_config))
+        cb_row.addWidget(self._btn("打开备份与恢复", self._open_backup_center))
         v.addLayout(cb_row)
 
         v.addSpacing(12)
@@ -547,57 +545,10 @@ class GlobalSettingsPage(BasePage):
         dlg = SkillDownloadDialog(self.app, self.app)
         dlg.exec()
 
-    # ---- 配置备份（导出 / 导入） ----
-    def _export_config(self):
-        from datetime import datetime
-        from toolbox import backup
+    # ---- 备份与恢复 ----
+    def _open_backup_center(self):
+        self.app.show_page("backup_center")
 
-        default = f"配置备份_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出配置", default, "zip 包 (*.zip)")
-        if not path:
-            return
-        if not path.lower().endswith(".zip"):
-            path += ".zip"
-
-        def work():
-            return backup.export_config(path)
-
-        def done(result, err):
-            if err:
-                self.app.toast(f"导出配置失败：{err}", "error")
-                return
-            self.app.toast(
-                f"已导出 {result['files']} 个配置文件（{result['size_text']}）",
-                "success")
-
-        run_bg(work, done)
-
-    def _import_config(self):
-        from toolbox import backup
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "导入配置", "", "配置备份 (*.zip)")
-        if not path:
-            return
-        if QMessageBox.question(
-                self, "导入配置",
-                "导入会覆盖当前同名配置文件，重启应用后全部生效。\n确定继续吗？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No) != QMessageBox.Yes:
-            return
-
-        def work():
-            return backup.import_config(path)
-
-        def done(result, err):
-            if err:
-                self.app.toast(f"导入配置失败：{err}", "error")
-                return
-            self.app.toast(
-                f"已导入 {result['files']} 个配置文件，重启应用后生效", "success")
-
-        run_bg(work, done)
 
     def _save(self):
         path = self.workdir_entry.text().strip()
