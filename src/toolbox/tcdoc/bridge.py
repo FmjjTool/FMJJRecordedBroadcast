@@ -630,6 +630,14 @@ EVENT_FALLBACK_COLUMNS = ("活动名称", "活动日期", "年份", "城市", "�
 MERCH_FALLBACK_COLUMNS = ("周边名称", "首发日期", "产品图", "封面图", "获取方式",
                           "来源渠道", "备注信息")
 
+# 直播记录：自动字段只写这 6 列；直播时长/直播距今是公式列，任何情况都不写；
+# 标签、AI 摘要、链接 2/3、截图、初编/终编、备注信息都属人工列，覆盖模式也不碰。
+LIVE_AUTO_COLUMNS = ("直播账户", "直播标题", "开始时间", "结束时间",
+                     "直播平台", "直播链接1")
+LIVE_FORMULA_COLUMNS = ("直播时长", "直播距今")
+LIVE_DUP_MODES = {"skip": "跳过重复", "fill": "只填空字段", "overwrite": "覆盖自动字段"}
+_LIVE_ROOM_RE = re.compile(r"live\.douyin\.com/(\d+)")
+
 _EVENT_LINE_RE = re.compile(r"【囧菌线下[·・]?\s*(\d{1,2})\.(\d{1,2})\s*([^】]{0,16})】")
 _EVENT_MONTH_DAY_RE = re.compile(r"(\d{1,2})月(\d{1,2})日")
 _EVENT_TYPE_WORDS = ("生日会", "音乐节", "演唱会", "巡演", "漫展", "见面会",
@@ -1906,6 +1914,231 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
         "动态链接(b站)": dyn,
         # UI 用：检测/复制图片，不参与 TSV 列
         "_images": images,
+    }
+
+
+# ==================== 直播记录（抖音直播历史） ====================
+
+def _cell_text(value) -> str:
+    """腾讯单元格值（文本/链接/多选）→ 纯文本。"""
+    if isinstance(value, list):
+        parts = [str(v.get("text") or v.get("link") or "") if isinstance(v, dict)
+                 else str(v) for v in value]
+        return " ".join(p for p in parts if p)
+    if isinstance(value, dict):
+        return str(value.get("text") or value.get("link") or "")
+    return str(value or "")
+
+
+def _norm_live_title(text) -> str:
+    """标题归一：去括号、标点、空白并转小写，用于同一场次的模糊匹配。"""
+    cleaned = re.sub(r"[【】\[\]（）()〈〉《》\s·•:：!！?？~～\-—_/、,，.。\"'“”]+", "",
+                     str(text or ""))
+    return cleaned.lower()
+
+
+def _live_link(room: str) -> str:
+    return f"https://live.douyin.com/{room}" if str(room or "").strip() else ""
+
+
+def _live_link_value(value) -> str:
+    """链接单元格（[{text,link}] / {text,link} / 纯文本）→ URL，优先取 link。"""
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and item.get("link"):
+                return str(item["link"])
+        return _cell_text(value)
+    if isinstance(value, dict):
+        return str(value.get("link") or value.get("text") or "")
+    return str(value or "")
+
+
+def _account_field(acc, key: str) -> str:
+    """账号追踪的数据行兼容 dict / 对象两种形态。"""
+    if isinstance(acc, dict):
+        return str(acc.get(key) or "")
+    return str(getattr(acc, key, "") or "")
+
+
+def _is_douyin_account(acc) -> bool:
+    platform = _account_field(acc, "platform").lower()
+    if platform == "douyin":
+        return True
+    return "douyin.com" in _account_field(acc, "url").lower()
+
+
+_LIVE_ACCOUNT_SUFFIX_RE = re.compile(r"(抖音|快手|微博|B站|bilibili|小红书|LIVE|直播)$",
+                                     re.I)
+
+
+def _live_account_label(name: str, options: set[str]) -> str:
+    """账号追踪里的名字 → 直播记录「直播账户」多选值。
+
+    优先用表里已出现过的选项；没有时去掉平台后缀（如「封茗囧菌抖音」→「封茗囧菌」），
+    避免多选列因为不认识的选项而写不进去。
+    """
+    name = str(name or "").strip()
+    if not name:
+        return ""
+    if name in options:
+        return name
+    base = _LIVE_ACCOUNT_SUFFIX_RE.sub("", name).strip() or name
+    if base in options:
+        return base
+    for option in sorted(options):
+        if option and (option in name or name in option):
+            return option
+    return base
+
+
+def live_accounts(days: int = 0) -> list[dict]:
+    """有直播场次的抖音主播（数据来自账号追踪 xlsx 的「直播历史」sheet）。
+
+    返回 [{name, count, latest}]，按最近一场开播时间倒序；days<=0 表示全部历史。
+    """
+    from tracker.accounts import load_accounts
+    from tracker.douyin_live import load_live_history
+
+    since = _since_date(days)
+    out = []
+    for acc in load_accounts():
+        name = _account_field(acc, "name")
+        if not name or not _is_douyin_account(acc):
+            continue
+        rows = [r for r in load_live_history(name)
+                if not since or (str(r.get("start") or ""))[:10] >= since]
+        if rows:
+            out.append({"name": name, "count": len(rows),
+                        "latest": str(rows[0].get("start") or "")[:10]})
+    out.sort(key=lambda item: (item.get("latest") or "", item.get("count") or 0),
+             reverse=True)
+    return out
+
+
+def _live_row(account: str, session: dict) -> dict:
+    """一场抖音直播 → 直播记录自动字段行。"""
+    room = str(session.get("room_id") or "").strip()
+    start = str(session.get("start") or "")
+    end = str(session.get("end") or "")
+    values = {
+        "直播账户": account,
+        "直播标题": str(session.get("title") or ""),
+        "开始时间": start[:10],
+        "结束时间": end[:10],
+        "直播平台": "抖音",
+        "直播链接1": _live_link(room),
+    }
+    return {"values": values, "day": start[:10],
+            "title": _norm_live_title(session.get("title")),
+            "link": values["直播链接1"], "room": room}
+
+
+def _merge_live_values(local_values: dict, remote_values: dict,
+                       mode: str, columns) -> dict:
+    """重复行按模式合并：只动自动字段，公式列与人工列一律保持原值。"""
+    merged = {}
+    for name in columns:
+        current = _cell_text(remote_values.get(name))
+        incoming = local_values.get(name, "")
+        if name in LIVE_FORMULA_COLUMNS or name not in LIVE_AUTO_COLUMNS:
+            merged[name] = current
+        elif mode == "overwrite":
+            merged[name] = incoming or current
+        else:  # fill：只补空
+            merged[name] = current or incoming
+    return merged
+
+
+def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
+                       columns=None) -> dict:
+    """抖音直播历史 → 直播记录待补行。
+
+    重复判定：优先「直播链接1（房间号）」一致，其次「开始时间（到日）+ 归一标题」。
+    因为腾讯表只有日期没有时分、也没有房间号列，房间号只在链接列里体现。
+    duplicate_mode：skip 丢弃重复行 / fill 只补空字段 / overwrite 覆盖自动字段。
+    """
+    started = time.perf_counter()
+    mode = duplicate_mode if duplicate_mode in LIVE_DUP_MODES else "skip"
+    cols = [str(name) for name in (columns or LIVE_FALLBACK_COLUMNS) if str(name).strip()]
+    remote = load_remote(SONG_DOC_KEY, LIVE_TAB_ID)
+
+    by_link: dict[str, dict] = {}
+    by_day_title: dict[tuple, dict] = {}
+    account_options: set[str] = set()
+    for idx, row in enumerate(remote):
+        values = row.get("values") or {}
+        for part in re.split(r"[、,，/]", _cell_text(values.get("直播账户"))):
+            if part.strip():
+                account_options.add(part.strip())
+        link = _norm_url(_live_link_value(values.get("直播链接1")))
+        day = _date_key(values.get("开始时间"))
+        title = _norm_live_title(_cell_text(values.get("直播标题")))
+        entry = {"values": values, "link": link, "idx": idx}
+        if link:
+            by_link.setdefault(link, entry)
+        if day and title:
+            by_day_title.setdefault((day, title), entry)
+
+    from tracker.accounts import load_accounts
+    from tracker.douyin_live import load_live_history
+
+    since = _since_date(days)
+    wanted = {str(name) for name in (accounts or []) if str(name)}
+    rows: list[dict] = []
+    duplicates = 0
+    sessions_total = 0
+    claimed: set[int] = set()   # 已被占用的远端行：同日多场时不让后续场次再算「重复」
+    for acc in load_accounts():
+        name = _account_field(acc, "name")
+        if not name or not _is_douyin_account(acc):
+            continue
+        if wanted and name not in wanted:
+            continue
+        for session in load_live_history(name):
+            start = str(session.get("start") or "")
+            if since and start[:10] < since:
+                continue
+            sessions_total += 1
+            item = _live_row(name, session)
+            item["values"]["直播账户"] = _live_account_label(name, account_options)
+            match = (by_link.get(_norm_url(item["link"])) if item["link"] else None) \
+                or by_day_title.get((item["day"], item["title"]))
+            if match is None:
+                rows.append(dict(item["values"], _images=[], _source="",
+                                 _needs_review=False, _dup=""))
+                continue
+            if match["idx"] in claimed:
+                # 同一天多场（第二场 / 重开播）：远端只可能有一行，后续场次留给人工判断
+                rows.append(dict(item["values"], _images=[], _source="",
+                                 _needs_review=True, _dup="同日多场，需人工确认"))
+                continue
+            claimed.add(match["idx"])
+            duplicates += 1
+            if mode == "skip":
+                continue
+            merged = _merge_live_values(item["values"], match["values"], mode, cols)
+            rows.append(dict(merged, _images=[], _source="", _needs_review=True,
+                             _dup=LIVE_DUP_MODES[mode]))
+
+    rows.sort(key=lambda row: (row.get("开始时间") or ""), reverse=True)
+    timing = {"total": time.perf_counter() - started}
+    return {
+        "profile": "lives",
+        "columns": cols,
+        "rows": rows,
+        "stats": {
+            "local_items": sessions_total,
+            "local_groups": sessions_total,
+            "synced_groups": duplicates if mode == "skip" else duplicates,
+            "pending": len(rows),
+            "duplicates": duplicates,
+            "mode": mode,
+            "since": since,
+            "with_images": 0,
+            "without_images": len(rows),
+            "image_count": 0,
+            "timing": timing,
+        },
     }
 
 

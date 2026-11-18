@@ -298,6 +298,29 @@ class TcDocBridgePanel(QWidget):
         self.account_btn.setMenu(self._account_menu)
         top.addWidget(self.account_btn)
 
+        # 直播记录专用：主播多选 + 重复处理策略（仅 profile=lives 时可见）
+        self.live_account_btn = QPushButton("主播：全部")
+        self.live_account_btn.setMinimumWidth(150)
+        self.live_account_btn.setToolTip(
+            "勾选要写入直播记录的抖音主播（来源：账号追踪的「直播历史」）")
+        self._live_account_menu = QMenu(self.live_account_btn)
+        self.live_account_btn.setMenu(self._live_account_menu)
+        self.live_account_btn.setVisible(False)
+        top.addWidget(self.live_account_btn)
+        self._live_rows: list[dict] = []
+        self._live_accounts_checked: set[str] = set()
+
+        self.dup_combo = QComboBox()
+        for label, key in (("重复：跳过", "skip"), ("重复：只填空", "fill"),
+                           ("重复：覆盖自动字段", "overwrite")):
+            self.dup_combo.addItem(label, key)
+        self.dup_combo.setToolTip(
+            "表里已有同一场直播时怎么处理：只影响自动字段"
+            "（账户/标题/开始/结束/平台/链接1）；AI 摘要、截图、标签、备注等人工列不会被覆盖")
+        self.dup_combo.setVisible(False)
+        self.dup_combo.currentIndexChanged.connect(self._on_dup_mode_changed)
+        top.addWidget(self.dup_combo)
+
         self.compare_btn = QPushButton("重新比对")
         self.compare_btn.clicked.connect(self._run_compare)
         top.addWidget(self.compare_btn)
@@ -575,6 +598,10 @@ class TcDocBridgePanel(QWidget):
         lives = profile == "lives"
         readonly = profile in ("events", "merch", "lives")
         self.manual_btn.setVisible(profile in ("events", "merch", "lives"))
+        self.live_account_btn.setVisible(lives)
+        self.dup_combo.setVisible(lives)
+        if lives:
+            self._load_live_accounts()
         if songs and not self._songs_mode:
             self._posts_days_index = self.days_combo.currentIndex()
         if songs:
@@ -596,6 +623,77 @@ class TcDocBridgePanel(QWidget):
             self._show_song_search()
         else:
             self._update_account_btn()
+            self._run_compare()
+
+    # ==================== 直播记录：主播 / 重复策略 ====================
+
+    def _load_live_accounts(self) -> None:
+        """读取有直播场次的抖音主播（账号追踪 xlsx，读取量小，直接同步读）。"""
+        try:
+            self._live_rows = bridge.live_accounts(0)
+        except Exception:  # noqa: BLE001 - 账号数据异常时退化为「未选主播」
+            self._live_rows = []
+        self._live_accounts_checked = {row["name"] for row in self._live_rows}
+        self._rebuild_live_menu()
+
+    def _rebuild_live_menu(self) -> None:
+        self._live_account_menu.clear()
+        if not self._live_rows:
+            action = self._live_account_menu.addAction("（没有可用的抖音直播账号）")
+            action.setEnabled(False)
+            self.live_account_btn.setText("主播：无")
+            return
+        toggle = self._live_account_menu.addAction("全选 / 全不选")
+        toggle.triggered.connect(self._toggle_all_live_accounts)
+        self._live_account_menu.addSeparator()
+        for row in self._live_rows:
+            name = row["name"]
+            action = self._live_account_menu.addAction(f"{name}（{row['count']} 场）")
+            action.setCheckable(True)
+            action.setData(name)
+            action.setChecked(name in self._live_accounts_checked)
+            action.toggled.connect(
+                lambda checked, n=name: self._on_live_account_toggled(n, checked))
+        self._update_live_account_btn()
+
+    def _toggle_all_live_accounts(self) -> None:
+        target = set() if self._live_accounts_checked else {
+            row["name"] for row in self._live_rows}
+        self._live_accounts_checked = target
+        for action in self._live_account_menu.actions():
+            if not action.isCheckable():
+                continue
+            action.blockSignals(True)
+            action.setChecked(action.data() in target)
+            action.blockSignals(False)
+        self._update_live_account_btn()
+        self._run_compare()
+
+    def _on_live_account_toggled(self, name: str, checked: bool) -> None:
+        if checked:
+            self._live_accounts_checked.add(name)
+        else:
+            self._live_accounts_checked.discard(name)
+        self._update_live_account_btn()
+        self._run_compare()
+
+    def _selected_live_accounts(self) -> list[str]:
+        return [row["name"] for row in self._live_rows
+                if row["name"] in self._live_accounts_checked]
+
+    def _update_live_account_btn(self) -> None:
+        total = len(self._live_rows)
+        chosen = len(self._live_accounts_checked)
+        if total and chosen == total:
+            self.live_account_btn.setText(f"主播：全部（{total}）")
+        elif chosen:
+            self.live_account_btn.setText(f"主播：{chosen}/{total}")
+        else:
+            self.live_account_btn.setText("主播：未选")
+
+    def _on_dup_mode_changed(self, *_args) -> None:
+        target = self.target_combo.currentData() or {}
+        if str(target.get("profile") or "") == "lives":
             self._run_compare()
 
     def _show_song_search(self) -> None:
@@ -1204,24 +1302,46 @@ class TcDocBridgePanel(QWidget):
             return
         profile = str(target.get("profile") or "posts")
         if profile == "lives":
-            # 直播记录暂无本地自动数据源：给出空表 + 手动录入入口。
+            # 抖音直播历史 → 直播记录待补行（含重复处理策略）
             columns = [str(col.get("name") or "")
                        for col in target.get("columns") or []
                        if str(col.get("name") or "")] or list(bridge.LIVE_FALLBACK_COLUMNS)
-            self._busy = False
-            self._compare_owner = 0
-            self._compare_watchdog.stop()
-            self._result = bridge.manual_target_result("lives", columns)
-            self._fill_table([], columns, append_images=False)
-            self._show_table()
-            self.compare_btn.setEnabled(True)
-            self.copy_btn.setEnabled(False)
-            self.upload_btn.setEnabled(False)
-            self.copy_images_btn.setEnabled(False)
-            self.summary.setText(
-                "直播记录暂无本地自动数据源：可点「手动录入」新增一行，再复制 TSV 粘贴。")
+            days = int(self.days_combo.currentData() or 0)
+            accounts = self._selected_live_accounts()
+            mode = str(self.dup_combo.currentData() or "skip")
+            if not accounts and self._live_rows:
+                # 有主播但一个都没勾：直接提示，避免误把所有主播都跑一遍
+                self._busy = False
+                self._compare_owner = 0
+                self._compare_watchdog.stop()
+                self._result = bridge.manual_target_result("lives", columns)
+                self._fill_table([], columns, append_images=False)
+                self._show_table()
+                self.copy_btn.setEnabled(False)
+                self.upload_btn.setEnabled(False)
+                self.summary.setText("未勾选任何主播：请在上方「主播」里选择要同步的抖音账号。")
+                return
+            self._busy = True
+            self._compare_pending = False
+            req = self._compare_req
+            self._compare_owner = req
+            self.summary.setText("正在比对抖音直播历史与直播记录表…")
             self.status.setText(
-                "手动录入只生成可复制的行，不会直接写入腾讯文档；图片列请在腾讯文档里补。")
+                f"只读比对：重复场次按「{bridge.LIVE_DUP_MODES.get(mode, mode)}」处理，"
+                "AI 摘要 / 截图 / 标签 / 备注等人工列不会被覆盖。")
+
+            def work():
+                return bridge.build_live_pending(days=days, accounts=accounts,
+                                                 duplicate_mode=mode, columns=columns)
+
+            def done(result, err):
+                self._finish_live_compare(req, result, err)
+
+            thread = run_bg(work, done, owner=self._task_owner)
+            if thread is None:
+                self._busy = False
+                self._compare_owner = 0
+                self.summary.setText("比对任务未启动，请重试")
             return
         self._busy = True
         self._compare_pending = False
@@ -1277,6 +1397,39 @@ class TcDocBridgePanel(QWidget):
             self._restore_buttons()
             return
         self._compare_watchdog.start(self.COMPARE_TIMEOUT_MS)
+
+    def _finish_live_compare(self, req, result, err) -> None:
+        """直播记录比对结果：只读展示 + 复制 TSV；不走上传（上传只支持动态结构）。"""
+        self._busy = False
+        self._compare_owner = 0
+        self._compare_watchdog.stop()
+        if self._closed or req != self._compare_req:
+            return
+        if err or not result:
+            self.summary.setText(f"比对失败：{err or '未知错误'}")
+            if not self._rows:
+                self._clear_result()
+            return
+        self._result = result
+        self._fill_table(result["rows"], result.get("columns"), append_images=False)
+        self._show_table()
+        stats = result.get("stats") or {}
+        mode_label = bridge.LIVE_DUP_MODES.get(str(stats.get("mode")), "跳过重复")
+        scope = stats.get("since") or "全部历史"
+        self.summary.setText(
+            f"抖音直播历史 {scope} 共 {stats.get('local_items', 0)} 场 → "
+            f"重复 {stats.get('duplicates', 0)} 场（{mode_label}）、"
+            f"待补 {stats.get('pending', 0)} 行")
+        self.copy_btn.setEnabled(bool(result["rows"]))
+        self.upload_btn.setEnabled(False)
+        self.copy_images_btn.setEnabled(False)
+        self.status.setText(
+            "只读比对：点「复制全部（TSV）」到直播记录表末尾粘贴；直播时长 / 直播距今是公式列，"
+            "不写；AI 摘要 / 截图 / 标签 / 备注 / 初编 / 终编属人工列，任何模式都不会覆盖。")
+        if stats.get("duplicates") and str(stats.get("mode")) == "skip":
+            self.status.setText(
+                self.status.text()
+                + " 当前为「跳过重复」；如需合并请把上方切到「只填空」或「覆盖自动字段」。")
 
     def _finish_compare(self, req, result, err, used_accounts):
         if self._closed or self._songs_mode:
