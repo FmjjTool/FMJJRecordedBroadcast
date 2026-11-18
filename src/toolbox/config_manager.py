@@ -313,6 +313,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "webwiki_analytics_api": "",        # 空 = 用内置地址
     "webwiki_analytics_scope": "human",  # human / qualified / all
     "webwiki_analytics_time": "09:10",   # 每日定时采集时间 HH:MM
+    "webwiki_analytics_time2": "",       # 补采时间 1（空 = 不启用）
+    "webwiki_analytics_time3": "",       # 补采时间 2（空 = 不启用）
     # 网媒/音乐账号追踪：定时采集（注册 Windows 计划任务，关闭软件也按计划采集）
     "tracker_schedule_mode": "daily",
     "tracker_collect_time": "09:00",

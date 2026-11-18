@@ -32,6 +32,14 @@ _PAGE_KEYS = {
     "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
     "quark": "quark_backup", "webwiki": "localwiki",
 }
+# 站点访问统计的两个补采时间点（空 = 不启用）
+_WEBWIKI_EXTRA_TIME_KEYS = ("webwiki_analytics_time2", "webwiki_analytics_time3")
+
+
+def _webwiki_times(cfg: dict) -> list[str]:
+    times = [str(cfg.get("webwiki_analytics_time") or "").strip()]
+    times.extend(str(cfg.get(key) or "").strip() for key in _WEBWIKI_EXTRA_TIME_KEYS)
+    return [value for value in dict.fromkeys(times) if value]
 
 
 def _interval_text(value) -> str:
@@ -70,13 +78,17 @@ def list_tasks() -> list[dict]:
     out = []
     for tid, label, usage, task_name, data in rows:
         mode_key, time_key, interval_key = _CFG_KEYS[tid]
+        if tid == "webwiki":
+            schedule = "每天 " + " / ".join(sorted(_webwiki_times(cfg)))
+        else:
+            schedule = _schedule_text(cfg, mode_key, time_key, interval_key)
         out.append({
             "id": tid,
             "label": label,
             "usage": usage,
             "page": _PAGE_KEYS[tid],
             "task_name": task_name,
-            "schedule": _schedule_text(cfg, mode_key, time_key, interval_key),
+            "schedule": schedule,
             "installed": bool(data),
             "next_run": _next_run(data) if data else "-",
         })
@@ -99,10 +111,13 @@ def get_schedule(task_id: str) -> dict:
         "time": str(cfg.get(time_key) or "09:00"),
         "interval": interval,
         "interval_supported": bool(interval_key),
+        "extra_times": ([str(cfg.get(key) or "") for key in _WEBWIKI_EXTRA_TIME_KEYS]
+                        if task_id == "webwiki" else []),
     }
 
 
-def save_schedule(task_id: str, mode: str, time_text: str, interval: int) -> None:
+def save_schedule(task_id: str, mode: str, time_text: str, interval: int,
+                  extra_times=None) -> None:
     """保存计划设置到全局配置（是否安装由 install() 负责）。"""
     mode_key, time_key, interval_key = _CFG_KEYS[task_id]
     cfg = load_convert_config()
@@ -114,14 +129,19 @@ def save_schedule(task_id: str, mode: str, time_text: str, interval: int) -> Non
             cfg[interval_key] = max(1, min(1439, int(interval)))
         except (TypeError, ValueError):
             cfg[interval_key] = 30
+    if task_id == "webwiki":
+        values = list(extra_times or [])
+        for index, key in enumerate(_WEBWIKI_EXTRA_TIME_KEYS):
+            cfg[key] = str(values[index] or "").strip() if index < len(values) else ""
     save_convert_config(cfg)
 
 
-def install(task_id: str, mode: str, time_text: str, interval: int) -> tuple[bool, str]:
+def install(task_id: str, mode: str, time_text: str, interval: int,
+            extra_times=None) -> tuple[bool, str]:
     """保存并注册 / 更新指定任务的 Windows 计划任务。"""
-    save_schedule(task_id, mode, time_text, interval)
+    save_schedule(task_id, mode, time_text, interval, extra_times)
     if task_id == "webwiki":
-        return _webwiki.install_daily(time_text)
+        return _webwiki.install_daily(time_text, extra_times or [])
     use_interval = mode == "interval" and _CFG_KEYS[task_id][2] is not None
     if task_id == "tcdoc":
         return (_tcdoc.install_interval(interval) if use_interval

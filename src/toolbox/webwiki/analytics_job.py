@@ -24,6 +24,9 @@ def main() -> int:
         analytics.append_job_log(str(text))
 
     log("定时采集开始")
+    if analytics.has_today_ro():
+        log("今天已有采集记录，跳过")
+        return 0
     try:
         row = analytics.collect(log=log)
     except analytics.AnalyticsError as error:

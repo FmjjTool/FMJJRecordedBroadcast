@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 TASK_NAME = "FengMingWebwikiAnalytics"
+TASK_NAMES = (TASK_NAME, TASK_NAME + "_2", TASK_NAME + "_3")
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -40,33 +42,56 @@ def _runner_command() -> str:
     return f'"{exe}" "{script}"'
 
 
-def install_daily(time_str: str) -> tuple[bool, str]:
-    """安装 / 更新每天定时采集任务，返回 (是否成功, 提示)。"""
-    time_str = str(time_str or "").strip()
-    try:
-        hour, minute = (int(part) for part in time_str.split(":", 1))
-        assert 0 <= hour <= 23 and 0 <= minute <= 59
-    except (ValueError, AssertionError):
-        return False, "时间格式应为 24 小时制 HH:MM，例如 09:10"
+def _normalize_times(time_str: str, extra_times=()) -> tuple[list[str], str]:
+    times: list[str] = []
+    for value in [time_str, *list(extra_times or [])]:
+        value = str(value or "").strip()
+        if not value:
+            continue
+        try:
+            hour, minute = (int(part) for part in value.split(":", 1))
+            assert 0 <= hour <= 23 and 0 <= minute <= 59
+        except (ValueError, AssertionError):
+            return [], f"时间格式应为 24 小时制 HH:MM：{value}"
+        if value not in times:
+            times.append(value)
+    if not times:
+        return [], "至少需要一个每天执行时间"
+    return times[:len(TASK_NAMES)], ""
+
+
+def install_daily(time_str: str, extra_times=()) -> tuple[bool, str]:
+    """安装 / 更新每天定时采集任务（最多三个时间点），返回 (是否成功, 提示)。"""
+    times, error = _normalize_times(time_str, extra_times)
+    if error:
+        return False, error
     command = _runner_command()
-    result = _run(["schtasks", "/Create", "/TN", TASK_NAME, "/TR", command,
-                   "/SC", "DAILY", "/ST", time_str, "/F"])
-    if result.returncode != 0:
-        return False, (result.stdout or result.stderr or "未知错误").strip()
-    return True, f"每天 {time_str} 自动采集站点统计"
+    errors = []
+    for index, value in enumerate(times):
+        result = _run(["schtasks", "/Create", "/TN", TASK_NAMES[index],
+                       "/TR", command, "/SC", "DAILY", "/ST", value, "/F"])
+        if result.returncode != 0:
+            errors.append((result.stdout or result.stderr or "未知错误").strip())
+    # 补采时间减少时，删掉多余的旧任务
+    for index in range(len(times), len(TASK_NAMES)):
+        _run(["schtasks", "/Delete", "/TN", TASK_NAMES[index], "/F"])
+    if errors:
+        return False, errors[0]
+    return True, "每天 " + " / ".join(sorted(times)) + " 自动采集站点统计"
 
 
 def uninstall() -> tuple[bool, str]:
-    result = _run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
-    if result.returncode != 0:
-        return False, (result.stdout or result.stderr or "未知错误").strip()
+    results = [_run(["schtasks", "/Delete", "/TN", name, "/F"])
+               for name in TASK_NAMES]
+    if all(result.returncode != 0 for result in results):
+        return False, (results[0].stdout or results[0].stderr
+                       or "未知错误").strip()
     return True, "定时任务已删除"
 
 
-def info() -> dict:
-    """解析 schtasks 输出（兼容中英文系统），未安装 / 查询失败返回空 dict。"""
+def _query_task(name: str) -> dict:
     try:
-        result = _run(["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"])
+        result = _run(["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"])
     except Exception:  # noqa: BLE001 - 任何异常都按「查不到」处理
         return {}
     if result.returncode != 0:
@@ -78,6 +103,38 @@ def info() -> dict:
         key, _, value = line.partition(":")
         data[key.strip()] = value.strip()
     return data
+
+
+def _next_run_dt(text: str):
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(str(text or "").strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def info() -> dict:
+    """解析全部时间点的 schtasks 输出；返回主任务数据并带最早下次运行时间。"""
+    queried = [(name, _query_task(name)) for name in TASK_NAMES]
+    installed = [(name, data) for name, data in queried if data]
+    if not installed:
+        return {}
+    primary = next((data for name, data in installed if name == TASK_NAME),
+                   installed[0][1])
+    next_values = []
+    for _name, data in installed:
+        text = (data.get("Next Run Time") or data.get("下次运行时间") or "")
+        parsed = _next_run_dt(text)
+        if parsed is not None:
+            next_values.append((parsed, text))
+    if next_values:
+        earliest = min(next_values, key=lambda item: item[0])[1]
+        primary = dict(primary)
+        primary["Next Run Time"] = earliest
+        primary["下次运行时间"] = earliest
+    return primary
 
 
 def next_run_text() -> str:

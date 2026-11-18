@@ -57,6 +57,17 @@ class _ScheduleDialog(QDialog):
 
         form.addRow("执行方式", self.mode)
         form.addRow("每天时间", self.time_edit)
+        self.extra_edits: list[QLineEdit] = []
+        if self._task_id == "webwiki":
+            for index, value in enumerate(self._schedule.get("extra_times") or ["", ""]):
+                edit = QLineEdit(str(value or ""), self)
+                edit.setFixedWidth(80)
+                edit.setAlignment(Qt.AlignCenter)
+                edit.setPlaceholderText("留空")
+                edit.setToolTip(
+                    "补采时间：到点后若今天还没有采集记录才采集，已有记录则跳过；留空不启用")
+                form.addRow(f"补采时间 {index + 1}", edit)
+                self.extra_edits.append(edit)
         form.addRow("间隔", self.interval_spin)
 
         hint = QLabel("保存后立即注册 / 更新 Windows 计划任务；关闭软件也会按计划执行。", self)
@@ -75,22 +86,27 @@ class _ScheduleDialog(QDialog):
         self.mode.setCurrentIndex(max(0, self.mode.findData(self._schedule["mode"])))
         self.mode.currentIndexChanged.connect(self._sync_mode)
         self._sync_mode()
-        self.resize(360, 210)
+        self.resize(380, 280 if self.extra_edits else 210)
 
     def _sync_mode(self):
         interval = self.mode.currentData() == "interval"
         self.interval_spin.setEnabled(interval)
         self.time_edit.setEnabled(not interval)
 
-    def values(self) -> tuple[str, str, int]:
+    def values(self) -> tuple[str, str, int, list[str]]:
         return (self.mode.currentData() or "daily",
-                self.time_edit.text().strip(), int(self.interval_spin.value()))
+                self.time_edit.text().strip(), int(self.interval_spin.value()),
+                [edit.text().strip() for edit in self.extra_edits])
 
     def accept(self):
-        mode, time_text, _interval = self.values()
+        mode, time_text, _interval, extra_times = self.values()
         if mode == "daily" and not _TIME_RE.match(time_text):
             QMessageBox.warning(self, "时间格式不正确",
                                 "请输入 24 小时制时间，例如 09:10 / 23:50。")
+            return
+        if any(value and not _TIME_RE.match(value) for value in extra_times):
+            QMessageBox.warning(self, "补采时间格式不正确",
+                                "补采时间留空或填 24 小时制 HH:MM，例如 13:00。")
             return
         super().accept()
 
@@ -102,28 +118,28 @@ class TasksPage(BasePage):
         v.setContentsMargins(10, 8, 10, 10)
         v.setSpacing(6)
 
-        head = QHBoxLayout()
-        head.addStretch(1)
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.clicked.connect(self.refresh)
-        head.addWidget(refresh_btn)
-        del_all_btn = QPushButton("全部删除")
-        del_all_btn.setProperty("variant", "danger")
-        del_all_btn.setToolTip("删除本软件注册的全部 Windows 计划任务")
-        del_all_btn.clicked.connect(self._uninstall_all)
-        head.addWidget(del_all_btn)
-        v.addLayout(head)
-
-        hint = QLabel("这些任务由 Windows 计划任务执行：关闭软件后也会按计划自动运行；"
-                      "计划模式、时间与间隔统一在本页「设置」里修改，功能页不再单独提供定时设置。")
-        hint.setProperty("role", "caption")
-        hint.setWordWrap(True)
-        v.addWidget(hint)
-
         card = QFrame()
         card.setProperty("variant", "card")
         cv = QVBoxLayout(card)
         cv.setContentsMargins(8, 8, 8, 8)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        hint = QLabel("由 Windows 计划任务执行，关闭软件也会按时运行；"
+                      "计划统一在本页「设置」修改。")
+        hint.setProperty("role", "caption")
+        hint.setWordWrap(True)
+        bar.addWidget(hint, 1)
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.clicked.connect(self.refresh)
+        bar.addWidget(refresh_btn)
+        del_all_btn = QPushButton("全部删除")
+        del_all_btn.setProperty("variant", "danger")
+        del_all_btn.setToolTip("删除本软件注册的全部 Windows 计划任务")
+        del_all_btn.clicked.connect(self._uninstall_all)
+        bar.addWidget(del_all_btn)
+        cv.addLayout(bar)
+
         self.table = QTableWidget(0, len(_COLS))
         self.table.setHorizontalHeaderLabels(_COLS)
         self.table.verticalHeader().setVisible(False)
@@ -204,12 +220,12 @@ class TasksPage(BasePage):
         dialog = _ScheduleDialog(self, task)
         if dialog.exec() != QDialog.Accepted:
             return
-        mode, time_text, interval = dialog.values()
+        mode, time_text, interval, extra_times = dialog.values()
         task_id = task["id"]
 
         def work():
             from toolbox import task_center
-            return task_center.install(task_id, mode, time_text, interval)
+            return task_center.install(task_id, mode, time_text, interval, extra_times)
 
         def done(result, err):
             if err:

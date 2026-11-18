@@ -358,6 +358,15 @@ def load_history_ro(limit: int = 14, scope: str | None = None) -> list[dict]:
         conn.close()
 
 
+def has_today_ro(scope: str | None = None) -> bool:
+    """今天（当前口径）是否已有快照；供多时间点补采跳过使用。"""
+    from toolbox.webwiki import config as wiki_cfg
+
+    scope = scope or wiki_cfg.analytics_scope()
+    rows = load_history_ro(limit=1, scope=scope)
+    return bool(rows and str(rows[0].get("stat_date") or "") == today())
+
+
 def load_fetch_log_ro(limit: int = 50) -> list[dict]:
     """只读采集历史（每次尝试的成功/失败记录）；不建库、不联网。"""
     try:
