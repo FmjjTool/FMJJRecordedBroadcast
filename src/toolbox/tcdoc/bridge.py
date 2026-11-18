@@ -618,6 +618,13 @@ EVENT_TAB_ID = "ss_e1kkm2"
 MERCH_TAB_ID = "ss_ekd4cz"
 EVENT_REQUIRED_COLUMNS = ("活动名称", "活动日期")
 MERCH_REQUIRED_COLUMNS = ("周边名称",)
+LIVE_TAB_ID = "ss_1xgstm"
+LIVE_REQUIRED_COLUMNS = ("直播标题", "直播平台", "开始时间")
+LIVE_FALLBACK_COLUMNS = (
+    "直播账户", "直播标题", "开始时间", "结束时间", "直播时长", "直播距今",
+    "直播标签", "AI 摘要", "直播平台", "直播链接2", "直播链接1", "直播链接3",
+    "直播截图", "初编人员", "备注信息", "终编人员",
+)
 EVENT_FALLBACK_COLUMNS = ("活动名称", "活动日期", "年份", "城市", "活动类型",
                           "宣传图", "备注信息")
 MERCH_FALLBACK_COLUMNS = ("周边名称", "首发日期", "产品图", "封面图", "获取方式",
@@ -1174,6 +1181,24 @@ reverse=True)
     }
 
 
+def manual_target_result(profile: str, columns) -> dict:
+    """无本地自动数据源的目标表（如直播记录）→ 空结果，供手动录入。"""
+    return {
+        "profile": profile,
+        "rows": [],
+        "columns": list(columns or []),
+        "accounts": [],
+        "local_accounts": [],
+        "link_columns": [],
+        "stats": {
+            "local_items": 0, "local_groups": 0, "synced_groups": 0,
+            "pending": 0, "with_images": 0, "without_images": 0,
+            "image_count": 0, "since": "", "source": "manual",
+            "timing": {"remote": 0, "local": 0, "match": 0, "total": 0},
+        },
+    }
+
+
 def build_event_pending(days=365, collected=None) -> dict:
     """线下活动：票务解析旁车优先（旧本地动态兜底）→ 与快照比对（只读）。"""
     return _build_candidate_result("events", days, collected)
@@ -1378,6 +1403,10 @@ def list_targets() -> list[dict]:
                 if not all(name in names for name in MERCH_REQUIRED_COLUMNS):
                     continue
                 profile = "merch"
+            elif key == SONG_DOC_KEY and sheet["tab_id"] == LIVE_TAB_ID:
+                if not all(name in names for name in LIVE_REQUIRED_COLUMNS):
+                    continue
+                profile = "lives"
             elif key == SONG_DOC_KEY and sheet["tab_id"] == SONG_TAB_ID:
                 if not _is_song_sheet(sheet):
                     continue

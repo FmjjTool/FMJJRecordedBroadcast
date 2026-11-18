@@ -12,10 +12,10 @@ import logging
 from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QProgressBar, QPushButton,
-    QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QApplication, QComboBox, QDialog, QFormLayout,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
+    QProgressBar, QPushButton, QScrollArea, QStackedWidget, QTableView,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -302,6 +302,14 @@ class TcDocBridgePanel(QWidget):
         self.compare_btn.clicked.connect(self._run_compare)
         top.addWidget(self.compare_btn)
 
+        self.manual_btn = QPushButton("手动录入")
+        self.manual_btn.setToolTip(
+            "为当前表手动新增一行；只生成可复制的 TSV，不会直接写入腾讯文档。"
+            "图片列请用「复制图片」或到腾讯文档里补。")
+        self.manual_btn.setVisible(False)
+        self.manual_btn.clicked.connect(self._manual_entry)
+        top.addWidget(self.manual_btn)
+
         self.refresh_sync_btn = QPushButton("同步前刷新")
         self.refresh_sync_btn.setToolTip(
             "上传前必须先刷新，保证数据清洁：\n"
@@ -564,7 +572,9 @@ class TcDocBridgePanel(QWidget):
                            tcdoc_bridge_tab_id=target["tab_id"])
         profile = str((target or {}).get("profile") or "posts")
         songs = profile == "songs"
-        readonly = profile in ("events", "merch")
+        lives = profile == "lives"
+        readonly = profile in ("events", "merch", "lives")
+        self.manual_btn.setVisible(profile in ("events", "merch", "lives"))
         if songs and not self._songs_mode:
             self._posts_days_index = self.days_combo.currentIndex()
         if songs:
@@ -577,7 +587,7 @@ class TcDocBridgePanel(QWidget):
             self.days_combo.setCurrentIndex(self._posts_days_index)
             self.days_combo.blockSignals(False)
         self._songs_mode = songs
-        self.days_combo.setEnabled(not songs)
+        self.days_combo.setEnabled(not songs and not lives)
         self.account_btn.setEnabled(not songs and not readonly)
         if readonly:
             self.account_btn.setText("全部")
@@ -1119,6 +1129,27 @@ class TcDocBridgePanel(QWidget):
     def _start_compare(self):
         target = self.target_combo.currentData()
         if not target:
+            return
+        profile = str(target.get("profile") or "posts")
+        if profile == "lives":
+            # 直播记录暂无本地自动数据源：给出空表 + 手动录入入口。
+            columns = [str(col.get("name") or "")
+                       for col in target.get("columns") or []
+                       if str(col.get("name") or "")] or list(bridge.LIVE_FALLBACK_COLUMNS)
+            self._busy = False
+            self._compare_owner = 0
+            self._compare_watchdog.stop()
+            self._result = bridge.manual_target_result("lives", columns)
+            self._fill_table([], columns)
+            self._show_table()
+            self.compare_btn.setEnabled(True)
+            self.copy_btn.setEnabled(False)
+            self.upload_btn.setEnabled(False)
+            self.copy_images_btn.setEnabled(False)
+            self.summary.setText(
+                "直播记录暂无本地自动数据源：可点「手动录入」新增一行，再复制 TSV 粘贴。")
+            self.status.setText(
+                "手动录入只生成可复制的行，不会直接写入腾讯文档；图片列请在腾讯文档里补。")
             return
         self._busy = True
         self._compare_pending = False
