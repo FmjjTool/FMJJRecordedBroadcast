@@ -545,14 +545,35 @@ def row_summary(values: dict) -> str:
     return ""
 
 
-def save_doc(result: dict, path=None) -> dict:
-    """落库并返回增量统计 {tab_name: (rows, added, updated, removed)}。"""
+def tab_ids_for(doc_key: str, names: list | None, path=None) -> set | None:
+    """子表名 → tab_id（用本地 sheets 表映射）；names=None 表示全部子表。"""
+    if names is None:
+        return None
+    path = init_db(path)
+    out: set = set()
+    with sqlite3.connect(path) as conn:
+        for tab_id, tab_name in conn.execute(
+                "SELECT tab_id, tab_name FROM sheets WHERE doc_key=? AND skipped=0",
+                (str(doc_key),)):
+            if tab_name in names:
+                out.add(tab_id)
+    return out
+
+
+def save_doc(result: dict, path=None, tab_ids: set | None = None) -> dict:
+    """落库并返回增量统计 {tab_name: (rows, added, updated, removed)}。
+
+    tab_ids：只落这些子表（自动维护按勾选范围同步）；None = 全部子表。
+    未选中的子表既不写入也不删除，本地旧数据原样保留。
+    """
     path = init_db(path)
     now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
     doc_key = result["doc_key"]
+    sheets = [s for s in result.get("sheets", [])
+              if tab_ids is None or s["tab_id"] in tab_ids]
     stats = []
     with closing(sqlite3.connect(path)) as conn, conn:
-        for sheet in result.get("sheets", []):
+        for sheet in sheets:
             tab_id, tab_name = sheet["tab_id"], sheet["tab_name"]
             old = {row[0]: (row[1], row[2]) for row in conn.execute(
                 "SELECT record_id, row_hash, data_json FROM rows "
@@ -634,7 +655,7 @@ def save_doc(result: dict, path=None) -> dict:
         from . import images
     except Exception:  # noqa: BLE001 - 图片登记失败不影响表格数据落库
         return {"doc_key": doc_key, "name": result.get("name"), "tabs": stats}
-    for sheet, stat in zip(result.get("sheets", []), stats):
+    for sheet, stat in zip(sheets, stats):
         try:
             images.register_sheet(
                 doc_key, sheet, path,

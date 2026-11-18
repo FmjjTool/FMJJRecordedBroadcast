@@ -504,6 +504,28 @@ class TcDocPage(BasePage):
             row.addWidget(btn)
         cv.addLayout(row)
 
+        # 自动维护总开关 + 子表范围（只作用于定时任务；手动采集始终可用）
+        auto_row = QHBoxLayout()
+        auto_row.setSpacing(6)
+        self.auto_cb = QCheckBox("自动维护（定时任务按勾选的子表同步）")
+        self.auto_cb.setToolTip(
+            "关闭后定时任务不再同步任何子表；计划任务本身保留，"
+            "时间仍在「任务」页统一管理。手动「立即采集 / 表格同步」不受影响。")
+        self.auto_cb.toggled.connect(self._on_auto_toggled)
+        auto_row.addWidget(self.auto_cb)
+        self.sync_tabs_btn = QPushButton("选择同步子表…")
+        self.sync_tabs_btn.setToolTip(
+            "勾选本子文档里参与自动同步的子表（官方动态 / 直播记录 / 完整歌曲…）；"
+            "未勾选的子表不拉取、不下图片，本地旧数据保留不删")
+        self.sync_tabs_btn.clicked.connect(self._choose_sync_tabs)
+        auto_row.addWidget(self.sync_tabs_btn)
+        self.sync_tabs_label = QLabel("")
+        self.sync_tabs_label.setProperty("role", "caption")
+        self.sync_tabs_label.setWordWrap(True)
+        auto_row.addWidget(self.sync_tabs_label, 1)
+        cv.addLayout(auto_row)
+        self._refresh_auto_state()
+
         self.url_label = QLabel("")
         self.url_label.setProperty("role", "caption")
         self.url_label.setWordWrap(True)
@@ -1131,6 +1153,92 @@ class TcDocPage(BasePage):
         if self.docs:
             self.doc_combo.setCurrentIndex(idx)
         self.doc_combo.blockSignals(False)
+        self._refresh_auto_state()
+
+    # ==================== 自动维护开关 / 子表范围 ====================
+
+    def _refresh_auto_state(self):
+        """回显总开关与当前文档的子表范围（只读配置，不触发同步）。"""
+        self.auto_cb.blockSignals(True)
+        self.auto_cb.setChecked(tc_cfg.auto_sync_enabled())
+        self.auto_cb.blockSignals(False)
+        doc = self.current_doc() or {}
+        key = str(doc.get("key") or "")
+        self.sync_tabs_btn.setEnabled(bool(key))
+        if not key:
+            self.sync_tabs_label.setText("子表范围：—")
+            return
+        names = tc_cfg.selected_tabs(key)
+        if names is None:
+            self.sync_tabs_label.setText("子表范围：全部子表（未限定）")
+        else:
+            preview = "、".join(names[:4]) + ("…" if len(names) > 4 else "")
+            self.sync_tabs_label.setText(f"子表范围：{len(names)} 张（{preview}）")
+
+    def _on_auto_toggled(self, checked):
+        tc_cfg.set_auto_sync_enabled(checked)
+        if checked:
+            self.app.toast("自动维护已开启：定时任务只同步勾选的子表", "success")
+        else:
+            self.app.toast("自动维护已关闭：定时任务不再同步（计划任务保留）", "info")
+
+    def _choose_sync_tabs(self):
+        """勾选本子文档参与自动同步的子表；取消全部勾选 = 恢复「全部子表」。"""
+        doc = self.current_doc() or {}
+        key = str(doc.get("key") or "")
+        if not key:
+            return
+        sheets = [s for s in tables.sheets_of(key) if not s.get("skipped")]
+        names = [s["tab_name"] for s in sheets]
+        if not names:
+            QMessageBox.information(
+                self, "还没有子表数据",
+                "本地还没有这本文档的子表快照，请先在「表格同步」里同步一次，再来选择范围。")
+            return
+        current = tc_cfg.selected_tabs(key)
+        checked = set(names if current is None else current)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("选择自动同步的子表")
+        dlg.resize(420, 460)
+        v = QVBoxLayout(dlg)
+        tip = QLabel("勾选的子表参与定时同步；未勾选的不拉取、不下图片，"
+                     "本地已有数据保留不删。全部勾选等于「同步全部子表」。")
+        tip.setProperty("role", "caption")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        boxes: dict[str, QCheckBox] = {}
+        for name in names:
+            cb = QCheckBox(name)
+            cb.setChecked(name in checked)
+            boxes[name] = cb
+            v.addWidget(cb)
+        v.addStretch(1)
+        row = QHBoxLayout()
+        all_btn = QPushButton("全选")
+        all_btn.clicked.connect(lambda: [cb.setChecked(True) for cb in boxes.values()])
+        row.addWidget(all_btn)
+        none_btn = QPushButton("全不选")
+        none_btn.clicked.connect(lambda: [cb.setChecked(False) for cb in boxes.values()])
+        row.addWidget(none_btn)
+        row.addStretch(1)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(dlg.reject)
+        row.addWidget(cancel)
+        ok = QPushButton("保存")
+        ok.setProperty("variant", "primary")
+        ok.clicked.connect(dlg.accept)
+        row.addWidget(ok)
+        v.addLayout(row)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        chosen = [name for name, cb in boxes.items() if cb.isChecked()]
+        # 全选 = 不限定（None），这样以后新增的子表也会自动同步
+        tc_cfg.set_selected_tabs(key, chosen if len(chosen) < len(names) else None)
+        self._refresh_auto_state()
+        self.app.toast(
+            "已保存子表范围：全部" if len(chosen) == len(names)
+            else f"已保存子表范围：{len(chosen)}/{len(names)} 张", "success")
 
     def _fill_doc_table(self):
         db = tc_cfg.db_path()
@@ -1221,6 +1329,7 @@ class TcDocPage(BasePage):
         return self.docs[0]
 
     def _on_doc_changed(self, _index):
+        self._refresh_auto_state()
         if not self._ready_done:
             return
         self._data_revision += 1

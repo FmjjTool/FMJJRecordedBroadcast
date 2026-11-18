@@ -187,13 +187,25 @@ def _store_tables(item: dict, info: dict, on_status=None) -> None:
         item["tables_error"] = info.get("error") or "表格同步失败"
         log(f"[{item['name']}] 表格同步失败：{item['tables_error']}")
         return
+    # 子表范围（自动维护按勾选同步）；None = 全部子表
+    selected = cfg_mod.selected_tabs(item["doc_key"])
+    tab_ids = tables.tab_ids_for(item["doc_key"], selected)
+    if selected is not None:
+        pulled = [s["tab_name"] for s in info.get("sheets", [])]
+        all_tabs = pulled or [s["tab_name"] for s in tables.sheets_of(item["doc_key"])]
+        skipped = [t for t in all_tabs if t not in selected]
+        if skipped:
+            item["tabs_skipped"] = len(skipped)
+            log(f"[{item['name']}] 按勾选跳过 {len(skipped)} 张子表："
+                f"{'、'.join(skipped[:6])}{'…' if len(skipped) > 6 else ''}"
+                "（本地数据保留，未删除）")
     if info.get("unchanged"):
         item["tables_unchanged"] = True
         log(f"[{item['name']}] 文档未变化（rev={info.get('rev') or '-'}），跳过拉取")
-        _download_images(item, on_status)
+        _download_images(item, on_status, tab_ids)
         return
     try:
-        stats = tables.save_doc(info)
+        stats = tables.save_doc(info, tab_ids=tab_ids)
         item["tables_delta"] = stats["tabs"]
         detail = "  ".join(f"{t['tab_name']}({t['rows']})" for t in stats["tabs"][:6])
         added = sum(t["added"] for t in stats["tabs"])
@@ -221,17 +233,17 @@ def _store_tables(item: dict, info: dict, on_status=None) -> None:
             tables.set_rev(item["doc_key"], "")
         elif excel_ok and info.get("rev"):
             tables.set_rev(item["doc_key"], info["rev"])
-        _download_images(item, on_status)
+        _download_images(item, on_status, tab_ids)
     except Exception as exc:  # noqa: BLE001
         item["tables_error"] = f"表格落库失败：{exc}"
         log(f"[{item['name']}] {item['tables_error']}")
 
 
-def _download_images(item: dict, on_status=None) -> None:
-    """表格同步/未变化时都补采缺失图片（已下载自动跳过）。"""
+def _download_images(item: dict, on_status=None, tab_ids: set | None = None) -> None:
+    """表格同步/未变化时都补采缺失图片（已下载自动跳过）；tab_ids 限定子表范围。"""
     try:
         image_stats = images.download_doc(item["doc_key"], item["name"],
-                                          on_status=on_status)
+                                          on_status=on_status, tab_ids=tab_ids)
         item["images"] = image_stats
         if image_stats["total"]:
             log(f"[{item['name']}] 表格图片：共 {image_stats['total']} 张，"
@@ -352,8 +364,12 @@ def run_scheduled() -> int:
 
     历史与表格任务交错提交到同一个线程池（默认 2 路并发），写库/报表统一
     回主线程串行，避免 SQLite 并发写；表格按 rev 跳过未变化的文档。
+    自动维护总开关关闭时整轮跳过（计划任务保留，不删除）。
     """
     ensure_ready()
+    if not cfg_mod.auto_sync_enabled():
+        log("自动维护已关闭（总开关），本次定时采集跳过；手动「立即采集 / 表格同步」不受影响")
+        return 0
     docs = cfg_mod.load_docs()
     if not docs:
         log("定时采集失败：尚未配置任何腾讯文档")

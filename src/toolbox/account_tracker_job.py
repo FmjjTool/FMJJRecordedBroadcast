@@ -84,6 +84,34 @@ def _collect_music_one(acc: dict) -> tuple[bool, str]:
 
 # ==================== 入口 ====================
 
+def collect_tracker_all(on_message=None) -> tuple[int, int]:
+    """采集全部网媒账号（指标 + 抖音直播历史），返回 (成功数, 账号总数)。
+
+    GUI「同步前刷新」与定时任务共用同一条采集链路，避免两套实现漂移。
+    """
+    from tracker.accounts import load_accounts
+
+    accounts = load_accounts()
+    if not accounts:
+        return 0, 0
+    ok = 0
+    with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
+        futures = [pool.submit(_collect_tracker_one, acc) for acc in accounts]
+        for fut in as_completed(futures):
+            try:
+                good, msg = fut.result()
+            except Exception as exc:  # noqa: BLE001 - 正常已在 worker 内捕获
+                good, msg = False, f"采集异常：{exc}"
+            ok += 1 if good else 0
+            log(msg)
+            if on_message is not None:
+                try:
+                    on_message(msg)
+                except Exception:  # noqa: BLE001 - 回调异常不影响采集
+                    pass
+    return ok, len(accounts)
+
+
 def run(kind: str) -> int:
     kind_name = "网媒账号追踪" if kind == "tracker" else "音乐账号追踪"
     log(f"===== {kind_name}定时任务开始 =====")
@@ -91,27 +119,29 @@ def run(kind: str) -> int:
         from toolbox.config_manager import init_all_configs
         init_all_configs()
         if kind == "tracker":
-            from tracker.accounts import load_accounts
-            worker = _collect_tracker_one
+            ok, total = collect_tracker_all()
+            if total == 0:
+                log(f"[{kind_name}] 尚未配置任何账号，跳过")
+                return 1
         else:
             from music_account.accounts import load_accounts
-            worker = _collect_music_one
-        accounts = load_accounts()
-        if not accounts:
-            log(f"[{kind_name}] 尚未配置任何账号，跳过")
-            return 1
-        ok = 0
-        with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
-            futures = [pool.submit(worker, acc) for acc in accounts]
-            for fut in as_completed(futures):
-                try:
-                    good, msg = fut.result()
-                except Exception as exc:  # noqa: BLE001 - 正常已在 worker 内捕获
-                    good, msg = False, f"采集异常：{exc}"
-                ok += 1 if good else 0
-                log(msg)
-        log(f"===== {kind_name}定时任务结束：成功 {ok}/{len(accounts)} =====")
-        return 0 if ok == len(accounts) else 1
+            accounts = load_accounts()
+            if not accounts:
+                log(f"[{kind_name}] 尚未配置任何账号，跳过")
+                return 1
+            ok = 0
+            with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as pool:
+                futures = [pool.submit(_collect_music_one, acc) for acc in accounts]
+                for fut in as_completed(futures):
+                    try:
+                        good, msg = fut.result()
+                    except Exception as exc:  # noqa: BLE001 - 正常已在 worker 内捕获
+                        good, msg = False, f"采集异常：{exc}"
+                    ok += 1 if good else 0
+                    log(msg)
+            total = len(accounts)
+        log(f"===== {kind_name}定时任务结束：成功 {ok}/{total} =====")
+        return 0 if ok == total else 1
     except Exception as exc:  # noqa: BLE001
         log(f"定时任务失败：{exc}")
         return 1

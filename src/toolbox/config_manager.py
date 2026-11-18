@@ -298,6 +298,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_headless": True,
     "tcdoc_legacy_migrated": False,
     "tcdoc_table_page": 200,
+    "tcdoc_auto_enabled": True,      # 自动维护总开关（定时任务是否同步）
+    "tcdoc_sync_tabs": {},           # {doc_key: [子表名…]}，缺省 = 全部子表
     # 腾讯文档「中间层同步器」：上次选择的目标表格 + 时间范围 + 账号勾选
     "tcdoc_bridge_doc_key": "",
     "tcdoc_bridge_tab_id": "",

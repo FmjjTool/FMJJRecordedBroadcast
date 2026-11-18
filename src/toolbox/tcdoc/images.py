@@ -350,8 +350,11 @@ def _update(conn, rec: dict, **fields) -> None:
 
 
 def download_doc(doc_key: str, doc_name: str, on_status=None, path=None,
-                 limit: int = 0) -> dict:
-    """下载该文档全部未落盘的图片，返回本次统计（limit 仅用于调试）。"""
+                 limit: int = 0, tab_ids: set | None = None) -> dict:
+    """下载该文档全部未落盘的图片，返回本次统计（limit 仅用于调试）。
+
+    tab_ids：只处理这些子表的图片（自动维护按勾选范围同步）；None = 全部。
+    """
     doc_key = str(doc_key)
     db = init_db(path)
     register_doc(doc_key, db)
@@ -360,6 +363,8 @@ def download_doc(doc_key: str, doc_name: str, on_status=None, path=None,
         rows = [dict(row) for row in conn.execute(
             "SELECT * FROM images WHERE doc_key=? "
             "ORDER BY tab_id, row_no, field, idx", (doc_key,))]
+    if tab_ids is not None:
+        rows = [r for r in rows if r.get("tab_id") in tab_ids]
     total = len(rows)
     existing = 0
     pending: list[dict] = []

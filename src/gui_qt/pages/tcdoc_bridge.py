@@ -249,6 +249,7 @@ class TcDocBridgePanel(QWidget):
         self._account_checked: dict[str, bool] = {}
         self._songs_mode = False
         self._posts_days_index = None
+        self._refreshing = False
 
         self._acc_timer = QTimer(self)
         self._acc_timer.setSingleShot(True)
@@ -300,6 +301,15 @@ class TcDocBridgePanel(QWidget):
         self.compare_btn = QPushButton("重新比对")
         self.compare_btn.clicked.connect(self._run_compare)
         top.addWidget(self.compare_btn)
+
+        self.refresh_sync_btn = QPushButton("同步前刷新")
+        self.refresh_sync_btn.setToolTip(
+            "上传前必须先刷新，保证数据清洁：\n"
+            "1) 采集平台资料（信息获取 + 网媒账号追踪）\n"
+            "2) 重新拉取一遍腾讯文档表格快照\n"
+            "三步都成功后「上传到腾讯文档」才可用；上传完成或超过 60 分钟后需重新刷新。")
+        self.refresh_sync_btn.clicked.connect(self._refresh_before_sync)
+        top.addWidget(self.refresh_sync_btn)
         top.addStretch(1)
 
         self.upload_btn = QPushButton("上传到腾讯文档")
@@ -756,6 +766,50 @@ class TcDocBridgePanel(QWidget):
 
     # ==================== 上传 ====================
 
+    def _refresh_before_sync(self) -> None:
+        """上传前刷新：采平台资料 → 拉腾讯文档，成功后才允许上传。"""
+        if self._refreshing or self._closed:
+            return
+        from toolbox import sync_refresh
+
+        self._refreshing = True
+        self.refresh_sync_btn.setEnabled(False)
+        self.status.setText("同步前刷新：采集平台资料 + 拉取腾讯文档…")
+
+        def work():
+            return sync_refresh.run(on_status=lambda text: common.post_to_main(
+                self.status.setText, text))
+
+        def done(result, err):
+            self._refreshing = False
+            self.refresh_sync_btn.setEnabled(True)
+            if self._closed:
+                return
+            if err or not result:
+                self.status.setText(f"刷新失败：{err or '未知错误'}")
+                return
+            if result.get("ok"):
+                self.status.setText(
+                    f"刷新完成（{result.get('ts')}）：平台资料与腾讯文档均已更新，可以上传")
+                self._maybe_run_pending_compare()
+                return
+            detail = "\n".join(
+                f"{label}：{'成功' if (result.get('steps') or {}).get(key, {}).get('ok') else '失败'}"
+                f"（{(result.get('steps') or {}).get(key, {}).get('msg') or '-'}）"
+                for key, label in (("info", "信息获取"), ("tracker", "网媒账号追踪"),
+                                   ("tcdoc", "拉取腾讯文档")))
+            self.status.setText(result.get("message") or "刷新未完成")
+            QMessageBox.warning(
+                self, "刷新未完成",
+                f"{result.get('message') or ''}\n\n{detail}\n\n"
+                "上传已锁定，请修复后重新点「同步前刷新」。")
+
+        thread = run_bg(work, done, owner=self)
+        if thread is None:
+            self._refreshing = False
+            self.refresh_sync_btn.setEnabled(True)
+            self.status.setText("刷新任务未启动，请重试")
+
     def _upload_target_ok(self) -> bool:
         """只允许白名单里的官方动态 / 直播记录，测试表与其它文档一律拒绝。"""
         target = self.target_combo.currentData()
@@ -773,6 +827,13 @@ class TcDocBridgePanel(QWidget):
             return
         target = self.target_combo.currentData()
         if not target:
+            return
+        from toolbox import sync_refresh
+        fresh, why = sync_refresh.is_fresh()
+        if not fresh:
+            QMessageBox.information(
+                self, "需要先刷新",
+                f"{why}\n\n请先点「同步前刷新」，完成后再上传。")
             return
         if not self._upload_target_ok():
             QMessageBox.warning(
@@ -916,6 +977,9 @@ class TcDocBridgePanel(QWidget):
                 self._progress_finish(3000)
                 return
             added = len(receipt.get("added") or [])
+            # 上传已写入远端：刷新记录作废，下一次上传必须重新「同步前刷新」
+            from toolbox import sync_refresh
+            sync_refresh.invalidate()
             skipped = len(receipt.get("skipped") or [])
             failed = [item for item in receipt.get("added") or [] if not item.get("verified")]
             duplicates = receipt.get("duplicates") or []

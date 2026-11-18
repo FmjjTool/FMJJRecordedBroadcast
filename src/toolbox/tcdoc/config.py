@@ -99,6 +99,38 @@ def save_cfg(**kwargs) -> None:
     save_convert_config(cfg)
 
 
+# ==================== 自动维护开关 / 子表范围 ====================
+# 自动维护 = Windows 定时任务那一侧；手动「立即采集 / 表格同步」始终可用。
+# 子表范围按文档存：{doc_key: [子表名…]}，没有记录的文档 = 全部子表（兼容旧配置）。
+
+def auto_sync_enabled() -> bool:
+    """自动维护总开关（默认开启，保持旧行为）。"""
+    return bool(load_cfg().get("tcdoc_auto_enabled", True))
+
+
+def set_auto_sync_enabled(enabled: bool) -> None:
+    save_cfg(tcdoc_auto_enabled=bool(enabled))
+
+
+def selected_tabs(doc_key: str) -> list | None:
+    """该文档参与自动同步的子表名；返回 None 表示「全部子表」（未配置过）。"""
+    mapping = load_cfg().get("tcdoc_sync_tabs") or {}
+    value = mapping.get(str(doc_key)) if isinstance(mapping, dict) else None
+    return list(value) if isinstance(value, list) else None
+
+
+def set_selected_tabs(doc_key: str, tabs: list) -> None:
+    """写入该文档的子表范围；传 None / 空表示恢复「全部子表」。"""
+    mapping = load_cfg().get("tcdoc_sync_tabs") or {}
+    if not isinstance(mapping, dict):
+        mapping = {}
+    if tabs:
+        mapping[str(doc_key)] = [str(t) for t in tabs]
+    else:
+        mapping.pop(str(doc_key), None)
+    save_cfg(tcdoc_sync_tabs=mapping)
+
+
 def load_docs() -> list[dict]:
     """文档清单；从未配置过（tcdocs 未落盘 / 为 None）时返回预置的 4 个文档。
 
