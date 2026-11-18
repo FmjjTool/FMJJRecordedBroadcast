@@ -162,47 +162,63 @@ def _group_maps() -> dict:
     }
 
 
+def iter_entries():
+    """逐条产出三个账号中心的原始条目（含来源、平台、身份链接与 id）。"""
+    for source, iterator in (("info", _info_items()),
+                             ("tracker", _tracker_items()),
+                             ("music", _music_items())):
+        for item in iterator:
+            platform = item.get("platform") or infer_platform(item["url"])
+            canonical = canonical_url(platform, item["url"])
+            yield {
+                "source": source, "platform": platform,
+                "url": item["url"], "canonical": canonical,
+                "id": account_id(platform, canonical),
+                "name": item["name"], "group_ids": item["group_ids"],
+                "kind": item.get("kind", ""),
+            }
+
+
 def load_overview() -> dict:
     """返回去重后的账号视图与统计；不写任何文件。"""
     groups = _group_maps()
     merged: dict[str, dict] = {}
     raw_counts = {"info": 0, "tracker": 0, "music": 0}
 
-    for source, iterator in (("info", _info_items()),
-                             ("tracker", _tracker_items()),
-                             ("music", _music_items())):
-        for item in iterator:
-            raw_counts[source] += 1
-            platform = item.get("platform") or infer_platform(item["url"])
-            norm = canonical_url(platform, item["url"])
-            key = account_id(platform, norm)
-            account = merged.get(key)
-            if account is None:
-                account = {
-                    "id": key, "platform": platform,
-                    "platform_name": _platform_name(platform),
-                    "name": item["name"], "url": norm, "norm_url": norm,
-                    "sources": [], "kinds": {}, "group_ids": [], "groups": [],
-                    "names": [],
-                }
-                merged[key] = account
-            if source not in account["sources"]:
-                account["sources"].append(source)
-            if item["name"] and item["name"] not in account["names"]:
-                account["names"].append(item["name"])
-            if not account["name"] and item["name"]:
-                account["name"] = item["name"]
-            if item.get("kind"):
-                kinds = account["kinds"].setdefault(source, [])
-                if item["kind"] not in kinds:
-                    kinds.append(item["kind"])
-            for gid in item["group_ids"]:
-                if gid and gid not in account["group_ids"]:
-                    account["group_ids"].append(gid)
-                gname = groups.get(source, {}).get(gid, "")
-                label = f"{gid} {gname}".strip()
-                if gid and label not in account["groups"]:
-                    account["groups"].append(label)
+    for entry in iter_entries():
+        source = entry["source"]
+        raw_counts[source] += 1
+        platform = entry["platform"]
+        norm = entry["canonical"]
+        key = entry["id"]
+        item = entry
+        account = merged.get(key)
+        if account is None:
+            account = {
+                "id": key, "platform": platform,
+                "platform_name": _platform_name(platform),
+                "name": item["name"], "url": norm, "norm_url": norm,
+                "sources": [], "kinds": {}, "group_ids": [], "groups": [],
+                "names": [],
+            }
+            merged[key] = account
+        if source not in account["sources"]:
+            account["sources"].append(source)
+        if item["name"] and item["name"] not in account["names"]:
+            account["names"].append(item["name"])
+        if not account["name"] and item["name"]:
+            account["name"] = item["name"]
+        if item.get("kind"):
+            kinds = account["kinds"].setdefault(source, [])
+            if item["kind"] not in kinds:
+                kinds.append(item["kind"])
+        for gid in item["group_ids"]:
+            if gid and gid not in account["group_ids"]:
+                account["group_ids"].append(gid)
+            gname = groups.get(source, {}).get(gid, "")
+            label = f"{gid} {gname}".strip()
+            if gid and label not in account["groups"]:
+                account["groups"].append(label)
 
     accounts = list(merged.values())
     for account in accounts:
