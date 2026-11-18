@@ -62,8 +62,10 @@ class ImageSearchDialog(QDialog):
         self._owner = owner
         self._query_path = ""
         self._running = False
+        self._downloading = False
         self._closed = False
         self._cancel = threading.Event()
+        self._download_cancel = threading.Event()
         self._model_ready = False
 
         self._build_ui()
@@ -94,6 +96,10 @@ class ImageSearchDialog(QDialog):
         model_layout.addWidget(self.model_hint)
         model_actions = QHBoxLayout()
         model_actions.setSpacing(8)
+        self.download_btn = QPushButton("一键下载模型")
+        self.download_btn.setProperty("variant", "primary")
+        self.download_btn.clicked.connect(self._download_model)
+        model_actions.addWidget(self.download_btn)
         self.open_dir_btn = QPushButton("打开模型目录")
         self.open_dir_btn.clicked.connect(self._open_model_dir)
         model_actions.addWidget(self.open_dir_btn)
@@ -105,6 +111,11 @@ class ImageSearchDialog(QDialog):
         model_actions.addWidget(self.refresh_model_btn)
         model_actions.addStretch(1)
         model_layout.addLayout(model_actions)
+        self.model_progress = QProgressBar()
+        self.model_progress.setFixedHeight(12)
+        self.model_progress.setTextVisible(True)
+        self.model_progress.setVisible(False)
+        model_layout.addWidget(self.model_progress)
         layout.addWidget(model_card)
 
         query_card = QFrame()
@@ -206,13 +217,13 @@ class ImageSearchDialog(QDialog):
         link = theme.color("link")
         return (
             f"<div>{reason}</div>"
-            "<div>需要本地 CLIP 图像编码器（ONNX），模型由你自行下载：</div>"
+            "<div>需要本地 CLIP 图像编码器（ONNX）：</div>"
             "<ol>"
-            f"<li>打开 <a href=\"{_HF_MIRROR}\" style=\"color:{link}\">国内镜像</a>"
-            f"或 <a href=\"{_HF_REPO}\" style=\"color:{link}\">Hugging Face 模型仓库</a>；</li>"
-            "<li>下载 onnx 目录下的 vision_model_quantized.onnx（体积小），"
-            "或未量化的 vision_model.onnx；</li>"
-            "<li>放入模型目录，或点「选择模型文件」指定已下载的文件。</li>"
+            "<li>点「一键下载模型」自动下载量化版（约 85 MB，支持断点续传）；</li>"
+            f"<li>也可从 <a href=\"{_HF_MIRROR}\" style=\"color:{link}\">国内镜像</a>"
+            f"或 <a href=\"{_HF_REPO}\" style=\"color:{link}\">Hugging Face</a> 手动下载"
+            " vision_model_quantized.onnx / vision_model.onnx；</li>"
+            "<li>已下载的文件可点「选择模型文件」直接指定。</li>"
             "</ol>"
         )
 
@@ -228,8 +239,10 @@ class ImageSearchDialog(QDialog):
             self.model_status.setText("未就绪")
             self.model_hint.setText(self._model_hint_html(str(status.get("reason") or "")))
             self.model_hint.setVisible(True)
+        self.download_btn.setVisible(not self._model_ready)
+        self.download_btn.setEnabled(not self._downloading)
         self.start_btn.setEnabled(self._model_ready and bool(self._query_path)
-                                  and not self._running)
+                                  and not self._running and not self._downloading)
 
     def _choose_model(self) -> None:
         configured = self._configured_model()
@@ -254,6 +267,79 @@ class ImageSearchDialog(QDialog):
             QMessageBox.warning(self, "目录不可用", f"无法创建模型目录：{exc}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+    def _download_model(self) -> None:
+        if self._downloading or self._model_ready:
+            return
+        self._downloading = True
+        self._download_cancel.clear()
+        self.download_btn.setEnabled(False)
+        self.choose_model_btn.setEnabled(False)
+        self.refresh_model_btn.setEnabled(False)
+        self.start_btn.setEnabled(False)
+        self.model_progress.setRange(0, 0)
+        self.model_progress.setFormat("连接中…")
+        self.model_progress.setVisible(True)
+        self.model_status.setText("正在连接下载源...")
+        self.stop_btn.setEnabled(True)
+
+        def work():
+            return image_embedding.download_default_model(
+                progress=lambda done, total: common.post_to_main(
+                    self._on_download_progress, done, total),
+                cancel=self._download_cancel)
+
+        thread = run_bg(work, self._finish_download, owner=self._owner)
+        if thread is None:
+            self._downloading = False
+            self.model_progress.setVisible(False)
+            self._reset_model_buttons()
+            self.model_status.setText("下载任务未启动，请重试。")
+
+    def _on_download_progress(self, done, total) -> None:
+        if self._closed:
+            return
+        done = int(done or 0)
+        total = int(total or 0)
+        if self._download_cancel.is_set():
+            self.model_status.setText("正在停止下载...")
+        if total:
+            self.model_progress.setRange(0, total)
+            self.model_progress.setValue(min(done, total))
+            self.model_progress.setFormat("%p%")
+            self.model_status.setText(
+                f"正在下载模型 {done / 1024 ** 2:.1f} / {total / 1024 ** 2:.1f} MB")
+        else:
+            self.model_progress.setRange(0, 0)
+            self.model_progress.setFormat("下载中…")
+            self.model_status.setText(f"正在下载模型 {done / 1024 ** 2:.1f} MB")
+
+    def _finish_download(self, result, err) -> None:
+        self._downloading = False
+        self.model_progress.setVisible(False)
+        self.stop_btn.setEnabled(False)
+        self._reset_model_buttons()
+        if self._closed:
+            return
+        if err:
+            text = str(err)
+            if "已停止" in text:
+                self.model_status.setText("已停止下载；已下载部分保留，可再次点击续传。")
+            else:
+                self.model_status.setText(f"下载失败：{text}")
+                QMessageBox.warning(
+                    self, "下载失败",
+                    f"{text}\n\n也可以手动下载模型后点「选择模型文件」。")
+            return
+        self._refresh_model()
+
+    def _reset_model_buttons(self) -> None:
+        self.choose_model_btn.setEnabled(True)
+        self.refresh_model_btn.setEnabled(True)
+        self.download_btn.setEnabled(True)
+        self.download_btn.setVisible(not self._model_ready)
+        self.start_btn.setEnabled(self._model_ready and bool(self._query_path)
+                                  and not self._running and not self._downloading)
 
     # ==================== 选图 ====================
 
@@ -367,6 +453,11 @@ class ImageSearchDialog(QDialog):
             self.status.setText("识别任务未启动，请重试。")
 
     def _stop(self) -> None:
+        if self._downloading:
+            self._download_cancel.set()
+            self.stop_btn.setEnabled(False)
+            self.model_status.setText("正在停止下载...")
+            return
         if not self._running:
             return
         self._cancel.set()
@@ -460,4 +551,5 @@ class ImageSearchDialog(QDialog):
     def done(self, result: int) -> None:
         self._closed = True
         self._cancel.set()
+        self._download_cancel.set()
         super().done(result)

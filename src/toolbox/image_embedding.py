@@ -9,8 +9,10 @@ L4：只负责图片预处理、推理与特征归一化，不依赖 Qt、页面
 from __future__ import annotations
 
 import os
+import re
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -24,6 +26,16 @@ CLIP_MEAN = np.array((0.48145466, 0.4578275, 0.40821073), dtype=np.float32)
 CLIP_STD = np.array((0.26862954, 0.26130258, 0.27577711), dtype=np.float32)
 DEFAULT_SIZE = 224
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
+# 一键下载的推荐模型：优先国内镜像，失败再走官方；文件由用户主动下载到本机
+MODEL_DOWNLOAD_URLS = (
+    "https://hf-mirror.com/Xenova/clip-vit-base-patch32/resolve/main/onnx/"
+    "vision_model_quantized.onnx",
+    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/"
+    "vision_model_quantized.onnx",
+)
+MODEL_MIN_BYTES = 20 * 1024 * 1024
+_DOWNLOAD_CHUNK = 256 * 1024
 
 _SESSIONS: dict[tuple, "ort.InferenceSession"] = {}
 _SESSION_LOCK = threading.Lock()
@@ -39,6 +51,14 @@ class ModelMissingError(EmbeddingError):
 
 class EmbeddingCancelled(RuntimeError):
     """用户停止特征提取。"""
+
+
+class DownloadCancelled(RuntimeError):
+    """用户停止模型下载；已下载部分保留用于续传。"""
+
+
+class DownloadError(EmbeddingError):
+    """模型下载或校验失败。"""
 
 
 def default_model_dir() -> Path:
@@ -274,3 +294,105 @@ class ImageEmbedder:
         except Exception as exc:  # noqa: BLE001
             raise EmbeddingError(f"模型推理失败：{exc}") from exc
         return _output_vectors(self._session, outputs)[0]
+
+
+def download_default_model(target_dir=None, urls=None, progress=None,
+                           cancel=None, min_bytes: int = MODEL_MIN_BYTES,
+                           validate: bool = True) -> Path:
+    """一键下载推荐 CLIP 视觉编码器，支持断点续传与取消。
+
+    progress(done_bytes, total_bytes)；cancel 为 threading.Event。
+    先写 <模型名>.part，校验通过后原子替换为正式文件。
+    """
+    url_list = [str(url) for url in (urls or MODEL_DOWNLOAD_URLS) if url]
+    if not url_list:
+        raise DownloadError("没有可用的下载地址")
+    directory = Path(target_dir) if target_dir else default_model_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise DownloadError(f"无法创建模型目录：{exc}") from exc
+    name = Path(urlsplit(url_list[0]).path).name or "vision_model_quantized.onnx"
+    target = directory / name
+    part = target.with_name(name + ".part")
+    if target.is_file() and target.stat().st_size >= min_bytes:
+        return target
+
+    errors = []
+    completed = False
+    for url in url_list:
+        if cancel is not None and cancel.is_set():
+            raise DownloadCancelled("已停止下载")
+        try:
+            _download_one(url, part, progress, cancel)
+            completed = True
+            break
+        except DownloadCancelled:
+            raise
+        except DownloadError as exc:
+            errors.append(str(exc))
+    if not completed:
+        detail = "；".join(errors[-2:]) if errors else "未知错误"
+        raise DownloadError(f"下载失败：{detail}")
+
+    size = part.stat().st_size if part.is_file() else 0
+    if size < min_bytes:
+        part.unlink(missing_ok=True)
+        raise DownloadError(f"下载文件不完整（{size} 字节），请重试")
+    if validate:
+        try:
+            _load_session(part)
+        except EmbeddingError as exc:
+            part.unlink(missing_ok=True)
+            raise DownloadError(f"模型校验失败：{exc}") from exc
+    try:
+        os.replace(part, target)
+    except OSError as exc:
+        raise DownloadError(f"无法保存模型：{exc}") from exc
+    return target
+
+
+def _download_one(url, part: Path, progress, cancel) -> None:
+    try:
+        import requests
+    except ImportError as exc:  # requests 属于既有依赖，缺失时给出明确提示
+        raise DownloadError("缺少 requests 依赖，请先安装：pip install requests") from exc
+    offset = part.stat().st_size if part.is_file() else 0
+    headers = {"User-Agent": "Mozilla/5.0 FengMingToolbox"}
+    if offset:
+        headers["Range"] = f"bytes={offset}-"
+    try:
+        with requests.get(url, headers=headers, stream=True, allow_redirects=True,
+                          timeout=(20, 60)) as response:
+            if response.status_code == 416 and offset:
+                return
+            if response.status_code not in (200, 206):
+                raise DownloadError(f"下载源返回 HTTP {response.status_code}")
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            if "text/html" in content_type:
+                raise DownloadError("下载源返回了网页而不是模型文件")
+            mode = "ab" if offset and response.status_code == 206 else "wb"
+            if mode == "ab":
+                match = re.match(r"bytes\s+(\d+)-",
+                                 response.headers.get("Content-Range") or "")
+                if match and int(match.group(1)) != offset:
+                    mode = "wb"
+            if mode == "wb":
+                offset = 0
+            try:
+                total = offset + int(response.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                total = 0
+            done = offset
+            with open(part, mode) as handle:
+                for chunk in response.iter_content(_DOWNLOAD_CHUNK):
+                    if cancel is not None and cancel.is_set():
+                        raise DownloadCancelled("已停止下载")
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    done += len(chunk)
+                    if progress is not None:
+                        progress(done, total)
+    except requests.RequestException as exc:
+        raise DownloadError(f"连接下载源失败：{exc}") from exc
