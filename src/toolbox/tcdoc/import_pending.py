@@ -261,8 +261,9 @@ def song_records_from_rows(project: Path, rows: list[dict]) -> list[dict]:
     with ThreadPoolExecutor(max_workers=6) as pool:
         covers = list(pool.map(fetch, rows))
     records = []
+    song_columns = bridge.song_columns()
     for row, cover in zip(rows, covers):
-        columns = {name: str(row.get(name) or "") for name in bridge.SONG_COLUMNS}
+        columns = {name: str(row.get(name) or "") for name in song_columns}
         key = "song:" + bridge._song_title_key(columns["歌曲名称"])
         if key == "song:":
             raise ImportErrorDetail("待同步歌曲缺少歌曲名称")

@@ -1030,8 +1030,8 @@ class TcDocBridgePanel(QWidget):
         if result["rows"]:
             if profile == "songs":
                 self.status.setText(
-                    f"共 {len(result['rows'])} 首待同步歌曲（按歌曲名称比对，不含表头）；"
-                    "上传只新增、不改不删；选中行可复制，图片可点「复制全部图片」。")
+                    f"共 {len(result['rows'])} 首待同步歌曲（按歌曲名称比对；列顺序与完整歌曲表头一致，"
+                    "整行复制后从表格第一列粘贴）；上传只新增、不改不删。")
             else:
                 self.status.setText(
                     f"共 {len(result['rows'])} 行待同步（不含表头；"

@@ -41,11 +41,19 @@ LINK_COLUMNS = ("作品链接", "动态链接(b站)")
 SONG_DOC_KEY = "DRnd3bkhkQUR1aEJr"
 SONG_TAB_ID = "ss_ktwk0t"
 SONG_REQUIRED_COLUMNS = ("歌曲名称", "演唱者", "首发日期")
-SONG_COLUMNS = ("封面图", "歌曲名称", "演唱者", "完整歌词", "歌曲时长",
-                "作词人", "作曲人", "出品方", "首发日期", "语言", "合唱形式",
-                "所属专辑", "QQ音乐", "网易云音乐", "酷狗音乐", "酷我音乐",
-                "5sing", "汽水音乐")
+# 腾讯表头缺省顺序（本地快照读不到时兜底）；实际以快照表头为准。
+SONG_FALLBACK_COLUMNS = (
+    "封面图", "歌曲名称", "演唱者", "歌曲简介", "完整歌词", "歌曲时长",
+    "动态歌词(更新中)", "作词人", "作曲人", "出品方", "作词原创性", "作曲原创性",
+    "首发日期", "版权方", "作品性质", "关联线下", "原唱艺人", "合唱形式",
+    "可用伴奏形式", "MV", "音乐类型", "语言", "发行平台列表", "B站链接",
+    "QQ音乐", "网易云音乐", "酷狗音乐", "5sing", "酷我音乐", "汽水音乐",
+    "人声本家", "授权作品", "所属专辑", "初编人员", "初编日期", "节令曲目",
+    "备注信息", "终编人员", "发布天数", "线下演唱频次", "其他平台#1", "音轨号",
+    "其他平台#2",
+)
 SONG_LINK_COLUMNS = ("QQ音乐", "网易云音乐", "酷狗音乐", "酷我音乐", "5sing", "汽水音乐")
+_SONG_COLUMNS_CACHE: dict[str, tuple] = {}
 
 _SONG_PLATFORM_COLUMNS = {"qq": "QQ音乐", "netease": "网易云音乐", "kugou": "酷狗音乐",
                           "kuwo": "酷我音乐", "fivesing": "5sing", "soda": "汽水音乐"}
@@ -441,7 +449,49 @@ def _song_links(entries: list[dict]) -> dict[str, str]:
     return links
 
 
-def _row_from_song_group(entries: list[dict], albums: list[dict]) -> dict:
+def _read_song_columns_ro(path: Path) -> tuple[str, ...] | None:
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT cols_json FROM sheets WHERE doc_key=? AND tab_id=?",
+            (SONG_DOC_KEY, SONG_TAB_ID)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if not row:
+        return None
+    try:
+        columns = json.loads(row[0] or "[]")
+    except (TypeError, ValueError):
+        return None
+    names = tuple(str(col.get("name") or "") for col in columns if col.get("name"))
+    if not all(name in names for name in SONG_REQUIRED_COLUMNS):
+        return None
+    return names
+
+
+def song_columns() -> tuple[str, ...]:
+    """完整歌曲的列顺序：以本地快照表头为准，保证复制/粘贴与标题栏对齐。"""
+    try:
+        path = Path(tables.db_path())
+        stamp = _file_stamp(path)
+    except Exception:  # noqa: BLE001 - 路径不可用按兜底列顺序
+        return SONG_FALLBACK_COLUMNS
+    cached = _SONG_COLUMNS_CACHE.get("columns")
+    if cached and cached[0] == stamp:
+        return cached[1]
+    names = _read_song_columns_ro(path) or SONG_FALLBACK_COLUMNS
+    _SONG_COLUMNS_CACHE["columns"] = (stamp, names)
+    return names
+
+
+def _row_from_song_group(entries: list[dict], albums: list[dict], columns) -> dict:
     title = Counter(str(entry.get("歌曲名") or "").strip()
                     for entry in entries if str(entry.get("歌曲名") or "").strip())
     title = title.most_common(1)[0][0] if title else ""
@@ -452,7 +502,7 @@ def _row_from_song_group(entries: list[dict], albums: list[dict]) -> dict:
     links = _song_links(entries)
     cover = _song_cover(entries)
 
-    row = {name: "" for name in SONG_COLUMNS}
+    row = {name: "" for name in columns}
     row.update({
         "歌曲名称": title,
         "演唱者": "、".join(singers),
@@ -475,6 +525,7 @@ def _row_from_song_group(entries: list[dict], albums: list[dict]) -> dict:
 
 def collect_local_songs(root: Path | None = None) -> list[dict]:
     """音乐信息页导出结果 → 本地歌曲行（按歌曲名去重，排除伴奏条目）。"""
+    columns = song_columns()
     exports = _load_song_exports(Path(root) if root else _music_info_root())
     groups: dict[str, dict] = {}
     albums: list[dict] = []
@@ -492,7 +543,7 @@ def collect_local_songs(root: Path | None = None) -> list[dict]:
             groups.setdefault(key, {"entries": []})["entries"].extend(items)
     rows = []
     for group in groups.values():
-        row = _row_from_song_group(group["entries"], albums)
+        row = _row_from_song_group(group["entries"], albums, columns)
         if row["歌曲名称"]:
             rows.append(row)
     return rows
@@ -511,6 +562,7 @@ def _song_remote_keys(remote: list[dict]) -> set[str]:
 def build_song_pending(root: Path | None = None) -> dict:
     """完整歌曲：本地音乐信息导出 vs 腾讯表，按歌曲名比对。"""
     started = time.perf_counter()
+    columns = song_columns()
     remote = load_remote(SONG_DOC_KEY, SONG_TAB_ID)
     remote_keys = _song_remote_keys(remote)
     after_remote = time.perf_counter()
@@ -530,7 +582,7 @@ def build_song_pending(root: Path | None = None) -> dict:
     return {
         "profile": "songs",
         "rows": pending,
-        "columns": list(SONG_COLUMNS),
+        "columns": list(columns),
         "accounts": [],
         "local_accounts": [],
         "link_columns": list(SONG_LINK_COLUMNS),
