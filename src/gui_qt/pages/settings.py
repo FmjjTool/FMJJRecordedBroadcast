@@ -8,6 +8,8 @@
 
 import os
 import re
+import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
@@ -26,6 +28,31 @@ from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_c
 
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
+
+
+# FFmpeg 一键下载源：gyan.dev 是 ffmpeg.org 下载页指向的 Windows 官方构建站，
+# release-essentials 包同时含 ffmpeg.exe / ffprobe.exe / ffplay.exe（只取前两个）
+FFMPEG_ZIP_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+FFMPEG_DOWNLOAD_PAGE = "https://www.gyan.dev/ffmpeg/builds/"
+
+
+def _extract_ffmpeg_binaries(zip_path, target):
+    """从官方 zip 只取 ffmpeg.exe / ffprobe.exe（包内结构 <版本>/bin/*.exe）。"""
+    import shutil as _shutil
+    import zipfile
+
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        for exe in ("ffmpeg.exe", "ffprobe.exe"):
+            member = next(
+                (n for n in names
+                 if n.replace("\\", "/").split("/")[-1].lower() == exe), "")
+            if not member:
+                raise RuntimeError(f"安装包内未找到 {exe}")
+            with zf.open(member) as src, open(target / exe, "wb") as dst:
+                _shutil.copyfileobj(src, dst)
+    return target
 
 
 class GlobalSettingsPage(BasePage):
@@ -197,6 +224,7 @@ class GlobalSettingsPage(BasePage):
         self._skel_timer.setInterval(480)
         self._skel_timer.timeout.connect(self._pulse_dep_skeleton)
         self._ffmpeg_ok = None     # FFmpeg 可用性缓存（None = 未检测）
+        self._ffmpeg_installing = False  # 一键下载进行中（防重复点击）
 
         v.addSpacing(12)
 
@@ -772,6 +800,16 @@ class GlobalSettingsPage(BasePage):
          "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4"),
         ("lxml", "lxml", "_check_lxml_detail",
          "更快的 HTML/XML 解析依赖", "pip install lxml"),
+        ("httpx", "httpx", "_check_httpx_detail",
+         "HTTP 请求库（B站 / 视频解析 / 腾讯文档）", "pip install httpx"),
+        ("openpyxl", "openpyxl", "_check_openpyxl_detail",
+         "Excel 表格导入导出", "pip install openpyxl"),
+        ("mutagen", "mutagen", "_check_mutagen_detail",
+         "音乐标签读写（MP3 / FLAC 等）", "pip install mutagen"),
+        ("websocket", "websocket-client", "_check_websocket_detail",
+         "直播弹幕长连接（B站 / 抖音）", "pip install websocket-client"),
+        ("playwright", "playwright", "_check_playwright_detail",
+         "登录 / 采集浏览器驱动（缺失时相关页面不可用）", "pip install playwright"),
         ("douyin_sign", "抖音签名环境", "_check_douyin_sign_detail",
          "抖音评论区/弹幕/视频详情接口的 a_bogus 签名（node 或 Playwright 内置 node）",
          "https://nodejs.org/zh-cn"),
@@ -919,29 +957,33 @@ class GlobalSettingsPage(BasePage):
             usage_lbl.setWordWrap(True)
             h.addWidget(usage_lbl, 1)
             # 缺失项提供快捷下载/安装按钮
-            if not ok:
-                install_btn = QPushButton("下载" if key in ("ffmpeg", "ffprobe") else "安装")
-                install_btn.setCursor(Qt.PointingHandCursor)
-                install_btn.setStyleSheet(
-                    "QPushButton { background: palette(bright-text); color: white;"
-                    " border-radius: 3px; padding: 3px 10px; font-size: 11px; }"
-                    "QPushButton:hover { background: palette(bright-text); }")
-                # Python 包走 pip 静默安装（标准做法）；二进制下载走浏览器打开官方页
-                if url.startswith("pip install"):
+            # 打包态（frozen）没有可用的 pip：装到的是用户自己的 Python 而不是程序本身，
+            # 所以 pip 类依赖只提示重装，不给会误导的「安装」按钮
+            if not ok and url.startswith("pip install") and getattr(sys, "frozen", False):
+                hint = QLabel("未内置，请重装软件")
+                hint.setStyleSheet(
+                    "color: palette(placeholder-text); font-size: 11px;"
+                    " background: transparent; border: none;")
+                h.addWidget(hint)
+            elif not ok:
+                if key in ("ffmpeg", "ffprobe"):
+                    # 两者同一个官方包：一键下载装好 ffmpeg，ffprobe 随之可用
+                    h.addWidget(self._dep_btn("一键下载", self._install_ffmpeg))
+                    h.addWidget(self._dep_btn("教程", self._show_ffmpeg_tutorial))
+                else:
+                    install_btn = self._dep_btn("安装")
                     install_btn.clicked.connect(
                         lambda _c=False, k=key, n=name, u=url:
                         self._pip_install(k, n, u))
-                else:
-                    install_btn.clicked.connect(
-                        lambda _c=False, n=name, u=url:
-                        self._open_browser_for_dep(n, u))
-                h.addWidget(install_btn)
+                    h.addWidget(install_btn)
+            if not ok:
                 missing += 1
             self.dependency_layout.addWidget(row)
         # 总览标签 —— 通过顶部右侧的依赖卡片对外展示
         if missing:
             summary = QLabel(
-                f"检测完成：{missing} 项缺失（已标红 · 点击「安装」自动修复或跳转到下载页）")
+                f"检测完成：{missing} 项缺失（已标红 · 点「安装」自动修复，"
+                f"FFmpeg 可一键下载或看教程）")
             summary.setStyleSheet(
                 "color: palette(bright-text); font-size: 11px; padding: 2px;")
         else:
@@ -1023,6 +1065,52 @@ class GlobalSettingsPage(BasePage):
         except Exception:
             return False, ""
 
+    def _check_httpx_detail(self):
+        try:
+            import httpx
+            return True, f"httpx {getattr(httpx, '__version__', '?')}"
+        except Exception:
+            return False, ""
+
+    def _check_openpyxl_detail(self):
+        try:
+            import openpyxl
+            return True, f"openpyxl {getattr(openpyxl, '__version__', '?')}"
+        except Exception:
+            return False, ""
+
+    def _check_mutagen_detail(self):
+        try:
+            import mutagen
+            return True, f"mutagen {getattr(mutagen, 'version_string', '?')}"
+        except Exception:
+            return False, ""
+
+    def _check_websocket_detail(self):
+        """直播弹幕走 websocket-client（import 名 websocket，包名不同）。"""
+        try:
+            import websocket  # noqa: F401
+            from importlib.metadata import version as pkg_version
+            try:
+                ver = pkg_version("websocket-client")
+            except Exception:
+                ver = "?"
+            return True, f"websocket-client {ver}"
+        except Exception:
+            return False, ""
+
+    def _check_playwright_detail(self):
+        try:
+            import playwright  # noqa: F401
+            from importlib.metadata import version as pkg_version
+            try:
+                ver = pkg_version("playwright")
+            except Exception:
+                ver = "?"
+            return True, f"playwright {ver}"
+        except Exception:
+            return False, ""
+
     def _check_douyin_sign_detail(self):
         """抖音签名环境：node 可用 + a_bogus 能生成签名。
 
@@ -1045,6 +1133,109 @@ class GlobalSettingsPage(BasePage):
             return False, f"node 未找到: {str(e)[:20]}"
 
     # ----- 缺失项快捷安装 -----
+
+    def _dep_btn(self, text, slot=None):
+        """依赖行里的小按钮（高亮主色，等比缩进）。"""
+        btn = QPushButton(text)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            "QPushButton { background: palette(bright-text); color: white;"
+            " border-radius: 3px; padding: 3px 10px; font-size: 11px; }"
+            "QPushButton:hover { background: palette(bright-text); }")
+        if slot is not None:
+            btn.clicked.connect(lambda _c=False: slot())
+        return btn
+
+    def _ffmpeg_install_dir(self):
+        """一键下载的落地目录：用户目录（Program Files 下没有写权限）。"""
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "FengMingToolbox" / "ffmpeg" / "bin"
+
+    def _install_ffmpeg(self):
+        """一键下载官方 FFmpeg 构建，解压 ffmpeg/ffprobe 后自动写回「FFmpeg 位置」。
+
+        下载源是 ffmpeg.org 下载页指向的 Windows 官方构建站（gyan.dev）的
+        release-essentials 包，约 110MB；两个 exe 装进用户目录，避免提权。
+        """
+        if self._ffmpeg_installing:
+            return
+        target = self._ffmpeg_install_dir()
+        if (target / "ffmpeg.exe").is_file() and (target / "ffprobe.exe").is_file():
+            self._apply_ffmpeg_dir(target)
+            return
+        self._ffmpeg_installing = True
+        self.ffmpeg_status.setText("正在下载 FFmpeg（约 110MB，请保持网络畅通）…")
+        self.ffmpeg_status.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;")
+        self.app.toast("开始下载 FFmpeg，完成后会自动配置", "info")
+
+        def work():
+            import tempfile
+
+            import httpx
+
+            target.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="fmjj_ffmpeg_") as tmp:
+                zip_path = Path(tmp) / "ffmpeg.zip"
+                timeout = httpx.Timeout(60.0, read=600.0)
+                with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                    with client.stream("GET", FFMPEG_ZIP_URL) as resp:
+                        resp.raise_for_status()
+                        with open(zip_path, "wb") as fh:
+                            for chunk in resp.iter_bytes(chunk_size=262144):
+                                fh.write(chunk)
+                _extract_ffmpeg_binaries(zip_path, target)
+            return target
+
+        def done(result, err):
+            self._ffmpeg_installing = False
+            if err or result is None:
+                msg = str(err or "未知错误")[:80]
+                self.ffmpeg_status.setText(
+                    f"一键下载失败：{msg}（可点「教程」手动安装）")
+                self.ffmpeg_status.setStyleSheet(
+                    "color: palette(bright-text); font-size: 11px;")
+                self.app.toast("FFmpeg 下载失败，请看「教程」手动安装", "error")
+                return
+            self._apply_ffmpeg_dir(result)
+
+        run_bg(work, done)
+
+    def _apply_ffmpeg_dir(self, target):
+        """把一键下载的目录写进设置并刷新界面。"""
+        set_ffmpeg_path(str(target))
+        invalidate_ffmpeg_cache()
+        self.ffmpeg_entry.setText(str(target))
+        self._update_ffmpeg_status()
+        self._refresh_dependencies()
+        self.app.toast("FFmpeg 已就绪", "success")
+
+    def _show_ffmpeg_tutorial(self):
+        """内置安装教程：一键安装说明 + 手动安装步骤 + 官方下载页入口。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("FFmpeg 安装教程")
+        box.setIcon(QMessageBox.Information)
+        box.setTextFormat(Qt.RichText)
+        box.setText(
+            "<b>方法一：一键自动安装（推荐）</b><br>"
+            "点依赖清单里的「一键下载」，程序会从 ffmpeg.org 指向的官方 Windows "
+            "构建站下载 release-essentials 包，把 ffmpeg.exe / ffprobe.exe 解压到"
+            "<br><code>%LOCALAPPDATA%\\FengMingToolbox\\ffmpeg\\bin</code><br>"
+            "并自动写入「FFmpeg 位置」，约 110MB，无需手动配置。<br><br>"
+            "<b>方法二：手动安装</b><br>"
+            "1. 点下方「打开官方下载页」，下载 <code>ffmpeg-release-essentials.zip</code><br>"
+            "2. 解压后进入 <code>bin</code> 目录，应能看到 ffmpeg.exe 与 ffprobe.exe<br>"
+            "3. 把 bin 目录放到固定位置，例如 <code>D:\\Tools\\ffmpeg\\bin</code><br>"
+            "4. 回到本页上方输入框粘贴该路径，点「保存」即生效<br><br>"
+            "<b>说明</b><br>"
+            "· ffprobe 与 ffmpeg 在同一个包里，装好 ffmpeg 后 ffprobe 自动可用<br>"
+            "· 也可把 bin 目录加入系统环境变量 PATH，程序优先使用 PATH 里的版本<br>"
+            "· 机器上已有 FFmpeg 的话不用再装，直接在上方指定位置即可")
+        open_btn = box.addButton("打开官方下载页", QMessageBox.ActionRole)
+        box.addButton("知道了", QMessageBox.AcceptRole)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            self._open_browser_for_dep("FFmpeg", FFMPEG_DOWNLOAD_PAGE)
 
     def _pip_install(self, key, name, cmd):
         """pip install 走 subprocess，后台线程不阻塞 UI；结果 toast 提示。"""
@@ -1073,7 +1264,7 @@ class GlobalSettingsPage(BasePage):
         run_bg(work, done)
 
     def _open_browser_for_dep(self, name, url):
-        """二进制类依赖（ffmpeg）：调浏览器打开官方下载页。"""
+        """打开依赖的官方下载页（FFmpeg 教程里的「手动安装」入口）。"""
         try:
             import webbrowser
             webbrowser.open(url)

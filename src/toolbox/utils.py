@@ -205,9 +205,29 @@ def _set_creation_time_windows(path: str, creation_time: float):
 
 
 # ==================== FFmpeg / FFprobe 定位 ====================
-# 系统PATH优先 → 全局设置「FFmpeg 位置」（目录或 ffmpeg.exe 完整路径）→ 回退命令名
+# 系统PATH优先 → 程序目录自带（便携版 / 打包时随包携带）→ 全局设置「FFmpeg 位置」
+# （目录或 ffmpeg.exe 完整路径）→ 回退命令名
 
 _ffmpeg_cache = {}
+
+
+def _app_root() -> Path:
+    """程序根目录：打包态 = exe 所在目录；源码态 = 仓库根（本文件上两级）。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def _bundled_binary(name: str) -> str:
+    """程序目录里自带的 ffmpeg / ffprobe（放在根目录、bin/、ffmpeg/bin/ 均可）。"""
+    if sys.platform == "win32" and not name.lower().endswith(".exe"):
+        name += ".exe"
+    root = _app_root()
+    for rel in (name, f"bin/{name}", f"ffmpeg/bin/{name}", f"ffmpeg/{name}"):
+        cand = root / rel
+        if cand.is_file():
+            return str(cand)
+    return ""
 
 
 def _custom_ffmpeg_location() -> str:
@@ -230,10 +250,12 @@ def _custom_ffmpeg_candidates() -> list:
 
 
 def find_ffmpeg_exe() -> str:
-    """ffmpeg 可执行路径：系统 PATH 优先 → 自定义位置；都找不到回退 "ffmpeg"。"""
+    """ffmpeg 可执行路径：系统 PATH → 程序目录自带 → 自定义位置；都没有回退 "ffmpeg"。"""
     if "ffmpeg" in _ffmpeg_cache:
         return _ffmpeg_cache["ffmpeg"]
     exe = shutil.which("ffmpeg")
+    if not exe:
+        exe = _bundled_binary("ffmpeg")
     if not exe:
         for cand in _custom_ffmpeg_candidates():
             if os.path.isfile(cand):
@@ -246,11 +268,13 @@ def find_ffmpeg_exe() -> str:
 
 
 def find_ffprobe_exe() -> str:
-    """ffprobe 可执行路径：系统 PATH 优先 → 自定义位置同目录 → ffmpeg 同目录。"""
+    """ffprobe 可执行路径：系统 PATH → 程序目录自带 → 自定义位置同目录 → ffmpeg 同目录。"""
     if "ffprobe" in _ffmpeg_cache:
         return _ffmpeg_cache["ffprobe"]
     name = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
     exe = shutil.which("ffprobe")
+    if not exe:
+        exe = _bundled_binary("ffprobe")
     if not exe:
         for cand in _custom_ffmpeg_candidates():
             probe = os.path.join(os.path.dirname(cand), name)

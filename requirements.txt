@@ -13,9 +13,14 @@ cryptography>=40.0.0
 pycryptodome
 qrcode>=8.0
 mutagen>=1.46.0
+beautifulsoup4>=4.12.0  # 公众号文章抓取 / 导出（exporters/wechat_writer.py 顶层硬 import）
+lxml>=4.9.0  # bs4 的快速解析器（设置页依赖检测也 import）
+websocket-client>=1.7.0  # B站 / 抖音直播弹幕长连接（bili_live.py、douyin_live.py）
 pillow>=10.0.0
 pillow-heif>=0.13.0  # 图片筛选页 HEIC/实况图解码
 numpy>=1.24.0  # 图片筛选页边界吸附/自动对齐提速（缺失时纯 Python 回退）
+pywin32>=306; sys_platform == "win32"  # 文件时间页改创建时间（缺失时回退 ctypes）
+send2trash>=1.8.0  # 音频删除走系统回收站（缺失时退化为永久删除）
 
 # 可选依赖（缺失时引擎自动降级）
 playwright>=1.40.0
