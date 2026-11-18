@@ -284,6 +284,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "taobao_verify_seller_id": "",
     # FFmpeg 自定义位置（目录或 ffmpeg.exe 完整路径；空 = 使用系统 PATH）
     "ffmpeg_path": "",
+    # 关闭主窗口时隐藏到系统托盘，程序在后台继续运行（任务/录制不中断）
+    "close_to_tray": True,
     # 全局设置：文件夹锁定（锁定后拖入文件夹不改变，直到解锁）
     "work_dir_locked": False,
     "export_dir_locked": False,

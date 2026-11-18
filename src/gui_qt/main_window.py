@@ -13,7 +13,8 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QMenu, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QSystemTrayIcon,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -240,6 +241,10 @@ class MainWindow(QMainWindow):
         # 页面懒加载状态
         self.pages = {}
         self._closed = False
+        self._quitting = False
+        self._tray = None
+        self._tray_menu = None
+        self._tray_hint_shown = False
         self.performance_monitor = None  # 用户开启后才创建，服务归主程序持有。
         self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
@@ -396,6 +401,62 @@ class MainWindow(QMainWindow):
         self._theme_timer = QTimer(self)
         self._theme_timer.timeout.connect(self._check_theme_schedule)
         self._theme_timer.start(10_000)
+        self._build_tray()
+
+    def _build_tray(self):
+        """系统托盘：关闭窗口时隐藏到这里，后台任务与录制继续运行。"""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self._tray = None
+            return
+        from version import APP_DISPLAY_NAME, APP_VERSION
+
+        icon = QApplication.windowIcon()
+        if icon.isNull():
+            root_icon = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "icon.ico")
+            if os.path.exists(root_icon):
+                icon = QIcon(root_icon)
+        tray = QSystemTrayIcon(icon, self)
+        tray.setToolTip(f"{APP_DISPLAY_NAME} v{APP_VERSION} · 后台运行中")
+        menu = QMenu()
+        show_action = menu.addAction("显示主界面")
+        show_action.triggered.connect(self._restore_from_tray)
+        menu.addSeparator()
+        quit_action = menu.addAction("退出")
+        quit_action.triggered.connect(self.quit_from_tray)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+        self._tray = tray
+        self._tray_menu = menu
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self._restore_from_tray()
+
+    def _restore_from_tray(self, *_args):
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_from_tray(self, *_args):
+        """托盘退出：走与关闭窗口相同的清理流程，然后结束进程。"""
+        self._quitting = True
+        self.close()
+
+    def _notify_background(self):
+        if self._tray is None or self._tray_hint_shown:
+            return
+        self._tray.showMessage(
+            "已隐藏到后台",
+            "程序仍在后台运行，任务和录制不会中断。\n"
+            "双击托盘图标恢复窗口，右键托盘图标可退出。",
+            QSystemTrayIcon.Information, 5000)
+        self._tray_hint_shown = True
 
     def _deferred_boot(self, first_key):
         """事件循环就绪后的启动收尾：构造首个真实页面 + 重依赖初始化。"""
@@ -816,6 +877,14 @@ class MainWindow(QMainWindow):
         return self.pages[key]
 
     def closeEvent(self, event):
+        cfg = load_convert_config()
+        if (not self._quitting and self._tray is not None
+                and bool(cfg.get("close_to_tray", True))):
+            event.ignore()
+            self.hide()
+            self._notify_background()
+            return
+        self._quitting = True
         self._closed = True
         self.page_preloader.stop()
         if self.performance_monitor is not None:
@@ -829,7 +898,12 @@ class MainWindow(QMainWindow):
                 lrw.close()
             except Exception:
                 pass
+        if self._tray is not None:
+            self._tray.hide()
         super().closeEvent(event)
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 
     # ==================== 回车键统一分发 ====================
 

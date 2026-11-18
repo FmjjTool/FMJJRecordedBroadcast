@@ -123,6 +123,18 @@ class GlobalSettingsPage(BasePage):
 
         v.addSpacing(12)
 
+        # ---- 后台运行 ----
+        v.addWidget(self._card_title("后台运行"))
+        self.close_to_tray_cb = QCheckBox("关闭主窗口时隐藏到系统托盘（后台继续运行）")
+        self.close_to_tray_cb.setToolTip(
+            "开启后点关闭只会隐藏窗口，任务和录制继续运行；\n"
+            "双击托盘图标恢复窗口，右键托盘图标可退出软件。\n"
+            "关闭此项后，点关闭会直接退出软件。")
+        self.close_to_tray_cb.toggled.connect(self._on_close_to_tray_changed)
+        v.addWidget(self.close_to_tray_cb)
+
+        v.addSpacing(12)
+
         # ---- 配置与依赖检查 ----
         v.addWidget(self._card_title("配置与依赖检查"))
         self.info_label = QLabel("")
@@ -258,8 +270,23 @@ class GlobalSettingsPage(BasePage):
                 site_row.addWidget(b, 1)
             v.addLayout(site_row)
 
+        repo_row = QHBoxLayout()
+        repo_row.addWidget(self._btn(
+            "GitHub 仓库",
+            lambda: self._open_site(
+                "GitHub 仓库", "https://github.com/FmjjTool/FMJJRecordedBroadcast")))
+        repo_row.addWidget(self._btn(
+            "开源许可证（GPL-3.0）",
+            lambda: self._open_site(
+                "GPL-3.0 许可证",
+                "https://github.com/FmjjTool/FMJJRecordedBroadcast/blob/main/LICENSE")))
+        repo_row.addStretch(1)
+        v.addLayout(repo_row)
+
         about = QLabel(
             "封茗囧菌数据汇总库 · 统一维护工具箱 · 制作歆慕\n"
+            "开源协议：GPL-3.0（GNU General Public License v3.0）\n"
+            "GitHub：https://github.com/FmjjTool/FMJJRecordedBroadcast\n"
             "依赖: ffmpeg, ffprobe, PySide6"
         )
         about.setWordWrap(True)
@@ -299,6 +326,10 @@ class GlobalSettingsPage(BasePage):
         self._refresh_exportdir_status()
         # 主题定时切换
         self._load_theme_schedule()
+        # 后台运行（关闭窗口隐藏到托盘）
+        self.close_to_tray_cb.blockSignals(True)
+        self.close_to_tray_cb.setChecked(bool(cfg.get("close_to_tray", True)))
+        self.close_to_tray_cb.blockSignals(False)
         # FFmpeg 位置
         self.ffmpeg_entry.setText(str(load_convert_config().get("ffmpeg_path", "") or ""))
         self._update_ffmpeg_status()
@@ -445,6 +476,15 @@ class GlobalSettingsPage(BasePage):
         if d:
             self.exportdir_entry.setText(d)
             self.app.toast(f"已选择导出目录: {d}", "info")
+
+    def _on_close_to_tray_changed(self, checked):
+        cfg = load_convert_config()
+        cfg["close_to_tray"] = bool(checked)
+        save_convert_config(cfg)
+        if self.app is not None:
+            self.app.toast(
+                "已开启后台运行" if checked else "已关闭后台运行（关闭窗口将退出）",
+                "info")
 
     def _open_site(self, label, url):
         """统一站点打开：所有「打开官方链接」按钮走这里，加 toast 提示。"""

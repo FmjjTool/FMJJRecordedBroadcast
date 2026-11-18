@@ -181,6 +181,8 @@ def main():
     _install_qt_noise_filter()
 
     app = QApplication(sys.argv)
+    # 后台托盘模式下主窗口会被隐藏而不是关闭；关闭最后一个独立窗口时不能自动退出。
+    app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
     from gui_qt.app_icon import configure_app_icon
     configure_app_icon(app)
