@@ -86,7 +86,7 @@ def build_index(entries, embedder, progress=None, cancel=None,
     images = collect_images(entries)
     total = len(images)
     if cancel is not None and cancel.is_set():
-        raise SearchCancelled("已停止识别")
+        raise SearchCancelled("已停止")
 
     cache: dict[str, np.ndarray] = {}
     if use_cache and images:
@@ -95,7 +95,7 @@ def build_index(entries, embedder, progress=None, cancel=None,
             [(path, mtime, size) for _idx, path, mtime, size in images],
             embedder.model_id)
     if cancel is not None and cancel.is_set():
-        raise SearchCancelled("已停止识别")
+        raise SearchCancelled("已停止")
 
     vectors: list[np.ndarray] = []
     owners: list[int] = []
@@ -178,9 +178,9 @@ def build_index(entries, embedder, progress=None, cancel=None,
             flush_rows()
         if cancel_exc is not None:
             raise SearchCancelled(
-                f"已停止识别，已缓存 {embedded} 张特征") from cancel_exc
+                f"已停止，已缓存 {embedded} 张特征") from cancel_exc
     if cancel is not None and cancel.is_set():
-        raise SearchCancelled(f"已停止识别，已缓存 {embedded} 张特征")
+        raise SearchCancelled(f"已停止，已缓存 {embedded} 张特征")
 
     matrix = np.vstack(vectors) if vectors else np.zeros((0, 0), dtype=np.float32)
     return {
@@ -267,3 +267,17 @@ def search(entries, query_path, model_path=None, top_k: int = 30,
     stats["results"] = len(results)
     stats["seconds"] = round(time.perf_counter() - started, 2)
     return {"results": results, "stats": stats}
+
+
+def prepare_index(entries, model_path=None, progress=None, cancel=None,
+                  embedder=None) -> dict:
+    """只建立/补齐特征索引，不需要查询图片。
+
+    返回索引统计；取消时抛出 SearchCancelled（已缓存数量在消息里）。
+    """
+    started = time.perf_counter()
+    embedder = embedder or ImageEmbedder(model_path)
+    index = build_index(entries, embedder, progress=progress, cancel=cancel)
+    stats = dict(index["stats"])
+    stats["seconds"] = round(time.perf_counter() - started, 2)
+    return stats

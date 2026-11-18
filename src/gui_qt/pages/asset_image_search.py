@@ -62,9 +62,11 @@ class ImageSearchDialog(QDialog):
         self._owner = owner
         self._query_path = ""
         self._running = False
+        self._indexing = False
         self._downloading = False
         self._closed = False
         self._cancel = threading.Event()
+        self._index_cancel = threading.Event()
         self._download_cancel = threading.Event()
         self._model_ready = False
         self._partial_count = 0
@@ -153,6 +155,10 @@ class ImageSearchDialog(QDialog):
 
         run_row = QHBoxLayout()
         run_row.setSpacing(8)
+        self.index_btn = QPushButton("建立特征索引")
+        self.index_btn.setToolTip("不需要选择图片；预建/补齐已获取资源的图片特征，之后识别更快")
+        self.index_btn.clicked.connect(self._build_index)
+        run_row.addWidget(self.index_btn)
         self.start_btn = QPushButton("开始识别")
         self.start_btn.setProperty("variant", "primary")
         self.start_btn.clicked.connect(self._start)
@@ -243,10 +249,18 @@ class ImageSearchDialog(QDialog):
             self.model_status.setText("未就绪")
             self.model_hint.setText(self._model_hint_html(str(status.get("reason") or "")))
             self.model_hint.setVisible(True)
-        self.download_btn.setVisible(not self._model_ready)
+        self._sync_run_buttons()
+
+    def _sync_run_buttons(self) -> None:
+        idle = not self._running and not self._indexing and not self._downloading
+        self.start_btn.setEnabled(bool(self._model_ready and self._query_path and idle))
+        self.index_btn.setEnabled(bool(self._model_ready and idle))
+        self.choose_image_btn.setEnabled(idle)
+        self.stop_btn.setEnabled(not idle)
         self.download_btn.setEnabled(not self._downloading)
-        self.start_btn.setEnabled(self._model_ready and bool(self._query_path)
-                                  and not self._running and not self._downloading)
+        self.download_btn.setVisible(not self._model_ready)
+        self.choose_model_btn.setEnabled(not self._downloading)
+        self.refresh_model_btn.setEnabled(not self._downloading)
 
     def _choose_model(self) -> None:
         configured = self._configured_model()
@@ -277,15 +291,11 @@ class ImageSearchDialog(QDialog):
             return
         self._downloading = True
         self._download_cancel.clear()
-        self.download_btn.setEnabled(False)
-        self.choose_model_btn.setEnabled(False)
-        self.refresh_model_btn.setEnabled(False)
-        self.start_btn.setEnabled(False)
+        self._sync_run_buttons()
         self.model_progress.setRange(0, 0)
         self.model_progress.setFormat("连接中…")
         self.model_progress.setVisible(True)
         self.model_status.setText("正在连接下载源...")
-        self.stop_btn.setEnabled(True)
 
         def work():
             return image_embedding.download_default_model(
@@ -297,7 +307,7 @@ class ImageSearchDialog(QDialog):
         if thread is None:
             self._downloading = False
             self.model_progress.setVisible(False)
-            self._reset_model_buttons()
+            self._sync_run_buttons()
             self.model_status.setText("下载任务未启动，请重试。")
 
     def _on_download_progress(self, done, total) -> None:
@@ -321,8 +331,7 @@ class ImageSearchDialog(QDialog):
     def _finish_download(self, result, err) -> None:
         self._downloading = False
         self.model_progress.setVisible(False)
-        self.stop_btn.setEnabled(False)
-        self._reset_model_buttons()
+        self._sync_run_buttons()
         if self._closed:
             return
         if err:
@@ -338,12 +347,7 @@ class ImageSearchDialog(QDialog):
         self._refresh_model()
 
     def _reset_model_buttons(self) -> None:
-        self.choose_model_btn.setEnabled(True)
-        self.refresh_model_btn.setEnabled(True)
-        self.download_btn.setEnabled(True)
-        self.download_btn.setVisible(not self._model_ready)
-        self.start_btn.setEnabled(self._model_ready and bool(self._query_path)
-                                  and not self._running and not self._downloading)
+        self._sync_run_buttons()
 
     # ==================== 选图 ====================
 
@@ -370,7 +374,7 @@ class ImageSearchDialog(QDialog):
             self.preview.setPixmap(pixmap)
         self.query_path_label.setText(path)
         self.query_path_label.setToolTip(path)
-        self.start_btn.setEnabled(self._model_ready and not self._running)
+        self._sync_run_buttons()
 
     def _thumb(self, path: str) -> QPixmap | None:
         if path in self._thumb_cache:
@@ -413,6 +417,66 @@ class ImageSearchDialog(QDialog):
 
     # ==================== 识别 ====================
 
+    def _build_index(self) -> None:
+        """不选图也能预建/补齐已获取资源的图片特征。"""
+        if self._running or self._indexing or self._downloading:
+            return
+        status = image_embedding.model_status(self._configured_model())
+        if not status.get("ready"):
+            self._refresh_model()
+            QMessageBox.warning(
+                self, "模型未就绪",
+                str(status.get("reason") or "请先下载模型并放入模型目录。"))
+            return
+        entries = list(self._entries) if self._entries else None
+        provider = self._entries_provider
+        model_path = str(status.get("path") or "")
+        self._indexing = True
+        self._index_cancel.clear()
+        self._partial_count = 0
+        self._partial_indexed = 0
+        self._sync_run_buttons()
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("准备中…")
+        self.progress.setVisible(True)
+        self.status.setText("正在准备已获取资源清单...")
+
+        def work():
+            source = list(entries) if entries is not None else list(provider() or [])
+            if not source:
+                raise RuntimeError("已获取资源清单为空，请先刷新资产页")
+            return asset_image_search.prepare_index(
+                source, model_path,
+                progress=lambda event: common.post_to_main(self._on_progress, event),
+                cancel=self._index_cancel)
+
+        thread = run_bg(work, self._finish_index, owner=self._owner)
+        if thread is None:
+            self._indexing = False
+            self.progress.setVisible(False)
+            self._sync_run_buttons()
+            self.status.setText("建立特征索引任务未启动，请重试。")
+
+    def _finish_index(self, result, err) -> None:
+        self._indexing = False
+        self.progress.setVisible(False)
+        self._sync_run_buttons()
+        if self._closed:
+            return
+        if err:
+            text = str(err)
+            if "已停止" in text:
+                self.status.setText(f"{text}；已完成的特征会保留，下次继续。")
+            else:
+                self.status.setText(f"建立特征索引失败：{text}")
+                QMessageBox.warning(self, "建立特征索引失败", text)
+            return
+        stats = result or {}
+        self.status.setText(
+            f"特征索引完成：已索引 {stats.get('indexed', 0)}/{stats.get('images', 0)} 张"
+            f" · 本次新增 {stats.get('embedded', 0)} 张"
+            f" · 耗时 {stats.get('seconds', 0)} 秒；选图后识别会直接复用。")
+
     def _start(self) -> None:
         if self._running:
             return
@@ -441,9 +505,7 @@ class ImageSearchDialog(QDialog):
         self._partial_count = 0
         self._partial_indexed = 0
         self._last_result_signature = None
-        self.start_btn.setEnabled(False)
-        self.choose_image_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
+        self._sync_run_buttons()
         self.table.setRowCount(0)
         self.progress.setRange(0, 0)
         self.progress.setFormat("准备中…")
@@ -465,12 +527,15 @@ class ImageSearchDialog(QDialog):
         if thread is None:
             self._running = False
             self.progress.setVisible(False)
-            self.stop_btn.setEnabled(False)
-            self.choose_image_btn.setEnabled(True)
-            self.start_btn.setEnabled(self._model_ready and bool(self._query_path))
+            self._sync_run_buttons()
             self.status.setText("识别任务未启动，请重试。")
 
     def _stop(self) -> None:
+        if self._indexing:
+            self._index_cancel.set()
+            self.stop_btn.setEnabled(False)
+            self.status.setText("正在停止建立特征索引...")
+            return
         if self._downloading:
             self._download_cancel.set()
             self.stop_btn.setEnabled(False)
@@ -515,9 +580,7 @@ class ImageSearchDialog(QDialog):
     def _finish(self, result, err) -> None:
         self._running = False
         self.progress.setVisible(False)
-        self.stop_btn.setEnabled(False)
-        self.choose_image_btn.setEnabled(True)
-        self.start_btn.setEnabled(self._model_ready and bool(self._query_path))
+        self._sync_run_buttons()
         if self._closed:
             return
         if err:
@@ -604,5 +667,6 @@ class ImageSearchDialog(QDialog):
     def done(self, result: int) -> None:
         self._closed = True
         self._cancel.set()
+        self._index_cancel.set()
         self._download_cancel.set()
         super().done(result)
