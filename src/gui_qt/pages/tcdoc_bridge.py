@@ -335,6 +335,15 @@ class TcDocBridgePanel(QWidget):
         self.api_preview_btn.clicked.connect(self._preview_live_api)
         top.addWidget(self.api_preview_btn)
 
+        # 单条试写：真实写入 1 条 + 读回校验（批量写回验证通过后再放开）
+        self.api_write_btn = QPushButton("单条试写")
+        self.api_write_btn.setToolTip(
+            "把清单第一条真实写入直播记录表并立即读回校验：只写 1 条，"
+            "写完后「同步前刷新」凭证作废，需要重新刷新才能再写。")
+        self.api_write_btn.setVisible(False)
+        self.api_write_btn.clicked.connect(self._write_single_live)
+        top.addWidget(self.api_write_btn)
+
         self.compare_btn = QPushButton("重新比对")
         self.compare_btn.clicked.connect(self._run_compare)
         top.addWidget(self.compare_btn)
@@ -615,6 +624,7 @@ class TcDocBridgePanel(QWidget):
         self.live_account_btn.setVisible(lives)
         self.dup_combo.setVisible(lives)
         self.api_preview_btn.setVisible(lives)
+        self.api_write_btn.setVisible(lives)
         if lives:
             self._load_live_accounts()
         if songs and not self._songs_mode:
@@ -1456,6 +1466,91 @@ class TcDocBridgePanel(QWidget):
         row.addWidget(close_btn)
         layout.addLayout(row)
         dlg.exec()
+
+    def _write_single_live(self) -> None:
+        """单条试写：真实写入 1 条直播记录并读回校验。"""
+        if self._closed or self._busy or self._uploading:
+            return
+        target = self.target_combo.currentData() or {}
+        rows = (self._result or {}).get("rows") or []
+        if str(target.get("profile") or "") != "lives" or not rows:
+            return
+        from toolbox import sync_refresh
+
+        fresh, why = sync_refresh.is_fresh()
+        if not fresh:
+            QMessageBox.information(
+                self, "需要先刷新",
+                f"{why}\n\n请先点「同步前刷新」，完成后再试写。")
+            return
+        if not self._upload_target_ok():
+            QMessageBox.warning(
+                self, "范围限制",
+                "只允许写入《封茗菌数据汇总库》的「直播记录」。")
+            return
+        row = rows[0]
+        link = bridge.tables.link_url(row.get("直播链接1")) or "-"
+        if QMessageBox.question(
+                self, "单条试写",
+                f"将真实写入 1 条到「{target.get('tab_name') or '直播记录'}」：\n\n"
+                f"标题：{row.get('直播标题') or '-'}\n"
+                f"开始：{row.get('开始时间') or '-'}\n"
+                f"链接：{link}\n\n"
+                "写入后立即读回校验；成功后刷新凭证作废，需要重新「同步前刷新」。\n"
+                "确定写入这 1 条吗？") != QMessageBox.Yes:
+            return
+
+        self._busy = True
+        self._uploading = True
+        self.api_write_btn.setEnabled(False)
+        self.status.setText("正在写入 1 条直播记录并读回校验…")
+
+        def work():
+            import auth as auth_module
+            from toolbox.tcdoc import import_pending as pending
+            from toolbox.tcdoc.import_local import LocalImportClient, ManagedAuth
+            client = LocalImportClient(
+                ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
+                str(target["doc_key"]), str(target["tab_id"]))
+            client.connect()
+            return pending.write_lives(client, [row], limit=1, apply=True,
+                                       verify_each=True)
+
+        def done(result, err):
+            self._busy = False
+            self._uploading = False
+            self.api_write_btn.setEnabled(True)
+            if self._closed:
+                return
+            if err:
+                self.status.setText(f"试写失败：{err}")
+                QMessageBox.warning(self, "试写失败", str(err))
+                return
+            added = (result or {}).get("added") or []
+            item = added[0] if added else {}
+            if item.get("verified"):
+                sync_refresh.invalidate("单条试写完成，需重新刷新后再写")
+                self.status.setText(
+                    f"试写成功并读回一致（record_id={item.get('record_id')}）；"
+                    "刷新凭证已作废，请重新「同步前刷新」。")
+                QMessageBox.information(
+                    self, "试写成功",
+                    f"已写入 1 条并读回一致：\n"
+                    f"标题：{item.get('title') or '-'}\n"
+                    f"record_id：{item.get('record_id') or '-'}\n\n"
+                    "建议回腾讯文档核对这一行，再决定是否放开批量写回。")
+                self._refresh_archive(target)
+            else:
+                self.status.setText("试写返回但未通过读回校验，请到表格里核对。")
+                QMessageBox.warning(self, "未通过校验",
+                                    "写入已提交但读回校验未通过，请人工核对。")
+
+        thread = run_bg(work, done, owner=self)
+        if thread is None:
+            self._busy = False
+            self._uploading = False
+            self.api_write_btn.setEnabled(True)
+            self.status.setText("试写任务未启动，请重试")
 
     def _finish_live_compare(self, req, result, err) -> None:
         """直播记录比对结果：只读展示 + 复制 TSV；不走上传（上传只支持动态结构）。"""

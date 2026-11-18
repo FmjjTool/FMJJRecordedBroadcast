@@ -521,6 +521,81 @@ def preview_lives(rows: list[dict], fields: list[dict], remote_keys=(),
     return out
 
 
+def _live_cell_text(raw) -> str:
+    """OpenAPI 单元格值 → 纯文本（链接取 URL、文本取 text、日期原样）。"""
+    if isinstance(raw, list):
+        parts = []
+        for item in raw:
+            if isinstance(item, dict):
+                parts.append(str(item.get("link") or item.get("text") or ""))
+            elif item not in (None, ""):
+                parts.append(str(item))
+        return " ".join(p for p in parts if p)
+    if isinstance(raw, dict):
+        return str(raw.get("link") or raw.get("text") or "")
+    return str(raw or "")
+
+
+def _ms_to_day(raw) -> str:
+    """毫秒时间戳 → YYYY-MM-DD（已是日期文本则截前 10 位）。"""
+    text = str(raw or "").strip()
+    if text.isdigit() and len(text) >= 12:
+        try:
+            return datetime.fromtimestamp(int(text) / 1000, tz=BEIJING).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            return ""
+    return text[:10]
+
+
+def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
+                verify_each: bool = True, emit=lambda event: None) -> dict:
+    """直播记录写回：预演 → 去重 → addRecords → 读回校验。
+
+    limit=1 时只写第一条（单条试写）；apply=False 只返回预演结果，不调用任何写接口。
+    """
+    fields = client.get_fields()
+    before = client.get_records()
+    known = set()
+    for record in before:
+        values = record.get("values") or {}
+        known.add(live_key({
+            "直播标题": _live_cell_text(values.get("直播标题")),
+            "开始时间": _ms_to_day(values.get("开始时间")),
+            "直播链接1": _live_cell_text(values.get("直播链接1")),
+        }))
+    preview = preview_lives(rows, fields, remote_keys=known, available_only=True)
+    receipt = {"phase": "complete", "apply": apply, "rows_before": len(before),
+               "rows_after": len(before), "sent": 0,
+               "added": [], "skipped": [item["key"] for item in preview["duplicates"]],
+               "errors": preview["errors"]}
+    if not apply:
+        receipt["preview"] = preview
+        return receipt
+
+    todo = preview["records"]
+    if limit and int(limit) > 0:
+        todo = todo[:int(limit)]
+    for item in todo:
+        rid = client.add_record(item["values"])
+        receipt["sent"] += 1
+        added = {"key": item["key"], "title": item["title"], "record_id": rid,
+                 "verified": False, "skipped_fields": item["skipped_fields"]}
+        if verify_each:
+            fresh = client.get_records()
+            saved = [row for row in fresh if row.get("recordID") == rid]
+            if len(saved) != 1:
+                raise ImportErrorDetail(f"新增记录未查回：{rid}")
+            checks = verify(saved[0], item["values"], item["kinds"], [])
+            added["checks"] = checks
+            added["verified"] = bool(checks) and all(checks.values())
+            if not added["verified"]:
+                raise ImportErrorDetail(f"读回不一致，停止后续写入：{rid}")
+            receipt["rows_after"] = len(fresh)
+        receipt["added"].append(added)
+        emit({"phase": "record_created", **added})
+    return receipt
+
+
 def make_plan(record: dict, fields: list[dict], available_only=False):
     columns = record["columns"]
     aliases = {**ALIASES, "作品时长": ("作品时长",), "动态链接(b站)": ("动态链接(b站)",)}
