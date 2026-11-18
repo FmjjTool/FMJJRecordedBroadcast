@@ -857,6 +857,39 @@ def _load_sidecars(subdir: str, filename: str, kind: str, days) -> list:
     return records
 
 
+def _load_latest(subdir: str, filename: str, kind: str, days) -> dict:
+    """读取页面最近一次解析快照（派生缓存）；无文件或超窗口返回空。"""
+    from toolbox.config_manager import get_export_dir
+    path = Path(get_export_dir()) / subdir / filename
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict) or str(raw.get("kind") or "") != kind:
+        return {}
+    since = _since_date(days)
+    saved = _date_key(raw.get("saved_at"))
+    if since and saved and saved < since:
+        return {}
+    return raw
+
+
+def _event_record_key(data: dict) -> str:
+    event_id = str(data.get("演出ID") or "").strip()
+    if event_id:
+        return event_id
+    return f"{data.get('标题') or ''}|{data.get('时间') or ''}"
+
+
+def _product_record_key(data: dict) -> str:
+    item_id = str(data.get("商品ID") or "").strip()
+    if item_id:
+        return item_id
+    return _clean_shop_title(data.get("标题"))
+
+
 def _local_images(data: dict, keys: tuple, limit: int = 12) -> list:
     """旁车里的本地图片路径（字符串），去重保序。"""
     images = []
@@ -946,9 +979,16 @@ def _clean_shop_title(title) -> str:
 
 
 def _ticket_candidates(days) -> list:
-    """票务解析旁车 → 线下活动候选。"""
-    rows = []
+    """票务解析 → 线下活动候选（详情旁车优先，其次最近一次解析快照）。"""
+    records = {}
+    latest = _load_latest("票务演出", "_latest.json", "ticket_latest", days)
+    for data in latest.get("events") or []:
+        if isinstance(data, dict) and data.get("标题"):
+            records[_event_record_key(data)] = data
     for path, data in _load_sidecars("票务演出", "event.json", "ticket_event", days):
+        records[_event_record_key(data)] = data   # 明细旁车覆盖列表快照
+    rows = []
+    for data in records.values():
         title = str(data.get("标题") or "").strip()
         if not title:
             continue
@@ -980,9 +1020,17 @@ def _ticket_candidates(days) -> list:
 
 
 def _shopping_candidates(days) -> list:
-    """购物解析旁车 → 周边图鉴候选。"""
-    rows = []
+    """购物解析 → 周边图鉴候选（详情旁车优先，其次最近一次店铺列表快照）。"""
+    records = {}
+    latest = _load_latest("淘宝商品", "_latest.json", "shop_latest", days)
+    shop_name = str(latest.get("shop_name") or "")
+    for data in latest.get("products") or []:
+        if isinstance(data, dict) and data.get("标题"):
+            records[_product_record_key(data)] = data
     for path, data in _load_sidecars("淘宝商品", "item.json", "shop_item", days):
+        records[_product_record_key(data)] = data   # 详情旁车覆盖列表快照
+    rows = []
+    for data in records.values():
         title = str(data.get("标题") or "").strip()
         if not title:
             continue
@@ -1004,7 +1052,7 @@ def _shopping_candidates(days) -> list:
             "text": "｜".join(bits)[:300],
             "images": images,
             "source": str(data.get("链接") or ""),
-            "author": str(data.get("店铺") or ""),
+            "author": str(data.get("店铺") or shop_name or ""),
         })
     return rows
 

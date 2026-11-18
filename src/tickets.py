@@ -1608,6 +1608,26 @@ def _download_images(urls: list, folder: Path, prefix: str, log=None) -> list:
     return out
 
 
+def save_latest_events(events, base_dir=None) -> str:
+    """保存最近一次解析结果，供腾讯文档中间层直接读取（派生缓存）。
+
+    路径：`download/票务演出/_latest.json`；schema 1，kind=ticket_latest。
+    """
+    from toolbox.config_manager import get_export_dir
+    from toolbox.durable_io import atomic_write_json
+    base = Path(base_dir) if base_dir else Path(get_export_dir()) / "票务演出"
+    base.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "kind": "ticket_latest",
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "events": [ev.to_dict() for ev in (events or [])[:300]],
+    }
+    path = base / "_latest.json"
+    atomic_write_json(path, payload)
+    return str(path)
+
+
 def download_event_images(ev: ShowEvent, base_dir, log=None) -> ShowEvent:
     """下载演出图片：封面 / 海报 / 宣传图 / 座位图 / 嘉宾头像 / 场馆图。
 

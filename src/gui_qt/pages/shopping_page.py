@@ -200,6 +200,10 @@ class ShoppingPage(BasePage):
             self._products = products
             self._detail = None
             self._detail_cache.clear()
+            try:
+                shopping_mod.save_latest_products(products, shop.shop_name)
+            except Exception as exc:  # noqa: BLE001 - 缓存失败不影响页面展示
+                self._log(f"中间层缓存保存失败：{str(exc)[:60]}")
             self.info_caption.setText("商品详情")
             self._fill_table_shop(products)
             self._reset_right_panel()

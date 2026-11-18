@@ -176,6 +176,10 @@ class TicketsPage(BasePage):
             self._sort_col = None
             self._sort_state = 0
             self._detail_cache.clear()
+            try:
+                tickets_mod.save_latest_events(self._events)
+            except Exception as exc:  # noqa: BLE001 - 缓存失败不影响页面展示
+                self._log(f"中间层缓存保存失败：{str(exc)[:60]}")
             self._fill_table()
             tip = ""
             if diag:

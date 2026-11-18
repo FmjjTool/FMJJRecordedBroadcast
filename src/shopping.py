@@ -1349,6 +1349,27 @@ def _safe_folder_name(s: str, maxlen: int = 40) -> str:
     return sanitize_filename(str(s or ""), maxlen, "未命名", collapse_ws=False)
 
 
+def save_latest_products(products, shop_name: str = "", base_dir=None) -> str:
+    """保存最近一次店铺商品解析结果，供腾讯文档中间层读取（派生缓存）。
+
+    路径：`download/淘宝商品/_latest.json`；schema 1，kind=shop_latest。
+    """
+    from toolbox.config_manager import get_export_dir
+    from toolbox.durable_io import atomic_write_json
+    base = Path(base_dir) if base_dir else Path(get_export_dir()) / "淘宝商品"
+    base.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "kind": "shop_latest",
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "shop_name": str(shop_name or ""),
+        "products": [pr.to_dict() for pr in (products or [])[:300]],
+    }
+    path = base / "_latest.json"
+    atomic_write_json(path, payload)
+    return str(path)
+
+
 def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
                          threads: int = 6) -> TaobaoItemDetail:
     """下载主图 / SKU 图 / 图文详情长图（图内并发下载）。
