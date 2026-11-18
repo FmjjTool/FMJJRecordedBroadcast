@@ -67,6 +67,10 @@ class ImageSearchDialog(QDialog):
         self._cancel = threading.Event()
         self._download_cancel = threading.Event()
         self._model_ready = False
+        self._partial_count = 0
+        self._partial_indexed = 0
+        self._thumb_cache: dict[str, QPixmap | None] = {}
+        self._last_result_signature = None
 
         self._build_ui()
         self._refresh_model()
@@ -368,6 +372,15 @@ class ImageSearchDialog(QDialog):
         self.query_path_label.setToolTip(path)
         self.start_btn.setEnabled(self._model_ready and not self._running)
 
+    def _thumb(self, path: str) -> QPixmap | None:
+        if path in self._thumb_cache:
+            return self._thumb_cache[path]
+        pixmap = self._scaled_pixmap(path, QSize(64, 40))
+        if len(self._thumb_cache) > 300:
+            self._thumb_cache.clear()
+        self._thumb_cache[path] = pixmap
+        return pixmap
+
     @staticmethod
     def _scaled_pixmap(path: str, size: QSize) -> QPixmap | None:
         reader = QImageReader(path)
@@ -425,6 +438,9 @@ class ImageSearchDialog(QDialog):
 
         self._running = True
         self._cancel.clear()
+        self._partial_count = 0
+        self._partial_indexed = 0
+        self._last_result_signature = None
         self.start_btn.setEnabled(False)
         self.choose_image_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -441,7 +457,9 @@ class ImageSearchDialog(QDialog):
             return asset_image_search.search(
                 source, query_path, model_path, top_k=top_k,
                 progress=lambda event: common.post_to_main(self._on_progress, event),
-                cancel=self._cancel)
+                cancel=self._cancel,
+                on_partial=lambda rows, stats: common.post_to_main(
+                    self._on_partial, rows, stats))
 
         thread = run_bg(work, self._finish, owner=self._owner)
         if thread is None:
@@ -481,7 +499,18 @@ class ImageSearchDialog(QDialog):
             self.progress.setRange(0, 0)
             self.progress.setFormat("处理中…")
         if message:
+            if self._partial_count:
+                message = (f"{message} · 暂定 {self._partial_count} 条"
+                           f"（已用 {self._partial_indexed} 张）")
             self.status.setText(message)
+
+    def _on_partial(self, results, stats) -> None:
+        """索引过程中用已提取部分刷新暂定结果，不阻塞继续提取。"""
+        if self._closed or not self._running:
+            return
+        self._partial_count = len(results or [])
+        self._partial_indexed = int((stats or {}).get("indexed") or 0)
+        self._fill_results(list(results or []))
 
     def _finish(self, result, err) -> None:
         self._running = False
@@ -498,13 +527,26 @@ class ImageSearchDialog(QDialog):
                     self.status.setText(f"{text}；下次识别会直接复用。")
                 else:
                     self.status.setText("已停止识别；已完成的特征会保留在缓存里。")
+            elif self._partial_count:
+                self.status.setText(
+                    f"识别失败（保留已提取 {self._partial_indexed} 张的暂定结果）：{text}")
             else:
                 self.status.setText(f"识别失败：{text}")
                 QMessageBox.warning(self, "识别失败", text)
             return
         rows = (result or {}).get("results") or []
         stats = (result or {}).get("stats") or {}
+        stopped = bool((result or {}).get("stopped"))
         self._fill_results(rows)
+        if stopped:
+            self._partial_count = len(rows)
+            self._partial_indexed = int(stats.get("indexed") or 0)
+            self.status.setText(
+                f"已停止提取，按已索引 {stats.get('indexed', 0)}/{stats.get('images', 0)} 张"
+                f"显示 {len(rows)} 条暂定结果；下次识别会继续复用缓存。")
+            return
+        self._partial_count = len(rows)
+        self._partial_indexed = int(stats.get("indexed") or 0)
         self.status.setText(
             f"命中 {len(rows)} 个条目 · 索引 {stats.get('indexed', 0)}/{stats.get('images', 0)} 张图片"
             f" · 缓存命中 {stats.get('cache_hits', 0)} 张"
@@ -512,6 +554,14 @@ class ImageSearchDialog(QDialog):
             f" · 用时 {stats.get('seconds', 0)} 秒")
 
     def _fill_results(self, rows: list[dict]) -> None:
+        signature = tuple(
+            (str((row.get("entry") or {}).get("title") or ""),
+             round(float(row.get("score") or 0), 4),
+             str(row.get("image") or ""))
+            for row in rows)
+        if signature == self._last_result_signature:
+            return
+        self._last_result_signature = signature
         self.table.setRowCount(len(rows))
         for row, result in enumerate(rows):
             entry = result.get("entry") or {}
@@ -534,7 +584,7 @@ class ImageSearchDialog(QDialog):
             image_path = str(result.get("image") or "")
             image_item = QTableWidgetItem(os.path.basename(image_path))
             image_item.setToolTip(image_path)
-            pixmap = self._scaled_pixmap(image_path, QSize(64, 40))
+            pixmap = self._thumb(image_path)
             if pixmap is not None:
                 image_item.setIcon(pixmap)
             self.table.setItem(row, 3, image_item)
