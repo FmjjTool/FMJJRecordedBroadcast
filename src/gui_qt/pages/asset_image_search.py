@@ -494,7 +494,10 @@ class ImageSearchDialog(QDialog):
         if err:
             text = str(err)
             if "已停止" in text:
-                self.status.setText("已停止识别；已完成的特征会保留在缓存里。")
+                if "已缓存" in text:
+                    self.status.setText(f"{text}；下次识别会直接复用。")
+                else:
+                    self.status.setText("已停止识别；已完成的特征会保留在缓存里。")
             else:
                 self.status.setText(f"识别失败：{text}")
                 QMessageBox.warning(self, "识别失败", text)

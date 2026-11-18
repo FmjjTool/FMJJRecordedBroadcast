@@ -250,8 +250,12 @@ class ImageEmbedder:
             self.batch_size = self._fixed_batch
         self._output_names = [output.name for output in self._session.get_outputs()]
 
-    def embed_paths(self, paths, progress=None, cancel=None):
-        """批量提特征，返回 ([(路径, 向量)], 跳过数)。"""
+    def embed_paths(self, paths, progress=None, cancel=None, on_batch=None):
+        """批量提特征，返回 ([(路径, 向量)], 跳过数)。
+
+        on_batch(batch_results) 在每个批次完成后立即回调，供调用方落盘；
+        取消/异常时已完成批次仍然有效。
+        """
         all_paths = list(paths)
         total = len(all_paths)
         results = []
@@ -281,7 +285,10 @@ class ImageEmbedder:
                 vectors = _output_vectors(self._session, outputs)[:len(valid)]
                 if len(vectors) != len(valid):
                     raise EmbeddingError("模型输出批次与输入不一致")
-                results.extend(zip(valid, vectors))
+                batch_results = list(zip(valid, vectors))
+                results.extend(batch_results)
+                if on_batch is not None:
+                    on_batch(batch_results)
             if progress is not None:
                 progress(min(start + len(chunk), total), total)
         return results, skipped

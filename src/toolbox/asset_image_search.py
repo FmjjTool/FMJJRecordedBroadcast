@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from toolbox import asset_image_vectors
-from toolbox.image_embedding import IMAGE_EXTS, ImageEmbedder
+from toolbox.image_embedding import IMAGE_EXTS, EmbeddingCancelled, ImageEmbedder
 
 
 class SearchCancelled(RuntimeError):
@@ -95,9 +95,36 @@ def build_index(entries, embedder, progress=None, cancel=None,
 
     missing = [(idx, path, mtime, size) for idx, path, mtime, size in images
                if _norm(path) not in cache]
+    if images:
+        _emit(progress, "cache", len(cache), total,
+              f"已缓存 {len(cache)}/{total} 张，本次需提取 {len(missing)} 张")
     embedded = 0
     skipped = 0
     if missing:
+        stamps = {_norm(path): (mtime, size)
+                  for _idx, path, mtime, size in missing}
+        pending_rows: list[tuple] = []
+
+        def flush_rows() -> None:
+            nonlocal embedded
+            if not pending_rows:
+                return
+            asset_image_vectors.upsert_many(pending_rows)
+            embedded += len(pending_rows)
+            pending_rows.clear()
+
+        def on_batch(batch) -> None:
+            for path, vector in batch:
+                stamp = stamps.get(_norm(path))
+                if stamp is None:
+                    continue
+                cache[_norm(path)] = vector
+                pending_rows.append(
+                    (path, stamp[0], stamp[1], embedder.model_id,
+                     int(np.asarray(vector).size), np.asarray(vector)))
+            if len(pending_rows) >= 256:
+                flush_rows()
+
         _emit(progress, "embed", 0, len(missing),
               f"正在提取图片特征 0/{len(missing)}...")
 
@@ -105,23 +132,20 @@ def build_index(entries, embedder, progress=None, cancel=None,
             _emit(progress, "embed", done, count,
                   f"正在提取图片特征 {done}/{count}...")
 
-        results, skipped = embedder.embed_paths(
-            [path for _idx, path, _mtime, _size in missing],
-            progress=on_embed, cancel=cancel)
-        stamps = {_norm(path): (mtime, size)
-                  for _idx, path, mtime, size in missing}
-        rows = []
-        for path, vector in results:
-            stamp = stamps.get(_norm(path))
-            if stamp is None:
-                continue
-            cache[_norm(path)] = vector
-            rows.append((path, stamp[0], stamp[1], embedder.model_id,
-                         int(np.asarray(vector).size), np.asarray(vector)))
-        asset_image_vectors.upsert_many(rows)
-        embedded = len(rows)
+        cancel_exc = None
+        try:
+            _results, skipped = embedder.embed_paths(
+                [path for _idx, path, _mtime, _size in missing],
+                progress=on_embed, cancel=cancel, on_batch=on_batch)
+        except EmbeddingCancelled as exc:
+            cancel_exc = exc
+        finally:
+            flush_rows()
+        if cancel_exc is not None:
+            raise SearchCancelled(
+                f"已停止识别，已缓存 {embedded} 张特征") from cancel_exc
     if cancel is not None and cancel.is_set():
-        raise SearchCancelled("已停止识别")
+        raise SearchCancelled(f"已停止识别，已缓存 {embedded} 张特征")
 
     vectors = []
     owners = []
