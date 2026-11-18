@@ -123,13 +123,13 @@ class GlobalSettingsPage(BasePage):
 
         v.addSpacing(12)
 
-        # ---- 后台运行 ----
-        v.addWidget(self._card_title("后台运行"))
-        self.close_to_tray_cb = QCheckBox("关闭主窗口时隐藏到系统托盘（后台继续运行）")
+        # ---- 后台模式 ----
+        v.addWidget(self._card_title("后台模式"))
+        self.close_to_tray_cb = QCheckBox("启用后台模式（关闭主窗口时隐藏到系统托盘）")
         self.close_to_tray_cb.setToolTip(
-            "开启后点关闭只会隐藏窗口，任务和录制继续运行；\n"
+            "勾选后点关闭只会隐藏窗口，任务和录制继续运行，并保留托盘图标；\n"
             "双击托盘图标恢复窗口，右键托盘图标可退出软件。\n"
-            "关闭此项后，点关闭会直接退出软件。")
+            "取消勾选即取消后台：不再保留托盘图标，点关闭会直接退出软件。")
         self.close_to_tray_cb.toggled.connect(self._on_close_to_tray_changed)
         v.addWidget(self.close_to_tray_cb)
 
@@ -481,9 +481,12 @@ class GlobalSettingsPage(BasePage):
         cfg = load_convert_config()
         cfg["close_to_tray"] = bool(checked)
         save_convert_config(cfg)
+        setter = getattr(self.app, "set_background_enabled", None)
+        if callable(setter):
+            setter(bool(checked))
         if self.app is not None:
             self.app.toast(
-                "已开启后台运行" if checked else "已关闭后台运行（关闭窗口将退出）",
+                "已开启后台模式" if checked else "已取消后台模式（关闭窗口将退出）",
                 "info")
 
     def _open_site(self, label, url):

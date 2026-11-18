@@ -427,9 +427,20 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.quit_from_tray)
         tray.setContextMenu(menu)
         tray.activated.connect(self._on_tray_activated)
-        tray.show()
+        # 关闭后台模式时连托盘图标一起收起，不留常驻图标。
+        if bool(load_convert_config().get("close_to_tray", True)):
+            tray.show()
         self._tray = tray
         self._tray_menu = menu
+
+    def set_background_enabled(self, enabled):
+        """设置页切换后台模式时同步托盘图标。"""
+        if self._tray is None:
+            return
+        if enabled:
+            self._tray.show()
+        else:
+            self._tray.hide()
 
     def _on_tray_activated(self, reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
