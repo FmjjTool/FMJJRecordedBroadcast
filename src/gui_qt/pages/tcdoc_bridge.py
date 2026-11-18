@@ -552,7 +552,9 @@ class TcDocBridgePanel(QWidget):
         if target:
             self._save_cfg(tcdoc_bridge_doc_key=target["doc_key"],
                            tcdoc_bridge_tab_id=target["tab_id"])
-        songs = str((target or {}).get("profile") or "") == "songs"
+        profile = str((target or {}).get("profile") or "posts")
+        songs = profile == "songs"
+        readonly = profile in ("events", "merch")
         if songs and not self._songs_mode:
             self._posts_days_index = self.days_combo.currentIndex()
         if songs:
@@ -566,7 +568,9 @@ class TcDocBridgePanel(QWidget):
             self.days_combo.blockSignals(False)
         self._songs_mode = songs
         self.days_combo.setEnabled(not songs)
-        self.account_btn.setEnabled(not songs)
+        self.account_btn.setEnabled(not songs and not readonly)
+        if readonly:
+            self.account_btn.setText("全部")
         self.song_search_row.setVisible(songs)
         if songs:
             self._show_song_search()
@@ -1065,9 +1069,17 @@ class TcDocBridgePanel(QWidget):
             doc_key, tab_id = target["doc_key"], target["tab_id"]
             collected = list(common.COLLECTED)  # 主线程快照，避免采集线程并发追加
 
-            def work():
-                return bridge.build_pending(doc_key, tab_id, days=days,
-                                            accounts=accounts, collected=collected)
+            profile = str(target.get("profile") or "posts")
+            if profile == "events":
+                def work():
+                    return bridge.build_event_pending(days=days, collected=collected)
+            elif profile == "merch":
+                def work():
+                    return bridge.build_merch_pending(days=days, collected=collected)
+            else:
+                def work():
+                    return bridge.build_pending(doc_key, tab_id, days=days,
+                                                accounts=accounts, collected=collected)
 
             def done(result, err):
                 self._finish_compare(req, result, err, accounts)
@@ -1158,6 +1170,13 @@ class TcDocBridgePanel(QWidget):
                 f"本地音乐信息导出 {stats['local_items']} 首 → 去重 {stats['local_groups']} 首；"
                 f"已同步 {stats['synced_groups']} 首，待同步 {stats['pending']} 首{image_note}"
                 f"；用时 {float(timing.get('total') or 0):.2f} 秒")
+        elif profile in ("events", "merch"):
+            label = "线下活动" if profile == "events" else "周边图鉴"
+            scope = stats["since"] or "全部历史"
+            self.summary.setText(
+                f"本地 {scope} 共 {stats['local_items']} 条 → 识别 {stats['local_groups']} 个"
+                f"{label}候选；已存在 {stats['synced_groups']} 个，待补 {stats['pending']} 行"
+                f"{image_note}；用时 {float(timing.get('total') or 0):.2f} 秒")
         else:
             scope = stats["since"] or "全部历史"
             self.summary.setText(
@@ -1178,6 +1197,10 @@ class TcDocBridgePanel(QWidget):
                 self.status.setText(
                     f"共 {len(result['rows'])} 首待同步歌曲（按歌曲名称比对；列顺序与完整歌曲表头一致，"
                     "整行复制后从表格第一列粘贴）；上传只新增、不改不删。")
+            elif profile in ("events", "merch"):
+                self.status.setText(
+                    f"共 {len(result['rows'])} 行候选（只读预览）：由本地动态自动识别，请人工核对；"
+                    "该表不在写回白名单，未开放上传，可复制 TSV 后手工粘贴。")
             else:
                 self.status.setText(
                     f"共 {len(result['rows'])} 行待同步（不含表头；"
@@ -1187,6 +1210,8 @@ class TcDocBridgePanel(QWidget):
             self.status.setText(
                 "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
                 if profile == "songs" else
+                "没有待补候选；只读预览，未写入腾讯文档。"
+                if profile in ("events", "merch") else
                 "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
 
     # ==================== 看门狗 ====================

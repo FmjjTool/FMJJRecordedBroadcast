@@ -610,6 +610,330 @@ def build_song_pending(root: Path | None = None) -> dict:
     }
 
 
+# ==================== 线下活动 / 周边图鉴：只读候选比对 ====================
+# 两张表均不在 tcdoc-sync-scope 白名单内：这里只生成候选并比对本地快照，
+# 不调用任何写回接口；上传入口由 import_local.validate_target 拦截。
+
+EVENT_TAB_ID = "ss_e1kkm2"
+MERCH_TAB_ID = "ss_ekd4cz"
+EVENT_REQUIRED_COLUMNS = ("活动名称", "活动日期")
+MERCH_REQUIRED_COLUMNS = ("周边名称",)
+EVENT_FALLBACK_COLUMNS = ("活动名称", "活动日期", "年份", "城市", "活动类型",
+                          "宣传图", "备注信息")
+MERCH_FALLBACK_COLUMNS = ("周边名称", "首发日期", "产品图", "封面图", "获取方式",
+                          "来源渠道", "备注信息")
+
+_EVENT_LINE_RE = re.compile(r"【囧菌线下[·・]?\s*(\d{1,2})\.(\d{1,2})\s*([^】]{0,16})】")
+_EVENT_MONTH_DAY_RE = re.compile(r"(\d{1,2})月(\d{1,2})日")
+_EVENT_TYPE_WORDS = ("生日会", "音乐节", "演唱会", "巡演", "漫展", "见面会",
+                     "签售", "花车巡游")
+_EVENT_NAME_RE = re.compile(
+    r"([\u4e00-\u9fa5A-Za-z0-9·]{2,24}(?:生日会|音乐节|演唱会|巡演|漫展|见面会|签售))")
+_EVENT_NAME_PREFIXES = ("相约", "和我", "我在", "在", "参加", "出席", "期待",
+                        "明天", "今天", "本次", "因为", "这是", "第一次", "一起",
+                        "尝试举办", "尝试", "举办", "封茗囧菌", "囧菌", "我",
+                        "是", "日")
+_MERCH_WORDS = ("周边", "无料", "棉花娃娃", "娃娃", "应援棒", "立牌", "徽章",
+                "吧唧", "海报", "专辑", "雨伞", "通贩", "预售", "上架")
+_MERCH_NAME_RE = re.compile(
+    r"([\u4e00-\u9fa5A-Za-z0-9·]{2,24}(?:棉花娃娃|娃娃|应援棒|雨伞|立牌|徽章|"
+    r"吧唧|海报|专辑|周边))")
+_MERCH_GENERIC = {"周边", "娃娃", "海报", "专辑", "周边展示", "店铺上架通知",
+                  "上架通知", "领养公告", "返图", "说明"}
+_MERCH_BAD_WORDS = ("本次", "关于", "普票", "大货", "本款", "观影", "须知",
+                    "说明", "返图", "领取", "发货", "打理", "特殊", "公告",
+                    "通知", "已经", "开始", "陆续", "禁止", "私自", "制作",
+                    "声明", "抵制", "盗版")
+_MERCH_NEW_WORDS = ("上架", "预售", "通贩", "领养", "新品", "开售", "发布")
+
+
+def _clean_event_name(raw) -> str:
+    text = re.sub(r"^\d{1,2}月\d{1,2}日", "", str(raw or ""))
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _EVENT_NAME_PREFIXES:
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                changed = True
+    return text.strip(" ·-，。！")
+
+
+def _event_name_score(name: str) -> int:
+    score = len(name)
+    if any(word in name for word in ("举办", "尝试", "因为", "这是", "本次", "关于")):
+        score -= 20
+    if re.match(r"^\d{1,2}月\d{1,2}日", name):
+        score -= 10
+    return score
+
+
+def _clean_merch_name(raw) -> str:
+    text = re.sub(r"^(封茗囧菌|囧菌)", "", str(raw or ""))
+    text = re.sub(r"(领养公告|上架通知|公告|通知|说明|须知|返图|预览图|展示图)$", "",
+                  text)
+    text = re.sub(r"^\d(?:\.\d)?版本的?", "", text)
+    return text.strip(" ·-，。！🍑")
+
+
+def _sheet_columns(doc_key: str, tab_id: str) -> tuple:
+    """目标表快照表头；读不到时返回空元组，由调用方回退到最小列集。"""
+    try:
+        sheets = tables.sheets_of(doc_key)
+    except Exception:  # noqa: BLE001 - 快照异常时按空表头处理
+        return ()
+    for sheet in sheets:
+        if str(sheet.get("tab_id") or "") != tab_id:
+            continue
+        return tuple(str(col.get("name") or "") for col in sheet.get("columns") or []
+                     if str(col.get("name") or ""))
+    return ()
+
+
+def _event_candidate(item: dict):
+    """本地动态 → 线下活动候选；只识别明确的日期 + 活动线索。"""
+    title = str(item.get("title") or "")
+    text = (title + "\n" + str(item.get("description") or "")).strip()
+    if not text:
+        return None
+    publish_day = _date_key(item.get("publish_time"))
+    year = int(publish_day[:4]) if publish_day else date.today().year
+    month = day = 0
+    city = ""
+    match = _EVENT_LINE_RE.search(text)
+    if match:
+        month, day = int(match.group(1)), int(match.group(2))
+        tail = match.group(3).strip(" ·-")
+        city = re.sub(r"(漫展|生日会|音乐节|演唱会|巡演|见面会|签售|线下活动|线下)$",
+                      "", tail).strip()
+    else:
+        date_match = _EVENT_MONTH_DAY_RE.search(text)
+        if not date_match or not any(word in text for word in _EVENT_TYPE_WORDS):
+            return None
+        month, day = int(date_match.group(1)), int(date_match.group(2))
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
+        return None
+    if publish_day and month + 6 < int(publish_day[5:7] or 1):
+        year += 1
+    event_type = next((word for word in _EVENT_TYPE_WORDS if word in text), "线下活动")
+    if city:
+        name = f"{city}{event_type}" if event_type != "线下活动" else f"{city}线下活动"
+    else:
+        name_match = _EVENT_NAME_RE.search(text)
+        name = (_clean_event_name(name_match.group(1)) if name_match
+                else f"{month}月{day}日{event_type}")
+        if not name:
+            name = f"{month}月{day}日{event_type}"
+    return {
+        "name": name,
+        "date": f"{year:04d}-{month:02d}-{day:02d}",
+        "year": str(year),
+        "city": city,
+        "type": event_type,
+        "text": text[:300],
+        "images": _item_images(item),
+        "source": _page_url(item),
+        "author": str(item.get("author") or ""),
+    }
+
+
+def _merch_candidate(item: dict):
+    """本地动态 → 周边图鉴候选；只保留能提取出具体周边名称的条目。"""
+    title = str(item.get("title") or "")
+    text = (title + "\n" + str(item.get("description") or "")).strip()
+    if not text or not any(word in text for word in _MERCH_WORDS):
+        return None
+    has_news = any(word in text for word in _MERCH_NEW_WORDS)
+    has_product_bracket = bool(re.search(
+        r"【[^】]*(?:棉花娃娃|娃娃|应援棒|雨伞|立牌|徽章|吧唧|海报|专辑|周边)[^】]*】",
+        text))
+    if not has_news and not has_product_bracket:
+        return None
+    name = ""
+    for match in re.finditer(r"【([^】]{2,40})】", text):
+        cleaned = _clean_merch_name(match.group(1).strip())
+        if cleaned in _MERCH_GENERIC or not cleaned:
+            continue
+        if any(word in cleaned for word in _MERCH_WORDS):
+            name = cleaned
+            break
+    if not name:
+        match = _MERCH_NAME_RE.search(text)
+        name = _clean_merch_name(match.group(1)) if match else ""
+    name = name.strip(" ·-")
+    if (not name or name in _MERCH_GENERIC
+            or any(word in name for word in _MERCH_BAD_WORDS)):
+        return None
+    if "会员" in text:
+        acquire = "会员"
+    elif any(word in text for word in ("无料", "免费", "领取")):
+        acquire = "领取"
+    elif any(word in text for word in ("上架", "预售", "通贩", "购买", "发货", "领养")):
+        acquire = "购买"
+    else:
+        acquire = ""
+    return {
+        "name": name,
+        "date": _date_key(item.get("publish_time")),
+        "acquire": acquire,
+        "text": text[:300],
+        "images": _item_images(item),
+        "source": _page_url(item),
+        "author": str(item.get("author") or ""),
+    }
+
+
+def _event_synced(candidate: dict, remote_rows: list[dict]) -> bool:
+    """按日期 + 名称（或城市）判断远端是否已有该活动。"""
+    c_name = _song_title_key(candidate.get("name"))
+    c_date = str(candidate.get("date") or "")
+    city = str(candidate.get("city") or "")
+    for row in remote_rows:
+        values = row.get("values") or {}
+        r_name_text = str(values.get("活动名称") or "")
+        r_name = _song_title_key(r_name_text)
+        r_date = (_date_key(values.get("活动日期"))
+                  or _date_key(values.get("开始时间")))
+        if c_date and r_date and c_date != r_date:
+            continue
+        if c_name and r_name and (c_name == r_name or c_name in r_name
+                                  or r_name in c_name):
+            return True
+        r_type = str(values.get("活动类型") or "")
+        if (c_date and r_date == c_date and r_type
+                and candidate.get("type") not in ("", "线下活动")
+                and candidate["type"] in r_type):
+            return True
+        if city and (not r_date or r_date == c_date) and city in r_name_text:
+            return True
+    return False
+
+
+def _merch_synced(candidate: dict, remote_rows: list[dict]) -> bool:
+    """按周边名称判断远端是否已有该周边。"""
+    c_name = _song_title_key(candidate.get("name"))
+    if not c_name:
+        return False
+    for row in remote_rows:
+        values = row.get("values") or {}
+        r_name = _song_title_key(values.get("周边名称"))
+        if not r_name:
+            continue
+        if c_name == r_name or (len(c_name) >= 4 and c_name in r_name) or (
+                len(r_name) >= 4 and r_name in c_name):
+            return True
+    return False
+
+
+def _build_candidate_result(profile: str, days, collected=None) -> dict:
+    """公共编排：本地候选 → 去重 → 与腾讯快照比对 → 只读待补行。"""
+    started = time.perf_counter()
+    tab_id = EVENT_TAB_ID if profile == "events" else MERCH_TAB_ID
+    remote = load_remote(SONG_DOC_KEY, tab_id)
+    after_remote = time.perf_counter()
+    items = collect_local_items(days, collected)
+    after_local = time.perf_counter()
+    groups: dict[str, dict] = {}
+    for item in items:
+        candidate = (_event_candidate(item) if profile == "events"
+                     else _merch_candidate(item))
+        if not candidate:
+            continue
+        if profile == "events":
+            key = "|".join((str(candidate.get("date") or ""),
+                            str(candidate.get("city") or ""),
+                            str(candidate.get("type") or "")))
+        else:
+            key = _song_title_key(candidate.get("name"))
+        if not key:
+            continue
+        group = groups.get(key)
+        if group is None:
+            groups[key] = {**candidate, "images": []}
+            group = groups[key]
+        elif (profile == "events"
+              and _event_name_score(candidate.get("name") or "")
+              > _event_name_score(group.get("name") or "")):
+            group["name"] = candidate.get("name")
+        for url in candidate.get("images") or []:
+            if url not in group["images"]:
+                group["images"].append(url)
+        if len(candidate.get("text") or "") > len(group.get("text") or ""):
+            group["text"] = candidate["text"]
+    pending = []
+    for group in groups.values():
+        synced = (_event_synced(group, remote) if profile == "events"
+                  else _merch_synced(group, remote))
+        if not synced:
+            pending.append(group)
+    after_match = time.perf_counter()
+    pending.sort(key=lambda item: (str(item.get("date") or ""), item.get("name") or ""),
+                 reverse=True)
+    columns = _sheet_columns(SONG_DOC_KEY, tab_id)
+    if not columns:
+        columns = EVENT_FALLBACK_COLUMNS if profile == "events" else MERCH_FALLBACK_COLUMNS
+    rows = []
+    for item in pending:
+        row = {name: "" for name in columns}
+        if profile == "events":
+            row.update({
+                "活动名称": item.get("name") or "",
+                "活动日期": item.get("date") or "",
+                "年份": item.get("year") or "",
+                "城市": item.get("city") or "",
+                "活动类型": item.get("type") or "线下活动",
+                "备注信息": item.get("text") or "",
+            })
+        else:
+            row.update({
+                "周边名称": item.get("name") or "",
+                "首发日期": item.get("date") or "",
+                "获取方式": item.get("acquire") or "",
+                "来源渠道": item.get("author") or "",
+                "备注信息": item.get("text") or "",
+            })
+        row["_images"] = list(item.get("images") or [])
+        row["_source"] = item.get("source") or ""
+        row["_needs_review"] = True
+        rows.append(row)
+    image_count = sum(len(row.get("_images") or []) for row in rows)
+    with_images = sum(1 for row in rows if row.get("_images"))
+    return {
+        "profile": profile,
+        "rows": rows,
+        "columns": list(columns),
+        "accounts": [],
+        "local_accounts": [],
+        "link_columns": [],
+        "stats": {
+            "local_items": len(items),
+            "local_groups": len(groups),
+            "synced_groups": len(groups) - len(pending),
+            "pending": len(rows),
+            "with_images": with_images,
+            "without_images": len(rows) - with_images,
+            "image_count": image_count,
+            "since": _since_date(days),
+            "timing": {
+                "remote": round(after_remote - started, 2),
+                "local": round(after_local - after_remote, 2),
+                "match": round(after_match - after_local, 2),
+                "total": round(after_match - started, 2),
+            },
+        },
+    }
+
+
+def build_event_pending(days=365, collected=None) -> dict:
+    """线下活动：本地动态 → 候选 → 与本地腾讯快照比对（只读）。"""
+    return _build_candidate_result("events", days, collected)
+
+
+def build_merch_pending(days=365, collected=None) -> dict:
+    """周边图鉴：本地动态 → 候选 → 与本地腾讯快照比对（只读）。"""
+    return _build_candidate_result("merch", days, collected)
+
+
 def _item_value(item, name: str, default=""):
     if isinstance(item, dict):
         return item.get(name, default)
@@ -795,7 +1119,16 @@ def list_targets() -> list[dict]:
         for sheet in sheets:
             if sheet.get("skipped"):
                 continue
-            if key == SONG_DOC_KEY and sheet["tab_id"] == SONG_TAB_ID:
+            names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
+            if key == SONG_DOC_KEY and sheet["tab_id"] == EVENT_TAB_ID:
+                if not all(name in names for name in EVENT_REQUIRED_COLUMNS):
+                    continue
+                profile = "events"
+            elif key == SONG_DOC_KEY and sheet["tab_id"] == MERCH_TAB_ID:
+                if not all(name in names for name in MERCH_REQUIRED_COLUMNS):
+                    continue
+                profile = "merch"
+            elif key == SONG_DOC_KEY and sheet["tab_id"] == SONG_TAB_ID:
                 if not _is_song_sheet(sheet):
                     continue
                 profile = "songs"
