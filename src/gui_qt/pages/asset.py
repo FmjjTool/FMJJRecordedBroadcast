@@ -1395,6 +1395,9 @@ class AssetPage(BasePage):
         self.sort_sel.currentTextChanged.connect(lambda _: self._refresh_collected(refresh_disk=False))
         actions.addWidget(self.sort_sel)
         actions.addWidget(_asset_action("刷新", self._refresh_collected, tip="重新核对文件变化并更新清单"))
+        actions.addWidget(_asset_action(
+            "图识别", self._open_image_search,
+            tip="用一张图片在已获取资源中查找视觉最接近的图片与对应条目"))
         actions.addStretch(1)
         self.select_all_cb = QCheckBox("全选")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
@@ -1425,6 +1428,15 @@ class AssetPage(BasePage):
             return
         self._search_var = text
         self._refresh_collected(refresh_disk=False)
+
+    def _open_image_search(self):
+        """以图搜图弹窗：复用当前已获取资源清单，为空时在后台重新读取。"""
+        from gui_qt.pages.asset_image_search import ImageSearchDialog
+        entries = list(getattr(self, "_disk_items", []) or [])
+        provider = None if entries else self._load_disk_items
+        dialog = ImageSearchDialog(self, entries=entries, entries_provider=provider,
+                                   open_detail=self._show_detail, owner=self)
+        dialog.exec()
 
     _MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mov", ".mp4", ".m4v"}
     _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}

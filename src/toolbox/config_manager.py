@@ -301,6 +301,9 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_bridge_tab_id": "",
     "tcdoc_bridge_days": 30,
     "tcdoc_bridge_accounts": [],
+    # 资产页「图识别（以图搜图）」：CLIP 图像编码器 ONNX（空 = config/models 自动查找）
+    "image_search_model": "",
+    "image_search_topk": 30,
     # 本地资料站：webwiki / webwiki-api 代码目录、GitHub 登录、2 个本地端口
     "webwiki_dir": "",
     "webwiki_backend_port": 8000,

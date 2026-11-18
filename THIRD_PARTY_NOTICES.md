@@ -27,6 +27,7 @@ FengMingToolbox（封茗囧菌数据汇总库 · 统一维护工具箱）在开�
 | beautifulsoup4 | 最新 | MIT | <https://code.launchpad.net/beautifulsoup> |
 | lxml | 最新 | BSD-3-Clause | <https://github.com/lxml/lxml> |
 | playwright | >= 1.40.0（可选） | Apache-2.0 | <https://github.com/microsoft/playwright-python> |
+| onnxruntime | >= 1.17.0（可选） | MIT | <https://github.com/microsoft/onnxruntime> |
 | 7-Zip（内置 `7z.exe` / `7z.dll`） | 26.06 | LGPL-2.1-or-later（含 unRAR 限制条款） | <https://www.7-zip.org/> |
 
 ### 关于 mutagen 与 GPL-3.0
@@ -56,6 +57,7 @@ PySide6 采用 LGPL-3.0。本项目以 GPL-3.0 分发，其要求严于 LGPL-3.0
 |---|---|
 | **FFmpeg / ffprobe** | 视频转换、切割、合并、抽帧、元数据写入均调用用户本机已有的 FFmpeg。本项目不打包、不附带其二进制，用户需自行安装并遵守其许可证。若使用 `--enable-gpl` 构建版本，其 GPL 义务由使用者自行承担；建议使用 LGPL 构建版。 |
 | **faster-whisper** | 可选的字幕转写后端，由用户自行安装，本项目不随包分发。 |
+| **CLIP 图像编码器（ONNX）** | 资产页「图识别（以图搜图）」的可选本地模型，由用户自行下载，本项目不随包分发；模型许可证以下载来源的发布页为准（推荐 Xenova/clip-vit-base-patch32，其来源模型为 MIT）。 |
 | **必剪 / 剪映** | 字幕转换通过其公开接口调用，不包含任何其客户端代码或资源。 |
 
 ---
