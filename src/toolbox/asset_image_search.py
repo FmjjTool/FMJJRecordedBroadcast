@@ -8,6 +8,7 @@ image_embedding，特征缓存由 L5 asset_image_vectors 负责。
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ import numpy as np
 
 from toolbox import asset_image_vectors
 from toolbox.image_embedding import IMAGE_EXTS, EmbeddingCancelled, ImageEmbedder
+
+logger = logging.getLogger(__name__)
 
 
 class SearchCancelled(RuntimeError):
@@ -114,13 +117,15 @@ def build_index(entries, embedder, progress=None, cancel=None,
         _emit(progress, "cache", len(cache), total,
               f"已缓存 {len(cache)}/{total} 张，本次需提取 {len(missing)} 张")
     embedded = 0
-    skipped = 0
+    skipped_count = 0
+    skipped_items: list[tuple[str, str]] = []
     cache_hits = len(vectors)
 
     def snapshot() -> dict:
         return {
             "entries": len(entries), "images": total, "indexed": len(vectors),
-            "cache_hits": cache_hits, "embedded": embedded, "skipped": skipped,
+            "cache_hits": cache_hits, "embedded": embedded,
+            "skipped": skipped_count, "skipped_items": list(skipped_items),
         }
 
     if on_ready is not None and vectors:
@@ -160,18 +165,30 @@ def build_index(entries, embedder, progress=None, cancel=None,
             if on_ready is not None:
                 on_ready(vectors, owners, paths, snapshot())
 
+        skipped_paths: list[str] = []
+
+        def collect_skip(path, reason) -> None:
+            nonlocal skipped_count
+            skipped_count += 1
+            skipped_paths.append(str(path))
+            if len(skipped_items) < 100:
+                skipped_items.append((str(path), str(reason)))
+
+        def embed_once(path_list, prefix: str = ""):
+            def on_embed(done, count):
+                _emit(progress, "embed", done, count,
+                      f"{prefix}正在提取图片特征 {done}/{count}...")
+
+            return embedder.embed_paths(
+                path_list, progress=on_embed, cancel=cancel,
+                on_batch=on_batch, on_skip=collect_skip)
+
         _emit(progress, "embed", 0, len(missing),
               f"正在提取图片特征 0/{len(missing)}...")
 
-        def on_embed(done, count):
-            _emit(progress, "embed", done, count,
-                  f"正在提取图片特征 {done}/{count}...")
-
         cancel_exc = None
         try:
-            _results, skipped = embedder.embed_paths(
-                [path for _idx, path, _mtime, _size in missing],
-                progress=on_embed, cancel=cancel, on_batch=on_batch)
+            embed_once([path for _idx, path, _mtime, _size in missing])
         except EmbeddingCancelled as exc:
             cancel_exc = exc
         finally:
@@ -179,8 +196,32 @@ def build_index(entries, embedder, progress=None, cancel=None,
         if cancel_exc is not None:
             raise SearchCancelled(
                 f"已停止，已缓存 {embedded} 张特征") from cancel_exc
+
+        # 读取失败可能是文件正在写入/短暂占用，给一次重试机会
+        if skipped_paths and not (cancel is not None and cancel.is_set()):
+            retry_paths = list(skipped_paths)
+            skipped_paths.clear()
+            skipped_count = 0
+            skipped_items.clear()
+            _emit(progress, "embed", 0, len(retry_paths),
+                  f"正在重试 {len(retry_paths)} 张不可读图片...")
+            try:
+                embed_once(retry_paths, prefix="重试：")
+            except EmbeddingCancelled as exc:
+                cancel_exc = exc
+            finally:
+                flush_rows()
+            if cancel_exc is not None:
+                raise SearchCancelled(
+                    f"已停止，已缓存 {embedded} 张特征") from cancel_exc
     if cancel is not None and cancel.is_set():
         raise SearchCancelled(f"已停止，已缓存 {embedded} 张特征")
+
+    if skipped_items:
+        logger.warning(
+            "图识别索引跳过 %s 张不可读图片：%s", skipped_count,
+            "; ".join(f"{Path(path).name}: {reason}"
+                      for path, reason in skipped_items[:20]))
 
     matrix = np.vstack(vectors) if vectors else np.zeros((0, 0), dtype=np.float32)
     return {

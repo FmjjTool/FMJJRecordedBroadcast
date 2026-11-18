@@ -472,10 +472,22 @@ class ImageSearchDialog(QDialog):
                 QMessageBox.warning(self, "建立特征索引失败", text)
             return
         stats = result or {}
+        skipped = int(stats.get("skipped") or 0)
+        note = f" · 跳过不可读 {skipped} 张（悬停查看）" if skipped else ""
         self.status.setText(
             f"特征索引完成：已索引 {stats.get('indexed', 0)}/{stats.get('images', 0)} 张"
-            f" · 本次新增 {stats.get('embedded', 0)} 张"
+            f" · 本次新增 {stats.get('embedded', 0)} 张{note}"
             f" · 耗时 {stats.get('seconds', 0)} 秒；选图后识别会直接复用。")
+        self.status.setToolTip(self._skipped_tooltip(stats) if skipped else "")
+        if skipped:
+            preview = "\n".join(
+                f"{Path(str(path)).name}：{reason}"
+                for path, reason in (stats.get("skipped_items") or [])[:10])
+            QMessageBox.information(
+                self, "部分图片未纳入索引",
+                f"有 {skipped} 张图片无法读取，已跳过（空文件、下载不完整或格式损坏）：\n\n"
+                f"{preview}" + ("\n…" if skipped > 10 else "")
+                + "\n\n可在资产页对这些条目重新下载后再建索引。")
 
     def _start(self) -> None:
         if self._running:
@@ -607,6 +619,8 @@ class ImageSearchDialog(QDialog):
             self.status.setText(
                 f"已停止提取，按已索引 {stats.get('indexed', 0)}/{stats.get('images', 0)} 张"
                 f"显示 {len(rows)} 条暂定结果；下次识别会继续复用缓存。")
+            self.status.setToolTip(self._skipped_tooltip(stats)
+                                   if stats.get("skipped") else "")
             return
         self._partial_count = len(rows)
         self._partial_indexed = int(stats.get("indexed") or 0)
@@ -615,6 +629,14 @@ class ImageSearchDialog(QDialog):
             f" · 缓存命中 {stats.get('cache_hits', 0)} 张"
             f" · 跳过读取失败 {stats.get('skipped', 0)} 张"
             f" · 用时 {stats.get('seconds', 0)} 秒")
+        self.status.setToolTip(self._skipped_tooltip(stats)
+                               if stats.get("skipped") else "")
+
+    @staticmethod
+    def _skipped_tooltip(stats: dict) -> str:
+        items = stats.get("skipped_items") or []
+        lines = [f"{Path(str(path)).name}：{reason}" for path, reason in items[:20]]
+        return "以下图片无法读取，已跳过（文件损坏或格式不支持）：\n" + "\n".join(lines)
 
     def _fill_results(self, rows: list[dict]) -> None:
         signature = tuple(

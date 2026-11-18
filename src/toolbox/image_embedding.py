@@ -250,10 +250,12 @@ class ImageEmbedder:
             self.batch_size = self._fixed_batch
         self._output_names = [output.name for output in self._session.get_outputs()]
 
-    def embed_paths(self, paths, progress=None, cancel=None, on_batch=None):
+    def embed_paths(self, paths, progress=None, cancel=None, on_batch=None,
+                    on_skip=None):
         """批量提特征，返回 ([(路径, 向量)], 跳过数)。
 
         on_batch(batch_results) 在每个批次完成后立即回调，供调用方落盘；
+        on_skip(path, reason) 在单张图片读取失败时回调；
         取消/异常时已完成批次仍然有效。
         """
         all_paths = list(paths)
@@ -268,8 +270,10 @@ class ImageEmbedder:
             for path in chunk:
                 try:
                     batch.append(preprocess_image(path, self._size))
-                except EmbeddingError:
+                except EmbeddingError as exc:
                     skipped += 1
+                    if on_skip is not None:
+                        on_skip(path, str(exc))
                     continue
                 valid.append(path)
             if batch:
