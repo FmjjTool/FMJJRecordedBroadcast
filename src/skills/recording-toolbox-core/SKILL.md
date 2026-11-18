@@ -1,6 +1,6 @@
 ---
 name: recording-toolbox-core
-description: "录播工具箱核心保护，任何项目更新前必读。自动整理、交互重命名/投稿、视频操作、音频提取、字幕转换、继续操作、日历浏览、文件迁移为核心逻辑处理中心；未获用户对本次具体模块与改动范围的明确授权，不得直接或间接修改。"
+description: "录播工具箱核心保护，任何项目更新前必读。自动整理、视频操作、交互重命名/投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移为核心逻辑处理中心；未获用户对本次具体模块与改动范围的明确授权，不得直接或间接修改。"
 ---
 
 # 录播工具箱核心保护
@@ -14,8 +14,8 @@ description: "录播工具箱核心保护，任何项目更新前必读。自动
 | 截图中的模块 | 主路由 / 页面类 | 页面与主要处理位置 |
 | --- | --- | --- |
 | 自动整理 | `toolbox_organize` / `OrganizePage` | `src/gui_qt/pages/organize.py`、`src/toolbox/organize_engine.py` |
-| 交互重命名 / 投稿 | `toolbox_rename` / `RenamePage` | `src/gui_qt/pages/rename.py`、`src/toolbox/rename_engine.py`、`src/toolbox/bili_upload.py`、`src/gui_qt/bili_upload_dialog.py`、`src/gui_qt/video_selection_dialog.py` |
 | 视频操作 | `toolbox_editor` / `EditorPage` | `src/gui_qt/pages/editor.py`、`src/toolbox/edit_engine.py`、`src/toolbox/convert_engine.py`、`src/toolbox/concat_engine.py` |
+| 交互重命名 / 投稿 | `toolbox_rename` / `RenamePage` | `src/gui_qt/pages/rename.py`、`src/toolbox/rename_engine.py`、`src/toolbox/bili_upload.py`、`src/gui_qt/bili_upload_dialog.py`、`src/gui_qt/video_selection_dialog.py` |
 | 音频提取 | `toolbox_audio` / `AudioPage` | `src/gui_qt/pages/audio.py`、`src/toolbox/audio_engine.py`、`src/toolbox/asr_engine.py`、`src/gui_qt/asr_settings_dialog.py` |
 | 字幕转换 | `toolbox_subtitle` / `SubtitlePage` | `src/gui_qt/pages/subtitle.py`、`src/toolbox/subtitle_engine.py`；内嵌歌词页 `src/gui_qt/pages/lyrics_tool.py`、`src/toolbox/lyrics_engine.py` |
 | 继续操作 | `toolbox_launcher` / `LauncherPage` | `src/gui_qt/pages/launcher.py`；外部程序启动与关联进程管理 `src/toolbox/process_tree.py` |
@@ -23,6 +23,8 @@ description: "录播工具箱核心保护，任何项目更新前必读。自动
 | 文件迁移 | `toolbox_migrate` / `MigratePage` | `src/gui_qt/pages/migrate.py` 内的扫描、复制/剪切、重复项处理及任务逻辑 |
 
 同样保护视频转换旧入口 `toolbox_convert`、兼容页面 `src/gui_qt/pages/convert.py`，以及这些核心页面已有或后续拆出的页签、对话框与处理组件。文件映射不是放行清单：发现核心逻辑在其他文件中时，也按本 skill 保护，不因改名、拆分或移动文件失去保护。
+
+菜单顺序固定为：自动整理 → 视频操作 → 交互重命名 / 投稿 → 音频提取 → 字幕转换 → 继续操作 → 日历浏览 → 文件迁移。未经用户明确要求，不得重排、合并或改写入列表顺序。
 
 ## 禁止直接或间接改动
 

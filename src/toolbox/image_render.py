@@ -556,6 +556,190 @@ def render_report(title: str, subtitle: str, sections: Sequence[Mapping],
     return str(first_path)
 
 
+# ==================== 账号追踪仪表盘 ====================
+# 参考样式：深色底 + 双列平台卡片 + 平台色左边条 + 合计卡。
+# 平台色只用于平台身份识别，不参与涨跌语义；涨跌仍用 success/danger。
+
+PLATFORM_ACCENTS: dict[str, str] = {
+    "bilibili": "#fb7299",
+    "douyin": "#fe2c55",
+    "weibo": "#ff8200",
+    "kuaishou": "#ff5000",
+    "xiaohongshu": "#ff2442",
+    "netease": "#e23a3a",
+    "qq": "#31c27c",
+    "kugou": "#2ea7ff",
+    "kuwo": "#ffb020",
+    "fivesing": "#ff7a45",
+}
+ACCENT_FALLBACK = "#3f76c9"
+
+DASH_HEADER_H = 150
+DASH_CARD_H = 196
+DASH_WIDE_H = 224
+DASH_CARD_GAP = 20
+DASH_TOTAL_H = 132
+
+
+def platform_accent(platform_key: str) -> str:
+    """平台英文标识 → 固定身份色；未知平台用中性强调色。"""
+    return PLATFORM_ACCENTS.get(str(platform_key or "").lower(), ACCENT_FALLBACK)
+
+
+def _center_text(draw: ImageDraw.ImageDraw, y: int, text: str,
+                 font_obj: ImageFont.ImageFont, fill: str,
+                 emoji_font: ImageFont.ImageFont | None = None) -> None:
+    width = rich_text_width(text, font_obj, emoji_font)
+    draw_rich_text(draw, (WIDTH - width) / 2, y + _ascent(font_obj), text,
+                   font_obj, fill, emoji_font)
+
+
+def _draw_dash_card(draw: ImageDraw.ImageDraw, box: Sequence[float],
+                    card: Mapping, theme: str, wide: bool = False) -> None:
+    palette = tokens(theme)
+    x1, y1, x2, y2 = box
+    draw_card(draw, box, theme)
+    accent = str(card.get("accent") or ACCENT_FALLBACK)
+    draw.rounded_rectangle((x1, y1, x1 + 6, y2), radius=3, fill=accent)
+    inner_w = (x2 - x1) - 2 * CARD_PADDING
+    title = f"{card.get('platform') or '未知'} · {card.get('account') or '账号'}"
+    title_font = font(18, bold=True)
+    title_emoji = font(18, emoji=True)
+    title = ellipsize_rich(title, title_font, title_emoji, inner_w)
+    draw_rich_text(draw, x1 + CARD_PADDING, y1 + 24 + _ascent(title_font),
+                   title, title_font, accent, title_emoji)
+    metrics = list(card.get("metrics") or [])
+    if wide and metrics:
+        # 单账号：指标横向分栏，避免半宽卡片旁边大块留白。
+        count = len(metrics)
+        gap = 24
+        col_w = (inner_w - gap * (count - 1)) / count
+        for index, metric in enumerate(metrics):
+            label, value, delta_text, direction = metric
+            cx = x1 + CARD_PADDING + index * (col_w + gap)
+            label_font = font(13)
+            value_font = font(30, bold=True)
+            delta_font = font(14, bold=True)
+            draw_rich_text(draw, cx, y1 + 78, str(label), label_font,
+                           palette["muted"])
+            draw_rich_text(draw, cx, y1 + 104 + _ascent(value_font),
+                           str(value), value_font, palette["text"])
+            if delta_text:
+                draw_rich_text(draw, cx, y1 + 154 + _ascent(delta_font),
+                               str(delta_text), delta_font,
+                               palette.get(str(direction or "flat"),
+                                           palette["flat"]))
+    else:
+        y = y1 + 58
+        for index, metric in enumerate(metrics):
+            label, value, delta_text, direction = metric
+            label_font = font(13)
+            value_font = font(22 if index == 0 else 17, bold=True)
+            delta_font = font(13, bold=True)
+            draw_rich_text(draw, x1 + CARD_PADDING, y + _ascent(label_font),
+                           str(label), label_font, palette["muted"])
+            draw_rich_text(draw, x1 + CARD_PADDING + 96, y + _ascent(value_font),
+                           str(value), value_font, palette["text"])
+            if delta_text:
+                delta_w = _font_length(delta_font, str(delta_text))
+                draw_rich_text(draw, x2 - CARD_PADDING - delta_w,
+                               y + _ascent(value_font), str(delta_text),
+                               delta_font,
+                               palette.get(str(direction or "flat"),
+                                           palette["flat"]))
+            y += 36
+    note = str(card.get("note") or "")
+    if note:
+        note_font = font(11)
+        note = ellipsize_rich(note, note_font, None, inner_w)
+        draw_rich_text(draw, x1 + CARD_PADDING, y2 - 22,
+                       note, note_font, palette["muted"])
+
+
+def render_account_dashboard(title: str, subtitle: str, cards: Sequence[Mapping],
+                             output_path, theme: str = "dark",
+                             total: Mapping | None = None,
+                             source: str = "本地采集记录") -> str:
+    """账号追踪仪表盘：深色双列平台卡片 + 合计卡 + 固定页脚。
+
+    cards: [{
+        "platform": "B站", "account": "账号名", "accent": "#fb7299",
+        "metrics": [("粉丝量", "1.2万", "↑ +345", "success"), ...],
+        "note": "上次 2026-11-16 → 本次 2026-11-17",
+    }]
+    total: {"label": "粉丝量合计（8 平台）", "value": "1857.76万",
+            "delta": "↓ -1,093", "direction": "danger"}
+    """
+    palette = tokens(theme)
+    cards = list(cards or [])
+    if not cards:
+        raise ValueError("没有可导出的账号数据")
+    single = len(cards) == 1
+    card_w = WIDTH - 2 * MARGIN if single else \
+        (WIDTH - 2 * MARGIN - DASH_CARD_GAP) // 2
+    card_h = DASH_WIDE_H if single else DASH_CARD_H
+    columns = 1 if single else 2
+    rows = (len(cards) + columns - 1) // columns
+    content_h = rows * card_h + max(0, rows - 1) * DASH_CARD_GAP
+    if total:
+        content_h += DASH_CARD_GAP + DASH_TOTAL_H
+    height = DASH_HEADER_H + content_h + FOOTER_H + BOTTOM_GAP
+    image = Image.new("RGB", (WIDTH, height), palette["bg"])
+    draw = ImageDraw.Draw(image)
+
+    brand_font = font(12)
+    _center_text(draw, 22, APP_NAME, brand_font, palette["muted"])
+    title_font = font(32, bold=True)
+    title_emoji = font(32, emoji=True)
+    title_text = ellipsize_rich(title or "账号数据", title_font, title_emoji,
+                                WIDTH - 2 * MARGIN)
+    _center_text(draw, 52, title_text, title_font, palette["text"], title_emoji)
+    if subtitle:
+        sub_font = font(13)
+        sub_emoji = font(13, emoji=True)
+        sub_text = ellipsize_rich(subtitle, sub_font, sub_emoji, WIDTH - 2 * MARGIN)
+        _center_text(draw, 108, sub_text, sub_font, palette["muted"], sub_emoji)
+
+    y = DASH_HEADER_H
+    for index, card in enumerate(cards):
+        column = index % columns
+        row = index // columns
+        x = MARGIN + column * (card_w + DASH_CARD_GAP)
+        top = y + row * (card_h + DASH_CARD_GAP)
+        _draw_dash_card(draw, (x, top, x + card_w, top + card_h), card, theme,
+                        wide=single)
+    y += content_h
+
+    if total:
+        top = DASH_HEADER_H + rows * card_h + (rows - 1) * DASH_CARD_GAP \
+            + DASH_CARD_GAP
+        draw_card(draw, (MARGIN, top, WIDTH - MARGIN, top + DASH_TOTAL_H), theme)
+        label_font = font(15, bold=True)
+        label = str(total.get("label") or "粉丝量合计")
+        label = ellipsize_rich(label, label_font, font(15, emoji=True),
+                               WIDTH - 2 * MARGIN - 2 * CARD_PADDING)
+        _center_text(draw, top + 18, label, label_font, palette["warning"])
+        value_font = font(40, bold=True)
+        value = str(total.get("value") or "—")
+        delta = str(total.get("delta") or "")
+        delta_font = font(16, bold=True)
+        value_w = _font_length(value_font, value)
+        delta_w = _font_length(delta_font, delta) if delta else 0
+        gap = 14 if delta else 0
+        start = (WIDTH - value_w - gap - delta_w) / 2
+        baseline = top + 52 + _ascent(value_font)
+        draw_rich_text(draw, start, baseline, value, value_font, palette["text"])
+        if delta:
+            draw_rich_text(draw, start + value_w + gap, baseline, delta,
+                           delta_font,
+                           palette.get(str(total.get("direction") or "flat"),
+                                       palette["flat"]))
+
+    draw_footer(draw, height - FOOTER_H - BOTTOM_GAP, source, theme)
+    save_png(image, output_path)
+    return str(output_path)
+
+
 def shift_color(delta: int, theme: str = "light") -> str:
     """涨跌颜色 token，供业务模块组装单元格时使用。"""
     palette = tokens(theme)

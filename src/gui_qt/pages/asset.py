@@ -268,6 +268,15 @@ def _wrappable(text: str) -> str:
     return text
 
 
+def _fit_preview_size(width: int, height: int,
+                      max_w: int = 760, max_h: int = 420) -> tuple:
+    """预览图等比收缩到最大框内；小图不放大，避免糊化。"""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    scale = min(max_w / width, max_h / height, 1.0)
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
 class _FlowLayout(QLayout):
     """流式布局（Qt 官方 FlowLayout 模式）：子项按宽度自动换行成多行。
 
@@ -1145,24 +1154,26 @@ class AssetPage(BasePage):
         kind = item.get("type")
         win = QDialog(self)
         win.setWindowTitle(f"预览 · {(item.get('name') or '')[:40]}")
-        win.resize(920, 720)
-        win.setMinimumSize(740, 520)
+        win.resize(880, 700)
+        win.setMinimumSize(560, 520)
 
         outer = QVBoxLayout(win)
-        outer.setContentsMargins(10, 10, 10, 6)
-        title_lbl = QLabel(item.get("name") or "")
-        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold;")
-        title_lbl.setWordWrap(True)
+        outer.setContentsMargins(10, 10, 10, 10)
+        name = item.get("name") or ""
+        title_lbl = QLabel(name if len(name) <= 40 else name[:37] + "…")
+        title_lbl.setStyleSheet("font-size: 13px; font-weight: bold;")
+        title_lbl.setWordWrap(False)
+        title_lbl.setToolTip(name)
         title_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         outer.addWidget(title_lbl)
 
         preview = QLabel("预览加载中…")
         preview.setAlignment(Qt.AlignCenter)
-        preview.setFixedSize(820, 440)
+        preview.setFixedSize(420, 260)
         preview.setStyleSheet(
-            "background: palette(alternate-base); border-radius: 6px; color: palette(placeholder-text);"
-            " font-size: 44px;")
-        outer.addWidget(preview, 1, Qt.AlignHCenter)
+            "background: palette(alternate-base); border-radius: 6px;"
+            " color: palette(placeholder-text); font-size: 14px;")
+        outer.addWidget(preview, 0, Qt.AlignHCenter)
 
         icon = {"video": "视频", "audio": "音频"}.get(kind, "")
 
@@ -1170,7 +1181,7 @@ class AssetPage(BasePage):
             if kind == "image":
                 from PIL import Image
                 img = Image.open(item["path"]).convert("RGB")
-                img.thumbnail((820, 440), Image.LANCZOS)
+                img.thumbnail((760, 420), Image.LANCZOS)
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 return buf.getvalue()
@@ -1201,8 +1212,14 @@ class AssetPage(BasePage):
                     preview.setText(icon)
                     return
                 preview.setText("")
+                # 预览框按图片比例收缩，避免竖图两侧留下大块空白
+                target_w, target_h = _fit_preview_size(qimg.width(), qimg.height())
+                preview.setFixedSize(target_w, target_h)
                 preview.setPixmap(QPixmap.fromImage(qimg).scaled(
-                    820, 440, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    target_w, target_h, Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation))
+                win.resize(min(880, max(560, target_w + 40)),
+                           min(760, max(520, target_h + 210)))
             except RuntimeError:
                 pass  # 弹窗已关闭
 

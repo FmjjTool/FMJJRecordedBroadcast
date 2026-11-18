@@ -35,7 +35,7 @@
 
 ## 录播工具箱核心保护 skill（强制阅读）
 
-完整内容见 [src/skills/recording-toolbox-core/SKILL.md](src/skills/recording-toolbox-core/SKILL.md)。截图指定的八个模块是核心逻辑处理中心：自动整理、交互重命名 / 投稿、视频操作、音频提取、字幕转换、继续操作、日历浏览、文件迁移。任何更新前都必须阅读并核对影响范围；未经用户对本次具体模块及改动范围明确授权，不得修改其入口、页面、底层处理逻辑或经共享代码间接改变行为。
+完整内容见 [src/skills/recording-toolbox-core/SKILL.md](src/skills/recording-toolbox-core/SKILL.md)。截图指定的八个模块是核心逻辑处理中心：自动整理、视频操作、交互重命名 / 投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移。任何更新前都必须阅读并核对影响范围；未经用户对本次具体模块及改动范围明确授权，不得修改其入口、页面、底层处理逻辑或经共享代码间接改变行为。
 
 ## 总结文章 skill（关键词 + 文件触发）
 

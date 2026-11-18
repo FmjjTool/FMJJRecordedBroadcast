@@ -1173,10 +1173,13 @@ class TcDocBridgePanel(QWidget):
         elif profile in ("events", "merch"):
             label = "线下活动" if profile == "events" else "周边图鉴"
             scope = stats["since"] or "全部历史"
+            source_label = {"ticket": "票务解析", "shop": "购物解析"}.get(
+                stats.get("source"), "本地动态")
             self.summary.setText(
-                f"本地 {scope} 共 {stats['local_items']} 条 → 识别 {stats['local_groups']} 个"
-                f"{label}候选；已存在 {stats['synced_groups']} 个，待补 {stats['pending']} 行"
-                f"{image_note}；用时 {float(timing.get('total') or 0):.2f} 秒")
+                f"{source_label} {scope} 共 {stats['local_items']} 条 → 识别 "
+                f"{stats['local_groups']} 个{label}候选；已存在 {stats['synced_groups']} 个，"
+                f"待补 {stats['pending']} 行{image_note}；"
+                f"用时 {float(timing.get('total') or 0):.2f} 秒")
         else:
             scope = stats["since"] or "全部历史"
             self.summary.setText(
@@ -1198,9 +1201,11 @@ class TcDocBridgePanel(QWidget):
                     f"共 {len(result['rows'])} 首待同步歌曲（按歌曲名称比对；列顺序与完整歌曲表头一致，"
                     "整行复制后从表格第一列粘贴）；上传只新增、不改不删。")
             elif profile in ("events", "merch"):
+                source_label = {"ticket": "票务解析", "shop": "购物解析"}.get(
+                    stats.get("source"), "本地动态")
                 self.status.setText(
-                    f"共 {len(result['rows'])} 行候选（只读预览）：由本地动态自动识别，请人工核对；"
-                    "该表不在写回白名单，未开放上传，可复制 TSV 后手工粘贴。")
+                    f"共 {len(result['rows'])} 行候选（只读预览）：由{source_label}自动识别，"
+                    "请人工核对；该表不在写回白名单，未开放上传，可复制 TSV 后手工粘贴。")
             else:
                 self.status.setText(
                     f"共 {len(result['rows'])} 行待同步（不含表头；"
@@ -1414,6 +1419,20 @@ class TcDocBridgePanel(QWidget):
 
         def fetch(item):
             index, url = item
+            if not url.lower().startswith(("http://", "https://", "//")):
+                local = Path(url)
+                if not local.is_absolute():
+                    from toolbox.config_manager import get_app_root
+                    local = Path(get_app_root()) / local
+                if not local.is_file():
+                    return None
+                ext = local.suffix.lower() or ".jpg"
+                target = root / f"{index:03d}{ext}"
+                try:
+                    shutil.copyfile(local, target)
+                    return str(target)
+                except OSError:
+                    return None
             try:
                 response = httpx.get(
                     url, timeout=20, follow_redirects=True,

@@ -119,8 +119,8 @@ NAV_GROUPS = [
     ]),
     ("录播工具箱", [
         ("toolbox_organize", "自动整理"),
-        ("toolbox_rename", "交互重命名 / 投稿"),
         ("toolbox_editor", "视频操作"),
+        ("toolbox_rename", "交互重命名 / 投稿"),
         ("toolbox_audio", "音频提取"),
         ("toolbox_subtitle", "字幕转换"),
         ("toolbox_launcher", "继续操作"),

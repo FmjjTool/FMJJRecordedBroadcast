@@ -1,9 +1,9 @@
 """账号追踪：把「当前两次采集的变化」导出为 PNG 图片。
 
-- 单账号：export_diff_png(account, history) → 一张账号对比图
-- 按组：export_group_png(group_id, group_name) → 组内所有账号堆叠成一张长图
+- 单账号：export_diff_png(account, history) → 一张账号数据卡
+- 按组：export_group_png(group_id, group_name) → 组内账号卡片 + 合计卡
 
-画面统一由 `toolbox.image_render` 生成（1080 px、品牌页头/页脚、浅色默认）。
+画面统一由 `toolbox.image_render` 生成（1080 px、深色平台卡片仪表盘）。
 """
 
 from pathlib import Path
@@ -11,10 +11,9 @@ from pathlib import Path
 from toolbox import image_render as render
 from toolbox.platform_names import MEDIA_PLATFORM_NAMES as PLATFORM_NAMES
 
-# 数字指标（可计算涨跌）：(显示名, 字段名...)
+# 卡片指标（第一项用大号字）：(显示名, 字段名...)
 NUM_METRICS = [
-    ("粉丝数", "fans"),
-    ("关注数", "following"),
+    ("粉丝量", "fans"),
     ("获赞数", "likes"),
     ("内容数", "video_count", "weibo_count"),
 ]
@@ -38,6 +37,10 @@ def _plat_of(account, rec):
     return PLATFORM_NAMES.get(platform, platform or "未知")
 
 
+def _plat_key(account, rec):
+    return (account.get("platform") or rec.get("platform") or "").strip()
+
+
 def _resolve_output_dir(output_dir):
     if output_dir is None:
         from toolbox.config_manager import get_export_subdir
@@ -47,34 +50,51 @@ def _resolve_output_dir(output_dir):
     return output_dir
 
 
-def _rows(prev, curr, theme):
-    palette = render.tokens(theme)
-    rows = []
+def _card(account, curr, prev):
+    metrics = []
     for label, *fields in NUM_METRICS:
         p_val = _num(prev, fields)
         c_val = _num(curr, fields)
         delta = None if p_val is None or c_val is None else c_val - p_val
         delta_text, delta_key = render.format_delta(delta)
-        rows.append((
-            label,
-            (render.format_count(p_val), palette["text"], False),
-            (render.format_count(c_val), palette["text"], True),
-            (delta_text, palette[delta_key], True),
-        ))
-    return rows
+        metrics.append((label, render.format_count(c_val), delta_text, delta_key))
+    return {
+        "platform": _plat_of(account, curr),
+        "account": account.get("name") or curr.get("name") or "账号",
+        "accent": render.platform_accent(_plat_key(account, curr)),
+        "metrics": metrics,
+        "note": f"{(prev.get('_time') or '—')[:16]} → {(curr.get('_time') or '—')[:16]}",
+    }
 
 
-def _notes(prev, curr):
-    notes = [
-        f"上次采集：{(prev.get('_time') or '—')[:16]}",
-        f"当前采集：{(curr.get('_time') or '—')[:16]}",
-    ]
-    if curr.get("name") and prev.get("name") and curr["name"] != prev["name"]:
-        notes.append(f"昵称变更：{prev['name']} → {curr['name']}")
-    return notes
+def _total(entries):
+    """粉丝量合计与变化；无任何粉丝数据时返回 None。"""
+    current = []
+    previous = []
+    for acc, hist in entries:
+        curr, prev = hist[0], hist[1]
+        c_val = _num(curr, ("fans",))
+        p_val = _num(prev, ("fans",))
+        if c_val is not None:
+            current.append(c_val)
+        if p_val is not None:
+            previous.append(p_val)
+    if not current:
+        return None
+    c_total = sum(current)
+    p_total = sum(previous) if len(previous) == len(current) else None
+    delta = None if p_total is None else c_total - p_total
+    delta_text, delta_key = render.format_delta(delta)
+    platforms = len({_plat_key(acc, hist[0]) for acc, hist in entries})
+    return {
+        "label": f"粉丝量合计（{platforms} 平台）",
+        "value": render.format_count(c_total),
+        "delta": delta_text,
+        "direction": delta_key,
+    }
 
 
-def export_diff_png(account, history, output_dir=None, theme="light"):
+def export_diff_png(account, history, output_dir=None, theme="dark"):
     """单账号导出：最新两次采集的变化对比 PNG，返回文件路径。"""
     if not history or len(history) < 2:
         raise ValueError("该账号至少需要两次采集数据才能导出变化对比")
@@ -85,19 +105,16 @@ def export_diff_png(account, history, output_dir=None, theme="light"):
     output_dir = _resolve_output_dir(output_dir)
     out_path = render.build_output_path(output_dir, "tracker", name)
 
-    sections = [{
-        "title": "",
-        "subtitle": "",
-        "rows": _rows(prev, curr, theme),
-        "notes": _notes(prev, curr),
-    }]
-    return render.render_report(
-        name, f"{plat_name} · 最近两次采集变化对比",
-        sections, out_path, theme=theme, source="账号追踪 · 本地采集记录")
+    card = _card(account, curr, prev)
+    subtitle = (f"{plat_name} · 数据时间：{(curr.get('_time') or '—')[:16]}"
+                f"　较上次（{(prev.get('_time') or '—')[:16]}）")
+    return render.render_account_dashboard(
+        f"{name} · 粉丝数据", subtitle, [card], out_path,
+        theme=theme, source="账号追踪 · 本地采集记录")
 
 
-def export_group_png(group_id, group_name, output_dir=None, theme="light"):
-    """按组导出：组内所有账号（各自最新两次变化）堆叠成一张长图。"""
+def export_group_png(group_id, group_name, output_dir=None, theme="dark"):
+    """按组导出：组内所有账号的卡片 + 粉丝量合计卡。"""
     from .accounts import get_accounts_by_group, load_history
 
     accounts = get_accounts_by_group(group_id)
@@ -113,17 +130,9 @@ def export_group_png(group_id, group_name, output_dir=None, theme="light"):
     output_dir = _resolve_output_dir(output_dir)
     out_path = render.build_output_path(output_dir, "tracker", group_label)
 
-    sections = []
-    for acc, hist in entries:
-        curr, prev = hist[0], hist[1]
-        name = acc.get("name") or curr.get("name") or "账号"
-        sections.append({
-            "title": name,
-            "subtitle": _plat_of(acc, curr),
-            "rows": _rows(prev, curr, theme),
-            "notes": _notes(prev, curr),
-        })
-    return render.render_report(
-        group_label,
-        f"组号 {group_id} · {len(entries)} 个账号 · 最近两次采集变化对比",
-        sections, out_path, theme=theme, source="账号追踪 · 本地采集记录")
+    cards = [_card(acc, hist[0], hist[1]) for acc, hist in entries]
+    latest = max((hist[0].get("_time") or "") for _acc, hist in entries)
+    subtitle = f"{len(entries)} 个账号 · 最新采集：{latest[:16] or '—'}"
+    return render.render_account_dashboard(
+        f"{group_label} · 多平台粉丝数据", subtitle, cards, out_path,
+        theme=theme, total=_total(entries), source="账号追踪 · 本地采集记录")

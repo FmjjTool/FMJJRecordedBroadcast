@@ -1675,6 +1675,16 @@ def download_event_images(ev: ShowEvent, base_dir, log=None) -> ShowEvent:
              + len(ev.local_seat) + len(ev.local_guests) + len(ev.local_venue))
     if total:
         ev.image_dir = str(base)
+    # 结构化旁车：腾讯文档「线下活动」直接读取，避免再从动态文本里猜活动
+    try:
+        from toolbox.durable_io import atomic_write_json
+        base.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(base / "event.json",
+                          {"schema": 1, "kind": "ticket_event",
+                           "data": ev.to_dict()})
+    except Exception as e:
+        if log:
+            log(f"活动数据保存失败: {str(e)[:60]}")
     if log:
         log(f"图片下载完成：共 {total} 张（封面 {len(ev.local_cover)} / "
             f"海报 {len(ev.local_poster)} / 宣传 {len(ev.local_images)} / "

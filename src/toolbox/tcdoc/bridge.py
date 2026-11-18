@@ -825,20 +825,125 @@ def _merch_synced(candidate: dict, remote_rows: list[dict]) -> bool:
     return False
 
 
+def _load_sidecars(subdir: str, filename: str, kind: str, days) -> list:
+    """读取票务/购物目录下的结构化旁车 JSON，按获取时间窗口筛选。"""
+    from toolbox.config_manager import get_export_dir
+    root = Path(get_export_dir()) / subdir
+    if not root.is_dir():
+        return []
+    since = _since_date(days)
+    records = []
+    for path in sorted(root.glob(f"*/{filename}")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("kind") and str(raw.get("kind")) != kind:
+            continue
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        if not isinstance(data, dict) or not data:
+            continue
+        stamp = _date_key(data.get("获取时间")) or _date_key(data.get("发布时间"))
+        if not stamp:
+            try:
+                stamp = time.strftime("%Y-%m-%d", time.localtime(path.stat().st_mtime))
+            except OSError:
+                stamp = ""
+        if since and stamp and stamp < since:
+            continue
+        records.append((path, data))
+    return records
+
+
+def _local_images(data: dict, keys: tuple, limit: int = 12) -> list:
+    """旁车里的本地图片路径（字符串），去重保序。"""
+    images = []
+    for key in keys:
+        for path in data.get(key) or []:
+            text = str(path or "").strip()
+            if text and text not in images:
+                images.append(text)
+    return images[:limit]
+
+
+def _ticket_candidates(days) -> list:
+    """票务解析旁车 → 线下活动候选。"""
+    rows = []
+    for path, data in _load_sidecars("票务演出", "event.json", "ticket_event", days):
+        title = str(data.get("标题") or "").strip()
+        if not title:
+            continue
+        day = _date_key(data.get("时间")) or _date_key(data.get("获取时间"))
+        bits = [data.get("平台"), data.get("场馆"), data.get("票价"),
+                data.get("状态"), data.get("链接")]
+        rows.append({
+            "name": title,
+            "date": day,
+            "year": day[:4] if day else "",
+            "city": str(data.get("城市") or ""),
+            "type": str(data.get("分类") or "").strip() or "线下活动",
+            "text": "｜".join(str(b) for b in bits if b)[:300],
+            "images": _local_images(
+                data, ("本地海报", "本地封面", "本地宣传图", "本地座位图", "本地场馆图")),
+            "source": str(data.get("链接") or ""),
+            "author": str(data.get("平台") or ""),
+        })
+    return rows
+
+
+def _shopping_candidates(days) -> list:
+    """购物解析旁车 → 周边图鉴候选。"""
+    rows = []
+    for path, data in _load_sidecars("淘宝商品", "item.json", "shop_item", days):
+        title = str(data.get("标题") or "").strip()
+        if not title:
+            continue
+        name = _clean_merch_name(title) or title
+        bits = [data.get("价格"), data.get("销量"), data.get("店铺"),
+                data.get("链接")]
+        local = data.get("本地图片")
+        images = _local_images(local if isinstance(local, dict) else {},
+                               ("主图", "规格图"), limit=10)
+        if not images:
+            images = _local_images(data, ("本地主图", "本地规格图"), limit=10)
+        rows.append({
+            "name": name,
+            "date": _date_key(data.get("获取时间")),
+            "acquire": "购买",
+            "text": "｜".join(str(b) for b in bits if b)[:300],
+            "images": images,
+            "source": str(data.get("链接") or ""),
+            "author": str(data.get("店铺") or ""),
+        })
+    return rows
+
+
 def _build_candidate_result(profile: str, days, collected=None) -> dict:
     """公共编排：本地候选 → 去重 → 与腾讯快照比对 → 只读待补行。"""
     started = time.perf_counter()
     tab_id = EVENT_TAB_ID if profile == "events" else MERCH_TAB_ID
     remote = load_remote(SONG_DOC_KEY, tab_id)
     after_remote = time.perf_counter()
-    items = collect_local_items(days, collected)
+    candidates = (_ticket_candidates(days) if profile == "events"
+                  else _shopping_candidates(days))
+    source_kind = "ticket" if profile == "events" else "shop"
+    if candidates:
+        items_count = len(candidates)
+    else:
+        source_kind = "dynamics"
+        items = collect_local_items(days, collected)
+        items_count = len(items)
+        candidates = []
+        for item in items:
+            candidate = (_event_candidate(item) if profile == "events"
+                         else _merch_candidate(item))
+            if candidate:
+                candidates.append(candidate)
     after_local = time.perf_counter()
     groups: dict[str, dict] = {}
-    for item in items:
-        candidate = (_event_candidate(item) if profile == "events"
-                     else _merch_candidate(item))
-        if not candidate:
-            continue
+    for candidate in candidates:
         if profile == "events":
             key = "|".join((str(candidate.get("date") or ""),
                             str(candidate.get("city") or ""),
@@ -906,14 +1011,15 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
         "local_accounts": [],
         "link_columns": [],
         "stats": {
-            "local_items": len(items),
+            "local_items": items_count,
             "local_groups": len(groups),
             "synced_groups": len(groups) - len(pending),
-            "pending": len(rows),
+"pending": len(rows),
             "with_images": with_images,
             "without_images": len(rows) - with_images,
             "image_count": image_count,
             "since": _since_date(days),
+            "source": source_kind,
             "timing": {
                 "remote": round(after_remote - started, 2),
                 "local": round(after_local - after_remote, 2),
@@ -925,12 +1031,12 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
 
 
 def build_event_pending(days=365, collected=None) -> dict:
-    """线下活动：本地动态 → 候选 → 与本地腾讯快照比对（只读）。"""
+    """线下活动：票务解析旁车优先（旧本地动态兜底）→ 与快照比对（只读）。"""
     return _build_candidate_result("events", days, collected)
 
 
 def build_merch_pending(days=365, collected=None) -> dict:
-    """周边图鉴：本地动态 → 候选 → 与本地腾讯快照比对（只读）。"""
+    """周边图鉴：购物解析旁车优先（旧本地动态兜底）→ 与快照比对（只读）。"""
     return _build_candidate_result("merch", days, collected)
 
 
@@ -1691,7 +1797,7 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
             "pending": len(pending),
             "with_images": with_images,
             "without_images": len(pending) - with_images,
-            "image_count": image_count,
+"image_count": image_count,
             "remote_rows": len(remote),
             "since": _since_date(days),
             "timing": {

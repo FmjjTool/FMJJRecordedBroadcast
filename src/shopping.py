@@ -1374,6 +1374,15 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
                                          "详情", log=log, threads=threads)
     # 图片全失败也保留商品目录：Excel 固定落在同一目录，不再散到分类根
     detail.image_dir = str(base)
+    # 结构化旁车：腾讯文档「周边图鉴」直接读取商品数据与本地图片
+    try:
+        from toolbox.durable_io import atomic_write_json
+        atomic_write_json(base / "item.json",
+                          {"schema": 1, "kind": "shop_item",
+                           "data": detail.to_dict()})
+    except Exception as e:
+        if log:
+            log(f"商品数据保存失败: {str(e)[:60]}")
     if log:
         log(f"图片下载完成：主图 {len(detail.local_main)} / 规格 "
             f"{len(detail.local_sku)} / 详情 {len(detail.local_desc)}")
