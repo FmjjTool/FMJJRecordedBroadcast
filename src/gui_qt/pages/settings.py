@@ -783,36 +783,43 @@ class GlobalSettingsPage(BasePage):
 
     # ----- 检测依赖 -----
 
-    # 依赖规格表：(键, 显示名, 检测函数, 用途说明, 下载 URL)
+    # 依赖规格表：(键, 显示名, 检测函数, 用途说明, 下载 URL, 是否可选)
     # 检测函数返回 (ok: bool, version: str)
+    # 可选依赖未安装时标「可选」而非「缺失」，不计入缺失数量，不影响主流程
     _DEPENDENCIES = [
         ("ffmpeg", "FFmpeg", "_check_ffmpeg_detail",
-         "视频处理、转码、合并、截图等核心功能", "https://www.gyan.dev/ffmpeg/builds/"),
+         "视频处理、转码、合并、截图等核心功能", "https://www.gyan.dev/ffmpeg/builds/", False),
         ("ffprobe", "FFprobe", "_check_ffprobe_detail",
-         "ffmpeg 同包，探测视频元数据（分辨率/时长/编码）", "https://www.gyan.dev/ffmpeg/builds/"),
+         "ffmpeg 同包，探测视频元数据（分辨率/时长/编码）", "https://www.gyan.dev/ffmpeg/builds/", False),
         ("PySide6", "PySide6", "_check_pyside6_detail",
-         "桌面 GUI 框架（Qt for Python）", "pip install PySide6"),
+         "桌面 GUI 框架（Qt for Python）", "pip install PySide6", False),
         ("requests", "requests", "_check_requests_detail",
-         "HTTP 请求库（各平台 API 调用）", "pip install requests"),
+         "HTTP 请求库（各平台 API 调用）", "pip install requests", False),
         ("PIL", "Pillow", "_check_pillow_detail",
-         "图片处理（封面 / 截图）", "pip install Pillow"),
+         "图片处理（封面 / 截图）", "pip install Pillow", False),
         ("bs4", "BeautifulSoup4", "_check_bs4_detail",
-         "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4"),
+         "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4", False),
         ("lxml", "lxml", "_check_lxml_detail",
-         "更快的 HTML/XML 解析依赖", "pip install lxml"),
+         "更快的 HTML/XML 解析依赖", "pip install lxml", False),
         ("httpx", "httpx", "_check_httpx_detail",
-         "HTTP 请求库（B站 / 视频解析 / 腾讯文档）", "pip install httpx"),
+         "HTTP 请求库（B站 / 视频解析 / 腾讯文档）", "pip install httpx", False),
         ("openpyxl", "openpyxl", "_check_openpyxl_detail",
-         "Excel 表格导入导出", "pip install openpyxl"),
+         "Excel 表格导入导出", "pip install openpyxl", False),
         ("mutagen", "mutagen", "_check_mutagen_detail",
-         "音乐标签读写（MP3 / FLAC 等）", "pip install mutagen"),
+         "音乐标签读写（MP3 / FLAC 等）", "pip install mutagen", False),
         ("websocket", "websocket-client", "_check_websocket_detail",
-         "直播弹幕长连接（B站 / 抖音）", "pip install websocket-client"),
+         "直播弹幕长连接（B站 / 抖音）", "pip install websocket-client", False),
         ("playwright", "playwright", "_check_playwright_detail",
-         "登录 / 采集浏览器驱动（缺失时相关页面不可用）", "pip install playwright"),
+         "登录 / 采集浏览器驱动（缺失时相关页面不可用）", "pip install playwright", False),
         ("douyin_sign", "抖音签名环境", "_check_douyin_sign_detail",
          "抖音评论区/弹幕/视频详情接口的 a_bogus 签名（node 或 Playwright 内置 node）",
-         "https://nodejs.org/zh-cn"),
+         "https://nodejs.org/zh-cn", False),
+        ("git", "Git", "_check_git_detail",
+         "可选：本地资料站拉取代码 / 版本回退（不装不影响其他功能）",
+         "https://git-scm.com/download/win", True),
+        ("node", "Node.js", "_check_node_detail",
+         "可选：本地资料站前端构建（需 node + npm 同时在 PATH，内置 node 无 npm）",
+         "https://nodejs.org/zh-cn", True),
     ]
 
     def _refresh_dependencies(self):
@@ -832,7 +839,7 @@ class GlobalSettingsPage(BasePage):
 
         def work():
             results = []
-            for key, name, fn_name, usage, url in self._DEPENDENCIES:
+            for key, name, fn_name, usage, url, optional in self._DEPENDENCIES:
                 fn = getattr(self, fn_name)
                 try:
                     ok, version = fn()
@@ -911,29 +918,37 @@ class GlobalSettingsPage(BasePage):
         """按检测结果重建依赖清单：每项一行 + 一键下载/安装按钮（缺失项标红）。"""
         self._clear_dep_rows()
         missing = 0
-        for (key, name, fn_name, usage, url), (_rk, _rn, ok, version) in zip(
+        optional_missing = 0
+        for (key, name, fn_name, usage, url, optional), (_rk, _rn, ok, version) in zip(
                 self._DEPENDENCIES, results):
+            # 三种状态：已安装 / 缺失（必装，标红）/ 可选（未装，中性色）
+            if ok:
+                mark_text, mark_color = "已安装", "palette(link-visited)"
+                name_color, row_bg = "palette(text)", "palette(midlight)"
+            elif optional:
+                mark_text, mark_color = "可选", "palette(placeholder-text)"
+                name_color, row_bg = "palette(text)", "palette(alternate-base)"
+            else:
+                mark_text, mark_color = "缺失", "palette(bright-text)"
+                name_color, row_bg = "palette(bright-text)", "palette(light)"
             row = QFrame()
             row.setObjectName("depRow")
             row.setStyleSheet(
-                "QFrame#depRow { background: %s; border-radius: 4px; }" % (
-                    "palette(light)" if not ok else "palette(midlight)"))
+                "QFrame#depRow { background: %s; border-radius: 4px; }" % row_bg)
             h = QHBoxLayout(row)
             h.setContentsMargins(8, 4, 8, 4)
             h.setSpacing(8)
             # 状态指示
-            mark = QLabel("缺失" if not ok else "已安装")
+            mark = QLabel(mark_text)
             mark.setStyleSheet(
                 "color: %s; font-weight: bold; font-size: 12px;"
-                " background: transparent; border: none;" % (
-                    "palette(bright-text)" if not ok else "palette(link-visited)"))
+                " background: transparent; border: none;" % mark_color)
             mark.setFixedWidth(70)
             h.addWidget(mark)
             name_lbl = QLabel(f"{name}")
             name_lbl.setStyleSheet(
                 "color: %s; font-weight: bold; font-size: 12px;"
-                " background: transparent; border: none;" % (
-                    "palette(bright-text)" if not ok else "palette(text)"))
+                " background: transparent; border: none;" % name_color)
             name_lbl.setFixedWidth(110)
             h.addWidget(name_lbl)
             ver_lbl = QLabel(version or "—")
@@ -970,6 +985,12 @@ class GlobalSettingsPage(BasePage):
                     # 两者同一个官方包：一键下载装好 ffmpeg，ffprobe 随之可用
                     h.addWidget(self._dep_btn("一键下载", self._install_ffmpeg))
                     h.addWidget(self._dep_btn("教程", self._show_ffmpeg_tutorial))
+                elif optional:
+                    # 可选外部程序（Git / Node.js）：只跳官方下载页，装完需自行加入 PATH
+                    dl_btn = self._dep_btn(
+                        "下载", lambda n=name, u=url: self._open_browser_for_dep(n, u))
+                    dl_btn.setToolTip("打开官方下载页；安装后需把安装目录加入系统 PATH")
+                    h.addWidget(dl_btn)
                 else:
                     install_btn = self._dep_btn("安装")
                     install_btn.clicked.connect(
@@ -977,15 +998,23 @@ class GlobalSettingsPage(BasePage):
                         self._pip_install(k, n, u))
                     h.addWidget(install_btn)
             if not ok:
-                missing += 1
+                if optional:
+                    optional_missing += 1
+                else:
+                    missing += 1
             self.dependency_layout.addWidget(row)
         # 总览标签 —— 通过顶部右侧的依赖卡片对外展示
-        if missing:
-            summary = QLabel(
-                f"检测完成：{missing} 项缺失（已标红 · 点「安装」自动修复，"
-                f"FFmpeg 可一键下载或看教程）")
+        if missing or optional_missing:
+            parts = []
+            if missing:
+                parts.append(
+                    f"{missing} 项缺失（已标红 · 点「安装」自动修复，FFmpeg 可一键下载或看教程）")
+            if optional_missing:
+                parts.append(f"{optional_missing} 项可选未安装（不影响主流程）")
+            summary = QLabel("检测完成：" + "；".join(parts))
             summary.setStyleSheet(
-                "color: palette(bright-text); font-size: 11px; padding: 2px;")
+                "color: %s; font-size: 11px; padding: 2px;" % (
+                    "palette(bright-text)" if missing else "palette(placeholder-text)"))
         else:
             summary = QLabel("所有依赖已就绪")
             summary.setStyleSheet(
@@ -1110,6 +1139,42 @@ class GlobalSettingsPage(BasePage):
             return True, f"playwright {ver}"
         except Exception:
             return False, ""
+
+    def _check_git_detail(self):
+        """可选依赖：本地资料站拉代码用 Git（要求已在 PATH）。"""
+        import shutil
+        import subprocess
+        exe = shutil.which("git")
+        if not exe:
+            return False, ""
+        try:
+            r = subprocess.run([exe, "--version"], capture_output=True,
+                               timeout=3, text=True)
+            ver = (r.stdout or "").strip().replace("git version ", "") or "?"
+        except Exception:
+            ver = "?"
+        return True, f"git {ver}"
+
+    def _check_node_detail(self):
+        """可选依赖：本地资料站前端构建需要 node + npm 同时在 PATH。
+
+        打包自带的 Playwright 驱动里只有 node.exe、没有 npm，所以不能用
+        `multi_downloader._find_node()` 的兜底结果来判断这一项。
+        """
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        npm = shutil.which("npm.cmd") or shutil.which("npm")
+        if not node:
+            return False, ""
+        if not npm:
+            return False, "缺 npm"
+        try:
+            r = subprocess.run([node, "-v"], capture_output=True, timeout=3, text=True)
+            ver = (r.stdout or "").strip() or "?"
+        except Exception:
+            ver = "?"
+        return True, f"node {ver} / npm 就绪"
 
     def _check_douyin_sign_detail(self):
         """抖音签名环境：node 可用 + a_bogus 能生成签名。

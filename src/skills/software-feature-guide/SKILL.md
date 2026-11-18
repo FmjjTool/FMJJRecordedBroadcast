@@ -252,6 +252,8 @@ description: "全软件页面功能介绍与使用说明（软件内已移除所
 - 托盘图标单击或双击恢复主窗口；右键菜单提供「显示主界面」与「退出」。首次隐藏会在托盘气泡提示恢复与退出方式。
 - 「全局设置 → 关于」提供 GitHub 仓库与 GPL-3.0 开源许可证入口，并标注本软件以 GPL-3.0（GNU General Public License v3.0）协议开源。
 - 「全局设置 → 检测依赖与其他强依赖」逐项显示 ffmpeg、ffprobe、PySide6、requests、Pillow、BeautifulSoup4、lxml、httpx、openpyxl、mutagen、websocket-client、playwright、抖音签名环境（node）的状态、版本与用途；缺失项标红。
+- 可选依赖显示「可选」而非「缺失」、不计入缺失数量：Git（本地资料站拉代码）、Node.js（本地资料站前端构建，需 node + npm 同时在 PATH，内置 node 无 npm），点「下载」跳官方下载页，装完需加入系统 PATH。
+- 全软件的依赖安装入口统一在本卡片（约定 11）；功能页只提示所需依赖，不再单独提供安装按钮。
 - 缺失项修复：「安装」按 pip 安装 Python 包（仅源码运行态；打包后的 exe 里改为「未内置，请重装软件」提示）；FFmpeg / FFprobe 提供「一键下载」与「教程」。
 - FFmpeg 一键下载：从 ffmpeg.org 指向的 Windows 官方构建站（gyan.dev）下载 release-essentials 包（约 110MB），只解出 ffmpeg.exe / ffprobe.exe 放到 `%LOCALAPPDATA%\FengMingToolbox\ffmpeg\bin`，并自动写入「FFmpeg 位置」；重装或再次点击会直接复用已下载文件。下载失败时按「教程」手动安装。
 - FFmpeg 教程：内置说明一键安装与手动安装两种方式（下载页 → 解压 bin → 回填路径，或加入系统 PATH），并提供「打开官方下载页」按钮。定位优先级为 系统 PATH → 程序目录自带（根目录 / bin / ffmpeg\bin）→ 页面上方指定的位置。
