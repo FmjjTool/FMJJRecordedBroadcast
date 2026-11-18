@@ -68,6 +68,7 @@ PAGE_CLASSES = {
     "info_tools": ("gui_qt.pages.containers", "InfoToolsPage"),
     "tracker": ("gui_qt.pages.tracker", "TrackerPage"),
     "music_tracker": ("gui_qt.pages.music_tracker", "MusicTrackerPage"),
+    "account_registry": ("gui_qt.pages.account_registry", "AccountRegistryPage"),
     "douyin_danmaku": ("gui_qt.pages.douyin_danmaku", "DouyinDanmakuPage"),
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
@@ -128,6 +129,7 @@ NAV_GROUPS = [
         ("toolbox_migrate", "文件迁移"),
     ]),
     ("账户追踪", [
+        ("account_registry", "账号名单"),
         ("music_tracker", "音乐账号追踪"),
         ("tracker", "网媒账号追踪"),
         ("tcdoc", "腾讯文档监控"),
