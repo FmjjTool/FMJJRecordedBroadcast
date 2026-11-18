@@ -16,9 +16,12 @@
 | 视觉 / 输出 | `ui-visual-spec`、`image-output-spec` | 屏幕 UI；导出图/报表图/封面图 |
 | 业务领域 | `recording-toolbox-core`、`tcdoc-sync-scope`、`fengming-livestream-summary`、`summarize-article`、`summarize-update` | 对应领域任务 |
 | 说明文档 | `software-feature-guide` | 需要了解页面功能、操作入口与使用说明时 |
+| 快捷指令 | `quick-commands` | 用户发送 `/短语`、要求短语清单或快速查阅某 skill 要点时 |
 | 可选 persona | `shaman-jobs` | 非强制，默认不读 |
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
+
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/并行`、`/测试`、`/功能说明`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
