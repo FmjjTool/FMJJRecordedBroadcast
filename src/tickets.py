@@ -960,30 +960,32 @@ def detect_ticket_platform(url: str) -> tuple:
     return None, None
 
 
-def parse_ticket_url(url: str, keyword: str = "") -> list:
+def parse_ticket_url(url: str, keyword: str = "", *, scope: str = "all") -> list:
     """统一入口：URL 或关键词 → [ShowEvent]。
-    无 URL 时用关键词走 B站会员购搜索。
+
+    scope='recent' 时只保留今天及以后的演出；无 URL 时用关键词走 B站会员购搜索。
     """
     kind, pid = detect_ticket_platform(url)
     if kind == "damai_artist":
         _name, events = parse_damai_artist(pid)
-        return events
-    if kind == "damai_item":
-        return [parse_damai_item(pid)]
-    if kind == "showstart_artist":
-        return parse_showstart_artist(pid)
-    if kind == "showstart_event":
-        return [parse_showstart_event(pid)]
-    if kind == "bili_project":
-        return [parse_bilibili_project(pid)]
-    if kind == "bili_search":
-        return search_bilibili_show(pid)
-    if kind == "unknown_url":
+    elif kind == "damai_item":
+        events = [parse_damai_item(pid)]
+    elif kind == "showstart_artist":
+        events = parse_showstart_artist(pid)
+    elif kind == "showstart_event":
+        events = [parse_showstart_event(pid)]
+    elif kind == "bili_project":
+        events = [parse_bilibili_project(pid)]
+    elif kind == "bili_search":
+        events = search_bilibili_show(pid)
+    elif kind == "unknown_url":
         raise ValueError("无法识别的票务链接（支持大麦艺人/演出、秀动艺人/事件、B站会员购搜索/项目）")
-    # 纯关键词 → B站会员购搜索
-    if keyword.strip():
-        return search_bilibili_show(keyword.strip())
-    raise ValueError("请输入票务链接或搜索关键词")
+    elif keyword.strip():
+        # 纯关键词 → B站会员购搜索
+        events = search_bilibili_show(keyword.strip())
+    else:
+        raise ValueError("请输入票务链接或搜索关键词")
+    return _filter_recent(events) if scope == "recent" else events
 
 
 # ==================== 跨平台关键词搜索（统一入口） ====================
@@ -1006,24 +1008,74 @@ _SHOWSTART_ARTIST_ID_HINTS = {
 }
 
 
-def _damai_search_keyword(keyword: str, log=None) -> list:
-    """大麦游客关键词搜索 → [ShowEvent]（轻量列表：标题/城市/场馆/票价/封面）。
+def _norm_artist_name(name) -> str:
+    """艺人名归一化：去空格/标点/大小写，便于「封茗囧菌」精确命中。"""
+    return re.sub(r"[\s·．.\-_/、,，（）()【】\[\]]+", "", str(name or "")).lower()
 
-    mtop.damai.wireless.search.search 游客 HTTP 直调会被 RGV587 滑块风控拦
-    （带淘宝 Cookie 也无效——环境风控而非登录风控），必须真实浏览器。
-    直达 https://m.damai.cn/shows/search.html?keyword=...，页面加载即自动
-    触发搜索；拦截 data 含 keyword 的 search.search 响应 → projectInfo。
+
+_DATE_RE = re.compile(r"(20\d{2})\s*[.\-/年]\s*(\d{1,2})\s*[.\-/月]\s*(\d{1,2})")
+
+
+def _event_date(show_time: str):
+    """从演出时间文本取首个日期（2026.09.25 / 2026-09-25 / 2026/09/25）。"""
+    m = _DATE_RE.search(show_time or "")
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+    except ValueError:
+        return None
+
+
+def _filter_recent(events: list) -> list:
+    """近期范围：只保留今天及以后（无法解析日期的保留，避免误删）。"""
+    today = datetime.now().date()
+    kept = []
+    for ev in events or []:
+        d = _event_date(ev.show_time)
+        if d is None or d >= today:
+            kept.append(ev)
+    return kept
+
+
+def _pick_artist(items: list, keyword: str) -> tuple:
+    """从平台艺人搜索结果中选最匹配的一个 → (id, name)。"""
+    rows = [it for it in (items or []) if isinstance(it, dict)
+            and str(it.get("id") or "").strip()]
+    if not rows:
+        return "", ""
+    norm = _norm_artist_name(keyword)
+    for it in rows:
+        if _norm_artist_name(it.get("name")) == norm:
+            return str(it["id"]), str(it.get("name") or "")
+    if norm:
+        for it in rows:
+            n = _norm_artist_name(it.get("name"))
+            if n and (norm in n or n in norm):
+                return str(it["id"]), str(it.get("name") or "")
+    first = rows[0]
+    return str(first["id"]), str(first.get("name") or "")
+
+
+def _damai_browser_search(keyword: str, log=None) -> tuple:
+    """大麦游客关键词搜索 → ([ShowEvent], [艺人])。
+
+    轻量列表：标题/城市/场馆/票价/封面。mtop.damai.wireless.search.search
+    游客 HTTP 直调会被 RGV587 滑块风控拦（带淘宝 Cookie 也无效——环境风控
+    而非登录风控），必须真实浏览器。直达搜索页，页面加载即自动触发搜索；
+    拦截 data 含 keyword 的 search.search 响应 → projectInfo / baccountInfo。
     """
     from playwright.sync_api import sync_playwright
     from urllib.parse import urlparse, parse_qs, quote
 
     keyword = (keyword or "").strip()
     if not keyword:
-        return []
+        return [], []
 
     def _run_once() -> tuple:
-        """单次浏览器搜索 → (hits, blocked)。blocked=True 表示被 RGV587 风控拦。"""
+        """单次浏览器搜索 → (hits, artists, blocked)。"""
         hits: list = []
+        artists: list = []
         state = {"blocked": False}
 
         def _events_from(data: dict) -> list:
@@ -1052,6 +1104,19 @@ def _damai_search_keyword(keyword: str, log=None) -> list:
                 ))
             return evts
 
+        def _artists_from(data: dict) -> list:
+            """baccountInfo 里 type=2 的条目是艺人卡片。"""
+            out = []
+            for a in (data.get("baccountInfo") or []):
+                if not isinstance(a, dict) or str(a.get("type")) != "2":
+                    continue
+                did = str(a.get("damaiId") or "").strip()
+                name = str(a.get("name") or "").strip()
+                if did and name:
+                    out.append({"id": did, "name": name,
+                                "performance": a.get("performanceCount") or 0})
+            return out
+
         with sync_playwright() as p:
             browser = pw_launch(p, headless=True, args=[
                 "--disable-blink-features=AutomationControlled", "--no-sandbox"])
@@ -1079,7 +1144,9 @@ def _damai_search_keyword(keyword: str, log=None) -> list:
                             state["blocked"] = True
                             return
                         if "SUCCESS" in ret:
-                            hits.extend(_events_from(body.get("data") or {}))
+                            data = body.get("data") or {}
+                            hits.extend(_events_from(data))
+                            artists.extend(_artists_from(data))
                     except Exception:
                         pass
 
@@ -1098,22 +1165,29 @@ def _damai_search_keyword(keyword: str, log=None) -> list:
                 page.wait_for_timeout(2000)
             finally:
                 browser.close()
-        return hits, state["blocked"]
+        return hits, artists, state["blocked"]
 
     # RGV587 滑块风控有波动性（连续高频请求会触发），被拦时隔几秒重试一次
+    hits: list = []
+    artists: list = []
     for attempt in range(2):
         try:
-            hits, blocked = _run_once()
+            hits, artists, blocked = _run_once()
         except Exception as e:
             msg = str(e)
             if "ERR_CONNECTION" in msg or "ERR_NAME" in msg or "Timeout" in msg:
                 raise RuntimeError("大麦连接失败（可能触发风控限流，请稍后再试）")
             raise
-        if hits or not blocked:
-            return hits
+        if hits or artists or not blocked:
+            return hits, artists
         if attempt == 0:
             time.sleep(5)
-    return hits
+    return hits, artists
+
+
+def _damai_search_keyword(keyword: str, log=None) -> list:
+    """大麦游客关键词搜索 → [ShowEvent]（只看在售/近期结果）。"""
+    return _damai_browser_search(keyword, log=log)[0]
 
 
 # 秀动 Web 列表页：SSR 只给城市/风格字典，演出卡片全部由客户端接口拉取
@@ -1256,6 +1330,57 @@ def _showstart_search_keyword_ssr(keyword: str, log=None) -> list:
     return events
 
 
+def _showstart_artist_from_response(data, keyword: str, log=None) -> tuple:
+    """解析 /web/performer/list 响应 → (艺人ID, 艺人名)。"""
+    if not isinstance(data, dict) or str(data.get("state")) != "1":
+        if log:
+            log(f"  秀动艺人搜索异常: {str(data)[:120]}")
+        return "", ""
+    rows = ((data.get("result") or {}).get("result") or [])
+    picked = _pick_artist(rows, keyword)
+    if log and not picked[0]:
+        log(f"  秀动未匹配到艺人：{keyword}")
+    return picked
+
+
+def _showstart_search_artist(keyword: str, log=None) -> tuple:
+    """秀动艺人搜索 → (艺人ID, 艺人名)；无命中返回 ("", "")。
+
+    艺人列表页同样是客户端渲染，真实接口为 POST /web/performer/list，
+    需前端签名头；复用页面 $nuxt.$axios 调一次（返回 id/name/activityNum）。
+    """
+    from playwright.sync_api import sync_playwright
+
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return "", ""
+    with sync_playwright() as p:
+        browser = pw_launch(p, headless=True, args=[
+            "--disable-blink-features=AutomationControlled", "--no-sandbox"])
+        try:
+            ctx = browser.new_context(
+                user_agent=UA, viewport={"width": 1400, "height": 900},
+                locale="zh-CN", timezone_id="Asia/Shanghai")
+            page = ctx.new_page()
+            page.goto("https://www.showstart.com/artist/list",
+                      wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(2000)
+            if not page.evaluate("!!(window.$nuxt && window.$nuxt.$axios)"):
+                raise RuntimeError("秀动艺人页 axios 未就绪（页面结构可能再变）")
+            data = page.evaluate(
+                """async (kw) => {
+                    const r = await window.$nuxt.$axios({
+                        url: '/web/performer/list', method: 'post',
+                        params: {searchKeyword: kw, styleId: '',
+                                 pageNo: 1, pageSize: 12}
+                    });
+                    return r.data || {};
+                }""", keyword)
+        finally:
+            browser.close()
+    return _showstart_artist_from_response(data, keyword, log=log)
+
+
 def _showstart_search_keyword(keyword: str, log=None) -> list:
     """秀动关键词搜索 → [ShowEvent]（走 Web 客户端接口，需浏览器）。
 
@@ -1275,27 +1400,120 @@ def _showstart_search_keyword(keyword: str, log=None) -> list:
         return _showstart_search_keyword_ssr(keyword, log=log)
 
 
+def _merge_events(*groups) -> list:
+    """合并多组演出并按平台+ID去重（保持先后顺序）。"""
+    seen = set()
+    out = []
+    for group in groups:
+        for ev in group or []:
+            if ev.event_id:
+                key = (ev.platform, ev.event_id)
+            else:
+                key = (ev.platform, ev.title[:30], ev.show_time or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(ev)
+    return out
+
+
+def _damai_scope_events(keyword: str, scope: str, artist_id: str, diag: dict) -> list:
+    """按查询范围取大麦演出：recent=关键词在售列表；all=艺人页含历史。"""
+    if scope == "recent":
+        did = ""
+    else:
+        did = artist_id or _DAMAI_ARTIST_ID_HINTS.get(keyword) or ""
+    browser_events = None
+    if scope == "all" and not did:
+        try:
+            browser_events, artists = _damai_browser_search(keyword)
+        except Exception as e:
+            diag["damai"] = f"失败: {str(e)[:80]}"
+            return []
+        did, _name = _pick_artist(artists, keyword)
+    if did:
+        try:
+            _name, evts = parse_damai_artist(did)
+            if browser_events:
+                evts = _merge_events(evts, browser_events)
+            diag["damai"] = len(evts)
+            return evts
+        except Exception as e:
+            if browser_events is None:
+                diag["damai"] = f"失败: {str(e)[:80]}"
+                return []
+            diag["damai"] = f"艺人页失败，已退回关键词: {str(e)[:50]}"
+    if browser_events is None:
+        try:
+            browser_events = _damai_search_keyword(keyword)
+        except Exception as e:
+            diag["damai"] = f"失败: {str(e)[:80]}"
+            return []
+    if scope == "recent":
+        browser_events = _filter_recent(browser_events)
+    diag["damai"] = len(browser_events) if browser_events else "大麦无结果"
+    return browser_events
+
+
+def _showstart_scope_events(keyword: str, scope: str, artist_id: str,
+                            diag: dict) -> list:
+    """按查询范围取秀动演出：recent=关键词在售列表；all=艺人页含历史。"""
+    sid = "" if scope == "recent" else (
+        artist_id or _SHOWSTART_ARTIST_ID_HINTS.get(keyword) or "")
+    artist_err = ""
+    if scope == "all" and not sid:
+        try:
+            sid, _name = _showstart_search_artist(keyword)
+        except Exception as e:
+            artist_err = f"艺人搜索失败: {str(e)[:50]}"
+    if sid:
+        try:
+            evts = parse_showstart_artist(sid)
+            diag["showstart"] = len(evts)
+            return evts
+        except Exception as e:
+            artist_err = f"艺人页失败: {str(e)[:50]}"
+    try:
+        evts = _showstart_search_keyword(keyword)
+    except Exception as e:
+        diag["showstart"] = f"失败: {str(e)[:80]}"
+        return []
+    if scope == "recent":
+        evts = _filter_recent(evts)
+    if evts:
+        diag["showstart"] = len(evts)
+    elif artist_err:
+        diag["showstart"] = artist_err
+    else:
+        diag["showstart"] = "秀动全国无在售演出"
+    return evts
+
+
 def search_tickets_by_keyword(keyword: str, *,
                               platform: str = "all",
                               damai_artist_id: str = "",
-                              showstart_artist_id: str = "") -> tuple:
+                              showstart_artist_id: str = "",
+                              scope: str = "all") -> tuple:
     """跨平台统一关键词搜索 → ([ShowEvent], {platform: error_or_count})。
 
     platform: 'all' | 'bilibili' | 'damai' | 'showstart' —— 多平台时分别走各平台通道
+    scope: 'all'（含历史）| 'recent'（只在售/即将开演）
 
     平台特性：
-    - B站会员购：纯 API 关键词搜索，**无需登录**，覆盖率最高
-    - 大麦：游客 Playwright 搜索（_damai_search_keyword）；命中艺人 ID 映射表或
-            调用方显式传 damai_artist_id 时走艺人详情页（数据更全）
-    - 秀动：Web 客户端接口 activity/list（Playwright 复用页面 $nuxt.$axios
-            自动补 crpsign 签名，cityCode 全国）；显式 showstart_artist_id
-            或命中艺人映射表时走艺人页 SSR（含历史演出）
+    - B站会员购：纯 API 关键词搜索，**无需登录**，覆盖率最高；结果含历史
+            项目，近期范围按日期过滤，所有范围原样保留
+    - 大麦：recent 走游客 Playwright 关键词搜索；all 先按关键词搜艺人，
+            再用艺人页通道取含历史的完整列表（显式 damai_artist_id / 映射表优先）
+    - 秀动：recent 走 Web 客户端接口 activity/list（只在售）；all 先按关键词
+            搜艺人（POST /web/performer/list），再走艺人页 SSR（含历史演出），
+            显式 showstart_artist_id / 映射表优先
 
     失败时不抛错，会把错误信息塞到第二项 dict 里，方便 UI 多平台结果汇总展示。
     """
     keyword = (keyword or "").strip()
     if not keyword:
         return [], {"_error": "请输入关键词"}
+    scope = "recent" if scope == "recent" else "all"
 
     results: list = []
     diag: dict = {}
@@ -1304,48 +1522,21 @@ def search_tickets_by_keyword(keyword: str, *,
     if platform in ("all", "bilibili"):
         try:
             bili = search_bilibili_show(keyword)
+            if scope == "recent":
+                bili = _filter_recent(bili)
             results.extend(bili)
             diag["bilibili"] = len(bili)
         except Exception as e:
             diag["bilibili"] = f"失败: {str(e)[:80]}"
 
-    # 2. 大麦：显式艺人 ID / 命中映射表 → 艺人详情通道（数据全：含场次+票档）；
-    #    否则游客 Playwright 关键词搜索（轻量列表）
+    # 2. 大麦
     if platform in ("all", "damai"):
-        did = damai_artist_id or _DAMAI_ARTIST_ID_HINTS.get(keyword) or ""
-        if did:
-            try:
-                _name, evts = parse_damai_artist(did)
-                results.extend(evts)
-                diag["damai"] = len(evts)
-            except Exception as e:
-                diag["damai"] = f"失败: {str(e)[:80]}"
-        else:
-            try:
-                evts = _damai_search_keyword(keyword)
-                results.extend(evts)
-                diag["damai"] = len(evts) if evts else "大麦无结果"
-            except Exception as e:
-                diag["damai"] = f"失败: {str(e)[:80]}"
+        results.extend(_damai_scope_events(keyword, scope, damai_artist_id, diag))
 
-    # 3. 秀动：显式艺人 ID / 命中映射表 → 艺人页通道；否则客户端接口关键词搜索
+    # 3. 秀动
     if platform in ("all", "showstart"):
-        sid = showstart_artist_id or _SHOWSTART_ARTIST_ID_HINTS.get(keyword) or ""
-        if sid:
-            try:
-                events_ss = parse_showstart_artist(sid)
-                results.extend(events_ss)
-                diag["showstart"] = len(events_ss)
-            except Exception as e:
-                diag["showstart"] = f"失败: {str(e)[:80]}"
-        else:
-            try:
-                events_ss = _showstart_search_keyword(keyword)
-                results.extend(events_ss)
-                diag["showstart"] = (len(events_ss) if events_ss
-                                     else "秀动全国无在售演出")
-            except Exception as e:
-                diag["showstart"] = f"失败: {str(e)[:80]}"
+        results.extend(_showstart_scope_events(
+            keyword, scope, showstart_artist_id, diag))
 
     # 去重（按 platform + event_id + title 前缀）
     seen = set()

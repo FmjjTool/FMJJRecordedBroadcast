@@ -10,9 +10,9 @@ import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import first_number, post_to_main, run_bg, stable_sort
@@ -46,6 +46,15 @@ class TicketsPage(BasePage):
             "留空直接回车 = 搜索「封茗囧菌」· 或输入 damai/showstart/bilibili 链接或任意关键词")
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
+        self.scope_sel = QComboBox()
+        self.scope_sel.addItem("近期（在售）", "recent")
+        self.scope_sel.addItem("所有（含历史）", "all")
+        self.scope_sel.setCurrentIndex(1)   # 默认含历史，保持原有结果范围
+        self.scope_sel.setMinimumWidth(150)
+        self.scope_sel.setToolTip(
+            "查询范围：近期=今天及以后（B站会过滤已结束项目）；"
+            "所有=包含历史演出（关键词查询会额外走大麦/秀动艺人页通道）")
+        row.addWidget(self.scope_sel)
         self.parse_btn = QPushButton("解析")
         self.parse_btn.setStyleSheet("background: #2e7d32; color: white;")
         self.parse_btn.clicked.connect(self._parse)
@@ -132,7 +141,9 @@ class TicketsPage(BasePage):
             # 留空直接回车 → 默认关键词
             self.url_entry.setText(self.DEFAULT_KEYWORD)
             url = self.DEFAULT_KEYWORD
+        scope = self.scope_sel.currentData() or "all"
         self.parse_btn.setEnabled(False)
+        self.scope_sel.setEnabled(False)
         self.status_label.setText("解析中...")
 
         def work():
@@ -140,17 +151,18 @@ class TicketsPage(BasePage):
             # （B站 API + 大麦 Playwright 游客搜索 + 秀动 Web 客户端接口）
             kind, _ = tickets_mod.detect_ticket_platform(url)
             if kind:
-                return tickets_mod.parse_ticket_url(url)
+                return tickets_mod.parse_ticket_url(url, scope=scope)
             # 纯关键词（不包含协议/path/数字 ID 之类）
             looks_like_url = ("://" in url or "/" in url or any(c.isdigit() for c in url[:5]))
             if looks_like_url:
                 # 但 detect 没识别，给个友好提示
                 raise ValueError("无法识别的票务链接（支持大麦艺人/演出、秀动艺人/事件、B站会员购搜索/项目）")
-            events, diag = tickets_mod.search_tickets_by_keyword(url)
+            events, diag = tickets_mod.search_tickets_by_keyword(url, scope=scope)
             return events, diag
 
         def done(result, err):
             self.parse_btn.setEnabled(True)
+            self.scope_sel.setEnabled(True)
             if err:
                 self.status_label.setText("")
                 self.app.toast(f"解析失败: {str(err)[:80]}", "error")
@@ -175,8 +187,15 @@ class TicketsPage(BasePage):
                         nice.append(f"{p}: {v}")
                 if nice:
                     tip = "｜" + " ".join(nice)
+            scope_cn = "近期" if scope == "recent" else "所有"
+            empty_tip = ""
+            if not self._events:
+                if scope == "recent":
+                    empty_tip = "；近期无在售场次，可切换到「所有（含历史）」"
+                else:
+                    empty_tip = "；可切换范围或更换关键词/链接"
             self.status_label.setText(
-                f"解析到 {len(self._events)} 场演出{tip}")
+                f"解析到 {len(self._events)} 场演出（{scope_cn}）{tip}{empty_tip}")
             self.export_btn.setEnabled(bool(self._events))
 
         run_bg(work, done)
