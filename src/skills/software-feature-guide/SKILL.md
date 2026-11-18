@@ -254,6 +254,8 @@ description: "全软件页面功能介绍与使用说明（软件内已移除所
 - 「全局设置 → 检测依赖与其他强依赖」逐项显示 ffmpeg、ffprobe、PySide6、requests、Pillow、BeautifulSoup4、lxml、httpx、openpyxl、mutagen、websocket-client、playwright、抖音签名环境（node）的状态、版本与用途；缺失项标红。
 - 可选依赖显示「可选」而非「缺失」、不计入缺失数量：Git（本地资料站拉代码）、Node.js（本地资料站前端构建，需 node + npm 同时在 PATH，内置 node 无 npm），点「下载」跳官方下载页，装完需加入系统 PATH。
 - 全软件的依赖安装入口统一在本卡片（约定 11）；功能页只提示所需依赖，不再单独提供安装按钮。
+- 卡片同时承担四个可选组件的安装与状态：采集引擎（Playwright 内核，无系统 Edge/Chrome 时用，约 91MB）、本地转写程序（约 84MB）、本地转写模型（下拉选择 Tiny 72MB ~ Large 2944MB，可装多个）、图识别模型（CLIP ONNX，约 85MB）；下载进度显示在卡片底部，装完自动刷新状态。
+- 对应功能页只保留状态与说明：Cookie 管理底部只显示浏览器环境并可「刷新环境」；语音转字幕设置只显示识别程序/模型状态并可删除已下载模型；资产页「图识别」弹窗只提示到全局设置下载，仍可「选择模型文件」手动指定。
 - 缺失项修复：「安装」按 pip 安装 Python 包（仅源码运行态；打包后的 exe 里改为「未内置，请重装软件」提示）；FFmpeg / FFprobe 提供「一键下载」与「教程」。
 - FFmpeg 一键下载：从 ffmpeg.org 指向的 Windows 官方构建站（gyan.dev）下载 release-essentials 包（约 110MB），只解出 ffmpeg.exe / ffprobe.exe 放到 `%LOCALAPPDATA%\FengMingToolbox\ffmpeg\bin`，并自动写入「FFmpeg 位置」；重装或再次点击会直接复用已下载文件。下载失败时按「教程」手动安装。
 - FFmpeg 教程：内置说明一键安装与手动安装两种方式（下载页 → 解压 bin → 回填路径，或加入系统 PATH），并提供「打开官方下载页」按钮。定位优先级为 系统 PATH → 程序目录自带（根目录 / bin / ffmpeg\bin）→ 页面上方指定的位置。

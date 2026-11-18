@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
 )
 
@@ -26,7 +26,7 @@ from toolbox.config_manager import (
 from toolbox.skills import list_skills, skill_total_size_text
 from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
 
-from gui_qt.common import run_bg
+from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 
 
@@ -214,6 +214,13 @@ class GlobalSettingsPage(BasePage):
         self.dependency_layout.setContentsMargins(0, 4, 0, 0)
         self.dependency_layout.setSpacing(3)
         dep_v.addLayout(self.dependency_layout)
+        # 组件下载进度/结果（采集引擎、转写程序与模型、图识别模型）
+        self.dep_status = QLabel("")
+        self.dep_status.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;"
+            " background: transparent; border: none;")
+        self.dep_status.setWordWrap(True)
+        dep_v.addWidget(self.dep_status)
         v.addWidget(self.dependency_frame)
         # 骨架屏加载：检测在后台线程跑，页面打开即刻渲染灰色占位条（__init__ 末尾 on_show 已触发）
         self._dep_cache = None      # [(key, name, ok, version)] 上次检测结果
@@ -225,6 +232,7 @@ class GlobalSettingsPage(BasePage):
         self._skel_timer.timeout.connect(self._pulse_dep_skeleton)
         self._ffmpeg_ok = None     # FFmpeg 可用性缓存（None = 未检测）
         self._ffmpeg_installing = False  # 一键下载进行中（防重复点击）
+        self._dep_downloading = False    # 组件下载进行中（防重复点击）
 
         v.addSpacing(12)
 
@@ -783,43 +791,60 @@ class GlobalSettingsPage(BasePage):
 
     # ----- 检测依赖 -----
 
-    # 依赖规格表：(键, 显示名, 检测函数, 用途说明, 下载 URL, 是否可选)
+    # 依赖规格表：(键, 显示名, 检测函数, 用途说明, 下载地址/命令, 是否可选, 安装动作)
     # 检测函数返回 (ok: bool, version: str)
+    # 安装动作 action：
+    #   pip        - pip install <下载地址>
+    #   ffmpeg     - 一键下载官方包 + 安装教程
+    #   external   - 打开官方下载页，用户自行安装
+    #   pw_shell / asr_program / asr_model / clip_model - 程序内一键下载组件
     # 可选依赖未安装时标「可选」而非「缺失」，不计入缺失数量，不影响主流程
     _DEPENDENCIES = [
         ("ffmpeg", "FFmpeg", "_check_ffmpeg_detail",
-         "视频处理、转码、合并、截图等核心功能", "https://www.gyan.dev/ffmpeg/builds/", False),
+         "视频处理、转码、合并、截图等核心功能", "https://www.gyan.dev/ffmpeg/builds/", False, "ffmpeg"),
         ("ffprobe", "FFprobe", "_check_ffprobe_detail",
-         "ffmpeg 同包，探测视频元数据（分辨率/时长/编码）", "https://www.gyan.dev/ffmpeg/builds/", False),
+         "ffmpeg 同包，探测视频元数据（分辨率/时长/编码）", "https://www.gyan.dev/ffmpeg/builds/", False, "ffmpeg"),
         ("PySide6", "PySide6", "_check_pyside6_detail",
-         "桌面 GUI 框架（Qt for Python）", "pip install PySide6", False),
+         "桌面 GUI 框架（Qt for Python）", "pip install PySide6", False, "pip"),
         ("requests", "requests", "_check_requests_detail",
-         "HTTP 请求库（各平台 API 调用）", "pip install requests", False),
+         "HTTP 请求库（各平台 API 调用）", "pip install requests", False, "pip"),
         ("PIL", "Pillow", "_check_pillow_detail",
-         "图片处理（封面 / 截图）", "pip install Pillow", False),
+         "图片处理（封面 / 截图）", "pip install Pillow", False, "pip"),
         ("bs4", "BeautifulSoup4", "_check_bs4_detail",
-         "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4", False),
+         "HTML 解析（封面 / 简介提取）", "pip install beautifulsoup4", False, "pip"),
         ("lxml", "lxml", "_check_lxml_detail",
-         "更快的 HTML/XML 解析依赖", "pip install lxml", False),
+         "更快的 HTML/XML 解析依赖", "pip install lxml", False, "pip"),
         ("httpx", "httpx", "_check_httpx_detail",
-         "HTTP 请求库（B站 / 视频解析 / 腾讯文档）", "pip install httpx", False),
+         "HTTP 请求库（B站 / 视频解析 / 腾讯文档）", "pip install httpx", False, "pip"),
         ("openpyxl", "openpyxl", "_check_openpyxl_detail",
-         "Excel 表格导入导出", "pip install openpyxl", False),
+         "Excel 表格导入导出", "pip install openpyxl", False, "pip"),
         ("mutagen", "mutagen", "_check_mutagen_detail",
-         "音乐标签读写（MP3 / FLAC 等）", "pip install mutagen", False),
+         "音乐标签读写（MP3 / FLAC 等）", "pip install mutagen", False, "pip"),
         ("websocket", "websocket-client", "_check_websocket_detail",
-         "直播弹幕长连接（B站 / 抖音）", "pip install websocket-client", False),
+         "直播弹幕长连接（B站 / 抖音）", "pip install websocket-client", False, "pip"),
         ("playwright", "playwright", "_check_playwright_detail",
-         "登录 / 采集浏览器驱动（缺失时相关页面不可用）", "pip install playwright", False),
+         "登录 / 采集浏览器驱动（缺失时相关页面不可用）", "pip install playwright", False, "pip"),
         ("douyin_sign", "抖音签名环境", "_check_douyin_sign_detail",
          "抖音评论区/弹幕/视频详情接口的 a_bogus 签名（node 或 Playwright 内置 node）",
-         "https://nodejs.org/zh-cn", False),
+         "https://nodejs.org/zh-cn", False, "external"),
+        ("pw_shell", "采集引擎", "_check_pw_shell_detail",
+         "无系统 Edge/Chrome 时的浏览器内核（约 91MB，系统已装 Edge 则不需要）",
+         "https://playwright.dev/", True, "pw_shell"),
+        ("asr_program", "本地转写程序", "_check_asr_program_detail",
+         "离线字幕转写程序（约 84MB；不装可用在线转写接口）",
+         "https://www.modelscope.cn/", True, "asr_program"),
+        ("asr_model", "本地转写模型", "_check_asr_model_detail",
+         "离线转写模型，越大越准也越慢（Tiny 72MB ~ Large 2944MB）",
+         "https://www.modelscope.cn/", True, "asr_model"),
+        ("clip_model", "图识别模型", "_check_clip_model_detail",
+         "以图搜图的 CLIP 视觉编码器（约 85MB，仅图识别使用）",
+         "https://hf-mirror.com/", True, "clip_model"),
         ("git", "Git", "_check_git_detail",
          "可选：本地资料站拉取代码 / 版本回退（不装不影响其他功能）",
-         "https://git-scm.com/download/win", True),
+         "https://git-scm.com/download/win", True, "external"),
         ("node", "Node.js", "_check_node_detail",
          "可选：本地资料站前端构建（需 node + npm 同时在 PATH，内置 node 无 npm）",
-         "https://nodejs.org/zh-cn", True),
+         "https://nodejs.org/zh-cn", True, "external"),
     ]
 
     def _refresh_dependencies(self):
@@ -839,7 +864,7 @@ class GlobalSettingsPage(BasePage):
 
         def work():
             results = []
-            for key, name, fn_name, usage, url, optional in self._DEPENDENCIES:
+            for key, name, fn_name, usage, url, optional, _action in self._DEPENDENCIES:
                 fn = getattr(self, fn_name)
                 try:
                     ok, version = fn()
@@ -919,7 +944,7 @@ class GlobalSettingsPage(BasePage):
         self._clear_dep_rows()
         missing = 0
         optional_missing = 0
-        for (key, name, fn_name, usage, url, optional), (_rk, _rn, ok, version) in zip(
+        for (key, name, fn_name, usage, url, optional, action), (_rk, _rn, ok, version) in zip(
                 self._DEPENDENCIES, results):
             # 三种状态：已安装 / 缺失（必装，标红）/ 可选（未装，中性色）
             if ok:
@@ -971,32 +996,47 @@ class GlobalSettingsPage(BasePage):
                 "color: palette(placeholder-text); font-size: 11px; background: transparent; border: none;")
             usage_lbl.setWordWrap(True)
             h.addWidget(usage_lbl, 1)
-            # 缺失项提供快捷下载/安装按钮
+            # 安装动作统一在本卡片完成（约定 11），功能页只保留说明文案
             # 打包态（frozen）没有可用的 pip：装到的是用户自己的 Python 而不是程序本身，
             # 所以 pip 类依赖只提示重装，不给会误导的「安装」按钮
-            if not ok and url.startswith("pip install") and getattr(sys, "frozen", False):
-                hint = QLabel("未内置，请重装软件")
-                hint.setStyleSheet(
-                    "color: palette(placeholder-text); font-size: 11px;"
-                    " background: transparent; border: none;")
-                h.addWidget(hint)
-            elif not ok:
-                if key in ("ffmpeg", "ffprobe"):
-                    # 两者同一个官方包：一键下载装好 ffmpeg，ffprobe 随之可用
-                    h.addWidget(self._dep_btn("一键下载", self._install_ffmpeg))
-                    h.addWidget(self._dep_btn("教程", self._show_ffmpeg_tutorial))
-                elif optional:
-                    # 可选外部程序（Git / Node.js）：只跳官方下载页，装完需自行加入 PATH
-                    dl_btn = self._dep_btn(
-                        "下载", lambda n=name, u=url: self._open_browser_for_dep(n, u))
-                    dl_btn.setToolTip("打开官方下载页；安装后需把安装目录加入系统 PATH")
-                    h.addWidget(dl_btn)
+            if action == "pip" and not ok:
+                if getattr(sys, "frozen", False):
+                    hint = QLabel("未内置，请重装软件")
+                    hint.setStyleSheet(
+                        "color: palette(placeholder-text); font-size: 11px;"
+                        " background: transparent; border: none;")
+                    h.addWidget(hint)
                 else:
                     install_btn = self._dep_btn("安装")
                     install_btn.clicked.connect(
                         lambda _c=False, k=key, n=name, u=url:
                         self._pip_install(k, n, u))
                     h.addWidget(install_btn)
+            elif action == "ffmpeg" and not ok:
+                # 两者同一个官方包：一键下载装好 ffmpeg，ffprobe 随之可用
+                h.addWidget(self._dep_btn("一键下载", self._install_ffmpeg))
+                h.addWidget(self._dep_btn("教程", self._show_ffmpeg_tutorial))
+            elif action == "external" and not ok:
+                dl_btn = self._dep_btn(
+                    "下载", lambda n=name, u=url: self._open_browser_for_dep(n, u))
+                dl_btn.setToolTip("打开官方下载页；安装后需把安装目录加入系统 PATH")
+                h.addWidget(dl_btn)
+            elif action == "pw_shell" and not ok:
+                h.addWidget(self._dep_btn("下载", self._download_pw_shell))
+            elif action == "asr_program" and not ok:
+                h.addWidget(self._dep_btn("下载", self._download_asr_program))
+            elif action == "asr_model":
+                # 模型可装多个：始终给下拉 + 下载；已装模型的删除仍在上层转写设置里
+                from toolbox.asr_engine import LOCAL_MODELS
+                combo = QComboBox()
+                combo.setFixedWidth(210)
+                for mkey, label, size_mb in LOCAL_MODELS:
+                    combo.addItem(f"{label} · {size_mb}MB", mkey)
+                h.addWidget(combo)
+                h.addWidget(self._dep_btn(
+                    "下载", lambda c=combo: self._download_asr_model(c.currentData())))
+            elif action == "clip_model" and not ok:
+                h.addWidget(self._dep_btn("下载", self._download_clip_model))
             if not ok:
                 if optional:
                     optional_missing += 1
@@ -1140,6 +1180,49 @@ class GlobalSettingsPage(BasePage):
         except Exception:
             return False, ""
 
+    def _check_pw_shell_detail(self):
+        """采集引擎：系统 Edge / Chrome 任一存在即可，否则需要本地内核。"""
+        from toolbox.browser import detect, headless_shell_installed
+        try:
+            env = detect()
+        except Exception:
+            env = {"edge": None, "chrome": None}
+        if env.get("edge"):
+            return True, f"系统 Edge {env['edge']}"
+        if env.get("chrome"):
+            return True, f"系统 Chrome {env['chrome']}"
+        if headless_shell_installed():
+            return True, "本地内核已就绪"
+        return False, ""
+
+    def _check_asr_program_detail(self):
+        from toolbox.asr_engine import local_program_path, local_program_ready
+        from toolbox.utils import format_size
+        if not local_program_ready():
+            return False, ""
+        try:
+            return True, f"已下载 {format_size(local_program_path().stat().st_size)}"
+        except Exception:
+            return True, "已下载"
+
+    def _check_asr_model_detail(self):
+        from toolbox.asr_engine import LOCAL_MODELS, local_model_ready
+        ready = [label for key, label, _size in LOCAL_MODELS if local_model_ready(key)]
+        if not ready:
+            return False, ""
+        name = ready[0].split("（")[0]
+        return True, (f"{name} 等 {len(ready)} 个" if len(ready) > 1 else name)
+
+    def _check_clip_model_detail(self):
+        from toolbox import image_embedding
+        if getattr(image_embedding, "ort", None) is None:
+            return False, "缺 onnxruntime"
+        status = image_embedding.model_status()
+        if not status.get("ready"):
+            return False, ""
+        size = status.get("size") or 0
+        return True, (f"已就绪 {size / 1024 ** 2:.0f}MB" if size else "已就绪")
+
     def _check_git_detail(self):
         """可选依赖：本地资料站拉代码用 Git（要求已在 PATH）。"""
         import shutil
@@ -1210,6 +1293,88 @@ class GlobalSettingsPage(BasePage):
         if slot is not None:
             btn.clicked.connect(lambda _c=False: slot())
         return btn
+
+    def _start_dep_download(self, name, work):
+        """组件下载统一入口：work(report) 在后台跑，report 回主线程写进度。
+
+        所有安装动作只在全局设置里发起（约定 11）；完成后重跑依赖检测刷新状态。
+        """
+        if self._dep_downloading:
+            return
+        self._dep_downloading = True
+        self.dep_status.setText(f"正在下载 {name}…")
+        self.dep_status.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;")
+
+        def report(text):
+            post_to_main(lambda: self.dep_status.setText(f"{name}：{text}"))
+
+        def job():
+            work(report)
+            return True
+
+        def done(result, err):
+            self._dep_downloading = False
+            if err or not result:
+                self.dep_status.setText(
+                    f"{name} 下载失败：{str(err or '未知错误')[:80]}")
+                self.dep_status.setStyleSheet(
+                    "color: palette(bright-text); font-size: 11px;")
+                self.app.toast(f"{name} 下载失败", "error")
+                return
+            self.dep_status.setText(f"{name} 已就绪")
+            self.dep_status.setStyleSheet(
+                "color: palette(link-visited); font-size: 11px;")
+            self.app.toast(f"{name} 已就绪", "success")
+            self._refresh_dependencies()
+
+        run_bg(job, done)
+
+    def _download_pw_shell(self):
+        """采集引擎（Playwright headless shell，约 91MB，下载到用户目录）。"""
+        from toolbox.browser import download_headless_shell
+
+        def work(report):
+            ok = download_headless_shell(log=lambda line: report(line[:60]))
+            if not ok:
+                raise RuntimeError("下载失败，可重试或安装 Edge/Chrome")
+
+        self._start_dep_download("采集引擎", work)
+
+    def _download_asr_program(self):
+        """本地转写程序（whisper-faster.exe，约 84MB）。"""
+        from toolbox.asr_engine import download_program
+
+        def work(report):
+            download_program(progress=lambda p, m: report(f"{m}（{p}%）"))
+
+        self._start_dep_download("本地转写程序", work)
+
+    def _download_asr_model(self, model_key):
+        """本地转写模型（ModelScope 拉取，按所选模型大小从 72MB 到 2.9GB）。"""
+        if not model_key:
+            return
+        from toolbox.asr_engine import LOCAL_MODELS, download_model
+
+        label = next((lb for k, lb, _s in LOCAL_MODELS if k == model_key), model_key)
+
+        def work(report):
+            download_model(model_key, progress=lambda p, m: report(f"{m}（{p}%）"))
+
+        self._start_dep_download(f"转写模型 {label.split('（')[0]}", work)
+
+    def _download_clip_model(self):
+        """图识别模型（CLIP 视觉编码器 ONNX，约 85MB，支持断点续传）。"""
+        from toolbox import image_embedding
+
+        def work(report):
+            def on_progress(done_bytes, total_bytes):
+                total = total_bytes or 1
+                report(f"{done_bytes / 1024 ** 2:.1f} / {total / 1024 ** 2:.1f} MB")
+
+            image_embedding.download_default_model(progress=on_progress)
+
+        self._start_dep_download("图识别模型", work)
 
     def _ffmpeg_install_dir(self):
         """一键下载的落地目录：用户目录（Program Files 下没有写权限）。"""

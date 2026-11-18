@@ -7,7 +7,6 @@ import io
 import os
 import re
 import sqlite3
-import sys
 import threading
 import time
 
@@ -259,7 +258,7 @@ class CookieManagerDialog(QDialog):
         self._whoami_cache: dict = {}
         self._whoami_probing: set = set()
 
-        # 底部：浏览器组件安装（Playwright + Chromium，游客态采集兜底用）
+        # 底部：浏览器环境状态（安装统一在「全局设置 → 检测依赖」，此处只显示与刷新）
         bottom = QHBoxLayout()
         self.pw_status = QLabel()
         bottom.addWidget(self.pw_status, 1)
@@ -267,7 +266,7 @@ class CookieManagerDialog(QDialog):
         bottom.addWidget(self.openapi_btn)
         self.github_btn = self._btn("GitHub 账户", self._open_github_account)
         bottom.addWidget(self.github_btn)
-        self.pw_btn = self._btn("下载浏览器组件", self._install_playwright, True)
+        self.pw_btn = self._btn("刷新环境", self._refresh_pw_status, True)
         bottom.addWidget(self.pw_btn)
         layout.addLayout(bottom)
         self._refresh_pw_status()
@@ -280,14 +279,13 @@ class CookieManagerDialog(QDialog):
         _GitHubTokenDialog(self).exec()
 
     def _refresh_pw_status(self):
-        """浏览器环境状态：Playwright 库 + 系统 Edge/Chrome + 本地采集引擎。"""
+        """浏览器环境状态：Playwright 库 + 系统 Edge/Chrome + 本地采集引擎（只读检测）。"""
         try:
             import playwright  # noqa: F401
         except ImportError:
-            self.pw_status.setText("浏览器组件：Playwright 未安装（采集需要）")
+            self.pw_status.setText(
+                "浏览器组件：Playwright 未安装（采集需要，请在「全局设置 → 检测依赖」安装）")
             self.pw_status.setStyleSheet("color: #ff5252;")
-            self.pw_btn.setEnabled(True)
-            self.pw_btn.setText("下载浏览器组件")
             return
         try:
             from toolbox.browser import detect
@@ -299,141 +297,13 @@ class CookieManagerDialog(QDialog):
             which = f"Edge {edge}" if edge else f"Chrome {chrome}"
             self.pw_status.setText(f"浏览器环境：系统 {which}（采集走系统浏览器，无需下载）")
             self.pw_status.setStyleSheet("color: #4caf50;")
-            self.pw_btn.setText("检测浏览器环境")
         elif shell:
             self.pw_status.setText("浏览器环境：本地采集引擎已就绪")
             self.pw_status.setStyleSheet("color: #4caf50;")
-            self.pw_btn.setText("检测浏览器环境")
         else:
-            self.pw_status.setText("浏览器环境：无系统 Edge/Chrome，采集需要下载引擎（91 MB）")
+            self.pw_status.setText(
+                "浏览器环境：无系统 Edge/Chrome，请在「全局设置 → 检测依赖」下载采集引擎（约 91MB）")
             self.pw_status.setStyleSheet("color: #eab308;")
-            self.pw_btn.setText("下载采集引擎")
-        self.pw_btn.setEnabled(True)
-
-    def _pip_install_dialog(self, title, tip, cmds, success_msg, on_ok=None):
-        """通用后台安装：逐条执行 cmds（(显示名, 参数列表)），弹实时日志窗口。"""
-        from gui_qt.common import post_to_main
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(title)
-        dlg.resize(560, 320)
-        v = QVBoxLayout(dlg)
-        tip_lbl = QLabel(tip)
-        v.addWidget(tip_lbl)
-        from PySide6.QtWidgets import QPlainTextEdit
-        log_view = QPlainTextEdit()
-        log_view.setReadOnly(True)
-        v.addWidget(log_view, 1)
-        close_btn = QPushButton("后台继续，关闭窗口")
-        close_btn.clicked.connect(dlg.close)
-        v.addWidget(close_btn)
-        dlg.show()
-
-        def append_log(line):
-            def _do():
-                log_view.appendPlainText(line)
-            post_to_main(_do)
-
-        def run():
-            import subprocess
-            ok = True
-            try:
-                for disp, args in cmds:
-                    append_log(f"$ {disp}")
-                    r = subprocess.run(
-                        [sys.executable] + args,
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, encoding="utf-8", errors="replace", timeout=3600,
-                    )
-                    for line in (r.stdout or "").splitlines():
-                        append_log(line)
-                    ok = ok and r.returncode == 0
-            except Exception as e:
-                append_log(f"安装失败：{e}")
-                ok = False
-
-            def _finish():
-                append_log("\n完成" if ok else "\n失败（可重试或手动执行上面的命令）")
-                tip_lbl.setText("安装完成，可关闭本窗口" if ok else "安装失败，可重试")
-                if on_ok:
-                    on_ok(ok)
-                if ok:
-                    QMessageBox.information(self, "成功", success_msg)
-            post_to_main(_finish)
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def _install_playwright(self):
-        """手动检测浏览器环境；缺采集引擎时按需下载 headless shell（用户目录）。"""
-        try:
-            import playwright  # noqa: F401
-        except ImportError:
-            if getattr(sys, "frozen", False):
-                QMessageBox.information(
-                    self, "提示",
-                    "安装版已内置浏览器组件，无需额外下载。\n"
-                    "若采集异常请检查系统是否装有 Edge/Chrome。")
-                return
-            self._pip_install_dialog(
-                "下载浏览器组件",
-                "正在安装 Playwright（约 40 MB，取决于网速）…",
-                [("pip install playwright", ["-m", "pip", "install", "playwright"])],
-                "浏览器组件安装完成！采集将自动使用系统 Edge/Chrome。",
-                on_ok=lambda ok: self._refresh_pw_status(),
-            )
-            return
-
-        from toolbox.browser import detect, download_headless_shell, headless_shell_installed
-        env = detect()
-        edge, chrome = env["edge"], env["chrome"]
-        status = (f"系统 Edge：{edge or '未安装'}\n"
-                  f"系统 Chrome：{chrome or '未安装'}\n"
-                  f"本地采集引擎：{'已就绪' if headless_shell_installed() else '未下载'}\n\n")
-        if edge or chrome:
-            QMessageBox.information(
-                self, "浏览器环境", status + "采集将自动使用系统浏览器，无需下载。")
-            self._refresh_pw_status()
-            return
-        if headless_shell_installed():
-            QMessageBox.information(self, "浏览器环境", status + "采集引擎已就绪。")
-            self._refresh_pw_status()
-            return
-        ret = QMessageBox.question(
-            self, "下载采集引擎",
-            status + "未检测到系统 Edge/Chrome，采集功能需要浏览器内核。\n\n"
-                     "是否下载 Playwright 采集引擎（约 91 MB，下载到用户目录，仅需一次）？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-        if ret != QMessageBox.Yes:
-            return
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("下载采集引擎")
-        dlg.resize(560, 320)
-        v = QVBoxLayout(dlg)
-        v.addWidget(QLabel("正在下载 Playwright 采集引擎（约 91 MB，国内镜像优先）…"))
-        from PySide6.QtWidgets import QPlainTextEdit
-        log_view = QPlainTextEdit()
-        log_view.setReadOnly(True)
-        v.addWidget(log_view, 1)
-        close_btn = QPushButton("后台继续，关闭窗口")
-        close_btn.clicked.connect(dlg.close)
-        v.addWidget(close_btn)
-        dlg.show()
-
-        def append_log(line):
-            def _do():
-                log_view.appendPlainText(line)
-            post_to_main(_do)
-
-        def run():
-            ok = download_headless_shell(log=append_log)
-
-            def _finish():
-                append_log("\n完成，采集引擎已就绪" if ok else "\n失败（可重试；也可安装 Edge/Chrome 后使用系统浏览器）")
-                self._refresh_pw_status()
-            post_to_main(_finish)
-
-        threading.Thread(target=run, daemon=True).start()
 
     def _reload(self):
         while self.container_layout.count():
