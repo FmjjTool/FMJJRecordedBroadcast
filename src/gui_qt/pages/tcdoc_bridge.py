@@ -1098,6 +1098,78 @@ class TcDocBridgePanel(QWidget):
 
     # ==================== 比对 ====================
 
+    _MANUAL_SKIP_TYPES = {5, 10, 11, 13, 19, 21}   # 图片/人员/公式/关联
+
+    def _manual_entry(self) -> None:
+        """手动新增一行：按当前表头生成输入框，只生成可复制 TSV。"""
+        target = self.target_combo.currentData()
+        if not target:
+            return
+        profile = str(target.get("profile") or "posts")
+        columns = [col for col in (target.get("columns") or [])
+                   if str(col.get("name") or "")
+                   and int(col.get("type") or 1) not in self._MANUAL_SKIP_TYPES]
+        if not columns:
+            columns = [{"name": name, "typeName": "文本"}
+                       for name in (target.get("columns") or [])]
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"手动录入 · {target.get('tab_name') or ''}")
+        dlg.resize(640, 620)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(12, 12, 12, 10)
+        tip = QLabel("只生成可复制的 TSV，不会写入腾讯文档；图片列请单独处理。")
+        tip.setProperty("role", "muted")
+        root.addWidget(tip)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        form = QFormLayout(body)
+        form.setContentsMargins(4, 4, 4, 4)
+        edits: dict[str, QLineEdit] = {}
+        for col in columns:
+            name = str(col.get("name") or "")
+            edit = QLineEdit()
+            type_name = str(col.get("typeName") or "")
+            edit.setPlaceholderText(type_name if type_name and type_name != "1"
+                                    else name)
+            edits[name] = edit
+            form.addRow(name, edit)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(dlg.reject)
+        buttons.addWidget(cancel)
+        ok = QPushButton("加入待复制行")
+        ok.setProperty("variant", "primary")
+        buttons.addWidget(ok)
+        root.addLayout(buttons)
+
+        def save():
+            row = {name: edit.text().strip() for name, edit in edits.items()}
+            if not any(row.values()):
+                QMessageBox.warning(dlg, "手动录入", "至少填写一个字段。")
+                return
+            row["_images"] = []
+            row["_source"] = ""
+            row["_needs_review"] = True
+            if self._result is None:
+                names = [c.get("name") for c in target.get("columns") or []]
+                self._result = bridge.manual_target_result(profile, names)
+            self._result["rows"].append(row)
+            self._fill_table(self._result["rows"], self._result.get("columns"))
+            self._show_table()
+            self.copy_btn.setEnabled(True)
+            self.upload_btn.setEnabled(False)
+            self.status.setText(
+                f"已手动新增 1 行（共 {len(self._result['rows'])} 行）；"
+                "点「复制全部（TSV）」后到腾讯文档对应表末尾粘贴。")
+            dlg.accept()
+
+        ok.clicked.connect(save)
+        dlg.exec()
+
     def _run_compare(self, *_args) -> None:
         if self._closed:
             return
@@ -1140,7 +1212,7 @@ class TcDocBridgePanel(QWidget):
             self._compare_owner = 0
             self._compare_watchdog.stop()
             self._result = bridge.manual_target_result("lives", columns)
-            self._fill_table([], columns)
+            self._fill_table([], columns, append_images=False)
             self._show_table()
             self.compare_btn.setEnabled(True)
             self.copy_btn.setEnabled(False)
