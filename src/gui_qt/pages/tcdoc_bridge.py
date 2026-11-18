@@ -1419,13 +1419,16 @@ class TcDocBridgePanel(QWidget):
         self.summary.setText(
             f"抖音直播历史 {scope} 共 {stats.get('local_items', 0)} 场 → "
             f"重复 {stats.get('duplicates', 0)} 场（{mode_label}）、"
-            f"待补 {stats.get('pending', 0)} 行")
+            f"待补 {stats.get('pending', 0)} 行"
+            f"（含回放 {stats.get('with_replay', 0)} / 缺回放 {stats.get('missing_replay', 0)}）")
         self.copy_btn.setEnabled(bool(result["rows"]))
         self.upload_btn.setEnabled(False)
         self.copy_images_btn.setEnabled(False)
         self.status.setText(
-            "只读比对：点「复制全部（TSV）」到直播记录表末尾粘贴；直播时长 / 直播距今是公式列，"
-            "不写；AI 摘要 / 截图 / 标签 / 备注 / 初编 / 终编属人工列，任何模式都不会覆盖。")
+            "只读比对：点「复制全部（TSV）」到直播记录表末尾粘贴；直播链接1 填 B 站投稿回放"
+            "（按录制日期 + 平台匹配，同一天取开播时间最近的一条，没有投稿就留空）；"
+            "直播时长 / 直播距今是公式列，不写；AI 摘要 / 截图 / 标签 / 备注 / 初编 / 终编属人工列，"
+            "任何模式都不会覆盖。")
         if stats.get("duplicates") and str(stats.get("mode")) == "skip":
             self.status.setText(
                 self.status.text()

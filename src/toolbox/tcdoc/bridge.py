@@ -1937,10 +1937,6 @@ def _norm_live_title(text) -> str:
     return cleaned.lower()
 
 
-def _live_link(room: str) -> str:
-    return f"https://live.douyin.com/{room}" if str(room or "").strip() else ""
-
-
 def _live_link_value(value) -> str:
     """链接单元格（[{text,link}] / {text,link} / 纯文本）→ URL，优先取 link。"""
     if isinstance(value, list):
@@ -2016,7 +2012,7 @@ def live_accounts(days: int = 0) -> list[dict]:
 
 
 def _live_row(account: str, session: dict) -> dict:
-    """一场抖音直播 → 直播记录自动字段行。"""
+    """一场抖音直播 → 直播记录自动字段行（直播链接1 稍后按 B 站投稿回填）。"""
     room = str(session.get("room_id") or "").strip()
     start = str(session.get("start") or "")
     end = str(session.get("end") or "")
@@ -2026,11 +2022,76 @@ def _live_row(account: str, session: dict) -> dict:
         "开始时间": start[:10],
         "结束时间": end[:10],
         "直播平台": "抖音",
-        "直播链接1": _live_link(room),
+        "直播链接1": "",
     }
-    return {"values": values, "day": start[:10],
+    return {"values": values, "day": start[:10], "time": start[11:16],
             "title": _norm_live_title(session.get("title")),
-            "link": values["直播链接1"], "room": room}
+            "link": "", "room": room}
+
+
+_BILI_VIDEO_URL = "https://www.bilibili.com/video/{}"
+_RECORD_NAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-\d{2}_(.+)$")
+
+
+def _replay_index() -> dict[tuple[str, str], list[dict]]:
+    """B 站投稿记录 → {(录制日期, 平台): [{bvid, time}]}，用于填直播链接1。
+
+    数据来自 `config/bili_upload.db` 的投稿任务（同一台机器上的录播投稿记录），
+    录制文件名格式 `2026-11-16_17-57-09_主播_类型_…_抖音.mp4`。
+    """
+    import sqlite3
+
+    from toolbox.config_manager import get_config_dir
+
+    path = get_config_dir() / "bili_upload.db"
+    out: dict[tuple[str, str], list[dict]] = {}
+    if not path.exists():
+        return out
+    try:
+        with sqlite3.connect(str(path), timeout=5) as conn:
+            rows = conn.execute("SELECT state, data FROM jobs").fetchall()
+    except sqlite3.Error:
+        return out
+    for state, raw in rows:
+        if state != "published":
+            continue
+        try:
+            data = json.loads(raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        bvid = str((data.get("result") or {}).get("bvid") or "").strip()
+        if not bvid:
+            continue
+        for item_path in data.get("paths") or []:
+            stem = Path(str(item_path or "")).stem
+            match = _RECORD_NAME_RE.search(stem)
+            if not match:
+                continue
+            day, hh, mm, rest = match.groups()
+            platform = str(rest).split("_")[-1].strip()
+            out.setdefault((day, platform), []).append(
+                {"bvid": bvid, "time": f"{hh}:{mm}"})
+    return out
+
+
+def _pick_replay(candidates: list[dict], session_time: str) -> str:
+    """同一天可能投稿多个视频：取开播时间最接近的那个。"""
+    if not candidates:
+        return ""
+    if len(candidates) == 1 or not session_time:
+        return candidates[0]["bvid"]
+
+    def distance(item: dict) -> int:
+        text = str(item.get("time") or "")
+        if len(text) < 5:
+            return 24 * 60
+        try:
+            return abs((int(text[:2]) * 60 + int(text[3:5]))
+                       - (int(session_time[:2]) * 60 + int(session_time[3:5])))
+        except ValueError:
+            return 24 * 60
+
+    return min(candidates, key=distance)["bvid"]
 
 
 def _merge_live_values(local_values: dict, remote_values: dict,
@@ -2084,9 +2145,11 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
 
     since = _since_date(days)
     wanted = {str(name) for name in (accounts or []) if str(name)}
+    replays = _replay_index()
     rows: list[dict] = []
     duplicates = 0
     sessions_total = 0
+    with_replay = 0
     claimed: set[int] = set()   # 已被占用的远端行：同日多场时不让后续场次再算「重复」
     for acc in load_accounts():
         name = _account_field(acc, "name")
@@ -2101,6 +2164,11 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
             sessions_total += 1
             item = _live_row(name, session)
             item["values"]["直播账户"] = _live_account_label(name, account_options)
+            bvid = _pick_replay(replays.get((item["day"], "抖音"), []), item["time"])
+            if bvid:
+                item["values"]["直播链接1"] = _BILI_VIDEO_URL.format(bvid)
+                item["link"] = item["values"]["直播链接1"]
+                with_replay += 1
             match = (by_link.get(_norm_url(item["link"])) if item["link"] else None) \
                 or by_day_title.get((item["day"], item["title"]))
             if match is None:
@@ -2134,6 +2202,8 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
             "duplicates": duplicates,
             "mode": mode,
             "since": since,
+            "with_replay": with_replay,
+            "missing_replay": sessions_total - with_replay,
             "with_images": 0,
             "without_images": len(rows),
             "image_count": 0,
