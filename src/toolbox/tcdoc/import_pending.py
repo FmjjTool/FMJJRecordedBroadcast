@@ -24,7 +24,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from toolbox import increment_db
-from toolbox.tcdoc import bridge, config as tc_cfg
+from toolbox.tcdoc import bridge, config as tc_cfg, tables
 from toolbox.tcdoc.import_local import (
     ALIASES, BEIJING, CHOICE_COLUMNS, MAX_IMAGE_BYTES, ImportErrorDetail, LocalImage,
     LocalImportClient, ManagedAuth, TEST_TARGET, UnknownWriteResult, field_options,
@@ -408,6 +408,117 @@ def load_manifest(path: Path, project=ROOT, skip_missing=False):
         if len(record["_images"]) + len(record.get("missing_slots", [])) != record["expected_images"]:
             raise ImportErrorDetail("图集数量与中间层清单不一致")
     return records
+
+
+# ==================== 直播记录：API 写回（只构造 payload，不发送） ====================
+
+LIVE_FIELDS = ("直播账户", "直播标题", "开始时间", "结束时间", "直播平台", "直播链接1")
+LIVE_REQUIRED_FIELDS = ("直播标题", "开始时间")
+# 公式列只登记跳过原因，永不写入
+LIVE_READONLY_FIELDS = ("直播时长", "直播距今")
+
+
+def live_key(row: dict) -> str:
+    """直播行的去重键：优先回放链接，其次「开始日期 + 标题」。"""
+    label, url = tables.split_link(row.get("直播链接1"))
+    if url:
+        return "link:" + url
+    day = str(row.get("开始时间") or "")[:10]
+    title = str(row.get("直播标题") or "").strip()
+    return f"date:{day}|{title}"
+
+
+def make_live_plan(record: dict, fields: list[dict], available_only=True):
+    """直播记录行 → OpenAPI values/kinds/skipped，只做编码，不发送请求。
+
+    公式列（直播时长/直播距今）不写；多选列没有既有选项时跳过该字段并记原因；
+    链接列写成 `[{type:url, text:显示文本, link:URL}]`，保留两级结构。
+    """
+    values, kinds, skipped = {}, {}, {}
+    for name in LIVE_READONLY_FIELDS:
+        if any(f.get("fieldTitle") == name for f in fields):
+            skipped[name] = "公式列不写"
+    for name in LIVE_FIELDS:
+        raw = record.get(name, "")
+        hits = [f for f in fields if f.get("fieldTitle") == name]
+        if len(hits) != 1:
+            if not available_only:
+                raise ImportErrorDetail(f"字段无法唯一匹配：{name}")
+            skipped[name] = "目标缺少字段"
+            continue
+        field = hits[0]
+        title, kind = field["fieldTitle"], int(field.get("fieldType") or 1)
+        if kind == 19:
+            skipped[name] = "公式列不写"
+            continue
+        if name in ("直播账户", "直播平台") and kind in {9, 17}:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            options = [o for o in field_options(field)
+                       if o.get("text") == text and o.get("id")]
+            if len(options) != 1:
+                skipped[name] = "没有匹配的既有选项"
+                continue
+            values[title] = options
+            kinds[title] = kind
+            continue
+        if kind == 4:  # 日期：腾讯要求毫秒时间戳
+            day = str(raw or "")[:10]
+            if not day:
+                continue
+            try:
+                moment = datetime.fromisoformat(day)
+            except ValueError:
+                skipped[name] = "日期无法识别"
+                continue
+            moment = (moment.replace(tzinfo=BEIJING)
+                      if moment.tzinfo is None else moment.astimezone(BEIJING))
+            values[title] = str(int(moment.timestamp() * 1000))
+            kinds[title] = kind
+            continue
+        if kind == 8:  # 链接：保留显示文本 + URL
+            label, url = tables.split_link(raw)
+            if not url:
+                continue
+            values[title] = [{"type": "url", "text": label or url, "link": url}]
+            kinds[title] = kind
+            continue
+        if kind == 1:  # 文本
+            text = str(raw or "")
+            if not text:
+                continue
+            values[title] = [{"type": "text", "text": text}]
+            kinds[title] = kind
+            continue
+        skipped[name] = "字段类型不匹配"
+    for required in LIVE_REQUIRED_FIELDS:
+        if required not in values:
+            raise ImportErrorDetail(f"必需字段无法写入：{required}")
+    return values, kinds, skipped
+
+
+def preview_lives(rows: list[dict], fields: list[dict], remote_keys=(),
+                  available_only=True) -> dict:
+    """直播记录写回预演：返回每条 payload 与跳过去重结果，**不发送任何请求**。"""
+    remote = {str(key) for key in (remote_keys or ())}
+    out: dict = {"records": [], "duplicates": [], "errors": [], "sent": 0}
+    for row in rows:
+        key = live_key(row)
+        try:
+            values, kinds, skipped = make_live_plan(row, fields, available_only)
+        except ImportErrorDetail as exc:
+            out["errors"].append({"key": key, "title": row.get("直播标题"),
+                                  "error": str(exc)})
+            continue
+        item = {"key": key, "title": row.get("直播标题"),
+                "operation": "skip" if key in remote else "add",
+                "skipped_fields": skipped, "values": values, "kinds": kinds}
+        if key in remote:
+            out["duplicates"].append(item)
+        else:
+            out["records"].append(item)
+    return out
 
 
 def make_plan(record: dict, fields: list[dict], available_only=False):

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
@@ -14,8 +15,8 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QStackedWidget, QTableView,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
+    QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common
@@ -325,6 +326,15 @@ class TcDocBridgePanel(QWidget):
         self.dup_combo.currentIndexChanged.connect(self._on_dup_mode_changed)
         top.addWidget(self.dup_combo)
 
+        # 直播记录 API 写回：只构造 payload 预览，不发送请求（默认不真实写入）
+        self.api_preview_btn = QPushButton("预览 API 写回")
+        self.api_preview_btn.setToolTip(
+            "只把待补行编码成腾讯文档 OpenAPI 的 payload 供核对：不发送请求、"
+            "不写入任何数据。真实写回需用户明确同意后在真机执行。")
+        self.api_preview_btn.setVisible(False)
+        self.api_preview_btn.clicked.connect(self._preview_live_api)
+        top.addWidget(self.api_preview_btn)
+
         self.compare_btn = QPushButton("重新比对")
         self.compare_btn.clicked.connect(self._run_compare)
         top.addWidget(self.compare_btn)
@@ -604,6 +614,7 @@ class TcDocBridgePanel(QWidget):
         self.manual_btn.setVisible(profile in ("events", "merch", "lives"))
         self.live_account_btn.setVisible(lives)
         self.dup_combo.setVisible(lives)
+        self.api_preview_btn.setVisible(lives)
         if lives:
             self._load_live_accounts()
         if songs and not self._songs_mode:
@@ -1401,6 +1412,50 @@ class TcDocBridgePanel(QWidget):
             self._restore_buttons()
             return
         self._compare_watchdog.start(self.COMPARE_TIMEOUT_MS)
+
+    def _preview_live_api(self) -> None:
+        """直播记录写回预演：构造 OpenAPI payload 供核对，不发送请求、不写数据。"""
+        rows = (self._result or {}).get("rows") or []
+        target = self.target_combo.currentData() or {}
+        if not rows or not target:
+            return
+        from toolbox.tcdoc import import_pending
+
+        fields = [{"fieldTitle": str(col.get("name") or ""),
+                   "fieldType": int(col.get("type") or 1)}
+                  for col in target.get("columns") or []
+                  if str(col.get("name") or "")]
+        remote_keys = []
+        try:
+            remote = bridge.load_remote(str(target.get("doc_key") or ""),
+                                        str(target.get("tab_id") or ""))
+            remote_keys = [import_pending.live_key(row.get("values") or {})
+                           for row in remote]
+        except Exception:  # noqa: BLE001 - 读不到快照就按「全部新增」预演
+            remote_keys = []
+        preview = import_pending.preview_lives(rows, fields, remote_keys=remote_keys)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("预览 API 写回（不会写入）")
+        dlg.resize(720, 560)
+        layout = QVBoxLayout(dlg)
+        head = QLabel(
+            f"可新增 {len(preview['records'])} 条 · 已存在跳过 {len(preview['duplicates'])} 条 · "
+            f"无法编码 {len(preview['errors'])} 条。\n"
+            "以下只是 payload 预览：本功能不发送请求、不写入腾讯文档。")
+        head.setWordWrap(True)
+        layout.addWidget(head)
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(json.dumps(preview, ensure_ascii=False, indent=2))
+        layout.addWidget(view, 1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+        dlg.exec()
 
     def _finish_live_compare(self, req, result, err) -> None:
         """直播记录比对结果：只读展示 + 复制 TSV；不走上传（上传只支持动态结构）。"""
