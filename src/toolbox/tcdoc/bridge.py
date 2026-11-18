@@ -868,6 +868,83 @@ def _local_images(data: dict, keys: tuple, limit: int = 12) -> list:
     return images[:limit]
 
 
+def _city_text(city) -> str:
+    """票务城市 → 腾讯表常用城市名（缺行政后缀时补「市」）。"""
+    text = str(city or "").strip()
+    if not text:
+        return ""
+    if text.endswith(("市", "区", "县", "盟", "旗")) or text.endswith("自治州"):
+        return text
+    return text + "市"
+
+
+_EVENT_TYPE_MAP = (("漫展", "漫展"), ("音乐节", "音乐节"),
+                   ("生日会", "生日会"), ("生日专场", "生日会"),
+                   ("演唱会", "演唱会"), ("巡演", "演唱会"),
+                   ("专场", "演唱会"), ("音乐会", "演唱会"))
+
+
+def _infer_event_type(title, category, text) -> str:
+    """从票务分类/标题推断腾讯「活动类型」多选值。"""
+    haystack = " ".join(str(x or "") for x in (title, category, text))
+    for word, value in _EVENT_TYPE_MAP:
+        if word in haystack:
+            return value
+    return "演唱会"
+
+
+def _event_status(day: str, raw_status) -> str:
+    """按取消/延期与日期推断「活动状态」。"""
+    raw = str(raw_status or "")
+    if "取消" in raw:
+        return "已取消"
+    if "延期" in raw:
+        return "已延期"
+    if day:
+        return "已结束" if day < date.today().isoformat() else "待开场"
+    return ""
+
+
+def _signing_text(text) -> str:
+    """演出介绍/须知里提到签售且没有否定词 → 含签售。"""
+    text = str(text or "")
+    if "签售" not in text:
+        return "无签售"
+    if re.search(r"(无|不设|不参与|取消|没有).{0,6}签售", text):
+        return "无签售"
+    return "含签售"
+
+
+def _ticket_price_text(data: dict) -> str:
+    """场次票档 → 「名称：价格」多行；无票档时回退票价。"""
+    lines = []
+    for session in data.get("场次明细") or []:
+        if not isinstance(session, dict):
+            continue
+        for tier in session.get("票档") or []:
+            if not isinstance(tier, dict):
+                continue
+            name = str(tier.get("名称") or "").strip()
+            price = str(tier.get("价格") or "").strip().replace("¥", "￥")
+            if not price:
+                continue
+            line = f"{name}：{price}" if name and name != price else price
+            if line not in lines:
+                lines.append(line)
+    if not lines:
+        range_text = str(data.get("票价") or "").strip().replace("¥", "￥")
+        if range_text:
+            lines.append(range_text)
+    return "\n".join(lines[:8])
+
+
+def _clean_shop_title(title) -> str:
+    """淘宝商品标题 → 周边名称：去掉【官方】前缀与开头的日期。"""
+    text = re.sub(r"^【[^】]*】\s*", "", str(title or "")).strip()
+    text = re.sub(r"^\d{4}\s*[.\-/年]\s*\d{1,2}\s*[.\-/月]\s*\d{1,2}\s*日?\s*", "", text)
+    return text.strip(" ·-") or str(title or "").strip()
+
+
 def _ticket_candidates(days) -> list:
     """票务解析旁车 → 线下活动候选。"""
     rows = []
@@ -876,14 +953,23 @@ def _ticket_candidates(days) -> list:
         if not title:
             continue
         day = _date_key(data.get("时间")) or _date_key(data.get("获取时间"))
+        city = _city_text(data.get("城市"))
+        text = " ".join(str(data.get(key) or "") for key in
+                        ("演出介绍", "购票须知"))
         bits = [data.get("平台"), data.get("场馆"), data.get("票价"),
-                data.get("状态"), data.get("链接")]
+                data.get("状态")]
         rows.append({
             "name": title,
             "date": day,
             "year": day[:4] if day else "",
-            "city": str(data.get("城市") or ""),
-            "type": str(data.get("分类") or "").strip() or "线下活动",
+            "city": city,
+            "venue": str(data.get("场馆") or ""),
+            "address": str(data.get("地址") or ""),
+            "status": _event_status(day, data.get("状态")),
+            "type": _infer_event_type(title, data.get("分类"), text),
+            "stage": "含舞台",
+            "signing": _signing_text(text),
+            "ticket_price": _ticket_price_text(data),
             "text": "｜".join(str(b) for b in bits if b)[:300],
             "images": _local_images(
                 data, ("本地海报", "本地封面", "本地宣传图", "本地座位图", "本地场馆图")),
@@ -900,9 +986,12 @@ def _shopping_candidates(days) -> list:
         title = str(data.get("标题") or "").strip()
         if not title:
             continue
-        name = _clean_merch_name(title) or title
-        bits = [data.get("价格"), data.get("销量"), data.get("店铺"),
-                data.get("链接")]
+        name = _clean_shop_title(title)
+        bits = []
+        if data.get("价格"):
+            bits.append(f"价格：{data['价格']}")
+        if data.get("销量"):
+            bits.append(f"销量：{data['销量']}")
         local = data.get("本地图片")
         images = _local_images(local if isinstance(local, dict) else {},
                                ("主图", "规格图"), limit=10)
@@ -910,9 +999,9 @@ def _shopping_candidates(days) -> list:
             images = _local_images(data, ("本地主图", "本地规格图"), limit=10)
         rows.append({
             "name": name,
-            "date": _date_key(data.get("获取时间")),
-            "acquire": "购买",
-            "text": "｜".join(str(b) for b in bits if b)[:300],
+            "date": "",
+            "acquire": "整套购买、单独购买",
+            "text": "｜".join(bits)[:300],
             "images": images,
             "source": str(data.get("链接") or ""),
             "author": str(data.get("店铺") or ""),
@@ -973,7 +1062,7 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
             pending.append(group)
     after_match = time.perf_counter()
     pending.sort(key=lambda item: (str(item.get("date") or ""), item.get("name") or ""),
-                 reverse=True)
+reverse=True)
     columns = _sheet_columns(SONG_DOC_KEY, tab_id)
     if not columns:
         columns = EVENT_FALLBACK_COLUMNS if profile == "events" else MERCH_FALLBACK_COLUMNS
@@ -986,8 +1075,15 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
                 "活动日期": item.get("date") or "",
                 "年份": item.get("year") or "",
                 "城市": item.get("city") or "",
-                "活动类型": item.get("type") or "线下活动",
+                "场馆名称": item.get("venue") or "",
+                "场馆地址": item.get("address") or "",
+                "活动状态": item.get("status") or "",
+                "活动类型": item.get("type") or "",
+                "舞台环节": item.get("stage") or "",
+                "签售环节": item.get("signing") or "",
                 "备注信息": item.get("text") or "",
+                "购票链接 1": item.get("source") or "",
+                "票档价格": item.get("ticket_price") or "",
             })
         else:
             row.update({
