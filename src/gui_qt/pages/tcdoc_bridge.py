@@ -83,6 +83,10 @@ class _PendingModel(QAbstractTableModel):
                 return f"有 {len(images)} 张" if images else "无"
             return "\n".join(images[:20]) + ("\n…" if len(images) > 20 else "")
         value = str(row.get(column) or "")
+        if bridge.tables.LINK_FIELD_SEP in value:
+            # 链接列两级结构：表格里显示文本，悬停看 URL
+            label, url = bridge.tables.split_link(value)
+            return (url or label) if role == Qt.ToolTipRole else label
         return value[:600] if role == Qt.ToolTipRole else value
 
 

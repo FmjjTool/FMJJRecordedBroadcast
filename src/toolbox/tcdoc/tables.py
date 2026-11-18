@@ -44,10 +44,41 @@ FIELD_TYPES = {1: "文本", 2: "数字", 3: "复选框", 4: "日期", 5: "图片
                12: "创建时间", 13: "最后编辑时间", 16: "邮箱", 17: "多选",
                18: "关联", 19: "公式", 21: "关联", 25: "自动编号"}
 
-# 关联字段先落 recordId，等全部表解析完再换成可读文本（分隔符不能是逗号，
+# 链接字段先落 recordId，等全部表解析完再换成可读文本（分隔符不能是逗号，
 # 关联值可能是带逗号的 dict repr）
 LINK_TAG = "\x00link:"
 LINK_SEP = "\x01"
+# 链接字段的「显示文本 + URL」两级结构：落库用 STX 分隔（正常文本里不会出现）
+LINK_FIELD_SEP = "\x02"
+
+
+def join_link(text: str, url: str) -> str:
+    """显示文本 + URL → 落库字符串；文本为空或等于 URL 时退化为纯 URL。"""
+    url = str(url or "").strip()
+    text = str(text or "").strip()
+    if url and text and text != url:
+        return f"{text}{LINK_FIELD_SEP}{url}"
+    return url or text
+
+
+def split_link(value) -> tuple[str, str]:
+    """落库字符串 → (显示文本, URL)；不是两级结构时文本为空、URL 为原值。"""
+    raw = str(value or "")
+    if LINK_FIELD_SEP in raw:
+        text, _, url = raw.partition(LINK_FIELD_SEP)
+        return text.strip(), url.strip()
+    return "", raw.strip()
+
+
+def link_text(value) -> str:
+    """表格/界面展示用：两级结构显示文本，否则原样。"""
+    text, url = split_link(value)
+    return text or url
+
+
+def link_url(value) -> str:
+    """比对/写回用：两级结构取 URL。"""
+    return split_link(value)[1]
 _ID_RE = re.compile(r"^r[0-9A-Za-z]{4,12}$")   # 腾讯记录 id 形如 r83LFJ
 
 _TAG_RE = re.compile(r"^k(\d+)$")
@@ -245,11 +276,16 @@ def render_cell(cell, field, users) -> str:
                         for item in val if isinstance(item, dict))
     if ftype == 6:  # 附件
         return " ".join(item.get("1") or "" for item in val if isinstance(item, dict))
-    if ftype == 8:  # 链接
+    if ftype == 8:  # 链接：保留「显示文本 + URL」两级（STX 分隔）
         out = []
         for item in (val if isinstance(val, list) else [val]):
             if isinstance(item, dict):
-                out.append(item.get("3") or item.get("2") or "")
+                url = str(item.get("3") or "")
+                label = str(item.get("2") or "")
+                if url.startswith("http") and label and not label.startswith("http"):
+                    out.append(join_link(label, url))
+                else:
+                    out.append(url or label)
             elif item:
                 out.append(str(item))
         return " ".join(x for x in out if x)
@@ -787,10 +823,24 @@ def export_excel(doc_key: str, doc_name: str, path=None, target=None) -> Path:
             cell.font = head_font
             cell.alignment = Alignment(vertical="center")
         offset = 0
+        link_columns = {c["name"] for c in sheet["columns"]
+                        if int(c.get("type") or 0) == 8}
         while True:
             rows, total = rows_page(doc_key, sheet["tab_id"], offset, 500, path)
             for row in rows:
-                ws.append([safe(row["values"].get(n, "")) for n in names])
+                values = row["values"]
+                ws.append([None] * len(names))
+                excel_row = ws.max_row
+                for column, name in enumerate(names, start=1):
+                    raw = values.get(name, "")
+                    cell = ws.cell(row=excel_row, column=column)
+                    if name in link_columns and isinstance(raw, str) \
+                            and LINK_FIELD_SEP in raw:
+                        label, url = split_link(raw)
+                        cell.value = safe(label)
+                        cell.hyperlink = url
+                    else:
+                        cell.value = safe(raw)
             offset += len(rows)
             if not rows or offset >= total:
                 break

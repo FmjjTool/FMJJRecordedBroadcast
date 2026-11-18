@@ -1938,7 +1938,9 @@ def _norm_live_title(text) -> str:
 
 
 def _live_link_value(value) -> str:
-    """链接单元格（[{text,link}] / {text,link} / 纯文本）→ URL，优先取 link。"""
+    """链接单元格（[{text,link}] / {text,link} / 两级字符串 / 纯文本）→ URL。"""
+    if isinstance(value, str) and tables.LINK_FIELD_SEP in value:
+        return tables.link_url(value)
     if isinstance(value, list):
         for item in value:
             if isinstance(item, dict) and item.get("link"):
@@ -2069,17 +2071,18 @@ def _replay_index() -> dict[tuple[str, str], list[dict]]:
                 continue
             day, hh, mm, rest = match.groups()
             platform = str(rest).split("_")[-1].strip()
+            title = str(data.get("title") or "").strip()
             out.setdefault((day, platform), []).append(
-                {"bvid": bvid, "time": f"{hh}:{mm}"})
+                {"bvid": bvid, "time": f"{hh}:{mm}", "title": title})
     return out
 
 
-def _pick_replay(candidates: list[dict], session_time: str) -> str:
+def _pick_replay(candidates: list[dict], session_time: str) -> dict:
     """同一天可能投稿多个视频：取开播时间最接近的那个。"""
     if not candidates:
-        return ""
+        return {}
     if len(candidates) == 1 or not session_time:
-        return candidates[0]["bvid"]
+        return candidates[0]
 
     def distance(item: dict) -> int:
         text = str(item.get("time") or "")
@@ -2091,7 +2094,7 @@ def _pick_replay(candidates: list[dict], session_time: str) -> str:
         except ValueError:
             return 24 * 60
 
-    return min(candidates, key=distance)["bvid"]
+    return min(candidates, key=distance)
 
 
 def _merge_live_values(local_values: dict, remote_values: dict,
@@ -2164,10 +2167,12 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
             sessions_total += 1
             item = _live_row(name, session)
             item["values"]["直播账户"] = _live_account_label(name, account_options)
-            bvid = _pick_replay(replays.get((item["day"], "抖音"), []), item["time"])
-            if bvid:
-                item["values"]["直播链接1"] = _BILI_VIDEO_URL.format(bvid)
-                item["link"] = item["values"]["直播链接1"]
+            replay = _pick_replay(replays.get((item["day"], "抖音"), []), item["time"])
+            if replay.get("bvid"):
+                url = _BILI_VIDEO_URL.format(replay["bvid"])
+                # 两级结构：显示文本用投稿标题，URL 单独保存（TSV 只带 URL）
+                item["values"]["直播链接1"] = tables.join_link(replay.get("title"), url)
+                item["link"] = url
                 with_replay += 1
             match = (by_link.get(_norm_url(item["link"])) if item["link"] else None) \
                 or by_day_title.get((item["day"], item["title"]))
@@ -2298,6 +2303,9 @@ def to_tsv(rows: list[dict], columns=None) -> str:
 
 def _clean_cell(value) -> str:
     text = str(value if value is not None else "")
+    if tables.LINK_FIELD_SEP in text:
+        # 两级的链接单元格：粘贴用 URL（腾讯文档会把 URL 变成可点链接）
+        text = tables.link_url(text) or tables.link_text(text)
     text = html.unescape(text)
     return (text.replace("\r\n", " ").replace("\r", " ")
             .replace("\n", " ").replace("\t", " ").strip())
