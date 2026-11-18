@@ -5,8 +5,10 @@
       <?xml version="1.0" encoding="UTF-8"?><i>
       <d p="相对秒,模式,字号,颜色,时间戳ms,弹幕池,用户ID,行ID">内容</d>…
       </i>
-- 两平台均额外写 JSONL（method/timestamp/content/user/gift），逐条 flush、
+- 所有平台都额外写 JSONL（method/timestamp/content/user/gift），逐条 flush、
   每秒同步磁盘；突发断电仍可能损失末尾未同步数据。B站 XML 每次保持闭合。
+- 快手/微博/小红书/网易云由 live_chat.BrowserChatFetcher 采集页面消息通道，
+  分类与字段对齐抖音/B站（弹幕/礼物/进场/点赞/关注）。
 
 弹幕连接失败绝不影响视频录制：所有异常都在本类内部吞掉并回调日志。
 """
@@ -42,9 +44,6 @@ class DanmakuRecorder:
 
     # ---------- 生命周期 ----------
     def start(self):
-        if self.platform not in ("bili", "douyin"):
-            self.on_log("该平台暂不支持弹幕录制（不影响视频）", "info")
-            return False
         try:
             os.makedirs(self.out_dir, exist_ok=True)
             if self.save:
@@ -67,10 +66,15 @@ class DanmakuRecorder:
                 self._fetcher = BiliLiveFetcher(
                     self.room, on_message=self._on_msg,
                     on_room_info=None, on_status=self._on_status)
-            else:
+            elif self.platform == "douyin":
                 from toolbox.douyin_live import DouyinLiveFetcher
                 self._fetcher = DouyinLiveFetcher(
                     self.room, on_message=self._on_msg,
+                    on_room_info=None, on_status=self._on_status)
+            else:
+                from toolbox.live_chat import BrowserChatFetcher
+                self._fetcher = BrowserChatFetcher(
+                    self.platform, self.room, on_message=self._on_msg,
                     on_room_info=None, on_status=self._on_status)
             self._fetcher.start()
             self.on_log("弹幕接入已开启%s" % (("：" + os.path.basename(self.path)) if self.path else "（实时渲染）"), "ok")

@@ -238,7 +238,8 @@ class DanmakuOverlay(QWidget):
         online = f"{self.online:,}" if self.online is not None else "—"
         text(QRectF(x + 12 * scale, 6 * scale, width - 24 * scale, 24 * scale), "在线观众：" + online, 14, "#e5e7eb")
         text(QRectF(x + 12 * scale, 34 * scale, width - 24 * scale, 24 * scale), "礼物贡献榜", 18)
-        unit = "电池" if self.platform in ("bili", "bilibili") else "抖币"
+        unit = ("电池" if self.platform in ("bili", "bilibili")
+                else "抖币" if self.platform == "douyin" else "")
         ranks = self.top_gifts()
         if not ranks:
             text(QRectF(x + 12 * scale, 95 * scale, width - 24 * scale, 30 * scale), "等待礼物", 14, "#a1a1aa")
@@ -254,8 +255,9 @@ class DanmakuOverlay(QWidget):
             p.setFont(font)
             nick = p.fontMetrics().elidedText(user, Qt.ElideRight, max(20, int(width - 87 * scale)))
             text(QRectF(x + 74 * scale, y, width - 84 * scale, 20 * scale), nick, 15)
+            value = (f" · {data.get('totalValue', 0):,} {unit}" if unit else "")
             text(QRectF(x + 74 * scale, y + 20 * scale, width - 84 * scale, 16 * scale),
-                 f"{data.get('giftCount', 0):,} 件 · {data.get('totalValue', 0):,} {unit}", 11, "#d4d4d8")
+                 f"{data.get('giftCount', 0):,} 件{value}", 11, "#d4d4d8")
         text(QRectF(x + 12 * scale, self.height() - 78 * scale, width - 24 * scale, 66 * scale),
              self.options["footer"], 14, "#d4d4d8", Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap)
 

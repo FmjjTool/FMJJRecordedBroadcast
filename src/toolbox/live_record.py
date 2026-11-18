@@ -62,8 +62,8 @@ PLATFORMS = {
     "netease": {"name": "网易云直播", "referer": "https://look.163.com/"},
 }
 
-# 弹幕接入目前只有 B站 / 抖音有对应 fetcher，其余平台不启动弹幕任务
-DANMAKU_PLATFORMS = ("bili", "douyin")
+# 弹幕接入：B站/抖音走原生接口，快手/微博/小红书/网易云走页面消息通道
+DANMAKU_PLATFORMS = tuple(PLATFORMS)
 
 # 输出容器：抖音与新增平台默认 TS、B站默认 FLV（用户可在「录制设置 → 输出格式」里改）
 OUTPUT_FORMAT_AUTO = "自动（抖音 TS · B站 FLV）"
@@ -928,7 +928,7 @@ DEFAULT_SETTINGS = {
     "outdir": "",            # 保存目录（空=导出目录/直播录制/<平台>）
     "retry_delay": 6,        # 断流后重连间隔（秒，录播姬 TimingStreamRetry）
     "max_retry": 30,         # 单场最多重试次数
-    "save_danmaku": True,    # B站 XML + JSONL / 抖音 JSONL
+    "save_danmaku": True,    # 六平台 JSONL；B站另存 XML
     "render_danmaku": True,  # 开录自动启动独立弹幕渲染窗口
     "save_cover": True,      # 录制时保存直播封面（录播姬 SaveStreamCover）
     # 标题命中这些正则时不录（录播姬 TitleFilterPatterns，多个用 ; 分隔）

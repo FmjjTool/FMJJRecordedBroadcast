@@ -489,7 +489,7 @@ def _fetch_with_browser(platform: str, room: str, quality: str) -> dict:
                 context = browser.new_context(
                     user_agent=UA, locale="zh-CN",
                     viewport={"width": 1280, "height": 800})
-                cookies = _context_cookies(platform)
+                cookies = context_cookies(platform)
                 if cookies:
                     try:
                         context.add_cookies(cookies)
@@ -571,7 +571,8 @@ def _poke_playback(page, elapsed: float) -> None:
         pass
 
 
-def _context_cookies(platform: str) -> list[dict]:
+def context_cookies(platform: str) -> list[dict]:
+    """已保存登录态 → Playwright 上下文 Cookie；总开关关闭或未登录时返回空。"""
     pairs = cookie_pairs(_managed_cookie(platform))
     if not pairs:
         return []
