@@ -142,6 +142,9 @@ class GlobalSettingsPage(BasePage):
         self.sched_status = QLabel("")
         self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.sched_status)
+        theme_note = QLabel("配色由全局色板统一维护，页面不提供自定义配色。")
+        theme_note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        v.addWidget(theme_note)
         # 改动即时生效：开关/时间一变就写入配置并立刻对齐主题（无需点保存）
         self.follow_sys_cb.toggled.connect(self._on_follow_system_changed)
         self.sched_enable.toggled.connect(self._on_schedule_changed)
@@ -162,8 +165,8 @@ class GlobalSettingsPage(BasePage):
 
         v.addSpacing(12)
 
-        # ---- 配置与依赖检查 ----
-        v.addWidget(self._card_title("配置与依赖检查"))
+        # ---- 配置信息与缓存清理 ----
+        v.addWidget(self._card_title("配置信息与缓存清理"))
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.info_label.setWordWrap(True)
@@ -178,7 +181,12 @@ class GlobalSettingsPage(BasePage):
         self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(self.clean_result_label)
 
-        # ---- FFmpeg 位置（可选；系统 PATH 优先，未找到时才用这里指定的位置）----
+        v.addSpacing(12)
+
+        # ---- 运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）----
+        v.addWidget(self._card_title("运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）"))
+
+        # FFmpeg 位置（可选；系统 PATH 优先，未找到时才用这里指定的位置）
         ff_row = QHBoxLayout()
         self.ffmpeg_entry = QLineEdit()
         self.ffmpeg_entry.setPlaceholderText(
@@ -200,7 +208,7 @@ class GlobalSettingsPage(BasePage):
         dep_v.setContentsMargins(10, 8, 10, 8)
         dep_v.setSpacing(4)
         dep_head = QHBoxLayout()
-        dep_title = QLabel("检测依赖与其他强依赖")
+        dep_title = QLabel("依赖与可选组件")
         dep_title.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent; border: none;")
         dep_head.addWidget(dep_title)
         dep_head.addStretch(1)
@@ -237,7 +245,7 @@ class GlobalSettingsPage(BasePage):
         v.addSpacing(12)
 
         # ---- AI Skill 下载（内置 Skill 导出到本地，供 AI 助手使用） ----
-        v.addWidget(self._card_title("AI Skill 下载（导出内置 Skill 到本地）"))
+        v.addWidget(self._card_title("AI Skill（导出到本地）"))
         skill_row = QHBoxLayout()
         self._skill_list = list_skills()
         skill_count = len(self._skill_list)

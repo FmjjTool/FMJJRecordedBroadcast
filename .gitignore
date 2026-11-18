@@ -17,6 +17,8 @@ src/music_account/music_accounts.json
 src/music_account/music_groups.json
 # 登录凭据（本地登录状态，含隐私，禁止入库）
 src/netease/cookie.txt
+# 本地数据备份（账号迁移前的快照，不进仓库）
+_backup/
 # 调试截图与工具目录（运行时产物，不进仓库）
 _taobao_debug/
 .workbuddy/

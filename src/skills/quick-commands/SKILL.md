@@ -36,7 +36,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 
 | 快捷短语 | 目标 skill | 一句话定位 |
 | --- | --- | --- |
-| `/约定` | `convention-skill` | 项目强制约定总纲（10 条） |
+| `/约定` | `convention-skill` | 项目强制约定总纲（11 条） |
 | `/Cookie保护` | `cookie-data-protection` | 已存真实 Cookie 绝对禁改 |
 | `/登录` | `cookie-manager` | 统一登录入口与只读取用 |
 | `/核心模块` | `recording-toolbox-core` | 录播工具箱八个核心模块保护 |

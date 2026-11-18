@@ -3,7 +3,7 @@
 「单个解析」「批量导入」已合并到本页：顶部批量输入框一行一个，
 账号主页链接 → 添加账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」。
 - 功能页：批量输入行 / 账号勾选列表 / 采集模式（全部/选中/按组）/ 条数 /
-  定时获取 / 增量模式 / 搜索限流 / 日志
+  会话定时 / 增量模式 / 搜索限流 / 日志
 - 设置页：添加账号（账号名+链接+分组多选）/ 分组管理 / 已配置账号
   （分组多选 + 采集类型下拉 + 保存/删除）
 """
@@ -264,7 +264,7 @@ class InfoAccountsPage(BasePage):
             (40, 30), True, "font-size: 15px;", self._cancel_fetch)
         self.cancel_btn.setEnabled(False)
         fetch_row.addWidget(self.cancel_btn)
-        self.timer_btn = QPushButton("定时获取")
+        self.timer_btn = QPushButton("会话定时")
         self.timer_btn.clicked.connect(self._toggle_timer)
         fetch_row.addWidget(self.timer_btn)
         self.timer_dot = QLabel("○")
@@ -820,7 +820,7 @@ class InfoAccountsPage(BasePage):
         self.prog_label.setText("已取消")
 
     def _set_fetch_ui(self, running: bool):
-        """获取开始/结束时同步暂停/取消按钮状态（手动与定时获取共用）。"""
+        """获取开始/结束时同步暂停/取消按钮状态（手动与会话定时共用）。"""
         self.pause_btn.setEnabled(running)
         self.cancel_btn.setEnabled(running)
         if running:
@@ -1251,7 +1251,7 @@ class InfoAccountsPage(BasePage):
         clear_btn.clicked.connect(lambda *a: _clear())
         win.exec()
 
-    # ---------- 定时获取 ----------
+    # ---------- 会话定时 ----------
     def _toggle_timer(self):
         if self._timer_running:
             self._stop_timer()
@@ -1260,13 +1260,13 @@ class InfoAccountsPage(BasePage):
 
     def _show_timer_dialog(self):
         win = QDialog(self)
-        win.setWindowTitle("定时获取")
+        win.setWindowTitle("会话定时")
         win.setFixedSize(320, 210)
         v = QVBoxLayout(win)
-        t = QLabel("设置定时获取间隔")
+        t = QLabel("设置会话定时间隔")
         t.setProperty("role", "sectionTitle")
         v.addWidget(t, 0, Qt.AlignHCenter)
-        sub = QLabel("按当前采集模式自动获取最新内容（仅在软件打开期间生效）")
+        sub = QLabel("按当前采集模式自动获取最新内容（仅在软件打开期间生效，不是 Windows 计划任务）")
         sub.setProperty("role", "caption")
         v.addWidget(sub, 0, Qt.AlignHCenter)
         row = QHBoxLayout()
@@ -1289,11 +1289,11 @@ class InfoAccountsPage(BasePage):
             self._timer_interval = m * 60
             self._timer_running = True
             win.accept()
-            self.timer_btn.setText("停止定时")
+            self.timer_btn.setText("停止会话定时")
             _set_button_variant(self.timer_btn, "danger")
             self.timer_dot.setText("●")
             self.timer_dot.setStyleSheet("color: palette(link); font-size: 15px;")
-            self.app.toast(f"定时获取已启动（每 {m} 分钟）", "success")
+            self.app.toast(f"会话定时已启动（每 {m} 分钟）", "success")
             # 启动后先执行一次，之后每隔 interval 执行一次（QTimer 替代后台 sleep 循环）
             self._run_timer_fetch()
             self._timer = QTimer(self)
@@ -1312,14 +1312,14 @@ class InfoAccountsPage(BasePage):
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
-        self.timer_btn.setText("定时获取")
+        self.timer_btn.setText("会话定时")
         _set_button_variant(self.timer_btn)
         self.timer_dot.setText("○")
         self.timer_dot.setStyleSheet("font-size: 15px;")
-        self.app.toast("定时获取已停止", "info")
+        self.app.toast("会话定时已停止", "info")
 
     def _run_timer_fetch(self):
-        """定时获取：按当前采集模式（全部/选中/按组）采集最新内容。"""
+        """会话定时：按当前采集模式（全部/选中/按组）采集最新内容。"""
         if not self._timer_running:
             return
         if self._fetching or self._batch_running:
@@ -1360,24 +1360,24 @@ class InfoAccountsPage(BasePage):
             self._fetching = False
             ts = datetime.now().strftime("%H:%M:%S")
             if err:
-                self.log_text.append(f"[{ts}] 定时获取失败: {err}")
-                self.prog_label.setText("定时获取失败")
+                self.log_text.append(f"[{ts}] 会话定时失败: {err}")
+                self.prog_label.setText("会话定时失败")
                 return
             total, _log, new_posts = result
             if cancel_evt.is_set():
-                self.log_text.append(f"[{ts}] 定时获取已取消（已获取 {total} 条）")
+                self.log_text.append(f"[{ts}] 会话定时已取消（已获取 {total} 条）")
                 self.prog_label.setText("已取消")
             else:
-                self.log_text.append(f"[{ts}] 定时获取[{mode}]完成：共 {total} 条（已存入「已获取」）")
+                self.log_text.append(f"[{ts}] 会话定时[{mode}]完成：共 {total} 条（已存入「已获取」）")
             if not self._reveal_queue:
                 refresh_results_count(self.app)
-            # 获取后自动下载（勾选后定时获取也生效：保存+下载一次性）
+            # 获取后自动下载（勾选后会话定时也生效：保存+下载一次性）
             if self.auto_dl_check.isChecked() and new_posts and not cancel_evt.is_set():
                 self._start_auto_download(new_posts)
                 return
             if not self.isVisible():
-                # 用户已切到其他页：提示定时获取仍在后台生效
-                self.app.toast(f"定时获取已在后台完成（共 {total} 条）", "info")
+                # 用户已切到其他页：提示会话定时仍在后台生效
+                self.app.toast(f"会话定时已在后台完成（共 {total} 条）", "info")
 
         self._fetching = True
         self._set_fetch_ui(True)
