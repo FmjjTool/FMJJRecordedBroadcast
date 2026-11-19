@@ -36,7 +36,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 
 | 快捷短语 | 目标 skill | 一句话定位 |
 | --- | --- | --- |
-| `/约定` | `convention-skill` | 项目强制约定总纲（12 条） |
+| `/约定` | `convention-skill` | 项目强制约定总纲（13 条） |
 | `/管理入口` | `convention-skill` | 管理器 / 中心 / 面板的分级与登记 |
 | `/Cookie保护` | `cookie-data-protection` | 已存真实 Cookie 绝对禁改 |
 | `/登录` | `cookie-manager` | 统一登录入口与只读取用 |
@@ -44,6 +44,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 | `/分层` | `layering-contract` | 五层架构与依赖方向 |
 | `/平台适配` | `platform-adapter-policy` | Adapter 契约与回退策略 |
 | `/安全` | `security-baseline` | 密钥、输入、文件、网络、依赖基线 |
+| `/运行中` | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
 | `/数据` | `data-lifecycle` | 存储、迁移、去重、备份 |
 | `/出图` | `image-output-spec` | 程序生成图片的版式与令牌 |
 | `/视觉` | `ui-visual-spec` | 主题、颜色、字号、图标、文案 |
@@ -183,6 +184,13 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 2. Bug 修复必须补回归测试，不能只改代码。
 3. 测试数据隔离，不碰真实 Cookie、真实网络或生产数据库。
 4. 提交前运行适用门禁命令，报告中写实际结果，不虚报通过项。
+
+### /运行中 → `running-instance-guard`
+
+1. 软件在运行（进程 / 窗口 / 托盘 / 端口 / 录制采集中）时，不允许关闭窗口、结束或重启进程。
+2. 需要验证改动只能新建实例：新进程、新端口、独立临时目录。
+3. 重启交给用户操作；用户明确授权时也要先提示录制 / 采集的损坏风险。
+4. 禁止覆盖、替换、删除运行中的 exe、dll 与被占用的配置目录。
 
 ### /功能说明 → `software-feature-guide`
 

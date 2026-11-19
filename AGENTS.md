@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试 |
 | 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
+| 运行保护 | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
 | 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
 | 视觉 / 输出 | `ui-visual-spec`、`image-output-spec` | 屏幕 UI；导出图/报表图/封面图 |
 | 业务领域 | `recording-toolbox-core`、`tcdoc-sync-scope`、`fengming-livestream-summary`、`summarize-article`、`summarize-update` | 对应领域任务 |
@@ -28,6 +29,10 @@
 ## Cookie 数据绝对保护 skill（强制中的强制，所有操作前必读）
 
 完整内容见 [src/skills/cookie-data-protection/SKILL.md](src/skills/cookie-data-protection/SKILL.md)。**所有 Agent 与自动任务绝对不允许改动 Cookie 管理器已保存的真实 Cookie。此条是项目内最高优先级的数据保护禁令，不设置临时授权、确认后覆盖、测试、修复或迁移例外。** 禁止直接/间接写入、覆盖、删除、清空、刷新、迁移、重新加密或修改其保存状态；既有登录、自动同步、备份、清理及核心模块授权均不能放宽本禁令。
+
+## 运行中实例保护 skill（强制阅读）
+
+完整内容见 [src/skills/running-instance-guard/SKILL.md](src/skills/running-instance-guard/SKILL.md)。**只要本软件还在运行（窗口、托盘图标、端口占用、正在录制 / 采集 / 同步），Agent 不得关闭窗口、结束或重启进程，也不得覆盖、替换、删除运行中的 exe 与目录。** 需要验证改动时只能新建实例（新进程、新端口、独立临时目录）；重启由用户自己操作，或用户对本次操作明确授权且已提示录制 / 采集中断风险。
 
 ## 统一登录 skill（涉及账户与认证时强制阅读）
 
@@ -166,3 +171,10 @@
 - 新增入口或数据实体必须在 `software-feature-guide` 登记，并在当日报告写明判定依据与不并入现有层的理由；新增 skill 类型还要同步本文件与 `quick-commands`。
 - 命名不得与约定 9 / 10 / 11 冲突：登录只在「Cookie 管理」，定时只在「任务」页，依赖安装只在全局设置。
 - 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 12。
+
+## 约定 13：腾讯文档真实数据与 skill 同步
+
+- 拉取 / 同步腾讯文档真实数据后，若字段名称、取值范围或枚举口径与 skill 不一致，必须在本轮适时更新对应 skill（`software-feature-guide`、`tcdoc-sync-scope`、直播总结数据库索引等），不能只改代码。
+- 代码枚举、判断逻辑、skill 三处保持一致；取值范围以真实数据为准（例：「可用伴奏形式」为 `无伴奏 / 纯伴奏 / 和声伴奏`，`纯伴奏` 即普通伴奏）。
+- 只读使用本地快照与已授权接口；本条不扩大腾讯文档写入白名单，`tcdoc-sync-scope` 仍是最高约束。
+- 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 13。

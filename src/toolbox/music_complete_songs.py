@@ -288,18 +288,28 @@ def _chorus_form(singer: str) -> str:
 
 
 def _accompaniment_form(results: dict, title: str) -> str:
-    has_pure = False
+    """伴奏形式判断（口径与腾讯表格「可用伴奏形式」一致）。
+
+    - 歌名 / 专辑名带「和声」字样 → 和声伴奏
+    - 带「伴奏」/ instrumental / off vocal，或 5sing 的伴奏模式 → 纯伴奏（即普通伴奏）
+    - 都没有 → 无伴奏
+    """
+    has_plain = False
     for items in results.values():
         for item in items:
             text = f"{item.song_name or ''} {item.album_name or ''}"
             if not _title_matches(text, title):
                 continue
             lowered = text.lower()
-            if "和声伴奏" in text or "伴唱" in text:
+            if "和声" in text:
                 return "和声伴奏"
-            if "伴奏" in text or "instrumental" in lowered or "off vocal" in lowered:
-                has_pure = True
-    return "纯伴奏" if has_pure else "无伴奏"
+            mode = str(getattr(item, "mode", "") or "")
+            if (mode == "伴奏"
+                    or "伴奏" in text
+                    or "instrumental" in lowered
+                    or "off vocal" in lowered):
+                has_plain = True
+    return "纯伴奏" if has_plain else "无伴奏"
 
 
 def _original_artist(results: dict, fallback_singer: str) -> str:
