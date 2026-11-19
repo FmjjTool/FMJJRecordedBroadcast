@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -32,6 +33,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from toolbox import certificate_agreement
 from toolbox import image_render
 
 # ==================== 版式常量 ====================
@@ -202,7 +204,17 @@ ART_TYPE_SUBTITLE = {
 DEFAULT_SUBTITLE = "美工作品 · 二级分发授权"
 
 # 认证号 / 协议编号 / 证书编号格式
-_RE_ARCHIVE = re.compile(r"FMJJ-DB-ART-\d{4}-\d{3,}")
+# 内部认证号：FMJJ-DB-ART-<年份>-<6 位序号>-<8 位校验哈希>
+ARCHIVE_PREFIX = "FMJJ-DB-ART"
+ARCHIVE_SERIAL_DIGITS = 6
+ARCHIVE_HASH_LEN = 8
+_RE_ARCHIVE = re.compile(
+    rf"FMJJ-DB-ART-\d{{4}}-\d{{3,}}(?:-[0-9A-F]{{{ARCHIVE_HASH_LEN}}})?")
+_RE_ARCHIVE_PARTS = re.compile(
+    rf"^FMJJ-DB-ART-(\d{{4}})-(\d{{3,}})(?:-([0-9A-F]{{{ARCHIVE_HASH_LEN}}}))?$")
+# 从文件夹名 / 历史备注等长文本里捞编号（不要求整串就是编号）
+_RE_ARCHIVE_SCAN = re.compile(
+    rf"FMJJ-DB-ART-(\d{{4}})-(\d{{3,}})(?:-([0-9A-F]{{{ARCHIVE_HASH_LEN}}}))?")
 _RE_LICENSE = re.compile(r"ART-LIC-\d{4}-\d{3,}")
 _RE_CERT = re.compile(r"FMJJ-CERT-\d{4}-\d{3,}")
 
@@ -527,6 +539,72 @@ class CertificateData:
         return " · ".join(self.watermark_parts())
 
 
+# ---------- 内部认证号：年份 + 6 位序号 + 8 位校验哈希 ----------
+
+def default_year() -> int:
+    """默认年份：取本机当前年份（页面可手动改）。"""
+    return date.today().year
+
+
+def archive_parts(code: str) -> tuple[int | None, int | None]:
+    """拆分内部认证号，返回 (年份, 序号)；也可从证书文件夹名里识别。"""
+    match = _RE_ARCHIVE_SCAN.search(str(code or ""))
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
+
+
+def archive_base(year: int, serial: int) -> str:
+    """编号主干：FMJJ-DB-ART-年份-6 位序号（不含哈希）。"""
+    return f"{ARCHIVE_PREFIX}-{int(year)}-{int(serial):0{ARCHIVE_SERIAL_DIGITS}d}"
+
+
+def license_no(code: str) -> str:
+    """按内部认证号派生协议编号：ART-LIC-年份-序号（序号位数跟随原编号）。"""
+    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
+    if not match:
+        return ""
+    width = len(match.group(2))
+    return f"ART-LIC-{int(match.group(1))}-{int(match.group(2)):0{width}d}"
+
+
+def _archive_hash_of(code: str) -> str:
+    """取编号末尾的校验哈希；没有则返回空串。"""
+    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
+    return match.group(3) if match else ""
+
+
+def archive_fingerprint(base: str, data: "CertificateData") -> str:
+    """校验哈希：编号主干 + 作品标题 + 授权方 + 授权期限 + 签发日期的 SHA-256 前 8 位。"""
+    payload = "\n".join((
+        str(base or "").strip(),
+        _clean(data.cert_title_text()),
+        _clean(data.cert_author_text()),
+        _clean(data.cert_period_start_text()),
+        _clean(data.cert_period_end_text()),
+        _clean(data.issue_date),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:ARCHIVE_HASH_LEN].upper()
+
+
+def with_fingerprint(code: str, data: "CertificateData") -> str:
+    """给编号补上（或重算）末尾校验哈希。
+
+    只处理 6 位序号的编号；历史遗留的 3 位编号保持原样，避免改动已签发的旧证书号。
+    """
+    if not is_managed_archive_no(code):
+        return str(code or "").strip()
+    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
+    base = archive_base(int(match.group(1)), int(match.group(2)))
+    return f"{base}-{archive_fingerprint(base, data)}"
+
+
+def is_managed_archive_no(code: str) -> bool:
+    """是否为当前规则下的编号（6 位序号，可带校验哈希）。"""
+    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
+    return bool(match) and len(match.group(2)) == ARCHIVE_SERIAL_DIGITS
+
+
 @dataclass
 class ParseResult:
     """文档解析结果：字段 + 复选框匹配 + 解析提示。"""
@@ -828,15 +906,22 @@ def parse_spreadsheet(path: str | Path) -> ParseResult:
 # ==================== 编号建议 ====================
 
 
-def suggest_numbers(year: int | None = None, existing: Iterable[str] = ()) -> dict[str, str]:
-    """按年份给出下一组编号（内部认证号 / 协议编号 / 证书编号）。"""
-    year = year or date.today().year
+def suggest_numbers(year: int | None = None, existing: Iterable[str] = (),
+                    data: CertificateData | None = None) -> dict[str, str]:
+    """按年份给出下一个内部认证号（年份 + 6 位序号 + 校验哈希）。
+
+    `existing` 可以是历史认证号、证书文件夹名或任何含编号的字符串；
+    序号按「该年份已有最大值 + 1」顺延。传入 `data` 时追加校验哈希。
+    """
+    year = int(year or default_year())
     serial = 1
     for code in existing:
-        match = re.search(r"-(\d{4})-(\d{3,})$", str(code))
-        if match and int(match.group(1)) == year:
-            serial = max(serial, int(match.group(2)) + 1)
-    return {"archive_no": f"FMJJ-DB-ART-{year}-{serial:03d}"}
+        found_year, found_serial = archive_parts(str(code))
+        if found_year == year and found_serial:
+            serial = max(serial, found_serial + 1)
+    base = archive_base(year, serial)
+    code = f"{base}-{archive_fingerprint(base, data)}" if data is not None else base
+    return {"archive_no": code}
 
 
 def missing_fields(data: CertificateData) -> list[str]:
@@ -1091,7 +1176,8 @@ def _draw_seal(draw: ImageDraw.ImageDraw, cx: float, cy: float, radius: float,
     draw.polygon(points, fill=SEAL)
     label_font = _font(int(radius * 0.19), bold=True)
     draw.text((cx, cy + radius * 0.52), "内部认证", font=label_font, fill=SEAL, anchor="mm")
-    code = (data.archive_no or "").split("-")[-1]
+    _year, serial = archive_parts(data.archive_no)
+    code = f"{serial:0{ARCHIVE_SERIAL_DIGITS}d}" if serial else ""
     if code:
         code_font = _latin_font(int(radius * 0.16))
         draw.text((cx, cy + radius * 0.78), code, font=code_font, fill=SEAL, anchor="mm")
@@ -1583,16 +1669,24 @@ def _docx_certificate_block(data: CertificateData) -> list[str]:
     ]
     if data.archive_no:
         out.append(_docx_para(f"内部认证号 {data.archive_no}", size=22,
-                              align="center", space_after=240))
+                              align="center", space_after=60))
+    fingerprint = _archive_hash_of(data.archive_no)
+    if fingerprint:
+        out.append(_docx_para(f"校验哈希 {fingerprint}（SHA-256 前 {ARCHIVE_HASH_LEN} 位）",
+                              size=18, align="center", space_after=220, color="6B7280"))
     pairs = (
         ("授权作品", data.cert_title_text()),
         ("作品类型", data.cert_type_text()),
+        ("作品对应歌曲/项目", _clean(data.project_name)),
         ("授权方", data.cert_author_text()),
+        ("联系方式", _clean(data.author_contact)),
         ("主要设计人", data.cert_lead_text()),
         ("协作设计人", data.cert_co_text()),
         ("授权期限", f"{data.cert_period_start_text()} 至 {data.cert_period_end_text()}"),
+        ("证书状态", _clean(data.status)),
         ("签发方", data.licensee),
         ("签发日期", _clean(data.issue_date) or date.today().isoformat()),
+        ("协议编号", license_no(data.archive_no)),
     )
     for label, value in pairs:
         if not str(value or "").strip():
@@ -1604,8 +1698,98 @@ def _docx_certificate_block(data: CertificateData) -> list[str]:
     return out
 
 
-def export_docx(data: CertificateData, body_text: str, out_dir: str | Path) -> str:
-    """导出 Word：证书页 + 协议正文，写入该证书的专属文件夹，可再编辑。"""
+def _docx_body_paragraphs(text: str) -> list[str]:
+    """把协议文本按行转成 Word 段落，识别标题 / 条款 / 附件小标题。"""
+    out: list[str] = []
+    for index, raw in enumerate(str(text or "").splitlines()):
+        line = raw.strip()
+        if not line:
+            continue
+        if index == 0:
+            out.append(_docx_para(line, size=36, bold=True, align="center", space_after=80))
+        elif line.startswith("（单作品"):
+            out.append(_docx_para(line, size=20, align="center", space_after=260,
+                                  color="8A6D3B"))
+        elif line.startswith("附件一") or line.startswith("附件二"):
+            out.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
+            out.append(_docx_para(line, size=28, bold=True, align="center",
+                                  space_before=60, space_after=160))
+        elif re.match(r"^第[一二三四五六七八九十]+条", line):
+            out.append(_docx_para(line, size=25, bold=True, space_before=200, space_after=90))
+        elif re.match(r"^[一二三四五六七八九十]+、", line):
+            out.append(_docx_para(line, size=23, bold=True, space_before=140, space_after=70))
+        elif line in ("授权方确认", "被授权方确认"):
+            out.append(_docx_para(line, size=24, bold=True, space_before=220, space_after=80))
+        else:
+            out.append(_docx_para(line, size=21, space_after=60))
+    return out
+
+
+def _agreement_values(data: CertificateData) -> dict[str, str]:
+    """协议全文占位符 → 软件当前字段值（冲突一律以软件为准）。"""
+    def mark(flag: bool) -> str:
+        return "☑" if flag else "□"
+
+    art_type = data.art_type
+    sample_format = data.sample_format
+    usage_places = set(data.usage_places)
+    watermark_items = set(data.watermark_items)
+    return {
+        "archive_no": _clean(data.archive_no),
+        "license_no": license_no(data.archive_no),
+        "author_name": _clean(data.author_name),
+        "author_contact": _clean(data.author_contact),
+        "manager_rep": _clean(data.manager_rep),
+        "contact_person": _clean(data.contact_person),
+        "title": data.cert_title_text(),
+        "project_name": _clean(data.project_name),
+        "art_type_other": _clean(data.art_type_other) if art_type == "其他" else "",
+        "chk_art_illust": mark(art_type == "曲绘/插画"),
+        "chk_art_cover": mark(art_type == "封面设计"),
+        "chk_art_poster": mark(art_type == "海报"),
+        "chk_art_other": mark(art_type == "其他"),
+        "period_start": data.cert_period_start_text(),
+        "period_end": data.cert_period_end_text(),
+        "author_sign": _clean(data.author_sign) or data.cert_author_text(),
+        "author_sign_date": _clean(data.author_sign_date),
+        "licensee_rep_sign": _clean(data.licensee_rep_sign),
+        "licensee_sign_date": _clean(data.licensee_sign_date),
+        "confirm_no": data.confirm_no(),
+        "watermark_file": data.cert_sample_text(),
+        "sample_other": _clean(data.sample_other) if sample_format == "其他" else "",
+        "chk_fmt_png": mark(sample_format == "PNG"),
+        "chk_fmt_jpg": mark(sample_format == "JPG"),
+        "chk_fmt_pdf": mark(sample_format == "PDF"),
+        "chk_fmt_other": mark(sample_format == "其他"),
+        "wm_author": data.wm_author_text(),
+        "wm_lead": data.wm_lead_text(),
+        "wm_co": data.wm_co_text(),
+        "wm_title": data.wm_title_text(),
+        "wm_archive_no": data.wm_archive_text(),
+        "wm_other": _clean(data.wm_other),
+        "chk_wm_author": mark("授权方署名/圈名" in watermark_items),
+        "chk_wm_lead": mark("主要设计人署名" in watermark_items),
+        "chk_wm_co": mark("协作设计人署名" in watermark_items),
+        "chk_wm_title": mark("作品标题/项目名称" in watermark_items),
+        "chk_wm_archive": mark("内部认证号" in watermark_items),
+        "chk_wm_other": mark("其他约定标识" in watermark_items),
+        "chk_use_db": mark("数据库条目展示" in usage_places),
+        "chk_use_pub": mark("网络宣发" in usage_places),
+        "chk_use_free": mark("非盈利无料" in usage_places),
+        "chk_use_other": mark("其他" in usage_places),
+        "usage_other": _clean(data.usage_other),
+        "lead_designer": data.cert_lead_text(),
+        "co_designers": data.cert_co_text(),
+        "credit_note": _clean(data.credit_note),
+    }
+
+
+def export_docx(data: CertificateData, out_dir: str | Path) -> str:
+    """导出 Word：证书页 + 完整协议（正文 + 附件一 + 附件二），可再编辑。
+
+    正文用内置全文按软件字段填充：导入文档里的旧值不会覆盖当前录入，
+    出现冲突时以软件生成为准。
+    """
     import zipfile
 
     missing = missing_fields(data)
@@ -1619,13 +1803,8 @@ def export_docx(data: CertificateData, body_text: str, out_dir: str | Path) -> s
     body.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
     body.append(_docx_para("协议正文", size=32, bold=True, align="center",
                            space_after=200))
-    lines = [line.rstrip() for line in str(body_text or "").splitlines()]
-    if any(line.strip() for line in lines):
-        for line in lines:
-            body.append(_docx_para(line, size=21, space_after=40))
-    else:
-        body.append(_docx_para("（未导入协议正文，可在 Word 里补充）", size=21,
-                               color="6B7280"))
+    body.extend(_docx_body_paragraphs(
+        certificate_agreement.agreement_text(_agreement_values(data))))
 
     document = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

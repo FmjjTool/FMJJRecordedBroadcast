@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+from PySide6.QtGui import QDesktopServices, QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
@@ -235,7 +235,6 @@ class CertificateMakerPage(BasePage):
         self._history_records: list[dict] = []
         self._suspend_signals = False
         self._auto_end = True          # 授权截止是否仍在跟随「起始 +3 年」
-        self._source_text = ""         # 导入的协议正文（导出 Word 用）
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -254,6 +253,7 @@ class CertificateMakerPage(BasePage):
         self._save_timer.timeout.connect(self._save_config)
 
         self._build_ui()
+        self._restore_year(self._section.get("number_year"))
         self._restore_form(self._section.get("data") or {})
         self.auto_watermark_check.setChecked(
             bool(self._section.get("auto_watermark", True)))
@@ -290,6 +290,7 @@ class CertificateMakerPage(BasePage):
             "images": [str(path) for path in self._images],
             "out_dir": str(self._out_dir),
             "auto_watermark": self.auto_watermark_check.isChecked(),
+            "number_year": self._selected_year() or 0,
         }
         try:
             with open(self._config_path(), "w", encoding="utf-8") as handle:
@@ -326,7 +327,7 @@ class CertificateMakerPage(BasePage):
         self.paste_btn.clicked.connect(self._on_paste)
         toolbar.addWidget(self.paste_btn)
         self.number_btn = QPushButton("自动编号")
-        self.number_btn.setToolTip("按当年已有证书的序号递增，自动生成内部认证号")
+        self.number_btn.setToolTip("按所选年份已有证书的 6 位序号顺延，并自动计算校验码")
         self.number_btn.clicked.connect(self._on_auto_number)
         toolbar.addWidget(self.number_btn)
         self.dir_btn = QPushButton("输出目录")
@@ -339,7 +340,8 @@ class CertificateMakerPage(BasePage):
         toolbar.addWidget(self.export_btn)
         self.word_btn = QPushButton("导出 Word")
         self.word_btn.setToolTip(
-            "导出「证书页 + 协议正文」的 .docx（可继续在 Word 里编辑）")
+            "导出「证书页 + 完整协议（正文 / 附件一 / 附件二）」的 .docx，"
+            "正文按软件当前字段填充，冲突以软件为准")
         self.word_btn.clicked.connect(self._on_export_docx)
         toolbar.addWidget(self.word_btn)
         root.addLayout(toolbar)
@@ -429,16 +431,31 @@ class CertificateMakerPage(BasePage):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
         self.number_edits: dict[str, QLineEdit] = {}
-        for row, (key, label, placeholder) in enumerate((
-            ("archive_no", "内部认证号", "FMJJ-DB-ART-年份-序号"),
-        )):
-            grid.addWidget(_field_label(label, key), row, 0)
-            edit = QLineEdit()
-            edit.setPlaceholderText(placeholder)
-            edit.textChanged.connect(self._on_field_changed)
-            self.number_edits[key] = edit
-            grid.addWidget(edit, row, 1)
+        self.year_combo = QComboBox()
+        self.year_combo.setToolTip(
+            "默认自动取本机当前年份；也可手动指定年份，序号按该年份顺延")
+        self.year_combo.addItem(f"自动（本机 {engine.default_year()}）", 0)
+        for year in range(engine.default_year() - 6, engine.default_year() + 5):
+            self.year_combo.addItem(str(year), year)
+        self.year_combo.currentIndexChanged.connect(self._on_year_changed)
+        grid.addWidget(QLabel("编号年份"), 0, 0)
+        grid.addWidget(self.year_combo, 0, 1)
+        grid.setColumnStretch(1, 1)
+        # 编号整串较长（含校验码），单独占满一行，避免被输入框宽度截断
+        grid.addWidget(_field_label("内部认证号", "archive_no"), 1, 0, 1, 2)
+        edit = QLineEdit()
+        edit.setPlaceholderText("FMJJ-DB-ART-年份-6位序号-8位校验码")
+        # 编号是等宽字母数字串，用等宽字体压缩宽度，保证 30 位整串一眼看全
+        number_font = QFont(edit.font())
+        number_font.setFamilies(["Consolas", "Courier New"])
+        edit.setFont(number_font)
+        edit.textChanged.connect(self._on_field_changed)
+        self.number_edits["archive_no"] = edit
+        grid.addWidget(edit, 2, 0, 1, 2)
         layout.addLayout(grid)
+        layout.addWidget(_hint(
+            "编号格式：FMJJ-DB-ART-年份-6 位序号-8 位校验码；序号按所选年份已有证书顺延，"
+            "校验码由编号与作品信息自动计算。"))
         return frame
 
     def _build_work_card(self) -> QWidget:
@@ -961,24 +978,79 @@ class CertificateMakerPage(BasePage):
         self._on_field_changed()
 
     def _maybe_auto_number(self) -> None:
-        """内部认证号为空时按当年历史序号自动补一个。"""
+        """内部认证号为空时按所选年份历史序号自动补一个；已有编号则核对校验码。"""
         edit = self.number_edits.get("archive_no")
-        if edit is None or edit.text().strip():
+        if edit is None:
             return
-        numbers = engine.suggest_numbers(existing=self._existing_codes())
-        value = numbers.get("archive_no") or ""
-        if value:
-            previous = self._suspend_signals
-            self._suspend_signals = True
-            try:
-                edit.setText(value)
-            finally:
-                self._suspend_signals = previous
-            self._on_field_changed()
+        if not edit.text().strip():
+            self._apply_auto_number()
+            return
+        self._sync_fingerprint()
+
+    def _selected_year(self) -> int | None:
+        """编号年份：0 表示自动（本机当前年份）。"""
+        value = self.year_combo.currentData()
+        return int(value) if value else None
+
+    def _restore_year(self, value) -> None:
+        try:
+            year = int(value or 0)
+        except (TypeError, ValueError):
+            year = 0
+        index = self.year_combo.findData(year)
+        if index < 0:
+            return
+        self.year_combo.blockSignals(True)
+        try:
+            self.year_combo.setCurrentIndex(index)
+        finally:
+            self.year_combo.blockSignals(False)
+
+    def _on_year_changed(self, *_args) -> None:
+        """切换编号年份后按该年份已有证书重新顺延序号。"""
+        if self._suspend_signals:
+            return
+        self._apply_auto_number()
+
+    def _apply_auto_number(self) -> None:
+        """按所选年份（自动=本机年份）生成 6 位序号 + 校验码。"""
+        numbers = engine.suggest_numbers(
+            year=self._selected_year(), existing=self._existing_codes(),
+            data=self._collect_data(),
+        )
+        edit = self.number_edits.get("archive_no")
+        if edit is None:
+            return
+        previous = self._suspend_signals
+        self._suspend_signals = True
+        try:
+            edit.setText(numbers.get("archive_no", ""))
+        finally:
+            self._suspend_signals = previous
+        self._on_field_changed()
+
+    def _sync_fingerprint(self) -> None:
+        """作品信息改动后重算编号末尾的校验码（只处理 6 位序号的新编号）。"""
+        edit = self.number_edits.get("archive_no")
+        if edit is None:
+            return
+        current = edit.text().strip()
+        if not engine.is_managed_archive_no(current):
+            return
+        wanted = engine.with_fingerprint(current, self._collect_data())
+        if not wanted or wanted == current:
+            return
+        previous = self._suspend_signals
+        self._suspend_signals = True
+        try:
+            edit.setText(wanted)
+        finally:
+            self._suspend_signals = previous
 
     def _on_field_changed(self, *_args) -> None:
         if self._suspend_signals:
             return
+        self._sync_fingerprint()
         self._validate_required()
         self._refresh_notes()
         self._schedule_preview()
@@ -1263,20 +1335,13 @@ class CertificateMakerPage(BasePage):
         self.source_label.setText("正在解析…")
 
         def work():
-            result = engine.parse_file(path)
-            try:
-                text = engine.load_document_text(path)
-            except Exception:  # noqa: BLE001 - 读不到正文不影响字段解析
-                text = ""
-            return result, text
+            return engine.parse_file(path)
 
-        def done(payload, error):
-            if error or not payload:
+        def done(result, error):
+            if error or not result:
                 self.source_label.setText("解析失败")
                 self.app.toast(f"解析失败：{error}", "error")
                 return
-            result, text = payload
-            self._source_text = text
             self._apply_parse(result)
 
         run_bg(work, done, owner=self)
@@ -1289,13 +1354,10 @@ class CertificateMakerPage(BasePage):
         if not text:
             self.app.toast("没有粘贴内容", "warning")
             return
-        self._source_text = text
         self._apply_parse(engine.parse_document(text, source="粘贴文本"))
 
     def _on_auto_number(self) -> None:
-        numbers = engine.suggest_numbers(existing=self._existing_codes())
-        for key, edit in self.number_edits.items():
-            edit.setText(numbers.get(key, edit.text()))
+        self._apply_auto_number()
 
     def _existing_codes(self) -> list[str]:
         codes: list[str] = []
@@ -1375,7 +1437,7 @@ class CertificateMakerPage(BasePage):
         run_bg(work, done, owner=self)
 
     def _on_export_docx(self) -> None:
-        """导出 Word：证书页 + 协议正文（标准文档）。"""
+        """导出 Word：证书页 + 完整协议（正文 + 附件一 + 附件二）。"""
         data = self._collect_data()
         missing = engine.missing_fields(data)
         if missing:
@@ -1387,7 +1449,7 @@ class CertificateMakerPage(BasePage):
             return
         try:
             self._out_dir.mkdir(parents=True, exist_ok=True)
-            path = engine.export_docx(data, self._source_text, self._out_dir)
+            path = engine.export_docx(data, self._out_dir)
         except Exception as exc:  # noqa: BLE001 - 导出失败直接提示
             self.app.toast(f"导出 Word 失败：{exc}", "error")
             return
