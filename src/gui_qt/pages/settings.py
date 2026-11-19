@@ -350,6 +350,14 @@ class GlobalSettingsPage(BasePage):
         b.clicked.connect(slot)
         return b
 
+    # 状态行统一配色：正常=次级灰、检测通过=绿、异常=红（两条状态行共用同一套规则）
+    _STATUS_TONES = {"muted": "placeholder-text", "ok": "link-visited", "warn": "bright-text"}
+
+    def _set_status(self, label, text, tone="muted"):
+        label.setText(text)
+        color = self._STATUS_TONES.get(tone, "placeholder-text")
+        label.setStyleSheet(f"color: palette({color}); font-size: 11px;")
+
     # ---- 逻辑 ----
     def on_show(self):
         cfg = load_convert_config()
@@ -385,7 +393,7 @@ class GlobalSettingsPage(BasePage):
 
     # ---- 文件夹锁定（锁定后拖入文件夹不改变，直到解锁） ----
     def _refresh_workdir_status(self):
-        """工作目录状态行：日期子文件夹检测 + 锁定标记。"""
+        """工作目录状态行：日期子文件夹检测 + 锁定标记（通过=绿 / 异常=红）。"""
         wd = self.workdir_entry.text().strip()
         if not wd:
             return
@@ -393,19 +401,19 @@ class GlobalSettingsPage(BasePage):
         if os.path.isdir(wd):
             ok = has_date_subfolders(wd)
             hint = "已检测到日期子文件夹" if ok else "无日期子文件夹"
-            self.workdir_status.setText(f"{lock}{hint} · {wd}")
-            self.workdir_status.setStyleSheet(
-                "color: palette(link-visited); font-size: 11px;" if ok else "color: palette(bright-text); font-size: 11px;")
+            self._set_status(self.workdir_status, f"{lock}{hint} · {wd}",
+                             "ok" if ok else "warn")
         else:
-            self.workdir_status.setText(f"{lock}目录不存在: {wd}")
-            self.workdir_status.setStyleSheet("color: palette(bright-text); font-size: 11px;")
+            self._set_status(self.workdir_status, f"{lock}目录不存在: {wd}", "warn")
 
     def _refresh_exportdir_status(self):
-        """导出目录状态行：当前路径 + 锁定标记。"""
+        """导出目录状态行：当前路径 + 锁定标记（目录可用=绿 / 不存在=红）。"""
         lock = "已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
         exd = self.exportdir_entry.text().strip() or str(get_export_dir())
-        self.exportdir_status.setText(f"{lock}当前: {exd}")
-        self.exportdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        if os.path.isdir(exd):
+            self._set_status(self.exportdir_status, f"{lock}当前: {exd}", "ok")
+        else:
+            self._set_status(self.exportdir_status, f"{lock}目录不存在: {exd}", "warn")
 
     def _on_workdir_lock_changed(self, checked):
         cfg = load_convert_config()
@@ -577,8 +585,7 @@ class GlobalSettingsPage(BasePage):
                 return
         set_export_dir(path)
         lock = "已锁定 · " if self.exportdir_lock_cb.isChecked() else ""
-        self.exportdir_status.setText(f"{lock}当前: {path}")
-        self.exportdir_status.setStyleSheet("color: palette(link-visited); font-size: 11px;")
+        self._set_status(self.exportdir_status, f"{lock}当前: {path}", "ok")
         self.app.toast("导出目录已保存", "success")
 
     def _info_text(self, ffmpeg_ok=None) -> str:
