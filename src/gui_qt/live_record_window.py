@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
-    QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
+    QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton, QSpinBox, QSplitter,
     QStackedWidget, QStatusBar, QTableView, QVBoxLayout, QWidget,
 )
 
@@ -1784,6 +1784,43 @@ class TimecodeDialog(QDialog):
 
 # ==================== 主窗口 ====================
 
+def collect_activity(panes) -> dict:
+    """汇总各平台的录制 / 监控状态。
+
+    panes: {平台 key: pane}，pane 需要 .manager（running / anchors / is_recording /
+    output_of）与 .pinfo。抽成纯函数，关闭流程与测试共用。
+    """
+    recording, monitoring = [], []
+    for key, pane in (panes or {}).items():
+        manager = getattr(pane, "manager", None)
+        if manager is None:
+            continue
+        name = (getattr(pane, "pinfo", None) or {}).get("name") or key
+        if getattr(manager, "running", False):
+            monitoring.append({"platform": key, "name": name})
+        try:
+            anchors = list(manager.anchors)
+        except Exception:
+            anchors = []
+        for anchor in anchors:
+            try:
+                active = bool(anchor.recording) and manager.is_recording(anchor)
+            except Exception:
+                active = False
+            if not active:
+                continue
+            try:
+                output = manager.output_of(anchor)
+            except Exception:
+                output = ""
+            recording.append({
+                "platform": key,
+                "name": anchor.name or anchor.room,
+                "output": output,
+            })
+    return {"recording": recording, "monitoring": monitoring}
+
+
 class LiveRecordWindow(QMainWindow):
     """直播录制二级界面：底部切换六个平台，各平台列表互不影响。"""
 
@@ -2017,15 +2054,9 @@ class LiveRecordWindow(QMainWindow):
         self.statusBar().showMessage(msg, 4000)
 
     def closeEvent(self, event):
-        active = sum(p.manager.active_count() for p in self.panes.values())
-        if active:
-            r = QMessageBox.question(
-                self, "确认关闭",
-                "当前有 %d 个录制任务在运行，关闭窗口会停止全部录制。确定关闭？" % active,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if r != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
+        if not self.confirm_shutdown(self):
+            event.ignore()
+            return
         self._timer.stop()
         self.save_state()
         for p in self.panes.values():
@@ -2039,6 +2070,105 @@ class LiveRecordWindow(QMainWindow):
         self.save_state()
         for p in self.panes.values():
             p.manager.shutdown()
+
+    # ==================== 关闭前收尾（停止录制 → 打包） ====================
+    def activity(self) -> dict:
+        """当前录制 / 监控状态，供关闭窗口与退出软件时判断。"""
+        return collect_activity(self.panes)
+
+    def confirm_shutdown(self, parent=None) -> bool:
+        """关闭窗口前的确认：录制中提示可能损坏文件，确认后停止并打包。"""
+        act = self.activity()
+        if not act["recording"] and not act["monitoring"]:
+            return True
+        parent = parent or self
+
+        box = QMessageBox(parent)
+        box.setWindowTitle("确认关闭")
+        box.setIcon(QMessageBox.Warning)
+        if act["recording"]:
+            names = "、".join(item["name"] for item in act["recording"][:5])
+            more = " 等" if len(act["recording"]) > 5 else ""
+            box.setText(f"正在录制 {len(act['recording'])} 场：{names}{more}")
+            box.setInformativeText(
+                "直接关闭可能损坏正在写入的文件（丢文件尾、打不开、花屏）。\n"
+                "点「停止并打包后关闭」会逐个停止录制、等 ffmpeg 写完，"
+                "再把分段合并、封装成 mp4 后关闭。")
+            ok = box.addButton("停止并打包后关闭", QMessageBox.AcceptRole)
+        else:
+            names = "、".join(item["name"] for item in act["monitoring"][:6])
+            box.setText(f"监控正在运行：{names}")
+            box.setInformativeText("关闭窗口会停止开播检测；当前没有正在写入的录制文件。")
+            ok = box.addButton("停止监控并关闭", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(ok)
+        box.exec()
+        if box.clickedButton() is not ok:
+            return False
+        self.stop_and_package(parent)
+        return True
+
+    def stop_and_package(self, parent=None) -> bool:
+        """逐个停止录制 → 等文件写完 → 合并分段并封装 mp4（显示进度）。"""
+        act = self.activity()
+        outputs = [item["output"] for item in act["recording"] if item["output"]]
+        total = max(1, len(outputs))
+        parent = parent or self
+
+        dlg = QProgressDialog("正在停止录制…", "", 0, total, parent)
+        dlg.setWindowTitle("收尾打包")
+        dlg.setCancelButton(None)
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.show()
+        QApplication.processEvents()
+
+        for pane in self.panes.values():
+            try:
+                pane.manager.stop_monitor()
+            except Exception:
+                pass
+        for pane in self.panes.values():
+            for anchor in list(pane.manager.anchors):
+                if not anchor.recording:
+                    continue
+                try:
+                    dlg.setLabelText(f"正在停止「{anchor.name or anchor.room}」并写完文件…")
+                    QApplication.processEvents()
+                    pane.manager.stop_record(anchor, reason="关闭前收尾")
+                except Exception:
+                    pass
+            try:
+                pane.model.refresh_all()
+            except Exception:
+                pass
+
+        results = []
+        if outputs:
+            from toolbox import live_shutdown
+
+            def progress(done, count, text):
+                dlg.setMaximum(max(1, count))
+                dlg.setValue(max(0, done - 1))
+                dlg.setLabelText(text)
+                QApplication.processEvents()
+
+            results = live_shutdown.package_many(outputs, progress=progress)
+        dlg.setValue(dlg.maximum())
+        dlg.close()
+
+        failed = [item for item in results if not item.get("ok")]
+        if failed:
+            detail = "\n".join(
+                f"{os.path.basename(item.get('source', ''))}：{item.get('message', '')}"
+                for item in failed[:4])
+            QMessageBox.warning(parent, "打包未全部完成",
+                                f"以下文件没打包成功，原始录制文件已保留：\n{detail}")
+        elif results:
+            self.toast(f"已停止录制并打包 {len(results)} 个文件", "info")
+        return True
 
 
 def open_live_record_window(app, platform="douyin", room=""):

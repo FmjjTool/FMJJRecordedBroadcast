@@ -13,8 +13,8 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMenu, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QSystemTrayIcon,
-    QVBoxLayout, QWidget,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
+    QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -462,7 +462,16 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def quit_from_tray(self, *_args):
-        """托盘退出：走与关闭窗口相同的清理流程，然后结束进程。"""
+        """托盘退出：先停止录制并打包，再走与关闭窗口相同的清理流程。"""
+        lrw = getattr(self, "live_record_win", None)
+        if lrw is not None:
+            try:
+                act = lrw.activity()
+            except Exception:
+                act = None
+            if act and (act["recording"] or act["monitoring"]):
+                if not lrw.stop_and_package(self):
+                    return
         self._quitting = True
         self.close()
 
@@ -904,12 +913,57 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         cfg = load_convert_config()
-        if (not self._quitting and self._tray is not None
-                and bool(cfg.get("close_to_tray", True))):
-            event.ignore()
-            self.hide()
-            self._notify_background()
-            return
+        lrw = getattr(self, "live_record_win", None)
+        act = self._live_activity()
+        has_activity = bool(act and (act["recording"] or act["monitoring"]))
+        background = (not self._quitting and self._tray is not None
+                      and bool(cfg.get("close_to_tray", True)))
+        if background:
+            if has_activity:
+                choice = self._ask_close_with_live(act)
+                if choice == "cancel":
+                    event.ignore()
+                    return
+                if choice == "quit":
+                    if lrw is not None and not lrw.stop_and_package(self):
+                        event.ignore()
+                        return
+                    self._quitting = True
+                else:
+                    event.ignore()
+                    self.hide()
+                    self._notify_background()
+                    return
+            else:
+                event.ignore()
+                self.hide()
+                self._notify_background()
+                return
+        elif has_activity and not self._quitting:
+            # 没有后台模式：关闭即退出，先确认再停止录制并打包
+            box = QMessageBox(self)
+            box.setWindowTitle("确认退出")
+            box.setIcon(QMessageBox.Warning)
+            if act["recording"]:
+                names = "、".join(item["name"] for item in act["recording"][:5])
+                box.setText(f"正在录制 {len(act['recording'])} 场：{names}")
+                box.setInformativeText(
+                    "直接退出可能损坏正在写入的文件。\n"
+                    "点「停止并打包后退出」会逐个停止录制、等文件写完，"
+                    "再把分段合并、封装成 mp4 后退出。")
+                ok = box.addButton("停止并打包后退出", QMessageBox.AcceptRole)
+            else:
+                box.setText("监控正在运行")
+                box.setInformativeText("退出会停止开播检测；当前没有正在写入的录制文件。")
+                ok = box.addButton("停止监控并退出", QMessageBox.AcceptRole)
+            box.addButton("取消", QMessageBox.RejectRole)
+            box.setDefaultButton(ok)
+            box.exec()
+            if box.clickedButton() is not ok:
+                event.ignore()
+                return
+            if lrw is not None:
+                lrw.stop_and_package(self)
         self._quitting = True
         self._closed = True
         self.page_preloader.stop()
@@ -917,7 +971,6 @@ class MainWindow(QMainWindow):
             self.performance_monitor.stop()
         self.page_lifecycle.shutdown()
         # 直播录制二级窗口（独立窗口，随主程序一起收尾）
-        lrw = getattr(self, "live_record_win", None)
         if lrw is not None:
             try:
                 lrw.shutdown()
@@ -930,6 +983,45 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             QTimer.singleShot(0, app.quit)
+
+    def _live_activity(self):
+        """直播录制的录制 / 监控状态；窗口没打开时返回 None。"""
+        lrw = getattr(self, "live_record_win", None)
+        if lrw is None:
+            return None
+        try:
+            return lrw.activity()
+        except Exception:
+            return None
+
+    def _ask_close_with_live(self, act) -> str:
+        """后台模式下带录制 / 监控关闭主窗口：返回 hide / quit / cancel。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("正在录制")
+        box.setIcon(QMessageBox.Warning)
+        if act["recording"]:
+            names = "、".join(item["name"] for item in act["recording"][:5])
+            more = " 等" if len(act["recording"]) > 5 else ""
+            box.setText(f"正在录制 {len(act['recording'])} 场：{names}{more}")
+            box.setInformativeText(
+                "关闭主窗口会隐藏到系统托盘，录制继续，不会损坏文件。\n"
+                "要退出软件请选「停止录制、打包并退出」。")
+            hide_btn = box.addButton("隐藏到托盘继续录制", QMessageBox.AcceptRole)
+        else:
+            names = "、".join(item["name"] for item in act["monitoring"][:6])
+            box.setText(f"监控正在运行：{names}")
+            box.setInformativeText("关闭主窗口会隐藏到系统托盘，监控继续。")
+            hide_btn = box.addButton("隐藏到托盘继续监控", QMessageBox.AcceptRole)
+        quit_btn = box.addButton("停止录制、打包并退出", QMessageBox.DestructiveRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(hide_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is hide_btn:
+            return "hide"
+        if clicked is quit_btn:
+            return "quit"
+        return "cancel"
 
     # ==================== 回车键统一分发 ====================
 
