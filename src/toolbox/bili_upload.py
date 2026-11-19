@@ -10,9 +10,10 @@ import subprocess
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from contextlib import contextmanager, ExitStack
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import requests
 
@@ -27,8 +28,9 @@ DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～",
 SOURCE_PLATFORMS = ("抖子", "B站")
 # 预上传节点按序尝试：某个节点的域名/连接不通时换下一个，避免整场投稿卡在第 1 个分片。
 UPLOAD_CDNS = ("bda2", "alia", "cos")
-UPLOAD_ATTEMPTS = 4      # 单个分片最多尝试次数
-UPLOAD_BACKOFF = 1.0     # 重试退避起点（秒），逐次翻倍
+UPLOAD_THREADS = 3       # 并行分片线程数（与 biliup 默认一致）
+UPLOAD_ATTEMPTS = 10     # 单个分片最多尝试次数
+UPLOAD_BACKOFF = 1.0     # 重试退避起点（秒），逐次翻倍、上限 8 秒
 
 
 def today_compact():
@@ -308,6 +310,7 @@ class BiliUploader:
         # 上传节点一律直连：环境代理（HTTP_PROXY/HTTPS_PROXY）常让分片 PUT 连不上，
         # 且失败时只剩一句“网络错误”，很难判断是代理还是节点的问题。
         self.upos.trust_env = False
+        self._lines = None
         self.cancel = cancel or threading.Event()
         self.progress = on_progress or (lambda done, total, text: None)
         self.history = history or UploadHistory()
@@ -366,25 +369,73 @@ class BiliUploader:
                                            "https://member.bilibili.com/x/vupre/web/archive/pre"))
 
     def _upload_video(self, path, complete_before, total_size):
-        """按 CDN 节点依次尝试；只有本文件还没传上任何分片时才换节点，避免重复上传。"""
+        """按线路依次尝试（参考 biliup）：一条线路整段失败才换下一条，避免重复上传。"""
         path = Path(path)
         size = path.stat().st_size
         before = (size, path.stat().st_mtime_ns)
+        lines = self._upload_lines()
         failures = []
-        for position, upcdn in enumerate(UPLOAD_CDNS):
+        for position, line in enumerate(lines):
+            name = str(line.get("upcdn") or "upos")
             try:
-                return self._upload_via_node(path, size, before, upcdn, complete_before, total_size)
+                return self._upload_via_line(path, size, before, line, complete_before, total_size)
             except UploadNodeError as error:
-                failures.append(f"{upcdn}：{error}")
-                if position + 1 < len(UPLOAD_CDNS):
+                failures.append(f"{name}：{error}")
+                if position + 1 < len(lines):
+                    following = str(lines[position + 1].get("upcdn") or "下一条")
                     self.progress(complete_before, total_size,
-                                  f"{upcdn} 节点不可用（{error}），改用 {UPLOAD_CDNS[position + 1]} 重试 {path.name}")
-        raise UploadError("上传节点都没能完成（" + "；".join(failures) + "）；本地视频保留")
+                                  f"{name} 线路不可用（{error}），改用 {following} 重试 {path.name}")
+        raise UploadError("上传线路都没能完成（" + "；".join(failures) + "）；本地视频保留")
 
-    def _upload_via_node(self, path, size, before, upcdn, complete_before, total_size):
+    def _upload_lines(self):
+        """预上传线路：优先用 B 站 ?r=probe 的实测结果，失败再退回固定清单。"""
+        if self._lines is None:
+            self._lines = self._probe_lines()
+        return self._lines or [{"upcdn": cdn, "probe_version": "20211012"} for cdn in UPLOAD_CDNS]
+
+    def _probe_lines(self):
+        """问 B 站要可选上传线路，并行测延迟后按快慢排序；任何异常都退回空表。"""
+        try:
+            data = self._json(self.member, "GET", "https://member.bilibili.com/preupload",
+                              params={"r": "probe"})
+        except UploadError:
+            return []
+        lines = [line for line in (data.get("lines") or [])
+                 if isinstance(line, dict) and str(line.get("os") or "") == "upos"
+                 and line.get("query") and line.get("probe_url")]
+        if not lines:
+            return []
+        costs = {}
+
+        def cost(line):
+            start = time.monotonic()
+            try:
+                self.member.get("https:" + str(line["probe_url"]), timeout=(2, 3))
+            except requests.RequestException:
+                return None
+            return time.monotonic() - start
+
+        pool = ThreadPoolExecutor(max_workers=min(8, len(lines)))
+        try:
+            jobs = {pool.submit(cost, line): line for line in lines}
+            for job in as_completed(list(jobs), timeout=6):
+                try:
+                    value = job.result()
+                except Exception:
+                    continue
+                if value is not None:
+                    costs[str(jobs[job]["query"])] = value
+        except Exception:
+            pass
+        finally:
+            pool.shutdown(wait=False)
+        ordered = sorted(lines, key=lambda line: costs.get(str(line["query"]), float("inf")))
+        return [dict(parse_qsl(str(line["query"]))) for line in ordered]
+
+    def _upload_via_line(self, path, size, before, line, complete_before, total_size):
         pre = self._json(self.member, "GET", "https://member.bilibili.com/preupload", params={
             "profile": "ugcfx/bup", "name": path.name, "size": size, "r": "upos", "ssl": 0,
-            "version": "2.14.0", "build": "2100400", "upcdn": upcdn, "probe_version": "20211012"})
+            "version": "2.14.0", "build": "2100400", "probe_version": "20211012", **line})
         if pre.get("OK") != 1:
             raise UploadError("预上传被拒绝，请在官方投稿页面检查账号")
         endpoint = str(pre.get("endpoint") or "")
@@ -405,36 +456,94 @@ class BiliUploader:
             "partsize": chunk_size, "biz_id": pre["biz_id"]})
         if init.get("OK") != 1 or not init.get("upload_id"):
             raise UploadNodeError("上传任务初始化失败")
-        chunks, parts = math.ceil(size / chunk_size), []
-        with open(path, "rb") as stream:
-            for number in range(chunks):
-                self._check_cancel()
-                chunk = stream.read(chunk_size)
-                start = number * chunk_size
-                if not chunk:
-                    raise UploadError("上传期间文件被截断，请重新选择")
-                response, reason = self._put_chunk(url, headers, chunk, init["upload_id"],
-                                                   number, chunks, start, size)
-                if reason:
-                    detail = f"第 {number + 1}/{chunks} 个分片上传失败（{reason}）"
-                    status = response.status_code if response is not None else 0
-                    # 4xx 多半是鉴权/参数问题，换节点没用；5xx、超时、断连、504 网关超时都算节点故障。
-                    if 400 <= status < 500 and status not in (408, 429):
-                        raise UploadError(detail + "；本地视频保留")
-                    raise UploadNodeError(detail)
-                parts.append({"partNumber": number + 1, "eTag": response.headers.get("ETag", "etag").strip('"')})
-                self.progress(complete_before + start + len(chunk), total_size, f"上传 {path.name} · {number + 1}/{chunks}")
+        chunks = math.ceil(size / chunk_size)
+        parts = self._upload_chunks(url, headers, path, chunk_size, chunks, size,
+                                    init["upload_id"], complete_before, total_size)
         if (path.stat().st_size, path.stat().st_mtime_ns) != before:
             raise UploadError("上传期间视频变化，本次不投稿")
-        result = self._json(self.upos, "POST", url, headers=headers, json={"parts": parts}, params={
-            "output": "json", "name": path.name, "profile": "ugcfx/bup",
-            "uploadId": init["upload_id"], "biz_id": pre["biz_id"]})
+        # 合并失败只影响这一条线路的重传成本，多试几次（biliup 也是重试合并）。
+        result = {}
+        for attempt in range(5):
+            try:
+                result = self._json(self.upos, "POST", url, headers=headers, json={"parts": parts}, params={
+                    "output": "json", "name": path.name, "profile": "ugcfx/bup",
+                    "uploadId": init["upload_id"], "biz_id": pre["biz_id"]})
+            except UploadError as error:
+                if attempt == 4 or "412" in str(error):
+                    raise
+                self.cancel.wait(5 + attempt * 5)
+                continue
+            if result.get("OK") == 1:
+                break
+            self.cancel.wait(5 + attempt * 5)
         if result.get("OK") != 1:
             raise UploadError("分片合并失败（" + str(result.get("message") or f"code {result.get('code')}") + "），本次不投稿")
         if not result.get("key"):
             raise UploadError("分片合并未返回文件标识，本次不投稿")
         return {"filename": os.path.splitext(str(result["key"]).lstrip("/"))[0],
                 "title": path.stem[:80], "desc": "", "cid": pre["biz_id"]}
+
+    def _upload_chunks(self, url, headers, path, chunk_size, chunks, size, upload_id,
+                       complete_before, total_size):
+        """多线程并行传分片：单连接被限速、网关空闲超时时更快，也不容易整段卡住。"""
+        parts = [None] * chunks
+        errors, lock = [], threading.Lock()
+        cursor, finished = [0], [0]
+
+        def worker():
+            while not self.cancel.is_set():
+                with lock:
+                    number = cursor[0]
+                    if number >= chunks:
+                        return
+                    cursor[0] = number + 1
+                start = number * chunk_size
+                try:
+                    with open(path, "rb") as stream:
+                        stream.seek(start)
+                        chunk = stream.read(chunk_size)
+                except OSError as error:
+                    with lock:
+                        errors.append((number, f"读取文件失败（{error}）", 0))
+                    return
+                if not chunk:
+                    with lock:
+                        errors.append((number, "上传期间文件被截断", 0))
+                    return
+                try:
+                    response, reason = self._put_chunk(url, headers, chunk, upload_id,
+                                                       number, chunks, start, size)
+                except UploadCancelled:
+                    return
+                if reason:
+                    with lock:
+                        if not errors:
+                            errors.append((number, reason,
+                                           response.status_code if response is not None else 0))
+                    return
+                parts[number] = {"partNumber": number + 1,
+                                 "eTag": response.headers.get("ETag", "etag").strip('"')}
+                with lock:
+                    finished[0] += 1
+                    done = finished[0]
+                self.progress(min(total_size, complete_before + done * chunk_size), total_size,
+                              f"上传 {path.name} · {done}/{chunks}")
+
+        threads = [threading.Thread(target=worker, daemon=True)
+                   for _ in range(max(1, min(UPLOAD_THREADS, chunks)))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self._check_cancel()
+        if errors:
+            number, reason, status = sorted(errors)[0]
+            detail = f"第 {number + 1}/{chunks} 个分片上传失败（{reason}）"
+            # 4xx 多半是鉴权/参数问题，换线路没用；5xx、超时、断连、504 网关超时都算线路故障。
+            if 400 <= status < 500 and status not in (408, 429):
+                raise UploadError(detail + "；本地视频保留")
+            raise UploadNodeError(detail)
+        return parts
 
     def _put_chunk(self, url, headers, chunk, upload_id, number, chunks, start, size):
         """分片 PUT：最多 4 次，退避等待，重试换新连接；返回（响应, 失败原因），成功时原因为空串。"""
@@ -455,7 +564,7 @@ class BiliUploader:
                 if response.status_code < 300 and text in ("", "MULTIPART_PUT_SUCCESS"):
                     return response, ""
                 reason = f"HTTP {response.status_code}" + (f"，响应 {text[:80]}" if text else "")
-            if attempt + 1 < UPLOAD_ATTEMPTS and self.cancel.wait(UPLOAD_BACKOFF * 2 ** attempt):
+            if attempt + 1 < UPLOAD_ATTEMPTS and self.cancel.wait(min(UPLOAD_BACKOFF * 2 ** attempt, 8)):
                 self._check_cancel()
         return response, reason
 

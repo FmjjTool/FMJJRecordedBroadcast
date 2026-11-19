@@ -35,7 +35,8 @@ def _fmt_duration(seconds):
 
 class BiliUploadDialog(QDialog):
     # 已传字节, 总字节, 说明（分片进度）
-    progress = Signal(int, int, str)
+    # 必须用 object 传字节数：Qt 的 int 是 32 位，超过 2 GB 的总量会溢出成负数。
+    progress = Signal(object, object, str)
 
     def __init__(self, parent=None, paths=None, *, work_dir=None, blocked_paths=()):
         super().__init__(parent)
@@ -610,14 +611,17 @@ class BiliUploadDialog(QDialog):
         run_bg(work, done, owner=self.parentWidget())
 
     def on_progress(self, done, total, text):
-        done, total = max(0, int(done)), max(1, int(total))
-        self.bar.setValue(min(100, int(done * 100 / total)))
+        done, total = max(0, int(done or 0)), int(total or 0)
+        if total > 0:
+            self.bar.setValue(min(100, int(done * 100 / total)))
+        else:
+            self.bar.setValue(0)
         elapsed = max(0.001, time.monotonic() - getattr(self, "_progress_started", time.monotonic()))
         speed = done / elapsed
-        parts = [f"{_fmt_size(done)} / {_fmt_size(total)}"]
+        parts = [f"{_fmt_size(done)} / {_fmt_size(total)}" if total else _fmt_size(done)]
         if speed > 0:
             parts.append(f"{_fmt_size(speed)}/s")
-        if speed > 0 and done < total:
+        if speed > 0 and total > done:
             parts.append("剩余 " + _fmt_duration((total - done) / speed))
         self.progress_detail.setText(" · ".join(parts))
         self.status.setText(text)
