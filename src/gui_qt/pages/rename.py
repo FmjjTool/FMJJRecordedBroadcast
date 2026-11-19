@@ -752,16 +752,16 @@ class RenamePage(BasePage):
 
     def _open_post_settings(self):
         if not self._busy:
-            from gui_qt.bili_upload_dialog import BiliUploadDialog
-            BiliUploadDialog(self, blocked_paths=self._metadata_failed).exec()
+            from gui_qt.bili_upload_dialog import open_upload_window
+            open_upload_window(self, blocked_paths=self._metadata_failed)
 
     def _open_upload(self):
         if self._busy:
             return
         ready = [path for path in self.current_videos
                  if self._is_standard_named(Path(path).name) and path not in self._metadata_failed]
-        from gui_qt.bili_upload_dialog import BiliUploadDialog
-        BiliUploadDialog(self, ready, blocked_paths=self._metadata_failed).exec()
+        from gui_qt.bili_upload_dialog import open_upload_window
+        open_upload_window(self, ready, blocked_paths=self._metadata_failed)
 
     def _post_completed_folder(self):
         if self._busy or not self.current_videos or self._loaded_root != self.app.work_dir:

@@ -1,5 +1,6 @@
 """可预览文案、选择分P与封面、查看失败记录的 B站投稿入口。"""
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Signal, Qt, QTimer
@@ -13,13 +14,36 @@ from toolbox.utils import extract_date_from_filename
 from gui_qt.video_selection_dialog import VideoSelectionDialog, video_item, checked_paths
 
 
+def _fmt_size(num):
+    """字节数 → 人读文本（B/KB/MB/GB）。"""
+    value = float(max(0, num))
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def _fmt_duration(seconds):
+    seconds = max(0, int(seconds))
+    if seconds >= 3600:
+        return f"{seconds // 3600} 小时 {seconds % 3600 // 60} 分"
+    if seconds >= 60:
+        return f"{seconds // 60} 分 {seconds % 60} 秒"
+    return f"{seconds} 秒"
+
+
 class BiliUploadDialog(QDialog):
-    progress = Signal(int, str)
+    # 已传字节, 总字节, 说明（分片进度）
+    progress = Signal(int, int, str)
 
     def __init__(self, parent=None, paths=None, *, work_dir=None, blocked_paths=()):
         super().__init__(parent)
         self.setWindowTitle("B站视频上传 · 文案与分P预览")
         self.resize(820, 890)
+        # 独立窗口（和直播录制二级界面一样），开着也能继续操作主界面
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.setModal(False)
         self.paths = BU.unique_video_paths(paths or [])
         self.work_dir = str(work_dir or getattr(getattr(parent, "app", None), "work_dir", ""))
         self.blocked_paths = set(blocked_paths)
@@ -128,16 +152,25 @@ class BiliUploadDialog(QDialog):
         self.preview.setReadOnly(True)
         self.preview.setMaximumHeight(110)
         layout.addWidget(self.preview)
+        # 进度区固定在窗口底部（不随表单滚动），上传时始终可见
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
-        layout.addWidget(self.bar)
+        self.bar.setTextVisible(True)
+        self.bar.setFormat("%p%")
+        self.bar.setMinimumHeight(24)
+        self.bar.setToolTip("已上传字节 / 总字节、实时速度与预计剩余时间")
+        outer.addWidget(self.bar)
+        self.progress_detail = QLabel("尚未开始上传")
+        self.progress_detail.setWordWrap(True)
+        self.progress_detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        outer.addWidget(self.progress_detail)
         self.account_label = QLabel("进入后自动验证当前 B站账号")
         self.account_label.setWordWrap(True)
-        layout.addWidget(self.account_label)
+        outer.addWidget(self.account_label)
         self.status = QLabel("就绪")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.status)
+        outer.addWidget(self.status)
         actions = QHBoxLayout()
         self.preview_btn = QPushButton("更新预览")
         self.preview_btn.clicked.connect(self.refresh_preview)
@@ -176,6 +209,44 @@ class BiliUploadDialog(QDialog):
             self._entered = True
             QTimer.singleShot(0, self.check_account)
             QTimer.singleShot(0, self.load_workspace)
+
+    def is_closed(self):
+        return self._closed
+
+    def reopen(self, paths=(), blocked_paths=()):
+        """关掉后再从投稿入口打开：沿用同一窗口，只补新视频并重新验证登录。"""
+        self._closed = False
+        self.account_cancel = threading.Event()
+        self.merge_paths(paths, blocked_paths)
+        QTimer.singleShot(0, self.check_account)
+        QTimer.singleShot(0, self.load_workspace)
+
+    def merge_paths(self, paths=(), blocked_paths=()):
+        """窗口已开着时再点投稿入口：把新视频并进来，不打断正在进行的上传。"""
+        self.blocked_paths.update(blocked_paths)
+        if self.busy or not paths:
+            return
+        known = {BU.video_path_key(item) for item in self.paths}
+        added = [item for item in BU.unique_video_paths(list(paths))
+                 if BU.video_path_key(item) not in known]
+        if not added:
+            return
+        added_keys = {BU.video_path_key(item) for item in added}
+        self.paths.extend(added)
+        records = [{"path": str(item), "date": extract_date_from_filename(Path(item).name) or "",
+                    "renamed": BU.is_renamed_video(item)} for item in self.paths]
+        self._records = records
+        days = {record["date"] for record in records
+                if record["date"] and BU.video_path_key(record["path"]) in added_keys}
+        if len(days) == 1:
+            self._selected_day = days.pop()
+            self.date.setText(self._selected_day)
+        checked = set(self.selected_paths())
+        checked |= {record["path"] for record in records
+                    if record["renamed"] and BU.video_path_key(record["path"]) in added_keys}
+        self._selection_modified = True
+        self.set_video_list([record for record in records if record["date"] == self._selected_day], checked)
+        self.status.setText(f"已加入 {len(added)} 个视频，当前勾选 {len(self.selected_paths())} 个")
 
     def set_video_list(self, records, checked):
         records = BU.unique_video_records(records)
@@ -503,6 +574,9 @@ class BiliUploadDialog(QDialog):
             return
         self.busy = True
         self.cancel.clear()
+        self._progress_started = time.monotonic()
+        self.bar.setValue(0)
+        self.progress_detail.setText("准备上传…")
         self.start_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.templates.setEnabled(False)
@@ -513,7 +587,7 @@ class BiliUploadDialog(QDialog):
         self.status.setText("开始上传…")
         def work():
             self.uploader = BU.BiliUploader(cancel=self.cancel, on_progress=lambda done, total, text:
-                self.progress.emit(int(done * 100 / max(1, total)), text))
+                self.progress.emit(int(done), int(total), text))
             try:
                 return self.uploader.run(paths, config)
             finally:
@@ -535,8 +609,17 @@ class BiliUploadDialog(QDialog):
                                     if result["state"] == "published" else "已上传；可用同一批视频再次进入投稿流程")
         run_bg(work, done, owner=self.parentWidget())
 
-    def on_progress(self, percent, text):
-        self.bar.setValue(percent)
+    def on_progress(self, done, total, text):
+        done, total = max(0, int(done)), max(1, int(total))
+        self.bar.setValue(min(100, int(done * 100 / total)))
+        elapsed = max(0.001, time.monotonic() - getattr(self, "_progress_started", time.monotonic()))
+        speed = done / elapsed
+        parts = [f"{_fmt_size(done)} / {_fmt_size(total)}"]
+        if speed > 0:
+            parts.append(f"{_fmt_size(speed)}/s")
+        if speed > 0 and done < total:
+            parts.append("剩余 " + _fmt_duration((total - done) / speed))
+        self.progress_detail.setText(" · ".join(parts))
         self.status.setText(text)
 
     def reject(self):
@@ -556,3 +639,25 @@ class BiliUploadDialog(QDialog):
             self._closed = True
             self.account_cancel.set()
             super().closeEvent(event)
+
+
+def open_upload_window(parent, paths=None, *, work_dir=None, blocked_paths=()):
+    """打开（或复用）非模态投稿窗口：和直播录制二级界面一样，开着也能操作主界面。"""
+    window = getattr(parent, "_bili_upload_window", None)
+    try:
+        if window is None:
+            window = BiliUploadDialog(parent, paths, work_dir=work_dir, blocked_paths=blocked_paths)
+            parent._bili_upload_window = window
+        elif window.is_closed():
+            window.reopen(paths or (), blocked_paths)
+        else:
+            window.merge_paths(paths or (), blocked_paths)
+    except RuntimeError:      # 旧窗口的 Qt 对象已被回收，重建一个
+        window = BiliUploadDialog(parent, paths, work_dir=work_dir, blocked_paths=blocked_paths)
+        parent._bili_upload_window = window
+    window.setModal(False)
+    window.setWindowModality(Qt.WindowModality.NonModal)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    return window
