@@ -104,6 +104,20 @@ def safe_name(s):
     return sanitize_filename(str(s or ""), 80, "未知主播", collapse_ws=False)
 
 
+def record_dir(base_dir, anchor_name, when=None, date_folder=True):
+    """主播录制目录：`<保存目录>/<主播名>/<YYYYMMDD>`。
+
+    日期层与「自动整理」一致（8 位 YYYYMMDD），录制文件、弹幕、封面、
+    时间轴都写在同一日期文件夹里；date_folder=False 时退回主播目录。
+    when 传时间戳用于测试/补偿历史日期，默认当前时间。
+    """
+    anchor_dir = os.path.join(str(base_dir or ""), safe_name(anchor_name))
+    if not date_folder:
+        return anchor_dir
+    moment = time.localtime(when) if when else time.localtime()
+    return os.path.join(anchor_dir, time.strftime("%Y%m%d", moment))
+
+
 def fmt_duration(sec):
     try:
         sec = int(sec or 0)
@@ -1020,6 +1034,7 @@ DEFAULT_SETTINGS = {
     "segment_mb": 1024,      # 按大小：每段 MB
     "stop_minutes": 0,       # 录满 N 分钟停止（0=不限）
     "outdir": "",            # 保存目录（空=导出目录/直播录制/<平台>）
+    "date_folder": True,     # 主播目录下再按 YYYYMMDD 建日期文件夹（同自动整理）
     "retry_delay": 6,        # 断流后重连间隔（秒，录播姬 TimingStreamRetry）
     "max_retry": 30,         # 单场最多重试次数
     "save_danmaku": True,    # 六平台 JSONL；B站另存 XML
@@ -1254,7 +1269,8 @@ class RecordManager:
             if not url:
                 self.emit("「%s」没有可用直播流（未开播或被限制）" % (a.name or a.room), "warn")
                 return False, "无可用直播流"
-            outdir = os.path.join(self.out_dir(), safe_name(a.name or a.room))
+            outdir = record_dir(self.out_dir(), a.name or a.room,
+                                date_folder=bool(self.settings.get("date_folder", True)))
             os.makedirs(outdir, exist_ok=True)
             ts = time.strftime("%Y%m%d-%H%M%S")
             base = "%s_%s" % (safe_name(a.name or a.room), ts)

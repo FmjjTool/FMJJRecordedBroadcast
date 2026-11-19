@@ -1324,9 +1324,14 @@ class RecordSettingsDialog(QDialog):
         b2.clicked.connect(lambda: _open_dir(self.ed_dir.text().strip()))
         rl.addWidget(b2)
         f2.addRow("保存目录", row)
-        hint = QLabel("录制文件：<保存目录>/<主播名>/<主播名>_<日期时间>.ts（抖音）/ .flv（B站）")
+        hint = QLabel("录制文件：<保存目录>/<主播名>/<YYYYMMDD>/<主播名>_<日期时间>.ts（抖音）/ .flv（B站）\n"
+                      "同一天的弹幕、封面、时间轴都在该日期文件夹里；关闭日期文件夹时去掉 YYYYMMDD 一层")
         hint.setStyleSheet("color:#888;")
         f2.addRow("", hint)
+        self.ck_date = QCheckBox("按日期建 YYYYMMDD 子文件夹（与自动整理一致）")
+        self.ck_date.setChecked(bool(s.get("date_folder", True)))
+        self.ck_date.setToolTip("开启后：<保存目录>/<主播名>/<YYYYMMDD>/；关闭后文件直接放在主播目录下")
+        f2.addRow("日期文件夹", self.ck_date)
         self.sp_interval = QSpinBox()
         self.sp_interval.setRange(5, 3600)
         self.sp_interval.setSuffix(" 秒")
@@ -1397,6 +1402,7 @@ class RecordSettingsDialog(QDialog):
             "segment_mb": self.sp_seg_mb.value(),
             "stop_minutes": self.sp_stop.value(),
             "outdir": self.ed_dir.text().strip(),
+            "date_folder": self.ck_date.isChecked(),
             "interval": self.sp_interval.value(),
             "retry_delay": self.sp_retry.value(),
             "max_retry": self.sp_max_retry.value(),
