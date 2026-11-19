@@ -202,7 +202,9 @@ class AccountCenterWidget(QWidget):
             self._reload_groups()
             self._reload_accounts()
             video = sum(1 for a in self._accounts if a["platform"] in registry.MEDIA_PLATFORMS)
-            self.count_label.setText(f"共 {len(self._accounts)} 个（视频号 {video}）")
+            music = sum(1 for a in self._accounts if a["platform"] in registry.MUSIC_PLATFORMS)
+            self.count_label.setText(
+                f"共 {len(self._accounts)} 个（视频账号 {video} / 音乐账号 {music}）")
         finally:
             self._building = False
 
@@ -266,12 +268,45 @@ class AccountCenterWidget(QWidget):
             self.acc_layout.addWidget(label)
             self.acc_layout.addStretch(1)
             return
-        for pos, account in enumerate(self._accounts):
+        groups = (
+            ("视频账号", [a for a in self._accounts
+                          if a["platform"] not in registry.MUSIC_PLATFORMS]),
+            ("音乐账号", [a for a in self._accounts
+                          if a["platform"] in registry.MUSIC_PLATFORMS]),
+        )
+        for title, accounts in groups:
             self.acc_layout.takeAt(self.acc_layout.count() - 1)
-            self.acc_layout.addWidget(self._build_account_row(account, pos))
+            self.acc_layout.addWidget(self._build_section_header(title, len(accounts)))
             self.acc_layout.addStretch(1)
+            if not accounts:
+                empty = QLabel(f"（暂无{title}）")
+                empty.setProperty("role", "muted")
+                self.acc_layout.takeAt(self.acc_layout.count() - 1)
+                self.acc_layout.addWidget(empty)
+                self.acc_layout.addStretch(1)
+                continue
+            for pos, account in enumerate(accounts):
+                self.acc_layout.takeAt(self.acc_layout.count() - 1)
+                self.acc_layout.addWidget(
+                    self._build_account_row(account, pos, len(accounts)))
+                self.acc_layout.addStretch(1)
 
-    def _build_account_row(self, account: dict, pos: int) -> QWidget:
+    @staticmethod
+    def _build_section_header(title: str, count: int) -> QWidget:
+        header = QWidget()
+        row = QHBoxLayout(header)
+        row.setContentsMargins(2, 8, 2, 2)
+        row.setSpacing(6)
+        label = QLabel(title)
+        label.setStyleSheet("font-weight: bold;")
+        row.addWidget(label)
+        counter = QLabel(f"{count} 个")
+        counter.setProperty("role", "caption")
+        row.addWidget(counter)
+        row.addStretch(1)
+        return header
+
+    def _build_account_row(self, account: dict, pos: int, group_size: int) -> QWidget:
         row = QFrame()
         row.setProperty("variant", "card")
         v = QVBoxLayout(row)
@@ -311,7 +346,7 @@ class AccountCenterWidget(QWidget):
         head.addWidget(up_btn)
         down_btn = self._small_button("↓", "下移一位",
                                       lambda aid=account["id"]: self._move_account(aid, 1))
-        down_btn.setEnabled(pos < len(self._accounts) - 1)
+        down_btn.setEnabled(pos < group_size - 1)
         down_btn.setFixedSize(28, 24)
         head.addWidget(down_btn)
         del_btn = self._small_button("×", "从所有功能中删除该账号",
