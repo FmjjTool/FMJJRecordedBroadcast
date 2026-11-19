@@ -4,8 +4,7 @@
 账号主页链接 → 添加账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」。
 - 功能页：批量输入行 / 账号勾选列表 / 采集模式（全部/选中/按组）/ 条数 /
   会话定时 / 增量模式 / 搜索限流 / 日志
-- 设置页：添加账号（账号名+链接+分组多选）/ 分组管理 / 已配置账号
-  （分组多选 + 采集类型下拉 + 保存/删除）
+- 设置页：账号与分组已迁移到「Cookie 管理 → 账号配置」，此处只保留入口提示
 """
 
 import json
@@ -19,16 +18,16 @@ from urllib.parse import urlparse
 from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout,
     QLabel, QLineEdit, QListView, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
-    QScrollArea, QSizePolicy, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from gui_qt import download_ops, theme
 from gui_qt.common import _collect, _db_insert, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.row_widgets import GroupMultiSelect, RowCheckList
+from gui_qt.row_widgets import RowCheckList
 
 
 def _set_button_variant(button, variant="secondary", compact=False):
@@ -66,14 +65,7 @@ def _is_account_url(url: str) -> bool:
     return False
 
 
-def _clear_layout(layout):
-    while layout.count():
-        item = layout.takeAt(0)
-        w = item.widget()
-        if w is not None:
-            w.deleteLater()
-        elif item.layout() is not None:
-            _clear_layout(item.layout())
+
 
 
 
@@ -110,25 +102,18 @@ class InfoAccountsPage(BasePage):
         self._reveal_timer.setSingleShot(True)
         self._reveal_timer.timeout.connect(self._drain_reveal)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
-
-        func_tab = QWidget()
-        set_tab = QWidget()
-        self.tabs.addTab(func_tab, "功能")
-        self.tabs.addTab(set_tab, "设置")
-
-        self._build_func(func_tab)
-        self._build_settings(set_tab)
+        self._build_func(self)
+        self._refresh_gid_menus()
         self._reload_account_list()
-        self._reload_group_list()
-        self._reload_account_settings()
 
     def on_return_press(self):
         """主窗口回车统一入口 → 触发「获取最新」。"""
         self._fetch()
+
+    def refresh_accounts(self):
+        """账号配置在「Cookie 管理 → 账号配置」里改动后刷新列表与分组下拉。"""
+        self._reload_account_list()
+        self._refresh_gid_menus()
 
     # ---------- 工具 ----------
     def _groups(self):
@@ -204,16 +189,6 @@ class InfoAccountsPage(BasePage):
                                 theme.color("text"), 13))
             sel_bar.addWidget(b)
         sel_bar.addStretch(1)
-        self.sync_btn = icon_button(
-            "", "同步到追踪：把本页账号一键同步到「视频账号追踪」（按平台+ID去重，已存在跳过；分组一并带过去）",
-            (36, 24), True, "font-size: 13px;", self._sync_to_tracker)
-        self.sync_btn.setIcon(line_icon("upload", theme.color("text"), 15))
-        sel_bar.addWidget(self.sync_btn)
-        self.sync_from_btn = icon_button(
-            "", "从追踪同步：把「视频账号追踪」的账号一键同步到本页（按平台+ID去重，已存在跳过；分组一并带过来）",
-            (36, 24), True, "font-size: 13px;", self._sync_from_tracker)
-        self.sync_from_btn.setIcon(line_icon("download", theme.color("text"), 15))
-        sel_bar.addWidget(self.sync_from_btn)
         layout.addLayout(sel_bar)
 
         # 账号列表（复选框，固定高度滚动；右键 打开/复制链接、修改、删除）
@@ -338,117 +313,6 @@ class InfoAccountsPage(BasePage):
                        else "danger" if button in (self.batch_cancel_btn, self.cancel_btn)
                        else "secondary")
             _set_button_variant(button, variant, button.maximumWidth() < 80)
-
-    # ---------- 设置页 ----------
-    def _build_settings(self, f):
-        outer = QVBoxLayout(f)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(6)
-
-        # 添加账号卡片
-        add_card = QFrame()
-        add_card.setProperty("variant", "card")
-        ac = QVBoxLayout(add_card)
-        ac.setContentsMargins(10, 10, 10, 10)
-        ac.setSpacing(4)
-        t1 = QLabel("添加账号（账号名 + 链接 + 组号）")
-        t1.setProperty("role", "sectionTitle")
-        ac.addWidget(t1)
-        r1 = QHBoxLayout()
-        r1.addWidget(QLabel("账号名:"))
-        self.set_name_entry = QLineEdit()
-        self.set_name_entry.setPlaceholderText("如 封茗囧菌抖音（留空自动获取）")
-        r1.addWidget(self.set_name_entry, 1)
-        r1.addWidget(QLabel("分组:"))
-        self.set_group_sel = GroupMultiSelect(width=126)
-        r1.addWidget(self.set_group_sel)
-        ac.addLayout(r1)
-        r2 = QHBoxLayout()
-        r2.addWidget(QLabel("链接:"))
-        self.set_url_entry = QLineEdit()
-        self.set_url_entry.setPlaceholderText("账号主页链接（自动识别平台）")
-        r2.addWidget(self.set_url_entry, 1)
-        self.set_name_fetch_btn = icon_button(
-            "", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
-            "font-size: 14px;",
-            lambda: self._auto_fetch_name(self.set_url_entry, self.set_name_entry,
-                                          self.set_name_fetch_btn))
-        self.set_name_fetch_btn.setIcon(line_icon("search", theme.color("text"), 15))
-        r2.addWidget(self.set_name_fetch_btn)
-        self.set_add_btn = icon_button("", "添加账号", (40, 30), True, "font-size: 16px;", self._add_set)
-        self.set_add_btn.setIcon(line_icon("plus", theme.color("text"), 16))
-        r2.addWidget(self.set_add_btn)
-        ac.addLayout(r2)
-        outer.addWidget(add_card)
-
-        # 分组管理卡片（列表独立滚动，调整显示顺序）
-        grp_card = QFrame()
-        grp_card.setProperty("variant", "card")
-        gc = QVBoxLayout(grp_card)
-        gc.setContentsMargins(10, 10, 10, 10)
-        gc.setSpacing(4)
-        t2 = QLabel("分组管理（组编号 + 组名，组号用于绑定账号）")
-        t2.setProperty("role", "sectionTitle")
-        t2.setWordWrap(True)
-        gc.addWidget(t2)
-        self.group_list_frame = QScrollArea()
-        self.group_list_frame.setWidgetResizable(True)
-        self.group_list_frame.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.group_list_frame.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
-        gcontainer = QWidget()
-        gcontainer.setStyleSheet("background: transparent;")
-        self.group_list_layout = QVBoxLayout(gcontainer)
-        self.group_list_layout.setContentsMargins(2, 2, 2, 2)
-        self.group_list_layout.setSpacing(3)
-        self.group_list_layout.addStretch(1)
-        self.group_list_frame.setWidget(gcontainer)
-        gc.addWidget(self.group_list_frame)
-        addg = QHBoxLayout()
-        self.gid_entry = QLineEdit()
-        self.gid_entry.setPlaceholderText("组编号(11/22)")
-        self.gid_entry.setFixedWidth(110)
-        addg.addWidget(self.gid_entry)
-        self.gname_entry = QLineEdit()
-        self.gname_entry.setPlaceholderText("组名")
-        self.gname_entry.setMinimumWidth(80)
-        addg.addWidget(self.gname_entry, 1)
-        newg_btn = icon_button("", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
-        newg_btn.setIcon(line_icon("plus", theme.color("text"), 16))
-        addg.addWidget(newg_btn)
-        gc.addLayout(addg)
-        outer.addWidget(grp_card)
-
-        # 已配置账号（列表独立滚动，底部保存栏固定不随列表滚动）
-        acct_card = QFrame()
-        acct_card.setProperty("variant", "card")
-        acc = QVBoxLayout(acct_card)
-        acc.setContentsMargins(10, 10, 10, 10)
-        acc.setSpacing(4)
-        t3 = QLabel("已配置账号")
-        t3.setProperty("role", "sectionTitle")
-        acc.addWidget(t3)
-        self.acct_set_frame = QScrollArea()
-        self.acct_set_frame.setWidgetResizable(True)
-        self.acct_set_frame.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.acct_set_frame.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
-        acontainer = QWidget()
-        acontainer.setStyleSheet("background: transparent;")
-        self.acct_set_layout = QVBoxLayout(acontainer)
-        self.acct_set_layout.setContentsMargins(2, 2, 2, 2)
-        self.acct_set_layout.setSpacing(3)
-        self.acct_set_layout.addStretch(1)
-        self.acct_set_frame.setWidget(acontainer)
-        acc.addWidget(self.acct_set_frame, 1)
-        # 底部保存栏（固定；由 _reload_account_settings 填充按钮）
-        self.acct_save_bar = QHBoxLayout()
-        acc.addLayout(self.acct_save_bar)
-        outer.addWidget(acct_card, 1)
-
-        for button in f.findChildren(QPushButton):
-            _set_button_variant(button, "primary" if button is self.set_add_btn else "secondary",
-                                button.maximumWidth() < 80)
 
     # ---------- 账号列表 ----------
     # B站采集类型标签（其他平台无此概念）
@@ -644,7 +508,7 @@ class InfoAccountsPage(BasePage):
             if ok_acc:
                 # 账号有变化才重建列表/分组下拉（避免无谓重绘）
                 self._reload_account_list()
-                self._reload_group_list()
+                self._refresh_gid_menus()
 
         run_bg(work, done)
 
@@ -664,125 +528,6 @@ class InfoAccountsPage(BasePage):
             except Exception:
                 pass
         post_to_main(apply)
-
-    def _add_set(self):
-        """设置页添加账号（账号名 + 链接 + 分组多选）。"""
-        name = self.set_name_entry.text().strip()
-        url = self.set_url_entry.text().strip()
-        if not url:
-            self.app.toast("请输入账号链接", "warning")
-            return
-        gids = self.set_group_sel.selected()
-        if name:
-            self._do_add_set(url, name, gids)
-        else:
-            # 名称留空 → 自动获取「昵称+平台」（如 封茗囧菌抖音）
-            self.app.toast("名称留空，正在自动获取账号名...", "info")
-            self.set_add_btn.setEnabled(False)
-
-            def work():
-                from platforms.account_names import fetch_display_name
-                return fetch_display_name(url)
-
-            def done(result, err):
-                self.set_add_btn.setEnabled(True)
-                if err:
-                    self.app.toast(f"自动获取失败：{str(err)[:60]}，已按无名称添加", "warning")
-                auto_name, _ferr = result or ("", "")
-                self._do_add_set(url, auto_name, gids)
-
-            run_bg(work, done)
-
-    def _do_add_set(self, url: str, name: str, gids: list):
-        gid = ",".join(gids)
-        from accounts_manager import add_account, get_groups
-        gname = get_groups().get(gids[0], "") if gids else ""
-        if add_account(url, name=name, group_id=gid, group_name=gname):
-            self.set_name_entry.clear()
-            self.set_url_entry.clear()
-            self.app.toast(f"已添加账号「{name or url[:30]}」", "success")
-            QTimer.singleShot(150, self._reload_account_list)
-            QTimer.singleShot(150, self._reload_account_settings)
-            QTimer.singleShot(150, self._reload_group_list)
-        else:
-            self.app.toast("账号已存在，无需重复添加", "warning")
-
-    # ---------- 同步到「视频账号追踪」 ----------
-    def _sync_to_tracker(self):
-        """把本页账号一键同步到「视频账号追踪」：按平台+ID去重，已存在跳过；
-        账号名/链接/分组一并带过去，分组不存在时按同组号+组名自动创建。"""
-        from tracker.accounts import plan_sync_from_fm, apply_sync_from_fm
-        new_items, skipped = plan_sync_from_fm()
-        if not new_items:
-            self.app.toast(f"共 {skipped} 个账号均已存在于「视频账号追踪」，无需同步", "info")
-            return
-        msg = (f"把「信息获取」的账号同步到「视频账号追踪」？\n\n"
-               f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
-               + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
-               + ("\n…等" if len(new_items) > 8 else ""))
-        if QMessageBox.question(self, "同步到视频账号追踪", msg,
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-            return
-        apply_sync_from_fm(new_items)
-        # 追踪页若已实例化，同步刷新其卡片/分组
-        page = (getattr(self.app, "pages", {}) or {}).get("tracker")
-        if page is not None:
-            page.reload_accounts()
-            page._reload_group_list()
-        self.app.toast(f"已同步 {len(new_items)} 个账号到「视频账号追踪」"
-                       + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
-
-    # ---------- 从「视频账号追踪」反向同步 ----------
-    def _sync_from_tracker(self):
-        """把「视频账号追踪」的账号一键同步到本页：按平台+ID去重，已存在跳过；
-        分组一并带过来，缺失分组按同组号+组名自动创建（与「同步到追踪」构成双向）。"""
-        from tracker.accounts import plan_sync_to_fm, apply_sync_to_fm
-        new_items, skipped = plan_sync_to_fm()
-        if not new_items:
-            self.app.toast(f"共 {skipped} 个账号均已存在，无需同步", "info")
-            return
-        msg = (f"把「视频账号追踪」的账号同步到「信息获取」？\n\n"
-               f"共 {len(new_items) + skipped} 个账号：新增 {len(new_items)} 个，已存在跳过 {skipped} 个。\n\n"
-               + "\n".join(f"· {(i['name'] or i['url'][:36])}" for i in new_items[:8])
-               + ("\n…等" if len(new_items) > 8 else ""))
-        if QMessageBox.question(self, "从追踪同步", msg,
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-            return
-        apply_sync_to_fm(new_items)
-        self._reload_account_list()
-        self._reload_group_list()
-        self._reload_account_settings()
-        self.app.toast(f"已从追踪同步 {len(new_items)} 个账号"
-                       + (f"（跳过已存在 {skipped} 个）" if skipped else ""), "success")
-
-    # ---------- 自动获取账号名 ----------
-    def _auto_fetch_name(self, url_entry, name_entry, btn):
-        """按链接识别平台并拉取昵称，填充到账号名输入框（后台线程，不卡 UI）。"""
-        url = url_entry.text().strip()
-        if not url:
-            self.app.toast("请先输入链接", "warning")
-            return
-        btn.setEnabled(False)
-        btn.setText("")
-
-        def work():
-            from platforms.account_names import fetch_account_name
-            return fetch_account_name(url)
-
-        def done(result, err):
-            btn.setEnabled(True)
-            btn.setText("")
-            if err:
-                self.app.toast(f"获取失败：{err[:60]}", "error")
-                return
-            name, ferr = result or ("", "")
-            if name:
-                name_entry.setText(name)
-                self.app.toast(f"已获取账号名「{name}」", "success")
-            else:
-                self.app.toast(ferr or "未获取到账号名", "error")
-
-        run_bg(work, done)
 
     # ---------- 暂停 ----------
     def _toggle_pause(self):
@@ -1389,221 +1134,6 @@ class InfoAccountsPage(BasePage):
         self._cancel_evt.set()
         self._pause_evt.set()
 
-    # ---------- 分组管理（设置页） ----------
-    def _reload_group_list(self):
-        self._refresh_gid_menus()
-        _clear_layout(self.group_list_layout)
-        self.group_list_layout.addStretch(1)
-        groups = self._groups()
-        n = len(groups)
-        if not groups:
-            lbl = QLabel("（暂无分组）")
-            lbl.setProperty("role", "muted")
-            self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
-            self.group_list_layout.addWidget(lbl)
-            self.group_list_layout.addStretch(1)
-        else:
-            gids = list(groups.keys())
-            for pos, gid in enumerate(gids):
-                gname = groups[gid]
-                row = QFrame()
-                row.setProperty("variant", "card")
-                h = QHBoxLayout(row)
-                h.setContentsMargins(8, 4, 6, 4)
-                h.setSpacing(4)
-                gid_lbl = QLabel(f"{gid}")
-                gid_lbl.setFixedWidth(44)
-                gid_lbl.setProperty("role", "sectionTitle")
-                h.addWidget(gid_lbl)
-                name_label = QLabel(gname)
-                name_label.setWordWrap(True)
-                name_label.setMinimumWidth(0)
-                name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-                h.addWidget(name_label, 1)
-                up_btn = icon_button("↑", "上移一位", (28, 24), False, "font-size: 11px;")
-                up_btn.setEnabled(pos > 0)
-                up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
-                h.addWidget(up_btn)
-                down_btn = icon_button("↓", "下移一位", (28, 24), False, "font-size: 11px;")
-                down_btn.setEnabled(pos < n - 1)
-                down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
-                h.addWidget(down_btn)
-                del_btn = icon_button(
-                    "×", "删除该分组（绑定该组的账号自动解绑）", (30, 24), False,
-                    "background: #c62828; color: white; font-size: 13px;",
-                    lambda _=False, g=gid: self._delete_group(g))
-                h.addWidget(del_btn)
-                for button in (up_btn, down_btn, del_btn):
-                    _set_button_variant(button, "danger" if button is del_btn else "ghost",
-                                        compact=True)
-                self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
-                self.group_list_layout.addWidget(row)
-                self.group_list_layout.addStretch(1)
-        # 分组少时紧凑、多时封顶滚动（每行约 34px）
-        self.group_list_frame.setFixedHeight(min(206, max(84, n * 34 + 16)))
-        # 同步刷新已配置账号列表的组号下拉
-        self._reload_account_settings()
-
-    def _move_group(self, gid, delta):
-        """上移/下移分组（重排 groups.json 键顺序，立即生效）。"""
-        from accounts_manager import move_group
-        if move_group(gid, delta):
-            self._reload_group_list()
-            self.app.toast("分组顺序已更新", "success")
-
-    def _add_group(self):
-        gid = self.gid_entry.text().strip()
-        gname = self.gname_entry.text().strip()
-        from accounts_manager import GROUP_ID_PATTERN, save_group
-        if not gid or not GROUP_ID_PATTERN.match(gid):
-            self.app.toast("组号必须为重复数字，如 11、22", "warning")
-            return
-        if not gname:
-            self.app.toast("请输入组名", "warning")
-            return
-        if save_group(gid, gname):
-            self.gid_entry.clear()
-            self.gname_entry.clear()
-            QTimer.singleShot(150, self._reload_group_list)
-            self.app.toast(f"已保存分组：{gid} {gname}", "success")
-
-    def _delete_group(self, gid):
-        from accounts_manager import delete_group
-        delete_group(gid)
-        self.app.toast(f"已删除分组 {gid}（绑定账号已解绑）", "info")
-        QTimer.singleShot(150, self._reload_group_list)
-        QTimer.singleShot(150, self._reload_account_list)
-        QTimer.singleShot(150, self._reload_account_settings)
-
-    def _reload_account_settings(self):
-        from accounts_manager import load_accounts, get_groups, infer_kind_from_url
-        from platforms import URLRecognizer
-        kind_options = ["", "video", "dynamic", "all"]
-        kind_label = {"": "自动", "video": "[作品]", "dynamic": "[动态]", "all": "[全部]"}
-        _clear_layout(self.acct_set_layout)
-        self.acct_set_layout.addStretch(1)
-        self._acct_set_rows = []
-        self.save_all_btn = QPushButton("保存全部修改")
-        self.save_all_btn.setProperty("variant", "primary")
-        # 保存栏始终保留在卡片底部，列表为空时也不会留下上一轮的控件。
-        _clear_layout(self.acct_save_bar)
-        self.save_all_btn.setEnabled(False)
-        self.save_all_btn.clicked.connect(self._save_all_account_rows)
-        self.acct_save_bar.addWidget(self.save_all_btn)
-        self.acct_save_bar.addStretch(1)
-        hint = QLabel("修改组号/采集类型后点此一次性保存")
-        hint.setProperty("role", "caption")
-        hint.setWordWrap(True)
-        hint.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        hint.setMaximumWidth(280)
-        self.acct_save_bar.addWidget(hint)
-        accounts = [a for a in load_accounts() if a.url]  # 过滤分组占位账号
-        groups = get_groups()
-        if not accounts:
-            lbl = QLabel("（暂无账号）")
-            lbl.setProperty("role", "muted")
-            self.acct_set_layout.takeAt(self.acct_set_layout.count() - 1)
-            self.acct_set_layout.addWidget(lbl)
-            self.acct_set_layout.addStretch(1)
-            return
-        for i, a in enumerate(accounts, 1):
-            row = QFrame()
-            row.setProperty("variant", "card")
-            v = QVBoxLayout(row)
-            v.setContentsMargins(8, 8, 8, 8)
-            v.setSpacing(6)
-            h = QHBoxLayout()
-            h.setSpacing(4)
-            plat = URLRecognizer.recognize(a.url) or "?"
-            name = a.name or ""
-            info = f"{name}  [{plat}]  {a.url[:40]}" if name else f"[{plat}]  {a.url[:50]}"
-            identity = QLabel(info)
-            identity.setWordWrap(True)
-            identity.setMinimumWidth(0)
-            identity.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            identity.setToolTip(f"{name}\n{a.url}")
-            h.addWidget(identity, 1)
-            v.addLayout(h)
-            settings = QHBoxLayout()
-            settings.setSpacing(6)
-            settings.addWidget(QLabel("分组"))
-            # 分组多选（当前绑定的全部组）
-            gsel = GroupMultiSelect(width=110)
-            gsel.set_groups(groups)
-            gsel.set_selected(a.group_ids)
-            settings.addWidget(gsel)
-            settings.addSpacing(8)
-            settings.addWidget(QLabel("采集类型"))
-            # 采集类型下拉（B站生效）
-            cur_kind = a.kind or infer_kind_from_url(a.url)
-            ksel = QComboBox()
-            ksel.addItems([kind_label.get(k, k) for k in kind_options])
-            ksel.setCurrentText(kind_label.get(cur_kind, "自动"))
-            ksel.setFixedWidth(80)
-            settings.addWidget(ksel)
-            settings.addStretch(1)
-            v.addLayout(settings)
-            # 记录行控件与初始值，改动后启用底部「保存全部修改」
-            self._acct_set_rows.append((a.url, gsel, ksel, gsel.selected(), ksel.currentText()))
-            gsel.changed.connect(lambda b=self.save_all_btn: self._mark_set_dirty(b))
-            ksel.currentTextChanged.connect(lambda _t, b=self.save_all_btn: self._mark_set_dirty(b))
-            # 修改账号名/链接（对话框；分组/采集类型仍用行内控件）
-            edit_btn = icon_button("", "修改账号名/链接", (30, 26), True, "font-size: 12px;")
-            edit_btn.setIcon(line_icon("edit", theme.color("text"), 14))
-            edit_btn.clicked.connect(lambda _=False, u=a.url: self._edit_account_row(u))
-            h.addWidget(edit_btn)
-            # 上移/下移（直接改 accounts.txt 顺序，立即生效）
-            up_btn = icon_button("↑", "上移一位", (28, 26), False, "font-size: 12px;")
-            up_btn.setEnabled(i > 1)
-            up_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, -1))
-            h.addWidget(up_btn)
-            down_btn = icon_button("↓", "下移一位", (28, 26), False, "font-size: 12px;")
-            down_btn.setEnabled(i < len(accounts))
-            down_btn.clicked.connect(lambda _=False, u=a.url: self._move_account_row(u, 1))
-            h.addWidget(down_btn)
-            del_btn = icon_button(
-                "×", "删除该账号", (30, 26), False,
-                "background: #c62828; color: white; font-size: 13px;",
-                lambda _=False, u=a.url: self._delete_account_row(u))
-            h.addWidget(del_btn)
-            for button in (gsel, edit_btn, up_btn, down_btn, del_btn):
-                _set_button_variant(button, "danger" if button is del_btn else "secondary",
-                                    compact=button is not gsel)
-            self.acct_set_layout.takeAt(self.acct_set_layout.count() - 1)
-            self.acct_set_layout.addWidget(row)
-            self.acct_set_layout.addStretch(1)
-
-    @staticmethod
-    def _mark_set_dirty(btn):
-        btn.setEnabled(True)
-
-    def _save_all_account_rows(self):
-        """一次性保存所有行的分组/采集类型修改（替代逐行保存）。"""
-        from accounts_manager import update_account, get_groups
-        try:
-            groups = get_groups()
-            changed = 0
-            for url, gsel, ksel, orig_g, orig_k in getattr(self, "_acct_set_rows", []):
-                gids = gsel.selected()
-                gid = ",".join(gids)
-                kind_rev = {"自动": "", "[作品]": "video", "[动态]": "dynamic", "[全部]": "all"}
-                kind = kind_rev.get(ksel.currentText(), "")
-                if gids == orig_g and ksel.currentText() == orig_k:
-                    continue  # 无变化
-                gname = groups.get(gids[0], "") if gids else ""
-                if update_account(url, group_id=gid, group_name=gname, kind=kind):
-                    changed += 1
-            if changed:
-                self.app.toast(f"已保存 {changed} 项账号设置", "success")
-            else:
-                self.app.toast("没有需要保存的修改", "info")
-        except Exception as e:
-            self.app.toast(f"保存失败：{str(e)[:60]}", "error")
-        self.save_all_btn.setEnabled(False)
-        QTimer.singleShot(150, self._reload_account_list)
-        QTimer.singleShot(150, self._reload_account_settings)
-        QTimer.singleShot(150, self._reload_group_list)
-
     def _edit_account_row(self, url):
         """编辑账号名/链接（改链接=替换账号主键，去重校验；平台变化时采集类型按新链接重推）。"""
         from PySide6.QtWidgets import QFormLayout
@@ -1663,8 +1193,6 @@ class InfoAccountsPage(BasePage):
             self.app.toast("修改失败（账号不存在）", "error")
             return
         QTimer.singleShot(150, self._reload_account_list)
-        QTimer.singleShot(150, self._reload_account_settings)
-        QTimer.singleShot(150, self._reload_group_list)
 
     def _acc_list_context_menu(self, pos):
         """功能页账号列表右键：打开链接（浏览器）/ 复制链接 / 修改账号 / 删除账号。"""
@@ -1705,8 +1233,6 @@ class InfoAccountsPage(BasePage):
         if remove_account(url):
             self.app.toast("已删除该账号", "info")
             QTimer.singleShot(150, self._reload_account_list)
-            QTimer.singleShot(150, self._reload_account_settings)
-            QTimer.singleShot(150, self._reload_group_list)
 
     def _move_account_row(self, url, delta):
         """上移/下移已配置账号（顺序即采集顺序，保存后立即生效）。"""
@@ -1714,4 +1240,3 @@ class InfoAccountsPage(BasePage):
         if move_account(url, delta):
             self.app.toast("账号顺序已更新", "success")
             QTimer.singleShot(150, self._reload_account_list)
-            QTimer.singleShot(150, self._reload_account_settings)

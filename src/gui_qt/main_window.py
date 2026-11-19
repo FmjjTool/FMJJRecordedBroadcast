@@ -135,7 +135,6 @@ NAV_GROUPS = [
         ("toolbox_migrate", "文件迁移"),
     ]),
     ("账户追踪", [
-        ("account_registry", "账号名单"),
         ("music_tracker", "音乐账号追踪"),
         ("tracker", "网媒账号追踪"),
         ("tcdoc", "腾讯文档监控"),
@@ -190,7 +189,6 @@ QWidget#workbenchSidebar { background: palette(base); border-right: 1px solid pa
 QWidget#workbenchNavItems, QWidget#workbenchNavViewport, QScrollArea#workbenchNavScroll,
 QWidget#workbenchNavGroups, QWidget#workbenchSearchResults { background: transparent; border: none; }
 QPushButton#workbenchBrand { background: transparent; color: palette(text); border: none; text-align: left; font-size: 16px; font-weight: bold; padding: 0; }
-QPushButton#workbenchBrand:hover { color: palette(link); }
 QLabel#workbenchBrandMark { background: transparent; border: none; }
 QLabel#workbenchBrandSub { background: transparent; color: palette(placeholder-text); border: none; font-size: 10px; }
 QLineEdit#workbenchSearch { background: palette(window); border: 1px solid palette(shadow); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
@@ -309,10 +307,10 @@ class MainWindow(QMainWindow):
         brand_text.setSpacing(1)
         self.nav_title = QPushButton("封茗囧菌数据汇总库")
         self.nav_title.setObjectName("workbenchBrand")
-        self.nav_title.setCheckable(True)
-        self.nav_title.setCursor(Qt.PointingHandCursor)
-        self.nav_title.setToolTip("返回首页")
-        self.nav_title.clicked.connect(lambda: self.show_page("home"))
+        # 只作品牌标题，不再当「返回工作台」的入口（避免误触跳页）
+        self.nav_title.setFocusPolicy(Qt.NoFocus)
+        self.nav_title.setCursor(Qt.ArrowCursor)
+        self.nav_title.setToolTip("封茗囧菌数据汇总库")
         brand_text.addWidget(self.nav_title)
         brand_sub = QLabel(f"统一维护工具箱 - v{APP_VERSION}")
         brand_sub.setObjectName("workbenchBrandSub")
@@ -755,7 +753,7 @@ class MainWindow(QMainWindow):
         self.cookie_status_label.setObjectName("workbenchCookieStatus")
         v.addWidget(self.cookie_status_label)
 
-        mgr_btn = QPushButton("管理 Cookie")
+        mgr_btn = QPushButton("管理账号与登录")
         mgr_btn.setObjectName("workbenchCookieManage")
         mgr_btn.setCursor(Qt.PointingHandCursor)
         mgr_btn.clicked.connect(self._open_cookie_manager)
@@ -802,6 +800,15 @@ class MainWindow(QMainWindow):
         dlg = CookieManagerDialog(self)
         dlg.exec()
         self._refresh_cookie_status()
+        # 账号配置在同一对话框里维护：关闭后刷新已实例化的账号页
+        for key in ("info_accounts", "tracker", "music_tracker"):
+            refresh = getattr(self.pages.get(key), "refresh_accounts", None)
+            if not callable(refresh):
+                continue
+            try:
+                refresh()
+            except Exception:
+                pass
 
     # ==================== 页面切换 ====================
 
@@ -843,8 +850,7 @@ class MainWindow(QMainWindow):
             self.pages["info_tools"].open_tab(key)
             self._update_page_context()
             return
-        # 高亮当前按钮（首页不在导航列表里，单独标记标题）
-        self.nav_title.setChecked(key == "home")
+        # 高亮当前按钮（首页不在导航列表里，单独标记侧栏「工作台」按钮）
         self.home_btn.setChecked(key == "home")
         for k, btn in self.nav_buttons.items():
             btn.setChecked(k == key)

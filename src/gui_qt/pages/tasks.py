@@ -125,11 +125,6 @@ class TasksPage(BasePage):
 
         bar = QHBoxLayout()
         bar.setSpacing(6)
-        hint = QLabel("由 Windows 计划任务执行，关闭软件也会按时运行；"
-                      "计划统一在本页「设置」修改。")
-        hint.setProperty("role", "caption")
-        hint.setWordWrap(True)
-        bar.addWidget(hint, 1)
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.refresh)
         bar.addWidget(refresh_btn)
@@ -138,7 +133,14 @@ class TasksPage(BasePage):
         del_all_btn.setToolTip("删除本软件注册的全部 Windows 计划任务")
         del_all_btn.clicked.connect(self._uninstall_all)
         bar.addWidget(del_all_btn)
+        bar.addStretch(1)
         cv.addLayout(bar)
+
+        hint = QLabel("由 Windows 计划任务执行，关闭软件也会按时运行；"
+                      "计划统一在本页「设置」修改。")
+        hint.setProperty("role", "caption")
+        hint.setWordWrap(True)
+        cv.addWidget(hint)
 
         self.table = QTableWidget(0, len(_COLS))
         self.table.setHorizontalHeaderLabels(_COLS)

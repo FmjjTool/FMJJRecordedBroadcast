@@ -1,11 +1,12 @@
 """本软件注册的 Windows 计划任务总览（供「定时任务」管理页使用）。
 
-五类任务各自独立，互不影响：
+六类任务各自独立，互不影响：
 - FengMingTCDocMonitor         腾讯文档监控（每天 / 按间隔）
 - FengMingTrackerMonitor       网媒账号追踪（每天 / 按间隔）
 - FengMingMusicTrackerMonitor  音乐账号追踪（每天 / 按间隔）
 - FengMingQuarkBackup          夸克网盘备份（每天 / 按间隔）
 - FengMingWebwikiAnalytics     本地资料站访问统计（每天）
+- FengMingFanGroupsMonitor     粉丝群人数快照（每天 / 按间隔）
 计划文本取自各页保存的配置，安装状态 / 下次运行取自 schtasks；计划设置统一由
 「定时任务」页读写，功能页不再单独提供定时配置。
 """
@@ -13,6 +14,7 @@
 from __future__ import annotations
 
 from toolbox import account_tracker_task as _acc
+from toolbox import fan_groups_task as _fan
 from toolbox import quark_backup_task as _quark
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.tcdoc import task as _tcdoc
@@ -25,12 +27,14 @@ _CFG_KEYS = {
     "music": ("music_schedule_mode", "music_collect_time", "music_interval_minutes"),
     "quark": ("quark_schedule_mode", "quark_backup_time", "quark_interval_minutes"),
     "webwiki": (None, "webwiki_analytics_time", None),
+    "fangroups": ("fangroups_schedule_mode", "fangroups_snapshot_time",
+                  "fangroups_interval_minutes"),
 }
 
 # 任务 id → 页面 key（仅用于展示来源，不再作为设置入口）
 _PAGE_KEYS = {
     "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
-    "quark": "netdisk", "webwiki": "localwiki",
+    "quark": "netdisk", "webwiki": "localwiki", "fangroups": "fan_groups",
 }
 # 站点访问统计的两个补采时间点（空 = 不启用）
 _WEBWIKI_EXTRA_TIME_KEYS = ("webwiki_analytics_time2", "webwiki_analytics_time3")
@@ -74,6 +78,8 @@ def list_tasks() -> list[dict]:
          _quark.TASK_NAME, _quark.info()),
         ("webwiki", "站点访问统计", "mandisa.wiki 后台访问统计每日采集",
          _webwiki.TASK_NAME, _webwiki.info()),
+        ("fangroups", "粉丝群快照", "已订阅粉丝群的群列表与人数定时快照",
+         _fan.TASK_NAME, _fan.info()),
     ]
     out = []
     for tid, label, usage, task_name, data in rows:
@@ -149,6 +155,9 @@ def install(task_id: str, mode: str, time_text: str, interval: int,
     if task_id == "quark":
         return (_quark.install_interval(interval) if use_interval
                 else _quark.install_daily(time_text))
+    if task_id == "fangroups":
+        return (_fan.install_interval(interval) if use_interval
+                else _fan.install_daily(time_text))
     if task_id in _acc.TASK_NAMES:
         return (_acc.install_interval(task_id, interval) if use_interval
                 else _acc.install_daily(task_id, time_text))
@@ -162,6 +171,8 @@ def uninstall(task_id: str) -> tuple[bool, str]:
         return _quark.uninstall()
     if task_id == "webwiki":
         return _webwiki.uninstall()
+    if task_id == "fangroups":
+        return _fan.uninstall()
     if task_id in _acc.TASK_NAMES:
         return _acc.uninstall(task_id)
     return False, f"未知的定时任务：{task_id}"

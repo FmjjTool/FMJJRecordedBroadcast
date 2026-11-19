@@ -51,6 +51,16 @@ if "--webwiki-analytics" in sys.argv:
 
     sys.exit(_wiki_analytics_job())
 
+# 粉丝群人数快照定时任务入口：--fan-groups-snapshot（同样在 PySide6 导入前拦截）。
+if "--fan-groups-snapshot" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.fan_groups_task import main as _fan_groups_job
+
+    sys.exit(_fan_groups_job())
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow

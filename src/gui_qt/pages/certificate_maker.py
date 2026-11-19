@@ -19,13 +19,15 @@ from pathlib import Path
 from PySide6.QtCore import QDate, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
+    QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem,
     QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QSplitter,
     QTabWidget, QVBoxLayout, QWidget,
 )
+from PIL import Image as PILImage
 
+from gui_qt import theme
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from toolbox import certificate_engine as engine
@@ -33,7 +35,9 @@ from toolbox import certificate_history
 from toolbox.config_manager import get_config_dir, get_export_dir
 
 _CONFIG_SECTION = "certificate_maker"
-_PREVIEW_WIDTH = 660
+_PREVIEW_MIN_WIDTH = 760      # 适配宽度时的下限，保证默认就能看清正文
+_PREVIEW_MAX_WIDTH = 3600     # 上限，避免超宽屏拉得过大
+_PREVIEW_BASE_WIDTH = 1700    # 「100%」对应的预览宽度
 _TEXT_FIELDS = (
     ("title", "作品标题", "协议第一条第 1.1 项"),
     ("project_name", "歌曲 / 项目", "作品对应歌曲或项目名称，如有则填"),
@@ -92,6 +96,40 @@ _WM_CHECK_FIELDS = {
     "内部认证号": "wm_archive_no",
     "其他约定标识": "wm_other",
 }
+
+# 必填标记：REQUIRED 判红框；AUTO 只标星（留空由回落值补齐）
+_REQUIRED_KEYS = {key for key, _label in engine.REQUIRED_FIELDS}
+_AUTO_REQUIRED_KEYS = {
+    "watermark_file", "wm_author", "wm_lead", "author_sign", "confirm_archive_no",
+    "cert_title", "cert_type", "cert_author", "cert_lead", "cert_period_start",
+    "cert_period_end", "issue_date", "signer", "renew_until",
+}
+_GROUP_REQUIRED_KEYS = {"art_type", "sample_format", "image_format", "cert_status"}
+
+
+def _danger() -> str:
+    """当前主题的危险色（用于富文本；QSS 用 theme(danger) 随主题重绘）。"""
+    return theme.color("danger")
+
+
+def _invalid_qss() -> str:
+    # 用当前主题的实色：QSS 的 palette(bright-text) 在部分 Qt 版本不生效
+    return f"border: 2px solid {_danger()}; border-radius: 3px;"
+
+
+def _field_label(text: str, key: str = "") -> QLabel:
+    """必填字段标签：红色 * 标记；自动回落的字段提示「留空自动带出」。"""
+    if key in _REQUIRED_KEYS:
+        label = QLabel(f'{text} <span style="color:{_danger()};">*</span>')
+        label.setTextFormat(Qt.RichText)
+        label.setToolTip("必填项")
+        return label
+    if key in _AUTO_REQUIRED_KEYS:
+        label = QLabel(f'{text} <span style="color:{_danger()};">*</span>')
+        label.setTextFormat(Qt.RichText)
+        label.setToolTip("必填，留空自动带出")
+        return label
+    return QLabel(text)
 
 
 def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
@@ -193,6 +231,7 @@ class CertificateMakerPage(BasePage):
         self._other_edits: dict[str, QLineEdit] = {}
         self._wm_edits: dict[str, QLineEdit] = {}
         self._cert_edits: dict[str, QLineEdit] = {}
+        self._group_base_qss: dict[QGroupBox, str] = {}
         self._history_records: list[dict] = []
         self._suspend_signals = False
         self._auto_end = True          # 授权截止是否仍在跟随「起始 +3 年」
@@ -202,6 +241,12 @@ class CertificateMakerPage(BasePage):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(180)
         self._preview_timer.timeout.connect(self._refresh_preview)
+
+        self._preview_pages: list = []   # 最近一次渲染的两页，缩放时直接复用
+        self._preview_scale_timer = QTimer(self)
+        self._preview_scale_timer.setSingleShot(True)
+        self._preview_scale_timer.setInterval(120)
+        self._preview_scale_timer.timeout.connect(self._scale_preview)
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -305,7 +350,7 @@ class CertificateMakerPage(BasePage):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setHandleWidth(6)
-        self.splitter.setSizes([470, 830])
+        self.splitter.setSizes([440, 960])
         root.addWidget(self.splitter, 1)
 
     def _build_left_panel(self) -> QWidget:
@@ -387,7 +432,7 @@ class CertificateMakerPage(BasePage):
         for row, (key, label, placeholder) in enumerate((
             ("archive_no", "内部认证号", "FMJJ-DB-ART-年份-序号"),
         )):
-            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(_field_label(label, key), row, 0)
             edit = QLineEdit()
             edit.setPlaceholderText(placeholder)
             edit.textChanged.connect(self._on_field_changed)
@@ -404,7 +449,7 @@ class CertificateMakerPage(BasePage):
         grid.setColumnStretch(1, 1)
         self.text_edits: dict[str, QLineEdit] = {}
         for row, (key, label, placeholder) in enumerate(_TEXT_FIELDS):
-            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(_field_label(label, key), row, 0)
             edit = QLineEdit()
             edit.setPlaceholderText(placeholder)
             edit.textChanged.connect(self._on_field_changed)
@@ -422,7 +467,7 @@ class CertificateMakerPage(BasePage):
         grid.setVerticalSpacing(6)
         grid.setColumnStretch(1, 1)
         for row, (key, label, placeholder) in enumerate(_WM_FIELDS):
-            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(_field_label(label, key), row, 0)
             edit = QLineEdit()
             edit.setPlaceholderText(placeholder)
             edit.textChanged.connect(self._on_field_changed)
@@ -439,7 +484,7 @@ class CertificateMakerPage(BasePage):
         grid.setVerticalSpacing(6)
         grid.setColumnStretch(1, 1)
         for row, (key, label, placeholder) in enumerate(_CERT_FIELDS):
-            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(_field_label(label, key), row, 0)
             edit = QLineEdit()
             edit.setPlaceholderText(placeholder)
             edit.textChanged.connect(self._on_field_changed)
@@ -456,7 +501,7 @@ class CertificateMakerPage(BasePage):
         grid.setColumnStretch(1, 1)
         self.date_edits: dict[str, DateField] = {}
         for row, (key, label, placeholder) in enumerate(_DATE_FIELDS):
-            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(_field_label(label, key), row, 0)
             edit = DateField()
             edit.setToolTip(placeholder)
             if key == "renew_until":
@@ -480,7 +525,7 @@ class CertificateMakerPage(BasePage):
         grid.setColumnStretch(1, 1)
         self.sign_edits: dict[str, QLineEdit] = {}
         for row, (key, label, placeholder) in enumerate(_SIGN_FIELDS):
-            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(_field_label(label, key), row, 0)
             edit = QLineEdit()
             edit.setPlaceholderText(placeholder)
             edit.textChanged.connect(self._on_field_changed)
@@ -519,7 +564,13 @@ class CertificateMakerPage(BasePage):
             box_layout = QVBoxLayout(box)
             box_layout.setContentsMargins(10, 8, 10, 10)
             box_layout.setSpacing(6)
+            self._group_base_qss[box] = box.styleSheet()
             head = QHBoxLayout()
+            if group["key"] in _GROUP_REQUIRED_KEYS:
+                star = QLabel("*")
+                star.setStyleSheet(f"color: {_danger()}; font-weight: bold;")
+                star.setToolTip("必填项")
+                head.addWidget(star)
             matched = QLabel("未匹配")
             matched.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
             head.addWidget(matched)
@@ -635,7 +686,25 @@ class CertificateMakerPage(BasePage):
         self.preview_status.setWordWrap(True)
         self.preview_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         layout.addWidget(self.preview_status)
+
+        scale_row = QHBoxLayout()
+        scale_row.setSpacing(6)
+        scale_row.addWidget(QLabel("预览缩放"))
+        self.preview_scale = QComboBox()
+        for text, value in (("适配宽度", "fit"), ("100%", 1.0), ("125%", 1.25),
+                            ("150%", 1.5), ("200%", 2.0)):
+            self.preview_scale.addItem(text, value)
+        self.preview_scale.setToolTip("预览按比例缩放，100% 约等于半个 A4 横版宽度")
+        self.preview_scale.currentIndexChanged.connect(self._scale_preview)
+        scale_row.addWidget(self.preview_scale)
+        zoom_hint = QLabel("正文看不清时调大")
+        zoom_hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        scale_row.addWidget(zoom_hint)
+        scale_row.addStretch(1)
+        layout.addLayout(scale_row)
+
         scroll = QScrollArea()
+        self._preview_scroll = scroll
         scroll.setWidgetResizable(True)
         body = QWidget()
         body_layout = QVBoxLayout(body)
@@ -753,6 +822,58 @@ class CertificateMakerPage(BasePage):
                 checked = self._selected(group_key) == "其他"
             edit.setEnabled(checked)
 
+    # ==================== 必填校验 ====================
+
+    def _required_widgets(self) -> dict[str, QWidget]:
+        """必填字段 → 对应控件（用于加红框）。"""
+        widgets: dict[str, QWidget] = {}
+        for key in _REQUIRED_KEYS:
+            for table in (self.number_edits, self.text_edits, self._wm_edits,
+                          self._cert_edits, self.date_edits, self.sign_edits):
+                if key in table:
+                    widgets[key] = table[key]
+                    break
+        for key, group_key in (("art_type", "art_type"),
+                               ("sample_format", "sample_format"),
+                               ("image_format", "image_format")):
+            box = self._checkbox_group_boxes.get(group_key)
+            if box is not None:
+                widgets[key] = box
+        if "renew_until" in self.date_edits:
+            widgets["renew_until"] = self.date_edits["renew_until"]
+        return widgets
+
+    def _set_invalid(self, widget: QWidget, invalid: bool) -> None:
+        if isinstance(widget, QGroupBox):
+            base = self._group_base_qss.get(widget, "")
+            widget.setStyleSheet(
+                base + (f"\nQGroupBox {{ border: 2px solid {_danger()}; }}" if invalid else ""))
+        else:
+            widget.setStyleSheet(_invalid_qss() if invalid else "")
+
+    def _validate_required(self) -> list[str]:
+        """按必填清单给未填字段加红框，返回缺失项中文名。"""
+        missing = engine.required_missing(self._collect_data())
+        keys = {key for key, _label in missing}
+        for key, widget in self._required_widgets().items():
+            self._set_invalid(widget, key in keys)
+        return [label for _key, label in missing]
+
+    def _confirm_required(self, data: engine.CertificateData) -> bool:
+        """必填项缺失时弹确认；确认后仍允许生成（红框已标出）。"""
+        missing = engine.required_missing(data)
+        self._validate_required()
+        if not missing:
+            return True
+        names = "\n".join(f"· {label}" for _key, label in missing[:12])
+        if len(missing) > 12:
+            names += f"\n… 共 {len(missing)} 项"
+        return QMessageBox.question(
+            self, "必填项未填",
+            f"还有 {len(missing)} 项必填未填（已标红）：\n\n{names}\n\n仍要继续吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) == QMessageBox.Yes
+
     def _restore_matched_marks(self, checks: dict) -> None:
         for group in engine.CHECK_GROUPS:
             key = group["key"]
@@ -793,10 +914,16 @@ class CertificateMakerPage(BasePage):
         self._refresh_preview()
 
     def _refresh_notes(self) -> None:
-        missing = engine.missing_fields(self._collect_data())
-        lines = [f"待补齐：{item}" for item in missing]
-        if not lines:
-            lines = list(self._notes) or []
+        data = self._collect_data()
+        required = [label for _key, label in engine.required_missing(data)]
+        if required:
+            text = f"必填未填 {len(required)} 项：" + "、".join(required[:6])
+            if len(required) > 6:
+                text += "…"
+            self.notes_label.setStyleSheet(f"color: {_danger()}; font-size: 11px;")
+            self.notes_label.setText(text)
+            return
+        lines = list(self._notes) or []
         if not lines:
             self.notes_label.setText("字段齐全，可直接生成")
             self.notes_label.setStyleSheet("color: palette(link); font-size: 11px;")
@@ -852,6 +979,7 @@ class CertificateMakerPage(BasePage):
     def _on_field_changed(self, *_args) -> None:
         if self._suspend_signals:
             return
+        self._validate_required()
         self._refresh_notes()
         self._schedule_preview()
         self._save_timer.start()
@@ -901,6 +1029,7 @@ class CertificateMakerPage(BasePage):
                 self.date_edits["renew_until"].setEnabled(checked and item == "已续签")
             break
         self._sync_other_edits()
+        self._validate_required()
         self._schedule_preview()
         self._save_timer.start()
 
@@ -932,29 +1061,54 @@ class CertificateMakerPage(BasePage):
 
     def _refresh_preview(self) -> None:
         data = self._collect_data()
+        self._validate_required()
         try:
-            pages = engine.render_pages(data, self._images)
+            self._preview_pages = engine.render_pages(data, self._images)
         except Exception as exc:  # 预览失败不应打断录入
             self.preview_status.setText(f"预览失败：{exc}")
             return
-        for label, page in zip(self.preview_labels, pages):
-            scaled = page.resize(
-                (_PREVIEW_WIDTH, int(page.height * _PREVIEW_WIDTH / page.width)),
-            )
-            buffer = scaled.tobytes()
-            image = QImage(buffer, scaled.width, scaled.height,
-                           scaled.width * 3, QImage.Format_RGB888).copy()
-            label.setPixmap(QPixmap.fromImage(image))
-            label.setMinimumHeight(image.height())
-        missing = engine.missing_fields(data)
-        if missing:
-            self.preview_status.setText("待补齐：" + "、".join(missing))
+        self._scale_preview()
+        required = [label for _key, label in engine.required_missing(data)]
+        if required:
+            text = f"必填待补齐 {len(required)} 项：" + "、".join(required[:5])
+            if len(required) > 5:
+                text += "…"
+            self.preview_status.setText(text)
         else:
             mark = " · 自动水印" if data.auto_watermark and data.watermark_text() else ""
             self.preview_status.setText(
                 f"可生成 · {data.archive_no or '未编号'} · {len(self._images)} 张图片{mark}"
             )
         self.preview_status.setToolTip(f"输出目录：{self._out_dir}")
+
+    def _preview_target_width(self) -> int:
+        """按缩放选项算出预览像素宽度；适配宽度时跟随预览区实际宽度。"""
+        mode = self.preview_scale.currentData() if hasattr(self, "preview_scale") else "fit"
+        if mode == "fit":
+            width = self._preview_scroll.viewport().width() - 28
+            return max(_PREVIEW_MIN_WIDTH, min(_PREVIEW_MAX_WIDTH, width))
+        return int(_PREVIEW_BASE_WIDTH * float(mode))
+
+    def _scale_preview(self, *_args) -> None:
+        """把已渲染的两页缩放到当前比例（不重新排版，切换很快）。"""
+        if not self._preview_pages or not hasattr(self, "preview_scale"):
+            return
+        width = self._preview_target_width()
+        for label, page in zip(self.preview_labels, self._preview_pages):
+            height = max(1, int(page.height * width / page.width))
+            scaled = page.resize((width, height), PILImage.LANCZOS)
+            buffer = scaled.tobytes()
+            image = QImage(buffer, scaled.width, scaled.height,
+                           scaled.width * 3, QImage.Format_RGB888).copy()
+            label.setPixmap(QPixmap.fromImage(image))
+            # 允许滚动：pixmap 比可视区宽时出现横向滚动条
+            label.setMinimumWidth(image.width())
+            label.setMinimumHeight(image.height())
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        if hasattr(self, "_preview_scale_timer") and self._preview_pages:
+            self._preview_scale_timer.start()
 
     # ==================== 图片 ====================
 
@@ -1174,6 +1328,8 @@ class CertificateMakerPage(BasePage):
         if missing:
             QMessageBox.warning(self, "还差必填项", "请先补齐：\n\n" + "\n".join(f"· {item}" for item in missing))
             return
+        if not self._confirm_required(data):
+            return
         try:
             self._out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -1192,8 +1348,9 @@ class CertificateMakerPage(BasePage):
             if error or result is None:
                 self.app.toast(f"生成失败：{error}", "error")
                 return
+            folder = Path(result.folder_path or out_dir)
             self.app.toast(
-                f"已生成 {result.page_count} 页 PNG + PDF"
+                f"已生成 {result.page_count} 页 PNG + PDF，并打包 zip"
                 + (f"，水印件 {len(result.watermarked_paths)} 张"
                    if result.watermarked_paths else "")
             )
@@ -1207,11 +1364,13 @@ class CertificateMakerPage(BasePage):
                      if result.watermarked_paths else "")
             answer = QMessageBox.question(
                 self, "生成完成",
-                f"已输出到：\n{out_dir}\n\n2 页 PNG（300dpi）+ 合并 PDF。{extra}\n是否打开输出目录？",
+                f"证书文件夹：\n{folder}\n\n"
+                f"附属压缩包：\n{result.zip_path}\n\n"
+                f"2 页 PNG（300dpi）+ 合并 PDF。{extra}\n是否打开证书文件夹？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
             )
             if answer == QMessageBox.Yes:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_dir)))
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
         run_bg(work, done, owner=self)
 
@@ -1224,11 +1383,13 @@ class CertificateMakerPage(BasePage):
                 self, "还差必填项",
                 "请先补齐：\n\n" + "\n".join(f"· {item}" for item in missing))
             return
+        if not self._confirm_required(data):
+            return
         try:
             self._out_dir.mkdir(parents=True, exist_ok=True)
             path = engine.export_docx(data, self._source_text, self._out_dir)
         except Exception as exc:  # noqa: BLE001 - 导出失败直接提示
             self.app.toast(f"导出 Word 失败：{exc}", "error")
             return
-        self.app.toast(f"已导出 Word：{Path(path).name}", "success")
+        self.app.toast(f"已导出 Word 到证书文件夹：{Path(path).name}", "success")
         self._save_config()

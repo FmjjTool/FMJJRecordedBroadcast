@@ -8,6 +8,7 @@
 """
 
 import os
+import time
 
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox,
@@ -87,6 +88,12 @@ class OrganizePage(BasePage):
         self.exec_btn.setProperty("variant", "primary")
         self.exec_btn.clicked.connect(self._execute)
         btn_row.addWidget(self.exec_btn)
+        self.source_btn = QPushButton("从来源迁移视频（按日期）")
+        self.source_btn.setToolTip(
+            "只迁移 A 端来源里的视频：文件名能识别日期就用文件名，否则按修改时间建日期文件夹；"
+            "工作目录里的视频不动")
+        self.source_btn.clicked.connect(self._migrate_sources)
+        btn_row.addWidget(self.source_btn)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
@@ -160,6 +167,7 @@ class OrganizePage(BasePage):
         self.busy = busy
         self.scan_btn.setEnabled(not busy)
         self.exec_btn.setEnabled(not busy)
+        self.source_btn.setEnabled(not busy)
 
     def has_active_tasks(self):
         return self.busy
@@ -262,6 +270,83 @@ class OrganizePage(BasePage):
             self._log(f"整理完成：成功 {success}，失败 {len(results) - success}。下一步请前往交互重命名页；此处不会上传投稿。")
             self._scan()
         run_bg(work, done, owner=self)
+
+    def _migrate_sources(self):
+        """只迁移来源视频：文件名无日期时按修改时间落到日期文件夹。"""
+        if self.busy:
+            return
+        root = self.app.work_dir
+        if not root or not os.path.isdir(root):
+            self._log("工作目录不存在，请先在全局设置指定")
+            return
+        sources, recursive = self._source_paths(), self.recursive.isChecked()
+        if not sources:
+            self._log("请先添加 A 端来源文件夹")
+            return
+        self._set_busy(True)
+        self._log("正在扫描来源文件夹…")
+
+        def work():
+            return scan_sources(sources, root, recursive)
+
+        def done(result, error):
+            if error:
+                self._set_busy(False)
+                self._log(f"扫描来源失败：{error}")
+                return
+            plan, skipped = result
+            for item in plan:
+                if not item.get("date"):
+                    item["date"] = self._date_from_mtime(item["path"])
+            if not plan:
+                self._set_busy(False)
+                self._log("来源里没有可迁移的视频（空文件 / 最近仍在写入 / 已在工作目录内）")
+                if skipped:
+                    self._log("跳过：" + "；".join(skipped[:5]))
+                return
+            dates = sorted({item["date"] for item in plan if item.get("date")})
+            preview = "\n".join(
+                f"{os.path.basename(item['path'])} → {item['date'] or '（根目录）'}"
+                for item in plan[:10])
+            more = f"\n…其余 {len(plan) - 10} 个视频" if len(plan) > 10 else ""
+            ret = QMessageBox.question(
+                self, "从来源迁移视频",
+                f"将迁移 {len(plan)} 个视频到：\n{root}\\<日期>\\\n\n"
+                f"{len(dates)} 个日期分组：{', '.join(dates[:8]) or '无'}\n\n"
+                f"{preview}{more}\n\n同名自动编号，校验成功后删除来源。确认执行？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                self._set_busy(False)
+                self._log("已取消来源迁移")
+                return
+            self.log_text.clear()
+
+            def migrate():
+                return execute_migration(root, plan, on_progress=lambda current, total, res:
+                    self.progress.emit(f"{current}/{total} " + (
+                        f"已迁移：{res['target']}" if res['ok']
+                        else f"失败：{res['source']} · {res['error']}")))
+
+            def migrated(results, err):
+                self._set_busy(False)
+                if err:
+                    self._log(f"迁移中断：{err}，已迁移的视频保留在目标目录")
+                    return
+                ok = sum(1 for item in results if item["ok"])
+                self._log(f"来源迁移完成：成功 {ok}，失败 {len(results) - ok}。"
+                          "下一步请前往交互重命名页处理，再投稿。")
+                self._update_dir_date_label()
+
+            run_bg(migrate, migrated, owner=self)
+
+        run_bg(work, done, owner=self)
+
+    @staticmethod
+    def _date_from_mtime(path: str) -> str:
+        try:
+            return time.strftime("%Y-%m-%d", time.localtime(os.path.getmtime(path)))
+        except OSError:
+            return ""
 
     def _log(self, msg):
         self.log_text.append(str(msg))

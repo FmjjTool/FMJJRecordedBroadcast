@@ -1,4 +1,8 @@
-"""Cookie 管理对话框（PySide6 版）：平台列表 + 扫码/浏览器/输入/清除。
+"""账号与登录对话框（PySide6 版）。
+
+- 第一页「登录状态」：平台列表 + 扫码/浏览器/输入/清除。
+- 第二页「账号配置」：三个功能（信息获取 / 网媒追踪 / 音乐追踪）共用的账号与分组管理，
+  勾选账号可用于哪些功能（原各页「设置」页已迁移到这里）。
 
 二维码轮询在后台线程执行，所有 UI 更新通过 post_to_main 调度回主线程。
 """
@@ -10,11 +14,12 @@ import sqlite3
 import threading
 import time
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QGridLayout, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 import auth
@@ -232,27 +237,82 @@ def _import_legacy_profile(plat: str, auth_keys: tuple) -> bool:
         return False
 
 
-class CookieManagerDialog(QDialog):
-    def __init__(self, parent, on_changed=None):
+class _PageScroll(QScrollArea):
+    """整页滚动区：宽度跟随视口，高度按内容自适应，最小尺寸不随内容变大。
+
+    不用 setWidgetResizable(True) 是因为页面里有换行 QLabel，布局的
+    heightForWidth 会把内容高度锁死，滚动区就再也压不下去（弹窗最小高度
+    随之被顶大，超过最大高度后 Qt 会忽略最大尺寸，拖动窗口就会失控放大）。
+    """
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Cookie 管理")
-        self.resize(620, 640)
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    def setWidget(self, widget):
+        super().setWidget(widget)
+        self.sync_content()
+
+    def sync_content(self):
+        widget = self.widget()
+        if widget is None:
+            return
+        width = max(1, self.viewport().width())
+        hfw = widget.heightForWidth(width)
+        height = hfw if hfw > 0 else widget.sizeHint().height()
+        height = max(height, self.viewport().height())
+        if widget.width() != width or widget.height() != height:
+            widget.resize(width, height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.sync_content()
+
+    def sizeHint(self):
+        return QSize(640, 420)
+
+    def minimumSizeHint(self):
+        return QSize(320, 200)
+
+
+class CookieManagerDialog(QDialog):
+    def __init__(self, parent, on_changed=None, initial_tab=0):
+        super().__init__(parent)
+        self.setWindowTitle("账号与登录")
+        self._want_size = (820, 640)
         self.on_changed = on_changed
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+
+        # ---- 第一页：各平台登录状态 ----
+        cookie_tab = QWidget()
+        cookie_layout = QVBoxLayout(cookie_tab)
+        cookie_layout.setContentsMargins(0, 0, 0, 0)
+        cookie_layout.setSpacing(6)
         # 只显示管理层实际绑定的路径，不迁移或导入另一处登录记录。
-        self.storage_location = QLabel(f"登录记录位置：{auth.COOKIE_FILE}")
+        self.storage_location = QLabel()
+        path_text = str(auth.COOKIE_FILE)
+        shown_path = (path_text if len(path_text) <= 46
+                      else path_text[:16] + "…" + path_text[-27:])
+        self.storage_location.setText(f"登录记录位置：{shown_path}")
         self.storage_location.setWordWrap(True)
         self.storage_location.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.storage_location.setToolTip("登录数据只从此位置读取；更新不会合并或覆盖其他位置的 Cookie。")
-        layout.addWidget(self.storage_location)
+        self.storage_location.setToolTip(
+            f"{path_text}\n登录数据只从此位置读取；更新不会合并或覆盖其他位置的 Cookie。")
+        cookie_layout.addWidget(self.storage_location)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.container = QWidget()
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(self.container)
-        layout.addWidget(scroll, 1)
+        cookie_layout.addWidget(scroll, 1)
 
         # 登录用户名探测：缓存 {plat: {"ok":..,"username":..} | "probing"}
         self._whoami_cache: dict = {}
@@ -261,6 +321,8 @@ class CookieManagerDialog(QDialog):
         # 底部：浏览器环境状态（安装统一在「全局设置 → 检测依赖」，此处只显示与刷新）
         bottom = QHBoxLayout()
         self.pw_status = QLabel()
+        # 状态文字较长，允许压缩（完整内容看 tooltip），避免撑宽弹窗
+        self.pw_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         bottom.addWidget(self.pw_status, 1)
         self.openapi_btn = self._btn("腾讯文档 OpenAPI", self._open_openapi_credentials)
         bottom.addWidget(self.openapi_btn)
@@ -268,9 +330,79 @@ class CookieManagerDialog(QDialog):
         bottom.addWidget(self.github_btn)
         self.pw_btn = self._btn("刷新环境", self._refresh_pw_status, True)
         bottom.addWidget(self.pw_btn)
-        layout.addLayout(bottom)
+        cookie_layout.addLayout(bottom)
+
+        self.tabs.addTab(cookie_tab, "登录状态")
+
+        # ---- 第二页：账号配置（原三个功能页的「设置」页） ----
+        from gui_qt.account_center import AccountCenterWidget
+        self.account_center = AccountCenterWidget(app=parent, parent=self)
+        self.account_center.changed.connect(self._notify)
+        # 本页内容较高，外面套一层滚动区：弹窗的最小尺寸才不会被内容高度顶大。
+        # 否则「最小尺寸 > 最大尺寸」时 Qt 会忽略最大尺寸，拖动放大就会失控。
+        center_scroll = _PageScroll()
+        center_scroll.setWidget(self.account_center)
+        self.account_center.changed.connect(center_scroll.sync_content)
+        self.tabs.addTab(center_scroll, "账号配置")
+
+        if 0 <= initial_tab < self.tabs.count():
+            self.tabs.setCurrentIndex(initial_tab)
         self._refresh_pw_status()
         self._reload()
+        self._fit_to_screen(*self._want_size)
+
+    def _fit_to_screen(self, want_w: int, want_h: int):
+        """按屏幕可用区域定尺寸：既能小于屏幕，也绝不超过屏幕。
+
+        Qt 里 maximumSize 小于最小尺寸时会被忽略（窗口反被最小尺寸顶大，
+        拖动时表现为「越拉越炸」），所以先量可用区域，再取两者的合理值。
+        """
+        screen = None
+        if self.parent() is not None:
+            screen = self.parent().screen()
+        screen = screen or QApplication.primaryScreen()
+        if screen is None:
+            self.resize(want_w, want_h)
+            return
+        avail = screen.availableGeometry()
+        max_w = max(420, avail.width() - 30)
+        max_h = max(320, avail.height() - 40)
+        self.setMaximumSize(max_w, max_h)
+        width = max(420, min(want_w, max_w))
+        height = max(320, min(want_h, max_h))
+        self.resize(width, height)
+        anchor = None
+        if self.parentWidget() is not None:
+            anchor = self.parentWidget().window().frameGeometry().center()
+        else:
+            anchor = avail.center()
+        self.move(anchor.x() - width // 2, anchor.y() - height // 2)
+        self._keep_on_screen()
+
+    def _keep_on_screen(self):
+        """把窗口夹在屏幕可用区域内（拖动放大时同样生效）。"""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        width = min(self.width(), max(360, avail.width() - 8))
+        height = min(self.height(), max(300, avail.height() - 8))
+        x = min(max(self.x(), avail.left()), max(avail.left(), avail.right() - width + 1))
+        y = min(max(self.y(), avail.top()), max(avail.top(), avail.bottom() - height + 1))
+        if (width, height) != (self.width(), self.height()):
+            self.resize(width, height)
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "_clamping", False):
+            return
+        self._clamping = True
+        try:
+            self._keep_on_screen()
+        finally:
+            self._clamping = False
 
     def _open_openapi_credentials(self):
         _TcdocOpenApiDialog(self).exec()
@@ -283,9 +415,9 @@ class CookieManagerDialog(QDialog):
         try:
             import playwright  # noqa: F401
         except ImportError:
-            self.pw_status.setText(
-                "浏览器组件：Playwright 未安装（采集需要，请在「全局设置 → 检测依赖」安装）")
-            self.pw_status.setStyleSheet("color: #ff5252;")
+            self._set_pw_status(
+                "浏览器组件：Playwright 未安装（采集需要，请在「全局设置 → 检测依赖」安装）",
+                "#ff5252")
             return
         try:
             from toolbox.browser import detect
@@ -295,15 +427,19 @@ class CookieManagerDialog(QDialog):
         edge, chrome, shell = env["edge"], env["chrome"], env["shell"]
         if edge or chrome:
             which = f"Edge {edge}" if edge else f"Chrome {chrome}"
-            self.pw_status.setText(f"浏览器环境：系统 {which}（采集走系统浏览器，无需下载）")
-            self.pw_status.setStyleSheet("color: #4caf50;")
+            self._set_pw_status(
+                f"浏览器环境：系统 {which}（采集走系统浏览器，无需下载）", "#4caf50")
         elif shell:
-            self.pw_status.setText("浏览器环境：本地采集引擎已就绪")
-            self.pw_status.setStyleSheet("color: #4caf50;")
+            self._set_pw_status("浏览器环境：本地采集引擎已就绪", "#4caf50")
         else:
-            self.pw_status.setText(
-                "浏览器环境：无系统 Edge/Chrome，请在「全局设置 → 检测依赖」下载采集引擎（约 91MB）")
-            self.pw_status.setStyleSheet("color: #eab308;")
+            self._set_pw_status(
+                "浏览器环境：无系统 Edge/Chrome，请在「全局设置 → 检测依赖」下载采集引擎（约 91MB）",
+                "#eab308")
+
+    def _set_pw_status(self, text: str, color: str):
+        self.pw_status.setText(text)
+        self.pw_status.setToolTip(text)
+        self.pw_status.setStyleSheet(f"color: {color};")
 
     def _reload(self):
         while self.container_layout.count():
@@ -324,11 +460,15 @@ class CookieManagerDialog(QDialog):
                 has = bool(cookies.get(plat, "") and len(cookies.get(plat, "")) > 10)
                 age = auth.get_cookie_age(plat)
             row = QHBoxLayout()
+            row.setContentsMargins(8, 2, 8, 2)
+            row.setSpacing(6)
             row.addWidget(QLabel(name, styleSheet="font-weight: bold;"))
             sl = QLabel(self._status_text(plat, has, age, lite_name))
             sl.setStyleSheet(self._status_color(plat, has))
-            row.addWidget(sl)
-            row.addStretch(1)
+            # 状态文字（含长昵称）允许被压缩，否则整行最小宽度会把弹窗撑得过宽
+            sl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            sl.setToolTip(sl.text())
+            row.addWidget(sl, 1)
             if has:
                 row.addWidget(self._btn("验证", lambda p=plat: self._verify(p)))
             if plat == "kugou_lite":

@@ -3,7 +3,7 @@
 与「账号追踪」页同构（照搬 UI 换数据源）：
 - 功能页：平台筛选 + 获取全部（回车快捷）+  按组导出 + 刷新（定时任务统一在「任务」页）
   每账号卡片：昵称/平台/状态 + 采集/导出/历史按钮 + 变化提示（涨绿跌红）+ 2行×4列预览
-- 设置页：搜索账号（名称→链接）、添加追踪账号、分组管理、已配置账号
+- 设置页：账号与分组已迁移到「Cookie 管理 → 账号配置」，此处只保留入口提示
 - 历史窗口：指标当列、时间点当行，可横向滚动
 
 数据源：网易云/QQ音乐/酷狗/酷我/5sing（游客HTTP→游客Playwright→登录态三级回退）。
@@ -16,12 +16,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QProgressBar, QScrollArea,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QProgressBar, QScrollArea,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
-from gui_qt.common import icon_btn_style, icon_button, run_bg
+from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.platform_names import MUSIC_PLATFORM_NAMES as PLATFORM_NAMES
 from toolbox.tracker_diff import diff_items, num_delta
@@ -76,13 +76,8 @@ class MusicTrackerPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
-        self.sub = QTabWidget()
-        layout.addWidget(self.sub)
-        self.sub.addTab(self._build_func(), "功能")
-        self.sub.addTab(self._build_settings(), "设置")
+        layout.addWidget(self._build_func())
         self.reload_accounts()
-        self._reload_group_list()
 
     # ---------- 功能页 ----------
     def _build_func(self) -> QWidget:
@@ -92,7 +87,6 @@ class MusicTrackerPage(BasePage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        head.addStretch(1)
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.reload_accounts)
         head.addWidget(refresh_btn)
@@ -116,6 +110,7 @@ class MusicTrackerPage(BasePage):
         self.batch_prog.setRange(0, 1)
         self.batch_prog.setValue(0)
         head.addWidget(self.batch_prog)
+        head.addStretch(1)
         v.addLayout(head)
 
         # 卡片滚动区
@@ -130,134 +125,7 @@ class MusicTrackerPage(BasePage):
         v.addWidget(self.cards_scroll, 1)
         return f
 
-    # ---------- 设置页 ----------
-    def _build_settings(self) -> QWidget:
-        f = QWidget()
-        outer = QVBoxLayout(f)
-        outer.setContentsMargins(10, 10, 10, 10)
-        outer.setSpacing(6)
-
-        # 搜索账号（名称 → 链接；5sing 无搜索通道）
-        search_card = QFrame()
-        search_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
-        sv = QVBoxLayout(search_card)
-        sv.setContentsMargins(10, 10, 10, 10)
-        sv.setSpacing(4)
-        sh = QLabel("搜索账号（按名称搜索歌手/用户，自动填入链接；5sing 请直接粘贴主页链接）")
-        sh.setStyleSheet("font-weight: bold;")
-        sv.addWidget(sh)
-        sr = QHBoxLayout()
-        self.search_platform = QComboBox()
-        self.search_platform.addItems(["网易云", "QQ音乐", "酷狗", "酷我"])
-        self.search_platform.setFixedWidth(100)
-        sr.addWidget(self.search_platform)
-        self.search_kw = QLineEdit()
-        self.search_kw.setPlaceholderText("如 封茗囧菌（回车搜索）")
-        self.search_kw.returnPressed.connect(self._search_accounts)
-        sr.addWidget(self.search_kw, 1)
-        search_btn = QPushButton("搜索")
-        search_btn.clicked.connect(self._search_accounts)
-        sr.addWidget(search_btn)
-        sv.addLayout(sr)
-        outer.addWidget(search_card)
-
-        # 添加追踪账号（账号名 + 链接，可选归属分组）
-        add_card = QFrame()
-        add_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
-        av = QVBoxLayout(add_card)
-        av.setContentsMargins(10, 10, 10, 10)
-        av.setSpacing(4)
-        ah = QLabel("添加追踪账号（账号名 + 链接地址）")
-        ah.setStyleSheet("font-weight: bold;")
-        av.addWidget(ah)
-        r1 = QHBoxLayout()
-        r1.addWidget(QLabel("账号名:"))
-        self.add_name = QLineEdit()
-        self.add_name.setPlaceholderText("如 封茗囧菌网易云（留空自动获取）")
-        r1.addWidget(self.add_name, 1)
-        r1.addWidget(QLabel("平台:"))
-        self.add_platform = QComboBox()
-        self.add_platform.addItems(["自动识别", "网易云", "QQ音乐", "酷狗", "酷我", "5sing"])
-        self.add_platform.setFixedWidth(100)
-        r1.addWidget(self.add_platform)
-        av.addLayout(r1)
-        r2 = QHBoxLayout()
-        r2.addWidget(QLabel("链接:"))
-        self.add_url = QLineEdit()
-        self.add_url.setPlaceholderText("账号/歌手主页链接（自动识别平台）")
-        self.add_url.returnPressed.connect(self._add_account)
-        r2.addWidget(self.add_url, 1)
-        self.name_fetch_btn = icon_button(
-            "", "自动获取账号名（按链接识别平台并拉取昵称）", (32, 30), True,
-            "font-size: 14px;", self._auto_fetch_name)
-        r2.addWidget(self.name_fetch_btn)
-        r2.addWidget(QLabel("组号:"))
-        self.add_group_sel = QComboBox()
-        self.add_group_sel.setFixedWidth(120)
-        r2.addWidget(self.add_group_sel)
-        self.add_acc_btn = icon_button("", "添加追踪账号", (40, 30), True, "font-size: 16px;", self._add_account)
-        r2.addWidget(self.add_acc_btn)
-        av.addLayout(r2)
-        outer.addWidget(add_card)
-
-        # 分组管理
-        group_card = QFrame()
-        group_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
-        gv = QVBoxLayout(group_card)
-        gv.setContentsMargins(10, 10, 10, 10)
-        gv.setSpacing(4)
-        gh = QLabel("分组管理（组编号 + 组名，支持按组导出）")
-        gh.setStyleSheet("font-weight: bold;")
-        gv.addWidget(gh)
-        self.group_list_frame = QScrollArea()
-        self.group_list_frame.setWidgetResizable(True)
-        self.group_list_frame.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
-        gcontainer = QWidget()
-        gcontainer.setStyleSheet("background: transparent;")
-        self.group_list_layout = QVBoxLayout(gcontainer)
-        self.group_list_layout.setContentsMargins(2, 2, 2, 2)
-        self.group_list_layout.setSpacing(3)
-        self.group_list_layout.addStretch(1)
-        self.group_list_frame.setWidget(gcontainer)
-        gv.addWidget(self.group_list_frame)
-        addg = QHBoxLayout()
-        self.gid_entry = QLineEdit()
-        self.gid_entry.setPlaceholderText("组编号(11/22)")
-        self.gid_entry.setFixedWidth(110)
-        addg.addWidget(self.gid_entry)
-        self.gname_entry = QLineEdit()
-        self.gname_entry.setPlaceholderText("组名")
-        self.gname_entry.setFixedWidth(140)
-        addg.addWidget(self.gname_entry)
-        newg_btn = icon_button("", "新建分组", (40, 30), True, "font-size: 16px;", self._add_group)
-        addg.addWidget(newg_btn)
-        addg.addStretch(1)
-        gv.addLayout(addg)
-        outer.addWidget(group_card)
-
-        # 已配置账号
-        list_card = QFrame()
-        list_card.setStyleSheet("QFrame { background: palette(base); border-radius: 8px; }")
-        lv = QVBoxLayout(list_card)
-        lv.setContentsMargins(10, 10, 10, 10)
-        lv.setSpacing(4)
-        lh = QLabel("已配置账号")
-        lh.setStyleSheet("font-weight: bold;")
-        lv.addWidget(lh)
-        self.acc_list_frame = QScrollArea()
-        self.acc_list_frame.setWidgetResizable(True)
-        acontainer = QWidget()
-        self.acc_list_layout = QVBoxLayout(acontainer)
-        self.acc_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.acc_list_layout.setSpacing(3)
-        self.acc_list_layout.addStretch(1)
-        self.acc_list_frame.setWidget(acontainer)
-        lv.addWidget(self.acc_list_frame, 1)
-        outer.addWidget(list_card, 1)
-        return f
-
-    # ---------- 账号管理 ----------
+    # ---------- 账号卡片 ----------
     def reload_accounts(self):
         self._accounts_loading = True
         self._accounts_refreshed_at = time.monotonic()
@@ -268,10 +136,9 @@ class MusicTrackerPage(BasePage):
         self.cards = []
         from music_account.accounts import load_accounts
         accounts = load_accounts()
-        self._reload_acc_list()
         if not accounts:
             self._accounts_loading = False
-            lbl = QLabel("（暂无账号，请在「设置」里搜索或添加）")
+            lbl = QLabel("（暂无账号，请在「Cookie 管理 → 账号配置」里搜索或添加）")
             lbl.setStyleSheet("color: gray;")
             lbl.setAlignment(Qt.AlignCenter)
             self.cards_layout.takeAt(self.cards_layout.count() - 1)
@@ -642,362 +509,9 @@ class MusicTrackerPage(BasePage):
         if (not self._accounts_loading
                 and time.monotonic() - self._accounts_refreshed_at > 30):
             self.reload_accounts()
-    # ---------- 设置页：搜索/账号增删 ----------
-    def _auto_fetch_name(self):
-        """按链接识别音乐平台并拉取昵称，填充到账号名输入框（后台线程，不卡 UI）。"""
-        url = self.add_url.text().strip()
-        if not url:
-            self.app.toast("请先输入链接", "warning")
-            return
-        self.name_fetch_btn.setEnabled(False)
-        self.name_fetch_btn.setText("")
 
-        def work():
-            from platforms.account_names import fetch_music_account_name
-            return fetch_music_account_name(url)
-
-        def done(result, err):
-            self.name_fetch_btn.setEnabled(True)
-            self.name_fetch_btn.setText("")
-            if err:
-                self.app.toast(f"获取失败：{err[:60]}", "error")
-                return
-            name, ferr = result or ("", "")
-            if name:
-                self.add_name.setText(name)
-                self.app.toast(f"已获取账号名「{name}」", "success")
-            else:
-                self.app.toast(ferr or "未获取到账号名", "error")
-
-        run_bg(work, done)
-
-    def _search_accounts(self):
-        """按名称搜索平台账号/歌手：结果弹窗里选中后自动填入账号名+链接。"""
-        from music_account.collectors import search_account
-        plat_map = {"网易云": "netease", "QQ音乐": "qq", "酷狗": "kugou", "酷我": "kuwo"}
-        platform = plat_map.get(self.search_platform.currentText(), "")
-        kw = self.search_kw.text().strip()
-        if not kw:
-            self.app.toast("请输入要搜索的名称", "warning")
-            return
-        self.search_kw.setEnabled(False)
-
-        def work():
-            return search_account(platform, kw)
-
-        def done(results, err):
-            self.search_kw.setEnabled(True)
-            if err:
-                self.app.toast(f"搜索失败：{err}", "error")
-                return
-            if not results:
-                self.app.toast(f"「{kw}」在{self.search_platform.currentText()}没有搜到结果", "warning")
-                return
-            self._show_search_results(platform, kw, results)
-
-        run_bg(work, done)
-
-    def _show_search_results(self, platform, kw, results):
-        """搜索结果弹窗：列表选择（双击/选中+添加）→ 填入账号名与链接。"""
-        win = QDialog(self)
-        win.setWindowTitle(f"搜索「{kw}」 · {PLATFORM_NAMES.get(platform, platform)}")
-        win.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
-        win.resize(560, 400)
-        v = QVBoxLayout(win)
-        v.setContentsMargins(12, 12, 12, 12)
-        head = QLabel(f"共 {len(results)} 条结果（双击条目或选中后点「填入」）")
-        head.setStyleSheet("font-size: 13px; font-weight: bold;")
-        v.addWidget(head)
-        table = QTableWidget(len(results), 4)
-        table.setHorizontalHeaderLabels(["名称", "类型", "粉丝数", "链接"])
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        kind_names = {"user": "用户", "artist": "歌手", "singer": "歌手"}
-        for i, r in enumerate(results):
-            fans = r.get("fans")
-            fans_txt = f"{fans:,}" if isinstance(fans, int) else ""
-            table.setItem(i, 0, QTableWidgetItem(str(r.get("name") or "")))
-            table.setItem(i, 1, QTableWidgetItem(kind_names.get(r.get("kind"), r.get("kind") or "")))
-            table.setItem(i, 2, QTableWidgetItem(fans_txt))
-            table.setItem(i, 3, QTableWidgetItem(str(r.get("url") or "")))
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setStretchLastSection(True)
-        v.addWidget(table, 1)
-
-        def _fill():
-            rows = {idx.row() for idx in table.selectedIndexes()}
-            if not rows:
-                self.app.toast("请先选中一条结果", "warning")
-                return
-            r = results[min(rows)]
-            name = str(r.get("name") or "").strip() or "未命名"
-            # 同名多平台区分后缀（与默认账号命名一致）
-            self.add_name.setText(f"{name}{PLATFORM_NAMES.get(platform, '')}")
-            self.add_url.setText(str(r.get("url") or ""))
-            win.accept()
-            self.sub.setCurrentIndex(1)
-
-        table.cellDoubleClicked.connect(lambda _r, _c: _fill())
-        bar = QHBoxLayout()
-        fill_btn = QPushButton("填入")
-        fill_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
-        fill_btn.clicked.connect(_fill)
-        bar.addStretch(1)
-        bar.addWidget(fill_btn)
-        v.addLayout(bar)
-        win.exec()
-
-    def _selected_group_id(self):
-        """从组号下拉框解析当前选中的组号（"无分组" 或 "组号:组名"）。"""
-        v = self.add_group_sel.currentText()
-        if not v or v == "无分组":
-            return ""
-        return v.split(":")[0].strip()
-
-    def _add_account(self):
-        name = self.add_name.text().strip()
-        url = self.add_url.text().strip()
-        if not url:
-            self.app.toast("请输入账号链接（可在上方搜索自动填入）", "warning")
-            return
-        if name:
-            self._do_add_account(url, name)
-        else:
-            # 名称留空 → 自动获取「昵称+平台」（如 封茗囧菌网易云），失败回退「未命名」
-            self.app.toast("名称留空，正在自动获取账号名...", "info")
-            self.add_acc_btn.setEnabled(False)
-
-            def work():
-                from platforms.account_names import fetch_display_name
-                return fetch_display_name(url)
-
-            def done(result, err):
-                self.add_acc_btn.setEnabled(True)
-                auto_name, _ferr = result or ("", "")
-                if not auto_name:
-                    reason = str(err)[:60] if err else ""
-                    self.app.toast(f"自动获取失败{('：' + reason) if reason else ''}，已按「未命名」添加", "warning")
-                self._do_add_account(url, auto_name or "未命名")
-
-            run_bg(work, done)
-
-    def _do_add_account(self, url: str, name: str):
-        from music_account.accounts import parse_url, extract_pid, load_accounts, save_accounts
-        plat_map = {"自动识别": "", "网易云": "netease", "QQ音乐": "qq", "酷狗": "kugou",
-                    "酷我": "kuwo", "5sing": "fivesing"}
-        platform = plat_map.get(self.add_platform.currentText(), "")
-        kind = ""
-        if not platform:
-            platform, _pid, kind = parse_url(url)
-        else:
-            # 手动选平台：链接必须能解析出该平台 ID（防止选 5sing 贴酷我链接）
-            pid, k = extract_pid(platform, url)
-            if not pid:
-                self.app.toast(
-                    f"链接无法解析出「{self.add_platform.currentText()}」的 ID，"
-                    "请检查链接与所选平台是否匹配", "warning")
-                return
-            kind = k
-        if not platform:
-            self.app.toast("无法识别链接平台，请检查链接或手动选择平台", "warning")
-            return
-        gid = self._selected_group_id()
-        acc = {"name": name, "url": url, "platform": platform, "kind": kind, "group_id": gid}
-        accounts = load_accounts()
-        accounts.append(acc)
-        save_accounts(accounts)
-        self.add_name.clear()
-        self.add_url.clear()
-        self.reload_accounts()
-
-    def _delete_account(self, index):
-        from music_account.accounts import load_accounts, save_accounts
-        accounts = load_accounts()
-        if 0 <= index < len(accounts):
-            accounts.pop(index)
-            save_accounts(accounts)
-            self.reload_accounts()
-
-    def _move_account(self, index, delta):
-        """上移/下移已配置账号（顺序即采集顺序，保存后立即生效）。"""
-        from music_account.accounts import move_account
-        if move_account(index, delta):
-            self.reload_accounts()
-
-    def _reload_acc_list(self):
-        self._clear_layout(self.acc_list_layout)
-        self.acc_list_layout.addStretch(1)
-        from music_account.accounts import load_accounts, get_groups
-        accounts = load_accounts()
-        groups = get_groups()
-        group_opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
-        self._acc_rows = []  # (index, gsel, 初始组值)
-        if not accounts:
-            lbl = QLabel("（暂无账号，先在上方添加）")
-            lbl.setStyleSheet("color: gray;")
-            self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
-            self.acc_list_layout.addWidget(lbl)
-            self.acc_list_layout.addStretch(1)
-            return
-        for i, acc in enumerate(accounts):
-            row = QFrame()
-            row.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
-            h = QHBoxLayout(row)
-            h.setContentsMargins(8, 4, 8, 4)
-            plat = PLATFORM_NAMES.get(acc.get("platform"), acc.get("platform") or "自动")
-            info = QLabel(f"{acc.get('name')}  [{plat}]  {acc.get('url', '')[:36]}")
-            h.addWidget(info, 1)
-            # 组号下拉（当前所属组）
-            cur_gid = acc.get("group_id", "")
-            cur_val = "无分组"
-            for opt in group_opts:
-                if opt != "无分组" and opt.split(":")[0] == cur_gid:
-                    cur_val = opt
-                    break
-            gsel = QComboBox()
-            gsel.addItems(group_opts)
-            gsel.setCurrentText(cur_val)
-            gsel.setFixedWidth(126)
-            h.addWidget(gsel)
-            # 记录行控件与初始值，改动后启用底部「保存全部修改」
-            self._acc_rows.append((i, gsel, cur_val))
-            gsel.currentTextChanged.connect(
-                lambda _t: self._acc_save_btn.setEnabled(True))
-            # 上移/下移（直接改账号顺序，立即生效）
-            up_btn = icon_button("", "上移一位", (28, 26), True, "font-size: 12px;",
-                                 on_click=lambda idx=i: self._move_account(idx, -1))
-            up_btn.setEnabled(i > 0)
-            h.addWidget(up_btn)
-            down_btn = icon_button("", "下移一位", (28, 26), True, "font-size: 12px;",
-                                   on_click=lambda idx=i: self._move_account(idx, 1))
-            down_btn.setEnabled(i < len(accounts) - 1)
-            h.addWidget(down_btn)
-            del_btn = QPushButton("")
-            del_btn.setFixedSize(30, 26)
-            del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
-            del_btn.clicked.connect(lambda _=False, idx=i: self._delete_account(idx))
-            h.addWidget(del_btn)
-            self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
-            self.acc_list_layout.addWidget(row)
-            self.acc_list_layout.addStretch(1)
-        # 底部统一保存按钮（替代逐行 ）
-        bar = QHBoxLayout()
-        self._acc_save_btn = QPushButton("保存全部修改")
-        self._acc_save_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 4px 14px;")
-        self._acc_save_btn.setEnabled(False)
-        self._acc_save_btn.clicked.connect(self._save_all_account_groups)
-        bar.addWidget(self._acc_save_btn)
-        bar.addStretch(1)
-        hint = QLabel("修改组号后点此一次性保存")
-        hint.setStyleSheet(_status_style("muted", 11))
-        bar.addWidget(hint)
-        self.acc_list_layout.takeAt(self.acc_list_layout.count() - 1)
-        self.acc_list_layout.addLayout(bar)
-        self.acc_list_layout.addStretch(1)
-
-    def _save_all_account_groups(self):
-        """一次性保存所有行的分组修改（替代逐行保存）。"""
-        from music_account.accounts import load_accounts, save_accounts
-        accounts = load_accounts()
-        changed = 0
-        for idx, gsel, orig in getattr(self, "_acc_rows", []):
-            v = gsel.currentText()
-            if v == orig or not (0 <= idx < len(accounts)):
-                continue
-            gid = "" if v == "无分组" else v.split(":")[0].strip()
-            accounts[idx]["group_id"] = gid
-            changed += 1
-        if changed:
-            save_accounts(accounts)
-            self.app.toast(f"已保存 {changed} 项分组修改", "success")
-        else:
-            self.app.toast("没有需要保存的修改", "info")
-        self.reload_accounts()
-
-    # ---------- 分组管理 ----------
-    def _reload_group_list(self):
-        """刷新分组列表 + 添加账号/已配置账号的组号下拉菜单。"""
-        from music_account.accounts import get_groups
-        groups = get_groups()
-        # 刷新「添加账号」的组号下拉（按文件序， 排序即调整该顺序）
-        opts = ["无分组"] + [f"{gid}:{gname}" for gid, gname in groups.items()]
-        cur = self.add_group_sel.currentText()
-        self.add_group_sel.clear()
-        self.add_group_sel.addItems(opts)
-        if cur in opts:
-            self.add_group_sel.setCurrentText(cur)
-        else:
-            self.add_group_sel.setCurrentText(opts[0])
-        # 刷新分组列表
-        self._clear_layout(self.group_list_layout)
-        self.group_list_layout.addStretch(1)
-        if not groups:
-            lbl = QLabel("（暂无分组，先新建分组再给账号绑定组号）")
-            lbl.setStyleSheet("color: gray;")
-            self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
-            self.group_list_layout.addWidget(lbl)
-            self.group_list_layout.addStretch(1)
-        else:
-            n = len(groups)
-            for pos, (gid, gname) in enumerate(groups.items()):
-                row = QFrame()
-                row.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
-                h = QHBoxLayout(row)
-                h.setContentsMargins(8, 4, 8, 4)
-                gid_lbl = QLabel(gid)
-                gid_lbl.setFixedWidth(44)
-                gid_lbl.setStyleSheet(
-                    f"font-weight: bold; color: {theme.color('link')};")
-                h.addWidget(gid_lbl)
-                h.addWidget(QLabel(gname), 1)
-                up_btn = icon_button("", "上移一位", (28, 24), True, "font-size: 11px;")
-                up_btn.setEnabled(pos > 0)
-                up_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, -1))
-                h.addWidget(up_btn)
-                down_btn = icon_button("", "下移一位", (28, 24), True, "font-size: 11px;")
-                down_btn.setEnabled(pos < n - 1)
-                down_btn.clicked.connect(lambda _=False, g=gid: self._move_group(g, 1))
-                h.addWidget(down_btn)
-                del_btn = QPushButton("")
-                del_btn.setFixedSize(30, 22)
-                del_btn.setStyleSheet(icon_btn_style(False, "background: palette(bright-text); color: palette(highlighted-text); font-size: 13px;"))
-                del_btn.clicked.connect(lambda _=False, g=gid: self._delete_group(g))
-                h.addWidget(del_btn)
-                self.group_list_layout.takeAt(self.group_list_layout.count() - 1)
-                self.group_list_layout.addWidget(row)
-                self.group_list_layout.addStretch(1)
-        # 刷新「已配置账号」列表（组号下拉同步新增的分组）
-        self._reload_acc_list()
-
-    def _move_group(self, gid, delta):
-        from music_account.accounts import move_group
-        if move_group(gid, delta):
-            self._reload_group_list()
-            self.reload_accounts()
-
-    def _add_group(self):
-        gid = self.gid_entry.text().strip()
-        gname = self.gname_entry.text().strip()
-        from music_account.accounts import GROUP_ID_PATTERN, save_group, get_groups
-        if not gid or not GROUP_ID_PATTERN.match(gid):
-            self.app.toast("组编号必须为重复数字，如 11、22、33", "warning")
-            return
-        if not gname:
-            self.app.toast("请输入组名", "warning")
-            return
-        if gid in get_groups():
-            self.app.toast(f"组 {gid} 已存在，直接给账号绑定即可", "warning")
-            return
-        if save_group(gid, gname):
-            self.gid_entry.clear()
-            self.gname_entry.clear()
-            self._reload_group_list()
-            self.app.toast(f"已新建分组：{gid} {gname}", "success")
-
-    def _delete_group(self, gid):
-        from music_account.accounts import delete_group
-        delete_group(gid)
-        self._reload_group_list()
+    def refresh_accounts(self):
+        """账号配置在「Cookie 管理 → 账号配置」里改动后，刷新卡片（不触发采集）。"""
         self.reload_accounts()
 
     # ---------- 按组导出 ----------
@@ -1006,7 +520,7 @@ class MusicTrackerPage(BasePage):
         from music_account.accounts import get_groups
         groups = get_groups()
         if not groups:
-            self.app.toast("暂无分组，请先在「设置」里新建分组", "warning")
+            self.app.toast("暂无分组，请先在「Cookie 管理 → 账号配置」里新建分组", "warning")
             return
         win = QDialog(self)
         win.setWindowTitle("按组导出")

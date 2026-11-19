@@ -13,7 +13,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -809,6 +809,7 @@ class LyricSearchDialog(QDialog):
         self.lyric = ""
         self.lyric_trans = ""
         self._current = None
+        self._errors: dict[str, str] = {}
 
         v = QVBoxLayout(self)
         top = QHBoxLayout()
@@ -858,16 +859,21 @@ class LyricSearchDialog(QDialog):
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
 
+        if self.title_edit.text().strip():
+            QTimer.singleShot(0, self._search)
+
     def _search(self):
         title = self.title_edit.text().strip()
         if not title:
             return
         self.search_btn.setEnabled(False)
         self.info.setText("搜索中……")
+        self._errors.clear()
 
         def job():
             return tag_search.search_tracks(title, self.artist_edit.text().strip(), "",
-                                            tag_search.DEFAULT_SOURCES)
+                                            tag_search.DEFAULT_SOURCES,
+                                            errors=self._errors)
 
         def done(result, err):
             self.search_btn.setEnabled(True)
@@ -880,6 +886,14 @@ class LyricSearchDialog(QDialog):
                 self.table.insertRow(i)
                 _fill_row(self.table, i, [cand.source_name, cand.title, cand.artist,
                                           cand.album, tag_search.format_duration(cand.duration)])
+            if not self.candidates:
+                failed = [f"{tag_search.SOURCE_NAMES.get(k, k)}：{v}"
+                          for k, v in self._errors.items()]
+                msg = "没有找到候选，换个标题/艺术家再试"
+                if failed:
+                    msg += "（失败源：" + "；".join(failed[:2]) + "）"
+                self.info.setText(msg)
+                return
             self.info.setText(f"共 {len(self.candidates)} 个候选（选中后自动加载歌词）")
 
         run_bg(job, done)

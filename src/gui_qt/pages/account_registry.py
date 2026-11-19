@@ -3,7 +3,7 @@
 数据来自 `toolbox.accounts_overview.load_overview()`，按「平台 + 规范化链接」去重，
 显示每个账号被哪些功能使用、分组与采集类型。
 
-本页不写任何账号文件；统一录入与「使用处勾选启用」在注册表迁移完成后开放。
+本页不写任何账号文件；增删账号与按功能勾选启用统一在「Cookie 管理 → 账号配置」。
 """
 
 from __future__ import annotations
@@ -75,8 +75,8 @@ class AccountRegistryPage(BasePage):
         outer.addWidget(self.table, 1)
 
         self.note = QLabel(
-            "只读总览：数据仍由三个账号中心各自保存，本页不改写任何账号文件。"
-            "统一录入与「使用处勾选启用」将在注册表迁移完成后开放。")
+            "只读总览：账号的添加/删除、分组与「可用于哪些功能」统一在"
+            "「Cookie 管理 → 账号配置」里维护，本页不改写任何账号文件。")
         self.note.setProperty("role", "caption")
         self.note.setWordWrap(True)
         outer.addWidget(self.note)

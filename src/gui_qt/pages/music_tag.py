@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMenuBar,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QStyle,
+    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStyle,
     QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
@@ -679,10 +679,18 @@ class MusicTagPage(BasePage):
         lyr_row = QHBoxLayout()
         lyr_row.setContentsMargins(0, 0, 0, 0)
         self.lyr_edit = QPlainTextEdit()
-        self.lyr_edit.setMaximumHeight(150)
+        self.lyr_edit.setMinimumHeight(120)
+        self.lyr_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.lyr_edit.textChanged.connect(lambda: self._on_edited("lyrics"))
         lyr_row.addWidget(self.lyr_edit, 1)
         lyr_side = QVBoxLayout()
+        lyr_side.setContentsMargins(0, 0, 0, 0)
+        lyr_side.setSpacing(4)
+        lyr_fetch = QPushButton("获取")
+        lyr_fetch.setFixedWidth(52)
+        lyr_fetch.setToolTip("优先读同目录同名 .lrc；没有则联网匹配，取到后存同名 .lrc 并写入文件")
+        lyr_fetch.clicked.connect(self._fetch_lyric)
+        lyr_side.addWidget(lyr_fetch)
         lyr_btn = QPushButton("展开\n编辑")
         lyr_btn.setFixedWidth(52)
         lyr_btn.setToolTip("打开二级窗口查看/编辑完整歌词")
@@ -691,7 +699,7 @@ class MusicTagPage(BasePage):
         lyr_side.addStretch(1)
         lyr_row.addLayout(lyr_side)
         form.addRow("歌词", lyr_row)
-        lv.addLayout(form)
+        lv.addLayout(form, 1)
 
         # 封面
         cov_row = QHBoxLayout()
@@ -718,7 +726,6 @@ class MusicTagPage(BasePage):
         cv.addStretch(1)
         cov_row.addLayout(cv, 1)
         lv.addLayout(cov_row)
-        lv.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -748,6 +755,7 @@ class MusicTagPage(BasePage):
             self.table.setColumnWidth(i, width)
         self._apply_column_visibility()
         sp.addWidget(self.table)
+        sp.setStretchFactor(0, 2)
         sp.setStretchFactor(1, 4)
         sp.setSizes([430, 900])
         return sp
@@ -1028,7 +1036,7 @@ class MusicTagPage(BasePage):
             self._mark_row(i)
         self._update_status()
 
-    def _save_rows(self, idxs: list[int]):
+    def _save_rows(self, idxs: list[int], note: str = ""):
         rows = [(i, self._rows[i]) for i in idxs if self._rows[i].get("dirty")]
         if not rows:
             self.app.toast("没有已修改的文件", "info")
@@ -1063,8 +1071,8 @@ class MusicTagPage(BasePage):
                 self.status.setText(f"保存完成 {ok} 个，失败 {len(failed)} 个：" + "；".join(failed[:3]))
                 self.app.toast(f"{ok} 成功 / {len(failed)} 失败", "warning")
             else:
-                self.status.setText(f"已保存 {ok} 个文件")
-                self.app.toast(f"已保存 {ok} 个文件", "success")
+                self.status.setText(f"已保存 {ok} 个文件" + (f" · {note}" if note else ""))
+                self.app.toast(f"已保存 {ok} 个文件" + (f" · {note}" if note else ""), "success")
             self._update_status()
 
         run_bg(job, done)
@@ -1320,6 +1328,104 @@ class MusicTagPage(BasePage):
             self._update_status()
             self.app.toast("封面已套用（记得保存）", "success")
 
+    def _request_lyric(self, row: dict, on_result):
+        """按当前标签后台匹配歌词，回主线程 on_result(lyric, source_label, err)。"""
+        tags = row.get("tags") or {}
+        title = str(tags.get("title") or "").strip()
+        used_filename = not title
+        if not title:
+            title = os.path.splitext(os.path.basename(row.get("path") or ""))[0]
+        artist = str(tags.get("artist") or "").strip()
+        album = str(tags.get("album") or "").strip()
+
+        def job():
+            return tag_search.auto_match(title, artist, album, tag_search.DEFAULT_SOURCES,
+                                         used_filename=used_filename, need_cover=False)
+
+        def done(result, err):
+            if err:
+                on_result("", "", f"搜索失败：{err}")
+                return
+            cand = getattr(result, "candidate", None)
+            lyric = (cand.lyric if cand else "") or ""
+            label = f"{cand.source_name} · {cand.title} - {cand.artist}" if lyric else ""
+            on_result(lyric, label, "")
+
+        run_bg(job, done)
+
+    def _fetch_lyric(self):
+        i = self._current_row()
+        if i is None:
+            self.app.toast("请先选中一个文件", "warning")
+            return
+        targets = [j for j in self._edit_targets if 0 <= j < len(self._rows)] or [i]
+
+        # 1) 本地同名 .lrc 优先
+        local = self._local_lyric_path(self._rows[i]["path"])
+        if local:
+            try:
+                text = open(local, "r", encoding="utf-8", errors="replace").read()
+            except OSError:
+                text = ""
+            if text.strip():
+                self._apply_fetched_lyric(text, targets, f"本地 {os.path.basename(local)}")
+                return
+
+        # 2) 联网匹配后落盘
+        self.status.setText("正在获取歌词……")
+
+        def done(lyric, label, err):
+            if err:
+                self.status.setText("")
+                self.app.toast(f"获取歌词失败：{err}", "error")
+                return
+            if not lyric:
+                self.status.setText("没有匹配到歌词，请手动选择来源")
+                self.app.toast("没有匹配到歌词，请手动选择来源", "warning")
+                self._lyric_search()
+                return
+            saved = sum(1 for j in targets if self._write_lyric_sidecar(self._rows[j]["path"], lyric))
+            self._apply_fetched_lyric(lyric, targets, label, saved)
+
+        self._request_lyric(self._rows[i], done)
+
+    def _local_lyric_path(self, path: str) -> str:
+        stem = os.path.splitext(os.path.basename(path or ""))[0]
+        folder = os.path.dirname(path or "")
+        for name in (stem + ".lrc", stem + ".txt"):
+            p = os.path.join(folder, name)
+            if os.path.isfile(p):
+                return p
+        return ""
+
+    def _write_lyric_sidecar(self, path: str, text: str) -> bool:
+        if not path:
+            return False
+        dst = os.path.splitext(path)[0] + ".lrc"
+        tmp = dst + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            os.replace(tmp, dst)
+            return True
+        except OSError:
+            return False
+
+    def _apply_fetched_lyric(self, text: str, targets: list[int], label: str,
+                             sidecar: int = 0):
+        for j in targets:
+            self._rows[j]["tags"]["lyrics"] = text
+            self._rows[j]["dirty"] = True
+            self._mark_row(j)
+        self.lyr_edit.blockSignals(True)
+        self.lyr_edit.setPlainText(text)
+        self.lyr_edit.blockSignals(False)
+        self._update_status()
+        extra = f"，同名 .lrc {sidecar} 个" if sidecar else ""
+        note = f"歌词来自 {label}{extra}"
+        self.status.setText(note + "，正在写入文件……")
+        self._save_rows(targets, note=note)
+
     def _lyric_search(self):
         i = self._current_row()
         if i is None:
@@ -1359,6 +1465,26 @@ class MusicTagPage(BasePage):
         edit.setFont(f)
         edit.textChanged.connect(lambda: self._lyric_dialog_info.setText(
             f"{len(edit.toPlainText())} 字符 · {edit.toPlainText().count(chr(10)) + 1} 行"))
+
+        fetch_btn = QPushButton("读取本地 .lrc")
+        fetch_btn.setToolTip("读取同目录同名 .lrc 填入")
+        row.insertWidget(1, fetch_btn)
+
+        def fetch_lyric():
+            local = self._local_lyric_path(self._rows[i]["path"])
+            if not local:
+                self._lyric_dialog_info.setText(
+                    "同目录没有同名 .lrc，可导入 .lrc 或到工具栏「歌词搜索」联网获取")
+                return
+            try:
+                text = open(local, "r", encoding="utf-8", errors="replace").read()
+            except OSError as exc:
+                self._lyric_dialog_info.setText(f"读取失败：{exc}")
+                return
+            edit.setPlainText(text)
+            self._lyric_dialog_info.setText(f"已读取 {os.path.basename(local)}")
+
+        fetch_btn.clicked.connect(fetch_lyric)
         v.addWidget(edit, 1)
         row2 = QHBoxLayout()
         row2.addStretch(1)

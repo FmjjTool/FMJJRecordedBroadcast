@@ -124,7 +124,7 @@ class FanGroupsPage(BasePage):
         row2 = QHBoxLayout()
         self.hint_label = QLabel(_HINTS["douyin"])
         self.hint_label.setStyleSheet("color: #666;")
-        row2.addWidget(self.hint_label, 1)
+        self.hint_label.setWordWrap(True)
 
         self.export_btn = QPushButton("导出 Excel")
         self.export_btn.setEnabled(False)
@@ -155,7 +155,14 @@ class FanGroupsPage(BasePage):
         clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self._clear)
         row2.addWidget(clear_btn)
+        row2.addStretch(1)
         tv.addLayout(row2)
+        tv.addWidget(self.hint_label)
+        self.task_label = QLabel("")
+        self.task_label.setProperty("role", "caption")
+        self.task_label.setWordWrap(True)
+        tv.addWidget(self.task_label)
+        self._refresh_task_label()
         layout.addWidget(top)
 
         self.table = QTableWidget(0, len(_COLUMNS))
@@ -189,6 +196,16 @@ class FanGroupsPage(BasePage):
         layout.addWidget(self.status_label)
 
     # ---------- 状态 ----------
+    def _refresh_task_label(self):
+        try:
+            from toolbox import fan_groups_task as fgt
+            count = len(fgt.load_targets())
+        except Exception:  # noqa: BLE001 - 读不到订阅名单时按未订阅显示
+            count = 0
+        self.task_label.setText(
+            f"定时快照：已订阅 {count} 个账号，时间到「任务 → 粉丝群快照」设置"
+            if count else "定时快照：查询成功后账号自动加入订阅名单")
+
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
         self.platform_box.setEnabled(not busy)
@@ -253,9 +270,17 @@ class FanGroupsPage(BasePage):
             self.copy_all_btn.setEnabled(bool(groups))
             self.avatar_btn.setEnabled(bool(groups))
             avatar_text = f"，头像 {av_ok}/{av_total}" if av_total else ""
+            subscribed = False
+            try:
+                from toolbox import fan_groups_task as fgt
+                subscribed = fgt.add_target(platform, text)
+            except Exception:  # noqa: BLE001 - 订阅名单写入失败不阻断查询
+                pass
+            self._refresh_task_label()
             self.status_label.setText(
                 f"{fg.PLATFORM_LABELS[platform]} {owner_id}：{len(groups)} 个群"
-                f"{avatar_text}，快照已保存（{os.path.basename(str(snap))}）")
+                f"{avatar_text}，快照已保存（{os.path.basename(str(snap))}）"
+                + ("，已加入定时快照名单" if subscribed else ""))
             self.app.toast(f"查到 {len(groups)} 个群", "success")
 
         run_bg(work, done)

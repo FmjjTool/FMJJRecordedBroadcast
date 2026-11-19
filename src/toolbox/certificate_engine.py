@@ -10,10 +10,11 @@
 - 复选框：文档里的勾选状态自动带出来，未匹配到的项交给页面复核勾选；
 - 派生字段：作品类型勾选后自动生成用途摘要与证书副标题；
   证书载明项留空时自动跟随正文 / 附件一；
-- 水印：按勾选内容把署名 / 认证号斜向平铺到作品图，右下角再压清晰标签，
-  导出时另存「水印件」文件夹（原图不修改）；
+- 水印：按勾选内容把署名 / 认证号以淡纹稀疏平铺到作品图，右下角再压一个小标签
+  （不遮挡主体），导出时另存到证书文件夹的「水印件」子目录（原图不修改）；
 - 渲染：Pillow 直接绘制 A4 横版 3508x2480，证书页 + 图片页；
-- 导出：两页 PNG（300dpi）+ 合并 PDF，文件名按认证号命名。
+- 导出：每份证书一个「认证号_作品名_内部认证证书」文件夹（两页 PNG 300dpi +
+  合并 PDF + 水印件），并在同级打一个同名 zip 包。
 
 历史数据只存字段、不含图片，见 `toolbox/certificate_history.py`。
 版式规范见 `src/skills/image-output-spec/SKILL.md` 的「内部认证证书」一节。
@@ -513,7 +514,11 @@ class CertificateData:
             ("其他约定标识", _clean(self.wm_other)),
         )
         checked = set(self.watermark_items)
-        parts = [value for item, value in mapping if (not checked or item in checked) and value]
+        parts: list[str] = []
+        for item, value in mapping:
+            if (checked and item not in checked) or not value or value in parts:
+                continue
+            parts.append(value)
         if not parts:
             parts = [part for part in (self.wm_author_text(), self.wm_archive_text()) if part]
         return parts
@@ -848,6 +853,40 @@ def missing_fields(data: CertificateData) -> list[str]:
         missing.append("作品类型")
     if data.status == "已续签" and not _clean(data.renew_until):
         missing.append("续签至日期")
+    return missing
+
+
+# 填写表里标「是」的必填项（页面直接可填的字段）。
+# 带自动回落的字段（证书载明、图片内署名、确认签名等）不在这里，
+# 由 cert_*/wm_*/author_sign 的回落逻辑保证有值，页面只标星、不判红。
+REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("archive_no", "内部认证号"),
+    ("title", "作品标题"),
+    ("author_name", "授权方圈名"),
+    ("author_contact", "授权方联系方式"),
+    ("manager_rep", "管理组代表 / 负责人"),
+    ("contact_person", "被授权方对接人"),
+    ("art_type", "作品类型"),
+    ("lead_designer", "主要设计人"),
+    ("period_start", "授权期限起始日"),
+    ("period_end", "授权期限届满日"),
+    ("author_sign_date", "授权方确认日期"),
+    ("licensee_rep_sign", "被授权方代表签名"),
+    ("licensee_sign_date", "被授权方确认日期"),
+    ("sample_format", "样本格式"),
+    ("image_format", "证书图片格式"),
+    ("credit_note", "署名写法说明"),
+)
+
+
+def required_missing(data: CertificateData) -> list[tuple[str, str]]:
+    """按填写表的必填清单找出未填项，返回 [(字段名, 中文名)]，供页面标红。"""
+    missing = [
+        (key, label) for key, label in REQUIRED_FIELDS
+        if not _clean(str(getattr(data, key, "") or ""))
+    ]
+    if data.status == "已续签" and not _clean(data.renew_until):
+        missing.append(("renew_until", "续签至"))
     return missing
 
 
@@ -1271,11 +1310,11 @@ def _text_layer(text: str, font, fill: tuple[int, int, int, int], angle: float) 
 
 
 def apply_watermark(image: Image.Image, text: str, *, angle: float = -28.0) -> Image.Image:
-    """把署名 / 认证号斜向平铺到作品图上，右下角再压一块清晰可辨的标签。
+    """把署名 / 认证号以淡纹稀疏平铺到作品图上，右下角再压一个小标签。
 
     水印直接合成进图片（对应协议附件二：水印已合成在作品图片上，
-    无需独立水印文件），因此整幅图铺淡纹 + 右下角实标签。
-    """
+    无需独立水印文件）；透明度与间距都收得比较轻，避免遮挡画面主体，
+    同时保留「清晰可辨」的右下角标签。"""
     if not _clean(text):
         return image.convert("RGB")
     base = image.convert("RGBA")
@@ -1283,19 +1322,19 @@ def apply_watermark(image: Image.Image, text: str, *, angle: float = -28.0) -> I
     short = max(1, min(width, height))
     ink = _rgb(INK)
 
-    font_size = max(18, int(short * 0.048))
-    while font_size > 16:
+    font_size = max(16, int(short * 0.034))
+    while font_size > 15:
         font = _font(font_size, bold=True)
         probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-        if probe.textlength(text, font=font) <= width * 0.66:
+        if probe.textlength(text, font=font) <= width * 0.6:
             break
         font_size -= 2
     font = _font(font_size, bold=True)
-    tile = _text_layer(text, font, (*ink, 52), angle)
+    tile = _text_layer(text, font, (*ink, 30), angle)
 
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    step_x = int(tile.width * 1.12)
-    step_y = int(tile.height * 2.1)
+    step_x = int(tile.width * 1.45)
+    step_y = int(tile.height * 3.4)
     row = 0
     y = -tile.height
     while y < height + tile.height:
@@ -1307,24 +1346,24 @@ def apply_watermark(image: Image.Image, text: str, *, angle: float = -28.0) -> I
         row += 1
     base.alpha_composite(overlay)
 
-    # 右下角标签：白底半透明 + 深色字，保证「图中清晰可辨」
-    label_size = max(16, int(short * 0.026))
+    # 右下角标签：半透明小标签，保证「图中清晰可辨」但不压住主体
+    label_size = max(14, int(short * 0.019))
     label_font = _font(label_size, bold=True)
     label_draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    label = _ellipsize(label_draw, text, label_font, width * 0.62)
-    pad_x, pad_y = int(label_size * 0.85), int(label_size * 0.55)
+    label = _ellipsize(label_draw, text, label_font, width * 0.5)
+    pad_x, pad_y = int(label_size * 0.7), int(label_size * 0.42)
     text_w = int(label_draw.textlength(label, font=label_font))
     box_w = text_w + pad_x * 2
     box_h = label_size + pad_y * 2
-    margin = max(14, int(short * 0.022))
+    margin = max(12, int(short * 0.018))
     plaque = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     plaque_draw = ImageDraw.Draw(plaque)
     plaque_draw.rounded_rectangle(
-        (0, 0, box_w - 1, box_h - 1), radius=min(18, box_h // 3),
-        fill=(255, 255, 255, 186), outline=(*_rgb(GOLD), 150), width=2,
+        (0, 0, box_w - 1, box_h - 1), radius=min(14, box_h // 3),
+        fill=(255, 255, 255, 132), outline=(*_rgb(GOLD), 96), width=1,
     )
     plaque_draw.text((box_w / 2, box_h / 2), label, font=label_font,
-                     fill=(*ink, 232), anchor="mm")
+                     fill=(*ink, 190), anchor="mm")
     base.alpha_composite(plaque, (width - box_w - margin, height - box_h - margin))
     return base.convert("RGB")
 
@@ -1503,6 +1542,8 @@ class ExportResult:
     pdf_path: str = ""
     page_count: int = 0
     watermarked_paths: list[str] = field(default_factory=list)
+    folder_path: str = ""     # 本次证书的专属文件夹
+    zip_path: str = ""        # 该文件夹的附属 zip 包
 
 
 # ==================== Word（docx）标准文档 ====================
@@ -1564,22 +1605,15 @@ def _docx_certificate_block(data: CertificateData) -> list[str]:
 
 
 def export_docx(data: CertificateData, body_text: str, out_dir: str | Path) -> str:
-    """导出 Word：证书页 + 协议正文，可再编辑。返回文件路径。"""
+    """导出 Word：证书页 + 协议正文，写入该证书的专属文件夹，可再编辑。"""
     import zipfile
 
     missing = missing_fields(data)
     if missing:
         raise ValueError("缺少必填字段：" + "、".join(missing))
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    stem = "_".join(
-        part for part in (
-            image_render.safe_filename_part(data.archive_no, 40),
-            image_render.safe_filename_part(data.title, 40),
-            "内部认证证书",
-        ) if part
-    )
-    target = out / f"{stem}.docx"
+    folder, stem = certificate_package(data, out_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{stem}.docx"
 
     body: list[str] = list(_docx_certificate_block(data))
     body.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
@@ -1617,6 +1651,9 @@ def export_docx(data: CertificateData, body_text: str, out_dir: str | Path) -> s
                     "</Relationships>")
         zf.writestr("word/document.xml", document)
     temp.replace(target)
+    archive = folder.parent / f"{stem}.zip"
+    if archive.is_file():
+        _zip_package(folder, archive)
     return str(target)
 
 
@@ -1629,12 +1666,8 @@ def _save_png(image: Image.Image, path: Path) -> str:
     return str(path)
 
 
-def export_certificate(data: CertificateData, images: Sequence[str | Path],
-                       out_dir: str | Path) -> ExportResult:
-    """导出两页 PNG + 合并 PDF；文件名以认证号 + 作品标题为前缀。"""
-    missing = missing_fields(data)
-    if missing:
-        raise ValueError("缺少必填字段：" + "、".join(missing))
+def certificate_package(data: CertificateData, out_dir: str | Path) -> tuple[Path, str]:
+    """返回「认证号_作品名_内部认证证书」文件夹与其名称。"""
     out = Path(out_dir)
     stem = "_".join(
         part for part in (
@@ -1643,15 +1676,40 @@ def export_certificate(data: CertificateData, images: Sequence[str | Path],
             "内部认证证书",
         ) if part
     )
+    return out / stem, stem
+
+
+def _zip_package(folder: Path, target: Path) -> str:
+    """把证书文件夹整体打包（解压后仍是同名文件夹），先写临时文件再替换。"""
+    import zipfile
+
+    temp = target.with_name(f".{target.stem}.tmp.zip")
+    with zipfile.ZipFile(temp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file():
+                arcname = f"{folder.name}/{path.relative_to(folder).as_posix()}"
+                archive.write(path, arcname)
+    temp.replace(target)
+    return str(target)
+
+
+def export_certificate(data: CertificateData, images: Sequence[str | Path],
+                       out_dir: str | Path) -> ExportResult:
+    """导出两页 PNG + PDF 到专属文件夹，并额外打一个同名 zip 包。"""
+    missing = missing_fields(data)
+    if missing:
+        raise ValueError("缺少必填字段：" + "、".join(missing))
     pages = render_pages(data, images)
-    result = ExportResult(page_count=len(pages))
-    result.watermarked_paths = export_watermarked_copies(images, data, out)
+    folder, stem = certificate_package(data, out_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    result = ExportResult(page_count=len(pages), folder_path=str(folder))
+    result.watermarked_paths = export_watermarked_copies(images, data, folder)
     if result.watermarked_paths:
         data.watermark_file = data.watermark_file or Path(result.watermarked_paths[0]).name
         data.cert_sample_file = data.cert_sample_file or data.watermark_file
     for index, page in enumerate(pages, start=1):
-        result.png_paths.append(_save_png(page, out / f"{stem}_{index:02d}.png"))
-    pdf_path = out / f"{stem}.pdf"
+        result.png_paths.append(_save_png(page, folder / f"{stem}_{index:02d}.png"))
+    pdf_path = folder / f"{stem}.pdf"
     temp_pdf = pdf_path.with_name(f".{pdf_path.stem}.tmp.pdf")
     pages[0].convert("RGB").save(
         temp_pdf, "PDF", resolution=DPI, save_all=True,
@@ -1659,4 +1717,5 @@ def export_certificate(data: CertificateData, images: Sequence[str | Path],
     )
     temp_pdf.replace(pdf_path)
     result.pdf_path = str(pdf_path)
+    result.zip_path = _zip_package(folder, folder.parent / f"{stem}.zip")
     return result
