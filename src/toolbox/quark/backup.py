@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -43,6 +44,10 @@ class BackupResult:
     errors: list[str] = field(default_factory=list)
     message: str = ""
     ok: bool = True
+    # 本次上传后生成的分享（share_url 为空表示没建）
+    share_dir: str = ""
+    share_url: str = ""
+    share_passcode: str = ""
 
     def summary(self) -> str:
         parts = [f"扫描 {self.scanned}", f"上传 {self.uploaded}",
@@ -190,6 +195,7 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
         return result
 
     _say(log, f"[{mapping.remote_dir}] 待处理 {len(files)} 个文件")
+    touched_dirs: set[str] = set()
     try:
         if client is None:
             client = build_client(mapping.provider)
@@ -327,6 +333,7 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
             done_bytes += stat.st_size
             result.uploaded += 1
             result.bytes += stat.st_size
+            touched_dirs.add(remote_dir)
             note = "（秒传）" if info.get("instant") else ""
             _say(log, f"已上传{note}：{rel}  {human_size(stat.st_size)}")
         except Exception as exc:  # noqa: BLE001 - 单个文件失败不打断整批
@@ -338,6 +345,7 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
             index_cache.pop(remote_dir, None)
 
     result.finished_at = _now()
+    _share_uploaded_folder(client, mapping, result, touched_dirs, log)
     if result.failed:
         result.ok = False
         result.message = result.message or f"{result.failed} 个文件失败"
@@ -349,6 +357,57 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
     except Exception:  # noqa: BLE001 - 记录失败不影响备份结果
         pass
     return result
+
+
+# ==================== 分享 ====================
+
+_SHARE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def _share_passcode(length: int = 4) -> str:
+    return "".join(secrets.choice(_SHARE_ALPHABET) for _ in range(length))
+
+
+def share_target_dir(mapping: Mapping, touched: set[str]) -> str:
+    """本次上传涉及的文件夹：多个子目录取共同目录，最外只到映射根目录。"""
+    root = (mapping.remote_dir or "").strip("/")
+    dirs = [d.strip("/") for d in touched if d and d.strip("/")]
+    if not dirs:
+        return root
+    common: list[str] = []
+    for column in zip(*(d.split("/") for d in dirs)):
+        if len(set(column)) != 1:
+            break
+        common.append(column[0])
+    path = "/".join(common)
+    if root and not (path == root or path.startswith(root + "/")):
+        return root
+    return path
+
+
+def _share_uploaded_folder(client, mapping: Mapping, result: BackupResult,
+                           touched: set[str], log) -> None:
+    """备份后给本次上传的文件夹建分享链接；失败只记日志，不算备份失败。"""
+    if not (mapping.share and result.uploaded and touched):
+        return
+    if (mapping.provider or "quark") != "quark":
+        _say(log, f"{mapping.provider_label()} 暂不支持自动创建分享链接，已跳过")
+        return
+    target = share_target_dir(mapping, touched)
+    title = target.rsplit("/", 1)[-1] if target else "备份"
+    passcode = _share_passcode() if mapping.share_passcode else ""
+    try:
+        fid = client.ensure_dir(target) if target else "0"
+        url, code = client.create_share(fid, title, expire=mapping.share_expire, passcode=passcode)
+    except Exception as exc:  # noqa: BLE001 - 分享失败不影响备份结果
+        message = f"创建分享链接失败（{title}）：{exc}"
+        result.errors.append(message)
+        _say(log, message)
+        return
+    result.share_dir = target
+    result.share_url = url
+    result.share_passcode = code
+    _say(log, f"分享链接（{title or '根目录'}）：{url}" + (f"  提取码：{code}" if code else ""))
 
 
 # ==================== 全部映射 ====================

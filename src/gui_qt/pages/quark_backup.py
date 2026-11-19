@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
@@ -108,12 +109,38 @@ class MappingDialog(QDialog):
             "关闭：只追加不上删，云端会保留旧版本并生成 a(1).txt 这类副本。")
         layout.addWidget(self.replace_cb)
 
+        share_row = QHBoxLayout()
+        share_row.setSpacing(6)
+        self.share_cb = QCheckBox("备份后给本次上传的文件夹生成分享链接")
+        self.share_cb.setChecked(bool(self._mapping.share))
+        self.share_cb.setToolTip(
+            "本次上传涉及多个子文件夹时，分享它们的共同目录（最外到上面的云端文件夹）。\n"
+            "没有新文件上传时不会重复建分享。")
+        share_row.addWidget(self.share_cb)
+        share_row.addStretch(1)
+        share_row.addWidget(QLabel("有效期"))
+        self.share_expire = QComboBox()
+        self.share_expire.addItems(qconfig.SHARE_EXPIRES)
+        self.share_expire.setCurrentText(qconfig.normalize_share_expire(self._mapping.share_expire))
+        share_row.addWidget(self.share_expire)
+        self.share_passcode = QCheckBox("提取码")
+        self.share_passcode.setChecked(bool(self._mapping.share_passcode))
+        self.share_passcode.setToolTip("勾选后生成 4 位随机提取码，链接里带 ?pwd=")
+        share_row.addWidget(self.share_passcode)
+        layout.addLayout(share_row)
+        self.share_cb.toggled.connect(self._sync_share)
+        self._sync_share(self.share_cb.isChecked())
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("保存")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
         buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _sync_share(self, enabled: bool):
+        self.share_expire.setEnabled(bool(enabled))
+        self.share_passcode.setEnabled(bool(enabled))
 
     def _pick_dir(self):
         start = self.local_edit.text().strip() or ""
@@ -136,6 +163,9 @@ class MappingDialog(QDialog):
         mapping.max_file_mb = int(self.max_size.value())
         mapping.replace_changed = self.replace_cb.isChecked()
         mapping.enabled = self.enabled_cb.isChecked()
+        mapping.share = self.share_cb.isChecked()
+        mapping.share_expire = self.share_expire.currentText()
+        mapping.share_passcode = self.share_passcode.isChecked()
         return mapping
 
 
@@ -318,6 +348,22 @@ class QuarkBackupPage(BasePage):
             last.setWordWrap(True)
             info.addWidget(last)
 
+        if mapping.last_share_url:
+            share_line = QHBoxLayout()
+            share_line.setSpacing(6)
+            link = QLabel("分享：" + mapping.last_share_url)
+            link.setProperty("role", "caption")
+            link.setWordWrap(True)
+            link.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            share_line.addWidget(link, 1)
+            copy_btn = QPushButton("复制")
+            copy_btn.setProperty("variant", "secondary")
+            copy_btn.setToolTip("复制最近一次生成的分享链接")
+            copy_btn.clicked.connect(
+                lambda _=False, url=mapping.last_share_url: self._copy_share(url))
+            share_line.addWidget(copy_btn)
+            info.addLayout(share_line)
+
         if not mapping.local_dir:
             warn = QLabel("本地目录未设置，这条映射不会执行")
             warn.setProperty("role", "caption")
@@ -431,6 +477,14 @@ class QuarkBackupPage(BasePage):
                 f"完成：上传 {uploaded} · 跳过 {skipped} · {qbackup.human_size(total_bytes)}")
             for result in results:
                 self._remember_result(result, started)
+            shares = [r for r in results if r.share_url]
+            for result in shares:
+                self._append_log("分享：" + result.share_url +
+                                 (f"  提取码：{result.share_passcode}" if result.share_passcode else ""))
+            if shares:
+                QGuiApplication.clipboard().setText(
+                    "\n".join(r.share_url for r in shares))
+                self.app.toast(f"已生成 {len(shares)} 条分享链接，已复制到剪贴板", "success")
             if failed:
                 self.app.toast(f"备份完成，但有 {len(failed)} 组失败：{failed[0].message}", "error")
             else:
@@ -448,8 +502,14 @@ class QuarkBackupPage(BasePage):
             mapping.last_run = started
             mapping.last_result = f"上传 {result.uploaded} · 跳过 {result.skipped}" + (
                 f" · 失败 {result.failed}" if result.failed else "")
+            if result.share_url:
+                mapping.last_share_url = result.share_url
             qconfig.update_mapping(mapping)
             break
+
+    def _copy_share(self, url: str):
+        QGuiApplication.clipboard().setText(url or "")
+        self.app.toast("分享链接已复制", "success")
 
     def _stop_backup(self):
         if self._stop_event is not None:

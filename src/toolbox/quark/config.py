@@ -19,6 +19,15 @@ CFG_MODE = "quark_schedule_mode"
 CFG_TIME = "quark_backup_time"
 CFG_INTERVAL = "quark_interval_minutes"
 
+# 分享有效期：界面选项 → 夸克接口的 expired_type（1 永久 / 2 一天 / 3 七天 / 4 三十天）
+SHARE_EXPIRES = ("永久", "7天", "30天", "1天")
+SHARE_EXPIRED_TYPE = {"永久": 1, "1天": 2, "7天": 3, "30天": 4}
+
+
+def normalize_share_expire(value: str) -> str:
+    value = str(value or "").strip()
+    return value if value in SHARE_EXPIRES else "永久"
+
 
 def _cfg():
     from toolbox.config_manager import load_convert_config, save_convert_config
@@ -41,8 +50,14 @@ class Mapping:
     # 本地文件内容变了：True = 先删掉上次上传的那一份再传（只删自己记录过的 fid），
     # False = 只追加，云端会留下 (1)(2) 副本
     replace_changed: bool = True
+    # 备份完成后把「本次上传的文件夹」生成分享链接（仅夸克网盘）
+    share: bool = False
+    share_expire: str = "永久"
+    share_passcode: bool = False
     last_run: str = ""
     last_result: str = ""
+    # 最近一次自动生成的分享链接（本次上传的文件夹），仅界面展示用
+    last_share_url: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def to_dict(self) -> dict:
@@ -63,8 +78,12 @@ class Mapping:
             exclude=str(data.get("exclude") or ""),
             max_file_mb=max(0, max_mb),
             replace_changed=bool(data.get("replace_changed", True)),
+            share=bool(data.get("share", False)),
+            share_expire=normalize_share_expire(data.get("share_expire")),
+            share_passcode=bool(data.get("share_passcode", False)),
             last_run=str(data.get("last_run") or ""),
             last_result=str(data.get("last_result") or ""),
+            last_share_url=str(data.get("last_share_url") or ""),
             id=str(data.get("id") or "") or uuid.uuid4().hex[:12],
         )
 

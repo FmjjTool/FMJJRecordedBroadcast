@@ -31,6 +31,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from requests.certs import where as _requests_ca_bundle
 
+from .config import SHARE_EXPIRED_TYPE
+
 API_BASE = "https://drive-pc.quark.cn/1/clouddrive"
 REFERER = "https://pan.quark.cn/"
 # 与 alist 一致的 OSS 客户端标识（服务端会校验 auth_meta 里的这段）
@@ -443,6 +445,48 @@ class QuarkClient:
     def _finish(self, pre: dict) -> None:
         self._request("POST", "/file/upload/finish", body={
             "obj_key": pre["obj_key"], "task_id": pre["task_id"]})
+
+    # ==================== 分享 ====================
+
+    def create_share(self, fid: str, title: str = "", *, expire: str = "永久",
+                     passcode: str = "") -> tuple[str, str]:
+        """给一个文件/文件夹建分享，返回 (分享地址, 提取码)。
+
+        走三步：`POST /share` 建任务 → `GET /task` 取 share_id → `POST /share/password`
+        取真实地址。`passcode` 留空表示公开分享；有效期见 `SHARE_EXPIRED_TYPE`。
+        """
+        fid = str(fid or "")
+        if not fid:
+            raise QuarkError(-1, "分享对象为空")
+        body = {
+            "fid_list": [fid],
+            "title": (title or "备份")[:100],
+            "url_type": 2 if passcode else 1,
+            "expired_type": SHARE_EXPIRED_TYPE.get(str(expire), 1),
+        }
+        if passcode:
+            body["passcode"] = passcode
+        task = (self._request("POST", "/share", body=body).get("data") or {})
+        task_id = str(task.get("task_id") or "")
+        if not task_id:
+            raise QuarkError(-1, "创建分享没有返回任务号", "/share")
+        share_id = ""
+        for attempt in range(10):
+            data = self._request("GET", "/task", params={
+                "task_id": task_id, "retry_index": attempt}).get("data") or {}
+            share_id = str(data.get("share_id") or "")
+            if share_id:
+                break
+            if attempt < 9:
+                time.sleep(0.8)
+        if not share_id:
+            raise QuarkError(-1, "分享任务还没完成，请稍后在夸克网盘里查看", "/task")
+        data = self._request("POST", "/share/password", body={"share_id": share_id}).get("data") or {}
+        url = str(data.get("share_url") or "")
+        code = str(data.get("passcode") or "")
+        if not url:
+            raise QuarkError(-1, "创建分享没有返回地址", "/share/password")
+        return (f"{url}?pwd={code}" if code else url), code
 
     # ==================== 下载 ====================
 
