@@ -208,6 +208,7 @@ DEFAULT_SUBTITLE = "美工作品 · 二级分发授权"
 ARCHIVE_PREFIX = "FMJJ-DB-ART"
 ARCHIVE_SERIAL_DIGITS = 6
 ARCHIVE_HASH_LEN = 8
+YEAR_MIN, YEAR_MAX = 1900, 2199      # 编号年份可选范围
 _RE_ARCHIVE = re.compile(
     rf"FMJJ-DB-ART-\d{{4}}-\d{{3,}}(?:-[0-9A-F]{{{ARCHIVE_HASH_LEN}}})?")
 _RE_ARCHIVE_PARTS = re.compile(

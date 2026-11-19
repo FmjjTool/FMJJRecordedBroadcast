@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFont, QImage, QPixmap
+from PySide6.QtGui import QDesktopServices, QFont, QImage, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
@@ -235,6 +235,7 @@ class CertificateMakerPage(BasePage):
         self._history_records: list[dict] = []
         self._suspend_signals = False
         self._auto_end = True          # 授权截止是否仍在跟随「起始 +3 年」
+        self._last_year: int | None = None   # 上次用于编号的年份（None=自动）
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -432,12 +433,18 @@ class CertificateMakerPage(BasePage):
         grid.setVerticalSpacing(6)
         self.number_edits: dict[str, QLineEdit] = {}
         self.year_combo = QComboBox()
+        self.year_combo.setEditable(True)
+        self.year_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.year_combo.setToolTip(
-            "默认自动取本机当前年份；也可手动指定年份，序号按该年份顺延")
+            "默认自动取本机当前年份；也可手动指定或直接输入年份（1900–2199），"
+            "序号按该年份顺延")
         self.year_combo.addItem(f"自动（本机 {engine.default_year()}）", 0)
-        for year in range(engine.default_year() - 6, engine.default_year() + 5):
+        for year in range(engine.YEAR_MIN, engine.YEAR_MAX + 1):
             self.year_combo.addItem(str(year), year)
+        self.year_combo.lineEdit().setValidator(
+            QIntValidator(engine.YEAR_MIN, engine.YEAR_MAX, self))
         self.year_combo.currentIndexChanged.connect(self._on_year_changed)
+        self.year_combo.lineEdit().editingFinished.connect(self._on_year_changed)
         grid.addWidget(QLabel("编号年份"), 0, 0)
         grid.addWidget(self.year_combo, 0, 1)
         grid.setColumnStretch(1, 1)
@@ -988,28 +995,38 @@ class CertificateMakerPage(BasePage):
         self._sync_fingerprint()
 
     def _selected_year(self) -> int | None:
-        """编号年份：0 表示自动（本机当前年份）。"""
-        value = self.year_combo.currentData()
-        return int(value) if value else None
+        """编号年份：返回具体年份；自动或无效输入返回 None（本机当前年份）。"""
+        text = self.year_combo.currentText().strip()
+        if text.isdigit():
+            year = int(text)
+            if engine.YEAR_MIN <= year <= engine.YEAR_MAX:
+                return year
+        return None
 
     def _restore_year(self, value) -> None:
         try:
             year = int(value or 0)
         except (TypeError, ValueError):
             year = 0
-        index = self.year_combo.findData(year)
-        if index < 0:
-            return
         self.year_combo.blockSignals(True)
         try:
-            self.year_combo.setCurrentIndex(index)
+            index = self.year_combo.findData(year)
+            if index >= 0:
+                self.year_combo.setCurrentIndex(index)
+            elif engine.YEAR_MIN <= year <= engine.YEAR_MAX:
+                self.year_combo.setEditText(str(year))
         finally:
             self.year_combo.blockSignals(False)
+        self._last_year = self._selected_year()
 
     def _on_year_changed(self, *_args) -> None:
-        """切换编号年份后按该年份已有证书重新顺延序号。"""
+        """切换/输入年份后按该年份已有证书重新顺延序号。"""
         if self._suspend_signals:
             return
+        year = self._selected_year()
+        if year == self._last_year:
+            return
+        self._last_year = year
         self._apply_auto_number()
 
     def _apply_auto_number(self) -> None:
@@ -1027,6 +1044,7 @@ class CertificateMakerPage(BasePage):
             edit.setText(numbers.get("archive_no", ""))
         finally:
             self._suspend_signals = previous
+        self._last_year = self._selected_year()
         self._on_field_changed()
 
     def _sync_fingerprint(self) -> None:
