@@ -145,6 +145,11 @@ class BiliUploadDialog(QDialog):
         button.clicked.connect(self.choose_cover)
         cover_row.addWidget(button)
         form.addRow("封面", cover_row)
+        self.threads = QSpinBox()
+        self.threads.setRange(1, BU.MAX_UPLOAD_THREADS)
+        self.threads.setValue(BU.upload_threads(self.config.get("threads")))
+        self.threads.setToolTip("同时上传几个分片：1 最稳、3 默认、调高更快但更吃带宽，也更容易触发风控")
+        form.addRow("并行上传线程", self.threads)
         self.publish = QCheckBox("上传成功后自动投稿（进入 B站审核）")
         self.publish.setChecked(bool(self.config.get("auto_publish", True)))
         form.addRow(self.publish)
@@ -318,7 +323,7 @@ class BiliUploadDialog(QDialog):
                 "desc": self.desc.toPlainText(), "tags": self.tags.text(), "tid": self.tid.value(),
                 "copyright": self.copyright.currentData(), "source": self.source.text().strip(),
                 "cover": self.cover.text().strip(), "auto_publish": self.publish.isChecked(),
-                "platform": self.platform.currentText()}
+                "platform": self.platform.currentText(), "threads": self.threads.value()}
 
     def choose_files(self):
         if self.busy:
@@ -398,6 +403,7 @@ class BiliUploadDialog(QDialog):
         self.source.setText(config["source"])
         self.cover.setText(config["cover"])
         self.publish.setChecked(bool(config.get("auto_publish", True)))
+        self.threads.setValue(BU.upload_threads(config.get("threads")))
         self.platform.setCurrentText(BU.normalize_platform(config.get("platform")))
         self._sync_source_platform(self.selected_paths(), force=True)
         self.refresh_preview()

@@ -24,13 +24,24 @@ from toolbox.utils import extract_date_from_filename
 UPLOAD_PAGE = "https://member.bilibili.com/platform/upload/video/frame"
 DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～", "desc": "",
             "tags": "封茗囧菌,直播录播", "tid": 0, "copyright": 2,
-            "source": "", "cover": "", "date": "", "auto_publish": True, "platform": "抖子"}
+            "source": "", "cover": "", "date": "", "auto_publish": True, "platform": "抖子",
+            "threads": 3}
 SOURCE_PLATFORMS = ("抖子", "B站")
 # 预上传节点按序尝试：某个节点的域名/连接不通时换下一个，避免整场投稿卡在第 1 个分片。
 UPLOAD_CDNS = ("bda2", "alia", "cos")
-UPLOAD_THREADS = 3       # 并行分片线程数（与 biliup 默认一致）
+UPLOAD_THREADS = 3       # 并行分片线程数默认值（与 biliup 默认一致）
+MAX_UPLOAD_THREADS = 8   # 并行上限：再多只会互相抢带宽，还容易触发风控
 UPLOAD_ATTEMPTS = 10     # 单个分片最多尝试次数
 UPLOAD_BACKOFF = 1.0     # 重试退避起点（秒），逐次翻倍、上限 8 秒
+
+
+def upload_threads(value=None):
+    """并行分片线程数：1～8，缺省 3。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return UPLOAD_THREADS
+    return max(1, min(MAX_UPLOAD_THREADS, number))
 
 
 def today_compact():
@@ -311,6 +322,7 @@ class BiliUploader:
         # 且失败时只剩一句“网络错误”，很难判断是代理还是节点的问题。
         self.upos.trust_env = False
         self._lines = None
+        self.threads = UPLOAD_THREADS
         self.cancel = cancel or threading.Event()
         self.progress = on_progress or (lambda done, total, text: None)
         self.history = history or UploadHistory()
@@ -530,7 +542,7 @@ class BiliUploader:
                               f"上传 {path.name} · {done}/{chunks}")
 
         threads = [threading.Thread(target=worker, daemon=True)
-                   for _ in range(max(1, min(UPLOAD_THREADS, chunks)))]
+                   for _ in range(max(1, min(self.threads, chunks)))]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -596,6 +608,7 @@ class BiliUploader:
 
     def run(self, paths, settings):
         validate_renamed_videos(paths)
+        self.threads = upload_threads(settings.get("threads"))
         # 在封面/分片/提交期间阻止 Windows 写入，防止暂停写盘的录制视频被当成整场。
         with ExitStack() as readers:
             for path in paths:
