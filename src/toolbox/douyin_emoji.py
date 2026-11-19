@@ -18,6 +18,17 @@ import os
 import re
 from pathlib import Path
 
+
+# 会员表情栏（房间一次性接口，需登录态）固定 7 个，id → 中文名
+_VIP_NAMES = {1000: "哈哈", 1001: "爱了", 1002: "比心", 1003: "666",
+              1004: "优秀", 1005: "感谢", 1006: "酷"}
+
+_ENTER_BASE = {
+    "aid": "6383", "app_name": "douyin_web", "live_id": "1",
+    "device_platform": "web", "language": "zh-CN", "browser_language": "zh-CN",
+    "browser_platform": "Win32", "browser_name": "Mozilla",
+}
+
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
 _REFERER = "https://live.douyin.com/"
@@ -160,3 +171,77 @@ def download_items(items, out_dir, *, on_progress=None, stop=None):
                 except Exception:
                     pass
     return {"saved": saved, "failed": failed}
+
+def fetch_vip_emojis(room_num, timeout=20):
+    """一次性拉全「会员表情栏」，不用等有人发。
+
+    链路：room/web/enter 取 room_id + anchor_id → privilege/subscribe/info
+    取 emoji_list（房间页进房时前端也走这条）。需要抖音登录 Cookie，
+    未登录返回 status_code=20003（User doesn't login）。
+
+    返回 {"items": [...], "error": "", "describe": "", "member": bool}
+    """
+    import urllib.parse as up
+
+    import httpx
+
+    from toolbox.douyin_live import UA, _get_douyin_cookie
+
+    res = {"items": [], "error": "", "describe": "", "member": False}
+    cookie = _get_douyin_cookie() or ""
+    base = dict(_ENTER_BASE)
+    base["browser_version"] = UA
+    ref = "https://live.douyin.com/%s" % room_num
+    with httpx.Client(timeout=timeout, follow_redirects=True,
+                      headers={"User-Agent": UA, "Referer": ref}) as c:
+        try:
+            c.get(ref, timeout=timeout)
+            r = c.get("https://live.douyin.com/webcast/room/web/enter/?"
+                      + up.urlencode({**base, "web_rid": str(room_num)}))
+            if not r.text.strip().startswith("{"):
+                res["error"] = "房间信息接口异常（HTTP %s）" % r.status_code
+                return res
+            rooms = ((r.json().get("data") or {}).get("data")) or []
+            node = rooms[0] if rooms else {}
+            room_id = node.get("id_str") or ""
+            owner = node.get("owner") or {}
+            anchor_id = owner.get("id_str") or ""
+            if not room_id or not anchor_id:
+                res["error"] = "未取到 room_id/anchor_id（直播间可能已结束）"
+                return res
+
+            h = {"Referer": ref}
+            if cookie:
+                h["Cookie"] = cookie
+            q = dict(base, purchase_type="1", room_id=str(room_id),
+                     anchor_id=str(anchor_id))
+            r2 = c.get("https://live.douyin.com/webcast/privilege/subscribe/info/?"
+                       + up.urlencode(q), headers=h)
+            j = r2.json() if r2.text.strip().startswith("{") else {}
+        except Exception as e:  # noqa: BLE001 - 网络/解析失败统一回给界面
+            res["error"] = "%s: %s" % (type(e).__name__, e)
+            return res
+
+    if j.get("status_code") == 20003:
+        res["error"] = "未登录抖音（会员表情栏需要登录态：先在 Cookie 管理里登录抖音）"
+        return res
+    data = j.get("data")
+    if not isinstance(data, dict):
+        res["error"] = "接口返回异常（status_code=%s）" % j.get("status_code")
+        return res
+    tab = data.get("emoji_tab_info") or {}
+    res["describe"] = tab.get("describe") or ""
+    res["member"] = bool((data.get("user_data") or {}).get("expired_time"))
+    for e in data.get("emoji_list") or []:
+        img = e.get("img") or {}
+        urls = img.get("url_list") or []
+        if not urls:
+            continue
+        uri = img.get("uri") or ""
+        stem = uri.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        name = _VIP_NAMES.get(e.get("id")) or _clean_name(stem or "会员表情")
+        res["items"].append({"url": urls[0], "key": url_key(urls[0]),
+                             "name": name, "nick": "", "ts": 0})
+    if not res["items"]:
+        res["error"] = res["error"] or "接口没有返回表情（该主播可能未开通会员表情）"
+    return res

@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """抖音表情收集 · 二级界面（非模态独立窗口）。
 
-为什么只做「收集」：会员表情（粉丝团/会员专属）不在官方公开表情库里，
-只会随聊天消息以图片直链下发（rtf 片段 type=2 + url），所以拿不到一份
-现成的「会员表情清单」，只能收实际出现过的表情图：
-  ① 直播间实时——由弹幕姬页把每条消息的 rtf 片段转喂进来（不额外开 WS）；
-  ② 本地弹幕包——.jsonl 实时记录 / 回放包 .zip 里已经存下的 rtfContent。
+三种来源：
+  ① 会员表情栏——房间进房接口 privilege/subscribe/info 一次返回全部
+     emoji_list，直接拉全（需登录态）；
+  ② 直播间实时——弹幕姬页把每条消息的 rtf 片段转喂进来（不额外开 WS）；
+  ③ 本地弹幕包——.jsonl 实时记录 / 回放包 .zip 里已经存下的 rtfContent。
 
 窗口独立（非模态），开着时仍能操作主界面；导出为图片文件（保留原格式），
 文件名取表情名，同名自动加序号。
@@ -117,6 +117,7 @@ class DouyinEmojiWindow(QDialog):
         outer.addWidget(tip)
 
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_vip_tab(), "会员表情栏")
         self.tabs.addTab(self._build_live_tab(), "直播间实时")
         self.tabs.addTab(self._build_file_tab(), "本地弹幕包")
         outer.addWidget(self.tabs)
@@ -175,6 +176,77 @@ class DouyinEmojiWindow(QDialog):
             page.emoji_sink = self._feed
 
     # ---------- 构建 ----------
+
+    def _build_vip_tab(self):
+        """会员表情栏：房间级一次性接口，不用等有人发。"""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 10, 10, 6)
+        v.setSpacing(6)
+        row = QHBoxLayout()
+        self.vip_room = QLineEdit()
+        self.vip_room.setPlaceholderText("直播间号（留空则用弹幕姬页当前房间）")
+        row.addWidget(self.vip_room, 1)
+        self.vip_btn = QPushButton("一键拉取全部")
+        self.vip_btn.clicked.connect(self._fetch_vip)
+        row.addWidget(self.vip_btn)
+        v.addLayout(row)
+        hint = QLabel("会员表情栏就是房间进房时前端调的那条接口（privilege/subscribe/info），"
+                      "这里直接读它的 emoji_list，一次性拉全，不用等会员发表情。"
+                      "需要抖音登录态。")
+        hint.setWordWrap(True)
+        hint.setProperty("role", "caption")
+        v.addWidget(hint)
+        v.addStretch(1)
+        return w
+
+    def _vip_room_id(self):
+        text = self.vip_room.text().strip()
+        if text:
+            return text
+        if self.page is not None:
+            for attr in ("room_entry", "room_input", "room_edit"):
+                w = getattr(self.page, attr, None)
+                try:
+                    if w is not None and w.text().strip():
+                        return w.text().strip()
+                except Exception:
+                    continue
+        return ""
+
+    def _fetch_vip(self):
+        room = self._vip_room_id()
+        if not room:
+            if self.app:
+                self.app.toast("先填直播间号", "warning")
+            return
+        self.vip_btn.setEnabled(False)
+        self.status.setText(f"正在拉取 {room} 的会员表情栏…")
+
+        def work():
+            return DE.fetch_vip_emojis(room)
+
+        def done(res, err=None):
+            self.vip_btn.setEnabled(True)
+            if err:
+                self.status.setText(f"拉取失败：{err}")
+                return
+            res = res or {}
+            items = res.get("items") or []
+            added = 0
+            for it in items:
+                before = len(self.items)
+                self._add_item(it)
+                if len(self.items) > before:
+                    added += 1
+            if not items:
+                self.status.setText(res.get("error") or "接口没有返回表情")
+                return
+            tip = res.get("describe") or ""
+            self.status.setText(f"会员表情栏：拉到 {len(items)} 个，新增 {added} 个"
+                                + (f" · {tip}" if tip else ""))
+
+        run_bg(work, done)
 
     def _build_live_tab(self):
         w = QWidget()
