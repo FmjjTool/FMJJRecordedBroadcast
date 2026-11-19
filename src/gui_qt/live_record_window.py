@@ -4,7 +4,7 @@
 界面结构对齐参考项目「江湖录播」（D:/PythonApps/Python版全量/ui/main_window.py）：
   菜单栏（文件 / 主播 / 工具 / 设置 / 帮助）
   + 工具栏（添加主播 / 批量导入 / 批量修改 / 开启监控录制 / 一键停止 /
-            立即检测 / 录制设置 / 推送设置 / FLV 修复 / 打开录制目录）
+            立即检测 / 录制设置 / 推送设置 / FLV 修复 / 写时间码 / 打开录制目录）
   + 顶部详情条 + 主播表格（状态着色、勾选列、双击切换监控/录制）
   + 下方运行日志（QSplitter 可拖）+ 状态栏
   + 右键菜单（参考项目原版全部项目，逐条对应）
@@ -12,7 +12,7 @@
 
 录制特性参考 BililiveRecorder 2.20.0：
   断线续传 / 按时间·按大小分段 / 断流重连 / 弹幕录制（六平台 JSONL，B站另存 XML）/
-  封面保存 / 标题过滤 / 文件按主播分目录 / FLV 修复。
+  封面保存 / 标题过滤 / 文件按主播分目录 / FLV 修复 / 写时间码（tmcd 轨）。
 """
 
 from __future__ import annotations
@@ -21,11 +21,13 @@ import os
 import shutil
 import subprocess
 import time
+from datetime import datetime
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import (QAbstractTableModel, QDateTime, QModelIndex, QObject,
+                            Qt, QTimer, Signal)
 from PySide6.QtGui import QAction, QBrush, QColor, QFont
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
@@ -327,6 +329,8 @@ class PlatformPane(QWidget):
         self._tbtn(bar, "录制设置", self.on_settings)
         self._tbtn(bar, "推送设置", self.on_push_settings)
         self._tbtn(bar, "FLV 修复", self.on_repair_flv, "修复录制中断/时间戳错乱的 FLV")
+        self._tbtn(bar, "写时间码", self.on_timecode,
+                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
         self._tbtn(bar, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
         bar.addStretch(1)
         self._tbtn(bar, "全选", lambda: self._check_all(True))
@@ -990,6 +994,9 @@ class PlatformPane(QWidget):
     def on_repair_flv(self):
         FlvRepairDialog(self, self.manager).exec()
 
+    def on_timecode(self):
+        TimecodeDialog(self).exec()
+
     def on_anchor_settings(self):
         items = self._selected()
         if not items:
@@ -1625,6 +1632,149 @@ class FlvRepairDialog(QDialog):
         threading.Thread(target=work, daemon=True).start()
 
 
+class TimecodeDialog(QDialog):
+    """写时间码：录制完成后把 .ts/.flv 重封装成 mp4 并加 tmcd 轨（不改画质）。"""
+
+    log_line = Signal(str)
+    job_ok = Signal(object)
+    job_failed = Signal(str)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("写时间码（录制文件 → mp4 + tmcd 轨）")
+        self.resize(780, 560)
+        lay = QVBoxLayout(self)
+
+        tip = QLabel("录制结束后使用：只重封装、不重编码，画质不变；"
+                     "时间码写进 mp4 的 tmcd 轨，供播放器/剪辑软件读取。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#555;")
+        lay.addWidget(tip)
+
+        row = QHBoxLayout()
+        self.ed_file = QLineEdit()
+        self.ed_file.setPlaceholderText("选择录制文件（.ts / .flv / .mp4）")
+        row.addWidget(self.ed_file, 1)
+        b = QPushButton("选择文件…")
+        b.clicked.connect(self._pick_file)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+        form = QFormLayout()
+        self.ed_start = QDateTimeEdit(QDateTime.currentDateTime())
+        self.ed_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.ed_start.setCalendarPopup(True)
+        form.addRow("录制起始时间", self.ed_start)
+        hint = QLabel("默认取文件名里的时间（如 主播_20261116-183009.ts）；分段文件请改成该段自己的起点。")
+        hint.setStyleSheet("color:#777;")
+        hint.setWordWrap(True)
+        form.addRow("", hint)
+
+        row2 = QHBoxLayout()
+        self.ed_out = QLineEdit()
+        self.ed_out.setPlaceholderText("留空 = 同目录，文件名加 _时间码.mp4")
+        row2.addWidget(self.ed_out, 1)
+        b2 = QPushButton("选择…")
+        b2.clicked.connect(self._pick_out)
+        row2.addWidget(b2)
+        form.addRow("输出文件", row2)
+        self.ck_overwrite = QCheckBox("输出文件已存在时覆盖")
+        form.addRow("", self.ck_overwrite)
+        lay.addLayout(form)
+
+        row3 = QHBoxLayout()
+        self.btn_run = QPushButton("开始写入")
+        self.btn_run.setStyleSheet("background:#2e7d32;color:white;padding:5px 16px;")
+        self.btn_run.clicked.connect(self._run)
+        row3.addWidget(self.btn_run)
+        self.status = QLabel("等待选择文件")
+        self.status.setStyleSheet("color:#666;")
+        row3.addWidget(self.status, 1)
+        lay.addLayout(row3)
+
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setFont(QFont("Consolas", 9))
+        lay.addWidget(self.log, 1)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(self.reject)
+        btns.clicked.connect(lambda _b: self.reject())
+        lay.addWidget(btns)
+
+        self.log_line.connect(self._log)
+        self.job_ok.connect(self._done)
+        self.job_failed.connect(self._fail)
+
+    # ---------- 选文件 ----------
+    def _pick_file(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "选择录制文件", "", "录制文件 (*.ts *.flv *.mp4 *.mkv);;所有文件 (*.*)")
+        if p:
+            self.ed_file.setText(p)
+            self._fill_from_file(p)
+
+    def _fill_from_file(self, path):
+        from toolbox import timecode as TC
+        start = TC.parse_start_time(path)
+        if start is None:
+            start = datetime.fromtimestamp(os.path.getmtime(path))
+            self._log("文件名里没有时间，起始时间按文件修改时间填入，请自行确认")
+        self.ed_start.setDateTime(QDateTime(start.year, start.month, start.day,
+                                            start.hour, start.minute, start.second))
+        self.ed_out.setText(TC.default_output(path))
+        try:
+            info = TC.probe(path)
+            self.status.setText("%.2f fps · %.1f 秒" % (info["fps"], info["duration"]))
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText("待写入")
+            self._log("读取失败：%s" % exc)
+
+    def _pick_out(self):
+        p, _ = QFileDialog.getSaveFileName(self, "选择输出文件", self.ed_out.text(), "MP4 (*.mp4)")
+        if p:
+            self.ed_out.setText(p)
+
+    # ---------- 执行 ----------
+    def _log(self, text):
+        self.log.appendPlainText(text)
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def _run(self):
+        src = self.ed_file.text().strip()
+        if not src or not os.path.isfile(src):
+            self._log("请先选择有效的录制文件")
+            return
+        dst = self.ed_out.text().strip() or None
+        start = self.ed_start.dateTime().toPython()
+        overwrite = self.ck_overwrite.isChecked()
+        self.btn_run.setEnabled(False)
+        self.status.setText("处理中…")
+        self._log("开始：%s" % src)
+
+        def work():
+            from toolbox import timecode as TC
+            try:
+                st = TC.write_timecode(src, dst, start, overwrite=overwrite,
+                                       on_log=self.log_line.emit)
+                self.job_ok.emit(st)
+            except Exception as exc:  # noqa: BLE001
+                self.job_failed.emit(str(exc))
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
+    def _done(self, st):
+        self.btn_run.setEnabled(True)
+        self.status.setText("完成 · 时间码 %s" % st.get("timecode", ""))
+        self._log("输出：%s" % st.get("out", ""))
+
+    def _fail(self, message):
+        self.btn_run.setEnabled(True)
+        self.status.setText("失败")
+        self._log("失败：%s" % message)
+
+
 # ==================== 主窗口 ====================
 
 class LiveRecordWindow(QMainWindow):
@@ -1744,6 +1894,7 @@ class LiveRecordWindow(QMainWindow):
         m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
         m.addAction(self._act("推送设置…", lambda: self.pane.on_push_settings()))
         m.addAction(self._act("FLV 修复…", lambda: self.pane.on_repair_flv()))
+        m.addAction(self._act("写时间码…", lambda: self.pane.on_timecode()))
         m.addSeparator()
         m.addAction(self._act("复制直播源", lambda: self.pane.on_copy_stream()))
         m.addAction(self._act("复制直播网址", lambda: self.pane.on_copy_url()))
@@ -1767,7 +1918,7 @@ class LiveRecordWindow(QMainWindow):
             "直播录制 · 多平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）\n\n"
             "界面与交互参考：江湖录播（DY直播数据分析）\n"
             "录制特性参考：BililiveRecorder 2.20.0\n"
-            "（断线续传 / 分段 / 断流重连 / 弹幕录制 / 封面 / 标题过滤 / FLV 修复）\n"
+            "（断线续传 / 分段 / 断流重连 / 弹幕录制 / 封面 / 标题过滤 / FLV 修复 / 写时间码）\n"
             "快手 / 微博 / 小红书 / 网易云取流来自页面自身接口，"
             "视频统一由 ffmpeg 转封装为 TS")
 
