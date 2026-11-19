@@ -283,6 +283,12 @@ class AccountCenterWidget(QWidget):
         name = QLabel(account["name"] or "（未命名）")
         name.setStyleSheet("font-weight: bold;")
         head.addWidget(name)
+        # B 站动态与 B 站作品是两条账号，名字可能相同，这里加标记区分
+        if account["platform"] == "bilibili" and \
+                account["modules"].get("info", {}).get("kind") == "dynamic":
+            dynamic_tag = QLabel("动态")
+            dynamic_tag.setProperty("role", "caption")
+            head.addWidget(dynamic_tag)
         platform = QLabel(f"[{account['platform_name']}]")
         platform.setProperty("role", "caption")
         head.addWidget(platform)

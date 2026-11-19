@@ -53,7 +53,8 @@ def account_id(platform: str, norm_url: str) -> str:
 def canonical_url(platform: str, url: str) -> str:
     """按平台收敛到账号身份链接。
 
-    同一 B 站账号的 `/video`、`/dynamic` 只是采集方式，不是不同账号；
+    B 站 `/video` 与裸空间链接是同一个账号（视频采集方式），
+    但 `/dynamic`（动态）是独立账号身份，保留后缀不合并；
     网易云的 artist id 在 fragment 里，不能直接丢弃。
     """
     raw = (url or "").strip()
@@ -69,7 +70,8 @@ def canonical_url(platform: str, url: str) -> str:
     if platform == "bilibili":
         match = re.search(r"/space\.bilibili\.com/(\d+)", f"/{host}{path}")
         if match:
-            return f"https://space.bilibili.com/{match.group(1)}"
+            suffix = "/dynamic" if path.rstrip("/").endswith("/dynamic") else ""
+            return f"https://space.bilibili.com/{match.group(1)}{suffix}"
     if platform == "weibo":
         match = re.search(r"/u/(\d+)", path) or re.match(r"/(\d+)", path)
         if match:

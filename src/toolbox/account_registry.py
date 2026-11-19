@@ -128,7 +128,8 @@ def list_accounts() -> list[dict]:
             order.append(key)
         previous = record["modules"].get(module)
         if previous is not None:
-            # 同一账号在信息获取里可能有 /video、/dynamic 两条记录：合并为「全部」
+            # 同一账号在同功能出现多条记录（如 B 站「作品 + 全部」）时合并采集类型；
+            # /dynamic 是独立账号，不会走到这里。
             kind = _merge_kind(previous.get("kind", ""), kind)
         record["modules"][module] = {
             "url": url,
