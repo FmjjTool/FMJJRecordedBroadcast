@@ -53,7 +53,6 @@ PAGE_CLASSES = {
     "douyin_index": ("gui_qt.pages.douyin_index", "DouyinIndexPage"),
     "wechat_article": ("gui_qt.pages.wechat_article", "WechatArticlePage"),
     "asset": ("gui_qt.pages.asset", "AssetPage"),
-    "backup_center": ("gui_qt.pages.backup_center", "BackupCenterPage"),
     "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
     "toolbox_rename": ("gui_qt.pages.rename", "RenamePage"),
     "toolbox_convert": ("gui_qt.pages.editor", "EditorPage"),
@@ -99,6 +98,8 @@ PAGE_ALIASES = {
     # 网盘备份已并入「网盘」页（下载 / 备份两个页签），旧地址统一指向新页
     "quark_backup": "netdisk",
     "quark_download": "netdisk",
+    # 备份与恢复已收起为全局设置里的面板，旧地址指向全局设置
+    "backup_center": "global_settings",
 }
 
 
@@ -121,7 +122,6 @@ NAV_GROUPS = [
     ]),
     ("资产管理", [
         ("asset", "资产管理"),
-        ("backup_center", "备份与恢复"),
         ("netdisk", "网盘"),
     ]),
     ("录播工具箱", [

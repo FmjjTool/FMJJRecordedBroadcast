@@ -1,11 +1,11 @@
-"""备份与恢复中心：配置备份、资产备份两个入口。
+"""配置备份与资产备份面板（嵌在「全局设置」页）。
 
 后端只调用现有实现，不复制备份逻辑：
 
-- 配置 / 资产 → `toolbox.backup`（export_config / import_config / export_assets / import_assets）
-- 网盘下载与网盘备份已并入侧栏「网盘」页（下载 / 备份到网盘两个页签），本页不再内嵌
+- 配置 → `toolbox.backup.export_config / import_config`
+- 资产 → `toolbox.backup.export_assets / import_assets`
 
-计划任务仍统一由「任务」页管理，本页不提供定时设置。
+网盘下载与网盘备份在侧栏「网盘」页；计划任务仍统一由「任务」页管理。
 """
 
 from __future__ import annotations
@@ -13,15 +13,13 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QMessageBox, QProgressDialog,
-    QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import run_bg
-from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolSectionCard
 
 
 class _ProgressBridge(QObject):
@@ -46,70 +44,72 @@ def _make_progress_dlg(parent, title: str, total: int, cancel_event: threading.E
     return dlg
 
 
-class BackupCenterPage(BasePage):
-    def __init__(self, app):
-        super().__init__(app)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(0)
+class BackupPanel(QWidget):
+    """配置 / 资产备份的按钮与状态行。"""
 
-        self.tabs = QTabWidget()
-        outer.addWidget(self.tabs)
+    def __init__(self, app, parent=None):
+        super().__init__(parent)
+        self.app = app
+        self.setStyleSheet("background: transparent;")
 
-        self.tabs.addTab(self._build_config_tab(), "配置")
-        self.tabs.addTab(self._build_assets_tab(), "资产")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
-        netdisk_btn = QPushButton("网盘下载与备份")
-        netdisk_btn.setProperty("variant", "secondary")
-        netdisk_btn.setToolTip("打开「网盘」页：云端文件下载与备份到网盘")
-        netdisk_btn.clicked.connect(lambda: self.app.show_page("netdisk"))
-        self.tabs.setCornerWidget(netdisk_btn, Qt.TopRightCorner)
+        self._caption(layout, "配置备份：工作目录与导出目录、登录状态、账号名单与分组、"
+                              "弹幕姬 / 录制 / 音乐标签等页面设置；不含已获取资产、媒体文件与数据库快照。")
+        self._caption(layout, "资产备份：资产数据库快照与统一导出目录全树；导入只补充缺失文件，"
+                              "数据库按去重键合并，不删除本地多出的文件。")
+        self._caption(layout, "导入配置会覆盖同名配置文件，重启应用后生效；建议先导出当前配置留底，"
+                              "备份文件放在软件目录之外。")
+
+        config_row = QHBoxLayout()
+        config_row.setSpacing(6)
+        config_row.addWidget(self._btn("导出配置…", self._export_config,
+                                       "把所有设置打包成 zip（不含已获取资产与媒体）"))
+        config_row.addWidget(self._btn("导入配置…", self._import_config,
+                                       "导入配置 zip，覆盖同名配置文件，重启后生效"))
+        config_row.addStretch(1)
+        layout.addLayout(config_row)
+        self.config_status = self._status(layout)
+
+        assets_row = QHBoxLayout()
+        assets_row.setSpacing(6)
+        assets_row.addWidget(self._btn("导出资产（zip 包）…", self._backup_assets_zip,
+                                       "资产数据库与统一导出目录打包成一个 zip"))
+        assets_row.addWidget(self._btn("导出资产（文件夹）…", self._backup_assets_folder,
+                                       "导出到新建的「资产备份_时间戳」文件夹"))
+        assets_row.addWidget(self._btn("导入资产（zip 包）…", self._import_backup_zip,
+                                       "从 zip 环境还原资产，文件不覆盖、数据库按去重键合并"))
+        assets_row.addWidget(self._btn("导入资产（文件夹）…", self._import_backup_folder,
+                                       "从备份文件夹还原资产"))
+        assets_row.addStretch(1)
+        layout.addLayout(assets_row)
+        self.assets_status = self._status(layout)
 
     # ---------- 通用小件 ----------
-    def _caption(self, text: str) -> QLabel:
+    def _caption(self, layout, text: str):
         label = QLabel(text)
         label.setProperty("role", "caption")
         label.setWordWrap(True)
+        layout.addWidget(label)
         return label
 
-    def _btn(self, text: str, slot) -> QPushButton:
+    def _btn(self, text: str, slot, tip: str = "") -> QPushButton:
         button = QPushButton(text)
+        if tip:
+            button.setToolTip(tip)
         button.clicked.connect(slot)
         return button
 
-    def _tab_shell(self) -> tuple[QWidget, QVBoxLayout]:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-        return page, layout
+    def _status(self, layout) -> QLabel:
+        label = QLabel("")
+        label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        return label
 
     # ---------- 配置 ----------
-    def _build_config_tab(self) -> QWidget:
-        page, v = self._tab_shell()
-        card = ToolSectionCard(
-            "配置备份",
-            "打包全部设置为 zip（工作目录 / 登录状态 / 账号名单 / 分组 / 弹幕姬配置等，"
-            "不含已获取资产）；导入会覆盖同名配置文件，重启应用后全部生效。")
-        card.content_layout.addWidget(self._caption(
-            "包含：工作目录与导出目录、登录状态、账号名单与分组、弹幕姬 / 录制 / 音乐标签等页面设置。"))
-        card.content_layout.addWidget(self._caption(
-            "不含：已获取资产、媒体文件、数据库快照（这些请用「资产」页备份）。"))
-        card.content_layout.addWidget(self._caption(
-            "使用建议：换机、重装或大改设置前先导出；导入会覆盖同名配置，建议先导出当前配置留底；"
-            "备份文件请放在软件目录之外。"))
-        row = QHBoxLayout()
-        row.addWidget(self._btn("导出配置…", self._export_config))
-        row.addWidget(self._btn("导入配置…", self._import_config))
-        row.addStretch(1)
-        card.content_layout.addLayout(row)
-        self.config_status = QLabel("")
-        self.config_status.setProperty("role", "caption")
-        card.content_layout.addWidget(self.config_status)
-        v.addWidget(card, 0, Qt.AlignTop)
-        v.addStretch(1)
-        return page
-
     def _export_config(self):
         default = f"配置备份_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         path, _ = QFileDialog.getSaveFileName(self, "导出配置", default, "zip 包 (*.zip)")
@@ -154,32 +154,6 @@ class BackupCenterPage(BasePage):
         run_bg(lambda: _import_config(path), done)
 
     # ---------- 资产 ----------
-    def _build_assets_tab(self) -> QWidget:
-        page, v = self._tab_shell()
-        card = ToolSectionCard(
-            "资产备份",
-            "资产备份包含资产数据库与统一导出目录（已获取数据 / 媒体 / 弹幕 / 录制等）。"
-            "导入时文件不覆盖，数据库按去重键合并；不含配置与登录状态（配置请用「配置」页）。")
-        card.content_layout.addWidget(self._caption(
-            "使用建议：大批量整理或换机前整包导出；导入只补充缺失文件，不删除本地多出的文件；"
-            "长期增量备份请用「网盘」页的「备份到网盘」页签。"))
-        row = QHBoxLayout()
-        row.addWidget(self._btn("导出所有资产（zip 包）…", self._backup_assets_zip))
-        row.addWidget(self._btn("导出所有资产（文件夹）…", self._backup_assets_folder))
-        row.addStretch(1)
-        card.content_layout.addLayout(row)
-        row2 = QHBoxLayout()
-        row2.addWidget(self._btn("导入备份（zip 包）…", self._import_backup_zip))
-        row2.addWidget(self._btn("导入备份（文件夹）…", self._import_backup_folder))
-        row2.addStretch(1)
-        card.content_layout.addLayout(row2)
-        self.assets_status = QLabel("")
-        self.assets_status.setProperty("role", "caption")
-        card.content_layout.addWidget(self.assets_status)
-        v.addWidget(card, 0, Qt.AlignTop)
-        v.addStretch(1)
-        return page
-
     def _backup_assets_zip(self):
         default = f"资产备份_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         path, _ = QFileDialog.getSaveFileName(

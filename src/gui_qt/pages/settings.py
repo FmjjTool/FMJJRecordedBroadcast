@@ -27,6 +27,7 @@ from toolbox.skills import list_skills, skill_total_size_text
 from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
 
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.pages.backup_panel import BackupPanel
 from gui_qt.pages.base import BasePage
 
 
@@ -64,6 +65,7 @@ class GlobalSettingsPage(BasePage):
 
         # 可滚动内容
         scroll = QScrollArea()
+        self.scroll = scroll
         scroll.setWidgetResizable(True)
         body = QWidget()
         v = QVBoxLayout(body)
@@ -263,15 +265,14 @@ class GlobalSettingsPage(BasePage):
 
         # ---- 备份与恢复 ----
         v.addWidget(self._card_title("备份与恢复"))
-        cb_row = QHBoxLayout()
-        cb_info = QLabel(
-            "配置与资产备份在「备份与恢复」页，网盘文件下载与网盘备份在「网盘」页；"
+        backup_note = QLabel(
+            "配置与资产备份都在本卡片完成；网盘文件下载与网盘备份在「网盘」页，"
             "计划任务仍在「任务」页管理。")
-        cb_info.setProperty("role", "caption")
-        cb_info.setWordWrap(True)
-        cb_row.addWidget(cb_info, 1)
-        cb_row.addWidget(self._btn("打开备份与恢复", self._open_backup_center))
-        v.addLayout(cb_row)
+        backup_note.setProperty("role", "caption")
+        backup_note.setWordWrap(True)
+        v.addWidget(backup_note)
+        self.backup_panel = BackupPanel(app, self)
+        v.addWidget(self.backup_panel)
 
         v.addSpacing(12)
 
@@ -360,6 +361,11 @@ class GlobalSettingsPage(BasePage):
         label.setStyleSheet(f"color: palette({color}); font-size: 11px;")
 
     # ---- 逻辑 ----
+    def scroll_to_backup(self):
+        """滚动到「备份与恢复」卡片（资产管理页「备份」按钮跳转用）。"""
+        QTimer.singleShot(
+            0, lambda: self.scroll.ensureWidgetVisible(self.backup_panel, 0, 24))
+
     def on_show(self):
         cfg = load_convert_config()
         # 工作目录
@@ -553,11 +559,6 @@ class GlobalSettingsPage(BasePage):
         from gui_qt.skill_download import SkillDownloadDialog
         dlg = SkillDownloadDialog(self.app, self.app)
         dlg.exec()
-
-    # ---- 备份与恢复 ----
-    def _open_backup_center(self):
-        self.app.show_page("backup_center")
-
 
     def _save(self):
         path = self.workdir_entry.text().strip()
