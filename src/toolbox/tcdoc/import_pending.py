@@ -596,7 +596,8 @@ def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
     return receipt
 
 
-def make_plan(record: dict, fields: list[dict], available_only=False):
+def make_plan(record: dict, fields: list[dict], available_only=False,
+              allow_new_options=False):
     columns = record["columns"]
     aliases = {**ALIASES, "作品时长": ("作品时长",), "动态链接(b站)": ("动态链接(b站)",)}
     values, kinds, skipped = {}, {}, {}
@@ -617,12 +618,16 @@ def make_plan(record: dict, fields: list[dict], available_only=False):
             continue
         if name in CHOICE_COLUMNS and kind in {9, 17}:
             options = [o for o in field_options(f) if o.get("text") == value and o.get("id")]
-            if len(options) != 1:
-                if not available_only:
-                    raise ImportErrorDetail(f"字段没有唯一既有选项：{name}")
+            if len(options) == 1:
+                encoded = [options[0]]
+            elif allow_new_options and value:
+                # 只给文本、不给 id：腾讯表格按「快速添加」新建该选项（新 UP 主自动登记）
+                encoded = [{"text": value}]
+            elif not available_only:
+                raise ImportErrorDetail(f"字段没有唯一既有选项：{name}")
+            else:
                 skipped[name] = "没有匹配的既有选项"
                 continue
-            encoded = [options[0]]
         elif name == "发布时间" and kind == 4:
             try:
                 date = datetime.fromisoformat(value)
@@ -653,6 +658,27 @@ def make_plan(record: dict, fields: list[dict], available_only=False):
     if not any(kind == 5 for kind in kinds.values()):
         raise ImportErrorDetail("没有可写的图片字段")
     return values, kinds, skipped
+
+
+def new_choice_options(records: list[dict], fields: list[dict]) -> dict[str, list[str]]:
+    """这批记录会新建的下拉选项：{字段名: [新选项文本...]}。
+
+    只用于上传前向用户确认；不写任何东西。
+    """
+    by_title = {f.get("fieldTitle"): f for f in fields if f.get("fieldTitle")}
+    out: dict[str, list[str]] = {}
+    for record in records:
+        for name in CHOICE_COLUMNS:
+            value = str(record["columns"].get(name) or "").strip()
+            field = by_title.get(name)
+            if not value or field is None or field.get("fieldType") not in {9, 17}:
+                continue
+            if any(o.get("text") == value and o.get("id") for o in field_options(field)):
+                continue
+            bucket = out.setdefault(name, [])
+            if value not in bucket:
+                bucket.append(value)
+    return out
 
 
 def count_remote_keys(rows: list[dict]) -> dict[str, int]:
@@ -693,7 +719,10 @@ def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage]):
         elif kind == 4:
             checks[title] = str(actual) == str(expected)
         else:
-            checks[title] = isinstance(actual, list) and [i.get("id") for i in actual] == [i.get("id") for i in expected]
+            # 单选/多选：按文本核对（新选项由表格快速添加，写入时还没有 id）
+            checks[title] = (isinstance(actual, list)
+                             and [str(i.get("text") or "") for i in actual if isinstance(i, dict)]
+                             == [str(i.get("text") or "") for i in expected if isinstance(i, dict)])
     return checks
 
 
@@ -795,12 +824,13 @@ def _record_title(record: dict) -> str:
 
 
 def run(client, records, *, apply=False, available_only=False, verify_each=True,
-        emit=lambda event: None, profile="posts"):
+        emit=lambda event: None, profile="posts", allow_new_options=False):
     """预览并导入记录。
 
     verify_each=True（命令行默认）逐条新增后立刻读回，异常即停；
     界面批量上传传 False：整批新增完只读回一次，避免每条都翻完整张表。
     profile="songs" 仅用于完整歌曲：按歌曲名去重，只新增。
+    allow_new_options=True 时，下拉列里没有的名字按「快速添加」新建选项（需用户当次确认）。
     """
     if available_only and (client.doc_key, client.tab_id) != TEST_TARGET:
         raise ImportErrorDetail("只写可用字段的例外仅允许本次授权测试目标")
@@ -808,7 +838,8 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     if profile == "songs":
         plans = [(record, *make_song_plan(record, fields)) for record in records]
     else:
-        plans = [(record, *make_plan(record, fields, available_only)) for record in records]
+        plans = [(record, *make_plan(record, fields, available_only, allow_new_options))
+                 for record in records]
     before = client.get_records()
     known = ({"song:" + key for key in song_remote_keys(before)}
              if profile == "songs" else set(remote_keys(before)))

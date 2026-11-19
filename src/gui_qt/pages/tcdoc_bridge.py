@@ -1018,10 +1018,16 @@ class TcDocBridgePanel(QWidget):
                     if profile == "songs":
                         pending.make_song_plan(record, fields)
                     else:
-                        pending.make_plan(record, fields, available_only=False)
+                        # 新名字（如新 UP 主）不在这里拦下：留到上传前统一确认是否新建选项
+                        pending.make_plan(record, fields, available_only=False,
+                                          allow_new_options=True)
                 except pending.ImportErrorDetail as exc:
                     record["blocked"] = str(exc)
-            return records
+            new_options = {}
+            if profile != "songs":
+                new_options = pending.new_choice_options(
+                    [r for r in records if not r.get("blocked")], fields)
+            return {"records": records, "new_options": new_options}
 
         def done(result, err):
             self._busy = False
@@ -1034,7 +1040,9 @@ class TcDocBridgePanel(QWidget):
                 QMessageBox.warning(self, "准备失败", str(err))
                 self._maybe_run_pending_compare()
                 return
-            dialog = _UploadDialog(result, self, profile=profile)
+            records = result["records"]
+            new_options = result.get("new_options") or {}
+            dialog = _UploadDialog(records, self, profile=profile)
             if dialog.exec() != QDialog.Accepted:
                 self.status.setText("已取消上传。")
                 self._maybe_run_pending_compare()
@@ -1044,7 +1052,23 @@ class TcDocBridgePanel(QWidget):
                 self.status.setText("未勾选任何记录，已取消上传。")
                 self._maybe_run_pending_compare()
                 return
-            self._start_upload(target, chosen)
+            allow_new_options = False
+            if new_options:
+                lines = "\n".join(f"{title}：{'、'.join(names)}"
+                                 for title, names in new_options.items())
+                answer = QMessageBox.question(
+                    self, "新建下拉选项",
+                    "这批记录里有腾讯表格下拉选项还没有的名字：\n"
+                    f"{lines}\n\n"
+                    "上传时会自动在对应列新建这些选项并写入（只影响这两张表的选项，"
+                    "不改字段类型）。是否继续？",
+                    QMessageBox.Yes | QMessageBox.No)
+                if answer != QMessageBox.Yes:
+                    self.status.setText("已取消上传（未新建选项）。")
+                    self._maybe_run_pending_compare()
+                    return
+                allow_new_options = True
+            self._start_upload(target, chosen, allow_new_options=allow_new_options)
 
         thread = run_bg(work, done, owner=self)
         if thread is None:
@@ -1054,7 +1078,8 @@ class TcDocBridgePanel(QWidget):
             self.status.setText("上传准备任务未启动，请重试")
             self._maybe_run_pending_compare()
 
-    def _start_upload(self, target: dict, records: list[dict]) -> None:
+    def _start_upload(self, target: dict, records: list[dict],
+                      allow_new_options: bool = False) -> None:
         if self._uploading:
             return
         self._uploading = True
@@ -1096,7 +1121,8 @@ class TcDocBridgePanel(QWidget):
             client.connect()
             return pending.run(client, records, apply=True, available_only=False,
                                verify_each=False, emit=emit,
-                               profile=str(target.get("profile") or "posts"))
+                               profile=str(target.get("profile") or "posts"),
+                               allow_new_options=allow_new_options)
 
         def done(receipt, err):
             self._uploading = False
