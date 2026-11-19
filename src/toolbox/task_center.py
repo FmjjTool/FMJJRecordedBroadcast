@@ -30,7 +30,7 @@ _CFG_KEYS = {
 # 任务 id → 页面 key（仅用于展示来源，不再作为设置入口）
 _PAGE_KEYS = {
     "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
-    "quark": "quark_backup", "webwiki": "localwiki",
+    "quark": "netdisk", "webwiki": "localwiki",
 }
 # 站点访问统计的两个补采时间点（空 = 不启用）
 _WEBWIKI_EXTRA_TIME_KEYS = ("webwiki_analytics_time2", "webwiki_analytics_time3")

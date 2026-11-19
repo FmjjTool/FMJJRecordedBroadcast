@@ -1,8 +1,9 @@
-"""备份与恢复中心：配置备份、资产备份、网盘备份三个入口。
+"""备份与恢复中心：配置备份、资产备份两个入口。
 
 后端只调用现有实现，不复制备份逻辑：
+
 - 配置 / 资产 → `toolbox.backup`（export_config / import_config / export_assets / import_assets）
-- 网盘 → 内嵌 `QuarkBackupPage`，映射、立即备份与日志保持原样
+- 网盘下载与网盘备份已并入侧栏「网盘」页（下载 / 备份到网盘两个页签），本页不再内嵌
 
 计划任务仍统一由「任务」页管理，本页不提供定时设置。
 """
@@ -48,8 +49,6 @@ def _make_progress_dlg(parent, title: str, total: int, cancel_event: threading.E
 class BackupCenterPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
-        from gui_qt.pages.quark_backup import QuarkBackupPage
-
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(0)
@@ -59,9 +58,12 @@ class BackupCenterPage(BasePage):
 
         self.tabs.addTab(self._build_config_tab(), "配置")
         self.tabs.addTab(self._build_assets_tab(), "资产")
-        self.quark_page = QuarkBackupPage(app)
-        self.tabs.addTab(self.quark_page, "网盘")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        netdisk_btn = QPushButton("网盘下载与备份")
+        netdisk_btn.setProperty("variant", "secondary")
+        netdisk_btn.setToolTip("打开「网盘」页：云端文件下载与备份到网盘")
+        netdisk_btn.clicked.connect(lambda: self.app.show_page("netdisk"))
+        self.tabs.setCornerWidget(netdisk_btn, Qt.TopRightCorner)
 
     # ---------- 通用小件 ----------
     def _caption(self, text: str) -> QLabel:
@@ -160,7 +162,7 @@ class BackupCenterPage(BasePage):
             "导入时文件不覆盖，数据库按去重键合并；不含配置与登录状态（配置请用「配置」页）。")
         card.content_layout.addWidget(self._caption(
             "使用建议：大批量整理或换机前整包导出；导入只补充缺失文件，不删除本地多出的文件；"
-            "长期增量备份请用「网盘」页。"))
+            "长期增量备份请用「网盘」页的「备份到网盘」页签。"))
         row = QHBoxLayout()
         row.addWidget(self._btn("导出所有资产（zip 包）…", self._backup_assets_zip))
         row.addWidget(self._btn("导出所有资产（文件夹）…", self._backup_assets_folder))
@@ -278,21 +280,6 @@ class BackupCenterPage(BasePage):
             self.app.toast(text, "success")
 
         run_bg(work, done)
-
-    # ---------- 生命周期 ----------
-    def _on_tab_changed(self, index: int):
-        if self.tabs.widget(index) is self.quark_page:
-            self.quark_page.on_show()
-
-    def on_show(self):
-        if self.tabs.currentWidget() is self.quark_page:
-            self.quark_page.on_show()
-
-    def on_hide(self):
-        self.quark_page.on_hide()
-
-    def shutdown(self):
-        self.quark_page.shutdown()
 
 
 def _export_config(path: str):

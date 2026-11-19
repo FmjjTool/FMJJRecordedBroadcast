@@ -265,7 +265,8 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(self._card_title("备份与恢复"))
         cb_row = QHBoxLayout()
         cb_info = QLabel(
-            "配置、资产与网盘备份统一在「备份与恢复」页；计划任务仍在「任务」页管理。")
+            "配置与资产备份在「备份与恢复」页，网盘文件下载与网盘备份在「网盘」页；"
+            "计划任务仍在「任务」页管理。")
         cb_info.setProperty("role", "caption")
         cb_info.setWordWrap(True)
         cb_row.addWidget(cb_info, 1)

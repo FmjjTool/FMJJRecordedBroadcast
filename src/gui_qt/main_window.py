@@ -88,13 +88,18 @@ PAGE_CLASSES = {
     "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
     "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
     "livestream_summary": ("gui_qt.pages.livestream_summary", "LivestreamSummaryPage"),
-    "quark_download": ("gui_qt.pages.quark_download", "QuarkDownloadPage"),
+    "netdisk": ("gui_qt.pages.netdisk", "NetdiskPage"),
     "tasks": ("gui_qt.pages.tasks", "TasksPage"),
     "performance": ("gui_qt.pages.performance", "PerformancePage"),
 }
 
 
-PAGE_ALIASES = {"test_page": "douyin_danmaku", "quark_backup": "backup_center"}
+PAGE_ALIASES = {
+    "test_page": "douyin_danmaku",
+    # 网盘备份已并入「网盘」页（下载 / 备份两个页签），旧地址统一指向新页
+    "quark_backup": "netdisk",
+    "quark_download": "netdisk",
+}
 
 
 def _resolve_page_key(key):
@@ -117,7 +122,7 @@ NAV_GROUPS = [
     ("资产管理", [
         ("asset", "资产管理"),
         ("backup_center", "备份与恢复"),
-        ("quark_download", "网盘下载"),
+        ("netdisk", "网盘"),
     ]),
     ("录播工具箱", [
         ("toolbox_organize", "自动整理"),

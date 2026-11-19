@@ -593,7 +593,7 @@ class AssetPage(BasePage):
         layout.setSpacing(0)
 
         backup_btn = QPushButton("备份")
-        backup_btn.setToolTip("打开备份与恢复中心（配置 / 资产 / 网盘）")
+        backup_btn.setToolTip("打开备份与恢复中心（配置 / 资产）")
         backup_btn.clicked.connect(self._open_backup_center)
 
         # 顺序：已获取资源 | 数据库浏览（中间） | 本地资源
@@ -629,7 +629,7 @@ class AssetPage(BasePage):
     # ==================== 备份入口 ====================
 
     def _open_backup_center(self):
-        """页头 备份 按钮：打开备份与恢复中心（配置 / 资产 / 网盘）。"""
+        """页头 备份 按钮：打开备份与恢复中心（配置 / 资产）。"""
         self.app.show_page("backup_center")
 
 
