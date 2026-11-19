@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -107,8 +108,7 @@ def _source_paths(project: Path, item: dict) -> dict[str, list[Path]]:
     day = re.sub(r"[^0-9]", "", str(item.get("publish_time") or "")[:10])
     directory = project / "download/已获取数据" / (PLATFORM_CN[platform] + "_媒体") / author
     stem = f"{day}_{author}_{title}"
-    owner_path = directory / ".stem_owners.json"
-    owners = json.loads(owner_path.read_text(encoding="utf-8-sig")) if owner_path.is_file() else {}
+    owners = _stem_owners(directory)
     owned = [s for s, owner in owners.items() if owner == str(item.get("video_id") or "")]
     stems = list(dict.fromkeys([stem] + owned))
     raw = json.loads(item.get("raw_json") or "{}")
@@ -131,6 +131,92 @@ def _source_paths(project: Path, item: dict) -> dict[str, list[Path]]:
     return mapping
 
 
+_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
+
+# 目录名 → (目录 mtime_ns, {小写文件名: 路径})；作者媒体目录动辄上万文件，
+# 逐行 glob 会把比对拖到分钟级，整批行共用一次扫描结果。
+_DIR_INDEX: dict[str, tuple[int, dict[str, Path]]] = {}
+
+
+def _dir_index(directory: Path) -> dict[str, Path]:
+    directory = Path(directory)
+    try:
+        stamp = directory.stat().st_mtime_ns
+    except OSError:
+        stamp = 0
+    key = str(directory)
+    cached = _DIR_INDEX.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    files: dict[str, Path] = {}
+    if stamp:
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_file():
+                            files[entry.name.lower()] = Path(entry.path)
+                    except OSError:
+                        continue
+        except OSError:
+            files = {}
+    _DIR_INDEX[key] = (stamp, files)
+    return files
+
+
+_OWNERS_CACHE: dict[str, tuple[int, dict]] = {}
+
+
+def _stem_owners(directory: Path) -> dict:
+    """作者目录的 .stem_owners.json（按文件 mtime 缓存，避免逐条重复解析）。"""
+    path = Path(directory) / ".stem_owners.json"
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    key = str(path)
+    cached = _OWNERS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        owners = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        owners = {}
+    if not isinstance(owners, dict):
+        owners = {}
+    _OWNERS_CACHE[key] = (stamp, owners)
+    return owners
+
+
+def _stem_files(directory: Path, stem: str) -> list[Path]:
+    """按「日期_账号_标题」取本地图片：先 _封面 后同名（一次查表，不 glob）。"""
+    index = _dir_index(directory)
+    stem = stem.lower()
+    covers = [index.get(stem + "_封面" + suffix) for suffix in _IMAGE_SUFFIXES]
+    plain = [index.get(stem + suffix) for suffix in _IMAGE_SUFFIXES]
+    return [path for path in covers + plain if path is not None]
+
+
+def _existing_files(paths) -> list[Path]:
+    """候选路径中真实存在的文件（按目录扫描缓存判断，不逐条 stat）。
+
+    同一个 URL 常被成百上千条作品共用（微博默认缩略图），必须先按目录分组，
+    否则每条候选都要一次 stat，比对会被拖到几分钟。
+    """
+    grouped: dict[Path, list[Path]] = {}
+    for path in paths:
+        path = Path(path)
+        grouped.setdefault(path.parent, []).append(path)
+    found: list[Path] = []
+    for directory, group in grouped.items():
+        index = _dir_index(directory)
+        for path in group:
+            hit = index.get(path.name.lower())
+            if hit is not None:
+                found.append(hit)
+    return found
+
+
 def stem_images(project: Path, columns: dict) -> list[Path]:
     """视频类条目的本地封面兜底：按「日期_账号_标题」定位 _封面 / 同名图片。
 
@@ -146,11 +232,7 @@ def stem_images(project: Path, columns: dict) -> list[Path]:
     directory = project / "download/已获取数据" / (PLATFORM_CN[platform] + "_媒体") / author
     if not directory.is_dir():
         return []
-    suffixes = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
-    stem = f"{day}_{author}_{title}"
-    covers = sorted(p for p in directory.glob(stem + "_封面.*") if p.suffix.lower() in suffixes)
-    plain = sorted(p for p in directory.glob(stem + ".*") if p.suffix.lower() in suffixes)
-    return covers + plain
+    return _stem_files(directory, f"{day}_{author}_{title}")
 
 
 def build_catalogue(project: Path, sources: list[dict]) -> dict:
@@ -162,38 +244,121 @@ def build_catalogue(project: Path, sources: list[dict]) -> dict:
     return catalogue
 
 
+def _resolve_row_images(project: Path, columns: dict, album: list, catalogue: dict,
+                        memo: dict | None = None):
+    """待同步行的图片 URL → 本地文件（相对项目根）+ 缺图槽位。
+
+    memo 用于整批行之间复用「这个 URL 的本地文件有哪些」，大批比对时调用方传入。
+    """
+    project = Path(project)
+    paths, gaps = [], []
+    for slot, url in enumerate(album, 1):
+        if memo is not None and url in memo:
+            existing = list(memo[url])
+        else:
+            candidates = list(dict.fromkeys(catalogue.get(url, [])))
+            existing = _existing_files(candidates)
+            if memo is not None:
+                memo[url] = existing
+        if not existing and len(album) == 1:
+            # 视频条目的封面 URL 带有时效签名，精确匹配常落空；
+            # 单图条目按本地 stem 兜底，多图条目不做模糊匹配。
+            existing = stem_images(project, columns)
+        if existing:
+            # 候选路径都拼自已解析的项目根，直接字符串比对即可；
+            # 逐张 resolve() 会多一次 realpath 系统调用，几千张时非常慢。
+            chosen = existing[0]
+            if not chosen.is_relative_to(project / "download/已获取数据"):
+                raise ImportErrorDetail("图片路径越出本地媒体目录")
+            paths.append(chosen.relative_to(project).as_posix())
+        else:
+            gaps.append(slot)
+    return paths, gaps
+
+
 def records_from_rows(project: Path, rows: list[dict], catalogue: dict):
     """中间层待同步行 → 可导入记录（含本地图片路径与缺图槽位）。"""
     project = Path(project).resolve()
     records, missing = [], []
+    memo: dict[str, list[Path]] = {}
     for row in rows:
         columns = {name: str(row.get(name) or "") for name in bridge.COLUMNS}
         key = link_key(columns["作品链接"] or columns["动态链接(b站)"])
         if not key:
             raise ImportErrorDetail("待同步行缺少可确定身份的原帖链接")
-        paths = []
-        gaps = []
-        album = row.get("_images") or []
-        for slot, url in enumerate(album, 1):
+        album = list(row.get("_images") or [])
+        paths, gaps = _resolve_row_images(project, columns, album, catalogue, memo)
+        for slot in gaps:
+            url = album[slot - 1] if 0 < slot <= len(album) else ""
             candidates = list(dict.fromkeys(catalogue.get(url, [])))
-            existing = [p for p in candidates if p.is_file()]
-            if not existing and len(album) == 1:
-                # 视频条目的封面 URL 带有时效签名，精确匹配常落空；
-                # 单图条目按本地 stem 兜底，多图条目不做模糊匹配。
-                existing = stem_images(project, columns)
-            if existing:
-                chosen = existing[0].resolve()
-                if not chosen.is_relative_to(project / "download/已获取数据"):
-                    raise ImportErrorDetail("图片路径越出本地媒体目录")
-                paths.append(chosen.relative_to(project).as_posix())
-            else:
-                gaps.append(slot)
-                # URL 仅供本进程必要下载使用，不写清单、日志或报告。
-                missing.append({"key": key, "slot": slot, "url": url,
-                                "path": candidates[0] if candidates else None})
+            # URL 仅供本进程必要下载使用，不写清单、日志或报告。
+            missing.append({"key": key, "slot": slot, "url": url,
+                            "path": candidates[0] if candidates else None})
         records.append({"key": key, "columns": columns, "images": paths,
-                        "expected_images": len(row.get("_images") or []), "missing_slots": gaps})
+                        "expected_images": len(album), "missing_slots": gaps})
     return records, missing
+
+
+def annotate_local_images(project: Path, rows: list[dict], catalogue: dict) -> None:
+    """只读标注每行图片的本地情况：_local_images 已下载 / _missing_images 缺图。
+
+    中间层只比对元数据，不下载媒体；界面必须区分「有图片链接」与「图片在本地」，
+    否则会出现「显示 42 张图、上传却说缺图」的矛盾。
+    """
+    project = Path(project).resolve()
+    memo: dict[str, list[Path]] = {}
+    for row in rows:
+        album = list(row.get("_images") or [])
+        if not album:
+            row["_local_images"] = row["_missing_images"] = 0
+            continue
+        columns = {name: str(row.get(name) or "") for name in bridge.COLUMNS}
+        try:
+            paths, gaps = _resolve_row_images(project, columns, album, catalogue, memo)
+        except ImportErrorDetail:
+            paths, gaps = [], list(range(1, len(album) + 1))
+        row["_local_images"] = len(paths)
+        row["_missing_images"] = len(gaps)
+
+
+def fetch_missing_images(records: list[dict], missing: list[dict], cache=None,
+                         workers: int = 4, limit: int | None = None) -> int:
+    """缺图记录按 URL 在线补图到中间层缓存，返回补上的张数。
+
+    只写 data_dir 下的缓存目录，不动用户「已获取数据」媒体库；
+    单张失败保持缺图，不中断上传。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    by_key = {record["key"]: record for record in records}
+    todo = [(by_key[item["key"]], item) for item in missing
+            if item.get("key") in by_key and item.get("url")]
+    if not todo:
+        return 0
+    if limit is not None:
+        todo = todo[:limit]
+    cache_dir = Path(cache) if cache else tc_cfg.data_dir() / "中间层/图片缓存"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def one(pair):
+        record, item = pair
+        return record, item, _fetch_cover(item["url"], cache_dir, timeout=12)
+
+    fetched = 0
+    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+        for record, item, path in pool.map(one, todo):
+            if path is None:
+                continue
+            try:
+                image = LocalImage.inspect(path, cache_dir)
+            except ImportErrorDetail:
+                continue
+            record.setdefault("_images", []).append(image)
+            gaps = record.get("missing_slots") or []
+            if item["slot"] in gaps:
+                gaps.remove(item["slot"])
+            fetched += 1
+    return fetched
 
 
 # ==================== 完整歌曲：封面下载 + 记录 ====================
@@ -202,7 +367,12 @@ _MIME_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
              "image/bmp": ".bmp", "image/webp": ".webp"}
 _COVER_REFERERS = (("gtimg.cn", "https://y.qq.com/"), ("music.126.net", "https://music.163.com/"),
                    ("kugou.com", "https://www.kugou.com/"), ("kuwo.cn", "https://www.kuwo.cn/"),
-                   ("sinaimg.cn", "https://weibo.com/"))
+                   ("sinaimg.cn", "https://weibo.com/"),
+                   ("hdslb.com", "https://www.bilibili.com/"),
+                   ("bilivideo.com", "https://www.bilibili.com/"),
+                   ("douyinpic.com", "https://www.douyin.com/"),
+                   ("kwaicdn.com", "https://www.kuaishou.com/"),
+                   ("xhscdn.com", "https://www.xiaohongshu.com/"))
 
 
 def _cover_referer(url: str) -> str:
@@ -221,8 +391,8 @@ def _cover_path(url: str, cache: Path) -> Path | None:
     return None
 
 
-def _fetch_cover(url: str, cache: Path) -> Path | None:
-    """下载完整歌曲封面到缓存目录；失败返回 None，不输出 URL。"""
+def _fetch_cover(url: str, cache: Path, timeout: float = 20) -> Path | None:
+    """下载图片到缓存目录；失败返回 None，不输出 URL。"""
     if not url.startswith(("https://", "http://")):
         return None
     cached = _cover_path(url, cache)
@@ -232,7 +402,7 @@ def _fetch_cover(url: str, cache: Path) -> Path | None:
         import httpx
 
         cache.mkdir(parents=True, exist_ok=True)
-        response = httpx.get(url, timeout=20, follow_redirects=True,
+        response = httpx.get(url, timeout=timeout, follow_redirects=True,
                              headers={"User-Agent": "Mozilla/5.0",
                                       "Referer": _cover_referer(url)})
         response.raise_for_status()
@@ -710,7 +880,7 @@ def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage]):
             entries = actual or []
             checks[title] = isinstance(entries, list) and len(entries) == len(images) and all(isinstance(i, dict) for i in entries)
             if checks[title] and images:
-                checks[title] = ([i.get("title") for i in entries] == [i.path.name for i in images] and
+                checks[title] = ([i.get("title") for i in entries] == [i.upload_name for i in images] and
                                  len({i.get("id") for i in entries if i.get("id")}) == len(images))
         elif kind == 1:
             checks[title] = "".join(str(i.get("text") or "") for i in actual or [] if isinstance(i, dict)) == expected[0]["text"]

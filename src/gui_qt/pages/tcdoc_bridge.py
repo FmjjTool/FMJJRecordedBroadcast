@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
 
 from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QFormLayout,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
-    QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QDialogButtonBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
+    QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from gui_qt import common
@@ -43,6 +46,28 @@ _WIDTHS = {
     "5sing": 180, "汽水音乐": 200,
     "图片": 90,
 }
+
+
+def _annotate_local_images(result: dict, days: int, collected) -> None:
+    """给官方动态待同步行补「本地已下载图片数」。
+
+    中间层只比对元数据、不下载媒体，所以「有图片」必须区分链接与本地文件，
+    否则会出现界面显示 42 张图、上传却报缺图的矛盾。
+    """
+    rows = result.get("rows") or []
+    if not rows or str(result.get("profile") or "") != "posts":
+        return
+    started = time.perf_counter()
+    try:
+        from toolbox.tcdoc import import_pending as pending
+
+        sources = bridge.collect_local_items(days, collected)
+        catalogue = pending.build_catalogue(pending.ROOT, sources)
+        pending.annotate_local_images(pending.ROOT, rows, catalogue)
+        logger.info("本地图片标注完成：%s 行 用时=%.2fs", len(rows),
+                    time.perf_counter() - started)
+    except Exception:  # noqa: BLE001 - 标注失败不影响比对结果
+        logger.warning("本地图片可用性标注失败", exc_info=True)
 
 
 class _PendingModel(QAbstractTableModel):
@@ -80,9 +105,23 @@ class _PendingModel(QAbstractTableModel):
         column = self.columns[index.column()]
         if column == "图片":
             images = row.get("_images") or []
+            local = row.get("_local_images")
+            missing = row.get("_missing_images")
             if role == Qt.DisplayRole:
-                return f"有 {len(images)} 张" if images else "无"
-            return "\n".join(images[:20]) + ("\n…" if len(images) > 20 else "")
+                if not images:
+                    return "无"
+                if local is None:
+                    return f"有 {len(images)} 张"
+                if not local:
+                    return f"缺 {len(images)} 张"
+                if local < len(images):
+                    return f"本地 {local}/{len(images)} 张"
+                return f"本地 {len(images)} 张"
+            tip = "\n".join(images[:20]) + ("\n…" if len(images) > 20 else "")
+            if local is not None and missing:
+                tip = (f"本地已下载 {local} 张，缺 {missing} 张"
+                       "（上传时可尝试在线补图）\n" + tip)
+            return tip
         value = str(row.get(column) or "")
         if bridge.tables.LINK_FIELD_SEP in value:
             # 链接列两级结构：表格里显示文本，悬停看 URL
@@ -97,6 +136,7 @@ class _UploadDialog(QDialog):
     def __init__(self, records, parent=None, profile="posts"):
         super().__init__(parent)
         self._records = list(records)
+        self._profile = str(profile or "posts")
         self.setWindowTitle("上传到腾讯文档")
         self.resize(900, 540)
         layout = QVBoxLayout(self)
@@ -134,6 +174,11 @@ class _UploadDialog(QDialog):
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
+        self.fetch_box = QCheckBox("缺图时尝试在线补图（下载到本地缓存后再上传）")
+        self.fetch_box.setChecked(True)
+        self.fetch_box.setVisible(self._profile != "songs")
+        layout.addWidget(self.fetch_box)
+
         row = QHBoxLayout()
         self.all_btn = QPushButton("全选")
         self.none_btn = QPushButton("全不选")
@@ -152,6 +197,7 @@ class _UploadDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         self.ok_btn.clicked.connect(self.accept)
         self.table.itemChanged.connect(lambda _item: self._refresh_summary())
+        self.fetch_box.stateChanged.connect(lambda _state: self._refresh_summary())
         self._refresh_summary()
 
     def _add_row(self, record: dict) -> None:
@@ -199,16 +245,62 @@ class _UploadDialog(QDialog):
                 chosen.append(record)
         return chosen
 
+    @property
+    def fetch_missing(self) -> bool:
+        """是否在写入前尝试按 URL 补下缺图（缺图复选框只在有缺图时可用）。"""
+        return self.fetch_box.isEnabled() and self.fetch_box.isChecked()
+
     def _refresh_summary(self) -> None:
         chosen = self.selected_records()
         images = sum(len(r.get("images") or []) for r in chosen)
         gaps = sum(len(r.get("missing_slots") or []) for r in chosen)
         blocked = sum(1 for r in self._records if r.get("blocked"))
-        note = f"；缺图 {gaps} 张会留空" if gaps else ""
+        self.fetch_box.setEnabled(gaps > 0)
+        note = ""
+        if gaps:
+            note = (f"；缺图 {gaps} 张"
+                    + ("（上传时尝试在线补图）" if self.fetch_missing else "（会留空）"))
         block_note = f"；不可上传 {blocked} 条（缺字段或选项）" if blocked else ""
         self.summary.setText(
             f"已选 {len(chosen)} / {len(self._records)} 条 · 图片 {images} 张{note}{block_note}")
         self.ok_btn.setEnabled(bool(chosen))
+
+
+class _PartnerFilterDialog(QDialog):
+    """合作方过滤设置：开关 + 关键词（腾讯表名单之外的账号只收录提及关键词的作品）。"""
+
+    def __init__(self, enabled: bool, keywords, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("合作方过滤")
+        self.setMinimumWidth(430)
+        layout = QVBoxLayout(self)
+        self.enable_box = QCheckBox(
+            "腾讯表「发布账号」名单之外的账号，只收录提到关键词的作品")
+        self.enable_box.setChecked(bool(enabled))
+        layout.addWidget(self.enable_box)
+        form = QFormLayout()
+        self.keyword_edit = QLineEdit("，".join(keywords or ()))
+        self.keyword_edit.setPlaceholderText("多个关键词用逗号分隔，如：封茗囧菌，囧菌")
+        form.addRow("关键词", self.keyword_edit)
+        layout.addLayout(form)
+        tip = QLabel(
+            "名单内账号（封茗囧菌、封茗囧菌咨讯站等）不受影响；\n"
+            "名单外的合作方账号只保留标题或正文提到关键词的作品，"
+            "对方空间的无关投稿不会进入待同步。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color: gray;")
+        layout.addWidget(tip)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def values(self) -> tuple[bool, list[str]]:
+        words = []
+        for word in re.split(r"[,，;；\s]+", self.keyword_edit.text().strip()):
+            if word and word not in words:
+                words.append(word)
+        return self.enable_box.isChecked(), words
 
 
 class TcDocBridgePanel(QWidget):
@@ -252,6 +344,8 @@ class TcDocBridgePanel(QWidget):
         self._compare_pending = False
         self._saved_accounts = []
         self._account_checked: dict[str, bool] = {}
+        # 已自动勾过的合作方作者：只勾一次，用户后续取消不再强制勾回
+        self._partner_seen: set[str] = set()
         self._songs_mode = False
         self._posts_days_index = None
         self._refreshing = False
@@ -302,6 +396,14 @@ class TcDocBridgePanel(QWidget):
         self._account_menu = QMenu(self.account_btn)
         self.account_btn.setMenu(self._account_menu)
         top.addWidget(self.account_btn)
+
+        # 合作方过滤：名单之外的账号只收录提到关键词的作品（默认启用，可在弹窗改关键词）
+        self.partner_filter_btn = QPushButton("合作方过滤")
+        self.partner_filter_btn.setToolTip(
+            "配置合作方账号的收录口径：腾讯表「发布账号」名单之外的账号，"
+            "只保留标题或正文提到关键词的作品；可关闭或修改关键词。")
+        self.partner_filter_btn.clicked.connect(self._edit_partner_filter)
+        top.addWidget(self.partner_filter_btn)
 
         # 直播记录专用：主播多选 + 重复处理策略（仅 profile=lives 时可见）
         self.live_account_btn = QPushButton("主播：全部")
@@ -621,6 +723,7 @@ class TcDocBridgePanel(QWidget):
         lives = profile == "lives"
         readonly = profile in ("events", "merch", "lives")
         self.manual_btn.setVisible(profile in ("events", "merch", "lives"))
+        self.partner_filter_btn.setVisible(profile == "posts")
         self.live_account_btn.setVisible(lives)
         self.dup_combo.setVisible(lives)
         self.api_preview_btn.setVisible(lives)
@@ -836,6 +939,23 @@ class TcDocBridgePanel(QWidget):
         self._save_cfg(tcdoc_bridge_days=int(self.days_combo.currentData() or 0))
         self._run_compare()
 
+    def _edit_partner_filter(self) -> None:
+        """合作方过滤设置：开关 + 关键词，保存后立即重新比对。"""
+        cfg = load_convert_config()
+        dialog = _PartnerFilterDialog(
+            cfg.get("tcdoc_bridge_partner_filter", True),
+            cfg.get("tcdoc_bridge_subject_keywords") or bridge.DEFAULT_SUBJECT_KEYWORDS,
+            self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        enabled, keywords = dialog.values()
+        if enabled and not keywords:
+            QMessageBox.warning(self, "合作方过滤", "启用过滤时至少填一个关键词。")
+            return
+        self._save_cfg(tcdoc_bridge_partner_filter=enabled,
+                       tcdoc_bridge_subject_keywords=keywords)
+        self._run_compare()
+
     # ==================== 账号 ====================
 
     def _rebuild_account_menu(self, names: list[str], checked: set[str]) -> None:
@@ -955,6 +1075,50 @@ class TcDocBridgePanel(QWidget):
             return False
         return True
 
+    def _prepare_records(self, rows: list[dict], target: dict, days: int,
+                         collected) -> dict:
+        """待同步行 → 可上传记录（本地图片、字段预检、需新建的下拉选项）。
+
+        GUI 批量上传与右键单行上传共用，避免两条链路的构造规则出现偏差。
+        """
+        from toolbox.tcdoc import import_pending as pending
+        from toolbox.tcdoc.import_local import LocalImage, LocalImportClient, ManagedAuth
+        import auth as auth_module
+
+        profile = str(target.get("profile") or "posts")
+        missing = []
+        if profile == "songs":
+            records = pending.song_records_from_rows(pending.ROOT, rows)
+        else:
+            sources = bridge.collect_local_items(days, collected)
+            catalogue = pending.build_catalogue(pending.ROOT, sources)
+            records, missing = pending.records_from_rows(pending.ROOT, rows, catalogue)
+            media = pending.ROOT / "download/已获取数据"
+            for record in records:
+                record["_images"] = [LocalImage.inspect(pending.ROOT / p, media)
+                                     for p in record["images"]]
+        # 预检：字段/选项不满足的行标成不可上传，避免上传到一半才中断
+        client = LocalImportClient(
+            ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
+            str(target["doc_key"]), str(target["tab_id"]))
+        client.connect()
+        fields = client.get_fields()
+        for record in records:
+            try:
+                if profile == "songs":
+                    pending.make_song_plan(record, fields)
+                else:
+                    # 新名字（如新 UP 主）不在这里拦下：留到上传前统一确认是否新建选项
+                    pending.make_plan(record, fields, available_only=False,
+                                      allow_new_options=True)
+            except pending.ImportErrorDetail as exc:
+                record["blocked"] = str(exc)
+        new_options = {}
+        if profile != "songs":
+            new_options = pending.new_choice_options(
+                [r for r in records if not r.get("blocked")], fields)
+        return {"records": records, "new_options": new_options, "missing": missing}
+
     def _open_upload(self) -> None:
         if self._closed or self._busy or self._uploading:
             return
@@ -994,40 +1158,7 @@ class TcDocBridgePanel(QWidget):
         self._progress_start()
 
         def work():
-            from toolbox.tcdoc import import_pending as pending
-            from toolbox.tcdoc.import_local import LocalImage, LocalImportClient, ManagedAuth
-            import auth as auth_module
-            if profile == "songs":
-                records = pending.song_records_from_rows(pending.ROOT, rows)
-            else:
-                sources = bridge.collect_local_items(days, collected)
-                catalogue = pending.build_catalogue(pending.ROOT, sources)
-                records, _missing = pending.records_from_rows(pending.ROOT, rows, catalogue)
-                media = pending.ROOT / "download/已获取数据"
-                for record in records:
-                    record["_images"] = [LocalImage.inspect(pending.ROOT / p, media)
-                                         for p in record["images"]]
-            # 预检：字段/选项不满足的行标成不可上传，避免上传到一半才中断
-            client = LocalImportClient(
-                ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
-                str(target["doc_key"]), str(target["tab_id"]))
-            client.connect()
-            fields = client.get_fields()
-            for record in records:
-                try:
-                    if profile == "songs":
-                        pending.make_song_plan(record, fields)
-                    else:
-                        # 新名字（如新 UP 主）不在这里拦下：留到上传前统一确认是否新建选项
-                        pending.make_plan(record, fields, available_only=False,
-                                          allow_new_options=True)
-                except pending.ImportErrorDetail as exc:
-                    record["blocked"] = str(exc)
-            new_options = {}
-            if profile != "songs":
-                new_options = pending.new_choice_options(
-                    [r for r in records if not r.get("blocked")], fields)
-            return {"records": records, "new_options": new_options}
+            return self._prepare_records(rows, target, days, collected)
 
         def done(result, err):
             self._busy = False
@@ -1068,7 +1199,9 @@ class TcDocBridgePanel(QWidget):
                     self._maybe_run_pending_compare()
                     return
                 allow_new_options = True
-            self._start_upload(target, chosen, allow_new_options=allow_new_options)
+            self._start_upload(target, chosen, allow_new_options=allow_new_options,
+                               fetch_missing=dialog.fetch_missing,
+                               missing=result.get("missing") or [])
 
         thread = run_bg(work, done, owner=self)
         if thread is None:
@@ -1079,7 +1212,9 @@ class TcDocBridgePanel(QWidget):
             self._maybe_run_pending_compare()
 
     def _start_upload(self, target: dict, records: list[dict],
-                      allow_new_options: bool = False) -> None:
+                      allow_new_options: bool = False, fetch_missing: bool = False,
+                      missing: list[dict] | None = None,
+                      verify_each: bool = False) -> None:
         if self._uploading:
             return
         self._uploading = True
@@ -1115,12 +1250,21 @@ class TcDocBridgePanel(QWidget):
             from toolbox.tcdoc import import_pending as pending
             from toolbox.tcdoc.import_local import LocalImportClient, ManagedAuth
             import auth as auth_module
+            if fetch_missing and missing:
+                common.post_to_main(self.status.setText, "正在尝试在线补下缺失图片…")
+                fetched = pending.fetch_missing_images(records, missing)
+                common.post_to_main(
+                    self.status.setText, f"在线补图完成：补上 {fetched} 张，其余留空")
+                if fetched:
+                    # 补图后总张数变大，否则进度会显示「图片 2/1」
+                    common.post_to_main(self._set_upload_image_total,
+                                        sum(len(r.get("_images") or []) for r in records))
             client = LocalImportClient(
                 ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
                 str(target["doc_key"]), str(target["tab_id"]))
             client.connect()
             return pending.run(client, records, apply=True, available_only=False,
-                               verify_each=False, emit=emit,
+                               verify_each=verify_each, emit=emit,
                                profile=str(target.get("profile") or "posts"),
                                allow_new_options=allow_new_options)
 
@@ -1206,6 +1350,14 @@ class TcDocBridgePanel(QWidget):
             self.upload_progress.setRange(0, 0)
             self.upload_progress.setFormat("准备中…")
         self.progress_label.setText("")
+
+    def _set_upload_image_total(self, total: int) -> None:
+        """在线补图后更新图片总数，避免进度标签出现「图片 2/1」。"""
+        self._upload_images_total = max(self._upload_images_total, int(total))
+        self._upload_steps_total = max(
+            self._upload_steps_total, self._upload_records_total + self._upload_images_total)
+        if self._upload_steps_total:
+            self.upload_progress.setRange(0, self._upload_steps_total)
 
     def _progress_tick(self, records: int = 0, images: int = 0) -> None:
         self._upload_records += records
@@ -1416,8 +1568,10 @@ class TcDocBridgePanel(QWidget):
                     return bridge.build_merch_pending(days=days, collected=collected)
             else:
                 def work():
-                    return bridge.build_pending(doc_key, tab_id, days=days,
-                                                accounts=accounts, collected=collected)
+                    result = bridge.build_pending(doc_key, tab_id, days=days,
+                                                  accounts=accounts, collected=collected)
+                    _annotate_local_images(result, days, collected)
+                    return result
 
             def done(result, err):
                 self._finish_compare(req, result, err, accounts)
@@ -1665,6 +1819,18 @@ class TcDocBridgePanel(QWidget):
             if profile == "songs":
                 image_note = (f"（有封面 {stats['with_images']} 首 / "
                               f"{stats['image_count']} 张，无封面 {stats['without_images']} 首）")
+            elif profile == "posts":
+                rows_now = result["rows"]
+                local_known = any(row.get("_local_images") is not None for row in rows_now)
+                if local_known:
+                    local_total = sum(int(row.get("_local_images") or 0) for row in rows_now)
+                    missing_total = sum(int(row.get("_missing_images") or 0) for row in rows_now)
+                    image_note = (f"（图片链接 {stats['with_images']} 行 / "
+                                  f"{stats['image_count']} 张，本地已下载 {local_total} 张、"
+                                  f"缺 {missing_total} 张，无图片 {stats['without_images']} 行）")
+                else:
+                    image_note = (f"（图片链接 {stats['with_images']} 行 / "
+                                  f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
             else:
                 image_note = (f"（有图片 {stats['with_images']} 行 / "
                               f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
@@ -1712,8 +1878,9 @@ class TcDocBridgePanel(QWidget):
             else:
                 self.status.setText(
                     f"共 {len(result['rows'])} 行待同步（不含表头；"
-                    "发布距今/封面图留空占位）；选中行可单行复制，右键行也有复制菜单，"
-                    "图片可点「复制全部图片」。")
+                    "发布距今/封面图留空占位）；选中行可单行复制，"
+                    "右键行可「上传这一行到腾讯文档」或复制；"
+                    "缺图会在上传时尝试在线补图，补不到则留空。")
         else:
             self.status.setText(
                 "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
@@ -1770,6 +1937,10 @@ class TcDocBridgePanel(QWidget):
         default_checked = (set(result.get("accounts") or [])
                            & set(result.get("local_accounts") or []))
         checked = previous or (saved & set(names)) or default_checked or set(result.get("accounts") or [])
+        # 新出现的合作方作者（如新加的合作方空间）默认勾选，否则比对结果里看不到它们的作品
+        partners = set(result.get("partner_accounts") or []) & set(names)
+        checked = set(checked) | (partners - self._partner_seen)
+        self._partner_seen |= partners
         self._rebuild_account_menu(names, checked)
         selected = self._selected_accounts()
         if (previous or saved) and selected != used_accounts:
@@ -2033,6 +2204,13 @@ class TcDocBridgePanel(QWidget):
         act_dyn = None
         if dyn:
             act_dyn = menu.addAction("复制动态链接(b站)")
+        act_upload = None
+        # 直播记录走独立的 payload 预演链路（列结构与官方动态不同），这里只开放
+        # 官方动态与完整歌曲的单行上传。
+        if profile in ("posts", "songs") and self._upload_target_ok():
+            menu.addSeparator()
+            act_upload = menu.addAction("上传这一行到腾讯文档")
+            act_upload.setEnabled(not self._busy and not self._uploading)
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == act_row:
             self._copy_rows([row], f"第 {row_index + 1} 行")
@@ -2045,3 +2223,108 @@ class TcDocBridgePanel(QWidget):
                 self._copy_text(dyn, "动态链接")
         elif act_dyn is not None and chosen == act_dyn:
             self._copy_text(dyn, "动态链接")
+        elif act_upload is not None and chosen == act_upload:
+            self._upload_single(row_index)
+
+    def _upload_single(self, row_index: int) -> None:
+        """右键单行上传：只准备并写入这一行，缺图会先尝试在线补下。
+
+        与批量上传同一条写回链路，差别是只写一条、逐条读回校验，
+        不走「上传到腾讯文档」按钮的勾选清单。
+        """
+        if self._closed or self._busy or self._uploading:
+            return
+        target = self.target_combo.currentData()
+        rows = list((self._result or {}).get("rows") or [])
+        if not target or not (0 <= row_index < len(rows)):
+            return
+        if str((self._result or {}).get("profile") or "") not in ("posts", "songs"):
+            return
+        if not self._upload_target_ok():
+            QMessageBox.warning(
+                self, "范围限制",
+                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」，"
+                "或「完整歌曲」（完整歌曲仅新增，不改不删）。")
+            return
+        from toolbox import sync_refresh
+        fresh, why = sync_refresh.is_fresh()
+        if not fresh:
+            QMessageBox.information(
+                self, "需要先刷新",
+                f"{why}\n\n请先点「同步前刷新」，完成后再上传。")
+            return
+
+        row = rows[row_index]
+        days = int(self.days_combo.currentData() or 0)
+        collected = list(common.COLLECTED)
+        self._busy = True
+        self.upload_btn.setEnabled(False)
+        self.status.setText("正在准备这一行的字段与本地图片…")
+        self._progress_start()
+
+        def work():
+            return self._prepare_records([row], target, days, collected)
+
+        def done(result, err):
+            self._busy = False
+            self._hide_progress()
+            if self._closed:
+                return
+            self._restore_buttons()
+            if err:
+                self.status.setText(f"这一行准备失败：{err}")
+                QMessageBox.warning(self, "准备失败", str(err))
+                return
+            record = (result.get("records") or [None])[0]
+            if not record:
+                self.status.setText("这一行没有可上传内容。")
+                return
+            if record.get("blocked"):
+                self.status.setText(f"这一行不能上传：{record['blocked']}")
+                QMessageBox.warning(self, "这一行不能上传", str(record["blocked"]))
+                return
+            columns = record.get("columns") or {}
+            title = str(record.get("title") or columns.get("作品标题")
+                        or columns.get("歌曲名称") or "")[:60]
+            local = len(record.get("_images") or [])
+            gaps = len(record.get("missing_slots") or [])
+            image_note = (f"图片：本地 {local} 张，缺 {gaps} 张"
+                          + ("（会先尝试在线补下，补不到留空）" if gaps else ""))
+            answer = QMessageBox.question(
+                self, "上传这一行到腾讯文档",
+                f"标题：{title}\n"
+                f"账号：{columns.get('发布账号') or columns.get('演唱者') or ''} · "
+                f"平台：{columns.get('发布平台') or '多平台'}\n"
+                f"{image_note}\n\n"
+                "只新增这一条，链接已存在会自动跳过；不会修改或删除表内其它行。\n"
+                "是否继续？",
+                QMessageBox.Yes | QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                self.status.setText("已取消上传。")
+                return
+            new_options = result.get("new_options") or {}
+            allow_new_options = False
+            if new_options:
+                lines = "\n".join(f"{name}：{'、'.join(names)}"
+                                  for name, names in new_options.items())
+                confirm = QMessageBox.question(
+                    self, "新建下拉选项",
+                    f"这一行有腾讯表格下拉选项还没有的名字：\n{lines}\n\n"
+                    "上传时会自动在对应列新建这些选项并写入（只影响这两张表的选项，"
+                    "不改字段类型）。是否继续？",
+                    QMessageBox.Yes | QMessageBox.No)
+                if confirm != QMessageBox.Yes:
+                    self.status.setText("已取消上传（未新建选项）。")
+                    return
+                allow_new_options = True
+            self._start_upload(target, [record], allow_new_options=allow_new_options,
+                               fetch_missing=True,
+                               missing=result.get("missing") or [],
+                               verify_each=True)
+
+        thread = run_bg(work, done, owner=self)
+        if thread is None:
+            self._busy = False
+            self._hide_progress()
+            self._restore_buttons()
+            self.status.setText("单行上传任务未启动，请重试")

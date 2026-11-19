@@ -2217,6 +2217,39 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
     }
 
 
+# 合作方账号（腾讯表「发布账号」名单之外的作者）只收录提及主体的作品，
+# 否则对方空间的游戏/原创等无关投稿会一起进「官方动态」。
+# 默认值仅作兜底，实际取值见 config.json 的 tcdoc_bridge_partner_filter / subject_keywords。
+DEFAULT_SUBJECT_KEYWORDS = ("封茗囧菌", "囧菌")
+
+
+def partner_filter_settings() -> tuple[bool, tuple[str, ...]]:
+    """读取合作方过滤配置：是否启用 + 关键词（配置缺失时用默认值）。"""
+    try:
+        from toolbox.config_manager import load_convert_config
+        cfg = load_convert_config()
+    except Exception:  # noqa: BLE001 - 配置不可用时按默认启用
+        return True, DEFAULT_SUBJECT_KEYWORDS
+    enabled = bool(cfg.get("tcdoc_bridge_partner_filter", True))
+    raw = cfg.get("tcdoc_bridge_subject_keywords") or []
+    if isinstance(raw, str):
+        raw = re.split(r"[,，;；\s]+", raw)
+    words = tuple(dict.fromkeys(str(word).strip() for word in raw if str(word).strip()))
+    return enabled, words or DEFAULT_SUBJECT_KEYWORDS
+
+
+def _group_mentions_subject(items: list[dict], official: set[str],
+                            keywords: tuple[str, ...] = DEFAULT_SUBJECT_KEYWORDS) -> bool:
+    """官方账号条目直接保留；其他作者需标题或正文提及关键词。"""
+    for item in items:
+        if str(item.get("author") or "") in official:
+            return True
+        text = f"{item.get('title') or ''}\n{item.get('description') or ''}"
+        if any(key in text for key in keywords):
+            return True
+    return False
+
+
 def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
                   collected=None) -> dict:
     """比对并返回待同步行。
@@ -2252,11 +2285,22 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
 
     pending = []
     synced = 0
+    filtered_partner = 0
+    partner_accounts: set[str] = set()
+    official = set(index["accounts"])
+    filter_enabled, keywords = partner_filter_settings()
     for items in groups.values():
         # 组内任意一条已在腾讯表 → 视为该作品已同步，避免重复行
         if any(_matches(item, index) for item in items):
             synced += 1
             continue
+        # 合作方账号只收录提到主体的作品（可在「合作方过滤」里配置开关与关键词）
+        if filter_enabled and not _group_mentions_subject(items, official, keywords):
+            filtered_partner += 1
+            continue
+        author = str(items[0].get("author") or "")
+        if author and author not in official:
+            partner_accounts.add(author)
         pending.append(_row_from_group(items, index))
     pending.sort(key=lambda row: (row.get("发布时间") or "",
                                   row.get("发布平台") or ""), reverse=True)
@@ -2271,10 +2315,13 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
         "link_columns": list(LINK_COLUMNS),
         "accounts": sorted(index["accounts"]),
         "local_accounts": all_local_accounts,
+        # 本地新增的合作方作者（有保留条目）——界面默认勾选，保证新加的合作账号自动参与同步
+        "partner_accounts": sorted(partner_accounts),
         "stats": {
             "local_items": len(local),
             "local_groups": len(groups),
             "synced_groups": synced,
+            "filtered_partner": filtered_partner,
             "pending": len(pending),
             "with_images": with_images,
             "without_images": len(pending) - with_images,

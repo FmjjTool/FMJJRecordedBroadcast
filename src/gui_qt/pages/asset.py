@@ -2874,6 +2874,9 @@ class AssetPage(BasePage):
             shown = True
         if not shown:
             menu.addAction("（该条目没有本地 MD / 媒体文件）").setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("上传到腾讯文档（官方动态）").triggered.connect(
+            lambda _=False, e=it: self._upload_item_to_tcdoc(e))
         # 下载限制：纯文本自动标记可解除；正常条目可手动标记为不可下载
         menu.addSeparator()
         key = self._dl_key(it)
@@ -2884,6 +2887,69 @@ class AssetPage(BasePage):
             menu.addAction("标记为不可下载").triggered.connect(
                 lambda _=False, k=key: self._set_no_dl_manual(k))
         menu.exec(global_pos)
+
+    def _upload_item_to_tcdoc(self, it):
+        """单条上传到腾讯文档「官方动态」：自动刷新 → 写入 → 读回校验。"""
+        from toolbox.tcdoc import single_upload
+
+        answer = QMessageBox.question(
+            self, "上传到腾讯文档",
+            "将把这一条上传到《封茗囧菌数据汇总库》的「官方动态」。\n\n"
+            "上传前会自动刷新：采集已配置账号 → 拉取云端表格快照 → 上传 → 读回校验。\n"
+            "刷新可能需要几十秒到几分钟，期间请不要关闭软件。\n\n是否继续？",
+            QMessageBox.Yes | QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+
+        dialog = QProgressDialog("正在自动刷新并上传…", "", 0, 0, self)
+        dialog.setWindowTitle("上传到腾讯文档")
+        dialog.setCancelButton(None)
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.show()
+
+        def emit(event):
+            phase = event.get("phase")
+            if phase == "refresh_status":
+                common.post_to_main(dialog.setLabelText, str(event.get("text") or ""))
+            elif phase == "image_uploaded":
+                common.post_to_main(dialog.setLabelText,
+                                    f"上传图片：{event.get('name')}")
+            elif phase == "record_created":
+                common.post_to_main(dialog.setLabelText, "已写入，正在读回校验…")
+
+        def work():
+            return single_upload.upload_entry(
+                it, doc_key=single_upload.OFFICIAL_DOC,
+                tab_id=single_upload.OFFICIAL_POSTS_TAB, refresh=True, emit=emit)
+
+        def done(receipt, err):
+            dialog.close()
+            if err:
+                QMessageBox.warning(self, "上传失败", str(err))
+                return
+            added = receipt.get("added") or []
+            skipped = receipt.get("skipped") or []
+            missing = int(receipt.get("missing_images") or 0)
+            if added:
+                item = added[0]
+                note = f"图片 {item.get('image_count', 0)} 张"
+                if missing:
+                    note += f" · 缺图 {missing} 张"
+                note += ("\n读回校验：通过" if item.get("verified")
+                         else "\n读回校验：异常，请到表格里核对")
+                QMessageBox.information(
+                    self, "上传完成",
+                    f"已新增 1 条：{str(item.get('title') or '')[:40]}\n{note}")
+            elif skipped:
+                QMessageBox.information(
+                    self, "未新增",
+                    "表里已存在同一条作品（按原帖链接判定），已跳过。")
+            else:
+                QMessageBox.information(self, "未新增", "没有写入任何记录。")
+            self.app.toast("单条上传完成", "success")
+
+        run_bg(work, done)
 
     def _set_no_dl_manual(self, key):
         """用户手动标记某条目不可下载（持久化 + 行级刷新）。"""

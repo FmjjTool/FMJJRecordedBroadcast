@@ -269,7 +269,7 @@ class LocalImportClient:
     def upload_image(self, image: LocalImage) -> str:
         validate_target(self.doc_key, self.tab_id, self.allow_test)
         result = self._request("POST", "/resources/v2/images",
-                               image=(image.path.name, image.mime, image.read_verified()))
+                               image=(image.upload_name, image.mime, image.read_verified()))
         image_id = result.get("imageID")
         if not isinstance(image_id, str) or not image_id:
             raise ImportErrorDetail("图片上传未返回 imageID；没有新增记录")
@@ -296,12 +296,43 @@ def image_mime(content: bytes) -> str:
     raise ImportErrorDetail("本地图片签名不支持（支持 JPEG、PNG、GIF、BMP、WebP）")
 
 
+def convert_to_png(data: bytes) -> bytes | None:
+    """非腾讯支持的图片格式（HEIC/AVIF/TIFF/SVG 等）转成 PNG 字节。
+
+    上传时只在内存里转换，不改动本地原图；解码失败或转换后超出限额返回 None。
+    """
+    try:
+        import io
+
+        from PIL import Image
+        try:  # HEIC/HEIF 需要先注册解码器（requirements 里已含 pillow-heif）
+            from pillow_heif import register_heif_opener
+            register_heif_opener()
+        except Exception:  # noqa: BLE001 - 没装也继续试其它格式
+            pass
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            alpha = img.mode in ("RGBA", "LA") or (
+                img.mode == "P" and "transparency" in img.info)
+            buffer = io.BytesIO()
+            img.convert("RGBA" if alpha else "RGB").save(buffer, "PNG", optimize=True)
+            png = buffer.getvalue()
+    except Exception:  # noqa: BLE001 - 任何解码/编码失败都按不支持处理
+        return None
+    if not 0 < len(png) <= MAX_IMAGE_BYTES:
+        return None
+    return png
+
+
 @dataclass(frozen=True)
 class LocalImage:
     path: Path
     size: int
     digest: str = field(repr=False)
     mime: str
+    # 非支持格式转换出来的 PNG：只存在内存里，不落盘、不改原图
+    data: bytes | None = field(default=None, repr=False, compare=False)
+    name: str = ""
 
     @classmethod
     def inspect(cls, path: Path, media_root: Path):
@@ -313,9 +344,28 @@ class LocalImage:
         if not 0 < resolved.stat().st_size <= MAX_IMAGE_BYTES:
             raise ImportErrorDetail(f"本地图片为空或超过脚本 20 MiB 限额：{path.name}")
         data = resolved.read_bytes()
-        return cls(resolved, len(data), hashlib.sha256(data).hexdigest(), image_mime(data))
+        try:
+            mime = image_mime(data)
+        except ImportErrorDetail:
+            # 腾讯只收 JPEG/PNG/GIF/BMP/WebP：其它格式（HEIC/AVIF/TIFF…）自动转 PNG
+            png = convert_to_png(data)
+            if png is None:
+                raise ImportErrorDetail(
+                    "本地图片格式不支持，自动转 PNG 也失败："
+                    f"{path.name}（支持 JPEG、PNG、GIF、BMP、WebP）") from None
+            return cls(resolved, len(png), hashlib.sha256(png).hexdigest(), "image/png",
+                       data=png, name=resolved.stem[:80] + ".png")
+        return cls(resolved, len(data), hashlib.sha256(data).hexdigest(), mime)
+
+    @property
+    def upload_name(self) -> str:
+        return self.name or self.path.name
 
     def read_verified(self) -> bytes:
+        if self.data is not None:
+            if hashlib.sha256(self.data).hexdigest() != self.digest:
+                raise ImportErrorDetail(f"转换后的 PNG 数据不一致：{self.upload_name}")
+            return self.data
         try:
             if not self.path.is_file() or self.path.stat().st_size != self.size:
                 raise ImportErrorDetail(f"预览后本地图片发生变化：{self.path.name}")

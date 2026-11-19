@@ -305,6 +305,9 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_bridge_tab_id": "",
     "tcdoc_bridge_days": 30,
     "tcdoc_bridge_accounts": [],
+    # 中间层：合作方过滤（腾讯表「发布账号」名单之外的账号只收录提到关键词的作品）
+    "tcdoc_bridge_partner_filter": True,
+    "tcdoc_bridge_subject_keywords": ["封茗囧菌", "囧菌"],
     # 资产页「图识别（以图搜图）」：CLIP 图像编码器 ONNX（空 = config/models 自动查找）
     "image_search_model": "",
     "image_search_topk": 30,
@@ -549,6 +552,7 @@ EXPORT_CATEGORIES = {
     "video_data": "已获取数据",
     "danmaku": "弹幕文件",
     "danmaku_bili": "弹幕文件B站",
+    "douyin_emoji": "抖音表情包",
     "douyin_comments": "评论区",
     "video_comments": "评论区",
     "wechat": "公众号文章",
