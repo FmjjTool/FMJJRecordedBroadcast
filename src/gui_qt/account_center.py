@@ -10,8 +10,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTabWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
@@ -74,14 +74,19 @@ class AccountCenterWidget(QWidget):
 
         # 列表不再自己滚动：整页由外层（弹窗页签）统一滚动，
         # 避免「页内 + 页外」两条并排的滚动条，也避免列表高度把弹窗最小尺寸顶大。
-        self.acc_scroll = QFrame()
-        self.acc_scroll.setStyleSheet(
-            "QFrame { background: transparent; border: 1px solid palette(shadow); border-radius: 6px; }")
-        self.acc_layout = QVBoxLayout(self.acc_scroll)
-        self.acc_layout.setContentsMargins(4, 4, 4, 4)
-        self.acc_layout.setSpacing(4)
-        self.acc_layout.addStretch(1)
-        lv.addWidget(self.acc_scroll)
+        # 二级页签：视频账号 / 音乐账号，各自一个列表。
+        self.acc_tabs = QTabWidget()
+        self.acc_tabs.setDocumentMode(True)
+        self.acc_layouts: dict[str, QVBoxLayout] = {}
+        for key in ("video", "music"):
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(4, 6, 4, 4)
+            layout.setSpacing(4)
+            layout.addStretch(1)
+            self.acc_layouts[key] = layout
+            self.acc_tabs.addTab(page, "")
+        lv.addWidget(self.acc_tabs)
         outer.addWidget(list_card)
 
         self.status_label = QLabel("")
@@ -258,53 +263,28 @@ class AccountCenterWidget(QWidget):
             self.group_layout.addStretch(1)
 
     def _reload_accounts(self):
-        self._clear_layout(self.acc_layout)
-        self.acc_layout.addStretch(1)
-        if not self._accounts:
-            label = QLabel("（暂无账号，先在上方添加）")
+        video = [a for a in self._accounts if a["platform"] not in registry.MUSIC_PLATFORMS]
+        music = [a for a in self._accounts if a["platform"] in registry.MUSIC_PLATFORMS]
+        self.acc_tabs.setTabText(0, f"视频账号 {len(video)}")
+        self.acc_tabs.setTabText(1, f"音乐账号 {len(music)}")
+        self._fill_account_tab(self.acc_layouts["video"], video, "视频账号")
+        self._fill_account_tab(self.acc_layouts["music"], music, "音乐账号")
+
+    def _fill_account_tab(self, layout, accounts, title):
+        self._clear_layout(layout)
+        layout.addStretch(1)
+        if not accounts:
+            label = QLabel(f"（暂无{title}，先在上方添加）")
             label.setProperty("role", "muted")
             label.setAlignment(Qt.AlignCenter)
-            self.acc_layout.takeAt(self.acc_layout.count() - 1)
-            self.acc_layout.addWidget(label)
-            self.acc_layout.addStretch(1)
+            layout.takeAt(layout.count() - 1)
+            layout.addWidget(label)
+            layout.addStretch(1)
             return
-        groups = (
-            ("视频账号", [a for a in self._accounts
-                          if a["platform"] not in registry.MUSIC_PLATFORMS]),
-            ("音乐账号", [a for a in self._accounts
-                          if a["platform"] in registry.MUSIC_PLATFORMS]),
-        )
-        for title, accounts in groups:
-            self.acc_layout.takeAt(self.acc_layout.count() - 1)
-            self.acc_layout.addWidget(self._build_section_header(title, len(accounts)))
-            self.acc_layout.addStretch(1)
-            if not accounts:
-                empty = QLabel(f"（暂无{title}）")
-                empty.setProperty("role", "muted")
-                self.acc_layout.takeAt(self.acc_layout.count() - 1)
-                self.acc_layout.addWidget(empty)
-                self.acc_layout.addStretch(1)
-                continue
-            for pos, account in enumerate(accounts):
-                self.acc_layout.takeAt(self.acc_layout.count() - 1)
-                self.acc_layout.addWidget(
-                    self._build_account_row(account, pos, len(accounts)))
-                self.acc_layout.addStretch(1)
-
-    @staticmethod
-    def _build_section_header(title: str, count: int) -> QWidget:
-        header = QWidget()
-        row = QHBoxLayout(header)
-        row.setContentsMargins(2, 8, 2, 2)
-        row.setSpacing(6)
-        label = QLabel(title)
-        label.setStyleSheet("font-weight: bold;")
-        row.addWidget(label)
-        counter = QLabel(f"{count} 个")
-        counter.setProperty("role", "caption")
-        row.addWidget(counter)
-        row.addStretch(1)
-        return header
+        for pos, account in enumerate(accounts):
+            layout.takeAt(layout.count() - 1)
+            layout.addWidget(self._build_account_row(account, pos, len(accounts)))
+            layout.addStretch(1)
 
     def _build_account_row(self, account: dict, pos: int, group_size: int) -> QWidget:
         row = QFrame()
