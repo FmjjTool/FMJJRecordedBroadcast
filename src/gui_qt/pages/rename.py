@@ -14,8 +14,6 @@
 
 import os
 import re
-import subprocess
-import tempfile
 from pathlib import Path
 import threading
 
@@ -34,8 +32,7 @@ from toolbox.rename_engine import (
     extract_file_title, extract_time_str, is_standard_recording_name,
 )
 from toolbox.utils import (
-    capture_video_frame, clean_special_chars, find_ffmpeg_exe, get_video_info,
-    is_video_file,
+    capture_video_frame, clean_special_chars, get_video_info, is_video_file,
 )
 
 from gui_qt.common import run_bg
@@ -264,6 +261,9 @@ class RenamePage(BasePage):
         # 版权信息开关（与参数设置同步）
         extra_row = QHBoxLayout()
         self.rename_extra_check = QCheckBox("写入版权属性")
+        self.rename_extra_check.setToolTip(
+            "写入标准版权标签（cprt）；MP4 在资源管理器里不显示「版权」，"
+            "会同时写一份到「备注」，属性 → 详细信息 → 备注 可看到")
         self.rename_extra_check.setChecked(self.rename_config.append_extra_info)
         self.rename_extra_check.toggled.connect(self._on_extra_toggle)
         extra_row.addWidget(self.rename_extra_check)
@@ -589,36 +589,8 @@ class RenamePage(BasePage):
         """同步写入元数据，完成后才允许投稿；失败保留已重命名的原视频。"""
         if not enabled or not info:
             return True, ""
-        path = Path(filepath)
-        try:
-            from toolbox.organize_engine import _locked_reader
-            with tempfile.TemporaryDirectory(prefix=".fmjj-meta-", dir=path.parent) as directory:
-                temporary = Path(directory) / ("video" + path.suffix)
-                with _locked_reader(path):
-                    before = path.stat()
-                    cmd = [find_ffmpeg_exe(), "-y", "-i", str(path), "-map", "0", "-c", "copy",
-                           "-metadata", f"copyright={info}", "-hide_banner", "-loglevel", "error"]
-                    if path.suffix.lower() in (".mp4", ".mov", ".m4v"):
-                        cmd += ["-movflags", "+faststart"]
-                    cmd.append(str(temporary))
-                    result = subprocess.run(cmd, capture_output=True, timeout=120)
-                    if result.returncode or not temporary.is_file() or not temporary.stat().st_size:
-                        return False, "FFmpeg 元数据写入失败，原视频已保留"
-                    if get_video_info(str(temporary)).get("error"):
-                        return False, "元数据产物无法解析，原视频已保留"
-                    # Windows 的 fsync 要求可写句柄；只同步临时产物。
-                    with open(temporary, "r+b") as stream:
-                        os.fsync(stream.fileno())
-                    os.utime(temporary, ns=(before.st_atime_ns, before.st_mtime_ns))
-                # Windows 替换目标前必须释放自己的读锁，再核对来源是否变化。
-                current = path.stat()
-                if (current.st_size, current.st_mtime_ns, current.st_ino) != (
-                        before.st_size, before.st_mtime_ns, before.st_ino):
-                    return False, "元数据处理期间原视频变化，原视频已保留"
-                os.replace(temporary, path)
-                return True, "版权信息已写入"
-        except Exception as error:
-            return False, f"元数据处理失败（{type(error).__name__}: {error}），原视频已保留"
+        from toolbox import video_meta
+        return video_meta.write_copyright(filepath, info)
 
     def _skip_video(self):
         """跳过当前视频，加载下一个；未标准命名的跳过项不会被自动投稿。"""
@@ -880,6 +852,9 @@ class RenamePage(BasePage):
         self.extra_info_entry = QLineEdit()
         ef.addWidget(self.extra_info_entry, 1)
         self.append_extra_check = QCheckBox("写入版权属性")
+        self.append_extra_check.setToolTip(
+            "写入标准版权标签（cprt）；MP4 在资源管理器里不显示「版权」，"
+            "会同时写一份到「备注」，属性 → 详细信息 → 备注 可看到")
         ef.addWidget(self.append_extra_check)
         outer.addLayout(ef)
         outer.addStretch(1)
