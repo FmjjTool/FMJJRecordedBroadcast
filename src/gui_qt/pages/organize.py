@@ -213,7 +213,12 @@ class OrganizePage(BasePage):
             self.preview_text.append(f"A端迁移：{len(self.migration_plan)} 个视频")
             for item in self.migration_plan[:100]:
                 target = os.path.join(self._plan_dir, item["date"], item["name"])
-                self.preview_text.append(f"{item['path']} → {target} ({format_size(item['size'])})")
+                extra = ""
+                if item.get("companions"):
+                    extra = f"  [附带 {len(item['companions'])} 个：{'、'.join(item['companions'][:3])}"
+                    extra += "…]" if len(item["companions"]) > 3 else "]"
+                self.preview_text.append(
+                    f"{item['path']} → {target} ({format_size(item['size'])}){extra}")
             if len(self.migration_plan) > 100:
                 self.preview_text.append(f"…其余 {len(self.migration_plan) - 100} 个视频")
             self.preview_text.append("")
@@ -267,7 +272,14 @@ class OrganizePage(BasePage):
             results = result
             self._migrated_videos = [item["target"] for item in results if item["ok"]]
             success = len(self._migrated_videos)
-            self._log(f"整理完成：成功 {success}，失败 {len(results) - success}。下一步请前往交互重命名页；此处不会上传投稿。")
+            attached = sum(len(item.get("companions") or []) for item in results if item.get("ok"))
+            skipped_companions = [reason for item in results
+                                  for reason in (item.get("companion_skipped") or [])]
+            extra = f"，带出弹幕/封面等 {attached} 个附属文件" if attached else ""
+            self._log(f"整理完成：成功 {success}，失败 {len(results) - success}{extra}。"
+                      "下一步请前往交互重命名页；此处不会上传投稿。")
+            if skipped_companions:
+                self._log("附属文件跳过：" + "；".join(skipped_companions[:5]))
             self._scan()
         run_bg(work, done, owner=self)
 

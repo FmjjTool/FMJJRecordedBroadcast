@@ -1,6 +1,7 @@
 """自动整理引擎 - 按日期整理文件到文件夹"""
 import os
 import hashlib
+import shutil
 import time
 import uuid
 from contextlib import contextmanager
@@ -13,11 +14,42 @@ from .utils import extract_date_from_filename
 VIDEO_EXTS = {".mp4", ".flv", ".mkv", ".ts", ".mov", ".avi", ".webm",
               ".m4v", ".mpeg", ".mpg", ".mts", ".m2ts", ".wmv", ".ogv"}
 
+# 跟录制视频同场、同名主干的附属文件（录播姬 / 本软件直播录制都会生成）
+COMPANION_EXTS = {".jsonl", ".xml", ".ass", ".srt", ".vtt", ".txt", ".json",
+                  ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
 
 def _snapshot(path):
     stat = os.stat(path)
     return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
             "inode": stat.st_ino, "device": stat.st_dev}
+
+
+def companion_candidates(video_path):
+    """同场附属文件：`<视频主干>_弹幕.jsonl` / `_封面.jpg` / `_时间轴.json` 等。
+
+    只认同一目录、同一主干前缀、且不是视频的文件；分段 `_001.ts` 仍是视频，
+    不会被当成附属文件。
+    """
+    video_path = Path(video_path)
+    stem = video_path.stem
+    try:
+        entries = list(video_path.parent.iterdir())
+    except OSError:
+        return []
+    found = []
+    for item in entries:
+        try:
+            if not item.is_file() or item == video_path:
+                continue
+        except OSError:
+            continue
+        suffix = item.suffix.lower()
+        if suffix in VIDEO_EXTS or suffix not in COMPANION_EXTS:
+            continue
+        if item.name.startswith(stem + "_") or item.stem == stem:
+            found.append(item)
+    return sorted(found)
 
 
 def scan_sources(sources, work_dir, recursive=False, stable_seconds=30):
@@ -51,8 +83,10 @@ def scan_sources(sources, work_dir, recursive=False, stable_seconds=30):
                         skipped.append(f"暂缓（空文件或最近仍有写入）：{path}")
                         continue
                     date = extract_date_from_filename(name) or ""
+                    companions = [item.name for item in companion_candidates(resolved)]
                     plan.append({"name": name, "path": str(resolved), "source_root": str(source),
-                                 "date": date, "ext": path.suffix.lower(), **snapshot})
+                                 "date": date, "ext": path.suffix.lower(),
+                                 "companions": companions, **snapshot})
                 except OSError as error:
                     skipped.append(f"无法读取：{path}（{type(error).__name__}）")
     return sorted(plan, key=lambda item: (item["date"], item["name"], item["path"])), skipped
@@ -146,14 +180,71 @@ def move_video(item, work_dir, date=None):
             temporary.unlink()
 
 
+def _move_companion(source: Path, target_dir: Path) -> Path:
+    """附属文件搬迁：复制校验后无覆盖发布，再删来源（失败抛异常，不动视频结果）。"""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    number = 0
+    while True:
+        name = source.name if not number else f"{source.stem}_{number}{source.suffix}"
+        destination = target_dir / name
+        if not destination.exists():
+            break
+        number += 1
+    temporary = target_dir / (".fmjj-" + uuid.uuid4().hex + ".part")
+    try:
+        expected = source.stat()
+        # 弹幕还在追加写入时不能搬：先跳过，等录制结束再整理
+        if time.time_ns() - expected.st_mtime_ns < 30 * 10**9:
+            raise ValueError("附属文件近期仍在写入，稍后再试")
+        with _locked_reader(source) as reader, open(temporary, "xb") as writer:
+            shutil.copyfileobj(reader, writer, 1024 * 1024)
+            writer.flush()
+            os.fsync(writer.fileno())
+        if temporary.stat().st_size != expected.st_size:
+            raise OSError("附属文件复制不完整")
+        os.utime(temporary, ns=(expected.st_atime_ns, expected.st_mtime_ns))
+        after = source.stat()
+        if (after.st_size != expected.st_size
+                or after.st_mtime_ns != expected.st_mtime_ns):
+            raise ValueError("复制期间附属文件有变化，来源已保留")
+        os.rename(temporary, destination)
+        try:
+            source.unlink()
+        except OSError as error:
+            raise OSError(f"已复制到 {destination}，来源删除失败") from error
+        return destination
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def move_companions(video_item, video_target) -> Tuple[List[str], List[str]]:
+    """视频迁移成功后，把同场弹幕 / 封面 / 时间轴搬到同一目标日期文件夹。
+
+    附属文件失败只记录，不回滚已完成的视频迁移；返回 (已搬列表, 跳过原因列表)。
+    """
+    source_video = Path(video_item["path"])
+    target_dir = Path(video_target).parent
+    moved, skipped = [], []
+    for companion in companion_candidates(source_video):
+        try:
+            moved.append(str(_move_companion(companion, target_dir)))
+        except (OSError, ValueError) as error:
+            skipped.append(f"{companion.name}：{error}")
+    return moved, skipped
+
+
 def execute_migration(work_dir, plan, on_progress=None):
     results = []
     for index, item in enumerate(plan, 1):
         try:
             target = move_video(item, work_dir)
-            result = {"source": item["path"], "target": target, "ok": True}
+            moved, skipped = move_companions(item, target)
+            result = {"source": item["path"], "target": target, "ok": True,
+                      "companions": moved, "companion_skipped": skipped}
         except (OSError, ValueError) as error:
-            result = {"source": item["path"], "ok": False, "error": str(error)}
+            result = {"source": item["path"], "ok": False, "error": str(error),
+                      "companions": [], "companion_skipped": []}
         results.append(result)
         if on_progress:
             on_progress(index, len(plan), result)
@@ -217,7 +308,8 @@ def execute_organize(root_path: str, groups: Dict[str, List[Dict]]) -> Tuple[int
         
         for f in files:
             try:
-                move_video(f, root_path, date=date_str)
+                target = move_video(f, root_path, date=date_str)
+                move_companions(f, target)
                 success_count += 1
             except Exception:
                 fail_count += 1
