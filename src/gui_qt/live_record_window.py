@@ -25,13 +25,14 @@ from datetime import datetime
 
 from PySide6.QtCore import (QAbstractTableModel, QDateTime, QModelIndex, QObject,
                             Qt, QTimer, Signal)
-from PySide6.QtGui import QAction, QBrush, QColor, QFont
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton, QSpinBox, QSplitter,
-    QStackedWidget, QStatusBar, QTableView, QVBoxLayout, QWidget,
+    QStackedWidget, QStatusBar, QStyle, QStyleOptionHeader, QTableView,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox import live_record as LR
@@ -122,6 +123,43 @@ def _ffplay():
         if os.path.isfile(p):
             return p
     return shutil.which("ffplay") or ""
+
+
+class WrapHeader(QHeaderView):
+    """表头自动换行。
+
+    Qt 的 QHeaderView 不会自动折行，列宽不够时直接把文字截掉
+    （「录制n分钟停止录制」「是否监控」这类标题只剩一半）。这里接管表头绘制：
+    先按系统样式画底与边线，再用 TextWordWrap 把标题按列宽折行，表头高度固定两行。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setHighlightSections(False)
+        self.setSectionsClickable(False)
+        metrics = self.fontMetrics()
+        self.setFixedHeight(metrics.lineSpacing() * 2 + 12)
+
+    def paintSection(self, painter, rect, logical_index):
+        if not rect.isValid():
+            return
+        option = QStyleOptionHeader()
+        self.initStyleOption(option)
+        option.rect = rect
+        option.section = logical_index
+        option.text = ""
+        painter.save()
+        self.style().drawControl(QStyle.ControlElement.CE_Header, option,
+                                 painter, self)
+        text = self.model().headerData(
+            logical_index, self.orientation(), Qt.ItemDataRole.DisplayRole)
+        if text:
+            painter.setPen(self.palette().color(QPalette.ColorRole.ButtonText))
+            flags = int(Qt.AlignmentFlag.AlignCenter
+                        | Qt.TextFlag.TextWordWrap)
+            painter.drawText(rect.adjusted(4, 2, -4, -2), flags, str(text))
+        painter.restore()
 
 
 class AnchorModel(QAbstractTableModel):
@@ -364,6 +402,7 @@ class PlatformPane(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
+        self.table.setHorizontalHeader(WrapHeader(self.table))
         hh = self.table.horizontalHeader()
         for i, (_k, _t, w, _a) in enumerate(COLUMNS):
             self.table.setColumnWidth(i, w)
