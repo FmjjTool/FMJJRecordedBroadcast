@@ -61,6 +61,16 @@ if "--fan-groups-snapshot" in sys.argv:
 
     sys.exit(_fan_groups_job())
 
+# 信息获取作品增量定时任务入口：--info-collect（同样在 PySide6 导入前拦截）。
+if "--info-collect" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.info_collect_task import main as _info_collect_job
+
+    sys.exit(_info_collect_job())
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow

@@ -332,9 +332,14 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "quark_backup_time": "02:30",
     "quark_interval_minutes": 120,
     # 粉丝群快照：订阅名单在页面查询后自动写入 config/fan_groups_targets.json
+    # （账号与登录里勾选「粉丝群快照」也会写同一份名单）
     "fangroups_schedule_mode": "daily",
     "fangroups_snapshot_time": "09:00",
     "fangroups_interval_minutes": 360,
+    # 信息获取作品增量：账号取 accounts.txt，只入库不下载媒体
+    "info_schedule_mode": "daily",
+    "info_collect_time": "08:30",
+    "info_interval_minutes": 360,
     # 首页看板「追踪账号」下钻抽屉：用户勾选要观察的账号 key；None = 未配置（默认全部观察）
     "home_watch_accounts": None,
     # 直播总结（大模型方案）：接口地址 / 模型名 / 每块字数 / 输出目录；

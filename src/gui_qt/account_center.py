@@ -1,6 +1,6 @@
 """账号配置页（Cookie 管理第二页）：统一添加/删除账号、分组，并勾选账号可用在哪些功能。
 
-三个功能（信息获取 / 网媒追踪 / 音乐追踪）原有的「设置」页已迁移到这里：
+三个采集功能（信息获取 / 网媒追踪 / 音乐追踪）与粉丝群快照原有的设置入口已迁移到这里：
 账号是否出现在某个功能的主数据里，就等于该功能能不能使用它，
 写入统一走 `toolbox.account_registry`（各功能主数据仍是唯一事实来源）。
 """
@@ -44,7 +44,8 @@ class AccountCenterWidget(QWidget):
         outer.setSpacing(8)
 
         intro = QLabel(
-            "统一维护三个功能的账号：勾选「可用于」即把账号写入对应功能，取消勾选即移除；"
+            "统一维护各功能的账号：勾选「可用于」即把账号写入对应功能，取消勾选即移除；"
+            "「粉丝群快照」是订阅项，勾选后每天自动把该账号的群列表与人数存成快照。"
             "分组与采集类型会同步到该账号已启用的功能。")
         intro.setProperty("role", "caption")
         intro.setWordWrap(True)
@@ -67,7 +68,7 @@ class AccountCenterWidget(QWidget):
         self.count_label.setProperty("role", "caption")
         head.addWidget(self.count_label)
         head.addStretch(1)
-        refresh_btn = self._small_button("刷新", "重新读取三个功能的账号", self.reload)
+        refresh_btn = self._small_button("刷新", "重新读取各功能的账号", self.reload)
         head.addWidget(refresh_btn)
         lv.addLayout(head)
 
@@ -335,6 +336,9 @@ class AccountCenterWidget(QWidget):
         group_sel.set_selected(account["group_ids"])
         group_sel.changed.connect(
             lambda aid=account["id"], sel=group_sel: self._change_group(aid, sel.selected()))
+        if not any(m in account["modules"] for m in ("info", "tracker", "music")):
+            group_sel.setEnabled(False)
+            group_sel.setToolTip("粉丝群快照不使用分组")
         opts.addWidget(group_sel)
 
         if account["platform"] == "bilibili":
@@ -383,7 +387,8 @@ class AccountCenterWidget(QWidget):
         for module, box in self.add_module_boxes.items():
             usable = module in allowed
             box.setEnabled(usable)
-            if usable:
+            # 粉丝群快照是订阅型使用位置：新录入账号默认不勾，避免自动订阅一堆名单
+            if usable and module != "fan_groups":
                 box.setChecked(True)
             else:
                 box.setChecked(False)

@@ -47,11 +47,15 @@ def load_targets() -> list[dict]:
         if not platform or not value or key in seen:
             continue
         seen.add(key)
-        out.append({"platform": platform, "input": value})
+        record = {"platform": platform, "input": value}
+        name = str(item.get("name") or "").strip()
+        if name:
+            record["name"] = name
+        out.append(record)
     return out
 
 
-def add_target(platform: str, owner_input: str) -> bool:
+def add_target(platform: str, owner_input: str, name: str = "") -> bool:
     """把页面上查过的账号加入定时快照名单；已在名单里返回 False。"""
     platform = (platform or "").strip()
     owner_input = (owner_input or "").strip()
@@ -61,7 +65,38 @@ def add_target(platform: str, owner_input: str) -> bool:
     key = (platform, owner_input.lower())
     if any((t["platform"], t["input"].lower()) == key for t in items):
         return False
-    items.append({"platform": platform, "input": owner_input})
+    record = {"platform": platform, "input": owner_input}
+    name = (name or "").strip()
+    if name:
+        record["name"] = name
+    items.append(record)
+    from toolbox.durable_io import atomic_write_json
+    atomic_write_json(_targets_path(), items)
+    return True
+
+
+def update_target(platform: str, old_input: str, new_input: str = "",
+                  name: str = "") -> bool:
+    """修改订阅条目的链接与名称（账号中心改名/换链接时回写），保持原顺序。"""
+    platform = (platform or "").strip()
+    old_key = (old_input or "").strip().lower()
+    if not platform or not old_key:
+        return False
+    items = load_targets()
+    hit = None
+    for item in items:
+        if item["platform"] == platform and item["input"].lower() == old_key:
+            hit = item
+            break
+    if hit is None:
+        return False
+    if (new_input or "").strip():
+        hit["input"] = str(new_input).strip()
+    name = (name or "").strip()
+    if name:
+        hit["name"] = name
+    elif "name" in hit:
+        hit.pop("name", None)
     from toolbox.durable_io import atomic_write_json
     atomic_write_json(_targets_path(), items)
     return True

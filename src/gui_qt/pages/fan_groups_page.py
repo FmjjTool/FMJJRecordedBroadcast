@@ -203,8 +203,9 @@ class FanGroupsPage(BasePage):
         except Exception:  # noqa: BLE001 - 读不到订阅名单时按未订阅显示
             count = 0
         self.task_label.setText(
-            f"定时快照：已订阅 {count} 个账号，时间到「任务 → 粉丝群快照」设置"
-            if count else "定时快照：查询成功后账号自动加入订阅名单")
+            f"定时快照：已订阅 {count} 个账号（名单在「账号与登录」勾选「粉丝群快照」管理），"
+            "时间到「任务 → 粉丝群快照」设置"
+            if count else "定时快照：查询成功后账号自动加入订阅名单，也可在「账号与登录」勾选")
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
@@ -270,17 +271,21 @@ class FanGroupsPage(BasePage):
             self.copy_all_btn.setEnabled(bool(groups))
             self.avatar_btn.setEnabled(bool(groups))
             avatar_text = f"，头像 {av_ok}/{av_total}" if av_total else ""
-            subscribed = False
+            subscribed, sub_msg = False, ""
             try:
-                from toolbox import fan_groups_task as fgt
-                subscribed = fgt.add_target(platform, text)
+                from toolbox import account_registry as registry
+                subscribed, sub_msg = registry.subscribe_fan_groups(platform, owner_id)
             except Exception:  # noqa: BLE001 - 订阅名单写入失败不阻断查询
                 pass
             self._refresh_task_label()
+            suffix = ""
+            if subscribed:
+                suffix = "，已加入定时快照名单"
+            elif sub_msg and "已存在" in sub_msg:
+                suffix = "，已在定时快照名单里"
             self.status_label.setText(
                 f"{fg.PLATFORM_LABELS[platform]} {owner_id}：{len(groups)} 个群"
-                f"{avatar_text}，快照已保存（{os.path.basename(str(snap))}）"
-                + ("，已加入定时快照名单" if subscribed else ""))
+                f"{avatar_text}，快照已保存（{os.path.basename(str(snap))}）" + suffix)
             self.app.toast(f"查到 {len(groups)} 个群", "success")
 
         run_bg(work, done)

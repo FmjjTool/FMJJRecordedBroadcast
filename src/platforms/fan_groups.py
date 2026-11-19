@@ -127,6 +127,24 @@ def extract_owner_id(platform: str, text: str) -> str:
     raise ValueError(f"不支持的平台：{platform}")
 
 
+def profile_url(platform: str, owner_id: str) -> str:
+    """平台 + 账号 ID → 主页链接。
+
+    统一账号身份用同一份规范化链接：粉丝群订阅名单、网媒追踪、信息获取
+    指向同一账号时才能被账号注册表识别成同一条记录。
+    """
+    owner_id = str(owner_id or "").strip()
+    if not owner_id:
+        return ""
+    if platform == "douyin":
+        return f"https://www.douyin.com/user/{owner_id}"
+    if platform == "weibo":
+        return f"https://weibo.com/u/{owner_id}"
+    if platform == "bilibili":
+        return f"https://space.bilibili.com/{owner_id}"
+    return ""
+
+
 # ==================== Cookie ====================
 
 def _cookie(platform: str) -> str:

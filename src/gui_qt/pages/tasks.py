@@ -1,27 +1,28 @@
 """定时任务管理页：集中查看 / 设置 / 删除本软件注册的 Windows 计划任务。
 
-- 列表：腾讯文档监控 / 网媒账号追踪 / 音乐账号追踪 / 网盘备份 / 站点访问统计
+- 列表：腾讯文档监控 / 网媒账号追踪 / 音乐账号追踪 / 网盘备份 / 站点访问统计 /
+  粉丝群快照 / 作品增量
 - 每行：计划（本页统一维护）、安装状态、下次运行（schtasks）、设置 / 删除
 - 顶部：刷新 / 全部删除
-计划的模式、时间与间隔统一在本页「设置」对话框修改并安装，功能页不再单独提供定时设置。
+计划的模式、时间与间隔统一在本页「设置」对话框修改并安装，功能页不再单独提供定时设置；
+时间用 24 小时制数字滚轮选择（时 / 分各一列，首尾无限循环）。
 """
 
-import re
 import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton, QSpinBox,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from gui_qt import theme
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.time_wheel import TimeWheel
 
 _COLS = ["任务", "用途", "计划", "状态", "下次运行", "操作"]
-_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
 
 
 class _ScheduleDialog(QDialog):
@@ -44,10 +45,8 @@ class _ScheduleDialog(QDialog):
             self.mode.setEnabled(False)
             self.mode.setToolTip("该任务只支持每天执行")
 
-        self.time_edit = QLineEdit(self._schedule["time"], self)
-        self.time_edit.setFixedWidth(80)
-        self.time_edit.setAlignment(Qt.AlignCenter)
-        self.time_edit.setToolTip("24 小时制，如 09:10")
+        self.time_wheel = TimeWheel(self._schedule["time"], self)
+        self.time_wheel.setToolTip("上下滚动鼠标滚轮 / 拖动数字选择时间，24 小时制，23 点后回到 0 点")
 
         self.interval_spin = QSpinBox(self)
         self.interval_spin.setRange(1, 1439)
@@ -56,18 +55,30 @@ class _ScheduleDialog(QDialog):
         self.interval_spin.setToolTip("1 ~ 1439 分钟；24 小时请用每天模式")
 
         form.addRow("执行方式", self.mode)
-        form.addRow("每天时间", self.time_edit)
-        self.extra_edits: list[QLineEdit] = []
+        form.addRow("每天时间", self.time_wheel)
+        self.extra_wheels: list[tuple[QCheckBox, TimeWheel]] = []
         if self._task_id == "webwiki":
+            row = QHBoxLayout()
+            row.setSpacing(10)
             for index, value in enumerate(self._schedule.get("extra_times") or ["", ""]):
-                edit = QLineEdit(str(value or ""), self)
-                edit.setFixedWidth(80)
-                edit.setAlignment(Qt.AlignCenter)
-                edit.setPlaceholderText("留空")
-                edit.setToolTip(
-                    "补采时间：到点后若今天还没有采集记录才采集，已有记录则跳过；留空不启用")
-                form.addRow(f"补采时间 {index + 1}", edit)
-                self.extra_edits.append(edit)
+                text = str(value or "").strip()
+                column = QVBoxLayout()
+                column.setSpacing(2)
+                enable = QCheckBox(f"补采 {index + 1}", self)
+                enable.setChecked(bool(text))
+                enable.setToolTip(
+                    "勾选后启用补采时间：到点若今天还没有采集记录才采集，已有记录则跳过")
+                wheel = TimeWheel(text or "13:00", self)
+                wheel.setEnabled(bool(text))
+                enable.toggled.connect(wheel.setEnabled)
+                column.addWidget(enable)
+                column.addWidget(wheel)
+                row.addLayout(column)
+                self.extra_wheels.append((enable, wheel))
+            row.addStretch(1)
+            holder = QWidget(self)
+            holder.setLayout(row)
+            form.addRow("补采时间", holder)
         form.addRow("间隔", self.interval_spin)
 
         hint = QLabel("保存后立即注册 / 更新 Windows 计划任务；关闭软件也会按计划执行。", self)
@@ -86,28 +97,21 @@ class _ScheduleDialog(QDialog):
         self.mode.setCurrentIndex(max(0, self.mode.findData(self._schedule["mode"])))
         self.mode.currentIndexChanged.connect(self._sync_mode)
         self._sync_mode()
-        self.resize(380, 280 if self.extra_edits else 210)
+        self.resize(430, 430 if self.extra_wheels else 340)
 
     def _sync_mode(self):
         interval = self.mode.currentData() == "interval"
         self.interval_spin.setEnabled(interval)
-        self.time_edit.setEnabled(not interval)
+        self.time_wheel.setEnabled(not interval)
 
     def values(self) -> tuple[str, str, int, list[str]]:
         return (self.mode.currentData() or "daily",
-                self.time_edit.text().strip(), int(self.interval_spin.value()),
-                [edit.text().strip() for edit in self.extra_edits])
+                self.time_wheel.time(), int(self.interval_spin.value()),
+                [wheel.time() if enable.isChecked() else ""
+                 for enable, wheel in self.extra_wheels])
 
     def accept(self):
-        mode, time_text, _interval, extra_times = self.values()
-        if mode == "daily" and not _TIME_RE.match(time_text):
-            QMessageBox.warning(self, "时间格式不正确",
-                                "请输入 24 小时制时间，例如 09:10 / 23:50。")
-            return
-        if any(value and not _TIME_RE.match(value) for value in extra_times):
-            QMessageBox.warning(self, "补采时间格式不正确",
-                                "补采时间留空或填 24 小时制 HH:MM，例如 13:00。")
-            return
+        # 滚轮选择的值天然合法（00-23 / 00-59），只保存不再校验格式
         super().accept()
 
 

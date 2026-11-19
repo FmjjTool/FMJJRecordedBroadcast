@@ -1,24 +1,29 @@
-"""统一账号注册表：三个账号中心的读写适配层。
+"""统一账号注册表：各功能账号中心的读写适配层。
 
-三份主数据保持各自的唯一写入方，不新增第四份账号文件：
+四份主数据保持各自的唯一写入方，不新增第五份账号文件：
 - 信息获取：`config/accounts.txt`（accounts_manager）
 - 网媒追踪：`tracker/accounts.json`（tracker.accounts）
 - 音乐追踪：`music_accounts.json`（music_account.accounts）
+- 粉丝群快照：`config/fan_groups_targets.json`（toolbox.fan_groups_task）
 
 本模块把「账号是否出现在某个主数据里」当作「该功能是否可以使用这个账号」：
 勾选某功能 → 写入该功能的主数据；取消勾选 → 从该主数据移除。
 同一平台+规范化链接被视为同一账号，分组按功能各自保存（写入时保持同步）。
+粉丝群快照只对抖音/微博/B站开放，且属于订阅型使用位置（加入名单即每天存快照）。
 """
 
 from __future__ import annotations
 
 import re
 
-MODULES = ("info", "tracker", "music")
-MODULE_NAMES = {"info": "信息获取", "tracker": "网媒追踪", "music": "音乐追踪"}
+MODULES = ("info", "tracker", "music", "fan_groups")
+MODULE_NAMES = {"info": "信息获取", "tracker": "网媒追踪", "music": "音乐追踪",
+                "fan_groups": "粉丝群快照"}
 
 MEDIA_PLATFORMS = ("bilibili", "douyin", "weibo", "kuaishou", "xiaohongshu")
 MUSIC_PLATFORMS = ("netease", "qq", "kugou", "kuwo", "fivesing")
+# 粉丝群快照只支持能列出公开群的三个平台
+FAN_GROUP_PLATFORMS = ("bilibili", "douyin", "weibo")
 
 # 组号规范（与三个账号中心一致）：必须是重复数字，如 11、22、33 ... 99
 GROUP_ID_PATTERN = re.compile(r"^(\d)\1$")
@@ -39,9 +44,16 @@ def platform_name(platform: str) -> str:
 
 
 def allowed_modules(platform: str) -> tuple:
-    """该平台账号可以被哪些功能使用（视频号 → 信息获取/网媒追踪，音乐号 → 音乐追踪）。"""
+    """该平台账号可以被哪些功能使用。
+
+    视频号 → 信息获取/网媒追踪（抖音、微博、B站另有粉丝群快照）；
+    音乐号 → 音乐追踪。
+    """
     if platform in MEDIA_PLATFORMS:
-        return ("info", "tracker")
+        modules = ["info", "tracker"]
+        if platform in FAN_GROUP_PLATFORMS:
+            modules.append("fan_groups")
+        return tuple(modules)
     if platform in MUSIC_PLATFORMS:
         return ("music",)
     return ()
@@ -91,8 +103,14 @@ def _music_items():
     return music_accounts.load_accounts()
 
 
+def _fan_items():
+    """粉丝群快照订阅名单：{platform, input, name?}。"""
+    from toolbox import fan_groups_task
+    return fan_groups_task.load_targets()
+
+
 def list_accounts() -> list[dict]:
-    """所有账号去重后的统一视图，按「信息获取 → 网媒 → 音乐」首次出现顺序排列。"""
+    """所有账号去重后的统一视图，按「信息获取 → 网媒 → 音乐 → 粉丝群」首次出现顺序排列。"""
     merged: dict[str, dict] = {}
     order: list[str] = []
 
@@ -130,6 +148,9 @@ def list_accounts() -> list[dict]:
         gid = str(acc.get("group_id") or "")
         add("music", acc.get("name", ""), acc.get("url", ""),
             [gid] if gid else [], acc.get("kind", ""), acc.get("platform", ""))
+    for acc in _fan_items():
+        add("fan_groups", acc.get("name", ""), acc.get("input", ""), [],
+            "", acc.get("platform", ""))
 
     accounts = []
     for key in order:
@@ -219,10 +240,39 @@ def add_account(name: str, url: str, modules, group_id="",
                              "kind": music_kind or "", "group_id": gids[0] if gids else ""})
             music_accounts.save_accounts(accounts)
             added.append("music")
+    if "fan_groups" in usable:
+        from platforms import fan_groups as fan_platform
+        from toolbox import fan_groups_task
+        target = url
+        try:
+            owner_id = fan_platform.extract_owner_id(platform, url)
+            target = fan_platform.profile_url(platform, owner_id) or url
+        except ValueError:
+            target = url
+        if fan_groups_task.add_target(platform, target, name):
+            added.append("fan_groups")
 
     if not added:
         return False, "该账号已存在于所选功能"
     return True, "已添加：" + "、".join(MODULE_NAMES[m] for m in added)
+
+
+def subscribe_fan_groups(platform: str, owner_input: str,
+                         name: str = "") -> tuple[bool, str]:
+    """把主页链接 / 账号 ID 加入粉丝群快照订阅（粉丝群页查询成功后调用）。
+
+    统一转成平台规范化主页链接再入库，这样账号中心能把「同一个账号的
+    网媒追踪 + 粉丝群快照」合并成一条记录。
+    """
+    from platforms import fan_groups as fan_platform
+    try:
+        owner_id = fan_platform.extract_owner_id(platform, owner_input)
+    except ValueError:
+        return False, "没识别到账号主页链接"
+    url = fan_platform.profile_url(platform, owner_id)
+    if not url:
+        return False, "该平台不支持粉丝群快照"
+    return add_account(name, url, ["fan_groups"])
 
 
 def update_account(account_id: str, name=None, url=None, kind=None) -> tuple[bool, str]:
@@ -251,8 +301,10 @@ def update_account(account_id: str, name=None, url=None, kind=None) -> tuple[boo
             _update_info(account, raw, new_name, new_url, kind)
         elif module == "tracker":
             _update_tracker(account, raw, new_name, new_url)
-        else:
+        elif module == "music":
             _update_music(account, raw, new_name, new_url)
+        elif module == "fan_groups":
+            _update_fan(account, raw, new_name, new_url)
     return True, "已保存账号修改"
 
 
@@ -312,6 +364,28 @@ def _update_music(account, raw, new_name, new_url):
     music_accounts.save_accounts(accounts)
 
 
+def _update_fan(account, raw, new_name, new_url):
+    """粉丝群订阅条目的改名/换链接（保持名单顺序）。"""
+    from platforms import fan_groups as fan_platform
+    from toolbox import fan_groups_task
+
+    platform = account["platform"]
+    target_input = ""
+    item = account["modules"].get("fan_groups") or {}
+    if item.get("url"):
+        target_input = item["url"]
+    if not target_input:
+        return
+    new_input = ""
+    if new_url and new_url != target_input:
+        try:
+            new_input = fan_platform.profile_url(
+                platform, fan_platform.extract_owner_id(platform, new_url)) or new_url
+        except ValueError:
+            new_input = new_url
+    fan_groups_task.update_target(platform, target_input, new_input, new_name)
+
+
 def set_module(account_id: str, module: str, enabled: bool,
                group_id: str = "") -> bool:
     """勾选/取消某个功能对该账号的使用权。"""
@@ -350,7 +424,21 @@ def _remove_from_module(account, module, raw) -> bool:
             return False
         tracker_accounts.save_accounts(keep)
         return True
-    from music_account import accounts as music_accounts
+    if module == "fan_groups":
+        from toolbox import fan_groups_task
+        removed = False
+        for target in fan_groups_task.load_targets():
+            if target["platform"] != account["platform"]:
+                continue
+            if _same_url(target["input"], raw) or \
+                    target["input"].strip().lower() == (raw or "").strip().lower():
+                removed = fan_groups_task.remove_target(
+                    target["platform"], target["input"]) or removed
+        return removed
+    if module == "music":
+        from music_account import accounts as music_accounts
+    else:
+        return False
     accounts = music_accounts.load_accounts()
     keep = [a for a in accounts if not _same_url(a.get("url", ""), raw)]
     if len(keep) == len(accounts):
@@ -375,6 +463,9 @@ def set_group(account_id: str, group_ids) -> bool:
     """把该账号在所有已启用功能里的分组改成同一组（音乐功能只保存第一个组号）。"""
     account = get_account(account_id)
     if account is None:
+        return False
+    # 粉丝群快照只是订阅名单，没有分组概念
+    if not any(m in account["modules"] for m in ("info", "tracker", "music")):
         return False
     gids = [str(g).strip() for g in group_ids if str(g).strip()]
     for gid in gids:
@@ -405,7 +496,7 @@ def set_group(account_id: str, group_ids) -> bool:
                     changed = True
             if changed:
                 tracker_accounts.save_accounts(accounts)
-        else:
+        elif module == "music":
             from music_account import accounts as music_accounts
             accounts = music_accounts.load_accounts()
             changed = False
@@ -438,7 +529,7 @@ def move_account(account_id: str, delta: int) -> bool:
                           if _same_url(a.get("url", ""), raw)), -1)
             if index >= 0:
                 moved = tracker_accounts.move_account(index, delta) or moved
-        else:
+        elif module == "music":
             from music_account import accounts as music_accounts
             accounts = music_accounts.load_accounts()
             index = next((i for i, a in enumerate(accounts)
