@@ -40,14 +40,18 @@ WS_RECV_TIMEOUT = 90         # 收不到任何包超过该秒数视为断线
 DEFAULT_ROOM = "544820"       # 默认示例房号（与直播间表情页一致，用户确认可用）
 
 
-def _headers() -> dict:
-    return {"User-Agent": UA, "Origin": "https://live.bilibili.com",
-            "Referer": "https://live.bilibili.com/"}
+def _headers(cookie: str = "") -> dict:
+    headers = {"User-Agent": UA, "Origin": "https://live.bilibili.com",
+               "Referer": "https://live.bilibili.com/"}
+    if cookie:
+        headers["Cookie"] = cookie
+    return headers
 
 
-def fetch_room_info(room_id: str) -> dict:
-    """房间信息（游客）：标题/状态/主播/封面/粉丝。live_status: 0未播 1直播中 2轮播。
+def fetch_room_info(room_id: str, cookie: str = "") -> dict:
+    """房间信息：标题/状态/主播/封面/粉丝。live_status: 0未播 1直播中 2轮播。
 
+    cookie 由调用方从统一账户管理层取得，仅用于当次请求；为空时按游客态。
     get_info 已不返回 uname/fans → 用 uid 查 live_user/v1/Master/info（游客可用）。
     real_room_id 必须回传：弹幕 WS 鉴权体 roomid 只认真实号（短号会被断连）。
     """
@@ -56,7 +60,7 @@ def fetch_room_info(room_id: str) -> dict:
            "fans": 0, "avatar": ""}
     try:
         r = httpx.get(INFO_API, params={"room_id": room_id},
-                      headers=_headers(), timeout=15)
+                      headers=_headers(cookie), timeout=15)
         d = r.json()
         if d.get("code") != 0:
             out["error"] = f"接口返回错误: {d.get('message') or d.get('code')}"
@@ -76,7 +80,7 @@ def fetch_room_info(room_id: str) -> dict:
         if uid:
             try:
                 r2 = httpx.get("https://api.live.bilibili.com/live_user/v1/Master/info",
-                               params={"uid": uid}, headers=_headers(), timeout=10)
+                               params={"uid": uid}, headers=_headers(cookie), timeout=10)
                 d2 = r2.json().get("data") or {}
                 out["uname"] = (d2.get("info") or {}).get("uname") or ""
                 out["avatar"] = (d2.get("info") or {}).get("face") or ""
@@ -92,8 +96,9 @@ def fetch_room_info(room_id: str) -> dict:
     return out
 
 
-def fetch_play_url(room_id: str, qn: int | None = None) -> dict:
-    """直播流地址（游客）。
+def fetch_play_url(room_id: str, qn: int | None = None,
+                   cookie: str = "") -> dict:
+    """直播流地址。cookie 由调用方从统一账户管理层取得，仅用于当次请求。
 
     返回 {flv: 主直链, flv_backup: [备用], quality_desc: 当前画质, qn_list: [(qn, desc)],
           live_status, title, error}
@@ -103,7 +108,7 @@ def fetch_play_url(room_id: str, qn: int | None = None) -> dict:
     params = {"room_id": room_id, "protocol": "0,1", "format": "0,1,2",
               "codec": "0,1", "platform": "web", "qn": qn or 10000}
     try:
-        r = httpx.get(PLAY_API, params=params, headers=_headers(), timeout=15)
+        r = httpx.get(PLAY_API, params=params, headers=_headers(cookie), timeout=15)
         d = r.json()
         if d.get("code") != 0:
             out["error"] = f"接口返回错误: {d.get('message') or d.get('code')}"

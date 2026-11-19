@@ -2,12 +2,13 @@
 
 对应原版 gui/toolbox_pages.py AudioPage：
 - 目录栏：工作目录 + 日期文件夹计数（随全局工作目录变化）
-- 扫描视频 → 复选框文件列表（默认勾选当天 = 北京 UTC+8，按 mtime 判断）
+- 扫描视频/音频 → 复选框文件列表（默认勾选当天 = 北京 UTC+8，按 mtime 判断）
 - 全选 / 全不选 / 仅当天；开始按钮随勾选数联动
 - 开始提取（后台线程，可停止）/ 停止；进度条 + 日志
+- 音频文件不需要再提取：直接作为转字幕输入（勾选「提取后自动转字幕」即可）
 - 回车快捷：第一次回车=扫描，第二次回车=开始提取
 - 删除日期内音频：弹复选框对话框（默认全选、全选/全不选/取消），后台移入回收站
-- 外部拖入：拖入视频文件/文件夹 → 追加到文件列表（标记「外部」，不限工作目录）
+- 外部拖入：拖入视频/音频文件/文件夹 → 追加到文件列表（标记「外部」，不限工作目录）
 """
 
 import os
@@ -31,7 +32,7 @@ from toolbox.audio_engine import (
     plan_audio_outputs, scan_audio_by_date,
 )
 from toolbox.config_manager import load_convert_config, save_convert_config
-from toolbox.utils import format_size, is_video_file
+from toolbox.utils import format_size, is_audio_file, is_media_file
 
 from gui_qt.asr_settings_dialog import AsrSettingsDialog
 from gui_qt.common import post_to_main, run_bg, start_page_thread
@@ -70,7 +71,7 @@ class AudioPage(BasePage):
 
         # 控制栏
         ctrl_row = QHBoxLayout()
-        self.scan_btn = QPushButton("扫描视频")
+        self.scan_btn = QPushButton("扫描视频/音频")
         self.scan_btn.clicked.connect(self._scan)
         ctrl_row.addWidget(self.scan_btn)
         self.count_label = QLabel("")
@@ -243,13 +244,13 @@ class AudioPage(BasePage):
             return
         root = Path(self.app.work_dir)
         self.videos = find_audio_videos(root)
-        self.count_label.setText(f"共 {len(self.videos)} 个视频文件")
+        self.count_label.setText(f"共 {len(self.videos)} 个文件")
         self.start_btn.setEnabled(False)
         self.log_text.clear()
         if not self.videos:
-            self._log("未找到视频文件")
+            self._log("未找到视频或音频文件")
         else:
-            self._log(f"扫描完成，共找到 {len(self.videos)} 个视频:")
+            self._log(f"扫描完成，共找到 {len(self.videos)} 个视频/音频文件:")
             for i, v in enumerate(self.videos, 1):
                 size = format_size(v.stat().st_size) if v.exists() else "?"
                 self._log(f"  [{i}] {self._rel(v)}  ({size})")
@@ -305,12 +306,12 @@ class AudioPage(BasePage):
     # ==================== 外部拖入 ====================
 
     def add_dropped_files(self, files):
-        """拖入视频文件 → 追加到列表（默认勾选，可提取）。"""
+        """拖入视频/音频文件 → 追加到列表（默认勾选，可提取或直接转字幕）。"""
         existing = {self.file_list.item(i).data(Qt.UserRole)
                     for i in range(self.file_list.count())}
         added = []
         for f in files:
-            if not is_video_file(f) or f in self.external_paths or f in existing:
+            if not is_media_file(f) or f in self.external_paths or f in existing:
                 continue
             self.external_paths.append(f)
             added.append(f)
@@ -319,25 +320,25 @@ class AudioPage(BasePage):
             for f in added:
                 self._append_external_item(f, Qt.Checked)
             self.file_list.blockSignals(False)
-            self._log(f"拖放添加 {len(added)} 个外部视频:")
+            self._log(f"拖放添加 {len(added)} 个外部文件:")
             for f in added:
                 self._log(f"  + {os.path.basename(f)}")
         else:
-            self._log("拖放：无新增视频文件（仅支持视频文件，重复自动忽略）")
+            self._log("拖放：无新增文件（支持视频/音频文件，重复自动忽略）")
         self._refresh_start_btn()
 
     def add_dropped_folder(self, folder):
-        """拖入文件夹 → 递归收集其中的视频文件加入列表。"""
+        """拖入文件夹 → 递归收集其中的视频/音频文件加入列表。"""
         found = []
         for root, _dirs, names in os.walk(folder):
             for n in names:
                 fp = os.path.join(root, n)
-                if is_video_file(fp):
+                if is_media_file(fp):
                     found.append(fp)
         if found:
             self.add_dropped_files(found)
         else:
-            self._log(f"拖放文件夹: {folder}（其中没有视频文件）")
+            self._log(f"拖放文件夹: {folder}（其中没有视频或音频文件）")
 
     def _set_all_checks(self, val):
         self.file_list.blockSignals(True)
@@ -472,7 +473,7 @@ class AudioPage(BasePage):
         self.start_btn.setEnabled(bool(selected))
         total = self.file_list.count()
         if total or self.videos:
-            self.count_label.setText(f"共 {total} 个视频，已勾选 {len(selected)}")
+            self.count_label.setText(f"共 {total} 个文件，已勾选 {len(selected)}")
 
     def _start(self):
         to_process = self._selected_videos()
@@ -480,6 +481,9 @@ class AudioPage(BasePage):
             self._log("未勾选任何文件")
             return
         asr_enabled = self.asr_check.isChecked()
+        if not asr_enabled and all(is_audio_file(str(p)) for p in to_process):
+            self._log("勾选的均为音频文件，未开启「提取后自动转字幕」，没有可执行的提取任务")
+            return
         if asr_enabled:
             opts = self._asr_options()
             problem = validate_engine(opts["engine"], opts["local_model"],
@@ -548,7 +552,7 @@ class AudioPage(BasePage):
         total = len(to_process)
         stats = {"success": 0, "failed": 0, "skipped": 0, "missing": 0,
                  "subtitle": 0, "subtitle_failed": 0, "subtitle_skipped": 0,
-                 "audio_deleted": 0}
+                 "source_audio": 0, "audio_deleted": 0}
         opts = getattr(self, "_asr_opts", None)
         self._relocate_index = None
         for i, src in enumerate(to_process):
@@ -571,20 +575,28 @@ class AudioPage(BasePage):
             audio_outputs = []
             all_tracks = self.audio_mode_combo.currentData() == "all"
             try:
-                planned = plan_audio_outputs(src, all_tracks)
-                if planned and all(p.exists() and p.stat().st_size > 0 for p in planned):
-                    audio = planned[0]
-                    audio_outputs = planned
-                    post_to_main(self._log, f"{self._rel(src)} -> 已存在，跳过提取")
-                    stats["skipped"] += 1
+                if is_audio_file(str(src)):
+                    # 已经是音频：不再调用 ffmpeg 提取，直接作为转字幕输入。
+                    # audio_outputs 保持为空，避免「转录后删除音频」删掉用户的原文件。
+                    audio = src
+                    stats["source_audio"] += 1
+                    post_to_main(self._log, f"{self._rel(src)} -> 已是音频，跳过提取")
+                    post_to_main(self._set_file_progress, i, total, 35)
                 else:
-                    post_to_main(self._log, f"{self._rel(src)}")
-                    post_to_main(self._set_file_progress, i, total, 5)
-                    audio_outputs = extract_audio_tracks(src, all_tracks)
-                    audio = audio_outputs[0]
-                    stats["success"] += 1
-                    for produced in audio_outputs:
-                        post_to_main(self._log, f"  完成 -> {produced.name}")
+                    planned = plan_audio_outputs(src, all_tracks)
+                    if planned and all(p.exists() and p.stat().st_size > 0 for p in planned):
+                        audio = planned[0]
+                        audio_outputs = planned
+                        post_to_main(self._log, f"{self._rel(src)} -> 已存在，跳过提取")
+                        stats["skipped"] += 1
+                    else:
+                        post_to_main(self._log, f"{self._rel(src)}")
+                        post_to_main(self._set_file_progress, i, total, 5)
+                        audio_outputs = extract_audio_tracks(src, all_tracks)
+                        audio = audio_outputs[0]
+                        stats["success"] += 1
+                        for produced in audio_outputs:
+                            post_to_main(self._log, f"  完成 -> {produced.name}")
             except Exception as e:
                 stats["failed"] += 1
                 post_to_main(self._log, f"  失败: {e}")
@@ -612,6 +624,8 @@ class AudioPage(BasePage):
 
         summary = (f"\n完成: 音频成功{stats['success']}, 失败{stats['failed']}, "
                    f"跳过{stats['skipped']}")
+        if stats["source_audio"]:
+            summary += f"，音频输入{stats['source_audio']}"
         if stats["missing"]:
             summary += f"，源文件缺失{stats['missing']}"
         if opts:

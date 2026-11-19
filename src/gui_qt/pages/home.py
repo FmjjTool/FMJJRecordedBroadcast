@@ -1023,6 +1023,11 @@ class HomePage(BasePage):
         row_h = table.verticalHeader().defaultSectionSize()
         header_h = max(22, table.horizontalHeader().sizeHint().height())
         table.setFixedHeight(header_h + row_h * rows + 2 * table.frameWidth() + 2)
+        # QStackedWidget 的 sizeHint 取所有子页的最大值，数据少的那页会被
+        # 别的页撑高，抽屉中间留下一大片空白。这里按当前页收紧，切页时重算。
+        if page.layout() is not None:
+            page.layout().activate()
+        stack.setFixedHeight(page.sizeHint().height())
         layout = self.drawer.layout()
         if layout is None:
             return

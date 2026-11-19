@@ -409,10 +409,24 @@ def extract_date_from_filename(filename: str) -> Optional[str]:
 
 VIDEO_EXTS = {".mp4", ".flv", ".mkv", ".ts", ".mov", ".avi", ".wmv", ".rmvb", ".webm", ".ogg"}
 
+# 音频扩展名（.ogg 同时出现在 VIDEO_EXTS，音频判定时按视频优先，见 is_audio_file）
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".m4b", ".opus", ".amr"}
+
 
 def is_video_file(filepath: str) -> bool:
     """判断是否为视频文件"""
     return os.path.splitext(filepath)[1].lower() in VIDEO_EXTS
+
+
+def is_audio_file(filepath: str) -> bool:
+    """判断是否为纯音频文件（与 VIDEO_EXTS 重叠的扩展名按视频处理）"""
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext in AUDIO_EXTS and ext not in VIDEO_EXTS
+
+
+def is_media_file(filepath: str) -> bool:
+    """判断是否为视频或音频文件（音频提取页的扫描/拖放范围）"""
+    return is_video_file(filepath) or is_audio_file(filepath)
 
 
 

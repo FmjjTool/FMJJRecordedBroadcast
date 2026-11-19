@@ -300,6 +300,8 @@ class PlatformPane(QWidget):
         self.bridge.record_state.connect(self._on_record_state, Qt.ConnectionType.QueuedConnection)
         self.bridge.danmaku.connect(self._on_danmaku, Qt.ConnectionType.QueuedConnection)
         self.overlays = {}
+        self._login_state = None
+        self._login_checked = 0.0
 
         state = (win.state.get("platforms") or {}).get(platform) or {}
         self.manager = LR.RecordManager(platform, state.get("settings"),
@@ -398,6 +400,21 @@ class PlatformPane(QWidget):
         layout.addWidget(b)
         return b
 
+    def login_state(self):
+        """当前平台的登录态文案（统一管理层只读判断，不展示凭据内容）。
+
+        结果缓存 10 秒，既跟随统一管理的关闭/清除状态，又不每秒解密凭据。
+        """
+        now = time.time()
+        if self._login_state is None or now - self._login_checked >= 10:
+            try:
+                self._login_state = ("已登录" if LR.has_login(self.platform)
+                                     else "游客态")
+            except Exception:  # noqa: BLE001 - 状态读取失败不影响录制
+                self._login_state = "游客态"
+            self._login_checked = now
+        return self._login_state
+
     def _log(self, text, level="debug"):
         color = {"ok": "#0A7A0A", "warn": "#B06000",
                  "error": "#C00000", "info": "#0A5AA0"}.get(level, "#777777")
@@ -412,6 +429,7 @@ class PlatformPane(QWidget):
         self._log(text, level)
 
     def _on_changed(self):
+        self._login_state = None  # 账号可能在统一管理里切换，下次刷新重新判定
         self.model.refresh_volatile()
         self.btn_mon.setText("■ 停止监控录制" if self.manager.running else "▶ 开启监控录制")
         self.win.refresh_status()
@@ -2012,9 +2030,10 @@ class LiveRecordWindow(QMainWindow):
         m = pane.manager
         sel = pane._selected()
         if not sel:
-            pane.info.setText("共 %d 个主播　|　监控 %d　|　录制中 %d　|　勾选 %d" % (
-                len(m.anchors), sum(1 for a in m.anchors if a.monitoring),
-                m.active_count(), len(pane._checked())))
+            pane.info.setText(
+                "共 %d 个主播　|　监控 %d　|　录制中 %d　|　勾选 %d　|　账号：%s" % (
+                    len(m.anchors), sum(1 for a in m.anchors if a.monitoring),
+                    m.active_count(), len(pane._checked()), pane.login_state()))
             return
         a = sel[0]
         text = ("【%s】　房间 %s　|　%s　|　在线 %s　|　检测 %s　|　已录 %s　|　%s　|　%s"
@@ -2023,6 +2042,7 @@ class LiveRecordWindow(QMainWindow):
                    a.online or "-", (a.last_check or "-")[11:19] or "-",
                    LR.fmt_duration(m.elapsed(a)), a.rec_state or "未录制",
                    a.title or ""))
+        text += "　|　账号：" + pane.login_state()
         if int(getattr(a, "content", 0) or 0) == 1:
             text += "　|　音频"
         if a.remark:

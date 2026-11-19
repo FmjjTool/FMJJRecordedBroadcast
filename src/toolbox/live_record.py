@@ -860,6 +860,32 @@ class Anchor:
 
 # ==================== 平台取流 ====================
 
+# 直播录制平台 → 统一账户管理层使用的平台键
+_LOGIN_KEYS = {"bili": "bilibili"}
+
+
+def login_key(platform: str) -> str:
+    """直播录制平台对应的统一账户管理平台键。"""
+    return _LOGIN_KEYS.get(platform, platform)
+
+
+def login_cookie(platform: str) -> str:
+    """从统一账户管理层读取当前登录态（受总开关/有效期控制）。
+
+    只用于当次平台请求，读完即丢；未登录或已关闭时返回空串，按游客态处理。
+    """
+    try:
+        from auth import get_cookie
+        return get_cookie(login_key(platform)) or ""
+    except Exception:
+        return ""
+
+
+def has_login(platform: str) -> bool:
+    """平台当前是否可用登录态（只返回布尔，不输出凭据内容）。"""
+    return bool(login_cookie(platform))
+
+
 def _pick_douyin_stream(streams, quality=""):
     """按清晰度优先级取抖音流地址（原画 > 蓝光 > 1080P > ...）。"""
     if not streams:
@@ -873,9 +899,13 @@ def _pick_douyin_stream(streams, quality=""):
 
 
 def fetch_douyin(room, quality=""):
-    """抖音房间信息 + 流地址（游客态，不占 Cookie）。"""
+    """抖音房间信息 + 流地址。
+
+    login=True 表示由 douyin_live 从统一账户管理层合并当前登录态
+    （用于建连取原画流）；未登录时自动退回游客态。
+    """
     from toolbox import douyin_live
-    info = douyin_live.fetch_room_info(str(room), login=False)
+    info = douyin_live.fetch_room_info(str(room), login=True)
     streams = info.get("streams") or {}
     qk, url = _pick_douyin_stream(streams, quality)
     status = info.get("status")
@@ -905,10 +935,14 @@ def fetch_douyin(room, quality=""):
 
 
 def fetch_bili(room, qn=10000):
-    """B站房间信息 + 流地址（游客态）。"""
+    """B站房间信息 + 流地址。
+
+    登录态从统一账户管理层只读取得（用于高画质取流），未登录时按游客态。
+    """
     from toolbox import bili_live
-    info = bili_live.fetch_room_info(str(room))
-    play = bili_live.fetch_play_url(str(room), qn)
+    cookie = login_cookie("bili")
+    info = bili_live.fetch_room_info(str(room), cookie=cookie)
+    play = bili_live.fetch_play_url(str(room), qn, cookie=cookie)
     status = info.get("live_status")
     if status is None:
         status = play.get("live_status")

@@ -5,10 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from .utils import is_video_file, find_ffmpeg_exe
+from .utils import AUDIO_EXTS, find_ffmpeg_exe, is_media_file
 
 
-AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".m4b", ".opus", ".amr"}
 DATE_FOLDER_RE = re.compile(r"^20\d{6}$")
 
 
@@ -121,10 +120,13 @@ def extract_audio_one(src: Path, dst: Path) -> Tuple[bool, str]:
 
 
 def find_audio_videos(root: Path) -> List[Path]:
-    """查找所有视频文件用于音频提取"""
+    """查找所有视频与音频文件用于音频提取/转字幕。
+
+    音频文件不需要再提取，页面会直接把它作为转字幕输入。
+    """
     videos = []
     for path in root.rglob("*"):
-        if path.is_file() and is_video_file(str(path)):
+        if path.is_file() and is_media_file(str(path)):
             videos.append(path)
     return sorted(videos)
 
