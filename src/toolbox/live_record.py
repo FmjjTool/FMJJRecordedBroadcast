@@ -1126,7 +1126,7 @@ class RecordManager:
         if self.running:
             return False
         if not any(a.monitoring for a in self.anchors):
-            self.emit("没有主播加入监控：请先在「是否监控」列打开", "warn")
+            self.emit("没有主播加入监控：请先在「监控状态」列打开", "warn")
             return False
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True,

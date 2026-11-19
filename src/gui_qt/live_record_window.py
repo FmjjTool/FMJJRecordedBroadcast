@@ -49,7 +49,7 @@ COLUMNS = [
     ("stop", "录制n分钟\n停止录制", 88, A.AlignCenter),
     ("rec", "录制状态", 78, A.AlignCenter),
     ("content", "录制\n内容", 62, A.AlignCenter),
-    ("monitoring", "是否\n监控", 58, A.AlignCenter),
+    ("monitoring", "监控\n状态", 62, A.AlignCenter),
     ("want_record", "是否\n录制", 58, A.AlignCenter),
     ("quality", "录制质量", 88, A.AlignCenter),
     ("segment", "分段\n录制", 76, A.AlignCenter),
@@ -142,8 +142,13 @@ class AnchorModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(COLUMNS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return COLUMNS[section][1]
+        if orientation == Qt.Orientation.Horizontal:
+            if role == Qt.ItemDataRole.DisplayRole:
+                return COLUMNS[section][1]
+            if (role == Qt.ItemDataRole.ToolTipRole
+                    and COLUMNS[section][0] == "monitoring"):
+                return ("监控状态：未监控 / 等待开播 / 下播检测。\n"
+                        "录制中会继续按间隔检测是否下播，检测到关播就停止录制。")
         return None
 
     def flags(self, index):
@@ -220,7 +225,10 @@ class AnchorModel(QAbstractTableModel):
         if key == "content":
             return "音频" if int(getattr(a, "content", 0) or 0) == 1 else "视频"
         if key == "monitoring":
-            return ("下播检测" if a.live and a.recording else "等待开播") if a.monitoring else "否"
+            # 录制中监控不会停：只是为了检测是否下播，所以显示「下播检测」
+            if not a.monitoring:
+                return "未监控"
+            return "下播检测" if (a.live and a.recording) else "等待开播"
         if key == "want_record":
             return "是" if getattr(a, "_want_record", False) else "否"
         if key == "quality":
@@ -772,7 +780,7 @@ class PlatformPane(QWidget):
             self.manager.stop_monitor()
         else:
             if not self.manager.start_monitor():
-                self.win.toast("请先给主播打开「是否监控」", "warning")
+                self.win.toast("请先给主播打开「监控状态」", "warning")
         self._on_changed()
 
     def on_stop_all(self):
