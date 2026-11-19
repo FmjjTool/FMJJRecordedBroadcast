@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFont, QImage, QIntValidator, QPixmap
+from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer, QUrl
+from PySide6.QtGui import (
+    QDesktopServices, QFont, QImage, QIntValidator, QPixmap, QRegularExpressionValidator,
+)
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem,
+    QListWidgetItem, QMenu,
     QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QSplitter,
     QTabWidget, QVBoxLayout, QWidget,
 )
@@ -236,6 +238,8 @@ class CertificateMakerPage(BasePage):
         self._suspend_signals = False
         self._auto_end = True          # 授权截止是否仍在跟随「起始 +3 年」
         self._last_year: int | None = None   # 上次用于编号的年份（None=自动）
+        self._auto_serial: int | None = None    # 「自动」时预留的下一个序号
+        self._number_managed = True             # 当前编号是否按五段规则自动合成
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -431,7 +435,35 @@ class CertificateMakerPage(BasePage):
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
         self.number_edits: dict[str, QLineEdit] = {}
+
+        # 前三个固定前缀：各自一个可编辑下拉，选项来自历史里用过的值
+        self.prefix_combos: list[QComboBox] = []
+        prefix_row = QHBoxLayout()
+        prefix_row.setSpacing(3)
+        prefix_pattern = QRegularExpression(r"[A-Za-z0-9]{1,8}")
+        for index, default in enumerate(engine.ARCHIVE_PREFIX_PARTS):
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            combo.setMaxVisibleItems(12)
+            combo.setMinimumWidth(72)
+            combo.setToolTip("编号第 %d 段，可从历史值里选，也可直接输入" % (index + 1))
+            combo.lineEdit().setValidator(QRegularExpressionValidator(prefix_pattern, self))
+            combo.lineEdit().setMaxLength(8)
+            combo.addItem(default)
+            combo.currentIndexChanged.connect(self._on_number_part_changed)
+            combo.lineEdit().editingFinished.connect(self._on_number_part_changed)
+            combo.lineEdit().textEdited.connect(self._on_number_part_changed)
+            if index:
+                prefix_row.addWidget(QLabel("-"))
+            prefix_row.addWidget(combo, 1)
+            self.prefix_combos.append(combo)
+        grid.addWidget(QLabel("编号前缀"), 0, 0)
+        grid.addLayout(prefix_row, 0, 1)
+
+        # 年份：自动（本机）或手动指定
         self.year_combo = QComboBox()
         self.year_combo.setEditable(True)
         self.year_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -445,24 +477,38 @@ class CertificateMakerPage(BasePage):
             QIntValidator(engine.YEAR_MIN, engine.YEAR_MAX, self))
         self.year_combo.currentIndexChanged.connect(self._on_year_changed)
         self.year_combo.lineEdit().editingFinished.connect(self._on_year_changed)
-        grid.addWidget(QLabel("编号年份"), 0, 0)
-        grid.addWidget(self.year_combo, 0, 1)
-        grid.setColumnStretch(1, 1)
-        # 编号整串较长（含校验码），单独占满一行，避免被输入框宽度截断
-        grid.addWidget(_field_label("内部认证号", "archive_no"), 1, 0, 1, 2)
+        grid.addWidget(QLabel("编号年份"), 1, 0)
+        grid.addWidget(self.year_combo, 1, 1)
+
+        # 序号：自动下一个，或从该年已用序号里选 / 直接输入
+        self.serial_combo = QComboBox()
+        self.serial_combo.setEditable(True)
+        self.serial_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.serial_combo.setMaxVisibleItems(14)
+        self.serial_combo.setToolTip("默认自动顺延；也可选该年已用序号或直接输入 6 位序号")
+        self.serial_combo.addItem("自动（下一个）", 0)
+        self.serial_combo.lineEdit().setValidator(QIntValidator(1, 999999, self))
+        self.serial_combo.lineEdit().setMaxLength(6)
+        self.serial_combo.currentIndexChanged.connect(self._on_number_part_changed)
+        self.serial_combo.lineEdit().editingFinished.connect(self._on_number_part_changed)
+        self.serial_combo.lineEdit().textEdited.connect(self._on_number_part_changed)
+        grid.addWidget(QLabel("证书序号"), 2, 0)
+        grid.addWidget(self.serial_combo, 2, 1)
+
+        # 五段合成后的完整编号（只读预览，含校验码）
+        grid.addWidget(_field_label("内部认证号", "archive_no"), 3, 0, 1, 2)
         edit = QLineEdit()
+        edit.setReadOnly(True)
         edit.setPlaceholderText("FMJJ-DB-ART-年份-6位序号-8位校验码")
-        # 编号是等宽字母数字串，用等宽字体压缩宽度，保证 30 位整串一眼看全
         number_font = QFont(edit.font())
         number_font.setFamilies(["Consolas", "Courier New"])
         edit.setFont(number_font)
-        edit.textChanged.connect(self._on_field_changed)
         self.number_edits["archive_no"] = edit
-        grid.addWidget(edit, 2, 0, 1, 2)
+        grid.addWidget(edit, 4, 0, 1, 2)
         layout.addLayout(grid)
         layout.addWidget(_hint(
-            "编号格式：FMJJ-DB-ART-年份-6 位序号-8 位校验码；序号按所选年份已有证书顺延，"
-            "校验码由编号与作品信息自动计算。"))
+            "五段可分别管理：三个前缀各自选/填，年份默认本机也可手选，序号自动顺延或手填；"
+            "下方编号由五段 + 校验码自动合成。"))
         return frame
 
     def _build_work_card(self) -> QWidget:
@@ -684,6 +730,8 @@ class CertificateMakerPage(BasePage):
         layout.addWidget(self.history_search)
         self.history_list = QListWidget()
         self.history_list.itemDoubleClicked.connect(lambda _item: self._on_history_load())
+        self.history_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history_list.customContextMenuRequested.connect(self._on_history_menu)
         layout.addWidget(self.history_list, 1)
         row = QHBoxLayout()
         load_btn = QPushButton("载入")
@@ -698,7 +746,8 @@ class CertificateMakerPage(BasePage):
         row.addWidget(clear_btn)
         row.addStretch(1)
         layout.addLayout(row)
-        layout.addWidget(_hint("历史只保存字段数据，不保存图片；同一认证号重复生成会合并为一条。"))
+        layout.addWidget(_hint("历史只保存字段数据，不保存图片；同一认证号重复生成会合并为一条。"
+                               "右键记录可删除，并选择保留或作废该序号。"))
         return body
 
     def _build_preview_panel(self) -> QWidget:
@@ -829,6 +878,7 @@ class CertificateMakerPage(BasePage):
             if parsed.isValid():
                 expected = parsed.addYears(3).toString("yyyy-MM-dd")
             self._auto_end = not end or end == expected
+            self._sync_number_controls(self.number_edits["archive_no"].text())
         finally:
             self._suspend_signals = previous
 
@@ -985,14 +1035,19 @@ class CertificateMakerPage(BasePage):
         self._on_field_changed()
 
     def _maybe_auto_number(self) -> None:
-        """内部认证号为空时按所选年份历史序号自动补一个；已有编号则核对校验码。"""
+        """编号为空时自动补一个；已有编号则把五段拆回各控件。"""
         edit = self.number_edits.get("archive_no")
         if edit is None:
             return
-        if not edit.text().strip():
+        self._refresh_auto_serial()
+        current = edit.text().strip()
+        if not current:
             self._apply_auto_number()
             return
-        self._sync_fingerprint()
+        self._sync_number_controls(current)
+        self._compose_into_preview()
+
+    # ---------- 五段编号：前缀 / 年份 / 序号 ----------
 
     def _selected_year(self) -> int | None:
         """编号年份：返回具体年份；自动或无效输入返回 None（本机当前年份）。"""
@@ -1002,6 +1057,17 @@ class CertificateMakerPage(BasePage):
             if engine.YEAR_MIN <= year <= engine.YEAR_MAX:
                 return year
         return None
+
+    def _selected_serial(self) -> int | None:
+        """当前序号：手填/选中的具体序号，或在「自动」时取预留的下一个。"""
+        text = self.serial_combo.currentText().strip()
+        if text.isdigit():
+            serial = int(text)
+            return serial if 1 <= serial <= 999999 else None
+        return self._auto_serial
+
+    def _prefix_values(self) -> list[str]:
+        return [combo.currentText().strip().upper() for combo in self.prefix_combos]
 
     def _restore_year(self, value) -> None:
         try:
@@ -1019,56 +1085,153 @@ class CertificateMakerPage(BasePage):
             self.year_combo.blockSignals(False)
         self._last_year = self._selected_year()
 
+    @staticmethod
+    def _set_combo_text(combo: QComboBox, text: str) -> None:
+        index = combo.findText(text)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        else:
+            combo.setEditText(text)
+
+    def _refresh_auto_serial(self) -> None:
+        """按所选年份与已有编号算出「下一个序号」（含保留/作废的序号）。"""
+        self._auto_serial = engine.next_serial(
+            self._selected_year(), self._existing_codes())
+        if getattr(self, "serial_combo", None) and self.serial_combo.count():
+            label = ("自动（下一个）" if not self._auto_serial
+                     else f"自动（下一个：{self._auto_serial:0{engine.ARCHIVE_SERIAL_DIGITS}d}）")
+            self.serial_combo.setItemText(0, label)
+
+    def _rebuild_serial_choices(self) -> None:
+        """序号下拉列出该年份已用序号，保留当前选择/输入。"""
+        year = self._selected_year() or engine.default_year()
+        used = sorted({
+            serial for found_year, serial in
+            (engine.archive_parts(code) for code in self._existing_codes())
+            if found_year == year and serial
+        })
+        try:
+            retired = certificate_history.retired_serials(year)
+        except OSError:
+            retired = set()
+        # 已保留 / 已作废的序号不再作为可选项，但仍参与自动顺延
+        used = [serial for serial in used if serial not in retired]
+        current = self.serial_combo.currentText().strip()
+        previous = self._suspend_signals
+        self._suspend_signals = True
+        try:
+            self.serial_combo.clear()
+            auto_label = ("自动（下一个）" if not self._auto_serial
+                          else f"自动（下一个：{self._auto_serial:0{engine.ARCHIVE_SERIAL_DIGITS}d}）")
+            self.serial_combo.addItem(auto_label, 0)
+            for serial in used:
+                self.serial_combo.addItem(f"{serial:0{engine.ARCHIVE_SERIAL_DIGITS}d}", serial)
+            if current and current.isdigit():
+                self._set_combo_text(self.serial_combo, current)
+            else:
+                self.serial_combo.setCurrentIndex(0)
+        finally:
+            self._suspend_signals = previous
+
+    def _sync_number_controls(self, code: str) -> None:
+        """把一条完整编号拆回三个前缀 / 年份 / 序号控件。"""
+        if not str(code or "").strip():
+            self._number_managed = True
+            return
+        segments = engine.split_archive_segments(code)
+        if not segments:
+            self._number_managed = False
+            return
+        prefix1, prefix2, prefix3, year, serial = segments
+        previous = self._suspend_signals
+        self._suspend_signals = True
+        try:
+            for combo, value in zip(self.prefix_combos, (prefix1, prefix2, prefix3)):
+                if combo.findText(value) < 0:
+                    combo.addItem(value)
+                self._set_combo_text(combo, value)
+            index = self.year_combo.findData(year)
+            if index >= 0:
+                self.year_combo.setCurrentIndex(index)
+            else:
+                self.year_combo.setEditText(str(year))
+            self._last_year = year
+            self._refresh_auto_serial()
+            self._rebuild_serial_choices()
+            self._set_combo_text(
+                self.serial_combo, f"{serial:0{engine.ARCHIVE_SERIAL_DIGITS}d}")
+        finally:
+            self._suspend_signals = previous
+        # 历史 3 位旧编号只回填控件、不改写原编号
+        self._number_managed = engine.is_managed_archive_no(code)
+
+    def _compose_into_preview(self) -> None:
+        """由五段控件 + 校验码合成完整编号。"""
+        edit = self.number_edits.get("archive_no")
+        if edit is None or not self._number_managed:
+            return
+        prefixes = self._prefix_values()
+        serial = self._selected_serial()
+        if not all(prefixes) or not serial:
+            if edit.text():
+                previous = self._suspend_signals
+                self._suspend_signals = True
+                try:
+                    edit.clear()
+                finally:
+                    self._suspend_signals = previous
+            return
+        year = self._selected_year() or engine.default_year()
+        base = engine.compose_archive_no(*prefixes, year, serial)
+        code = engine.with_fingerprint(base, self._collect_data())
+        if edit.text() == code:
+            return
+        previous = self._suspend_signals
+        self._suspend_signals = True
+        try:
+            edit.setText(code)
+        finally:
+            self._suspend_signals = previous
+
+    def _on_number_part_changed(self, *_args) -> None:
+        """前缀 / 序号改动后重组编号。"""
+        if self._suspend_signals:
+            return
+        self._number_managed = True
+        self._on_field_changed()
+
     def _on_year_changed(self, *_args) -> None:
-        """切换/输入年份后按该年份已有证书重新顺延序号。"""
+        """切换/输入年份后重算下一个序号并重建序号列表。"""
         if self._suspend_signals:
             return
         year = self._selected_year()
         if year == self._last_year:
             return
         self._last_year = year
-        self._apply_auto_number()
+        self._number_managed = True
+        self._refresh_auto_serial()
+        self._rebuild_serial_choices()
+        self._on_field_changed()
 
     def _apply_auto_number(self) -> None:
-        """按所选年份（自动=本机年份）生成 6 位序号 + 校验码。"""
-        numbers = engine.suggest_numbers(
-            year=self._selected_year(), existing=self._existing_codes(),
-            data=self._collect_data(),
-        )
-        edit = self.number_edits.get("archive_no")
-        if edit is None:
-            return
+        """按所选年份（自动=本机年份）把序号重置为下一个可用值。"""
+        self._number_managed = True
+        self._refresh_auto_serial()
+        self._rebuild_serial_choices()
         previous = self._suspend_signals
         self._suspend_signals = True
         try:
-            edit.setText(numbers.get("archive_no", ""))
+            self.serial_combo.setCurrentIndex(0)
         finally:
             self._suspend_signals = previous
         self._last_year = self._selected_year()
+        self._compose_into_preview()
         self._on_field_changed()
-
-    def _sync_fingerprint(self) -> None:
-        """作品信息改动后重算编号末尾的校验码（只处理 6 位序号的新编号）。"""
-        edit = self.number_edits.get("archive_no")
-        if edit is None:
-            return
-        current = edit.text().strip()
-        if not engine.is_managed_archive_no(current):
-            return
-        wanted = engine.with_fingerprint(current, self._collect_data())
-        if not wanted or wanted == current:
-            return
-        previous = self._suspend_signals
-        self._suspend_signals = True
-        try:
-            edit.setText(wanted)
-        finally:
-            self._suspend_signals = previous
 
     def _on_field_changed(self, *_args) -> None:
         if self._suspend_signals:
             return
-        self._sync_fingerprint()
+        self._compose_into_preview()
         self._validate_required()
         self._refresh_notes()
         self._schedule_preview()
@@ -1263,7 +1426,28 @@ class CertificateMakerPage(BasePage):
             self._history_records = certificate_history.load_records()
         except OSError:
             self._history_records = []
+        self._refresh_prefix_options()
         self._filter_history()
+
+    def _refresh_prefix_options(self) -> None:
+        """把历史里用过的前三段前缀补进下拉，保留当前选择。"""
+        if not getattr(self, "prefix_combos", None):
+            return
+        for position, combo in enumerate(self.prefix_combos):
+            used = [combo.itemText(index) for index in range(combo.count())]
+            for record in self._history_records:
+                segments = engine.split_archive_segments(
+                    str(record.get("archive_no") or ""))
+                if not segments:
+                    continue
+                value = segments[position]
+                if value not in used:
+                    combo.blockSignals(True)
+                    try:
+                        combo.addItem(value)
+                    finally:
+                        combo.blockSignals(False)
+                    used.append(value)
 
     def _filter_history(self) -> None:
         if not hasattr(self, "history_list"):
@@ -1320,26 +1504,79 @@ class CertificateMakerPage(BasePage):
         if record is None:
             self.app.toast("先选中一条历史记录", "warning")
             return
-        if QMessageBox.question(
-            self, "删除历史记录",
-            f"删除「{record.get('title') or '未命名作品'}」这条记录？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        ) != QMessageBox.Yes:
+        self._delete_history_record(record)
+
+    def _on_history_menu(self, pos) -> None:
+        """历史列表右键：载入 / 删除并保留序号 / 删除并作废序号。"""
+        item = self.history_list.itemAt(pos)
+        if item is None or not item.data(Qt.UserRole):
             return
+        self.history_list.setCurrentItem(item)
+        record = self._current_record()
+        if record is None:
+            return
+        menu = QMenu(self)
+        load_action = menu.addAction("载入这条记录")
+        menu.addSeparator()
+        keep_action = menu.addAction("删除记录（保留序号）")
+        void_action = menu.addAction("删除记录并作废序号")
+        chosen = menu.exec(self.history_list.mapToGlobal(pos))
+        if chosen is load_action:
+            self._on_history_load()
+        elif chosen is keep_action:
+            self._delete_history_record(record, voided=False)
+        elif chosen is void_action:
+            self._delete_history_record(record, voided=True)
+
+    def _delete_history_record(self, record: dict, *, voided: bool | None = None) -> None:
+        """删除历史记录；`voided` 为空时弹窗让用户选保留还是作废序号。"""
+        title = record.get("title") or "未命名作品"
+        if voided is None:
+            box = QMessageBox(self)
+            box.setWindowTitle("删除历史记录")
+            box.setText(
+                f"删除「{title}」这条记录？\n\n"
+                "保留序号：序号继续占用，自动编号往后顺延；\n"
+                "作废序号：标记为不再使用，自动编号也不会再发到它。")
+            keep_btn = box.addButton("保留序号", QMessageBox.ButtonRole.AcceptRole)
+            void_btn = box.addButton("作废序号", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(keep_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked not in (keep_btn, void_btn):
+                return
+            voided = clicked is void_btn
+        segments = engine.split_archive_segments(str(record.get("archive_no") or ""))
         certificate_history.delete_record(str(record.get("id")))
+        if segments:
+            certificate_history.retire_serial(
+                segments[3], segments[4], voided=bool(voided), note=title)
         self._refresh_history()
+        self._refresh_auto_serial()
+        self._rebuild_serial_choices()
+        self.app.toast("已删除历史记录，序号已作废" if voided else "已删除历史记录，序号已保留")
 
     def _on_history_clear(self) -> None:
         if not self._history_records:
             return
         if QMessageBox.question(
             self, "清空历史记录",
-            f"清空全部 {len(self._history_records)} 条历史记录？此操作不可撤销。",
+            f"清空全部 {len(self._history_records)} 条历史记录？\n\n"
+            "这些记录的序号会一并作废，自动编号不再使用它们。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return
+        for record in list(self._history_records):
+            segments = engine.split_archive_segments(str(record.get("archive_no") or ""))
+            if segments:
+                certificate_history.retire_serial(
+                    segments[3], segments[4], voided=True,
+                    note=str(record.get("title") or ""))
         certificate_history.clear_records()
         self._refresh_history()
+        self._refresh_auto_serial()
+        self._rebuild_serial_choices()
 
     # ==================== 文档导入 ====================
 
@@ -1387,6 +1624,8 @@ class CertificateMakerPage(BasePage):
         try:
             for record in certificate_history.load_records():
                 codes.append(str(record.get("archive_no") or ""))
+            # 删除历史时保留/作废的序号也要占用，自动编号不再发到它们
+            codes.extend(certificate_history.retired_codes())
         except OSError:
             pass
         return codes
@@ -1397,6 +1636,9 @@ class CertificateMakerPage(BasePage):
             return
         self._out_dir = Path(path)
         self.dir_btn.setToolTip(str(self._out_dir))
+        self._refresh_auto_serial()
+        self._rebuild_serial_choices()
+        self._compose_into_preview()
         self._save_timer.start()
         self._refresh_preview()
 

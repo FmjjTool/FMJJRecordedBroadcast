@@ -26,29 +26,48 @@ def history_path() -> Path:
     return get_config_dir() / FILE_NAME
 
 
-def _read(path: Path | None = None) -> list[dict[str, Any]]:
+def _read_payload(path: Path | None = None) -> dict[str, Any]:
+    """读取历史文件：`records` 为记录，`retired` 为已保留/已作废的序号。"""
     target = Path(path) if path else history_path()
     try:
         with open(target, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, ValueError):
-        return []
+        return {"records": [], "retired": []}
     if isinstance(payload, dict):
         records = payload.get("records")
+        retired = payload.get("retired")
     else:
-        records = payload
-    if not isinstance(records, list):
-        return []
-    return [record for record in records if isinstance(record, dict)]
+        records, retired = payload, []
+    records = records if isinstance(records, list) else []
+    retired = retired if isinstance(retired, list) else []
+    return {
+        "records": [record for record in records if isinstance(record, dict)],
+        "retired": [item for item in retired if isinstance(item, dict)],
+    }
 
 
-def _write(records: list[dict[str, Any]], path: Path | None = None) -> None:
+def _read(path: Path | None = None) -> list[dict[str, Any]]:
+    return _read_payload(path)["records"]
+
+
+def _write_payload(payload: dict[str, Any], path: Path | None = None) -> None:
     target = Path(path) if path else history_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(f".{target.stem}.tmp.json")
+    body = {
+        "records": list(payload.get("records") or [])[:MAX_RECORDS],
+        "retired": list(payload.get("retired") or []),
+    }
     with open(temp, "w", encoding="utf-8") as handle:
-        json.dump({"records": records[:MAX_RECORDS]}, handle, indent=2, ensure_ascii=False)
+        json.dump(body, handle, indent=2, ensure_ascii=False)
     temp.replace(target)
+
+
+def _write(records: list[dict[str, Any]], path: Path | None = None) -> None:
+    # 记录增删改都要保留序号作废/保留清单
+    retired = _read_payload(path).get("retired") or []
+    _write_payload({"records": records, "retired": retired}, path)
 
 
 def load_records(path: Path | None = None) -> list[dict[str, Any]]:
@@ -105,3 +124,59 @@ def delete_record(record_id: str, path: Path | None = None) -> bool:
 
 def clear_records(path: Path | None = None) -> None:
     _write([], path)
+
+
+def load_retired(path: Path | None = None) -> list[dict[str, Any]]:
+    """已保留 / 已作废的序号清单。"""
+    return _read_payload(path).get("retired") or []
+
+
+def retired_codes(path: Path | None = None) -> list[str]:
+    """把保留/作废序号转成编号主干，供自动编号顺延时跳过。"""
+    codes: list[str] = []
+    for item in load_retired(path):
+        try:
+            year, serial = int(item.get("year")), int(item.get("serial"))
+        except (TypeError, ValueError):
+            continue
+        if year and serial:
+            codes.append(engine.archive_base(year, serial))
+    return codes
+
+
+def retired_serials(year: int, path: Path | None = None) -> set[int]:
+    """某年份已保留 / 已作废的序号（不再出现在可选列表里）。"""
+    serials: set[int] = set()
+    for item in load_retired(path):
+        try:
+            if int(item.get("year")) == int(year):
+                serials.add(int(item.get("serial")))
+        except (TypeError, ValueError):
+            continue
+    return serials
+
+
+def retire_serial(year: int, serial: int, *, voided: bool,
+                  note: str = "", path: Path | None = None) -> dict[str, Any]:
+    """删除历史记录后保留 / 作废序号：之后自动编号不会再发到它。
+
+    `voided=True` 表示彻底作废（人工标记不再使用）；`False` 表示只保留占用。
+    """
+    payload = _read_payload(path)
+    key = (int(year), int(serial))
+    retired = [
+        item for item in payload["retired"]
+        if (int(item.get("year") or 0), int(item.get("serial") or 0)) != key
+    ]
+    entry = {
+        "year": key[0],
+        "serial": key[1],
+        "voided": bool(voided),
+        "note": str(note or ""),
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    retired.append(entry)
+    retired.sort(key=lambda item: (int(item.get("year") or 0), int(item.get("serial") or 0)))
+    payload["retired"] = retired
+    _write_payload(payload, path)
+    return entry

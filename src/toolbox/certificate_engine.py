@@ -206,16 +206,20 @@ DEFAULT_SUBTITLE = "美工作品 · 二级分发授权"
 # 认证号 / 协议编号 / 证书编号格式
 # 内部认证号：FMJJ-DB-ART-<年份>-<6 位序号>-<8 位校验哈希>
 ARCHIVE_PREFIX = "FMJJ-DB-ART"
+ARCHIVE_PREFIX_PARTS = ("FMJJ", "DB", "ART")   # 前三段默认值（页面可分别改）
 ARCHIVE_SERIAL_DIGITS = 6
 ARCHIVE_HASH_LEN = 8
 YEAR_MIN, YEAR_MAX = 1900, 2199      # 编号年份可选范围
+_RE_NUMBER = re.compile(
+    rf"^([A-Z]{{1,8}})-([A-Z0-9]{{1,8}})-([A-Z0-9]{{1,8}})-(\d{{4}})-(\d{{3,}})"
+    rf"(?:-([0-9A-F]{{{ARCHIVE_HASH_LEN}}}))?$")
+# 从文件夹名等长文本里捞编号（不要求整串就是编号）
+_RE_NUMBER_SCAN = re.compile(
+    rf"([A-Z]{{1,8}})-([A-Z0-9]{{1,8}})-([A-Z0-9]{{1,8}})-(\d{{4}})-(\d{{3,}})"
+    rf"(?:-([0-9A-F]{{{ARCHIVE_HASH_LEN}}}))?")
+# 协议文档里识别内部认证号（标签写法之外的正则兜底）
 _RE_ARCHIVE = re.compile(
     rf"FMJJ-DB-ART-\d{{4}}-\d{{3,}}(?:-[0-9A-F]{{{ARCHIVE_HASH_LEN}}})?")
-_RE_ARCHIVE_PARTS = re.compile(
-    rf"^FMJJ-DB-ART-(\d{{4}})-(\d{{3,}})(?:-([0-9A-F]{{{ARCHIVE_HASH_LEN}}}))?$")
-# 从文件夹名 / 历史备注等长文本里捞编号（不要求整串就是编号）
-_RE_ARCHIVE_SCAN = re.compile(
-    rf"FMJJ-DB-ART-(\d{{4}})-(\d{{3,}})(?:-([0-9A-F]{{{ARCHIVE_HASH_LEN}}}))?")
 _RE_LICENSE = re.compile(r"ART-LIC-\d{4}-\d{3,}")
 _RE_CERT = re.compile(r"FMJJ-CERT-\d{4}-\d{3,}")
 
@@ -549,30 +553,50 @@ def default_year() -> int:
 
 def archive_parts(code: str) -> tuple[int | None, int | None]:
     """拆分内部认证号，返回 (年份, 序号)；也可从证书文件夹名里识别。"""
-    match = _RE_ARCHIVE_SCAN.search(str(code or ""))
+    match = _RE_NUMBER_SCAN.search(str(code or "").strip().upper())
     if not match:
         return None, None
-    return int(match.group(1)), int(match.group(2))
+    return int(match.group(4)), int(match.group(5))
+
+
+def split_archive_segments(code: str) -> tuple[str, str, str, int, int] | None:
+    """把编号拆成五段：(前缀1, 前缀2, 前缀3, 年份, 序号)；不合法返回 None。"""
+    match = _RE_NUMBER.match(str(code or "").strip().upper())
+    if not match:
+        return None
+    return (match.group(1), match.group(2), match.group(3),
+            int(match.group(4)), int(match.group(5)))
+
+
+def compose_archive_no(prefix1: str, prefix2: str, prefix3: str,
+                       year: int, serial: int) -> str:
+    """按五段拼出编号主干（不含校验哈希）。"""
+    parts = [str(prefix1 or "").strip().upper(), str(prefix2 or "").strip().upper(),
+             str(prefix3 or "").strip().upper()]
+    if not all(parts):
+        return ""
+    return (f"{'-'.join(parts)}-{int(year)}-"
+            f"{int(serial):0{ARCHIVE_SERIAL_DIGITS}d}")
 
 
 def archive_base(year: int, serial: int) -> str:
-    """编号主干：FMJJ-DB-ART-年份-6 位序号（不含哈希）。"""
-    return f"{ARCHIVE_PREFIX}-{int(year)}-{int(serial):0{ARCHIVE_SERIAL_DIGITS}d}"
+    """用默认前缀拼编号主干：FMJJ-DB-ART-年份-6 位序号（不含哈希）。"""
+    return compose_archive_no(*ARCHIVE_PREFIX_PARTS, int(year), int(serial))
 
 
 def license_no(code: str) -> str:
     """按内部认证号派生协议编号：ART-LIC-年份-序号（序号位数跟随原编号）。"""
-    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
+    match = _RE_NUMBER.match(str(code or "").strip().upper())
     if not match:
         return ""
-    width = len(match.group(2))
-    return f"ART-LIC-{int(match.group(1))}-{int(match.group(2)):0{width}d}"
+    width = len(match.group(5))
+    return f"ART-LIC-{int(match.group(4))}-{int(match.group(5)):0{width}d}"
 
 
 def _archive_hash_of(code: str) -> str:
     """取编号末尾的校验哈希；没有则返回空串。"""
-    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
-    return match.group(3) if match else ""
+    match = _RE_NUMBER.match(str(code or "").strip().upper())
+    return match.group(6) if match else ""
 
 
 def archive_fingerprint(base: str, data: "CertificateData") -> str:
@@ -589,21 +613,21 @@ def archive_fingerprint(base: str, data: "CertificateData") -> str:
 
 
 def with_fingerprint(code: str, data: "CertificateData") -> str:
-    """给编号补上（或重算）末尾校验哈希。
+    """给编号补上（或重算）末尾校验哈希，前三段前缀原样保留。
 
     只处理 6 位序号的编号；历史遗留的 3 位编号保持原样，避免改动已签发的旧证书号。
     """
     if not is_managed_archive_no(code):
-        return str(code or "").strip()
-    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
-    base = archive_base(int(match.group(1)), int(match.group(2)))
+        return str(code or "").strip().upper()
+    segments = split_archive_segments(code)
+    base = compose_archive_no(*segments[:3], segments[3], segments[4])
     return f"{base}-{archive_fingerprint(base, data)}"
 
 
 def is_managed_archive_no(code: str) -> bool:
-    """是否为当前规则下的编号（6 位序号，可带校验哈希）。"""
-    match = _RE_ARCHIVE_PARTS.match(str(code or "").strip())
-    return bool(match) and len(match.group(2)) == ARCHIVE_SERIAL_DIGITS
+    """是否为当前规则下的编号（五段、6 位序号，可带校验哈希）。"""
+    match = _RE_NUMBER.match(str(code or "").strip().upper())
+    return bool(match) and len(match.group(5)) == ARCHIVE_SERIAL_DIGITS
 
 
 @dataclass
@@ -907,20 +931,27 @@ def parse_spreadsheet(path: str | Path) -> ParseResult:
 # ==================== 编号建议 ====================
 
 
-def suggest_numbers(year: int | None = None, existing: Iterable[str] = (),
-                    data: CertificateData | None = None) -> dict[str, str]:
-    """按年份给出下一个内部认证号（年份 + 6 位序号 + 校验哈希）。
-
-    `existing` 可以是历史认证号、证书文件夹名或任何含编号的字符串；
-    序号按「该年份已有最大值 + 1」顺延。传入 `data` 时追加校验哈希。
-    """
+def next_serial(year: int | None = None, existing: Iterable[str] = ()) -> int:
+    """该年份下一个可用序号：已有最大值 + 1（作废序号由调用方一并传入）。"""
     year = int(year or default_year())
     serial = 1
     for code in existing:
         found_year, found_serial = archive_parts(str(code))
         if found_year == year and found_serial:
             serial = max(serial, found_serial + 1)
-    base = archive_base(year, serial)
+    return serial
+
+
+def suggest_numbers(year: int | None = None, existing: Iterable[str] = (),
+                    data: CertificateData | None = None,
+                    prefixes: Sequence[str] = ARCHIVE_PREFIX_PARTS) -> dict[str, str]:
+    """按年份给出下一个内部认证号（五段 + 校验哈希）。
+
+    `existing` 可以是历史认证号、证书文件夹名或任何含编号的字符串；
+    序号按「该年份已有最大值 + 1」顺延。传入 `data` 时追加校验哈希。
+    """
+    year = int(year or default_year())
+    base = compose_archive_no(*prefixes, year, next_serial(year, existing))
     code = f"{base}-{archive_fingerprint(base, data)}" if data is not None else base
     return {"archive_no": code}
 
