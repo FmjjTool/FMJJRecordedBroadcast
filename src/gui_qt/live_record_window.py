@@ -1716,10 +1716,17 @@ class TimecodeDialog(QDialog):
 
     def _fill_from_file(self, path):
         from toolbox import timecode as TC
-        start = TC.parse_start_time(path)
-        if start is None:
-            start = datetime.fromtimestamp(os.path.getmtime(path))
-            self._log("文件名里没有时间，起始时间按文件修改时间填入，请自行确认")
+        from toolbox import timeline as TL
+        tl = TL.load(path)
+        start = TL.start_datetime(tl, path) if tl else None
+        if start is not None:
+            self._log("已读到录制时间轴（首帧锚点）：%s"
+                      % start.strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            start = TC.parse_start_time(path)
+            if start is None:
+                start = datetime.fromtimestamp(os.path.getmtime(path))
+                self._log("文件名里没有时间，起始时间按文件修改时间填入，请自行确认")
         self.ed_start.setDateTime(QDateTime(start.year, start.month, start.day,
                                             start.hour, start.minute, start.second))
         self.ed_out.setText(TC.default_output(path))

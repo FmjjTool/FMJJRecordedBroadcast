@@ -354,7 +354,7 @@ class StreamDownloader:
 
     def __init__(self, url, path, headers=None, stop_minutes=0,
                  segment_minutes=0, segment_mb=0, base_name="record",
-                 outdir=None, label="", refresh_url=None):
+                 outdir=None, label="", refresh_url=None, on_media_start=None):
         self.url = url
         self.path = path
         self.headers = dict(headers or {})
@@ -367,6 +367,8 @@ class StreamDownloader:
         # 重连时刷新直链：B站/抖音的 flv 地址有时效（几分钟），只重试旧地址
         # 会在地址过期后永远失败（录播姬每次重连都重新取流，这里对齐）
         self._refresh_url = refresh_url
+        self.on_media_start = on_media_start   # (wall_ms, file_path, pts_ms)
+        self._anchor_pending = None
         self._stop = threading.Event()
         self._thread = None
         self._start = 0.0
@@ -427,6 +429,7 @@ class StreamDownloader:
         self._last_file = p
         w = FlvWriter(p, resume=resume, seam_fix=True)
         self._seg_started = time.time()
+        self._anchor_pending = p       # 等第一段字节真正写下去再记锚点
         return w
 
     def _should_segment(self, writer):
@@ -538,7 +541,15 @@ class StreamDownloader:
                 if not chunk:
                     return "eof"
                 self._received += len(chunk)
-                self._written += writer.feed(chunk)
+                written = writer.feed(chunk)
+                self._written += written
+                if written and self._anchor_pending:
+                    pending, self._anchor_pending = self._anchor_pending, None
+                    if self.on_media_start:
+                        try:
+                            self.on_media_start(int(time.time() * 1000), pending, 0)
+                        except Exception:
+                            pass
             return "stopped"
 
 
@@ -568,7 +579,7 @@ class FfmpegRecorder:
 
     def __init__(self, url, path, headers=None, stop_minutes=0,
                  segment_minutes=0, segment_mb=0, audio_only=False, log_dir=None,
-                 fmt="flv", ts_offset_ms=0):
+                 fmt="flv", ts_offset_ms=0, on_media_start=None):
         self.url = url
         self.path = path
         self.headers = dict(headers or {})
@@ -579,6 +590,8 @@ class FfmpegRecorder:
         self.log_dir = log_dir or os.path.dirname(path)
         self.fmt = "ts" if (audio_only or fmt == "ts") else "flv"
         self.ts_offset_ms = int(ts_offset_ms or 0)
+        self.on_media_start = on_media_start   # (wall_ms, file_path, pts_ms)
+        self._media_started = False
         self._proc = None
         self._errf = None
         self._out = None
@@ -653,7 +666,51 @@ class FfmpegRecorder:
             self._close_all()
             return False
         self.start_ts = int(time.time() * 1000)
+        if not use_pipe and self.on_media_start:
+            threading.Thread(target=self._watch_outputs, daemon=True,
+                             name="ffmpeg-first-frame").start()
         return True
+
+    def _notify_media(self, file_path, pts_ms=0):
+        cb = self.on_media_start
+        if not cb:
+            return
+        try:
+            cb(int(time.time() * 1000), str(file_path), int(pts_ms or 0))
+        except Exception:
+            pass
+
+    def _watch_outputs(self):
+        """直接落盘/分段模式：轮询输出文件，出现即记一条起录锚点（误差 ≤1 秒）。"""
+        root, ext = os.path.splitext(self.path)
+        ext = ext or ".ts"
+        seen = set()
+        while True:
+            files = []
+            if self.segment_minutes:
+                folder = os.path.dirname(self.path) or "."
+                prefix = os.path.basename(root) + "_"
+                try:
+                    files = [os.path.join(folder, n) for n in os.listdir(folder)
+                             if n.startswith(prefix) and n.endswith(ext)]
+                except OSError:
+                    files = []
+            else:
+                files = [self.path]
+            for f in files:
+                if f in seen:
+                    continue
+                try:
+                    if os.path.getsize(f) <= 0:
+                        continue
+                except OSError:
+                    continue
+                seen.add(f)
+                self._notify_media(f, 0 if self.segment_minutes else self.ts_offset_ms)
+            proc = self._proc
+            if proc is None or proc.poll() is not None:
+                return
+            time.sleep(1.0)
 
     def _pump(self):
         """ffmpeg stdout（TS 字节流）→ 文件。必须在独立线程里读，否则管道堵死。"""
@@ -671,6 +728,9 @@ class FfmpegRecorder:
                         self._written += len(chunk)
                     except Exception:
                         break
+                    if not self._media_started:
+                        self._media_started = True
+                        self._notify_media(self.path, self.ts_offset_ms)
         finally:
             try:
                 if self._out is not None:
@@ -963,6 +1023,7 @@ class RecordManager:
         self._danmaku = {}     # key -> DanmakuRecorder（录制时同步存弹幕）
         self._retry = {}       # key -> {"count": n, "next": ts}
         self._resume = {}      # key -> {"path": .., "offset_ms": ..}（TS 续录）
+        self._timelines = {}   # key -> TimelineRecorder（P1 时间轴锚点）
         self._lock = threading.RLock()
         self._thread = None
         self._stop = threading.Event()
@@ -1177,6 +1238,17 @@ class RecordManager:
             if rs and fmt == "ts" and not audio_only and os.path.exists(rs.get("path") or ""):
                 path = rs["path"]
                 ts_off = int(rs.get("offset_ms") or 0)
+            # P1 时间轴：首帧墙钟 ↔ 视频 PTS 锚点，供弹幕对齐/写时间码使用
+            from toolbox import timeline as TL
+            tl = TL.TimelineRecorder(path, platform=a.platform, room=a.room, base=base)
+            self._timelines[a.key] = tl
+
+            def _anchor(wall_ms, file_path=None, pts_ms=0, _tl=tl):
+                try:
+                    _tl.add_anchor(file_path or path, wall_ms, pts_ms)
+                except Exception:
+                    pass
+
             seg_min, seg_mb, stop_min = self._record_params(a)
             headers = {"User-Agent": UA,
                        "Referer": PLATFORMS[a.platform]["referer"]}
@@ -1189,7 +1261,8 @@ class RecordManager:
                                       stop_minutes=stop_min,
                                       segment_minutes=seg_min, log_dir=outdir,
                                       audio_only=audio_only, fmt=fmt,
-                                      ts_offset_ms=ts_off)
+                                      ts_offset_ms=ts_off,
+                                      on_media_start=_anchor)
                 ok = task.start()
                 kind = "ff"
             else:
@@ -1199,6 +1272,7 @@ class RecordManager:
                                         segment_mb=seg_mb,
                                         base_name=base, outdir=outdir,
                                         label=a.name or a.room,
+                                        on_media_start=_anchor,
                                         refresh_url=lambda: fetch_info(
                                             a.platform, a.room, a.quality).get("stream") or "")
                 ok = task.start()

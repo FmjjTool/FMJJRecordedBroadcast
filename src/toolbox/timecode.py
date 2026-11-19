@@ -128,6 +128,16 @@ def default_output(src) -> str:
     return base
 
 
+def _timeline_start(src):
+    """有录制时间轴就用首帧锚点（比文件名秒级时间准）。"""
+    try:
+        from . import timeline as TL
+        tl = TL.load(src)
+        return TL.start_datetime(tl, src) if tl else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _tail(raw: bytes, limit: int = 600) -> str:
     text = (raw or b"").decode("utf-8", "replace").strip()
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -165,10 +175,14 @@ def write_timecode(src, dst=None, start: Optional[datetime] = None, *,
                             % os.path.splitext(src)[1])
     info = probe(src)
     if start is None:
-        start = parse_start_time(src)
-        if start is None:
-            raise TimecodeError("文件名里没有录制时间，请手动指定起始时间")
-        log("起始时间取自文件名：%s" % start.strftime("%Y-%m-%d %H:%M:%S"))
+        start = _timeline_start(src)
+        if start is not None:
+            log("起始时间取自录制时间轴（首帧）：%s" % start.strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            start = parse_start_time(src)
+            if start is None:
+                raise TimecodeError("文件名里没有录制时间，请手动指定起始时间")
+            log("起始时间取自文件名：%s" % start.strftime("%Y-%m-%d %H:%M:%S"))
     if is_segment_file(src):
         log("分段文件：起始时间按给定值写入，请确认是否是该段自己的起点")
 
