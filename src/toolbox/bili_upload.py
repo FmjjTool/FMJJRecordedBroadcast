@@ -25,6 +25,8 @@ DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～",
             "tags": "封茗囧菌,直播录播", "tid": 0, "copyright": 2,
             "source": "", "cover": "", "date": "", "auto_publish": True, "platform": "抖子"}
 SOURCE_PLATFORMS = ("抖子", "B站")
+# 预上传节点按序尝试：某个节点的域名/连接不通时换下一个，避免整场投稿卡在第 1 个分片。
+UPLOAD_CDNS = ("bda2", "alia", "cos")
 
 
 def today_compact():
@@ -213,6 +215,29 @@ class UploadCancelled(UploadError):
     pass
 
 
+class UploadNodeError(UploadError):
+    """单个 CDN 节点不可用（域名不通、连不上、初始化被拒）；还没传任何分片，可换节点重试。"""
+
+
+def _failure_reason(error):
+    """把 requests 异常翻成一句能直接定位的失败原因。"""
+    text = str(error)
+    if isinstance(error, requests.exceptions.ConnectTimeout):
+        return "连接超时"
+    if isinstance(error, requests.exceptions.ReadTimeout):
+        return "传输超时（120 秒无响应）"
+    if isinstance(error, requests.exceptions.SSLError):
+        return "TLS 握手失败"
+    if "NameResolutionError" in text or "Name or service not known" in text \
+            or "getaddrinfo failed" in text or "No address associated with hostname" in text:
+        return "域名解析失败"
+    if isinstance(error, requests.exceptions.Timeout):
+        return "请求超时"
+    if isinstance(error, requests.exceptions.ConnectionError):
+        return "连接被重置或中断"
+    return type(error).__name__
+
+
 class UploadHistory:
     """已投稿与响应不明的任务不能再次自动提交，避免重复发布。"""
     def __init__(self, path=None):
@@ -278,6 +303,9 @@ class BiliUploader:
                                     "Referer": UPLOAD_PAGE, "Origin": "https://member.bilibili.com"})
         # UPOS 客户端只携带一次性上传授权，绝不转发账号 Cookie。
         self.upos = requests.Session()
+        # 上传节点一律直连：环境代理（HTTP_PROXY/HTTPS_PROXY）常让分片 PUT 连不上，
+        # 且失败时只剩一句“网络错误”，很难判断是代理还是节点的问题。
+        self.upos.trust_env = False
         self.cancel = cancel or threading.Event()
         self.progress = on_progress or (lambda done, total, text: None)
         self.history = history or UploadHistory()
@@ -293,11 +321,18 @@ class BiliUploader:
             raise UploadCancelled("Cookie 管理的登录状态已改变，本任务已停止；请重新进入投稿窗口")
 
     def _json(self, session, method, url, **kwargs):
+        # node=True：请求的是上传节点，失败要带上原因并允许换节点重试。
+        node = kwargs.pop("node", False)
         self._check_cancel()
         try:
             response = session.request(method, url, timeout=(15, 120), allow_redirects=False, **kwargs)
         except requests.RequestException as error:
-            raise UploadError("网络请求失败或超时，请重试/检查任务状态") from error
+            reason = _failure_reason(error)
+            if node:
+                raise UploadNodeError(f"节点请求失败（{reason}）") from error
+            raise UploadError(f"网络请求失败或超时（{reason}），请重试/检查任务状态") from error
+        if node and response.status_code >= 400:
+            raise UploadNodeError(f"节点返回 HTTP {response.status_code}")
         if response.status_code == 412:
             raise UploadError("B站返回 412 风控；请在官方投稿页面检查登录和验证后重试")
         if response.status_code >= 400 or 300 <= response.status_code < 400:
@@ -305,6 +340,8 @@ class BiliUploader:
         try:
             data = response.json()
         except ValueError as error:
+            if node:
+                raise UploadNodeError("节点未返回 JSON") from error
             raise UploadError("接口未返回 JSON，可能需要网页登录验证") from error
         if not isinstance(data, dict):
             raise UploadError("接口响应结构发生变化")
@@ -327,32 +364,45 @@ class BiliUploader:
                                            "https://member.bilibili.com/x/vupre/web/archive/pre"))
 
     def _upload_video(self, path, complete_before, total_size):
+        """按 CDN 节点依次尝试；只有本文件还没传上任何分片时才换节点，避免重复上传。"""
         path = Path(path)
         size = path.stat().st_size
         before = (size, path.stat().st_mtime_ns)
+        failures = []
+        for position, upcdn in enumerate(UPLOAD_CDNS):
+            try:
+                return self._upload_via_node(path, size, before, upcdn, complete_before, total_size)
+            except UploadNodeError as error:
+                failures.append(f"{upcdn}：{error}")
+                if position + 1 < len(UPLOAD_CDNS):
+                    self.progress(complete_before, total_size,
+                                  f"{upcdn} 节点不可用（{error}），改用 {UPLOAD_CDNS[position + 1]} 重试 {path.name}")
+        raise UploadError("上传节点都连不上（" + "；".join(failures) + "）；本地视频保留")
+
+    def _upload_via_node(self, path, size, before, upcdn, complete_before, total_size):
         pre = self._json(self.member, "GET", "https://member.bilibili.com/preupload", params={
             "profile": "ugcfx/bup", "name": path.name, "size": size, "r": "upos", "ssl": 0,
-            "version": "2.14.0", "build": "2100400", "upcdn": "bda2", "probe_version": "20211012"})
+            "version": "2.14.0", "build": "2100400", "upcdn": upcdn, "probe_version": "20211012"})
         if pre.get("OK") != 1:
             raise UploadError("预上传被拒绝，请在官方投稿页面检查账号")
         endpoint = str(pre.get("endpoint") or "")
         endpoint = "https:" + endpoint if endpoint.startswith("//") else endpoint
         host = urlparse(endpoint)
         if host.scheme != "https" or not (host.hostname or "").endswith(".bilivideo.com") or host.username:
-            raise UploadError("预上传返回了无法识别的上传地址")
+            raise UploadNodeError("返回了无法识别的上传地址")
         uri = str(pre.get("upos_uri") or "")
         if not uri.startswith("upos://") or any(part in ("", ".", "..") for part in uri[7:].split("/")):
-            raise UploadError("预上传文件标识不合法")
+            raise UploadNodeError("返回的文件标识不合法")
         url = endpoint.rstrip("/") + "/" + uri[7:]
         headers = {"x-upos-auth": pre["auth"]}
         chunk_size = int(pre["chunk_size"])
         if not 1 <= chunk_size <= 64 * 1024 * 1024:
-            raise UploadError("上传分片大小不合法")
-        init = self._json(self.upos, "POST", url, headers=headers, params={
+            raise UploadNodeError("返回的分片大小不合法")
+        init = self._json(self.upos, "POST", url, headers=headers, node=True, params={
             "uploads": "", "output": "json", "profile": "ugcfx/bup", "filesize": size,
             "partsize": chunk_size, "biz_id": pre["biz_id"]})
         if init.get("OK") != 1 or not init.get("upload_id"):
-            raise UploadError("上传任务初始化失败")
+            raise UploadNodeError("上传任务初始化失败")
         chunks, parts = math.ceil(size / chunk_size), []
         with open(path, "rb") as stream:
             for number in range(chunks):
@@ -361,21 +411,13 @@ class BiliUploader:
                 start = number * chunk_size
                 if not chunk:
                     raise UploadError("上传期间文件被截断，请重新选择")
-                for attempt in range(3):
-                    self._check_cancel()
-                    try:
-                        response = self.upos.put(url, data=chunk, headers=headers, timeout=(15, 120),
-                            allow_redirects=False, params={"partNumber": number + 1, "uploadId": init["upload_id"],
-                                "chunk": number, "chunks": chunks, "size": len(chunk), "start": start,
-                                "end": start + len(chunk), "total": size})
-                        if response.status_code < 300 and response.text.strip() in ("", "MULTIPART_PUT_SUCCESS"):
-                            break
-                    except requests.RequestException:
-                        pass
-                    if attempt == 2:
-                        raise UploadError(f"第 {number + 1} 个分片上传失败；本地视频保留")
-                    if self.cancel.wait(1):
-                        self._check_cancel()
+                reason, response = self._put_chunk(url, headers, chunk, init["upload_id"],
+                                                   number, chunks, start, size)
+                if reason:
+                    # 一个分片都没成功时换节点是安全的；已经传过分片则保留原任务。
+                    if number == 0:
+                        raise UploadNodeError(reason)
+                    raise UploadError(f"第 {number + 1} 个分片上传失败（{reason}）；本地视频保留")
                 parts.append({"partNumber": number + 1, "eTag": response.headers.get("ETag", "etag").strip('"')})
                 self.progress(complete_before + start + len(chunk), total_size, f"上传 {path.name} · {number + 1}/{chunks}")
         if (path.stat().st_size, path.stat().st_mtime_ns) != before:
@@ -383,10 +425,33 @@ class BiliUploader:
         result = self._json(self.upos, "POST", url, headers=headers, json={"parts": parts}, params={
             "output": "json", "name": path.name, "profile": "ugcfx/bup",
             "uploadId": init["upload_id"], "biz_id": pre["biz_id"]})
-        if result.get("OK") != 1 or not result.get("key"):
-            raise UploadError("分片合并失败，本次不投稿")
+        if result.get("OK") != 1:
+            raise UploadError("分片合并失败（" + str(result.get("message") or f"code {result.get('code')}") + "），本次不投稿")
+        if not result.get("key"):
+            raise UploadError("分片合并未返回文件标识，本次不投稿")
         return {"filename": os.path.splitext(str(result["key"]).lstrip("/"))[0],
                 "title": path.stem[:80], "desc": "", "cid": pre["biz_id"]}
+
+    def _put_chunk(self, url, headers, chunk, upload_id, number, chunks, start, size):
+        """分片 PUT：最多 3 次；返回（失败原因, 成功的响应），成功时原因为空串。"""
+        reason = ""
+        for attempt in range(3):
+            self._check_cancel()
+            try:
+                response = self.upos.put(url, data=chunk, headers=headers, timeout=(15, 120),
+                    allow_redirects=False, params={"partNumber": number + 1, "uploadId": upload_id,
+                        "chunk": number, "chunks": chunks, "size": len(chunk), "start": start,
+                        "end": start + len(chunk), "total": size})
+            except requests.RequestException as error:
+                reason, response = _failure_reason(error), None
+            else:
+                text = (response.text or "").strip()
+                if response.status_code < 300 and text in ("", "MULTIPART_PUT_SUCCESS"):
+                    return "", response
+                reason = f"HTTP {response.status_code}" + (f"，响应 {text[:80]}" if text else "")
+            if attempt < 2 and self.cancel.wait(1):
+                self._check_cancel()
+        return reason, None
 
     def _upload_cover(self, video, cover):
         with tempfile.TemporaryDirectory(prefix="fmjj-cover-") as folder:
