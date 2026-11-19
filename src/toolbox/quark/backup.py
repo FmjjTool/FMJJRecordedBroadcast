@@ -364,7 +364,8 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
 _SHARE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 
-def _share_passcode(length: int = 4) -> str:
+def share_passcode(length: int = 4) -> str:
+    """随机提取码（去掉容易看混的 0/o/1/l/i）。"""
     return "".join(secrets.choice(_SHARE_ALPHABET) for _ in range(length))
 
 
@@ -395,7 +396,7 @@ def _share_uploaded_folder(client, mapping: Mapping, result: BackupResult,
         return
     target = share_target_dir(mapping, touched)
     title = target.rsplit("/", 1)[-1] if target else "备份"
-    passcode = _share_passcode() if mapping.share_passcode else ""
+    passcode = share_passcode() if mapping.share_passcode else ""
     try:
         fid = client.ensure_dir(target) if target else "0"
         url, code = client.create_share(fid, title, expire=mapping.share_expire, passcode=passcode)

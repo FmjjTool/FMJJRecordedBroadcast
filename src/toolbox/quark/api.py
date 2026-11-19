@@ -448,18 +448,19 @@ class QuarkClient:
 
     # ==================== 分享 ====================
 
-    def create_share(self, fid: str, title: str = "", *, expire: str = "永久",
+    def create_share(self, fids, title: str = "", *, expire: str = "永久",
                      passcode: str = "") -> tuple[str, str]:
-        """给一个文件/文件夹建分享，返回 (分享地址, 提取码)。
+        """给一个或多个文件/文件夹建分享，返回 (分享地址, 提取码)。
 
-        走三步：`POST /share` 建任务 → `GET /task` 取 share_id → `POST /share/password`
-        取真实地址。`passcode` 留空表示公开分享；有效期见 `SHARE_EXPIRED_TYPE`。
+        `fids` 可以是单个 fid 或 fid 列表；走三步：`POST /share` 建任务 →
+        `GET /task` 取 share_id → `POST /share/password` 取真实地址。
+        `passcode` 留空表示公开分享；有效期见 `SHARE_EXPIRED_TYPE`。
         """
-        fid = str(fid or "")
-        if not fid:
+        items = [str(f) for f in ([fids] if isinstance(fids, str) else (fids or [])) if f]
+        if not items:
             raise QuarkError(-1, "分享对象为空")
         body = {
-            "fid_list": [fid],
+            "fid_list": items,
             "title": (title or "备份")[:100],
             "url_type": 2 if passcode else 1,
             "expired_type": SHARE_EXPIRED_TYPE.get(str(expire), 1),

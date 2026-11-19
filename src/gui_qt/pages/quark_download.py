@@ -18,8 +18,10 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -56,6 +58,60 @@ def _fmt_time(value) -> str:
         return str(value or "")
 
 
+def _sort_time(value):
+    """排序键：时间戳用数字、ISO 字符串用文本，首元素区分类型避免混比。"""
+    if isinstance(value, str) and "T" in value:
+        return (1, value)
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return (1, str(value or ""))
+    if num > 10 ** 12:
+        num //= 1000
+    return (0, num)
+
+
+class ShareDialog(QDialog):
+    """分享云端文件 / 文件夹：名称、有效期、是否带提取码。"""
+
+    def __init__(self, parent=None, title: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("分享云端文件")
+        self.setMinimumWidth(420)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("分享名称"))
+        self.title_edit = QLineEdit(title)
+        self.title_edit.setPlaceholderText("显示在夸克「我的分享」里的名称")
+        layout.addWidget(self.title_edit)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(QLabel("有效期"))
+        self.expire_combo = QComboBox()
+        self.expire_combo.addItems(qconfig.SHARE_EXPIRES)
+        row.addWidget(self.expire_combo)
+        row.addSpacing(8)
+        self.passcode_cb = QCheckBox("需要提取码（4 位随机）")
+        row.addWidget(self.passcode_cb)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("创建分享")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def options(self) -> dict:
+        return {"title": self.title_edit.text().strip() or "分享",
+                "expire": self.expire_combo.currentText(),
+                "passcode": qbackup.share_passcode() if self.passcode_cb.isChecked() else ""}
+
+
 class QuarkDownloadPage(BasePage):
     COLS = ("", "名称", "大小", "修改时间")
 
@@ -67,6 +123,9 @@ class QuarkDownloadPage(BasePage):
         self._loading = False
         self._running = False
         self._stop_event: threading.Event | None = None
+        # 列头排序：文件夹恒在最前，组内按 名称 / 大小 / 修改时间
+        self._sort_column = 1
+        self._sort_desc = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -141,6 +200,12 @@ class QuarkDownloadPage(BasePage):
         self.folder_btn.clicked.connect(self._download_current_folder)
         local_row.addWidget(self.folder_btn)
 
+        self.share_btn = QPushButton("分享选中")
+        self.share_btn.setProperty("variant", "secondary")
+        self.share_btn.setToolTip("把勾选的文件（没勾选时用当前选中的文件夹）生成夸克分享链接")
+        self.share_btn.clicked.connect(self._share_selected)
+        local_row.addWidget(self.share_btn)
+
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
         self.stop_btn.setToolTip("停止当前下载（已下载部分保留为 .part，下次自动续传）")
@@ -200,6 +265,11 @@ class QuarkDownloadPage(BasePage):
         header.resizeSection(2, 96)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
         header.resizeSection(3, 150)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(1, Qt.AscendingOrder)
+        header.setToolTip("点击「名称 / 大小 / 修改时间」列头排序，文件夹始终排在最前")
+        header.sectionClicked.connect(self._on_header_clicked)
         self.table.cellDoubleClicked.connect(self._on_double_click)
         left.content_layout.addWidget(self.table, 1)
         body.addWidget(left, 3)
@@ -283,10 +353,7 @@ class QuarkDownloadPage(BasePage):
         run_bg(work, done, owner=self)
 
     def _render_entries(self):
-        entries = sorted(
-            self._entries,
-            key=lambda e: (0 if e.get("dir") else 1,
-                           str(e.get("file_name") or "").casefold()))
+        entries = self._ordered_entries()
         self.table.setRowCount(0)
         self.table.setRowCount(len(entries))
         for row, entry in enumerate(entries):
@@ -302,8 +369,9 @@ class QuarkDownloadPage(BasePage):
             name_item.setData(Qt.UserRole, entry)
             self.table.setItem(row, 1, name_item)
 
+            size = int(entry.get("size") or 0)
             size_item = QTableWidgetItem(
-                "" if is_dir else qdownload.human_size(int(entry.get("size") or 0)))
+                "" if is_dir else qdownload.human_size(size))
             size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.table.setItem(row, 2, size_item)
 
@@ -316,6 +384,35 @@ class QuarkDownloadPage(BasePage):
         self.select_all.blockSignals(True)
         self.select_all.setChecked(False)
         self.select_all.blockSignals(False)
+
+    def _on_header_clicked(self, section: int):
+        """列头点击：第 0 列是勾选框，不参与排序。"""
+        if section <= 0 or section >= len(self.COLS):
+            return
+        if section == self._sort_column:
+            self._sort_desc = not self._sort_desc
+        else:
+            # 换列时默认正序；「修改时间」更常见的是最新在前
+            self._sort_column, self._sort_desc = section, section == 3
+        self.table.horizontalHeader().setSortIndicator(
+            self._sort_column,
+            Qt.DescendingOrder if self._sort_desc else Qt.AscendingOrder)
+        self._render_entries()
+
+    def _entry_sort_key(self, entry: dict):
+        if self._sort_column == 2:
+            return int(entry.get("size") or 0)
+        if self._sort_column == 3:
+            return _sort_time(entry.get("updated_at"))
+        return str(entry.get("file_name") or "").casefold()
+
+    def _ordered_entries(self) -> list[dict]:
+        """文件夹恒在最前（正倒序都一样），组内按当前列排序。"""
+        dirs = [entry for entry in self._entries if entry.get("dir")]
+        files = [entry for entry in self._entries if not entry.get("dir")]
+        for group in (dirs, files):
+            group.sort(key=self._entry_sort_key, reverse=self._sort_desc)
+        return dirs + files
 
     def _on_double_click(self, row: int, _column: int):
         item = self.table.item(row, 1)
@@ -367,6 +464,55 @@ class QuarkDownloadPage(BasePage):
             self, "选择下载保存的文件夹", self.local_edit.text().strip())
         if chosen:
             self.local_edit.setText(chosen)
+
+    # ==================== 分享 ====================
+
+    def _share_selected(self):
+        if self._running:
+            self.app.toast("正在下载，等下载结束后再分享", "info")
+            return
+        if self._current_provider() != "quark":
+            self.app.toast("分享目前只支持夸克网盘", "info")
+            return
+        entries = self._checked_files()
+        if not entries:
+            row = self.table.currentRow()
+            item = self.table.item(row, 1) if row >= 0 else None
+            entry = item.data(Qt.UserRole) if item is not None else None
+            entries = [entry] if entry else []
+        if not entries:
+            self.app.toast("请先勾选文件，或选中要分享的文件夹", "info")
+            return
+        fids = [str(entry.get("fid") or "") for entry in entries if entry.get("fid")]
+        if not fids:
+            self.app.toast("选中的项目没有文件标识，无法分享", "error")
+            return
+        default = (str(entries[0].get("file_name") or "") if len(entries) == 1
+                   else f"分享 {len(entries)} 项")
+        dialog = ShareDialog(self, default)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        options = dialog.options()
+        self.share_btn.setEnabled(False)
+        self._append_log(f"正在创建分享：{len(fids)} 项")
+
+        def work():
+            client = qbackup.build_client("quark")
+            return client.create_share(fids, options["title"],
+                                       expire=options["expire"], passcode=options["passcode"])
+
+        def done(result, err):
+            self.share_btn.setEnabled(True)
+            if err:
+                self._append_log(f"分享失败：{err}")
+                self.app.toast(f"分享失败：{err}", "error")
+                return
+            url, code = result
+            self._append_log(f"分享链接：{url}" + (f"  提取码：{code}" if code else ""))
+            QGuiApplication.clipboard().setText(url)
+            self.app.toast("分享链接已复制到剪贴板", "success")
+
+        run_bg(work, done, owner=self)
 
     # ==================== 下载 ====================
 
