@@ -303,6 +303,13 @@ class DouyinDanmakuPage(BasePage):
                              "合并成一个完整回放包（弹幕/礼物/统计数据；视频文件不参与合并）")
         merge_btn.clicked.connect(self._merge_replay_zips_dialog)
         tb.addWidget(merge_btn)
+        danmaku_txt_btn = QPushButton("转弹幕机 TXT")
+        danmaku_txt_btn.setToolTip(
+            "选择 .jsonl（抖音/录播姬）或 .xml（B站）弹幕文件，可多选，\n"
+            "批量转成弹幕机可读的 TXT：每行 HH:mm:ss.SSS|[昵称]：内容，\n"
+            "最早一条对齐 00:00:00.000；输出到导出目录「弹幕文件」目录")
+        danmaku_txt_btn.clicked.connect(self._convert_danmaku_txt)
+        tb.addWidget(danmaku_txt_btn)
         self.save_stats_var = QCheckBox("保存统计")
         self.save_stats_var.setChecked(bool(self.settings.get("save_stats", False)))
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
@@ -890,6 +897,41 @@ class DouyinDanmakuPage(BasePage):
             self, "选择回放包", "", "回放包 (*.zip *.json)")
         if path:
             self.load_replay_zip(path)
+
+    # ======================== 转弹幕机 TXT ========================
+
+    def _convert_danmaku_txt(self):
+        """选 .jsonl / B站 XML → 弹幕机 TXT（HH:mm:ss.SSS|[昵称]：内容）。"""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择要转换的弹幕文件（可多选）", "",
+            "弹幕文件 (*.jsonl *.xml);;所有文件 (*)")
+        if not paths:
+            return
+        out_dir = self._backend()._danmaku_dir()
+
+        def work():
+            from toolbox.danmaku_convert import convert_many
+            return convert_many(paths, out_dir)
+
+        def done(result, err=None):
+            if err or not isinstance(result, dict):
+                self.app.toast(f"转换失败：{err or '未知错误'}", "error")
+                return
+            files, failed = result["files"], result["failed"]
+            if files:
+                if len(files) == 1:
+                    msg = (f"已转换 {files[0]['count']} 条 → "
+                           f"{os.path.basename(files[0]['out'])}")
+                else:
+                    total = sum(f["count"] for f in files)
+                    msg = f"已转换 {len(files)} 个文件、{total} 条弹幕 → 弹幕文件目录"
+                self.app.toast(msg, "success")
+            if failed:
+                text = (failed[0]["error"] if len(failed) == 1
+                        else f"{len(failed)} 个文件转换失败：{failed[0]['error']}")
+                self.app.toast(text, "warning")
+
+        run_bg(work, done)
 
     # ======================== 合并回放包（断线多段 → 一段完整） ========================
 
