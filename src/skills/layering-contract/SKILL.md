@@ -121,7 +121,7 @@ L1 入口/任务编排
 
 以下是审计中反复出现的模式，不代表已经自动修复；涉及对应模块时逐项确认现状，不要批量返工：
 
-- **L2 承载 L3（剩余）**：`asset` 的目录扫描/平台下载/记录导出/资产索引；信息获取采集、首页统计、回放包、账号 diff、标签匹配已完成服务下沉。
+- **L2 承载 L3（剩余）**：`asset` 的目录扫描/平台下载/记录导出/资产索引；采集任务采集、首页统计、回放包、账号 diff、标签匹配已完成服务下沉。
 - **已修复（2026-11-17 P4）**：`exporters/wechat_writer.py` 的 PDF 已上移 GUI；`toolbox/live_video.py` 改注入调度；`toolbox/webwiki/server.py` 改用 `toolbox.process_tree`。
 - **L5 数据多轨**：`collected.db` 与 `increment.db`、`asset_index.db` 与 `_assets_index.json`、网媒/音乐/信息获取三套账号存储。
 - 这些偏差不因本 skill 新增而自动回滚；只在新代码或触及该链路时按授权范围收敛，保留既有行为并补测试。

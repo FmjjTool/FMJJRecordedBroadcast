@@ -73,8 +73,8 @@ class OrganizePage(BasePage):
         source_row.addStretch(1)
         layout.addLayout(source_row)
         rename_row = QHBoxLayout()
-        rename_row.addWidget(QLabel("下一步：视频交互重命名完成后，再在重命名页投稿"), 1)
-        rename_button = QPushButton("前往交互重命名 / 投稿")
+        rename_row.addWidget(QLabel("下一步：在命名投稿页完成命名后，再投稿"), 1)
+        rename_button = QPushButton("前往命名投稿")
         rename_button.clicked.connect(self._open_rename)
         rename_row.addWidget(rename_button)
         layout.addLayout(rename_row)
@@ -253,7 +253,7 @@ class OrganizePage(BasePage):
                 for date, items in self.groups.items() for item in items]
         ret = QMessageBox.question(
             self, "确认",
-            f"将迁移/整理 {len(plan)} 个视频到：\n{root}\n\n同名自动编号，目标校验成功后删除来源。\n完成后请前往交互重命名页处理，再投稿。\n确认执行？",
+            f"将迁移/整理 {len(plan)} 个视频到：\n{root}\n\n同名自动编号，目标校验成功后删除来源。\n完成后请前往命名投稿页处理，再投稿。\n确认执行？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
@@ -277,7 +277,7 @@ class OrganizePage(BasePage):
                                   for reason in (item.get("companion_skipped") or [])]
             extra = f"，带出弹幕/封面等 {attached} 个附属文件" if attached else ""
             self._log(f"整理完成：成功 {success}，失败 {len(results) - success}{extra}。"
-                      "下一步请前往交互重命名页；此处不会上传投稿。")
+                      "下一步请前往命名投稿页；此处不会上传投稿。")
             if skipped_companions:
                 self._log("附属文件跳过：" + "；".join(skipped_companions[:5]))
             self._scan()
@@ -346,7 +346,7 @@ class OrganizePage(BasePage):
                     return
                 ok = sum(1 for item in results if item["ok"])
                 self._log(f"来源迁移完成：成功 {ok}，失败 {len(results) - ok}。"
-                          "下一步请前往交互重命名页处理，再投稿。")
+                          "下一步请前往命名投稿页处理，再投稿。")
                 self._update_dir_date_label()
 
             run_bg(migrate, migrated, owner=self)

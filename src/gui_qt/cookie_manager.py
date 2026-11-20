@@ -689,6 +689,17 @@ class CookieManagerDialog(QDialog):
             "did", "didv", "clientid", "kpf", "kpn",
             "_bl_uid", "__aegis_uid", "kwfv1", "ktrace-context",
         }
+        # 抖音特例：回种旧的登录票据（sessionid/sid_guard…）会让页面直接显示已登录，
+        # 用户点「已获取」只是把过期票据又存一遍 —— 登录态永远刷新不了（2026-11 实测）。
+        # 只回种设备/环境字段，登录票全部靠本次新登录种下。
+        _DY_LOGIN_DROP = {
+            "sessionid", "sessionid_ss", "sid_tt", "sid_guard", "sid_ucp_v1",
+            "ssid_ucp_v1", "uid_tt", "uid_tt_ss", "session_tlb_tag",
+            "passport_csrf_token", "passport_csrf_token_default",
+            "passport_auth_mix_state", "passport_mfa_token", "d_ticket",
+            "n_mh", "csrf_session_id", "login_time", "is_staff_user",
+            "has_biz_token", "x_tt_token",
+        }
         if plat not in configs:
             QMessageBox.information(self, "提示", f"{plat} 暂不支持浏览器登录，请使用「输入」")
             return
@@ -1077,6 +1088,12 @@ class CookieManagerDialog(QDialog):
                         stored = "; ".join(
                             p.strip() for p in stored.split(";")
                             if p.strip().split("=")[0].strip() in keep)
+                    elif plat == "douyin":
+                        # 抖音同理：过期 sessionid 回种后页面显示「已登录」，
+                        # 点「已获取」只会把旧票再存一遍（2026-11 实测）
+                        stored = "; ".join(
+                            p.strip() for p in stored.split(";")
+                            if p.strip().split("=")[0].strip() not in _DY_LOGIN_DROP)
                     if stored:
                         from urllib.parse import urlparse
                         h = urlparse(url).hostname or ""

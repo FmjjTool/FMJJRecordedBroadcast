@@ -28,22 +28,24 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QFontDatabase, QIcon, QImage, QImageReader,
-    QPainter, QPalette, QPen, QPixmap, QTextLayout, QTextOption,
+    QPainter, QPainterPath, QPalette, QPen, QPixmap, QTextLayout, QTextOption,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QFontComboBox, QGridLayout, QGroupBox, QHBoxLayout,
+    QFileDialog, QFontComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QListView,
-    QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
-    QTextEdit, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
+    QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox import image_render
 from toolbox.config_manager import get_config_dir, get_export_dir
 
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.theme import is_dark
+from gui_qt.theme import current_palette, is_dark
+from gui_qt.toolbox_common import ElidedLabel
 
 # ==================== 常量 ====================
 
@@ -54,9 +56,9 @@ CANVAS_BG_FALLBACK = _CANVAS_TOKENS["bg"]   # 无底图/留白时的画布底色
 FIELD_KEYS = ("title", "date", "remark")
 FIELD_LABELS = {"title": "标题", "date": "日期", "remark": "备注"}
 FIELD_PLACEHOLDERS = {
-    "title": "输入标题文字（预览区可直接拖动定位）",
-    "date": "输入日期文字，如 2026-09-05",
-    "remark": "多行备注，支持自动换行",
+    "title": "封面标题",
+    "date": "日期，如 2026-09-05",
+    "remark": "备注（可换行，留空不显示）",
 }
 
 DEFAULT_FONT_FAMILY = "Microsoft YaHei"
@@ -74,9 +76,6 @@ ALIGN_ITEMS = [("居中", "center"), ("左对齐", "left"), ("右对齐", "right
 
 EXPORT_RESOLUTIONS = ["1920x1080", "2560x1440", "3840x2160", "1280x720"]
 JPG_QUALITY_MIN, JPG_QUALITY_MAX, JPG_QUALITY_DEFAULT = 60, 100, 95
-
-PREVIEW_LETTERBOX = "#101216"   # 预览组件画框底色（深浅主题固定）
-DRAG_HINT_COLOR = _CANVAS_TOKENS["warning"]
 
 # 滚轮拦截/弹窗主题控件（见 NoWheelMixin / force_combo_popup_theme）
 COMBO_POPUP_BG = {"light": "#ffffff", "dark": "#23262f"}
@@ -146,9 +145,9 @@ class FieldState:
 def default_states() -> Dict[str, FieldState]:
     """默认三字段布局：三行垂直居中。"""
     return {
-        "title": FieldState(font_size_ratio=88.0 / CANVAS_REF_H, y_ratio=0.40),
-        "date": FieldState(font_size_ratio=44.0 / CANVAS_REF_H, y_ratio=0.54),
-        "remark": FieldState(font_size_ratio=32.0 / CANVAS_REF_H, y_ratio=0.67),
+        "title": FieldState(font_size_ratio=88.0 / CANVAS_REF_H, y_ratio=0.38),
+        "date": FieldState(font_size_ratio=44.0 / CANVAS_REF_H, y_ratio=0.55),
+        "remark": FieldState(font_size_ratio=32.0 / CANVAS_REF_H, y_ratio=0.68),
     }
 
 
@@ -229,8 +228,8 @@ def _measure_block(text: str, font: QFont, max_w: float
 
 
 def render_cover(width: int, height: int, bg: Optional[QImage], fit_mode: str,
-                 states: Dict[str, FieldState], y_shift_ratio: float = 0.0,
-                 draw_hint: bool = True) -> Tuple[QImage, Dict[str, QRectF]]:
+                 states: Dict[str, FieldState],
+                 y_shift_ratio: float = 0.0) -> Tuple[QImage, Dict[str, QRectF]]:
     """渲染封面画布，返回 (图像, 各字段文字块几何区域)。
 
     bg 为已按画布尺寸缓存缩放的底图（或原始图，内部二次等比缩放为幂等操作）。
@@ -254,13 +253,6 @@ def render_cover(width: int, height: int, bg: Optional[QImage], fit_mode: str,
                                Qt.TransformationMode.SmoothTransformation)
             painter.drawImage((width - scaled.width()) // 2,
                               (height - scaled.height()) // 2, scaled)
-    elif draw_hint:
-        hint_font = QFont(DEFAULT_FONT_FAMILY)
-        hint_font.setPixelSize(max(14, height // 36))
-        painter.setFont(hint_font)
-        painter.setPen(QColor("#8a93a5"))
-        painter.drawText(image.rect(), Qt.AlignmentFlag.AlignCenter,
-                         "暂无底图 · 点击「随机底图」或「上传图片」添加")
 
     # 2. 三段文字
     geoms: Dict[str, QRectF] = {}
@@ -612,7 +604,7 @@ class BackgroundPickerDialog(QDialog):
         v.addWidget(self.listw, 1)
 
         hint = QLabel("双击方块或选中后点「使用此图」；缩略图在后台逐张生成")
-        hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
+        hint.setStyleSheet("font-size: 11px; color: palette(placeholder-text);")
         v.addWidget(hint)
 
         btns = QHBoxLayout()
@@ -903,7 +895,10 @@ class ColorPickerDialog(QDialog):
 # ==================== 字段控制面板 ====================
 
 class FieldPanel(QWidget):
-    """单个文字字段控件组（文本/字体/字号/颜色/粗斜体/对齐），直接写入 FieldState。"""
+    """单个文字字段控件组（文本/字体/字号/颜色/粗斜体/对齐），直接写入 FieldState。
+
+    紧凑三行：字段名 + 对齐 / 文本输入 / 字体 + 字号 + 颜色 + B + I。
+    """
 
     def __init__(self, key: str, label: str, multiline: bool, placeholder: str,
                  on_change: Callable[[], None],
@@ -917,85 +912,87 @@ class FieldPanel(QWidget):
         self._on_change = on_change
         self._on_attr = on_attr_change
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        box = QGroupBox(label, self)
-        outer.addWidget(box)
-        v = QVBoxLayout(box)
-        v.setContentsMargins(8, 8, 8, 8)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(6)
+
+        # 字段名 + 对齐
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        name = QLabel(label, self)
+        name.setProperty("role", "sectionTitle")
+        head.addWidget(name)
+        head.addStretch(1)
+        self.align_combo = NoWheelComboBox(self)
+        self.align_combo.setToolTip("对齐方式（决定文字块水平锚点含义）")
+        for text, _key in ALIGN_ITEMS:
+            self.align_combo.addItem(text)
+        self.align_combo.setFixedWidth(76)
+        head.addWidget(self.align_combo)
+        v.addLayout(head)
 
         # 文本
         if multiline:
-            self.text_edit = QTextEdit()
+            self.text_edit = QTextEdit(self)
             self.text_edit.setPlaceholderText(placeholder)
-            self.text_edit.setFixedHeight(72)
+            self.text_edit.setFixedHeight(58)
             self.text_edit.textChanged.connect(self._on_text_changed)
         else:
-            self.text_edit = QLineEdit()
+            self.text_edit = QLineEdit(self)
             self.text_edit.setPlaceholderText(placeholder)
             self.text_edit.setClearButtonEnabled(True)
             self.text_edit.textChanged.connect(self._on_text_changed)
         v.addWidget(self.text_edit)
 
-        # 字体 + 对齐（NoWheel：滚轮不改值；字体下拉可输入识别）
-        row1 = QHBoxLayout()
-        self.font_combo = NoWheelFontComboBox()
+        # 字体 + 字号 + 颜色 + 粗斜体（一行排完，滚轮不改值）
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.font_combo = NoWheelFontComboBox(self)
         self.font_combo.setToolTip(
             "文字字体（下拉选择，或直接输入字体名回车识别；滚轮不改变字体）")
-        self.font_combo.setMinimumWidth(150)
-        row1.addWidget(self.font_combo, 1)
-        self.align_combo = NoWheelComboBox()
-        self.align_combo.setToolTip("对齐方式（决定文字块水平锚点含义）")
-        for text, _key in ALIGN_ITEMS:
-            self.align_combo.addItem(text)
-        row1.addWidget(self.align_combo)
-        v.addLayout(row1)
-
-        # 字号滑条（1080p 基准 px，底层存比例；NoWheel：滚轮不改值）
-        row2 = QHBoxLayout()
-        size_lab = QLabel("字号")
-        size_lab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        row2.addWidget(size_lab)
-        self.size_slider = NoWheelSlider(Qt.Orientation.Horizontal)
-        self.size_slider.setRange(FONT_SIZE_MIN, FONT_SIZE_MAX)
-        self.size_slider.setValue(48)
-        self.size_slider.setToolTip("1080p 基准字号（其他分辨率按画布高度等比缩放）")
-        row2.addWidget(self.size_slider, 1)
-        self.size_label = QLabel("48")
-        self.size_label.setMinimumWidth(34)
-        self.size_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row2.addWidget(self.size_label)
-        v.addLayout(row2)
-
-        # 颜色 + 加粗/斜体
-        row3 = QHBoxLayout()
-        self.color_btn = QPushButton()
-        self.color_btn.setFixedSize(34, 24)
+        self.font_combo.setMinimumWidth(80)
+        self.font_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.font_combo.setMinimumContentsLength(6)
+        self.font_combo.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                      QSizePolicy.Policy.Fixed)
+        row.addWidget(self.font_combo, 1)
+        self.size_spin = NoWheelSpinBox(self)
+        self.size_spin.setRange(FONT_SIZE_MIN, FONT_SIZE_MAX)
+        self.size_spin.setSingleStep(2)
+        self.size_spin.setValue(48)
+        self.size_spin.setFixedWidth(72)
+        self.size_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.size_spin.setToolTip("1080p 基准字号（其他分辨率按画布高度等比缩放）")
+        row.addWidget(self.size_spin)
+        self.color_btn = QPushButton(self)
+        self.color_btn.setFixedSize(30, 28)
         self.color_btn.setStyleSheet(icon_btn_style(
-            emoji=False, extra="border: 1px solid #d0d6df;"))
+            emoji=False, extra="padding: 0; border: 1px solid palette(mid);"
+                              " border-radius: 4px;"))
         self.color_btn.setToolTip("选择文字颜色")
         self.color_btn.clicked.connect(self._pick_color)
-        row3.addWidget(self.color_btn)
-        self.bold_btn = QPushButton("B")
-        self.bold_btn.setFixedSize(30, 24)
+        row.addWidget(self.color_btn)
+        self.bold_btn = QPushButton("B", self)
+        self.bold_btn.setFixedSize(28, 28)
         self.bold_btn.setCheckable(True)
-        self.bold_btn.setStyleSheet(icon_btn_style(emoji=False, extra="font-weight: 700;"))
+        self.bold_btn.setStyleSheet(icon_btn_style(
+            emoji=False, extra="padding: 0; font-weight: bold;"))
         self.bold_btn.setToolTip("加粗")
         self.bold_btn.toggled.connect(self._on_bold)
-        row3.addWidget(self.bold_btn)
-        self.italic_btn = QPushButton("I")
-        self.italic_btn.setFixedSize(30, 24)
+        row.addWidget(self.bold_btn)
+        self.italic_btn = QPushButton("I", self)
+        self.italic_btn.setFixedSize(28, 28)
         self.italic_btn.setCheckable(True)
-        self.italic_btn.setStyleSheet(icon_btn_style(emoji=False, extra="font-style: italic;"))
+        self.italic_btn.setStyleSheet(icon_btn_style(
+            emoji=False, extra="padding: 0; font-style: italic;"))
         self.italic_btn.setToolTip("斜体")
         self.italic_btn.toggled.connect(self._on_italic)
-        row3.addWidget(self.italic_btn)
-        row3.addStretch(1)
-        v.addLayout(row3)
+        row.addWidget(self.italic_btn)
+        v.addLayout(row)
 
         self.font_combo.currentFontChanged.connect(self._on_font_changed)
-        self.size_slider.valueChanged.connect(self._on_size_changed)
+        self.size_spin.valueChanged.connect(self._on_size_changed)
         self.align_combo.currentIndexChanged.connect(self._on_align_changed)
 
     # ---------- 状态同步 ----------
@@ -1011,8 +1008,7 @@ class FieldPanel(QWidget):
             self.font_combo.setCurrentFont(QFont(state.font_family))
             size = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX,
                                           round(state.font_size_ratio * CANVAS_REF_H)))
-            self.size_slider.setValue(size)
-            self.size_label.setText(str(size))
+            self.size_spin.setValue(size)
             align_keys = [k for _t, k in ALIGN_ITEMS]
             index = align_keys.index(state.alignment) if state.alignment in align_keys else 0
             self.align_combo.setCurrentIndex(index)
@@ -1023,10 +1019,18 @@ class FieldPanel(QWidget):
             self._applying = False
 
     def _refresh_color_icon(self):
-        pm = QPixmap(20, 14)
-        pm.fill(QColor(self.state.color if self.state else DEFAULT_TEXT_COLOR))
+        color = QColor(self.state.color if self.state else DEFAULT_TEXT_COLOR)
+        pm = QPixmap(16, 12)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QColor(current_palette().color(QPalette.ColorRole.Mid)))
+        painter.setBrush(color)
+        painter.drawRoundedRect(QRectF(0.5, 0.5, 15, 11), 2, 2)
+        painter.end()
         self.color_btn.setIcon(QIcon(pm))
-        self.color_btn.setIconSize(QSize(20, 14))
+        self.color_btn.setIconSize(QSize(16, 12))
+        self.color_btn.setToolTip(f"文字颜色 {color.name().upper()}")
 
     # ---------- 控件事件（写入 state） ----------
 
@@ -1065,7 +1069,6 @@ class FieldPanel(QWidget):
         self._notify_attr("font")
 
     def _on_size_changed(self, value: int):
-        self.size_label.setText(str(value))
         if self._applying or self.state is None:
             return
         self.state.font_size_ratio = value / float(CANVAS_REF_H)
@@ -1131,8 +1134,7 @@ class FieldPanel(QWidget):
         self.state.font_size_ratio = size / float(CANVAS_REF_H)
         self._applying = True
         try:
-            self.size_slider.setValue(size)
-            self.size_label.setText(str(size))
+            self.size_spin.setValue(size)
         finally:
             self._applying = False
 
@@ -1147,18 +1149,21 @@ class CoverPreview(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setMinimumSize(480, 270)
+        self.setToolTip("预览区可直接拖动文字调整位置")
         self._image = QImage()
         self._geoms: Dict[str, QRectF] = {}
         self._anchors: Dict[str, Tuple[float, float]] = {}
         self._drag_key: Optional[str] = None
         self._grab = QPointF()
         self._on_drag = on_drag
+        self._empty = True
 
     def set_canvas(self, image: QImage, geoms: Dict[str, QRectF],
-                   anchors: Dict[str, Tuple[float, float]]):
+                   anchors: Dict[str, Tuple[float, float]], empty: bool = True):
         self._image = image
         self._geoms = geoms
         self._anchors = anchors
+        self._empty = empty
         self.update()
 
     def _scale_offset(self) -> Tuple[float, QPointF]:
@@ -1184,22 +1189,74 @@ class CoverPreview(QWidget):
         return None
 
     def paintEvent(self, _event):
+        pal = current_palette()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(PREVIEW_LETTERBOX))
-        if not self._image.isNull():
-            s, off = self._scale_offset()
-            target = QRectF(off.x(), off.y(),
-                            self._image.width() * s, self._image.height() * s)
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-            painter.drawImage(target, self._image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.fillRect(self.rect(), pal.color(QPalette.ColorRole.AlternateBase))
+        if self._image.isNull():
+            painter.end()
+            return
+
+        s, off = self._scale_offset()
+        target = QRectF(off.x(), off.y(),
+                        self._image.width() * s, self._image.height() * s)
+        clip = QPainterPath()
+        clip.addRoundedRect(target, 8, 8)
+        painter.save()
+        painter.setClipPath(clip)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawImage(target, self._image)
+        painter.restore()
+        painter.setPen(QPen(pal.color(QPalette.ColorRole.Shadow), 1))
+        painter.drawRoundedRect(target.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+
+        if self._empty:
+            self._paint_empty_hint(painter, target, pal)
+
         if self._drag_key and self._drag_key in self._geoms:
             rect = self._geoms[self._drag_key]
-            s, off = self._scale_offset()
             shown = QRectF(off.x() + rect.x() * s, off.y() + rect.y() * s,
                            rect.width() * s, rect.height() * s)
-            painter.setPen(QPen(QColor(DRAG_HINT_COLOR), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor(pal.color(QPalette.ColorRole.Link)), 1,
+                                Qt.PenStyle.DashLine))
             painter.drawRect(shown)
         painter.end()
+
+    def _paint_empty_hint(self, painter: QPainter, target: QRectF, pal: QPalette):
+        """无底图时的画布内引导（只画在预览层，不进导出图）。"""
+        pen = QPen(QColor(pal.color(QPalette.ColorRole.Mid)), 1,
+                   Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        inner = target.adjusted(12, 12, -12, -12)
+        painter.drawRoundedRect(inner, 6, 6)
+
+        center = inner.center()
+        if self._geoms:
+            # 已有文字时只在顶部留一行提示，避免压住文字
+            rect = QRectF(inner.x(), inner.y() + 8, inner.width(), 20)
+            font = QFont()
+            font.setPixelSize(12)
+            painter.setFont(font)
+            painter.setPen(QColor(pal.color(QPalette.ColorRole.PlaceholderText)))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter, "当前无底图")
+            return
+
+        font = QFont()
+        font.setPixelSize(15)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(pal.color(QPalette.ColorRole.WindowText)))
+        painter.drawText(QRectF(inner.x(), center.y() - 26, inner.width(), 22),
+                         Qt.AlignmentFlag.AlignCenter, "暂无底图")
+        font.setPixelSize(12)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor(pal.color(QPalette.ColorRole.PlaceholderText)))
+        painter.drawText(
+            QRectF(inner.x() + 16, center.y() - 2, inner.width() - 32, 40),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            "用右上角「随机底图 / 选择底图 / 上传图片」添加底图")
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton or self._image.isNull():
@@ -1281,14 +1338,17 @@ class CoverMakerPage(BasePage):
         self.provider = BackgroundProvider(folder)
         self._bg_path: Optional[Path] = None
         self.cached_export_image: Optional[QImage] = None
+        self._icons: List[Tuple[QWidget, str, str]] = []
 
-        self._build_ui()
-        self._restore_widgets(section)
-
+        # 预览节流定时器必须在构建控件前就绪：_restore_widgets 恢复滑条/数值框
+        # 会触发 valueChanged -> _schedule_preview。
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(10)
         self._debounce.timeout.connect(self._render_preview)
+
+        self._build_ui()
+        self._restore_widgets(section)
 
         # 初始底图：上次使用（文件仍在）> 随机抽取
         stored_bg = str(section.get("bg_path") or "")
@@ -1302,60 +1362,133 @@ class CoverMakerPage(BasePage):
 
     # ---------- UI ----------
 
+    def _register_icon(self, widget: QWidget, name: str, role: str = "button"):
+        self._icons.append((widget, name, role))
+        self._apply_icon(widget, name, role)
+
+    def _apply_icon(self, widget: QWidget, name: str, role: str):
+        widget.setIcon(line_icon(name, self._icon_color(role), 16))
+        widget.setIconSize(QSize(16, 16))
+
+    @staticmethod
+    def _icon_color(role: str) -> str:
+        pal = current_palette()
+        if role == "primary":
+            return pal.color(QPalette.ColorRole.HighlightedText).name()
+        if role == "title":
+            return pal.color(QPalette.ColorRole.Link).name()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def on_theme_changed(self):
+        for widget, name, role in self._icons:
+            self._apply_icon(widget, name, role)
+        for panel in self.panels.values():
+            panel._refresh_color_icon()
+        self.preview.update()
+
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    @staticmethod
+    def _separator(vertical: bool = False) -> QFrame:
+        line = QFrame()
+        line.setStyleSheet("background: palette(shadow); border: none;")
+        if vertical:
+            line.setFixedWidth(1)
+        else:
+            line.setFixedHeight(1)
+        return line
+
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
-        head = QHBoxLayout()
-        title = QLabel("套版封面制作")
-        font = QFont()
-        font.setPointSize(11)
-        font.setBold(True)
-        title.setFont(font)
-        head.addWidget(title)
-        head.addStretch(1)
+        root.addWidget(self._build_toolbar())
 
-        self.random_bg_btn = QPushButton("随机底图")
-        self.random_bg_btn.clicked.connect(self._on_random_bg)
-        head.addWidget(self.random_bg_btn)
-        self.pick_bg_btn = QPushButton("选择底图")
-        self.pick_bg_btn.setToolTip("浏览底图文件夹缩略图，指定哪张图片作为当前底图（蒙版）")
-        self.pick_bg_btn.clicked.connect(self._on_pick_bg)
-        head.addWidget(self.pick_bg_btn)
-        self.upload_btn = QPushButton("上传图片")
-        self.upload_btn.setToolTip("选择本地图片临时替换当前底图（不写入底图文件夹）")
-        self.upload_btn.clicked.connect(self._on_upload_bg)
-        head.addWidget(self.upload_btn)
-        self.fit_combo = NoWheelComboBox()
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self._build_left_panel())
+        self.splitter.addWidget(self._build_right_panel())
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([366, 780])
+        root.addWidget(self.splitter, 1)
+
+    def _build_toolbar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 10)
+        h.setSpacing(8)
+
+        # 左段：底图文件夹（原左栏「底图」卡片并入这里）
+        self.folder_label = ElidedLabel("")
+        self.folder_label.setMinimumWidth(120)
+        h.addWidget(self.folder_label, 1)
+
+        self.bg_count_label = self._caption("0 张")
+        self.bg_count_label.setMinimumWidth(36)
+        self.bg_count_label.setToolTip("底图文件夹内可随机抽取的图片数量")
+        h.addWidget(self.bg_count_label)
+
+        self.folder_btn = QPushButton("更换文件夹", bar)
+        self.folder_btn.setProperty("variant", "secondary")
+        self.folder_btn.setToolTip("选择底图文件夹（递归扫描内部全部图片）")
+        self.folder_btn.clicked.connect(self._on_change_bg_folder)
+        self._register_icon(self.folder_btn, "folder")
+        h.addWidget(self.folder_btn)
+
+        self.rescan_btn = QPushButton("重新扫描", bar)
+        self.rescan_btn.setProperty("variant", "secondary")
+        self.rescan_btn.setToolTip("重新扫描当前底图文件夹，新增图片会立即参与随机抽取")
+        self.rescan_btn.clicked.connect(self._on_rescan)
+        self._register_icon(self.rescan_btn, "pulse")
+        h.addWidget(self.rescan_btn)
+
+        h.addSpacing(4)
+        h.addWidget(self._caption("底图适配"))
+        self.fit_combo = NoWheelComboBox(bar)
         self.fit_combo.setToolTip(
             "裁剪填充：底图等比放大铺满画布并居中裁切；完整包含：整图可见，留白填充")
         for text, _key in FIT_ITEMS:
             self.fit_combo.addItem(text)
+        self.fit_combo.setMinimumWidth(122)
         self.fit_combo.currentIndexChanged.connect(self._on_fit_changed)
-        head.addWidget(self.fit_combo)
-        root.addLayout(head)
+        h.addWidget(self.fit_combo)
 
-        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        self.splitter.addWidget(self._build_left_panel())
-        self.splitter.addWidget(self._build_right_panel())
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 2)
-        self.splitter.setSizes([380, 760])
-        root.addWidget(self.splitter, 1)
+        self.random_bg_btn = QPushButton("随机底图", bar)
+        self.random_bg_btn.setProperty("variant", "secondary")
+        self.random_bg_btn.setToolTip("从底图文件夹递归扫描的图片里随机抽取一张")
+        self.random_bg_btn.clicked.connect(self._on_random_bg)
+        self._register_icon(self.random_bg_btn, "dice")
+        h.addWidget(self.random_bg_btn)
 
-        self.status_label = QLabel("")
-        root.addWidget(self.status_label)
+        self.pick_bg_btn = QPushButton("选择底图", bar)
+        self.pick_bg_btn.setProperty("variant", "secondary")
+        self.pick_bg_btn.setToolTip("浏览底图文件夹缩略图，指定哪张图片作为当前底图（蒙版）")
+        self.pick_bg_btn.clicked.connect(self._on_pick_bg)
+        self._register_icon(self.pick_bg_btn, "image")
+        h.addWidget(self.pick_bg_btn)
+
+        self.upload_btn = QPushButton("上传图片", bar)
+        self.upload_btn.setProperty("variant", "secondary")
+        self.upload_btn.setToolTip("选择本地图片临时替换当前底图（不写入底图文件夹）")
+        self.upload_btn.clicked.connect(self._on_upload_bg)
+        self._register_icon(self.upload_btn, "upload")
+        h.addWidget(self.upload_btn)
+        return bar
 
     def _build_left_panel(self) -> QWidget:
         scroll = QScrollArea(self.splitter)
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            "QScrollArea { background-color: #ffffff; border: 1px solid #d0d6df;"
-            " border-radius: 4px; }"
-        )
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setMinimumWidth(320)
-        scroll.setMaximumWidth(460)
+        scroll.setMaximumWidth(430)
         body = QWidget(scroll)
         # 必须用带选择器的样式表：无选择器样式表会传播给全部后代，包括以本栏
         # 控件为父的对话框（ColorPickerDialog），background: transparent 会覆盖
@@ -1363,93 +1496,24 @@ class CoverMakerPage(BasePage):
         body.setObjectName("coverMakerLeftBody")
         body.setStyleSheet("QWidget#coverMakerLeftBody { background: transparent; }")
         lv = QVBoxLayout(body)
-        lv.setContentsMargins(8, 8, 8, 8)
-        lv.setSpacing(10)
+        lv.setContentsMargins(0, 0, 6, 0)
+        lv.setSpacing(12)
 
-        # 底图组
-        bg_box = QGroupBox("底图")
-        bgv = QVBoxLayout(bg_box)
-        bgv.setContentsMargins(8, 8, 8, 8)
-        bgv.setSpacing(6)
-        self.folder_label = QLabel("")
-        self.folder_label.setWordWrap(True)
-        self.folder_label.setStyleSheet("color: #5a6474;")
-        bgv.addWidget(self.folder_label)
-        row = QHBoxLayout()
-        self.folder_btn = QPushButton("更换底图文件夹")
-        self.folder_btn.clicked.connect(self._on_change_bg_folder)
-        row.addWidget(self.folder_btn, 1)
-        self.rescan_btn = QPushButton("重新扫描")
-        self.rescan_btn.clicked.connect(self._on_rescan)
-        row.addWidget(self.rescan_btn)
-        bgv.addLayout(row)
-        self.bg_count_label = QLabel("已扫描 0 张图片")
-        bg_count_style = "font-size: 12px; color: #6b7280;"
-        self.bg_count_label.setStyleSheet(bg_count_style)
-        bgv.addWidget(self.bg_count_label)
-        hint = QLabel("随机底图从文件夹递归抽取全部图片；「上传图片」仅临时替换当前底图")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
-        bgv.addWidget(hint)
-        lv.addWidget(bg_box)
+        lv.addWidget(self._build_style_card())
 
-        # 同步样式组
-        sync_box = QGroupBox("同步样式")
-        sync_box.setStyleSheet("QGroupBox { font-weight: 600; }")
-        sh = QVBoxLayout(sync_box)
-        sh.setContentsMargins(8, 8, 8, 8)
-        sh.setSpacing(6)
-        srow = QHBoxLayout()
-        self.sync_font_cb = QCheckBox("同步字体")
-        self.sync_font_cb.setToolTip("修改任一字段字体时同步到其余字段")
-        self.sync_color_cb = QCheckBox("同步颜色")
-        self.sync_color_cb.setToolTip("修改任一字段颜色时同步到其余字段")
-        self.sync_size_cb = QCheckBox("同步字号")
-        self.sync_size_cb.setToolTip("修改任一字段字号时同步到其余字段")
-        srow.addWidget(self.sync_font_cb)
-        srow.addWidget(self.sync_color_cb)
-        srow.addWidget(self.sync_size_cb)
-        srow.addStretch(1)
-        sh.addLayout(srow)
-        sync_hint = QLabel("开启后，修改任一字段的该属性会立即同步应用到其余两个字段")
-        sync_hint.setWordWrap(True)
-        sync_hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
-        sh.addWidget(sync_hint)
-        lv.addWidget(sync_box)
-
-        # 三字段面板
-        self.panels: Dict[str, FieldPanel] = {}
-        for key in FIELD_KEYS:
-            panel = FieldPanel(key, FIELD_LABELS[key], multiline=(key == "remark"),
-                               placeholder=FIELD_PLACEHOLDERS[key],
-                               on_change=self._on_panel_changed,
-                               on_attr_change=self._on_panel_attr)
-            panel.set_state(self.states[key])
-            self.panels[key] = panel
-            lv.addWidget(panel)
-
-        # Y轴微调
-        yrow = QHBoxLayout()
-        ylab = QLabel("Y轴微调(整体)")
-        ylab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        ylab.setToolTip("全部文字整体上下平移（画布高度比例，正值下移/负值上移）")
-        yrow.addWidget(ylab)
-        self.y_spin = NoWheelDoubleSpinBox()
-        self.y_spin.setRange(-0.3, 0.3)
-        self.y_spin.setSingleStep(0.002)
-        self.y_spin.setDecimals(3)
-        self.y_spin.setToolTip("可直接输入数值；滚轮不改变值")
-        self.y_spin.valueChanged.connect(self._on_y_changed)
-        yrow.addWidget(self.y_spin, 1)
-        lv.addLayout(yrow)
-
-        # 模板行
         trow = QHBoxLayout()
+        trow.setSpacing(8)
         self.save_tpl_btn = QPushButton("保存模板")
+        self.save_tpl_btn.setProperty("variant", "secondary")
+        self.save_tpl_btn.setToolTip("把三字段样式、位置比例与当前底图存为模板（不含文字内容）")
         self.save_tpl_btn.clicked.connect(self._on_save_template)
+        self._register_icon(self.save_tpl_btn, "save")
         trow.addWidget(self.save_tpl_btn, 1)
         self.load_tpl_btn = QPushButton("加载模板")
+        self.load_tpl_btn.setProperty("variant", "secondary")
+        self.load_tpl_btn.setToolTip("加载已保存的模板样式与位置（不覆盖当前文字内容）")
         self.load_tpl_btn.clicked.connect(self._on_load_template)
+        self._register_icon(self.load_tpl_btn, "folder")
         trow.addWidget(self.load_tpl_btn, 1)
         lv.addLayout(trow)
 
@@ -1457,58 +1521,134 @@ class CoverMakerPage(BasePage):
         scroll.setWidget(body)
         return scroll
 
+    def _build_style_card(self) -> QFrame:
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("文字样式")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        head.addWidget(self._caption("同步"))
+        self.sync_font_cb = QCheckBox("字体")
+        self.sync_font_cb.setToolTip("改任一字段字体时，同步到其余两个字段")
+        self.sync_color_cb = QCheckBox("颜色")
+        self.sync_color_cb.setToolTip("改任一字段颜色时，同步到其余两个字段")
+        self.sync_size_cb = QCheckBox("字号")
+        self.sync_size_cb.setToolTip("改任一字段字号时，同步到其余两个字段")
+        for cb in (self.sync_font_cb, self.sync_color_cb, self.sync_size_cb):
+            head.addWidget(cb)
+        v.addLayout(head)
+
+        self.panels: Dict[str, FieldPanel] = {}
+        for index, key in enumerate(FIELD_KEYS):
+            if index:
+                v.addWidget(self._separator())
+            panel = FieldPanel(key, FIELD_LABELS[key], multiline=(key == "remark"),
+                               placeholder=FIELD_PLACEHOLDERS[key],
+                               on_change=self._on_panel_changed,
+                               on_attr_change=self._on_panel_attr)
+            panel.set_state(self.states[key])
+            self.panels[key] = panel
+            v.addWidget(panel)
+
+        v.addWidget(self._separator())
+        foot = QHBoxLayout()
+        foot.setSpacing(6)
+        ylab = self._caption("整体 Y 轴")
+        ylab.setToolTip("全部文字整体上下平移，正值下移")
+        foot.addWidget(ylab)
+        self.y_spin = NoWheelDoubleSpinBox()
+        self.y_spin.setRange(-30.0, 30.0)
+        self.y_spin.setSingleStep(0.5)
+        self.y_spin.setDecimals(1)
+        self.y_spin.setSuffix(" %")
+        self.y_spin.setFixedWidth(88)
+        self.y_spin.setToolTip("按画布高度百分比整体平移；滚轮不改变值")
+        self.y_spin.valueChanged.connect(self._on_y_changed)
+        foot.addWidget(self.y_spin)
+        foot.addStretch(1)
+        self.reset_pos_btn = QPushButton("重置位置")
+        self.reset_pos_btn.setProperty("variant", "secondary")
+        self.reset_pos_btn.setToolTip("恢复默认布局：三行垂直居中")
+        self.reset_pos_btn.clicked.connect(self._on_reset_positions)
+        self._register_icon(self.reset_pos_btn, "target")
+        foot.addWidget(self.reset_pos_btn)
+        v.addLayout(foot)
+        return card
+
     def _build_right_panel(self) -> QWidget:
         right = QWidget(self.splitter)
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(8)
+        rv.setSpacing(12)
 
-        row0 = QHBoxLayout()
-        self.reset_pos_btn = QPushButton("重置文字位置")
-        self.reset_pos_btn.setToolTip("恢复默认布局：三行垂直居中")
-        self.reset_pos_btn.clicked.connect(self._on_reset_positions)
-        row0.addWidget(self.reset_pos_btn)
-        row0.addStretch(1)
-        res_lab = QLabel("导出分辨率")
-        res_lab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        row0.addWidget(res_lab)
-        self.res_combo = NoWheelComboBox()
+        card = QFrame(right)
+        card.setProperty("variant", "card")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(10, 8, 10, 10)
+        cv.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self.status_label = ElidedLabel("当前底图：未选择", role="caption")
+        head.addWidget(self.status_label, 1)
+        cv.addLayout(head)
+        self.preview = CoverPreview(on_drag=self._on_drag_update, parent=card)
+        cv.addWidget(self.preview, 1)
+        rv.addWidget(card, 1)
+
+        bar = QFrame(right)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 8, 12, 8)
+        h.setSpacing(8)
+        self.res_combo = NoWheelComboBox(bar)
         self.res_combo.addItems(EXPORT_RESOLUTIONS)
-        self.res_combo.setMinimumWidth(110)
+        self.res_combo.setFixedWidth(118)
+        self.res_combo.setToolTip("导出分辨率：成品宽高（预览始终按 960x540 等比显示）")
         self.res_combo.currentTextChanged.connect(lambda _t: self._update_status())
-        row0.addWidget(self.res_combo)
-        rv.addLayout(row0)
+        h.addWidget(self.res_combo)
+        h.addWidget(self._separator(vertical=True))
 
-        self.preview = CoverPreview(on_drag=self._on_drag_update)
-        rv.addWidget(self.preview, 1)
-
-        row2 = QHBoxLayout()
-        qlab = QLabel("JPG质量")
-        qlab.setStyleSheet("font-weight: 600; color: #5a6474;")
-        self.quality_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        h.addWidget(self._caption("JPG 质量"))
+        self.quality_slider = NoWheelSlider(Qt.Orientation.Horizontal, bar)
         self.quality_slider.setRange(JPG_QUALITY_MIN, JPG_QUALITY_MAX)
         self.quality_slider.setValue(JPG_QUALITY_DEFAULT)
-        self.quality_slider.setMaximumWidth(160)
+        self.quality_slider.setMinimumWidth(80)
+        self.quality_slider.setMaximumWidth(130)
         self.quality_slider.setToolTip("滚轮不改变值，拖动或键盘调整")
-        self.quality_label = QLabel(str(JPG_QUALITY_DEFAULT))
-        self.quality_label.setMinimumWidth(28)
+        self.quality_label = QLabel(str(JPG_QUALITY_DEFAULT), bar)
+        self.quality_label.setMinimumWidth(26)
         self.quality_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.quality_slider.valueChanged.connect(self._on_quality_changed)
-        row2.addWidget(qlab)
-        row2.addWidget(self.quality_slider)
-        row2.addWidget(self.quality_label)
-        row2.addStretch(1)
-        self.export_png_btn = QPushButton("导出PNG")
-        self.export_png_btn.clicked.connect(lambda: self._export_image("PNG"))
-        row2.addWidget(self.export_png_btn)
-        self.export_jpg_btn = QPushButton("导出JPG")
-        self.export_jpg_btn.clicked.connect(lambda: self._export_image("JPEG"))
-        row2.addWidget(self.export_jpg_btn)
-        self.copy_btn = QPushButton("复制")
+        h.addWidget(self.quality_slider)
+        h.addWidget(self.quality_label)
+        h.addStretch(1)
+
+        self.copy_btn = QPushButton("复制", bar)
+        self.copy_btn.setProperty("variant", "secondary")
         self.copy_btn.setToolTip("按当前分辨率渲染成品并复制到剪贴板，可直接粘到 PS / PR / 微信")
         self.copy_btn.clicked.connect(self._copy_image)
-        row2.addWidget(self.copy_btn)
-        rv.addLayout(row2)
+        self._register_icon(self.copy_btn, "copy")
+        h.addWidget(self.copy_btn)
+        self.export_png_btn = QPushButton("导出 PNG", bar)
+        self.export_png_btn.setProperty("variant", "secondary")
+        self.export_png_btn.setToolTip("按当前分辨率导出无损 PNG 到 download/套版封面/")
+        self.export_png_btn.clicked.connect(lambda: self._export_image("PNG"))
+        self._register_icon(self.export_png_btn, "download")
+        h.addWidget(self.export_png_btn)
+        self.export_jpg_btn = QPushButton("导出 JPG", bar)
+        self.export_jpg_btn.setProperty("variant", "primary")
+        self.export_jpg_btn.setToolTip("按当前分辨率与 JPG 质量导出到 download/套版封面/")
+        self.export_jpg_btn.clicked.connect(lambda: self._export_image("JPEG"))
+        self._register_icon(self.export_jpg_btn, "download", "primary")
+        h.addWidget(self.export_jpg_btn)
+        rv.addWidget(bar)
         return right
 
     def _restore_widgets(self, section: Dict[str, Any]):
@@ -1517,7 +1657,7 @@ class CoverMakerPage(BasePage):
             self.res_combo.setCurrentText(self._export_resolution)
         self.quality_slider.setValue(self._jpg_quality)
         self.quality_label.setText(str(self._jpg_quality))
-        self.y_spin.setValue(self.y_shift)
+        self.y_spin.setValue(self.y_shift * 100.0)
         self.sync_font_cb.setChecked(self._sync["font"])
         self.sync_color_cb.setChecked(self._sync["color"])
         self.sync_size_cb.setChecked(self._sync["size"])
@@ -1553,20 +1693,24 @@ class CoverMakerPage(BasePage):
     def _render_preview(self):
         bg = self._current_bg(PREVIEW_W, PREVIEW_H)
         image, geoms = render_cover(PREVIEW_W, PREVIEW_H, bg, self.fit_mode,
-                                     self.states, self.y_shift, draw_hint=True)
+                                     self.states, self.y_shift)
         anchors = {k: (self.states[k].x_ratio, self.states[k].y_ratio + self.y_shift)
                    for k in FIELD_KEYS}
-        self.preview.set_canvas(image, geoms, anchors)
+        self.preview.set_canvas(image, geoms, anchors, empty=bg is None)
         self._update_status()
 
     def _update_status(self):
         count = len(self.provider.files)
-        current = self._bg_path.name if self._bg_path else "无"
-        self.status_label.setText(
-            f"底图 {count} 张 · 当前 {current} · 预览 {PREVIEW_W}x{PREVIEW_H} · "
-            f"导出 {self.res_combo.currentText()} · 预览区可直接拖动文字调整位置")
-        self.folder_label.setText(f"底图文件夹：{self.provider.folder}")
-        self.bg_count_label.setText(f"已扫描 {count} 张图片")
+        current = self._bg_path.name if self._bg_path else "未选择"
+        self.status_label.setText(f"当前底图：{current}")
+        self.status_label.setToolTip(
+            f"当前底图：{self._bg_path if self._bg_path else '未选择'}\n"
+            f"预览 {PREVIEW_W}x{PREVIEW_H} · 导出 {self.res_combo.currentText()} · "
+            "预览区可直接拖动文字调整位置")
+        folder = self.provider.folder
+        self.folder_label.setText(str(folder or "未选择底图文件夹"))
+        self.folder_label.setToolTip(f"底图文件夹：{folder or '未选择'}")
+        self.bg_count_label.setText(f"{count} 张")
 
     # ---------- 事件处理 ----------
 
@@ -1596,7 +1740,7 @@ class CoverMakerPage(BasePage):
         self._render_preview()
 
     def _on_y_changed(self, value: float):
-        self.y_shift = value
+        self.y_shift = value / 100.0
         self._schedule_preview()
 
     def _on_quality_changed(self, value: int):
@@ -1696,7 +1840,7 @@ class CoverMakerPage(BasePage):
         w, h = self._export_size()
         bg = self._current_bg(w, h)
         image, _geoms = render_cover(w, h, bg, self.fit_mode, self.states,
-                                     self.y_shift, draw_hint=False)
+                                     self.y_shift)
         self.cached_export_image = image
         return image
 
@@ -1814,7 +1958,7 @@ class CoverMakerPage(BasePage):
         hint = QLabel("模板保存三字段样式与位置比例，并记忆保存时所用底图"
                       "（文件仍在时加载自动切换）；不保存文字内容")
         hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 11px; color: #8a93a5;")
+        hint.setStyleSheet("font-size: 11px; color: palette(placeholder-text);")
         v.addWidget(hint)
         btns = QHBoxLayout()
         load_btn = QPushButton("加载")
@@ -1870,7 +2014,7 @@ class CoverMakerPage(BasePage):
             "fit_mode": self.fit_mode,
             "export_resolution": self.res_combo.currentText(),
             "jpg_quality": self.quality_slider.value(),
-            "y_shift": round(float(self.y_spin.value()), 4),
+            "y_shift": round(float(self.y_spin.value()) / 100.0, 4),
             "sync": {
                 "font": self.sync_font_cb.isChecked(),
                 "color": self.sync_color_cb.isChecked(),

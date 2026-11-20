@@ -1,13 +1,13 @@
 """抖音弹幕实时数据接入页（PySide6 版，对应原版抖音弹幕页）。
 
 三栏布局：左主播信息（首行直播标题）/ 中弹幕聊天礼物 / 右4块垂直（房间号/WS/打赏榜/弹幕信息2）。
-- 顶栏：轮询 / 模式（仅弹幕 / 回放）/ 录播 / 设置 / 清空内容
+- 顶栏：轮询 / 模式（仅弹幕 / 回放）/ 设置 / 清空内容
 - 工具栏：保存弹幕 / 导出导入合并回放包 / 保存统计
 - 连接控制：房间号右侧唯一按钮（未连接「连接」/ 已连接「断开」/ 等待开播「立即重试」）
 - 底栏：状态点 + 状态文本 + 计时 + 本场点赞
 - 真实抓取：DouyinLiveFetcher / StatsCollector（开播等待走轮询）
 
-视频录制（含自动回放包录制）已全部迁到顶栏「录播」里的「直播录制」窗口，
+视频录制（含自动回放包录制）已全部迁到同一页的「直播录制」页签，
 本页只负责【仅弹幕】实时抓取与【回放】已导出的回放包。
 """
 
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from gui_qt import common
+from gui_qt import common, table_sort
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
@@ -153,7 +153,7 @@ class DouyinDanmakuPage(BasePage):
         self.fetcher = None
         self.stats_collector = None
         self.settings = self._load_settings()
-        # 模式 / 回放（视频录制已迁到「直播录制」窗口，本页不再录视频）
+        # 模式 / 回放（视频录制在顶部「直播录制」页签，本页不再录视频）
         self.mode = "danmaku_only"      # danmaku_only（仅弹幕）/ replay（回放）
         self.video_player = None        # 仅回放用（回放包里的视频）
         self._streams = {}              # 清晰度 → FLV URL（后端回调带入，仅供展示/备用）
@@ -226,7 +226,7 @@ class DouyinDanmakuPage(BasePage):
         self._countdown_timer = QTimer(self)
         self._countdown_timer.timeout.connect(self._update_poll_countdown)
         self._countdown_timer.start(1000)
-        # 模式切换：仅弹幕 / 回放（视频录制已迁到「直播录制」窗口，本页不再拉直播视频）
+        # 模式切换：仅弹幕 / 回放（视频录制在顶部「直播录制」页签，本页不再拉直播视频）
         top_l.addWidget(QLabel("模式:"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("仅弹幕模式", "danmaku_only")
@@ -234,7 +234,7 @@ class DouyinDanmakuPage(BasePage):
         self.mode_combo.setToolTip(
             "仅弹幕模式：只抓弹幕，不拉视频流（最省资源）\n"
             "回放模式：导入回放包，弹幕与视频按时间轴同步重演\n"
-            "（要录直播视频请在顶栏「录播」里开，本页不再录视频）")
+            "（要录直播视频请切到顶部「直播录制」页签，本页不再录视频）")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         top_l.addWidget(self.mode_combo)
         settings_btn = QPushButton("")
@@ -261,18 +261,6 @@ class DouyinDanmakuPage(BasePage):
         self.account_pick_btn.clicked.connect(self._open_room_picker)
         top_l.addWidget(self.account_pick_btn)
         top_l.addStretch(1)
-        # 录播：打开「直播录制」二级界面（抖音/B站同源，独立窗口，底部切换平台）
-        # 位置按需求放在顶栏右侧、清空按钮左边
-        self.record_win_btn = QPushButton("录播")
-        self.record_win_btn.setToolTip(
-            "打开「直播录制」二级窗口：\n"
-            "· 抖音 / B站 两套列表，窗口底部按钮切换，录制任务互不影响\n"
-            "· 开播自动录制、断流自动重连续录、按时间/大小分段、录满自动停\n"
-            "· 窗口独立（可随便拖动/最大化），但不是独立程序，随主程序退出")
-        self.record_win_btn.setStyleSheet(
-            icon_btn_style(True, "font-size: 12px; padding: 3px 8px;"))
-        self.record_win_btn.clicked.connect(self._open_live_record)
-        top_l.addWidget(self.record_win_btn)
         clear_btn = QPushButton("")
         clear_btn.setToolTip("清空界面临时内容（弹幕/打赏榜/统计/主播信息/封面/计时）\n"
                              "保留房间号、WS 地址等配置")
@@ -437,17 +425,6 @@ class DouyinDanmakuPage(BasePage):
         self.room_entry.setText(e.room)
         self.app.toast(f"已填入「{e.name or label}」房间号 {e.room}，点「连接」开始",
                        "success")
-
-    def _open_live_record(self):
-        """录播：打开「直播录制」二级界面，带上当前平台与房间号。"""
-        try:
-            from gui_qt.live_record_window import open_live_record_window
-        except Exception as e:  # noqa: BLE001
-            self.app.toast(f"录制窗口加载失败：{e}", "error")
-            return
-        platform = "bili" if self._BACKEND.endswith("bili_live") else "douyin"
-        room = self.room_entry.text().strip() or self._default_room()
-        open_live_record_window(self.app, platform=platform, room=room)
 
     def _open_emoji_window(self):
         """表情包：打开「抖音表情收集」二级界面（非模态，跟随本页连接收表情图）。"""
@@ -843,7 +820,7 @@ class DouyinDanmakuPage(BasePage):
         else:
             self._stop_replay()
 
-    # ======================== 房间流（仅供信息展示；录播在「直播录制」窗口） ========================
+    # ======================== 房间流（仅供信息展示；录播在「直播录制」页签） ========================
 
     def _on_room_streams(self, streams):
         """后端带回清晰度列表：记下来即可，本页不预览、不录制。"""
@@ -1387,6 +1364,7 @@ class DouyinDanmakuPage(BasePage):
         hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self._gift_sorter = table_sort.install(self.gift_table, skip_columns=())
         v.addWidget(self.gift_table, 1)
 
         # 4. 弹幕信息2（点赞+进入直播间+日志提醒）
@@ -2517,6 +2495,7 @@ class DouyinDanmakuPage(BasePage):
                 if c != 1:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.gift_table.setItem(i, c, item)
+        self._gift_sorter.reapply()
 
     @staticmethod
     def _ts_html(ts):

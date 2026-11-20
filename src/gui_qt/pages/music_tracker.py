@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from gui_qt import theme
+from gui_qt import table_sort, theme
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.platform_names import MUSIC_PLATFORM_NAMES as PLATFORM_NAMES
@@ -404,6 +404,17 @@ class MusicTrackerPage(BasePage):
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         # 最后一列拉伸：最大化后不留右侧大片空白
         table.horizontalHeader().setStretchLastSection(True)
+        # 表头点击排序：采集时间在行首（垂直表头），排序后按记录新顺序重贴
+        table_sort.install(table, rows=history, skip_columns=())
+
+        def _sync_row_labels(_col):
+            if len(history) != table.rowCount():
+                return
+            table.setVerticalHeaderLabels([
+                ((rec.get("_time") or "")[:16] or f"记录{i + 1}")
+                for i, rec in enumerate(history)])
+
+        table.horizontalHeader().sectionClicked.connect(_sync_row_labels)
         hint = QLabel("颜色说明：与上一条采集对比，绿色=数值增加，红色=数值减少（↑/↓ 后为增减量）")
         hint.setProperty("role", "caption")
         v.addWidget(hint)

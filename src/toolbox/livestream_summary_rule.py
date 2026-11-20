@@ -5,7 +5,7 @@
 
 1. SRT 去掉字幕序号与时间戳，TXT 自动尝试 UTF-8 / UTF-16 / GB18030；
 2. 按 `correction-map.md` 的固定词表做替换式纠错（解析失败时用内置兜底词对）；
-3. 从文件名优先、正文其次识别直播日期，生成标题；
+3. 按命名投稿口径识别直播日期（标准录播名 → 日期文件夹 → 正文），生成标题；
 4. 按关键词把句子摘录到 1—7 级维度，6 级提取书名号歌名、7 级提取身高体重等数值；
 5. 按 `template.md` 的行序输出纯文本，末尾补固定标注。
 
@@ -72,6 +72,8 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[。！？!?；;])|\n+")
 _FULL_DATE = re.compile(r"(20\d{2})[-_.年](\d{1,2})[-_.月](\d{1,2})日?")
 _COMPACT_DATE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
 _TODAY_DATE = re.compile(r"今天是?\s*(20\d{2})年(\d{1,2})月(\d{1,2})[日号]")
+# 命名投稿的标准录播名：YYYY-MM-DD_HH-MM-SS_主播_…
+_STANDARD_NAME = re.compile(r"(?<!\d)(20\d{2})-(\d{2})-(\d{2})_\d{2}-\d{2}-\d{2}_")
 
 _CITY = re.compile(
     r"(?:在|去)(北京|上海|广州|深圳|杭州|成都|重庆|武汉|南京|西安|长沙|"
@@ -208,8 +210,31 @@ def _valid_date(year: int, month: int, day: int) -> str | None:
         return None
 
 
-def extract_date(filename: str, text: str) -> tuple[str | None, str]:
-    """返回 (YYYYMMDD 或 None, 来源说明)。文件名优先，其次正文明确日期。"""
+def _folder_date(folder: str) -> str | None:
+    """日期文件夹（YYYYMMDD / YYYY-MM-DD）→ YYYYMMDD。"""
+    name = Path(folder).name if folder else ""
+    if not name:
+        return None
+    match = _COMPACT_DATE.search(name) or _FULL_DATE.search(name)
+    if not match:
+        return None
+    return _valid_date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def extract_date(filename: str, text: str, folder: str = "") -> tuple[str | None, str]:
+    """按命名投稿口径识别直播日期，返回 (YYYYMMDD 或 None, 来源说明)。
+
+    优先级：标准录播名（日期_时分秒_…）→ 日期文件夹 → 其他文件名日期 → 正文。
+    """
+    match = _STANDARD_NAME.search(Path(filename).name)
+    if match:
+        value = _valid_date(int(match.group(1)), int(match.group(2)),
+                            int(match.group(3)))
+        if value:
+            return value, "文件名（命名投稿）"
+    value = _folder_date(folder)
+    if value:
+        return value, "日期文件夹"
     for pattern in (_FULL_DATE, _COMPACT_DATE):
         for match in pattern.finditer(filename):
             value = _valid_date(int(match.group(1)), int(match.group(2)),
@@ -230,6 +255,50 @@ def build_title(date_text: str | None) -> str:
     if date_text:
         return f"封茗囧菌 {date_text} 直播总结"
     return "封茗囧菌暂未公开（直播日期）直播总结"
+
+
+# ==================== 工作文件夹扫描 ====================
+
+TRANSCRIPT_SUFFIXES = (".txt", ".srt")
+
+
+def scan_transcripts(root: str | Path) -> list[Path]:
+    """只扫描工作文件夹里的转录文件（根目录 + 日期文件夹），最新的一场在前。
+
+    页面不允许浏览其他目录，因此这里不做深度递归，只认工作目录根下与
+    命名投稿使用的 YYYYMMDD 日期文件夹（日期文件夹内允许再嵌套子目录）。
+    """
+    if not root:
+        return []
+    base = Path(root)
+    if not base.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        entries = list(base.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.suffix.lower() in TRANSCRIPT_SUFFIXES:
+                found.append(entry)
+            elif (entry.is_dir() and not entry.name.startswith(".")
+                  and _folder_date(entry.name)):
+                found.extend(path for path in entry.rglob("*")
+                             if path.is_file()
+                             and path.suffix.lower() in TRANSCRIPT_SUFFIXES)
+        except OSError:
+            continue
+
+    def sort_key(path: Path) -> tuple[str, float]:
+        date_text, _ = extract_date(path.name, "", str(path.parent))
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return date_text or "00000000", mtime
+
+    return sorted(found, key=sort_key, reverse=True)
 
 
 # ==================== 纠错 ====================
@@ -432,11 +501,11 @@ def render(date_text: str | None, buckets: dict[int, list[str]],
 
 # ==================== 入口 ====================
 
-def summarize_text(text: str, filename: str = "",
-                   max_per_dim: int = 30) -> tuple[str, dict]:
+def summarize_text(text: str, filename: str = "", max_per_dim: int = 30,
+                   folder: str = "") -> tuple[str, dict]:
     """纯函数入口：返回 (总结文本, 统计信息)，便于测试与后续页面复用。"""
     body = strip_srt(text)
-    date_text, date_source = extract_date(filename, body)
+    date_text, date_source = extract_date(filename, body, folder)
     corrected = apply_corrections(body, load_corrections())
     sentences = split_sentences(corrected)
     buckets = classify(sentences, max_per_dim=max_per_dim)
@@ -480,7 +549,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"读取失败：{exc}", file=sys.stderr)
         return 1
 
-    output, stats = summarize_text(text, source.name, max_per_dim=args.max_per_dim)
+    output, stats = summarize_text(text, source.name, max_per_dim=args.max_per_dim,
+                                   folder=str(source.parent))
     if args.stdout:
         print(output)
     else:

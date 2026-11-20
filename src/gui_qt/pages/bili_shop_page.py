@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import bili_shop as bs
@@ -123,6 +124,8 @@ class BiliShopPage(BasePage):
         for i in range(1, 4):
             self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
         self.table.itemSelectionChanged.connect(self._on_select)
+        # 表头排序：与 self._shop.items 同步重排，currentRow 仍能反查商品
+        self._sorter = table_sort.install(self.table, skip_columns=())
         lv.addWidget(self.table, 1)
         splitter.addWidget(left)
 
@@ -164,6 +167,17 @@ class BiliShopPage(BasePage):
         self.status_label = QLabel("粘贴 B站小店链接或 UP主 UID → 解析")
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
+
+    # ---------- 合并页接口 ----------
+    def embed_input(self):
+        """被「购物解析」合并页接管输入时调用：收起自带的输入框与解析按钮。"""
+        self.input_edit.hide()
+        self.parse_btn.hide()
+
+    def submit_text(self, text: str):
+        """合并页识别出 B站小店链接/UID 后调用：走原有解析流程。"""
+        self.input_edit.setText((text or "").strip())
+        self._do_parse()
 
     # ---------- 状态 ----------
     def _set_busy(self, busy: bool, text: str = ""):
@@ -246,15 +260,23 @@ class BiliShopPage(BasePage):
 
     def _fill_table(self):
         items = self._shop.items if self._shop else []
+        self._sorter.attach(items)
         self.table.setRowCount(len(items))
         for r, it in enumerate(items):
             t = QTableWidgetItem(it.title)
             t.setToolTip(it.title)
             self.table.setItem(r, 0, t)
-            self.table.setItem(r, 1, _center(it.price_text))
+            price_item = _center(it.price_text)
+            try:  # 「¥19.90」文本解析不出数字 → 用数值排序键
+                price_item.setData(table_sort.SORT_KEY_ROLE,
+                                   float(str(it.price).replace(",", "")))
+            except (TypeError, ValueError):
+                pass
+            self.table.setItem(r, 1, price_item)
             self.table.setItem(r, 2, _center(it.item_id or "-"))
             self.table.setItem(r, 3, _center(it.source or "-"))
         self.export_btn.setEnabled(bool(items))
+        self._sorter.apply()
 
     # ---------- 选中 ----------
     def _on_select(self):

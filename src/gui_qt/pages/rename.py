@@ -1,7 +1,7 @@
 """重命名页（PySide6 版）：交互式重命名 — 三栏：文件夹 | 账户+类型 | 视频预览。
 
 对应原版 gui/toolbox_pages.py RenamePage，功能一一对应：
-- Tab「交互重命名」：
+- Tab「命名投稿」：
   * 栏1 两级列表：日期文件夹 + 文件夹内视频文件（点击跳转、当前项高亮）
   * 栏2 直播账户（单选）+ 直播类型（多选，按点击顺序编号 [N]，数字键 1-9 快捷切换）
   * 栏3 视频信息（ffprobe）+ 版本（无/有弹幕）+ 平台（配置单选）+ 标题三模式
@@ -20,10 +20,10 @@ import threading
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QInputDialog, QLabel,
+    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QRadioButton, QScrollArea, QSplitter, QTabWidget, QTextEdit, QVBoxLayout,
-    QWidget,
+    QRadioButton, QScrollArea, QSizePolicy, QSplitter, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import get_rename_config, save_rename_config
@@ -55,12 +55,15 @@ class RenamePage(BasePage):
         self.auto_title = ""
         self._load_token = None   # 防止过期截图/信息覆盖新文件
         self._thumb_pm = None     # 保持 QPixmap 引用避免被回收
+        self._thumb_source = None
+        self._thumb_size = None
         self._busy = False
         self._loaded_root = None
         self._params_loaded = False
         self._metadata_failed = set()
         self._posted_batches = set()
         self._post_cancel = threading.Event()
+        self.card_count_labels = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -68,7 +71,7 @@ class RenamePage(BasePage):
 
         self.sub_tabs = QTabWidget()
         layout.addWidget(self.sub_tabs, 1)
-        self.sub_tabs.addTab(self._build_rename_tab(), "交互重命名")
+        self.sub_tabs.addTab(self._build_rename_tab(), "命名投稿")
         self.sub_tabs.addTab(self._build_params_tab(), "参数设置")
 
         self._rebuild_account_radios()
@@ -89,7 +92,7 @@ class RenamePage(BasePage):
     def has_active_tasks(self):
         return self._busy
 
-    # ==================== 交互重命名 Tab（三栏） ====================
+    # ==================== 命名投稿 Tab（三栏） ====================
 
     def _build_rename_tab(self):
         w = QWidget()
@@ -97,33 +100,30 @@ class RenamePage(BasePage):
         v.setContentsMargins(6, 6, 6, 6)
         v.setSpacing(5)
 
-        # 顶栏：刷新 + 文件夹计数 + 进度
+        # 顶栏：刷新 + 文件夹计数 + 自动投稿 + 投稿入口（压成一行，给主体留高度）
         top = QHBoxLayout()
         refresh_btn = QPushButton("刷新")
-        refresh_btn.setFixedWidth(80)
+        refresh_btn.setFixedWidth(72)
         refresh_btn.clicked.connect(self._refresh)
         top.addWidget(refresh_btn)
         self.folder_count_label = QLabel("")
         top.addWidget(self.folder_count_label)
+        self.auto_upload = QCheckBox("本文件夹全部重命名完成后自动投稿")
+        self.auto_upload.setChecked(bool(BU.load_settings().get("auto_upload", False)))
+        self.auto_upload.toggled.connect(self._save_post_switch)
+        self.auto_upload.setToolTip("本文件夹全部视频重命名完成后，自动打开投稿流程")
+        top.addWidget(self.auto_upload)
         top.addStretch(1)
         self.progress_label = QLabel("")
         self.progress_label.setStyleSheet("color: palette(link);")
         top.addWidget(self.progress_label)
-        v.addLayout(top)
-
-        post_row = QHBoxLayout()
-        self.auto_upload = QCheckBox("本文件夹全部重命名完成后自动投稿")
-        self.auto_upload.setChecked(bool(BU.load_settings().get("auto_upload", False)))
-        self.auto_upload.toggled.connect(self._save_post_switch)
-        post_row.addWidget(self.auto_upload)
-        post_row.addStretch(1)
         self.post_settings_btn = QPushButton("投稿设置")
         self.post_settings_btn.clicked.connect(self._open_post_settings)
-        post_row.addWidget(self.post_settings_btn)
+        top.addWidget(self.post_settings_btn)
         self.post_btn = QPushButton("投稿已重命名视频")
         self.post_btn.clicked.connect(self._open_upload)
-        post_row.addWidget(self.post_btn)
-        v.addLayout(post_row)
+        top.addWidget(self.post_btn)
+        v.addLayout(top)
 
         # 三栏主体
         split = QSplitter(Qt.Horizontal)
@@ -134,12 +134,14 @@ class RenamePage(BasePage):
         c1 = QVBoxLayout(col1)
         c1.setContentsMargins(0, 0, 0, 0)
         c1.setSpacing(3)
-        c1.addWidget(QLabel("日期文件夹"))
+        c1.addWidget(self._section_label("日期文件夹"))
         self.folder_list = QListWidget()
+        self.folder_list.setAlternatingRowColors(True)
         self.folder_list.itemClicked.connect(lambda _it: self._on_folder_click())
         c1.addWidget(self.folder_list, 3)
-        c1.addWidget(QLabel("文件列表"))
+        c1.addWidget(self._section_label("文件列表"))
         self.file_list = QListWidget()
+        self.file_list.setAlternatingRowColors(True)
         self.file_list.itemClicked.connect(self._on_file_click)
         c1.addWidget(self.file_list, 4)
         split.addWidget(col1)
@@ -148,37 +150,62 @@ class RenamePage(BasePage):
         col2 = QWidget()
         c2 = QVBoxLayout(col2)
         c2.setContentsMargins(0, 0, 0, 0)
-        c2.setSpacing(3)
-        c2.addWidget(QLabel("直播账户"))
+        c2.setSpacing(4)
+        c2.addWidget(self._section_label("直播账户"))
         self.account_list = QListWidget()
+        self.account_list.setAlternatingRowColors(True)
         self.account_list.itemSelectionChanged.connect(self._update_preview)
-        c2.addWidget(self.account_list, 1)
-        c2.addWidget(QLabel("直播类型（多选）"))
-        self.type_list = QListWidget()
-        self.type_list.itemClicked.connect(self._on_type_item_click)
-        c2.addWidget(self.type_list, 1)
+        c2.addWidget(self.account_list, 2)
+        type_head = QHBoxLayout()
+        type_head.setSpacing(6)
+        type_head.addWidget(self._section_label("直播类型（多选）"))
+        type_head.addStretch(1)
+        type_hint = QLabel("按勾选顺序参与命名")
+        type_hint.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
+        type_head.addWidget(type_hint)
+        c2.addLayout(type_head)
+        self.type_box = QFrame()
+        self.type_box.setObjectName("renameTypeBox")
+        self.type_box.setStyleSheet(
+            "QFrame#renameTypeBox { background: palette(base);"
+            " border: 1px solid palette(mid); border-radius: 6px; }")
+        self.type_grid = QGridLayout(self.type_box)
+        self.type_grid.setContentsMargins(10, 8, 10, 8)
+        self.type_grid.setHorizontalSpacing(16)
+        self.type_grid.setVerticalSpacing(6)
+        self.type_grid.setAlignment(Qt.AlignTop)
+        c2.addWidget(self.type_box, 1)
+        self.type_checks = {}
         clear_btn = QPushButton("清除所有选择")
         clear_btn.clicked.connect(self._clear_all_types)
         c2.addWidget(clear_btn)
         split.addWidget(col2)
 
-        # === 栏3: 视频信息 + 预览 + 操作 ===
-        col3_area = QScrollArea()
-        col3_area.setWidgetResizable(True)
+        # === 栏3: 视频信息 + 预览（操作按钮固定在下方，不随内容被裁） ===
         col3 = QWidget()
         c3 = QVBoxLayout(col3)
-        c3.setContentsMargins(6, 4, 6, 4)
-        c3.setSpacing(5)
+        c3.setContentsMargins(0, 0, 0, 0)
+        c3.setSpacing(6)
 
-        c3.addWidget(QLabel("视频信息"))
+        info_card = QFrame()
+        info_card.setObjectName("renameInfoCard")
+        info_card.setStyleSheet(
+            "QFrame#renameInfoCard { background: palette(base);"
+            " border: 1px solid palette(mid); border-radius: 6px; }")
+        ic = QVBoxLayout(info_card)
+        ic.setContentsMargins(10, 8, 10, 10)
+        ic.setSpacing(6)
+        ic.addWidget(self._section_label("视频信息"))
         self.video_info_label = QLabel("请选择左侧文件夹")
         self.video_info_label.setWordWrap(True)
         self.video_info_label.setStyleSheet("font-size: 12px;")
-        c3.addWidget(self.video_info_label)
+        self.video_info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        ic.addWidget(self.video_info_label)
 
         # 版本
         ver_row = QHBoxLayout()
-        ver_row.addWidget(QLabel("版本:"))
+        ver_row.setSpacing(10)
+        ver_row.addWidget(QLabel("版本"))
         self.version_group = QButtonGroup(self)
         self.ver_none_radio = QRadioButton("无弹幕")
         self.ver_none_radio.setChecked(True)
@@ -190,21 +217,24 @@ class RenamePage(BasePage):
         ver_row.addWidget(self.ver_none_radio)
         ver_row.addWidget(self.ver_danmu_radio)
         ver_row.addStretch(1)
-        c3.addLayout(ver_row)
+        ic.addLayout(ver_row)
 
         # 平台
         plat_row = QHBoxLayout()
-        plat_row.addWidget(QLabel("平台:"))
+        plat_row.setSpacing(10)
+        plat_row.addWidget(QLabel("平台"))
         self.platform_group = QButtonGroup(self)
         self.platform_box = QWidget()
         self.platform_layout = QHBoxLayout(self.platform_box)
         self.platform_layout.setContentsMargins(0, 0, 0, 0)
+        self.platform_layout.setSpacing(12)
         plat_row.addWidget(self.platform_box, 1)
-        c3.addLayout(plat_row)
+        ic.addLayout(plat_row)
 
-        # 标题三模式
-        c3.addWidget(QLabel("标题:"))
+        # 标题三模式：标签与按钮同一行，输入框单占一行
         trow = QHBoxLayout()
+        trow.setSpacing(6)
+        trow.addWidget(QLabel("标题"))
         self.title_auto_btn = QPushButton("自动提取")
         self.title_auto_btn.setCheckable(True)
         self.title_auto_btn.clicked.connect(lambda: self._set_title_mode("auto"))
@@ -218,76 +248,86 @@ class RenamePage(BasePage):
         self.title_none_btn.clicked.connect(lambda: self._set_title_mode("none"))
         trow.addWidget(self.title_none_btn)
         trow.addStretch(1)
-        c3.addLayout(trow)
+        ic.addLayout(trow)
         self.title_entry = QLineEdit()
         self.title_entry.setPlaceholderText("手动输入标题...")
         self.title_entry.setReadOnly(True)
         self.title_entry.textChanged.connect(lambda _t: self._update_preview())
-        c3.addWidget(self.title_entry)
+        ic.addWidget(self.title_entry)
+        c3.addWidget(info_card)
 
-        # 预览截图
-        c3.addWidget(QLabel("预览截图"))
+        # 预览截图（占满剩余高度）
+        c3.addWidget(self._section_label("预览截图"))
         self.thumb_label = QLabel("（选择视频后显示）")
         self.thumb_label.setAlignment(Qt.AlignCenter)
-        self.thumb_label.setFixedHeight(180)
+        self.thumb_label.setMinimumHeight(150)
+        self.thumb_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.thumb_label.setStyleSheet(
             "background: palette(alternate-base); border-radius: 6px;"
             " color: palette(placeholder-text);")
-        c3.addWidget(self.thumb_label)
+        c3.addWidget(self.thumb_label, 1)
 
         # 新文件名预览
-        c3.addWidget(QLabel("新文件名:"))
+        c3.addWidget(self._section_label("新文件名"))
         self.new_name_label = QLabel("")
         self.new_name_label.setWordWrap(True)
+        self.new_name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.new_name_label.setStyleSheet(
             "background: palette(alternate-base); color: palette(link-visited);"
-            " border-radius: 6px; padding: 6px; font-size: 12px;")
+            " border-radius: 6px; padding: 6px 8px; font-size: 12px;")
         c3.addWidget(self.new_name_label)
 
-        # 操作按钮
-        action_row = QHBoxLayout()
-        self.confirm_btn = QPushButton("确认重命名 (Enter)")
-        self.confirm_btn.setProperty("variant", "primary")
-        self.confirm_btn.setEnabled(False)
-        self.confirm_btn.clicked.connect(self._do_rename)
-        action_row.addWidget(self.confirm_btn)
-        self.skip_btn = QPushButton("⏭ 跳过")
-        self.skip_btn.setEnabled(False)
-        self.skip_btn.clicked.connect(self._skip_video)
-        action_row.addWidget(self.skip_btn)
-        action_row.addStretch(1)
-        c3.addLayout(action_row)
+        split.addWidget(col3)
+        split.setSizes([250, 280, 520])
 
-        # 版权信息开关（与参数设置同步）
-        extra_row = QHBoxLayout()
+        # 固定操作栏：版权开关 + 跳过 / 确认，永远可见
+        footer = QFrame()
+        footer.setObjectName("renameFooter")
+        footer.setStyleSheet(
+            "QFrame#renameFooter { background: palette(alternate-base);"
+            " border-radius: 8px; }")
+        fv = QHBoxLayout(footer)
+        fv.setContentsMargins(10, 6, 10, 6)
+        fv.setSpacing(10)
         self.rename_extra_check = QCheckBox("写入版权属性")
         self.rename_extra_check.setToolTip(
             "写入标准版权标签（cprt）；MP4 在资源管理器里不显示「版权」，"
             "会同时写一份到「备注」，属性 → 详细信息 → 备注 可看到")
         self.rename_extra_check.setChecked(self.rename_config.append_extra_info)
         self.rename_extra_check.toggled.connect(self._on_extra_toggle)
-        extra_row.addWidget(self.rename_extra_check)
+        fv.addWidget(self.rename_extra_check)
         self.extra_preview_label = QLabel("")
         self.extra_preview_label.setStyleSheet(
             "color: palette(placeholder-text); font-size: 10px;")
-        extra_row.addWidget(self.extra_preview_label, 1)
-        c3.addLayout(extra_row)
-        c3.addStretch(1)
-
-        col3_area.setWidget(col3)
-        split.addWidget(col3_area)
-        split.setSizes([230, 250, 520])
+        fv.addWidget(self.extra_preview_label, 1)
+        self.skip_btn = QPushButton("⏭ 跳过")
+        self.skip_btn.setEnabled(False)
+        self.skip_btn.clicked.connect(self._skip_video)
+        fv.addWidget(self.skip_btn)
+        self.confirm_btn = QPushButton("确认重命名 (Enter)")
+        self.confirm_btn.setProperty("variant", "primary")
+        self.confirm_btn.setEnabled(False)
+        self.confirm_btn.clicked.connect(self._do_rename)
+        fv.addWidget(self.confirm_btn)
+        v.addWidget(footer)
 
         # 日志
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFixedHeight(80)
+        self.log_text.setFixedHeight(64)
         v.addWidget(self.log_text)
 
         self._update_extra_preview()
         return w
 
     # ==================== 账户/类型 UI ====================
+
+    @staticmethod
+    def _section_label(text):
+        """分区标题：比正文略重，不抢按钮焦点。"""
+        lbl = QLabel(text)
+        lbl.setStyleSheet("font-weight: 600; color: palette(text);")
+        return lbl
 
     def _rebuild_account_radios(self):
         self.account_list.clear()
@@ -298,12 +338,18 @@ class RenamePage(BasePage):
             self.account_list.setCurrentRow(0)
 
     def _rebuild_type_checkboxes(self):
+        """直播类型用真实复选框（两列），勾选顺序仍决定命名顺序。"""
         self.type_order.clear()
-        self.type_list.clear()
-        for t in get_rename_config().live_types:
-            it = QListWidgetItem(f"[ ] {t}")
-            it.setData(Qt.UserRole, t)
-            self.type_list.addItem(it)
+        while self.type_grid.count():
+            item = self.type_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.type_checks = {}
+        for index, t in enumerate(get_rename_config().live_types):
+            box = QCheckBox(t)
+            box.toggled.connect(lambda checked, name=t: self._on_type_toggled(name, checked))
+            self.type_grid.addWidget(box, index // 2, index % 2)
+            self.type_checks[t] = box
 
     def _rebuild_platform_radios(self):
         cfg = get_rename_config()
@@ -329,28 +375,32 @@ class RenamePage(BasePage):
         self.platform_layout.addStretch(1)
 
     def _refresh_type_labels(self):
-        """刷新标签显示：[] 未选中，[N] 选中顺序"""
-        for i in range(self.type_list.count()):
-            item = self.type_list.item(i)
-            t = item.data(Qt.UserRole)
-            if t in self.type_order:
-                idx = self.type_order.index(t) + 1
-                item.setText(f"[{idx}] {t}")
-            else:
-                item.setText(f"[ ] {t}")
-            item.setData(Qt.ForegroundRole, None)
+        """勾选框文字带上顺序标记，让「按勾选顺序命名」看得见。"""
+        marks = "①②③④⑤⑥⑦⑧⑨"
+        for name, box in getattr(self, "type_checks", {}).items():
+            suffix = ""
+            if name in self.type_order:
+                index = self.type_order.index(name)
+                suffix = f"  {marks[index] if index < len(marks) else index + 1}"
+            box.blockSignals(True)
+            box.setText(f"{name}{suffix}")
+            box.blockSignals(False)
 
-    def _on_type_click(self, tname):
-        """点击切换选中，按顺序排列"""
-        if tname in self.type_order:
-            self.type_order.remove(tname)
-        else:
-            self.type_order.append(tname)
+    def _on_type_toggled(self, name, checked):
+        if checked and name not in self.type_order:
+            self.type_order.append(name)
+        elif not checked and name in self.type_order:
+            self.type_order.remove(name)
         self._refresh_type_labels()
         self._update_preview()
 
-    def _on_type_item_click(self, item):
-        self._on_type_click(item.data(Qt.UserRole))
+    def _on_type_click(self, tname):
+        """数字键 / 外部调用的统一切换入口。"""
+        box = getattr(self, "type_checks", {}).get(tname)
+        if box is not None:
+            box.setChecked(not box.isChecked())
+        else:
+            self._on_type_toggled(tname, tname not in self.type_order)
 
     def _key_toggle_type(self, idx):
         types = get_rename_config().live_types
@@ -358,6 +408,10 @@ class RenamePage(BasePage):
             self._on_type_click(types[idx])
 
     def _reset_type_selection(self):
+        for box in getattr(self, "type_checks", {}).values():
+            box.blockSignals(True)
+            box.setChecked(False)
+            box.blockSignals(False)
         self.type_order.clear()
         self._refresh_type_labels()
         self._update_preview()
@@ -532,8 +586,7 @@ class RenamePage(BasePage):
         # 后台获取视频信息 + 截图
         token = object()
         self._load_token = token
-        self._thumb_pm = None
-        self.thumb_label.clear()
+        self._clear_thumb()
         self.video_info_label.setText(f"{filename}\n加载中...")
 
         def work():
@@ -559,14 +612,17 @@ class RenamePage(BasePage):
             if thumb and os.path.exists(thumb):
                 pm = QPixmap(thumb)
                 if not pm.isNull():
-                    pm = pm.scaledToHeight(180, Qt.SmoothTransformation)
+                    self._thumb_source = pm
                     self._thumb_pm = pm
-                    self.thumb_label.setPixmap(pm)
+                    self._thumb_size = None
+                    self._apply_thumb()
                 else:
                     self._thumb_pm = None
+                    self._thumb_source = None
                     self.thumb_label.setText("（截图失败）")
             else:
                 self._thumb_pm = None
+                self._thumb_source = None
                 self.thumb_label.setText("（无法截图）")
             self._update_preview()
 
@@ -669,11 +725,35 @@ class RenamePage(BasePage):
     def _update_preview(self):
         self.new_name_label.setText(self._build_filename())
 
+    def _clear_thumb(self):
+        self._thumb_pm = None
+        self._thumb_source = None
+        self._thumb_size = None
+        self.thumb_label.clear()
+
+    def _apply_thumb(self):
+        """按预览区当前尺寸等比缩放；尺寸没变就跳过，避免布局来回触发。"""
+        src = self._thumb_source
+        if src is None or src.isNull():
+            return
+        target = self.thumb_label.size()
+        if target.width() <= 4 or target.height() <= 4:
+            return
+        if target == self._thumb_size:
+            return
+        self._thumb_size = target
+        self.thumb_label.setPixmap(
+            src.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_thumb()
+
     # ==================== 重命名执行 ====================
 
     def _set_busy(self, busy):
         self._busy = busy
-        for widget in (self.folder_list, self.file_list, self.account_list, self.type_list,
+        for widget in (self.folder_list, self.file_list, self.account_list, self.type_box,
                        self.auto_upload, self.post_settings_btn, self.post_btn, self.sub_tabs,
                        self.rename_extra_check):
             widget.setEnabled(not busy)
@@ -817,71 +897,97 @@ class RenamePage(BasePage):
         w = QWidget()
         outer = QVBoxLayout(w)
         outer.setContentsMargins(10, 10, 10, 10)
-        outer.setSpacing(6)
+        outer.setSpacing(8)
 
-        # 上：账户列表 + 直播类型 + 直播平台 三列（均竖向卡片）
+        # 上：账户列表 + 直播类型 + 直播平台 三列（均竖向卡片，占满剩余高度）
         cols = QHBoxLayout()
+        cols.setSpacing(14)
         cols.addWidget(self._build_card_column("账户列表", "account"), 1)
         cols.addWidget(self._build_card_column("直播类型", "type"), 1)
         cols.addWidget(self._build_card_column("直播平台", "platform"), 1)
         outer.addLayout(cols, 1)
 
-        # 其他设置：后缀 / 阈值 / 保存
-        of = QHBoxLayout()
-        of.addWidget(QLabel("视频后缀:"))
+        # 下：设置收进一张卡片，参数与保存同一视觉块
+        footer = QFrame()
+        footer.setObjectName("renameParamsFooter")
+        footer.setStyleSheet(
+            "QFrame#renameParamsFooter { background: palette(alternate-base);"
+            " border-radius: 8px; }")
+        fv = QVBoxLayout(footer)
+        fv.setContentsMargins(12, 8, 12, 10)
+        fv.setSpacing(8)
+
+        first = QHBoxLayout()
+        first.setSpacing(8)
+        first.addWidget(QLabel("视频后缀"))
         self.suffix_entry = QLineEdit()
         self.suffix_entry.setFixedWidth(90)
         self.suffix_entry.setText(self.rename_config.video_suffix)
-        of.addWidget(self.suffix_entry)
-        of.addSpacing(20)
-        of.addWidget(QLabel("匹配阈值:"))
+        first.addWidget(self.suffix_entry)
+        first.addSpacing(18)
+        first.addWidget(QLabel("匹配阈值"))
         self.threshold_entry = QLineEdit()
         self.threshold_entry.setFixedWidth(70)
         self.threshold_entry.setText(str(self.rename_config.subtitle_match_threshold))
-        of.addWidget(self.threshold_entry)
-        of.addStretch(1)
-        save_btn = QPushButton("保存设置")
-        save_btn.setProperty("variant", "primary")
-        save_btn.clicked.connect(self._save_params)
-        of.addWidget(save_btn)
-        outer.addLayout(of)
-
-        # 附加信息 + 版权开关
-        ef = QHBoxLayout()
-        ef.addWidget(QLabel("附加信息:"))
-        self.extra_info_entry = QLineEdit()
-        ef.addWidget(self.extra_info_entry, 1)
+        self.threshold_entry.setToolTip("字幕与视频名的相似度阈值（0–1，越大越严格）")
+        first.addWidget(self.threshold_entry)
+        first.addSpacing(18)
         self.append_extra_check = QCheckBox("写入版权属性")
         self.append_extra_check.setToolTip(
             "写入标准版权标签（cprt）；MP4 在资源管理器里不显示「版权」，"
             "会同时写一份到「备注」，属性 → 详细信息 → 备注 可看到")
-        ef.addWidget(self.append_extra_check)
-        outer.addLayout(ef)
-        outer.addStretch(1)
+        first.addWidget(self.append_extra_check)
+        first.addStretch(1)
+        save_btn = QPushButton("保存设置")
+        save_btn.setProperty("variant", "primary")
+        save_btn.clicked.connect(self._save_params)
+        first.addWidget(save_btn)
+        fv.addLayout(first)
+
+        second = QHBoxLayout()
+        second.setSpacing(8)
+        second.addWidget(QLabel("附加信息"))
+        self.extra_info_entry = QLineEdit()
+        self.extra_info_entry.setPlaceholderText("写入版权/备注的附加信息，可留空")
+        second.addWidget(self.extra_info_entry, 1)
+        fv.addLayout(second)
+
+        outer.addWidget(footer)
         return w
 
     def _build_card_column(self, title, card_type):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(4)
+        v.setSpacing(6)
         head = QHBoxLayout()
+        head.setSpacing(6)
         lbl = QLabel(title)
-        lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+        lbl.setStyleSheet("font-weight: 600; font-size: 13px;")
         head.addWidget(lbl)
+        count_lbl = QLabel("")
+        count_lbl.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        head.addWidget(count_lbl)
         head.addStretch(1)
         add_btn = QPushButton("添加")
+        add_btn.setToolTip(f"新增一个{title[:-2] if title.endswith('列表') else title}")
         add_btn.clicked.connect(
             lambda: self._add_card_item(card_type))
         head.addWidget(add_btn)
         v.addLayout(head)
+        self.card_count_labels[card_type] = count_lbl
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background: palette(base);"
+            " border: 1px solid palette(mid); border-radius: 6px; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
         container = QWidget()
         box = QVBoxLayout(container)
         box.setContentsMargins(2, 2, 2, 2)
-        box.setSpacing(3)
+        box.setSpacing(4)
         scroll.setWidget(container)
         v.addWidget(scroll, 1)
 
@@ -929,6 +1035,9 @@ class RenamePage(BasePage):
             wgt = item.widget()
             if wgt:
                 wgt.deleteLater()
+        count_lbl = getattr(self, "card_count_labels", {}).get(card_type)
+        if count_lbl is not None:
+            count_lbl.setText(f"{len(items)} 项")
         for i, name in enumerate(items):
             card = QFrame()
             card.setStyleSheet(
@@ -1075,4 +1184,4 @@ class RenamePage(BasePage):
         self._post_cancel.set()
         self._load_token = object()
         self._thumb_pm = None
-        self.thumb_label.clear()
+        self._clear_thumb()

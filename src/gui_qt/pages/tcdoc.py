@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg, TASKS
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.tcdoc_bridge import TcDocBridgePanel
@@ -446,6 +447,7 @@ class TcDocPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.docs: list[dict] = []
+        self._doc_rows: list[dict] = []   # 文档表格当前显示顺序（排序后与 docs 不同）
         self._busy = False
         self._ready_done = False
         self._ready_loading = False
@@ -478,16 +480,25 @@ class TcDocPage(BasePage):
         card = QFrame()
         card.setProperty("variant", "card")
         cv = QVBoxLayout(card)
-        cv.setContentsMargins(10, 8, 10, 8)
-        cv.setSpacing(6)
+        cv.setContentsMargins(12, 10, 12, 10)
+        cv.setSpacing(8)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("文档"))
+        row.setSpacing(8)
+        doc_label = QLabel("文档")
+        doc_label.setProperty("role", "caption")
+        row.addWidget(doc_label)
         self.doc_combo = QComboBox()
-        self.doc_combo.setMinimumWidth(230)
+        self.doc_combo.setMinimumWidth(260)
         self.doc_combo.setToolTip("切换文档：每个文档的历史记录、报表互相独立")
         self.doc_combo.currentIndexChanged.connect(self._on_doc_changed)
         row.addWidget(self.doc_combo)
+        self.link_btn = QPushButton("打开链接")
+        self.link_btn.setProperty("variant", "ghost")
+        self.link_btn.setToolTip("在浏览器打开当前文档")
+        self.link_btn.setVisible(False)
+        self.link_btn.clicked.connect(self._open_doc_url)
+        row.addWidget(self.link_btn)
         row.addStretch(1)
 
         self.collect_btn = QPushButton("立即采集")
@@ -504,33 +515,36 @@ class TcDocPage(BasePage):
             row.addWidget(btn)
         cv.addLayout(row)
 
-        # 自动维护总开关 + 子表范围（只作用于定时任务；手动采集始终可用）
-        auto_row = QHBoxLayout()
-        auto_row.setSpacing(6)
-        self.auto_cb = QCheckBox("自动维护（定时任务按勾选的子表同步）")
+        # 自动维护：单独一条浅色带，开关在左、作用范围在右，不再和按钮挤一行
+        auto_bar = QFrame()
+        auto_bar.setProperty("variant", "subtle")
+        auto_row = QHBoxLayout(auto_bar)
+        auto_row.setContentsMargins(10, 6, 10, 6)
+        auto_row.setSpacing(8)
+        self.auto_cb = QCheckBox("自动维护")
         self.auto_cb.setToolTip(
-            "关闭后定时任务不再同步任何子表；计划任务本身保留，"
-            "时间仍在「任务」页统一管理。手动「立即采集 / 表格同步」不受影响。")
+            "开启后定时任务按勾选的子表同步；关闭后定时任务不再同步任何子表。"
+            "计划任务本身保留，时间仍在「任务」页统一管理。"
+            "手动「立即采集 / 表格同步」不受影响。")
         self.auto_cb.toggled.connect(self._on_auto_toggled)
         auto_row.addWidget(self.auto_cb)
+        auto_row.addStretch(1)
+        self.sync_tabs_label = QLabel("")
+        self.sync_tabs_label.setProperty("role", "caption")
+        self.sync_tabs_label.setWordWrap(False)
+        auto_row.addWidget(self.sync_tabs_label)
         self.sync_tabs_btn = QPushButton("选择同步子表…")
         self.sync_tabs_btn.setToolTip(
             "勾选本子文档里参与自动同步的子表（官方动态 / 直播记录 / 完整歌曲…）；"
             "未勾选的子表不拉取、不下图片，本地旧数据保留不删")
         self.sync_tabs_btn.clicked.connect(self._choose_sync_tabs)
         auto_row.addWidget(self.sync_tabs_btn)
-        self.sync_tabs_label = QLabel("")
-        self.sync_tabs_label.setProperty("role", "caption")
-        self.sync_tabs_label.setWordWrap(True)
-        auto_row.addWidget(self.sync_tabs_label, 1)
-        cv.addLayout(auto_row)
+        cv.addWidget(auto_bar)
         self._refresh_auto_state()
 
-        self.url_label = QLabel("")
-        self.url_label.setProperty("role", "caption")
-        self.url_label.setWordWrap(True)
-        cv.addWidget(self.url_label)
         self.latest_label = QLabel("")
+        self.latest_label.setProperty("role", "subtitle")
+        self.latest_label.setWordWrap(True)
         cv.addWidget(self.latest_label)
         layout.addWidget(card)
 
@@ -685,9 +699,16 @@ class TcDocPage(BasePage):
             if position < len(rows):
                 self._defer(step)
             else:
+                self._apply_table_sort(table)
                 finish()
 
         self._defer(step)
+
+    def _apply_table_sort(self, table):
+        """填充完成后按 sorter 记住的表头状态重排（未点过表头时不做任何事）。"""
+        sorter = getattr(table, "_table_sorter", None)
+        if sorter is not None:
+            sorter.apply()
 
     def _build_bridge_panel(self):
         self.bridge_panel = TcDocBridgePanel(self, self.app, defer_load=True)
@@ -703,11 +724,13 @@ class TcDocPage(BasePage):
 
     def _build_daily_panel(self):
         self.table_daily = self._make_table(DAILY_COLS, stretch_all=True, fit_cols=(0,))
+        self._daily_sorter = table_sort.install(self.table_daily, skip_columns=())
         self.table_daily.setToolTip("每次采集追加一行；增量相对该文档上一次采集")
         return self._wrap(self.table_daily)
 
     def _build_snapshot_panel(self):
         self.table_snap = self._make_table(SNAP_COLS)
+        self._snap_sorter = table_sort.install(self.table_snap, skip_columns=())
         self.table_snap.setToolTip("每次采集的成功/失败明细，失败原因留档便于回溯")
         return self._wrap(self.table_snap)
 
@@ -752,6 +775,7 @@ class TcDocPage(BasePage):
             self.doc_table.setColumnWidth(idx, width)
             self.doc_table.horizontalHeader().setSectionResizeMode(
                 idx, QHeaderView.Stretch if idx == 0 else QHeaderView.Interactive)
+        self._doc_sorter = table_sort.install(self.doc_table, skip_columns=())
         self.doc_table.itemSelectionChanged.connect(self._on_doc_row_selected)
         self.doc_table.cellDoubleClicked.connect(lambda _r, _c: self._edit_doc())
         v.addWidget(self.doc_table, 1)
@@ -849,6 +873,7 @@ class TcDocPage(BasePage):
         self.table_data.setAlternatingRowColors(True)
         self.table_data.setWordWrap(False)
         self.table_data.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self._data_sorter = table_sort.install(self.table_data, skip_columns=())
         self.table_data.setToolTip("本地存档的表格数据（每次同步按记录逐行比对增量）")
 
         change_box = QWidget()
@@ -866,6 +891,7 @@ class TcDocPage(BasePage):
         for idx, (_name, width) in enumerate(CHANGE_COLS):
             self.table_changes.setColumnWidth(idx, width)
         self.table_changes.horizontalHeader().setStretchLastSection(True)
+        self._changes_sorter = table_sort.install(self.table_changes, skip_columns=())
         cv.addWidget(self.table_changes, 1)
 
         # 上下可拖动分栏：预览表与变更记录各自独立伸缩，避免预览把变更区压成一条缝
@@ -940,6 +966,7 @@ class TcDocPage(BasePage):
         self.rev_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.Stretch)
         self.rev_table.horizontalHeader().setStretchLastSection(True)
+        self._rev_sorter = table_sort.install(self.rev_table, skip_columns=())
         self.rev_table.verticalScrollBar().valueChanged.connect(self._on_rev_scrolled)
         v.addWidget(self.rev_table, 1)
 
@@ -996,6 +1023,7 @@ class TcDocPage(BasePage):
         self.mem_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.Stretch)
         self.mem_table.horizontalHeader().setStretchLastSection(True)
+        self._mem_sorter = table_sort.install(self.mem_table, skip_columns=())
         v.addWidget(self.mem_table, 1)
 
         self.mem_hint = QLabel(
@@ -1243,6 +1271,8 @@ class TcDocPage(BasePage):
     def _fill_doc_table(self):
         db = tc_cfg.db_path()
         docs = [dict(doc) for doc in self.docs]
+        self._doc_rows = list(docs)
+        self._doc_sorter.attach(self._doc_rows)
 
         def work():
             return [(doc, *storage.doc_stats(db, doc["key"])) for doc in docs]
@@ -1295,10 +1325,13 @@ class TcDocPage(BasePage):
     def _refresh_summary(self):
         doc = self.current_doc()
         if not doc:
-            self.url_label.setText("尚未配置文档，可在「文档管理」里添加")
-            self.latest_label.setText("")
+            self.link_btn.setVisible(False)
+            self.latest_label.setText("尚未配置文档，可在「文档管理」里添加")
             return
-        self.url_label.setText(f"链接：{doc['url']}")
+        url = str(doc.get("url") or "")
+        self.link_btn.setVisible(bool(url))
+        self.link_btn.setToolTip(f"在浏览器打开：{url}" if url else "当前文档没有链接")
+        self.latest_label.setText("正在读取最新记录…")
         revision = self._data_revision
         db = tc_cfg.db_path()
         self.latest_label.setText("正在读取最新记录…")
@@ -1313,8 +1346,8 @@ class TcDocPage(BasePage):
             else:
                 views = "-" if row["views"] is None else row["views"]
                 self.latest_label.setText(
-                    f"最新记录：{row['date']}　浏览量 {views}　成员 {row['members']}"
-                    f"　已查看 {row['readers'] if row['readers'] is not None else '-'}")
+                    f"最新记录 {row['date']} · 浏览量 {views} · 成员 {row['members']}"
+                    f" · 已查看 {row['readers'] if row['readers'] is not None else '-'}")
 
         run_bg(lambda: storage.latest(db, doc["key"]), done, owner=self)
 
@@ -1554,6 +1587,9 @@ class TcDocPage(BasePage):
                 if value:
                     item.setToolTip(value[:1500])
                 result.append(item)
+            if result:
+                # 行号挂在首列，排序后按新行序还原竖表头（排序只移动单元格，不动竖表头）
+                result[0].setData(Qt.UserRole, str(row["row_no"]))
             return result
         pages = max(1, (total + page_size - 1) // page_size)
         current = self._sheet_offset // page_size + 1 if total else 0
@@ -1568,7 +1604,22 @@ class TcDocPage(BasePage):
                              if image_stats.get("failed") else ""))
         self.sheet_info.setText(
             f"{len(names)} 列 · {total} 行{image_note} · 同步于 {stamp}")
-        self._render_table(self.table_data, rows, items, done, valid)
+
+        def rendered(error=None):
+            if not error:
+                self._restore_sheet_row_numbers()
+            done(error)
+
+        self._render_table(self.table_data, rows, items, rendered, valid)
+
+    def _restore_sheet_row_numbers(self):
+        """排序后重排竖表头的原始行号（单元格被整体搬行，竖表头不会跟随）。"""
+        table = self.table_data
+        for r in range(table.rowCount()):
+            item = table.item(r, 0)
+            row_no = item.data(Qt.UserRole) if item is not None else None
+            if row_no:
+                table.setVerticalHeaderItem(r, QTableWidgetItem(str(row_no)))
 
     def _refresh_changes(self):
         doc = self.current_doc()
@@ -1586,6 +1637,7 @@ class TcDocPage(BasePage):
             self.table_changes.setItem(r, 2, _cell(row["kind"]))
             self.table_changes.setItem(r, 3, _cell(row["record_id"] or ""))
             self.table_changes.setItem(r, 4, QTableWidgetItem(row["summary"] or ""))
+        self._changes_sorter.apply()
 
     def _sync_tables(self):
         if self._busy:
@@ -2019,12 +2071,18 @@ class TcDocPage(BasePage):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
             self.app.toast(f"打开失败：{path}", "warning")
 
+    def _open_doc_url(self):
+        doc = self.current_doc() or {}
+        url = str(doc.get("url") or "")
+        if url and not QDesktopServices.openUrl(QUrl(url)):
+            self.app.toast(f"打开失败：{url}", "warning")
+
     # ==================== 文档管理 ====================
 
     def _selected_doc(self) -> dict | None:
         row = self.doc_table.currentRow()
-        if 0 <= row < len(self.docs):
-            return self.docs[row]
+        if 0 <= row < len(self._doc_rows):
+            return self._doc_rows[row]
         return None
 
     def _on_doc_row_selected(self):

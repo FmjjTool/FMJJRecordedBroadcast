@@ -28,7 +28,7 @@ class BiliResourcePage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)

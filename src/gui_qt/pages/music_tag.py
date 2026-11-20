@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QAction, QIcon, QPixmap
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.music_tag_dialogs import (
@@ -44,6 +46,26 @@ COLUMNS = [
     ("samplerate", "采样率", 70), ("bitrate", "比特率", 70),
     ("durationinms", "时长", 80), ("updatetime", "修改时间", 130),
 ]
+
+# 需要按数值（而不是文本）排序的列：音轨 3/12、采样率 44.1 kHz、时长 3:21 等
+_NUMERIC_SORT_KEYS = {"year", "trackstr", "discstr", "bitpersample", "channels",
+                      "samplerate", "bitrate", "durationinms"}
+
+
+def _numeric_sort_key(key: str, text: str):
+    """数值型列 → 排序用数字；非数值列返回 None（交回通用文本/日期解析）。"""
+    if key not in _NUMERIC_SORT_KEYS:
+        return None
+    s = str(text or "").strip()
+    if not s or s in {"-", "—"}:
+        return None
+    m = re.fullmatch(r"(\d+):(\d{2})(?::(\d{2}))?", s)
+    if m:
+        a, b, c = m.groups()
+        return int(a) * 3600 + int(b) * 60 + int(c) if c else int(a) * 60 + int(b)
+    m = re.search(r"\d+(?:\.\d+)?", s)
+    return float(m.group()) if m else None
+
 
 DEFAULT_SETTINGS = {
     "id3_version": 3,
@@ -165,6 +187,8 @@ class _XlsxDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 行号 == self.page_rows 下标：排序时同步重排匹配记录，_apply 才能对上文件
+        self._sorter = table_sort.install(self.table, rows=self.page_rows, skip_columns=())
         v.addWidget(self.table, 1)
 
         row2 = QHBoxLayout()
@@ -225,6 +249,7 @@ class _XlsxDialog(QDialog):
                 self.table.setItem(i, 2, QTableWidgetItem(
                     f"{xlsx_match_score(pr, vals):.0f}"))
                 self.table.setItem(i, 3, QTableWidgetItem("待填充"))
+        self._sorter.attach(self.page_rows).reapply()
         n = sum(1 for m in matches if m >= 0)
         if not self._mapping().get("title") and not self._mapping().get("filename"):
             self.info.setText("请先把某一列映射为「文件名」或「标题」用于匹配")
@@ -268,8 +293,6 @@ class MusicTagPage(BasePage):
         self._rows: list[dict] = []
         self._edit_targets: list[int] = []
         self._settings = _load_settings()
-        self._sort_col = -1
-        self._sort_desc = False
         self._clipboard: tuple[dict, list[tags_io.Pic]] | None = None
         self._pending_encrypted: list[str] = []
 
@@ -749,7 +772,10 @@ class MusicTagPage(BasePage):
         header = self.table.horizontalHeader()
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._column_menu)
-        header.sectionClicked.connect(self._sort_by_column)
+        # 行号 == self._rows 下标：排序时同步重排记录列表，row() 反查仍正确
+        self._sorter = table_sort.install(self.table, rows=self._rows, skip_columns=())
+        header.sectionClicked.connect(
+            lambda _c: self._apply_filter(self.filter_edit.text()))
         header.setSectionResizeMode(QHeaderView.Interactive)
         for i, (_key, _label, width) in enumerate(COLUMNS):
             self.table.setColumnWidth(i, width)
@@ -865,6 +891,7 @@ class MusicTagPage(BasePage):
                 existing_paths.add(r["path"])
                 self._rows.append(r)
                 self._insert_table_row(len(self._rows) - 1)
+            self._sorter.attach(self._rows).reapply()
             self._update_status()
 
         run_bg(job, done)
@@ -921,6 +948,9 @@ class MusicTagPage(BasePage):
             item = QTableWidgetItem(text)
             if key in ("filename", "filedir"):
                 item.setToolTip(self._rows[i]["path"])
+            value = _numeric_sort_key(key, text)
+            if value is not None:
+                item.setData(table_sort.SORT_KEY_ROLE, value)
             self.table.setItem(i, c, item)
 
     def _refresh_row_cells(self, i: int):
@@ -936,6 +966,8 @@ class MusicTagPage(BasePage):
                 self.table.setItem(i, c, item)
             if item.text() != text:
                 item.setText(text)
+            value = _numeric_sort_key(key, text)
+            item.setData(table_sort.SORT_KEY_ROLE, value)
         self._apply_filter(self.filter_edit.text())
 
     def _mark_row(self, i: int):
@@ -950,6 +982,7 @@ class MusicTagPage(BasePage):
             if self._rows[i]["path"] in selected_paths:
                 self.table.selectRow(i)
         self.table.setUpdatesEnabled(True)
+        self._sorter.attach(self._rows).reapply()
         self._update_status()
 
     def _on_select(self):
@@ -1718,38 +1751,6 @@ class MusicTagPage(BasePage):
         cols = self._settings.get("columns") or {}
         for i, (key, _label, _width) in enumerate(COLUMNS):
             self.table.setColumnHidden(i, cols.get(key, True) is False)
-
-    def _sort_by_column(self, col: int):
-        if col < 0 or col >= len(COLUMNS):
-            return
-        selected_paths = {self._rows[i]["path"] for i in self._edit_targets}
-        if self._sort_col == col:
-            self._sort_desc = not self._sort_desc
-        else:
-            self._sort_col = col
-            self._sort_desc = False
-        key = COLUMNS[col][0]
-
-        def natural(text):
-            return [int(p) if p.isdigit() else p.lower()
-                    for p in re.split(r"(\d+)", str(text or ""))]
-
-        def sort_key(r):
-            if key in ("year", "trackstr", "discstr", "bitpersample", "channels",
-                       "samplerate", "bitrate", "durationinms"):
-                text = self._cell_value(r, key)
-                m = re.search(r"\d+(?:\.\d+)?", text)
-                return float(m.group()) if m else -1
-            if key == "updatetime":
-                try:
-                    return os.path.getmtime(r["path"])
-                except OSError:
-                    return 0
-            return natural(self._cell_value(r, key))
-
-        self._rows.sort(key=sort_key, reverse=self._sort_desc)
-        self._edit_targets = []
-        self._rebuild_table(selected_paths)
 
     # ==================== 状态 ====================
     def _apply_filter(self, text):

@@ -819,7 +819,10 @@ class Anchor:
               "elapsed", "quality", "quality_label", "segment",
               "segment_minutes", "segment_mb", "stop_minutes", "content",
               "remark", "notify_live", "notify_offline", "notify_rec_start",
-              "notify_rec_stop", "notify_online", "selected", "error")
+              "notify_rec_stop", "notify_online", "selected", "error",
+              # 账号配置里的「用于直播录制」：记住该主播属于哪个统一账号，
+              # 取消勾选时按它精确移除；老数据没有这两个字段也能正常加载。
+              "account_id", "url")
 
     def __init__(self, **kw):
         self.platform = kw.get("platform") or "douyin"
@@ -850,6 +853,8 @@ class Anchor:
         self.notify_online = bool(kw.get("notify_online", False))
         self.selected = bool(kw.get("selected"))
         self.error = kw.get("error") or ""
+        self.account_id = kw.get("account_id") or ""
+        self.url = kw.get("url") or ""
 
     @property
     def key(self):
@@ -928,6 +933,13 @@ def fetch_douyin(room, quality=""):
     err = info.get("error") or ""
     if status is None:
         err = err or "未读取到直播状态，请稍后重试"
+        digits = re.sub(r"\D", "", str(room))
+        if re.fullmatch(r"\d{15,16}", digits):
+            # 抖音分享/主页里给的主播 ID、用户 ID 长得像房间号，但读不到直播
+            err = ("这是抖音的用户/主播 ID，不是直播间号。"
+                   "请填 11~13 位直播间号（live.douyin.com/ 后面那段）或 19 位房间 ID")
+        elif "无法" in err and "查看" in err:
+            err += "（该号可能不是直播间号，请粘贴直播间链接或用 19 位房间 ID）"
     elif not live:
         err = ""
     elif not url:
@@ -945,6 +957,8 @@ def fetch_douyin(room, quality=""):
         "qualities": {DOUYIN_QUALITY_LABEL.get(k, k): k for k in
                       sorted(streams, key=lambda x: -DOUYIN_QUALITY_ORDER.get(x, 0))},
         "error": err,
+        # 登录态失效后已自动降级游客态：note 给界面/日志提示，不当成错误
+        "note": info.get("login_note") or "",
     }
 
 
@@ -1079,6 +1093,9 @@ class RecordManager:
         self.cycles = 0
         self.last_run = ""
         self.running = False
+        # 状态代次：清除状态后 +1，正在跑的检测结果按旧代次直接丢弃，
+        # 避免清完几秒后被迟到的「取流失败」重新写回表格。
+        self._epoch = 0
 
     # ---------- 事件 / 推送 / 记录 ----------
     def emit(self, text, level="info"):
@@ -1185,13 +1202,24 @@ class RecordManager:
 
     # ---------- 单个主播检测 ----------
     def check_one(self, a, status_only=False):
+        epoch = self._epoch
         info = fetch_status(a.platform, a.room) if status_only else fetch_info(a.platform, a.room, a.quality)
+        if epoch != self._epoch:
+            # 检测期间用户清除了状态：这批结果已经过期，不能再写回
+            return
         a.last_check = time.strftime("%Y-%m-%d %H:%M:%S")
+        prev_error = a.error or ""
         a.error = info.get("error") or ""
         if a.error and info.get("status") is None:
             # 查询失败不是关播；保留上一状态，正常收流的任务继续运行。
+            if a.error != prev_error:
+                # 表格只显示「取流失败」，真实原因进运行日志，便于排查
+                self.emit("「%s」取流失败：%s" % (a.name or a.room, a.error), "warn")
             self.changed()
             return
+        if info.get("note") and info["note"] != getattr(a, "_note", ""):
+            a._note = info["note"]
+            self.emit("「%s」%s" % (a.name or a.room, info["note"]), "warn")
         was_live = a.live
         a.live = bool(info.get("live"))
         if info.get("title"):
@@ -1429,6 +1457,41 @@ class RecordManager:
             if a.recording:
                 self.stop_record(a, reason="一键停止")
 
+    def reset_states(self, notify=True):
+        """清空运行状态（主播列表、备注与录制设置保留）。
+
+        停监控、停录制，主播的直播/录制/监控/在线等状态归零，轮次计数与
+        上次检测时间清空；调用方负责刷新界面与持久化。
+        """
+        self._epoch += 1
+        self.stop_monitor()
+        self.running = False
+        self.stop_all()
+        with self._lock:
+            self._tasks.clear()
+            self._task_info.clear()
+            self._retry.clear()
+            self._resume.clear()
+        self.cycles = 0
+        self.last_run = ""
+        for a in self.anchors:
+            a.live = False
+            a.online = 0
+            a.last_check = ""
+            a.error = ""
+            a.recording = False
+            a.rec_state = "未录制"
+            a.elapsed = 0
+            a.monitoring = False
+            a._want_record = False
+            a.selected = False
+            a.title = ""
+            a.cover = ""
+            a._note = ""
+            a._force_flv = False
+        if notify:
+            self.changed()
+
     def is_recording(self, a):
         t = self._tasks.get(a.key)
         return bool(t and t.is_active())
@@ -1599,3 +1662,77 @@ def save_state(state):
         return True
     except Exception:
         return False
+
+
+# ==================== 统一账号 → 录制主播（账号配置「用于直播录制」） ====================
+
+# 统一账号平台键 → 录制平台键（统一层叫 bilibili，录制层叫 bili）
+ACCOUNT_PLATFORM_KEYS = {"bilibili": "bili"}
+
+
+def record_platform(account_platform: str) -> str:
+    return ACCOUNT_PLATFORM_KEYS.get(account_platform, account_platform)
+
+
+def list_account_anchors() -> dict:
+    """统一账号 id → 已绑定的录制主播（只读，供账号配置显示勾选状态）。"""
+    state = load_state() or {}
+    out = {}
+    for plat, data in (state.get("platforms") or {}).items():
+        for item in (data or {}).get("anchors") or []:
+            aid = (item or {}).get("account_id")
+            if aid:
+                out[aid] = {"platform": plat,
+                            "room": str(item.get("room") or ""),
+                            "name": item.get("name") or ""}
+    return out
+
+
+def set_account_anchor(account_id: str, account_platform: str, room: str,
+                       name: str = "", url: str = ""):
+    """把统一账号绑定为一个录制主播；同平台同房间号复用，不重复添加。
+
+    只写 platform/room/name/account_id/url，其它录制设置保持原样；
+    返回 (是否成功, 提示文本)。
+    """
+    room = str(room or "").strip()
+    if not account_id or not room:
+        return False, "缺少账号或直播间号"
+    plat = record_platform(account_platform)
+    if plat not in PLATFORMS:
+        return False, "该平台不支持直播录制"
+    state = load_state() or {}
+    platforms = state.setdefault("platforms", {})
+    data = platforms.setdefault(plat, {})
+    anchors = data.setdefault("anchors", [])
+    for item in anchors:
+        if str(item.get("room") or "") == room:
+            item["account_id"] = account_id
+            if name:
+                item["name"] = name
+            if url:
+                item["url"] = url
+            save_state(state)
+            return True, "已绑定到已有主播"
+    anchors.append({"platform": plat, "room": room, "name": name,
+                    "account_id": account_id, "url": url,
+                    "monitoring": False, "recording": False})
+    save_state(state)
+    return True, "已加入直播录制"
+
+
+def remove_account_anchor(account_id: str) -> bool:
+    """取消「用于直播录制」：按 account_id 把主播从列表移除（不删录制文件）。"""
+    if not account_id:
+        return False
+    state = load_state() or {}
+    changed = False
+    for data in (state.get("platforms") or {}).values():
+        anchors = (data or {}).get("anchors") or []
+        keep = [x for x in anchors if (x or {}).get("account_id") != account_id]
+        if len(keep) != len(anchors):
+            data["anchors"] = keep
+            changed = True
+    if changed:
+        save_state(state)
+    return changed

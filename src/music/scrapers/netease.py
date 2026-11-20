@@ -76,7 +76,31 @@ class NeteaseScraper(BaseScraper):
                 url=f"https://music.163.com/song?id={item.get('id', '')}",
                 extra=_remainder(item, "id name alias duration artists album mvid fee pop"),
             ))
+        self._fill_covers(songs)
         return songs
+
+    def _fill_covers(self, songs) -> None:
+        """搜索接口不带封面：按 ID 批量补一次 song/detail 的 al.picUrl。"""
+        need = [s for s in songs if not s.cover_url and s.song_id]
+        if not need:
+            return
+        params = {"ids": "[" + ",".join(s.song_id for s in need) + "]"}
+        headers = make_headers(referer=f"{self.BASE}/",
+                               extra={"X-Requested-With": "XMLHttpRequest"})
+        try:
+            with get_client() as client:
+                self._init_cookies(client)
+                resp = client.get(self.SONG_URL, params=params, headers=headers)
+            data = safe_json(resp.text) or {}
+            covers = {
+                str(item.get("id", "")): (
+                    (item.get("al") or item.get("album") or {}).get("picUrl") or "")
+                for item in data.get("songs", [])
+            }
+            for song in need:
+                song.cover_url = covers.get(song.song_id, "") or song.cover_url
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     def get_song_detail(self, song_id: str) -> Optional[SongInfo]:

@@ -52,6 +52,7 @@ from toolbox.edit_engine import (
 )
 from toolbox.utils import format_size, is_video_file
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 
@@ -424,7 +425,7 @@ class EditorPage(BasePage):
         work = getattr(self.app, "work_dir", "") or ""
         return work if work and Path(work).is_dir() else str(Path.home())
 
-    # ==================== 日期文件夹（自动识别，和交互重命名一致） ====================
+    # ==================== 日期文件夹（自动识别，和命名投稿页一致） ====================
 
     def _folder_choices(self):
         """工作目录下的全部日期文件夹 [(名称, 绝对路径)]，按名称升序。"""
@@ -1182,6 +1183,8 @@ class EditorPage(BasePage):
         self.track_table.setColumnWidth(0, 60)
         self.track_table.setColumnWidth(1, 80)
         self.track_table.setColumnWidth(2, 120)
+        # 流信息存在第 1 列的 UserRole 里，随 item 一起移动，排序后仍能取到
+        self._track_sorter = table_sort.install(self.track_table, skip_columns=())
         v.addWidget(self.track_table, 1)
 
         row = QHBoxLayout()
@@ -1615,6 +1618,7 @@ class EditorPage(BasePage):
             self.track_table.setItem(row, 2, QTableWidgetItem(str(stream.get("codec_name"))))
             self.track_table.setItem(row, 3, QTableWidgetItem(str(language)))
             self.track_table.item(row, 0).setData(Qt.UserRole, stream)
+        self._track_sorter.reapply()
 
     def _selected_track_streams(self):
         rows = sorted({i.row() for i in self.track_table.selectedItems()})

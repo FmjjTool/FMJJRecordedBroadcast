@@ -90,22 +90,8 @@ def fmt_num(v):
 
 def _parse_room(platform, text):
     """从输入里提取房间号（房间号 / 直播间链接）。"""
-    import re
-    s = (text or "").strip()
-    if not s:
-        return ""
-    if platform not in ("douyin", "bili"):
-        from toolbox import live_stream
-        return live_stream.parse_room(platform, s)
-    if s.isdigit():
-        return s
-    if platform == "bili":
-        m = re.search(r"live\.bilibili\.com/(\d+)", s) or re.search(r"^(\d{2,})$", s)
-        return m.group(1) if m else ""
-    m = (re.search(r"live\.douyin\.com/(\d+)", s)
-         or re.search(r"web_rid=(\d+)", s)
-         or re.search(r"(\d{6,})", s))
-    return m.group(1) if m else ""
+    from toolbox.live_room_resolver import parse_room_input
+    return parse_room_input(platform, text)
 
 
 def _open_dir(path):
@@ -296,6 +282,11 @@ class AnchorModel(QAbstractTableModel):
                  f"录制质量：{a.quality_label or a.quality or '自动'}",
                  f"录制内容：{'音频' if int(getattr(a, 'content', 0) or 0) == 1 else '视频'}",
                  f"录满停止：{'%d 分钟' % a.stop_minutes if a.stop_minutes else '不限'}"]
+        if a.error:
+            lines.append("失败原因：" + a.error)
+        note = getattr(a, "_note", "")
+        if note:
+            lines.append("提示：" + note)
         if a.segment:
             lines.append("分段：" + ("%d MB/段" % a.segment_mb if a.segment_mb
                                     else "%d 分钟/段" % (a.segment_minutes or 30)))
@@ -361,7 +352,7 @@ class PlatformPane(QWidget):
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(4)
 
-        # ---- 工具栏 ----
+        # ---- 工具栏（分两行：上排主播与监控，下排设置与工具）----
         bar = QHBoxLayout()
         bar.setSpacing(6)
         self._tbtn(bar, "＋ 添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
@@ -373,17 +364,28 @@ class PlatformPane(QWidget):
                                   "按间隔检测开播，开播即自动录制")
         self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
         self._tbtn(bar, "⟳ 立即检测", self.on_check_now, "立刻检测所有监控中的主播")
-        bar.addSpacing(10)
-        self._tbtn(bar, "录制设置", self.on_settings)
-        self._tbtn(bar, "推送设置", self.on_push_settings)
-        self._tbtn(bar, "FLV 修复", self.on_repair_flv, "修复录制中断/时间戳错乱的 FLV")
-        self._tbtn(bar, "写时间码", self.on_timecode,
-                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
-        self._tbtn(bar, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
         bar.addStretch(1)
         self._tbtn(bar, "全选", lambda: self._check_all(True))
         self._tbtn(bar, "取消", lambda: self._check_all(False))
         lay.addLayout(bar)
+
+        bar2 = QHBoxLayout()
+        bar2.setSpacing(6)
+        self._tbtn(bar2, "录制设置", self.on_settings)
+        self._tbtn(bar2, "推送设置", self.on_push_settings)
+        self._tbtn(bar2, "FLV 修复", self.on_repair_flv, "修复录制中断/时间戳错乱的 FLV")
+        self._tbtn(bar2, "写时间码", self.on_timecode,
+                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
+        self._tbtn(bar2, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
+        self._tbtn(bar2, "清除状态", self.on_clear_states,
+                   "清空本页运行状态与日志（直播/录制/监控/已录时间/在线人数），"
+                   "主播列表、备注和录制设置保留；正在录制会先停止并打包")
+        bar2.addStretch(1)
+        bt_dm = self._tbtn(bar2, "弹幕姬",
+                           self.win._open_danmaku_window,
+                           "打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT、表情包")
+        bt_dm.setProperty("variant", "primary")
+        lay.addLayout(bar2)
 
         # ---- 顶部详情条 ----
         self.info = QLabel("共 0 个主播")
@@ -818,6 +820,19 @@ class PlatformPane(QWidget):
         if self.manager.running:
             self.manager.stop_monitor()
         else:
+            if not any(a.monitoring for a in self.manager.anchors):
+                # 状态刚被清除 / 首次启动：按钮直接对整张列表生效，
+                # 否则「开启监控录制」在初始状态下会一直提示先打开监控状态。
+                if not self.manager.anchors:
+                    self.win.toast("请先添加主播", "warning")
+                    self._on_changed()
+                    return
+                for anchor in self.manager.anchors:
+                    anchor.monitoring = True
+                self.model.refresh_all()
+                self._log("已把 %d 个主播加入监控；如需自动录制，"
+                          "请打开「是否录制」或使用「批量修改」" % len(self.manager.anchors),
+                          "info")
             if not self.manager.start_monitor():
                 self.win.toast("请先给主播打开「监控状态」", "warning")
         self._on_changed()
@@ -834,6 +849,74 @@ class PlatformPane(QWidget):
             return
         self.manager.stop_all()
         self.model.refresh_volatile()
+
+    def on_clear_states(self):
+        """清空本平台运行状态；正在录制时先停止并打包（主播与设置保留）。"""
+        m = self.manager
+        recording = [a for a in m.anchors if a.recording]
+        if m.running or recording:
+            first = ("将先停止 %d 个录制任务，等文件写完并完成分段合并打包；"
+                     % len(recording)) if recording else "将先停止监控；"
+            if QMessageBox.question(
+                    self, "清除状态",
+                    first + "\n随后清空本页的直播状态、监控时间、已录时间、录制状态、"
+                    "在线人数、勾选与运行日志。\n"
+                    "主播列表、备注、录制质量/内容/分段等设置都会保留。\n\n确定继续？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            outputs = [m.output_of(a) for a in recording]
+            outputs = [p for p in outputs if p]
+            m.stop_monitor()
+            for anchor in recording:
+                try:
+                    m.stop_record(anchor, reason="清除状态")
+                except Exception:  # noqa: BLE001 - 单个停止失败不阻止清零
+                    pass
+            self.model.refresh_all()
+            if outputs:
+                self._package_after_clear(outputs)
+        m.reset_states()
+        self.log.clear()
+        self._log("状态已清除：%d 个主播与全部设置保留，监控/录制均未启动"
+                  % len(m.anchors), "ok")
+        self.model.refresh_all()
+        self._on_changed()
+        self.win.toast("已清除本页运行状态（主播与设置保留）", "success")
+
+    def _package_after_clear(self, outputs):
+        """清除状态前给正在录制的文件收尾：分段合并 + 封装 mp4，带进度。"""
+        from toolbox import live_shutdown
+
+        dlg = QProgressDialog("正在停止录制并打包…", "", 0, max(1, len(outputs)), self)
+        dlg.setWindowTitle("清除状态 · 收尾打包")
+        dlg.setCancelButton(None)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.show()
+        QApplication.processEvents()
+
+        def progress(done, count, text):
+            dlg.setMaximum(max(1, count))
+            dlg.setValue(max(0, done - 1))
+            dlg.setLabelText(text)
+            QApplication.processEvents()
+
+        results = live_shutdown.package_many(outputs, progress=progress)
+        dlg.setValue(dlg.maximum())
+        dlg.close()
+        failed = [item for item in results if not item.get("ok")]
+        if failed:
+            detail = "\n".join(
+                f"{os.path.basename(item.get('source', ''))}：{item.get('message', '')}"
+                for item in failed[:4])
+            QMessageBox.warning(self, "打包未全部完成",
+                                f"以下文件没打包成功，原始录制文件已保留：\n{detail}")
+        elif results:
+            self.win.toast(f"已停止录制并打包 {len(results)} 个文件", "info")
 
     def on_check_now(self):
         items = [a for a in self.manager.anchors if a.monitoring] or list(self.manager.anchors)
@@ -1112,7 +1195,8 @@ class AddAnchorDialog(QDialog):
         if platform == "bili":
             hint = "如 544820 / https://live.bilibili.com/544820"
         elif platform == "douyin":
-            hint = "如 582775732015 / https://live.douyin.com/582775732015"
+            hint = ("11~13 位直播间号 / 19 位房间 ID / 直播间链接"
+                    "（如 582775732015、7710257134692633395、https://live.douyin.com/582775732015）")
         else:
             from toolbox import live_stream
             hint = live_stream.room_hint(platform)
@@ -1895,14 +1979,23 @@ def collect_activity(panes) -> dict:
 class LiveRecordWindow(QMainWindow):
     """直播录制二级界面：底部切换六个平台，各平台列表互不影响。"""
 
-    def __init__(self, app=None, platform="douyin", room=""):
+    def __init__(self, app=None, platform="douyin", room="", embedded=False):
         super().__init__()
         self.app = app
+        self.embedded = bool(embedded)
+        if self.embedded:
+            # 内嵌到主界面页面栈：当普通子控件用，菜单栏仍显示在页面顶部
+            self.setWindowFlags(Qt.Widget)
         self.state = LR.load_state() or {}
+        # 记下启动时是否真读到配置：读空时不允许把空主播列表写回磁盘（见 save_state）
+        self._state_from_disk = bool(self.state)
         self.setWindowTitle("直播录制 · 多平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）")
         size = self.state.get("window") or [1360, 760]
         self.resize(int(size[0]), int(size[1]))
-        self.setMinimumSize(1080, 600)
+        if self.embedded:
+            self.setMinimumSize(880, 520)
+        else:
+            self.setMinimumSize(1080, 600)
 
         self.panes = {}
         self.current = "douyin"
@@ -1952,6 +2045,8 @@ class LiveRecordWindow(QMainWindow):
         self._timer.start(1000)
 
         self.switch_platform(platform)
+        # 启动即初始化：主播列表与设置保留，运行状态从零开始（不自动监控）
+        self.reset_all_states(initial=True)
         if room:
             pane = self.panes.get(platform)
             if pane and not any(a.room == room for a in pane.manager.anchors):
@@ -1982,7 +2077,11 @@ class LiveRecordWindow(QMainWindow):
                               lambda: _open_dir(self.pane.manager.out_dir())))
         m.addAction(self._act("打开记录数据文件夹", lambda: self.pane.on_open_record_dir()))
         m.addSeparator()
-        m.addAction(self._act("退出", self.close, "Ctrl+Q"))
+        if self.embedded and self.app is not None:
+            # 内嵌在页面栈里：退出＝退出整个软件，交给主窗口统一收尾
+            m.addAction(self._act("退出软件", self.app.close, "Ctrl+Q"))
+        else:
+            m.addAction(self._act("退出", self.close, "Ctrl+Q"))
 
         m = mb.addMenu("主播(&A)")
         m.addAction(self._act("加入监控", lambda: self.pane._set_flag("monitoring", True)))
@@ -2011,9 +2110,16 @@ class LiveRecordWindow(QMainWindow):
         m.addAction(self._act("FLV 修复…", lambda: self.pane.on_repair_flv()))
         m.addAction(self._act("写时间码…", lambda: self.pane.on_timecode()))
         m.addSeparator()
+        m.addAction(self._act("清除本页状态…", lambda: self.pane.on_clear_states(),
+                              tip="清空当前平台的运行状态与日志；主播与设置保留"))
+        m.addSeparator()
         m.addAction(self._act("复制直播源", lambda: self.pane.on_copy_stream()))
         m.addAction(self._act("复制直播网址", lambda: self.pane.on_copy_url()))
         m.addAction(self._act("运行日志…", lambda: self.pane.on_show_log()))
+        m.addSeparator()
+        m.addAction(self._act(
+            "弹幕姬…", self._open_danmaku_window,
+            tip="打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT、表情包"))
 
         m = mb.addMenu("设置(&S)")
         m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
@@ -2037,6 +2143,14 @@ class LiveRecordWindow(QMainWindow):
             "快手 / 微博 / 小红书 / 网易云取流来自页面自身接口，"
             "视频统一由 ffmpeg 转封装为 TS")
 
+    def _open_danmaku_window(self):
+        """打开弹幕姬窗口（抖音 / B站两个页签）。"""
+        try:
+            from gui_qt.danmaku_window import open_danmaku_window
+            open_danmaku_window(self.app)
+        except Exception as e:  # 弹幕窗口加载失败不应连带录制页崩掉
+            QMessageBox.warning(self, "弹幕姬", f"打开失败：{e}")
+
     # ---------- 平台切换 ----------
     def switch_platform(self, key):
         if key not in self.panes:
@@ -2052,6 +2166,16 @@ class LiveRecordWindow(QMainWindow):
     @property
     def pane(self):
         return self.panes[self.current]
+
+    def reset_all_states(self, initial=False):
+        """把所有平台的运行状态归零；initial=True 时用于启动初始化（不写盘）。"""
+        for pane in self.panes.values():
+            pane.manager.reset_states(notify=not initial)
+            pane.model.refresh_all()
+        if not initial:
+            self.schedule_save()
+        self.refresh_status()
+        self._update_info()
 
     def refresh_status(self):
         panes = getattr(self, "panes", {})
@@ -2112,8 +2236,16 @@ class LiveRecordWindow(QMainWindow):
             self._save_timer.start(500)
 
     def save_state(self):
-        self.state["platforms"] = {k: p.to_state() for k, p in self.panes.items()}
-        self.state["window"] = [self.width(), self.height()]
+        platforms = {k: p.to_state() for k, p in self.panes.items()}
+        if not self._state_from_disk and not any(
+                (v or {}).get("anchors") for v in platforms.values()):
+            # 启动时没读到配置（文件缺失/损坏/被占用），本轮也没有主播：
+            # 不能把空列表写回磁盘，否则会误清用户已设定的主播
+            return
+        self.state["platforms"] = platforms
+        if not self.embedded:
+            # 内嵌页面不记录窗口尺寸（内嵌尺寸由主窗口布局决定）
+            self.state["window"] = [self.width(), self.height()]
         if not LR.save_state(self.state):
             self.toast("录制配置保存失败，请检查目录写入权限", "error")
 
@@ -2145,6 +2277,46 @@ class LiveRecordWindow(QMainWindow):
             p.manager.shutdown()
 
     # ==================== 关闭前收尾（停止录制 → 打包） ====================
+    # ---------- 账号配置「用于直播录制」 ----------
+    def upsert_account_anchor(self, account_id, account_platform, room,
+                              name="", url=""):
+        """账号配置勾选「用于直播录制」：同平台同房间号复用，否则新增一条主播。"""
+        plat = LR.record_platform(account_platform)
+        pane = self.panes.get(plat)
+        if pane is None:
+            return False, "该平台不支持直播录制"
+        room = str(room or "").strip()
+        if not room:
+            return False, "请先填直播间号"
+        for a in pane.manager.anchors:
+            if a.room == room:
+                a.account_id = account_id
+                if name:
+                    a.name = name
+                if url:
+                    a.url = url
+                pane.model.refresh_all()
+                self.schedule_save()
+                return True, "已绑定到已有主播"
+        pane.manager.anchors.append(LR.Anchor(
+            platform=plat, room=room, name=name, account_id=account_id, url=url))
+        pane.model.refresh_all()
+        self.schedule_save()
+        return True, "已加入直播录制"
+
+    def remove_account_anchor(self, account_id):
+        """取消「用于直播录制」：只移除该账号绑定的主播，不删录制文件。"""
+        changed = False
+        for pane in self.panes.values():
+            keep = [a for a in pane.manager.anchors if a.account_id != account_id]
+            if len(keep) != len(pane.manager.anchors):
+                pane.manager.anchors[:] = keep
+                pane.model.refresh_all()
+                changed = True
+        if changed:
+            self.schedule_save()
+        return changed
+
     def activity(self) -> dict:
         """当前录制 / 监控状态，供关闭窗口与退出软件时判断。"""
         return collect_activity(self.panes)
@@ -2245,7 +2417,7 @@ class LiveRecordWindow(QMainWindow):
 
 
 def open_live_record_window(app, platform="douyin", room=""):
-    """打开（或复用）直播录制二级界面，返回窗口实例。"""
+    """打开（或切到）直播录制：内嵌页面时切页，独立窗口时显示窗口。"""
     win = getattr(app, "live_record_win", None)
     if win is None:
         win = LiveRecordWindow(app, platform=platform, room=room)
@@ -2258,6 +2430,11 @@ def open_live_record_window(app, platform="douyin", room=""):
             win.panes[platform].manager.anchors.append(a)
             win.panes[platform].model.refresh_all()
         win.switch_platform(platform)
+    if getattr(win, "embedded", False):
+        # 已内嵌在主界面页面栈：切到该页即可，不另开顶层窗口
+        if app is not None and hasattr(app, "show_page"):
+            app.show_page("live_record")
+        return win
     win.show()
     win.raise_()
     win.activateWindow()

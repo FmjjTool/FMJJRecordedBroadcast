@@ -1,12 +1,13 @@
-"""音乐下载工具箱（PySide6 版，对应原版 gui/netease_page.py）。
+"""音乐搜索下载页（PySide6 版，原「音乐信息获取」+「音乐下载」合并为单页）。
 
-五平台：网易云音乐 / QQ音乐 / 酷狗 / 酷我 / 5sing
-- 功能/设置 双标签
+一条主线：平台选择 → 输入 → 结果表 → 勾选后下载 / 导出。
 - 平台选择 + 模式按钮 + 动态输入区（搜索模式带歌手预填）
+- 「五平台对比」：一次并行搜五个平台，结果进同一张表（平台标签 + 平台筛选）
 - 网易云走 netease 模块（登录态 + 音质选择 + 专辑解析）
-- 其余四平台走 music/scrapers（游客直采：搜索/单曲解析/歌单解析）
+- 其余平台走 music/scrapers（游客直采：搜索/单曲解析/歌单解析）
 - 详情滚动区：歌曲列表（封面+时长）、单曲详情卡（封面+歌词+立即下载）、歌单信息卡
-- 下载：网易云 MusicDownloader；四平台 music/downloader（QQ 仅解析）
+- 下载：网易云 MusicDownloader；其余 music/downloader（QQ 仅解析）
+- 导出：勾选结果导出 Excel/JSON/Markdown（原「音乐信息获取」能力）
 """
 
 import os
@@ -16,7 +17,7 @@ import time
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget,
 )
@@ -40,12 +41,21 @@ QUALITY_NAMES = {
 
 # (platform_id, 显示名, 模式列表) —— netease 走独立模块，其余走 music scrapers
 PLATFORMS = [
+    ("all", "五平台对比", ["search"]),
     ("netease", "网易云音乐", ["search", "song", "playlist", "album"]),
     ("qq", "QQ音乐", ["search", "song", "playlist"]),
     ("kugou", "酷狗音乐", ["search", "song", "playlist"]),
     ("kuwo", "酷我音乐", ["search", "song", "playlist"]),
     ("5sing", "5sing音乐", ["search", "song", "playlist"]),
     ("kugou_lite", "酷狗概念版", ["search", "song"]),
+]
+
+MERGE_PLATFORM = "all"
+
+# 五平台对比的参与平台（酷狗概念版需登录，单独入口，不进对比）
+MERGE_SOURCES = [
+    ("kugou", "酷狗"), ("qq", "QQ"), ("netease", "网易云"),
+    ("kuwo", "酷我"), ("5sing", "5sing"),
 ]
 
 MODES = [
@@ -111,8 +121,122 @@ def _song_to_row(s):
         "picUrl": s.cover_url or "",
         "duration": (s.duration or 0) * 1000,
         "_platform": s.platform,
+        "_mode": getattr(s, "mode", "") or "",
         "_song": s,
     }
+
+
+# 五平台栏里的勾选框：默认样式在白色栏内太浅（选中态只剩一个勾、看不到框），
+# 这里未选态加深边框，选中态用绿底 + 自绘白勾，保证两种状态都能一眼看清。
+MERGE_CHECK_QSS = (
+    "QCheckBox { spacing: 0px; }"
+    "QCheckBox::indicator { width: 16px; height: 16px; }"
+    "QCheckBox::indicator:unchecked {"
+    " background: #ffffff; border: 2px solid #77818f; border-radius: 4px; }"
+    "QCheckBox::indicator:unchecked:hover { border-color: #2e7d32; }"
+    "QCheckBox::indicator:checked {"
+    " background: #2e7d32; border: 2px solid #2e7d32; border-radius: 4px;"
+    " image: url(\"%s\"); }"
+    "QCheckBox::indicator:checked:hover { background: #276b2b; border-color: #276b2b; }"
+)
+
+_MERGE_CHECK_PATH = None
+
+
+def _merge_check_image() -> str:
+    """生成白勾小图（QSS 里给选中态用），失败时返回空串退回纯绿底。"""
+    global _MERGE_CHECK_PATH
+    if _MERGE_CHECK_PATH is not None:
+        return _MERGE_CHECK_PATH
+    import tempfile
+    from PySide6.QtCore import QPointF, Qt as _Qt
+    from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
+
+    path = os.path.join(tempfile.gettempdir(), "fmjj_music_check.png")
+    if os.path.exists(path):
+        _MERGE_CHECK_PATH = path
+        return path
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(_Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor("#ffffff"), 4.0, _Qt.SolidLine, _Qt.RoundCap, _Qt.RoundJoin))
+    painter.drawPolyline(QPolygonF([QPointF(8, 17), QPointF(14, 23), QPointF(24, 10)]))
+    painter.end()
+    try:
+        pixmap.save(path)
+    except Exception:
+        _MERGE_CHECK_PATH = ""
+        return ""
+    _MERGE_CHECK_PATH = path
+    return path
+
+
+def _merge_check_qss() -> str:
+    path = _merge_check_image()
+    if not path:
+        return MERGE_CHECK_QSS % ""
+    return MERGE_CHECK_QSS % path.replace(os.sep, "/")
+
+
+_TITLE_PUNCT = re.compile(
+    r"[\s\-_·・.,，。()（）\[\]【】{}<>《》\"'’‘“”：:;；!！?？/、|~～]+")
+
+
+def _norm_title(text) -> str:
+    return _TITLE_PUNCT.sub("", str(text or "")).lower()
+
+
+def _match_score(title, keyword) -> int:
+    """匹配度：0 完全相同 / 1 前缀相同 / 2 包含 / 3 不相关。"""
+    name, key = _norm_title(title), _norm_title(keyword)
+    if not key:
+        return 0
+    if name == key:
+        return 0
+    if name.startswith(key):
+        return 1
+    if key in name:
+        return 2
+    return 3
+
+
+def _row_cover_url(row) -> str:
+    """结果行封面：优先 SongInfo.cover_url，其次各平台返回里的备用字段。"""
+    song = row.get("_song")
+    url = row.get("picUrl") or getattr(song, "cover_url", "") or ""
+    extra = dict(getattr(song, "extra", {}) or {})
+    if not url:
+        trans = extra.get("trans_param") or {}
+        union = trans.get("union_cover") or extra.get("union_cover") or ""
+        if union:
+            url = str(union).replace("{size}", "400")
+    if not url:
+        key = row.get("_platform_key") or row.get("_platform") or ""
+        album_mid = getattr(song, "album_id", "") or ""
+        if key == "qq" and album_mid:
+            url = f"https://y.gtimg.cn/music/photo_new/T002R300x300M000{album_mid}.jpg"
+    if not url:
+        for field in ("picUrl", "imgurl", "img_url", "songimg", "userimg", "cover"):
+            value = extra.get(field)
+            if isinstance(value, str) and value.startswith("http"):
+                url = value
+                break
+    return _thumb_cover_url(url)
+
+
+def _thumb_cover_url(url: str) -> str:
+    """五平台栏里封面只显示 36px，按平台缩到小图，减少加载失败与流量。"""
+    if not url:
+        return ""
+    if "y.gtimg.cn" in url:
+        return (url.replace("T002R800x800M000", "T002R300x300M000")
+                   .replace("800x800", "300x300"))
+    if "music.126.net" in url:
+        return url + ("&" if "?" in url else "?") + "param=300y300"
+    if "kuwo.cn" in url:
+        return url.replace("/700/", "/300/")
+    return url
 
 
 class NeteasePage(BasePage):
@@ -120,6 +244,10 @@ class NeteasePage(BasePage):
 
     def restore_session_data(self):
         platform, mode = self.platform, self.mode
+        index = next((i for i, (pid, _n, _m) in enumerate(PLATFORMS) if pid == platform), 0)
+        self.platform_menu.blockSignals(True)
+        self.platform_menu.setCurrentIndex(index)
+        self.platform_menu.blockSignals(False)
         self._apply_platform(platform)
         self._switch_mode(mode)
         snapshot = getattr(self, "_result_snapshot", None)
@@ -189,6 +317,13 @@ class NeteasePage(BasePage):
         self.detail_layout.setAlignment(Qt.AlignTop)
         self.detail_scroll.setWidget(self.detail_container)
         self.detail_stack.addWidget(self.detail_scroll)
+        # 五平台对比独立页：五个平台各一栏框架，各自滚动，不走上面的大滚动区
+        self.merged_page = QWidget()
+        self.merged_outer = QVBoxLayout(self.merged_page)
+        self.merged_outer.setContentsMargins(0, 0, 0, 0)
+        self.merged_outer.setSpacing(4)
+        self._merged_groups = []
+        self.detail_stack.addWidget(self.merged_page)
         v.addWidget(self.detail_stack, 1)
 
         # 底部：操作栏
@@ -228,12 +363,19 @@ class NeteasePage(BasePage):
         self.download_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
         self.download_btn.clicked.connect(self._download_selected)
         bottom.addWidget(self.download_btn)
+        self.export_btn = QPushButton("导出选中")
+        self.export_btn.setToolTip("把勾选结果导出为 Excel/JSON/Markdown（原「音乐信息获取」能力）")
+        self.export_btn.clicked.connect(self._export_selected)
+        bottom.addWidget(self.export_btn)
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #888;")
         bottom.addWidget(self.status_label, 1)
         v.addLayout(bottom)
 
-        # 默认平台/模式
+        # 默认平台/模式：沿用原行为（网易云 + 歌曲搜索）
+        self.platform_menu.blockSignals(True)
+        self.platform_menu.setCurrentIndex(1)
+        self.platform_menu.blockSignals(False)
         self._apply_platform("netease")
         return w
 
@@ -314,7 +456,11 @@ class NeteasePage(BasePage):
         # 音质选项
         self.quality_menu.blockSignals(True)
         self.quality_menu.clear()
-        if platform == "netease":
+        if platform == MERGE_PLATFORM:
+            # 对比模式混合多平台，音质由各平台各自取默认（网易云走无损）
+            self.quality_menu.addItem("各平台默认（网易云无损）", "")
+            self.quality_menu.setEnabled(False)
+        elif platform == "netease":
             self.quality_menu.addItems(list(QUALITY_NAMES.values()))
             self.quality_menu.setCurrentText(QUALITY_NAMES["lossless"])
             self.quality_menu.setEnabled(True)
@@ -326,6 +472,11 @@ class NeteasePage(BasePage):
         self.quality_menu.blockSignals(False)
         # 默认模式（album 仅网易云）
         self._switch_mode("search")
+        if platform == MERGE_PLATFORM:
+            # 切到五平台对比就先把五个空框架摆出来，不等搜索
+            self._result_kind = "multi"
+            self._render_merged([])
+            self.detail_stack.setCurrentWidget(self.merged_page)
 
     # ===================== 模式切换 =====================
     def _switch_mode(self, mode):
@@ -346,21 +497,31 @@ class NeteasePage(BasePage):
             self.singer_entry = QLineEdit()
             self.singer_entry.setPlaceholderText("歌手（默认封茗囧菌）")
             self.singer_entry.setFixedWidth(150)
-            if self.platform == "netease":
+            if self.platform in ("netease", MERGE_PLATFORM):
                 self.singer_entry.setText("封茗囧菌")
             self.input_row.addWidget(self.singer_entry)
         ph = PLACEHOLDERS.get(self.platform, {}).get(mode, "歌曲关键词")
+        if self.platform == MERGE_PLATFORM:
+            ph = "歌曲名 / 专辑名（五个平台一次搜）"
         self.kw_entry = QLineEdit()
         self.kw_entry.setPlaceholderText(ph)
         self.kw_entry.returnPressed.connect(self._search)
         self.input_row.addWidget(self.kw_entry, 1)
-        self.search_btn = QPushButton("获取")
+        self.search_btn = QPushButton("搜索五平台" if self.platform == MERGE_PLATFORM else "获取")
         self.search_btn.clicked.connect(self._search)
         self.input_row.addWidget(self.search_btn)
+        if self.platform == MERGE_PLATFORM:
+            self.complete_btn = QPushButton("从完整歌曲选择")
+            self.complete_btn.setToolTip("从腾讯文档「完整歌曲」本地快照选歌，优先用歌曲平台链接取详情")
+            self.complete_btn.clicked.connect(self._pick_complete_song)
+            self.input_row.addWidget(self.complete_btn)
+        else:
+            self.complete_btn = None
         # 清空详情
         self._clear_detail()
         self.results = []
         self.check_boxes = []
+        self._merged_rows = []
         self.single_song_id = None
         self.single_song = None
         self._show_empty()
@@ -375,6 +536,7 @@ class NeteasePage(BasePage):
                     sub = item.layout().takeAt(0)
                     if sub.widget():
                         sub.widget().deleteLater()
+        self._clear_merged()
 
     def _show_empty(self):
         self._clear_detail()
@@ -449,6 +611,8 @@ class NeteasePage(BasePage):
         platform = self.platform
 
         def work():
+            if platform == MERGE_PLATFORM:
+                return self._work_all(kw, singer)
             if platform == "netease":
                 return self._work_netease(mode, kw, singer)
             return self._work_scraper(platform, mode, kw)
@@ -456,22 +620,330 @@ class NeteasePage(BasePage):
         def done(result, err):
             self.search_btn.setEnabled(True)
             if err:
+                if self.platform == MERGE_PLATFORM:
+                    self._render_merged([])
+                    self.detail_stack.setCurrentWidget(self.merged_page)
+                else:
+                    self._show_empty()
                 self.status_label.setText(f"{err}")
-                self._show_empty()
                 return
             self._result_snapshot = result
             self._render_result(result)
+            if result and result[0] == "multi" and not result[1]:
+                self.status_label.setText("五平台都没有搜索结果，换个歌名或检查网络/登录态")
 
         run_bg(work, done)
 
     def _render_result(self, result):
         kind, data = result
-        self.detail_stack.setCurrentWidget(self.detail_scroll)
+        self._result_kind = kind
+        if kind == "multi":
+            self.detail_stack.setCurrentWidget(self.merged_page)
+        else:
+            self.detail_stack.setCurrentWidget(self.detail_scroll)
         render = {"songs": self._render_songs, "song": self._render_single_song,
                   "playlist": self._render_playlist, "album": self._render_album,
-                  "albums": self._render_albums}.get(kind)
+                  "albums": self._render_albums, "multi": self._render_merged}.get(kind)
         if render:
-            render(data or [] if kind in ("songs", "albums") else data)
+            render(data or [] if kind in ("songs", "albums", "multi") else data)
+
+    # ===================== 五平台对比：搜索与渲染 =====================
+    def _work_all(self, kw, singer):
+        """五平台并行搜索：结果合并成一张表（不按平台分列）。"""
+        from concurrent.futures import ThreadPoolExecutor
+        from music import ALL_PLATFORMS
+
+        keyword = f"{singer} {kw}".strip() if singer else kw
+        targets = [(key, name, cls) for key, name, cls in ALL_PLATFORMS
+                   if key in dict(MERGE_SOURCES)]
+
+        def one(spec):
+            key, name, cls = spec
+            try:
+                scraper = cls()
+                if key == "5sing":
+                    songs = []
+                    for part in scraper.search_all_modes(keyword, limit=8).values():
+                        songs.extend(part)
+                else:
+                    songs = scraper.search(keyword, limit=8)
+            except Exception:
+                songs = []
+            rows = []
+            for s in songs or []:
+                row = _song_to_row(s)
+                row["_platform_key"] = key
+                row["_platform_name"] = dict(MERGE_SOURCES).get(key, name)
+                rows.append(row)
+            return rows
+
+        with ThreadPoolExecutor(max_workers=max(1, len(targets))) as ex:
+            groups = list(ex.map(one, targets))
+        rows = [row for group in groups for row in group]
+        if not rows:
+            return ("multi", [])
+        # 按与搜索词的匹配度排序（稳定排序，同分保留平台自己的相关度顺序）
+        rows.sort(key=lambda r: _match_score(r.get("name"), kw))
+        return ("multi", rows)
+
+    def _clear_merged(self):
+        """清空五平台对比页（筛选栏 + 五个平台栏）。"""
+        while self.merged_outer.count():
+            item = self.merged_outer.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+                continue
+            layout = item.layout()
+            if layout is None:
+                continue
+            while layout.count():
+                sub = layout.takeAt(0)
+                if sub.widget():
+                    sub.widget().hide()
+                    sub.widget().deleteLater()
+                elif sub.layout():
+                    while sub.layout().count():
+                        deep = sub.layout().takeAt(0)
+                        if deep.widget():
+                            deep.widget().hide()
+                            deep.widget().deleteLater()
+        self._merged_groups = []
+
+    def _render_merged(self, rows, empty_hint="输入歌曲名后点「搜索五平台」"):
+        """五平台各一栏独立框架并排：尚未搜索时也先把五个空框架显示出来。"""
+        self._clear_merged()
+        self._result_kind = "multi"
+        self.results = []
+        self.check_boxes = []
+        rows = list(rows or [])
+
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 2)
+        bar.addWidget(QLabel("平台筛选:"))
+        self.filter_menu = QComboBox()
+        self.filter_menu.addItem("全部平台", "")
+        for key, name in MERGE_SOURCES:
+            self.filter_menu.addItem(name, key)
+        self.filter_menu.currentIndexChanged.connect(self._apply_merged_filter)
+        bar.addWidget(self.filter_menu)
+        if not rows:
+            hint = QLabel(empty_hint)
+            hint.setStyleSheet(
+                "color: palette(placeholder-text); font-size: 11px; background: transparent;")
+            bar.addSpacing(8)
+            bar.addWidget(hint)
+        bar.addStretch(1)
+        self.merged_outer.addLayout(bar)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(8)
+        self.merged_outer.addLayout(columns, 1)
+        for key, label in MERGE_SOURCES:
+            group_rows = [r for r in rows if (r.get("_platform_key") or "") == key]
+            frame = QFrame()
+            frame.setObjectName("mergeGroup")
+            frame.setStyleSheet(
+                "QFrame#mergeGroup { background: #ffffff; border: 1px solid #d0d6df;"
+                " border-radius: 6px; }")
+            fv = QVBoxLayout(frame)
+            fv.setContentsMargins(6, 6, 6, 6)
+            fv.setSpacing(4)
+            head = QLabel(f"{label} · {len(group_rows)}")
+            head.setStyleSheet(
+                "font-weight: bold; color: #333; background: transparent; border: none;")
+            fv.addWidget(head)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setStyleSheet(
+                "QScrollArea { background: transparent; border: none; }"
+                "QScrollArea > QWidget > QWidget { background: transparent; }")
+            host = QWidget()
+            hv = QVBoxLayout(host)
+            hv.setContentsMargins(0, 0, 0, 0)
+            hv.setSpacing(2)
+            hv.setAlignment(Qt.AlignTop)
+            if not group_rows:
+                blank = QLabel("—")
+                blank.setAlignment(Qt.AlignCenter)
+                blank.setStyleSheet(
+                    "color: palette(placeholder-text); background: transparent;"
+                    " border: none; padding: 18px 0;")
+                hv.addWidget(blank)
+            for index, s in enumerate(group_rows):
+                self.results.append(s)
+                # 每栏第一条（匹配度最高）默认勾选，和原信息页一致
+                hv.addWidget(self._merged_row(s, checked=(index == 0)))
+            scroll.setWidget(host)
+            fv.addWidget(scroll, 1)
+            columns.addWidget(frame, 1)
+            self._merged_groups.append((key, frame))
+
+        if not rows:
+            self.status_label.setText(empty_hint)
+            return
+        counts = []
+        for key, name in MERGE_SOURCES:
+            n = sum(1 for r in self.results if r.get("_platform_key") == key)
+            if n:
+                counts.append(f"{name} {n}")
+        self.status_label.setText(
+            f"共 {len(self.results)} 首（{' / '.join(counts)}），勾选后下载或导出")
+
+    def _merged_row(self, s, checked=False):
+        """五平台栏内的一行：勾选 + 封面 + 歌名/歌手 + 时长。"""
+        row = QFrame()
+        row.setStyleSheet("QFrame { background: transparent; border: none; }")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(2, 2, 2, 2)
+        h.setSpacing(6)
+        cb = QCheckBox()
+        cb.setFixedSize(20, 20)
+        cb.setStyleSheet(_merge_check_qss())
+        cb.setChecked(bool(checked))
+        self.check_boxes.append(cb)
+        h.addWidget(cb, 0, Qt.AlignVCenter)
+        self._load_image_async(_row_cover_url(s), 36, h)
+        name = str(s.get("name") or "")
+        if s.get("_mode"):
+            name += f"[{s.get('_mode')}]"
+        artists = str(s.get("artists") or "")
+        info = QLabel(
+            f"{name}<br><span style='color:#888;font-size:11px'>{artists}</span>")
+        info.setTextFormat(Qt.RichText)
+        info.setWordWrap(True)
+        info.setStyleSheet("background: transparent; border: none;")
+        info.setToolTip(f"{name}\n{artists}\n{s.get('album') or ''}".strip())
+        h.addWidget(info, 1)
+        dur = QLabel(_fmt_duration(s.get("duration", 0)))
+        dur.setStyleSheet("color: #888; font-size: 11px; background: transparent; border: none;")
+        h.addWidget(dur, 0, Qt.AlignTop)
+        make_row_clickable(row, cb)
+        return row
+
+    def _apply_merged_filter(self, _index=0):
+        selected = self.filter_menu.currentData() if getattr(self, "filter_menu", None) else ""
+        for key, frame in getattr(self, "_merged_groups", []):
+            frame.setVisible(not selected or key == selected)
+
+    # ===================== 完整歌曲 → 五平台（原音乐信息页入口） =====================
+    def _pick_complete_song(self):
+        from gui_qt.pages.music_complete_dialog import CompleteSongDialog
+        from toolbox.music_complete_songs import load_complete_songs
+
+        songs = load_complete_songs()
+        if not songs:
+            self.app.toast("没有找到完整歌曲本地快照，请先在腾讯文档页采集", "warning")
+            return
+        dialog = CompleteSongDialog(songs, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        picked = dialog.selected_song()
+        if not picked:
+            return
+        self.singer_entry.setText(picked.get("singer") or "")
+        self.kw_entry.setText(picked.get("title") or "")
+        self._search_btn_busy(True)
+        self.status_label.setText(f"正在按完整歌曲《{picked.get('title')}》匹配五平台...")
+
+        def work():
+            from toolbox.music_complete_songs import fetch_platform_songs
+            found = fetch_platform_songs(picked)
+            rows = []
+            names = dict(MERGE_SOURCES)
+            for key, items in found.items():
+                if key not in names:
+                    continue
+                for s in items or []:
+                    row = _song_to_row(s)
+                    row["_platform_key"] = key
+                    row["_platform_name"] = names[key]
+                    rows.append(row)
+            if not rows:
+                raise ValueError("完整歌曲链接和歌名搜索都没有返回结果")
+            rows.sort(key=lambda r: _match_score(r.get("name"), picked.get("title")))
+            return ("multi", rows)
+
+        def done(result, err):
+            self._search_btn_busy(False)
+            if err:
+                self.status_label.setText(f"{err}")
+                return
+            self._result_snapshot = result
+            self._render_result(result)
+            if self.results:
+                self.status_label.setText(
+                    self.status_label.text() + "（完整歌曲：链接优先，缺失平台回退歌名搜索）")
+
+        run_bg(work, done)
+
+    def _search_btn_busy(self, busy):
+        self.search_btn.setEnabled(not busy)
+        if getattr(self, "complete_btn", None) is not None:
+            self.complete_btn.setEnabled(not busy)
+
+    # ===================== 导出选中（原音乐信息页能力） =====================
+    def _export_selected(self):
+        if getattr(self, "_result_kind", "") not in ("songs", "multi"):
+            self.app.toast("当前结果不是歌曲列表，先把歌单/专辑解析成歌曲再导出", "warning")
+            return
+        selected = [self.results[i] for i, cb in enumerate(self.check_boxes)
+                    if cb.isChecked() and i < len(self.results)]
+        if not selected:
+            self.app.toast("请先勾选要导出的歌曲", "warning")
+            return
+        keyword = " ".join(
+            part for part in ((self.singer_entry.text().strip()
+                               if getattr(self, "singer_entry", None) else ""),
+                              self.kw_entry.text().strip())
+            if part).strip()
+        self.export_btn.setEnabled(False)
+        self.status_label.setText(f"导出 {len(selected)} 首...")
+
+        def work():
+            from music import SearchResult, export_all_formats
+            from music.models import SongInfo
+            from toolbox.config_manager import get_export_subdir
+
+            songs, platforms = [], []
+            for item in selected:
+                name = item.get("_platform_name") or ""
+                if name and name not in platforms:
+                    platforms.append(name)
+                song = item.get("_song")
+                if not isinstance(song, SongInfo):
+                    song = SongInfo(
+                        song_id=str(item.get("id", "")),
+                        song_name=item.get("name", ""),
+                        singer=item.get("artists", ""),
+                        album_name=item.get("album", ""),
+                        duration=(item.get("duration") or 0) // 1000,
+                        cover_url=item.get("picUrl") or "",
+                        platform=(item.get("_platform_key") or item.get("_platform")
+                                  or self.platform))
+                songs.append(song)
+            result = SearchResult(
+                keyword=keyword or "音乐导出",
+                platforms_available=platforms,
+                total_songs=len(songs),
+                total_albums=0,
+                songs=songs,
+            )
+            return export_all_formats(result, str(get_export_subdir("music_info")))
+
+        def done(outputs, err):
+            self.export_btn.setEnabled(True)
+            if err:
+                self.status_label.setText(f"{err}")
+                return
+            out_dir = (outputs or {}).get("输出目录") or ""
+            self.status_label.setText(
+                f"已导出 {len(selected)} 首" + (f"：{out_dir}" if out_dir else ""))
+
+        run_bg(work, done)
+
 
     def _work_netease(self, mode, kw, singer):
         from netease import (
@@ -901,6 +1373,9 @@ class NeteasePage(BasePage):
         if not selected:
             self.app.toast("请先勾选要下载的歌曲", "warning")
             return
+        if self.platform == MERGE_PLATFORM:
+            self._download_selected_multi(selected)
+            return
         if self.platform == "netease":
             self._download_selected_netease(selected)
             return
@@ -979,6 +1454,105 @@ class NeteasePage(BasePage):
                 tip += f"：{first_err[:40]}"
             self.status_label.setText(tip)
             card.finish(" / ".join(parts))
+
+        run_bg(work, done)
+
+    def _download_selected_multi(self, selected):
+        """五平台勾选批量下载：网易云走 MusicDownloader，其余走 download_song_smart。"""
+        use_fallback = self.fallback_check.isChecked()
+        self.download_btn.setEnabled(False)
+        self.status_label.setText(
+            "下载中（五平台混合，失败将自动换源）..." if use_fallback
+            else "下载中（五平台混合）...")
+        from gui_qt.download_float import get_float
+        card = get_float().add_batch("音乐下载 · 五平台", total=len(selected), threads=4)
+
+        def work():
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from music.downloader import download_song_smart
+            from music.models import SongInfo
+            from toolbox.config_manager import get_music_download_dir
+            out_dir = str(get_music_download_dir())
+
+            def _one(item):
+                key = item.get("_platform_key") or item.get("_platform") or ""
+                label = (f"{item.get('name', '')} - {item.get('artists', '')}".strip(" -")
+                         or f"歌曲 {item.get('id', '')}")[:40]
+                card.handle_event("start", label)
+                ok = preview = via = False
+                err = ""
+                try:
+                    if key == "netease":
+                        from auth import get_netease_cookie
+                        from netease import MusicDownloader
+                        dl = MusicDownloader(download_dir=out_dir,
+                                             cookie_string=get_netease_cookie())
+                        r = dl.download_music_file(int(item.get("id")), "lossless")
+                        ok = bool(r and r.success)
+                        if not ok:
+                            err = getattr(r, "error_message", "") or "失败"
+                    else:
+                        song = item.get("_song")
+                        if not isinstance(song, SongInfo):
+                            song = SongInfo(
+                                song_id=str(item.get("id", "")),
+                                song_name=item.get("name", ""),
+                                singer=item.get("artists", ""),
+                                album_name=item.get("album", ""),
+                                duration=(item.get("duration") or 0) // 1000,
+                                cover_url=item.get("picUrl") or "",
+                                platform=key)
+                        r = download_song_smart(song, out_dir, "", fallback=use_fallback)
+                        ok = bool(r and r.success and not r.is_preview)
+                        preview = bool(r and r.success and r.is_preview)
+                        via = bool(getattr(r, "via_platform", ""))
+                        if r and not r.success:
+                            err = r.error_message or "失败"
+                except Exception as exc:
+                    err = str(exc)
+                card.handle_event("done", label, ok or preview)
+                return ok, preview, via, err
+
+            ok = fail = preview = via = 0
+            first_err = ""
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futs = [ex.submit(_one, item) for item in selected]
+                for fut in as_completed(futs):
+                    try:
+                        got_ok, got_preview, got_via, got_err = fut.result()
+                    except Exception as exc:
+                        got_ok, got_preview, got_via, got_err = False, False, False, str(exc)
+                    if got_ok:
+                        ok += 1
+                    elif got_preview:
+                        preview += 1
+                    else:
+                        fail += 1
+                        if not first_err:
+                            first_err = got_err
+                    if got_via:
+                        via += 1
+            return ok, fail, preview, via, first_err
+
+        def done(result, err):
+            self.download_btn.setEnabled(True)
+            if err:
+                self.status_label.setText(f"{err}")
+                card.finish(f"下载失败: {str(err)[:50]}")
+                return
+            ok, fail, preview, via, first_err = result
+            parts = [f"成功 {ok}"]
+            if via:
+                parts.append(f"换源 {via}")
+            if preview:
+                parts.append(f"试听 {preview}")
+            if fail:
+                parts.append(f"失败 {fail}")
+            tip = " / ".join(parts)
+            if first_err and (fail or preview):
+                tip += f"：{first_err[:40]}"
+            self.status_label.setText(f"下载完成（{tip}）")
+            card.finish(tip)
 
         run_bg(work, done)
 

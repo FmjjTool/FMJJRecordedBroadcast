@@ -94,7 +94,7 @@ def sync_docs(root: Path | None = None, log=print) -> str:
     source = Path(tcdoc_config.tables_db_path())
     if not source.is_file():
         raise DeployError(
-            "腾讯文档监控还没有同步过表格：请先到「腾讯文档监控 → 表格同步」同步一次")
+            "腾讯文档还没有同步过表格：请先到「腾讯文档 → 表格同步」同步一次")
     try:
         conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=3)
         try:
@@ -102,10 +102,10 @@ def sync_docs(root: Path | None = None, log=print) -> str:
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        raise DeployError(f"读取腾讯文档监控本地库失败：{exc}") from exc
+        raise DeployError(f"读取腾讯文档本地库失败：{exc}") from exc
     if not row_count:
         raise DeployError(
-            "腾讯文档监控的表格库还是空的：请先到「腾讯文档监控 → 表格同步」同步一次")
+            "腾讯文档的表格库还是空的：请先到「腾讯文档 → 表格同步」同步一次")
 
     log(f"数据来源：{source}（{row_count} 行，直接读本地，不再请求腾讯文档）")
     code = (
@@ -115,7 +115,7 @@ def sync_docs(root: Path | None = None, log=print) -> str:
         "raise SystemExit(etl.main())\n"
     )
     runner.run_stream([str(python), "-c", code], api, log,
-                      title="从腾讯文档监控本地库重建站点数据")
+                      title="从腾讯文档本地库重建站点数据")
     status = data_status(root)
     if status.get("exists"):
         return (f"已重建：歌曲 {status.get('songs', 0)} / 活动 {status.get('events', 0)} / "

@@ -563,6 +563,7 @@ EXPORT_CATEGORIES = {
     "tcdoc": "腾讯文档数据",
     "webwiki_monitor": "站点监控数据",
     "weibo_chaohua": "微博超话",
+    "livestream_summary": "直播总结",
 }
 
 

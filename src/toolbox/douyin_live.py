@@ -81,6 +81,9 @@ def _query_enter(info, c, web_rid, cookie_str, cache, cache_key):
     url = "https://live.douyin.com/webcast/room/web/enter/?" + up.urlencode(params)
     r = c.get(url, headers={"User-Agent": UA, "Referer": f"https://live.douyin.com/{web_rid}", "Cookie": cookie_str}, timeout=15)
     if r.status_code != 200 or not r.text.strip():
+        # HTTP 200 + 空包是抖音拒绝失效登录态的固定表现（同一请求去掉 sessionid 就能读到数据）
+        if not r.text.strip():
+            info["_empty_body"] = True
         info["error"] = f"room/enter 接口返回异常（可能被风控），状态 {r.status_code}"
         return False
     d = r.json()
@@ -166,6 +169,160 @@ def _merge_login_cookie(cookie_str: str, login_cookie: str) -> str:
     return "; ".join([cookie_str] + extra) if extra else cookie_str
 
 
+def _ssr_room(page_text):
+    """从直播间页面 SSR 数据里取出 roomStore.roomInfo.room 对象。
+
+    页面里是转义过的 JSON（\\" 形式），且同一页会出现多处 roomStore
+    （前几处 roomInfo 为空对象），所以逐处尝试取第一个带房间数据的。
+    """
+    pos = 0
+    while True:
+        i = page_text.find("roomStore", pos)
+        if i < 0:
+            return {}
+        pos = i + len("roomStore")
+        room = _ssr_room_at(page_text[max(0, i - 200):i + 400000])
+        if room:
+            return room
+
+
+def _ssr_room_at(raw):
+    """把一处 roomStore 片段还原成 room dict；取不到返回 {}。"""
+    seg = raw.replace('\\"', '"')
+    j = seg.find('"roomInfo"')
+    if j < 0:
+        return {}
+    k = seg.find('"room":', j)
+    start = seg.find("{", k if k >= 0 else j)
+    if start < 0:
+        return {}
+    depth = 0
+    in_str = False
+    esc = False
+    for pos in range(start, min(len(seg), start + 300000)):
+        ch = seg[pos]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    room = json.loads(seg[start:pos + 1])
+                except Exception:
+                    return {}
+                return room if isinstance(room, dict) and room.get("id_str") else {}
+    return {}
+
+
+def _page_room_state(room_num, cookie_str=""):
+    """页面兜底：从直播间页面 SSR 读房间状态/标题/在线/流地址。
+
+    对应参考实现（FMJJLiveMonitorAndRecorder）的 RENDER_DATA / 页面解析兜底，
+    用于 room/enter 被风控返回 200 空包时仍能判断开播状态。
+    """
+    try:
+        r = httpx.get("https://live.douyin.com/%s" % room_num,
+                      headers={"User-Agent": UA, "Cookie": cookie_str or "",
+                               "Referer": "https://live.douyin.com/"},
+                      timeout=15, follow_redirects=True)
+    except Exception:
+        return {}
+    room = _ssr_room(r.text or "")
+    if not room:
+        return {}
+    out = {}
+    if room.get("id_str"):
+        out["roomId"] = str(room["id_str"])
+    if room.get("status") is not None:
+        out["status"] = int(room["status"])
+    if room.get("title"):
+        out["title"] = room["title"]
+    owner = room.get("owner") or {}
+    if isinstance(owner, dict) and owner.get("nickname"):
+        out["anchor"] = owner["nickname"]
+    stats = room.get("stats") or {}
+    if isinstance(stats, dict) and stats.get("user_count_str"):
+        out["online"] = stats["user_count_str"]
+    stream_url = room.get("stream_url") or {}
+    if isinstance(stream_url, dict):
+        flv = stream_url.get("flv_pull_url") or {}
+        if isinstance(flv, dict) and flv:
+            out["streams"] = {**_extract_core_streams(stream_url), **flv}
+        if stream_url.get("hls_pull_url"):
+            out["hls"] = stream_url["hls_pull_url"]
+    return out
+
+
+def room_id_kind(value):
+    """抖音输入类型判定。
+
+    - room_id：17 位以上纯数字（直播间真实 ID，如 7710257134692633395）
+    - web_rid：8~16 位纯数字（live.douyin.com/ 后面那段短号）
+    - other：链接/抖音号等，交给上层解析
+    """
+    s = str(value or "").strip()
+    if not s.isdigit():
+        return "other"
+    if len(s) >= 17:
+        return "room_id"
+    if len(s) >= 8:
+        return "web_rid"
+    return "other"
+
+
+def _fetch_by_room_id(room_id):
+    """用 19 位直播间 ID 取房间信息（reflow 接口，游客可用、无需登录）。
+
+    room/enter 只认 web_rid，抖音分享面板给的是 19 位房间 ID，
+    这里走 amemv 的 reflow 接口，status/title/主播/各档直链都能拿到。
+    """
+    try:
+        r = httpx.get(
+            "https://webcast.amemv.com/webcast/room/reflow/info/"
+            "?type_id=0&live_id=1&app_id=1128&room_id=%s" % room_id,
+            headers={"User-Agent": UA, "Referer": "https://live.douyin.com/"},
+            timeout=15, follow_redirects=True)
+        d = r.json()
+    except Exception:
+        return {}
+    room = (d.get("data") or {}).get("room") or {}
+    if not isinstance(room, dict) or not room:
+        return {}
+    out = {"roomId": str(room.get("id_str") or room_id)}
+    if room.get("status") is not None:
+        out["status"] = int(room["status"])
+    if room.get("title"):
+        out["title"] = room["title"]
+    owner = room.get("owner") or {}
+    if isinstance(owner, dict) and owner.get("nickname"):
+        out["anchor"] = owner["nickname"]
+    if room.get("user_count") not in (None, ""):
+        out["online"] = _fmt_count(room["user_count"])
+    cover = room.get("cover") or {}
+    if isinstance(cover, dict):
+        urls = cover.get("url_list") or []
+        if urls:
+            out["cover"] = urls[0]
+    stream_url = room.get("stream_url") or {}
+    if isinstance(stream_url, dict):
+        flv = stream_url.get("flv_pull_url") or {}
+        if isinstance(flv, dict) and flv:
+            out["streams"] = {**_extract_core_streams(stream_url), **flv}
+        if stream_url.get("hls_pull_url"):
+            out["hls"] = stream_url["hls_pull_url"]
+    return out
+
+
 def fetch_room_info(room_num, login=True):
     """通过 room/enter 接口拿房间信息 + 主播信息。
 
@@ -177,14 +334,27 @@ def fetch_room_info(room_num, login=True):
     info = {"roomNum": room_num, "uniqueId": DEFAULT_UNIQUE_ID}
     cache = _load_room_cache()
     cached = cache.get(room_num, {})
+    login_cookie = _get_douyin_cookie() if login else ""
 
-    def _session_cookies() -> str:
-        cs = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
-        return _merge_login_cookie(cs, login_cookie)
+    # 19 位直播间 ID（抖音分享面板给的房间号）走 reflow 接口，room/enter 不认这种号
+    if room_id_kind(room_num) == "room_id":
+        by_id = _fetch_by_room_id(room_num)
+        if by_id:
+            info.update(by_id)
+            cache[room_num] = {"roomId": by_id["roomId"],
+                               "anchor": by_id.get("anchor", ""),
+                               "title": by_id.get("title", "")}
+            _save_room_cache(cache)
+            return info
+        info["error"] = "房间不存在或已结束（19 位房间 ID 读取失败）"
+        return info
 
     try:
         with httpx.Client(headers={"User-Agent": UA, "Referer": "https://live.douyin.com/"}, follow_redirects=True) as c:
-            login_cookie = _get_douyin_cookie() if login else ""
+            def _session_cookies(extra_login: str) -> str:
+                cs = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
+                return _merge_login_cookie(cs, extra_login)
+
             # 游客 ttwid 缓存命中：跳过首页访问（实测省 ~1s；enter 失败再回源刷新）
             used_cache = False
             if _ttwid_valid():
@@ -196,7 +366,9 @@ def fetch_room_info(room_num, login=True):
                 if ttwid:
                     _ttwid_cache["value"] = ttwid
                     _ttwid_cache["ts"] = time.time()
-            ok = _query_enter(info, c, room_num, _session_cookies(), cache, room_num)
+            # 游客态优先：room/enter 带 sessionid 时抖音会对非浏览器请求回 200 空包
+            # （2026-11 实测，登录态刷新后依旧），游客态反而能读到完整数据且含原画直链
+            ok = _query_enter(info, c, room_num, _session_cookies(""), cache, room_num)
             if not ok and used_cache:
                 # 缓存的 ttwid 可能已失效：回源刷新一次再试
                 c.cookies.delete("ttwid", domain=".douyin.com")
@@ -206,11 +378,35 @@ def fetch_room_info(room_num, login=True):
                     if ttwid:
                         _ttwid_cache["value"] = ttwid
                         _ttwid_cache["ts"] = time.time()
-                    _query_enter(info, c, room_num, _session_cookies(), cache, room_num)
+                    ok = _query_enter(info, c, room_num, _session_cookies(""), cache, room_num)
                 except Exception:
                     pass
+            if not ok and login_cookie and not info.get("_biz_error"):
+                # 游客态读不到（需要登录的房间）时再带上登录态试一次；
+                # 用独立 dict 收结果，被空包拒绝也不污染游客态的 error
+                with_login = {}
+                ok2 = _query_enter(with_login, c, room_num,
+                                   _session_cookies(login_cookie), cache, room_num)
+                if ok2:
+                    info.update(with_login)
+                    info["login_used"] = True
+                elif with_login.get("_empty_body"):
+                    info["login_note"] = "抖音拒绝了带登录态的请求（200 空包），本次按游客态读取"
+            if not ok and not info.get("roomId") and not info.get("_biz_error"):
+                # enter 兜底：直播间页面 SSR（roomStore）里也有房间状态/标题/在线
+                page = _page_room_state(room_num, _session_cookies(login_cookie))
+                if page:
+                    info.update(page)
+                    info["from_page"] = True
+                    if page.get("roomId"):
+                        cache[room_num] = {"roomId": page["roomId"],
+                                           "anchor": page.get("anchor", ""),
+                                           "title": page.get("title", "")}
+                        _save_room_cache(cache)
+                        info.pop("error", None)
     except Exception as e:
         info["error"] = str(e)
+    info.pop("_empty_body", None)
     # 缓存兜底：room/enter 失败（被风控/网络故障）时，用缓存的 roomId 继续连接；
     # 业务错误（内容不可查看/房间不存在）不兜底
     if (not info.get("roomId") and not info.get("_biz_error")

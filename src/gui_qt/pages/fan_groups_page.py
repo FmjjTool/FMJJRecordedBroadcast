@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import fan_groups as fg
@@ -183,6 +184,8 @@ class FanGroupsPage(BasePage):
             self.table.setColumnWidth(i, w)
         self.table.itemSelectionChanged.connect(self._on_select)
         self.table.cellDoubleClicked.connect(self._open_avatar)
+        # 表头点击排序（首列头像不参与）；行号与 self._groups 下标一致，走记录模式
+        self._sorter = table_sort.install(self.table, skip_columns=(0,))
         layout.addWidget(self.table, 1)
 
         self.detail = QTextEdit()
@@ -300,6 +303,7 @@ class FanGroupsPage(BasePage):
         return QIcon()
 
     def _fill_table(self):
+        self._sorter.attach(self._groups)
         self.table.setRowCount(len(self._groups))
         for r, g in enumerate(self._groups):
             av = QTableWidgetItem()
@@ -314,6 +318,7 @@ class FanGroupsPage(BasePage):
             self.table.setItem(r, 4, _center(g.member_text))
             self.table.setItem(r, 5, _center(self._delta_text(g)))
             self.table.setItem(r, 6, _center(g.entry_limit or "-"))
+        self._sorter.apply()
         self.export_btn.setEnabled(bool(self._groups))
         self.copy_all_btn.setEnabled(bool(self._groups))
         self.avatar_btn.setEnabled(bool(self._groups))

@@ -198,7 +198,8 @@ def run(text: str, filename: str, client: ChatClient, *,
         cancel: CancelCb | None = None,
         chunk_chars: int = 6000,
         merge_chars: int = 12000,
-        max_tokens: int = 8192) -> PipelineResult:
+        max_tokens: int = 8192,
+        folder: str = "") -> PipelineResult:
     progress = progress or _noop
     _check_cancel(cancel)
     progress("read", 2, "读取转录")
@@ -207,7 +208,7 @@ def run(text: str, filename: str, client: ChatClient, *,
     body = rule.strip_srt(text)
     if not body.strip():
         raise ValueError("转录内容为空")
-    date_text, date_source = rule.extract_date(filename, body)
+    date_text, date_source = rule.extract_date(filename, body, folder)
     corrected = rule.apply_corrections(body, rule.load_corrections())
     chunks = split_chunks(corrected, chunk_chars)
     if not chunks:
@@ -253,13 +254,15 @@ def run(text: str, filename: str, client: ChatClient, *,
     return PipelineResult(text=output, stats=stats, problems=problems)
 
 
-def run_rule(text: str, filename: str, max_per_dim: int = 30) -> PipelineResult:
+def run_rule(text: str, filename: str, max_per_dim: int = 30,
+             folder: str = "") -> PipelineResult:
     """完全本地的纯规则模式：不调用模型，只做清洗、纠错与关键词摘录。"""
     body = rule.strip_srt(text)
     if not body.strip():
         raise ValueError("转录内容为空")
-    date_text, date_source = rule.extract_date(filename, body)
-    output, stats = rule.summarize_text(text, filename, max_per_dim=max_per_dim)
+    date_text, date_source = rule.extract_date(filename, body, folder)
+    output, stats = rule.summarize_text(text, filename, max_per_dim=max_per_dim,
+                                       folder=folder)
     problems = validate_output(output, date_text)
     stats.update({
         "mode": "rule",

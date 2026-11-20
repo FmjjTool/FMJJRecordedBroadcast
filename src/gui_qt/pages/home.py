@@ -21,9 +21,10 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from gui_qt import theme
+from gui_qt import table_sort, theme
 from gui_qt.common import run_bg
 from gui_qt.navigation import line_icon, tool_icon_name
+from gui_qt.page_index import HOME_COMMON, HOME_INFO, page_meta, page_title
 from gui_qt.pages.base import BasePage
 from toolbox.dashboard_stats import (
     load_account_history, load_dashboard_data, load_tcdoc_history, tcdoc_docs,
@@ -53,23 +54,15 @@ SITE_STAT_KEYS = {"site_visitors", "site_sessions", "site_pageviews", "site_onli
 DRAWER_MAX_ROWS = 10
 
 # 常用工具：(key, 标题, 说明)
-COMMON_TOOLS = [
-    ("info_accounts", "信息获取", "批量链接解析与账号采集"),
-    ("info_results", "已获取", "结果库、下载与导出"),
-    ("asset", "资产管理", "已获取资源与本地扫描"),
-    ("toolbox_editor", "视频操作", "转换 / 合并 / 切割 / 压缩"),
-    ("toolbox_subtitle", "字幕转换", "字幕与歌词格式转换"),
-    ("music_search_download", "音乐搜索下载", "五平台信息与歌曲下载"),
-]
+# 常用工具卡片：顺序与文案来自 page_index（页面名单一事实来源）
+def _tool_card(key):
+    meta = page_meta(key)
+    return (key, meta.card_title or meta.title, meta.card_note)
 
-INFO_TOOLS = [
-    ("douyin_index", "抖音指数", "达人指标、作品与粉丝画像"),
-    ("wechat_article", "公众号解析", "文章导出 HTML / PDF / Word"),
-    ("bili_resource", "B站资源", "表情包、收藏集、空间资源"),
-    ("video_comments", "视频评论区", "三平台评论抓取与长图"),
-    ("tcdoc", "腾讯文档监控", "浏览量 / 成员数每日记录"),
-    ("localwiki", "本地资料站", "本地 Wiki + 腾讯文档预览"),
-]
+
+COMMON_TOOLS = [_tool_card(key) for key in HOME_COMMON]
+
+INFO_TOOLS = [_tool_card(key) for key in HOME_INFO]
 INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
 
 
@@ -492,9 +485,9 @@ class HomePage(BasePage):
             ("chaohua_posts", "微博超话帖子", "config/weibo_chaohua.db 累计去重帖子"),
             ("tcdoc_rows", "腾讯文档行", "腾讯文档智能表格已同步的数据行"),
             ("asset_files", "资源文件", "asset_index 登记的本地资源文件"),
-            ("doc_views", "文档浏览量", "腾讯文档监控各文档最新浏览量合计"),
-            ("doc_members", "文档成员数", "腾讯文档监控各文档最新成员数合计"),
-            ("doc_readers", "已查看人数", "腾讯文档监控各文档最新已查看人数合计"),
+            ("doc_views", "文档浏览量", "腾讯文档各文档最新浏览量合计"),
+            ("doc_members", "文档成员数", "腾讯文档各文档最新成员数合计"),
+            ("doc_readers", "已查看人数", "腾讯文档各文档最新已查看人数合计"),
             ("tracked_accounts", "追踪账号", "网媒账号 + 音乐账号追踪的账号数量"),
             ("site_visitors", "站点访客", "mandisa.wiki 最近一次采集的访客"),
             ("site_sessions", "站点会话", "mandisa.wiki 最近一次采集的会话"),
@@ -575,10 +568,10 @@ class HomePage(BasePage):
         config_btn = QPushButton("配置观察账号")
         config_btn.clicked.connect(self._open_account_config)
         bar.addWidget(config_btn)
-        media_btn = QPushButton("网媒账号追踪")
+        media_btn = QPushButton(f"{page_title('tracker')}追踪")
         media_btn.clicked.connect(lambda: self.app.show_page("tracker"))
         bar.addWidget(media_btn)
-        music_btn = QPushButton("音乐账号追踪")
+        music_btn = QPushButton(f"{page_title('music_tracker')}追踪")
         music_btn.clicked.connect(lambda: self.app.show_page("music_tracker"))
         bar.addWidget(music_btn)
         v.addLayout(bar)
@@ -596,6 +589,8 @@ class HomePage(BasePage):
         for index, width in enumerate([185, 80, 150, 100, 90, 110]):
             header.resizeSection(index, width)
         header.setSectionResizeMode(6, QHeaderView.Stretch)
+        self._account_sorter = table_sort.install(
+            self.account_table, skip_columns=())
         v.addWidget(self.account_table)
 
         self.account_status = QLabel("")
@@ -637,6 +632,8 @@ class HomePage(BasePage):
                             (4, "相对上一条记录的成员数增量"),
                             (6, "按采集日期统计的当天修订记录条数")):
             self.tcdoc_table.horizontalHeaderItem(column).setToolTip(tip)
+        self._tcdoc_sorter = table_sort.install(
+            self.tcdoc_table, skip_columns=())
         v.addWidget(self.tcdoc_table)
         return page
 
@@ -740,6 +737,8 @@ class HomePage(BasePage):
             header.resizeSection(index, width)
         header.setSectionResizeMode(6, QHeaderView.Stretch)
         self.site_history_table.setToolTip("本地历史（最多 14 条）：每天一条，按日期+口径去重")
+        self._site_history_sorter = table_sort.install(
+            self.site_history_table, skip_columns=())
         v.addWidget(self.site_history_table)
 
         log_cap = QLabel("采集历史（最近 50 次）")
@@ -759,6 +758,8 @@ class HomePage(BasePage):
             log_header.resizeSection(index, width)
         log_header.setSectionResizeMode(4, QHeaderView.Stretch)
         self.site_log_table.setToolTip("每次采集尝试的记录：成功或失败原因（最多 50 条）")
+        self._site_log_sorter = table_sort.install(
+            self.site_log_table, skip_columns=())
         v.addWidget(self.site_log_table)
         return page
 
@@ -935,6 +936,8 @@ class HomePage(BasePage):
                 item = QTableWidgetItem(text)
                 item.setToolTip(text)
                 self.site_log_table.setItem(index, column, item)
+        self._site_history_sorter.apply()
+        self._site_log_sorter.apply()
         try:
             from toolbox.webwiki import analytics_task
 
@@ -1102,6 +1105,7 @@ class HomePage(BasePage):
             for row, account in enumerate(display):
                 history = (histories or {}).get(account["key"]) or []
                 self._fill_account_row(row, account, history)
+            self._account_sorter.apply()
             self.account_status.setText(
                 f"已观察 {len(selected)} / 共 {len(accounts)} 个账号{limit_note}")
             self._fit_drawer_height()
@@ -1218,6 +1222,7 @@ class HomePage(BasePage):
                     item.setTextAlignment(Qt.AlignCenter)
                 table.setItem(row_index, column, item)
         table.setUpdatesEnabled(True)
+        self._tcdoc_sorter.apply()
         if rows:
             latest = rows[0]
             total = int(result.get("total") or len(rows))
@@ -1227,7 +1232,7 @@ class HomePage(BasePage):
                 f" / 成员 {self._num_text(latest.get('members'))}"
                 f" / 已查看 {self._num_text(latest.get('readers'))}")
         else:
-            self.tcdoc_status.setText("暂无历史记录，请先到「腾讯文档监控」采集")
+            self.tcdoc_status.setText("暂无历史记录，请先到「腾讯文档」采集")
         self._fit_drawer_height()
 
     @staticmethod

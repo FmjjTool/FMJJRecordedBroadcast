@@ -9,9 +9,9 @@ import functools
 import time
 from collections import Counter
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import QTextBrowser
+from PySide6.QtWidgets import QTabWidget, QTextBrowser
 
 
 def refresh_browser_colors(browser: QTextBrowser, muted_colors=()):
@@ -295,6 +295,54 @@ def icon_button(text, tip="", size=(30, 26), emoji=True, extra="", on_click=None
     if on_click:
         b.clicked.connect(on_click)
     return b
+
+
+# ==================== 页签按当前页内容收缩高度 ====================
+
+class AutoFitTabWidget(QTabWidget):
+    """高度只按当前页内容算的页签控件。
+
+    QTabWidget 的 sizeHint 取所有子页的最大值：放在拉伸表格上方时，
+    一个高页签（如「时间修改」）会把整块内容区顶高，短页签下方就空出
+    一大片。这里改成按当前页给高度，剩余空间让给后面的拉伸控件；
+    切到更高的页签时再自动撑开。
+    """
+
+    MIN_CONTENT_HEIGHT = 72    # 极短页签也保留可读的最小内容高度
+    PANE_BORDER = 2            # QSS 里 QTabWidget::pane 的上下 1px 边框
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 高度由 fit_height 按当前页固定，父布局不用再猜 sizeHint
+        self._fit_left = 0
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self.fit_height)
+        self.currentChanged.connect(self._schedule_fit)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_fit()
+
+    def _schedule_fit(self, _index=None):
+        self._fit_left = 3      # 切页后最多连续校准 3 次，防止抖动时死循环
+        self._fit_timer.start(0)
+
+    def fit_height(self):
+        """按当前页内容固定高度；隐藏页的 sizeHint 要等它真正摆好才准，
+        所以再排一次，避免停在上一页的高度。"""
+        page = self.currentWidget()
+        if page is None:
+            return
+        bar_h = self.tabBar().sizeHint().height()
+        content = max(page.sizeHint().height(), self.MIN_CONTENT_HEIGHT)
+        height = content + bar_h + self.PANE_BORDER
+        if height == self.height():
+            return
+        self.setFixedHeight(height)
+        if self._fit_left > 0:
+            self._fit_left -= 1
+            self._fit_timer.start(0)
 
 
 # ==================== 复选框开/关 toast ====================

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from gui_qt import theme
+from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox.tcdoc import config as tcdoc_cfg
@@ -293,6 +293,8 @@ class LocalWikiPage(BasePage):
         self.analytics_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.analytics_table.setMinimumHeight(150)
         self.analytics_table.setToolTip("本地历史（最多 14 条）：每天一条，按日期+口径去重")
+        self._analytics_sorter = table_sort.install(
+            self.analytics_table, skip_columns=())
         box.addWidget(self.analytics_table)
 
         sched_hint = QLabel("每日定时采集已统一到「任务」页面，可在那里修改计划与安装 / 删除任务。")
@@ -313,13 +315,13 @@ class LocalWikiPage(BasePage):
         preview.setObjectName("wikiButton")
         preview.clicked.connect(self._open_doc_preview)
         row.addWidget(preview)
-        monitor = QPushButton("腾讯文档监控页")
+        monitor = QPushButton("腾讯文档页")
         monitor.setObjectName("wikiButton")
         monitor.clicked.connect(lambda: self.app.show_page("tcdoc"))
         row.addWidget(monitor)
         box.addLayout(row)
         hint = QLabel(
-            "预览用系统默认浏览器打开源文档；本站数据直接读取「腾讯文档监控」已同步的本地表格，"
+            "预览用系统默认浏览器打开源文档；本站数据直接读取「腾讯文档」已同步的本地表格，"
             "点「重建站点数据」即可，不需要重新联网拉取。")
         hint.setObjectName("wikiMuted")
         hint.setWordWrap(True)
@@ -797,6 +799,7 @@ class LocalWikiPage(BasePage):
                     table.setItem(index, column, cell)
         finally:
             table.setUpdatesEnabled(True)
+        self._analytics_sorter.apply()
 
     def _save_analytics_password(self):
         text = self.analytics_pwd.text().strip()
@@ -884,6 +887,6 @@ class LocalWikiPage(BasePage):
     def _open_doc_preview(self):
         url = self.doc_combo.currentData()
         if not url:
-            QMessageBox.information(self, "腾讯文档预览", "文档清单为空，请先到腾讯文档监控页添加文档。")
+            QMessageBox.information(self, "腾讯文档预览", "文档清单为空，请先到腾讯文档页添加文档。")
             return
         QDesktopServices.openUrl(QUrl(str(url)))

@@ -28,11 +28,10 @@ from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolSectionCard
 from toolbox import livestream_summary_rule as rule
+from toolbox.config_manager import get_export_subdir
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import local_model, pipeline
 from toolbox.livestream_summary.client import ChatClient, is_local_base_url
-
-SUPPORTED_FILTER = "直播转录 (*.txt *.srt);;所有文件 (*)"
 
 
 class LivestreamSummaryPage(BasePage):
@@ -54,6 +53,7 @@ class LivestreamSummaryPage(BasePage):
         root.addLayout(self._build_body(), 1)
         self._load_settings()
         self._detect_local()
+        self._refresh_files()
 
     # ==================== 图标 ====================
 
@@ -104,16 +104,18 @@ class LivestreamSummaryPage(BasePage):
 
         file_row = QHBoxLayout()
         file_row.setSpacing(6)
-        self.file_edit = QLineEdit()
-        self.file_edit.setReadOnly(True)
-        self.file_edit.setPlaceholderText("选择直播转录文件（TXT / SRT）")
-        file_row.addWidget(self.file_edit, 1)
-        pick_btn = QPushButton("选择文件")
-        pick_btn.setProperty("variant", "secondary")
-        pick_btn.setToolTip("选择要总结的直播转录文件")
-        pick_btn.clicked.connect(self._pick_file)
-        self._register_icon(pick_btn, "folder")
-        file_row.addWidget(pick_btn)
+        self.file_combo = QComboBox()
+        self.file_combo.setMinimumContentsLength(24)
+        self.file_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.file_combo.currentIndexChanged.connect(self._on_file_selected)
+        file_row.addWidget(self.file_combo, 1)
+        scan_btn = QPushButton("刷新")
+        scan_btn.setProperty("variant", "secondary")
+        scan_btn.setToolTip("重新扫描工作文件夹里的转录文件（只读工作文件夹，不能选别处）")
+        scan_btn.clicked.connect(self._refresh_files)
+        self._register_icon(scan_btn, "refresh")
+        file_row.addWidget(scan_btn)
         self.date_label = QLabel("直播日期：未选择文件")
         self.date_label.setProperty("role", "caption")
         self.date_label.setMinimumWidth(190)
@@ -157,7 +159,6 @@ class LivestreamSummaryPage(BasePage):
 
         left = QVBoxLayout()
         left.setSpacing(12)
-        left.addWidget(self._build_input_card())
         left.addWidget(self._build_local_card())
         left.addWidget(self._build_model_card())
         left.addStretch(1)
@@ -183,35 +184,6 @@ class LivestreamSummaryPage(BasePage):
         right_wrap.setLayout(right)
         body.addWidget(right_wrap, 1)
         return body
-
-    def _build_input_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("输入与输出", "转录文件只读；总结另存为 TXT。", icon="document")
-        self._register_icon(card, "document", "title")
-        self.detail_label = QLabel("尚未选择文件")
-        self.detail_label.setProperty("role", "caption")
-        self.detail_label.setWordWrap(True)
-        card.content_layout.addWidget(self.detail_label)
-
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        row.addWidget(QLabel("输出目录"))
-        self.output_dir_edit = QLineEdit()
-        self.output_dir_edit.setPlaceholderText("留空 = 转录文件同目录")
-        row.addWidget(self.output_dir_edit, 1)
-        browse = QPushButton()
-        browse.setProperty("variant", "secondary")
-        browse.setToolTip("选择总结输出目录")
-        browse.setFixedWidth(38)
-        browse.clicked.connect(self._pick_output_dir)
-        self._register_icon(browse, "folder")
-        row.addWidget(browse)
-        card.content_layout.addLayout(row)
-
-        hint = QLabel("结果会同时显示在右侧；文件名取总结标题，可直接修改后再另存。")
-        hint.setProperty("role", "caption")
-        hint.setWordWrap(True)
-        card.content_layout.addWidget(hint)
-        return card
 
     def _build_local_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
@@ -637,7 +609,6 @@ class LivestreamSummaryPage(BasePage):
         self.base_url_edit.setText(settings.base_url)
         self.model_edit.setText(settings.model)
         self.chunk_spin.setValue(settings.chunk_chars)
-        self.output_dir_edit.setText(settings.output_dir)
         index = self.mode_combo.findData(settings.mode)
         self.mode_combo.setCurrentIndex(max(0, index))
         self._refresh_key_status()
@@ -661,12 +632,17 @@ class LivestreamSummaryPage(BasePage):
             self.api_key_edit.setPlaceholderText("粘贴 API Key")
             self.key_status.setText("API Key：未保存")
 
+    @staticmethod
+    def _default_output_dir() -> str:
+        """输出目录固定跟随全局设置：统一导出目录 +「直播总结」，页面不提供改写入口。"""
+        return str(get_export_subdir("livestream_summary"))
+
     def _collect_settings(self) -> ls_config.Settings:
         return ls_config.Settings(
             base_url=self.base_url_edit.text().strip() or ls_config.DEFAULT_BASE_URL,
             model=self.model_edit.text().strip(),
             chunk_chars=int(self.chunk_spin.value()),
-            output_dir=self.output_dir_edit.text().strip(),
+            output_dir="",
             mode=self.mode_combo.currentData() or "ai",
         )
 
@@ -696,23 +672,59 @@ class LivestreamSummaryPage(BasePage):
 
     # ==================== 文件 ====================
 
-    def _pick_file(self):
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "选择直播转录文件", str(Path.home()), SUPPORTED_FILTER)
-        if not chosen:
+    @staticmethod
+    def _display_name(path: Path, root: Path) -> str:
+        try:
+            return str(path.relative_to(root))
+        except ValueError:
+            return path.name
+
+    def _refresh_files(self):
+        """只扫描工作文件夹（根目录 + 日期文件夹）里的 TXT / SRT，最新在前。"""
+        if self._running:
             return
-        self._source = Path(chosen)
-        self.file_edit.setText(str(self._source))
+        root_text = getattr(self.app, "work_dir", "") or ""
+        root = Path(root_text) if root_text else None
+        files = rule.scan_transcripts(root_text) if root_text else []
+        previous = str(self._source) if self._source else ""
+        self.file_combo.blockSignals(True)
+        self.file_combo.clear()
+        if root is None or not root.is_dir():
+            self.file_combo.addItem("未设置工作文件夹，请到全局设置里选择录播目录", "")
+        elif not files:
+            self.file_combo.addItem("工作文件夹内没有转录文件（TXT / SRT）", "")
+        else:
+            for path in files:
+                self.file_combo.addItem(self._display_name(path, root), str(path))
+        index = self.file_combo.findData(previous) if previous else -1
+        self.file_combo.setCurrentIndex(max(0, index))
+        self.file_combo.blockSignals(False)
+        self._on_file_selected()
+
+    def _on_file_selected(self, *_args):
+        data = self.file_combo.currentData()
+        path = Path(data) if data else None
+        changed = path != self._source
+        self._source = path
+        self.start_btn.setEnabled(path is not None and not self._running)
+        if path is None:
+            self.file_combo.setToolTip(self.file_combo.currentText())
+            self.date_label.setText("直播日期：未选择文件")
+            return
+        self.file_combo.setToolTip(str(path))
+        if not changed:
+            return
         self._result_text = ""
         self.result_view.clear()
         self.date_label.setText("直播日期：读取中…")
-        self._inspect_source(self._source)
+        self._inspect_source(path)
 
     def _inspect_source(self, path: Path):
         def work():
             text = rule.read_transcript(path)
             body = rule.strip_srt(text)
-            date_text, source = rule.extract_date(path.name, body)
+            date_text, source = rule.extract_date(
+                path.name, body, str(path.parent))
             return {"chars": len(body), "date": date_text, "source": source}
 
         def done(result, err):
@@ -726,15 +738,9 @@ class LivestreamSummaryPage(BasePage):
                     f"直播日期：{result['date']}（{result['source']}）")
             else:
                 self.date_label.setText("直播日期：未识别（按「暂未公开」）")
-            self.detail_label.setText(f"转录正文约 {chars} 字 · {path.name}")
+            self._append_log(f"已读取转录：{chars} 字 · {path.name}")
 
         run_bg(work, done, owner=self)
-
-    def _pick_output_dir(self):
-        start = self.output_dir_edit.text().strip() or str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "选择总结输出目录", start)
-        if chosen:
-            self.output_dir_edit.setText(chosen)
 
     # ==================== 执行 ====================
 
@@ -743,7 +749,7 @@ class LivestreamSummaryPage(BasePage):
             self.app.toast("总结正在进行中", "info")
             return
         if self._source is None or not self._source.is_file():
-            self.app.toast("请先选择直播转录文件", "info")
+            self.app.toast("工作文件夹内没有可用的转录文件（TXT / SRT）", "info")
             return
         self._save_settings(quiet=True)
         settings = self._collect_settings()
@@ -782,19 +788,20 @@ class LivestreamSummaryPage(BasePage):
 
         def work():
             text = rule.read_transcript(source)
+            folder = str(source.parent)
             if settings.mode == "rule":
-                return pipeline.run_rule(text, source.name)
+                return pipeline.run_rule(text, source.name, folder=folder)
             client = ChatClient(settings.base_url, api_key, settings.model,
                                 allow_empty_key=allow_empty_key)
             return pipeline.run(
                 text, source.name, client,
                 progress=lambda stage, percent, message: post_to_main(
                     self._on_progress, stage, percent, message),
-                cancel=cancel, chunk_chars=settings.chunk_chars)
+                cancel=cancel, chunk_chars=settings.chunk_chars, folder=folder)
 
         def done(result, err):
             self._running = False
-            self.start_btn.setEnabled(True)
+            self.start_btn.setEnabled(self._source is not None)
             self.stop_btn.setEnabled(False)
             self._sync_mode()
             if err:
@@ -806,12 +813,11 @@ class LivestreamSummaryPage(BasePage):
                     self._append_log(f"总结失败：{err}")
                     self.app.toast(f"总结失败：{err}", "error")
                 return
-            self._on_finished(result, source, settings)
+            self._on_finished(result, source)
 
         run_bg(work, done, owner=self)
 
-    def _on_finished(self, result: pipeline.PipelineResult, source: Path,
-                     settings: ls_config.Settings):
+    def _on_finished(self, result: pipeline.PipelineResult, source: Path):
         self._result_text = result.text
         self.result_view.setPlainText(result.text)
         self.progress.setValue(100)
@@ -827,7 +833,9 @@ class LivestreamSummaryPage(BasePage):
             f"（{stats.get('date_source', '-')}）")
         self._append_log(f"{summary} · 校验问题 {len(result.problems)} 处")
 
-        target = pipeline.default_output_path(result.text, source, settings.output_dir)
+        # 输出位置固定跟随全局统一导出目录，不受页面设置影响
+        target = pipeline.default_output_path(
+            result.text, source, self._default_output_dir())
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(result.text, encoding="utf-8")
@@ -897,8 +905,7 @@ class LivestreamSummaryPage(BasePage):
         if not self._result_text:
             self.app.toast("还没有可保存的总结", "info")
             return
-        default_dir = self.output_dir_edit.text().strip() or (
-            str(self._source.parent) if self._source else str(Path.home()))
+        default_dir = self._default_output_dir()
         default = str(Path(default_dir) / pipeline.output_filename(self._result_text))
         chosen, _ = QFileDialog.getSaveFileName(
             self, "另存总结", default, "文本文件 (*.txt)")
@@ -924,6 +931,10 @@ class LivestreamSummaryPage(BasePage):
             self._append_log(message)
 
     # ==================== 生命周期 ====================
+
+    def on_show(self):
+        """切回本页时重新扫描工作文件夹，新转录的文件自动出现在下拉里。"""
+        self._refresh_files()
 
     def has_active_tasks(self) -> bool:
         return self._running or (

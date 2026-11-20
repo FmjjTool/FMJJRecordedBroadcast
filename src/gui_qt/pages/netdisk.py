@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""网盘页：备份到网盘 + 文件下载（先备份后下载）。
+"""网络库页：备份到网盘 + 文件下载（先备份后下载）。
 
 两个页签直接复用既有页面，不复制任何业务逻辑：
 
@@ -28,6 +28,11 @@ class NetdiskPage(BasePage):
         outer.setSpacing(0)
 
         self.tabs = QTabWidget()
+        # 页签面板不再画第二层边框/底色：内容卡片直接落在页面底上，
+        # 避免「页面 → 页签框 → 卡片」三层边框叠加
+        self.tabs.setObjectName("netdiskTabs")
+        self.tabs.setStyleSheet(
+            "QTabWidget#netdiskTabs::pane { border: none; background: transparent; }")
         outer.addWidget(self.tabs)
 
         self.backup_page = QuarkBackupPage(app)
@@ -37,6 +42,13 @@ class NetdiskPage(BasePage):
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
     # ---------- 生命周期 ----------
+    def on_theme_changed(self):
+        """把主题切换转发给两个子页（工具条与映射卡片的图标颜色是烘进像素的）。"""
+        for page in (self.backup_page, self.download_page):
+            handler = getattr(page, "on_theme_changed", None)
+            if handler is not None:
+                handler()
+
     def _on_tab_changed(self, index: int):
         page = self.tabs.widget(index)
         if page is not None:

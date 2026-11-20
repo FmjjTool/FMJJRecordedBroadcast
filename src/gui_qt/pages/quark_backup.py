@@ -17,8 +17,8 @@ import threading
 import time
 from datetime import datetime
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
@@ -29,7 +29,7 @@ from gui_qt import theme
 from gui_qt.common import icon_button, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolSectionCard
+from gui_qt.toolbox_common import ElidedLabel, ToolSectionCard
 from toolbox.quark import backup as qbackup
 from toolbox.quark import config as qconfig
 from toolbox.quark import state as qstate
@@ -176,9 +176,11 @@ class QuarkBackupPage(BasePage):
         self._running = False
         self._stop_event: threading.Event | None = None
         self._task_info: dict = {}
+        self._icons: list[tuple[QWidget, str, str]] = []
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        # 本页只作为「网络库」页签内容使用，左右留白交给页签容器
+        root.setContentsMargins(0, 12, 0, 0)
         root.setSpacing(12)
 
         root.addWidget(self._build_toolbar())
@@ -186,59 +188,84 @@ class QuarkBackupPage(BasePage):
 
         self.reload()
 
+    # ==================== 图标（主题切换后重生成） ====================
+
+    def _register_icon(self, widget: QWidget, name: str, role: str = "button"):
+        self._icons.append((widget, name, role))
+        self._apply_icon(widget, name, role)
+
+    def _apply_icon(self, widget: QWidget, name: str, role: str):
+        widget.setIcon(line_icon(name, self._icon_color(role), 16))
+        widget.setIconSize(QSize(16, 16))
+
+    @staticmethod
+    def _icon_color(role: str) -> str:
+        pal = theme.current_palette()
+        if role == "primary":
+            return pal.color(QPalette.HighlightedText).name()
+        if role == "danger":
+            return pal.color(QPalette.BrightText).name()
+        return pal.color(QPalette.ButtonText).name()
+
+    def on_theme_changed(self):
+        for widget, name, role in self._icons:
+            self._apply_icon(widget, name, role)
+        # 映射卡片里的编辑/重传/删除图标是建卡时烘进像素的，整表重建
+        self._render_list()
+
     # ==================== 界面搭建 ====================
 
     def _build_toolbar(self) -> QFrame:
         bar = QFrame()
         bar.setProperty("variant", "toolbar")
-        layout = QVBoxLayout(bar)
+        layout = QHBoxLayout(bar)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
         self.run_btn = QPushButton("立即备份")
         self.run_btn.setProperty("variant", "primary")
         self.run_btn.setToolTip("按当前启用的映射执行一次增量备份（与定时任务同一条链路）")
         self.run_btn.clicked.connect(self._start_backup)
-        row.addWidget(self.run_btn)
+        self._register_icon(self.run_btn, "play", "primary")
+        layout.addWidget(self.run_btn)
 
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
         self.stop_btn.setToolTip("停止当前正在进行的备份（已上传的文件保留）")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_backup)
-        row.addWidget(self.stop_btn)
+        self._register_icon(self.stop_btn, "stop")
+        layout.addWidget(self.stop_btn)
 
-        self.add_btn = QPushButton("＋ 新增备份目录")
+        self.add_btn = QPushButton("新增备份目录")
         self.add_btn.setProperty("variant", "secondary")
         self.add_btn.setToolTip("添加一组「本地目录 → 云端文件夹」映射")
         self.add_btn.clicked.connect(self._add_mapping)
-        row.addWidget(self.add_btn)
-        row.addStretch(1)
-        layout.addLayout(row)
+        self._register_icon(self.add_btn, "plus")
+        layout.addWidget(self.add_btn)
 
-        progress_row = QHBoxLayout()
-        progress_row.setSpacing(8)
+        layout.addSpacing(8)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         self.progress.setFixedHeight(16)
-        progress_row.addWidget(self.progress, 1)
-        self.progress_label = QLabel("空闲")
-        self.progress_label.setProperty("role", "caption")
-        self.progress_label.setMinimumWidth(220)
+        self.progress.setFixedWidth(240)
+        self.progress.setToolTip("当前备份进度")
+        layout.addWidget(self.progress, 0, Qt.AlignVCenter)
+
+        self.progress_label = ElidedLabel("空闲", role="caption")
+        self.progress_label.setMinimumWidth(150)
         self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        progress_row.addWidget(self.progress_label)
-        layout.addLayout(progress_row)
+        layout.addWidget(self.progress_label, 1)
         return bar
 
     def _build_body(self) -> QHBoxLayout:
         body = QHBoxLayout()
         body.setSpacing(12)
 
-        left = ToolSectionCard("备份目录", "每一组映射单独判定增量，互不影响。")
+        left = ToolSectionCard(
+            "备份目录", "每一组映射单独判定增量，互不影响；定时备份在「任务」页设置。")
         self.count_label = QLabel("0 组")
         self.count_label.setProperty("role", "caption")
         left.heading_layout.addWidget(self.count_label)
@@ -255,26 +282,15 @@ class QuarkBackupPage(BasePage):
         self.scroll.setWidget(self.list_host)
         left.content_layout.addWidget(self.scroll, 1)
         body.addWidget(left, 3)
-
-        right = QVBoxLayout()
-        right.setSpacing(12)
-        schedule_hint = QLabel("定时备份已统一到「任务」页面，可在那里修改计划并安装 / 删除任务。")
-        schedule_hint.setProperty("role", "caption")
-        schedule_hint.setWordWrap(True)
-        right.addWidget(schedule_hint)
-        right.addWidget(self._build_log_card(), 1)
-        wrapper = QWidget()
-        wrapper.setLayout(right)
-        right.setContentsMargins(0, 0, 0, 0)
-        body.addWidget(wrapper, 2)
+        body.addWidget(self._build_log_card(), 2)
         return body
 
     def _build_log_card(self) -> ToolSectionCard:
-        card = ToolSectionCard("本次运行日志", "定时任务的日志另存为 config/quark_backup_task.log。")
+        card = ToolSectionCard("本次运行日志", "定时任务日志写入 config/quark_backup_task.log")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
-        self.log_view.setPlaceholderText("点「立即备份」后，这里会显示每个文件的处理结果")
+        self.log_view.setPlaceholderText("点「立即备份」后显示每个文件的处理结果")
         self.log_view.setStyleSheet(
             'QPlainTextEdit { font-family: Consolas, "Cascadia Mono", monospace;'
             " font-size: 11px; background: palette(base); color: palette(text);"
@@ -293,11 +309,14 @@ class QuarkBackupPage(BasePage):
             item = self.list_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # 先脱离父级再排队销毁：deleteLater 要等事件循环，期间旧卡片
+                # 仍留在原位，会和重建后的空状态/新卡片叠在一起
+                widget.setParent(None)
                 widget.deleteLater()
         self.count_label.setText(f"{len(self._mappings)} 组")
 
         if not self._mappings:
-            empty = QLabel("还没有备份目录。点上方「＋ 新增备份目录」添加一组，"
+            empty = QLabel("还没有备份目录。点上方「新增备份目录」添加一组："
                            "选好本地文件夹与云端目标文件夹即可。")
             empty.setProperty("role", "caption")
             empty.setWordWrap(True)
@@ -326,27 +345,44 @@ class QuarkBackupPage(BasePage):
 
         info = QVBoxLayout()
         info.setSpacing(2)
-        title = QLabel(f"［{mapping.provider_label()}］{mapping.title()}")
-        title.setProperty("role", "sectionTitle")
-        title.setWordWrap(True)
-        info.addWidget(title)
 
+        # 第 1 行：存储后端标签 + 云端目标目录（中间省略，完整值进 tooltip）
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        badge = QLabel(mapping.provider_label())
+        badge.setStyleSheet(
+            "QLabel { font-size: 11px; color: palette(placeholder-text);"
+            " border: 1px solid palette(shadow); border-radius: 4px; padding: 0 6px; }")
+        badge.setToolTip("存储后端")
+        top.addWidget(badge, 0, Qt.AlignVCenter)
+        target = ElidedLabel(mapping.remote_dir or "（未设云端目录）")
+        font = target.font()
+        font.setBold(True)
+        target.setFont(font)
+        target.setMinimumWidth(120)
+        top.addWidget(target, 1)
+        info.addLayout(top)
+
+        # 第 2 行：本地目录
+        source = ElidedLabel(f"本地 {mapping.local_dir or '（未选本地目录）'}",
+                             role="caption")
+        info.addWidget(source)
+
+        # 第 3 行：统计 / 上次结果 / 排除与上限，全部压成一条
         stats = qstate.mapping_stats(mapping.id)
-        detail = f"已备份 {stats['files']} 个文件 · {qbackup.human_size(stats['bytes'])}"
-        if mapping.exclude:
-            detail += f" ｜ 排除：{mapping.exclude}"
-        if mapping.max_file_mb:
-            detail += f" ｜ 单文件上限 {mapping.max_file_mb} MB"
-        detail_label = QLabel(detail)
-        detail_label.setProperty("role", "caption")
-        detail_label.setWordWrap(True)
-        info.addWidget(detail_label)
-
+        parts = [f"{stats['files']} 个文件", qbackup.human_size(stats['bytes'])]
         if mapping.last_run:
-            last = QLabel(f"上次：{mapping.last_run} {mapping.last_result}")
-            last.setProperty("role", "caption")
-            last.setWordWrap(True)
-            info.addWidget(last)
+            parts.append(f"上次 {mapping.last_run}")
+        if mapping.last_result:
+            parts.append(mapping.last_result)
+        if mapping.exclude:
+            parts.append(f"排除 {mapping.exclude}")
+        if mapping.max_file_mb:
+            parts.append(f"单文件上限 {mapping.max_file_mb} MB")
+        summary = ElidedLabel(" · ".join(parts),
+                              role="danger" if "失败" in (mapping.last_result or "")
+                              else "caption")
+        info.addWidget(summary)
 
         if mapping.last_share_url:
             share_line = QHBoxLayout()
@@ -366,7 +402,7 @@ class QuarkBackupPage(BasePage):
 
         if not mapping.local_dir:
             warn = QLabel("本地目录未设置，这条映射不会执行")
-            warn.setProperty("role", "caption")
+            warn.setStyleSheet("color: theme(danger);")
             warn.setWordWrap(True)
             info.addWidget(warn)
         layout.addLayout(info, 1)
@@ -374,15 +410,15 @@ class QuarkBackupPage(BasePage):
         icon_color = theme.color("text")
         edit_btn = icon_button("", "编辑这条备份目录", on_click=lambda _=False, m=mapping: self._edit_mapping(m))
         edit_btn.setIcon(line_icon("edit", icon_color, 16))
-        layout.addWidget(edit_btn)
+        layout.addWidget(edit_btn, 0, Qt.AlignTop)
         reset_btn = icon_button("", "清空同步记录，下次备份重新上传全部文件",
                                 on_click=lambda _=False, m=mapping: self._reset_mapping(m))
         reset_btn.setIcon(line_icon("refresh", icon_color, 16))
-        layout.addWidget(reset_btn)
+        layout.addWidget(reset_btn, 0, Qt.AlignTop)
         del_btn = icon_button("", "删除这条备份目录（云端文件不受影响）",
                               on_click=lambda _=False, m=mapping: self._delete_mapping(m))
         del_btn.setIcon(line_icon("trash", icon_color, 16))
-        layout.addWidget(del_btn)
+        layout.addWidget(del_btn, 0, Qt.AlignTop)
         return card
 
     # ==================== 映射增删改 ====================

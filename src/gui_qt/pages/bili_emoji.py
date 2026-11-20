@@ -10,7 +10,7 @@ import httpx
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
     QVBoxLayout, QWidget,
 )
@@ -19,6 +19,7 @@ from bili import api
 from bili.links import parse_link
 from bili.download import DownloadTask
 from toolbox.config_manager import get_export_dir
+from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 
@@ -57,6 +58,16 @@ def fmt_urls(fmt: str, emote: dict) -> list[str]:
     return [u] if u else []
 
 
+def _padded(widget: QWidget) -> QWidget:
+    """页签内容统一外边距 16px：卡片外再留白，与其它页面版式对齐。"""
+    wrap = QWidget()
+    lay = QVBoxLayout(wrap)
+    lay.setContentsMargins(16, 16, 16, 16)
+    lay.setSpacing(0)
+    lay.addWidget(widget)
+    return wrap
+
+
 class _DlBar(QWidget):
     """格式选择 + 下载按钮 + 进度标签（每个 Tab 独立一份）。"""
 
@@ -64,18 +75,22 @@ class _DlBar(QWidget):
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
         self.fmt_cb = None
         if show_fmt:
-            row.addWidget(QLabel("保存格式："))
+            fmt_label = QLabel("保存格式")
+            fmt_label.setProperty("role", "caption")
+            row.addWidget(fmt_label)
             self.fmt_cb = QComboBox()
             for key, label in FMT_OPTIONS:
                 self.fmt_cb.addItem(label, key)
+            self.fmt_cb.setFixedWidth(128)
             row.addWidget(self.fmt_cb)
         self.dl_btn = QPushButton("全部下载")
-        self.dl_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);padding:5px 18px;")
+        self.dl_btn.setProperty("variant", "primary")
         row.addWidget(self.dl_btn)
         self.progress = QLabel("")
-        self.progress.setStyleSheet("color: palette(placeholder-text);")
+        self.progress.setProperty("role", "caption")
         row.addWidget(self.progress, 1)
         self._page = parent_page
         self._getter = getter
@@ -215,26 +230,38 @@ class BiliEmojiPage(BasePage):
         """全部表情包与按 ID 下载合并，避免两个高度重合的 tab。"""
         split = QSplitter(Qt.Vertical)
         split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
         split.addWidget(self._build_all_tab())
         split.addWidget(self._build_id_tab())
         split.setSizes([260, 320])
         self._emoji_split = split
-        return split
+        return _padded(split)
 
     # ---------- Tab1 全部表情包（搜索 + 滚动懒加载） ----------
     def _build_all_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.addWidget(QLabel("① 浏览 / 搜索全部表情包", styleSheet="font-weight:600;"))
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("① 浏览 / 搜索全部表情包")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         top = QHBoxLayout()
-        top.addWidget(QLabel("搜索："))
+        top.setSpacing(8)
         self.all_search = QLineEdit()
         self.all_search.setPlaceholderText("输入要搜索的表情包名字，回车或点击搜索按钮过滤")
+        self.all_search.setClearButtonEnabled(True)
         self.all_search.returnPressed.connect(self._search_all)
         top.addWidget(self.all_search, 1)
         btn = QPushButton("搜索")
-        btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);padding:5px 16px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._search_all)
         top.addWidget(btn)
         v.addLayout(top)
@@ -244,17 +271,19 @@ class BiliEmojiPage(BasePage):
         self.all_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.all_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.all_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._all_sorter = table_sort.install(self.all_table, skip_columns=(3,))
         # 滚动到底 → 追加下一批（懒加载）
         self.all_table.verticalScrollBar().valueChanged.connect(self._all_scroll)
         v.addWidget(self.all_table, 1)
 
         self.all_info = QLabel("需要 B站 登录。输入名字搜索，列表滚动到底自动加载更多")
-        self.all_info.setStyleSheet("color: palette(placeholder-text);")
+        self.all_info.setProperty("role", "caption")
+        self.all_info.setWordWrap(True)
         v.addWidget(self.all_info)
 
         self.all_dl = _DlBar(self, lambda: self._all_current, "表情包")
         v.addWidget(self.all_dl)
-        return w
+        return card
 
     def _search_all(self):
         """搜索：首次自动加载全部列表（仅包名等元数据，轻量），再按名字过滤。"""
@@ -305,6 +334,7 @@ class BiliEmojiPage(BasePage):
             self.all_table.setCellWidget(i, 3, btn)
         # 封面缩略图（缓存命中即时回填，新图后台下载）
         self._preview(self.all_table, [d.get("url", "") for d in self._all_filtered[:self._all_shown]], col=1)
+        self._all_sorter.reapply()
 
     def _all_scroll(self, val):
         bar = self.all_table.verticalScrollBar()
@@ -324,37 +354,52 @@ class BiliEmojiPage(BasePage):
 
     # ---------- Tab2 按ID（智能识别：链接/普通包/装扮/收藏集自动判断） ----------
     def _build_id_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.addWidget(QLabel("② 按 ID 下载（普通表情包 / 装扮表情包）",
-                          styleSheet="font-weight:600;"))
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("② 按 ID 下载（普通表情包 / 装扮表情包）")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("表情包/装扮ID："))
+        row.setSpacing(8)
+        entry_label = QLabel("表情包/装扮 ID")
+        entry_label.setProperty("role", "caption")
+        row.addWidget(entry_label)
         self.id_entry = QLineEdit()
         self.id_entry.setPlaceholderText(
             "表情包 ID / 装扮 item_id / 链接（装扮、收藏集、b23短链均支持），多个 ID 用逗号分隔")
+        self.id_entry.setClearButtonEnabled(True)
         self.id_entry.returnPressed.connect(self._view_by_id)
         row.addWidget(self.id_entry, 1)
         self.id_suit_cb = QCheckBox("装扮表情包")
         self.id_suit_cb.setToolTip("勾选后强制按装扮接口解析；不勾选时自动判断")
         row.addWidget(self.id_suit_cb)
         btn = QPushButton("查看")
-        btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);padding:5px 14px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._view_by_id)
         row.addWidget(btn)
         v.addLayout(row)
 
         self.id_info = QLabel("自动识别：普通表情包 → 装扮表情 → 收藏集（命中收藏集会自动跳「收藏集」tab）")
-        self.id_info.setStyleSheet("color: palette(placeholder-text);")
+        self.id_info.setProperty("role", "caption")
+        self.id_info.setWordWrap(True)
         v.addWidget(self.id_info)
         self.id_table = QTableWidget(0, 2)
         self.id_table.setHorizontalHeaderLabels(["表情", "格式/目录"])
         self.id_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.id_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._id_sorter = table_sort.install(self.id_table, skip_columns=())
         v.addWidget(self.id_table, 1)
         v.addWidget(_DlBar(self, lambda: self._id_current, "表情包"))
-        return w
+        return card
 
     def _goto_garb(self, act_id: str):
         """切换到本页「收藏集」tab 加载收藏集活动（B站资源聚合页内切换）。"""
@@ -442,6 +487,7 @@ class BiliEmojiPage(BasePage):
             self._id_current = result
             render_files(self.id_table, self.id_info, result)
             self._preview(self.id_table, [f["url"] for f in result["files"]])
+            self._id_sorter.reapply()
             if result["hints"]:
                 self.id_info.setText(self.id_info.text() + "  |  " + "；".join(result["hints"]))
 
@@ -449,30 +495,47 @@ class BiliEmojiPage(BasePage):
 
     # ---------- Tab3 直播间表情 ----------
     def _build_room_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("③ 直播间表情")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("房间号："))
+        row.setSpacing(8)
+        room_label = QLabel("房间号")
+        room_label.setProperty("role", "caption")
+        row.addWidget(room_label)
         self.room_entry2 = QLineEdit()
         self.room_entry2.setPlaceholderText("如 544820 或直播间链接（表情需登录，头像/封面不需要）")
+        self.room_entry2.setClearButtonEnabled(True)
         self.room_entry2.returnPressed.connect(self._load_room)
         row.addWidget(self.room_entry2, 1)
         btn = QPushButton("加载")
-        btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);padding:5px 14px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._load_room)
         row.addWidget(btn)
         v.addLayout(row)
         self.room_info = QLabel("加载直播间专属表情/UP主大表情/通用表情 + 主播头像/封面/网页+App背景图/关键帧（表情需登录）")
-        self.room_info.setStyleSheet("color: palette(placeholder-text);")
+        self.room_info.setProperty("role", "caption")
+        self.room_info.setWordWrap(True)
         v.addWidget(self.room_info)
         self.room_table = QTableWidget(0, 2)
         self.room_table.setHorizontalHeaderLabels(["表情", "格式/目录"])
         self.room_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.room_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._room_sorter = table_sort.install(self.room_table, skip_columns=())
         v.addWidget(self.room_table, 1)
         v.addWidget(_DlBar(self, lambda: self._room_current, "表情包"))
-        return w
+        return _padded(card)
 
     def _load_room(self):
         rid = self.room_entry2.text().strip()
@@ -549,6 +612,7 @@ class BiliEmojiPage(BasePage):
             self._room_current = result
             render_files(self.room_table, self.room_info, result)
             self._preview(self.room_table, [f["url"] for f in result["files"]])
+            self._room_sorter.reapply()
             if result["notes"]:
                 self.room_info.setText(self.room_info.text() + "  |  " + "；".join(result["notes"]))
 

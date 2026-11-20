@@ -300,9 +300,30 @@ def list_tables() -> list:
     return out
 
 
+# 允许排序的列（白名单，避免拼接外部输入）。数字列按整数比较，文本列忽略大小写。
+_SORT_COLUMNS = {
+    "fetched_at": "TEXT", "kind": "TEXT", "title": "TEXT", "author": "TEXT",
+    "publish_time": "TEXT", "play_count": "INTEGER", "like_count": "INTEGER",
+    "comment_count": "INTEGER", "video_url": "TEXT",
+}
+
+
+def _order_clause(order_by: str, ascending: bool) -> str:
+    col = (order_by or "").strip()
+    if col not in _SORT_COLUMNS:
+        return "ORDER BY rowid DESC"
+    direction = "ASC" if ascending else "DESC"
+    if _SORT_COLUMNS[col] == "INTEGER":
+        return f'ORDER BY "{col}" IS NULL, "{col}" {direction}, rowid DESC'
+    # 空字符串/空值不论升降序都排最后，再按文本（忽略大小写）比较
+    return (f'ORDER BY ("{col}" IS NULL OR "{col}" = \'\'), '
+            f'"{col}" COLLATE NOCASE {direction}, rowid DESC')
+
+
 def query_rows(platform: str, keyword: str = "", author: str = "",
-               limit: int = 500, offset: int = 0) -> tuple:
-    """查询平台表（关键词过滤 + 作者精确筛选）。返回 (行列表, 总条数)。"""
+               limit: int = 500, offset: int = 0,
+               order_by: str = "", ascending: bool = False) -> tuple:
+    """查询平台表（关键词过滤 + 作者精确筛选 + 表头排序）。返回 (行列表, 总条数)。"""
     if not (platform or "").strip():
         return [], 0
     platform = _norm_platform(platform)
@@ -325,7 +346,7 @@ def query_rows(platform: str, keyword: str = "", author: str = "",
                 total = conn.execute(
                     f'SELECT COUNT(*) FROM "{platform}" {where}', params).fetchone()[0]
                 q = (f'SELECT {", ".join(_COL_NAMES)} FROM "{platform}" {where} '
-                     f'ORDER BY rowid DESC LIMIT ? OFFSET ?')
+                     f'{_order_clause(order_by, ascending)} LIMIT ? OFFSET ?')
                 rows = conn.execute(q, params + [int(limit), int(offset)]).fetchall()
             finally:
                 conn.close()

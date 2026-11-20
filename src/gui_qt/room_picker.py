@@ -18,11 +18,8 @@
 from __future__ import annotations
 
 import json
-import os
-import re
 import threading
 
-import httpx
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -30,8 +27,12 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout,
 )
 
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+from gui_qt import table_sort
+
+# 解析逻辑放在 toolbox/live_room_resolver（账号配置页也要用），这里沿用旧名字
+from toolbox.live_room_resolver import (  # noqa: F401
+    bili_uid_to_room, parse_account_url, resolve_douyin_sec,
+)
 
 PLATFORM_LABEL = {"douyin": "抖音", "bili": "B站", "kuaishou": "快手",
                   "weibo": "微博", "xiaohongshu": "小红书", "netease": "网易云"}
@@ -63,119 +64,6 @@ def _config_dir():
         return get_config_dir()
     except Exception:
         return Path(__file__).resolve().parent.parent.parent / "config"
-
-
-def parse_account_url(url):
-    """账号 URL → (platform, room, uid, sec_uid)。识别不了返回 ("", "", "", "")。"""
-    u = (url or "").strip()
-    if not u:
-        return "", "", "", ""
-    m = re.search(r"live\.douyin\.com/(\d+)", u)
-    if m:
-        return "douyin", m.group(1), "", ""
-    m = re.search(r"live\.bilibili\.com/(\d+)", u)
-    if m:
-        return "bili", m.group(1), "", ""
-    m = re.search(r"space\.bilibili\.com/(\d+)", u)
-    if m:
-        return "bili", "", m.group(1), ""
-    m = re.search(r"douyin\.com/user/([A-Za-z0-9_\-]+)", u)
-    if m:
-        return "douyin", "", "", m.group(1)
-    m = re.search(r"live\.kuaishou\.com/u/([0-9A-Za-z_\-]+)", u)
-    if m:
-        return "kuaishou", m.group(1), "", ""
-    m = (re.search(r"weibo\.com/l/wblive/p/show/([0-9A-Za-z:_\-]+)", u)
-         or re.search(r"live\.weibo\.com/(?:show|room)\?(?:[^#]*&)?id=([0-9A-Za-z:_\-]+)", u))
-    if m:
-        return "weibo", m.group(1), "", ""
-    m = re.search(r"xiaohongshu\.com/livestream/([0-9A-Za-z_\-]+)", u)
-    if m:
-        return "xiaohongshu", m.group(1), "", ""
-    m = re.search(r"(?:look|music)\.163\.com/live\?(?:[^#]*&)?id=([0-9A-Za-z_\-]+)", u)
-    if m:
-        return "netease", m.group(1), "", ""
-    return "", "", "", ""
-
-
-def bili_uid_to_room(uid, timeout=8):
-    """B站 UID → 直播间号（游客接口，绝大多数主播 roomid≠uid 时也能取到）。"""
-    try:
-        r = httpx.get("https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld",
-                      params={"mid": str(uid)},
-                      headers={"User-Agent": UA, "Referer": "https://live.bilibili.com/"},
-                      timeout=timeout)
-        d = r.json()
-        if d.get("code") == 0:
-            rid = (d.get("data") or {}).get("roomid")
-            if rid:
-                return str(rid)
-    except Exception:
-        pass
-    return ""
-
-
-def resolve_douyin_sec(sec_uid, timeout_ms=30000):
-    """抖音主页 sec_uid → (昵称, web_rid, 是否直播中)。
-
-    纯 httpx 请求 profile/other 会返回 200 + 空体（Argus 校验浏览器指纹），
-    必须在 Playwright 页面上下文里 fetch 才拿得到数据（与下载器的兜底同源）。
-    未开播时 room_data 为空 → web_rid 为空，只能拿到昵称。
-    """
-    import urllib.parse
-    try:
-        from playwright.sync_api import sync_playwright
-        from toolbox.browser import launch as pw_launch
-    except Exception:
-        return "", "", False
-    qs = urllib.parse.urlencode({
-        "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
-        "sec_user_id": sec_uid, "publish_video_strategy_type": "2",
-        "version_code": "170400", "version_name": "17.4.0",
-        "cookie_enabled": "true", "platform": "PC", "downlink": "10",
-    })
-    api = "https://www.douyin.com/aweme/v1/web/user/profile/other/?" + qs
-    try:
-        with sync_playwright() as p:
-            browser = pw_launch(p, headless=True,
-                                args=["--disable-blink-features=AutomationControlled",
-                                      "--no-sandbox", "--disable-dev-shm-usage"])
-            try:
-                ctx = browser.new_context(user_agent=UA, viewport={"width": 1920,
-                                                                  "height": 1080},
-                                          locale="zh-CN")
-                ctx.add_init_script(
-                    "Object.defineProperty(navigator,'webdriver',{get:()=>false});")
-                page = ctx.new_page()
-                page.goto("https://www.douyin.com/", wait_until="domcontentloaded",
-                          timeout=timeout_ms)
-                page.wait_for_timeout(2500)
-                txt = page.evaluate(
-                    """async (u) => {
-                        const r = await fetch(u, {credentials: 'include'});
-                        return await r.text();
-                    }""", api)
-            finally:
-                browser.close()
-    except Exception:
-        return "", "", False
-    if not txt or not txt.strip().startswith("{"):
-        return "", "", False
-    try:
-        d = json.loads(txt)
-    except Exception:
-        return "", "", False
-    u = d.get("user") or {}
-    nick = u.get("nickname") or ""
-    live = bool(int(u.get("live_status") or 0))
-    rd = u.get("room_data")
-    if isinstance(rd, str) and rd.strip():
-        try:
-            rd = json.loads(rd)
-        except Exception:
-            rd = None
-    web_rid = ((rd or {}).get("owner") or {}).get("web_rid") or ""
-    return nick, str(web_rid), live
 
 
 def load_local_entries():
@@ -294,6 +182,9 @@ class RoomPickerDialog(QDialog):
         hh.setSectionResizeMode(2, QHeaderView.Stretch)
         hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
+        # 行号 == self._rows 下标：currentRow() 反查记录，排序时必须同步重排列表
+        self._rows: list[RoomEntry] = []
+        self._sorter = table_sort.install(self.table, skip_columns=())
         self.table.doubleClicked.connect(lambda _i: self._accept())
         lay.addWidget(self.table, 1)
 
@@ -370,6 +261,7 @@ class RoomPickerDialog(QDialog):
         n_ready = sum(1 for e in rows if e.ready)
         self.status.setText("共 %d 条（可直接用 %d 条）" % (len(rows), n_ready))
         self._rows = rows
+        self._sorter.attach(rows).apply()
 
     def _selected_entry(self):
         r = self.table.currentRow()

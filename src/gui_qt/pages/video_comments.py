@@ -8,15 +8,19 @@
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
+    QLineEdit, QPushButton, QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
+from gui_qt.theme import current_palette
 from toolbox import bili_comments as bc
 from toolbox import douyin_comments as dc
 from toolbox import weibo_comments as wc
@@ -46,135 +50,265 @@ _PLACEHOLDERS = {
 }
 
 
+class _ElidedLabel(QLabel):
+    """按可用宽度中间省略的单行标签：完整内容进 tooltip，避免长提示撑宽布局。"""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full_text = str(text or "")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setToolTip(self._full_text)
+
+    def setText(self, text: str):
+        self._full_text = str(text or "")
+        self.setToolTip(self._full_text)
+        self.update()
+
+    def text(self) -> str:
+        return self._full_text
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        shown = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideMiddle, max(16, self.width()))
+        role = (QPalette.ColorRole.PlaceholderText
+                if self.property("role") == "caption" else QPalette.ColorRole.WindowText)
+        p.setPen(self.palette().color(role))
+        p.drawText(self.rect(), int(self.alignment()), shown)
+        p.end()
+
+
 class VideoCommentsPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.videos = []          # [{id, desc, comments}]
         self.current_index = -1
         self._stop = False
+        self._icons: list = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        layout.addWidget(self._build_fetch_card())
+        layout.addWidget(self._build_filter_bar())
+        layout.addWidget(self._build_table_card(), 1)
 
-        # ---- 顶部：输入区 ----
-        top = QFrame()
-        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
-        tv = QVBoxLayout(top)
-        tv.setContentsMargins(10, 8, 10, 8)
-        tv.setSpacing(6)
+    # ===================== 布局片段 =====================
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    @staticmethod
+    def _separator(vertical: bool = False) -> QFrame:
+        line = QFrame()
+        line.setStyleSheet("background: palette(shadow); border: none;")
+        if vertical:
+            line.setFixedWidth(1)
+        else:
+            line.setFixedHeight(1)
+        return line
+
+    @staticmethod
+    def _icon_color(role: str = "button") -> str:
+        pal = current_palette()
+        if role == "primary":
+            return pal.color(QPalette.ColorRole.HighlightedText).name()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def _icon_button(self, text: str, icon_name: str, variant: str = "secondary") -> QPushButton:
+        btn = QPushButton(text)
+        btn.setProperty("variant", variant)
+        role = "primary" if variant == "primary" else "button"
+        btn.setIcon(line_icon(icon_name, self._icon_color(role), 16))
+        btn.setIconSize(QSize(16, 16))
+        self._icons.append((btn, icon_name, role))
+        return btn
+
+    def on_theme_changed(self):
+        for btn, name, role in self._icons:
+            btn.setIcon(line_icon(name, self._icon_color(role), 16))
+
+    def _build_fetch_card(self) -> QFrame:
+        card = QFrame(self)
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("抓取", card)
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        self.status_label = _ElidedLabel("选择平台，输入视频链接开始", card)
+        self.status_label.setProperty("role", "caption")
+        self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        head.addWidget(self.status_label, 1)
+        v.addLayout(head)
 
         row1 = QHBoxLayout()
-        self.platform_combo = QComboBox()
+        row1.setSpacing(8)
+        self.platform_combo = QComboBox(card)
         for key, name in _PLATFORMS:
             self.platform_combo.addItem(name, key)
+        self.platform_combo.setFixedWidth(92)
+        self.platform_combo.setToolTip("评论来源平台")
         self.platform_combo.currentIndexChanged.connect(self._platform_changed)
         row1.addWidget(self.platform_combo)
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems([" 单视频", "作者模式"])
+
+        self.mode_combo = QComboBox(card)
+        self.mode_combo.addItems(["单视频", "作者模式"])
+        self.mode_combo.setFixedWidth(104)
+        self.mode_combo.setToolTip("作者模式：按作者主页链接抓最新 N 个视频的评论（仅抖音）")
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         row1.addWidget(self.mode_combo)
-        self.input_edit = QLineEdit()
+
+        self.input_edit = QLineEdit(card)
         self.input_edit.setPlaceholderText(_PLACEHOLDERS[("douyin", False)])
+        self.input_edit.setClearButtonEnabled(True)
         self.input_edit.returnPressed.connect(self.start_fetch)
         row1.addWidget(self.input_edit, 1)
-        self.video_count_spin = QSpinBox()
+
+        row1.addWidget(self._caption("视频数"))
+        self.video_count_spin = QSpinBox(card)
         self.video_count_spin.setRange(1, 10)
         self.video_count_spin.setValue(3)
+        self.video_count_spin.setFixedWidth(64)
         self.video_count_spin.setToolTip("作者模式：抓最新几个视频的评论（仅抖音）")
-        row1.addWidget(QLabel("视频数"))
         row1.addWidget(self.video_count_spin)
-        self.pages_spin = QSpinBox()
+
+        row1.addWidget(self._caption("页数"))
+        self.pages_spin = QSpinBox(card)
         self.pages_spin.setRange(1, 50)
         self.pages_spin.setValue(5)
+        self.pages_spin.setFixedWidth(64)
         self.pages_spin.setToolTip("每个视频抓取的评论页数（抖音/B站每页 20 条，微博每页 10 条）")
-        row1.addWidget(QLabel("页数"))
         row1.addWidget(self.pages_spin)
-        self.fetch_btn = QPushButton("抓取评论")
-        self.fetch_btn.setStyleSheet(
-            "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
+
+        row1.addSpacing(4)
+        self.fetch_btn = self._icon_button("抓取评论", "download", "primary")
+        self.fetch_btn.setToolTip("按当前平台与链接抓取评论（回车同效）")
         self.fetch_btn.clicked.connect(self.start_fetch)
         row1.addWidget(self.fetch_btn)
-        self.stop_btn = QPushButton("停止")
+        self.stop_btn = self._icon_button("停止", "stop")
+        self.stop_btn.setToolTip("停止当前抓取（已抓到的评论保留）")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._do_stop)
         row1.addWidget(self.stop_btn)
-        tv.addLayout(row1)
+        v.addLayout(row1)
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("视频："))
-        self.video_combo = QComboBox()
+        row2.setSpacing(8)
+        row2.addWidget(self._caption("视频"))
+        self.video_combo = QComboBox(card)
         self.video_combo.setMinimumWidth(320)
+        self.video_combo.setToolTip("已抓取的视频；切换即刷新下方评论")
         self.video_combo.currentIndexChanged.connect(self._video_switched)
         row2.addWidget(self.video_combo, 1)
-        self.export_btn = QPushButton("导出长图")
+        self.export_btn = self._icon_button("导出长图", "image")
         self.export_btn.setToolTip("当前视频筛选后的评论导出为 PNG 长图（含头像与评论图片）")
-        self.export_btn.setStyleSheet(
-            "background: palette(highlight); color: palette(highlighted-text); padding: 5px 14px; border-radius: 4px;")
         self.export_btn.clicked.connect(self.export_png)
         row2.addWidget(self.export_btn)
-        self.save_btn = QPushButton("保存原始数据")
+        self.save_btn = self._icon_button("保存原始数据", "save")
         self.save_btn.setToolTip("保存 comments.json（原始数据）/ comments.txt / 图片原图")
         self.save_btn.clicked.connect(self.save_raw)
         row2.addWidget(self.save_btn)
-        tv.addLayout(row2)
-        layout.addWidget(top)
+        v.addLayout(row2)
+        return card
 
-        # ---- 筛选栏 ----
-        flt = QFrame()
-        flt.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
-        fv = QHBoxLayout(flt)
-        fv.setContentsMargins(10, 6, 10, 6)
-        fv.setSpacing(6)
-        fv.addWidget(QLabel("搜索"))
-        self.kw_edit = QLineEdit()
+    def _build_filter_bar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 8, 12, 8)
+        h.setSpacing(8)
+
+        h.addWidget(self._caption("搜索"))
+        self.kw_edit = QLineEdit(bar)
         self.kw_edit.setPlaceholderText("评论文本关键词")
-        self.kw_edit.setFixedWidth(150)
+        self.kw_edit.setClearButtonEnabled(True)
+        self.kw_edit.setFixedWidth(180)
         self.kw_edit.textChanged.connect(self.apply_filter)
-        fv.addWidget(self.kw_edit)
-        fv.addWidget(QLabel(""))
-        self.user_edit = QLineEdit()
+        h.addWidget(self.kw_edit)
+
+        self.user_edit = QLineEdit(bar)
         self.user_edit.setPlaceholderText("昵称")
-        self.user_edit.setFixedWidth(110)
+        self.user_edit.setClearButtonEnabled(True)
+        self.user_edit.setFixedWidth(130)
         self.user_edit.textChanged.connect(self.apply_filter)
-        fv.addWidget(self.user_edit)
-        self.image_combo = QComboBox()
+        h.addWidget(self.user_edit)
+
+        self.image_combo = QComboBox(bar)
         for v, name in _IMAGE_MODES:
             self.image_combo.addItem(name, v)
+        self.image_combo.setFixedWidth(96)
+        self.image_combo.setToolTip("按评论是否带图筛选")
         self.image_combo.currentIndexChanged.connect(self.apply_filter)
-        fv.addWidget(self.image_combo)
-        fv.addWidget(QLabel("≥"))
-        self.likes_spin = QSpinBox()
+        h.addWidget(self.image_combo)
+
+        h.addWidget(self._caption("点赞 ≥"))
+        self.likes_spin = QSpinBox(bar)
         self.likes_spin.setRange(0, 999999)
+        self.likes_spin.setFixedWidth(96)
+        self.likes_spin.setToolTip("只显示点赞数不低于该值的评论")
         self.likes_spin.valueChanged.connect(self.apply_filter)
-        fv.addWidget(self.likes_spin)
-        fv.addWidget(QLabel("排序"))
-        self.sort_combo = QComboBox()
+        h.addWidget(self.likes_spin)
+
+        h.addWidget(self._caption("排序"))
+        self.sort_combo = QComboBox(bar)
         for v, name in _SORT_MODES:
             self.sort_combo.addItem(name, v)
+        self.sort_combo.setFixedWidth(92)
+        self.sort_combo.setToolTip("默认顺序 / 按点赞 / 按时间，表头点击也可排序")
         self.sort_combo.currentIndexChanged.connect(self.apply_filter)
-        fv.addWidget(self.sort_combo)
-        reset_btn = QPushButton("↺ 重置")
-        reset_btn.clicked.connect(self.reset_filter)
-        fv.addWidget(reset_btn)
-        fv.addStretch(1)
-        self.status_label = QLabel("选择平台，输入视频链接开始")
-        self.status_label.setStyleSheet("color: palette(placeholder-text);")
-        fv.addWidget(self.status_label)
-        layout.addWidget(flt)
+        h.addWidget(self.sort_combo)
 
-        # ---- 评论表格 ----
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["用户", "评论内容", "", "图", "时间"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for col, w in ((2, 60), (3, 45), (4, 110)):
-            self.table.horizontalHeader().resizeSection(col, w)
+        reset_btn = self._icon_button("重置", "refresh")
+        reset_btn.setToolTip("清空关键词、昵称、图片、点赞与排序条件")
+        reset_btn.clicked.connect(self.reset_filter)
+        h.addWidget(reset_btn)
+        h.addStretch(1)
+        return bar
+
+    def _build_table_card(self) -> QFrame:
+        card = QFrame(self)
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("评论", card)
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        self.count_label = self._caption("0 条")
+        head.addWidget(self.count_label)
+        v.addLayout(head)
+
+        self.table = QTableWidget(0, 5, card)
+        self.table.setHorizontalHeaderLabels(["用户", "评论内容", "点赞", "图", "时间"])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for col in (2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.resizeSection(4, 110)
+        header.setHighlightSections(False)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setWordWrap(True)
-        layout.addWidget(self.table, 1)
+        # 表头点击排序（图片数量列不参与，点赞/时间按数值解析）
+        self._sorter = table_sort.install(self.table, skip_columns=(3,))
+        # 排序会重建行（行高回到默认），排完按换行内容重算行高
+        self.table.horizontalHeader().sectionClicked.connect(
+            lambda _col: self.table.resizeRowsToContents())
+        v.addWidget(self.table, 1)
+        return card
 
     # ===================== 平台 / 模式 / 状态 =====================
 
@@ -337,6 +471,8 @@ class VideoCommentsPage(BasePage):
     def apply_filter(self, *_):
         v = self._current_video()
         if not v:
+            self.table.setRowCount(0)
+            self.count_label.setText("0 条")
             return
         be = self._be()
         comments = self._filtered_comments(v)
@@ -356,11 +492,11 @@ class VideoCommentsPage(BasePage):
                 if col in (2, 3):
                     it.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(i, col, it)
+        self._sorter.apply()
         self.table.resizeRowsToContents()
         if v["comments"]:
-            self.status_label.setText(
-                f"筛选后 {len(comments)}/{len(v['comments'])} 条"
-                + f" · 视频：{v['desc'] or v['id']}")
+            self.count_label.setText(
+                f"筛选后 {len(comments)}/{len(v['comments'])} 条")
 
     def reset_filter(self):
         self.kw_edit.clear()

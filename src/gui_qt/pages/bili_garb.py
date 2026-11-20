@@ -12,16 +12,17 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
 )
 
 from bili import api
 from bili.download import DownloadTask
 from toolbox.config_manager import get_export_dir
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.pages.bili_emoji import render_files
+from gui_qt.pages.bili_emoji import _padded, render_files
 
 # 皮肤的固定资源字段（key → 中文名），与原版 skinProps 一致
 SKIN_PROPS = [
@@ -363,25 +364,38 @@ class BiliGarbPage(BasePage):
         """搜索与按 ID 详情合并：上半搜索，下半详情，避免两个高度重合的 tab。"""
         split = QSplitter(Qt.Vertical)
         split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
         split.addWidget(self._build_search_tab())
         split.addWidget(self._build_suit_tab())
         split.setSizes([220, 420])
         self._garb_split = split
-        return split
+        return _padded(split)
 
     # ---------- 搜索 ----------
     def _build_search_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.addWidget(QLabel("① 搜索装扮 / 收藏集", styleSheet="font-weight:600;"))
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("① 搜索装扮 / 收藏集")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         row = QHBoxLayout()
+        row.setSpacing(8)
         self.search_entry = QLineEdit()
         self.search_entry.setPlaceholderText("装扮/收藏集关键词（如 白菜、UP主名），回车搜索")
+        self.search_entry.setClearButtonEnabled(True)
         self.search_entry.returnPressed.connect(self._search)
         row.addWidget(self.search_entry, 1)
         btn = QPushButton("搜索")
-        btn.setStyleSheet("background:#1976d2;color:white;padding:5px 16px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._search)
         row.addWidget(btn)
         v.addLayout(row)
@@ -390,11 +404,13 @@ class BiliGarbPage(BasePage):
         self.search_table.setHorizontalHeaderLabels(["类型", "名称", "item_id", "简介", "查看"])
         self.search_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.search_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._search_sorter = table_sort.install(self.search_table, skip_columns=(4,))
         v.addWidget(self.search_table, 1)
         self.search_info = QLabel("无需登录。type=ip 是装扮（套装详情），type=dlc_act 是收藏集（活动详情）")
-        self.search_info.setStyleSheet("color:#888;")
+        self.search_info.setProperty("role", "caption")
+        self.search_info.setWordWrap(True)
         v.addWidget(self.search_info)
-        return w
+        return card
 
     def _search(self):
         kw = self.search_entry.text().strip()
@@ -443,11 +459,18 @@ class BiliGarbPage(BasePage):
                 self.search_table.setItem(i, 1, QTableWidgetItem(d["name"]))
                 self.search_table.setItem(i, 2, QTableWidgetItem(d["item_id"]))
                 sale = str(d.get("sale") or "")
-                self.search_table.setItem(i, 3, QTableWidgetItem(f"销量 {sale}" if sale else ""))
+                sale_item = QTableWidgetItem(f"销量 {sale}" if sale else "")
+                try:  # 「销量 1234」带前缀，文本解析不出数字 → 用数值排序键
+                    sale_item.setData(table_sort.SORT_KEY_ROLE,
+                                      float(sale.replace(",", "")))
+                except (TypeError, ValueError):
+                    pass
+                self.search_table.setItem(i, 3, sale_item)
                 btn = QPushButton("详情")
                 btn.clicked.connect(lambda _, iid=d["item_id"], t=d["type"]: self._open_detail(iid, t))
                 self.search_table.setCellWidget(i, 4, btn)
             self.search_info.setText(f"共 {len(result)} 个结果（已翻最多 3 页）")
+            self._search_sorter.reapply()
 
         run_bg(job, done)
 
@@ -459,33 +482,49 @@ class BiliGarbPage(BasePage):
 
     # ---------- 装扮详情 ----------
     def _build_suit_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.addWidget(QLabel("② 按 ID 查看装扮详情", styleSheet="font-weight:600;"))
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("② 按 ID 查看装扮详情")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("装扮 item_id："))
+        row.setSpacing(8)
+        suit_label = QLabel("装扮 item_id")
+        suit_label.setProperty("role", "caption")
+        row.addWidget(suit_label)
         self.suit_entry = QLineEdit()
         self.suit_entry.setPlaceholderText("装扮 item_id 或装扮页链接（如 336202401），多个逗号分隔")
+        self.suit_entry.setClearButtonEnabled(True)
         self.suit_entry.returnPressed.connect(self._load_suit)
         row.addWidget(self.suit_entry, 1)
         btn = QPushButton("查看")
-        btn.setStyleSheet("background:#1976d2;color:white;padding:5px 14px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._load_suit)
         row.addWidget(btn)
         v.addLayout(row)
 
         self.suit_info = QLabel("加载装扮全部资源：空间背景/粉丝牌/评论背景/表情包/加载动画/进度条/皮肤/点赞动画")
-        self.suit_info.setStyleSheet("color:#888;")
+        self.suit_info.setProperty("role", "caption")
+        self.suit_info.setWordWrap(True)
         v.addWidget(self.suit_info)
         self.suit_table = QTableWidget(0, 2)
         self.suit_table.setHorizontalHeaderLabels(["文件", "目录"])
         self.suit_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.suit_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._suit_sorter = table_sort.install(self.suit_table, skip_columns=())
         v.addWidget(self.suit_table, 1)
         self._suit_bar = self._dl_bar("装扮")
         v.addWidget(self._suit_bar)
-        return w
+        return card
 
     # 跨页入口：从其他页面跳转加载（先 show_page 再调用）
     def open_act(self, act_id: str):
@@ -547,37 +586,55 @@ class BiliGarbPage(BasePage):
                 return
             self._current = result
             render_files(self.suit_table, self.suit_info, result)
+            self._suit_sorter.reapply()
 
         run_bg(job, done)
 
-    # ---------- 收藏集 ----------
+# ---------- 收藏集 ----------
     def _build_lottery_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("收藏集活动（按 ID）")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("活动 act_id："))
+        row.setSpacing(8)
+        act_label = QLabel("活动 act_id")
+        act_label.setProperty("role", "caption")
+        row.addWidget(act_label)
         self.lottery_entry = QLineEdit()
         self.lottery_entry.setPlaceholderText("收藏集 act_id 或收藏集页链接（如 107423），装扮搜索 tab 可跳转")
+        self.lottery_entry.setClearButtonEnabled(True)
         self.lottery_entry.returnPressed.connect(self._load_lottery)
         row.addWidget(self.lottery_entry, 1)
         btn = QPushButton("查看")
-        btn.setStyleSheet("background:#1976d2;color:white;padding:5px 14px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._load_lottery)
         row.addWidget(btn)
         v.addLayout(row)
 
         self.lottery_info = QLabel("加载活动视觉/勋章/全部收藏集卡牌图与卡牌视频")
-        self.lottery_info.setStyleSheet("color:#888;")
+        self.lottery_info.setProperty("role", "caption")
+        self.lottery_info.setWordWrap(True)
         v.addWidget(self.lottery_info)
         self.lottery_table = QTableWidget(0, 2)
         self.lottery_table.setHorizontalHeaderLabels(["文件", "目录"])
         self.lottery_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.lottery_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._lottery_sorter = table_sort.install(self.lottery_table, skip_columns=())
         v.addWidget(self.lottery_table, 1)
         self._lottery_bar = self._dl_bar("收藏集")
         v.addWidget(self._lottery_bar)
-        return w
+        return _padded(card)
 
     def _load_lottery(self):
         from bili.links import parse_link
@@ -615,6 +672,7 @@ class BiliGarbPage(BasePage):
                 return
             self._current = result
             render_files(self.lottery_table, self.lottery_info, result)
+            self._lottery_sorter.reapply()
 
         run_bg(job, done)
 

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton, QSpinBox,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from gui_qt import theme
+from gui_qt import table_sort, theme
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.time_wheel import TimeWheel
@@ -153,6 +153,8 @@ class TasksPage(BasePage):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
+        # 表头排序：数据只在单元格 / 按钮闭包里，最后一列是操作控件 → 跳过
+        self._sorter = table_sort.install(self.table, skip_columns=(5,))
         cv.addWidget(self.table)
         v.addWidget(card, 1)
 

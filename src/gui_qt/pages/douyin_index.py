@@ -9,16 +9,17 @@
 
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
-    QVBoxLayout, QWidget,
+    QLineEdit, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from platforms import douyin_index as dxi
 
@@ -63,6 +64,58 @@ def _num_tip(it, raw):
     return it
 
 
+def _separator(vertical: bool = False) -> QFrame:
+    """卡片内的分组线：只用主题边框色，不写死 hex。"""
+    line = QFrame()
+    line.setStyleSheet("background: palette(shadow); border: none;")
+    if vertical:
+        line.setFixedWidth(1)
+        line.setFixedHeight(20)
+    else:
+        line.setFixedHeight(1)
+    return line
+
+
+class _StackedBody(QWidget):
+    """内容区 + 空数据引导：没有数据时只显示一条引导文案，不留大片空表。"""
+
+    def __init__(self, content: QWidget, title: str, hint: str, parent=None):
+        super().__init__(parent)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        self.stack = QStackedWidget(self)
+        box.addWidget(self.stack)
+
+        empty = QWidget(self)
+        ev = QVBoxLayout(empty)
+        ev.setContentsMargins(12, 24, 12, 24)
+        ev.setSpacing(4)
+        empty_title = QLabel(title)
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_title.setWordWrap(True)
+        empty_hint = QLabel(hint)
+        empty_hint.setProperty("role", "caption")
+        empty_hint.setAlignment(Qt.AlignCenter)
+        empty_hint.setWordWrap(True)
+        ev.addStretch(1)
+        ev.addWidget(empty_title)
+        ev.addWidget(empty_hint)
+        ev.addStretch(1)
+
+        self.stack.addWidget(empty)
+        self.stack.addWidget(content)
+        self.stack.setCurrentWidget(empty)
+
+    def show_data(self, has_data: bool):
+        self.stack.setCurrentIndex(1 if has_data else 0)
+
+
+# 环比列下标：核心指标里每个时间窗「值 + 环比」两列，稿均指标为第 3、5 列
+_EX_CORE_COLS = tuple(2 + i * 2 for i in range(len(_WINDOWS)))
+_EX_AVG_COLS = (2, 4)
+
+
 class _PickDialog(QDialog):
     """搜索结果两步确认：候选表 → 双击或「选择」填充当前账号。"""
 
@@ -89,6 +142,9 @@ class _PickDialog(QDialog):
                     _num_tip(it, u.get("follow_count") if col == 2 else u.get("like_count"))
                 self.table.setItem(i, col, it)
         self.table.cellDoubleClicked.connect(self._pick)
+        # 排序会同步重排 users，currentRow() 反查仍然正确
+        self._pick_sorter = table_sort.install(
+            self.table, rows=users, skip_columns=())
         v.addWidget(self.table, 1)
         h = QHBoxLayout()
         h.addStretch(1)
@@ -118,47 +174,13 @@ class DouyinIndexPage(BasePage):
         self._name = ""
         self._data = None
         self._busy = False
+        self._icons = []          # (按钮, 图标名, 颜色角色)：切主题时按主题色重绘
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(12)
 
-        # ---- 顶部输入区 ----
-        top = QFrame()
-        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
-        tv = QVBoxLayout(top)
-        tv.setContentsMargins(10, 8, 10, 8)
-        tv.setSpacing(6)
-
-        row = QHBoxLayout()
-        self.input_edit = QLineEdit()
-        self.input_edit.setPlaceholderText("输入达人名称或抖音号（如：封茗囧菌 / mandisasa）")
-        self.input_edit.returnPressed.connect(self._do_search)
-        row.addWidget(self.input_edit, 1)
-        self.search_btn = QPushButton("搜索")
-        self.search_btn.clicked.connect(self._do_search)
-        row.addWidget(self.search_btn)
-        row.addWidget(QLabel("统计范围"))
-        self.range_combo = QComboBox()
-        for days, name in ((30, "近30天"), (15, "近15天"), (7, "近7天")):
-            self.range_combo.addItem(name, days)
-        self.range_combo.setToolTip("达人视频列表与视频指数的统计时间范围（核心指标各时间窗一次全部返回）")
-        row.addWidget(self.range_combo)
-        self.fetch_btn = QPushButton("获取全部数据并保存")
-        self.fetch_btn.setStyleSheet(
-            "background: palette(highlight); color: palette(highlighted-text); padding: 6px 16px; border-radius: 4px;")
-        self.fetch_btn.clicked.connect(self._do_fetch)
-        row.addWidget(self.fetch_btn)
-        open_btn = QPushButton("打开保存目录")
-        open_btn.setToolTip("打开 download/抖音指数/（每次抓取的完整数据都保存在这里）")
-        open_btn.clicked.connect(self._open_dir)
-        row.addWidget(open_btn)
-        tv.addLayout(row)
-
-        self.account_label = QLabel("当前账号：<b>未选择</b>（先搜索并确认达人）")
-        self.account_label.setWordWrap(True)
-        tv.addWidget(self.account_label)
-        layout.addWidget(top)
+        layout.addWidget(self._build_toolbar())
 
         # ---- 数据展示 Tabs ----
         self.tabs = QTabWidget()
@@ -170,94 +192,239 @@ class DouyinIndexPage(BasePage):
         layout.addWidget(self.tabs, 1)
 
         self.status_label = QLabel("输入达人名称或抖音号 → 搜索 → 确认 → 获取全部数据并保存")
-        self.status_label.setStyleSheet("color: palette(placeholder-text);")
+        self.status_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(self.status_label)
+
+    # ---------- 顶部工具栏 ----------
+    def _build_toolbar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.input_edit = QLineEdit(bar)
+        self.input_edit.setPlaceholderText("输入达人名称或抖音号（如：封茗囧菌 / mandisasa）")
+        self.input_edit.setClearButtonEnabled(True)
+        self.input_edit.returnPressed.connect(self._do_search)
+        row.addWidget(self.input_edit, 1)
+
+        self.search_btn = self._icon_button("搜索", "search")
+        self.search_btn.setToolTip("按达人名称或抖音号搜索候选，确认后再抓取")
+        self.search_btn.clicked.connect(self._do_search)
+        row.addWidget(self.search_btn)
+
+        row.addWidget(_separator(vertical=True), 0, Qt.AlignVCenter)
+
+        range_label = QLabel("统计范围")
+        range_label.setProperty("role", "caption")
+        row.addWidget(range_label)
+        self.range_combo = QComboBox(bar)
+        for days, name in ((30, "近30天"), (15, "近15天"), (7, "近7天")):
+            self.range_combo.addItem(name, days)
+        self.range_combo.setFixedWidth(96)
+        self.range_combo.setToolTip("达人视频列表与视频指数的统计时间范围（核心指标各时间窗一次全部返回）")
+        row.addWidget(self.range_combo)
+
+        self.fetch_btn = self._icon_button("获取全部数据并保存", "download", "primary")
+        self.fetch_btn.setToolTip("抓取核心指标、稿均指标、每日趋势、达人视频、粉丝画像与相似达人，并保存 JSON")
+        self.fetch_btn.clicked.connect(self._do_fetch)
+        row.addWidget(self.fetch_btn)
+
+        self.open_btn = self._icon_button("打开保存目录", "folder")
+        self.open_btn.setToolTip("打开 download/抖音指数/（每次抓取的完整数据都保存在这里）")
+        self.open_btn.clicked.connect(self._open_dir)
+        row.addWidget(self.open_btn)
+        v.addLayout(row)
+
+        v.addWidget(_separator())
+
+        self.account_label = QLabel("当前账号：<b>未选择</b>（先搜索并确认达人）")
+        self.account_label.setWordWrap(True)
+        v.addWidget(self.account_label)
+
+        # 涨粉里程碑 / 简介：辅助信息走 caption，不和账号主信息抢层级
+        self.account_extra_label = QLabel("")
+        self.account_extra_label.setProperty("role", "caption")
+        self.account_extra_label.setWordWrap(True)
+        self.account_extra_label.hide()
+        v.addWidget(self.account_extra_label)
+        return bar
+
+    @staticmethod
+    def _icon_color(role: str = "button") -> str:
+        pal = theme.current_palette()
+        if role == "primary":
+            return pal.color(QPalette.ColorRole.HighlightedText).name()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def _icon_button(self, text: str, icon_name: str, variant: str = "secondary") -> QPushButton:
+        btn = QPushButton(text)
+        btn.setProperty("variant", variant)
+        role = "primary" if variant == "primary" else "button"
+        btn.setIcon(line_icon(icon_name, self._icon_color(role), 16))
+        btn.setIconSize(QSize(16, 16))
+        self._icons.append((btn, icon_name, role))
+        return btn
+
+    def on_theme_changed(self):
+        """换主题不重建控件：只重绘线形图标与环比颜色。"""
+        for btn, name, role in self._icons:
+            btn.setIcon(line_icon(name, self._icon_color(role), 16))
+        self._paint_exchange_colors()
 
     # ---------- UI 构建 ----------
     def _build_core_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(4, 6, 4, 4)
-        v.setSpacing(4)
-        v.addWidget(self._section_label("核心指标（作者分析）"))
+        v.setContentsMargins(4, 8, 4, 4)
+        v.addWidget(self._core_content(w))
+        return w
+
+    def _core_content(self, parent):
+        content = QWidget(parent)
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(4)
+        cv.addWidget(self._section_label("核心指标（作者分析）"))
         self.core_table = QTableWidget(0, 1 + len(_WINDOWS) * 2)
         self.core_table.setHorizontalHeaderLabels(
             ["指标"] + [x for w2 in _WINDOWS for x in (w2[1], w2[2])])
         self._style_table(self.core_table, first_col_w=100)
-        v.addWidget(self.core_table)
-        v.addWidget(self._section_label("稿均指标（作品分析 · 每条作品的平均数据）"))
+        self._core_sorter = table_sort.install(self.core_table, skip_columns=(0,))
+        cv.addWidget(self.core_table, 1)
+        cv.addWidget(self._section_label("稿均指标（作品分析 · 每条作品的平均数据）"))
         self.avg_table = QTableWidget(0, 5)
         self.avg_table.setHorizontalHeaderLabels(
             ["指标", "近7天稿均", "环比前7天", "近30天稿均", "环比前30天"])
         self._style_table(self.avg_table, first_col_w=100)
-        v.addWidget(self.avg_table)
-        return w
+        self._avg_sorter = table_sort.install(self.avg_table, skip_columns=(0,))
+        cv.addWidget(self.avg_table, 1)
+        self.core_body = _StackedBody(
+            content, "还没有达人数据",
+            "在上面输入达人名称或抖音号，搜索并确认后点「获取全部数据并保存」", parent)
+        return self.core_body
 
     def _build_trend_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(4, 6, 4, 4)
+        v.setContentsMargins(4, 8, 4, 4)
+        content = QWidget(w)
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(4)
         self.trend_label = self._section_label("每日趋势")
-        v.addWidget(self.trend_label)
+        cv.addWidget(self.trend_label)
         self.trend_table = QTableWidget(0, 6)
         self.trend_table.setHorizontalHeaderLabels(
             ["日期", "新增点赞", "净增粉丝", "新增分享", "新增评论", "新增作品"])
-        self._style_table(self.trend_table, first_col_w=90)
-        v.addWidget(self.trend_table, 1)
+        self._style_table(self.trend_table, first_col_w=100)
+        self._trend_sorter = table_sort.install(self.trend_table, skip_columns=())
+        cv.addWidget(self.trend_table, 1)
+        self.trend_body = _StackedBody(
+            content, "暂无趋势数据", "抓取完成后按天列出新增点赞、净增粉丝等数据", w)
+        v.addWidget(self.trend_body)
         return w
 
     def _build_videos_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(4, 6, 4, 4)
-        v.addWidget(self._section_label("达人视频（双击行打开视频页）"))
+        v.setContentsMargins(4, 8, 4, 4)
+        content = QWidget(w)
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(4)
+        self.video_label = self._section_label("达人视频（双击行打开视频页）")
+        cv.addWidget(self.video_label)
         self.video_table = QTableWidget(0, 7)
         self.video_table.setHorizontalHeaderLabels(
             ["发布日期", "内容", "点赞量", "评论量", "分享量", "收藏量", "视频指数"])
-        self._style_table(self.video_table, first_col_w=88, stretch_col=1)
+        self._style_table(self.video_table, first_col_w=96, stretch_col=1)
+        self._videos: list = []
+        self._video_sorter = table_sort.install(
+            self.video_table, rows=self._videos, skip_columns=())
         self.video_table.cellDoubleClicked.connect(self._open_video)
-        v.addWidget(self.video_table, 1)
+        cv.addWidget(self.video_table, 1)
+        self.videos_body = _StackedBody(
+            content, "暂无作品数据",
+            "抓取完成后显示每条作品的点赞、评论、分享、收藏与视频指数，双击可打开抖音视频页", w)
+        v.addWidget(self.videos_body)
         return w
 
     def _build_fans_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(4, 6, 4, 4)
-        v.addWidget(self._section_label("粉丝画像（占比 + TGI 指数，TGI>100 表示偏好度高于大盘）"))
+        v.setContentsMargins(4, 8, 4, 4)
+        content = QWidget(w)
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(4)
+        self.fans_label = self._section_label(
+            "粉丝画像（占比 + TGI 指数，TGI>100 表示偏好度高于大盘）")
+        cv.addWidget(self.fans_label)
         self.fans_table = QTableWidget(0, 4)
         self.fans_table.setHorizontalHeaderLabels(["维度", "项目", "占比", "TGI"])
-        self._style_table(self.fans_table, first_col_w=80, stretch_col=1)
-        v.addWidget(self.fans_table, 1)
+        self._style_table(self.fans_table, first_col_w=100, stretch_col=1)
+        self._fans_sorter = table_sort.install(self.fans_table, skip_columns=(0,))
+        cv.addWidget(self.fans_table, 1)
+        self.fans_body = _StackedBody(
+            content, "暂无粉丝画像",
+            "抓取完成后显示地域、年龄、性别、手机与兴趣的占比及 TGI", w)
+        v.addWidget(self.fans_body)
         return w
 
     def _build_similar_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(4, 6, 4, 4)
-        v.addWidget(self._section_label("相似达人（双击行直接抓取该达人）"))
+        v.setContentsMargins(4, 8, 4, 4)
+        content = QWidget(w)
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(4)
+        self.similar_label = self._section_label("相似达人（双击行直接抓取该达人）")
+        cv.addWidget(self.similar_label)
         self.similar_table = QTableWidget(0, 7)
         self.similar_table.setHorizontalHeaderLabels(
             ["排名", "达人", "抖音号", "粉丝", "总获赞", "作品", "标签"])
-        self._style_table(self.similar_table, first_col_w=50, stretch_col=1)
+        self._style_table(self.similar_table, first_col_w=64, stretch_col=1)
+        self._similar_users: list = []
+        self._similar_sorter = table_sort.install(
+            self.similar_table, rows=self._similar_users, skip_columns=())
         self.similar_table.cellDoubleClicked.connect(self._open_similar)
-        v.addWidget(self.similar_table, 1)
+        cv.addWidget(self.similar_table, 1)
+        self.similar_body = _StackedBody(
+            content, "暂无相似达人",
+            "抓取完成后列出同领域达人，双击可直接抓取该达人", w)
+        v.addWidget(self.similar_body)
         return w
 
     @staticmethod
     def _section_label(text):
         lb = QLabel(text)
-        lb.setStyleSheet("font-weight: bold;")
+        lb.setProperty("role", "sectionTitle")
         return lb
 
     @staticmethod
     def _style_table(t: QTableWidget, first_col_w=70, stretch_col=None):
+        """首列定宽、其余列铺满：避免整张表挤在左侧、右边留一大片空白。"""
         t.verticalHeader().setVisible(False)
         t.setEditTriggers(QTableWidget.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectRows)
         t.setAlternatingRowColors(True)
-        t.horizontalHeader().resizeSection(0, first_col_w)
-        if stretch_col is not None:
-            t.horizontalHeader().setSectionResizeMode(stretch_col, QHeaderView.Stretch)
+        t.setWordWrap(False)
+        header = t.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setMinimumSectionSize(56)
+        header.setDefaultAlignment(Qt.AlignCenter)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.resizeSection(0, first_col_w)
+        for col in range(1, t.columnCount()):
+            if stretch_col is None or col == stretch_col:
+                header.setSectionResizeMode(col, QHeaderView.Stretch)
+            else:
+                header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
     # ---------- 搜索（两步确认） ----------
     def _do_search(self):
@@ -289,6 +456,7 @@ class DouyinIndexPage(BasePage):
                     f" · 总获赞 {dxi.fmt_count(u.get('like_count'))}"
                     f" · 作品 {u.get('item_count')}")
                 self.status_label.setText(f"已选择「{self._name}」→ 点「获取全部数据并保存」")
+                self.account_extra_label.hide()
                 self.fetch_btn.setFocus()
 
         run_bg(work, done)
@@ -328,12 +496,17 @@ class DouyinIndexPage(BasePage):
 
     # ---------- 渲染 ----------
     def _render(self, data: dict):
-        self._render_core(data.get("core_metrics") or {})
-        self._render_trend(data.get("core_metrics") or {})
-        self._render_avg(data.get("item_metrics") or {})
+        core = data.get("core_metrics") or {}
+        item_metrics = data.get("item_metrics") or {}
+        self._render_core(core)
+        self._render_trend(core)
+        self._render_avg(item_metrics)
         self._render_videos(data.get("videos") or [])
         self._render_fans(data.get("fans_profile") or {})
         self._render_similar(data.get("similar_users") or [])
+        self.core_body.show_data(
+            any(core.get(seg) for _, seg, _ in _CORE_ROWS)
+            or any(item_metrics.get(seg) for _, seg, _ in _AVG_ROWS))
         author = data.get("author") or {}
         intro = (author.get("user_introduction") or "").replace("\n", "· ")
         if len(intro) > 120:
@@ -350,9 +523,14 @@ class DouyinIndexPage(BasePage):
             f" · {author.get('first_tag_name') or ''}/{author.get('second_tag_name') or ''}"
             f" · 粉丝 {dxi.fmt_count(author.get('fans_count'))}"
             f" · 总获赞 {dxi.fmt_count(author.get('like_count'))}"
-            f" · 作品 {author.get('item_count')}"
-            + (f"\n涨粉里程碑：{ms_txt}" if ms_txt else "")
-            + (f"\n简介：{intro}" if intro else ""))
+            f" · 作品 {author.get('item_count')}")
+        extras = []
+        if ms_txt:
+            extras.append(f"涨粉里程碑：{ms_txt}")
+        if intro:
+            extras.append(f"简介：{intro}")
+        self.account_extra_label.setText(" ｜ ".join(extras))
+        self.account_extra_label.setVisible(bool(extras))
 
     def _render_core(self, core: dict):
         self.core_table.setRowCount(len(_CORE_ROWS))
@@ -364,7 +542,35 @@ class DouyinIndexPage(BasePage):
                 it = _center(dxi.fmt_count(v) if v is not None else "-")
                 self.core_table.setItem(r, 1 + c * 2, _num_tip(it, v))
                 ex = info.get("exchange_by_" + suffix)
-                self.core_table.setItem(r, 2 + c * 2, _center(dxi.fmt_pct(ex) if ex is not None else "-"))
+                it = _center(dxi.fmt_pct(ex) if ex is not None else "-")
+                if isinstance(ex, (int, float)):
+                    it.setData(table_sort.SORT_KEY_ROLE, ex)
+                self.core_table.setItem(r, 2 + c * 2, it)
+        self._core_sorter.apply()
+
+    def _paint_exchange_colors(self):
+        """环比列按涨跌着色：涨 success、跌 danger，0 与无数据保持正文色。"""
+        up = QBrush(QColor(theme.color("success")))
+        down = QBrush(QColor(theme.color("danger")))
+        normal = QBrush(QColor(theme.color("text")))
+        for table, cols in ((getattr(self, "core_table", None), _EX_CORE_COLS),
+                            (getattr(self, "avg_table", None), _EX_AVG_COLS)):
+            if table is None:
+                continue
+            for r in range(table.rowCount()):
+                for c in cols:
+                    item = table.item(r, c)
+                    if item is None:
+                        continue
+                    value = item.data(table_sort.SORT_KEY_ROLE)
+                    if not isinstance(value, (int, float)):
+                        item.setForeground(normal)
+                    elif value > 0:
+                        item.setForeground(up)
+                    elif value < 0:
+                        item.setForeground(down)
+                    else:
+                        item.setForeground(normal)
 
     def _render_avg(self, item_metrics: dict):
         self.avg_table.setRowCount(len(_AVG_ROWS))
@@ -375,10 +581,20 @@ class DouyinIndexPage(BasePage):
             wk, mo = info.get(prefix + "week"), info.get(prefix + "month")
             it = _center(f"{wk:.2f}" if wk is not None else "-")
             self.avg_table.setItem(r, 1, _num_tip(it, wk))
-            self.avg_table.setItem(r, 2, _center(dxi.fmt_pct(info.get("exchange_by_week"))))
+            ex = info.get("exchange_by_week")
+            it = _center(dxi.fmt_pct(ex))
+            if isinstance(ex, (int, float)):
+                it.setData(table_sort.SORT_KEY_ROLE, ex)
+            self.avg_table.setItem(r, 2, it)
             it = _center(f"{mo:.2f}" if mo is not None else "-")
             self.avg_table.setItem(r, 3, _num_tip(it, mo))
-            self.avg_table.setItem(r, 4, _center(dxi.fmt_pct(info.get("exchange_by_month"))))
+            ex = info.get("exchange_by_month")
+            it = _center(dxi.fmt_pct(ex))
+            if isinstance(ex, (int, float)):
+                it.setData(table_sort.SORT_KEY_ROLE, ex)
+            self.avg_table.setItem(r, 4, it)
+        self._avg_sorter.apply()
+        self._paint_exchange_colors()
 
     def _render_trend(self, core: dict):
         by_date = {}
@@ -389,6 +605,7 @@ class DouyinIndexPage(BasePage):
                     by_date.setdefault(f"{d[:4]}-{d[4:6]}-{d[6:]}", {})[key] = it.get("count")
         dates = sorted(by_date, reverse=True)
         self.trend_label.setText(f"每日趋势 · 共 {len(dates)} 天（接口返回的最大范围）")
+        self.trend_body.show_data(bool(dates))
         self.trend_table.setRowCount(len(dates))
         for r, d in enumerate(dates):
             row = by_date[d]
@@ -397,9 +614,15 @@ class DouyinIndexPage(BasePage):
                 v = row.get(key)
                 it = _center(dxi.fmt_count(v) if v is not None else "-")
                 self.trend_table.setItem(r, 1 + c, _num_tip(it, v))
+        self._trend_sorter.apply()
 
     def _render_videos(self, videos: list):
         videos = sorted(videos, key=lambda v: str(v.get("create_time") or ""), reverse=True)
+        self._videos = videos
+        self._video_sorter.attach(self._videos)
+        self.video_label.setText(
+            f"达人视频 · 共 {len(videos)} 条（双击行打开视频页）")
+        self.videos_body.show_data(bool(videos))
         self.video_table.setRowCount(len(videos))
         for r, v in enumerate(videos):
             d = str(v.get("create_time") or "")
@@ -413,6 +636,7 @@ class DouyinIndexPage(BasePage):
                 cell = _center(dxi.fmt_count(val) if val is not None else "-")
                 self.video_table.setItem(r, c, _num_tip(cell, val))
             self.video_table.setItem(r, 6, _center(v.get("video_index") or "-"))
+        self._video_sorter.apply()
         self.video_table.resizeRowsToContents()
 
     def _render_fans(self, fans: dict):
@@ -425,17 +649,36 @@ class DouyinIndexPage(BasePage):
                 continue
             for x in items:
                 v = x.get("value")
-                rows.append((label, str(x.get("name") or ""),
-                             f"{v * 100:.2f}%" if isinstance(v, (int, float)) else "-",
-                             f"{tgi.get(x.get('name'), 0):.2f}" if isinstance(tgi.get(x.get("name")), (int, float)) else "-"))
+                tgi_value = tgi.get(x.get("name"))
+                pct = f"{v * 100:.2f}%" if isinstance(v, (int, float)) else "-"
+                tgi_text = (f"{tgi_value:.2f}"
+                            if isinstance(tgi_value, (int, float)) else "-")
+                rows.append((label, str(x.get("name") or ""), pct, tgi_text,
+                             v * 100 if isinstance(v, (int, float)) else None,
+                             tgi_value if isinstance(tgi_value, (int, float)) else None))
+        self.fans_label.setText(
+            f"粉丝画像 · 共 {len(rows)} 项（占比 + TGI 指数，TGI>100 表示偏好度高于大盘）")
+        self.fans_body.show_data(bool(rows))
         self.fans_table.setRowCount(len(rows))
-        for r, (dim, name, pct, tgi) in enumerate(rows):
+        for r, (dim, name, pct, tgi_text, pct_value, tgi_value) in enumerate(rows):
             self.fans_table.setItem(r, 0, _center(dim))
             self.fans_table.setItem(r, 1, _center(name))
-            self.fans_table.setItem(r, 2, _center(pct))
-            self.fans_table.setItem(r, 3, _center(tgi))
+            cell = _center(pct)
+            if pct_value is not None:
+                cell.setData(table_sort.SORT_KEY_ROLE, pct_value)
+            self.fans_table.setItem(r, 2, cell)
+            cell = _center(tgi_text)
+            if tgi_value is not None:
+                cell.setData(table_sort.SORT_KEY_ROLE, tgi_value)
+            self.fans_table.setItem(r, 3, cell)
+        self._fans_sorter.apply()
 
     def _render_similar(self, users: list):
+        self._similar_users = list(users)
+        self._similar_sorter.attach(self._similar_users)
+        self.similar_label.setText(
+            f"相似达人 · 共 {len(users)} 位（双击行直接抓取该达人）")
+        self.similar_body.show_data(bool(users))
         self.similar_table.setRowCount(len(users))
         for r, u in enumerate(users):
             vals = [u.get("rank"), u.get("user_name"), u.get("aweme_id") or "-",
@@ -447,22 +690,21 @@ class DouyinIndexPage(BasePage):
                     self.similar_table.setItem(r, col, _num_tip(it, v))
                 else:
                     self.similar_table.setItem(r, col, _center(v))
+        self._similar_sorter.apply()
 
     # ---------- 交互 ----------
     def _open_video(self, row, _col):
-        if not self._data:
+        if not self._videos:
             return
-        videos = sorted(self._data.get("videos") or [],
-                        key=lambda v: str(v.get("create_time") or ""), reverse=True)
-        if 0 <= row < len(videos):
-            vid = videos[row].get("item_id")
+        if 0 <= row < len(self._videos):
+            vid = self._videos[row].get("item_id")
             if vid:
                 QDesktopServices.openUrl(QUrl(f"https://www.douyin.com/video/{vid}"))
 
     def _open_similar(self, row, _col):
         if not self._data or self._busy:
             return
-        users = self._data.get("similar_users") or []
+        users = self._similar_users
         if 0 <= row < len(users):
             u = users[row]
             self._uid = u.get("user_id", "")
@@ -481,5 +723,7 @@ class DouyinIndexPage(BasePage):
         self._busy = busy
         self.search_btn.setEnabled(not busy)
         self.fetch_btn.setEnabled(not busy)
+        self.open_btn.setEnabled(not busy)
+        self.range_combo.setEnabled(not busy)
         if text:
             self.status_label.setText(text)

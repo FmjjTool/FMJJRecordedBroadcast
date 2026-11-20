@@ -11,19 +11,21 @@
 import os
 import threading
 
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit,
-    QProgressBar, QPushButton, QTextEdit, QVBoxLayout,
+    QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
+    QPlainTextEdit, QProgressBar, QPushButton, QTextEdit, QVBoxLayout,
 )
 
 from toolbox.config_manager import (
     get_export_subdir, load_convert_config, save_convert_config,
 )
 
-from gui_qt import theme
 from gui_qt.common import post_to_main
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
+from gui_qt.theme import current_palette
 
 FORMATS = [
     ("html", "HTML"),
@@ -39,81 +41,150 @@ class WechatArticlePage(BasePage):
         super().__init__(app)
         self.running = False
         self._cancel = False
+        self._icons: list = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        layout.addWidget(self._build_input_card())
+        layout.addWidget(self._build_log_card(), 1)
+        layout.addWidget(self._build_action_bar())
 
-        # 链接输入区
-        self.input_edit = QPlainTextEdit()
+        self._refresh_loc_label()
+
+    # ===================== 布局片段 =====================
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    @staticmethod
+    def _icon_color(role: str = "button") -> str:
+        pal = current_palette()
+        if role == "primary":
+            return pal.color(QPalette.ColorRole.HighlightedText).name()
+        if role == "danger":
+            return pal.color(QPalette.ColorRole.ButtonText).name()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def _icon_button(self, text: str, icon_name: str, variant: str = "secondary") -> QPushButton:
+        btn = QPushButton(text)
+        btn.setProperty("variant", variant)
+        role = "primary" if variant == "primary" else "button"
+        btn.setIcon(line_icon(icon_name, self._icon_color(role), 16))
+        btn.setIconSize(QSize(16, 16))
+        self._icons.append((btn, icon_name, role))
+        return btn
+
+    def on_theme_changed(self):
+        for btn, name, role in self._icons:
+            btn.setIcon(line_icon(name, self._icon_color(role), 16))
+
+    def _build_input_card(self) -> QFrame:
+        card = QFrame(self)
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("文章链接", card)
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        head.addWidget(self._caption("每行一个链接，可批量；自动去重"))
+        v.addLayout(head)
+
+        self.input_edit = QPlainTextEdit(card)
         self.input_edit.setPlaceholderText(
             "输入公众号文章链接，每行一个（支持单个和批量）：\n"
             "https://mp.weixin.qq.com/s/xxxxxxxx\n"
             "https://mp.weixin.qq.com/s?__biz=xxx&mid=xxx&idx=1&sn=xxx")
         self.input_edit.setMaximumHeight(110)
-        layout.addWidget(self.input_edit)
+        v.addWidget(self.input_edit)
 
-        # 格式选择 + 导出位置
-        opt_row = QHBoxLayout()
-        opt_row.addWidget(QLabel("导出格式:"))
+        fmt_row = QHBoxLayout()
+        fmt_row.setSpacing(12)
+        fmt_row.addWidget(self._caption("导出格式"))
         self.format_checks = {}
         for key, label in FORMATS:
-            cb = QCheckBox(label)
+            cb = QCheckBox(label, card)
             cb.setChecked(True)
             self.format_checks[key] = cb
-            opt_row.addWidget(cb)
-        opt_row.addStretch(1)
-        layout.addLayout(opt_row)
+            fmt_row.addWidget(cb)
+        fmt_row.addStretch(1)
+        v.addLayout(fmt_row)
 
         loc_row = QHBoxLayout()
-        loc_row.addWidget(QLabel("导出到:"))
-        self.loc_combo = QComboBox()
+        loc_row.setSpacing(10)
+        loc_row.addWidget(self._caption("导出到"))
+        self.loc_combo = QComboBox(card)
         self.loc_combo.addItem("默认位置")
         self.loc_combo.addItem("固定位置")
+        self.loc_combo.setFixedWidth(112)
         self.loc_combo.currentIndexChanged.connect(self._on_loc_changed)
         loc_row.addWidget(self.loc_combo)
-        pick_btn = QPushButton()
-        pick_btn.setIcon(line_icon("folder", theme.color("link"), 16))
+        pick_btn = self._icon_button("", "folder")
         pick_btn.setFixedSize(30, 26)
         pick_btn.setToolTip("选择固定位置（文件夹）")
         pick_btn.clicked.connect(self._pick_custom_dir)
         loc_row.addWidget(pick_btn)
-        self.loc_label = QLabel("")
-        self.loc_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.loc_label = self._caption("")
+        self.loc_label.setWordWrap(True)
         loc_row.addWidget(self.loc_label, 1)
-        layout.addLayout(loc_row)
+        v.addLayout(loc_row)
+        return card
 
-        # 进度条 + 状态
-        self.progress = QProgressBar()
+    def _build_log_card(self) -> QFrame:
+        card = QFrame(self)
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("日志", card)
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
+        self.log_text = QTextEdit(card)
+        self.log_text.setReadOnly(True)
+        v.addWidget(self.log_text, 1)
+        return card
+
+    def _build_action_bar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 8, 12, 8)
+        h.setSpacing(8)
+
+        self.progress = QProgressBar(bar)
         self.progress.setRange(0, 100)
-        layout.addWidget(self.progress)
-        self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color: #888;")
-        layout.addWidget(self.status_label)
+        self.progress.setFixedWidth(220)
+        h.addWidget(self.progress)
+        self.status_label = self._caption("就绪")
+        h.addWidget(self.status_label, 1)
 
-        # 操作按钮
-        btn_row = QHBoxLayout()
-        self.start_btn = QPushButton("解析并导出")
-        self.start_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
-        self.start_btn.clicked.connect(self._start)
-        btn_row.addWidget(self.start_btn)
-        self.cancel_btn = QPushButton("取消")
-        self.cancel_btn.setStyleSheet("background: #c62828; color: white;")
+        open_btn = self._icon_button("打开导出文件夹", "folder")
+        open_btn.setToolTip("在资源管理器中打开当前导出位置")
+        open_btn.clicked.connect(self._open_export_dir)
+        h.addWidget(open_btn)
+        self.cancel_btn = self._icon_button("取消", "stop", "danger")
+        self.cancel_btn.setToolTip("打断当前文章（请求间检测），已完成的导出保留")
         self.cancel_btn.clicked.connect(self._cancel_run)
         self.cancel_btn.setEnabled(False)
-        btn_row.addWidget(self.cancel_btn)
-        open_btn = QPushButton("打开导出文件夹")
-        open_btn.clicked.connect(self._open_export_dir)
-        btn_row.addWidget(open_btn)
-        btn_row.addStretch(1)
-        layout.addLayout(btn_row)
-
-        # 日志
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        layout.addWidget(self.log_text, 1)
-
-        self._refresh_loc_label()
+        h.addWidget(self.cancel_btn)
+        self.start_btn = self._icon_button("解析并导出", "play", "primary")
+        self.start_btn.setToolTip("解析全部链接并按勾选格式导出")
+        self.start_btn.clicked.connect(self._start)
+        h.addWidget(self.start_btn)
+        return bar
 
     # ===================== 导出位置（默认/固定 双选项） =====================
 

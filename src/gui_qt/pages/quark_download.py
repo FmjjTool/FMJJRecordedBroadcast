@@ -17,18 +17,20 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolSectionCard
+from gui_qt.toolbox_common import ElidedLabel, ToolSectionCard
 from toolbox import sevenzip
 from toolbox.quark import backup as qbackup
 from toolbox.quark import config as qconfig
@@ -128,7 +130,8 @@ class QuarkDownloadPage(BasePage):
         self._sort_desc = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        # 本页只作为「网络库」页签内容使用，左右留白交给页签容器
+        root.setContentsMargins(0, 12, 0, 0)
         root.setSpacing(12)
 
         root.addWidget(self._build_toolbar())
@@ -143,6 +146,7 @@ class QuarkDownloadPage(BasePage):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
 
+        # 第 1 行：在哪个网盘的哪一层
         path_row = QHBoxLayout()
         path_row.setSpacing(6)
         path_row.addWidget(QLabel("网盘"))
@@ -160,8 +164,8 @@ class QuarkDownloadPage(BasePage):
         self.up_btn.clicked.connect(self._go_up)
         path_row.addWidget(self.up_btn)
 
-        self.path_label = QLabel("根目录")
-        self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.path_label = ElidedLabel("根目录")
+        self.path_label.setMinimumWidth(120)
         path_row.addWidget(self.path_label, 1)
 
         self.refresh_btn = QPushButton("刷新")
@@ -171,6 +175,7 @@ class QuarkDownloadPage(BasePage):
         path_row.addWidget(self.refresh_btn)
         layout.addLayout(path_row)
 
+        # 第 2 行：下载到哪里 + 后处理选项
         local_row = QHBoxLayout()
         local_row.setSpacing(6)
         local_row.addWidget(QLabel("保存到"))
@@ -183,60 +188,58 @@ class QuarkDownloadPage(BasePage):
         browse.clicked.connect(self._pick_local_dir)
         local_row.addWidget(browse)
 
-        self.select_all = QCheckBox("全选")
-        self.select_all.setToolTip("勾选 / 取消当前目录的全部文件（文件夹不参与）")
-        self.select_all.toggled.connect(self._toggle_all)
-        local_row.addWidget(self.select_all)
+        self.extract_cb = QCheckBox("下载后自动解压")
+        self.extract_cb.setToolTip("用内置 7-Zip 解开 rar / 7z / zip 等，解到压缩包同名的文件夹；"
+                                   "加密包会跳过，需手动解压")
+        local_row.addWidget(self.extract_cb)
+        layout.addLayout(local_row)
 
+        # 第 3 行：动作 + 进度 + 状态
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
         self.download_btn = QPushButton("下载选中")
         self.download_btn.setProperty("variant", "primary")
         self.download_btn.setToolTip("下载已勾选的文件；同名同大小文件会自动跳过")
         self.download_btn.clicked.connect(self._download_selected)
-        local_row.addWidget(self.download_btn)
+        action_row.addWidget(self.download_btn)
 
         self.folder_btn = QPushButton("下载本文件夹")
         self.folder_btn.setProperty("variant", "secondary")
         self.folder_btn.setToolTip("递归下载当前目录及其全部子目录")
         self.folder_btn.clicked.connect(self._download_current_folder)
-        local_row.addWidget(self.folder_btn)
+        action_row.addWidget(self.folder_btn)
 
         self.share_btn = QPushButton("分享选中")
         self.share_btn.setProperty("variant", "secondary")
         self.share_btn.setToolTip("把勾选的文件（没勾选时用当前选中的文件夹）生成夸克分享链接")
         self.share_btn.clicked.connect(self._share_selected)
-        local_row.addWidget(self.share_btn)
+        action_row.addWidget(self.share_btn)
 
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
         self.stop_btn.setToolTip("停止当前下载（已下载部分保留为 .part，下次自动续传）")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop)
-        local_row.addWidget(self.stop_btn)
-        layout.addLayout(local_row)
+        action_row.addWidget(self.stop_btn)
 
-        option_row = QHBoxLayout()
-        option_row.setSpacing(6)
-        self.extract_cb = QCheckBox("下载完成后自动解压压缩包")
-        self.extract_cb.setToolTip("用内置 7-Zip 解开 rar / 7z / zip 等，解到压缩包同名的文件夹；"
-                                   "加密包会跳过，需手动解压")
-        option_row.addWidget(self.extract_cb)
-        option_row.addStretch(1)
-        layout.addLayout(option_row)
-
-        progress_row = QHBoxLayout()
-        progress_row.setSpacing(8)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         self.progress.setFixedHeight(16)
-        progress_row.addWidget(self.progress, 1)
-        self.status_label = QLabel("空闲")
-        self.status_label.setProperty("role", "caption")
-        self.status_label.setMinimumWidth(260)
+        self.progress.setMinimumWidth(140)
+        self.progress.setToolTip("当前下载进度")
+        action_row.addWidget(self.progress, 1)
+
+        self.status_label = ElidedLabel("空闲", role="caption")
+        # ElidedLabel 默认水平策略是 Ignored（配合 stretch 使用）；这里要给固定
+        # 宽度、由布局预留空间，必须换回 Preferred，否则状态文字会溢出工具条
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                        QSizePolicy.Policy.Preferred)
+        self.status_label.setFixedWidth(240)
         self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        progress_row.addWidget(self.status_label)
-        layout.addLayout(progress_row)
+        action_row.addWidget(self.status_label)
+        layout.addLayout(action_row)
         return bar
 
     def _build_body(self) -> QHBoxLayout:
@@ -244,6 +247,10 @@ class QuarkDownloadPage(BasePage):
         body.setSpacing(12)
 
         left = ToolSectionCard("云端文件", "双击文件夹进入；勾选文件后点「下载选中」。")
+        self.select_all = QCheckBox("全选")
+        self.select_all.setToolTip("勾选 / 取消当前目录的全部文件（文件夹不参与）")
+        self.select_all.toggled.connect(self._toggle_all)
+        left.heading_layout.addWidget(self.select_all)
         self.count_label = QLabel("0 项")
         self.count_label.setProperty("role", "caption")
         left.heading_layout.addWidget(self.count_label)
@@ -256,6 +263,7 @@ class QuarkDownloadPage(BasePage):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
+        self.table.setIconSize(QSize(16, 16))
         self.table.verticalHeader().setDefaultSectionSize(34)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)
@@ -284,11 +292,7 @@ class QuarkDownloadPage(BasePage):
             " font-size: 11px; background: palette(base); color: palette(text);"
             " border: 1px solid palette(shadow); border-radius: 8px; padding: 6px; }")
         right.content_layout.addWidget(self.log_view, 1)
-        wrapper = QWidget()
-        wrap_layout = QVBoxLayout(wrapper)
-        wrap_layout.setContentsMargins(0, 0, 0, 0)
-        wrap_layout.addWidget(right, 1)
-        body.addWidget(wrapper, 2)
+        body.addWidget(right, 2)
         return body
 
     # ==================== 生命周期 ====================
@@ -297,6 +301,10 @@ class QuarkDownloadPage(BasePage):
         if not self._loaded:
             self._loaded = True
             self._refresh()
+
+    def on_theme_changed(self):
+        # 文件夹图标颜色烘进像素，主题切换后按新主题重画当前列表
+        self._render_entries()
 
     def _default_local_dir(self) -> str:
         work = str(getattr(self.app, "work_dir", "") or "")
@@ -366,6 +374,8 @@ class QuarkDownloadPage(BasePage):
             self.table.setItem(row, 0, check_item)
 
             name_item = QTableWidgetItem(str(entry.get("file_name") or ""))
+            if is_dir:
+                name_item.setIcon(QIcon(line_icon("folder", theme.color("link"), 16)))
             name_item.setData(Qt.UserRole, entry)
             self.table.setItem(row, 1, name_item)
 

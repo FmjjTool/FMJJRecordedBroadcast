@@ -70,7 +70,7 @@ class BiliUploadDialog(QDialog):
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
         layout = QVBoxLayout(content)
-        hint = QLabel("视频须先完成交互重命名，再开始上传投稿。分区、简介和来源可自行填写。")
+        hint = QLabel("视频须先在命名投稿页完成命名，再开始上传投稿。分区、简介和来源可自行填写。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         templates = QHBoxLayout()

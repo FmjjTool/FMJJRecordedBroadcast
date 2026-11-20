@@ -1,6 +1,6 @@
 ---
 name: recording-toolbox-core
-description: "录播工具箱核心保护，任何项目更新前必读。自动整理、视频操作、交互重命名/投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移为核心逻辑处理中心；未获用户对本次具体模块与改动范围的明确授权，不得直接或间接修改。"
+description: "录播工具箱核心保护，任何项目更新前必读。自动整理、视频操作、命名投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移为核心逻辑处理中心；未获用户对本次具体模块与改动范围的明确授权，不得直接或间接修改。"
 ---
 
 # 录播工具箱核心保护
@@ -15,7 +15,7 @@ description: "录播工具箱核心保护，任何项目更新前必读。自动
 | --- | --- | --- |
 | 自动整理 | `toolbox_organize` / `OrganizePage` | `src/gui_qt/pages/organize.py`、`src/toolbox/organize_engine.py` |
 | 视频操作 | `toolbox_editor` / `EditorPage` | `src/gui_qt/pages/editor.py`、`src/toolbox/edit_engine.py`、`src/toolbox/convert_engine.py`、`src/toolbox/concat_engine.py` |
-| 交互重命名 / 投稿 | `toolbox_rename` / `RenamePage` | `src/gui_qt/pages/rename.py`、`src/toolbox/rename_engine.py`、`src/toolbox/bili_upload.py`、`src/gui_qt/bili_upload_dialog.py`、`src/gui_qt/video_selection_dialog.py` |
+| 命名投稿 | `toolbox_rename` / `RenamePage` | `src/gui_qt/pages/rename.py`、`src/toolbox/rename_engine.py`、`src/toolbox/bili_upload.py`、`src/gui_qt/bili_upload_dialog.py`、`src/gui_qt/video_selection_dialog.py` |
 | 音频提取 | `toolbox_audio` / `AudioPage` | `src/gui_qt/pages/audio.py`、`src/toolbox/audio_engine.py`、`src/toolbox/asr_engine.py`、`src/gui_qt/asr_settings_dialog.py` |
 | 字幕转换 | `toolbox_subtitle` / `SubtitlePage` | `src/gui_qt/pages/subtitle.py`、`src/toolbox/subtitle_engine.py`；内嵌歌词页 `src/gui_qt/pages/lyrics_tool.py`、`src/toolbox/lyrics_engine.py` |
 | 继续操作 | `toolbox_launcher` / `LauncherPage` | `src/gui_qt/pages/launcher.py`；外部程序启动与关联进程管理 `src/toolbox/process_tree.py` |
@@ -24,7 +24,7 @@ description: "录播工具箱核心保护，任何项目更新前必读。自动
 
 同样保护视频转换旧入口 `toolbox_convert`、兼容页面 `src/gui_qt/pages/convert.py`，以及这些核心页面已有或后续拆出的页签、对话框与处理组件。文件映射不是放行清单：发现核心逻辑在其他文件中时，也按本 skill 保护，不因改名、拆分或移动文件失去保护。
 
-菜单顺序固定为：自动整理 → 视频操作 → 交互重命名 / 投稿 → 音频提取 → 字幕转换 → 继续操作 → 日历浏览 → 文件迁移。未经用户明确要求，不得重排、合并或改写入列表顺序。
+菜单顺序固定为：自动整理 → 视频操作 → 命名投稿 → 音频提取 → 字幕转换 → 继续操作 → 日历浏览 → 文件迁移。未经用户明确要求，不得重排、合并或改写入列表顺序。
 
 ## 禁止直接或间接改动
 
@@ -32,7 +32,7 @@ description: "录播工具箱核心保护，任何项目更新前必读。自动
 
 - 删除、合并、改名、重排截图中的入口，改变路由/别名或把入口替换成简化页面；移除已有控件、参数设置、快捷键、预览、页签或功能。
 - 修改各模块的算法、流程、参数默认值、FFmpeg/转录调用、输出命名、日期识别、文件过滤、元数据、覆写/删除策略、错误处理、线程任务及取消行为。
-- 调整自动整理、交互重命名与投稿之间的衔接，绕过重命名/版权处理等已有投稿前置条件，或改变投稿账号、文案、分P、上传和发布行为。
+- 调整自动整理、命名投稿之间的衔接，绕过命名/版权处理等已有投稿前置条件，或改变投稿账号、文案、分P、上传和发布行为。
 - 借全局美化、性能优化、清理死代码、统一登录、重构或“顺手修复”更改核心；把核心迁到新文件或新入口后再修改以绕开限制。
 - 修改共享代码而改变核心入口、交互、配置、生命周期、数据或输出行为，即使变更文件不在上表中。
 

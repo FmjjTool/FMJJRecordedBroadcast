@@ -16,21 +16,22 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QPoint, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
+    QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPalette, QPen, QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QApplication, QCheckBox, QDialog, QFileDialog, QGridLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
-    QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton,
-    QSpinBox, QTextEdit, QToolTip, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QApplication, QCheckBox, QDialog, QFileDialog, QFrame,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+    QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton, QSizePolicy, QSpinBox,
+    QSplitter, QTextEdit, QToolTip, QVBoxLayout, QWidget,
 )
 
-from gui_qt import theme
 from gui_qt.common import icon_button, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
+from gui_qt.theme import current_palette
 
 try:
     import numpy as _np
@@ -378,6 +379,35 @@ class _Magnifier(QWidget):
                    QColor(0, 0, 0, 150))
         p.setPen(QColor("#ffffff"))
         p.drawText(QPoint(MAGNIFIER_SIZE - tw - 9, MAGNIFIER_SIZE - 8), label)
+
+
+# ==================== 单行省略标签 ====================
+class _ElidedLabel(QLabel):
+    """按可用宽度中间省略的单行标签：完整内容进 tooltip，避免长文件名撑宽布局。"""
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._full_text = str(text or "")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setToolTip(self._full_text)
+
+    def setText(self, text: str):
+        self._full_text = str(text or "")
+        self.setToolTip(self._full_text)
+        self.update()
+
+    def text(self) -> str:
+        return self._full_text
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        shown = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideMiddle, max(16, self.width()))
+        role = (QPalette.ColorRole.PlaceholderText
+                if self.property("role") == "caption" else QPalette.ColorRole.WindowText)
+        p.setPen(self.palette().color(role))
+        p.drawText(self.rect(), int(self.alignment()), shown)
+        p.end()
 
 
 # ==================== 裁切画布 ====================
@@ -796,41 +826,89 @@ class ImageCropPage(BasePage):
         self._batch_running = False
         self._auto_running = False
         self._building_list = False
+        self._icons: list = []
 
         self._build_ui()
         self._bind_shortcuts()
         self._sync_ui()
 
     # ---------- UI ----------
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    @staticmethod
+    def _separator(vertical: bool = False) -> QFrame:
+        line = QFrame()
+        line.setStyleSheet("background: palette(shadow); border: none;")
+        if vertical:
+            line.setFixedWidth(1)
+        else:
+            line.setFixedHeight(1)
+        return line
+
+    def _register_icon(self, widget: QWidget, name: str, role: str = "button"):
+        self._icons.append((widget, name, role))
+        self._apply_icon(widget, name, role)
+
+    def _apply_icon(self, widget: QWidget, name: str, role: str):
+        widget.setIcon(line_icon(name, self._icon_color(role), 16))
+        widget.setIconSize(QSize(16, 16))
+
+    @staticmethod
+    def _icon_color(role: str) -> str:
+        pal = current_palette()
+        if role == "primary":
+            return pal.color(QPalette.ColorRole.HighlightedText).name()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def on_theme_changed(self):
+        for widget, name, role in self._icons:
+            self._apply_icon(widget, name, role)
+        self.canvas.update()
+
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
-        head = QHBoxLayout()
-        title = QLabel("图片裁切")
-        f = QFont()
-        f.setPointSize(11)
-        f.setBold(True)
-        title.setFont(f)
-        head.addWidget(title)
-        head.addStretch(1)
-        root.addLayout(head)
+        root.addWidget(self._build_toolbar())
 
-        bar = QHBoxLayout()
-        bar.setSpacing(4)
-        self.btn_import = QPushButton("导入")
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self._build_list_panel())
+        self.splitter.addWidget(self._build_canvas_panel())
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([270, 840])
+        root.addWidget(self.splitter, 1)
+
+    def _build_toolbar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 10)
+        h.setSpacing(8)
+
+        self.btn_import = QPushButton("导入图片", bar)
+        self.btn_import.setProperty("variant", "primary")
+        self.btn_import.setToolTip("选择图片导入（PNG / JPG / JPEG / WebP，可多选）")
         self.btn_import.clicked.connect(self._pick_files)
-        bar.addWidget(self.btn_import)
+        self._register_icon(self.btn_import, "image", "primary")
+        h.addWidget(self.btn_import)
 
-        self.btn_undo = icon_button("↩", "撤销 (Ctrl+Z)", (32, 26), emoji=False,
+        h.addWidget(self._separator(vertical=True))
+        self.btn_undo = icon_button("↩", "撤销 (Ctrl+Z)", (30, 26), emoji=False,
                                     on_click=self.undo)
-        self.btn_redo = icon_button("↪", "重做 (Ctrl+Y)", (32, 26), emoji=False,
+        self.btn_redo = icon_button("↪", "重做 (Ctrl+Y)", (30, 26), emoji=False,
                                     on_click=self.redo)
-        bar.addWidget(self.btn_undo)
-        bar.addWidget(self.btn_redo)
-        bar.addSpacing(6)
+        h.addWidget(self.btn_undo)
+        h.addWidget(self.btn_redo)
 
+        h.addWidget(self._separator(vertical=True))
+        h.addWidget(self._caption("放大镜"))
         self.btn_zoom_out = icon_button("−", "缩小放大镜", (26, 24), emoji=False,
                                         on_click=lambda: self._set_zoom(self.magnifier_zoom - 1))
         self.zoom_label = QLabel(f"{self.magnifier_zoom}x")
@@ -841,75 +919,138 @@ class ImageCropPage(BasePage):
         self.zoom_label.setFont(f)
         self.btn_zoom_in = icon_button("+", "放大放大镜", (26, 24), emoji=False,
                                        on_click=lambda: self._set_zoom(self.magnifier_zoom + 1))
-        bar.addWidget(self.btn_zoom_out)
-        bar.addWidget(self.zoom_label)
-        bar.addWidget(self.btn_zoom_in)
-        bar.addSpacing(6)
+        h.addWidget(self.btn_zoom_out)
+        h.addWidget(self.zoom_label)
+        h.addWidget(self.btn_zoom_in)
 
-        self.btn_auto = QPushButton("自动对齐")
+        h.addWidget(self._separator(vertical=True))
+        self.btn_auto = QPushButton("自动对齐", bar)
+        self.btn_auto.setProperty("variant", "secondary")
         self.btn_auto.setToolTip("自动识别内容边界，一键裁掉黑边")
         self.btn_auto.clicked.connect(self._auto_align)
-        bar.addWidget(self.btn_auto)
-        self.btn_precise = QPushButton("精确输入")
+        self._register_icon(self.btn_auto, "expand")
+        h.addWidget(self.btn_auto)
+        self.btn_precise = QPushButton("精确输入", bar)
+        self.btn_precise.setProperty("variant", "secondary")
         self.btn_precise.setToolTip("输入上下左右像素坐标定位参考线")
         self.btn_precise.clicked.connect(self._open_precise_input)
-        bar.addWidget(self.btn_precise)
+        self._register_icon(self.btn_precise, "keyboard")
+        h.addWidget(self.btn_precise)
 
-        self.cb_fine = QCheckBox("精细模式")
+        h.addWidget(self._separator(vertical=True))
+        self.cb_fine = QCheckBox("精细模式", bar)
         self.cb_fine.setToolTip("精细模式：鼠标移动 20px → 参考线移动 1px")
         self.cb_fine.setChecked(True)
         self.cb_fine.toggled.connect(self._on_fine_toggled)
-        bar.addWidget(self.cb_fine)
-        self.cb_snap = QCheckBox("边界吸附")
+        h.addWidget(self.cb_fine)
+        self.cb_snap = QCheckBox("边界吸附", bar)
         self.cb_snap.setToolTip("边界吸附：参考线靠近颜色边缘时自动对齐")
         self.cb_snap.setChecked(True)
         self.cb_snap.toggled.connect(self._on_snap_toggled)
-        bar.addWidget(self.cb_snap)
-        bar.addStretch(1)
+        h.addWidget(self.cb_snap)
 
-        self.btn_size = QPushButton("— × — px")
-        self.btn_size.setToolTip("点击输入精确裁切尺寸")
-        self.btn_size.clicked.connect(self._open_precise_input)
-        bar.addWidget(self.btn_size)
+        h.addStretch(1)
+        self.btn_clear = QPushButton("清空", bar)
+        self.btn_clear.setProperty("variant", "secondary")
+        self.btn_clear.setToolTip("清空全部图片（各自调整过的裁切区域将丢失）")
+        self.btn_clear.clicked.connect(self._clear_all)
+        self._register_icon(self.btn_clear, "trash")
+        h.addWidget(self.btn_clear)
+        return bar
 
-        self.btn_export = QPushButton("导出")
-        self.btn_export.clicked.connect(self._export_current)
-        bar.addWidget(self.btn_export)
-        self.btn_copy = QPushButton("复制")
-        self.btn_copy.setToolTip("把当前裁切结果复制到剪贴板，可直接粘到 PS / PR / 微信")
-        self.btn_copy.clicked.connect(self._copy_current)
-        bar.addWidget(self.btn_copy)
-        self.btn_batch = QPushButton("批量导出")
-        self.btn_batch.setToolTip("全部图片按各自裁切区域导出到 download/图片裁切/")
-        self.btn_batch.clicked.connect(self._batch_export)
-        bar.addWidget(self.btn_batch)
-        self.btn_clear = icon_button("", "清空全部图片", (32, 26), on_click=self._clear_all)
-        self.btn_clear.setIcon(line_icon("trash", theme.color("text"), 16))
-        bar.addWidget(self.btn_clear)
-        root.addLayout(bar)
+    def _build_list_panel(self) -> QFrame:
+        card = QFrame(self.splitter)
+        card.setProperty("variant", "card")
+        card.setMinimumWidth(240)
+        card.setMaximumWidth(340)
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(8)
 
-        body = QHBoxLayout()
-        body.setSpacing(6)
-        self.list_widget = QListWidget()
-        self.list_widget.setMinimumWidth(170)
-        self.list_widget.setMaximumWidth(260)
-        self.list_widget.setIconSize(QRect(0, 0, 40, 40).size())
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("图片列表", card)
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        self.list_count_label = self._caption("0 张")
+        head.addWidget(self.list_count_label)
+        v.addLayout(head)
+
+        self.list_widget = QListWidget(card)
+        self.list_widget.setIconSize(QSize(40, 40))
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._list_menu)
         self.list_widget.currentRowChanged.connect(self._on_list_row_changed)
-        body.addWidget(self.list_widget)
+        v.addWidget(self.list_widget, 1)
 
-        self.canvas = CropCanvas(self)
-        body.addWidget(self.canvas, 1)
-        root.addLayout(body, 1)
+        v.addWidget(self._caption("右键删除单张 · Delete 快速删除"))
+        return card
 
-        status = QHBoxLayout()
-        self.status_label = QLabel("拖动参考线调整裁切 · Ctrl+Z 撤销 · Ctrl+Y 重做 · Shift 加速拖动")
-        self.file_label = QLabel("")
+    def _build_canvas_panel(self) -> QWidget:
+        right = QWidget(self.splitter)
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(12)
+
+        card = QFrame(right)
+        card.setProperty("variant", "card")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(12, 10, 12, 12)
+        cv.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self.status_label = _ElidedLabel(
+            "将图片拖入窗口，或点击「导入图片」选择图片（支持 PNG/JPG/JPEG/WebP）", card)
+        self.status_label.setProperty("role", "caption")
+        head.addWidget(self.status_label, 1)
+        self.file_label = _ElidedLabel("", card)
+        self.file_label.setProperty("role", "caption")
         self.file_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        status.addWidget(self.status_label, 1)
-        status.addWidget(self.file_label, 1)
-        root.addLayout(status)
+        self.file_label.setMaximumWidth(280)
+        head.addWidget(self.file_label, 1)
+        cv.addLayout(head)
+        self.canvas = CropCanvas(self)
+        self.canvas.setToolTip("拖动四条参考线调整裁切 · Ctrl+Z 撤销 · Ctrl+Y 重做 · Shift 加速拖动")
+        cv.addWidget(self.canvas, 1)
+        rv.addWidget(card, 1)
+
+        bar = QFrame(right)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 8, 12, 8)
+        h.setSpacing(8)
+        h.addWidget(self._caption("裁切尺寸"))
+        self.btn_size = QPushButton("— × — px", bar)
+        self.btn_size.setProperty("variant", "secondary")
+        self.btn_size.setMinimumWidth(112)
+        self.btn_size.setToolTip("点击输入精确裁切尺寸")
+        self.btn_size.clicked.connect(self._open_precise_input)
+        h.addWidget(self.btn_size)
+        h.addStretch(1)
+
+        self.btn_copy = QPushButton("复制", bar)
+        self.btn_copy.setProperty("variant", "secondary")
+        self.btn_copy.setToolTip("把当前裁切结果复制到剪贴板，可直接粘到 PS / PR / 微信")
+        self.btn_copy.clicked.connect(self._copy_current)
+        self._register_icon(self.btn_copy, "copy")
+        h.addWidget(self.btn_copy)
+        self.btn_export = QPushButton("导出", bar)
+        self.btn_export.setProperty("variant", "secondary")
+        self.btn_export.setToolTip("把当前裁切结果另存为图片")
+        self.btn_export.clicked.connect(self._export_current)
+        self._register_icon(self.btn_export, "download")
+        h.addWidget(self.btn_export)
+        self.btn_batch = QPushButton("批量导出", bar)
+        self.btn_batch.setProperty("variant", "primary")
+        self.btn_batch.setToolTip("全部图片按各自裁切区域导出到 download/图片裁切/")
+        self.btn_batch.clicked.connect(self._batch_export)
+        self._register_icon(self.btn_batch, "download", "primary")
+        h.addWidget(self.btn_batch)
+        rv.addWidget(bar)
+        return right
 
     def _bind_shortcuts(self):
         for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo),
@@ -1010,7 +1151,11 @@ class ImageCropPage(BasePage):
         self._building_list = False
 
     def _apply_item_text(self, item: QListWidgetItem, slot: ImageSlot):
-        item.setText(f"{slot.name}\n{slot.crop.width}×{slot.crop.height}")
+        avail = max(90, self.list_widget.viewport().width() - 52)
+        name = self.list_widget.fontMetrics().elidedText(
+            slot.name, Qt.TextElideMode.ElideMiddle, avail)
+        item.setText(f"{name}\n{slot.crop.width}×{slot.crop.height}")
+        item.setToolTip(slot.name)
 
     def _on_list_row_changed(self, row: int):
         if self._building_list or row < 0 or row >= len(self._slots):
@@ -1310,19 +1455,24 @@ class ImageCropPage(BasePage):
         self.btn_precise.setEnabled(has)
         self.btn_export.setEnabled(has)
         self.btn_clear.setEnabled(bool(self._slots))
+        self.list_count_label.setText(f"{len(self._slots)} 张")
         if has:
             self.btn_size.setText(f"{slot.crop.width} × {slot.crop.height} px")
             self.file_label.setText(slot.name)
+            self.file_label.setToolTip(slot.path)
             self.status_label.setText(
-                f"裁切 {slot.crop.width}×{slot.crop.height}px · 原图 "
-                f"{slot.image.width()}×{slot.image.height()} · 共 {len(self._slots)} 张图片")
+                f"原图 {slot.image.width()}×{slot.image.height()} · "
+                f"裁切 {slot.crop.width}×{slot.crop.height}")
+            self.status_label.setToolTip(
+                "拖动参考线调整裁切 · Ctrl+Z 撤销 · Ctrl+Y 重做 · Shift 加速拖动")
             for i in range(self.list_widget.count()):
                 if self.list_widget.item(i).data(Qt.UserRole) == slot.sid:
                     self._apply_item_text(self.list_widget.item(i), slot)
         else:
             self.btn_size.setText("— × — px")
             self.file_label.setText("")
+            self.file_label.setToolTip("")
             self.status_label.setText(
-                "拖动参考线调整裁切 · Ctrl+Z 撤销 · Ctrl+Y 重做 · Shift 加速拖动"
-                if self._slots else
-                "将图片拖入窗口，或点击「导入」选择图片（支持 PNG/JPG/JPEG/WebP）")
+                "选择左侧图片开始裁切" if self._slots else
+                "将图片拖入窗口，或点击「导入图片」选择图片（支持 PNG/JPG/JPEG/WebP）")
+            self.status_label.setToolTip(self.status_label.text())

@@ -8,15 +8,16 @@ import re
 
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
+    QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout,
 )
 
 from bili import api
 from toolbox.config_manager import get_export_dir
+from gui_qt import table_sort
 from gui_qt.common import refresh_browser_colors, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.pages.bili_emoji import _DlBar, render_files
+from gui_qt.pages.bili_emoji import _DlBar, _padded, render_files
 
 
 def space_files(card: dict, appinfo: dict, emotes: list) -> list[dict]:
@@ -70,20 +71,36 @@ class BiliInfoPage(BasePage):
 
     # ---------- 空间 ----------
     def _build_space_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(6, 6, 6, 6)
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("用户空间")
+        title.setProperty("role", "sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        v.addLayout(head)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("用户 UID："))
+        row.setSpacing(8)
+        uid_label = QLabel("用户 UID")
+        uid_label.setProperty("role", "caption")
+        row.addWidget(uid_label)
         self.space_entry = QLineEdit()
         self.space_entry.setPlaceholderText("如 470880931，可粘贴空间链接")
+        self.space_entry.setClearButtonEnabled(True)
         self.space_entry.returnPressed.connect(self._load_space)
         row.addWidget(self.space_entry, 1)
         btn = QPushButton("查看")
-        btn.setStyleSheet("background:#1976d2;color:white;padding:5px 14px;")
+        btn.setProperty("variant", "primary")
         btn.clicked.connect(self._load_space)
         row.addWidget(btn)
         v.addLayout(row)
+
         self.space_view = QTextBrowser()
         self.space_view.setOpenExternalLinks(True)
         # 聚合页会把本页 tab 提升出去；监听实际浏览器，主题切换无需
@@ -94,11 +111,12 @@ class BiliInfoPage(BasePage):
         self.space_table.setHorizontalHeaderLabels(["文件", "目录"])
         self.space_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.space_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._space_sorter = table_sort.install(self.space_table, skip_columns=())
         v.addWidget(self.space_table, 1)
         self.space_bar = _DlBar(self, lambda: self._space_current, "空间资源", show_fmt=False)
         self.space_bar.dl_btn.setText("下载头像/横幅/表情")
         v.addWidget(self.space_bar)
-        return w
+        return _padded(card)
 
     def _load_space(self):
         raw = self.space_entry.text().strip()
@@ -149,6 +167,7 @@ class BiliInfoPage(BasePage):
             self._space_current = {"title": f"{api.sanitize(name)} 空间",
                                    "files": space_files(d["card"], d["appinfo"], d["emotes"])}
             render_files(self.space_table, QLabel(""), self._space_current)
+            self._space_sorter.reapply()
             self.space_bar.progress.setText(f"{len(self._space_current['files'])} 个资源就绪")
 
         run_bg(job, done)

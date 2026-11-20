@@ -126,7 +126,7 @@ def credential_identity():
 def validate_renamed_videos(paths):
     pending = [Path(path).name for path in paths if not is_renamed_video(path)]
     if pending:
-        raise ValueError("请先完成交互重命名，再开始投稿：" + "、".join(pending[:3]))
+        raise ValueError("请先在命名投稿页完成命名，再开始投稿：" + "、".join(pending[:3]))
 
 
 def is_renamed_video(path):

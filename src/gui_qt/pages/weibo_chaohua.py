@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import weibo_chaohua as wch
@@ -99,6 +100,8 @@ class WeiboChaohuaPage(BasePage):
         header.resizeSection(3, 90)
         header.resizeSection(4, 210)
         header.setSectionResizeMode(2, QHeaderView.Stretch)
+        # 表头点击排序：勾选 / 最大页数 / 本次采集三列是控件，不参与
+        self._ch_sorter = table_sort.install(self.ch_table, skip_columns=(0, 3, 4))
         cv.addWidget(self.ch_table)
 
         ops = QHBoxLayout()
@@ -175,6 +178,8 @@ class WeiboChaohuaPage(BasePage):
         for column, width in enumerate([142, 86, 150, 58, 58, 58, 58, 100, 130]):
             head.resizeSection(column, width)
         head.setSectionResizeMode(9, QHeaderView.Stretch)
+        # 表头点击排序（数据只存在单元格里，不需要同步记录列表）
+        self._posts_sorter = table_sort.install(self.posts_table, skip_columns=())
         v.addWidget(self.posts_table, 1)
         return page
 
@@ -298,6 +303,8 @@ class WeiboChaohuaPage(BasePage):
                 "spin": spin,
                 "status": status,
             })
+        # 行号与 self._channel_rows 下标一致，排序时同步重排记录列表
+        self._ch_sorter.attach(self._channel_rows).apply()
 
     def _set_all_checked(self, checked):
         for row in self._channel_rows:
@@ -454,6 +461,7 @@ class WeiboChaohuaPage(BasePage):
                     item.setToolTip(str(value))
                 table.setItem(index, column, item)
         table.setUpdatesEnabled(True)
+        self._posts_sorter.apply()
         self.count_label.setText(f"{len(rows)} 条")
 
     def _refresh_stats(self):

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.performance_monitor import PerformanceMonitor
@@ -128,6 +129,8 @@ class PerformancePage(BasePage):
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
         table.setColumnWidth(0, 110 if len(headers) > 4 else 300)
+        # 表头排序：数据只在单元格里（无控件列），每秒刷新后由 _fill 重新套用
+        table_sort.install(table, skip_columns=())
         return table
 
     def _fill(self, table, rows):
@@ -141,6 +144,9 @@ class PerformancePage(BasePage):
                     table.setItem(r, c, item)
         finally:
             table.setUpdatesEnabled(True)
+        sorter = getattr(table, "_table_sorter", None)
+        if sorter is not None:
+            sorter.reapply()
 
     def on_show(self):
         self._visible = True

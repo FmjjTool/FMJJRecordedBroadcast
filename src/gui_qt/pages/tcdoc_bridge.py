@@ -16,13 +16,13 @@ from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QDialogButtonBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
-    QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QScrollArea, QSizePolicy, QStackedWidget, QTableView, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from gui_qt import common
+from gui_qt import common, table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.skeleton import LoadingSkeleton
@@ -70,18 +70,84 @@ def _annotate_local_images(result: dict, days: int, collected) -> None:
         logger.warning("本地图片可用性标注失败", exc_info=True)
 
 
+def _caption(text: str) -> QLabel:
+    """工具条里的字段名：统一小号灰字，避免和正文/按钮抢注意力。"""
+    label = QLabel(text)
+    label.setProperty("role", "caption")
+    return label
+
+
+class _StatusLabel(QLabel):
+    """单行状态提示：超宽自动省略，悬停看全文，文案变化不撑高布局。"""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__("", parent)
+        self._full_text = str(text or "")
+        self.setWordWrap(False)
+        self.setTextFormat(Qt.PlainText)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setToolTip(self._full_text)
+        self.setText(self._full_text)
+
+    def setText(self, text):  # noqa: N802 - 与 Qt 接口保持一致
+        self._full_text = "" if text is None else str(text)
+        self.setToolTip(self._full_text)
+        self._apply_elide()
+
+    def text(self):
+        return getattr(self, "_full_text", "")
+
+    def resizeEvent(self, event):  # noqa: N802 - 与 Qt 接口保持一致
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        full = getattr(self, "_full_text", "")
+        width = self.contentsRect().width()
+        if width > 0:
+            full = self.fontMetrics().elidedText(full, Qt.ElideRight, width)
+        if super().text() != full:
+            super().setText(full)
+
+
 class _PendingModel(QAbstractTableModel):
     """保留全部行，只为可见单元格生成显示文本。"""
+
+    # 数值 / 缩略图列居中，文本列左对齐，避免整表读起来像居中的公告
+    _CENTER_COLUMNS = frozenset((
+        "发布距今", "封面图", "图片", "动态类型", "发布平台", "发布位置",
+        "作品时长", "歌曲时长", "首发日期", "语言",
+    ))
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.rows = []
         self.columns = list(_DISPLAY_COLUMNS)
+        self._sort_column = -1
+        self._sort_order = Qt.AscendingOrder
 
     def replace(self, rows):
         self.beginResetModel()
         self.rows = rows
+        if self._sort_column >= 0:
+            self._sort_locked()
         self.endResetModel()
+
+    def _sort_locked(self) -> None:
+        """按当前排序列原地排序（调用方需自行包 begin/endResetModel）。"""
+        if not (0 <= self._sort_column < len(self.columns)) or len(self.rows) < 2:
+            return
+        column = self.columns[self._sort_column]
+        key = lambda row: table_sort.sort_key(self.cell_text(row, column))
+        self.rows = table_sort.sort_records(
+            self.rows, key, self._sort_order == Qt.AscendingOrder)
+
+    def sort(self, column, order=Qt.AscendingOrder):
+        """表头点击排序：排的是全部行（不只可见行），选中行会重置。"""
+        self.layoutAboutToBeChanged.emit()
+        self._sort_column, self._sort_order = column, order
+        self._sort_locked()
+        self.layoutChanged.emit()
 
     def set_columns(self, columns):
         self.beginResetModel()
@@ -97,26 +163,29 @@ class _PendingModel(QAbstractTableModel):
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self.columns[section]
+        if role == Qt.TextAlignmentRole and orientation == Qt.Horizontal:
+            name = self.columns[section]
+            if name in self._CENTER_COLUMNS:
+                return int(Qt.AlignCenter)
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
 
     def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
+        if not index.isValid():
+            return None
+        column = self.columns[index.column()]
+        if role == Qt.TextAlignmentRole:
+            if column in self._CENTER_COLUMNS:
+                return int(Qt.AlignCenter)
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
+        if role not in (Qt.DisplayRole, Qt.ToolTipRole):
             return None
         row = self.rows[index.row()]
-        column = self.columns[index.column()]
         if column == "图片":
             images = row.get("_images") or []
             local = row.get("_local_images")
             missing = row.get("_missing_images")
             if role == Qt.DisplayRole:
-                if not images:
-                    return "无"
-                if local is None:
-                    return f"有 {len(images)} 张"
-                if not local:
-                    return f"缺 {len(images)} 张"
-                if local < len(images):
-                    return f"本地 {local}/{len(images)} 张"
-                return f"本地 {len(images)} 张"
+                return self.cell_text(row, column)
             tip = "\n".join(images[:20]) + ("\n…" if len(images) > 20 else "")
             if local is not None and missing:
                 tip = (f"本地已下载 {local} 张，缺 {missing} 张"
@@ -128,6 +197,26 @@ class _PendingModel(QAbstractTableModel):
             label, url = bridge.tables.split_link(value)
             return (url or label) if role == Qt.ToolTipRole else label
         return value[:600] if role == Qt.ToolTipRole else value
+
+    def cell_text(self, row, column) -> str:
+        """单元格显示文本（排序键也按这份文本解析）。"""
+        if column == "图片":
+            images = row.get("_images") or []
+            local = row.get("_local_images")
+            if not images:
+                return "无"
+            if local is None:
+                return f"有 {len(images)} 张"
+            if not local:
+                return f"缺 {len(images)} 张"
+            if local < len(images):
+                return f"本地 {local}/{len(images)} 张"
+            return f"本地 {len(images)} 张"
+        value = str(row.get(column) or "")
+        if bridge.tables.LINK_FIELD_SEP in value:
+            label, _url = bridge.tables.split_link(value)
+            return label
+        return value
 
 
 class _UploadDialog(QDialog):
@@ -166,13 +255,16 @@ class _UploadDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         for index, width in enumerate((56, 380, 130, 90, 150, 120)):
             self.table.setColumnWidth(index, width)
+        # 行号 == self._records 下标：勾选/汇总都按行号反查记录，排序时必须同步重排记录列表
+        self._upload_sorter = table_sort.install(self.table, rows=self._records)
         for record in self._records:
             self._add_row(record)
+        self._upload_sorter.apply()
         layout.addWidget(self.table, 1)
 
-        self.summary = QLabel("")
-        self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
+        self._upload_summary = QLabel("")
+        self._upload_summary.setWordWrap(True)
+        layout.addWidget(self._upload_summary)
 
         self.fetch_box = QCheckBox("缺图时尝试在线补图（下载到本地缓存后再上传）")
         self.fetch_box.setChecked(True)
@@ -261,7 +353,7 @@ class _UploadDialog(QDialog):
             note = (f"；缺图 {gaps} 张"
                     + ("（上传时尝试在线补图）" if self.fetch_missing else "（会留空）"))
         block_note = f"；不可上传 {blocked} 条（缺字段或选项）" if blocked else ""
-        self.summary.setText(
+        self._upload_summary.setText(
             f"已选 {len(chosen)} / {len(self._records)} 条 · 图片 {images} 张{note}{block_note}")
         self.ok_btn.setEnabled(bool(chosen))
 
@@ -372,30 +464,38 @@ class TcDocBridgePanel(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        top.addWidget(QLabel("目标表格"))
+        # 工具条：上行选范围，下行放动作；整块用同一个容器包住，
+        # 动作统一靠右，避免按钮散在两侧造成视觉跳跃。
+        toolbar = QFrame()
+        toolbar.setProperty("variant", "toolbar")
+        tb = QVBoxLayout(toolbar)
+        tb.setContentsMargins(10, 8, 10, 8)
+        tb.setSpacing(8)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        row1.addWidget(_caption("表格"))
         self.target_combo = QComboBox()
-        self.target_combo.setMinimumWidth(340)
+        self.target_combo.setMinimumWidth(320)
         self.target_combo.setToolTip("已同步到本地的腾讯表格（自动识别含官方动态字段的工作表）")
         self.target_combo.currentIndexChanged.connect(self._on_target_changed)
-        top.addWidget(self.target_combo, 2)
+        row1.addWidget(self.target_combo, 2)
 
-        top.addWidget(QLabel("时间"))
+        row1.addWidget(_caption("时间"))
         self.days_combo = QComboBox()
         for label, days in _DAYS:
             self.days_combo.addItem(label, days)
-        self.days_combo.setFixedWidth(100)
+        self.days_combo.setFixedWidth(110)
         self.days_combo.currentIndexChanged.connect(self._on_days_changed)
-        top.addWidget(self.days_combo)
+        row1.addWidget(self.days_combo)
 
-        top.addWidget(QLabel("账号"))
+        row1.addWidget(_caption("账号"))
         self.account_btn = QPushButton("全部")
-        self.account_btn.setMinimumWidth(130)
+        self.account_btn.setMinimumWidth(120)
         self.account_btn.setToolTip("勾选要比对的发布账号；默认只比对腾讯表出现过的账号")
         self._account_menu = QMenu(self.account_btn)
         self.account_btn.setMenu(self._account_menu)
-        top.addWidget(self.account_btn)
+        row1.addWidget(self.account_btn)
 
         # 合作方过滤：名单之外的账号只收录提到关键词的作品（默认启用，可在弹窗改关键词）
         self.partner_filter_btn = QPushButton("合作方过滤")
@@ -403,7 +503,7 @@ class TcDocBridgePanel(QWidget):
             "配置合作方账号的收录口径：腾讯表「发布账号」名单之外的账号，"
             "只保留标题或正文提到关键词的作品；可关闭或修改关键词。")
         self.partner_filter_btn.clicked.connect(self._edit_partner_filter)
-        top.addWidget(self.partner_filter_btn)
+        row1.addWidget(self.partner_filter_btn)
 
         # 直播记录专用：主播多选 + 重复处理策略（仅 profile=lives 时可见）
         self.live_account_btn = QPushButton("主播：全部")
@@ -413,7 +513,7 @@ class TcDocBridgePanel(QWidget):
         self._live_account_menu = QMenu(self.live_account_btn)
         self.live_account_btn.setMenu(self._live_account_menu)
         self.live_account_btn.setVisible(False)
-        top.addWidget(self.live_account_btn)
+        row1.addWidget(self.live_account_btn)
         self._live_rows: list[dict] = []
         self._live_accounts_checked: set[str] = set()
 
@@ -426,37 +526,15 @@ class TcDocBridgePanel(QWidget):
             "（账户/标题/开始/结束/平台/链接1）；AI 摘要、截图、标签、备注等人工列不会被覆盖")
         self.dup_combo.setVisible(False)
         self.dup_combo.currentIndexChanged.connect(self._on_dup_mode_changed)
-        top.addWidget(self.dup_combo)
+        row1.addWidget(self.dup_combo)
+        tb.addLayout(row1)
 
-        # 直播记录 API 写回：只构造 payload 预览，不发送请求（默认不真实写入）
-        self.api_preview_btn = QPushButton("预览 API 写回")
-        self.api_preview_btn.setToolTip(
-            "只把待补行编码成腾讯文档 OpenAPI 的 payload 供核对：不发送请求、"
-            "不写入任何数据。真实写回需用户明确同意后在真机执行。")
-        self.api_preview_btn.setVisible(False)
-        self.api_preview_btn.clicked.connect(self._preview_live_api)
-        top.addWidget(self.api_preview_btn)
-
-        # 单条试写：真实写入 1 条 + 读回校验（批量写回验证通过后再放开）
-        self.api_write_btn = QPushButton("单条试写")
-        self.api_write_btn.setToolTip(
-            "把清单第一条真实写入直播记录表并立即读回校验：只写 1 条，"
-            "写完后「同步前刷新」凭证作废，需要重新刷新才能再写。")
-        self.api_write_btn.setVisible(False)
-        self.api_write_btn.clicked.connect(self._write_single_live)
-        top.addWidget(self.api_write_btn)
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
 
         self.compare_btn = QPushButton("重新比对")
         self.compare_btn.clicked.connect(self._run_compare)
-        top.addWidget(self.compare_btn)
-
-        self.manual_btn = QPushButton("手动录入")
-        self.manual_btn.setToolTip(
-            "为当前表手动新增一行；只生成可复制的 TSV，不会直接写入腾讯文档。"
-            "图片列请用「复制图片」或到腾讯文档里补。")
-        self.manual_btn.setVisible(False)
-        self.manual_btn.clicked.connect(self._manual_entry)
-        top.addWidget(self.manual_btn)
+        row2.addWidget(self.compare_btn)
 
         self.refresh_sync_btn = QPushButton("同步前刷新")
         self.refresh_sync_btn.setToolTip(
@@ -465,24 +543,52 @@ class TcDocBridgePanel(QWidget):
             "2) 重新拉取一遍腾讯文档表格快照\n"
             "三步都成功后「上传到腾讯文档」才可用；上传完成或超过 60 分钟后需重新刷新。")
         self.refresh_sync_btn.clicked.connect(self._refresh_before_sync)
-        top.addWidget(self.refresh_sync_btn)
-        top.addStretch(1)
+        row2.addWidget(self.refresh_sync_btn)
+
+        # 直播记录 API 写回：只构造 payload 预览，不发送请求（默认不真实写入）
+        self.api_preview_btn = QPushButton("预览 API 写回")
+        self.api_preview_btn.setToolTip(
+            "只把待补行编码成腾讯文档 OpenAPI 的 payload 供核对：不发送请求、"
+            "不写入任何数据。真实写回需用户明确同意后在真机执行。")
+        self.api_preview_btn.setVisible(False)
+        self.api_preview_btn.clicked.connect(self._preview_live_api)
+        row2.addWidget(self.api_preview_btn)
+
+        # 单条试写：真实写入 1 条 + 读回校验（批量写回验证通过后再放开）
+        self.api_write_btn = QPushButton("单条试写")
+        self.api_write_btn.setToolTip(
+            "把清单第一条真实写入直播记录表并立即读回校验：只写 1 条，"
+            "写完后「同步前刷新」凭证作废，需要重新刷新才能再写。")
+        self.api_write_btn.setVisible(False)
+        self.api_write_btn.clicked.connect(self._write_single_live)
+        row2.addWidget(self.api_write_btn)
+
+        self.manual_btn = QPushButton("手动录入")
+        self.manual_btn.setToolTip(
+            "为当前表手动新增一行；只生成可复制的 TSV，不会直接写入腾讯文档。"
+            "图片列请用「复制图片」或到腾讯文档里补。")
+        self.manual_btn.setVisible(False)
+        self.manual_btn.clicked.connect(self._manual_entry)
+        row2.addWidget(self.manual_btn)
+        row2.addStretch(1)
+
+        self.copy_btn = QPushButton("复制全部（TSV）")
+        self.copy_btn.setToolTip("复制全部待同步行（不含表头），到腾讯文档表格末尾粘贴")
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._copy)
+        row2.addWidget(self.copy_btn)
 
         self.upload_btn = QPushButton("上传到腾讯文档")
+        self.upload_btn.setProperty("variant", "primary")
         self.upload_btn.setToolTip(
             "把清单中勾选的记录连同本地图片上传到腾讯文档（官方动态 / 直播记录可新增，"
             "完整歌曲仅新增、不改不删；需在弹窗里确认勾选，已存在的自动跳过）")
         self.upload_btn.setEnabled(False)
         self.upload_btn.clicked.connect(self._open_upload)
-        top.addWidget(self.upload_btn)
-
-        self.copy_btn = QPushButton("复制全部（TSV）")
-        self.copy_btn.setProperty("variant", "primary")
-        self.copy_btn.setToolTip("复制全部待同步行（不含表头），到腾讯文档表格末尾粘贴")
-        self.copy_btn.setEnabled(False)
-        self.copy_btn.clicked.connect(self._copy)
-        top.addWidget(self.copy_btn)
-        layout.addLayout(top)
+        row2.addWidget(self.upload_btn)
+        tb.addLayout(row2)
+        layout.addWidget(toolbar)
+        self._refresh_partner_btn()
 
         self.song_search_row = QWidget(self)
         search_layout = QHBoxLayout(self.song_search_row)
@@ -503,15 +609,33 @@ class TcDocBridgePanel(QWidget):
         self.song_search_row.setVisible(False)
         layout.addWidget(self.song_search_row)
 
+        # 结果摘要分两层：第一行给结论（待同步数量 + 比对范围），
+        # 第二行灰色小字放图片/耗时等细节，长文本不再挤成一行。
+        self.pending_label = QLabel("")
+        self.pending_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        self.pending_label.setVisible(False)
         self.summary = QLabel("加载中…")
         self.summary.setWordWrap(True)
-        self.summary.setStyleSheet("font-weight: 600;")
         self.summary.setTextFormat(Qt.PlainText)
-        layout.addWidget(self.summary)
+        self.summary_note = QLabel("")
+        self.summary_note.setProperty("role", "caption")
+        self.summary_note.setWordWrap(True)
+        self.summary_note.setVisible(False)
+        info_row = QHBoxLayout()
+        info_row.setSpacing(10)
+        info_row.addWidget(self.pending_label)
+        info_row.addWidget(self.summary, 1)
+        layout.addLayout(info_row)
+        layout.addWidget(self.summary_note)
 
         self.table = QTableView()
         self._model = _PendingModel(self.table)
         self.table.setModel(self._model)
+        # 表头点击排序：交给 _PendingModel.sort()，排的是全部待同步行
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.table.horizontalHeader().setToolTip("点击表头排序（对全部待同步行生效）")
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -520,9 +644,13 @@ class TcDocBridgePanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setMinimumSectionSize(72)
         for index, name in enumerate(_DISPLAY_COLUMNS):
             self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
+        if _DISPLAY_COLUMNS:
+            # 标题列吃掉剩余宽度，右侧不再靠「最后一列被拉宽」填满
+            self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
         self.table.selectionModel().selectionChanged.connect(self._update_copy_row_btn)
@@ -532,6 +660,8 @@ class TcDocBridgePanel(QWidget):
         self._table_stack.addWidget(self.table)
         self._skeleton = LoadingSkeleton(text="正在读取目标表格…")
         self._table_stack.addWidget(self._skeleton)
+        self._empty = self._build_empty_state()
+        self._table_stack.addWidget(self._empty)
         layout.addWidget(self._table_stack, 1)
 
         self.progress_row = QWidget(self)
@@ -550,8 +680,8 @@ class TcDocBridgePanel(QWidget):
         layout.addWidget(self.progress_row)
 
         bottom = QHBoxLayout()
-        self.status = QLabel("选中行可单行复制；上传需点「上传到腾讯文档」并确认勾选。")
-        self.status.setWordWrap(True)
+        bottom.setSpacing(8)
+        self.status = _StatusLabel("选中行可单行复制；上传需点「上传到腾讯文档」并确认勾选。")
         self.status.setStyleSheet("color: #888;")
         bottom.addWidget(self.status, 1)
         self.copy_images_btn = QPushButton("复制全部图片")
@@ -571,6 +701,56 @@ class TcDocBridgePanel(QWidget):
             close_btn.clicked.connect(self._close)
             bottom.addWidget(close_btn)
         layout.addLayout(bottom)
+
+    def _build_empty_state(self) -> QWidget:
+        """待同步为 0 时替代空表格：给出结论、原因和「重新比对」入口。"""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(24, 24, 24, 24)
+        v.setSpacing(6)
+        v.addStretch(1)
+        self._empty_title = QLabel("当前没有待同步条目")
+        self._empty_title.setProperty("role", "sectionTitle")
+        self._empty_title.setAlignment(Qt.AlignCenter)
+        v.addWidget(self._empty_title)
+        self._empty_hint = QLabel(
+            "本地数据与腾讯表格一致时会停在这里；比对结果只读，不会修改腾讯文档。")
+        self._empty_hint.setProperty("role", "muted")
+        self._empty_hint.setAlignment(Qt.AlignCenter)
+        self._empty_hint.setWordWrap(True)
+        v.addWidget(self._empty_hint)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        reload_btn = QPushButton("重新比对")
+        reload_btn.clicked.connect(self._run_compare)
+        buttons.addWidget(reload_btn)
+        buttons.addStretch(1)
+        v.addSpacing(6)
+        v.addLayout(buttons)
+        v.addStretch(1)
+        return box
+
+    def _set_empty(self, title: str, hint: str) -> None:
+        self._empty_title.setText(title)
+        self._empty_hint.setText(hint)
+
+    def _set_summary(self, text: str, note: str = "", pending_text: str = "") -> None:
+        """摘要第一行给结论，第二行灰色小字放图片统计与耗时。"""
+        self.pending_label.setText(pending_text)
+        self.pending_label.setVisible(bool(pending_text))
+        self.summary.setText(text)
+        self.summary.setToolTip(text)
+        self.summary_note.setText(note)
+        self.summary_note.setVisible(bool(note))
+
+    def _refresh_partner_btn(self) -> None:
+        """按钮直接显示过滤当前是否生效，避免用户点开才知道。"""
+        try:
+            enabled = bool(load_convert_config().get("tcdoc_bridge_partner_filter", True))
+        except Exception:  # noqa: BLE001 - 配置读不到时按默认启用显示
+            enabled = True
+        self.partner_filter_btn.setText(
+            "合作方过滤：已启用" if enabled else "合作方过滤：已关闭")
 
     def _close(self) -> None:
         window = self.window()
@@ -650,7 +830,9 @@ class TcDocBridgePanel(QWidget):
                 self.target_combo.clear()
                 self.target_combo.blockSignals(False)
                 self._clear_result()
-                self.summary.setText(f"表格清单读取失败：{err}；可重新比对重试")
+                self._set_empty("表格清单读取失败",
+                                "点「重新比对」重试；若反复失败请查看 logs/app_*.log。")
+                self._set_summary(f"表格清单读取失败：{err}；可重新比对重试")
                 self._show_table()
                 return
             self._targets, cfg = result
@@ -660,7 +842,7 @@ class TcDocBridgePanel(QWidget):
         thread = run_bg(work, done, owner=self._task_owner)
         if thread is None:
             self._targets_loading = False
-            self.summary.setText("表格清单读取任务未启动，请重试")
+            self._set_summary("表格清单读取任务未启动，请重试")
             self._show_table()
             return
         self._targets_watchdog.start(self.TARGETS_TIMEOUT_MS)
@@ -675,7 +857,9 @@ class TcDocBridgePanel(QWidget):
         if not self._targets:
             self.target_combo.blockSignals(False)
             self._clear_result()
-            self.summary.setText(
+            self._set_empty("还没有可用的表格数据",
+                            "请先在「表格同步」页签同步一次表格，再回来比对。")
+            self._set_summary(
                 "本地还没有可用的表格数据：请先在「表格同步」页签同步一次表格。")
             self._show_table()
             return
@@ -832,6 +1016,8 @@ class TcDocBridgePanel(QWidget):
         self._compare_pending = False
         self._compare_req += 1
         self._clear_result()
+        self._set_empty("还没有待录入歌曲",
+                        "在上方输入歌名，回车或点「多平台检索」生成与表头对齐的录入行。")
         self._fill_table([], list(bridge.song_columns()), append_images=False)
         self._show_table()
         self.compare_btn.setEnabled(False)
@@ -840,7 +1026,7 @@ class TcDocBridgePanel(QWidget):
         self.copy_images_btn.setEnabled(False)
         self.copy_row_btn.setEnabled(False)
         self.account_btn.setText("全部")
-        self.summary.setText("完整歌曲：输入歌名，五平台检索后生成按表头对齐的录入行（不读写腾讯表格）")
+        self._set_summary("完整歌曲：输入歌名，五平台检索后生成按表头对齐的录入行（不读写腾讯表格）")
         self.status.setText(
             "输入歌曲名后点「多平台检索」：生成一行与完整歌曲表头完全一致的数据，"
             "QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 链接分别填入对应列；"
@@ -858,7 +1044,7 @@ class TcDocBridgePanel(QWidget):
         self.song_search_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.copy_row_btn.setEnabled(False)
-        self.summary.setText(f"正在检索五平台：{singer} - {title} …")
+        self._set_summary(f"正在检索五平台：{singer} - {title} …")
         self.status.setText("QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 并行检索中…")
 
         def work():
@@ -873,7 +1059,7 @@ class TcDocBridgePanel(QWidget):
                 return
             self.song_search_btn.setEnabled(True)
             if err:
-                self.summary.setText(f"检索失败：{err}")
+                self._set_summary(f"检索失败：{err}")
                 self.status.setText("可稍后重试；不会读写腾讯表格。")
                 self.copy_btn.setEnabled(bool(self._rows))
                 self._update_copy_row_btn()
@@ -884,7 +1070,7 @@ class TcDocBridgePanel(QWidget):
         thread = run_bg(work, done, owner=self._task_owner)
         if thread is None:
             self.song_search_btn.setEnabled(True)
-            self.summary.setText("检索任务未启动，请重试")
+            self._set_summary("检索任务未启动，请重试")
 
     def _show_song_row(self, row: dict, matches: dict) -> None:
         columns = list(bridge.song_columns())
@@ -914,7 +1100,7 @@ class TcDocBridgePanel(QWidget):
                 dates.add(day)
         duration_note = "时长一致" if len(durations) == 1 else f"时长 {len(durations)} 种"
         date_note = "日期一致" if len(dates) == 1 else f"日期 {len(dates)} 种"
-        self.summary.setText(
+        self._set_summary(
             f"已生成 1 行，43 列与完整歌曲表头一致；链接 {links}/5 已填入对应列；"
             f"平台匹配 {len(present)}/5，{duration_note}，{date_note}"
             + (f"；缺 {'、'.join(missing)}" if missing else "；五平台链接齐全")
@@ -954,6 +1140,7 @@ class TcDocBridgePanel(QWidget):
             return
         self._save_cfg(tcdoc_bridge_partner_filter=enabled,
                        tcdoc_bridge_subject_keywords=keywords)
+        self._refresh_partner_btn()
         self._run_compare()
 
     # ==================== 账号 ====================
@@ -1493,7 +1680,7 @@ class TcDocBridgePanel(QWidget):
         self._compare_req += 1
         if self._rows:
             # 已有结果时保留表格，避免每次重新比对都整块闪骨架
-            self.summary.setText("正在重新比对本地数据与腾讯表格…")
+            self._set_summary("正在重新比对本地数据与腾讯表格…")
             self.compare_btn.setEnabled(False)
         else:
             self._set_loading("正在比对本地数据与腾讯表格…")
@@ -1522,13 +1709,13 @@ class TcDocBridgePanel(QWidget):
                 self._show_table()
                 self.copy_btn.setEnabled(False)
                 self.upload_btn.setEnabled(False)
-                self.summary.setText("未勾选任何主播：请在上方「主播」里选择要同步的抖音账号。")
+                self._set_summary("未勾选任何主播：请在上方「主播」里选择要同步的抖音账号。")
                 return
             self._busy = True
             self._compare_pending = False
             req = self._compare_req
             self._compare_owner = req
-            self.summary.setText("正在比对抖音直播历史与直播记录表…")
+            self._set_summary("正在比对抖音直播历史与直播记录表…")
             self.status.setText(
                 f"只读比对：重复场次按「{bridge.LIVE_DUP_MODES.get(mode, mode)}」处理，"
                 "AI 摘要 / 截图 / 标签 / 备注等人工列不会被覆盖。")
@@ -1544,7 +1731,7 @@ class TcDocBridgePanel(QWidget):
             if thread is None:
                 self._busy = False
                 self._compare_owner = 0
-                self.summary.setText("比对任务未启动，请重试")
+                self._set_summary("比对任务未启动，请重试")
             return
         self._busy = True
         self._compare_pending = False
@@ -1552,7 +1739,7 @@ class TcDocBridgePanel(QWidget):
         self._compare_owner = req
 
         try:
-            self.summary.setText("正在比对本地数据与腾讯表格…")
+            self._set_summary("正在比对本地数据与腾讯表格…")
             self.status.setText("本地已获取 + 增量数据库合并去重后比对，不会修改腾讯文档。")
             days = int(self.days_combo.currentData() or 0)
             accounts = self._selected_accounts()
@@ -1586,10 +1773,11 @@ class TcDocBridgePanel(QWidget):
             self._compare_watchdog.stop()
             if self._rows:
                 self._show_table()
-                self.summary.setText(f"比对启动失败（保留上次结果）：{exc}")
+                self._set_summary(f"比对启动失败（保留上次结果）：{exc}")
             else:
                 self._clear_result()
-                self.summary.setText(f"比对启动失败：{exc}")
+                self._set_empty("比对启动失败", "点「重新比对」重试；若反复失败请查看 logs/app_*.log。")
+                self._set_summary(f"比对启动失败：{exc}")
             self._restore_buttons()
             return
         if thread is None:
@@ -1598,7 +1786,7 @@ class TcDocBridgePanel(QWidget):
             self._compare_watchdog.stop()
             if self._rows:
                 self._show_table()
-            self.summary.setText("比对任务未启动，请重试")
+            self._set_summary("比对任务未启动，请重试")
             self._restore_buttons()
             return
         self._compare_watchdog.start(self.COMPARE_TIMEOUT_MS)
@@ -1740,9 +1928,10 @@ class TcDocBridgePanel(QWidget):
         if self._closed or req != self._compare_req:
             return
         if err or not result:
-            self.summary.setText(f"比对失败：{err or '未知错误'}")
+            self._set_summary(f"比对失败：{err or '未知错误'}")
             if not self._rows:
                 self._clear_result()
+                self._set_empty("比对失败", "点「重新比对」重试；若反复失败请查看 logs/app_*.log。")
             return
         self._result = result
         self._fill_table(result["rows"], result.get("columns"), append_images=False)
@@ -1750,7 +1939,7 @@ class TcDocBridgePanel(QWidget):
         stats = result.get("stats") or {}
         mode_label = bridge.LIVE_DUP_MODES.get(str(stats.get("mode")), "跳过重复")
         scope = stats.get("since") or "全部历史"
-        self.summary.setText(
+        self._set_summary(
             f"抖音直播历史 {scope} 共 {stats.get('local_items', 0)} 场 → "
             f"重复 {stats.get('duplicates', 0)} 场（{mode_label}）、"
             f"待补 {stats.get('pending', 0)} 行"
@@ -1797,11 +1986,12 @@ class TcDocBridgePanel(QWidget):
         if err:
             logger.warning("中间层比对失败：%s", err)
             if self._rows:
-                self.summary.setText(f"比对失败（保留上次结果）：{err}")
+                self._set_summary(f"比对失败（保留上次结果）：{err}")
                 self._restore_buttons()
             else:
                 self._clear_result()
-                self.summary.setText(f"比对失败：{err}")
+                self._set_empty("比对失败", "点「重新比对」重试；若反复失败请查看 logs/app_*.log。")
+                self._set_summary(f"比对失败：{err}")
             return
         self._result = result
         self._fill_table(result["rows"], result.get("columns"))
@@ -1834,29 +2024,33 @@ class TcDocBridgePanel(QWidget):
             else:
                 image_note = (f"（有图片 {stats['with_images']} 行 / "
                               f"{stats['image_count']} 张，无图片 {stats['without_images']} 行）")
+        note_parts = []
+        if image_note:
+            note_parts.append(image_note.strip("（）"))
+        note_parts.append(f"用时 {float(timing.get('total') or 0):.2f} 秒")
+        note = " · ".join(note_parts)
         if profile == "songs":
-            self.summary.setText(
-                f"本地音乐信息导出 {stats['local_items']} 首 → 去重 {stats['local_groups']} 首；"
-                f"已同步 {stats['synced_groups']} 首，待同步 {stats['pending']} 首{image_note}"
-                f"；用时 {float(timing.get('total') or 0):.2f} 秒")
+            self._set_summary(
+                f"本地音乐信息导出 {stats['local_items']} 首 → 去重 {stats['local_groups']} 首 · "
+                f"已同步 {stats['synced_groups']} 首",
+                note, f"待同步 {stats['pending']} 首")
         elif profile in ("events", "merch"):
             label = "线下活动" if profile == "events" else "周边图鉴"
             scope = stats["since"] or "全部历史"
             source_label = {"ticket": "票务解析", "shop": "购物解析"}.get(
                 stats.get("source"), "本地动态")
-            self.summary.setText(
+            self._set_summary(
                 f"{source_label} {scope} 共 {stats['local_items']} 条 → 识别 "
-                f"{stats['local_groups']} 个{label}候选；已存在 {stats['synced_groups']} 个，"
-                f"待补 {stats['pending']} 行{image_note}；"
-                f"用时 {float(timing.get('total') or 0):.2f} 秒")
+                f"{stats['local_groups']} 个{label}候选 · 已存在 {stats['synced_groups']} 个",
+                note, f"待补 {stats['pending']} 行")
         else:
             scope = stats["since"] or "全部历史"
-            self.summary.setText(
-                f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品；"
-                f"已同步 {stats['synced_groups']} 个，待同步 {stats['pending']} 行{image_note}"
-                f"；用时 {float(timing.get('total') or 0):.2f} 秒")
+            self._set_summary(
+                f"本地 {scope} 共 {stats['local_items']} 条 → 合并 {stats['local_groups']} 个作品 · "
+                f"已同步 {stats['synced_groups']} 个",
+                note, f"待同步 {stats['pending']} 行")
         if timing:
-            self.status.setToolTip(
+            self.summary_note.setToolTip(
                 f"读取腾讯存档 {timing.get('remote', 0):.2f}s · "
                 f"读取本地条目 {timing.get('local', 0):.2f}s · "
                 f"分组去重 {timing.get('match', 0):.2f}s")
@@ -1882,12 +2076,23 @@ class TcDocBridgePanel(QWidget):
                     "右键行可「上传这一行到腾讯文档」或复制；"
                     "缺图会在上传时尝试在线补图，补不到则留空。")
         else:
+            hint = ("已同步 {synced} 首歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
+                    if profile == "songs" else
+                    "只读预览，未写入腾讯文档；本地没有新的候选。"
+                    if profile in ("events", "merch") else
+                    "已同步 {synced} 个作品；如果刚上传过，请先同步一次腾讯表格再比对。")
+            self._set_empty(
+                "当前没有待同步歌曲" if profile == "songs" else
+                "当前没有待补候选" if profile in ("events", "merch") else
+                "当前没有待同步条目",
+                hint.format(synced=stats["synced_groups"]))
             self.status.setText(
                 "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
                 if profile == "songs" else
                 "没有待补候选；只读预览，未写入腾讯文档。"
                 if profile in ("events", "merch") else
                 "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
+        self._show_table()
 
     # ==================== 看门狗 ====================
 
@@ -1901,10 +2106,11 @@ class TcDocBridgePanel(QWidget):
                        self.TARGETS_TIMEOUT_MS / 1000)
         self._show_table()
         if self._rows:
-            self.summary.setText("读取表格清单超时，已保留上次结果；请稍后重试")
+            self._set_summary("读取表格清单超时，已保留上次结果；请稍后重试")
         else:
             self._clear_result()
-            self.summary.setText("读取表格清单超时；请稍后重新比对重试")
+            self._set_empty("读取表格清单超时", "点「重新比对」重试；若反复超时请查看 logs/app_*.log。")
+            self._set_summary("读取表格清单超时；请稍后重新比对重试")
         self.status.setText("可点「重新比对」重试；若反复超时请查看 logs/app_*.log")
 
     def _on_compare_watchdog(self) -> None:
@@ -1918,12 +2124,13 @@ class TcDocBridgePanel(QWidget):
         logger.warning("中间层比对超过 %s 秒未完成，已解除等待", seconds)
         self._show_table()
         if self._rows:
-            self.summary.setText(
+            self._set_summary(
                 f"比对超时（{seconds} 秒未完成），已保留上次结果，请稍后重试")
             self._restore_buttons()
         else:
             self._clear_result()
-            self.summary.setText(f"比对超时（{seconds} 秒未完成），请稍后重试")
+            self._set_empty("比对超时", "点「重新比对」重试；若反复超时请查看 logs/app_*.log。")
+            self._set_summary(f"比对超时（{seconds} 秒未完成），请稍后重试")
         self.status.setText("可点「重新比对」重试；若反复超时请查看 logs/app_*.log")
 
     def _refresh_accounts(self, result: dict, used_accounts) -> None:
@@ -1952,7 +2159,12 @@ class TcDocBridgePanel(QWidget):
             display = list(columns) + (["图片"] if append_images else [])
             if display != self._model.columns:
                 self._model.set_columns(display)
+                header = self.table.horizontalHeader()
+                header.setSectionResizeMode(QHeaderView.Interactive)
                 for index, name in enumerate(display):
+                    if index == 0:
+                        header.setSectionResizeMode(0, QHeaderView.Stretch)
+                        continue
                     self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
         self._rows = list(rows)
         self._model.replace(self._rows)
@@ -1963,12 +2175,16 @@ class TcDocBridgePanel(QWidget):
     def _clear_result(self):
         self._result = None
         self._fill_table([])
+        self._set_empty("当前没有待同步条目",
+                        "本地数据与腾讯表格一致时会停在这里；比对结果只读，不会修改腾讯文档。")
         self.copy_btn.setEnabled(False)
         self.upload_btn.setEnabled(False)
 
     def _set_loading(self, text):
         self._skeleton.setText(text)
         self._table_stack.setCurrentWidget(self._skeleton)
+        self.pending_label.setVisible(False)
+        self.summary_note.setVisible(False)
         self.compare_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.upload_btn.setEnabled(False)
@@ -1976,7 +2192,7 @@ class TcDocBridgePanel(QWidget):
         self.copy_images_btn.setEnabled(False)
 
     def _show_table(self):
-        self._table_stack.setCurrentWidget(self.table)
+        self._table_stack.setCurrentWidget(self.table if self._rows else self._empty)
         self.compare_btn.setEnabled(True)
 
     def shutdown(self):

@@ -5,7 +5,7 @@
 - 配置 → `toolbox.backup.export_config / import_config`
 - 资产 → `toolbox.backup.export_assets / import_assets`
 
-网盘下载与网盘备份在侧栏「网盘」页；计划任务仍统一由「任务」页管理。
+网盘下载与网盘备份在侧栏「网络库」页；计划任务仍统一由「任务」页管理。
 """
 
 from __future__ import annotations

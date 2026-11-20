@@ -24,7 +24,7 @@ description: "软件运行中禁止关闭的强制规则：只要本软件（桌
 | --- | --- |
 | 进程 | 任务管理器 / `tasklist` 里存在 `FengMingToolbox.exe`、`pythonw.exe`、`python.exe`（带本项目脚本）、`node.exe` 等 |
 | 窗口 | 主窗口、直播录制二级窗口、弹幕浮层、托盘图标仍在 |
-| 端口 | 本地资料站、Web 服务端口处于 `LISTENING` |
+| 端口 | 资料站、Web 服务端口处于 `LISTENING` |
 | 业务状态 | 正在录制（已录时间在走）、正在采集、正在同步腾讯文档、正在打包/上传 |
 | 文件锁 | 目标文件被占用、写入失败、`PermissionError` / `WinError 32` |
 

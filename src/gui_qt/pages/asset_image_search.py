@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from gui_qt import common, theme
+from gui_qt import common, table_sort, theme
 from gui_qt.common import run_bg
 from toolbox import asset_image_search, image_embedding
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -184,6 +184,8 @@ class ImageSearchDialog(QDialog):
         for index, width in enumerate((86, 420, 220, 260)):
             self.table.setColumnWidth(index, width)
         self.table.cellDoubleClicked.connect(self._open_row)
+        # 记录存在匹配度单元格的 UserRole 里，直接按单元格排序即可
+        self._sorter = table_sort.install(self.table, skip_columns=())
         layout.addWidget(self.table, 1)
 
         footer = QHBoxLayout()
@@ -593,6 +595,7 @@ class ImageSearchDialog(QDialog):
             if pixmap is not None:
                 image_item.setIcon(pixmap)
             self.table.setItem(row, 3, image_item)
+        self._sorter.reapply()
 
     def _open_row(self, row: int, _column: int) -> None:
         item = self.table.item(row, 0)

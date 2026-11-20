@@ -7,6 +7,7 @@
 - 回车键统一分发到当前页 on_return_press（输入框聚焦时不拦截）
 """
 
+import html
 import os
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
@@ -21,6 +22,11 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt import common, theme
 from gui_qt.navigation import line_icon, tool_icon_name
+from gui_qt.page_index import (
+    ALIASES as PAGE_ALIASES, PAGE_CLASSES, PAGE_INDEX, container_tabs,
+    nav_groups as _index_nav_groups, nav_keys, page_meta, page_title,
+    preload_keys, search_aliases,
+)
 from gui_qt.toolbox_common import has_date_subfolders
 from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
@@ -44,64 +50,7 @@ def _brand_icon_pixmap():
     return icon.pixmap(QSize(34, 34))
 
 
-# 页面注册：key -> (模块路径, 类名)。
-# 首页先显示，其余模块随分步预载导入；导航提前点击时立即创建并复用。
-PAGE_CLASSES = {
-    "home": ("gui_qt.pages.home", "HomePage"),
-    "info_accounts": ("gui_qt.pages.info_accounts", "InfoAccountsPage"),
-    "info_results": ("gui_qt.pages.info_results", "InfoResultsPage"),
-    "douyin_index": ("gui_qt.pages.douyin_index", "DouyinIndexPage"),
-    "wechat_article": ("gui_qt.pages.wechat_article", "WechatArticlePage"),
-    "asset": ("gui_qt.pages.asset", "AssetPage"),
-    "toolbox_organize": ("gui_qt.pages.organize", "OrganizePage"),
-    "toolbox_rename": ("gui_qt.pages.rename", "RenamePage"),
-    "toolbox_convert": ("gui_qt.pages.editor", "EditorPage"),
-    "toolbox_editor": ("gui_qt.pages.editor", "EditorPage"),
-    "toolbox_audio": ("gui_qt.pages.audio", "AudioPage"),
-    "toolbox_subtitle": ("gui_qt.pages.subtitle", "SubtitlePage"),
-    "toolbox_launcher": ("gui_qt.pages.launcher", "LauncherPage"),
-    "toolbox_calendar": ("gui_qt.pages.calendar", "CalendarPage"),
-    "toolbox_migrate": ("gui_qt.pages.migrate", "MigratePage"),
-    "music_search_download": ("gui_qt.pages.containers", "MusicSearchDownloadPage"),
-    "music_file_tools": ("gui_qt.pages.music_tag", "MusicTagPage"),
-    "info_tools": ("gui_qt.pages.containers", "InfoToolsPage"),
-    "tracker": ("gui_qt.pages.tracker", "TrackerPage"),
-    "music_tracker": ("gui_qt.pages.music_tracker", "MusicTrackerPage"),
-    "account_registry": ("gui_qt.pages.account_registry", "AccountRegistryPage"),
-    "douyin_danmaku": ("gui_qt.pages.douyin_danmaku", "DouyinDanmakuPage"),
-    "live_record": ("gui_qt.pages.live_record", "LiveRecordPage"),
-    "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
-    "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
-    "weibo_chaohua": ("gui_qt.pages.weibo_chaohua", "WeiboChaohuaPage"),
-    "tcdoc": ("gui_qt.pages.tcdoc", "TcDocPage"),
-    "localwiki": ("gui_qt.pages.localwiki", "LocalWikiPage"),
-    "rename_batch": ("gui_qt.pages.rename_batch", "RenameBatchPage"),
-    "tickets": ("gui_qt.pages.tickets_page", "TicketsPage"),
-    "shopping": ("gui_qt.pages.shopping_page", "ShoppingPage"),
-    "douyin_shop": ("gui_qt.pages.douyin_shop_page", "DouyinShopPage"),
-    "bili_shop": ("gui_qt.pages.bili_shop_page", "BiliShopPage"),
-    "fan_groups": ("gui_qt.pages.fan_groups_page", "FanGroupsPage"),
-    "bili_danmaku": ("gui_qt.pages.bili_danmaku", "BiliDanmakuPage"),
-    "image_crop": ("gui_qt.pages.image_crop", "ImageCropPage"),
-    "cover_maker": ("gui_qt.pages.cover_maker", "CoverMakerPage"),
-    "certificate_maker": ("gui_qt.pages.certificate_maker", "CertificateMakerPage"),
-    "image_sorter": ("gui_qt.pages.image_sorter", "ImageSorterPage"),
-    "global_settings": ("gui_qt.pages.settings", "GlobalSettingsPage"),
-    "livestream_summary": ("gui_qt.pages.livestream_summary", "LivestreamSummaryPage"),
-    "netdisk": ("gui_qt.pages.netdisk", "NetdiskPage"),
-    "tasks": ("gui_qt.pages.tasks", "TasksPage"),
-    "performance": ("gui_qt.pages.performance", "PerformancePage"),
-}
-
-
-PAGE_ALIASES = {
-    "test_page": "douyin_danmaku",
-    # 网盘备份已并入「网盘」页（下载 / 备份两个页签），旧地址统一指向新页
-    "quark_backup": "netdisk",
-    "quark_download": "netdisk",
-    # 备份与恢复已收起为全局设置里的面板，旧地址指向全局设置
-    "backup_center": "global_settings",
-}
+# 页面注册（名称、分组、类路径、别名）见 gui_qt.page_index；这里不再维护副本。
 
 
 def _resolve_page_key(key):
@@ -115,63 +64,11 @@ def _page_class(key):
     mod_name, cls_name = PAGE_CLASSES[key]
     return getattr(importlib.import_module(mod_name), cls_name)
 
-NAV_GROUPS = [
-    ("内容采集", [
-        ("info_accounts", "信息获取"),
-        ("info_results", "已获取"),
-        ("info_tools", "信息工具"),
-    ]),
-    ("资产管理", [
-        ("asset", "资产管理"),
-        ("netdisk", "网盘"),
-    ]),
-    ("录播工具箱", [
-        ("toolbox_organize", "自动整理"),
-        ("toolbox_editor", "视频操作"),
-        ("toolbox_rename", "交互重命名 / 投稿"),
-        ("toolbox_audio", "音频提取"),
-        ("toolbox_subtitle", "字幕转换"),
-        ("toolbox_launcher", "继续操作"),
-        ("toolbox_calendar", "日历浏览"),
-        ("toolbox_migrate", "文件迁移"),
-    ]),
-    ("账户追踪", [
-        ("music_tracker", "音乐账号追踪"),
-        ("tracker", "网媒账号追踪"),
-        ("douyin_index", "抖音指数"),
-        ("tcdoc", "腾讯文档监控"),
-        ("weibo_chaohua", "微博超话"),
-        ("fan_groups", "粉丝群查询"),
-    ]),
-    ("票务购物", [
-        ("tickets", "票务解析"),
-        ("shopping", "购物解析"),
-        ("douyin_shop", "抖音商品"),
-        ("bili_shop", "B站小店"),
-    ]),
-    ("音乐工具", [
-        ("music_search_download", "音乐搜索下载"),
-        ("music_file_tools", "音乐标签"),
-    ]),
-    ("直播录制", [
-        # 直播录制与弹幕姬都内嵌在这一页（页签切换），侧栏只占一个入口
-        ("live_record", "直播录制"),
-    ]),
-    ("本地工具", [
-        ("localwiki", "本地资料站"),
-        ("livestream_summary", "直播总结"),
-        ("image_crop", "图片裁切"),
-        ("cover_maker", "套版封面制作"),
-        ("certificate_maker", "证书生成器"),
-        ("image_sorter", "媒体筛选分类"),
-        ("rename_batch", "批量重命名"),
-    ]),
-    ("全局", [
-        ("tasks", "定时任务"),
-        ("global_settings", "全局设置"),
-        ("performance", "性能诊断"),
-    ]),
-]
+# 侧栏分组与顺序来自 page_index.NAV_LAYOUT，条目标题查 PAGE_INDEX
+NAV_GROUPS = _index_nav_groups()
+
+# 侧栏条目改短名后，搜索仍按旧叫法命中（只参与匹配，不显示）
+NAV_SEARCH_ALIASES = search_aliases()
 
 # Cookie 管理平台列表取自 gui_qt.cookie_manager.COOKIE_PLATFORMS（单一事实来源），
 # 这里不再复制一份：以前两处各写一遍，新增平台时计数口径会悄悄对不上。
@@ -180,8 +77,8 @@ NAV_GROUPS = [
 _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 import 全部控件类型）
 
 _EXTRA_TOOLS = {
-    "wechat_article": "公众号解析",
-    "bili_resource": "B站资源", "video_comments": "视频评论区",
+    key: PAGE_INDEX[key].title for key in container_tabs("info_tools")
+    if key not in nav_keys()
 }
 
 _SHELL_QSS = """
@@ -201,8 +98,7 @@ QPushButton#workbenchNavButton:hover { background: palette(alternate-base); colo
 QPushButton#workbenchNavButton:checked { background: palette(midlight); color: palette(link); border-color: palette(midlight); font-weight: bold; }
 QPushButton#workbenchNavButton:focus { border-color: palette(highlight); }
 QFrame#workbenchTopbar { background: palette(base); border: none; border-bottom: 1px solid palette(shadow); }
-QLabel#workbenchContext { color: palette(placeholder-text); background: transparent; font-size: 11px; }
-QLabel#workbenchPageTitle { color: palette(text); background: transparent; font-size: 14px; font-weight: bold; }
+QLabel#workbenchBreadcrumb { background: transparent; }
 QPushButton#workbenchDirectory { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 0; }
 QPushButton#workbenchDirectory:hover { background: palette(alternate-base); border-color: palette(shadow); }
 QFrame#workbenchTopbarDivider { background: palette(shadow); border: none; }
@@ -258,16 +154,12 @@ class MainWindow(QMainWindow):
         self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
         self.page_lifecycle = PageLifecycleManager(self)
-        self.page_preloader = PagePreloader(
-            self, [key for key in PAGE_CLASSES
-                   if key != "toolbox_convert" and key not in _EXTRA_TOOLS])
+        self.page_preloader = PagePreloader(self, preload_keys(PAGE_CLASSES))
         self.nav_buttons = {}
         self._search_buttons = {}
-        self._tool_names = {"home": ("工作台", "总览")}
-        for group_title, items in NAV_GROUPS:
-            for key, title in items:
-                self._tool_names[key] = (title, group_title)
-        self._tool_names.update({key: (title, "信息工具") for key, title in _EXTRA_TOOLS.items()})
+        self._tool_names = {
+            key: (meta.title, meta.group) for key, meta in PAGE_INDEX.items()
+        }
         self.current_page = None
 
         central = QWidget()
@@ -516,12 +408,12 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(bar)
         row.setContentsMargins(24, 0, 8, 0)
         row.setSpacing(4)
-        self.context_label = QLabel("总览  / ")
-        self.context_label.setObjectName("workbenchContext")
-        row.addWidget(self.context_label)
-        self.page_title_label = QLabel("工作台")
-        self.page_title_label.setObjectName("workbenchPageTitle")
-        row.addWidget(self.page_title_label)
+        # 面包屑用单个富文本 QLabel：分组名与页面名共享一条基线，
+        # 两个独立 QLabel 各自垂直居中时字号不同会错开 1–3px。
+        self.breadcrumb_label = QLabel()
+        self.breadcrumb_label.setObjectName("workbenchBreadcrumb")
+        self.breadcrumb_label.setTextFormat(Qt.RichText)
+        row.addWidget(self.breadcrumb_label)
         row.addStretch(1)
         # 工作目录只留图标入口（路径进 tooltip），原来「工作目录 xxx」那行文字
         # 让位给窗口控制按钮；点击仍直达全局设置里的目录管理。
@@ -558,7 +450,7 @@ class MainWindow(QMainWindow):
         return button
 
     def _build_nav(self, nav_layout):
-        self.home_btn = self._make_nav_button("home", "工作台")
+        self.home_btn = self._make_nav_button("home", page_title("home"))
         self.home_btn.clicked.connect(lambda: self.show_page("home"))
         nav_layout.addWidget(self.home_btn)
         bottom_buttons = []
@@ -572,7 +464,7 @@ class MainWindow(QMainWindow):
                 btn = self._make_nav_button(key, item_title)
                 if is_bottom:
                     btn.setObjectName("workbenchFooter")
-                    btn.setText({"tasks": "任务", "global_settings": "设置", "performance": "性能"}[key])
+                    btn.setText(page_meta(key).footer_label or item_title)
                     btn.setFixedHeight(34)
                     bottom_buttons.append(btn)
                 else:
@@ -618,7 +510,8 @@ class MainWindow(QMainWindow):
         matched = 0
         for key, button in self._search_buttons.items():
             title, group = self._tool_names.get(key, (key, ""))
-            visible = query in f"{title} {group} {key}".casefold()
+            alias = NAV_SEARCH_ALIASES.get(key, "")
+            visible = query in f"{title} {group} {key} {alias}".casefold()
             button.setVisible(visible)
             matched += visible
         self.search_empty.setVisible(bool(query) and not matched)
@@ -644,16 +537,43 @@ class MainWindow(QMainWindow):
     def _update_page_context(self, *_args):
         key = self.current_page
         page = self.pages.get(key)
-        if key == "info_tools" and hasattr(page, "TAB_KEYS"):
+        meta = page_meta(key)
+        if getattr(page, "TAB_KEYS", None) and hasattr(page, "tabs"):
+            # 三级：分组 / 页面名 / 容器内页签
+            parts = [meta.group, meta.title]
             index = page.tabs.currentIndex()
-            if 0 <= index < len(page.TAB_KEYS):
-                key = page.TAB_KEYS[index]
-        title, group = self._tool_names.get(key, (key or "工作台", "总览"))
-        self.context_label.setText(f"{group}  / ")
-        self.page_title_label.setText(title)
+            tab_keys = list(page.TAB_KEYS)
+            if 0 <= index < len(tab_keys):
+                key = tab_keys[index]
+                parts.append(page.tabs.tabText(index))
+        else:
+            title, group = self._tool_names.get(
+                key, (key or page_meta("home").title, page_meta("home").group))
+            parts = [group, title]
+        self._render_breadcrumb(parts)
         for search_key, button in self._search_buttons.items():
             button.setChecked(search_key == key)
         self._sync_shell_icons()
+
+    def _render_breadcrumb(self, parts):
+        """面包屑：一级分组 / 二级页面名 / 三级容器内页签，同一段富文本共享基线。"""
+        parts = [str(part) for part in parts if str(part or "").strip()]
+        if not parts:
+            parts = [page_meta("home").group, page_meta("home").title]
+        palette = theme.current_palette()
+        group_color = palette.color(QPalette.PlaceholderText).name()
+        title_color = palette.color(QPalette.Text).name()
+        prefix = "&nbsp;&nbsp;/&nbsp;&nbsp;".join(
+            f'<span style="color:{group_color};font-size:11px;">'
+            f'{html.escape(part)}</span>'
+            for part in parts[:-1])
+        if prefix:
+            prefix += "&nbsp;&nbsp;/&nbsp;&nbsp;"
+        self.breadcrumb_label.setText(
+            prefix
+            + f'<span style="color:{title_color};font-size:14px;font-weight:700;">'
+              f'{html.escape(parts[-1])}</span>')
+        self.breadcrumb_label.setToolTip(" / ".join(parts))
 
     def _sync_shell_icons(self):
         palette = theme.current_palette()
@@ -720,6 +640,7 @@ class MainWindow(QMainWindow):
         内容色需页面自行重建）；未激活页记入 _theme_dirty，切回时在 show_page 补通知，
         避免一次切换唤醒全部已加载页面的重建逻辑。"""
         self._sync_shell_icons()
+        self._update_page_context()  # 面包屑颜色取自调色板，换主题后要重画
         current_page = self.pages.get(self.current_page)
         for key, page in self.pages.items():
             if page is None:
@@ -905,7 +826,7 @@ class MainWindow(QMainWindow):
                 self.page_lifecycle.states.pop(key, None)
             self.stack.addWidget(page)
             self.pages[key] = page
-            if key == "info_tools" and hasattr(page, "tabs"):
+            if getattr(page, "TAB_KEYS", None) and hasattr(page, "tabs"):
                 page.tabs.currentChanged.connect(self._update_page_context)
             # 功能型复选框：点击时右下角 toast「已开启/已关闭 XXX」
             common.bind_checkbox_toasts(page)

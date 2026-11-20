@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from platforms import douyin_shop as ds
@@ -110,6 +111,8 @@ class DouyinShopPage(BasePage):
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.itemSelectionChanged.connect(self._on_select)
+        # 表头排序：与 self._products 同步重排，currentRow 仍能反查商品
+        self._sorter = table_sort.install(self.table, skip_columns=())
         lv.addWidget(self.table, 1)
         splitter.addWidget(left)
 
@@ -160,6 +163,17 @@ class DouyinShopPage(BasePage):
         lb = QLabel(text)
         lb.setStyleSheet("font-weight: bold;")
         return lb
+
+    # ---------- 合并页接口 ----------
+    def embed_input(self):
+        """被「购物解析」合并页接管输入时调用：收起自带的输入框与解析按钮。"""
+        self.input_edit.hide()
+        self.parse_btn.hide()
+
+    def submit_text(self, text: str):
+        """合并页识别出抖音商城链接后调用：走原有解析流程（支持多行）。"""
+        self.input_edit.setPlainText(text or "")
+        self._do_parse()
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
@@ -226,16 +240,22 @@ class DouyinShopPage(BasePage):
         run_bg(work, done)
 
     def _fill_table(self):
+        self._sorter.attach(self._products)
         self.table.setRowCount(len(self._products))
         for r, p in enumerate(self._products):
             it = QTableWidgetItem(p.title)
             it.setToolTip(p.title)
             self.table.setItem(r, 0, it)
-            self.table.setItem(r, 1, _center(p.price_text))
+            price_item = _center(p.price_text)
+            if p.min_price > 0 or p.max_price > 0:  # 「¥9.90 ~ ¥19.90」→ 数值排序键
+                price_item.setData(table_sort.SORT_KEY_ROLE,
+                                   min(p.min_price, p.max_price))
+            self.table.setItem(r, 1, price_item)
             self.table.setItem(r, 2, _center(p.sales))
             self.table.setItem(r, 3, _center(p.product_id or "-"))
             self.table.setItem(r, 4, _center(p.shop_id or "-"))
         self.export_btn.setEnabled(bool(self._products))
+        self._sorter.apply()
 
     # ---------- 选中行 → 详情 ----------
     def _on_select(self):

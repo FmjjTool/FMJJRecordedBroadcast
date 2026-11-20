@@ -170,6 +170,18 @@ class ShoppingPage(BasePage):
         else:
             self._parse_shop(url)
 
+    # ==================== 合并页接口 ====================
+
+    def embed_input(self):
+        """被「购物解析」合并页接管输入时调用：收起自带的输入框与解析按钮。"""
+        self.url_entry.hide()
+        self.parse_btn.hide()
+
+    def submit_text(self, text: str):
+        """合并页识别出淘宝链接后调用：走原有解析流程。"""
+        self.url_entry.setText((text or "").strip() or self.DEFAULT_SHOP_URL)
+        self._parse()
+
     def _log(self, msg):
         def apply():
             self.status_label.setText(f"{msg}")

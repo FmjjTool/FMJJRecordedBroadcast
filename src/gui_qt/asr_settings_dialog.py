@@ -19,7 +19,7 @@ from toolbox.asr_engine import (
 from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size
 
-from gui_qt import theme
+from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main
 
 # 安装入口固定文案：依赖安装只在全局设置，页面不放安装控件（约定 11）
@@ -87,6 +87,8 @@ class AsrSettingsDialog(QDialog):
         self.table.setColumnWidth(0, 220)
         self.table.setColumnWidth(1, 90)
         self.table.setColumnWidth(2, 90)
+        # 第 4 列是「删除」按钮，跳过不排序
+        self._sorter = table_sort.install(self.table, skip_columns=(3,))
         root.addWidget(self.table, 1)
 
         self.hint = QLabel(
@@ -156,6 +158,7 @@ class AsrSettingsDialog(QDialog):
                 cell_row.addWidget(QLabel("—"))
             cell_row.addStretch(1)
             self.table.setCellWidget(row, 3, cell)
+        self._sorter.reapply()
         self._apply_busy()
 
     def _apply_busy(self):

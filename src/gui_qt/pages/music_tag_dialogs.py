@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from music import tag_history, tag_search, tags_io
 
@@ -62,6 +63,7 @@ def _table(headers: list[str]) -> QTableWidget:
     t.setSelectionMode(QAbstractItemView.SingleSelection)
     t.verticalHeader().setVisible(False)
     t.horizontalHeader().setStretchLastSection(True)
+    table_sort.install(t, skip_columns=())
     return t
 
 
@@ -170,6 +172,8 @@ class AutoMatchDialog(QDialog):
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # 第 2/3 列是下拉框/勾选框，跳过不排序
+        table_sort.install(table, skip_columns=(1, 2))
         self.field_modes: dict[str, QComboBox] = {}
         self.field_overwrite: dict[str, QCheckBox] = {}
         modes = {
@@ -533,6 +537,7 @@ class CombinedSearchDialog(QDialog):
                 _fill_row(self.table, i, [
                     cand.source_name, cand.title, cand.artist, cand.album,
                     cand.year, cand.track_label, str(cand.disc or ""), cand.genre])
+            table_sort.install(self.table).attach(self.candidates).reapply()
             self.info.setText(f"共 {len(self.candidates)} 个候选（双击套用）")
 
         run_bg(job, done)
@@ -728,6 +733,7 @@ class CoverSearchDialog(QDialog):
                 self.table.insertRow(i)
                 _fill_row(self.table, i, [cand.source_name, cand.title, cand.artist,
                                           cand.album, "有"])
+            table_sort.install(self.table).attach(self.candidates).reapply()
             self.info.setText(f"共 {len(self.candidates)} 个封面候选")
 
         run_bg(job, done)
@@ -886,6 +892,7 @@ class LyricSearchDialog(QDialog):
                 self.table.insertRow(i)
                 _fill_row(self.table, i, [cand.source_name, cand.title, cand.artist,
                                           cand.album, tag_search.format_duration(cand.duration)])
+            table_sort.install(self.table).attach(self.candidates).reapply()
             if not self.candidates:
                 failed = [f"{tag_search.SOURCE_NAMES.get(k, k)}：{v}"
                           for k, v in self._errors.items()]
@@ -1029,6 +1036,7 @@ class BatchRenameDialog(QDialog):
             _fill_row(self.table, i, [old, new, status])
             if status == "待改名":
                 self.renames.append((row["path"], new))
+        table_sort.install(self.table).reapply()
         self.info.setText(f"可改名 {len(self.renames)} / {len(self.rows)} 个文件")
 
     def _apply(self):
@@ -1426,6 +1434,7 @@ class HistoryDialog(QDialog):
             _fill_row(self.table, i, [when, rec.get("title", ""), rec.get("artist", ""),
                                       rec.get("album", ""), rec.get("year", ""),
                                       rec.get("track", ""), rec.get("disc", "")])
+        table_sort.install(self.table).attach(self.records).reapply()
 
     def _detail(self):
         rows = self.table.selectionModel().selectedRows()

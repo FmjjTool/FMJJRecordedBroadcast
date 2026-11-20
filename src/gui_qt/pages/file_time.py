@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout,
 )
 
+from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 
@@ -118,6 +119,8 @@ class FileTimePage(BasePage):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        # 行号 == self.files 下标：_scope() 用选中行反查文件，排序时必须同步重排列表
+        self._sorter = table_sort.install(self.table, skip_columns=())
         layout.addWidget(self.table, 1)
 
         # 模式区
@@ -179,13 +182,17 @@ class FileTimePage(BasePage):
     def _render(self):
         self.cnt.setText(f"{len(self.files)} 个文件")
         self.table.setRowCount(0)
-        for i, f in enumerate(self.files[:1000]):
+        shown = self.files[:1000]        # 表格只显示前 1000 个文件
+        for i, f in enumerate(shown):
             self.table.insertRow(i)
             st = os.stat(f)
             self.table.setItem(i, 0, QTableWidgetItem(os.path.basename(f)))
             self.table.setItem(i, 1, QTableWidgetItem(datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")))
             self.table.setItem(i, 2, QTableWidgetItem(datetime.fromtimestamp(st.st_ctime).strftime("%Y-%m-%d %H:%M:%S")))
             self.table.setItem(i, 5, QTableWidgetItem(""))
+        # 只重排显示段：排序后把这一段写回 self.files，选中行反查仍然对得上
+        self._sorter.attach(shown).apply()
+        self.files[:len(shown)] = shown
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():

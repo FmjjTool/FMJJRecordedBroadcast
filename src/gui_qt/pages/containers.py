@@ -9,6 +9,7 @@
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from gui_qt.pages.base import BasePage
+from gui_qt.pages.netease import NeteasePage
 
 
 class TabbedPage(BasePage):
@@ -176,13 +177,14 @@ class InfoToolsPage(TabbedPage):
     ]
 
     def __init__(self, app):
+        from gui_qt.page_index import page_meta
         from gui_qt.pages.bili_resource import BiliResourcePage
         from gui_qt.pages.video_comments import VideoCommentsPage
         from gui_qt.pages.wechat_article import WechatArticlePage
         super().__init__(app, [
-            ("视频评论区", VideoCommentsPage),
-            ("B站资源", BiliResourcePage),
-            ("公众号解析", WechatArticlePage),
+            (page_meta("video_comments").title, VideoCommentsPage),
+            (page_meta("bili_resource").title, BiliResourcePage),
+            (page_meta("wechat_article").title, WechatArticlePage),
         ], lazy=True)
         self._tab_index = {key: i for i, key in enumerate(self.TAB_KEYS)}
 
@@ -193,13 +195,9 @@ class InfoToolsPage(TabbedPage):
             self.tabs.setCurrentIndex(index)
 
 
-class MusicSearchDownloadPage(TabbedPage):
-    """音乐搜索与下载：五平台信息对比 + 多平台下载。"""
+class MusicSearchDownloadPage(NeteasePage):
+    """音乐搜索下载：单页统一入口。
 
-    def __init__(self, app):
-        from gui_qt.pages.music_info import MusicInfoPage
-        from gui_qt.pages.netease import NeteasePage
-        super().__init__(app, [
-            ("音乐信息获取", MusicInfoPage),
-            ("音乐下载", NeteasePage),
-        ], lazy=True)
+    「音乐信息获取」与「音乐下载」已合并为一页：平台下拉里的「五平台对比」
+    把五个平台的结果并进同一张表，勾选后直接下载或导出，不再分两个页签。
+    """

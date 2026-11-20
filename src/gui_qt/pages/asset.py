@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWidgets import QLayout
 
-from gui_qt import common, theme
+from gui_qt import common, table_sort, theme
 from gui_qt.common import _fmt, icon_button, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
@@ -587,6 +587,8 @@ class AssetPage(BasePage):
         self._db_total = 0              # 数据库浏览总条数
         self._db_rows = []              # 当前页原始行（含 dedup_key）
         self._db_filling = False        # 数据库表填充中（抑制勾选计数刷新）
+        self._db_sort_col = -1           # 数据库浏览当前排序列（-1 = 默认按入库倒序）
+        self._db_sort_asc = True        # 数据库浏览当前排序方向
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 0)
@@ -2601,6 +2603,8 @@ class AssetPage(BasePage):
                 fw.setItem(r, c, it)
         fw.doubleClicked.connect(
             lambda idx, fl=files: self._open_media(fl[idx.row()]["path"]))
+        # 表头点击排序：行号与 files 一一对应，走记录模式
+        table_sort.install(fw, rows=files)
         tabs.addTab(fw, f"文件（{len(files)}）")
         body.addWidget(tabs, 1)
         outer.addLayout(body, 1)
@@ -3889,6 +3893,10 @@ class AssetPage(BasePage):
     _DB_PAGE_SIZE = 200
     _DB_HEADERS = ["", "获取时间", "类型", "标题", "作者", "发布时间", "播放/阅览",
                    "点赞", "评论", "链接"]
+    # 表头列 → 数据库列（排序在 SQL 里做，翻页后顺序仍正确）
+    _DB_SORT_FIELDS = {1: "fetched_at", 2: "kind", 3: "title", 4: "author",
+                       5: "publish_time", 6: "play_count", 7: "like_count",
+                       8: "comment_count", 9: "video_url"}
 
     def _build_db_tab(self) -> QWidget:
         f = QWidget()
@@ -3963,6 +3971,9 @@ class AssetPage(BasePage):
         self.db_table.setColumnWidth(0, 34)
         for col, width in ((1, 130), (2, 56), (4, 110), (5, 130), (6, 80), (7, 56), (8, 56)):
             self.db_table.setColumnWidth(col, width)
+        # 表头点击排序（SQL 层排序，跨页生效）
+        self._db_sorter = table_sort.install_callback(
+            self.db_table, self._db_on_sort, skip_columns={0})
         v.addWidget(self.db_table, 1)
         pager = QHBoxLayout()
         pager.setSpacing(8)
@@ -3972,6 +3983,12 @@ class AssetPage(BasePage):
         pager.addWidget(self.db_page_lbl, 1)
         v.addLayout(pager)
         return f
+
+    def _db_on_sort(self, col: int, ascending: bool):
+        """点击表头 → 换排序字段/方向，回到第一页重新查询。"""
+        self._db_sort_col, self._db_sort_asc = col, ascending
+        self._db_page = 1
+        self._db_reload()
 
     def _db_turn(self, delta: int):
         pages = max(1, -(-self._db_total // self._DB_PAGE_SIZE))
@@ -4013,7 +4030,7 @@ class AssetPage(BasePage):
                 self.db_author_sel.addItems(["全部作者"])
                 self.db_author_sel.blockSignals(False)
                 self.db_page_lbl.setText(
-                    "暂无数据 · 请在「信息获取」页开启「增量模式」并点「获取最新」")
+                    "暂无数据 · 请在「采集任务」页开启「增量模式」并点「获取最新」")
                 return
             self._db_reload_authors()
 
@@ -4031,7 +4048,10 @@ class AssetPage(BasePage):
             from toolbox import increment_db
             kw = self.db_search.text().strip()
             offset = (self._db_page - 1) * self._DB_PAGE_SIZE
-            return increment_db.query_rows(plat, kw, author, self._DB_PAGE_SIZE, offset)
+            return increment_db.query_rows(
+                plat, kw, author, self._DB_PAGE_SIZE, offset,
+                order_by=self._DB_SORT_FIELDS.get(self._db_sort_col, ""),
+                ascending=self._db_sort_asc)
 
         def done(result, err):
             if err:
@@ -4069,7 +4089,7 @@ class AssetPage(BasePage):
             label = plat if not author else f"{plat} · 作者「{author}」"
             self.db_page_lbl.setText(
                 f"{label} · 共 {total} 条 · 第 {self._db_page}/{pages} 页 · "
-                f"点击作者筛选，双击查看详情，右键更多")
+                f"点击表头排序，点击作者筛选，双击查看详情，右键更多")
 
         run_bg(work, done)
 

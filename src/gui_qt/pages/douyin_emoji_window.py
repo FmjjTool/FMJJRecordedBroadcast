@@ -111,7 +111,7 @@ class DouyinEmojiWindow(QDialog):
         outer.setSpacing(8)
 
         tip = QLabel("会员表情不在官方表情库里，只会随聊天消息下发——这里收集「实际收到过」的表情图。"
-                     "直播间来源跟随弹幕姬页的连接（不额外开第二条 WS）。")
+                     "直播间来源跟随弹幕姬的连接（不额外开第二条 WS）。")
         tip.setWordWrap(True)
         tip.setProperty("role", "caption")
         outer.addWidget(tip)
@@ -185,7 +185,7 @@ class DouyinEmojiWindow(QDialog):
         v.setSpacing(6)
         row = QHBoxLayout()
         self.vip_room = QLineEdit()
-        self.vip_room.setPlaceholderText("直播间号（留空则用弹幕姬页当前房间）")
+        self.vip_room.setPlaceholderText("直播间号（留空则用弹幕姬当前房间）")
         row.addWidget(self.vip_room, 1)
         self.vip_btn = QPushButton("一键拉取全部")
         self.vip_btn.clicked.connect(self._fetch_vip)
@@ -262,7 +262,7 @@ class DouyinEmojiWindow(QDialog):
         self.pause_btn.toggled.connect(self._on_pause)
         row.addWidget(self.pause_btn)
         v.addLayout(row)
-        hint = QLabel("先在弹幕姬页连接直播间；连上后本窗口自动收集聊天里的表情图"
+        hint = QLabel("先在弹幕姬连接直播间；连上后本窗口自动收集聊天里的表情图"
                       "（会员/粉丝团/合并表情都会收进来），下播或断开即停止。")
         hint.setWordWrap(True)
         hint.setProperty("role", "caption")
