@@ -182,7 +182,7 @@ class EditorPage(BasePage):
         left = QVBoxLayout()
         left.setSpacing(4)
         row1 = QHBoxLayout()
-        row1.addWidget(self._btn("扫描工作目录", self._scan_work_dir))
+        row1.addWidget(self._btn("刷新", self._refresh_folders))
         row1.addWidget(self._btn("添加文件", self._add_files))
         row1.addWidget(self._btn("添加文件夹", self._add_folder))
         left.addLayout(row1)
@@ -462,6 +462,17 @@ class EditorPage(BasePage):
         if reload_files:
             self._load_folder(target)
 
+    def _refresh_folders(self):
+        """刷新：重扫日期文件夹并重新载入当前文件夹的视频。"""
+        if self.running:
+            return
+        _root, choices = self._folder_choices()
+        if not choices:
+            self._scan_work_dir()   # 没有日期文件夹：按工作目录递归刷新
+            return
+        self._sync_folders()
+        self._log("已刷新日期文件夹与视频列表")
+
     def _folder_of_path(self, path, choices):
         """当前文件属于哪个日期文件夹；不在日期文件夹内返回空串。"""
         if not path:
@@ -545,7 +556,7 @@ class EditorPage(BasePage):
             self.add_dropped_files(files)
 
     def _scan_work_dir(self):
-        """手动兜底：递归扫描全局工作目录（日期文件夹内已自动载入，一般用不到）。"""
+        """兜底：递归扫描全局工作目录（无日期文件夹时由「刷新」和进入页面调用）。"""
         root = self._work_dir_start()
         found = [str(p) for p in find_videos_in(root)]
         if not found:
