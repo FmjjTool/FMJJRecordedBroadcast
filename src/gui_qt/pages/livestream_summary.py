@@ -44,6 +44,7 @@ class LivestreamSummaryPage(BasePage):
         self._source: Path | None = None
         self._result_text = ""
         self._icons: list[tuple[QWidget, str, str]] = []
+        self._local_ready = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -214,8 +215,9 @@ class LivestreamSummaryPage(BasePage):
 
     def _build_local_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
-            "本机模型（Ollama）",
-            "自动检测本机服务与已安装模型；未安装时只给下载入口，不会静默安装。",
+            "本机模型（可选）",
+            "在本机跑模型只是可选项：不装也能用——在下方「总结方式」里选云接口（填 Key），"
+            "或直接用本地规则。未安装时这里只给下载入口，不会静默安装。",
             icon="chip")
         self._register_icon(card, "chip", "title")
 
@@ -300,6 +302,13 @@ class LivestreamSummaryPage(BasePage):
         self.install_command.setProperty("role", "caption")
         self.install_command.setWordWrap(True)
         card.content_layout.addWidget(self.install_command)
+
+        self.local_muted_hint = QLabel(
+            "未检测到本机模型不影响使用：云接口与本地规则都不需要 Ollama。")
+        self.local_muted_hint.setProperty("role", "caption")
+        self.local_muted_hint.setWordWrap(True)
+        card.content_layout.addWidget(self.local_muted_hint)
+        self._set_local_ready(False)
         return card
 
     def _build_model_card(self) -> ToolSectionCard:
@@ -439,6 +448,18 @@ class LivestreamSummaryPage(BasePage):
 
     # ==================== 本机模型 ====================
 
+    def _set_local_ready(self, ready: bool):
+        """未检测到本机服务时弱化模型选择与下载控件，只保留检测/下载入口。"""
+        self._local_ready = bool(ready)
+        self.local_models_combo.setEnabled(self._local_ready)
+        self.recommend_combo.setEnabled(self._local_ready)
+        self.pull_btn.setEnabled(self._local_ready)
+        if not self._local_ready:
+            self.pull_stop_btn.setEnabled(False)
+        self.install_command.setVisible(not self._local_ready)
+        self.local_muted_hint.setVisible(not self._local_ready)
+        self._sync_local_actions()
+
     def _detect_local(self):
         self.local_status.setText("检测中…")
         self.local_detect_btn.setEnabled(False)
@@ -454,17 +475,18 @@ class LivestreamSummaryPage(BasePage):
                 self.local_status.setText("检测失败")
                 self.local_models_combo.clear()
                 self.local_models_combo.addItem("检测失败，请确认 Ollama 已启动", None)
-                self._sync_local_actions()
+                self._set_local_ready(False)
                 self._append_log(f"本机模型检测失败：{err}")
                 return
             if not result["running"]:
-                self.local_status.setText("Ollama 未运行 / 未安装")
+                self.local_status.setText("未运行 / 未安装（不影响使用）")
                 self.local_models_combo.clear()
                 self.local_models_combo.addItem("未检测到 Ollama", None)
-                self._sync_local_actions()
+                self._set_local_ready(False)
                 return
             models = result["models"]
             self.local_status.setText(f"Ollama 已运行 · {len(models)} 个模型")
+            self._set_local_ready(True)
             self.local_models_combo.clear()
             if models:
                 for item in models:
@@ -478,7 +500,7 @@ class LivestreamSummaryPage(BasePage):
         run_bg(work, done, owner=self)
 
     def _sync_local_actions(self, *_args):
-        has_model = bool(self.local_models_combo.currentData())
+        has_model = bool(self.local_models_combo.currentData()) and self._local_ready
         self.use_local_btn.setEnabled(has_model)
         self.delete_local_btn.setEnabled(has_model)
 
@@ -569,7 +591,7 @@ class LivestreamSummaryPage(BasePage):
             return name
 
         def done(result, err):
-            self.pull_btn.setEnabled(True)
+            self.pull_btn.setEnabled(self._local_ready)
             self.pull_stop_btn.setEnabled(False)
             self.pull_progress.setVisible(False)
             self._pull_cancel = None
