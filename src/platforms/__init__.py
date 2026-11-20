@@ -4,6 +4,7 @@
 
 from .base import PlatformBase, URLRecognizer
 from .bilibili import BilibiliParser
+from .acfun import AcfunPlatform
 from .douyin import DouyinParser
 from .weibo import WeiboParser
 from .kuaishou import KuaishouParser
@@ -12,6 +13,7 @@ from .xiaohongshu import XiaohongshuParser
 # 注册所有解析器
 PARSERS = {
     "bilibili": BilibiliParser(),
+    "acfun": AcfunPlatform(),
     "douyin": DouyinParser(),
     "weibo": WeiboParser(),
     "kuaishou": KuaishouParser(),

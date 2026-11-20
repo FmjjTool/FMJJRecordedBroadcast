@@ -24,6 +24,20 @@ _KIND_OPTIONS = (("自动", ""), ("作品", "video"), ("动态", "dynamic"), ("�
 _SEARCH_PLATFORMS = (("网易云", "netease"), ("QQ音乐", "qq"), ("酷狗", "kugou"), ("酷我", "kuwo"))
 
 
+def _mark_unavailable(box: QCheckBox) -> None:
+    """该平台用不了的勾选项：红字 + 红框，深色主题里也能一眼看出是禁用态。"""
+    danger = theme.color("danger")
+    box.setStyleSheet(
+        f"QCheckBox {{ color: {danger}; }}"
+        f"QCheckBox::indicator {{ border: 1px solid {danger}; background: transparent;"
+        f" border-radius: 3px; }}"
+    )
+
+
+def _clear_unavailable(box: QCheckBox) -> None:
+    box.setStyleSheet("")
+
+
 class AccountCenterWidget(QWidget):
     changed = Signal()
 
@@ -33,6 +47,8 @@ class AccountCenterWidget(QWidget):
         self._building = False
         self._groups: dict[str, str] = {}
         self._accounts: list[dict] = []
+        self._live_edits: dict[str, QLineEdit] = {}
+        self._live_boxes: dict[str, QCheckBox] = {}
         self._build()
         self.reload()
 
@@ -131,8 +147,12 @@ class AccountCenterWidget(QWidget):
         row3.addWidget(QLabel("可用于:"))
         self.add_module_boxes: dict[str, QCheckBox] = {}
         for module in registry.MODULES:
+            if module == "live":
+                # 直播录制要先有直播间号，统一在下面列表里勾选，添加卡片不放
+                continue
             box = QCheckBox(registry.MODULE_NAMES[module])
             box.setEnabled(False)
+            _mark_unavailable(box)
             row3.addWidget(box)
             self.add_module_boxes[module] = box
         row3.addSpacing(10)
@@ -263,6 +283,8 @@ class AccountCenterWidget(QWidget):
             self.group_layout.addStretch(1)
 
     def _reload_accounts(self):
+        self._live_edits.clear()
+        self._live_boxes.clear()
         video = [a for a in self._accounts if a["platform"] not in registry.MUSIC_PLATFORMS]
         music = [a for a in self._accounts if a["platform"] in registry.MUSIC_PLATFORMS]
         self.acc_tabs.setTabText(0, f"视频账号 {len(video)}")
@@ -340,12 +362,15 @@ class AccountCenterWidget(QWidget):
         opts.setSpacing(6)
         opts.addWidget(QLabel("可用于:"))
         for module in registry.MODULES:
+            if module == "live":
+                continue  # 单独放在后面：要先填直播间号
             box = QCheckBox(registry.MODULE_NAMES[module])
             allowed = module in account["allowed"]
             box.setChecked(module in account["modules"])
             box.setEnabled(allowed)
             if not allowed:
                 box.setToolTip(f"{account['platform_name']}账号不适用该功能")
+                _mark_unavailable(box)
             box.toggled.connect(
                 lambda checked, aid=account["id"], m=module: self._toggle_module(aid, m, checked))
             opts.addWidget(box)
@@ -379,6 +404,28 @@ class AccountCenterWidget(QWidget):
                 lambda _i, aid=account["id"], combo=kind_combo: self._change_kind(aid, combo))
             opts.addWidget(kind_combo)
 
+        if "live" in account["allowed"]:
+            opts.addSpacing(8)
+            opts.addWidget(QLabel("直播:"))
+            live_edit = QLineEdit()
+            live_edit.setPlaceholderText("直播间号")
+            live_edit.setFixedWidth(120)
+            live_edit.setText((account["modules"].get("live") or {}).get("room", ""))
+            live_edit.setToolTip("该账号的直播间号（抖音/快手等需手填；B站填直播间号）")
+            live_edit.editingFinished.connect(
+                lambda aid=account["id"]: self._live_room_edited(aid))
+            opts.addWidget(live_edit)
+            self._live_edits[account["id"]] = live_edit
+            live_box = QCheckBox("用于直播录制")
+            live_box.setChecked("live" in account["modules"])
+            live_box.setToolTip(
+                "勾选后把该直播间加入「直播录制」主播列表（只加一条主播，"
+                "清晰度/分段等录制设置仍在录制页里调）；取消勾选即移除主播，录制文件保留")
+            live_box.toggled.connect(
+                lambda checked, aid=account["id"]: self._toggle_live(aid, checked))
+            opts.addWidget(live_box)
+            self._live_boxes[account["id"]] = live_box
+
         opts.addStretch(1)
         v.addLayout(opts)
         return row
@@ -408,6 +455,12 @@ class AccountCenterWidget(QWidget):
         for module, box in self.add_module_boxes.items():
             usable = module in allowed
             box.setEnabled(usable)
+            if usable:
+                _clear_unavailable(box)
+            else:
+                _mark_unavailable(box)
+                box.setToolTip(f"{registry.platform_name(platform)}账号不适用该功能"
+                               if platform else "先填链接识别平台")
             # 粉丝群快照是订阅型使用位置：新录入账号默认不勾，避免自动订阅一堆名单
             if usable and module != "fan_groups":
                 box.setChecked(True)
@@ -484,6 +537,64 @@ class AccountCenterWidget(QWidget):
             self._toast("修改失败：账号可能已被删除", "warning")
         self.reload()
         self.changed.emit()
+
+    def _toggle_live(self, account_id, checked):
+        """「用于直播录制」：勾选需先有直播间号；只增删主播，不动录制设置。"""
+        if self._building:
+            return
+        account = registry.get_account(account_id)
+        if account is None:
+            self.reload()
+            return
+        if not checked:
+            win = getattr(self.app, "live_record_win", None)
+            if win is not None:
+                win.remove_account_anchor(account_id)
+            else:
+                registry.clear_live_room(account_id)
+            self._toast("已从直播录制移除（录制文件保留）", "info")
+            self.reload()
+            self.changed.emit()
+            return
+        edit = self._live_edits.get(account_id)
+        room = edit.text().strip() if edit is not None else ""
+        if not room:
+            box = self._live_boxes.get(account_id)
+            if box is not None:
+                box.setChecked(False)
+            self._toast("请先填直播间号，再勾选「用于直播录制」", "warning")
+            return
+        win = getattr(self.app, "live_record_win", None)
+        if win is not None:
+            ok, msg = win.upsert_account_anchor(
+                account_id, account["platform"], room, account["name"], account["url"])
+        else:
+            ok, msg = registry.set_live_room(account_id, room)
+        if not ok:
+            box = self._live_boxes.get(account_id)
+            if box is not None:
+                box.setChecked(False)
+        self._toast(msg, "success" if ok else "warning")
+        self.reload()
+        self.changed.emit()
+
+    def _live_room_edited(self, account_id):
+        """已勾选的情况下改了直播间号：立即更新绑定（未勾选就先不保存）。"""
+        account = registry.get_account(account_id)
+        if account is None or "live" not in account["modules"]:
+            return
+        edit = self._live_edits.get(account_id)
+        room = edit.text().strip() if edit is not None else ""
+        if not room:
+            return
+        win = getattr(self.app, "live_record_win", None)
+        if win is not None:
+            ok, _msg = win.upsert_account_anchor(
+                account_id, account["platform"], room, account["name"], account["url"])
+        else:
+            ok, _msg = registry.set_live_room(account_id, room)
+        if ok:
+            self._toast(f"直播房间已更新为 {room}", "success")
 
     def _change_group(self, account_id, gids):
         if not registry.set_group(account_id, gids):

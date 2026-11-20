@@ -568,8 +568,40 @@ def kugou_nick_for(userid) -> str:
     return ""
 
 
+def _acfun(cookie: str) -> dict:
+    """AcFun：personalInfo 返回 result=0 即已登录，昵称从 info 里浅层找。
+
+    游客态接口回 401 / {"result":-401,"error_msg":"user not login"}，
+    这属于明确的未登录；接口异常或返回不认识的结构则给 None（不当成未登录）。
+    """
+    import requests
+
+    h = _headers(cookie)
+    h["Referer"] = "https://www.acfun.cn/"
+    try:
+        d = requests.get("https://www.acfun.cn/rest/pc-direct/user/personalInfo",
+                         headers=h, timeout=10).json()
+    except Exception:
+        return {"ok": None, "username": ""}
+    if not isinstance(d, dict):
+        return {"ok": None, "username": ""}
+    result = d.get("result")
+    if result == 0:
+        info = d.get("info") or d.get("userInfo") or {}
+        nick = ""
+        if isinstance(info, dict):
+            nick = str(info.get("userName") or info.get("name") or "").strip()
+            user = info.get("user") if isinstance(info.get("user"), dict) else {}
+            nick = nick or str((user or {}).get("name") or "").strip()
+        return {"ok": True, "username": nick}
+    msg = str(d.get("error_msg") or "").lower()
+    if result in (-401, 401) or "not login" in msg or "未登录" in msg:
+        return {"ok": False, "username": ""}
+    return {"ok": None, "username": ""}
+
+
 _VERIFIERS = {
-    "bilibili": _bili, "douyin": _douyin, "weibo": _weibo,
+    "bilibili": _bili, "douyin": _douyin, "weibo": _weibo, "acfun": _acfun,
     "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,

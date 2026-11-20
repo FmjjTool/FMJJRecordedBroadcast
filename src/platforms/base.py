@@ -144,9 +144,12 @@ class URLRecognizer:
             r"b23\.tv/([a-zA-Z0-9]+)",
             r"bili(?:22|23|33)\.cn/([a-zA-Z0-9]+)",
         ],
+        "acfun": [
+            r"acfun\.cn/u/(\d+)",
+            r"acfun\.cn/v/ac(\d+)",
+        ],
         "douyin": [
-            r"douyin\.com/video/(\d+)",
-            r"douyin\.com/note/(\d+)",
+            r"douyin\.com/video/(\d+)",            r"douyin\.com/note/(\d+)",
             r"douyin\.com/user/",
             r"douyin\.com/search/",
             r"v\.douyin\.com/([a-zA-Z0-9]+)",

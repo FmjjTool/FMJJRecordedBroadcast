@@ -31,6 +31,7 @@ from gui_qt.common import post_to_main, run_bg
 # 酷狗/酷我/5sing/小红书/快手/淘宝 无公开扫码 API，登录页内扫码由「浏览器」入口承载
 COOKIE_PLATFORMS = [
     ("bilibili", "B站", True, True),
+    ("acfun", "AcFun", False, True),
     ("douyin", "抖音", False, True),
     ("weibo", "微博", False, True),
     ("netease", "网易云", True, False),
@@ -59,6 +60,10 @@ BROWSER_LOGIN_CONFIGS = {
               "&url=https%3A%2F%2Fm.weibo.cn%2F", "微博登录（软件内）", ("SUB",),
               "扫码 / 手机验证码 / 账号密码登录（直达 passport 登录页）"),
     "douyin": ("https://www.douyin.com/", "抖音登录（软件内）", ("sessionid",), ""),
+    # AcFun：登录后种 acPasstoken（长期票）；acPlatform 游客也有，不能当判据，
+    # 最终以站内 personalInfo 接口为准（见 REMOTE_VERIFY_PLATFORMS）
+    "acfun": ("https://www.acfun.cn/", "AcFun登录（软件内）",
+              ("acPasstoken",), "点击右上角「登录」→ 扫码 / 账号密码登录（回到首页算成功）"),
     "bilibili": ("https://www.bilibili.com/", "B站登录（软件内）", ("SESSDATA",), ""),
     "qq": ("https://y.qq.com/", "QQ音乐登录（软件内）",
            ("uin", "qm_keyst"), "点击右上角「登录」→ 扫码或账号登录"),
@@ -135,7 +140,7 @@ def _save_nick(plat: str, userid, name: str) -> None:
 
 # Cookie 名判不准、需要额外问站内接口确认登录态的平台
 # （5sing 的会话 Cookie 游客也有，只有 user/checkstatus 说得准）
-REMOTE_VERIFY_PLATFORMS = {"5sing"}
+REMOTE_VERIFY_PLATFORMS = {"5sing", "acfun"}
 
 
 def _kugou_lite_state() -> tuple[bool, str]:

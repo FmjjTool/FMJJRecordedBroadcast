@@ -77,6 +77,8 @@ COOKIE_TTL_DAYS = {
     "weibo": 30,
     "douyin": 0,
     "bilibili": 0,
+    # AcFun：acPasstoken 长期有效，失效只能重新登录，不按天数判过期
+    "acfun": 0,
     "qq": 0,
     "kugou": 0,
     "kuwo": 0,
@@ -97,6 +99,7 @@ COOKIE_TTL_DAYS = {
 # 平台 key -> 中文名（用于 UI 展示）
 PLATFORM_NAMES = {
     "bilibili": "B站",
+    "acfun": "AcFun",
     "douyin": "抖音",
     "weibo": "微博",
     "netease": "网易云",

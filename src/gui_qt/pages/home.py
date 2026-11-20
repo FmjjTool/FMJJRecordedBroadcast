@@ -41,6 +41,7 @@ PLATFORM_META = {
     "assets": ("本地资源", "#26a69a"),
     "xiaohongshu": ("小红书", "#ff4d6d"),
     "kuaishou": ("快手", "#ff8f1f"),
+    "acfun": ("AcFun", "#fd4c5b"),
 }
 OTHER_COLOR = "#8b93a7"
 

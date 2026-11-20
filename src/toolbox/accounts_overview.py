@@ -21,6 +21,7 @@ _PLATFORM_RULES = (
     ("space.bilibili.com", "bilibili"), ("bilibili.com", "bilibili"),
     ("douyin.com", "douyin"), ("weibo.com", "weibo"), ("weibo.cn", "weibo"),
     ("kuaishou.com", "kuaishou"), ("xiaohongshu.com", "xiaohongshu"),
+    ("acfun.cn", "acfun"),
     ("music.163.com", "netease"), ("y.qq.com", "qq"), ("kugou.com", "kugou"),
     ("kuwo.cn", "kuwo"), ("5sing.kugou.com", "fivesing"), ("5sing.com", "fivesing"),
 )
@@ -88,6 +89,10 @@ def canonical_url(platform: str, url: str) -> str:
         match = re.search(r"/user/profile/([^/]+)", path)
         if match:
             return f"https://www.xiaohongshu.com/user/profile/{match.group(1)}"
+    if platform == "acfun":
+        match = re.search(r"/u/(\d+)", path)
+        if match:
+            return f"https://www.acfun.cn/u/{match.group(1)}"
     if platform == "netease":
         fragment = parts.fragment or ""
         target = fragment if "id=" in fragment else path

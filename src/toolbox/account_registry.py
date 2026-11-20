@@ -16,14 +16,18 @@ from __future__ import annotations
 
 import re
 
-MODULES = ("info", "tracker", "music", "fan_groups")
+MODULES = ("info", "tracker", "music", "fan_groups", "live")
 MODULE_NAMES = {"info": "信息获取", "tracker": "网媒追踪", "music": "音乐追踪",
-                "fan_groups": "粉丝群快照"}
+                "fan_groups": "粉丝群快照", "live": "直播录制"}
 
-MEDIA_PLATFORMS = ("bilibili", "douyin", "weibo", "kuaishou", "xiaohongshu")
+MEDIA_PLATFORMS = ("bilibili", "douyin", "weibo", "kuaishou", "xiaohongshu", "acfun")
+# 网媒追踪（粉丝/播放量等指标）目前只覆盖这五个平台；AcFun 只开放「信息获取」
+TRACK_PLATFORMS = ("bilibili", "douyin", "weibo", "kuaishou", "xiaohongshu")
 MUSIC_PLATFORMS = ("netease", "qq", "kugou", "kuwo", "fivesing")
 # 粉丝群快照只支持能列出公开群的三个平台
 FAN_GROUP_PLATFORMS = ("bilibili", "douyin", "weibo")
+# 直播录制支持：桌面录制窗口里的六个平台（音乐号里的网易云也能直播）
+LIVE_PLATFORMS = ("bilibili", "douyin", "kuaishou", "weibo", "xiaohongshu", "netease")
 
 # 组号规范（与三个账号中心一致）：必须是重复数字，如 11、22、33 ... 99
 GROUP_ID_PATTERN = re.compile(r"^(\d)\1$")
@@ -46,16 +50,23 @@ def platform_name(platform: str) -> str:
 def allowed_modules(platform: str) -> tuple:
     """该平台账号可以被哪些功能使用。
 
-    视频号 → 信息获取/网媒追踪（抖音、微博、B站另有粉丝群快照）；
-    音乐号 → 音乐追踪。
+    视频号 → 信息获取/网媒追踪（抖音、微博、B站另有粉丝群快照）+ 直播录制；
+    音乐号 → 音乐追踪（网易云另可用于直播录制）。
     """
     if platform in MEDIA_PLATFORMS:
-        modules = ["info", "tracker"]
+        modules = ["info"]
+        if platform in TRACK_PLATFORMS:
+            modules.append("tracker")
         if platform in FAN_GROUP_PLATFORMS:
             modules.append("fan_groups")
+        if platform in LIVE_PLATFORMS:
+            modules.append("live")
         return tuple(modules)
     if platform in MUSIC_PLATFORMS:
-        return ("music",)
+        modules = ["music"]
+        if platform in LIVE_PLATFORMS:
+            modules.append("live")
+        return tuple(modules)
     return ()
 
 
@@ -153,9 +164,19 @@ def list_accounts() -> list[dict]:
         add("fan_groups", acc.get("name", ""), acc.get("input", ""), [],
             "", acc.get("platform", ""))
 
+    from toolbox import live_record
+    live_map = live_record.list_account_anchors()
     accounts = []
     for key in order:
         record = merged[key]
+        live = live_map.get(key)
+        if live:
+            # 直播录制：勾选状态来自录制列表里绑定的主播（房间号存 anchor 上）
+            record["modules"]["live"] = {"url": "", "name": live.get("name") or "",
+                                         "room": live.get("room") or "",
+                                         "group_ids": [], "kind": ""}
+            if live.get("name"):
+                record["names"]["live"] = live["name"]
         record["name"] = next(
             (record["names"][m] for m in MODULES if record["names"].get(m)), "")
         gids: list[str] = []
@@ -408,6 +429,31 @@ def set_module(account_id: str, module: str, enabled: bool,
     return _remove_from_module(account, module, _raw_url(account))
 
 
+def set_live_room(account_id: str, room: str) -> tuple[bool, str]:
+    """账号配置勾选「用于直播录制」：把直播间号绑定成录制主播。"""
+    account = get_account(account_id)
+    if account is None:
+        return False, "账号不存在"
+    if "live" not in allowed_modules(account["platform"]):
+        return False, "该平台不支持直播录制"
+    from toolbox import live_record
+    return live_record.set_account_anchor(
+        account_id, account["platform"], room,
+        account["name"], account["url"])
+
+
+def clear_live_room(account_id: str) -> bool:
+    """取消「用于直播录制」：只从录制列表移除，不删录制文件。"""
+    from toolbox import live_record
+    return live_record.remove_account_anchor(account_id)
+
+
+def live_binding(account_id: str) -> dict:
+    """该账号当前绑定的录制主播 {platform, room, name}；未绑定返回空 dict。"""
+    from toolbox import live_record
+    return live_record.list_account_anchors().get(account_id) or {}
+
+
 def _remove_from_module(account, module, raw) -> bool:
     if module == "info":
         from accounts_manager import load_accounts, save_accounts
@@ -457,6 +503,9 @@ def remove_account(account_id: str) -> bool:
     changed = False
     for module in list(account["modules"]):
         changed = _remove_from_module(account, module, raw) or changed
+    if "live" in account["modules"]:
+        from toolbox import live_record
+        changed = live_record.remove_account_anchor(account["id"]) or changed
     return changed
 
 

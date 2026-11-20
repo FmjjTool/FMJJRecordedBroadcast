@@ -21,7 +21,7 @@ UA_MOBILE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
              "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1")
 
 PLATFORM_LABELS = {"bilibili": "B站", "douyin": "抖音", "weibo": "微博",
-                   "kuaishou": "快手", "xiaohongshu": "小红书"}
+                   "kuaishou": "快手", "xiaohongshu": "小红书", "acfun": "AcFun"}
 
 
 def _cookie(platform: str) -> str:
@@ -221,14 +221,37 @@ def _xhs_name(url: str) -> tuple[str, str]:
     return "", "未获取到昵称（小红书主页需登录，请在「Cookie 管理」登录小红书后重试）"
 
 
+# ==================== AcFun ====================
+
+def _acfun_name(url: str) -> tuple[str, str]:
+    """AcFun：userInfo 接口的 profile.name（游客也返回，不强制登录）。"""
+    m = re.search(r"acfun\.cn/u/(\d+)", url or "")
+    if not m:
+        return "", "不是 AcFun 主页链接（应形如 https://www.acfun.cn/u/550551）"
+    ck = _cookie("acfun")
+    headers = {"User-Agent": UA_PC, "Referer": url,
+               "Accept": "application/json, text/plain, */*"}
+    if ck:
+        headers["Cookie"] = ck
+    try:
+        d = httpx.get(f"https://www.acfun.cn/rest/pc-direct/user/userInfo?userId={m.group(1)}",
+                      headers=headers, timeout=15).json()
+    except Exception as exc:  # noqa: BLE001
+        return "", f"AcFun 接口请求失败：{exc}"
+    name = str(((d or {}).get("profile") or {}).get("name") or "").strip()
+    if name:
+        return name, ""
+    return "", "未获取到昵称（账号可能已注销）"
+
+
 # ==================== 统一入口 ====================
 
 _FETCHERS = {
     "bilibili": _bili_name,
     "douyin": _douyin_name,
-    "weibo": _weibo_name,
-    "kuaishou": _kuaishou_name,
+    "weibo": _weibo_name,    "kuaishou": _kuaishou_name,
     "xiaohongshu": _xhs_name,
+    "acfun": _acfun_name,
 }
 
 

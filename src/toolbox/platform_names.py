@@ -4,6 +4,7 @@ from __future__ import annotations
 
 MEDIA_PLATFORM_NAMES = {
     "bilibili": "B站",
+    "acfun": "AcFun",
     "douyin": "抖音",
     "weibo": "微博",
     "kuaishou": "快手",
@@ -20,6 +21,8 @@ MUSIC_PLATFORM_NAMES = {
 
 DIRECTORY_PLATFORM_NAMES = {
     **MEDIA_PLATFORM_NAMES,
+    # AcFun 暂无采集模块，但目录名要稳定（已有 AcFun_媒体 历史数据）
+    "acfun": "AcFun",
     "haokan": "好看视频",
     "weishi": "微视",
     "pear": "梨视频",
