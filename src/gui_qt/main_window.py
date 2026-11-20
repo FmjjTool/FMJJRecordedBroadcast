@@ -9,6 +9,7 @@
 
 import html
 import os
+import time
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
@@ -150,6 +151,7 @@ class MainWindow(QMainWindow):
         self._tray = None
         self._tray_menu = None
         self._tray_hint_shown = False
+        self.available_update = None   # 已发现但尚未安装的版本（供设置页展示）
         self.performance_monitor = None  # 用户开启后才创建，服务归主程序持有。
         self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
@@ -398,6 +400,44 @@ class MainWindow(QMainWindow):
         if theme.is_dark():
             theme.adapt(self)
         self.page_preloader.start()
+        # 启动后静默检查更新：延迟避开启动高峰，默认每天最多一次，失败不打扰
+        QTimer.singleShot(15000, self._auto_check_update)
+
+    # ==================== 软件更新 ====================
+
+    def _auto_check_update(self):
+        from toolbox import updater
+
+        try:
+            cfg = load_convert_config()
+        except Exception:
+            return
+        if not cfg.get("auto_check_update", True):
+            return
+        if not updater.should_check_now(cfg.get("update_last_check", 0)):
+            return
+        cfg["update_last_check"] = time.time()
+        save_convert_config(cfg)
+
+        from version import APP_VERSION
+        common.run_bg(lambda: updater.check_for_update(APP_VERSION, timeout=5.0),
+                      self._on_auto_update_checked, owner=self)
+
+    def _on_auto_update_checked(self, result, err):
+        if err or not result:
+            return
+        info, _ = result
+        if info is None:
+            return
+        cfg = load_convert_config()
+        if str(cfg.get("update_skip_version") or "") == info.version:
+            return
+        self.available_update = info
+        if self._tray is not None:
+            self._tray.showMessage(
+                f"发现新版本 v{info.version}",
+                "打开「设置 → 关于」可一键更新（下载校验后自动安装）。",
+                QSystemTrayIcon.Information, 8000)
 
     # ==================== 侧栏 ====================
 

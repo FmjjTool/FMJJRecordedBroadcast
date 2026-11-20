@@ -25,6 +25,8 @@ from toolbox.config_manager import (
 )
 from toolbox.skills import list_skills, skill_total_size_text
 from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
+from toolbox import updater
+from version import APP_VERSION
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.backup_panel import BackupPanel
@@ -327,6 +329,27 @@ class GlobalSettingsPage(BasePage):
         repo_row.addStretch(1)
         v.addLayout(repo_row)
 
+        # ---- 软件更新（GitHub Releases） ----
+        up_row = QHBoxLayout()
+        self.update_version_lbl = QLabel(f"当前版本 v{APP_VERSION}")
+        self.update_version_lbl.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        up_row.addWidget(self.update_version_lbl)
+        up_row.addStretch(1)
+        self.update_btn = self._btn("检查更新", self._check_update)
+        self.update_btn.setCursor(Qt.PointingHandCursor)
+        up_row.addWidget(self.update_btn)
+        self.update_cb = QCheckBox("启动时自动检查更新（每天最多一次）")
+        self.update_cb.setToolTip(
+            "程序启动约 15 秒后在后台查询 GitHub Releases；发现新版本只弹一次托盘提示，\n"
+            "不会自动下载或安装。是否真正更新始终由你在本页点击决定。")
+        self.update_cb.toggled.connect(self._on_auto_update_changed)
+        up_row.addWidget(self.update_cb)
+        v.addLayout(up_row)
+        self.update_status = QLabel("")
+        self.update_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        self.update_status.setWordWrap(True)
+        v.addWidget(self.update_status)
+
         about = QLabel(
             "封茗囧菌数据汇总库 · 统一维护工具箱 · 制作歆慕\n"
             "开源协议：GPL-3.0（GNU General Public License v3.0）\n"
@@ -387,6 +410,11 @@ class GlobalSettingsPage(BasePage):
         self.close_to_tray_cb.blockSignals(True)
         self.close_to_tray_cb.setChecked(bool(cfg.get("close_to_tray", True)))
         self.close_to_tray_cb.blockSignals(False)
+        # 软件更新：自动检查开关 + 已发现的新版本提示
+        self.update_cb.blockSignals(True)
+        self.update_cb.setChecked(bool(cfg.get("auto_check_update", True)))
+        self.update_cb.blockSignals(False)
+        self._sync_update_status()
         # FFmpeg 位置
         self.ffmpeg_entry.setText(str(load_convert_config().get("ffmpeg_path", "") or ""))
         self._update_ffmpeg_status()
@@ -559,6 +587,62 @@ class GlobalSettingsPage(BasePage):
         from gui_qt.skill_download import SkillDownloadDialog
         dlg = SkillDownloadDialog(self.app, self.app)
         dlg.exec()
+
+    # ---- 软件更新（GitHub Releases） ----
+    def _on_auto_update_changed(self, checked):
+        cfg = load_convert_config()
+        cfg["auto_check_update"] = bool(checked)
+        save_convert_config(cfg)
+        if checked:
+            self._set_status(self.update_status, "已开启：启动后每天最多检查一次，仅托盘提示", "muted")
+
+    def _check_update(self):
+        info = getattr(self.app, "available_update", None)
+        if info is not None and updater.is_newer(info.version, APP_VERSION):
+            self._open_update_dialog(info)
+            return
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("检查中…")
+        self._set_status(self.update_status, "正在查询 GitHub Releases…", "muted")
+        run_bg(lambda: updater.check_for_update(APP_VERSION), self._on_update_checked, owner=self)
+
+    def _on_update_checked(self, result, err):
+        self.update_btn.setEnabled(True)
+        self.update_btn.setText("检查更新")
+        if err:
+            self._set_status(self.update_status, f"检查失败：{err}", "warn")
+            return
+        info, _ = result
+        if info is None:
+            self.app.available_update = None
+            self._set_status(self.update_status, f"已是最新版本（v{APP_VERSION}）", "ok")
+            return
+        self.app.available_update = info
+        self._show_update_available(info)
+        self._open_update_dialog(info)
+
+    def _show_update_available(self, info):
+        self._set_status(
+            self.update_status,
+            f"发现新版本 v{info.version}（安装包 {info.size_text}）· 点右侧按钮查看并安装",
+            "ok")
+        self.update_btn.setText(f"更新到 v{info.version}")
+
+    def _open_update_dialog(self, info):
+        if not updater.is_newer(info.version, APP_VERSION):
+            self.app.available_update = None
+            self.update_btn.setText("检查更新")
+            self._set_status(self.update_status, f"已是最新版本（v{APP_VERSION}）", "ok")
+            return
+        from gui_qt.update_dialog import UpdateDialog
+        UpdateDialog(self.app, info, self).exec()
+
+    def _sync_update_status(self):
+        info = getattr(self.app, "available_update", None)
+        if info is not None and updater.is_newer(info.version, APP_VERSION):
+            self._show_update_available(info)
+        else:
+            self.update_btn.setText("检查更新")
 
     def _save(self):
         path = self.workdir_entry.text().strip()

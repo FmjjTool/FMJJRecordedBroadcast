@@ -398,6 +398,19 @@ def find_iscc() -> str | None:
     return None
 
 
+def write_sha256sums(exe: Path) -> Path:
+    """生成客户端更新要用的校验文件（必须与安装包一起上传到 Release）。"""
+    import hashlib
+
+    h = hashlib.sha256()
+    with exe.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    sums = exe.parent / "SHA256SUMS.txt"
+    sums.write_text(f"{h.hexdigest()}  {exe.name}\n", encoding="utf-8")
+    return sums
+
+
 def build_installer(name: str, ver: dict):
     step("生成 Inno Setup 安装器")
     iss_dir = ROOT / "build"
@@ -428,6 +441,10 @@ def build_installer(name: str, ver: dict):
     exe = out / f"{name}_Setup_{ver['APP_VERSION']}.exe"
     if r.returncode == 0 and exe.exists():
         print(f"安装器完成：{exe}")
+        sums = write_sha256sums(exe)
+        print(f"校验文件：{sums}")
+        print("  上传 Release 时请把 SHA256SUMS.txt 与安装包一起附上，"
+              "客户端更新会强校验（缺文件则只允许手动下载）。")
     else:
         sys.exit("安装器编译失败，请查看 ISCC 输出")
 

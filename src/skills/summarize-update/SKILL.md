@@ -167,22 +167,29 @@ $rel = Invoke-RestMethod -Method Post `
 - JSON body 必须走 `UTF8.GetBytes`（PS5.1 直接传字符串会乱码）
 - release id 存临时文件供上传步骤用：`$rel.id | Out-File -Encoding ascii _tmp_relid.txt`
 
-**c) 上传安装包资产**：
+**c) 上传安装包与校验文件资产**（两个都要传）：
 
 ```powershell
-$exe = "dist/installer/FengMingToolbox_Setup_{新版本}.exe"
-$uri = "https://uploads.github.com/repos/FmjjTool/FMJJRecordedBroadcast/releases/$($rel.id)/assets?name=$(Split-Path $exe -Leaf)"
-Invoke-RestMethod -Method Post -Uri $uri `
-  -Headers @{ Authorization = "Bearer $tok" } `
-  -InFile $exe -ContentType "application/octet-stream" -TimeoutSec 1800
+$files = @(
+  "dist/installer/FengMingToolbox_Setup_{新版本}.exe",
+  "dist/installer/SHA256SUMS.txt"
+)
+foreach ($f in $files) {
+  $uri = "https://uploads.github.com/repos/FmjjTool/FMJJRecordedBroadcast/releases/$($rel.id)/assets?name=$(Split-Path $f -Leaf)"
+  Invoke-RestMethod -Method Post -Uri $uri `
+    -Headers @{ Authorization = "Bearer $tok" } `
+    -InFile $f -ContentType "application/octet-stream" -TimeoutSec 1800
+}
 ```
 
+- `SHA256SUMS.txt` 由 `build.py` 自动生成（`<sha256>  <安装包名>`）；客户端的「检查更新」强校验它，**缺这个文件时自动安装会拒绝，只允许手动下载**
 - 92MB 上传按分钟计，超时给足（1800s）
 - 未安装 gh CLI，一律走 REST API，不要尝试 gh 命令
 
 ### 验证与汇报
 
-- `GET /repos/FmjjTool/FMJJRecordedBroadcast/releases/tags/{新版本}` 确认：非 draft、assets=1、大小 ≈92MB（与本地 `dist/installer` 产物字节数一致）
+- `GET /repos/FmjjTool/FMJJRecordedBroadcast/releases/tags/{新版本}` 确认：非 draft、assets=2（安装包 + SHA256SUMS.txt）、安装包大小 ≈92MB（与本地 `dist/installer` 产物字节数一致）
+- 再取 `SHA256SUMS.txt` 内容，确认哈希与本地 `Get-FileHash` 结果逐字一致（客户端按它校验，不一致会导致所有用户更新失败）
 - **仓库为私有仓库**：验证的 GET 也必须带 Authorization 头（GCM 取 token 同上）——无凭据返回 404，曾被误判为 Release 不存在
 - 向用户汇报：新版本号、Release 链接（`https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/{新版本}`）、本次更新内容摘要
 

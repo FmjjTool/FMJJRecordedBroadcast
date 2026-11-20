@@ -357,6 +357,9 @@ description: "全软件页面功能介绍与使用说明（软件内已移除所
 -   托盘图标单击或双击恢复主窗口；右键菜单提供「显示主界面」与「退出」。首次隐藏会在托盘气泡提示恢复与退出方式。
 -   主题相关设置集中在「主题自动切换（跟随系统 / 定时黑白）」；配色由全局色板统一维护，页面不提供自定义配色。
 -   「全局设置 → 关于」提供 GitHub 仓库与 GPL-3.0 开源许可证入口，并标注本软件以 GPL-3.0（GNU General Public License v3.0）协议开源。
+-   「全局设置 → 关于 → 软件更新」：显示当前版本，点「检查更新」查询 GitHub Releases（`toolbox/updater.py`）；发现新版本在同一行变红/变绿提示，并打开更新对话框展示更新说明与安装包大小。点「立即更新」下载安装包、按 Release 的 `SHA256SUMS.txt` 强校验后，自动退出程序并静默安装（`/VERYSILENT`），安装器拉起新版本；UAC 权限确认需用户点「是」。只有安装版可自动安装：绿色版 / 源码运行位置与注册表 `HKLM\Software\FengMingToolbox` 的 `InstallPath` 不一致时只允许「打开下载页」，避免在 Program Files 外再装第二套。
+-   「启动时自动检查更新（每天最多一次）」默认开启，可在同一行取消：启动约 15 秒后后台查询一次，失败静默、不阻塞启动；发现新版本只弹一次托盘气泡，不自动下载或安装。与「以后不再提醒这个版本」配合，写入 `config.json` 的 `auto_check_update` / `update_last_check` / `update_skip_version`。
+-   更新安装前必须先真正退出进程（关闭窗口只是隐藏到托盘，exe 被占用）：由 `updater.launch_installer` 写临时 cmd 等本进程 PID 消失后再运行安装器；直播录制/监控进行中会拒绝更新，提示先停止录制。
 -   「全局设置 → 运行环境与组件 → 依赖与可选组件」逐项显示 ffmpeg、ffprobe、PySide6、requests、Pillow、BeautifulSoup4、lxml、httpx、openpyxl、mutagen、websocket-client、playwright、抖音签名环境（node）的状态、版本与用途；缺失项标红。
 -   可选依赖显示「可选」而非「缺失」、不计入缺失数量：Git（资料站拉代码）、Node.js（资料站前端构建，需 node + npm 同时在 PATH，内置 node 无 npm），点「下载」跳官方下载页，装完需加入系统 PATH。
 -   全软件的依赖安装入口统一在本卡片（约定 11）；功能页只提示所需依赖，不再单独提供安装按钮。
