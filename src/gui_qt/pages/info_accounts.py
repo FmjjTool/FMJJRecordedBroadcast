@@ -15,10 +15,10 @@ from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QDate, Qt, QTimer
+from PySide6.QtCore import QDate, QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QListView, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
     QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -135,10 +135,76 @@ class InfoAccountsPage(BasePage):
     # ---------- 功能页 ----------
     def _build_func(self, f):
         layout = QVBoxLayout(f)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # 批量输入：一行一个，账号主页 → 添加账号，其余 → 解析存入「已获取」
+        layout.addWidget(self._build_batch_card())
+        layout.addWidget(self._build_accounts_card())
+        layout.addWidget(self._build_settings_card())
+        layout.addWidget(self._build_run_bar())
+        layout.addWidget(self._build_log_card(), 1)
+
+        # 没有显式语义的按钮统一次要样式（新建按钮在创建处已声明 variant）
+        for button in f.findChildren(QPushButton):
+            if not button.property("variant"):
+                _set_button_variant(button, "secondary", button.maximumWidth() < 80)
+
+    # ---------- 布局片段 ----------
+
+    @staticmethod
+    def _new_card(title: str):
+        """卡片容器：标题行 + 内容区，返回 (卡片, 标题行, 内容布局)。"""
+        card = QFrame()
+        card.setProperty("variant", "card")
+        body = QVBoxLayout(card)
+        body.setContentsMargins(10, 8, 10, 10)
+        body.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        label = QLabel(title)
+        label.setProperty("role", "sectionTitle")
+        head.addWidget(label)
+        body.addLayout(head)
+        return card, head, body
+
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    @staticmethod
+    def _separator(vertical: bool = False) -> QFrame:
+        line = QFrame()
+        line.setStyleSheet("background: palette(shadow); border: none;")
+        if vertical:
+            line.setFixedWidth(1)
+        else:
+            line.setFixedHeight(1)
+        return line
+
+    def _icon_action(self, icon_name: str, tip: str, variant: str = "secondary") -> QPushButton:
+        """固定 40x30 的仅图标按钮（必须带 tooltip）。"""
+        btn = QPushButton()
+        btn.setProperty("variant", variant)
+        btn.setFixedSize(40, 30)
+        btn.setIcon(line_icon(icon_name, theme.color("text"), 16))
+        btn.setIconSize(QSize(16, 16))
+        btn.setToolTip(tip)
+        return btn
+
+    def _set_pause_icon(self, button: QPushButton, paused: bool):
+        """暂停/继续按钮：暂停中显示播放图标并转主色，运行中显示暂停图标。"""
+        button.setIcon(line_icon("play" if paused else "pause", theme.color("text"), 16))
+        _set_button_variant(button, "primary" if paused else "secondary", compact=True)
+
+    def _build_batch_card(self) -> QFrame:
+        card, head, body = self._new_card("批量添加 / 解析")
+        head.addWidget(self._caption("一行一个，支持整段分享文案"))
+        head.addStretch(1)
+        head.addWidget(self._caption("Ctrl+Enter 处理"))
+
+        # 批量输入：账号主页 → 添加账号，其余 → 解析存入「已获取」
         self.batch_text = QTextEdit()
         self.batch_text.setPlaceholderText(
             "一行一个，直接粘贴（支持整段分享文案）：\n"
@@ -147,49 +213,52 @@ class InfoAccountsPage(BasePage):
         self.batch_text.setFixedHeight(88)
         batch_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.batch_text)
         batch_shortcut.activated.connect(self._process_batch)
-        layout.addWidget(self.batch_text)
+        body.addWidget(self.batch_text)
 
-        batch_row = QHBoxLayout()
+        row = QHBoxLayout()
+        row.setSpacing(6)
         self.process_btn = QPushButton("开始处理")
         self.process_btn.setProperty("variant", "primary")
+        self.process_btn.setIcon(line_icon("play", theme.color("on_accent"), 16))
+        self.process_btn.setIconSize(QSize(16, 16))
         self.process_btn.setToolTip(
             "逐行识别：账号主页 → 添加账号；其余 → 解析作品并存入「已获取」（Ctrl+Enter）")
         self.process_btn.clicked.connect(self._process_batch)
-        batch_row.addWidget(self.process_btn)
-        self.batch_pause_btn = icon_button(
-            "▮▮", "暂停批量处理：当前行处理完即停住，点「继续」恢复",
-            (40, 30), True, "font-size: 15px;", self._toggle_batch_pause)
-        self.batch_pause_btn.setEnabled(False)
-        batch_row.addWidget(self.batch_pause_btn)
-        self.batch_cancel_btn = icon_button(
-            "×", "取消批量处理：未开始的行直接跳过", (40, 30), True,
-            "font-size: 15px;", self._cancel_batch)
-        self.batch_cancel_btn.setEnabled(False)
-        batch_row.addWidget(self.batch_cancel_btn)
-        import_btn = icon_button(
-            "", "从文本文件导入链接列表（每行一个）", (40, 30), True,
-            "font-size: 15px;", self._import_file)
-        import_btn.setIcon(line_icon("folder", theme.color("text"), 16))
-        batch_row.addWidget(import_btn)
-        batch_row.addStretch(1)
-        batch_row.addWidget(QLabel("账号分组:"))
-        self.add_gid_entry = QLineEdit()
-        self.add_gid_entry.setPlaceholderText("组号(逗号分隔多组)")
-        self.add_gid_entry.setFixedWidth(130)
-        self.add_gid_entry.setToolTip("仅对「账号主页」行生效：添加账号时绑定这些分组")
-        batch_row.addWidget(self.add_gid_entry)
-        layout.addLayout(batch_row)
+        row.addWidget(self.process_btn)
 
-        # 全选/反选/清除
-        sel_bar = QHBoxLayout()
-        for text, mode, tip in (("", "all", "全选"), ("", "invert", "反选"), ("", "none", "清除选择")):
-            b = icon_button(text, tip, (32, 24), False, "font-size: 12px;",
-                            lambda _=False, m=mode: self._acc_select(m))
-            b.setIcon(line_icon({"all": "check", "invert": "refresh", "none": "close"}[mode],
-                                theme.color("text"), 13))
-            sel_bar.addWidget(b)
-        sel_bar.addStretch(1)
-        layout.addLayout(sel_bar)
+        self.batch_pause_btn = self._icon_action(
+            "pause", "暂停批量处理：当前行处理完即停住，点「继续」恢复")
+        self.batch_pause_btn.setEnabled(False)
+        self.batch_pause_btn.clicked.connect(self._toggle_batch_pause)
+        row.addWidget(self.batch_pause_btn)
+
+        self.batch_cancel_btn = self._icon_action(
+            "close", "取消批量处理：未开始的行直接跳过", "danger")
+        self.batch_cancel_btn.setEnabled(False)
+        self.batch_cancel_btn.clicked.connect(self._cancel_batch)
+        row.addWidget(self.batch_cancel_btn)
+
+        import_btn = self._icon_action("folder", "从文本文件导入链接列表（每行一个）")
+        import_btn.clicked.connect(self._import_file)
+        row.addWidget(import_btn)
+        row.addStretch(1)
+        body.addLayout(row)
+        return card
+
+    def _build_accounts_card(self) -> QFrame:
+        card, head, body = self._new_card("账号列表")
+        self.acc_count_label = self._caption("0 个账号")
+        head.addWidget(self.acc_count_label)
+        head.addStretch(1)
+        for text, mode, tip in (("全选", "all", "全选账号"),
+                                ("反选", "invert", "反选已选账号"),
+                                ("清除", "none", "清除选择")):
+            b = QPushButton(text)
+            b.setProperty("variant", "ghost")
+            b.setStyleSheet("padding: 2px 8px; font-size: 12px;")
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, m=mode: self._acc_select(m))
+            head.addWidget(b)
 
         # 账号列表（复选框，固定高度滚动；右键 打开/复制链接、修改、删除）
         self.acc_list = RowCheckList()
@@ -201,118 +270,163 @@ class InfoAccountsPage(BasePage):
         self.acc_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.acc_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.acc_list.customContextMenuRequested.connect(self._acc_list_context_menu)
-        layout.addWidget(self.acc_list)
+        body.addWidget(self.acc_list)
+        return card
 
-        # 范围与操作各占一行，窄窗口仍完整展示暂停、取消和定时入口。
-        op_row = QHBoxLayout()
-        op_row.addWidget(QLabel("采集:"))
+    def _build_settings_card(self) -> QFrame:
+        card, head, body = self._new_card("采集设置")
+        body.setSpacing(10)
+        head.addWidget(self._caption("范围 / 条数 / 限流 / 日期"))
+        head.addStretch(1)
+
+        # 左侧两行参数，右侧一列策略开关；窄窗口也不挤压
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+        params = QVBoxLayout()
+        params.setSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self._caption("采集范围"))
         self.fetch_mode = QComboBox()
         self.fetch_mode.addItems(["全部账号", "选中账号", "按组采集"])
         self.fetch_mode.setFixedWidth(110)
         self.fetch_mode.currentTextChanged.connect(self._on_fetch_mode_change)
-        op_row.addWidget(self.fetch_mode)
+        row.addWidget(self.fetch_mode)
+        row.addWidget(self._caption("分组"))
         self.fetch_group = QComboBox()
         self.fetch_group.setFixedWidth(110)
-        op_row.addWidget(self.fetch_group)
-        cnt_lbl = QLabel("条数:")
-        op_row.addWidget(cnt_lbl)
+        row.addWidget(self.fetch_group)
+        row.addSpacing(8)
+        row.addWidget(self._caption("条数"))
         self.count_entry = QLineEdit("10")
         self.count_entry.setFixedWidth(56)
-        op_row.addWidget(self.count_entry)
-        zero_lbl = QLabel("(0=无上限)")
-        zero_lbl.setProperty("role", "caption")
-        op_row.addWidget(zero_lbl)
-        op_row.addStretch(1)
-        layout.addLayout(op_row)
-        fetch_row = QHBoxLayout()
-        self.fetch_btn = QPushButton("获取最新")
-        self.fetch_btn.setProperty("variant", "primary")
-        self.fetch_btn.clicked.connect(self._fetch)
-        fetch_row.addWidget(self.fetch_btn)
-        self.pause_btn = icon_button(
-            "▮▮", "暂停后当前账号采集完即停住，点「继续」恢复",
-            (40, 30), True, "font-size: 15px;", self._toggle_pause)
-        self.pause_btn.setEnabled(False)
-        fetch_row.addWidget(self.pause_btn)
-        self.cancel_btn = icon_button(
-            "×", "取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束",
-            (40, 30), True, "font-size: 15px;", self._cancel_fetch)
-        self.cancel_btn.setEnabled(False)
-        fetch_row.addWidget(self.cancel_btn)
-        self.timer_btn = QPushButton("会话定时")
-        self.timer_btn.clicked.connect(self._toggle_timer)
-        fetch_row.addWidget(self.timer_btn)
-        self.timer_dot = QLabel("○")
-        self.timer_dot.setProperty("role", "caption")
-        self.timer_dot.setStyleSheet("font-size: 15px;")
-        fetch_row.addWidget(self.timer_dot)
-        fetch_row.addStretch(1)
-        layout.addLayout(fetch_row)
-        self.fetch_mode.setCurrentText("选中账号")
-        self._on_fetch_mode_change("选中账号")
+        self.count_entry.setToolTip("每个账号取多少条；0 = 不限")
+        row.addWidget(self.count_entry)
+        row.addSpacing(6)
+        row.addWidget(self._caption("0 = 不限"))
+        params.addLayout(row)
 
-        # 策略与限流/日期分开，保存的长日期范围不再撑宽窗口。
-        strat_row = QHBoxLayout()
-        self.inc_check = QCheckBox("增量模式(写入数据库)")
-        # 默认勾选 + 记住上次选择（写入 config，重启恢复）
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addWidget(self._caption("限流"))
+        row2.addWidget(self._caption("每"))
+        self.rate_count_entry = QLineEdit("10")
+        self.rate_count_entry.setFixedWidth(40)
+        self.rate_count_entry.setToolTip("每采集多少个账号停顿一次")
+        row2.addWidget(self.rate_count_entry)
+        row2.addWidget(self._caption("个停"))
+        self.rate_interval_entry = QLineEdit("10")
+        self.rate_interval_entry.setFixedWidth(40)
+        self.rate_interval_entry.setToolTip("停顿秒数")
+        row2.addWidget(self.rate_interval_entry)
+        row2.addWidget(self._caption("秒"))
+        row2.addSpacing(12)
+        self.date_btn = QPushButton("日期段: 不限")
+        self.date_btn.setProperty("variant", "secondary")
+        self.date_btn.setToolTip("只采集指定发布日期范围内的内容")
+        self.date_btn.clicked.connect(self._show_date_range_dialog)
+        row2.addWidget(self.date_btn)
+        params.addLayout(row2)
+
+        columns.addLayout(params)
+        columns.addWidget(self._separator(vertical=True))
+
+        strategy = QVBoxLayout()
+        strategy.setSpacing(6)
+        self.inc_check = QCheckBox("增量模式（写入数据库）")
+        self.inc_check.setToolTip("只写入未入库的新内容，重复内容自动跳过")
         self.inc_check.setChecked(self._load_inc_checked())
         self.inc_check.toggled.connect(self._save_inc_checked)
-        strat_row.addWidget(self.inc_check)
-        strat_row.addSpacing(8)
+        strategy.addWidget(self.inc_check)
         self.auto_dl_check = QCheckBox("获取后自动下载")
         self.auto_dl_check.setToolTip(
             "勾选后：获取完成 → 保存（已获取/数据库）→ 自动下载本次获取的内容，"
             "一次性完成。下载画质/线程数用「已获取」页的全局设置")
         self.auto_dl_check.setChecked(self._load_auto_dl_checked())
         self.auto_dl_check.toggled.connect(self._save_auto_dl_checked)
-        strat_row.addWidget(self.auto_dl_check)
-        strat_row.addStretch(1)
-        layout.addLayout(strat_row)
-        limit_row = QHBoxLayout()
-        limit_row.addWidget(QLabel("限流:每"))
-        self.rate_count_entry = QLineEdit("10")
-        self.rate_count_entry.setFixedWidth(40)
-        limit_row.addWidget(self.rate_count_entry)
-        limit_row.addWidget(QLabel("个停"))
-        self.rate_interval_entry = QLineEdit("10")
-        self.rate_interval_entry.setFixedWidth(40)
-        limit_row.addWidget(self.rate_interval_entry)
-        sec_lbl = QLabel("秒")
-        sec_lbl.setProperty("role", "caption")
-        limit_row.addWidget(sec_lbl)
-        self.date_btn = QPushButton("日期段: 不限")
-        self.date_btn.clicked.connect(self._show_date_range_dialog)
-        limit_row.addSpacing(12)
-        limit_row.addWidget(self.date_btn)
-        self._load_date_range()
-        limit_row.addStretch(1)
-        layout.addLayout(limit_row)
+        strategy.addWidget(self.auto_dl_check)
+        columns.addLayout(strategy)
+        columns.addStretch(1)
+        body.addLayout(columns)
 
-        # 进度条行（实时显示当前抓到第几个账号）
+        # 同一张卡片里的下拉/输入/按钮统一高度，两行基线一致
+        for widget in (self.fetch_mode, self.fetch_group, self.count_entry,
+                       self.rate_count_entry, self.rate_interval_entry, self.date_btn):
+            widget.setFixedHeight(30)
+
+        self._load_date_range()
+        self.fetch_mode.setCurrentText("选中账号")
+        self._on_fetch_mode_change("选中账号")
+        return card
+
+    def _build_run_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setProperty("variant", "toolbar")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.fetch_btn = QPushButton("获取最新")
+        self.fetch_btn.setProperty("variant", "primary")
+        self.fetch_btn.setIcon(line_icon("download", theme.color("on_accent"), 16))
+        self.fetch_btn.setIconSize(QSize(16, 16))
+        self.fetch_btn.setToolTip("按当前采集范围获取各账号最新内容（回车）")
+        self.fetch_btn.clicked.connect(self._fetch)
+        row.addWidget(self.fetch_btn)
+
+        self.pause_btn = self._icon_action(
+            "pause", "暂停后当前账号采集完即停住，点「继续」恢复")
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.clicked.connect(self._toggle_pause)
+        row.addWidget(self.pause_btn)
+
+        self.cancel_btn = self._icon_action(
+            "close", "取消当前获取：未开始的账号直接跳过，正在采集的账号自然结束",
+            "danger")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._cancel_fetch)
+        row.addWidget(self.cancel_btn)
+
+        row.addWidget(self._separator(vertical=True))
+        self.timer_btn = QPushButton("会话定时")
+        self.timer_btn.setProperty("variant", "secondary")
+        self.timer_btn.setToolTip("按固定间隔自动执行一轮「获取最新」")
+        self.timer_btn.clicked.connect(self._toggle_timer)
+        row.addWidget(self.timer_btn)
+
+        self.timer_dot = self._caption("定时未开启")
+        row.addWidget(self.timer_dot)
+        row.addStretch(1)
+        v.addLayout(row)
+
         prog_row = QHBoxLayout()
+        prog_row.setSpacing(8)
         self.prog_label = QLabel("空闲")
         self.prog_label.setProperty("role", "caption")
         self.prog_label.setMinimumWidth(150)
         self.prog_label.setMaximumWidth(220)
-        self.prog_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.prog_label.setWordWrap(True)
         prog_row.addWidget(self.prog_label)
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setFormat("空闲")
         self.progress_bar.setValue(0)
         prog_row.addWidget(self.progress_bar, 1)
-        layout.addLayout(prog_row)
+        v.addLayout(prog_row)
+        return bar
 
-        # 日志
+    def _build_log_card(self) -> QFrame:
+        card, head, body = self._new_card("运行日志")
+        head.addWidget(self._caption("采集过程、错误与统计"))
+        head.addStretch(1)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        layout.addWidget(self.log_text, 1)
-
-        for button in f.findChildren(QPushButton):
-            variant = ("primary" if button in (self.process_btn, self.fetch_btn)
-                       else "danger" if button in (self.batch_cancel_btn, self.cancel_btn)
-                       else "secondary")
-            _set_button_variant(button, variant, button.maximumWidth() < 80)
+        self.log_text.setPlaceholderText("等待采集任务…")
+        body.addWidget(self.log_text, 1)
+        return card
 
     # ---------- 账号列表 ----------
     # B站采集类型标签（其他平台无此概念）
@@ -324,10 +438,13 @@ class InfoAccountsPage(BasePage):
         self.acc_list.clear()
         accounts = [a for a in load_accounts() if a.url]  # 过滤分组占位账号（url 为空）
         self.acc_accounts = accounts
+        if hasattr(self, "acc_count_label"):
+            self.acc_count_label.setText(f"{len(accounts)} 个账号")
         if not accounts:
             item = QListWidgetItem("（暂无账号，请在上方添加）")
             item.setFlags(Qt.NoItemFlags)
             self.acc_list.addItem(item)
+            self._fit_account_list_height(0)
             return
         for i, a in enumerate(accounts, 1):
             plat = URLRecognizer.recognize(a.url) or "?"
@@ -344,6 +461,18 @@ class InfoAccountsPage(BasePage):
             item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             item.setCheckState(Qt.Unchecked)
             self.acc_list.addItem(item)
+        self._fit_account_list_height(len(accounts))
+
+    def _fit_account_list_height(self, count: int):
+        """账号少时列表跟着收缩，避免卡片里空出一大片。"""
+        if count <= 0:
+            self.acc_list.setFixedHeight(96)
+            return
+        row_h = self.acc_list.sizeHintForRow(0)
+        if row_h <= 0:
+            row_h = 28
+        visible = min(count, 6)
+        self.acc_list.setFixedHeight(max(96, visible * row_h + 12))
 
     def _acc_select(self, mode):
         for row in range(self.acc_list.count()):
@@ -388,15 +517,13 @@ class InfoAccountsPage(BasePage):
             return
         if self._batch_pause_evt.is_set():
             self._batch_pause_evt.clear()
-            self.batch_pause_btn.setText("▶")
-            _set_button_variant(self.batch_pause_btn, "primary", compact=True)
+            self._set_pause_icon(self.batch_pause_btn, paused=True)
             self._log("已暂停（当前行处理完成后停住）")
             self.prog_label.setText("已暂停，等待继续...")
         else:
             self._batch_pause_evt.set()
-            self.batch_pause_btn.setText("▮▮")
-            _set_button_variant(self.batch_pause_btn, compact=True)
-            self._log("▶ 已继续批量处理")
+            self._set_pause_icon(self.batch_pause_btn, paused=False)
+            self._log("已继续批量处理")
             self.prog_label.setText("继续批量处理中...")
 
     def _cancel_batch(self):
@@ -421,7 +548,6 @@ class InfoAccountsPage(BasePage):
         if not lines:
             self.app.toast("请输入账号主页或作品链接（一行一个）", "warning")
             return
-        gid = self.add_gid_entry.text().strip()
         self._batch_running = True
         # 取消后仍在后台收尾的旧采集轮次立即判为过期，避免其日志混进批量处理
         self._fetch_round += 1
@@ -436,13 +562,10 @@ class InfoAccountsPage(BasePage):
         self._set_batch_progress(0, len(lines), "准备中...")
 
         def work():
-            from accounts_manager import add_account, get_groups, load_accounts
+            from accounts_manager import add_account, load_accounts
             from platforms.account_names import fetch_display_name
             ok_acc = dup_acc = ok_post = new_posts = fail = 0
             cancelled = False
-            groups = get_groups()
-            gids = [g.strip() for g in gid.replace("，", ",").split(",") if g.strip()]
-            gname = groups.get(gids[0], "") if gids else ""
             existing = {a.url for a in load_accounts()}
             for idx, raw in enumerate(lines, 1):
                 # 暂停门闩：clear 时在行边界停住
@@ -463,7 +586,7 @@ class InfoAccountsPage(BasePage):
                         name, _err = fetch_display_name(url)
                     except Exception:
                         name = ""
-                    if add_account(url, name=name, group_id=gid, group_name=gname):
+                    if add_account(url, name=name):
                         existing.add(url)
                         ok_acc += 1
                         self._log(f"{prefix} 已添加账号：{name or url[:60]}")
@@ -491,8 +614,7 @@ class InfoAccountsPage(BasePage):
             self.batch_cancel_btn.setEnabled(False)
             self.fetch_btn.setEnabled(True)
             self._batch_pause_evt.set()
-            self.batch_pause_btn.setText("▮▮")
-            _set_button_variant(self.batch_pause_btn, compact=True)
+            self._set_pause_icon(self.batch_pause_btn, paused=False)
             self.progress_bar.setFormat("第 %v / %m 个账号（%p%）")
             if err:
                 self._log(f"批量处理失败: {err}")
@@ -535,15 +657,13 @@ class InfoAccountsPage(BasePage):
             return
         if self._pause_evt.is_set():
             self._pause_evt.clear()
-            self.pause_btn.setText("▶")
-            _set_button_variant(self.pause_btn, "primary", compact=True)
+            self._set_pause_icon(self.pause_btn, paused=True)
             self.log_text.append("已暂停（当前账号采集完成后停住）")
             self.prog_label.setText("已暂停，等待继续...")
         else:
             self._pause_evt.set()
-            self.pause_btn.setText("▮▮")
-            _set_button_variant(self.pause_btn, compact=True)
-            self.log_text.append("▶ 已继续采集")
+            self._set_pause_icon(self.pause_btn, paused=False)
+            self.log_text.append("已继续采集")
             self.prog_label.setText("继续采集中...")
 
     def _cancel_fetch(self):
@@ -572,8 +692,7 @@ class InfoAccountsPage(BasePage):
             self._cancel_evt.clear()  # 每轮获取开始前复位取消标记
         else:
             self._pause_evt.set()  # 复位门闩，避免下轮启动即处于暂停态
-            self.pause_btn.setText("▮▮")
-            _set_button_variant(self.pause_btn, compact=True)
+            self._set_pause_icon(self.pause_btn, paused=False)
 
     # ---------- 获取 ----------
     def _read_int(self, edit, default):
@@ -1036,8 +1155,8 @@ class InfoAccountsPage(BasePage):
             win.accept()
             self.timer_btn.setText("停止会话定时")
             _set_button_variant(self.timer_btn, "danger")
-            self.timer_dot.setText("●")
-            self.timer_dot.setStyleSheet("color: palette(link); font-size: 15px;")
+            self.timer_dot.setText(f"定时中 · 每 {m} 分钟")
+            self.timer_dot.setStyleSheet("color: palette(link);")
             self.app.toast(f"会话定时已启动（每 {m} 分钟）", "success")
             # 启动后先执行一次，之后每隔 interval 执行一次（QTimer 替代后台 sleep 循环）
             self._run_timer_fetch()
@@ -1059,8 +1178,8 @@ class InfoAccountsPage(BasePage):
             self._timer = None
         self.timer_btn.setText("会话定时")
         _set_button_variant(self.timer_btn)
-        self.timer_dot.setText("○")
-        self.timer_dot.setStyleSheet("font-size: 15px;")
+        self.timer_dot.setText("定时未开启")
+        self.timer_dot.setStyleSheet("")
         self.app.toast("会话定时已停止", "info")
 
     def _run_timer_fetch(self):
