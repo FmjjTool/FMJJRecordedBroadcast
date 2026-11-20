@@ -52,6 +52,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 | `/总结文章` | `summarize-article` | 文件总结入口与前置阅读 |
 | `/直播总结` | `fengming-livestream-summary` | 直播转录纠错与固定模板 |
 | `/更新发布` | `summarize-update` | 质量闭环与版本发布流程 |
+| `/双版本` | `release-editions` | 标准版 / FULL 内置版双形态打包 |
 | `/并行` | `agent-coordination` | 多 Agent / 并行协作约束 |
 | `/测试` | `testing-quality-gates` | 测试层级与质量门禁 |
 | `/功能说明` | `software-feature-guide` | 各页面功能唯一说明处 |
@@ -170,6 +171,13 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 2. 发布流程顺序：推送本地提交 → 递增版本号 → 打包 → 更新 README → 推送 GitHub → 创建 Release。
 3. 版本号与 README 更新格式固定，不跳步、不合并步骤。
 4. 安全红线：不强推、不覆盖远端历史；未命中排除项才按全文流程执行。
+
+### /双版本 → `release-editions`
+
+1. 共用一份代码、一个版本号、一个 AppId、一个 Release；FULL 版只作为额外资产。
+2. FULL 只内置 `base` 转写模型与 headless shell，不内置完整 Chromium、不复制本机 `models/`。
+3. node、CLIP 模型、Playwright 内核必须有「包内优先」的查找回退，否则 FULL 仍提示缺依赖。
+4. 资产按 edition 严格筛选，标准版不得匹配到 `_Full_` 安装包；FULL→标准 需卸载重装。
 
 ### /并行 → `agent-coordination`
 

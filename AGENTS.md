@@ -22,7 +22,7 @@
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/并行`、`/测试`、`/功能说明`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/功能说明`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
@@ -69,6 +69,7 @@
 - **并行协作** [agent-coordination](src/skills/agent-coordination/SKILL.md)：多 Agent/并行进程/用户同时编辑、共享文件或长任务时必读。
 - **数据生命周期** [data-lifecycle](src/skills/data-lifecycle/SKILL.md)：新增/修改数据库、存储、去重、迁移、备份、保留清理时必读。
 - **平台适配** [platform-adapter-policy](src/skills/platform-adapter-policy/SKILL.md)：新增/修改平台接口、登录、下载、回退策略时必读。
+- **双版本发布** [release-editions](src/skills/release-editions/SKILL.md)：标准版 / FULL 内置版的双形态打包与发布——FULL 版内置 FFmpeg、Playwright 内核、转写程序与模型、图识别模型、node 等依赖，做到装完即用；改 `build.py`、内置清单、依赖查找顺序或排查「装了仍提示缺依赖」时必读。
 
 ## 生成图片规范 skill（涉及导出图/报表图/封面图时强制阅读）
 

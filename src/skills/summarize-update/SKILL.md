@@ -81,6 +81,7 @@ python build.py
   `gui_qt.pages.*`，`--collect-submodules` 在 spec 阶段 sys.path 无 src 时收集为空——
   必须在 build.py 里按 `src/gui_qt/pages/*.py` 目录生成 hidden-import。
 - 打包失败：中止流程并报告错误，不执行后续步骤
+- **FULL 内置版**：用户要求同时发布 FULL 版时，按 [release-editions](../release-editions/SKILL.md) 追加构建与验收；标准版的 PyInstaller 参数不得因 FULL 改造而增删。FULL 包作为同版本额外资产上传，不新建 tag、不新建 Release。
 
 ### 第 4 步：更新 README
 
@@ -183,6 +184,7 @@ foreach ($f in $files) {
 ```
 
 - `SHA256SUMS.txt` 由 `build.py` 自动生成（`<sha256>  <安装包名>`）；客户端的「检查更新」强校验它，**缺这个文件时自动安装会拒绝，只允许手动下载**
+- 同时发布 FULL 内置版时，`SHA256SUMS.txt` 含两行（标准 + FULL），Release 资产数为 3（两个 exe + 一个校验文件）
 - 92MB 上传按分钟计，超时给足（1800s）
 - 未安装 gh CLI，一律走 REST API，不要尝试 gh 命令
 
