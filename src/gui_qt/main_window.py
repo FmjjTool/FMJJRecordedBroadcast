@@ -69,6 +69,7 @@ PAGE_CLASSES = {
     "music_tracker": ("gui_qt.pages.music_tracker", "MusicTrackerPage"),
     "account_registry": ("gui_qt.pages.account_registry", "AccountRegistryPage"),
     "douyin_danmaku": ("gui_qt.pages.douyin_danmaku", "DouyinDanmakuPage"),
+    "live_record": ("gui_qt.pages.live_record", "LiveRecordPage"),
     "bili_resource": ("gui_qt.pages.bili_resource", "BiliResourcePage"),
     "video_comments": ("gui_qt.pages.video_comments", "VideoCommentsPage"),
     "weibo_chaohua": ("gui_qt.pages.weibo_chaohua", "WeiboChaohuaPage"),
@@ -137,6 +138,7 @@ NAV_GROUPS = [
     ("账户追踪", [
         ("music_tracker", "音乐账号追踪"),
         ("tracker", "网媒账号追踪"),
+        ("douyin_index", "抖音指数"),
         ("tcdoc", "腾讯文档监控"),
         ("weibo_chaohua", "微博超话"),
         ("fan_groups", "粉丝群查询"),
@@ -151,9 +153,9 @@ NAV_GROUPS = [
         ("music_search_download", "音乐搜索下载"),
         ("music_file_tools", "音乐标签"),
     ]),
-    ("直播弹幕录制", [
-        ("douyin_danmaku", "抖音弹幕姬"),
-        ("bili_danmaku", "B站弹幕姬"),
+    ("直播录制", [
+        # 直播录制与弹幕姬都内嵌在这一页（页签切换），侧栏只占一个入口
+        ("live_record", "直播录制"),
     ]),
     ("本地工具", [
         ("localwiki", "本地资料站"),
@@ -178,7 +180,7 @@ NAV_GROUPS = [
 _TEXT_INPUT_TYPES = None  # 延迟初始化（QApplication 未建时不能 import 全部控件类型）
 
 _EXTRA_TOOLS = {
-    "douyin_index": "抖音指数", "wechat_article": "公众号解析",
+    "wechat_article": "公众号解析",
     "bili_resource": "B站资源", "video_comments": "视频评论区",
 }
 

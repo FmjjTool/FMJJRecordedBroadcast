@@ -9,11 +9,11 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 def tool_icon_name(key):
     if key == "home":
         return "grid"
-    if key in ("info_accounts", "douyin_index"):
+    if key == "info_accounts":
         return "search"
     if key in ("info_results", "asset", "toolbox_organize", "toolbox_migrate"):
         return "folder"
-    if key in ("tracker", "music_tracker"):
+    if key in ("tracker", "music_tracker", "douyin_index"):
         return "chart"
     if key in ("toolbox_convert", "toolbox_editor", "douyin_danmaku", "bili_danmaku"):
         return "video"
