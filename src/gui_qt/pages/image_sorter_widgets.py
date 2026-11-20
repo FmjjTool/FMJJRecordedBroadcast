@@ -111,11 +111,8 @@ class FileListPanel(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
         self.setAcceptDrops(True)
-
-        title_label = QLabel("文件列表", self)
-        title_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #2f3440; padding: 2px;")
-        layout.addWidget(title_label)
 
         self.file_list = QListWidget(self)
         self.file_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -135,9 +132,8 @@ class FileListPanel(QWidget):
         self.file_list.setStyleSheet(
             """
             QListWidget {
-                background-color: #ffffff;
-                border: 1px solid #d0d6df;
-                border-radius: 6px;
+                background: transparent;
+                border: none;
                 outline: none;
             }
             QListWidget::item {
@@ -147,7 +143,7 @@ class FileListPanel(QWidget):
                 margin: 2px;
             }
             QListWidget::item:selected {
-                background: #d8e7f6;
+                background: palette(midlight);
                 border-radius: 8px;
             }
             """
@@ -189,13 +185,41 @@ class FileListPanel(QWidget):
         self.loading_bar.setRange(0, 0)
         self.loading_bar.setFixedWidth(180)
         self.loading_label = QLabel("加载中...", self.loading_widget)
-        self.loading_label.setStyleSheet("color: #5a6474;")
+        self.loading_label.setProperty("role", "caption")
         loading_layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignCenter)
         loading_layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignCenter)
         self.loading_widget.hide()
         layout.addWidget(self.loading_widget)
 
+        # 空状态：没有可筛选文件时的引导提示
+        self.empty_state = QWidget(self)
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(12, 24, 12, 24)
+        empty_layout.setSpacing(4)
+        self.empty_title = QLabel("还没有可筛选的文件")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_title.setWordWrap(True)
+        self.empty_hint = QLabel("把文件夹拖到这里，或点上方「添加源文件夹」")
+        self.empty_hint.setProperty("role", "caption")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setWordWrap(True)
+        empty_layout.addStretch(1)
+        empty_layout.addWidget(self.empty_title)
+        empty_layout.addWidget(self.empty_hint)
+        empty_layout.addStretch(1)
+        layout.addWidget(self.empty_state, 1)
+
+        self._loading = False
+        self._refresh_body_visibility()
+
         QTimer.singleShot(0, lambda: self._apply_responsive_layout(force=True))
+
+    def _refresh_body_visibility(self):
+        """文件列表 / 空状态 / 加载中三者互斥显示。"""
+        has_files = bool(self._file_items)
+        self.file_list.setVisible(has_files and not self._loading)
+        self.empty_state.setVisible(not has_files and not self._loading)
+        self.loading_widget.setVisible(self._loading)
 
     @staticmethod
     def _build_preview_card_stylesheet() -> str:
@@ -217,8 +241,8 @@ class FileListPanel(QWidget):
         item_width = min(200, max(92, two_col_width))
         preview_card = max(84, item_width - 20)
         preview = max(80, preview_card - 4)
-        # 名称标签两行换行（窄面板下完整可读）：36px + 上下边距 12 + 间距 6 + 状态余量
-        item_height = preview_card + 72
+        # 名称标签两行换行（窄面板下完整可读）：36px + 上下边距 12 + 间距 6 + 余量
+        item_height = preview_card + 56
         header_width = max(120, viewport_width - 16)
 
         return {
@@ -397,6 +421,7 @@ class FileListPanel(QWidget):
             self._update_folder_titles_upward(folder_key)
             self._refresh_visibility()
             self._apply_responsive_layout()
+        self._refresh_body_visibility()
 
     def select_file_item(self, file_path: Path):
         """选中并激活指定文件的卡片（视觉选中）"""
@@ -521,6 +546,7 @@ class FileListPanel(QWidget):
         self._update_folder_titles_upward(folder_key)
         self._cleanup_empty_folders(folder_key)
         self._refresh_visibility()
+        self._refresh_body_visibility()
 
     def rename_file(self, old_path: Path, new_path: Path):
         """更新列表中单个文件的路径和显示名称"""
@@ -627,6 +653,7 @@ class FileListPanel(QWidget):
         finally:
             self.file_list.setUpdatesEnabled(True)
             self.file_list.blockSignals(previous_signal_state)
+            self._refresh_body_visibility()
 
     def refresh_after_batch(self):
         """批量操作后统一刷新UI状态"""
@@ -648,6 +675,7 @@ class FileListPanel(QWidget):
             self.file_list.setUpdatesEnabled(True)
             self._apply_responsive_layout(force=True)
             self.file_list.viewport().update()
+            self._refresh_body_visibility()
 
     def refresh_after_incremental(self, file_paths: List[Path]):
         """增量插入后的轻量刷新：仅刷新受影响目录与新文件可见性。"""
@@ -711,15 +739,16 @@ class FileListPanel(QWidget):
         self._folder_total_file_count.clear()
         self._source_folder_map.clear()
         self._folder_path_map.clear()
+        self._refresh_body_visibility()
 
     def clear(self):
         """兼容旧调用"""
         self.clear_files()
 
     def show_loading(self, show: bool = True):
-        """显示/隐藏加载动画"""
-        self.loading_widget.setVisible(show)
-        self.file_list.setVisible(not show)
+        """显示/隐藏加载动画（列表与空状态随之让位）"""
+        self._loading = bool(show)
+        self._refresh_body_visibility()
 
     def _on_item_clicked(self, item: QListWidgetItem):
         item_type = item.data(Qt.ItemDataRole.UserRole + 1)
@@ -1439,6 +1468,7 @@ class MediaViewer(QWidget):
             """
         )
         self.progress_label.move(self.width() - 80, self.height() - 40)
+        self.progress_label.hide()
 
         # 缩放比例标签（左上角）
         self.zoom_label = QLabel("100%", self)
@@ -1453,6 +1483,7 @@ class MediaViewer(QWidget):
             """
         )
         self.zoom_label.move(10, 10)
+        self.zoom_label.hide()
 
         # 加载动画（busy 进度条）
         self.loading_widget = QWidget(self)
@@ -1463,6 +1494,15 @@ class MediaViewer(QWidget):
         loading_layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignCenter)
         self.loading_widget.setStyleSheet("background: transparent;")
         self.loading_widget.hide()
+
+        # 空状态提示（未选中文件时居中覆盖在预览区，不挡鼠标拖动）
+        self.empty_hint = QLabel("尚未选择文件\n左侧选一张，或把文件夹拖进左侧列表", self)
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.empty_hint.setStyleSheet(
+            "QLabel { color: palette(highlighted-text); font-size: 13px;"
+            " background: transparent; }"
+        )
 
         # 视频封面中央播放按钮
         self.center_play_btn = QPushButton(self.PLAY_ICON, self)
@@ -1487,6 +1527,8 @@ class MediaViewer(QWidget):
         )
         self.center_play_btn.clicked.connect(self._on_center_play_clicked)
         self.center_play_btn.hide()
+
+        QTimer.singleShot(0, self._update_empty_hint_geometry)
 
     def _init_video_controls(self):
         """视频控制条（深色半透明条：播放/暂停 + 时间 + 进度 + 音量）"""
@@ -1604,6 +1646,9 @@ class MediaViewer(QWidget):
         self.video_widget.hide()
         self.video_controls.hide()
         self.graphics_view.show()
+        self._set_empty_hint_visible(False)
+        self.zoom_label.show()
+        self.progress_label.show()
         self.original_pixmap = pixmap
         self.graphics_scene.clear()
         self.pixmap_item = self.graphics_scene.addPixmap(pixmap)
@@ -1659,6 +1704,9 @@ class MediaViewer(QWidget):
         self.progress_label.setText("0/0")
         self.time_label.setText("00:00 / 00:00")
         self._set_center_play_visible(False)
+        self._set_empty_hint_visible(True)
+        self.zoom_label.hide()
+        self.progress_label.hide()
 
     # ==================== 视频播放（阶段四） ====================
 
@@ -1667,6 +1715,9 @@ class MediaViewer(QWidget):
         try:
             self._requested_video_path = video_path
             self._set_center_play_visible(False)
+            self._set_empty_hint_visible(False)
+            self.zoom_label.hide()
+            self.progress_label.hide()
 
             # 隐藏图片显示区，显示视频播放器和控制条
             self.graphics_view.hide()
@@ -1941,6 +1992,21 @@ class MediaViewer(QWidget):
         super().resizeEvent(event)
         self.progress_label.move(self.width() - 100, self.height() - 50)
         self._update_center_play_position()
+        self._update_empty_hint_geometry()
+
+    def _update_empty_hint_geometry(self):
+        """空状态提示始终铺满图片预览区（跟随布局尺寸变化）。"""
+        if not hasattr(self, "empty_hint"):
+            return
+        self.empty_hint.setGeometry(self.graphics_view.geometry())
+
+    def _set_empty_hint_visible(self, visible: bool):
+        if not hasattr(self, "empty_hint"):
+            return
+        self._update_empty_hint_geometry()
+        self.empty_hint.setVisible(visible)
+        if visible:
+            self.empty_hint.raise_()
 
 
 # ==================== 右栏：媒体信息面板（阶段二：信息展示） ====================
@@ -2014,24 +2080,20 @@ class FileInfoPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        # 信息卡（白底+边框容器，深浅色主题均正常）
+        # 信息卡：与页面其它栏统一的卡片容器（配色走主题，不写死深浅）
         card = QFrame(self)
-        card.setStyleSheet(
-            "QFrame { background-color: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }"
-        )
+        card.setProperty("variant", "card")
         outer.addWidget(card, 1)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(8, 8, 8, 8)
+        card_layout.setContentsMargins(10, 8, 10, 10)
+        card_layout.setSpacing(6)
 
         self.tab_widget = QTabWidget(card)
-        self.tab_widget.setStyleSheet(
-            "QTabWidget::pane { border: 1px solid #d0d6df; border-radius: 4px; top: -1px; }"
-            " QTabBar::tab { padding: 5px 12px; background: #f4f5f7;"
-            " border: 1px solid #d0d6df; border-bottom: none;"
-            " border-top-left-radius: 4px; border-top-right-radius: 4px; }"
-            " QTabBar::tab:selected { background: #ffffff; color: #2563eb;"
-            " font-weight: 600; }"
+        self.tab_widget.setObjectName("fileInfoTabs")
+        # 标签栏即卡片头，页签面板不再叠一层底与边框（避免框中框）
+        self.setStyleSheet(
+            "QTabWidget#fileInfoTabs::pane { border: none; background: transparent; }"
         )
         card_layout.addWidget(self.tab_widget, 1)
 
@@ -2043,33 +2105,29 @@ class FileInfoPanel(QWidget):
         self.info_tab.setStyleSheet("background: transparent;")
         info_layout = QVBoxLayout(self.info_tab)
         info_layout.setContentsMargins(6, 8, 6, 6)
-
-        header = QHBoxLayout()
-        title = QLabel("媒体信息")
-        title.setStyleSheet("font-size: 13px; font-weight: 600; color: #2f3440;")
-        header.addWidget(title)
-        header.addStretch(1)
-        self.copy_all_btn = QPushButton("复制全部")
-        self.copy_all_btn.clicked.connect(self._on_copy_all_clicked)
-        header.addWidget(self.copy_all_btn)
-        info_layout.addLayout(header)
-
-        self.export_txt_btn = QPushButton("导出 TXT")
-        self.export_txt_btn.clicked.connect(lambda: self._export_current_info("txt"))
-        self.export_json_btn = QPushButton("导出 JSON")
-        self.export_json_btn.clicked.connect(lambda: self._export_current_info("json"))
+        info_layout.setSpacing(6)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self.copy_all_btn = QPushButton("复制全部")
+        self.copy_all_btn.setProperty("variant", "ghost")
+        self.copy_all_btn.setToolTip("把当前文件已读到的全部信息复制到剪贴板")
+        self.copy_all_btn.clicked.connect(self._on_copy_all_clicked)
+        self.export_txt_btn = QPushButton("导出 TXT")
+        self.export_txt_btn.setProperty("variant", "ghost")
+        self.export_txt_btn.clicked.connect(lambda: self._export_current_info("txt"))
+        self.export_json_btn = QPushButton("导出 JSON")
+        self.export_json_btn.setProperty("variant", "ghost")
+        self.export_json_btn.clicked.connect(lambda: self._export_current_info("json"))
+        btn_row.addWidget(self.copy_all_btn)
+        btn_row.addStretch(1)
         btn_row.addWidget(self.export_txt_btn)
         btn_row.addWidget(self.export_json_btn)
-        btn_row.addStretch(1)
         info_layout.addLayout(btn_row)
 
         self.scroll = QScrollArea(self.info_tab)
         self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet(
-            "QScrollArea { background-color: #ffffff; border: 1px solid #d0d6df; border-radius: 4px; }"
-        )
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self.scroll_container = QWidget()
         self.scroll_container.setStyleSheet("background: transparent;")
         self.scroll.setWidget(self.scroll_container)
@@ -2078,7 +2136,8 @@ class FileInfoPanel(QWidget):
         self.info_grid = QVBoxLayout(self.scroll_container)
         self.info_grid.setContentsMargins(6, 6, 6, 6)
         self.info_grid.setSpacing(2)
-        self.info_grid.addStretch(1)
+        self._show_info_empty()
+        self._set_info_actions_enabled(False)
 
         self.tab_widget.addTab(self.info_tab, "文件信息")
 
@@ -2089,9 +2148,7 @@ class FileInfoPanel(QWidget):
 
         rename_scroll = QScrollArea(self.rename_tab)
         rename_scroll.setWidgetResizable(True)
-        rename_scroll.setStyleSheet(
-            "QScrollArea { background-color: #ffffff; border: none; }"
-        )
+        rename_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         rename_tab_layout = QVBoxLayout(self.rename_tab)
         rename_tab_layout.setContentsMargins(0, 0, 0, 0)
         rename_tab_layout.addWidget(rename_scroll)
@@ -2108,7 +2165,7 @@ class FileInfoPanel(QWidget):
         self.current_name_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
-        self.current_name_label.setStyleSheet("color: #6b7280;")
+        self.current_name_label.setProperty("role", "caption")
         rename_layout.addWidget(self.current_name_label)
 
         self.rename_input = QLineEdit(body)
@@ -2147,13 +2204,11 @@ class FileInfoPanel(QWidget):
 
         template_hint = QLabel("模板与自动重命名使用同一套占位符（见下方可复制列表）", body)
         template_hint.setWordWrap(True)
-        template_hint.setStyleSheet("font-size: 11px; color: #888;")
+        template_hint.setProperty("role", "caption")
         rename_layout.addWidget(template_hint)
 
         auto_title = QLabel("自动重命名（分类后）", body)
-        auto_title.setStyleSheet(
-            "font-size: 13px; font-weight: 600; color: #2f3440; margin-top: 6px;"
-        )
+        auto_title.setProperty("role", "sectionTitle")
         rename_layout.addWidget(auto_title)
 
         auto_toggle_layout = QHBoxLayout()
@@ -2172,12 +2227,12 @@ class FileInfoPanel(QWidget):
             "占位符必须是英文并用 {} 包裹；其余内容按普通文本原样保留", body
         )
         auto_hint.setWordWrap(True)
-        auto_hint.setStyleSheet("font-size: 11px; color: #888;")
+        auto_hint.setProperty("role", "caption")
         rename_layout.addWidget(auto_hint)
 
         fields_hint = QLabel("点击下方占位符可直接复制：", body)
         fields_hint.setWordWrap(True)
-        fields_hint.setStyleSheet("font-size: 11px; color: #6b7280;")
+        fields_hint.setProperty("role", "caption")
         rename_layout.addWidget(fields_hint)
 
         self.auto_token_search_input = QLineEdit(body)
@@ -2202,6 +2257,8 @@ class FileInfoPanel(QWidget):
             row = i // token_cols
             col = i % token_cols
             token_btn = QPushButton(f"{{{token}}}", self.auto_token_panel)
+            token_btn.setProperty("variant", "ghost")
+            token_btn.setStyleSheet("padding: 2px 6px; font-size: 11px;")
             token_btn.setToolTip(f"{desc}\n点击可复制")
             token_btn.clicked.connect(
                 lambda _, t=token: self._copy_auto_rename_token(t)
@@ -2215,7 +2272,7 @@ class FileInfoPanel(QWidget):
             "示例: {source_name}_{captured_time}_raw；重复文件名会自动加 (1)/(2) 后缀", body
         )
         invalid_hint.setWordWrap(True)
-        invalid_hint.setStyleSheet("font-size: 11px; color: #888;")
+        invalid_hint.setProperty("role", "caption")
         rename_layout.addWidget(invalid_hint)
 
         save_auto_btn = QPushButton("保存自动重命名配置", body)
@@ -2223,9 +2280,7 @@ class FileInfoPanel(QWidget):
         rename_layout.addWidget(save_auto_btn)
 
         tag_title = QLabel("分类词", body)
-        tag_title.setStyleSheet(
-            "font-size: 13px; font-weight: 600; color: #2f3440; margin-top: 6px;"
-        )
+        tag_title.setProperty("role", "sectionTitle")
         rename_layout.addWidget(tag_title)
 
         tag_edit_layout = QHBoxLayout()
@@ -2237,6 +2292,7 @@ class FileInfoPanel(QWidget):
         tag_edit_layout.addWidget(self.tag_input, 1)
 
         add_tag_btn = QPushButton("新增词", body)
+        add_tag_btn.setProperty("variant", "secondary")
         add_tag_btn.clicked.connect(self._on_add_tag)
         tag_edit_layout.addWidget(add_tag_btn)
         rename_layout.addLayout(tag_edit_layout)
@@ -2245,7 +2301,8 @@ class FileInfoPanel(QWidget):
         self.tag_scroll.setWidgetResizable(True)
         self.tag_scroll.setFixedHeight(130)
         self.tag_scroll.setStyleSheet(
-            "QScrollArea { background-color: #ffffff; border: 1px solid #d0d6df; border-radius: 4px; }"
+            "QScrollArea { background: transparent; border: 1px solid palette(shadow);"
+            " border-radius: 6px; }"
         )
         self.tag_panel = QWidget(self.tag_scroll)
         self.tag_panel.setStyleSheet("background: transparent;")
@@ -2257,10 +2314,7 @@ class FileInfoPanel(QWidget):
         rename_layout.addWidget(self.tag_scroll)
 
         self.rename_btn = QPushButton("重命名当前文件", body)
-        self.rename_btn.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: #ffffff; border: none;"
-            " border-radius: 4px; padding: 6px 16px; font-weight: 600; }"
-        )
+        self.rename_btn.setProperty("variant", "primary")
         self.rename_btn.clicked.connect(self._on_rename_clicked)
         self.rename_btn.setEnabled(False)
         rename_layout.addWidget(self.rename_btn)
@@ -2300,15 +2354,10 @@ class FileInfoPanel(QWidget):
         ordered_fields.extend(sorted(all_fields))  # 其余按字母排
 
         self._current_fields = ordered_fields
-        self.copy_all_btn.setEnabled(len(ordered_fields) > 0)
-        self.export_txt_btn.setEnabled(len(ordered_fields) > 0 and self._current_file is not None)
-        self.export_json_btn.setEnabled(len(ordered_fields) > 0 and self._current_file is not None)
+        self._set_info_actions_enabled(len(ordered_fields) > 0)
 
         # 移除末尾 stretch，逐行插入后再补回
-        while self.info_grid.count():
-            item = self.info_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._clear_info_grid()
 
         for field in ordered_fields:
             val = str(info[field]).strip()
@@ -2316,7 +2365,7 @@ class FileInfoPanel(QWidget):
                 continue
 
             field_label = QLabel(f"{field}:")
-            field_label.setStyleSheet("font-weight: 600; color: #5a6474;")
+            field_label.setStyleSheet("font-weight: 600; color: palette(placeholder-text);")
             self.info_grid.addWidget(field_label)
 
             value_label = QLabel(val)
@@ -2325,7 +2374,9 @@ class FileInfoPanel(QWidget):
             value_label.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
             )
-            value_label.setStyleSheet("margin-left: 10px; margin-bottom: 8px; color: #2f3440;")
+            value_label.setStyleSheet(
+                "margin-left: 10px; margin-bottom: 8px; color: palette(text);"
+            )
             self.info_grid.addWidget(value_label)
             self.info_labels[field] = value_label
 
@@ -2334,14 +2385,33 @@ class FileInfoPanel(QWidget):
     def _clear_info(self):
         self._current_info = {}
         self._current_fields = []
-        self.copy_all_btn.setEnabled(False)
-        self.export_txt_btn.setEnabled(False)
-        self.export_json_btn.setEnabled(False)
+        self._set_info_actions_enabled(False)
+        self.info_labels.clear()
+        self._show_info_empty()
+
+    def _clear_info_grid(self):
         while self.info_grid.count():
             item = self.info_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self.info_labels.clear()
+            widget = item.widget()
+            if widget is not None:
+                # 先脱离父级再排队销毁：deleteLater 要等事件循环，旧行会残留在原位
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _set_info_actions_enabled(self, enabled: bool):
+        self.copy_all_btn.setEnabled(enabled)
+        self.export_txt_btn.setEnabled(bool(enabled) and self._current_file is not None)
+        self.export_json_btn.setEnabled(bool(enabled) and self._current_file is not None)
+
+    def _show_info_empty(self):
+        """无选中文件时的占位提示，避免右侧出现大片空白。"""
+        self._clear_info_grid()
+        hint = QLabel("选择左侧文件后显示媒体信息\n（格式 / 分辨率 / 时长 / Exif 等）")
+        hint.setProperty("role", "caption")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        hint.setContentsMargins(0, 28, 0, 28)
+        self.info_grid.addWidget(hint)
         self.info_grid.addStretch(1)
 
     # ---------- 复制 / 导出 ----------
@@ -2589,7 +2659,7 @@ class FileInfoPanel(QWidget):
 
         if not self._rename_tags:
             hint = QLabel("暂无分类词，可在上方新增", self.tag_panel)
-            hint.setStyleSheet("font-size: 11px; color: #888;")
+            hint.setProperty("role", "caption")
             self.tag_layout.addWidget(hint, 0, 0)
             return
 

@@ -18,15 +18,18 @@ from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
     QSplitter, QVBoxLayout, QWidget,
 )
 
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.common import run_bg, post_to_main
+from gui_qt.theme import current_palette
 
 from image_sorter import settings as cfg
 from image_sorter.constants import (
@@ -136,6 +139,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self._undo_thumbnail_loader: Optional[ThumbnailLoader] = None
         self._shortcut_mapping_dialog_open = False
         self._shortcuts_installed = False
+        self._icon_buttons: list = []
 
         # ---------- 线程 ----------
         self.thumbnail_loader = None
@@ -191,86 +195,51 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # ---------- 顶栏：源文件夹管理 ----------
-        top = QHBoxLayout()
-        add_btn = QPushButton("添加源文件夹")
-        add_btn.clicked.connect(self._pick_source_folder)
-        clear_btn = QPushButton("清空源")
-        clear_btn.clicked.connect(self._clear_sources)
-        self.view_combo = QComboBox()
-        for key, text in VIEW_MODES:
-            self.view_combo.addItem(text, key)
-            if key == self._view_mode:
-                self.view_combo.setCurrentIndex(self.view_combo.count() - 1)
-        self.view_combo.currentIndexChanged.connect(self._on_view_mode_changed)
-        top.addWidget(add_btn)
-        top.addWidget(clear_btn)
-        top.addWidget(QLabel("视图:"))
-        top.addWidget(self.view_combo)
-        top.addStretch(1)
-        self.sources_label = ElidedPathLabel("尚未添加源文件夹")
-        self.sources_label.setStyleSheet("color:#888;")
-        top.addWidget(self.sources_label)
-        layout.addLayout(top)
+        layout.addWidget(self._build_source_bar())
 
         # ---------- 顶栏二：分类工作流控制 ----------
-        classify_bar = QHBoxLayout()
-        self.work_dir_btn = QPushButton("分类目录")
-        self.work_dir_btn.clicked.connect(self._on_change_work_dir)
-        classify_bar.addWidget(self.work_dir_btn)
-        self.work_dir_label = ElidedPathLabel("")
-        self.work_dir_label.setStyleSheet("color:#6b7280;")
-        classify_bar.addWidget(self.work_dir_label)
-        classify_bar.addStretch(1)
-
-        self.op_mode_combo = QComboBox()
-        self.op_mode_combo.addItem("复制模式", "copy")
-        self.op_mode_combo.addItem("移动模式", "move")
-        if self._file_operation_mode == "move":
-            self.op_mode_combo.setCurrentIndex(1)
-        self.op_mode_combo.currentIndexChanged.connect(self._on_op_mode_changed)
-        classify_bar.addWidget(QLabel("分类方式:"))
-        classify_bar.addWidget(self.op_mode_combo)
-
-        keep_btn = QPushButton("保留(S)")
-        keep_btn.clicked.connect(self._on_keep_file)
-        classify_bar.addWidget(keep_btn)
-        fav_btn = QPushButton("收藏(F)")
-        fav_btn.clicked.connect(self._on_favorite_file)
-        classify_bar.addWidget(fav_btn)
-        del_btn = QPushButton("删除(W)")
-        del_btn.clicked.connect(self._on_delete_file)
-        classify_bar.addWidget(del_btn)
-        undo_btn = QPushButton("↩ 撤销(Ctrl+Z)")
-        undo_btn.clicked.connect(self._on_undo)
-        classify_bar.addWidget(undo_btn)
-
-        self.settings_btn = QPushButton("设置")
-        self.settings_btn.clicked.connect(self._toggle_settings_area)
-        classify_bar.addWidget(self.settings_btn)
-        layout.addLayout(classify_bar)
+        layout.addWidget(self._build_flow_bar())
 
         # ---------- 页内设置区（默认收起） ----------
         self._init_settings_area()
 
         # ---------- 管线状态栏 ----------
+        self.status_bar = QFrame(self)
+        self.status_bar.setProperty("variant", "subtle")
+        status_layout = QHBoxLayout(self.status_bar)
+        status_layout.setContentsMargins(12, 6, 12, 6)
+        status_layout.setSpacing(8)
+        status_title = QLabel("处理状态")
+        status_title.setProperty("role", "caption")
+        status_layout.addWidget(status_title)
         self.pipeline_label = QLabel("")
-        self.pipeline_label.setStyleSheet("color:#6b7280; padding: 1px 2px;")
-        layout.addWidget(self.pipeline_label)
+        self.pipeline_label.setProperty("role", "caption")
+        self.pipeline_label.setStyleSheet("font-size: 12px;")
+        status_layout.addWidget(self.pipeline_label, 1)
+        layout.addWidget(self.status_bar)
 
         # ---------- 三栏（中栏 = 预览 + 文件夹面板 垂直分割） ----------
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
 
         self.file_list_panel = FileListPanel(self)
         self.file_list_panel.set_grouping_mode(self._resolve_grouping_mode_for_view(self._view_mode))
         self.file_list_panel.set_grouping_datetime_resolver(self._get_grouping_datetime_fast)
-        splitter.addWidget(self.file_list_panel)
+        self.view_caption = self._caption(self._view_mode_label())
+        splitter.addWidget(self._panel_card("文件列表", self.file_list_panel, self.view_caption))
 
         middle_splitter = QSplitter(Qt.Vertical)
+        middle_splitter.setHandleWidth(10)
         self.media_viewer = MediaViewer(self)
-        middle_splitter.addWidget(self.media_viewer)
+        self.preview_caption = ElidedPathLabel("未选择文件")
+        self.preview_caption.setProperty("role", "caption")
+        self.preview_caption.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        middle_splitter.addWidget(self._panel_card("预览", self.media_viewer, self.preview_caption))
 
         self.folder_panel = FolderPanel(self)
         self.folder_panel.set_folder_manager(self.folder_manager)
@@ -297,35 +266,184 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self._reload_sources_label()
         self._reload_work_dir_label()
 
+    # ---------- 布局片段 ----------
+
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    @staticmethod
+    def _separator(vertical: bool = False) -> QFrame:
+        line = QFrame()
+        line.setStyleSheet("background: palette(shadow); border: none;")
+        if vertical:
+            line.setFixedWidth(1)
+        else:
+            line.setFixedHeight(1)
+        return line
+
+    @staticmethod
+    def _panel_card(title: str, content: QWidget, trailing: Optional[QLabel] = None) -> QFrame:
+        """统一卡片容器：标题行 + 内容区（内容自带边距时自动收紧）。"""
+        card = QFrame()
+        card.setProperty("variant", "card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 10)
+        v.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        label = QLabel(title)
+        label.setProperty("role", "sectionTitle")
+        head.addWidget(label)
+        head.addStretch(1)
+        if trailing is not None:
+            head.addWidget(trailing)
+        v.addLayout(head)
+        v.addWidget(content, 1)
+        return card
+
+    def _icon_color(self, role: str = "button") -> str:
+        pal = current_palette()
+        if role == "primary":
+            return pal.color(QPalette.ColorRole.HighlightedText).name()
+        if role == "danger":
+            return pal.color(QPalette.ColorRole.WindowText).name()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def _icon_button(
+        self, text: str, icon_name: str, variant: str = "secondary", role: str = "button"
+    ) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setProperty("variant", variant)
+        btn.setIcon(line_icon(icon_name, self._icon_color(role), 16))
+        btn.setIconSize(QSize(16, 16))
+        self._icon_buttons.append((btn, icon_name, role))
+        return btn
+
+    def _build_source_bar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 10)
+        h.setSpacing(8)
+
+        add_btn = self._icon_button("添加源文件夹", "folder", "primary", "primary")
+        add_btn.setToolTip("选择要筛选的源文件夹（可多次添加、也可直接把文件夹拖入左侧列表）")
+        add_btn.clicked.connect(self._pick_source_folder)
+        h.addWidget(add_btn)
+
+        clear_btn = self._icon_button("清空源", "broom")
+        clear_btn.setToolTip("移除全部源文件夹记录（不删除任何文件）")
+        clear_btn.clicked.connect(self._clear_sources)
+        h.addWidget(clear_btn)
+
+        h.addWidget(self._separator(vertical=True))
+        h.addWidget(self._caption("视图"))
+        self.view_combo = QComboBox()
+        for key, text in VIEW_MODES:
+            self.view_combo.addItem(text, key)
+            if key == self._view_mode:
+                self.view_combo.setCurrentIndex(self.view_combo.count() - 1)
+        self.view_combo.setFixedWidth(112)
+        self.view_combo.setToolTip("左侧列表的排序方式：日期分组 / 默认列表 / 随机抽样")
+        self.view_combo.currentIndexChanged.connect(self._on_view_mode_changed)
+        h.addWidget(self.view_combo)
+
+        self.sources_label = ElidedPathLabel("尚未添加源文件夹")
+        self.sources_label.setProperty("role", "caption")
+        self.sources_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        h.addWidget(self.sources_label, 1)
+        return bar
+
+    def _build_flow_bar(self) -> QFrame:
+        bar = QFrame(self)
+        bar.setProperty("variant", "toolbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 10)
+        h.setSpacing(8)
+
+        self.work_dir_btn = self._icon_button("分类目录", "folder")
+        self.work_dir_btn.setToolTip("选择分类工作目录（分类目标根，内置 默认/收藏/删除/重复文件 四个文件夹）")
+        self.work_dir_btn.clicked.connect(self._on_change_work_dir)
+        h.addWidget(self.work_dir_btn)
+
+        self.work_dir_label = ElidedPathLabel("")
+        self.work_dir_label.setProperty("role", "caption")
+        self.work_dir_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.work_dir_label.setMaximumWidth(240)
+        h.addWidget(self.work_dir_label)
+        h.addWidget(self._separator(vertical=True))
+
+        h.addWidget(self._caption("分类方式"))
+        self.op_mode_combo = QComboBox()
+        self.op_mode_combo.addItem("复制模式", "copy")
+        self.op_mode_combo.addItem("移动模式", "move")
+        if self._file_operation_mode == "move":
+            self.op_mode_combo.setCurrentIndex(1)
+        self.op_mode_combo.setFixedWidth(100)
+        self.op_mode_combo.setToolTip("复制模式：源文件保留；移动模式：源文件移入分类文件夹")
+        self.op_mode_combo.currentIndexChanged.connect(self._on_op_mode_changed)
+        h.addWidget(self.op_mode_combo)
+        h.addWidget(self._separator(vertical=True))
+
+        keep_btn = self._icon_button("保留", "check")
+        keep_btn.setToolTip("保留当前文件（快捷键 S）")
+        keep_btn.clicked.connect(self._on_keep_file)
+        h.addWidget(keep_btn)
+        fav_btn = self._icon_button("收藏", "star")
+        fav_btn.setToolTip("收藏当前文件（快捷键 F）")
+        fav_btn.clicked.connect(self._on_favorite_file)
+        h.addWidget(fav_btn)
+        del_btn = self._icon_button("删除", "trash", "danger", "danger")
+        del_btn.setToolTip("把当前文件移入「删除」文件夹（快捷键 W）")
+        del_btn.clicked.connect(self._on_delete_file)
+        h.addWidget(del_btn)
+        undo_btn = self._icon_button("撤销", "arrow_left")
+        undo_btn.setToolTip("撤销上一步分类操作（快捷键 Ctrl+Z）")
+        undo_btn.clicked.connect(self._on_undo)
+        h.addWidget(undo_btn)
+
+        h.addStretch(1)
+
+        h.addWidget(self._separator(vertical=True))
+        self.settings_btn = self._icon_button("设置", "settings", "ghost")
+        self.settings_btn.setCheckable(True)
+        self.settings_btn.setToolTip("展开/收起页内设置（MD5 过滤、重复保留、随机抽样、播放）")
+        self.settings_btn.clicked.connect(self._toggle_settings_area)
+        h.addWidget(self.settings_btn)
+        return bar
+
     # ==================== 页内设置区 ====================
 
     def _init_settings_area(self):
-        self.settings_area = QWidget()
-        self.settings_area.setStyleSheet(
-            "QWidget { background-color: #f4f5f7; border: 1px solid #dfe4ec;"
-            " border-radius: 6px; }"
-        )
+        self.settings_area = QFrame()
+        self.settings_area.setProperty("variant", "subtle")
         area_layout = QHBoxLayout(self.settings_area)
-        area_layout.setContentsMargins(8, 6, 8, 6)
-        area_layout.setSpacing(10)
+        area_layout.setContentsMargins(12, 8, 12, 8)
+        area_layout.setSpacing(12)
 
         self.filter_screened_cb = QCheckBox("过滤已筛选文件(MD5)")
+        self.filter_screened_cb.setToolTip("按 MD5 跳过已经分类过的媒体，避免重复处理")
         self.filter_screened_cb.setChecked(cfg.get_bool("filter_screened_files", True))
         self.filter_screened_cb.stateChanged.connect(self._on_filter_screened_toggled)
         area_layout.addWidget(self.filter_screened_cb)
 
-        area_layout.addWidget(QLabel("重复保留:"))
+        area_layout.addWidget(self._caption("重复保留:"))
         self.duplicate_keep_combo = QComboBox()
         self.duplicate_keep_combo.addItem("保留最新", "latest")
         self.duplicate_keep_combo.addItem("手动处理", "manual")
+        self.duplicate_keep_combo.setFixedWidth(108)
         saved_keep = cfg.get_str("duplicate_keep", "latest")
         self.duplicate_keep_combo.setCurrentIndex(1 if saved_keep == "manual" else 0)
         self.duplicate_keep_combo.currentIndexChanged.connect(self._on_duplicate_keep_changed)
         area_layout.addWidget(self.duplicate_keep_combo)
 
-        area_layout.addWidget(QLabel("随机抽样数:"))
+        area_layout.addWidget(self._caption("随机抽样数:"))
         self.random_size_spin = QSpinBox()
         self.random_size_spin.setRange(5, 500)
+        self.random_size_spin.setFixedWidth(76)
         self.random_size_spin.setValue(cfg.get_int("random_sample_size", 50))
         self.random_size_spin.valueChanged.connect(self._on_random_size_changed)
         area_layout.addWidget(self.random_size_spin)
@@ -340,16 +458,20 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.autoplay_live_cb.stateChanged.connect(self._on_autoplay_live_toggled)
         area_layout.addWidget(self.autoplay_live_cb)
 
-        shortcut_btn = QPushButton("⌨ 快捷键映射")
+        area_layout.addStretch(1)
+        shortcut_btn = self._icon_button("快捷键映射", "keyboard", "ghost")
+        shortcut_btn.setToolTip("查看/修改保留、收藏、删除等操作的快捷键")
         shortcut_btn.clicked.connect(self._on_shortcut_mapping)
         area_layout.addWidget(shortcut_btn)
 
-        area_layout.addStretch(1)
         self.settings_area.hide()
         self.layout().addWidget(self.settings_area)
 
     def _toggle_settings_area(self):
-        self.settings_area.setVisible(not self.settings_area.isVisible())
+        visible = not self.settings_area.isVisible()
+        self.settings_area.setVisible(visible)
+        if hasattr(self, "settings_btn"):
+            self.settings_btn.setChecked(visible)
 
     def _on_filter_screened_toggled(self, state: int):
         enabled = self.filter_screened_cb.isChecked()
@@ -414,6 +536,13 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.media_viewer.playback_failed.connect(self._on_playback_failed)
         self.media_viewer.livp_play_requested.connect(self._play_livp_video)
 
+    def on_theme_changed(self):
+        """主题切换后按新配色重画线形图标（QIcon 不参与 QSS 重映射）。"""
+        for widget, name, role in self._icon_buttons:
+            if widget is not None:
+                widget.setIcon(line_icon(name, self._icon_color(role), 16))
+        self.folder_panel.refresh_if_theme_changed()
+
     # ==================== 源文件夹管理 ====================
 
     def _pick_source_folder(self):
@@ -454,6 +583,8 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.file_info_panel.update_current_file_path(None)
         self._set_pipeline_idle_status("就绪")
         self._reload_sources_label()
+        if hasattr(self, "preview_caption"):
+            self.preview_caption.set_full_text("未选择文件")
         self.app.toast("已清空源文件夹列表", "info")
 
     def _source_folders_as_str(self) -> List[str]:
@@ -479,11 +610,21 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         key = self.view_combo.itemData(index)
         self._set_view_mode(key)
 
+    def _view_mode_label(self) -> str:
+        for key, text in VIEW_MODES:
+            if key == self._view_mode:
+                return text
+        return VIEW_MODES[0][1]
+
     def _set_view_mode(self, mode: str):
         normalized = self._normalize_view_mode(mode)
         if normalized == self._view_mode:
+            if hasattr(self, "view_caption"):
+                self.view_caption.setText(self._view_mode_label())
             return
         self._view_mode = normalized
+        if hasattr(self, "view_caption"):
+            self.view_caption.setText(self._view_mode_label())
         cfg.set_setting("view_mode", normalized)
 
         if self._source_folders:
@@ -885,6 +1026,8 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
 
         file_path = self.file_list[index]
         self.current_index = index
+        if hasattr(self, "preview_caption"):
+            self.preview_caption.set_full_text(file_path.name)
         requested_thumb = self._ensure_file_loaded_for_display(file_path)
         if prefetch_focus and requested_thumb:
             self._prefetch_focus_window_thumbnails(index, radius=30)

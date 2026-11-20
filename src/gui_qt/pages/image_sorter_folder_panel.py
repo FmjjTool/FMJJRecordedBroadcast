@@ -20,13 +20,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QColor, QDrag, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDrag, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem,
+    QComboBox, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QToolTip, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
+from gui_qt.navigation import line_icon
 
 from image_sorter import settings as cfg
 from image_sorter.core.folder_manager import FolderManager
@@ -232,6 +233,7 @@ class FolderPanel(QWidget):
         self._current_path: List[str] = []  # 面包屑路径
         self._custom_order: Dict[str, list] = {}
         self._icon_theme_dark: Optional[bool] = None
+        self._icon_buttons: List[tuple] = []
 
         self._init_ui()
         self._load_custom_order()
@@ -239,35 +241,50 @@ class FolderPanel(QWidget):
     # ---------- UI ----------
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self.card = QFrame(self)
+        self.card.setProperty("variant", "card")
+        outer.addWidget(self.card)
+
+        layout = QVBoxLayout(self.card)
+        layout.setContentsMargins(10, 8, 10, 10)
         layout.setSpacing(6)
-
-        # 面包屑导航
-        breadcrumb_layout = QHBoxLayout()
-        self.back_btn = QPushButton("← 返回")
-        self.back_btn.clicked.connect(self._on_go_back)
-        self.back_btn.setEnabled(False)
-        breadcrumb_layout.addWidget(self.back_btn)
-
-        self.breadcrumb_label = QLabel("/")
-        self.breadcrumb_label.setStyleSheet("font-size: 12px; color: #6b7280;")
-        breadcrumb_layout.addWidget(self.breadcrumb_label)
-        breadcrumb_layout.addStretch()
-        layout.addLayout(breadcrumb_layout)
 
         # 标题和排序
         header_layout = QHBoxLayout()
+        header_layout.setSpacing(6)
         self.title_label = QLabel("分类文件夹")
-        self.title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self.title_label.setProperty("role", "sectionTitle")
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
+        header_layout.addWidget(self._caption("排序"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["自定义", "按时间", "按名称"])
+        self.sort_combo.setFixedWidth(96)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         header_layout.addWidget(self.sort_combo)
         layout.addLayout(header_layout)
+
+        # 面包屑导航（只在进入子目录后显示）
+        self.breadcrumb_row = QWidget(self.card)
+        breadcrumb_layout = QHBoxLayout(self.breadcrumb_row)
+        breadcrumb_layout.setContentsMargins(0, 0, 0, 0)
+        breadcrumb_layout.setSpacing(4)
+        self.back_btn = QPushButton("返回上级")
+        self.back_btn.setProperty("variant", "ghost")
+        self.back_btn.setStyleSheet("padding: 2px 6px; font-size: 12px;")
+        self.back_btn.setIcon(line_icon("arrow_left", self._icon_color(), 14))
+        self.back_btn.clicked.connect(self._on_go_back)
+        self.back_btn.setEnabled(False)
+        breadcrumb_layout.addWidget(self.back_btn)
+        self.breadcrumb_label = QLabel("/")
+        self.breadcrumb_label.setProperty("role", "caption")
+        breadcrumb_layout.addWidget(self.breadcrumb_label, 1)
+        layout.addWidget(self.breadcrumb_row)
+        self.breadcrumb_row.hide()
 
         # 文件夹卡片列表（横向单行图标模式）
         self.folder_list = DragSortFolderList(self)
@@ -281,6 +298,10 @@ class FolderPanel(QWidget):
         self.folder_list.setMovement(QListWidget.Movement.Snap)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.folder_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.folder_list.setStyleSheet(
+            "QListWidget { background: transparent; border: none; outline: none; }"
+            " QListWidget::item { background: transparent; }"
+        )
 
         row_height = max(self.folder_list.gridSize().height() + 24, 180)
         self.folder_list.setFixedHeight(row_height)
@@ -295,44 +316,99 @@ class FolderPanel(QWidget):
         self.folder_list.customContextMenuRequested.connect(self._show_folder_context_menu)
         layout.addWidget(self.folder_list)
 
-        # 未设置工作目录提示
-        self.empty_hint_label = QLabel("尚未设置分类工作目录（分类时将自动弹出选择）")
-        self.empty_hint_label.setStyleSheet("color: #6b7280; padding: 12px;")
+        # 空状态：未设置工作目录 / 目录内还没有分类文件夹
+        self.empty_state = QWidget(self.card)
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(0, 24, 0, 24)
+        empty_layout.setSpacing(4)
+        self.empty_title = QLabel("尚未设置分类工作目录")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_title.setWordWrap(True)
+        self.empty_hint_label = QLabel("点左上「分类目录」选择保存位置")
+        self.empty_hint_label.setProperty("role", "caption")
+        self.empty_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_hint_label.setWordWrap(True)
-        self.empty_hint_label.hide()
-        layout.addWidget(self.empty_hint_label)
+        empty_layout.addStretch(1)
+        empty_layout.addWidget(self.empty_title)
+        empty_layout.addWidget(self.empty_hint_label)
+        empty_layout.addStretch(1)
+        self.empty_state.setMinimumHeight(row_height)
+        layout.addWidget(self.empty_state)
+        self.empty_state.hide()
 
-        # 操作按钮
+        # 操作按钮：文件夹维护一行，导航/复检一行（窄栏下不挤压）
         button_layout = QHBoxLayout()
-        self.create_btn = QPushButton("创建")
+        button_layout.setSpacing(6)
+        self.create_btn = self._icon_button("创建", "plus")
+        self.create_btn.setToolTip("在当前目录新建分类文件夹")
         self.create_btn.clicked.connect(self._on_create_folder)
         button_layout.addWidget(self.create_btn)
 
-        self.rename_btn = QPushButton("重命名")
+        self.rename_btn = self._icon_button("重命名", "edit")
+        self.rename_btn.setToolTip("重命名选中的分类文件夹")
         self.rename_btn.clicked.connect(self._on_rename_folder)
         button_layout.addWidget(self.rename_btn)
 
-        self.delete_btn = QPushButton("删除")
+        self.delete_btn = self._icon_button("删除", "trash", "danger")
+        self.delete_btn.setToolTip("删除选中的分类文件夹及其内容")
         self.delete_btn.clicked.connect(self._on_delete_folder)
         button_layout.addWidget(self.delete_btn)
 
-        self.preview_btn = QPushButton("复检此夹")
-        self.preview_btn.clicked.connect(self._on_preview_folder)
-        button_layout.addWidget(self.preview_btn)
+        button_layout.addStretch(1)
 
-        self.restore_btn = QPushButton("↩ 返回源目录")
-        self.restore_btn.clicked.connect(self._on_restore_sources)
-        button_layout.addWidget(self.restore_btn)
-
-        self.refresh_btn = QPushButton("刷新")
+        self.refresh_btn = self._icon_button("刷新", "refresh")
+        self.refresh_btn.setToolTip("重新读取分类目录（外部新建/删除了文件夹时用）")
         self.refresh_btn.clicked.connect(self.refresh_folders)
         button_layout.addWidget(self.refresh_btn)
         layout.addLayout(button_layout)
 
-        self.folder_list.setStyleSheet(
-            "QListWidget { background-color: #ffffff; border: 1px solid #dfe4ec;"
-            " border-radius: 6px; }"
-        )
+        nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(6)
+        self.preview_btn = self._icon_button("复检此夹", "search", "ghost")
+        self.preview_btn.setToolTip("把该文件夹里的媒体重新载入左侧列表继续筛选")
+        self.preview_btn.clicked.connect(self._on_preview_folder)
+        nav_layout.addWidget(self.preview_btn)
+
+        self.restore_btn = self._icon_button("返回源目录", "arrow_left", "ghost")
+        self.restore_btn.setToolTip("回到源文件夹列表，继续处理未分类的文件")
+        self.restore_btn.clicked.connect(self._on_restore_sources)
+        nav_layout.addWidget(self.restore_btn)
+        nav_layout.addStretch(1)
+        layout.addLayout(nav_layout)
+
+    # ---------- 小部件 ----------
+
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("role", "caption")
+        return label
+
+    def _icon_color(self) -> str:
+        pal = theme.current_palette()
+        return pal.color(QPalette.ColorRole.ButtonText).name()
+
+    def _icon_button(self, text: str, icon_name: str, variant: str = "secondary") -> QPushButton:
+        btn = QPushButton(text)
+        btn.setProperty("variant", variant)
+        if variant == "danger":
+            color = theme.current_palette().color(QPalette.ColorRole.WindowText).name()
+        else:
+            color = self._icon_color()
+        btn.setIcon(line_icon(icon_name, color, 16))
+        btn.setIconSize(QSize(16, 16))
+        self._icon_buttons.append((btn, icon_name, variant))
+        return btn
+
+    def _show_empty(self, title: str, hint: str):
+        self.empty_title.setText(title)
+        self.empty_hint_label.setText(hint)
+        self.folder_list.hide()
+        self.empty_state.show()
+
+    def _hide_empty(self):
+        self.empty_state.hide()
+        self.folder_list.show()
 
     # ---------- 数据接入 ----------
 
@@ -341,20 +417,30 @@ class FolderPanel(QWidget):
         self.refresh_folders()
 
     def refresh_if_theme_changed(self):
-        """主题切换后重画卡片图标（QPainter 图标不经过 QSS 重映射）。"""
+        """主题切换后重画卡片图标与按钮线形图标（颜色烘进像素，需重生成）。"""
         if self._icon_theme_dark != theme.is_dark():
+            for btn, icon_name, variant in self._icon_buttons:
+                if variant == "danger":
+                    color = theme.current_palette().color(QPalette.ColorRole.WindowText).name()
+                else:
+                    color = self._icon_color()
+                btn.setIcon(line_icon(icon_name, color, 16))
+            self.back_btn.setIcon(line_icon("arrow_left", self._icon_color(), 14))
             self.refresh_folders()
 
     # ---------- 列表刷新 ----------
 
     def refresh_folders(self):
         """刷新文件夹列表"""
+        self.breadcrumb_row.setVisible(bool(self._current_path))
         if not self.folder_manager or self.folder_manager._work_dir is None:
             self.folder_list.clear()
             self._selected_folder = None
-            self.empty_hint_label.show()
+            self._show_empty(
+                "尚未设置分类工作目录",
+                "点左上「分类目录」选择保存位置（分类时也会自动询问）",
+            )
             return
-        self.empty_hint_label.hide()
         self._icon_theme_dark = theme.is_dark()
 
         self.folder_list.clear()
@@ -396,6 +482,17 @@ class FolderPanel(QWidget):
                 item, folder_name, is_builtin, folder_count, file_count, quick_index=quick_index
             )
             self.folder_list.addItem(item)
+
+        if self.folder_list.count() == 0:
+            if self._current_path:
+                self._show_empty("这个文件夹里还没有子文件夹", "点「创建」新建，或「返回上级」")
+            else:
+                self._show_empty(
+                    "分类目录里还没有文件夹",
+                    "点「创建」新建一个，或把文件拖到卡片上直接分类",
+                )
+        else:
+            self._hide_empty()
 
     def _on_folder_clicked(self, item: QListWidgetItem):
         folder_name = item.data(Qt.ItemDataRole.UserRole)
