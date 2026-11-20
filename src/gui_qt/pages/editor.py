@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import datetime
@@ -40,6 +41,7 @@ from toolbox.config_manager import (
 from toolbox.convert_engine import (
     convert_one_file, find_videos, get_output_path, is_convert_cached, update_convert_cache,
 )
+from toolbox.date_folders import scan_date_folders
 from toolbox.edit_engine import (
     add_external_audio, add_external_subtitle, complement_segments,
     cut_points_from_ranges, cut_segments, detect_black, detect_scenes,
@@ -126,12 +128,24 @@ class EditorPage(BasePage):
         self.video.hide()
 
     def on_show(self):
+        self._sync_folders()
         if self.current_path:
             self.video.show()
             source = QUrl.fromLocalFile(self.current_path)
             if self.player.source() != source:
                 self.player.setSource(source)
             self.player.pause()
+
+    def on_dir_changed(self, _path):
+        """工作目录切换：刷新转换提示，并重新识别日期文件夹（不用手动扫描）。"""
+        self._refresh_convert_hint()
+        replace = bool(self._auto_folder) or not self.files
+        self._auto_folder = None
+        if replace:
+            self.files = []
+            self.current_path = None
+            self._refresh_files(select=-1)
+        self._sync_folders(reload_files=replace)
 
     def on_hide(self):
         self.player.pause()
@@ -152,6 +166,8 @@ class EditorPage(BasePage):
         self._cancel: Optional[threading.Event] = None
         self._compress_queue: List[str] = []
         self._compress_thread = None
+        # 当前自动点入的日期文件夹；None 表示队列是手动添加/扫描得到的，自动识别不再覆盖
+        self._auto_folder: Optional[str] = None
 
         cfg = load_convert_config()
         root = QVBoxLayout(self)
@@ -177,6 +193,18 @@ class EditorPage(BasePage):
         row2.addWidget(self._btn("×", self._delete_selected, small=True, danger=True))
         row2.addWidget(self._btn("清空", self._clear, small=True))
         left.addLayout(row2)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(6)
+        folder_row.addWidget(QLabel("日期文件夹"))
+        self.folder_combo = QComboBox()
+        self.folder_combo.setToolTip(
+            "工作目录下的日期文件夹：进入页面自动点入最新一个并载入其中的视频，"
+            "选中其它文件夹即载入该文件夹的视频")
+        self.folder_combo.setMinimumContentsLength(12)
+        self.folder_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.folder_combo.currentIndexChanged.connect(self._on_folder_changed)
+        folder_row.addWidget(self.folder_combo, 1)
+        left.addLayout(folder_row)
         self.file_list = QListWidget()
         self.file_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -396,6 +424,96 @@ class EditorPage(BasePage):
         work = getattr(self.app, "work_dir", "") or ""
         return work if work and Path(work).is_dir() else str(Path.home())
 
+    # ==================== 日期文件夹（自动识别，和交互重命名一致） ====================
+
+    def _folder_choices(self):
+        """工作目录下的全部日期文件夹 [(名称, 绝对路径)]，按名称升序。"""
+        root = self._work_dir_start()
+        return root, [(name, os.path.join(root, name))
+                      for name, _label in scan_date_folders(root)]
+
+    def _sync_folders(self, reload_files: bool = True):
+        """扫描日期文件夹下拉，自动点入最新一个并载入其中视频（免手动扫描）。"""
+        if self.running:
+            return
+        _root, choices = self._folder_choices()
+        self.folder_combo.blockSignals(True)
+        self.folder_combo.clear()
+        for name, path in choices:
+            self.folder_combo.addItem(name, path)
+            self.folder_combo.setItemData(
+                self.folder_combo.count() - 1, path, Qt.ToolTipRole)
+        self.folder_combo.blockSignals(False)
+        self.folder_combo.setEnabled(bool(choices))
+        if not choices:
+            # 没有日期文件夹：按工作目录递归兜底，且只在队列为空时做，不冲掉手动队列
+            work = getattr(self.app, "work_dir", "") or ""
+            if reload_files and not self.files and work and Path(work).is_dir():
+                self._scan_work_dir()
+            return
+        if self.files and not self._auto_folder:
+            # 手动添加/扫描得到的队列保持不动，下拉只跟随显示当前文件所在文件夹
+            self._select_folder(self._folder_of_path(self.current_path, choices))
+            return
+        keep = (self._auto_folder
+                if self._auto_folder and os.path.isdir(self._auto_folder) else "")
+        target = keep or choices[-1][1]   # 升序 → 最后一个是最新日期文件夹
+        self._select_folder(target)
+        if reload_files:
+            self._load_folder(target)
+
+    def _folder_of_path(self, path, choices):
+        """当前文件属于哪个日期文件夹；不在日期文件夹内返回空串。"""
+        if not path:
+            return ""
+        target = os.path.abspath(path)
+        for _name, folder in choices:
+            base = os.path.abspath(folder)
+            try:
+                if os.path.commonpath([base, target]) == base:
+                    return folder
+            except ValueError:
+                continue
+        return ""
+
+    def _select_folder(self, folder: str):
+        """只把下拉切到指定文件夹，不触发载入。"""
+        if not folder:
+            return
+        for idx in range(self.folder_combo.count()):
+            if self.folder_combo.itemData(idx) == folder:
+                self.folder_combo.blockSignals(True)
+                self.folder_combo.setCurrentIndex(idx)
+                self.folder_combo.blockSignals(False)
+                return
+
+    def _load_folder(self, folder: str):
+        """点入日期文件夹：队列换成该文件夹内的视频，并载入第一个预览。"""
+        found = [str(p) for p in find_videos_in(folder)]
+        self._auto_folder = folder
+        if found and self.files == found and self.current_path in found:
+            return   # 内容没变：保留当前进度与已标记片段，不重置预览
+        if not found:
+            self.files = []
+            self._refresh_files(select=-1)
+            self._log(f"{Path(folder).name} 内没有视频")
+            return
+        keep = self.current_path if self.current_path in found else found[0]
+        self.files = found
+        self._refresh_files(select=found.index(keep))
+        self._log(f"载入日期文件夹 {Path(folder).name} → {len(found)} 个视频")
+
+    def _on_folder_changed(self, index: int):
+        """下拉选中某个日期文件夹：载入该文件夹的视频。"""
+        folder = self.folder_combo.itemData(index)
+        if not folder or not os.path.isdir(folder):
+            return
+        if folder == self._auto_folder and self.files:
+            return
+        if self.files and not self._auto_folder:
+            self._log("手动加入的文件队列已被日期文件夹替换")
+        self._load_folder(folder)
+
     # ==================== 文件队列 ====================
 
     def add_dropped_files(self, files):
@@ -405,6 +523,7 @@ class EditorPage(BasePage):
                 self.files.append(f)
                 added.append(f)
         if added:
+            self._auto_folder = None   # 手动加入后队列归手动，自动识别不再覆盖
             self._log(f"添加 {len(added)} 个视频")
             self._refresh_files(select=self.files.index(added[0]))
         else:
@@ -426,7 +545,7 @@ class EditorPage(BasePage):
             self.add_dropped_files(files)
 
     def _scan_work_dir(self):
-        """直接扫描全局工作目录，免去手动选目录。"""
+        """手动兜底：递归扫描全局工作目录（日期文件夹内已自动载入，一般用不到）。"""
         root = self._work_dir_start()
         found = [str(p) for p in find_videos_in(root)]
         if not found:
@@ -708,9 +827,6 @@ class EditorPage(BasePage):
 
     def open_convert_tab(self):
         self.tabs.setCurrentIndex(self.convert_tab_index)
-
-    def on_dir_changed(self, _path):
-        self._refresh_convert_hint()
 
     def _refresh_convert_hint(self):
         cfg = self._cfg()
