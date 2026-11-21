@@ -149,12 +149,11 @@ class MappingDialog(QDialog):
         self.share_passcode.setEnabled(bool(enabled))
 
     def _sync_provider(self, _index: int = 0):
-        """115 只接了浏览与下载，选中时把限制说清楚，别让人以为能备份。"""
+        """115 走 OSS 直传，单文件有 5 GB 上限；选中时说清楚，其余网盘无附加限制。"""
         provider = str(self.provider_combo.currentData() or "quark")
         if provider == "115":
             self.provider_hint.setText(
-                "115 网盘目前只支持浏览与下载，备份上传还没接入；"
-                "这条映射保存后点「立即备份」会直接提示未接入。")
+                "115 网盘上传走阿里云 OSS 直传（先试秒传），单文件上限 5 GB。")
         else:
             self.provider_hint.setText("")
 

@@ -3,9 +3,9 @@
 
 与另外三个网盘后端共用同一组引擎接口：
 `list_entries` / `list_index` / `ensure_dir` / `delete_files` / `digest` /
-`download_links` / `download_headers` / `session`。
+`upload_file` / `download_links` / `download_headers` / `session`。
 
-能力矩阵（2026-11 核对）：
+能力矩阵（2026-11 核对，上传协议对齐 115 官方客户端 27.0.5.7）：
 
 | 能力 | 状态 | 接口 |
 | --- | --- | --- |
@@ -13,9 +13,19 @@
 | 浏览目录（分页） | 支持 | `GET webapi.115.com/files` |
 | 新建目录 | 支持 | `POST webapi.115.com/files/add` |
 | 下载直链 | 支持 | `GET webapi.115.com/files/download?pickcode=` |
+| 上传（秒传 + OSS 直传） | 支持 | `proapi.115.com/app/uploadinfo` → `uplb.115.com/4.0/initupload.php`（EC115 加密）→ 阿里云 OSS `PUT` |
 | 删除到回收站 | 支持 | `POST webapi.115.com/rb/delete`（`fid[i]` + `pid[i]` 成对） |
-| 上传（备份） | **未接入** | 115 网页上传要 `uplb.115.com` 初始调度 + 阿里云 OSS 直传 + 回调三步 |
 | 生成分享 | 未接入 | 115 分享另有一套签名，暂不做 |
+
+上传协议要点（来自 115 官方客户端行为，2026-11 复核）：
+
+- `POST proapi.115.com/app/uploadinfo` → `user_id` + `userkey`（签名用）；
+- 初始调度 `POST uplb.115.com/4.0/initupload.php?k_ec=<token>`，请求体是
+  **EC115 加密后的表单**（P-224 ECDH + AES-CBC），响应体同样加密后回；
+- 表单含 `fileid`（整文件 SHA1 大写）、`target=U_1_<目录cid>`、`sig`、`token`、
+  `t`（毫秒时间戳）、`topupload=true`；需要二次校验时带 `sign_key` + `sign_val`；
+- `status=2` 是秒传成功；否则拿 `bucket / object / callback` 走阿里云 OSS
+  `PUT`（回调里完成入库），令牌来自 `GET uplb.115.com/3.0/gettoken.php`。
 
 已知限制：
 
@@ -25,22 +35,48 @@
   新 Cookie 才能一起带上；首个文件探活确认可用组合，被拒时把 CDN 原文带进错误；
 - 请求头不发 `Origin`（CDN 会按跨域请求 403）；
 - 下载还依赖 Cookie 里的 `KID`（登录页会种下）；缺 KID 时错误里会点明；
+- 上传走单次 OSS `PUT`，单文件上限 5 GB；更大的文件会明确报错（未做 OSS 分片）；
 - 删除要 `fid + pid` 成对提交，pid 取自列目录时的缓存（没列过的 fid 退回根目录，
   115 会拒绝，返回 False 而不是静默成功）；
-- 非会员限速是服务端策略，本客户端不做任何绕过；
-- 空文件（0 字节）在 115 侧可能被合并/忽略，备份引擎按普通文件处理。
+- 非会员限速是服务端策略，本客户端不做任何绕过。
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
+import secrets
 import time
+import zlib
+from email.utils import formatdate
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 import requests
 
 API_BASE = "https://webapi.115.com"
 NAV_URL = "https://my.115.com/?ct=ajax&ac=nav"
+UPLOAD_INFO_URL = "https://proapi.115.com/app/uploadinfo"
+UPLOAD_INIT_URL = "https://uplb.115.com/4.0/initupload.php"
+OSS_TOKEN_URL = "https://uplb.115.com/3.0/gettoken.php"
+OSS_ENDPOINT = "cn-shenzhen.oss.aliyuncs.com"
+OSS_USER_AGENT = "aliyun-sdk-android/2.9.1"
+UPLOAD_APP_VERSION = "27.0.5.7"
+# 115 客户端里写死的两个盐
+_UPLOAD_MD5_SALT = "Qclm8MGWUv59TnrR0XPg"
+_EC_CRC_SALT = b"^j>WD3Kr?J2gLFjD4W2y@"
+# EC115 的远端公钥（P-224，X||Y 各 28 字节）
+_EC_REMOTE_KEY = bytes([
+    0x57, 0xA2, 0x92, 0x57, 0xCD, 0x23, 0x20, 0xE5,
+    0xD6, 0xD1, 0x43, 0x32, 0x2F, 0xA4, 0xBB, 0x8A,
+    0x3C, 0xF9, 0xD3, 0xCC, 0x62, 0x3E, 0xF5, 0xED,
+    0xAC, 0x62, 0xB7, 0x67, 0x8A, 0x89, 0xC9, 0x1A,
+    0x83, 0xBA, 0x80, 0x0D, 0x61, 0x29, 0xF5, 0x22,
+    0xD0, 0x34, 0xC8, 0x95, 0xDD, 0x24, 0x65, 0x24,
+    0x3A, 0xDD, 0xC2, 0x50, 0x95, 0x3B, 0xEE, 0xBA,
+])
+
 REFERER = "https://115.com/"
 ROOT_ID = "0"
 PAGE_SIZE = 1150
@@ -49,7 +85,7 @@ DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 # 115 的下载 CDN 对 UA 有偏好：普通 Chrome UA 被 403 时，用带 115Browser 的 UA
 # 重新申请一次直链（UA 与直链绑定，换 UA 必须连申请一起换）
-FALLBACK_UA = DEFAULT_UA + " 115Browser/27.0.3.7"
+FALLBACK_UA = DEFAULT_UA + " 115Browser/27.0.5.7"
 
 _AUTH_HINTS = ("登录", "登入", "授权", "认证", "token", "sign")
 
@@ -87,6 +123,142 @@ def _int(value, default: int = 0) -> int:
         return default
 
 
+def _sha1_upper(data: bytes) -> str:
+    return hashlib.sha1(data).hexdigest().upper()
+
+
+def _md5_hex(data: bytes) -> str:
+    return hashlib.md5(data).hexdigest()
+
+
+def _sha1_range_file(path: Path, start: int, end: int) -> str:
+    """算文件 [start, end] 区间的 SHA1（大写），用于二次校验。"""
+    digest = hashlib.sha1()
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        left = end - start + 1
+        while left > 0:
+            chunk = handle.read(min(1024 * 1024, left))
+            if not chunk:
+                break
+            digest.update(chunk)
+            left -= len(chunk)
+    return digest.hexdigest().upper()
+
+
+def _lz4_decompress(src: bytes) -> bytes:
+    """LZ4 block 解压（115 的响应体只用了 block 格式，没有帧头）。"""
+    out = bytearray()
+    index = 0
+    total = len(src)
+    while index < total:
+        token = src[index]
+        index += 1
+        literals = token >> 4
+        if literals == 15:
+            while True:
+                extra = src[index]
+                index += 1
+                literals += extra
+                if extra != 255:
+                    break
+        out += src[index:index + literals]
+        index += literals
+        if index >= total:
+            break
+        offset = src[index] | (src[index + 1] << 8)
+        index += 2
+        match_len = token & 0x0F
+        if match_len == 15:
+            while True:
+                extra = src[index]
+                index += 1
+                match_len += extra
+                if extra != 255:
+                    break
+        match_len += 4
+        start = len(out) - offset
+        if start < 0:
+            raise Drive115Error(-1, "115 响应解压失败（LZ4 偏移越界）")
+        for _ in range(match_len):
+            out.append(out[start])
+            start += 1
+    return bytes(out)
+
+
+class _EC115Cipher:
+    """115 客户端的上传加密：P-224 ECDH 派生 AES key/iv，请求用 CBC，响应再解 LZ4。"""
+
+    def __init__(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        remote = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(_EC_REMOTE_KEY[:28], "big"),
+            int.from_bytes(_EC_REMOTE_KEY[28:], "big"),
+            ec.SECP224R1(),
+        ).public_key()
+        private = ec.generate_private_key(ec.SECP224R1())
+        secret = private.exchange(ec.ECDH(), remote)
+        self.key = secret[:16]
+        self.iv = secret[-16:]
+        numbers = private.public_key().public_numbers()
+        prefix = 0x03 if numbers.y & 1 else 0x02
+        # 29 = 28 字节 X + 1 字节压缩点前缀
+        self.pub_key = bytes([29, prefix]) + numbers.x.to_bytes(28, "big")
+
+    def encrypt(self, plain: bytes) -> bytes:
+        from cryptography.hazmat.primitives import padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+        padder = padding.PKCS7(128).padder()
+        data = padder.update(plain) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(self.key), modes.CBC(self.iv)).encryptor()
+        return encryptor.update(data) + encryptor.finalize()
+
+    def decrypt(self, cipher_text: bytes) -> bytes:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+        usable = len(cipher_text) - len(cipher_text) % 16
+        decryptor = Cipher(algorithms.AES(self.key), modes.CBC(self.iv)).decryptor()
+        data = decryptor.update(cipher_text[:usable]) + decryptor.finalize()
+        if len(data) < 2:
+            raise Drive115Error(-1, "115 响应过短，无法解密")
+        length = data[0] | (data[1] << 8)
+        return _lz4_decompress(data[2:2 + length])
+
+    def encode_token(self, timestamp_ms: int) -> str:
+        r1 = secrets.token_bytes(1)[0]
+        r2 = secrets.token_bytes(1)[0]
+        stamp = int(timestamp_ms & 0xFFFFFFFF).to_bytes(4, "big")
+        buf = bytearray()
+        for i in range(15):
+            buf.append(self.pub_key[i] ^ r1)
+        buf += bytes([r1, 0x73 ^ r1])
+        buf += bytes([r1, r1, r1])
+        for i in range(4):
+            buf.append(r1 ^ stamp[3 - i])
+        for i in range(15, len(self.pub_key)):
+            buf.append(self.pub_key[i] ^ r2)
+        buf += bytes([r2, 0x01 ^ r2])
+        buf += bytes([r2, r2, r2])
+        crc = zlib.crc32(_EC_CRC_SALT + bytes(buf)) & 0xFFFFFFFF
+        buf += bytes(reversed(crc.to_bytes(4, "big")))
+        return base64.b64encode(bytes(buf)).decode()
+
+
+def _oss_signature(secret: str, method: str, content_md5: str, content_type: str,
+                   date: str, oss_headers: dict[str, str], resource: str) -> str:
+    """阿里云 OSS V1 签名（PUT 单对象）。"""
+    import hmac
+
+    canonical = "".join(f"{key.lower()}:{value}\n"
+                        for key, value in sorted(oss_headers.items()))
+    to_sign = (f"{method}\n{content_md5}\n{content_type}\n{date}\n"
+               f"{canonical}{resource}")
+    digest = hmac.new(secret.encode(), to_sign.encode(), hashlib.sha1).digest()
+    return base64.b64encode(digest).decode()
+
+
 class Drive115Client:
     """一个登录态一个实例；目录 id 缓存按云端路径。
 
@@ -94,8 +266,8 @@ class Drive115Client:
     文件另带 `pc`（pickcode）用于取直链。
     """
 
-    # 备份引擎据此判断能否走上传；115 上传还没接入
-    supports_upload = False
+    # 备份引擎据此判断能否走上传；115 已接入秒传 + OSS 直传
+    supports_upload = True
 
     @staticmethod
     def _parse_cookie(cookie: str) -> dict[str, str]:
@@ -467,6 +639,229 @@ class Drive115Client:
 
     def upload_file(self, local_path, remote_dir: str, on_progress=None,
                     on_stage=None, hashes=None, resume=None) -> dict:
-        """115 上传未接入：明确报错，不返回假成功。"""
-        raise Drive115Error(
-            -1, "115 网盘的上传还没接入（当前只支持浏览与下载）", "/upload")
+        """上传一个文件：先试秒传，未命中再走阿里云 OSS 直传（单次 PUT）。
+
+        协议细节见模块文档；`hashes` 是引擎算好的 (md5, sha1)，没传就自己算。
+        """
+        path = Path(local_path)
+        size = path.stat().st_size
+        if size <= 0:
+            raise Drive115Error(-1, "115 不允许上传 0 字节文件")
+        if size > 5 * 1024 ** 3:
+            raise Drive115Error(-1, "115 单文件直传上限 5 GB（更大的文件暂未支持分片）")
+        remote_dir = (remote_dir or "").strip("/")
+        if on_stage is not None:
+            on_stage("hash", path.name, size)
+        md5, sha1 = hashes if hashes else self.digest(path)
+        sha1 = str(sha1).upper()
+        user_id, userkey = self._upload_credentials()
+        target = f"U_1_{self.ensure_dir(remote_dir)}"
+
+        sign_key, sign_val = "", ""
+        cipher = _EC115Cipher()
+        payload: dict = {}
+        for attempt in range(2):
+            stamp = int(time.time() * 1000)
+            user_id_str = str(user_id)
+            sig_hash = _sha1_upper(f"{user_id_str}{sha1}{target}0".encode())
+            sig = _sha1_upper(f"{userkey}{sig_hash}000000".encode())
+            token = _md5_hex((
+                _UPLOAD_MD5_SALT + sha1 + str(size) + sign_key + sign_val
+                + user_id_str + str(stamp)
+                + _md5_hex(user_id_str.encode()) + UPLOAD_APP_VERSION
+            ).encode())
+            form = {
+                "appid": "0",
+                "appversion": UPLOAD_APP_VERSION,
+                "userid": user_id_str,
+                "filename": path.name,
+                "filesize": str(size),
+                "fileid": sha1,
+                "target": target,
+                "sig": sig,
+                "topupload": "true",
+                "t": str(stamp),
+                "token": token,
+            }
+            if sign_key and sign_val:
+                form["sign_key"] = sign_key
+                form["sign_val"] = sign_val
+            body = cipher.encrypt(urlencode(form).encode())
+            try:
+                resp = self.session.post(
+                    f"{UPLOAD_INIT_URL}?k_ec={quote(cipher.encode_token(stamp))}",
+                    data=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=TIMEOUT * 2)
+            except (requests.RequestException, OSError) as exc:
+                raise Drive115Error(-1, f"上传初始化请求失败：{exc}", "/initupload")
+            if resp.status_code != 200:
+                raise Drive115Error(resp.status_code,
+                                    f"上传初始化 HTTP {resp.status_code}：{resp.text[:200]}",
+                                    "/initupload")
+            try:
+                payload = json.loads(cipher.decrypt(resp.content).decode("utf-8"))
+            except Drive115Error:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 解密/JSON 失败都算协议异常
+                raise Drive115Error(-1, f"上传初始化响应无法解析：{exc}", "/initupload")
+            if payload.get("state") is False:
+                raise Drive115Error(payload.get("code") or payload.get("errno") or -1,
+                                    str(payload.get("message") or payload.get("error")
+                                        or "上传初始化被拒绝"), "/initupload")
+            nested = payload.get("data")
+            data = nested if isinstance(nested, dict) else payload
+            status = _int(data.get("status", payload.get("status")))
+            if status == 7 and attempt == 0:
+                sign_key = str(data.get("sign_key") or payload.get("sign_key") or "")
+                sign_check = str(data.get("sign_check") or payload.get("sign_check") or "")
+                if not (sign_key and sign_check):
+                    break
+                if on_stage is not None:
+                    on_stage("hash", path.name, size)
+                sign_val = self._sha1_range(path, sign_check)
+                continue
+            break
+
+        nested = payload.get("data")
+        data = nested if isinstance(nested, dict) else payload
+        status = _int(data.get("status", payload.get("status")))
+        pick_code = str(data.get("pick_code") or payload.get("pick_code") or "")
+        if status == 2:
+            if on_progress is not None:
+                try:
+                    on_progress(size, size)
+                except Exception:  # noqa: BLE001
+                    pass
+            return {"fid": pick_code, "instant": True, "md5": md5, "size": size}
+
+        bucket = str(data.get("bucket") or "")
+        obj = str(data.get("object") or "")
+        callback = data.get("callback") if isinstance(data.get("callback"), dict) else {}
+        if not (bucket and obj):
+            raise Drive115Error(-1,
+                                f"上传初始化未返回 OSS 信息（status={status}，"
+                                f"字段：{'、'.join(sorted(data)) or '无'}）", "/initupload")
+        if on_stage is not None:
+            on_stage("upload", path.name, size)
+        self._oss_put(path, bucket, obj, callback, size, on_progress)
+        self._index_cache.pop(remote_dir, None)
+        return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
+
+    # ==================== 上传辅助 ====================
+
+    _upload_user: tuple[int, str] | None = None
+
+    def _upload_credentials(self) -> tuple[int, str]:
+        """`app/uploadinfo` 给 user_id + userkey（签名用），一次登录只取一次。"""
+        if self._upload_user:
+            return self._upload_user
+        try:
+            resp = self.session.post(UPLOAD_INFO_URL, timeout=TIMEOUT)
+            payload = resp.json()
+        except (requests.RequestException, OSError, ValueError) as exc:
+            raise Drive115Error(-1, f"取上传凭证失败：{exc}", "/app/uploadinfo")
+        if not isinstance(payload, dict):
+            raise Drive115Error(-1, "上传凭证结构异常", "/app/uploadinfo")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        user_id = _int(data.get("user_id") or data.get("userid") or data.get("uid"))
+        userkey = str(data.get("userkey") or data.get("user_key") or "")
+        if not (user_id and userkey):
+            raise Drive115Error(-1,
+                                f"上传凭证缺少 user_id/userkey（字段："
+                                f"{'、'.join(sorted(data)) or '无'}）", "/app/uploadinfo")
+        self._upload_user = (user_id, userkey)
+        return self._upload_user
+
+    @staticmethod
+    def _sha1_range(path: Path, range_spec: str) -> str:
+        """`sign_check` 形如 `0-131071`：算这段字节的 SHA1（大写）。"""
+        try:
+            start_text, end_text = str(range_spec).split("-", 1)
+            start, end = int(start_text), int(end_text)
+        except (ValueError, TypeError):
+            raise Drive115Error(-1, f"无法解析二次校验范围：{range_spec}", "/initupload")
+        return _sha1_range_file(path, start, end)
+
+    def _oss_token(self) -> dict:
+        try:
+            payload = self.session.get(OSS_TOKEN_URL, timeout=TIMEOUT).json()
+        except (requests.RequestException, OSError, ValueError) as exc:
+            raise Drive115Error(-1, f"取 OSS 上传令牌失败：{exc}", "/3.0/gettoken.php")
+        if not isinstance(payload, dict):
+            raise Drive115Error(-1, "OSS 令牌结构异常", "/3.0/gettoken.php")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        token = {
+            "key_id": str(data.get("AccessKeyId") or data.get("AccessKeyID") or ""),
+            "key_secret": str(data.get("AccessKeySecret") or ""),
+            "security": str(data.get("SecurityToken") or ""),
+        }
+        if not (token["key_id"] and token["key_secret"] and token["security"]):
+            raise Drive115Error(-1,
+                                f"OSS 令牌缺字段（字段：{'、'.join(sorted(data)) or '无'}）",
+                                "/3.0/gettoken.php")
+        return token
+
+    def _oss_put(self, path: Path, bucket: str, obj: str, callback: dict,
+                 size: int, on_progress=None) -> None:
+        """单次 PUT 到阿里云 OSS；回调由 115 校验，成功即入库。"""
+        token = self._oss_token()
+        oss_headers = {
+            "x-oss-security-token": token["security"],
+        }
+        cb = str(callback.get("callback") or "")
+        cb_var = str(callback.get("callback_var") or "")
+        if cb:
+            oss_headers["x-oss-callback"] = base64.b64encode(cb.encode()).decode()
+        if cb_var:
+            oss_headers["x-oss-callback-var"] = base64.b64encode(cb_var.encode()).decode()
+        date = formatdate(usegmt=True)
+        resource = f"/{bucket}/{obj}"
+        signature = _oss_signature(token["key_secret"], "PUT", "", "", date,
+                                   oss_headers, resource)
+        headers = {
+            "Date": date,
+            "Authorization": f"OSS {token['key_id']}:{signature}",
+            "User-Agent": OSS_USER_AGENT,
+            **oss_headers,
+        }
+        url = f"https://{bucket}.{OSS_ENDPOINT}/{quote(obj, safe='/')}"
+
+        sent = {"done": 0}
+
+        class _Reader:
+            """给 requests 一个带长度、可进度回调的文件流（避免 chunked PUT）。"""
+
+            def __init__(self):
+                self._handle = open(path, "rb")
+
+            def __len__(self) -> int:
+                return size
+
+            def read(self, amount: int = -1) -> bytes:
+                chunk = self._handle.read(amount if amount and amount > 0 else 1024 * 1024)
+                if chunk:
+                    sent["done"] += len(chunk)
+                    if on_progress is not None:
+                        try:
+                            on_progress(min(sent["done"], size), size)
+                        except Exception:  # noqa: BLE001
+                            pass
+                return chunk
+
+            def close(self) -> None:
+                self._handle.close()
+
+        reader = _Reader()
+        try:
+            resp = self.session.put(url, data=reader, headers=headers,
+                                    timeout=(30, 600))
+        except (requests.RequestException, OSError) as exc:
+            raise Drive115Error(-1, f"OSS 上传中断：{exc}", "/oss")
+        finally:
+            reader.close()
+        if resp.status_code == 200:
+            return
+        body = (resp.text or "")[:300]
+        raise Drive115Error(resp.status_code,
+                            f"OSS 上传被拒（HTTP {resp.status_code}）：{body}", "/oss")
