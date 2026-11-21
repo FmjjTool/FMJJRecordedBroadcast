@@ -19,11 +19,12 @@
 
 已知限制：
 
-- 下载直链与请求 UA 绑定，`download_headers()` 必须与申请直链时用同一个 UA；
-- 115 的下载 CDN 对 `Origin` / UA 挑剔：请求头里不发 `Origin`，首次取链后用
-  「Range: bytes=0-0」探活；被 401/403 就换 `115Browser` UA 重新申请一次，
-  仍然失败时把 CDN 返回的状态码与响应片段带进错误（不再只报「直链失效」）；
-- 下载还需要 Cookie 里的 `KID`（登录页会种下）；缺 KID 时探活失败会在错误里点明；
+- 下载直链与请求 UA 绑定，下载时必须用申请时同一个 UA；
+- 115 的下载 CDN（`cdnfhnfile.115.com`）常见拒绝是 `no cookie value`：
+  账号 Cookie 要放在会话罐里（而不是写死 `Cookie` 头），这样取链响应下发的
+  新 Cookie 才能一起带上；首个文件探活确认可用组合，被拒时把 CDN 原文带进错误；
+- 请求头不发 `Origin`（CDN 会按跨域请求 403）；
+- 下载还依赖 Cookie 里的 `KID`（登录页会种下）；缺 KID 时错误里会点明；
 - 删除要 `fid + pid` 成对提交，pid 取自列目录时的缓存（没列过的 fid 退回根目录，
   115 会拒绝，返回 False 而不是静默成功）；
 - 非会员限速是服务端策略，本客户端不做任何绕过；
@@ -96,6 +97,17 @@ class Drive115Client:
     # 备份引擎据此判断能否走上传；115 上传还没接入
     supports_upload = False
 
+    @staticmethod
+    def _parse_cookie(cookie: str) -> dict[str, str]:
+        jar: dict[str, str] = {}
+        for part in (cookie or "").split(";"):
+            if "=" in part:
+                key, _, value = part.partition("=")
+                key = key.strip()
+                if key:
+                    jar[key] = value.strip()
+        return jar
+
     def __init__(self, cookie: str, user_agent: str = DEFAULT_UA):
         cookie = (cookie or "").strip()
         if not cookie:
@@ -103,8 +115,13 @@ class Drive115Client:
         self.cookie = cookie
         self.user_agent = user_agent
         self.session = requests.Session()
+        # 账号 Cookie 放进会话罐，而不是写死 Cookie 头：
+        # ① 取链接口若下发新 Cookie，罐里能自动带上；
+        # ② 显式 Cookie 头会覆盖罐内容，115 的 cdnfhnfile 节点正是靠这条判定
+        #    「no cookie value」→ 403。
+        self._account_cookies = self._parse_cookie(cookie)
+        self.session.cookies.update(self._account_cookies)
         self.session.headers.update({
-            "Cookie": self.cookie,
             "User-Agent": self.user_agent,
             "Referer": REFERER,
             "Accept": "application/json, text/plain, */*",
@@ -116,12 +133,14 @@ class Drive115Client:
         self._index_cache: dict[str, dict] = {}
         self._digest_cache: dict[tuple, tuple[str, str]] = {}
         self._user_id = ""
-        # 直链探活只做一次：记录最终可用的 UA / 是否带 Cookie
+        # 直链探活只做一次：记录最终可用的 UA / Cookie 方式
         self._download_checked = False
-        self._download_mode = "cookie"
-        # 探活四种组合全被拒后缓存原因：同一批后续文件直接失败，不再各等 6 次重试
+        self._download_ua = ""
+        self._download_mode = "jar"      # jar / meta
+        self._download_cookie = ""
+        # 探活全部被拒后缓存原因：同一批后续文件直接失败，不再各等 6 次重试
         self._download_blocked = ""
-        self.has_kid = "KID=" in self.cookie
+        self.has_kid = "KID" in self._account_cookies
 
     # ==================== 基础 ====================
 
@@ -279,37 +298,39 @@ class Drive115Client:
 
     # ==================== 下载 ====================
 
-    def _fetch_link(self, pick: str) -> str:
-        """按 pickcode 申请一次直链。"""
+    def _fetch_download(self, pick: str) -> tuple[str, dict]:
+        """按 pickcode 申请直链，连同响应里可能下发的下载头字段一起返回。
+
+        115 的 `/files/download` 除 `file_url` 外还可能给 `user_agent` /
+        `cookie`（CDN 认的是这一份，不是账号 Cookie），先原样收着备用。
+        """
         payload = self._request("GET", "/files/download", params={
             "pickcode": pick, "_": int(time.time() * 1000)})
-        url = str(payload.get("file_url") or "")
-        if not url:
-            data = payload.get("data")
-            nested = data if isinstance(data, dict) else {}
-            url = str(nested.get("file_url") or nested.get("url") or "")
+        data = payload.get("data")
+        nested = data if isinstance(data, dict) else {}
+        url = str(payload.get("file_url") or nested.get("file_url")
+                  or nested.get("url") or "")
         if not url:
             raise Drive115Error(-1, "未取到下载直链", "/files/download")
-        return url
+        meta: dict = {"keys": sorted(set(payload) | set(nested))}
+        for source in (payload, nested):
+            for key in ("user_agent", "cookie", "downcookie"):
+                value = source.get(key)
+                if isinstance(value, str) and value and key not in meta:
+                    meta[key] = value
+        return url, meta
 
-    def _headers_for(self, mode: str, ua: str) -> dict:
-        """下载头；`mode` 决定带不带登录 Cookie（部分 CDN 签名链接只认裸请求）。"""
-        headers = {
-            "User-Agent": ua,
-            "Referer": REFERER,
-            "Accept": "*/*",
-        }
-        if mode == "cookie":
-            headers["Cookie"] = self.cookie
-        return headers
+    def _probe_link(self, url: str, ua: str, cookie: str | None) -> tuple[int, str]:
+        """试下载同一个直链，返回 (状态码, 响应片段)。
 
-    def _probe_link(self, url: str, mode: str, ua: str) -> tuple[int, str]:
-        """按给定时序/头试下载同一个直链，返回 (状态码, 响应片段)。
-
-        与下载引擎第一次请求完全一致（普通 GET、不带 Range），所以探活通过
-        就说明引擎马上要发的那个请求也能过。状态码 0 表示网络异常。
+        `cookie=None` 表示不写 Cookie 头、交给会话罐（账号 Cookie + 取链时
+        服务端新下的 Cookie）；传字符串则显式用这份 Cookie。
+        与下载引擎第一次请求完全一致（普通 GET、不带 Range），探活通过就说明
+        引擎马上要发的那个请求也能过。状态码 0 表示网络异常。
         """
-        headers = self._headers_for(mode, ua)
+        headers = {"User-Agent": ua, "Referer": REFERER, "Accept": "*/*"}
+        if cookie is not None:
+            headers["Cookie"] = cookie
         try:
             resp = self.session.get(url, headers=headers, stream=True,
                                     allow_redirects=True, timeout=(15, 30))
@@ -330,10 +351,15 @@ class Drive115Client:
     def download_links(self, pickcodes: list[str]) -> dict[str, str]:
         """按 pickcode 取直链；返回 `{pickcode: url}`。
 
-        115 的 CDN 会按 UA / Cookie / Referer 组合拒绝（401/403）。首个文件把
-        「普通 UA / 115Browser UA」×「带 Cookie / 不带 Cookie」四种组合各试一次，
-        命中哪种就按哪种下载；四种都不过时**直接报错并停止重试**，错误里带
-        CDN 的状态码与原文，避免日志只剩「直链失效」看不出原因。
+        115 的 CDN 对下载请求的 Cookie / UA 很挑（典型拒绝是
+        `{"message":"no cookie value"}`）。首个文件按顺序探活：
+
+        1. 会话罐（账号 Cookie，自动并入取链响应下发的 Cookie）
+        2. 响应里显式下发的 cookie（若有该字段）
+        3. 换 `115Browser` UA 重新申请后再试 1 / 2
+
+        命中哪种就按哪种下载；全部被拒时**直接报错并停止重试**，
+        错误里带每次的状态码、CDN 原文、直链主机和取链响应字段名。
         """
         from toolbox.quark.download import DownloadError
 
@@ -341,8 +367,9 @@ class Drive115Client:
             raise DownloadError(self._download_blocked)
 
         links: dict[str, str] = {}
+        metas: dict[str, dict] = {}
         for pick in [str(p) for p in pickcodes if p]:
-            links[pick] = self._fetch_link(pick)
+            links[pick], metas[pick] = self._fetch_download(pick)
         if not links:
             raise Drive115Error(-1, "未取到下载直链", "/files/download")
 
@@ -351,25 +378,46 @@ class Drive115Client:
 
         self._download_checked = True
         first = next(iter(links))
-        saved_ua = self.user_agent
+        meta = metas[first]
+        # 直链可能绑定响应里下发的 UA，优先用它
+        ua = str(meta.get("user_agent") or self.user_agent)
+        meta_cookie = str(meta.get("cookie") or meta.get("downcookie") or "")
         attempts: list[str] = []
-        for ua in (saved_ua, FALLBACK_UA):
-            label = "115Browser UA" if ua == FALLBACK_UA else "Chrome UA"
-            if ua != saved_ua:
-                # 直链与 UA 绑定：换 UA 必须重新申请，不能只换下载头
-                self.user_agent = ua
-                self.session.headers["User-Agent"] = ua
-                links[first] = self._fetch_link(first)
-            for mode in ("cookie", "nocookie"):
-                how = "带Cookie" if mode == "cookie" else "不带Cookie"
-                code, detail = self._probe_link(links[first], mode, ua)
-                if code == 0:
-                    # 网络异常不当作 CDN 拒绝，交给下载引擎重试
-                    return links
-                if code in (200, 206):
-                    self._download_mode = mode
-                    return links
-                attempts.append(f"{label}/{how}：HTTP {code} {detail}".strip())
+
+        plans: list[tuple[str, str, str | None]] = [("会话罐", ua, None)]
+        if meta_cookie:
+            plans.append(("响应下发 cookie", ua, meta_cookie))
+        for label, probe_ua, cookie in plans:
+            code, detail = self._probe_link(links[first], probe_ua, cookie)
+            if code == 0:
+                # 网络异常不当作 CDN 拒绝，交给下载引擎重试
+                return links
+            if code in (200, 206):
+                self._download_ua = probe_ua
+                self._download_mode = "meta" if cookie is not None else "jar"
+                self._download_cookie = cookie or ""
+                return links
+            attempts.append(f"{label}：HTTP {code} {detail}".strip())
+
+        saved_ua = self.user_agent
+        self.user_agent = FALLBACK_UA
+        self.session.headers["User-Agent"] = FALLBACK_UA
+        links[first], meta = self._fetch_download(first)
+        meta_cookie = str(meta.get("cookie") or meta.get("downcookie") or "")
+        retry_plans: list[tuple[str, str, str | None]] = [
+            ("115Browser UA + 会话罐", FALLBACK_UA, None)]
+        if meta_cookie:
+            retry_plans.append(("115Browser UA + 响应 cookie", FALLBACK_UA, meta_cookie))
+        for label, probe_ua, cookie in retry_plans:
+            code, detail = self._probe_link(links[first], probe_ua, cookie)
+            if code == 0:
+                return links
+            if code in (200, 206):
+                self._download_ua = probe_ua
+                self._download_mode = "meta" if cookie is not None else "jar"
+                self._download_cookie = cookie or ""
+                return links
+            attempts.append(f"{label}：HTTP {code} {detail}".strip())
 
         self.user_agent = saved_ua
         self.session.headers["User-Agent"] = saved_ua
@@ -381,9 +429,16 @@ class Drive115Client:
             host = urlsplit(links[first]).netloc
         except ValueError:
             pass
-        message = ("115 拒绝下载直链（四种组合都被拒，已停止重试）：\n  "
+        keys = "、".join(meta.get("keys") or []) or "（无）"
+        try:
+            extra = len(self.session.cookies) - len(self._account_cookies)
+        except Exception:  # noqa: BLE001 - 诊断信息拿不到不影响报错
+            extra = 0
+        message = ("115 拒绝下载直链（已停止重试）：\n  "
                    + "\n  ".join(attempts)
                    + (f"\n直链主机：{host}" if host else "")
+                   + f"\n取链响应字段：{keys}"
+                   + (f"\n会话罐新增 Cookie：{extra} 个" if extra > 0 else "")
                    + hint)
         self._download_blocked = message
         raise DownloadError(message)
@@ -391,8 +446,16 @@ class Drive115Client:
     # ==================== 上传（待接入） ====================
 
     def download_headers(self) -> dict:
-        """直链下载头；UA 必须与申请直链时一致，Cookie 按探活结论带或不带。"""
-        return self._headers_for(self._download_mode, self.user_agent)
+        """直链下载头；UA 必须与申请直链时一致。
+
+        会话罐模式不写 Cookie 头，让 requests 用罐里的 Cookie（含取链时服务端
+        新下的那份）；只有响应明确下发了 cookie 才显式带上。
+        """
+        headers = {"User-Agent": self._download_ua or self.user_agent,
+                   "Referer": REFERER, "Accept": "*/*"}
+        if self._download_mode == "meta" and self._download_cookie:
+            headers["Cookie"] = self._download_cookie
+        return headers
 
     def digest(self, path) -> tuple[str, str]:
         p = Path(path)
