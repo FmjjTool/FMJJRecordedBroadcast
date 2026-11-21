@@ -4,7 +4,7 @@
 账号主页链接 → 添加账号；作品链接/分享文案/纯 BV 号 → 解析并存入「已获取」。
 - 功能页：批量输入行 / 账号勾选列表 / 采集模式（全部/选中/按组）/ 条数 /
   会话定时 / 增量模式 / 搜索限流 / 日志
-- 设置页：账号与分组已迁移到「Cookie 管理 → 账号配置」，此处只保留入口提示
+- 账号与分组由统一账号配置维护，本页只保留采集参数与运行状态
 """
 
 import json
@@ -18,9 +18,9 @@ from urllib.parse import urlparse
 from PySide6.QtCore import QDate, QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
-    QLabel, QLineEdit, QListView, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
-    QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
+    QBoxLayout, QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
+    QLabel, QLayout, QLineEdit, QListView, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
+    QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from gui_qt import download_ops, theme
@@ -74,6 +74,25 @@ def _is_account_url(url: str) -> bool:
 
 
 
+class _AccountsContent(QWidget):
+    """保留卡片的自然高度，只把窄版最小宽度交给滚动容器。"""
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+        self.setProperty("pageSurface", True)
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        if hasattr(self.page, "_settings_strategy"):
+            hint.setWidth(self.page._minimum_content_width())
+        return hint
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.page._update_settings_layout()
+
+
 class InfoAccountsPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
@@ -103,8 +122,53 @@ class InfoAccountsPage(BasePage):
         self._reveal_timer.timeout.connect(self._drain_reveal)
 
         self._build_func(self)
+        self._update_settings_layout()
         self._refresh_gid_menus()
         self._reload_account_list()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_settings_layout()
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        if hasattr(self, "_settings_strategy"):
+            hint.setWidth(self._minimum_content_width()
+                          + self._scroll.verticalScrollBar().sizeHint().width())
+        return hint
+
+    def _minimum_content_width(self):
+        layout = self._content.layout()
+        outer = layout.contentsMargins()
+        inner = self._settings_card.layout().contentsMargins()
+        frame_width = (self._settings_card.minimumSizeHint().width()
+                       - self._settings_card.layout().minimumSize().width())
+        settings_width = (max(self._settings_params.minimumSize().width(),
+                              self._settings_strategy.minimumSize().width())
+                          + inner.left() + inner.right() + frame_width)
+        widths = [settings_width]
+        for index in range(layout.count()):
+            card = layout.itemAt(index).widget()
+            if card is not None and card is not self._settings_card:
+                widths.append(card.minimumSizeHint().width())
+        return max(widths) + outer.left() + outer.right()
+
+    def _update_settings_layout(self):
+        """窄窗口将策略开关换到参数下方，不重建控件或修改采集设置。"""
+        if not hasattr(self, "_settings_strategy"):
+            return
+        outer = self._content.layout().contentsMargins()
+        inner = self._settings_card.layout().contentsMargins()
+        available = self._content.width() - outer.left() - outer.right() - inner.left() - inner.right()
+        required = (self._settings_params.minimumSize().width()
+                    + self._settings_strategy.minimumSize().width()
+                    + 1 + 2 * self._settings_columns.spacing())
+        wide = available >= required
+        direction = QBoxLayout.LeftToRight if wide else QBoxLayout.TopToBottom
+        if self._settings_columns.direction() != direction:
+            self._settings_columns.setDirection(direction)
+            self._content.updateGeometry()
+        self._settings_separator.setVisible(wide)
 
     def on_return_press(self):
         """主窗口回车统一入口 → 触发「获取最新」。"""
@@ -134,15 +198,26 @@ class InfoAccountsPage(BasePage):
 
     # ---------- 功能页 ----------
     def _build_func(self, f):
-        layout = QVBoxLayout(f)
+        outer = QVBoxLayout(f)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._scroll = QScrollArea(f)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._content = _AccountsContent(self)
+        layout = QVBoxLayout(self._content)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
+        # 宽度由窄版 size hint 决定；高度由自然最小高度决定，不压缩固定高控件。
+        layout.setSizeConstraint(QLayout.SetNoConstraint)
 
         layout.addWidget(self._build_batch_card())
         layout.addWidget(self._build_accounts_card())
         layout.addWidget(self._build_settings_card())
         layout.addWidget(self._build_run_bar())
         layout.addWidget(self._build_log_card(), 1)
+        self._scroll.setWidget(self._content)
+        outer.addWidget(self._scroll)
 
         # 没有显式语义的按钮统一次要样式（新建按钮在创建处已声明 variant）
         for button in f.findChildren(QPushButton):
@@ -275,14 +350,17 @@ class InfoAccountsPage(BasePage):
 
     def _build_settings_card(self) -> QFrame:
         card, head, body = self._new_card("采集设置")
+        self._settings_card = card
         body.setSpacing(10)
         head.addWidget(self._caption("范围 / 条数 / 限流 / 日期"))
         head.addStretch(1)
 
         # 左侧两行参数，右侧一列策略开关；窄窗口也不挤压
         columns = QHBoxLayout()
+        self._settings_columns = columns
         columns.setSpacing(12)
         params = QVBoxLayout()
+        self._settings_params = params
         params.setSpacing(8)
 
         row = QHBoxLayout()
@@ -330,9 +408,11 @@ class InfoAccountsPage(BasePage):
         params.addLayout(row2)
 
         columns.addLayout(params)
-        columns.addWidget(self._separator(vertical=True))
+        self._settings_separator = self._separator(vertical=True)
+        columns.addWidget(self._settings_separator)
 
         strategy = QVBoxLayout()
+        self._settings_strategy = strategy
         strategy.setSpacing(6)
         self.inc_check = QCheckBox("增量模式（写入数据库）")
         self.inc_check.setToolTip("只写入未入库的新内容，重复内容自动跳过")
