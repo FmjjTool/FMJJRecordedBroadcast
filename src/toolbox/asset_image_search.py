@@ -20,6 +20,9 @@ from toolbox.image_embedding import IMAGE_EXTS, EmbeddingCancelled, ImageEmbedde
 
 logger = logging.getLogger(__name__)
 
+_INDEX_CACHE_BATCH = 1600
+_INDEX_EMBED_BATCH = 256
+
 
 class SearchCancelled(RuntimeError):
     """用户停止识别。"""
@@ -85,45 +88,60 @@ def build_index(entries, embedder, progress=None, cancel=None,
     on_ready(vectors, owners, paths, stats) 在读取缓存后和每个批次结束时回调，
     调用方可用已提取部分做暂定匹配；回调只读，不要修改传入列表。
     """
+    return _build_index(entries, embedder, progress, cancel, use_cache, on_ready)
+
+
+def _build_index(entries, embedder, progress=None, cancel=None,
+                 use_cache: bool = True, on_ready=None, *, keep_vectors=True) -> dict:
     _emit(progress, "collect", message="正在收集已获取资源的图片...")
     images = collect_images(entries)
     total = len(images)
     if cancel is not None and cancel.is_set():
         raise SearchCancelled("已停止")
 
-    cache: dict[str, np.ndarray] = {}
-    if use_cache and images:
-        _emit(progress, "cache", message=f"正在读取特征缓存（{total} 张图片）...")
-        cache = asset_image_vectors.fetch_many(
-            [(path, mtime, size) for _idx, path, mtime, size in images],
-            embedder.model_id)
-    if cancel is not None and cancel.is_set():
-        raise SearchCancelled("已停止")
-
     vectors: list[np.ndarray] = []
     owners: list[int] = []
     paths: list[str] = []
-    for index, path, _mtime, _size in images:
-        vector = cache.get(_norm(path))
-        if vector is None:
-            continue
-        vectors.append(np.asarray(vector, dtype=np.float32))
-        owners.append(index)
-        paths.append(path)
+    cache_hits = 0
+    if use_cache and images:
+        _emit(progress, "cache", message=f"正在读取特征缓存（{total} 张图片）...")
+        missing = []
+        chunk_size = total if keep_vectors else _INDEX_CACHE_BATCH
+        for start in range(0, total, chunk_size):
+            chunk = images if keep_vectors else images[start:start + chunk_size]
+            cache = asset_image_vectors.fetch_many(
+                [(path, mtime, size) for _idx, path, mtime, size in chunk],
+                embedder.model_id)
+            if cancel is not None and cancel.is_set():
+                raise SearchCancelled("已停止")
+            for row in chunk:
+                index, path, _mtime, _size = row
+                vector = cache.get(_norm(path))
+                if vector is None:
+                    missing.append(row)
+                    continue
+                cache_hits += 1
+                if keep_vectors:
+                    vectors.append(np.asarray(vector, dtype=np.float32))
+                    owners.append(index)
+                    paths.append(path)
+            del cache, vector
+    else:
+        missing = images
+    if cancel is not None and cancel.is_set():
+        raise SearchCancelled("已停止")
 
-    missing = [(idx, path, mtime, size) for idx, path, mtime, size in images
-               if _norm(path) not in cache]
     if images:
-        _emit(progress, "cache", len(cache), total,
-              f"已缓存 {len(cache)}/{total} 张，本次需提取 {len(missing)} 张")
+        _emit(progress, "cache", cache_hits, total,
+              f"已缓存 {cache_hits}/{total} 张，本次需提取 {len(missing)} 张")
+    indexed = cache_hits
     embedded = 0
     skipped_count = 0
     skipped_items: list[tuple[str, str]] = []
-    cache_hits = len(vectors)
 
     def snapshot() -> dict:
         return {
-            "entries": len(entries), "images": total, "indexed": len(vectors),
+            "entries": len(entries), "images": total, "indexed": indexed,
             "cache_hits": cache_hits, "embedded": embedded,
             "skipped": skipped_count, "skipped_items": list(skipped_items),
         }
@@ -146,6 +164,7 @@ def build_index(entries, embedder, progress=None, cancel=None,
             pending_rows.clear()
 
         def on_batch(batch) -> None:
+            nonlocal indexed
             for path, vector in batch:
                 key = _norm(path)
                 stamp = stamps.get(key)
@@ -153,10 +172,11 @@ def build_index(entries, embedder, progress=None, cancel=None,
                 if stamp is None or index is None:
                     continue
                 array = np.asarray(vector, dtype=np.float32)
-                cache[key] = array
-                vectors.append(array)
-                owners.append(index)
-                paths.append(path)
+                indexed += 1
+                if keep_vectors:
+                    vectors.append(array)
+                    owners.append(index)
+                    paths.append(path)
                 pending_rows.append(
                     (path, stamp[0], stamp[1], embedder.model_id,
                      int(array.size), array))
@@ -175,13 +195,27 @@ def build_index(entries, embedder, progress=None, cancel=None,
                 skipped_items.append((str(path), str(reason)))
 
         def embed_once(path_list, prefix: str = ""):
-            def on_embed(done, count):
+            def report(done, count):
                 _emit(progress, "embed", done, count,
                       f"{prefix}正在提取图片特征 {done}/{count}...")
 
-            return embedder.embed_paths(
-                path_list, progress=on_embed, cancel=cancel,
-                on_batch=on_batch, on_skip=collect_skip)
+            if keep_vectors:
+                embedder.embed_paths(path_list, progress=report, cancel=cancel,
+                                     on_batch=on_batch, on_skip=collect_skip)
+                return
+
+            # embed_paths 会收集调用内的向量。预建只需写入缓存，按完整模型批次切分。
+            batch_size = max(1, getattr(embedder, "batch_size", 1))
+            chunk_size = batch_size * max(1, _INDEX_EMBED_BATCH // batch_size)
+            count = len(path_list)
+
+            for start in range(0, count, chunk_size):
+                def on_embed(done, _count, start=start):
+                    report(start + done, count)
+
+                embedder.embed_paths(
+                    path_list[start:start + chunk_size], progress=on_embed, cancel=cancel,
+                    on_batch=on_batch, on_skip=collect_skip)
 
         _emit(progress, "embed", 0, len(missing),
               f"正在提取图片特征 0/{len(missing)}...")
@@ -223,6 +257,8 @@ def build_index(entries, embedder, progress=None, cancel=None,
             "; ".join(f"{Path(path).name}: {reason}"
                       for path, reason in skipped_items[:20]))
 
+    if not keep_vectors:
+        return {"stats": snapshot()}
     matrix = np.vstack(vectors) if vectors else np.zeros((0, 0), dtype=np.float32)
     return {
         "matrix": matrix,
@@ -318,7 +354,7 @@ def prepare_index(entries, model_path=None, progress=None, cancel=None,
     """
     started = time.perf_counter()
     embedder = embedder or ImageEmbedder(model_path)
-    index = build_index(entries, embedder, progress=progress, cancel=cancel)
+    index = _build_index(entries, embedder, progress=progress, cancel=cancel, keep_vectors=False)
     stats = dict(index["stats"])
     stats["seconds"] = round(time.perf_counter() - started, 2)
     return stats

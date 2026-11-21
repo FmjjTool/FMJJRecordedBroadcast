@@ -521,13 +521,12 @@ def save_collected():
 def load_collected():
     """启动时从 config/collected.db 恢复已获取列表（失败静默，保持空列表）。
 
-    首次运行由存储服务把旧 collected.json 迁移入库；按去重键跳过已存在条目。
+    首次运行由存储服务把旧 collected.json 迁移入库，展示去重只在内存中完成。
     """
     from toolbox.collected_store import load_items
     try:
         items = load_items()
-        existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
-        kept = 0
+        existing = {key for info in COLLECTED if (key := _dedup_key(info))}
         for info in items:
             key = _dedup_key(info)
             if key and key in existing:
@@ -535,11 +534,7 @@ def load_collected():
             if key:
                 existing.add(key)
             COLLECTED.append(info)
-            kept += 1
-        # 旧库可能存有按会过期的 CDN 直链键写入的重复行（同一 video_id 多行），
-        # 加载去重丢过行就把库物理重写成干净键，避免脏行越积越多
-        if kept < len(items):
-            save_collected()
+        # 定时采集可能在读取快照后写入新条目。启动去重只影响展示，不能用旧快照重写库。
     except Exception:
         pass
 

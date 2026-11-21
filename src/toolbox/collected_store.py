@@ -15,6 +15,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import ExitStack
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
@@ -35,12 +36,20 @@ def db_path() -> Path:
     return get_config_dir() / "collected.db"
 
 
+def _resolve_db_path(path=None) -> Path:
+    return Path(path) if path is not None else db_path()
+
+
 def _connect(path=None):
-    p = Path(path) if path is not None else db_path()
+    p = _resolve_db_path(path)
     os.makedirs(p.parent, exist_ok=True)
     conn = sqlite3.connect(p, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(_CREATE_TABLE)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(_CREATE_TABLE)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -139,30 +148,29 @@ def _migrate_from_json(conn, path: Path):
 def load_items(db_path=None) -> list:
     """读取全部已获取条目（按入库顺序），首次运行自动迁移旧 collected.json。"""
     from platforms.base import VideoInfo
-    p = Path(db_path) if db_path is not None else db_path()
+    fields = set(VideoInfo.__dataclass_fields__)
     try:
-        with _lock:
-            conn = _connect(p)
-            try:
-                n = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
-                if n == 0:
+        p = _resolve_db_path(db_path)
+        with ExitStack() as resources:
+            with _lock:
+                conn = _connect(p)
+                resources.callback(conn.close)
+                if conn.execute("SELECT 1 FROM videos LIMIT 1").fetchone() is None:
                     _migrate_from_json(conn, p)
-                rows = conn.execute(
-                    "SELECT data FROM videos ORDER BY rowid").fetchall()
-            finally:
-                conn.close()
+                rows = conn.execute("SELECT data FROM videos ORDER BY rowid")
+                resources.callback(rows.close)
+            # WAL 读快照允许采集继续写入。逐行解码避免同时保留全库 JSON 与对象列表。
+            items = []
+            for (data,) in rows:
+                try:
+                    d = json.loads(data)
+                    if isinstance(d, dict):
+                        items.append(VideoInfo(**{k: v for k, v in d.items() if k in fields}))
+                except Exception:
+                    continue
+            return items
     except Exception:
         return []
-    fields = set(VideoInfo.__dataclass_fields__)
-    items = []
-    for (data,) in rows:
-        try:
-            d = json.loads(data)
-            if isinstance(d, dict):
-                items.append(VideoInfo(**{k: v for k, v in d.items() if k in fields}))
-        except Exception:
-            continue
-    return items
 
 
 def ingest_items(items, *, incremental: bool = False, db_path=None, projector=None) -> dict:
