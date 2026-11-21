@@ -65,7 +65,7 @@ QMenuBar::item:selected { background: palette(highlight); color: palette(highlig
 QMenu { background: palette(base); color: palette(text); border: 1px solid palette(mid); }
 QMenu::item { padding: 5px 18px; }
 QMenu::item:selected { background: palette(highlight); color: palette(highlighted-text); }
-QToolTip { background: palette(tool-tip-base); color: palette(tool-tip-text); border: 1px solid palette(mid); padding: 5px 7px; }
+QToolTip { background: palette(tool-tip-base); color: palette(tool-tip-text); border: 1px solid palette(shadow); padding: 6px 9px; }
 QGroupBox { border: 1px solid palette(shadow); border-radius: 6px; margin-top: 10px; padding-top: 6px; }
 QGroupBox::title { color: palette(placeholder-text); subcontrol-origin: margin; left: 10px; }
 QSpinBox, QDoubleSpinBox { padding: 3px 6px; }
@@ -689,11 +689,30 @@ class _CheckProxyStyle(QProxyStyle):
         painter.restore()
 
 
+_check_style = None
+
+
 def _ensure_check_style(app):
-    """把勾选绘制挂到应用样式上（幂等）。"""
-    style = app.style()
-    if not isinstance(style, _CheckProxyStyle):
-        app.setStyle(_CheckProxyStyle(style))
+    """把勾选绘制挂到应用样式上（整个进程只装一次）。
+
+    两个坑，都会让「切主题」从几十毫秒变成 1~2 秒：
+    1. 装了应用 QSS 之后 `app.style()` 返回的是 Qt 内部的 QStyleSheetStyle
+       （Python 侧表现为 QCommonStyle），`isinstance(..., _CheckProxyStyle)`
+       永远为假 —— 于是每次切主题都重新 setStyle，触发全量重 polish。
+    2. `QProxyStyle(base)` 的 base 不能传 `app.style()`：setStyle 会释放旧样式，
+       base 立刻变成悬空指针；必须用 QStyleFactory 新建一份同款样式。
+    代理对象还要留强引用，否则被回收后 Qt 退回默认样式。
+    """
+    global _check_style
+    if _check_style is not None:
+        return
+    from PySide6.QtWidgets import QStyleFactory
+
+    base = QStyleFactory.create(app.style().name() or "Fusion")
+    if base is None:
+        base = QStyleFactory.create("Fusion")
+    _check_style = _CheckProxyStyle(base)
+    app.setStyle(_check_style)
 
 
 def apply_theme(app=None):

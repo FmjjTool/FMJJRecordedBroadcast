@@ -14,9 +14,9 @@ import time
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
-    QSystemTrayIcon, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+    QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from toolbox.config_manager import load_convert_config, save_convert_config
@@ -33,6 +33,7 @@ from gui_qt.skeleton import SkeletonPage
 from gui_qt.toast import show_toast
 from gui_qt.page_lifecycle import PageLifecycleManager, PagePolicy, restore_page_state
 from gui_qt.page_preloader import PagePreloader
+from gui_qt.row_widgets import ToggleSwitch
 from gui_qt.window_chrome import (
     TitleBar, WindowControlBar, apply_round_corners, install_resize_handles,
 )
@@ -110,10 +111,18 @@ QPushButton#windowControlClose { background: transparent; border: none; border-r
 QPushButton#windowControlClose:hover { background: #e81123; }
 QPushButton#windowControlClose:pressed { background: #c42b1c; }
 QWidget#workbenchCookie { background: palette(window); border: 1px solid palette(shadow); border-radius: 10px; }
+QLabel#workbenchCookieDot { background: palette(mid); border: none; border-radius: 4px; }
 QLabel#workbenchCookieTitle { background: transparent; color: palette(text); font-size: 12px; font-weight: bold; border: none; }
-QCheckBox#workbenchCookieToggle { background: transparent; border: none; font-size: 11px; }
-QLabel#workbenchCookieStatus { background: transparent; color: palette(placeholder-text); border: none; font-size: 10px; }
-QPushButton#workbenchCookieManage { background: transparent; color: palette(link); border: none; padding: 0; font-size: 11px; text-align: right; }
+QLabel#workbenchCookieToggleLabel { background: transparent; color: palette(placeholder-text); border: none; font-size: 11px; }
+QLabel#workbenchCookieStatus { background: transparent; color: palette(placeholder-text); border: none; font-size: 11px; }
+QProgressBar#workbenchCookieMeter { background: palette(shadow); border: none; border-radius: 4px; }
+QProgressBar#workbenchCookieMeter::chunk { background: palette(link); border-radius: 4px; }
+QPushButton#workbenchCookieManage { background: palette(button); color: palette(link); border: 1px solid palette(shadow); border-radius: 8px; padding: 5px 8px; font-size: 11px; }
+QPushButton#workbenchCookieManage:hover { background: palette(midlight); border-color: palette(highlight); }
+QPushButton#workbenchCookieManage:pressed { background: palette(midlight); border-color: palette(highlight); }
+QPushButton#workbenchCookieRefresh { background: palette(button); border: 1px solid palette(shadow); border-radius: 8px; padding: 0; }
+QPushButton#workbenchCookieRefresh:hover { background: palette(midlight); border-color: palette(highlight); }
+QPushButton#workbenchCookieRefresh:pressed { background: palette(midlight); }
 QPushButton#workbenchFooter { background: transparent; color: palette(placeholder-text); border: 1px solid transparent; border-radius: 7px; padding: 7px 2px; font-size: 11px; }
 QPushButton#workbenchFooter:hover, QPushButton#workbenchFooter:checked { background: palette(midlight); color: palette(link); }
 QLabel#workbenchEmptySearch { background: transparent; color: palette(placeholder-text); padding: 18px 10px; font-size: 12px; }
@@ -206,7 +215,6 @@ class MainWindow(QMainWindow):
         # 只作品牌标题，不再当「返回工作台」的入口（避免误触跳页）
         self.nav_title.setFocusPolicy(Qt.NoFocus)
         self.nav_title.setCursor(Qt.ArrowCursor)
-        self.nav_title.setToolTip("封茗囧菌数据汇总库")
         brand_text.addWidget(self.nav_title)
         brand_sub = QLabel(f"统一维护工具箱 - v{APP_VERSION}")
         brand_sub.setObjectName("workbenchBrandSub")
@@ -486,7 +494,6 @@ class MainWindow(QMainWindow):
         button.setIconSize(QSize(18, 18))
         button.setCheckable(True)
         button.setCursor(Qt.PointingHandCursor)
-        button.setToolTip(title)
         return button
 
     def _build_nav(self, nav_layout):
@@ -613,7 +620,6 @@ class MainWindow(QMainWindow):
             prefix
             + f'<span style="color:{title_color};font-size:14px;font-weight:700;">'
               f'{html.escape(parts[-1])}</span>')
-        self.breadcrumb_label.setToolTip(" / ".join(parts))
 
     def _sync_shell_icons(self):
         palette = theme.current_palette()
@@ -681,6 +687,7 @@ class MainWindow(QMainWindow):
         避免一次切换唤醒全部已加载页面的重建逻辑。"""
         self._sync_shell_icons()
         self._update_page_context()  # 面包屑颜色取自调色板，换主题后要重画
+        self._refresh_cookie_status()  # 状态圆点颜色是内联样式，换主题后重算
         current_page = self.pages.get(self.current_page)
         for key, page in self.pages.items():
             if page is None:
@@ -699,39 +706,88 @@ class MainWindow(QMainWindow):
         color = theme.current_palette().color(QPalette.PlaceholderText).name()
         self.theme_btn.setIcon(line_icon("moon" if theme.is_dark() else "sun", color, 18))
         self.theme_btn.setToolTip(f"当前为{'深色' if theme.is_dark() else '浅色'}主题，点击切换（自动保存）")
+        self._update_cookie_icons()
 
     def _build_cookie_bar(self, nav_layout):
         box = QWidget()
         box.setObjectName("workbenchCookie")
         box.setAttribute(Qt.WA_StyledBackground, True)
         v = QVBoxLayout(box)
-        v.setContentsMargins(11, 10, 11, 10)
-        v.setSpacing(7)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(6)
 
         head = QHBoxLayout()
+        head.setSpacing(6)
+        # 状态圆点：一眼看出登录态是否可用（绿=可用，橙=无有效登录，灰=总开关关闭）
+        self.cookie_dot = QLabel()
+        self.cookie_dot.setObjectName("workbenchCookieDot")
+        self.cookie_dot.setFixedSize(8, 8)
+        head.addWidget(self.cookie_dot, 0, Qt.AlignVCenter)
         lbl = QLabel("账号与登录")
         lbl.setObjectName("workbenchCookieTitle")
         head.addWidget(lbl)
         head.addStretch(1)
-        self.cookie_toggle = QCheckBox("启用")
-        self.cookie_toggle.setObjectName("workbenchCookieToggle")
-        self.cookie_toggle.setToolTip("Cookie 总开关：启用后允许使用已保存的登录状态")
+        # 左右滑动开关：比勾选框更直观地表达「开 / 关」这种二态
+        toggle_label = QLabel("总开关")
+        toggle_label.setObjectName("workbenchCookieToggleLabel")
+        head.addWidget(toggle_label, 0, Qt.AlignVCenter)
+        self.cookie_toggle = ToggleSwitch()
+        self.cookie_toggle.setAccessibleName("Cookie 总开关")
+        self.cookie_toggle.setToolTip("Cookie 总开关：打开后允许使用已保存的登录状态")
         self.cookie_toggle.toggled.connect(self._toggle_cookie)
-        head.addWidget(self.cookie_toggle)
+        head.addWidget(self.cookie_toggle, 0, Qt.AlignVCenter)
         v.addLayout(head)
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
         self.cookie_status_label = QLabel("加载中...")
         self.cookie_status_label.setWordWrap(True)
         self.cookie_status_label.setObjectName("workbenchCookieStatus")
-        v.addWidget(self.cookie_status_label)
+        status_row.addWidget(self.cookie_status_label, 1)
+        # 登录覆盖率：短条靠右，只作比例提示，不做分隔线
+        self.cookie_meter = QProgressBar()
+        self.cookie_meter.setObjectName("workbenchCookieMeter")
+        self.cookie_meter.setTextVisible(False)
+        self.cookie_meter.setFixedSize(56, 4)
+        self.cookie_meter.setRange(0, 1)
+        self.cookie_meter.setValue(0)
+        status_row.addWidget(self.cookie_meter, 0, Qt.AlignVCenter)
+        v.addLayout(status_row)
 
-        mgr_btn = QPushButton("管理账号与登录")
-        mgr_btn.setObjectName("workbenchCookieManage")
-        mgr_btn.setCursor(Qt.PointingHandCursor)
-        mgr_btn.clicked.connect(self._open_cookie_manager)
-        v.addWidget(mgr_btn)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        self.cookie_manage_btn = QPushButton("管理账号与登录")
+        self.cookie_manage_btn.setObjectName("workbenchCookieManage")
+        self.cookie_manage_btn.setMinimumHeight(30)
+        self.cookie_manage_btn.setCursor(Qt.PointingHandCursor)
+        self.cookie_manage_btn.setToolTip("打开「登录状态 / 账号配置」：登录平台账号、维护账号与分组")
+        self.cookie_manage_btn.clicked.connect(self._open_cookie_manager)
+        action_row.addWidget(self.cookie_manage_btn, 1)
+        self.cookie_refresh_btn = QPushButton()
+        self.cookie_refresh_btn.setObjectName("workbenchCookieRefresh")
+        self.cookie_refresh_btn.setFixedSize(32, 30)
+        self.cookie_refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.cookie_refresh_btn.setToolTip("重新检查已保存的登录状态")
+        self.cookie_refresh_btn.clicked.connect(self._recheck_cookie_status)
+        action_row.addWidget(self.cookie_refresh_btn)
+        v.addLayout(action_row)
+        self._update_cookie_icons()
 
         nav_layout.addWidget(box)
+
+    def _update_cookie_icons(self):
+        """卡片内图标按主题角色重绘（图标颜色烘进像素，换主题必须重设）。"""
+        if getattr(self, "cookie_manage_btn", None) is None:
+            return
+        self.cookie_manage_btn.setIcon(line_icon("key", theme.color("link"), 14))
+        self.cookie_manage_btn.setIconSize(QSize(14, 14))
+        self.cookie_refresh_btn.setIcon(line_icon("refresh", theme.color("muted"), 14))
+        self.cookie_refresh_btn.setIconSize(QSize(14, 14))
+        self.cookie_toggle.update()  # 开关是自绘控件，换主题后要重画
+
+    def _recheck_cookie_status(self):
+        self._refresh_cookie_status()
+        show_toast(self, "已重新检查登录状态", "info")
 
     def _refresh_cookie_status(self):
         try:
@@ -755,17 +811,49 @@ class MainWindow(QMainWindow):
                     ok = bool(cookies.get(plat, "") and len(cookies.get(plat, "")) > 10)
                 if ok:
                     logged += 1
-            self.cookie_toggle.blockSignals(True)
-            self.cookie_toggle.setChecked(enabled)
-            self.cookie_toggle.blockSignals(False)
-            self.cookie_status_label.setText(f"总开关 {'开' if enabled else '关'} · 已登录 {logged}/{total}")
+            self.cookie_toggle.set_state(enabled)
+            self.cookie_meter.setRange(0, max(total, 1))
+            self.cookie_meter.setValue(logged)
+            self.cookie_meter.setStyleSheet(self._cookie_meter_style(logged, total))
+            if enabled:
+                text = f"已登录 {logged}/{total}" if logged else "还没有可用的登录态"
+            else:
+                text = "总开关已关闭"
+            self.cookie_status_label.setText(text)
+            state = ("off" if not enabled else ("ok" if logged else "warn"))
+            self.cookie_dot.setStyleSheet(self._cookie_dot_style(state))
+            self.cookie_dot.setToolTip(
+                f"总开关{'开启' if enabled else '关闭'} · 已登录 {logged}/{total} 个平台"
+                + ("（关闭时不使用已保存的登录态）" if not enabled else ""))
         except Exception:
             pass
+
+    @staticmethod
+    def _cookie_dot_style(state):
+        """圆点颜色：只有三种语义（可用/待登录/停用），颜色取自主题角色。"""
+        color = {"ok": theme.color("success"), "warn": theme.color("warning")}.get(
+            state, theme.color("muted"))
+        return f"background: {color}; border: none; border-radius: 4px;"
+
+    @staticmethod
+    def _cookie_meter_style(logged, total):
+        """比例条：全部登录用成功色，部分登录用强调色（避免满格时一片高饱和蓝）。"""
+        if total and logged >= total:
+            color = theme.color("success")
+        elif logged:
+            color = theme.color("link")
+        else:
+            color = theme.color("border")
+        return (f"QProgressBar {{ background: {theme.color('border')}; border: none;"
+                f" border-radius: 4px; }}"
+                f"QProgressBar::chunk {{ background: {color}; border-radius: 4px; }}")
 
     def _toggle_cookie(self, checked):
         from auth import set_cookie_enabled
         set_cookie_enabled(bool(checked))
         self._refresh_cookie_status()
+        show_toast(self, f"Cookie 总开关已{'开启' if checked else '关闭'}",
+                   "info" if checked else "warning")
 
     def _open_cookie_manager(self):
         from gui_qt.cookie_manager import CookieManagerDialog

@@ -216,6 +216,10 @@ def main():
     theme.check_auto_switch()
     theme.apply_theme(app)
 
+    # 滚轮守卫：滚轮只滚页面，下拉框/页签不随滚轮悄悄改值（须在 QApplication 之后装）
+    from gui_qt import wheel_guard
+    wheel_guard.install()
+
     win = MainWindow()
     win.show()
 
