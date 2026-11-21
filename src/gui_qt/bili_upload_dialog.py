@@ -58,6 +58,7 @@ class BiliUploadDialog(QDialog):
         self._selection_modified = False
         self._source_platform_paths = None
         self.account_cancel = threading.Event()
+        self._season_titles = set()
         self.settings = BU.load_settings()
         self.config = {**BU.DEFAULTS, **self.settings.get("upload", {})}
         self.busy = False
@@ -129,14 +130,21 @@ class BiliUploadDialog(QDialog):
         self.categories.addItem("进入窗口后自动读取可用分区", 0)
         self.categories.currentIndexChanged.connect(lambda: self.tid.setValue(int(self.categories.currentData() or 0)))
         form.addRow("账号可用分区", self.categories)
-        self.copyright = QComboBox()
-        self.copyright.addItem("转载（原直播录播）", 2)
-        self.copyright.addItem("自制", 1)
-        self.copyright.setCurrentIndex(0 if self.config["copyright"] == 2 else 1)
-        form.addRow("投稿类型", self.copyright)
+        self.statement = QComboBox()
+        for code, label, *_ in BU.CREATION_STATEMENTS:
+            self.statement.addItem(label, code)
+        self.statement.setToolTip("B站创作声明只能选一条：选“内容为转载”时须填写视频来源")
+        form.addRow("创作声明", self.statement)
         self.source = QLineEdit(self.config["source"])
-        self.source.setPlaceholderText("转载稿件填写原直播间链接")
+        self.source.setPlaceholderText("创作声明选“内容为转载”时填写原直播间链接")
         form.addRow("视频来源", self.source)
+        self.season = QComboBox()
+        self.season.setEditable(True)
+        self.season.addItem("不加入合集", "")
+        self.season.setToolTip("投稿成功后把稿件放进该合集；验证账号后会列出账号可用合集")
+        form.addRow("加入合集", self.season)
+        self._select_statement(self.config.get("creation_statement"))
+        self.season.setCurrentText(str(self.config.get("season") or ""))
         cover_row = QHBoxLayout()
         self.cover = QLineEdit(self.config["cover"])
         self.cover.setPlaceholderText("留空自动提取首帧封面")
@@ -205,7 +213,8 @@ class BiliUploadDialog(QDialog):
         self.desc.textChanged.connect(self.refresh_preview)
         self.platform.currentTextChanged.connect(self.refresh_preview)
         self.tid.valueChanged.connect(self.refresh_preview)
-        self.copyright.currentIndexChanged.connect(self.refresh_preview)
+        self.statement.currentIndexChanged.connect(self.refresh_preview)
+        self.season.currentTextChanged.connect(self.refresh_preview)
         self.load_template(self.templates.currentText())
         self.refresh_preview()
 
@@ -321,9 +330,35 @@ class BiliUploadDialog(QDialog):
     def current_config(self):
         return {"title": self.title.text(), "date": self.date.text().strip(),
                 "desc": self.desc.toPlainText(), "tags": self.tags.text(), "tid": self.tid.value(),
-                "copyright": self.copyright.currentData(), "source": self.source.text().strip(),
+                "creation_statement": self.statement.currentData() or "self",
+                "season": self.season_name(), "source": self.source.text().strip(),
                 "cover": self.cover.text().strip(), "auto_publish": self.publish.isChecked(),
                 "platform": self.platform.currentText(), "threads": self.threads.value()}
+
+    def statement_label(self):
+        return self.statement.currentText()
+
+    def season_name(self):
+        name = self.season.currentText().strip()
+        return "" if name == "不加入合集" else name
+
+    def _select_statement(self, value):
+        """按保存的键或名称选中创作声明；未知值回到自制声明。"""
+        index = self.statement.findText(BU.creation_statement(value)[0])
+        self.statement.setCurrentIndex(max(0, index))
+
+    def _fill_seasons(self, seasons):
+        """把账号可用合集填进下拉框，保留用户已填的名称。"""
+        self._season_titles = {season["title"] for season in seasons}
+        current = self.season_name()
+        self.season.blockSignals(True)
+        self.season.clear()
+        self.season.addItem("不加入合集", "")
+        for season in seasons:
+            self.season.addItem(season["title"], season["title"])
+        self.season.setCurrentText(current)
+        self.season.blockSignals(False)
+        self.refresh_preview()
 
     def choose_files(self):
         if self.busy:
@@ -373,7 +408,8 @@ class BiliUploadDialog(QDialog):
             self.preview.setPlainText(f"标题：{metadata['title']}\n简介：{metadata['desc']}\n"
                 f"标签：{metadata['tag']}\n分区：{metadata['tid']} · " +
                 (f"{parts} P" if parts else f"视频：{len(paths)} 个") +
-                f"\n平台：{self.platform.currentText()}\n来源：{metadata['source']}")
+                f"\n平台：{self.platform.currentText()}\n创作声明：{self.statement_label()}" +
+                f"\n合集：{self.season_name() or '不加入合集'}\n来源：{metadata['source']}")
         except (ValueError, TypeError) as error:
             self.preview.setPlainText(str(error))
 
@@ -399,7 +435,8 @@ class BiliUploadDialog(QDialog):
         self.desc.setPlainText(config["desc"])
         self.tags.setText(config["tags"])
         self.tid.setValue(int(config["tid"] or 0))
-        self.copyright.setCurrentIndex(0 if config["copyright"] == 2 else 1)
+        self._select_statement(config.get("creation_statement"))
+        self.season.setCurrentText(str(config.get("season") or ""))
         self.source.setText(config["source"])
         self.cover.setText(config["cover"])
         self.publish.setChecked(bool(config.get("auto_publish", True)))
@@ -475,7 +512,11 @@ class BiliUploadDialog(QDialog):
                     data, category_error = uploader.creator_info(), ""
                 except BU.UploadError as error:
                     data, category_error = {}, str(error)
-                return account, data, uploader.auth_identity, category_error
+                try:
+                    seasons = uploader.list_seasons()
+                except (BU.UploadError, AttributeError):
+                    seasons = []
+                return account, data, uploader.auth_identity, category_error, seasons
             finally:
                 uploader.close()
         def done(result, error):
@@ -489,13 +530,14 @@ class BiliUploadDialog(QDialog):
             if error:
                 self.account_label.setText(str(error) + "；请检查当前登录状态")
                 return
-            account, data, identity, category_error = result
+            account, data, identity, category_error, seasons = result
             if not identity or identity != BU.credential_identity():
                 self.account_label.setText("登录状态已变化，正在重新验证…")
                 QTimer.singleShot(0, self.check_account)
                 return
             self._verified_identity = identity
             self.start_btn.setEnabled(True)
+            self._fill_seasons(seasons)
             self.account_label.setText(f"当前投稿账号：{account['name']}（UID {account['mid']}）" +
                                       ("；分区读取失败，可手工填写分区 ID" if category_error else ""))
             current = self.tid.value()
@@ -571,9 +613,13 @@ class BiliUploadDialog(QDialog):
             self.status.setText("正在自动验证登录，请稍候再开始上传")
             self.check_account()
             return
+        if config["season"] and self._season_titles and config["season"] not in self._season_titles:
+            self.status.setText(f"当前账号没有合集“{config['season']}”，请在“加入合集”里重新选择")
+            return
         action = "上传并自动投稿" if config["auto_publish"] else "仅上传，不投稿"
         count_text = f"{len(paths)} P" if len(paths) > 1 else "1 个视频"
         if QMessageBox.question(self, "投稿预览", f"{action}\n\n{metadata['title']}\n{count_text} · 分区 {metadata['tid']}\n"
+                f"创作声明：{self.statement_label()}\n合集：{config['season'] or '不加入合集'}\n"
                 f"简介：{metadata['desc']}\n标签：{metadata['tag']}\n\n使用当前 B站账号，确认开始？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
@@ -612,8 +658,15 @@ class BiliUploadDialog(QDialog):
                 self.status.setText(str(error) + "；可到上传历史核对任务状态")
             else:
                 self.bar.setValue(100)
-                self.status.setText("已投稿，等待 B站审核：" + str(result.get("bvid") or result.get("aid") or result["task"])
-                                    if result["state"] == "published" else "已上传；可用同一批视频再次进入投稿流程")
+                if result["state"] == "published":
+                    text = "已投稿，等待 B站审核：" + str(result.get("bvid") or result.get("aid") or result["task"])
+                    if result.get("season"):
+                        text += f"；已加入合集“{result['season']}”"
+                else:
+                    text = "已上传；可用同一批视频再次进入投稿流程"
+                if result.get("season_note"):
+                    text += "；" + result["season_note"]
+                self.status.setText(text)
         run_bg(work, done, owner=self.parentWidget())
 
     def on_progress(self, done, total, text):

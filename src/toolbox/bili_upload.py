@@ -23,10 +23,24 @@ from toolbox.utils import extract_date_from_filename
 
 UPLOAD_PAGE = "https://member.bilibili.com/platform/upload/video/frame"
 DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～", "desc": "",
-            "tags": "封茗囧菌,直播录播", "tid": 0, "copyright": 2,
+            "tags": "封茗囧菌,直播录播", "tid": 0,
+            "creation_statement": "self", "season": "封茗囧菌直播",
             "source": "", "cover": "", "date": "", "auto_publish": True, "platform": "抖子",
             "threads": 3}
 SOURCE_PLATFORMS = ("抖子", "B站")
+# 创作声明：网页投稿页只允许选一条。名称后面的数字是（版权类型, 是否禁止转载, 声明 ID）。
+CREATION_STATEMENTS = (
+    ("self", "内容为自制：未经作者允许，禁止转载", 1, 1, -1),
+    ("repost", "内容为转载（原直播录播）", 2, 0, -1),
+    ("none", "内容无需标注", 1, 0, -1),
+    ("ai", "含有AI生成内容", 1, 0, 1),
+    ("fiction", "含有虚构演绎内容", 1, 0, 2),
+    ("promotion", "内容含营销信息", 1, 0, 3),
+    ("opinion", "内容为个人观点，仅供参考", 1, 0, 4),
+)
+SEASON_LIST_API = "https://member.bilibili.com/x2/creative/web/seasons"
+SEASON_AID_API = "https://member.bilibili.com/x2/creative/web/season/aid"
+SEASON_SWITCH_API = "https://member.bilibili.com/x2/creative/web/season/switch"
 # 预上传节点按序尝试：某个节点的域名/连接不通时换下一个，避免整场投稿卡在第 1 个分片。
 UPLOAD_CDNS = ("bda2", "alia", "cos")
 UPLOAD_THREADS = 3       # 并行分片线程数默认值（与 biliup 默认一致）
@@ -52,6 +66,15 @@ def today_compact():
 def normalize_platform(value):
     value = "抖子" if value in ("抖音", "douyin") else value
     return value if value in SOURCE_PLATFORMS else "抖子"
+
+
+def creation_statement(value):
+    """创作声明 → (名称, 版权类型, 是否禁止转载, 声明 ID)；未识别的值按自制处理。"""
+    key = str(value or "").strip()
+    for code, label, copyright_type, no_reprint, statement_id in CREATION_STATEMENTS:
+        if key in (code, label):
+            return label, copyright_type, no_reprint, statement_id
+    return CREATION_STATEMENTS[0][1:]
 
 
 def detect_source_platform(paths):
@@ -209,15 +232,14 @@ def build_metadata(paths, settings):
     tags = [tag.strip() for tag in str(config["tags"]).replace("，", ",").split(",") if tag.strip()]
     if not 1 <= len(tags) <= 12:
         raise ValueError("请填写 1～12 个标签，以逗号分隔")
-    copyright = int(config["copyright"])
-    if copyright not in (1, 2):
-        raise ValueError("投稿类型须为自制或转载")
+    _, copyright, no_reprint, statement_id = creation_statement(config.get("creation_statement"))
     if copyright == 2 and not str(config["source"]).strip():
-        raise ValueError("转载投稿请填写原直播来源链接")
+        raise ValueError("创作声明为“内容为转载”时请填写原直播来源链接")
     return {"title": title, "desc": desc, "tag": ",".join(tags), "tid": tid,
             "copyright": copyright, "source": config["source"] if copyright == 2 else "",
             "dynamic": "", "cover": "", "desc_format_id": 0, "interactive": 0,
-            "no_reprint": 0, "open_elec": 0, "origin_state": 0,
+            "no_reprint": no_reprint, "creation_statement": {"id": statement_id},
+            "open_elec": 0, "origin_state": 0,
             "subtitles": {"lan": "", "open": 0}, "up_close_danmaku": False,
             "up_close_reply": False, "up_selection_reply": False}
 
@@ -379,6 +401,64 @@ class BiliUploader:
     def creator_info(self):
         return self._require_ok(self._json(self.member, "GET",
                                            "https://member.bilibili.com/x/vupre/web/archive/pre"))
+
+    def list_seasons(self):
+        """当前账号的合集列表：ID、标题与各小节。"""
+        data = self._require_ok(self._json(self.member, "GET", SEASON_LIST_API,
+                                           params={"pn": 1, "ps": 50}))
+        seasons = []
+        for item in data.get("seasons") or []:
+            if not isinstance(item, dict):
+                continue
+            season = item.get("season") if isinstance(item.get("season"), dict) else item
+            if not season.get("id"):
+                continue
+            sections = item.get("sections") if isinstance(item.get("sections"), dict) else {}
+            parts = [part for part in (sections.get("sections") or []) if isinstance(part, dict)]
+            seasons.append({"id": int(season["id"]), "title": str(season.get("title") or ""),
+                            "sections": [{"id": int(part["id"]), "title": str(part.get("title") or "")}
+                                         for part in parts if part.get("id")]})
+        return seasons
+
+    def resolve_season(self, name):
+        """合集名称 → {id, title, section_id}：先精确匹配标题，再按包含匹配。"""
+        wanted = str(name or "").strip()
+        if not wanted:
+            return None
+        seasons = self.list_seasons()
+        found = ([season for season in seasons if season["title"] == wanted] or
+                 [season for season in seasons if wanted in season["title"]])
+        if not found:
+            raise UploadError(f"当前账号没有名为“{wanted}”的合集，请先在合集管理创建")
+        season = found[0]
+        section = next((part for part in season["sections"] if part["title"] == "正片"),
+                       season["sections"][0] if season["sections"] else None)
+        return {"id": season["id"], "title": season["title"],
+                "section_id": section["id"] if section else 0}
+
+    def season_target(self, settings):
+        """合集名称 → (目标, 提示)；查询失败只记提示，不打断这次投稿。"""
+        name = str(settings.get("season", DEFAULTS["season"]) or "").strip()
+        if not name:
+            return None, ""
+        try:
+            return self.resolve_season(name), ""
+        except (UploadError, KeyError, TypeError, ValueError, AttributeError) as error:
+            return None, f"未能加入合集“{name}”：{error}"
+
+    def attach_season(self, aid, season, title):
+        """投稿成功后把稿件放进合集；已经在合集里就不再提交一次。"""
+        aid = int(aid)
+        try:
+            data = self._json(self.member, "GET", SEASON_AID_API, params={"id": aid}).get("data")
+            data = data.get("season") if isinstance(data, dict) else None
+            if isinstance(data, dict) and int(data.get("id") or 0) == season["id"]:
+                return
+        except (UploadError, KeyError, TypeError, ValueError):
+            pass
+        self._require_ok(self._json(self.member, "POST", SEASON_SWITCH_API, data={
+            "aid": aid, "season_id": season["id"], "section_id": season["section_id"],
+            "title": title, "csrf": self.csrf}))
 
     def _upload_video(self, path, complete_before, total_size):
         """按线路依次尝试（参考 biliup）：一条线路整段失败才换下一条，避免重复上传。"""
@@ -630,6 +710,7 @@ class BiliUploader:
                 raise UploadError("视频最近仍有写入，请等待录制结束至少30秒后上传")
             snapshots.append((str(path), stat.st_size, stat.st_mtime_ns))
         account = self.check_account()
+        season, season_note = self.season_target(settings)
         identity = json.dumps([account["mid"], snapshots], ensure_ascii=False).encode("utf-8")
         key = hashlib.sha256(identity).hexdigest()
         task = self.history.claim(key, {"title": metadata["title"], "account": account,
@@ -651,7 +732,8 @@ class BiliUploader:
             metadata["videos"] = task["videos"]
             if not settings.get("auto_publish", True):
                 status = "uploaded"
-                return {"state": status, "task": key, "title": metadata["title"]}
+                return {"state": status, "task": key, "title": metadata["title"],
+                        "season_note": season_note}
             self._check_cancel()
             metadata["csrf"] = self.csrf
             # 从此处开始，超时/取消均不能证明服务器未收稿，禁止自动重发。
@@ -665,8 +747,14 @@ class BiliUploader:
             result = response.get("data") or {}
             if not result.get("bvid") and not result.get("aid"):
                 raise UploadError("投稿响应没有稿件 ID，请在官方投稿管理核对")
+            if season and result.get("aid"):
+                try:
+                    self.attach_season(result["aid"], season, metadata["title"])
+                except (UploadError, KeyError, TypeError, ValueError) as error:
+                    season_note = f"已投稿，但未能加入合集“{season['title']}”：{error}"
             task["result"] = result
             status = "published"
-            return {"state": status, **result, "task": key, "title": metadata["title"]}
+            return {"state": status, **result, "task": key, "title": metadata["title"],
+                    "season": (season or {}).get("title", ""), "season_note": season_note}
         finally:
             self.history.save(key, status, task)
