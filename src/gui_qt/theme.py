@@ -44,9 +44,9 @@ QCheckBox:disabled, QRadioButton:disabled { color: palette(placeholder-text); }
 QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
 QCheckBox::indicator:unchecked { background: palette(button); border: 1px solid palette(mid); border-radius: 3px; }
 QCheckBox::indicator:unchecked:disabled { background: palette(alternate-base); border-color: palette(shadow); }
-QTabBar::tab { background: palette(alternate-base); color: palette(placeholder-text); padding: 7px 14px; border: 1px solid palette(shadow); border-bottom: 2px solid transparent; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+QTabBar::tab { background: palette(alternate-base); color: palette(placeholder-text); padding: 7px 14px; border: 1px solid palette(mid); border-bottom: 2px solid transparent; border-top-left-radius: 6px; border-top-right-radius: 6px; }
 QTabBar::tab:hover { background: palette(midlight); color: palette(link); }
-QTabBar::tab:selected { background: palette(base); color: palette(link); border-bottom-color: palette(highlight); }
+QTabBar::tab:selected { background: palette(base); color: palette(link); border-color: palette(mid); border-bottom-color: palette(highlight); }
 QTabWidget::pane { border: 1px solid palette(shadow); background: palette(window); }
 QProgressBar { background: palette(base); border: 1px solid palette(mid); border-radius: 4px; text-align: center; color: palette(text); }
 QProgressBar::chunk { background: palette(highlight); border-radius: 3px; }
@@ -102,6 +102,8 @@ QPushButton[variant="secondary"]:hover { background: palette(midlight); border-c
 QPushButton[variant="ghost"] { background: transparent; color: palette(placeholder-text); border-color: transparent; }
 QPushButton[variant="ghost"]:hover { background: palette(midlight); color: palette(link); }
 QPushButton[variant="primary"]:disabled, QPushButton[variant="danger"]:disabled, QPushButton[variant="secondary"]:disabled, QPushButton[variant="ghost"]:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
+QPushButton[menuButton="true"]:pressed, QPushButton[menuButton="true"]:open { background: palette(midlight); color: palette(link); border-color: palette(highlight); }
+QPushButton[menuButton="true"]::menu-indicator { subcontrol-position: right center; right: 6px; }
 """
 
 # ==================== 浅色 / 深色调色板 ====================

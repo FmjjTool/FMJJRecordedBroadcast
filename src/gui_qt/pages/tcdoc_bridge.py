@@ -601,6 +601,7 @@ class TcDocBridgePanel(QWidget):
 
         row1.addWidget(_caption("账号"))
         self.account_btn = QPushButton("全部")
+        self.account_btn.setProperty("menuButton", True)
         self.account_btn.setMinimumWidth(120)
         self.account_btn.setToolTip("勾选要比对的发布账号；默认只比对腾讯表出现过的账号")
         self._account_menu = QMenu(self.account_btn)
@@ -617,6 +618,7 @@ class TcDocBridgePanel(QWidget):
 
         # 直播记录专用：主播多选 + 重复处理策略（仅 profile=lives 时可见）
         self.live_account_btn = QPushButton("主播：全部")
+        self.live_account_btn.setProperty("menuButton", True)
         self.live_account_btn.setMinimumWidth(150)
         self.live_account_btn.setToolTip(
             "勾选要写入直播记录的抖音主播（来源：账号追踪的「直播历史」）")
