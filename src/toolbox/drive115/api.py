@@ -116,8 +116,11 @@ class Drive115Client:
         self._index_cache: dict[str, dict] = {}
         self._digest_cache: dict[tuple, tuple[str, str]] = {}
         self._user_id = ""
-        # 直链探活只做一次：记录最终可用的 UA 与拒绝原因
-        self._download_probed = False
+        # 直链探活只做一次：记录最终可用的 UA / 是否带 Cookie
+        self._download_checked = False
+        self._download_mode = "cookie"
+        # 探活四种组合全被拒后缓存原因：同一批后续文件直接失败，不再各等 6 次重试
+        self._download_blocked = ""
         self.has_kid = "KID=" in self.cookie
 
     # ==================== 基础 ====================
@@ -289,82 +292,107 @@ class Drive115Client:
             raise Drive115Error(-1, "未取到下载直链", "/files/download")
         return url
 
-    def _probe_link(self, url: str) -> tuple[bool, str]:
-        """用真正下载时的请求头要 1 个字节，提前发现 CDN 的 401/403。
+    def _headers_for(self, mode: str, ua: str) -> dict:
+        """下载头；`mode` 决定带不带登录 Cookie（部分 CDN 签名链接只认裸请求）。"""
+        headers = {
+            "User-Agent": ua,
+            "Referer": REFERER,
+            "Accept": "*/*",
+        }
+        if mode == "cookie":
+            headers["Cookie"] = self.cookie
+        return headers
 
-        返回 (是否可用, 拒绝原因)。网络错误不当作拒绝，交给下载引擎重试。
+    def _probe_link(self, url: str, mode: str, ua: str) -> tuple[int, str]:
+        """按给定时序/头试下载同一个直链，返回 (状态码, 响应片段)。
+
+        与下载引擎第一次请求完全一致（普通 GET、不带 Range），所以探活通过
+        就说明引擎马上要发的那个请求也能过。状态码 0 表示网络异常。
         """
-        headers = self.download_headers()
-        headers["Range"] = "bytes=0-0"
+        headers = self._headers_for(mode, ua)
         try:
             resp = self.session.get(url, headers=headers, stream=True,
                                     allow_redirects=True, timeout=(15, 30))
         except (requests.RequestException, OSError) as exc:
-            return True, f"探活未完成（{exc}）"
+            return 0, f"探活未完成（{exc}）"
         try:
             if resp.status_code in (200, 206):
-                return True, ""
-            detail = f"HTTP {resp.status_code}"
+                return resp.status_code, ""
             try:
                 body = resp.raw.read(200, decode_content=True) or b""
                 text = body.decode("utf-8", "replace").strip()
             except Exception:  # noqa: BLE001 - 读取错误体失败不影响判定
                 text = ""
-            if text:
-                detail += f" {text[:180]}"
-            return False, detail
+            return resp.status_code, text[:180]
         finally:
             resp.close()
 
     def download_links(self, pickcodes: list[str]) -> dict[str, str]:
         """按 pickcode 取直链；返回 `{pickcode: url}`。
 
-        115 的 CDN 对 UA / Origin 很挑：第一次取链后先用真实下载头探活，
-        被 403 就换成带 115Browser 的 UA 重新申请一次（直链与 UA 绑定，
-        必须连申请一起换）。两种都失败时把 CDN 返回的原因带进错误里。
+        115 的 CDN 会按 UA / Cookie / Referer 组合拒绝（401/403）。首个文件把
+        「普通 UA / 115Browser UA」×「带 Cookie / 不带 Cookie」四种组合各试一次，
+        命中哪种就按哪种下载；四种都不过时**直接报错并停止重试**，错误里带
+        CDN 的状态码与原文，避免日志只剩「直链失效」看不出原因。
         """
+        from toolbox.quark.download import DownloadError
+
+        if self._download_blocked:
+            raise DownloadError(self._download_blocked)
+
         links: dict[str, str] = {}
         for pick in [str(p) for p in pickcodes if p]:
             links[pick] = self._fetch_link(pick)
         if not links:
             raise Drive115Error(-1, "未取到下载直链", "/files/download")
 
-        if not self._download_probed:
-            self._download_probed = True
-            first = next(iter(links))
-            ok, detail = self._probe_link(links[first])
-            if not ok:
-                saved = self.user_agent
-                retry_ok, retry_detail = False, ""
-                self.user_agent = FALLBACK_UA
-                self.session.headers["User-Agent"] = FALLBACK_UA
-                try:
-                    retry_url = self._fetch_link(first)
-                    retry_ok, retry_detail = self._probe_link(retry_url)
-                    if retry_ok:
-                        links[first] = retry_url
-                except Drive115Error as exc:
-                    retry_detail = str(exc)
-                if not retry_ok:
-                    self.user_agent = saved
-                    self.session.headers["User-Agent"] = saved
-                    hint = ("" if self.has_kid else
-                            "；当前登录里没有 KID，可能需要在 115 页面重新登录一次")
-                    raise Drive115Error(
-                        -1, f"115 拒绝下载直链（{detail}；换 115Browser UA 仍失败："
-                            f"{retry_detail or '无响应'}）{hint}", "/files/download")
-        return links
+        if self._download_checked:
+            return links
 
-    def download_headers(self) -> dict:
-        """直链下载头；115 的直链与 UA 绑定，UA 必须和申请时一致。"""
-        return {
-            "Cookie": self.cookie,
-            "User-Agent": self.user_agent,
-            "Referer": REFERER,
-            "Accept": "*/*",
-        }
+        self._download_checked = True
+        first = next(iter(links))
+        saved_ua = self.user_agent
+        attempts: list[str] = []
+        for ua in (saved_ua, FALLBACK_UA):
+            label = "115Browser UA" if ua == FALLBACK_UA else "Chrome UA"
+            if ua != saved_ua:
+                # 直链与 UA 绑定：换 UA 必须重新申请，不能只换下载头
+                self.user_agent = ua
+                self.session.headers["User-Agent"] = ua
+                links[first] = self._fetch_link(first)
+            for mode in ("cookie", "nocookie"):
+                how = "带Cookie" if mode == "cookie" else "不带Cookie"
+                code, detail = self._probe_link(links[first], mode, ua)
+                if code == 0:
+                    # 网络异常不当作 CDN 拒绝，交给下载引擎重试
+                    return links
+                if code in (200, 206):
+                    self._download_mode = mode
+                    return links
+                attempts.append(f"{label}/{how}：HTTP {code} {detail}".strip())
+
+        self.user_agent = saved_ua
+        self.session.headers["User-Agent"] = saved_ua
+        hint = ("" if self.has_kid else
+                "\n当前登录里没有 KID，可在 115 页面重新登录一次再试")
+        host = ""
+        try:
+            from urllib.parse import urlsplit
+            host = urlsplit(links[first]).netloc
+        except ValueError:
+            pass
+        message = ("115 拒绝下载直链（四种组合都被拒，已停止重试）：\n  "
+                   + "\n  ".join(attempts)
+                   + (f"\n直链主机：{host}" if host else "")
+                   + hint)
+        self._download_blocked = message
+        raise DownloadError(message)
 
     # ==================== 上传（待接入） ====================
+
+    def download_headers(self) -> dict:
+        """直链下载头；UA 必须与申请直链时一致，Cookie 按探活结论带或不带。"""
+        return self._headers_for(self._download_mode, self.user_agent)
 
     def digest(self, path) -> tuple[str, str]:
         p = Path(path)
