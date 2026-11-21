@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import weakref
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -37,7 +38,7 @@ MODEL_DOWNLOAD_URLS = (
 MODEL_MIN_BYTES = 20 * 1024 * 1024
 _DOWNLOAD_CHUNK = 256 * 1024
 
-_SESSIONS: dict[tuple, "ort.InferenceSession"] = {}
+_SESSIONS = weakref.WeakValueDictionary()
 _SESSION_LOCK = threading.Lock()
 
 
@@ -124,7 +125,7 @@ def model_id(path) -> str:
     return f"{path.name}|{stat.st_size}|{int(stat.st_mtime)}"
 
 
-def _load_session(path: Path):
+def _load_session(path: Path, *, cache=True):
     if ort is None:
         raise ModelMissingError("缺少 onnxruntime 依赖，请先安装：pip install onnxruntime")
     path = Path(path)
@@ -133,24 +134,24 @@ def _load_session(path: Path):
     except OSError as exc:
         raise ModelMissingError(f"模型文件不可用：{path}") from exc
     key = (str(path.resolve()), stat.st_size, int(stat.st_mtime))
+    # 编码器持有强引用；最后一个任务退出即释放模型，缓存本身不延长寿命。
+    # 构造也在锁内，避免两个同时开始的任务重复加载同一个大模型。
     with _SESSION_LOCK:
-        cached = _SESSIONS.get(key)
+        cached = _SESSIONS.get(key) if cache else None
         if cached is not None:
             return cached
-    options = ort.SessionOptions()
-    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    options.intra_op_num_threads = max(1, min(8, (os.cpu_count() or 4) - 1))
-    options.inter_op_num_threads = 1
-    try:
-        session = ort.InferenceSession(
-            str(path), sess_options=options, providers=["CPUExecutionProvider"])
-    except Exception as exc:  # noqa: BLE001 - 模型损坏/格式不符统一提示
-        raise EmbeddingError(f"模型加载失败：{exc}") from exc
-    with _SESSION_LOCK:
-        if len(_SESSIONS) >= 3:
-            _SESSIONS.clear()
-        _SESSIONS[key] = session
-    return session
+        options = ort.SessionOptions()
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        options.intra_op_num_threads = max(1, min(8, (os.cpu_count() or 4) - 1))
+        options.inter_op_num_threads = 1
+        try:
+            session = ort.InferenceSession(
+                str(path), sess_options=options, providers=["CPUExecutionProvider"])
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingError(f"模型加载失败：{exc}") from exc
+        if cache:
+            _SESSIONS[key] = session
+        return session
 
 
 def _pixel_input(session):
@@ -362,7 +363,7 @@ def download_default_model(target_dir=None, urls=None, progress=None,
         raise DownloadError(f"下载文件不完整（{size} 字节），请重试")
     if validate:
         try:
-            _load_session(part)
+            _load_session(part, cache=False)
         except EmbeddingError as exc:
             part.unlink(missing_ok=True)
             raise DownloadError(f"模型校验失败：{exc}") from exc

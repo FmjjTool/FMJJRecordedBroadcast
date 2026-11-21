@@ -26,7 +26,7 @@ class PageMeta:
     card_title: str = ""           # 首页卡片短名，留空则用 title
     card_note: str = ""            # 首页卡片说明
     footer_label: str = ""         # 侧栏底部按钮短名（任务 / 设置 / 性能）
-    preload: bool = True           # 是否进入启动预载队列
+    preload: bool = False          # 低频页面首次访问时创建；核心保留既有预载
     tab_of: str = ""               # 属于哪个容器页（容器子页填容器 key）
 
 
@@ -75,27 +75,27 @@ PAGE_INDEX = {
 
     # ---- 录播工具箱 ----
     "toolbox_organize": PageMeta(
-        "自动整理", "录播工具箱", module="gui_qt.pages.organize", cls="OrganizePage"),
+        "自动整理", "录播工具箱", module="gui_qt.pages.organize", cls="OrganizePage", preload=True),
     "toolbox_editor": PageMeta(
         "视频操作", "录播工具箱", module="gui_qt.pages.editor", cls="EditorPage",
-        card_note="转换 / 合并 / 切割 / 压缩"),
+        card_note="转换 / 合并 / 切割 / 压缩", preload=True),
     "toolbox_convert": PageMeta(
         "视频操作", "录播工具箱", module="gui_qt.pages.editor", cls="EditorPage",
         preload=False),
     "toolbox_rename": PageMeta(
         "命名投稿", "录播工具箱", module="gui_qt.pages.rename", cls="RenamePage",
-        aliases="交互重命名 重命名 投稿"),
+        aliases="交互重命名 重命名 投稿", preload=True),
     "toolbox_audio": PageMeta(
-        "音频提取", "录播工具箱", module="gui_qt.pages.audio", cls="AudioPage"),
+        "音频提取", "录播工具箱", module="gui_qt.pages.audio", cls="AudioPage", preload=True),
     "toolbox_subtitle": PageMeta(
         "字幕转换", "录播工具箱", module="gui_qt.pages.subtitle", cls="SubtitlePage",
-        card_note="字幕与歌词格式转换"),
+        card_note="字幕与歌词格式转换", preload=True),
     "toolbox_launcher": PageMeta(
-        "继续操作", "录播工具箱", module="gui_qt.pages.launcher", cls="LauncherPage"),
+        "继续操作", "录播工具箱", module="gui_qt.pages.launcher", cls="LauncherPage", preload=True),
     "toolbox_calendar": PageMeta(
-        "日历浏览", "录播工具箱", module="gui_qt.pages.calendar", cls="CalendarPage"),
+        "日历浏览", "录播工具箱", module="gui_qt.pages.calendar", cls="CalendarPage", preload=True),
     "toolbox_migrate": PageMeta(
-        "文件迁移", "录播工具箱", module="gui_qt.pages.migrate", cls="MigratePage"),
+        "文件迁移", "录播工具箱", module="gui_qt.pages.migrate", cls="MigratePage", preload=True),
 
     # ---- 账户追踪 ----
     "music_tracker": PageMeta(

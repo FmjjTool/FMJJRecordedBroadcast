@@ -30,6 +30,7 @@ from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.common import run_bg, post_to_main
 from gui_qt.theme import current_palette
+from toolbox.memory_cache import ByteLRU
 
 from image_sorter import settings as cfg
 from image_sorter.constants import (
@@ -124,8 +125,10 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self._source_folders: List[Path] = []
         self._view_mode = self._normalize_view_mode(cfg.get_str("view_mode", "date"))
         self._file_list_already_md5_filtered = False
-        self._video_cover_cache = {}
-        self._video_info_cache = {}
+        self._video_cover_cache = ByteLRU(64 * 1024 * 1024, max_items=32,
+            size_of=lambda pixmap: pixmap.width() * pixmap.height() * max(1, pixmap.depth() // 8))
+        self._video_info_cache = ByteLRU(4 * 1024 * 1024, max_items=256,
+                                        size_of=lambda info: len(repr(info).encode('utf-8')))
         self._review_source_snapshot: List[str] = []  # 复检前的源目录快照
 
         # ---------- 操作体系（阶段三） ----------
@@ -2335,6 +2338,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
         self.media_viewer.stop_video()
         # 停止后台缩略图线程，避免占用资源
         self._retire_thumbnail_loader(timeout_ms=200)
+        self.clear_memory_caches()
 
     def shutdown(self):
         # 窗口关闭：卸载过滤器；停播放器与缩略图线程；MD5/去重线程不可中断，短暂等待兜底

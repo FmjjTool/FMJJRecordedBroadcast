@@ -8,6 +8,7 @@ import threading
 import functools
 import time
 from collections import Counter
+from toolbox.collected_library import CollectedLibrary
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
@@ -94,8 +95,8 @@ _bg_bridge.done.connect(_on_bg_done)
 
 # ==================== 共享状态 ====================
 
-# 已获取的视频信息列表（VideoInfo 对象），跨页面共享
-COLLECTED = []
+# 已获取目录，跨页面共享；只常驻键/平台/日期，迭代时按批读取完整 VideoInfo。
+COLLECTED = CollectedLibrary()
 
 # 全局清晰度设置（已获取页 / 视频下载页 / 资产管理 共享）
 CURRENT_QUALITY = "最高画质"
@@ -476,9 +477,11 @@ def _dedup_key(info) -> str:
 def _collect(infos, persist=True):
     """批量加入共享列表（自动去重，默认 SQLite 增量落库），返回新增条数。
 
-    persist=False 只进内存列表、不写数据库：用于采集线程已先行落库后，
+    persist=False 只揭示已落库条目、不重复写数据库：用于采集线程已先行落库后，
     主线程按节奏把结果揭示到「已获取」页，避免重复写库。
     """
+    if isinstance(COLLECTED, CollectedLibrary):
+        return COLLECTED.reveal(infos, persist=persist)
     existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
     new_items = []
     for i in infos:
@@ -513,21 +516,28 @@ def _db_insert(items) -> int:
 
 
 def save_collected():
-    """全量同步内存列表到 db（清空/重建场景用；日常新增走 _db_insert 增量）。"""
+    """重试未落盘条目；兼容旧列表调用方，不以目录快照重写主数据。"""
+    if isinstance(COLLECTED, CollectedLibrary):
+        return COLLECTED.flush()
     from toolbox.collected_store import save_all
     save_all(COLLECTED)
 
 
 def load_collected():
-    """启动时从 config/collected.db 恢复已获取列表（失败静默，保持空列表）。
+    """启动时恢复已获取轻量目录（失败保留当前状态）。
 
-    首次运行由存储服务把旧 collected.json 迁移入库；按去重键跳过已存在条目。
+    首次运行由存储服务把旧 collected.json 迁移入库，展示去重只在内存中完成。
     """
+    if isinstance(COLLECTED, CollectedLibrary):
+        try:
+            COLLECTED.initialize()
+        except Exception:
+            pass
+        return
     from toolbox.collected_store import load_items
     try:
         items = load_items()
-        existing = {_dedup_key(i) for i in COLLECTED if _dedup_key(i)}
-        kept = 0
+        existing = {key for info in COLLECTED if (key := _dedup_key(info))}
         for info in items:
             key = _dedup_key(info)
             if key and key in existing:
@@ -535,11 +545,7 @@ def load_collected():
             if key:
                 existing.add(key)
             COLLECTED.append(info)
-            kept += 1
-        # 旧库可能存有按会过期的 CDN 直链键写入的重复行（同一 video_id 多行），
-        # 加载去重丢过行就把库物理重写成干净键，避免脏行越积越多
-        if kept < len(items):
-            save_collected()
+        # 定时采集可能在读取快照后写入新条目。启动去重只影响展示，不能用旧快照重写库。
     except Exception:
         pass
 
