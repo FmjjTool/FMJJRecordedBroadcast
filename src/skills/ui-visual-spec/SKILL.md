@@ -382,6 +382,8 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 5. 同一页面同类操作只用一种动词：「抓取」就不要在另一处写「获取」。
 6. **带菜单的按钮保持中性外观**：`setMenu()` 的按钮展开/按下不得变成主操作蓝（`palette(highlight)` 底 + 白字），否则用户会误认成主操作。用 `menuButton` 属性单独压成 `midlight` 底 + `link` 字。
 7. **菜单箭头只留一个**：Qt 会为 `setMenu()` 自动画 menu-indicator，不要再给按钮 `setIcon(chevron)`，否则出现双箭头（样张实测）。
+8. **勾选框不要只给未选态上样式**：只写 `QCheckBox::indicator:unchecked` 时，选中态会落回原生绘制，同一列出现「白底灰框」与「原生勾号」两种观感。表格勾选列改用 delegate 自绘：未选 `palette(base)` 底 + 1px `palette(mid)` + 圆角 3，选中 `palette(accent)` 底 + `palette(on_accent)` 白勾。
+9. **数字框覆盖 subcontrol 必须补箭头图**：一旦写了 `QSpinBox::up-button/down-button`，原生箭头就不再绘制。必须同时给 `::up-arrow` / `::down-arrow` 的 `image`，右侧 `padding` 留 22px，按钮 `width: 20px`、贴右边缘上下各占一半（样张实测：不补 image 时箭头完全消失）。
 
 ### 5.5 超出可视范围时怎么摆
 
@@ -410,7 +412,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 长文本 | `setSizeAdjustPolicy(AdjustToMinimumContentsLengthWithIcon)` + `setMinimumContentsLength(8)`，超出省略并 tooltip 全文 |
 | 选项数 | 2–12 普通下拉；>12 用可输入下拉（`setEditable(True)` + `QCompleter`）或配搜索框；<2 改只读文本 |
 | 首项 | 筛选类固定「全部」，不用空项、不用「请选择」；输入类用 placeholder |
-| 滚轮 | 不响应滚轮改值（滚轮只滚页面）：`setFocusPolicy(Qt.StrongFocus)`，必要时在 `wheelEvent` 里转发父级；**数字框、滑条、页签同样适用**，统一在应用级事件过滤器里拦，控件声明 `wheelOk=true` 才放行 |
+| 滚轮 | 不响应滚轮改值（滚轮只滚页面）：`setFocusPolicy(Qt.StrongFocus)`，必要时在 `wheelEvent` 里转发父级；**数字框、滑条、页签同样适用**，统一在应用级事件过滤器里拦（`gui_qt/wheel_guard.py`，`main.py` 创建 QApplication 后安装，滚轮转给最近滚动区），控件声明 `wheelOk=true` 才放行；`QScrollBar` 不在拦截名单 |
 | 图标 | `setItemIcon(index, line_icon(name, color, 16))` |
 | 禁用 | 保留文字，用禁用色；不换成「无」 |
 
@@ -490,6 +492,8 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - [ ] 单行按钮不超过 5 个，主操作在最右；放不下按「更多 → 换行 → 缩文案」顺序处理
 - [ ] 同组下拉等宽且有最小宽度，下拉/数字框/滑条/页签都不响应滚轮改值
 - [ ] 带菜单的按钮没有变主操作蓝，菜单箭头只有一个
+- [ ] 勾选框选中/未选同一套自绘样式，没有「QSS 未选 + 原生选中」混搭
+- [ ] 数字框上下箭头能看见且能点（覆盖 subcontrol 时已补 arrow image）
 - [ ] 二级页签边框用 `palette(mid)`，在页面底上能看出卡片形状
 - [ ] 新图标已查 4.4 清单，未重复造图，且已回写本表
 - [ ] 弱对比 `placeholder-text` 未承载必读正文
