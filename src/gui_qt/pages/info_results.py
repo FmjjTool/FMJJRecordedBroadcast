@@ -10,7 +10,6 @@
 
 import re
 import webbrowser
-from datetime import datetime
 
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QTextDocument
@@ -25,6 +24,7 @@ from gui_qt.common import _fmt, post_to_main, run_bg
 from gui_qt import download_ops
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
+from toolbox.collected_library import CollectedLibrary, CollectedView, parse_publish
 
 PLATFORMS_3 = [
     ("douyin", "抖音"),
@@ -35,9 +35,6 @@ PLATFORMS_3 = [
 
 # 「其他」栏收纳的平台（快手/小红书/好看/微视等）；未列出的平台也归入 other
 _KNOWN_COLS = {key for key, _ in PLATFORMS_3}
-
-_PUB_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
-                "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
 
 # 视频/动态标签配色：常规态 + 选中态（选中卡片为浅蓝底，使用较深的文字）。
 TAG_COLORS = {"[视频]": ("#1976d2", "#1258a6"), "[动态]": ("#e65100", "#9a3f00"),
@@ -204,31 +201,16 @@ class _SingleItemScrollList(RowCheckList):
 
 def _parse_pub(info):
     """解析发布时间 → (datetime, 显示文本)。无法解析时返回 (datetime.min, '无日期')。"""
-    raw = (getattr(info, "publish_time", "") or "").strip()
-    if raw:
-        for fmt in _PUB_FORMATS:
-            try:
-                dt = datetime.strptime(raw[:19] if " " in raw else raw[:10], fmt)
-                return dt, raw[:16] if " " in raw else raw[:10]
-            except ValueError:
-                continue
-        # 纯数字时间戳
-        if raw.isdigit():
-            try:
-                ts = int(raw)
-                if ts > 10 ** 12:  # 毫秒
-                    ts //= 1000
-                dt = datetime.fromtimestamp(ts)
-                return dt, dt.strftime("%Y-%m-%d %H:%M")
-            except (ValueError, OSError):
-                pass
-    return datetime.min, "无日期"
+    return parse_publish(getattr(info, "publish_time", ""))
 
 
 class InfoResultsPage(BasePage):
+    PAGE_SIZE = 200
+
     def __init__(self, app):
         super().__init__(app)
-        self.cols = {key: {"songs": [], "list": None, "count_label": None}
+        self.cols = {key: {"songs": [], "list": None, "count_label": None,
+                           "page": 1, "selected": set()}
                      for key, _ in PLATFORMS_3}
 
         layout = QVBoxLayout(self)
@@ -466,7 +448,24 @@ class InfoResultsPage(BasePage):
         lst.customContextMenuRequested.connect(
             lambda pos, k=key: self._row_menu(k, pos))
         self.cols[key]["list"] = lst
+        lst.itemChanged.connect(lambda item, k=key: self._selection_changed(k, item))
         v.addWidget(lst, 1)
+        pager = QHBoxLayout()
+        pager.setSpacing(4)
+        previous = QPushButton("上一页")
+        previous.setProperty("variant", "ghost")
+        previous.clicked.connect(lambda _=False, k=key: self._change_page(k, -1))
+        pager.addWidget(previous)
+        position = QLabel("1 / 1")
+        position.setAlignment(Qt.AlignCenter)
+        position.setProperty("role", "caption")
+        pager.addWidget(position, 1)
+        following = QPushButton("下一页")
+        following.setProperty("variant", "ghost")
+        following.clicked.connect(lambda _=False, k=key: self._change_page(k, 1))
+        pager.addWidget(following)
+        self.cols[key].update(previous=previous, following=following, position=position)
+        v.addLayout(pager)
         return col
 
     # ==================== 渲染 ====================
@@ -478,21 +477,28 @@ class InfoResultsPage(BasePage):
                    for key, _ in PLATFORMS_3}
         # 按平台分到四栏（快手/小红书等归入「其他」），默认按发布日期倒序（最新在前）
         grouped = {key: [] for key, _ in PLATFORMS_3}
-        for info in common.COLLECTED:
-            plat = info.platform or "other"
-            if plat not in _KNOWN_COLS:
-                plat = "other"
-            grouped[plat].append(info)
+        if isinstance(common.COLLECTED, CollectedLibrary):
+            grouped = {key: common.COLLECTED.view(key) for key, _ in PLATFORMS_3}
+        else:
+            for info in common.COLLECTED:
+                plat = info.platform or "other"
+                if plat not in _KNOWN_COLS:
+                    plat = "other"
+                grouped[plat].append(info)
         for key, _name in PLATFORMS_3:
             # 本次刷新内复用日期解析结果，排序与行文本不再各解析一遍。
-            pub_dates = {id(info): _parse_pub(info) for info in grouped[key]}
-            grouped[key].sort(key=lambda info: pub_dates[id(info)], reverse=True)
+            pub_dates = None
+            if not isinstance(grouped[key], CollectedView):
+                pub_dates = {id(info): _parse_pub(info) for info in grouped[key]}
+                grouped[key].sort(key=lambda info: pub_dates[id(info)], reverse=True)
             self._render_column(key, grouped[key], checked[key], pub_dates)
             self.cols[key]["list"].verticalScrollBar().setValue(scrolls[key])
         self._render_signature = self._collected_signature()
 
     @staticmethod
     def _collected_signature():
+        if isinstance(common.COLLECTED, CollectedLibrary):
+            return common.COLLECTED.revision
         # 同一批数据切回时保留列表；对象替换或展示字段变化则重新渲染。
         fields = ("platform", "title", "author", "publish_time", "kind", "video_url",
                   "video_id", "raw_url", "play_count", "like_count")
@@ -501,15 +507,27 @@ class InfoResultsPage(BasePage):
 
     def _checked_keys(self, key):
         """当前栏已勾选条目的去重键（刷新后用于还原勾选）。"""
-        result = set()
+        return set(self.cols[key]["selected"])
+
+    @staticmethod
+    def _result_key(info):
+        return getattr(info, "_collection_key", None) or common._dedup_key(info) or f"item:{id(info)}"
+
+    def _selection_changed(self, key, item):
+        item_key = item.data(Qt.UserRole + 1)
+        if item_key is None:
+            return
+        selected = self.cols[key]["selected"]
+        if item.checkState() == Qt.Checked:
+            selected.add(item_key)
+        else:
+            selected.discard(item_key)
+
+    def _change_page(self, key, delta):
         col = self.cols[key]
-        for row in range(col["list"].count()):
-            item = col["list"].item(row)
-            if item.checkState() == Qt.Checked and row < len(col["songs"]):
-                k = common._dedup_key(col["songs"][row])
-                if k:
-                    result.add(k)
-        return result
+        col["page"] += delta
+        self._render_column(key, col["songs"], col["selected"])
+        col["list"].verticalScrollBar().setValue(0)
 
     @staticmethod
     def _openable_url(info) -> str:
@@ -534,7 +552,14 @@ class InfoResultsPage(BasePage):
     def _render_column(self, key, songs, checked_keys=None, pub_dates=None):
         col = self.cols[key]
         lst = col["list"]
-        checked_keys = checked_keys or set()
+        checked_keys = checked_keys if checked_keys is not None else col["selected"]
+        live_keys = set(songs.keys) if isinstance(songs, CollectedView) else {self._result_key(i) for i in songs}
+        col["selected"] = checked_keys & live_keys
+        pages = max(1, (len(songs) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        col["page"] = max(1, min(col["page"], pages))
+        col["position"].setText(f"{col['page']} / {pages}")
+        col["previous"].setEnabled(col["page"] > 1)
+        col["following"].setEnabled(col["page"] < pages)
         lst.clear()
         col["songs"] = songs
         col["count_label"].setText(f"{len(songs)} 条")
@@ -543,7 +568,8 @@ class InfoResultsPage(BasePage):
             item.setFlags(Qt.NoItemFlags)
             lst.addItem(item)
             return
-        for i, info in enumerate(songs, 1):
+        start = (col["page"] - 1) * self.PAGE_SIZE
+        for i, info in enumerate(songs[start:start + self.PAGE_SIZE], start + 1):
             title = info.title or "-"
             author = info.author or "-"
             if getattr(info, "kind", "") == "dynamic":
@@ -562,8 +588,9 @@ class InfoResultsPage(BasePage):
             item = QListWidgetItem(text)
             item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             item.setCheckState(
-                Qt.Checked if common._dedup_key(info) in checked_keys else Qt.Unchecked)
+                Qt.Checked if self._result_key(info) in col["selected"] else Qt.Unchecked)
             item.setData(Qt.UserRole, url or "")
+            item.setData(Qt.UserRole + 1, self._result_key(info))
             item.setToolTip(f"{title}\n{author}  {date_str}\n{url or ''}")
             lst.addItem(item)
 
@@ -577,28 +604,25 @@ class InfoResultsPage(BasePage):
         if getattr(self, "_render_signature", None) != self._collected_signature():
             self.refresh()
 
+    def on_hide(self):
+        for col in self.cols.values():
+            col["list"].clear()
+            col["songs"] = []
+        self._render_signature = None
+
     def _selected(self, key):
         col = self.cols[key]
-        result = []
-        for row in range(col["list"].count()):
-            item = col["list"].item(row)
-            if item.checkState() == Qt.Checked and row < len(col["songs"]):
-                result.append(col["songs"][row])
-        return result
+        songs = col["songs"]
+        if isinstance(songs, CollectedView):
+            return songs.selected(col["selected"])
+        return [info for info in songs if self._result_key(info) in col["selected"]]
 
     def _col_select(self, key, mode):
-        lst = self.cols[key]["list"]
-        for row in range(lst.count()):
-            item = lst.item(row)
-            if not (item.flags() & Qt.ItemIsUserCheckable):
-                continue
-            if mode == "all":
-                item.setCheckState(Qt.Checked)
-            elif mode == "none":
-                item.setCheckState(Qt.Unchecked)
-            else:
-                item.setCheckState(
-                    Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+        col = self.cols[key]
+        songs = col["songs"]
+        keys = set(songs.keys) if isinstance(songs, CollectedView) else {self._result_key(i) for i in songs}
+        col["selected"] = keys if mode == "all" else (set() if mode == "none" else keys - col["selected"])
+        self._render_column(key, songs, col["selected"])
 
     # ==================== 操作 ====================
 
@@ -741,8 +765,12 @@ class InfoResultsPage(BasePage):
     def _clear(self):
         if not common.COLLECTED:
             return
-        common.COLLECTED.clear()
-        common.save_collected()
+        try:
+            common.COLLECTED.clear()
+            common.save_collected()
+        except Exception:
+            self.app.toast("清空失败，请稍后重试", "error")
+            return
         self.refresh()
 
     # ==================== 删除条目 ====================
@@ -751,7 +779,10 @@ class InfoResultsPage(BasePage):
         """右键条目菜单：打开/复制作品链接、删除该条目（从已获取列表移除，不动本地文件）。"""
         lst = self.cols[key]["list"]
         row = lst.indexAt(pos).row()
-        if row < 0 or row >= len(self.cols[key]["songs"]):
+        if row < 0:
+            return
+        row += (self.cols[key]["page"] - 1) * self.PAGE_SIZE
+        if row >= len(self.cols[key]["songs"]):
             return
         info = self.cols[key]["songs"][row]
         url = self._openable_url(info)
@@ -789,8 +820,15 @@ class InfoResultsPage(BasePage):
                 + ("\n…等" if len(items) > 8 else ""),
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
-        ids = {id(i) for i in items}
-        common.COLLECTED[:] = [i for i in common.COLLECTED if id(i) not in ids]
+        if isinstance(common.COLLECTED, CollectedLibrary):
+            try:
+                common.COLLECTED.remove_keys({self._result_key(info) for info in items})
+            except Exception:
+                self.app.toast("删除失败，请稍后重试", "error")
+                return
+        else:
+            ids = {id(i) for i in items}
+            common.COLLECTED[:] = [i for i in common.COLLECTED if id(i) not in ids]
         common.save_collected()
         self.refresh()
         self.app.toast(f"已删除 {len(items)} 个条目", "success")
