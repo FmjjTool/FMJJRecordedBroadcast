@@ -12,7 +12,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 # 备份后端：key → 中文名（界面与日志都用这张表）
-PROVIDERS = {"quark": "夸克网盘", "baidu": "百度网盘", "yun139": "移动云盘"}
+# 115 目前只接入浏览与下载，备份上传未实现（选它会在引擎里明确报错，不会静默失败）
+PROVIDERS = {"quark": "夸克网盘", "baidu": "百度网盘", "yun139": "移动云盘",
+             "115": "115网盘"}
 
 CFG_MAPPINGS = "quark_backup_mappings"
 CFG_MODE = "quark_schedule_mode"

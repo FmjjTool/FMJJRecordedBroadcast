@@ -95,6 +95,9 @@ def build_client(provider: str = "quark"):
     if provider == "yun139":
         from toolbox.yun139.api import Yun139Client
         return Yun139Client(cookie)
+    if provider == "115":
+        from toolbox.drive115.api import Drive115Client
+        return Drive115Client(cookie)
     from .api import QuarkClient
     return QuarkClient(cookie)
 
@@ -199,6 +202,14 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
     try:
         if client is None:
             client = build_client(mapping.provider)
+        if not getattr(client, "supports_upload", True):
+            # 115 这类「只有浏览 + 下载」的后端：先明确拒绝，别建目录、别传文件
+            result.ok = False
+            result.message = (f"{mapping.provider_label()} 的上传还没接入，"
+                              f"当前只支持浏览与下载")
+            result.errors.append(result.message)
+            result.finished_at = _now()
+            return result
         folder_fid = client.ensure_dir(mapping.remote_dir)
     except QuarkAuthError as exc:
         result.ok = False
@@ -208,7 +219,7 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
         return result
     except Exception as exc:  # noqa: BLE001 - 网络 / 接口错误
         result.ok = False
-        result.message = f"连接夸克网盘失败：{exc}"
+        result.message = f"连接{mapping.provider_label()}失败：{exc}"
         result.errors.append(result.message)
         result.finished_at = _now()
         return result

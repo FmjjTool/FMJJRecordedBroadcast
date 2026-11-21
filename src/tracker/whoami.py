@@ -555,6 +555,33 @@ def _baidu(cookie: str) -> dict:
     return {"ok": None, "username": ""}
 
 
+def _115(cookie: str) -> dict:
+    """115 网盘：my.115.com 的 nav 接口能返回 uname 即已登录。
+
+    未登录时接口回 state=false（errno 40101017 这类）且没有 data；
+    接口不可达或结构不认识时返回 ok=None，让界面显示「无法验证」而不是误判。
+    """
+    import requests
+
+    h = _headers(cookie)
+    h["Referer"] = "https://115.com/"
+    try:
+        d = requests.get("https://my.115.com/?ct=ajax&ac=nav",
+                         headers=h, timeout=10).json()
+    except Exception:
+        return {"ok": None, "username": ""}
+    if not isinstance(d, dict):
+        return {"ok": None, "username": ""}
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    if d.get("state") is True:
+        nick = str((data or {}).get("uname") or (data or {}).get("user_name")
+                   or "").strip()
+        return {"ok": True, "username": nick}
+    if d.get("state") is False:
+        return {"ok": False, "username": ""}
+    return {"ok": None, "username": ""}
+
+
 def kugou_nick_for(userid) -> str:
     """同 userid 的酷狗昵称（酷狗概念版没有可用的用户信息接口，借主账号 Cookie）。"""
     import auth
@@ -606,4 +633,5 @@ _VERIFIERS = {
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
     "quark": _quark, "baidu": _baidu, "yun139": _yun139,
+    "115": _115,
 }

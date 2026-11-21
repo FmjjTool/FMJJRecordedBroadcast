@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""网盘下载页（夸克 / 百度 / 移动云盘）。
+"""网盘下载页（夸克 / 百度 / 移动云盘 / 115）。
 
-浏览三大网盘目录，把选中的文件或整个文件夹下载到本地：
+浏览四个网盘目录，把选中的文件或整个文件夹下载到本地：
 
 - 单线程 + Range 断点续传：直链过期自动重新申请，网络中断后从 `.part` 接着下；
 - 已存在的同名同大小文件自动跳过，不重复消耗流量；
@@ -36,8 +36,8 @@ from toolbox.quark import backup as qbackup
 from toolbox.quark import config as qconfig
 from toolbox.quark import download as qdownload
 
-# 各网盘根目录标识：夸克用 fid "0"，百度 / 移动云盘用 "/"
-ROOT_IDS = {"quark": "0", "baidu": "/", "yun139": "/"}
+# 各网盘根目录标识：夸克 / 115 用 fid "0"，百度 / 移动云盘用 "/"
+ROOT_IDS = {"quark": "0", "baidu": "/", "yun139": "/", "115": "0"}
 
 
 def _fmt_time(value) -> str:

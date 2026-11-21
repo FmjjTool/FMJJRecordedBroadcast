@@ -47,6 +47,7 @@ COOKIE_PLATFORMS = [
     ("quark", "夸克网盘", False, True),
     ("baidu", "百度网盘", False, True),
     ("yun139", "移动云盘", False, True),
+    ("115", "115网盘", False, True),
 ]
 
 
@@ -105,6 +106,11 @@ BROWSER_LOGIN_CONFIGS = {
     "baidu": ("https://pan.baidu.com/disk/main", "百度网盘登录（软件内）",
               ("BDUSS", "STOKEN"),
               "扫码 / 账号密码登录（登录后进到网盘文件列表即算成功）"),
+    # 115 网盘：登录后种 UID / CID / SEID 三件套，网页接口（webapi.115.com）
+    # 与下载直链都靠它；登录窗停在文件列表页即可
+    "115": ("https://115.com/?ct=file&ac=file&mode=wangpan", "115网盘登录（软件内）",
+            ("UID", "SEID"),
+            "扫码 / 账号密码登录（进到「我的文件」列表即算成功）"),
 }
 
 # 登录窗里"顺手抓昵称"的 JS（接口风控严、只有页面上下文问得到的平台）

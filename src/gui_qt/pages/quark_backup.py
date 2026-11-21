@@ -56,6 +56,12 @@ class MappingDialog(QDialog):
         self.provider_combo.setCurrentIndex(max(0, index))
         self.provider_combo.setToolTip("同一份本地目录可以分别备份到不同网盘，各建一条映射")
         layout.addWidget(self.provider_combo)
+        self.provider_hint = QLabel("")
+        self.provider_hint.setProperty("role", "caption")
+        self.provider_hint.setWordWrap(True)
+        layout.addWidget(self.provider_hint)
+        self.provider_combo.currentIndexChanged.connect(self._sync_provider)
+        self._sync_provider()
 
         layout.addWidget(QLabel("本地目录"))
         row = QHBoxLayout()
@@ -141,6 +147,16 @@ class MappingDialog(QDialog):
     def _sync_share(self, enabled: bool):
         self.share_expire.setEnabled(bool(enabled))
         self.share_passcode.setEnabled(bool(enabled))
+
+    def _sync_provider(self, _index: int = 0):
+        """115 只接了浏览与下载，选中时把限制说清楚，别让人以为能备份。"""
+        provider = str(self.provider_combo.currentData() or "quark")
+        if provider == "115":
+            self.provider_hint.setText(
+                "115 网盘目前只支持浏览与下载，备份上传还没接入；"
+                "这条映射保存后点「立即备份」会直接提示未接入。")
+        else:
+            self.provider_hint.setText("")
 
     def _pick_dir(self):
         start = self.local_edit.text().strip() or ""
