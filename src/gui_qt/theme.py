@@ -42,8 +42,6 @@ QHeaderView::section { background: palette(alternate-base); color: palette(place
 QCheckBox, QRadioButton { color: palette(window-text); spacing: 6px; }
 QCheckBox:disabled, QRadioButton:disabled { color: palette(placeholder-text); }
 QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
-QCheckBox::indicator:unchecked { background: palette(button); border: 1px solid palette(mid); border-radius: 3px; }
-QCheckBox::indicator:unchecked:disabled { background: palette(alternate-base); border-color: palette(shadow); }
 QTabBar::tab { background: palette(alternate-base); color: palette(placeholder-text); padding: 7px 14px; border: 1px solid palette(mid); border-bottom: 2px solid transparent; border-top-left-radius: 6px; border-top-right-radius: 6px; }
 QTabBar::tab:hover { background: palette(midlight); color: palette(link); }
 QTabBar::tab:selected { background: palette(base); color: palette(link); border-color: palette(mid); border-bottom-color: palette(highlight); }
@@ -610,6 +608,93 @@ def current_palette():
 
 _applied_qss = None
 
+from PySide6.QtWidgets import QProxyStyle, QStyle  # noqa: E402  (仅在勾选代理样式需要)
+
+
+class _CheckProxyStyle(QProxyStyle):
+    """勾选框统一自绘：颜色全部取自 QPalette。
+
+    系统样式在深色下仍画白底方框（且 QSS 只给未选态上样式时，选中态会落回
+    原生，一列出现两种观感）。这里统一接管 QCheckBox 与表格/列表的勾选标记：
+    未选 = base 底 + mid 边框；选中 = highlight 实心 + highlighted-text 勾。
+    """
+
+    def drawPrimitive(self, element, option, painter, widget=None):
+        if element in (QStyle.PE_IndicatorCheckBox,
+                       QStyle.PE_IndicatorItemViewItemCheck):
+            self._draw_check(option, painter)
+            return
+        super().drawPrimitive(element, option, painter, widget)
+
+    def subElementRect(self, element, option, widget=None):
+        """把勾选指示器统一成 16×16（QSS 不再接管 indicator，避免两套绘制）。"""
+        from PySide6.QtCore import QRect
+
+        rect = super().subElementRect(element, option, widget)
+        if element == QStyle.SE_CheckBoxIndicator:
+            return QRect(rect.x(), rect.y(), 16, 16)
+        if element == QStyle.SE_ItemViewItemCheckIndicator:
+            out = QRect(0, 0, 16, 16)
+            out.moveCenter(rect.center())
+            return out
+        return rect
+
+    @staticmethod
+    def _draw_check(option, painter):
+        from PySide6.QtCore import QPointF, QRectF, Qt
+        from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen
+
+        rect = QRectF(option.rect)
+        if rect.width() > 18 or rect.height() > 18:
+            side = min(rect.width(), rect.height(), 16)
+            rect = QRectF(0, 0, side, side)
+            rect.moveCenter(QPointF(option.rect.center()))
+        else:
+            rect = rect.adjusted(0.5, 0.5, -0.5, -0.5)
+
+        palette = option.palette
+        enabled = bool(option.state & QStyle.State_Enabled)
+        checked = bool(option.state & QStyle.State_On)
+        partial = bool(option.state & QStyle.State_NoChange)
+
+        base = palette.color(QPalette.Base if enabled else QPalette.AlternateBase)
+        border = palette.color(QPalette.Mid)
+        accent = palette.color(QPalette.Highlight if enabled else QPalette.Mid)
+        mark = palette.color(QPalette.HighlightedText)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 3, 3)
+        if checked or partial:
+            painter.fillPath(path, accent)
+            painter.setPen(QPen(accent, 1))
+        else:
+            painter.fillPath(path, base)
+            painter.setPen(QPen(border, 1))
+        painter.drawPath(path)
+
+        pen = QPen(mark if (checked or partial) else QColor(0, 0, 0, 0), 1.8)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        if partial:
+            painter.drawLine(QPointF(rect.left() + 4, rect.center().y()),
+                             QPointF(rect.right() - 4, rect.center().y()))
+        elif checked:
+            painter.drawLine(QPointF(rect.left() + 3.6, rect.center().y() + 0.4),
+                             QPointF(rect.left() + 6.6, rect.bottom() - 3.6))
+            painter.drawLine(QPointF(rect.left() + 6.6, rect.bottom() - 3.6),
+                             QPointF(rect.right() - 3.4, rect.top() + 3.8))
+        painter.restore()
+
+
+def _ensure_check_style(app):
+    """把勾选绘制挂到应用样式上（幂等）。"""
+    style = app.style()
+    if not isinstance(style, _CheckProxyStyle):
+        app.setStyle(_CheckProxyStyle(style))
+
 
 def apply_theme(app=None):
     """把当前完整主题应用到已有与随后创建的控件。
@@ -617,7 +702,7 @@ def apply_theme(app=None):
     模板只安装一次；更新调色板后重新 polish 可见控件来清除 Qt 的颜色
     缓存。隐藏页在 Show 前处理，避免切换时重刷整个应用。更新期间抑制
     窗口重绘，完成后一次呈现，不重建页面或触发采集。
-    """
+"""
     global _applied_qss, _applied_dark, _applying
     from PySide6.QtWidgets import QApplication
     if app is None:
@@ -625,6 +710,10 @@ def apply_theme(app=None):
     if app is None:
         return
     install_auto_remap()
+    _ensure_check_style(app)
+    # 下拉弹层圆角：需要 QApplication 才能装事件过滤器，这里是最早的可靠时机
+    from gui_qt import combo_popup
+    combo_popup.install()
     _audit_theme_tokens()
     dark = is_dark()
     qss = _theme_template(NEUTRAL_QSS, legacy=False, dark=dark)

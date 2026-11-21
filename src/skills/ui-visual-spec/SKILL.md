@@ -384,7 +384,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 5. 同一页面同类操作只用一种动词：「抓取」就不要在另一处写「获取」。
 6. **带菜单的按钮保持中性外观**：`setMenu()` 的按钮展开/按下不得变成主操作蓝（`palette(highlight)` 底 + 白字），否则用户会误认成主操作。用 `menuButton` 属性单独压成 `midlight` 底 + `link` 字。
 7. **菜单箭头只留一个**：Qt 会为 `setMenu()` 自动画 menu-indicator，不要再给按钮 `setIcon(chevron)`，否则出现双箭头（样张实测）。
-8. **勾选框不要只给未选态上样式**：只写 `QCheckBox::indicator:unchecked` 时，选中态会落回原生绘制，同一列出现「白底灰框」与「原生勾号」两种观感。表格勾选列改用 delegate 自绘：未选 `palette(base)` 底 + 1px `palette(mid)` + 圆角 3，选中 `palette(accent)` 底 + `palette(on_accent)` 白勾；自绘前必须 `opt.features &= ~QStyleOptionViewItem.HasCheckIndicator`，否则原生勾选标记会和自绘框叠成双层。
+8. **勾选框不要只给未选态上样式**：只写 `QCheckBox::indicator:unchecked` 时，选中态会落回原生绘制，同一列出现「白底灰框」与「原生勾号」两种观感。主程序统一由 `theme._CheckProxyStyle`（`QProxyStyle` 接管 `PE_IndicatorCheckBox` / `PE_IndicatorItemViewItemCheck`）自绘：未选 `base` 底 + 1px `mid` 边框 + 圆角 3，选中 `highlight` 实心 + `highlighted-text` 勾；QSS 只保留 `::indicator` 尺寸（16×16），**不再写 background/border**。若某处改用 delegate 自绘，绘制前必须 `opt.features &= ~QStyleOptionViewItem.HasCheckIndicator`，否则原生勾选标记会和自绘框叠成双层。
 9. **数字框覆盖 subcontrol 必须补箭头图**：一旦写了 `QSpinBox::up-button/down-button`，原生箭头就不再绘制。必须同时给 `::up-arrow` / `::down-arrow` 的 `image`，右侧 `padding` 留 22px，按钮 `width: 20px`、贴右边缘上下各占一半（样张实测：不补 image 时箭头完全消失）。
 
 ### 5.5 超出可视范围时怎么摆
@@ -423,7 +423,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 1. 同一行两个以上下拉时，标签取组内最长宽度并固定，控件等宽对齐。
 2. 选项文案与被筛选数据的显示值完全一致（含单位与大小写），不另造简称。
 3. 不用下拉承载超过一屏（>15 项）且不可搜索的列表。
-4. **弹层圆角要显式做，而且要裁得住子控件**：视图设 `border-radius: 8px` 只裁它自己的背景；弹层容器必须同时 `WA_TranslucentBackground` + `FramelessWindowHint` + `background: transparent`，并且给弹层窗口 `setMask(圆角区域)`。少了遮罩时，垂直滚动条作为子控件会一直画到右下角，把圆角顶成直角（样张实测：只做前两步，首开直角、二次开仍露直角）。统一封装成 `RoundCombo`（`showPopup()` 后按最终尺寸重设遮罩）+ `round_combo_popup(combo)`，页面构建完对所有下拉调一次。
+4. **弹层圆角要显式做，而且要处理滚动条**：视图设 `border-radius: 8px`，弹层容器同时 `WA_TranslucentBackground` + `FramelessWindowHint` + `background: transparent`（`gui_qt/combo_popup.py` 统一装应用级过滤器，识别 `QComboBoxPrivateContainer`）。滚动条是子控件、不受父级圆角裁剪：优先给弹层滚动条上下 `margin: 8px` 让它缩进；滚动条仍压角时再给弹层窗口 `setMask(圆角区域)`。只做视图圆角＝首帧直角、长列表右下角被滚动条顶成直角（样张与主程序均实测）。
 
 ## 六、组件写法
 
