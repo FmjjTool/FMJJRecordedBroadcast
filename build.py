@@ -58,6 +58,10 @@ ISS_TEMPLATE = r"""; 由 build.py 自动生成 — Inno Setup 6 脚本（安装�
 #define MyAppVersion "{APP_VERSION}"
 #define MyAppPublisher "{APP_PUBLISHER}"
 #define MyAppExeName "{APP_NAME}.exe"
+; 版本形态：标准版留空 / FULL 版为 " FULL 版" 与 "_Full"
+#define MyEditionTitle "{EDITION_TITLE}"
+#define MyEditionFileSuffix "{EDITION_SUFFIX}"
+#define MyEditionId "{EDITION_ID}"
 
 ; 优先用简体中文语言包（Inno 6.3+ 自带），未安装时回退英文向导
 #if FileExists(CompilerPath + "\Languages\ChineseSimplified.isl")
@@ -68,17 +72,17 @@ ISS_TEMPLATE = r"""; 由 build.py 自动生成 — Inno Setup 6 脚本（安装�
 
 [Setup]
 AppId={{8F6A2C71-9D4E-4B57-A3C2-7E9F01B5D384}
-AppName={#MyAppName}
+AppName={#MyAppName}{#MyEditionTitle}
 AppVersion={#MyAppVersion}
-AppVerName={#MyAppName} {#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}{#MyEditionTitle}
 AppPublisher={#MyAppPublisher}
 ; 安装向导默认目录 = Program Files\FengMingToolbox，用户可在向导中自由修改
 DefaultDirName={autopf}\{#MyAppNameEn}
 DefaultGroupName={#MyAppName}
-UninstallDisplayName={#MyAppName}
+UninstallDisplayName={#MyAppName}{#MyEditionTitle}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\dist\installer
-OutputBaseFilename={#MyAppNameEn}_Setup_{#MyAppVersion}
+OutputBaseFilename={#MyAppNameEn}{#MyEditionFileSuffix}_Setup_{#MyAppVersion}
 {SETUP_ICON}
 Compression=lzma2/max
 SolidCompression=yes
@@ -111,6 +115,7 @@ Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; Fil
 ; 自定义注册表项（记录安装位置/版本，供外部查询；卸载时自动清除）
 Root: HKLM; Subkey: "Software\{#MyAppNameEn}"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\{#MyAppNameEn}"; ValueType: string; ValueName: "Version"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\{#MyAppNameEn}"; ValueType: string; ValueName: "Edition"; ValueData: "{#MyEditionId}"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\{#MyAppNameEn}"; ValueType: string; ValueName: "Publisher"; ValueData: "{#MyAppPublisher}"; Flags: uninsdeletevalue
 ; 控制面板「应用与功能」的卸载条目（DisplayName/UninstallString/InstallLocation/
 ; DisplayIcon 等）由 Inno 自动写入 HKLM\...\CurrentVersion\Uninstall\..._is1
@@ -364,9 +369,13 @@ def privacy_scan(name: str):
     hits = []
     for p in dist.rglob("*"):
         rel = p.relative_to(dist)
+        rel_posix = rel.as_posix()
         if p.is_dir():
             if p.name in PRIVACY_DIRS:
                 hits.append(f"[目录] {rel}")
+            continue
+        # FULL 版内置模型自带的 config.json 是模型参数，不是本机配置，允许存在
+        if rel_posix.startswith("models/") and p.name == "config.json":
             continue
         if p.name in PRIVACY_FILES or any(pat.match(p.name) for pat in PRIVACY_FILE_PATTERNS):
             hits.append(f"[文件] {rel}")
@@ -398,20 +407,152 @@ def find_iscc() -> str | None:
     return None
 
 
-def write_sha256sums(exe: Path) -> Path:
-    """生成客户端更新要用的校验文件（必须与安装包一起上传到 Release）。"""
+def write_sha256sums(exes: list) -> Path:
+    """生成客户端更新要用的校验文件（每个安装包一行，必须随 Release 上传）。"""
     import hashlib
 
-    h = hashlib.sha256()
-    with exe.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    sums = exe.parent / "SHA256SUMS.txt"
-    sums.write_text(f"{h.hexdigest()}  {exe.name}\n", encoding="utf-8")
+    lines = []
+    for exe in exes:
+        h = hashlib.sha256()
+        with exe.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        lines.append(f"{h.hexdigest()}  {exe.name}")
+    sums = Path(exes[0]).parent / "SHA256SUMS.txt"
+    sums.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return sums
 
 
-def build_installer(name: str, ver: dict):
+def installer_path(name: str, version: str, edition: str = "standard") -> Path:
+    suffix = "_Full" if edition == "full" else ""
+    return ROOT / "dist" / "installer" / f"{name}{suffix}_Setup_{version}.exe"
+
+
+# ---- FULL 内置版：组件准备与装配 ----
+# 供应商目录放在 build/ 之外，避免 run_pyinstaller 清理 build/ 时被删。
+FULL_VENDOR = ROOT / "build_full_vendor"
+WHISPER_MODELS = ("base",)
+
+
+def _download_file(url: str, dest: Path, label: str):
+    import requests
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size > 0:
+        print(f"  已存在：{label}")
+        return
+    tmp = dest.with_name(dest.name + ".part")
+    print(f"  下载：{label}")
+    with requests.get(url, stream=True, timeout=(15, 180)) as resp:
+        resp.raise_for_status()
+        with open(tmp, "wb") as f:
+            for chunk in resp.iter_content(1024 * 256):
+                if chunk:
+                    f.write(chunk)
+    tmp.replace(dest)
+
+
+def prepare_full_vendor():
+    """把 FULL 版需要的一切外部组件收集到 build_full_vendor/（只需跑一次）。"""
+    step("准备 FULL 版内置组件")
+    vendor = FULL_VENDOR
+    (vendor / "bin").mkdir(parents=True, exist_ok=True)
+    (vendor / "models").mkdir(parents=True, exist_ok=True)
+    (vendor / "browsers").mkdir(parents=True, exist_ok=True)
+
+    for exe in ("ffmpeg.exe", "ffprobe.exe"):
+        dst = vendor / "bin" / exe
+        if dst.exists():
+            print(f"  已存在：bin/{exe}")
+            continue
+        src = shutil.which(exe)
+        if not src:
+            sys.exit(f"本机未找到 {exe}，请先安装 FFmpeg（或手动放入 {dst}）")
+        shutil.copy2(src, dst)
+        print(f"  复制：{exe} ← {src}")
+
+    src = ROOT / "models" / "whisper-faster.exe"
+    dst = vendor / "models" / "whisper-faster.exe"
+    if not dst.exists():
+        if not src.is_file():
+            sys.exit(f"未找到本地转写程序：{src}")
+        shutil.copy2(src, dst)
+        print("  复制：whisper-faster.exe")
+
+    sys.path.insert(0, str(ROOT / "src"))
+    from toolbox import asr_engine, image_embedding
+
+    for key in WHISPER_MODELS:
+        folder = vendor / "models" / f"faster-whisper-{key}"
+        if (folder / "model.bin").is_file():
+            print(f"  已存在：faster-whisper-{key}")
+            continue
+        files = asr_engine._repo_file_list(key)
+        if not files:
+            sys.exit(f"模型 {key} 文件列表为空，请检查网络")
+        repo = asr_engine.MODEL_REPO_TPL.format(key=key)
+        for item in files:
+            rel = item["Path"]
+            url = asr_engine.MODELSCOPE_RESOLVE.format(repo=repo, path=rel)
+            _download_file(url, folder / rel, f"faster-whisper-{key}/{rel}")
+
+    clip_dir = vendor / "models" / "clip"
+    if not any(clip_dir.glob("*.onnx")):
+        last = None
+        for url in image_embedding.MODEL_DOWNLOAD_URLS:
+            try:
+                _download_file(url, clip_dir / "vision_model_quantized.onnx", "CLIP 视觉编码器")
+                last = None
+                break
+            except Exception as exc:  # noqa: BLE001 - 逐个源回退
+                last = exc
+                print(f"  源失败：{url}（{exc.__class__.__name__}）")
+        if last is not None:
+            sys.exit(f"CLIP 模型下载失败：{last}")
+
+    browsers_root = (Path(os.environ.get("LOCALAPPDATA", ""))
+                     / "ms-playwright")
+    shells = sorted(browsers_root.glob("chromium_headless_shell-*"))
+    target = vendor / "browsers" / shells[-1].name if shells else None
+    if shells and not (target / "chrome-win" / "headless_shell.exe").is_file():
+        shutil.copytree(shells[-1], target, dirs_exist_ok=True)
+        print(f"  复制：{shells[-1].name}")
+    elif target is not None:
+        print(f"  已存在：{target.name}")
+    else:
+        print("  警告：未找到 chromium_headless_shell-*，FULL 包将不含采集引擎内核")
+        print("        可先运行：python -m playwright install chromium-headless-shell")
+
+    print(f"组件目录：{vendor}")
+
+
+def stage_full_bundle(dist: Path):
+    """把内置组件装配进 dist，并写入 FULL_EDITION 标记。"""
+    step("装配 FULL 内置组件")
+    missing = []
+    for rel in ("bin/ffmpeg.exe", "bin/ffprobe.exe", "models/whisper-faster.exe"):
+        if not (FULL_VENDOR / rel).is_file():
+            missing.append(rel)
+    for key in WHISPER_MODELS:
+        if not (FULL_VENDOR / "models" / f"faster-whisper-{key}" / "model.bin").is_file():
+            missing.append(f"models/faster-whisper-{key}")
+    if not any((FULL_VENDOR / "models" / "clip").glob("*.onnx")):
+        missing.append("models/clip/*.onnx")
+    if missing:
+        sys.exit("FULL 内置组件不完整，请先运行：python build.py --prepare-full\n"
+                 "缺少：" + "、".join(missing))
+
+    for sub in ("bin", "models", "browsers"):
+        src = FULL_VENDOR / sub
+        if src.is_dir():
+            shutil.copytree(src, dist / sub, dirs_exist_ok=True)
+            size = sum(p.stat().st_size for p in src.rglob("*") if p.is_file())
+            print(f"  {sub}/ → dist（{size / 1048576:.1f} MB）")
+    (dist / "FULL_EDITION").write_text("full\n", encoding="utf-8")
+    print("  写入标记：FULL_EDITION")
+
+
+def build_installer(name: str, ver: dict, edition: str = "standard"):
     step("生成 Inno Setup 安装器")
     iss_dir = ROOT / "build"
     iss_dir.mkdir(exist_ok=True)
@@ -424,6 +565,9 @@ def build_installer(name: str, ver: dict):
         .replace("{APP_NAME}", name)
         .replace("{APP_VERSION}", ver["APP_VERSION"])
         .replace("{APP_PUBLISHER}", ver["APP_PUBLISHER"])
+        .replace("{EDITION_TITLE}", " FULL 版" if edition == "full" else "")
+        .replace("{EDITION_SUFFIX}", "_Full" if edition == "full" else "")
+        .replace("{EDITION_ID}", edition)
         .replace("{SETUP_ICON}", setup_icon),
         encoding="utf-8-sig",  # BOM：保证 ISCC 正确识别 UTF-8 中文
     )
@@ -438,13 +582,9 @@ def build_installer(name: str, ver: dict):
 
     out = ROOT / "dist" / "installer"
     r = subprocess.run([iscc, str(iss)], cwd=iss_dir)
-    exe = out / f"{name}_Setup_{ver['APP_VERSION']}.exe"
+    exe = installer_path(name, ver["APP_VERSION"], edition)
     if r.returncode == 0 and exe.exists():
-        print(f"安装器完成：{exe}")
-        sums = write_sha256sums(exe)
-        print(f"校验文件：{sums}")
-        print("  上传 Release 时请把 SHA256SUMS.txt 与安装包一起附上，"
-              "客户端更新会强校验（缺文件则只允许手动下载）。")
+        print(f"安装器完成：{exe}（{exe.stat().st_size / 1048576:.1f} MB）")
     else:
         sys.exit("安装器编译失败，请查看 ISCC 输出")
 
@@ -454,12 +594,20 @@ def main():
     ap.add_argument("--name", default=None, help="产物/exe 名称（默认取 version.py 的 APP_NAME）")
     ap.add_argument("--skip-build", action="store_true", help="跳过 PyInstaller，仅重新生成安装器")
     ap.add_argument("--no-installer", action="store_true", help="只打绿色版，不出安装器")
+    ap.add_argument("--edition", choices=("standard", "full"), default="standard",
+                    help="standard=标准版（默认）；full=FULL 内置版（需先 --prepare-full）")
+    ap.add_argument("--prepare-full", action="store_true",
+                    help="收集 FULL 版内置组件到 build_full_vendor/ 后退出")
     args = ap.parse_args()
+
+    if args.prepare_full:
+        prepare_full_vendor()
+        return
 
     ver = read_version_info()
     name = args.name or ver["APP_NAME"]
     print(f"应用：{ver['APP_DISPLAY_NAME']}  v{ver['APP_VERSION']}  制作：{ver['APP_PUBLISHER']}")
-    print(f"产物名：{name}")
+    print(f"产物名：{name}  形态：{args.edition}")
 
     if not args.skip_build:
         if not check_pyinstaller():
@@ -467,16 +615,32 @@ def main():
         run_pyinstaller(name)
         prune(name)
 
+    if args.edition == "full":
+        stage_full_bundle(ROOT / "dist" / name)
+
     privacy_scan(name)
 
     if args.no_installer:
         print("\n完成（--no-installer：未生成安装器）")
         return
 
-    build_installer(name, ver)
+    build_installer(name, ver, args.edition)
+    version = ver["APP_VERSION"]
+    existing = [p for p in (installer_path(name, version, "standard"),
+                            installer_path(name, version, "full")) if p.exists()]
+    if existing:
+        sums = write_sha256sums(existing)
+        print(f"\n校验文件：{sums}（{len(existing)} 行）")
+        if args.edition == "full" and len(existing) < 2:
+            print("  警告：本机没有同版本标准版安装器，校验文件只有 FULL 一行；"
+                  "发布前请先构建标准版")
+        print("  上传 Release 时请把 SHA256SUMS.txt 与安装包一起附上，"
+              "客户端更新会强校验（缺文件则只允许手动下载）。")
+
     print("\n全部完成")
     print(f"  绿色版：dist\\{name}\\{name}.exe（无 CMD 窗口，双击即用）")
-    print(f"  安装器：dist\\installer\\{name}_Setup_{ver['APP_VERSION']}.exe（可选目录/注册表/可卸载）")
+    print(f"  安装器：dist\\installer\\{installer_path(name, version, args.edition).name}"
+          "（可选目录/注册表/可卸载）")
 
 
 if __name__ == "__main__":

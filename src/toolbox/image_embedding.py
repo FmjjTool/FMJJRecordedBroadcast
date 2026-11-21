@@ -67,6 +67,14 @@ def default_model_dir() -> Path:
     return get_config_dir() / "models"
 
 
+def bundled_model_dir() -> Path | None:
+    """FULL 版随包的 CLIP 模型目录（models/clip），标准版返回 None。"""
+    from toolbox import edition
+
+    path = edition.bundled_dir("models") / "clip"
+    return path if path.is_dir() else None
+
+
 def find_model_files(root: Path | None = None) -> list[Path]:
     """列出模型目录下的 .onnx（先普通版，后量化版）。"""
     directory = Path(root) if root else default_model_dir()
@@ -78,13 +86,15 @@ def find_model_files(root: Path | None = None) -> list[Path]:
 
 
 def resolve_model_path(configured: str = "") -> Path | None:
-    """配置路径有效时优先使用，否则在默认模型目录里找第一个 .onnx。"""
+    """配置路径有效时优先使用，其次包内模型（FULL 版），最后用户模型目录。"""
     text = str(configured or "").strip()
     if text:
         path = Path(text).expanduser()
         if path.is_file() and path.suffix.lower() == ".onnx":
             return path
-    files = find_model_files()
+    files = find_model_files(bundled_model_dir())
+    if not files:
+        files = find_model_files()
     return files[0] if files else None
 
 

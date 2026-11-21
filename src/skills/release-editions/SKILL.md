@@ -36,23 +36,22 @@ description: "标准版与 FULL 内置版的双形态打包与发布规则：FUL
 | 本地转写程序 | `<app>\models\whisper-faster.exe` | `toolbox/asr_engine.py::get_models_dir` | 已被 `get_models_dir()` 的「程序目录/models」覆盖 |
 | 本地转写模型 | `<app>\models\faster-whisper-base\` | 同上 `local_model_dir` | 只内置 `base`（与默认 `asr_local_model` 一致）；其余档位仍按需下载 |
 | 图识别模型 | `<app>\models\clip\vision_model_quantized.onnx` | `toolbox/image_embedding.py::default_model_dir`（现为 `config/models`） | 增加「包内 `models/clip` → `config/models`」的查找顺序 |
-| node（抖音 a_bogus 签名） | `<app>\bin\node\node.exe` | `multi_downloader.py` 只 `shutil.which("node")`；设置页检测同 | 必须加内置回退：PATH 找不到时用包内 node |
+| node（抖音 a_bogus 签名） | 已在 `<app>\_internal\playwright\driver\node.exe` | `multi_downloader._find_node`（PATH → Playwright 自带 node → 常规安装位） | 无需重复内置；FULL 版直接复用 Playwright 驱动的 node |
 | 7-Zip | `<app>\_internal\toolbox\bin` | 已随包（`ADD_DATA`） | 不变 |
 
 **FULL 版不放**：用户 Cookie、账号、日志、下载缓存、`config/` 下任何文件；也不放本机 `models/` 的整目录副本（见隐私与体积）。
 
 ## 三、体积预算（实测基线）
 
-| 项 | 未压缩 | LZMA 后（估算） | 说明 |
+| 项 | 未压缩 | LZMA 后（实测/估算） | 说明 |
 | --- | --- | --- | --- |
 | 标准版整体 | 435 MB | 127.9 MB | v3.0.2 实测安装包 |
-| ffmpeg + ffprobe（gyan release-essentials） | ≈250 MB | ≈75 MB | 只取两个 exe |
+| ffmpeg + ffprobe | 381.5 MB | ≈130 MB | 本机 N-122740 构建，两个 exe 各约 190 MB |
 | chromium_headless_shell | 277.5 MB | ≈100 MB | 只内置 headless shell，不内置完整 Chromium（436 MB） |
 | whisper-faster.exe | 84.3 MB | ≈35 MB | 本地转写程序 |
-| faster-whisper-base 模型 | ≈145 MB | ≈140 MB | 权重压缩率低，别按 3:1 估 |
-| CLIP 视觉编码器 onnx | ≈90 MB | ≈88 MB | `vision_model_quantized.onnx` |
-| node.exe | 89.2 MB | ≈35 MB | 仅签名用，单文件即可 |
-| **FULL 合计（估算）** | **≈1.4 GB** | **≈550–650 MB** | 以 base 模型为准 |
+| faster-whisper-base 模型 | ≈141 MB | ≈138 MB | 权重压缩率低，别按 3:1 估 |
+| CLIP 视觉编码器 onnx | 85.0 MB | ≈83 MB | `vision_model_quantized.onnx` |
+| **FULL 合计（实测）** | **≈1.4 GB** | **569.4 MB 安装包** | v3.0.2 补发实测 |
 
 - 内置 `small` 模型会再增加约 330 MB（本机实测 463.7 MB 原始），**默认不内置**；`medium` / `large` 一律按需下载。
 - GitHub 单个资产上限 2 GB，FULL 包在限内；但 Inno 生成的单 exe 建议控制在 2 GB 以下，超过需分卷，此时必须同步改发布流程。
@@ -63,7 +62,7 @@ description: "标准版与 FULL 内置版的双形态打包与发布规则：FUL
 1. **版本标记只有一个来源**：包根放 `FULL_EDITION` 标记文件（内容 `full`），运行时 `edition()` 读它；读不到一律视为 `standard`。不要把 edition 写进 `version.py`，避免双份事实。
 2. **依赖查找顺序**（标准版行为不得变化）：
    - ffmpeg / ffprobe：PATH → 程序目录（已有）→ 用户自定义位置。
-   - node：PATH → `<app>\bin\node\node.exe` → 报错。
+   - node：PATH → Playwright driver 自带 `node.exe`（已有，位于 `_internal/playwright/driver/`）→ 常规安装位；FULL 不需要额外内置。
    - Playwright：包内 `browsers/`（存在时）→ 用户 LocalAppData。`PLAYWRIGHT_BROWSERS_PATH` 必须在 `sync_playwright()` 之前设置，事后设置无效。
    - CLIP 模型：用户配置路径 → 包内 `models/clip` → `config/models`。
 3. **依赖面板**：FULL 版每项显示「已内置」+ 版本号，中性/通过色，不计入缺失数；隐藏下载按钮。标准版保持现状，不因 FULL 改造改动文案与入口分级（约定 11 仍成立：安装入口统一在全局设置）。
@@ -125,11 +124,20 @@ FULL 版把更多第三方二进制随包分发，发布前必须在 `THIRD_PART
 - **P1（构建与发布）**：`build.py --edition full`、Inno 双产物、`SHA256SUMS.txt` 两行、发布流程追加 FULL 资产、FULL 版离屏烟测。
 - **P2（体验与优化）**：安装器内选择版本（标准 / FULL 二选一）、跨版本切换提示、体积优化（headless shell 精简、模型档位可选）、`THIRD_PARTY_NOTICES` 完整化。
 
-## 十、常见坑
+## 十一、已落地状态（v3.0.2 补发）
+
+- 运行时：`toolbox/edition.py`（`FMJJ_EDITION` 环境变量 → 包根 `FULL_EDITION` 标记 → standard）；`browser.browsers_dir()`、`image_embedding.bundled_model_dir()/resolve_model_path()` 已支持包内优先；设置页依赖面板对 `ffmpeg / ffprobe / pw_shell / asr_program / asr_model / clip_model` 显示「已内置」。
+- 更新器：`updater` 按 edition 挑资产（标准 `FengMingToolbox_Setup_`、FULL `FengMingToolbox_Full_Setup_`），`check_for_update` / `fetch_latest` 支持 `edition=` 参数。
+- 构建：`python build.py --prepare-full` 收集组件到 `build_full_vendor/`（已加入 .gitignore）；`python build.py --edition full` 装配 + 打 FULL 安装器；`SHA256SUMS.txt` 按磁盘上实际存在的安装包逐行生成。
+- 隐私扫描白名单：`models/**/config.json` 是模型参数而非本机配置，已显式放行；其余 `config/`、`logs/`、`download/` 仍禁止。
+- 实测：`dist/FengMingToolbox` 1.4 GB → FULL 安装器 569.4 MB；离屏运行 15 秒无异常；包内 ffmpeg / CLIP / browsers 解析路径均已验证。
+- 注意：FULL 版与标准版共用 `APP_VERSION`；若在某个已发布 tag 之后才补 FULL，FULL 包会包含 tag 之后的运行时修复，发布说明里要注明。
+
+## 十二、常见坑
 
 1. **直接复制本机 `models/`**：会带进 `small`（463.7 MB）与转写缓存，FULL 包体积失控且可能夹带用户数据。只允许从干净目录挑 `base`。
 2. **把完整 Chromium 打进包**：完整版 436.4 MB，且大多数场景只用 headless shell；内置 headless shell 即可，登录仍走系统 Edge/Chrome。
-3. **忘记 node 回退**：FULL 版仍会提示「未找到 node 环境」，因为现有代码只查 PATH。
+3. **以为要单独内置 node**：Playwright driver 自带 `node.exe`，`multi_downloader._find_node` 已优先回退到它；再塞一份只会让包更大。
 4. **CLIP 模型放错目录**：`default_model_dir()` 是 `config/models`，不是包内 `models/`，不加回退会显示「未下载模型」。
 5. **Playwright 环境变量设晚了**：必须在 `sync_playwright()` 之前设置，否则仍去用户目录找内核。
 6. **AppId 不同**：给 FULL 换新 GUID 会变成两套程序、两个卸载项、两份配置，升级路径断裂。

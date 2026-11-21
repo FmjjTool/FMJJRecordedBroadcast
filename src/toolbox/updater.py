@@ -28,6 +28,7 @@ API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 INSTALL_REG_KEY = r"Software\FengMingToolbox"
 SETUP_PREFIX = "FengMingToolbox_Setup_"
+FULL_SETUP_PREFIX = "FengMingToolbox_Full_Setup_"
 SHA_SUMS_NAME = "SHA256SUMS.txt"
 CHECK_INTERVAL = 24 * 3600  # 启动静默检查的最小间隔（秒）
 
@@ -84,10 +85,12 @@ def _session_headers(current: str) -> dict:
     }
 
 
-def _pick_setup_asset(assets: Iterable[dict]) -> Optional[dict]:
+def _pick_setup_asset(assets: Iterable[dict], edition: str = "standard") -> Optional[dict]:
+    """按版本形态挑安装包：标准版与 FULL 版前缀互斥，不允许串包。"""
+    prefix = FULL_SETUP_PREFIX if edition == "full" else SETUP_PREFIX
     for a in assets:
         name = str(a.get("name") or "")
-        if name.lower().endswith(".exe") and name.startswith(SETUP_PREFIX):
+        if name.lower().endswith(".exe") and name.startswith(prefix):
             return a
     return None
 
@@ -101,9 +104,13 @@ def _pick_sha_asset(assets: Iterable[dict]) -> Optional[dict]:
 
 
 def fetch_latest(current: str = "", timeout: float = 6.0,
-                 proxies: Optional[dict] = None) -> ReleaseInfo:
+                 proxies: Optional[dict] = None,
+                 edition: Optional[str] = None) -> ReleaseInfo:
     """拉取 latest release；网络/接口错误统一抛 UpdateError（消息可直接展示）。"""
     import requests
+    from toolbox import edition as edition_mod
+
+    edition = edition or edition_mod.edition()
 
     try:
         resp = requests.get(API_LATEST, headers=_session_headers(current or "0"),
@@ -124,8 +131,10 @@ def fetch_latest(current: str = "", timeout: float = 6.0,
         raise UpdateError("GitHub 返回内容无法解析")
 
     assets = data.get("assets") or []
-    setup = _pick_setup_asset(assets)
+    setup = _pick_setup_asset(assets, edition)
     if setup is None:
+        if edition == "full":
+            raise UpdateError("该版本未上传 FULL 版安装包，请手动下载或等待下一版")
         raise UpdateError("该版本未上传安装包（Setup.exe）")
     sha = _pick_sha_asset(assets)
     tag = str(data.get("tag_name") or "")
@@ -146,9 +155,10 @@ def fetch_latest(current: str = "", timeout: float = 6.0,
 
 
 def check_for_update(current: str, timeout: float = 6.0,
-                     proxies: Optional[dict] = None):
+                     proxies: Optional[dict] = None,
+                     edition: Optional[str] = None):
     """返回 (ReleaseInfo | None, 错误消息 | None)；有新版本才返回 info。"""
-    info = fetch_latest(current, timeout=timeout, proxies=proxies)
+    info = fetch_latest(current, timeout=timeout, proxies=proxies, edition=edition)
     return (info, None) if is_newer(info.version, current) else (None, None)
 
 

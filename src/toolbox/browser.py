@@ -24,7 +24,16 @@ _APP_DIR_NAME = "FengMingToolbox"
 
 
 def browsers_dir() -> Path:
-    """按需下载的浏览器存放目录（用户 LocalAppData，无写权限问题）。"""
+    """Playwright 内核目录：FULL 版优先包内 browsers/，否则用户 LocalAppData。
+
+    包内内核只读即可（浏览器用户数据由 Playwright 放临时目录），
+    因此安装在 Program Files 下也能直接使用。
+    """
+    from toolbox import edition
+
+    bundled = edition.bundled_dir("browsers")
+    if getattr(sys, "frozen", False) and bundled.is_dir():
+        return bundled
     base = Path(os.environ.get("LOCALAPPDATA", "")) or (Path.home() / "AppData" / "Local")
     return base / _APP_DIR_NAME / "browsers"
 

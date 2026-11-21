@@ -25,7 +25,7 @@ from toolbox.config_manager import (
 )
 from toolbox.skills import list_skills, skill_total_size_text
 from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
-from toolbox import updater
+from toolbox import edition, updater
 from version import APP_VERSION
 
 from gui_qt.common import post_to_main, run_bg
@@ -851,6 +851,10 @@ class GlobalSettingsPage(BasePage):
     #   external   - 打开官方下载页，用户自行安装
     #   pw_shell / asr_program / asr_model / clip_model - 程序内一键下载组件
     # 可选依赖未安装时标「可选」而非「缺失」，不计入缺失数量，不影响主流程
+    # FULL 内置版随包提供、状态显示「已内置」的组件
+    _FULL_BUNDLED = {"ffmpeg", "ffprobe", "pw_shell", "asr_program",
+                     "asr_model", "clip_model"}
+
     _DEPENDENCIES = [
         ("ffmpeg", "FFmpeg", "_check_ffmpeg_detail",
          "视频处理、转码、合并、截图等核心功能", "https://www.gyan.dev/ffmpeg/builds/", False, "ffmpeg"),
@@ -999,8 +1003,12 @@ class GlobalSettingsPage(BasePage):
         for (key, name, fn_name, usage, url, optional, action), (_rk, _rn, ok, version) in zip(
                 self._DEPENDENCIES, results):
             # 三种状态：已安装 / 缺失（必装，标红）/ 可选（未装，中性色）
+            # FULL 版内置项显示「已内置」，与用户自行安装区分
+            bundled = (key in self._FULL_BUNDLED and ok
+                       and edition.is_full())
             if ok:
-                mark_text, mark_color = "已安装", "palette(link-visited)"
+                mark_text = "已内置" if bundled else "已安装"
+                mark_color = "palette(link-visited)"
                 name_color, row_bg = "palette(text)", "palette(midlight)"
             elif optional:
                 mark_text, mark_color = "可选", "palette(placeholder-text)"

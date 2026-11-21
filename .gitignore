@@ -5,6 +5,7 @@ download/
 logs/
 dist/
 build/
+build_full_vendor/
 *.spec
 _test_replay.flv
 dycast-main/downloads/
