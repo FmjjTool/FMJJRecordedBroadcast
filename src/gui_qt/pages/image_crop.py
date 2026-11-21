@@ -13,12 +13,12 @@ Shift 加速、边界吸附（预计算行/列边缘画像，后台线程分析�
 import math
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPalette, QPen, QPixmap,
+    QColor, QFont, QIcon, QImage, QImageReader, QKeySequence, QPainter, QPalette, QPen, QPixmap,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -32,6 +32,7 @@ from gui_qt.common import icon_button, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.theme import current_palette
+from toolbox.memory_cache import ByteLRU
 
 try:
     import numpy as _np
@@ -93,13 +94,60 @@ class ImageSlot:
     path: str
     name: str
     ext: str
-    image: QImage
+    image: QImage                    # 仅列表缩略图，原始像素尺寸单独保存
     crop: CropRect
     display_crop: CropRect
     history: list = field(default_factory=list)
     history_index: int = 0
     profiles: Optional[tuple] = None       # (row_sum, row_cnt, col_sum, col_cnt)
     profile_pending: bool = False
+    source_size: Optional[QSize] = None
+    stamp: Optional[tuple] = None
+
+    @property
+    def width(self):
+        return self.source_size.width() if self.source_size is not None else self.image.width()
+
+    @property
+    def height(self):
+        return self.source_size.height() if self.source_size is not None else self.image.height()
+
+
+def _image_stamp(path):
+    stat = os.stat(path)
+    return stat.st_mtime_ns, stat.st_size
+
+
+def read_image_slot(path, sid=0):
+    """只读尺寸与小缩略图；导入一批图片时不保留本批所有原图。"""
+    stamp = _image_stamp(path)
+    reader = QImageReader(path)
+    size = reader.size()
+    if not size.isValid():
+        raise RuntimeError("图片尺寸无效")
+    reader.setScaledSize(size.scaled(QSize(160, 160), Qt.KeepAspectRatio))
+    thumbnail = reader.read()
+    if thumbnail.isNull():
+        raise RuntimeError("图片解码失败")
+    if _image_stamp(path) != stamp:
+        raise RuntimeError("图片已发生变化，请重新导入")
+    crop = make_initial_crop(size.width(), size.height())
+    return ImageSlot(sid=sid, path=path, name=os.path.basename(path),
+                     ext=os.path.splitext(path)[1].lower(), image=thumbnail,
+                     crop=crop, display_crop=crop.copy(), history=[crop.copy()],
+                     source_size=size, stamp=stamp)
+
+
+def read_original(slot):
+    """原图只在当前编辑/逐张导出时读取，禁止把旧坐标套到已变化的文件上。"""
+    if slot.stamp is not None and _image_stamp(slot.path) != slot.stamp:
+        raise RuntimeError("原图已发生变化，请重新导入后再裁切")
+    image = QImageReader(slot.path).read()
+    if image.isNull():
+        raise RuntimeError("无法读取原图，请检查源文件")
+    if slot.stamp is not None and _image_stamp(slot.path) != slot.stamp:
+        raise RuntimeError("原图已发生变化，请重新导入后再裁切")
+    return image
 
 
 # ==================== 纯函数（无 Qt 界面依赖，便于离线自测） ====================
@@ -147,20 +195,29 @@ def compute_edge_profiles(gray: QImage):
     if w < 3 or h < 3:
         return [0.0] * h, [0] * h, [0.0] * w, [0] * w
     stride = gray.bytesPerLine()
-    buf = bytes(gray.constBits())
+    buf = gray.constBits()
 
     if _np is not None:
-        arr = _np.frombuffer(buf, dtype=_np.uint8).reshape(h, stride)[:, :w].astype(_np.int16)
-        # dv[i] = |lum(i+2) - lum(i)|，边缘中心在 i+1 → 行画像右移一位对齐
-        dv = _np.abs(arr[2:, :] - arr[:-2, :])
-        dm = dv > EDGE_THRESHOLD
-        row_sum = [0.0] + (dv * dm).sum(axis=1).tolist() + [0.0]
-        row_cnt = [0] + dm.sum(axis=1).tolist() + [0]
-        dh = _np.abs(arr[:, 2:] - arr[:, :-2])
-        em = dh > EDGE_THRESHOLD
-        col_sum = [0.0] + (dh * em).sum(axis=0).tolist() + [0.0]
-        col_cnt = [0] + em.sum(axis=0).tolist() + [0]
-        return row_sum, row_cnt, col_sum, col_cnt
+        arr = _np.frombuffer(buf, dtype=_np.uint8).reshape(h, stride)[:, :w]
+        row_sum, row_cnt = [0.0] * h, [0] * h
+        col_sum = _np.zeros(w - 2, dtype=_np.int64)
+        col_cnt = _np.zeros(w - 2, dtype=_np.int64)
+        # 与原算法逐像素一致；临时 int16/掩码仅占 128 行，不复制整幅灰度图。
+        for start in range(1, h - 1, 128):
+            end = min(h - 1, start + 128)
+            dv = _np.abs(arr[start + 1:end + 1].astype(_np.int16) - arr[start - 1:end - 1])
+            mask = dv > EDGE_THRESHOLD
+            row_cnt[start:end] = mask.sum(axis=1).tolist()
+            dv *= mask
+            row_sum[start:end] = dv.sum(axis=1).tolist()
+        for start in range(0, h, 128):
+            block = arr[start:start + 128]
+            dh = _np.abs(block[:, 2:].astype(_np.int16) - block[:, :-2])
+            mask = dh > EDGE_THRESHOLD
+            col_cnt += mask.sum(axis=0)
+            dh *= mask
+            col_sum += dh.sum(axis=0)
+        return row_sum, row_cnt, [0.0] + col_sum.tolist() + [0.0], [0] + col_cnt.tolist() + [0]
 
     step = 2 if w * h <= 4_000_000 else 4
     row_sum = [0.0] * h
@@ -241,7 +298,7 @@ def find_content_bounds(img: QImage) -> Optional[CropRect]:
         return None
     rgba = img.convertToFormat(QImage.Format_RGBA8888)
     stride = rgba.bytesPerLine()
-    buf = bytes(rgba.constBits())
+    buf = rgba.constBits()
     step = CONTENT_SCAN_STEP
 
     top = 0
@@ -439,7 +496,7 @@ class CropCanvas(QWidget):
         cw, ch = self.width(), self.height()
         if cw <= 1 or ch <= 1:
             return None
-        img_w, img_h = max(1, slot.image.width()), max(1, slot.image.height())
+        img_w, img_h = max(1, slot.width), max(1, slot.height)
         scale = min(cw / img_w, ch / img_h)   # 不设 1.0 上限：图片撑满画布
         dw = max(1, round(img_w * scale))
         dh = max(1, round(img_h * scale))
@@ -473,10 +530,12 @@ class CropCanvas(QWidget):
 
     # ---- 渲染 ----
     def _scaled_pixmap(self, slot, lay) -> QPixmap:
-        key = (id(slot.image), lay["dw"], lay["dh"])
+        image = self.page._active_preview
+        image = image if image is not None else slot.image
+        key = (slot.sid, image.cacheKey(), lay["dw"], lay["dh"])
         if self._pix_cache[0] != key:
-            pm = QPixmap.fromImage(slot.image).scaled(
-                lay["dw"], lay["dh"], Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            pm = QPixmap.fromImage(image.scaled(
+                lay["dw"], lay["dh"], Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
             self._pix_cache = (key, pm)
         return self._pix_cache[1]
 
@@ -542,6 +601,10 @@ class CropCanvas(QWidget):
         slot = self.page.active_slot()
         lay = self._layout()
         if slot is None or lay is None:
+            return
+        original = self.page._active_original
+        if original is None:
+            self._hide_magnifier()
             return
         pos = e.position()
         edge = self._detect_edge(lay, pos.x(), pos.y())
@@ -670,6 +733,10 @@ class CropCanvas(QWidget):
         lay = self._layout()
         if slot is None or lay is None:
             return
+        original = self.page._active_original
+        if original is None:
+            self._hide_magnifier()
+            return
         dc = slot.display_crop
         img_w, img_h = lay["img_w"], lay["img_h"]
         zoom = self.page.magnifier_zoom
@@ -682,7 +749,7 @@ class CropCanvas(QWidget):
         # 源窗口始终以参考线为中心、不夹取图片边界：
         # 线拖到图片边缘时越界部分显示深色底，可直观看到已经到边、无法再移动
         self._magnifier.show_region(
-            slot.image,
+            original,
             QRectF(line_x - src_size / 2, line_y - src_size / 2, src_size, src_size),
             zoom, is_horizontal)
 
@@ -736,6 +803,7 @@ class CropCanvas(QWidget):
 
     def _hide_magnifier(self):
         self._magnifier.hide()
+        self._magnifier._image = None
 
 
 # ==================== 精确裁切尺寸输入对话框 ====================
@@ -789,24 +857,26 @@ class ImageCropPage(BasePage):
     def prepare_session_state(self):
         self._session_slots = [dict(sid=s.sid, path=s.path, crop=s.crop.copy(),
                                     display_crop=s.display_crop.copy(), history=s.history,
-                                    history_index=s.history_index) for s in self._slots]
+                                    history_index=s.history_index, stamp=s.stamp) for s in self._slots]
 
     def restore_session_data(self):
         records = getattr(self, "_session_slots", [])
         active = self._active
 
         def work():
-            return [(r, QImage(r["path"])) for r in records]
+            return [(r, read_image_slot(r["path"], r["sid"])) for r in records]
 
         def done(result, err):
             if err:
                 return
-            self._slots = [ImageSlot(
-                sid=r["sid"], path=r["path"], name=os.path.basename(r["path"]),
-                ext=os.path.splitext(r["path"])[1].lower(), image=img,
-                crop=r["crop"], display_crop=r["display_crop"],
-                history=r["history"], history_index=r["history_index"])
-                for r, img in result if not img.isNull()]
+            self._slots = []
+            for r, slot in result:
+                if r.get("stamp") is not None and r["stamp"] != slot.stamp:
+                    self.app.toast("原图已发生变化，请重新导入后再裁切", "warning")
+                    continue
+                slot.crop, slot.display_crop = r["crop"], r["display_crop"]
+                slot.history, slot.history_index = r["history"], r["history_index"]
+                self._slots.append(slot)
             self._rebuild_list()
             if self._slots:
                 self._select_slot(max(0, min(active, len(self._slots) - 1)))
@@ -827,6 +897,12 @@ class ImageCropPage(BasePage):
         self._auto_running = False
         self._building_list = False
         self._icons: list = []
+        self._originals = ByteLRU(128 * 1024 * 1024,
+                                  size_of=lambda img: img.sizeInBytes(), max_items=2)
+        self._active_original = self._active_preview = None
+        self._source_loading = False
+        self._view_visible = True
+        self._load_error = None
 
         self._build_ui()
         self._bind_shortcuts()
@@ -1102,14 +1178,12 @@ class ImageCropPage(BasePage):
             loaded = []
             failed = []
             for p in todo:
-                img = QImage(p)
-                if img.isNull() or img.width() <= 0 or img.height() <= 0:
+                try:
+                    slot = read_image_slot(p)
+                except Exception:
                     failed.append(os.path.basename(p))
                     continue
-                crop = clamp_crop(make_initial_crop(img.width(), img.height()),
-                                  img.width(), img.height())
-                loaded.append((p, os.path.basename(p),
-                               os.path.splitext(p)[1].lower(), img, crop))
+                loaded.append(slot)
             return loaded, failed
 
         def done(res, err):
@@ -1122,13 +1196,14 @@ class ImageCropPage(BasePage):
             if not loaded:
                 return
             slots = []
-            for path, name, ext, img, crop in loaded:
+            existing = {s.path for s in self._slots}
+            for slot in loaded:
+                if slot.path in existing:
+                    continue
+                existing.add(slot.path)
                 self._slot_seq += 1
-                slots.append(ImageSlot(
-                    sid=self._slot_seq, path=path, name=name, ext=ext, image=img,
-                    crop=crop.copy(), display_crop=crop.copy(),
-                    history=[crop.copy()], history_index=0,
-                ))
+                slot.sid = self._slot_seq
+                slots.append(slot)
             self._slots.extend(slots)
             self._rebuild_list()
             self._select_slot(len(self._slots) - 1)
@@ -1180,6 +1255,7 @@ class ImageCropPage(BasePage):
         if not (0 <= row < len(self._slots)):
             return
         removed = self._slots.pop(row)
+        self._originals.pop((removed.path, removed.stamp), None)
         if self._active >= len(self._slots):
             self._active = len(self._slots) - 1
         self._rebuild_list()
@@ -1188,6 +1264,7 @@ class ImageCropPage(BasePage):
             self._select_slot(target)
         else:
             self._active = -1
+            self._active_original = self._active_preview = None
             self.canvas.reset_interaction()
             self._sync_ui()
         self.app.toast(f"已删除：{removed.name}", "info")
@@ -1202,6 +1279,8 @@ class ImageCropPage(BasePage):
         if ret != QMessageBox.Yes:
             return
         self._slots.clear()
+        self._originals.clear()
+        self._active_original = self._active_preview = None
         self._active = -1
         self._rebuild_list()
         self.canvas.reset_interaction()
@@ -1212,19 +1291,78 @@ class ImageCropPage(BasePage):
         if not (0 <= index < len(self._slots)):
             return
         self._active = index
+        self._active_original = self._active_preview = None
+        self._load_error = None
         self.canvas.reset_interaction()
         if self.list_widget.currentRow() != index:
             self._building_list = True
             self.list_widget.setCurrentRow(index)
             self._building_list = False
         slot = self._slots[index]
-        if self.snap_mode:
-            self._ensure_profiles(slot)
+        for other in self._slots:
+            if other is not slot:
+                other.profiles = None
+        self._start_source_load()
         self._sync_ui()
+
+    def _start_source_load(self):
+        slot = self.active_slot()
+        if slot is None or self._source_loading or not self._view_visible:
+            return
+        self._source_loading = True
+        want_profiles = self.snap_mode and slot.profiles is None
+
+        def job():
+            if slot.stamp is not None and _image_stamp(slot.path) != slot.stamp:
+                raise RuntimeError("原图已发生变化，请重新导入后再裁切")
+            image = self._originals.get((slot.path, slot.stamp))
+            if image is None:
+                image = read_original(slot)
+            preview = image.scaled(QSize(1600, 1600), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            profiles = compute_edge_profiles(image.convertToFormat(QImage.Format_Grayscale8)) if want_profiles else None
+            return image, preview, profiles
+
+        def done(result, err):
+            self._source_loading = False
+            current = self.active_slot()
+            if not self._view_visible:
+                return
+            if current is not slot:
+                self._start_source_load()
+                return
+            if err:
+                self._load_error = str(err)
+                self.app.toast(str(err), "error")
+            else:
+                image, preview, profiles = result
+                self._originals[(slot.path, slot.stamp)] = image
+                self._active_original, self._active_preview = image, preview
+                if profiles is not None:
+                    slot.profiles = profiles
+                self.canvas.reset_interaction()
+            self._sync_ui()
+            if not err and self.snap_mode and slot.profiles is None:
+                self._start_source_load()
+
+        run_bg(job, done)
+
+    def on_hide(self):
+        self._view_visible = False
+        self.canvas.reset_interaction()
+        self._active_original = self._active_preview = None
+        self._originals.clear()
+        for slot in self._slots:
+            slot.profiles = None
+
+    def on_show(self):
+        self._view_visible = True
+        self._load_error = None
+        if self._active_original is None:
+            self._start_source_load()
 
     # ---------- 裁切提交 / 历史 ----------
     def commit_crop(self, slot: ImageSlot, crop: CropRect):
-        img_w, img_h = slot.image.width(), slot.image.height()
+        img_w, img_h = slot.width, slot.height
         crop = clamp_crop(crop, img_w, img_h)
         slot.crop = crop
         slot.display_crop = crop.copy()
@@ -1286,18 +1424,7 @@ class ImageCropPage(BasePage):
     def _ensure_profiles(self, slot: ImageSlot):
         if slot.profiles is not None or slot.profile_pending:
             return
-        slot.profile_pending = True
-
-        def job():
-            gray = slot.image.convertToFormat(QImage.Format_Grayscale8)
-            return compute_edge_profiles(gray)
-
-        def done(res, err):
-            slot.profile_pending = False
-            if err is None:
-                slot.profiles = res
-
-        run_bg(job, done)
+        self._start_source_load()
 
     # ---------- 放大镜倍率 ----------
     def _set_zoom(self, zoom: int):
@@ -1311,11 +1438,14 @@ class ImageCropPage(BasePage):
         slot = self.active_slot()
         if slot is None or self._auto_running:
             return
+        image = self._active_original
+        if image is None:
+            return
         self._auto_running = True
         self.btn_auto.setEnabled(False)
 
         def job():
-            return find_content_bounds(slot.image)
+            return find_content_bounds(image)
 
         def done(res, err):
             self._auto_running = False
@@ -1335,11 +1465,12 @@ class ImageCropPage(BasePage):
         slot = self.active_slot()
         if slot is None:
             return
-        dlg = CropInputDialog(self, slot.image.width(), slot.image.height(),
+        dlg = CropInputDialog(self, slot.width, slot.height,
                               slot.display_crop)
         if dlg.exec() == QDialog.Accepted:
             self.commit_crop(slot, dlg.value())
             self.app.toast("裁切区域已更新", "success")
+        dlg.deleteLater()
 
     # ---------- 导出 ----------
     def _export_current(self):
@@ -1357,7 +1488,10 @@ class ImageCropPage(BasePage):
             "PNG (*.png);;JPEG (*.jpg);;WebP (*.webp)")
         if not path:
             return
-        saved = save_cropped(slot.image, crop, path)
+        image = self._active_original
+        if image is None:
+            return
+        saved = save_cropped(image, crop, path)
         if saved:
             self.app.toast(f"导出成功：{saved}", "success")
         else:
@@ -1373,7 +1507,9 @@ class ImageCropPage(BasePage):
         if crop.width <= 0 or crop.height <= 0:
             self.app.toast("裁切区域无效", "warning")
             return
-        img = slot.image.copy(QRect(crop.left, crop.top, crop.width, crop.height))
+        if self._active_original is None:
+            return
+        img = self._active_original.copy(QRect(crop.left, crop.top, crop.width, crop.height))
         if img.isNull():
             self.app.toast("复制失败：裁切结果为空", "error")
             return
@@ -1389,7 +1525,8 @@ class ImageCropPage(BasePage):
         from toolbox.config_manager import get_export_dir
         out_dir = get_export_dir() / "图片裁切"
         os.makedirs(out_dir, exist_ok=True)
-        total = len(self._slots)
+        slots = tuple(replace(s, crop=s.crop.copy(), history=[], profiles=None) for s in self._slots)
+        total = len(slots)
         cancel = threading.Event()
         dlg = QProgressDialog("正在导出...", "取消", 0, total, self)
         dlg.setWindowTitle("批量导出")
@@ -1403,7 +1540,7 @@ class ImageCropPage(BasePage):
         def job():
             ok = 0
             fails = []
-            for i, slot in enumerate(self._slots):
+            for i, slot in enumerate(slots):
                 if cancel.is_set():
                     break
                 post_to_main(dlg.setValue, i)
@@ -1419,7 +1556,9 @@ class ImageCropPage(BasePage):
                     out = os.path.join(out_dir, f"{base}_cropped_{n}{slot.ext}")
                     n += 1
                 try:
-                    saved = save_cropped(slot.image, crop, out)
+                    image = read_original(slot)
+                    saved = save_cropped(image, crop, out)
+                    del image
                     if saved:
                         ok += 1
                     else:
@@ -1432,6 +1571,7 @@ class ImageCropPage(BasePage):
             self._batch_running = False
             self.btn_batch.setEnabled(True)
             dlg.close()
+            dlg.deleteLater()
             if err:
                 self.app.toast(f"批量导出失败：{err}", "error")
                 return
@@ -1449,11 +1589,13 @@ class ImageCropPage(BasePage):
     def _sync_ui(self):
         slot = self.active_slot()
         has = slot is not None
+        ready = has and self._active_original is not None
         self.btn_undo.setEnabled(has and slot.history_index > 0)
         self.btn_redo.setEnabled(has and slot.history_index < len(slot.history) - 1)
-        self.btn_auto.setEnabled(has and not self._auto_running)
+        self.btn_auto.setEnabled(ready and not self._auto_running)
         self.btn_precise.setEnabled(has)
-        self.btn_export.setEnabled(has)
+        self.btn_export.setEnabled(ready)
+        self.btn_copy.setEnabled(ready)
         self.btn_clear.setEnabled(bool(self._slots))
         self.list_count_label.setText(f"{len(self._slots)} 张")
         if has:
@@ -1461,8 +1603,8 @@ class ImageCropPage(BasePage):
             self.file_label.setText(slot.name)
             self.file_label.setToolTip(slot.path)
             self.status_label.setText(
-                f"原图 {slot.image.width()}×{slot.image.height()} · "
-                f"裁切 {slot.crop.width}×{slot.crop.height}")
+                self._load_error or (f"原图 {slot.width}×{slot.height} · "
+                f"裁切 {slot.crop.width}×{slot.crop.height}" + (" · 正在读取原图…" if not ready else "")))
             self.status_label.setToolTip(
                 "拖动参考线调整裁切 · Ctrl+Z 撤销 · Ctrl+Y 重做 · Shift 加速拖动")
             for i in range(self.list_widget.count()):
