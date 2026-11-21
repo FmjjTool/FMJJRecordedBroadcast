@@ -711,9 +711,6 @@ def apply_theme(app=None):
         return
     install_auto_remap()
     _ensure_check_style(app)
-    # 下拉弹层圆角：需要 QApplication 才能装事件过滤器，这里是最早的可靠时机
-    from gui_qt import combo_popup
-    combo_popup.install()
     _audit_theme_tokens()
     dark = is_dark()
     qss = _theme_template(NEUTRAL_QSS, legacy=False, dark=dark)
