@@ -168,23 +168,29 @@ class TabbedPage(BasePage):
 
 
 class InfoToolsPage(TabbedPage):
-    """信息工具：原侧栏四个独立信息页合并为一个页签容器。"""
+    """信息工具：原侧栏独立信息页合并为一个页签容器。
+
+    页签：视频评论区 / B站资源 / 公众号解析 / 抖音表情包。
+    """
 
     TAB_KEYS = [
         "video_comments",
         "bili_resource",
         "wechat_article",
+        "douyin_emoji",
     ]
 
     def __init__(self, app):
         from gui_qt.page_index import page_meta
         from gui_qt.pages.bili_resource import BiliResourcePage
+        from gui_qt.pages.douyin_emoji_page import DouyinEmojiPage
         from gui_qt.pages.video_comments import VideoCommentsPage
         from gui_qt.pages.wechat_article import WechatArticlePage
         super().__init__(app, [
             (page_meta("video_comments").title, VideoCommentsPage),
             (page_meta("bili_resource").title, BiliResourcePage),
             (page_meta("wechat_article").title, WechatArticlePage),
+            (page_meta("douyin_emoji").title, DouyinEmojiPage),
         ], lazy=True)
         self._tab_index = {key: i for i, key in enumerate(self.TAB_KEYS)}
 

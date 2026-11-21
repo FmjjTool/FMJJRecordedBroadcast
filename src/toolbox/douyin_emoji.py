@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
-"""抖音表情图收集与导出（会员表情 / 粉丝团表情 / 合并表情）。
+"""抖音会员表情栏拉取与导出。
 
-会员表情不在官方公开表情库里，只会随聊天消息以图片直链下发（rtf 片段
-type=2 + url），所以这里只做「已经收到的表情」收集：
-  1. 直播间实时消息（弹幕姬页把 rtf 片段喂进来）；
-  2. 本地已保存的弹幕包（.jsonl 实时记录 / 回放包 .zip / data.json）。
-收集到的表情图按 URL 去重（忽略签名参数），导出成图片文件（保留原格式
-webp/gif/png），文件名取表情名（如「[点赞]」→ 点赞.webp）。
+会员表情不在官方公开表情库里，只在房间进房接口
+`webcast/privilege/subscribe/info` 的 emoji_list 里一次性返回（需登录态）。
+本模块只负责：确定主播 ID → 拉全表情栏 → 按「CDN 归一后的路径」去重
+（同一张图会在 lf3/lf5/lf6、p3/p11 之间换域名下发，域名不同也算同一张）
+→ 导出成图片文件（保留原格式 webp/gif/png），文件名取表情名，同名加序号。
 
-不依赖 Qt：GUI 只负责把 piece 喂进来、展示和调 download_items()。
+不依赖 Qt：GUI 只负责展示和调 fetch_vip_emojis() / download_items()。
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 # 会员表情栏（房间一次性接口，需登录态）固定 7 个，id → 中文名
@@ -35,6 +33,11 @@ _REFERER = "https://live.douyin.com/"
 
 _BAD_NAME = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 
+# 未开播/已结束的直播间页面里仍有这段（转义 JSON）：
+#   "roomId":"7709824534500608818","web_rid":"582775732015","anchor":{"id_str":"78087831246",...
+_ROOM_ANCHOR_RE = re.compile(
+    r'"roomId"\s*:\s*"(\d+)"\s*,\s*"web_rid"\s*:\s*"[^"]*"\s*,\s*"anchor"\s*:\s*\{\s*"id_str"\s*:\s*"(\d+)"')
+
 
 def _clean_name(text, fallback="表情"):
     """表情名规整：去掉 [ ] 括号、非法文件名字符，限长 24。"""
@@ -44,72 +47,14 @@ def _clean_name(text, fallback="表情"):
 
 
 def url_key(url):
-    """去重键：去掉签名/过期参数，同一张图不同签名视为同一个。"""
-    return str(url or "").split("?", 1)[0]
-
-
-def piece_items(pieces, nick="", ts=0):
-    """rtf 片段 → 表情条目（只要带 url 的图片片段）。"""
-    out = []
-    for p in pieces or []:
-        if not isinstance(p, dict):
-            continue
-        url = str(p.get("url") or "").strip()
-        if not url.startswith("http"):
-            continue
-        out.append({"url": url, "key": url_key(url),
-                    "name": _clean_name(p.get("text")), "nick": nick or "",
-                    "ts": int(ts or 0)})
-    return out
-
-
-def casts_items(casts):
-    """弹幕记录列表（dycast 结构）→ 表情条目。"""
-    out = []
-    for c in casts or []:
-        if not isinstance(c, dict):
-            continue
-        nick = ((c.get("user") or {}).get("name") or "")[:40]
-        out.extend(piece_items(c.get("rtfContent") or c.get("rtf") or [],
-                               nick, c.get("timestamp") or 0))
-    return out
-
-
-def load_casts(path):
-    """读弹幕包 → casts 列表；支持 .jsonl / .txt / .zip / .json，失败返回 []。"""
-    path = str(path)
-    if not os.path.isfile(path):
-        return []
-    low = path.lower()
-    if low.endswith((".jsonl", ".txt")):
-        casts = []
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    casts.append(json.loads(line))
-                except ValueError:
-                    continue
-        return casts
-    if low.endswith((".zip", ".json")):
-        from toolbox.replay_bundle import parse_replay_file
-        parsed = parse_replay_file(path)
-        return list((parsed or {}).get("casts") or [])
-    return []
-
-
-def collect_files(paths):
-    """批量读多个弹幕包 → 去重后的表情条目（保持首次出现顺序）。"""
-    seen, items = set(), []
-    for p in paths or []:
-        for it in casts_items(load_casts(p)):
-            if it["key"] in seen:
-                continue
-            seen.add(it["key"])
-            items.append(it)
-    return items
+    """去重键：同一张表情会在 lf3/lf5/lf6、p3/p11 等 CDN 域名间轮换下发，
+    路径（对象 key + `~tplv-` 图床样式）相同即同一张图。只保留 path，
+    忽略域名与签名参数；path 为空时退回去掉 query 的整段。"""
+    s = str(url or "").strip()
+    if not s:
+        return ""
+    path = urlsplit(s).path
+    return path or s.split("?", 1)[0]
 
 
 def _sniff_ext(data):
@@ -172,12 +117,52 @@ def download_items(items, out_dir, *, on_progress=None, stop=None):
                     pass
     return {"saved": saved, "failed": failed}
 
+def _page_room_ids(room_num, timeout=20):
+    """直播间页面兜底：SSR 里拿 room_id + 主播 ID。
+
+    未开播 / 已结束的页面同样带着这段数据（`room/enter` 被风控返回 200 空包、
+    或房间已下播清除时，网页仍能确定房间和主播）。返回 ("", "") 表示没拿到。
+    """
+    import httpx
+
+    try:
+        r = httpx.get("https://live.douyin.com/%s" % room_num,
+                      headers={"User-Agent": _UA, "Referer": "https://live.douyin.com/"},
+                      timeout=timeout, follow_redirects=True)
+    except Exception:
+        return "", ""
+    text = (r.text or "").replace('\\"', '"')
+    m = _ROOM_ANCHOR_RE.search(text)
+    return (m.group(1), m.group(2)) if m else ("", "")
+
+
+def _reflow_room(room_id, timeout=20):
+    """19 位房间号走 reflow（游客可用）：未开播也能拿到 room_id + 主播 ID。"""
+    import httpx
+
+    try:
+        r = httpx.get(
+            "https://webcast.amemv.com/webcast/room/reflow/info/"
+            "?type_id=0&live_id=1&app_id=1128&room_id=%s" % room_id,
+            headers={"User-Agent": _UA, "Referer": "https://live.douyin.com/"},
+            timeout=timeout, follow_redirects=True)
+        room = (r.json().get("data") or {}).get("room") or {}
+    except Exception:
+        return "", ""
+    owner = room.get("owner") or {}
+    return (str(room.get("id_str") or room.get("id") or room_id),
+            str(owner.get("id_str") or room.get("owner_user_id") or ""))
+
+
 def fetch_vip_emojis(room_num, timeout=20):
     """一次性拉全「会员表情栏」，不用等有人发。
 
-    链路：room/web/enter 取 room_id + anchor_id → privilege/subscribe/info
-    取 emoji_list（房间页进房时前端也走这条）。需要抖音登录 Cookie，
-    未登录返回 status_code=20003（User doesn't login）。
+    链路：先确定 room_id + anchor_id → privilege/subscribe/info 取 emoji_list
+    （房间页进房时前端也走这条）。主播 ID 依次尝试：
+      ① 19 位长号 → reflow 接口（未开播也能拿）；
+      ② room/web/enter（开播时最稳，顺带拿主播）；
+      ③ 直播间页面 SSR（未开播/已结束页面仍有 roomId + anchor.id_str）。
+    需要抖音登录 Cookie，未登录返回 status_code=20003（User doesn't login）。
 
     返回 {"items": [...], "error": "", "describe": "", "member": bool}
     """
@@ -185,35 +170,60 @@ def fetch_vip_emojis(room_num, timeout=20):
 
     import httpx
 
-    from toolbox.douyin_live import UA, _get_douyin_cookie
+    from toolbox.douyin_live import UA, _get_douyin_cookie, room_id_kind
 
     res = {"items": [], "error": "", "describe": "", "member": False}
+    room_num = str(room_num or "").strip()
+    m = re.search(r"live\.douyin\.com/([A-Za-z0-9_\-]+)", room_num)
+    if m:
+        room_num = m.group(1)
+    if not room_num:
+        res["error"] = "先填直播间号或直播间链接"
+        return res
+
     cookie = _get_douyin_cookie() or ""
     base = dict(_ENTER_BASE)
     base["browser_version"] = UA
     ref = "https://live.douyin.com/%s" % room_num
+    room_id = anchor_id = ""
+    notes = []
+
+    # 长号 room/enter 不认，reflow 最直接（已结束也有 room + 主播）
+    if room_id_kind(room_num) == "room_id":
+        room_id, anchor_id = _reflow_room(room_num, timeout)
+
     with httpx.Client(timeout=timeout, follow_redirects=True,
                       headers={"User-Agent": UA, "Referer": ref}) as c:
         try:
             c.get(ref, timeout=timeout)
-            r = c.get("https://live.douyin.com/webcast/room/web/enter/?"
-                      + up.urlencode({**base, "web_rid": str(room_num)}))
-            if not r.text.strip().startswith("{"):
-                res["error"] = "房间信息接口异常（HTTP %s）" % r.status_code
-                return res
-            rooms = ((r.json().get("data") or {}).get("data")) or []
-            node = rooms[0] if rooms else {}
-            room_id = node.get("id_str") or ""
-            owner = node.get("owner") or {}
-            anchor_id = owner.get("id_str") or ""
-            if not room_id or not anchor_id:
-                res["error"] = "未取到 room_id/anchor_id（直播间可能已结束）"
+            if not anchor_id:
+                h = {"Referer": ref}
+                if cookie:
+                    h["Cookie"] = cookie
+                r = c.get("https://live.douyin.com/webcast/room/web/enter/?"
+                          + up.urlencode({**base, "web_rid": str(room_num)}), headers=h)
+                if r.text.strip().startswith("{"):
+                    rooms = ((r.json().get("data") or {}).get("data")) or []
+                    node = rooms[0] if rooms else {}
+                    room_id = room_id or node.get("id_str") or ""
+                    anchor_id = (node.get("owner") or {}).get("id_str") or ""
+                else:
+                    notes.append("房间接口空响应")
+            if not anchor_id:
+                # 未开播 / 已结束：页面 SSR 兜底（enter 已被下播清除或被风控）
+                page_room, page_anchor = _page_room_ids(room_num, timeout)
+                room_id = room_id or page_room
+                anchor_id = page_anchor
+            if not anchor_id:
+                res["error"] = ("未取到主播 ID（直播间不存在，或抖音接口被风控）"
+                                + ("：" + "、".join(notes) if notes else ""))
                 return res
 
             h = {"Referer": ref}
             if cookie:
                 h["Cookie"] = cookie
-            q = dict(base, purchase_type="1", room_id=str(room_id),
+            # room_id 传 0 也能取到主播的会员表情（实测），有真实房间号时优先用它
+            q = dict(base, purchase_type="1", room_id=str(room_id or "0"),
                      anchor_id=str(anchor_id))
             r2 = c.get("https://live.douyin.com/webcast/privilege/subscribe/info/?"
                        + up.urlencode(q), headers=h)
@@ -230,8 +240,9 @@ def fetch_vip_emojis(room_num, timeout=20):
         res["error"] = "接口返回异常（status_code=%s）" % j.get("status_code")
         return res
     tab = data.get("emoji_tab_info") or {}
-    res["describe"] = tab.get("describe") or ""
-    res["member"] = bool((data.get("user_data") or {}).get("expired_time"))
+    res["describe"] = tab.get("describe") or data.get("emoji_tip") or ""
+    res["member"] = bool(data.get("is_member")) or \
+        bool((data.get("user_data") or {}).get("expired_time"))
     for e in data.get("emoji_list") or []:
         img = e.get("img") or {}
         urls = img.get("url_list") or []
@@ -239,7 +250,8 @@ def fetch_vip_emojis(room_num, timeout=20):
             continue
         uri = img.get("uri") or ""
         stem = uri.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        name = _VIP_NAMES.get(e.get("id")) or _clean_name(stem or "会员表情")
+        name = _VIP_NAMES.get(e.get("id")) or _clean_name(
+            e.get("text") or stem or "会员表情")
         res["items"].append({"url": urls[0], "key": url_key(urls[0]),
                              "name": name, "nick": "", "ts": 0})
     if not res["items"]:

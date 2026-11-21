@@ -183,8 +183,6 @@ class DouyinDanmakuPage(BasePage):
         self._rt_room = ""
         self._overlay = None
         self._resume_keep = False   # 切页自动重连：保留本场弹幕/搜索状态
-        # 表情收集窗口的回调（后台线程调用）：rtf 片段 → 收集会员/粉丝团表情图
-        self.emoji_sink = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -300,15 +298,6 @@ class DouyinDanmakuPage(BasePage):
             "最早一条对齐 00:00:00.000；输出到导出目录「弹幕文件」目录")
         danmaku_txt_btn.clicked.connect(self._convert_danmaku_txt)
         tb.addWidget(danmaku_txt_btn)
-        emoji_btn = QPushButton("表情包")
-        emoji_btn.setToolTip(
-            "收集本场聊天里实际出现的表情图（会员/粉丝团/合并表情）：\n"
-            "会员表情不在官方表情库里，只在消息里以图片直链下发，\n"
-            "所以按「收到的」收集，可导出成图片；也可从已保存的弹幕包补收")
-        emoji_btn.clicked.connect(self._open_emoji_window)
-        tb.addWidget(emoji_btn)
-        # 先入布局再设可见性：无父控件的按钮提前 setVisible 会闪成独立小窗口
-        emoji_btn.setVisible(not self._BACKEND.endswith("bili_live"))
         self.save_stats_var = QCheckBox("保存统计")
         self.save_stats_var.setChecked(bool(self.settings.get("save_stats", False)))
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
@@ -425,15 +414,6 @@ class DouyinDanmakuPage(BasePage):
         self.room_entry.setText(e.room)
         self.app.toast(f"已填入「{e.name or label}」房间号 {e.room}，点「连接」开始",
                        "success")
-
-    def _open_emoji_window(self):
-        """表情包：打开「抖音表情收集」二级界面（非模态，跟随本页连接收表情图）。"""
-        try:
-            from gui_qt.pages.douyin_emoji_window import open_emoji_window
-        except Exception as e:  # noqa: BLE001
-            self.app.toast(f"表情窗口加载失败：{e}", "error")
-            return
-        open_emoji_window(self.app, page=self)
 
     def _show_danmaku_overlay(self):
         from gui_qt.danmaku_overlay import DanmakuOverlay
@@ -1931,13 +1911,6 @@ class DouyinDanmakuPage(BasePage):
                 and FANSCLUB_NAME_RE.search(str(m.get("giftName")))):
             m["giftPrice"] = FANSCLUB_PRICE_FALLBACK
         self._record_cast(name, text, m)
-        # 表情收集窗口：会员表情只在消息里以图片直链下发，这里把 rtf 片段转喂给它
-        if self.emoji_sink and m.get("rtf"):
-            try:
-                self.emoji_sink(m.get("rtf") or [], m.get("nickname") or "",
-                                m.get("ts") or 0)
-            except Exception:
-                pass
         t = datetime.now()
         post_to_main(lambda: self._apply_message(name, text, m, t))
 

@@ -64,6 +64,11 @@ PAGE_INDEX = {
         "公众号解析", "信息工具",
         module="gui_qt.pages.wechat_article", cls="WechatArticlePage",
         preload=False, tab_of="info_tools", card_note="文章导出 HTML / PDF / Word"),
+    "douyin_emoji": PageMeta(
+        "抖音表情包", "信息工具",
+        module="gui_qt.pages.douyin_emoji_page", cls="DouyinEmojiPage",
+        aliases="表情收集 会员表情",
+        preload=False, tab_of="info_tools", card_note="会员表情、直播收集与导出"),
 
     # ---- 资产管理 ----
     "asset": PageMeta(

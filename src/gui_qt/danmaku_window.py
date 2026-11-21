@@ -61,7 +61,7 @@ class DanmakuWindow(QMainWindow):
     def __init__(self, app=None):
         super().__init__()
         self.app = app
-        self.setWindowTitle("弹幕姬 · 抖音 / B站（实时弹幕 / 回放包 / 转 TXT / 表情包）")
+        self.setWindowTitle("弹幕姬 · 抖音 / B站（实时弹幕 / 回放包 / 转 TXT）")
         self.resize(1320, 800)
         self.setMinimumSize(960, 560)
         self.tabs = DanmakuTabs(app, self)
