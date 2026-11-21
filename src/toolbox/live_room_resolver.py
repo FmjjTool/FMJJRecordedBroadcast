@@ -4,9 +4,10 @@
 能力矩阵（比的是「主页链接能不能反推出直播房间号」）：
   · B站      space UID → roomid：游客接口 getRoomInfoOld，无需登录
   · 快手     主页 principalId 就是 live.kuaishou.com/u/{id}，离线可得
-  · 抖音     主页 sec_uid → 抖音号（unique_id），而抖音号本身就是直播间 web_rid：
-              纯 httpx 就能取（iesdouyin 用户接口 + room/enter 校验），未开播同样可用；
-              抖音号取不到时才开浏览器读主页 room_data 兜底
+  · 抖音     主页 sec_uid → 抖音号（unique_id）→ room/enter 房间 → reflow 里的
+              owner.web_rid（真正的直播间短号，如 582775732015）：纯 httpx，
+              未开播也能走；房间没有历史场次（reflow 无数据）时才退回抖音号，
+              抖音号同样能被 room/enter 认，录制不受影响
   · 微博 / 小红书 / 网易云  主页链接没有固定房间号，只有链接本身就是直播链接时才能解析
 
 结果缓存到 config/live_rooms.json：{account_id: {platform, url, room, note, ts}}。

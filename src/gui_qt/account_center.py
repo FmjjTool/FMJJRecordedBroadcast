@@ -248,8 +248,8 @@ class AccountCenterWidget(QWidget):
     def _auto_resolve_rooms(self, force: bool = False, only_ids=None):
         """后台把「可用于直播录制」但还没有房间号的账号自动解析一遍。
 
-        B站/快手走接口、抖音走「抖音号即直播间号」的离线链路（都不开浏览器）；
-        浏览器只在抖音号取不到时兜底。解析结果只回填输入框并写入缓存。
+        B站/快手走接口，抖音走「抖音号 → room/enter 房间 → reflow 直播间短号」的
+        离线链路（都不开浏览器）；浏览器只在抖音号取不到时兜底。
         only_ids 只解析指定账号（刚勾选「用于直播录制」时立即补号用）。
         """
         targets = []
