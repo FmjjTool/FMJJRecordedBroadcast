@@ -1,6 +1,6 @@
 ---
 name: ui-visual-spec
-description: "界面视觉与主题规范（强制阅读）。统一浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式；结构性图标统一用 navigation.line_icon 线形图标；整个软件 UI 文案与只读日志统一去 emoji（用户生成正文除外）；凡新增或修改任何 PySide6 界面（页面、对话框、浮层、自绘控件、富文本、图表、图标），或改动 theme.py、内联 QSS、背景色、文字色、字号，必须先阅读本 skill 并逐项核对。触发词：深色模式、浅色模式、主题、配色、颜色、背景色、字号、字体、间距、圆角、样式、美化、UI、界面、卡片、按钮样式、图标、emoji、对比度。"
+description: "界面视觉与布局规范（强制阅读）。统一浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式；规定了页面四边留白、一至四级页签层级与形态、边框宽度、工具栏与按钮排布、按钮溢出处理、下拉框总模式、图标名清单；结构性图标统一用 navigation.line_icon 线形图标；整个软件 UI 文案与只读日志统一去 emoji（用户生成正文除外）；凡新增或修改任何 PySide6 界面（页面、对话框、浮层、自绘控件、富文本、图表、图标），或改动 theme.py、内联 QSS、背景色、文字色、字号、布局边距、页签层级、工具栏，必须先阅读本 skill 并逐项核对。触发词：深色模式、浅色模式、主题、配色、颜色、背景色、字号、字体、间距、圆角、样式、美化、UI、界面、卡片、按钮样式、布局、留白、页签层级、三级页签、四级页签、工具栏、按钮溢出、下拉宽度、边框、图标、emoji、对比度。"
 ---
 
 # 界面视觉与主题规范
@@ -9,7 +9,7 @@ description: "界面视觉与主题规范（强制阅读）。统一浅色/深�
 
 屏幕 UI 用本 skill；导出图、报表图、封面图等生成图片用 [image-output-spec](../image-output-spec/SKILL.md)。两者共享颜色语义，但画布、字号与页头页脚规则不同。
 
-本 skill 只管**视觉**：颜色、主题、字号、背景层级、间距、圆角、组件外观。它不给任何模块授权——改动录播工具箱八个核心模块的外观，仍需用户对本次模块与范围明确授权；视觉规范不能作为绕过保护的依据。它也不改变任何业务逻辑、布局结构与交互流程。
+本 skill 只管**视觉与布局**：颜色、主题、字号、背景层级、间距、圆角、组件外观，以及页面四边留白、页签层级、边框宽度、工具栏与按钮排布、溢出处理、下拉框模式（第五节）。它不给任何模块授权——改动录播工具箱八个核心模块的外观，仍需用户对本次模块与范围明确授权；视觉规范不能作为绕过保护的依据。它也不改变任何业务逻辑、布局结构与交互流程。
 
 本 skill 是纯 Markdown 约束：不含脚本、不含机器可读色板文件。核对由 Agent 阅读后人工完成，不外包给校验程序。
 
@@ -234,6 +234,20 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 分辨率 | `size * 2` pixmap + `setDevicePixelRatio(2)`，按参数 `lru_cache` 缓存 |
 | 命名 | 全小写英文单词或短横线（`folder`、`clipboard`、`win_close`） |
 
+**已登记图标名（共 74 个，新增前先查表）**：语义接近就复用现有图标，不要为同一概念画第二个（例如「获取」用 `download`，不要再画 `fetch`）。
+
+| 分组 | 可用名称 |
+| --- | --- |
+| 导航 / 内容 | `search` `compass` `list` `chart` `pulse` `globe` `folder` `document` `image` `video` `music` `message` `clipboard` `chip` `calendar` `clock` `settings` |
+| 账号 / 权限 | `users` `key` `lock` `unlock` `question` |
+| 操作 | `plus` `minus` `close` `check` `edit` `copy` `save` `trash` `download` `upload` `refresh` `swap` `expand` `pin` `broom` `scissors` `compress` `target` `rocket` |
+| 媒体 | `play` `pause` `stop` `skip_next` `skip_prev` `mic` `keyboard` `phone` |
+| 业务对象 | `cart` `package` `ticket` `truck` `star` `heart` `smile` `palette` `dice` `tag` `link` `eye` `robot` `antenna` |
+| 状态 / 主题 | `alert` `dot` `sun` `moon` `cloud` `arrow` `arrow_left` |
+| 窗口控制 | `win_min` `win_max` `win_restore` `win_close` |
+
+表里没有的图标才允许改 `navigation.py` 的 `elif name == ...` 链，且必须在同一次改动里把新名字补进本表；导航页用的图标还要补进 `tool_icon_name()` 映射。新增后核对：`grep -o 'name == "[^"]*"' src/gui_qt/navigation.py | wc -l` 的数量与本表总数一致。
+
 颜色只传主题角色，不传 hex：
 
 | 位置 | 颜色角色 |
@@ -248,9 +262,9 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - 卡片：`ToolSectionCard(title, description, icon="clipboard")`，或 `card.set_icon(name, color)`。
 - 按钮：`btn.setIcon(line_icon(name, color, 16))` + `btn.setIconSize(QSize(16, 16))`，同时删除文案里的 emoji。
 - 下拉：`combo.setItemIcon(index, line_icon(name, color, 16))`。
-- 仅图标按钮仍必须有 tooltip（见第五节第 5 条）。
+- 仅图标按钮仍必须有 tooltip（见第六节第 5 条）。
 
-主题切换：图标会把颜色烘进像素，必须按第六节第 3 条重新生成。页面维护 `(widget, name, role)` 注册表，在 `on_theme_changed()` 里统一重设；参考实现 `src/gui_qt/pages/livestream_summary.py` 的 `_register_icon()` / `_refresh_icons()` / `_icon_color()`。
+主题切换：图标会把颜色烘进像素，必须按第七节第 3 条重新生成。页面维护 `(widget, name, role)` 注册表，在 `on_theme_changed()` 里统一重设；参考实现 `src/gui_qt/pages/livestream_summary.py` 的 `_register_icon()` / `_refresh_icons()` / `_icon_color()`。
 
 ### 4.5 历史 emoji 的自动转换（运行时）
 
@@ -277,7 +291,131 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。
 5. 新增功能仍按 4.4 显式写图标（`icon=` / `setIcon`），不要把新代码依赖在这层兼容转换上。
 
-## 五、组件写法
+## 五、布局结构与信息密度
+
+本节管「东西摆在哪、占多大、放不下怎么办」。颜色仍归第二节，字号圆角归第四、五节。现状与规范不一致的页面，**只在改到该页时归位**，不批量重排（同 3.2 的收敛原则）。
+
+### 5.1 页面骨架与四边留白
+
+页面结构固定为：外壳顶栏 → 页面内容 → 外壳状态栏。页面自己是 `BasePage`，已通过 `pageSurface` 拿到 `window` 底色，**不再画外框、不再设背景**。
+
+| 层 | 留白 | 说明 |
+| --- | --- | --- |
+| 页面外边距 | `16, 16, 16, 16` | 新页面唯一取值，四边一致 |
+| 卡片之间 | 12（`setSpacing(12)`） | 竖向节奏不用 16 |
+| 卡片内边距 | `12, 12, 12, 12` | 带标题行的卡片 `12, 10, 12, 12` |
+| 大卡片内边距 | 上限 16 | 仅首页统计卡、详情主卡 |
+| 同行控件间距 | 8 | 标签与控件之间 6 |
+| 卡片内分组之间 | 12 | 用留白分隔，不加分隔线 |
+
+规则：
+
+1. 四边留白只在页面根布局设一次。子卡片再补 16 会变成 32，页面内容和外壳对不齐。
+2. 有滚动区时，滚动区内边距设 `0, 0, 0, 0`，由外层 16 负责；滚动条贴右，不额外留白。
+3. 首块内容距顶 16。页面顶端不放标题与说明（见 3.1 第 3 条），所以不存在「标题占位」。
+4. 末块与状态栏之间保留 16，不留贴边。
+5. 现存四种页面边距：`10,10,10,10`（`audio.py` / `editor.py` / `organize.py`）、`12,12,12,12`（`settings.py` / `subtitle.py` / `tickets_page.py`）、`16,12,16,12`（`netdisk.py` / `account_registry.py`）、`16,16,16,12`（`douyin_index.py` / `asset_image_search.py`）。新代码一律 16；老页面改到时收敛。
+
+### 5.2 页签层级（一至四级）
+
+层级由**位置**决定，不靠字号或颜色深浅区分。全项目最多四级。
+
+| 级 | 位置 | 实现 | 形态 |
+| --- | --- | --- | --- |
+| 一级 | 左侧栏 | `main_window` 导航 | 导航项，不是页签 |
+| 二级 | 页面顶部 | `pages/containers.TabbedPage` | 卡片式：`alternate-base` 底、上圆角 6、选中 `base` + 2px 下边线 |
+| 三级 | 页内第一块卡片上方 | 页面内 `QTabWidget` / `AutoFitTabWidget` | 下划线式：无底色、无边框、`padding: 6px 12px`、选中 2px `highlight` 下划线 |
+| 四级 | 卡片或区域内部 | 页面级 `objectName` 样式 | 分段式：容器 `alternate-base`、圆角 6、选中 `base` + 1px `shadow`、`padding: 4px 10px`、字号 12 |
+
+规则：
+
+1. **最多四级**。需要第五层说明信息架构有问题：改用筛选下拉、分段按钮或拆页，不再加一层页签。
+2. 二级 2–6 个，三级 2–7 个，四级 2–5 个。超出数量改用「更多」或筛选。
+3. 标题 2–6 字，不带 emoji；数量写成「视频 12」，不加括号之外的修饰。
+4. 顺序按流程或使用频率，主视图第一；不按字母序、不按创建时间。
+5. 全局操作（刷新、备份）放 `setCornerWidget` 或工具栏右侧，不混进页签行。
+6. 切换页签不重建整页；延迟构造沿用 `TabbedPage(lazy=True)`。
+7. **三级、四级不得复用二级的卡片式外观**。同一屏出现两行长得一样的页签，用户分不清层级。现状三级/四级都用全局 `QTabBar` 样式（`theme.py:47-50`），改到该页时用页面级 `objectName` 样式收敛；**不动 `theme.py` 全局基线**。
+
+### 5.3 边框宽度
+
+| 场景 | 宽度 | 颜色 |
+| --- | --- | --- |
+| 卡片、分组框 | 1px | `palette(shadow)` |
+| 输入框、下拉、表格、列表 | 1px | `palette(mid)` |
+| 悬停 | 1px，只换色 | `palette(dark)` 或 `palette(highlight)` |
+| 焦点 | 1px，只换色 | `palette(highlight)` |
+| 页签选中指示 | 2px，仅下边线 | `palette(highlight)` |
+| 分隔线、表头底边 | 1px | `palette(shadow)` |
+
+规则：
+
+1. 除页签选中指示外，不得出现 ≥2px 的边框；不许用 `border: 2px` 表达强调。
+2. 悬停/焦点只换颜色不换宽度，否则控件会跳 1px。
+3. 卡片已有 1px 边框时，内部控件不再套同色边框（双线）；表头只留底边。
+4. 禁止 `border: none` + 伪阴影模拟卡片：本项目没有阴影体系，深色下会露出灰边。
+5. 圆角与边框同时存在时边框由 Qt 画在内侧，不写 `outline` 补偿。
+
+### 5.4 工具栏与按钮排布
+
+一行一件事：`[输入 / 筛选] …… [次要操作] [主操作]`。
+
+| 项 | 值 |
+| --- | --- |
+| 按钮高度 | 全局 `padding: 6px 12px`（约 30px）；同一行高度必须一致 |
+| 仅图标按钮 | 30×26，必须 tooltip |
+| 按钮间距 | 8；操作组之间 12 |
+| 主操作 | 每行最多 1 个 `variant="primary"`，固定最右 |
+| 危险操作 | `variant="danger"`，与主操作至少隔 12，或收进「更多」 |
+| 文案 | 动词开头 2–6 字（抓取 / 开始 / 停止 / 导出 / 保存），不加标点 |
+| 图标 | 16px，`line_icon` |
+
+规则：
+
+1. 左侧放输入与筛选，右侧放操作；不要把操作按钮夹在两个输入框之间。
+2. 同一行按钮 ≤5 个（含主操作）。超过走 5.5。
+3. 二次确认不靠按钮样式表达，统一用弹窗（见 `ui-interaction-spec` 2.3）。
+4. 禁用只改样式不改宽度，且保留 tooltip 说明原因。
+5. 同一页面同类操作只用一种动词：「抓取」就不要在另一处写「获取」。
+
+### 5.5 超出可视范围时怎么摆
+
+严格按顺序，不得跳级：
+
+1. **收进「更多 ▾」**：低频或次要操作放 `QMenu`，用 `QPushButton` + `setMenu()`（先例：`tcdoc_bridge.py` 的账号按钮）。菜单项顺序与原按钮一致，不重排。
+2. **换行**：整组操作换到第二行工具栏，主操作仍在最右。需要流式布局时把 `pages/asset.py` 的私有 `_FlowLayout` 提取到 `common`，不要复制第二份实现。
+3. **缩短文案**：只去掉修饰词，不改变动作语义。
+
+禁止：
+
+- 出现横向滚动条；
+- 按钮被压缩到文字截断，或悄悄只剩图标（要转仅图标就必须显式转 + tooltip）；
+- 按钮被布局隐藏；
+- 为塞下按钮而缩小字号（字号阶梯是硬的）。
+
+判定：默认 1240 宽放得下就保持一行；缩到最小 880 宽时，主操作与「更多」必须可见；窗口变宽恢复原布局，不记忆折叠状态。
+
+### 5.6 下拉框总模式
+
+结构：`标签 + 下拉` 同行，标签在左、控件在右。
+
+| 项 | 规则 |
+| --- | --- |
+| 宽度 | 同组等宽，`setMinimumWidth(100~160)`，不随选项文字跳动 |
+| 长文本 | `setSizeAdjustPolicy(AdjustToMinimumContentsLengthWithIcon)` + `setMinimumContentsLength(8)`，超出省略并 tooltip 全文 |
+| 选项数 | 2–12 普通下拉；>12 用可输入下拉（`setEditable(True)` + `QCompleter`）或配搜索框；<2 改只读文本 |
+| 首项 | 筛选类固定「全部」，不用空项、不用「请选择」；输入类用 placeholder |
+| 滚轮 | 不响应滚轮改值（滚轮只滚页面）：`setFocusPolicy(Qt.StrongFocus)`，必要时在 `wheelEvent` 里转发父级 |
+| 图标 | `setItemIcon(index, line_icon(name, color, 16))` |
+| 禁用 | 保留文字，用禁用色；不换成「无」 |
+
+规则：
+
+1. 同一行两个以上下拉时，标签取组内最长宽度并固定，控件等宽对齐。
+2. 选项文案与被筛选数据的显示值完全一致（含单位与大小写），不另造简称。
+3. 不用下拉承载超过一屏（>15 项）且不可搜索的列表。
+
+## 六、组件写法
 
 优先用语义属性 + 全局 QSS，不要把样式写成一页一套。
 
@@ -296,7 +434,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 4. 一处页面级 `setStyleSheet` 优于几十处控件级 `setStyleSheet`：控件级写法让主题 remap 逐控件跑一遍，是切主题卡顿的主要来源。
 5. 仅图标按钮统一 `common.icon_button(...)` / `common.icon_btn_style(...)`，必须给 tooltip——用户无法从图形得知功能。
 
-## 六、主题切换铁律
+## 七、主题切换铁律
 
 主题有两条生效路径：`QPalette` + 全局 QSS（自动生效），以及内联样式（由 `theme` 的 remap 补丁处理）。下列七条是自绘与缓存内容的必守项。
 
@@ -308,7 +446,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 6. **不要用 `setPalette()` 改界面底色**：与全局主题打架，且 Qt 会缓存 `palette()` 解析结果。
 7. **独立窗口与浮层**：普通窗口要有不透明底（否则深色下露出桌面或形成黑洞）；`WA_TranslucentBackground` 只给浮层、拖拽预览、媒体覆盖层。带系统标题栏的窗口由 `theme._set_native_titlebar()` 对齐深色，走无边框外壳的则由 `window_chrome` 负责。
 
-## 七、验证路径（四条都要过）
+## 八、验证路径（四条都要过）
 
 新增或修改任何视觉相关代码后，逐条走完：
 
@@ -325,7 +463,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 烟测以真实窗口（`windows` 平台插件）+ offscreen 各跑一遍，截图存 `Progress/ui/<日期>/`，作为报告证据。仅 offscreen 通过不算完成。
 
-## 八、提交前自检清单
+## 九、提交前自检清单
 
 - [ ] 无新增 hex 前景/背景/边框色（`grep` 过一遍改动文件）
 - [ ] 无 `gray` / `black` / `white` 关键字色
@@ -341,10 +479,16 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - [ ] 图标颜色取自主题角色（导航/标题 link、按钮 button-text、主按钮 highlighted-text），未传 hex
 - [ ] 页面内 `setStyleSheet` 选择器带 `objectName`
 - [ ] 仅图标按钮有 tooltip
+- [ ] 页面四边留白 16，子卡片没有重复加边距
+- [ ] 页签层级不超过四级，三级/四级没有复用二级的卡片式外观
+- [ ] 边框 1px（仅页签选中指示允许 2px 下边线），悬停/焦点只换色不换宽
+- [ ] 单行按钮不超过 5 个，主操作在最右；放不下按「更多 → 换行 → 缩文案」顺序处理
+- [ ] 同组下拉等宽且有最小宽度，不响应滚轮改值
+- [ ] 新图标已查 4.4 清单，未重复造图，且已回写本表
 - [ ] 弱对比 `placeholder-text` 未承载必读正文
 - [ ] 四条验证路径 + 懒加载页 + 弹窗 + 独立窗口都已实测
 
-## 九、反例与改法
+## 十、反例与改法
 
 以下取自 `src/gui_qt/pages/tracker.py`，是项目里最典型的旧写法，其他页面存在同类问题。
 
@@ -357,7 +501,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | `setStyleSheet("color: #888; font-size: 15px;")` | `#888888` 命中兼容层变浅灰，但 15px 与 11px 说明文字混用破坏层级 | `color: palette(placeholder-text); font-size: 11px;` |
 | 裸 `QFrame { ... }` 页面级样式 | 命中该页面所有 QFrame，含懒加载子卡片与弹窗 | 加 `objectName` 限定 |
 
-## 十、待评估改进项（需用户明确同意后才动）
+## 十一、待评估改进项（需用户明确同意后才动）
 
 这些改动影响全站观感与既有截图，不在本次范围内，不要顺手改。
 

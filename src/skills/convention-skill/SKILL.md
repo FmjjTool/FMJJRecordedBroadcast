@@ -270,6 +270,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [ ] 新增或改名的管理入口已按约定 12 判定层级，已在 `software-feature-guide` 登记，并在当日报告写明判定依据与不并入现有层的理由。
 - [ ] 本次涉及依赖安装 / 模型或引擎下载时，安装入口只在「全局设置 → 检测依赖」，功能页无安装按钮；新增项已按六元组登记并标注是否可选（约定 11）。
 - [ ] 本次新增/修改的表格已按约定 14 接入表头排序（`gui_qt/table_sort.py`）；分页表的排序已下推到数据层，行号与记录列表保持同步。
+- [ ] 本次涉及界面时已读 `ui-visual-spec` 并核对留白、页签层级（≤4 级）、边框（1px）、单行按钮数（≤5）与下拉宽度；涉及弹窗、表格、状态、表单或按钮文案时已读 `ui-interaction-spec`。
 - [ ] 本次涉及新增/移动/重构模块或跨层调用时，已读 `layering-contract`，新代码放置与依赖方向符合分层约束。
 - [ ] 本次涉及安全/测试/并行协作/数据迁移/平台适配/生成图片时，已读对应横向 skill：`security-baseline` / `testing-quality-gates` / `agent-coordination` / `data-lifecycle` / `platform-adapter-policy` / `image-output-spec`。
 - [ ] 更新前已读 `recording-toolbox-core` 并核对直接/间接影响；未修改八个核心模块，或仅按用户已明确授权的具体范围修改。
@@ -292,3 +293,5 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [data-lifecycle](../data-lifecycle/SKILL.md)：存储 owner、schema 迁移、去重、备份、保留清理与 primary/derived。
 - [platform-adapter-policy](../platform-adapter-policy/SKILL.md)：平台 Adapter 契约、能力矩阵、回退、限流、错误分类与契约测试。
 - [image-output-spec](../image-output-spec/SKILL.md)：生成图片的画布、配色、字体、页头页脚、数字格式、命名与共享渲染。
+- [ui-visual-spec](../ui-visual-spec/SKILL.md)：屏幕 UI 的主题、颜色、字号、留白圆角、页签层级、边框、按钮排布与溢出、下拉模式、图标名清单；任何界面改动前必读。
+- [ui-interaction-spec](../ui-interaction-spec/SKILL.md)：弹窗与二级窗口、表格与列表、空/载/错/禁用四态、长任务进度与取消、表单校验、按钮与状态文案；任何页面交互或文案改动前必读。

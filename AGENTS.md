@@ -14,7 +14,7 @@
 | 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
 | 运行保护 | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
 | 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
-| 视觉 / 输出 | `ui-visual-spec`、`image-output-spec` | 屏幕 UI；导出图/报表图/封面图 |
+| 视觉 / 交互 / 输出 | `ui-visual-spec`、`ui-interaction-spec`、`image-output-spec` | 屏幕 UI 外观与布局；弹窗/表格/状态/表单/文案；导出图/报表图/封面图 |
 | 业务领域 | `recording-toolbox-core`、`tcdoc-sync-scope`、`fengming-livestream-summary`、`summarize-article`、`summarize-update` | 对应领域任务 |
 | 说明文档 | `software-feature-guide` | 需要了解页面功能、操作入口与使用说明时 |
 | 快捷指令 | `quick-commands` | 用户发送 `/短语`、要求短语清单或快速查阅某 skill 要点时 |
@@ -22,7 +22,7 @@
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
@@ -56,7 +56,11 @@
 
 ## 界面视觉与主题规范 skill（涉及任何 UI 改动时强制阅读）
 
-完整内容见 [src/skills/ui-visual-spec/SKILL.md](src/skills/ui-visual-spec/SKILL.md)。浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式均以该 skill 为唯一依据；`theme.py` 是唯一色板来源，页面不得自带第二套配色。凡新增或修改页面、对话框、浮层、自绘控件、富文本、图表、图标，或改动背景色、文字色、字号、内联 QSS、`theme.py`，必须先阅读并逐项核对其中的禁令、铁律与验证路径。该 skill 只管屏幕 UI 视觉；导出图、报表图、封面图等生成图片另见 `image-output-spec`。它不构成对核心八模块的改动授权。
+完整内容见 [src/skills/ui-visual-spec/SKILL.md](src/skills/ui-visual-spec/SKILL.md)。浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式，以及页面四边留白、一至四级页签层级、边框宽度、工具栏与按钮排布、按钮溢出处理、下拉框总模式、图标名清单，均以该 skill 为唯一依据；`theme.py` 是唯一色板来源，页面不得自带第二套配色。凡新增或修改页面、对话框、浮层、自绘控件、富文本、图表、图标，或改动背景色、文字色、字号、布局边距、页签层级、工具栏、内联 QSS、`theme.py`，必须先阅读并逐项核对其中的禁令、铁律与验证路径。该 skill 只管屏幕 UI 视觉与布局；导出图、报表图、封面图等生成图片另见 `image-output-spec`。它不构成对核心八模块的改动授权。
+
+## 界面交互与反馈规范 skill（涉及弹窗、表格、状态、表单、文案时强制阅读）
+
+完整内容见 [src/skills/ui-interaction-spec/SKILL.md](src/skills/ui-interaction-spec/SKILL.md)。弹窗与二级窗口的形态选择、尺寸、按钮区顺序、二次确认，表格列宽/分页/空态/双击右键，加载/空/错误/禁用四态，长任务进度与取消，反馈通道（toast / 状态栏 / 行内 / 弹窗 / 日志）的选用，表单结构与校验时机，以及按钮动词与状态词表，均以该 skill 为唯一依据。凡新增或修改页面、对话框、二级窗口、表格、表单、提示与按钮文案，必须先阅读并逐项核对。该 skill 不改变业务逻辑，也不构成核心八模块的改动授权。
 
 ## 分层约束 skill（新增/重构/跨层调用时强制阅读）
 
