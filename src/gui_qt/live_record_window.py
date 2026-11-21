@@ -276,7 +276,8 @@ class AnchorModel(QAbstractTableModel):
 
     @staticmethod
     def _tooltip(a):
-        lines = [f"房间号：{a.room}", f"主播：{a.name or '-'}",
+        lines = [f"房间号：{a.room or '待开播（按账号主页自动获取）'}",
+                 f"主播：{a.name or '-'}",
                  f"状态：{'已开播' if a.live else '等待开播'}",
                  f"最后检测：{a.last_check or '-'}",
                  f"录制质量：{a.quality_label or a.quality or '自动'}",
@@ -383,7 +384,7 @@ class PlatformPane(QWidget):
         bar2.addStretch(1)
         bt_dm = self._tbtn(bar2, "弹幕姬",
                            self.win._open_danmaku_window,
-                           "打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT、表情包")
+                           "打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT")
         bt_dm.setProperty("variant", "primary")
         lay.addLayout(bar2)
 
@@ -2119,7 +2120,7 @@ class LiveRecordWindow(QMainWindow):
         m.addSeparator()
         m.addAction(self._act(
             "弹幕姬…", self._open_danmaku_window,
-            tip="打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT、表情包"))
+            tip="打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT"))
 
         m = mb.addMenu("设置(&S)")
         m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
@@ -2280,28 +2281,43 @@ class LiveRecordWindow(QMainWindow):
     # ---------- 账号配置「用于直播录制」 ----------
     def upsert_account_anchor(self, account_id, account_platform, room,
                               name="", url=""):
-        """账号配置勾选「用于直播录制」：同平台同房间号复用，否则新增一条主播。"""
+        """账号配置勾选「用于直播录制」：同平台同房间号复用，否则新增一条主播。
+
+        room 为空时允许先记成「待开播」主播（抖音/B站/快手能从账号主页反推
+        房间号），监控线程开播后自动补号再开录。
+        """
+        from toolbox import live_room_resolver
         plat = LR.record_platform(account_platform)
         pane = self.panes.get(plat)
         if pane is None:
             return False, "该平台不支持直播录制"
         room = str(room or "").strip()
-        if not room:
+        if not room and not live_room_resolver.can_resolve(account_platform, url):
             return False, "请先填直播间号"
-        for a in pane.manager.anchors:
-            if a.room == room:
-                a.account_id = account_id
-                if name:
-                    a.name = name
-                if url:
-                    a.url = url
-                pane.model.refresh_all()
-                self.schedule_save()
-                return True, "已绑定到已有主播"
+        anchors = pane.manager.anchors
+        target = next((a for a in anchors if room and a.room == room), None)
+        if target is None:
+            target = next((a for a in anchors if a.account_id == account_id), None)
+        if target is not None:
+            target.account_id = account_id
+            if room:
+                target.room = room
+            if name:
+                target.name = name
+            if url:
+                target.url = url
+            # 一个账号只对应一个主播：房间号换了就把旧的占位主播清掉
+            pane.manager.anchors[:] = [
+                a for a in anchors if a is target or a.account_id != account_id]
+            pane.model.refresh_all()
+            self.schedule_save()
+            return True, ("已绑定到已有主播" if room else "已在直播录制中（待开播）")
         pane.manager.anchors.append(LR.Anchor(
             platform=plat, room=room, name=name, account_id=account_id, url=url))
         pane.model.refresh_all()
         self.schedule_save()
+        if not room:
+            return True, "已加入直播录制（未开播，开播后自动补房间号）"
         return True, "已加入直播录制"
 
     def remove_account_anchor(self, account_id):

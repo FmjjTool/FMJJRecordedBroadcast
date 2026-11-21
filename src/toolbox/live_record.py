@@ -855,13 +855,20 @@ class Anchor:
         self.error = kw.get("error") or ""
         self.account_id = kw.get("account_id") or ""
         self.url = kw.get("url") or ""
+        # 待开播主播（room 暂时为空，靠账号主页解析补号）的重解析时间点
+        self._resolve_at = float(kw.get("_resolve_at") or 0)
 
     @property
     def key(self):
-        return "%s:%s" % (self.platform, self.room)
+        # 待开播主播还没有房间号，用账号标识兜底，避免多条空房间号互相覆盖
+        ident = self.room or ("待开播:" + (self.account_id or self.url))
+        return "%s:%s" % (self.platform, ident)
 
     @property
     def live_url(self):
+        if not self.room:
+            # 待开播主播还没有房间号：先给出账号主页，别拼出假的直播间地址
+            return self.url or ""
         if self.platform == "bili":
             return "https://live.bilibili.com/%s" % self.room
         if self.platform == "douyin":
@@ -1064,6 +1071,9 @@ DEFAULT_SETTINGS = {
     "online_threshold": 10000,   # 在线人数提醒阈值
 }
 
+# 待开播主播（还没有房间号，靠账号主页解析）的最短重解析间隔（秒）
+RESOLVE_MIN_INTERVAL = 60
+
 
 class RecordManager:
     """一个平台的录制调度器：检测开播 → 自动开录 → 断流重连 → 关播停止。
@@ -1192,17 +1202,69 @@ class RecordManager:
             self._stop.wait(max(1.0, interval - (time.time() - t0)))
 
     def _cycle(self):
+        pending = [a for a in list(self.anchors)
+                   if a.monitoring and self._needs_resolve(a)]
+        if pending:
+            self._resolve_pending(pending)
         for a in list(self.anchors):
             if self._stop.is_set():
                 return
             if not a.monitoring:
                 continue
+            if not a.room:
+                # 待开播主播本轮还没解析出房间号：等下一轮，别拿空号去请求
+                continue
             self.check_one(a, status_only=a.live and a.recording)
         self.poll_finished()
+
+    # ---------- 待开播主播：账号主页 → 房间号 ----------
+    def _pending_interval(self):
+        """待开播主播的重解析间隔：默认 60 秒（开播后最多 1 分钟就能补上）。"""
+        return max(RESOLVE_MIN_INTERVAL, int(self.settings.get("interval") or 30))
+
+    def _needs_resolve(self, a):
+        if a.room or not a.url:
+            return False
+        from toolbox import live_room_resolver
+        if not live_room_resolver.can_resolve(a.platform, a.url):
+            return False
+        return time.time() >= float(a._resolve_at or 0)
+
+    def _resolve_pending(self, anchors):
+        """批量解析待开播主播的房间号；抖音账号共用一次浏览器会话。"""
+        from toolbox import live_room_resolver
+        items = [(a.platform, a.url) for a in anchors]
+        try:
+            results = live_room_resolver.resolve_many(items)
+        except Exception as e:  # noqa: BLE001
+            self.emit("待开播主播解析失败：%s" % e, "warn")
+            return
+        now = time.time()
+        for a, (room, note) in zip(anchors, results):
+            a.last_check = time.strftime("%Y-%m-%d %H:%M:%S")
+            if room:
+                a.room = room
+                a._resolve_at = 0
+                a.error = ""
+                self.emit("「%s」已取到直播间号 %s" % (a.name or a.url[:20], room), "ok")
+                live_room_resolver.remember(
+                    a.account_id, a.platform, a.url, room, note or "账号主页解析")
+            else:
+                a._resolve_at = now + self._pending_interval()
+                if note and note != getattr(a, "_note", ""):
+                    a._note = note
+                    self.emit("「%s」%s" % (a.name or a.url[:20], note), "info")
+        self.changed()
 
     # ---------- 单个主播检测 ----------
     def check_one(self, a, status_only=False):
         epoch = self._epoch
+        if not a.room:
+            # 手动「立即检测」或刚加进来的待开播主播：先解析房间号
+            self._resolve_pending([a])
+            if not a.room:
+                self.changed()
+                return
         info = fetch_status(a.platform, a.room) if status_only else fetch_info(a.platform, a.room, a.quality)
         if epoch != self._epoch:
             # 检测期间用户清除了状态：这批结果已经过期，不能再写回
@@ -1692,32 +1754,54 @@ def set_account_anchor(account_id: str, account_platform: str, room: str,
                        name: str = "", url: str = ""):
     """把统一账号绑定为一个录制主播；同平台同房间号复用，不重复添加。
 
+    room 可以为空：抖音/B站/快手这类能从账号主页反推直播间号的平台，
+    先记成「待开播」主播，监控线程开播时自动补上房间号。
     只写 platform/room/name/account_id/url，其它录制设置保持原样；
     返回 (是否成功, 提示文本)。
     """
     room = str(room or "").strip()
-    if not account_id or not room:
-        return False, "缺少账号或直播间号"
+    if not account_id:
+        return False, "缺少账号"
     plat = record_platform(account_platform)
     if plat not in PLATFORMS:
         return False, "该平台不支持直播录制"
+    if not room:
+        from toolbox import live_room_resolver
+        if not live_room_resolver.can_resolve(account_platform, url):
+            return False, "缺少直播间号"
     state = load_state() or {}
     platforms = state.setdefault("platforms", {})
     data = platforms.setdefault(plat, {})
     anchors = data.setdefault("anchors", [])
+    target = None
     for item in anchors:
-        if str(item.get("room") or "") == room:
-            item["account_id"] = account_id
-            if name:
-                item["name"] = name
-            if url:
-                item["url"] = url
-            save_state(state)
-            return True, "已绑定到已有主播"
+        if room and str(item.get("room") or "") == room:
+            target = item
+            break
+    if target is None:
+        for item in anchors:
+            if item.get("account_id") == account_id:
+                target = item
+                break
+    if target is not None:
+        target["account_id"] = account_id
+        if room:
+            target["room"] = room
+        if name:
+            target["name"] = name
+        if url:
+            target["url"] = url
+        # 一个账号只对应一个主播：房间号换了就把旧的那条清掉
+        data["anchors"] = [x for x in anchors
+                           if x is target or x.get("account_id") != account_id]
+        save_state(state)
+        return True, ("已绑定到已有主播" if room else "已在直播录制中（待开播）")
     anchors.append({"platform": plat, "room": room, "name": name,
                     "account_id": account_id, "url": url,
                     "monitoring": False, "recording": False})
     save_state(state)
+    if not room:
+        return True, "已加入直播录制（未开播，开播后自动补房间号）"
     return True, "已加入直播录制"
 
 

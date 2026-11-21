@@ -50,6 +50,8 @@ class AccountCenterWidget(QWidget):
         self._accounts: list[dict] = []
         self._live_edits: dict[str, QLineEdit] = {}
         self._live_boxes: dict[str, QCheckBox] = {}
+        # 每行控件的引用：保存修改后原地更新这一行，不重建整个列表
+        self._row_refs: dict[str, dict] = {}
         # 直播间号自动解析轮次：刷新/重建后旧轮次的结果直接丢弃
         self._resolve_round = 0
         self._build()
@@ -122,7 +124,7 @@ class AccountCenterWidget(QWidget):
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(6)
 
-        title = QLabel("添加账号（账号名 + 链接 + 可用于）")
+        title = QLabel("识别并添加账号（粘贴链接，自动识别平台与可用功能）")
         title.setProperty("role", "sectionTitle")
         v.addWidget(title)
 
@@ -165,8 +167,10 @@ class AccountCenterWidget(QWidget):
         self.add_group_sel = GroupMultiSelect(width=140)
         row3.addWidget(self.add_group_sel)
         row3.addStretch(1)
-        self.add_btn = QPushButton("添加账号")
+        self.add_btn = QPushButton("识别并添加")
         self.add_btn.setProperty("variant", "primary")
+        self.add_btn.setToolTip("先粘贴账号主页链接，识别出平台后即可添加")
+        self.add_btn.setEnabled(False)
         self.add_btn.clicked.connect(self._add)
         row3.addWidget(self.add_btn)
         v.addLayout(row3)
@@ -241,24 +245,31 @@ class AccountCenterWidget(QWidget):
 
     # ==================== 直播间号自动获取 ====================
 
-    def _auto_resolve_rooms(self, force: bool = False):
+    def _auto_resolve_rooms(self, force: bool = False, only_ids=None):
         """后台把「可用于直播录制」但还没有房间号的账号自动解析一遍。
 
-        B站/快手走接口或链接直接得；抖音需要开浏览器（未开播时拿不到，6 小时后再试）。
-        解析结果只回填输入框并写入缓存，不自动勾选「用于直播录制」。
+        B站/快手走接口、抖音走「抖音号即直播间号」的离线链路（都不开浏览器）；
+        浏览器只在抖音号取不到时兜底。解析结果只回填输入框并写入缓存。
+        only_ids 只解析指定账号（刚勾选「用于直播录制」时立即补号用）。
         """
         targets = []
         for account in self._accounts:
+            if only_ids is not None and account["id"] not in only_ids:
+                continue
             if "live" not in account["allowed"]:
                 continue
-            if (account["modules"].get("live") or {}).get("room"):
-                continue
+            bound_room = (account["modules"].get("live") or {}).get("room")
+            if not force:
+                if bound_room and not live_rooms.stale(account["id"]):
+                    # 已有房间号且缓存是新算法结果：不用重解析
+                    continue
+                if not bound_room and not live_rooms.should_try(
+                        account["id"], account["platform"], account["url"]):
+                    continue
             if not live_rooms.can_resolve(account["platform"], account["url"]):
                 continue
-            if not force and not live_rooms.should_try(
-                    account["id"], account["platform"], account["url"]):
-                continue
-            targets.append((account["id"], account["platform"], account["url"]))
+            targets.append((account["id"], account["platform"], account["url"],
+                            live_rooms.stale(account["id"])))
         self._resolve_round += 1
         round_id = self._resolve_round
         if not targets:
@@ -268,12 +279,13 @@ class AccountCenterWidget(QWidget):
         self.status_label.setText(f"正在自动获取直播间号 0/{len(targets)}…")
 
         def work():
+            post_to_main(self._on_resolve_progress, round_id, 1, len(targets))
+            # 抖音先走离线链路；离线拿不到时多个账号共用一个浏览器会话兜底
+            results = live_rooms.resolve_many([(p, u) for _aid, p, u, _st in targets])
             done = []
-            for index, (aid, platform, url) in enumerate(targets, 1):
-                post_to_main(self._on_resolve_progress, round_id, index, len(targets))
-                room, note = live_rooms.resolve_room(platform, url)
+            for (aid, platform, url, refresh), (room, note) in zip(targets, results):
                 live_rooms.remember(aid, platform, url, room, note)
-                done.append((aid, room))
+                done.append((aid, room, refresh))
             return done
 
         def finished(result, err):
@@ -283,17 +295,23 @@ class AccountCenterWidget(QWidget):
                 self.status_label.setText(f"直播间号自动获取失败：{err}")
                 return
             filled = pending = 0
-            for aid, room in result or []:
+            for aid, room, refresh in result or []:
                 if not room:
                     pending += 1
                     continue
                 edit = self._live_edits.get(aid)
-                if edit is not None and not edit.text().strip():
-                    edit.setText(room)
-                    filled += 1
+                # refresh=旧算法缓存（例如把抖音号当房间号）：直接换成新的短号
+                if edit is not None and (refresh or not edit.text().strip()):
+                    if edit.text().strip() != room:
+                        edit.setText(room)
+                        filled += 1
+                # 已绑定「用于直播录制」的账号：把补到的房间号同步进录制列表
+                account = next((x for x in self._accounts if x["id"] == aid), None)
+                if account is not None and "live" in account["modules"]:
+                    self._bind_live_anchor(aid, account, room)
             msg = f"已自动获取 {filled} 个直播间号"
             if pending:
-                msg += f"；{pending} 个暂未取到（抖音未开播时取不到，直播后会再试）"
+                msg += f"；{pending} 个暂未取到（稍后会自动重试，也可点「刷新」）"
             self.status_label.setText(msg)
 
         run_bg(work, finished)
@@ -355,6 +373,7 @@ class AccountCenterWidget(QWidget):
     def _reload_accounts(self):
         self._live_edits.clear()
         self._live_boxes.clear()
+        self._row_refs.clear()
         video = [a for a in self._accounts if a["platform"] not in registry.MUSIC_PLATFORMS]
         music = [a for a in self._accounts if a["platform"] in registry.MUSIC_PLATFORMS]
         self.acc_tabs.setTabText(0, f"视频账号 {len(video)}")
@@ -375,8 +394,12 @@ class AccountCenterWidget(QWidget):
             return
         for pos, account in enumerate(accounts):
             layout.takeAt(layout.count() - 1)
-            layout.addWidget(self._build_account_row(account, pos, len(accounts)))
+            row = self._build_account_row(account, pos, len(accounts))
+            layout.addWidget(row)
             layout.addStretch(1)
+            refs = self._row_refs.get(account["id"])
+            if refs is not None:
+                refs["layout"] = layout
 
     def _build_account_row(self, account: dict, pos: int, group_size: int) -> QWidget:
         row = QFrame()
@@ -391,6 +414,7 @@ class AccountCenterWidget(QWidget):
         name.setStyleSheet("font-weight: bold;")
         head.addWidget(name)
         # B 站动态与 B 站作品是两条账号，名字可能相同，这里加标记区分
+        dynamic_tag = None
         if account["platform"] == "bilibili" and \
                 account["modules"].get("info", {}).get("kind") == "dynamic":
             dynamic_tag = QLabel("动态")
@@ -492,6 +516,10 @@ class AccountCenterWidget(QWidget):
                 # 自动解析过的结果先回填（还没勾选直播录制，所以不在主播列表里）
                 room = live_rooms.cached_room(account["id"], account["url"])
             live_edit.setText(room)
+            if not room and "live" in account["modules"]:
+                # 已勾选但还没号：没解析过=正在取；解析失败则直接显示原因
+                live_edit.setPlaceholderText(
+                    live_rooms.cached_note(account["id"], account["url"]) or "获取中…")
             if auto:
                 live_edit.setToolTip(
                     "填房间号或直播间链接都可以（会自动抽出房间号）；"
@@ -517,6 +545,8 @@ class AccountCenterWidget(QWidget):
         if opts2.count():
             opts2.addStretch(1)
             v.addLayout(opts2)
+        self._row_refs[account["id"]] = {
+            "row": row, "name": name, "url": url, "tag": dynamic_tag}
         return row
 
     # ==================== 操作 ====================
@@ -537,10 +567,16 @@ class AccountCenterWidget(QWidget):
         allowed = registry.allowed_modules(platform)
         if platform:
             self.plat_label.setText(f"平台：{registry.platform_name(platform)}")
+            self.add_btn.setEnabled(True)
+            self.add_btn.setToolTip(f"识别为{registry.platform_name(platform)}账号，点击加入账号列表")
         elif self.url_edit.text().strip():
             self.plat_label.setText("平台：未识别")
+            self.add_btn.setEnabled(False)
+            self.add_btn.setToolTip("链接暂未识别：请填账号主页链接（视频号/音乐号）")
         else:
             self.plat_label.setText("平台：未识别")
+            self.add_btn.setEnabled(False)
+            self.add_btn.setToolTip("先粘贴账号主页链接，识别出平台后即可添加")
         for module, box in self.add_module_boxes.items():
             usable = module in allowed
             box.setEnabled(usable)
@@ -582,7 +618,7 @@ class AccountCenterWidget(QWidget):
             return fetch_display_name(url)
 
         def done(result, err):
-            self.add_btn.setEnabled(True)
+            self.add_btn.setEnabled(bool(self.url_edit.text().strip()))
             auto_name = ""
             if isinstance(result, tuple):
                 auto_name = (result[0] or "").strip()
@@ -627,8 +663,16 @@ class AccountCenterWidget(QWidget):
         self.reload()
         self.changed.emit()
 
+    def _bind_live_anchor(self, account_id, account, room):
+        """把直播间号写进「直播录制」主播列表（录制窗口没开时直接落配置）。"""
+        win = getattr(self.app, "live_record_win", None)
+        if win is not None:
+            return win.upsert_account_anchor(
+                account_id, account["platform"], room, account["name"], account["url"])
+        return registry.set_live_room(account_id, room)
+
     def _toggle_live(self, account_id, checked):
-        """「用于直播录制」：勾选需先有直播间号；只增删主播，不动录制设置。"""
+        """「用于直播录制」：有房间号直接用，取不到的房间号先记成待开播主播。"""
         if self._building:
             return
         account = registry.get_account(account_id)
@@ -657,28 +701,25 @@ class AccountCenterWidget(QWidget):
             return
         if edit is not None and room and edit.text().strip() != room:
             edit.setText(room)
-        if not room:
+        if not room and not live_rooms.can_resolve(account["platform"], account["url"]):
             box = self._live_boxes.get(account_id)
             if box is not None:
                 box.setChecked(False)
-            if live_rooms.can_resolve(account["platform"], account["url"]):
-                msg = "直播间号还没取到：点「刷新」重试，或直接填房间号/链接后再勾选"
-            else:
-                msg = f"{account['platform_name']}没有自动获取功能：请先在框里贴入直播房间地址"
-            self._toast(msg, "warning")
+            self._toast(
+                f"{account['platform_name']}没有自动获取功能：请先在框里贴入直播房间地址",
+                "warning")
             return
-        win = getattr(self.app, "live_record_win", None)
-        if win is not None:
-            ok, msg = win.upsert_account_anchor(
-                account_id, account["platform"], room, account["name"], account["url"])
-        else:
-            ok, msg = registry.set_live_room(account_id, room)
+        # 还没房间号（抖音等）：先记成「待开播」主播，随即强制解析一次补号
+        ok, msg = self._bind_live_anchor(account_id, account, room)
         if not ok:
             box = self._live_boxes.get(account_id)
             if box is not None:
                 box.setChecked(False)
         self._toast(msg, "success" if ok else "warning")
         self.reload()
+        if ok and not room:
+            # 绕过缓存节流：刚勾选就立刻补号，不让输入框停在占位文案上
+            self._auto_resolve_rooms(force=True, only_ids=[account_id])
         self.changed.emit()
 
     def _live_room_edited(self, account_id):
@@ -696,12 +737,7 @@ class AccountCenterWidget(QWidget):
             return
         if edit is not None and raw != room:
             edit.setText(room)
-        win = getattr(self.app, "live_record_win", None)
-        if win is not None:
-            ok, _msg = win.upsert_account_anchor(
-                account_id, account["platform"], room, account["name"], account["url"])
-        else:
-            ok, _msg = registry.set_live_room(account_id, room)
+        ok, _msg = self._bind_live_anchor(account_id, account, room)
         if ok:
             # 手填的房间号也进缓存：未勾选直播录制时刷新页面不会丢
             live_rooms.remember(account_id, account["platform"], account["url"],
@@ -719,7 +755,12 @@ class AccountCenterWidget(QWidget):
         kind = combo.currentData() or ""
         ok, message = registry.update_account(account_id, kind=kind)
         self._toast(message, "success" if ok else "warning")
-        self.reload()
+        if ok:
+            # 只刷新这一行的显示（作品/动态标记），不重建列表：
+            # 下拉刚关闭就销毁控件会吞掉鼠标点击，也会让列表闪一下。
+            account = registry.get_account(account_id)
+            if account is not None:
+                self._paint_row(account_id, account)
         self.changed.emit()
 
     def _edit_account(self, account_id):
@@ -737,6 +778,7 @@ class AccountCenterWidget(QWidget):
         url_edit = QLineEdit(account["modules"].get("info", account["modules"].get(
             "tracker", account["modules"].get("music", {}))).get("url", account["url"]))
         url_edit.setPlaceholderText("https://…（修改链接即更换账号指向）")
+        initial_url = url_edit.text().strip()
         form.addRow("账号名", name_edit)
         form.addRow("链接", url_edit)
         v.addLayout(form)
@@ -752,12 +794,65 @@ class AccountCenterWidget(QWidget):
         cancel_btn.clicked.connect(dialog.reject)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        ok, message = registry.update_account(
-            account_id, name=name_edit.text().strip(), url=url_edit.text().strip())
+        new_name = name_edit.text().strip()
+        new_url = url_edit.text().strip()
+        url_changed = new_url != initial_url
+        before_ids = {a["id"] for a in self._accounts}
+        ok, message = registry.update_account(account_id, name=new_name, url=new_url)
         self._toast(message, "success" if ok else "warning")
-        if ok:
+        if not ok:
+            return
+        self._accounts = registry.list_accounts()
+        if url_changed:
+            # 链接换掉后账号身份（id）变了：只换这一行，其余行与滚动位置都不动
+            fresh = next((a for a in self._accounts if a["id"] not in before_ids), None)
+            if fresh is not None and self._row_refs.get(account_id) is not None:
+                self._replace_row(account_id, fresh)
+            else:
+                self.reload()
+        else:
+            updated = next((a for a in self._accounts if a["id"] == account_id), None)
+            if updated is not None:
+                self._paint_row(account_id, updated)
+        self.changed.emit()
+
+    def _paint_row(self, account_id, account):
+        """原地更新一行里会变的文字（名字 / 链接 / B站动态标记）。"""
+        refs = self._row_refs.get(account_id)
+        if refs is None:
+            return
+        refs["name"].setText(account["name"] or "（未命名）")
+        url = account["url"]
+        refs["url"].setText(url if len(url) <= 56 else url[:53] + "...")
+        refs["url"].setToolTip(url)
+        tag = refs.get("tag")
+        if tag is not None:
+            kind = account["modules"].get("info", {}).get("kind", "")
+            tag.setVisible(account["platform"] == "bilibili" and kind == "dynamic")
+
+    def _replace_row(self, old_id, account):
+        """链接变更导致账号 id 变化：在同一个位置换掉这一行，不重建整个列表。"""
+        refs = self._row_refs.pop(old_id, None)
+        if refs is None:
             self.reload()
-            self.changed.emit()
+            return
+        layout = refs.get("layout")
+        old_row = refs["row"]
+        if layout is None:
+            self.reload()
+            return
+        index = layout.indexOf(old_row)
+        music = account["platform"] in registry.MUSIC_PLATFORMS
+        bucket = [a for a in self._accounts
+                  if (a["platform"] in registry.MUSIC_PLATFORMS) == music]
+        pos = next((i for i, a in enumerate(bucket) if a["id"] == account["id"]), 0)
+        new_row = self._build_account_row(account, pos, len(bucket))
+        layout.insertWidget(index if index >= 0 else layout.count(), new_row)
+        self._row_refs[account["id"]]["layout"] = layout
+        self._live_edits.pop(old_id, None)
+        self._live_boxes.pop(old_id, None)
+        old_row.setParent(None)
+        old_row.deleteLater()
 
     def _delete_account(self, account_id):
         account = registry.get_account(account_id)
