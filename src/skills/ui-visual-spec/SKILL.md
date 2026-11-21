@@ -214,6 +214,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 窗口控制按钮 | 40×30，图标 16，圆角 8 |
 | 导航项 | `padding: 8px 11px`，字号 12，图标 18，圆角 8 |
 | 仅图标小按钮 | 30×26（`common.icon_button` 默认），必须带 tooltip |
+| 开关（`row_widgets.ToggleSwitch`） | 36×20，轨道 34×18，滑块 13；轨道取 `palette(mid)`→`palette(highlight)`，滑块 `palette(highlighted-text)`；仅键盘 Tab 聚焦画焦点圈 |
 | 图标线宽 | 导航/工具图标 1.65，窗口控制图标 1.4 |
 | 图标绘制 | 2 倍分辨率 + `setDevicePixelRatio(2)`，兼顾高 DPI |
 | 图标统一实现 | `navigation.line_icon()` 自绘，禁止 emoji/图片充当，见 4.4 |
@@ -234,11 +235,11 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 分辨率 | `size * 2` pixmap + `setDevicePixelRatio(2)`，按参数 `lru_cache` 缓存 |
 | 命名 | 全小写英文单词或短横线（`folder`、`clipboard`、`win_close`） |
 
-**已登记图标名（共 74 个，新增前先查表）**：语义接近就复用现有图标，不要为同一概念画第二个（例如「获取」用 `download`，不要再画 `fetch`）。
+**已登记图标名（共 75 个，新增前先查表）**：语义接近就复用现有图标，不要为同一概念画第二个（例如「获取」用 `download`，不要再画 `fetch`）。
 
 | 分组 | 可用名称 |
 | --- | --- |
-| 导航 / 内容 | `search` `compass` `list` `chart` `pulse` `globe` `folder` `document` `image` `video` `music` `message` `clipboard` `chip` `calendar` `clock` `settings` |
+| 导航 / 内容 | `search` `compass` `list` `chart` `pulse` `globe` `folder` `document` `image` `video` `music` `message` `clipboard` `chip` `calendar` `clock` `settings` `sliders` |
 | 账号 / 权限 | `users` `key` `lock` `unlock` `question` |
 | 操作 | `plus` `minus` `close` `check` `edit` `copy` `save` `trash` `download` `upload` `refresh` `swap` `expand` `pin` `broom` `scissors` `compress` `target` `rocket` |
 | 媒体 | `play` `pause` `stop` `skip_next` `skip_prev` `mic` `keyboard` `phone` |
@@ -323,7 +324,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 级 | 位置 | 实现 | 形态 |
 | --- | --- | --- | --- |
 | 一级 | 左侧栏 | `main_window` 导航 | 导航项，不是页签 |
-| 二级 | 页面顶部 | `pages/containers.TabbedPage` | 卡片式：`alternate-base` 底、上圆角 6、选中 `base` + 2px 下边线 |
+| 二级 | 页面顶部 | `pages/containers.TabbedPage` | 卡片式：`alternate-base` 底、上圆角 6、**1px `mid` 边框**、选中 `base` + 2px 下边线 |
 | 三级 | 页内第一块卡片上方 | 页面内 `QTabWidget` / `AutoFitTabWidget` | 下划线式：无底色、无边框、`padding: 6px 12px`、选中 2px `highlight` 下划线 |
 | 四级 | 卡片或区域内部 | 页面级 `objectName` 样式 | 分段式：容器 `alternate-base`、圆角 6、选中 `base` + 1px `shadow`、`padding: 4px 10px`、字号 12 |
 
@@ -336,6 +337,8 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 5. 全局操作（刷新、备份）放 `setCornerWidget` 或工具栏右侧，不混进页签行。
 6. 切换页签不重建整页；延迟构造沿用 `TabbedPage(lazy=True)`。
 7. **三级、四级不得复用二级的卡片式外观**。同一屏出现两行长得一样的页签，用户分不清层级。现状三级/四级都用全局 `QTabBar` 样式（`theme.py:47-50`），改到该页时用页面级 `objectName` 样式收敛；**不动 `theme.py` 全局基线**。
+8. **二级未选中页签的边框必须是 `palette(mid)`，不能用 `palette(shadow)`**。`alternate-base`（浅色 `#f0f3f8`）与页面底 `window`（`#f3f5f9`）只差 3 个色阶，用 `shadow` 做边框时整行几乎看不出卡片形状，只剩一条下划线（样张实测）。
+9. **页签不响应滚轮**：滚轮只滚页面，不允许 `QTabBar` 随滚轮切页签。需要时由用户单项授权，控件上标 `wheelOk=true` 才放行。
 
 ### 5.3 边框宽度
 
@@ -377,6 +380,8 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 3. 二次确认不靠按钮样式表达，统一用弹窗（见 `ui-interaction-spec` 2.3）。
 4. 禁用只改样式不改宽度，且保留 tooltip 说明原因。
 5. 同一页面同类操作只用一种动词：「抓取」就不要在另一处写「获取」。
+6. **带菜单的按钮保持中性外观**：`setMenu()` 的按钮展开/按下不得变成主操作蓝（`palette(highlight)` 底 + 白字），否则用户会误认成主操作。用 `menuButton` 属性单独压成 `midlight` 底 + `link` 字。
+7. **菜单箭头只留一个**：Qt 会为 `setMenu()` 自动画 menu-indicator，不要再给按钮 `setIcon(chevron)`，否则出现双箭头（样张实测）。
 
 ### 5.5 超出可视范围时怎么摆
 
@@ -405,7 +410,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 长文本 | `setSizeAdjustPolicy(AdjustToMinimumContentsLengthWithIcon)` + `setMinimumContentsLength(8)`，超出省略并 tooltip 全文 |
 | 选项数 | 2–12 普通下拉；>12 用可输入下拉（`setEditable(True)` + `QCompleter`）或配搜索框；<2 改只读文本 |
 | 首项 | 筛选类固定「全部」，不用空项、不用「请选择」；输入类用 placeholder |
-| 滚轮 | 不响应滚轮改值（滚轮只滚页面）：`setFocusPolicy(Qt.StrongFocus)`，必要时在 `wheelEvent` 里转发父级 |
+| 滚轮 | 不响应滚轮改值（滚轮只滚页面）：`setFocusPolicy(Qt.StrongFocus)`，必要时在 `wheelEvent` 里转发父级；**数字框、滑条、页签同样适用**，统一在应用级事件过滤器里拦，控件声明 `wheelOk=true` 才放行 |
 | 图标 | `setItemIcon(index, line_icon(name, color, 16))` |
 | 禁用 | 保留文字，用禁用色；不换成「无」 |
 
@@ -483,7 +488,9 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - [ ] 页签层级不超过四级，三级/四级没有复用二级的卡片式外观
 - [ ] 边框 1px（仅页签选中指示允许 2px 下边线），悬停/焦点只换色不换宽
 - [ ] 单行按钮不超过 5 个，主操作在最右；放不下按「更多 → 换行 → 缩文案」顺序处理
-- [ ] 同组下拉等宽且有最小宽度，不响应滚轮改值
+- [ ] 同组下拉等宽且有最小宽度，下拉/数字框/滑条/页签都不响应滚轮改值
+- [ ] 带菜单的按钮没有变主操作蓝，菜单箭头只有一个
+- [ ] 二级页签边框用 `palette(mid)`，在页面底上能看出卡片形状
 - [ ] 新图标已查 4.4 清单，未重复造图，且已回写本表
 - [ ] 弱对比 `placeholder-text` 未承载必读正文
 - [ ] 四条验证路径 + 懒加载页 + 弹窗 + 独立窗口都已实测
