@@ -382,7 +382,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 5. 同一页面同类操作只用一种动词：「抓取」就不要在另一处写「获取」。
 6. **带菜单的按钮保持中性外观**：`setMenu()` 的按钮展开/按下不得变成主操作蓝（`palette(highlight)` 底 + 白字），否则用户会误认成主操作。用 `menuButton` 属性单独压成 `midlight` 底 + `link` 字。
 7. **菜单箭头只留一个**：Qt 会为 `setMenu()` 自动画 menu-indicator，不要再给按钮 `setIcon(chevron)`，否则出现双箭头（样张实测）。
-8. **勾选框不要只给未选态上样式**：只写 `QCheckBox::indicator:unchecked` 时，选中态会落回原生绘制，同一列出现「白底灰框」与「原生勾号」两种观感。表格勾选列改用 delegate 自绘：未选 `palette(base)` 底 + 1px `palette(mid)` + 圆角 3，选中 `palette(accent)` 底 + `palette(on_accent)` 白勾。
+8. **勾选框不要只给未选态上样式**：只写 `QCheckBox::indicator:unchecked` 时，选中态会落回原生绘制，同一列出现「白底灰框」与「原生勾号」两种观感。表格勾选列改用 delegate 自绘：未选 `palette(base)` 底 + 1px `palette(mid)` + 圆角 3，选中 `palette(accent)` 底 + `palette(on_accent)` 白勾；自绘前必须 `opt.features &= ~QStyleOptionViewItem.HasCheckIndicator`，否则原生勾选标记会和自绘框叠成双层。
 9. **数字框覆盖 subcontrol 必须补箭头图**：一旦写了 `QSpinBox::up-button/down-button`，原生箭头就不再绘制。必须同时给 `::up-arrow` / `::down-arrow` 的 `image`，右侧 `padding` 留 22px，按钮 `width: 20px`、贴右边缘上下各占一半（样张实测：不补 image 时箭头完全消失）。
 
 ### 5.5 超出可视范围时怎么摆

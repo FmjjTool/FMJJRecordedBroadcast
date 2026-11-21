@@ -106,7 +106,7 @@ description: "界面交互与反馈规范（强制阅读）。统一弹窗与二
 1. 同一页同类表格列宽策略一致；不为个别数据临时调宽。
 2. 不允许横向滚动条成为常态：列总宽超出时先砍非关键列或合并展示。
 3. 表头文案 2–6 字，单位写进表头（`点赞数` 而不是 `点赞数量（个）`）。
-4. 勾选列必须自绘（`QStyledItemDelegate`）：未选 `palette(base)` 底 + 1px `palette(mid)` 圆角 3，选中 `palette(accent)` 底 + `palette(on_accent)` 白勾。不要只在 QSS 里给 `::indicator:unchecked` 上样式——选中态会落回原生绘制，同一列出现两种观感（样张实测）。
+4. 勾选列必须自绘（`QStyledItemDelegate`）：未选 `palette(base)` 底 + 1px `palette(mid)` 圆角 3，选中 `palette(accent)` 底 + `palette(on_accent)` 白勾。不要只在 QSS 里给 `::indicator:unchecked` 上样式——选中态会落回原生绘制，同一列出现两种观感（样张实测）。自绘前必须先清掉原生指示器：`opt.features &= ~QStyleOptionViewItem.HasCheckIndicator`，否则系统先画一个方框/勾，自绘框再盖上去，会出现双层框与立体投影。
 
 ### 2.2 排序与分页
 
