@@ -421,7 +421,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 1. 同一行两个以上下拉时，标签取组内最长宽度并固定，控件等宽对齐。
 2. 选项文案与被筛选数据的显示值完全一致（含单位与大小写），不另造简称。
 3. 不用下拉承载超过一屏（>15 项）且不可搜索的列表。
-4. **弹层圆角要显式做，不能等系统**：给视图设 `border-radius: 8px` 同时，必须把弹层顶层容器设成透明无边框（`WA_TranslucentBackground` + `FramelessWindowHint` + `background: transparent`）。只给视图圆角、容器仍不透明时，**首次弹出是直角**，第二次才被系统补上圆角（样张实测）。统一封装成 `round_combo_popup(combo)`，页面构建完对所有 `QComboBox` 调一次。
+4. **弹层圆角要显式做，而且要裁得住子控件**：视图设 `border-radius: 8px` 只裁它自己的背景；弹层容器必须同时 `WA_TranslucentBackground` + `FramelessWindowHint` + `background: transparent`，并且给弹层窗口 `setMask(圆角区域)`。少了遮罩时，垂直滚动条作为子控件会一直画到右下角，把圆角顶成直角（样张实测：只做前两步，首开直角、二次开仍露直角）。统一封装成 `RoundCombo`（`showPopup()` 后按最终尺寸重设遮罩）+ `round_combo_popup(combo)`，页面构建完对所有下拉调一次。
 
 ## 六、组件写法
 
@@ -495,7 +495,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 - [ ] 带菜单的按钮没有变主操作蓝，菜单箭头只有一个
 - [ ] 勾选框选中/未选同一套自绘样式，没有「QSS 未选 + 原生选中」混搭
 - [ ] 数字框上下箭头能看见且能点（覆盖 subcontrol 时已补 arrow image）
-- [ ] 下拉弹层第一次弹出就是圆角，不是首开直角、二次才圆
+- [ ] 下拉弹层第一次弹出就是圆角，滚动条没有把右下角顶成直角（容器透明 + 窗口遮罩都在）
 - [ ] 二级页签边框用 `palette(mid)`，在页面底上能看出卡片形状
 - [ ] 新图标已查 4.4 清单，未重复造图，且已回写本表
 - [ ] 弱对比 `placeholder-text` 未承载必读正文
