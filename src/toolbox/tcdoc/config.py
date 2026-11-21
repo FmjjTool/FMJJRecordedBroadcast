@@ -21,6 +21,7 @@ toolbox.config_manager.DEFAULT_CONVERT_CONFIG_DICT 里登记过，否则读取�
   download/腾讯文档数据/表格数据/*.xlsx  每个文档一份表格数据（每表一个 sheet）
   download/腾讯文档数据/正文存档/*.md    每个文档一份自动更新的正文快照
   download/腾讯文档数据/图片/          智能表格图片字段（按文档/工作表/字段归档）
+  download/腾讯文档数据/推送历史.jsonl 程序每次写入腾讯文档的记录（按表汇总，只追加）
   download/腾讯文档数据/日志/         采集日志
   download/腾讯文档数据/调试/         页面改版时的诊断包
 登录态含账号凭证，单独放 config/tcdoc_state.json（不进导出目录）。

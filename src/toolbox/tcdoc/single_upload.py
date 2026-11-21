@@ -139,7 +139,7 @@ def upload_entry(entry: dict, *, doc_key: str, tab_id: str, refresh: bool = True
     client.connect()
     receipt = pending.run(client, [record], apply=True, available_only=False,
                           verify_each=True, emit=emit, profile="posts",
-                          allow_new_options=True)
+                          allow_new_options=True, source="资产页单条上传")
     if receipt.get("added"):
         sync_refresh.invalidate("单条上传完成")
     return receipt

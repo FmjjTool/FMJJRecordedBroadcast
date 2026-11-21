@@ -25,7 +25,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from toolbox import increment_db
-from toolbox.tcdoc import bridge, config as tc_cfg, tables
+from toolbox.tcdoc import bridge, config as tc_cfg, push_history, tables
 from toolbox.tcdoc.import_local import (
     ALIASES, BEIJING, CHOICE_COLUMNS, MAX_IMAGE_BYTES, ImportErrorDetail, LocalImage,
     LocalImportClient, ManagedAuth, TEST_TARGET, UnknownWriteResult, field_options,
@@ -472,22 +472,26 @@ SONG_DATE_FIELDS = ("首发日期",)
 
 
 def _remark_plan(columns: dict, fields: list[dict], skipped: dict):
-    """目标表有「备注信息」文本列时，返回 (写入值, 字段类型)；没有则返回 (None, None)。
+    """备注列计划：返回 (写入值, 字段类型, 字段名)；没有备注列时返回 (None, None, None)。
 
     任何程序写入（批量/单行/自动推送）都会调用它把
     「自动推送程序上传+北京时间」追加到已有备注后面；表里没这一列就静默跳过
     （不拦下整条记录、也不改表结构），字段存在但不是文本类型时记一笔原因。
+    列名兼容「备注信息」（四张子表）与「备注」（官方动态新增列）。
     """
-    hits = [f for f in fields if f.get("fieldTitle") == bridge.REMARK_COLUMN]
-    if len(hits) != 1:
-        # 目标表没有备注列（如官方动态）：静默跳过，不新增字段、不影响其它列
-        return None, None
+    hits = [f for f in fields
+            if str(f.get("fieldTitle") or "") in bridge.REMARK_ALIASES]
+    if not hits:
+        # 目标表没有备注列：静默跳过，不新增字段、不影响其它列
+        return None, None, None
+    hits.sort(key=lambda f: bridge.REMARK_ALIASES.index(str(f.get("fieldTitle"))))
     field = hits[0]
+    title = str(field.get("fieldTitle"))
     if int(field.get("fieldType") or 0) != 1:
-        skipped[bridge.REMARK_COLUMN] = "备注字段不是文本类型"
-        return None, None
-    text = bridge.append_auto_remark(columns.get(bridge.REMARK_COLUMN))
-    return [{"type": "text", "text": text}], 1
+        skipped[title] = "备注字段不是文本类型"
+        return None, None, None
+    text = bridge.append_auto_remark(columns.get(title))
+    return [{"type": "text", "text": text}], 1, title
 
 
 def make_song_plan(record: dict, fields: list[dict]):
@@ -538,10 +542,10 @@ def make_song_plan(record: dict, fields: list[dict]):
         values[field["fieldTitle"]] = encoded
         kinds[field["fieldTitle"]] = kind
 
-    remark, remark_kind = _remark_plan(columns, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
     if remark is not None:
-        values[bridge.REMARK_COLUMN] = remark
-        kinds[bridge.REMARK_COLUMN] = remark_kind
+        values[remark_title] = remark
+        kinds[remark_title] = remark_kind
 
     if record.get("_images"):
         field = unique("封面图")
@@ -684,10 +688,10 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
         else:
             skipped[name] = "字段类型不匹配"
 
-    remark, remark_kind = _remark_plan(columns, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
     if remark is not None:
-        values[bridge.REMARK_COLUMN] = remark
-        kinds[bridge.REMARK_COLUMN] = remark_kind
+        values[remark_title] = remark
+        kinds[remark_title] = remark_kind
 
     for required in spec["required"]:
         if required not in values:
@@ -898,10 +902,10 @@ def make_live_plan(record: dict, fields: list[dict], available_only=True):
             kinds[title] = kind
             continue
         skipped[name] = "字段类型不匹配"
-    remark, remark_kind = _remark_plan(record, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(record, fields, skipped)
     if remark is not None:
-        values[bridge.REMARK_COLUMN] = remark
-        kinds[bridge.REMARK_COLUMN] = remark_kind
+        values[remark_title] = remark
+        kinds[remark_title] = remark_kind
     for required in LIVE_REQUIRED_FIELDS:
         if required not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
@@ -985,24 +989,50 @@ def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
     todo = preview["records"]
     if limit and int(limit) > 0:
         todo = todo[:int(limit)]
-    for item in todo:
-        rid = client.add_record(item["values"])
-        receipt["sent"] += 1
-        added = {"key": item["key"], "title": item["title"], "record_id": rid,
-                 "verified": False, "skipped_fields": item["skipped_fields"]}
-        if verify_each:
-            fresh = client.get_records()
-            saved = [row for row in fresh if row.get("recordID") == rid]
-            if len(saved) != 1:
-                raise ImportErrorDetail(f"新增记录未查回：{rid}")
-            checks = verify(saved[0], item["values"], item["kinds"], [])
-            added["checks"] = checks
-            added["verified"] = bool(checks) and all(checks.values())
-            if not added["verified"]:
-                raise ImportErrorDetail(f"读回不一致，停止后续写入：{rid}")
-            receipt["rows_after"] = len(fresh)
-        receipt["added"].append(added)
-        emit({"phase": "record_created", **added})
+
+    def save_history(status="成功", note=""):
+        remark_text = ""
+        for item in todo:
+            for title in bridge.REMARK_ALIASES:
+                block = (item.get("values") or {}).get(title)
+                if isinstance(block, list) and block and isinstance(block[0], dict):
+                    remark_text = str(block[0].get("text") or "")
+                    break
+            if remark_text:
+                break
+        push_history.record(
+            tab_name=getattr(client, "sheet_title", "") or "",
+            tab_id=str(getattr(client, "tab_id", "") or ""),
+            doc_key=str(getattr(client, "doc_key", "") or ""),
+            profile="lives", source="单条试写", status=status,
+            added=len(receipt["added"]), skipped=len(receipt["skipped"]),
+            failed=sum(1 for added in receipt["added"] if not added.get("verified")),
+            record_ids=[added.get("record_id") for added in receipt["added"]],
+            remark=remark_text, note=note)
+
+    try:
+        for item in todo:
+            rid = client.add_record(item["values"])
+            receipt["sent"] += 1
+            added = {"key": item["key"], "title": item["title"], "record_id": rid,
+                     "verified": False, "skipped_fields": item["skipped_fields"]}
+            if verify_each:
+                fresh = client.get_records()
+                saved = [row for row in fresh if row.get("recordID") == rid]
+                if len(saved) != 1:
+                    raise ImportErrorDetail(f"新增记录未查回：{rid}")
+                checks = verify(saved[0], item["values"], item["kinds"], [])
+                added["checks"] = checks
+                added["verified"] = bool(checks) and all(checks.values())
+                if not added["verified"]:
+                    raise ImportErrorDetail(f"读回不一致，停止后续写入：{rid}")
+                receipt["rows_after"] = len(fresh)
+            receipt["added"].append(added)
+            emit({"phase": "record_created", **added})
+    except ImportErrorDetail as exc:
+        save_history("失败", str(exc))
+        raise
+    save_history()
     return receipt
 
 
@@ -1060,10 +1090,10 @@ def make_plan(record: dict, fields: list[dict], available_only=False,
             continue
         values[title] = encoded
         kinds[title] = kind
-    remark, remark_kind = _remark_plan(columns, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
     if remark is not None:
-        values[bridge.REMARK_COLUMN] = remark
-        kinds[bridge.REMARK_COLUMN] = remark_kind
+        values[remark_title] = remark
+        kinds[remark_title] = remark_kind
     for required in ("作品标题", "作品内容", "发布时间"):
         if required not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
@@ -1246,13 +1276,15 @@ def _record_title(record: dict) -> str:
 
 
 def run(client, records, *, apply=False, available_only=False, verify_each=True,
-        emit=lambda event: None, profile="posts", allow_new_options=False):
+        emit=lambda event: None, profile="posts", allow_new_options=False,
+        source="上传"):
     """预览并导入记录。
 
     verify_each=True（命令行默认）逐条新增后立刻读回，异常即停；
     界面批量上传传 False：整批新增完只读回一次，避免每条都翻完整张表。
     profile="songs" 仅用于完整歌曲：按歌曲名去重，只新增。
     allow_new_options=True 时，下拉列里没有的名字按「快速添加」新建选项（需用户当次确认）。
+    source 只用于推送历史（批量上传 / 单行上传等）。
     """
     if available_only and (client.doc_key, client.tab_id) != TEST_TARGET:
         raise ImportErrorDetail("只写可用字段的例外仅允许本次授权测试目标")
@@ -1286,72 +1318,99 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     if not apply:
         return receipt
 
-    pending_verify = []
-    for record, values, kinds, skipped in plans:
-        try:
-            if record["key"] in known:
-                receipt["skipped"].append({"key": record["key"], "record_ids": []})
-                continue
-            images = record["_images"]
-            for image in images:
-                image.read_verified()
-            tickets = []
-            for image in images:
-                tickets.append(client.upload_image(image))
-                receipt["uploaded_images"] += 1
-                emit({"phase": "image_uploaded", "key": record["key"], "name": image.path.name})
-            values = copy.deepcopy(values)
-            if tickets:
-                image_title = next(title for title, kind in kinds.items() if kind == 5)
-                values[image_title] = [{"imageID": ticket} for ticket in tickets]
-            rid = client.add_record(values)
-            known.add(record["key"])
-            added = {"key": record["key"], "title": _record_title(record), "record_id": rid,
-                     "image_count": len(images), "missing_images": len(record["missing_slots"]),
-                     "skipped_fields": skipped, "verified": False}
-            receipt["added"].append(added)
-            receipt["rows_after"] = receipt["rows_before"] + len(receipt["added"])
-            emit({"phase": "record_created", **added})
-            if verify_each:
-                fresh = client.get_records()
-                saved = [row for row in fresh if row.get("recordID") == rid]
-                if len(saved) != 1:
-                    raise ImportErrorDetail("新增记录未查回，请按 record_id 核对")
-                checks = verify(saved[0], values, kinds, images)
-                added.update({"verified": all(checks.values()), "checks": checks})
-                receipt["rows_after"] = len(fresh)
-                emit({"phase": "readback", **added})
-                if not added["verified"]:
-                    raise ImportErrorDetail("读回不一致，停止后续条目")
-            else:
-                pending_verify.append((added, values, kinds, images))
-        except ImportErrorDetail as exc:
-            emit({**receipt, "phase": "stopped", "key": record["key"], "error": str(exc),
-                  "unknown_record_outcome": isinstance(exc, UnknownWriteResult)})
-            raise
+    remark_text = ""
+    for _record, values, _kinds, _skipped in plans:
+        for title in bridge.REMARK_ALIASES:
+            block = values.get(title)
+            if isinstance(block, list) and block and isinstance(block[0], dict):
+                remark_text = str(block[0].get("text") or "")
+                break
+        if remark_text:
+            break
 
-    if pending_verify:
-        fresh = client.get_records()
-        saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
-        counts = (count_song_title_keys(fresh) if profile == "songs"
-                  else count_remote_keys(fresh))
-        for added, values, kinds, images in pending_verify:
-            if profile in ("events", "merch"):
-                # 候选表只给「新增」授权，重复性由名称键在上方 already-skip 判断
-                added["duplicate"] = False
-                lookup = ""
-            else:
-                lookup = added["key"][5:] if profile == "songs" else added["key"]
-                added["duplicate"] = counts.get(lookup, 0) > 1
-            saved = saved_by_id.get(str(added["record_id"]))
-            if saved is None:
+    def save_history(status="成功", note=""):
+        push_history.record(
+            tab_name=getattr(client, "sheet_title", "") or "",
+            tab_id=str(getattr(client, "tab_id", "") or ""),
+            doc_key=str(getattr(client, "doc_key", "") or ""),
+            profile=profile, source=source, status=status,
+            added=len(receipt["added"]), skipped=len(receipt["skipped"]),
+            images=receipt["uploaded_images"],
+            failed=sum(1 for item in receipt["added"] if not item.get("verified")),
+            record_ids=[item.get("record_id") for item in receipt["added"]],
+            remark=remark_text, note=note)
+
+    try:
+        pending_verify = []
+        for record, values, kinds, skipped in plans:
+            try:
+                if record["key"] in known:
+                    receipt["skipped"].append({"key": record["key"], "record_ids": []})
+                    continue
+                images = record["_images"]
+                for image in images:
+                    image.read_verified()
+                tickets = []
+                for image in images:
+                    tickets.append(client.upload_image(image))
+                    receipt["uploaded_images"] += 1
+                    emit({"phase": "image_uploaded", "key": record["key"], "name": image.path.name})
+                values = copy.deepcopy(values)
+                if tickets:
+                    image_title = next(title for title, kind in kinds.items() if kind == 5)
+                    values[image_title] = [{"imageID": ticket} for ticket in tickets]
+                rid = client.add_record(values)
+                known.add(record["key"])
+                added = {"key": record["key"], "title": _record_title(record), "record_id": rid,
+                         "image_count": len(images), "missing_images": len(record["missing_slots"]),
+                         "skipped_fields": skipped, "verified": False}
+                receipt["added"].append(added)
+                receipt["rows_after"] = receipt["rows_before"] + len(receipt["added"])
+                emit({"phase": "record_created", **added})
+                if verify_each:
+                    fresh = client.get_records()
+                    saved = [row for row in fresh if row.get("recordID") == rid]
+                    if len(saved) != 1:
+                        raise ImportErrorDetail("新增记录未查回，请按 record_id 核对")
+                    checks = verify(saved[0], values, kinds, images)
+                    added.update({"verified": all(checks.values()), "checks": checks})
+                    receipt["rows_after"] = len(fresh)
+                    emit({"phase": "readback", **added})
+                    if not added["verified"]:
+                        raise ImportErrorDetail("读回不一致，停止后续条目")
+                else:
+                    pending_verify.append((added, values, kinds, images))
+            except ImportErrorDetail as exc:
+                emit({**receipt, "phase": "stopped", "key": record["key"], "error": str(exc),
+                      "unknown_record_outcome": isinstance(exc, UnknownWriteResult)})
+                raise
+
+        if pending_verify:
+            fresh = client.get_records()
+            saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
+            counts = (count_song_title_keys(fresh) if profile == "songs"
+                      else count_remote_keys(fresh))
+            for added, values, kinds, images in pending_verify:
+                if profile in ("events", "merch"):
+                    # 候选表只给「新增」授权，重复性由名称键在上方 already-skip 判断
+                    added["duplicate"] = False
+                    lookup = ""
+                else:
+                    lookup = added["key"][5:] if profile == "songs" else added["key"]
+                    added["duplicate"] = counts.get(lookup, 0) > 1
+                saved = saved_by_id.get(str(added["record_id"]))
+                if saved is None:
+                    emit({"phase": "readback", **added})
+                    continue
+                checks = verify(saved, values, kinds, images)
+                added.update({"verified": all(checks.values()), "checks": checks})
                 emit({"phase": "readback", **added})
-                continue
-            checks = verify(saved, values, kinds, images)
-            added.update({"verified": all(checks.values()), "checks": checks})
-            emit({"phase": "readback", **added})
-        receipt["rows_after"] = len(fresh)
-        receipt["duplicates"] = [item["key"] for item in receipt["added"] if item.get("duplicate")]
+            receipt["rows_after"] = len(fresh)
+            receipt["duplicates"] = [item["key"] for item in receipt["added"] if item.get("duplicate")]
+    except ImportErrorDetail as exc:
+        save_history("失败", str(exc))
+        raise
+    save_history()
     return receipt
 
 

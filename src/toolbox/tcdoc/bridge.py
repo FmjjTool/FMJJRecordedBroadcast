@@ -43,6 +43,8 @@ LINK_COLUMNS = ("作品链接", "动态链接(b站)")
 # 不新增字段、不改表结构。
 BEIJING_TZ = timezone(timedelta(hours=8))
 REMARK_COLUMN = "备注信息"
+# 腾讯表里的备注列存在两种命名：四张子表叫「备注信息」，官方动态新增的列可能叫「备注」
+REMARK_ALIASES = ("备注信息", "备注")
 AUTO_REMARK_PREFIX = "自动推送程序上传"
 
 

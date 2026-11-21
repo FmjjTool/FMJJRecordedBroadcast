@@ -2,7 +2,8 @@
 
 比对本地「已获取」/增量数据库与已同步的腾讯表格，把尚未上传的条目按
 「官方动态」列标准整理成表格：可一键复制 TSV 手工粘贴，也可在勾选确认后
-连同本地图片上传到腾讯文档（仅限官方动态 / 直播记录，需用户点击确认）。
+连同本地图片上传到腾讯文档（官方动态 / 直播记录 / 完整歌曲 / 线下活动 /
+周边图鉴，后三张仅新增）；工具条「推送历史」按表查看每次写入结果。
 """
 
 from __future__ import annotations
@@ -368,6 +369,105 @@ class _UploadDialog(QDialog):
         self.ok_btn.setEnabled(bool(chosen))
 
 
+class _PushHistoryDialog(QDialog):
+    """推送历史：按表汇总 + 最近批次明细（只读，数据来自 推送历史.jsonl）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from toolbox.tcdoc import push_history
+
+        self._history = push_history
+        self.setWindowTitle("推送历史")
+        self.resize(880, 580)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(8)
+
+        path = QLabel(f"记录文件：{push_history.history_path()}")
+        path.setProperty("role", "caption")
+        path.setWordWrap(True)
+        path.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(path)
+
+        self.empty = QLabel("还没有推送记录：完成一次「上传到腾讯文档」或「单条试写」后，"
+                            "这里会按表记下时间、新增/跳过/图片数量。")
+        self.empty.setWordWrap(True)
+        self.empty.setProperty("role", "caption")
+        layout.addWidget(self.empty)
+
+        layout.addWidget(QLabel("按表汇总"))
+        self.summary = QTableWidget(0, 4, self)
+        self.summary.setHorizontalHeaderLabels(["表", "最近推送", "批次", "累计新增"])
+        self.summary.verticalHeader().setVisible(False)
+        self.summary.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.summary.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.summary.setAlternatingRowColors(True)
+        for index, width in enumerate((240, 170, 70, 90)):
+            self.summary.setColumnWidth(index, width)
+        self.summary.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.summary, 1)
+
+        layout.addWidget(QLabel("最近批次"))
+        self.table = QTableWidget(0, 7, self)
+        self.table.setHorizontalHeaderLabels(
+            ["时间", "表", "来源", "新增", "跳过", "图片", "结果"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        for index, width in enumerate((150, 150, 110, 60, 60, 60, 170)):
+            self.table.setColumnWidth(index, width)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table, 1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        refresh = QPushButton("刷新")
+        refresh.clicked.connect(self.refresh)
+        close = QPushButton("关闭")
+        close.clicked.connect(self.close)
+        row.addWidget(refresh)
+        row.addWidget(close)
+        layout.addLayout(row)
+        self.refresh()
+
+    def refresh(self) -> None:
+        entries = self._history.load(limit=200)
+        groups = self._history.summary(entries)
+        self.empty.setVisible(not entries)
+        self.summary.setRowCount(len(groups))
+        for row, item in enumerate(groups):
+            texts = [item.get("tab_name") or item.get("tab_id") or "-",
+                     item.get("last_time") or "-",
+                     str(item.get("batches") or 0),
+                     str(item.get("added") or 0)]
+            for column, text in enumerate(texts):
+                cell = QTableWidgetItem(str(text))
+                cell.setToolTip(f"{item.get('doc_key') or ''} / {item.get('tab_id') or ''}")
+                self.summary.setItem(row, column, cell)
+        self.table.setRowCount(len(entries))
+        for row, item in enumerate(entries):
+            status = str(item.get("status") or "成功")
+            if status != "成功" and item.get("note"):
+                status = f"{status}：{item.get('note')}"
+            texts = [item.get("time") or "-",
+                     item.get("tab_name") or item.get("tab_id") or "-",
+                     item.get("source") or "-",
+                     str(item.get("added") or 0),
+                     str(item.get("skipped") or 0),
+                     str(item.get("images") or 0),
+                     status]
+            tip = "\n".join(part for part in (
+                f"recordID：{'、'.join(item.get('record_ids') or [])[:200]}",
+                f"备注：{item.get('remark')}" if item.get("remark") else "",
+            ) if part)
+            for column, text in enumerate(texts):
+                cell = QTableWidgetItem(str(text))
+                if tip:
+                    cell.setToolTip(tip)
+                self.table.setItem(row, column, cell)
+
+
 class _PartnerFilterDialog(QDialog):
     """合作方过滤设置：开关 + 关键词（腾讯表名单之外的账号只收录提及关键词的作品）。"""
 
@@ -587,6 +687,13 @@ class TcDocBridgePanel(QWidget):
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self._copy)
         row2.addWidget(self.copy_btn)
+
+        self.history_btn = QPushButton("推送历史")
+        self.history_btn.setToolTip(
+            "查看程序每次写入腾讯文档的记录：按表汇总新增/跳过/图片与最近推送时间；"
+            "只读，不影响表格数据")
+        self.history_btn.clicked.connect(self._open_push_history)
+        row2.addWidget(self.history_btn)
 
         self.upload_btn = QPushButton("上传到腾讯文档")
         self.upload_btn.setProperty("variant", "primary")
@@ -1418,7 +1525,7 @@ class TcDocBridgePanel(QWidget):
     def _start_upload(self, target: dict, records: list[dict],
                       allow_new_options: bool = False, fetch_missing: bool = False,
                       missing: list[dict] | None = None,
-                      verify_each: bool = False) -> None:
+                      verify_each: bool = False, source: str = "批量上传") -> None:
         if self._uploading:
             return
         self._uploading = True
@@ -1470,7 +1577,7 @@ class TcDocBridgePanel(QWidget):
             return pending.run(client, records, apply=True, available_only=False,
                                verify_each=verify_each, emit=emit,
                                profile=str(target.get("profile") or "posts"),
-                               allow_new_options=allow_new_options)
+                               allow_new_options=allow_new_options, source=source)
 
         def done(receipt, err):
             self._uploading = False
@@ -2243,6 +2350,25 @@ class TcDocBridgePanel(QWidget):
             return
         self._copy_rows(rows, f"全部 {len(rows)} 行")
 
+    def _open_push_history(self) -> None:
+        """打开推送历史（非模态，可一边查看一边操作主界面）。"""
+        if self._closed:
+            return
+        dialog = getattr(self, "_history_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.refresh()
+                dialog.raise_()
+                dialog.activateWindow()
+                return
+            except RuntimeError:  # 已关闭并销毁：重建
+                self._history_dialog = None
+        dialog = _PushHistoryDialog(self)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+        dialog.destroyed.connect(lambda *_: setattr(self, "_history_dialog", None))
+        self._history_dialog = dialog
+        dialog.show()
+
     def _copy_all_images(self) -> None:
         urls: list[str] = []
         for row in self._rows:
@@ -2563,7 +2689,7 @@ class TcDocBridgePanel(QWidget):
             self._start_upload(target, [record], allow_new_options=allow_new_options,
                                fetch_missing=True,
                                missing=result.get("missing") or [],
-                               verify_each=True)
+                               verify_each=True, source="单行上传")
 
         thread = run_bg(work, done, owner=self)
         if thread is None:
