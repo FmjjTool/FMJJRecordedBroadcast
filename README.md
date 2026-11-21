@@ -437,7 +437,7 @@ pip install websocket-client
 | `douyin_live_rooms.json` | 房间号 → roomId 缓存（避免重复解析） |
 | `accounts.txt` | 「信息获取」页账号列表，每行一条，pipe 分隔 |
 | `groups.json` | 账号分组，扁平映射 `{"11": "默认分组"}`。**组号必须是重复双位数**（`11/22/.../99`） |
-| `live_rooms.json` | 「账号配置」自动解析出的直播间号缓存：`{账号id: {platform, url, room, note, ts}}`。空结果 6 小时内不重复解析；抖音按「抖音号即直播间号」离线解析（`room/enter` 校验，未开播也拿得到），拿不到时先记为待开播主播，由录制监控线程补号 |
+| `live_rooms.json` | 「账号配置」自动解析出的直播间号缓存：`{账号id: {platform, url, room, note, ts, v}}`。空结果 6 小时内不重复解析（抖音 10 分钟）；抖音走「抖音号 → room/enter → reflow 短号」离线解析，`v` 是解析算法版本，旧缓存会自动重解析一次 |
 | `collected.db` | **SQLite**。已获取数据持久化，单表 `videos(dedup_key PK, platform, created_at, data)`，WAL 模式 |
 | `increment.db` | **SQLite**。增量采集库，**每平台一张表**（23 列）+ 内部表 `_content_keys` / `_meta`。两层去重：表内 `dedup_key` 唯一 + 跨表 `content_key` 全局唯一（同内容跨平台只留最早一条） |
 | `rename_log.log` | 重命名操作日志 |
