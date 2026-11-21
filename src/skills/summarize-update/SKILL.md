@@ -40,6 +40,7 @@ description: "开发阶段质量闭环与版本发布流程：编辑后适用测
 
 1. **工作区必须干净**（`git status` 无未提交修改）。有未提交内容先按项目规范提交（测试脚本/临时文件必须先清理再提交）。
 2. 仅明确的发布请求且未附“不打包”等限制时，才适用打包前提；总结排除项或对本 skill 的维护/阅读不授权打包。
+3. 所有 GitHub 网络动作（推送、API、上传）按 `convention-skill` 约定 15 执行：**优先直连 → 失败回退代理 → 最后才用其他方式**。
 
 ## 版本号规则（重要）
 
@@ -53,10 +54,15 @@ description: "开发阶段质量闭环与版本发布流程：编辑后适用测
 ### 第 1 步：推送本地提交
 
 ```
-git push origin main
+git -c http.proxy= -c https.proxy= push origin main
 ```
 
 先把手头累积的全部提交同步到远端，再做后续动作。
+
+**网络顺序（按 `convention-skill` 约定 15）**：默认直连（如上，显式清空代理）→ 直连失败才回退代理
+（`git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push origin main`，
+候选顺序：用户指定 / `HTTPS_PROXY` / 7890 / 10809 / 12450 / `git config http.proxy`，切档前先探测端口）
+→ 都不通才用其他方式（交回宿主执行、SSH over 443）并向用户说明。逐档记录真实错误，禁止静默换档。
 
 ### 第 2 步：递增版本号（打包前置）
 
@@ -105,8 +111,10 @@ git commit -m "docs: v{新版本} 版本发布（更新日志 + 版本号）"
 ### 第 5 步：推送 GitHub
 
 ```
-git push origin main
+git -c http.proxy= -c https.proxy= push origin main
 ```
+
+网络顺序同第 1 步（约定 15）：直连 → 代理 → 其他；不带 tag，tag 在第 6 步单独推。
 
 ### 第 6 步：创建 Release 并上传安装包
 
@@ -132,11 +140,13 @@ $H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json" }
 - 子 PowerShell 里 `git credential fill` 包装层不工作（报 missing protocol field），必须直接调用 GCM exe（上面写法）
 - `.ps1` 文件必须**纯 ASCII**：PS 5.1 把无 BOM 的 UTF-8 脚本当 ANSI 读，中文会乱码甚至语法错误——中文内容（Release 正文等）写到单独的 UTF-8 `.txt`，脚本里用 `[IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)` 读入
 
+**网络顺序（约定 15，REST API 同样适用）**：默认直连，脚本开头先清 `$env:HTTP_PROXY/$env:HTTPS_PROXY/$env:ALL_PROXY` 并 `[System.Net.WebRequest]::DefaultWebProxy = $null`；直连失败才加 `-Proxy "http://127.0.0.1:7890"`（候选端口 7890 / 10809 / 12450，先 `Test-NetConnection` 探测）；仍失败按"交回宿主执行 → SSH over 443（仅 git）"处理并告知用户。逐档记录真实错误，禁止静默换档。
+
 **a) 建本地 tag 并推送**：
 
 ```powershell
 git tag {新版本}
-git push origin {新版本}
+git -c http.proxy= -c https.proxy= push origin {新版本}
 ```
 
 **b) 创建 Release**（非 draft、非 prerelease，name = tag，与历史格式一致）：
@@ -193,6 +203,7 @@ foreach ($f in $files) {
 - `GET /repos/FmjjTool/FMJJRecordedBroadcast/releases/tags/{新版本}` 确认：非 draft、assets=2（安装包 + SHA256SUMS.txt）、安装包大小 ≈92MB（与本地 `dist/installer` 产物字节数一致）
 - 再取 `SHA256SUMS.txt` 内容，确认哈希与本地 `Get-FileHash` 结果逐字一致（客户端按它校验，不一致会导致所有用户更新失败）
 - **仓库为私有仓库**：验证的 GET 也必须带 Authorization 头（GCM 取 token 同上）——无凭据返回 404，曾被误判为 Release 不存在
+- **网络顺序按约定 15**：直连（`-NoProxy` / 清空 `DefaultWebProxy`）→ 代理（`-Proxy "http://127.0.0.1:7890"`）→ 其他；GET 失败要区分「404 无凭据」与「网络不通」，不要把网络错误报成 Release 不存在
 - 向用户汇报：新版本号、Release 链接（`https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/{新版本}`）、本次更新内容摘要
 
 ## 安全红线

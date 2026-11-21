@@ -216,6 +216,41 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 4. 排序只改变展示顺序：不改数据、不改勾选集合，勾选与选中状态随行走；分页表排序后回到第 1 页。
 5. `shopping_page` / `tickets_page` / `quark_download` 里早期的三态自写实现视为历史实现，改到这些页面时迁移到 `table_sort`，不新增第二套。
 
+### 约定 15：GitHub 访问网络顺序（直连 → 代理 → 其他）
+
+**触发条件**：任何访问 GitHub 的动作，包括 `git fetch` / `pull` / `push` / `clone`、`api.github.com`、`uploads.github.com`、Release 资产上传与下载、版本检查。
+
+1. **第一档：直连**。默认先直连，并显式清空代理，不让仓库或环境里残留的 `http.proxy` / `https.proxy` 参与：
+
+   ```bash
+   git -c http.proxy= -c https.proxy= fetch origin
+   git -c http.proxy= -c https.proxy= push origin main
+   ```
+
+   PowerShell 里先清环境变量再请求（PS 5.1 无 `-NoProxy`）：
+   `$env:HTTP_PROXY = $null; $env:HTTPS_PROXY = $null; $env:ALL_PROXY = $null`
+   并在调用前 `[System.Net.WebRequest]::DefaultWebProxy = $null`。
+
+2. **第二档：代理回退**。只在直连失败（DNS 解析失败、连接超时、连接被重置、TLS 握手失败、443 不通）后才切代理，按下列顺序取第一个可用项：
+   1. 用户当次明确给出的代理，或环境变量 `HTTPS_PROXY` / `ALL_PROXY`；
+   2. 本机常见端口：`7890`（Clash）、`10809`（v2rayN）、`12450`（旧配置，常已失效）；
+   3. `git config --get http.proxy` 里的值（只当候选，不直接信任）。
+
+   ```bash
+   git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push origin main
+   ```
+
+   切档前先探测端口：`curl -x http://127.0.0.1:7890 -sSI -m 10 https://github.com`（或 PowerShell `Test-NetConnection 127.0.0.1 -Port 7890`），端口不通的候选直接跳过，不算「代理失败」。
+
+3. **第三档：其他方式**。前两档都失败后才用，且必须先向用户说明再执行：
+   - 交回宿主/桌面环境执行同一条命令（沙箱报 DNS、`Schannel`、`SEC_E_NO_CREDENTIALS` 等网络或系统错误时，优先按此重试一次）；
+   - SSH over 443：`ssh -T -p 443 git@ssh.github.com`，必要时把 remote 改成 `ssh://git@ssh.github.com:443/FmjjTool/FMJJRecordedBroadcast.git`；
+   - GitHub 加速/镜像域名只允许用于只读 GET，不用于 push，也不写进 `.git/config` 长期配置。
+
+4. **逐档推进、留下证据**：一次只升一档，记录每档真实错误（DNS / 超时 / 连接重置 / TLS / HTTP 状态码）。禁止多档并发混用，禁止静默换档不说，禁止把代理地址长期写进 `.git/config`（本机历史配置 `socks5h://127.0.0.1:12450` 指向不存在的代理，已多次导致推送失败）。
+
+5. **三档都失败**：按约定 1 的失败处理，停止本次操作，向用户报告错误原文与已尝试的档位；不得略过 fetch/比较直接发布，也不得使用 `git push --force` 等破坏远端历史的操作。
+
 ## 执行检查清单
 
 - [ ] 已阅读本 skill。
@@ -224,6 +259,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [ ] 已成功 fetch 并比较版本；云端领先时已成功快进，本地领先时保留本地较新代码。
 - [ ] 两端分叉时已列出提交、逐文件差异及取舍，并收到用户明确选择后才编辑/同步。
 - [ ] 获取、比较或同步失败时，已停止操作并向用户提问或按相关 skill 处理。
+- [ ] 访问 GitHub 已按约定 15 逐档进行：先直连（清空代理），失败才回退代理，最后才用其他方式并已告知用户。
 - [ ] 改动前已执行 `git status`，无未备份内容（否则已先本地提交）。
 - [ ] 完成后已本地 `git commit` 一次并汇报。
 - [ ] 本次涉及 skill 时，新增/修改内容全部为 `.md`，未附带脚本或 JSON（用户特别告知的除外）。

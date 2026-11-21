@@ -22,7 +22,7 @@
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/功能说明`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
@@ -187,3 +187,12 @@
 - 排序键统一解析：数字（千分位、万/亿/k/w）< 日期时间 < 文本，空值（空串、`-`、`—`）恒排最后；时长等特殊格式用 `item.setData(SORT_KEY_ROLE, 数值)`。
 - 排序只改展示顺序：不改数据、不改勾选集合，勾选与选中随行走；各页不自写第二套比较逻辑。
 - 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 14。
+
+## 约定 15：GitHub 访问网络顺序（直连 → 代理 → 其他）
+
+- 任何访问 GitHub 的动作（`fetch` / `push` / `clone`、`api.github.com`、`uploads.github.com`、资产上传下载）一律先**直连**，并显式清空代理：`git -c http.proxy= -c https.proxy= push origin main`。
+- 直连失败（DNS、超时、连接重置、TLS、443 不通）才回退**代理**，顺序为：用户当次指定或 `HTTPS_PROXY`/`ALL_PROXY` → 本机常见端口 `7890` / `10809` / `12450` → `git config http.proxy` 的值；切档前先探测端口是否可连，不通就跳过。
+- 前两档都失败才用**其他方式**（交回宿主执行、SSH over 443、只读镜像），且先告知用户；镜像只用于只读 GET，不用于 push。
+- 逐档推进并记录真实错误；不并发混用、不静默换档、不把代理长期写进 `.git/config`（`socks5h://127.0.0.1:12450` 已多次导致推送失败）。
+- 三档都失败即按约定 1 停止并报告，不跳过 fetch/比较，不使用 `git push --force`。
+- 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 15。

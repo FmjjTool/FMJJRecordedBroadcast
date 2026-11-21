@@ -36,7 +36,8 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 
 | 快捷短语 | 目标 skill | 一句话定位 |
 | --- | --- | --- |
-| `/约定` | `convention-skill` | 项目强制约定总纲（13 条） |
+| `/约定` | `convention-skill` | 项目强制约定总纲（15 条） |
+| `/网络` | `convention-skill` | GitHub 访问顺序：直连 → 代理 → 其他 |
 | `/管理入口` | `convention-skill` | 管理器 / 中心 / 面板的分级与登记 |
 | `/Cookie保护` | `cookie-data-protection` | 已存真实 Cookie 绝对禁改 |
 | `/登录` | `cookie-manager` | 统一登录入口与只读取用 |
@@ -68,6 +69,14 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 3. 存在未备份改动时先本地提交备份；每次任务完成后必须本地提交一次。
 4. 每次任务结束写唯一当日报告 `Progress/YYYY-MM-DD_当日总结.md`，同一天只保留一份，写完再连同改动提交。
 5. skill 只用 Markdown（`SKILL.md` + 可选 `.md`），禁止附带脚本或机器可读配置。
+6. GitHub 动作按约定 15：先直连（清空代理）→ 失败回退代理 → 最后才用其他方式并告知用户。
+
+### /网络 → `convention-skill`（约定 15）
+
+1. 第一档直连：`git -c http.proxy= -c https.proxy= push origin main`，并清空 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY`。
+2. 直连失败才回退代理，候选顺序：用户指定或 `HTTPS_PROXY` → 7890 → 10809 → 12450 → `git config http.proxy`；切档前先探测端口。
+3. 前两档都失败才用其他方式（交回宿主执行、SSH over 443、只读镜像），且先告知用户；镜像不用于 push。
+4. 一次只升一档、记录真实错误；不把代理长期写进 `.git/config`，三档都失败即停止并报告。
 
 ### /管理入口 → `convention-skill`
 
@@ -169,7 +178,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 
 1. 先判排除项：总结文章、工作总结、直播总结、仅「总结此次更新」都不触发推送与发布。
 2. 发布流程顺序：推送本地提交 → 递增版本号 → 打包 → 更新 README → 推送 GitHub → 创建 Release。
-3. 版本号与 README 更新格式固定，不跳步、不合并步骤。
+3. 版本号与 README 更新格式固定，不跳步、不合并步骤；所有 GitHub 动作按约定 15（直连 → 代理 → 其他）。
 4. 安全红线：不强推、不覆盖远端历史；未命中排除项才按全文流程执行。
 
 ### /双版本 → `release-editions`
