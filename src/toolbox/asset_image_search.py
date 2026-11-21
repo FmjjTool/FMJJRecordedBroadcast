@@ -92,7 +92,8 @@ def build_index(entries, embedder, progress=None, cancel=None,
 
 
 def _build_index(entries, embedder, progress=None, cancel=None,
-                 use_cache: bool = True, on_ready=None, *, keep_vectors=True) -> dict:
+                 use_cache: bool = True, on_ready=None, *, keep_vectors=True,
+                 on_vectors=None) -> dict:
     _emit(progress, "collect", message="正在收集已获取资源的图片...")
     images = collect_images(entries)
     total = len(images)
@@ -103,40 +104,7 @@ def _build_index(entries, embedder, progress=None, cancel=None,
     owners: list[int] = []
     paths: list[str] = []
     cache_hits = 0
-    if use_cache and images:
-        _emit(progress, "cache", message=f"正在读取特征缓存（{total} 张图片）...")
-        missing = []
-        chunk_size = total if keep_vectors else _INDEX_CACHE_BATCH
-        for start in range(0, total, chunk_size):
-            chunk = images if keep_vectors else images[start:start + chunk_size]
-            cache = asset_image_vectors.fetch_many(
-                [(path, mtime, size) for _idx, path, mtime, size in chunk],
-                embedder.model_id)
-            if cancel is not None and cancel.is_set():
-                raise SearchCancelled("已停止")
-            for row in chunk:
-                index, path, _mtime, _size = row
-                vector = cache.get(_norm(path))
-                if vector is None:
-                    missing.append(row)
-                    continue
-                cache_hits += 1
-                if keep_vectors:
-                    vectors.append(np.asarray(vector, dtype=np.float32))
-                    owners.append(index)
-                    paths.append(path)
-            del cache, vector
-    else:
-        missing = images
-    if cancel is not None and cancel.is_set():
-        raise SearchCancelled("已停止")
-
-    if images:
-        _emit(progress, "cache", cache_hits, total,
-              f"已缓存 {cache_hits}/{total} 张，本次需提取 {len(missing)} 张")
-    indexed = cache_hits
-    embedded = 0
-    skipped_count = 0
+    indexed = embedded = skipped_count = 0
     skipped_items: list[tuple[str, str]] = []
 
     def snapshot() -> dict:
@@ -146,6 +114,45 @@ def _build_index(entries, embedder, progress=None, cancel=None,
             "skipped": skipped_count, "skipped_items": list(skipped_items),
         }
 
+    if use_cache and images:
+        _emit(progress, "cache", message=f"正在读取特征缓存（{total} 张图片）...")
+        missing = []
+        chunk_size = _INDEX_CACHE_BATCH
+        for start in range(0, total, chunk_size):
+            chunk = images[start:start + chunk_size]
+            cache = asset_image_vectors.fetch_many(
+                [(path, mtime, size) for _idx, path, mtime, size in chunk],
+                embedder.model_id)
+            if cancel is not None and cancel.is_set():
+                raise SearchCancelled("已停止")
+            batch_vectors, batch_owners, batch_paths = [], [], []
+            for row in chunk:
+                index, path, _mtime, _size = row
+                vector = cache.get(_norm(path))
+                if vector is None:
+                    missing.append(row)
+                    continue
+                cache_hits += 1
+                indexed += 1
+                if keep_vectors:
+                    vectors.append(np.asarray(vector, dtype=np.float32))
+                    owners.append(index)
+                    paths.append(path)
+                if on_vectors is not None:
+                    batch_vectors.append(vector)
+                    batch_owners.append(index)
+                    batch_paths.append(path)
+            if on_vectors is not None and batch_vectors:
+                on_vectors(batch_vectors, batch_owners, batch_paths, snapshot())
+            del cache, vector
+    else:
+        missing = images
+    if cancel is not None and cancel.is_set():
+        raise SearchCancelled("已停止")
+
+    if images:
+        _emit(progress, "cache", cache_hits, total,
+              f"已缓存 {cache_hits}/{total} 张，本次需提取 {len(missing)} 张")
     if on_ready is not None and vectors:
         on_ready(vectors, owners, paths, snapshot())
 
@@ -165,6 +172,7 @@ def _build_index(entries, embedder, progress=None, cancel=None,
 
         def on_batch(batch) -> None:
             nonlocal indexed
+            batch_vectors, batch_owners, batch_paths = [], [], []
             for path, vector in batch:
                 key = _norm(path)
                 stamp = stamps.get(key)
@@ -177,6 +185,10 @@ def _build_index(entries, embedder, progress=None, cancel=None,
                     vectors.append(array)
                     owners.append(index)
                     paths.append(path)
+                if on_vectors is not None:
+                    batch_vectors.append(array)
+                    batch_owners.append(index)
+                    batch_paths.append(path)
                 pending_rows.append(
                     (path, stamp[0], stamp[1], embedder.model_id,
                      int(array.size), array))
@@ -184,6 +196,11 @@ def _build_index(entries, embedder, progress=None, cancel=None,
                 flush_rows()
             if on_ready is not None:
                 on_ready(vectors, owners, paths, snapshot())
+            if on_vectors is not None and batch_vectors:
+                stats = snapshot()
+                # 本批尾部会在 finally 落盘；取消后的暂定统计也应包括这部分。
+                stats["embedded"] += len(pending_rows)
+                on_vectors(batch_vectors, batch_owners, batch_paths, stats)
 
         skipped_paths: list[str] = []
 
@@ -301,34 +318,47 @@ def search(entries, query_path, model_path=None, top_k: int = 30,
     embedder = embedder or ImageEmbedder(model_path)
     query = embedder.embed_query(query_path)
 
-    last_results: list[dict] = []
+    best = np.full(len(entries), -1.0, dtype=np.float32)
+    best_paths = [""] * len(entries)
     last_stats: dict = {}
     last_rank = 0.0
 
-    def on_ready(vectors, owners, paths, stats) -> None:
-        nonlocal last_rank, last_results, last_stats
-        if not vectors:
-            return
-        last_stats = dict(stats)
+    def results() -> list[dict]:
+        return [{"entry": entries[int(i)], "score": float(best[i]),
+                 "image": best_paths[int(i)]}
+                for i in np.argsort(-best)[:top_k] if best[i] >= 0]
+
+    def publish(force=False) -> None:
+        nonlocal last_rank
         now = time.perf_counter()
-        if last_results and now - last_rank < 1.0:
+        if not force and last_rank and now - last_rank < 1.0:
             return
         last_rank = now
-        ranked = _rank(np.vstack(vectors), np.asarray(owners, dtype=np.int32),
-                       paths, entries, query, top_k)
-        last_results = ranked
         if on_partial is not None:
-            snapshot = dict(stats)
+            ranked = results()
+            snapshot = dict(last_stats)
             snapshot["results"] = len(ranked)
             try:
                 on_partial(ranked, snapshot)
             except Exception:  # noqa: BLE001 - 展示回调失败不影响索引
                 pass
 
+    def on_vectors(vectors, owners, paths, stats) -> None:
+        nonlocal last_stats
+        # 只计算新增块，不再复制/重排先前已提取的全部向量。
+        scores = np.stack(vectors) @ np.asarray(query, dtype=np.float32)
+        for owner, path, score in zip(owners, paths, scores):
+            if score > best[owner]:
+                best[owner] = score
+                best_paths[owner] = path
+        last_stats = dict(stats)
+        publish()
+
     try:
-        index = build_index(entries, embedder, progress=progress, cancel=cancel,
-                            on_ready=on_ready)
+        index = _build_index(entries, embedder, progress=progress, cancel=cancel,
+                             keep_vectors=False, on_vectors=on_vectors)
     except SearchCancelled:
+        last_results = results()
         if last_results:
             stats = dict(last_stats)
             stats["results"] = len(last_results)
@@ -338,12 +368,13 @@ def search(entries, query_path, model_path=None, top_k: int = 30,
         raise
 
     _emit(progress, "match", message="正在比对相似度...")
-    results = _rank(index["matrix"], index["owners"], index["paths"],
-                    entries, query, top_k)
     stats = dict(index["stats"])
-    stats["results"] = len(results)
+    last_stats = stats
+    publish(force=True)
+    ranked = results()
+    stats["results"] = len(ranked)
     stats["seconds"] = round(time.perf_counter() - started, 2)
-    return {"results": results, "stats": stats}
+    return {"results": ranked, "stats": stats}
 
 
 def prepare_index(entries, model_path=None, progress=None, cancel=None,

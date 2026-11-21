@@ -56,7 +56,7 @@ class ImageSearchDialog(QDialog):
         self.setStyleSheet(_styles())
         self.setAcceptDrops(True)
 
-        self._entries = list(entries or [])
+        self._entries = tuple(entries or ())
         self._entries_provider = entries_provider
         self._open_detail = open_detail
         self._owner = owner
@@ -355,7 +355,7 @@ class ImageSearchDialog(QDialog):
                 self, "模型未就绪",
                 str(status.get("reason") or "请先下载模型并放入模型目录。"))
             return
-        entries = list(self._entries) if self._entries else None
+        entries = self._entries or None
         provider = self._entries_provider
         model_path = str(status.get("path") or "")
         self._indexing = True
@@ -369,7 +369,7 @@ class ImageSearchDialog(QDialog):
         self.status.setText("正在准备已获取资源清单...")
 
         def work():
-            source = list(entries) if entries is not None else list(provider() or [])
+            source = entries if entries is not None else provider() or []
             if not source:
                 raise RuntimeError("已获取资源清单为空，请先刷新资产页")
             return asset_image_search.prepare_index(
@@ -386,10 +386,11 @@ class ImageSearchDialog(QDialog):
 
     def _finish_index(self, result, err) -> None:
         self._indexing = False
+        if self._closed:
+            self._dispose_when_idle()
+            return
         self.progress.setVisible(False)
         self._sync_run_buttons()
-        if self._closed:
-            return
         if err:
             text = str(err)
             if "已停止" in text:
@@ -434,7 +435,7 @@ class ImageSearchDialog(QDialog):
             top_k = int(load_convert_config().get("image_search_topk", 30) or 30)
         except Exception:  # noqa: BLE001
             top_k = 30
-        entries = list(self._entries) if self._entries else None
+        entries = self._entries or None
         provider = self._entries_provider
         model_path = str(status.get("path") or "")
         query_path = self._query_path
@@ -452,7 +453,7 @@ class ImageSearchDialog(QDialog):
         self.status.setText("正在准备已获取资源清单...")
 
         def work():
-            source = list(entries) if entries is not None else list(provider() or [])
+            source = entries if entries is not None else provider() or []
             if not source:
                 raise RuntimeError("已获取资源清单为空，请先刷新资产页")
             return asset_image_search.search(
@@ -513,10 +514,11 @@ class ImageSearchDialog(QDialog):
 
     def _finish(self, result, err) -> None:
         self._running = False
+        if self._closed:
+            self._dispose_when_idle()
+            return
         self.progress.setVisible(False)
         self._sync_run_buttons()
-        if self._closed:
-            return
         if err:
             text = str(err)
             if "已停止" in text:
@@ -613,4 +615,16 @@ class ImageSearchDialog(QDialog):
         self._closed = True
         self._cancel.set()
         self._index_cancel.set()
+        self._entries = ()
+        self._entries_provider = None
+        self._open_detail = None
+        self._thumb_cache.clear()
+        self.table.setRowCount(0)
+        self.preview.clear()
         super().done(result)
+        self._dispose_when_idle()
+
+    def _dispose_when_idle(self):
+        # worker/已排队的回调可能还持有此对象，先等正常取消收尾再销毁 Qt 子树。
+        if self._closed and not self._running and not self._indexing:
+            self.deleteLater()

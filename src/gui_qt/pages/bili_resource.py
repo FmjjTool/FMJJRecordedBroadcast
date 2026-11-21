@@ -63,3 +63,7 @@ class BiliResourcePage(BasePage):
     def show_garb(self, act_id: str):
         """表情包 tab 命中收藏集 ID 时切到「收藏集」tab 并加载活动。"""
         self.garb_page.open_act(act_id)
+
+    def on_hide(self):
+        # 平铺子页没有 Qt parent，显式转发预览缓存的收尾。
+        self.emoji_page.on_hide()

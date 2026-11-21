@@ -20,10 +20,11 @@ import os
 import random
 import re
 import time
-from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from toolbox.memory_cache import ByteLRU
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -402,7 +403,8 @@ class BackgroundProvider:
     def __init__(self, folder: Optional[Path]):
         self.folder = Path(folder) if folder else None
         self.files: List[Path] = []
-        self._scaled_cache: "OrderedDict[Tuple[str, int, int, str], QImage]" = OrderedDict()
+        self._scaled_cache = ByteLRU(64 * 1024 * 1024,
+                                     size_of=lambda img: img.sizeInBytes(), max_items=8)
         self._original: Optional[QImage] = None
         self._original_path: Optional[str] = None
         self._last_pick: Optional[Path] = None
@@ -417,8 +419,13 @@ class BackgroundProvider:
                     if Path(name).suffix.lstrip(".").lower() in exts:
                         files.append(Path(root) / name)
         self.files = files
-        self._scaled_cache.clear()
+        self.clear_memory()
         return len(files)
+
+    def clear_memory(self):
+        self._scaled_cache.clear()
+        self._original = None
+        self._original_path = None
 
     def set_folder(self, folder: Path) -> int:
         self.folder = Path(folder)
@@ -440,8 +447,11 @@ class BackgroundProvider:
         img = QImage(key)
         if img.isNull() or img.width() <= 0 or img.height() <= 0:
             return None
-        self._original = img
-        self._original_path = key
+        if img.sizeInBytes() <= 64 * 1024 * 1024:
+            self._original = img
+            self._original_path = key
+        else:
+            self._original = self._original_path = None
         return img
 
     def scaled_background(self, path: Path, w: int, h: int, mode: str) -> Optional[QImage]:
@@ -457,8 +467,6 @@ class BackgroundProvider:
                   else Qt.AspectRatioMode.KeepAspectRatio)
         scaled = original.scaled(w, h, aspect, Qt.TransformationMode.SmoothTransformation)
         self._scaled_cache[key] = scaled
-        while len(self._scaled_cache) > 8:
-            self._scaled_cache.popitem(last=False)
         return scaled
 
 
@@ -1386,6 +1394,18 @@ class CoverMakerPage(BasePage):
             panel._refresh_color_icon()
         self.preview.update()
 
+    def on_hide(self):
+        self._debounce.stop()
+        self.provider.clear_memory()
+        self.cached_export_image = None
+        self.preview.set_canvas(QImage(), {}, {})
+        self._preview_released = True
+
+    def on_show(self):
+        if getattr(self, "_preview_released", False):
+            self._preview_released = False
+            self._render_preview()
+
     @staticmethod
     def _caption(text: str) -> QLabel:
         label = QLabel(text)
@@ -1841,7 +1861,6 @@ class CoverMakerPage(BasePage):
         bg = self._current_bg(w, h)
         image, _geoms = render_cover(w, h, bg, self.fit_mode, self.states,
                                      self.y_shift)
-        self.cached_export_image = image
         return image
 
     def _export_image(self, fmt: str) -> Optional[Path]:

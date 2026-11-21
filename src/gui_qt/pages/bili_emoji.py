@@ -19,6 +19,8 @@ from bili import api
 from bili.links import parse_link
 from bili.download import DownloadTask
 from toolbox.config_manager import get_export_dir
+from toolbox.image_fetch import fetch_thumbnail
+from toolbox.memory_cache import ByteLRU
 from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
@@ -166,7 +168,7 @@ class BiliEmojiPage(BasePage):
         self._all_filtered = []        # 过滤后
         self._all_shown = 0            # 已渲染行数（懒加载）
         self._thumb_gen: dict[QTableWidget, int] = {}  # 每表格缩略图批次（防串台）
-        self._thumb_cache: dict[str, bytes] = {}       # URL → 图片bytes（懒加载重建表格不重复下载）
+        self._thumb_cache = ByteLRU(16 * 1024 * 1024, max_items=256)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         self.tabs = QTabWidget()
@@ -202,11 +204,15 @@ class BiliEmojiPage(BasePage):
                     seen.add(u)
                     todo.append((i, u))
             for i, u in todo:
+                if gen != self._thumb_gen.get(table):
+                    break
                 try:
-                    r = httpx.get(u, timeout=10, headers=_THUMB_HEADERS, follow_redirects=True)
-                    if r.status_code == 200 and r.content:
-                        cache[u] = r.content
-                        hits.append((i, r.content))
+                    data = fetch_thumbnail(u, (THUMB_SIZE, THUMB_SIZE), timeout=10,
+                                           user_agent=_THUMB_HEADERS["User-Agent"],
+                                           referer=_THUMB_HEADERS["Referer"])
+                    if gen == self._thumb_gen.get(table):
+                        cache[u] = data
+                        hits.append((i, data))
                 except Exception:
                     continue
             return hits
@@ -224,6 +230,11 @@ class BiliEmojiPage(BasePage):
                                                Qt.KeepAspectRatio, Qt.SmoothTransformation)))
 
         run_bg(job, done)
+
+    def on_hide(self):
+        for table in self._thumb_gen:
+            self._thumb_gen[table] += 1
+        self._thumb_cache.clear()
 
     # ---------- 表情包（全部搜索 + 按ID / 装扮表情包） ----------
     def _build_emoji_tab(self):
