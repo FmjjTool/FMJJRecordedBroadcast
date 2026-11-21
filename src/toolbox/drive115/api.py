@@ -20,6 +20,10 @@
 已知限制：
 
 - 下载直链与请求 UA 绑定，`download_headers()` 必须与申请直链时用同一个 UA；
+- 115 的下载 CDN 对 `Origin` / UA 挑剔：请求头里不发 `Origin`，首次取链后用
+  「Range: bytes=0-0」探活；被 401/403 就换 `115Browser` UA 重新申请一次，
+  仍然失败时把 CDN 返回的状态码与响应片段带进错误（不再只报「直链失效」）；
+- 下载还需要 Cookie 里的 `KID`（登录页会种下）；缺 KID 时探活失败会在错误里点明；
 - 删除要 `fid + pid` 成对提交，pid 取自列目录时的缓存（没列过的 fid 退回根目录，
   115 会拒绝，返回 False 而不是静默成功）；
 - 非会员限速是服务端策略，本客户端不做任何绕过；
@@ -42,6 +46,9 @@ PAGE_SIZE = 1150
 TIMEOUT = 60
 DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+# 115 的下载 CDN 对 UA 有偏好：普通 Chrome UA 被 403 时，用带 115Browser 的 UA
+# 重新申请一次直链（UA 与直链绑定，换 UA 必须连申请一起换）
+FALLBACK_UA = DEFAULT_UA + " 115Browser/27.0.3.7"
 
 _AUTH_HINTS = ("登录", "登入", "授权", "认证", "token", "sign")
 
@@ -100,14 +107,18 @@ class Drive115Client:
             "Cookie": self.cookie,
             "User-Agent": self.user_agent,
             "Referer": REFERER,
-            "Origin": "https://115.com",
             "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            # 故意不设 Origin：115 的下载 CDN 对带 Origin 的 GET 会按跨域请求处理并 403
         })
         self._dir_cache: dict[str, str] = {"": ROOT_ID, "/": ROOT_ID}
         self._pid_of: dict[str, str] = {}
         self._index_cache: dict[str, dict] = {}
         self._digest_cache: dict[tuple, tuple[str, str]] = {}
         self._user_id = ""
+        # 直链探活只做一次：记录最终可用的 UA 与拒绝原因
+        self._download_probed = False
+        self.has_kid = "KID=" in self.cookie
 
     # ==================== 基础 ====================
 
@@ -265,21 +276,83 @@ class Drive115Client:
 
     # ==================== 下载 ====================
 
+    def _fetch_link(self, pick: str) -> str:
+        """按 pickcode 申请一次直链。"""
+        payload = self._request("GET", "/files/download", params={
+            "pickcode": pick, "_": int(time.time() * 1000)})
+        url = str(payload.get("file_url") or "")
+        if not url:
+            data = payload.get("data")
+            nested = data if isinstance(data, dict) else {}
+            url = str(nested.get("file_url") or nested.get("url") or "")
+        if not url:
+            raise Drive115Error(-1, "未取到下载直链", "/files/download")
+        return url
+
+    def _probe_link(self, url: str) -> tuple[bool, str]:
+        """用真正下载时的请求头要 1 个字节，提前发现 CDN 的 401/403。
+
+        返回 (是否可用, 拒绝原因)。网络错误不当作拒绝，交给下载引擎重试。
+        """
+        headers = self.download_headers()
+        headers["Range"] = "bytes=0-0"
+        try:
+            resp = self.session.get(url, headers=headers, stream=True,
+                                    allow_redirects=True, timeout=(15, 30))
+        except (requests.RequestException, OSError) as exc:
+            return True, f"探活未完成（{exc}）"
+        try:
+            if resp.status_code in (200, 206):
+                return True, ""
+            detail = f"HTTP {resp.status_code}"
+            try:
+                body = resp.raw.read(200, decode_content=True) or b""
+                text = body.decode("utf-8", "replace").strip()
+            except Exception:  # noqa: BLE001 - 读取错误体失败不影响判定
+                text = ""
+            if text:
+                detail += f" {text[:180]}"
+            return False, detail
+        finally:
+            resp.close()
+
     def download_links(self, pickcodes: list[str]) -> dict[str, str]:
-        """按 pickcode 取直链；返回 `{pickcode: url}`。"""
+        """按 pickcode 取直链；返回 `{pickcode: url}`。
+
+        115 的 CDN 对 UA / Origin 很挑：第一次取链后先用真实下载头探活，
+        被 403 就换成带 115Browser 的 UA 重新申请一次（直链与 UA 绑定，
+        必须连申请一起换）。两种都失败时把 CDN 返回的原因带进错误里。
+        """
         links: dict[str, str] = {}
         for pick in [str(p) for p in pickcodes if p]:
-            payload = self._request("GET", "/files/download", params={
-                "pickcode": pick, "_": int(time.time() * 1000)})
-            url = str(payload.get("file_url") or "")
-            if not url:
-                data = payload.get("data")
-                nested = data if isinstance(data, dict) else {}
-                url = str(nested.get("file_url") or nested.get("url") or "")
-            if url:
-                links[pick] = url
+            links[pick] = self._fetch_link(pick)
         if not links:
             raise Drive115Error(-1, "未取到下载直链", "/files/download")
+
+        if not self._download_probed:
+            self._download_probed = True
+            first = next(iter(links))
+            ok, detail = self._probe_link(links[first])
+            if not ok:
+                saved = self.user_agent
+                retry_ok, retry_detail = False, ""
+                self.user_agent = FALLBACK_UA
+                self.session.headers["User-Agent"] = FALLBACK_UA
+                try:
+                    retry_url = self._fetch_link(first)
+                    retry_ok, retry_detail = self._probe_link(retry_url)
+                    if retry_ok:
+                        links[first] = retry_url
+                except Drive115Error as exc:
+                    retry_detail = str(exc)
+                if not retry_ok:
+                    self.user_agent = saved
+                    self.session.headers["User-Agent"] = saved
+                    hint = ("" if self.has_kid else
+                            "；当前登录里没有 KID，可能需要在 115 页面重新登录一次")
+                    raise Drive115Error(
+                        -1, f"115 拒绝下载直链（{detail}；换 115Browser UA 仍失败："
+                            f"{retry_detail or '无响应'}）{hint}", "/files/download")
         return links
 
     def download_headers(self) -> dict:
