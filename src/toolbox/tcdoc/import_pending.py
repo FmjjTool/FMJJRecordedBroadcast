@@ -471,6 +471,25 @@ SONG_CHOICE_FIELDS = ("语言", "合唱形式")
 SONG_DATE_FIELDS = ("首发日期",)
 
 
+def _remark_plan(columns: dict, fields: list[dict], skipped: dict):
+    """目标表有「备注信息」文本列时，返回 (写入值, 字段类型)；没有则返回 (None, None)。
+
+    任何程序写入（批量/单行/自动推送）都会调用它把
+    「自动推送程序上传+北京时间」追加到已有备注后面；表里没这一列就静默跳过
+    （不拦下整条记录、也不改表结构），字段存在但不是文本类型时记一笔原因。
+    """
+    hits = [f for f in fields if f.get("fieldTitle") == bridge.REMARK_COLUMN]
+    if len(hits) != 1:
+        # 目标表没有备注列（如官方动态）：静默跳过，不新增字段、不影响其它列
+        return None, None
+    field = hits[0]
+    if int(field.get("fieldType") or 0) != 1:
+        skipped[bridge.REMARK_COLUMN] = "备注字段不是文本类型"
+        return None, None
+    text = bridge.append_auto_remark(columns.get(bridge.REMARK_COLUMN))
+    return [{"type": "text", "text": text}], 1
+
+
 def make_song_plan(record: dict, fields: list[dict]):
     """完整歌曲字段计划：只写明确支持的文本/日期/单选/链接/封面字段。"""
     columns = record["columns"]
@@ -519,6 +538,11 @@ def make_song_plan(record: dict, fields: list[dict]):
         values[field["fieldTitle"]] = encoded
         kinds[field["fieldTitle"]] = kind
 
+    remark, remark_kind = _remark_plan(columns, fields, skipped)
+    if remark is not None:
+        values[bridge.REMARK_COLUMN] = remark
+        kinds[bridge.REMARK_COLUMN] = remark_kind
+
     if record.get("_images"):
         field = unique("封面图")
         if field.get("fieldType") != 5:
@@ -528,6 +552,218 @@ def make_song_plan(record: dict, fields: list[dict]):
     if "歌曲名称" not in values:
         raise ImportErrorDetail("必需字段无法写入：歌曲名称")
     return values, kinds, skipped
+
+
+# ==================== 线下活动 / 周边图鉴：仅新增写回 ====================
+# 两张表按用户 2026-11-21 的授权只开放「新增」，不修改、不删除已有行；
+# 图片列仍走「复制全部图片」手工补，程序只写文本/日期/链接/下拉与备注。
+
+CANDIDATE_FIELDS = {
+    "events": {
+        "title": "活动名称",
+        "text": ("活动名称", "城市", "场馆名称", "票档价格"),
+        "date": ("活动日期",),
+        "choice": ("年份", "活动状态", "活动类型", "舞台环节", "签售环节"),
+        "link": ("购票链接 1",),
+        "required": ("活动名称",),
+    },
+    "merch": {
+        "title": "周边名称",
+        "text": ("周边名称", "来源渠道"),
+        "date": ("首发日期",),
+        "choice": ("获取方式",),
+        "link": (),
+        "required": ("周边名称",),
+    },
+}
+
+
+def _date_ms(value: str):
+    """YYYY-MM-DD → 腾讯日期列要求的毫秒时间戳；无法识别返回原因。"""
+    day = str(value or "")[:10]
+    if not day:
+        return None, "日期为空"
+    try:
+        moment = datetime.fromisoformat(day)
+    except ValueError:
+        return None, "日期无法识别"
+    moment = (moment.replace(tzinfo=BEIJING)
+              if moment.tzinfo is None else moment.astimezone(BEIJING))
+    return str(int(moment.timestamp() * 1000)), None
+
+
+def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events"):
+    """线下活动 / 周边图鉴字段计划：只写明确支持的列，不新建下拉选项、不碰图片列。"""
+    spec = CANDIDATE_FIELDS.get(profile) or CANDIDATE_FIELDS["events"]
+    columns = record.get("columns") or {}
+    by_title: dict[str, list[dict]] = {}
+    for field in fields:
+        by_title.setdefault(str(field.get("fieldTitle") or ""), []).append(field)
+
+    def one(name: str):
+        hits = by_title.get(name) or []
+        return hits[0] if len(hits) == 1 else None
+
+    values, kinds, skipped = {}, {}, {}
+    for name in spec["text"]:
+        value = str(columns.get(name) or "").strip()
+        if not value:
+            continue
+        field = one(name)
+        if field is None:
+            skipped[name] = "目标缺少字段"
+            continue
+        kind = int(field.get("fieldType") or 1)
+        if kind == 1:
+            values[name] = [{"type": "text", "text": value}]
+            kinds[name] = kind
+        else:
+            skipped[name] = "字段类型不匹配"
+
+    for name in spec["date"]:
+        value = str(columns.get(name) or "").strip()
+        if not value:
+            continue
+        field = one(name)
+        if field is None:
+            skipped[name] = "目标缺少字段"
+            continue
+        kind = int(field.get("fieldType") or 1)
+        if kind == 4:
+            encoded, why = _date_ms(value)
+            if why:
+                skipped[name] = why
+                continue
+            values[name] = encoded
+            kinds[name] = kind
+        elif kind == 1:
+            values[name] = [{"type": "text", "text": value}]
+            kinds[name] = kind
+        else:
+            skipped[name] = "字段类型不匹配"
+
+    for name in spec["choice"]:
+        value = str(columns.get(name) or "").strip()
+        if not value:
+            continue
+        field = one(name)
+        if field is None:
+            skipped[name] = "目标缺少字段"
+            continue
+        kind = int(field.get("fieldType") or 1)
+        if kind not in {9, 17}:
+            skipped[name] = "字段不是单选类型"
+            continue
+        options = [o for o in field_options(field)
+                   if o.get("text") == value and o.get("id")]
+        if len(options) != 1:
+            skipped[name] = "没有匹配的既有选项"
+            continue
+        values[name] = options
+        kinds[name] = kind
+
+    for name in spec["link"]:
+        value = str(columns.get(name) or "").strip()
+        if not value:
+            continue
+        field = one(name)
+        if field is None:
+            skipped[name] = "目标缺少字段"
+            continue
+        kind = int(field.get("fieldType") or 1)
+        if kind == 8:
+            parts = urlsplit(value)
+            if parts.scheme not in {"http", "https"} or not parts.hostname:
+                skipped[name] = "链接无法识别"
+                continue
+            values[name] = [{"type": "url", "text": value, "link": value}]
+            kinds[name] = kind
+        elif kind == 1:
+            values[name] = [{"type": "text", "text": value}]
+            kinds[name] = kind
+        else:
+            skipped[name] = "字段类型不匹配"
+
+    remark, remark_kind = _remark_plan(columns, fields, skipped)
+    if remark is not None:
+        values[bridge.REMARK_COLUMN] = remark
+        kinds[bridge.REMARK_COLUMN] = remark_kind
+
+    for required in spec["required"]:
+        if required not in values:
+            raise ImportErrorDetail(f"必需字段无法写入：{required}")
+    return values, kinds, skipped
+
+
+def _candidate_columns(row: dict) -> dict:
+    """候选行 → 表格列字典；下划线开头的内部字段不参与写入。"""
+    return {str(key): ("" if value is None else str(value))
+            for key, value in (row or {}).items() if not str(key).startswith("_")}
+
+
+def event_key(columns: dict) -> str:
+    return "event:" + bridge._song_title_key(columns.get("活动名称"))
+
+
+def merch_key(columns: dict) -> str:
+    return "merch:" + bridge._song_title_key(columns.get("周边名称"))
+
+
+def _candidate_record(columns: dict, key: str, title: str, account: str,
+                      platform: str, day: str) -> dict:
+    return {"key": key, "title": title, "account": account, "platform": platform,
+            "time": day, "columns": columns, "images": [], "expected_images": 0,
+            "missing_slots": [], "_images": []}
+
+
+def event_records_from_rows(rows: list[dict]) -> list[dict]:
+    """线下活动候选行 → 可上传记录（图片不随程序上传）。"""
+    records = []
+    for row in rows:
+        columns = _candidate_columns(row)
+        name = str(columns.get("活动名称") or "").strip()
+        if not name:
+            continue
+        records.append(_candidate_record(
+            columns, event_key(columns), name,
+            str(columns.get("城市") or columns.get("活动类型") or ""),
+            "线下活动", str(columns.get("活动日期") or "")))
+    return records
+
+
+def merch_records_from_rows(rows: list[dict]) -> list[dict]:
+    """周边图鉴候选行 → 可上传记录（图片不随程序上传）。"""
+    records = []
+    for row in rows:
+        columns = _candidate_columns(row)
+        name = str(columns.get("周边名称") or "").strip()
+        if not name:
+            continue
+        records.append(_candidate_record(
+            columns, merch_key(columns), name,
+            str(columns.get("来源渠道") or ""), "周边图鉴",
+            str(columns.get("首发日期") or "")))
+    return records
+
+
+def event_remote_keys(rows: list[dict]) -> set[str]:
+    keys = set()
+    for row in rows:
+        name = bridge._song_title_key(
+            _live_cell_text((row.get("values") or {}).get("活动名称")))
+        if name:
+            keys.add("event:" + name)
+    return keys
+
+
+def merch_remote_keys(rows: list[dict]) -> set[str]:
+    keys = set()
+    for row in rows:
+        name = bridge._song_title_key(
+            _live_cell_text((row.get("values") or {}).get("周边名称")))
+        if name:
+            keys.add("merch:" + name)
+    return keys
 
 
 def song_remote_keys(rows: list[dict]) -> dict[str, list]:
@@ -662,6 +898,10 @@ def make_live_plan(record: dict, fields: list[dict], available_only=True):
             kinds[title] = kind
             continue
         skipped[name] = "字段类型不匹配"
+    remark, remark_kind = _remark_plan(record, fields, skipped)
+    if remark is not None:
+        values[bridge.REMARK_COLUMN] = remark
+        kinds[bridge.REMARK_COLUMN] = remark_kind
     for required in LIVE_REQUIRED_FIELDS:
         if required not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
@@ -820,6 +1060,10 @@ def make_plan(record: dict, fields: list[dict], available_only=False,
             continue
         values[title] = encoded
         kinds[title] = kind
+    remark, remark_kind = _remark_plan(columns, fields, skipped)
+    if remark is not None:
+        values[bridge.REMARK_COLUMN] = remark
+        kinds[bridge.REMARK_COLUMN] = remark_kind
     for required in ("作品标题", "作品内容", "发布时间"):
         if required not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
@@ -872,6 +1116,11 @@ def remote_keys(rows: list[dict]):
     return keys
 
 
+def _plain_text(value) -> str:
+    """读回核对用：忽略空白差异（备注换行、表格自动补空格不算不一致）。"""
+    return re.sub(r"\s+", "", str(value or ""))
+
+
 def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage]):
     saved, checks = row.get("values") or {}, {}
     for title, kind in kinds.items():
@@ -883,7 +1132,10 @@ def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage]):
                 checks[title] = ([i.get("title") for i in entries] == [i.upload_name for i in images] and
                                  len({i.get("id") for i in entries if i.get("id")}) == len(images))
         elif kind == 1:
-            checks[title] = "".join(str(i.get("text") or "") for i in actual or [] if isinstance(i, dict)) == expected[0]["text"]
+            actual_text = "".join(str(i.get("text") or "") for i in actual or [] if isinstance(i, dict))
+            target = ((expected or [{}])[0].get("text")
+                      if isinstance(expected, list) else expected)
+            checks[title] = _plain_text(actual_text) == _plain_text(target)
         elif kind == 8:
             checks[title] = isinstance(actual, list) and any(i.get("link") == expected[0]["link"] for i in actual if isinstance(i, dict))
         elif kind == 4:
@@ -1007,12 +1259,21 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     fields = client.get_fields()
     if profile == "songs":
         plans = [(record, *make_song_plan(record, fields)) for record in records]
+    elif profile in ("events", "merch"):
+        plans = [(record, *make_candidate_plan(record, fields, profile))
+                 for record in records]
     else:
         plans = [(record, *make_plan(record, fields, available_only, allow_new_options))
                  for record in records]
     before = client.get_records()
-    known = ({"song:" + key for key in song_remote_keys(before)}
-             if profile == "songs" else set(remote_keys(before)))
+    if profile == "songs":
+        known = {"song:" + key for key in song_remote_keys(before)}
+    elif profile == "events":
+        known = event_remote_keys(before)
+    elif profile == "merch":
+        known = merch_remote_keys(before)
+    else:
+        known = set(remote_keys(before))
     emit({"phase": "preview", "apply": apply, "doc_key": client.doc_key, "tab_id": client.tab_id,
           "records": [{"key": r["key"], "title": _record_title(r), "images": len(r["_images"]),
                        "missing_images": len(r["missing_slots"]), "skipped_fields": skipped,
@@ -1075,9 +1336,13 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
         counts = (count_song_title_keys(fresh) if profile == "songs"
                   else count_remote_keys(fresh))
         for added, values, kinds, images in pending_verify:
-            # 同一原帖链接/歌曲名在表里出现多次 = 之前已存在或被并发写入，标记出来
-            lookup = added["key"][5:] if profile == "songs" else added["key"]
-            added["duplicate"] = counts.get(lookup, 0) > 1
+            if profile in ("events", "merch"):
+                # 候选表只给「新增」授权，重复性由名称键在上方 already-skip 判断
+                added["duplicate"] = False
+                lookup = ""
+            else:
+                lookup = added["key"][5:] if profile == "songs" else added["key"]
+                added["duplicate"] = counts.get(lookup, 0) > 1
             saved = saved_by_id.get(str(added["record_id"]))
             if saved is None:
                 emit({"phase": "readback", **added})

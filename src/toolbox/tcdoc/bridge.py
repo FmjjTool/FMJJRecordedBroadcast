@@ -16,7 +16,7 @@ import sqlite3
 import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, is_dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -36,6 +36,33 @@ CN_TO_PLATFORM = {"bilibili": "bilibili", "b站": "bilibili",
 
 REQUIRED_COLUMNS = ("作品标题", "发布时间", "发布平台", "发布账号")
 LINK_COLUMNS = ("作品链接", "动态链接(b站)")
+
+# ==================== 自动推送备注 ====================
+# 程序写入腾讯文档（批量上传 / 单行上传 / 定时自动推送）新增的行，都要在
+# 「备注信息」列留一句来源说明，便于和人工录入的行区分。表里没有该列时跳过，
+# 不新增字段、不改表结构。
+BEIJING_TZ = timezone(timedelta(hours=8))
+REMARK_COLUMN = "备注信息"
+AUTO_REMARK_PREFIX = "自动推送程序上传"
+
+
+def auto_remark(now=None) -> str:
+    """备注文本：「自动推送程序上传」+ 北京时间（到秒）。"""
+    moment = now or datetime.now(BEIJING_TZ)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=BEIJING_TZ)
+    return f"{AUTO_REMARK_PREFIX}{moment.astimezone(BEIJING_TZ):%Y-%m-%d %H:%M:%S}"
+
+
+def append_auto_remark(text, now=None) -> str:
+    """已有备注保留，另起一行追加本次来源说明（同一时间戳不重复追加）。"""
+    mark = auto_remark(now)
+    base = str(text or "").strip()
+    if not base:
+        return mark
+    if mark in base:
+        return base
+    return f"{base}\n{mark}"
 
 # 完整歌曲：只比对/新增，不改不删；本地来源是「音乐信息」页导出结果
 SONG_DOC_KEY = "DRnd3bkhkQUR1aEJr"
@@ -610,9 +637,9 @@ def build_song_pending(root: Path | None = None) -> dict:
     }
 
 
-# ==================== 线下活动 / 周边图鉴：只读候选比对 ====================
-# 两张表均不在 tcdoc-sync-scope 白名单内：这里只生成候选并比对本地快照，
-# 不调用任何写回接口；上传入口由 import_local.validate_target 拦截。
+# ==================== 线下活动 / 周边图鉴：候选比对 + 仅新增写回 ====================
+# 两张表按用户 2026-11-21 授权只开放「仅新增」：候选仍只比对本地快照，
+# 上传由 import_pending.make_candidate_plan 构造，不改、不删已有行。
 
 EVENT_TAB_ID = "ss_e1kkm2"
 MERCH_TAB_ID = "ss_ekd4cz"

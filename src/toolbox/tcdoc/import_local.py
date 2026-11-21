@@ -37,6 +37,8 @@ OFFICIAL_DOC = "DRnd3bkhkQUR1aEJr"
 OFFICIAL_TABS = frozenset({"ss_h2uh2s", "ss_1xgstm"})
 # 完整歌曲仅按用户明确授权的「只新增、不改不删」开放；更新/删除入口不存在。
 SONG_TABS = frozenset({"ss_ktwk0t"})
+# 线下活动 / 周边图鉴：用户 2026-11-21 授权「仅新增」，同样不提供修改与删除。
+CANDIDATE_TABS = frozenset({"ss_e1kkm2", "ss_ekd4cz"})
 TEST_TARGET = ("DRmFHc1dLcnBvbmtB", "ss_q4fwq4")
 BEIJING = timezone(timedelta(hours=8))
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 脚本的内存限额，不代表服务端限额
@@ -59,7 +61,7 @@ class UnknownWriteResult(ImportErrorDetail):
 
 
 def validate_target(doc_key: str, tab_id: str, allow_test: bool = False) -> None:
-    if doc_key == OFFICIAL_DOC and tab_id in OFFICIAL_TABS | SONG_TABS:
+    if doc_key == OFFICIAL_DOC and tab_id in OFFICIAL_TABS | SONG_TABS | CANDIDATE_TABS:
         return
     if allow_test and (doc_key, tab_id) == TEST_TARGET:
         return

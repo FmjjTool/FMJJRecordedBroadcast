@@ -235,9 +235,14 @@ class _UploadDialog(QDialog):
         if profile == "songs":
             note = ("默认全选；取消勾选可跳过某些歌曲。上传会新增歌曲记录并上传封面图，"
                     "同名歌曲会自动跳过，不会修改或删除表内已有行。")
+        elif profile in ("events", "merch"):
+            note = ("默认全选；取消勾选可跳过某些行。上传只新增候选记录（不改不删），"
+                    "图片列不随程序上传，可先用「复制全部图片」补；"
+                    "备注信息会追加「自动推送程序上传+当前时间」。")
         else:
             note = ("默认全选；取消勾选可跳过某些行。上传会新增记录并把本地图片一起传到腾讯文档，"
-                    "链接已存在的记录会自动跳过，不会修改或删除表内已有行。")
+                    "已存在的记录会自动跳过，不会修改或删除表内已有行；"
+                    "备注信息会追加「自动推送程序上传+当前时间」。")
         tip = QLabel(note)
         tip.setWordWrap(True)
         tip.setStyleSheet("color: #888;")
@@ -268,7 +273,7 @@ class _UploadDialog(QDialog):
 
         self.fetch_box = QCheckBox("缺图时尝试在线补图（下载到本地缓存后再上传）")
         self.fetch_box.setChecked(True)
-        self.fetch_box.setVisible(self._profile != "songs")
+        self.fetch_box.setVisible(self._profile not in ("songs", "events", "merch"))
         layout.addWidget(self.fetch_box)
 
         row = QHBoxLayout()
@@ -311,10 +316,15 @@ class _UploadDialog(QDialog):
             note += f"（缺 {len(record['missing_slots'])}）"
         if blocked:
             note += " · 不可上传"
-        texts = [str(record.get("title") or columns.get("作品标题") or columns.get("歌曲名称") or ""),
-                 str(record.get("account") or columns.get("发布账号") or columns.get("演唱者") or ""),
+        texts = [str(record.get("title") or columns.get("作品标题")
+                     or columns.get("歌曲名称") or columns.get("活动名称")
+                     or columns.get("周边名称") or ""),
+                 str(record.get("account") or columns.get("发布账号")
+                     or columns.get("演唱者") or columns.get("城市")
+                     or columns.get("来源渠道") or ""),
                  str(record.get("platform") or columns.get("发布平台") or ""),
-                 str(record.get("time") or columns.get("发布时间") or columns.get("首发日期") or ""),
+                 str(record.get("time") or columns.get("发布时间")
+                     or columns.get("首发日期") or columns.get("活动日期") or ""),
                  note]
         for index, text in enumerate(texts, start=1):
             item = QTableWidgetItem(text.replace("\n", " ")[:160])
@@ -1251,7 +1261,7 @@ class TcDocBridgePanel(QWidget):
             self.status.setText("刷新任务未启动，请重试")
 
     def _upload_target_ok(self) -> bool:
-        """只允许白名单里的官方动态 / 直播记录，测试表与其它文档一律拒绝。"""
+        """只允许白名单里的表（官方动态 / 直播记录 / 完整歌曲 / 线下活动 / 周边图鉴）。"""
         target = self.target_combo.currentData()
         if not target:
             return False
@@ -1276,6 +1286,10 @@ class TcDocBridgePanel(QWidget):
         missing = []
         if profile == "songs":
             records = pending.song_records_from_rows(pending.ROOT, rows)
+        elif profile in ("events", "merch"):
+            builder = (pending.event_records_from_rows if profile == "events"
+                       else pending.merch_records_from_rows)
+            records = builder(rows)
         else:
             sources = bridge.collect_local_items(days, collected)
             catalogue = pending.build_catalogue(pending.ROOT, sources)
@@ -1294,6 +1308,8 @@ class TcDocBridgePanel(QWidget):
             try:
                 if profile == "songs":
                     pending.make_song_plan(record, fields)
+                elif profile in ("events", "merch"):
+                    pending.make_candidate_plan(record, fields, profile)
                 else:
                     # 新名字（如新 UP 主）不在这里拦下：留到上传前统一确认是否新建选项
                     pending.make_plan(record, fields, available_only=False,
@@ -1301,7 +1317,7 @@ class TcDocBridgePanel(QWidget):
             except pending.ImportErrorDetail as exc:
                 record["blocked"] = str(exc)
         new_options = {}
-        if profile != "songs":
+        if profile == "posts":
             new_options = pending.new_choice_options(
                 [r for r in records if not r.get("blocked")], fields)
         return {"records": records, "new_options": new_options, "missing": missing}
@@ -1322,8 +1338,9 @@ class TcDocBridgePanel(QWidget):
         if not self._upload_target_ok():
             QMessageBox.warning(
                 self, "范围限制",
-                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」，"
-                "或「完整歌曲」（完整歌曲仅新增，不改不删）。")
+                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」"
+                "「完整歌曲」「线下活动」「周边图鉴」；后三张表及候选表只允许"
+                "新增，不改不删。")
             return
         rows = list((self._result or {}).get("rows") or [])
         if not rows:
@@ -1950,8 +1967,9 @@ class TcDocBridgePanel(QWidget):
         self.status.setText(
             "只读比对：点「复制全部（TSV）」到直播记录表末尾粘贴；直播链接1 填 B 站投稿回放"
             "（按录制日期 + 平台匹配，同一天取开播时间最近的一条，没有投稿就留空）；"
-            "直播时长 / 直播距今是公式列，不写；AI 摘要 / 截图 / 标签 / 备注 / 初编 / 终编属人工列，"
-            "任何模式都不会覆盖。")
+            "直播时长 / 直播距今是公式列，不写；AI 摘要 / 截图 / 标签 / 初编 / 终编属人工列，"
+            "任何模式都不会覆盖；新增行的「备注信息」会追加「自动推送程序上传+当前时间」，"
+            "表里已有行不改。")
         if stats.get("duplicates") and str(stats.get("mode")) == "skip":
             self.status.setText(
                 self.status.text()
@@ -2067,8 +2085,10 @@ class TcDocBridgePanel(QWidget):
                 source_label = {"ticket": "票务解析", "shop": "购物解析"}.get(
                     stats.get("source"), "本地动态")
                 self.status.setText(
-                    f"共 {len(result['rows'])} 行候选（只读预览）：由{source_label}自动识别，"
-                    "请人工核对；该表不在写回白名单，未开放上传，可复制 TSV 后手工粘贴。")
+                    f"共 {len(result['rows'])} 行候选：由{source_label}自动识别，"
+                    "请人工核对；可点「上传到腾讯文档」仅新增（不改不删），"
+                    "图片随后用「复制全部图片」补；备注信息会追加"
+                    "「自动推送程序上传+当前时间」。")
             else:
                 self.status.setText(
                     f"共 {len(result['rows'])} 行待同步（不含表头；"
@@ -2078,7 +2098,7 @@ class TcDocBridgePanel(QWidget):
         else:
             hint = ("已同步 {synced} 首歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
                     if profile == "songs" else
-                    "只读预览，未写入腾讯文档；本地没有新的候选。"
+                    "本地没有新的候选；可先同步一次腾讯表格再重新比对。"
                     if profile in ("events", "merch") else
                     "已同步 {synced} 个作品；如果刚上传过，请先同步一次腾讯表格再比对。")
             self._set_empty(
@@ -2089,7 +2109,7 @@ class TcDocBridgePanel(QWidget):
             self.status.setText(
                 "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
                 if profile == "songs" else
-                "没有待补候选；只读预览，未写入腾讯文档。"
+                "没有待补候选；可先同步一次腾讯表格再重新比对。"
                 if profile in ("events", "merch") else
                 "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
         self._show_table()
@@ -2421,9 +2441,9 @@ class TcDocBridgePanel(QWidget):
         if dyn:
             act_dyn = menu.addAction("复制动态链接(b站)")
         act_upload = None
-        # 直播记录走独立的 payload 预演链路（列结构与官方动态不同），这里只开放
-        # 官方动态与完整歌曲的单行上传。
-        if profile in ("posts", "songs") and self._upload_target_ok():
+        # 直播记录走独立的 payload 预演链路（列结构与官方动态不同），这里开放
+        # 官方动态、完整歌曲与两张候选表（线下活动 / 周边图鉴）的单行上传。
+        if profile in ("posts", "songs", "events", "merch") and self._upload_target_ok():
             menu.addSeparator()
             act_upload = menu.addAction("上传这一行到腾讯文档")
             act_upload.setEnabled(not self._busy and not self._uploading)
@@ -2454,13 +2474,15 @@ class TcDocBridgePanel(QWidget):
         rows = list((self._result or {}).get("rows") or [])
         if not target or not (0 <= row_index < len(rows)):
             return
-        if str((self._result or {}).get("profile") or "") not in ("posts", "songs"):
+        if str((self._result or {}).get("profile") or "") not in (
+                "posts", "songs", "events", "merch"):
             return
         if not self._upload_target_ok():
             QMessageBox.warning(
                 self, "范围限制",
-                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」，"
-                "或「完整歌曲」（完整歌曲仅新增，不改不删）。")
+                "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」"
+                "「完整歌曲」「线下活动」「周边图鉴」；后三张表及候选表只允许"
+                "新增，不改不删。")
             return
         from toolbox import sync_refresh
         fresh, why = sync_refresh.is_fresh()
@@ -2504,15 +2526,20 @@ class TcDocBridgePanel(QWidget):
                         or columns.get("歌曲名称") or "")[:60]
             local = len(record.get("_images") or [])
             gaps = len(record.get("missing_slots") or [])
-            image_note = (f"图片：本地 {local} 张，缺 {gaps} 张"
-                          + ("（会先尝试在线补下，补不到留空）" if gaps else ""))
+            profile = str((self._result or {}).get("profile") or "posts")
+            if profile in ("events", "merch"):
+                image_note = "图片：不随程序上传，可先用「复制全部图片」到表格里补"
+            else:
+                image_note = (f"图片：本地 {local} 张，缺 {gaps} 张"
+                              + ("（会先尝试在线补下，补不到留空）" if gaps else ""))
             answer = QMessageBox.question(
                 self, "上传这一行到腾讯文档",
                 f"标题：{title}\n"
-                f"账号：{columns.get('发布账号') or columns.get('演唱者') or ''} · "
-                f"平台：{columns.get('发布平台') or '多平台'}\n"
+                f"账号：{columns.get('发布账号') or columns.get('演唱者') or columns.get('城市') or columns.get('来源渠道') or ''} · "
+                f"平台：{columns.get('发布平台') or record.get('platform') or '多平台'}\n"
                 f"{image_note}\n\n"
-                "只新增这一条，链接已存在会自动跳过；不会修改或删除表内其它行。\n"
+                "只新增这一条，已存在会自动跳过；不会修改或删除表内其它行。\n"
+                "备注信息会追加一行「自动推送程序上传+当前时间」。\n"
                 "是否继续？",
                 QMessageBox.Yes | QMessageBox.No)
             if answer != QMessageBox.Yes:
