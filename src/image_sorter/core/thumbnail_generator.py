@@ -8,6 +8,8 @@
 
 from pathlib import Path
 import os
+import threading
+from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Optional, TYPE_CHECKING
 from PIL import Image
@@ -16,6 +18,10 @@ from PySide6.QtGui import QPixmap, QImage
 from image_sorter.constants import THUMBNAIL_SIZE, SUPPORTED_IMAGE_FORMATS, SUPPORTED_VIDEO_FORMATS
 from image_sorter.core.media_info_extractor import MediaInfoExtractor
 from image_sorter._log import logger
+
+# 大 PNG/实况封面无法在解码阶段缩小；最多一个重解码与其他小图并行。
+_LARGE_IMAGE_DECODE = threading.Semaphore(1)
+_LARGE_IMAGE_PIXELS = 8_000_000
 
 if TYPE_CHECKING:
     from image_sorter.core.cache_manager import CacheManager
@@ -54,23 +60,21 @@ class ThumbnailGenerator:
         try:
             suffix = file_path.suffix.lower()
             if suffix == ".livp":
-                live_cover = MediaInfoExtractor.extract_live_photo_cover(file_path)
-                if live_cover is None:
-                    return None
-                img = live_cover
+                with _LARGE_IMAGE_DECODE:
+                    live_cover = MediaInfoExtractor.extract_live_photo_cover(file_path)
+                    if live_cover is None:
+                        return None
+                    with live_cover:
+                        square = ThumbnailGenerator._make_square(live_cover, THUMBNAIL_SIZE[0])
+                        return ThumbnailGenerator._pil_to_qpixmap(square.convert('RGB'))
             else:
                 with Image.open(file_path) as opened:
-                    img = opened.copy()
-
-            # 转换为RGB模式（处理RGBA等）
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-
-            # 生成1:1正方形缩略图（居中裁剪）
-            square_img = ThumbnailGenerator._make_square(img, THUMBNAIL_SIZE[0])
-
-            # 转换为QPixmap
-            return ThumbnailGenerator._pil_to_qpixmap(square_img)
+                    guard = (_LARGE_IMAGE_DECODE if opened.width * opened.height > _LARGE_IMAGE_PIXELS
+                             else nullcontext())
+                    with guard:
+                        opened.draft('RGB', THUMBNAIL_SIZE)
+                        square = ThumbnailGenerator._make_square(opened, THUMBNAIL_SIZE[0])
+                        return ThumbnailGenerator._pil_to_qpixmap(square.convert('RGB'))
         except Exception as e:
             logger.log_exception(e, f"生成图片缩略图失败: {file_path}")
             return None
@@ -123,13 +127,12 @@ class ThumbnailGenerator:
             right = width
             bottom = top + width
 
-        # 裁剪为正方形
-        square_img = img.crop((left, top, right, bottom))
-
-        # 缩放到目标大小
-        square_img = square_img.resize((size, size), Image.Resampling.LANCZOS)
-
-        return square_img
+        # resize 的源区域避免创建原尺寸正方形副本；转换颜色也推迟到小图。
+        if img.mode in ('1', 'P'):
+            # Pillow 的调色板模式会强制最近邻；先转 RGB 保留原有平滑采样效果。
+            img = img.convert('RGB')
+        return img.resize((size, size), Image.Resampling.LANCZOS,
+                          box=(left, top, right, bottom))
 
     @staticmethod
     def _pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:

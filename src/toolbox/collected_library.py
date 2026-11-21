@@ -20,6 +20,13 @@ _KNOWN = {"douyin", "bilibili", "weibo"}
 def parse_publish(raw):
     raw = str(raw or "").strip()
     if raw:
+        candidate = raw[:19] if " " in raw else raw[:10]
+        if (len(candidate) in (10, 16, 19) and candidate[4:5] == "-"
+                and candidate[7:8] == "-" and (len(candidate) == 10 or candidate[10] == " ")):
+            try:
+                return datetime.fromisoformat(candidate), raw[:16] if " " in raw else raw[:10]
+            except ValueError:
+                pass
         for fmt in _FORMATS:
             try:
                 dt = datetime.strptime(raw[:19] if " " in raw else raw[:10], fmt)
@@ -83,8 +90,10 @@ class CollectedLibrary(Sequence):
     def initialize(self):
         records, by_key, aliases = [], {}, {}
         for storage_key, canonical, platform, published in store.iter_metadata(self.db_path):
-            key = canonical or f"\0stored:{storage_key}"
-            aliases.setdefault(key, []).append(storage_key)
+            key = ((storage_key if canonical == storage_key else canonical)
+                   if canonical else f"\0stored:{storage_key}")
+            if storage_key != key:
+                aliases.setdefault(key, []).append(storage_key)
             if key in by_key:
                 continue
             record = _Record(storage_key, key, platform, parse_publish(published)[0])
@@ -156,7 +165,8 @@ class CollectedLibrary(Sequence):
             record = self._record(info, key)
             self._records.append(record)
             self._by_key[key] = record
-            self._aliases.setdefault(key, []).append(record.storage_key)
+            if record.storage_key and record.storage_key != key:
+                self._aliases.setdefault(key, []).append(record.storage_key)
             if record.storage_key not in saved or not collect_key(info):
                 self._pending[key] = info
         self.revision += 1
@@ -182,6 +192,7 @@ class CollectedLibrary(Sequence):
     def remove_keys(self, keys):
         keys = set(keys)
         storage_keys = {storage for key in keys for storage in self._aliases.get(key, ())}
+        storage_keys.update(key for key in keys if not key.startswith("\0"))
         store.delete_keys(storage_keys, db_path=self.db_path)
         self._records = [record for record in self._records if record.key not in keys]
         for key in keys:

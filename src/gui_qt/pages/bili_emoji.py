@@ -198,8 +198,9 @@ class BiliEmojiPage(BasePage):
             for i, u in enumerate(urls):
                 if not u:
                     continue
-                if u in cache:
-                    hits.append((i, cache[u]))
+                cached = cache.get(u)
+                if cached is not None:
+                    hits.append((i, cached))
                 elif u not in seen:
                     seen.add(u)
                     todo.append((i, u))

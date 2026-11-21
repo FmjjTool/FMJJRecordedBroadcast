@@ -144,6 +144,7 @@ def _build_index(entries, embedder, progress=None, cancel=None,
                     batch_paths.append(path)
             if on_vectors is not None and batch_vectors:
                 on_vectors(batch_vectors, batch_owners, batch_paths, snapshot())
+            del batch_vectors, batch_owners, batch_paths
             del cache, vector
     else:
         missing = images

@@ -186,7 +186,7 @@ def iter_metadata(db_path=None):
             if conn.execute("SELECT 1 FROM videos LIMIT 1").fetchone() is None:
                 _migrate_from_json(conn, p)
             cursor = conn.execute(
-                "SELECT dedup_key, platform, json_extract(data, '$.publish_time'), "
+                "SELECT dedup_key, json_extract(data, '$.platform'), json_extract(data, '$.publish_time'), "
                 "json_extract(data, '$.video_id'), json_extract(data, '$.video_url'), "
                 "json_extract(data, '$.raw_url') FROM videos "
                 "WHERE CASE WHEN json_valid(data) THEN json_type(data)='object' ELSE 0 END "

@@ -125,7 +125,8 @@ def read_image_slot(path, sid=0):
     size = reader.size()
     if not size.isValid():
         raise RuntimeError("图片尺寸无效")
-    reader.setScaledSize(size.scaled(QSize(160, 160), Qt.KeepAspectRatio))
+    if size.width() > 160 or size.height() > 160:
+        reader.setScaledSize(size.scaled(QSize(160, 160), Qt.KeepAspectRatio))
     thumbnail = reader.read()
     if thumbnail.isNull():
         raise RuntimeError("图片解码失败")
@@ -1318,7 +1319,8 @@ class ImageCropPage(BasePage):
             image = self._originals.get((slot.path, slot.stamp))
             if image is None:
                 image = read_original(slot)
-            preview = image.scaled(QSize(1600, 1600), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            preview = (image.scaled(QSize(1600, 1600), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                       if image.width() > 1600 or image.height() > 1600 else image)
             profiles = compute_edge_profiles(image.convertToFormat(QImage.Format_Grayscale8)) if want_profiles else None
             return image, preview, profiles
 
@@ -1353,12 +1355,14 @@ class ImageCropPage(BasePage):
         self._originals.clear()
         for slot in self._slots:
             slot.profiles = None
+        self._sync_ui()
 
     def on_show(self):
         self._view_visible = True
         self._load_error = None
         if self._active_original is None:
             self._start_source_load()
+        self._sync_ui()
 
     # ---------- 裁切提交 / 历史 ----------
     def commit_crop(self, slot: ImageSlot, crop: CropRect):
