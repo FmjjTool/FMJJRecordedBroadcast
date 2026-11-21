@@ -464,9 +464,128 @@ class NeteaseAPI:
         except (json.JSONDecodeError, KeyError) as e:
             raise APIException(f"解析专辑详情响应失败: {e}")
     
+    # ------------------------------------------------------------------
+    # 歌手主页（artist 搜索 / 详情 / 热门歌曲 / 专辑）
+    def search_artist(self, keywords: str, cookies: Dict[str, str], limit: int = 10) -> List[Dict[str, Any]]:
+        """搜索歌手（type=100）
+
+        Returns:
+            [{id, name, picUrl, musicSize, albumSize, alias}]
+        """
+        try:
+            data = {'s': keywords, 'type': 100, 'limit': limit}
+            headers = {
+                'User-Agent': APIConstants.USER_AGENT,
+                'Referer': APIConstants.REFERER,
+            }
+            response = requests.post(APIConstants.SEARCH_API, data=data,
+                                     headers=headers, cookies=cookies, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if result.get('code') != 200:
+                raise APIException(f"搜索歌手失败: {result.get('message', '未知错误')}")
+            artists = []
+            for item in result.get('result', {}).get('artists', []):
+                artists.append({
+                    'id': item.get('id'),
+                    'name': item.get('name', ''),
+                    'picUrl': item.get('picUrl', ''),
+                    'musicSize': item.get('musicSize', 0),
+                    'albumSize': item.get('albumSize', 0),
+                    'alias': item.get('alias') or [],
+                })
+            return artists
+        except requests.RequestException as e:
+            raise APIException(f"搜索歌手请求失败: {e}")
+        except json.JSONDecodeError as e:
+            raise APIException(f"解析歌手搜索响应失败: {e}")
+
+    def get_artist_detail(self, artist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+        """歌手详情（/api/artist/{id}）"""
+        try:
+            url = f'https://music.163.com/api/artist/{artist_id}'
+            headers = {
+                'User-Agent': APIConstants.USER_AGENT,
+                'Referer': APIConstants.REFERER,
+            }
+            response = requests.get(url, headers=headers, cookies=cookies, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            artist = result.get('artist') or {}
+            return {
+                'id': artist.get('id') or artist_id,
+                'name': artist.get('name', ''),
+                'picUrl': artist.get('picUrl') or artist.get('cover', ''),
+                'briefDesc': artist.get('briefDesc', '') or '',
+                'musicSize': artist.get('musicSize', 0),
+                'albumSize': artist.get('albumSize', 0),
+                'alias': artist.get('alias') or [],
+            }
+        except requests.RequestException as e:
+            raise APIException(f"获取歌手详情请求失败: {e}")
+        except json.JSONDecodeError as e:
+            raise APIException(f"解析歌手详情响应失败: {e}")
+
+    def get_artist_songs(self, artist_id: int) -> List[Dict[str, Any]]:
+        """歌手热门歌曲（/api/artist/top/song）→ 页面行结构"""
+        try:
+            url = 'https://music.163.com/api/artist/top/song'
+            headers = {
+                'User-Agent': APIConstants.USER_AGENT,
+                'Referer': APIConstants.REFERER,
+            }
+            response = requests.get(url, params={'id': artist_id},
+                                    headers=headers, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            songs = []
+            for song in result.get('songs') or []:
+                al = song.get('al') or {}
+                songs.append({
+                    'id': song.get('id'),
+                    'name': song.get('name', ''),
+                    'artists': '/'.join(a.get('name', '') for a in (song.get('ar') or [])),
+                    'album': al.get('name', ''),
+                    'album_id': al.get('id'),
+                    'picUrl': al.get('picUrl', ''),
+                    'duration': song.get('dt', 0),
+                })
+            return songs
+        except requests.RequestException as e:
+            raise APIException(f"获取歌手歌曲请求失败: {e}")
+        except json.JSONDecodeError as e:
+            raise APIException(f"解析歌手歌曲响应失败: {e}")
+
+    def get_artist_albums(self, artist_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """歌手专辑（/api/artist/albums/{id}）→ [{id, name, picUrl, size, publishTime, artist}]"""
+        try:
+            url = f'https://music.163.com/api/artist/albums/{artist_id}'
+            headers = {
+                'User-Agent': APIConstants.USER_AGENT,
+                'Referer': APIConstants.REFERER,
+            }
+            response = requests.get(url, params={'limit': limit},
+                                    headers=headers, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            albums = []
+            for album in result.get('hotAlbums') or []:
+                albums.append({
+                    'id': album.get('id'),
+                    'name': album.get('name', ''),
+                    'artist': (album.get('artist') or {}).get('name', ''),
+                    'picUrl': album.get('picUrl', ''),
+                    'size': album.get('size', 0),
+                    'publishTime': album.get('publishTime', 0),
+                })
+            return albums
+        except requests.RequestException as e:
+            raise APIException(f"获取歌手专辑请求失败: {e}")
+        except json.JSONDecodeError as e:
+            raise APIException(f"解析歌手专辑响应失败: {e}")
+
     def netease_encrypt_id(self, id_str: str) -> str:
         """网易云加密图片ID算法
-        
         Args:
             id_str: 图片ID字符串
             
@@ -708,6 +827,26 @@ def get_song_detail(song_id: int) -> Dict[str, Any]:
 def get_lyric(song_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
     """获取歌词（清晰命名别名）。"""
     return NeteaseAPI().get_lyric(song_id, cookies)
+
+
+def search_artist(keywords: str, cookies: Dict[str, str], limit: int = 10) -> List[Dict[str, Any]]:
+    """搜索歌手（type=100）。"""
+    return NeteaseAPI().search_artist(keywords, cookies, limit)
+
+
+def artist_detail(artist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+    """歌手详情。"""
+    return NeteaseAPI().get_artist_detail(artist_id, cookies)
+
+
+def artist_songs(artist_id: int) -> List[Dict[str, Any]]:
+    """歌手热门歌曲。"""
+    return NeteaseAPI().get_artist_songs(artist_id)
+
+
+def artist_albums(artist_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """歌手专辑列表。"""
+    return NeteaseAPI().get_artist_albums(artist_id, limit)
 
 
 if __name__ == "__main__":

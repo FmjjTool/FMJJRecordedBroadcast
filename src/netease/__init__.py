@@ -5,6 +5,7 @@ from .music_api import (
     search_music, search_album, name_v1, url_v1, lyric_v1,
     playlist_detail, album_detail, get_pic_url, qr_login,
     get_song_detail, get_lyric,
+    search_artist, artist_detail, artist_songs, artist_albums,
 )
 from .music_downloader import MusicDownloader, DownloadException
 from .cookie_manager import CookieManager, CookieException, parse_cookie_string
@@ -14,6 +15,7 @@ __all__ = [
     "search_music", "search_album", "name_v1", "url_v1", "lyric_v1",
     "playlist_detail", "album_detail", "get_pic_url", "qr_login",
     "get_song_detail", "get_lyric",
+    "search_artist", "artist_detail", "artist_songs", "artist_albums",
     "MusicDownloader", "DownloadException",
     "CookieManager", "CookieException", "parse_cookie_string",
 ]

@@ -176,6 +176,9 @@ class KuwoScraper(BaseScraper):
     def get_album(self, album_id: str) -> Optional[AlbumInfo]:
         if not album_id or album_id == "0":
             return None
+        album = self._get_album_legacy(album_id)
+        if album is not None:
+            return album
         params = {"albumid": album_id, "pn": 1, "rn": 100, "httpsStatus": 1}
         headers = make_headers(referer="http://www.kuwo.cn/", extra={"csrf": "", "X-Requested-With": "XMLHttpRequest"})
         with get_client() as client:
@@ -217,6 +220,185 @@ class KuwoScraper(BaseScraper):
             url=f"http://www.kuwo.cn/album_detail/{album_id}",
             extra=_remainder(info, "name album artist releaseDate info desc pic htsPic musicList"),
         )
+
+    # ------------------------------------------------------------------
+    def _rs(self, params: dict) -> dict:
+        """search.kuwo.cn/r.s 老接口（游客可用，返回 JSON）"""
+        base = {"encoding": "utf8", "rformat": "json", "mobi": 1}
+        base.update(params)
+        headers = make_headers(referer="https://www.kuwo.cn/")
+        with get_client() as client:
+            resp = client.get("http://search.kuwo.cn/r.s", params=base, headers=headers)
+        return safe_json(resp.text) or {}
+
+    def _get_album_legacy(self, album_id: str) -> Optional[AlbumInfo]:
+        """专辑详情走老接口 stype=albuminfo（www 接口有反爬）"""
+        data = self._rs({"stype": "albuminfo", "albumid": album_id, "pn": 0, "rn": 200})
+        name = data.get("name") or data.get("album") or ""
+        if not name:
+            return None
+        songs = []
+        for item in data.get("musiclist") or []:
+            rid = str(item.get("rid") or item.get("id") or "").replace("MUSIC_", "")
+            if not rid:
+                continue
+            songs.append(SongInfo(
+                song_id=rid,
+                song_name=item.get("name", ""),
+                singer=item.get("artist", "") or data.get("artist", ""),
+                album_name=name,
+                album_id=album_id,
+                duration=parse_duration(item.get("duration", 0)),
+                language=_detect_lang(item.get("name", "")),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"http://www.kuwo.cn/play_detail/{rid}",
+                extra=_remainder(item, "rid id name artist duration"),
+            ))
+        return AlbumInfo(
+            album_id=album_id,
+            album_name=name,
+            title=name,
+            singer=data.get("artist", ""),
+            singer_id=str(data.get("artistid", "")),
+            release_date=data.get("pub", "") or data.get("releaseDate", ""),
+            description=data.get("info", ""),
+            language=_detect_lang(name),
+            cover_url=data.get("hts_img", "") or data.get("img", "") or data.get("pic", ""),
+            song_count=int(data.get("songnum") or len(songs)),
+            songs=songs,
+            platform=self.platform,
+            platform_name=self.platform_name,
+            url=f"http://www.kuwo.cn/album_detail/{album_id}",
+            extra=_remainder(data, "name album artist artistid pub releaseDate info hts_img img pic songnum musiclist"),
+        )
+
+    # ------------------------------------------------------------------
+    # 专辑搜索 / ID 解析
+    def search_album(self, keyword: str, limit: int = 30) -> list[AlbumInfo]:
+        data = self._rs({"all": keyword, "ft": "album", "pn": 0, "rn": limit})
+        albums = []
+        for item in data.get("albumlist") or []:
+            album_id = str(item.get("albumid") or item.get("id") or "")
+            name = item.get("name") or item.get("falbum") or item.get("album") or ""
+            if not album_id or not name:
+                continue
+            albums.append(AlbumInfo(
+                album_id=album_id,
+                album_name=name,
+                title=name,
+                singer=item.get("artist") or "",
+                singer_id=str(item.get("artistid") or ""),
+                release_date=item.get("pub", "") or item.get("releaseDate", ""),
+                description=item.get("info", ""),
+                cover_url=item.get("hts_img", "") or item.get("img", ""),
+                song_count=int(item.get("musiccnt") or item.get("songnum") or 0),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"http://www.kuwo.cn/album_detail/{album_id}",
+                extra=_remainder(item, "albumid id name falbum album artist artistid pub releaseDate info hts_img img songnum"),
+            ))
+        return albums
+
+    @staticmethod
+    def extract_album_id(text: str) -> str:
+        """album_detail/{id}、albumid={id} 或纯数字"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = (re.search(r"/album_detail/(\d+)", s)
+             or re.search(r"albumid=(\d+)", s))
+        if m:
+            return m.group(1)
+        if s.isdigit():
+            return s
+        return ""
+
+    # ------------------------------------------------------------------
+    # 歌手主页
+    def search_artist(self, keyword: str, limit: int = 10) -> list[dict]:
+        data = self._rs({"all": keyword, "ft": "artist", "pn": 0, "rn": limit})
+        artists = []
+        for item in data.get("abslist") or []:
+            aid = str(item.get("ARTISTID") or item.get("DC_TARGETID") or "")
+            name = item.get("ARTIST") or ""
+            if not aid or not name:
+                continue
+            artists.append({
+                "id": aid,
+                "name": name,
+                "pic": item.get("hts_PICPATH") or item.get("PICPATH") or "",
+                "song_count": int(item.get("SONGNUM") or 0),
+                "album_count": int(item.get("ALBUMNUM") or 0),
+                "desc": item.get("desc") or item.get("DESC") or "",
+            })
+        return artists
+
+    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+        info = {}
+        if name:
+            for cand in self.search_artist(name, 10):
+                if str(cand.get("id")) == str(artist_id):
+                    info = cand
+                    break
+        if not info:
+            data = self._rs({"stype": "artistinfo", "artistid": artist_id})
+            if not (data.get("name") or data.get("ARTIST") or data.get("artist")):
+                return None
+            info = {
+                "id": artist_id,
+                "name": data.get("name") or data.get("ARTIST") or data.get("artist") or "",
+                "pic": data.get("hts_pic") or data.get("pic") or "",
+                # artistinfo 接口用 musicnum/albumnum，songnum 只在搜索结果里出现
+                "song_count": int(data.get("songnum") or data.get("musicnum") or 0),
+                "album_count": int(data.get("albumnum") or 0),
+                "desc": data.get("desc") or data.get("info") or "",
+            }
+        artist_name = info.get("name") or name
+        if not artist_name:
+            return None
+
+        songs, seen = [], set()
+        for song in self._do_search(artist_name, 1, 80):
+            if str(song.extra.get("ARTISTID") or "") != str(artist_id):
+                continue
+            if song.song_id in seen:
+                continue
+            seen.add(song.song_id)
+            songs.append(song)
+
+        albums = [a for a in self.search_album(artist_name, 40)
+                  if str(a.singer_id) == str(artist_id)]
+
+        return {
+            "id": artist_id,
+            "name": artist_name,
+            "pic": info.get("pic") or "",
+            "desc": info.get("desc") or "",
+            "song_count": info.get("song_count") or len(songs),
+            "album_count": info.get("album_count") or len(albums),
+            "url": f"https://www.kuwo.cn/singer_detail/{artist_id}",
+            "songs": songs,
+            "albums": albums,
+        }
+
+    @staticmethod
+    def extract_artist_id(text: str) -> str:
+        """singer_detail/{id}、artist_detail/{id}、artistid={id} 或纯数字
+
+        酷我站点复制出来的歌手主页链接是 /singer_detail/{id}（SSR 页，带 singerInfo），
+        /artist_detail/{id} 只是历史别名，两个都要认。
+        """
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = (re.search(r"/(?:singer|artist)_detail/(\d+)", s)
+             or re.search(r"artistid=(\d+)", s))
+        if m:
+            return m.group(1)
+        if s.isdigit():
+            return s
+        return ""
 
     # ------------------------------------------------------------------
     def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:

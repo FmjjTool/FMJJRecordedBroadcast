@@ -298,8 +298,9 @@ class KuGouLiteClient:
 class KuGouLiteScraper:
     """酷狗概念版 Scraper（duck-typing 兼容 BaseScraper 接口）。
 
-    不继承 BaseScraper：lite 的 search 需要登录态，构造时惰性创建客户端，
-    且不实现 get_album（概念版无公开专辑接口）。
+    不继承 BaseScraper：lite 的 search 需要登录态，构造时惰性创建客户端。
+    歌单/专辑/歌手主页概念版没有独立接口，统一复用主版酷狗同库接口取数据，
+    再把 platform 改回 kugou_lite —— 这样下载仍走概念版 v5/url（登录后可下高音质）。
     """
     platform = "kugou_lite"
     platform_name = "酷狗概念版"
@@ -312,6 +313,26 @@ class KuGouLiteScraper:
         if self._client is None:
             self._client = KuGouLiteClient()
         return self._client
+
+    def _as_lite(self, obj):
+        """把主版酷狗返回的对象（歌单/专辑/歌手数据）标成概念版，下载走 lite 通道。"""
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            obj["platform"] = self.platform
+            obj["platform_name"] = self.platform_name
+            for song in obj.get("songs") or []:
+                song.platform = self.platform
+                song.platform_name = self.platform_name
+            for album in obj.get("albums") or []:
+                self._as_lite(album)
+            return obj
+        obj.platform = self.platform
+        obj.platform_name = self.platform_name
+        for song in getattr(obj, "songs", []) or []:
+            song.platform = self.platform
+            song.platform_name = self.platform_name
+        return obj
 
     # ---- 搜索 ----
     def search_song(self, keyword: str, page: int = 1, limit: int = 10) -> list:
@@ -353,16 +374,46 @@ class KuGouLiteScraper:
     def get_song_detail(self, song_id: str) -> Optional:
         from .kugou import KugouScraper
         try:
-            return KugouScraper().get_song_detail(song_id)
+            return self._as_lite(KugouScraper().get_song_detail(song_id))
         except Exception:
             from ..models import SongInfo
             return SongInfo(song_id=song_id, platform=self.platform,
                             platform_name=self.platform_name,
                             url=f"https://www.kugou.com/song/#hash={song_id}")
 
-    # ---- 歌单：概念版无公开歌单接口 ----
+    # ---- 歌单（概念版无独立接口，复用主版同库数据） ----
     def get_playlist(self, playlist_id: str):
-        return None
+        from .kugou import KugouScraper
+        return self._as_lite(KugouScraper().get_playlist(playlist_id))
+
+    # ---- 专辑（复用主版同库数据） ----
+    def search_album(self, keyword: str, limit: int = 30) -> list:
+        from .kugou import KugouScraper
+        albums = KugouScraper().search_album(keyword, limit)
+        return [self._as_lite(a) for a in albums]
+
+    def get_album(self, album_id: str):
+        from .kugou import KugouScraper
+        return self._as_lite(KugouScraper().get_album(album_id))
+
+    @staticmethod
+    def extract_album_id(text: str) -> str:
+        from .kugou import KugouScraper
+        return KugouScraper.extract_album_id(text)
+
+    # ---- 歌手主页（复用主版同库数据） ----
+    def search_artist(self, keyword: str, limit: int = 10) -> list:
+        from .kugou import KugouScraper
+        return KugouScraper().search_artist(keyword, limit)
+
+    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+        from .kugou import KugouScraper
+        return self._as_lite(KugouScraper().get_artist(artist_id, name))
+
+    @staticmethod
+    def extract_artist_id(text: str) -> str:
+        from .kugou import KugouScraper
+        return KugouScraper.extract_artist_id(text)
 
     # ---- 播放直链 ----
     def get_play_url(self, song_id: str) -> str:
@@ -388,7 +439,8 @@ class KuGouLiteScraper:
 
     @staticmethod
     def extract_playlist_id(text: str) -> str:
-        return ""
+        from .kugou import KugouScraper
+        return KugouScraper.extract_playlist_id(text)
 
     def search(self, keyword: str, limit: int = 5) -> list:
         songs = self.search_song(keyword, 1, limit)

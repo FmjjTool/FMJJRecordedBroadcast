@@ -35,6 +35,32 @@ class BaseScraper(ABC):
         """获取歌单信息（含歌曲列表），平台未实现时返回 None"""
         return None
 
+    # ---- 专辑搜索 / 专辑 ID 解析（各平台按需实现，未实现返回空） ----
+    def search_album(self, keyword: str, limit: int = 30) -> list[AlbumInfo]:
+        """按专辑名搜索，返回 AlbumInfo 列表（只填列表展示所需字段）"""
+        return []
+
+    @staticmethod
+    def extract_album_id(text: str) -> str:
+        """从专辑链接或纯 ID 中解析专辑 ID，解析失败返回空串"""
+        return ""
+
+    # ---- 歌手主页（返回普通 dict，页面直接消费） ----
+    def search_artist(self, keyword: str, limit: int = 10) -> list[dict]:
+        """按歌手名搜索。
+
+        每项：{"id", "name", "pic", "song_count", "album_count", "desc"}
+        """
+        return []
+
+    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+        """歌手主页数据。
+
+        返回：{"id", "name", "pic", "desc", "song_count", "album_count",
+               "url", "songs": [SongInfo], "albums": [AlbumInfo]}
+        """
+        return None
+
     # ---- 链接/输入解析：从用户输入提取歌曲或歌单 ID ----
     @staticmethod
     def extract_song_id(text: str) -> str:

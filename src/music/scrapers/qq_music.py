@@ -299,6 +299,141 @@ class QQMusicScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
+    # 专辑搜索 / ID 解析
+    def search_album(self, keyword: str, limit: int = 30) -> list[AlbumInfo]:
+        params = {"w": keyword, "format": "json", "p": 1, "n": limit, "t": 8}
+        headers = make_headers(referer="https://y.qq.com/")
+        with get_client() as client:
+            resp = client.get(self.SEARCH_URL, params=params, headers=headers)
+        data = safe_json(resp.text)
+        if not data:
+            return []
+        albums = []
+        for item in data.get("data", {}).get("album", {}).get("list", []):
+            mid = item.get("albumMID") or item.get("albummid") or ""
+            name = item.get("albumName") or item.get("albumname") or ""
+            if not mid or not name:
+                continue
+            albums.append(AlbumInfo(
+                album_id=mid,
+                album_name=name,
+                title=name,
+                singer=item.get("singerName") or item.get("singername") or "",
+                singer_id=str(item.get("singerID") or item.get("singerid") or ""),
+                release_date=item.get("publicTime") or "",
+                cover_url=item.get("albumPic") or _cover_url(mid, 300),
+                song_count=int(item.get("song_count") or 0),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"https://y.qq.com/n/ryqq/albumDetail/{mid}",
+                extra=_remainder(item, "albumID albumMID albumName albumPic publicTime singerID singerMID singerName song_count"),
+            ))
+        return albums
+
+    @staticmethod
+    def extract_album_id(text: str) -> str:
+        """albumDetail/{mid}、albummid={mid} 或纯 mid（字母数字 10 位以上）"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = (re.search(r"albumDetail/([A-Za-z0-9]+)", s)
+             or re.search(r"albummid=([A-Za-z0-9]+)", s)
+             or re.search(r"/album/([A-Za-z0-9]+)(?:\.html)?", s))
+        if m:
+            return m.group(1)
+        if _looks_like_mid(s):
+            return s
+        return ""
+
+    # ------------------------------------------------------------------
+    # 歌手主页
+    def search_artist(self, keyword: str, limit: int = 10) -> list[dict]:
+        """QQ 歌手搜索（type=9）"""
+        params = {"w": keyword, "format": "json", "p": 1, "n": limit, "t": 9}
+        headers = make_headers(referer="https://y.qq.com/")
+        with get_client() as client:
+            resp = client.get(self.SEARCH_URL, params=params, headers=headers)
+        data = safe_json(resp.text)
+        if not data:
+            return []
+        artists = []
+        for item in data.get("data", {}).get("singer", {}).get("list", []):
+            mid = item.get("singerMID") or ""
+            name = (item.get("singerName") or "").replace('<em class="singer_name">', "").replace("</em>", "")
+            if not mid or not name:
+                continue
+            pic = item.get("singerPic") or ""
+            if pic:
+                pic = re.sub(r"T001R\d+x\d+M000", "T001R300x300M000", pic)
+            artists.append({
+                "id": mid,
+                "name": name,
+                "pic": pic,
+                "song_count": int(item.get("songNum") or 0),
+                "album_count": int(item.get("albumNum") or 0),
+                "desc": "",
+            })
+        return artists
+
+    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+        """歌手主页：名称/头像取歌手详情，歌曲与专辑用同名搜索结果按歌手过滤。"""
+        info = {}
+        with get_client() as client:
+            resp = client.get(
+                "https://c.y.qq.com/v8/fcg-bin/fcg_v8_singer_detail_cp.fcg",
+                params={"singermid": artist_id, "format": "json"},
+                headers=make_headers(referer="https://y.qq.com/"))
+        data = safe_json(resp.text) or {}
+        detail = data.get("getSingerInfo") or {}
+        artist_name = name or detail.get("Fsinger_name") or detail.get("singername") or ""
+        if not artist_name:
+            return None
+        pic = detail.get("Fsinger_pic") or detail.get("singerPic") or ""
+        if not pic:
+            # 新版歌手详情接口已不再返回头像，按头像规则拼：T001=歌手头像、T002=专辑封面。
+            # 取不到就留空，由页面回退，别拿某首歌的封面冒充头像。
+            pic = f"https://y.gtimg.cn/music/photo_new/T001R300x300M000{artist_id}.jpg"
+        if pic:
+            pic = re.sub(r"T001R\d+x\d+M000", "T001R300x300M000", pic)
+
+        songs, seen = [], set()
+        for song in self.search_song(artist_name, 1, 50):
+            if artist_name not in (song.singer or ""):
+                continue
+            if song.song_id in seen:
+                continue
+            seen.add(song.song_id)
+            songs.append(song)
+
+        albums = [a for a in self.search_album(artist_name, 40)
+                  if artist_name in (a.singer or "")]
+
+        return {
+            "id": artist_id,
+            "name": artist_name,
+            "pic": pic,
+            "desc": detail.get("Fsinger_desc") or detail.get("Fother_name") or "",
+            "song_count": int(detail.get("Fsong_count") or len(songs)),
+            "album_count": int(detail.get("Falbum_count") or len(albums)),
+            "url": f"https://y.qq.com/n/ryqq/singer/{artist_id}",
+            "songs": songs,
+            "albums": albums,
+        }
+
+    @staticmethod
+    def extract_artist_id(text: str) -> str:
+        """singer/{mid} 或纯 mid"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = re.search(r"singer/([A-Za-z0-9]+)", s)
+        if m:
+            return m.group(1)
+        if _looks_like_mid(s):
+            return s
+        return ""
+
+    # ------------------------------------------------------------------
     def get_play_url(self, song_id: str) -> str:
         """QQ音乐播放直链 - 朋友圈分享格式"""
         # song_id 即 songmid, 格式: http://c6.y.qq.com/rsc/fcgi-bin/fcg_pyq_play.fcg?songid=&songmid={songmid}&songtype=1&fromtag=50&uin=0&code=5F4F8
@@ -335,6 +470,11 @@ class QQMusicScraper(BaseScraper):
 
 # ------------------------------------------------------------------
 # Helpers
+
+def _looks_like_mid(text: str) -> bool:
+    """QQ 的 albummid / singermid：12~16 位字母数字，且至少含一位数字（避免把英文名当 ID）。"""
+    return bool(re.fullmatch(r"[A-Za-z0-9]{12,16}", text)) and any(c.isdigit() for c in text)
+
 
 def _cover_url(albummid: str, size: int = 800) -> str:
     if not albummid:

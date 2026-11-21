@@ -20,8 +20,17 @@ class KugouScraper(BaseScraper):
     platform_name = "酷狗音乐"
 
     SEARCH_URL  = "http://mobilecdn.kugou.com/api/v3/search/song"
+    SEARCH_ALBUM_URL = "http://mobilecdn.kugou.com/api/v3/search/album"
     LYRIC_URL   = "http://m.kugou.com/app/i/krc.php"
     ALBUM_URL   = "http://mobilecdn.kugou.com/api/v3/album/info"
+    ALBUM_SONG_URL = "http://mobilecdn.kugou.com/api/v3/album/song"
+    SINGER_SEARCH_URL = "http://mobilecdn.kugou.com/api/v3/search/singer"
+    SINGER_INFO_URL = "http://mobilecdn.kugou.com/api/v3/singer/info"
+    SINGER_SONG_URL = "http://mobilecdn.kugou.com/api/v3/singer/song"
+    SINGER_ALBUM_URL = "http://mobilecdn.kugou.com/api/v3/singer/album"
+    SINGER_MOBILE_URL = "https://m.kugou.com/singer/info/{token}"
+    MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                 "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
     SONG_INFO_URL = "http://mobilecdn.kugou.com/api/v3/song/info"
     SPECIAL_INFO_URL = "http://mobilecdn.kugou.com/api/v3/special/info"
     SPECIAL_SONG_URL = "http://mobilecdn.kugou.com/api/v3/special/song"
@@ -199,11 +208,63 @@ class KugouScraper(BaseScraper):
             language=_detect_lang(album_name),
             cover_url=(info.get("imgurl", "") or "").replace("{size}", "480"),
             song_count=info.get("songcount", 0),
-            songs=[],
+            songs=self._album_songs(album_id),
             platform=self.platform,
             platform_name=self.platform_name,
             url=f"https://www.kugou.com/album/{album_id}.html",
             extra=_remainder(info, "albumname singername singerid publishtime intro imgurl songcount"),
+        )
+
+    def _album_songs(self, album_id: str) -> list[SongInfo]:
+        """酷狗专辑曲目（album/song 接口只给 filename，需要拆歌手/歌名）"""
+        params = {"albumid": album_id, "page": 1, "pagesize": 100, "format": "json"}
+        headers = make_headers(referer="http://m.kugou.com/")
+        songs: list[SongInfo] = []
+        page = 1
+        with get_client() as client:
+            while page <= 30:  # 防御性上限 3000 首
+                params["page"] = page
+                resp = client.get(self.ALBUM_SONG_URL, params=params, headers=headers)
+                data = safe_json(resp.text)
+                batch = ((data or {}).get("data") or {}).get("info") or []
+                if not batch:
+                    break
+                songs.extend(self._parse_filename_song(item) for item in batch)
+                if len(batch) < params["pagesize"]:
+                    break
+                page += 1
+        return songs
+
+    def _parse_filename_song(self, item: dict) -> SongInfo:
+        """album/song、singer/song 等只给 filename 的条目 → SongInfo"""
+        filename = item.get("filename", "") or ""
+        song_name = item.get("songname") or ""
+        singer = item.get("singername") or ""
+        if not song_name:
+            if " - " in filename:
+                singer_part, song_name = filename.split(" - ", 1)
+                singer = singer or singer_part
+            else:
+                song_name = filename
+        audio_id = str(item.get("album_audio_id", "") or "")
+        song_hash = item.get("hash", "")
+        return SongInfo(
+            song_id=song_hash,
+            song_name=song_name,
+            title=item.get("songname") or song_name,
+            singer=singer,
+            album_name=item.get("album_name", "") or "",
+            album_id=str(item.get("album_id", "") or ""),
+            duration=parse_duration(item.get("duration", 0)),
+            interval=item.get("duration", 0),
+            language=_detect_lang(song_name),
+            cover_url=f"http://imge.kugou.com/stdmusic/240/{audio_id}.jpg" if audio_id else "",
+            size128=item.get("filesize", 0),
+            files=[FileInfo(quality="128kbps", size=item.get("filesize", 0), extension="mp3")] if item.get("filesize") else [],
+            platform=self.platform,
+            platform_name=self.platform_name,
+            url=f"https://www.kugou.com/song/#hash={song_hash}",
+            extra=_remainder(item, "hash filename songname singername album_id album_name album_audio_id duration filesize"),
         )
 
     # ------------------------------------------------------------------
@@ -287,6 +348,176 @@ class KugouScraper(BaseScraper):
             url=f"https://www.kugou.com/song/#hash={item.get('hash', '')}",
             extra=_remainder(item, "hash filename album_id album_audio_id duration filesize 320filesize sqfilesize mvhash"),
         )
+
+    # ------------------------------------------------------------------
+    # 专辑搜索 / ID 解析
+    def search_album(self, keyword: str, limit: int = 30) -> list[AlbumInfo]:
+        params = {"keyword": keyword, "page": 1, "pagesize": limit, "format": "json"}
+        headers = make_headers(referer="http://m.kugou.com/")
+        with get_client() as client:
+            resp = client.get(self.SEARCH_ALBUM_URL, params=params, headers=headers)
+        data = safe_json(resp.text)
+        if not data or data.get("status") != 1:
+            return []
+        albums = []
+        for item in ((data.get("data") or {}).get("info") or []):
+            album_id = str(item.get("albumid") or "")
+            name = item.get("albumname") or ""
+            if not album_id or not name:
+                continue
+            albums.append(AlbumInfo(
+                album_id=album_id,
+                album_name=name,
+                title=name,
+                singer=item.get("singername") or "",
+                singer_id=str(item.get("singerid") or ""),
+                release_date=item.get("publishtime") or "",
+                description=item.get("intro") or "",
+                cover_url=(item.get("imgurl") or "").replace("{size}", "480"),
+                song_count=int(item.get("songcount") or 0),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"https://www.kugou.com/album/{album_id}.html",
+                extra=_remainder(item, "albumid albumname singername singerid publishtime intro imgurl songcount"),
+            ))
+        return albums
+
+    @staticmethod
+    def extract_album_id(text: str) -> str:
+        """album/{id}.html、albumid={id} 或纯数字"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = (re.search(r"/album/(\d+)", s)
+             or re.search(r"albumid=(\d+)", s)
+             or re.search(r"album_id=(\d+)", s))
+        if m:
+            return m.group(1)
+        if s.isdigit():
+            return s
+        return ""
+
+    # ------------------------------------------------------------------
+    # 歌手主页
+    def search_artist(self, keyword: str, limit: int = 10) -> list[dict]:
+        params = {"keyword": keyword, "page": 1, "pagesize": limit, "format": "json"}
+        headers = make_headers(referer="http://m.kugou.com/")
+        with get_client() as client:
+            resp = client.get(self.SINGER_SEARCH_URL, params=params, headers=headers)
+        data = safe_json(resp.text)
+        if not data or data.get("status") != 1:
+            return []
+        artists = []
+        for item in data.get("data") or []:
+            sid = str(item.get("singerid") or "")
+            name = item.get("singername") or ""
+            if sid and name:
+                artists.append({"id": sid, "name": name, "pic": "",
+                                "song_count": 0, "album_count": 0, "desc": ""})
+        return artists
+
+    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+        artist_id = self.resolve_singer_id(artist_id)
+        if not artist_id:
+            return None
+        headers = make_headers(referer="http://m.kugou.com/")
+        with get_client() as client:
+            resp = client.get(self.SINGER_INFO_URL,
+                              params={"singerid": artist_id}, headers=headers)
+        data = safe_json(resp.text) or {}
+        info = data.get("data") or {}
+        artist_name = name or info.get("singername") or ""
+        if not artist_name:
+            return None
+        pic = (info.get("imgurl") or "").replace("{size}", "480")
+
+        songs, seen = [], set()
+        with get_client() as client:
+            resp = client.get(self.SINGER_SONG_URL,
+                              params={"singerid": artist_id, "page": 1,
+                                      "pagesize": 50, "format": "json"},
+                              headers=headers)
+        song_data = safe_json(resp.text) or {}
+        for item in ((song_data.get("data") or {}).get("info") or []):
+            song = self._parse_filename_song(item)
+            if song.song_id and song.song_id not in seen:
+                seen.add(song.song_id)
+                songs.append(song)
+
+        albums = []
+        with get_client() as client:
+            resp = client.get(self.SINGER_ALBUM_URL,
+                              params={"singerid": artist_id, "page": 1,
+                                      "pagesize": 30, "format": "json"},
+                              headers=headers)
+        album_data = safe_json(resp.text) or {}
+        for item in ((album_data.get("data") or {}).get("info") or []):
+            album_id = str(item.get("albumid") or "")
+            album_name = item.get("albumname") or ""
+            if not album_id or not album_name:
+                continue
+            albums.append(AlbumInfo(
+                album_id=album_id,
+                album_name=album_name,
+                title=album_name,
+                singer=item.get("singername") or artist_name,
+                release_date=item.get("publishtime") or "",
+                cover_url=(item.get("imgurl") or "").replace("{size}", "480"),
+                song_count=int(item.get("songcount") or 0),
+                platform=self.platform,
+                platform_name=self.platform_name,
+                url=f"https://www.kugou.com/album/{album_id}.html",
+                extra=_remainder(item, "albumid albumname singername imgurl songcount publishtime"),
+            ))
+
+        return {
+            "id": artist_id,
+            "name": artist_name,
+            "pic": pic,
+            "desc": info.get("intro") or "",
+            "song_count": int(info.get("songcount") or len(songs)),
+            "album_count": int(info.get("albumcount") or len(albums)),
+            "url": f"https://www.kugou.com/singer/{artist_id}.html",
+            "songs": songs,
+            "albums": albums,
+        }
+
+    @classmethod
+    def resolve_singer_id(cls, text: str) -> str:
+        """把主页链接/哈希 ID 归一成数字 singerid。
+
+        新式主页链接 `www.kugou.com/singer/info/<哈希>`（如 5NQUK0F36CC0A）
+        里的哈希不是数字 ID，截取前几位会指向另一位歌手，必须查移动端
+        H5 页面内嵌 JSON 里的 singerid。
+        """
+        token = (text or "").strip()
+        token = cls.extract_artist_id(token) or token
+        if not token or token.isdigit():
+            return token
+        # 只有移动端 UA 才返回带歌手 JSON 的 H5 页面，桌面 UA 是空壳 SPA
+        headers = make_headers(referer="https://m.kugou.com/",
+                               extra={"User-Agent": cls.MOBILE_UA})
+        with get_client() as client:
+            resp = client.get(cls.SINGER_MOBILE_URL.format(token=token),
+                              headers=headers)
+        m = re.search(r'"singerid"\s*:\s*(\d+)', resp.text or "")
+        return m.group(1) if m else ""
+
+    @staticmethod
+    def extract_artist_id(text: str) -> str:
+        """singer/{id}.html、singer/home/{id}.html、singer/info/{id|哈希}、singerid={id} 或纯数字"""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        m = (re.search(r"/singer/info/([0-9A-Za-z]+)", s)
+             or re.search(r"/singer/home/(\d+)", s)
+             or re.search(r"/singer/(\d+)", s)
+             or re.search(r"singerid=(\d+)", s))
+        if m:
+            return m.group(1)
+        if s.isdigit():
+            return s
+        return ""
 
     # ------------------------------------------------------------------
     def get_play_url(self, song_id: str) -> str:

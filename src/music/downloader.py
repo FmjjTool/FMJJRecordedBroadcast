@@ -280,7 +280,7 @@ def quality_options(platform: str) -> list[tuple[str, str]]:
     if platform == "kugou_lite":
         return [("128k", "128k MP3"), ("320k", "320k MP3"), ("flac", "FLAC 无损")]
     if platform == "qq":
-        return [("default", "默认（下载走换源）")]
+        return [("default", "默认（QQ 直链需 VIP，下载自动换源）")]
     return [("default", "默认")]
 
 

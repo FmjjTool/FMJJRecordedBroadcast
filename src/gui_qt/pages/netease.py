@@ -3,30 +3,35 @@
 一条主线：平台选择 → 输入 → 结果表 → 勾选后下载 / 导出。
 - 平台选择 + 模式按钮 + 动态输入区（搜索模式带歌手预填）
 - 「五平台对比」：一次并行搜五个平台，结果进同一张表（平台标签 + 平台筛选）
-- 网易云走 netease 模块（登录态 + 音质选择 + 专辑解析）
-- 其余平台走 music/scrapers（游客直采：搜索/单曲解析/歌单解析）
-- 详情滚动区：歌曲列表（封面+时长）、单曲详情卡（封面+歌词+立即下载）、歌单信息卡
-- 下载：网易云 MusicDownloader；其余 music/downloader（QQ 仅解析）
+- 网易云走 netease 模块（登录态 + 音质选择）
+- 其余平台走 music/scrapers（游客直采：搜索/单曲解析/歌单解析/专辑解析/歌手主页）
+- 五个主平台能力对齐：搜索 / 单曲 / 歌单 / 专辑 / 歌手主页（名称或主页链接）
+- 详情滚动区：歌曲列表（封面+时长）、单曲详情卡（封面+歌词+立即下载）、歌单信息卡、
+  专辑详情卡、歌手主页（信息卡 + 热门歌曲 + 专辑，均可勾选下载）
+- 下载：网易云 MusicDownloader；其余 music/downloader（QQ 仅解析，失败自动换源）
 - 导出：勾选结果导出 Excel/JSON/Markdown（原「音乐信息获取」能力）
 """
 
+import html
 import os
 import re
 import time
+import weakref
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QPoint, QRect, QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget,
 )
+from shiboken6 import isValid
 
 from gui_qt import theme
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import run_bg
+from gui_qt.cover_loader import load_cover
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.row_widgets import make_row_clickable
+from gui_qt.row_widgets import ElidedLabel, make_row_clickable
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 QUALITY_NAMES = {
@@ -42,12 +47,13 @@ QUALITY_NAMES = {
 # (platform_id, 显示名, 模式列表) —— netease 走独立模块，其余走 music scrapers
 PLATFORMS = [
     ("all", "五平台对比", ["search"]),
-    ("netease", "网易云音乐", ["search", "song", "playlist", "album"]),
-    ("qq", "QQ音乐", ["search", "song", "playlist"]),
-    ("kugou", "酷狗音乐", ["search", "song", "playlist"]),
-    ("kuwo", "酷我音乐", ["search", "song", "playlist"]),
-    ("5sing", "5sing音乐", ["search", "song", "playlist"]),
-    ("kugou_lite", "酷狗概念版", ["search", "song"]),
+    ("netease", "网易云音乐", ["search", "song", "playlist", "album", "artist"]),
+    ("qq", "QQ音乐", ["search", "song", "playlist", "album", "artist"]),
+    ("kugou", "酷狗音乐", ["search", "song", "playlist", "album", "artist"]),
+    ("kuwo", "酷我音乐", ["search", "song", "playlist", "album", "artist"]),
+    # 5sing 没有专辑，不提供「专辑解析」
+    ("5sing", "5sing音乐", ["search", "song", "playlist", "artist"]),
+    ("kugou_lite", "酷狗概念版", ["search", "song", "playlist", "album", "artist"]),
 ]
 
 MERGE_PLATFORM = "all"
@@ -63,6 +69,7 @@ MODES = [
     ("song", "单曲解析"),
     ("playlist", "歌单解析"),
     ("album", "专辑解析"),
+    ("artist", "歌手主页"),
 ]
 
 PLACEHOLDERS = {
@@ -70,25 +77,36 @@ PLACEHOLDERS = {
         "song": "歌曲链接或 ID（例：https://music.163.com/song?id=xxx）",
         "playlist": "歌单链接或 ID（例：https://music.163.com/playlist?id=xxx）",
         "album": "专辑链接 / ID / 专辑名",
+        "artist": "歌手名或主页链接（例：https://music.163.com/artist?id=xxx）",
     },
     "qq": {
         "song": "歌曲链接或 songmid（例：https://y.qq.com/n/ryqq/songDetail/xxx）",
         "playlist": "歌单链接或 dissid（例：https://y.qq.com/n/ryqq/playlist/7256912512）",
+        "album": "专辑链接 / 专辑 mid / 专辑名",
+        "artist": "歌手名或主页链接（例：https://y.qq.com/n/ryqq/singer/xxx）",
     },
     "kugou": {
         "song": "歌曲链接或 hash（例：https://www.kugou.com/mixsong/xxx.html）",
         "playlist": "歌单链接或 specialid（例：https://www.kugou.com/yy/special/single/9580287.html）",
+        "album": "专辑链接 / 专辑 ID / 专辑名",
+        "artist": "歌手名或主页链接（例：https://www.kugou.com/singer/188254.html 或 singer/info/ 哈希链接）",
     },
     "kuwo": {
         "song": "歌曲链接或 rid（例：https://www.kuwo.cn/play_detail/228908）",
         "playlist": "歌单链接或 pid（例：https://www.kuwo.cn/playlist_detail/1082685104）",
+        "album": "专辑链接 / 专辑 ID / 专辑名",
+        "artist": "歌手名或主页链接（例：https://www.kuwo.cn/singer_detail/260226）",
     },
     "5sing": {
         "song": "歌曲页链接（例：https://5sing.kugou.com/yc/4219209.html）",
         "playlist": "歌单链接（例：https://5sing.kugou.com/65188239/dj/61d1a130683d8134f5a28493.html）",
+        "artist": "歌手名或音乐空间链接（例：https://5sing.kugou.com/65188239/default.html）",
     },
     "kugou_lite": {
         "song": "歌曲 hash（32 位十六进制，可从酷狗概念版搜索结果复制）",
+        "playlist": "歌单链接或 specialid（与酷狗同库，例：https://www.kugou.com/yy/special/single/9580287.html）",
+        "album": "专辑链接 / 专辑 ID / 专辑名（与酷狗同库）",
+        "artist": "歌手名或主页链接（与酷狗同库，例：https://www.kugou.com/singer/188254.html）",
     },
 }
 
@@ -128,16 +146,17 @@ def _song_to_row(s):
 
 # 五平台栏里的勾选框：默认样式在白色栏内太浅（选中态只剩一个勾、看不到框），
 # 这里未选态加深边框，选中态用绿底 + 自绘白勾，保证两种状态都能一眼看清。
+# 整页只应用一次（按 #mergeCheck 选中），不再逐行 setStyleSheet。
 MERGE_CHECK_QSS = (
-    "QCheckBox { spacing: 0px; }"
-    "QCheckBox::indicator { width: 16px; height: 16px; }"
-    "QCheckBox::indicator:unchecked {"
+    "QCheckBox#mergeCheck { spacing: 0px; }"
+    "QCheckBox#mergeCheck::indicator { width: 16px; height: 16px; }"
+    "QCheckBox#mergeCheck::indicator:unchecked {"
     " background: #ffffff; border: 2px solid #77818f; border-radius: 4px; }"
-    "QCheckBox::indicator:unchecked:hover { border-color: #2e7d32; }"
-    "QCheckBox::indicator:checked {"
+    "QCheckBox#mergeCheck::indicator:unchecked:hover { border-color: #2e7d32; }"
+    "QCheckBox#mergeCheck::indicator:checked {"
     " background: #2e7d32; border: 2px solid #2e7d32; border-radius: 4px;"
     " image: url(\"%s\"); }"
-    "QCheckBox::indicator:checked:hover { background: #276b2b; border-color: #276b2b; }"
+    "QCheckBox#mergeCheck::indicator:checked:hover { background: #276b2b; border-color: #276b2b; }"
 )
 
 _MERGE_CHECK_PATH = None
@@ -177,6 +196,18 @@ def _merge_check_qss() -> str:
     if not path:
         return MERGE_CHECK_QSS % ""
     return MERGE_CHECK_QSS % path.replace(os.sep, "/")
+
+
+# 结果行样式：整页按 objectName 应用一次。旧写法每行、每个控件各自
+# setStyleSheet，几百行时光 QSS 解析/重抛光就要一百多毫秒。
+ROW_QSS = (
+    "QFrame#songRow, QFrame#albumRow, QFrame#mergeRow {"
+    " background: transparent; border: none; }"
+    "QLabel#rowText { background: transparent; border: none; }"
+    "QLabel#rowDur { color: #888; font-size: 11px;"
+    " background: transparent; border: none; }"
+    "QLabel#rowPic { background: #ffffff; border-radius: 4px; color: #555; }"
+)
 
 
 _TITLE_PUNCT = re.compile(
@@ -239,6 +270,20 @@ def _thumb_cover_url(url: str) -> str:
     return url
 
 
+class _AlbumDescBox(QPlainTextEdit):
+    """专辑介绍只读框：内容超出时可滚动，滚到顶/底后把滚轮交还外层页面。"""
+
+    def wheelEvent(self, event):
+        bar = self.verticalScrollBar()
+        delta = event.angleDelta().y()
+        at_top = bar.value() <= bar.minimum()
+        at_bottom = bar.value() >= bar.maximum()
+        if (delta > 0 and at_top) or (delta < 0 and at_bottom):
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
 class NeteasePage(BasePage):
     SESSION_FIELDS = ("platform", "mode", "_result_snapshot")
 
@@ -262,6 +307,12 @@ class NeteasePage(BasePage):
         self.check_boxes = []
         self.single_song_id = None  # 单曲解析时的当前歌曲 ID
         self.single_song = None     # 单曲解析时的 SongInfo（四平台）
+        self._cover_epoch = 0       # 结果换代计数：清空结果后旧封面任务作废
+        self._cover_pending = []    # [(label 弱引用, url, size, epoch)] 等滚到可见再拉
+        self._cover_retry = 0       # 布局未稳定时的重试次数（防止隐藏页面空转）
+
+        # 行样式整页应用一次（按 objectName 选中），不再逐行 setStyleSheet
+        self.setStyleSheet(ROW_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -276,6 +327,12 @@ class NeteasePage(BasePage):
             return parse_cookie_string(content) if content else {}
         except Exception:
             return {}
+
+    def _scraper(self):
+        """当前平台的抓取器实例（网易云也走 scraper，仅用于专辑展开）。"""
+        from music import ALL_PLATFORMS
+        scraper_cls = next(cls for pid, _, cls in ALL_PLATFORMS if pid == self.platform)
+        return scraper_cls()
 
     # ===================== 功能页 =====================
     def _build_func(self):
@@ -316,9 +373,13 @@ class NeteasePage(BasePage):
         self.detail_layout.setSpacing(2)
         self.detail_layout.setAlignment(Qt.AlignTop)
         self.detail_scroll.setWidget(self.detail_container)
+        # 结果多时封面按「滚到可见」再拉，避免一次性打出几百个请求
+        self.detail_scroll.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._load_visible_covers())
         self.detail_stack.addWidget(self.detail_scroll)
         # 五平台对比独立页：五个平台各一栏框架，各自滚动，不走上面的大滚动区
         self.merged_page = QWidget()
+        self.merged_page.setStyleSheet(_merge_check_qss())
         self.merged_outer = QVBoxLayout(self.merged_page)
         self.merged_outer.setContentsMargins(0, 0, 0, 0)
         self.merged_outer.setSpacing(4)
@@ -527,6 +588,10 @@ class NeteasePage(BasePage):
         self._show_empty()
 
     def _clear_detail(self):
+        # 旧结果的封面任务全部作废，避免清空后还在后台拉几百张图
+        self._cover_epoch += 1
+        self._cover_pending = []
+        self._cover_retry = 0
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             if item.widget():
@@ -552,44 +617,81 @@ class NeteasePage(BasePage):
             else:
                 cb.setChecked(not cb.isChecked())
 
-    # ===================== 封面图（异步加载） =====================
-    def _load_image_async(self, url, size, parent_layout):
-        """异步加载网络图片，返回占位 QLabel（加载成功后替换 pixmap）。"""
+    # ===================== 封面图（共享加载器 + 可见才拉） =====================
+    def _cover_check(self, epoch):
+        return lambda: epoch != self._cover_epoch
+
+    def _load_image_async(self, url, size, parent_layout, lazy=False):
+        """占位 QLabel + 异步封面。
+
+        lazy=True：先登记，滚到可见区域才真正发请求（结果列表动辄几百行）；
+        lazy=False：单曲/歌单信息卡、五平台栏等少量图片立即加载。
+        """
         lbl = QLabel("")
+        lbl.setObjectName("rowPic")
         lbl.setFixedSize(size, size)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background: #ffffff; border-radius: 4px; color: #555;")
         parent_layout.addWidget(lbl)
         if not url:
             return lbl
 
-        def load():
-            try:
-                import requests
-                headers = {"User-Agent": "Mozilla/5.0"}
-                host = re.match(r"https?://([^/]+)/", url)
-                if host and host.group(1).endswith("126.net"):
-                    headers["Referer"] = "https://music.163.com/"
-                resp = requests.get(url, timeout=8, headers=headers)
-                img = QImage.fromData(resp.content)
-                if img.isNull():
-                    return
-                pm = QPixmap.fromImage(img).scaled(
-                    size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-                def _set():
-                    try:
-                        lbl.setPixmap(pm)
-                    except Exception:
-                        pass
-                post_to_main(_set)
-            except Exception:
-                pass
-
-        import threading
-        from gui_qt.common import start_page_thread
-        start_page_thread(self, load)
+        epoch = self._cover_epoch
+        stale = self._cover_check(epoch)
+        if lazy:
+            self._cover_pending.append((weakref.ref(lbl), url, int(size), epoch))
+        else:
+            load_cover(url, size, lbl, stale)
         return lbl
+
+    def _load_visible_covers(self):
+        """只加载当前视口（上下各留 400px）内的懒加载封面。"""
+        pending = self._cover_pending
+        if not pending:
+            return
+        try:
+            self.detail_container.layout().activate()
+            viewport = self.detail_scroll.viewport().rect()
+            need = self.detail_layout.sizeHint().height()
+            settled = self.detail_container.height() + 4 >= need
+        except (RuntimeError, AttributeError):
+            return
+        if not settled:
+            # 行还没完成布局时（插入瞬间）所有行都挤在顶部，按几何判定会把
+            # 全部行误判成可见、一次拉满封面；等布局稳定后再判定（最多重试 20 次，
+            # 页面隐藏时不再空转，显示时由 on_show 重置重试）。
+            if self._cover_retry < 20:
+                self._cover_retry += 1
+                QTimer.singleShot(50, self._load_visible_covers)
+            return
+        self._cover_retry = 0
+        keep = []
+        for ref, url, size, epoch in pending:
+            lbl = ref()
+            if lbl is None or epoch != self._cover_epoch:
+                continue
+            try:
+                if not isValid(lbl):
+                    continue
+                # 布局还没落位时行高为 0，先留着，等下一次判定，
+                # 否则所有行会挤在顶部被误判成「全部可见」而一次性全拉。
+                if lbl.height() <= 0:
+                    keep.append((ref, url, size, epoch))
+                    continue
+                pos = lbl.mapTo(self.detail_scroll.viewport(), QPoint(0, 0))
+            except RuntimeError:
+                continue
+            rect = QRect(pos, lbl.size())
+            if viewport.adjusted(0, -400, 0, 400).intersects(rect):
+                load_cover(url, size, lbl, self._cover_check(epoch))
+            else:
+                keep.append((ref, url, size, epoch))
+        self._cover_pending = keep
+
+    def on_show(self):
+        # 页面从隐藏变可见时，视口尺寸才有效，需要重新判定可见封面
+        self._cover_retry = 0
+        QTimer.singleShot(0, self._load_visible_covers)
+        QTimer.singleShot(80, self._load_visible_covers)
 
     # ===================== 搜索/解析入口 =====================
     def _search(self):
@@ -643,7 +745,8 @@ class NeteasePage(BasePage):
             self.detail_stack.setCurrentWidget(self.detail_scroll)
         render = {"songs": self._render_songs, "song": self._render_single_song,
                   "playlist": self._render_playlist, "album": self._render_album,
-                  "albums": self._render_albums, "multi": self._render_merged}.get(kind)
+                  "albums": self._render_albums, "multi": self._render_merged,
+                  "artist": self._render_artist}.get(kind)
         if render:
             render(data or [] if kind in ("songs", "albums", "multi") else data)
 
@@ -795,13 +898,13 @@ class NeteasePage(BasePage):
     def _merged_row(self, s, checked=False):
         """五平台栏内的一行：勾选 + 封面 + 歌名/歌手 + 时长。"""
         row = QFrame()
-        row.setStyleSheet("QFrame { background: transparent; border: none; }")
+        row.setObjectName("mergeRow")
         h = QHBoxLayout(row)
         h.setContentsMargins(2, 2, 2, 2)
         h.setSpacing(6)
         cb = QCheckBox()
+        cb.setObjectName("mergeCheck")
         cb.setFixedSize(20, 20)
-        cb.setStyleSheet(_merge_check_qss())
         cb.setChecked(bool(checked))
         self.check_boxes.append(cb)
         h.addWidget(cb, 0, Qt.AlignVCenter)
@@ -814,11 +917,11 @@ class NeteasePage(BasePage):
             f"{name}<br><span style='color:#888;font-size:11px'>{artists}</span>")
         info.setTextFormat(Qt.RichText)
         info.setWordWrap(True)
-        info.setStyleSheet("background: transparent; border: none;")
+        info.setObjectName("rowText")
         info.setToolTip(f"{name}\n{artists}\n{s.get('album') or ''}".strip())
         h.addWidget(info, 1)
         dur = QLabel(_fmt_duration(s.get("duration", 0)))
-        dur.setStyleSheet("color: #888; font-size: 11px; background: transparent; border: none;")
+        dur.setObjectName("rowDur")
         h.addWidget(dur, 0, Qt.AlignTop)
         make_row_clickable(row, cb)
         return row
@@ -979,7 +1082,37 @@ class NeteasePage(BasePage):
                 return ("album", album_detail(aid, cookies))
             keyword = f"{singer} {kw}".strip() if singer else kw
             return ("albums", search_album(keyword, cookies, limit=30))
+        if mode == "artist":
+            return self._work_netease_artist(kw, cookies)
         return ("songs", [])
+
+    def _work_netease_artist(self, kw, cookies):
+        """歌手主页：链接/ID 直接取详情，否则按名称搜索并取最匹配的一位。"""
+        from netease import search_artist, artist_detail, artist_songs, artist_albums
+
+        aid = _parse_netease_id(kw)
+        candidates = []
+        if aid is None:
+            candidates = search_artist(kw, cookies, limit=10)
+            if not candidates:
+                raise ValueError("没有找到该歌手，换个名字或贴主页链接试试")
+            candidates.sort(key=lambda c: _match_score(c.get("name"), kw))
+            aid = candidates[0]["id"]
+        info = artist_detail(int(aid), cookies)
+        songs = artist_songs(int(aid))
+        albums = artist_albums(int(aid), limit=50)
+        payload = {
+            "id": aid,
+            "name": info.get("name", ""),
+            "pic": info.get("picUrl", ""),
+            "desc": info.get("briefDesc", ""),
+            "song_count": info.get("musicSize") or len(songs),
+            "album_count": info.get("albumSize") or len(albums),
+            "url": f"https://music.163.com/#/artist?id={aid}",
+            "songs": songs,
+            "albums": albums,
+        }
+        return ("artist", {"candidates": candidates, "artist": payload})
 
     def _work_scraper(self, platform, mode, kw):
         from music import ALL_PLATFORMS
@@ -1004,6 +1137,33 @@ class NeteasePage(BasePage):
             if pl is None:
                 raise ValueError("未找到该歌单（可能已删除或链接失效）")
             return ("playlist", pl)
+        if mode == "album":
+            aid = scraper.extract_album_id(kw)
+            if aid:
+                album = scraper.get_album(aid)
+                if album is None:
+                    raise ValueError("未找到该专辑（可能已下架或链接失效）")
+                return ("album", album)
+            albums = scraper.search_album(kw, 30) or []
+            if not albums:
+                raise ValueError("没有找到匹配的专辑，试试专辑链接或更完整的专辑名")
+            return ("albums", albums)
+        if mode == "artist":
+            aid = scraper.extract_artist_id(kw)
+            if aid:
+                payload = scraper.get_artist(aid)
+                if payload is None:
+                    raise ValueError("未找到该歌手（可能链接失效或需要登录）")
+                return ("artist", {"candidates": [], "artist": payload})
+            candidates = scraper.search_artist(kw, 10) or []
+            if not candidates:
+                raise ValueError("没有找到该歌手，换个名字或贴主页链接试试")
+            candidates.sort(key=lambda c: _match_score(c.get("name"), kw))
+            best = candidates[0]
+            payload = scraper.get_artist(best["id"], best.get("name", ""))
+            if payload is None:
+                raise ValueError(f"没能打开歌手「{best.get('name')}」的主页")
+            return ("artist", {"candidates": candidates, "artist": payload})
         return ("songs", [])
 
     # ===================== 渲染：歌曲列表（带封面） =====================
@@ -1016,9 +1176,14 @@ class NeteasePage(BasePage):
             self.detail_layout.addWidget(lbl)
             self.status_label.setText("无结果")
             return
+        self._render_song_rows(songs)
+        self.status_label.setText(f"共 {len(songs)} 首，勾选后批量下载")
+
+    def _render_song_rows(self, songs):
+        """只画歌曲行（不重置 results / status），供歌手主页分节复用。"""
         for s in songs:
             row = QFrame()
-            row.setStyleSheet("QFrame { background: transparent; border: none; }")
+            row.setObjectName("songRow")
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 1, 0, 1)
             cb = QCheckBox()
@@ -1026,17 +1191,19 @@ class NeteasePage(BasePage):
             self.check_boxes.append(cb)
             h.addWidget(cb)
             pic = s.get("picUrl") or (s.get("al") or {}).get("picUrl")
-            self._load_image_async(pic, 44, h)
-            text = f"{s.get('name', '')} - {s.get('artists', '')}  ({s.get('album', '')})"
-            info = QLabel(text)
-            info.setWordWrap(True)
+            self._load_image_async(pic, 44, h, lazy=True)
+            text = f"{s.get('name', '')} - {s.get('artists', '')}"
+            if s.get("album"):
+                text += f"  ({s['album']})"
+            info = ElidedLabel(text)
+            info.setObjectName("rowText")
             h.addWidget(info, 1)
             dur = QLabel(_fmt_duration(s.get("duration", 0)))
-            dur.setStyleSheet("color: #888; font-size: 11px;")
+            dur.setObjectName("rowDur")
             h.addWidget(dur)
             make_row_clickable(row, cb)
             self.detail_layout.addWidget(row)
-        self.status_label.setText(f"共 {len(songs)} 首，勾选后批量下载")
+        QTimer.singleShot(0, self._load_visible_covers)
 
     # ===================== 渲染：单曲解析（详情 + 歌词） =====================
     def _render_single_song(self, song):
@@ -1225,31 +1392,84 @@ class NeteasePage(BasePage):
         self._render_songs(self.results)
         self.status_label.setText(f"歌单「{pl.get('name', '')}」共 {len(self.results)} 首")
 
+    # ===================== 渲染：专辑详情卡（各平台共用） =====================
+    # 卡片高度固定：封面 96 + 上下的 10 边距 + 介绍框 64 + 间距 6
+    ALBUM_CARD_HEIGHT = 186
+    ALBUM_DESC_HEIGHT = 64
+
+    @staticmethod
+    def _clean_album_desc(desc):
+        """专辑介绍统一成纯文本（部分平台返回 <br>/实体）。"""
+        text = str(desc or "").strip()
+        if "<" in text and ">" in text:
+            text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+            text = re.sub(r"</p\s*>", "\n", text, flags=re.I)
+            text = re.sub(r"<[^>]+>", "", text)
+            text = html.unescape(text)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    def _album_info_card(self, name, singer, count, publish, cover, desc):
+        """专辑信息卡：封面 + 基本信息 + 固定高度的可滚动介绍框。
+
+        介绍框高度写死（滚动看全文），卡片高度也随之固定，
+        不同专辑 / 不同平台之间卡片大小一致。
+        """
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
+        card.setFixedHeight(self.ALBUM_CARD_HEIGHT)
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(6)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._load_image_async(cover, 96, row)
+        lines = [f"{name}", f"歌手: {singer or '未知'}", f"歌曲数: {count}"]
+        if publish:
+            lines.append(f"发行: {publish}")
+        info = QLabel("\n".join(lines))
+        info.setWordWrap(True)
+        info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        info.setFixedHeight(96)
+        info.setStyleSheet("background: transparent; border: none;")
+        row.addWidget(info, 1)
+        v.addLayout(row)
+
+        desc_box = _AlbumDescBox()
+        desc_box.setReadOnly(True)
+        desc_box.setFrameShape(QFrame.NoFrame)
+        desc_box.setFixedHeight(self.ALBUM_DESC_HEIGHT)
+        desc_box.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        desc_box.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        desc_box.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        desc_box.setPlainText(self._clean_album_desc(desc) or "（暂无专辑介绍）")
+        desc_box.setStyleSheet(
+            "QPlainTextEdit { background: #f7f8fa; border: 1px solid #e3e7ee;"
+            " border-radius: 4px; padding: 2px 4px; font-size: 12px; color: #444; }")
+        v.addWidget(desc_box)
+        return card
+
     # ===================== 渲染：专辑解析（专辑详情） =====================
     def _render_album(self, album):
         if not album:
             self._show_empty()
             return
+        if not isinstance(album, dict):
+            self._render_album_info(album)
+            return
         songs = album.get("songs") or []
         album_info = album.get("album") or {}
-        info_card = QFrame()
-        info_card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
-        h = QHBoxLayout(info_card)
-        h.setContentsMargins(10, 10, 10, 10)
         pic = album_info.get("picUrl") or album_info.get("blurPicUrl")
-        self._load_image_async(pic, 96, h)
         artist = album_info.get("artist") or {}
         artist_name = artist.get("name", "") if isinstance(artist, dict) else str(artist)
         publish = album_info.get("publishTime", 0)
         pub_str = time.strftime("%Y-%m-%d", time.localtime(publish / 1000)) if publish else "未知"
-        txt = QLabel(
-            f"{album_info.get('name', '')}\n"
-            f"歌手: {artist_name}\n"
-            f"歌曲数: {album_info.get('size', len(songs))}\n"
-            f"发行: {pub_str}"
-        )
-        h.addWidget(txt, 1)
-        self.detail_layout.addWidget(info_card)
+        card = self._album_info_card(
+            album_info.get("name", ""), artist_name,
+            album_info.get("size", len(songs)), pub_str, pic,
+            album_info.get("description") or "")
+        self.detail_layout.addWidget(card)
         self.results = [
             {"id": s["id"], "name": s.get("name", ""),
              "artists": "/".join(a.get("name", "") for a in (s.get("ar") or [])),
@@ -1261,34 +1481,219 @@ class NeteasePage(BasePage):
         self.status_label.setText(f"专辑「{album_info.get('name', '')}」共 {len(self.results)} 首")
 
     # ===================== 渲染：专辑搜索结果（整张专辑下载） =====================
+    def _album_row(self, album):
+        """专辑（网易云 dict / 各平台 AlbumInfo）→ 页面统一行。"""
+        if isinstance(album, dict):
+            album_id = album.get("id")
+            name = album.get("name", "")
+            artist = album.get("artist")
+            if isinstance(artist, dict):
+                artist = artist.get("name", "")
+            pic = album.get("picUrl") or album.get("blurPicUrl") or ""
+            count = album.get("size") or album.get("song_count") or 0
+        else:
+            album_id = album.album_id
+            name = album.album_name
+            artist = album.singer
+            pic = album.cover_url
+            count = album.song_count
+        return {
+            "_kind": "album",
+            "id": album_id,
+            "name": name,
+            "artists": artist or "",
+            "picUrl": pic or "",
+            "song_count": int(count or 0),
+            "_platform": self.platform,
+        }
+
     def _render_albums(self, albums):
-        self.results = albums
-        if not albums:
+        rows = [self._album_row(a) for a in albums or []]
+        self.results = rows
+        if not rows:
             lbl = QLabel("（无结果）")
             lbl.setStyleSheet("color: gray; padding: 20px;")
             lbl.setAlignment(Qt.AlignCenter)
             self.detail_layout.addWidget(lbl)
             self.status_label.setText("无结果")
             return
-        for alb in albums:
-            row = QFrame()
-            row.setStyleSheet("QFrame { background: transparent; border: none; }")
-            h = QHBoxLayout(row)
+        self._render_album_rows(rows)
+        self.status_label.setText(f"共 {len(rows)} 个专辑，勾选后下载整张专辑")
+
+    def _render_album_rows(self, rows):
+        """只画专辑行（不重置 results / status），供歌手主页分节复用。"""
+        for row in rows:
+            frame = QFrame()
+            frame.setObjectName("albumRow")
+            h = QHBoxLayout(frame)
             h.setContentsMargins(0, 1, 0, 1)
             cb = QCheckBox()
             cb.setFixedSize(18, 18)
             self.check_boxes.append(cb)
             h.addWidget(cb)
-            pic = alb.get("picUrl") or alb.get("blurPicUrl")
-            self._load_image_async(pic, 44, h)
-            artist = alb.get("artist")
-            if isinstance(artist, dict):
-                artist = artist.get("name", "")
-            lbl = QLabel(f"{alb.get('name', '')} - {artist}")
+            self._load_image_async(row.get("picUrl"), 44, h, lazy=True)
+            text = f"{row.get('name', '')} - {row.get('artists', '')}"
+            if row.get("song_count"):
+                text += f"（{row['song_count']} 首）"
+            lbl = ElidedLabel(text)
+            lbl.setObjectName("rowText")
             h.addWidget(lbl, 1)
-            make_row_clickable(row, cb)
-            self.detail_layout.addWidget(row)
-        self.status_label.setText(f"共 {len(albums)} 个专辑，勾选后下载整张专辑")
+            make_row_clickable(frame, cb)
+            self.detail_layout.addWidget(frame)
+        QTimer.singleShot(0, self._load_visible_covers)
+
+    def _render_album_info(self, album):
+        """各平台 AlbumInfo → 专辑信息卡 + 曲目列表。"""
+        card = self._album_info_card(
+            album.album_name, album.singer,
+            album.song_count or len(album.songs), album.release_date,
+            album.cover_url, album.description)
+        self.detail_layout.addWidget(card)
+        self.results = [_song_to_row(s) for s in album.songs]
+        self._render_songs(self.results)
+        self.status_label.setText(f"专辑「{album.album_name}」共 {len(self.results)} 首")
+
+    # ===================== 渲染：歌手主页 =====================
+    def _render_artist(self, payload):
+        payload = payload or {}
+        artist = payload.get("artist") or {}
+        if not artist:
+            self._show_empty()
+            return
+        self._artist_payload = payload
+        self._artist_candidates = payload.get("candidates") or []
+        self.results = []
+        self.check_boxes = []
+
+        if len(self._artist_candidates) > 1:
+            bar = QHBoxLayout()
+            bar.setContentsMargins(0, 0, 0, 2)
+            bar.addWidget(QLabel("匹配歌手:"))
+            combo = QComboBox()
+            current = 0
+            for index, cand in enumerate(self._artist_candidates):
+                count = cand.get("song_count") or 0
+                label = cand.get("name", "")
+                if count:
+                    label += f"（{count} 首）"
+                combo.addItem(label, cand.get("id"))
+                if cand.get("name") == artist.get("name"):
+                    current = index
+            combo.setCurrentIndex(current)
+            combo.currentIndexChanged.connect(self._switch_artist_candidate)
+            bar.addWidget(combo)
+            bar.addStretch(1)
+            self.detail_layout.addLayout(bar)
+
+        songs = self._artist_song_rows(artist.get("songs") or [])
+        albums = [self._album_row(a) for a in (artist.get("albums") or [])]
+
+        info_card = QFrame()
+        info_card.setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 6px; }")
+        h = QHBoxLayout(info_card)
+        h.setContentsMargins(10, 10, 10, 10)
+        pic = artist.get("pic") or (songs[0].get("picUrl") if songs else "")
+        self._load_image_async(pic, 96, h)
+        lines = [f"{artist.get('name', '')}"]
+        stats = []
+        if artist.get("song_count"):
+            stats.append(f"歌曲 {artist['song_count']}")
+        if artist.get("album_count"):
+            stats.append(f"专辑 {artist['album_count']}")
+        if artist.get("fans"):
+            stats.append(f"粉丝 {artist['fans']}")
+        if stats:
+            lines.append(" / ".join(stats))
+        if artist.get("desc"):
+            lines.append(str(artist["desc"])[:120])
+        if artist.get("url"):
+            lines.append(str(artist["url"]))
+        txt = QLabel("\n".join(lines))
+        txt.setWordWrap(True)
+        txt.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        h.addWidget(txt, 1)
+        self.detail_layout.addWidget(info_card)
+
+        if songs:
+            self._section_title(f"热门歌曲 · {len(songs)}")
+            self.results.extend(songs)
+            self._render_song_rows(songs)
+        if albums:
+            self._section_title(f"专辑 · {len(albums)}")
+            self.results.extend(albums)
+            self._render_album_rows(albums)
+        if not songs and not albums:
+            hint = QLabel("（没有取到公开曲目：换个输入，或改用「歌曲搜索」按歌手名查）")
+            hint.setStyleSheet("color: #888; padding: 10px 2px;")
+            self.detail_layout.addWidget(hint)
+
+        album_part = f" / {len(albums)} 个专辑" if albums else ""
+        self.status_label.setText(
+            f"歌手「{artist.get('name', '')}」：{len(songs)} 首歌曲{album_part}，勾选后下载")
+
+    def _section_title(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            "font-weight: bold; font-size: 12px; padding: 6px 2px 2px 2px;"
+            " background: transparent; border: none;")
+        self.detail_layout.addWidget(lbl)
+
+    def _artist_song_rows(self, songs):
+        rows = []
+        for item in songs:
+            if isinstance(item, dict):
+                row = {
+                    "id": item.get("id"),
+                    "name": item.get("name", ""),
+                    "artists": item.get("artists", ""),
+                    "album": item.get("album", ""),
+                    "picUrl": item.get("picUrl", ""),
+                    "duration": item.get("duration", 0),
+                    "_platform": self.platform,
+                }
+            else:
+                row = _song_to_row(item)
+            rows.append(row)
+        return rows
+
+    def _switch_artist_candidate(self, index):
+        cands = getattr(self, "_artist_candidates", [])
+        if not (0 <= index < len(cands)):
+            return
+        cand = cands[index]
+        self._load_artist(cand.get("id"), cand.get("name", ""))
+
+    def _load_artist(self, artist_id, name=""):
+        """切歌手候选：只重取歌手主页，不动输入框。"""
+        if artist_id is None:
+            return
+        self.status_label.setText(f"正在加载歌手「{name or artist_id}」...")
+        self.search_btn.setEnabled(False)
+        platform, mode = self.platform, self.mode
+
+        def work():
+            if platform == "netease":
+                return self._work_netease_artist(str(artist_id), self._cookies())
+            from music import ALL_PLATFORMS
+            scraper_cls = next(cls for pid, _, cls in ALL_PLATFORMS if pid == platform)
+            payload = scraper_cls().get_artist(str(artist_id), name)
+            if payload is None:
+                raise ValueError("没能打开该歌手主页")
+            return {"candidates": getattr(self, "_artist_candidates", []), "artist": payload}
+
+        def done(result, err):
+            self.search_btn.setEnabled(True)
+            if err:
+                self.status_label.setText(f"{err}")
+                return
+            if isinstance(result, tuple):
+                result = result[1]
+            self._clear_detail()
+            self._render_result(("artist", result))
+            self._result_snapshot = ("artist", result)
+
+        run_bg(work, done)
 
     # ===================== 下载：单曲立即下载 =====================
     def _download_single_song(self):
@@ -1390,14 +1795,35 @@ class NeteasePage(BasePage):
         def work():
             from concurrent.futures import ThreadPoolExecutor, as_completed
             from music.downloader import download_song_smart
+            from music.models import SongInfo
             from toolbox.config_manager import get_music_download_dir
             out_dir = str(get_music_download_dir())
             ok, fail, preview, via_cnt, first_err = 0, 0, 0, 0, ""
 
+            # 勾选的专辑先展开成曲目（各平台专辑接口），再统一下载
+            jobs = []
+            for item in selected:
+                if item.get("_kind") == "album":
+                    try:
+                        scraper = self._scraper()
+                        album = scraper.get_album(str(item.get("id") or ""))
+                    except Exception as exc:
+                        album = None
+                        if not first_err:
+                            first_err = f"专辑展开失败：{exc}"
+                    if album:
+                        for s in album.songs:
+                            jobs.append(_song_to_row(s))
+                    else:
+                        fail += 1
+                else:
+                    jobs.append(item)
+            if jobs:
+                card.plan(len(jobs) + fail, 4)
+
             def _one(item):
                 song = item.get("_song")
                 if song is None:
-                    from music.models import SongInfo
                     song = SongInfo(song_id=str(item.get("id", "")),
                                     song_name=item.get("name", ""),
                                     singer=item.get("artists", ""),
@@ -1413,7 +1839,7 @@ class NeteasePage(BasePage):
                 return r
 
             with ThreadPoolExecutor(max_workers=4) as ex:
-                futs = {ex.submit(_one, it): it for it in selected}
+                futs = {ex.submit(_one, it): it for it in jobs}
                 for fut in as_completed(futs):
                     try:
                         r = fut.result()
@@ -1558,8 +1984,9 @@ class NeteasePage(BasePage):
 
     def _download_selected_netease(self, selected):
         quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
-        # 判断是专辑（搜索结果含 artist 字段而非 artists）还是歌曲
-        is_albums = bool(selected) and ("artists" not in selected[0] and "artist" in selected[0])
+        # 歌手主页/专辑搜索结果：行上带 _kind=album 的展开成整张专辑
+        album_rows = [r for r in selected if r.get("_kind") == "album"]
+        song_rows = [r for r in selected if r.get("_kind") != "album"]
 
         self.download_btn.setEnabled(False)
         self.status_label.setText("下载中...")
@@ -1578,9 +2005,9 @@ class NeteasePage(BasePage):
             jobs = []  # (song_id, 显示名)
             fail = 0
             first_err = ""
-            if is_albums:
+            if album_rows:
                 cookies = self._cookies()
-                for alb in selected:
+                for alb in album_rows:
                     try:
                         info = album_detail(int(alb["id"]), cookies)
                         for song in info.get("songs", []):
@@ -1592,10 +2019,9 @@ class NeteasePage(BasePage):
                             first_err = str(e)
                 if not jobs and not fail:
                     first_err = "专辑内无歌曲"
-            else:
-                jobs = [(int(s["id"]),
-                         (s.get("name") or f"歌曲{s['id']}")[:40]) for s in selected]
-            card.plan(len(jobs), 4)
+            jobs.extend((int(s["id"]),
+                         (s.get("name") or f"歌曲{s['id']}")[:40]) for s in song_rows)
+            card.plan(len(jobs) + fail, 4)
 
             def _one(job):
                 sid, name = job
