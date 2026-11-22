@@ -700,7 +700,12 @@ class Drive115Client:
             self._oss_put(path, bucket, obj, callback, size, on_progress)
             self._index_cache.pop(remote_dir, None)
             return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
-        raise last_error or Drive115Error(-1, "115 上传初始化失败", "/initupload")
+        if last_error is not None:
+            raise Drive115Error(
+                last_error.code,
+                f"{last_error.message}（已尝试版本：{'、'.join(self._app_versions)}）",
+                last_error.path)
+        raise Drive115Error(-1, "115 上传初始化失败", "/initupload")
 
     def _init_upload(self, path: Path, sha1: str, size: int, target: str,
                      user_id: int, userkey: str, app_ver: str, on_stage):
