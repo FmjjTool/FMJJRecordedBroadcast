@@ -1,8 +1,11 @@
 """重命名引擎 - 文件批量重命名核心逻辑"""
+import json
 import os
 import re
+from pathlib import Path
 
 from .date_folders import scan_date_folders  # noqa: F401  兼容旧导入路径
+from .organize_engine import companion_candidates
 from .utils import clean_special_chars
 
 
@@ -92,6 +95,110 @@ def extract_file_title(file_name: str) -> str:
 # ==================== 扫描文件夹 ====================
 
 # scan_date_folders 由 toolbox.date_folders 提供（skip_subfolders 读重命名配置）。
+
+# ==================== 附属文件同步改名 ====================
+
+_TIMELINE_SUFFIX = "_时间轴.json"
+
+
+def _unique_target(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem, suffix = os.path.splitext(path.name)
+    number = 1
+    while True:
+        candidate = path.with_name(f"{stem}_{number}{suffix}")
+        if not candidate.exists():
+            return candidate
+        number += 1
+
+
+def _sidecar_tail(name: str, old_stem: str, old_ext: str, new_ext: str) -> str:
+    """附属文件在新主干的尾部；`.ts.ffmpeg.log` 的扩展名跟随视频改成 `.mp4`。"""
+    tail = name[len(old_stem):]
+    if old_ext != new_ext and tail.lower().startswith(old_ext + ".ffmpeg.log"):
+        tail = new_ext + tail[len(old_ext):]
+    return tail
+
+
+def _update_timeline(timeline_path, old_video, new_video) -> bool:
+    """把时间轴里指向旧视频的路径改到新视频，避免重命名后弹幕对齐失效。"""
+    path = Path(timeline_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    old_abs = os.path.normcase(os.path.abspath(str(old_video)))
+    old_dir = os.path.normcase(os.path.dirname(os.path.abspath(str(old_video))))
+    old_stem = Path(old_video).stem
+    new_abs = os.path.abspath(str(new_video))
+    changed = False
+    for entry in data.get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        raw = str(entry.get("file") or "")
+        if not raw:
+            continue
+        same = os.path.normcase(os.path.abspath(raw)) == old_abs
+        if not same:
+            raw_path = Path(raw)
+            same = (os.path.normcase(os.path.abspath(raw_path.parent)) == old_dir
+                    and raw_path.stem == old_stem)
+        if same:
+            entry["file"] = new_abs
+            changed = True
+    if data.get("base") == old_stem:
+        data["base"] = Path(new_video).stem
+        changed = True
+    if data.get("merged") and os.path.normcase(
+            os.path.abspath(str(data.get("target") or ""))) == old_abs:
+        data["target"] = new_abs
+        changed = True
+    if changed:
+        temporary = str(path) + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=1)
+        os.replace(temporary, path)
+    return changed
+
+
+def rebase_companions(src_video, dst_video):
+    """视频改名后同步改名弹幕 / 封面 / 时间轴 / ffmpeg 日志，并修正时间轴路径。
+
+    返回 (已改名列表, 跳过原因列表)；单个附属文件失败不影响视频改名结果。
+    """
+    src = Path(src_video)
+    dst = Path(dst_video)
+    old_stem, new_stem = src.stem, dst.stem
+    old_ext, new_ext = src.suffix.lower(), dst.suffix.lower()
+    if old_stem == new_stem and old_ext == new_ext:
+        return [], []
+    moved, skipped = [], []
+    for item in companion_candidates(src):
+        if not item.name.startswith(old_stem):
+            continue
+        tail = _sidecar_tail(item.name, old_stem, old_ext, new_ext)
+        if re.match(r"_\d{3}(?:_|\.|$)", tail):
+            continue  # 分段自己的附属文件，等分段改名时处理
+        target = item.with_name(new_stem + tail)
+        if os.path.normcase(str(target)) == os.path.normcase(str(item)):
+            continue
+        target = _unique_target(target)
+        try:
+            os.rename(item, target)
+        except OSError as error:
+            skipped.append(f"{item.name}：{error}")
+            continue
+        moved.append(str(target))
+        if tail.lower().endswith(_TIMELINE_SUFFIX.lower()):
+            try:
+                _update_timeline(target, src, dst)
+            except OSError as error:
+                skipped.append(f"{target.name}（时间轴路径未更新）：{error}")
+    return moved, skipped
+
 
 # ==================== 缓存操作 ====================
 

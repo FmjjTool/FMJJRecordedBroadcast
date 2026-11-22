@@ -9,20 +9,174 @@
 
 import os
 import time
+from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QGroupBox,
+    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
     QPushButton, QTextEdit, QVBoxLayout,
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 
+from toolbox.date_folders import scan_date_folders
 from toolbox.organize_engine import execute_migration, scan_files, scan_sources
+from toolbox.rename_engine import is_standard_recording_name
+from toolbox.sidecar_merge import (
+    DANMAKU_SUFFIX, TIMELINE_SUFFIX, list_danmaku_files, list_timeline_files,
+    merge_danmaku, merge_timelines,
+)
 from toolbox import bili_upload as BU
-from toolbox.utils import format_size
+from toolbox.utils import format_size, is_video_file
 
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import count_date_subfolders
 from gui_qt.common import run_bg
+
+
+class MergeSidecarsDialog(QDialog):
+    """选择日期文件夹、目标视频与要合并的弹幕 / 时间轴（只收集选择）。"""
+
+    def __init__(self, parent, work_dir, folders):
+        super().__init__(parent)
+        self.setWindowTitle("合并弹幕 / 时间轴")
+        self.resize(900, 640)
+        self.setMinimumSize(640, 420)
+        self.work_dir = work_dir
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        form = QHBoxLayout()
+        form.setSpacing(8)
+        form.addWidget(QLabel("日期文件夹"))
+        self.folder_combo = QComboBox()
+        self.folder_combo.setMinimumWidth(160)
+        for name, _label in folders:
+            self.folder_combo.addItem(name)
+        self.folder_combo.currentIndexChanged.connect(self._load_folder)
+        form.addWidget(self.folder_combo)
+        form.addSpacing(12)
+        form.addWidget(QLabel("目标视频"))
+        self.video_combo = QComboBox()
+        self.video_combo.setMinimumWidth(320)
+        self.video_combo.currentIndexChanged.connect(self._update_summary)
+        form.addWidget(self.video_combo, 1)
+        layout.addLayout(form)
+
+        hint = QLabel("弹幕按时间排序去重；时间轴按录制顺序换算到目标视频。"
+                      "已有同名附属文件会先备份为 .bak-时间。")
+        hint.setProperty("role", "muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        lists = QHBoxLayout()
+        lists.setSpacing(12)
+        self.danmaku_list = self._build_list("弹幕文件", lists)
+        self.timeline_list = self._build_list("时间轴", lists)
+        layout.addLayout(lists, 1)
+
+        self.summary = QLabel("")
+        self.summary.setProperty("role", "muted")
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.merge_btn = buttons.addButton("合并", QDialogButtonBox.AcceptRole)
+        self.merge_btn.setProperty("variant", "primary")
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self._accept)
+        layout.addWidget(buttons)
+
+        self._load_folder()
+
+    def _build_list(self, title, parent_layout):
+        box = QGroupBox(title)
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(8, 8, 8, 8)
+        items = QListWidget()
+        items.setAlternatingRowColors(True)
+        items.itemChanged.connect(lambda _item: self._update_summary())
+        box_layout.addWidget(items)
+        parent_layout.addWidget(box, 1)
+        return items
+
+    def _folder_path(self):
+        name = self.folder_combo.currentText()
+        return os.path.join(self.work_dir, name) if name else ""
+
+    def _load_folder(self):
+        self.danmaku_list.blockSignals(True)
+        self.timeline_list.blockSignals(True)
+        self.danmaku_list.clear()
+        self.timeline_list.clear()
+        self.video_combo.clear()
+        folder = self._folder_path()
+        self._danmaku_paths = list_danmaku_files(folder)
+        self._timeline_paths = list_timeline_files(folder)
+        for path in self._danmaku_paths:
+            self._add_item(self.danmaku_list, path)
+        for path in self._timeline_paths:
+            self._add_item(self.timeline_list, path)
+        videos = []
+        if folder and os.path.isdir(folder):
+            for name in sorted(os.listdir(folder)):
+                path = os.path.join(folder, name)
+                if os.path.isfile(path) and is_video_file(path):
+                    videos.append(path)
+        videos.sort(key=lambda item: (
+            not is_standard_recording_name(Path(item).name),
+            -os.path.getsize(item)))
+        for path in videos:
+            self.video_combo.addItem(os.path.basename(path), path)
+        self.danmaku_list.blockSignals(False)
+        self.timeline_list.blockSignals(False)
+        self._update_summary()
+
+    @staticmethod
+    def _add_item(items, path):
+        item = QListWidgetItem(f"{Path(path).name}  ({format_size(os.path.getsize(path))})")
+        item.setData(Qt.UserRole, str(path))
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked)
+        items.addItem(item)
+
+    @staticmethod
+    def _checked(items):
+        return [Path(items.item(index).data(Qt.UserRole))
+                for index in range(items.count())
+                if items.item(index).checkState() == Qt.Checked]
+
+    def _target(self):
+        value = self.video_combo.currentData()
+        return Path(value) if value else None
+
+    def _update_summary(self):
+        target = self._target()
+        danmaku = self._checked(self.danmaku_list)
+        timelines = self._checked(self.timeline_list)
+        if target is None:
+            self.summary.setText("当前日期文件夹没有视频，无法确定合并后的文件名")
+            self.merge_btn.setEnabled(False)
+            return
+        parts = []
+        if danmaku:
+            parts.append(f"{len(danmaku)} 个弹幕 → {target.stem}{DANMAKU_SUFFIX}")
+        if timelines:
+            parts.append(f"{len(timelines)} 个时间轴 → {target.stem}{TIMELINE_SUFFIX}")
+        self.summary.setText("；".join(parts) if parts else "请至少勾选一个弹幕或时间轴文件")
+        self.merge_btn.setEnabled(bool(parts))
+
+    def _accept(self):
+        if self._target() is not None and (
+                self._checked(self.danmaku_list) or self._checked(self.timeline_list)):
+            self.accept()
+
+    def request(self):
+        target = self._target()
+        return {"target": str(target) if target else "",
+                "danmaku": [str(path) for path in self._checked(self.danmaku_list)],
+                "timelines": [str(path) for path in self._checked(self.timeline_list)]}
 
 
 class OrganizePage(BasePage):
@@ -37,6 +191,7 @@ class OrganizePage(BasePage):
         self._plan_dir = ""
         self._generation = 0
         self._migrated_videos = []
+        self._last_scan_skipped = []
         self._enter_stage = 0  # 回车快捷：0=待扫描，1=待执行
 
         layout = QVBoxLayout(self)
@@ -94,6 +249,12 @@ class OrganizePage(BasePage):
             "工作目录里的视频不动")
         self.source_btn.clicked.connect(self._migrate_sources)
         btn_row.addWidget(self.source_btn)
+        self.merge_btn = QPushButton("合并弹幕 / 时间轴")
+        self.merge_btn.setToolTip(
+            "把选中日期文件夹里的多个弹幕 JSONL / 时间轴合并到目标视频，"
+            "输出与目标视频同名的附属文件；原名文件保留，同名目标会先备份")
+        self.merge_btn.clicked.connect(self._open_merge)
+        btn_row.addWidget(self.merge_btn)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
@@ -130,6 +291,7 @@ class OrganizePage(BasePage):
         self.groups = {}
         self.migration_plan = []
         self._plan_dir = ""
+        self._last_scan_skipped = []
         self._enter_stage = 0
 
     def _source_paths(self):
@@ -168,6 +330,7 @@ class OrganizePage(BasePage):
         self.scan_btn.setEnabled(not busy)
         self.exec_btn.setEnabled(not busy)
         self.source_btn.setEnabled(not busy)
+        self.merge_btn.setEnabled(not busy)
 
     def has_active_tasks(self):
         return self.busy
@@ -202,6 +365,7 @@ class OrganizePage(BasePage):
                 return
             (self.groups, self.no_date_files), (self.migration_plan, skipped) = result
             self._plan_dir = root
+            self._last_scan_skipped = list(skipped)
             self._show_preview(skipped)
             self._enter_stage = 1
         run_bg(work, done, owner=self)
@@ -280,7 +444,66 @@ class OrganizePage(BasePage):
                       "下一步请前往命名投稿页；此处不会上传投稿。")
             if skipped_companions:
                 self._log("附属文件跳过：" + "；".join(skipped_companions[:5]))
+            if self._last_scan_skipped:
+                self._log(f"另有 {len(self._last_scan_skipped)} 个未迁移（仍留在来源）："
+                          + "；".join(self._last_scan_skipped[:5]))
             self._scan()
+        run_bg(work, done, owner=self)
+
+    def _open_merge(self):
+        if self.busy:
+            return
+        if not self.app.work_dir or not os.path.isdir(self.app.work_dir):
+            self._log("工作目录不存在，请先在全局设置指定")
+            return
+        folders = scan_date_folders(self.app.work_dir)
+        if not folders:
+            self._log("工作目录下没有日期文件夹")
+            return
+        dialog = MergeSidecarsDialog(self, self.app.work_dir, folders)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        request = dialog.request()
+        self._set_busy(True)
+        self._log("正在合并弹幕 / 时间轴…")
+
+        def work():
+            target = Path(request["target"])
+            result = {}
+            if request["danmaku"]:
+                result["danmaku"] = merge_danmaku(
+                    request["danmaku"],
+                    target.parent / (target.stem + DANMAKU_SUFFIX))
+            if request["timelines"]:
+                result["timeline"] = merge_timelines(
+                    request["timelines"],
+                    target.parent / (target.stem + TIMELINE_SUFFIX), target)
+            return result
+
+        def done(result, error):
+            self._set_busy(False)
+            if error:
+                self._log(f"合并失败：{error}")
+                return
+            parts = []
+            danmaku = result.get("danmaku")
+            if danmaku:
+                parts.append(f"弹幕 {danmaku['merged']} 条（去重 {danmaku['duplicates']} 条）")
+                self._log(f"已合并弹幕 → {os.path.basename(danmaku['out'])}")
+                if danmaku.get("backup"):
+                    self._log(f"原弹幕已备份：{os.path.basename(danmaku['backup'])}")
+            timeline = result.get("timeline")
+            if timeline:
+                parts.append(f"时间轴 {timeline['entries']} 段 / {timeline['anchors']} 个锚点")
+                self._log(f"已合并时间轴 → {os.path.basename(timeline['out'])}")
+                if timeline.get("backup"):
+                    self._log(f"原时间轴已备份：{os.path.basename(timeline['backup'])}")
+                if timeline.get("estimated"):
+                    self._log("部分源视频已不存在，时间轴偏移按相邻场次时间估算；"
+                              "如对不上，请只勾选目标视频对应的那一段。")
+            if parts:
+                self.app.toast("合并完成：" + "，".join(parts), "success")
+
         run_bg(work, done, owner=self)
 
     def _migrate_sources(self):
@@ -321,11 +544,18 @@ class OrganizePage(BasePage):
                 f"{os.path.basename(item['path'])} → {item['date'] or '（根目录）'}"
                 for item in plan[:10])
             more = f"\n…其余 {len(plan) - 10} 个视频" if len(plan) > 10 else ""
+            skip_text = ""
+            if skipped:
+                skip_text = (f"\n\n本次不迁移 {len(skipped)} 个：\n"
+                             + "\n".join(skipped[:5]))
+                if len(skipped) > 5:
+                    skip_text += f"\n…其余 {len(skipped) - 5} 个"
             ret = QMessageBox.question(
                 self, "从来源迁移视频",
                 f"将迁移 {len(plan)} 个视频到：\n{root}\\<日期>\\\n\n"
                 f"{len(dates)} 个日期分组：{', '.join(dates[:8]) or '无'}\n\n"
-                f"{preview}{more}\n\n同名自动编号，校验成功后删除来源。确认执行？",
+                f"{preview}{more}{skip_text}\n\n"
+                "同名自动编号，校验成功后删除来源。确认执行？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ret != QMessageBox.Yes:
                 self._set_busy(False)
@@ -347,6 +577,9 @@ class OrganizePage(BasePage):
                 ok = sum(1 for item in results if item["ok"])
                 self._log(f"来源迁移完成：成功 {ok}，失败 {len(results) - ok}。"
                           "下一步请前往命名投稿页处理，再投稿。")
+                if skipped:
+                    self._log(f"另有 {len(skipped)} 个未迁移（仍留在来源）："
+                              + "；".join(skipped[:5]))
                 self._update_dir_date_label()
 
             run_bg(migrate, migrated, owner=self)

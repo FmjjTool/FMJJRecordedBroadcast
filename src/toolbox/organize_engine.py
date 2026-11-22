@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from .date_folders import date_folder_value
 from .utils import extract_date_from_filename
 
 
@@ -16,7 +17,14 @@ VIDEO_EXTS = {".mp4", ".flv", ".mkv", ".ts", ".mov", ".avi", ".webm",
 
 # 跟录制视频同场、同名主干的附属文件（录播姬 / 本软件直播录制都会生成）
 COMPANION_EXTS = {".jsonl", ".xml", ".ass", ".srt", ".vtt", ".txt", ".json",
-                  ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+                  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".log", ".lrc"}
+
+# 日期文件夹里明确属于录制的附属文件；孤儿文件（视频已删/已改名）也能按整日补搬
+SESSION_SIDECAR_SUFFIXES = (
+    "_弹幕.jsonl", "_弹幕.txt", "_弹幕.xml", "_时间轴.json",
+    "_封面.jpg", "_封面.jpeg", "_封面.png", "_封面.webp",
+    "_音轨1.srt", "_音轨1.txt", "_统计.json",
+)
 
 
 def _snapshot(path):
@@ -47,9 +55,28 @@ def companion_candidates(video_path):
         suffix = item.suffix.lower()
         if suffix in VIDEO_EXTS or suffix not in COMPANION_EXTS:
             continue
-        if item.name.startswith(stem + "_") or item.stem == stem:
+        if (item.name.startswith(stem + "_") or item.stem == stem
+                or (suffix == ".log" and item.name.startswith(stem + "."))):
             found.append(item)
     return sorted(found)
+
+
+def is_session_sidecar(name: str) -> bool:
+    """是否为录制附属文件；用于整日补搬时识别没对上主干的孤儿文件。"""
+    low = str(name).lower()
+    return (low.endswith(".ffmpeg.log") or low.endswith(".xml")
+            or any(low.endswith(suffix) for suffix in SESSION_SIDECAR_SUFFIXES))
+
+
+def sidecar_base(name: str) -> str:
+    """附属文件对应的场次主干；`<主干>.ts.ffmpeg.log` 要剥掉日志与视频后缀两层。"""
+    low = str(name).lower()
+    for suffix in SESSION_SIDECAR_SUFFIXES:
+        if low.endswith(suffix):
+            return str(name)[: -len(suffix)]
+    if low.endswith(".ffmpeg.log"):
+        return os.path.splitext(str(name)[: -len(".ffmpeg.log")])[0]
+    return os.path.splitext(str(name))[0]
 
 
 def scan_sources(sources, work_dir, recursive=False, stable_seconds=30):
@@ -221,16 +248,52 @@ def _move_companion(source: Path, target_dir: Path) -> Path:
 def move_companions(video_item, video_target) -> Tuple[List[str], List[str]]:
     """视频迁移成功后，把同场弹幕 / 封面 / 时间轴搬到同一目标日期文件夹。
 
+    日期文件夹里没对上当前视频主干的孤儿附属文件（视频已删/已改名、ffmpeg 日志）
+    也一起补搬，避免「一个日期文件夹只搬走一个」。仍对应其它未迁移视频
+    （可能还在录制）的附属文件留给对应视频处理。
     附属文件失败只记录，不回滚已完成的视频迁移；返回 (已搬列表, 跳过原因列表)。
     """
     source_video = Path(video_item["path"])
     target_dir = Path(video_target).parent
     moved, skipped = [], []
+    handled = set()
     for companion in companion_candidates(source_video):
         try:
             moved.append(str(_move_companion(companion, target_dir)))
         except (OSError, ValueError) as error:
             skipped.append(f"{companion.name}：{error}")
+        handled.add(os.path.normcase(companion.name))
+
+    source_dir = source_video.parent
+    if not date_folder_value(source_dir.name):
+        return moved, skipped
+    try:
+        entries = sorted(source_dir.iterdir())
+    except OSError:
+        return moved, skipped
+    video_bases = {
+        item.stem for item in entries
+        if item.is_file() and item.suffix.lower() in VIDEO_EXTS
+    }
+    for item in entries:
+        try:
+            if not item.is_file() or item.name.startswith("."):
+                continue
+        except OSError:
+            continue
+        if item.suffix.lower() in VIDEO_EXTS or not is_session_sidecar(item.name):
+            continue
+        key = os.path.normcase(item.name)
+        if key in handled:
+            continue
+        base = sidecar_base(item.name)
+        if base in video_bases and base != source_video.stem:
+            continue
+        try:
+            moved.append(str(_move_companion(item, target_dir)))
+        except (OSError, ValueError) as error:
+            skipped.append(f"{item.name}：{error}")
+        handled.add(key)
     return moved, skipped
 
 

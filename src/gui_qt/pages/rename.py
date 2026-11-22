@@ -30,6 +30,7 @@ from toolbox.config_manager import get_rename_config, save_rename_config
 from toolbox.date_folders import date_folder_value, scan_date_folders
 from toolbox.rename_engine import (
     extract_file_title, extract_time_str, is_standard_recording_name,
+    rebase_companions,
 )
 from toolbox.utils import (
     capture_video_frame, clean_special_chars, get_video_info, is_video_file,
@@ -501,8 +502,7 @@ class RenamePage(BasePage):
         self.current_videos = []
         for f in sorted(os.listdir(folder_path)):
             fp = os.path.join(folder_path, f)
-            if os.path.isfile(fp) and is_video_file(fp) and \
-                    f.lower().endswith(self.rename_config.video_suffix):
+            if os.path.isfile(fp) and is_video_file(fp):
                 self.current_videos.append(fp)
 
         self.file_list.clear()
@@ -720,7 +720,10 @@ class RenamePage(BasePage):
             t = clean_special_chars(title)
             if t:
                 parts.append(t)
-        return "_".join(parts) + self.rename_config.video_suffix
+        suffix = self.rename_config.video_suffix
+        if 0 <= self.current_video_idx < len(self.current_videos):
+            suffix = Path(self.current_videos[self.current_video_idx]).suffix or suffix
+        return "_".join(parts) + suffix
 
     def _update_preview(self):
         self.new_name_label.setText(self._build_filename())
@@ -790,19 +793,27 @@ class RenamePage(BasePage):
             with _locked_reader(src):
                 if src != dst:
                     os.rename(src, dst)
+            sidecars, sidecar_skipped = (
+                rebase_companions(src, dst) if src != dst else ([], []))
             metadata_ok, message = self._write_copyright_metadata(dst, enabled, info)
-            return metadata_ok, message
+            return metadata_ok, message, sidecars, sidecar_skipped
         def done(result, error):
             self._set_busy(False)
             if error:
                 self._log(f"重命名失败: {error}")
                 return
-            metadata_ok, message = result
+            metadata_ok, message, sidecars, sidecar_skipped = result
             self.current_videos[index] = dst
             item = self.file_list.item(index)
             if item:
                 item.setText(f"{new_name}")
             self._log(f"{os.path.basename(src)} → {new_name}")
+            if sidecars:
+                names = "、".join(os.path.basename(path) for path in sidecars[:4])
+                more = "…" if len(sidecars) > 4 else ""
+                self._log(f"同步重命名附属文件 {len(sidecars)} 个：{names}{more}")
+            for reason in sidecar_skipped[:3]:
+                self._log(f"附属文件跳过：{reason}")
             if message:
                 self._log(message)
             if metadata_ok:
@@ -853,8 +864,7 @@ class RenamePage(BasePage):
         config = {**BU.DEFAULTS, **BU.load_settings().get("upload", {}), "date": ""}
         try:
             actual = {str(path) for path in Path(self.current_folder).iterdir()
-                      if path.is_file() and is_video_file(str(path))
-                      and path.name.lower().endswith(self.rename_config.video_suffix)}
+                      if path.is_file() and is_video_file(str(path))}
             if actual != set(paths):
                 raise ValueError("文件夹的视频已变化，请重新选择文件夹完成重命名")
             BU.validate_renamed_videos(paths)
