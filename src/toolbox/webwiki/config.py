@@ -10,8 +10,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
+import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from toolbox.config_manager import (
     get_config_dir,
@@ -171,6 +174,77 @@ def system_proxy() -> str:
         if value:
             return value if "://" in value else f"http://{value}"
     return ""
+
+
+# 本机常见代理端口：Clash 7890、v2rayN 10809、旧配置 12450（常已失效）
+LOCAL_PROXY_PORTS = (7890, 10809, 12450)
+_PROXY_PREFIXES = ("http://", "https://", "socks5://", "socks5h://")
+
+
+def normalize_proxy(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return raw if raw.lower().startswith(_PROXY_PREFIXES) else f"http://{raw}"
+
+
+def proxy_alive(proxy: str, timeout: float = 0.4,
+                cache: dict[tuple[str, int], bool] | None = None) -> bool:
+    """本机代理先探端口：端口不通直接跳过，不算「代理失败」；远端代理不探。"""
+    parts = urlsplit(proxy)
+    host = parts.hostname or ""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return True
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    key = (host, port)
+    if cache is not None and key in cache:
+        return cache[key]
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            alive = True
+    except OSError:
+        alive = False
+    if cache is not None:
+        cache[key] = alive
+    return alive
+
+
+def git_config_proxy() -> str:
+    """`git config --get http.proxy` 只当候选：本机历史上残留过失效代理。"""
+    kwargs = {"capture_output": True, "text": True, "timeout": 5}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run([find_git(), "config", "--get", "http.proxy"], **kwargs)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return ""
+    return (proc.stdout or "").strip() if proc.returncode == 0 else ""
+
+
+def proxy_candidates() -> list[str]:
+    """访问 GitHub 的网络通道，按约定 15 逐档尝试；空串 = 显式直连。
+
+    第一档直连（显式清空 http.proxy）→ 当次指定 / 环境变量 → 系统代理 →
+    本机常见端口（先探活）→ `git config http.proxy`（只当候选）。
+    """
+    channels: list[str] = [""]
+    probed: dict[tuple[str, int], bool] = {}
+
+    def add(raw: str) -> None:
+        value = normalize_proxy(raw)
+        if value and value not in channels and proxy_alive(value, cache=probed):
+            channels.append(value)
+
+    for name in ("WEBWIKI_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        add(os.environ.get(name, ""))
+    add(system_proxy())
+    for port in LOCAL_PROXY_PORTS:
+        # 混合端口（Clash / mihomo）同时提供 HTTP 与 SOCKS5；本机 SOCKS5 常比
+        # HTTP CONNECT 更稳，两个都当候选，探活只按端口算一次
+        add(f"http://127.0.0.1:{port}")
+        add(f"socks5h://127.0.0.1:{port}")
+    add(git_config_proxy())
+    return channels
 
 
 # 图片图床走直连：这些域名都在国内，绕开系统代理反而更快；

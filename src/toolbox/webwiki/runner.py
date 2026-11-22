@@ -49,12 +49,17 @@ def run_stream(cmd: list[str], cwd, log, env: dict | None = None,
     return rc, lines
 
 
-def capture(cmd: list[str], cwd, env: dict | None = None, timeout: int = 30) -> tuple[int, str]:
-    """静默执行命令（用于读取 git 状态），返回 (退出码, 合并输出)。"""
+def capture(cmd: list[str], cwd, env: dict | None = None, timeout: int = 30,
+            merge_stderr: bool = True) -> tuple[int, str]:
+    """静默执行命令（用于读取 git 状态），返回 (退出码, 输出)。
+
+    merge_stderr=False 时丢弃 stderr：git 的 warning（如 safe.directory、
+    ignore 文件不可读）不能混进 porcelain 输出，否则会被误判成"有本地改动"。
+    """
     kwargs = {
         "cwd": str(cwd),
         "stdout": subprocess.PIPE,
-        "stderr": subprocess.STDOUT,
+        "stderr": subprocess.STDOUT if merge_stderr else subprocess.PIPE,
         "text": True,
         "encoding": "utf-8",
         "errors": "replace",
