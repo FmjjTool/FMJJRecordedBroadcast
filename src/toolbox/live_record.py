@@ -1519,11 +1519,13 @@ class RecordManager:
             if a.recording:
                 self.stop_record(a, reason="一键停止")
 
-    def reset_states(self, notify=True):
+    def reset_states(self, notify=True, keep_intent=False):
         """清空运行状态（主播列表、备注与录制设置保留）。
 
         停监控、停录制，主播的直播/录制/监控/在线等状态归零，轮次计数与
         上次检测时间清空；调用方负责刷新界面与持久化。
+        keep_intent=True 用于启动恢复：保留「是否录制」与「监控状态」两个
+        用户意图标记，避免重启后把所有主播的录制/监控设置清成默认。
         """
         self._epoch += 1
         self.stop_monitor()
@@ -1544,8 +1546,9 @@ class RecordManager:
             a.recording = False
             a.rec_state = "未录制"
             a.elapsed = 0
-            a.monitoring = False
-            a._want_record = False
+            if not keep_intent:
+                a.monitoring = False
+                a._want_record = False
             a.selected = False
             a.title = ""
             a.cover = ""

@@ -2043,8 +2043,13 @@ class LiveRecordWindow(QMainWindow):
         self._timer.start(1000)
 
         self.switch_platform(platform)
-        # 启动即初始化：主播列表与设置保留，运行状态从零开始（不自动监控）
+        # 启动恢复：主播列表与录制设置保留，「是否录制 / 监控状态」按上次
+        # 保存的意图恢复；直播/在线/录制中这类运行态归零。有关主播仍在
+        # 监控里就续跑监控线程，重启后不用再手动点一次。
         self.reset_all_states(initial=True)
+        for pane in self.panes.values():
+            if any(a.monitoring for a in pane.manager.anchors):
+                pane.manager.start_monitor()
         if room:
             pane = self.panes.get(platform)
             if pane and not any(a.room == room for a in pane.manager.anchors):
@@ -2168,7 +2173,7 @@ class LiveRecordWindow(QMainWindow):
     def reset_all_states(self, initial=False):
         """把所有平台的运行状态归零；initial=True 时用于启动初始化（不写盘）。"""
         for pane in self.panes.values():
-            pane.manager.reset_states(notify=not initial)
+            pane.manager.reset_states(notify=not initial, keep_intent=initial)
             pane.model.refresh_all()
         if not initial:
             self.schedule_save()
