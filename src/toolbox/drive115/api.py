@@ -123,12 +123,23 @@ def _int(value, default: int = 0) -> int:
         return default
 
 
-def _sha1_upper(data: bytes) -> str:
-    return hashlib.sha1(data).hexdigest().upper()
-
-
 def _md5_hex(data: bytes) -> str:
     return hashlib.md5(data).hexdigest()
+
+
+def _upload_sig(user_id: str, file_id: str, target: str, userkey: str) -> str:
+    """115 上传 `sig`：内层 SHA1 取小写 hex，最终结果转大写（大小写错了会被判 sig invalid）。"""
+    inner = hashlib.sha1(f"{user_id}{file_id}{target}0".encode()).hexdigest()
+    return hashlib.sha1(f"{userkey}{inner}000000".encode()).hexdigest().upper()
+
+
+def _upload_token(user_id: str, file_id: str, file_size, sign_key: str,
+                  sign_val: str, stamp: int, app_ver: str) -> str:
+    """115 上传 `token`（全部小写 hex）。"""
+    user_md5 = _md5_hex(user_id.encode())
+    raw = (f"{_UPLOAD_MD5_SALT}{file_id}{file_size}{sign_key}{sign_val}"
+           f"{user_id}{stamp}{user_md5}{app_ver}")
+    return _md5_hex(raw.encode())
 
 
 def _sha1_range_file(path: Path, start: int, end: int) -> str:
@@ -663,13 +674,9 @@ class Drive115Client:
         for attempt in range(2):
             stamp = int(time.time() * 1000)
             user_id_str = str(user_id)
-            sig_hash = _sha1_upper(f"{user_id_str}{sha1}{target}0".encode())
-            sig = _sha1_upper(f"{userkey}{sig_hash}000000".encode())
-            token = _md5_hex((
-                _UPLOAD_MD5_SALT + sha1 + str(size) + sign_key + sign_val
-                + user_id_str + str(stamp)
-                + _md5_hex(user_id_str.encode()) + UPLOAD_APP_VERSION
-            ).encode())
+            sig = _upload_sig(user_id_str, sha1, target, userkey)
+            token = _upload_token(user_id_str, sha1, size, sign_key, sign_val,
+                                  stamp, UPLOAD_APP_VERSION)
             form = {
                 "appid": "0",
                 "appversion": UPLOAD_APP_VERSION,
@@ -765,7 +772,8 @@ class Drive115Client:
         if self._upload_user:
             return self._upload_user
         try:
-            resp = self.session.post(UPLOAD_INFO_URL, timeout=TIMEOUT)
+            # 与官方客户端一致：POST + JSON 内容类型（无内容类型时 115 可能给降级凭证）
+            resp = self.session.post(UPLOAD_INFO_URL, json={}, timeout=TIMEOUT)
             payload = resp.json()
         except (requests.RequestException, OSError, ValueError) as exc:
             raise Drive115Error(-1, f"取上传凭证失败：{exc}", "/app/uploadinfo")
