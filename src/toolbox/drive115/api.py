@@ -723,12 +723,33 @@ class Drive115Client:
                                             hashes=(md5, sha1), resume=resume)
                 cleanup_note = ("；目标目录有同名条目但删除失败" if entry
                                 else "；目标目录无同名条目")
+            probe_note = self._probe_filename(path, sha1, size, target,
+                                              user_id, userkey, candidates[0])
             raise Drive115Error(
                 last_error.code,
                 f"{last_error.message}（已尝试版本：{'、'.join(self._app_versions)}"
-                f"{cleanup_note}）",
+                f"{cleanup_note}；换名探测：{probe_note}）",
                 last_error.path)
         raise Drive115Error(-1, "115 上传初始化失败", "/initupload")
+
+    def _probe_filename(self, path: Path, sha1: str, size: int, target: str,
+                        user_id: int, userkey: str, app_ver: str) -> str:
+        """诊断用：换一个 ASCII 临时文件名再申请一次初始化（不上传文件）。
+
+        通过 → 说明 115 拒绝的是原文件名；仍失败 → 与文件名无关。
+        """
+        suffix = path.suffix or ""
+        probe_name = f"qw_probe_{sha1[:8]}{suffix}"
+        try:
+            _payload, _data, status, _pick, _b, _o, _c = self._init_upload(
+                path, sha1, size, target, user_id, userkey, app_ver, None,
+                filename=probe_name)
+            return f"临时名通过（status={status}）"
+        except Drive115Error as exc:
+            text = str(exc)
+            if "被 115 拒绝" in text:
+                return f"临时名仍失败：{text[:120]}"
+            return f"临时名异常：{text[:120]}"
 
     def _same_name_entry(self, cid: str, name: str) -> dict | None:
         """目标目录里与本地同名的文件（用于清理残留下同名条目）。"""
@@ -741,8 +762,10 @@ class Drive115Client:
         return None
 
     def _init_upload(self, path: Path, sha1: str, size: int, target: str,
-                     user_id: int, userkey: str, app_ver: str, on_stage):
+                     user_id: int, userkey: str, app_ver: str, on_stage,
+                     filename: str | None = None):
         """一次上传初始化（含二次校验重试），成功返回响应拆好的字段。"""
+        name = filename or path.name
         sign_key, sign_val = "", ""
         cipher = _EC115Cipher()
         payload: dict = {}
@@ -757,7 +780,7 @@ class Drive115Client:
                 "appid": "0",
                 "appversion": app_ver,
                 "userid": user_id_str,
-                "filename": path.name,
+                "filename": name,
                 "filesize": str(size),
                 "fileid": sha1,
                 "target": target,
