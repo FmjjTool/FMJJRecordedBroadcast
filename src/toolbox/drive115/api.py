@@ -327,6 +327,7 @@ class Drive115Client:
         self.has_kid = "KID" in self._account_cookies
         self._app_version = ""
         self._app_versions: list[str] = []
+        self._version_confirmed = False
 
     # ==================== 基础 ====================
 
@@ -672,34 +673,39 @@ class Drive115Client:
         target = f"U_1_{self.ensure_dir(remote_dir)}"
 
         last_error: Drive115Error | None = None
-        for app_ver in self._app_version_candidates():
+        candidates = self._app_version_candidates()
+        for app_ver in candidates:
             self._app_version = app_ver
-            try:
-                payload, data, status, pick_code, bucket, obj, callback = self._init_upload(
-                    path, sha1, size, target, user_id, userkey, app_ver, on_stage)
-            except Drive115Error as exc:
-                text = str(exc)
-                # 版本号写不对时 115 会回 token invalid / 请升级：换下一个候选再试
-                if "token invalid" in text or "升级到最新版本" in text:
-                    last_error = exc
-                    continue
-                raise
-            if status == 2:
-                if on_progress is not None:
-                    try:
-                        on_progress(size, size)
-                    except Exception:  # noqa: BLE001
-                        pass
-                return {"fid": pick_code, "instant": True, "md5": md5, "size": size}
-            if not (bucket and obj):
-                raise Drive115Error(
-                    -1, f"上传初始化未返回 OSS 信息（status={status}，"
-                        f"字段：{'、'.join(sorted(data)) or '无'}）", "/initupload")
-            if on_stage is not None:
-                on_stage("upload", path.name, size)
-            self._oss_put(path, bucket, obj, callback, size, on_progress)
-            self._index_cache.pop(remote_dir, None)
-            return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
+            # 第一档多给一次机会：同一 fileid 连续申请时 115 偶尔回 token invalid，
+            # 换个新时间戳重签一次通常就过；其余档只试一次，避免空转
+            tries = 2 if app_ver == candidates[0] else 1
+            for _ in range(tries):
+                try:
+                    payload, data, status, pick_code, bucket, obj, callback = self._init_upload(
+                        path, sha1, size, target, user_id, userkey, app_ver, on_stage)
+                except Drive115Error as exc:
+                    text = str(exc)
+                    if "token invalid" in text or "升级到最新版本" in text:
+                        last_error = exc
+                        continue
+                    raise
+                self._version_confirmed = True
+                if status == 2:
+                    if on_progress is not None:
+                        try:
+                            on_progress(size, size)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return {"fid": pick_code, "instant": True, "md5": md5, "size": size}
+                if not (bucket and obj):
+                    raise Drive115Error(
+                        -1, f"上传初始化未返回 OSS 信息（status={status}，"
+                            f"字段：{'、'.join(sorted(data)) or '无'}）", "/initupload")
+                if on_stage is not None:
+                    on_stage("upload", path.name, size)
+                self._oss_put(path, bucket, obj, callback, size, on_progress)
+                self._index_cache.pop(remote_dir, None)
+                return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
         if last_error is not None:
             raise Drive115Error(
                 last_error.code,
@@ -808,6 +814,8 @@ class Drive115Client:
         本机 115Life 版本 → 带构建号」依次尝试，命中即缓存。
         """
         if self._app_versions:
+            if self._version_confirmed and self._app_version:
+                return [self._app_version]
             return list(self._app_versions)
         values: list[str] = []
         try:
