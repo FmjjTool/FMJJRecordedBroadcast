@@ -48,7 +48,6 @@ COLUMNS = [
     ("checked", "监控时间", 84, A.AlignCenter),
     ("elapsed", "已录时间", 84, A.AlignCenter),
     ("stop", "录制n分钟\n停止录制", 88, A.AlignCenter),
-    ("rec", "录制状态", 78, A.AlignCenter),
     ("content", "录制\n内容", 62, A.AlignCenter),
     ("monitoring", "监控\n状态", 62, A.AlignCenter),
     ("want_record", "是否\n录制", 58, A.AlignCenter),
@@ -58,7 +57,7 @@ COLUMNS = [
     ("title", "直播标题", 180, A.AlignLeft | A.AlignVCenter),
 ]
 COL_INDEX = {c[0]: i for i, c in enumerate(COLUMNS)}
-VOLATILE = ("live", "checked", "elapsed", "rec", "monitoring",
+VOLATILE = ("live", "checked", "elapsed", "monitoring",
             "want_record", "online", "stop", "content", "quality")
 
 C_LIVE_BG = QColor("#FFF4F4")
@@ -241,8 +240,6 @@ class AnchorModel(QAbstractTableModel):
             return (a.last_check or "")[11:19] or "-"
         if key == "elapsed":
             return LR.fmt_duration(self.manager.elapsed(a))
-        if key == "rec":
-            return "录制中" if a.recording else (a.rec_state or "未录制")
         if key == "stop":
             n = a.stop_minutes or int(self.manager.settings.get("stop_minutes") or 0)
             return "%d 分钟" % n if n else "不限"
@@ -860,7 +857,7 @@ class PlatformPane(QWidget):
                      % len(recording)) if recording else "将先停止监控；"
             if QMessageBox.question(
                     self, "清除状态",
-                    first + "\n随后清空本页的直播状态、监控时间、已录时间、录制状态、"
+                    first + "\n随后清空本页的直播状态、监控时间、已录时间、"
                     "在线人数、勾选与运行日志。\n"
                     "主播列表、备注、录制质量/内容/分段等设置都会保留。\n\n确定继续？",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -2361,10 +2358,12 @@ class LiveRecordWindow(QMainWindow):
             box.setText(f"监控正在运行：{names}")
             box.setInformativeText("关闭窗口会停止开播检测；当前没有正在写入的录制文件。")
             ok = box.addButton("停止监控并关闭", QMessageBox.AcceptRole)
-        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(ok)
         box.exec()
-        if box.clickedButton() is not ok:
+        clicked = box.clickedButton()
+        # 按钮包装对象不保证同一个实例，按角色判断「确认 / 取消」。
+        if clicked is None or box.buttonRole(clicked) != QMessageBox.ButtonRole.AcceptRole:
             return False
         self.stop_and_package(parent)
         return True

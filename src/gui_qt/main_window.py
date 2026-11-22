@@ -1095,7 +1095,10 @@ class MainWindow(QMainWindow):
             box.addButton("取消", QMessageBox.RejectRole)
             box.setDefaultButton(ok)
             box.exec()
-            if box.clickedButton() is not ok:
+            clicked = box.clickedButton()
+            # 按钮由 Qt 持有，PySide 返回的包装对象与 addButton() 的返回值
+            # 不保证是同一个对象，按角色判断才能可靠区分「确定 / 取消」。
+            if clicked is None or box.buttonRole(clicked) != QMessageBox.ButtonRole.AcceptRole:
                 event.ignore()
                 return
             if lrw is not None:
@@ -1148,14 +1151,16 @@ class MainWindow(QMainWindow):
             box.setText(f"监控正在运行：{names}")
             box.setInformativeText("关闭主窗口会隐藏到系统托盘，监控继续。")
             hide_btn = box.addButton("隐藏到托盘继续监控", QMessageBox.AcceptRole)
-        quit_btn = box.addButton("停止录制、打包并退出", QMessageBox.DestructiveRole)
+        box.addButton("停止录制、打包并退出", QMessageBox.DestructiveRole)
         box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(hide_btn)
         box.exec()
         clicked = box.clickedButton()
-        if clicked is hide_btn:
+        role = (box.buttonRole(clicked) if clicked is not None
+                else QMessageBox.ButtonRole.RejectRole)
+        if role == QMessageBox.ButtonRole.AcceptRole:
             return "hide"
-        if clicked is quit_btn:
+        if role == QMessageBox.ButtonRole.DestructiveRole:
             return "quit"
         return "cancel"
 
