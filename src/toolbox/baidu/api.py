@@ -5,7 +5,7 @@
 所以备份引擎不需要区分后端。上传链路：
 
 1. `POST /api/precreate`  申请上传，返回 `uploadid`；`return_type=2` 表示秒传成功
-2. `POST d.pcs.baidu.com/rest/2.0/pcs/superfile2`  逐块上传（表单字段 `file`）
+2. `POST <d/c/c2/c3>.pcs.baidu.com/rest/2.0/pcs/superfile2`  逐块上传（表单字段 `file`）
 3. `POST /api/create`     提交文件（`uploadid` + `block_list`）
 
 要点（实测得出）：
@@ -25,7 +25,9 @@ from pathlib import Path
 import requests
 
 BASE = "https://pan.baidu.com"
-PCS = "https://d.pcs.baidu.com"
+# 官方客户端同款上传集群；单个节点网络/TLS 故障时按顺序切换，成功后固定使用
+PCS_HOSTS = ("https://d.pcs.baidu.com", "https://c.pcs.baidu.com",
+             "https://c2.pcs.baidu.com", "https://c3.pcs.baidu.com")
 APP_ID = 250528
 BLOCK_SIZE = 4 * 1024 * 1024
 TIMEOUT = 60
@@ -84,6 +86,7 @@ class BaiduClient:
             "Accept": "application/json, text/plain, */*",
         })
         self._bdstoken = ""
+        self._pcs_index = 0
         self._dir_cache: dict[str, str] = {"": "/", "/": "/"}
         self._index_cache: dict[str, dict] = {}
         # (路径, 大小, mtime) → (整文件 md5, 4MB 块 md5 列表)
@@ -339,10 +342,13 @@ class BaiduClient:
                     if not blob:
                         break
                     last_error = None
-                    for attempt in range(2):
+                    tried = 0
+                    for attempt in range(len(PCS_HOSTS)):
+                        tried += 1
+                        base = PCS_HOSTS[self._pcs_index]
                         try:
                             r = self.session.post(
-                                f"{PCS}/rest/2.0/pcs/superfile2",
+                                f"{base}/rest/2.0/pcs/superfile2",
                                 params={"method": "upload", "type": "tmpfile",
                                         "path": remote_path, "uploadid": uploadid,
                                         "partseq": partseq, "app_id": APP_ID},
@@ -355,11 +361,13 @@ class BaiduClient:
                                 break
                         except (requests.RequestException, OSError) as exc:
                             last_error = exc
-                        if attempt == 0:
-                            time.sleep(1.5)
+                        self._pcs_index = (self._pcs_index + 1) % len(PCS_HOSTS)
+                        if attempt < len(PCS_HOSTS) - 1:
+                            time.sleep(1.5 * (attempt + 1))
                     if last_error is not None:
+                        hint = f"（已尝试 {tried} 个官方上传节点）" if tried > 1 else ""
                         raise last_error if isinstance(last_error, BaiduError) else BaiduError(
-                            -1, f"分块 {partseq} 上传失败：{last_error}", "superfile2")
+                            -1, f"分块 {partseq} 上传失败{hint}：{last_error}", "superfile2")
                     sent = min(sent + len(blob), size)
                     partseq += 1
                     done = partseq
