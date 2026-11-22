@@ -20,8 +20,8 @@ import weakref
 from PySide6.QtCore import QEvent, Qt, QTimer
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from gui_qt.common import icon_btn_style, post_to_main
@@ -106,6 +106,7 @@ class BatchCard(QFrame):
         self._cancel_cb = cancel_cb
         self._finished = False   # finish() 后置 True（下载中心据此自动收起）
         self.batch = None
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 8)
@@ -199,6 +200,7 @@ class DownloadFloatWindow(QWidget):
     """
 
     _MIN_W, _MIN_H = 420, 240
+    _MIN_CARD_W = 300       # 两列时单张卡片的最小可用宽度
     _EDGE = 6        # 四周缩放热区（px）
     _AUTO_CLOSE_MS = 1500   # 全部批次结束后延迟收起，让用户看到完成状态
 
@@ -209,6 +211,9 @@ class DownloadFloatWindow(QWidget):
             # 极少数没有主窗口的场景（离屏脚本）→ 退化为独立无边框浮窗
             self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
         self._main_window = main_window
+        self._cards = []
+        self._grid_cols = 0
+        self._grid_rows = 0
         # 相对主窗口右下角的留白：移动/缩放主窗口后按它重新吸附
         self._off = (20, 20)
         self._drag_pos = None
@@ -263,10 +268,9 @@ class DownloadFloatWindow(QWidget):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setMinimumHeight(120)
         host = QWidget()
-        self._cards_lay = QVBoxLayout(host)
-        self._cards_lay.setContentsMargins(0, 0, 0, 0)
-        self._cards_lay.setSpacing(8)
-        self._cards_lay.addStretch(1)
+        self._cards_grid = QGridLayout(host)
+        self._cards_grid.setContentsMargins(0, 0, 0, 0)
+        self._cards_grid.setSpacing(8)
         self._scroll.setWidget(host)
         root.addWidget(self._scroll, 1)
 
@@ -284,9 +288,36 @@ class DownloadFloatWindow(QWidget):
         card = BatchCard(batch.source, cancel_cb=batch.cancel if batch._cancel_cb else None,
                          parent=self)
         card.batch = batch
-        self._cards_lay.insertWidget(0, card)
+        self._cards.insert(0, card)
         batch.attach(card)
+        self._reflow_cards()
         return card
+
+    def _desired_columns(self) -> int:
+        if len(self._cards) <= 1:
+            return 1
+        avail = max(0, self.width() - 20)
+        return 2 if avail >= self._MIN_CARD_W * 2 + 8 else 1
+
+    def _reflow_cards(self):
+        """单批次占满整个下载中心；多批次两列排布，奇数最后一张跨两列。"""
+        grid = self._cards_grid
+        for i in range(self._grid_rows):
+            grid.setRowStretch(i, 0)
+        for card in self._cards:
+            grid.removeWidget(card)
+        n = len(self._cards)
+        cols = self._desired_columns()
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1 if cols == 2 else 0)
+        rows = (n + cols - 1) // cols if n else 0
+        for i, card in enumerate(self._cards):
+            row, col = divmod(i, cols)
+            span = 2 if cols == 2 and n % 2 == 1 and i == n - 1 else 1
+            grid.addWidget(card, row, col, 1, span)
+        for r in range(rows):
+            grid.setRowStretch(r, 1)
+        self._grid_cols, self._grid_rows = cols, rows
 
     def closeEvent(self, event):
         global _FLOAT
@@ -319,9 +350,12 @@ class DownloadFloatWindow(QWidget):
         return batch
 
     def remove_card(self, card: BatchCard):
-        self._cards_lay.removeWidget(card)
+        if card in self._cards:
+            self._cards.remove(card)
+        self._cards_grid.removeWidget(card)
         card.setParent(None)
         card.deleteLater()
+        self._reflow_cards()
         self._update_count()
 
     # ==================== 完成后自动收起 ====================
@@ -333,9 +367,7 @@ class DownloadFloatWindow(QWidget):
     def _auto_close_finished(self):
         if self._unloading:
             return
-        cards = [self._cards_lay.itemAt(i).widget()
-                 for i in range(self._cards_lay.count())]
-        cards = [c for c in cards if isinstance(c, BatchCard)]
+        cards = list(self._cards)
         # 期间又开了新批次（有未完成卡片）→ 不收起
         if not cards or not all(getattr(c, "_finished", False) for c in cards):
             return
@@ -347,7 +379,7 @@ class DownloadFloatWindow(QWidget):
     # ==================== 布局 / 拖动 / 缩放 ====================
 
     def _update_count(self):
-        n = max(0, self._cards_lay.count() - 1)  # 减去底部 stretch
+        n = len(self._cards)
         self._count_label.setText(f"{n} 个批次" if n else "")
         if n == 0:
             self.close()
@@ -394,6 +426,8 @@ class DownloadFloatWindow(QWidget):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        if self._cards and self._desired_columns() != self._grid_cols:
+            self._reflow_cards()
 
     # ---------- 四周边缘 / 四角缩放 ----------
 

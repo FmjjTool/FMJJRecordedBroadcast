@@ -122,7 +122,7 @@ class _SlotRow(QWidget):
         self.setFixedHeight(34)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(2, 1, 2, 1)
-        lay.setSpacing(8)
+        lay.setSpacing(6)
         self.no_label = QLabel(f"{idx + 1}")
         self.no_label.setFixedWidth(22)
         self.no_label.setStyleSheet("color: #888; font-size: 13px;")
@@ -131,11 +131,11 @@ class _SlotRow(QWidget):
         self.name_label.set_full_text("—")
         self.bar = QProgressBar()
         self.bar.setFixedHeight(16)
-        self.bar.setMinimumWidth(160)
+        self.bar.setMinimumWidth(120)
         self.bar.setStyleSheet(
             "QProgressBar { font-size: 12px; border-radius: 4px; }")
         self.state_label = QLabel("")
-        self.state_label.setFixedWidth(96)
+        self.state_label.setFixedWidth(44)
         self.state_label.setStyleSheet("font-size: 13px; color: #888;")
         lay.addWidget(self.no_label)
         lay.addWidget(self.name_label, 1)
@@ -378,6 +378,7 @@ class DownloadPanel(QFrame):
         self._root.addWidget(self._placeholder)
         self._placeholder.show()  # 被 _clear_layout hide 过，重新入局需显式复位
         self.setFixedHeight(56)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setVisible(True)
 
     def _build_ui(self, mode: str, nslots: int, threads: int):
@@ -390,6 +391,7 @@ class DownloadPanel(QFrame):
                 self._root.addWidget(w)
                 w.show()  # _clear_layout 的 hide() 需显式复位，否则二次构建后永久不可见
             self.setFixedHeight(110)
+            self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         else:
             # 重建槽位行
             for w in (self._rows):
@@ -407,8 +409,11 @@ class DownloadPanel(QFrame):
             #  二次 _build_ui，不 show 则面板永久空白）
             self._batch_head.show()
             self._scroll.show()
-            # 槽位全展开（浮窗滚动区统一管理总高度）；仅线程特别多时内部截断
-            self.setFixedHeight(min(46 + nslots * 40, 760))
+            # 槽位全展开（浮窗滚动区统一管理总高度）；仅线程特别多时内部截断。
+            # 卡片本身可被下载中心拉伸，面板用最小高度 + Expanding 填满剩余空间。
+            self.setMinimumHeight(min(46 + nslots * 40, 760))
+            self.setMaximumHeight(16777215)
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setVisible(True)
 
     def _single_started(self, name: str):
