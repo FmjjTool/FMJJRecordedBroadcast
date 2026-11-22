@@ -678,18 +678,21 @@ class Drive115Client:
         candidates = self._app_version_candidates()
         for app_ver in candidates:
             self._app_version = app_ver
-            # 第一档多给一次机会：同一 fileid 连续申请时 115 偶尔回 token invalid，
-            # 换个新时间戳重签一次通常就过；其余档只试一次，避免空转
-            tries = 2 if app_ver == candidates[0] else 1
-            for _ in range(tries):
+            # 首档多给一次机会：同一 fileid 连续申请时 115 偶尔回 token invalid，
+            # 换个新时间戳重签一次通常就过；其余档只试一次
+            attempts = 2 if app_ver == candidates[0] else 1
+            for _ in range(attempts):
                 try:
                     payload, data, status, pick_code, bucket, obj, callback = self._init_upload(
                         path, sha1, size, target, user_id, userkey, app_ver, on_stage)
                 except Drive115Error as exc:
                     text = str(exc)
-                    if "token invalid" in text or "升级到最新版本" in text:
+                    if "升级到最新版本" in text:
                         last_error = exc
-                        continue
+                        break            # 版本太旧：换下一档
+                    if "token invalid" in text:
+                        last_error = exc
+                        continue         # 同版本重签再试一次
                     raise
                 self._version_confirmed = True
                 if status == 2:
@@ -708,6 +711,10 @@ class Drive115Client:
                 self._oss_put(path, bucket, obj, callback, size, on_progress)
                 self._index_cache.pop(remote_dir, None)
                 return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
+            if (app_ver == candidates[0] and last_error is not None
+                    and "token invalid" in str(last_error)):
+                # 首档（已验证可用的版本）两次都 token invalid：不是版本问题，别再换档空转
+                break
         if last_error is not None:
             # 所有版本都被拒：先看看目标目录里是不是已有同名（可能残缺）条目，
             # 115 会因此一直回 token invalid；清掉后重试一轮（每次映射每个文件只清一次）

@@ -40,7 +40,7 @@ class MappingDialog(QDialog):
 
     def __init__(self, parent=None, mapping: qconfig.Mapping | None = None):
         super().__init__(parent)
-        self.setWindowTitle("夸克网盘备份 · 备份目录")
+        self.setWindowTitle("网盘备份 · 备份目录")
         self.setMinimumWidth(520)
         self._mapping = mapping or qconfig.Mapping()
 
@@ -458,7 +458,7 @@ class QuarkBackupPage(BasePage):
         if QMessageBox.question(
                 self, "删除备份目录",
                 f"删除这条映射？\n\n{mapping.title()}\n\n"
-                "只删除本地配置，夸克网盘里已上传的文件不受影响。"
+                "只删除本地配置，云盘里已上传的文件不受影响。"
         ) != QMessageBox.Yes:
             return
         qconfig.delete_mapping(mapping.id)
@@ -473,8 +473,14 @@ class QuarkBackupPage(BasePage):
         ) != QMessageBox.Yes:
             return
         removed = qstate.forget_mapping(mapping.id)
+        # 同步记录清掉后，卡片上的「上次结果 / 上次时间 / 分享链接」也要一起清，
+        # 否则状态文字会一直停在上一次的上传/失败统计上
+        mapping.last_result = ""
+        mapping.last_run = ""
+        mapping.last_share_url = ""
+        qconfig.update_mapping(mapping)
         self.reload()
-        self.app.toast(f"已清空 {removed} 条同步记录", "info")
+        self.app.toast(f"已清空 {removed} 条同步记录与状态", "info")
 
     def _toggle_mapping(self, mapping: qconfig.Mapping, checked: bool):
         mapping.enabled = bool(checked)
