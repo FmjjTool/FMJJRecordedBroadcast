@@ -353,10 +353,11 @@ def draw_header(draw: ImageDraw.ImageDraw, title: str, subtitle: str = "",
 
 def draw_footer(draw: ImageDraw.ImageDraw, y: int, source: str,
                 theme: str = "light", page: int | None = None,
-                total: int | None = None) -> int:
+                total: int | None = None,
+                when: datetime | None = None) -> int:
     palette = tokens(theme)
     draw.line([(MARGIN, y), (WIDTH - MARGIN, y)], fill=palette["border"], width=1)
-    text = footer_text(source, page=page, total=total)
+    text = footer_text(source, page=page, total=total, when=when)
     footer_font = font(13)
     width = _font_length(footer_font, text)
     draw.text(((WIDTH - width) / 2, y + 20), text, font=footer_font, fill=palette["muted"])
@@ -548,6 +549,229 @@ def render_report(title: str, subtitle: str, sections: Sequence[Mapping],
         draw_footer(draw, height - FOOTER_H - BOTTOM_GAP, source, theme,
                     page=page_index if total > 1 else None,
                     total=total if total > 1 else None)
+        path = first_path
+        if page_index > 1:
+            path = first_path.with_name(
+                f"{first_path.stem}_{page_index}{first_path.suffix}")
+        save_png(image, path)
+    return str(first_path)
+
+
+# ==================== 评论区长图 ====================
+
+COMMENT_AVATAR = 56
+COMMENT_IMAGE_GAP = 8
+COMMENT_IMAGE_MAX_H = 640
+COMMENT_PAD = 24
+
+
+def _fit_image(image, max_w: int, max_h: int):
+    """等比缩放到框内，不放大；坏图返回 None。"""
+    if image is None:
+        return None
+    try:
+        image = image.convert("RGB")
+        iw, ih = image.size
+        if iw <= 0 or ih <= 0:
+            return None
+        scale = min(max_w / iw, max_h / ih, 1.0)
+        if scale < 1.0:
+            image = image.resize(
+                (max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
+        return image
+    except Exception:
+        return None
+
+
+def _avatar_image(image, size: int):
+    """头像居中裁成正方形再缩放；失败返回 None。"""
+    if image is None:
+        return None
+    try:
+        image = image.convert("RGB")
+        w, h = image.size
+        side = min(w, h)
+        left, top = (w - side) // 2, (h - side) // 2
+        return image.crop((left, top, left + side, top + side)).resize(
+            (size, size), Image.LANCZOS)
+    except Exception:
+        return None
+
+
+def _comment_layout(item: Mapping, text_w: int) -> dict:
+    text = str(item.get("text") or "")
+    extra = str(item.get("extra") or "")
+    user = str(item.get("user") or "")
+    text_font = font(16)
+    text_emoji = font(16, emoji=True)
+    lines = wrap_rich_text(text, text_font, text_emoji, text_w)
+    text_h = len(lines) * 24
+    extra_h = 20 if extra else 0
+    body_h = 24 + 6 + text_h + extra_h
+    body_h = max(COMMENT_AVATAR, body_h)
+
+    image_columns: list[list[Image.Image]] = []
+    images_h = 0
+    raw_images = [im for im in list(item.get("images") or [])[:9] if im is not None]
+    if len(raw_images) == 1:
+        fitted = _fit_image(raw_images[0], text_w, COMMENT_IMAGE_MAX_H)
+        if fitted is not None:
+            image_columns = [[fitted]]
+            images_h = fitted.size[1]
+    elif raw_images:
+        col_w = max(1, (text_w - COMMENT_IMAGE_GAP) // 2)
+        fitted = [_fit_image(im, col_w, COMMENT_IMAGE_MAX_H) for im in raw_images]
+        fitted = [im for im in fitted if im is not None]
+
+        columns: list[list[Image.Image]] = [[], []]
+        heights = [0, 0]
+        for image in fitted:
+            column = 0 if heights[0] <= heights[1] else 1
+            columns[column].append(image)
+            heights[column] += image.size[1] + COMMENT_IMAGE_GAP
+        image_columns = [col for col in columns if col]
+        if image_columns:
+            images_h = max(heights) - COMMENT_IMAGE_GAP
+
+    row_h = COMMENT_PAD * 2 + body_h + (images_h + 10 if images_h else 0)
+    likes = item.get("likes")
+    like_text = (f"赞 {format_count(likes)}"
+                 if likes not in (None, "", 0, "0") else "")
+    return {
+        "user": user,
+        "like_text": like_text,
+        "lines": lines,
+        "extra": extra,
+        "images": image_columns,
+        "images_h": images_h,
+        "row_h": row_h,
+    }
+
+
+def _draw_comment_row(draw: ImageDraw.ImageDraw, image: Image.Image,
+                      item: Mapping, layout: Mapping, x: int, y: int,
+                      content_w: int, theme: str) -> None:
+    palette = tokens(theme)
+    avatar = _avatar_image(item.get("avatar"), COMMENT_AVATAR)
+    if avatar is not None:
+        mask = Image.new("L", (COMMENT_AVATAR, COMMENT_AVATAR), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, COMMENT_AVATAR, COMMENT_AVATAR), fill=255)
+        image.paste(avatar, (x, y + COMMENT_PAD), mask)
+    else:
+        box = (x, y + COMMENT_PAD, x + COMMENT_AVATAR, y + COMMENT_PAD + COMMENT_AVATAR)
+        draw.ellipse(box, fill=palette["surface_alt"], outline=palette["border"], width=1)
+        initial = (layout["user"] or "?")[:1]
+        initial_font = font(20, bold=True)
+        initial_w = _font_length(initial_font, initial)
+        draw.text((x + (COMMENT_AVATAR - initial_w) / 2,
+                   y + COMMENT_PAD + (COMMENT_AVATAR - 20) / 2),
+                  initial, font=initial_font, fill=palette["muted"])
+
+    text_x = x + COMMENT_AVATAR + 16
+    text_w = content_w - COMMENT_AVATAR - 16
+    user_font = font(16, bold=True)
+    user_emoji = font(16, emoji=True)
+    like_font = font(14)
+    like_w = _font_length(like_font, layout["like_text"]) if layout["like_text"] else 0
+    user_max = text_w - (like_w + 8 if like_w else 0)
+    user_text = ellipsize_rich(layout["user"], user_font, user_emoji, user_max)
+    draw_rich_text(draw, text_x, y + COMMENT_PAD + _ascent(user_font),
+                   user_text, user_font, palette["text"], user_emoji)
+    if layout["like_text"]:
+        draw.text((x + content_w - like_w, y + COMMENT_PAD + 2),
+                  layout["like_text"], font=like_font, fill=palette["accent"])
+
+    text_font = font(16)
+    text_emoji = font(16, emoji=True)
+    ty = y + COMMENT_PAD + 30
+    for line in layout["lines"]:
+        draw_rich_text(draw, text_x, ty + _ascent(text_font), line,
+                       text_font, palette["text"], text_emoji)
+        ty += 24
+    if layout["extra"]:
+        extra_font = font(13)
+        draw_rich_text(draw, text_x, ty + _ascent(extra_font), layout["extra"],
+                       extra_font, palette["muted"])
+        ty += 20
+    if layout["images"]:
+        ty += 10
+        for column_index, column in enumerate(layout["images"]):
+            image_y = ty
+            image_x = text_x + column_index * (
+                max(1, (text_w - COMMENT_IMAGE_GAP) // 2) + COMMENT_IMAGE_GAP)
+            for im in column:
+                image.paste(im, (image_x, image_y))
+                image_y += im.size[1] + COMMENT_IMAGE_GAP
+
+
+def _comment_pages(layouts: Sequence[Mapping]) -> list[list[Mapping]]:
+    available = MAX_HEIGHT - HEADER_H - FOOTER_H - BOTTOM_GAP
+    pages: list[list[Mapping]] = []
+    current: list[Mapping] = []
+    current_h = 16
+    for layout in layouts:
+        needed = layout["row_h"]
+        if current and current_h + needed + 16 > available:
+            pages.append(current)
+            current, current_h = [layout], 16 + needed
+        else:
+            current.append(layout)
+            current_h += needed
+    if current:
+        pages.append(current)
+    return pages or [[]]
+
+
+def render_comment_feed(title: str, subtitle: str, comments: Sequence[Mapping],
+                        output_path, theme: str = "light",
+                        source: str = "评论区采集") -> str:
+    """评论区长图：页头 → 评论卡片（头像/昵称/点赞/正文/图片）→ 页脚。
+
+    comments 只传数据：avatar / user / likes / text / extra / images；
+    图片已由调用方下载好，渲染阶段不发网络请求。超出 20000 px 自动分页。
+    """
+    card_w = WIDTH - 2 * MARGIN
+    content_w = card_w - 2 * COMMENT_PAD
+    text_w = content_w - COMMENT_AVATAR - 16
+    source_items = list(comments or [])
+    layouts = [_comment_layout(item, text_w) for item in source_items]
+    pages = _comment_pages(layouts)
+    total = len(pages)
+    first_path = Path(output_path)
+    stamp = datetime.now()
+    source_text = source or "评论区采集"
+    item_cursor = 0
+
+    for page_index, page_layouts in enumerate(pages, 1):
+        page_items = source_items[item_cursor:item_cursor + len(page_layouts)]
+        item_cursor += len(page_layouts)
+        content_h = 16 + sum(layout["row_h"] for layout in page_layouts) + 16
+        if not page_layouts:
+            content_h = 120
+        height = HEADER_H + content_h + FOOTER_H + BOTTOM_GAP
+        image = Image.new("RGB", (WIDTH, height), tokens(theme)["bg"])
+        draw = ImageDraw.Draw(image)
+        draw_header(draw, title, subtitle, theme)
+        draw_card(draw, (MARGIN, HEADER_H, WIDTH - MARGIN, HEADER_H + content_h), theme)
+        if not page_layouts:
+            empty_font = font(16)
+            empty = "暂无评论"
+            draw.text(((WIDTH - _font_length(empty_font, empty)) / 2,
+                       HEADER_H + 46), empty, font=empty_font,
+                      fill=tokens(theme)["muted"])
+        else:
+            y = HEADER_H + 16
+            for index, (item, layout) in enumerate(zip(page_items, page_layouts)):
+                _draw_comment_row(draw, image, item, layout,
+                                  MARGIN + COMMENT_PAD, y, content_w, theme)
+                y += layout["row_h"]
+                if index < len(page_layouts) - 1:
+                    draw.line([(MARGIN + COMMENT_PAD, y),
+                               (WIDTH - MARGIN - COMMENT_PAD, y)],
+                              fill=tokens(theme)["border"], width=1)
+        draw_footer(draw, height - FOOTER_H - BOTTOM_GAP, source_text, theme,
+                    page=page_index if total > 1 else None,
+                    total=total if total > 1 else None, when=stamp)
         path = first_path
         if page_index > 1:
             path = first_path.with_name(

@@ -18,7 +18,6 @@ from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.row_widgets import GroupMultiSelect
-from toolbox import account_health
 from toolbox import account_registry as registry
 from toolbox import live_room_resolver as live_rooms
 
@@ -55,9 +54,6 @@ class AccountCenterWidget(QWidget):
         self._row_refs: dict[str, dict] = {}
         # 直播间号自动解析轮次：刷新/重建后旧轮次的结果直接丢弃
         self._resolve_round = 0
-        # 账号状态检测轮次：同一时间只跑一批，重建列表后旧结果丢弃
-        self._check_round = 0
-        self._checking = False
         self._build()
         self.reload()
 
@@ -93,10 +89,6 @@ class AccountCenterWidget(QWidget):
         self.count_label.setProperty("role", "caption")
         head.addWidget(self.count_label)
         head.addStretch(1)
-        check_btn = self._small_button(
-            "检测状态", "重新检测各平台登录态（每个平台校验一次）",
-            self._check_all)
-        head.addWidget(check_btn)
         refresh_btn = self._small_button(
             "刷新", "重新读取各功能的账号，并强制重新解析直播间号",
             lambda: self.reload(force_resolve=True))
@@ -250,141 +242,6 @@ class AccountCenterWidget(QWidget):
         finally:
             self._building = False
         self._auto_resolve_rooms(force=force_resolve)
-        self._check_stale()
-
-    # ==================== 登录状态（结果全部来自 account_health 中间层） ====================
-
-    def _check_stale(self):
-        """打开/刷新列表时只补测「没测过或已过期」的平台，正常项不重复联网。"""
-        platforms = account_health.platforms_to_check(self._accounts)
-        if platforms:
-            self._run_check(platforms)
-
-    def _check_all(self):
-        platforms = []
-        for account in self._accounts:
-            if account["platform"] not in platforms:
-                platforms.append(account["platform"])
-        self._run_check(platforms)
-
-    def _run_check(self, platforms):
-        if self._checking or not platforms:
-            return
-        self._checking = True
-        self._check_round += 1
-        round_id = self._check_round
-        self.status_label.setText(f"正在检测登录状态 0/{len(platforms)}…")
-
-        def progress(done, total):
-            post_to_main(self._on_check_progress, round_id, done, total)
-
-        def work():
-            return account_health.refresh(only_platforms=platforms, progress=progress)
-
-        def finished(result, err):
-            if not self._alive():
-                return
-            self._checking = False
-            if round_id != self._check_round:
-                return
-            if err:
-                self.status_label.setText(f"登录状态检测失败：{err}")
-                return
-            for account in self._accounts:
-                self._paint_health(account["id"])
-            data = result or {}
-            self.status_label.setText(
-                f"登录状态：已登录 {data.get('ok', 0)} · 无法验证 {data.get('warn', 0)}"
-                f" · 未登录 {data.get('bad', 0)} · 未检测 {data.get('unknown', 0)}"
-                f"（按账号行统计）")
-            self.changed.emit()  # 侧栏卡片跟着刷新汇总
-
-        run_bg(work, finished, owner=self)
-
-    def _alive(self) -> bool:
-        """弹窗已关闭时后台回调不能再碰控件。"""
-        try:
-            from shiboken6 import isValid
-            return bool(isValid(self))
-        except Exception:
-            return True
-
-    def _on_check_progress(self, round_id, done, total):
-        if not self._alive() or round_id != self._check_round:
-            return
-        self.status_label.setText(f"正在检测登录状态 {done}/{total}…")
-
-    def _check_one(self, account_id):
-        """点某一行的状态徽标：只重测这个账号所在平台的登录态。"""
-        if self._checking:
-            self._toast("正在检测其它平台，稍等片刻", "info")
-            return
-        account = next((a for a in self._accounts if a["id"] == account_id), None)
-        if account is None:
-            return
-        self._checking = True
-        self._check_round += 1
-        round_id = self._check_round
-        self.status_label.setText("正在检测登录状态…")
-
-        def work():
-            return account_health.refresh(only_platforms=[account["platform"]])
-
-        def finished(result, err):
-            if not self._alive():
-                return
-            self._checking = False
-            if round_id != self._check_round:
-                return
-            if err:
-                self.status_label.setText(f"登录状态检测失败：{err}")
-                return
-            for row in self._accounts:
-                if row["platform"] == account["platform"]:
-                    self._paint_health(row["id"])
-            info = account_health.status(account)
-            self.status_label.setText(
-                f"{account['platform_name']} 登录状态：{info['text']}"
-                + (f"（{info['detail']}）" if info["detail"] else ""))
-            self.changed.emit()
-
-        run_bg(work, finished, owner=self)
-
-    @staticmethod
-    def _health_badge_style(state):
-        color = {account_health.STATE_OK: theme.color("success"),
-                 account_health.STATE_WARN: theme.color("warning"),
-                 account_health.STATE_BAD: theme.color("danger")}.get(
-                     state, theme.color("muted"))
-        return (f"QPushButton#accountHealthBadge {{ color: {color}; background: transparent;"
-                f" border: 1px solid {color}; border-radius: 9px; padding: 0 7px;"
-                f" font-size: 11px; }}"
-                f"QPushButton#accountHealthBadge:hover {{ background: {theme.color('border')}; }}")
-
-    def _paint_health(self, account_id):
-        """把中间层的平台登录态画到这一行的徽标上（不触发任何网络请求）。"""
-        refs = self._row_refs.get(account_id)
-        badge = (refs or {}).get("health")
-        if badge is None:
-            return
-        account = next((a for a in self._accounts if a["id"] == account_id), None)
-        info = account_health.status(account or account_id)
-        age = account_health.human_age(info["checked_at"])
-        badge.setText("● " + info["text"] + (f" · {age}" if age else ""))
-        badge.setStyleSheet(self._health_badge_style(info["state"]))
-        platform_name = account["platform_name"] if account else info["platform"]
-        lines = [f"{platform_name} 登录状态：{info['text']}"]
-        if info["username"]:
-            lines.append(f"登录账号：{info['username']}")
-        if info["detail"]:
-            lines.append(info["detail"])
-        if info["ok_at"]:
-            lines.append(f"上次正常：{account_health.stamp(info['ok_at'])}"
-                         f"（{account_health.human_age(info['ok_at'])}）")
-        if info["checked_at"]:
-            lines.append(f"本次检测：{account_health.stamp(info['checked_at'])}")
-        lines.append("点击重新检测该平台登录态")
-        badge.setToolTip("\n".join(lines))
 
     # ==================== 直播间号自动获取 ====================
 
@@ -566,16 +423,6 @@ class AccountCenterWidget(QWidget):
         platform = QLabel(f"[{account['platform_name']}]")
         platform.setProperty("role", "caption")
         head.addWidget(platform)
-        # 账号状态徽标：颜色/文字来自 account_health 中间层，点击只重测这一个账号
-        health = QPushButton("● 未检测")
-        health.setObjectName("accountHealthBadge")
-        health.setFlat(True)
-        health.setCursor(Qt.PointingHandCursor)
-        health.setFixedHeight(22)
-        health.setStyleSheet(self._health_badge_style(account_health.STATE_UNKNOWN))
-        health.clicked.connect(
-            lambda _checked=False, aid=account["id"]: self._check_one(aid))
-        head.addWidget(health)
         url = QLabel(account["url"] if len(account["url"]) <= 56 else account["url"][:53] + "...")
         url.setProperty("role", "caption")
         url.setToolTip(account["url"])
@@ -706,9 +553,7 @@ class AccountCenterWidget(QWidget):
             opts2.addStretch(1)
             v.addLayout(opts2)
         self._row_refs[account["id"]] = {
-            "row": row, "name": name, "url": url, "tag": dynamic_tag,
-            "health": health}
-        self._paint_health(account["id"])
+            "row": row, "name": name, "url": url, "tag": dynamic_tag}
         return row
 
     # ==================== 操作 ====================
@@ -964,7 +809,6 @@ class AccountCenterWidget(QWidget):
         self._toast(message, "success" if ok else "warning")
         if not ok:
             return
-        # 链接/名字变了：账号 id 变了就是另一条记录，状态徽标按平台重新取
         self._accounts = registry.list_accounts()
         if url_changed:
             # 链接换掉后账号身份（id）变了：只换这一行，其余行与滚动位置都不动
@@ -977,7 +821,6 @@ class AccountCenterWidget(QWidget):
             updated = next((a for a in self._accounts if a["id"] == account_id), None)
             if updated is not None:
                 self._paint_row(account_id, updated)
-        self._check_stale()
         self.changed.emit()
 
     def _paint_row(self, account_id, account):

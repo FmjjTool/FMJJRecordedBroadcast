@@ -46,7 +46,8 @@ description: "生成图片输出规范（账号对比 PNG、资产预览图、�
 - `src/tracker/export_png.py`、`src/music_account/export_png.py` 已改为薄适配层，统一调用共享渲染；宽度 1080。账号追踪默认 `theme="dark"` 的深色卡片仪表盘（`render_account_dashboard`），其他报表仍默认 brand-light。
 - 已新增 `src/toolbox/asset_preview.py`；`asset.py:_export_preview_image` 只调用该服务，不再自带紫色渐变/私有色板。
 - `cover_maker.py` 的默认画布底色、默认文字色与拖拽提示色改取共享 token；交互式预览仍使用 Qt `QPainter`（用户自定义封面/模板保持自由），不强行改成 Pillow。
-- 视频评论区长图等后续生成器尚未迁移，新增时必须直接使用共享模块。
+- 视频评论区长图已迁移：`toolbox/comments_common.py` 只下载头像/评论图片并整理数据，绘制统一走 `image_render.render_comment_feed()`；使用 1080 px 画布、共享 token、固定页头页脚、评论卡片与 20000 px 自动分页，头像/图片失败走统一占位，不再自带私有色板与字体表。
+- 后续新增报表图必须直接使用共享模块，不再新建私有画布。
 
 
 ## 画布与布局

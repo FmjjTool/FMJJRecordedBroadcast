@@ -10,64 +10,9 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 
 import requests
-
-# 浅色主题（仿抖音 App 评论区）
-_C_BG = "#ffffff"
-_C_HEAD = "#f7f8fa"
-_C_TEXT = "#232323"
-_C_NICK = "#61666d"
-_C_TIME = "#b1b4bb"
-_C_ACCENT = "#161823"
-_C_LIKE = "#f52e56"
-_C_BORDER = "#eef0f3"
-
-_FONT_CANDIDATES = [
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/simhei.ttf",
-    "C:/Windows/Fonts/simsun.ttc",
-]
-_font_cache = {}
-
-
-def _font(size: int):
-    key = size
-    if key not in _font_cache:
-        f = None
-        for path in _FONT_CANDIDATES:
-            try:
-                from PIL import ImageFont
-                f = ImageFont.truetype(path, size)
-                break
-            except Exception:
-                continue
-        if f is None:
-            from PIL import ImageFont
-            f = ImageFont.load_default()
-        _font_cache[key] = f
-    return _font_cache[key]
-
-
-def _wrap(text: str, font, max_w: int) -> list:
-    """中文按字符宽度换行（PIL 无自动换行）。"""
-    lines, line = [], ""
-    for ch in text:
-        if ch == "\n":
-            lines.append(line)
-            line = ""
-            continue
-        t = line + ch
-        if font.getlength(t) > max_w and line:
-            lines.append(line)
-            line = ch
-        else:
-            line = t
-    if line:
-        lines.append(line)
-    return lines or [""]
 
 
 def _http_img(be, url: str):
@@ -75,9 +20,9 @@ def _http_img(be, url: str):
     try:
         r = requests.get(url, headers=be.IMG_HEADERS, timeout=20)
         if r.status_code == 200 and len(r.content) > 500:
-            from PIL import Image
+            from PIL import Image, ImageOps
             import io
-            return Image.open(io.BytesIO(r.content)).convert("RGB")
+            return ImageOps.exif_transpose(Image.open(io.BytesIO(r.content))).convert("RGB")
     except Exception:
         pass
     return None
@@ -194,135 +139,42 @@ def save_raw(be, comments: list, out_dir: Path, progress=None,
 
 def export_comments_png(be, comments: list, meta: dict, out_path: Path,
                         progress=None) -> Path:
-    """评论列表导出为长图。
+    """评论列表导出为 1080 px 长图；绘制统一走 toolbox.image_render。
 
     meta: {platform, video_desc, filter_desc, stats}（页头信息）。
-    每条评论绘制：头像 + 昵称 + 时间/IP + 点赞 + 文本 + 评论图片（等比缩放内嵌）。
+    评论图片与头像在这里下载；渲染阶段不再发网络请求。超过 20000 px 自动分页。
     """
-    from PIL import Image, ImageDraw
+    from toolbox import image_render
 
-    W = 860
-    AVATAR = 44
-    PAD = 24
-    CONTENT_X = PAD + AVATAR + 12
-    CONTENT_W = W - CONTENT_X - PAD
-    IMG_MAX_W = min(560, CONTENT_W)
-    IMG_MAX_H = 640          # 单张图片最大高度（长截图等比缩到该高度内）
-    IMG_GAP = 6
-    COL_W = (IMG_MAX_W - IMG_GAP) // 2   # 两列网格的单列宽
-
-    def _fit(im, max_w: int, max_h: int):
-        """等比缩放到 (max_w, max_h) 内，不放大。"""
-        iw, ih = im.size
-        sc = min(max_w / iw, max_h / ih, 1.0)
-        if sc < 1.0:
-            im = im.resize((max(1, int(iw * sc)), max(1, int(ih * sc))))
-        return im
-
-    # ---- 先下载并排版（量高度），再统一绘制 ----
-    rows = []
+    items = []
     for idx, c in enumerate(comments):
-        text = be.comment_text(c)
-        t_lines = _wrap(text, _font(16), CONTENT_W)
-        h_text = len(t_lines) * 24
-        imgs = [im for u in be.image_urls(c)[:9]
-                 if (im := _http_img(be, u)) is not None]
-        h_imgs = 0
-        if len(imgs) == 1:
-            imgs[0] = _fit(imgs[0], IMG_MAX_W, IMG_MAX_H)
-            h_imgs = imgs[0].size[1] + 8
-        elif imgs:
-            imgs = [_fit(im, COL_W, IMG_MAX_H) for im in imgs]
-            # 与绘制一致：贪心装短列
-            ys = [0, 0]
-            for im in imgs:
-                k = 0 if ys[0] <= ys[1] else 1
-                ys[k] += im.size[1] + IMG_GAP
-            h_imgs = max(ys) + 6
-        rows.append({"c": c, "text_lines": t_lines, "imgs": imgs,
-                     "h": 34 + h_text + h_imgs + 18})
+        images = [im for u in be.image_urls(c)[:9]
+                  if (im := _http_img(be, u)) is not None]
+        items.append({
+            "avatar": _http_img(be, be.avatar_url(c)),
+            "user": be.comment_user(c),
+            "likes": be.comment_likes(c),
+            "text": be.comment_text(c),
+            "extra": be.comment_extra(c),
+            "images": images,
+        })
         if progress and (idx + 1) % 5 == 0:
             progress(f"渲染 {idx + 1}/{len(comments)}", idx + 1, len(comments))
 
+    platform = meta.get("platform") or ""
+    title = f"{platform}评论区" if platform else "评论区"
     stats = meta.get("stats") or {}
-    filter_desc = meta.get("filter_desc") or ""
-    head_lines = [
-        f"视频：{(meta.get('video_desc') or '未知')[:36]}",
-        f"共导出 {len(comments)} 条评论"
-        + (f"（原始 {stats.get('total', '')} 条）" if stats.get("total") else ""),
-    ]
-    if filter_desc:
-        head_lines.append(f"筛选：{filter_desc}")
-    head_lines.append(f"导出时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    parts = [f"视频：{(meta.get('video_desc') or '未知')[:60]}"]
+    count = f"共导出 {len(comments)} 条评论"
+    if stats.get("total"):
+        count += f"（原始 {stats['total']} 条）"
+    parts.append(count)
+    if meta.get("filter_desc"):
+        parts.append(f"筛选：{meta['filter_desc']}")
+    subtitle = " · ".join(parts)
 
-    head_h = 40 + len(head_lines) * 26 + 14
-    total_h = head_h + sum(r["h"] for r in rows) + 60
-
-    img = Image.new("RGB", (W, total_h), _C_BG)
-    dr = ImageDraw.Draw(img)
-
-    # ---- 页头 ----
-    dr.rectangle([0, 0, W, head_h], fill=_C_HEAD)
-    dr.text((PAD, 16), f"{meta.get('platform') or ''}评论区", font=_font(22), fill=_C_ACCENT)
-    y = 52
-    for line in head_lines:
-        dr.text((PAD, y), line, font=_font(14), fill=_C_NICK)
-        y += 26
-
-    # ---- 评论 ----
-    y = head_h + 10
-    for r in rows:
-        c = r["c"]
-        # 头像（圆形裁切）
-        av = _http_img(be, be.avatar_url(c))
-        if av is not None:
-            av = av.resize((AVATAR, AVATAR))
-            mask = Image.new("L", (AVATAR, AVATAR), 0)
-            ImageDraw.Draw(mask).ellipse([0, 0, AVATAR, AVATAR], fill=255)
-            img.paste(av, (PAD, y + 4), mask)
-        else:
-            dr.ellipse([PAD, y + 4, PAD + AVATAR, y + 4 + AVATAR],
-                       outline=_C_TIME, width=1)
-        # 昵称 + 点赞
-        dr.text((CONTENT_X, y + 4), be.comment_user(c)[:24], font=_font(14), fill=_C_NICK)
-        likes = be.comment_likes(c)
-        like_txt = f"赞 {likes}" if likes else ""
-        lw = _font(13).getlength(like_txt)
-        dr.text((W - PAD - lw, y + 4), like_txt, font=_font(13), fill=_C_LIKE)
-        # 文本
-        ty = y + 26
-        for ln in r["text_lines"]:
-            dr.text((CONTENT_X, ty), ln, font=_font(16), fill=_C_TEXT)
-            ty += 24
-        # 时间 / IP
-        extra = be.comment_extra(c)
-        if extra:
-            dr.text((CONTENT_X, ty), extra, font=_font(12), fill=_C_TIME)
-            ty += 18
-        # 图片
-        if r["imgs"]:
-            ty += 8
-            if len(r["imgs"]) == 1:
-                img.paste(r["imgs"][0], (CONTENT_X, ty))
-                ty += r["imgs"][0].size[1] + 8
-            else:
-                xs = [CONTENT_X, CONTENT_X + COL_W + IMG_GAP]
-                ys = [ty, ty]
-                for im in r["imgs"]:
-                    k = 0 if ys[0] <= ys[1] else 1
-                    img.paste(im, (xs[k], ys[k]))
-                    ys[k] += im.size[1] + IMG_GAP
-                ty = max(ys) + 6
-        # 分隔线
-        y += r["h"]
-        dr.line([PAD, y - 6, W - PAD, y - 6], fill=_C_BORDER, width=1)
-
-    # ---- 页脚 ----
-    dr.text((PAD, total_h - 34), "· 由 封茗工具箱 导出 ·",
-            font=_font(12), fill=_C_TIME)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out_path, "PNG")
+    path = image_render.render_comment_feed(
+        title, subtitle, items, out_path, source=title)
     if progress:
         progress("导出完成", 1, 1)
-    return out_path
+    return Path(path)
