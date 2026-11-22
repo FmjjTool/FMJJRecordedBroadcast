@@ -408,8 +408,8 @@ class MainWindow(QMainWindow):
         if theme.is_dark():
             theme.adapt(self)
         self.page_preloader.start()
-        # 账号状态：延迟后台补测缺失/过期项，让侧栏卡片有真实数据（失败不打扰）
-        QTimer.singleShot(8000, self._auto_check_accounts)
+        # 登录态：延迟后台补测缺失/过期平台，侧栏卡片颜色才有依据（失败不打扰）
+        QTimer.singleShot(8000, self._auto_check_logins)
         # 启动后静默检查更新：延迟避开启动高峰，默认每天最多一次，失败不打扰
         QTimer.singleShot(15000, self._auto_check_update)
 
@@ -769,7 +769,7 @@ class MainWindow(QMainWindow):
         self.cookie_refresh_btn.setObjectName("workbenchCookieRefresh")
         self.cookie_refresh_btn.setFixedSize(32, 30)
         self.cookie_refresh_btn.setCursor(Qt.PointingHandCursor)
-        self.cookie_refresh_btn.setToolTip("重新检测各平台登录态（B站/抖音/微博/音乐平台等）")
+        self.cookie_refresh_btn.setToolTip("重新检查已保存的登录状态")
         self.cookie_refresh_btn.clicked.connect(self._recheck_cookie_status)
         action_row.addWidget(self.cookie_refresh_btn)
         v.addLayout(action_row)
@@ -788,120 +788,134 @@ class MainWindow(QMainWindow):
         self.cookie_toggle.update()  # 开关是自绘控件，换主题后要重画
 
     def _recheck_cookie_status(self):
-        """重新检测各平台登录态，完成后刷新卡片汇总。"""
-        self._start_account_check(None, announce=True)
+        """重新检测各平台登录态（检测在 account_health 中间层）。"""
+        from gui_qt.cookie_manager import COOKIE_PLATFORMS
+        platforms = [p for p, *_rest in COOKIE_PLATFORMS if p != "kugou_lite"]
+        self._start_login_check(platforms, announce=True)
 
-    def _auto_check_accounts(self):
-        """启动后台补测缺失/过期的登录态，卡片才有真实数据（失败不打扰）。"""
+    def _auto_check_logins(self):
+        """进入软件时后台刷新一遍各平台登录态，卡片颜色才有依据（失败不打扰）。
+
+        自动刷新只发生在这里（进软件）和「单个平台刚登录」两处；运行期间不再
+        按时间重复补测，避免频繁请求平台接口。
+        """
         if self._closed:
             return
         try:
-            from toolbox import account_health, account_registry
-            accounts = account_registry.list_accounts()
-            platforms = account_health.platforms_to_check(accounts)
+            from auth import get_netease_cookie_stored, load_cookies
+            from gui_qt.cookie_manager import COOKIE_PLATFORMS
+            cookies = load_cookies()
+            netease_ok = bool(get_netease_cookie_stored().strip())
+            platforms = []
+            for plat, *_rest in COOKIE_PLATFORMS:
+                if plat == "kugou_lite":
+                    continue  # 概念版登录态在会话文件，不走 Cookie 检测
+                has = netease_ok if plat == "netease" else bool((cookies.get(plat) or "").strip())
+                if has:
+                    platforms.append(plat)
         except Exception:
             return
         if platforms:
-            self._start_account_check(platforms, announce=False)
+            self._start_login_check(platforms, announce=False)
 
-    def _start_account_check(self, platforms, announce: bool):
+    def _start_login_check(self, platforms, announce: bool):
         if getattr(self, "_cookie_checking", False):
             return
-        from toolbox import account_health, account_registry
-        if platforms is None:
-            platforms = []
-            for account in account_registry.list_accounts():
-                if account["platform"] not in platforms:
-                    platforms.append(account["platform"])
         if not platforms:
             self._refresh_cookie_status()
             return
+        from toolbox import account_health
         self._cookie_checking = True
         self.cookie_refresh_btn.setEnabled(False)
         self.cookie_status_label.setText("正在检测登录状态…")
-        if announce:
-            show_toast(self, f"正在检测 {len(platforms)} 个平台的登录态…", "info")
 
         def work():
-            return account_health.refresh(only_platforms=platforms)
+            return account_health.refresh(accounts=[], only_platforms=platforms, workers=4)
 
         def finished(result, err):
             self._cookie_checking = False
             self.cookie_refresh_btn.setEnabled(True)
-            if err:
-                if announce:
-                    show_toast(self, f"登录状态检测失败：{err}", "warning")
-                return
             self._refresh_cookie_status()
-            if announce:
-                data = result or {}
-                show_toast(self,
-                           f"登录状态检测完成：已登录 {data.get('ok', 0)}/{data.get('total', 0)}",
-                           "info")
+            if err:
+                show_toast(self, f"登录状态检测失败：{err}", "warning")
+            elif announce:
+                show_toast(self, "已重新检测各平台登录状态", "info")
 
         common.run_bg(work, finished, owner=self)
 
+    @staticmethod
+    def _legacy_logged(plat, cookies, netease_ok) -> bool:
+        """还没检测过时的旧口径：只看有没有存过登录态（不发请求）。"""
+        if plat == "netease":
+            return netease_ok
+        if plat == "kugou_lite":
+            try:
+                from music.scrapers.kugou_lite import session_logged_in
+                return session_logged_in()
+            except Exception:
+                return False
+        return bool(cookies.get(plat, "") and len(cookies.get(plat, "")) > 10)
+
     def _refresh_cookie_status(self):
         try:
-            from auth import is_cookie_enabled
-            from toolbox import account_health, account_registry
+            from auth import load_cookies, is_cookie_enabled, get_netease_cookie_stored
+            from gui_qt.cookie_manager import COOKIE_PLATFORMS as _PLATFORMS
+            from toolbox import account_health
 
             enabled = is_cookie_enabled()
+            cookies = load_cookies()
+            netease_ok = bool(get_netease_cookie_stored().strip())
+            total = len(_PLATFORMS)
+            records = account_health.records()
+            detected = bool(records)
+            infos = account_health.states([p for p, *_rest in _PLATFORMS])
+
+            ok = warn = bad = unknown = 0
+            for plat, _name, _qr, _browser in _PLATFORMS:
+                if plat == "kugou_lite" or not detected:
+                    # 概念版登录态在会话文件；首次启动还没有检测结果时沿用旧口径
+                    state = "ok" if self._legacy_logged(plat, cookies, netease_ok) else "bad"
+                else:
+                    state = infos[plat]["state"]
+                if state == "ok":
+                    ok += 1
+                elif state == "warn":
+                    warn += 1
+                elif state == "bad":
+                    bad += 1
+                else:
+                    unknown += 1
+
             self.cookie_toggle.set_state(enabled)
-
-            accounts = account_registry.list_accounts()
-            data = account_health.summary(accounts)
-            total = data["total"]
-            ok = data[account_health.STATE_OK]
-            warn = data[account_health.STATE_WARN]
-            bad = data[account_health.STATE_BAD]
-            unknown = data[account_health.STATE_UNKNOWN]
-
-            # 比例条 = 账号行里「已登录/总数」；登录态来自中间层缓存，不在绘图路径联网
             self.cookie_meter.setRange(0, max(total, 1))
             self.cookie_meter.setValue(ok)
             self.cookie_meter.setStyleSheet(self._cookie_meter_style(ok, total))
-
             if not enabled:
                 text = "总开关已关闭"
-            elif not total:
-                text = "还没有账号"
-            elif ok + warn + bad == 0:
-                text = f"账号 {total} 个 · 待检测"
+            elif not ok:
+                text = "还没有可用的登录态"
             else:
                 text = f"已登录 {ok}/{total}"
             self.cookie_status_label.setText(text)
-
-            if not enabled or not total or (ok + warn + bad == 0):
-                state = "off"
-            elif ok and not warn and not bad:
-                state = "ok"
-            elif not ok and bad:
-                state = "bad"
-            else:
-                state = "warn"
+            state = "off" if not enabled else ("bad" if bad else ("warn" if warn else "ok"))
             self.cookie_dot.setStyleSheet(self._cookie_dot_style(state))
-
-            checked = account_health.human_age(data["checked_at"])
-            lines = [text]
-            if total:
-                lines.append(f"已登录 {ok} · 无法验证 {warn} · 未登录 {bad} · 未检测 {unknown}"
-                             "（按账号行统计）")
-            if data.get("platforms"):
-                lines.append(f"涉及平台：{data['platforms']} 个"
-                             f"（登录有效 {data.get('platforms_ok', 0)}）")
-            if checked:
-                lines.append(f"上次检测：{account_health.stamp(data['checked_at'])}（{checked}）")
+            lines = [f"已登录 {ok}/{total} 个平台"]
+            if warn or bad or unknown:
+                lines.append(f"无法验证 {warn} · 未登录 {bad} · 未检测 {unknown}")
+            last = max((float((records.get(p) or {}).get("checked_at") or 0)
+                        for p, *_r in _PLATFORMS if p != "kugou_lite"), default=0)
+            if last:
+                lines.append(f"上次检测：{account_health.stamp(last)}"
+                             f"（{account_health.human_age(last)}）")
             lines.append(f"总开关{'开启' if enabled else '关闭'}"
                          + ("（关闭时不使用已保存的登录态）" if not enabled else ""))
-            lines.append("点右侧刷新按钮可重新检测各平台登录态")
             self.cookie_dot.setToolTip("\n".join(lines))
         except Exception:
             pass
 
     @staticmethod
     def _cookie_dot_style(state):
-        """圆点颜色：全部正常 / 部分异常 / 全部失效 / 停用，颜色取自主题角色。"""
+        """圆点颜色：全部正常 / 有无法验证 / 有未登录 / 停用，颜色取自主题角色。"""
         color = {"ok": theme.color("success"), "warn": theme.color("warning"),
                  "bad": theme.color("danger")}.get(state, theme.color("muted"))
         return f"background: {color}; border: none; border-radius: 4px;"

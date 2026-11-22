@@ -478,7 +478,7 @@ class CookieManagerDialog(QDialog):
             sl.setStyleSheet(self._status_color(plat, has))
             # 状态文字（含长昵称）允许被压缩，否则整行最小宽度会把弹窗撑得过宽
             sl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            sl.setToolTip(sl.text())
+            sl.setToolTip(self._status_tooltip(plat, has, age, lite_name))
             row.addWidget(sl, 1)
             if has:
                 row.addWidget(self._btn("验证", lambda p=plat: self._verify(p)))
@@ -496,13 +496,28 @@ class CookieManagerDialog(QDialog):
             w.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             self.container_layout.addWidget(w)
 
-        # 有 Cookie 且未探测过的平台 → 后台自动拉取登录用户名
-        # （管理弹窗读"已存储"Cookie：总开关只管采集，不影响这里的状态展示/验证）
+        # 自动检测只在两处发生：进入软件时（main_window 启动后台跑一遍全量）与
+        # 单个平台刚登录时（保存/扫码后已用 forget_platform_login 作废该平台缓存）。
+        # 因此这里只补测「没有记录」的平台，其余直接用已有结果——打开账号配置
+        # 不再全量重测、也不再按时间过期重测，避免频繁请求平台接口。
+        from toolbox import account_health
+        records = account_health.records()
         stored = auth.load_cookies()
+        pending = []
         for plat, _n, _q, _b in COOKIE_PLATFORMS:
-            cookie = (auth.get_netease_cookie_stored() if plat == "netease" else stored.get(plat, "")) or ""
-            if len(cookie) > 10 and plat not in self._whoami_cache and plat not in self._whoami_probing:
-                self._start_probe(plat)
+            if plat == "kugou_lite":
+                continue  # 概念版登录态在会话文件，走 _kugou_lite_verify
+            cookie = (auth.get_netease_cookie_stored() if plat == "netease"
+                      else stored.get(plat, "")) or ""
+            if len(cookie) > 10 and plat not in records:
+                pending.append(plat)
+        self._start_probes(pending)
+
+    def _mark_relogged(self, plat):
+        """刚登录成功的平台：作废它的登录态缓存，随后 _reload 只补测这一个平台。"""
+        self._whoami_cache.pop(plat, None)
+        from toolbox import account_health
+        account_health.forget_platform_login(plat)
 
     @staticmethod
     def _short(s: str, limit: int = 20) -> str:
@@ -511,59 +526,104 @@ class CookieManagerDialog(QDialog):
         return s if len(s) <= limit else s[:limit - 3] + "..."
 
     def _status_text(self, plat, has, age, name=""):
-        """name：非 Cookie 平台的展示名（如酷狗概念版来自会话文件）。"""
-        if not has:
-            return "未登录"
-        info = self._whoami_cache.get(plat)
-        if info is None:
-            shown = f" · {self._short(name)}" if name else ""
-            return "已登录" + shown + (f" · {age}" if age else "")
-        if info == "probing":
-            return "已登录 · 验证中…" + (f" · {age}" if age else "")
-        base = "已登录"
-        if info["ok"] is False:
-            base = "已保存 · 验证失败"
-        elif info["ok"] is None and not (info.get("username") or name):
-            # 接口不可达/该平台无验证通道：别硬说"已登录"（酷狗、5sing 曾因此
-            # 游客态也显示绿色已登录）
-            base = "已保存 · 无法验证"
-        else:
-            shown = info.get("username") or name
-            if shown:
-                base = f"已登录 · {self._short(shown)}"
-        return base + (f" · {age}" if age else "")
+        """状态文字：登录态由 account_health 中间层给出（酷狗概念版走会话文件）。
+
+        name：非 Cookie 平台的展示名（如酷狗概念版来自会话文件）。
+        最后成功时间 = 中间层记录的 ok_at，登录态掉掉后仍能看到「上次正常」。
+        """
+        from toolbox import account_health
+        info = self._login_info(plat, has)
+        state = info["state"]
+        shown = self._short(info.get("username") or name)
+        ok_at = account_health.stamp(info.get("ok_at")) if info.get("ok_at") else ""
+        if state == "probing":
+            return "验证中…" + (f" · {shown}" if shown else "") + (f" · {age}" if age else "")
+        if state == "ok":
+            base = "已登录" + (f" · {shown}" if shown else "")
+            when = account_health.human_age(info.get("ok_at")) or age
+            return base + (f" · {when}" if when else "")
+        if state == "warn":
+            base = "无法验证" + (f" · {shown}" if shown else "")
+            return base + (f" · 上次正常 {ok_at}" if ok_at else "")
+        if state == "bad":
+            base = "登录态已失效" if has else "未登录"
+            return base + (f" · 上次正常 {ok_at}" if ok_at else "")
+        # unknown：还没检测完，先按有没有存过登录态显示
+        base = "已保存 · 待验证" if has else "未登录"
+        return base + (f" · {shown}" if shown else "") + (f" · {age}" if age else "")
+
+    def _login_info(self, plat, has=False):
+        """{state, username, detail, checked_at, ok_at}；酷狗概念版由会话文件判定。"""
+        from toolbox import account_health
+        if plat == "kugou_lite":
+            cached = self._whoami_cache.get(plat)
+            if cached == "probing" or plat in self._whoami_probing:
+                return {"state": "probing", "username": "", "detail": "",
+                        "checked_at": 0, "ok_at": 0}
+            if cached is None:
+                # 还没验证过：概念版只有会话文件，存在即先按已登录展示
+                return {"state": "ok" if has else "bad", "username": "",
+                        "detail": "", "checked_at": 0, "ok_at": 0}
+            ok = cached.get("ok")
+            state = "ok" if ok is True else ("bad" if ok is False else "warn")
+            return {"state": state, "username": cached.get("username") or "",
+                    "detail": "", "checked_at": 0, "ok_at": 0}
+        info = dict(account_health.status(plat))
+        if plat in self._whoami_probing:
+            info["state"] = "probing"
+        return info
 
     def _status_color(self, plat, has):
-        if not has:
-            return "color: #ff5252;"
-        info = self._whoami_cache.get(plat)
-        if info and info != "probing" and info["ok"] is False:
-            return "color: #ef6c00;"
-        if info and info != "probing" and info["ok"] is None and not info.get("username"):
-            return "color: #eab308;"
-        return "color: #4caf50;"
+        state = self._login_info(plat, has)["state"]
+        return {"ok": "color: #4caf50;", "warn": "color: #eab308;",
+                "bad": "color: #ff5252;"}.get(state, "color: #9e9e9e;")
 
-    def _start_probe(self, plat):
+    def _status_tooltip(self, plat, has, age, name=""):
+        from toolbox import account_health
+        info = self._login_info(plat, has)
+        lines = [account_health.STATE_TEXT.get(info["state"], info["state"])]
+        if info.get("username") or name:
+            lines.append(f"登录账号：{info.get('username') or name}")
+        if info.get("detail"):
+            lines.append(info["detail"])
+        if info.get("checked_at"):
+            lines.append(f"本次检测：{account_health.stamp(info['checked_at'])}"
+                         f"（{account_health.human_age(info['checked_at'])}）")
+        if info.get("ok_at"):
+            lines.append(f"上次正常：{account_health.stamp(info['ok_at'])}"
+                         f"（{account_health.human_age(info['ok_at'])}）")
+        if age:
+            lines.append(f"登录记录保存于 {age}")
+        return "\n".join(lines)
+
+    def _start_probes(self, plats):
+        """批量检测：一次交给中间层并发校验，结果落盘供各处复用。"""
         from gui_qt.common import post_to_main
-        from tracker import whoami
 
-        self._whoami_probing.add(plat)
-        self._whoami_cache[plat] = "probing"
-        self._render_status(plat)
+        plats = [p for p in plats if p and p not in self._whoami_probing]
+        if not plats:
+            return
+        self._whoami_probing.update(plats)
+        for plat in plats:
+            self._render_status(plat)
 
         def run():
+            from toolbox import account_health
             try:
-                info = whoami.probe(plat)
+                account_health.refresh(accounts=[], only_platforms=plats, workers=4)
             except Exception:
-                info = {"ok": None, "username": ""}
+                pass
 
             def done():
-                self._whoami_cache[plat] = info
-                self._whoami_probing.discard(plat)
-                self._render_status(plat)
+                self._whoami_probing.difference_update(plats)
+                for plat in plats:
+                    self._render_status(plat)
             post_to_main(done)
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _start_probe(self, plat):
+        self._start_probes([plat])
 
     def _render_status(self, plat):
         """只更新对应行的状态文字（避免整表重建闪烁）。"""
@@ -585,6 +645,7 @@ class CookieManagerDialog(QDialog):
                     age = auth.get_cookie_age(plat) if has else ""
                 labels[1].setText(self._status_text(plat, has, age, lite_name))
                 labels[1].setStyleSheet(self._status_color(plat, has))
+                labels[1].setToolTip(self._status_tooltip(plat, has, age, lite_name))
                 return
 
     def _verify(self, plat):
@@ -1480,7 +1541,7 @@ class CookieManagerDialog(QDialog):
                             post_to_main(status.setText, "获取登录凭据失败，请重试")
                             return
                         auth.set_cookie("qq", cookie_str)
-                        self._whoami_cache.pop("qq", None)
+                        self._mark_relogged("qq")
                         post_to_main(self._on_qr_success, dlg, "QQ音乐登录成功，Cookie 已保存")
                         return
                     elif err == "404":
@@ -1549,7 +1610,7 @@ class CookieManagerDialog(QDialog):
                     if code == 803:
                         cookie_str = f"MUSIC_U={cookies.get('MUSIC_U', '')};os=pc;appver=8.9.70;"
                         auth.set_cookie("netease", cookie_str)
-                        self._whoami_cache.pop("netease", None)
+                        self._mark_relogged("netease")
                         post_to_main(self._on_qr_success, dlg, "网易云登录成功，Cookie 已保存")
                         return
                     elif code == 801:
@@ -1598,7 +1659,7 @@ class CookieManagerDialog(QDialog):
                                 cookies = dict(s.cookies)
                         cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
                         auth.set_cookie("bilibili", cookie_str)
-                        self._whoami_cache.pop("bilibili", None)
+                        self._mark_relogged("bilibili")
                         post_to_main(self._on_qr_success, dlg, "B站登录成功，Cookie 已保存")
                         return
                     elif code == 86101:

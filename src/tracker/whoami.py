@@ -232,26 +232,113 @@ def _find_nick(obj, depth=0):
     return ""
 
 
-def _qq(cookie: str) -> dict:
+def _qq_hash33(skey: str) -> int:
+    """QQ 音乐的 g_tk（网页内嵌页公参）：h = h*33 + ord(ch)，初值 5381。"""
+    h = 5381
+    for ch in (skey or ""):
+        h = (h + (h << 5) + ord(ch)) & 0xFFFFFFFF
+    return h & 0x7FFFFFFF
+
+
+def _qq_account(cookie: str) -> tuple[str, str, int]:
+    """从 Cookie 解出 (musicid, musickey, tmeLoginType)。
+
+    QQ 登录是 QQ 号，微信登录是 0 开头的 musicid（可能带 o 前缀），两种都要认。
+    """
+    uid = (_cookie_field(cookie, "uin") or _cookie_field(cookie, "qqmusic_uin")
+           or _cookie_field(cookie, "wxuin") or "").strip()
+    if uid[:1] in ("o", "O"):
+        uid = uid[1:]
+    uid = uid.lstrip("0") or uid
+    key = ""
+    for name in ("qm_keyst", "qqmusic_key", "music_key", "musickey"):
+        key = _cookie_field(cookie, name).strip()
+        if key:
+            break
+    login_type = 1 if (_cookie_field(cookie, "tmeLoginType").strip() == "1"
+                       or key.startswith("W_X")) else 2
+    return uid, key, login_type
+
+
+def _qq_profile(cookie: str, uid: str, key: str) -> dict | None:
+    """主页资料 CGI：未登录恒回 code=1000，带登录态返回 creator（含昵称）→ 可判登录。
+
+    比 musicu 用户接口轻，且微信/QQ 两种登录都认（musicu 对微信票常回 500003）。
+    """
     import requests
 
-    payload = {"comm": {"ct": 24, "cv": 0},
-               "req_0": {"module": "music.UserInfoCgiSvr", "method": "GetUserInfo", "param": {}}}
+    g_tk = _qq_hash33(key)
+    params = {"format": "json", "cid": "205360838", "userid": uid, "uin": uid,
+              "reqfrom": "1", "reqtype": "0", "ct": "20", "cv": "2276",
+              "platform": "yqq.json",
+              "g_tk": g_tk, "g_tk_new_20200303": g_tk}
+    h = _headers(cookie)
+    h["Referer"] = f"https://y.qq.com/n/ryqq/profile?uin={uid}"
+    d = requests.get("https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg",
+                     params=params, headers=h, timeout=10).json()
+    if not isinstance(d, dict):
+        return None
+    if d.get("code") == 0:
+        creator = (d.get("data") or {}).get("creator") or {}
+        return {"ok": True, "username": str(creator.get("nick") or "").strip()}
+    if d.get("code") in (1000, -1000) or str(d.get("subcode")) in ("1000", "-1000"):
+        return {"ok": False, "username": ""}
+    return None
+
+
+def _qq_musicu(cookie: str, uid: str, key: str, login_type: int) -> dict | None:
+    """musicu 用户信息接口：comm 必须带 uin/authst/tmeLoginType，否则恒 500003。"""
+    import requests
+
+    comm = {"ct": 24, "cv": 0, "format": "json", "tmeAppID": "qqmusic",
+            "tmeLoginType": login_type, "uin": uid, "qq": uid, "authst": key}
+    payload = {"comm": comm,
+               "req_0": {"module": "music.UserInfoCgiSvr",
+                         "method": "GetUserInfo", "param": {}}}
+    h = _headers(cookie)
+    h["Referer"] = "https://y.qq.com/"
     d = requests.post("https://u.y.qq.com/cgi-bin/musicu.fcg", json=payload,
-                      headers=_headers(cookie), timeout=10).json()
+                      headers=h, timeout=10).json()
     req = d.get("req_0") or {}
     if req.get("code") == 0:
-        nick = _find_nick(req.get("data") or {})
-        return {"ok": True, "username": nick}
-    uin = _cookie_field(cookie, "uin")
-    # 微信登录的账号走不通 musicu 用户接口（恒 500003），昵称只有扫码登录时
-    # 换票接口给的那一份，读缓存补上（未远程复核 → ok 保持 None）
-    cached = nick_cache.get("qq", uin) if uin else ""
-    if cached:
-        return {"ok": None, "username": cached}
-    if uin:
-        return {"ok": None, "username": f"QQ {uin}"}
-    return {"ok": False, "username": ""}
+        return {"ok": True, "username": _find_nick(req.get("data") or {})}
+    if req.get("code") in (500003, 1000, -1000) or d.get("code") in (1000, -1000):
+        return {"ok": False, "username": ""}
+    return None
+
+
+def _qq(cookie: str) -> dict:
+    uid, key, login_type = _qq_account(cookie)
+    # 扫码登录时换票接口给的昵称（微信票问不到用户信息，只有这一份）
+    cached = nick_cache.get("qq", uid) if uid else ""
+    if not uid or not key:
+        # 只有 uin、没有通行令牌：凭证不完整，远程一定问不出登录态
+        shown = cached or (f"QQ {uid}" if uid else "")
+        return {"ok": None, "username": shown}
+
+    def _run(probe):
+        try:
+            return probe()
+        except Exception:
+            return None
+
+    def _fill(info):
+        if not info.get("username"):
+            info["username"] = cached
+        return info
+
+    profile = _run(lambda: _qq_profile(cookie, uid, key))
+    if profile is not None and profile.get("ok") is True:
+        return _fill(profile)
+    musicu = _run(lambda: _qq_musicu(cookie, uid, key, login_type))
+    if musicu is not None and musicu.get("ok") is True:
+        return _fill(musicu)
+    # 主页资料接口是真正的登录门禁（未登录恒回 1000），它的否定结论可信；
+    # musicu 用户接口对新版/微信登录的票常回 500003，单独否定时只报「无法验证」，
+    # 免得把好好的绿标误判成红标。
+    if profile is not None:
+        return profile
+    return {"ok": None, "username": cached or f"QQ {uid}"}
 
 
 def _kuaishou(cookie: str) -> dict:
