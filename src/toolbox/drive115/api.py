@@ -328,6 +328,7 @@ class Drive115Client:
         self._app_version = ""
         self._app_versions: list[str] = []
         self._version_confirmed = False
+        self._cleanup_tried: set[tuple[str, str]] = set()
 
     # ==================== 基础 ====================
 
@@ -670,7 +671,8 @@ class Drive115Client:
         md5, sha1 = hashes if hashes else self.digest(path)
         sha1 = str(sha1).upper()
         user_id, userkey = self._upload_credentials()
-        target = f"U_1_{self.ensure_dir(remote_dir)}"
+        cid = self.ensure_dir(remote_dir)
+        target = f"U_1_{cid}"
 
         last_error: Drive115Error | None = None
         candidates = self._app_version_candidates()
@@ -707,11 +709,32 @@ class Drive115Client:
                 self._index_cache.pop(remote_dir, None)
                 return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
         if last_error is not None:
+            # 所有版本都被拒：先看看目标目录里是不是已有同名（可能残缺）条目，
+            # 115 会因此一直回 token invalid；清掉后重试一轮（每次映射每个文件只清一次）
+            marker = (cid, path.name)
+            if marker not in self._cleanup_tried:
+                entry = self._same_name_entry(cid, path.name)
+                if entry and self.delete_files([str(entry.get("fid") or "")]):
+                    self._cleanup_tried.add(marker)
+                    self._index_cache.pop(remote_dir, None)
+                    return self.upload_file(local_path, remote_dir,
+                                            on_progress=on_progress, on_stage=on_stage,
+                                            hashes=(md5, sha1), resume=resume)
             raise Drive115Error(
                 last_error.code,
                 f"{last_error.message}（已尝试版本：{'、'.join(self._app_versions)}）",
                 last_error.path)
         raise Drive115Error(-1, "115 上传初始化失败", "/initupload")
+
+    def _same_name_entry(self, cid: str, name: str) -> dict | None:
+        """目标目录里与本地同名的文件（用于清理残留下同名条目）。"""
+        try:
+            for entry in self.list_entries(cid):
+                if not entry.get("dir") and entry.get("file_name") == name:
+                    return entry
+        except Drive115Error:
+            return None
+        return None
 
     def _init_upload(self, path: Path, sha1: str, size: int, target: str,
                      user_id: int, userkey: str, app_ver: str, on_stage):
