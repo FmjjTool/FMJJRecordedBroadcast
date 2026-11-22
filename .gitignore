@@ -87,3 +87,7 @@ docs/
 # Agent 输入附件（截图 / 临时文件，不进仓库）
 .qoder-input-files/
 .qoder-input-images/
+
+# 临时工作目录与抓取到的页面快照（本地调试产物，不进仓库）
+.tmp/
+/*_*.html
