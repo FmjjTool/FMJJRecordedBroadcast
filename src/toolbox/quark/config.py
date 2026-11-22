@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 # 备份后端：key → 中文名（界面与日志都用这张表）
-# 115 目前只接入浏览与下载，备份上传未实现（选它会在引擎里明确报错，不会静默失败）
+# 115 上传为单次 OSS 直传（单文件上限 5 GB），不参与分片并发
 PROVIDERS = {"quark": "夸克网盘", "baidu": "百度网盘", "yun139": "移动云盘",
              "115": "115网盘"}
 
@@ -20,6 +20,11 @@ CFG_MAPPINGS = "quark_backup_mappings"
 CFG_MODE = "quark_schedule_mode"
 CFG_TIME = "quark_backup_time"
 CFG_INTERVAL = "quark_interval_minutes"
+CFG_UPLOAD_LANES = "quark_upload_lanes"
+
+# 分片并发路数：只给支持分片的后端（夸克 / 百度 / 移动云盘），115 单次直传不适用
+UPLOAD_LANES = (2, 3, 4)
+DEFAULT_UPLOAD_LANES = 3
 
 # 分享有效期：界面选项 → 夸克接口的 expired_type（1 永久 / 2 一天 / 3 七天 / 4 三十天）
 SHARE_EXPIRES = ("永久", "7天", "30天", "1天")
@@ -156,6 +161,28 @@ def delete_mapping(mapping_id: str) -> bool:
         return False
     save_mappings(kept)
     return True
+
+
+def normalize_upload_lanes(value) -> int:
+    try:
+        lanes = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_UPLOAD_LANES
+    return lanes if lanes in UPLOAD_LANES else DEFAULT_UPLOAD_LANES
+
+
+def load_upload_lanes() -> int:
+    load, _save = _cfg()
+    return normalize_upload_lanes(load().get(CFG_UPLOAD_LANES))
+
+
+def save_upload_lanes(value) -> int:
+    lanes = normalize_upload_lanes(value)
+    load, save = _cfg()
+    cfg = load()
+    cfg[CFG_UPLOAD_LANES] = lanes
+    save(cfg)
+    return lanes
 
 
 def load_schedule() -> dict[str, Any]:

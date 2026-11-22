@@ -74,15 +74,18 @@ def _now() -> str:
 
 # ==================== 客户端 ====================
 
-def build_client(provider: str = "quark"):
+def build_client(provider: str = "quark", lanes=None):
     """按 Cookie 管理的当前登录态构造对应后端的客户端。
 
     各后端的客户端接口一致（list_index / ensure_dir / upload_file / delete_files / digest），
-    所以引擎本身不区分夸克还是百度。
+    所以引擎本身不区分夸克还是百度。`lanes` 为分片上传并发路数，留空读全局设置。
     """
     from auth import get_cookie
 
     provider = (provider or "quark").strip()
+    if lanes is None:
+        from .config import load_upload_lanes
+        lanes = load_upload_lanes()
     cookie = get_cookie(provider)
     if not cookie:
         from .config import PROVIDERS
@@ -91,15 +94,15 @@ def build_client(provider: str = "quark"):
             f"{name}未登录或 Cookie 总开关已关闭，请到「Cookie 管理 → {name}」登录后再试")
     if provider == "baidu":
         from toolbox.baidu.api import BaiduClient
-        return BaiduClient(cookie)
+        return BaiduClient(cookie, lanes=lanes)
     if provider == "yun139":
         from toolbox.yun139.api import Yun139Client
-        return Yun139Client(cookie)
+        return Yun139Client(cookie, lanes=lanes)
     if provider == "115":
         from toolbox.drive115.api import Drive115Client
         return Drive115Client(cookie)
     from .api import QuarkClient
-    return QuarkClient(cookie)
+    return QuarkClient(cookie, lanes=lanes)
 
 
 

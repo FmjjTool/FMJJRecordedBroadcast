@@ -20,7 +20,9 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -44,6 +46,27 @@ CLIENT_INFO = f"{DEVICE_INFO}ZWRnZQ==||"
 _AUTH_HINTS = ("认证失败", "登录")
 
 
+class _PartReader:
+    """把文件的一段作为流式请求体，避免 100/512 MB 的分片整片读进内存。"""
+
+    def __init__(self, handle, length: int):
+        self._handle = handle
+        self._left = max(0, int(length))
+        self._length = self._left
+
+    def __len__(self) -> int:
+        return self._length
+
+    def read(self, size: int = -1) -> bytes:
+        if self._left <= 0:
+            return b""
+        if size is None or size < 0 or size > self._left:
+            size = self._left
+        data = self._handle.read(size)
+        self._left -= len(data)
+        return data
+
+
 class Yun139Error(RuntimeError):
     def __init__(self, code, message: str = "", path: str = ""):
         self.code = code
@@ -60,12 +83,13 @@ class Yun139Error(RuntimeError):
 class Yun139Client:
     """一个登录态一个实例（fileId 语义：`/` 为根，其余为字符串 id）。"""
 
-    def __init__(self, cookie: str, user_agent: str = UA):
+    def __init__(self, cookie: str, user_agent: str = UA, lanes: int = 3):
         cookie = (cookie or "").strip()
         if not cookie:
             raise Yun139Error(-1, "移动云盘未登录")
         self.cookie = cookie
         self.user_agent = user_agent
+        self.lanes = max(1, min(4, int(lanes or 3)))
         self.session = requests.Session()
         self._dir_cache: dict[str, str] = {"": "/", "/": "/"}
         self._index_cache: dict[str, dict] = {}
@@ -285,8 +309,9 @@ class Yun139Client:
                     on_stage=None, hashes=None, resume=None) -> dict:
         """上传文件；`resume` 为 `state.ResumeHandle` 时按分片续传。
 
-        续传记录保存 `file_id` / `upload_id` / 分片计划 / 已完成片数。
-        上传地址（uploadUrl）有时效，失效时用 `/file/getUploadUrl` 重新取。
+        续传记录保存 `file_id` / `upload_id` / 分片计划 / 已完成分片列表。
+        分片按 `lanes` 并发 PUT；上传地址（uploadUrl）有时效，失效时用
+        `/file/getUploadUrl` 重新取。
         """
         path = Path(local_path)
         size = path.stat().st_size
@@ -300,30 +325,37 @@ class Yun139Client:
         upload_id = ""
         plan: list[dict] = []
         done = 0
+        completed: set[int] = set()
         if (saved.get("sha256") == sha256 and int(saved.get("size") or -1) == size
                 and saved.get("upload_id") and saved.get("plan")):
             file_id = str(saved.get("file_id") or "")
             upload_id = str(saved["upload_id"])
             plan = list(saved["plan"])
             done = max(0, int(saved.get("done") or 0))
+            completed = {int(x) for x in (saved.get("parts") or range(done))}
+            while done in completed:
+                done += 1
         used_resume = bool(upload_id)
 
         def _persist() -> None:
             if resume is not None:
                 resume.save({"sha256": sha256, "size": size, "file_id": file_id,
-                             "upload_id": upload_id, "plan": plan, "done": done})
+                             "upload_id": upload_id, "plan": plan, "done": done,
+                             "parts": sorted(completed)})
 
         urls: dict[int, str] = {}
+        url_lock = threading.RLock()
 
         def _fetch_urls(start_index: int) -> None:
             pending = plan[start_index:start_index + 100]
             if not pending:
                 return
-            more = self._post("/file/getUploadUrl", {
-                "fileId": file_id, "uploadId": upload_id, "partInfos": pending})
-            for index, item in enumerate(more.get("partInfos") or []):
-                urls[int(item.get("partNumber") or 0) or (start_index + index + 1)] = str(
-                    item.get("uploadUrl") or "")
+            with url_lock:
+                more = self._post("/file/getUploadUrl", {
+                    "fileId": file_id, "uploadId": upload_id, "partInfos": pending})
+                for index, item in enumerate(more.get("partInfos") or []):
+                    number = int(item.get("partNumber") or 0) or (start_index + index + 1)
+                    urls[number] = str(item.get("uploadUrl") or "")
 
         try:
             if not upload_id:
@@ -353,64 +385,103 @@ class Yun139Client:
                         item.get("uploadUrl") or "")
                 _persist()
 
-            sent = sum(int(plan[i]["partSize"]) for i in range(min(done, len(plan))))
-            if on_progress is not None and sent:
+            def part_length(index: int) -> int:
+                return max(0, int(plan[index]["partSize"]))
+
+            offsets: list[int] = []
+            cursor = 0
+            for index in range(len(plan)):
+                offsets.append(cursor)
+                cursor += part_length(index)
+
+            sent = sum(part_length(i) for i in completed if 0 <= i < len(plan))
+
+            def report(done_bytes: int) -> None:
+                if on_progress is None:
+                    return
                 try:
-                    on_progress(min(sent, size), size)
+                    on_progress(min(done_bytes, size), size)
                 except Exception:  # noqa: BLE001
                     pass
 
-            with open(path, "rb") as handle:
-                handle.seek(sent)
-                for offset_index in range(done, len(plan)):
-                    item = plan[offset_index]
-                    number = int(item["partNumber"])
-                    blob = handle.read(int(item["partSize"]))
-                    if not blob:
-                        break
-                    url = urls.get(number) or ""
+            report(sent)
+
+            # 先把待传分片的上传地址取齐，避免多个线程同时补取同一批
+            for start in range(0, len(plan), 100):
+                block = range(start, min(start + 100, len(plan)))
+                if any(i not in completed and not urls.get(int(plan[i]["partNumber"]))
+                       for i in block):
+                    _fetch_urls(start)
+
+            def upload_part(offset_index: int) -> tuple[int, int]:
+                item = plan[offset_index]
+                number = int(item["partNumber"])
+                length = part_length(offset_index)
+                url = urls.get(number) or ""
+                last_error = None
+                for attempt in range(2):
                     if not url:
                         _fetch_urls(offset_index)
                         url = urls.get(number) or ""
-                    last_error = None
-                    for attempt in range(2):
-                        if not url:
-                            break
-                        try:
-                            resp = self.session.put(
-                                url, data=blob,
-                                headers={"Content-Type": "application/octet-stream",
-                                         "Content-Length": str(len(blob))},
-                                timeout=PART_TIMEOUT)
-                            if resp.status_code in (200, 201, 204):
-                                last_error = None
-                                break
-                            last_error = Yun139Error(resp.status_code, resp.text[:160], "uploadUrl")
-                            if resp.status_code in (401, 403, 404):
-                                # 上传地址过期：重新取一次再试
-                                urls.pop(number, None)
-                                _fetch_urls(offset_index)
-                                url = urls.get(number) or ""
-                                continue
-                            if resp.status_code < 500:
-                                break
-                        except (requests.RequestException, OSError) as exc:
-                            last_error = exc
-                        if attempt == 0:
-                            time.sleep(1.5)
-                    if url and last_error is not None:
-                        raise last_error if isinstance(last_error, Yun139Error) else Yun139Error(
-                            -1, f"分片 {number} 上传失败：{last_error}", "uploadUrl")
                     if not url:
-                        raise Yun139Error(-1, f"第 {number} 片缺少上传地址", "/file/getUploadUrl")
-                    sent += len(blob)
-                    done = offset_index + 1
+                        break
+                    try:
+                        with open(path, "rb") as handle:
+                            handle.seek(offsets[offset_index])
+                            body = _PartReader(handle, length)
+                            resp = self.session.put(
+                                url, data=body,
+                                headers={"Content-Type": "application/octet-stream",
+                                         "Content-Length": str(length)},
+                                timeout=PART_TIMEOUT)
+                        if resp.status_code in (200, 201, 204):
+                            return offset_index, length
+                        last_error = Yun139Error(resp.status_code, resp.text[:160], "uploadUrl")
+                        if resp.status_code in (401, 403, 404):
+                            # 上传地址过期：重新取一次再试
+                            with url_lock:
+                                urls.pop(number, None)
+                            _fetch_urls(offset_index)
+                            url = urls.get(number) or ""
+                            continue
+                        if resp.status_code < 500:
+                            break
+                    except (requests.RequestException, OSError) as exc:
+                        last_error = exc
+                    if attempt == 0:
+                        time.sleep(1.5)
+                if not url:
+                    raise Yun139Error(-1, f"第 {number} 片缺少上传地址", "/file/getUploadUrl")
+                raise last_error if isinstance(last_error, Yun139Error) else Yun139Error(
+                    -1, f"分片 {number} 上传失败：{last_error}", "uploadUrl")
+
+            pending = [i for i in range(len(plan)) if i not in completed]
+            lanes = min(self.lanes, len(pending)) if pending else 0
+            if lanes > 1:
+                with ThreadPoolExecutor(max_workers=lanes) as pool:
+                    futures = {pool.submit(upload_part, i): i for i in pending}
+                    try:
+                        for future in as_completed(futures):
+                            offset_index, length = future.result()
+                            completed.add(offset_index)
+                            while done in completed:
+                                done += 1
+                            sent += length
+                            _persist()
+                            report(sent)
+                    except Exception:
+                        for future in futures:
+                            future.cancel()
+                        raise
+            else:
+                for index in pending:
+                    offset_index, length = upload_part(index)
+                    completed.add(offset_index)
+                    while done in completed:
+                        done += 1
+                    sent += length
                     _persist()
-                    if on_progress is not None:
-                        try:
-                            on_progress(min(sent, size), size)
-                        except Exception:  # noqa: BLE001
-                            pass
+                    report(sent)
 
             self._post("/file/complete", {
                 "contentHash": sha256, "contentHashAlgorithm": "SHA256",

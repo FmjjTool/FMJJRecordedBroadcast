@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -72,12 +74,14 @@ def file_digests(path: Path, block_size: int = BLOCK_SIZE) -> tuple[str, list[st
 class BaiduClient:
     """一个登录态一个实例；`bdstoken` 首次用时取。"""
 
-    def __init__(self, cookie: str, user_agent: str = UA):
+    def __init__(self, cookie: str, user_agent: str = UA, lanes: int = 3):
         cookie = (cookie or "").strip()
         if not cookie:
             raise BaiduError(-6, "百度网盘未登录")
         self.cookie = cookie
         self.user_agent = user_agent
+        self.lanes = max(1, min(4, int(lanes or 3)))
+        self._pcs_lock = threading.Lock()
         self.session = requests.Session()
         self.session.headers.update({
             "Cookie": self.cookie,
@@ -279,8 +283,8 @@ class BaiduClient:
                     on_stage=None, hashes=None, resume=None) -> dict:
         """上传一个文件；`resume` 为 `state.ResumeHandle` 时支持断点续传。
 
-        百度按 `partseq` 顺序传分片，所以断点只需记住「已传到第几片」；
-        `uploadid` 过期时 create/precreate 会报错，这里丢掉断点重来一次。
+        分片按 `lanes` 并发上传，断点记录已完成分片列表（`parts`），
+        `done` 只保留连续前缀用于兼容旧记录；`uploadid` 过期时丢点重来一次。
         """
         path = Path(local_path)
         size = path.stat().st_size
@@ -297,16 +301,21 @@ class BaiduClient:
         saved = resume.load() if resume is not None else {}
         uploadid = ""
         done = 0
+        completed: set[int] = set()
         if (saved.get("md5") == file_md5 and int(saved.get("size") or -1) == size
                 and saved.get("uploadid")):
             uploadid = str(saved["uploadid"])
             done = max(0, int(saved.get("done") or 0))
+            completed = {int(x) for x in (saved.get("parts") or range(done))}
+            while done in completed:
+                done += 1
         used_resume = bool(uploadid)
 
         def _persist() -> None:
             if resume is not None:
                 resume.save({"md5": file_md5, "size": size,
-                             "uploadid": uploadid, "done": done})
+                             "uploadid": uploadid, "done": done,
+                             "parts": sorted(completed)})
 
         try:
             if not uploadid:
@@ -327,56 +336,83 @@ class BaiduClient:
             if on_stage is not None:
                 on_stage("upload", path.name, size)
             total_parts = max(1, -(-size // BLOCK_SIZE))
-            sent = min(done * BLOCK_SIZE, size)
-            if on_progress is not None and sent:
+
+            def part_length(partseq: int) -> int:
+                return max(0, min(BLOCK_SIZE, size - partseq * BLOCK_SIZE))
+
+            sent = sum(part_length(i) for i in completed if 0 <= i < total_parts)
+
+            def report(done_bytes: int) -> None:
+                if on_progress is None:
+                    return
                 try:
-                    on_progress(sent, size)
+                    on_progress(min(done_bytes, size), size)
                 except Exception:  # noqa: BLE001
                     pass
 
-            with open(path, "rb") as handle:
-                handle.seek(done * BLOCK_SIZE)
-                partseq = done
-                while True:
+            report(sent)
+
+            def upload_part(partseq: int) -> tuple[int, int]:
+                with open(path, "rb") as handle:
+                    handle.seek(partseq * BLOCK_SIZE)
                     blob = handle.read(BLOCK_SIZE)
-                    if not blob:
-                        break
-                    last_error = None
-                    tried = 0
-                    for attempt in range(len(PCS_HOSTS)):
-                        tried += 1
+                last_error = None
+                tried = 0
+                for attempt in range(len(PCS_HOSTS)):
+                    tried += 1
+                    with self._pcs_lock:
                         base = PCS_HOSTS[self._pcs_index]
-                        try:
-                            r = self.session.post(
-                                f"{base}/rest/2.0/pcs/superfile2",
-                                params={"method": "upload", "type": "tmpfile",
-                                        "path": remote_path, "uploadid": uploadid,
-                                        "partseq": partseq, "app_id": APP_ID},
-                                files={"file": ("blob", blob)}, timeout=PART_TIMEOUT)
-                            if r.status_code == 200:
-                                last_error = None
-                                break
-                            last_error = BaiduError(r.status_code, r.text[:160], "superfile2")
-                            if r.status_code < 500:
-                                break
-                        except (requests.RequestException, OSError) as exc:
-                            last_error = exc
+                    try:
+                        r = self.session.post(
+                            f"{base}/rest/2.0/pcs/superfile2",
+                            params={"method": "upload", "type": "tmpfile",
+                                    "path": remote_path, "uploadid": uploadid,
+                                    "partseq": partseq, "app_id": APP_ID},
+                            files={"file": ("blob", blob)}, timeout=PART_TIMEOUT)
+                        if r.status_code == 200:
+                            return partseq, len(blob)
+                        if r.status_code < 500:
+                            raise BaiduError(r.status_code, r.text[:160], "superfile2")
+                        last_error = BaiduError(r.status_code, r.text[:160], "superfile2")
+                    except BaiduError:
+                        raise
+                    except (requests.RequestException, OSError) as exc:
+                        last_error = exc
+                    with self._pcs_lock:
                         self._pcs_index = (self._pcs_index + 1) % len(PCS_HOSTS)
-                        if attempt < len(PCS_HOSTS) - 1:
-                            time.sleep(1.5 * (attempt + 1))
-                    if last_error is not None:
-                        hint = f"（已尝试 {tried} 个官方上传节点）" if tried > 1 else ""
-                        raise last_error if isinstance(last_error, BaiduError) else BaiduError(
-                            -1, f"分块 {partseq} 上传失败{hint}：{last_error}", "superfile2")
-                    sent = min(sent + len(blob), size)
-                    partseq += 1
-                    done = partseq
+                    if attempt < len(PCS_HOSTS) - 1:
+                        time.sleep(1.5 * (attempt + 1))
+                hint = f"（已尝试 {tried} 个官方上传节点）" if tried > 1 else ""
+                raise last_error if isinstance(last_error, BaiduError) else BaiduError(
+                    -1, f"分块 {partseq} 上传失败{hint}：{last_error}", "superfile2")
+
+            pending = [i for i in range(total_parts) if i not in completed]
+            lanes = min(self.lanes, len(pending)) if pending else 0
+            if lanes > 1:
+                with ThreadPoolExecutor(max_workers=lanes) as pool:
+                    futures = {pool.submit(upload_part, i): i for i in pending}
+                    try:
+                        for future in as_completed(futures):
+                            partseq, length = future.result()
+                            completed.add(partseq)
+                            while done in completed:
+                                done += 1
+                            sent += length
+                            _persist()
+                            report(sent)
+                    except Exception:
+                        for future in futures:
+                            future.cancel()
+                        raise
+            else:
+                for index in pending:
+                    partseq, length = upload_part(index)
+                    completed.add(partseq)
+                    while done in completed:
+                        done += 1
+                    sent += length
                     _persist()
-                    if on_progress is not None:
-                        try:
-                            on_progress(sent, size)
-                        except Exception:  # noqa: BLE001
-                            pass
+                    report(sent)
 
             resp = self.session.post(f"{BASE}/api/create", data={
                 "path": remote_path, "size": size, "isdir": 0,

@@ -23,7 +23,9 @@ import json
 import mimetypes
 import os
 import ssl
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.utils import formatdate
 from pathlib import Path
 
@@ -97,12 +99,14 @@ def file_hashes(path: Path) -> tuple[str, str]:
 class QuarkClient:
     """一个登录态一个实例；`ensure_dir` 的结果按路径缓存。"""
 
-    def __init__(self, cookie: str, user_agent: str = DEFAULT_UA):
+    def __init__(self, cookie: str, user_agent: str = DEFAULT_UA, lanes: int = 3):
         cookie = (cookie or "").strip()
         if not cookie:
             raise QuarkError(-1, "夸克网盘未登录")
         self.cookie = cookie
         self.user_agent = user_agent
+        self.lanes = max(1, min(4, int(lanes or 3)))
+        self._cookie_lock = threading.Lock()
         self.session = requests.Session()
         self.session.mount("https://", _QuarkSSLAdapter())
         self._dir_cache: dict[str, str] = {"": "0", "/": "0"}
@@ -141,17 +145,18 @@ class QuarkClient:
                     fresh[key] = value.strip()
         if not fresh:
             return
-        parts, seen = [], set()
-        for item in self.cookie.split(";"):
-            if "=" not in item:
-                continue
-            key, _, value = item.partition("=")
-            key = key.strip()
-            seen.add(key)
-            parts.append(f"{key}={fresh.pop(key, value.strip())}")
-        for key, value in fresh.items():
-            parts.append(f"{key}={value}")
-        self.cookie = "; ".join(parts)
+        with self._cookie_lock:
+            parts, seen = [], set()
+            for item in self.cookie.split(";"):
+                if "=" not in item:
+                    continue
+                key, _, value = item.partition("=")
+                key = key.strip()
+                seen.add(key)
+                parts.append(f"{key}={fresh.pop(key, value.strip())}")
+            for key, value in fresh.items():
+                parts.append(f"{key}={value}")
+            self.cookie = "; ".join(parts)
 
     def _request(self, method: str, path: str, body: dict | None = None,
                  params: dict | None = None, retries: int = 2):
@@ -598,26 +603,52 @@ class QuarkClient:
             mime = _mime_of(path)
             if on_stage is not None:
                 on_stage("upload", path.name, size)
-            sent = 0
-            with open(path, "rb") as handle:
-                for number in range(1, total_parts + 1):
-                    offset = (number - 1) * part_size
-                    handle.seek(offset)
-                    blob = handle.read(min(part_size, size - offset))
-                    if number in etags:
-                        sent += len(blob)
-                        if on_progress is not None:
-                            try:
-                                on_progress(min(sent, size), size)
-                            except Exception:  # noqa: BLE001
-                                pass
-                        continue
-                    etag = self._put_part(pre, number, blob, mime,
-                                          on_progress=on_progress,
-                                          sent_before=sent, total=size)
-                    etags[number] = etag
-                    sent += len(blob)
+            def part_length(number: int) -> int:
+                offset = (number - 1) * part_size
+                return max(0, min(part_size, size - offset))
+
+            sent = sum(part_length(number) for number in etags)
+
+            def report(done_bytes: int) -> None:
+                if on_progress is None:
+                    return
+                try:
+                    on_progress(min(done_bytes, size), size)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            report(sent)
+
+            def upload_part(number: int) -> tuple[int, int, str]:
+                with open(path, "rb") as handle:
+                    handle.seek((number - 1) * part_size)
+                    blob = handle.read(part_length(number))
+                etag = self._put_part(pre, number, blob, mime)
+                return number, len(blob), etag
+
+            pending = [n for n in range(1, total_parts + 1) if n not in etags]
+            lanes = min(self.lanes, len(pending)) if pending else 0
+            if lanes > 1:
+                with ThreadPoolExecutor(max_workers=lanes) as pool:
+                    futures = {pool.submit(upload_part, n): n for n in pending}
+                    try:
+                        for future in as_completed(futures):
+                            number, length, etag = future.result()
+                            etags[number] = etag
+                            sent += length
+                            _persist()
+                            report(sent)
+                    except Exception:
+                        for future in futures:
+                            future.cancel()
+                        raise
+            else:
+                for number in pending:
+                    done_number, length, etag = upload_part(number)
+                    etags[done_number] = etag
+                    sent += length
                     _persist()
+                    report(sent)
             if etags:
                 self._commit(pre, [etags[n] for n in sorted(etags)])
             self._finish(pre)

@@ -260,6 +260,22 @@ class QuarkBackupPage(BasePage):
         layout.addWidget(self.add_btn)
 
         layout.addSpacing(8)
+        lanes_label = QLabel("上传并发")
+        lanes_label.setProperty("role", "caption")
+        layout.addWidget(lanes_label, 0, Qt.AlignVCenter)
+        self.lanes_combo = QComboBox()
+        for lanes in qconfig.UPLOAD_LANES:
+            self.lanes_combo.addItem(f"{lanes} 路", lanes)
+        index = self.lanes_combo.findData(qconfig.load_upload_lanes())
+        self.lanes_combo.setCurrentIndex(max(0, index))
+        self.lanes_combo.setFixedWidth(90)
+        self.lanes_combo.setToolTip(
+            "夸克 / 百度 / 移动云盘的分片上传路数，2-4 路；115 为单次直传，不受此项影响。\n"
+            "修改后在下一次备份生效，断点续传与百度节点回退保持有效。")
+        self.lanes_combo.currentIndexChanged.connect(self._save_lanes)
+        layout.addWidget(self.lanes_combo, 0, Qt.AlignVCenter)
+
+        layout.addSpacing(8)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -274,6 +290,9 @@ class QuarkBackupPage(BasePage):
         self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.progress_label, 1)
         return bar
+
+    def _save_lanes(self, _index: int = 0):
+        qconfig.save_upload_lanes(self.lanes_combo.currentData())
 
     def _build_body(self) -> QHBoxLayout:
         body = QHBoxLayout()
