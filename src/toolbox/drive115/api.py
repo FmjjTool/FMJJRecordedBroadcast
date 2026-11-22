@@ -60,9 +60,10 @@ NAV_URL = "https://my.115.com/?ct=ajax&ac=nav"
 UPLOAD_INFO_URL = "https://proapi.115.com/app/uploadinfo"
 UPLOAD_INIT_URL = "https://uplb.115.com/4.0/initupload.php"
 OSS_TOKEN_URL = "https://uplb.115.com/3.0/gettoken.php"
+APP_VERSION_URL = "https://appversion.115.com/1/web/1.0/api/chrome"
 OSS_ENDPOINT = "cn-shenzhen.oss.aliyuncs.com"
 OSS_USER_AGENT = "aliyun-sdk-android/2.9.1"
-UPLOAD_APP_VERSION = "27.0.5.7"
+UPLOAD_APP_VERSION = "37.3.3"  # 兜底值；实际优先用 115 版本接口返回的当前客户端版本
 # 115 客户端里写死的两个盐
 _UPLOAD_MD5_SALT = "Qclm8MGWUv59TnrR0XPg"
 _EC_CRC_SALT = b"^j>WD3Kr?J2gLFjD4W2y@"
@@ -324,6 +325,7 @@ class Drive115Client:
         # 探活全部被拒后缓存原因：同一批后续文件直接失败，不再各等 6 次重试
         self._download_blocked = ""
         self.has_kid = "KID" in self._account_cookies
+        self._app_version = ""
 
     # ==================== 基础 ====================
 
@@ -666,6 +668,7 @@ class Drive115Client:
         md5, sha1 = hashes if hashes else self.digest(path)
         sha1 = str(sha1).upper()
         user_id, userkey = self._upload_credentials()
+        app_ver = self._current_app_version()
         target = f"U_1_{self.ensure_dir(remote_dir)}"
 
         sign_key, sign_val = "", ""
@@ -676,10 +679,10 @@ class Drive115Client:
             user_id_str = str(user_id)
             sig = _upload_sig(user_id_str, sha1, target, userkey)
             token = _upload_token(user_id_str, sha1, size, sign_key, sign_val,
-                                  stamp, UPLOAD_APP_VERSION)
+                                  stamp, app_ver)
             form = {
                 "appid": "0",
-                "appversion": UPLOAD_APP_VERSION,
+                "appversion": app_ver,
                 "userid": user_id_str,
                 "filename": path.name,
                 "filesize": str(size),
@@ -698,7 +701,8 @@ class Drive115Client:
                 resp = self.session.post(
                     f"{UPLOAD_INIT_URL}?k_ec={quote(cipher.encode_token(stamp))}",
                     data=body,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    headers={**self._upload_headers(),
+                             "Content-Type": "application/x-www-form-urlencoded"},
                     timeout=TIMEOUT * 2)
             except (requests.RequestException, OSError) as exc:
                 raise Drive115Error(-1, f"上传初始化请求失败：{exc}", "/initupload")
@@ -755,7 +759,7 @@ class Drive115Client:
                 -1, f"上传初始化被 115 拒绝：status={status} statuscode={status_code} "
                     f"statusmsg={status_msg or '（空）'}"
                     f"{' request=' + request_id if request_id else ''}"
-                    f"，target={target}，"
+                    f"，target={target}，appversion={app_ver}，"
                     f"字段：{'、'.join(sorted(data)) or '无'}", "/initupload")
         if on_stage is not None:
             on_stage("upload", path.name, size)
@@ -767,13 +771,50 @@ class Drive115Client:
 
     _upload_user: tuple[int, str] | None = None
 
+    def _current_app_version(self) -> str:
+        """115 会拒绝过旧的客户端版本（`请升级到最新版本`）。
+
+        版本接口给的是各端最新版本（`win`=115浏览器、`window_115`=115Life 等），
+        取其中最大的一个，并与本机已知的最新客户端 37.3.3 取 max，避免接口滞后。
+        """
+        if self._app_version:
+            return self._app_version
+        candidates = [UPLOAD_APP_VERSION]
+        try:
+            payload = self.session.get(APP_VERSION_URL, timeout=TIMEOUT).json()
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            for key in ("window_115", "win", "win64"):
+                item = data.get(key)
+                if isinstance(item, dict):
+                    value = str(item.get("version_code") or item.get("version") or "")
+                    if value:
+                        candidates.append(value)
+        except (requests.RequestException, OSError, ValueError):
+            pass
+
+        def _key(text: str) -> tuple:
+            parts = []
+            for piece in str(text).replace("-", ".").split("."):
+                parts.append(int(piece) if piece.isdigit() else 0)
+            while len(parts) < 4:
+                parts.append(0)
+            return tuple(parts[:4])
+
+        self._app_version = max(candidates, key=_key)
+        return self._app_version
+
+    def _upload_headers(self) -> dict:
+        """上传接口用与客户端版本一致的 UA（webapi 的 Chrome UA 保持不动）。"""
+        return {"User-Agent": f"Mozilla/5.0 115Browser/{self._current_app_version()}"}
+
     def _upload_credentials(self) -> tuple[int, str]:
         """`app/uploadinfo` 给 user_id + userkey（签名用），一次登录只取一次。"""
         if self._upload_user:
             return self._upload_user
         try:
             # 与官方客户端一致：POST + JSON 内容类型（无内容类型时 115 可能给降级凭证）
-            resp = self.session.post(UPLOAD_INFO_URL, json={}, timeout=TIMEOUT)
+            resp = self.session.post(UPLOAD_INFO_URL, json={},
+                                     headers=self._upload_headers(), timeout=TIMEOUT)
             payload = resp.json()
         except (requests.RequestException, OSError, ValueError) as exc:
             raise Drive115Error(-1, f"取上传凭证失败：{exc}", "/app/uploadinfo")
@@ -801,7 +842,9 @@ class Drive115Client:
 
     def _oss_token(self) -> dict:
         try:
-            payload = self.session.get(OSS_TOKEN_URL, timeout=TIMEOUT).json()
+            payload = self.session.get(OSS_TOKEN_URL,
+                                       headers=self._upload_headers(),
+                                       timeout=TIMEOUT).json()
         except (requests.RequestException, OSError, ValueError) as exc:
             raise Drive115Error(-1, f"取 OSS 上传令牌失败：{exc}", "/3.0/gettoken.php")
         if not isinstance(payload, dict):
