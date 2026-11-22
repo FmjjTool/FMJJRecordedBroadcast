@@ -14,6 +14,7 @@ pycryptodome
 qrcode>=8.0
 mutagen>=1.46.0
 beautifulsoup4>=4.12.0  # 公众号文章抓取 / 导出（exporters/wechat_writer.py 顶层硬 import）
+PyYAML>=6.0  # 网络代理页解析提供商 YAML、生成 mihomo 运行配置
 lxml>=4.9.0  # bs4 的快速解析器（设置页依赖检测也 import）
 websocket-client>=1.7.0  # B站 / 抖音直播弹幕长连接（bili_live.py、douyin_live.py）
 pillow>=10.0.0

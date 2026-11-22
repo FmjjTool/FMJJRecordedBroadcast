@@ -220,6 +220,14 @@ def main():
     from gui_qt import wheel_guard
     wheel_guard.install()
 
+    # 程序内代理：上次处于启用状态就在后台恢复内核与进程环境变量，不阻塞首屏。
+    # 只影响本进程及其子进程，不改系统代理；失败只记日志，不打断启动。
+    try:
+        from toolbox.proxy import bootstrap as _proxy_bootstrap
+        _proxy_bootstrap()
+    except Exception:
+        pass
+
     win = MainWindow()
     win.show()
 
@@ -264,6 +272,13 @@ def main():
     QTimer.singleShot(1200, _post_startup_checks)
 
     code = app.exec()
+
+    # 代理收尾：停内核、恢复进程环境变量（幂等，页面 shutdown 已调用过也不影响）
+    try:
+        from toolbox.proxy import shutdown as _proxy_shutdown
+        _proxy_shutdown()
+    except Exception:
+        pass
 
     # —— 退出兜底：确保 python 进程必然结束（根治退出后 CLI 窗口残留）——
     # Python 3.9+ 起 ThreadPoolExecutor 的工作线程是「非 daemon」线程：解释器

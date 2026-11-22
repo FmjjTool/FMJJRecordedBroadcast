@@ -30,6 +30,8 @@ def tool_icon_name(key):
         return "message"
     if key == "global_settings":
         return "settings"
+    if key == "proxy":
+        return "globe"
     if key == "toolbox_launcher":
         return "arrow"
     return "grid"

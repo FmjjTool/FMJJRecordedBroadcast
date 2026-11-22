@@ -176,6 +176,9 @@ PAGE_INDEX = {
     "global_settings": PageMeta(
         "全局设置", "全局", module="gui_qt.pages.settings", cls="GlobalSettingsPage",
         footer_label="设置"),
+    "proxy": PageMeta(
+        "网络代理", "网络", module="gui_qt.pages.proxy", cls="ProxyPage",
+        aliases="代理 机场 订阅 mihomo 节点 内核"),
     "performance": PageMeta(
         "性能诊断", "全局", module="gui_qt.pages.performance", cls="PerformancePage",
         footer_label="性能"),
@@ -206,6 +209,7 @@ NAV_LAYOUT = [
         "localwiki", "livestream_summary", "image_crop", "cover_maker",
         "certificate_maker", "image_sorter", "rename_batch",
     ]),
+    ("网络", ["proxy"]),
     ("全局", ["tasks", "global_settings", "performance"]),
 ]
 

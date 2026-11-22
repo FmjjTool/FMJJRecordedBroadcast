@@ -29,6 +29,7 @@ FengMingToolbox（封茗囧菌数据汇总库 · 统一维护工具箱）在开�
 | playwright | >= 1.40.0（可选） | Apache-2.0 | <https://github.com/microsoft/playwright-python> |
 | onnxruntime | >= 1.17.0（可选） | MIT | <https://github.com/microsoft/onnxruntime> |
 | 7-Zip（内置 `7z.exe` / `7z.dll`） | 26.06 | LGPL-2.1-or-later（含 unRAR 限制条款） | <https://www.7-zip.org/> |
+| PyYAML | >= 6.0 | MIT | <https://github.com/yaml/pyyaml> |
 
 ### 关于 mutagen 与 GPL-3.0
 
@@ -59,6 +60,7 @@ PySide6 采用 LGPL-3.0。本项目以 GPL-3.0 分发，其要求严于 LGPL-3.0
 | **faster-whisper** | 可选的字幕转写后端，由用户自行安装，本项目不随包分发。 |
 | **CLIP 图像编码器（ONNX）** | 资产页「图识别（以图搜图）」的可选本地模型，由用户自行下载，本项目不随包分发；模型许可证以下载来源的发布页为准（推荐 Xenova/clip-vit-base-patch32，其来源模型为 MIT）。 |
 | **必剪 / 剪映** | 字幕转换通过其公开接口调用，不包含任何其客户端代码或资源。 |
+| **mihomo（Clash Meta）内核** | 「网络代理」页的内置代理内核，可选组件，由用户在该页或全局设置中自行下载，本项目不随仓库分发其二进制。内核按 **GPL-3.0** 授权，来源：<https://github.com/MetaCubeX/mihomo>。本项目只以其命令行方式启动并调用其本地控制接口，未修改内核代码；分发该二进制时须同时提供其对应源码与许可证。节点（提供商）内容由用户自行提供，与本项目无关。 |
 
 ---
 

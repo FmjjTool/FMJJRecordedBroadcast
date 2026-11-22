@@ -9,6 +9,7 @@
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
@@ -849,7 +850,7 @@ class GlobalSettingsPage(BasePage):
     #   pip        - pip install <下载地址>
     #   ffmpeg     - 一键下载官方包 + 安装教程
     #   external   - 打开官方下载页，用户自行安装
-    #   pw_shell / asr_program / asr_model / clip_model - 程序内一键下载组件
+    #   pw_shell / asr_program / asr_model / clip_model / proxy_core - 程序内一键下载组件
     # 可选依赖未安装时标「可选」而非「缺失」，不计入缺失数量，不影响主流程
     # FULL 内置版随包提供、状态显示「已内置」的组件
     _FULL_BUNDLED = {"ffmpeg", "ffprobe", "pw_shell", "asr_program",
@@ -901,6 +902,9 @@ class GlobalSettingsPage(BasePage):
         ("node", "Node.js", "_check_node_detail",
          "可选：本地资料站前端构建（需 node + npm 同时在 PATH，内置 node 无 npm）",
          "https://nodejs.org/zh-cn", True, "external"),
+        ("proxy_core", "代理内核", "_check_proxy_core_detail",
+         "可选：网络代理页启动内置代理时使用（mihomo 单文件，约 21MB，自动选最快加速源，支持断点续传与本地导入）",
+         "https://github.com/MetaCubeX/mihomo/releases", True, "proxy_core"),
     ]
 
     def _refresh_dependencies(self):
@@ -1086,7 +1090,7 @@ class GlobalSettingsPage(BasePage):
             elif action == "asr_program" and not ok:
                 h.addWidget(self._dep_btn("下载", self._download_asr_program))
             elif action == "asr_model":
-                # 模型可装多个：始终给下拉 + 下载；已装模型的删除仍在上层转写设置里
+                # 模型可装多个：始终给下拉 + 下载；本地组件不可卸载，不提供删除入口
                 from toolbox.asr_engine import LOCAL_MODELS
                 combo = QComboBox()
                 combo.setFixedWidth(210)
@@ -1097,6 +1101,13 @@ class GlobalSettingsPage(BasePage):
                     "下载", lambda c=combo: self._download_asr_model(c.currentData())))
             elif action == "clip_model" and not ok:
                 h.addWidget(self._dep_btn("下载", self._download_clip_model))
+            elif action == "proxy_core" and not ok:
+                dl_btn = self._dep_btn("下载", self._download_proxy_core)
+                dl_btn.setToolTip("自动测速选最快的加速源，支持断点续传")
+                h.addWidget(dl_btn)
+                local_btn = self._dep_btn("本地导入", self._import_proxy_core)
+                local_btn.setToolTip("选择自己下载好的 mihomo-windows-amd64-*.zip")
+                h.addWidget(local_btn)
             if not ok:
                 if optional:
                     optional_missing += 1
@@ -1298,6 +1309,37 @@ class GlobalSettingsPage(BasePage):
             ver = "?"
         return True, f"git {ver}"
 
+    def _check_proxy_core_detail(self):
+        """可选依赖：网络代理页的内置 mihomo 内核。
+
+        外部客户端已装（Clash Verge 等）或用户手动指定过内核时也算就绪，
+        不再重复下载；只有确实找不到才提示安装。
+        """
+        from toolbox.proxy import core as proxy_core
+        from toolbox.proxy import install as proxy_install
+        path = proxy_install.installed()
+        if path is not None:
+            try:
+                return True, f"已下载 {path.stat().st_size / 1024 ** 2:.0f}MB"
+            except OSError:
+                return True, "已下载"
+        try:
+            found = proxy_core.resolve_core()
+        except Exception:
+            found = None
+        if found is not None:
+            try:
+                return True, f"已找到 {found.name}"
+            except OSError:
+                return True, "已找到"
+        try:
+            part = proxy_install.part_path()
+            if part.is_file() and part.stat().st_size:
+                return False, f"可续传 {part.stat().st_size / 1024 ** 2:.0f}MB"
+        except OSError:
+            pass
+        return False, ""
+
     def _check_node_detail(self):
         """可选依赖：本地资料站前端构建需要 node + npm 同时在 PATH。
 
@@ -1377,7 +1419,7 @@ class GlobalSettingsPage(BasePage):
             self._dep_downloading = False
             if err or not result:
                 self.dep_status.setText(
-                    f"{name} 下载失败：{str(err or '未知错误')[:80]}")
+                    f"{name} 下载失败：{str(err or '未知错误')[:300]}")
                 self.dep_status.setStyleSheet(
                     "color: palette(bright-text); font-size: 11px;")
                 self.app.toast(f"{name} 下载失败", "error")
@@ -1435,6 +1477,51 @@ class GlobalSettingsPage(BasePage):
             image_embedding.download_default_model(progress=on_progress)
 
         self._start_dep_download("图识别模型", work)
+
+    def _download_proxy_core(self):
+        """代理内核（mihomo 单文件，约 21MB）：自动挑最快加速源，断点续传。"""
+        from toolbox.proxy import install as proxy_install
+
+        def work(report):
+            state = {"at": time.monotonic(), "done": 0, "speed": 0.0}
+
+            def on_progress(done_bytes, total_bytes):
+                now = time.monotonic()
+                span = now - state["at"]
+                if span >= 0.5:
+                    instant = (done_bytes - state["done"]) / span / 1024 ** 2
+                    if instant > 0:
+                        state["speed"] = instant
+                    state["at"], state["done"] = now, done_bytes
+                text = f"{done_bytes / 1024 ** 2:.1f}"
+                if total_bytes:
+                    text += f" / {total_bytes / 1024 ** 2:.1f} MB"
+                    text += f"（{done_bytes * 100 // total_bytes}%）"
+                else:
+                    text += " MB"
+                if state["speed"]:
+                    text += f" · {state['speed']:.1f} MB/s"
+                report(text)
+
+            proxy_install.download_core(progress=on_progress, status=report)
+
+        self._start_dep_download("代理内核", work)
+
+    def _import_proxy_core(self):
+        """本地导入：用浏览器/下载器下好 mihomo zip，绕开 GitHub 慢速。"""
+        from toolbox.proxy import install as proxy_install
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 mihomo 内核压缩包", "", "压缩包 (*.zip)")
+        if not path:
+            return
+
+        def work(report):
+            report("正在解压…")
+            proxy_install.install_from_zip(
+                Path(path), progress=lambda done, total: None)
+
+        self._start_dep_download("代理内核", work)
 
     def _ffmpeg_install_dir(self):
         """一键下载的落地目录：用户目录（Program Files 下没有写权限）。"""
