@@ -512,11 +512,18 @@ class AccountCenterWidget(QWidget):
             live_edit.setPlaceholderText("房间号/直播间链接" if auto else "无自动·手动贴链接")
             live_edit.setFixedWidth(160)
             room = (account["modules"].get("live") or {}).get("room", "")
+            pending = False
             if not room:
-                # 自动解析过的结果先回填（还没勾选直播录制，所以不在主播列表里）
-                room = live_rooms.cached_room(account["id"], account["url"])
+                if live_rooms.stale(account["id"]):
+                    # 旧算法缓存（例如把抖音号当房间号）：不显示，等这轮重解析
+                    pending = True
+                else:
+                    # 自动解析过的结果先回填（还没勾选直播录制，所以不在主播列表里）
+                    room = live_rooms.cached_room(account["id"], account["url"])
             live_edit.setText(room)
-            if not room and "live" in account["modules"]:
+            if pending:
+                live_edit.setPlaceholderText("解析中…")
+            elif not room and "live" in account["modules"]:
                 # 已勾选但还没号：没解析过=正在取；解析失败则直接显示原因
                 live_edit.setPlaceholderText(
                     live_rooms.cached_note(account["id"], account["url"]) or "获取中…")
