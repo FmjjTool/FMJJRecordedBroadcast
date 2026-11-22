@@ -712,11 +712,12 @@ class Drive115Client:
             nested = payload.get("data")
             data = nested if isinstance(nested, dict) else payload
             status = _int(data.get("status", payload.get("status")))
-            if status == 7 and attempt == 0:
-                sign_key = str(data.get("sign_key") or payload.get("sign_key") or "")
-                sign_check = str(data.get("sign_check") or payload.get("sign_check") or "")
-                if not (sign_key and sign_check):
-                    break
+            status_code = _int(data.get("statuscode", payload.get("statuscode")))
+            sign_key = str(data.get("sign_key") or payload.get("sign_key") or "")
+            sign_check = str(data.get("sign_check") or payload.get("sign_check") or "")
+            # 二次校验：客户端按 status 6/7/8 或 statuscode 700/701/702 触发
+            need_check = status in (6, 7, 8) or status_code in (700, 701, 702)
+            if need_check and attempt == 0 and sign_key and sign_check:
                 if on_stage is not None:
                     on_stage("hash", path.name, size)
                 sign_val = self._sha1_range(path, sign_check)
@@ -739,9 +740,16 @@ class Drive115Client:
         obj = str(data.get("object") or "")
         callback = data.get("callback") if isinstance(data.get("callback"), dict) else {}
         if not (bucket and obj):
-            raise Drive115Error(-1,
-                                f"上传初始化未返回 OSS 信息（status={status}，"
-                                f"字段：{'、'.join(sorted(data)) or '无'}）", "/initupload")
+            status_code = _int(data.get("statuscode", payload.get("statuscode")))
+            status_msg = str(data.get("statusmsg") or payload.get("statusmsg")
+                             or data.get("message") or "")
+            request_id = str(data.get("request") or payload.get("request") or "")
+            raise Drive115Error(
+                -1, f"上传初始化被 115 拒绝：status={status} statuscode={status_code} "
+                    f"statusmsg={status_msg or '（空）'}"
+                    f"{' request=' + request_id if request_id else ''}"
+                    f"，target={target}，"
+                    f"字段：{'、'.join(sorted(data)) or '无'}", "/initupload")
         if on_stage is not None:
             on_stage("upload", path.name, size)
         self._oss_put(path, bucket, obj, callback, size, on_progress)
