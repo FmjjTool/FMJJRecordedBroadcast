@@ -32,7 +32,7 @@ from . import sign as ysign
 HOST = "https://personal-kd-njs.yun.139.com"
 BASE = f"{HOST}/hcy"
 TIMEOUT = 60
-PART_TIMEOUT = 600
+PART_TIMEOUT = 1800
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 PART_SIZE = 100 * 1024 * 1024
@@ -452,8 +452,10 @@ class Yun139Client:
                         time.sleep(1.5)
                 if not url:
                     raise Yun139Error(-1, f"第 {number} 片缺少上传地址", "/file/getUploadUrl")
+                hint = ("（超时：服务器出网带宽不足或连接中断，可把并发降到 2 路后重试）"
+                        if isinstance(last_error, requests.exceptions.Timeout) else "")
                 raise last_error if isinstance(last_error, Yun139Error) else Yun139Error(
-                    -1, f"分片 {number} 上传失败：{last_error}", "uploadUrl")
+                    -1, f"分片 {number} 上传失败{hint}：{last_error}", "uploadUrl")
 
             pending = [i for i in range(len(plan)) if i not in completed]
             lanes = min(self.lanes, len(pending)) if pending else 0

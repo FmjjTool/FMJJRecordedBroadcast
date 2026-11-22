@@ -271,6 +271,7 @@ class QuarkBackupPage(BasePage):
         self.lanes_combo.setFixedWidth(90)
         self.lanes_combo.setToolTip(
             "夸克 / 百度 / 移动云盘的分片上传路数，2-4 路；115 为单次直传，不受此项影响。\n"
+            "云服务器出网带宽低于 2 Mbps 时建议选 2 路，避免单片超时。\n"
             "修改后在下一次备份生效，断点续传与百度节点回退保持有效。")
         self.lanes_combo.currentIndexChanged.connect(self._save_lanes)
         layout.addWidget(self.lanes_combo, 0, Qt.AlignVCenter)

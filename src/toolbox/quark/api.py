@@ -43,8 +43,8 @@ DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 DEFAULT_PART_SIZE = 4 * 1024 * 1024
 TIMEOUT = 60
-# 单个分片（默认 4 MB）的传输超时：太长会「假死」几分钟没反馈，太短会误杀慢速网络
-PART_TIMEOUT = 150
+# 单个分片（默认 4 MB）的传输超时：太长会「假死」，太短会误杀低带宽云服务器
+PART_TIMEOUT = 300
 
 _AUTH_HINTS = ("未登录", "登录", "token", "授权", "认证")
 
@@ -407,7 +407,9 @@ class QuarkClient:
                 last_error = exc
             if attempt == 0:
                 time.sleep(1.5)
-        raise QuarkError(-1, f"分片 {part_number} 重试后仍失败：{last_error}")
+        hint = ("（超时：服务器出网带宽不足或连接中断，可把并发降到 2 路后重试）"
+                if isinstance(last_error, requests.exceptions.Timeout) else "")
+        raise QuarkError(-1, f"分片 {part_number} 重试后仍失败{hint}：{last_error}")
 
     def _commit(self, pre: dict, etags: list[str]) -> None:
         body_parts = "".join(

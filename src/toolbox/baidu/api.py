@@ -33,7 +33,7 @@ PCS_HOSTS = ("https://d.pcs.baidu.com", "https://c.pcs.baidu.com",
 APP_ID = 250528
 BLOCK_SIZE = 4 * 1024 * 1024
 TIMEOUT = 60
-PART_TIMEOUT = 150
+PART_TIMEOUT = 300
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -383,6 +383,8 @@ class BaiduClient:
                     if attempt < len(PCS_HOSTS) - 1:
                         time.sleep(1.5 * (attempt + 1))
                 hint = f"（已尝试 {tried} 个官方上传节点）" if tried > 1 else ""
+                if isinstance(last_error, requests.exceptions.Timeout):
+                    hint += "（超时：服务器出网带宽不足或连接中断，可把并发降到 2 路后重试）"
                 raise last_error if isinstance(last_error, BaiduError) else BaiduError(
                     -1, f"分块 {partseq} 上传失败{hint}：{last_error}", "superfile2")
 
