@@ -326,6 +326,7 @@ class Drive115Client:
         self._download_blocked = ""
         self.has_kid = "KID" in self._account_cookies
         self._app_version = ""
+        self._app_versions: list[str] = []
 
     # ==================== 基础 ====================
 
@@ -668,12 +669,46 @@ class Drive115Client:
         md5, sha1 = hashes if hashes else self.digest(path)
         sha1 = str(sha1).upper()
         user_id, userkey = self._upload_credentials()
-        app_ver = self._current_app_version()
         target = f"U_1_{self.ensure_dir(remote_dir)}"
 
+        last_error: Drive115Error | None = None
+        for app_ver in self._app_version_candidates():
+            self._app_version = app_ver
+            try:
+                payload, data, status, pick_code, bucket, obj, callback = self._init_upload(
+                    path, sha1, size, target, user_id, userkey, app_ver, on_stage)
+            except Drive115Error as exc:
+                text = str(exc)
+                # 版本号写不对时 115 会回 token invalid / 请升级：换下一个候选再试
+                if "token invalid" in text or "升级到最新版本" in text:
+                    last_error = exc
+                    continue
+                raise
+            if status == 2:
+                if on_progress is not None:
+                    try:
+                        on_progress(size, size)
+                    except Exception:  # noqa: BLE001
+                        pass
+                return {"fid": pick_code, "instant": True, "md5": md5, "size": size}
+            if not (bucket and obj):
+                raise Drive115Error(
+                    -1, f"上传初始化未返回 OSS 信息（status={status}，"
+                        f"字段：{'、'.join(sorted(data)) or '无'}）", "/initupload")
+            if on_stage is not None:
+                on_stage("upload", path.name, size)
+            self._oss_put(path, bucket, obj, callback, size, on_progress)
+            self._index_cache.pop(remote_dir, None)
+            return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
+        raise last_error or Drive115Error(-1, "115 上传初始化失败", "/initupload")
+
+    def _init_upload(self, path: Path, sha1: str, size: int, target: str,
+                     user_id: int, userkey: str, app_ver: str, on_stage):
+        """一次上传初始化（含二次校验重试），成功返回响应拆好的字段。"""
         sign_key, sign_val = "", ""
         cipher = _EC115Cipher()
         payload: dict = {}
+        data: dict = {}
         for attempt in range(2):
             stamp = int(time.time() * 1000)
             user_id_str = str(user_id)
@@ -735,73 +770,66 @@ class Drive115Client:
                 continue
             break
 
-        nested = payload.get("data")
-        data = nested if isinstance(nested, dict) else payload
         status = _int(data.get("status", payload.get("status")))
-        pick_code = str(data.get("pick_code") or payload.get("pick_code") or "")
-        if status == 2:
-            if on_progress is not None:
-                try:
-                    on_progress(size, size)
-                except Exception:  # noqa: BLE001
-                    pass
-            return {"fid": pick_code, "instant": True, "md5": md5, "size": size}
-
+        pick_code = str(data.get("pick_code") or data.get("pickcode")
+                        or payload.get("pick_code") or "")
         bucket = str(data.get("bucket") or "")
         obj = str(data.get("object") or "")
         callback = data.get("callback") if isinstance(data.get("callback"), dict) else {}
-        if not (bucket and obj):
+        if status != 2 and not (bucket and obj):
             status_code = _int(data.get("statuscode", payload.get("statuscode")))
             status_msg = str(data.get("statusmsg") or payload.get("statusmsg")
                              or data.get("message") or "")
             request_id = str(data.get("request") or payload.get("request") or "")
+            version_echo = str(data.get("version") or payload.get("version") or "")
             raise Drive115Error(
                 -1, f"上传初始化被 115 拒绝：status={status} statuscode={status_code} "
                     f"statusmsg={status_msg or '（空）'}"
                     f"{' request=' + request_id if request_id else ''}"
-                    f"，target={target}，appversion={app_ver}，"
+                    f"，target={target}，appversion={app_ver}"
+                    f"{'，服务端 version=' + version_echo if version_echo else ''}，"
                     f"字段：{'、'.join(sorted(data)) or '无'}", "/initupload")
-        if on_stage is not None:
-            on_stage("upload", path.name, size)
-        self._oss_put(path, bucket, obj, callback, size, on_progress)
-        self._index_cache.pop(remote_dir, None)
-        return {"fid": pick_code, "instant": False, "md5": md5, "size": size}
+        return payload, data, status, pick_code, bucket, obj, callback
 
     # ==================== 上传辅助 ====================
 
     _upload_user: tuple[int, str] | None = None
 
-    def _current_app_version(self) -> str:
-        """115 会拒绝过旧的客户端版本（`请升级到最新版本`）。
+    def _app_version_candidates(self) -> list[str]:
+        """上传初始化要用的 `appversion` 候选。
 
-        版本接口给的是各端最新版本（`win`=115浏览器、`window_115`=115Life 等），
-        取其中最大的一个，并与本机已知的最新客户端 37.3.3 取 max，避免接口滞后。
+        115 的 `token` 把版本号字符串一起 MD5，版本串与服务端要求不一致会回
+        `token invalid`；版本过旧会回「请升级到最新版本」。所以按「接口各端版本 →
+        本机 115Life 版本 → 带构建号」依次尝试，命中即缓存。
         """
-        if self._app_version:
-            return self._app_version
-        candidates = [UPLOAD_APP_VERSION]
+        if self._app_versions:
+            return list(self._app_versions)
+        values: list[str] = []
         try:
             payload = self.session.get(APP_VERSION_URL, timeout=TIMEOUT).json()
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-            for key in ("window_115", "win", "win64"):
+            # 协议归属 115浏览器（win/win64），其次是 115Life（window_115）
+            for key in ("win", "win64", "window_115"):
                 item = data.get(key)
                 if isinstance(item, dict):
-                    value = str(item.get("version_code") or item.get("version") or "")
+                    value = str(item.get("version_code") or item.get("version") or "").strip()
                     if value:
-                        candidates.append(value)
+                        values.append(value)
         except (requests.RequestException, OSError, ValueError):
             pass
+        values.extend([UPLOAD_APP_VERSION, "37.3.3.2026110914", "37.3.3.0"])
+        unique: list[str] = []
+        for value in values:
+            if value and value not in unique:
+                unique.append(value)
+        self._app_versions = unique
+        return list(unique)
 
-        def _key(text: str) -> tuple:
-            parts = []
-            for piece in str(text).replace("-", ".").split("."):
-                parts.append(int(piece) if piece.isdigit() else 0)
-            while len(parts) < 4:
-                parts.append(0)
-            return tuple(parts[:4])
-
-        self._app_version = max(candidates, key=_key)
-        return self._app_version
+    def _current_app_version(self) -> str:
+        if self._app_version:
+            return self._app_version
+        candidates = self._app_version_candidates()
+        return candidates[0] if candidates else UPLOAD_APP_VERSION
 
     def _upload_headers(self) -> dict:
         """上传接口用与客户端版本一致的 UA（webapi 的 Chrome UA 保持不动）。"""
