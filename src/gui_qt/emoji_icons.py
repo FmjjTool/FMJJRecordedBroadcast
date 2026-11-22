@@ -240,6 +240,7 @@ def _apply_button_impl(button):
         if getattr(button, "_line_auto", False):
             button._line_auto = False
             button._line_icon_name = None
+            button.setIcon(QIcon())
         return
     if clean != original:
         button._line_busy = True

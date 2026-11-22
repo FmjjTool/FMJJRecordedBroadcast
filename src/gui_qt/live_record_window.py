@@ -478,7 +478,7 @@ class PlatformPane(QWidget):
     def _on_changed(self):
         self._login_state = None  # 账号可能在统一管理里切换，下次刷新重新判定
         self.model.refresh_volatile()
-        self.btn_mon.setText("■ 停止监控录制" if self.manager.running else "▶ 开启监控录制")
+        self.btn_mon.setText("⏹ 停止监控录制" if self.manager.running else "▶ 开启监控录制")
         self.win.refresh_status()
         self.win.schedule_save()
 
