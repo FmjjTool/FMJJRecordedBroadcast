@@ -5,7 +5,7 @@
 ```
 封茗囧菌 YYYYMMDD 直播总结
 【腾讯文档】封茗囧菌数据汇总库
-@share-html:https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr
+https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr
 
 1 级：待发布内容详情
 [实际分类名称]：核心详情，时间：XX，地点：XX，合作方：XX（五要素逐字段列出，未知填「暂未公开」）
@@ -35,7 +35,7 @@
 [生日]：明确数值，无则「未公开」
 
 【腾讯文档】封茗囧菌数据汇总库
-@share-html:https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr
+https://docs.qq.com/sheet/DRnd3bkhkQUR1aEJr
 ```
 
 ## 说明
