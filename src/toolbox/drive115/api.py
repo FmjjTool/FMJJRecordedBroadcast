@@ -724,7 +724,8 @@ class Drive115Client:
                 cleanup_note = ("；目标目录有同名条目但删除失败" if entry
                                 else "；目标目录无同名条目")
             probe_note = self._probe_filename(path, sha1, size, target,
-                                              user_id, userkey, candidates[0])
+                                              user_id, userkey,
+                                              self._app_version or UPLOAD_APP_VERSION)
             raise Drive115Error(
                 last_error.code,
                 f"{last_error.message}（已尝试版本：{'、'.join(self._app_versions)}"
@@ -868,6 +869,8 @@ class Drive115Client:
                 return [self._app_version]
             return list(self._app_versions)
         values: list[str] = []
+        # 37.3.3 是当前能过版本门槛且 token 被接受的一档（实测 36.x 会回「请升级」）
+        values.extend([UPLOAD_APP_VERSION, "37.3.3.2026110914", "37.3.3.0"])
         try:
             payload = self.session.get(APP_VERSION_URL, timeout=TIMEOUT).json()
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
