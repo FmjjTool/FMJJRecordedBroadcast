@@ -711,6 +711,7 @@ class Drive115Client:
         if last_error is not None:
             # 所有版本都被拒：先看看目标目录里是不是已有同名（可能残缺）条目，
             # 115 会因此一直回 token invalid；清掉后重试一轮（每次映射每个文件只清一次）
+            cleanup_note = ""
             marker = (cid, path.name)
             if marker not in self._cleanup_tried:
                 entry = self._same_name_entry(cid, path.name)
@@ -720,9 +721,12 @@ class Drive115Client:
                     return self.upload_file(local_path, remote_dir,
                                             on_progress=on_progress, on_stage=on_stage,
                                             hashes=(md5, sha1), resume=resume)
+                cleanup_note = ("；目标目录有同名条目但删除失败" if entry
+                                else "；目标目录无同名条目")
             raise Drive115Error(
                 last_error.code,
-                f"{last_error.message}（已尝试版本：{'、'.join(self._app_versions)}）",
+                f"{last_error.message}（已尝试版本：{'、'.join(self._app_versions)}"
+                f"{cleanup_note}）",
                 last_error.path)
         raise Drive115Error(-1, "115 上传初始化失败", "/initupload")
 
