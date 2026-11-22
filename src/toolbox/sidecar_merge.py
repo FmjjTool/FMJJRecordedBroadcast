@@ -20,6 +20,7 @@ from pathlib import Path
 
 DANMAKU_SUFFIX = "_弹幕.jsonl"
 TIMELINE_SUFFIX = "_时间轴.json"
+COVER_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def list_danmaku_files(folder) -> list[Path]:
@@ -36,6 +37,28 @@ def list_timeline_files(folder) -> list[Path]:
         return []
     return sorted(path for path in folder.iterdir()
                   if path.is_file() and path.name.endswith(TIMELINE_SUFFIX))
+
+
+def list_cover_files(folder) -> list[Path]:
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+    return sorted(path for path in folder.iterdir()
+                  if path.is_file() and path.stem.endswith("_封面")
+                  and path.suffix.lower() in COVER_SUFFIXES)
+
+
+def copy_cover(source, out_base) -> dict:
+    """复制一张封面为 `<目标视频>_封面<原扩展名>`；同名先备份，不删原封面。"""
+    source = Path(source)
+    if not source.is_file():
+        raise ValueError("封面文件不存在")
+    out = Path(out_base).with_suffix(source.suffix.lower())
+    backup = backup_existing(out)
+    temporary = out.with_name(out.name + ".tmp")
+    shutil.copyfile(source, temporary)
+    os.replace(temporary, out)
+    return {"out": str(out), "source": str(source), "backup": backup}
 
 
 def _atomic_write(path: Path, text: str):

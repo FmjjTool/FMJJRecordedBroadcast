@@ -502,7 +502,8 @@ class RenamePage(BasePage):
         self.current_videos = []
         for f in sorted(os.listdir(folder_path)):
             fp = os.path.join(folder_path, f)
-            if os.path.isfile(fp) and is_video_file(fp):
+            if os.path.isfile(fp) and is_video_file(fp) and \
+                    f.lower().endswith(self.rename_config.video_suffix):
                 self.current_videos.append(fp)
 
         self.file_list.clear()
@@ -722,7 +723,7 @@ class RenamePage(BasePage):
                 parts.append(t)
         suffix = self.rename_config.video_suffix
         if 0 <= self.current_video_idx < len(self.current_videos):
-            suffix = Path(self.current_videos[self.current_video_idx]).suffix or suffix
+            suffix = Path(self.current_videos[self.current_video_idx]).suffix.lower() or suffix
         return "_".join(parts) + suffix
 
     def _update_preview(self):
@@ -864,7 +865,8 @@ class RenamePage(BasePage):
         config = {**BU.DEFAULTS, **BU.load_settings().get("upload", {}), "date": ""}
         try:
             actual = {str(path) for path in Path(self.current_folder).iterdir()
-                      if path.is_file() and is_video_file(str(path))}
+                      if path.is_file() and is_video_file(str(path))
+                      and path.name.lower().endswith(self.rename_config.video_suffix)}
             if actual != set(paths):
                 raise ValueError("文件夹的视频已变化，请重新选择文件夹完成重命名")
             BU.validate_renamed_videos(paths)

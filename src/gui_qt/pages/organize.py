@@ -7,6 +7,7 @@
 - 回车快捷：第一次回车=扫描，第二次回车=执行整理
 """
 
+import json
 import os
 import time
 from pathlib import Path
@@ -22,8 +23,8 @@ from toolbox.date_folders import scan_date_folders
 from toolbox.organize_engine import execute_migration, scan_files, scan_sources
 from toolbox.rename_engine import is_standard_recording_name
 from toolbox.sidecar_merge import (
-    DANMAKU_SUFFIX, TIMELINE_SUFFIX, list_danmaku_files, list_timeline_files,
-    merge_danmaku, merge_timelines,
+    DANMAKU_SUFFIX, TIMELINE_SUFFIX, copy_cover, list_cover_files,
+    list_danmaku_files, list_timeline_files, merge_danmaku, merge_timelines,
 )
 from toolbox import bili_upload as BU
 from toolbox.utils import format_size, is_video_file
@@ -76,6 +77,14 @@ class MergeSidecarsDialog(QDialog):
         self.timeline_list = self._build_list("时间轴", lists)
         layout.addLayout(lists, 1)
 
+        cover_row = QHBoxLayout()
+        self.cover_check = QCheckBox("同时整理封面（复制最新一张为 目标视频_封面）")
+        self.cover_check.setChecked(True)
+        self.cover_check.toggled.connect(self._update_summary)
+        cover_row.addWidget(self.cover_check)
+        cover_row.addStretch(1)
+        layout.addLayout(cover_row)
+
         self.summary = QLabel("")
         self.summary.setProperty("role", "muted")
         self.summary.setWordWrap(True)
@@ -114,6 +123,7 @@ class MergeSidecarsDialog(QDialog):
         folder = self._folder_path()
         self._danmaku_paths = list_danmaku_files(folder)
         self._timeline_paths = list_timeline_files(folder)
+        self._covers = list_cover_files(folder)
         for path in self._danmaku_paths:
             self._add_item(self.danmaku_list, path)
         for path in self._timeline_paths:
@@ -134,8 +144,65 @@ class MergeSidecarsDialog(QDialog):
         self._update_summary()
 
     @staticmethod
-    def _add_item(items, path):
-        item = QListWidgetItem(f"{Path(path).name}  ({format_size(os.path.getsize(path))})")
+    def _clock(ms):
+        try:
+            return time.strftime("%H:%M:%S", time.localtime(int(ms) / 1000))
+        except (TypeError, ValueError, OSError):
+            return ""
+
+    @classmethod
+    def _sidecar_label(cls, path):
+        label = f"{path.name}  ({format_size(os.path.getsize(path))})"
+        if path.name.endswith(TIMELINE_SUFFIX):
+            start = cls._timeline_start(path)
+            if start:
+                label += f"   首锚点 {start}"
+        elif path.name.endswith(DANMAKU_SUFFIX):
+            start = cls._danmaku_start(path)
+            if start:
+                label += f"   首条 {start}"
+        return label
+
+    @staticmethod
+    def _timeline_start(path):
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        walls = []
+        for entry in data.get("files") or []:
+            if not isinstance(entry, dict):
+                continue
+            for anchor in entry.get("anchors") or []:
+                if isinstance(anchor, dict) and anchor.get("wall_ms"):
+                    walls.append(anchor["wall_ms"])
+        return MergeSidecarsDialog._clock(min(walls)) if walls else ""
+
+    @staticmethod
+    def _danmaku_start(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as stream:
+                for line in stream:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        message = json.loads(line)
+                    except ValueError:
+                        continue
+                    stamp = message.get("timestamp") or message.get("ts")
+                    if stamp:
+                        return MergeSidecarsDialog._clock(stamp)
+        except OSError:
+            return ""
+        return ""
+
+    def _add_item(self, items, path):
+        try:
+            label = self._sidecar_label(path)
+        except OSError:
+            label = path.name
+        item = QListWidgetItem(label)
         item.setData(Qt.UserRole, str(path))
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked)
@@ -151,6 +218,19 @@ class MergeSidecarsDialog(QDialog):
         value = self.video_combo.currentData()
         return Path(value) if value else None
 
+    def _latest_cover(self):
+        covers = getattr(self, "_covers", [])
+        if not covers:
+            return None
+
+        def stamp(path):
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return 0
+
+        return max(covers, key=lambda path: (stamp(path), path.name))
+
     def _update_summary(self):
         target = self._target()
         danmaku = self._checked(self.danmaku_list)
@@ -164,19 +244,25 @@ class MergeSidecarsDialog(QDialog):
             parts.append(f"{len(danmaku)} 个弹幕 → {target.stem}{DANMAKU_SUFFIX}")
         if timelines:
             parts.append(f"{len(timelines)} 个时间轴 → {target.stem}{TIMELINE_SUFFIX}")
-        self.summary.setText("；".join(parts) if parts else "请至少勾选一个弹幕或时间轴文件")
+        cover = self._latest_cover()
+        if cover is not None and self.cover_check.isChecked():
+            parts.append(f"封面 ← {cover.name}")
+        self.summary.setText("；".join(parts) if parts else "请至少勾选一个弹幕、时间轴或封面")
         self.merge_btn.setEnabled(bool(parts))
 
     def _accept(self):
         if self._target() is not None and (
-                self._checked(self.danmaku_list) or self._checked(self.timeline_list)):
+                self._checked(self.danmaku_list) or self._checked(self.timeline_list)
+                or (self.cover_check.isChecked() and self._latest_cover() is not None)):
             self.accept()
 
     def request(self):
         target = self._target()
+        cover = self._latest_cover()
         return {"target": str(target) if target else "",
                 "danmaku": [str(path) for path in self._checked(self.danmaku_list)],
-                "timelines": [str(path) for path in self._checked(self.timeline_list)]}
+                "timelines": [str(path) for path in self._checked(self.timeline_list)],
+                "cover": str(cover) if self.cover_check.isChecked() and cover else ""}
 
 
 class OrganizePage(BasePage):
@@ -478,6 +564,9 @@ class OrganizePage(BasePage):
                 result["timeline"] = merge_timelines(
                     request["timelines"],
                     target.parent / (target.stem + TIMELINE_SUFFIX), target)
+            if request.get("cover"):
+                result["cover"] = copy_cover(
+                    request["cover"], target.parent / (target.stem + "_封面"))
             return result
 
         def done(result, error):
@@ -501,6 +590,12 @@ class OrganizePage(BasePage):
                 if timeline.get("estimated"):
                     self._log("部分源视频已不存在，时间轴偏移按相邻场次时间估算；"
                               "如对不上，请只勾选目标视频对应的那一段。")
+            cover = result.get("cover")
+            if cover:
+                parts.append(f"封面 ← {os.path.basename(cover['source'])}")
+                self._log(f"已整理封面 → {os.path.basename(cover['out'])}")
+                if cover.get("backup"):
+                    self._log(f"原封面已备份：{os.path.basename(cover['backup'])}")
             if parts:
                 self.app.toast("合并完成：" + "，".join(parts), "success")
 
