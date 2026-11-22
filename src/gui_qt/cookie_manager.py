@@ -648,6 +648,8 @@ class CookieManagerDialog(QDialog):
         try:
             auth.set_cookie(plat, val.strip())
             self._whoami_cache.pop(plat, None)
+            from toolbox import account_health
+            account_health.forget_platform_login(plat)
             self._reload()
             self._notify()
             QMessageBox.information(self, "成功", f"{name} Cookie 已保存")
@@ -671,6 +673,8 @@ class CookieManagerDialog(QDialog):
                 from toolbox.tcdoc import session as tc_session
                 tc_session.clear()
             self._whoami_cache.pop(plat, None)
+            from toolbox import account_health
+            account_health.forget_platform_login(plat)  # 登录态清除后账号卡片重新判定
             self._reload()
             self._notify()
         except Exception as e:
@@ -1285,6 +1289,8 @@ class CookieManagerDialog(QDialog):
                     from toolbox.tcdoc import session as tc_session
                     tc_session.save_state_snapshot(state.get("storage_state"))
                 self._whoami_cache.pop(plat, None)
+                from toolbox import account_health
+                account_health.forget_platform_login(plat)  # 登录态变了，账号卡片重算
                 self._reload()
                 self._notify()
             except Exception as e:

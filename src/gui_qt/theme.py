@@ -65,7 +65,7 @@ QMenuBar::item:selected { background: palette(highlight); color: palette(highlig
 QMenu { background: palette(base); color: palette(text); border: 1px solid palette(mid); }
 QMenu::item { padding: 5px 18px; }
 QMenu::item:selected { background: palette(highlight); color: palette(highlighted-text); }
-QToolTip { background: palette(tool-tip-base); color: palette(tool-tip-text); border: 1px solid palette(shadow); padding: 6px 9px; }
+QToolTip { background: palette(tooltip-base); color: palette(tooltip-text); border: 1px solid palette(shadow); padding: 6px 9px; }
 QGroupBox { border: 1px solid palette(shadow); border-radius: 6px; margin-top: 10px; padding-top: 6px; }
 QGroupBox::title { color: palette(placeholder-text); subcontrol-origin: margin; left: 10px; }
 QSpinBox, QDoubleSpinBox { padding: 3px 6px; }
