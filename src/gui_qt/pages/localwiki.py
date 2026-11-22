@@ -16,8 +16,9 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from gui_qt import table_sort, theme
@@ -38,11 +39,21 @@ def _signed(value) -> str:
     return f"+{number}" if number > 0 else str(number)
 
 
+class _DeployCancelled(Exception):
+    """用户在部署过程中点了「取消」：停在当前步骤，已完成的部分保留。"""
+
+    def __init__(self, done: int, total: int):
+        super().__init__(f"已取消（完成 {done}/{total} 步）")
+        self.done = done
+        self.total = total
+
+
 class LocalWikiPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self.service = server.SiteService()
         self._busy = False
+        self._deploy_cancel = False
         self._task_buttons: list[QPushButton] = []
         self._build_ui()
         self._refresh_status()
@@ -153,6 +164,24 @@ class LocalWikiPage(BasePage):
         self.deploy_btn.clicked.connect(self._deploy)
         box.addWidget(self.deploy_btn)
         self._task_buttons.append(self.deploy_btn)
+
+        progress_row = QHBoxLayout()
+        progress_row.setSpacing(8)
+        self.deploy_progress = QProgressBar()
+        self.deploy_progress.setObjectName("wikiProgress")
+        self.deploy_progress.setRange(0, 100)
+        self.deploy_progress.setValue(0)
+        self.deploy_progress.setFormat("准备中…")
+        self.deploy_progress.setFixedHeight(16)
+        self.deploy_progress.setVisible(False)
+        progress_row.addWidget(self.deploy_progress, 1)
+        self.deploy_cancel_btn = QPushButton("取消")
+        self.deploy_cancel_btn.setObjectName("wikiButton")
+        self.deploy_cancel_btn.setFixedWidth(64)
+        self.deploy_cancel_btn.setVisible(False)
+        self.deploy_cancel_btn.clicked.connect(self._cancel_deploy)
+        progress_row.addWidget(self.deploy_cancel_btn)
+        box.addLayout(progress_row)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -420,6 +449,14 @@ class LocalWikiPage(BasePage):
             QPushButton#wikiPrimary:disabled {
                 background: palette(midlight); color: palette(placeholder-text);
             }
+            QProgressBar#wikiProgress {
+                background: palette(alternate-base); color: palette(text);
+                border: 1px solid palette(shadow); border-radius: 8px;
+                font-size: 10px; text-align: center;
+            }
+            QProgressBar#wikiProgress::chunk {
+                background: palette(highlight); border-radius: 7px;
+            }
             QPlainTextEdit#wikiLog {
                 background: palette(alternate-base); color: palette(text);
                 border: 1px solid palette(shadow); border-radius: 8px;
@@ -585,7 +622,7 @@ class LocalWikiPage(BasePage):
             self.status_label.setText(text)
         self._refresh_actions()
 
-    def _start_task(self, title: str, fn, on_ok=None):
+    def _start_task(self, title: str, fn, on_ok=None, on_error=None):
         if self._busy:
             return
         self._set_busy(True, f"{title}…")
@@ -598,12 +635,19 @@ class LocalWikiPage(BasePage):
             self._set_busy(False)
             if err:
                 self._log(f"{title}：{err}")
-                self.status_label.setText(f"{title}失败")
-                QMessageBox.warning(self, title, str(err))
-                try:
-                    self.app.toast(f"{title}失败：{err}"[:120], "error")
-                except Exception:  # noqa: BLE001
-                    pass
+                handled = False
+                if on_error is not None:
+                    try:
+                        handled = bool(on_error(err))
+                    except Exception as exc:  # noqa: BLE001 - 回调出错不能吞掉原错误
+                        self._log(f"失败处理出错：{exc}")
+                if not handled:
+                    self.status_label.setText(f"{title}失败")
+                    QMessageBox.warning(self, title, str(err))
+                    try:
+                        self.app.toast(f"{title}失败：{err}"[:120], "error")
+                    except Exception:  # noqa: BLE001
+                        pass
             else:
                 message = f"{title}完成" + (f"：{result}" if result else "")
                 self._log(message)
@@ -693,36 +737,130 @@ class LocalWikiPage(BasePage):
 
         self._start_task("停止服务", work)
 
+    DEPLOY_RETRIES = 1  # 首次失败后自动重新部署的次数
+
     def _deploy(self):
-        if not self._require_auth():
+        if self._busy or not self._require_auth():
             return
         root = wiki_cfg.root_dir()
         token = wiki_creds.token()
-
-        def work(log):
-            if self.service.running:
-                log("检测到服务正在运行，先停止旧服务…")
-                self.service.stop(log)
-            self.service = server.SiteService(root)
-            gitops.ensure_repo("webwiki-api", token, log, root)
-            gitops.ensure_repo("webwiki", token, log, root)
-            deploy.ensure_python_env(root, log)
-            deploy.sync_docs(root, log)
-            deploy.ensure_node_deps(root, log)
-            deploy.build_frontend(root, log)
-            try:
-                deploy.warm_covers(root, log)
-            except Exception as exc:  # noqa: BLE001 - 预热失败不影响部署
-                log(f"封面预热跳过：{exc}")
-            return self.service.start(log)
+        self._deploy_cancel = False
+        self._deploy_progress_show()
 
         def after(url):
+            self._deploy_progress_finish("部署完成")
             if self.auto_open.isChecked():
                 server.open_site(url)
             self._update_service_label()
             self._refresh_actions()
 
-        self._start_task("一键部署", work, on_ok=after)
+        self._start_task("一键部署",
+                         lambda log: self._deploy_with_retry(root, token, log),
+                         on_ok=after, on_error=self._deploy_failed)
+
+    def _deploy_with_retry(self, root, token, log):
+        """整链部署；任何一步失败就从头重新部署，全部尝试都失败才上报。"""
+        attempts = self.DEPLOY_RETRIES + 1
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                log(f"上一步部署中断，自动重新部署（第 {attempt - 1}/{self.DEPLOY_RETRIES} 次）")
+                post_to_main(self._deploy_progress_restart, attempt)
+            try:
+                return self._deploy_once(root, token, log)
+            except _DeployCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 失败后整链重来
+                last = exc
+                log(f"部署中断：{exc}")
+        raise RuntimeError(
+            f"部署失败：已自动重新部署 {self.DEPLOY_RETRIES} 次仍未成功（{last}）。"
+            f"请查看下方日志里中断的那一步再重试。")
+
+    def _deploy_once(self, root, token, log):
+        """拉取代码 → 安装依赖 → 重建站点数据 → 构建前端 → 启动服务。"""
+        if self.service.running:
+            log("检测到服务正在运行，先停止旧服务…")
+            self.service.stop(log)
+        self.service = server.SiteService(root)
+        steps = (
+            ("拉取代码", lambda: self._deploy_pull(root, token, log)),
+            ("安装依赖", lambda: (deploy.ensure_python_env(root, log),
+                                 deploy.ensure_node_deps(root, log))),
+            ("重建站点数据", lambda: deploy.sync_docs(root, log)),
+            ("构建前端", lambda: deploy.build_frontend(root, log)),
+        )
+        total = len(steps) + 1
+        for index, (label, run) in enumerate(steps, start=1):
+            if self._deploy_cancel:
+                raise _DeployCancelled(index - 1, total)
+            post_to_main(self._deploy_progress_step, index, total, label)
+            log(f"[{index}/{total}] {label}")
+            run()
+        if self._deploy_cancel:
+            raise _DeployCancelled(total - 1, total)
+        post_to_main(self._deploy_progress_step, total, total, "启动服务")
+        log(f"[{total}/{total}] 启动服务")
+        return self._deploy_start(root, log)
+
+    def _deploy_pull(self, root, token, log):
+        gitops.ensure_repo("webwiki-api", token, log, root)
+        gitops.ensure_repo("webwiki", token, log, root)
+
+    def _deploy_start(self, root, log):
+        try:
+            deploy.warm_covers(root, log)
+        except Exception as exc:  # noqa: BLE001 - 预热失败不影响部署
+            log(f"封面预热跳过：{exc}")
+        return self.service.start(log)
+
+    # ==================== 部署进度 ====================
+
+    def _deploy_progress_show(self):
+        self.deploy_progress.setRange(0, 100)
+        self.deploy_progress.setValue(0)
+        self.deploy_progress.setFormat("准备中…")
+        self.deploy_progress.setVisible(True)
+        self.deploy_cancel_btn.setEnabled(True)
+        self.deploy_cancel_btn.setVisible(True)
+
+    def _deploy_progress_step(self, index: int, total: int, label: str):
+        self.deploy_progress.setValue(int((index - 1) * 100 / total))
+        self.deploy_progress.setFormat(f"{index}/{total} {label}")
+
+    def _deploy_progress_restart(self, attempt: int):
+        self.deploy_progress.setValue(0)
+        self.deploy_progress.setFormat(f"重新部署 {attempt - 1}/{self.DEPLOY_RETRIES}…")
+
+    def _deploy_progress_finish(self, text: str):
+        if text == "部署完成":
+            self.deploy_progress.setValue(100)
+        self.deploy_progress.setFormat(text)
+        self.deploy_cancel_btn.setVisible(False)
+        QTimer.singleShot(3000, self._deploy_progress_hide)
+
+    def _deploy_progress_hide(self):
+        if self._busy:
+            return
+        self.deploy_progress.setVisible(False)
+        self.deploy_cancel_btn.setVisible(False)
+
+    def _cancel_deploy(self):
+        if not self._busy:
+            return
+        self._deploy_cancel = True
+        self.deploy_cancel_btn.setEnabled(False)
+        self.status_label.setText("已请求取消，当前步骤结束后停止…")
+        self._log("已请求取消部署：当前步骤结束后停止，已完成的部分保留。")
+
+    def _deploy_failed(self, err) -> bool:
+        """取消不弹窗；真正的失败交给 _start_task 弹窗并给下一步。"""
+        if isinstance(err, _DeployCancelled):
+            self.status_label.setText(f"部署已取消（完成 {err.done}/{err.total} 步）")
+            self._deploy_progress_finish("已取消")
+            return True
+        self._deploy_progress_finish("部署失败")
+        return False
 
     # ==================== 站点访问监控 ====================
 
