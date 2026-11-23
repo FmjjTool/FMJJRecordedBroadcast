@@ -925,22 +925,101 @@ class QuarkClient:
         直链有分钟级时效，大文件跑到一半就可能 403；调用方拿到 403 要重新
         调一次本接口，再用 `Range` 从断点续传（见 `download.Downloader`）。
         只能传文件 fid，目录会走打包任务，不在本工具范围内。
+
+        单文件超过网页端限额时 `/file/download` 会回 `23018 download file size
+        limit`（实测连 SUPER_VIP 也一样），此时改走播放链路拿**原片直链**：
+        `/batch/file/play/info` 的 `video_list` 里与文件大小一致的那一项就是原始
+        文件（其余是同名 m3u8 转码流），该 CDN 支持 Range 且**不能带 Cookie**。
         """
         fids = [str(f) for f in fids if f]
         if not fids:
             return {}
-        payload = self._request("POST", "/file/download", body={"fids": fids})
         links: dict[str, str] = {}
-        for item in payload.get("data") or []:
-            if not isinstance(item, dict):
-                continue
-            fid = str(item.get("fid") or "")
-            url = str(item.get("download_url") or "")
-            if fid and url:
-                links[fid] = url
+        oversize: list[str] = []
+        try:
+            payload = self._request("POST", "/file/download", body={"fids": fids})
+            for item in payload.get("data") or []:
+                if not isinstance(item, dict):
+                    continue
+                fid = str(item.get("fid") or "")
+                url = str(item.get("download_url") or "")
+                if fid and url:
+                    links[fid] = url
+        except QuarkError as exc:
+            if str(exc.code) != "23018":
+                raise
+            # 整批被拒：逐个重试，把真正超限的文件挑出来走播放链路
+            for fid in fids:
+                try:
+                    payload = self._request("POST", "/file/download", body={"fids": [fid]})
+                except QuarkError as one:
+                    if str(one.code) == "23018":
+                        oversize.append(fid)
+                        continue
+                    raise
+                for item in payload.get("data") or []:
+                    url = str((item or {}).get("download_url") or "")
+                    if url:
+                        links[fid] = url
+        if oversize:
+            links.update(self._play_links(oversize))
         if not links:
             raise QuarkError(-1, "未取到下载直链", "/file/download")
         return links
+
+    def _play_links(self, fids: list[str]) -> dict[str, str]:
+        """播放链路取原片直链（绕过网页端单文件大小限制）。"""
+        links: dict[str, str] = {}
+        body = {
+            "fids": fids,
+            "resolutions": "normal,low,high,super,2k,4k",
+            "fetch_credits_setting": 1,
+            "fetch_play_video_resolution_setting": 1,
+            "fetch_play_audio_type_setting": 1,
+            "support_resolution_free_limit_ab": 1,
+            "fetch_pdir": 1,
+            "support_right": "trial_1080P_zhizhen_pc",
+        }
+        payload = self._request("POST", "/batch/file/play/info",
+                                body=body, params={"uc_param_str": "utfrpr"})
+        data = payload.get("data") or {}
+        for fid, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            size = int(info.get("size") or 0)
+            videos = info.get("video_list") or []
+            picked = ""
+            # 原片的 size 与文件总大小一致；其余是同名转码流（m3u8）
+            for item in videos:
+                video = (item or {}).get("video_info") or {}
+                url = str(video.get("url") or "")
+                if not url or "m3u8" in url:
+                    continue
+                if size and int(video.get("size") or 0) == size:
+                    picked = url
+                    break
+            if not picked:
+                for item in videos:
+                    video = (item or {}).get("video_info") or {}
+                    url = str(video.get("url") or "")
+                    if url and "m3u8" not in url:
+                        picked = url
+                        break
+            if picked:
+                links[str(fid)] = picked
+        if not links:
+            raise QuarkError(
+                -1, "文件超过网页端下载限额，且不是可播放视频，无法取到原片直链",
+                "/batch/file/play/info")
+        return links
+
+    def headers_for_download(self, url: str) -> dict:
+        """按下载域名决定请求头：播放 CDN 带 Cookie 会 412（实测）。"""
+        headers = self.download_headers()
+        host = str(url or "").split("://", 1)[-1].split("/", 1)[0]
+        if host.startswith("video-") or host.startswith("video."):
+            headers.pop("Cookie", None)
+        return headers
 
     def delete_files(self, fids: list[str]) -> bool:
         """把指定 fid 删到回收站（用于替换本工具上传过的旧版本）。

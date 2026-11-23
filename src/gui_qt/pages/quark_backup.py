@@ -22,7 +22,7 @@ from PySide6.QtGui import QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
@@ -233,16 +233,20 @@ class QuarkBackupPage(BasePage):
     def _build_toolbar(self) -> QFrame:
         bar = QFrame()
         bar.setProperty("variant", "toolbar")
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(8)
+
+        # 第一行：操作按钮靠左，上传并发靠右
+        top = QHBoxLayout()
+        top.setSpacing(8)
 
         self.run_btn = QPushButton("立即备份")
         self.run_btn.setProperty("variant", "primary")
         self.run_btn.setToolTip("按当前启用的映射执行一次增量备份（与定时任务同一条链路）")
         self.run_btn.clicked.connect(self._start_backup)
         self._register_icon(self.run_btn, "play", "primary")
-        layout.addWidget(self.run_btn)
+        top.addWidget(self.run_btn)
 
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setProperty("variant", "secondary")
@@ -250,19 +254,19 @@ class QuarkBackupPage(BasePage):
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_backup)
         self._register_icon(self.stop_btn, "stop")
-        layout.addWidget(self.stop_btn)
+        top.addWidget(self.stop_btn)
 
         self.add_btn = QPushButton("新增备份目录")
         self.add_btn.setProperty("variant", "secondary")
         self.add_btn.setToolTip("添加一组「本地目录 → 云端文件夹」映射")
         self.add_btn.clicked.connect(self._add_mapping)
         self._register_icon(self.add_btn, "plus")
-        layout.addWidget(self.add_btn)
+        top.addWidget(self.add_btn)
 
-        layout.addSpacing(8)
+        top.addStretch(1)
         lanes_label = QLabel("上传并发")
         lanes_label.setProperty("role", "caption")
-        layout.addWidget(lanes_label, 0, Qt.AlignVCenter)
+        top.addWidget(lanes_label, 0, Qt.AlignVCenter)
         self.lanes_combo = QComboBox()
         for lanes in qconfig.UPLOAD_LANES:
             self.lanes_combo.addItem(f"{lanes} 路", lanes)
@@ -274,22 +278,32 @@ class QuarkBackupPage(BasePage):
             "云服务器出网带宽低于 2 Mbps 时建议选 2 路，避免单片超时。\n"
             "修改后在下一次备份生效，断点续传与百度节点回退保持有效。")
         self.lanes_combo.currentIndexChanged.connect(self._save_lanes)
-        layout.addWidget(self.lanes_combo, 0, Qt.AlignVCenter)
+        top.addWidget(self.lanes_combo, 0, Qt.AlignVCenter)
+        outer.addLayout(top)
 
-        layout.addSpacing(8)
+        # 第二行：进度条 + 状态文字。单独占一行，窗口变窄时文件名才有完整宽度，
+        # 不会被按钮组挤成「1…中心单机-流程.mp4」这种看不清的形态。
+        bottom = QHBoxLayout()
+        bottom.setSpacing(8)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         self.progress.setFixedHeight(16)
-        self.progress.setFixedWidth(240)
+        self.progress.setMinimumWidth(120)
         self.progress.setToolTip("当前备份进度")
-        layout.addWidget(self.progress, 0, Qt.AlignVCenter)
+        bottom.addWidget(self.progress, 1)
 
         self.progress_label = ElidedLabel("空闲", role="caption")
-        self.progress_label.setMinimumWidth(150)
+        # ElidedLabel 默认 Ignored 策略会把最小宽度也忽略掉，进度条会把它挤出容器；
+        # 这里改成受控区间：至少 240 放得下「上传中 1/1 · 文件名」的前半段，最多 380。
+        self.progress_label.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                         QSizePolicy.Policy.Preferred)
+        self.progress_label.setMinimumWidth(320)
+        self.progress_label.setMaximumWidth(420)
         self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.progress_label, 1)
+        bottom.addWidget(self.progress_label, 0)
+        outer.addLayout(bottom)
         return bar
 
     def _save_lanes(self, _index: int = 0):
@@ -595,7 +609,8 @@ class QuarkBackupPage(BasePage):
             self.stop_btn.setEnabled(False)
 
     @staticmethod
-    def _short_name(name: str, limit: int = 34) -> str:
+    @staticmethod
+    def _short_name(name: str, limit: int = 60) -> str:
         name = name or ""
         return name if len(name) <= limit else name[:limit - 1] + "…"
 
@@ -609,19 +624,20 @@ class QuarkBackupPage(BasePage):
         index = int(payload.get("current") or 0)
         total = int(payload.get("total") or 0)
         if phase == "mapping":
+            self.progress.setFormat("%p%")
             self.progress_label.setText(f"第 {index + 1}/{total} 组：{name}")
         elif phase == "hash":
-            size = qbackup.human_size(int(payload.get("size") or 0))
-            self.progress_label.setText(f"校验中 {index + 1}/{total} · {size} · {name}")
+            # 序号挪进进度条，标签整段留给文件名，窄窗口下也能看清是哪个文件
+            self.progress.setFormat(f"{index + 1}/{total} · %p%")
+            self.progress_label.setText(f"校验中 · {name}")
         elif phase == "file":
-            sent = int(payload.get("sent") or 0)
-            size = int(payload.get("size") or 0)
-            self.progress_label.setText(
-                f"上传中 {index + 1}/{total} · "
-                f"{qbackup.human_size(sent)} / {qbackup.human_size(size)} · {name}")
+            self.progress.setFormat(f"{index + 1}/{total} · %p%")
+            self.progress_label.setText(f"上传中 · {name}")
         elif phase == "run":
+            self.progress.setFormat("%p%")
             self.progress_label.setText(f"{index}/{total} {name}")
         elif phase == "done":
+            self.progress.setFormat("%p%")
             self.progress_label.setText("收尾中…")
 
     def _append_log(self, message: str):

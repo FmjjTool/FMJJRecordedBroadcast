@@ -259,7 +259,11 @@ class Downloader:
     def _stream(self, url: str, part: Path, item: DownloadItem,
                 done: int) -> tuple[int, float]:
         """把直链内容写进 .part，返回 (总字节, 末速)。"""
-        headers = dict(self.client.download_headers())
+        # 部分 CDN（如夸克的播放域名）带了 Cookie 反而 412，由后端按 URL 决定要不要带
+        if hasattr(self.client, "headers_for_download"):
+            headers = dict(self.client.headers_for_download(url))
+        else:
+            headers = dict(self.client.download_headers())
         if done:
             headers["Range"] = f"bytes={done}-"
         try:
