@@ -10,13 +10,12 @@ import os
 import re
 import sys
 import time
-import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QScrollArea, QSpinBox, QTimeEdit, QVBoxLayout, QWidget, QFrame,
+    QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
 )
 
 from image_sorter.core.cache_manager import CacheManager
@@ -168,38 +167,6 @@ class GlobalSettingsPage(BasePage):
             "取消勾选即取消后台：不再保留托盘图标，点关闭会直接退出软件。")
         self.close_to_tray_cb.toggled.connect(self._on_close_to_tray_changed)
         v.addWidget(self.close_to_tray_cb)
-
-        v.addSpacing(12)
-
-        # ---- WebUI 页面镜像（浏览器访问当前页面） ----
-        v.addWidget(self._card_title("WebUI 页面镜像（浏览器访问当前页面）"))
-        webui_row = QHBoxLayout()
-        webui_row.addWidget(QLabel("端口"))
-        self.webui_port = QSpinBox()
-        self.webui_port.setRange(1024, 65535)
-        self.webui_port.setFixedWidth(96)
-        self.webui_port.setToolTip("本机 127.0.0.1 监听端口，被占用时换一个")
-        self.webui_port.valueChanged.connect(self._save_webui_settings)
-        webui_row.addWidget(self.webui_port)
-        self.webui_autostart_cb = QCheckBox("软件启动时自动开启")
-        self.webui_autostart_cb.toggled.connect(self._save_webui_settings)
-        webui_row.addWidget(self.webui_autostart_cb)
-        webui_row.addStretch(1)
-        self.webui_open_btn = self._btn("打开 WebUI", self._open_webui)
-        self.webui_toggle_btn = self._btn("启动", self._toggle_webui)
-        webui_row.addWidget(self.webui_open_btn)
-        webui_row.addWidget(self.webui_toggle_btn)
-        v.addLayout(webui_row)
-        self.webui_status = QLabel("")
-        self.webui_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        self.webui_status.setWordWrap(True)
-        v.addWidget(self.webui_status)
-        webui_note = QLabel(
-            "只在本机 127.0.0.1 监听，访问链接自带本次运行的令牌；页面按控件树镜像，"
-            "文件选择、下拉菜单、独立对话框与自绘图表仍需在桌面端操作。")
-        webui_note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        webui_note.setWordWrap(True)
-        v.addWidget(webui_note)
 
         v.addSpacing(12)
 
@@ -444,7 +411,6 @@ class GlobalSettingsPage(BasePage):
         self.close_to_tray_cb.blockSignals(True)
         self.close_to_tray_cb.setChecked(bool(cfg.get("close_to_tray", True)))
         self.close_to_tray_cb.blockSignals(False)
-        self._refresh_webui_status()
         # 软件更新：自动检查开关 + 已发现的新版本提示
         self.update_cb.blockSignals(True)
         self.update_cb.setChecked(bool(cfg.get("auto_check_update", True)))
@@ -608,67 +574,6 @@ class GlobalSettingsPage(BasePage):
             self.app.toast(
                 "已开启后台模式" if checked else "已取消后台模式（关闭窗口将退出）",
                 "info")
-
-    # ---- WebUI 页面镜像 ----
-    def _refresh_webui_status(self):
-        from gui_qt.webui.controller import controller
-
-        cfg = load_convert_config()
-        ctl = controller()
-        self.webui_autostart_cb.blockSignals(True)
-        self.webui_autostart_cb.setChecked(bool(cfg.get("webui_auto_start")))
-        self.webui_autostart_cb.blockSignals(False)
-        self.webui_port.blockSignals(True)
-        self.webui_port.setValue(int(ctl.port or cfg.get("webui_port", 8765) or 8765))
-        self.webui_port.blockSignals(False)
-        if ctl.running:
-            base = ctl.url.split("?", 1)[0]
-            self._set_status(self.webui_status, f"运行中 · {base}", "ok")
-        else:
-            self._set_status(self.webui_status, "未启动", "muted")
-        self._refresh_webui_buttons()
-
-    def _refresh_webui_buttons(self):
-        from gui_qt.webui.controller import controller
-
-        running = controller().running
-        self.webui_toggle_btn.setText("停止" if running else "启动")
-        self.webui_port.setEnabled(not running)
-        self.webui_open_btn.setEnabled(running)
-
-    def _save_webui_settings(self, *_args):
-        cfg = load_convert_config()
-        cfg["webui_port"] = int(self.webui_port.value())
-        cfg["webui_auto_start"] = bool(self.webui_autostart_cb.isChecked())
-        save_convert_config(cfg)
-
-    def _toggle_webui(self):
-        from gui_qt.webui.controller import controller
-
-        ctl = controller()
-        if ctl.running:
-            ctl.stop()
-            self._refresh_webui_status()
-            return
-        port = int(self.webui_port.value())
-        self._save_webui_settings()
-        try:
-            ctl.start(self.app, port)
-        except Exception as exc:
-            self._set_status(
-                self.webui_status, f"启动失败：端口可能被占用（{exc}）", "warn")
-            self._refresh_webui_buttons()
-            return
-        self._refresh_webui_status()
-
-    def _open_webui(self):
-        from gui_qt.webui.controller import controller
-
-        ctl = controller()
-        if not ctl.running:
-            self._set_status(self.webui_status, "请先启动页面镜像", "warn")
-            return
-        webbrowser.open(ctl.url, new=2)
 
     def _open_site(self, label, url):
         """统一站点打开：所有「打开官方链接」按钮走这里，加 toast 提示。"""

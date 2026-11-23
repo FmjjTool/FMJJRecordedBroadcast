@@ -219,9 +219,6 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     # 字幕页开关（未注册默认键的键会在 load 时被过滤丢弃，必须登记）
     "subtitle_use_date_folder": False,
     "subtitle_use_same_dir": True,
-    # WebUI 页面镜像（全局设置卡片）
-    "webui_auto_start": False,
-    "webui_port": 8765,
     # 音频提取页「提取后自动转字幕」（引擎/本地模型/输出开关，切换即保存）
     "asr_enabled": False,
     "asr_engine": "bijian",
