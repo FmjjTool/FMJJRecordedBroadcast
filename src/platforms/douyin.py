@@ -6,12 +6,50 @@
 from typing import Optional
 import re
 import json
+import threading
 import time
 from urllib.parse import unquote
 
 import httpx
 from .base import PlatformBase, VideoInfo, now_str
 from toolbox.browser import launch as pw_launch
+
+# aweme/post 直调被 Argus 风控拦死后进入冷却，避免每个账号都白打请求；
+# 浏览器兜底仍可取到登录态下的完整列表。
+_POST_HTTP_COOLDOWN = 600.0
+_post_http_blocked_until = 0.0
+_post_http_blocked_lock = threading.Lock()
+
+
+def _post_http_blocked_for() -> float:
+    """HTTP 直调冷却剩余秒数（0 = 可用）。"""
+    with _post_http_blocked_lock:
+        return max(0.0, _post_http_blocked_until - time.time())
+
+
+def _mark_post_http_blocked() -> None:
+    global _post_http_blocked_until
+    with _post_http_blocked_lock:
+        _post_http_blocked_until = time.time() + _POST_HTTP_COOLDOWN
+
+
+def _classify_post_response(status_code: int, text: str) -> str:
+    """aweme/post 响应分类：ok / blocked / non_json / transient。
+
+    抖音对非浏览器客户端常回 403「Blocked by ArgusSecurityPlugin」，
+    或回验证页 HTML；两者都应停止直调而不是反复 JSON 解析。
+    5xx 只算临时故障，不进入风控冷却。
+    """
+    body = (text or "").strip()
+    if status_code >= 500:
+        return "transient"
+    if status_code == 403 or "ArgusSecurityPlugin" in body:
+        return "blocked"
+    if not body:
+        return "blocked"
+    if not body.startswith(("{", "[")):
+        return "non_json"
+    return "ok"
 
 
 def _deep_find(d, key, depth=10):
@@ -89,7 +127,7 @@ class DouyinParser(PlatformBase):
                 items = data.get("item_list", [])
                 if items: return self._build_from_aweme(items[0], video_id)
             else:
-                print(f"[抖音] API 返回: {data.get('status_msg', '')}（可能需要登录 Cookie）")
+                print(f"[抖音] API 返回: {data.get('status_msg', '')}（可能需要登录）")
         except Exception as e:
             print(f"[抖音] API 请求失败: {e}")
         return None
@@ -270,8 +308,9 @@ class DouyinParser(PlatformBase):
         stop_check: 返回 True 时停止翻页并保留已获取的部分（取消时断点保留）。
 
         层级（2026-09-21 Playwright 页面数据层被安全 SDK 拦死后改为 HTTP 直调优先）：
-        ① HTTP 直调 aweme/post + a_bogus 签名（Cookie 优先，游客也试一次）
-        ② Playwright 浏览器兜底（Cookie → 游客）
+        ① HTTP 直调 aweme/post + a_bogus 签名（Cookie 优先，游客也试一次；
+           被 Argus 风控拦截后进入冷却，后续账号直接走浏览器）
+        ② Playwright 浏览器兜底（Cookie → 游客；游客态可能缺少最新作品）
         """
         sec_uid = self.extract_user_id(url_or_id)
         if not sec_uid:
@@ -322,14 +361,19 @@ class DouyinParser(PlatformBase):
             return result
 
         # 一级：各登录态 HTTP 只试一次，Cookie 不可用时仍尝试游客 HTTP。
-        for cookie in cookie_attempts:
-            if _stopped():
-                return _partial_result()
-            results = _run_stage(self._fetch_user_posts_http, cookie)
-            if _stopped():
-                return _partial_result()
-            if results:
-                return results
+        # 接口被 Argus 拦死后冷却期内跳过整级，避免每个账号都白打两轮请求。
+        # 冷却期直接走浏览器（首个账号被拦时已提示，这里不再逐账号刷日志）。
+        if _post_http_blocked_for() <= 0:
+            for cookie in cookie_attempts:
+                if _stopped():
+                    return _partial_result()
+                if _post_http_blocked_for() > 0:
+                    break
+                results = _run_stage(self._fetch_user_posts_http, cookie)
+                if _stopped():
+                    return _partial_result()
+                if results:
+                    return results
 
         # 二级：Playwright 兜底
         if _stopped():
@@ -348,7 +392,8 @@ class DouyinParser(PlatformBase):
             if results:
                 return results
             if cookie:
-                print("[抖音] Cookie 态未获取到数据（可能失效/触发风控），回退游客态...")
+                print("[抖音] 登录态未获取到数据（可能失效或触发风控），"
+                      "回退游客态；游客态可能缺少最新作品")
         return _partial_result()
 
     def _fetch_user_posts_http(self, sec_uid: str, count: int, cookie_str: str = "",
@@ -357,8 +402,11 @@ class DouyinParser(PlatformBase):
         """HTTP 直调 aweme/post（a_bogus 签名），max_cursor 链式翻页到 count 条。
 
         空响应或签名失败时返回空，让上层继续尝试；已回调作品由上层留作最终兜底。
+        风控拦截（403 Argus / 验证页 HTML / 空响应）会标记冷却，后续账号跳过直调。
         """
         if stop_check is not None and stop_check():
+            return []
+        if _post_http_blocked_for() > 0:
             return []
         import requests
         from multi_downloader import UA_PC, _douyin_abogus
@@ -367,7 +415,7 @@ class DouyinParser(PlatformBase):
         failed = False
         cursor = 0
         seen = set()
-        label = "抖音-Cookie" if cookie_str else "抖音"
+        label = "抖音-登录态" if cookie_str else "抖音"
         # 有限目标 50 页护栏；0=无上限（count≥10^12）翻到底（has_more=False 自然停）
         max_pages = 2500 if count >= 10**12 else 50
         with requests.Session() as s:
@@ -406,16 +454,35 @@ class DouyinParser(PlatformBase):
                         break
                     try:
                         r = s.get(f"{self.POST_API}?{query}&a_bogus={a_bogus}", timeout=20)
-                        if not r.text.strip():
-                            print("[抖音] HTTP 直调被风控（空响应）")
-                            failed = True
-                            break
-                        d = r.json()
-                        break
                     except Exception as e:
-                        print(f"[抖音] HTTP 直调第 {_attempt + 1} 次失败: {e}")
+                        print(f"[抖音] HTTP 直调第 {_attempt + 1} 次失败（{type(e).__name__}）")
                         if stop_check is None or not stop_check():
                             time.sleep(1.0)
+                        continue
+                    kind = _classify_post_response(r.status_code, r.text)
+                    if kind == "transient":
+                        print(f"[抖音] 接口暂时不可用（HTTP {r.status_code}），稍后重试")
+                        if stop_check is None or not stop_check():
+                            time.sleep(1.0)
+                        continue
+                    if kind == "blocked":
+                        _mark_post_http_blocked()
+                        print(f"[抖音] 接口被平台拦截（HTTP {r.status_code}），"
+                              "本次跳过直调并改用浏览器")
+                        failed = True
+                        break
+                    if kind == "non_json":
+                        _mark_post_http_blocked()
+                        print(f"[抖音] 接口返回非 JSON（HTTP {r.status_code}），改用浏览器兜底")
+                        failed = True
+                        break
+                    try:
+                        d = r.json()
+                    except ValueError:
+                        print(f"[抖音] 接口响应解析失败（HTTP {r.status_code}），改用浏览器兜底")
+                        failed = True
+                        break
+                    break
                 if d is None:
                     if stop_check is None or not stop_check():
                         failed = True
@@ -464,9 +531,10 @@ class DouyinParser(PlatformBase):
                     time.sleep(pause_secs * page_new / pause_every)
                 else:
                     time.sleep(0.6)
-        print(f"[抖音] HTTP 直调获取到 {len(results)} 条")
         if failed:
+            print("[抖音] HTTP 直调未取得数据，转浏览器兜底")
             return []
+        print(f"[抖音] HTTP 直调获取到 {len(results)} 条")
         return results[:count] if count > 0 else results
 
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "",
@@ -512,6 +580,8 @@ class DouyinParser(PlatformBase):
             page = context.new_page()
             collected = []
             revealed = 0
+            first_timeline = threading.Event()
+            login_state = "unknown"
 
             def _reveal(raw_items):
                 """把新解析到的作品立即回调给采集层（主线程按账号节奏揭示）。"""
@@ -537,14 +607,22 @@ class DouyinParser(PlatformBase):
                     pass
 
             def on_response(response):
+                nonlocal login_state
                 if response.status != 200:
                     return
                 url = response.url
+                if "user/profile/self" in url and login_state == "unknown":
+                    try:
+                        login_state = "ok" if (response.json() or {}).get("status_code") == 0 else "expired"
+                    except Exception:
+                        login_state = "expired"
                 # 匹配多种用户作品列表 API 端点
                 if any(p in url for p in ["aweme/v1/web/aweme/post", "/aweme/post/", "user/profile"]):
                     try:
                         data = response.json()
                         aweme_list = data.get("aweme_list", [])
+                        if "aweme/v1/web/aweme/post" in url or "/aweme/post/" in url:
+                            first_timeline.set()
                         new_raw = []
                         for a in aweme_list:
                             if a not in collected:
@@ -574,9 +652,30 @@ class DouyinParser(PlatformBase):
                     if new_raw:
                         _reveal(new_raw)
 
+                def _wait_first_timeline():
+                    # 首个作品列表响应可能晚于 DOM 就绪，最多等 12s，
+                    # 避免慢响应被后面的停滞检测误判成空结果
+                    for _ in range(24):
+                        if collected or first_timeline.is_set():
+                            return
+                        if stop_check is not None and stop_check():
+                            return
+                        page.wait_for_timeout(500)
+
+                _wait_first_timeline()
                 _merge_html_items()
                 if collected:
                     print(f"[抖音-Playwright] 首屏获取到 {len(collected)} 条")
+                elif not first_timeline.is_set() and (stop_check is None or not stop_check()):
+                    # 首屏可能遇到验证页/空白页：重载一次再等首个列表响应
+                    print("[抖音-Playwright] 首屏未获取到作品，重载一次...")
+                    first_timeline.clear()
+                    try:
+                        page.reload(wait_until="domcontentloaded", timeout=60000)
+                        _wait_first_timeline()
+                        _merge_html_items()
+                    except Exception as e:
+                        print(f"[抖音-Playwright] 重载失败: {e}")
 
                 # 滚动触发 API 翻页加载，凑够 count 条即停；0=无上限（count≥10^12）
                 # 放开轮数护栏，靠停滞检测收尾（连续 3 轮无新数据 = 已到底）
@@ -607,6 +706,9 @@ class DouyinParser(PlatformBase):
                 if not collected and (stop_check is None or not stop_check()):
                     page.wait_for_timeout(5000)
                     _merge_html_items()
+
+                if collected and cookie_str and login_state == "expired":
+                    print("[抖音] 登录状态已失效，本次仅获取公开作品，可能缺少最新内容")
 
                 for item in collected[:count]:
                     info = self._build_from_aweme(item, str(item.get("aweme_id", "")))
@@ -669,7 +771,7 @@ class DouyinParser(PlatformBase):
             from auth import get_cookie
             ck = get_cookie("douyin")
             if ck:
-                print("[抖音] 游客解析失败，接入 Cookie 重试...")
+                print("[抖音] 游客解析失败，接入登录态重试...")
                 # Playwright 游客已在一级试过，Cookie 重试只走 API + 页面
                 result = self._parse_once(url, None, cookie=ck, allow_playwright=False)
         return result
