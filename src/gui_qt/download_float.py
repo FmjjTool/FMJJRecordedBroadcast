@@ -2,30 +2,64 @@
 
 所有页面的批量下载进度统一到这里展示（不再占原页面 UI）：
 - 主窗口的**子控件**（不是独立顶层窗口）：随主窗口移动/缩放/最小化，
-  拖标题栏可在窗口内移动，拖右下角手柄可调整大小；仅隐藏不取消任务
-- 每个下载批次一张卡片：头部（来源 + 汇总 + 关闭卡片）+ 内嵌 DownloadPanel
+  拖标题栏可在窗口内移动，拖四周/四角可调整大小；仅隐藏不取消任务
+- 每个下载批次一张紧凑卡片：头部（来源 + 取消 + 关闭）+ 内嵌 DownloadPanel
+- 窗口高度自动贴合卡片内容，超过主窗口可用高度才滚动；不把行摊开留白
 - 并发批次各自独立卡片，互不干扰；关闭卡片只隐藏进度，下载继续后台跑
 
 页面用法（主线程调用）：
     from gui_qt.download_float import get_float
     card = get_float().add_batch("来源页", total=12, threads=8)  # total 未知传 None
     download(..., on_task_event=card.handle_event)              # 任意线程安全
-    card.finish("完成 12 条")                                  # 头部显示汇总
+    card.finish("完成 12 条")                                  # 状态行显示汇总
 事件协议与 DownloadPanel 一致：plan / start / bytes / seg / done / skip。
 """
 
 import threading
 import weakref
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import icon_btn_style, post_to_main
-from gui_qt.download_panel import DownloadPanel
+from gui_qt.download_panel import DownloadPanel, ElidedLabel
+from gui_qt.navigation import line_icon
+
+_FLOAT_QSS = """
+DownloadFloatWindow {
+    background: palette(window);
+    border: 1px solid palette(mid);
+    border-radius: 12px;
+}
+QLabel#downloadFloatTitle {
+    color: palette(window-text);
+    font-size: 14px;
+    font-weight: bold;
+}
+QLabel#downloadFloatCount {
+    color: palette(placeholder-text);
+    font-size: 11px;
+}
+QFrame#downloadBatchCard {
+    background: palette(base);
+    border: 1px solid palette(shadow);
+    border-radius: 12px;
+}
+QLabel#downloadBatchTitle {
+    color: palette(window-text);
+    font-size: 14px;
+    font-weight: bold;
+}
+QPushButton#downloadBatchCancel {
+    font-size: 11px;
+    padding: 0 10px;
+}
+"""
 
 
 class DownloadBatch:
@@ -98,46 +132,48 @@ _BATCHES = []
 
 
 class BatchCard(QFrame):
-    """一个下载批次的卡片：头部（来源/汇总/取消/关闭）+ 内嵌 DownloadPanel。"""
+    """一个下载批次的紧凑卡片：头部（来源/取消/关闭）+ 内嵌 DownloadPanel。"""
 
     def __init__(self, source: str, cancel_cb=None, parent=None):
         super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setObjectName("downloadBatchCard")
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self._cancel_cb = cancel_cb
         self._finished = False   # finish() 后置 True（下载中心据此自动收起）
         self.batch = None
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 6, 8, 8)
-        root.setSpacing(4)
+        root.setContentsMargins(12, 10, 12, 12)
+        root.setSpacing(8)
 
         head = QHBoxLayout()
-        head.setSpacing(6)
-        title = QLabel(f"{source}")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        head.addWidget(title)
-        self.summary_label = QLabel("")
-        self.summary_label.setStyleSheet("color: #888; font-size: 12px;")
-        head.addWidget(self.summary_label, 1)
+        head.setSpacing(8)
+        self.title_label = ElidedLabel(elide=Qt.ElideRight)
+        self.title_label.setObjectName("downloadBatchTitle")
+        self.title_label.set_full_text(source)
+        head.addWidget(self.title_label, 1)
         if cancel_cb is not None:
             self.cancel_btn = QPushButton("取消")
-            self.cancel_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+            self.cancel_btn.setObjectName("downloadBatchCancel")
+            self.cancel_btn.setFixedHeight(26)
             self.cancel_btn.setToolTip("取消该批次下载（已完成的文件保留）")
             self.cancel_btn.clicked.connect(self._on_cancel)
             head.addWidget(self.cancel_btn)
         else:
             self.cancel_btn = None
-        close_btn = QPushButton("×")
-        close_btn.setFixedSize(24, 20)
-        close_btn.setStyleSheet(icon_btn_style(False))
-        close_btn.setToolTip("关闭卡片（下载继续后台进行）")
-        close_btn.clicked.connect(self._dismiss)
-        head.addWidget(close_btn)
+        self.close_btn = QPushButton()
+        self.close_btn.setFixedSize(30, 26)
+        self.close_btn.setIconSize(QSize(16, 16))
+        self.close_btn.setStyleSheet(icon_btn_style(False))
+        self.close_btn.setToolTip("关闭卡片（下载继续后台进行）")
+        self.close_btn.clicked.connect(self._dismiss)
+        head.addWidget(self.close_btn)
         root.addLayout(head)
 
         self.panel = DownloadPanel(self)
         root.addWidget(self.panel)
+        self.panel.content_changed.connect(self._notify_content_changed)
+        self._sync_icons()
 
     # ---------- 对外（主线程） ----------
 
@@ -151,23 +187,40 @@ class BatchCard(QFrame):
         self.panel.handle_event(event, *args)
 
     def finish(self, text: str):
-        """批次结束：头部显示汇总。"""
-        post_to_main(lambda: self._set_summary(text))
+        """批次结束：状态行显示汇总。"""
+        post_to_main(lambda: self._set_summary(text) if isValid(self) else None)
 
     # ---------- 内部 ----------
 
+    def _window(self):
+        parent = self.parent()
+        while parent is not None and not isinstance(parent, DownloadFloatWindow):
+            parent = parent.parent()
+        return parent if isinstance(parent, DownloadFloatWindow) else None
+
+    def _notify_content_changed(self):
+        win = self._window()
+        if win is not None:
+            win._schedule_fit()
+
+    def _sync_icons(self):
+        self.close_btn.setIcon(line_icon("close", theme.color("text"), 16))
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self._sync_icons()
+
     def _set_summary(self, text: str):
-        self.summary_label.setText(text)
         self._finished = True
+        self.panel.set_status(text)
         if self.cancel_btn is not None:
             self.cancel_btn.setEnabled(False)
             self.cancel_btn.setVisible(False)
         # 通知下载中心：所有批次都结束后自动收起（延迟一点，先让用户看到结果）
-        parent = self.parent()
-        while parent is not None and not isinstance(parent, DownloadFloatWindow):
-            parent = parent.parent()
-        if isinstance(parent, DownloadFloatWindow):
-            parent._schedule_auto_close()
+        win = self._window()
+        if win is not None:
+            win._schedule_auto_close()
 
     def _on_cancel(self):
         if self._cancel_cb is not None:
@@ -182,13 +235,11 @@ class BatchCard(QFrame):
     def _dismiss(self):
         # 浮窗现在是主窗口的子控件，card.window() 会返回 MainWindow，
         # 直接取父级（卡片由 add_batch 以浮窗为 parent 创建）
-        parent = self.parent()
-        while parent is not None and not isinstance(parent, DownloadFloatWindow):
-            parent = parent.parent()
-        if isinstance(parent, DownloadFloatWindow):
+        win = self._window()
+        if win is not None:
             if self.batch is not None:
                 self.batch.dismissed = True
-            parent.remove_card(self)
+            win.remove_card(self)
 
 
 class DownloadFloatWindow(QWidget):
@@ -199,7 +250,7 @@ class DownloadFloatWindow(QWidget):
     全部批次结束后自动收起。
     """
 
-    _MIN_W, _MIN_H = 420, 240
+    _MIN_W, _MIN_H = 460, 150
     _EDGE = 6        # 四周缩放热区（px）
     _AUTO_CLOSE_MS = 1500   # 全部批次结束后延迟收起，让用户看到完成状态
 
@@ -215,79 +266,101 @@ class DownloadFloatWindow(QWidget):
         self._off = (20, 20)
         self._drag_pos = None
         self._resize_state = None   # (方向, 按下时全局坐标, 按下时几何)
+        self._user_resized = False  # 用户手动调过大小后不再自动贴合高度
+        self._collapsed = False
+        self._expanded_h = self._MIN_H
         self.setMinimumSize(self._MIN_W, self._MIN_H)
         self.setMouseTracking(True)   # 悬停边缘时切换缩放光标
 
-        screen = QApplication.primaryScreen()
-        avail_h = screen.availableGeometry().height() if screen else 1040
-        w, h = 640, max(360, int(avail_h * 0.5))
+        w = 600
         if main_window is not None:
             # 初始尺寸不超过主窗口（子控件超出部分会被裁掉）
             w = min(w, max(self._MIN_W, main_window.width() - 40))
-            h = min(h, max(self._MIN_H, main_window.height() - 40))
-        self.resize(w, h)
+        self.resize(w, self._MIN_H)
         if main_window is not None:
             main_window.installEventFilter(self)   # 主窗口缩放时重新吸附
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(6)
+        root.setContentsMargins(12, 10, 12, 12)
+        root.setSpacing(8)
 
         # 标题栏（拖动区）
         self._title_bar = QWidget()
         self._title_bar.setFixedHeight(26)
         tlay = QHBoxLayout(self._title_bar)
         tlay.setContentsMargins(2, 0, 0, 0)
-        tlay.setSpacing(6)
+        tlay.setSpacing(8)
+        self._title_icon = QLabel()
+        self._title_icon.setFixedSize(16, 16)
+        tlay.addWidget(self._title_icon)
         tlabel = QLabel("下载中心")
-        tlabel.setStyleSheet("font-weight: bold; font-size: 13px;")
+        tlabel.setObjectName("downloadFloatTitle")
         tlay.addWidget(tlabel)
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet("color: #888; font-size: 11px;")
-        tlay.addWidget(self._count_label, 1)
-        self._collapse_btn = QPushButton("—")
-        self._collapse_btn.setFixedSize(24, 22)
+        self._count_label.setObjectName("downloadFloatCount")
+        tlay.addWidget(self._count_label)
+        tlay.addStretch(1)
+        self._collapse_btn = QPushButton()
+        self._collapse_btn.setFixedSize(30, 26)
+        self._collapse_btn.setIconSize(QSize(16, 16))
         self._collapse_btn.setStyleSheet(icon_btn_style(False))
-        self._collapse_btn.setToolTip("收起 / 展开卡片列表")
+        self._collapse_btn.setToolTip("收起列表")
         self._collapse_btn.clicked.connect(self._toggle_collapse)
         tlay.addWidget(self._collapse_btn)
-        tclose = QPushButton("×")
-        tclose.setFixedSize(24, 22)
-        tclose.setStyleSheet(icon_btn_style(False))
-        tclose.setToolTip("隐藏浮窗（下载继续后台进行）")
-        tclose.clicked.connect(self.close)
-        tlay.addWidget(tclose)
+        self._close_btn = QPushButton()
+        self._close_btn.setFixedSize(30, 26)
+        self._close_btn.setIconSize(QSize(16, 16))
+        self._close_btn.setStyleSheet(icon_btn_style(False))
+        self._close_btn.setToolTip("隐藏浮窗（下载继续后台进行）")
+        self._close_btn.clicked.connect(self.close)
+        tlay.addWidget(self._close_btn)
         root.addWidget(self._title_bar)
 
-        # 卡片滚动区：高度由窗口大小决定（四周边缘/四角都能拖动调整）
+        # 卡片滚动区：高度由内容决定，超过主窗口可用高度才滚动
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setMinimumHeight(120)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         host = QWidget()
         self._cards_box = QVBoxLayout(host)
         self._cards_box.setContentsMargins(0, 0, 0, 0)
         self._cards_box.setSpacing(8)
+        self._cards_box.addStretch(1)
         self._scroll.setWidget(host)
         root.addWidget(self._scroll, 1)
 
         # 实底：QWidget 子类默认不画 QSS 背景（顶层窗口有窗口底色，子控件
         # 会变成透明露出后面的页面）→ 显式开启样式背景
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "DownloadFloatWindow { background: palette(window);"
-            " border: 1px solid palette(shadow); border-radius: 10px; }")
+        self.setStyleSheet(_FLOAT_QSS)
+        self._sync_icons()
         for batch in _BATCHES:
             if not batch.dismissed:
                 self._add_card(batch)
+
+    def _sync_icons(self):
+        color = theme.color("text")
+        self._title_icon.setPixmap(line_icon("download", theme.color("link"), 16).pixmap(16, 16))
+        self._collapse_btn.setIcon(
+            line_icon("expand" if self._collapsed else "minus", color, 16))
+        self._close_btn.setIcon(line_icon("win_close", color, 16))
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self._sync_icons()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_icons()
 
     def _add_card(self, batch):
         card = BatchCard(batch.source, cancel_cb=batch.cancel if batch._cancel_cb else None,
                          parent=self)
         card.batch = batch
-        # 单列竖向堆叠：新批次插到最上方，各自平均分配高度（超出则滚动）
+        # 单列竖向堆叠：新批次插到最上方（超出可视高度由外层滚动区接管）
         self._cards.insert(0, card)
-        self._cards_box.insertWidget(0, card, 1)
+        self._cards_box.insertWidget(0, card)
         batch.attach(card)
         return card
 
@@ -306,19 +379,21 @@ class DownloadFloatWindow(QWidget):
 
     def add_batch(self, source: str, total=None, threads: int = 1,
                   cancel_cb=None) -> DownloadBatch:
-        """新建批次卡片并显示浮窗；返回卡片（handle_event 可跨线程调用）。"""
+        """新建批次卡片并显示浮窗；返回批次（handle_event 可跨线程调用）。"""
         batch = DownloadBatch(source, cancel_cb=cancel_cb)
         # 已结束批次只留少量汇总；活动任务不会随窗口/卡片关闭被移除。
         finished = [b for b in _BATCHES if b._finished][-19:]
         active = [b for b in _BATCHES if not b._finished]
         _BATCHES[:] = [*finished, *active, batch]
+        if self._collapsed:
+            self._set_collapsed(False)
         batch.plan(total, threads)
         self._add_card(batch)
-        self._scroll.setVisible(True)
         self.show()
         self.raise_()
         self._apply_anchor()
         self._update_count()
+        self._schedule_fit()
         return batch
 
     def remove_card(self, card: BatchCard):
@@ -328,6 +403,40 @@ class DownloadFloatWindow(QWidget):
         card.setParent(None)
         card.deleteLater()
         self._update_count()
+        self._schedule_fit()
+
+    # ==================== 高度贴合内容 ====================
+
+    def _max_height(self) -> int:
+        host = self._main_window
+        if host is not None and not self.isWindow() and host.height() > 0:
+            return max(self._MIN_H, host.height() - 40)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return 720
+        return max(self._MIN_H, int(screen.availableGeometry().height() * 0.8))
+
+    def _content_height(self) -> int:
+        self._cards_box.activate()
+        margins = self.layout().contentsMargins()
+        return (margins.top() + self._title_bar.sizeHint().height()
+                + self.layout().spacing()
+                + self._cards_box.sizeHint().height()
+                + margins.bottom() + 2)
+
+    def _schedule_fit(self):
+        QTimer.singleShot(0, lambda: self._fit_to_content() if isValid(self) else None)
+
+    def _fit_to_content(self, force: bool = False):
+        if self._unloading or self._collapsed:
+            return
+        if self._user_resized and not force:
+            return
+        desired = max(self.minimumHeight(),
+                      min(self._content_height(), self._max_height()))
+        if desired != self.height():
+            self.resize(self.width(), desired)
+            self._apply_anchor()
 
     # ==================== 完成后自动收起 ====================
 
@@ -356,9 +465,26 @@ class DownloadFloatWindow(QWidget):
             self.close()
 
     def _toggle_collapse(self):
-        vis = not self._scroll.isVisible()
-        self._scroll.setVisible(vis)
-        self._collapse_btn.setText("—" if vis else "▢")
+        self._set_collapsed(not self._collapsed)
+
+    def _set_collapsed(self, collapsed: bool):
+        self._collapsed = collapsed
+        self._scroll.setVisible(not collapsed)
+        self._sync_icons()
+        if collapsed:
+            self._expanded_h = max(self.height(), self._MIN_H)
+            self.setMinimumHeight(0)
+            margins = self.layout().contentsMargins()
+            h = (margins.top() + self._title_bar.height()
+                 + margins.bottom() + 2)
+            self.resize(self.width(), h)
+        else:
+            self.setMinimumHeight(self._MIN_H)
+            if self._user_resized:
+                self.resize(self.width(), max(self._MIN_H, self._expanded_h))
+            else:
+                self._fit_to_content(force=True)
+        self._collapse_btn.setToolTip("收起列表" if not collapsed else "展开列表")
         self._apply_anchor()
 
     def _update_offsets(self):
@@ -453,6 +579,7 @@ class DownloadFloatWindow(QWidget):
             limit = (host.height() - 20 - geo.y()) if child else (1 << 20)
             h = min(max(min_h, h + d.y()), max(min_h, limit))
         self.setGeometry(max(0, x), max(0, y), w, h)
+        self._user_resized = True
 
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton:
@@ -462,8 +589,8 @@ class DownloadFloatWindow(QWidget):
                                       self.geometry())
                 ev.accept()
                 return
-            # 标题栏拖动（子控件坐标：顶部留白 8 + 标题栏 26）
-            if ev.position().y() <= 40:
+            # 标题栏拖动（子控件坐标：顶部留白 10 + 标题栏 26）
+            if ev.position().y() <= self._title_bar.geometry().bottom() + 4:
                 self._drag_pos = ev.globalPosition().toPoint() - self.pos()
                 ev.accept()
                 return

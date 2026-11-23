@@ -1,10 +1,8 @@
-"""IDM 风格下载进度面板（已获取 / 账号获取页共用）。
+"""下载进度面板（全局下载中心内嵌使用）。
 
-参考 Internet Download Manager 的下载对话视觉：
-- 单文件模式（segments）：文件名 + 下方 N 段分段进度条（每段对应一个下载线程）
-  + 统计行（已下/总大小 · 速度 · 百分比 · N 线程）；
-- 批量模式（parallel/serial）：N 个「文件名槽位」行并行显示（每行文件名 +
-  进度条 + 状态），槽位完成后自动被队列中的下一个文件占用（IDM 队列风格）。
+- 批量模式（parallel/serial）：每个下载槽位一行：序号 + 文件名 + 进度条 + 状态。
+  槽位完成后自动被队列中的下一个文件占用（IDM 队列风格）；
+- 单文件模式（segments）：文件名 + N 段分段进度条（每段一个下载线程）+ 统计行。
 
 数据源：media_downloader.download_media / download_ops.do_bilibili_download 的
 on_task_event 回调 → DownloadPanel.handle_event（线程安全，内部 post_to_main）。
@@ -13,18 +11,21 @@ on_task_event 回调 → DownloadPanel.handle_event（线程安全，内部 post
 import threading
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QVBoxLayout, QWidget,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main
 
-_ACCENT = "#2e7d32"        # 与全局 QSS QProgressBar::chunk 同色
-_FAIL = "#c62828"
-_SKIP = "#9aa3b0"
+_STATE_STYLES = {
+    "idle": "color: theme(muted);",
+    "active": "color: theme(link);",
+    "ok": "color: theme(success);",
+    "fail": "color: theme(danger);",
+}
 
 
 def _fmt_bytes(n: float) -> str:
@@ -41,12 +42,13 @@ def _fmt_speed(n: float) -> str:
     return _fmt_bytes(n) + "/s"
 
 
-class _ElidedLabel(QLabel):
+class ElidedLabel(QLabel):
     """按控件实际宽度省略文本（完整文本进 tooltip），避免长文件名撑宽整行。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, elide: Qt.TextElideMode = Qt.ElideMiddle):
         super().__init__(parent)
         self._full_text = ""
+        self._elide = elide
         # 不把文本长度计入最小宽度，布局才能把标签压缩到可用空间内
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setMinimumWidth(40)
@@ -62,14 +64,11 @@ class _ElidedLabel(QLabel):
 
     def _apply_elide(self):
         self.setText(self.fontMetrics().elidedText(
-            self._full_text, Qt.ElideMiddle, max(24, self.width())))
+            self._full_text, self._elide, max(24, self.width())))
 
 
 class SegmentBar(QWidget):
-    """IDM 风格分段进度条：N 个格子，每格独立填充比例（一格 = 一个下载线程）。
-
-    单文件多线程下载时，文件名下方这 N 格与线程数一一对应。
-    """
+    """IDM 风格分段进度条：N 个格子，每格独立填充比例（一格 = 一个下载线程）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,31 +85,26 @@ class SegmentBar(QWidget):
             self.update()
 
     def paintEvent(self, _ev):
-        from gui_qt.theme import is_dark
-        dark = is_dark()
-        empty = QColor("#23262f" if dark else "#e4e8ee")
-        edge = QColor("#333" if dark else "#ffffff")
-        fill = QColor(_ACCENT)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
         n = len(self._segs)
         if n == 0:
             return
-        gap = 2
+        track = QColor(theme.color("accent_soft"))
+        fill = QColor(theme.color("accent"))
+        gap = 4
         cw = (w - gap * (n - 1)) / n
-        bar_h = h - 4
+        bar_h = max(6, h - 4)
         for i, (done, total) in enumerate(self._segs):
             x = i * (cw + gap)
             p.setPen(Qt.NoPen)
-            p.setBrush(empty)
-            p.drawRoundedRect(int(x + 0.5), 2, int(cw + 0.5), bar_h, 2, 2)
+            p.setBrush(track)
+            p.drawRoundedRect(QRectF(x, 2, cw, bar_h), 4, 4)
             if total > 0 and done > 0:
                 frac = max(0.0, min(1.0, done / total))
-                if frac > 0:
-                    p.setBrush(fill)
-                    p.drawRoundedRect(int(x + 0.5), 2,
-                                      max(2, int(cw * frac)), bar_h, 2, 2)
+                p.setBrush(fill)
+                p.drawRoundedRect(QRectF(x, 2, max(2.0, cw * frac), bar_h), 4, 4)
         p.end()
 
 
@@ -119,35 +113,42 @@ class _SlotRow(QWidget):
 
     def __init__(self, idx: int, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(34)
+        self.setFixedHeight(30)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(2, 1, 2, 1)
-        lay.setSpacing(6)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
         self.no_label = QLabel(f"{idx + 1}")
-        self.no_label.setFixedWidth(22)
-        self.no_label.setStyleSheet("color: #888; font-size: 13px;")
-        self.name_label = _ElidedLabel()
-        self.name_label.setStyleSheet("font-size: 14px;")
-        self.name_label.set_full_text("—")
+        self.no_label.setFixedWidth(18)
+        self.no_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.no_label.setProperty("role", "caption")
+        self.name_label = ElidedLabel()
+        self.name_label.set_full_text("")
         self.bar = QProgressBar()
-        self.bar.setFixedHeight(16)
-        self.bar.setMinimumWidth(120)
-        self.bar.setStyleSheet(
-            "QProgressBar { font-size: 12px; border-radius: 4px; }")
-        self.state_label = QLabel("")
-        self.state_label.setFixedWidth(44)
-        self.state_label.setStyleSheet("font-size: 13px; color: #888;")
+        self.bar.setFixedSize(180, 16)
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(True)
+        self.bar.setStyleSheet("QProgressBar { font-size: 11px; }")
+        self.state_label = QLabel("未开始")
+        self.state_label.setFixedWidth(52)
+        self.state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.state_label.setStyleSheet(
+            f"font-size: 11px; {_STATE_STYLES['idle']}")
         lay.addWidget(self.no_label)
         lay.addWidget(self.name_label, 1)
         lay.addWidget(self.bar)
         lay.addWidget(self.state_label)
 
+    def _set_state(self, state: str, text: str):
+        self.state_label.setText(text)
+        self.state_label.setStyleSheet(
+            f"font-size: 11px; {_STATE_STYLES[state]}")
+
     def bind(self, name: str):
         self.name_label.set_full_text(name)
         self.bar.setRange(0, 100)
         self.bar.setValue(0)
-        self.state_label.setText("")
-        self.state_label.setStyleSheet("font-size: 11px; color: #888;")
+        self._set_state("active", "下载中")
 
     def progress(self, done: int, total: int):
         if total > 0:
@@ -155,29 +156,36 @@ class _SlotRow(QWidget):
             self.bar.setValue(int(done * 100 / total))
         else:
             self.bar.setRange(0, 0)  # busy
+        if self.state_label.text() != "下载中":
+            self._set_state("active", "下载中")
 
     def finish(self, ok: bool):
-        self.bar.setRange(0, 100)
-        self.bar.setValue(100 if ok else 100)
-        self.state_label.setText("完成" if ok else "失败")
-        self.state_label.setStyleSheet(
-            f"font-size: 11px; color: {_ACCENT if ok else _FAIL};")
+        if self.bar.maximum() == 0:
+            self.bar.setRange(0, 100)
+        if ok:
+            self.bar.setValue(100)
+        self._set_state("ok" if ok else "fail", "已完成" if ok else "失败")
 
 
 class DownloadPanel(QFrame):
     """下载进度面板：单文件 IDM 分段模式 / 批量文件名槽位模式。
 
+    面板高度始终贴合内容；超出下载中心可视高度时由外层滚动区接管，
+    面板内部不再嵌套第二个滚动条。结构变化通过 content_changed 通知外层。
+
     页面用法：
         panel.begin()                     # 下载开始：显示面板并复位
         download(..., on_task_event=panel.handle_event)
-        # 结束后 stats 文本用 panel.finish(text) 或页面日志呈现
+        panel.finish(text)                # 结束后汇总文案
     handle_event(event, *args) 由下载线程直接调用（内部线程安全）。
     """
 
+    content_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setVisible(False)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self._lock = threading.Lock()
         # ---- 事件状态（下载线程写，post 到主线程渲染）----
         self._mode = None          # "segments" / "parallel" / "serial"
@@ -190,45 +198,44 @@ class DownloadPanel(QFrame):
         self._free_slots: list[int] = []
         # ---- UI ----
         self._root = QVBoxLayout(self)
-        self._root.setContentsMargins(10, 8, 10, 8)
+        self._root.setContentsMargins(0, 0, 0, 0)
         self._root.setSpacing(6)
         # 单文件模式控件
-        self._single_name_label = _ElidedLabel()
-        self._single_name_label.setStyleSheet(
-            "font-size: 14px; font-weight: bold;")
+        self._single_name_label = ElidedLabel(elide=Qt.ElideRight)
+        self._single_name_label.setStyleSheet("font-weight: bold;")
         self._single_name_label.setWordWrap(False)
         self._seg_bar = SegmentBar()
         self._single_stats = QLabel("")
-        self._single_stats.setStyleSheet("color: #888; font-size: 13px;")
+        self._single_stats.setProperty("role", "caption")
         # 批量模式控件
         self._batch_head = QLabel("")
-        self._batch_head.setStyleSheet("color: #888; font-size: 13px;")
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        # 进度条必须完整可见：内容宽度不产生横向滚动（文件名按宽度省略）
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._batch_head.setProperty("role", "caption")
         self._slots_host = QWidget()
         self._slots_lay = QVBoxLayout(self._slots_host)
         self._slots_lay.setContentsMargins(0, 0, 0, 0)
-        self._slots_lay.setSpacing(2)
-        self._scroll.setWidget(self._slots_host)
+        self._slots_lay.setSpacing(4)
         self._rows: list[_SlotRow] = []
         # 空态
         self._placeholder = QLabel("等待下载任务…")
-        self._placeholder.setStyleSheet("color: #888;")
+        self._placeholder.setProperty("role", "caption")
         self._root.addWidget(self._placeholder)
+        self.setFixedHeight(max(24, self._placeholder.sizeHint().height() + 4))
 
     # ==================== 对外（主线程） ====================
 
     def begin(self):
         """下载开始：显示面板并复位到空态（主线程调用）。"""
         self._reset_state()
+        self._placeholder.setText("等待下载任务…")
         post_to_main(self._build_placeholder)
 
     def finish(self, text: str):
-        """下载结束：底部汇总文案（保留面板，主线程调用）。"""
-        post_to_main(lambda: self._set_summary(text))
+        """下载结束：汇总文案（主线程调用）。"""
+        post_to_main(self._set_summary, text)
+
+    def set_status(self, text: str):
+        """任意线程设置汇总文案（批量挂到状态行，单文件挂到统计行）。"""
+        post_to_main(self._set_summary, text)
 
     # ==================== 事件入口（任意线程） ====================
 
@@ -264,7 +271,7 @@ class DownloadPanel(QFrame):
                 nslots = 0
             else:
                 # serial = 单槽位顺序；parallel = 线程数个槽位（IDM 队列）
-                nslots = 1 if mode == "serial" else min(threads, count)
+                nslots = 1 if mode == "serial" else max(1, min(threads, count))
                 self._free_slots = list(range(nslots))
         post_to_main(lambda: self._build_ui(mode, nslots, threads))
 
@@ -278,9 +285,17 @@ class DownloadPanel(QFrame):
                                 "t": None, "speed": 0.0}
                 post_to_main(lambda: self._single_started(name))
                 return
+            if self._mode is None:
+                # 下载函数未先发 plan：按单槽位顺序下载兜底，不能只留空卡片
+                self._mode = "serial"
+                self._threads = 1
+                self._total_cnt = 0
+                self._free_slots = [0]
+                post_to_main(lambda: self._build_ui("serial", 1, 1))
             slot = self._alloc_slot(name)
         if slot is not None:
-            post_to_main(lambda: self._rows[slot].bind(name))
+            post_to_main(lambda: self._bind_row(slot, name))
+            self._refresh_batch_head(self._done_cnt, self._total_cnt)
 
     # ---------- seg（segments 模式） ----------
 
@@ -312,7 +327,7 @@ class DownloadPanel(QFrame):
             else:
                 slot = self._slot_by_name.get(name)
                 if slot is not None:
-                    post_to_main(lambda: self._rows[slot].progress(done, total))
+                    post_to_main(lambda: self._row_progress(slot, done, total))
 
     # ---------- done / skip ----------
 
@@ -328,7 +343,7 @@ class DownloadPanel(QFrame):
             slot = self._slot_by_name.pop(name, None)
             if slot is not None:
                 self._free_slots.append(slot)
-                post_to_main(lambda: self._rows[slot].finish(ok))
+                post_to_main(lambda: self._row_finish(slot, ok))
         self._refresh_batch_head(done, total)
 
     def _on_skip(self, name: str):
@@ -353,10 +368,16 @@ class DownloadPanel(QFrame):
             mode = self._mode
         if mode == "segments":
             return
-        text = (f"多文件并行下载 · 完成 {done}/{total}"
-                if mode == "parallel" else f"下载中 · 完成 {done}/{total}")
+        if total > 0:
+            text = f"已完成 {done}/{total}"
+        elif done <= 0:
+            text = "下载中"
+        else:
+            text = f"已完成 {done} 个"
         if mode == "parallel":
-            text += f" · {n} 线程"
+            text = f"并行下载 · {text} · {n} 线程"
+        else:
+            text = f"顺序下载 · {text}"
         post_to_main(lambda: self._batch_head.setText(text))
 
     # ==================== UI 构建（主线程） ====================
@@ -368,18 +389,28 @@ class DownloadPanel(QFrame):
             if w is not None:
                 w.hide()
                 w.setParent(None)
-            lay = item.layout()
-            if lay is not None:
-                while lay.count():
-                    sub = lay.takeAt(0)
 
     def _build_placeholder(self):
         self._clear_layout()
         self._root.addWidget(self._placeholder)
         self._placeholder.show()  # 被 _clear_layout hide 过，重新入局需显式复位
-        self.setFixedHeight(56)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setFixedHeight(max(24, self._placeholder.sizeHint().height() + 4))
         self.setVisible(True)
+        self.content_changed.emit()
+
+    def _reset_rows(self, nslots: int):
+        while self._slots_lay.count():
+            item = self._slots_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self._rows = []
+        for i in range(nslots):
+            row = _SlotRow(i)
+            self._slots_lay.addWidget(row)
+            self._rows.append(row)
 
     def _build_ui(self, mode: str, nslots: int, threads: int):
         self._clear_layout()
@@ -390,39 +421,46 @@ class DownloadPanel(QFrame):
             for w in (self._single_name_label, self._seg_bar, self._single_stats):
                 self._root.addWidget(w)
                 w.show()  # _clear_layout 的 hide() 需显式复位，否则二次构建后永久不可见
-            self.setFixedHeight(110)
-            self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            height = (self._single_name_label.sizeHint().height()
+                      + self._seg_bar.minimumHeight()
+                      + self._single_stats.sizeHint().height()
+                      + self._root.spacing() * 2)
+            self.setFixedHeight(max(72, height))
         else:
-            # 重建槽位行
-            for w in (self._rows):
-                w.setParent(None)
-            self._rows = []
-            for i in range(nslots):
-                row = _SlotRow(i)
-                self._slots_lay.addWidget(row)
-                self._rows.append(row)
-            self._batch_head.setText("准备下载…")
+            self._reset_rows(nslots)
+            self._batch_head.setText("准备下载")
             self._root.addWidget(self._batch_head)
-            self._root.addWidget(self._scroll)
+            self._root.addWidget(self._slots_host)
             # 复用控件被 _clear_layout hide() 过，重新入局后必须 show()
-            # （自动下载批次：add_batch 预 plan 一次 + 下载函数 plan 一次 =
-            #  二次 _build_ui，不 show 则面板永久空白）
             self._batch_head.show()
-            self._scroll.show()
-            # 槽位全展开（浮窗滚动区统一管理总高度）；仅线程特别多时内部截断。
-            # 卡片本身可被下载中心拉伸，面板用最小高度 + Expanding 填满剩余空间。
-            self.setMinimumHeight(min(46 + nslots * 40, 760))
-            self.setMaximumHeight(16777215)
-            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self._slots_host.show()
+            height = (self._batch_head.sizeHint().height()
+                      + self._root.spacing()
+                      + nslots * 30
+                      + max(0, nslots - 1) * self._slots_lay.spacing())
+            self.setFixedHeight(max(48, height))
         self.setVisible(True)
+        self.content_changed.emit()
+
+    def _bind_row(self, slot: int, name: str):
+        if 0 <= slot < len(self._rows):
+            self._rows[slot].bind(name)
+
+    def _row_progress(self, slot: int, done: int, total: int):
+        if 0 <= slot < len(self._rows):
+            self._rows[slot].progress(done, total)
+
+    def _row_finish(self, slot: int, ok: bool):
+        if 0 <= slot < len(self._rows):
+            self._rows[slot].finish(ok)
 
     def _single_started(self, name: str):
         self._single_name_label.set_full_text(f"{name}")
         self._seg_bar.set_count(self._threads)
-        self._single_stats.setText(f"0% · {self._threads} 线程")
+        self._single_stats.setText(f"下载中 · 0% · {self._threads} 线程")
 
     def _single_progress(self, done: int, total: int, speed: float, threads: int):
-        parts = []
+        parts = ["下载中"]
         if total > 0:
             parts.append(f"{_fmt_bytes(done)} / {_fmt_bytes(total)}")
             parts.append(f"{done * 100 / total:.1f}%")
@@ -438,16 +476,19 @@ class DownloadPanel(QFrame):
             self._seg_bar.set_count(self._threads)
             for i in range(self._threads):
                 self._seg_bar.set_seg(i, 1, 1)
-            text = f"下载完成 · {_fmt_bytes(done)} · {self._threads} 线程"
+            text = f"已完成 · {_fmt_bytes(done)} · {self._threads} 线程"
         else:
-            text = f"下载失败（已下 {_fmt_bytes(done)}）"
+            text = f"失败（已下 {_fmt_bytes(done)}）"
         self._single_stats.setText(text)
 
     def _set_summary(self, text: str):
-        # 批量模式把汇总挂到 head；单文件模式挂到 stats（不覆盖文件名）
+        # 批量模式把汇总挂到状态行；单文件模式挂到统计行（不覆盖文件名）
         with self._lock:
             mode = self._mode
-        if mode == "segments":
+        if mode is None:
+            self._placeholder.setText(text or "等待下载任务…")
+            self._build_placeholder()
+        elif mode == "segments":
             self._single_stats.setText(text)
         else:
             self._batch_head.setText(text)
