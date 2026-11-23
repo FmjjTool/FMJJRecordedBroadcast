@@ -493,14 +493,13 @@
       bar.style.height = thumbH + 'px';
       box.appendChild(bar);
     }
-    var pendingY = 0, pendingX = 0, last = 0, timer = null;
+    var pendingY = 0, pendingX = 0, timer = null;
     function flush() {
       timer = null;
       if (!pendingY && !pendingX) return;
       send({ a: 'scroll', id: node.id, dy: Math.round(pendingY), dx: Math.round(pendingX) });
       pendingY = 0;
       pendingX = 0;
-      last = Date.now();
     }
     box.addEventListener('wheel', function (event) {
       var unit = event.deltaMode === 1 ? 16 : 1;

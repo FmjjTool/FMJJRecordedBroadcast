@@ -1,24 +1,25 @@
 :root {
-  --window: #f3f5f9;
-  --surface: #ffffff;
-  --surface-alt: #f0f3f8;
-  --text: #263449;
-  --muted: #5f7089;
-  --border: #dce3ed;
-  --accent: #356bd6;
-  --accent-soft: #e8effc;
-  --accent-hover: #275bc1;
-  --on-accent: #ffffff;
-  --link: #285ebc;
-  --danger: #b93842;
-  --danger-soft: #fff1f2;
-  --success: #18754e;
-  --warning: #99600c;
-  --input-border: #cbd5e3;
-  --hover: #e8effc;
-  --disabled-bg: #f0f3f8;
-  --header-bg: #f0f3f8;
-  --scroll: #cbd5e3;
+  /* 实际配色由 theme.py 导出的令牌在首帧覆盖；此处只用系统色占位，不复制色板。 */
+  --window: Canvas;
+  --surface: Canvas;
+  --surface-alt: ButtonFace;
+  --text: CanvasText;
+  --muted: GrayText;
+  --border: ButtonBorder;
+  --accent: Highlight;
+  --accent-soft: ButtonFace;
+  --accent-hover: Highlight;
+  --on-accent: HighlightText;
+  --link: LinkText;
+  --danger: Mark;
+  --danger-soft: ButtonFace;
+  --success: LinkText;
+  --warning: Mark;
+  --input-border: ButtonBorder;
+  --hover: ButtonFace;
+  --disabled-bg: ButtonFace;
+  --header-bg: ButtonFace;
+  --scroll: GrayText;
 }
 
 * { box-sizing: border-box; }
@@ -143,7 +144,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 .label { display: flex; white-space: nowrap; overflow: hidden; }
 .label.wrap { white-space: pre-wrap; word-break: break-word; }
 .label img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.label.role-title { font-size: 23px; font-weight: bold; color: var(--text); }
+.label.role-title { font-size: 22px; font-weight: bold; color: var(--text); }
 .label.role-subtitle, .label.role-muted { color: var(--muted); }
 .label.role-caption { font-size: 11px; color: var(--muted); }
 .label.role-sectionTitle { font-size: 14px; font-weight: bold; color: var(--text); }
@@ -196,7 +197,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   height: 16px;
   flex: none;
   border: 1px solid var(--input-border);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--on-accent);
   display: flex;
@@ -337,7 +338,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   align-items: center;
   justify-content: center;
   border: 1px solid var(--input-border);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--on-accent);
   font-size: 11px;
@@ -372,7 +373,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   align-items: center;
   justify-content: center;
   border: 1px solid var(--input-border);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--on-accent);
   font-size: 11px;

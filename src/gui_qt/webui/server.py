@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hmac
 import json
-import logging
 import secrets
 import sys
 import threading
@@ -17,8 +16,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from gui_qt.page_index import nav_groups
-
-_log = logging.getLogger(__name__)
 
 _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -225,9 +222,11 @@ def _make_handler(app: WebUiServer):
             self.end_headers()
             app._bridge.subscribe()
             try:
-                while True:
+                while not app._bridge.closed:
                     result = app._bridge.wait_snapshot(since, 20.0)
                     if result is None:
+                        if app._bridge.closed:
+                            break
                         self.wfile.write(b": ping\n\n")
                         self.wfile.flush()
                         continue

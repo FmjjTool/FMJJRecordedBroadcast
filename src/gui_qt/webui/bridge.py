@@ -13,7 +13,6 @@ import time
 from typing import Any
 
 from PySide6.QtCore import Q_ARG, QMetaObject, QObject, QPoint, QTimer, Qt, Slot
-from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QAbstractButton, QComboBox, QDoubleSpinBox, QLineEdit, QListWidget,
     QPlainTextEdit, QScrollArea, QSlider, QSpinBox, QTabWidget, QTableWidget,
@@ -52,6 +51,10 @@ class WebUiBridge(QObject):
         self._timer.start()
 
     # ---------- 供 HTTP 线程调用 ----------
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def subscribe(self) -> None:
         with self._cond:
