@@ -78,6 +78,53 @@ def _filter_posts_by_date(posts, lo_ts, hi_ts):
     return keep
 
 
+def _newest_publish_ts(posts):
+    """本批作品里可解析的最新发布时间（epoch 秒）；无则 None。"""
+    newest = None
+    for p in posts or []:
+        ts = _parse_publish_ts(getattr(p, "publish_time", ""))
+        if ts is not None and (newest is None or ts > newest):
+            newest = ts
+    return newest
+
+
+def _stored_newest_ts(platform, author_id):
+    """已入库同作者的最新发布时间；读取失败返回 None。"""
+    if not author_id:
+        return None
+    try:
+        from toolbox import collected_store
+        texts = collected_store.newest_publish_times(platform, author_id)
+    except Exception:
+        return None
+    newest = None
+    for text in texts:
+        ts = _parse_publish_ts(text)
+        if ts is not None and (newest is None or ts > newest):
+            newest = ts
+    return newest
+
+
+def _freshness_warning(platform, parser, account, posts):
+    """本次最新比已入库更旧时给出提示；仅抖音启用，避免其它平台误报。"""
+    if platform != "douyin" or not posts:
+        return ""
+    try:
+        author_id = parser.extract_user_id(account.url)
+    except Exception:
+        author_id = ""
+    known = _stored_newest_ts(platform, author_id)
+    current = _newest_publish_ts(posts)
+    if known is None or current is None or current >= known - 3600:
+        return ""
+
+    def _fmt(ts):
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+    return (f"本次最新 {_fmt(current)} 比已入库的 {_fmt(known)} 更旧，"
+            "可能未取到最新（游客态或登录失效时常见）")
+
+
 def collect_accounts(
     accounts, count, *,
     rate_count=0, rate_interval=0, incremental=False,
@@ -231,6 +278,9 @@ def collect_accounts(
         proxy._local.buf = buf
         try:
             posts = parser.fetch_user_posts(a.url, count=fetch_count, **kwargs)
+            warn = _freshness_warning(platform, parser, a, posts)
+            if warn:
+                print(warn)
         except Exception as e:  # noqa: BLE001
             return i, a, platform, [], str(e)
         finally:

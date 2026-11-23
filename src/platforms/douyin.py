@@ -4,10 +4,13 @@
 """
 
 from typing import Optional
+import atexit
+import queue
 import re
 import json
 import threading
 import time
+from concurrent.futures import Future
 from urllib.parse import unquote
 
 import httpx
@@ -50,6 +53,160 @@ def _classify_post_response(status_code: int, text: str) -> str:
     if not body.startswith(("{", "[")):
         return "non_json"
     return "ok"
+
+
+# ---------- Playwright 浏览器会话池 ----------
+# 复用浏览器与登录/游客上下文，避免每个账号重复启动；sync API 不允许跨线程，
+# 因此每个池线程独占一个 Playwright 实例，调用线程只等待 Future。
+_PW_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+_PW_ARGS = ["--disable-blink-features=AutomationControlled",
+            "--no-sandbox", "--disable-dev-shm-usage"]
+_PW_STEALTH_JS = """
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
+    window.chrome = { runtime: {} };
+"""
+_PW_IDLE_SECONDS = 120.0
+_PW_MAX_WORKERS = 2
+
+_log_local = threading.local()
+
+
+def _log(msg: str) -> None:
+    """浏览器线程内先写本地 sink，由调用线程回放，保持账号日志前缀。"""
+    sink = getattr(_log_local, "sink", None)
+    if sink is None:
+        print(msg)
+    else:
+        sink.append(msg)
+
+
+class _DouyinPwPool:
+    """上限固定的浏览器会话池；每个线程独占 browser + 登录/游客 context。"""
+
+    def __init__(self, max_workers: int = _PW_MAX_WORKERS,
+                 idle_seconds: float = _PW_IDLE_SECONDS):
+        self._max = max(1, int(max_workers))
+        self._idle = float(idle_seconds)
+        self._queue: queue.Queue = queue.Queue()
+        self._lock = threading.Lock()
+        self._workers: list[threading.Thread] = []
+        self._closed = False
+
+    def submit(self, fn) -> Future:
+        fut: Future = Future()
+        with self._lock:
+            if self._closed:
+                fut.set_exception(RuntimeError("浏览器会话已关闭"))
+                return fut
+            self._queue.put((fut, fn))
+            self._ensure_worker_locked()
+        return fut
+
+    def _ensure_worker_locked(self) -> None:
+        self._workers = [t for t in self._workers if t.is_alive()]
+        if len(self._workers) >= self._max:
+            return
+        if self._queue.qsize() > len(self._workers):
+            t = threading.Thread(target=self._run, name="douyin-pw", daemon=True)
+            t.start()
+            self._workers.append(t)
+
+    def _run(self) -> None:
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = pw_launch(p, headless=True, args=list(_PW_ARGS))
+                contexts = {}
+                try:
+                    while True:
+                        try:
+                            fut, fn = self._queue.get(timeout=self._idle)
+                        except queue.Empty:
+                            with self._lock:
+                                if not self._queue.empty():
+                                    continue
+                                self._workers = [
+                                    t for t in self._workers
+                                    if t is not threading.current_thread()]
+                                return
+                        if fut is None:
+                            return
+                        if not fut.set_running_or_notify_cancel():
+                            continue
+                        sink = []
+                        _log_local.sink = sink
+                        try:
+                            result = fn(browser, contexts)
+                        except BaseException as exc:  # noqa: BLE001
+                            fut.set_exception(exc)
+                            try:
+                                if not browser.is_connected():
+                                    break
+                            except Exception:
+                                break
+                        else:
+                            fut.set_result((result, sink))
+                        finally:
+                            _log_local.sink = None
+                finally:
+                    for cookie, ctx in list(contexts.values()):
+                        try:
+                            ctx.close()
+                        except Exception:
+                            pass
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+        except BaseException as exc:  # noqa: BLE001 - 启动失败要唤醒排队任务
+            with self._lock:
+                others = [t for t in self._workers
+                          if t.is_alive() and t is not threading.current_thread()]
+            if not others:
+                while True:
+                    try:
+                        fut, _fn = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if fut is not None and not fut.done():
+                        fut.set_exception(exc)
+        finally:
+            with self._lock:
+                self._workers = [t for t in self._workers
+                                 if t.is_alive() and t is not threading.current_thread()]
+                # 浏览器崩溃后仍有排队任务时补一个线程，避免 Future 永远等待
+                if (not self._closed and not self._queue.empty()
+                        and len(self._workers) < self._max):
+                    t = threading.Thread(target=self._run, name="douyin-pw", daemon=True)
+                    t.start()
+                    self._workers.append(t)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            workers = list(self._workers)
+        for _ in workers:
+            self._queue.put((None, None))
+        for t in workers:
+            t.join(timeout=5)
+        while True:
+            try:
+                fut, _fn = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if fut is not None and not fut.done():
+                fut.set_exception(RuntimeError("浏览器会话已关闭"))
+        with self._lock:
+            self._workers = []
+
+
+_pw_pool = _DouyinPwPool()
+atexit.register(_pw_pool.close)
 
 
 def _deep_find(d, key, depth=10):
@@ -540,187 +697,211 @@ class DouyinParser(PlatformBase):
     def _fetch_pw_once(self, sec_uid: str, count: int, cookie_str: str = "",
                        pause_every: int = 0, pause_secs: float = 0.0,
                        stop_check=None, on_items=None) -> list:
-        """单次 Playwright 抓取用户作品列表（cookie_str 为空即游客态）。"""
+        """提交到浏览器会话池；调用线程回放浏览器线程日志。"""
         if stop_check is not None and stop_check():
             return []
-        from playwright.sync_api import sync_playwright
+        fut = _pw_pool.submit(
+            lambda browser, contexts: self._fetch_pw_in_browser(
+                browser, contexts, sec_uid, count, cookie_str,
+                pause_every=pause_every, pause_secs=pause_secs,
+                stop_check=stop_check, on_items=on_items))
+        result, logs = fut.result()
+        for line in logs:
+            print(line)
+        return result
 
-        results = []
-
-        with sync_playwright() as p:
-            browser = pw_launch(
-                p, headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-            )
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-            )
-            # 注入隐身脚本
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-                Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
-                window.chrome = { runtime: {} };
-            """)
-            if cookie_str:
-                for item in cookie_str.split("; "):
-                    if "=" in item:
-                        name, value = item.split("=", 1)
-                        try:
-                            context.add_cookies([{"name": name, "value": value, "domain": ".douyin.com", "path": "/"}])
-                        except Exception:
-                            pass
-
-            page = context.new_page()
-            collected = []
-            revealed = 0
-            first_timeline = threading.Event()
-            login_state = "unknown"
-
-            def _reveal(raw_items):
-                """把新解析到的作品立即回调给采集层（主线程按账号节奏揭示）。"""
-                nonlocal revealed
-                if on_items is None:
-                    return
-                items = []
-                for a in raw_items:
-                    if count > 0 and revealed + len(items) >= count:
-                        break
+    def _pw_context(self, browser, contexts, cookie_str: str):
+        """复用登录/游客上下文；Cookie 变化时重建，避免沿用旧登录态。"""
+        state = "login" if cookie_str else "guest"
+        cached = contexts.get(state)
+        if cached is not None:
+            cached_cookie, ctx = cached
+            try:
+                if cached_cookie == cookie_str and not ctx.is_closed():
+                    return ctx
+            except Exception:
+                pass
+            try:
+                ctx.close()
+            except Exception:
+                pass
+            contexts.pop(state, None)
+        ctx = browser.new_context(
+            user_agent=_PW_UA,
+            viewport={"width": 1920, "height": 1080},
+            locale="zh-CN",
+        )
+        ctx.add_init_script(_PW_STEALTH_JS)
+        if cookie_str:
+            for item in cookie_str.split("; "):
+                if "=" in item:
+                    name, value = item.split("=", 1)
                     try:
-                        info = self._build_from_aweme(a, str(a.get("aweme_id", "")))
-                        info.raw_url = self._aweme_url(a)
-                        items.append(info)
+                        ctx.add_cookies([{"name": name, "value": value,
+                                          "domain": ".douyin.com", "path": "/"}])
                     except Exception:
                         pass
-                if not items:
-                    return
-                revealed += len(items)
+        contexts[state] = (cookie_str, ctx)
+        return ctx
+
+    def _fetch_pw_in_browser(self, browser, contexts, sec_uid: str, count: int,
+                             cookie_str: str = "", pause_every: int = 0,
+                             pause_secs: float = 0.0, stop_check=None,
+                             on_items=None) -> list:
+        """在池线程内抓取单个账号（cookie_str 为空即游客态）。"""
+        if stop_check is not None and stop_check():
+            return []
+        context = self._pw_context(browser, contexts, cookie_str)
+        results = []
+        page = context.new_page()
+        collected = []
+        revealed = 0
+        first_timeline = threading.Event()
+        login_state = "unknown"
+
+        def _reveal(raw_items):
+            """把新解析到的作品立即回调给采集层（主线程按账号节奏揭示）。"""
+            nonlocal revealed
+            if on_items is None:
+                return
+            items = []
+            for a in raw_items:
+                if count > 0 and revealed + len(items) >= count:
+                    break
                 try:
-                    on_items(items)
+                    info = self._build_from_aweme(a, str(a.get("aweme_id", "")))
+                    info.raw_url = self._aweme_url(a)
+                    items.append(info)
+                except Exception:
+                    pass
+            if not items:
+                return
+            revealed += len(items)
+            try:
+                on_items(items)
+            except Exception:
+                pass
+
+        def on_response(response):
+            nonlocal login_state
+            if response.status != 200:
+                return
+            url = response.url
+            if "user/profile/self" in url and login_state == "unknown":
+                try:
+                    login_state = "ok" if (response.json() or {}).get("status_code") == 0 else "expired"
+                except Exception:
+                    login_state = "expired"
+            # 匹配多种用户作品列表 API 端点
+            if any(p in url for p in ["aweme/v1/web/aweme/post", "/aweme/post/", "user/profile"]):
+                try:
+                    data = response.json()
+                    aweme_list = data.get("aweme_list", [])
+                    # 只把「有作品」的列表响应当作首屏就绪；空响应多为预取/风控，
+                    # 不能因此提前结束等待
+                    if aweme_list and ("aweme/v1/web/aweme/post" in url or "/aweme/post/" in url):
+                        first_timeline.set()
+                    new_raw = []
+                    for a in aweme_list:
+                        if a not in collected:
+                            collected.append(a)
+                            new_raw.append(a)
+                    if new_raw:
+                        _reveal(new_raw)
                 except Exception:
                     pass
 
-            def on_response(response):
-                nonlocal login_state
-                if response.status != 200:
-                    return
-                url = response.url
-                if "user/profile/self" in url and login_state == "unknown":
-                    try:
-                        login_state = "ok" if (response.json() or {}).get("status_code") == 0 else "expired"
-                    except Exception:
-                        login_state = "expired"
-                # 匹配多种用户作品列表 API 端点
-                if any(p in url for p in ["aweme/v1/web/aweme/post", "/aweme/post/", "user/profile"]):
-                    try:
-                        data = response.json()
-                        aweme_list = data.get("aweme_list", [])
-                        # 只把「有作品」的列表响应当作首屏就绪；空响应多为预取/风控，
-                        # 不能因此提前结束等待
-                        if aweme_list and ("aweme/v1/web/aweme/post" in url or "/aweme/post/" in url):
-                            first_timeline.set()
-                        new_raw = []
-                        for a in aweme_list:
-                            if a not in collected:
-                                collected.append(a)
-                                new_raw.append(a)
-                        if new_raw:
-                            _reveal(new_raw)
-                    except Exception:
-                        pass
+        page.on("response", on_response)
 
-            page.on("response", on_response)
+        try:
+            user_url = f"https://www.douyin.com/user/{sec_uid}"
+            _log(f"[抖音-Playwright] 加载: {user_url[:60]}...")
+            # 抖音主页资源重、加载慢，20s 实测会超时（2026-09-18），放宽到 60s
+            page.goto(user_url, wait_until="domcontentloaded", timeout=60000)
 
-            try:
-                user_url = f"https://www.douyin.com/user/{sec_uid}"
-                print(f"[抖音-Playwright] 加载: {user_url[:60]}...")
-                # 抖音主页资源重、加载慢，20s 实测会超时（2026-09-18），放宽到 60s
-                page.goto(user_url, wait_until="domcontentloaded", timeout=60000)
+            # 页面内嵌数据（RENDER_DATA/SSR 首屏）合并进 collected（与 API 拦截去重）
+            def _merge_html_items():
+                html = page.content()
+                new_raw = []
+                for item in self._extract_aweme_list_from_html(html):
+                    if item not in collected:
+                        collected.append(item)
+                        new_raw.append(item)
+                if new_raw:
+                    _reveal(new_raw)
 
-                # 页面内嵌数据（RENDER_DATA/SSR 首屏）合并进 collected（与 API 拦截去重）
-                def _merge_html_items():
-                    html = page.content()
-                    new_raw = []
-                    for item in self._extract_aweme_list_from_html(html):
-                        if item not in collected:
-                            collected.append(item)
-                            new_raw.append(item)
-                    if new_raw:
-                        _reveal(new_raw)
-
-                def _wait_first_timeline():
-                    # 首个作品列表响应可能晚于 DOM 就绪，最多等 12s，
-                    # 避免慢响应被后面的停滞检测误判成空结果
-                    for _ in range(24):
-                        if collected or first_timeline.is_set():
-                            return
-                        if stop_check is not None and stop_check():
-                            return
-                        page.wait_for_timeout(500)
-
-                _wait_first_timeline()
-                _merge_html_items()
-                if collected:
-                    print(f"[抖音-Playwright] 首屏获取到 {len(collected)} 条")
-                elif not first_timeline.is_set() and (stop_check is None or not stop_check()):
-                    # 首屏可能遇到验证页/空白页：重载一次再等首个列表响应
-                    print("[抖音-Playwright] 首屏未获取到作品，重载一次...")
-                    first_timeline.clear()
-                    try:
-                        page.reload(wait_until="domcontentloaded", timeout=60000)
-                        _wait_first_timeline()
-                        _merge_html_items()
-                    except Exception as e:
-                        print(f"[抖音-Playwright] 重载失败: {e}")
-
-                # 滚动触发 API 翻页加载，凑够 count 条即停；0=无上限（count≥10^12）
-                # 放开轮数护栏，靠停滞检测收尾（连续 3 轮无新数据 = 已到底）
-                rounds = 400 if count >= 10**12 else 5
-                prev, stalls = -1, 0
-                for i in range(rounds):
-                    if len(collected) >= count:
-                        break
+            def _wait_first_timeline():
+                # 首个作品列表响应可能晚于 DOM 就绪，最多等 12s，
+                # 避免慢响应被后面的停滞检测误判成空结果
+                for _ in range(24):
+                    if collected or first_timeline.is_set():
+                        return
                     if stop_check is not None and stop_check():
-                        print(f"[抖音-Playwright] 收到停止信号，保留已获取 {len(collected)} 条")
+                        return
+                    page.wait_for_timeout(500)
+
+            _wait_first_timeline()
+            if not collected:
+                # 只有 API 没数据时才解析页面 HTML（page.content 在大页面上开销明显）
+                _merge_html_items()
+            if collected:
+                _log(f"[抖音-Playwright] 首屏获取到 {len(collected)} 条")
+            elif not first_timeline.is_set() and (stop_check is None or not stop_check()):
+                # 首屏可能遇到验证页/空白页：重载一次再等首个列表响应
+                _log("[抖音-Playwright] 首屏未获取到作品，重载一次...")
+                first_timeline.clear()
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=60000)
+                    _wait_first_timeline()
+                    if not collected:
+                        _merge_html_items()
+                except Exception as e:
+                    _log(f"[抖音-Playwright] 重载失败: {e}")
+
+            # 滚动触发 API 翻页加载，凑够 count 条即停；0=无上限（count≥10^12）
+            # 放开轮数护栏，靠停滞检测收尾（连续 3 轮无新数据 = 已到底）
+            rounds = 400 if count >= 10**12 else 5
+            prev, stalls = -1, 0
+            for i in range(rounds):
+                if len(collected) >= count:
+                    break
+                if stop_check is not None and stop_check():
+                    _log(f"[抖音-Playwright] 收到停止信号，保留已获取 {len(collected)} 条")
+                    break
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2000)
+                if len(collected) == prev:
+                    stalls += 1
+                    if stalls >= 3:
                         break
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    page.wait_for_timeout(2000)
-                    _merge_html_items()
-                    if len(collected) == prev:
-                        stalls += 1
-                        if stalls >= 3:
-                            break
-                    else:
-                        stalls = 0
-                    prev = len(collected)
-                    if (i + 1) % 10 == 0:
-                        print(f"[抖音-Playwright] 已滚动 {i + 1} 轮 · 累计 {len(collected)} 条，继续...")
-                    # 限流：每次滚动加载约一页（20 条），按「每 pause_every 条停 pause_secs 秒」折算
-                    if pause_every > 0 and pause_secs > 0:
-                        page.wait_for_timeout(int(pause_secs * 20 / pause_every * 1000))
+                else:
+                    stalls = 0
+                prev = len(collected)
+                if (i + 1) % 10 == 0:
+                    _log(f"[抖音-Playwright] 已滚动 {i + 1} 轮 · 累计 {len(collected)} 条，继续...")
+                # 限流：每次滚动加载约一页（20 条），按「每 pause_every 条停 pause_secs 秒」折算
+                if pause_every > 0 and pause_secs > 0:
+                    page.wait_for_timeout(int(pause_secs * 20 / pause_every * 1000))
 
-                if not collected and (stop_check is None or not stop_check()):
-                    page.wait_for_timeout(5000)
-                    _merge_html_items()
+            if not collected and (stop_check is None or not stop_check()):
+                page.wait_for_timeout(5000)
+                _merge_html_items()
 
-                if collected and cookie_str and login_state == "expired":
-                    print("[抖音] 登录状态已失效，本次仅获取公开作品，可能缺少最新内容")
+            if collected and cookie_str and login_state == "expired":
+                _log("[抖音] 登录状态已失效，本次仅获取公开作品，可能缺少最新内容")
 
-                for item in collected[:count]:
-                    info = self._build_from_aweme(item, str(item.get("aweme_id", "")))
-                    info.raw_url = self._aweme_url(item)
-                    results.append(info)
+            for item in collected[:count]:
+                info = self._build_from_aweme(item, str(item.get("aweme_id", "")))
+                info.raw_url = self._aweme_url(item)
+                results.append(info)
 
-            except Exception as e:
-                print(f"[抖音-Playwright] 页面加载失败: {e}")
-            finally:
-                browser.close()
+        except Exception as e:
+            _log(f"[抖音-Playwright] 页面加载失败: {e}")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
 
         return results
 

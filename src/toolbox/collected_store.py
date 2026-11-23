@@ -197,6 +197,25 @@ def iter_metadata(db_path=None):
             yield storage_key, key, platform or "", published or ""
 
 
+def newest_publish_times(platform: str, author_sec_uid: str,
+                         limit: int = 100, db_path=None) -> list[str]:
+    """读取指定平台/作者已入库的最近发布时间文本（只读，供新鲜度对比）。"""
+    if not platform or not author_sec_uid:
+        return []
+    with ExitStack() as resources:
+        conn = _connect(db_path)
+        resources.callback(conn.close)
+        rows = conn.execute(
+            "SELECT json_extract(data, '$.publish_time') FROM videos "
+            "WHERE platform = ? "
+            "AND CASE WHEN json_valid(data) THEN json_type(data)='object' ELSE 0 END "
+            "AND json_extract(data, '$.raw_data.author.sec_uid') = ? "
+            "ORDER BY json_extract(data, '$.publish_time') DESC LIMIT ?",
+            (platform, author_sec_uid, max(1, int(limit))))
+        resources.callback(rows.close)
+        return [r[0] for r in rows if r[0]]
+
+
 def read_by_keys(keys, *, include_raw=True, db_path=None):
     """按一页稳定存储键读取；展示页不解码原始响应，显式导出仍返回完整数据。"""
     from platforms.base import VideoInfo
