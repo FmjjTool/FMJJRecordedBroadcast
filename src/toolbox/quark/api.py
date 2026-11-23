@@ -526,8 +526,15 @@ class QuarkClient:
             headers.update(extra_headers)
         if signature:
             headers["Authorization"] = signature
-        resp = self.session.put(url, data=blob, headers=headers,
-                                timeout=PART_TIMEOUT)
+        try:
+            resp = self.session.put(url, data=blob, headers=headers,
+                                    timeout=PART_TIMEOUT)
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError):
+            # 代理隧道异常（企业代理/本机代理对对象存储域名回 502 或断 TLS）
+            # 与云盘协议无关，直连通常能过；只在失败后降级
+            resp = self.session.put(url, data=blob, headers=headers,
+                                    timeout=PART_TIMEOUT,
+                                    proxies={"http": None, "https": None})
         if resp.status_code not in (200, 201):
             text = resp.text[:200]
             if "SignatureDoesNotMatch" in text or "RequestTimeTooSkewed" in text:

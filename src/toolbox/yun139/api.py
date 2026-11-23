@@ -22,7 +22,6 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -426,14 +425,25 @@ class Yun139Client:
                     if not url:
                         break
                     try:
-                        with open(path, "rb") as handle:
-                            handle.seek(offsets[offset_index])
-                            body = _PartReader(handle, length)
-                            resp = self.session.put(
-                                url, data=body,
-                                headers={"Content-Type": "application/octet-stream",
-                                         "Content-Length": str(length)},
-                                timeout=PART_TIMEOUT)
+                        def _send(proxies=None):
+                            # 每次重建 reader：重试时旧 body 已经消费过，不能复用
+                            with open(path, "rb") as handle:
+                                handle.seek(offsets[offset_index])
+                                body = _PartReader(handle, length)
+                                extra = {"proxies": proxies} if proxies is not None else {}
+                                return self.session.put(
+                                    url, data=body,
+                                    headers={"Content-Type": "application/octet-stream",
+                                             "Content-Length": str(length)},
+                                    timeout=PART_TIMEOUT, **extra)
+
+                        try:
+                            resp = _send()
+                        except (requests.exceptions.ProxyError,
+                                requests.exceptions.SSLError):
+                            # 代理隧道异常（企业代理/本机代理对 EOS 域名回 502 或断 TLS）
+                            # 与云盘协议无关，直连通常能过；只在失败后降级，不影响正常代理环境
+                            resp = _send({"http": None, "https": None})
                         if resp.status_code in (200, 201, 204):
                             return offset_index, length
                         last_error = Yun139Error(resp.status_code, resp.text[:160], "uploadUrl")
@@ -458,32 +468,18 @@ class Yun139Client:
                     -1, f"分片 {number} 上传失败{hint}：{last_error}", "uploadUrl")
 
             pending = [i for i in range(len(plan)) if i not in completed]
-            lanes = min(self.lanes, len(pending)) if pending else 0
-            if lanes > 1:
-                with ThreadPoolExecutor(max_workers=lanes) as pool:
-                    futures = {pool.submit(upload_part, i): i for i in pending}
-                    try:
-                        for future in as_completed(futures):
-                            offset_index, length = future.result()
-                            completed.add(offset_index)
-                            while done in completed:
-                                done += 1
-                            sent += length
-                            _persist()
-                            report(sent)
-                    except Exception:
-                        for future in futures:
-                            future.cancel()
-                        raise
-            else:
-                for index in pending:
-                    offset_index, length = upload_part(index)
-                    completed.add(offset_index)
-                    while done in completed:
-                        done += 1
-                    sent += length
-                    _persist()
-                    report(sent)
+            # 移动云盘的 EOS 要求分片**严格按 partNumber 顺序**上传：乱序会回
+            # `400 InvalidPartOrder: fail to get previous part hash context`，
+            # 并发下还会先表现为 SSL EOF（连接被服务端掐断）。
+            # 总耗时受上行带宽限制，顺序上传并不会更慢，但能消掉这整类失败。
+            for index in pending:
+                offset_index, length = upload_part(index)
+                completed.add(offset_index)
+                while done in completed:
+                    done += 1
+                sent += length
+                _persist()
+                report(sent)
 
             self._post("/file/complete", {
                 "contentHash": sha256, "contentHashAlgorithm": "SHA256",

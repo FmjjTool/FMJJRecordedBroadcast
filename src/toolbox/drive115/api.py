@@ -992,10 +992,22 @@ class Drive115Client:
             def close(self) -> None:
                 self._handle.close()
 
+        def _send(target, proxies=None):
+            extra = {"proxies": proxies} if proxies is not None else {}
+            return self.session.put(url, data=target, headers=headers,
+                                    timeout=(30, 600), **extra)
+
         reader = _Reader()
         try:
-            resp = self.session.put(url, data=reader, headers=headers,
-                                    timeout=(30, 600))
+            try:
+                resp = _send(reader)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError):
+                # 代理隧道异常（企业代理/本机代理对 OSS 域名回 502 或断 TLS）：
+                # 关掉旧流、进度归零，改直连从头重试一次
+                reader.close()
+                sent["done"] = 0
+                reader = _Reader()
+                resp = _send(reader, {"http": None, "https": None})
         except (requests.RequestException, OSError) as exc:
             raise Drive115Error(-1, f"OSS 上传中断：{exc}", "/oss")
         finally:
