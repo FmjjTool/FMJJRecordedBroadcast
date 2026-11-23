@@ -621,7 +621,9 @@ class DouyinParser(PlatformBase):
                     try:
                         data = response.json()
                         aweme_list = data.get("aweme_list", [])
-                        if "aweme/v1/web/aweme/post" in url or "/aweme/post/" in url:
+                        # 只把「有作品」的列表响应当作首屏就绪；空响应多为预取/风控，
+                        # 不能因此提前结束等待
+                        if aweme_list and ("aweme/v1/web/aweme/post" in url or "/aweme/post/" in url):
                             first_timeline.set()
                         new_raw = []
                         for a in aweme_list:
