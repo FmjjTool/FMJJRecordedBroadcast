@@ -12,10 +12,12 @@
   匹配阈值、附加信息、写入版权开关、保存设置
 """
 
+import errno
 import os
 import re
 from pathlib import Path
 import threading
+import time
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
@@ -39,6 +41,31 @@ from toolbox.utils import (
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from toolbox import bili_upload as BU
+
+
+# Windows：ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION
+_SHARING_WINERRORS = frozenset({32, 33})
+
+
+def _is_sharing_violation(error):
+    """文件正被占用（预览/播放器/杀软/同步盘）导致的改名失败。"""
+    if getattr(error, "winerror", None) in _SHARING_WINERRORS:
+        return True
+    return getattr(error, "errno", None) in (errno.EACCES, errno.EBUSY, 32)
+
+
+def _rename_with_retry(src, dst, attempts=6, delay=0.3):
+    """改名；短暂占用时稍等重试（调用前已让本软件内的预览松手）。"""
+    from toolbox.organize_engine import _locked_reader
+    for attempt in range(attempts):
+        try:
+            with _locked_reader(src):
+                os.rename(src, dst)
+            return
+        except OSError as error:
+            if attempt + 1 >= attempts or not _is_sharing_violation(error):
+                raise
+            time.sleep(delay)
 
 
 class RenamePage(BasePage):
@@ -764,6 +791,16 @@ class RenamePage(BasePage):
         self.confirm_btn.setEnabled(not busy and self.current_video_idx < len(self.current_videos))
         self.skip_btn.setEnabled(not busy and self.current_video_idx < len(self.current_videos))
 
+    def _release_media_holders(self, path):
+        """本软件内其它页面（如视频操作预览）正占用该视频时，先让它松开文件句柄。"""
+        for page in list(getattr(self.app, "pages", {}).values()):
+            release = getattr(page, "release_media_file", None)
+            if callable(release):
+                try:
+                    release(path)
+                except Exception:  # 释放失败不阻断改名，重试会再兜一次
+                    continue
+
     def _do_rename(self):
         if self._busy or not (0 <= self.current_video_idx < len(self.current_videos)):
             return
@@ -786,14 +823,21 @@ class RenamePage(BasePage):
         enabled = self.rename_extra_check.isChecked()
         info = self.rename_config.extra_info.strip()
         root = self._loaded_root
+        self._release_media_holders(src)
         self._set_busy(True)
         self._load_token = object()
         self._log("正在重命名并完成所选元数据处理…")
         def work():
-            from toolbox.organize_engine import _locked_reader
-            with _locked_reader(src):
-                if src != dst:
-                    os.rename(src, dst)
+            if src != dst:
+                try:
+                    _rename_with_retry(src, dst)
+                except OSError as error:
+                    if _is_sharing_violation(error):
+                        raise OSError(
+                            f"视频仍被占用，改名未执行：{os.path.basename(src)}"
+                            "（可能有程序正在预览/播放或同步该文件，关闭后重试）"
+                        ) from error
+                    raise
             sidecars, sidecar_skipped = (
                 rebase_companions(src, dst) if src != dst else ([], []))
             metadata_ok, message = self._write_copyright_metadata(dst, enabled, info)

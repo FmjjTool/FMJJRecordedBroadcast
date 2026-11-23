@@ -124,9 +124,30 @@ class EditorPage(BasePage):
         return self.running
 
     def release_view_resources(self):
+        self._release_preview()
+        self.video.hide()
+
+    def release_media_file(self, path):
+        """其它页面要改名/移动视频前调用：预览占用同一文件时立即松开句柄。"""
+        current = self.current_path
+        if not current or not path:
+            return
+        try:
+            same = (os.path.normcase(os.path.abspath(current))
+                    == os.path.normcase(os.path.abspath(path)))
+        except (OSError, ValueError):
+            same = current == path
+        if same:
+            self._release_preview()
+
+    def _release_preview(self):
+        """停播并清空媒体源：QMediaPlayer 暂停时仍持有文件句柄，Windows 上会挡住改名。"""
+        position = self.player.position()
+        if position > 0:
+            self._resume_ms = position  # 回来时接着看，不因松开句柄丢进度
         self.player.stop()
         self.player.setSource(QUrl())
-        self.video.hide()
+        self.play_btn.setText("▶ 播放")
 
     def on_show(self):
         self._sync_folders()
@@ -135,6 +156,13 @@ class EditorPage(BasePage):
             source = QUrl.fromLocalFile(self.current_path)
             if self.player.source() != source:
                 self.player.setSource(source)
+                if self._resume_ms > 0:
+                    self.player.setPosition(self._resume_ms)
+                    self.slider.setValue(self._resume_ms)
+                    self._update_time_label(self._resume_ms)
+                else:
+                    self.slider.setValue(0)
+                    self._update_time_label(0)
             self.player.pause()
 
     def on_dir_changed(self, _path):
@@ -149,7 +177,9 @@ class EditorPage(BasePage):
         self._sync_folders(reload_files=replace)
 
     def on_hide(self):
-        self.player.pause()
+        # 切页必须松开文件：暂停状态的 QMediaPlayer 仍占着句柄，
+        # 会让命名投稿无法改名、删除或写元数据。
+        self._release_preview()
 
     def __init__(self, app):
         super().__init__(app)
@@ -163,6 +193,7 @@ class EditorPage(BasePage):
         self._dragging_slider = False
         self._last_seek_at = 0.0
         self._duration_ms = 0
+        self._resume_ms = 0  # 切页松开句柄时记住播放位置
         self.running = False
         self._cancel: Optional[threading.Event] = None
         self._compress_queue: List[str] = []
@@ -669,6 +700,7 @@ class EditorPage(BasePage):
     # ==================== 预览 ====================
 
     def _load_preview(self, path: str):
+        self._resume_ms = 0
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.pause()
         self.slider.setValue(0)
@@ -945,8 +977,7 @@ class EditorPage(BasePage):
     def shutdown(self):
         if self._cancel is not None:
             self._cancel.set()
-        self.player.stop()
-        self.player.setSource(QUrl())
+        self._release_preview()
 
     def _on_player_error(self, *_args):
         self._log("该格式无法内嵌预览（不影响切割/合并/提取）")
