@@ -43,6 +43,8 @@ class WebUiBridge(QObject):
         self._subscribers = 0
         self._forced = True
         self._last_build = 0.0
+        self._last_signature = ""
+        self._soon = False
         self._id_map: dict[str, QWidget] = {}
         self._closed = False
         self._timer = QTimer(self)
@@ -124,8 +126,9 @@ class WebUiBridge(QObject):
         key, page = current
         try:
             snapshot, id_map = serializer.build_snapshot(
-                page, key, page_title(key), self._version + 1)
-            text = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+                page, key, page_title(key), 0)
+            signature = json.dumps(
+                snapshot, ensure_ascii=False, separators=(",", ":"))
         except Exception:
             _log.exception("WebUI 快照生成失败")
             self._forced = False
@@ -133,6 +136,11 @@ class WebUiBridge(QObject):
         self._id_map = id_map
         self._forced = False
         self._last_build = time.monotonic()
+        if signature == self._last_signature:
+            return
+        self._last_signature = signature
+        snapshot["v"] = self._version + 1
+        text = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
         with self._cond:
             self._version += 1
             self._json = text
@@ -150,7 +158,20 @@ class WebUiBridge(QObject):
             self._dispatch(action)
         except Exception:
             _log.exception("WebUI 动作执行失败：%s", action.get("a"))
-        self.request_refresh()
+        if action.get("a") == "scroll":
+            self._publish_soon()
+        else:
+            self._publish()
+
+    def _publish_soon(self) -> None:
+        if self._soon:
+            return
+        self._soon = True
+        QTimer.singleShot(50, self._publish_after_scroll)
+
+    def _publish_after_scroll(self) -> None:
+        self._soon = False
+        self._publish()
 
     def _dispatch(self, action: dict[str, Any]) -> None:
         name = str(action.get("a") or "")
@@ -183,6 +204,10 @@ class WebUiBridge(QObject):
             self._header_click(widget, action.get("c"))
         elif name in ("itemClick", "itemDblClick"):
             self._item_click(widget, action, double=name == "itemDblClick")
+        elif name == "cellCheck":
+            self._cell_check(widget, action)
+        elif name == "itemCheck":
+            self._item_check(widget, action)
 
     def _click(self, widget: QWidget) -> None:
         if not isinstance(widget, QAbstractButton):
@@ -251,18 +276,48 @@ class WebUiBridge(QObject):
             delta_x = int(dx)
         except (TypeError, ValueError):
             return
-        bars = []
         if isinstance(widget, QScrollArea):
-            bars = [widget.verticalScrollBar(), widget.horizontalScrollBar()]
-        elif isinstance(widget, (QTableWidget, QListWidget, QTreeWidget)):
-            bars = [widget.verticalScrollBar(), widget.horizontalScrollBar()]
-        if len(bars) != 2:
+            vbar = widget.verticalScrollBar()
+            hbar = widget.horizontalScrollBar()
+            if vbar is not None and delta_y:
+                vbar.setValue(vbar.value() + delta_y)
+            if hbar is not None and delta_x:
+                hbar.setValue(hbar.value() + delta_x)
             return
-        vbar, hbar = bars
-        if vbar is not None and delta_y:
-            vbar.setValue(vbar.value() + delta_y)
-        if hbar is not None and delta_x:
-            hbar.setValue(hbar.value() + delta_x)
+        if not isinstance(widget, (QTableWidget, QListWidget, QTreeWidget)):
+            return
+        row_height = self._row_height(widget)
+        vsteps = int(round(delta_y / row_height)) if row_height else 0
+        if delta_y and not vsteps:
+            vsteps = 1 if delta_y > 0 else -1
+        hsteps = int(round(delta_x / 40)) if delta_x else 0
+        if delta_x and not hsteps:
+            hsteps = 1 if delta_x > 0 else -1
+        vbar = widget.verticalScrollBar()
+        hbar = widget.horizontalScrollBar()
+        if vbar is not None and vsteps:
+            vbar.setValue(vbar.value() + vsteps)
+        if hbar is not None and hsteps:
+            hbar.setValue(hbar.value() + hsteps)
+
+    @staticmethod
+    def _row_height(widget: QWidget) -> int:
+        if isinstance(widget, QTableWidget):
+            row = widget.rowAt(0)
+            if row < 0:
+                row = 0
+            height = widget.rowHeight(row) if widget.rowCount() else 0
+            if height <= 0:
+                height = widget.verticalHeader().defaultSectionSize()
+            return max(1, int(height))
+        if isinstance(widget, QListWidget):
+            item = widget.item(0)
+            if item is not None:
+                rect = widget.visualItemRect(item)
+                if rect.height() > 0:
+                    return int(rect.height())
+        hint = widget.sizeHintForRow(0)
+        return int(hint) if hint > 0 else 24
 
     def _cell_click(self, widget: QWidget, action: dict[str, Any], double: bool) -> None:
         if not isinstance(widget, QTableWidget):
@@ -290,6 +345,37 @@ class WebUiBridge(QObject):
             widget.cellClicked.emit(row, col)
             if double:
                 widget.cellDoubleClicked.emit(row, col)
+
+    def _cell_check(self, widget: QWidget, action: dict[str, Any]) -> None:
+        if not isinstance(widget, QTableWidget):
+            return
+        try:
+            row = int(action.get("r"))
+            col = int(action.get("c"))
+        except (TypeError, ValueError):
+            return
+        item = widget.item(row, col)
+        if item is None:
+            return
+        item.setCheckState(
+            Qt.CheckState.Checked if action.get("value") else Qt.CheckState.Unchecked)
+
+    def _item_check(self, widget: QWidget, action: dict[str, Any]) -> None:
+        state = (Qt.CheckState.Checked if action.get("value")
+                 else Qt.CheckState.Unchecked)
+        if isinstance(widget, QListWidget):
+            try:
+                row = int(action.get("r"))
+            except (TypeError, ValueError):
+                return
+            item = widget.item(row)
+            if item is not None:
+                item.setCheckState(state)
+            return
+        if isinstance(widget, QTreeWidget):
+            item = self._tree_item(widget, str(action.get("p") or ""))
+            if item is not None:
+                item.setCheckState(0, state)
 
     def _header_click(self, widget: QWidget, value: Any) -> None:
         if not isinstance(widget, QTableWidget):

@@ -11,10 +11,11 @@
   var select = $('pageSelect'), hint = $('hint'), hintText = $('hintText');
   var zoomFit = $('zoomFit');
 
-  var snap = null, version = 0, lastSig = '', lastAt = 0, es = null;
+  var snap = null, version = 0, lastSkel = '', lastAt = 0, es = null;
   var fitMode = true, zoom = 1, scale = 1;
   var focusState = null;
   var timers = new Map();
+  var nodeEls = new Map();
 
   if (!token) {
     hintText.textContent = '访问链接缺少令牌。请回到桌面端「全局设置 → 页面镜像」重新点「打开 WebUI」。';
@@ -119,6 +120,10 @@
   }
 
   function render(data) {
+    var previous = snap;
+    var canPatch = !!(previous && previous.page === data.page &&
+      previous.size[0] === data.size[0] && previous.size[1] === data.size[1] &&
+      data.skel && data.skel === lastSkel && nodeEls.size > 0);
     snap = data;
     version = data.v;
     lastAt = Date.now();
@@ -137,13 +142,20 @@
       select.appendChild(extra);
     }
     select.value = data.page;
-    var sig = data.page + '|' + data.size.join('x') + '|' + JSON.stringify(data.root);
-    if (sig === lastSig) {
-      updateStatus();
-      return;
+    if (canPatch) {
+      var rootEl = nodeEls.get(data.root.id);
+      if (rootEl && patchNode(rootEl, data.root, data)) {
+        updateStatus();
+        return;
+      }
     }
-    lastSig = sig;
+    fullRender(data);
+  }
+
+  function fullRender(data) {
+    lastSkel = data.skel || '';
     saveFocus();
+    nodeEls.clear();
     canvas.replaceChildren();
     canvas.style.width = data.size[0] + 'px';
     canvas.style.height = data.size[1] + 'px';
@@ -179,6 +191,9 @@
     box.style.width = node.w + 'px';
     box.style.height = node.h + 'px';
     box.dataset.id = node.id;
+    box.__node = node;
+    box.__role = node.role || '';
+    nodeEls.set(node.id, box);
     if (node.tip) box.title = node.tip;
     if (node.role) box.classList.add('role-' + node.role);
     if (node.fg) box.style.color = node.fg;
@@ -216,6 +231,280 @@
       default: appendKids(box, node, state);
     }
     return box;
+  }
+
+  function updateRole(el, node) {
+    var role = node.role || '';
+    if (el.__role === role) return;
+    if (el.__role) el.classList.remove('role-' + el.__role);
+    if (role) el.classList.add('role-' + role);
+    el.__role = role;
+  }
+
+  function setBase(el, node) {
+    el.style.left = node.x + 'px';
+    el.style.top = node.y + 'px';
+    el.style.width = node.w + 'px';
+    el.style.height = node.h + 'px';
+    if (node.tip) el.title = node.tip;
+    else el.removeAttribute('title');
+    updateRole(el, node);
+    el.style.color = node.fg || '';
+    el.style.fontSize = (node.fs && !node.role) ? (node.fs + 'px') : '';
+    el.style.fontWeight = (node.bold && !node.role) ? 'bold' : '';
+  }
+
+  function patchKids(el, node, state) {
+    var kids = node.kids || [];
+    for (var i = 0; i < kids.length; i++) {
+      var child = nodeEls.get(kids[i].id);
+      if (!child) return false;
+      if (!patchNode(child, kids[i], state)) return false;
+    }
+    return true;
+  }
+
+  function tableSig(node) {
+    return JSON.stringify([node.cols, node.hh, node.rhw, node.rows, node.cur,
+      node.total, node.vmax, node.v, node.hmax, node.hv]);
+  }
+
+  function listSig(node) {
+    return JSON.stringify([node.items, node.rh, node.total, node.vmax, node.v]);
+  }
+
+  function treeSig(node) {
+    return JSON.stringify([node.items, node.rh, node.vmax, node.v]);
+  }
+
+  function patchNode(el, node, state) {
+    el.__node = node;
+    setBase(el, node);
+    switch (node.k) {
+      case 'page':
+        el.classList.add('page');
+        return patchKids(el, node, state);
+      case 'label': {
+        var img = el.querySelector(':scope > img');
+        if (node.img) {
+          if (!img) {
+            el.replaceChildren();
+            img = document.createElement('img');
+            el.appendChild(img);
+          }
+          if (img.src !== node.img) img.src = node.img;
+        } else {
+          if (img) el.replaceChildren();
+          if (el.textContent !== (node.t || '')) el.textContent = node.t || '';
+        }
+        el.classList.toggle('wrap', !!node.wrap);
+        var align = node.al || '';
+        el.style.display = 'flex';
+        el.style.justifyContent = align.charAt(0) === 'c' ? 'center'
+          : (align.charAt(0) === 'r' ? 'flex-end' : 'flex-start');
+        el.style.alignItems = align.charAt(1) === 'b' ? 'flex-end'
+          : (align.charAt(1) === 'c' ? 'center' : 'flex-start');
+        return true;
+      }
+      case 'button':
+      case 'toolbutton': {
+        el.classList.toggle('primary', node.variant === 'primary');
+        el.classList.toggle('danger', node.variant === 'danger');
+        el.classList.toggle('secondary', node.variant === 'secondary');
+        el.classList.toggle('ghost', node.variant === 'ghost');
+        el.classList.toggle('off', !!node.off);
+        var bimg = el.querySelector(':scope > img');
+        if (node.icon) {
+          if (!bimg) {
+            bimg = document.createElement('img');
+            bimg.alt = '';
+            el.insertBefore(bimg, el.firstChild);
+          }
+          if (bimg.src !== node.icon) bimg.src = node.icon;
+        } else if (bimg) {
+          bimg.remove();
+        }
+        var txt = el.querySelector('.txt');
+        if (node.t) {
+          if (!txt) {
+            txt = document.createElement('span');
+            txt.className = 'txt';
+            el.appendChild(txt);
+          }
+          if (txt.textContent !== node.t) txt.textContent = node.t;
+        } else if (txt) {
+          txt.remove();
+        }
+        if (node.off) {
+          el.setAttribute('disabled', '');
+          el.setAttribute('aria-disabled', 'true');
+          el.tabIndex = -1;
+        } else {
+          el.removeAttribute('disabled');
+          el.removeAttribute('aria-disabled');
+          el.tabIndex = 0;
+        }
+        return true;
+      }
+      case 'check':
+      case 'radio': {
+        el.classList.toggle('on', !!node.chk);
+        el.classList.toggle('off', !!node.off);
+        var mark = el.querySelector(':scope > .box');
+        if (!mark) return false;
+        mark.textContent = node.chk ? (node.k === 'radio' ? '●' : '✓') : '';
+        var label = el.querySelector(':scope > .txt');
+        if (label && label.textContent !== (node.t || '')) {
+          label.textContent = node.t || '';
+        }
+        el.setAttribute('aria-checked', node.chk ? 'true' : 'false');
+        if (node.off) {
+          el.setAttribute('aria-disabled', 'true');
+          el.tabIndex = -1;
+        } else {
+          el.removeAttribute('aria-disabled');
+          el.tabIndex = 0;
+        }
+        return true;
+      }
+      case 'line':
+      case 'datetime': {
+        var input = el.querySelector('input');
+        if (!input) return false;
+        if (document.activeElement !== input) {
+          var value = node.t == null ? '' : String(node.t);
+          if (input.value !== value) input.value = value;
+        }
+        input.readOnly = !!(node.ro || node.secret);
+        input.placeholder = node.ph || '';
+        input.title = node.secret ? '密码输入框，请在桌面端查看与修改' : '';
+        return true;
+      }
+      case 'text':
+      case 'plain': {
+        var area = el.querySelector('textarea');
+        if (!area) return false;
+        if (document.activeElement !== area && area.value !== (node.t || '')) {
+          area.value = node.t || '';
+        }
+        area.readOnly = !!node.ro;
+        area.placeholder = node.ph || '';
+        return true;
+      }
+      case 'combo': {
+        var combo = el.querySelector('select');
+        if (!combo) return false;
+        var itemsSig = JSON.stringify(node.items || []);
+        if (combo.__itemsSig !== itemsSig) {
+          combo.replaceChildren();
+          (node.items || []).forEach(function (text, index) {
+            var op = document.createElement('option');
+            op.value = String(index);
+            op.textContent = text;
+            combo.appendChild(op);
+          });
+          combo.__itemsSig = itemsSig;
+        }
+        if (document.activeElement !== combo) {
+          combo.value = String(node.cur || 0);
+        }
+        return true;
+      }
+      case 'spin':
+      case 'dspin': {
+        var spin = el.querySelector('input');
+        if (!spin) return false;
+        spin.min = String(node.min);
+        spin.max = String(node.max);
+        spin.step = String(node.step || 1);
+        if (document.activeElement !== spin && spin.value !== String(node.v)) {
+          spin.value = String(node.v);
+        }
+        return true;
+      }
+      case 'slider': {
+        var slider = el.querySelector('input');
+        if (!slider) return false;
+        slider.min = String(node.min);
+        slider.max = String(node.max);
+        if (document.activeElement !== slider && slider.value !== String(node.v)) {
+          slider.value = String(node.v);
+        }
+        return true;
+      }
+      case 'progress': {
+        var fill = el.querySelector('.fill');
+        var ptext = el.querySelector('.ptext');
+        if (!fill || !ptext) return false;
+        var span = Math.max(0, (node.max - node.min) || 1);
+        var ratio = Math.max(0, Math.min(1, (node.v - node.min) / span));
+        fill.style.width = (ratio * 100) + '%';
+        var text = node.text || (Math.round(ratio * 100) + '%');
+        if (ptext.textContent !== text) ptext.textContent = text;
+        return true;
+      }
+      case 'tabs': {
+        var bar = el.querySelector(':scope > .tabbar');
+        if (!bar) return false;
+        var tabsSig = JSON.stringify(node.tabs || []);
+        if (bar.__sig !== tabsSig) buildTabBar(bar, node);
+        var buttons = bar.querySelectorAll('.tab');
+        (node.tabs || []).forEach(function (tab, index) {
+          if (!buttons[index]) return;
+          buttons[index].classList.toggle('on', index === node.cur);
+          buttons[index].disabled = !!tab.off;
+        });
+        return patchKids(el, node, state);
+      }
+      case 'scroll':
+        if (!patchKids(el, node, state)) return false;
+        updateScrollbar(el, node);
+        return true;
+      case 'table': {
+        var tsig = tableSig(node);
+        if (el.__dataSig !== tsig) {
+          el.replaceChildren();
+          fillTable(el, node);
+        } else {
+          updateScrollbar(el, node);
+        }
+        return true;
+      }
+      case 'list': {
+        var lsig = listSig(node);
+        if (el.__dataSig !== lsig) {
+          el.replaceChildren();
+          fillList(el, node);
+        } else {
+          updateScrollbar(el, node);
+        }
+        return true;
+      }
+      case 'tree': {
+        var rsig = treeSig(node);
+        if (el.__dataSig !== rsig) {
+          el.replaceChildren();
+          fillTree(el, node);
+        } else {
+          updateScrollbar(el, node);
+        }
+        return true;
+      }
+      case 'group': {
+        var title = el.querySelector(':scope > .gtitle');
+        if (title && title.textContent !== (node.t || '')) {
+          title.textContent = node.t || '';
+        }
+        return patchKids(el, node, state);
+      }
+      case 'frame':
+        el.classList.toggle('card', node.variant === 'card');
+        el.classList.toggle('subtle', node.variant === 'subtle');
+        el.classList.toggle('toolbarcard', node.variant === 'toolbar');
+        return patchKids(el, node, state);
+      default:
+        return patchKids(el, node, state);
+    }
   }
 
   function fillLabel(box, node) {
@@ -257,22 +546,24 @@
     }
     box.setAttribute('role', 'button');
     if (node.off) {
+      box.classList.add('off');
       box.setAttribute('aria-disabled', 'true');
       box.tabIndex = -1;
     } else {
       box.tabIndex = 0;
     }
     function activate() {
-      if (node.off) return;
-      if (node.menu) {
+      var cur = box.__node || node;
+      if (cur.off) return;
+      if (cur.menu) {
         alert('该按钮带下拉菜单，请在桌面端操作。');
         return;
       }
-      if (node.hint === 'desktop' && !box.dataset.ack) {
+      if (cur.hint === 'desktop' && !box.dataset.ack) {
         if (!confirm('该操作会在桌面端打开文件选择或其他对话框，继续执行？')) return;
         box.dataset.ack = '1';
       }
-      send({ a: 'click', id: node.id });
+      send({ a: 'click', id: cur.id });
     }
     box.addEventListener('click', function (event) {
       event.stopPropagation();
@@ -295,6 +586,7 @@
     mark.className = 'box';
     mark.textContent = node.chk ? (node.k === 'radio' ? '●' : '✓') : '';
     var label = document.createElement('span');
+    label.className = 'txt';
     label.textContent = node.t || '';
     box.appendChild(mark);
     box.appendChild(label);
@@ -307,8 +599,9 @@
       box.tabIndex = 0;
     }
     function toggle() {
-      if (node.off) return;
-      send({ a: 'click', id: node.id });
+      var cur = box.__node || node;
+      if (cur.off) return;
+      send({ a: 'click', id: cur.id });
     }
     box.addEventListener('click', function (event) {
       event.stopPropagation();
@@ -394,8 +687,9 @@
       combo.appendChild(op);
     }
     combo.value = String(node.cur || 0);
+    combo.__itemsSig = JSON.stringify(items);
     combo.addEventListener('change', function () {
-      send({ a: 'index', id: node.id, value: Number(combo.value) });
+      send({ a: 'index', id: box.__node.id, value: Number(combo.value) });
     });
     box.appendChild(combo);
   }
@@ -443,14 +737,11 @@
     box.appendChild(label);
   }
 
-  function fillTabs(box, node, state) {
-    box.classList.add('tabs');
-    var bar = document.createElement('div');
-    bar.className = 'tabbar';
+  function buildTabBar(bar, node) {
+    bar.replaceChildren();
     bar.style.height = (node.barh || 30) + 'px';
     bar.style.width = '100%';
-    var tabs = node.tabs || [];
-    tabs.forEach(function (tab, index) {
+    (node.tabs || []).forEach(function (tab, index) {
       var button = document.createElement('button');
       button.type = 'button';
       button.className = 'tab' + (index === node.cur ? ' on' : '');
@@ -465,10 +756,20 @@
       text.textContent = tab.t || '';
       button.appendChild(text);
       button.addEventListener('click', function () {
-        send({ a: 'tab', id: node.id, value: index });
+        send({ a: 'tab', id: bar.__nodeId, value: index });
       });
       bar.appendChild(button);
     });
+    bar.__nodeId = node.id;
+    bar.__sig = JSON.stringify(node.tabs || []);
+  }
+
+  function fillTabs(box, node, state) {
+    box.classList.add('tabs');
+    var bar = document.createElement('div');
+    bar.className = 'tabbar';
+    bar.__nodeId = node.id;
+    buildTabBar(bar, node);
     box.appendChild(bar);
     appendKids(box, node, state);
   }
@@ -476,32 +777,41 @@
   function fillScroll(box, node, state) {
     box.classList.add('scroll');
     appendKids(box, node, state);
-    attachWheel(box, node);
+    attachWheel(box);
+    updateScrollbar(box, node);
   }
 
-  function attachWheel(box, node) {
-    if (!node.vmax && !node.hmax) return;
-    if (node.vmax > 0) {
-      var trackH = Math.max(10, (node.h || 0) - 6);
-      var page = node.page || 0;
-      var ratio = page > 0 ? page / (node.vmax + page) : 0.18;
-      var thumbH = Math.max(24, Math.min(trackH, trackH * ratio));
-      var top = 3 + (node.v / (node.vmax || 1)) * Math.max(0, trackH - thumbH);
-      var bar = document.createElement('div');
-      bar.className = 'gsbar';
-      bar.style.top = top + 'px';
-      bar.style.height = thumbH + 'px';
-      box.appendChild(bar);
-    }
+  function updateScrollbar(box, node) {
+    var old = box.querySelector(':scope > .gsbar');
+    if (old) old.remove();
+    if (!node.vmax) return;
+    var trackH = Math.max(10, (node.h || 0) - 6);
+    var page = node.page || 0;
+    var ratio = page > 0 ? page / (node.vmax + page) : 0.18;
+    var thumbH = Math.max(24, Math.min(trackH, trackH * ratio));
+    var top = 3 + (node.v / (node.vmax || 1)) * Math.max(0, trackH - thumbH);
+    var bar = document.createElement('div');
+    bar.className = 'gsbar';
+    bar.style.top = top + 'px';
+    bar.style.height = thumbH + 'px';
+    box.appendChild(bar);
+  }
+
+  function attachWheel(box) {
+    if (box.__wheelBound) return;
+    box.__wheelBound = true;
     var pendingY = 0, pendingX = 0, timer = null;
     function flush() {
       timer = null;
-      if (!pendingY && !pendingX) return;
+      var node = box.__node;
+      if (!node || (!pendingY && !pendingX)) return;
       send({ a: 'scroll', id: node.id, dy: Math.round(pendingY), dx: Math.round(pendingX) });
       pendingY = 0;
       pendingX = 0;
     }
     box.addEventListener('wheel', function (event) {
+      var node = box.__node;
+      if (!node) return;
       var unit = event.deltaMode === 1 ? 16 : 1;
       var dy = event.deltaY * unit;
       var dx = event.deltaX * unit;
@@ -512,7 +822,7 @@
       pendingY += dy;
       pendingX += dx;
       if (timer) clearTimeout(timer);
-      timer = setTimeout(flush, 60);
+      timer = setTimeout(flush, 80);
     }, { passive: false });
   }
 
@@ -556,8 +866,13 @@
         var td = document.createElement('td');
         if ('cs' in cell) {
           var mark = document.createElement('span');
-          mark.className = 'cellchk' + (cell.cs === 1 ? ' on' : '');
-          mark.textContent = cell.cs === 1 ? '✓' : (cell.cs === 2 ? '－' : '');
+          mark.className = 'cellchk' + (cell.cs === 2 ? ' on' : '');
+          mark.textContent = cell.cs === 2 ? '✓' : (cell.cs === 1 ? '－' : '');
+          mark.addEventListener('click', function (event) {
+            event.stopPropagation();
+            send({ a: 'cellCheck', id: node.id, r: row.r, c: cell.c,
+                   value: cell.cs === 2 ? 0 : 1 });
+          });
           td.appendChild(mark);
         }
         td.appendChild(document.createTextNode(cell.t || ''));
@@ -573,7 +888,9 @@
     });
     table.appendChild(tbody);
     box.appendChild(table);
-    attachWheel(box, node);
+    attachWheel(box);
+    updateScrollbar(box, node);
+    box.__dataSig = tableSig(node);
   }
 
   function rowShell(box, node, index, height, text, extraClass) {
@@ -592,12 +909,19 @@
     box.classList.add('listwrap');
     var rh = node.rh || 24;
     var items = node.items || [];
+    var multi = rh >= 34;
     items.forEach(function (item, index) {
       var row = rowShell(box, node, index, rh);
+      if (multi) row.classList.add('multi');
       if ('cs' in item) {
         var mark = document.createElement('span');
-        mark.className = 'cellchk' + (item.cs === 1 ? ' on' : '');
-        mark.textContent = item.cs === 1 ? '✓' : (item.cs === 2 ? '－' : '');
+        mark.className = 'cellchk' + (item.cs === 2 ? ' on' : '');
+        mark.textContent = item.cs === 2 ? '✓' : (item.cs === 1 ? '－' : '');
+        mark.addEventListener('click', function (event) {
+          event.stopPropagation();
+          send({ a: 'itemCheck', id: node.id, r: item.r,
+                 value: item.cs === 2 ? 0 : 1 });
+        });
         row.appendChild(mark);
       }
       if (item.icon) {
@@ -618,7 +942,9 @@
         send({ a: 'itemDblClick', id: node.id, r: item.r });
       });
     });
-    attachWheel(box, node);
+    attachWheel(box);
+    updateScrollbar(box, node);
+    box.__dataSig = listSig(node);
   }
 
   function fillTree(box, node) {
@@ -634,8 +960,13 @@
       row.appendChild(exp);
       if ('cs' in item) {
         var mark = document.createElement('span');
-        mark.className = 'cellchk' + (item.cs === 1 ? ' on' : '');
-        mark.textContent = item.cs === 1 ? '✓' : (item.cs === 2 ? '－' : '');
+        mark.className = 'cellchk' + (item.cs === 2 ? ' on' : '');
+        mark.textContent = item.cs === 2 ? '✓' : (item.cs === 1 ? '－' : '');
+        mark.addEventListener('click', function (event) {
+          event.stopPropagation();
+          send({ a: 'itemCheck', id: node.id, p: item.p,
+                 value: item.cs === 2 ? 0 : 1 });
+        });
         row.appendChild(mark);
       }
       if (item.icon) {
@@ -654,7 +985,9 @@
         send({ a: 'itemDblClick', id: node.id, p: item.p });
       });
     });
-    attachWheel(box, node);
+    attachWheel(box);
+    updateScrollbar(box, node);
+    box.__dataSig = treeSig(node);
   }
 
   function fillGroup(box, node, state) {

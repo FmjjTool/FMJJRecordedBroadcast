@@ -175,7 +175,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 .btn.danger { background: var(--danger-soft); color: var(--danger); border-color: var(--border); }
 .btn.secondary { background: var(--surface); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
-.btn:disabled, .toolbtn:disabled {
+.btn:disabled, .toolbtn:disabled, .btn.off, .toolbtn.off {
   background: var(--disabled-bg);
   color: var(--muted);
   border-color: var(--border);
@@ -363,6 +363,8 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   white-space: nowrap;
   cursor: pointer;
 }
+.row.multi { white-space: pre-line; line-height: 1.35; }
+.row .cellchk { cursor: pointer; }
 .row:hover { background: var(--hover); }
 .row .exp { width: 12px; flex: none; color: var(--muted); }
 .row .cellchk {

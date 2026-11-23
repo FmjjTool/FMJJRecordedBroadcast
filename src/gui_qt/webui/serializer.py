@@ -434,12 +434,15 @@ def _fill_table(table: QTableWidget, node: dict[str, Any]) -> None:
     node["rhw"] = int(vheader.width()) if vheader is not None and vheader.isVisible() else 0
     rows_total = table.rowCount()
     cols_total = table.columnCount()
+    vbar = table.verticalScrollBar()
+    hbar = table.horizontalScrollBar()
     first_row = table.rowAt(0)
     if first_row < 0:
-        first_row = 0
+        first_row = int(vbar.value()) if vbar else 0
+    visible_rows = max(1, int(vbar.pageStep())) if vbar else 10
     last_row = table.rowAt(viewport.height() - 1)
     if last_row < 0:
-        last_row = min(rows_total - 1, first_row + 30)
+        last_row = first_row + visible_rows - 1
     last_row = min(last_row, first_row + _MAX_ROWS - 1, rows_total - 1)
     first_col = table.columnAt(0)
     if first_col < 0:
@@ -471,8 +474,6 @@ def _fill_table(table: QTableWidget, node: dict[str, Any]) -> None:
                     cell["cs"] = int(item.checkState().value)
             cells.append(cell)
         rows.append({"r": row, "h": int(table.rowHeight(row)), "cells": cells})
-    vbar = table.verticalScrollBar()
-    hbar = table.horizontalScrollBar()
     node["cols"] = columns
     node["rows"] = rows
     node["total"] = [rows_total, cols_total]
@@ -489,12 +490,16 @@ def _fill_list(widget: QListWidget, node: dict[str, Any]) -> None:
     vp = viewport.mapTo(widget, QPoint(0, 0))
     node["vp"] = [vp.x(), vp.y(), viewport.width(), viewport.height()]
     count = widget.count()
-    first = 0
+    vbar = widget.verticalScrollBar()
     top_item = widget.itemAt(0, 0)
+    first = 0
     if top_item is not None:
         first = max(0, widget.row(top_item))
+    elif vbar is not None:
+        first = max(0, int(vbar.value()))
+    visible = max(1, int(vbar.pageStep())) if vbar else 10
     last_item = widget.itemAt(0, viewport.height() - 1)
-    last = widget.row(last_item) if last_item is not None else min(count - 1, first + 30)
+    last = widget.row(last_item) if last_item is not None else first + visible - 1
     last = min(last, first + _MAX_ITEMS - 1, count - 1)
     row_height = 24
     if count:
@@ -513,7 +518,6 @@ def _fill_list(widget: QListWidget, node: dict[str, Any]) -> None:
         if uri:
             entry["icon"] = uri
         items.append(entry)
-    vbar = widget.verticalScrollBar()
     node["items"] = items
     node["rh"] = int(row_height)
     node["total"] = count
@@ -567,6 +571,12 @@ def _fill_tree(widget: QTreeWidget, node: dict[str, Any]) -> None:
     node["page"] = int(vbar.pageStep()) if vbar else 0
 
 
+def _structure(node: dict[str, Any], parts: list[str]) -> None:
+    parts.append(f"{node['id']}:{node['k']}")
+    for child in node.get("kids", []):
+        _structure(child, parts)
+
+
 def build_snapshot(
     page: QWidget,
     page_key: str,
@@ -589,12 +599,15 @@ def build_snapshot(
         root["y"] = 0
         root["w"] = page.width()
         root["h"] = page.height()
+    parts: list[str] = []
+    _structure(root, parts)
     snapshot = {
         "v": int(version),
         "page": page_key,
         "title": title,
         "size": [page.width(), page.height()],
         "tokens": theme_tokens(),
+        "skel": "|".join(parts),
         "root": root,
     }
     return snapshot, id_map
