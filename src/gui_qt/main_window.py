@@ -305,7 +305,10 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.skeleton)
         self.stack.setCurrentWidget(self.skeleton)
         first_key = "home" if "home" in PAGE_CLASSES else NAV_GROUPS[0][1][0][0]
-        QTimer.singleShot(0, lambda: self._deferred_boot(first_key))
+        QTimer.singleShot(0, self._fit_nav_scroll)
+        # 首帧先让导航与骨架完成排版并上屏，再构造首页；否则首页构造会一直
+        # 占用主线程，用户长时间看到未排版的空白侧栏。
+        QTimer.singleShot(50, lambda: self._deferred_boot(first_key))
 
         # 主题定时开关：启动对齐一次 + 每 10 秒强制对齐（到点即变，无需手动触发）
         self._check_theme_schedule()
@@ -496,6 +499,9 @@ class MainWindow(QMainWindow):
         button.setIconSize(QSize(18, 18))
         button.setCheckable(True)
         button.setCursor(Qt.PointingHandCursor)
+        # 固定行高：QSS 内边距在首次 polish 前不参与 sizeHint，若等样式生效
+        # 再算，滚动区会先按错误高度把导航压成一团（首帧左侧空白）。
+        button.setFixedHeight(34)
         return button
 
     def _build_nav(self, nav_layout):
@@ -551,6 +557,21 @@ class MainWindow(QMainWindow):
         self.search_empty.setWordWrap(True)
         self.search_layout.addWidget(self.search_empty)
         self.search_empty.hide()
+
+    def _fit_nav_scroll(self):
+        """首帧修正导航滚动内容高度。
+
+        QScrollArea 在首次 show 时按当时的 minimumSizeHint 定高；此时导航
+        子项尚未完成排版，内容会被压成视口高度且之后不会自动回弹，表现为
+        启动首帧左侧整块空白。排版就绪后按真实 sizeHint 再撑开一次。
+        """
+        widget = self.nav_scroll.widget()
+        if widget is None:
+            return
+        # 至少铺满视口，避免超高窗口下导航只占上半段
+        height = max(self.nav_scroll.viewport().height(), widget.sizeHint().height())
+        widget.resize(widget.width(), height)
+        self.nav_scroll.verticalScrollBar().setValue(0)
 
     def _filter_navigation(self, text):
         query = text.strip().casefold()
