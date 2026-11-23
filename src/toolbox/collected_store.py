@@ -197,6 +197,73 @@ def iter_metadata(db_path=None):
             yield storage_key, key, platform or "", published or ""
 
 
+def _card_filter(platform: str, keyword: str) -> tuple[str, list]:
+    where = ["CASE WHEN json_valid(data) THEN json_type(data)='object' ELSE 0 END"]
+    params: list = []
+    plat = (platform or "").strip()
+    if plat == "other":
+        where.append("COALESCE(platform,'') NOT IN ('douyin','bilibili','weibo')")
+    elif plat:
+        where.append("platform = ?")
+        params.append(plat)
+    kw = (keyword or "").strip().lower()
+    if kw:
+        where.append("(LOWER(json_extract(data,'$.title')) LIKE ?"
+                     " OR LOWER(json_extract(data,'$.author')) LIKE ?"
+                     " OR LOWER(json_extract(data,'$.video_id')) LIKE ?)")
+        params += [f"%{kw}%"] * 3
+    return " AND ".join(where), params
+
+
+def query_cards(platform: str = "", keyword: str = "",
+                limit: int = 50, offset: int = 0, db_path=None) -> tuple[list, int]:
+    """分平台分页读取展示卡片（标题/作者/计数/链接），不返回正文与原始数据。"""
+    limit = max(1, min(200, int(limit or 50)))
+    offset = max(0, int(offset or 0))
+    where, params = _card_filter(platform, keyword)
+    with ExitStack() as resources:
+        conn = _connect(_resolve_db_path(db_path))
+        resources.callback(conn.close)
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM videos WHERE {where}", params).fetchone()[0]
+        rows = conn.execute(
+            "SELECT dedup_key, platform,"
+            " json_extract(data,'$.title'), json_extract(data,'$.author'),"
+            " json_extract(data,'$.publish_time'), json_extract(data,'$.kind'),"
+            " json_extract(data,'$.play_count'), json_extract(data,'$.like_count'),"
+            " json_extract(data,'$.video_id'), json_extract(data,'$.video_url'),"
+            " json_extract(data,'$.raw_url')"
+            f" FROM videos WHERE {where}"
+            " ORDER BY (json_extract(data,'$.publish_time') IS NULL"
+            " OR json_extract(data,'$.publish_time')='') ASC,"
+            " json_extract(data,'$.publish_time') DESC, rowid DESC"
+            " LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
+    items = [{
+        "key": row[0], "platform": row[1] or "", "title": row[2] or "",
+        "author": row[3] or "", "publish_time": row[4] or "",
+        "kind": row[5] or "", "play_count": row[6], "like_count": row[7],
+        "video_id": row[8] or "", "video_url": row[9] or "",
+        "raw_url": row[10] or "",
+    } for row in rows]
+    return items, int(total)
+
+
+def query_keys(platform: str = "", keyword: str = "", limit: int = 5000,
+               db_path=None) -> list[str]:
+    """按当前平台/关键词取稳定键，供 WebUI 批量导出。"""
+    where, params = _card_filter(platform, keyword)
+    with ExitStack() as resources:
+        conn = _connect(_resolve_db_path(db_path))
+        resources.callback(conn.close)
+        rows = conn.execute(
+            f"SELECT dedup_key FROM videos WHERE {where}"
+            " ORDER BY (json_extract(data,'$.publish_time') IS NULL"
+            " OR json_extract(data,'$.publish_time')='') ASC,"
+            " json_extract(data,'$.publish_time') DESC, rowid DESC LIMIT ?",
+            params + [max(1, min(20000, int(limit or 5000)))]).fetchall()
+    return [row[0] for row in rows]
+
+
 def newest_publish_times(platform: str, author_sec_uid: str,
                          limit: int = 100, db_path=None) -> list[str]:
     """读取指定平台/作者已入库的最近发布时间文本（只读，供新鲜度对比）。"""

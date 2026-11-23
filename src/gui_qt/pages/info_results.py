@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt import common
 from gui_qt.common import _fmt, post_to_main, run_bg
-from gui_qt import download_ops
+from toolbox import download_ops
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 from toolbox.collected_library import CollectedLibrary, CollectedView, parse_publish
@@ -531,23 +531,13 @@ class InfoResultsPage(BasePage):
 
     @staticmethod
     def _openable_url(info) -> str:
-        """条目可打开链接：优先真实作品页（raw_url）；存量数据里时间线
-        采集的主页链接（抖音 /user、微博裸 uid、B站 space）回退构造作品页。"""
-        ru = (getattr(info, "raw_url", "") or "").strip()
-        plat = (getattr(info, "platform", "") or "").strip()
-        vid = str(getattr(info, "video_id", "") or "").strip()
-        if plat == "douyin" and "/user/" in ru and vid:
-            is_note = getattr(info, "kind", "") == "image" or (
-                getattr(info, "images", None) and not info.video_url)
-            return f"https://www.douyin.com/note/{vid}" if is_note \
-                else f"https://www.douyin.com/video/{vid}"
-        if plat == "weibo" and vid and re.fullmatch(r"https?://weibo\.com/u?\d+/?", ru):
-            m = re.search(r"weibo\.com/u?(\d+)", ru)
-            if m:
-                return f"https://weibo.com/{m.group(1)}/{vid}"
-        if plat == "bilibili" and vid and "space.bilibili.com" in ru:
-            return f"https://www.bilibili.com/video/{vid}"
-        return ru or (getattr(info, "video_url", "") or "")
+        """条目可打开链接：桌面页与 WebUI 共用 L3 规则。"""
+        from toolbox.collected_urls import openable_url
+
+        return openable_url(
+            getattr(info, "platform", ""), getattr(info, "video_id", ""),
+            getattr(info, "video_url", ""), getattr(info, "raw_url", ""),
+            getattr(info, "kind", ""), bool(getattr(info, "images", None)))
 
     def _render_column(self, key, songs, checked_keys=None, pub_dates=None):
         col = self.cols[key]

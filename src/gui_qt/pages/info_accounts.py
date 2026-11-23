@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from gui_qt import download_ops, theme
+from toolbox import download_ops
+from gui_qt import theme
 from gui_qt.common import _collect, _db_insert, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
@@ -1031,7 +1032,8 @@ class InfoAccountsPage(BasePage):
     # ---------- 获取后自动下载 ----------
     def _start_auto_download(self, posts):
         """获取完成后自动下载本次内容（勾选「获取后自动下载」时触发，保存+下载一次性）。"""
-        from gui_qt import common, download_ops
+        from gui_qt import common
+
         quality = common.CURRENT_QUALITY
         threads = common.CURRENT_THREADS
 

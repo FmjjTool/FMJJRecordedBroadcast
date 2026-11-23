@@ -8,6 +8,16 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
+# WebUI 独立服务入口：--webui 时只加载 Qt-free 服务端，不创建桌面窗口。
+if "--webui" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.webui.runner import main as _webui_main
+
+    sys.exit(_webui_main(sys.argv))
+
 # 定时任务入口：打包后的 exe 带 --tcdoc-collect 参数时只跑一次腾讯文档采集，
 # 不创建窗口、也不加载 Qt（Windows 计划任务每天调起）。必须在 PySide6 导入前拦截。
 if "--tcdoc-collect" in sys.argv:

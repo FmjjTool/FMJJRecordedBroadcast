@@ -406,6 +406,17 @@ description: "全软件页面功能介绍与使用说明（软件内已移除所
 -   FFmpeg 一键下载：从 [ffmpeg.org](http://ffmpeg.org) 指向的 Windows 官方构建站（gyan.dev）下载 release-essentials 包（约 110MB），只解出 ffmpeg.exe / ffprobe.exe 放到 `%LOCALAPPDATA%\FengMingToolbox\ffmpeg\bin`，并自动写入「FFmpeg 位置」；重装或再次点击会直接复用已下载文件。下载失败时按「教程」手动安装。
 -   FFmpeg 教程：内置说明一键安装与手动安装两种方式（下载页 → 解压 bin → 回填路径，或加入系统 PATH），并提供「打开官方下载页」按钮。定位优先级为 系统 PATH → 程序目录自带（根目录 / bin / ffmpeg\\bin）→ 页面上方指定的位置。
 
+## WebUI 独立服务
+
+- 启动：源码运行 `python main.py --webui --webui-port 8765`；打包版运行 `FengMingToolbox.exe --webui --webui-port 8765`。可选 `--webui-host`（默认 `127.0.0.1`）、`--webui-token`（不填则生成并写入 `config/webui_url.txt`），也可用环境变量 `FMJJ_WEBUI_TOKEN`。
+- 服务完全独立于桌面 Qt：只加载 `toolbox/webui` 的 Qt-free 服务端与原生 Web 前端，不创建窗口、不导出控件树；访问地址在启动输出和 `config/webui_url.txt` 中。
+- 首批页面：
+  - 采集结果：分平台查看/搜索/分页、勾选导出 JSON/XLSX/MD（打包为 zip 下载）、勾选下载到服务端导出目录、打开作品链接。
+  - 资产库：已获取资源（导出 JSON 概览）、数据库浏览（分平台分页/搜索/表头排序）、本地资源分类分组浏览；只读，不返回绝对路径。
+  - 腾讯文档：文档概览、采集历史、表格同步状态与只读行、推送历史；可触发「立即采集」「表格同步」后台任务并查看日志。写回腾讯文档不在 WebUI 提供。
+- 服务端只监听指定地址，`/api/*` 需令牌；POST 校验 Origin。WebUI 与桌面界面相互独立，页面样式和布局不再依赖桌面控件树。
+- 限制：首版不镜像桌面弹窗/原生文件框/自绘图表；本地资源与已获取资源为只读概览；腾讯文档上传与写回仍需桌面端。
+
 ## 维护约定
 
 -   页面新增或调整功能时，先改代码，再更新本 skill 对应章节；不在页面重新加入功能介绍控件。

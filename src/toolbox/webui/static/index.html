@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>录播工具箱 WebUI</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-name">录播工具箱</div>
+      <div class="brand-sub">Web 服务端</div>
+    </div>
+    <nav id="nav">
+      <button class="nav-item" data-route="collected">采集结果</button>
+      <button class="nav-item" data-route="assets">资产库</button>
+      <button class="nav-item" data-route="tcdoc">腾讯文档</button>
+    </nav>
+    <div class="sidebar-foot">
+      <span class="dot" id="serverDot"></span>
+      <span id="serverState">连接中</span>
+    </div>
+  </aside>
+  <div id="scrim"></div>
+  <main id="main">
+    <header id="topbar">
+      <button id="menuBtn" class="icon-btn" type="button" title="打开导航">菜单</button>
+      <h1 id="pageTitle">采集结果</h1>
+      <div class="spacer"></div>
+      <button id="themeBtn" class="btn ghost" type="button">深色</button>
+      <button id="refreshBtn" class="btn" type="button">刷新</button>
+    </header>
+    <section id="content" aria-live="polite"></section>
+  </main>
+</div>
+<div id="toast" class="toast hidden"></div>
+<div id="gate" class="gate hidden">
+  <div class="gate-box">
+    <h2>需要访问令牌</h2>
+    <p>请使用 <code>config/webui_url.txt</code> 中的完整地址打开，或在启动命令中指定
+      <code>--webui-token</code>。令牌只用于本机服务鉴权。</p>
+    <label class="gate-input">令牌
+      <input id="gateToken" type="text" autocomplete="off" placeholder="粘贴访问令牌">
+    </label>
+    <button id="gateSubmit" class="btn primary" type="button">进入</button>
+    <p id="gateError" class="gate-error"></p>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
