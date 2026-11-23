@@ -32,11 +32,14 @@ PDS（首选）：
 from __future__ import annotations
 
 import base64
+import ctypes
+import ctypes.util
 import hashlib
 import json
 import mimetypes
 import os
 import ssl
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -84,9 +87,86 @@ class _QuarkSSLAdapter(HTTPAdapter):
         super().init_poolmanager(*args, **kwargs)
 
 
+class _Sha1StateReader:
+    """顺序读文件，导出每个分片起点的 SHA1 中间状态（h0..h4）。
+
+    PDS 的 `parallel_sha1_ctx` 要求第 2 片起必须带「该片之前所有字节」的 SHA1
+    内部状态：缺这个字段服务端直接回 43001，填假数据 finish 时回 43008
+    （实测）。hashlib 不暴露中间状态，这里借 OpenSSL 的 SHA_CTX 结构直接读，
+    全程 C 速度，只多读一遍文件。
+    """
+
+    _lock = threading.Lock()
+    _lib = None
+    _tried = False
+
+    class _Ctx(ctypes.Structure):
+        # OpenSSL 的 SHA_CTX 布局：5 个状态字 + 长度 + 64 字节缓冲区 + 计数
+        _fields_ = [
+            ("h0", ctypes.c_uint), ("h1", ctypes.c_uint),
+            ("h2", ctypes.c_uint), ("h3", ctypes.c_uint),
+            ("h4", ctypes.c_uint),
+            ("Nl", ctypes.c_uint), ("Nh", ctypes.c_uint),
+            ("data", ctypes.c_uint * 16),
+            ("num", ctypes.c_uint),
+        ]
+
+    @classmethod
+    def _library(cls):
+        with cls._lock:
+            if cls._tried:
+                return cls._lib
+            cls._tried = True
+            candidates: list[str] = []
+            dll_dir = Path(sys.prefix) / "DLLs"
+            for name in ("libcrypto-3-x64.dll", "libcrypto-3.dll",
+                         "libcrypto-1_1-x64.dll"):
+                candidates.append(str(dll_dir / name))
+            found = ctypes.util.find_library("crypto")
+            if found:
+                candidates.append(found)
+            for candidate in candidates:
+                try:
+                    lib = ctypes.CDLL(candidate)
+                    lib.SHA1_Init.argtypes = [ctypes.POINTER(cls._Ctx)]
+                    lib.SHA1_Update.argtypes = [ctypes.POINTER(cls._Ctx),
+                                                ctypes.c_char_p, ctypes.c_size_t]
+                except (OSError, AttributeError):
+                    continue
+                cls._lib = lib
+                return lib
+            return None
+
+    @classmethod
+    def available(cls) -> bool:
+        return cls._library() is not None
+
+    @classmethod
+    def states(cls, path: Path, part_size: int, total: int,
+               size: int) -> dict[int, list[int]]:
+        """返回 `{分片号: [h0, h1, h2, h3, h4]}`，第 1 片不在结果里。"""
+        lib = cls._library()
+        if lib is None:
+            raise QuarkError(-1, "缺少 libcrypto，无法计算分片 SHA1（PDS 上传必需）")
+        ctx = cls._Ctx()
+        lib.SHA1_Init(ctypes.byref(ctx))
+        out: dict[int, list[int]] = {}
+        with open(path, "rb") as handle:
+            for number in range(1, total + 1):
+                if number > 1:
+                    out[number] = [ctx.h0, ctx.h1, ctx.h2, ctx.h3, ctx.h4]
+                left = min(part_size, size - (number - 1) * part_size)
+                while left > 0:
+                    chunk = handle.read(min(4 * 1024 * 1024, left))
+                    if not chunk:
+                        break
+                    lib.SHA1_Update(ctypes.byref(ctx), chunk, len(chunk))
+                    left -= len(chunk)
+        return out
+
+
 class QuarkError(RuntimeError):
     """接口返回非 0 code（业务错误）。"""
-
     def __init__(self, code, message: str, path: str = ""):
         self.code = code
         self.message = message or "未知错误"
@@ -509,16 +589,23 @@ class QuarkClient:
         saved = resume.load() if resume is not None else {}
         pre: dict = {}
         etags: dict[int, str] = {}
+        states: dict[int, list[int]] = {}
         if (saved.get("kind") == "pds" and saved.get("md5") == md5
                 and int(saved.get("size") or -1) == size
                 and isinstance(saved.get("pre"), dict) and saved["pre"].get("task_id")):
             pre = dict(saved["pre"])
             etags = {int(k): v for k, v in (saved.get("etags") or {}).items()}
+            # 分片校验状态一起存：重试时不必为 3 GB 文件重算一遍 SHA1
+            if saved.get("states") and int(saved.get("part_size") or 0) == int(
+                    pre.get("_part_size") or 0):
+                states = {int(k): list(v) for k, v in saved["states"].items()}
 
         def _persist() -> None:
             if resume is None:
                 return
             resume.save({"kind": "pds", "md5": md5, "size": size, "pre": pre,
+                         "part_size": int(pre.get("_part_size") or 0),
+                         "states": {str(k): list(v) for k, v in states.items()},
                          "etags": {str(k): v for k, v in etags.items()}})
 
         if not pre:
@@ -538,19 +625,19 @@ class QuarkClient:
             offset = (number - 1) * part_size
             return max(0, min(part_size, size - offset))
 
-        # 秒传探测：PDS pre 已带 md5/sha1 时服务端多半直接给 fid
-        if not etags:
-            try:
-                finish, fid = self._pds_hash(task_id, md5, sha1)
-            except QuarkError:
-                finish, fid = False, ""
-            if finish:
-                if resume is not None:
-                    resume.clear()
-                self._name_cache.pop(str(remote_dir or "").strip("/"), None)
-                return {"fid": fid or str(pre.get("fid") or ""), "instant": True,
-                        "md5": md5, "size": size,
-                        "visible": self._wait_visible(parent_fid, path.name)}
+        # 上报 md5/sha1：finish 前服务端必须收到这对值（缺了报 43009），
+        # 顺带探测秒传：命中会直接返回 fid，不用传任何分片。
+        try:
+            finish, instant_fid = self._pds_hash(task_id, md5, sha1)
+        except QuarkError:
+            finish, instant_fid = False, ""
+        if finish:
+            if resume is not None:
+                resume.clear()
+            self._name_cache.pop(str(remote_dir or "").strip("/"), None)
+            return {"fid": instant_fid or str(pre.get("fid") or ""), "instant": True,
+                    "md5": md5, "size": size,
+                    "visible": self._wait_visible(parent_fid, path.name)}
 
         # 续传：把服务端已收到的分片补进 etags
         if pre.get("_resume_probe", True) and size > 0:
@@ -581,35 +668,47 @@ class QuarkClient:
         pending = [n for n in range(1, total + 1) if n not in etags]
         upload_id = str(pre.get("upload_id") or "")
 
+        # 第 2 片起必须带真实 SHA1 中间状态（服务端 finish 时用它拼整文件 sha1
+        # 与上报值比对）；状态会随断点一起落库，重试时不再重算。
+        if any(number > 1 for number in pending) and not states:
+            if not _Sha1StateReader.available():
+                # 环境缺 libcrypto 时 PDS 走不通，按「接口不可用」降级网页通路
+                raise QuarkError(404, "PDS 不可用：缺少 libcrypto，无法计算分片 SHA1")
+            if on_stage is not None:
+                on_stage("hash", path.name, size)
+            states = _Sha1StateReader.states(path, part_size, total, size)
+            _persist()
+
         def _part_body(number: int) -> dict:
-            return {"content_type": "application/json",
+            body = {"content_type": "application/json",
                     "part_number": number,
                     "part_size": part_length(number)}
+            if number > 1:
+                body["parallel_sha1_ctx"] = {
+                    "h": states.get(number) or [],
+                    "part_offset": (number - 1) * part_size,
+                }
+            return body
 
-        def _put_one(number: int) -> tuple[int, int, str]:
-            """取地址 → PUT；签名过期就刷新一次地址再试。"""
-            nonlocal pre
+        def _put_one(number: int, url: str, signature: str,
+                     headers: dict) -> tuple[int, int, str]:
+            """PUT 一片；签名过期就重新申请这一片的地址再试一次。"""
             blob = b""
             with open(path, "rb") as handle:
                 handle.seek((number - 1) * part_size)
                 blob = handle.read(part_length(number))
-            urls, headers = self._pds_urls(task_id, upload_id, [_part_body(number)])
-            item = urls.get(number)
-            if not item or not item.get("url"):
-                raise QuarkError(-1, f"分片 {number} 未取到上传地址",
-                                 "/file/upload/getUploadUrls")
             try:
-                return number, len(blob), self._pds_put(
-                    item["url"], item.get("signature") or "", blob, headers)
+                return number, len(blob), self._pds_put(url, signature, blob, headers)
             except QuarkError as exc:
                 if str(exc.code) != "SIGN_EXPIRED":
                     raise
-                urls, headers = self._pds_urls(task_id, upload_id, [_part_body(number)])
+                urls, fresh_headers = self._pds_urls(
+                    task_id, upload_id, [_part_body(number)])
                 item = urls.get(number) or {}
                 if not item.get("url"):
                     raise
                 return number, len(blob), self._pds_put(
-                    item["url"], item.get("signature") or "", blob, headers)
+                    item["url"], item.get("signature") or "", blob, fresh_headers)
 
         def _report_done(number: int, length: int, etag: str) -> None:
             nonlocal sent
@@ -622,22 +721,40 @@ class QuarkClient:
                 except Exception:  # noqa: BLE001
                     pass
 
-        if pending:
-            lanes = min(self.lanes, len(pending))
+        # 按 50 片一批申请预签名地址（客户端同样批量），再并发上传这一批；
+        # 逐片申请会把 getUploadUrls 打成高频请求，服务端容易限流。
+        for start in range(0, len(pending), PDS_URL_BATCH):
+            batch = pending[start:start + PDS_URL_BATCH]
+            urls, headers = self._pds_urls(
+                task_id, upload_id, [_part_body(n) for n in batch])
+            jobs: list[tuple[int, str, str, dict]] = []
+            for number in batch:
+                item = urls.get(number) or {}
+                if not item.get("url"):
+                    raise QuarkError(-1, f"分片 {number} 未取到上传地址",
+                                     "/file/upload/getUploadUrls")
+                jobs.append((number, item["url"], item.get("signature") or "", headers))
+            lanes = min(self.lanes, len(jobs))
             if lanes > 1:
                 with ThreadPoolExecutor(max_workers=lanes) as pool:
-                    futures = {pool.submit(_put_one, n): n for n in pending}
+                    futures = {pool.submit(_put_one, *job): job[0] for job in jobs}
                     try:
                         for future in as_completed(futures):
-                            number, length, etag = future.result()
-                            _report_done(number, length, etag)
+                            _report_done(*future.result())
                     except Exception:
                         for future in futures:
                             future.cancel()
                         raise
             else:
-                for number in pending:
-                    _report_done(*_put_one(number))
+                for job in jobs:
+                    _report_done(*_put_one(*job))
+
+        # 服务端实测不校验分片是否齐全（只传 1 片也能 finish 成功），
+        # 这里自己把关，避免漏片时静默产出损坏文件。
+        missing = [n for n in range(1, total + 1) if n not in etags]
+        if missing:
+            raise QuarkError(-1, f"分片未传齐：缺 {len(missing)}/{total}"
+                                 f"（首个缺失 {missing[0]}）", "/file/upload/finish")
 
         data = self._pds_finish(task_id, etags)
         if resume is not None:
@@ -856,7 +973,7 @@ class QuarkClient:
 
     def upload_file(self, local_path, remote_dir: str, on_progress=None,
                     on_stage=None, hashes: tuple[str, str] | None = None,
-                    resume=None) -> dict:
+                    resume=None, _clean_retry: bool = False) -> dict:
         """上传一个文件到 `remote_dir`（相对路径，自动建目录）。
 
         - `on_stage("hash" | "upload", 文件名, 字节数)`：大文件算校验、开始传输时给界面反馈
@@ -894,8 +1011,16 @@ class QuarkClient:
                 if str(exc.code) in ("404", "400"):
                     self._pds_enabled = False
                     self._pds_last_error = str(exc)
+                # 票据过期 / 上下文对不上（上次失败留下的脏断点）：清掉重来一次，
+                # 否则每次重试都会在同一张废票上报同样的错。
+                elif str(exc.code) in ("14004", "43001", "43008", "43009") and not _clean_retry:
+                    self._pds_last_error = str(exc)
                     if resume is not None:
                         resume.clear()
+                    return self.upload_file(
+                        local_path, remote_dir, on_progress=on_progress,
+                        on_stage=on_stage, hashes=(md5, sha1), resume=resume,
+                        _clean_retry=True)
                 else:
                     raise
 
