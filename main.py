@@ -236,6 +236,13 @@ def main():
     win = MainWindow()
     win.show()
 
+    # WebUI 页面镜像：只在全局设置勾选「软件启动时自动开启」时拉起本地服务
+    try:
+        from gui_qt.webui.controller import maybe_autostart
+        maybe_autostart(win)
+    except Exception:
+        pass
+
     # 延后启动检查，并在后台探测 ffmpeg：仅用 singleShot 延后仍会在
     # 主线程等待子进程（最坏 5s），期间窗口无法响应。
     def _post_startup_checks():

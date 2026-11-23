@@ -39,6 +39,7 @@ ADD_DATA = [
     ("src/toolbox/bin", "toolbox/bin"),  # 内置 7-Zip（rar/7z/zip 解压与压缩）
     ("src/skills", "skills"),  # 内置 AI Skill（设置页「下载 Skill」导出用）
     ("src/gui_qt/assets", "gui_qt/assets"),  # 音乐标签页官方风格图标
+    ("src/gui_qt/webui/client", "gui_qt/webui/client"),  # WebUI 页面镜像静态页
 ]
 
 # dist 中禁止出现的隐私/本机数据（文件名 / 目录名）
