@@ -523,7 +523,12 @@
               h('td', { class: 'num' }, fmtNumber(item.like)),
               h('td', { class: 'ellipsis' }, item.file || '-')));
           });
-          tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+          tableHost.replaceChildren();
+          if (data.truncated) {
+            tableHost.appendChild(h('div', { class: 'muted small', style: 'margin:6px 2px' },
+              '已获取资源仅展示前 2000 条 JSON 概览。'));
+          }
+          tableHost.appendChild(h('div', { class: 'table-wrap' },
             h('table', null,
               h('thead', null, h('tr', null,
                 h('th', null, '标题'), h('th', null, '作者'), h('th', null, '平台'),

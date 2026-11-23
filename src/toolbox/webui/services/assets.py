@@ -32,7 +32,8 @@ _PLATFORM_ORDER = ["douyin", "bilibili", "weibo", "kuaishou",
 
 class AssetService:
     def __init__(self):
-        self._entries_cache: tuple[str, int, list] | None = None
+        self._entries_cache: tuple[str, int, list, bool] | None = None
+        self._entries_truncated = False
         self._groups_cache: dict[tuple[str, int], tuple[float, list, bool]] = {}
 
     def summary(self) -> dict:
@@ -102,11 +103,11 @@ class AssetService:
         cache_key = (category, stamp)
         cached = self._groups_cache.get(cache_key)
         now = time.time()
-        if cached and now - cached[0] < 60:
+        if cached and now - cached[0] < 300:
             groups, truncated = cached[1], cached[2]
         else:
             groups, truncated = asset_groups.load_dir_groups(
-                str(root), limit_files=20000, cat=category)
+                str(root), limit_files=8000, cat=category)
             self._groups_cache = {cache_key: (now, groups, truncated)}
         payload = []
         for group in groups[:500]:
@@ -145,7 +146,8 @@ class AssetService:
         start = (page - 1) * page_size
         pages = max(1, (total + page_size - 1) // page_size)
         return {"items": items[start:start + page_size], "total": total,
-                "page": page, "page_size": page_size, "pages": pages}
+                "page": page, "page_size": page_size, "pages": pages,
+                "truncated": bool(self._entries_truncated)}
 
     def _entry_rows(self) -> list[dict]:
         root = get_export_dir() / EXPORT_CATEGORIES["video_data"]
@@ -155,8 +157,10 @@ class AssetService:
             stamp = 0
         cached = self._entries_cache
         if cached and cached[0] == str(root) and cached[1] == stamp:
+            self._entries_truncated = cached[3]
             return cached[2]
         rows: list[dict] = []
+        self._entries_truncated = False
         if asset_index.db_path().exists():
             view = asset_index.fetch_view(str(root), "entries")
             if view and isinstance(view.get("items"), list):
@@ -165,7 +169,7 @@ class AssetService:
             rows = self._scan_json(root)
         rows = [row for row in rows if row]
         rows.sort(key=lambda item: item.get("publish_time") or "", reverse=True)
-        self._entries_cache = (str(root), stamp, rows)
+        self._entries_cache = (str(root), stamp, rows, self._entries_truncated)
         return rows
 
     @staticmethod
@@ -201,6 +205,7 @@ class AssetService:
                     continue
                 scanned += 1
                 if scanned > 2000:
+                    self._entries_truncated = True
                     return rows
                 path = os.path.join(dirpath, name)
                 payload = None
