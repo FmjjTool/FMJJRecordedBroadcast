@@ -115,6 +115,36 @@ def model_status(configured: str = "") -> dict:
     return {"ready": True, "path": str(path), "size": size, "reason": ""}
 
 
+def uninstall_default_model() -> tuple[bool, int, str]:
+    """只删除默认模型目录里的 ONNX；自定义路径与打包内置模型不处理。"""
+    directory = default_model_dir()
+    base = directory.resolve()
+    targets = []
+    for path in find_model_files(directory):
+        try:
+            resolved = path.resolve()
+            if resolved.is_file() and resolved.is_relative_to(base):
+                targets.append(resolved)
+        except OSError:
+            continue
+    if not targets:
+        return False, 0, "默认模型目录没有可卸载的图识别模型"
+    freed = 0
+    failed = ""
+    for path in targets:
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            freed += size
+        except PermissionError:
+            failed = "模型文件正在使用，请关闭图识别任务后重试"
+        except OSError as exc:
+            failed = str(exc)
+    if failed:
+        return False, freed, f"部分模型未能删除：{failed}"
+    return True, freed, "已卸载图识别模型，可重新下载"
+
+
 def model_id(path) -> str:
     """模型标识：文件名 + 大小 + 修改时间，用于特征缓存失效判断。"""
     path = Path(path)

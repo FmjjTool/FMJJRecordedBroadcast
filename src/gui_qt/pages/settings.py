@@ -25,7 +25,8 @@ from toolbox.config_manager import (
     set_work_dir,
 )
 from toolbox.skills import list_skills, skill_total_size_text
-from toolbox.utils import find_ffmpeg_exe, find_ffprobe_exe, invalidate_ffmpeg_cache
+from toolbox.utils import (find_ffmpeg_exe, find_ffprobe_exe, format_size,
+                           invalidate_ffmpeg_cache)
 from toolbox import edition, updater
 from version import APP_VERSION
 
@@ -1090,15 +1091,29 @@ class GlobalSettingsPage(BasePage):
             elif action == "asr_program" and not ok:
                 h.addWidget(self._dep_btn("下载", self._download_asr_program))
             elif action == "asr_model":
-                # 模型可装多个：始终给下拉 + 下载；本地组件不可卸载，不提供删除入口
-                from toolbox.asr_engine import LOCAL_MODELS
+                from toolbox.asr_engine import LOCAL_MODELS, local_model_present
                 combo = QComboBox()
                 combo.setFixedWidth(210)
+                present_models = []
                 for mkey, label, size_mb in LOCAL_MODELS:
                     combo.addItem(f"{label} · {size_mb}MB", mkey)
+                for mkey, _label, _size in LOCAL_MODELS:
+                    if local_model_present(mkey):
+                        present_models.append(mkey)
+                if present_models:
+                    for index in range(combo.count()):
+                        if combo.itemData(index) in present_models:
+                            combo.setCurrentIndex(index)
+                            break
                 h.addWidget(combo)
                 h.addWidget(self._dep_btn(
                     "下载", lambda c=combo: self._download_asr_model(c.currentData())))
+                if present_models and not bundled:
+                    uninstall = self._dep_btn("卸载")
+                    uninstall.setToolTip("卸载下拉选中的转写模型")
+                    uninstall.clicked.connect(
+                        lambda _c=False, c=combo: self._confirm_uninstall_asr_model(c))
+                    h.addWidget(uninstall)
             elif action == "clip_model" and not ok:
                 h.addWidget(self._dep_btn("下载", self._download_clip_model))
             elif action == "proxy_core" and not ok:
@@ -1108,6 +1123,55 @@ class GlobalSettingsPage(BasePage):
                 local_btn = self._dep_btn("本地导入", self._import_proxy_core)
                 local_btn.setToolTip("选择自己下载好的 mihomo-windows-amd64-*.zip")
                 h.addWidget(local_btn)
+            # 应用自行下载的本地组件：仅受控目录确实存在文件时提供卸载
+            if ok and not bundled:
+                if key == "pw_shell":
+                    from toolbox.browser import (headless_shell_installed,
+                                                 headless_shell_size,
+                                                 uninstall_headless_shell)
+                    if headless_shell_installed():
+                        self._add_uninstall_btn(
+                            h, "采集引擎",
+                            "只删除程序下载的采集内核（当前约 %s），系统 Edge/Chrome "
+                            "不受影响；删除后无系统浏览器时相关采集会不可用，可重新下载。"
+                            % format_size(headless_shell_size()),
+                            uninstall_headless_shell,
+                            "只删除本地下载的采集内核")
+                elif key == "asr_program":
+                    from toolbox.asr_engine import (local_program_ready,
+                                                    uninstall_local_program)
+                    if local_program_ready():
+                        self._add_uninstall_btn(
+                            h, "本地转写程序",
+                            "删除后本地离线字幕转写不可用（在线转写不受影响），可重新下载。",
+                            uninstall_local_program)
+                elif key == "clip_model":
+                    from toolbox import image_embedding
+                    files = image_embedding.find_model_files(
+                        image_embedding.default_model_dir())
+                    if files:
+                        size = 0
+                        for path in files:
+                            try:
+                                size += path.stat().st_size
+                            except OSError:
+                                continue
+                        self._add_uninstall_btn(
+                            h, "图识别模型",
+                            "只删除默认模型目录中的模型（当前约 %s），自定义路径与内置模型"
+                            "不受影响；删除后可重新下载。" % format_size(size),
+                            image_embedding.uninstall_default_model)
+                elif key == "proxy_core":
+                    from toolbox.proxy import core as proxy_core_module
+                    from toolbox.proxy import install as proxy_install
+                    if proxy_install.installed() is not None:
+                        running = proxy_core_module.is_running()
+                        self._add_uninstall_btn(
+                            h, "代理内核",
+                            "删除后内置代理不可用，外部内核与提供商配置不受影响；可重新下载。"
+                            + ("当前内核正在运行，请先在网络代理页停止。" if running else ""),
+                            proxy_install.uninstall_core,
+                            "运行中需先停止代理" if running else "")
             if not ok:
                 if optional:
                     optional_missing += 1
@@ -1258,11 +1322,12 @@ class GlobalSettingsPage(BasePage):
             env = detect()
         except Exception:
             env = {"edge": None, "chrome": None}
+        shell = headless_shell_installed()
         if env.get("edge"):
-            return True, f"系统 Edge {env['edge']}"
+            return True, f"系统 Edge {env['edge']}" + (" · 本地内核已下载" if shell else "")
         if env.get("chrome"):
-            return True, f"系统 Chrome {env['chrome']}"
-        if headless_shell_installed():
+            return True, f"系统 Chrome {env['chrome']}" + (" · 本地内核已下载" if shell else "")
+        if shell:
             return True, "本地内核已就绪"
         return False, ""
 
@@ -1395,6 +1460,70 @@ class GlobalSettingsPage(BasePage):
         if slot is not None:
             btn.clicked.connect(lambda _c=False: slot())
         return btn
+
+    def _add_uninstall_btn(self, layout, name, detail, action, tooltip=""):
+        btn = self._dep_btn("卸载")
+        btn.setToolTip(tooltip or ("卸载 %s" % name))
+        btn.clicked.connect(
+            lambda _checked=False: self._confirm_and_uninstall(name, detail, action))
+        layout.addWidget(btn)
+        return btn
+
+    def _confirm_and_uninstall(self, name, detail, action):
+        if self._dep_downloading:
+            self.app.toast("已有组件下载或卸载在进行中", "warning")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("卸载组件")
+        box.setIcon(QMessageBox.Warning)
+        box.setText("卸载%s？" % name)
+        box.setInformativeText(detail)
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        if box.exec() != QMessageBox.Yes:
+            return
+        self._dep_downloading = True
+        self.dep_status.setText("正在卸载 %s…" % name)
+        self.dep_status.setStyleSheet(
+            "color: palette(placeholder-text); font-size: 11px;")
+
+        def done(result, err):
+            self._dep_downloading = False
+            if err or not result:
+                message = str(err or "未知错误")[:300]
+                self.dep_status.setText("%s 卸载失败：%s" % (name, message))
+                self.dep_status.setStyleSheet(
+                    "color: palette(bright-text); font-size: 11px;")
+                self.app.toast("%s 卸载失败" % name, "error")
+            else:
+                ok, freed, message = result
+                if ok:
+                    suffix = ("（释放 %s）" % format_size(freed)) if freed else ""
+                    self.dep_status.setText("%s：%s%s" % (name, message, suffix))
+                    self.dep_status.setStyleSheet(
+                        "color: palette(link-visited); font-size: 11px;")
+                    self.app.toast("%s 已卸载" % name, "success")
+                else:
+                    self.dep_status.setText("%s 卸载失败：%s" % (name, message))
+                    self.dep_status.setStyleSheet(
+                        "color: palette(bright-text); font-size: 11px;")
+                    self.app.toast("%s 卸载失败" % name, "error")
+            self._refresh_dependencies()
+
+        run_bg(action, done)
+
+    def _confirm_uninstall_asr_model(self, combo):
+        from toolbox.asr_engine import local_model_present, uninstall_local_model
+
+        key = combo.currentData()
+        label = combo.currentText()
+        if not local_model_present(key):
+            self.app.toast("该转写模型未下载", "warning")
+            return
+        self._confirm_and_uninstall(
+            "转写模型 %s" % label.split(" · ")[0],
+            "将删除该模型目录；其他模型与已导出的字幕不受影响，可重新下载。",
+            lambda: uninstall_local_model(key))
 
     def _start_dep_download(self, name, work):
         """组件下载统一入口：work(report) 在后台跑，report 回主线程写进度。

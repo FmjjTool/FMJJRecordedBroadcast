@@ -10,6 +10,7 @@
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -85,6 +86,59 @@ def headless_shell_installed() -> bool:
     """本地 headless shell 是否已下载（降级链第 3 级是否可用）。"""
     lb = browsers_dir()
     return any(lb.glob("chromium_headless_shell-*"))
+
+
+def headless_shell_dirs() -> list[Path]:
+    """本地下载的 Playwright headless shell 目录（不含系统 Edge/Chrome）。"""
+    base = browsers_dir()
+    if not base.is_dir():
+        return []
+    return [path for path in base.glob("chromium_headless_shell-*")
+            if path.is_dir() and not path.is_symlink()]
+
+
+def headless_shell_size() -> int:
+    total = 0
+    for folder in headless_shell_dirs():
+        for path in folder.rglob("*"):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def uninstall_headless_shell() -> tuple[bool, int, str]:
+    """只删除用户目录下下载的采集内核；系统 Edge/Chrome 与 FULL 内置不处理。"""
+    from toolbox import edition
+
+    base = browsers_dir().resolve()
+    if getattr(sys, "frozen", False):
+        try:
+            if base == edition.bundled_dir("browsers").resolve():
+                return False, 0, "FULL 版内置采集引擎不可卸载"
+        except Exception:
+            pass
+    folders = headless_shell_dirs()
+    if not folders:
+        return False, 0, "未下载本地采集引擎"
+    freed = 0
+    failed = ""
+    for folder in folders:
+        try:
+            folder = folder.resolve()
+            if folder.parent != base or not folder.name.startswith("chromium_headless_shell-"):
+                continue
+            size = sum(path.stat().st_size for path in folder.rglob("*")
+                       if path.is_file())
+            shutil.rmtree(folder)
+            freed += size
+        except OSError as exc:
+            failed = str(exc)
+    if failed:
+        return False, freed, f"部分内核文件无法删除（可能正在使用）：{failed}"
+    return True, freed, "已卸载本地采集引擎，可重新下载"
 
 
 def download_headless_shell(log=None) -> bool:

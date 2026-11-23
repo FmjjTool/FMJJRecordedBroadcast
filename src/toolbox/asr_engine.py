@@ -612,6 +612,44 @@ def local_model_present(model_key: str) -> bool:
     return local_model_dir(model_key).exists()
 
 
+def uninstall_local_program() -> tuple[bool, int, str]:
+    """删除已下载的本地转写程序；其他文件与在线转写不受影响。"""
+    exe = local_program_path()
+    if not exe.is_file():
+        return False, 0, "本地转写程序未下载"
+    if exe.parent.resolve() != get_models_dir().resolve() or exe.is_symlink():
+        return False, 0, "转写程序路径异常，未删除"
+    try:
+        size = exe.stat().st_size
+        exe.unlink()
+    except PermissionError:
+        return False, 0, "转写程序正在使用，请先停止转写任务"
+    except OSError as exc:
+        return False, 0, f"删除失败：{exc}"
+    return True, size, "已卸载本地转写程序，可重新下载"
+
+
+def uninstall_local_model(model_key: str) -> tuple[bool, int, str]:
+    """只删除指定模型目录；其他模型与已导出的字幕不受影响。"""
+    keys = {key for key, _label, _size in LOCAL_MODELS}
+    if model_key not in keys:
+        return False, 0, "未知的转写模型"
+    folder = local_model_dir(model_key)
+    if not folder.exists():
+        return False, 0, "该模型未下载"
+    if folder.is_symlink() or folder.parent.resolve() != get_models_dir().resolve():
+        return False, 0, "模型路径异常，未删除"
+    try:
+        size = sum(path.stat().st_size for path in folder.rglob("*")
+                   if path.is_file())
+        shutil.rmtree(folder)
+    except PermissionError:
+        return False, 0, "模型正在使用，请先停止转写任务"
+    except OSError as exc:
+        return False, 0, f"删除失败：{exc}"
+    return True, size, "已卸载该转写模型，可重新下载"
+
+
 class LocalWhisperClient:
     """调用 whisper-faster.exe 输出 SRT。"""
 

@@ -87,6 +87,29 @@ def installed() -> Path | None:
     return None
 
 
+def uninstall_core() -> tuple[bool, int, str]:
+    """删除程序下载的内置代理内核；提供商配置与外部内核不受影响。"""
+    target = installed()
+    if target is None:
+        return False, 0, "未安装内置代理内核"
+    from .core import core as proxy_core
+    try:
+        if proxy_core.is_running():
+            return False, 0, "代理内核正在运行，请先在网络代理页停止"
+    except Exception:
+        pass
+    try:
+        if target.parent.resolve() != settings.bin_dir().resolve() or target.is_symlink():
+            return False, 0, "内核路径异常，未删除"
+        size = target.stat().st_size
+        target.unlink()
+    except PermissionError:
+        return False, 0, "内核文件正在使用，请先停止代理"
+    except OSError as exc:
+        return False, 0, f"删除失败：{exc}"
+    return True, size, "已卸载代理内核，可重新下载"
+
+
 def _probe(url: str) -> float:
     """取前 256KB 测速，返回字节/秒；0 表示这个源当前不可用。"""
     request = urllib.request.Request(url, headers={
