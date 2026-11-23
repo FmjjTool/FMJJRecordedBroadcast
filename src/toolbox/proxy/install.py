@@ -183,21 +183,38 @@ def _fetch(url: str, part: Path, progress=None) -> int:
     return part.stat().st_size if part.is_file() else 0
 
 
+def _pick_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo | None:
+    """挑出要安装的可执行文件。
+
+    官方包里的文件名不固定：v1.19.x 的 zip 内是
+    `mihomo-windows-amd64-compatible.exe`，而不是 `mihomo.exe`。按
+    「精确 mihomo.exe → 名称以 mihomo 开头的 exe → 包内唯一的 exe」依次匹配，
+    避免因为改名就整包安装失败。
+    """
+    exes = [info for info in archive.infolist()
+            if not info.is_dir() and info.filename.lower().endswith(".exe")]
+    for info in exes:
+        if Path(info.filename).name.lower() == "mihomo.exe":
+            return info
+    for info in exes:
+        if Path(info.filename).name.lower().startswith("mihomo"):
+            return info
+    if len(exes) == 1:
+        return exes[0]
+    return None
+
+
 def _extract(zip_path: Path, target: Path) -> None:
     temporary = None
     try:
         with zipfile.ZipFile(zip_path) as archive:
-            member = None
-            for info in archive.infolist():
-                if info.is_dir():
-                    continue
-                if Path(info.filename).name.lower() == "mihomo.exe":
-                    if info.file_size > 80 * 1024 * 1024:
-                        raise InstallError("内核包内文件大小异常，已停止解压")
-                    member = info
-                    break
+            member = _pick_member(archive)
             if member is None:
-                raise InstallError("内核包内未找到 mihomo.exe")
+                names = "、".join(Path(i.filename).name
+                                  for i in archive.infolist() if not i.is_dir())[:120]
+                raise InstallError(f"内核包内未找到 mihomo 可执行文件（包内：{names or '空'}）")
+            if member.file_size > 80 * 1024 * 1024:
+                raise InstallError("内核包内文件大小异常，已停止解压")
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as src, tempfile.NamedTemporaryFile(
                     delete=False, dir=target.parent, suffix=".exe.tmp") as dst:
@@ -271,8 +288,13 @@ def download_core(progress=None, status=None) -> Path:
                 failures.append(f"{label}：{exc}")
             except Exception as exc:
                 failures.append(f"{label}：{type(exc).__name__} {exc}")
+            # 包本身完整（例如换了源但文件已下全），即使这次 fetch 报错也试着装一次
             if part.is_file() and part.stat().st_size >= ZIP_MIN_BYTES and _zip_ready(part):
-                _extract(part, target)
+                try:
+                    _extract(part, target)
+                except InstallError as exc:
+                    failures.append(f"{label}：{exc}")
+                    continue
                 part.unlink(missing_ok=True)
                 return target
 
