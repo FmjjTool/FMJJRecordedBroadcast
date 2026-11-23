@@ -84,9 +84,9 @@ PAGE_SIZE = 1150
 TIMEOUT = 60
 DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-# 115 的下载 CDN 对 UA 有偏好：普通 Chrome UA 被 403 时，用带 115Browser 的 UA
-# 重新申请一次直链（UA 与直链绑定，换 UA 必须连申请一起换）
-FALLBACK_UA = DEFAULT_UA + " 115Browser/27.0.5.7"
+# 注意：不要给 UA 拼 "115Browser/..." 去伪装客户端。实测这样取链会被判
+# 「文件大小超出限制，请使用115电脑端下载」，下载 CDN 也会回
+# "ua not match cookie"，把本来可用的 Chrome UA 组合毁掉。
 
 _AUTH_HINTS = ("登录", "登入", "授权", "认证", "token", "sign")
 
@@ -544,10 +544,12 @@ class Drive115Client:
 
         1. 会话罐（账号 Cookie，自动并入取链响应下发的 Cookie）
         2. 响应里显式下发的 cookie（若有该字段）
-        3. 换 `115Browser` UA 重新申请后再试 1 / 2
 
-        命中哪种就按哪种下载；全部被拒时**直接报错并停止重试**，
-        错误里带每次的状态码、CDN 原文、直链主机和取链响应字段名。
+        命中哪种就按哪种下载。**不要伪装 `115Browser` UA**：实测
+        `115Browser` + 账号 Cookie 会被 CDN 判 `403 ua not match cookie`，
+        而重新申请直链时会直接回「文件大小超出限制，请使用115电脑端下载」，
+        把本来可用的链接毁掉。全部被拒时**直接报错并停止重试**，错误里带
+        每次的状态码、CDN 原文、直链主机和取链响应字段名。
         """
         from toolbox.quark.download import DownloadError
 
@@ -587,28 +589,6 @@ class Drive115Client:
                 return links
             attempts.append(f"{label}：HTTP {code} {detail}".strip())
 
-        saved_ua = self.user_agent
-        self.user_agent = FALLBACK_UA
-        self.session.headers["User-Agent"] = FALLBACK_UA
-        links[first], meta = self._fetch_download(first)
-        meta_cookie = str(meta.get("cookie") or meta.get("downcookie") or "")
-        retry_plans: list[tuple[str, str, str | None]] = [
-            ("115Browser UA + 会话罐", FALLBACK_UA, None)]
-        if meta_cookie:
-            retry_plans.append(("115Browser UA + 响应 cookie", FALLBACK_UA, meta_cookie))
-        for label, probe_ua, cookie in retry_plans:
-            code, detail = self._probe_link(links[first], probe_ua, cookie)
-            if code == 0:
-                return links
-            if code in (200, 206):
-                self._download_ua = probe_ua
-                self._download_mode = "meta" if cookie is not None else "jar"
-                self._download_cookie = cookie or ""
-                return links
-            attempts.append(f"{label}：HTTP {code} {detail}".strip())
-
-        self.user_agent = saved_ua
-        self.session.headers["User-Agent"] = saved_ua
         hint = ("" if self.has_kid else
                 "\n当前登录里没有 KID，可在 115 页面重新登录一次再试")
         host = ""
