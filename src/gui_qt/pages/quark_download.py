@@ -73,6 +73,15 @@ def _sort_time(value):
     return (0, num)
 
 
+def _display_error(message: str) -> str:
+    """页面与日志里不出现凭据名词或登录管理入口。"""
+    text = str(message or "").strip() or "未知原因"
+    low = text.lower()
+    if "cookie" in low or "未登录" in text or "登录已失效" in text:
+        return "未登录或登录已失效，请重新登录后重试"
+    return text
+
+
 class ShareDialog(QDialog):
     """分享云端文件 / 文件夹：名称、有效期、是否带提取码。"""
 
@@ -121,10 +130,14 @@ class QuarkDownloadPage(BasePage):
         super().__init__(app)
         self._crumbs: list[tuple[str, str]] = [("0", "根目录")]
         self._entries: list[dict] = []
+        self._display: list[dict] = []      # 与表格行一一对应的展示顺序
         self._loaded = False
         self._loading = False
+        self._load_token = 0
+        self._load_stop: threading.Event | None = None
         self._running = False
         self._stop_event: threading.Event | None = None
+        self._folder_icon = QIcon(line_icon("folder", theme.color("link"), 16))
         # 列头排序：文件夹恒在最前，组内按 名称 / 大小 / 修改时间
         self._sort_column = 1
         self._sort_desc = False
@@ -304,6 +317,7 @@ class QuarkDownloadPage(BasePage):
 
     def on_theme_changed(self):
         # 文件夹图标颜色烘进像素，主题切换后按新主题重画当前列表
+        self._folder_icon = QIcon(line_icon("folder", theme.color("link"), 16))
         self._render_entries()
 
     def _default_local_dir(self) -> str:
@@ -324,76 +338,147 @@ class QuarkDownloadPage(BasePage):
     def _on_provider_changed(self, _index: int = 0):
         """切换网盘：目录栈回到该网盘的根，再重新列目录。"""
         self._crumbs = [(self._provider_root(), "根目录")]
-        self._entries = []
-        self.table.setRowCount(0)
-        self.count_label.setText("0 项")
-        self.path_label.setText("根目录")
-        self.up_btn.setEnabled(False)
         self._refresh()
 
     # ==================== 目录浏览 ====================
 
     def _refresh(self):
-        if self._running or self._loading:
+        """开始列目录；首分页到达即渲染，其余分页在后台继续追加。"""
+        if self._running:
             return
+        if self._load_stop is not None:
+            self._load_stop.set()
+        self._load_token += 1
+        token = self._load_token
+        stop_event = threading.Event()
+        self._load_stop = stop_event
         self._loading = True
-        self.refresh_btn.setEnabled(False)
-        self.provider_combo.setEnabled(False)
-        fid = self._crumbs[-1][0]
-        provider = self._current_provider()
-
-        def work():
-            client = qbackup.build_client(provider)
-            return client.list_entries(fid)
-
-        def done(entries, err):
-            self._loading = False
-            self.refresh_btn.setEnabled(True)
-            self.provider_combo.setEnabled(True)
-            if err:
-                self.status_label.setText("列目录失败")
-                self._append_log(f"列目录失败：{err}")
-                self.app.toast(f"读取云端目录失败：{err}", "error")
-                return
-            self._entries = list(entries or [])
-            self._render_entries()
-
-        run_bg(work, done, owner=self)
-
-    def _render_entries(self):
-        entries = self._ordered_entries()
+        self._entries = []
+        self._display = []
         self.table.setRowCount(0)
-        self.table.setRowCount(len(entries))
-        for row, entry in enumerate(entries):
-            is_dir = bool(entry.get("dir"))
-            check_item = QTableWidgetItem("")
-            check_item.setFlags(Qt.ItemIsEnabled)
-            if not is_dir:
-                check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-                check_item.setCheckState(Qt.Unchecked)
-            self.table.setItem(row, 0, check_item)
-
-            name_item = QTableWidgetItem(str(entry.get("file_name") or ""))
-            if is_dir:
-                name_item.setIcon(QIcon(line_icon("folder", theme.color("link"), 16)))
-            name_item.setData(Qt.UserRole, entry)
-            self.table.setItem(row, 1, name_item)
-
-            size = int(entry.get("size") or 0)
-            size_item = QTableWidgetItem(
-                "" if is_dir else qdownload.human_size(size))
-            size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 2, size_item)
-
-            time_item = QTableWidgetItem(_fmt_time(entry.get("updated_at")))
-            self.table.setItem(row, 3, time_item)
-
-        self.count_label.setText(f"{len(entries)} 项")
+        self.count_label.setText("0 项 · 加载中…")
+        self.status_label.setText("加载中…")
         self.path_label.setText(" / ".join(name for _fid, name in self._crumbs))
         self.up_btn.setEnabled(len(self._crumbs) > 1)
         self.select_all.blockSignals(True)
         self.select_all.setChecked(False)
         self.select_all.blockSignals(False)
+        fid = self._crumbs[-1][0]
+        provider = self._current_provider()
+
+        def work():
+            try:
+                client = qbackup.build_client(provider)
+                for batch in client.iter_entries(fid):
+                    if stop_event.is_set():
+                        return
+                    post_to_main(self._append_entries, token, batch)
+            except Exception as exc:  # noqa: BLE001 - 列目录失败要回主线程提示
+                post_to_main(self._load_failed, token, str(exc))
+                return
+            post_to_main(self._load_finished, token)
+
+        run_bg(work, None, owner=self)
+
+    def _append_entries(self, token: int, entries):
+        """主线程追加一页结果：保持当前排序，与已显示行合并。"""
+        if token != self._load_token or not entries:
+            return
+        self.table.setUpdatesEnabled(False)
+        try:
+            for entry in entries:
+                self._entries.append(entry)
+                row = self._insert_position(entry)
+                self._display.insert(row, entry)
+                self.table.insertRow(row)
+                self._fill_row(row, entry)
+        finally:
+            self.table.setUpdatesEnabled(True)
+        self.count_label.setText(f"{len(self._entries)} 项 · 加载中…")
+
+    def _load_finished(self, token: int):
+        if token != self._load_token:
+            return
+        self._loading = False
+        self.count_label.setText(f"{len(self._entries)} 项")
+        if not self._running:
+            self.status_label.setText("空闲")
+
+    def _load_failed(self, token: int, message: str):
+        if token != self._load_token:
+            return
+        self._loading = False
+        self.count_label.setText(f"{len(self._entries)} 项")
+        self.status_label.setText("列目录失败")
+        reason = _display_error(message)
+        self._append_log(f"列目录失败：{reason}")
+        self.app.toast(f"读取云端目录失败：{reason}", "error")
+
+    def _fill_row(self, row: int, entry: dict):
+        is_dir = bool(entry.get("dir"))
+        check_item = QTableWidgetItem("")
+        check_item.setFlags(Qt.ItemIsEnabled)
+        if not is_dir:
+            check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            check_item.setCheckState(
+                Qt.Checked if self.select_all.isChecked() else Qt.Unchecked)
+        self.table.setItem(row, 0, check_item)
+
+        name_item = QTableWidgetItem(str(entry.get("file_name") or ""))
+        if is_dir:
+            name_item.setIcon(self._folder_icon)
+        name_item.setData(Qt.UserRole, entry)
+        self.table.setItem(row, 1, name_item)
+
+        size = int(entry.get("size") or 0)
+        size_item = QTableWidgetItem(
+            "" if is_dir else qdownload.human_size(size))
+        size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.table.setItem(row, 2, size_item)
+
+        time_item = QTableWidgetItem(_fmt_time(entry.get("updated_at")))
+        self.table.setItem(row, 3, time_item)
+
+    def _insert_position(self, entry: dict) -> int:
+        """按当前列头排序把新条目放进已有展示顺序（文件夹恒在最前）。"""
+        lo, hi = 0, len(self._display)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._entry_before(entry, self._display[mid]):
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
+    def _entry_before(self, left: dict, right: dict) -> bool:
+        left_dir = bool(left.get("dir"))
+        right_dir = bool(right.get("dir"))
+        if left_dir != right_dir:
+            return left_dir
+        left_key = self._entry_sort_key(left)
+        right_key = self._entry_sort_key(right)
+        if left_key == right_key:
+            return False
+        return left_key > right_key if self._sort_desc else left_key < right_key
+
+    def _render_entries(self):
+        entries = self._ordered_entries()
+        self._display = list(entries)
+        self.select_all.blockSignals(True)
+        self.select_all.setChecked(False)
+        self.select_all.blockSignals(False)
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            self.table.setRowCount(len(entries))
+            for row, entry in enumerate(entries):
+                self._fill_row(row, entry)
+        finally:
+            self.table.setUpdatesEnabled(True)
+        self.count_label.setText(
+            f"{len(entries)} 项" + (" · 加载中…" if self._loading else ""))
+        self.path_label.setText(" / ".join(name for _fid, name in self._crumbs))
+        self.up_btn.setEnabled(len(self._crumbs) > 1)
 
     def _on_header_clicked(self, section: int):
         """列头点击：第 0 列是勾选框，不参与排序。"""

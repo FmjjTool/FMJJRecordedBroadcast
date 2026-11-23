@@ -147,43 +147,52 @@ class BaiduClient:
 
     # ==================== 目录 ====================
 
-    def list_dir(self, remote_path: str) -> list[dict]:
-        items: list[dict] = []
+    def iter_dir(self, remote_path: str, page_size: int = 100):
+        """逐页列出一个目录的子项；调用方可边翻页边展示。"""
         start = 0
         while True:
             resp = self.session.get(f"{BASE}/api/list", params={
                 **self._common(), "dir": remote_path or "/", "order": "name",
-                "start": start, "limit": 100, "bdstoken": self.bdstoken}, timeout=TIMEOUT)
+                "start": start, "limit": page_size,
+                "bdstoken": self.bdstoken}, timeout=TIMEOUT)
             data = self._check(self._json(resp, "/api/list"), "/api/list")
             batch = data.get("list") or []
-            items.extend(batch)
-            if len(batch) < 100:
+            if batch:
+                yield batch
+            if len(batch) < page_size:
                 break
-            start += 100
-        return items
+            start += page_size
 
-    def list_entries(self, remote_path: str = "/") -> list[dict]:
+    def list_dir(self, remote_path: str) -> list[dict]:
+        return [item for batch in self.iter_dir(remote_path) for item in batch]
+
+    @staticmethod
+    def _entry(item: dict) -> dict:
         """下载页使用的统一结构。
 
         `fid` 用路径（进入目录靠路径），`download_id` 用 fs_id
         （百度 filemetas 的 targets 对中文路径会报 errno 2，必须用 fsids）。
         """
-        entries: list[dict] = []
-        for item in self.list_dir(remote_path or "/"):
-            try:
-                size = int(item.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0
-            path = str(item.get("path") or "")
-            entries.append({
-                "file_name": str(item.get("server_filename") or ""),
-                "fid": path,
-                "download_id": str(item.get("fs_id") or ""),
-                "dir": str(item.get("isdir")) == "1",
-                "size": size,
-                "updated_at": item.get("server_mtime") or item.get("local_mtime") or "",
-            })
-        return entries
+        try:
+            size = int(item.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        return {
+            "file_name": str(item.get("server_filename") or ""),
+            "fid": str(item.get("path") or ""),
+            "download_id": str(item.get("fs_id") or ""),
+            "dir": str(item.get("isdir")) == "1",
+            "size": size,
+            "updated_at": item.get("server_mtime") or item.get("local_mtime") or "",
+        }
+
+    def iter_entries(self, remote_path: str = "/", page_size: int = 100):
+        """逐页产出下载页统一结构，首分页返回后即可渲染。"""
+        for batch in self.iter_dir(remote_path or "/", page_size):
+            yield [self._entry(item) for item in batch]
+
+    def list_entries(self, remote_path: str = "/") -> list[dict]:
+        return [entry for batch in self.iter_entries(remote_path) for entry in batch]
 
     def download_links(self, fsids: list[str]) -> dict[str, str]:
         """按 fs_id 批量取 dlink；返回值 `{fs_id: dlink}`。"""

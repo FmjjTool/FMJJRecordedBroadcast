@@ -293,10 +293,10 @@ class QuarkClient:
 
     # ==================== 目录 ====================
 
-    def list_dir(self, fid: str = "0", page_size: int = 100) -> list[dict]:
-        """列出一个目录的全部直接子项（自动翻页）。"""
-        items: list[dict] = []
+    def iter_dir(self, fid: str = "0", page_size: int = 100):
+        """逐页列出一个目录的直接子项；调用方可边翻页边展示。"""
         page = 1
+        fetched = 0
         while True:
             payload = self._request("GET", "/file/sort", params={
                 "pdir_fid": fid or "0",
@@ -309,7 +309,9 @@ class QuarkClient:
             })
             data = payload.get("data") or {}
             batch = data.get("list") or []
-            items.extend(batch)
+            if batch:
+                fetched += len(batch)
+                yield batch
             total = 0
             for holder in (payload.get("metadata") or {}, data.get("metadata") or {},
                            data if isinstance(data, dict) else {}):
@@ -319,29 +321,38 @@ class QuarkClient:
                     total = 0
                 if total:
                     break
-            if not batch or len(batch) < page_size or (total and len(items) >= total):
+            if not batch or len(batch) < page_size or (total and fetched >= total):
                 break
             page += 1
-        return items
+
+    def list_dir(self, fid: str = "0", page_size: int = 100) -> list[dict]:
+        """列出一个目录的全部直接子项（自动翻页）。"""
+        return [item for batch in self.iter_dir(fid, page_size) for item in batch]
+
+    @staticmethod
+    def _entry(item: dict) -> dict:
+        """下载页使用的统一结构，与百度 / 移动云盘字段对齐。"""
+        try:
+            size = int(item.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        file_id = str(item.get("fid") or "")
+        return {
+            "file_name": str(item.get("file_name") or ""),
+            "fid": file_id,
+            "download_id": file_id,
+            "dir": bool(item.get("dir")),
+            "size": size,
+            "updated_at": item.get("updated_at") or item.get("created_at") or "",
+        }
+
+    def iter_entries(self, fid: str = "0", page_size: int = 100):
+        """逐页产出下载页统一结构，首分页返回后即可渲染。"""
+        for batch in self.iter_dir(fid, page_size):
+            yield [self._entry(item) for item in batch]
 
     def list_entries(self, fid: str = "0") -> list[dict]:
-        """下载页使用的统一结构，与百度 / 移动云盘字段对齐。"""
-        entries: list[dict] = []
-        for item in self.list_dir(fid):
-            try:
-                size = int(item.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0
-            file_id = str(item.get("fid") or "")
-            entries.append({
-                "file_name": str(item.get("file_name") or ""),
-                "fid": file_id,
-                "download_id": file_id,
-                "dir": bool(item.get("dir")),
-                "size": size,
-                "updated_at": item.get("updated_at") or item.get("created_at") or "",
-            })
-        return entries
+        return [entry for batch in self.iter_entries(fid) for entry in batch]
 
     def download_headers(self) -> dict:
         """直链下载头；夸克直链要求 Cookie + Referer。"""

@@ -371,25 +371,28 @@ class Drive115Client:
 
     # ==================== 目录 ====================
 
-    def list_dir(self, cid: str = ROOT_ID) -> list[dict]:
-        """列一页或多页目录（115 单页上限 1150，超过要翻页）。"""
+    def iter_dir(self, cid: str = ROOT_ID, page_size: int = PAGE_SIZE):
+        """逐页列出目录（115 单页上限 1150，超过要翻页）。"""
         cid = str(cid or ROOT_ID)
-        items: list[dict] = []
         offset = 0
         while True:
             payload = self._request("GET", "/files", params={
                 "aid": 1, "cid": cid, "o": "user_ptime", "asc": 0,
-                "offset": offset, "show_dir": 1, "limit": PAGE_SIZE,
+                "offset": offset, "show_dir": 1, "limit": page_size,
                 "fc_mix": 0,
             })
             batch = payload.get("data")
             batch = batch if isinstance(batch, list) else []
-            items.extend(batch)
+            if batch:
+                yield batch
             total = _int(payload.get("count"))
             offset += len(batch)
-            if not batch or len(batch) < PAGE_SIZE or (total and offset >= total):
+            if not batch or len(batch) < page_size or (total and offset >= total):
                 break
-        return items
+
+    def list_dir(self, cid: str = ROOT_ID) -> list[dict]:
+        """列一页或多页目录（115 单页上限 1150，超过要翻页）。"""
+        return [item for batch in self.iter_dir(cid) for item in batch]
 
     @staticmethod
     def _is_dir(raw: dict) -> bool:
@@ -412,10 +415,15 @@ class Drive115Client:
             "updated_at": raw.get("t") or raw.get("u") or "",
         }
 
+    def iter_entries(self, cid: str = ROOT_ID, page_size: int = PAGE_SIZE):
+        """逐页产出下载页统一结构，首分页返回后即可渲染。"""
+        cid = str(cid or ROOT_ID)
+        for batch in self.iter_dir(cid, page_size):
+            yield [self._entry(raw, cid) for raw in batch]
+
     def list_entries(self, cid: str = ROOT_ID) -> list[dict]:
         """下载页使用的统一结构；目录的 `fid` 直接就是子目录 cid。"""
-        cid = str(cid or ROOT_ID)
-        return [self._entry(raw, cid) for raw in self.list_dir(cid)]
+        return [entry for batch in self.iter_entries(cid) for entry in batch]
 
     def ensure_dir(self, remote_dir: str) -> str:
         """逐级建目录，返回最终 cid；已存在则复用同名目录。"""

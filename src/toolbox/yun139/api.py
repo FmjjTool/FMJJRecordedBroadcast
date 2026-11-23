@@ -155,42 +155,51 @@ class Yun139Client:
 
     # ==================== 目录 ====================
 
-    def list_dir(self, file_id: str = "/") -> list[dict]:
-        items: list[dict] = []
+    def iter_dir(self, file_id: str = "/", page_size: int = 100):
+        """逐页列出一个目录的子项；调用方可边翻页边展示。"""
         cursor = None
         while True:
             data = self._post("/file/list", {
-                "pageInfo": {"pageSize": 100, "pageCursor": cursor},
+                "pageInfo": {"pageSize": page_size, "pageCursor": cursor},
                 "orderBy": "updated_at", "orderDirection": "DESC",
                 "parentFileId": file_id or "/",
                 "imageThumbnailStyleList": ["Small", "Large"],
             })
             batch = data.get("items") or []
-            items.extend(batch)
+            if batch:
+                yield batch
             cursor = (data.get("pageInfo") or {}).get("nextPageCursor")
             if not cursor or not batch:
                 break
-        return items
+
+    def list_dir(self, file_id: str = "/") -> list[dict]:
+        return [item for batch in self.iter_dir(file_id) for item in batch]
+
+    @staticmethod
+    def _entry(item: dict) -> dict:
+        """下载页使用的统一结构；`fid` 与 `download_id` 都是 fileId。"""
+        is_dir = item.get("type") == "folder"
+        try:
+            size = int(item.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        file_key = str(item.get("fileId") or "")
+        return {
+            "file_name": str(item.get("name") or ""),
+            "fid": file_key,
+            "download_id": file_key,
+            "dir": is_dir,
+            "size": 0 if is_dir else size,
+            "updated_at": item.get("updatedAt") or item.get("createdAt") or "",
+        }
+
+    def iter_entries(self, file_id: str = "/", page_size: int = 100):
+        """逐页产出下载页统一结构，首分页返回后即可渲染。"""
+        for batch in self.iter_dir(file_id or "/", page_size):
+            yield [self._entry(item) for item in batch]
 
     def list_entries(self, file_id: str = "/") -> list[dict]:
-        """下载页使用的统一结构；`fid` 与 `download_id` 都是 fileId。"""
-        entries: list[dict] = []
-        for item in self.list_dir(file_id or "/"):
-            is_dir = item.get("type") == "folder"
-            try:
-                size = int(item.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0
-            file_key = str(item.get("fileId") or "")
-            entries.append({
-                "file_name": str(item.get("name") or ""),
-                "fid": file_key,
-                "download_id": file_key,
-                "dir": is_dir,
-                "size": 0 if is_dir else size,
-                "updated_at": item.get("updatedAt") or item.get("createdAt") or "",
-            })
-        return entries
+        return [entry for batch in self.iter_entries(file_id) for entry in batch]
 
     def download_links(self, file_ids: list[str]) -> dict[str, str]:
         """逐个取下载地址（接口一次只接受一个 fileId，返回 data.url）。"""
