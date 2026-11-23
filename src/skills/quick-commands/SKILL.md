@@ -57,6 +57,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 | `/双版本` | `release-editions` | 标准版 / FULL 内置版双形态打包 |
 | `/并行` | `agent-coordination` | 多 Agent / 并行协作约束 |
 | `/测试` | `testing-quality-gates` | 测试层级与质量门禁 |
+| `/测试清理` | `test-cleanup` | 任务完成后删除测试文件与测试缓存 |
 | `/功能说明` | `software-feature-guide` | 各页面功能唯一说明处 |
 | `/shaman` | `shaman-jobs` | 可选 persona，非强制 |
 | `/快捷指令` | 本 skill | 输出本表 |
@@ -217,6 +218,14 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 2. Bug 修复必须补回归测试，不能只改代码。
 3. 测试数据隔离，不碰真实 Cookie、真实网络或生产数据库。
 4. 提交前运行适用门禁命令，报告中写实际结果，不虚报通过项。
+
+### /测试清理 → `test-cleanup`
+
+1. 先按 `/测试` 完成本次验证并记录真实结果，再删除 `tests/` 全部测试文件与测试缓存；不得为清理跳过测试。
+2. 删除范围：`tests/` 整目录 + `__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率与测试报告产物；不保留空目录。
+3. `tests/` 已被 `.gitignore` 忽略、不入库；删除不备份，不修改 `.gitignore`。
+4. 删除前核对 `git ls-files tests` 为空；不删源码、用户数据、凭据与证据截图；文件被占用时停止，不结束进程。
+5. 清理后更新当日报告并本地提交，写明清理范围与残留。
 
 ### /运行中 → `running-instance-guard`
 

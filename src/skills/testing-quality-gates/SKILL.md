@@ -83,7 +83,7 @@ PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
 - 报告写明：跑了哪些测试、结果、未跑哪些、为什么；失败是否已修复。
 - 不用“应该没问题”“理论上通过”代替实际结果。
 - 测试产生的临时文件、截图、日志不得提交；需要作为证据的截图放 `Progress/ui/<日期>/`。
-- 测试改动与业务改动一起提交；测试夹具不含真实个人数据/凭据。
+- `tests/` 已被 `.gitignore` 忽略，测试文件不入库；本次验证完成后按 [test-cleanup](../test-cleanup/SKILL.md) 删除测试文件与测试缓存。测试夹具不含真实个人数据/凭据。
 
 ## 检查清单
 
@@ -94,12 +94,14 @@ PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
 - [ ] 测试是否只用临时目录/虚构凭据/fake 网络，未碰真实环境？
 - [ ] UI 改动是否做了 offscreen 冒烟？视觉改动是否做了浅/深主题手工核对？
 - [ ] 全量测试是否通过？未跑的测试是否如实报告？
+- [ ] 验证完成后是否已按 `test-cleanup` 删除 `tests/` 与测试缓存？
 - [ ] 录播八模块/Cookie/腾讯文档写入是否先核对了授权边界？
 - [ ] 是否更新当日报告并本地提交？
 
 ## 与其他 skill 的关系
 
 - `summarize-update`：开发阶段冒烟、报告、提交与发布流程；本 skill 补测试分层与门禁。
+- `test-cleanup`：验证完成后的测试文件与缓存清理；先测后删，`tests/` 不入库。
 - `layering-contract`：测试按层放置；L3 纯逻辑必须可脱离 Qt 测试。
 - `data-lifecycle`：迁移/备份/恢复测试的具体要求。
 - `security-baseline`：安全输入、路径、ZIP、subprocess、日志的测试用例。

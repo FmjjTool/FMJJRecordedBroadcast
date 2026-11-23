@@ -10,7 +10,7 @@
 
 | 类别 | Skill | 触发 |
 | --- | --- | --- |
-| 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试 |
+| 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates`、`test-cleanup` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试；任务完成后清理测试文件与缓存 |
 | 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
 | 运行保护 | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
 | 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
@@ -22,7 +22,7 @@
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/测试清理`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
@@ -70,6 +70,7 @@
 
 - **安全基线** [security-baseline](src/skills/security-baseline/SKILL.md)：涉及 Cookie 之外的密钥、日志脱敏、文件导入导出、ZIP、subprocess、网络请求、依赖或打包时必读。
 - **测试与质量门禁** [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md)：任何代码修改、重构、Bug 修复、数据迁移或 UI 改动时必读。
+- **测试文件清理** [test-cleanup](src/skills/test-cleanup/SKILL.md)：任何代码任务验证完成后执行——删除 `tests/` 全部测试文件与测试缓存（`__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率产物）；`tests/` 已被 `.gitignore` 忽略、删除不备份；不得借清理删源码、用户数据或凭据，也不得跳过测试。
 - **并行协作** [agent-coordination](src/skills/agent-coordination/SKILL.md)：多 Agent/并行进程/用户同时编辑、共享文件或长任务时必读。
 - **数据生命周期** [data-lifecycle](src/skills/data-lifecycle/SKILL.md)：新增/修改数据库、存储、去重、迁移、备份、保留清理时必读。
 - **平台适配** [platform-adapter-policy](src/skills/platform-adapter-policy/SKILL.md)：新增/修改平台接口、登录、下载、回退策略时必读。

@@ -274,6 +274,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [ ] 本次涉及界面时已读 `ui-visual-spec` 并核对留白、页签层级（≤4 级）、边框（1px）、单行按钮数（≤5）与下拉宽度；涉及弹窗、表格、状态、表单或按钮文案时已读 `ui-interaction-spec`。
 - [ ] 本次涉及新增/移动/重构模块或跨层调用时，已读 `layering-contract`，新代码放置与依赖方向符合分层约束。
 - [ ] 本次涉及安全/测试/并行协作/数据迁移/平台适配/生成图片时，已读对应横向 skill：`security-baseline` / `testing-quality-gates` / `agent-coordination` / `data-lifecycle` / `platform-adapter-policy` / `image-output-spec`。
+- [ ] 代码任务完成后已按 `test-cleanup` 删除 `tests/` 全部测试文件与测试缓存（用户当次明确保留的除外）。
 - [ ] 更新前已读 `recording-toolbox-core` 并核对直接/间接影响；未修改八个核心模块，或仅按用户已明确授权的具体范围修改。
 - [ ] 如需认证验证，已确认只读无副作用，或使用独立临时目录和虚构凭据；未复制、输出、备份进 Git 或导出真实 Cookie。
 - [ ] 实际「总结文章」任务已携带可读取文件，并完整读取指定总结 skill 及规则参考；规则维护没有被误判为实际总结。
@@ -290,6 +291,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [layering-contract](../layering-contract/SKILL.md)：五层 + 横切层的名称、职责、允许依赖与禁止模式；新增/重构/跨层调用前必读。
 - [security-baseline](../security-baseline/SKILL.md)：Cookie 之外的密钥、日志、文件、ZIP、subprocess、网络、依赖与打包安全；不授权真实凭据操作。
 - [testing-quality-gates](../testing-quality-gates/SKILL.md)：测试分层、隔离数据、回归测试与质量门禁。
+- [test-cleanup](../test-cleanup/SKILL.md)：代码任务验证完成后删除 `tests/` 全部测试文件与测试缓存；先测后删、`tests/` 不入库。
 - [agent-coordination](../agent-coordination/SKILL.md)：多 Agent/并行进程、文件所有权、WIP 备份、提交拆分与冲突交接。
 - [data-lifecycle](../data-lifecycle/SKILL.md)：存储 owner、schema 迁移、去重、备份、保留清理与 primary/derived。
 - [platform-adapter-policy](../platform-adapter-policy/SKILL.md)：平台 Adapter 契约、能力矩阵、回退、限流、错误分类与契约测试。
