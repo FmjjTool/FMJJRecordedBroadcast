@@ -10,7 +10,7 @@
 
 | 类别 | Skill | 触发 |
 | --- | --- | --- |
-| 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates`、`test-cleanup` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试；任务完成后清理测试文件与缓存 |
+| 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates`、`test-cleanup` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试；任务完成后清理测试文件、缓存与根目录临时产物 |
 | 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
 | 运行保护 | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
 | 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
@@ -70,7 +70,7 @@
 
 - **安全基线** [security-baseline](src/skills/security-baseline/SKILL.md)：涉及 Cookie 之外的密钥、日志脱敏、文件导入导出、ZIP、subprocess、网络请求、依赖或打包时必读。
 - **测试与质量门禁** [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md)：任何代码修改、重构、Bug 修复、数据迁移或 UI 改动时必读。
-- **测试文件清理** [test-cleanup](src/skills/test-cleanup/SKILL.md)：任何代码任务验证完成后执行——删除 `tests/` 全部测试文件与测试缓存（`__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率产物）；`tests/` 已被 `.gitignore` 忽略、删除不备份；不得借清理删源码、用户数据或凭据，也不得跳过测试。
+- **测试文件清理** [test-cleanup](src/skills/test-cleanup/SKILL.md)：任何代码任务验证完成后执行——删除 `tests/` 全部测试文件与测试缓存（`__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率产物），以及用户明确确认的根目录临时产物（`.tmp/`、`_tmp_*`、`_smoke/`、`_probe_*`、调试 HTML、编辑器/Agent 暂存目录等）；`tests/` 已被 `.gitignore` 忽略、删除不备份；被 Git 跟踪的本地数据文件只 `git rm --cached` 移出版本跟踪、不删本地文件；备份/快照类目录经用户确认后移入回收站；不得借清理删源码、用户数据或凭据，也不得跳过测试。
 - **并行协作** [agent-coordination](src/skills/agent-coordination/SKILL.md)：多 Agent/并行进程/用户同时编辑、共享文件或长任务时必读。
 - **数据生命周期** [data-lifecycle](src/skills/data-lifecycle/SKILL.md)：新增/修改数据库、存储、去重、迁移、备份、保留清理时必读。
 - **平台适配** [platform-adapter-policy](src/skills/platform-adapter-policy/SKILL.md)：新增/修改平台接口、登录、下载、回退策略时必读。
