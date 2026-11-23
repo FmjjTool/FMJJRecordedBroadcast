@@ -799,7 +799,21 @@ class CookieManagerDialog(QDialog):
         host = QWidget()
         host.setAttribute(Qt.WA_NativeWindow)  # 原生句柄取物理坐标（免 DPI 换算）
         host.setStyleSheet("background: #ffffff;")
+        host_lay = QVBoxLayout(host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        host_lbl = QLabel("正在启动登录浏览器…", host)
+        host_lbl.setAlignment(Qt.AlignCenter)
+        host_lbl.setStyleSheet("color: #888; background: #ffffff;")
+        host_lay.addWidget(host_lbl)
         v.addWidget(host, 1)
+
+        def _set_host_hint(text):
+            """宿主区域提示文案（'' = 隐藏，浏览器贴上来后调用）。"""
+            try:
+                host_lbl.setText(text)
+                host_lbl.setVisible(bool(text))
+            except Exception:
+                pass
 
         # 底部操作栏：只有用户点「已获取」才保存，不自动不超时
         bar = QHBoxLayout()
@@ -820,9 +834,10 @@ class CookieManagerDialog(QDialog):
         bar.addWidget(got_btn)
         pop_btn = QPushButton("⌨ 改独立窗口")
         pop_btn.setStyleSheet("color: #1565c0;")
-        pop_btn.setToolTip("无法在嵌入页面打字时点此：浏览器弹回独立窗口，输入必定可用，Cookie 捕获不受影响")
+        pop_btn.setToolTip("页面按钮/输入异常，或需要拖动缩放浏览器时点此弹出为独立窗口；"
+                           "再点一次贴回登录框（Cookie 捕获不受影响）")
         pop_btn.setEnabled(False)  # 嵌入成功后才可用
-        pop_btn.clicked.connect(lambda *args: _pop_out())
+        pop_btn.clicked.connect(lambda *args: _toggle_pop())
         bar.addWidget(pop_btn)
         cancel_btn = QPushButton("放弃")
         cancel_btn.clicked.connect(dlg.close)
@@ -937,6 +952,7 @@ class CookieManagerDialog(QDialog):
         # ==== Win32 覆盖层辅助（Playwright 启动的 Chromium 系窗口类名）====
         import ctypes
         user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
         GWL_STYLE, GWL_EXSTYLE = -16, -20
         WS_CAPTION, WS_THICKFRAME, WS_EX_TOOLWINDOW = 0x00C00000, 0x00040000, 0x00000080
 
@@ -994,6 +1010,70 @@ class CookieManagerDialog(QDialog):
         state = {"stop": threading.Event(), "hwnd": 0, "overlay": False,
                  "box_open": False, "reload": threading.Event()}
 
+        def _window_rect(hwnd):
+            """窗口屏幕矩形 (l, t, r, b)；失败返回 None。"""
+            from ctypes import wintypes
+            rc = wintypes.RECT()
+            try:
+                if not user32.GetWindowRect(int(hwnd), ctypes.byref(rc)):
+                    return None
+            except Exception:
+                return None
+            return rc.left, rc.top, rc.right, rc.bottom
+
+        def _cursor_in(hwnd):
+            """鼠标是否落在浏览器窗口矩形内（用户正在页面里操作）。"""
+            rc = _window_rect(hwnd) if hwnd else None
+            if not rc:
+                return False
+            from ctypes import wintypes
+            pt = wintypes.POINT()
+            try:
+                if not user32.GetCursorPos(ctypes.byref(pt)):
+                    return False
+            except Exception:
+                return False
+            return rc[0] <= pt.x < rc[2] and rc[1] <= pt.y < rc[3]
+
+        def _mouse_down():
+            """左键是否按下（拖动窗口/在页面里拖拽时不要抢前台）。"""
+            try:
+                return bool(user32.GetAsyncKeyState(0x01) & 0x8000)
+            except Exception:
+                return False
+
+        def _activate(hwnd):
+            """把浏览器窗口真正拿到系统前台（Chromium 非激活状态会丢弃点击/按键）。
+
+            后台进程直接 SetForegroundWindow 会被 Windows 前台锁静默拒绝（这正是
+            「内嵌后页面按钮点不动、只能改独立窗口」的根因）：把前台窗口和浏览器
+            窗口的输入线程都 AttachThreadInput 到本线程，调用结束后再解绑，
+            SetFocus 才能真正落到 Chromium 的窗口上。
+            """
+            if not hwnd:
+                return False
+            try:
+                fg = user32.GetForegroundWindow()
+                tid_me = kernel32.GetCurrentThreadId()
+                attached = []
+                for wnd in (fg, hwnd):
+                    if not wnd:
+                        continue
+                    tid = user32.GetWindowThreadProcessId(wnd, None)
+                    if tid and tid != tid_me and tid not in attached:
+                        if user32.AttachThreadInput(tid_me, tid, True):
+                            attached.append(tid)
+                try:
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.SetFocus(hwnd)
+                finally:
+                    for tid in attached:
+                        user32.AttachThreadInput(tid_me, tid, False)
+                return user32.GetForegroundWindow() == hwnd
+            except Exception:
+                return False
+
         def _fg_root():
             """当前前台窗口的根窗口句柄（0=无）。"""
             fg = user32.GetForegroundWindow()
@@ -1017,18 +1097,29 @@ class CookieManagerDialog(QDialog):
             try:
                 if dlg.isActiveWindow():
                     return True
-                return _fg_root() == hwnd
+                if _fg_root() == hwnd:
+                    return True
+                # 前台还是登录框、鼠标已经进到页面区域：用户正要点页面，
+                # 提前保持显示（否则这一刻被收起，点击就落在空白处）
+                return _fg_root() == int(dlg.winId()) and _cursor_in(hwnd)
             except Exception:
                 return True
 
-        def _resync():
-            """按激活状态同步贴合层可见性（显示时同时贴合+抬 z 序）。"""
+        def _resync(activate=False):
+            """按激活状态同步贴合层可见性（显示时同时贴合+抬 z 序）。
+
+            activate=True 或鼠标已在页面里时，顺带把前台交给浏览器窗口：
+            Chromium 未拿到系统激活就不派发点击（页面按钮点了没反应）。
+            """
             hwnd = state.get("hwnd") or 0
             if not hwnd or not state.get("overlay") or state.get("box_open"):
                 return
             if _overlay_should_show():
                 _bw_show(hwnd, True)
                 _reposition()
+                if (activate or _cursor_in(hwnd)) and _fg_root() != hwnd \
+                        and not _mouse_down():
+                    _activate(hwnd)
             else:
                 _bw_show(hwnd, False)
 
@@ -1053,6 +1144,8 @@ class CookieManagerDialog(QDialog):
                     if same:
                         # 矩形没变也要抬 z 序：主窗口激活过就会把浏览器压到
                         # 下面（被 Qt 遮住的根因），NOMOVE|NOSIZE 不触发重绘
+                        if _mouse_down():
+                            return  # 正在页面里点击/拖拽：此刻不要动窗口
                         user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
                                             SWP_NOSIZE | SWP_NOMOVE
                                             | SWP_NOACTIVATE | SWP_SHOWWINDOW
@@ -1065,13 +1158,13 @@ class CookieManagerDialog(QDialog):
             except Exception:
                 pass
 
-        def _embed(hwnd):
-            """主线程：浏览器改成无边框顶层窗口，贴合 host 区域（视觉等同内嵌）。
+        def _apply_fit(hwnd):
+            """去边框 + 工具窗口 + 贴合 host，并把前台交给浏览器。
 
             保持顶层独立窗口是关键：作子窗口嵌入时 Chromium 收不到系统激活
             消息（WM_ACTIVATE/WM_ACTIVATEAPP），会按「未激活」丢弃按键，登录框
-            完全打不了字（实测）；顶层贴合方案下键盘输入原生可用。"""
-            state["hwnd"] = hwnd
+            完全打不了字（实测）；顶层贴合方案下键盘输入原生可用。
+            可重复调用（弹出后再次贴回共用）。"""
             try:
                 style = user32.GetWindowLongW(hwnd, GWL_STYLE)
                 user32.SetWindowLongW(hwnd, GWL_STYLE,
@@ -1080,17 +1173,28 @@ class CookieManagerDialog(QDialog):
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
                                       int(ex) | WS_EX_TOOLWINDOW)  # 不进任务栏/Alt-Tab
                 state["overlay"] = True
-                # 激活一次浏览器窗口：NOACTIVATE 贴入的窗口从未被激活过，
-                # Chromium 在非激活状态下会丢弃按钮点击的事件派发（实测快手
-                # 验证码登录「获取验证码」点击零请求、无倒计时，激活后恢复）
-                try:
-                    user32.SetForegroundWindow(hwnd)
-                except Exception:
-                    pass
-                _resync()
-                for ms in (150, 400, 1000):
-                    QTimer.singleShot(ms, _resync)
+                _set_host_hint("")
+                _resync(activate=True)
+                # NOACTIVATE 贴入的窗口常常一次激活不成功（前台锁、页面还没
+                # 首帧都会让 Chromium 处于未激活，点击被丢弃）—— 多点几次，
+                # 已经在前台时 _resync 内部会直接跳过，不会抢输入焦点
+                for ms in (120, 350, 800, 1500, 2600):
+                    QTimer.singleShot(ms, lambda: _resync(True))
+                return True
+            except Exception:
+                return False
 
+        def _embed(hwnd):
+            """主线程：浏览器改成无边框顶层窗口，贴合 host 区域（视觉等同内嵌）。"""
+            state["hwnd"] = hwnd
+            if not _apply_fit(hwnd):
+                pass  # 贴合失败时浏览器保持独立窗口，登录功能不受影响
+            else:
+                pop_btn.setText("⌨ 改独立窗口")
+                pop_btn.setToolTip("页面按钮/输入异常，或需要拖动缩放浏览器时点此"
+                                   "弹出为独立窗口；再点一次贴回登录框")
+                pop_btn.setEnabled(True)
+            if not state.get("focus_filter"):
                 # 对话框激活/失活/移动/缩放/最小化时保持贴合；
                 # 失活时收起贴合层（防主窗口把它压到后面 + 规避嵌套循环冻死组合）
                 class _FollowFilter(QObject):
@@ -1116,10 +1220,26 @@ class CookieManagerDialog(QDialog):
                 dlg.installEventFilter(filt)
                 host.installEventFilter(filt)
                 state["focus_filter"] = filt
-                pop_btn.setEnabled(True)
-            except Exception:
-                pass  # 贴合失败时浏览器保持独立窗口，登录功能不受影响
             _refresh_cap()
+
+        def _find_window(before, timeout=8.0):
+            """等 Playwright 启动的浏览器窗口出现（只看窗口，不等页面加载）。"""
+            deadline = time.time() + timeout
+            while time.time() < deadline and not state["stop"].is_set():
+                new = [h for h in _enum_browser_windows() if h not in before]
+                if new:
+                    # 取面积最大的那个：启动瞬间可能还有「首次运行」之类的小弹窗
+                    best, area = 0, -1
+                    for h in new:
+                        rc = _window_rect(h)
+                        if not rc:
+                            continue
+                        a = (rc[2] - rc[0]) * (rc[3] - rc[1])
+                        if a > area:
+                            best, area = h, a
+                    return best or new[0]
+                time.sleep(0.12)
+            return None
 
         def worker():
             """后台线程：Playwright 生命周期必须在创建线程内收尾（sync API 非线程安全）。"""
@@ -1176,18 +1296,25 @@ class CookieManagerDialog(QDialog):
                                                   "domain": dom, "path": "/"}])
                                 jar[n] = val
                     page = ctx.new_page()
-                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                    # 找到新出现的浏览器窗口句柄 → 主线程嵌入
-                    hwnd = None
-                    deadline = time.time() + 10
-                    while time.time() < deadline and not state["stop"].is_set():
-                        new = [h for h in _enum_browser_windows() if h not in before]
-                        if new:
-                            hwnd = new[0]
-                            break
-                        time.sleep(0.3)
-                    if hwnd is not None:
-                        post_to_main(lambda: _embed(hwnd))
+                    # 先贴进登录框、再导航：窗口一出现就嵌入，页面在自己的窗口里
+                    # 加载并显示进度条，不必等导航完成。原来的顺序是 goto 返回后
+                    # 才找窗口 —— 慢站点要空白等几十秒，goto 超时更是永远不贴。
+                    hwnd = _find_window(before, 3.5)
+                    if hwnd:
+                        post_to_main(lambda h=hwnd: _embed(h))
+                    # commit = 拿到响应头就返回（比 domcontentloaded 早得多），
+                    # 慢页面不再把嵌入和 Cookie 捕获一起堵住
+                    try:
+                        page.goto(url, wait_until="commit", timeout=45000)
+                    except Exception:
+                        # 已贴进登录框：页面会自己慢加载，也可点「刷新」重试
+                        if not hwnd:
+                            post_to_main(lambda: _set_host_hint(
+                                "页面加载较慢，稍候…（可点下方「刷新」重试）"))
+                    if not hwnd:
+                        hwnd = _find_window(before, 10.0)
+                        if hwnd:
+                            post_to_main(lambda h=hwnd: _embed(h))
                     # 轮询捕获（全量含 HttpOnly；窗口被用户手动关闭时退出）
                     nick_tries = 0  # 昵称抓取次数（接口风控严，只在登录窗里问得到）
                     poll_i = 0
@@ -1236,6 +1363,7 @@ class CookieManagerDialog(QDialog):
                             break
             except Exception as e:
                 def _fail(msg=str(e)):
+                    _set_host_hint("浏览器启动失败，请改用「输入」手动粘贴 Cookie")
                     if dlg.isVisible():
                         _info_box(QMessageBox.Warning, "打开失败",
                                   f"浏览器启动失败：\n{msg}\n\n可改用「输入」手动粘贴 Cookie",
@@ -1248,7 +1376,11 @@ class CookieManagerDialog(QDialog):
             if not hwnd:
                 return
             state["overlay"] = False
-            pop_btn.setEnabled(False)
+            pop_btn.setText("↩ 贴回登录框")
+            pop_btn.setToolTip("浏览器已弹出为独立窗口；点此重新贴回登录框")
+            pop_btn.setEnabled(True)
+            _set_host_hint("浏览器已在独立窗口中打开（不遮挡主界面），"
+                           "登录完成后回到这里点「已获取」")
             try:
                 style = user32.GetWindowLongW(hwnd, GWL_STYLE)
                 user32.SetWindowLongW(hwnd, GWL_STYLE,
@@ -1257,9 +1389,27 @@ class CookieManagerDialog(QDialog):
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE, int(ex) & ~WS_EX_TOOLWINDOW)
                 # 尾部 0x4040 = SWP_SHOWWINDOW|SWP_ASYNCWINDOWPOS
                 user32.SetWindowPos(hwnd, 0, 100, 100, 1100, 760, 0x4040)
-                user32.SetForegroundWindow(hwnd)
+                _activate(hwnd)
             except Exception:
                 pass
+
+        def _re_embed():
+            """把弹出为独立窗口的浏览器重新贴回登录框。"""
+            hwnd = state.get("hwnd") or 0
+            if not hwnd:
+                return
+            if _apply_fit(hwnd):
+                pop_btn.setText("⌨ 改独立窗口")
+                pop_btn.setToolTip("页面按钮/输入异常，或需要拖动缩放浏览器时点此"
+                                   "弹出为独立窗口；再点一次贴回登录框")
+                pop_btn.setEnabled(True)
+
+        def _toggle_pop():
+            """同一个按钮：贴合 ↔ 独立窗口 互相切换。"""
+            if state.get("overlay"):
+                _pop_out()
+            else:
+                _re_embed()
 
         def _cleanup():
             state["stop"].set()
