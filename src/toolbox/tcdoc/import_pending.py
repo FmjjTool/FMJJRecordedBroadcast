@@ -119,15 +119,18 @@ def _source_paths(project: Path, item: dict) -> dict[str, list[Path]]:
     for index, url in enumerate(album, 1):
         if not isinstance(url, str):
             continue
-        suffix = ".jpg" if len(album) == 1 else f"_{index}.jpg"
-        mapping.setdefault(url, []).extend(directory / (s + suffix) for s in stems)
+        # 下载器会按 Content-Type 改扩展名（抖音图集存成 .webp、.png 原图存成 .png），
+        # 候选必须覆盖所有图片扩展名，不能只按 URL 后缀或 .jpg 猜。
+        suffix = "" if len(album) == 1 else f"_{index}"
+        mapping.setdefault(url, []).extend(
+            directory / (s + suffix + ext) for s in stems for ext in _IMAGE_SUFFIXES)
     cover = str(item.get("cover_url") or "")
     if cover and cover not in album:
-        ext = Path(urlsplit(cover).path).suffix.lower()
-        ext = ext if ext in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"} else ".jpg"
         # 旧 B站下载器把封面直接保存为 stem.jpg；新媒体下载器使用 _封面 后缀。
         mapping.setdefault(cover, []).extend(
-            p for s in stems for p in (directory / (s + "_封面" + ext), directory / (s + ext)))
+            directory / (s + "_封面" + ext) for s in stems for ext in _IMAGE_SUFFIXES)
+        mapping.setdefault(cover, []).extend(
+            directory / (s + ext) for s in stems for ext in _IMAGE_SUFFIXES)
     return mapping
 
 
