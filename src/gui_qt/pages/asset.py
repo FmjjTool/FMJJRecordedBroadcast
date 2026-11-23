@@ -572,6 +572,8 @@ class AssetPage(BasePage):
         self._disk_items = []           # 磁盘已下载数据全量
         self._collected_all_items = []  # 当前平台筛选后的列表
         self._collected_page = 1        # 当前页码（分页渲染）
+        self._collected_rendering = False   # 整页渲染重入保护（分页条失焦会触发跳页）
+        self._collected_pager_spin = None   # 当前分页条「跳至」数字框（重建前屏蔽信号）
         self._dl_state = {}             # 条目下载状态：'downloading' / 'done'
         self._no_dl = _load_no_dl()     # 不可下载标记（auto/manual/allow，持久化）
         self._search_var = ""           # 搜索关键词
@@ -1983,7 +1985,11 @@ class AssetPage(BasePage):
                 items, plat, self.status_sel.currentText(), desc, kw)
         if not keep_page:
             self._collected_page = 1
-        self._render_collected_batch()
+        if keep_page:
+            self._render_collected_batch_keep_scroll()
+        else:
+            self._render_collected_batch()
+            self.collected_scroll.verticalScrollBar().setValue(0)
         if not is_files and self._ever_shown:
             self._backfill_bili_covers()
 
@@ -2123,7 +2129,11 @@ class AssetPage(BasePage):
             self._disk_items, plat, status, desc, kw)
         if not keep_page:
             self._collected_page = 1
-        self._render_collected_batch()
+        if keep_page:
+            self._render_collected_batch_keep_scroll()
+        else:
+            self._render_collected_batch()
+            self.collected_scroll.verticalScrollBar().setValue(0)
 
     def _backfill_bili_covers(self):
         """补齐已下载 B站视频的官方封面（旧版下载的视频没有同名 .jpg 索引）。
@@ -2230,6 +2240,26 @@ class AssetPage(BasePage):
 
         两种视图共用分页条：entry（已获取条目）/ files（download 分类目录的文件清单）。
         """
+        if getattr(self, "_collected_rendering", False):
+            # 重建时旧分页条被隐藏会让「跳至」数字框发出 editingFinished，
+            # 再次请求整页渲染；嵌套重入会覆盖当前重建，直接忽略。
+            return
+        self._collected_rendering = True
+        try:
+            self._render_collected_batch_body()
+        finally:
+            self._collected_rendering = False
+
+    def _render_collected_batch_body(self):
+        # 旧分页条即将被隐藏：先屏蔽「跳至」数字框，避免失焦的
+        # editingFinished 把页码改回旧值（重建时嵌套请求已被上一级忽略）。
+        old_spin = self._collected_pager_spin
+        if old_spin is not None:
+            try:
+                old_spin.blockSignals(True)
+            except RuntimeError:
+                pass
+            self._collected_pager_spin = None
         lay = self.collected_layout
         self._clear_layout(lay)
         if getattr(self, "_view_mode", "entries") == "files":
@@ -2255,6 +2285,23 @@ class AssetPage(BasePage):
             self._render_collected_row(items[i], i + 1)
         lay.addWidget(self._make_pager(len(items), page, total_pages))
         lay.addStretch(1)
+
+    def _render_collected_batch_keep_scroll(self):
+        """整页重渲染并恢复滚动位置：_clear_layout 会让 QScrollArea 跳到最大值。"""
+        bar = self.collected_scroll.verticalScrollBar()
+        pos = bar.value()
+        self._render_collected_batch()
+        QTimer.singleShot(0, lambda: self._restore_scroll_pos(pos))
+
+    def _restore_scroll_pos(self, pos, tries=3):
+        """等布局/删除事件处理完再恢复滚动；期间范围短暂归零时重试。"""
+        if self._disposed:
+            return
+        bar = self.collected_scroll.verticalScrollBar()
+        if bar.maximum() <= 0 and tries > 0:
+            QTimer.singleShot(0, lambda: self._restore_scroll_pos(pos, tries - 1))
+            return
+        bar.setValue(min(pos, bar.maximum()))
 
     def _render_files_batch(self, lay):
         """download 分类目录：按「一次导出的产物」聚合的条目（类 B站/抖音行）。"""
@@ -2714,6 +2761,7 @@ class AssetPage(BasePage):
         spin.setFixedWidth(64)
         spin.setStyleSheet("QSpinBox { padding: 1px 4px; }")
         spin.editingFinished.connect(lambda s=spin: self._goto_collected_page(s.value()))
+        self._collected_pager_spin = spin
         h.addWidget(spin)
         h.addWidget(QLabel("页"))
         h.addStretch(1)
@@ -2722,7 +2770,10 @@ class AssetPage(BasePage):
     def _goto_collected_page(self, page):
         total = len(self._current_view_items())
         total_pages = (total + BATCH - 1) // BATCH if total else 1
-        self._collected_page = min(max(1, page), total_pages)
+        new_page = min(max(1, page), total_pages)
+        if new_page == self._collected_page:
+            return
+        self._collected_page = new_page
         self._render_collected_batch()
 
     def _render_collected_row(self, it, index):
@@ -2795,21 +2846,15 @@ class AssetPage(BasePage):
 
         actions = QVBoxLayout()
         actions.setSpacing(6)
-        redo_btn = _asset_action("重新下载", lambda _=False, e=it: self._download_for_item(e, force=True),
-                                 tip="重新下载（忽略已下载状态）")
+        has_media = bool(it.get("media_files"))
+        dl_btn = _asset_action("重新下载" if has_media else "下载资源",
+                               lambda _=False, e=it: self._download_for_item(e, force=True),
+                               tip="重新下载（忽略已下载状态）" if has_media
+                               else "下载该条目的图片 / 视频资源")
         if no_dl:
-            redo_btn.setEnabled(False)
-            redo_btn.setToolTip("已标记不可下载（纯文本无媒体），右键行可解除限制")
-        actions.addWidget(redo_btn)
-        if it.get("cover_url") and not it.get("media_files") and not no_dl:
-            plat0, vid0 = it.get("platform", ""), str(it.get("video_id") or "")
-            if plat0 == "bilibili":
-                is_vid = (self._bili_dynamic_type(it) == "av"
-                          or (bool(vid0) and not vid0.startswith("dyn_")))
-            else:
-                is_vid = plat0 == "douyin" or self._item_has_video(it)
-            actions.addWidget(_asset_action("下载视频" if is_vid else "下载封面",
-                                            lambda _=False, e=it: self._download_for_item(e)))
+            dl_btn.setEnabled(False)
+            dl_btn.setToolTip("已标记不可下载（纯文本无媒体），右键行可解除限制")
+        actions.addWidget(dl_btn)
         actions.addWidget(_asset_action("删除", lambda _=False, e=it: self._delete_item(e),
                                         danger=True, tip="选择要删除的关联文件"))
         h.addLayout(actions)
@@ -3134,7 +3179,7 @@ class AssetPage(BasePage):
 
         微博生日/活动自动帖的封面是 pc.us.sinaimg.cn 下的卡片占位图，
         不能算作可下载媒体；这类条目按纯文本处理，避免列表里出现
-        「重新下载/下载封面」按钮、点下去才提示无图可下。
+        「下载资源」按钮、点下去才提示无图可下。
         """
         if it.get("media_files"):
             return False
@@ -3241,7 +3286,8 @@ class AssetPage(BasePage):
                     "subdir": target.get("platform", ""),
                 })
                 existing.add(path)
-            self._reload_from_memory(keep_page=True)
+            if not self._refresh_item_row(target):
+                self._reload_from_memory(keep_page=True)
             return
 
         def work():
@@ -3266,6 +3312,97 @@ class AssetPage(BasePage):
             self._reload_from_memory(keep_page=True)
 
         run_bg(work, done)
+
+    def _refresh_item_row(self, it) -> bool:
+        """单条下载完成后的行级刷新：只换这一张卡片，不整页重渲染（滚动不跳底）。
+
+        条目 dict 已就地补全 media_files；按当前筛选判断它是否仍在列表：
+        仍在 → 原位换行；被筛掉（如「未下载」下刚下完）→ 移出并保滚动位置重排。
+        返回 False 表示条目不在当前数据源，交由调用方整页刷新兜底。
+        """
+        if getattr(self, "_view_mode", "entries") != "entries":
+            return False
+        if not any(x is it for x in self._disk_items):
+            return False
+        plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
+        status = self.status_sel.currentText()
+        desc = self.sort_sel.currentText() == "时间倒序"
+        kw = (self._search_var or "").strip().lower()
+        matches = bool(self._apply_item_filters([it], plat, status, desc, kw))
+        idx = next((i for i, x in enumerate(self._collected_all_items) if x is it), None)
+        if idx is None:
+            if not matches:
+                return True
+            # 原来被筛掉、下载后应出现（如「已下载」筛选）：重算清单，保滚动位置
+            self._collected_all_items = self._apply_item_filters(
+                self._disk_items, plat, status, desc, kw)
+            self._render_collected_batch_keep_scroll()
+            return True
+        if matches:
+            self._replace_collected_row(idx, it)
+            return True
+        del self._collected_all_items[idx]
+        self._refresh_after_row_removed(idx)
+        return True
+
+    def _refresh_after_row_removed(self, idx):
+        """从当前页移除一条后，只重排该行之后的卡片与分页条（上方行不动）。"""
+        lay = self.collected_layout
+        total = len(self._collected_all_items)
+        if not total:
+            self._render_collected_batch()
+            self.collected_scroll.verticalScrollBar().setValue(0)
+            return
+        total_pages = (total + BATCH - 1) // BATCH
+        page = min(max(1, self._collected_page), total_pages)
+        if page != self._collected_page:
+            self._render_collected_batch_keep_scroll()
+            return
+        start = (page - 1) * BATCH
+        pos = idx - start
+        if pos < 0 or pos >= BATCH:
+            self._render_collected_batch_keep_scroll()
+            return
+        bar = self.collected_scroll.verticalScrollBar()
+        bar_pos = bar.value()
+        old_spin = self._collected_pager_spin
+        if old_spin is not None:
+            try:
+                old_spin.blockSignals(True)
+            except RuntimeError:
+                pass
+            self._collected_pager_spin = None
+        while lay.count() > pos:
+            item = lay.takeAt(pos)
+            w = item.widget()
+            if w:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        for i in range(start + pos, min(start + BATCH, total)):
+            self._render_collected_row(self._collected_all_items[i], i + 1)
+        lay.addWidget(self._make_pager(total, page, total_pages))
+        lay.addStretch(1)
+        QTimer.singleShot(0, lambda: self._restore_scroll_pos(bar_pos))
+
+    def _replace_collected_row(self, idx, it):
+        """把列表第 idx 条对应的已渲染卡片原地替换（页码与滚动位置不变）。"""
+        lay = self.collected_layout
+        total = len(self._collected_all_items)
+        total_pages = (total + BATCH - 1) // BATCH if total else 1
+        self._collected_page = min(max(1, self._collected_page), total_pages)
+        pos = idx - (self._collected_page - 1) * BATCH
+        if pos < 0 or pos >= BATCH or pos >= lay.count():
+            return
+        old = lay.itemAt(pos).widget()
+        if not isinstance(old, _RowWidget):
+            return
+        bar_pos = self.collected_scroll.verticalScrollBar().value()
+        lay.insertWidget(pos, self._make_collected_row(it, idx + 1))
+        old.hide()
+        old.setParent(None)
+        old.deleteLater()
+        QTimer.singleShot(0, lambda: self._restore_scroll_pos(bar_pos))
 
     def _toggle_select_all(self, state):
         """全选/取消：对所有筛选后的条目生效（含懒加载未渲染的）。"""
