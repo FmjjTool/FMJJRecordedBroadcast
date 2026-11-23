@@ -5,6 +5,8 @@
 2. 再拉一遍腾讯文档表格（刷新本地快照）；
 3. 两步都成功后写一条刷新记录，中间层「上传」才可用。
 上传成功或超过有效期后记录作废，下次上传必须重新刷新，不允许拿旧快照比对。
+例外：用户开启「免校对模式」（config.json 的 tcdoc_skip_sync_refresh）后，
+上传门禁直接放行，用当前本地数据推送；写回仍只新增，不绕过白名单。
 
 状态落在 config/sync_refresh.json：{ts, ts_epoch, steps:{info,tracker,tcdoc}}。
 """
@@ -19,6 +21,32 @@ from pathlib import Path
 STALE_MINUTES = 60          # 刷新记录有效期：超过就得重刷
 STATE_FILE = "sync_refresh.json"
 STEP_LABELS = {"info": "信息获取", "tracker": "网媒账号追踪", "tcdoc": "拉取腾讯文档"}
+SKIP_CONFIG_KEY = "tcdoc_skip_sync_refresh"   # 免校对模式（config.json convert 段）
+
+
+# ==================== 免校对模式 ====================
+
+def bypass_enabled() -> bool:
+    """免校对模式是否开启：开启后上传不再要求先「同步前刷新」。"""
+    from toolbox.config_manager import load_convert_config
+    try:
+        return bool(load_convert_config().get(SKIP_CONFIG_KEY, False))
+    except Exception:  # noqa: BLE001 - 配置读不到按关闭处理，保持原有门禁
+        return False
+
+
+def set_bypass(enabled: bool) -> None:
+    from toolbox.config_manager import load_convert_config, save_convert_config
+    cfg = load_convert_config()
+    cfg[SKIP_CONFIG_KEY] = bool(enabled)
+    save_convert_config(cfg)
+
+
+def upload_allowed() -> tuple[bool, str]:
+    """上传门禁：免校对模式直接放行，否则要求当前数据刚刷新过。"""
+    if bypass_enabled():
+        return True, "免校对模式：跳过同步前刷新"
+    return is_fresh()
 
 
 # ==================== 状态文件 ====================

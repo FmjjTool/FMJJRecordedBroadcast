@@ -2893,19 +2893,26 @@ class AssetPage(BasePage):
         menu.exec(global_pos)
 
     def _upload_item_to_tcdoc(self, it):
-        """单条上传到腾讯文档「官方动态」：自动刷新 → 写入 → 读回校验。"""
+        """单条上传到腾讯文档「官方动态」：刷新（免校对模式下跳过）→ 写入 → 读回校验。"""
+        from toolbox import sync_refresh
         from toolbox.tcdoc import single_upload
 
+        bypass = sync_refresh.bypass_enabled()
+        refresh_note = (
+            "免校对模式已开启：不会自动刷新，直接用当前本地数据写入。"
+            if bypass else
+            "上传前会自动刷新：采集已配置账号 → 拉取云端表格快照 → 上传 → 读回校验。\n"
+            "刷新可能需要几十秒到几分钟，期间请不要关闭软件。")
         answer = QMessageBox.question(
             self, "上传到腾讯文档",
             "将把这一条上传到《封茗囧菌数据汇总库》的「官方动态」。\n\n"
-            "上传前会自动刷新：采集已配置账号 → 拉取云端表格快照 → 上传 → 读回校验。\n"
-            "刷新可能需要几十秒到几分钟，期间请不要关闭软件。\n\n是否继续？",
+            f"{refresh_note}\n\n是否继续？",
             QMessageBox.Yes | QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
 
-        dialog = QProgressDialog("正在自动刷新并上传…", "", 0, 0, self)
+        dialog = QProgressDialog("正在上传…" if bypass else "正在自动刷新并上传…",
+                                 "", 0, 0, self)
         dialog.setWindowTitle("上传到腾讯文档")
         dialog.setCancelButton(None)
         dialog.setWindowModality(Qt.WindowModal)
@@ -2925,7 +2932,8 @@ class AssetPage(BasePage):
         def work():
             return single_upload.upload_entry(
                 it, doc_key=single_upload.OFFICIAL_DOC,
-                tab_id=single_upload.OFFICIAL_POSTS_TAB, refresh=True, emit=emit)
+                tab_id=single_upload.OFFICIAL_POSTS_TAB,
+                refresh=not bypass, emit=emit)
 
         def done(receipt, err):
             dialog.close()

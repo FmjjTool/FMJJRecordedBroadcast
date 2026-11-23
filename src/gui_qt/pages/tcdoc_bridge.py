@@ -657,6 +657,17 @@ class TcDocBridgePanel(QWidget):
         self.refresh_sync_btn.clicked.connect(self._refresh_before_sync)
         row2.addWidget(self.refresh_sync_btn)
 
+        # 免校对模式：上传不再强制「同步前刷新」，直接推送本地数据（用户 2026-11-23 要求）
+        from toolbox import sync_refresh as sync_refresh_module
+        self.skip_refresh_box = QCheckBox("免校对模式")
+        self.skip_refresh_box.setToolTip(
+            "开启后批量上传与右键单行上传不再要求先「同步前刷新」，"
+            "直接用当前本地数据推送；资产页单条上传也会跳过自动刷新。\n"
+            "适合只补少量已确认的新作品；写回仍只新增，不改不删表内已有行。")
+        self.skip_refresh_box.setChecked(sync_refresh_module.bypass_enabled())
+        self.skip_refresh_box.clicked.connect(self._on_skip_refresh_toggled)
+        row2.addWidget(self.skip_refresh_box)
+
         # 直播记录 API 写回：只构造 payload 预览，不发送请求（默认不真实写入）
         self.api_preview_btn = QPushButton("预览 API 写回")
         self.api_preview_btn.setToolTip(
@@ -1369,6 +1380,14 @@ class TcDocBridgePanel(QWidget):
             self.refresh_sync_btn.setEnabled(True)
             self.status.setText("刷新任务未启动，请重试")
 
+    def _on_skip_refresh_toggled(self, checked: bool) -> None:
+        """免校对模式开关：持久化到配置，上传门禁即时生效（提示走勾选框 toast）。"""
+        from toolbox import sync_refresh
+        try:
+            sync_refresh.set_bypass(bool(checked))
+        except Exception:  # noqa: BLE001 - 保存失败只影响下次启动，不阻断当前模式
+            pass
+
     def _upload_target_ok(self) -> bool:
         """只允许白名单里的表（官方动态 / 直播记录 / 完整歌曲 / 线下活动 / 周边图鉴）。"""
         target = self.target_combo.currentData()
@@ -1438,11 +1457,12 @@ class TcDocBridgePanel(QWidget):
         if not target:
             return
         from toolbox import sync_refresh
-        fresh, why = sync_refresh.is_fresh()
-        if not fresh:
+        allowed, why = sync_refresh.upload_allowed()
+        if not allowed:
             QMessageBox.information(
                 self, "需要先刷新",
-                f"{why}\n\n请先点「同步前刷新」，完成后再上传。")
+                f"{why}\n\n请先点「同步前刷新」，完成后再上传；"
+                "或在工具条勾选「免校对模式」跳过刷新。")
             return
         if not self._upload_target_ok():
             QMessageBox.warning(
@@ -2613,11 +2633,12 @@ class TcDocBridgePanel(QWidget):
                 "新增，不改不删。")
             return
         from toolbox import sync_refresh
-        fresh, why = sync_refresh.is_fresh()
-        if not fresh:
+        allowed, why = sync_refresh.upload_allowed()
+        if not allowed:
             QMessageBox.information(
                 self, "需要先刷新",
-                f"{why}\n\n请先点「同步前刷新」，完成后再上传。")
+                f"{why}\n\n请先点「同步前刷新」，完成后再上传；"
+                "或在工具条勾选「免校对模式」跳过刷新。")
             return
 
         row = rows[row_index]

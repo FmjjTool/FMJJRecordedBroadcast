@@ -313,6 +313,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     # 中间层：合作方过滤（腾讯表「发布账号」名单之外的账号只收录提到关键词的作品）
     "tcdoc_bridge_partner_filter": True,
     "tcdoc_bridge_subject_keywords": ["封茗囧菌", "囧菌"],
+    # 中间层：免校对模式（上传不再要求先「同步前刷新」，直接推送本地数据）
+    "tcdoc_skip_sync_refresh": False,
     # 资产页「图识别（以图搜图）」：CLIP 图像编码器 ONNX（空 = config/models 自动查找）
     "image_search_model": "",
     "image_search_topk": 30,

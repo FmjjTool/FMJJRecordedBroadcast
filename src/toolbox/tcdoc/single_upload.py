@@ -4,6 +4,7 @@
 差别只有三点：
 1. 条目直接来自资产管理（本地 json + 同目录媒体），不经过中间层待同步清单；
 2. 上传前自动跑一遍「同步前刷新」（采集 + 拉云端快照），不需要用户手动点；
+   中间层开启免校对模式时调用方传 refresh=False，直接用当前本地数据写入；
 3. 一次只写一条，不受中间层 50 条批量上限影响。
 """
 
@@ -100,7 +101,7 @@ def _read_cookie() -> str:
 
 def upload_entry(entry: dict, *, doc_key: str, tab_id: str, refresh: bool = True,
                  emit=lambda _event: None) -> dict:
-    """单条上传：自动刷新 → 构造记录 → 写入 → 读回校验。返回 receipt。"""
+    """单条上传：刷新（refresh=True）→ 构造记录 → 写入 → 读回校验。返回 receipt。"""
     entry = dict(entry or {})
     if refresh:
         emit({"phase": "refresh"})
