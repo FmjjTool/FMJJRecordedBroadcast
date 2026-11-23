@@ -78,11 +78,18 @@ PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
 5. 对异常路径也要断言：错误类型、错误码、用户可见提示、是否重试。
 6. 覆盖率只作参考；优先覆盖关键路径：去重、存储写入、同步匹配、任务调度、认证闸门、导出格式。
 
+## 烟测文件目录（固定）
+
+- 手动冒烟 / 联调脚本、harness、临时数据、日志与过程截图统一放在项目根目录 `_smoking/`；不得散落到根目录、`tests/`、`src/` 或 `Progress/`。
+- `_smoking/` 已由 `.gitignore` 忽略：不 `git add -f`、不提交、不推送；提交前确认 `git ls-files _smoking` 为空。
+- 只有需要长期作为报告证据的最终截图才另存到 `Progress/ui/<日期>/`（PNG 已被忽略）；过程截图与 harness 留在 `_smoking/`。
+- `_smoking/` 是可复用的本地临时工作区，清理按 [test-cleanup](../test-cleanup/SKILL.md)：保留可复用脚本，只清理可再生的临时输出。
+
 ## 报告与收尾
 
 - 报告写明：跑了哪些测试、结果、未跑哪些、为什么；失败是否已修复。
 - 不用“应该没问题”“理论上通过”代替实际结果。
-- 测试产生的临时文件、截图、日志不得提交；需要作为证据的截图放 `Progress/ui/<日期>/`。
+- 测试产生的临时文件、截图、日志不得提交；烟测脚本与过程截图放 `_smoking/`，仅最终证据截图放 `Progress/ui/<日期>/`。
 - `tests/` 已被 `.gitignore` 忽略，测试文件不入库；本次验证完成后按 [test-cleanup](../test-cleanup/SKILL.md) 删除测试文件与测试缓存。测试夹具不含真实个人数据/凭据。
 
 ## 检查清单
@@ -94,6 +101,7 @@ PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
 - [ ] 测试是否只用临时目录/虚构凭据/fake 网络，未碰真实环境？
 - [ ] UI 改动是否做了 offscreen 冒烟？视觉改动是否做了浅/深主题手工核对？
 - [ ] 全量测试是否通过？未跑的测试是否如实报告？
+- [ ] 烟测脚本、harness、临时数据与过程截图是否都在 `_smoking/`，且未被提交/推送？
 - [ ] 验证完成后是否已按 `test-cleanup` 删除 `tests/` 与测试缓存？
 - [ ] 录播八模块/Cookie/腾讯文档写入是否先核对了授权边界？
 - [ ] 是否更新当日报告并本地提交？

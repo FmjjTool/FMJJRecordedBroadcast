@@ -1,6 +1,6 @@
 ---
 name: test-cleanup
-description: "测试文件与本地残留清理（代码任务完成后执行）：先按 testing-quality-gates 完成验证，再删除 tests/ 下全部测试文件与测试缓存（__pycache__、.pytest_cache、*.pyc、覆盖率与测试报告产物），以及用户确认的根目录临时产物（.tmp、_tmp_*、_smoke、_probe_*、调试 HTML、编辑器/Agent 暂存目录等）；tests/ 已被 .gitignore 忽略、删除不备份；被跟踪的本地数据文件只移出版本跟踪、不删文件；备份类目录经确认后移入回收站；不得借清理删源码、用户数据或凭据，也不得为删除跳过测试。"
+description: "测试文件与本地残留清理（代码任务完成后执行）：先按 testing-quality-gates 完成验证，再删除 tests/ 下全部测试文件与测试缓存（__pycache__、.pytest_cache、*.pyc、覆盖率与测试报告产物），以及用户确认的根目录临时产物（.tmp、_tmp_*、_smoke、_probe_*、调试 HTML、编辑器/Agent 暂存目录等）；所有烟测脚本/harness/临时产物固定放根目录 _smoking/（已忽略、不提交不推送）；tests/ 已被 .gitignore 忽略、删除不备份；被跟踪的本地数据文件只移出版本跟踪、不删文件；备份类目录经确认后移入回收站；不得借清理删源码、用户数据或凭据，也不得为删除跳过测试。"
 ---
 
 # 测试文件与本地残留清理（Test Cleanup）
@@ -12,6 +12,15 @@ description: "测试文件与本地残留清理（代码任务完成后执行）
 根目录还会积累开发过程产物（临时脚本、冒烟截图、页面快照、编辑器/Agent 暂存目录、功能调试导出等）。这些同样只在本地保留、可重建；用户要求清理或明确列出残留时，按本 skill 的「根目录临时产物」范围处理。
 
 本 skill 只规定「什么时候删、删什么、不删什么」；测试层级、用例质量与门禁仍以 [testing-quality-gates](../testing-quality-gates/SKILL.md) 为准，本 skill 不降低任何测试要求。
+
+## 固定烟测目录 `_smoking/`（强制）
+
+1. 所有手动冒烟 / 联调脚本、harness、临时数据、日志与过程截图统一放在项目根目录 `_smoking/`；不得散落到根目录、`tests/`、`src/` 或 `Progress/`。
+2. `_smoking/` 已加入 `.gitignore`，只留本地：禁止 `git add -f`、禁止提交或推送；提交前用 `git status` 与 `git ls-files _smoking` 确认没有烟测文件进入版本库。
+3. `_smoking/` 是可复用的本地临时工作区：任务结束默认保留脚本供下次复用，只清理其中可再生的截图、日志与临时数据；删除整个目录或用户提供的烟测脚本必须先取得确认。
+4. 只有需要作为长期报告证据的最终截图才另存到 `Progress/ui/<日期>/`（PNG 已被忽略）；harness、原始截图与中间产物一律留在 `_smoking/`。
+5. 发现根目录散落的烟测文件时，优先移动到 `_smoking/`；属于并行会话或无法确认归属的文件先报告，不擅自移动。
+6. 自动化测试仍放 `tests/`，并按本 skill 的删除范围处理；`_smoking/` 不能替代测试目录。
 
 ## 触发条件
 
@@ -48,7 +57,7 @@ description: "测试文件与本地残留清理（代码任务完成后执行）
 | 类别 | 当前实际路径（示例） |
 | --- | --- |
 | 临时工作目录与一次性脚本 | `.tmp/`、`_tmp_*`、`_probe_*`、`_test_ks_*` |
-| 冒烟测试产物 | `_smoke/`、`/_smoke_*.py`、`_smoke_*.png` |
+| 冒烟测试产物（历史散落） | `_smoke/`、`/_smoke_*.py`、`_smoke_*.png`；新烟测统一放 `_smoking/`，不在此清单默认清理 |
 | 调试抓取页面快照 | 根目录 `/*_*.html`（如 `_fc.html`、`_s1.html`） |
 | 编辑器 / Agent 暂存与工作区 | `.qoder-input-files/`、`.qoder-input-images/`、`.codeartsdoer/`、`.trae/`、`.trae-html-share-packages/`、`.workbuddy/`、`.workbuddy-ai/` |
 | 功能调试目录 | `_taobao_debug/`、`_dyx_debug/`、`test/_out/`、`test/_dump/` |
@@ -63,7 +72,7 @@ description: "测试文件与本地残留清理（代码任务完成后执行）
 3. 运行数据与用户产物不清理：`config/`、`download/`、`logs/`、`models/`、`Progress/`（含 `Progress/ui/` 证据截图）；打包产物 `build/`、`build_full_vendor/`、`dist/`、`*.spec`，以及 `docs/`、`task.md`、`_ref/`、`.uploads/`、`peachring_export/` 等未列入清单的项。
 4. 备份与快照目录（如 `_backup/`）可能承载用户数据或迁移恢复点：先取得用户对具体目录的明确确认，确认后移入回收站（PowerShell `Microsoft.VisualBasic.FileIO.FileSystem::DeleteDirectory(..., 'SendToRecycleBin')`），不直接 `unlink`/`rmtree`。
 5. 被 Git 跟踪的本地数据文件（如根目录导出的作品清单 xlsx）：默认 `git rm --cached` 移出版本跟踪并在 `.gitignore` 增加对应规则，保留本地文件；只有用户明确要求删除文件本身时才删除。
-6. 不删除需要作为证据的截图：按 `testing-quality-gates`，证据截图应放 `Progress/ui/<日期>/`，不在 `tests/` 内。
+6. 不删除需要作为证据的截图：按 `testing-quality-gates`，最终证据截图放 `Progress/ui/<日期>/`；烟测过程截图与 harness 固定在 `_smoking/`，不在 `tests/` 或 Progress 内。
 7. 批量删除前必须取得用户对删除清单的明确确认（列出清单或逐项确认）；用户只说「文件很乱/没用」不构成删除授权。
 8. 删除前对每个待删路径执行 `git ls-files <路径>`：有输出（被跟踪）时立即停止并询问用户，不直接删除被跟踪文件。
 9. 不为清理修改 `.gitignore` 的 `tests/` 忽略规则，或把测试文件改为入库；根目录临时产物的忽略规则可以补齐。
@@ -92,6 +101,8 @@ description: "测试文件与本地残留清理（代码任务完成后执行）
 - [ ] 本次测试已先运行并记录真实结果，未为清理跳过或缩减测试。
 - [ ] `tests/` 下测试文件已全部删除（用户当次明确保留的除外），未保留空目录。
 - [ ] `__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率与测试报告产物等测试缓存已删除。
+- [ ] 本次烟测脚本、harness、临时数据与过程截图均在 `_smoking/`，未散落到根目录、`tests/` 或 `Progress/`。
+- [ ] `_smoking/` 未被 `git add -f`、未进入提交或远端（`git ls-files _smoking` 为空）。
 - [ ] 根目录临时产物只在用户确认的清单内删除，未扩大范围。
 - [ ] 待删路径均已核对 `git ls-files` 为空；被跟踪的本地数据文件只移出版本跟踪、未删本地文件。
 - [ ] 备份/快照类目录经用户明确确认后移入回收站，未直接删除。

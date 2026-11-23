@@ -57,7 +57,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 | `/双版本` | `release-editions` | 标准版 / FULL 内置版双形态打包 |
 | `/并行` | `agent-coordination` | 多 Agent / 并行协作约束 |
 | `/测试` | `testing-quality-gates` | 测试层级与质量门禁 |
-| `/测试清理` | `test-cleanup` | 任务完成后删除测试文件与测试缓存 |
+| `/测试清理` | `test-cleanup` | 任务完成后删除测试文件与测试缓存；烟测文件固定放 `_smoking/` |
 | `/功能说明` | `software-feature-guide` | 各页面功能唯一说明处 |
 | `/shaman` | `shaman-jobs` | 可选 persona，非强制 |
 | `/快捷指令` | 本 skill | 输出本表 |
@@ -222,7 +222,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 ### /测试清理 → `test-cleanup`
 
 1. 先按 `/测试` 完成本次验证并记录真实结果，再删除 `tests/` 全部测试文件与测试缓存；不得为清理跳过测试。
-2. 删除范围：`tests/` 整目录 + 测试缓存 + 用户明确确认的根目录临时产物（`.tmp/`、`_tmp_*`、`_smoke/`、`_probe_*`、调试 HTML、编辑器/Agent 暂存目录等）；不保留空目录。
+2. 删除范围：`tests/` 整目录 + 测试缓存 + 用户明确确认的根目录临时产物（`.tmp/`、`_tmp_*`、`_smoke/`、`_probe_*`、调试 HTML、编辑器/Agent 暂存目录等）；不保留空目录。烟测脚本/harness/临时数据/过程截图固定放根目录 `_smoking/`（已忽略、不提交不推送），不要散落；最终证据截图才放 `Progress/ui/<日期>/`。
 3. 每个待删路径先核对 `git ls-files` 为空；被跟踪的本地数据文件只 `git rm --cached` 移出版本跟踪并补忽略规则，不删本地文件。
 4. 不清理用户数据与运行产物（`config/`、`download/`、`logs/`、`models/`、`Progress/`、构建产物等）；备份/快照目录经用户确认后移入回收站。
 5. 文件被占用时停止、不结束进程；清理后更新当日报告并本地提交，写明范围、释放空间与残留。

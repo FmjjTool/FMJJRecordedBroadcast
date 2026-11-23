@@ -60,6 +60,9 @@ _smoke_*.png
 _smoke/
 /_smoke_*.py
 
+# 烟测专用目录：脚本、harness、临时数据与过程截图统一放这里（仅本地，不提交/不推送）
+_smoking/
+
 # 腾讯文档表格同步实验产物（库文件/抓包，体积大，仅本地）
 test/_out/
 test/_dump/
