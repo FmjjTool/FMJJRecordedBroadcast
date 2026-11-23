@@ -1,13 +1,27 @@
 # -*- coding: utf-8 -*-
-"""夸克网盘 Web API 客户端（Cookie 直连，纯 Python）。
+"""夸克网盘 API 客户端（Cookie 直连，纯 Python）。
 
-接口顺序与 alist 的 `drivers/quark_uc` 对齐，共五步：
+**上传默认走客户端 PDS 通路**（对齐夸克网盘 PC 2.5.40），失败才退回网页五步：
+
+PDS（首选）：
+1. `POST /file/upload/pre`            `pds_version=std` + `upload_type=single_part|multi_part`
+2. `POST /file/upload/getUploadUrls`  一次取最多 50 片预签名地址（省掉逐片 auth）
+3. `PUT  <upload_url>`                带 `Authorization: signature_info.signature`
+4. `POST /file/upload/listPart`       断点续传：拉回服务端已收到的分片
+5. `POST /file/upload/finish`         交 etag 列表收尾
+   `POST /file/update/hash`           并行探测秒传（命中即 finish）
+
+网页五步（回退）：
 
 1. `POST /file/upload/pre`      申请上传任务，拿 task_id / obj_key / bucket / auth_info / part_size
 2. `POST /file/update/hash`     交 md5 + sha1，命中即「秒传」（返回 finish=true 直接完成）
 3. `POST /file/upload/auth`     取 OSS 分片签名，再 `PUT` 到 {bucket}.{upload_url} 上传分片
 4. `POST /file/upload/auth`     取 CompleteMultipartUpload 签名，POST XML 合并分片
 5. `POST /file/upload/finish`   通知服务端收尾
+
+为什么优先 PDS：网页版每片都要单独 `upload/auth` 再手工拼 OSS 签名，任何一次往返
+抖动都会让整片重来；PDS 一次批量拿 50 片地址、签名过期才刷新，且 listPart 能续传，
+这是客户端上传比网页协议稳的根本原因。
 
 约定：
 - Cookie 只在内存里用；响应里服务端刷新的 `__puus` / `__pus` 只更新内存副本，
@@ -37,6 +51,11 @@ from .config import SHARE_EXPIRED_TYPE
 
 API_BASE = "https://drive-pc.quark.cn/1/clouddrive"
 REFERER = "https://pan.quark.cn/"
+# 客户端 PDS 上传参数（对齐夸克网盘 PC 2.5.40）
+PDS_HEADER_VER = "std"
+PDS_URL_BATCH = 50          # getUploadUrls 单次最多申请 50 片（客户端行为）
+PDS_SINGLE_MAX = 4 * 1024 * 1024   # 不超过一片的文件走 single_part
+PDS_MIN_PART = 64 * 1024    # 服务端要求 part_size 按 65536 对齐
 # 与 alist 一致的 OSS 客户端标识（服务端会校验 auth_meta 里的这段）
 OSS_USER_AGENT = "aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit"
 DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -113,6 +132,9 @@ class QuarkClient:
         self._name_cache: dict[str, dict[str, int]] = {}
         # (路径, 大小, mtime) → (md5, sha1)：引擎判内容与上传前算校验只读一遍盘
         self._digest_cache: dict[tuple, tuple[str, str]] = {}
+        # 客户端 PDS 通路开关：接口不可用时本次实例退化为网页五步
+        self._pds_enabled = True
+        self._pds_last_error = ""
 
     def digest(self, path) -> tuple[str, str]:
         """算 (md5, sha1)，同一 (路径, 大小, mtime) 只算一次。"""
@@ -342,6 +364,288 @@ class QuarkClient:
         data["_part_size"] = int((payload.get("metadata") or {}).get("part_size")
                                  or DEFAULT_PART_SIZE)
         return data
+
+    # ==================== 上传 · 客户端 PDS 通路 ====================
+    #
+    # 官方客户端（PC 2.5.40）上传走 PDS，与网页版五步不是一套：
+    #
+    #   1. POST /file/upload/pre            pds_version=std + upload_type=single_part|multi_part
+    #   2. POST /file/upload/getUploadUrls  一次取最多 50 片预签名地址
+    #   3. PUT  <upload_url>                只带 Authorization: signature_info.signature
+    #   4. POST /file/upload/listPart       断点续传：拉回服务端已收到的分片
+    #   5. POST /file/upload/finish         交 etag 列表收尾
+    #      POST /file/update/hash           并行跑，命中即秒传（FLASH_FINISH）
+    #
+    # 相比网页版，每片少两次往返（auth + 手工拼 OSS 签名），且能续传；
+    # 网页协议上传容易失败，主要就差在这里。
+
+    def _pre_pds(self, path: Path, parent_fid: str, size: int,
+                 md5: str, sha1: str) -> dict:
+        """申请 PDS 上传任务；小文件单分片，大文件由服务端下发 part_size。"""
+        now_ms = int(time.time() * 1000)
+        body = {
+            "pds_version": "std",
+            "header_ver": PDS_HEADER_VER,
+            "upload_type": ("single_part" if 0 < size <= PDS_SINGLE_MAX
+                            else "multi_part"),
+            "pdir_fid": parent_fid or "0",
+            "dir_name": "",
+            "size": size,
+            "file_name": path.name,
+            "format_type": _mime_of(path),
+            "same_path_reuse": False,
+            "ccp_hash_update": True,
+            "parallel_upload": True,
+            "l_shot_at": now_ms,
+            "l_created_at": int(path.stat().st_ctime * 1000),
+            "l_updated_at": int(path.stat().st_mtime * 1000),
+            "file_local_path": str(path),
+        }
+        if size <= PDS_SINGLE_MAX:
+            # 单分片：客户端带整文件 md5/sha1，服务端可当场判秒传
+            body.update(md5=md5, sha1=sha1, part_info_list=[{
+                "content_type": "application/json",
+                "part_number": 1,
+                "part_size": size,
+            }])
+        payload = self._request("POST", "/file/upload/pre", body=body, retries=0)
+        data = payload.get("data") or {}
+        for field in ("task_id", "upload_id"):
+            if not str(data.get(field) or ""):
+                raise QuarkError(-1, f"PDS pre 返回缺少 {field}", "/file/upload/pre")
+        data["_pds"] = True
+        data["_part_size"] = int((payload.get("metadata") or {}).get("part_size")
+                                 or DEFAULT_PART_SIZE)
+        data["_single"] = size <= PDS_SINGLE_MAX
+        return data
+
+    def _pds_urls(self, task_id: str, upload_id: str,
+                  parts: list[dict]) -> tuple[dict, dict]:
+        """取一批分片的预签名地址；返回 ({part_no: url}, 公共 headers)。"""
+        payload = self._request("POST", "/file/upload/getUploadUrls", body={
+            "header_ver": PDS_HEADER_VER,
+            "task_id": task_id,
+            "upload_id": upload_id,
+            "part_info_list": parts,
+        })
+        data = payload.get("data") or {}
+        headers = data.get("headers") or {}
+        urls: dict[int, dict] = {}
+        for item in data.get("upload_urls") or []:
+            number = int(item.get("part_number") or 0)
+            if number:
+                urls[number] = {"url": item.get("upload_url"),
+                                "signature": (item.get("signature_info") or {}).get("signature")}
+        return urls, headers
+
+    def _pds_put(self, url: str, signature: str, blob: bytes,
+                 extra_headers: dict | None = None) -> str:
+        """PUT 一个分片，返回 etag。签名过期由上层重新取地址后重试。"""
+        headers = {"Content-Type": "application/json"}
+        if extra_headers:
+            headers.update(extra_headers)
+        if signature:
+            headers["Authorization"] = signature
+        resp = self.session.put(url, data=blob, headers=headers,
+                                timeout=PART_TIMEOUT)
+        if resp.status_code not in (200, 201):
+            text = resp.text[:200]
+            if "SignatureDoesNotMatch" in text or "RequestTimeTooSkewed" in text:
+                raise QuarkError("SIGN_EXPIRED", text, "/upload_url")
+            raise QuarkError(resp.status_code, f"分片上传失败：{text}", "/upload_url")
+        return resp.headers.get("ETag") or resp.headers.get("Etag") or ""
+
+    def _pds_list_parts(self, task_id: str) -> tuple[dict[int, str], int]:
+        """断点续传：服务端已收到的分片 {part_no: etag} 与完成状态。"""
+        done: dict[int, str] = {}
+        marker = 0
+        status = 0
+        while True:
+            payload = self._request("POST", "/file/upload/listPart", body={
+                "task_id": task_id,
+                "next_part_number_marker": str(marker),
+            })
+            data = payload.get("data") or {}
+            status = int(data.get("finish_status") or status or 0)
+            batch = data.get("uploaded_parts") or []
+            if isinstance(batch, dict):
+                batch = [batch]
+            for item in batch:
+                number = int(item.get("part_number") or 0)
+                if number:
+                    done[number] = str(item.get("etag") or "").strip('"')
+            marker += len(batch)
+            if len(batch) < 100:
+                break
+        return done, status
+
+    def _pds_finish(self, task_id: str, etags: dict[int, str]) -> dict:
+        # 服务端要求 etag 带双引号；PUT 响应本身带，listPart 回包不带，
+        # 这里统一规范化，避免续传文件 finish 时报 etag 不匹配。
+        parts = [{"etag": f'"{str(etags[n]).strip(chr(34))}"', "part_number": n}
+                 for n in sorted(etags)]
+        payload = self._request("POST", "/file/upload/finish", body={
+            "task_id": task_id,
+            "pds_version": "std",
+            "part_info_list": parts,
+        }, retries=2)
+        return payload.get("data") or {}
+
+    def _pds_hash(self, task_id: str, md5: str, sha1: str) -> tuple[bool, str]:
+        """PDS 秒传探测：命中返回 (True, fid)。"""
+        payload = self._request("POST", "/file/update/hash", body={
+            "task_id": task_id,
+            "md5": md5,
+            "sha1": sha1,
+            "allow_repeat_backup": False,
+        })
+        data = payload.get("data") or {}
+        return bool(data.get("finish")), str(data.get("fid") or "")
+
+    def _upload_pds(self, path: Path, parent_fid: str, size: int, md5: str,
+                    sha1: str, remote_dir: str, on_progress, on_stage,
+                    resume) -> dict:
+        """PDS 主流程；内部处理续传票据与进度落库。"""
+        saved = resume.load() if resume is not None else {}
+        pre: dict = {}
+        etags: dict[int, str] = {}
+        if (saved.get("kind") == "pds" and saved.get("md5") == md5
+                and int(saved.get("size") or -1) == size
+                and isinstance(saved.get("pre"), dict) and saved["pre"].get("task_id")):
+            pre = dict(saved["pre"])
+            etags = {int(k): v for k, v in (saved.get("etags") or {}).items()}
+
+        def _persist() -> None:
+            if resume is None:
+                return
+            resume.save({"kind": "pds", "md5": md5, "size": size, "pre": pre,
+                         "etags": {str(k): v for k, v in etags.items()}})
+
+        if not pre:
+            pre = self._pre_pds(path, parent_fid, size, md5, sha1)
+            _persist()
+
+        task_id = str(pre["task_id"])
+        part_size = max(PDS_MIN_PART, int(pre.get("_part_size") or DEFAULT_PART_SIZE))
+        if part_size % PDS_MIN_PART:
+            part_size = DEFAULT_PART_SIZE
+        total = max(1, -(-size // part_size)) if size else 1
+
+        if on_stage is not None:
+            on_stage("upload", path.name, size)
+
+        def part_length(number: int) -> int:
+            offset = (number - 1) * part_size
+            return max(0, min(part_size, size - offset))
+
+        # 秒传探测：PDS pre 已带 md5/sha1 时服务端多半直接给 fid
+        if not etags:
+            try:
+                finish, fid = self._pds_hash(task_id, md5, sha1)
+            except QuarkError:
+                finish, fid = False, ""
+            if finish:
+                if resume is not None:
+                    resume.clear()
+                self._name_cache.pop(str(remote_dir or "").strip("/"), None)
+                return {"fid": fid or str(pre.get("fid") or ""), "instant": True,
+                        "md5": md5, "size": size,
+                        "visible": self._wait_visible(parent_fid, path.name)}
+
+        # 续传：把服务端已收到的分片补进 etags
+        if pre.get("_resume_probe", True) and size > 0:
+            try:
+                server_parts, status = self._pds_list_parts(task_id)
+            except QuarkError:
+                server_parts, status = {}, 0
+            if server_parts:
+                for number, etag in server_parts.items():
+                    if number <= total and etag:
+                        etags.setdefault(number, etag)
+                _persist()
+            if status == 2:
+                if resume is not None:
+                    resume.clear()
+                self._name_cache.pop(str(remote_dir or "").strip("/"), None)
+                return {"fid": str(pre.get("fid") or ""), "instant": False,
+                        "md5": md5, "size": size,
+                        "visible": self._wait_visible(parent_fid, path.name)}
+
+        sent = sum(part_length(n) for n in etags if 1 <= n <= total)
+        if on_progress is not None:
+            try:
+                on_progress(min(sent, size), size)
+            except Exception:  # noqa: BLE001
+                pass
+
+        pending = [n for n in range(1, total + 1) if n not in etags]
+        upload_id = str(pre.get("upload_id") or "")
+
+        def _part_body(number: int) -> dict:
+            return {"content_type": "application/json",
+                    "part_number": number,
+                    "part_size": part_length(number)}
+
+        def _put_one(number: int) -> tuple[int, int, str]:
+            """取地址 → PUT；签名过期就刷新一次地址再试。"""
+            nonlocal pre
+            blob = b""
+            with open(path, "rb") as handle:
+                handle.seek((number - 1) * part_size)
+                blob = handle.read(part_length(number))
+            urls, headers = self._pds_urls(task_id, upload_id, [_part_body(number)])
+            item = urls.get(number)
+            if not item or not item.get("url"):
+                raise QuarkError(-1, f"分片 {number} 未取到上传地址",
+                                 "/file/upload/getUploadUrls")
+            try:
+                return number, len(blob), self._pds_put(
+                    item["url"], item.get("signature") or "", blob, headers)
+            except QuarkError as exc:
+                if str(exc.code) != "SIGN_EXPIRED":
+                    raise
+                urls, headers = self._pds_urls(task_id, upload_id, [_part_body(number)])
+                item = urls.get(number) or {}
+                if not item.get("url"):
+                    raise
+                return number, len(blob), self._pds_put(
+                    item["url"], item.get("signature") or "", blob, headers)
+
+        def _report_done(number: int, length: int, etag: str) -> None:
+            nonlocal sent
+            etags[number] = etag
+            sent += length
+            _persist()
+            if on_progress is not None:
+                try:
+                    on_progress(min(sent, size), size)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        if pending:
+            lanes = min(self.lanes, len(pending))
+            if lanes > 1:
+                with ThreadPoolExecutor(max_workers=lanes) as pool:
+                    futures = {pool.submit(_put_one, n): n for n in pending}
+                    try:
+                        for future in as_completed(futures):
+                            number, length, etag = future.result()
+                            _report_done(number, length, etag)
+                    except Exception:
+                        for future in futures:
+                            future.cancel()
+                        raise
+            else:
+                for number in pending:
+                    _report_done(*_put_one(number))
+
+        data = self._pds_finish(task_id, etags)
+        if resume is not None:
+            resume.clear()
+        self._name_cache.pop(str(remote_dir or "").strip("/"), None)
+        fid = str(data.get("fid") or pre.get("fid") or "")
+        return {"fid": fid, "instant": False, "md5": md5, "size": size,
+                "visible": self._wait_visible(parent_fid, path.name)}
 
     def _hash(self, md5: str, sha1: str, task_id: str) -> tuple[bool, str]:
         payload = self._request("POST", "/file/update/hash", body={
@@ -573,6 +877,28 @@ class QuarkClient:
         parent_fid = self.ensure_dir(remote_dir)
 
         saved = resume.load() if resume is not None else {}
+
+        # 客户端 PDS 通路优先：批量预签名 + 断点续传，比网页五步少往返。
+        # 旧票据（无 kind）留在旧通路续传，避免中途换协议；
+        # PDS 一旦明确不可用，本实例后续文件不再尝试，避免每个文件都多一次失败。
+        if self._pds_enabled and not (saved and saved.get("kind") != "pds"):
+            try:
+                return self._upload_pds(path, parent_fid, size, md5, sha1,
+                                        remote_dir, on_progress, on_stage, resume)
+            except QuarkError as exc:
+                if exc.is_auth:
+                    raise
+                # 只有「接口不存在 / 参数不被接受」才判定 PDS 不可用并降级；
+                # 网络抖动、超时、5xx 保留断点原样抛出，交给引擎重试同一条通路，
+                # 降级到网页五步反而更慢更容易再失败。
+                if str(exc.code) in ("404", "400"):
+                    self._pds_enabled = False
+                    self._pds_last_error = str(exc)
+                    if resume is not None:
+                        resume.clear()
+                else:
+                    raise
+
         pre: dict = {}
         etags: dict[int, str] = {}
         if (saved.get("md5") == md5 and int(saved.get("size") or -1) == size

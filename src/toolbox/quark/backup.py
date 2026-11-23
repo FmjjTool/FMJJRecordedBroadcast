@@ -172,6 +172,50 @@ def _say(log, message: str):
             pass
 
 
+# 这些错误重试也没用：权限、容量、平台硬限制，直接失败让上层记一条
+_NO_RETRY_HINTS = ("0 字节", "5 GB", "未登录", "认证失败", "签名错误",
+                   "不存在", "无权限", "空间不足", "容量不足")
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """判断一次上传失败值不值得从断点重试。
+
+    鉴权失效与平台硬限制不重试；其余（超时、连接重置、5xx、票据过期、
+    服务端忙）统一按可恢复处理——各 Provider 的 resume 会把进度留在本地。
+    """
+    if getattr(exc, "is_auth", False):
+        return False
+    text = str(exc)
+    return not any(hint in text for hint in _NO_RETRY_HINTS)
+
+
+def _upload_with_retry(client, path, remote_dir: str, *, hashes, resume,
+                       on_stage, on_progress, log, rel: str,
+                       attempts: int = 3):
+    """上传一个文件，可恢复错误自动从断点重试（指数退避）。
+
+    网页协议上传大文件最怕「跑到 90% 掉一次线整份重来」；这里配合 Provider
+    的断点续传，掉线后只补没传完的分片。
+    """
+    last: Exception | None = None
+    for index in range(max(1, attempts)):
+        try:
+            return client.upload_file(
+                path, remote_dir, hashes=hashes, resume=resume,
+                on_stage=on_stage, on_progress=on_progress)
+        except Exception as exc:  # noqa: BLE001 - 分类后再决定是否重试
+            last = exc
+            if index >= attempts - 1 or not _is_retryable(exc):
+                raise
+            delay = 3 * (2 ** index)
+            _say(log, f"传输中断，{delay}s 后从断点重试（第 {index + 2}/{attempts} 次）："
+                      f"{rel}  {exc}")
+            time.sleep(delay)
+    if last is not None:
+        raise last
+    raise RuntimeError("上传未执行")
+
+
 # ==================== 单条映射 ====================
 
 def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
@@ -331,8 +375,9 @@ def run_mapping(mapping: Mapping, client=None, progress=None, log=None,
                                         stat.st_size, stat.st_mtime, remote_dir)
             if resume.load():
                 _say(log, f"从断点续传：{rel}")
-            info = client.upload_file(
-                path, remote_dir, hashes=(md5, sha1), resume=resume,
+            info = _upload_with_retry(
+                client, path, remote_dir, hashes=(md5, sha1), resume=resume,
+                log=log, rel=rel,
                 on_stage=lambda stage, _name, _size, _rel=rel: _emit(
                     progress, phase=("hash" if stage == "hash" else "file"),
                     name=_rel, size=_size, sent=0, current=index - 1,
