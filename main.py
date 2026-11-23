@@ -216,6 +216,11 @@ def main():
     theme.check_auto_switch()
     theme.apply_theme(app)
 
+    # 右键菜单统一：Qt 自带的文本菜单是英文（&Copy / Select All）且无图标，
+    # 这里换成中文 + 线形图标菜单，覆盖所有页面的输入框/日志/文本浏览区
+    from gui_qt import context_menu
+    context_menu.install()
+
     # 滚轮守卫：滚轮只滚页面，下拉框/页签不随滚轮悄悄改值（须在 QApplication 之后装）
     from gui_qt import wheel_guard
     wheel_guard.install()

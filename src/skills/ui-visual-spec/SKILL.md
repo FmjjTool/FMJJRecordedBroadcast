@@ -237,13 +237,13 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 | 分辨率 | `size * 2` pixmap + `setDevicePixelRatio(2)`，按参数 `lru_cache` 缓存 |
 | 命名 | 全小写英文单词或短横线（`folder`、`clipboard`、`win_close`） |
 
-**已登记图标名（共 75 个，新增前先查表）**：语义接近就复用现有图标，不要为同一概念画第二个（例如「获取」用 `download`，不要再画 `fetch`）。
+**已登记图标名（共 77 个，新增前先查表）**：语义接近就复用现有图标，不要为同一概念画第二个（例如「获取」用 `download`，不要再画 `fetch`）。
 
 | 分组 | 可用名称 |
 | --- | --- |
-| 导航 / 内容 | `search` `compass` `list` `chart` `pulse` `globe` `folder` `document` `image` `video` `music` `message` `clipboard` `chip` `calendar` `clock` `settings` `sliders` |
+| 导航 / 内容 | `search` `compass` `list` `chart` `pulse` `globe` `folder` `document` `image` `video` `music` `message` `clipboard` `chip` `calendar` `clock` `settings` |
 | 账号 / 权限 | `users` `key` `lock` `unlock` `question` |
-| 操作 | `plus` `minus` `close` `check` `edit` `copy` `save` `trash` `download` `upload` `refresh` `swap` `expand` `pin` `broom` `scissors` `compress` `target` `rocket` |
+| 操作 | `plus` `minus` `close` `check` `edit` `copy` `save` `trash` `download` `upload` `refresh` `swap` `expand` `pin` `broom` `scissors` `compress` `target` `rocket` `undo` `redo` `select_all` |
 | 媒体 | `play` `pause` `stop` `skip_next` `skip_prev` `mic` `keyboard` `phone` |
 | 业务对象 | `cart` `package` `ticket` `truck` `star` `heart` `smile` `palette` `dice` `tag` `link` `eye` `robot` `antenna` |
 | 状态 / 主题 | `alert` `dot` `sun` `moon` `cloud` `arrow` `arrow_left` |
@@ -293,6 +293,25 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 3. 显式调用 `setIcon()` 会关闭该控件的自动图标（导航栏等自定义图标不会被运行时转换覆盖）。
 4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。
 5. 新增功能仍按 4.4 显式写图标（`icon=` / `setIcon`），不要把新代码依赖在这层兼容转换上。
+
+### 4.6 文本右键菜单（统一接管）
+
+Qt 内建的文本上下文菜单是英文（`&Copy` / `Select All`）且无图标，与中文主题不一致。`src/gui_qt/context_menu.py` 在应用级事件过滤器里统一接管（`main.py` 创建 QApplication 后 `install()`）：
+
+| 控件 | 菜单内容 |
+| --- | --- |
+| `QLineEdit`（可编辑） | 撤销 / 重做 ｜ 剪切 / 复制 / 粘贴 / 删除 ｜ 全选 |
+| `QLineEdit`（只读） | 复制 ｜ 全选 |
+| `QLineEdit`（密码框） | 粘贴 ｜ 全选（不出现复制/剪切/删除） |
+| `QTextEdit` / `QPlainTextEdit` | 按只读与否同上；可编辑区含撤销/重做与删除 |
+| `QTextBrowser` | 复制（链接上额外「复制链接地址」）｜ 全选 |
+| 可选中 `QLabel` | 复制 ｜ 全选 |
+
+规则：
+
+1. 文案中文、图标取 `line_icon()`、快捷键由 `QAction.setShortcut` 右对齐、禁用态随选区与剪贴板内容变化。
+2. 只接管默认菜单策略的控件；页面 `setContextMenuPolicy(CustomContextMenu)` 或重写 `contextMenuEvent` 的自建菜单保持原样，新页面不要再自建文本菜单。
+3. 菜单外观统一由 `theme.py` 的 `QMenu` QSS 负责：项圆角 4、内边距 `6px 16px`、分隔线 `palette(mid)`，全部取 palette 角色，不写死颜色。
 
 ## 五、布局结构与信息密度
 

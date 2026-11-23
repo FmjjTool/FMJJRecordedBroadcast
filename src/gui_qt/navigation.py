@@ -533,6 +533,30 @@ def line_icon(name, color, size=20):
         painter.setPen(QPen(QColor(color), 1.4, Qt.SolidLine, Qt.RoundCap))
         line(6.5, 6.5, 17.5, 17.5)
         line(17.5, 6.5, 6.5, 17.5)
+    elif name == "undo":
+        # 右键菜单：向左回卷的箭头，尾巴向下收，和 redo 成镜像
+        line(3.5, 12, 9, 6.5)
+        line(3.5, 12, 9, 17.5)
+        path = QPainterPath(QPointF(3.5, 12))
+        path.lineTo(12, 12)
+        path.cubicTo(16.5, 12, 19, 14, 19, 17.5)
+        painter.drawPath(path)
+    elif name == "redo":
+        line(20.5, 12, 15, 6.5)
+        line(20.5, 12, 15, 17.5)
+        path = QPainterPath(QPointF(20.5, 12))
+        path.lineTo(12, 12)
+        path.cubicTo(7.5, 12, 5, 14, 5, 17.5)
+        painter.drawPath(path)
+    elif name == "select_all":
+        # 虚线选框 + 四角外伸手柄：和「全选」语义一致，只描边不填充
+        painter.setPen(QPen(QColor(color), 1.65, Qt.DashLine, Qt.RoundCap))
+        rect(5.5, 5.5, 13, 13, 2)
+        painter.setPen(QPen(QColor(color), 1.65, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        for x, y, sx, sy in ((5.5, 5.5, -1, -1), (18.5, 5.5, 1, -1),
+                             (5.5, 18.5, -1, 1), (18.5, 18.5, 1, 1)):
+            line(x, y, x + 3 * sx, y)
+            line(x, y, x, y + 3 * sy)
     else:
         for x in (4, 14):
             for y in (4, 14):

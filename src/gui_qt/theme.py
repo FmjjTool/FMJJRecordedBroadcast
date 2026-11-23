@@ -62,9 +62,11 @@ QStatusBar::item { border: none; }
 QLabel { color: palette(window-text); }
 QMenuBar { background: palette(window); color: palette(window-text); }
 QMenuBar::item:selected { background: palette(highlight); color: palette(highlighted-text); }
-QMenu { background: palette(base); color: palette(text); border: 1px solid palette(mid); }
-QMenu::item { padding: 5px 18px; }
+QMenu { background: palette(base); color: palette(text); border: 1px solid palette(mid); padding: 4px 0px; }
+QMenu::item { padding: 6px 16px; margin: 2px 4px; border-radius: 4px; }
 QMenu::item:selected { background: palette(highlight); color: palette(highlighted-text); }
+QMenu::item:disabled { color: palette(placeholder-text); background: transparent; }
+QMenu::separator { height: 1px; background: palette(mid); margin: 4px 12px; }
 QToolTip { background: palette(tooltip-base); color: palette(tooltip-text); border: 1px solid palette(shadow); padding: 6px 9px; }
 QGroupBox { border: 1px solid palette(shadow); border-radius: 6px; margin-top: 10px; padding-top: 6px; }
 QGroupBox::title { color: palette(placeholder-text); subcontrol-origin: margin; left: 10px; }
