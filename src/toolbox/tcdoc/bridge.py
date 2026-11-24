@@ -82,6 +82,10 @@ SONG_FALLBACK_COLUMNS = (
     "其他平台#2",
 )
 SONG_LINK_COLUMNS = ("QQ音乐", "网易云音乐", "酷狗音乐", "酷我音乐", "5sing", "汽水音乐")
+# B站不是音乐平台、没有「歌曲实体」：这一列只能靠搜索匹配得到（见 song_bili.py），
+# 所以单独一列、不计入「平台链接 x/5」统计，只在单曲检索时按高置信填入。
+SONG_BILI_COLUMN = "B站链接"
+SONG_BILI_FIELD_ID = "fhDmMB"   # 本地快照表头核对：type 8（链接）列，与其它平台链接同类型
 SONG_PLATFORM_ORDER = (("qq", "QQ音乐"), ("netease", "网易云音乐"),
                        ("kugou", "酷狗音乐"), ("kuwo", "酷我音乐"),
                        ("5sing", "5sing音乐"))
@@ -1169,6 +1173,11 @@ reverse=True)
     columns = _sheet_columns(SONG_DOC_KEY, tab_id)
     if not columns:
         columns = EVENT_FALLBACK_COLUMNS if profile == "events" else MERCH_FALLBACK_COLUMNS
+    if profile == "events":
+        # 「场馆地址」是 type 22 地理位置字段：OpenAPI 只校验不检索，连真实腾讯地图
+        # POI 也返回 ret=22037（2026-11-24 实测），所以只写文本列「场馆地址（文本）」。
+        columns = tuple(list(columns) + [name for name in ("场馆地址（文本）",)
+                                         if name not in columns])
 
     def build_row(item, is_existing=False):
         row = {name: "" for name in columns}
@@ -1180,6 +1189,7 @@ reverse=True)
                 "城市": item.get("city") or "",
                 "场馆名称": item.get("venue") or "",
                 "场馆地址": item.get("address") or "",
+                "场馆地址（文本）": item.get("address") or "",
                 "活动状态": item.get("status") or "",
                 "活动类型": item.get("type") or "",
                 "舞台环节": item.get("stage") or "",
@@ -1360,8 +1370,12 @@ def best_platform_songs(results: dict, title: str, singer: str) -> dict[str, obj
 
 
 def song_row_from_matches(matches: dict, title: str, singer: str,
-                          columns=None) -> dict:
-    """多平台匹配结果 → 一行「完整歌曲」数据，键严格按表头列名。"""
+                          columns=None, bili: dict | None = None) -> dict:
+    """多平台匹配结果 → 一行「完整歌曲」数据，键严格按表头列名。
+
+    bili 是 song_bili.search_song_bili() 的结果：只有 state=matched 且 URL 合法时
+    才写入「B站链接」，待确认 / 未找到一律留空，由页面下拉人工选。
+    """
     columns = tuple(columns or song_columns())
     row = {name: "" for name in columns}
     items = [item for item in matches.values() if item is not None]
@@ -1414,6 +1428,11 @@ def song_row_from_matches(matches: dict, title: str, singer: str,
         url = str(_item_value(item, "url") or "").strip()
         if column in row and url.startswith(("http://", "https://")):
             row[column] = url
+
+    bili_url = str((bili or {}).get("url") or "").strip()
+    if (SONG_BILI_COLUMN in row and (bili or {}).get("state") == "matched"
+            and bili_url.startswith(("http://", "https://"))):
+        row[SONG_BILI_COLUMN] = bili_url
 
     cover = next((str(_item_value(item, "cover_url") or "").strip() for item in items
                   if str(_item_value(item, "cover_url") or "").startswith(

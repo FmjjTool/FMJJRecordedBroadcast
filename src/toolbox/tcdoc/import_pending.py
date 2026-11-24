@@ -569,8 +569,18 @@ def _remark_plan(columns: dict, fields: list[dict], skipped: dict):
     return [{"type": "text", "text": text}], 1, title
 
 
+# B站链接是搜索匹配得到的（song_bili.py），按用户规矩「新字段先单条试写 + 读回校验」
+# 再放批量白名单：试写通过前保持 False，预览里显式标「未写入」，不静默跳过。
+SONG_BILI_WRITE_ENABLED = False
+
+
 def make_song_plan(record: dict, fields: list[dict]):
-    """完整歌曲字段计划：只写明确支持的文本/日期/单选/链接/封面字段。"""
+    """完整歌曲字段计划：只写明确支持的文本/日期/单选/链接/封面字段。
+
+    「B站链接」列（type 8）已按本地快照表头核过，但它是搜索匹配得到的，不属于
+    官方平台链接，按约定「新字段先单条试写 + 读回校验」：试写通过前本批显式记
+    「未写入」，不静默丢弃、也不冒充成功（见 SONG_BILI_WRITE_ENABLED）。
+    """
     columns = record["columns"]
     by_title: dict[str, list[dict]] = {}
     for field in fields:
@@ -622,6 +632,24 @@ def make_song_plan(record: dict, fields: list[dict]):
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
 
+    bili = str(columns.get(bridge.SONG_BILI_COLUMN) or "").strip()
+    if bili:
+        hits = by_title.get(bridge.SONG_BILI_COLUMN) or []
+        if not SONG_BILI_WRITE_ENABLED:
+            skipped[bridge.SONG_BILI_COLUMN] = "B站链接待单条试写校验后启用（本批未写入）"
+        elif len(hits) != 1:
+            skipped[bridge.SONG_BILI_COLUMN] = "目标缺少字段"
+        elif int(hits[0].get("fieldType") or 0) != 8:
+            skipped[bridge.SONG_BILI_COLUMN] = "字段类型不匹配"
+        else:
+            parts = urlsplit(bili)
+            if parts.scheme not in {"http", "https"} or not parts.hostname:
+                skipped[bridge.SONG_BILI_COLUMN] = "链接无法识别"
+            else:
+                values[bridge.SONG_BILI_COLUMN] = [
+                    {"type": "url", "text": bili, "link": bili}]
+                kinds[bridge.SONG_BILI_COLUMN] = 8
+
     if record.get("_images"):
         field = unique("封面图")
         if field.get("fieldType") != 5:
@@ -640,11 +668,13 @@ def make_song_plan(record: dict, fields: list[dict]):
 CANDIDATE_FIELDS = {
     "events": {
         "title": "活动名称",
-        "text": ("活动名称", "城市", "场馆名称", "票档价格"),
+        "text": ("活动名称", "城市", "场馆名称", "票档价格", "场馆地址（文本）"),
         "date": ("活动日期",),
         "choice": ("年份", "活动状态", "活动类型", "舞台环节", "签售环节"),
         "link": ("购票链接 1",),
         "image": ("宣传图",),
+        # 场馆地址列是 type 22 地理位置：OpenAPI 连真实腾讯地图 POI 也返回 22037，
+        # 只写文本列「场馆地址（文本）」（见下方 skipped 标注）。
         "required": ("活动名称",),
     },
     "merch": {
@@ -782,6 +812,11 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
             kinds[name] = kind
         else:
             skipped[name] = "字段类型不匹配"
+
+    # 场馆地址（type 22 地理位置列）写不进去：2026-11-24 用真实腾讯地图 POI 实测仍
+    # ret=22037。这里显式标注「未写入」，避免再出现「预览有值、表里永远空」。
+    if str(columns.get("场馆地址") or "").strip() and one("场馆地址") is not None:
+        skipped["场馆地址"] = "地址列（地理位置）不支持 OpenAPI 写入，已写「场馆地址（文本）」"
 
     for name in spec.get("image") or ():
         if not record.get("_images"):

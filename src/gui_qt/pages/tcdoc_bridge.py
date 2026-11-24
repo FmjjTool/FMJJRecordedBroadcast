@@ -45,6 +45,8 @@ _WIDTHS = {
     "语言": 110, "合唱形式": 90, "所属专辑": 160,
     "QQ音乐": 200, "网易云音乐": 200, "酷狗音乐": 200, "酷我音乐": 200,
     "5sing": 180, "汽水音乐": 200,
+    "场馆名称": 160, "场馆地址": 200,
+    "场馆地址（文本）": 220,
     "图片": 90,
 }
 
@@ -239,7 +241,8 @@ class _UploadDialog(QDialog):
         elif profile == "events":
             note = ("默认全选；取消勾选可跳过某些行。新增行会把本地封面/宣传图写入"
                     "「宣传图」列；已存在的活动只向该行「宣传图」追加缺的本地图片，"
-                    "不改其他字段、不删除已有图片。备注信息会追加"
+                    "不改其他字段、不删除已有图片。场馆地址只写「场馆地址（文本）」"
+                    "文本列（原地址列是地理位置字段，OpenAPI 写不进去）。备注信息会追加"
                     "「自动推送程序上传+当前时间」。")
         elif profile == "merch":
             note = ("默认全选；取消勾选可跳过某些行。上传只新增候选记录（不改不删），"
@@ -764,6 +767,15 @@ class TcDocBridgePanel(QWidget):
         self.song_search_btn = QPushButton("多平台检索")
         self.song_search_btn.clicked.connect(self._search_song)
         search_layout.addWidget(self.song_search_btn)
+        # B站没有歌曲实体，链接靠搜索匹配：自动填只认高置信，其余从这里就地选
+        self.song_bili_combo = QComboBox()
+        self.song_bili_combo.setToolTip(
+            "B站候选：歌名、时长、演唱者三项都对上才会自动填入 B站链接；"
+            "其余候选在这里就地选，选中即写入该行，不需要弹窗")
+        self.song_bili_combo.setFixedWidth(300)
+        self.song_bili_combo.setVisible(False)
+        self.song_bili_combo.currentIndexChanged.connect(self._on_bili_pick)
+        search_layout.addWidget(self.song_bili_combo)
         self.song_search_row.setVisible(False)
         layout.addWidget(self.song_search_row)
 
@@ -785,6 +797,17 @@ class TcDocBridgePanel(QWidget):
         info_row.addWidget(self.summary, 1)
         layout.addLayout(info_row)
         layout.addWidget(self.summary_note)
+
+        # 「场馆地址」是 type 22 地理位置字段，OpenAPI 实测写不进去（含真实腾讯地图
+        # POI 也 ret=22037），地址只写文本列「场馆地址（文本）」。这里给一句固定说明。
+        self.address_hint = QLabel(
+            "场馆地址写入「场馆地址（文本）」文本列；原「场馆地址」是地理位置字段，"
+            "腾讯 OpenAPI 写不进去（ret=22037）")
+        self.address_hint.setProperty("role", "caption")
+        self.address_hint.setStyleSheet("color: #888;")
+        self.address_hint.setWordWrap(True)
+        self.address_hint.setVisible(False)
+        layout.addWidget(self.address_hint)
 
         self.table = QTableView()
         self._model = _PendingModel(self.table)
@@ -1089,6 +1112,7 @@ class TcDocBridgePanel(QWidget):
         if readonly:
             self.account_btn.setText("全部")
         self.song_search_row.setVisible(songs)
+        self.address_hint.setVisible(profile == "events")
         if songs:
             self._show_song_search()
         else:
@@ -1184,11 +1208,12 @@ class TcDocBridgePanel(QWidget):
         self.copy_images_btn.setEnabled(False)
         self.copy_row_btn.setEnabled(False)
         self.account_btn.setText("全部")
-        self._set_summary("完整歌曲：输入歌名，五平台检索后生成按表头对齐的录入行（不读写腾讯表格）")
+        self._set_summary("完整歌曲：输入歌名，五平台 + B站检索后生成按表头对齐的录入行（不读写腾讯表格）")
         self.status.setText(
             "输入歌曲名后点「多平台检索」：生成一行与完整歌曲表头完全一致的数据，"
             "QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 链接分别填入对应列；"
-            "复制后从表格第一列粘贴。")
+            "B站没有歌曲实体，按「歌名 + 时长 + 演唱者」搜索匹配，三项都对上才自动填 "
+            "B站链接，其余候选在右侧下拉里就地选。复制后从表格第一列粘贴。")
 
     def _search_song(self, *_args) -> None:
         if self._closed or not self._songs_mode or not self.song_search_btn.isEnabled():
@@ -1202,15 +1227,22 @@ class TcDocBridgePanel(QWidget):
         self.song_search_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.copy_row_btn.setEnabled(False)
-        self._set_summary(f"正在检索五平台：{singer} - {title} …")
-        self.status.setText("QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 并行检索中…")
+        self._clear_bili_combo()
+        self._set_summary(f"正在检索五平台 + B站：{singer} - {title} …")
+        self.status.setText("QQ音乐 / 网易云音乐 / 酷狗音乐 / 酷我音乐 / 5sing 并行检索中，"
+                            "随后按歌名+时长+演唱者匹配 B站视频…")
 
         def work():
             from toolbox.music_complete_songs import fetch_platform_songs
+            from toolbox.tcdoc import song_bili
             results = fetch_platform_songs(
                 {"title": title, "singer": singer, "links": {}}, limit=8)
             matches = bridge.best_platform_songs(results, title, singer)
-            return matches, bridge.song_row_from_matches(matches, title, singer)
+            duration = bridge._most_common_int(
+                bridge._item_value(item, "duration") for item in matches.values())
+            bili = song_bili.search_song_bili(title, singer, duration)
+            row = bridge.song_row_from_matches(matches, title, singer, bili=bili)
+            return matches, row, bili
 
         def done(result, err):
             if self._closed:
@@ -1222,21 +1254,70 @@ class TcDocBridgePanel(QWidget):
                 self.copy_btn.setEnabled(bool(self._rows))
                 self._update_copy_row_btn()
                 return
-            matches, row = result
-            self._show_song_row(row, matches)
+            matches, row, bili = result
+            self._show_song_row(row, matches, bili)
 
         thread = run_bg(work, done, owner=self._task_owner)
         if thread is None:
             self.song_search_btn.setEnabled(True)
             self._set_summary("检索任务未启动，请重试")
 
-    def _show_song_row(self, row: dict, matches: dict) -> None:
+    def _clear_bili_combo(self) -> None:
+        combo = getattr(self, "song_bili_combo", None)
+        if combo is None:      # 初始化早期 _clear_result 先于检索行创建
+            return
+        self._bili_filling = True
+        combo.clear()
+        combo.setVisible(False)
+        self._bili_filling = False
+
+    def _on_bili_pick(self, index: int) -> None:
+        """下拉就地选 B站候选 → 直接改这一行的「B站链接」，不弹窗。"""
+        if getattr(self, "_bili_filling", False) or not self._result:
+            return
+        rows = self._result.get("rows") or []
+        if not rows or not isinstance(rows[0], dict):
+            return
+        url = str(self.song_bili_combo.itemData(index) or "")
+        rows[0][bridge.SONG_BILI_COLUMN] = url
+        self._fill_table([rows[0]], list(bridge.song_columns()), append_images=False)
+        self.table.selectRow(0)
+        self.status.setText("B站链接已改为：" + (url or "留空"))
+
+    def _fill_bili_combo(self, bili: dict, row: dict) -> None:
+        candidates = list((bili or {}).get("candidates") or [])
+        self._bili_filling = True
+        self.song_bili_combo.clear()
+        if not candidates:
+            self.song_bili_combo.setVisible(False)
+            self._bili_filling = False
+            return
+        self.song_bili_combo.addItem("B站：不填（留空）", "")
+        current = -1
+        for index, item in enumerate(candidates[:8], start=1):
+            cand = item.get("candidate") or {}
+            label = (f"B站 {index}. {str(cand.get('title') or '')[:26]} · "
+                     f"{cand.get('author') or '?'} · "
+                     f"{bridge._mmss(int(cand.get('duration') or 0)) or '时长?'}")
+            self.song_bili_combo.addItem(label, str(cand.get("url") or ""))
+            if row.get(bridge.SONG_BILI_COLUMN) and \
+                    row.get(bridge.SONG_BILI_COLUMN) == cand.get("url"):
+                current = index
+        self.song_bili_combo.setToolTip("\n".join(
+            f"{item.get('candidate', {}).get('url', '')}  {'；'.join(item.get('reasons') or [])}"
+            for item in candidates[:8]))
+        self.song_bili_combo.setCurrentIndex(max(current, 0))
+        self.song_bili_combo.setVisible(True)
+        self._bili_filling = False
+
+    def _show_song_row(self, row: dict, matches: dict, bili: dict | None = None) -> None:
         columns = list(bridge.song_columns())
         self._result = {"profile": "songs_row", "rows": [row], "columns": columns,
                         "link_columns": list(bridge.SONG_LINK_COLUMNS)}
         self._fill_table([row], columns, append_images=False)
         self.table.selectRow(0)
         self._show_table()
+        self._fill_bili_combo(bili or {}, row)
         self.compare_btn.setEnabled(False)
         self.upload_btn.setEnabled(False)
         self.copy_btn.setEnabled(True)
@@ -1258,9 +1339,15 @@ class TcDocBridgePanel(QWidget):
                 dates.add(day)
         duration_note = "时长一致" if len(durations) == 1 else f"时长 {len(durations)} 种"
         date_note = "日期一致" if len(dates) == 1 else f"日期 {len(dates)} 种"
+        bili_state = str((bili or {}).get("state") or "")
+        bili_url = str(row.get(bridge.SONG_BILI_COLUMN) or "")
+        bili_note = {"matched": "B站链接已填入", "ambiguous": "B站多条候选待确认",
+                     "none": "B站无达标候选", "error": "B站检索失败"}.get(
+                         bili_state, "B站未检索")
         self._set_summary(
-            f"已生成 1 行，43 列与完整歌曲表头一致；链接 {links}/5 已填入对应列；"
-            f"平台匹配 {len(present)}/5，{duration_note}，{date_note}"
+            f"已生成 1 行，{len(columns)} 列与完整歌曲表头一致；"
+            f"链接 {links}/5 已填入对应列，"
+            f"{bili_note}；平台匹配 {len(present)}/5，{duration_note}，{date_note}"
             + (f"；缺 {'、'.join(missing)}" if missing else "；五平台链接齐全")
             + "。复制后从表格第一列粘贴。")
 
@@ -1277,6 +1364,15 @@ class TcDocBridgePanel(QWidget):
                 f"{label}：{bridge._item_value(item, 'song_name')} · "
                 f"{bridge._item_value(item, 'singer')} · "
                 f"{bridge._mmss(duration) or '时长?'} · {day or '日期?'} · 链接已填入")
+        lines.append(f"B站：{bili_note}" + (f" {bili_url}" if bili_url else ""))
+        if not bili_url:
+            for index, item in enumerate(((bili or {}).get("candidates") or [])[:3], start=1):
+                cand = item.get("candidate") or {}
+                lines.append(
+                    f"B站候选 {index}：{str(cand.get('title') or '')[:30]} · "
+                    f"{cand.get('author') or '?'} · "
+                    f"{bridge._mmss(int(cand.get('duration') or 0)) or '时长?'} · "
+                    f"{cand.get('url') or ''}（{'；'.join(item.get('reasons') or [])}）")
         self.status.setText("\n".join(lines))
 
     def _on_days_changed(self, *_args) -> None:
@@ -2309,6 +2405,8 @@ class TcDocBridgePanel(QWidget):
                 f"{source_label} {scope} 共 {stats['local_items']} 条 → 识别 "
                 f"{stats['local_groups']} 个{label}候选 · 已存在 {stats['synced_groups']} 个",
                 note, f"待补 {stats['pending']} 行{extra}")
+            if profile == "events":
+                self._set_address_hint(stats)
         else:
             scope = stats["since"] or "全部历史"
             self._set_summary(
@@ -2339,10 +2437,14 @@ class TcDocBridgePanel(QWidget):
                 image_rule = ("上传会把本地封面/宣传图写入「宣传图」列，已存在活动只追加"
                               "该列图片、不改其他字段；" if profile == "events"
                               else "图片列仍不随程序上传；")
+                addr_rule = ""
+                if profile == "events":
+                    addr_rule = ("地址只写「场馆地址（文本）」文本列"
+                                 "（原地址列是地理位置字段，OpenAPI 写不进去）；")
                 self.status.setText(
                     f"共 {len(result['rows'])} 行候选：由{source_label}自动识别，"
                     "请人工核对；可点「上传到腾讯文档」仅新增（不改不删），"
-                    f"{image_rule}{append_note}备注信息会追加"
+                    f"{image_rule}{addr_rule}{append_note}备注信息会追加"
                     "「自动推送程序上传+当前时间」。")
             else:
                 self.status.setText(
@@ -2457,6 +2559,7 @@ class TcDocBridgePanel(QWidget):
 
     def _clear_result(self):
         self._result = None
+        self._clear_bili_combo()
         self._fill_table([])
         self._set_empty("当前没有待同步条目",
                         "本地数据与腾讯表格一致时会停在这里；比对结果只读，不会修改腾讯文档。")
