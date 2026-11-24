@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from toolbox.config_manager import load_convert_config, save_convert_config
 
-from gui_qt import common, theme
+from gui_qt import common, table_columns, theme
 from gui_qt.navigation import line_icon, tool_icon_name
 from gui_qt.page_index import (
     ALIASES as PAGE_ALIASES, PAGE_CLASSES, PAGE_INDEX, container_tabs,
@@ -288,6 +288,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("就绪")
         self.preload_status = QLabel("页面预载：准备中")
         self.statusBar().addPermanentWidget(self.preload_status)
+        self.table_column_btn = table_columns.make_button(self)
+        self.statusBar().addPermanentWidget(self.table_column_btn)
 
         # 全局拖放
         self.setAcceptDrops(True)
