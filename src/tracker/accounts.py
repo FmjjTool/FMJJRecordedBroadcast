@@ -44,6 +44,10 @@ _RECORD_FIELDS = [
     "platform", "name", "fans", "following", "likes",
     "video_count", "weibo_count", "sign", "official_title",
     "verified_reason", "verified", "level", "error",
+    # 粉丝统计口径：精确值 / 平台公开约数，增减对比必须据此判断可否比较
+    "fans_source", "fans_approximate",
+    # 微博转评赞合计（获赞 + 转发 + 评论，三项齐全才算）
+    "interactions",
 ]
 
 
@@ -274,19 +278,29 @@ def _xlsx_path(name):
 
 
 def save_history(name, record):
-    """把采集结果追加到账号的 xlsx 缓存，返回文件路径。"""
+    """把采集结果追加到账号的 xlsx 缓存，返回文件路径。
+
+    旧缓存缺少新字段时先补表头再按表头顺序写行，保证列不串位。
+    """
     import openpyxl
     path = _xlsx_path(name)
-    headers = ["time"] + _RECORD_FIELDS
-    row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S")] + [record.get(f, "") for f in _RECORD_FIELDS]
+    expected = ["time"] + _RECORD_FIELDS
     if path.exists():
         wb = openpyxl.load_workbook(path)
         ws = wb.active
+        headers = [cell.value for cell in ws[1]] if ws.max_row >= 1 else []
+        headers = [h for h in headers if h]
+        for field in expected:
+            if field not in headers:
+                headers.append(field)
+                ws.cell(row=1, column=len(headers), value=field)
     else:
         wb = openpyxl.Workbook()
         ws = wb.active
+        headers = expected
         ws.append(headers)
-    ws.append(row)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ws.append([now if h == "time" else record.get(h, "") for h in headers])
     wb.save(path)
     return str(path)
 
@@ -311,7 +325,8 @@ def load_history(name):
         rec = dict(zip(headers, row))
         time_str = rec.pop("time", "") or ""
         rec["_time"] = time_str
-        for k in ["fans", "following", "likes", "video_count", "weibo_count", "level"]:
+        for k in ["fans", "following", "likes", "video_count", "weibo_count",
+                  "level", "interactions"]:
             if rec.get(k) not in (None, ""):
                 try:
                     rec[k] = int(rec[k])

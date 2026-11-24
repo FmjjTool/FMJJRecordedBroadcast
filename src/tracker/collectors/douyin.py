@@ -3,9 +3,67 @@ import asyncio
 from ..config import DOUYIN_SEC_UID
 from toolbox.browser import launch as pw_launch
 
+# 统计有效性的最低要求：粉丝/获赞/作品至少一项有数字，否则整条记录不算成功。
+_STAT_KEYS = ("fans", "likes", "video_count")
+
+
+def _to_int(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_from_user(user_data: dict) -> dict:
+    """统一把抖音用户 JSON 转成采集记录。
+
+    官方 profile 接口的 follower_count 是精确值；分享接口只有
+    mplatform_followers_count（平台公开约数）。来源要跟着记录一起落库，
+    否则「精确↔约数」切换时会被算成粉丝暴涨/暴跌。
+    """
+    avatar_url = None
+    for key in ("avatar_larger", "avatar_medium", "avatar_168x168"):
+        obj = user_data.get(key)
+        if isinstance(obj, dict):
+            urls = obj.get("url_list")
+            if urls:
+                avatar_url = urls[0]
+                break
+
+    exact = _to_int(user_data.get("follower_count"))
+    shared = _to_int(user_data.get("mplatform_followers_count"))
+    if exact is not None:
+        fans, source = exact, "follower_count"
+    elif shared is not None:
+        fans, source = shared, "mplatform_followers_count"
+    else:
+        fans, source = None, None
+
+    record = {
+        "platform": "douyin",
+        "name": user_data.get("nickname"),
+        "fans": fans,
+        "following": user_data.get("following_count"),
+        "likes": user_data.get("total_favorited"),
+        "sign": user_data.get("signature"),
+        "video_count": user_data.get("aweme_count"),
+        "avatar": avatar_url,
+        "short_id": user_data.get("short_id"),
+        "uid": user_data.get("uid"),
+        "gender": user_data.get("gender"),
+        "verified": bool(user_data.get("custom_verify")),
+        "fans_source": source,
+        "fans_approximate": exact is None and shared is not None,
+    }
+    if not any(_to_int(record.get(k)) is not None for k in _STAT_KEYS):
+        raise ValueError("抖音接口未返回账号统计")
+    return record
+
 
 def _sync_collect(sec_uid=None) -> dict:
-    """游客 HTTP → 已启用的 Cookie HTTP → 游客 Playwright。"""
+    """签名 HTTP 游客 → 官方分享接口 → 已启用的 Cookie HTTP → 游客 Playwright。"""
     def _attempt(collect_fn, **kwargs):
         try:
             return collect_fn(sec_uid, **kwargs)
@@ -14,29 +72,64 @@ def _sync_collect(sec_uid=None) -> dict:
 
     # 一级：无 Cookie 游客 HTTP（内部先访问首页取 ttwid 游客票据）
     r = _attempt(_http_collect, cookie="")
-    if not r.get("error"):
+    if not r.get("error") and not r.get("fans_approximate"):
         return r
+    signed_result = None if r.get("error") else r
 
-    # 游客失败才读取已启用的登录态，HTTP 成功时无需启动浏览器。
+    # 二级：签名失败才走官方分享接口。它免 a_bogus、免 Cookie，只给平台公开约数，
+    # 未装 node.js（签名环境缺失）时也能出数，不必先拉起浏览器。
+    shared_result = None
+    if signed_result is None:
+        shared_result = _attempt(_share_collect)
+
+    # 三级：需要精确值时再读取已启用的登录态；HTTP 成功时无需启动浏览器。
     try:
         from auth import get_cookie
         cookie = get_cookie("douyin") or ""
     except Exception:
         cookie = ""
     cookie_result = None
-    if cookie:
-        print("[抖音采集] 游客方式失败，接入 Cookie 重试")
+    if cookie and (signed_result is None or signed_result.get("fans_approximate")):
+        print("[抖音采集] 游客方式未拿到精确值，接入 Cookie 重试")
         cookie_result = _attempt(_http_collect, cookie=cookie)
-        if not cookie_result.get("error"):
+        if not cookie_result.get("error") and not cookie_result.get("fans_approximate"):
             return cookie_result
 
-    # 末级：HTTP 均失败后才启动原有游客浏览器兜底。
-    r = _attempt(_playwright_collect)
-    if not r.get("error"):
-        return r
-    if cookie_result is not None:
-        return cookie_result
+    # 末级：HTTP 全都没拿到数据时才启动原有游客浏览器兜底。
+    r = None
+    if not any(c and not c.get("error") for c in (signed_result, cookie_result, shared_result)):
+        r = _attempt(_playwright_collect)
+        if not r.get("error") and not r.get("fans_approximate"):
+            return r
+
+    # 只剩约数/错误：按「有数字优先」返回，最后才报错误。
+    for candidate in (signed_result, cookie_result, shared_result, r):
+        if candidate and not candidate.get("error"):
+            return candidate
+    for candidate in (signed_result, cookie_result, shared_result, r):
+        if candidate and candidate.get("error"):
+            return candidate
     return {"platform": "douyin", "error": "游客与 Cookie 方式均失败：请在「Cookie 管理」中登录抖音后重试"}
+
+
+def _share_collect(sec_uid=None) -> dict:
+    """官方分享接口：不需要签名与登录，只暴露平台公开约数粉丝。"""
+    import requests
+
+    from ..config import MOBILE_USER_AGENT
+
+    sec_uid = sec_uid or DOUYIN_SEC_UID
+    url = f"https://www.iesdouyin.com/web/api/v2/user/info/?sec_uid={sec_uid}"
+    resp = requests.get(url, headers={
+        "User-Agent": MOBILE_USER_AGENT,
+        "Referer": "https://www.iesdouyin.com/",
+        "Accept": "application/json, text/plain, */*",
+    }, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status_code") != 0 or not isinstance(data.get("user_info"), dict):
+        return {"platform": "douyin", "error": "抖音分享接口没有返回用户"}
+    return _record_from_user(data["user_info"])
 
 
 def _http_collect(sec_uid=None, cookie: str = "") -> dict:
@@ -85,29 +178,10 @@ def _http_collect(sec_uid=None, cookie: str = "") -> dict:
         return {"platform": "douyin", "error": f"接口返回异常（status_code={code}），建议登录抖音后重试"}
 
     user_data = data["user"]
-    avatar_url = None
-    for key in ("avatar_larger", "avatar_medium", "avatar_168x168"):
-        obj = user_data.get(key)
-        if isinstance(obj, dict):
-            urls = obj.get("url_list")
-            if urls:
-                avatar_url = urls[0]
-                break
-
-    return {
-        "platform": "douyin",
-        "name": user_data.get("nickname"),
-        "fans": user_data.get("follower_count"),
-        "following": user_data.get("following_count"),
-        "likes": user_data.get("total_favorited"),
-        "sign": user_data.get("signature"),
-        "video_count": user_data.get("aweme_count"),
-        "avatar": avatar_url,
-        "short_id": user_data.get("short_id"),
-        "uid": user_data.get("uid"),
-        "gender": user_data.get("gender"),
-        "verified": bool(user_data.get("custom_verify")),
-    }
+    try:
+        return _record_from_user(user_data)
+    except ValueError as exc:
+        return {"platform": "douyin", "error": str(exc)}
 
 
 def _playwright_collect(sec_uid=None) -> dict:
@@ -169,19 +243,10 @@ def _playwright_collect(sec_uid=None) -> dict:
 
         if not user_data:
             return {"platform": "douyin", "error": "未登录抖音：请在「Cookie 管理」中登录后再采集"}
-        return {
-            "platform": "douyin",
-            "name": user_data.get("nickname"),
-            "fans": user_data.get("follower_count"),
-            "following": user_data.get("following_count"),
-            "likes": user_data.get("total_favorited"),
-            "sign": user_data.get("signature"),
-            "video_count": user_data.get("aweme_count"),
-            "short_id": user_data.get("short_id"),
-            "uid": user_data.get("uid"),
-            "gender": user_data.get("gender"),
-            "verified": bool(user_data.get("custom_verify")),
-        }
+        try:
+            return _record_from_user(user_data)
+        except ValueError as exc:
+            return {"platform": "douyin", "error": str(exc)}
 
 
 async def collect(sec_uid=None) -> dict:

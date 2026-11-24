@@ -19,6 +19,9 @@ _KEY_MAP = {
     "likes": "获赞数",
     "video_count": "视频数",
     "weibo_count": "微博数",
+    "interactions": "转评赞",
+    "fans_source": "粉丝数来源",
+    "fans_approximate": "粉丝数为约数",
     "sign": "简介",
     "avatar": "头像",
     "official_title": "认证",
@@ -39,7 +42,8 @@ _REVERSE_KEY_MAP = {v: k for k, v in _KEY_MAP.items()}
 
 _CN_KEYS = [_KEY_MAP[k] for k in (
     "platform", "name", "fans", "following", "likes",
-    "video_count", "weibo_count", "sign", "avatar",
+    "video_count", "weibo_count", "interactions",
+    "fans_source", "fans_approximate", "sign", "avatar",
     "official_title", "level", "vip_type", "sex",
     "verified", "verified_reason", "gender", "uid",
     "short_id", "cover",

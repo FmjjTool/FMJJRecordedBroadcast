@@ -35,6 +35,48 @@ def _is_vague(s: object) -> bool:
     return isinstance(s, str) and ("万" in s or "亿" in s)
 
 
+def _record_from_user(ui: dict, uid: str, source: str) -> dict:
+    """把 m 端 / 桌面端用户 JSON 统一成采集记录。
+
+    粉丝来源（精确 / 万化约数）必须跟着记录一起落库：口径切换时才能判定
+    「不可比较」，而不是把 126.6万 → 1,266,412 算成粉丝暴涨。
+    """
+    raw_followers = ui.get("followers_count")
+    counters = ui.get("status_total_counter") or {}
+    likes = _parse_num(counters.get("like_cnt"))
+    rounded = _is_vague(raw_followers)
+    following_raw = ui.get("friends_count")
+    if following_raw in (None, ""):
+        following_raw = ui.get("follow_count")
+
+    record = {
+        "platform": "weibo",
+        "name": ui.get("screen_name"),
+        "fans": _parse_num(raw_followers),
+        "following": _parse_num(following_raw),
+        "weibo_count": _parse_num(ui.get("statuses_count")),
+        "likes": likes,
+        "sign": ui.get("description"),
+        "avatar": ui.get("avatar_hd") or ui.get("profile_image_url"),
+        "verified": ui.get("verified"),
+        "verified_reason": ui.get("verified_reason"),
+        "gender": ui.get("gender"),
+        "cover": ui.get("cover_image_phone"),
+        "level": ui.get("mbrank"),
+        "uid": uid,
+        "fans_source": f"{source}:{'rounded' if rounded else 'exact'}",
+        "fans_approximate": rounded,
+    }
+    # 转评赞合计（卡片第二指标）：三项齐全才算，缺一项就是空而非 0。
+    reposts = _parse_num(counters.get("repost_cnt"))
+    comments = _parse_num(counters.get("comment_cnt"))
+    if likes is not None and reposts is not None and comments is not None:
+        record["interactions"] = likes + reposts + comments
+    if all(record.get(k) is None for k in ("fans", "weibo_count", "likes")):
+        raise ValueError("微博接口未返回账号统计")
+    return record
+
+
 def _precise_counts(uid: str, cookie: str = "") -> dict:
     """PC端 weibo.com/ajax/profile/info 拿精确 粉丝/关注/微博数。
 
@@ -75,6 +117,9 @@ def _precise_counts(uid: str, cookie: str = "") -> dict:
             out = {}
             if isinstance(user.get("followers_count"), int):
                 out["fans"] = user["followers_count"]
+                # PC 端是精确整数：来源标记同步更新，后续才能与上次记录比较。
+                out["fans_source"] = "pc:exact"
+                out["fans_approximate"] = False
             if isinstance(user.get("friends_count"), int):
                 out["following"] = user["friends_count"]
             if isinstance(user.get("statuses_count"), int):
@@ -85,13 +130,22 @@ def _precise_counts(uid: str, cookie: str = "") -> dict:
             likes = _parse_num(stc.get("like_cnt"))
             if likes is not None:
                 out["likes"] = likes
+            # 转评赞合计只有 PC 端拿得到三项齐全的计数（m 端没有 status_total_counter）。
+            reposts = _parse_num(stc.get("repost_cnt"))
+            comments = _parse_num(stc.get("comment_cnt"))
+            if likes is not None and reposts is not None and comments is not None:
+                out["interactions"] = likes + reposts + comments
             return out
         except Exception:
             return {}
 
 
 def _apply_precise(result: dict, uid: str, cookie: str, raw_followers) -> dict:
-    """PC端精确数覆盖：粉丝数万化值修正 + 获赞数（m端没有该字段）。"""
+    """PC端精确数覆盖：粉丝数万化值修正 + 获赞数（m端没有该字段）。
+
+    同时把 fans_source / fans_approximate 改成 pc:exact，避免下一次采集
+    把「万化值 → 精确值」误判成粉丝变化。
+    """
     if not _is_vague(raw_followers) and result.get("likes") is not None:
         return result
     precise = _precise_counts(uid, cookie)
@@ -186,25 +240,10 @@ def _http_collect(uid=None, cookie: str = "") -> dict:
     if not ui:
         return {"platform": "weibo", "error": error}
 
-    followers = _parse_num(ui.get("followers_count"))
-    following = _parse_num(ui.get("follow_count"))
-    posts = _parse_num(ui.get("statuses_count"))
-
-    result = {
-        "platform": "weibo",
-        "name": ui.get("screen_name"),
-        "fans": followers,
-        "following": following,
-        "weibo_count": posts,
-        "sign": ui.get("description"),
-        "avatar": ui.get("avatar_hd") or ui.get("profile_image_url"),
-        "verified": ui.get("verified"),
-        "verified_reason": ui.get("verified_reason"),
-        "gender": ui.get("gender"),
-        "cover": ui.get("cover_image_phone"),
-        "level": ui.get("mbrank"),
-        "uid": uid,
-    }
+    try:
+        result = _record_from_user(ui, uid, "mobile")
+    except ValueError as exc:
+        return {"platform": "weibo", "error": str(exc)}
     return _apply_precise(result, uid, cookie, ui.get("followers_count"))
 
 
@@ -271,24 +310,10 @@ def _playwright_collect(uid=None) -> dict:
 
         if not user_info:
             return {"platform": "weibo", "error": "未登录微博：请在「Cookie 管理」中登录后再采集"}
-        followers = _parse_num(user_info.get("followers_count"))
-        following = _parse_num(user_info.get("follow_count"))
-        posts = _parse_num(user_info.get("statuses_count"))
-        result = {
-            "platform": "weibo",
-            "name": user_info.get("screen_name"),
-            "fans": followers,
-            "following": following,
-            "weibo_count": posts,
-            "sign": user_info.get("description"),
-            "avatar": user_info.get("avatar_hd") or user_info.get("profile_image_url"),
-            "verified": user_info.get("verified"),
-            "verified_reason": user_info.get("verified_reason"),
-            "gender": user_info.get("gender"),
-            "cover": user_info.get("cover_image_phone"),
-            "level": user_info.get("mbrank"),
-            "uid": uid,
-        }
+        try:
+            result = _record_from_user(user_info, uid, "playwright")
+        except ValueError as exc:
+            return {"platform": "weibo", "error": str(exc)}
         return _apply_precise(result, uid, "", user_info.get("followers_count"))
 
 
