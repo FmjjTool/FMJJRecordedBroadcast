@@ -12,6 +12,8 @@ from toolbox import webui_assets_dl
 from toolbox.asset_query import AssetQueryService
 from toolbox.webui.jobs import JobCancelled
 
+_STATUS_KEYS = ("", "missing", "partial", "ok", "text")
+
 
 class AssetService:
     def __init__(self, jobs=None, query: AssetQueryService | None = None):
@@ -35,6 +37,13 @@ class AssetService:
     def entries(self, page: int, page_size: int, keyword: str = "",
                 platform: str = "") -> dict:
         return self._query.entries(page, page_size, keyword, platform)
+
+    def entries_status(self, page: int, page_size: int, keyword: str = "",
+                       platform: str = "", status: str = "") -> dict:
+        if status not in _STATUS_KEYS:
+            raise ValueError("未知状态筛选")
+        return webui_assets_dl.entries_with_status(
+            page, page_size, keyword, platform, status)
 
     def start_download(self, payload: dict) -> dict:
         if self._jobs is None:

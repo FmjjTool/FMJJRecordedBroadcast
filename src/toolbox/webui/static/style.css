@@ -252,6 +252,7 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 }
 .badge.ok { background: var(--panel-3); color: var(--ok); }
 .badge.warn { background: var(--danger-soft); color: var(--warn); }
+.badge.danger { background: var(--danger-soft); color: var(--danger); }
 .empty { padding: 26px 10px; text-align: center; color: var(--muted); font-size: 12px; }
 .loading { padding: 26px 10px; text-align: center; color: var(--muted); }
 .error { padding: 20px; border: 1px solid var(--danger); background: var(--danger-soft); color: var(--danger); border-radius: var(--radius-sm); }

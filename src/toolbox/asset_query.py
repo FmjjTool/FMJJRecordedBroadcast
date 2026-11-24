@@ -217,6 +217,8 @@ class AssetQueryService:
             "url": item.get("video_url") or "",
             "file": os.path.basename(file_path),
             "path": rel,
+            "video_id": str(item.get("video_id") or ""),
+            "cover": item.get("cover_url") or "",
             "images": int(item.get("expected_imgs") or 0),
         }
 
@@ -269,7 +271,9 @@ class AssetQueryService:
                     "url": payload.get("原始URL") or payload.get("链接") or "",
                     "file": name,
                     "path": os.path.relpath(path, root).replace("\\", "/"),
-                    "images": 0,
+                    "video_id": str(payload.get("视频ID") or ""),
+                    "cover": payload.get("封面") or "",
+                    "images": _num(payload.get("图片数")),
                 })
         return rows
 
@@ -302,6 +306,10 @@ def _dir_stamp(root: Path) -> int:
 
 
 def _platform_of(text: str) -> str:
+    from toolbox.utils import norm_platform_dir
+    found = norm_platform_dir(text or "")
+    if found:
+        return found
     low = (text or "").lower()
     for key in _KNOWN_PLATFORMS:
         if key in low:
