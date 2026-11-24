@@ -78,6 +78,37 @@ class ToolService:
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def video_overview(self) -> dict:
+        return webui_tools.video_overview()
+
+    def video_sources(self, limit: int = 200) -> dict:
+        return webui_tools.list_video_sources(limit)
+
+    def start_video_convert(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        paths = payload.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("请选择要转换的视频")
+        job = self._jobs.submit(
+            "video_convert",
+            lambda task: self._video_job(task, paths))
+        return {"job": job.id}
+
+    def _video_job(self, job, paths) -> dict:
+        def progress(done: int, total: int, name: str) -> None:
+            job.update(f"正在转换 {done}/{total}: {name}",
+                       done / total if total else None)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.convert_videos(
+                paths, on_progress=progress, is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
     def calendar_days(self) -> dict:
         return webui_tools.calendar_days()
 
@@ -86,6 +117,7 @@ class ToolService:
 
     def launcher_overview(self) -> dict:
         return webui_tools.launcher_overview()
+
     def migrate_overview(self) -> dict:
         return webui_tools.migrate_overview()
 

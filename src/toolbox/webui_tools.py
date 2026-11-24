@@ -203,6 +203,77 @@ def convert_subtitles(rel_paths, formats, on_progress=None,
             "results": results, "ok": ok, "failed": len(paths) - ok}
 
 
+def video_overview() -> dict:
+    root = _work_root()
+    files = _scan_videos(root)
+    cfg = load_convert_config()
+    ext = str(cfg.get("output_extension") or ".mp4").lower()
+    return {
+        "has_work_dir": bool(root),
+        "work_dir": root.name if root else "",
+        "output_extension": ext,
+        "files": len(files),
+        "limited": len(files) >= _MAX_FILES,
+        "note": "只生成新文件，不删除、不改写源视频；输出与原文件同目录；"
+                "目标格式与源相同则跳过。默认输出格式在桌面端全局设置修改。",
+    }
+
+
+def list_video_sources(limit: int = 200) -> dict:
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    limit = max(1, min(500, int(limit)))
+    files = _scan_videos(root)
+    return {"items": _file_items(root, files[:limit]), "total": len(files),
+            "limited": len(files) >= _MAX_FILES,
+            "truncated": len(files) > limit,
+            "note": "只列出工作目录下的视频文件。"}
+
+
+def convert_videos(rel_paths, on_progress=None, is_cancelled=None) -> dict:
+    """批量格式转换（无损优先，按桌面转换配置；强制同目录、不删源）。"""
+    from toolbox.convert_engine import convert_one_file
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    raw = [str(item or "").strip() for item in (rel_paths or [])]
+    raw = [item for item in raw if item][:_MAX_TASK_FILES]
+    if not raw:
+        raise ValueError("请选择要转换的视频")
+    paths = [_resolve(root, rel) for rel in raw]
+    cfg = dict(load_convert_config())
+    cfg["output_dir"] = ""
+    cfg["delete_source_after_success"] = False
+    cfg["preserve_timestamps"] = True
+    results = []
+    ok = 0
+    for index, path in enumerate(paths, 1):
+        if is_cancelled and is_cancelled():
+            raise ToolCancelled("任务已取消")
+        rel = _rel(root, path)
+        result = convert_one_file(
+            path, root, cfg,
+            should_stop=lambda: bool(is_cancelled and is_cancelled()))
+        if getattr(result, "interrupted", False):
+            raise ToolCancelled("任务已取消")
+        success = bool(getattr(result, "success", False))
+        results.append({
+            "file": rel,
+            "ok": success,
+            "mode": getattr(result, "mode", "") or "",
+            "output": getattr(getattr(result, "dst", None), "name", "") or "",
+            "error": (getattr(result, "error_detail", "") or
+                      getattr(result, "error_type", "") or ""),
+        })
+        ok += 1 if success else 0
+        if on_progress:
+            on_progress(index, len(paths), rel)
+    return {"summary": f"完成 {ok}/{len(paths)} 个文件",
+            "results": results, "ok": ok, "failed": len(paths) - ok}
+
+
 def calendar_days() -> dict:
     """列出工作目录下的日期文件夹（名称、日期、文件数与总大小）。"""
     from toolbox.date_folders import scan_date_folders

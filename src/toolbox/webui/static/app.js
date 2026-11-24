@@ -20,6 +20,7 @@
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
+    video: { order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
@@ -30,7 +31,7 @@
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
     organize: { title: '自动整理', load: function (host) { renderModule(host, 'organize'); } },
-    editor: { title: '视频操作', load: function (host) { renderModule(host, 'editor'); } },
+    editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: function (host) { renderModule(host, 'rename'); } },
     audio: { title: '音频提取', load: renderAudio },
     subtitle: { title: '字幕转换', load: renderSubtitle },
@@ -1072,6 +1073,186 @@
       },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           result.summary || '提取结果'),
+        h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body))));
+    }
+  }
+
+  function renderVideo(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取工作目录…');
+    Promise.all([
+      api('/api/tools/video/overview'),
+      api('/api/tools/video/sources?limit=300')
+    ]).then(function (results) {
+      var overview = results[0];
+      var sources = results[1];
+      host.replaceChildren();
+      if (!overview.has_work_dir) {
+        host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
+        return;
+      }
+      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('视频', fmtNumber(sources.total), '工作目录内'));
+      stats.appendChild(statCard('输出格式', overview.output_extension || '-', '桌面端配置'));
+      stats.appendChild(statCard('已列出', fmtNumber(sources.items.length),
+        sources.truncated ? '仅前 300 个' : '全部'));
+      stats.appendChild(statCard('处理方式', '无损优先', '同目录输出'));
+      host.appendChild(stats);
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, overview.note || '')));
+      if (!sources.items.length) {
+        host.appendChild(empty('工作目录下没有可转换的视频。'));
+        return;
+      }
+
+      var selected = state.video.selected;
+      var known = new Set(sources.items.map(function (item) { return item.path; }));
+      Array.from(selected).forEach(function (path) {
+        if (!known.has(path)) selected.delete(path);
+      });
+
+      var selectedLabel = h('span', { class: 'muted small' });
+      var selectAll = h('input', { type: 'checkbox' });
+      var runBtn = h('button', { class: 'btn primary', type: 'button' }, '转换选中视频');
+      var rescan = h('button', { class: 'btn', type: 'button' }, '刷新');
+      host.appendChild(h('div', { class: 'toolbar' },
+        h('label', { class: 'muted small' }, selectAll, ' 全选'),
+        selectedLabel, h('span', { style: 'flex:1' }), rescan, runBtn));
+
+      var jobHost = h('div');
+      var listHost = h('div');
+      var resultHost = h('div');
+      host.appendChild(jobHost);
+      host.appendChild(listHost);
+      host.appendChild(resultHost);
+
+      var running = false;
+      var columns = [
+        { key: 'name', label: '文件名' },
+        { key: 'dir', label: '目录' },
+        { key: 'size', label: '大小' },
+        { key: 'mtime', label: '修改时间' }
+      ];
+
+      function updateButtons() {
+        runBtn.disabled = running || selected.size === 0;
+        runBtn.textContent = running ? '转换中…' : '转换选中视频';
+        selectedLabel.textContent = '已选 ' + selected.size + ' 个';
+        selectAll.checked = sources.items.length > 0
+          && selected.size === sources.items.length;
+        selectAll.indeterminate = selected.size > 0
+          && selected.size < sources.items.length;
+      }
+
+      function draw() {
+        var rows = sortRows(sources.items, columns, state.video);
+        var head = h('tr', null, h('th', { style: 'width:36px' }, ''));
+        columns.forEach(function (column) {
+          var mark = state.video.order === column.key
+            ? (state.video.asc ? ' ↑' : ' ↓') : '';
+          head.appendChild(h('th', {
+            class: 'sortable',
+            onclick: function () {
+              cycleSort(state.video, column.key);
+              draw();
+            }
+          }, column.label + mark));
+        });
+        var body = h('tbody');
+        rows.forEach(function (item) {
+          var check = h('input', {
+            type: 'checkbox', checked: selected.has(item.path)
+          });
+          check.addEventListener('change', function () {
+            if (check.checked) selected.add(item.path);
+            else selected.delete(item.path);
+            updateButtons();
+          });
+          body.appendChild(h('tr', null,
+            h('td', null, check),
+            h('td', null, item.name || '-'),
+            h('td', { class: 'muted small' }, item.dir || '-'),
+            h('td', { class: 'num' }, fmtBytes(item.size)),
+            h('td', null, item.mtime || '-')));
+        });
+        listHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+        updateButtons();
+      }
+
+      selectAll.addEventListener('change', function () {
+        selected.clear();
+        if (selectAll.checked) {
+          sources.items.forEach(function (item) { selected.add(item.path); });
+        }
+        draw();
+      });
+      rescan.addEventListener('click', function () {
+        selected.clear();
+        renderVideo(host);
+      });
+      runBtn.addEventListener('click', function () {
+        if (!selected.size || running) return;
+        var paths = Array.from(selected);
+        running = true;
+        updateButtons();
+        post('/api/tools/video/convert', { paths: paths }).then(function (data) {
+          watchJob(jobHost, data.job, function (job) {
+            running = false;
+            updateButtons();
+            var summary = job.result && job.result.summary
+              ? job.result.summary : '转换完成';
+            toast(summary, 'success');
+            showResult(job);
+            selected.clear();
+            draw();
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              updateButtons();
+              if (job.status === 'cancelled') {
+                toast('视频转换已取消', 'info');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          updateButtons();
+          toast('转换失败：' + error.message, 'error');
+        });
+      });
+      draw();
+    }).catch(function (error) {
+      setError(host, error, function () { renderVideo(host); });
+    });
+
+    function showResult(job) {
+      var result = job.result || {};
+      var rows = result.results || [];
+      if (!rows.length) return;
+      var labels = {
+        lossless: '无损封装', skip: '已存在跳过',
+        encode: '重新编码', encode_fallback: '重编码'
+      };
+      var head = h('tr', null,
+        h('th', null, '文件'), h('th', null, '结果'),
+        h('th', null, '输出'), h('th', null, '说明'));
+      var body = h('tbody');
+      rows.forEach(function (row) {
+        body.appendChild(h('tr', null,
+          h('td', null, row.file || '-'),
+          h('td', null, row.ok ? '成功' : '失败'),
+          h('td', { class: 'muted small' }, row.output || '-'),
+          h('td', { class: 'muted small' },
+            row.error || labels[row.mode] || row.mode || '-')));
+      });
+      resultHost.replaceChildren(h('div', {
+        class: 'card', style: 'margin-top:12px'
+      },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          result.summary || '转换结果'),
         h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' }, h('thead', null, head), body))));
     }
