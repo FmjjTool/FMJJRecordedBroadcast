@@ -101,6 +101,7 @@ class BasePlaylistWriter:
     platform = ""
     platform_name = ""
     supports_create = True
+    available = True          # False = 接口已确认不可用，界面不提供选择
     experimental = False
     verified = False
     prepend = False

@@ -48,6 +48,7 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
     platform = "kuwo"
     platform_name = "酷我音乐"
     verified = False
+    available = False
     experimental = True
     note = "写入接口返回 504，当前不可用"
     batch_size = 50

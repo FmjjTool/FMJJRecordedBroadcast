@@ -208,6 +208,7 @@ def capabilities() -> list[dict]:
             "platform": platform,
             "name": writer.platform_name,
             "supports_create": writer.supports_create,
+            "available": writer.available,
             "experimental": writer.experimental,
             "verified": writer.verified,
             "note": writer.note,
@@ -261,6 +262,60 @@ def read_source_playlist(platform: str, url_or_id: str) -> tuple[list[SourceSong
         if (song.song_name or song.title)
     ]
     return songs, playlist.name or playlist_id
+
+
+def read_source_complete_songs(path: str | Path | None = None) -> tuple[list[SourceSong], str]:
+    """从腾讯文档「完整歌曲」本地快照取歌。
+
+    快照里的平台链接是官方歌曲 ID，匹配时优先直连，比纯搜索稳定；
+    链接缺失的平台才回退官方搜索接口。
+    """
+    from toolbox.music_complete_songs import load_complete_songs
+
+    rows = load_complete_songs(path)
+    if not rows:
+        raise ValueError("本地没有「完整歌曲」快照，请先在腾讯文档页完成一次同步")
+
+    sources: list[SourceSong] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        title = (row.get("title") or "").strip()
+        if not title:
+            continue
+        artist = (row.get("singer") or "").strip()
+        key = (title.lower(), artist.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        links = {platform: str(url).strip()
+                 for platform, url in (row.get("links") or {}).items() if url}
+        sources.append(SourceSong(
+            title=title,
+            artist=artist,
+            album=(row.get("album") or "").strip(),
+            links=links,
+        ))
+    if not sources:
+        raise ValueError("「完整歌曲」快照中没有可用歌曲")
+    return sources, f"完整歌曲快照（{len(sources)} 首）"
+
+
+def report_dir() -> Path:
+    """预览 / 执行报告目录：统一导出目录下的「音乐信息/歌曲合集」。"""
+    try:
+        from toolbox.config_manager import get_export_subdir
+        path = get_export_subdir("music_info") / "歌曲合集"
+    except Exception:
+        path = Path.cwd() / "download" / "音乐信息" / "歌曲合集"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_report(path: str | Path, data: dict) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, indent=2)
 
 
 def read_source_file(path: str | Path) -> list[SourceSong]:
@@ -329,7 +384,8 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
                interval: float = 0.8,
                on_progress: Optional[Callable[[int, int, str], None]] = None,
                journal_path: str | Path | None = None,
-               resume: dict | None = None) -> ApplyResult:
+               resume: dict | None = None,
+               cancel=None) -> ApplyResult:
     selected = plan.selected(include_uncertain)
     result = ApplyResult(platform=plan.platform, playlist_name=plan.playlist_name)
     if not selected:
@@ -362,6 +418,15 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
     done = 0
     batch_size = 1 if plan.writer.prepend else max(1, int(plan.writer.batch_size or 50))
     for start in range(0, total, batch_size):
+        if cancel is not None and cancel.is_set():
+            result.stopped = "已手动停止"
+            for item in add_sequence[start:]:
+                result.skipped.append({
+                    "song": item.target.song_name if item.target else item.source.title,
+                    "reason": result.stopped,
+                })
+            _write_journal(journal_path, result)
+            break
         batch = add_sequence[start:start + batch_size]
         batch_songs = [item.target for item in batch if item.target]
         try:

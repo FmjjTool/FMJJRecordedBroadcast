@@ -31,9 +31,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.capabilities:
         for row in service.capabilities():
-            status = "不支持" if not row["supports_create"] else (
-                "实验" if row["experimental"] else ("已核对" if row["verified"] else "待实测")
-            )
+            if not row["supports_create"]:
+                status = "不支持"
+            elif not row.get("available", True):
+                status = "不可用"
+            elif row["experimental"]:
+                status = "实验"
+            elif row["verified"]:
+                status = "已核对"
+            else:
+                status = "待实测"
             note = f"；{row['note']}" if row.get("note") else ""
             print(f"{row['name']}（{row['platform']}）：{status}{note}")
         return 0
@@ -241,13 +248,7 @@ def _confirm() -> bool:
 
 
 def _default_report_dir() -> Path:
-    try:
-        from toolbox.config_manager import get_export_subdir
-        path = get_export_subdir("music_info") / "歌曲合集"
-    except Exception:
-        path = Path.cwd() / "download" / "音乐信息" / "歌曲合集"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return service.report_dir()
 
 
 def _write_report(path: Path, data: dict) -> None:
