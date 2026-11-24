@@ -30,7 +30,7 @@ from toolbox import bili_upload as BU
 from toolbox.utils import format_size, is_video_file
 
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ToolSectionCard, count_date_subfolders
+from gui_qt.toolbox_common import ToolSectionCard
 from gui_qt.common import run_bg
 
 
@@ -284,18 +284,6 @@ class OrganizePage(BasePage):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # 目录栏：工作目录 + 日期文件夹计数
-        dir_row = QHBoxLayout()
-        self.dir_label = QLabel(app.work_dir)
-        dir_row.addWidget(self.dir_label, 1)
-        self.dir_date_label = QLabel("")
-        self.dir_date_label.setProperty("role", "muted")
-        dir_row.addWidget(self.dir_date_label)
-        dir_card = self._section("目录", "folder")
-        dir_card.content_layout.addLayout(dir_row)
-        layout.addWidget(dir_card)
-        self._update_dir_date_label()
-
         sources_card = self._section(
             "A端来源文件夹", "folder",
             "可多个；迁移视频到当前工作目录，日期可识别时放入日期文件夹")
@@ -385,8 +373,6 @@ class OrganizePage(BasePage):
     # ==================== 目录 ====================
 
     def on_dir_changed(self, path):
-        self.dir_label.setText(path)
-        self._update_dir_date_label()
         self._invalidate_plan()
 
     def _invalidate_plan(self):
@@ -437,11 +423,6 @@ class OrganizePage(BasePage):
 
     def has_active_tasks(self):
         return self.busy
-
-    def _update_dir_date_label(self):
-        count = count_date_subfolders(self.app.work_dir)
-        self.dir_date_label.setText(
-            f"{count} 个日期文件夹" if count else "无日期文件夹")
 
     # ==================== 扫描 / 执行 ====================
 
@@ -692,7 +673,6 @@ class OrganizePage(BasePage):
                 if skipped:
                     self._log(f"另有 {len(skipped)} 个未迁移（仍留在来源）："
                               + "；".join(skipped[:5]))
-                self._update_dir_date_label()
 
             run_bg(migrate, migrated, owner=self)
 

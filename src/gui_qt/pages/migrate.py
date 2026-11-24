@@ -113,13 +113,6 @@ class MigratePage(BasePage):
         top_v.setContentsMargins(10, 8, 10, 8)
         top_v.setSpacing(6)
 
-        # 源目录
-        src_row = QHBoxLayout()
-        src_row.addWidget(QLabel("源目录:"))
-        self.src_label = QLabel(app.work_dir)
-        src_row.addWidget(self.src_label, 1)
-        top_v.addLayout(src_row)
-
         # 目标目录
         tgt_row = QHBoxLayout()
         tgt_row.addWidget(QLabel("目标:"))
@@ -189,10 +182,7 @@ class MigratePage(BasePage):
         self.log_text.setFixedHeight(120)
         layout.addWidget(self.log_text)
 
-    # ==================== 目录/模式 ====================
-
-    def on_dir_changed(self, path):
-        self.src_label.setText(path)
+    # ==================== 模式 ====================
 
     def _mode(self):
         return "copy" if self.copy_radio.isChecked() else "move"

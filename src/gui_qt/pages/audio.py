@@ -38,7 +38,7 @@ from gui_qt.asr_settings_dialog import AsrSettingsDialog
 from gui_qt.common import post_to_main, run_bg, start_page_thread
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
-from gui_qt.toolbox_common import ToolSectionCard, count_date_subfolders
+from gui_qt.toolbox_common import ToolSectionCard
 
 
 class AudioPage(BasePage):
@@ -58,18 +58,6 @@ class AudioPage(BasePage):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-
-        # 目录栏：工作目录 + 日期文件夹计数
-        dir_row = QHBoxLayout()
-        self.dir_label = QLabel(app.work_dir)
-        dir_row.addWidget(self.dir_label, 1)
-        self.dir_date_label = QLabel("")
-        self.dir_date_label.setProperty("role", "muted")
-        dir_row.addWidget(self.dir_date_label)
-        dir_card = self._section("目录", "folder")
-        dir_card.content_layout.addLayout(dir_row)
-        layout.addWidget(dir_card)
-        self._update_dir_date_label()
 
         # 控制栏
         ctrl_row = QHBoxLayout()
@@ -233,17 +221,6 @@ class AudioPage(BasePage):
             return dt.strftime("%Y-%m-%d") == AudioPage._today_bj_str()
         except Exception:
             return False
-
-    # ==================== 目录 ====================
-
-    def on_dir_changed(self, path):
-        self.dir_label.setText(path)
-        self._update_dir_date_label()
-
-    def _update_dir_date_label(self):
-        count = count_date_subfolders(self.app.work_dir)
-        self.dir_date_label.setText(
-            f"{count} 个日期文件夹" if count else "无日期文件夹")
 
     # ==================== 扫描 ====================
 
