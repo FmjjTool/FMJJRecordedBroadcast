@@ -16,7 +16,7 @@
     route: 'collected',
     theme: localStorage.getItem('webui-theme') || 'auto',
     collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
-    assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '' },
+    assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1 },
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
   };
   var routes = {
@@ -182,27 +182,48 @@
     routes[route].load(content);
   }
 
-  function watchJob(host, jobId, onDone) {
+  function watchJob(host, jobId, onDone, options) {
+    options = options || {};
     host.replaceChildren();
     var box = h('div', { class: 'job' });
     var head = h('div', { class: 'job-head' });
     var status = h('span', { class: 'job-status' }, '任务运行中');
     var link = h('span', { class: 'job-done' });
+    var cancelBtn = options.cancelable
+      ? h('button', { class: 'btn', type: 'button' }, '取消任务')
+      : null;
     var bar = h('div', { class: 'progress' }, h('i'));
     var resultLine = h('div', { class: 'muted small', style: 'margin:2px 0 6px' });
     var log = h('pre', { class: 'job-log' });
     head.appendChild(status);
     head.appendChild(link);
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', function () {
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '取消中…';
+        post('/api/jobs/' + jobId + '/cancel', {}).catch(function (error) {
+          toast('取消失败：' + error.message, 'error');
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = '取消任务';
+        });
+      });
+      head.appendChild(cancelBtn);
+    }
     box.appendChild(head);
     box.appendChild(bar);
     box.appendChild(resultLine);
     box.appendChild(log);
     host.appendChild(box);
 
+    function settle(job) {
+      if (cancelBtn) cancelBtn.remove();
+      if (options.onSettled) options.onSettled(job);
+    }
+
     function tick() {
       if (!box.isConnected) return;
       api('/api/jobs/' + jobId).then(function (job) {
-        status.textContent = job.status === 'done' ? '已完成' : (job.status === 'error' ? '失败' : (job.message || '运行中'));
+        status.textContent = job.status === 'done' ? '已完成' : (job.status === 'error' ? '失败' : (job.status === 'cancelled' ? '已取消' : (job.message || '运行中')));
         bar.firstChild.style.width = (job.progress == null ? 30 : Math.round(job.progress * 100)) + '%';
         log.textContent = (job.logs || []).join('\n');
         if (job.status === 'done') {
@@ -219,10 +240,17 @@
             }, '下载结果'));
           }
           if (onDone) onDone(job);
+          settle(job);
+          return;
+        }
+        if (job.status === 'cancelled') {
+          bar.firstChild.style.width = '0';
+          settle(job);
           return;
         }
         if (job.status === 'error') {
           link.replaceChildren(h('span', { class: 'badge warn' }, job.error || '任务失败'));
+          settle(job);
           return;
         }
         setTimeout(tick, 700);
@@ -676,59 +704,168 @@
 
   function renderLocal(host, summary) {
     host.replaceChildren();
-    var groupHost = h('div', { class: 'list' });
+    var listHost = h('div');
+    var pagerHost = h('div', { class: 'pager' });
+    var jobHost = h('div', { class: 'hidden' });
     var select = h('select', { class: 'select' });
     summary.categories.forEach(function (name) {
       select.appendChild(h('option', { value: name }, name));
     });
     if (!summary.categories.length) {
-      host.appendChild(empty('暂无可浏览的本地分类目录。'));
+      host.appendChild(empty('暂无可浏览的本地分类目录。先在桌面端导出资源，或检查导出目录。'));
       return;
     }
     if (!state.assets.cat || summary.categories.indexOf(state.assets.cat) < 0) {
       state.assets.cat = summary.categories.indexOf('已获取数据') >= 0
         ? '已获取数据' : summary.categories[0];
+      state.assets.localPage = 1;
     }
     select.value = state.assets.cat;
-    select.addEventListener('change', function () {
-      state.assets.cat = select.value;
-      load();
-    });
-    host.appendChild(h('div', { class: 'toolbar' }, h('span', { class: 'muted small' }, '分类'), select));
-    host.appendChild(groupHost);
+    var rescan = h('button', { class: 'btn', type: 'button' }, '重新扫描');
+    var scanInfo = h('span', { class: 'muted small' });
+    var scanning = false;
+    var tracking = '';
+    var autoTried = false;
+    var cancelledOnce = false;
+
+    function setScanning(value) {
+      scanning = value;
+      rescan.disabled = value;
+      rescan.textContent = value ? '扫描中…' : '重新扫描';
+    }
+
+    function renderInfo(data) {
+      if (!data.scanned_at) { scanInfo.textContent = ''; return; }
+      var time = new Date(data.scanned_at * 1000);
+      scanInfo.textContent = '扫描于 ' + time.toLocaleTimeString('zh-CN', {
+        hour: '2-digit', minute: '2-digit'
+      }) + ' · ' + fmtNumber(data.files) + ' 个文件';
+    }
+
+    function renderGroups(data) {
+      state.assets.localPage = data.page;
+      renderInfo(data);
+      if (!data.groups.length) {
+        listHost.replaceChildren(empty('该分类下暂无文件。可切换其他分类，或先在桌面端导出资源。'));
+        pagerHost.replaceChildren();
+        return;
+      }
+      var list = h('div', { class: 'list' });
+      data.groups.forEach(function (group) {
+        var files = h('ul', { class: 'row-files' });
+        (group.files || []).slice(0, 12).forEach(function (file) {
+          files.appendChild(h('li', null, file.name + (file.size ? ' · ' + fmtBytes(file.size) : '')));
+        });
+        if ((group.files || []).length > 12) {
+          files.appendChild(h('li', null, '…共 ' + group.files.length + ' 个文件'));
+        }
+        list.appendChild(h('div', { class: 'row-card' },
+          h('div', { class: 'row-head' }, h('div', { class: 'row-title' }, group.title || '-')),
+          h('div', { class: 'row-meta' },
+            h('span', null, group.date || '无日期'),
+            h('span', null, '图片 ' + group.n_img),
+            h('span', null, '视频 ' + group.n_vid),
+            h('span', null, '音频 ' + group.n_aud),
+            h('span', null, '文档 ' + group.n_doc),
+            h('span', null, fmtBytes(group.size)),
+            h('span', null, group.mtime || '')),
+          files));
+      });
+      listHost.replaceChildren();
+      if (data.truncated) {
+        listHost.appendChild(h('div', { class: 'muted small', style: 'margin:0 2px 8px' },
+          '目录文件超过 50000 个，当前仅展示已扫描部分。'));
+      }
+      listHost.appendChild(list);
+      pager(pagerHost, data.page, data.pages, data.total, function (page) {
+        state.assets.localPage = page;
+        load();
+      });
+    }
+
+    function trackScan(jobId) {
+      if (!jobId || tracking === jobId) return;
+      tracking = jobId;
+      setScanning(true);
+      jobHost.classList.remove('hidden');
+      watchJob(jobHost, jobId, function (job) {
+        tracking = '';
+        setScanning(false);
+        jobHost.classList.add('hidden');
+        toast(job.result && job.result.summary ? job.result.summary : '扫描完成', 'success');
+        load();
+      }, {
+        cancelable: true,
+        onSettled: function (job) {
+          tracking = '';
+          setScanning(false);
+          if (job.status === 'cancelled') {
+            cancelledOnce = true;
+            jobHost.replaceChildren();
+            jobHost.classList.add('hidden');
+            toast('扫描已取消，保留上次结果。', 'info');
+            load();
+          }
+        }
+      });
+    }
+
+    function startScan(quiet) {
+      if (scanning) return;
+      setScanning(true);
+      if (!quiet) listHost.replaceChildren(h('div', { class: 'loading', text: '正在启动后台扫描…' }));
+      post('/api/assets/local/scan', { cat: state.assets.cat }).then(function (data) {
+        trackScan(data.job);
+      }).catch(function (error) {
+        setScanning(false);
+        setError(listHost, error, load);
+      });
+    }
 
     function load() {
-      setLoading(groupHost, '正在扫描分类目录…');
-      api('/api/assets/local/groups?cat=' + encodeURIComponent(state.assets.cat)).then(function (data) {
-        if (!data.groups.length) {
-          groupHost.replaceChildren(empty('该分类下暂无文件。'));
-          return;
-        }
-        var list = h('div', { class: 'list' });
-        data.groups.forEach(function (group) {
-          var files = h('ul', { class: 'row-files' });
-          (group.files || []).slice(0, 12).forEach(function (file) {
-            files.appendChild(h('li', null, file.name + (file.size ? ' · ' + fmtBytes(file.size) : '')));
-          });
-          if ((group.files || []).length > 12) {
-            files.appendChild(h('li', null, '…共 ' + group.files.length + ' 个文件'));
+      setLoading(listHost, '正在读取本地资源…');
+      api('/api/assets/local/groups?cat=' + encodeURIComponent(state.assets.cat) +
+        '&page=' + state.assets.localPage + '&page_size=40')
+        .then(function (data) {
+          if (data.status === 'idle') {
+            renderInfo(data);
+            if (!autoTried && !cancelledOnce) {
+              autoTried = true;
+              startScan();
+            } else {
+              listHost.replaceChildren(empty('尚未扫描该分类。点右上角「重新扫描」开始。'));
+              pagerHost.replaceChildren();
+            }
+            return;
           }
-          list.appendChild(h('div', { class: 'row-card' },
-            h('div', { class: 'row-head' }, h('div', { class: 'row-title' }, group.title || '-')),
-            h('div', { class: 'row-meta' },
-              h('span', null, group.date || '无日期'),
-              h('span', null, '图片 ' + group.n_img),
-              h('span', null, '视频 ' + group.n_vid),
-              h('span', null, '音频 ' + group.n_aud),
-              h('span', null, '文档 ' + group.n_doc),
-              h('span', null, fmtBytes(group.size)),
-              h('span', null, group.mtime || '')),
-            files));
-        });
-        groupHost.replaceChildren(list);
-        if (data.truncated) toast('目录文件较多，已截断显示。', 'info');
-      }).catch(function (error) { setError(groupHost, error, load); });
+          renderGroups(data);
+          if (data.status === 'scanning' && data.job) trackScan(data.job);
+          else if (data.stale && !scanning) startScan(true);
+        }).catch(function (error) { setError(listHost, error, load); });
     }
+
+    select.addEventListener('change', function () {
+      state.assets.cat = select.value;
+      state.assets.localPage = 1;
+      tracking = '';
+      cancelledOnce = false;
+      setScanning(false);
+      jobHost.replaceChildren();
+      jobHost.classList.add('hidden');
+      load();
+    });
+    rescan.addEventListener('click', function () {
+      state.assets.localPage = 1;
+      cancelledOnce = false;
+      startScan();
+    });
+
+    host.appendChild(h('div', { class: 'toolbar' },
+      h('span', { class: 'muted small' }, '分类'), select,
+      h('span', { style: 'flex:1' }), scanInfo, rescan));
+    host.appendChild(jobHost);
+    host.appendChild(listHost);
+    host.appendChild(pagerHost);
     load();
   }
 

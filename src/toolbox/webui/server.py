@@ -104,6 +104,9 @@ class WebUIServer:
     def get_re(self, pattern: str, fn) -> None:
         self._dynamic.append(("GET", re.compile(pattern), fn))
 
+    def post_re(self, pattern: str, fn) -> None:
+        self._dynamic.append(("POST", re.compile(pattern), fn))
+
     def start(self) -> None:
         if self._httpd is not None:
             return

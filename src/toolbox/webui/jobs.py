@@ -15,6 +15,10 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 
+class JobCancelled(Exception):
+    """任务主动取消：由任务函数在检查取消标记后抛出。"""
+
+
 @dataclass
 class Job:
     id: str
@@ -28,6 +32,7 @@ class Job:
     logs: list[str] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)
     created: float = field(default_factory=time.time)
+    cancel_requested: bool = False
 
     def log(self, text: str) -> None:
         line = str(text).strip()
@@ -97,6 +102,10 @@ class JobManager:
             job.status = "done"
             job.progress = 1.0
             job.message = "已完成"
+        except JobCancelled:
+            job.status = "cancelled"
+            job.message = "已取消"
+            job.log("任务已取消")
         except Exception as exc:
             job.status = "error"
             job.error = str(exc)[:500] or exc.__class__.__name__
@@ -111,6 +120,14 @@ class JobManager:
         if job is not None:
             return job
         return None
+
+    def cancel(self, job_id: str) -> bool:
+        job = self.get(job_id)
+        if job is None or job.status not in ("queued", "running"):
+            return False
+        job.cancel_requested = True
+        job.log("收到取消请求")
+        return True
 
     def download(self, job_id: str) -> Path | None:
         job = self.get(job_id)

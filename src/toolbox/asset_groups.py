@@ -79,15 +79,20 @@ def extract_date(text) -> str:
     return ""
 
 
-def load_dir_groups(root, limit_files: int = 20000, cat: str = "") -> tuple[list, bool]:
+def load_dir_groups(root, limit_files: int = 20000, cat: str = "",
+                    on_progress=None) -> tuple[list, bool]:
     """扫描 root 并按分类规则聚合，返回 (groups, truncated)。
 
     limit_files 兜底防误选超大目录把内存打满；truncated=True 表示已截断。
+    on_progress(count) 每扫描若干文件回调一次，回调抛异常即中止扫描
+    （供后台任务展示进度与响应取消）。
     """
     root = str(root)
     cat = cat or os.path.basename(root.rstrip("\\/"))
     files_scan, top_dirs = [], {}
     total = 0
+    if on_progress is not None:
+        on_progress(0)
 
     def scan_error(error):
         raise error
@@ -117,6 +122,8 @@ def load_dir_groups(root, limit_files: int = 20000, cat: str = "") -> tuple[list
                     "audio" if ext in AUDIO_EXTS else "other")
             files_scan.append((rel, fn, full, st, kind))
             total += 1
+            if on_progress is not None and total % 200 == 0:
+                on_progress(total)
             if limit_files and total >= limit_files:
                 break
         if limit_files and total >= limit_files:

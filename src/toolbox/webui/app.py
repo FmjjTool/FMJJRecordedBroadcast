@@ -14,7 +14,7 @@ from version import APP_VERSION
 def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer:
     jobs = JobManager()
     collected = CollectedService()
-    assets = AssetService()
+    assets = AssetService(jobs)
     tcdoc = TCDocService(jobs)
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
@@ -47,7 +47,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q_int("page_size", 50, 1, 200), req.q("q"), req.q("author"),
         req.q("order_by"), _truthy(req.q("ascending"))))
     server.get("/api/assets/local/groups",
-               lambda req: assets.local_groups(req.q("cat")))
+               lambda req: assets.local_groups(
+                   req.q("cat"), req.q_int("page", 1, 1),
+                   req.q_int("page_size", 40, 1, 100)))
+
+    def start_local_scan(req):
+        payload = dict(req.json or {})
+        return assets.start_local_scan(str(payload.get("cat") or ""))
+    server.post("/api/assets/local/scan", start_local_scan)
+
     server.get("/api/assets/entries", lambda req: assets.entries(
         req.q_int("page", 1, 1), req.q_int("page_size", 20, 1, 100),
         req.q("q"), req.q("platform")))
@@ -81,8 +89,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
             raise NotFound("任务文件不存在")
         return FileResponse(path, path.name, "application/zip")
 
+    def cancel_job(req, job_id):
+        if not jobs.cancel(job_id):
+            raise NotFound("任务不存在或已结束")
+        return {"ok": True}
+
     server.get_re(r"/api/jobs/(?P<job_id>[0-9a-f]{12})", get_job)
     server.get_re(r"/api/jobs/(?P<job_id>[0-9a-f]{12})/download", download_job)
+    server.post_re(r"/api/jobs/(?P<job_id>[0-9a-f]{12})/cancel", cancel_job)
     return server
 
 
