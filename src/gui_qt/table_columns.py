@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import weakref
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QApplication, QHeaderView, QMenu, QTableView, QTableWidget, QToolButton,
-    QTreeWidget,
+    QApplication, QHBoxLayout, QHeaderView, QMenu, QTableView, QTableWidget,
+    QToolButton, QTreeWidget, QWidget,
 )
 
 from gui_qt import theme
@@ -160,12 +160,15 @@ def _show_header_menu(view, pos):
 
 
 class _TableColumnController(QObject):
+    currentChanged = Signal(object)
+
     def __init__(self, app):
         super().__init__(app)
         self._last = None
 
     def _remember(self, view):
         self._last = weakref.ref(view)
+        self.currentChanged.emit(view)
 
     def _view_of_header(self, header):
         if not isinstance(header, QHeaderView) or header.orientation() != Qt.Horizontal:
@@ -181,6 +184,10 @@ class _TableColumnController(QObject):
                 self._remember(view)
         elif etype == QEvent.Show and isinstance(obj, _TABLE_TYPES):
             QTimer.singleShot(300, lambda v=obj: _capture_defaults(v))
+        elif etype == QEvent.Hide and isinstance(obj, _TABLE_TYPES):
+            if self._last is not None and self._last() is obj:
+                self._last = None
+                self.currentChanged.emit(None)
         elif etype == QEvent.ContextMenu:
             view = self._view_of_header(obj)
             if view is not None:
@@ -256,37 +263,60 @@ class _ColumnButton(QToolButton):
         super().changeEvent(event)
 
 
-def make_button(parent) -> QToolButton:
-    """创建状态栏「列宽」菜单按钮；对当前表格执行自适应/重置。"""
-    install()
-    button = _ColumnButton(parent)
-    button.setObjectName("tableColumnButton")
-    button.setText("列宽")
-    button.setPopupMode(QToolButton.InstantPopup)
-    button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-    button.setFixedHeight(22)
-    button.apply_theme_style()
-    menu = QMenu(button)
-    act_fit = menu.addAction("列宽自适应")
-    act_reset = menu.addAction("重置列宽")
+class _ColumnButtons(QWidget):
+    """状态栏两个直接按钮：自适应 / 重置；对当前表格生效。"""
 
-    def run(action):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("tableColumnButtons")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.fit_btn = self._make_button("自适应", "列宽自适应（对当前表格）")
+        self.reset_btn = self._make_button("重置", "重置列宽（恢复表格首次显示时的宽度）")
+        layout.addWidget(self.fit_btn)
+        layout.addWidget(self.reset_btn)
+        self.setFixedHeight(22)
+        self.fit_btn.clicked.connect(self._run_fit)
+        self.reset_btn.clicked.connect(self._run_reset)
+        self._sync()
+        if _controller is not None:
+            _controller.currentChanged.connect(self._sync)
+
+    def _make_button(self, text: str, tip: str) -> _ColumnButton:
+        button = _ColumnButton(self)
+        button.setObjectName("tableColumnButton")
+        button.setText(text)
+        button.setToolTip(tip)
+        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        button.setFixedHeight(22)
+        button.apply_theme_style()
+        return button
+
+    def _run_fit(self):
         view = current_table()
         if view is not None:
-            action(view)
+            fit_table_columns(view)
 
-    act_fit.triggered.connect(lambda: run(fit_table_columns))
-    act_reset.triggered.connect(lambda: run(reset_table_columns))
-
-    def refresh():
+    def _run_reset(self):
         view = current_table()
-        act_fit.setEnabled(view is not None)
-        act_reset.setEnabled(view is not None)
-        button.setToolTip(
-            "对当前表格：列宽自适应 / 重置列宽" if view is not None
+        if view is not None:
+            reset_table_columns(view)
+
+    def _sync(self, *_):
+        enabled = current_table() is not None
+        self.fit_btn.setEnabled(enabled)
+        self.reset_btn.setEnabled(enabled)
+        self.setToolTip(
+            "对当前表格：列宽自适应 / 重置列宽" if enabled
             else "先点击一个表格，再使用列宽操作")
 
-    menu.aboutToShow.connect(refresh)
-    refresh()
-    button.setMenu(menu)
-    return button
+    def apply_theme_style(self):
+        self.fit_btn.apply_theme_style()
+        self.reset_btn.apply_theme_style()
+
+
+def make_buttons(parent) -> QWidget:
+    """创建状态栏「自适应 / 重置」两个直接按钮。"""
+    install()
+    return _ColumnButtons(parent)
