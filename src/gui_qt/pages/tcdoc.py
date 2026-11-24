@@ -7,9 +7,11 @@
 - 文档下拉切换（每个文档独立记录），登录态统一由管理层持有（平台：腾讯文档）
 - 立即采集（纯 HTTP 接口），每次采集追加一行并算增量，各自出 Excel
 - 子页签顺序：中间层同步 → 表格同步 → 历史记录 → 采集明细 → 修订记录 →
-  成员名单 → 文档管理
+  成员名单 → 文档管理 → 映射回写
 - 中间层同步：比对本地已获取与当前表格，列出未上传条目，一键复制 TSV（不自动写入）；
   OpenAPI 凭证由统一管理入口维护（Client-Id / Access-Token / Open-Id）
+- 映射回写：本地 CSV / Excel / JSON 按字段映射写入官方动态 / 直播记录，
+  先预览差异再执行，只新增 / 更新，不删除记录
 - 内容 Tab 自动切换：表格类型显示「表格同步」；文档 / AI 文档等显示「正文预览」
   （AI 文档自动抓取全部子页面，支持导出 Markdown/TXT 并自动存档）
 - 表格图片字段同步时登记 URL 并增量下载到 图片/，也可手动「采集图片」补采
@@ -462,6 +464,7 @@ class TcDocPage(BasePage):
         self._data_revision = 0
         self._reload_pending = False
         self._reload_doc_key = ""
+        self.mapping_panel = None
         self._sheets = []
         self._rev_meta = None
         self._migrate_note = ""
@@ -554,10 +557,10 @@ class TcDocPage(BasePage):
             self._build_bridge_panel, self._build_content_panel,
             self._build_daily_panel, self._build_snapshot_panel,
             self._build_revision_tab, self._build_members_tab,
-            self._build_doc_tab,
+            self._build_doc_tab, self._build_mapping_panel,
         )
         for title in ("中间层同步", "表格同步", "历史记录", "采集明细",
-                      "修订记录", "成员名单", "文档管理"):
+                      "修订记录", "成员名单", "文档管理", "映射回写"):
             stack = QStackedWidget()
             skeleton = LoadingSkeleton(text="正在准备页面…")
             stack.addWidget(skeleton)
@@ -565,7 +568,7 @@ class TcDocPage(BasePage):
             self.tabs.addTab(stack, title)
         (self.bridge_tab_index, self.content_tab_index, self.daily_tab_index,
          self.snapshot_tab_index, self.revision_tab_index, self.members_tab_index,
-         self.doc_tab_index) = range(7)
+         self.doc_tab_index, self.mapping_tab_index) = range(8)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
@@ -713,6 +716,11 @@ class TcDocPage(BasePage):
     def _build_bridge_panel(self):
         self.bridge_panel = TcDocBridgePanel(self, self.app, defer_load=True)
         return self.bridge_panel
+
+    def _build_mapping_panel(self):
+        from gui_qt.pages.tcdoc_mapping import TcDocMappingPanel
+        self.mapping_panel = TcDocMappingPanel(self, self.current_doc)
+        return self.mapping_panel
 
     def _build_content_panel(self):
         self.table_panel = self._build_sheet_tab()
@@ -1104,6 +1112,8 @@ class TcDocPage(BasePage):
         self._page_visible = False
         if self.bridge_tab_index in self._panels:
             self.bridge_panel.shutdown()
+        if self.mapping_panel is not None:
+            self.mapping_panel.shutdown()
 
     def _ensure_ready(self):
         """后台建库/迁移，让页面框架先显示；失败时下次进入可重试。"""
@@ -1163,6 +1173,8 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_content_tab()
         self._loaded_tabs.clear()
+        if self.mapping_panel is not None:
+            self.mapping_panel.set_doc(self.current_doc())
         self._refresh_active_tab()
 
     def _bridge_loaded(self) -> bool:
@@ -1372,6 +1384,8 @@ class TcDocPage(BasePage):
         self._refresh_summary()
         self._refresh_content_tab()
         self._loaded_tabs.clear()
+        if self.mapping_panel is not None:
+            self.mapping_panel.set_doc(self.current_doc())
         self._refresh_active_tab()
 
     def _refresh_content_tab(self):
@@ -1415,6 +1429,10 @@ class TcDocPage(BasePage):
             self._refresh_members()
         elif index == self.doc_tab_index:
             self._fill_doc_table()
+        elif index == self.mapping_tab_index:
+            self.mapping_panel.set_doc(self.current_doc())
+            self._show_panel(index)
+            self._loaded_tabs.add(index)
         elif index in (self.daily_tab_index, self.snapshot_tab_index):
             self._refresh_tables(index)
         elif index == self.content_tab_index:
