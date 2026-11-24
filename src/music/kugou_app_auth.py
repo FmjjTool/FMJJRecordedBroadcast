@@ -208,11 +208,17 @@ def clear_cache() -> None:
         pass
 
 
+APP_LOGIN_HINT = (
+    "请到「账号与登录 → 登录状态 → 酷狗」点「App扫码」，"
+    "用酷狗 App 扫码登录后再试"
+)
+
+
 def get_app_token(cookie: dict[str, str], *, force: bool = False) -> str:
     """用网页登录票据换取 App token；失败抛 AuthRequiredError（不含凭据）。"""
     userid = str(cookie.get("userid") or cookie.get("KugooID") or "").strip()
     if not userid:
-        raise AuthRequiredError("酷狗登录状态缺少账号信息，请重新登录",
+        raise AuthRequiredError(f"未登录酷狗。{APP_LOGIN_HINT}",
                                 platform="kugou", phase="auth")
     if not force:
         token = cached_token(userid)
@@ -220,14 +226,12 @@ def get_app_token(cookie: dict[str, str], *, force: bool = False) -> str:
             return token
     web_token = str(cookie.get("t") or cookie.get("token") or "").strip()
     if not web_token:
-        raise AuthRequiredError("酷狗登录状态不完整，请重新登录",
+        raise AuthRequiredError(f"酷狗登录状态不完整。{APP_LOGIN_HINT}",
                                 platform="kugou", phase="auth")
     token = _exchange(userid, web_token, cookie)
     if not token:
-        raise AuthRequiredError(
-            "酷狗 App 登录态换取失败，请重新登录后再试",
-            platform="kugou", phase="auth",
-        )
+        raise AuthRequiredError(f"酷狗云歌单需要登录酷狗 App。{APP_LOGIN_HINT}",
+                                platform="kugou", phase="auth")
     _save_cache(userid, token)
     return token
 
@@ -252,8 +256,8 @@ def _exchange(userid: str, web_token: str, cookie: dict[str, str]) -> str:
     if data.get("status") != 1:
         code = data.get("error_code") or data.get("err_code")
         raise AuthRequiredError(
-            "酷狗网页登录已失效，请重新登录后再试" if str(code) == "20018"
-            else f"酷狗 App 登录态换取失败（错误码 {code or '未知'}）",
+            f"酷狗云歌单需要登录酷狗 App。{APP_LOGIN_HINT}"
+            + (f"（换取失败码 {code}）" if code else ""),
             platform="kugou", phase="auth",
         )
     payload = data.get("data") or {}

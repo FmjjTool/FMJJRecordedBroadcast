@@ -165,6 +165,8 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             CREATE_URL, data, params, cookie, userid, token, mid, dfid, transport)
         if _needs_app_token(body) and not refresh:
             return self._create(name, cookie, transport, refresh=True)
+        if _needs_app_token(body):
+            raise _app_login_error(self.platform, "create")
         if _is_auth_error(body):
             raise AuthRequiredError(
                 "登录状态不可用，请先在账号管理中重新登录",
@@ -233,6 +235,8 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             ADD_URL, data, params, cookie, userid, token, mid, dfid, transport)
         if _needs_app_token(body) and not refresh:
             return self._add(playlist_id, songs, cookie, transport, progress, refresh=True)
+        if _needs_app_token(body):
+            raise _app_login_error(self.platform, "add")
         if _is_auth_error(body):
             raise AuthRequiredError(
                 "登录状态不可用，请先在账号管理中重新登录",
@@ -260,6 +264,14 @@ def _is_ok(body: dict) -> bool:
             except (TypeError, ValueError):
                 return False
     return False
+
+
+def _app_login_error(platform: str, phase: str) -> AuthRequiredError:
+    from ..kugou_app_auth import APP_LOGIN_HINT
+    return AuthRequiredError(
+        f"酷狗云歌单需要登录酷狗 App：{APP_LOGIN_HINT}",
+        platform=platform, phase=phase,
+    )
 
 
 def _needs_app_token(body: dict) -> bool:

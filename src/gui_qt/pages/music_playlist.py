@@ -345,7 +345,7 @@ class MusicPlaylistPage(BasePage):
             elif row["experimental"]:
                 parts.append(f"{row['name']}：实验接口，可能失败（{row.get('note')}）")
             elif row["platform"] == "kugou":
-                parts.append("酷狗：云歌单需要 App 扫码令牌，网页登录态写入会失败")
+                parts.append("酷狗：云歌单需先登录酷狗 App（账号与登录 → 酷狗 → App扫码）")
         return "；".join(parts)
 
     def _target_platforms(self) -> list[str]:
@@ -511,6 +511,10 @@ class MusicPlaylistPage(BasePage):
             lines.append(f"{plan.platform_name}：写入 {counts['matched']} 首"
                          f"（待确认 {counts['uncertain']} 首、未找到 {counts['missing']} 首不写入）")
         detail = "\n".join(lines)
+        if any(plan.platform == "kugou" for plan in plans):
+            detail += ("\n\n酷狗云歌单需要登录酷狗 App："
+                       "请先在「账号与登录 → 登录状态 → 酷狗」点「App扫码」；"
+                       "未登录时该平台会提示登录，不影响其他平台写入。")
         answer = QMessageBox.question(
             self, "确认写入歌单",
             f"歌单名称：{plans[0].playlist_name}\n\n{detail}\n\n"
