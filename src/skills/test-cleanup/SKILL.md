@@ -73,6 +73,7 @@ description: "测试文件与本地残留清理（代码任务完成后执行）
 4. 备份与快照目录（如 `_backup/`）可能承载用户数据或迁移恢复点：先取得用户对具体目录的明确确认，确认后移入回收站（PowerShell `Microsoft.VisualBasic.FileIO.FileSystem::DeleteDirectory(..., 'SendToRecycleBin')`），不直接 `unlink`/`rmtree`。
 5. 被 Git 跟踪的本地数据文件（如根目录导出的作品清单 xlsx）：默认 `git rm --cached` 移出版本跟踪并在 `.gitignore` 增加对应规则，保留本地文件；只有用户明确要求删除文件本身时才删除。
 6. 不删除需要作为证据的截图：按 `testing-quality-gates`，最终证据截图放 `Progress/ui/<日期>/`；烟测过程截图与 harness 固定在 `_smoking/`，不在 `tests/` 或 Progress 内。
+7. 不删除真实环境快照：`_smoking/real-snapshots/` 承载接入真实数据测试后的还原点，必须保留到还原校验完成并经用户确认；不得随普通临时产物清理（见 [isolated-testing](../isolated-testing/SKILL.md)）。
 7. 批量删除前必须取得用户对删除清单的明确确认（列出清单或逐项确认）；用户只说「文件很乱/没用」不构成删除授权。
 8. 删除前对每个待删路径执行 `git ls-files <路径>`：有输出（被跟踪）时立即停止并询问用户，不直接删除被跟踪文件。
 9. 不为清理修改 `.gitignore` 的 `tests/` 忽略规则，或把测试文件改为入库；根目录临时产物的忽略规则可以补齐。

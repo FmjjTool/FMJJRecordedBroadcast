@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates`、`test-cleanup` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试；任务完成后清理测试文件、缓存与根目录临时产物 |
 | 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
-| 运行保护 | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
+| 运行保护 | `running-instance-guard`、`isolated-testing` | 软件运行中禁止关闭 / 结束进程；测试默认隔离实例，接入真实实例需申请，测试后必须还原数据 |
 | 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
 | 视觉 / 交互 / 输出 | `ui-visual-spec`、`ui-interaction-spec`、`image-output-spec` | 屏幕 UI 外观与布局；弹窗/表格/状态/表单/文案；导出图/报表图/封面图 |
 | 业务领域 | `recording-toolbox-core`、`tcdoc-sync-scope`、`fengming-livestream-summary`、`summarize-article`、`summarize-update` | 对应领域任务 |
@@ -22,7 +22,7 @@
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/测试清理`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/测试清理`、`/隔离测试`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
@@ -33,6 +33,10 @@
 ## 运行中实例保护 skill（强制阅读）
 
 完整内容见 [src/skills/running-instance-guard/SKILL.md](src/skills/running-instance-guard/SKILL.md)。**只要本软件还在运行（窗口、托盘图标、端口占用、正在录制 / 采集 / 同步），Agent 不得关闭窗口、结束或重启进程，也不得覆盖、替换、删除运行中的 exe 与目录。** 需要验证改动时只能新建实例（新进程、新端口、独立临时目录）；重启由用户自己操作，或用户对本次操作明确授权且已提示录制 / 采集中断风险。
+
+## 隔离测试与数据还原 skill（测试 / 验证时强制阅读）
+
+完整内容见 [src/skills/isolated-testing/SKILL.md](src/skills/isolated-testing/SKILL.md)。**测试与验证默认必须运行隔离版本的程序：独立程序副本、独立 `config/` / `download/` / `logs/` 与独立端口，不连接用户正在使用的实例，不读写真实配置、数据库与下载目录。** 确需接入用户当前实例或真实数据时，必须先说明范围、数据清单、快照与还原方案并取得当次明确同意；测试前必须对受影响数据做快照与哈希清单，测试后必须按快照整文件还原并校验（尤其 `config/live_record.json` 的主播列表、备注与录制设置），禁止用「删掉测试项」代替还原。还原失败、被运行中实例覆盖或未完成时，停止写入并如实报告。真实 Cookie 不因接入授权而放宽，仍按约定 7 执行。
 
 ## 统一登录 skill（涉及账户与认证时强制阅读）
 
@@ -202,3 +206,11 @@
 - 逐档推进并记录真实错误；不并发混用、不静默换档、不把代理长期写进 `.git/config`（`socks5h://127.0.0.1:12450` 已多次导致推送失败）。
 - 三档都失败即按约定 1 停止并报告，不跳过 fetch/比较，不使用 `git push --force`。
 - 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 15。
+
+## 约定 16：测试默认使用隔离实例，接入真实环境须申请并还原
+
+- 测试、验证、冒烟、演示、截图默认运行隔离版本程序：项目副本 + 独立 `config/`、`download/`、`logs/`、独立端口；本项目没有 `--work-dir`，数据根跟随程序根，隔离靠副本实现（见 `isolated-testing`）。
+- 需要接入用户正在使用的实例或真实数据（驱动界面、读写真实配置 / 数据库、触发真实平台写入、安装计划任务）时，必须先提出申请，写清范围、数据清单、快照与还原方案、风险与时长，取得当次明确同意后才可操作；只读查看进程 / 端口 / 日志尾部不算接入。
+- 真实环境写入前必须快照并生成 SHA-256 清单，快照放 `_smoking/real-snapshots/`（已忽略、不提交）；测试结束后必须按快照整文件还原并校验一致，直播录制需逐项核对 `config/live_record.json` 的主播数量、房间号、备注、顺序与录制设置。
+- 禁止把「删掉测试主播」「清理测试项」当作还原；还原失败或被运行中的实例覆盖时停止写入并如实报告，不得隐瞒。接入授权不放宽真实 Cookie 禁令（约定 7）与运行中实例保护（`running-instance-guard`）。
+- 完整规则见 `src/skills/isolated-testing/SKILL.md`。

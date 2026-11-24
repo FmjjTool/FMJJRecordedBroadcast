@@ -48,6 +48,7 @@ description: "测试与质量门禁（任何代码修改、重构、Bug 修复�
 5. 时间、随机数、机器 GUID 等不稳定输入要注入或固定；避免依赖当前日期。
 6. 不共享可变全局状态；测试可单独运行、可重复运行、顺序无关。
 7. 不使用 `sleep` 等待异步结果；用事件、回调、超时断言或可控时钟。
+8. **人工 / UI / 真实数据验证默认使用隔离版本程序**（项目副本 + 独立 `config/`、`download/`、`logs/`、独立端口）。确需接入用户当前实例或真实数据时，先按 [isolated-testing](../isolated-testing/SKILL.md) 申请，测试前快照、测试后整文件还原并校验；不得用删除测试项代替还原。
 
 ## 本地命令与门禁
 
@@ -110,6 +111,7 @@ PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
 
 - `summarize-update`：开发阶段冒烟、报告、提交与发布流程；本 skill 补测试分层与门禁。
 - `test-cleanup`：验证完成后的测试文件与缓存清理；先测后删，`tests/` 不入库。
+- [isolated-testing](../isolated-testing/SKILL.md)：人工测试默认隔离实例、真实环境接入申请、快照与还原；快照不随普通临时产物清理。
 - `layering-contract`：测试按层放置；L3 纯逻辑必须可脱离 Qt 测试。
 - `data-lifecycle`：迁移/备份/恢复测试的具体要求。
 - `security-baseline`：安全输入、路径、ZIP、subprocess、日志的测试用例。
