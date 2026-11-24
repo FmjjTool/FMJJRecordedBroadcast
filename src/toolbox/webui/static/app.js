@@ -19,6 +19,7 @@
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1 },
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
+    calendar: { day: '', order: '', asc: true },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
@@ -31,8 +32,8 @@
     rename: { title: '命名投稿', load: function (host) { renderModule(host, 'rename'); } },
     audio: { title: '音频提取', load: renderAudio },
     subtitle: { title: '字幕转换', load: renderSubtitle },
-    launcher: { title: '继续操作', load: function (host) { renderModule(host, 'launcher'); } },
-    calendar: { title: '日历浏览', load: function (host) { renderModule(host, 'calendar'); } },
+    launcher: { title: '继续操作', load: renderLauncher },
+    calendar: { title: '日历浏览', load: renderCalendar },
     migrate: { title: '文件迁移', load: function (host) { renderModule(host, 'migrate'); } },
     record: { title: '录制', load: renderRecord },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
@@ -1081,6 +1082,128 @@
         h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' }, h('thead', null, head), body))));
     }
+  }
+
+  function renderCalendar(host) {
+    host.replaceChildren();
+    setLoading(host, '正在扫描日期文件夹…');
+    api('/api/tools/calendar/days').then(function (data) {
+      host.replaceChildren();
+      if (!data.total) {
+        host.appendChild(empty('工作目录下没有日期文件夹。'));
+        return;
+      }
+      var stats = h('div', { class: 'grid cols-3', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('日期', fmtNumber(data.total), '工作目录内'));
+      var files = (data.days || []).reduce(function (sum, day) {
+        return sum + day.files;
+      }, 0);
+      stats.appendChild(statCard('文件', fmtNumber(files), '全部日期合计'));
+      var size = (data.days || []).reduce(function (sum, day) {
+        return sum + day.size;
+      }, 0);
+      stats.appendChild(statCard('总大小', fmtBytes(size), '全部日期合计'));
+      host.appendChild(stats);
+      host.appendChild(h('div', { class: 'muted small', style: 'margin:0 2px 8px' },
+        data.note || ''));
+
+      var daysHost = h('div');
+      var filesHost = h('div');
+      host.appendChild(daysHost);
+      host.appendChild(filesHost);
+
+      function drawDays() {
+        var head = h('tr',
+          null,
+          h('th', { class: 'sortable', onclick: function () { cycleSort(state.calendar, 'date'); drawDays(); } },
+            '日期' + (state.calendar.order === 'date' ? (state.calendar.asc ? ' ↑' : ' ↓') : '')),
+          h('th', { class: 'num' }, '文件'),
+          h('th', { class: 'num' }, '大小'));
+        var rows = (data.days || []).slice();
+        if (state.calendar.order === 'date' && !state.calendar.asc) rows.reverse();
+        var body = h('tbody');
+        rows.forEach(function (day) {
+          var link = h('a', {
+            href: '#', text: day.date || day.folder
+          }, day.date || day.folder);
+          link.addEventListener('click', function (event) {
+            event.preventDefault();
+            state.calendar.day = day.folder;
+            loadDay();
+          });
+          body.appendChild(h('tr', { class: state.calendar.day === day.folder ? 'active' : null },
+            h('td', null, link),
+            h('td', { class: 'num' }, fmtNumber(day.files)),
+            h('td', { class: 'num' }, fmtBytes(day.size))));
+        });
+        daysHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+      }
+
+      function loadDay() {
+        drawDays();
+        if (!state.calendar.day) { filesHost.replaceChildren(); return; }
+        setLoading(filesHost, '正在读取当天文件…');
+        api('/api/tools/calendar/day?folder=' + encodeURIComponent(state.calendar.day))
+          .then(function (day) {
+            if (!day.files.length) {
+              filesHost.replaceChildren(h('div', { class: 'card', style: 'margin-top:12px' },
+                h('div', { class: 'row-title' }, day.folder),
+                empty('该日期文件夹内没有文件。')));
+              return;
+            }
+            var head = h('tr', null, h('th', null, '文件名'), h('th', { class: 'num' }, '大小'),
+              h('th', null, '修改时间'));
+            var body = h('tbody');
+            day.files.forEach(function (file) {
+              body.appendChild(h('tr', null,
+                h('td', null, file.name),
+                h('td', { class: 'num' }, fmtBytes(file.size)),
+                h('td', null, file.mtime || '-')));
+            });
+            var title = day.folder + ' · ' + fmtNumber(day.total) + ' 个文件'
+              + (day.truncated ? '（仅列前 ' + day.files.length + ' 个）' : '');
+            filesHost.replaceChildren(h('div', { class: 'card', style: 'margin-top:12px' },
+              h('div', { class: 'row-title', style: 'margin-bottom:8px' }, title),
+              h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' }, h('thead', null, head), body))));
+          })
+          .catch(function (error) { setError(filesHost, error, loadDay); });
+      }
+
+      drawDays();
+    }).catch(function (error) {
+      setError(host, error, function () { renderCalendar(host); });
+    });
+  }
+
+  function renderLauncher(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取快捷项…');
+    api('/api/tools/launcher/overview').then(function (data) {
+      host.replaceChildren();
+      if (!data.total) {
+        host.appendChild(empty('尚未配置快捷项。请在桌面端「继续操作」页添加。'));
+        return;
+      }
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, data.note || '')));
+      var head = h('tr', null,
+        h('th', { class: 'num' }, '#'), h('th', null, '名称'),
+        h('th', null, '类型'), h('th', null, '路径状态'));
+      var body = h('tbody');
+      (data.items || []).forEach(function (item) {
+        body.appendChild(h('tr', null,
+          h('td', { class: 'num' }, item.index),
+          h('td', null, item.name || '-'),
+          h('td', null, item.type === 'link' ? '链接' : '软件'),
+          h('td', null, item.exists ? '可用' : '未找到')));
+      });
+      host.appendChild(h('div', { class: 'table-wrap' },
+        h('table', { class: 'db-table' }, h('thead', null, head), body)));
+    }).catch(function (error) {
+      setError(host, error, function () { renderLauncher(host); });
+    });
   }
 
   function renderModule(host, key) {

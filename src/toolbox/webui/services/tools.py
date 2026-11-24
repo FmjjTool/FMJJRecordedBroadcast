@@ -42,6 +42,7 @@ class ToolService:
                 is_cancelled=cancelled)
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
+
     def subtitle_overview(self) -> dict:
         return webui_tools.subtitle_overview()
 
@@ -76,3 +77,12 @@ class ToolService:
                 is_cancelled=cancelled)
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
+
+    def calendar_days(self) -> dict:
+        return webui_tools.calendar_days()
+
+    def calendar_day_files(self, folder: str, limit: int = 500) -> dict:
+        return webui_tools.calendar_day_files(folder, limit)
+
+    def launcher_overview(self) -> dict:
+        return webui_tools.launcher_overview()

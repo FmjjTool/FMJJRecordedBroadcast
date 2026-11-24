@@ -198,6 +198,89 @@ def convert_subtitles(rel_paths, formats, on_progress=None,
             "results": results, "ok": ok, "failed": len(paths) - ok}
 
 
+def calendar_days() -> dict:
+    """列出工作目录下的日期文件夹（名称、日期、文件数与总大小）。"""
+    from toolbox.date_folders import scan_date_folders
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    rows = []
+    for name, date_text in scan_date_folders(str(root)):
+        files, total = _folder_brief(root / name)
+        rows.append({"folder": name, "date": date_text,
+                     "files": files, "size": total})
+    rows.sort(key=lambda row: row["folder"], reverse=True)
+    return {"days": rows, "total": len(rows),
+            "note": "按日期文件夹浏览工作目录；点击日期查看当天文件。"}
+
+
+def calendar_day_files(folder: str, limit: int = 500) -> dict:
+    """列出某个日期文件夹内的文件（名称、大小、修改时间）。"""
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    name = str(folder or "").strip()
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise ValueError("日期文件夹名不合法")
+    from toolbox.date_folders import is_date_folder
+    if not is_date_folder(name):
+        raise ValueError("不是日期文件夹")
+    target = root / name
+    if not target.is_dir():
+        raise ValueError("日期文件夹不存在")
+    limit = max(1, min(1000, int(limit)))
+    files = []
+    for path in sorted(target.iterdir()):
+        if len(files) >= limit:
+            break
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        files.append({"name": path.name, "size": int(stat.st_size),
+                      "mtime": time.strftime("%Y-%m-%d %H:%M",
+                                             time.localtime(stat.st_mtime))})
+    total = sum(1 for path in target.iterdir() if path.is_file())
+    return {"folder": name, "files": files, "total": total,
+            "truncated": total > limit,
+            "note": "只列出该日期文件夹内的文件；打开文件请在桌面端操作。"}
+
+
+def launcher_overview() -> dict:
+    """继续操作：只读列出快捷项（名称、类型、路径状态）。"""
+    cfg = load_convert_config()
+    items = cfg.get("launcher_items") or []
+    rows = []
+    for index, item in enumerate(items, 1):
+        item = item or {}
+        path = str(item.get("path") or "")
+        rows.append({
+            "index": index,
+            "name": item.get("name") or f"软件{index}",
+            "type": "link" if item.get("type") == "link" else "app",
+            "exists": bool(path) and Path(path).exists(),
+        })
+    return {"items": rows, "total": len(rows),
+            "note": "只读展示快捷项；启动外部软件请在桌面端「继续操作」页。"}
+
+
+def _folder_brief(folder: Path) -> tuple[int, int]:
+    try:
+        entries = [item for item in folder.iterdir() if item.is_file()]
+    except OSError:
+        return 0, 0
+    size = 0
+    for item in entries:
+        try:
+            size += item.stat().st_size
+        except OSError:
+            pass
+    return len(entries), size
+
+
 def _work_root() -> Path | None:
     text = str(load_convert_config().get("work_dir") or "").strip()
     if not text:

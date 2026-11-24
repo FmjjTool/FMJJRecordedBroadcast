@@ -93,6 +93,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tool_service.start_subtitle_convert(dict(req.json or {}))
     server.post("/api/tools/subtitle/convert", start_subtitle_convert)
 
+    server.get("/api/tools/calendar/days",
+               lambda req: tool_service.calendar_days())
+    server.get("/api/tools/calendar/day",
+               lambda req: tool_service.calendar_day_files(
+                   req.q("folder"), req.q_int("limit", 500, 1, 1000)))
+    server.get("/api/tools/launcher/overview",
+               lambda req: tool_service.launcher_overview())
+
     server.get("/api/tcdoc/overview",
                lambda req: tcdoc.overview(req.q("doc_key")))
 
