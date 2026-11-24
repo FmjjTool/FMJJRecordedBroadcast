@@ -108,6 +108,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tasks", lambda req: modules.tasks())
     server.get("/api/system", lambda req: modules.system())
 
+    server.get("/api/tools/organize/overview",
+               lambda req: tool_service.organize_overview())
+    server.get("/api/tools/organize/preview",
+               lambda req: tool_service.organize_preview(
+                   req.q_int("limit", 100, 1, 500)))
+
     server.get("/api/tools/rename/overview",
                lambda req: tool_service.rename_overview())
     server.get("/api/tools/rename/preview", lambda req: tool_service.rename_preview(

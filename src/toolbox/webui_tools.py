@@ -275,6 +275,47 @@ def convert_videos(rel_paths, on_progress=None, is_cancelled=None) -> dict:
             "results": results, "ok": ok, "failed": len(paths) - ok}
 
 
+def organize_overview() -> dict:
+    from toolbox.organize_engine import scan_files
+
+    root = _work_root()
+    if root is None:
+        return {"has_work_dir": False, "work_dir": "", "files": 0,
+                "groups": 0, "no_date": 0,
+                "note": "尚未设置工作目录，请先在桌面端全局设置中配置。"}
+    groups, no_date = scan_files(str(root))
+    files = sum(len(items) for items in groups.values()) + len(no_date)
+    return {"has_work_dir": True, "work_dir": root.name,
+            "files": files, "groups": len(groups),
+            "no_date": len(no_date),
+            "note": "只读预览：按文件名日期分组；执行整理"
+                    "（移动视频到日期文件夹）仍在桌面端。"}
+
+
+def list_organize_preview(limit: int = 100) -> dict:
+    from toolbox.organize_engine import scan_files
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    limit = max(1, min(500, int(limit)))
+    groups, no_date = scan_files(str(root))
+    rows = []
+    for date_str in sorted(groups)[:limit]:
+        items = groups[date_str]
+        size = sum(int(item.get("size") or 0) for item in items)
+        rows.append({
+            "date": date_str,
+            "count": len(items),
+            "size": size,
+            "files": [str(item.get("name") or "")
+                      for item in items][:50],
+        })
+    return {"groups": rows,
+            "no_date": [str(name) for name in no_date][:200],
+            "note": "只读预览：不会移动或改名；执行整理需在桌面端操作。"}
+
+
 def rename_overview() -> dict:
     from toolbox.rename_engine import is_standard_recording_name
 

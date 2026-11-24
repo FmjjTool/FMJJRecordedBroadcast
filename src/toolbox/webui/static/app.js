@@ -20,6 +20,7 @@
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
+    organize: { order: '', asc: true },
     rename: { order: '', asc: true },
     video: { order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
@@ -31,7 +32,7 @@
   var routes = {
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
-    organize: { title: '自动整理', load: function (host) { renderModule(host, 'organize'); } },
+    organize: { title: '自动整理', load: renderOrganize },
     editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: renderRename },
     audio: { title: '音频提取', load: renderAudio },
@@ -1077,6 +1078,84 @@
         h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' }, h('thead', null, head), body))));
     }
+  }
+
+  function renderOrganize(host) {
+    host.replaceChildren();
+    setLoading(host, '正在扫描工作目录…');
+    Promise.all([
+      api('/api/tools/organize/overview'),
+      api('/api/tools/organize/preview?limit=100')
+    ]).then(function (results) {
+      var overview = results[0];
+      var preview = results[1];
+      host.replaceChildren();
+      if (!overview.has_work_dir) {
+        host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
+        return;
+      }
+      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('视频', fmtNumber(overview.files), '工作目录顶层'));
+      stats.appendChild(statCard('日期分组', fmtNumber(overview.groups), '按文件名日期'));
+      stats.appendChild(statCard('无日期', fmtNumber(overview.no_date), '有视频但无日期'));
+      stats.appendChild(statCard('工作目录', overview.work_dir || '-', '仅目录名'));
+      host.appendChild(stats);
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, overview.note || '')));
+
+      var tableHost = h('div');
+      host.appendChild(tableHost);
+      var groups = preview.groups || [];
+      if (!groups.length) {
+        tableHost.appendChild(empty('工作目录顶层没有可整理的视频。'));
+      } else {
+        var columns = [
+          { key: 'date', label: '日期分组' },
+          { key: 'count', label: '文件数' },
+          { key: 'size', label: '大小' }
+        ];
+        var rows = sortRows(groups, columns, state.organize);
+        var head = h('tr');
+        columns.forEach(function (column) {
+          var mark = state.organize.order === column.key
+            ? (state.organize.asc ? ' ↑' : ' ↓') : '';
+          head.appendChild(h('th', {
+            class: 'sortable',
+            onclick: function () {
+              cycleSort(state.organize, column.key);
+              renderOrganize(host);
+            }
+          }, column.label + mark));
+        });
+        head.appendChild(h('th', null, '文件预览'));
+        var body = h('tbody');
+        rows.forEach(function (item) {
+          body.appendChild(h('tr', null,
+            h('td', null, item.date || '-'),
+            h('td', { class: 'num' }, fmtNumber(item.count)),
+            h('td', { class: 'num' }, fmtBytes(item.size)),
+            h('td', { class: 'muted small' },
+              (item.files || []).slice(0, 4).join('、')
+              + ((item.files || []).length > 4 ? ' …' : ''))));
+        });
+        tableHost.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+      }
+      if (preview.no_date && preview.no_date.length) {
+        var card = h('div', { class: 'card', style: 'margin-top:12px' },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '无日期文件名'));
+        var badges = h('div', { class: 'days' });
+        preview.no_date.forEach(function (name) {
+          badges.appendChild(h('span', { class: 'badge' }, name));
+        });
+        card.appendChild(badges);
+        host.appendChild(card);
+      }
+      host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+        preview.note || '只读预览，不会移动或改名。'));
+    }).catch(function (error) {
+      setError(host, error, function () { renderOrganize(host); });
+    });
   }
 
   function renderRename(host) {

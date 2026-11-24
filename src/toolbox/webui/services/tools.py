@@ -78,6 +78,12 @@ class ToolService:
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def organize_overview(self) -> dict:
+        return webui_tools.organize_overview()
+
+    def organize_preview(self, limit: int = 100) -> dict:
+        return webui_tools.list_organize_preview(limit)
+
     def rename_overview(self) -> dict:
         return webui_tools.rename_overview()
 
