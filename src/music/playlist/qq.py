@@ -12,6 +12,7 @@ import hashlib
 import json
 import random
 import re
+import time
 from typing import Optional
 
 import httpx
@@ -114,8 +115,12 @@ class QQPlaylistWriter(BasePlaylistWriter):
                 platform=self.platform, phase="create",
             )
         if code == 21:
+            # 同名歌单已存在：直接复用它继续加歌，避免中断后重跑必须先删歌单
+            existing = body.get("dirid") or (body.get("data") or {}).get("dirid")
+            if existing:
+                return str(existing)
             raise PlatformRejectedError(
-                "已存在同名歌单，请换一个合集名称",
+                "已存在同名歌单，请在 QQ音乐里删除或换一个名称",
                 platform=self.platform, phase="create",
             )
         if code == 429:
@@ -178,20 +183,27 @@ class QQPlaylistWriter(BasePlaylistWriter):
                     },
                 },
             }
-            body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-            sign = ("zza" + "".join(random.choice("0123456789abcdef") for _ in range(10))
-                    + hashlib.md5((SIGN_SALT + body).encode()).hexdigest())
-            resp = client.post(
-                f"{MUSICU_URL}?sign={sign}",
-                content=body.encode("utf-8"),
-                headers={
-                    "User-Agent": QQ_UA,
-                    "Content-Type": "application/json",
-                    "Origin": "https://i.y.qq.com",
-                    "Referer": "https://y.qq.com/",
-                },
-            )
-        body = response_json(resp, platform=self.platform, phase="add")
+            payload_text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+            content = payload_text.encode("utf-8")
+            headers = {
+                "User-Agent": QQ_UA,
+                "Content-Type": "application/json",
+                "Origin": "https://i.y.qq.com",
+                "Referer": "https://y.qq.com/",
+            }
+
+            def _post() -> httpx.Response:
+                sign = ("zza" + "".join(random.choice("0123456789abcdef") for _ in range(10))
+                        + hashlib.md5((SIGN_SALT + payload_text).encode()).hexdigest())
+                return client.post(f"{MUSICU_URL}?sign={sign}",
+                                   content=content, headers=headers)
+
+            try:
+                body = response_json(_post(), platform=self.platform, phase="add")
+            except ParseChangedError:
+                # 偶发风控页 / 空响应：换新签名重试一次，仍失败才上报
+                time.sleep(1.0)
+                body = response_json(_post(), platform=self.platform, phase="add")
         req = _musicu_req(body)
         code = _code(req)
         if code == 0:

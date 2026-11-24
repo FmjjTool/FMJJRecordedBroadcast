@@ -269,7 +269,11 @@ def _find_listid(body: dict) -> str:
 
 
 def _error_message(body: dict, fallback: str) -> str:
+    code = body.get("error_code") or body.get("errcode") or body.get("code")
+    if str(code) in ("20017", "20006", "20001"):
+        return (f"{fallback}：酷狗云歌单只认 App 登录令牌（错误码 {code}）；"
+                "网页登录态无法写入，需在酷狗 App 扫码换取令牌")
     message = body.get("error") or body.get("message") or body.get("msg")
     if message:
         return f"{fallback}：{message}"
-    return f"{fallback}（错误码 {body.get('error_code') or body.get('code') or '未知'}）"
+    return f"{fallback}（错误码 {code or '未知'}）"

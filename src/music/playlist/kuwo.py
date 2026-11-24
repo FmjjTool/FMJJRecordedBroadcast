@@ -50,7 +50,8 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
     verified = False
     available = False
     experimental = True
-    note = "写入接口返回 504，当前不可用"
+    note = ("网页建单接口已下线：addPlaylist/createPlaylist 返回 504，"
+            "用户歌单列表接口 404，前端无写歌单入口；需 App 端协议与登录令牌")
     batch_size = 50
 
     def _headers(self, cookie: dict[str, str]) -> dict[str, str]:
@@ -175,7 +176,7 @@ def _map_error(body: dict, platform: str, phase: str, fallback: str):
         )
     if "illegal" in lowered:
         return PlatformRejectedError(
-            "酷我网页接口拒绝写入；该平台目前仅实验支持，可稍后重试或反馈结果",
+            "酷我网页建单接口已下线（返回 illegal / 504），只能在酷我 App 内建单",
             platform=platform, phase=phase,
         )
     detail = f"{fallback}：{message}" if message else fallback

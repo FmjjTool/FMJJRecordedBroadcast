@@ -74,18 +74,28 @@ def cookie_from_auth(platform: str) -> dict[str, str]:
     return jar
 
 
+def _body_snippet(text: str, limit: int = 120) -> str:
+    """响应正文摘要：只用于错误提示，便于判断是登录页、风控页还是结构变化。"""
+    value = " ".join((text or "").split())
+    if not value:
+        return "空响应"
+    return value[:limit] + ("…" if len(value) > limit else "")
+
+
 def response_json(resp: httpx.Response, *, platform: str, phase: str) -> dict:
-    """解析 JSON，失败归为 ParseChanged，避免把结构变化当空结果。"""
+    """解析 JSON，失败归为 ParseChanged，并把状态码与正文摘要带进提示。"""
+    content_type = (resp.headers.get("content-type") or "").split(";")[0].strip()
+    detail = f"HTTP {resp.status_code}" + (f" {content_type}" if content_type else "")
     try:
         data = resp.json()
     except Exception as exc:  # noqa: BLE001 - 统一转类型化错误
         raise ParseChangedError(
-            "平台返回内容无法解析，接口可能已变化",
+            f"平台返回内容无法解析（{detail}）：{_body_snippet(resp.text)}",
             platform=platform, phase=phase,
         ) from exc
     if not isinstance(data, dict):
         raise ParseChangedError(
-            "平台返回结构异常，接口可能已变化",
+            f"平台返回结构异常（{detail}）：{_body_snippet(resp.text)}",
             platform=platform, phase=phase,
         )
     return data
