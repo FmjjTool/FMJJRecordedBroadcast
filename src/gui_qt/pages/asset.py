@@ -600,6 +600,7 @@ class AssetPage(BasePage):
         self._ov_searching = False
         self._ov_cancel = None
         self._ov_sorter = None
+        self._ov_manual_resize = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 0)
@@ -1321,9 +1322,12 @@ class AssetPage(BasePage):
         self.ov_table.doubleClicked.connect(self._ov_open_index)
         hdr = self.ov_table.horizontalHeader()
         hdr.setMinimumSectionSize(34)
-        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
-        for col, width in ((0, 145), (2, 90), (3, 56), (4, 96), (5, 100), (6, 48)):
+        hdr.setSectionResizeMode(QHeaderView.Interactive)
+        hdr.setStretchLastSection(False)
+        hdr.sectionResized.connect(self._ov_on_section_resized)
+        for col, width in ((0, 145), (1, 400), (2, 90), (3, 56), (4, 96), (5, 100), (6, 48)):
             self.ov_table.setColumnWidth(col, width)
+        self.ov_table.installEventFilter(self)
         self._ov_sorter = table_sort.install(
             self.ov_table, rows=self._ov_rows, skip_columns={6})
         self.ov_stack.addWidget(self.ov_table)
@@ -1338,6 +1342,26 @@ class AssetPage(BasePage):
         text = text.replace("「Cookie 管理」", "「账号与登录」").replace("Cookie 管理", "账号与登录")
         text = re.sub(r"(?i)cookie", "登录态", text)
         return text
+
+    def _ov_on_section_resized(self, *_):
+        if QApplication.mouseButtons() & Qt.LeftButton:
+            self._ov_manual_resize = True
+
+    def _ov_fit_title_column(self):
+        if not hasattr(self, "ov_table") or self._ov_manual_resize:
+            return
+        vp = self.ov_table.viewport().width()
+        if vp <= 0:
+            return
+        other = sum(self.ov_table.columnWidth(i)
+                    for i in range(self.ov_table.columnCount()) if i != 1)
+        self.ov_table.setColumnWidth(1, max(60, vp - other - 2))
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "ov_table", None) and event.type() == QEvent.Resize:
+            if not getattr(self, "_ov_manual_resize", False):
+                QTimer.singleShot(0, self._ov_fit_title_column)
+        return super().eventFilter(obj, event)
 
     def _ov_reload_events(self):
         if self._ov_searching:
@@ -1627,6 +1651,9 @@ class AssetPage(BasePage):
         self.ov_table.setUpdatesEnabled(True)
         self._ov_sorter.reapply()
         self.ov_stack.setCurrentIndex(1)
+        self._ov_manual_resize = False
+        self._ov_fit_title_column()
+        QTimer.singleShot(0, self._ov_fit_title_column)
 
     def _ov_open_row(self, row: int):
         if not (0 <= row < len(self._ov_rows)):

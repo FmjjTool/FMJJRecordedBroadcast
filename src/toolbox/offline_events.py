@@ -48,7 +48,10 @@ PROMO_WORDS = [
     "偷跑", "入场", "演出时间", "演出地点", "预S", "大🌾", "名称：", "地址：", "日期：",
     "舞台时间", "活动信息",
 ]
-DAILY_LIVE_EXCLUDE = ["漫展", "现场", "舞台", "演唱会", "音乐节", "巡演", "签售", "演出", "文旅", "活动"]
+OFFLINE_SCENE_WORDS = [
+    "漫展", "现场", "舞台", "演唱会", "音乐节", "巡演", "签售", "演出",
+    "活动", "文旅", "生日会", "生日场", "返场", "路演", "嘉年华",
+]
 GUEST_HOSTS = ["江辰", "等什么君", "音阙诗听", "徐泽", "小精灵", "翁杰Winjay", "翁杰", "双笙"]
 KNOWN_CITIES = [
     "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "武汉", "长沙", "重庆",
@@ -367,9 +370,9 @@ def _score_bili(info, event: OfflineEvent) -> tuple[int, list[str], bool, bool]:
     duration = int(getattr(info, "duration", 0) or 0)
     publish = getattr(info, "publish_time", "") or ""
     scene_hits = [w for w in SCENE_WORDS if w.lower() in f"{title} {desc}".lower()]
-    strong_scene = _has_any(title, CORE_LIVE)
-    daily_live = ("直播" in title and not _has_any(title, DAILY_LIVE_EXCLUDE)
-                  and not strong_scene)
+    daily_live = "直播" in title and not _has_any(title, OFFLINE_SCENE_WORDS)
+    if daily_live:
+        return -99, ["日常直播，非线下现场"], False, False
     aliases = _aliases(event)
     guest_hosts = _guest_hosts(event)
     evd = _event_datetime(event)
@@ -424,9 +427,9 @@ def _score_bili(info, event: OfflineEvent) -> tuple[int, list[str], bool, bool]:
                 return -99, ["预告/下一站"], False, False
         if pub.year != evd.year and not any(y == evd.year for y in years) and abs((pub - evd).days) > 10:
             return -99, ["发布年份不符"], False, False
-        if (not title_city_hits and not title_token_hits and not title_full_date
+        if (not title_city_hits and not title_full_date
                 and not title_date_hits and abs((pub - evd).days) > 2):
-            return -99, ["标题无城市/活动/日期且发布日远离"], False, False
+            return -99, ["仅活动词匹配且发布日远离"], False, False
         if (title_city_hits and not title_token_hits and not title_full_date
                 and not title_date_hits and abs((pub - evd).days) > 45):
             return -99, ["仅标题城市匹配且发布日远离"], False, False
@@ -528,6 +531,8 @@ def _score_douyin(post: dict, event: OfflineEvent) -> tuple[int, list[str], str]
     strong_live = [w for w in STRONG_LIVE if w.lower() in text.lower()]
     if promo and not _has_any(title, CORE_LIVE):
         return -99, ["宣传/通知类"], ""
+    if "直播" in title and not _has_any(title, OFFLINE_SCENE_WORDS):
+        return -99, ["日常直播，非线下现场"], ""
 
     name_hit = _has_any(text, ["封茗囧菌", "囧菌"])
     if not name_hit:
@@ -567,9 +572,9 @@ def _score_douyin(post: dict, event: OfflineEvent) -> tuple[int, list[str], str]
             return -99, ["预告/下一站"], ""
         if pub.year != evd.year and not any(y == evd.year for y in years) and abs((pub - evd).days) > 10:
             return -99, ["发布年份不符"], ""
-        if (not title_city_hits and not title_token_hits and not title_full_date
+        if (not title_city_hits and not title_full_date
                 and not title_date_hits and abs((pub - evd).days) > 2):
-            return -99, ["标题无城市/活动/日期且发布日远离"], ""
+            return -99, ["仅活动词匹配且发布日远离"], ""
         if (title_city_hits and not title_token_hits and not title_full_date
                 and not title_date_hits and abs((pub - evd).days) > 45):
             return -99, ["仅标题城市匹配且发布日远离"], ""
