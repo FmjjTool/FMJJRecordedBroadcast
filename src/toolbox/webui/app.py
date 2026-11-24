@@ -8,6 +8,7 @@ from toolbox.webui.server import BytesResponse, FileResponse, WebUIServer
 from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.modules import ModuleService
+from toolbox.webui.services.offline import OfflineService
 from toolbox.webui.services.record import RecordService
 from toolbox.webui.services.tcdoc import TCDocService
 from toolbox.webui.services.tools import ToolService
@@ -20,6 +21,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     assets = AssetService(jobs)
     record = RecordService()
     modules = ModuleService()
+    offline = OfflineService(jobs)
     tool_service = ToolService(jobs)
     tcdoc = TCDocService(jobs)
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
@@ -85,6 +87,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_assets_download(req):
         return assets.start_download(dict(req.json or {}))
     server.post("/api/assets/download", start_assets_download)
+
+    server.get("/api/assets/offline/events", lambda req: offline.overview())
+
+    def start_offline_search(req):
+        return offline.start_search(dict(req.json or {}))
+    server.post("/api/assets/offline/search", start_offline_search)
 
     server.get("/api/record/overview", lambda req: record.overview())
 

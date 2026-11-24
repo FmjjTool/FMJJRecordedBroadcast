@@ -16,7 +16,8 @@
     route: 'collected',
     theme: localStorage.getItem('webui-theme') || 'auto',
     collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
-    assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1 },
+    assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1,
+      offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
@@ -521,7 +522,7 @@
     api('/api/assets/summary').then(function (summary) {
       var tabs = h('div', { class: 'tabs' });
       var host = h('div');
-      [['entries', '已获取资源'], ['db', '数据库浏览'], ['local', '本地资源']].forEach(function (pair) {
+      [['entries', '已获取资源'], ['db', '数据库浏览'], ['local', '本地资源'], ['offline', '线下现场视频']].forEach(function (pair) {
         tabs.appendChild(h('button', {
           class: 'tab' + (state.assets.tab === pair[0] ? ' active' : ''),
           type: 'button', dataset: { tab: pair[0] },
@@ -538,6 +539,7 @@
       function renderTab() {
         if (state.assets.tab === 'entries') renderEntries(host);
         else if (state.assets.tab === 'db') renderDb(host);
+        else if (state.assets.tab === 'offline') renderOffline(host);
         else renderLocal(host, summary);
       }
 
@@ -2174,6 +2176,218 @@
     if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB';
     if (size < 1024 * 1024 * 1024) return (size / 1024 / 1024).toFixed(1) + ' MB';
     return (size / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  function renderOffline(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取线下活动清单…');
+    api('/api/assets/offline/events').then(function (data) {
+      host.replaceChildren();
+      if (!data.available) {
+        host.appendChild(empty(data.error || '本地快照不可用，请先在「腾讯文档」页同步表格。'));
+        return;
+      }
+      if (!data.events.length) {
+        host.appendChild(empty('线下活动表为空；请先在「腾讯文档」页同步表格。'));
+        return;
+      }
+      var offline = state.assets.offline;
+      var years = data.years || [];
+      if (offline.year && years.indexOf(offline.year) < 0) offline.year = '';
+      var yearSel = h('select', { class: 'select' });
+      yearSel.appendChild(h('option', { value: '' }, '全部年份'));
+      years.forEach(function (year) {
+        yearSel.appendChild(h('option', { value: year }, year + ' 年'));
+      });
+      yearSel.value = offline.year;
+      var biliBox = h('input', {
+        type: 'checkbox', checked: offline.platforms.has('bilibili')
+      });
+      var douyinBox = h('input', {
+        type: 'checkbox', checked: offline.platforms.has('douyin_archive')
+      });
+      var searchBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '搜索现场视频');
+      var selectionLabel = h('span', { class: 'muted small' }, '未选择活动');
+      var toolbar = h('div', { class: 'toolbar' },
+        h('span', { class: 'muted small' }, '年份'), yearSel,
+        h('label', { class: 'muted small' }, biliBox, ' B站实时'),
+        h('label', { class: 'muted small' }, douyinBox, ' 抖音归档'),
+        h('span', { style: 'flex:1' }), selectionLabel, searchBtn);
+      host.appendChild(toolbar);
+      var jobHost = h('div');
+      var tableHost = h('div');
+      var resultHost = h('div');
+      host.appendChild(jobHost);
+      host.appendChild(tableHost);
+      host.appendChild(resultHost);
+
+      var running = false;
+
+      function visibleRows() {
+        var rows = data.events.filter(function (item) {
+          return !offline.year || item.year === offline.year;
+        });
+        if (offline.order) {
+          rows = sortRows(rows, [{ key: 'date' }, { key: 'name' }], offline);
+        }
+        return rows;
+      }
+
+      function selectedEvent() {
+        if (!offline.selected) return null;
+        return data.events.find(function (item) {
+          return item.date + '|' + item.name === offline.selected;
+        }) || null;
+      }
+
+      function updateButtons() {
+        var event = selectedEvent();
+        selectionLabel.textContent = event
+          ? (event.date + ' · ' + event.name)
+          : '未选择活动';
+        searchBtn.disabled = running || !event || offline.platforms.size === 0;
+        searchBtn.textContent = running ? '搜索中…' : '搜索现场视频';
+      }
+
+      function updatePlatforms() {
+        offline.platforms.clear();
+        if (biliBox.checked) offline.platforms.add('bilibili');
+        if (douyinBox.checked) offline.platforms.add('douyin_archive');
+        updateButtons();
+      }
+      biliBox.addEventListener('change', updatePlatforms);
+      douyinBox.addEventListener('change', updatePlatforms);
+      yearSel.addEventListener('change', function () {
+        offline.year = yearSel.value;
+        offline.selected = null;
+        draw();
+      });
+
+      function draw() {
+        var rows = visibleRows();
+        var head = h('tr', null, h('th', { style: 'width:36px' }, ''));
+        ['date', 'name'].forEach(function (key) {
+          var label = key === 'date' ? '日期' : '活动';
+          var mark = offline.order === key
+            ? (offline.asc ? ' ↑' : ' ↓') : '';
+          head.appendChild(h('th', {
+            class: 'sortable',
+            onclick: function () {
+              cycleSort(offline, key);
+              draw();
+            }
+          }, label + mark));
+        });
+        ['城市', '场馆', '状态', '已登记'].forEach(function (label) {
+          head.appendChild(h('th', null, label));
+        });
+        var body = h('tbody');
+        rows.forEach(function (item) {
+          var key = item.date + '|' + item.name;
+          var radio = h('input', {
+            type: 'radio', name: 'offline-event',
+            checked: offline.selected === key
+          });
+          radio.addEventListener('change', function () {
+            offline.selected = key;
+            updateButtons();
+          });
+          body.appendChild(h('tr', null,
+            h('td', null, radio),
+            h('td', null, item.date || '-'),
+            h('td', null, item.name || '-'),
+            h('td', null, item.city || '-'),
+            h('td', null, item.venue || '-'),
+            h('td', null, item.status || '-'),
+            h('td', { class: 'num' }, fmtNumber(item.existing || 0))));
+        });
+        tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+        updateButtons();
+      }
+
+      searchBtn.addEventListener('click', function () {
+        var event = selectedEvent();
+        if (!event || running) return;
+        running = true;
+        updateButtons();
+        post('/api/assets/offline/search', {
+          date: event.date, name: event.name,
+          platforms: Array.from(offline.platforms)
+        }).then(function (data) {
+          watchJob(jobHost, data.job, function (job) {
+            running = false;
+            updateButtons();
+            var result = job.result || {};
+            var errors = result.errors || [];
+            toast((result.summary || '搜索完成')
+              + (errors.length ? '（部分请求失败）' : ''), 'success');
+            showResult(result);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              updateButtons();
+              if (job.status === 'cancelled') toast('搜索已取消', 'info');
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          updateButtons();
+          toast('搜索失败：' + error.message, 'error');
+        });
+      });
+
+      function showResult(result) {
+        var rows = result.results || [];
+        var errors = result.errors || [];
+        if (!rows.length) {
+          resultHost.replaceChildren(h('div', {
+            class: 'card', style: 'margin-top:12px'
+          },
+            h('div', { class: 'row-title' }, '搜索结果'),
+            h('div', { class: 'muted small', style: 'margin-top:6px' },
+              errors.length
+                ? '没有找到结果；部分请求失败：' + errors.join('；')
+                : '没有找到达到阈值的现场视频。')));
+          return;
+        }
+        var head = h('tr', null,
+          h('th', null, '标题'), h('th', null, '平台'),
+          h('th', null, '作者'), h('th', null, '时长'),
+          h('th', null, '发布时间'), h('th', { class: 'num' }, '评分'));
+        var body = h('tbody');
+        rows.forEach(function (item) {
+          var title = item.url
+            ? h('a', {
+                href: item.url, target: '_blank', rel: 'noopener noreferrer'
+              }, item.title || '-')
+            : (item.title || '-');
+          body.appendChild(h('tr', null,
+            h('td', { class: 'ellipsis' }, title),
+            h('td', null, item.platform || '-'),
+            h('td', null, item.author || '-'),
+            h('td', null, item.duration || '-'),
+            h('td', null, item.publish_time || '-'),
+            h('td', { class: 'num' }, item.score || 0)));
+        });
+        resultHost.replaceChildren(h('div', {
+          class: 'card', style: 'margin-top:12px'
+        },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+            (result.summary || '搜索结果')
+            + (errors.length ? '（部分请求失败）' : '')),
+          h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' },
+              h('thead', null, head), body))));
+      }
+
+      draw();
+    }).catch(function (error) {
+      setError(host, error, function () { renderOffline(host); });
+    });
   }
 
   function renderTcdoc(root) {
