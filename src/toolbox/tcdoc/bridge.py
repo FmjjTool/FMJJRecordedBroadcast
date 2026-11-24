@@ -642,6 +642,7 @@ def build_song_pending(root: Path | None = None) -> dict:
 # ==================== 线下活动 / 周边图鉴：候选比对 + 仅新增写回 ====================
 # 两张表按用户 2026-11-21 授权只开放「仅新增」：候选仍只比对本地快照，
 # 上传由 import_pending.make_candidate_plan 构造，不改、不删已有行。
+# 2026-11-24 用户追加授权：线下活动新增行可写「宣传图」，已存在行只追加该图片列。
 
 EVENT_TAB_ID = "ss_e1kkm2"
 MERCH_TAB_ID = "ss_ekd4cz"
@@ -1057,6 +1058,8 @@ def _ticket_candidates(days) -> list:
             "text": "｜".join(str(b) for b in bits if b)[:300],
             "images": _local_images(
                 data, ("本地海报", "本地封面", "本地宣传图", "本地座位图", "本地场馆图")),
+            # 「宣传图」列只收本地封面与宣传图两个目录，不含海报/座位/嘉宾/场馆
+            "promo_images": _local_images(data, ("本地封面", "本地宣传图")),
             "source": str(data.get("链接") or ""),
             "author": str(data.get("平台") or ""),
         })
@@ -1135,7 +1138,7 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
             continue
         group = groups.get(key)
         if group is None:
-            groups[key] = {**candidate, "images": []}
+            groups[key] = {**candidate, "images": [], "promo_images": []}
             group = groups[key]
         elif (profile == "events"
               and _event_name_score(candidate.get("name") or "")
@@ -1144,22 +1147,30 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
         for url in candidate.get("images") or []:
             if url not in group["images"]:
                 group["images"].append(url)
+        for path in candidate.get("promo_images") or []:
+            if path not in group["promo_images"]:
+                group["promo_images"].append(path)
         if len(candidate.get("text") or "") > len(group.get("text") or ""):
             group["text"] = candidate["text"]
-    pending = []
+    pending, existing = [], []
     for group in groups.values():
         synced = (_event_synced(group, remote) if profile == "events"
                   else _merch_synced(group, remote))
         if not synced:
             pending.append(group)
+        elif profile == "events" and group.get("promo_images"):
+            # 已存在活动：只用于把本地封面/宣传图追加到「宣传图」列
+            existing.append(group)
     after_match = time.perf_counter()
     pending.sort(key=lambda item: (str(item.get("date") or ""), item.get("name") or ""),
+reverse=True)
+    existing.sort(key=lambda item: (str(item.get("date") or ""), item.get("name") or ""),
 reverse=True)
     columns = _sheet_columns(SONG_DOC_KEY, tab_id)
     if not columns:
         columns = EVENT_FALLBACK_COLUMNS if profile == "events" else MERCH_FALLBACK_COLUMNS
-    rows = []
-    for item in pending:
+
+    def build_row(item, is_existing=False):
         row = {name: "" for name in columns}
         if profile == "events":
             row.update({
@@ -1186,14 +1197,21 @@ reverse=True)
                 "备注信息": item.get("text") or "",
             })
         row["_images"] = list(item.get("images") or [])
+        row["_promo_images"] = list(item.get("promo_images") or [])
         row["_source"] = item.get("source") or ""
         row["_needs_review"] = True
-        rows.append(row)
+        if is_existing:
+            row["_existing"] = True
+        return row
+
+    rows = [build_row(item) for item in pending]
+    existing_rows = [build_row(item, is_existing=True) for item in existing]
     image_count = sum(len(row.get("_images") or []) for row in rows)
     with_images = sum(1 for row in rows if row.get("_images"))
     return {
         "profile": profile,
         "rows": rows,
+        "existing": existing_rows,
         "columns": list(columns),
         "accounts": [],
         "local_accounts": [],
@@ -1203,6 +1221,7 @@ reverse=True)
             "local_groups": len(groups),
             "synced_groups": len(groups) - len(pending),
 "pending": len(rows),
+            "existing_promo": len(existing_rows),
             "with_images": with_images,
             "without_images": len(rows) - with_images,
             "image_count": image_count,

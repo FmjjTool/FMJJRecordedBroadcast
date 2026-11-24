@@ -39,6 +39,8 @@ OFFICIAL_TABS = frozenset({"ss_h2uh2s", "ss_1xgstm"})
 SONG_TABS = frozenset({"ss_ktwk0t"})
 # 线下活动 / 周边图鉴：用户 2026-11-21 授权「仅新增」，同样不提供修改与删除。
 CANDIDATE_TABS = frozenset({"ss_e1kkm2", "ss_ekd4cz"})
+# 2026-11-24 用户授权：线下活动已存在行只允许追加「宣传图」图片，不改其他字段。
+IMAGE_APPEND_TABS = frozenset({"ss_e1kkm2"})
 TEST_TARGET = ("DRmFHc1dLcnBvbmtB", "ss_q4fwq4")
 BEIJING = timezone(timedelta(hours=8))
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 脚本的内存限额，不代表服务端限额
@@ -282,6 +284,31 @@ class LocalImportClient:
         if not isinstance(rows, list) or len(rows) != 1 or not rows[0].get("recordID"):
             raise UnknownWriteResult("新增结果缺少唯一 recordID，请先按原帖链接查回")
         return str(rows[0]["recordID"])
+
+    def update_image_field(self, record_id: str, field_title: str,
+                           entries: list[dict]) -> None:
+        """线下活动「宣传图」追加：只更新指定行的单个图片字段。"""
+        if self.doc_key != OFFICIAL_DOC or self.tab_id not in IMAGE_APPEND_TABS:
+            raise ImportErrorDetail("图片追加仅授权线下活动表")
+        if field_title != "宣传图":
+            raise ImportErrorDetail("图片追加仅授权「宣传图」列")
+        if not str(record_id or "").strip():
+            raise ImportErrorDetail("追加图片缺少目标行 recordID")
+        if not entries or not all(
+                isinstance(e, dict) and str(e.get("imageID") or "") for e in entries):
+            raise ImportErrorDetail("图片追加清单格式异常")
+        if not self.file_id:
+            raise ImportErrorDetail("尚未核对文档身份")
+        path = (f"/smartbook/v2/files/{quote(self.file_id, safe='')}"
+                f"/sheets/{quote(self.tab_id, safe='')}")
+        payload = {"updateRecords": {"records": [{
+            "recordID": str(record_id),
+            "values": {field_title: entries}}]}}
+        data = self._request("POST", path, payload, record_write=True)
+        result = data.get("updateRecords")
+        rows = result.get("records") if isinstance(result, dict) else None
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise UnknownWriteResult("图片追加结果缺少逐条回执，请按 recordID 读回核对")
 
 
 def image_mime(content: bytes) -> str:

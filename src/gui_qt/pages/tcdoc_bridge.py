@@ -236,7 +236,12 @@ class _UploadDialog(QDialog):
         if profile == "songs":
             note = ("默认全选；取消勾选可跳过某些歌曲。上传会新增歌曲记录并上传封面图，"
                     "同名歌曲会自动跳过，不会修改或删除表内已有行。")
-        elif profile in ("events", "merch"):
+        elif profile == "events":
+            note = ("默认全选；取消勾选可跳过某些行。新增行会把本地封面/宣传图写入"
+                    "「宣传图」列；已存在的活动只向该行「宣传图」追加缺的本地图片，"
+                    "不改其他字段、不删除已有图片。备注信息会追加"
+                    "「自动推送程序上传+当前时间」。")
+        elif profile == "merch":
             note = ("默认全选；取消勾选可跳过某些行。上传只新增候选记录（不改不删），"
                     "图片列不随程序上传，可先用「复制全部图片」补；"
                     "备注信息会追加「自动推送程序上传+当前时间」。")
@@ -260,7 +265,7 @@ class _UploadDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        for index, width in enumerate((56, 380, 130, 90, 150, 120)):
+        for index, width in enumerate((56, 330, 110, 80, 130, 150)):
             self.table.setColumnWidth(index, width)
         # 行号 == self._records 下标：勾选/汇总都按行号反查记录，排序时必须同步重排记录列表
         self._upload_sorter = table_sort.install(self.table, rows=self._records)
@@ -315,9 +320,14 @@ class _UploadDialog(QDialog):
         self.table.setItem(row, 0, check)
         cover_n = len(record.get("images") or [])
         comment_n = len(record.get("_comment_images") or [])
-        note = f"封面 {cover_n} · 评论 {comment_n}"
-        if record.get("missing_slots"):
-            note += f"（缺封面 {len(record['missing_slots'])}）"
+        if self._profile == "events":
+            note = f"宣传图 {cover_n} 张"
+            if record.get("_existing"):
+                note += " · 已存在·追加"
+        else:
+            note = f"封面 {cover_n} · 评论 {comment_n}"
+            if record.get("missing_slots"):
+                note += f"（缺封面 {len(record['missing_slots'])}）"
         if blocked:
             note += " · 不可上传"
         comment_note = str(record.get("comment_note") or "")
@@ -373,9 +383,15 @@ class _UploadDialog(QDialog):
             gap_note = (f"；缺封面图 {gaps} 张"
                         + ("（上传时尝试在线补图）" if self.fetch_missing else "（会留空）"))
         block_note = f"；不可上传 {blocked} 条（缺字段或选项）" if blocked else ""
-        self._upload_summary.setText(
-            f"已选 {len(chosen)} / {len(self._records)} 条 · 封面图 {covers} 张 · "
-            f"评论区图片 {comments} 张{gap_note}{block_note}")
+        if self._profile == "events":
+            appends = sum(1 for r in chosen if r.get("_existing"))
+            self._upload_summary.setText(
+                f"已选 {len(chosen)} / {len(self._records)} 条 · 新增 {len(chosen) - appends} 条 · "
+                f"追加宣传图 {appends} 条 · 宣传图 {covers} 张{block_note}")
+        else:
+            self._upload_summary.setText(
+                f"已选 {len(chosen)} / {len(self._records)} 条 · 封面图 {covers} 张 · "
+                f"评论区图片 {comments} 张{gap_note}{block_note}")
         self.ok_btn.setEnabled(bool(chosen))
 
 
@@ -673,7 +689,8 @@ class TcDocBridgePanel(QWidget):
         self.skip_refresh_box.setToolTip(
             "开启后批量上传与右键单行上传不再要求先「同步前刷新」，"
             "直接用当前本地数据推送；资产页单条上传也会跳过自动刷新。\n"
-            "适合只补少量已确认的新作品；写回仍只新增，不改不删表内已有行。")
+            "适合只补少量已确认的新作品；写回以仅新增为主，"
+            "线下活动已存在行只追加「宣传图」图片。")
         self.skip_refresh_box.setChecked(sync_refresh_module.bypass_enabled())
         self.skip_refresh_box.clicked.connect(self._on_skip_refresh_toggled)
         row2.addWidget(self.skip_refresh_box)
@@ -722,7 +739,8 @@ class TcDocBridgePanel(QWidget):
         self.upload_btn.setProperty("variant", "primary")
         self.upload_btn.setToolTip(
             "把清单中勾选的记录连同本地图片上传到腾讯文档（官方动态 / 直播记录可新增，"
-            "完整歌曲仅新增、不改不删；需在弹窗里确认勾选，已存在的自动跳过）")
+            "完整歌曲仅新增、不改不删；线下活动新增行会写入本地封面/宣传图，"
+            "已存在活动只追加「宣传图」图片；需在弹窗里确认勾选）")
         self.upload_btn.setEnabled(False)
         self.upload_btn.clicked.connect(self._open_upload)
         row2.addWidget(self.upload_btn)
@@ -1442,6 +1460,8 @@ class TcDocBridgePanel(QWidget):
             str(target["doc_key"]), str(target["tab_id"]))
         client.connect()
         fields = client.get_fields()
+        if profile == "events":
+            records = self._filter_event_append_records(records, client)
         for record in records:
             try:
                 if profile == "songs":
@@ -1464,6 +1484,36 @@ class TcDocBridgePanel(QWidget):
                 [r for r in records if not r.get("blocked")], fields)
         return {"records": records, "new_options": new_options, "missing": missing}
 
+    @staticmethod
+    def _filter_event_append_records(records: list[dict], client) -> list[dict]:
+        """已存在活动只保留还有本地图片可追加的行；已补全的不再展示。"""
+        from toolbox.tcdoc import import_pending as pending
+
+        existing = [record for record in records if record.get("_existing")]
+        if not existing:
+            return records
+        live = pending._event_live_index(client.get_records())
+        kept = []
+        for record in existing:
+            row = live.get(record["key"])
+            if row is None:
+                record["blocked"] = "目标活动行已不存在，请重新比对"
+                kept.append(record)
+                continue
+            values = row.get("values") or {}
+            present = set(pending._image_titles(values))
+            missing = [image for image in record.get("_images") or []
+                       if image.upload_name not in present]
+            if not missing:
+                continue
+            record["_images"] = missing
+            record["images"] = [str(image.path) for image in missing]
+            record["_record_id"] = str(row.get("recordID") or "")
+            record["_existing_images"] = len(present)
+            kept.append(record)
+        fresh = [record for record in records if not record.get("_existing")]
+        return fresh + kept
+
     def _open_upload(self) -> None:
         if self._closed or self._busy or self._uploading:
             return
@@ -1482,10 +1532,11 @@ class TcDocBridgePanel(QWidget):
             QMessageBox.warning(
                 self, "范围限制",
                 "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」"
-                "「完整歌曲」「线下活动」「周边图鉴」；后三张表及候选表只允许"
-                "新增，不改不删。")
+                "「完整歌曲」「线下活动」「周边图鉴」；完整歌曲/周边图鉴仅新增，"
+                "线下活动仅新增并可为已存在行追加「宣传图」图片，不改其他字段。")
             return
-        rows = list((self._result or {}).get("rows") or [])
+        rows = list((self._result or {}).get("rows") or []) + list(
+            (self._result or {}).get("existing") or [])
         if not rows:
             QMessageBox.information(self, "没有待同步行", "当前清单为空，无需上传。")
             return
@@ -1520,6 +1571,10 @@ class TcDocBridgePanel(QWidget):
                 return
             records = result["records"]
             new_options = result.get("new_options") or {}
+            if not records:
+                self.status.setText("没有可上传内容：本地图片已在表格中，或目标行已不存在。")
+                self._maybe_run_pending_compare()
+                return
             dialog = _UploadDialog(records, self, profile=profile)
             if dialog.exec() != QDialog.Accepted:
                 self.status.setText("已取消上传。")
@@ -1594,9 +1649,16 @@ class TcDocBridgePanel(QWidget):
                 common.post_to_main(self.status.setText, text)
             elif phase == "image_uploaded":
                 common.post_to_main(self._progress_tick, 0, 1)
-                kind = "评论区图片" if event.get("kind") == "comment" else "封面图"
+                kind = {"comment": "评论区图片", "promo": "宣传图"}.get(
+                    event.get("kind"), "封面图")
                 common.post_to_main(self.status.setText,
                                     f"上传{kind}：{event.get('name')}")
+            elif phase == "images_appended":
+                common.post_to_main(self._progress_tick, 1, 0)
+                common.post_to_main(
+                    self.status.setText,
+                    f"已追加宣传图：{str(event.get('title') or '')[:40]}"
+                    f"（{int(event.get('image_count') or 0)} 张）")
             elif phase == "record_created":
                 common.post_to_main(self._progress_tick, 1, 0)
                 cover_n = int(event.get("cover_image_count") or event.get("image_count") or 0)
@@ -1648,6 +1710,7 @@ class TcDocBridgePanel(QWidget):
                 self._progress_finish(3000)
                 return
             added = len(receipt.get("added") or [])
+            updated = int(receipt.get("updated") or 0)
             # 上传已写入远端：刷新记录作废，下一次上传必须重新「同步前刷新」
             from toolbox import sync_refresh
             sync_refresh.invalidate()
@@ -1659,6 +1722,7 @@ class TcDocBridgePanel(QWidget):
                 f"上传完成：新增 {added} 条 · 跳过 {skipped} 条 · "
                 f"图片 {receipt.get('uploaded_images', 0)} 张"
                 + (f"（评论区 {comment_images} 张）" if comment_images else "")
+                + (f" · 追加宣传图 {updated} 条" if updated else "")
                 + f" · 缺图 {receipt.get('missing_images', 0)} 张"
                 + (f" · 评论区失败 {receipt.get('comment_image_failures')} 张"
                    if receipt.get("comment_image_failures") else "")
@@ -1769,9 +1833,10 @@ class TcDocBridgePanel(QWidget):
         self.progress_row.setVisible(False)
 
     def _restore_buttons(self) -> None:
-        has_rows = bool((self._result or {}).get("rows"))
+        result = self._result or {}
+        has_rows = bool(result.get("rows") or result.get("existing"))
         self.compare_btn.setEnabled(True)
-        self.copy_btn.setEnabled(has_rows)
+        self.copy_btn.setEnabled(bool(result.get("rows")))
         self.upload_btn.setEnabled(has_rows and self._upload_target_ok())
 
     def _maybe_run_pending_compare(self) -> None:
@@ -2238,10 +2303,12 @@ class TcDocBridgePanel(QWidget):
             scope = stats["since"] or "全部历史"
             source_label = {"ticket": "票务解析", "shop": "购物解析"}.get(
                 stats.get("source"), "本地动态")
+            extra = (f" · 可追加宣传图 {stats['existing_promo']} 场"
+                     if stats.get("existing_promo") else "")
             self._set_summary(
                 f"{source_label} {scope} 共 {stats['local_items']} 条 → 识别 "
                 f"{stats['local_groups']} 个{label}候选 · 已存在 {stats['synced_groups']} 个",
-                note, f"待补 {stats['pending']} 行")
+                note, f"待补 {stats['pending']} 行{extra}")
         else:
             scope = stats["since"] or "全部历史"
             self._set_summary(
@@ -2254,7 +2321,8 @@ class TcDocBridgePanel(QWidget):
                 f"读取本地条目 {timing.get('local', 0):.2f}s · "
                 f"分组去重 {timing.get('match', 0):.2f}s")
         self.copy_btn.setEnabled(bool(result["rows"]))
-        self.upload_btn.setEnabled(bool(result["rows"]) and self._upload_target_ok())
+        self.upload_btn.setEnabled(
+            bool(result["rows"] or result.get("existing")) and self._upload_target_ok())
         self.copy_images_btn.setEnabled(stats["image_count"] > 0 and not self._image_busy)
         self._refresh_accounts(result, used_accounts)
         if result["rows"]:
@@ -2265,10 +2333,16 @@ class TcDocBridgePanel(QWidget):
             elif profile in ("events", "merch"):
                 source_label = {"ticket": "票务解析", "shop": "购物解析"}.get(
                     stats.get("source"), "本地动态")
+                append_note = (f"另有 {stats['existing_promo']} 场已存在活动可追加宣传图，"
+                               "上传时在选择清单里勾选；"
+                               if stats.get("existing_promo") else "")
+                image_rule = ("上传会把本地封面/宣传图写入「宣传图」列，已存在活动只追加"
+                              "该列图片、不改其他字段；" if profile == "events"
+                              else "图片列仍不随程序上传；")
                 self.status.setText(
                     f"共 {len(result['rows'])} 行候选：由{source_label}自动识别，"
                     "请人工核对；可点「上传到腾讯文档」仅新增（不改不删），"
-                    "图片随后用「复制全部图片」补；备注信息会追加"
+                    f"{image_rule}{append_note}备注信息会追加"
                     "「自动推送程序上传+当前时间」。")
             else:
                 self.status.setText(
@@ -2277,22 +2351,30 @@ class TcDocBridgePanel(QWidget):
                     "右键行可「上传这一行到腾讯文档」或复制；"
                     "缺图会在上传时尝试在线补图，补不到则留空。")
         else:
-            hint = ("已同步 {synced} 首歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
+            append_n = int(stats.get("existing_promo") or 0)
+            if profile in ("events", "merch"):
+                hint = (f"有 {append_n} 场已存在活动带本地封面/宣传图，点「上传到腾讯文档」"
+                        "在选择清单里勾选后可只追加「宣传图」；也可先同步一次腾讯表格再比对。"
+                        if append_n else
+                        "本地没有新的候选；可先同步一次腾讯表格再重新比对。")
+                self.status.setText(
+                    f"没有待补候选；{append_n} 场已存在活动可追加宣传图。"
+                    if append_n else
+                    "没有待补候选；可先同步一次腾讯表格再重新比对。")
+            else:
+                hint = ("已同步 {synced} 首歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
+                        if profile == "songs" else
+                        "已同步 {synced} 个作品；如果刚上传过，请先同步一次腾讯表格再比对。")
+                hint = hint.format(synced=stats["synced_groups"])
+                self.status.setText(
+                    "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
                     if profile == "songs" else
-                    "本地没有新的候选；可先同步一次腾讯表格再重新比对。"
-                    if profile in ("events", "merch") else
-                    "已同步 {synced} 个作品；如果刚上传过，请先同步一次腾讯表格再比对。")
+                    "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
             self._set_empty(
                 "当前没有待同步歌曲" if profile == "songs" else
                 "当前没有待补候选" if profile in ("events", "merch") else
                 "当前没有待同步条目",
-                hint.format(synced=stats["synced_groups"]))
-            self.status.setText(
-                "没有待同步歌曲；如果刚上传过，请先同步一次腾讯表格再比对。"
-                if profile == "songs" else
-                "没有待补候选；可先同步一次腾讯表格再重新比对。"
-                if profile in ("events", "merch") else
-                "没有待同步条目；如果刚上传过，请先同步一次腾讯表格再比对。")
+                hint)
         self._show_table()
 
     # ==================== 看门狗 ====================
@@ -2681,8 +2763,8 @@ class TcDocBridgePanel(QWidget):
             QMessageBox.warning(
                 self, "范围限制",
                 "只允许上传到《封茗囧菌数据汇总库》的「官方动态」「直播记录」"
-                "「完整歌曲」「线下活动」「周边图鉴」；后三张表及候选表只允许"
-                "新增，不改不删。")
+                "「完整歌曲」「线下活动」「周边图鉴」；完整歌曲/周边图鉴仅新增，"
+                "线下活动仅新增并可为已存在行追加「宣传图」图片，不改其他字段。")
             return
         from toolbox import sync_refresh
         allowed, why = sync_refresh.upload_allowed()
@@ -2728,7 +2810,12 @@ class TcDocBridgePanel(QWidget):
             local = len(record.get("_images") or [])
             gaps = len(record.get("missing_slots") or [])
             profile = str((self._result or {}).get("profile") or "posts")
-            if profile in ("events", "merch"):
+            if profile == "events":
+                image_note = (f"宣传图：本地 {local} 张会写入「宣传图」列"
+                              if local else "宣传图：本地没有封面/宣传图")
+                if record.get("_existing"):
+                    image_note += "（该活动已存在，只追加这一列图片）"
+            elif profile == "merch":
                 image_note = "图片：不随程序上传，可先用「复制全部图片」到表格里补"
             else:
                 image_note = (f"图片：本地 {local} 张，缺 {gaps} 张"

@@ -644,6 +644,7 @@ CANDIDATE_FIELDS = {
         "date": ("活动日期",),
         "choice": ("年份", "活动状态", "活动类型", "舞台环节", "签售环节"),
         "link": ("购票链接 1",),
+        "image": ("宣传图",),
         "required": ("活动名称",),
     },
     "merch": {
@@ -652,6 +653,7 @@ CANDIDATE_FIELDS = {
         "date": ("首发日期",),
         "choice": ("获取方式",),
         "link": (),
+        "image": (),
         "required": ("周边名称",),
     },
 }
@@ -672,7 +674,11 @@ def _date_ms(value: str):
 
 
 def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events"):
-    """线下活动 / 周边图鉴字段计划：只写明确支持的列，不新建下拉选项、不碰图片列。"""
+    """线下活动 / 周边图鉴字段计划：只写明确支持的列，不新建下拉选项。
+
+    线下活动可写「宣传图」图片列（本地封面/宣传图）；已存在行只追加该图片列。
+    周边图鉴仍不碰图片列。
+    """
     spec = CANDIDATE_FIELDS.get(profile) or CANDIDATE_FIELDS["events"]
     columns = record.get("columns") or {}
     by_title: dict[str, list[dict]] = {}
@@ -684,6 +690,20 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
         return hits[0] if len(hits) == 1 else None
 
     values, kinds, skipped = {}, {}, {}
+    is_existing = bool(record.get("_existing"))
+    if is_existing:
+        # 已存在行只追加「宣传图」：文本/日期/选项/链接一律不重写
+        for name in spec.get("image") or ():
+            if not record.get("_images"):
+                continue
+            field = one(name)
+            if field is None:
+                skipped[name] = "目标缺少字段"
+            elif int(field.get("fieldType") or 0) == 5:
+                kinds[name] = 5
+            else:
+                skipped[name] = "字段不是图片类型"
+        return values, kinds, skipped
     for name in spec["text"]:
         value = str(columns.get(name) or "").strip()
         if not value:
@@ -763,6 +783,17 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
         else:
             skipped[name] = "字段类型不匹配"
 
+    for name in spec.get("image") or ():
+        if not record.get("_images"):
+            continue
+        field = one(name)
+        if field is None:
+            skipped[name] = "目标缺少字段"
+        elif int(field.get("fieldType") or 0) == 5:
+            kinds[name] = 5
+        else:
+            skipped[name] = "字段不是图片类型"
+
     remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
     if remark is not None:
         values[remark_title] = remark
@@ -789,14 +820,38 @@ def merch_key(columns: dict) -> str:
 
 
 def _candidate_record(columns: dict, key: str, title: str, account: str,
-                      platform: str, day: str) -> dict:
+                      platform: str, day: str, images=None, existing: bool = False) -> dict:
+    images = list(images or [])
     return {"key": key, "title": title, "account": account, "platform": platform,
-            "time": day, "columns": columns, "images": [], "expected_images": 0,
-            "missing_slots": [], "_images": []}
+            "time": day, "columns": columns, "images": [str(i.path) for i in images],
+            "expected_images": len(images), "missing_slots": [], "_images": images,
+            "_existing": existing}
+
+
+def _promo_local_images(row: dict, media_root: Path) -> list:
+    """行内本地封面/宣传图 → LocalImage；缺文件或越出票务目录的跳过。"""
+    paths = [str(p) for p in (row.get("_promo_images") or [])]
+    if not paths:
+        paths = [str(p) for p in (row.get("_images") or [])
+                 if Path(str(p)).parent.name in ("cover", "images")]
+    images, seen = [], set()
+    for text in paths:
+        try:
+            image = LocalImage.inspect(Path(text), media_root)
+        except ImportErrorDetail:
+            continue
+        if image.upload_name in seen:
+            continue
+        seen.add(image.upload_name)
+        images.append(image)
+    return images
 
 
 def event_records_from_rows(rows: list[dict]) -> list[dict]:
-    """线下活动候选行 → 可上传记录（图片不随程序上传）。"""
+    """线下活动候选行 → 可上传记录：新增行带本地宣传图，已存在行只追加图片。"""
+    from toolbox.config_manager import get_export_dir
+
+    media_root = Path(get_export_dir()) / "票务演出"
     records = []
     for row in rows:
         columns = _candidate_columns(row)
@@ -806,7 +861,9 @@ def event_records_from_rows(rows: list[dict]) -> list[dict]:
         records.append(_candidate_record(
             columns, event_key(columns), name,
             str(columns.get("城市") or columns.get("活动类型") or ""),
-            "线下活动", str(columns.get("活动日期") or "")))
+            "线下活动", str(columns.get("活动日期") or ""),
+            images=_promo_local_images(row, media_root),
+            existing=bool(row.get("_existing"))))
     return records
 
 
@@ -1352,6 +1409,40 @@ def _record_title(record: dict) -> str:
                or record["columns"].get("作品标题") or "")
 
 
+def _image_write_entries(values: dict, title: str = "宣传图") -> list[dict]:
+    """读回值里的图片条目 → 可回写 imageID；缺图片 ID 时报错，避免覆盖丢图。"""
+    raw = (values or {}).get(title)
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list) or not all(isinstance(i, dict) for i in raw):
+        raise ImportErrorDetail("目标行图片列格式异常，无法安全追加")
+    entries = []
+    for item in raw:
+        image_id = str(item.get("id") or item.get("imageID") or "")
+        if not image_id:
+            raise ImportErrorDetail("目标行已有图片缺少图片 ID，请在腾讯文档里手动补图")
+        entries.append({"imageID": image_id})
+    return entries
+
+
+def _image_titles(values: dict, title: str = "宣传图") -> list[str]:
+    raw = (values or {}).get(title)
+    if not isinstance(raw, list):
+        return []
+    return [str(i.get("title") or "") for i in raw if isinstance(i, dict)]
+
+
+def _event_live_index(rows: list[dict]) -> dict:
+    """线上记录 → 活动键对应的 record；同名只取第一条。"""
+    index = {}
+    for row in rows:
+        values = row.get("values") or {}
+        key = "event:" + bridge._song_title_key(_live_cell_text(values.get("活动名称")))
+        if key != "event:" and key not in index:
+            index[key] = row
+    return index
+
+
 def run(client, records, *, apply=False, available_only=False, verify_each=True,
         emit=lambda event: None, profile="posts", allow_new_options=False,
         source="上传"):
@@ -1389,15 +1480,23 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
         known = merch_remote_keys(before)
     else:
         known = set(remote_keys(before))
+    live_events = _event_live_index(before) if profile == "events" else {}
+
+    def operation(record) -> str:
+        if record.get("_existing"):
+            return "append_images"
+        return "skip" if record["key"] in known else "add"
+
     emit({"phase": "preview", "apply": apply, "doc_key": client.doc_key, "tab_id": client.tab_id,
           "records": [{"key": r["key"], "title": _record_title(r), "images": len(r["_images"]),
                        "comment_images": len(r.get("_comment_images") or []),
                        "comment_note": r.get("comment_note") or "",
                        "missing_images": len(r["missing_slots"]), "skipped_fields": skipped,
-                       "operation": "skip" if r["key"] in known else "add"}
+                       "operation": operation(r)}
                       for r, v, k, skipped in plans]})
     receipt = {"phase": "complete", "doc_key": client.doc_key, "tab_id": client.tab_id, "apply": apply,
                "rows_before": len(before), "rows_after": len(before), "added": [], "skipped": [],
+               "appended": [],
                "uploaded_images": 0, "uploaded_comment_images": 0,
                "comment_image_failures": 0,
                "missing_images": sum(len(r["missing_slots"]) for r in records),
@@ -1429,8 +1528,51 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
 
     try:
         pending_verify = []
+        pending_append_verify = []
         for record, values, kinds, skipped in plans:
             try:
+                if record.get("_existing"):
+                    live = live_events.get(record["key"])
+                    if live is None:
+                        raise ImportErrorDetail("目标活动行已不存在，请重新比对后再上传")
+                    rid = str(live.get("recordID") or "")
+                    if not rid:
+                        raise ImportErrorDetail("目标活动行缺少 recordID，无法追加宣传图")
+                    live_values = live.get("values") or {}
+                    existing_entries = _image_write_entries(live_values)
+                    existing_names = set(_image_titles(live_values))
+                    pending_images = [image for image in record["_images"]
+                                      if image.upload_name not in existing_names]
+                    if not pending_images:
+                        receipt["skipped"].append({"key": record["key"], "record_ids": [rid]})
+                        continue
+                    image_title = next(
+                        (title for title, kind in kinds.items() if kind == 5), "")
+                    if not image_title:
+                        raise ImportErrorDetail("目标表没有可写的「宣传图」图片列")
+                    tickets = []
+                    for image in pending_images:
+                        image.read_verified()
+                        tickets.append(client.upload_image(image))
+                        receipt["uploaded_images"] += 1
+                        emit({"phase": "image_uploaded", "key": record["key"],
+                              "name": image.path.name, "kind": "promo"})
+                    client.update_image_field(
+                        rid, image_title,
+                        existing_entries + [{"imageID": ticket} for ticket in tickets])
+                    item = {"key": record["key"], "title": _record_title(record),
+                            "record_id": rid, "image_count": len(pending_images),
+                            "cover_image_count": 0, "comment_image_count": 0,
+                            "comment_failed_count": 0, "comment_note": "",
+                            "missing_images": 0, "skipped_fields": skipped,
+                            "verified": False, "appended": True,
+                            "existing_images": len(existing_entries)}
+                    receipt["appended"].append(item)
+                    receipt["updated"] += 1
+                    emit({"phase": "images_appended", **item})
+                    pending_append_verify.append(
+                        (item, rid, len(existing_entries), pending_images))
+                    continue
                 if record["key"] in known:
                     receipt["skipped"].append({"key": record["key"], "record_ids": []})
                     continue
@@ -1554,10 +1696,25 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                 emit({"phase": "readback", **added})
             receipt["rows_after"] = len(fresh)
             receipt["duplicates"] = [item["key"] for item in receipt["added"] if item.get("duplicate")]
+        if pending_append_verify:
+            fresh = client.get_records()
+            by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
+            for item, rid, before_count, images in pending_append_verify:
+                row = by_id.get(rid)
+                titles = _image_titles((row or {}).get("values") or {})
+                ok = (row is not None
+                      and len(titles) == before_count + len(images)
+                      and all(image.upload_name in titles for image in images))
+                item["verified"] = ok
+                emit({"phase": "readback", **item})
+                if not ok:
+                    raise ImportErrorDetail("追加宣传图后读回不一致，请到表格里核对")
+            receipt["rows_after"] = len(fresh)
     except ImportErrorDetail as exc:
         save_history("失败", str(exc))
         raise
-    save_history()
+    save_history(note=(f"追加宣传图 {len(receipt['appended'])} 条"
+                       if receipt["appended"] else ""))
     return receipt
 
 
