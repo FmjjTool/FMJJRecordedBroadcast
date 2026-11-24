@@ -1,9 +1,19 @@
 """粉丝群 / QQ群公开信息查询：抖音 / 微博 / B站 / QQ群。
 
 QQ群（2026-11 实测）：
-  GET https://qun.qq.com/universal-share/share?...  （手机 UA）
-  - 免登录；服务端渲染的 HTML 里含群名、群号与 memberCnt
-  - 每个群的分享 token 独立，群号不能推导其他群的分享链接
+  免登录 GET https://qun.qq.com/universal-share/share?ac=1&authKey=...
+  - 服务端渲染的 HTML 里含群名、群号、人数（memberCnt / member-count）
+  - 免登录只能读「已有分享链接」：authKey/token 按群独立签发，改群号会 err -1/9/10，
+    无登录态也无法通过 CreateShare 生成新链接 → 免登录拿不到任意群的人数
+  登录   POST https://qun.qq.com/cgi-bin/qun_mgr/get_group_list   （bkn=hash33(skey)）
+  - ec=0 即登录态有效（登录状态检测用它），只回已加入群的名字，不含人数
+  登录   POST https://qun.qq.com/cgi-bin/group_search/pc_group_search
+  - keyword=群号、bkn 有效时返回该群 name / member_num / max_member_num，
+    不要求已加入该群（2026-11 实测：未加入的群也能取到人数）
+  登录   GET  https://qinfo.clt.qq.com/cgi-bin/qun_info/get_group_info_all
+  - 只认自己的会话票据，群网页登录态常被判 no login，仅作备用
+  匿名按群号查询：以上登录接口都必须带 skey/bkn，空 bkn 一律 {"ec":4,"em":"user err"}，
+  旧版 qun_mgr/search_group 已下线（404）→ 没有可用的免登录按群号接口
 
 
 抖音（2026-11 实测）：
@@ -331,7 +341,9 @@ def _fetch_qqgroup_qinfo(group_no: str, timeout: float = 20.0) -> "FanGroup":
     except (TypeError, ValueError):
         ec_int = -1
     if ec_int == 4:
-        raise ValueError("QQ 群登录态失效，请重新完成 QQ 群登录")
+        # qinfo 只认它自己的会话票据，群网页登录态常被它判 no login；
+        # 这不等于 QQ 群登录失效，只为让上层改走群搜索，不要吓用户。
+        raise ValueError("群资料接口(qinfo)不接受当前登录态，改用群搜索")
     if ec_int == 7:
         raise ValueError("没有权限查看该群资料（可能需要先加入该群）")
     if ec_int != 0:
@@ -469,19 +481,68 @@ def _fetch_qqgroup_search(group_no: str, timeout: float = 20.0) -> "FanGroup":
     )
 
 
+def qq_login_probe(cookie: str, timeout: float = 15.0) -> dict:
+    """QQ 群登录态自检：get_group_list 回 ec=0 即票有效。
+
+    返回 {"ok": True/False/None, "username": "QQ 123456", "detail": "..."}。
+    ok=None 表示接口不可达/结构不认识（界面显示「无法验证」而不是误判失效）。
+    """
+    cookie = (cookie or "").strip()
+    if not cookie:
+        return {"ok": False, "username": "", "detail": "还没有登录 QQ 群"}
+    uin = _cookie_value(cookie, "uin").lstrip("o")
+    name = f"QQ {uin}" if uin else ""
+    try:
+        bkn = _qq_bkn(cookie)
+    except ValueError as exc:
+        return {"ok": False, "username": "", "detail": str(exc)}
+    try:
+        response = requests.post(
+            "https://qun.qq.com/cgi-bin/qun_mgr/get_group_list",
+            data={"bkn": bkn, "gc": "", "st": "0", "end": "20", "sort": "0"},
+            headers={"User-Agent": UA_PC, "Cookie": cookie,
+                     "Referer": "https://qun.qq.com/member.html",
+                     "Origin": "https://qun.qq.com"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return {"ok": None, "username": name,
+                "detail": f"QQ 群接口不可达：{type(exc).__name__}"}
+    if response.status_code != 200:
+        return {"ok": None, "username": name,
+                "detail": f"QQ 群接口 HTTP {response.status_code}"}
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return {"ok": None, "username": name, "detail": "QQ 群接口返回的不是 JSON"}
+    ec = payload.get("ec") if isinstance(payload, dict) else None
+    try:
+        ec_int = int(ec) if ec is not None else 0
+    except (TypeError, ValueError):
+        ec_int = -1
+    if ec_int == 0:
+        return {"ok": True, "username": name, "detail": ""}
+    if ec_int == 4:
+        return {"ok": False, "username": "", "detail": "QQ 群登录态已失效，请重新登录"}
+    em = str(payload.get("em") or "").strip() if isinstance(payload, dict) else ""
+    return {"ok": None, "username": name,
+            "detail": f"QQ 群接口返回 ec={ec_int}" + (f"：{em}" if em else "")}
+
+
 def fetch_qqgroup_by_cookie(group_no: str, timeout: float = 20.0) -> "FanGroup":
-    """登录兜底：先试 qinfo 资料，再用群搜索取人数。"""
+    """登录态按群号取群资料：群搜索优先（任意群可查），qinfo 作备用。"""
     group_no = extract_qq_group_no(group_no)
     cookie = _cookie("qqgroup")
     if not cookie:
         raise ValueError("需要 QQ 群登录态，请先完成 QQ 群登录后重试")
     errors: list[str] = []
-    for fetcher in (_fetch_qqgroup_qinfo, _fetch_qqgroup_search):
+    for fetcher in (_fetch_qqgroup_search, _fetch_qqgroup_qinfo):
         try:
             return fetcher(group_no, timeout=timeout)
         except ValueError as exc:
             errors.append(str(exc))
-    raise ValueError(errors[-1] if errors else "QQ 群资料读取失败")
+    # 群搜索的报错更贴近真实原因（未公开/无权/失效），优先展示
+    raise ValueError(errors[0] if errors else "QQ 群资料读取失败")
 
 
 def fetch_qqgroup_any(text: str, timeout: float = 20.0) -> "FanGroup":
@@ -831,6 +892,7 @@ _AVATAR_REFERER = {
     "douyin": "https://www.douyin.com/",
     "weibo": "https://weibo.com/",
     "bilibili": "https://space.bilibili.com/",
+    "qqgroup": "https://qun.qq.com/",
 }
 _IMG_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif)(?:[?~!]|$)", re.I)
 
@@ -926,6 +988,38 @@ def download_avatars(platform: str, owner_id: str, groups: list[FanGroup],
             if progress:
                 progress(f"群头像下载失败（{g.name or g.group_id}）：{str(e)[:50]}")
     return ok, total
+
+
+def download_group_avatar(group: FanGroup, force: bool = False) -> bool:
+    """下载单个 QQ 群头像到该群自己的目录（QQ 群是一群一目录，不能共用 owner）。
+
+    默认复用 `<群目录>/头像/` 下已有文件，force=True 重新下载并覆盖。
+    失败不抛异常（头像只是装饰），返回是否拿到本地文件。
+    """
+    if not group.avatar:
+        group.avatar_path = ""
+        return False
+    d = avatar_dir("qqgroup", group.group_id)
+    olds = [p for p in d.iterdir() if p.is_file()] if d.exists() else []
+    if olds and not force:
+        group.avatar_path = str(olds[0])
+        return True
+    try:
+        data, real_url = _fetch_avatar(group.avatar, "qqgroup")
+        for old in olds:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        name = _safe_name(group.name, 30) or "群"
+        gid = _safe_name(group.group_id, 40) or "group"
+        path = d / f"{name}_{gid}{_avatar_ext(real_url, data)}"
+        path.write_bytes(data)
+        group.avatar_path = str(path)
+        return True
+    except Exception:  # noqa: BLE001 - 头像下载失败不影响人数
+        group.avatar_path = ""
+        return False
 
 
 # ==================== Excel ====================

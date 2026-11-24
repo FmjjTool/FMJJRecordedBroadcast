@@ -137,6 +137,7 @@ def log(message: str) -> None:
 def snapshot_all(progress=None) -> tuple[int, int]:
     """逐个订阅账号重新查询并写快照，返回 (成功, 总数)。"""
     from platforms import fan_groups as fg
+    from toolbox import qq_groups_store as store
 
     targets = load_targets()
     ok = 0
@@ -148,6 +149,19 @@ def snapshot_all(progress=None) -> tuple[int, int]:
             progress(f"[{index}/{len(targets)}] {label} {safe}")
         try:
             owner_id, groups = fg.fetch_groups(platform, value)
+            if platform == "qqgroup":
+                # QQ群：头像进各自群目录，人数历史进 SQLite（不写 JSON 快照）
+                for group in groups:
+                    fg.download_group_avatar(group)
+                previous = store.latest_snapshot(owner_id)
+                changes = fg.diff_members(groups, previous)
+                for group in groups:
+                    store.record(group, source="task")
+                moved = sum(1 for v in changes.values() if v)
+                log(f"{label} {owner_id}：{len(groups)} 个群，人数变化 {moved} 个，"
+                    f"已写入数据库（累计 {store.count(owner_id)} 条）")
+                ok += 1
+                continue
             previous = fg.load_latest(platform, owner_id)
             changes = fg.diff_members(groups, previous)
             snap = fg.save_snapshot(platform, owner_id, groups)

@@ -156,6 +156,13 @@ class FanGroupsPage(BasePage):
         self.avatar_btn.clicked.connect(self._do_refresh_avatars)
         row2.addWidget(self.avatar_btn)
 
+        # QQ群模式专用：一键把已订阅群的群头像补下来（不藏进菜单）
+        self.qq_avatar_btn = QPushButton("下载头像")
+        self.qq_avatar_btn.setToolTip("下载全部已订阅 QQ 群的群头像（已有文件直接复用）")
+        self.qq_avatar_btn.setVisible(False)
+        self.qq_avatar_btn.clicked.connect(self._do_download_qq_avatars)
+        row2.addWidget(self.qq_avatar_btn)
+
         self.dir_btn = QPushButton("打开保存目录")
         self.dir_btn.setEnabled(False)
         self.dir_btn.clicked.connect(self._open_dir)
@@ -236,7 +243,7 @@ class FanGroupsPage(BasePage):
             f"定时快照：已订阅 {'、'.join(parts)}（{'；'.join(hints)}；"
             "时间到「任务 → 粉丝群快照」设置）"
             if parts else
-            "定时快照：查询成功后账号自动加入订阅名单；QQ 群请在平台下拉选「QQ群」后配置分享链接")
+            "定时快照：查询成功后账号自动加入订阅名单；QQ 群请在平台下拉选「QQ群」后粘贴群号（需先完成 QQ 群登录）或分享链接")
 
     def _open_qq_groups(self):
         if self._qq_dialog is None:
@@ -279,7 +286,8 @@ class FanGroupsPage(BasePage):
             self._groups.append(fg.FanGroup(
                 platform="qqgroup", group_id=row.no, name=row.name,
                 member_count=row.member_count, group_no=row.no,
-                avatar=row.avatar, entry_limit=row.status))
+                avatar=row.avatar, avatar_path=row.avatar_path,
+                entry_limit=row.status))
             if row.is_new:
                 self._changes[row.no] = None
             elif row.change is not None:
@@ -306,6 +314,7 @@ class FanGroupsPage(BasePage):
         self.qq_btn.setEnabled(not busy)
         self.export_btn.setEnabled((not busy) and bool(self._groups))
         self.avatar_btn.setEnabled((not busy) and bool(self._groups))
+        self.qq_avatar_btn.setEnabled((not busy) and bool(self._groups))
         if text:
             self.status_label.setText(text)
 
@@ -324,6 +333,7 @@ class FanGroupsPage(BasePage):
             self.input_edit.clear()
             self.avatar_btn.setText("刷新人数")
             self.avatar_btn.setToolTip("刷新全部已配置分享链接的 QQ 群人数")
+            self.qq_avatar_btn.setVisible(True)
             self.clear_btn.setText("重载列表")
         else:
             self.qq_btn.setVisible(False)
@@ -331,6 +341,7 @@ class FanGroupsPage(BasePage):
             self.avatar_btn.setText("刷新头像")
             self.avatar_btn.setToolTip(
                 "强制重新下载当前列表的群头像（查询时已有文件会自动复用）")
+            self.qq_avatar_btn.setVisible(False)
             self.clear_btn.setText("清空")
         self.hint_label.setText(_HINTS[self._platform])
         self._clear()
@@ -475,7 +486,8 @@ class FanGroupsPage(BasePage):
         self.table.setRowCount(len(self._groups))
         for r, g in enumerate(self._groups):
             av = QTableWidgetItem()
-            av.setToolTip(g.avatar or "无头像")
+            av.setIcon(self._avatar_icon(g))
+            av.setToolTip(g.avatar_path or g.avatar or "无头像")
             self.table.setItem(r, 0, av)
             name = QTableWidgetItem(g.name or "-")
             name.setToolTip(g.name or "")
@@ -606,6 +618,40 @@ class FanGroupsPage(BasePage):
 
         run_bg(work, done)
 
+    def _do_download_qq_avatars(self):
+        """QQ群模式：一键下载全部已订阅群的头像（已有文件复用，不覆盖）。"""
+        if self._busy:
+            return
+        if not self._qq_configured:
+            self.status_label.setText("还没有订阅的群；先在「QQ群 → 订阅列表」按群号订阅")
+            return
+        from toolbox import qq_groups_service as qgs
+
+        self._set_busy(True, "正在下载群头像...")
+
+        def progress(index, total, label):
+            post_to_main(self.status_label.setText,
+                         f"正在下载头像 {index}/{total}：{label}")
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self.status_label.setText(f"下载头像失败：{err}")
+                self.app.toast(str(err)[:80], "warning")
+                return
+            self._load_qq_groups()
+            if result["errors"]:
+                self.status_label.setText(
+                    f"已下载 {result['ok']}/{result['total']} 个头像，"
+                    f"失败 {len(result['errors'])} 个")
+            else:
+                self.status_label.setText(
+                    f"已下载 {result['ok']}/{result['total']} 个群头像")
+            self.app.toast("群头像已下载", "success")
+
+        run_bg(lambda: qgs.refresh_avatars(force=False, progress=progress),
+               done, owner=self)
+
     def _do_refresh_qq_counts(self):
         if not self._groups or self._busy:
             return
@@ -667,6 +713,24 @@ class FanGroupsPage(BasePage):
         run_bg(work, done)
 
     def _open_dir(self):
+        # QQ群是一群一目录：优先打开选中群的目录（历史快照、头像都在里面）
+        if self._platform == "qqgroup":
+            g = self._selected()
+            if g is not None and g.group_id:
+                path = fg.group_dir("qqgroup", g.group_id, create=False)
+                if path.exists():
+                    try:
+                        os.startfile(str(path))
+                        return
+                    except OSError:
+                        pass
+            path = fg.group_dir("qqgroup", "all", create=False)
+            if path.exists():
+                os.startfile(str(path))
+                self.app.toast("单个群的历史快照在 download/粉丝群/QQ群/<群号>/", "info")
+            else:
+                self.app.toast("还没有快照（先订阅并刷新一次人数）", "info")
+            return
         if not self._owner_id:
             return
         try:

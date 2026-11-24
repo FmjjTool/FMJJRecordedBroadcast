@@ -2,13 +2,14 @@
 
 数据源：
 - 免登录：QQ群资料分享页（qun.qq.com/universal-share），每个群需要各自的分享链接。
-- 登录兜底：QQ群登录态下按群号读取官方群资料（qinfo），用于批量订阅预置群。
+- 登录查询（推荐）：QQ群登录态下按群号走群搜索接口，任意群（不要求已加入）都能取到
+  群名、当前人数与人数上限；qinfo 只作备用。
 
 存储：
 - 订阅名单复用 config/fan_groups_targets.json，记录 platform=qqgroup、
   input=<分享链接>、name=<群名>，由 toolbox.fan_groups_task 唯一读写。
-- 快照复用 platforms.fan_groups 的 download/粉丝群/QQ群/<群号>/，
-  含时间戳 JSON、最新.json 与 Excel。
+- 人数历史写 SQLite：download/粉丝群/QQ群/qq_groups.db（toolbox.qq_groups_store），
+  不再生成 快照_*.json / 最新.json；群头像仍存 download/粉丝群/QQ群/<群号>/头像/。
 
 本模块只做用例编排；页面不得直接拼请求或写订阅文件。
 """
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from platforms import fan_groups as fg
 from toolbox import fan_groups_task as task
+from toolbox import qq_groups_store as store
 
 
 @dataclass
@@ -33,6 +35,7 @@ class QQGroupRow:
     fetched_at: str = ""
     status: str = ""
     avatar: str = ""
+    avatar_path: str = ""
     change: int | None = None
     is_new: bool = False
 
@@ -70,27 +73,35 @@ def _row_from_target(no: str, default_name: str, target: dict | None) -> QQGroup
     if share_url:
         source = "share" if fg.is_qq_share_text(share_url) else "login"
     name = str((target or {}).get("name") or "").strip() or default_name or no
-    latest = fg.load_latest("qqgroup", no) if share_url else None
+    latest = store.latest_group(no)
     count = None
     fetched_at = ""
     avatar = ""
+    avatar_path = ""
     if latest:
-        groups = latest.get("groups") or []
-        if groups:
-            item = groups[0] if isinstance(groups[0], dict) else {}
-            name = str(item.get("name") or name)
-            count = item.get("member_count")
-            avatar = str(item.get("avatar") or "")
+        name = str(latest.get("name") or name)
+        count = latest.get("member_count")
+        avatar = str(latest.get("avatar") or "")
+        avatar_path = str(latest.get("avatar_path") or "")
         fetched_at = str(latest.get("fetched_at") or "")
     if not share_url:
-        status = "待配置（分享链接或登录按群号）"
+        status = "未订阅（粘贴群号或分享链接）"
     elif count is None:
         status = "已按群号订阅，待刷新" if source == "login" else "已订阅，待刷新"
     else:
         status = f"已更新 {fetched_at}" if fetched_at else "已更新"
+    if not avatar_path:
+        # 库里没记路径（或刚迁移）：直接看群目录里有没有头像
+        try:
+            d = fg.avatar_dir("qqgroup", no, create=False)
+            files = sorted(p for p in d.iterdir() if p.is_file()) if d.exists() else []
+            avatar_path = str(files[0]) if files else ""
+        except OSError:
+            avatar_path = ""
     return QQGroupRow(no=no, name=name, share_url=share_url, source=source,
                       member_count=count if isinstance(count, int) else None,
-                      fetched_at=fetched_at, status=status, avatar=avatar)
+                      fetched_at=fetched_at, status=status, avatar=avatar,
+                      avatar_path=avatar_path)
 
 
 def catalog() -> list[QQGroupRow]:
@@ -114,6 +125,7 @@ def catalog() -> list[QQGroupRow]:
 def save_link(target_input: str, name: str = "") -> QQGroupRow:
     """读取分享页或登录态群资料并写入/更新订阅；立即保存一次快照。"""
     group = fg.fetch_qqgroup_any(target_input)
+    fg.download_group_avatar(group)
     group_no = group.group_id
     title = (name or "").strip() or group.name or group_no
     target = _qq_targets().get(group_no)
@@ -122,9 +134,9 @@ def save_link(target_input: str, name: str = "") -> QQGroupRow:
                            target_input, title)
     else:
         task.add_target("qqgroup", target_input, title)
-    previous = fg.load_latest("qqgroup", group_no)
+    previous = store.latest_snapshot(group_no)
     changes = fg.diff_members([group], previous)
-    fg.save_snapshot("qqgroup", group_no, [group])
+    store.record(group, source="share" if fg.is_qq_share_text(target_input) else "login")
     change = changes.get(group_no)
     return QQGroupRow(
         no=group_no,
@@ -135,6 +147,7 @@ def save_link(target_input: str, name: str = "") -> QQGroupRow:
         fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         status="已更新",
         avatar=group.avatar,
+        avatar_path=group.avatar_path,
         change=change if isinstance(change, int) else None,
         is_new=previous is None or change is None,
     )
@@ -165,9 +178,11 @@ def refresh_all(progress=None, cancel=None) -> dict:
         try:
             _, groups = fg.fetch_groups("qqgroup", str(target.get("input") or ""))
             group = groups[0]
-            previous = fg.load_latest("qqgroup", group.group_id)
+            fg.download_group_avatar(group)
+            previous = store.latest_snapshot(group.group_id)
             changes = fg.diff_members(groups, previous)
-            fg.save_snapshot("qqgroup", group.group_id, groups)
+            store.record(group, source=("share" if fg.is_qq_share_text(
+                str(target.get("input") or "")) else "login"))
             change = changes.get(group.group_id)
             results.append(QQGroupRow(
                 no=group.group_id,
@@ -179,6 +194,7 @@ def refresh_all(progress=None, cancel=None) -> dict:
                 fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 status="已更新",
                 avatar=group.avatar,
+                avatar_path=group.avatar_path,
                 change=change if isinstance(change, int) else None,
                 is_new=previous is None or change is None,
             ))
@@ -210,21 +226,23 @@ def subscribe_catalog_by_login(progress=None, cancel=None) -> dict:
             progress(index, len(catalog), name)
         try:
             group = fg.fetch_qqgroup_by_cookie(no)
+            fg.download_group_avatar(group)
             title = group.name or name
             if existing:
                 task.update_target("qqgroup", str(existing.get("input") or ""),
                                    no, title)
             else:
                 task.add_target("qqgroup", no, title)
-            previous = fg.load_latest("qqgroup", no)
+            previous = store.latest_snapshot(no)
             changes = fg.diff_members([group], previous)
-            fg.save_snapshot("qqgroup", no, [group])
+            store.record(group, source="login")
             change = changes.get(no)
             results.append(QQGroupRow(
                 no=no, name=title, share_url=no, source="login",
                 member_count=group.member_count,
                 fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 status="已更新", avatar=group.avatar,
+                avatar_path=group.avatar_path,
                 change=change if isinstance(change, int) else None,
                 is_new=previous is None or change is None,
             ))
@@ -232,6 +250,36 @@ def subscribe_catalog_by_login(progress=None, cancel=None) -> dict:
             errors.append((name, str(exc)))
     return {"total": len(catalog), "ok": len(results), "errors": errors,
             "results": results, "cancelled": cancelled}
+
+
+def refresh_avatars(force: bool = True, progress=None) -> dict:
+    """重下已订阅群的群头像到各自群目录（不动人数与快照历史）。"""
+    targets = _qq_targets()
+    total = len(targets)
+    ok = 0
+    errors: list[tuple[str, str]] = []
+    for index, (group_no, target) in enumerate(targets.items(), 1):
+        label = str(target.get("name") or "").strip() or group_no
+        if progress:
+            progress(index, total, label)
+        url = f"https://p.qlogo.cn/gh/{group_no}/{group_no}/"
+        group = fg.FanGroup(platform="qqgroup", group_id=group_no,
+                            name=label, group_no=group_no, avatar=url)
+        if fg.download_group_avatar(group, force=force):
+            ok += 1
+        else:
+            errors.append((label, "头像下载失败"))
+    return {"total": total, "ok": ok, "errors": errors}
+
+
+def history(group_no: str, limit: int = 500) -> list[dict]:
+    """某群的历史人数（最新在前），供弹窗查看。"""
+    return store.history(group_no, limit=limit)
+
+
+def db_file() -> Path:
+    """人数历史库文件路径（download/粉丝群/QQ群/qq_groups.db）。"""
+    return store.db_path(create=False)
 
 
 def export_rows(rows: list[QQGroupRow]) -> Path:
@@ -246,6 +294,7 @@ def export_rows(rows: list[QQGroupRow]) -> Path:
             member_count=row.member_count,
             group_no=row.no,
             avatar=row.avatar,
+            avatar_path=row.avatar_path,
             entry_limit=row.status,
         ))
         if row.is_new:

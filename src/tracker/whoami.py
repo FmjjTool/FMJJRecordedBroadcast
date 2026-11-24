@@ -714,11 +714,25 @@ def _acfun(cookie: str) -> dict:
     return {"ok": None, "username": ""}
 
 
+def _qqgroup(cookie: str) -> dict:
+    """QQ群：get_group_list 回 ec=0 即登录态有效（同一接口也是人数订阅的取数通道）。
+
+    昵称取 Cookie 里的 uin（QQ 号，形如 o0123456789）；接口不可达时给 None，
+    界面显示「无法验证」而不是误判成未登录。
+    """
+    try:
+        from platforms.fan_groups import qq_login_probe
+    except Exception:
+        return {"ok": None, "username": ""}
+    info = qq_login_probe(cookie) or {}
+    return {"ok": info.get("ok"), "username": str(info.get("username") or "")}
+
+
 _VERIFIERS = {
     "bilibili": _bili, "douyin": _douyin, "weibo": _weibo, "acfun": _acfun,
     "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
     "quark": _quark, "baidu": _baidu, "yun139": _yun139,
-    "115": _115,
+    "115": _115, "qqgroup": _qqgroup,
 }

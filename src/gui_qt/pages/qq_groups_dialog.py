@@ -22,8 +22,8 @@ from gui_qt.common import post_to_main, run_bg
 from toolbox import qq_groups_service as service
 
 _COLUMNS = ["群名", "群号", "人数", "变化", "状态", "来源"]
-_HINT = ("可粘贴群号或 QQ 群资料分享链接。分享链接免登录但每个群独立；"
-         "群号查询需先用「QQ群登录」取得登录态，适合批量订阅预置的 8 个群。")
+_HINT = ("粘贴群号即可订阅（需先完成 QQ 群登录，任意群都能按群号查人数）；"
+         "也可以粘贴 QQ 群资料分享链接，分享链接免登录但每个群要各自一条。")
 
 
 class _BulkImportDialog(QDialog):
@@ -116,6 +116,17 @@ class QQGroupsDialog(QDialog):
         self.refresh_btn.clicked.connect(self._refresh)
         row.addWidget(self.refresh_btn)
 
+        # 一键下载头像：摆在工具条上，不再藏进「更多」
+        self.avatar_btn = QPushButton("下载头像")
+        self.avatar_btn.setToolTip("把全部已订阅群的群头像下载到各自群目录的 头像/ 里")
+        self.avatar_btn.clicked.connect(self._download_avatars)
+        row.addWidget(self.avatar_btn)
+
+        self.history_btn = QPushButton("人数历史")
+        self.history_btn.setToolTip("查看选中群的历史人数（存在 qq_groups.db 里）")
+        self.history_btn.clicked.connect(self._show_history)
+        row.addWidget(self.history_btn)
+
         self.more_btn = QPushButton("更多")
         self.more_btn.setProperty("menuButton", True)
         more = QMenu(self)
@@ -123,6 +134,8 @@ class QQGroupsDialog(QDialog):
         export_action.triggered.connect(self._export)
         dir_action = more.addAction("打开保存目录")
         dir_action.triggered.connect(self._open_dir)
+        avatar_action = more.addAction("重下群头像（覆盖已有）")
+        avatar_action.triggered.connect(self._refresh_avatars)
         more.addSeparator()
         self.login_action = more.addAction("按群号订阅全部（需 QQ 群登录）")
         self.login_action.triggered.connect(self._subscribe_catalog_by_login)
@@ -191,8 +204,8 @@ class QQGroupsDialog(QDialog):
         subscribed = sum(1 for row in rows if row.share_url)
         if not self.status.text():
             self.status.setText(
-                f"共 {len(rows)} 个群，已配置分享链接 {subscribed} 个；"
-                "未配置链接的群不会抓人数。")
+                f"共 {len(rows)} 个群，已订阅 {subscribed} 个；未订阅的群不会抓人数。"
+                "登录后点「更多 → 按群号订阅全部」可一次订阅 8 个预置群。")
         sync = getattr(self.page, "_refresh_task_label", None)
         if callable(sync):
             sync()
@@ -232,8 +245,8 @@ class QQGroupsDialog(QDialog):
                 link_text = "登录查询"
                 link_tip = "已按群号订阅，刷新时使用 QQ 群登录态读取群资料"
             else:
-                link_text = "未配置"
-                link_tip = "粘贴该群群号（需登录）或资料分享链接"
+                link_text = "未订阅"
+                link_tip = "粘贴该群群号（需 QQ 群登录）或资料分享链接即可订阅"
             link = QTableWidgetItem(link_text)
             link.setTextAlignment(Qt.AlignCenter)
             link.setToolTip(link_tip)
@@ -248,16 +261,18 @@ class QQGroupsDialog(QDialog):
         return None
 
     def _on_selection(self):
-        self.delete_action.setEnabled(
-            (not self._busy) and self._selected() is not None)
+        row = self._selected()
+        self.delete_action.setEnabled((not self._busy) and row is not None)
+        self.history_btn.setEnabled((not self._busy) and row is not None)
 
     # ---------- 状态 ----------
     def _set_busy(self, busy: bool, text: str = "", indeterminate: bool = False,
                   total: int = 0):
         self._busy = busy
         for widget in (self.input, self.save_btn, self.bulk_btn,
-                       self.refresh_btn, self.more_btn):
+                       self.refresh_btn, self.avatar_btn, self.more_btn):
             widget.setEnabled(not busy)
+        self.history_btn.setEnabled(not busy and self._selected() is not None)
         self.progress.setVisible(busy)
         if busy:
             self.progress.setRange(0, 0 if indeterminate else max(1, total))
@@ -384,6 +399,120 @@ class QQGroupsDialog(QDialog):
             self._set_busy(False, text)
 
         run_bg(work, done, owner=self)
+
+    def _download_avatars(self):
+        """一键下载：只补缺失的头像，已有文件直接复用。"""
+        if self._busy:
+            return
+        total = sum(1 for row in self._rows if row.share_url)
+        if not total:
+            self.status.setText("还没有订阅的群，先按群号或分享链接订阅")
+            return
+        self._cancel = None
+        self._set_busy(True, "正在下载群头像...", total=total)
+
+        def progress(index, count, label):
+            post_to_main(self._set_progress, index, count, label)
+
+        def done(result, err):
+            if err:
+                self._set_busy(False, f"下载头像失败：{err}")
+                return
+            self._reload_rows()
+            if result["errors"]:
+                self._set_busy(False, f"已下载 {result['ok']}/{result['total']} 个头像，"
+                                      f"失败 {len(result['errors'])} 个")
+            else:
+                self._set_busy(False, f"已下载 {result['ok']}/{result['total']} 个群头像")
+
+        run_bg(lambda: service.refresh_avatars(force=False, progress=progress),
+               done, owner=self)
+
+    def _show_history(self):
+        row = self._selected()
+        if row is None:
+            self.status.setText("请先选中一个群")
+            return
+        items = service.history(row.no)
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{row.name or row.no} · 人数历史")
+        dialog.setModal(False)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+        dialog.resize(720, 520)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+        head = QLabel(
+            f"群号 {row.no} · 共 {len(items)} 条记录（库文件 {service.db_file().name}，最新在前）")
+        head.setProperty("role", "caption")
+        head.setWordWrap(True)
+        layout.addWidget(head)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["采集时间", "人数", "上限", "变化", "来源"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setAlternatingRowColors(True)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for index, width in ((1, 80), (2, 80), (3, 80), (4, 90)):
+            header.setSectionResizeMode(index, QHeaderView.Interactive)
+            table.setColumnWidth(index, width)
+        table.setRowCount(len(items))
+        source_text = {"login": "按群号", "share": "分享链接",
+                       "task": "定时任务", "import": "导入历史"}
+        for r, item in enumerate(items):
+            count = item.get("member_count")
+            prev = items[r + 1].get("member_count") if r + 1 < len(items) else None
+            if isinstance(count, int) and isinstance(prev, int):
+                change = count - prev
+                change_text = f"+{change}" if change > 0 else str(change)
+            else:
+                change_text = "-"
+            table.setItem(r, 0, QTableWidgetItem(str(item.get("fetched_at") or "")))
+            for col, value in ((1, count), (2, item.get("member_limit")), (3, change_text)):
+                cell = QTableWidgetItem("-" if value is None else str(value))
+                cell.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, col, cell)
+            src = QTableWidgetItem(source_text.get(str(item.get("source") or ""),
+                                                  item.get("source") or "-"))
+            src.setTextAlignment(Qt.AlignCenter)
+            table.setItem(r, 4, src)
+        layout.addWidget(table, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.button(QDialogButtonBox.Close).setText("关闭")
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.show()
+        dialog.raise_()
+
+    def _refresh_avatars(self):
+        if self._busy:
+            return
+        total = sum(1 for row in self._rows if row.share_url)
+        if not total:
+            self.status.setText("还没有订阅的群，先按群号或分享链接订阅")
+            return
+        self._cancel = None
+        self._set_busy(True, "正在重新下载群头像...", total=total)
+
+        def progress(index, count, label):
+            post_to_main(self._set_progress, index, count, label)
+
+        def done(result, err):
+            if err:
+                self._set_busy(False, f"下载头像失败：{err}")
+                return
+            self._reload_rows()
+            if result["errors"]:
+                self._set_busy(False, f"已重下 {result['ok']}/{result['total']} 个头像，"
+                                      f"失败 {len(result['errors'])} 个")
+            else:
+                self._set_busy(False, f"已重下 {result['ok']}/{result['total']} 个群头像")
+
+        run_bg(lambda: service.refresh_avatars(progress=progress), done, owner=self)
 
     def _refresh(self):
         if self._busy:
