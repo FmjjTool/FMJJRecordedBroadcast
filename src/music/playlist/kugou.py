@@ -79,16 +79,29 @@ class KugouPlaylistWriter(BasePlaylistWriter):
     note = "云歌单需 App 扫码 token；网页登录态返回 20017，App token 已实测 16/16 加歌"
     batch_size = 10
 
-    def _identity(self, cookie: dict[str, str]) -> tuple[str, str, str, str]:
+    def _identity(self, cookie: dict[str, str], *, refresh: bool = False) -> tuple[str, str, str, str]:
         userid = _kugoo_userid(cookie)
-        token = _cookie_value(cookie, "token", "t")
         mid = _cookie_value(cookie, "kg_mid", "mid", "KUGOU_API_MID")
         dfid = _cookie_value(cookie, "kg_dfid", "dfid")
+        token = ""
+        auth_error = None
+        if userid:
+            # 云歌单只认 App token：用网页登录票据换取并缓存
+            try:
+                from ..kugou_app_auth import get_app_token
+                token = get_app_token({**cookie, "userid": userid}, force=refresh)
+            except AuthRequiredError as exc:
+                auth_error = exc
+        if not token:
+            token = _cookie_value(cookie, "token", "t")
         if not userid or not token:
-            raise AuthRequiredError(
+            raise auth_error or AuthRequiredError(
                 "登录状态不完整，请先在账号管理中重新登录",
                 platform=self.platform, phase="auth",
             )
+        if auth_error is not None:
+            # 网页 token 无法写云歌单，直接给出换取失败的真实原因
+            raise auth_error
         return userid, token, mid, dfid
 
     def _signed_request(self, url: str, data: dict, extra_params: dict,
@@ -125,7 +138,11 @@ class KugouPlaylistWriter(BasePlaylistWriter):
 
     def create_playlist(self, name: str, cookie: dict[str, str], *,
                         transport: Optional[httpx.BaseTransport] = None) -> str:
-        userid, token, mid, dfid = self._identity(cookie)
+        return self._create(name, cookie, transport, refresh=False)
+
+    def _create(self, name: str, cookie: dict[str, str], transport, *,
+                refresh: bool) -> str:
+        userid, token, mid, dfid = self._identity(cookie, refresh=refresh)
         clienttime = int(time.time())
         data = {
             "userid": userid,
@@ -146,6 +163,8 @@ class KugouPlaylistWriter(BasePlaylistWriter):
         }
         body = self._signed_request(
             CREATE_URL, data, params, cookie, userid, token, mid, dfid, transport)
+        if _needs_app_token(body) and not refresh:
+            return self._create(name, cookie, transport, refresh=True)
         if _is_auth_error(body):
             raise AuthRequiredError(
                 "登录状态不可用，请先在账号管理中重新登录",
@@ -168,8 +187,12 @@ class KugouPlaylistWriter(BasePlaylistWriter):
                   cookie: dict[str, str], *,
                   transport: Optional[httpx.BaseTransport] = None,
                   progress=None) -> AddSongsResult:
+        return self._add(playlist_id, songs, cookie, transport, progress, refresh=False)
+
+    def _add(self, playlist_id: str, songs: list[SongInfo],
+             cookie: dict[str, str], transport, progress, *, refresh: bool) -> AddSongsResult:
         result = AddSongsResult()
-        userid, token, mid, dfid = self._identity(cookie)
+        userid, token, mid, dfid = self._identity(cookie, refresh=refresh)
         resources = []
         for song in songs:
             if not song.song_id:
@@ -208,6 +231,8 @@ class KugouPlaylistWriter(BasePlaylistWriter):
         }
         body = self._signed_request(
             ADD_URL, data, params, cookie, userid, token, mid, dfid, transport)
+        if _needs_app_token(body) and not refresh:
+            return self._add(playlist_id, songs, cookie, transport, progress, refresh=True)
         if _is_auth_error(body):
             raise AuthRequiredError(
                 "登录状态不可用，请先在账号管理中重新登录",
@@ -235,6 +260,14 @@ def _is_ok(body: dict) -> bool:
             except (TypeError, ValueError):
                 return False
     return False
+
+
+def _needs_app_token(body: dict) -> bool:
+    """20017/20006 等说明网页 token 不能写云歌单，需要换 App token。"""
+    for key in ("error_code", "errcode", "code"):
+        if str(body.get(key)) in ("20017", "20006", "20001"):
+            return True
+    return _is_auth_error(body)
 
 
 def _is_auth_error(body: dict) -> bool:

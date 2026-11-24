@@ -48,10 +48,10 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
     platform = "kuwo"
     platform_name = "酷我音乐"
     verified = False
-    available = False
+    available = True          # 可勾选；写入会明确失败并说明原因
     experimental = True
-    note = ("网页建单接口已下线：addPlaylist/createPlaylist 返回 504，"
-            "用户歌单列表接口 404，前端无写歌单入口；需 App 端协议与登录令牌")
+    note = ("网页建单接口已下线（addPlaylist/createPlaylist 返回 504、"
+            "用户歌单列表 404），勾选后写入会失败；需酷我 App 协议才能真正建单")
     batch_size = 50
 
     def _headers(self, cookie: dict[str, str]) -> dict[str, str]:
@@ -92,6 +92,7 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
                 json={"name": name, "isOpen": 0},
                 headers=self._headers(cookie),
             )
+        _check_status(resp, self.platform, "create")
         body = response_json(resp, platform=self.platform, phase="create")
         if _is_ok(body):
             playlist_id = _find_playlist_id(body)
@@ -125,6 +126,7 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
                 json={"playlistId": playlist_id, "musicIds": ",".join(music_ids)},
                 headers=self._headers(cookie),
             )
+        _check_status(resp, self.platform, "add")
         body = response_json(resp, platform=self.platform, phase="add")
         if _is_ok(body):
             result.added.extend(music_ids)
@@ -132,6 +134,20 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
                 progress(len(music_ids), len(music_ids))
             return result
         raise _map_error(body, self.platform, "add", "添加歌曲失败")
+
+
+def _check_status(resp, platform: str, phase: str) -> None:
+    """把网页端的 5xx/鉴权状态翻成能看懂的提示，避免暴露代理原文。"""
+    if resp.status_code >= 500:
+        raise PlatformRejectedError(
+            f"酷我网页建单接口已下线（HTTP {resp.status_code}），只能在酷我 App 内建单",
+            platform=platform, phase=phase,
+        )
+    if resp.status_code in (401, 403):
+        raise AuthRequiredError(
+            "登录状态不可用，请先在账号管理中重新登录",
+            platform=platform, phase=phase,
+        )
 
 
 def _is_ok(body: dict) -> bool:

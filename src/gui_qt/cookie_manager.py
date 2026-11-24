@@ -489,6 +489,8 @@ class CookieManagerDialog(QDialog):
                 row.addWidget(self._btn("验证", lambda p=plat: self._verify(p)))
             if plat == "kugou_lite":
                 row.addWidget(self._btn("领VIP", lambda: self._kugou_lite_claim_vip(), True))
+            if plat == "kugou":
+                row.addWidget(self._btn("App扫码", self._kugou_app_qr, True))
             if can_qr:
                 row.addWidget(self._btn("扫码登录", lambda p=plat: self._qr_login(p), True))
             if can_browser:
@@ -1586,6 +1588,42 @@ class CookieManagerDialog(QDialog):
                         post_to_main(status.setText, f"{r['message']}")
             except Exception as e:
                 post_to_main(status.setText, f"{e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _kugou_app_qr(self):
+        """酷狗主版 App 扫码：换取云歌单写入所需的 App 令牌。
+
+        只把令牌存到独立的 App 会话文件，不改动统一登录里已保存的网页登录态。
+        """
+        dlg, qr_label, status = self._qr_dialog("酷狗 App 扫码登录")
+
+        def run():
+            try:
+                from music import kugou_app_auth
+                key, png = kugou_app_auth.qr_create()
+                self._show_qr_bytes(qr_label, png)
+                post_to_main(status.setText, "请用酷狗 App 扫码（用于云歌单写入）")
+                while dlg.isVisible():
+                    time.sleep(2)
+                    result = kugou_app_auth.qr_poll(key)
+                    state = result.get("status")
+                    if state == 4 and result.get("logged_in"):
+                        post_to_main(self._on_qr_success, dlg,
+                                     "酷狗 App 登录成功，云歌单写入已就绪")
+                        return
+                    if state == 4:
+                        post_to_main(status.setText, "已确认但未返回令牌，请重试")
+                        return
+                    if state == 0:
+                        post_to_main(status.setText, "二维码已过期，请重新扫码")
+                        return
+                    if state == 2:
+                        post_to_main(status.setText, "扫码成功，请在手机上确认")
+                    else:
+                        post_to_main(status.setText, result.get("message") or "等待扫码")
+            except Exception as exc:  # noqa: BLE001 - 登录失败原因直接展示
+                post_to_main(status.setText, f"{exc}")
 
         threading.Thread(target=run, daemon=True).start()
 
