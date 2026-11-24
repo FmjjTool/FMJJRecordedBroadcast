@@ -57,11 +57,13 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
             "Content-Type": "application/json",
         }
         csrf = cookie.get("kw_token") or cookie.get("csrf") or ""
-        if csrf:
-            headers["csrf"] = csrf
         hm_token = _hm_token(cookie)
         if hm_token:
             headers["Secret"] = kuwo_secret(hm_token)
+            if not csrf:
+                csrf = headers["Secret"]
+        if csrf:
+            headers["csrf"] = csrf
         return headers
 
     def _params(self, extra: dict) -> dict:
@@ -74,14 +76,19 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
 
     def create_playlist(self, name: str, cookie: dict[str, str], *,
                         transport: Optional[httpx.BaseTransport] = None) -> str:
-        if not (cookie.get("kw_token") or cookie.get("csrf")):
+        if not (cookie.get("kw_token") or cookie.get("csrf")
+                or _hm_token(cookie) or cookie.get("userid")):
             raise AuthRequiredError(
                 "登录状态不可用，请先在账号管理中重新登录",
                 platform=self.platform, phase="create",
             )
         params = self._params({"name": name, "isOpen": 0})
         with self._client(cookie, transport) as client:
-            resp = client.post(CREATE_URL, params=params, headers=self._headers(cookie))
+            resp = client.post(
+                CREATE_URL, params=params,
+                json={"name": name, "isOpen": 0},
+                headers=self._headers(cookie),
+            )
         body = response_json(resp, platform=self.platform, phase="create")
         if _is_ok(body):
             playlist_id = _find_playlist_id(body)
@@ -110,7 +117,11 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
             "musicIds": ",".join(music_ids),
         })
         with self._client(cookie, transport) as client:
-            resp = client.post(ADD_URL, params=params, headers=self._headers(cookie))
+            resp = client.post(
+                ADD_URL, params=params,
+                json={"playlistId": playlist_id, "musicIds": ",".join(music_ids)},
+                headers=self._headers(cookie),
+            )
         body = response_json(resp, platform=self.platform, phase="add")
         if _is_ok(body):
             result.added.extend(music_ids)

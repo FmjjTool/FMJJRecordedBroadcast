@@ -116,6 +116,7 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             "kg-thash": "5d816a0",
             "kg-rec": "1",
             "kg-rf": "B9EDA08A64250DEFFBCADDEE00F8F25F",
+            "x-router": "cloudlist.service.kugou.com",
             "Content-Type": "application/json",
         }
         with self._client(cookie, transport) as client:
@@ -127,7 +128,7 @@ class KugouPlaylistWriter(BasePlaylistWriter):
         userid, token, mid, dfid = self._identity(cookie)
         clienttime = int(time.time())
         data = {
-            "userid": int(userid) if userid.isdigit() else userid,
+            "userid": userid,
             "token": token,
             "total_ver": 0,
             "name": name,
@@ -190,9 +191,9 @@ class KugouPlaylistWriter(BasePlaylistWriter):
 
         clienttime = int(time.time())
         data = {
-            "userid": int(userid) if userid.isdigit() else userid,
+            "userid": userid,
             "token": token,
-            "listid": int(playlist_id) if str(playlist_id).isdigit() else playlist_id,
+            "listid": str(playlist_id),
             "list_ver": 0,
             "type": 0,
             "slow_upload": 1,

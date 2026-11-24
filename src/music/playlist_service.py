@@ -51,6 +51,14 @@ PLATFORM_NAMES = {
     "5sing": "5sing",
 }
 
+_LINK_KEYS = {
+    "qq": ("qq", "QQ音乐", "QQ音乐链接"),
+    "netease": ("netease", "网易云音乐", "网易云音乐链接"),
+    "kugou": ("kugou", "酷狗音乐", "酷狗音乐链接"),
+    "kuwo": ("kuwo", "酷我音乐", "酷我音乐链接"),
+    "5sing": ("5sing", "5sing链接"),
+}
+
 _VERSION_RULES = (
     ("和声伴奏", ("和声伴奏",)),
     ("伴奏", ("伴奏", "instrumental", "off vocal", "offvocal")),
@@ -71,15 +79,20 @@ class SourceSong:
     song_id: str = ""
     platform: str = ""
     raw: Optional[SongInfo] = None
+    links: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "title": self.title,
             "artist": self.artist,
             "album": self.album,
             "song_id": self.song_id,
             "platform": self.platform,
         }
+        links = {key: value for key, value in self.links.items() if value}
+        if links:
+            data["links"] = links
+        return data
 
 
 @dataclass
@@ -253,8 +266,8 @@ def read_source_file(path: str | Path) -> list[SourceSong]:
         raise ValueError(f"歌曲清单不存在：{file_path}")
     suffix = file_path.suffix.lower()
     if suffix == ".json":
-        rows = _rows_from_json(file_path)
-    elif suffix in (".xlsx", ".xlsm"):
+        return _sources_from_json(file_path)
+    if suffix in (".xlsx", ".xlsm"):
         rows = _rows_from_xlsx(file_path)
     elif suffix == ".csv":
         with file_path.open("r", encoding="utf-8-sig", newline="") as stream:
@@ -411,7 +424,8 @@ def match_score(source: SourceSong, candidate: SongInfo) -> float:
         score = title_score
 
     if _version_tokens(source.title) != _version_tokens(candidate.song_name or candidate.title):
-        score -= 0.15
+        # 原曲与伴奏/DJ/Live 等版本不能互相替代，压到默认阈值以下
+        score = min(score - 0.2, 0.68)
     return max(0.0, min(1.0, score))
 
 
@@ -420,10 +434,41 @@ def _match_one(platform: str, source: SourceSong, scraper, *,
     if source.platform == platform and source.song_id and source.raw:
         return MatchItem(source=source, status="matched", target=source.raw, score=1.0,
                          note="同平台直接使用原歌曲 ID")
+    link = (source.links or {}).get(platform, "")
+    if link:
+        extract = getattr(scraper, "extract_song_id", None)
+        try:
+            linked_id = extract(link) if extract else ""
+        except NotImplementedError:
+            linked_id = ""
+        if linked_id:
+            return MatchItem(
+                source=source,
+                status="matched",
+                target=SongInfo(
+                    song_id=linked_id,
+                    song_name=source.title,
+                    title=source.title,
+                    singer=source.artist,
+                    album_name=source.album,
+                    platform=platform,
+                    platform_name=getattr(scraper, "platform_name", "") or PLATFORM_NAMES.get(platform, platform),
+                    url=link,
+                ),
+                score=1.0,
+                note="使用完整歌曲表中的平台链接",
+            )
     query = f"{source.title} {source.artist}".strip()
-    candidates = scraper.search_song(query, limit=search_limit)
-    if not candidates and source.artist:
-        candidates = scraper.search_song(source.title, limit=search_limit)
+    candidates = scraper.search_song(query, limit=search_limit) or []
+    # 歌手名可能让搜索漏掉原曲（平台只收录翻唱/别名），高分不足时再用纯歌名补搜
+    if source.artist:
+        best_so_far = max((match_score(source, song) for song in candidates), default=0.0)
+        if best_so_far < min_score:
+            seen_ids = {song.song_id for song in candidates}
+            for song in scraper.search_song(source.title, limit=search_limit) or []:
+                if song.song_id not in seen_ids:
+                    seen_ids.add(song.song_id)
+                    candidates.append(song)
     scored = sorted(
         ((song, match_score(source, song)) for song in candidates),
         key=lambda pair: pair[1],
@@ -492,23 +537,47 @@ def _version_tokens(text: str) -> set[str]:
     return tokens
 
 
-def _rows_from_json(path: Path) -> list[list[str]]:
+def _sources_from_json(path: Path) -> list[SourceSong]:
     with path.open("r", encoding="utf-8-sig") as stream:
         data = json.load(stream)
     if isinstance(data, dict):
         data = data.get("songs") or data.get("items") or data.get("list") or []
     if not isinstance(data, list):
         raise ValueError("JSON 歌曲清单应为数组，或包含 songs/items 数组")
-    rows: list[list[str]] = []
+    sources: list[SourceSong] = []
+    seen: dict[tuple[str, str], SourceSong] = {}
     for item in data:
+        links: dict[str, str] = {}
         if isinstance(item, str):
-            rows.append([item])
+            title = item.strip()
+            artist = album = ""
         elif isinstance(item, dict):
-            title = _first_value(item, "title", "song_name", "name", "歌名", "歌曲")
-            artist = _first_value(item, "artist", "singer", "歌手")
-            album = _first_value(item, "album", "album_name", "专辑")
-            rows.append([title, artist, album])
-    return rows
+            title = _first_value(item, "title", "song_name", "name", "歌名", "歌曲", "歌曲名称")
+            artist = _first_value(item, "artist", "singer", "歌手", "演唱者")
+            album = _first_value(item, "album", "album_name", "专辑", "所属专辑")
+            raw_links = item.get("links")
+            if isinstance(raw_links, dict):
+                links.update({str(key).lower(): str(value).strip()
+                              for key, value in raw_links.items() if value})
+            for platform, keys in _LINK_KEYS.items():
+                for key in keys:
+                    value = item.get(key)
+                    if value not in (None, ""):
+                        links[platform] = str(value).strip()
+                        break
+        else:
+            continue
+        if not title:
+            continue
+        links = {key: value for key, value in links.items() if value}
+        dedup_key = (title.lower(), artist.lower())
+        if dedup_key in seen:
+            seen[dedup_key].links.update(links)
+            continue
+        source = SourceSong(title=title, artist=artist, album=album, links=links)
+        seen[dedup_key] = source
+        sources.append(source)
+    return sources
 
 
 def _rows_from_xlsx(path: Path) -> list[list[str]]:

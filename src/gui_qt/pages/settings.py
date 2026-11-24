@@ -33,6 +33,7 @@ from version import APP_VERSION
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.backup_panel import BackupPanel
 from gui_qt.pages.base import BasePage
+from gui_qt.toolbox_common import ToolSectionCard
 
 
 # FFmpeg 一键下载源：gyan.dev 是 ffmpeg.org 下载页指向的 Windows 官方构建站，
@@ -65,7 +66,7 @@ class GlobalSettingsPage(BasePage):
         super().__init__(app)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setContentsMargins(16, 16, 16, 16)
 
         # 可滚动内容
         scroll = QScrollArea()
@@ -73,12 +74,15 @@ class GlobalSettingsPage(BasePage):
         scroll.setWidgetResizable(True)
         body = QWidget()
         v = QVBoxLayout(body)
-        v.setContentsMargins(0, 8, 8, 8)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(12)
         scroll.setWidget(body)
         outer.addWidget(scroll)
 
+        self._section_cards = []  # [(card, icon_name)] 供主题切换时重绘图标
+
         # ---- 默认工作目录 ----
-        v.addWidget(self._card_title("默认工作文件夹（用于录播工具箱）"))
+        card = self._section_card("默认工作文件夹（用于录播工具箱）", "folder")
         wd_row = QHBoxLayout()
         self.workdir_entry = QLineEdit()
         self.workdir_entry.setPlaceholderText("工作目录路径")
@@ -88,15 +92,14 @@ class GlobalSettingsPage(BasePage):
         self.workdir_lock_cb = QCheckBox("锁定工作文件夹")
         self.workdir_lock_cb.setToolTip("锁定后拖入文件夹不会改变此目录，直到解锁")
         wd_row.addWidget(self.workdir_lock_cb)
-        v.addLayout(wd_row)
+        card.content_layout.addLayout(wd_row)
         self.workdir_status = QLabel("")
         self.workdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(self.workdir_status)
-
-        v.addSpacing(12)
+        card.content_layout.addWidget(self.workdir_status)
+        v.addWidget(card)
 
         # ---- 统一导出目录 ----
-        v.addWidget(self._card_title("统一导出目录（音乐/已获取/信息获取数据导出）"))
+        card = self._section_card("统一导出目录（音乐/已获取/信息获取数据导出）", "upload")
         ex_row = QHBoxLayout()
         self.exportdir_entry = QLineEdit()
         self.exportdir_entry.setPlaceholderText("导出目录路径（默认 download/）")
@@ -106,18 +109,17 @@ class GlobalSettingsPage(BasePage):
         self.exportdir_lock_cb = QCheckBox("锁定导出文件夹")
         self.exportdir_lock_cb.setToolTip("锁定后拖入文件夹不会改变此目录，直到解锁")
         ex_row.addWidget(self.exportdir_lock_cb)
-        v.addLayout(ex_row)
+        card.content_layout.addLayout(ex_row)
         self.exportdir_status = QLabel("")
         self.exportdir_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(self.exportdir_status)
+        card.content_layout.addWidget(self.exportdir_status)
+        v.addWidget(card)
         # 文件夹锁定：改动即保存（拖入文件夹不改变，直到解锁）
         self.workdir_lock_cb.toggled.connect(self._on_workdir_lock_changed)
         self.exportdir_lock_cb.toggled.connect(self._on_exportdir_lock_changed)
 
-        v.addSpacing(12)
-
         # ---- 主题自动切换（跟随系统 / 定时黑白） ----
-        v.addWidget(self._card_title("主题自动切换（跟随系统 / 定时黑白）"))
+        card = self._section_card("主题自动切换（跟随系统 / 定时黑白）", "palette")
         fs_row = QHBoxLayout()
         self.follow_sys_cb = QCheckBox("跟随系统深浅色")
         self.follow_sys_cb.setToolTip(
@@ -125,7 +127,7 @@ class GlobalSettingsPage(BasePage):
             "与定时切换互斥（同时只能开一个）；手动点击侧栏主题方块会关闭本功能")
         fs_row.addWidget(self.follow_sys_cb)
         fs_row.addStretch(1)
-        v.addLayout(fs_row)
+        card.content_layout.addLayout(fs_row)
         ts_row = QHBoxLayout()
         self.sched_enable = QCheckBox("启用定时切换")
         self.sched_enable.setToolTip(
@@ -144,53 +146,50 @@ class GlobalSettingsPage(BasePage):
         self.sched_dark.setFixedWidth(84)
         ts_row.addWidget(self.sched_dark)
         ts_row.addWidget(self._btn("保存", self._save_theme_schedule_clicked))
-        v.addLayout(ts_row)
+        card.content_layout.addLayout(ts_row)
         self.sched_status = QLabel("")
         self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(self.sched_status)
+        card.content_layout.addWidget(self.sched_status)
         theme_note = QLabel("配色由全局色板统一维护，页面不提供自定义配色。")
         theme_note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(theme_note)
+        card.content_layout.addWidget(theme_note)
+        v.addWidget(card)
         # 改动即时生效：开关/时间一变就写入配置并立刻对齐主题（无需点保存）
         self.follow_sys_cb.toggled.connect(self._on_follow_system_changed)
         self.sched_enable.toggled.connect(self._on_schedule_changed)
         self.sched_light.timeChanged.connect(self._on_schedule_changed)
         self.sched_dark.timeChanged.connect(self._on_schedule_changed)
 
-        v.addSpacing(12)
-
         # ---- 后台模式 ----
-        v.addWidget(self._card_title("后台模式"))
+        card = self._section_card("后台模式", "pulse")
         self.close_to_tray_cb = QCheckBox("启用后台模式（关闭主窗口时隐藏到系统托盘）")
         self.close_to_tray_cb.setToolTip(
             "勾选后点关闭只会隐藏窗口，任务和录制继续运行，并保留托盘图标；\n"
             "双击托盘图标恢复窗口，右键托盘图标可退出软件。\n"
             "取消勾选即取消后台：不再保留托盘图标，点关闭会直接退出软件。")
         self.close_to_tray_cb.toggled.connect(self._on_close_to_tray_changed)
-        v.addWidget(self.close_to_tray_cb)
-
-        v.addSpacing(12)
+        card.content_layout.addWidget(self.close_to_tray_cb)
+        v.addWidget(card)
 
         # ---- 配置信息与缓存清理 ----
-        v.addWidget(self._card_title("配置信息与缓存清理"))
+        card = self._section_card("配置信息与缓存清理", "broom")
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.info_label.setWordWrap(True)
-        v.addWidget(self.info_label)
+        card.content_layout.addWidget(self.info_label)
         info_row = QHBoxLayout()
         info_row.addWidget(self._btn("刷新信息", self._refresh_info))
         info_row.addWidget(self._btn("清理 Python 缓存 (__pycache__)", self._clean_pycache))
         info_row.addWidget(self._btn("清理媒体筛选缓存", self._clean_media_sorter_cache))
         info_row.addStretch(1)
-        v.addLayout(info_row)
+        card.content_layout.addLayout(info_row)
         self.clean_result_label = QLabel("")
         self.clean_result_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(self.clean_result_label)
-
-        v.addSpacing(12)
+        card.content_layout.addWidget(self.clean_result_label)
+        v.addWidget(card)
 
         # ---- 运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）----
-        v.addWidget(self._card_title("运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）"))
+        card = self._section_card("运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）", "chip")
 
         # FFmpeg 位置（可选；系统 PATH 优先，未找到时才用这里指定的位置）
         ff_row = QHBoxLayout()
@@ -200,42 +199,34 @@ class GlobalSettingsPage(BasePage):
         ff_row.addWidget(self.ffmpeg_entry, 1)
         ff_row.addWidget(self._btn("浏览...", self._browse_ffmpeg))
         ff_row.addWidget(self._btn("保存", self._save_ffmpeg))
-        v.addLayout(ff_row)
+        card.content_layout.addLayout(ff_row)
         self.ffmpeg_status = QLabel("")
         self.ffmpeg_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.ffmpeg_status.setWordWrap(True)
-        v.addWidget(self.ffmpeg_status)
+        card.content_layout.addWidget(self.ffmpeg_status)
 
         # 检测依赖与其他强依赖：缺失项标红 + 快捷下载按钮
-        self.dependency_frame = QFrame()
-        self.dependency_frame.setStyleSheet(
-            "QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 6px; }")
-        dep_v = QVBoxLayout(self.dependency_frame)
-        dep_v.setContentsMargins(10, 8, 10, 8)
-        dep_v.setSpacing(4)
         dep_head = QHBoxLayout()
         dep_title = QLabel("依赖与可选组件")
-        dep_title.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent; border: none;")
+        dep_title.setStyleSheet("font-weight: bold; font-size: 13px;")
         dep_head.addWidget(dep_title)
         dep_head.addStretch(1)
         self.recheck_btn = QPushButton("重新检测")
         self.recheck_btn.setCursor(Qt.PointingHandCursor)
         self.recheck_btn.clicked.connect(self._refresh_dependencies)
         dep_head.addWidget(self.recheck_btn)
-        dep_v.addLayout(dep_head)
+        card.content_layout.addLayout(dep_head)
         # 占位：_refresh_dependencies 重建 self.dependency_layout
         self.dependency_layout = QVBoxLayout()
-        self.dependency_layout.setContentsMargins(0, 4, 0, 0)
+        self.dependency_layout.setContentsMargins(0, 0, 0, 0)
         self.dependency_layout.setSpacing(3)
-        dep_v.addLayout(self.dependency_layout)
+        card.content_layout.addLayout(self.dependency_layout)
         # 组件下载进度/结果（采集引擎、转写程序与模型、图识别模型）
         self.dep_status = QLabel("")
-        self.dep_status.setStyleSheet(
-            "color: palette(placeholder-text); font-size: 11px;"
-            " background: transparent; border: none;")
+        self.dep_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.dep_status.setWordWrap(True)
-        dep_v.addWidget(self.dep_status)
-        v.addWidget(self.dependency_frame)
+        card.content_layout.addWidget(self.dep_status)
+        v.addWidget(card)
         # 骨架屏加载：检测在后台线程跑，页面打开即刻渲染灰色占位条（__init__ 末尾 on_show 已触发）
         self._dep_cache = None      # [(key, name, ok, version)] 上次检测结果
         self._dep_loading = False
@@ -248,10 +239,8 @@ class GlobalSettingsPage(BasePage):
         self._ffmpeg_installing = False  # 一键下载进行中（防重复点击）
         self._dep_downloading = False    # 组件下载进行中（防重复点击）
 
-        v.addSpacing(12)
-
         # ---- AI Skill 下载（内置 Skill 导出到本地，供 AI 助手使用） ----
-        v.addWidget(self._card_title("AI Skill（导出到本地）"))
+        card = self._section_card("AI Skill（导出到本地）", "robot")
         skill_row = QHBoxLayout()
         self._skill_list = list_skills()
         skill_count = len(self._skill_list)
@@ -263,25 +252,23 @@ class GlobalSettingsPage(BasePage):
         skill_info.setWordWrap(True)
         skill_row.addWidget(skill_info, 1)
         skill_row.addWidget(self._btn("下载 Skill…", self._open_skill_download))
-        v.addLayout(skill_row)
-
-        v.addSpacing(12)
+        card.content_layout.addLayout(skill_row)
+        v.addWidget(card)
 
         # ---- 备份与恢复 ----
-        v.addWidget(self._card_title("备份与恢复"))
+        card = self._section_card("备份与恢复", "package")
         backup_note = QLabel(
             "配置与资产备份都在本卡片完成；网盘文件下载与网盘备份在「网盘」页，"
             "计划任务仍在「任务」页管理。")
         backup_note.setProperty("role", "caption")
         backup_note.setWordWrap(True)
-        v.addWidget(backup_note)
+        card.content_layout.addWidget(backup_note)
         self.backup_panel = BackupPanel(app, self)
-        v.addWidget(self.backup_panel)
-
-        v.addSpacing(12)
+        card.content_layout.addWidget(self.backup_panel)
+        v.addWidget(card)
 
         # ---- 关于 ----
-        v.addWidget(self._card_title("关于"))
+        card = self._section_card("关于", "question")
         maker_row = QHBoxLayout()
         maker_lbl = QLabel("制作：歆慕")
         maker_lbl.setStyleSheet("color: palette(link); font-weight: bold;")
@@ -298,7 +285,7 @@ class GlobalSettingsPage(BasePage):
         maker_row.addWidget(self._btn(
             "微博主页",
             lambda: self._open_site("微博主页", "https://weibo.com/u/7262942477")))
-        v.addLayout(maker_row)
+        card.content_layout.addLayout(maker_row)
 
         # 四个站点直接做成按钮（3 个官方站点 + 数据库 Wiki）
         sites = [
@@ -316,7 +303,7 @@ class GlobalSettingsPage(BasePage):
                 b.setToolTip(url)
                 b.setCursor(Qt.PointingHandCursor)
                 site_row.addWidget(b, 1)
-            v.addLayout(site_row)
+            card.content_layout.addLayout(site_row)
 
         repo_row = QHBoxLayout()
         repo_row.addWidget(self._btn(
@@ -329,7 +316,7 @@ class GlobalSettingsPage(BasePage):
                 "GPL-3.0 许可证",
                 "https://github.com/FmjjTool/FMJJRecordedBroadcast/blob/main/LICENSE")))
         repo_row.addStretch(1)
-        v.addLayout(repo_row)
+        card.content_layout.addLayout(repo_row)
 
         # ---- 软件更新（GitHub Releases） ----
         up_row = QHBoxLayout()
@@ -346,11 +333,11 @@ class GlobalSettingsPage(BasePage):
             "不会自动下载或安装。是否真正更新始终由你在本页点击决定。")
         self.update_cb.toggled.connect(self._on_auto_update_changed)
         up_row.addWidget(self.update_cb)
-        v.addLayout(up_row)
+        card.content_layout.addLayout(up_row)
         self.update_status = QLabel("")
         self.update_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.update_status.setWordWrap(True)
-        v.addWidget(self.update_status)
+        card.content_layout.addWidget(self.update_status)
 
         about = QLabel(
             "封茗囧菌数据汇总库 · 统一维护工具箱 · 制作歆慕\n"
@@ -360,17 +347,22 @@ class GlobalSettingsPage(BasePage):
         )
         about.setWordWrap(True)
         about.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
-        v.addWidget(about)
+        card.content_layout.addWidget(about)
+        v.addWidget(card)
 
         v.addStretch(1)
 
         self.on_show()
 
     # ---- 小工具 ----
-    def _card_title(self, text):
-        lbl = QLabel(text)
-        lbl.setStyleSheet("font-weight: bold; margin-top: 4px;")
-        return lbl
+    def _section_card(self, title, icon):
+        card = ToolSectionCard(title, icon=icon)
+        self._section_cards.append((card, icon))
+        return card
+
+    def on_theme_changed(self):
+        for card, icon in self._section_cards:
+            card.set_icon(icon)
 
     def _btn(self, text, slot):
         b = QPushButton(text)
