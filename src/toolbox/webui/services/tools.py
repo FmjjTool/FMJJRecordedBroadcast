@@ -86,3 +86,39 @@ class ToolService:
 
     def launcher_overview(self) -> dict:
         return webui_tools.launcher_overview()
+    def migrate_overview(self) -> dict:
+        return webui_tools.migrate_overview()
+
+    def migrate_scan(self) -> dict:
+        return webui_tools.migrate_scan()
+
+    def start_migrate(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        mode = str(payload.get("mode") or "")
+        if mode not in ("copy", "move"):
+            raise ValueError("迁移模式只支持复制或剪切")
+        folders = payload.get("folders") or []
+        if not isinstance(folders, list) or not folders:
+            raise ValueError("请选择要迁移的日期文件夹")
+        confirmed = bool(payload.get("confirmed"))
+        if not confirmed:
+            raise ValueError("缺少迁移确认")
+        job = self._jobs.submit(
+            "file_migrate",
+            lambda task: self._migrate_job(task, mode, folders))
+        return {"job": job.id}
+
+    def _migrate_job(self, job, mode, folders) -> dict:
+        def progress(done: int, total: int, name: str) -> None:
+            job.update(f"正在迁移 {done}/{total}: {name}",
+                       done / total if total else None)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.migrate_run(
+                mode, folders, on_progress=progress, is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc

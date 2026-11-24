@@ -101,6 +101,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tools/launcher/overview",
                lambda req: tool_service.launcher_overview())
 
+    server.get("/api/tools/migrate/overview",
+               lambda req: tool_service.migrate_overview())
+    server.get("/api/tools/migrate/scan",
+               lambda req: tool_service.migrate_scan())
+
+    def start_migrate(req):
+        return tool_service.start_migrate(dict(req.json or {}))
+    server.post("/api/tools/migrate/run", start_migrate)
+
     server.get("/api/tcdoc/overview",
                lambda req: tcdoc.overview(req.q("doc_key")))
 

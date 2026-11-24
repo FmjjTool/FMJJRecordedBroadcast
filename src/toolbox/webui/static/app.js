@@ -20,6 +20,7 @@
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
+    migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
@@ -34,7 +35,7 @@
     subtitle: { title: '字幕转换', load: renderSubtitle },
     launcher: { title: '继续操作', load: renderLauncher },
     calendar: { title: '日历浏览', load: renderCalendar },
-    migrate: { title: '文件迁移', load: function (host) { renderModule(host, 'migrate'); } },
+    migrate: { title: '文件迁移', load: renderMigrate },
     record: { title: '录制', load: renderRecord },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
     tasks: { title: '任务', load: renderTasks },
@@ -1204,6 +1205,210 @@
     }).catch(function (error) {
       setError(host, error, function () { renderLauncher(host); });
     });
+  }
+
+  function renderMigrate(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取迁移配置…');
+    Promise.all([
+      api('/api/tools/migrate/overview'),
+      api('/api/tools/migrate/scan')
+    ]).then(function (results) {
+      var overview = results[0];
+      var scan = results[1];
+      host.replaceChildren();
+      if (!overview.has_work_dir) {
+        host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
+        return;
+      }
+      if (!overview.has_target_dir) {
+        host.appendChild(empty('尚未设置迁移目标目录。请先在桌面端「文件迁移」页选择目标目录。'));
+        return;
+      }
+      var stats = h('div', { class: 'grid cols-3', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('日期文件夹', fmtNumber(scan.total), '工作目录内'));
+      var selectedCount = 0;
+      var selectedSize = 0;
+      scan.folders.forEach(function (item) {
+        if (item.is_today) { selectedCount++; selectedSize += item.size; }
+      });
+      stats.appendChild(statCard('默认勾选（当天）', fmtNumber(selectedCount),
+        fmtBytes(selectedSize)));
+      stats.appendChild(statCard('目标目录', overview.target_dir || '-', '桌面端设置'));
+      host.appendChild(stats);
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, overview.note || '')));
+      if (!scan.folders.length) {
+        host.appendChild(empty('工作目录下没有日期文件夹。'));
+        return;
+      }
+
+      var selected = state.migrate.selected;
+      var mode = state.migrate.mode;
+      var known = new Set(scan.folders.map(function (item) { return item.folder; }));
+      Array.from(selected).forEach(function (name) {
+        if (!known.has(name)) selected.delete(name);
+      });
+      if (!selected.size) {
+        scan.folders.forEach(function (item) {
+          if (item.is_today) selected.add(item.folder);
+        });
+      }
+
+      var copyRadio = h('input', { type: 'radio', name: 'migrate-mode', checked: mode === 'copy' });
+      var moveRadio = h('input', { type: 'radio', name: 'migrate-mode', checked: mode === 'move' });
+      copyRadio.addEventListener('change', function () { if (copyRadio.checked) { state.migrate.mode = 'copy'; updateButtons(); } });
+      moveRadio.addEventListener('change', function () { if (moveRadio.checked) { state.migrate.mode = 'move'; updateButtons(); } });
+      var selectedLabel = h('span', { class: 'muted small' });
+      var selectAll = h('input', { type: 'checkbox' });
+      var runBtn = h('button', { class: 'btn primary', type: 'button' }, '开始迁移');
+      var rescan = h('button', { class: 'btn', type: 'button' }, '刷新');
+      host.appendChild(h('div', { class: 'toolbar' },
+        h('label', { class: 'muted small' }, copyRadio, ' 复制（保留源）'),
+        h('label', { class: 'muted small' }, moveRadio, ' 剪切（移动）'),
+        h('span', { style: 'flex:1' }),
+        h('label', { class: 'muted small' }, selectAll, ' 全选'),
+        selectedLabel, rescan, runBtn));
+
+      var jobHost = h('div');
+      var listHost = h('div');
+      var resultHost = h('div');
+      host.appendChild(jobHost);
+      host.appendChild(listHost);
+      host.appendChild(resultHost);
+
+      var running = false;
+      var columns = [
+        { key: 'date', label: '日期' },
+        { key: 'files', label: '文件' },
+        { key: 'size', label: '大小' }
+      ];
+
+      function updateButtons() {
+        runBtn.disabled = running || selected.size === 0;
+        runBtn.textContent = running ? '迁移中…' : '开始迁移';
+        selectedLabel.textContent = '已选 ' + selected.size + ' 个文件夹';
+        selectAll.checked = scan.folders.length > 0
+          && selected.size === scan.folders.length;
+        selectAll.indeterminate = selected.size > 0
+          && selected.size < scan.folders.length;
+        runBtn.classList.toggle('danger', state.migrate.mode === 'move');
+      }
+
+      function draw() {
+        var rows = sortRows(scan.folders, columns, state.migrate);
+        var head = h('tr', null, h('th', { style: 'width:36px' }, ''));
+        columns.forEach(function (column) {
+          var mark = state.migrate.order === column.key
+            ? (state.migrate.asc ? ' ↑' : ' ↓') : '';
+          head.appendChild(h('th', {
+            class: 'sortable',
+            onclick: function () {
+              cycleSort(state.migrate, column.key);
+              draw();
+            }
+          }, column.label + mark));
+        });
+        var body = h('tbody');
+        rows.forEach(function (item) {
+          var check = h('input', {
+            type: 'checkbox', checked: selected.has(item.folder)
+          });
+          check.addEventListener('change', function () {
+            if (check.checked) selected.add(item.folder);
+            else selected.delete(item.folder);
+            updateButtons();
+          });
+          body.appendChild(h('tr', null,
+            h('td', null, check),
+            h('td', null, (item.date || item.folder) + (item.is_today ? '（今天）' : '')),
+            h('td', { class: 'num' }, fmtNumber(item.files)),
+            h('td', { class: 'num' }, fmtBytes(item.size))));
+        });
+        listHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+        updateButtons();
+      }
+
+      selectAll.addEventListener('change', function () {
+        selected.clear();
+        if (selectAll.checked) {
+          scan.folders.forEach(function (item) { selected.add(item.folder); });
+        }
+        draw();
+      });
+      rescan.addEventListener('click', function () {
+        selected.clear();
+        renderMigrate(host);
+      });
+      runBtn.addEventListener('click', function () {
+        if (!selected.size || running) return;
+        var modeText = state.migrate.mode === 'copy' ? '复制（保留源）' : '剪切（移动）';
+        var folders = Array.from(selected);
+        if (!window.confirm(
+          '确认迁移\n\n操作模式: ' + modeText +
+          '\n将迁移 ' + folders.length + ' 个日期文件夹到「' +
+          (overview.target_dir || '目标目录') + '」。\n同名文件会跳过并计入重复，不会覆盖目标。\n\n确认继续？')) {
+          return;
+        }
+        running = true;
+        updateButtons();
+        post('/api/tools/migrate/run', {
+          mode: state.migrate.mode, folders: folders, confirmed: true
+        }).then(function (data) {
+          watchJob(jobHost, data.job, function (job) {
+            running = false;
+            updateButtons();
+            var summary = job.result && job.result.summary
+              ? job.result.summary : '迁移完成';
+            toast(summary, 'success');
+            showResult(job);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              updateButtons();
+              if (job.status === 'cancelled') {
+                toast('文件迁移已取消', 'info');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          updateButtons();
+          toast('迁移失败：' + error.message, 'error');
+        });
+      });
+      draw();
+    }).catch(function (error) {
+      setError(host, error, function () { renderMigrate(host); });
+    });
+
+    function showResult(job) {
+      var result = job.result || {};
+      var rows = result.results || [];
+      if (!rows.length) return;
+      var head = h('tr', null,
+        h('th', null, '文件夹'), h('th', null, '结果'),
+        h('th', { class: 'num' }, '迁移文件'), h('th', { class: 'num' }, '重复跳过'),
+        h('th', null, '错误'));
+      var body = h('tbody');
+      rows.forEach(function (row) {
+        body.appendChild(h('tr', null,
+          h('td', null, row.folder),
+          h('td', null, row.ok ? '成功' : '失败'),
+          h('td', { class: 'num' }, fmtNumber(row.moved || 0)),
+          h('td', { class: 'num' }, fmtNumber(row.duplicates || 0)),
+          h('td', { class: 'muted small' }, row.error || '-')));
+      });
+      resultHost.replaceChildren(h('div', {
+        class: 'card', style: 'margin-top:12px'
+      },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          result.summary || '迁移结果'),
+        h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body))));
+    }
   }
 
   function renderModule(host, key) {

@@ -1,8 +1,13 @@
-"""WebUI 工具用例（L3）：音频提取与字幕转换的扫描与执行。
+"""WebUI 工具用例（L3）：音频提取、字幕转换、日历、迁移的扫描与执行。
 
 只允许工作目录内的文件；输出沿用桌面引擎（音频同目录、按音轨编码；
 字幕按配置输出到原目录或统一导出目录）。转换只生成新文件，输出与源文件
 同名时跳过，避免覆盖源文件。
+
+本模块是 Web 专用中间层，与桌面端隔离：只依赖 L4 引擎 / L5 设施，
+不 import PySide6 / gui_qt，不改桌面页面行为。文件迁移复用桌面
+「文件迁移」页的合并语义：文件级合并、同名跳过记录重复、移动后
+清理空目录；Web 端不提供重复项的覆盖 / 删除本地处理。
 """
 
 from __future__ import annotations
@@ -279,6 +284,173 @@ def _folder_brief(folder: Path) -> tuple[int, int]:
         except OSError:
             pass
     return len(entries), size
+
+
+# ==================== 文件迁移（复用桌面合并语义，独立实现） ====================
+
+_MAX_MIGRATE_FOLDERS = 200
+
+
+def migrate_overview() -> dict:
+    """迁移概览：工作目录、目标目录与模式说明。"""
+    cfg = load_convert_config()
+    root = _work_root()
+    target = str(cfg.get("migrate_target_dir") or "").strip()
+    return {
+        "has_work_dir": root is not None,
+        "work_dir": root.name if root else "",
+        "target_dir": Path(target).name if target else "",
+        "has_target_dir": bool(target) and Path(target).is_dir(),
+        "note": ("复制保留源文件，剪切移动并在迁移后清理空目录；"
+                 "同名文件跳过并计入重复，不覆盖目标。"
+                 "目标目录请在桌面端「文件迁移」页设置。"),
+    }
+
+
+def migrate_scan() -> dict:
+    """扫描工作目录下可迁移的日期文件夹（名称、日期、文件数、大小）。"""
+    from toolbox.date_folders import is_date_folder
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    rows = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as exc:
+        raise ValueError(f"无法读取工作目录: {exc}") from exc
+    today = today_str()
+    for name in names:
+        if not is_date_folder(name):
+            continue
+        files, size = _folder_stats_deep(root / name)
+        rows.append({
+            "folder": name,
+            "date": _folder_date_text(name),
+            "files": files,
+            "size": size,
+            "is_today": name[:8] == today,
+        })
+    return {"folders": rows, "total": len(rows),
+            "today": today,
+            "note": "默认勾选当天；迁移按文件级合并，同名跳过计重复。"}
+
+
+def migrate_run(mode: str, folders, on_progress=None,
+                is_cancelled=None) -> dict:
+    """执行迁移：文件级合并（同名跳过记重复），move 后清理空目录。"""
+    import shutil
+
+    if mode not in ("copy", "move"):
+        raise ValueError("迁移模式只支持复制或剪切")
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    cfg = load_convert_config()
+    target_text = str(cfg.get("migrate_target_dir") or "").strip()
+    if not target_text:
+        raise ValueError("尚未设置迁移目标目录，请先在桌面端「文件迁移」页选择")
+    target = Path(target_text)
+    if not target.is_dir():
+        raise ValueError("迁移目标目录不存在")
+    if _paths_nested(root, target):
+        raise ValueError("目标目录不能是工作目录的父目录/子目录（会递归迁移）")
+    raw = [str(item or "").strip() for item in (folders or [])]
+    raw = [item for item in raw if item][:_MAX_MIGRATE_FOLDERS]
+    if not raw:
+        raise ValueError("请选择要迁移的日期文件夹")
+    from toolbox.date_folders import is_date_folder
+    for name in raw:
+        if not is_date_folder(name):
+            raise ValueError(f"不是日期文件夹: {name}")
+
+    results = []
+    ok = 0
+    duplicates = []
+    for index, name in enumerate(raw, 1):
+        if is_cancelled and is_cancelled():
+            raise ToolCancelled("任务已取消")
+        src_dir = root / name
+        dst_dir = target / name
+        if not src_dir.is_dir():
+            results.append({"folder": name, "ok": False,
+                            "error": "源文件夹不存在"})
+            continue
+        moved = 0
+        dup = 0
+        error = ""
+        for file_root, dirs, files in os.walk(src_dir):
+            rel_root = os.path.relpath(file_root, src_dir)
+            dst_root = dst_dir if rel_root == "." else dst_dir / rel_root
+            for file_name in files:
+                if is_cancelled and is_cancelled():
+                    raise ToolCancelled("任务已取消")
+                src_file = Path(file_root) / file_name
+                dst_file = dst_root / file_name
+                if dst_file.exists():
+                    duplicates.append({
+                        "folder": name,
+                        "name": str(src_file.relative_to(src_dir)).replace("\\", "/"),
+                    })
+                    dup += 1
+                    continue
+                try:
+                    dst_root.mkdir(parents=True, exist_ok=True)
+                    if mode == "copy":
+                        shutil.copy2(str(src_file), str(dst_file))
+                    else:
+                        shutil.move(str(src_file), str(dst_file))
+                    moved += 1
+                except OSError as exc:
+                    error = str(exc)[:300]
+        if mode == "move" and not error:
+            for file_root, dirs, files in os.walk(src_dir, topdown=False):
+                try:
+                    os.rmdir(file_root)
+                except OSError:
+                    pass
+        ok += 1 if not error else 0
+        results.append({"folder": name, "ok": not error,
+                        "moved": moved, "duplicates": dup,
+                        "error": error})
+        if on_progress:
+            on_progress(index, len(raw), name)
+    total_moved = sum(row["moved"] for row in results)
+    summary = (f"迁移 {ok}/{len(raw)} 个文件夹，共 {total_moved} 个文件，"
+               f"重复跳过 {len(duplicates)} 个文件")
+    return {"summary": summary, "results": results, "ok": ok,
+            "failed": len(raw) - ok, "moved": total_moved,
+            "duplicates": duplicates[:500]}
+
+
+def _folder_stats_deep(folder: Path) -> tuple[int, int]:
+    """递归统计文件夹的文件数与总大小（对齐桌面迁移页口径）。"""
+    count = 0
+    total = 0
+    for file_root, _dirs, files in os.walk(folder):
+        for name in files:
+            try:
+                stat = (Path(file_root) / name).stat()
+            except OSError:
+                continue
+            count += 1
+            total += stat.st_size
+    return count, total
+
+
+def _folder_date_text(name: str) -> str:
+    text = name[:8]
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    return name
+
+
+def _paths_nested(a: Path, b: Path) -> bool:
+    try:
+        common = os.path.commonpath([str(a.resolve()), str(b.resolve())])
+    except ValueError:
+        return False
+    return common == str(a.resolve()) or common == str(b.resolve())
 
 
 def _work_root() -> Path | None:
