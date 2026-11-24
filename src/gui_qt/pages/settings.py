@@ -14,9 +14,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
 )
+from PySide6.QtGui import QPixmap
 
 from image_sorter.core.cache_manager import CacheManager
 from toolbox.config_manager import (
@@ -187,6 +188,48 @@ class GlobalSettingsPage(BasePage):
             "取消勾选即取消后台：不再保留托盘图标，点关闭会直接退出软件。")
         self.close_to_tray_cb.toggled.connect(self._on_close_to_tray_changed)
         card.content_layout.addWidget(self.close_to_tray_cb)
+        v.addWidget(card)
+
+        # ---- WebUI 独立服务 ----
+        card = self._section_card("WebUI 独立服务（浏览器访问）", "globe")
+        webui_row = QHBoxLayout()
+        webui_row.addWidget(QLabel("端口:"))
+        self.webui_port = QLineEdit()
+        self.webui_port.setPlaceholderText("8765")
+        self.webui_port.setFixedWidth(80)
+        webui_row.addWidget(self.webui_port)
+        self.webui_start_btn = self._btn("启动", self._start_webui)
+        self.webui_stop_btn = self._btn("停止", self._stop_webui)
+        self.webui_open_btn = self._btn("打开 WebUI", self._open_webui)
+        self.webui_stop_btn.setEnabled(False)
+        self.webui_open_btn.setEnabled(False)
+        webui_row.addWidget(self.webui_start_btn)
+        webui_row.addWidget(self.webui_stop_btn)
+        webui_row.addWidget(self.webui_open_btn)
+        webui_row.addStretch(1)
+        card.content_layout.addLayout(webui_row)
+        webui_lan_row = QHBoxLayout()
+        self.webui_lan_cb = QCheckBox("允许局域网访问（手机同一 Wi-Fi）")
+        self.webui_lan_cb.setToolTip(
+            "勾选后 WebUI 监听局域网地址，手机与电脑连同一 Wi-Fi 即可打开；\n"
+            "首次使用需要在 Windows 防火墙提示中允许访问。公网访问请使用隧道，不要直接映射端口。")
+        self.webui_lan_cb.toggled.connect(self._on_webui_lan_changed)
+        self.webui_qr_btn = self._btn("手机二维码", self._open_webui_qr)
+        self.webui_qr_btn.setEnabled(False)
+        webui_lan_row.addWidget(self.webui_lan_cb)
+        webui_lan_row.addWidget(self.webui_qr_btn)
+        webui_lan_row.addStretch(1)
+        card.content_layout.addLayout(webui_lan_row)
+        self.webui_auto_cb = QCheckBox("随软件启动 WebUI 服务")
+        self.webui_auto_cb.setToolTip(
+            "勾选后下次打开软件自动在后台启动 WebUI，关闭软件时停止由本软件启动的服务；\n"
+            "端口在点「启动」时保存。WebUI 是独立进程，不依赖桌面窗口。")
+        self.webui_auto_cb.toggled.connect(self._on_webui_auto_changed)
+        card.content_layout.addWidget(self.webui_auto_cb)
+        self.webui_status = QLabel("")
+        self.webui_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        self.webui_status.setWordWrap(True)
+        card.content_layout.addWidget(self.webui_status)
         v.addWidget(card)
 
         # ---- 配置信息与缓存清理 ----
@@ -435,9 +478,177 @@ class GlobalSettingsPage(BasePage):
         self._refresh_info(show_toast=False)
         # 依赖检测（每次回到本页都重检一次，不依赖外部信号）
         self._refresh_dependencies()
+        # WebUI 独立服务：端口、自动启动与运行状态
+        self._load_webui()
 
     def on_hide(self):
         self._skel_timer.stop()
+
+    # ---- WebUI 独立服务 ----
+    def _webui(self):
+        from toolbox.webui_launcher import get_launcher
+        return get_launcher()
+
+    def _load_webui(self):
+        cfg = self._webui().config()
+        self.webui_port.setText(str(cfg["port"]))
+        self.webui_auto_cb.blockSignals(True)
+        self.webui_auto_cb.setChecked(bool(cfg["auto_start"]))
+        self.webui_auto_cb.blockSignals(False)
+        self.webui_lan_cb.blockSignals(True)
+        self.webui_lan_cb.setChecked(bool(cfg["lan"]))
+        self.webui_lan_cb.blockSignals(False)
+        self._refresh_webui_async()
+
+    def _refresh_webui_async(self):
+        launcher = self._webui()
+        self._set_status(self.webui_status, "正在检查 WebUI 状态…", "muted")
+        run_bg(launcher.status,
+               lambda status, err: self._apply_webui_status(status, err))
+
+    def _apply_webui_status(self, status, err=None):
+        if err is not None or not isinstance(status, dict):
+            self._set_status(self.webui_status, f"状态检查失败：{err}", "warn")
+            self.webui_start_btn.setEnabled(True)
+            self.webui_stop_btn.setEnabled(False)
+            self.webui_open_btn.setEnabled(False)
+            return
+        running = bool(status.get("running"))
+        owned = bool(status.get("owned"))
+        self.webui_start_btn.setEnabled(not running)
+        self.webui_stop_btn.setEnabled(running and owned)
+        self.webui_open_btn.setEnabled(running)
+        self.webui_qr_btn.setEnabled(running and bool(status.get("lan_url")))
+        if running:
+            note = "" if owned else "（由其他方式启动）"
+            text = f"运行中 · 本机 http://127.0.0.1:{status.get('port')}{note}"
+            if status.get("lan_ip"):
+                text += f" · 手机 http://{status['lan_ip']}:{status.get('port')}"
+            self._set_status(self.webui_status, text, "ok")
+        else:
+            message = status.get("error") or "未运行"
+            self._set_status(self.webui_status, message,
+                             "warn" if status.get("error") else "muted")
+
+    def _webui_port_value(self):
+        text = self.webui_port.text().strip()
+        try:
+            port = int(text or "8765")
+        except ValueError:
+            self._set_status(self.webui_status,
+                             "端口必须是 1024-65535 之间的数字", "warn")
+            return None
+        if not 1024 <= port <= 65535:
+            self._set_status(self.webui_status,
+                             "端口必须是 1024-65535 之间的数字", "warn")
+            return None
+        return port
+
+    def _start_webui(self):
+        port = self._webui_port_value()
+        if port is None:
+            return
+        lan = self.webui_lan_cb.isChecked()
+        self.webui_start_btn.setEnabled(False)
+        self._set_status(self.webui_status, "正在启动 WebUI…", "muted")
+        launcher = self._webui()
+
+        def work():
+            launcher.save_config(port=port, lan=lan)
+            return launcher.start(port, lan=lan)
+
+        def done(status, err):
+            if err is not None:
+                self._set_status(self.webui_status, f"启动失败：{err}", "warn")
+                self._refresh_webui_async()
+                return
+            self.app.toast("WebUI 已启动", "success")
+            self._apply_webui_status(status, None)
+
+        run_bg(work, done)
+
+    def _stop_webui(self):
+        self.webui_stop_btn.setEnabled(False)
+        self._set_status(self.webui_status, "正在停止 WebUI…", "muted")
+        launcher = self._webui()
+
+        def done(result, err):
+            if err is not None:
+                self._set_status(self.webui_status, f"停止失败：{err}", "warn")
+            elif result and result.get("stopped"):
+                self.app.toast("WebUI 已停止", "info")
+            else:
+                self.app.toast((result or {}).get("message", "WebUI 未运行"),
+                               "info")
+            self._refresh_webui_async()
+
+        run_bg(launcher.stop, done)
+
+    def _open_webui(self):
+        try:
+            self._webui().open_browser()
+        except Exception as exc:
+            self._set_status(self.webui_status, str(exc), "warn")
+            self._refresh_webui_async()
+
+    def _open_webui_qr(self):
+        launcher = self._webui()
+        status = launcher.status()
+        if not status.get("running"):
+            self._set_status(self.webui_status, "WebUI 未运行，请先启动", "warn")
+            return
+        if not status.get("lan_url"):
+            self._set_status(self.webui_status,
+                             "当前未开启局域网访问，二维码不可用", "warn")
+            return
+        try:
+            import io
+
+            import qrcode
+
+            image = qrcode.make(launcher.phone_url())
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            pixmap = QPixmap()
+            if not pixmap.loadFromData(buffer.getvalue(), "PNG"):
+                raise ValueError("二维码图片无效")
+        except Exception as exc:
+            self._set_status(self.webui_status, f"二维码生成失败：{exc}", "warn")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("手机访问 WebUI")
+        layout = QVBoxLayout(dialog)
+        picture = QLabel()
+        picture.setPixmap(pixmap.scaled(260, 260, Qt.KeepAspectRatio,
+                                        Qt.SmoothTransformation))
+        picture.setAlignment(Qt.AlignCenter)
+        layout.addWidget(picture)
+        note = QLabel(
+            f"手机与电脑连同一 Wi-Fi 后扫码打开。\n"
+            f"局域网地址：http://{status.get('lan_ip')}:{status.get('port')}\n"
+            "二维码包含访问令牌，请勿转发给不可信设备。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        dialog.exec()
+
+    def _on_webui_lan_changed(self, checked):
+        try:
+            self._webui().save_config(lan=bool(checked))
+        except Exception as exc:
+            self.app.toast(f"保存 WebUI 设置失败：{exc}", "error")
+            return
+        self._set_status(self.webui_status,
+                         "局域网设置已保存；重启 WebUI 后生效", "muted")
+        self._refresh_webui_async()
+
+    def _on_webui_auto_changed(self, checked):
+        try:
+            self._webui().save_config(auto_start=bool(checked))
+        except Exception as exc:
+            self.app.toast(f"保存 WebUI 设置失败：{exc}", "error")
 
     # ---- 文件夹锁定（锁定后拖入文件夹不改变，直到解锁） ----
     def _refresh_workdir_status(self):

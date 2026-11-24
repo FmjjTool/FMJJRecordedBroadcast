@@ -294,10 +294,24 @@ def main():
 
         run_bg(_probe_ffmpeg, _on_ffmpeg_checked)
 
+        # WebUI 独立服务：按设置自动启动（独立子进程，失败只记日志）
+        def _start_webui_service():
+            from toolbox.webui_launcher import get_launcher
+            get_launcher().start_if_enabled()
+
+        run_bg(_start_webui_service, lambda _result, _err: None)
+
     from PySide6.QtCore import QTimer
     QTimer.singleShot(1200, _post_startup_checks)
 
     code = app.exec()
+
+    # WebUI 独立服务：停止由本软件启动的子进程，外部启动的实例不动
+    try:
+        from toolbox.webui_launcher import get_launcher
+        get_launcher().shutdown()
+    except Exception:
+        pass
 
     # 代理收尾：停内核、恢复进程环境变量（幂等，页面 shutdown 已调用过也不影响）
     try:

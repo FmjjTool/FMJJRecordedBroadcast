@@ -359,6 +359,10 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "livestream_summary_chunk_chars": 6000,
     "livestream_summary_output_dir": "",
     "livestream_summary_mode": "ai",
+    # WebUI 独立服务：设置页启动端口、自动启动与局域网访问（独立子进程）
+    "webui_port": 8765,
+    "webui_auto_start": False,
+    "webui_lan": False,
 }
 
 
