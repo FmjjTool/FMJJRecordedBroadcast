@@ -196,6 +196,7 @@
 - 统一用 `src/gui_qt/table_sort.py`：`install(table)`（行号与记录列表无绑定）、`install(table, rows=列表)`（页面用 `row()` / `currentRow()` 反查列表，排序同步重排列表）、`install_callback(table, fn)`（服务端分页表，排序下推到 SQL `ORDER BY` 并回到第 1 页）。
 - 排序键统一解析：数字（千分位、万/亿/k/w）< 日期时间 < 文本，空值（空串、`-`、`—`）恒排最后；时长等特殊格式用 `item.setData(SORT_KEY_ROLE, 数值)`。
 - 排序只改展示顺序：不改数据、不改勾选集合，勾选与选中随行走；各页不自写第二套比较逻辑。
+- 所有表格还必须支持列宽自适应/重置：统一由 `src/gui_qt/table_columns.py` 提供表头右键（列宽自适应 / 重置列宽）与主窗口状态栏「列宽」按钮；页面不自写列宽菜单，默认不出现横向滚动。
 - 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 14。
 
 ## 约定 15：GitHub 访问网络顺序（直连 → 代理 → 其他）

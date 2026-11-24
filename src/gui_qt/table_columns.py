@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QTreeWidget,
 )
 
+from gui_qt import theme
+
 _TABLE_TYPES = (QTableWidget, QTableView, QTreeWidget)
 _MIN_WIDTH = 40
 _MAX_WIDTH = 520
@@ -219,12 +221,38 @@ def set_current_table(view):
 
 
 class _ColumnButton(QToolButton):
-    """状态栏窄按钮：切主题时重新解析内联 QSS 的 palette 角色。"""
+    """状态栏窄按钮：切主题时按当前语义色重设样式。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._repolishing = False
+
+    def apply_theme_style(self):
+        try:
+            self.setPalette(theme.current_palette())
+            self.setStyleSheet(
+                "QToolButton#tableColumnButton { background: %s; color: %s; "
+                "border: 1px solid %s; border-radius: 6px; padding: 2px 8px; font-size: 11px; }"
+                "QToolButton#tableColumnButton:hover { color: %s; border-color: %s; "
+                "background: %s; }"
+                "QToolButton#tableColumnButton:disabled { color: %s; border-color: %s; }" % (
+                    theme.color("surface"), theme.color("link"), theme.color("border"),
+                    theme.color("link"), theme.color("link"), theme.color("surface_alt"),
+                    theme.color("muted"), theme.color("border"),
+                ))
+        except Exception:
+            pass
 
     def changeEvent(self, event):
-        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
-            self.style().unpolish(self)
-            self.style().polish(self)
+        if (event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange)
+                and not getattr(self, "_repolishing", False)):
+            self._repolishing = True
+            try:
+                self.apply_theme_style()
+                self.style().unpolish(self)
+                self.style().polish(self)
+            finally:
+                self._repolishing = False
         super().changeEvent(event)
 
 
@@ -237,13 +265,7 @@ def make_button(parent) -> QToolButton:
     button.setPopupMode(QToolButton.InstantPopup)
     button.setToolButtonStyle(Qt.ToolButtonTextOnly)
     button.setFixedHeight(22)
-    button.setStyleSheet(
-        "QToolButton#tableColumnButton { background: palette(base); color: palette(link); "
-        "border: 1px solid palette(mid); border-radius: 6px; padding: 2px 8px; font-size: 11px; }"
-        "QToolButton#tableColumnButton:hover { color: palette(link); border-color: palette(highlight); "
-        "background: palette(midlight); }"
-        "QToolButton#tableColumnButton:disabled { color: palette(placeholder-text); "
-        "border-color: palette(shadow); }")
+    button.apply_theme_style()
     menu = QMenu(button)
     act_fit = menu.addAction("列宽自适应")
     act_reset = menu.addAction("重置列宽")

@@ -643,6 +643,9 @@ class MainWindow(QMainWindow):
                 button.setIcon(line_icon(tool_icon_name(key), active if button.isChecked() else normal))
         self.window_controls.refresh_icons()
         self._update_theme_btn()
+        column_btn = getattr(self, "table_column_btn", None)
+        if column_btn is not None:
+            column_btn.apply_theme_style()
 
     def _toggle_theme(self):
         name = theme.toggle_theme()
