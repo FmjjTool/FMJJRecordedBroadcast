@@ -133,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
               f"跳过 {len(result.skipped)} 首")
         if result.stopped:
             print(f"  已停止：{result.stopped}")
+        if result.sort_error:
+            print(f"  排序警告：{result.sort_error}")
 
     result_path = report_dir / f"result_{stamp}.json"
     _write_report(result_path, {

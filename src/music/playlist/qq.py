@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import random
 import re
 from typing import Optional
 
@@ -30,6 +32,21 @@ CREATE_URL = f"{BASE}/splcloud/fcgi-bin/create_playlist.fcg?g_tk=5381"
 MUSICU_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 SONG_DETAIL_URL = f"{BASE}/v8/fcg-bin/fcg_play_single_song.fcg"
 REFERER = "https://y.qq.com/n/yqq/playlist"
+SIGN_SALT = "CJBPACrRuNy7"
+QQ_UA = (
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36 "
+    "QQJSSDK/1.3 /ANDROIDQQMUSIC/11050108 QQMusic/11.5.1.8 H5/1"
+)
+
+
+def _g_tk(cookie: dict[str, str]) -> int:
+    key = (cookie.get("qqmusic_key") or cookie.get("qm_keyst")
+           or cookie.get("p_skey") or cookie.get("skey") or "")
+    h = 5381
+    for ch in key:
+        h = ((h << 5) + h + ord(ch)) & 0x7FFFFFFF
+    return h
 
 
 def _qq_uin(cookie: dict[str, str]) -> str:
@@ -44,8 +61,9 @@ def _qq_uin(cookie: dict[str, str]) -> str:
 class QQPlaylistWriter(BasePlaylistWriter):
     platform = "qq"
     platform_name = "QQ音乐"
-    verified = False
-    note = "创建已实测通过；加歌需网页 ag-1 签名，当前未通"
+    verified = True
+    prepend = True
+    note = "创建/加歌已实测通过（musicu 签名）"
     # 单首失败会让整批返回 invalid request，逐首加便于隔离无效 mid
     batch_size = 1
 
@@ -142,16 +160,14 @@ class QQPlaylistWriter(BasePlaylistWriter):
 
             payload = {
                 "comm": {
-                    "cv": 4747474,
-                    "ct": 24,
+                    "g_tk": _g_tk(cookie),
+                    "uin": uin,
                     "format": "json",
                     "inCharset": "utf-8",
                     "outCharset": "utf-8",
                     "notice": 0,
-                    "platform": "yqq.json",
+                    "platform": "h5",
                     "needNewCode": 1,
-                    "uin": uin,
-                    "g_tk": 5381,
                 },
                 "req_0": {
                     "module": "music.musicasset.PlaylistDetailWrite",
@@ -162,15 +178,18 @@ class QQPlaylistWriter(BasePlaylistWriter):
                     },
                 },
             }
+            body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+            sign = ("zza" + "".join(random.choice("0123456789abcdef") for _ in range(10))
+                    + hashlib.md5((SIGN_SALT + body).encode()).hexdigest())
             resp = client.post(
-                MUSICU_URL,
-                data={
-                    "data": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                    "format": "json",
-                    "g_tk": 5381,
+                f"{MUSICU_URL}?sign={sign}",
+                content=body.encode("utf-8"),
+                headers={
+                    "User-Agent": QQ_UA,
+                    "Content-Type": "application/json",
+                    "Origin": "https://i.y.qq.com",
+                    "Referer": "https://y.qq.com/",
                 },
-                headers={"Referer": REFERER, "Origin": "https://y.qq.com",
-                         "Content-Type": "application/x-www-form-urlencoded"},
             )
         body = response_json(resp, platform=self.platform, phase="add")
         req = _musicu_req(body)

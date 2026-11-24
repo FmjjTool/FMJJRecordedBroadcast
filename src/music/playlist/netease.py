@@ -30,7 +30,8 @@ class NeteasePlaylistWriter(BasePlaylistWriter):
     platform = "netease"
     platform_name = "网易云音乐"
     verified = True
-    note = "创建/加歌已实测通过"
+    supports_sort = True
+    note = "创建/加歌/排序已实测通过"
     batch_size = 100
 
     def _csrf(self, cookie: dict[str, str]) -> str:
@@ -128,6 +129,47 @@ class NeteasePlaylistWriter(BasePlaylistWriter):
         raise PlatformRejectedError(
             _error_message(body, "添加歌曲失败"),
             platform=self.platform, phase="add",
+        )
+
+    def sort_songs(self, playlist_id: str, ordered_song_ids: list[str],
+                   cookie: dict[str, str], *,
+                   transport: Optional[httpx.BaseTransport] = None) -> None:
+        if not ordered_song_ids:
+            return
+        data = {
+            "op": "update",
+            "pid": playlist_id,
+            "trackIds": json.dumps([str(x) for x in ordered_song_ids],
+                                   separators=(",", ":")),
+        }
+        csrf = self._csrf(cookie)
+        if csrf:
+            data["csrf_token"] = csrf
+        headers = {
+            "Referer": f"{BASE}/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        with self._client(cookie, transport) as client:
+            resp = client.post(f"{BASE}/api/playlist/manipulate/tracks",
+                               data=data, headers=headers)
+        body = response_json(resp, platform=self.platform, phase="sort")
+        code = _code(body)
+        if code == 200:
+            return
+        if code in (301, 302, 401):
+            raise AuthRequiredError(
+                "登录状态不可用，请先在账号管理中重新登录",
+                platform=self.platform, phase="sort",
+            )
+        if code == 429:
+            raise RateLimitedError(
+                "网易云请求过于频繁，请稍后再试",
+                platform=self.platform, phase="sort", retryable=True,
+            )
+        raise PlatformRejectedError(
+            _error_message(body, "排序失败"),
+            platform=self.platform, phase="sort",
         )
 
 

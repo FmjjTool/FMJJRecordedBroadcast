@@ -163,6 +163,7 @@ class ApplyResult:
     failed: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
     stopped: str = ""
+    sort_error: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -173,6 +174,7 @@ class ApplyResult:
             "failed": self.failed,
             "skipped": self.skipped,
             "stopped": self.stopped,
+            "sort_error": self.sort_error,
         }
 
 
@@ -353,11 +355,14 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
         playlist_id = plan.writer.create_playlist(plan.playlist_name, cookie, transport=transport)
     result.playlist_id = playlist_id
 
-    total = len(remaining)
+    # QQ 等平台会把新歌插到最前，按来源顺序逐首添加会得到倒序；
+    # 对这类平台反向添加，最终顺序才与来源一致。
+    add_sequence = list(reversed(remaining)) if plan.writer.prepend else remaining
+    total = len(add_sequence)
     done = 0
-    batch_size = max(1, int(plan.writer.batch_size or 50))
+    batch_size = 1 if plan.writer.prepend else max(1, int(plan.writer.batch_size or 50))
     for start in range(0, total, batch_size):
-        batch = remaining[start:start + batch_size]
+        batch = add_sequence[start:start + batch_size]
         batch_songs = [item.target for item in batch if item.target]
         try:
             added = plan.writer.add_songs(
@@ -369,7 +374,7 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
         except (AuthRequiredError, RateLimitedError, UnsupportedPlatformError,
                 ParseChangedError, PlatformRejectedError) as exc:
             result.stopped = str(exc)
-            for item in remaining[start:]:
+            for item in add_sequence[start:]:
                 result.skipped.append({
                     "song": item.target.song_name if item.target else item.source.title,
                     "reason": result.stopped,
@@ -384,6 +389,19 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
         _write_journal(journal_path, result)
         if interval and done < total:
             time.sleep(interval)
+
+    added_set = set(result.added)
+    result.added = [
+        item.target.song_id for item in selected
+        if item.target and item.target.song_id in added_set
+    ]
+    if not result.stopped and plan.writer.supports_sort and selected:
+        ordered_ids = [item.target.song_id for item in selected if item.target]
+        try:
+            plan.writer.sort_songs(playlist_id, ordered_ids, cookie,
+                                   transport=transport)
+        except PlaylistWriteError as exc:
+            result.sort_error = str(exc)
     return result
 
 

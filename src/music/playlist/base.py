@@ -103,6 +103,8 @@ class BasePlaylistWriter:
     supports_create = True
     experimental = False
     verified = False
+    prepend = False
+    supports_sort = False
     note = ""
     batch_size = 50
 
@@ -115,6 +117,12 @@ class BasePlaylistWriter:
                   transport: Optional[httpx.BaseTransport] = None,
                   progress: Optional[Callable[[int, int], None]] = None) -> AddSongsResult:
         raise NotImplementedError
+
+    def sort_songs(self, playlist_id: str, ordered_song_ids: list[str],
+                   cookie: dict[str, str], *,
+                   transport: Optional[httpx.BaseTransport] = None) -> None:
+        """按给定顺序重排歌单；平台不支持时由 supports_sort=False 跳过。"""
+        return None
 
     def _client(self, cookie: dict[str, str], transport=None) -> httpx.Client:
         return httpx.Client(
