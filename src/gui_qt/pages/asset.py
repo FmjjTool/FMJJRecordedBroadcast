@@ -26,11 +26,11 @@ from PySide6.QtCore import (QEvent, QMimeData, QObject, QPoint, QPointF, QRect, 
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
                            QPalette, QPen, QPixmap, QPolygonF, QTextCursor, QTextFormat)
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressDialog,
-    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QTableWidget,
-    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QCompleter, QDialog,
+    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QProgressBar, QProgressDialog,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QTabWidget,
+    QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 from PySide6.QtWidgets import QLayout
 
@@ -38,7 +38,7 @@ from gui_qt import common, table_sort, theme
 from gui_qt.common import _fmt, icon_button, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from toolbox import asset_index
+from toolbox import asset_index, offline_events
 from toolbox.asset_content import (
     docx_to_html, files_summary_html, fmt_size as _fmt_size,
     html_to_content, md_to_html, read_text_file, text_preview_html,
@@ -591,6 +591,15 @@ class AssetPage(BasePage):
         self._db_filling = False        # 数据库表填充中（抑制勾选计数刷新）
         self._db_sort_col = -1           # 数据库浏览当前排序列（-1 = 默认按入库倒序）
         self._db_sort_asc = True        # 数据库浏览当前排序方向
+        self._ov_events = []            # 线下活动清单
+        self._ov_event_map = {}         # key -> OfflineEvent
+        self._ov_events_loaded = False
+        self._ov_events_loading = False
+        self._ov_populating = False
+        self._ov_rows = []              # 当前活动搜索结果
+        self._ov_searching = False
+        self._ov_cancel = None
+        self._ov_sorter = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 0)
@@ -608,6 +617,7 @@ class AssetPage(BasePage):
         self.tabs.addTab(self._build_collected_tab(), "已获取资源")
         self.tabs.addTab(self._build_db_tab(), "数据库浏览")
         self.tabs.addTab(self._build_local_tab(), "本地资源")
+        self.tabs.addTab(self._build_offline_video_tab(), "线下现场视频")
         # 切到数据库浏览 Tab 时刷新（采集后无需切页面，直接切 Tab 即可见新数据）
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -629,6 +639,8 @@ class AssetPage(BasePage):
             self._db_reload_tables()
         elif name == "本地资源":
             self._auto_scan_local()
+        elif name == "线下现场视频":
+            self._ov_ensure_events()
 
     # ==================== 备份入口 ====================
 
@@ -1209,6 +1221,465 @@ class AssetPage(BasePage):
         return lbl
 
     # ==================== 已获取资源（磁盘扫描） ====================
+
+    # ==================== 线下现场视频 ====================
+
+    def _build_offline_video_tab(self) -> QWidget:
+        f = QWidget()
+        v = QVBoxLayout(f)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(10)
+        toolbar = _asset_toolbar(v)
+
+        filters = QHBoxLayout()
+        filters.setSpacing(8)
+        filters.addWidget(_asset_label("年份"))
+        self.ov_year_sel = QComboBox()
+        self.ov_year_sel.setMinimumWidth(96)
+        self.ov_year_sel.setMaximumWidth(120)
+        self.ov_year_sel.setEnabled(False)
+        self.ov_year_sel.currentIndexChanged.connect(lambda _: self._ov_populate_events())
+        filters.addWidget(self.ov_year_sel)
+
+        filters.addWidget(_asset_label("活动"))
+        self.ov_event_sel = QComboBox()
+        self.ov_event_sel.setEditable(True)
+        self.ov_event_sel.setInsertPolicy(QComboBox.NoInsert)
+        self.ov_event_sel.setMinimumWidth(240)
+        self.ov_event_sel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.ov_event_sel.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.ov_event_sel.setMinimumContentsLength(14)
+        self.ov_event_sel.lineEdit().setPlaceholderText("输入日期、活动名或城市筛选")
+        self.ov_event_sel.setEnabled(False)
+        self.ov_event_sel.currentIndexChanged.connect(self._ov_event_changed)
+        self.ov_event_sel.lineEdit().returnPressed.connect(self._ov_resolve_typed_event)
+        filters.addWidget(self.ov_event_sel, 1)
+
+        filters.addWidget(_asset_label("平台"))
+        self.ov_platform_sel = QComboBox()
+        self.ov_platform_sel.addItems(["全部平台", "B站", "抖音（本地归档）"])
+        self.ov_platform_sel.setMinimumWidth(118)
+        self.ov_platform_sel.setMaximumWidth(150)
+        self.ov_platform_sel.setEnabled(False)
+        filters.addWidget(self.ov_platform_sel)
+        toolbar.addLayout(filters)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch(1)
+        self.ov_refresh_btn = _asset_action(
+            "刷新", self._ov_reload_events, tip="重新读取腾讯文档线下活动快照")
+        actions.addWidget(self.ov_refresh_btn)
+        self.ov_stop_btn = _asset_action("停止", self._ov_stop_search, tip="停止当前搜索，保留已完成结果")
+        self.ov_stop_btn.setEnabled(False)
+        actions.addWidget(self.ov_stop_btn)
+        self.ov_export_btn = _asset_action("导出", self._ov_export, tip="导出当前结果为 Excel")
+        self.ov_export_btn.setEnabled(False)
+        actions.addWidget(self.ov_export_btn)
+        self.ov_search_btn = _asset_action(
+            "搜索", self._ov_start_search, primary=True,
+            tip="搜索所选活动的现场视频（B站实时 + 抖音本地归档）")
+        self.ov_search_btn.setEnabled(False)
+        actions.addWidget(self.ov_search_btn)
+        toolbar.addLayout(actions)
+
+        self.ov_progress = QProgressBar()
+        self.ov_progress.setTextVisible(False)
+        self.ov_progress.setFixedHeight(8)
+        self.ov_progress.setVisible(False)
+        toolbar.addWidget(self.ov_progress)
+
+        self.ov_summary_lbl = _asset_label("正在读取线下活动清单…", wrap=True)
+        v.addWidget(self.ov_summary_lbl)
+
+        self.ov_stack = QStackedWidget()
+        hint_page = QWidget()
+        hl = QVBoxLayout(hint_page)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addStretch(1)
+        self.ov_hint = _asset_label("正在读取线下活动清单…", wrap=True)
+        self.ov_hint.setAlignment(Qt.AlignCenter)
+        self.ov_hint.setMinimumHeight(120)
+        hl.addWidget(self.ov_hint)
+        hl.addStretch(1)
+        self.ov_stack.addWidget(hint_page)
+
+        self._OV_HEADERS = ["来源", "标题", "作者", "时长", "发布", "说明", "链接"]
+        self.ov_table = QTableWidget(0, len(self._OV_HEADERS))
+        self.ov_table.setObjectName("assetTable")
+        self.ov_table.setHorizontalHeaderLabels(self._OV_HEADERS)
+        self.ov_table.verticalHeader().setVisible(False)
+        self.ov_table.verticalHeader().setDefaultSectionSize(38)
+        self.ov_table.setAlternatingRowColors(True)
+        self.ov_table.setShowGrid(False)
+        self.ov_table.setWordWrap(False)
+        self.ov_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.ov_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.ov_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.ov_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ov_table.customContextMenuRequested.connect(self._ov_context_menu)
+        self.ov_table.doubleClicked.connect(self._ov_open_index)
+        hdr = self.ov_table.horizontalHeader()
+        hdr.setMinimumSectionSize(34)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        for col, width in ((0, 145), (2, 90), (3, 56), (4, 96), (5, 100), (6, 48)):
+            self.ov_table.setColumnWidth(col, width)
+        self._ov_sorter = table_sort.install(
+            self.ov_table, rows=self._ov_rows, skip_columns={6})
+        self.ov_stack.addWidget(self.ov_table)
+        v.addWidget(self.ov_stack, 1)
+
+        self.ov_status_lbl = _asset_label("未开始", wrap=True)
+        v.addWidget(self.ov_status_lbl)
+        return f
+
+    def _ov_clean_text(self, text: str) -> str:
+        text = str(text or "")
+        text = text.replace("「Cookie 管理」", "「账号与登录」").replace("Cookie 管理", "账号与登录")
+        text = re.sub(r"(?i)cookie", "登录态", text)
+        return text
+
+    def _ov_reload_events(self):
+        if self._ov_searching:
+            self.app.toast("搜索进行中，请先停止再刷新活动清单", "warning")
+            return
+        if self._ov_events_loading:
+            return
+        self._ov_events_loaded = False
+        self._ov_events_loading = False
+        self._ov_events = []
+        self._ov_event_map = {}
+        self._ov_rows.clear()
+        self.ov_table.setRowCount(0)
+        self.ov_export_btn.setEnabled(False)
+        self.ov_year_sel.clear()
+        self.ov_event_sel.clear()
+        for w in (self.ov_year_sel, self.ov_event_sel,
+                  self.ov_platform_sel, self.ov_search_btn):
+            w.setEnabled(False)
+        self.ov_summary_lbl.setText("正在读取线下活动清单…")
+        self._ov_set_hint("正在读取线下活动清单…")
+        self.ov_status_lbl.setText("读取活动清单…")
+        self._ov_ensure_events()
+
+    def _ov_ensure_events(self):
+        if self._ov_events_loaded or self._ov_events_loading:
+            return
+        self._ov_events_loading = True
+        self._ov_set_hint("正在读取线下活动清单…")
+        self.ov_status_lbl.setText("读取活动清单…")
+
+        def work():
+            return offline_events.load_events()
+
+        def done(events, err):
+            self._ov_events_loading = False
+            if err:
+                msg = self._ov_clean_text(err)
+                self._ov_set_hint(f"读取线下活动失败：{msg}；请先在「腾讯文档」页同步表格后重试")
+                self.ov_status_lbl.setText(f"失败：{msg}")
+                self.app.toast(f"读取线下活动失败：{msg}", "error")
+                return
+            self._ov_events = list(events or [])
+            self._ov_events_loaded = True
+            if not self._ov_events:
+                self._ov_set_hint("线下活动表为空；请先在「腾讯文档」页同步表格后重试")
+                self.ov_status_lbl.setText("未开始")
+                return
+            self._ov_build_year_options()
+            for w in (self.ov_year_sel, self.ov_event_sel, self.ov_platform_sel, self.ov_search_btn):
+                w.setEnabled(True)
+            self.ov_status_lbl.setText("未开始")
+
+        run_bg(work, done)
+
+    def _ov_build_year_options(self):
+        years = sorted({e.year for e in self._ov_events if e.year}, reverse=True)
+        self.ov_year_sel.blockSignals(True)
+        self.ov_year_sel.clear()
+        self.ov_year_sel.addItem("全部", "all")
+        if {"2024", "2025", "2026"} & set(years):
+            self.ov_year_sel.addItem("2024–2026", "range2024")
+        for y in years:
+            self.ov_year_sel.addItem(y, y)
+        target = next((i for i in range(self.ov_year_sel.count())
+                       if self.ov_year_sel.itemData(i) == "range2024"), 0)
+        self.ov_year_sel.setCurrentIndex(target)
+        self.ov_year_sel.blockSignals(False)
+        self._ov_populate_events()
+
+    def _ov_filtered_events(self):
+        value = self.ov_year_sel.currentData()
+        if value == "range2024":
+            return [e for e in self._ov_events if e.year in {"2024", "2025", "2026"}]
+        if value and value != "all":
+            return [e for e in self._ov_events if e.year == value]
+        return list(self._ov_events)
+
+    def _ov_populate_events(self):
+        if not self._ov_events_loaded:
+            return
+        prev = self._ov_current_event()
+        prev_key = prev.key if prev else ""
+        events = self._ov_filtered_events()
+        self._ov_populating = True
+        self.ov_event_sel.blockSignals(True)
+        self.ov_event_sel.clear()
+        self._ov_event_map = {}
+        for ev in events:
+            display = ev.display
+            self.ov_event_sel.addItem(display, ev.key)
+            self._ov_event_map[ev.key] = ev
+            idx = self.ov_event_sel.count() - 1
+            detail = "｜".join(x for x in (ev.city, ev.kind, ev.status) if x)
+            self.ov_event_sel.setItemData(
+                idx, f"{display}\n{detail}" if detail else display, Qt.ToolTipRole)
+        self.ov_event_sel.blockSignals(False)
+        self._ov_populating = False
+        texts = [self.ov_event_sel.itemText(i) for i in range(self.ov_event_sel.count())]
+        comp = QCompleter(texts, self.ov_event_sel)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchContains)
+        comp.setCompletionMode(QCompleter.PopupCompletion)
+        comp.activated[str].connect(self._ov_on_completer_activated)
+        self.ov_event_sel.setCompleter(comp)
+        idx = next((i for i in range(self.ov_event_sel.count())
+                    if self.ov_event_sel.itemData(i) == prev_key), 0)
+        self.ov_search_btn.setEnabled(bool(events))
+        self.ov_event_sel.blockSignals(True)
+        if events:
+            self.ov_event_sel.setCurrentIndex(idx)
+        self.ov_event_sel.blockSignals(False)
+        if not events:
+            self._ov_set_hint("当前年份没有线下活动，可切换年份")
+        self._ov_event_changed()
+
+    def _ov_current_event(self):
+        idx = self.ov_event_sel.currentIndex()
+        if idx >= 0:
+            key = self.ov_event_sel.itemData(idx)
+            ev = self._ov_event_map.get(key)
+            if ev is not None:
+                return ev
+        return self._ov_resolve_typed_event(silent=True)
+
+    def _ov_resolve_typed_event(self, silent: bool = False):
+        text = self.ov_event_sel.currentText().strip()
+        if not text:
+            return None
+        target = next((i for i in range(self.ov_event_sel.count())
+                       if self.ov_event_sel.itemText(i) == text), None)
+        if target is None:
+            target = next((i for i in range(self.ov_event_sel.count())
+                           if text in self.ov_event_sel.itemText(i)), None)
+        if target is not None:
+            self.ov_event_sel.blockSignals(True)
+            self.ov_event_sel.setCurrentIndex(target)
+            self.ov_event_sel.blockSignals(False)
+            ev = self._ov_event_map.get(self.ov_event_sel.itemData(target))
+            if not silent:
+                self._ov_event_changed()
+            return ev
+        if not silent:
+            self.app.toast("没有找到匹配的线下活动", "warning")
+        return None
+
+    def _ov_on_completer_activated(self, text: str):
+        for i in range(self.ov_event_sel.count()):
+            if self.ov_event_sel.itemText(i) == text:
+                self.ov_event_sel.setCurrentIndex(i)
+                return
+        self._ov_resolve_typed_event()
+
+    def _ov_event_changed(self):
+        if self._ov_populating or self._ov_searching:
+            return
+        ev = self._ov_current_event()
+        if ev is None:
+            return
+        detail = "｜".join(x for x in (ev.city, ev.kind, ev.status) if x)
+        self.ov_summary_lbl.setText(f"{ev.display}｜{detail}" if detail else ev.display)
+        self._ov_rows.clear()
+        self.ov_table.setRowCount(0)
+        self.ov_export_btn.setEnabled(False)
+        self.ov_status_lbl.setText("未开始")
+        self._ov_set_hint("点「搜索」开始检索现场视频")
+
+    def _ov_set_hint(self, text: str):
+        self.ov_hint.setText(self._ov_clean_text(text))
+        self.ov_stack.setCurrentIndex(0)
+
+    def _ov_platforms(self):
+        text = self.ov_platform_sel.currentText()
+        if text == "B站":
+            return ("bilibili",)
+        if text.startswith("抖音"):
+            return ("douyin_archive",)
+        return ("bilibili", "douyin_archive")
+
+    def _ov_set_running(self, running: bool):
+        self._ov_searching = running
+        for w in (self.ov_year_sel, self.ov_event_sel,
+                  self.ov_platform_sel, self.ov_search_btn, self.ov_refresh_btn):
+            w.setEnabled(not running)
+        self.ov_stop_btn.setEnabled(running)
+        self.ov_export_btn.setEnabled(bool(self._ov_rows) and not running)
+
+    def _ov_start_search(self):
+        if self._ov_searching:
+            return
+        ev = self._ov_current_event()
+        if ev is None:
+            self.app.toast("请先选择一个线下活动", "warning")
+            return
+        if ev.status in {"已延期", "已取消"}:
+            self.app.toast(f"该活动{ev.status}，没有现场视频", "info")
+            return
+        self._ov_rows.clear()
+        self.ov_table.setRowCount(0)
+        self.ov_export_btn.setEnabled(False)
+        self._ov_set_hint("正在搜索，请稍候…")
+        self.ov_status_lbl.setText("进行中：准备搜索…")
+        self.ov_progress.setRange(0, 0)
+        self.ov_progress.setVisible(True)
+        self._ov_set_running(True)
+        self._ov_cancel = threading.Event()
+        platforms = self._ov_platforms()
+
+        def progress_cb(done, total, text):
+            common.post_to_main(self._ov_on_progress, done, total, text)
+
+        def work():
+            return offline_events.search_event_videos(
+                ev, platforms=platforms, progress=progress_cb, cancel=self._ov_cancel)
+
+        def done(outcome, err):
+            self.ov_progress.setVisible(False)
+            self.ov_progress.setRange(0, 1)
+            self._ov_set_running(False)
+            if err:
+                msg = self._ov_clean_text(err)
+                self._ov_set_hint(f"搜索失败：{msg}；可点「搜索」重试")
+                self.ov_status_lbl.setText(f"失败：{msg}")
+                self.app.toast(f"搜索失败：{msg}", "error")
+                return
+            results = list(getattr(outcome, "results", []) or [])
+            cancelled = bool(getattr(outcome, "cancelled", False))
+            errors = [self._ov_clean_text(e) for e in (getattr(outcome, "errors", []) or [])]
+            if results:
+                self._ov_rows[:] = results
+                self._ov_fill_table()
+                self.ov_export_btn.setEnabled(True)
+            else:
+                self._ov_set_hint("没有找到达到阈值的现场视频；可切换平台或稍后重试")
+            status = ("已取消" if cancelled else "已完成") + f"：{len(results)} 条"
+            if errors:
+                status += "；部分请求失败：" + "；".join(errors[:2])
+            self.ov_status_lbl.setText(self._ov_clean_text(status))
+
+        run_bg(work, done)
+
+    def _ov_on_progress(self, done: int, total: int, text: str):
+        if not self._ov_searching:
+            return
+        total = max(int(total or 1), 1)
+        self.ov_progress.setRange(0, total)
+        self.ov_progress.setValue(min(max(int(done or 0), 0), total))
+        self.ov_status_lbl.setText(self._ov_clean_text(f"进行中：{text}（{done}/{total}）"))
+
+    def _ov_stop_search(self):
+        if self._ov_searching and self._ov_cancel is not None:
+            self._ov_cancel.set()
+            self.ov_stop_btn.setEnabled(False)
+            self.ov_status_lbl.setText("正在停止…")
+
+    def _ov_fill_table(self):
+        rows = self._ov_rows
+        self.ov_table.setUpdatesEnabled(False)
+        self.ov_table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            platform_text = "抖音归档" if r.source == "douyin_archive" else r.platform
+            kind_text = ("推荐·" + r.kind) if r.recommended else r.kind
+            detail = "；".join(r.reasons)
+            if r.note:
+                detail = (detail + "；" if detail else "") + r.note
+            values = [
+                f"{platform_text}｜{kind_text}",
+                r.title,
+                r.author,
+                r.duration_text,
+                (r.publish_time or "")[:10],
+                detail,
+                "打开",
+            ]
+            for col, text in enumerate(values):
+                item = QTableWidgetItem(str(text or ""))
+                item.setToolTip(str(text or ""))
+                if col == 0:
+                    item.setToolTip(f"{r.platform}｜{kind_text}")
+                if col == 1:
+                    item.setToolTip(f"{r.title}\n{r.url}" if r.url else r.title)
+                if col == 3:
+                    item.setData(table_sort.SORT_KEY_ROLE, int(r.duration or 0))
+                if col == 6:
+                    item.setToolTip(r.url)
+                self.ov_table.setItem(i, col, item)
+        self.ov_table.setUpdatesEnabled(True)
+        self._ov_sorter.reapply()
+        self.ov_stack.setCurrentIndex(1)
+
+    def _ov_open_row(self, row: int):
+        if not (0 <= row < len(self._ov_rows)):
+            return
+        url = self._ov_rows[row].url
+        qurl = QUrl(url)
+        if qurl.scheme().lower() not in ("http", "https"):
+            self.app.toast("链接格式不支持", "warning")
+            return
+        if not QDesktopServices.openUrl(qurl):
+            self.app.toast("打开链接失败，可右键复制后手动打开", "error")
+
+    def _ov_open_index(self, index):
+        self._ov_open_row(index.row())
+
+    def _ov_context_menu(self, pos):
+        idx = self.ov_table.indexAt(pos)
+        if not idx.isValid():
+            return
+        row = idx.row()
+        if not (0 <= row < len(self._ov_rows)):
+            return
+        r = self._ov_rows[row]
+        menu = QMenu(self)
+        menu.addAction("打开链接", lambda: self._ov_open_row(row))
+        menu.addAction("复制链接", lambda: QApplication.clipboard().setText(r.url))
+        menu.addAction("复制标题", lambda: QApplication.clipboard().setText(r.title))
+        menu.exec(self.ov_table.viewport().mapToGlobal(pos))
+
+    def _ov_export(self):
+        ev = self._ov_current_event()
+        if ev is None or not self._ov_rows:
+            self.app.toast("当前没有可导出的结果", "info")
+            return
+        self.ov_export_btn.setEnabled(False)
+        self.ov_status_lbl.setText("正在导出…")
+        rows = list(self._ov_rows)
+
+        def work():
+            return offline_events.export_results_xlsx(ev, rows)
+
+        def done(path, err):
+            self.ov_export_btn.setEnabled(bool(self._ov_rows))
+            if err:
+                msg = self._ov_clean_text(err)
+                self.ov_status_lbl.setText(f"导出失败：{msg}")
+                self.app.toast(f"导出失败：{msg}", "error")
+                return
+            name = Path(path).name
+            self.ov_status_lbl.setText(f"已导出 {len(rows)} 条 → {name}")
+            self.app.toast(f"已导出 {len(rows)} 条 → {name}", "success")
+
+        run_bg(work, done)
 
     def _build_collected_tab(self) -> QWidget:
         f = QWidget()

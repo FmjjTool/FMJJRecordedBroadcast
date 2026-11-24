@@ -86,7 +86,8 @@ def _bili_search_pages(keyword: str, count: int, cookie: str = "") -> list:
     from bili import wbi as bili_wbi
 
     results = []
-    client = httpx.Client(timeout=15, follow_redirects=True)
+    # 平台搜索走直连；系统里损坏的代理变量不应阻断搜索（仍可按需在外部配置代理）。
+    client = httpx.Client(timeout=15, follow_redirects=True, trust_env=False)
     try:
         page = 1
         while len(results) < count and page <= 5:
