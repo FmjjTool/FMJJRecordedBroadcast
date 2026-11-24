@@ -72,8 +72,9 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[。！？!?；;])|\n+")
 _FULL_DATE = re.compile(r"(20\d{2})[-_.年](\d{1,2})[-_.月](\d{1,2})日?")
 _COMPACT_DATE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
 _TODAY_DATE = re.compile(r"今天是?\s*(20\d{2})年(\d{1,2})月(\d{1,2})[日号]")
-# 命名投稿的标准录播名：YYYY-MM-DD_HH-MM-SS_主播_…
-_STANDARD_NAME = re.compile(r"(?<!\d)(20\d{2})-(\d{2})-(\d{2})_\d{2}-\d{2}-\d{2}_")
+# 命名投稿的标准录播名：YYYY-MM-DD(_~YYYY-MM-DD)_HH-MM-SS_主播_…
+_STANDARD_NAME = re.compile(
+    r"(?<!\d)(20\d{2})-(\d{2})-(\d{2})(?:~20\d{2}-\d{2}-\d{2})?_\d{2}-\d{2}-\d{2}_")
 
 _CITY = re.compile(
     r"(?:在|去)(北京|上海|广州|深圳|杭州|成都|重庆|武汉|南京|西安|长沙|"

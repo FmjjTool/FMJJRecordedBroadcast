@@ -8,8 +8,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from .date_folders import date_folder_value
-from .utils import extract_date_from_filename
+from .date_folders import date_folder_value, format_date_range, split_date_range
+from .utils import (
+    extract_date_from_filename, extract_date_range_from_filename, video_end_date,
+)
 
 
 VIDEO_EXTS = {".mp4", ".flv", ".mkv", ".ts", ".mov", ".avi", ".webm",
@@ -297,11 +299,35 @@ def move_companions(video_item, video_target) -> Tuple[List[str], List[str]]:
     return moved, skipped
 
 
+def _group_date_range(items, start_date):
+    """同一开始日期的一组视频 → 日期文件夹名；按结束日期扩展为跨天范围。"""
+    start, existing_end = split_date_range(start_date)
+    if not start:
+        return ""
+    end = existing_end or start
+    for item in items:
+        path = item.get("path", "")
+        _name_start, name_end = extract_date_range_from_filename(path)
+        if name_end and name_end > start:
+            end = max(end, name_end)
+            continue
+        candidate = video_end_date(path, fallback_date=start)
+        if candidate and candidate > end:
+            end = candidate
+    return format_date_range(start, end)
+
+
 def execute_migration(work_dir, plan, on_progress=None):
+    groups = {}
+    for item in plan:
+        groups.setdefault(item.get("date") or "", []).append(item)
+    ranges = {date: _group_date_range(items, date)
+              for date, items in groups.items() if date}
     results = []
     for index, item in enumerate(plan, 1):
         try:
-            target = move_video(item, work_dir)
+            target = move_video(item, work_dir,
+                                date=ranges.get(item.get("date") or "", None))
             moved, skipped = move_companions(item, target)
             result = {"source": item["path"], "target": target, "ok": True,
                       "companions": moved, "companion_skipped": skipped}
@@ -361,7 +387,8 @@ def execute_organize(root_path: str, groups: Dict[str, List[Dict]]) -> Tuple[int
     failed_files = []
     
     for date_str, files in groups.items():
-        folder_path = os.path.join(root_path, date_str)
+        target_date = _group_date_range(files, date_str)
+        folder_path = os.path.join(root_path, target_date)
         try:
             os.makedirs(folder_path, exist_ok=True)
         except Exception:
@@ -371,7 +398,7 @@ def execute_organize(root_path: str, groups: Dict[str, List[Dict]]) -> Tuple[int
         
         for f in files:
             try:
-                target = move_video(f, root_path, date=date_str)
+                target = move_video(f, root_path, date=target_date)
                 move_companions(f, target)
                 success_count += 1
             except Exception:

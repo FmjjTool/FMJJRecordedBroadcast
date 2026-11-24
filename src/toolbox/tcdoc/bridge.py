@@ -2061,7 +2061,8 @@ def _live_row(account: str, session: dict) -> dict:
 
 
 _BILI_VIDEO_URL = "https://www.bilibili.com/video/{}"
-_RECORD_NAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-\d{2}_(.+)$")
+_RECORD_NAME_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})(?:~\d{4}-\d{2}-\d{2})?_(\d{2})-(\d{2})-\d{2}_(.+)$")
 
 
 def _replay_index() -> dict[tuple[str, str], list[dict]]:

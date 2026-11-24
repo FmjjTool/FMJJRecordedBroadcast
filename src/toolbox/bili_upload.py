@@ -17,9 +17,14 @@ from urllib.parse import parse_qsl, urlparse
 
 import requests
 
+from toolbox.date_folders import (
+    DATE_RANGE_SEP, date_folder_range, format_date_range, split_date_range,
+)
 from toolbox.durable_io import atomic_write_json
 from toolbox.organize_engine import VIDEO_EXTS, _locked_reader
-from toolbox.utils import extract_date_from_filename
+from toolbox.utils import (
+    extract_date_from_filename, extract_date_range_from_filename,
+)
 
 UPLOAD_PAGE = "https://member.bilibili.com/platform/upload/video/frame"
 DEFAULTS = {"title": "封茗囧菌{日期}直播全程无弹幕{分P说明}～", "desc": "",
@@ -83,7 +88,7 @@ def detect_source_platform(paths):
                "b站": "B站", "bilibili": "B站"}
     platforms = set()
     for path in paths:
-        match = re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[^_]+(?:_[^_]*)*?_(?:有弹幕|无弹幕)_([^_]+)(?:_|$)", Path(path).stem)
+        match = re.match(r"^\d{4}-\d{2}-\d{2}(?:~\d{4}-\d{2}-\d{2})?_\d{2}-\d{2}-\d{2}_[^_]+(?:_[^_]*)*?_(?:有弹幕|无弹幕)_([^_]+)(?:_|$)", Path(path).stem)
         platform = aliases.get(match[1].casefold()) if match else ""
         if not platform:
             return ""
@@ -160,17 +165,26 @@ def is_renamed_video(path):
 def multipart_count(paths, date=""):
     """只把今天同一主播/平台/弹幕版本的有效录播算作一条稿件的多个 P。"""
     today = today_compact()
-    if len(paths) < 2 or (date and str(date).replace("-", "") != today):
+    start_date, end_date = split_date_range(date)
+    if len(paths) < 2:
         return 0
+    if start_date:
+        # 跨天范围只要包含今天，就允许今天把整场录播作为一条稿件的多个 P。
+        if not start_date <= today <= (end_date or start_date):
+            return 0
     groups, unique = set(), set()
     for value in paths:
         path = Path(value)
         if not is_renamed_video(path) or path.suffix.lower() not in VIDEO_EXTS:
             return 0
-        if extract_date_from_filename(path.name) != today:
+        file_start, file_end = extract_date_range_from_filename(path.name)
+        if start_date:
+            if not start_date <= file_start <= (end_date or start_date):
+                return 0
+        elif file_start != today:
             return 0
         # 标准交互命名中，日期/时间后是账户；直播类型和附加标题可以不同。
-        match = re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_([^_]+)(?:_[^_]*)*?_(有弹幕|无弹幕)_([^_]+)(?:_|$)", path.stem)
+        match = re.match(r"^\d{4}-\d{2}-\d{2}(?:~\d{4}-\d{2}-\d{2})?_\d{2}-\d{2}-\d{2}_([^_]+)(?:_[^_]*)*?_(有弹幕|无弹幕)_([^_]+)(?:_|$)", path.stem)
         if not match:
             return 0
         platform = match[3]
@@ -199,17 +213,52 @@ def save_settings(settings):
     atomic_write_json(get_config_dir() / "organize.json", settings)
 
 
+def date_value_for_paths(paths):
+    """选中视频 → 日期文本；同一天可组成跨天范围 `20261124~20261126`。"""
+    values = [extract_date_range_from_filename(Path(path).name) for path in paths]
+    starts = {start for start, _end in values if start}
+    if len(starts) != 1:
+        return ""
+    start = next(iter(starts))
+    end = max((end or start) for value_start, end in values if value_start == start)
+    for path in paths:
+        folder_start, folder_end = date_folder_range(Path(path).parent.name)
+        if folder_start == start:
+            end = max(end, folder_end or start)
+    return format_date_range(start, end)
+
+
 def build_metadata(paths, settings):
     config = {**DEFAULTS, **settings}
     if not paths:
         raise ValueError("请先选择视频")
-    dates = {extract_date_from_filename(Path(path).name) for path in paths}
-    date = config.get("date") or (next(iter(dates)) if len(dates) == 1 else "")
-    if not date:
+    ranges = [extract_date_range_from_filename(Path(path).name) for path in paths]
+    file_starts = {start for start, _end in ranges if start}
+    configured = str(config.get("date") or "").strip()
+    configured_start, configured_end = split_date_range(configured)
+    if configured and not configured_start:
+        raise ValueError("日期须为 YYYYMMDD 或 YYYYMMDD~YYYYMMDD")
+    if configured_start:
+        start = configured_start
+    elif len(file_starts) == 1:
+        start = next(iter(file_starts))
+    else:
         raise ValueError("无法识别同一场日期，请填写日期或按日期分组投稿")
+    end = configured_end or start
+    if DATE_RANGE_SEP not in configured.replace("～", DATE_RANGE_SEP):
+        for file_start, file_end in ranges:
+            if file_start == start:
+                end = max(end, file_end or start)
+        for path in paths:
+            folder_start, folder_end = date_folder_range(Path(path).parent.name)
+            if folder_start == start:
+                end = max(end, folder_end or start)
+    if end < start:
+        raise ValueError("结束日期不能早于开始日期")
     from datetime import datetime
-    compact = str(date).replace("-", "")
-    datetime.strptime(compact, "%Y%m%d")
+    datetime.strptime(start, "%Y%m%d")
+    datetime.strptime(end, "%Y%m%d")
+    compact = format_date_range(start, end)
     count = len(paths)
     parts = multipart_count(paths, compact)
     if count > 1 and not parts:

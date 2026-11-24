@@ -10,7 +10,7 @@ import threading
 import ctypes
 from pathlib import Path
 from typing import Tuple, Optional
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from .config_manager import load_convert_config
 from .platform_names import DIRECTORY_PLATFORM_NAMES as PLATFORM_CN
@@ -355,6 +355,15 @@ def clean_special_chars(s: str) -> str:
 ORGANIZE_DATE_PATTERN = re.compile(r"(\d{4})(\d{2})(\d{2})")
 # 支持带分隔符的日期：2026-06-08 / 2026_06_08 / 2026.06.08
 ORGANIZE_DATE_SEP_PATTERN = re.compile(r"(\d{4})[-_./](\d{1,2})[-_./](\d{1,2})")
+# 标准录播名前缀：2026-11-24 或跨天 2026-11-24~2026-11-26
+STANDARD_RANGE_PATTERN = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})(?:~(\d{4})-(\d{2})-(\d{2}))?")
+# 开始时间：标准名 2026-11-24_20-15-30 / 通用 2026-11-24 20-15-30 / 录制 20261124-201530
+START_DATETIME_PATTERNS = (
+    re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:~(\d{4})-(\d{2})-(\d{2}))?[_\-](\d{2})-(\d{2})-(\d{2})"),
+    re.compile(r"(20\d{2})[-./](\d{1,2})[-./](\d{1,2})[ _\-T]+(\d{1,2})[-:.：](\d{1,2})[-:.：](\d{1,2})"),
+    re.compile(r"(20\d{2})(\d{2})(\d{2})[-_]?(\d{2})(\d{2})(\d{2})(?!\d)"),
+)
 
 
 def _validate_date(y: int, mo: int, d: int) -> Optional[str]:
@@ -403,6 +412,80 @@ def extract_date_from_filename(filename: str) -> Optional[str]:
             pass
 
     return None
+
+
+def extract_date_range_from_filename(filename: str) -> Tuple[str, str]:
+    """文件名日期前缀 → (开始, 结束) YYYYMMDD；单日或非标准名两端相同。"""
+    name = os.path.splitext(os.path.basename(str(filename)))[0]
+    match = STANDARD_RANGE_PATTERN.match(name)
+    if match:
+        try:
+            start = date(int(match.group(1)), int(match.group(2)),
+                         int(match.group(3)))
+            end = (date(int(match.group(4)), int(match.group(5)),
+                        int(match.group(6))) if match.group(4) else start)
+        except ValueError:
+            start = end = None
+        if start and end:
+            if end < start:
+                return "", ""
+            return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    value = extract_date_from_filename(name) or ""
+    return value, value
+
+
+def extract_start_datetime(filename: str, fallback_date: str = "") -> Optional[datetime]:
+    """从录播文件名提取开始时间；识别不了返回 None。"""
+    name = os.path.basename(str(filename))
+    for pattern in START_DATETIME_PATTERNS:
+        match = pattern.search(name)
+        if not match:
+            continue
+        parts = [int(value) for value in match.groups() if value]
+        try:
+            if len(parts) >= 9:
+                # 标准名：开始日期 + 可选结束日期 + 开始时间
+                parts = parts[:3] + parts[6:9]
+            return datetime(*parts[:6])
+        except (TypeError, ValueError):
+            continue
+    value = _validate_date_string(fallback_date)
+    if value:
+        try:
+            return datetime.strptime(value, "%Y%m%d")
+        except ValueError:
+            return None
+    return None
+
+
+def _validate_date_string(value: str) -> str:
+    text = str(value or "").replace("-", "").strip()
+    if len(text) != 8 or not text.isdigit():
+        return ""
+    try:
+        return datetime.strptime(text, "%Y%m%d").strftime("%Y%m%d")
+    except ValueError:
+        return ""
+
+
+def video_end_date(filename_or_path: str, duration=None, fallback_date: str = "") -> str:
+    """开始时间 + 视频时长 → 结束 YYYYMMDD；无法识别返回空串。"""
+    start = extract_start_datetime(filename_or_path, fallback_date)
+    if start is None:
+        return ""
+    if duration is None:
+        info = get_video_info(str(filename_or_path))
+        if info.get("error"):
+            return ""
+        duration = info.get("duration")
+    try:
+        seconds = float(duration or 0)
+    except (TypeError, ValueError):
+        return ""
+    # 损坏文件可能报出几十年的时长；只接受 0～366 天。
+    if not 0 < seconds <= 366 * 86400:
+        return ""
+    return (start + timedelta(seconds=seconds)).strftime("%Y%m%d")
 
 
 # ==================== 视频信息 ====================

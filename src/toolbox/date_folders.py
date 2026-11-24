@@ -8,8 +8,12 @@ import re
 from datetime import datetime
 from typing import Iterable, List, Tuple
 
-# 日期文件夹以 8 位日期开头；`20260923_备份` 这类带后缀的仍归入同一天。
+# 日期文件夹以 8 位日期开头；`20260923_备份` 这类带后缀的仍归入同一天，
+# 跨天录制的文件夹为 `20261124~20261126`。
 DATE_FOLDER_RE = re.compile(r"^(20\d{6})")
+DATE_RANGE_SEP = "~"
+_COMPACT_DATE_RE = re.compile(r"^(20\d{2})(\d{2})(\d{2})$")
+_SEP_DATE_RE = re.compile(r"^(20\d{2})[-./](\d{1,2})[-./](\d{1,2})$")
 
 
 def match_date_folder(name: str):
@@ -17,10 +21,74 @@ def match_date_folder(name: str):
     return DATE_FOLDER_RE.match(name or "")
 
 
+def _normalize_date(value: str) -> str:
+    """YYYYMMDD / YYYY-MM-DD / YYYY.MM.DD / YYYY_MM_DD → YYYYMMDD；非法返回空串。"""
+    text = str(value or "").strip()
+    for pattern in (_COMPACT_DATE_RE, _SEP_DATE_RE):
+        match = pattern.fullmatch(text)
+        if not match:
+            continue
+        try:
+            return datetime(int(match.group(1)), int(match.group(2)),
+                            int(match.group(3))).strftime("%Y%m%d")
+        except ValueError:
+            return ""
+    return ""
+
+
+def split_date_range(value: str):
+    """解析单日或 `开始~结束`（紧凑/带分隔符均可）→ (YYYYMMDD, YYYYMMDD)。
+
+    空值或非法值返回 ("", "")；结束早于开始时原样返回两端，由调用方决定是否报错。
+    """
+    text = str(value or "").replace("～", DATE_RANGE_SEP).strip()
+    if not text:
+        return "", ""
+    parts = [part.strip() for part in text.split(DATE_RANGE_SEP)]
+    if len(parts) == 1:
+        start = _normalize_date(parts[0])
+        return (start, start) if start else ("", "")
+    if len(parts) != 2:
+        return "", ""
+    start, end = _normalize_date(parts[0]), _normalize_date(parts[1])
+    if not start or not end:
+        return "", ""
+    return start, end
+
+
+def format_date_range(start: str, end: str = "", dashed: bool = False) -> str:
+    """开始/结束日期 → `YYYYMMDD` 或 `YYYYMMDD~YYYYMMDD`；同一天只保留一个日期。"""
+    first = _normalize_date(start)
+    last = _normalize_date(end) if end else first
+    if not first or not last or last <= first:
+        return _dash_date(first) if dashed and first else first
+    if dashed:
+        return f"{_dash_date(first)}~{_dash_date(last)}"
+    return f"{first}~{last}"
+
+
+def _dash_date(value: str) -> str:
+    return f"{value[:4]}-{value[4:6]}-{value[6:8]}" if len(value) == 8 else value
+
+
 def date_folder_value(name: str) -> str:
-    """取文件夹名里的 YYYYMMDD；不是日期文件夹返回空串。"""
+    """取文件夹名里的起始 YYYYMMDD；不是日期文件夹返回空串。"""
     m = match_date_folder(name)
     return m.group(1) if m else ""
+
+
+def date_folder_range(name: str):
+    """日期文件夹 → (开始, 结束)；跨天文件夹识别 `~YYYYMMDD`，单日两端相同。"""
+    start = date_folder_value(name)
+    if not start:
+        return "", ""
+    match = re.match(r"~(20\d{6})", str(name or "")[8:])
+    return start, match.group(1) if match else start
+
+
+def date_folder_end(name: str) -> str:
+    """日期文件夹的结束 YYYYMMDD；不是日期文件夹返回空串。"""
+    return date_folder_range(name)[1]
 
 
 def folder_date_label(value: str) -> str:

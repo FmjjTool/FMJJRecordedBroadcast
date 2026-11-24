@@ -12,14 +12,20 @@ from .utils import clean_special_chars
 # ==================== 正则模式 ====================
 
 TIME_HHMMSS_PATTERN = re.compile(r"(?<![\d-])(\d{2}-\d{2}-\d{2})(?!\d)", re.I)
-STANDARD_DT_PATTERN = re.compile(r"20\d{2}-\d{2}-\d{2}[_\-](\d{2})-(\d{2})-(\d{2})")
+STANDARD_DT_PATTERN = re.compile(
+    r"20\d{2}-\d{2}-\d{2}(?:~20\d{2}-\d{2}-\d{2})?[_\-](\d{2})-(\d{2})-(\d{2})")
+STANDARD_NAME_PATTERN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})(?:~(\d{4}-\d{2}-\d{2}))?_(\d{2})-(\d{2})-(\d{2})_.+")
+DATE_RANGE_DASH_PATTERN = re.compile(
+    r"20\d{2}[-./]\d{1,2}[-./]\d{1,2}\s*~\s*20\d{2}[-./]\d{1,2}[-./]\d{1,2}")
+DATE_RANGE_COMPACT_PATTERN = re.compile(r"20\d{6}\s*~\s*20\d{6}")
 TIMESTAMP_14_PATTERN = re.compile(r"20\d{2}(0[1-9]|1[0-2])([0-2]\d|3[01])(\d{2})(\d{2})(\d{2})")
 REC_TIME_PATTERN = re.compile(r"20\d{6}-(\d{6})")
 BV_PATTERN = re.compile(r"BV[a-zA-Z0-9]{8,12}", re.I)
 REC_PREFIX_PATTERN = re.compile(r"录制-\d+", re.I)
 DATE_STAMP_PATTERN = re.compile(r"20\d{6}-\d{6}|20\d{12}")
 DATE_DASH_PATTERN = re.compile(r"20\d{2}[-./]\d{1,2}[-./]\d{1,2}")
-TIME_CLEAN_PATTERN = re.compile(r"(?<!20)\b\d{2}-\d{2}-\d{2}\b")
+TIME_CLEAN_PATTERN = re.compile(r"(?<!\d)\d{2}-\d{2}-\d{2}(?!\d)")
 PURE_DIGIT6_PATTERN = re.compile(r"\d{6}")
 
 
@@ -33,13 +39,23 @@ PURE_DIGIT6_PATTERN = re.compile(r"\d{6}")
 # ==================== 时间提取 ====================
 
 def is_standard_recording_name(filename: str) -> bool:
-    """交互重命名生成的日期/时间前缀；投稿统一检查同一规则。"""
+    """交互重命名生成的日期/时间前缀；投稿统一检查同一规则。
+
+    跨天录制允许 `YYYY-MM-DD~YYYY-MM-DD_HH-MM-SS_`，结束日期不得早于开始日期。
+    """
     from datetime import datetime
-    match = re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_.+", os.path.basename(filename))
+    match = STANDARD_NAME_PATTERN.match(os.path.basename(filename))
     if not match:
         return False
     try:
-        datetime.strptime(match.group(1) + " " + match.group(2), "%Y-%m-%d %H-%M-%S")
+        start = datetime.strptime(match.group(1), "%Y-%m-%d")
+        end = (datetime.strptime(match.group(2), "%Y-%m-%d")
+               if match.group(2) else start)
+        if end < start:
+            return False
+        datetime.strptime(match.group(1) + " " +
+                          f"{match.group(3)}-{match.group(4)}-{match.group(5)}",
+                          "%Y-%m-%d %H-%M-%S")
         return True
     except ValueError:
         return False
@@ -77,10 +93,12 @@ def extract_file_title(file_name: str) -> str:
     t = os.path.splitext(str(file_name))[0]
     t = REC_PREFIX_PATTERN.sub("", t)
     t = DATE_STAMP_PATTERN.sub("", t)
-    t = re.sub(r"^\d+|-(\d+)-", "", t)
-    t = re.sub(r"[-._]", "", t)
+    t = DATE_RANGE_DASH_PATTERN.sub("", t)
+    t = DATE_RANGE_COMPACT_PATTERN.sub("", t)
     t = DATE_DASH_PATTERN.sub("", t)
     t = TIME_CLEAN_PATTERN.sub("", t)
+    t = re.sub(r"^\d+|-(\d+)-", "", t)
+    t = re.sub(r"[-._]", "", t)
     t = PURE_DIGIT6_PATTERN.sub("", t)
     t = clean_special_chars(t)
     return t if t else "无标题"
@@ -162,6 +180,13 @@ def _update_timeline(timeline_path, old_video, new_video) -> bool:
             json.dump(data, stream, ensure_ascii=False, indent=1)
         os.replace(temporary, path)
     return changed
+
+
+def rebase_timeline_paths(old_video, new_video):
+    """文件夹整体改名后修正 `_时间轴.json` 里的视频绝对路径（文件名不变）。"""
+    for item in companion_candidates(Path(new_video)):
+        if item.name.lower().endswith(_TIMELINE_SUFFIX.lower()):
+            _update_timeline(item, old_video, new_video)
 
 
 def rebase_companions(src_video, dst_video):

@@ -109,7 +109,8 @@ class BiliUploadDialog(QDialog):
         self.title = QLineEdit(self.config["title"])
         form.addRow("标题模板", self.title)
         self.date = QLineEdit(self._selected_day)
-        self.date.setPlaceholderText("留空从视频文件名识别；可填 20261002")
+        self.date.setPlaceholderText("留空从视频文件名识别；可填 20261002 或 20261002~20261003")
+        self.date.setToolTip("跨天录制填 开始~结束；只填单日时按视频文件名里的结束日期补全")
         form.addRow("本次直播日期", self.date)
         self.platform = QComboBox()
         self.platform.addItems(BU.SOURCE_PLATFORMS)
@@ -208,6 +209,10 @@ class BiliUploadDialog(QDialog):
                     "renamed": BU.is_renamed_video(path)} for path in self.paths]
         self._records = records
         self.set_video_list(records, {record["path"] for record in records if record["date"] == self._selected_day})
+        value = BU.date_value_for_paths(self.selected_paths())
+        if value:
+            self._selected_day = value.split("~", 1)[0]
+            self.date.setText(value)
         for widget in (self.title, self.date, self.tags, self.source, self.cover):
             widget.textChanged.connect(self.refresh_preview)
         self.desc.textChanged.connect(self.refresh_preview)
@@ -261,6 +266,10 @@ class BiliUploadDialog(QDialog):
                     if record["renamed"] and BU.video_path_key(record["path"]) in added_keys}
         self._selection_modified = True
         self.set_video_list([record for record in records if record["date"] == self._selected_day], checked)
+        value = BU.date_value_for_paths(self.selected_paths())
+        if value:
+            self._selected_day = value.split("~", 1)[0]
+            self.date.setText(value)
         self.status.setText(f"已加入 {len(added)} 个视频，当前勾选 {len(self.selected_paths())} 个")
 
     def set_video_list(self, records, checked):
@@ -277,9 +286,10 @@ class BiliUploadDialog(QDialog):
         self._selection_modified = True
         selected = self.selected_paths()
         dates = {extract_date_from_filename(Path(path).name) for path in selected}
-        if len(dates) == 1 and next(iter(dates)):
-            self._selected_day = next(iter(dates))
-            self.date.setText(self._selected_day)
+        value = BU.date_value_for_paths(selected)
+        if value:
+            self._selected_day = value.split("~", 1)[0]
+            self.date.setText(value)
         elif len(dates) > 1:
             self.date.clear()
         elif not selected:

@@ -29,13 +29,16 @@ from PySide6.QtWidgets import (
 )
 
 from toolbox.config_manager import get_rename_config, save_rename_config
-from toolbox.date_folders import date_folder_value, scan_date_folders
+from toolbox.date_folders import (
+    date_folder_range, date_folder_value, format_date_range, scan_date_folders,
+)
 from toolbox.rename_engine import (
     extract_file_title, extract_time_str, is_standard_recording_name,
-    rebase_companions,
+    rebase_companions, rebase_timeline_paths,
 )
 from toolbox.utils import (
-    capture_video_frame, clean_special_chars, get_video_info, is_video_file,
+    capture_video_frame, clean_special_chars, extract_date_range_from_filename,
+    extract_start_datetime, get_video_info, is_video_file, video_end_date,
 )
 
 from gui_qt.common import run_bg
@@ -61,6 +64,18 @@ def _rename_with_retry(src, dst, attempts=6, delay=0.3):
         try:
             with _locked_reader(src):
                 os.rename(src, dst)
+            return
+        except OSError as error:
+            if attempt + 1 >= attempts or not _is_sharing_violation(error):
+                raise
+            time.sleep(delay)
+
+
+def _rename_dir_with_retry(src, dst, attempts=3, delay=0.2):
+    """文件夹改名；被预览/同步盘短暂占用时重试，不打开目录句柄。"""
+    for attempt in range(attempts):
+        try:
+            os.rename(src, dst)
             return
         except OSError as error:
             if attempt + 1 >= attempts or not _is_sharing_violation(error):
@@ -582,20 +597,25 @@ class RenamePage(BasePage):
         self._load_video(path)
 
     def _is_standard_named(self, filename: str) -> bool:
-        """检测是否已经是标准命名格式（YYYY-MM-DD_HH-MM-SS_...）"""
+        """检测是否已经是标准命名格式（YYYY-MM-DD[~YYYY-MM-DD]_HH-MM-SS_...）"""
         return is_standard_recording_name(filename)
 
     def _load_video(self, video_path):
         """加载单个视频的详细信息 + 截图（后台线程执行，避免卡 UI）"""
         filename = os.path.basename(video_path)
-        folder_date = os.path.basename(self.current_folder)
-        date_str = date_folder_value(folder_date) or folder_date[:8]
-        fmt_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}" if len(date_str) >= 8 else date_str
+        folder_name = os.path.basename(self.current_folder)
+        folder_date = date_folder_value(folder_name) or folder_name[:8]
+        name_start, name_end = extract_date_range_from_filename(filename)
+        date_str = name_start or folder_date
+        self._ctx_start_compact = date_str
+        self._ctx_end_compact = name_end if name_end and name_end > date_str else None
+        self._ctx_start_dt = extract_start_datetime(filename, date_str)
 
         time_str = extract_time_str(filename)
         self.auto_title = extract_file_title(filename)
 
-        self._ctx_date = fmt_date
+        self._ctx_date = format_date_range(
+            date_str, self._ctx_end_compact or date_str, dashed=True)
         self._ctx_time = time_str
         self._set_title_mode("none")  # 默认不保留
 
@@ -626,16 +646,22 @@ class RenamePage(BasePage):
             if self._load_token is not token:
                 return  # 已切换文件，丢弃过期结果
             info, thumb = result if result else ({}, None)
-            if info.get("error"):
-                info_text = f"{filename}\n时间: {time_str}\n无法获取视频信息"
-            else:
+            duration = 0.0
+            if isinstance(info, dict) and not info.get("error"):
+                try:
+                    duration = float(info.get("duration") or 0)
+                except (TypeError, ValueError):
+                    duration = 0.0
                 info_text = (
                     f"{filename}\n时间: {time_str}\n"
                     f"{info.get('resolution', '?')} | {info.get('orientation', '?')}\n"
                     f"{info.get('duration_str', '?')} | {info.get('fps', '?')} fps\n"
                     f"{info.get('file_size_str', '?')} | {info.get('audio_codec', '?')}"
                 )
+            else:
+                info_text = f"{filename}\n时间: {time_str}\n无法获取视频信息"
             self.video_info_label.setText(info_text)
+            self._apply_video_date_range(video_path, duration)
 
             if thumb and os.path.exists(thumb):
                 pm = QPixmap(thumb)
@@ -668,6 +694,88 @@ class RenamePage(BasePage):
             self.confirm_btn.setEnabled(True)
             self.skip_btn.setText("⏭ 跳过")
             self.skip_btn.setEnabled(True)
+
+    def _apply_video_date_range(self, video_path, duration=None):
+        """按开始时间和视频时长补全结束日期，并把当前日期文件夹扩展成跨天范围。"""
+        start = getattr(self, "_ctx_start_compact", "")
+        if not start:
+            return
+        end = getattr(self, "_ctx_end_compact", None) or start
+        name_start, name_end = extract_date_range_from_filename(
+            os.path.basename(video_path))
+        if name_start:
+            end = max(end, name_end or start)
+        if duration is None:
+            computed = video_end_date(video_path, fallback_date=start)
+        elif duration > 0:
+            computed = video_end_date(
+                video_path, duration=duration, fallback_date=start)
+        else:
+            computed = ""
+        if computed:
+            end = max(end, computed)
+        self._ctx_end_compact = end
+        self._ctx_date = format_date_range(start, end, dashed=True)
+        if end > start:
+            self._extend_folder_range(end)
+
+    def _extend_folder_range(self, end_compact):
+        """日期文件夹从 20261124 扩展为 20261124~20261126；同名目标存在时不覆盖。"""
+        if not self.current_folder or not end_compact:
+            return
+        folder_name = os.path.basename(self.current_folder.rstrip("\\/"))
+        start, current_end = date_folder_range(folder_name)
+        if not start or not current_end or end_compact <= current_end:
+            return
+        suffix = re.sub(r"^~20\d{6}", "", folder_name[8:])
+        new_name = f"{start}~{end_compact}{suffix}"
+        new_path = os.path.join(os.path.dirname(self.current_folder), new_name)
+        if os.path.exists(new_path):
+            self._log(f"日期文件夹已存在，未扩展：{new_name}")
+            return
+        for path in list(self.current_videos):
+            self._release_media_holders(path)
+        old_path = self.current_folder
+        old_key = os.path.normcase(os.path.abspath(old_path))
+        try:
+            _rename_dir_with_retry(old_path, new_path)
+        except OSError as error:
+            self._log(f"日期文件夹改名失败：{folder_name} → {new_name}（{error}）")
+            return
+
+        def rebase(path):
+            if os.path.normcase(os.path.dirname(os.path.abspath(path))) != old_key:
+                return path
+            return os.path.join(new_path, os.path.basename(path))
+
+        old_videos = list(self.current_videos)
+        self.current_folder = new_path
+        self.current_videos = [rebase(path) for path in self.current_videos]
+        for old_video, new_video in zip(old_videos, self.current_videos):
+            try:
+                rebase_timeline_paths(old_video, new_video)
+            except OSError as error:
+                self._log(f"时间轴路径未更新：{os.path.basename(new_video)}（{error}）")
+        self._metadata_failed = {rebase(path) for path in self._metadata_failed}
+        self._posted_batches = {
+            tuple((rebase(path), size, mtime) for path, size, mtime in signature)
+            for signature in self._posted_batches}
+        for index in range(self.folder_list.count()):
+            item = self.folder_list.item(index)
+            if item and item.text() == folder_name:
+                item.setText(new_name)
+                break
+        self.folders = [(new_name if name == folder_name else name, label)
+                        for name, label in self.folders]
+        self._log(f"日期文件夹改为：{new_name}")
+
+    def _ensure_end_date(self):
+        """确认重命名前补算结束日期；后台信息未到时同步读取一次视频时长。"""
+        if getattr(self, "_ctx_end_compact", None):
+            return
+        if not (0 <= self.current_video_idx < len(self.current_videos)):
+            return
+        self._apply_video_date_range(self.current_videos[self.current_video_idx])
 
     def _write_copyright_metadata(self, filepath, enabled, info):
         """同步写入元数据，完成后才允许投稿；失败保留已重命名的原视频。"""
@@ -809,6 +917,9 @@ class RenamePage(BasePage):
             return
         if not self.type_order:
             self._log("请至少选择一种直播类型")
+            return
+        self._ensure_end_date()
+        if not (0 <= self.current_video_idx < len(self.current_videos)):
             return
         index = self.current_video_idx
         src = self.current_videos[index]

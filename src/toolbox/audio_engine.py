@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple
 from .utils import AUDIO_EXTS, find_ffmpeg_exe, is_media_file
 
 
-DATE_FOLDER_RE = re.compile(r"^20\d{6}$")
+DATE_FOLDER_RE = re.compile(r"^20\d{6}(?:~20\d{6})?$")
 
 
 def _no_window() -> int:
