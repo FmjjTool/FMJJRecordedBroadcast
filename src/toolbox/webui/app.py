@@ -83,6 +83,16 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tool_service.start_audio_extract(dict(req.json or {}))
     server.post("/api/tools/audio/extract", start_audio_extract)
 
+    server.get("/api/tools/subtitle/overview",
+               lambda req: tool_service.subtitle_overview())
+    server.get("/api/tools/subtitle/sources",
+               lambda req: tool_service.subtitle_sources(
+                   req.q_int("limit", 200, 1, 500)))
+
+    def start_subtitle_convert(req):
+        return tool_service.start_subtitle_convert(dict(req.json or {}))
+    server.post("/api/tools/subtitle/convert", start_subtitle_convert)
+
     server.get("/api/tcdoc/overview",
                lambda req: tcdoc.overview(req.q("doc_key")))
 

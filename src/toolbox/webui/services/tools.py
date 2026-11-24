@@ -42,3 +42,37 @@ class ToolService:
                 is_cancelled=cancelled)
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
+    def subtitle_overview(self) -> dict:
+        return webui_tools.subtitle_overview()
+
+    def subtitle_sources(self, limit: int = 200) -> dict:
+        return webui_tools.list_subtitle_sources(limit)
+
+    def start_subtitle_convert(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        paths = payload.get("paths") or []
+        formats = payload.get("formats") or []
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("请选择要转换的字幕文件")
+        if not isinstance(formats, list) or not formats:
+            raise ValueError("请至少选择一种输出格式")
+        job = self._jobs.submit(
+            "subtitle_convert",
+            lambda task: self._subtitle_job(task, paths, formats))
+        return {"job": job.id}
+
+    def _subtitle_job(self, job, paths, formats) -> dict:
+        def progress(done: int, total: int, name: str) -> None:
+            job.update(f"正在转换 {done}/{total}: {name}",
+                       done / total if total else None)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.convert_subtitles(
+                paths, formats, on_progress=progress,
+                is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
