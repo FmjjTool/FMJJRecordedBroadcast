@@ -491,6 +491,8 @@ class CookieManagerDialog(QDialog):
                 row.addWidget(self._btn("领VIP", lambda: self._kugou_lite_claim_vip(), True))
             if plat == "kugou":
                 row.addWidget(self._btn("App扫码", self._kugou_app_qr, True))
+            if plat == "kuwo":
+                row.addWidget(self._btn("App扫码", self._kuwo_app_qr, True))
             if can_qr:
                 row.addWidget(self._btn("扫码登录", lambda p=plat: self._qr_login(p), True))
             if can_browser:
@@ -1620,6 +1622,39 @@ class CookieManagerDialog(QDialog):
                         return
                     if state == 2:
                         post_to_main(status.setText, "扫码成功，请在手机上确认")
+                    else:
+                        post_to_main(status.setText, result.get("message") or "等待扫码")
+            except Exception as exc:  # noqa: BLE001 - 登录失败原因直接展示
+                post_to_main(status.setText, f"{exc}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _kuwo_app_qr(self):
+        """酷我 App 扫码：拿 uid + sid，供云歌单写入（pl.svc）使用。
+
+        只写独立会话文件，不改动统一登录里的网页登录态。
+        """
+        dlg, qr_label, status = self._qr_dialog("酷我 App 扫码登录")
+
+        def run():
+            try:
+                from music import kuwo_app_auth
+                token, image = kuwo_app_auth.qr_create()
+                self._show_qr_bytes(qr_label, image)
+                post_to_main(status.setText, "请用酷我 App 扫码（用于歌单写入）")
+                while dlg.isVisible():
+                    time.sleep(2)
+                    result = kuwo_app_auth.qr_poll(token)
+                    state = result.get("status")
+                    if state == "ok":
+                        post_to_main(self._on_qr_success, dlg,
+                                     "酷我 App 登录成功，歌单写入已就绪")
+                        return
+                    if state == "scanned":
+                        post_to_main(status.setText, "扫码成功，请在手机上确认登录")
+                    elif state == "failed":
+                        post_to_main(status.setText, result.get("message") or "扫码失败")
+                        return
                     else:
                         post_to_main(status.setText, result.get("message") or "等待扫码")
             except Exception as exc:  # noqa: BLE001 - 登录失败原因直接展示

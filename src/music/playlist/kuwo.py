@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Optional
@@ -30,6 +31,7 @@ from .base import (
 BASE = "https://www.kuwo.cn"
 CREATE_URL = f"{BASE}/api/www/playlist/addPlaylist"
 ADD_URL = f"{BASE}/api/www/playlist/addSongToPlayList"
+PL_SVC = "http://nplserver.kuwo.cn/pl.svc"
 
 
 def _req_id() -> str:
@@ -79,6 +81,52 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
 
     def create_playlist(self, name: str, cookie: dict[str, str], *,
                         transport: Optional[httpx.BaseTransport] = None) -> str:
+        session = self._app_session()
+        if session:
+            return self._create_via_client(session, name, transport)
+        return self._create_via_web(name, cookie, transport)
+
+    @staticmethod
+    def _app_session() -> dict | None:
+        try:
+            from ..kuwo_app_auth import load_session
+        except Exception:  # noqa: BLE001 - 没装扫码模块时退回网页链路
+            return None
+        data = load_session()
+        return data if data.get("uid") and data.get("sid") else None
+
+    def _pl_call(self, op: str, uid: str, sid: str, body: dict,
+                 transport=None) -> dict:
+        params = {"op": op, "uid": uid, "sid": sid, "encode": "utf-8", "plat": "win"}
+        with self._client({}, transport) as client:
+            resp = client.post(PL_SVC, params=params, data=body,
+                               headers={"Referer": "http://www.kuwo.cn/"})
+        try:
+            data = resp.json()
+        except ValueError:
+            return {"_raw": resp.text[:200], "_status": resp.status_code}
+        return data if isinstance(data, dict) else {"_raw": str(data)[:200]}
+
+    def _create_via_client(self, session: dict, name: str, transport) -> str:
+        uid, sid = str(session["uid"]), str(session["sid"])
+        attempts = (
+            ("UPDATE", {"name": name, "pid": "0", "ver": "1"}),
+            ("addlist", {"name": name, "ver": "1"}),
+        )
+        detail = ""
+        for op, body in attempts:
+            data = self._pl_call(op, uid, sid, body, transport)
+            playlist_id = _find_playlist_id(data)
+            if playlist_id:
+                return playlist_id
+            detail = f"{op}: {_brief(data)}"
+        raise PlatformRejectedError(
+            f"酷我建单失败（App 会话已登录）：{detail}",
+            platform=self.platform, phase="create",
+        )
+
+    def _create_via_web(self, name: str, cookie: dict[str, str],
+                        transport) -> str:
         if not (cookie.get("kw_token") or cookie.get("csrf")
                 or _hm_token(cookie) or cookie.get("userid")):
             raise AuthRequiredError(
@@ -108,6 +156,40 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
                   cookie: dict[str, str], *,
                   transport: Optional[httpx.BaseTransport] = None,
                   progress=None) -> AddSongsResult:
+        session = self._app_session()
+        if session:
+            return self._add_via_client(session, playlist_id, songs, transport, progress)
+        return self._add_via_web(playlist_id, songs, cookie, transport, progress)
+
+    def _add_via_client(self, session: dict, playlist_id: str, songs: list[SongInfo],
+                        transport, progress) -> AddSongsResult:
+        result = AddSongsResult()
+        music_ids = [song.song_id for song in songs if song.song_id]
+        for song in songs:
+            if not song.song_id:
+                result.failed.append((song.song_name or "", "缺少酷我歌曲 ID"))
+        if not music_ids:
+            return result
+        uid, sid = str(session["uid"]), str(session["sid"])
+        data = self._pl_call("ADD", uid, sid, {
+            "pid": str(playlist_id),
+            "data": ",".join(music_ids),
+            "ver": "0",
+            "tmpid": ".",
+            "type": "0",
+        }, transport)
+        if data.get("result") == "ok" or str(data.get("ret")) == "0":
+            result.added.extend(music_ids)
+            if progress:
+                progress(len(music_ids), len(music_ids))
+            return result
+        raise PlatformRejectedError(
+            f"酷我加歌失败（App 会话已登录）：{_brief(data)}",
+            platform=self.platform, phase="add",
+        )
+
+    def _add_via_web(self, playlist_id: str, songs: list[SongInfo],
+                     cookie: dict[str, str], transport, progress) -> AddSongsResult:
         result = AddSongsResult()
         music_ids = [song.song_id for song in songs if song.song_id]
         if len(music_ids) != len(songs):
@@ -134,6 +216,11 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
                 progress(len(music_ids), len(music_ids))
             return result
         raise _map_error(body, self.platform, "add", "添加歌曲失败")
+
+
+def _brief(data: dict) -> str:
+    text = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
+    return text[:160]
 
 
 def _check_status(resp, platform: str, phase: str) -> None:
