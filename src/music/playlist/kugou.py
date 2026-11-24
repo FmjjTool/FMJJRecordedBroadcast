@@ -76,7 +76,7 @@ class KugouPlaylistWriter(BasePlaylistWriter):
     platform = "kugou"
     platform_name = "酷狗音乐"
     verified = False
-    note = "云歌单服务要求客户端 token，网页登录态返回 20017"
+    note = "云歌单需 App 扫码 token；网页登录态返回 20017，App token 已实测 16/16 加歌"
     batch_size = 10
 
     def _identity(self, cookie: dict[str, str]) -> tuple[str, str, str, str]:
