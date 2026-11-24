@@ -81,6 +81,17 @@ if "--info-collect" in sys.argv:
 
     sys.exit(_info_collect_job())
 
+# 歌曲合集创建命令行入口：--music-playlist（无窗口，不加载 Qt）。
+if "--music-playlist" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.music_playlist_job import main as _music_playlist_job
+
+    _player_args = [arg for arg in sys.argv[1:] if arg != "--music-playlist"]
+    sys.exit(_music_playlist_job(_player_args))
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui_qt.main_window import MainWindow

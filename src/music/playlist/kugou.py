@@ -1,0 +1,274 @@
+"""酷狗音乐歌单写入（cloudlist 服务）。
+
+创建：POST https://gateway.kugou.com/cloudlist.service/v5/add_list
+加歌：POST https://gateway.kugou.com/cloudlist.service/v6/add_song
+登录态：userid + token；请求参数使用 Android 版 MD5 签名。
+
+协议参数与签名算法参考开源项目 KuGouMusicApi（MakcRe/KuGouMusicApi）的
+playlist_add / playlist_tracks_add 模块。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from typing import Optional
+
+import httpx
+
+from ..models import SongInfo
+from .base import (
+    AddSongsResult,
+    AuthRequiredError,
+    BasePlaylistWriter,
+    ParseChangedError,
+    PlatformRejectedError,
+    RateLimitedError,
+    response_json,
+)
+
+BASE = "https://gateway.kugou.com"
+CREATE_URL = f"{BASE}/cloudlist.service/v5/add_list"
+ADD_URL = f"{BASE}/cloudlist.service/v6/add_song"
+SIGN_SALT = "OIlwieks28dk2k092lksi2UIkp"
+APPID = "1005"
+CLIENTVER = "20489"
+ANDROID_UA = "Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi"
+
+
+def _stringify(value) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return str(value)
+
+
+def sign_params(params: dict, body: str) -> str:
+    """Android 版签名：MD5(盐 + 按 key 排序的 k=v + 请求体 + 盐)。"""
+    param_string = "".join(
+        f"{key}={_stringify(value)}" for key, value in sorted(params.items())
+    )
+    return hashlib.md5(
+        f"{SIGN_SALT}{param_string}{body}{SIGN_SALT}".encode("utf-8")
+    ).hexdigest()
+
+
+def _cookie_value(cookie: dict[str, str], *keys: str) -> str:
+    for key in keys:
+        value = str(cookie.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _kugoo_userid(cookie: dict[str, str]) -> str:
+    userid = _cookie_value(cookie, "userid", "user_id", "kugouid")
+    if userid:
+        return userid
+    raw = cookie.get("KuGoo") or ""
+    for part in raw.split("&"):
+        if part.lower().startswith("kugooid="):
+            return part.split("=", 1)[1].strip()
+    return ""
+
+
+class KugouPlaylistWriter(BasePlaylistWriter):
+    platform = "kugou"
+    platform_name = "酷狗音乐"
+    verified = True
+    batch_size = 10
+
+    def _identity(self, cookie: dict[str, str]) -> tuple[str, str, str, str]:
+        userid = _kugoo_userid(cookie)
+        token = _cookie_value(cookie, "token", "t")
+        mid = _cookie_value(cookie, "kg_mid", "mid", "KUGOU_API_MID")
+        dfid = _cookie_value(cookie, "kg_dfid", "dfid")
+        if not userid or not token:
+            raise AuthRequiredError(
+                "登录状态不完整，请先在账号管理中重新登录",
+                platform=self.platform, phase="auth",
+            )
+        return userid, token, mid, dfid
+
+    def _signed_request(self, url: str, data: dict, extra_params: dict,
+                        cookie: dict[str, str], userid: str, token: str,
+                        mid: str, dfid: str, transport=None) -> dict:
+        clienttime = int(time.time())
+        body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        params = {
+            "dfid": dfid or "-",
+            "mid": mid or "-",
+            "uuid": "-",
+            "appid": APPID,
+            "clientver": CLIENTVER,
+            "clienttime": clienttime,
+            "token": token,
+            "userid": userid,
+        }
+        params.update(extra_params)
+        params["signature"] = sign_params(params, body)
+        headers = {
+            "User-Agent": ANDROID_UA,
+            "dfid": dfid or "-",
+            "mid": mid or "-",
+            "clienttime": str(clienttime),
+            "kg-rc": "1",
+            "kg-thash": "5d816a0",
+            "kg-rec": "1",
+            "kg-rf": "B9EDA08A64250DEFFBCADDEE00F8F25F",
+            "Content-Type": "application/json",
+        }
+        with self._client(cookie, transport) as client:
+            resp = client.post(url, params=params, content=body, headers=headers)
+        return response_json(resp, platform=self.platform, phase="request")
+
+    def create_playlist(self, name: str, cookie: dict[str, str], *,
+                        transport: Optional[httpx.BaseTransport] = None) -> str:
+        userid, token, mid, dfid = self._identity(cookie)
+        clienttime = int(time.time())
+        data = {
+            "userid": int(userid) if userid.isdigit() else userid,
+            "token": token,
+            "total_ver": 0,
+            "name": name,
+            "type": 0,
+            "source": 1,
+            "is_pri": 0,
+            "list_create_gid": "",
+            "from_shupinmv": 0,
+        }
+        params = {
+            "last_time": clienttime,
+            "last_area": "gztx",
+            "userid": userid,
+            "token": token,
+        }
+        body = self._signed_request(
+            CREATE_URL, data, params, cookie, userid, token, mid, dfid, transport)
+        if _is_auth_error(body):
+            raise AuthRequiredError(
+                "登录状态不可用，请先在账号管理中重新登录",
+                platform=self.platform, phase="create",
+            )
+        if not _is_ok(body):
+            raise PlatformRejectedError(
+                _error_message(body, "创建歌单失败"),
+                platform=self.platform, phase="create",
+            )
+        playlist_id = _find_listid(body)
+        if not playlist_id:
+            raise ParseChangedError(
+                "创建成功但未返回歌单 ID，接口可能已变化",
+                platform=self.platform, phase="create",
+            )
+        return str(playlist_id)
+
+    def add_songs(self, playlist_id: str, songs: list[SongInfo],
+                  cookie: dict[str, str], *,
+                  transport: Optional[httpx.BaseTransport] = None,
+                  progress=None) -> AddSongsResult:
+        result = AddSongsResult()
+        userid, token, mid, dfid = self._identity(cookie)
+        resources = []
+        for song in songs:
+            if not song.song_id:
+                result.failed.append((song.song_name or "", "缺少酷狗歌曲 hash"))
+                continue
+            resources.append({
+                "number": 1,
+                "name": song.song_name or "",
+                "hash": song.song_id,
+                "size": 0,
+                "sort": 0,
+                "timelen": 0,
+                "bitrate": 0,
+                "album_id": self._extra_int(song, "album_id", "albumid"),
+                "mixsongid": self._extra_int(song, "mixsongid", "mix_songid", "audio_id"),
+            })
+        if not resources:
+            return result
+
+        clienttime = int(time.time())
+        data = {
+            "userid": int(userid) if userid.isdigit() else userid,
+            "token": token,
+            "listid": int(playlist_id) if str(playlist_id).isdigit() else playlist_id,
+            "list_ver": 0,
+            "type": 0,
+            "slow_upload": 1,
+            "scene": "false;null",
+            "data": resources,
+        }
+        params = {
+            "last_time": clienttime,
+            "last_area": "gztx",
+            "userid": userid,
+            "token": token,
+        }
+        body = self._signed_request(
+            ADD_URL, data, params, cookie, userid, token, mid, dfid, transport)
+        if _is_auth_error(body):
+            raise AuthRequiredError(
+                "登录状态不可用，请先在账号管理中重新登录",
+                platform=self.platform, phase="add",
+            )
+        if not _is_ok(body):
+            raise PlatformRejectedError(
+                _error_message(body, "添加歌曲失败"),
+                platform=self.platform, phase="add",
+            )
+        hashes = [item["hash"] for item in resources]
+        result.added.extend(hashes)
+        if progress:
+            progress(len(hashes), len(hashes))
+        return result
+
+
+def _is_ok(body: dict) -> bool:
+    if body.get("status") == 1:
+        return True
+    for key in ("error_code", "errcode", "code"):
+        if key in body:
+            try:
+                return int(body[key]) == 0
+            except (TypeError, ValueError):
+                return False
+    return False
+
+
+def _is_auth_error(body: dict) -> bool:
+    for key in ("error_code", "errcode", "code"):
+        try:
+            if int(body.get(key, -1)) in (20010, 20011, 20012, 30001, 40001):
+                return True
+        except (TypeError, ValueError):
+            continue
+    message = str(body.get("error") or body.get("message") or body.get("msg") or "")
+    return "token" in message.lower() or "login" in message.lower()
+
+
+def _find_listid(body: dict) -> str:
+    candidates = [body]
+    data = body.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+        info = data.get("info")
+        if isinstance(info, list) and info:
+            candidates.append(info[0])
+        elif isinstance(info, dict):
+            candidates.append(info)
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        for key in ("listid", "list_id", "listId", "specialid"):
+            value = item.get(key)
+            if value not in (None, "", 0, "0"):
+                return str(value)
+    return ""
+
+
+def _error_message(body: dict, fallback: str) -> str:
+    message = body.get("error") or body.get("message") or body.get("msg")
+    if message:
+        return f"{fallback}：{message}"
+    return f"{fallback}（错误码 {body.get('error_code') or body.get('code') or '未知'}）"
