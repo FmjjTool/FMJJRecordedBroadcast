@@ -188,7 +188,8 @@ class AssetQueryService:
         if asset_index.db_path().exists():
             view = asset_index.fetch_view(str(root), "entries")
             if view and isinstance(view.get("items"), list):
-                rows = [self._from_cached(item) for item in view["items"]]
+                rows = [self._from_cached(root, item)
+                        for item in view["items"]]
         if not rows:
             rows = self._scan_json(root)
         rows = [row for row in rows if row]
@@ -197,10 +198,15 @@ class AssetQueryService:
         return rows
 
     @staticmethod
-    def _from_cached(item: dict) -> dict | None:
+    def _from_cached(root: Path, item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
         file_path = str(item.get("file_path") or "")
+        rel = ""
+        try:
+            rel = str(Path(file_path).relative_to(root)).replace("\\", "/")
+        except ValueError:
+            rel = os.path.basename(file_path)
         return {
             "title": item.get("title") or "-",
             "author": item.get("author") or "-",
@@ -210,6 +216,7 @@ class AssetQueryService:
             "like": _num(item.get("like_count")),
             "url": item.get("video_url") or "",
             "file": os.path.basename(file_path),
+            "path": rel,
             "images": int(item.get("expected_imgs") or 0),
         }
 
@@ -261,6 +268,7 @@ class AssetQueryService:
                     "like": _num(payload.get("点赞数")),
                     "url": payload.get("原始URL") or payload.get("链接") or "",
                     "file": name,
+                    "path": os.path.relpath(path, root).replace("\\", "/"),
                     "images": 0,
                 })
         return rows

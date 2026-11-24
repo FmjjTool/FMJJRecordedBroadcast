@@ -533,6 +533,8 @@
   function renderEntries(host) {
     host.replaceChildren();
     var tableHost = h('div');
+    var jobHost = h('div');
+    var resultHost = h('div');
     var pagerHost = h('div', { class: 'pager' });
     var search = h('input', { class: 'input grow', placeholder: '搜索标题或作者', value: state.assets.q });
     var platform = h('select', { class: 'select' },
@@ -543,6 +545,23 @@
       h('option', { value: 'kuaishou' }, '快手'),
       h('option', { value: 'xiaohongshu' }, '小红书'));
     platform.value = state.assets.platform;
+    var quality = h('select', { class: 'select', title: 'B站视频画质' },
+      h('option', { value: '最高画质' }, '最高画质'),
+      h('option', { value: '4K' }, '4K'),
+      h('option', { value: '1080P60' }, '1080P60'),
+      h('option', { value: '1080P' }, '1080P'),
+      h('option', { value: '720P' }, '720P'));
+    var dlBtn = h('button', { class: 'btn primary', type: 'button' }, '下载选中');
+    var selectAll = h('input', { type: 'checkbox', title: '全选本页' });
+    var selectedLabel = h('span', { class: 'muted small' });
+    var selected = state.assets.dlSelected || (state.assets.dlSelected = new Set());
+    var running = false;
+
+    function updateButtons() {
+      dlBtn.disabled = running || selected.size === 0;
+      dlBtn.textContent = running ? '下载中…' : '下载选中';
+      selectedLabel.textContent = selected.size ? '已选 ' + selected.size + ' 条' : '';
+    }
 
     function load() {
       setLoading(tableHost, '正在读取已获取资源…');
@@ -552,14 +571,33 @@
           if (!data.items.length) {
             tableHost.replaceChildren(empty('没有匹配的导出 JSON。可清空搜索词或切换平台。'));
             pagerHost.replaceChildren();
+            selected.clear();
+            updateButtons();
             return;
           }
+          var known = new Set(data.items.map(function (item) { return item.path; }));
+          Array.from(selected).forEach(function (path) {
+            if (!known.has(path) && selected.size > data.items.length) {
+              if (data.items.every(function (item) { return !known.has(path) || selected.has(item.path); })) {
+                selected.delete(path);
+              }
+            }
+          });
           var body = h('tbody');
           data.items.forEach(function (item) {
+            var check = h('input', {
+              type: 'checkbox', checked: selected.has(item.path)
+            });
+            check.addEventListener('change', function () {
+              if (check.checked) selected.add(item.path);
+              else selected.delete(item.path);
+              updateButtons();
+            });
             var title = item.url
               ? h('a', { href: item.url, target: '_blank', rel: 'noopener noreferrer' }, item.title)
               : item.title;
             body.appendChild(h('tr', null,
+              h('td', null, check),
               h('td', { class: 'ellipsis' }, title),
               h('td', null, item.author || '-'),
               h('td', null, platformLabel(item.platform)),
@@ -576,15 +614,99 @@
           tableHost.appendChild(h('div', { class: 'table-wrap' },
             h('table', null,
               h('thead', null, h('tr', null,
+                h('th', { style: 'width:36px' }, ''),
                 h('th', null, '标题'), h('th', null, '作者'), h('th', null, '平台'),
                 h('th', null, '发布时间'), h('th', { class: 'num' }, '播放'),
                 h('th', { class: 'num' }, '点赞'), h('th', null, '导出文件'))),
               body)));
+          selectAll.checked = data.items.length > 0
+            && data.items.every(function (item) { return selected.has(item.path); });
+          selectAll.indeterminate = selected.size > 0 && !selectAll.checked;
+          updateButtons();
           pager(pagerHost, data.page, data.pages, data.total, function (page) {
             state.assets.page = page;
             load();
           });
         }).catch(function (error) { setError(tableHost, error, load); });
+    }
+
+    selectAll.addEventListener('change', function () {
+      api('/api/assets/entries?page=' + state.assets.page + '&page_size=20&q=' +
+        encodeURIComponent(state.assets.q) + '&platform=' + encodeURIComponent(state.assets.platform))
+        .then(function (data) {
+          data.items.forEach(function (item) {
+            if (selectAll.checked) selected.add(item.path);
+            else selected.delete(item.path);
+          });
+          load();
+        });
+    });
+
+    dlBtn.addEventListener('click', function () {
+      if (!selected.size || running) return;
+      var paths = Array.from(selected);
+      running = true;
+      updateButtons();
+      post('/api/assets/download', {
+        paths: paths, quality: quality.value
+      }).then(function (data) {
+        watchJob(jobHost, data.job, function (job) {
+          running = false;
+          updateButtons();
+          var summary = job.result && job.result.summary
+            ? job.result.summary : '下载完成';
+          toast(summary, 'success');
+          showResult(job);
+          selected.clear();
+          load();
+        }, {
+          cancelable: true,
+          onSettled: function (job) {
+            running = false;
+            updateButtons();
+            if (job.status === 'cancelled') {
+              toast('下载已取消', 'info');
+            }
+          }
+        });
+      }).catch(function (error) {
+        running = false;
+        updateButtons();
+        toast('下载失败：' + error.message, 'error');
+      });
+    });
+
+    function showResult(job) {
+      var result = job.result || {};
+      var rows = result.results || [];
+      if (!rows.length) return;
+      var head = h('tr', null,
+        h('th', null, '条目'), h('th', null, '结果'), h('th', null, '产出'));
+      var body = h('tbody');
+      rows.forEach(function (row) {
+        var parts = [];
+        if (row.kind === 'video') {
+          parts.push(row.path ? '视频 ' + row.path : '视频 ×' + (row.videos || 1));
+          if (row.skipped) parts.push('跳过已有 ' + row.skipped);
+          if (row.covers) parts.push('封面 ' + row.covers);
+        } else if (row.kind === 'images') {
+          var segs = [];
+          if (row.images) segs.push('图片 ' + row.images);
+          if (row.live) segs.push('Live图 ' + row.live);
+          if (row.covers) segs.push('封面 ' + row.covers);
+          if (row.skipped) segs.push('跳过已有 ' + row.skipped);
+          parts.push(segs.join(' / ') || '无新文件');
+        }
+        body.appendChild(h('tr', null,
+          h('td', { class: 'ellipsis' }, row.title || row.file),
+          h('td', null, row.ok ? '成功' : '失败'),
+          h('td', { class: 'muted small' }, row.ok ? (parts.join('；') || '-') : (row.error || '-'))));
+      });
+      resultHost.replaceChildren(h('div', { class: 'card', style: 'margin:12px 0' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          result.summary || '下载结果'),
+        h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body))));
     }
 
     search.addEventListener('input', function () {
@@ -600,8 +722,13 @@
       state.assets.page = 1;
       load();
     });
-    host.appendChild(h('div', { class: 'toolbar' }, search, platform));
+    host.appendChild(h('div', { class: 'toolbar' },
+      search, platform, h('span', { style: 'flex:1' }),
+      h('label', { class: 'muted small' }, selectAll, ' 本页'),
+      selectedLabel, quality, dlBtn));
+    host.appendChild(jobHost);
     host.appendChild(tableHost);
+    host.appendChild(resultHost);
     host.appendChild(pagerHost);
     load();
   }

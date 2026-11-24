@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 
+from toolbox import webui_assets_dl
 from toolbox.asset_query import AssetQueryService
 from toolbox.webui.jobs import JobCancelled
 
@@ -34,6 +35,33 @@ class AssetService:
     def entries(self, page: int, page_size: int, keyword: str = "",
                 platform: str = "") -> dict:
         return self._query.entries(page, page_size, keyword, platform)
+
+    def start_download(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        paths = payload.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("请选择要下载的条目")
+        quality = str(payload.get("quality") or "最高画质")
+        job = self._jobs.submit(
+            "assets_download",
+            lambda task: self._download_job(task, paths, quality))
+        return {"job": job.id}
+
+    def _download_job(self, job, paths, quality: str) -> dict:
+        def progress(done: int, total: int, name: str) -> None:
+            job.update(f"正在下载 {done}/{total}: {name}",
+                       done / total if total else None)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_assets_dl.download_entries(
+                paths, quality=quality, on_progress=progress,
+                is_cancelled=cancelled)
+        except webui_assets_dl.DownloadCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
 
     def start_local_scan(self, category: str) -> dict:
         self._query.category_root(category)

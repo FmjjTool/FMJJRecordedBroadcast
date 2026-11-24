@@ -66,6 +66,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q_int("page", 1, 1), req.q_int("page_size", 20, 1, 100),
         req.q("q"), req.q("platform")))
 
+    def start_assets_download(req):
+        return assets.start_download(dict(req.json or {}))
+    server.post("/api/assets/download", start_assets_download)
+
     server.get("/api/record/overview", lambda req: record.overview())
 
     server.get("/api/modules", lambda req: modules.list())
