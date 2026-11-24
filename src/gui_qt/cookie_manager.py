@@ -1605,7 +1605,7 @@ class CookieManagerDialog(QDialog):
                 from music import kugou_app_auth
                 key, png = kugou_app_auth.qr_create()
                 self._show_qr_bytes(qr_label, png)
-                post_to_main(status.setText, "请用酷狗 App 扫码（用于云歌单写入）")
+                post_to_main(status.setText, "请用酷狗 App 扫码（用于云歌单写入，码会自动刷新）")
                 while dlg.isVisible():
                     time.sleep(2)
                     result = kugou_app_auth.qr_poll(key)
@@ -1618,8 +1618,11 @@ class CookieManagerDialog(QDialog):
                         post_to_main(status.setText, "已确认但未返回令牌，请重试")
                         return
                     if state == 0:
-                        post_to_main(status.setText, "二维码已过期，请重新扫码")
-                        return
+                        # 过期就自动换一张，不让用户抢时间
+                        key, png = kugou_app_auth.qr_create()
+                        post_to_main(self._show_qr_bytes, qr_label, png)
+                        post_to_main(status.setText, "二维码已刷新，请用酷狗 App 重新扫码")
+                        continue
                     if state == 2:
                         post_to_main(status.setText, "扫码成功，请在手机上确认")
                     else:
@@ -1641,7 +1644,7 @@ class CookieManagerDialog(QDialog):
                 from music import kuwo_app_auth
                 token, image = kuwo_app_auth.qr_create()
                 self._show_qr_bytes(qr_label, image)
-                post_to_main(status.setText, "请用酷我 App 扫码（用于歌单写入）")
+                post_to_main(status.setText, "请用酷我 App 扫码（用于歌单写入，码会自动刷新）")
                 while dlg.isVisible():
                     time.sleep(2)
                     result = kuwo_app_auth.qr_poll(token)
@@ -1652,6 +1655,10 @@ class CookieManagerDialog(QDialog):
                         return
                     if state == "scanned":
                         post_to_main(status.setText, "扫码成功，请在手机上确认登录")
+                    elif state == "expired":
+                        token, image = kuwo_app_auth.qr_create()
+                        post_to_main(self._show_qr_bytes, qr_label, image)
+                        post_to_main(status.setText, "二维码已刷新，请用酷我 App 重新扫码")
                     elif state == "failed":
                         post_to_main(status.setText, result.get("message") or "扫码失败")
                         return

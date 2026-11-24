@@ -113,6 +113,8 @@ def qr_poll(token: str) -> dict:
                 "message": data.get("msg") or "等待扫码"}
     if ret == 0:
         return {"status": "waiting", "message": data.get("msg") or "等待确认"}
+    if ret in (-1, 1003, 1004):
+        return {"status": "expired", "message": "二维码已过期，正在刷新"}
     return {"status": "failed", "message": f"{data.get('msg') or '扫码失败'}（ret={ret}）"}
 
 

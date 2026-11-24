@@ -171,6 +171,9 @@ def qr_poll(qrcode_key: str) -> dict:
     })
     payload = data.get("data") or {}
     status = payload.get("status")
+    if data.get("status") != 1 or status is None:
+        # 令牌失效/被风控时顶层 status 不是 1，按过期处理，界面会自动换新码
+        return {"status": 0, "logged_in": False, "message": "二维码已失效，正在刷新"}
     if status == 4:
         token = str(payload.get("token") or "")
         userid = str(payload.get("userid") or "")

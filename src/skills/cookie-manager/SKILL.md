@@ -50,8 +50,8 @@ GitHub 的 GCM/系统凭据可作为统一管理层的原生后端；业务通�
 
 - 腾讯文档 `storage_state` 包含 Cookie 与 localStorage，不能只靠 Cookie 字符串保证可重建完整登录。快照仅作管理层控制的补充状态，须匹配当前账号；管理层关闭、清除或换号后旧快照不能继续授权业务。
 - 酷狗概念版等非 Cookie 会话走统一管理中的平台适配。迁移过程中可以保留必要的底层格式，读取、更新和清除须受同一管理层控制，不能形成两套账户状态。
-- 酷狗主版另有「App 扫码」入口（登录状态 → 酷狗行 → App扫码）：主版 App 令牌只用于云歌单写入，存在独立会话文件 `config/kugou_app_session.json`，由 `src/music/kugou_app_auth.py` 唯一读写，**不写入也不改动** `cookies.json` 里的网页登录态；网页登录态仍是业务默认凭据，App 令牌失效时重新扫码即可。酷狗云歌单只认 App 令牌，网页令牌写入会返回 20017。
-- 酷我同样是「登录状态 → 酷我行 → App扫码」：扫码换取 `uid + sid`（`i.kuwo.cn/qrlogin/*`），存 `config/kuwo_app_session.json`，由 `src/music/kuwo_app_auth.py` 唯一读写。酷我网页端建单接口已下线（504/404），歌单写入走 PC 客户端同款 `http://nplserver.kuwo.cn/pl.svc`（`op=ADD/UPDATE`，鉴权 uid+sid），不涉及网页 Cookie 的修改。
+- 酷狗主版另有「App 扫码」入口（登录状态 → 酷狗行 → App扫码）：主版 App 令牌只用于云歌单写入，存在独立会话文件 `config/kugou_app_session.json`，由 `src/music/kugou_app_auth.py` 唯一读写，**不写入也不改动** `cookies.json` 里的网页登录态；网页登录态仍是业务默认凭据，App 令牌失效时重新扫码即可。酷狗云歌单只认 App 令牌，网页令牌写入会返回 20017。扫码框里的二维码**过期会自动换新**，不需要用户抢时间。
+- 酷我同样是「登录状态 → 酷我行 → App扫码」：扫码换取 `uid + sid`（`i.kuwo.cn/qrlogin/*`），存 `config/kuwo_app_session.json`，由 `src/music/kuwo_app_auth.py` 唯一读写。酷我网页端建单接口已下线（504/404），歌单写入走 PC 客户端同款 `http://nplserver.kuwo.cn/pl.svc`（`op=pl3_addlist` 建单、`op=pl3_add` 加歌），不涉及网页 Cookie 的修改；二维码过期同样自动换新。
 - 先盘点受影响链路的登录 UI、凭据读写、缓存、profile 和全部业务调用方；读取旧格式与当前管理记录时不输出凭据内容。
 - 迁移旧凭据时不覆盖管理层已有的较新账号状态；确认转换与保存成功、调用方已切换后，再停用旧读取路径并按确认范围清理旧状态。迁移失败保留原数据并报告，不写成已统一。
 - 明确区分首次迁移与用户主动退出/清除，保存退出状态或移除相应旧来源，避免下一次读取又自动导入旧票据。不能用“文件仍存在”判定当前可登录。
