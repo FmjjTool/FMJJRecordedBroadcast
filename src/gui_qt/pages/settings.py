@@ -232,6 +232,33 @@ class GlobalSettingsPage(BasePage):
         card.content_layout.addWidget(self.webui_status)
         v.addWidget(card)
 
+        # ---- WebUI 公网访问（隧道） ----
+        card = self._section_card("WebUI 公网访问（隧道）", "globe")
+        tunnel_row = QHBoxLayout()
+        self.tunnel_mode = QComboBox()
+        self.tunnel_mode.addItem("关闭", "none")
+        self.tunnel_mode.addItem("Cloudflare 快速隧道", "cloudflare")
+        self.tunnel_mode.addItem("Tailscale（待接入）", "tailscale")
+        self.tunnel_mode.addItem("frp（待接入）", "frp")
+        self.tunnel_mode.setToolTip(
+            "Cloudflare 快速隧道提供临时公网 HTTPS 地址，无需账号；\n"
+            "Tailscale 与 frp 目前只检测客户端，启动能力后续接入。")
+        self.tunnel_mode.currentIndexChanged.connect(
+            self._on_tunnel_mode_changed)
+        tunnel_row.addWidget(self.tunnel_mode)
+        self.tunnel_start_btn = self._btn("启动隧道", self._start_tunnel)
+        self.tunnel_stop_btn = self._btn("停止隧道", self._stop_tunnel)
+        self.tunnel_stop_btn.setEnabled(False)
+        tunnel_row.addWidget(self.tunnel_start_btn)
+        tunnel_row.addWidget(self.tunnel_stop_btn)
+        tunnel_row.addStretch(1)
+        card.content_layout.addLayout(tunnel_row)
+        self.tunnel_status = QLabel("")
+        self.tunnel_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        self.tunnel_status.setWordWrap(True)
+        card.content_layout.addWidget(self.tunnel_status)
+        v.addWidget(card)
+
         # ---- 配置信息与缓存清理 ----
         card = self._section_card("配置信息与缓存清理", "broom")
         self.info_label = QLabel("")
@@ -480,6 +507,7 @@ class GlobalSettingsPage(BasePage):
         self._refresh_dependencies()
         # WebUI 独立服务：端口、自动启动与运行状态
         self._load_webui()
+        self._load_webui_tunnel()
 
     def on_hide(self):
         self._skel_timer.stop()
@@ -649,6 +677,92 @@ class GlobalSettingsPage(BasePage):
             self._webui().save_config(auto_start=bool(checked))
         except Exception as exc:
             self.app.toast(f"保存 WebUI 设置失败：{exc}", "error")
+
+    # ---- WebUI 公网访问（隧道） ----
+    def _tunnel(self):
+        from toolbox.webui_tunnel import get_tunnel
+        return get_tunnel()
+
+    def _load_webui_tunnel(self):
+        cfg = self._tunnel().config()
+        index = self.tunnel_mode.findData(cfg["mode"])
+        self.tunnel_mode.blockSignals(True)
+        self.tunnel_mode.setCurrentIndex(max(0, index))
+        self.tunnel_mode.blockSignals(False)
+        self._refresh_tunnel_async()
+
+    def _refresh_tunnel_async(self):
+        run_bg(self._tunnel().status,
+               lambda status, err: self._apply_tunnel_status(status, err))
+
+    def _apply_tunnel_status(self, status, err=None):
+        if err is not None or not isinstance(status, dict):
+            self._set_status(self.tunnel_status, f"隧道状态检查失败：{err}",
+                             "warn")
+            return
+        running = bool(status.get("running"))
+        self.tunnel_start_btn.setEnabled(not running)
+        self.tunnel_stop_btn.setEnabled(running)
+        clients = status.get("clients") or {}
+        cloudflared = clients.get("cloudflare") or ""
+        if running:
+            url = status.get("public_url") or "等待公网地址…"
+            self._set_status(self.tunnel_status, f"运行中 · {url}", "ok")
+            return
+        text = "未运行"
+        if not cloudflared:
+            text += " · 未检测到 cloudflared，请先在「运行环境与组件」查看"
+        error = status.get("error") or ""
+        self._set_status(self.tunnel_status, error or text,
+                         "warn" if (error or not cloudflared) else "muted")
+
+    def _start_tunnel(self):
+        mode = self.tunnel_mode.currentData() or "none"
+        if mode == "none":
+            self._set_status(self.tunnel_status, "请选择隧道类型", "warn")
+            return
+        webui = self._webui().status()
+        if not webui.get("running"):
+            self._set_status(self.tunnel_status, "请先启动 WebUI 服务", "warn")
+            return
+        self.tunnel_start_btn.setEnabled(False)
+        self._set_status(self.tunnel_status, "正在启动隧道…", "muted")
+        tunnel = self._tunnel()
+
+        def work():
+            tunnel.save_config(mode=mode)
+            return tunnel.start(mode, int(webui["port"]))
+
+        def done(status, err):
+            if err is not None:
+                self._set_status(self.tunnel_status, f"启动失败：{err}", "warn")
+                self._refresh_tunnel_async()
+                return
+            self.app.toast("隧道已启动", "success")
+            self._apply_tunnel_status(status, None)
+
+        run_bg(work, done)
+
+    def _stop_tunnel(self):
+        self.tunnel_stop_btn.setEnabled(False)
+        self._set_status(self.tunnel_status, "正在停止隧道…", "muted")
+        tunnel = self._tunnel()
+
+        def done(result, err):
+            if err is not None:
+                self._set_status(self.tunnel_status, f"停止失败：{err}", "warn")
+            elif result and result.get("stopped"):
+                self.app.toast("隧道已停止", "info")
+            self._refresh_tunnel_async()
+
+        run_bg(tunnel.stop, done)
+
+    def _on_tunnel_mode_changed(self, _index):
+        mode = self.tunnel_mode.currentData() or "none"
+        try:
+            self._tunnel().save_config(mode=mode)
+        except Exception as exc:
+            self.app.toast(f"保存隧道设置失败：{exc}", "error")
 
     # ---- 文件夹锁定（锁定后拖入文件夹不改变，直到解锁） ----
     def _refresh_workdir_status(self):
@@ -1128,6 +1242,15 @@ class GlobalSettingsPage(BasePage):
         ("proxy_core", "代理内核", "_check_proxy_core_detail",
          "可选：网络代理页启动内置代理时使用（mihomo 单文件，约 21MB，自动选最快加速源，支持断点续传与本地导入）",
          "https://github.com/MetaCubeX/mihomo/releases", True, "proxy_core"),
+        ("cloudflared", "cloudflared（Cloudflare 隧道）", "_check_cloudflared_detail",
+         "可选：WebUI 公网快速隧道（临时 HTTPS 地址，无需账号）",
+         "https://github.com/cloudflare/cloudflared/releases", True, "external"),
+        ("tailscale", "Tailscale", "_check_tailscale_detail",
+         "可选：WebUI 公网私有网络（需登录，启动能力后续接入）",
+         "https://tailscale.com/download", True, "external"),
+        ("frpc", "frp 客户端", "_check_frpc_detail",
+         "可选：WebUI 自建服务器隧道（需 frpc 配置，启动能力后续接入）",
+         "https://github.com/fatedier/frp/releases", True, "external"),
     ]
 
     def _refresh_dependencies(self):
@@ -1598,6 +1721,21 @@ class GlobalSettingsPage(BasePage):
         except Exception:
             ver = "?"
         return True, f"git {ver}"
+
+    def _check_cloudflared_detail(self):
+        from toolbox.webui_tunnel import get_tunnel
+        path = get_tunnel().detect().get("cloudflare") or ""
+        return bool(path), path
+
+    def _check_tailscale_detail(self):
+        from toolbox.webui_tunnel import get_tunnel
+        path = get_tunnel().detect().get("tailscale") or ""
+        return bool(path), path
+
+    def _check_frpc_detail(self):
+        from toolbox.webui_tunnel import get_tunnel
+        path = get_tunnel().detect().get("frp") or ""
+        return bool(path), path
 
     def _check_proxy_core_detail(self):
         """可选依赖：网络代理页的内置 mihomo 内核。

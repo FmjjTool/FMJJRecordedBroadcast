@@ -363,6 +363,9 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "webui_port": 8765,
     "webui_auto_start": False,
     "webui_lan": False,
+    # 公网隧道：none / cloudflare（快速隧道）/ tailscale / frp
+    "webui_tunnel": "none",
+    "webui_tunnel_frp_config": "",
 }
 
 
