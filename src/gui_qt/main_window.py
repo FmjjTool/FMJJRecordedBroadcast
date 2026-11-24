@@ -171,6 +171,9 @@ class MainWindow(QMainWindow):
         }
         self.current_page = None
 
+        # 全局表格列宽：表头右键 + 每张表格自己卡片底部操作行的「自适应 / 重置」
+        table_columns.install()
+
         central = QWidget()
         central.setObjectName("workbenchShell")
         central.setAttribute(Qt.WA_StyledBackground, True)
@@ -288,8 +291,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("就绪")
         self.preload_status = QLabel("页面预载：准备中")
         self.statusBar().addPermanentWidget(self.preload_status)
-        self.table_column_btns = table_columns.make_buttons(self)
-        self.statusBar().addPermanentWidget(self.table_column_btns)
 
         # 全局拖放
         self.setAcceptDrops(True)
@@ -643,9 +644,6 @@ class MainWindow(QMainWindow):
                 button.setIcon(line_icon(tool_icon_name(key), active if button.isChecked() else normal))
         self.window_controls.refresh_icons()
         self._update_theme_btn()
-        column_btns = getattr(self, "table_column_btns", None)
-        if column_btns is not None:
-            column_btns.apply_theme_style()
 
     def _toggle_theme(self):
         name = theme.toggle_theme()

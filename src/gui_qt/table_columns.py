@@ -1,8 +1,10 @@
-"""全局表格列宽：自适应 / 重置（表头右键 + 状态栏「列宽」按钮）。
+"""全局表格列宽：自适应 / 重置（表头右键 + 每张表格自己的操作行）。
 
 - 所有 QTableWidget / QTableView / QTreeWidget 的水平表头右键：
   列宽自适应 / 重置列宽
-- 主窗口状态栏「列宽」菜单按钮对当前（最后聚焦的）表格执行同样操作
+- 「自适应 / 重置」两个按钮放在每张表格自己的底部操作行右端（表格所在的
+  卡片内），无其它右侧内容时贴到最右；找不到操作行时退化为表格右下角浮层
+- 按钮只作用于所属表格，不再占用主窗口状态栏
 - 列宽自适应按内容宽度分配并尽量填满视口；重置恢复表格首次显示时的宽度
 - 页面不自写列宽菜单或第二套列宽逻辑
 
@@ -11,12 +13,10 @@
 
 from __future__ import annotations
 
-import weakref
-
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QHeaderView, QMenu, QTableView, QTableWidget,
-    QToolButton, QTreeWidget, QWidget,
+    QAbstractButton, QApplication, QHBoxLayout, QHeaderView, QMenu, QSizePolicy,
+    QTableView, QTableWidget, QToolButton, QTreeWidget, QWidget,
 )
 
 from gui_qt import theme
@@ -160,15 +160,7 @@ def _show_header_menu(view, pos):
 
 
 class _TableColumnController(QObject):
-    currentChanged = Signal(object)
-
-    def __init__(self, app):
-        super().__init__(app)
-        self._last = None
-
-    def _remember(self, view):
-        self._last = weakref.ref(view)
-        self.currentChanged.emit(view)
+    """应用级事件过滤器：表头右键菜单 + 每张表格的操作行按钮。"""
 
     def _view_of_header(self, header):
         if not isinstance(header, QHeaderView) or header.orientation() != Qt.Horizontal:
@@ -178,32 +170,25 @@ class _TableColumnController(QObject):
 
     def eventFilter(self, obj, event):
         etype = event.type()
-        if etype == QEvent.FocusIn:
-            view = obj if isinstance(obj, _TABLE_TYPES) else self._view_of_header(obj)
-            if view is not None:
-                self._remember(view)
-        elif etype == QEvent.Show and isinstance(obj, _TABLE_TYPES):
+        if etype == QEvent.Show and isinstance(obj, _TABLE_TYPES):
             QTimer.singleShot(300, lambda v=obj: _capture_defaults(v))
-        elif etype == QEvent.Hide and isinstance(obj, _TABLE_TYPES):
-            if self._last is not None and self._last() is obj:
-                self._last = None
-                self.currentChanged.emit(None)
+            # 页面可能先建表格、后建底部操作行，显示后补挂几次（重复调用幂等）
+            for delay in (0, 120, 400):
+                QTimer.singleShot(delay, lambda v=obj: _sync_actions(v))
+        elif etype == QEvent.Resize:
+            if isinstance(obj, _TABLE_TYPES):
+                _sync_actions(obj)
+            else:
+                host = getattr(obj, "_table_column_host", None)
+                if isinstance(host, _TABLE_TYPES):
+                    _sync_actions(host)
         elif etype == QEvent.ContextMenu:
             view = self._view_of_header(obj)
             if view is not None:
-                self._remember(view)
                 _capture_defaults(view)
                 _show_header_menu(view, event.globalPos())
                 return True
         return False
-
-    def current(self):
-        if self._last is None:
-            return None
-        view = self._last()
-        if view is None or not view.isVisible():
-            return None
-        return view
 
 
 def install():
@@ -217,18 +202,18 @@ def install():
 
 
 def current_table():
-    return _controller.current() if _controller is not None else None
-
-
-def set_current_table(view):
-    """显式指定当前表格（测试/嵌入场景）；正常由焦点与表头右键自动记录。"""
-    install()
-    if _controller is not None and isinstance(view, _TABLE_TYPES):
-        _controller._remember(view)
+    """当前显示中的表格（测试与嵌入场景用，不参与按钮位置）。"""
+    app = QApplication.instance()
+    if app is None:
+        return None
+    focus = app.focusWidget()
+    while focus is not None and not isinstance(focus, _TABLE_TYPES):
+        focus = focus.parentWidget()
+    return focus if isinstance(focus, _TABLE_TYPES) else None
 
 
 class _ColumnButton(QToolButton):
-    """状态栏窄按钮：切主题时按当前语义色重设样式。"""
+    """表格操作行里的小按钮：切主题时按当前语义色重设样式。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -239,12 +224,14 @@ class _ColumnButton(QToolButton):
             self.setPalette(theme.current_palette())
             self.setStyleSheet(
                 "QToolButton#tableColumnButton { background: %s; color: %s; "
-                "border: 1px solid %s; border-radius: 6px; padding: 2px 8px; font-size: 11px; }"
+                "border: 1px solid %s; border-radius: 6px; padding: 2px 9px; font-size: 11px; }"
                 "QToolButton#tableColumnButton:hover { color: %s; border-color: %s; "
                 "background: %s; }"
+                "QToolButton#tableColumnButton:pressed { background: %s; }"
                 "QToolButton#tableColumnButton:disabled { color: %s; border-color: %s; }" % (
                     theme.color("surface"), theme.color("link"), theme.color("border"),
                     theme.color("link"), theme.color("link"), theme.color("surface_alt"),
+                    theme.color("surface_alt"),
                     theme.color("muted"), theme.color("border"),
                 ))
         except Exception:
@@ -263,60 +250,208 @@ class _ColumnButton(QToolButton):
         super().changeEvent(event)
 
 
-class _ColumnButtons(QWidget):
-    """状态栏两个直接按钮：自适应 / 重置；对当前表格生效。"""
+def _make_column_button(parent, text: str, tip: str, height: int = 24) -> _ColumnButton:
+    button = _ColumnButton(parent)
+    button.setObjectName("tableColumnButton")
+    button.setText(text)
+    button.setToolTip(tip)
+    button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+    button.setFixedHeight(height)
+    button.apply_theme_style()
+    return button
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("tableColumnButtons")
+
+def _wire(view, widget):
+    widget.fit_btn.clicked.connect(lambda: fit_table_columns(view))
+    widget.reset_btn.clicked.connect(lambda: reset_table_columns(view))
+
+
+class _TableColumnActions(QWidget):
+    """表格底部操作行右端的「自适应 / 重置」两个按钮。"""
+
+    def __init__(self, view):
+        super().__init__()
+        self.setObjectName("tableColumnActions")
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        self.fit_btn = self._make_button("自适应", "列宽自适应（对当前表格）")
-        self.reset_btn = self._make_button("重置", "重置列宽（恢复表格首次显示时的宽度）")
+        layout.setSpacing(6)
+        self.fit_btn = _make_column_button(self, "自适应", "本表格列宽自适应")
+        self.reset_btn = _make_column_button(
+            self, "重置", "重置本表格列宽（恢复首次显示时的宽度）")
         layout.addWidget(self.fit_btn)
         layout.addWidget(self.reset_btn)
-        self.setFixedHeight(22)
-        self.fit_btn.clicked.connect(self._run_fit)
-        self.reset_btn.clicked.connect(self._run_reset)
-        self._sync()
-        if _controller is not None:
-            _controller.currentChanged.connect(self._sync)
-
-    def _make_button(self, text: str, tip: str) -> _ColumnButton:
-        button = _ColumnButton(self)
-        button.setObjectName("tableColumnButton")
-        button.setText(text)
-        button.setToolTip(tip)
-        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        button.setFixedHeight(22)
-        button.apply_theme_style()
-        return button
-
-    def _run_fit(self):
-        view = current_table()
-        if view is not None:
-            fit_table_columns(view)
-
-    def _run_reset(self):
-        view = current_table()
-        if view is not None:
-            reset_table_columns(view)
-
-    def _sync(self, *_):
-        enabled = current_table() is not None
-        self.fit_btn.setEnabled(enabled)
-        self.reset_btn.setEnabled(enabled)
-        self.setToolTip(
-            "对当前表格：列宽自适应 / 重置列宽" if enabled
-            else "先点击一个表格，再使用列宽操作")
+        _wire(view, self)
 
     def apply_theme_style(self):
         self.fit_btn.apply_theme_style()
         self.reset_btn.apply_theme_style()
 
+    def changeEvent(self, event):
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self.apply_theme_style()
+        super().changeEvent(event)
 
-def make_buttons(parent) -> QWidget:
-    """创建状态栏「自适应 / 重置」两个直接按钮。"""
-    install()
-    return _ColumnButtons(parent)
+
+class _TableColumnOverlay(QWidget):
+    """兜底浮层：表格自身没有底部操作行时，贴表格右下角显示同一对按钮。"""
+
+    _EDGE_MARGIN = 4
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.setObjectName("tableColumnOverlay")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(3, 2, 3, 2)
+        layout.setSpacing(3)
+        self.fit_btn = _make_column_button(self, "自适应", "本表格列宽自适应", height=20)
+        self.reset_btn = _make_column_button(
+            self, "重置", "重置本表格列宽（恢复首次显示时的宽度）", height=20)
+        layout.addWidget(self.fit_btn)
+        layout.addWidget(self.reset_btn)
+        _wire(view, self)
+        self.apply_theme_style()
+
+    def table_view(self):
+        parent = self.parentWidget()
+        return parent if isinstance(parent, _TABLE_TYPES) else None
+
+    def apply_theme_style(self):
+        try:
+            self.setPalette(theme.current_palette())
+            self.setStyleSheet(
+                "QWidget#tableColumnOverlay { background: %s; border: 1px solid %s; "
+                "border-radius: 6px; }" % (theme.color("surface_alt"), theme.color("border")))
+        except Exception:
+            pass
+        self.fit_btn.apply_theme_style()
+        self.reset_btn.apply_theme_style()
+
+    def changeEvent(self, event):
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self.apply_theme_style()
+        super().changeEvent(event)
+
+
+def _alive(widget):
+    """控件可能被页面重建布局时删掉，触碰 C++ 对象可判断是否还活着。"""
+    if widget is None:
+        return None
+    try:
+        widget.objectName()
+    except RuntimeError:
+        return None
+    return widget
+
+
+def _locate_layout(layout, widget):
+    """在（可能嵌套的）布局里找到直接放着 widget 的那一层，返回 (布局, 下标)。"""
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is None:
+            continue
+        if item.widget() is widget:
+            return layout, index
+        sub = item.layout()
+        if sub is not None:
+            found = _locate_layout(sub, widget)
+            if found is not None:
+                return found
+    return None
+
+
+def _footer_row_of(view):
+    """表格所在容器里紧跟表格之后的那一行（QHBoxLayout），没有就返回 None。"""
+    parent = view.parentWidget()
+    while parent is not None:
+        layout = parent.layout()
+        if layout is not None:
+            found = _locate_layout(layout, view)
+            if found is not None:
+                holder, index = found
+                follow = holder.itemAt(index + 1) if index + 1 < holder.count() else None
+                row = follow.layout() if follow is not None else None
+                return row if isinstance(row, QHBoxLayout) else None
+        parent = parent.parentWidget()
+    return None
+
+
+def _insert_index(row):
+    """右侧只有一个动作按钮时插到它左边（并排）；否则顶到最右。"""
+    buttons = []
+    for index in range(row.count()):
+        item = row.itemAt(index)
+        widget = item.widget() if item is not None else None
+        if isinstance(widget, QAbstractButton):
+            buttons.append((index, widget))
+    if len(buttons) == 1 and buttons[0][0] == row.count() - 1:
+        return row.count() - 1
+    return row.count()
+
+
+def _ensure_actions(view):
+    """把「自适应 / 重置」挂到表格底部操作行右端；没有这一行返回 None。"""
+    actions = _alive(getattr(view, "_table_column_actions", None))
+    row = _footer_row_of(view)
+    if row is None:
+        return None
+    if actions is not None and row.indexOf(actions) >= 0:
+        return actions
+    if actions is None:
+        actions = _TableColumnActions(view)
+        view._table_column_actions = actions
+    try:
+        row.insertWidget(_insert_index(row), actions)
+    except RuntimeError:
+        view._table_column_actions = None
+        return None
+    return actions
+
+
+def _ensure_overlay(view) -> _TableColumnOverlay:
+    overlay = _alive(getattr(view, "_table_column_overlay", None))
+    if overlay is None:
+        overlay = _TableColumnOverlay(view)
+        view._table_column_overlay = overlay
+        viewport = view.viewport()
+        if viewport is not None:
+            viewport._table_column_host = view
+    return overlay
+
+
+def _place_overlay(view):
+    """表格没有底部操作行时，把兜底浮层贴到表格右下角；太小则隐藏。"""
+    viewport = view.viewport()
+    if viewport is None:
+        return
+    rect = viewport.geometry()
+    if rect.width() <= 0 or rect.height() <= 0:
+        return
+    overlay = _ensure_overlay(view)
+    overlay.adjustSize()
+    hint = overlay.sizeHint()
+    width = max(int(hint.width()), 88)
+    height = max(int(hint.height()), 26)
+    margin = _TableColumnOverlay._EDGE_MARGIN
+    if rect.width() < width + margin * 3 or rect.height() < height + margin * 3:
+        overlay.hide()
+        return
+    overlay.setGeometry(
+        rect.x() + rect.width() - width - margin,
+        rect.y() + rect.height() - height - margin,
+        width, height)
+    overlay.show()
+    overlay.raise_()
+
+
+def _sync_actions(view):
+    """表格显示/尺寸变化后对齐按钮：优先底部操作行，其次右下角浮层。"""
+    if not isinstance(view, _TABLE_TYPES) or not view.isVisible():
+        return
+    if _ensure_actions(view) is not None:
+        overlay = _alive(getattr(view, "_table_column_overlay", None))
+        if overlay is not None:
+            overlay.hide()
+        return
+    _place_overlay(view)
