@@ -32,6 +32,9 @@ BASE = "https://www.kuwo.cn"
 CREATE_URL = f"{BASE}/api/www/playlist/addPlaylist"
 ADD_URL = f"{BASE}/api/www/playlist/addSongToPlayList"
 PL_SVC = "http://nplserver.kuwo.cn/pl.svc"
+# 抓包得到的 PC 客户端标识（设备号与版本串，不含凭据）
+KUWO_DEVID = "1955031"
+KUWO_PROD = "MUSIC_9.6.0.0_W1"
 
 
 def _req_id() -> str:
@@ -97,10 +100,20 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
 
     def _pl_call(self, op: str, uid: str, sid: str, body: dict,
                  transport=None) -> dict:
-        params = {"op": op, "uid": uid, "sid": sid, "encode": "utf-8", "plat": "win"}
+        """pl3 协议：参数走 query，业务数据走 JSON body（抓包实测）。"""
+        import time as _time
+
+        params = {
+            "op": op, "encode": "utf-8", "plat": "pc", "corp": "kuwo",
+            "uid": uid, "sid": sid, "devid": KUWO_DEVID,
+            "prod": KUWO_PROD, "ttime": str(int(_time.time())),
+            "source": "kwmusic_web_1.exe",
+        }
         with self._client({}, transport) as client:
-            resp = client.post(PL_SVC, params=params, data=body,
-                               headers={"Referer": "http://www.kuwo.cn/"})
+            resp = client.post(PL_SVC, params=params,
+                               content=json.dumps(body, ensure_ascii=False),
+                               headers={"Referer": "http://www.kuwo.cn/",
+                                        "Content-Type": "application/json"})
         try:
             data = resp.json()
         except ValueError:
@@ -109,19 +122,14 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
 
     def _create_via_client(self, session: dict, name: str, transport) -> str:
         uid, sid = str(session["uid"]), str(session["sid"])
-        attempts = (
-            ("UPDATE", {"name": name, "pid": "0", "ver": "1"}),
-            ("addlist", {"name": name, "ver": "1"}),
-        )
-        detail = ""
-        for op, body in attempts:
-            data = self._pl_call(op, uid, sid, body, transport)
-            playlist_id = _find_playlist_id(data)
-            if playlist_id:
-                return playlist_id
-            detail = f"{op}: {_brief(data)}"
+        body = {"data": None, "intro": "", "ispub": True, "pic": "",
+                "tag": "", "title": name, "turn": 0}
+        data = self._pl_call("pl3_addlist", uid, sid, body, transport)
+        playlist_id = _find_playlist_id(data)
+        if playlist_id:
+            return playlist_id
         raise PlatformRejectedError(
-            f"酷我建单失败（App 会话已登录）：{detail}",
+            f"酷我建单失败（App 会话已登录）：{_brief(data)}",
             platform=self.platform, phase="create",
         )
 
@@ -171,14 +179,14 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
         if not music_ids:
             return result
         uid, sid = str(session["uid"]), str(session["sid"])
-        data = self._pl_call("ADD", uid, sid, {
-            "pid": str(playlist_id),
-            "data": ",".join(music_ids),
-            "ver": "0",
-            "tmpid": ".",
-            "type": "0",
+        data = self._pl_call("pl3_add", uid, sid, {
+            "data": [int(song_id) if str(song_id).isdigit() else song_id
+                     for song_id in music_ids],
+            "pid": int(playlist_id) if str(playlist_id).isdigit() else playlist_id,
+            "pos": 0,
         }, transport)
-        if data.get("result") == "ok" or str(data.get("ret")) == "0":
+        if data.get("result") == "ok" or str(data.get("code")) == "200" \
+                or str(data.get("ret")) == "0":
             result.added.extend(music_ids)
             if progress:
                 progress(len(music_ids), len(music_ids))
