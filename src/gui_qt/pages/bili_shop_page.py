@@ -18,12 +18,13 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QVBoxLayout,
 )
 
 from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.toolbox_common import ToolSectionCard
 from platforms import bili_shop as bs
 from toolbox.image_fetch import fetch_image
 
@@ -45,13 +46,13 @@ class BiliShopPage(BasePage):
         self._busy = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         top = QFrame()
-        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
+        top.setProperty("variant", "card")
         tv = QVBoxLayout(top)
-        tv.setContentsMargins(10, 8, 10, 8)
+        tv.setContentsMargins(12, 10, 12, 10)
         tv.setSpacing(6)
 
         row = QHBoxLayout()
@@ -105,13 +106,9 @@ class BiliShopPage(BasePage):
 
         splitter = QSplitter(Qt.Horizontal)
 
-        left = QWidget()
-        lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 0, 0)
-        lv.setSpacing(4)
-        lb = QLabel("商品列表（选中一行看右侧详情）")
-        lb.setStyleSheet("font-weight: bold;")
-        lv.addWidget(lb)
+        left_card = ToolSectionCard("商品列表", "选中一行查看右侧详情")
+        left_card.layout().setContentsMargins(12, 12, 12, 12)
+        lv = left_card.content_layout
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["商品标题", "价格", "商品ID", "来源"])
         self.table.verticalHeader().setVisible(False)
@@ -127,15 +124,12 @@ class BiliShopPage(BasePage):
         # 表头排序：与 self._shop.items 同步重排，currentRow 仍能反查商品
         self._sorter = table_sort.install(self.table, skip_columns=())
         lv.addWidget(self.table, 1)
-        splitter.addWidget(left)
+        splitter.addWidget(left_card)
 
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(6, 0, 0, 0)
+        right_card = ToolSectionCard("商品详情")
+        right_card.layout().setContentsMargins(12, 12, 12, 12)
+        rv = right_card.content_layout
         rv.setSpacing(6)
-        lb2 = QLabel("商品详情")
-        lb2.setStyleSheet("font-weight: bold;")
-        rv.addWidget(lb2)
         self.preview = QLabel("（选中商品后显示封面）")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setFixedSize(_PREVIEW_W, _PREVIEW_H)
@@ -159,7 +153,7 @@ class BiliShopPage(BasePage):
         btn_row.addWidget(self.copy_btn)
         btn_row.addStretch(1)
         rv.addLayout(btn_row)
-        splitter.addWidget(right)
+        splitter.addWidget(right_card)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)

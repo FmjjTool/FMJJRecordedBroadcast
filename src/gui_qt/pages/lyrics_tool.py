@@ -13,6 +13,7 @@ from toolbox.lyrics_engine import LyricConverter
 
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
+from gui_qt.toolbox_common import ToolSectionCard
 
 
 class LyricsToolPage(BasePage):
@@ -41,16 +42,23 @@ class LyricsToolPage(BasePage):
         self._enter_stage = 0    # 回车快捷：0=待扫描，1=待转换
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_convert_tab(), "转换")
         self.tabs.addTab(self._build_krcd_tab(), "KRCD工具")
 
+    def _section(self, title, icon):
+        card = ToolSectionCard(title, icon=icon)
+        card.layout().setContentsMargins(12, 12, 12, 12)
+        card.content_layout.setSpacing(6)
+        return card
+
     def _build_convert_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
 
         frow = QHBoxLayout()
         frow.addWidget(QPushButton("选择歌词文件", clicked=self._select_files))
@@ -64,7 +72,6 @@ class LyricsToolPage(BasePage):
         self.work_dir_label.setStyleSheet("color: palette(placeholder-text); font-size: 10px;")
         frow.addWidget(self.work_dir_label)
         frow.addStretch(1)
-        v.addLayout(frow)
 
         # 歌词文字输入区（默认折叠）：直接粘贴 LRC 等文本，走正常转换流程
         self.input_area = QWidget()
@@ -90,10 +97,14 @@ class LyricsToolPage(BasePage):
         irow.addStretch(1)
         iv.addLayout(irow)
         self.input_area.setVisible(False)
-        v.addWidget(self.input_area)
         self.file_count_label = QLabel("未选择文件")
         self.file_count_label.setProperty("role", "muted")
-        v.addWidget(self.file_count_label)
+
+        files_card = self._section("歌词文件", "music")
+        files_card.content_layout.addLayout(frow)
+        files_card.content_layout.addWidget(self.input_area)
+        files_card.content_layout.addWidget(self.file_count_label)
+        v.addWidget(files_card)
 
         fmt_row = QHBoxLayout()
         fmt_row.addWidget(QLabel("输出格式:"))
@@ -105,7 +116,9 @@ class LyricsToolPage(BasePage):
             rb.toggled.connect(lambda checked, v=val: self._set_fmt(v) if checked else None)
             fmt_row.addWidget(rb)
         fmt_row.addStretch(1)
-        v.addLayout(fmt_row)
+        fmt_card = self._section("输出格式", "document")
+        fmt_card.content_layout.addLayout(fmt_row)
+        v.addWidget(fmt_card)
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("已识别歌词文件:"))
@@ -113,10 +126,12 @@ class LyricsToolPage(BasePage):
         bar.addWidget(QPushButton("反选", clicked=lambda: self._sel("invert")))
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._sel("none")))
         bar.addStretch(1)
-        v.addLayout(bar)
         self.lyr_list = RowCheckList()
         self.lyr_list.setMaximumHeight(140)
-        v.addWidget(self.lyr_list)
+        list_card = self._section("歌词列表", "list")
+        list_card.content_layout.addLayout(bar)
+        list_card.content_layout.addWidget(self.lyr_list)
+        v.addWidget(list_card)
 
         conv_row = QHBoxLayout()
         conv_btn = QPushButton("开始转换")
@@ -126,26 +141,30 @@ class LyricsToolPage(BasePage):
         self.result_label = QLabel("")
         conv_row.addWidget(self.result_label)
         conv_row.addStretch(1)
-        v.addLayout(conv_row)
-
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        v.addWidget(self.log_text, 1)
+        run_card = self._section("转换与日志", "play")
+        run_card.content_layout.addLayout(conv_row)
+        run_card.content_layout.addWidget(self.log_text)
+        v.addWidget(run_card, 1)
         return w
 
     def _build_krcd_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
 
         frow = QHBoxLayout()
         frow.addWidget(QPushButton("选择文件", clicked=self._krcd_select_files))
         frow.addWidget(QPushButton("选择文件夹", clicked=self._krcd_select_folder))
         frow.addStretch(1)
-        v.addLayout(frow)
         self.krcd_count = QLabel("未选择文件")
         self.krcd_count.setProperty("role", "muted")
-        v.addWidget(self.krcd_count)
+        files_card = self._section("KRC / KRCD 文件", "key")
+        files_card.content_layout.addLayout(frow)
+        files_card.content_layout.addWidget(self.krcd_count)
+        v.addWidget(files_card)
 
         op = QHBoxLayout()
         op.addWidget(QLabel("操作:"))
@@ -158,7 +177,9 @@ class LyricsToolPage(BasePage):
         rb2.toggled.connect(lambda c: self._set_krcd_mode("encrypt") if c else None)
         op.addWidget(rb2)
         op.addStretch(1)
-        v.addLayout(op)
+        mode_card = self._section("转换方向", "swap")
+        mode_card.content_layout.addLayout(op)
+        v.addWidget(mode_card)
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("文件列表:"))
@@ -166,10 +187,12 @@ class LyricsToolPage(BasePage):
         bar.addWidget(QPushButton("反选", clicked=lambda: self._krcd_sel("invert")))
         bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._krcd_sel("none")))
         bar.addStretch(1)
-        v.addLayout(bar)
         self.krcd_list = RowCheckList()
         self.krcd_list.setMaximumHeight(140)
-        v.addWidget(self.krcd_list)
+        list_card = self._section("文件列表", "list")
+        list_card.content_layout.addLayout(bar)
+        list_card.content_layout.addWidget(self.krcd_list)
+        v.addWidget(list_card)
 
         run_row = QHBoxLayout()
         run = QPushButton("▶ 执行")
@@ -179,10 +202,12 @@ class LyricsToolPage(BasePage):
         self.krcd_result_label = QLabel("")
         run_row.addWidget(self.krcd_result_label)
         run_row.addStretch(1)
-        v.addLayout(run_row)
         self.krcd_log = QTextEdit()
         self.krcd_log.setReadOnly(True)
-        v.addWidget(self.krcd_log, 1)
+        run_card = self._section("执行与日志", "play")
+        run_card.content_layout.addLayout(run_row)
+        run_card.content_layout.addWidget(self.krcd_log)
+        v.addWidget(run_card, 1)
         return w
 
     # ---- 转换 tab ----

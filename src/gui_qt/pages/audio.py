@@ -38,7 +38,7 @@ from gui_qt.asr_settings_dialog import AsrSettingsDialog
 from gui_qt.common import post_to_main, run_bg, start_page_thread
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
-from gui_qt.toolbox_common import count_date_subfolders
+from gui_qt.toolbox_common import ToolSectionCard, count_date_subfolders
 
 
 class AudioPage(BasePage):
@@ -56,8 +56,8 @@ class AudioPage(BasePage):
         self._enter_stage = 0  # 回车快捷：0=待扫描，1=待提取
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # 目录栏：工作目录 + 日期文件夹计数
         dir_row = QHBoxLayout()
@@ -66,7 +66,9 @@ class AudioPage(BasePage):
         self.dir_date_label = QLabel("")
         self.dir_date_label.setProperty("role", "muted")
         dir_row.addWidget(self.dir_date_label)
-        layout.addLayout(dir_row)
+        dir_card = self._section("目录", "folder")
+        dir_card.content_layout.addLayout(dir_row)
+        layout.addWidget(dir_card)
         self._update_dir_date_label()
 
         # 控制栏
@@ -77,13 +79,11 @@ class AudioPage(BasePage):
         self.count_label = QLabel("")
         ctrl_row.addWidget(self.count_label)
         ctrl_row.addStretch(1)
-        layout.addLayout(ctrl_row)
 
         # 进度条
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        layout.addWidget(self.progress)
 
         # 操作按钮
         btn_row = QHBoxLayout()
@@ -102,7 +102,6 @@ class AudioPage(BasePage):
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self._delete_date_audio)
         btn_row.addWidget(del_btn)
-        layout.addLayout(btn_row)
 
         # 字幕：提取后直接联网/本地识别
         cfg = load_convert_config()
@@ -127,7 +126,6 @@ class AudioPage(BasePage):
         self.asr_status = QLabel("")
         self.asr_status.setStyleSheet("font-size: 11px;")
         asr_row.addWidget(self.asr_status)
-        layout.addLayout(asr_row)
 
         asr_row2 = QHBoxLayout()
         asr_row2.addWidget(QLabel("提取内容:"))
@@ -161,7 +159,14 @@ class AudioPage(BasePage):
         self.delete_audio_check.toggled.connect(self._on_asr_changed)
         asr_row2.addWidget(self.delete_audio_check)
         asr_row2.addStretch(1)
-        layout.addLayout(asr_row2)
+
+        run_card = self._section("提取与字幕", "music")
+        run_card.content_layout.addLayout(ctrl_row)
+        run_card.content_layout.addWidget(self.progress)
+        run_card.content_layout.addLayout(btn_row)
+        run_card.content_layout.addLayout(asr_row)
+        run_card.content_layout.addLayout(asr_row2)
+        layout.addWidget(run_card)
         self._refresh_asr_state()
 
         # 扫描后文件复选框列表（默认勾选当天 = 北京 UTC+8）
@@ -174,16 +179,26 @@ class AudioPage(BasePage):
         head.addWidget(self._mini_btn("全选", lambda: self._set_all_checks(True)))
         head.addWidget(self._mini_btn("全不选", lambda: self._set_all_checks(False)))
         head.addWidget(self._mini_btn("仅当天", self._check_today_only))
-        layout.addLayout(head)
         self.file_list = RowCheckList()
         self.file_list.setMaximumHeight(180)
         self.file_list.itemChanged.connect(lambda _it: self._refresh_start_btn())
-        layout.addWidget(self.file_list)
+        files_card = self._section("待处理文件", "list")
+        files_card.content_layout.addLayout(head)
+        files_card.content_layout.addWidget(self.file_list)
+        layout.addWidget(files_card)
 
         # 日志
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        layout.addWidget(self.log_text, 1)
+        log_card = self._section("运行日志", "document")
+        log_card.content_layout.addWidget(self.log_text)
+        layout.addWidget(log_card, 1)
+
+    def _section(self, title, icon):
+        card = ToolSectionCard(title, icon=icon)
+        card.layout().setContentsMargins(12, 12, 12, 12)
+        card.content_layout.setSpacing(6)
+        return card
 
     def _mini_btn(self, text, slot):
         b = QPushButton(text)

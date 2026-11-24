@@ -16,13 +16,14 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QVBoxLayout,
 )
 
 from gui_qt.common import first_number, post_to_main, run_bg, sales_number, stable_sort
 from gui_qt.pages.base import BasePage
+from gui_qt.toolbox_common import ToolSectionCard
 
 import shopping as shopping_mod
 from toolbox.image_fetch import fetch_image
@@ -52,8 +53,8 @@ class ShoppingPage(BasePage):
         self._sort_state = 0         # 0=原顺序 1=A-Z 2=Z-A
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         row = QHBoxLayout()
         self.url_entry = QLineEdit()
@@ -63,7 +64,7 @@ class ShoppingPage(BasePage):
         self.url_entry.returnPressed.connect(self._parse)
         row.addWidget(self.url_entry, 1)
         self.parse_btn = QPushButton("解析")
-        self.parse_btn.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);")
+        self.parse_btn.setProperty("variant", "primary")
         self.parse_btn.clicked.connect(self._parse)
         row.addWidget(self.parse_btn)
         self.detail_btn = QPushButton("获取选中商品详情")
@@ -80,7 +81,6 @@ class ShoppingPage(BasePage):
             "本地图片路径）；未拉过详情的自动逐件拉取并下载图片")
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
-        layout.addLayout(row)
 
         # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
         sel_row = QHBoxLayout()
@@ -100,7 +100,15 @@ class ShoppingPage(BasePage):
         self.check_count_label.setStyleSheet("color: palette(placeholder-text);")
         sel_row.addWidget(self.check_count_label)
         sel_row.addStretch(1)
-        layout.addLayout(sel_row)
+
+        top = QFrame()
+        top.setProperty("variant", "toolbar")
+        tv = QVBoxLayout(top)
+        tv.setContentsMargins(12, 10, 12, 10)
+        tv.setSpacing(6)
+        tv.addLayout(row)
+        tv.addLayout(sel_row)
+        layout.addWidget(top)
 
         # 左：商品表格 / 右：商品详情（简介 + 图预览 + 单商品导出）
         splitter = QSplitter(Qt.Horizontal)
@@ -117,13 +125,18 @@ class ShoppingPage(BasePage):
         self.table.cellDoubleClicked.connect(self._open_item)
         # 点击表头排序：A-Z → Z-A → 原顺序（勾选与选中行保留）
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
-        splitter.addWidget(self.table)
+        left_card = ToolSectionCard("商品列表", "选中一行查看右侧详情")
+        left_card.layout().setContentsMargins(12, 12, 12, 12)
+        left_card.content_layout.addWidget(self.table)
+        splitter.addWidget(left_card)
 
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(4)
+        right_card = QFrame()
+        right_card.setProperty("variant", "card")
+        rv = QVBoxLayout(right_card)
+        rv.setContentsMargins(12, 12, 12, 12)
+        rv.setSpacing(6)
         self.info_caption = QLabel("商品详情")
+        self.info_caption.setProperty("role", "sectionTitle")
         rv.addWidget(self.info_caption)
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
@@ -147,7 +160,7 @@ class ShoppingPage(BasePage):
         self.link_btn.clicked.connect(self._open_item_btn)
         btn_row.addWidget(self.link_btn)
         rv.addLayout(btn_row)
-        splitter.addWidget(right)
+        splitter.addWidget(right_card)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)

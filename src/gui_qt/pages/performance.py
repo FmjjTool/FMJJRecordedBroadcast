@@ -7,8 +7,9 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
+    QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from gui_qt import table_sort
@@ -70,7 +71,8 @@ class PerformancePage(BasePage):
         self._visible = False
         self._snapshot_busy = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         bar = QHBoxLayout()
         self.trace_cb = QCheckBox("追踪 Python 分配（较慢）")
         self.trace_cb.setToolTip("仅追踪开启后的 Python 分配；Qt、解码图片及子进程内存不在其覆盖范围内")
@@ -90,13 +92,24 @@ class PerformancePage(BasePage):
         self.export_btn = QPushButton("导出报告")
         self.export_btn.clicked.connect(self._export)
         bar.addWidget(self.export_btn)
-        layout.addLayout(bar)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.PlainText)
-        layout.addWidget(self.status)
+        top = QFrame()
+        top.setProperty("variant", "toolbar")
+        tv = QVBoxLayout(top)
+        tv.setContentsMargins(12, 10, 12, 10)
+        tv.setSpacing(6)
+        tv.addLayout(bar)
+        tv.addWidget(self.status)
+        layout.addWidget(top)
         self.chart = _MemoryChart()
-        layout.addWidget(self.chart)
+        chart_card = QFrame()
+        chart_card.setProperty("variant", "card")
+        cv = QVBoxLayout(chart_card)
+        cv.setContentsMargins(10, 10, 10, 10)
+        cv.addWidget(self.chart)
+        layout.addWidget(chart_card)
         self.tabs = QTabWidget()
         self.sample_table = self._table(("秒", "页面", "工作集 MB", "私有提交 MB", "Python MB",
                                          "CPU % / 单核", "界面延迟 ms", "线程 / 任务"))
@@ -113,6 +126,7 @@ class PerformancePage(BasePage):
         note = QLabel("工作集与私有提交是不同指标，不能相加；Python 分配不等于进程总内存。"
                       "页面切换增量可能包含同期后台任务。CPU 100% 表示用满一个逻辑核。"
                       "每秒自动采样，最多保留 3600 次采样和 2000 个事件。")
+        note.setProperty("role", "caption")
         note.setWordWrap(True)
         layout.addWidget(note)
         self._timer = QTimer(self)

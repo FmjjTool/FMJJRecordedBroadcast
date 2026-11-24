@@ -20,12 +20,13 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QPlainTextEdit,
     QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QVBoxLayout,
 )
 
 from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.toolbox_common import ToolSectionCard
 from platforms import douyin_shop as ds
 from toolbox.image_fetch import fetch_image
 
@@ -46,14 +47,14 @@ class DouyinShopPage(BasePage):
         self._busy = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # ---- 输入区 ----
         top = QFrame()
-        top.setStyleSheet("QFrame { background: palette(base); border: 1px solid palette(shadow); border-radius: 8px; }")
+        top.setProperty("variant", "card")
         tv = QVBoxLayout(top)
-        tv.setContentsMargins(10, 8, 10, 8)
+        tv.setContentsMargins(12, 10, 12, 10)
         tv.setSpacing(6)
 
         self.input_edit = QPlainTextEdit()
@@ -97,11 +98,9 @@ class DouyinShopPage(BasePage):
         # ---- 左列表 + 右详情 ----
         splitter = QSplitter(Qt.Horizontal)
 
-        left = QWidget()
-        lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 0, 0)
-        lv.setSpacing(4)
-        lv.addWidget(self._section_label("商品列表（选中一行看右侧详情）"))
+        left_card = ToolSectionCard("商品列表", "选中一行查看右侧详情")
+        left_card.layout().setContentsMargins(12, 12, 12, 12)
+        lv = left_card.content_layout
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["商品标题", "价格区间", "销量", "商品ID", "店铺ID"])
         self.table.verticalHeader().setVisible(False)
@@ -114,13 +113,12 @@ class DouyinShopPage(BasePage):
         # 表头排序：与 self._products 同步重排，currentRow 仍能反查商品
         self._sorter = table_sort.install(self.table, skip_columns=())
         lv.addWidget(self.table, 1)
-        splitter.addWidget(left)
+        splitter.addWidget(left_card)
 
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(6, 0, 0, 0)
+        right_card = ToolSectionCard("商品详情")
+        right_card.layout().setContentsMargins(12, 12, 12, 12)
+        rv = right_card.content_layout
         rv.setSpacing(6)
-        rv.addWidget(self._section_label("商品详情"))
         self.preview = QLabel("（选中商品后显示主图）")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setFixedSize(_PREVIEW_W, _PREVIEW_H)
@@ -148,7 +146,7 @@ class DouyinShopPage(BasePage):
         btn_row.addWidget(self.folder_btn)
         btn_row.addStretch(1)
         rv.addLayout(btn_row)
-        splitter.addWidget(right)
+        splitter.addWidget(right_card)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)
@@ -156,13 +154,6 @@ class DouyinShopPage(BasePage):
         self.status_label = QLabel("粘贴分享文案 → 解析全部")
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
-
-    # ---------- 小工具 ----------
-    @staticmethod
-    def _section_label(text):
-        lb = QLabel(text)
-        lb.setStyleSheet("font-weight: bold;")
-        return lb
 
     # ---------- 合并页接口 ----------
     def embed_input(self):

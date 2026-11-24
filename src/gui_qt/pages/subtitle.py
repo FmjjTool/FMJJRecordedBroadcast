@@ -16,6 +16,7 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
+from gui_qt.toolbox_common import ToolSectionCard
 
 
 class SubtitlePage(BasePage):
@@ -41,8 +42,8 @@ class SubtitlePage(BasePage):
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # 文件按钮
         frow = QHBoxLayout()
@@ -60,7 +61,9 @@ class SubtitlePage(BasePage):
         self.file_count_label.setProperty("role", "muted")
         frow.addWidget(self.file_count_label)
         frow.addStretch(1)
-        layout.addLayout(frow)
+        scan_card = self._section("选择与扫描", "folder")
+        scan_card.content_layout.addLayout(frow)
+        layout.addWidget(scan_card)
         self._refresh_date_combo()
 
         # 输出格式（持久化）
@@ -74,7 +77,9 @@ class SubtitlePage(BasePage):
             self.fmt_checks[key] = cb
             fmt_row.addWidget(cb)
         fmt_row.addStretch(1)
-        layout.addLayout(fmt_row)
+        fmt_card = self._section("输出格式", "document")
+        fmt_card.content_layout.addLayout(fmt_row)
+        layout.addWidget(fmt_card)
 
         # 文件列表（勾选）
         bar = QHBoxLayout()
@@ -84,11 +89,13 @@ class SubtitlePage(BasePage):
         bar.addWidget(self._btn("□ 清除", lambda: self._sel("none"), small=True))
         bar.addWidget(self._btn("删除选中", self._delete_selected, small=True, danger=True))
         bar.addStretch(1)
-        layout.addLayout(bar)
 
         self.file_list = RowCheckList()
         self.file_list.setMaximumHeight(150)
-        layout.addWidget(self.file_list)
+        files_card = self._section("字幕文件", "list")
+        files_card.content_layout.addLayout(bar)
+        files_card.content_layout.addWidget(self.file_list)
+        layout.addWidget(files_card)
 
         # 选项 + 转换
         opt_row = QHBoxLayout()
@@ -107,12 +114,16 @@ class SubtitlePage(BasePage):
         opt_row.addWidget(self.convert_btn)
         self.result_label = QLabel("")
         opt_row.addWidget(self.result_label)
-        layout.addLayout(opt_row)
+        run_card = self._section("转换选项", "play")
+        run_card.content_layout.addLayout(opt_row)
+        layout.addWidget(run_card)
 
         # 日志
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        layout.addWidget(self.log_text, 1)
+        log_card = self._section("运行日志", "clipboard")
+        log_card.content_layout.addWidget(self.log_text)
+        layout.addWidget(log_card, 1)
 
         # 外层页签：字幕转换（原有界面）+ 歌词转换（原独立页并入）
         root = QVBoxLayout(self)
@@ -123,6 +134,12 @@ class SubtitlePage(BasePage):
         self.lyrics_page = LyricsToolPage(app)
         self.tabs.addTab(self.lyrics_page, "歌词转换")
         root.addWidget(self.tabs)
+
+    def _section(self, title, icon):
+        card = ToolSectionCard(title, icon=icon)
+        card.layout().setContentsMargins(12, 12, 12, 12)
+        card.content_layout.setSpacing(6)
+        return card
 
     def on_show(self):
         """切回本页：工作目录可能变了 / 今天可能新建了日期文件夹 → 刷新日期下拉。"""

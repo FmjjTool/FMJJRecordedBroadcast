@@ -10,13 +10,14 @@ import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QTextEdit, QVBoxLayout,
 )
 
 from gui_qt.common import first_number, post_to_main, run_bg, stable_sort
 from gui_qt.pages.base import BasePage
+from gui_qt.toolbox_common import ToolSectionCard
 
 import tickets as tickets_mod
 
@@ -37,8 +38,8 @@ class TicketsPage(BasePage):
         self._sort_state = 0       # 0=原顺序 1=A-Z 2=Z-A
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         row = QHBoxLayout()
         self.url_entry = QLineEdit()
@@ -56,7 +57,7 @@ class TicketsPage(BasePage):
             "所有=包含历史演出（关键词查询会额外走大麦/秀动艺人页通道）")
         row.addWidget(self.scope_sel)
         self.parse_btn = QPushButton("解析")
-        self.parse_btn.setStyleSheet("background: #2e7d32; color: white;")
+        self.parse_btn.setProperty("variant", "primary")
         self.parse_btn.clicked.connect(self._parse)
         row.addWidget(self.parse_btn)
         self.detail_btn = QPushButton("获取选中演出详情")
@@ -73,7 +74,6 @@ class TicketsPage(BasePage):
             "未拉详情的自动逐场拉取并下载图片")
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
-        layout.addLayout(row)
 
         # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
         sel_row = QHBoxLayout()
@@ -90,10 +90,18 @@ class TicketsPage(BasePage):
         self.sel_clear_btn.clicked.connect(lambda: self._set_all_checks(False))
         sel_row.addWidget(self.sel_clear_btn)
         self.check_count_label = QLabel("已勾选 0 场")
-        self.check_count_label.setStyleSheet("color: #888;")
+        self.check_count_label.setStyleSheet("color: palette(placeholder-text);")
         sel_row.addWidget(self.check_count_label)
         sel_row.addStretch(1)
-        layout.addLayout(sel_row)
+
+        top = QFrame()
+        top.setProperty("variant", "toolbar")
+        tv = QVBoxLayout(top)
+        tv.setContentsMargins(12, 10, 12, 10)
+        tv.setSpacing(6)
+        tv.addLayout(row)
+        tv.addLayout(sel_row)
+        layout.addWidget(top)
 
         # 左：演出列表 / 右：详情
         splitter = QSplitter(Qt.Horizontal)
@@ -109,13 +117,15 @@ class TicketsPage(BasePage):
         self.table.itemSelectionChanged.connect(self._on_select)
         # 点击表头排序：A-Z → Z-A → 原顺序（勾选与选中行保留）
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
-        splitter.addWidget(self.table)
+        left_card = ToolSectionCard("演出列表", "勾选演出后可批量获取详情与导出")
+        left_card.layout().setContentsMargins(12, 12, 12, 12)
+        left_card.content_layout.addWidget(self.table)
+        splitter.addWidget(left_card)
 
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(4)
-        rv.addWidget(QLabel("演出详情"))
+        right_card = ToolSectionCard("演出详情")
+        right_card.layout().setContentsMargins(12, 12, 12, 12)
+        rv = right_card.content_layout
+        rv.setSpacing(6)
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
         self.detail_text.setPlaceholderText("选中左侧演出查看详情；点「获取选中演出详情」拉场次/票档")
@@ -124,13 +134,13 @@ class TicketsPage(BasePage):
         self.link_btn.setEnabled(False)
         self.link_btn.clicked.connect(self._open_link)
         rv.addWidget(self.link_btn)
-        splitter.addWidget(right)
+        splitter.addWidget(right_card)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #888;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
     # ==================== 解析列表 ====================

@@ -652,11 +652,13 @@ class MusicTagPage(BasePage):
         sp = QSplitter(Qt.Horizontal)
 
         # ---- 左：标签表单 ----
-        left = QWidget()
+        left = QFrame()
+        left.setProperty("variant", "card")
         lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 6, 0)
+        lv.setContentsMargins(12, 12, 12, 12)
+        lv.setSpacing(8)
         self.form_title = QLabel("（未选择文件）")
-        self.form_title.setStyleSheet("font-weight:bold;color:#2f3440;")
+        self.form_title.setProperty("role", "sectionTitle")
         lv.addWidget(self.form_title)
 
         form = QFormLayout()
@@ -729,12 +731,14 @@ class MusicTagPage(BasePage):
         self.cov_label = QLabel()
         self.cov_label.setFixedSize(140, 140)
         self.cov_label.setAlignment(Qt.AlignCenter)
-        self.cov_label.setStyleSheet("border:1px solid #c3cad6;background:#ffffff;")
+        self.cov_label.setStyleSheet(
+            "border: 1px solid palette(mid); background: palette(alternate-base);"
+            " color: palette(placeholder-text); border-radius: 6px;")
         self.cov_label.setText("无封面")
         cov_row.addWidget(self.cov_label)
         cv = QVBoxLayout()
         self.cov_info = QLabel("")
-        self.cov_info.setStyleSheet("color:#888;")
+        self.cov_info.setStyleSheet("color: palette(placeholder-text);")
         cv.addWidget(self.cov_info)
         for text, cb, tip in [
             ("更换封面", self._cover_set, "把选中图片设为前置封面"),
