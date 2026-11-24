@@ -678,6 +678,14 @@ class AccountCenterWidget(QWidget):
                 account_id, account["platform"], room, account["name"], account["url"])
         return registry.set_live_room(account_id, room)
 
+    def _revert_live_box(self, account_id):
+        """勾选失败时把复选框退回未勾选，不触发取消绑定的重入分支。"""
+        box = self._live_boxes.get(account_id)
+        if box is not None:
+            box.blockSignals(True)
+            box.setChecked(False)
+            box.blockSignals(False)
+
     def _toggle_live(self, account_id, checked):
         """「用于直播录制」：有房间号直接用，取不到的房间号先记成待开播主播。"""
         if self._building:
@@ -701,17 +709,13 @@ class AccountCenterWidget(QWidget):
         # 输入既可以是房间号，也可以是直播间链接：统一抽成房间号
         room = live_rooms.parse_room_input(account["platform"], raw)
         if raw and not room:
-            box = self._live_boxes.get(account_id)
-            if box is not None:
-                box.setChecked(False)
+            self._revert_live_box(account_id)
             self._toast("没从链接里识别到直播间号，请填直播间链接或房间号", "warning")
             return
         if edit is not None and room and edit.text().strip() != room:
             edit.setText(room)
         if not room and not live_rooms.can_resolve(account["platform"], account["url"]):
-            box = self._live_boxes.get(account_id)
-            if box is not None:
-                box.setChecked(False)
+            self._revert_live_box(account_id)
             self._toast(
                 f"{account['platform_name']}没有自动获取功能：请先在框里贴入直播房间地址",
                 "warning")
@@ -719,9 +723,7 @@ class AccountCenterWidget(QWidget):
         # 还没房间号（抖音等）：先记成「待开播」主播，随即强制解析一次补号
         ok, msg = self._bind_live_anchor(account_id, account, room)
         if not ok:
-            box = self._live_boxes.get(account_id)
-            if box is not None:
-                box.setChecked(False)
+            self._revert_live_box(account_id)
         self._toast(msg, "success" if ok else "warning")
         self.reload()
         if ok and not room:

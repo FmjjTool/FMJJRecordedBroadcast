@@ -2238,19 +2238,24 @@ class LiveRecordWindow(QMainWindow):
         if not self._save_timer.isActive():
             self._save_timer.start(500)
 
-    def save_state(self):
+    def save_state(self, notify=True) -> bool:
         platforms = {k: p.to_state() for k, p in self.panes.items()}
         if not self._state_from_disk and not any(
                 (v or {}).get("anchors") for v in platforms.values()):
             # 启动时没读到配置（文件缺失/损坏/被占用），本轮也没有主播：
             # 不能把空列表写回磁盘，否则会误清用户已设定的主播
-            return
+            return False
         self.state["platforms"] = platforms
         if not self.embedded:
             # 内嵌页面不记录窗口尺寸（内嵌尺寸由主窗口布局决定）
             self.state["window"] = [self.width(), self.height()]
         if not LR.save_state(self.state):
-            self.toast("录制配置保存失败，请检查目录写入权限", "error")
+            if notify:
+                self.toast("录制配置保存失败，请检查目录写入权限", "error")
+            return False
+        # 已成功写过一次：之后删掉最后一条主播也允许把空列表落盘
+        self._state_from_disk = True
+        return True
 
     def toast(self, msg, kind="info"):
         if self.app is not None and hasattr(self.app, "toast"):
@@ -2312,12 +2317,16 @@ class LiveRecordWindow(QMainWindow):
             pane.manager.anchors[:] = [
                 a for a in anchors if a is target or a.account_id != account_id]
             pane.model.refresh_all()
-            self.schedule_save()
+            # 账号配置勾选后会立刻重读配置，这里必须同步落盘，
+            # 否则复选框会先弹回未勾选，要再点一次才生效
+            if not self.save_state(notify=False):
+                return False, "直播录制配置保存失败，请检查目录写入权限"
             return True, ("已绑定到已有主播" if room else "已在直播录制中（待开播）")
         pane.manager.anchors.append(LR.Anchor(
             platform=plat, room=room, name=name, account_id=account_id, url=url))
         pane.model.refresh_all()
-        self.schedule_save()
+        if not self.save_state(notify=False):
+            return False, "直播录制配置保存失败，请检查目录写入权限"
         if not room:
             return True, "已加入直播录制（未开播，开播后自动补房间号）"
         return True, "已加入直播录制"
@@ -2332,7 +2341,8 @@ class LiveRecordWindow(QMainWindow):
                 pane.model.refresh_all()
                 changed = True
         if changed:
-            self.schedule_save()
+            # 与新增一致：账号配置取消勾选后立刻重读配置，不能等延迟保存
+            self.save_state()
         return changed
 
     def activity(self) -> dict:
