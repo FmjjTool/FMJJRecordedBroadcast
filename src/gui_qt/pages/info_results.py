@@ -763,16 +763,6 @@ class InfoResultsPage(BasePage):
 
         run_bg(work, done)
 
-    def _confirm_clear(self, title, text):
-        """清空类破坏操作确认：默认「取消」，Esc / Enter 都不会误清空。"""
-        box = QMessageBox(QMessageBox.Warning, title, text, QMessageBox.NoButton, self)
-        action = box.addButton("清空", QMessageBox.AcceptRole)
-        cancel = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel)
-        box.setEscapeButton(cancel)
-        box.exec()
-        return box.clickedButton() is action
-
     def _col_clear(self, key, name):
         """清空单个平台栏的全部条目（只移除采集结果记录，不影响已下载的本地文件）。"""
         if isinstance(common.COLLECTED, CollectedLibrary):
@@ -783,11 +773,6 @@ class InfoResultsPage(BasePage):
             keys = None
         if not count:
             self.app.toast("该栏暂无条目", "warning")
-            return
-        if not self._confirm_clear(
-                "清空本栏",
-                f"将清空「{name}」栏全部 {count} 个条目。\n\n"
-                "只移除采集结果中的记录，不影响已下载的本地文件，清空后无法恢复。"):
             return
         try:
             if keys is not None:
@@ -805,11 +790,6 @@ class InfoResultsPage(BasePage):
     def _clear(self):
         count = len(common.COLLECTED)
         if not count:
-            return
-        if not self._confirm_clear(
-                "全部清空",
-                f"将清空全部平台栏共 {count} 个条目。\n\n"
-                "只移除采集结果中的记录，不影响已下载的本地文件，清空后无法恢复。"):
             return
         try:
             common.COLLECTED.clear()
