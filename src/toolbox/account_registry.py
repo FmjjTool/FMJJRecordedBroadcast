@@ -161,6 +161,9 @@ def list_accounts() -> list[dict]:
         add("music", acc.get("name", ""), acc.get("url", ""),
             [gid] if gid else [], acc.get("kind", ""), acc.get("platform", ""))
     for acc in _fan_items():
+        # QQ 群是群订阅，不是账号；只在粉丝群页的「QQ群订阅」里展示。
+        if str(acc.get("platform") or "") == "qqgroup":
+            continue
         add("fan_groups", acc.get("name", ""), acc.get("input", ""), [],
             "", acc.get("platform", ""))
 

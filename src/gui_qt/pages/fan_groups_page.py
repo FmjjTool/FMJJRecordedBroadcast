@@ -90,6 +90,7 @@ class FanGroupsPage(BasePage):
         self._changes: dict[str, int | None] = {}
         self._prev_at = ""
         self._busy = False
+        self._qq_dialog = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -114,6 +115,12 @@ class FanGroupsPage(BasePage):
         self.input_edit.setText(_default_owner_url(self._platform))
         self.input_edit.returnPressed.connect(self._do_query)
         row.addWidget(self.input_edit, 1)
+
+        self.qq_btn = QPushButton("QQ群订阅")
+        self.qq_btn.setToolTip(
+            "按 QQ 群资料分享链接订阅人数（免登录）；定时刷新在任务页设置")
+        self.qq_btn.clicked.connect(self._open_qq_groups)
+        row.addWidget(self.qq_btn)
 
         self.query_btn = QPushButton("查询")
         self.query_btn.setStyleSheet(
@@ -202,13 +209,31 @@ class FanGroupsPage(BasePage):
     def _refresh_task_label(self):
         try:
             from toolbox import fan_groups_task as fgt
-            count = len(fgt.load_targets())
+            targets = fgt.load_targets()
         except Exception:  # noqa: BLE001 - 读不到订阅名单时按未订阅显示
-            count = 0
+            targets = []
+        qq_count = sum(1 for t in targets if t.get("platform") == "qqgroup")
+        account_count = len(targets) - qq_count
+        parts, hints = [], []
+        if account_count:
+            parts.append(f"{account_count} 个账号")
+            hints.append("账号名单在「账号与登录」勾选「粉丝群快照」管理")
+        if qq_count:
+            parts.append(f"{qq_count} 个 QQ 群")
+            hints.append("QQ 群名单在「QQ群订阅」管理")
         self.task_label.setText(
-            f"定时快照：已订阅 {count} 个账号（名单在「账号与登录」勾选「粉丝群快照」管理），"
-            "时间到「任务 → 粉丝群快照」设置"
-            if count else "定时快照：查询成功后账号自动加入订阅名单，也可在「账号与登录」勾选")
+            f"定时快照：已订阅 {'、'.join(parts)}（{'；'.join(hints)}；"
+            "时间到「任务 → 粉丝群快照」设置）"
+            if parts else
+            "定时快照：查询成功后账号自动加入订阅名单；QQ 群请在「QQ群订阅」配置分享链接")
+
+    def _open_qq_groups(self):
+        if self._qq_dialog is None:
+            from gui_qt.pages.qq_groups_dialog import QQGroupsDialog
+            self._qq_dialog = QQGroupsDialog(self)
+        self._qq_dialog.show()
+        self._qq_dialog.raise_()
+        self._qq_dialog.activateWindow()
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy

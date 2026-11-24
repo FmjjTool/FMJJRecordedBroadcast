@@ -116,7 +116,7 @@ PAGE_INDEX = {
         "微博超话", "账户追踪", module="gui_qt.pages.weibo_chaohua", cls="WeiboChaohuaPage"),
     "fan_groups": PageMeta(
         "粉丝群", "账户追踪", module="gui_qt.pages.fan_groups_page", cls="FanGroupsPage",
-        aliases="粉丝群查询"),
+        aliases="粉丝群查询 QQ群 QQ群订阅"),
     "account_registry": PageMeta(
         "账号名单", "账户追踪",
         module="gui_qt.pages.account_registry", cls="AccountRegistryPage"),

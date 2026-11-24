@@ -1,10 +1,12 @@
-"""粉丝群人数快照 · Windows 计划任务（每天 / 按间隔）。
+"""粉丝群 / QQ群人数快照 · Windows 计划任务（每天 / 按间隔）。
 
 - 任务名：FengMingFanGroupsMonitor
 - 命令：pythonw main.py --fan-groups-snapshot（打包后 FengMingToolbox.exe --fan-groups-snapshot）
-- 订阅名单：在「粉丝群查询」页成功查到群后自动记入 config/fan_groups_targets.json，
-  每行 {platform, input}；定时任务逐个重新查询并保存快照（人数变化以上次快照对比）。
-- 日志：config/fan_groups_task.log（超过 1 MB 备份为 .1.log）。
+- 订阅名单：粉丝群账号与 QQ 群共用 config/fan_groups_targets.json，
+  每行 {platform, input, name?}；QQ 群记录 platform=qqgroup、input=<分享链接>。
+- 定时任务逐个重新查询并保存快照（人数变化以上次快照对比）。
+- 日志：config/fan_groups_task.log（超过 1 MB 备份为 .1.log）；
+  QQ 群日志只写群号/群名，不写含 token 的分享链接。
 """
 
 from __future__ import annotations
@@ -141,8 +143,9 @@ def snapshot_all(progress=None) -> tuple[int, int]:
     for index, target in enumerate(targets, 1):
         platform, value = target["platform"], target["input"]
         label = fg.PLATFORM_LABELS.get(platform, platform)
+        safe = fg.safe_target_text(platform, value)
         if progress:
-            progress(f"[{index}/{len(targets)}] {label} {value}")
+            progress(f"[{index}/{len(targets)}] {label} {safe}")
         try:
             owner_id, groups = fg.fetch_groups(platform, value)
             previous = fg.load_latest(platform, owner_id)
@@ -153,7 +156,7 @@ def snapshot_all(progress=None) -> tuple[int, int]:
                 f"快照 {snap.name}")
             ok += 1
         except Exception as exc:  # noqa: BLE001 - 单个账号失败不影响其它账号
-            log(f"{label} {value} 失败：{type(exc).__name__}: {exc}")
+            log(f"{label} {safe} 失败：{type(exc).__name__}: {exc}")
     return ok, len(targets)
 
 
@@ -163,7 +166,7 @@ def main() -> int:
         from toolbox.config_manager import init_all_configs
         init_all_configs()
         if not load_targets():
-            log("尚未订阅任何粉丝群账号，跳过")
+            log("尚未订阅任何粉丝群账号或 QQ 群，跳过")
             return 1
         ok, total = snapshot_all(progress=log)
         log(f"===== 粉丝群快照定时任务结束：成功 {ok}/{total} =====")

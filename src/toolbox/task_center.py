@@ -6,7 +6,7 @@
 - FengMingMusicTrackerMonitor  音乐账号追踪（每天 / 按间隔）
 - FengMingQuarkBackup          夸克网盘备份（每天 / 按间隔）
 - FengMingWebwikiAnalytics     本地资料站访问统计（每天）
-- FengMingFanGroupsMonitor     粉丝群人数快照（每天 / 按间隔）
+- FengMingFanGroupsMonitor     粉丝群 / QQ群人数快照（每天 / 按间隔）
 - FengMingInfoCollect          信息获取作品增量（每天 / 按间隔）
 计划文本取自各页保存的配置，安装状态 / 下次运行取自 schtasks；计划设置统一由
 「定时任务」页读写，功能页不再单独提供定时配置。
@@ -82,7 +82,7 @@ def list_tasks() -> list[dict]:
          _quark.TASK_NAME, _quark.info()),
         ("webwiki", "站点访问统计", "mandisa.wiki 后台访问统计每日采集",
          _webwiki.TASK_NAME, _webwiki.info()),
-        ("fangroups", "粉丝群快照", "已订阅粉丝群的群列表与人数定时快照",
+        ("fangroups", "粉丝群快照", "已订阅粉丝群 / QQ群的人数定时快照",
          _fan.TASK_NAME, _fan.info()),
         ("info", "作品增量", "信息获取账号的最新作品定时入库（只入库不下媒体）",
          _info.TASK_NAME, _info.info()),

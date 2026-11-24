@@ -1,4 +1,10 @@
-"""三平台公开粉丝群查询：抖音 / 微博 / B站（均需登录 Cookie）。
+"""粉丝群 / QQ群公开信息查询：抖音 / 微博 / B站 / QQ群。
+
+QQ群（2026-11 实测）：
+  GET https://qun.qq.com/universal-share/share?...  （手机 UA）
+  - 免登录；服务端渲染的 HTML 里含群名、群号与 memberCnt
+  - 每个群的分享 token 独立，群号不能推导其他群的分享链接
+
 
 抖音（2026-11 实测）：
   GET https://www.douyin.com/aweme/v1/web/im_group_api/list/other/
@@ -24,18 +30,38 @@ B站（2026-11 实测）：
 
 from __future__ import annotations
 
+import base64
+import html
 import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
-PLATFORM_LABELS = {"douyin": "抖音", "weibo": "微博", "bilibili": "B站"}
+PLATFORM_LABELS = {"douyin": "抖音", "weibo": "微博", "bilibili": "B站",
+                   "qqgroup": "QQ群"}
 
 UA_PC = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+UA_MOBILE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+             "Mobile/15E148 Safari/604.1")
+
+# QQ 群官方目录：只存公开群名与群号，不预置任何群分享 token。
+# 人数需要每个群各自的 universal-share 分享链接，群号不能代替。
+QQ_GROUP_CATALOG = (
+    {"name": "【封茗囧菌 青龙宫】", "no": "691575264"},
+    {"name": "【封茗囧菌 朱雀宫】", "no": "948877302"},
+    {"name": "【封茗囧菌 玄武宫】", "no": "927955571"},
+    {"name": "【封茗囧菌 白虎宫】", "no": "653742745"},
+    {"name": "【封茗囧菌 应龙宫】", "no": "951080398"},
+    {"name": "囧菌直播通知群", "no": "982956634"},
+    {"name": "囧菌官方周边群", "no": "387717507"},
+    {"name": "囧菌娃娃2.0选号群", "no": "619206018"},
+)
 
 DOUYIN_API = "https://www.douyin.com/aweme/v1/web/im_group_api/list/other/"
 WEIBO_API = "https://weibo.com/ajax/profile/sidedetail"
@@ -117,6 +143,127 @@ def extract_bili_mid(text: str) -> str:
     raise ValueError("没识别到 B站 UID（请粘贴 space.bilibili.com/<UID> 或直接输入 UID）")
 
 
+def _b64decode_any(text: str) -> bytes:
+    raw = (text or "").strip()
+    if not raw:
+        return b""
+    padded = raw + "=" * (-len(raw) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded)
+    except (ValueError, TypeError):
+        return base64.b64decode(padded, altchars=b"-_")
+
+
+def extract_qq_group_no(text: str) -> str:
+    """从 QQ 群分享链接 / 加群链接 / 群号中提取群号。"""
+    raw = html.unescape((text or "").strip())
+    if re.fullmatch(r"\d{5,12}", raw):
+        return raw
+    parsed = urlparse(raw)
+    query = parse_qs(parsed.query)
+    for key in ("group_code", "groupCode", "gc", "group_id"):
+        for value in query.get(key) or []:
+            value = str(value).strip()
+            if re.fullmatch(r"\d{5,12}", value):
+                return value
+    busi = (query.get("busi_data") or [""])[0]
+    if busi:
+        try:
+            data = json.loads(_b64decode_any(busi).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            for key in ("groupCode", "group_code", "gc"):
+                value = str(data.get(key) or "").strip()
+                if re.fullmatch(r"\d{5,12}", value):
+                    return value
+    raise ValueError("没识别到 QQ 群号（请粘贴群分享链接或群号）")
+
+
+def qq_share_url(text: str) -> str:
+    """校验并规范化 QQ 群资料分享链接（只允许 qun.qq.com 的 universal-share）。"""
+    raw = html.unescape((text or "").strip())
+    if raw.startswith("http://"):
+        raw = "https://" + raw[len("http://"):]
+    parsed = urlparse(raw)
+    if parsed.scheme != "https":
+        raise ValueError("QQ 群分享链接必须以 https:// 开头")
+    if (parsed.hostname or "").lower() not in ("qun.qq.com", "www.qun.qq.com"):
+        raise ValueError("请粘贴 qun.qq.com 的 QQ 群资料分享链接")
+    if parsed.path.rstrip("/") != "/universal-share/share":
+        raise ValueError("请粘贴 qun.qq.com/universal-share/share 形式的分享链接")
+    query = parse_qs(parsed.query)
+    if not (query.get("busi_data") or query.get("data")):
+        raise ValueError("分享链接缺少群资料参数，请重新复制完整链接")
+    return raw
+
+
+def fetch_qqgroup(text: str, timeout: float = 20.0) -> "FanGroup":
+    """读取 QQ 群资料分享页（无需登录），解析群名与当前人数。"""
+    url = qq_share_url(text)
+    group_no = extract_qq_group_no(url)
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": UA_MOBILE, "Referer": "https://qun.qq.com/"},
+            timeout=timeout,
+            allow_redirects=True,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(f"读取 QQ 群分享页失败：{type(exc).__name__}") from exc
+    if response.status_code != 200:
+        raise ValueError(f"QQ 群分享页 HTTP {response.status_code}（链接可能已失效）")
+    final = urlparse(getattr(response, "url", "") or url)
+    if (final.hostname or "").lower() not in ("qun.qq.com", "www.qun.qq.com"):
+        raise ValueError("QQ 群分享页跳转到了非预期域名，已停止解析")
+    body = (response.content or b"")[:2_000_000].decode("utf-8", "ignore")
+    name_match = re.search(
+        r'<div[^>]*class="[^"]*group-name[^"]*"[^>]*>(.*?)</div>', body, re.S)
+    count_match = re.search(
+        r'<span[^>]*class="[^"]*member-count[^"]*"[^>]*>\s*([\d,]+)\s*人', body)
+    if not count_match:
+        count_match = re.search(r'"memberCnt"\s*:\s*(\d+)', body)
+    if not name_match or not count_match:
+        raise ValueError("分享链接已失效，或该群未公开人数")
+    name = html.unescape(re.sub(r"<[^>]+>", "", name_match.group(1))).strip()
+    try:
+        member_count = int(count_match.group(1).replace(",", ""))
+    except (TypeError, ValueError):
+        raise ValueError("分享页人数格式无法识别") from None
+    page_no_match = re.search(r"群号[:：]\s*(\d{5,12})", body)
+    if not page_no_match:
+        page_no_match = re.search(r'"groupcode"\s*:\s*"(\d{5,12})"', body)
+    page_no = page_no_match.group(1) if page_no_match else group_no
+    if page_no and group_no and page_no != group_no:
+        raise ValueError("分享页群号与链接不一致")
+    avatar_match = re.search(
+        r'<img[^>]*class="[^"]*avatar[^"]*"[^>]*src="([^"]+)"', body)
+    avatar = html.unescape(avatar_match.group(1)) if avatar_match else ""
+    description = ""
+    desc_match = re.search(r'"description":"((?:\\.|[^"\\])*)"', body)
+    if desc_match:
+        try:
+            description = json.loads('"' + desc_match.group(1) + '"')
+        except (ValueError, json.JSONDecodeError):
+            description = ""
+    return FanGroup(
+        platform="qqgroup",
+        group_id=page_no or group_no,
+        name=name,
+        member_count=member_count,
+        member_limit=None,
+        group_no=page_no or group_no,
+        owner_uid="",
+        avatar="" if avatar.startswith("data:") else avatar,
+        avatar_path="",
+        entry_limit="分享链接",
+        tags="",
+        notice=description,
+        url="",
+        raw={},
+    )
+
+
 def extract_owner_id(platform: str, text: str) -> str:
     if platform == "douyin":
         return extract_douyin_sec_uid(text)
@@ -124,6 +271,8 @@ def extract_owner_id(platform: str, text: str) -> str:
         return extract_weibo_uid(text)
     if platform == "bilibili":
         return extract_bili_mid(text)
+    if platform == "qqgroup":
+        return extract_qq_group_no(text)
     raise ValueError(f"不支持的平台：{platform}")
 
 
@@ -343,10 +492,29 @@ FETCHERS = {"douyin": fetch_douyin, "weibo": fetch_weibo, "bilibili": fetch_bili
 
 def fetch_groups(platform: str, text: str, progress=None) -> tuple[str, list[FanGroup]]:
     """输入主页链接/ID → (owner_id, 群列表)。"""
+    if platform == "qqgroup":
+        owner_id = extract_qq_group_no(text)
+        if progress:
+            progress(f"QQ群 {owner_id}：正在读取分享页...")
+        return owner_id, [fetch_qqgroup(text)]
     owner_id = extract_owner_id(platform, text)
     if progress:
         progress(f"{PLATFORM_LABELS[platform]} ID：{owner_id}，正在查询...")
     return owner_id, FETCHERS[platform](owner_id)
+
+
+def safe_target_text(platform: str, value: str) -> str:
+    """日志/进度里使用的安全标识；QQ 群不输出含 token 的分享链接。"""
+    if platform == "qqgroup":
+        try:
+            return extract_qq_group_no(value)
+        except ValueError:
+            return "(无效分享链接)"
+    return str(value or "")
+
+
+def qq_group_catalog() -> list[dict]:
+    return [dict(item) for item in QQ_GROUP_CATALOG]
 
 
 # ==================== 快照 / 变化 ====================
