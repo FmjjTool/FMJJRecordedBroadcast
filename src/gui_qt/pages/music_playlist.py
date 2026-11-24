@@ -20,15 +20,14 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QCheckBox, QComboBox, QCompleter, QFileDialog, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.pages.music_playlist_dialog import EventPickerDialog
 from gui_qt.toolbox_common import ElidedLabel, ToolSectionCard
 from music import playlist_service as service
 from music.playlist_service import PlaylistWriteError
@@ -56,6 +55,8 @@ class MusicPlaylistPage(BasePage):
         self._plans: list[service.PlatformPlan] = []
         self._source_label = ""
         self._event: dict | None = None
+        self._events: list[dict] = []
+        self._events_loaded = False
         self._report_dir = service.report_dir()
         self._report_paths: list[Path] = []
         self._platform_supported: dict[str, bool] = {}
@@ -107,10 +108,21 @@ class MusicPlaylistPage(BasePage):
         self.source_input.setPlaceholderText("使用本地「完整歌曲」快照")
         source_row.addWidget(self.source_input, 1)
 
+        # 线下活动：可直接输入搜索（包含匹配），也可点箭头从全部活动里选
+        self.event_box = QComboBox()
+        self.event_box.setEditable(True)
+        self.event_box.setInsertPolicy(QComboBox.NoInsert)
+        self.event_box.setMinimumHeight(28)
+        self.event_box.setVisible(False)
+        self.event_box.lineEdit().setPlaceholderText("输入活动名称搜索，或点箭头选择")
+        self.event_box.activated.connect(self._on_event_activated)
+        self.event_box.lineEdit().returnPressed.connect(self._on_event_return)
+        source_row.addWidget(self.event_box, 1)
+
         self.pick_btn = QPushButton("选择文件")
         self.pick_btn.setMinimumHeight(28)
         self.pick_btn.setVisible(False)
-        self.pick_btn.clicked.connect(self._on_pick)
+        self.pick_btn.clicked.connect(self._pick_file)
         source_row.addWidget(self.pick_btn)
         content.addLayout(source_row)
 
@@ -239,55 +251,84 @@ class MusicPlaylistPage(BasePage):
         mode = self.source_box.currentData()
         is_snapshot = mode == _SOURCE_SNAPSHOT
         is_event = mode == _SOURCE_EVENT
-        self.pick_btn.setVisible(mode in (_SOURCE_FILE, _SOURCE_EVENT))
-        self.pick_btn.setText("选择活动" if is_event else "选择文件")
+        self.source_input.setVisible(not is_event)
+        self.event_box.setVisible(is_event)
+        self.pick_btn.setVisible(mode == _SOURCE_FILE)
         self.source_input.setEnabled(not (is_snapshot or is_event))
         if is_snapshot:
             self.source_input.clear()
             self.source_input.setPlaceholderText("使用本地「完整歌曲」快照")
         elif is_event:
-            self.source_input.clear()
-            self.source_input.setPlaceholderText("点「选择活动」，歌单名自动使用活动名称")
-            if self._event:
-                self._show_event(self._event)
+            self._ensure_events()
         elif mode == _SOURCE_FILE:
             self.source_input.setPlaceholderText("选择 txt / json / csv / xlsx 歌曲清单")
         else:
             self.source_input.setPlaceholderText(
                 "粘贴歌单链接或 ID（QQ音乐 / 网易云 / 酷狗 / 酷我 / 5sing）")
 
-    def _show_event(self, event: dict):
-        parts = [event.get("date") or "", event.get("city") or ""]
-        summary = " · ".join(part for part in parts if part)
-        self.source_input.setText(
-            f"{summary} · {event.get('song_count') or 0} 首" if summary
-            else f"{event.get('song_count') or 0} 首")
-        self.name_edit.setText(event.get("name") or self.name_edit.text())
-
-    def _on_pick(self):
-        if self.source_box.currentData() == _SOURCE_EVENT:
-            self._pick_event()
-        else:
-            self._pick_file()
-
-    def _pick_event(self):
+    def _ensure_events(self):
+        """首次进入线下活动来源时读取活动列表，输入即按包含匹配筛选。"""
+        if self._events_loaded:
+            return
         try:
             events = service.load_offline_events()
         except OSError as exc:
             QMessageBox.warning(self, "歌单", f"读取线下活动失败：{exc}")
             return
+        self._events_loaded = True
+        self._events = events
+        self.event_box.blockSignals(True)
+        self.event_box.clear()
+        for event in events:
+            self.event_box.addItem(self._event_label(event), event["row_no"])
+        self.event_box.setCurrentIndex(-1)
+        self.event_box.setEditText("")
+        self.event_box.blockSignals(False)
+        completer = self.event_box.completer()
+        if completer is not None:
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
         if not events:
             QMessageBox.information(
                 self, "歌单", "本地没有「线下活动」快照，请先在腾讯文档页完成一次同步")
+
+    @staticmethod
+    def _event_label(event: dict) -> str:
+        parts = [event.get("name") or "", event.get("date") or "",
+                 event.get("city") or "", f"{event.get('song_count') or 0} 首"]
+        return " · ".join(part for part in parts if part)
+
+    def _on_event_activated(self, index: int):
+        if 0 <= index < len(self._events):
+            self._apply_event(self._events[index])
+        elif index < 0:
+            self._apply_event_by_text()
+
+    def _on_event_return(self):
+        self._apply_event_by_text()
+
+    def _apply_event_by_text(self):
+        text = self.event_box.currentText().strip()
+        if not text:
             return
-        dialog = EventPickerDialog(events, self)
-        if dialog.exec() != EventPickerDialog.Accepted:
-            return
-        event = dialog.selected_event()
-        if not event:
-            return
+        for index, event in enumerate(self._events):
+            if self._event_label(event) == text:
+                self._apply_event(event)
+                return
+        lowered = text.lower()
+        for event in self._events:
+            if lowered in self._event_label(event).lower():
+                self._apply_event(event)
+                return
+
+    def _apply_event(self, event: dict):
         self._event = event
-        self._show_event(event)
+        self.name_edit.setText(event.get("name") or self.name_edit.text())
+        index = self.event_box.findData(event.get("row_no"))
+        if index >= 0:
+            self.event_box.setCurrentIndex(index)
+        self.event_box.setEditText(self._event_label(event))
 
     def _pick_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -319,7 +360,7 @@ class MusicPlaylistPage(BasePage):
             return service.read_source_complete_songs()
         if mode == _SOURCE_EVENT:
             if not self._event:
-                raise ValueError("请先点「选择活动」挑一场线下活动")
+                raise ValueError("请先在下拉里选一场线下活动（可直接输入名称搜索）")
             return service.read_source_event(self._event["row_no"])
         value = self.source_input.text().strip()
         if not value:
@@ -583,6 +624,7 @@ class MusicPlaylistPage(BasePage):
         self.source_box.setEnabled(not busy)
         self.source_input.setEnabled(
             not busy and self.source_box.currentData() not in (_SOURCE_SNAPSHOT, _SOURCE_EVENT))
+        self.event_box.setEnabled(not busy)
         self.name_edit.setEnabled(not busy)
         self.pick_btn.setEnabled(not busy)
         for platform, box in self._platform_boxes.items():
