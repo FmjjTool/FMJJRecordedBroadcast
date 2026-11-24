@@ -1,7 +1,9 @@
-"""Qt-free WebUI 服务端：路由、令牌校验、静态页与任务下载。
+"""Qt-free WebUI 服务端：路由、令牌与短期会话、静态页与任务下载。
 
-只绑定指定地址（默认 127.0.0.1）；/api/* 需要 X-WebUI-Token 或 query token；
-POST 额外校验 Origin 与 Host 一致。业务接口全部调用 L3 服务，不接触 Qt。
+只绑定指定地址（默认 127.0.0.1）；/api/* 需要 X-WebUI-Token（长期令牌或
+短期会话票据）；POST 额外校验 Origin 与 Host 一致。`/api/auth/login` 用
+长期令牌换取会话票据（默认 12 小时，内存存储，重启失效），避免长期令牌
+长期留在浏览器与链接中。业务接口全部调用 L3 服务，不接触 Qt。
 """
 
 from __future__ import annotations
@@ -10,8 +12,10 @@ import hmac
 import json
 import logging
 import re
+import secrets
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +24,9 @@ from urllib.parse import parse_qs, quote, urlsplit
 from toolbox.webui.errors import ApiError
 
 _log = logging.getLogger(__name__)
+
+SESSION_TTL = 12 * 3600
+_MAX_SESSIONS = 64
 
 _MAX_BODY = 2 * 1024 * 1024
 _STATIC = {
@@ -81,6 +88,8 @@ class WebUIServer:
         self._dynamic: list[tuple[str, re.Pattern, object]] = []
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._sessions: dict[str, float] = {}
+        self._sessions_lock = threading.Lock()
 
     @property
     def port(self) -> int:
@@ -143,8 +152,44 @@ class WebUIServer:
         supplied = req.headers.get("x-webui-token", "")
         if not supplied:
             supplied = req.q("token")
+        if not supplied or not self._token:
+            return False
+        if hmac.compare_digest(supplied, self._token):
+            return True
+        return self._session_valid(supplied)
+
+    def _master_token_ok(self, supplied: str) -> bool:
         return bool(supplied) and bool(self._token) and hmac.compare_digest(
             supplied, self._token)
+
+    def _session_valid(self, ticket: str) -> bool:
+        now = time.time()
+        with self._sessions_lock:
+            expiry = self._sessions.get(ticket)
+            if expiry is None:
+                return False
+            if expiry <= now:
+                self._sessions.pop(ticket, None)
+                return False
+            return True
+
+    def issue_session(self, ttl: int = SESSION_TTL) -> dict:
+        """签发短期会话票据（内存存储，服务重启即失效）。"""
+        ticket = secrets.token_urlsafe(24)
+        now = time.time()
+        with self._sessions_lock:
+            for key, expiry in list(self._sessions.items()):
+                if expiry <= now:
+                    self._sessions.pop(key, None)
+            while len(self._sessions) >= _MAX_SESSIONS:
+                oldest = min(self._sessions, key=self._sessions.get)
+                self._sessions.pop(oldest, None)
+            self._sessions[ticket] = now + ttl
+        return {"ticket": ticket, "expires_in": int(ttl)}
+
+    def revoke_session(self, ticket: str) -> bool:
+        with self._sessions_lock:
+            return self._sessions.pop(ticket, None) is not None
 
     def _origin_ok(self, req: Request) -> bool:
         origin = req.headers.get("origin", "")
@@ -170,6 +215,23 @@ class WebUIServer:
 
     def _dispatch(self, req: Request) -> object:
         if req.path == "/api/health":
+            return {"ok": True}
+        if req.path == "/api/auth/login" and req.method == "POST":
+            if not self._origin_ok(req):
+                return _error(403, "origin rejected")
+            supplied = req.headers.get("x-webui-token", "") or \
+                str((req.json or {}).get("token") or "")
+            if not self._master_token_ok(supplied):
+                return _error(403, "forbidden")
+            return self.issue_session()
+        if req.path == "/api/auth/logout" and req.method == "POST":
+            if not self._origin_ok(req):
+                return _error(403, "origin rejected")
+            supplied = req.headers.get("x-webui-token", "") or \
+                str((req.json or {}).get("ticket") or "")
+            if not self._auth(req):
+                return _error(403, "forbidden")
+            self.revoke_session(supplied)
             return {"ok": True}
         if not self._auth(req):
             return _error(403, "forbidden")

@@ -2,8 +2,8 @@
   'use strict';
 
   var params = new URLSearchParams(location.search);
-  var token = params.get('token') || localStorage.getItem('webui-token') || '';
-  if (params.get('token')) localStorage.setItem('webui-token', token);
+  var urlToken = params.get('token') || '';
+  var token = localStorage.getItem('webui-ticket') || '';
   var gate = document.getElementById('gate');
   var gateToken = document.getElementById('gateToken');
   var gateError = document.getElementById('gateError');
@@ -42,6 +42,30 @@
     system: { title: '系统', load: renderSystem }
   };
   var searchTimer = null;
+
+  function login(master, onDone, onFail) {
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-WebUI-Token': master },
+      body: '{}', cache: 'no-store'
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (response.status === 403) {
+          onFail('访问令牌无效，请核对后重试。');
+          return;
+        }
+        if (!response.ok || !data || !data.ticket) {
+          onFail('登录失败（' + response.status + '）。');
+          return;
+        }
+        token = data.ticket;
+        localStorage.setItem('webui-ticket', token);
+        onDone();
+      });
+    }).catch(function () {
+      onFail('无法连接服务，请确认 WebUI 正在运行。');
+    });
+  }
 
   function h(tag, props) {
     var node = document.createElement(tag);
@@ -110,7 +134,7 @@
           var data = null;
           try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
           if (response.status === 403) {
-            showGate('访问令牌无效，请重新打开带令牌的地址。');
+            clearStaleSession();
             throw new Error('需要访问令牌');
           }
           if (!response.ok) {
@@ -2266,16 +2290,32 @@
   document.getElementById('gateSubmit').addEventListener('click', function () {
     var value = gateToken.value.trim();
     if (!value) { gateError.textContent = '请输入访问令牌'; return; }
-    token = value;
-    localStorage.setItem('webui-token', token);
-    gate.classList.add('hidden');
-    init();
+    gateError.textContent = '';
+    login(value, function () {
+      gate.classList.add('hidden');
+      init();
+    }, function (message) {
+      gateError.textContent = message;
+    });
   });
   gateToken.addEventListener('keydown', function (event) {
     if (event.key === 'Enter') document.getElementById('gateSubmit').click();
   });
 
-  if (!token) {
+  function clearStaleSession() {
+    localStorage.removeItem('webui-ticket');
+    token = '';
+    showGate('会话已过期或失效，请重新输入访问令牌。');
+  }
+
+  if (urlToken) {
+    history.replaceState(null, '', location.pathname);
+    login(urlToken, function () {
+      init();
+    }, function (message) {
+      showGate(message);
+    });
+  } else if (!token) {
     showGate('请从 config/webui_url.txt 打开完整地址，或粘贴令牌。');
   } else {
     init();
