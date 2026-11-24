@@ -18,6 +18,7 @@
     collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1 },
     record: { platform: '', order: '', asc: true },
+    audio: { order: '', asc: true, selected: new Set() },
     tasks: { order: '', asc: true },
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
   };
@@ -27,7 +28,7 @@
     organize: { title: '自动整理', load: function (host) { renderModule(host, 'organize'); } },
     editor: { title: '视频操作', load: function (host) { renderModule(host, 'editor'); } },
     rename: { title: '命名投稿', load: function (host) { renderModule(host, 'rename'); } },
-    audio: { title: '音频提取', load: function (host) { renderModule(host, 'audio'); } },
+    audio: { title: '音频提取', load: renderAudio },
     subtitle: { title: '字幕转换', load: function (host) { renderModule(host, 'subtitle'); } },
     launcher: { title: '继续操作', load: function (host) { renderModule(host, 'launcher'); } },
     calendar: { title: '日历浏览', load: function (host) { renderModule(host, 'calendar'); } },
@@ -688,6 +689,186 @@
             load();
           });
         }).catch(function (error) { setError(tableHost, error, load); });
+    }
+  }
+
+  function renderAudio(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取工作目录…');
+    Promise.all([
+      api('/api/tools/audio/overview'),
+      api('/api/tools/audio/sources?limit=300')
+    ]).then(function (results) {
+      var overview = results[0];
+      var sources = results[1];
+      host.replaceChildren();
+      if (!overview.has_work_dir) {
+        host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
+        return;
+      }
+      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('视频', fmtNumber(sources.total), '工作目录内'));
+      stats.appendChild(statCard('提取模式', overview.mode, '与桌面端一致'));
+      stats.appendChild(statCard('已列出', fmtNumber(sources.items.length),
+        sources.truncated ? '仅前 300 个' : '全部'));
+      stats.appendChild(statCard('输出', '同目录', '按音轨编码'));
+      host.appendChild(stats);
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, overview.note || '')));
+      if (!sources.items.length) {
+        host.appendChild(empty('工作目录下没有可提取的视频。'));
+        return;
+      }
+
+      var selected = state.audio.selected;
+      var known = new Set(sources.items.map(function (item) { return item.path; }));
+      Array.from(selected).forEach(function (path) {
+        if (!known.has(path)) selected.delete(path);
+      });
+
+      var selectedLabel = h('span', { class: 'muted small' });
+      var selectAll = h('input', { type: 'checkbox' });
+      var extract = h('button', { class: 'btn primary', type: 'button' }, '提取选中音频');
+      var rescan = h('button', { class: 'btn', type: 'button' }, '刷新');
+      var toolbar = h('div', { class: 'toolbar' },
+        h('label', { class: 'muted small' }, selectAll, ' 全选'),
+        selectedLabel,
+        h('span', { style: 'flex:1' }),
+        rescan, extract);
+      host.appendChild(toolbar);
+      var jobHost = h('div');
+      var listHost = h('div');
+      var resultHost = h('div');
+      host.appendChild(jobHost);
+      host.appendChild(listHost);
+      host.appendChild(resultHost);
+
+      var running = false;
+      var columns = [
+        { key: 'name', label: '文件名' },
+        { key: 'dir', label: '目录' },
+        { key: 'size', label: '大小' },
+        { key: 'mtime', label: '修改时间' }
+      ];
+
+      function updateButtons() {
+        extract.disabled = running || selected.size === 0;
+        extract.textContent = running ? '提取中…' : '提取选中音频';
+        selectedLabel.textContent = '已选 ' + selected.size + ' 个';
+        selectAll.checked = sources.items.length > 0
+          && selected.size === sources.items.length;
+        selectAll.indeterminate = selected.size > 0
+          && selected.size < sources.items.length;
+      }
+
+      function draw() {
+        var rows = sortRows(sources.items, columns, state.audio);
+        var head = h('tr', null, h('th', { style: 'width:36px' }, ''));
+        columns.forEach(function (column) {
+          var mark = state.audio.order === column.key
+            ? (state.audio.asc ? ' ↑' : ' ↓') : '';
+          head.appendChild(h('th', {
+            class: 'sortable',
+            onclick: function () {
+              cycleSort(state.audio, column.key);
+              draw();
+            }
+          }, column.label + mark));
+        });
+        var body = h('tbody');
+        rows.forEach(function (item) {
+          var check = h('input', {
+            type: 'checkbox', checked: selected.has(item.path)
+          });
+          check.addEventListener('change', function () {
+            if (check.checked) selected.add(item.path);
+            else selected.delete(item.path);
+            updateButtons();
+          });
+          body.appendChild(h('tr', null,
+            h('td', null, check),
+            h('td', null, item.name || '-'),
+            h('td', { class: 'muted small' }, item.dir || '-'),
+            h('td', { class: 'num' }, fmtBytes(item.size)),
+            h('td', null, item.mtime || '-')));
+        });
+        listHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+        updateButtons();
+      }
+
+      selectAll.addEventListener('change', function () {
+        selected.clear();
+        if (selectAll.checked) {
+          sources.items.forEach(function (item) { selected.add(item.path); });
+        }
+        draw();
+      });
+      rescan.addEventListener('click', function () {
+        selected.clear();
+        renderAudio(host);
+      });
+      extract.addEventListener('click', function () {
+        if (!selected.size || running) return;
+        var paths = Array.from(selected);
+        running = true;
+        updateButtons();
+        post('/api/tools/audio/extract', {
+          paths: paths,
+          all_tracks: !!overview.all_tracks
+        }).then(function (data) {
+          watchJob(jobHost, data.job, function (job) {
+            running = false;
+            updateButtons();
+            var summary = job.result && job.result.summary
+              ? job.result.summary : '提取完成';
+            toast(summary, 'success');
+            showResult(job);
+            selected.clear();
+            draw();
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              updateButtons();
+              if (job.status === 'cancelled') {
+                toast('音频提取已取消', 'info');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          updateButtons();
+          toast('提取失败：' + error.message, 'error');
+        });
+      });
+      draw();
+    }).catch(function (error) {
+      setError(host, error, function () { renderAudio(host); });
+    });
+
+    function showResult(job) {
+      var result = job.result || {};
+      var rows = result.results || [];
+      if (!rows.length) return;
+      var head = h('tr', null,
+        h('th', null, '文件'), h('th', null, '结果'),
+        h('th', null, '输出 / 错误'));
+      var body = h('tbody');
+      rows.forEach(function (row) {
+        body.appendChild(h('tr', null,
+          h('td', null, row.file || '-'),
+          h('td', null, row.ok ? '成功' : '失败'),
+          h('td', { class: 'muted small' },
+            row.ok ? (row.outputs || []).join('、') : (row.error || ''))));
+      });
+      resultHost.replaceChildren(h('div', {
+        class: 'card', style: 'margin-top:12px'
+      },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          result.summary || '提取结果'),
+        h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body))));
     }
   }
 
