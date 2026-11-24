@@ -34,7 +34,8 @@ def main(argv: list[str] | None = None) -> int:
             status = "不支持" if not row["supports_create"] else (
                 "实验" if row["experimental"] else ("已核对" if row["verified"] else "待实测")
             )
-            print(f"{row['name']}（{row['platform']}）：{status}")
+            note = f"；{row['note']}" if row.get("note") else ""
+            print(f"{row['name']}（{row['platform']}）：{status}{note}")
         return 0
 
     try:

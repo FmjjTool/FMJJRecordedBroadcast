@@ -75,7 +75,8 @@ def _kugoo_userid(cookie: dict[str, str]) -> str:
 class KugouPlaylistWriter(BasePlaylistWriter):
     platform = "kugou"
     platform_name = "酷狗音乐"
-    verified = True
+    verified = False
+    note = "云歌单服务要求客户端 token，网页登录态返回 20017"
     batch_size = 10
 
     def _identity(self, cookie: dict[str, str]) -> tuple[str, str, str, str]:
@@ -116,7 +117,6 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             "kg-thash": "5d816a0",
             "kg-rec": "1",
             "kg-rf": "B9EDA08A64250DEFFBCADDEE00F8F25F",
-            "x-router": "cloudlist.service.kugou.com",
             "Content-Type": "application/json",
         }
         with self._client(cookie, transport) as client:

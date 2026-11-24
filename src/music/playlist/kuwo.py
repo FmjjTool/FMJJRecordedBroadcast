@@ -49,6 +49,7 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
     platform_name = "酷我音乐"
     verified = False
     experimental = True
+    note = "写入接口返回 504，当前不可用"
     batch_size = 50
 
     def _headers(self, cookie: dict[str, str]) -> dict[str, str]:

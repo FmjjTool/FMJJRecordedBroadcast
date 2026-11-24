@@ -44,7 +44,8 @@ def _qq_uin(cookie: dict[str, str]) -> str:
 class QQPlaylistWriter(BasePlaylistWriter):
     platform = "qq"
     platform_name = "QQ音乐"
-    verified = True
+    verified = False
+    note = "创建已实测通过；加歌需网页 ag-1 签名，当前未通"
     # 单首失败会让整批返回 invalid request，逐首加便于隔离无效 mid
     batch_size = 1
 

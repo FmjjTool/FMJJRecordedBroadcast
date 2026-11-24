@@ -15,6 +15,7 @@ class FiveSingPlaylistWriter(BasePlaylistWriter):
     platform_name = "5sing"
     supports_create = False
     verified = False
+    note = "无公开歌单创建接口"
 
     def create_playlist(self, name: str, cookie: dict[str, str], *,
                         transport: Optional[httpx.BaseTransport] = None) -> str:

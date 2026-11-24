@@ -30,6 +30,7 @@ class NeteasePlaylistWriter(BasePlaylistWriter):
     platform = "netease"
     platform_name = "网易云音乐"
     verified = True
+    note = "创建/加歌已实测通过"
     batch_size = 100
 
     def _csrf(self, cookie: dict[str, str]) -> str:

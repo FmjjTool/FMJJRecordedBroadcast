@@ -208,6 +208,7 @@ def capabilities() -> list[dict]:
             "supports_create": writer.supports_create,
             "experimental": writer.experimental,
             "verified": writer.verified,
+            "note": writer.note,
             "batch_size": writer.batch_size,
         })
     return rows

@@ -103,6 +103,7 @@ class BasePlaylistWriter:
     supports_create = True
     experimental = False
     verified = False
+    note = ""
     batch_size = 50
 
     def create_playlist(self, name: str, cookie: dict[str, str], *,
