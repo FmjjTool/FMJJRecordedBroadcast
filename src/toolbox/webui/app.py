@@ -96,6 +96,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.get("/api/record/overview", lambda req: record.overview())
 
+    server.get("/api/record/bridge", lambda req: record.bridge_status())
+
+    def record_control(req):
+        return record.control(dict(req.json or {}))
+    server.post("/api/record/control", record_control)
+
     server.get("/api/modules", lambda req: modules.list())
     server.get_re(r"/api/modules/(?P<key>[a-z_]+)",
                   lambda req, key: modules.detail(key))

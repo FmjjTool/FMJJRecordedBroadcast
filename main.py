@@ -301,10 +301,28 @@ def main():
 
         run_bg(_start_webui_service, lambda _result, _err: None)
 
+    # 桌面录制控制桥：供 WebUI 子进程远控录制（仅 127.0.0.1，随机端口 + 令牌，
+    # 信息写 logs/webui_desktop_bridge.json；不改 config/download）
+    record_bridge = None
+    try:
+        from gui_qt.live_record_bridge_controller import DesktopRecordController
+        from toolbox.live_record_bridge import DesktopBridge
+        record_bridge = DesktopBridge(DesktopRecordController(win))
+        record_bridge.start()
+    except Exception:
+        import logging
+        logging.getLogger("startup").warning("录制控制桥启动失败", exc_info=True)
+
     from PySide6.QtCore import QTimer
     QTimer.singleShot(1200, _post_startup_checks)
 
     code = app.exec()
+
+    if record_bridge is not None:
+        try:
+            record_bridge.stop()
+        except Exception:
+            pass
 
     # WebUI 独立服务：停止由本软件启动的子进程，外部启动的实例不动
     try:
