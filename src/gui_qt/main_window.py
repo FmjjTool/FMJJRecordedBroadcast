@@ -15,7 +15,7 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+    QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea,
     QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
@@ -101,8 +101,8 @@ QPushButton#workbenchNavButton:checked { background: palette(midlight); color: p
 QPushButton#workbenchNavButton:focus { border-color: palette(highlight); }
 QFrame#workbenchTopbar { background: palette(base); border: none; border-bottom: 1px solid palette(shadow); }
 QLabel#workbenchBreadcrumb { background: transparent; }
-QPushButton#workbenchDirectory { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 0; }
-QPushButton#workbenchDirectory:hover { background: palette(alternate-base); border-color: palette(shadow); }
+QPushButton#workbenchTopAction { background: transparent; color: palette(placeholder-text); border: 1px solid transparent; border-radius: 8px; padding: 0 10px; font-size: 12px; }
+QPushButton#workbenchTopAction:hover, QPushButton#workbenchTopAction:checked { background: palette(midlight); color: palette(link); }
 QFrame#workbenchTopbarDivider { background: palette(shadow); border: none; }
 QPushButton#windowControl { background: transparent; border: none; border-radius: 8px; padding: 0; }
 QPushButton#windowControl:hover { background: palette(alternate-base); }
@@ -123,8 +123,6 @@ QPushButton#workbenchCookieManage:pressed { background: palette(midlight); borde
 QPushButton#workbenchCookieRefresh { background: palette(button); border: 1px solid palette(shadow); border-radius: 8px; padding: 0; }
 QPushButton#workbenchCookieRefresh:hover { background: palette(midlight); border-color: palette(highlight); }
 QPushButton#workbenchCookieRefresh:pressed { background: palette(midlight); }
-QPushButton#workbenchFooter { background: transparent; color: palette(placeholder-text); border: 1px solid transparent; border-radius: 7px; padding: 7px 2px; font-size: 11px; }
-QPushButton#workbenchFooter:hover, QPushButton#workbenchFooter:checked { background: palette(midlight); color: palette(link); }
 QLabel#workbenchEmptySearch { background: transparent; color: palette(placeholder-text); padding: 18px 10px; font-size: 12px; }
 """
 
@@ -468,15 +466,11 @@ class MainWindow(QMainWindow):
         self.breadcrumb_label.setTextFormat(Qt.RichText)
         row.addWidget(self.breadcrumb_label)
         row.addStretch(1)
-        # 工作目录只留图标入口（路径进 tooltip），原来「工作目录 xxx」那行文字
-        # 让位给窗口控制按钮；点击仍直达全局设置里的目录管理。
-        self.directory_btn = QPushButton()
-        self.directory_btn.setObjectName("workbenchDirectory")
-        self.directory_btn.setCursor(Qt.PointingHandCursor)
-        self.directory_btn.setFixedSize(32, 30)
-        self.directory_btn.setIconSize(QSize(16, 16))
-        self.directory_btn.clicked.connect(lambda: self.show_page("global_settings"))
-        row.addWidget(self.directory_btn)
+        # 全局入口（任务 / 设置 / 性能 / 主题）从侧栏底部移入顶栏，紧邻窗口控制按钮
+        self._topbar_actions = QHBoxLayout()
+        self._topbar_actions.setContentsMargins(0, 0, 0, 0)
+        self._topbar_actions.setSpacing(2)
+        row.addLayout(self._topbar_actions)
         divider = QFrame()
         divider.setObjectName("workbenchTopbarDivider")
         divider.setFixedSize(1, 18)
@@ -486,12 +480,7 @@ class MainWindow(QMainWindow):
         self.window_controls.maximize_requested.connect(self.toggle_max_restore)
         self.window_controls.close_requested.connect(self.close)
         row.addWidget(self.window_controls)
-        self._update_directory_button()
         return bar
-
-    def _update_directory_button(self):
-        self.directory_btn.setToolTip(
-            f"当前工作目录：{self.work_dir}\n点击在全局设置中管理")
 
     def _make_nav_button(self, key, title):
         button = QPushButton(title)
@@ -508,7 +497,7 @@ class MainWindow(QMainWindow):
         self.home_btn = self._make_nav_button("home", page_title("home"))
         self.home_btn.clicked.connect(lambda: self.show_page("home"))
         nav_layout.addWidget(self.home_btn)
-        bottom_buttons = []
+        topbar_buttons = []
         for group_title, items in NAV_GROUPS:
             is_bottom = group_title == "全局"
             if not is_bottom:
@@ -518,30 +507,28 @@ class MainWindow(QMainWindow):
             for key, item_title in items:
                 btn = self._make_nav_button(key, item_title)
                 if is_bottom:
-                    btn.setObjectName("workbenchFooter")
+                    btn.setObjectName("workbenchTopAction")
                     btn.setText(page_meta(key).footer_label or item_title)
-                    btn.setFixedHeight(34)
-                    bottom_buttons.append(btn)
+                    btn.setFixedHeight(30)
+                    btn.setIconSize(QSize(16, 16))
+                    topbar_buttons.append(btn)
                 else:
                     nav_layout.addWidget(btn)
                 btn.clicked.connect(lambda checked, k=key: self.show_page(k))
                 self.nav_buttons[key] = btn
 
-        self._build_cookie_bar(self.bottom_layout)
-        theme_row = QHBoxLayout()
-        theme_row.setSpacing(2)
-        for btn in bottom_buttons:
-            theme_row.addWidget(btn, 1)
+        for btn in topbar_buttons:
+            self._topbar_actions.addWidget(btn)
         self.theme_btn = QPushButton("主题")
-        self.theme_btn.setObjectName("workbenchFooter")
-        self.theme_btn.setFixedHeight(34)
-        self.theme_btn.setIconSize(QSize(18, 18))
+        self.theme_btn.setObjectName("workbenchTopAction")
+        self.theme_btn.setFixedHeight(30)
+        self.theme_btn.setIconSize(QSize(16, 16))
         self.theme_btn.setCursor(Qt.PointingHandCursor)
-        self.theme_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.theme_btn.setToolTip("切换 浅色 / 深色 界面（自动保存）")
         self.theme_btn.clicked.connect(self._toggle_theme)
-        theme_row.addWidget(self.theme_btn, 1)
-        self.bottom_layout.addLayout(theme_row)
+        self._topbar_actions.addWidget(self.theme_btn)
+
+        self._build_cookie_bar(self.bottom_layout)
         self._update_theme_btn()
 
     def _build_search_results(self):
@@ -652,7 +639,6 @@ class MainWindow(QMainWindow):
         for buttons in (self.nav_buttons, self._search_buttons):
             for key, button in buttons.items():
                 button.setIcon(line_icon(tool_icon_name(key), active if button.isChecked() else normal))
-        self.directory_btn.setIcon(line_icon("folder", normal, 16))
         self.window_controls.refresh_icons()
         self._update_theme_btn()
 
@@ -727,7 +713,7 @@ class MainWindow(QMainWindow):
 
     def _update_theme_btn(self):
         color = theme.current_palette().color(QPalette.PlaceholderText).name()
-        self.theme_btn.setIcon(line_icon("moon" if theme.is_dark() else "sun", color, 18))
+        self.theme_btn.setIcon(line_icon("moon" if theme.is_dark() else "sun", color, 16))
         self.theme_btn.setToolTip(f"当前为{'深色' if theme.is_dark() else '浅色'}主题，点击切换（自动保存）")
         self._update_cookie_icons()
 
@@ -1318,7 +1304,6 @@ class MainWindow(QMainWindow):
             shell.style().polish(shell)
 
     def _refresh_all(self):
-        self._update_directory_button()
         for page in self.pages.values():
             fn = getattr(page, "on_dir_changed", None)
             if fn:
