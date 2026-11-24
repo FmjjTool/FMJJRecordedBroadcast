@@ -249,6 +249,12 @@ def comment_user(c: dict) -> str:
     return (c.get("member") or {}).get("uname") or "?"
 
 
+def comment_author_ids(c: dict) -> set[str]:
+    """评论作者的 B 站 UID 集合；用于精确识别账号本人评论。"""
+    mid = str((c.get("member") or {}).get("mid") or "").strip()
+    return {mid} if mid else set()
+
+
 def comment_likes(c: dict) -> int:
     try:
         return int(c.get("like") or 0)

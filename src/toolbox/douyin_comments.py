@@ -298,6 +298,14 @@ def comment_user(c: dict) -> str:
     return (c.get("user") or {}).get("nickname") or "?"
 
 
+def comment_author_ids(c: dict) -> set[str]:
+    """评论作者的抖音身份集合（sec_uid / uid）；用于精确识别账号本人评论。"""
+    user = c.get("user") or {}
+    values = {str(user.get("sec_uid") or "").strip(),
+              str(user.get("uid") or "").strip()}
+    return {value for value in values if value}
+
+
 def comment_likes(c: dict) -> int:
     try:
         return int(c.get("digg_count") or 0)

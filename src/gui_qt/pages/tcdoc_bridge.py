@@ -241,9 +241,10 @@ class _UploadDialog(QDialog):
                     "图片列不随程序上传，可先用「复制全部图片」补；"
                     "备注信息会追加「自动推送程序上传+当前时间」。")
         else:
-            note = ("默认全选；取消勾选可跳过某些行。上传会新增记录并把本地图片一起传到腾讯文档，"
-                    "已存在的记录会自动跳过，不会修改或删除表内已有行；"
-                    "备注信息会追加「自动推送程序上传+当前时间」。")
+            note = ("默认全选；取消勾选可跳过某些行。上传会新增记录并把本地图片一起传到腾讯文档；"
+                    "若本地已保存该作品的评论原始数据，会把封茗囧菌本人评论的评论区长图与原图"
+                    "写入「评论区图片」，仅随新增行写入。已存在的记录会自动跳过，"
+                    "不会修改或删除表内已有行；备注信息会追加「自动推送程序上传+当前时间」。")
         tip = QLabel(note)
         tip.setWordWrap(True)
         tip.setStyleSheet("color: #888;")
@@ -312,11 +313,15 @@ class _UploadDialog(QDialog):
             check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             check.setCheckState(Qt.Checked)
         self.table.setItem(row, 0, check)
-        note = f"{len(record.get('images') or [])} 张"
+        cover_n = len(record.get("images") or [])
+        comment_n = len(record.get("_comment_images") or [])
+        note = f"封面 {cover_n} · 评论 {comment_n}"
         if record.get("missing_slots"):
-            note += f"（缺 {len(record['missing_slots'])}）"
+            note += f"（缺封面 {len(record['missing_slots'])}）"
         if blocked:
             note += " · 不可上传"
+        comment_note = str(record.get("comment_note") or "")
+        image_tip = note + (f"\n{comment_note}" if comment_note else "")
         texts = [str(record.get("title") or columns.get("作品标题")
                      or columns.get("歌曲名称") or columns.get("活动名称")
                      or columns.get("周边名称") or ""),
@@ -331,6 +336,9 @@ class _UploadDialog(QDialog):
             item = QTableWidgetItem(text.replace("\n", " ")[:160])
             item.setToolTip(text[:1500])
             self.table.setItem(row, index, item)
+        image_item = self.table.item(row, 5)
+        if image_item is not None:
+            image_item.setToolTip(image_tip[:1500])
 
     def _set_all(self, checked: bool) -> None:
         state = Qt.Checked if checked else Qt.Unchecked
@@ -355,17 +363,19 @@ class _UploadDialog(QDialog):
 
     def _refresh_summary(self) -> None:
         chosen = self.selected_records()
-        images = sum(len(r.get("images") or []) for r in chosen)
+        covers = sum(len(r.get("images") or []) for r in chosen)
+        comments = sum(len(r.get("_comment_images") or []) for r in chosen)
         gaps = sum(len(r.get("missing_slots") or []) for r in chosen)
         blocked = sum(1 for r in self._records if r.get("blocked"))
         self.fetch_box.setEnabled(gaps > 0)
-        note = ""
+        gap_note = ""
         if gaps:
-            note = (f"；缺图 {gaps} 张"
-                    + ("（上传时尝试在线补图）" if self.fetch_missing else "（会留空）"))
+            gap_note = (f"；缺封面图 {gaps} 张"
+                        + ("（上传时尝试在线补图）" if self.fetch_missing else "（会留空）"))
         block_note = f"；不可上传 {blocked} 条（缺字段或选项）" if blocked else ""
         self._upload_summary.setText(
-            f"已选 {len(chosen)} / {len(self._records)} 条 · 图片 {images} 张{note}{block_note}")
+            f"已选 {len(chosen)} / {len(self._records)} 条 · 封面图 {covers} 张 · "
+            f"评论区图片 {comments} 张{gap_note}{block_note}")
         self.ok_btn.setEnabled(bool(chosen))
 
 
@@ -1444,6 +1454,10 @@ class TcDocBridgePanel(QWidget):
                                       allow_new_options=True)
             except pending.ImportErrorDetail as exc:
                 record["blocked"] = str(exc)
+        if profile == "posts":
+            for record in records:
+                if not record.get("blocked"):
+                    pending.prepare_comment_images(record)
         new_options = {}
         if profile == "posts":
             new_options = pending.new_choice_options(
@@ -1487,7 +1501,7 @@ class TcDocBridgePanel(QWidget):
         self._busy = True
         self._compare_owner = 0
         self.upload_btn.setEnabled(False)
-        self.status.setText("正在准备待上传清单与本地图片…")
+        self.status.setText("正在准备待上传清单、封面图与评论区图片…")
         self._progress_start()
 
         def work():
@@ -1553,7 +1567,8 @@ class TcDocBridgePanel(QWidget):
         self._uploading = True
         self._busy = True
         self._compare_owner = 0
-        total_images = sum(len(r.get("_images") or []) for r in records)
+        total_images = sum(len(r.get("_images") or []) + len(r.get("_comment_images") or [])
+                           for r in records)
         self._upload_records_total = len(records)
         self._upload_images_total = total_images
         self._progress_start(len(records) + total_images)
@@ -1563,15 +1578,33 @@ class TcDocBridgePanel(QWidget):
 
         def emit(event):
             phase = event.get("phase")
-            if phase == "image_uploaded":
+            if phase == "comment_prepare":
+                common.post_to_main(
+                    self.status.setText,
+                    f"正在生成评论区图片：{str(event.get('title') or '')[:40]}")
+            elif phase == "comment_prepared":
+                count = int(event.get("count") or 0)
+                note = str(event.get("note") or "")
+                if count:
+                    text = f"评论区图片 {count} 张已准备"
+                elif note:
+                    text = f"评论区图片已跳过：{note}"
+                else:
+                    text = "评论区图片已跳过"
+                common.post_to_main(self.status.setText, text)
+            elif phase == "image_uploaded":
                 common.post_to_main(self._progress_tick, 0, 1)
-                common.post_to_main(self.status.setText, f"上传图片：{event.get('name')}")
+                kind = "评论区图片" if event.get("kind") == "comment" else "封面图"
+                common.post_to_main(self.status.setText,
+                                    f"上传{kind}：{event.get('name')}")
             elif phase == "record_created":
                 common.post_to_main(self._progress_tick, 1, 0)
+                cover_n = int(event.get("cover_image_count") or event.get("image_count") or 0)
+                comment_n = int(event.get("comment_image_count") or 0)
                 common.post_to_main(
                     self.status.setText,
                     f"已新增：{str(event.get('title') or '')[:40]}"
-                    f"（{event.get('image_count')} 张图）")
+                    f"（封面 {cover_n} / 评论 {comment_n}）")
             elif phase == "readback":
                 state = "读回校验通过" if event.get("verified") else "读回校验失败"
                 common.post_to_main(self.status.setText,
@@ -1590,8 +1623,10 @@ class TcDocBridgePanel(QWidget):
                     self.status.setText, f"在线补图完成：补上 {fetched} 张，其余留空")
                 if fetched:
                     # 补图后总张数变大，否则进度会显示「图片 2/1」
-                    common.post_to_main(self._set_upload_image_total,
-                                        sum(len(r.get("_images") or []) for r in records))
+                    common.post_to_main(
+                        self._set_upload_image_total,
+                        sum(len(r.get("_images") or []) + len(r.get("_comment_images") or [])
+                            for r in records))
             client = LocalImportClient(
                 ManagedAuth(lambda: auth_module.get_cookie("tcdoc_openapi")),
                 str(target["doc_key"]), str(target["tab_id"]))
@@ -1619,10 +1654,14 @@ class TcDocBridgePanel(QWidget):
             skipped = len(receipt.get("skipped") or [])
             failed = [item for item in receipt.get("added") or [] if not item.get("verified")]
             duplicates = receipt.get("duplicates") or []
+            comment_images = int(receipt.get("uploaded_comment_images") or 0)
             self.status.setText(
                 f"上传完成：新增 {added} 条 · 跳过 {skipped} 条 · "
-                f"图片 {receipt.get('uploaded_images', 0)} 张 · "
-                f"缺图 {receipt.get('missing_images', 0)} 张"
+                f"图片 {receipt.get('uploaded_images', 0)} 张"
+                + (f"（评论区 {comment_images} 张）" if comment_images else "")
+                + f" · 缺图 {receipt.get('missing_images', 0)} 张"
+                + (f" · 评论区失败 {receipt.get('comment_image_failures')} 张"
+                   if receipt.get("comment_image_failures") else "")
                 + (f" · 读回异常 {len(failed)} 条" if failed else "")
                 + (f" · 重复链接 {len(duplicates)} 条" if duplicates else ""))
             if failed:
@@ -1635,6 +1674,19 @@ class TcDocBridgePanel(QWidget):
                     self, "发现重复链接",
                     "以下原帖链接在表里出现多次，可能是之前已存在或被并发写入，请人工确认：\n"
                     + "\n".join(duplicates[:10]))
+            comment_failed = [item for item in receipt.get("added") or []
+                              if item.get("comment_failed_count")]
+            if comment_failed:
+                QMessageBox.warning(
+                    self, "评论区图片未全部写入",
+                    "以下记录的主行已新增，但评论区图片没有全部写入；"
+                    "可重新抓取评论后再补传：\n"
+                    + "\n".join(
+                        f"{str(item.get('title') or '')[:40]}："
+                        f"失败 {item.get('comment_failed_count')} 张"
+                        + (f"（{str(item.get('comment_note') or '')[:120]}）"
+                           if item.get("comment_note") else "")
+                        for item in comment_failed[:10]))
             self._progress_finish(5000)
             self._refresh_archive(target)
 

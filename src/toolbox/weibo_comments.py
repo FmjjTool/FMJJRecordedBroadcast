@@ -281,6 +281,12 @@ def comment_user(c: dict) -> str:
     return (c.get("user") or {}).get("screen_name") or "?"
 
 
+def comment_author_ids(c: dict) -> set[str]:
+    """评论作者的微博 UID 集合；用于精确识别账号本人评论。"""
+    uid = str((c.get("user") or {}).get("id") or "").strip()
+    return {uid} if uid else set()
+
+
 def comment_likes(c: dict) -> int:
     try:
         return int(c.get("like_counts") or c.get("like_count")

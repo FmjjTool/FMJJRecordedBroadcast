@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
@@ -25,7 +26,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from toolbox import increment_db
-from toolbox.tcdoc import bridge, config as tc_cfg, push_history, tables
+from toolbox.tcdoc import bridge, comment_images, config as tc_cfg, push_history, tables
 from toolbox.tcdoc.import_local import (
     ALIASES, BEIJING, CHOICE_COLUMNS, MAX_IMAGE_BYTES, ImportErrorDetail, LocalImage,
     LocalImportClient, ManagedAuth, TEST_TARGET, UnknownWriteResult, field_options,
@@ -362,6 +363,77 @@ def fetch_missing_images(records: list[dict], missing: list[dict], cache=None,
                 gaps.remove(item["slot"])
             fetched += 1
     return fetched
+
+
+def _join_notes(*notes) -> str:
+    return "；".join(dict.fromkeys(str(note).strip() for note in notes if str(note).strip()))
+
+
+def prepare_comment_images(record: dict, *, export_root=None, cache_dir=None,
+                           out_root=None, identities=None) -> None:
+    """为官方动态记录准备账号评论索引图 + 她评论中的原图。
+
+    只读本地 comments.json，生成图写中间层派生目录，原图写中间层图片缓存；
+    失败只记 comment_note，不阻断主记录上传。
+    """
+    if record.get("_comment_images_prepared"):
+        return
+    record["_comment_images_prepared"] = True
+    record["_comment_images"] = []
+    notes: list[str] = []
+    try:
+        index = comment_images.find_artist_comments(
+            record.get("columns") or {}, export_root=export_root, identities=identities)
+        if not index.artist_comments:
+            record["comment_note"] = index.reason or "本地评论中没有封茗囧菌本人评论"
+            return
+
+        media_root = Path(out_root) if out_root else tc_cfg.data_dir() / "中间层/评论区图片"
+        pages: list[Path] = []
+        try:
+            pages = comment_images.render_index_image(index, out_root=out_root)
+        except Exception:  # noqa: BLE001 - 生成图失败不阻断主记录
+            notes.append("评论区长图生成失败")
+
+        images: list[LocalImage] = []
+        for page in pages:
+            try:
+                images.append(LocalImage.inspect(Path(page), media_root))
+            except ImportErrorDetail:
+                notes.append("评论区长图无法上传")
+
+        urls = comment_images.artist_image_urls(index)
+        cache = Path(cache_dir) if cache_dir else tc_cfg.data_dir() / "中间层/图片缓存"
+        failed = 0
+        seen: set[Path] = set()
+        for url in urls:
+            path = _fetch_cover(url, cache, timeout=12)
+            if path is None:
+                failed += 1
+                continue
+            try:
+                image = LocalImage.inspect(path, cache)
+            except ImportErrorDetail:
+                failed += 1
+                continue
+            if image.path in seen:
+                continue
+            seen.add(image.path)
+            images.append(image)
+        if failed:
+            notes.append(
+                f"评论区原图 {failed}/{len(urls)} 张下载失败（链接可能已过期，请重新抓取评论）")
+        elif not urls and images:
+            notes.append("她只发了文字评论，没有原图")
+
+        record["_comment_images"] = images
+        if notes:
+            record["comment_note"] = _join_notes(*notes)
+        elif not images:
+            record["comment_note"] = "没有可写入的评论区图片"
+    except Exception:  # noqa: BLE001 - 评论区图片是补充项，不阻断上传
+        record["_comment_images"] = []
+        record["comment_note"] = "评论区图片准备失败"
 
 
 # ==================== 完整歌曲：封面下载 + 记录 ====================
@@ -1154,16 +1226,18 @@ def _plain_text(value) -> str:
     return re.sub(r"\s+", "", str(value or ""))
 
 
-def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage]):
+def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage],
+           image_groups: dict[str, list[LocalImage]] | None = None):
     saved, checks = row.get("values") or {}, {}
     for title, kind in kinds.items():
         actual, expected = saved.get(title), values.get(title)
         if kind == 5:
+            group = list(images) if image_groups is None else list(image_groups.get(title) or [])
             entries = actual or []
-            checks[title] = isinstance(entries, list) and len(entries) == len(images) and all(isinstance(i, dict) for i in entries)
-            if checks[title] and images:
-                checks[title] = ([i.get("title") for i in entries] == [i.upload_name for i in images] and
-                                 len({i.get("id") for i in entries if i.get("id")}) == len(images))
+            checks[title] = isinstance(entries, list) and len(entries) == len(group) and all(isinstance(i, dict) for i in entries)
+            if checks[title] and group:
+                checks[title] = ([i.get("title") for i in entries] == [i.upload_name for i in group] and
+                                 len({i.get("id") for i in entries if i.get("id")}) == len(group))
         elif kind == 1:
             actual_text = "".join(str(i.get("text") or "") for i in actual or [] if isinstance(i, dict))
             target = ((expected or [{}])[0].get("text")
@@ -1300,6 +1374,12 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     else:
         plans = [(record, *make_plan(record, fields, available_only, allow_new_options))
                  for record in records]
+    comment_field = None
+    if profile == "posts":
+        comment_field = next(
+            (field for field in fields
+             if str(field.get("fieldTitle") or "") == comment_images.COMMENT_FIELD_TITLE
+             and int(field.get("fieldType") or 0) == 5), None)
     before = client.get_records()
     if profile == "songs":
         known = {"song:" + key for key in song_remote_keys(before)}
@@ -1311,12 +1391,16 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
         known = set(remote_keys(before))
     emit({"phase": "preview", "apply": apply, "doc_key": client.doc_key, "tab_id": client.tab_id,
           "records": [{"key": r["key"], "title": _record_title(r), "images": len(r["_images"]),
+                       "comment_images": len(r.get("_comment_images") or []),
+                       "comment_note": r.get("comment_note") or "",
                        "missing_images": len(r["missing_slots"]), "skipped_fields": skipped,
                        "operation": "skip" if r["key"] in known else "add"}
                       for r, v, k, skipped in plans]})
     receipt = {"phase": "complete", "doc_key": client.doc_key, "tab_id": client.tab_id, "apply": apply,
                "rows_before": len(before), "rows_after": len(before), "added": [], "skipped": [],
-               "uploaded_images": 0, "missing_images": sum(len(r["missing_slots"]) for r in records),
+               "uploaded_images": 0, "uploaded_comment_images": 0,
+               "comment_image_failures": 0,
+               "missing_images": sum(len(r["missing_slots"]) for r in records),
                "updated": 0, "deleted": 0}
     if not apply:
         return receipt
@@ -1350,6 +1434,13 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                 if record["key"] in known:
                     receipt["skipped"].append({"key": record["key"], "record_ids": []})
                     continue
+                if profile == "posts" and not record.get("_comment_images_prepared"):
+                    emit({"phase": "comment_prepare", "key": record["key"],
+                          "title": _record_title(record)})
+                    prepare_comment_images(record)
+                    emit({"phase": "comment_prepared", "key": record["key"],
+                          "count": len(record.get("_comment_images") or []),
+                          "note": record.get("comment_note") or ""})
                 images = record["_images"]
                 for image in images:
                     image.read_verified()
@@ -1357,17 +1448,70 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                 for image in images:
                     tickets.append(client.upload_image(image))
                     receipt["uploaded_images"] += 1
-                    emit({"phase": "image_uploaded", "key": record["key"], "name": image.path.name})
+                    emit({"phase": "image_uploaded", "key": record["key"],
+                          "name": image.path.name, "kind": "cover"})
+
+                image_title = ("封面图" if kinds.get("封面图") == 5 else
+                               next((title for title, kind in kinds.items() if kind == 5), ""))
+                comment_selected = (list(record.get("_comment_images") or [])
+                                    if profile == "posts" else [])
+                comment_note = str(record.get("comment_note") or "")
+                comment_tickets = []
+                comment_uploaded = []
+                if comment_selected and image_title == comment_images.COMMENT_FIELD_TITLE:
+                    comment_note = _join_notes(
+                        comment_note, "封面图与评论区图片是同一字段，未写入评论区图片")
+                    comment_selected = []
+                if comment_selected and comment_field is None:
+                    comment_note = _join_notes(
+                        comment_note, "目标表没有可写的「评论区图片」字段")
+                elif comment_selected:
+                    for image in comment_selected:
+                        try:
+                            image.read_verified()
+                        except ImportErrorDetail:
+                            comment_note = _join_notes(
+                                comment_note, "评论区图片跳过：文件已变化")
+                            continue
+                        try:
+                            ticket = client.upload_image(image)
+                        except ImportErrorDetail:
+                            comment_note = _join_notes(
+                                comment_note, "评论区图片上传失败")
+                            continue
+                        comment_tickets.append(ticket)
+                        comment_uploaded.append(image)
+                        receipt["uploaded_images"] += 1
+                        receipt["uploaded_comment_images"] += 1
+                        emit({"phase": "image_uploaded", "key": record["key"],
+                              "name": image.path.name, "kind": "comment"})
+                comment_failed = len(comment_selected) - len(comment_uploaded)
+
                 values = copy.deepcopy(values)
-                if tickets:
-                    image_title = next(title for title, kind in kinds.items() if kind == 5)
+                if tickets and image_title:
                     values[image_title] = [{"imageID": ticket} for ticket in tickets]
+                if comment_tickets and comment_field is not None:
+                    values[comment_images.COMMENT_FIELD_TITLE] = [
+                        {"imageID": ticket} for ticket in comment_tickets]
+                    kinds[comment_images.COMMENT_FIELD_TITLE] = 5
+                image_groups = {}
+                if image_title:
+                    image_groups[image_title] = images
+                if comment_tickets:
+                    image_groups[comment_images.COMMENT_FIELD_TITLE] = comment_uploaded
+
                 rid = client.add_record(values)
                 known.add(record["key"])
                 added = {"key": record["key"], "title": _record_title(record), "record_id": rid,
-                         "image_count": len(images), "missing_images": len(record["missing_slots"]),
+                         "image_count": len(images) + len(comment_uploaded),
+                         "cover_image_count": len(images),
+                         "comment_image_count": len(comment_uploaded),
+                         "comment_failed_count": comment_failed,
+                         "comment_note": comment_note,
+                         "missing_images": len(record["missing_slots"]),
                          "skipped_fields": skipped, "verified": False}
                 receipt["added"].append(added)
+                receipt["comment_image_failures"] += comment_failed
                 receipt["rows_after"] = receipt["rows_before"] + len(receipt["added"])
                 emit({"phase": "record_created", **added})
                 if verify_each:
@@ -1375,14 +1519,14 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                     saved = [row for row in fresh if row.get("recordID") == rid]
                     if len(saved) != 1:
                         raise ImportErrorDetail("新增记录未查回，请按 record_id 核对")
-                    checks = verify(saved[0], values, kinds, images)
+                    checks = verify(saved[0], values, kinds, images, image_groups)
                     added.update({"verified": all(checks.values()), "checks": checks})
                     receipt["rows_after"] = len(fresh)
                     emit({"phase": "readback", **added})
                     if not added["verified"]:
                         raise ImportErrorDetail("读回不一致，停止后续条目")
                 else:
-                    pending_verify.append((added, values, kinds, images))
+                    pending_verify.append((added, values, kinds, images, image_groups))
             except ImportErrorDetail as exc:
                 emit({**receipt, "phase": "stopped", "key": record["key"], "error": str(exc),
                       "unknown_record_outcome": isinstance(exc, UnknownWriteResult)})
@@ -1393,7 +1537,7 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
             saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
             counts = (count_song_title_keys(fresh) if profile == "songs"
                       else count_remote_keys(fresh))
-            for added, values, kinds, images in pending_verify:
+            for added, values, kinds, images, image_groups in pending_verify:
                 if profile in ("events", "merch"):
                     # 候选表只给「新增」授权，重复性由名称键在上方 already-skip 判断
                     added["duplicate"] = False
@@ -1405,7 +1549,7 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                 if saved is None:
                     emit({"phase": "readback", **added})
                     continue
-                checks = verify(saved, values, kinds, images)
+                checks = verify(saved, values, kinds, images, image_groups)
                 added.update({"verified": all(checks.values()), "checks": checks})
                 emit({"phase": "readback", **added})
             receipt["rows_after"] = len(fresh)
