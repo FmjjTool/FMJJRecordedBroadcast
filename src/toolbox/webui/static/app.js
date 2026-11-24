@@ -17,11 +17,13 @@
     theme: localStorage.getItem('webui-theme') || 'auto',
     collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1 },
+    record: { platform: '', order: '', asc: true },
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
   };
   var routes = {
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
+    record: { title: '录制', load: renderRecord },
     tcdoc: { title: '腾讯文档', load: renderTcdoc }
   };
   var searchTimer = null;
@@ -676,6 +678,154 @@
           });
         }).catch(function (error) { setError(tableHost, error, load); });
     }
+  }
+
+  function cycleSort(state, key) {
+    if (state.order !== key) {
+      state.order = key;
+      state.asc = true;
+    } else if (state.asc) {
+      state.asc = false;
+    } else {
+      state.order = '';
+      state.asc = true;
+    }
+  }
+
+  function sortRows(items, columns, order) {
+    if (!order.order) return items;
+    var column = null;
+    columns.forEach(function (item) {
+      if (item.key === order.order) column = item;
+    });
+    if (!column) return items;
+    var sorted = items.slice();
+    sorted.sort(function (left, right) {
+      var av = left[column.key];
+      var bv = right[column.key];
+      if (column.bool) {
+        av = av ? 1 : 0;
+        bv = bv ? 1 : 0;
+      }
+      var aempty = av === '' || av === null || av === undefined;
+      var bempty = bv === '' || bv === null || bv === undefined;
+      if (aempty && bempty) return 0;
+      if (aempty) return 1;
+      if (bempty) return -1;
+      var result;
+      if (typeof av === 'number' && typeof bv === 'number') result = av - bv;
+      else result = String(av).localeCompare(String(bv), 'zh-CN');
+      return order.asc ? result : -result;
+    });
+    return sorted;
+  }
+
+  function renderRecord(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取录制配置…');
+    api('/api/record/overview').then(function (data) {
+      host.replaceChildren();
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, data.note || '当前为只读。')));
+
+      var summary = data.summary || {};
+      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('主播', fmtNumber(summary.anchors || 0), '已配置主播'));
+      stats.appendChild(statCard('监控中', fmtNumber(summary.monitoring || 0), '配置为监控'));
+      stats.appendChild(statCard('录制意图', fmtNumber(summary.want_record || 0), '开播后录制'));
+      stats.appendChild(statCard('平台', fmtNumber(summary.platforms || 0), '有主播的平台'));
+      host.appendChild(stats);
+
+      var platforms = data.platforms || [];
+      if (!platforms.length) {
+        host.appendChild(empty('尚未配置录制主播。请先在桌面端「直播录制」页添加主播。'));
+        return;
+      }
+      var keys = platforms.map(function (item) { return item.key; });
+      if (state.record.platform && keys.indexOf(state.record.platform) < 0) {
+        state.record.platform = '';
+      }
+
+      var toolbar = h('div', { class: 'toolbar' });
+      var select = h('select', { class: 'select' });
+      select.appendChild(h('option', { value: '' }, '全部平台'));
+      platforms.forEach(function (item) {
+        select.appendChild(h('option', { value: item.key },
+          item.name + '（' + item.anchors.length + '）'));
+      });
+      select.value = state.record.platform || '';
+      select.addEventListener('change', function () {
+        state.record.platform = select.value;
+        draw();
+      });
+      toolbar.appendChild(select);
+      toolbar.appendChild(h('span', { class: 'muted small' },
+        '点击表头排序；启停录制仍在桌面端操作。'));
+      host.appendChild(toolbar);
+
+      var tableHost = h('div');
+      host.appendChild(tableHost);
+
+      function visibleRows() {
+        var rows = [];
+        platforms.forEach(function (platform) {
+          if (state.record.platform && platform.key !== state.record.platform) return;
+          platform.anchors.forEach(function (anchor) {
+            rows.push(Object.assign({}, anchor, {
+              platform_key: platform.key,
+              platform_name: platform.name
+            }));
+          });
+        });
+        return rows;
+      }
+
+      function draw() {
+        var items = visibleRows();
+        if (!items.length) {
+          tableHost.replaceChildren(empty('该平台暂无主播。'));
+          return;
+        }
+        var columns = [
+          { key: 'platform_name', label: '平台' },
+          { key: 'room', label: '房间号' },
+          { key: 'name', label: '主播' },
+          { key: 'remark', label: '备注' },
+          { key: 'monitoring', label: '监控', bool: true },
+          { key: 'want_record', label: '录制意图', bool: true },
+          { key: 'quality', label: '画质' }
+        ];
+        items = sortRows(items, columns, state.record);
+        var head = h('tr');
+        columns.forEach(function (column) {
+          var mark = state.record.order === column.key
+            ? (state.record.asc ? ' ↑' : ' ↓') : '';
+          head.appendChild(h('th', {
+            class: 'sortable',
+            onclick: function () {
+              cycleSort(state.record, column.key);
+              draw();
+            }
+          }, column.label + mark));
+        });
+        var body = h('tbody');
+        items.forEach(function (item) {
+          body.appendChild(h('tr', null,
+            h('td', null, item.platform_name || item.platform_key),
+            h('td', null, item.room || '-'),
+            h('td', { title: item.title || '' }, item.name || '-'),
+            h('td', { title: item.remark || '' }, item.remark || '-'),
+            h('td', null, item.monitoring ? '是' : '否'),
+            h('td', null, item.want_record ? '是' : '否'),
+            h('td', null, item.quality || '-')));
+        });
+        tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+      }
+      draw();
+    }).catch(function (error) {
+      setError(host, error, function () { renderRecord(host); });
+    });
   }
 
   function kindLabel(kind) {
