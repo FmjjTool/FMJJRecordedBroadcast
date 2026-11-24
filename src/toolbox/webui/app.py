@@ -63,6 +63,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return BytesResponse(data, mime)
     server.get("/api/assets/local/preview", preview_local)
 
+    def thumbnail_local(req):
+        data, mime = assets.thumbnail_local(
+            req.q("cat"), req.q("dir"), req.q("name"))
+        return BytesResponse(data, mime)
+    server.get("/api/assets/local/thumb", thumbnail_local)
+
     def start_local_scan(req):
         payload = dict(req.json or {})
         return assets.start_local_scan(str(payload.get("cat") or ""))

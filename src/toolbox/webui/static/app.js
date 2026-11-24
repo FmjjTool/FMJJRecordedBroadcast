@@ -1995,7 +1995,24 @@
         if ((group.files || []).length > 12) {
           files.appendChild(h('li', null, '…共 ' + group.files.length + ' 个文件'));
         }
-        list.appendChild(h('div', { class: 'row-card' },
+        var card = h('div', { class: 'row-card' });
+        if (group.cover && group.cover.name) {
+          var thumb = h('img', {
+            class: 'row-thumb', loading: 'lazy', alt: '',
+            title: '点击预览'
+          });
+          thumb.src = withToken('/api/assets/local/thumb?cat='
+            + encodeURIComponent(data.category)
+            + '&dir=' + encodeURIComponent(group.cover.dir || '')
+            + '&name=' + encodeURIComponent(group.cover.name));
+          thumb.addEventListener('click', function () {
+            openPreview(data.category, {
+              name: group.cover.name, rel_dir: group.cover.dir || ''
+            });
+          });
+          card.appendChild(h('div', { class: 'row-thumb-wrap' }, thumb));
+        }
+        var main = h('div', { class: 'row-main' },
           h('div', { class: 'row-head' }, h('div', { class: 'row-title' }, group.title || '-')),
           h('div', { class: 'row-meta' },
             h('span', null, group.date || '无日期'),
@@ -2005,7 +2022,9 @@
             h('span', null, '文档 ' + group.n_doc),
             h('span', null, fmtBytes(group.size)),
             h('span', null, group.mtime || '')),
-          files));
+          files);
+        card.appendChild(main);
+        list.appendChild(card);
       });
       listHost.replaceChildren();
       if (data.truncated) {

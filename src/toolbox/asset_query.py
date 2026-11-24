@@ -183,6 +183,40 @@ class AssetQueryService:
             return _video_first_frame(target), "image/jpeg"
         raise ValueError("该文件类型不支持预览")
 
+    def thumbnail_local(self, category: str, rel_dir: str, name: str) -> tuple:
+        """缩略图：图片或视频首帧经 ffmpeg 缩放到 200px，内存缓存 300 秒。"""
+        root = self.category_root(category)
+        rel = str(rel_dir or "").replace("\\", "/").strip("/")
+        file_name = str(name or "").strip()
+        if not file_name or ".." in file_name or "/" in file_name:
+            raise ValueError("文件名不合法")
+        if ".." in rel.split("/"):
+            raise ValueError("目录不合法")
+        target = (root / rel / file_name) if rel else (root / file_name)
+        try:
+            target.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError("文件不在分类目录内") from exc
+        if not target.is_file():
+            raise ValueError("文件不存在或已被移动")
+        ext = target.suffix.lower()
+        if ext not in _PREVIEW_IMAGE_EXTS and ext not in _PREVIEW_VIDEO_EXTS:
+            raise ValueError("该文件类型不支持缩略图")
+        try:
+            stamp = int(target.stat().st_mtime)
+        except OSError:
+            stamp = 0
+        cache_key = (str(target), stamp)
+        cached = _thumb_cache.get(cache_key)
+        if cached is not None:
+            return cached, "image/jpeg"
+        data = _scaled_frame(target, is_video=ext in _PREVIEW_VIDEO_EXTS)
+        _thumb_cache[cache_key] = data
+        if len(_thumb_cache) > 240:
+            for key in list(_thumb_cache)[:80]:
+                _thumb_cache.pop(key, None)
+        return data, "image/jpeg"
+
     def local_groups(self, category: str, page: int = 1,
                      page_size: int = 40) -> dict:
         page = max(1, int(page))
@@ -318,6 +352,10 @@ class AssetQueryService:
 
 def _local_group_payload(group: dict) -> dict:
     files = group.get("files") or []
+    cover = next((item for item in files if item.get("type") == "image"), None)
+    if cover is None:
+        cover = next((item for item in files if item.get("type") == "video"),
+                     None)
     return {
         "title": group.get("title") or "",
         "date": group.get("date") or "",
@@ -327,6 +365,8 @@ def _local_group_payload(group: dict) -> dict:
         "n_vid": int(group.get("n_vid") or 0),
         "n_aud": int(group.get("n_aud") or 0),
         "n_doc": int(group.get("n_doc") or 0),
+        "cover": {"name": cover.get("name") or "",
+                  "dir": cover.get("rel_dir") or ""} if cover else None,
         "files": [{
             "name": item.get("name") or "",
             "type": item.get("type") or "",
@@ -380,3 +420,27 @@ def _video_first_frame(path: Path) -> bytes:
     if not frame:
         raise ValueError("视频首帧提取失败（文件可能损坏）")
     return frame
+
+_thumb_cache: dict[tuple[str, int], bytes] = {}
+
+
+def _scaled_frame(path: Path, is_video: bool) -> bytes:
+    """ffmpeg 缩放生成 200px 缩略图（stdout 管道，不写任何目录）。"""
+    import subprocess
+
+    from toolbox.utils import find_ffmpeg_exe
+    ffmpeg = find_ffmpeg_exe()
+    if not ffmpeg:
+        raise ValueError("未找到 ffmpeg，无法生成缩略图")
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error"]
+    if is_video:
+        command += ["-ss", "1"]
+    command += ["-i", str(path), "-vf", "scale=200:-2", "-frames:v", "1",
+                "-f", "mjpeg", "-q:v", "6", "pipe:1"]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("缩略图生成超时") from exc
+    if not result.stdout:
+        raise ValueError("缩略图生成失败")
+    return result.stdout

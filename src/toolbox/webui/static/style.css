@@ -287,7 +287,16 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
   border-radius: var(--radius-sm);
   background: var(--panel);
   padding: 10px 12px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
 }
+.row-thumb-wrap { flex: none; }
+.row-thumb {
+  width: 84px; height: 84px; object-fit: cover; border-radius: 6px;
+  background: var(--panel-2); cursor: pointer; display: block;
+}
+.row-main { flex: 1; min-width: 0; }
 .row-head { display: flex; gap: 10px; align-items: baseline; }
 .row-title { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-meta { color: var(--muted); font-size: 11px; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 10px; }
