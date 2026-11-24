@@ -936,7 +936,7 @@ class TcDocMappingPanel(QWidget):
         def done(result):
             self.log(f"写入完成：新增 {result.get('added', 0)}，"
                      f"更新 {result.get('updated', 0)}")
-            self._record_history(result, client, file_id, sheet_id)
+            self._record_history(result, sheet_id)
             toast = getattr(getattr(self.page, "app", None), "toast", None)
             if callable(toast):
                 toast(f"写入完成：新增 {result.get('added', 0)} 条，"
@@ -947,8 +947,7 @@ class TcDocMappingPanel(QWidget):
 
         self._run(work, done, "正在写入腾讯文档…", "写入")
 
-    def _record_history(self, result: dict, client, file_id: str,
-                        sheet_id: str) -> None:
+    def _record_history(self, result: dict, sheet_id: str) -> None:
         try:
             from toolbox.tcdoc import push_history
         except Exception:  # noqa: BLE001 - 历史不可用不影响写入结果
