@@ -238,11 +238,12 @@ class GlobalSettingsPage(BasePage):
         self.tunnel_mode = QComboBox()
         self.tunnel_mode.addItem("关闭", "none")
         self.tunnel_mode.addItem("Cloudflare 快速隧道", "cloudflare")
-        self.tunnel_mode.addItem("Tailscale（待接入）", "tailscale")
-        self.tunnel_mode.addItem("frp（待接入）", "frp")
+        self.tunnel_mode.addItem("Tailscale（私有网络）", "tailscale")
+        self.tunnel_mode.addItem("frp（自建服务器）", "frp")
         self.tunnel_mode.setToolTip(
             "Cloudflare 快速隧道提供临时公网 HTTPS 地址，无需账号；\n"
-            "Tailscale 与 frp 目前只检测客户端，启动能力后续接入。")
+            "Tailscale 使用私有网络（需登录，WebUI 需允许局域网）；\n"
+            "frp 需要选择 frpc 配置文件，并在服务器侧配置公网域名。")
         self.tunnel_mode.currentIndexChanged.connect(
             self._on_tunnel_mode_changed)
         tunnel_row.addWidget(self.tunnel_mode)
@@ -253,6 +254,14 @@ class GlobalSettingsPage(BasePage):
         tunnel_row.addWidget(self.tunnel_stop_btn)
         tunnel_row.addStretch(1)
         card.content_layout.addLayout(tunnel_row)
+        self.tunnel_frp_row = QHBoxLayout()
+        self.tunnel_frp_row.addWidget(QLabel("frpc 配置:"))
+        self.tunnel_frp_config = QLineEdit()
+        self.tunnel_frp_config.setPlaceholderText("选择 frpc.toml / frpc.ini")
+        self.tunnel_frp_row.addWidget(self.tunnel_frp_config, 1)
+        self.tunnel_frp_browse = self._btn("选择", self._pick_frp_config)
+        self.tunnel_frp_row.addWidget(self.tunnel_frp_browse)
+        card.content_layout.addLayout(self.tunnel_frp_row)
         self.tunnel_status = QLabel("")
         self.tunnel_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.tunnel_status.setWordWrap(True)
@@ -689,7 +698,29 @@ class GlobalSettingsPage(BasePage):
         self.tunnel_mode.blockSignals(True)
         self.tunnel_mode.setCurrentIndex(max(0, index))
         self.tunnel_mode.blockSignals(False)
+        self.tunnel_frp_config.setText(cfg.get("frp_config") or "")
+        self._update_frp_row()
         self._refresh_tunnel_async()
+
+    def _update_frp_row(self):
+        frp = (self.tunnel_mode.currentData() or "") == "frp"
+        for index in range(self.tunnel_frp_row.count()):
+            widget = self.tunnel_frp_row.itemAt(index).widget()
+            if widget is not None:
+                widget.setVisible(frp)
+        self.tunnel_frp_row.setEnabled(frp)
+
+    def _pick_frp_config(self):
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "选择 frpc 配置文件", "",
+            "frp 配置 (*.toml *.ini *.yaml *.yml);;所有文件 (*)")
+        if not path:
+            return
+        self.tunnel_frp_config.setText(path)
+        try:
+            self._tunnel().save_config(frp_config=path)
+        except Exception as exc:
+            self.app.toast(f"保存 frp 配置失败：{exc}", "error")
 
     def _refresh_tunnel_async(self):
         run_bg(self._tunnel().status,
@@ -704,17 +735,23 @@ class GlobalSettingsPage(BasePage):
         self.tunnel_start_btn.setEnabled(not running)
         self.tunnel_stop_btn.setEnabled(running)
         clients = status.get("clients") or {}
-        cloudflared = clients.get("cloudflare") or ""
+        mode = status.get("mode") or (self.tunnel_mode.currentData() or "")
+        exe_key = {"cloudflare": "cloudflare", "tailscale": "tailscale",
+                   "frp": "frp"}.get(mode, "cloudflare")
+        exe_ok = bool(clients.get(exe_key) or "")
         if running:
             url = status.get("public_url") or "等待公网地址…"
             self._set_status(self.tunnel_status, f"运行中 · {url}", "ok")
             return
         text = "未运行"
-        if not cloudflared:
-            text += " · 未检测到 cloudflared，请先在「运行环境与组件」查看"
+        if not exe_ok:
+            text += (" · 未检测到 " + {"cloudflare": "cloudflared",
+                                        "tailscale": "Tailscale",
+                                        "frp": "frpc"}[exe_key]
+                     + "，请先在「运行环境与组件」查看")
         error = status.get("error") or ""
         self._set_status(self.tunnel_status, error or text,
-                         "warn" if (error or not cloudflared) else "muted")
+                         "warn" if (error or not exe_ok) else "muted")
 
     def _start_tunnel(self):
         mode = self.tunnel_mode.currentData() or "none"
@@ -725,12 +762,17 @@ class GlobalSettingsPage(BasePage):
         if not webui.get("running"):
             self._set_status(self.tunnel_status, "请先启动 WebUI 服务", "warn")
             return
+        frp_config = self.tunnel_frp_config.text().strip()
+        if mode == "frp" and not frp_config:
+            self._set_status(self.tunnel_status, "请先选择 frpc 配置文件",
+                             "warn")
+            return
         self.tunnel_start_btn.setEnabled(False)
         self._set_status(self.tunnel_status, "正在启动隧道…", "muted")
         tunnel = self._tunnel()
 
         def work():
-            tunnel.save_config(mode=mode)
+            tunnel.save_config(mode=mode, frp_config=frp_config)
             return tunnel.start(mode, int(webui["port"]))
 
         def done(status, err):
@@ -759,6 +801,7 @@ class GlobalSettingsPage(BasePage):
 
     def _on_tunnel_mode_changed(self, _index):
         mode = self.tunnel_mode.currentData() or "none"
+        self._update_frp_row()
         try:
             self._tunnel().save_config(mode=mode)
         except Exception as exc:

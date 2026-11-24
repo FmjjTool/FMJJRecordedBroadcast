@@ -366,6 +366,7 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     # 公网隧道：none / cloudflare（快速隧道）/ tailscale / frp
     "webui_tunnel": "none",
     "webui_tunnel_frp_config": "",
+    "webui_tunnel_frp_public_url": "",
 }
 
 
