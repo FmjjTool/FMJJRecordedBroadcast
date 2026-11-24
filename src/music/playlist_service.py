@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -298,6 +299,125 @@ def read_source_complete_songs(path: str | Path | None = None) -> tuple[list[Sou
     if not sources:
         raise ValueError("「完整歌曲」快照中没有可用歌曲")
     return sources, f"完整歌曲快照（{len(sources)} 首）"
+
+
+OFFLINE_EVENT_DOC = "DRnd3bkhkQUR1aEJr"
+OFFLINE_EVENT_TAB = "ss_e1kkm2"
+_SONG_NO_RE = re.compile(r"^\s*\d+\s*[.、,，:：]\s*")
+
+
+def _tables_db_path() -> Path:
+    from toolbox.tcdoc import config as tcdoc_config
+    return Path(tcdoc_config.tables_db_path())
+
+
+def load_offline_events(path: str | Path | None = None) -> list[dict]:
+    """读取腾讯文档「线下活动」本地快照（只读），返回活动与演唱曲目。"""
+    db = Path(path) if path else _tables_db_path()
+    if not db.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT row_no, data_json FROM rows WHERE tab_id=? ORDER BY row_no",
+                (OFFLINE_EVENT_TAB,)).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+
+    events: list[dict] = []
+    for row_no, payload in rows:
+        try:
+            values = json.loads(payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        name = _text_value(values.get("活动名称"))
+        if not name:
+            continue
+        songs = _parse_event_songs(values)
+        events.append({
+            "row_no": row_no,
+            "name": name,
+            "date": _text_value(values.get("活动日期"))[:10],
+            "city": _text_value(values.get("城市")),
+            "songs": songs,
+            "song_count": len(songs),
+        })
+    return events
+
+
+def read_source_event(row_no: int, path: str | Path | None = None) -> tuple[list[SourceSong], str]:
+    """把某场线下活动的演唱曲目转成来源歌曲，并用「完整歌曲」补官方链接。"""
+    events = load_offline_events(path)
+    event = next((item for item in events if int(item["row_no"]) == int(row_no)), None)
+    if not event:
+        raise ValueError("没有找到该线下活动，请刷新腾讯文档快照后重试")
+    if not event["songs"]:
+        raise ValueError(f"活动「{event['name']}」没有登记演唱曲目")
+
+    index = _complete_song_index(path)
+    sources: list[SourceSong] = []
+    for title in event["songs"]:
+        matched = index.get(_normalize_title(title)) or _find_song(index, title)
+        links = dict((matched or {}).get("links") or {})
+        singer = (matched or {}).get("singer") or ""
+        if "封茗囧菌" not in singer:
+            # 活动曲目都是她本人演唱，完整歌曲里的原唱歌手不参与匹配
+            singer = "封茗囧菌"
+        sources.append(SourceSong(
+            title=title,
+            artist=singer,
+            album=(matched or {}).get("album") or "",
+            links={platform: url for platform, url in links.items() if url},
+        ))
+    label = f"线下活动「{event['name']}」（{len(sources)} 首）"
+    return sources, label
+
+
+def _complete_song_index(path: str | Path | None = None) -> dict[str, dict]:
+    from toolbox.music_complete_songs import load_complete_songs
+
+    index: dict[str, dict] = {}
+    for row in load_complete_songs(path):
+        key = _normalize_title(row.get("title") or "")
+        if key:
+            index.setdefault(key, row)
+    return index
+
+
+def _find_song(index: dict[str, dict], title: str) -> dict:
+    key = _normalize_title(title)
+    if not key:
+        return {}
+    for name, row in index.items():
+        if key in name or name in key:
+            return row
+    return {}
+
+
+def _parse_event_songs(values: dict) -> list[str]:
+    raw = _text_value(values.get("标准化曲目"))
+    if raw:
+        parts = re.split(r"[、,，;；\n]+", raw)
+    else:
+        parts = _text_value(values.get("演唱曲目")).splitlines()
+    songs: list[str] = []
+    for part in parts:
+        text = _SONG_NO_RE.sub("", part or "").strip()
+        text = text.strip("《》 \t")
+        if text and text not in songs:
+            songs.append(text)
+    return songs
+
+
+def _text_value(value) -> str:
+    if isinstance(value, list):
+        return "、".join(_text_value(item) for item in value if _text_value(item))
+    if isinstance(value, dict):
+        return str(value.get("text") or value.get("name") or "").strip()
+    return str(value or "").strip()
 
 
 def report_dir() -> Path:

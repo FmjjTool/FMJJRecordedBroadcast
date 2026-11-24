@@ -133,9 +133,9 @@ PAGE_INDEX = {
         module="gui_qt.pages.containers", cls="MusicSearchDownloadPage",
         aliases="音乐搜索下载 搜索", card_title="音乐下载", card_note="五平台信息与歌曲下载"),
     "music_playlist": PageMeta(
-        "歌曲合集", "音乐工具",
+        "歌单", "音乐工具",
         module="gui_qt.pages.music_playlist", cls="MusicPlaylistPage",
-        aliases="歌单 创建歌单 合集 playlist", card_note="跨平台创建歌曲合集"),
+        aliases="歌曲合集 创建歌单 合集 playlist", card_note="跨平台创建歌曲合集"),
     "music_file_tools": PageMeta(
         "标签", "音乐工具", module="gui_qt.pages.music_tag", cls="MusicTagPage",
         aliases="音乐标签"),
