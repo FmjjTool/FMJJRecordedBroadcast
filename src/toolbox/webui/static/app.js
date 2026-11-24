@@ -18,13 +18,24 @@
     collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1 },
     record: { platform: '', order: '', asc: true },
+    tasks: { order: '', asc: true },
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
   };
   var routes = {
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
+    organize: { title: '自动整理', load: function (host) { renderModule(host, 'organize'); } },
+    editor: { title: '视频操作', load: function (host) { renderModule(host, 'editor'); } },
+    rename: { title: '命名投稿', load: function (host) { renderModule(host, 'rename'); } },
+    audio: { title: '音频提取', load: function (host) { renderModule(host, 'audio'); } },
+    subtitle: { title: '字幕转换', load: function (host) { renderModule(host, 'subtitle'); } },
+    launcher: { title: '继续操作', load: function (host) { renderModule(host, 'launcher'); } },
+    calendar: { title: '日历浏览', load: function (host) { renderModule(host, 'calendar'); } },
+    migrate: { title: '文件迁移', load: function (host) { renderModule(host, 'migrate'); } },
     record: { title: '录制', load: renderRecord },
-    tcdoc: { title: '腾讯文档', load: renderTcdoc }
+    tcdoc: { title: '腾讯文档', load: renderTcdoc },
+    tasks: { title: '任务', load: renderTasks },
+    system: { title: '系统', load: renderSystem }
   };
   var searchTimer = null;
 
@@ -678,6 +689,147 @@
           });
         }).catch(function (error) { setError(tableHost, error, load); });
     }
+  }
+
+  function renderModule(host, key) {
+    host.replaceChildren();
+    setLoading(host, '正在读取模块信息…');
+    api('/api/modules/' + encodeURIComponent(key)).then(function (data) {
+      host.replaceChildren();
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, data.name),
+        h('div', { class: 'muted small', style: 'margin-top:4px' }, data.desc || ''),
+        h('div', { class: 'muted small', style: 'margin-top:6px' }, data.note || '')));
+
+      var settings = data.settings || [];
+      if (settings.length) {
+        var card = h('div', { class: 'card', style: 'margin-bottom:12px' });
+        card.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '当前配置'));
+        settings.forEach(function (item) {
+          card.appendChild(h('div', { class: 'kv' },
+            h('span', { class: 'muted' }, item.label),
+            h('span', null, item.value || '-')));
+        });
+        host.appendChild(card);
+      }
+
+      var actions = data.actions || [];
+      if (actions.length) {
+        var actionCard = h('div', { class: 'card' });
+        actionCard.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '桌面操作'));
+        actions.forEach(function (name) {
+          actionCard.appendChild(h('button', {
+            class: 'btn', type: 'button', disabled: true,
+            title: '该操作暂未在 Web 端开放，请在桌面端使用',
+            style: 'margin:4px'
+          }, name));
+        });
+        actionCard.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '入口已预留；当前版本只提供只读概览。'));
+        host.appendChild(actionCard);
+      }
+
+      if (data.days && data.days.length) {
+        var daysCard = h('div', { class: 'card', style: 'margin-top:12px' });
+        daysCard.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '最近日期'));
+        var days = h('div', { class: 'days' });
+        data.days.forEach(function (day) {
+          days.appendChild(h('span', { class: 'badge' }, day));
+        });
+        daysCard.appendChild(days);
+        host.appendChild(daysCard);
+      }
+    }).catch(function (error) {
+      setError(host, error, function () { renderModule(host, key); });
+    });
+  }
+
+  function renderTasks(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取计划任务…');
+    api('/api/tasks').then(function (data) {
+      host.replaceChildren();
+      var items = data.tasks || [];
+      if (!items.length) {
+        host.appendChild(empty('暂无计划任务。'));
+        return;
+      }
+      var columns = [
+        { key: 'label', label: '任务' },
+        { key: 'usage', label: '用途' },
+        { key: 'schedule', label: '计划' },
+        { key: 'installed', label: '状态', bool: true },
+        { key: 'next_run', label: '下次运行' }
+      ];
+      var rows = sortRows(items, columns, state.tasks);
+      var head = h('tr');
+      columns.forEach(function (column) {
+        var mark = state.tasks.order === column.key
+          ? (state.tasks.asc ? ' ↑' : ' ↓') : '';
+        head.appendChild(h('th', {
+          class: 'sortable',
+          onclick: function () {
+            cycleSort(state.tasks, column.key);
+            renderTasks(host);
+          }
+        }, column.label + mark));
+      });
+      var body = h('tbody');
+      rows.forEach(function (item) {
+        body.appendChild(h('tr', null,
+          h('td', null, item.label || '-'),
+          h('td', { class: 'muted small' }, item.usage || '-'),
+          h('td', null, item.schedule || '-'),
+          h('td', null, item.installed ? '已安装' : '未安装'),
+          h('td', null, item.next_run || '-')));
+      });
+      host.appendChild(h('div', { class: 'table-wrap' },
+        h('table', { class: 'db-table' }, h('thead', null, head), body)));
+      host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+        '只读展示；安装 / 删除与时间设置请在桌面端「任务」页操作。'));
+    }).catch(function (error) {
+      setError(host, error, function () { renderTasks(host); });
+    });
+  }
+
+  function renderSystem(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取系统信息…');
+    api('/api/system').then(function (data) {
+      host.replaceChildren();
+      var info = h('div', { class: 'card', style: 'margin-bottom:12px' });
+      info.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '版本与目录'));
+      [
+        ['版本', data.version],
+        ['程序目录', data.app_root],
+        ['配置目录', data.config_dir],
+        ['导出目录', data.export_dir],
+        ['工作目录', data.work_dir]
+      ].forEach(function (pair) {
+        info.appendChild(h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, pair[0]),
+          h('span', null, pair[1] || '-')));
+      });
+      host.appendChild(info);
+
+      var webui = h('div', { class: 'card' });
+      webui.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, 'WebUI'));
+      var cfg = data.webui || {};
+      [
+        ['端口', cfg.port],
+        ['局域网访问', cfg.lan ? '已开启' : '关闭'],
+        ['公网隧道', cfg.tunnel || 'none']
+      ].forEach(function (pair) {
+        webui.appendChild(h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, pair[0]),
+          h('span', null, pair[1])));
+      });
+      webui.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+        data.note || ''));
+      host.appendChild(webui);
+    }).catch(function (error) {
+      setError(host, error, function () { renderSystem(host); });
+    });
   }
 
   function cycleSort(state, key) {

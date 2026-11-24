@@ -7,6 +7,7 @@ from toolbox.webui.jobs import JobManager
 from toolbox.webui.server import FileResponse, WebUIServer
 from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.collected import CollectedService
+from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.record import RecordService
 from toolbox.webui.services.tcdoc import TCDocService
 from version import APP_VERSION
@@ -17,6 +18,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     collected = CollectedService()
     assets = AssetService(jobs)
     record = RecordService()
+    modules = ModuleService()
     tcdoc = TCDocService(jobs)
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
@@ -63,6 +65,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q("q"), req.q("platform")))
 
     server.get("/api/record/overview", lambda req: record.overview())
+
+    server.get("/api/modules", lambda req: modules.list())
+    server.get_re(r"/api/modules/(?P<key>[a-z_]+)",
+                  lambda req, key: modules.detail(key))
+    server.get("/api/tasks", lambda req: modules.tasks())
+    server.get("/api/system", lambda req: modules.system())
 
     server.get("/api/tcdoc/overview",
                lambda req: tcdoc.overview(req.q("doc_key")))
