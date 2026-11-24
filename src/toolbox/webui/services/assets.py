@@ -45,6 +45,10 @@ class AssetService:
         return webui_assets_dl.entries_with_status(
             page, page_size, keyword, platform, status)
 
+    def preview_local(self, category: str, rel_dir: str, name: str):
+        """返回 (bytes, mime)；只读预览，详见 L3 `preview_local`。"""
+        return self._query.preview_local(category, rel_dir, name)
+
     def start_download(self, payload: dict) -> dict:
         if self._jobs is None:
             raise ValueError("任务服务不可用")

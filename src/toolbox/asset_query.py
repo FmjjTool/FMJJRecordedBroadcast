@@ -32,6 +32,12 @@ _PLATFORM_ORDER = ["douyin", "bilibili", "weibo", "kuaishou",
 _LOCAL_SCAN_LIMIT = 50000
 _LOCAL_CACHE_TTL = 300
 _LOCAL_GROUP_LIMIT = 200
+_PREVIEW_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+_PREVIEW_IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                       ".png": "image/png", ".gif": "image/gif",
+                       ".webp": "image/webp", ".bmp": "image/bmp"}
+_PREVIEW_VIDEO_EXTS = {".mp4", ".flv", ".mkv", ".ts", ".mov", ".webm"}
+_PREVIEW_MAX_BYTES = 20 * 1024 * 1024
 
 
 class AssetQueryService:
@@ -146,6 +152,37 @@ class AssetQueryService:
         return {"category": category, "summary": summary, "files": int(files),
                 "groups": len(payload), "truncated": bool(truncated)}
 
+    def preview_local(self, category: str, rel_dir: str, name: str) -> tuple:
+        """预览分类目录内文件：图片返回原字节，视频返回 ffmpeg 首帧。
+
+        只读（首帧走 stdout 管道，不写任何目录）；返回 (bytes, mime)。
+        路径越界 / 缺失 / 超大图片均抛 ValueError。
+        """
+        root = self.category_root(category)
+        rel = str(rel_dir or "").replace("\\", "/").strip("/")
+        file_name = str(name or "").strip()
+        if not file_name or ".." in file_name or "/" in file_name:
+            raise ValueError("文件名不合法")
+        if ".." in rel.split("/"):
+            raise ValueError("目录不合法")
+        target = (root / rel / file_name) if rel else (root / file_name)
+        try:
+            target.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError("文件不在分类目录内") from exc
+        if not target.is_file():
+            raise ValueError("文件不存在或已被移动")
+        ext = target.suffix.lower()
+        if ext in _PREVIEW_IMAGE_EXTS:
+            size = target.stat().st_size
+            if size > _PREVIEW_MAX_BYTES:
+                raise ValueError("图片过大，请在桌面端查看")
+            return target.read_bytes(), _PREVIEW_IMAGE_MIME.get(
+                ext, "application/octet-stream")
+        if ext in _PREVIEW_VIDEO_EXTS:
+            return _video_first_frame(target), "image/jpeg"
+        raise ValueError("该文件类型不支持预览")
+
     def local_groups(self, category: str, page: int = 1,
                      page_size: int = 40) -> dict:
         page = max(1, int(page))
@@ -183,6 +220,7 @@ class AssetQueryService:
         if cached and cached[0] == str(root) and cached[1] == stamp:
             self._entries_truncated = cached[3]
             return cached[2]
+
         rows: list[dict] = []
         self._entries_truncated = False
         if asset_index.db_path().exists():
@@ -322,3 +360,23 @@ def _num(value) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+def _video_first_frame(path: Path) -> bytes:
+    """ffmpeg 抽视频首帧（stdout 管道输出 mjpeg，不写任何目录）。"""
+    import subprocess
+
+    from toolbox.utils import find_ffmpeg_exe
+    ffmpeg = find_ffmpeg_exe()
+    if not ffmpeg:
+        raise ValueError("未找到 ffmpeg，无法生成视频预览")
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error",
+               "-ss", "1", "-i", str(path), "-frames:v", "1",
+               "-f", "mjpeg", "pipe:1"]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("视频预览超时") from exc
+    frame = result.stdout
+    if not frame:
+        raise ValueError("视频首帧提取失败（文件可能损坏）")
+    return frame

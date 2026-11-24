@@ -1976,7 +1976,21 @@
       data.groups.forEach(function (group) {
         var files = h('ul', { class: 'row-files' });
         (group.files || []).slice(0, 12).forEach(function (file) {
-          files.appendChild(h('li', null, file.name + (file.size ? ' · ' + fmtBytes(file.size) : '')));
+          var previewable = /\.(png|jpe?g|gif|webp|bmp|mp4|flv|mkv|ts|mov|webm)$/i.test(file.name || '');
+          var node;
+          if (previewable) {
+            var link = h('a', {
+              href: '#', title: '点击预览' + (/^(mp4|flv|mkv|ts|mov|webm)$/i.test((file.name.split('.').pop() || '')) ? '（视频首帧）' : '')
+            }, file.name + (file.size ? ' · ' + fmtBytes(file.size) : ''));
+            link.addEventListener('click', function (event) {
+              event.preventDefault();
+              openPreview(data.category, file);
+            });
+            node = h('li', null, link);
+          } else {
+            node = h('li', null, file.name + (file.size ? ' · ' + fmtBytes(file.size) : ''));
+          }
+          files.appendChild(node);
         });
         if ((group.files || []).length > 12) {
           files.appendChild(h('li', null, '…共 ' + group.files.length + ' 个文件'));
@@ -2089,6 +2103,50 @@
     host.appendChild(listHost);
     host.appendChild(pagerHost);
     load();
+
+    function openPreview(category, file) {
+      var overlay = h('div', { class: 'preview-overlay' });
+      var box = h('div', { class: 'preview-box' });
+      var caption = h('div', { class: 'preview-caption' },
+        h('span', { class: 'ellipsis' }, file.name),
+        h('button', { class: 'btn', type: 'button' }, '关闭'));
+      var closeBtn = caption.lastChild;
+      var body = h('div', { class: 'preview-body' }, '正在加载预览…');
+      box.appendChild(caption);
+      box.appendChild(body);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      function close() {
+        overlay.remove();
+      }
+      closeBtn.addEventListener('click', close);
+      overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) close();
+      });
+      document.addEventListener('keydown', function onKey(event) {
+        if (event.key === 'Escape') {
+          close();
+          document.removeEventListener('keydown', onKey);
+        }
+      });
+
+      var url = '/api/assets/local/preview?cat=' + encodeURIComponent(category)
+        + '&dir=' + encodeURIComponent(file.rel_dir || '')
+        + '&name=' + encodeURIComponent(file.name);
+      var image = new Image();
+      image.onload = function () {
+        body.replaceChildren(image);
+      };
+      image.onerror = function () {
+        api(url).catch(function (error) {
+          body.replaceChildren(h('div', { class: 'muted' },
+            '预览失败：' + error.message));
+        });
+        body.replaceChildren(h('div', { class: 'muted' }, '该文件无法预览。'));
+      };
+      image.src = withToken(url);
+    }
   }
 
   function fmtBytes(value) {

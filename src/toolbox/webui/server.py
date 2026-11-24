@@ -76,6 +76,13 @@ class FileResponse:
     content_type: str = "application/octet-stream"
 
 
+@dataclass
+class BytesResponse:
+    """内联二进制响应（预览图 / 视频首帧等），不作为附件下载。"""
+    data: bytes
+    content_type: str = "image/jpeg"
+
+
 class WebUIServer:
     def __init__(self, token: str, host: str = "127.0.0.1", port: int = 0,
                  on_stop=None):
@@ -293,6 +300,10 @@ def _make_handler(app: WebUIServer):
         def _send(self, result) -> None:
             if isinstance(result, FileResponse):
                 self._send_file(result)
+                return
+            if isinstance(result, BytesResponse):
+                self._headers(200, result.content_type, len(result.data))
+                self.wfile.write(result.data)
                 return
             if isinstance(result, tuple) and len(result) == 2:
                 status, payload = result

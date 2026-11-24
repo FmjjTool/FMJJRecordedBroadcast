@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from toolbox.webui.errors import NotFound
 from toolbox.webui.jobs import JobManager
-from toolbox.webui.server import FileResponse, WebUIServer
+from toolbox.webui.server import BytesResponse, FileResponse, WebUIServer
 from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.modules import ModuleService
@@ -56,6 +56,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: assets.local_groups(
                    req.q("cat"), req.q_int("page", 1, 1),
                    req.q_int("page_size", 40, 1, 100)))
+
+    def preview_local(req):
+        data, mime = assets.preview_local(
+            req.q("cat"), req.q("dir"), req.q("name"))
+        return BytesResponse(data, mime)
+    server.get("/api/assets/local/preview", preview_local)
 
     def start_local_scan(req):
         payload = dict(req.json or {})
