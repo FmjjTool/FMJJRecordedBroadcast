@@ -20,6 +20,7 @@
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
+    rename: { order: '', asc: true },
     video: { order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
@@ -32,7 +33,7 @@
     assets: { title: '资产库', load: renderAssets },
     organize: { title: '自动整理', load: function (host) { renderModule(host, 'organize'); } },
     editor: { title: '视频操作', load: renderVideo },
-    rename: { title: '命名投稿', load: function (host) { renderModule(host, 'rename'); } },
+    rename: { title: '命名投稿', load: renderRename },
     audio: { title: '音频提取', load: renderAudio },
     subtitle: { title: '字幕转换', load: renderSubtitle },
     launcher: { title: '继续操作', load: renderLauncher },
@@ -1076,6 +1077,75 @@
         h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' }, h('thead', null, head), body))));
     }
+  }
+
+  function renderRename(host) {
+    host.replaceChildren();
+    setLoading(host, '正在读取工作目录…');
+    Promise.all([
+      api('/api/tools/rename/overview'),
+      api('/api/tools/rename/preview?limit=300')
+    ]).then(function (results) {
+      var overview = results[0];
+      var preview = results[1];
+      host.replaceChildren();
+      if (!overview.has_work_dir) {
+        host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
+        return;
+      }
+      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('视频', fmtNumber(overview.files), '工作目录内'));
+      stats.appendChild(statCard('已标准命名', fmtNumber(overview.standard), '日期_时间_前缀'));
+      stats.appendChild(statCard('待命名', fmtNumber(overview.nonstandard), '需桌面端确认'));
+      stats.appendChild(statCard('已列出', fmtNumber(preview.items.length),
+        preview.truncated ? '仅前 300 个' : '全部'));
+      host.appendChild(stats);
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'muted small' }, overview.note || '')));
+      if (!preview.items.length) {
+        host.appendChild(empty('工作目录下没有可预览的视频。'));
+        return;
+      }
+      var columns = [
+        { key: 'name', label: '文件名' },
+        { key: 'platform', label: '平台' },
+        { key: 'date', label: '日期' },
+        { key: 'time', label: '时间' },
+        { key: 'title', label: '提取标题' },
+        { key: 'standard', label: '已标准命名', bool: true }
+      ];
+      var rows = sortRows(preview.items, columns, state.rename);
+      var head = h('tr');
+      columns.forEach(function (column) {
+        var mark = state.rename.order === column.key
+          ? (state.rename.asc ? ' ↑' : ' ↓') : '';
+        head.appendChild(h('th', {
+          class: 'sortable',
+          onclick: function () {
+            cycleSort(state.rename, column.key);
+            renderRename(host);
+          }
+        }, column.label + mark));
+      });
+      var body = h('tbody');
+      rows.forEach(function (item) {
+        body.appendChild(h('tr', null,
+          h('td', { class: 'ellipsis' }, item.name || '-'),
+          h('td', null, item.platform ? platformLabel(item.platform) : '-'),
+          h('td', null, item.date || '-'),
+          h('td', null,
+            item.time && item.time !== '00-00-00' ? item.time : '-'),
+          h('td', { class: 'ellipsis', title: item.title || '' },
+            item.title || '-'),
+          h('td', null, item.standard ? '是' : '否')));
+      });
+      host.appendChild(h('div', { class: 'table-wrap' },
+        h('table', { class: 'db-table' }, h('thead', null, head), body)));
+      host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+        preview.note || '只读预览，不会改名。'));
+    }).catch(function (error) {
+      setError(host, error, function () { renderRename(host); });
+    });
   }
 
   function renderVideo(host) {

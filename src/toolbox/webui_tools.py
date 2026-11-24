@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -272,6 +273,61 @@ def convert_videos(rel_paths, on_progress=None, is_cancelled=None) -> dict:
             on_progress(index, len(paths), rel)
     return {"summary": f"完成 {ok}/{len(paths)} 个文件",
             "results": results, "ok": ok, "failed": len(paths) - ok}
+
+
+def rename_overview() -> dict:
+    from toolbox.rename_engine import is_standard_recording_name
+
+    root = _work_root()
+    files = _scan_videos(root)
+    standard = sum(1 for path in files
+                   if is_standard_recording_name(path.name))
+    return {
+        "has_work_dir": bool(root),
+        "work_dir": root.name if root else "",
+        "files": len(files),
+        "standard": standard,
+        "nonstandard": len(files) - standard,
+        "limited": len(files) >= _MAX_FILES,
+        "note": "只读预览：提取日期 / 时间 / 标题与平台；完整改名"
+                "（账户、类型、弹幕、版权）需桌面端「命名投稿」页。",
+    }
+
+
+def list_rename_preview(limit: int = 200) -> dict:
+    from toolbox.rename_engine import (extract_file_title, extract_time_str,
+                                       is_standard_recording_name)
+    from toolbox.utils import norm_platform_dir
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    limit = max(1, min(500, int(limit)))
+    files = _scan_videos(root)
+    items = []
+    for path in files[:limit]:
+        rel = _rel(root, path)
+        platform = ""
+        for part in Path(rel).parts[:-1]:
+            platform = norm_platform_dir(part)
+            if platform:
+                break
+        date_match = re.search(r"(20\d{2}-\d{2}-\d{2})", path.name)
+        items.append({
+            "path": rel,
+            "name": path.name,
+            "dir": path.parent.name,
+            "platform": platform,
+            "date": date_match.group(1) if date_match else "",
+            "time": extract_time_str(path.name),
+            "title": extract_file_title(path.name),
+            "standard": is_standard_recording_name(path.name),
+        })
+    return {"items": items, "total": len(files),
+            "limited": len(files) >= _MAX_FILES,
+            "truncated": len(files) > limit,
+            "note": "只读预览，不会改名；最终名称需在桌面端确认"
+                    "账户 / 类型 / 弹幕后生成。"}
 
 
 def calendar_days() -> dict:
