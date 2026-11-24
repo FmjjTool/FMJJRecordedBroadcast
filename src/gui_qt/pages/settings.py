@@ -61,6 +61,24 @@ def _extract_ffmpeg_binaries(zip_path, target):
     return target
 
 
+class _SettingsScrollArea(QScrollArea):
+    """宽度跟随视口；换行标签的期望高度按实际宽度重算，窄窗口不压扁卡片裁字。"""
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.sync_content()
+
+    def sync_content(self):
+        body = self.widget()
+        if body is None or body.layout() is None:
+            return
+        width = max(1, self.viewport().width())
+        need = body.layout().heightForWidth(width)
+        if need <= 0:
+            need = body.sizeHint().height()
+        body.setMinimumHeight(max(need, self.viewport().height()))
+
+
 class GlobalSettingsPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
@@ -69,7 +87,7 @@ class GlobalSettingsPage(BasePage):
         outer.setContentsMargins(16, 16, 16, 16)
 
         # 可滚动内容
-        scroll = QScrollArea()
+        scroll = _SettingsScrollArea()
         self.scroll = scroll
         scroll.setWidgetResizable(True)
         body = QWidget()
@@ -138,12 +156,12 @@ class GlobalSettingsPage(BasePage):
         ts_row.addWidget(QLabel("浅色时间:"))
         self.sched_light = QTimeEdit()
         self.sched_light.setDisplayFormat("HH:mm")
-        self.sched_light.setFixedWidth(84)
+        self.sched_light.setFixedWidth(96)
         ts_row.addWidget(self.sched_light)
         ts_row.addWidget(QLabel("深色时间:"))
         self.sched_dark = QTimeEdit()
         self.sched_dark.setDisplayFormat("HH:mm")
-        self.sched_dark.setFixedWidth(84)
+        self.sched_dark.setFixedWidth(96)
         ts_row.addWidget(self.sched_dark)
         ts_row.addWidget(self._btn("保存", self._save_theme_schedule_clicked))
         card.content_layout.addLayout(ts_row)
@@ -363,6 +381,7 @@ class GlobalSettingsPage(BasePage):
     def on_theme_changed(self):
         for card, icon in self._section_cards:
             card.set_icon(icon)
+        self.scroll.sync_content()
 
     def _btn(self, text, slot):
         b = QPushButton(text)
@@ -935,6 +954,7 @@ class GlobalSettingsPage(BasePage):
                 tip = QLabel(f"依赖检测失败: {err or '未知错误'}")
                 tip.setStyleSheet("color: palette(bright-text); font-size: 11px; padding: 2px;")
                 self.dependency_layout.addWidget(tip)
+                self.scroll.sync_content()
                 return
             self._dep_cache = result
             self._fill_dep_rows(result)
@@ -981,6 +1001,7 @@ class GlobalSettingsPage(BasePage):
         self.dependency_layout.addWidget(tip)
         self._skel_phase = 0
         self._skel_timer.start()
+        self.scroll.sync_content()
 
     def _pulse_dep_skeleton(self):
         self._skel_phase = 1 - self._skel_phase
@@ -1187,6 +1208,7 @@ class GlobalSettingsPage(BasePage):
             summary.setStyleSheet(
                 "color: palette(link-visited); font-size: 11px; padding: 2px;")
         self.dependency_layout.addWidget(summary)
+        self.scroll.sync_content()
 
     # ----- 依赖检测实现：返回 (ok, version_str) -----
 
