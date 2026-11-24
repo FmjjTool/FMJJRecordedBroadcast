@@ -55,8 +55,7 @@ class KuwoPlaylistWriter(BasePlaylistWriter):
     verified = False
     available = True          # 可勾选；写入会明确失败并说明原因
     experimental = True
-    note = ("网页建单接口已下线（addPlaylist/createPlaylist 返回 504、"
-            "用户歌单列表 404），勾选后写入会失败；需酷我 App 协议才能真正建单")
+    note = "App 扫码后走客户端 pl3 协议建单/加歌（已实测）；网页建单接口已下线"
     batch_size = 50
 
     def _headers(self, cookie: dict[str, str]) -> dict[str, str]:
