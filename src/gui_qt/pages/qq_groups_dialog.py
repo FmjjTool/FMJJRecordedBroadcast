@@ -21,9 +21,9 @@ from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from toolbox import qq_groups_service as service
 
-_COLUMNS = ["群名", "群号", "人数", "变化", "状态", "分享链接"]
-_HINT = ("每个群需要各自的 QQ 群资料分享链接（手机 QQ → 群资料 → 分享 → 复制链接）。"
-         "群号不能代替分享链接；没有链接的群只保留在名单里，不抓人数。")
+_COLUMNS = ["群名", "群号", "人数", "变化", "状态", "来源"]
+_HINT = ("可粘贴群号或 QQ 群资料分享链接。分享链接免登录但每个群独立；"
+         "群号查询需先用「QQ群登录」取得登录态，适合批量订阅预置的 8 个群。")
 
 
 class _BulkImportDialog(QDialog):
@@ -37,8 +37,8 @@ class _BulkImportDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
-        hint = QLabel("每行粘贴一条 QQ 群资料分享链接；按链接里的群号自动匹配官方目录，"
-                      "匹配不到就追加到名单末尾。")
+        hint = QLabel("每行粘贴一个 QQ 群号或群资料分享链接；按群号自动匹配官方目录，"
+                      "匹配不到就追加到名单末尾。群号需要先完成 QQ 群登录。")
         hint.setProperty("role", "caption")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -104,7 +104,7 @@ class QQGroupsDialog(QDialog):
         row.setSpacing(8)
         self.input = QLineEdit()
         self.input.setPlaceholderText(
-            "粘贴 QQ 群分享链接（qun.qq.com/universal-share/...）")
+            "粘贴 QQ 群号或分享链接（群号需先完成 QQ 群登录）")
         self.input.returnPressed.connect(self._save_link)
         row.addWidget(self.input, 1)
 
@@ -124,6 +124,8 @@ class QQGroupsDialog(QDialog):
         dir_action = more.addAction("打开保存目录")
         dir_action.triggered.connect(self._open_dir)
         more.addSeparator()
+        self.login_action = more.addAction("按群号订阅全部（需 QQ 群登录）")
+        self.login_action.triggered.connect(self._subscribe_catalog_by_login)
         self.delete_action = more.addAction("删除订阅")
         self.delete_action.setEnabled(False)
         self.delete_action.triggered.connect(self._delete)
@@ -223,10 +225,18 @@ class QQGroupsDialog(QDialog):
             status.setTextAlignment(Qt.AlignCenter)
             status.setToolTip(f"{row.status} {row.fetched_at}".strip())
             self.table.setItem(index, 4, status)
-            link = QTableWidgetItem("已配置" if row.share_url else "未配置")
+            if row.source == "share":
+                link_text = "分享链接"
+                link_tip = "已保存该群的资料分享链接（不显示链接内容）"
+            elif row.source == "login":
+                link_text = "登录查询"
+                link_tip = "已按群号订阅，刷新时使用 QQ 群登录态读取群资料"
+            else:
+                link_text = "未配置"
+                link_tip = "粘贴该群群号（需登录）或资料分享链接"
+            link = QTableWidgetItem(link_text)
             link.setTextAlignment(Qt.AlignCenter)
-            link.setToolTip("分享链接已保存（不在表格显示链接内容）" if row.share_url
-                            else "请把该群的 QQ 群资料分享链接粘贴到上方输入框")
+            link.setToolTip(link_tip)
             self.table.setItem(index, 5, link)
         self._sorter.apply()
         self._on_selection()
@@ -340,12 +350,48 @@ class QQGroupsDialog(QDialog):
 
         run_bg(work, done, owner=self)
 
+    def _subscribe_catalog_by_login(self):
+        if self._busy:
+            return
+        self._cancel = threading.Event()
+        total = len(service.catalog())
+        self._set_busy(True, "正在按群号订阅预置群...", total=total)
+
+        def progress(index, count, label):
+            post_to_main(self._set_progress, index, count, label)
+
+        def work():
+            return service.subscribe_catalog_by_login(
+                progress=progress, cancel=self._cancel)
+
+        def done(result, err):
+            if err:
+                self._set_busy(False, f"按群号订阅失败：{err}")
+                return
+            for row in result["results"]:
+                self._deltas[row.no] = (row.change, row.is_new)
+            self._reload_rows()
+            errors = result["errors"]
+            if result["cancelled"]:
+                text = f"已取消（完成 {result['ok']}/{result['total']} 个群）"
+            elif errors and not result["ok"]:
+                text = f"按群号订阅失败：{errors[0][1]}"
+            elif errors:
+                text = (f"已按群号订阅 {result['ok']}/{result['total']} 个群，"
+                        f"失败 {len(errors)} 个：{errors[0][1]}")
+            else:
+                text = f"已按群号订阅 {result['ok']}/{result['total']} 个群"
+            self._set_busy(False, text)
+
+        run_bg(work, done, owner=self)
+
     def _refresh(self):
         if self._busy:
             return
         total = sum(1 for row in self._rows if row.share_url)
         if not total:
-            self.status.setText("还没有配置分享链接；请先粘贴至少一个群的分享链接。")
+            self.status.setText(
+                "还没有配置群号或分享链接；可点「更多 → 按群号订阅全部」登录后批量订阅。")
             return
         self._cancel = threading.Event()
         self._set_busy(True, "正在刷新 QQ 群人数...", total=total)
@@ -383,7 +429,7 @@ class QQGroupsDialog(QDialog):
             self.status.setText("请先选中一行")
             return
         if not row.share_url:
-            self.status.setText("该群还没有订阅分享链接")
+            self.status.setText("该群还没有订阅来源")
             return
         box = QMessageBox(self)
         box.setWindowTitle("取消订阅")

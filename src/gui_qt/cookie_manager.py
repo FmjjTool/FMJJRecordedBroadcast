@@ -44,6 +44,7 @@ COOKIE_PLATFORMS = [
     ("kuaishou", "快手", False, True),
     ("taobao", "淘宝", False, True),
     ("tcdoc", "腾讯文档", False, True),
+    ("qqgroup", "QQ群", False, True),
     ("quark", "夸克网盘", False, True),
     ("baidu", "百度网盘", False, True),
     ("yun139", "移动云盘", False, True),
@@ -92,6 +93,10 @@ BROWSER_LOGIN_CONFIGS = {
     "tcdoc": ("https://docs.qq.com/desktop", "腾讯文档登录（软件内）",
               ("uid", "uid_key", "DOC_SID"),
               "扫码 / 微信 / QQ 登录（登录后回文档列表即算成功）"),
+    # QQ群：登录后 qinfo 群资料接口按群号读群名/人数；skey/p_skey 用于 bkn
+    "qqgroup": ("https://qun.qq.com/", "QQ群登录（软件内）",
+                ("uin", "skey", "p_skey"),
+                "QQ扫码 / 账号密码登录（进入群管理页即算成功）"),
     # 夸克网盘：登录态在 __puus / __pus（约 3 小时一轮，页面活动会自动续期），
     # 备份任务用同一份 Cookie 直连 drive-pc.quark.cn
     "quark": ("https://pan.quark.cn/", "夸克网盘登录（软件内）",

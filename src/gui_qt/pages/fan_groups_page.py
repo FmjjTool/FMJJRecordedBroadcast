@@ -40,19 +40,19 @@ _HINTS = {
     "douyin": "需要抖音登录态。可查该账号全部公开粉丝群（含 VIP 群）与人数。",
     "weibo": "需要微博登录态。可查该账号全部公开粉丝群（群号 / 人数 / 上限）。",
     "bilibili": "需要 B站登录态。网页端只列出当前账号已加入的应援团，无法列出 UP 全部群。",
-    "qqgroup": "每个群需要各自的资料分享链接（手机 QQ → 群资料 → 分享 → 复制链接）；"
-               "群号不能代替链接。已预置 8 个官方群，粘贴链接后可刷新人数。",
+    "qqgroup": "可粘贴群号（需先完成 QQ 群登录）或群资料分享链接（免登录）；"
+               "登录后可在「订阅列表 → 更多 → 按群号订阅全部」批量订阅预置的 8 个官方群。",
 }
 
 _PLACEHOLDERS = {
     "douyin": "https://www.douyin.com/user/MS4wLjABAAAA...（或 sec_uid）",
     "weibo": "https://weibo.com/u/3056354293（或 UID）",
     "bilibili": "https://space.bilibili.com/1467772（或 UID）",
-    "qqgroup": "粘贴 QQ 群分享链接（qun.qq.com/universal-share/...）",
+    "qqgroup": "粘贴 QQ 群号或分享链接（群号需先完成 QQ 群登录）",
 }
 
 _COLUMNS = ["头像", "群名", "群ID", "群号", "人数", "变化", "进群条件"]
-_QQ_COLUMNS = ["头像", "群名", "群号", "人数", "变化", "状态", "分享链接"]
+_QQ_COLUMNS = ["头像", "群名", "群号", "人数", "变化", "状态", "来源"]
 
 _AVATAR_SIZE = 40
 
@@ -97,6 +97,7 @@ class FanGroupsPage(BasePage):
         self._busy = False
         self._qq_dialog = None
         self._qq_configured: set[str] = set()
+        self._qq_sources: dict[str, str] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -269,6 +270,7 @@ class FanGroupsPage(BasePage):
             self.status_label.setText(f"读取 QQ 群订阅失败：{exc}")
             return
         self._qq_configured = {row.no for row in rows if row.share_url}
+        self._qq_sources = {row.no: row.source for row in rows}
         self._owner_id = "all"
         self._prev_at = ""
         self._groups = []
@@ -290,8 +292,8 @@ class FanGroupsPage(BasePage):
         self.copy_all_btn.setEnabled(bool(self._groups))
         self.avatar_btn.setEnabled(bool(self._groups))
         self.status_label.setText(
-            f"QQ群：共 {len(rows)} 个，已配置分享链接 "
-            f"{len(self._qq_configured)} 个；粘贴分享链接可添加或更新")
+            f"QQ群：共 {len(rows)} 个，已配置群号/分享链接 "
+            f"{len(self._qq_configured)} 个；粘贴群号或分享链接可添加或更新")
 
     def _refresh_qq_view(self):
         if self._platform == "qqgroup" and not self._busy:
@@ -490,11 +492,18 @@ class FanGroupsPage(BasePage):
             status = _center(g.entry_limit or "-")
             status.setToolTip(g.entry_limit or "")
             self.table.setItem(r, 5, status)
-            configured = g.group_id in self._qq_configured
-            link = _center("已配置" if configured else "未配置")
-            link.setToolTip(
-                "分享链接已保存（不在表格显示链接内容）" if configured
-                else "请把该群的资料分享链接粘贴到上方输入框")
+            source = self._qq_sources.get(g.group_id, "")
+            if source == "share":
+                link_text = "分享链接"
+                tip = "已保存该群的资料分享链接（不显示链接内容）"
+            elif source == "login":
+                link_text = "登录查询"
+                tip = "已按群号订阅，刷新时使用 QQ 群登录态读取群资料"
+            else:
+                link_text = "未配置"
+                tip = "粘贴该群群号（需登录）或资料分享链接"
+            link = _center(link_text)
+            link.setToolTip(tip)
             self.table.setItem(r, 6, link)
         self._sorter.apply()
         self.export_btn.setEnabled(bool(self._groups))
@@ -602,7 +611,7 @@ class FanGroupsPage(BasePage):
             return
         if not self._qq_configured:
             self.status_label.setText(
-                "还没有配置分享链接；请先粘贴至少一个 QQ 群分享链接。")
+                "还没有配置群号或分享链接；可登录后点「订阅列表 → 按群号订阅全部」。")
             return
         from toolbox import qq_groups_service as qgs
 
@@ -689,6 +698,7 @@ class FanGroupsPage(BasePage):
         self._changes = {}
         self._prev_at = ""
         self._qq_configured = set()
+        self._qq_sources = {}
         self.table.setRowCount(0)
         self.detail.clear()
         self.export_btn.setEnabled(False)

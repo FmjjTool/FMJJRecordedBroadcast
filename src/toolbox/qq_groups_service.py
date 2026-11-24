@@ -1,7 +1,8 @@
 """QQ群人数订阅用例。
 
-数据源：QQ群资料分享页（qun.qq.com/universal-share，无需登录），
-每个群需要各自的分享链接；群号不能代替分享链接。
+数据源：
+- 免登录：QQ群资料分享页（qun.qq.com/universal-share），每个群需要各自的分享链接。
+- 登录兜底：QQ群登录态下按群号读取官方群资料（qinfo），用于批量订阅预置群。
 
 存储：
 - 订阅名单复用 config/fan_groups_targets.json，记录 platform=qqgroup、
@@ -26,7 +27,8 @@ from toolbox import fan_groups_task as task
 class QQGroupRow:
     no: str
     name: str
-    share_url: str = ""
+    share_url: str = ""     # 订阅输入：分享链接或群号
+    source: str = ""        # share=分享链接，login=登录按群号
     member_count: int | None = None
     fetched_at: str = ""
     status: str = ""
@@ -64,6 +66,9 @@ def _qq_targets() -> dict[str, dict]:
 
 def _row_from_target(no: str, default_name: str, target: dict | None) -> QQGroupRow:
     share_url = str((target or {}).get("input") or "").strip()
+    source = ""
+    if share_url:
+        source = "share" if fg.is_qq_share_text(share_url) else "login"
     name = str((target or {}).get("name") or "").strip() or default_name or no
     latest = fg.load_latest("qqgroup", no) if share_url else None
     count = None
@@ -78,12 +83,12 @@ def _row_from_target(no: str, default_name: str, target: dict | None) -> QQGroup
             avatar = str(item.get("avatar") or "")
         fetched_at = str(latest.get("fetched_at") or "")
     if not share_url:
-        status = "待配置分享链接"
+        status = "待配置（分享链接或登录按群号）"
     elif count is None:
-        status = "已订阅，待刷新"
+        status = "已按群号订阅，待刷新" if source == "login" else "已订阅，待刷新"
     else:
         status = f"已更新 {fetched_at}" if fetched_at else "已更新"
-    return QQGroupRow(no=no, name=name, share_url=share_url,
+    return QQGroupRow(no=no, name=name, share_url=share_url, source=source,
                       member_count=count if isinstance(count, int) else None,
                       fetched_at=fetched_at, status=status, avatar=avatar)
 
@@ -106,17 +111,17 @@ def catalog() -> list[QQGroupRow]:
     return rows
 
 
-def save_link(share_url: str, name: str = "") -> QQGroupRow:
-    """读取分享页并写入/更新订阅；立即保存一次快照。"""
-    group = fg.fetch_qqgroup(share_url)
+def save_link(target_input: str, name: str = "") -> QQGroupRow:
+    """读取分享页或登录态群资料并写入/更新订阅；立即保存一次快照。"""
+    group = fg.fetch_qqgroup_any(target_input)
     group_no = group.group_id
     title = (name or "").strip() or group.name or group_no
     target = _qq_targets().get(group_no)
     if target:
         task.update_target("qqgroup", str(target.get("input") or ""),
-                           share_url, title)
+                           target_input, title)
     else:
-        task.add_target("qqgroup", share_url, title)
+        task.add_target("qqgroup", target_input, title)
     previous = fg.load_latest("qqgroup", group_no)
     changes = fg.diff_members([group], previous)
     fg.save_snapshot("qqgroup", group_no, [group])
@@ -124,7 +129,8 @@ def save_link(share_url: str, name: str = "") -> QQGroupRow:
     return QQGroupRow(
         no=group_no,
         name=title,
-        share_url=share_url,
+        share_url=target_input,
+        source="share" if fg.is_qq_share_text(target_input) else "login",
         member_count=group.member_count,
         fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         status="已更新",
@@ -167,6 +173,8 @@ def refresh_all(progress=None, cancel=None) -> dict:
                 no=group.group_id,
                 name=group.name or label,
                 share_url=str(target.get("input") or ""),
+                source=("share" if fg.is_qq_share_text(str(target.get("input") or ""))
+                        else "login"),
                 member_count=group.member_count,
                 fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 status="已更新",
@@ -177,6 +185,52 @@ def refresh_all(progress=None, cancel=None) -> dict:
         except Exception as exc:  # noqa: BLE001 - 单个群失败不影响其他群
             errors.append((label, str(exc)))
     return {"total": total, "ok": len(results), "errors": errors,
+            "results": results, "cancelled": cancelled}
+
+
+def subscribe_catalog_by_login(progress=None, cancel=None) -> dict:
+    """登录态下按群号订阅官方目录中的群；已有分享链接的群不覆盖。"""
+    targets = _qq_targets()
+    catalog = fg.qq_group_catalog()
+    results: list[QQGroupRow] = []
+    errors: list[tuple[str, str]] = []
+    cancelled = False
+    for index, item in enumerate(catalog, 1):
+        if cancel is not None and cancel.is_set():
+            cancelled = True
+            break
+        no = str(item.get("no") or "").strip()
+        name = str(item.get("name") or "").strip() or no
+        if not no:
+            continue
+        existing = targets.get(no)
+        if existing and fg.is_qq_share_text(str(existing.get("input") or "")):
+            continue
+        if progress:
+            progress(index, len(catalog), name)
+        try:
+            group = fg.fetch_qqgroup_by_cookie(no)
+            title = group.name or name
+            if existing:
+                task.update_target("qqgroup", str(existing.get("input") or ""),
+                                   no, title)
+            else:
+                task.add_target("qqgroup", no, title)
+            previous = fg.load_latest("qqgroup", no)
+            changes = fg.diff_members([group], previous)
+            fg.save_snapshot("qqgroup", no, [group])
+            change = changes.get(no)
+            results.append(QQGroupRow(
+                no=no, name=title, share_url=no, source="login",
+                member_count=group.member_count,
+                fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                status="已更新", avatar=group.avatar,
+                change=change if isinstance(change, int) else None,
+                is_new=previous is None or change is None,
+            ))
+        except Exception as exc:  # noqa: BLE001 - 单个群失败不影响其他群
+            errors.append((name, str(exc)))
+    return {"total": len(catalog), "ok": len(results), "errors": errors,
             "results": results, "cancelled": cancelled}
 
 

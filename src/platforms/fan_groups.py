@@ -264,6 +264,234 @@ def fetch_qqgroup(text: str, timeout: float = 20.0) -> "FanGroup":
     )
 
 
+def is_qq_share_text(text: str) -> bool:
+    try:
+        qq_share_url(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _cookie_value(cookie: str, name: str) -> str:
+    for part in (cookie or "").split(";"):
+        key, sep, value = part.strip().partition("=")
+        if sep and key.strip() == name:
+            return value.strip()
+    return ""
+
+
+def _qq_bkn(cookie: str) -> str:
+    skey = _cookie_value(cookie, "skey") or _cookie_value(cookie, "p_skey")
+    if not skey:
+        raise ValueError("QQ 群登录态不完整（缺少会话票据），请重新完成 QQ 群登录")
+    hash_value = 5381
+    for char in skey:
+        hash_value += (hash_value << 5) + ord(char)
+    return str(hash_value & 0x7FFFFFFF)
+
+
+def _first_value(data: dict, keys: tuple[str, ...]):
+    for key in keys:
+        value = data.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _fetch_qqgroup_qinfo(group_no: str, timeout: float = 20.0) -> "FanGroup":
+    """用 QQ 群登录态读取官方群资料（qinfo，可能不含人数）。"""
+    group_no = extract_qq_group_no(group_no)
+    cookie = _cookie("qqgroup")
+    if not cookie:
+        raise ValueError("需要 QQ 群登录态，请先完成 QQ 群登录后重试")
+    bkn = _qq_bkn(cookie)
+    url = "https://qinfo.clt.qq.com/cgi-bin/qun_info/get_group_info_all"
+    try:
+        response = requests.get(
+            url,
+            params={"gc": group_no, "bkn": bkn, "t": "basic",
+                    "from": "1", "src": "qinfo_v3"},
+            headers={"User-Agent": UA_PC, "Cookie": cookie,
+                     "Referer": f"https://qinfo.clt.qq.com/qinfo_v3/member.html"
+                                f"?groupuin={group_no}"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(f"读取 QQ 群资料失败：{type(exc).__name__}") from exc
+    if response.status_code != 200:
+        raise ValueError(f"QQ 群资料 HTTP {response.status_code}")
+    try:
+        parsed = response.json()
+    except (ValueError, TypeError):
+        raise ValueError("QQ 群资料接口返回的不是 JSON（登录态可能已失效）") from None
+    payload = parsed if isinstance(parsed, dict) else {}
+    ec = payload.get("ec")
+    try:
+        ec_int = int(ec) if ec is not None else 0
+    except (TypeError, ValueError):
+        ec_int = -1
+    if ec_int == 4:
+        raise ValueError("QQ 群登录态失效，请重新完成 QQ 群登录")
+    if ec_int == 7:
+        raise ValueError("没有权限查看该群资料（可能需要先加入该群）")
+    if ec_int != 0:
+        em = str(payload.get("em") or "").strip()
+        raise ValueError(f"QQ 群资料接口返回 ec={ec_int}" + (f"：{em}" if em else ""))
+    data = payload.get("data")
+    data = data if isinstance(data, dict) else payload
+    candidates = [data]
+    for key in ("group_info", "groupinfo", "group"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    name = count = limit = owner = notice = None
+    fields = (
+        ("group_name", "groupName", "gname", "name", "group_nick"),
+        ("group_member_num", "groupMemberNum", "member_num", "memberNum",
+         "group_member_count", "member_count", "memberCnt", "gmembernum"),
+        ("group_max_member", "groupMaxMember", "max_member", "maxMember",
+         "max_member_num", "group_max_member_num"),
+        ("group_owner", "groupOwner", "owner", "owner_uin", "group_owner_uin"),
+        ("group_memo", "memo", "group_notice", "description", "group_desc"),
+    )
+    for item in candidates:
+        name = name or _first_value(item, fields[0])
+        count = count if count is not None else _first_value(item, fields[1])
+        limit = limit if limit is not None else _first_value(item, fields[2])
+        owner = owner or _first_value(item, fields[3])
+        notice = notice or _first_value(item, fields[4])
+    try:
+        member_count = int(str(count).replace(",", "")) if count is not None else None
+    except (TypeError, ValueError):
+        member_count = None
+    if not name or member_count is None:
+        keys = "、".join(str(k) for k in list(payload)[:16])
+        raise ValueError(f"QQ 群资料接口返回格式变化（顶层字段：{keys or '无'}）")
+    try:
+        member_limit = int(str(limit).replace(",", "")) if limit is not None else None
+    except (TypeError, ValueError):
+        member_limit = None
+    return FanGroup(
+        platform="qqgroup",
+        group_id=group_no,
+        name=str(name),
+        member_count=member_count,
+        member_limit=member_limit,
+        group_no=group_no,
+        owner_uid=str(owner or ""),
+        avatar=f"https://p.qlogo.cn/gh/{group_no}/{group_no}/",
+        avatar_path="",
+        entry_limit="登录查询",
+        tags="",
+        notice=str(notice or ""),
+        url="",
+        raw={},
+    )
+
+
+def _clean_qq_text(text) -> str:
+    return re.sub(r"[​‌‍﻿]", "", str(text or "")).strip()
+
+
+def _fetch_qqgroup_search(group_no: str, timeout: float = 20.0) -> "FanGroup":
+    """登录态下用 QQ 群搜索接口按群号取群名与人数（QQ-Groups-Spider 同源接口）。"""
+    cookie = _cookie("qqgroup")
+    if not cookie:
+        raise ValueError("需要 QQ 群登录态，请先完成 QQ 群登录后重试")
+    bkn = _qq_bkn(cookie)
+    data = {
+        "k": "交友", "n": "8", "st": "1", "iso": "1", "src": "1", "v": "4903",
+        "bkn": bkn, "isRecommend": "false", "city_id": "0", "from": "1",
+        "keyword": group_no, "sort": "0", "wantnum": "24", "page": "0", "ldw": bkn,
+    }
+    try:
+        response = requests.post(
+            "https://qun.qq.com/cgi-bin/group_search/pc_group_search",
+            data=data,
+            headers={"User-Agent": UA_PC, "Cookie": cookie,
+                     "Referer": "http://find.qq.com/index.html?version=1"
+                                "&im_version=5533&width=910&height=610&search_target=0"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(f"QQ 群搜索失败：{type(exc).__name__}") from exc
+    if response.status_code != 200:
+        raise ValueError(f"QQ 群搜索 HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        raise ValueError("QQ 群搜索返回的不是 JSON（登录态可能已失效）") from None
+    if not isinstance(payload, dict):
+        payload = {}
+    ec = payload.get("ec")
+    try:
+        ec_int = int(ec) if ec is not None else 0
+    except (TypeError, ValueError):
+        ec_int = -1
+    if ec_int == 4:
+        raise ValueError("QQ 群登录态失效，请重新完成 QQ 群登录")
+    if ec_int != 0:
+        em = str(payload.get("em") or "").strip()
+        raise ValueError(f"QQ 群搜索返回 ec={ec_int}" + (f"：{em}" if em else ""))
+    groups = payload.get("group_list") or []
+    match = next((g for g in groups
+                  if isinstance(g, dict) and str(g.get("code")) == group_no), None)
+    if match is None:
+        raise ValueError("QQ 群搜索未找到该群（可能未公开，或当前账号无权查看）")
+    try:
+        member_count = int(str(match.get("member_num")).replace(",", ""))
+    except (TypeError, ValueError):
+        member_count = None
+    if member_count is None:
+        raise ValueError("QQ 群搜索返回缺少人数")
+    try:
+        member_limit = int(str(match.get("max_member_num")).replace(",", ""))
+    except (TypeError, ValueError):
+        member_limit = None
+    labels = match.get("labels") or []
+    tags = "、".join(_clean_qq_text(
+        x.get("label") if isinstance(x, dict) else x) for x in labels)
+    return FanGroup(
+        platform="qqgroup",
+        group_id=group_no,
+        name=_clean_qq_text(match.get("name")) or group_no,
+        member_count=member_count,
+        member_limit=member_limit,
+        group_no=group_no,
+        owner_uid=str(match.get("owner_uin") or ""),
+        avatar=f"https://p.qlogo.cn/gh/{group_no}/{group_no}/",
+        avatar_path="",
+        entry_limit="登录查询",
+        tags=tags,
+        notice=_clean_qq_text(match.get("memo")),
+        url="",
+        raw={},
+    )
+
+
+def fetch_qqgroup_by_cookie(group_no: str, timeout: float = 20.0) -> "FanGroup":
+    """登录兜底：先试 qinfo 资料，再用群搜索取人数。"""
+    group_no = extract_qq_group_no(group_no)
+    cookie = _cookie("qqgroup")
+    if not cookie:
+        raise ValueError("需要 QQ 群登录态，请先完成 QQ 群登录后重试")
+    errors: list[str] = []
+    for fetcher in (_fetch_qqgroup_qinfo, _fetch_qqgroup_search):
+        try:
+            return fetcher(group_no, timeout=timeout)
+        except ValueError as exc:
+            errors.append(str(exc))
+    raise ValueError(errors[-1] if errors else "QQ 群资料读取失败")
+
+
+def fetch_qqgroup_any(text: str, timeout: float = 20.0) -> "FanGroup":
+    """分享链接优先；群号/加群链接走 QQ 群登录态兜底。"""
+    if is_qq_share_text(text):
+        return fetch_qqgroup(text, timeout=timeout)
+    group_no = extract_qq_group_no(text)
+    return fetch_qqgroup_by_cookie(group_no, timeout=timeout)
+
+
 def extract_owner_id(platform: str, text: str) -> str:
     if platform == "douyin":
         return extract_douyin_sec_uid(text)
@@ -495,8 +723,8 @@ def fetch_groups(platform: str, text: str, progress=None) -> tuple[str, list[Fan
     if platform == "qqgroup":
         owner_id = extract_qq_group_no(text)
         if progress:
-            progress(f"QQ群 {owner_id}：正在读取分享页...")
-        return owner_id, [fetch_qqgroup(text)]
+            progress(f"QQ群 {owner_id}：正在读取群资料...")
+        return owner_id, [fetch_qqgroup_any(text)]
     owner_id = extract_owner_id(platform, text)
     if progress:
         progress(f"{PLATFORM_LABELS[platform]} ID：{owner_id}，正在查询...")
