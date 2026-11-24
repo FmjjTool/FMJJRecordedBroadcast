@@ -1,9 +1,9 @@
-"""已获取页（PySide6 版）：分平台展示 COLLECTED，按栏全选/反选/清除、导出、下载。
+"""已获取页（PySide6 版）：分平台展示 COLLECTED，按栏全选/反选/全不选/清空、导出、下载。
 
 对应原版 gui/info_pages.py 的 InfoResultsPage：
 - 顶部：画质下拉（全局共享）+ 全部清空 + 全部导出 + 全部下载 + 导出格式复选
   + 微博评论页数（导出微博帖子时附带评论区聊天记录，0 = 不抓）
-- 三栏（抖音/B站/微博）：计数标签 + 全选/反选/清除/导出/下载 + 复选行 + 打开链接
+- 四栏（抖音/B站/微博/其他）：计数标签 + 全选/反选/全不选/清空/导出/下载 + 复选行 + 打开链接
 - 每行显示发布日期，默认按发布日期倒序（最新在前）
 - 下载：B站按画质直下（视频走 playurl、DRAW 动态走图片），非 B站走 media_downloader
 """
@@ -408,13 +408,21 @@ class InfoResultsPage(BasePage):
 
         btns = QHBoxLayout()
         btns.setSpacing(4)
-        for text, mode in (("全选", "all"), ("反选", "invert"), ("清除", "none")):
+        for text, mode in (("全选", "all"), ("反选", "invert"), ("全不选", "none")):
             b = QPushButton(text)
             b.setFixedSize(42, 26)
             b.setProperty("variant", "ghost")
             b.setStyleSheet("padding: 0px; font-size: 11px;")
             b.clicked.connect(lambda _=False, k=key, m=mode: self._col_select(k, m))
             btns.addWidget(b)
+        btns.addSpacing(4)
+        clear_btn = QPushButton("清空")
+        clear_btn.setFixedSize(42, 26)
+        clear_btn.setProperty("variant", "danger")
+        clear_btn.setStyleSheet("padding: 0px; font-size: 11px;")
+        clear_btn.setToolTip("清空本栏全部条目（只移除采集结果记录，不影响已下载的本地文件）")
+        clear_btn.clicked.connect(lambda _=False, k=key, n=name: self._col_clear(k, n))
+        btns.addWidget(clear_btn)
         btns.addStretch(1)
         v.addLayout(btns)
         transfer = QHBoxLayout()
@@ -481,10 +489,7 @@ class InfoResultsPage(BasePage):
             grouped = {key: common.COLLECTED.view(key) for key, _ in PLATFORMS_3}
         else:
             for info in common.COLLECTED:
-                plat = info.platform or "other"
-                if plat not in _KNOWN_COLS:
-                    plat = "other"
-                grouped[plat].append(info)
+                grouped[self._column_key(info)].append(info)
         for key, _name in PLATFORMS_3:
             # 本次刷新内复用日期解析结果，排序与行文本不再各解析一遍。
             pub_dates = None
@@ -512,6 +517,12 @@ class InfoResultsPage(BasePage):
     @staticmethod
     def _result_key(info):
         return getattr(info, "_collection_key", None) or common._dedup_key(info) or f"item:{id(info)}"
+
+    @staticmethod
+    def _column_key(info):
+        """条目所属平台栏：已知平台原样返回，其余（快手/小红书等）归入 other。"""
+        plat = getattr(info, "platform", "") or "other"
+        return plat if plat in _KNOWN_COLS else "other"
 
     def _selection_changed(self, key, item):
         item_key = item.data(Qt.UserRole + 1)
@@ -752,8 +763,53 @@ class InfoResultsPage(BasePage):
 
         run_bg(work, done)
 
+    def _confirm_clear(self, title, text):
+        """清空类破坏操作确认：默认「取消」，Esc / Enter 都不会误清空。"""
+        box = QMessageBox(QMessageBox.Warning, title, text, QMessageBox.NoButton, self)
+        action = box.addButton("清空", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is action
+
+    def _col_clear(self, key, name):
+        """清空单个平台栏的全部条目（只移除采集结果记录，不影响已下载的本地文件）。"""
+        if isinstance(common.COLLECTED, CollectedLibrary):
+            view = common.COLLECTED.view(key)
+            count, keys = len(view), set(view.keys)
+        else:
+            count = sum(1 for info in common.COLLECTED if self._column_key(info) == key)
+            keys = None
+        if not count:
+            self.app.toast("该栏暂无条目", "warning")
+            return
+        if not self._confirm_clear(
+                "清空本栏",
+                f"将清空「{name}」栏全部 {count} 个条目。\n\n"
+                "只移除采集结果中的记录，不影响已下载的本地文件，清空后无法恢复。"):
+            return
+        try:
+            if keys is not None:
+                common.COLLECTED.remove_keys(keys)
+            else:
+                common.COLLECTED[:] = [info for info in common.COLLECTED
+                                       if self._column_key(info) != key]
+            common.save_collected()
+        except Exception:
+            self.app.toast("清空失败，请稍后重试", "error")
+            return
+        self.refresh()
+        self.app.toast(f"已清空「{name}」栏 {count} 个条目", "success")
+
     def _clear(self):
-        if not common.COLLECTED:
+        count = len(common.COLLECTED)
+        if not count:
+            return
+        if not self._confirm_clear(
+                "全部清空",
+                f"将清空全部平台栏共 {count} 个条目。\n\n"
+                "只移除采集结果中的记录，不影响已下载的本地文件，清空后无法恢复。"):
             return
         try:
             common.COLLECTED.clear()
@@ -762,6 +818,7 @@ class InfoResultsPage(BasePage):
             self.app.toast("清空失败，请稍后重试", "error")
             return
         self.refresh()
+        self.app.toast(f"已清空全部 {count} 个条目", "success")
 
     # ==================== 删除条目 ====================
 
