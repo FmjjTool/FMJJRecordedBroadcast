@@ -33,21 +33,26 @@ _PLATFORMS = [
     ("douyin", "抖音"),
     ("weibo", "微博"),
     ("bilibili", "B站"),
+    ("qqgroup", "QQ群"),
 ]
 
 _HINTS = {
     "douyin": "需要抖音登录态。可查该账号全部公开粉丝群（含 VIP 群）与人数。",
     "weibo": "需要微博登录态。可查该账号全部公开粉丝群（群号 / 人数 / 上限）。",
     "bilibili": "需要 B站登录态。网页端只列出当前账号已加入的应援团，无法列出 UP 全部群。",
+    "qqgroup": "每个群需要各自的资料分享链接（手机 QQ → 群资料 → 分享 → 复制链接）；"
+               "群号不能代替链接。已预置 8 个官方群，粘贴链接后可刷新人数。",
 }
 
 _PLACEHOLDERS = {
     "douyin": "https://www.douyin.com/user/MS4wLjABAAAA...（或 sec_uid）",
     "weibo": "https://weibo.com/u/3056354293（或 UID）",
     "bilibili": "https://space.bilibili.com/1467772（或 UID）",
+    "qqgroup": "粘贴 QQ 群分享链接（qun.qq.com/universal-share/...）",
 }
 
 _COLUMNS = ["头像", "群名", "群ID", "群号", "人数", "变化", "进群条件"]
+_QQ_COLUMNS = ["头像", "群名", "群号", "人数", "变化", "状态", "分享链接"]
 
 _AVATAR_SIZE = 40
 
@@ -91,13 +96,17 @@ class FanGroupsPage(BasePage):
         self._prev_at = ""
         self._busy = False
         self._qq_dialog = None
+        self._qq_configured: set[str] = set()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
         top = QFrame()
-        top.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #d0d6df; border-radius: 8px; }")
+        top.setObjectName("fanGroupsTop")
+        top.setStyleSheet(
+            "QFrame#fanGroupsTop { background: palette(base); "
+            "border: 1px solid palette(shadow); border-radius: 8px; }")
         tv = QVBoxLayout(top)
         tv.setContentsMargins(10, 8, 10, 8)
         tv.setSpacing(6)
@@ -116,9 +125,10 @@ class FanGroupsPage(BasePage):
         self.input_edit.returnPressed.connect(self._do_query)
         row.addWidget(self.input_edit, 1)
 
-        self.qq_btn = QPushButton("QQ群订阅")
+        self.qq_btn = QPushButton("订阅列表")
         self.qq_btn.setToolTip(
-            "按 QQ 群资料分享链接订阅人数（免登录）；定时刷新在任务页设置")
+            "打开 QQ群订阅列表，支持批量导入分享链接、删除订阅和导出")
+        self.qq_btn.setVisible(False)
         self.qq_btn.clicked.connect(self._open_qq_groups)
         row.addWidget(self.qq_btn)
 
@@ -131,7 +141,7 @@ class FanGroupsPage(BasePage):
 
         row2 = QHBoxLayout()
         self.hint_label = QLabel(_HINTS["douyin"])
-        self.hint_label.setStyleSheet("color: #666;")
+        self.hint_label.setStyleSheet("color: palette(placeholder-text);")
         self.hint_label.setWordWrap(True)
 
         self.export_btn = QPushButton("导出 Excel")
@@ -160,9 +170,9 @@ class FanGroupsPage(BasePage):
         self.copy_all_btn.clicked.connect(self._copy_all)
         row2.addWidget(self.copy_all_btn)
 
-        clear_btn = QPushButton("清空")
-        clear_btn.clicked.connect(self._clear)
-        row2.addWidget(clear_btn)
+        self.clear_btn = QPushButton("清空")
+        self.clear_btn.clicked.connect(self._on_clear_clicked)
+        row2.addWidget(self.clear_btn)
         row2.addStretch(1)
         tv.addLayout(row2)
         tv.addWidget(self.hint_label)
@@ -202,7 +212,7 @@ class FanGroupsPage(BasePage):
         layout.addWidget(self.detail)
 
         self.status_label = QLabel("选平台 → 粘贴主页链接 → 查询")
-        self.status_label.setStyleSheet("color: #666;")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
 
     # ---------- 状态 ----------
@@ -220,12 +230,12 @@ class FanGroupsPage(BasePage):
             hints.append("账号名单在「账号与登录」勾选「粉丝群快照」管理")
         if qq_count:
             parts.append(f"{qq_count} 个 QQ 群")
-            hints.append("QQ 群名单在「QQ群订阅」管理")
+            hints.append("QQ 群名单在「QQ群 → 订阅列表」管理")
         self.task_label.setText(
             f"定时快照：已订阅 {'、'.join(parts)}（{'；'.join(hints)}；"
             "时间到「任务 → 粉丝群快照」设置）"
             if parts else
-            "定时快照：查询成功后账号自动加入订阅名单；QQ 群请在「QQ群订阅」配置分享链接")
+            "定时快照：查询成功后账号自动加入订阅名单；QQ 群请在平台下拉选「QQ群」后配置分享链接")
 
     def _open_qq_groups(self):
         if self._qq_dialog is None:
@@ -235,10 +245,63 @@ class FanGroupsPage(BasePage):
         self._qq_dialog.raise_()
         self._qq_dialog.activateWindow()
 
+    def _apply_columns(self):
+        if self._platform == "qqgroup":
+            headers = _QQ_COLUMNS
+            widths = ((2, 110), (3, 80), (4, 70), (5, 190), (6, 90))
+        else:
+            headers = _COLUMNS
+            widths = ((2, 170), (3, 85), (4, 80), (5, 55), (6, 150))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, _AVATAR_SIZE + 14)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for index, width in widths:
+            self.table.horizontalHeader().setSectionResizeMode(
+                index, QHeaderView.Interactive)
+            self.table.setColumnWidth(index, width)
+
+    def _load_qq_groups(self):
+        try:
+            from toolbox import qq_groups_service as qgs
+            rows = qgs.catalog()
+        except Exception as exc:  # noqa: BLE001 - 列表读取失败留在页面提示
+            self.status_label.setText(f"读取 QQ 群订阅失败：{exc}")
+            return
+        self._qq_configured = {row.no for row in rows if row.share_url}
+        self._owner_id = "all"
+        self._prev_at = ""
+        self._groups = []
+        self._changes = {}
+        for row in rows:
+            self._groups.append(fg.FanGroup(
+                platform="qqgroup", group_id=row.no, name=row.name,
+                member_count=row.member_count, group_no=row.no,
+                avatar=row.avatar, entry_limit=row.status))
+            if row.is_new:
+                self._changes[row.no] = None
+            elif row.change is not None:
+                self._changes[row.no] = row.change
+        self._fill_qq_table()
+        if self._groups:
+            self.table.selectRow(0)
+        self.export_btn.setEnabled(bool(self._groups))
+        self.dir_btn.setEnabled(bool(self._groups))
+        self.copy_all_btn.setEnabled(bool(self._groups))
+        self.avatar_btn.setEnabled(bool(self._groups))
+        self.status_label.setText(
+            f"QQ群：共 {len(rows)} 个，已配置分享链接 "
+            f"{len(self._qq_configured)} 个；粘贴分享链接可添加或更新")
+
+    def _refresh_qq_view(self):
+        if self._platform == "qqgroup" and not self._busy:
+            self._load_qq_groups()
+
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
         self.platform_box.setEnabled(not busy)
         self.query_btn.setEnabled(not busy)
+        self.qq_btn.setEnabled(not busy)
         self.export_btn.setEnabled((not busy) and bool(self._groups))
         self.avatar_btn.setEnabled((not busy) and bool(self._groups))
         if text:
@@ -252,10 +315,32 @@ class FanGroupsPage(BasePage):
 
     def _on_platform_change(self):
         self._platform = self.platform_box.currentData() or "douyin"
+        self._apply_columns()
         self.input_edit.setPlaceholderText(_PLACEHOLDERS[self._platform])
-        self.input_edit.setText(_default_owner_url(self._platform))
+        if self._platform == "qqgroup":
+            self.qq_btn.setVisible(True)
+            self.input_edit.clear()
+            self.avatar_btn.setText("刷新人数")
+            self.avatar_btn.setToolTip("刷新全部已配置分享链接的 QQ 群人数")
+            self.clear_btn.setText("重载列表")
+        else:
+            self.qq_btn.setVisible(False)
+            self.input_edit.setText(_default_owner_url(self._platform))
+            self.avatar_btn.setText("刷新头像")
+            self.avatar_btn.setToolTip(
+                "强制重新下载当前列表的群头像（查询时已有文件会自动复用）")
+            self.clear_btn.setText("清空")
         self.hint_label.setText(_HINTS[self._platform])
         self._clear()
+        if self._platform == "qqgroup":
+            self._load_qq_groups()
+
+    def _on_clear_clicked(self):
+        if self._platform == "qqgroup":
+            if not self._busy:
+                self._load_qq_groups()
+        else:
+            self._clear()
 
     # ---------- 查询 ----------
     def _do_query(self):
@@ -263,7 +348,12 @@ class FanGroupsPage(BasePage):
             return
         text = self.input_edit.text().strip()
         if not text:
-            self.status_label.setText("请先粘贴主页链接或输入 UID")
+            self.status_label.setText(
+                "请先粘贴 QQ 群分享链接" if self._platform == "qqgroup"
+                else "请先粘贴主页链接或输入 UID")
+            return
+        if self._platform == "qqgroup":
+            self._do_qq_query(text)
             return
         platform = self._platform
         self._set_busy(True, "正在查询...")
@@ -318,6 +408,36 @@ class FanGroupsPage(BasePage):
 
         run_bg(work, done)
 
+    def _do_qq_query(self, text: str):
+        from toolbox import qq_groups_service as qgs
+
+        self._set_busy(True, "正在读取 QQ 群分享链接...")
+
+        def done(row, err):
+            self._set_busy(False)
+            if err:
+                self.status_label.setText(f"保存失败：{err}")
+                self.app.toast(str(err)[:80], "warning")
+                return
+            self.input_edit.clear()
+            self._load_qq_groups()
+            if row.is_new:
+                self._changes[row.no] = None
+            elif row.change is not None:
+                self._changes[row.no] = row.change
+            for index, group in enumerate(self._groups):
+                if group.group_id == row.no:
+                    self.table.selectRow(index)
+                    break
+            self._fill_qq_table()
+            self._refresh_task_label()
+            self.status_label.setText(
+                f"已保存并订阅：{row.name}（{row.member_text} 人）；"
+                "可在「订阅列表」批量管理")
+            self.app.toast(f"已更新 {row.name}", "success")
+
+        run_bg(lambda: qgs.save_link(text), done)
+
     def _avatar_icon(self, g: fg.FanGroup) -> QIcon:
         path = g.avatar_path
         if path and os.path.exists(path):
@@ -343,6 +463,39 @@ class FanGroupsPage(BasePage):
             self.table.setItem(r, 4, _center(g.member_text))
             self.table.setItem(r, 5, _center(self._delta_text(g)))
             self.table.setItem(r, 6, _center(g.entry_limit or "-"))
+        self._sorter.apply()
+        self.export_btn.setEnabled(bool(self._groups))
+        self.copy_all_btn.setEnabled(bool(self._groups))
+        self.avatar_btn.setEnabled(bool(self._groups))
+
+    def _fill_qq_table(self):
+        self._sorter.attach(self._groups)
+        self.table.setRowCount(len(self._groups))
+        for r, g in enumerate(self._groups):
+            av = QTableWidgetItem()
+            av.setToolTip(g.avatar or "无头像")
+            self.table.setItem(r, 0, av)
+            name = QTableWidgetItem(g.name or "-")
+            name.setToolTip(g.name or "")
+            self.table.setItem(r, 1, name)
+            self.table.setItem(r, 2, _center(g.group_no or g.group_id))
+            member = _center(g.member_text)
+            if g.member_count is not None:
+                member.setData(table_sort.SORT_KEY_ROLE, g.member_count)
+            self.table.setItem(r, 3, member)
+            delta = _center(self._delta_text(g))
+            if g.group_id in self._changes and self._changes[g.group_id] is not None:
+                delta.setData(table_sort.SORT_KEY_ROLE, self._changes[g.group_id])
+            self.table.setItem(r, 4, delta)
+            status = _center(g.entry_limit or "-")
+            status.setToolTip(g.entry_limit or "")
+            self.table.setItem(r, 5, status)
+            configured = g.group_id in self._qq_configured
+            link = _center("已配置" if configured else "未配置")
+            link.setToolTip(
+                "分享链接已保存（不在表格显示链接内容）" if configured
+                else "请把该群的资料分享链接粘贴到上方输入框")
+            self.table.setItem(r, 6, link)
         self._sorter.apply()
         self.export_btn.setEnabled(bool(self._groups))
         self.copy_all_btn.setEnabled(bool(self._groups))
@@ -380,7 +533,8 @@ class FanGroupsPage(BasePage):
             cmp_at = f"（对比 {self._prev_at}）" if self._prev_at else ""
             lines.append(f"人数变化：{delta} {cmp_at}".strip())
         if g.entry_limit:
-            lines.append(f"进群条件：{g.entry_limit}")
+            label = "状态" if g.platform == "qqgroup" else "进群条件"
+            lines.append(f"{label}：{g.entry_limit}")
         if g.tags:
             lines.append(f"标签：{g.tags}")
         if g.owner_uid:
@@ -412,6 +566,9 @@ class FanGroupsPage(BasePage):
 
     # ---------- 头像 ----------
     def _do_refresh_avatars(self):
+        if self._platform == "qqgroup":
+            self._do_refresh_qq_counts()
+            return
         if not self._groups or self._busy:
             return
         platform, owner_id = self._platform, self._owner_id
@@ -439,6 +596,43 @@ class FanGroupsPage(BasePage):
             self.app.toast(f"群头像 {ok}/{total}", "success")
 
         run_bg(work, done)
+
+    def _do_refresh_qq_counts(self):
+        if not self._groups or self._busy:
+            return
+        if not self._qq_configured:
+            self.status_label.setText(
+                "还没有配置分享链接；请先粘贴至少一个 QQ 群分享链接。")
+            return
+        from toolbox import qq_groups_service as qgs
+
+        self._set_busy(True, "正在刷新 QQ 群人数...")
+
+        def progress(index, total, label):
+            post_to_main(self.status_label.setText,
+                         f"正在刷新 {index}/{total}：{label}")
+
+        def done(result, err):
+            self._set_busy(False)
+            if err:
+                self.status_label.setText(f"刷新失败：{err}")
+                self.app.toast(str(err)[:80], "warning")
+                return
+            self._load_qq_groups()
+            for row in result["results"]:
+                self._changes[row.no] = None if row.is_new else row.change
+            self._fill_qq_table()
+            errors = result["errors"]
+            if errors:
+                self.status_label.setText(
+                    f"已刷新 {result['ok']}/{result['total']} 个群，"
+                    f"失败 {len(errors)} 个：{errors[0][1]}")
+            else:
+                self.status_label.setText(
+                    f"QQ群人数已刷新：{result['ok']}/{result['total']}")
+            self.app.toast("QQ群人数已刷新", "success")
+
+        run_bg(lambda: qgs.refresh_all(progress=progress), done, owner=self)
 
     # ---------- 导出 / 复制 ----------
     def _do_export(self):
@@ -494,6 +688,7 @@ class FanGroupsPage(BasePage):
         self._groups = []
         self._changes = {}
         self._prev_at = ""
+        self._qq_configured = set()
         self.table.setRowCount(0)
         self.detail.clear()
         self.export_btn.setEnabled(False)

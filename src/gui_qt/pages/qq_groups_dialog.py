@@ -194,6 +194,9 @@ class QQGroupsDialog(QDialog):
         sync = getattr(self.page, "_refresh_task_label", None)
         if callable(sync):
             sync()
+        view = getattr(self.page, "_refresh_qq_view", None)
+        if callable(view):
+            view()
 
     def _apply_rows(self, rows: list[service.QQGroupRow]):
         self._rows = rows
