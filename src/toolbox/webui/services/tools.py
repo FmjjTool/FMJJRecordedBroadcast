@@ -117,6 +117,29 @@ class ToolService:
     def rename_preview(self, limit: int = 200) -> dict:
         return webui_tools.list_rename_preview(limit)
 
+    def start_rename_execute(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("缺少视频文件")
+        account = str(payload.get("account") or "").strip()
+        types = payload.get("types") or []
+        if not account:
+            raise ValueError("请选择直播账户")
+        if not isinstance(types, list) or not types:
+            raise ValueError("请至少选择一种直播类型")
+        if not payload.get("confirmed"):
+            raise ValueError("缺少改名确认")
+        danmu = bool(payload.get("danmu"))
+        platform = str(payload.get("platform") or "").strip()
+        title = str(payload.get("title") or "").strip()
+        job = self._jobs.submit(
+            "rename_execute",
+            lambda task: webui_tools.rename_execute(
+                rel, account, types, danmu, platform, title))
+        return {"job": job.id}
+
     def video_overview(self) -> dict:
         return webui_tools.video_overview()
 

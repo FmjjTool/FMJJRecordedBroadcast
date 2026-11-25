@@ -361,6 +361,7 @@ def rename_overview() -> dict:
     files = _scan_videos(root)
     standard = sum(1 for path in files
                    if is_standard_recording_name(path.name))
+    options = rename_options()
     return {
         "has_work_dir": bool(root),
         "work_dir": root.name if root else "",
@@ -368,9 +369,90 @@ def rename_overview() -> dict:
         "standard": standard,
         "nonstandard": len(files) - standard,
         "limited": len(files) >= _MAX_FILES,
-        "note": "只读预览：提取日期 / 时间 / 标题与平台；完整改名"
-                "（账户、类型、弹幕、版权）需桌面端「命名投稿」页。",
+        "accounts": options["accounts"],
+        "types": options["types"],
+        "platforms": options["platforms"],
+        "note": "改名为标准命名（日期_时间_账户_类型_版本_平台_标题），"
+                "附属文件同步改名；版权属性写入需桌面端。",
     }
+
+
+def rename_options() -> dict:
+    from toolbox.config_manager import get_rename_config
+
+    cfg = get_rename_config()
+    return {
+        "accounts": [str(item) for item in (cfg.account_list or []) if item],
+        "types": [str(item) for item in (cfg.live_types or []) if item],
+        "platforms": [str(item) for item in (cfg.platform_list or []) if item],
+    }
+
+
+def rename_execute(rel_path: str, account: str, types, danmu: bool,
+                   platform: str, title: str) -> dict:
+    """按桌面模板生成标准名并改名（单文件，含附属同步）。
+
+    与桌面 `_build_filename` 同构；校验非法字符与目标存在；版权属性
+    写入（NTFS 附加信息）不在 Web 端提供。
+    """
+    import time as _time
+
+    from toolbox.rename_engine import (extract_file_title, extract_time_str,
+                                       rebase_companions)
+    from toolbox.utils import clean_special_chars
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    account = str(account or "").strip()
+    if not account:
+        raise ValueError("请选择直播账户")
+    chosen = [str(item or "").strip() for item in (types or [])
+              if str(item or "").strip()]
+    if not chosen:
+        raise ValueError("请至少选择一种直播类型")
+    version = "有弹幕" if danmu else "无弹幕"
+    platform = str(platform or "").strip()
+    name = path.stem
+    date_match = re.search(r"(20\d{2}-\d{2}-\d{2})", name)
+    date = date_match.group(1) if date_match else "0000-00-00"
+    time_str = extract_time_str(name)
+    if time_str == "00-00-00":
+        time_str = _time.strftime("%H-%M-%S")
+    final_title = str(title or "").strip() or extract_file_title(name)
+    parts = [date, time_str, account, "+".join(chosen), version]
+    if platform:
+        parts.append(platform)
+    cleaned = clean_special_chars(final_title)
+    if cleaned:
+        parts.append(cleaned)
+    new_name = "_".join(parts) + path.suffix.lower()
+    if any(character in new_name for character in '<>:"/\\|?*'):
+        raise ValueError("新文件名包含非法字符，请检查账户/类型/标题")
+    dst = path.with_name(new_name)
+    if dst.resolve() == path.resolve():
+        return {"ok": True, "message": "文件名已一致，无需改名",
+                "new_name": new_name, "sidecars": 0, "skipped": 0}
+    if dst.exists():
+        raise ValueError(f"目标已存在：{new_name}")
+    for attempt in range(6):
+        try:
+            path.rename(dst)
+            break
+        except PermissionError:
+            if attempt == 5:
+                raise ValueError(
+                    "视频仍被占用，改名未执行（可能有程序正在预览/播放"
+                    "或同步该文件），请关闭后重试")
+            _time.sleep(0.3)
+    try:
+        sidecars, skipped = rebase_companions(str(path), str(dst))
+    except Exception:
+        sidecars, skipped = [], []
+    return {"ok": True, "message": f"已改名为 {new_name}",
+            "new_name": new_name,
+            "sidecars": len(sidecars or []), "skipped": len(skipped or [])}
 
 
 def list_rename_preview(limit: int = 200) -> dict:

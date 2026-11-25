@@ -123,6 +123,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tools/rename/preview", lambda req: tool_service.rename_preview(
         req.q_int("limit", 200, 1, 500)))
 
+    def start_rename_execute(req):
+        return tool_service.start_rename_execute(dict(req.json or {}))
+    server.post("/api/tools/rename/execute", start_rename_execute)
+
     server.get("/api/tools/video/overview",
                lambda req: tool_service.video_overview())
     server.get("/api/tools/video/sources", lambda req: tool_service.video_sources(

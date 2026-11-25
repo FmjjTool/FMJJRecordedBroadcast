@@ -1266,7 +1266,7 @@
       var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
       stats.appendChild(statCard('视频', fmtNumber(overview.files), '工作目录内'));
       stats.appendChild(statCard('已标准命名', fmtNumber(overview.standard), '日期_时间_前缀'));
-      stats.appendChild(statCard('待命名', fmtNumber(overview.nonstandard), '需桌面端确认'));
+      stats.appendChild(statCard('待命名', fmtNumber(overview.nonstandard), '点击右侧「命名」'));
       stats.appendChild(statCard('已列出', fmtNumber(preview.items.length),
         preview.truncated ? '仅前 300 个' : '全部'));
       host.appendChild(stats);
@@ -1276,6 +1276,132 @@
         host.appendChild(empty('工作目录下没有可预览的视频。'));
         return;
       }
+
+      var jobHost = h('div');
+      host.appendChild(jobHost);
+
+      function openRenameForm(item) {
+        var overlay = h('div', { class: 'preview-overlay' });
+        var box = h('div', { class: 'preview-box', style: 'max-width:520px' });
+        var caption = h('div', { class: 'preview-caption' },
+          h('span', { class: 'ellipsis' }, item.name),
+          h('button', { class: 'btn', type: 'button' }, '关闭'));
+        var closeBtn = caption.lastChild;
+        var form = h('div', { style: 'padding:14px; overflow:auto' });
+        var running = false;
+
+        var accountSel = h('select', { class: 'select', style: 'width:100%' });
+        (overview.accounts || []).forEach(function (name) {
+          accountSel.appendChild(h('option', { value: name }, name));
+        });
+        var typeBoxes = [];
+        var typeRow = h('div', { class: 'row-files', style: 'margin-top:4px' });
+        (overview.types || []).forEach(function (name) {
+          var box = h('input', { type: 'checkbox' });
+          typeBoxes.push({ name: name, box: box });
+          typeRow.appendChild(h('label', {
+            class: 'muted small', style: 'margin:2px 6px'
+          }, box, ' ' + name));
+        });
+        var danmuBox = h('input', { type: 'checkbox' });
+        var platformSel = h('select', { class: 'select' });
+        platformSel.appendChild(h('option', { value: '' }, '不标平台'));
+        (overview.platforms || []).forEach(function (name) {
+          platformSel.appendChild(h('option', { value: name }, name));
+        });
+        if (item.platform) {
+          var label = { douyin: '抖音', bilibili: 'B站', weibo: '微博',
+            kuaishou: '快手', xiaohongshu: '小红书' }[item.platform];
+          if (label) platformSel.value = label;
+        }
+        var titleEntry = h('input', {
+          class: 'input', style: 'width:100%',
+          value: item.title && item.title !== '无标题' ? item.title : ''
+        });
+        var resultLine = h('div', { class: 'muted small', style: 'margin-top:8px' });
+        var submit = h('button', { class: 'btn primary', type: 'button' }, '确认改名');
+
+        function chosenTypes() {
+          return typeBoxes.filter(function (entry) {
+            return entry.box.checked;
+          }).map(function (entry) { return entry.name; });
+        }
+
+        submit.addEventListener('click', function () {
+          if (running) return;
+          var account = accountSel.value;
+          var types = chosenTypes();
+          if (!account) { resultLine.textContent = '请选择直播账户'; return; }
+          if (!types.length) { resultLine.textContent = '请至少选择一种直播类型'; return; }
+          var title = titleEntry.value.trim();
+          var previewName = (item.date || '0000-00-00') + '_' + item.time + '_'
+            + account + '_' + types.join('+') + '_'
+            + (danmuBox.checked ? '有弹幕' : '无弹幕')
+            + (platformSel.value ? '_' + platformSel.value : '')
+            + (title ? '_' + title : '');
+          if (!window.confirm(
+            '确认改名\n\n' + item.name + ' →\n' + previewName + '\n\n'
+            + '附属文件会同步改名；版权属性写入需桌面端。\n确认继续？')) {
+            return;
+          }
+          running = true;
+          submit.disabled = true;
+          submit.textContent = '改名中…';
+          post('/api/tools/rename/execute', {
+            path: item.path, account: account, types: types,
+            danmu: danmuBox.checked, platform: platformSel.value,
+            title: title, confirmed: true
+          }).then(function (data) {
+            watchJob(jobHost, data.job, function (job) {
+              var message = job.result && job.result.message
+                ? job.result.message : '改名完成';
+              resultLine.textContent = message;
+              toast(message, 'success');
+              submit.textContent = '完成';
+              setTimeout(function () { overlay.remove(); renderRename(host); }, 900);
+            }, {
+              onSettled: function (job) {
+                if (job.status === 'error') {
+                  running = false;
+                  submit.disabled = false;
+                  submit.textContent = '确认改名';
+                  resultLine.textContent = job.error || '改名失败';
+                }
+              }
+            });
+          }).catch(function (error) {
+            running = false;
+            submit.disabled = false;
+            submit.textContent = '确认改名';
+            resultLine.textContent = '改名失败：' + error.message;
+          });
+        });
+
+        closeBtn.addEventListener('click', function () { overlay.remove(); });
+        overlay.addEventListener('click', function (event) {
+          if (event.target === overlay) overlay.remove();
+        });
+
+        form.appendChild(h('div', { class: 'muted small' }, '直播账户'));
+        form.appendChild(accountSel);
+        form.appendChild(h('div', { class: 'muted small', style: 'margin-top:10px' }, '直播类型（可多选）'));
+        form.appendChild(typeRow);
+        form.appendChild(h('label', { class: 'muted small', style: 'margin-top:10px; display:block' },
+          danmuBox, ' 有弹幕'));
+        form.appendChild(h('div', { class: 'muted small', style: 'margin-top:10px' }, '平台'));
+        form.appendChild(platformSel);
+        form.appendChild(h('div', { class: 'muted small', style: 'margin-top:10px' }, '标题（留空用提取标题）'));
+        form.appendChild(titleEntry);
+        form.appendChild(resultLine);
+        var footer = h('div', { style: 'margin-top:12px; text-align:right' });
+        footer.appendChild(submit);
+        form.appendChild(footer);
+        box.appendChild(caption);
+        box.appendChild(form);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+      }
+
       var columns = [
         { key: 'name', label: '文件名' },
         { key: 'platform', label: '平台' },
@@ -1297,8 +1423,19 @@
           }
         }, column.label + mark));
       });
+      head.appendChild(h('th', null, '操作'));
       var body = h('tbody');
       rows.forEach(function (item) {
+        var actionCell = h('td', null);
+        if (!item.standard) {
+          var renameBtn = h('button', { class: 'btn', type: 'button' }, '命名');
+          renameBtn.addEventListener('click', function () {
+            openRenameForm(item);
+          });
+          actionCell.appendChild(renameBtn);
+        } else {
+          actionCell.appendChild(h('span', { class: 'muted small' }, '—'));
+        }
         body.appendChild(h('tr', null,
           h('td', { class: 'ellipsis' }, item.name || '-'),
           h('td', null, item.platform ? platformLabel(item.platform) : '-'),
@@ -1307,12 +1444,13 @@
             item.time && item.time !== '00-00-00' ? item.time : '-'),
           h('td', { class: 'ellipsis', title: item.title || '' },
             item.title || '-'),
-          h('td', null, item.standard ? '是' : '否')));
+          h('td', null, item.standard ? '是' : '否'),
+          actionCell));
       });
       host.appendChild(h('div', { class: 'table-wrap' },
         h('table', { class: 'db-table' }, h('thead', null, head), body)));
       host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
-        preview.note || '只读预览，不会改名。'));
+        preview.note || '点击「命名」生成标准文件名。'));
     }).catch(function (error) {
       setError(host, error, function () { renderRename(host); });
     });
