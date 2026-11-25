@@ -168,6 +168,67 @@ class TCDocService:
         except module.TcdocWriteCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def bridge_overview(self) -> dict:
+        return _bridge_module().overview()
+
+    def bridge_preview(self, payload: dict) -> dict:
+        return _bridge_module().preview(payload)
+
+    def start_bridge_refresh(self) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        if not self._lock.acquire(blocking=False):
+            raise BusyError("已有采集 / 同步 / 刷新任务在运行")
+        module = _bridge_module()
+
+        def run(job):
+            try:
+                job.log("同步前刷新：采集平台资料 + 拉取腾讯文档…")
+                result = module.refresh(on_status=lambda text: job.log(str(text)))
+                if not result or not result.get("ok"):
+                    detail = "；".join(
+                        f"{label}：{'成功' if (result.get('steps') or {}).get(key, {}).get('ok') else '失败'}"
+                        for key, label in (("info", "信息获取"),
+                                           ("tracker", "网媒账号追踪"),
+                                           ("tcdoc", "拉取腾讯文档")))
+                    raise RuntimeError(
+                        f"{result.get('message') or '刷新未完成'}（{detail}）")
+                job.log("刷新完成，已允许上传")
+                return {"ok": True, "ts": result.get("ts") or "",
+                        "steps": result.get("steps") or {}}
+            finally:
+                self._lock.release()
+
+        try:
+            return self.jobs.submit("tcdoc_bridge_refresh", run)
+        except Exception:
+            self._lock.release()
+            raise
+
+    def start_bridge_upload(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        module = _bridge_module()
+        module.ensure_uploadable(payload)
+        job = self.jobs.submit(
+            "tcdoc_bridge_upload",
+            lambda task: self._bridge_upload_job(task, module, payload))
+        return {"job": job.id}
+
+    def _bridge_upload_job(self, job, module, payload: dict) -> dict:
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"正在上传到腾讯文档：{name}", fraction)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return module.upload(dict(payload), on_progress=progress,
+                                 is_cancelled=cancelled)
+        except module.BridgeCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
     def start_collect(self):
         return self._start("tcdoc_collect", "采集腾讯文档", tcdoc_job.collect_all)
 
@@ -196,6 +257,11 @@ class TCDocService:
 def _write_module():
     from toolbox import webui_tcdoc_write
     return webui_tcdoc_write
+
+
+def _bridge_module():
+    from toolbox import webui_tcdoc_bridge
+    return webui_tcdoc_bridge
 
 
 def _row_dict(row) -> dict:

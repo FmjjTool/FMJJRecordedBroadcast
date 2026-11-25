@@ -37,7 +37,8 @@
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
-    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '' }
+    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '',
+      bridge: { docKey: '', tabId: '', days: 30, accounts: 'default', dupMode: 'skip' } }
   };
   var routes = {
     home: { title: '工作台', load: renderHome },
@@ -7029,10 +7030,381 @@
           else if (state.tcdoc.tab === 'members') renderMembersTab();
           else if (state.tcdoc.tab === 'docs') renderDocsTab();
           else if (state.tcdoc.tab === 'writeback') renderWritebackTab();
-          else {
-            tabHost.appendChild(empty(
-              '中间层同步（选择目标表格、时间范围与账号后写入）仅在桌面端提供。'));
+          else renderBridgeTab();
+        }
+
+        function renderBridgeTab() {
+          var box = h('div');
+          tabHost.appendChild(box);
+          var bridgeState = state.tcdoc.bridge;
+          var selected = new Set();
+          var checkboxMap = {};
+          var lastPreview = null;
+          var busy = false;
+          var refreshInfo = h('div', { class: 'muted small', style: 'margin:6px 0' });
+          var gateBadge = h('span', { class: 'badge' }, '读取中…');
+          var summary = h('div', { class: 'muted small', style: 'margin:8px 0' });
+          var tableHost = h('div');
+          var jobHost2 = h('div');
+          var tableSel = h('select', { class: 'select grow' });
+          var daysSel = h('select', { class: 'select' });
+          var accSel = h('select', { class: 'select' },
+            h('option', { value: 'default' }, '腾讯表账号'),
+            h('option', { value: 'all' }, '全部账号'));
+          var dupSel = h('select', { class: 'select' },
+            h('option', { value: 'skip' }, '重复：跳过'),
+            h('option', { value: 'fill' }, '重复：只填空'),
+            h('option', { value: 'overwrite' }, '重复：覆盖自动字段'));
+          var compareBtn = h('button', { class: 'btn', type: 'button' }, '重新比对');
+          var refreshBtn = h('button', { class: 'btn', type: 'button' }, '同步前刷新');
+          var tsvBtn = h('button', { class: 'btn', type: 'button', disabled: true }, '查看 TSV');
+          var uploadBtn = h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '上传选中');
+          var selLabel = h('span', { class: 'muted small' }, '已选 0 条');
+          var targets = [];
+          var maxUpload = 50;
+
+          function targetNow() {
+            var key = tableSel.value;
+            return targets.filter(function (item) {
+              return item.doc_key + '|' + item.tab_id === key;
+            })[0] || null;
           }
+
+          function syncButtons() {
+            var target = targetNow();
+            var gate = lastPreview ? lastPreview.refresh.allowed : false;
+            var canUpload = !!(target && target.write_mode === 'append');
+            selLabel.textContent = '已选 ' + selected.size + ' 条';
+            tsvBtn.disabled = !lastPreview || !lastPreview.tsv;
+            uploadBtn.disabled = busy || !canUpload || !gate
+              || selected.size === 0 || selected.size > maxUpload;
+            uploadBtn.textContent = busy ? '处理中…'
+              : (canUpload ? '上传选中' : '该表只读');
+            compareBtn.disabled = busy;
+            refreshBtn.disabled = busy;
+          }
+
+          function applyTargetOptions() {
+            tableSel.replaceChildren();
+            if (!targets.length) {
+              tableSel.appendChild(h('option', { value: '' },
+                '本地没有已同步的表格（请先「表格同步」）'));
+              tableSel.disabled = true;
+              return;
+            }
+            tableSel.disabled = false;
+            targets.forEach(function (item) {
+              tableSel.appendChild(h('option', {
+                value: item.doc_key + '|' + item.tab_id
+              }, item.doc_name + ' / ' + item.tab_name
+                + '（' + item.n_rows + ' 行'
+                + (item.write_mode === 'append' ? '' : '，只读') + '）'));
+            });
+            var wanted = bridgeState.docKey + '|' + bridgeState.tabId;
+            if (wanted !== '|' && targets.some(function (item) {
+              return item.doc_key + '|' + item.tab_id === wanted;
+            })) {
+              tableSel.value = wanted;
+            }
+            updateTargetUi();
+          }
+
+          function updateTargetUi() {
+            var target = targetNow();
+            var isLives = !!target && target.profile === 'lives';
+            accSel.style.display = isLives ? 'none' : '';
+            dupSel.style.display = isLives ? '' : 'none';
+            accSel.value = bridgeState.accounts;
+            dupSel.value = bridgeState.dupMode;
+            if (target) {
+              bridgeState.docKey = target.doc_key;
+              bridgeState.tabId = target.tab_id;
+            }
+            syncButtons();
+          }
+
+          function failList(items) {
+            if (!items || !items.length) return null;
+            return h('div', { class: 'muted small', style: 'margin-top:6px' },
+              '未写入 ' + items.length + ' 条：'
+              + items.map(function (item) {
+                return (item.name || item.title || item.ref || '-')
+                  + '（' + (item.reason || item.error || '未知原因') + '）';
+              }).join('；'));
+          }
+
+          function runCompare() {
+            var target = targetNow();
+            if (!target) {
+              toast('请先选择表格', 'warning');
+              return;
+            }
+            busy = true;
+            syncButtons();
+            setLoading(tableHost, '正在比对本地数据与表格快照…');
+            summary.textContent = '';
+            post('/api/tcdoc/bridge/preview', {
+              doc_key: target.doc_key, tab_id: target.tab_id,
+              days: Number(daysSel.value) || 30,
+              accounts: accSel.value, dup_mode: dupSel.value
+            }).then(function (result) {
+              busy = false;
+              lastPreview = result;
+              selected.clear();
+              checkboxMap = {};
+              bridgeState.days = result.days;
+              bridgeState.dupMode = result.dup_mode || 'skip';
+              gateBadge.className = 'badge' + (result.refresh.allowed ? ' ok' : '');
+              gateBadge.textContent = result.refresh.allowed
+                ? '已刷新，可上传' : '需同步前刷新';
+              refreshInfo.textContent = result.refresh.allowed
+                ? '刷新门禁通过：' + (result.refresh.message || '')
+                : result.refresh.message || '数据未刷新，上传已锁定。';
+              var stats = result.stats || {};
+              summary.textContent = '待同步 ' + fmtNumber(result.total)
+                + ' 条 · 已同步 ' + fmtNumber(stats.synced_groups)
+                + ' · 本地 ' + fmtNumber(stats.local_items)
+                + ' 条' + (stats.filtered_partner
+                  ? ' · 合作方过滤 ' + fmtNumber(stats.filtered_partner) : '')
+                + (stats.with_images ? ' · 含图 ' + fmtNumber(stats.with_images)
+                  + ' 条（' + fmtNumber(stats.image_count) + ' 张）' : '')
+                + (stats.remote_rows ? ' · 表格 ' + fmtNumber(stats.remote_rows)
+                  + ' 行' : '')
+                + (stats.since ? ' · 范围自 ' + stats.since : '')
+                + (result.existing ? ' · 可追加图片 ' + result.existing + ' 条' : '');
+              if (!result.items.length) {
+                tableHost.replaceChildren(empty('当前范围没有待同步记录。'));
+                syncButtons();
+                return;
+              }
+              var head = h('tr', null,
+                h('th', { style: 'width:32px' }, ''),
+                h('th', null, '标题'), h('th', null, '时间'),
+                h('th', null, '账号'), h('th', null, '平台'),
+                h('th', null, '图片'), h('th', null, '标记'));
+              var body = h('tbody');
+              result.items.forEach(function (item) {
+                var check = h('input', {
+                  type: 'checkbox', checked: selected.has(item.key)
+                });
+                checkboxMap[item.key] = check;
+                check.addEventListener('change', function () {
+                  if (check.checked) selected.add(item.key);
+                  else selected.delete(item.key);
+                  syncButtons();
+                });
+                body.appendChild(h('tr', null,
+                  h('td', null, check),
+                  h('td', { title: item.title }, item.title || '-'),
+                  h('td', { class: 'muted small' }, item.time || '-'),
+                  h('td', { class: 'muted small' }, item.account || '-'),
+                  h('td', { class: 'muted small' }, item.platform || '-'),
+                  h('td', { class: 'num' }, item.images ? item.images : ''),
+                  h('td', { class: 'muted small' }, item.flag || '')));
+              });
+              tableHost.replaceChildren(
+                h('div', { class: 'table-wrap' },
+                  h('table', { class: 'db-table' },
+                    h('thead', null, head), body)),
+                h('div', { class: 'toolbar', style: 'margin-top:8px' },
+                  h('button', {
+                    class: 'btn', type: 'button',
+                    onclick: function () {
+                      selected.clear();
+                      result.items.slice(0, maxUpload).forEach(function (item) {
+                        selected.add(item.key);
+                      });
+                      Object.keys(checkboxMap).forEach(function (key) {
+                        checkboxMap[key].checked = selected.has(key);
+                      });
+                      syncButtons();
+                    }
+                  }, '全选前 ' + maxUpload + ' 条'),
+                  h('button', {
+                    class: 'btn ghost', type: 'button',
+                    onclick: function () {
+                      selected.clear();
+                      Object.keys(checkboxMap).forEach(function (key) {
+                        checkboxMap[key].checked = false;
+                      });
+                      syncButtons();
+                    }
+                  }, '清空选择'),
+                  result.note ? h('span', { class: 'muted small' },
+                    result.note) : null));
+              syncButtons();
+            }).catch(function (error) {
+              busy = false;
+              syncButtons();
+              setError(tableHost, error, runCompare);
+            });
+          }
+
+          uploadBtn.addEventListener('click', function () {
+            var target = targetNow();
+            if (!target || !lastPreview || !selected.size) return;
+            if (selected.size > maxUpload) {
+              toast('单次最多上传 ' + maxUpload + ' 条', 'warning');
+              return;
+            }
+            var withImages = lastPreview.items.filter(function (item) {
+              return selected.has(item.key) && item.images;
+            }).length;
+            var ok = window.confirm('确定向「' + target.doc_name + ' / '
+              + target.tab_name + '」新增 ' + selected.size + ' 条记录？\n'
+              + (withImages ? '其中 ' + withImages + ' 条带本地图片（含评论区图片）。\n' : '')
+              + '只新增 / 追加，不修改或删除已有行；写入后读回校验并记录推送历史。');
+            if (!ok) return;
+            busy = true;
+            syncButtons();
+            post('/api/tcdoc/bridge/upload', {
+              doc_key: target.doc_key, tab_id: target.tab_id,
+              days: Number(daysSel.value) || 30,
+              accounts: accSel.value, dup_mode: dupSel.value,
+              keys: Array.from(selected), confirmed: true
+            }).then(function (data) {
+              watchJob(jobHost2, data.job, function (job) {
+                busy = false;
+                var result = job.result || {};
+                toast(result.summary || '上传完成',
+                  result.failed_verify ? 'warning' : 'success');
+                if (jobHost2) {
+                  jobHost2.replaceChildren(h('div', {
+                    class: 'card', style: 'margin-top:8px'
+                  }, h('div', { class: 'muted small' }, result.summary || ''),
+                    failList(result.blocked || []),
+                    h('div', { class: 'muted small' },
+                      '新增 ' + fmtNumber(result.added) + ' 条'
+                      + (result.updated ? ' · 追加 ' + result.updated + ' 条' : '')
+                      + (result.skipped ? ' · 跳过 ' + result.skipped + ' 条' : '')
+                      + (result.missing_images
+                        ? ' · 缺图 ' + result.missing_images + ' 张' : ''))));
+                }
+                selected.clear();
+                runCompare();
+              }, {
+                cancelable: true,
+                onSettled: function (job) {
+                  busy = false;
+                  syncButtons();
+                  if (job.status === 'error') {
+                    toast('上传失败：' + (job.error || '未知错误'), 'error');
+                  }
+                }
+              });
+            }).catch(function (error) {
+              busy = false;
+              syncButtons();
+              toast('上传失败：' + error.message, 'error');
+            });
+          });
+
+          compareBtn.addEventListener('click', runCompare);
+          tableSel.addEventListener('change', function () {
+            updateTargetUi();
+          });
+          accSel.addEventListener('change', function () {
+            bridgeState.accounts = accSel.value;
+            runCompare();
+          });
+          dupSel.addEventListener('change', function () {
+            bridgeState.dupMode = dupSel.value;
+            runCompare();
+          });
+
+          refreshBtn.addEventListener('click', function () {
+            busy = true;
+            syncButtons();
+            post('/api/tcdoc/bridge/refresh', {}).then(function (data) {
+              watchJob(jobHost2, data.job, function (job) {
+                busy = false;
+                toast('同步前刷新完成，可以上传', 'success');
+                syncButtons();
+                runCompare();
+              }, {
+                onSettled: function (job) {
+                  busy = false;
+                  syncButtons();
+                  if (job.status !== 'done') {
+                    toast('刷新未完成：' + (job.error || '请查看任务日志'),
+                      'error');
+                  }
+                }
+              });
+            }).catch(function (error) {
+              busy = false;
+              syncButtons();
+              toast('刷新失败：' + error.message, 'error');
+            });
+          });
+
+          tsvBtn.addEventListener('click', function () {
+            if (!lastPreview || !lastPreview.tsv) return;
+            var area = h('textarea', {
+              class: 'textarea', rows: '12', readonly: true,
+              style: 'width:100%;font-family:monospace;font-size:12px'
+            });
+            area.value = lastPreview.tsv;
+            var overlay = h('div', { class: 'preview-overlay' });
+            overlay.addEventListener('click', function (event) {
+              if (event.target === overlay) overlay.remove();
+            });
+            overlay.appendChild(h('div', { class: 'preview-box' },
+              h('div', { class: 'preview-caption' },
+                h('span', null, '待同步 TSV（全选后 Ctrl+C 复制，不含表头）'),
+                h('button', {
+                  class: 'btn mini', type: 'button',
+                  onclick: function () { overlay.remove(); }
+                }, '关闭')),
+              h('div', { class: 'preview-body' }, area)));
+            document.body.appendChild(overlay);
+            area.focus();
+            area.select();
+          });
+
+          box.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+            h('div', { class: 'toolbar' },
+              h('span', { class: 'muted small' }, '表格'), tableSel,
+              h('span', { class: 'muted small' }, '时间'), daysSel,
+              accSel, dupSel, compareBtn),
+            h('div', { class: 'toolbar', style: 'margin-top:8px' },
+              refreshBtn, gateBadge, tsvBtn, uploadBtn,
+              h('span', { style: 'flex:1' }), selLabel),
+            refreshInfo,
+            h('div', { class: 'muted small', style: 'margin-top:4px' },
+              '比对只读本地快照与本地采集数据；批量上传只限「官方动态」「直播记录」且仅新增，'
+              + '需先「同步前刷新」（或桌面端免校对模式），单次最多 50 条。')));
+          box.appendChild(summary);
+          box.appendChild(tableHost);
+          box.appendChild(jobHost2);
+
+          api('/api/tcdoc/bridge').then(function (data) {
+            targets = data.targets || [];
+            maxUpload = data.max_upload || 50;
+            (data.days || []).forEach(function (item) {
+              daysSel.appendChild(h('option', {
+                value: item.value, selected: item.value === bridgeState.days
+              }, item.label));
+            });
+            if (!daysSel.value) daysSel.value = String(bridgeState.days);
+            gateBadge.className = 'badge' + (data.refresh.allowed ? ' ok' : '');
+            gateBadge.textContent = data.refresh.allowed
+              ? '已刷新，可上传' : '需同步前刷新';
+            refreshInfo.textContent = (data.refresh.allowed
+              ? '刷新门禁通过：' : '') + (data.refresh.message || '')
+              + (data.bypass ? '（桌面端已开启免校对模式）' : '');
+            applyTargetOptions();
+            if (targets.length) runCompare();
+            else {
+              tableHost.replaceChildren(empty(
+                '本地还没有已同步的表格。请先在上方「表格同步」拉取，'
+                + '或到桌面端「腾讯文档」完成同步。'));
+            }
+          }).catch(function (error) {
+            setError(tableHost, error, renderBridgeTab);
+          });
         }
 
         function renderSyncTab() {

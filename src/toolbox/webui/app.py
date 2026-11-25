@@ -450,6 +450,21 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.start_writeback_upload(dict(req.json or {}))
     server.post("/api/tcdoc/writeback/upload", start_tcdoc_writeback)
 
+    server.get("/api/tcdoc/bridge", lambda req: tcdoc.bridge_overview())
+
+    def tcdoc_bridge_preview(req):
+        return tcdoc.bridge_preview(dict(req.json or {}))
+    server.post("/api/tcdoc/bridge/preview", tcdoc_bridge_preview)
+
+    def start_tcdoc_bridge_refresh(req):
+        job = tcdoc.start_bridge_refresh()
+        return {"job": job.id}
+    server.post("/api/tcdoc/bridge/refresh", start_tcdoc_bridge_refresh)
+
+    def start_tcdoc_bridge_upload(req):
+        return tcdoc.start_bridge_upload(dict(req.json or {}))
+    server.post("/api/tcdoc/bridge/upload", start_tcdoc_bridge_upload)
+
     def get_job(req, job_id):
         job = jobs.get(job_id)
         if job is None:
