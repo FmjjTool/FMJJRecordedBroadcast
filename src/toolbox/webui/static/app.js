@@ -585,7 +585,8 @@
       h('option', { value: 'missing' }, '该下未下'),
       h('option', { value: 'partial' }, '部分下载'),
       h('option', { value: 'ok' }, '已完整'),
-      h('option', { value: 'text' }, '纯文本'));
+      h('option', { value: 'text' }, '纯文本'),
+      h('option', { value: 'nodl' }, '不可下载'));
     statusSel.value = state.assets.status || '';
     var dlBtn = h('button', { class: 'btn primary', type: 'button' }, '下载选中');
     var selectAll = h('input', { type: 'checkbox', title: '全选本页' });
@@ -595,7 +596,8 @@
     var running = false;
     var STATUS_BADGE = {
       ok: ['已完整', 'ok'], partial: ['部分下载', 'warn'],
-      missing: ['该下未下', 'danger'], text: ['纯文本', '']
+      missing: ['该下未下', 'danger'], text: ['纯文本', ''],
+      nodl: ['不可下载', 'warn']
     };
 
     function updateButtons() {
@@ -606,16 +608,15 @@
 
     function load() {
       setLoading(tableHost, '正在读取已获取资源…');
-      var useStatus = !!state.assets.status;
-      var url = (useStatus ? '/api/assets/entries-status' : '/api/assets/entries')
-        + '?page=' + state.assets.page + '&page_size=20&q='
-        + encodeURIComponent(state.assets.q) + '&platform=' + encodeURIComponent(state.assets.platform)
-        + (useStatus ? '&status=' + encodeURIComponent(state.assets.status) : '');
+      var url = '/api/assets/entries-status?page=' + state.assets.page
+        + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
+        + '&platform=' + encodeURIComponent(state.assets.platform)
+        + '&status=' + encodeURIComponent(state.assets.status || '');
       api(url)
         .then(function (data) {
-          if (useStatus && data.counts) {
+          if (data.counts) {
             var parts = [];
-            ['ok', 'partial', 'missing', 'text'].forEach(function (key) {
+            ['ok', 'partial', 'missing', 'text', 'nodl'].forEach(function (key) {
               if (data.counts[key]) {
                 parts.push((data.labels[key] || key) + ' ' + data.counts[key]);
               }
@@ -661,6 +662,29 @@
                 (item.n_img && item.n_vid ? ' / ' : '') +
                 (item.n_vid ? '视 ' + item.n_vid : '')
               : '';
+            var noDlBtn = h('button', {
+              class: 'btn', type: 'button', title: item.no_dl
+                ? '解除后重新计入媒体完整度并可下载'
+                : '标记后不计入「该下未下」，下载时跳过'
+            }, item.no_dl ? '解除' : '标记');
+            noDlBtn.addEventListener('click', function () {
+              if (!window.confirm(item.no_dl
+                ? '解除「' + (item.title || '该条目') + '」的不可下载标记？'
+                : '将「' + (item.title || '该条目') + '」标记为不可下载？\n'
+                  + '标记后不计入「该下未下」，下载时会被跳过。')) {
+                return;
+              }
+              noDlBtn.disabled = true;
+              post('/api/assets/no-dl', {
+                path: item.path, marked: !item.no_dl
+              }).then(function (result) {
+                toast((result && result.message) || '已保存', 'success');
+                load();
+              }).catch(function (error) {
+                noDlBtn.disabled = false;
+                toast('操作失败：' + error.message, 'error');
+              });
+            });
             body.appendChild(h('tr', null,
               h('td', null, check),
               h('td', { class: 'ellipsis' }, title),
@@ -671,7 +695,8 @@
               h('td', null, fmtTime(item.publish_time)),
               h('td', { class: 'num' }, fmtNumber(item.play)),
               h('td', { class: 'num' }, fmtNumber(item.like)),
-              h('td', { class: 'ellipsis' }, item.file || '-')));
+              h('td', { class: 'ellipsis' }, item.file || '-'),
+              h('td', null, noDlBtn)));
           });
           tableHost.replaceChildren();
           if (data.truncated) {
@@ -685,7 +710,8 @@
                 h('th', null, '标题'), h('th', null, '作者'), h('th', null, '平台'),
                 h('th', null, '状态'), h('th', null, '本地媒体'),
                 h('th', null, '发布时间'), h('th', { class: 'num' }, '播放'),
-                h('th', { class: 'num' }, '点赞'), h('th', null, '导出文件'))),
+                h('th', { class: 'num' }, '点赞'), h('th', null, '导出文件'),
+                h('th', null, '操作'))),
               body)));
           selectAll.checked = data.items.length > 0
             && data.items.every(function (item) { return selected.has(item.path); });
@@ -699,11 +725,10 @@
     }
 
     selectAll.addEventListener('change', function () {
-      var useStatus = !!state.assets.status;
-      var url = (useStatus ? '/api/assets/entries-status' : '/api/assets/entries')
-        + '?page=' + state.assets.page + '&page_size=20&q='
-        + encodeURIComponent(state.assets.q) + '&platform=' + encodeURIComponent(state.assets.platform)
-        + (useStatus ? '&status=' + encodeURIComponent(state.assets.status) : '');
+      var url = '/api/assets/entries-status?page=' + state.assets.page
+        + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
+        + '&platform=' + encodeURIComponent(state.assets.platform)
+        + '&status=' + encodeURIComponent(state.assets.status || '');
       api(url)
         .then(function (data) {
           data.items.forEach(function (item) {

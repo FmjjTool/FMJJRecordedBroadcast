@@ -12,7 +12,7 @@ from toolbox import webui_assets_dl
 from toolbox.asset_query import AssetQueryService
 from toolbox.webui.jobs import JobCancelled
 
-_STATUS_KEYS = ("", "missing", "partial", "ok", "text")
+_STATUS_KEYS = ("", "missing", "partial", "ok", "text", "nodl")
 
 
 class AssetService:
@@ -44,6 +44,13 @@ class AssetService:
             raise ValueError("未知状态筛选")
         return webui_assets_dl.entries_with_status(
             page, page_size, keyword, platform, status)
+
+    def set_no_dl(self, payload: dict) -> dict:
+        path = str(payload.get("path") or "").strip()
+        if not path:
+            raise ValueError("缺少条目路径")
+        return webui_assets_dl.set_entry_no_dl(path,
+                                               bool(payload.get("marked")))
 
     def preview_local(self, category: str, rel_dir: str, name: str):
         """返回 (bytes, mime)；只读预览，详见 L3 `preview_local`。"""

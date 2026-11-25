@@ -32,6 +32,7 @@ _MAX_TASK_ITEMS = 50
 _QUALITY_LABELS = ("最高画质", "8K", "杜比视界", "HDR", "4K",
                    "1080P60", "1080P", "720P", "480P")
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+_NO_DL_FILE = "no_download_keys.json"
 
 
 class DownloadCancelled(Exception):
@@ -101,6 +102,7 @@ def download_entries(paths, quality: str = "最高画质", on_progress=None,
     base_dir = str(root)
     results = []
     ok = 0
+    flagged = _flagged_no_dl()
     for index, rel in enumerate(raw_paths, 1):
         if is_cancelled and is_cancelled():
             raise DownloadCancelled("任务已取消")
@@ -108,10 +110,14 @@ def download_entries(paths, quality: str = "最高画质", on_progress=None,
         try:
             entry = _load_entry(Path(root), rel)
             title = entry["title"] or title
-            stats = _download_one(entry, quality, _is_direct_media_url)
-            results.append({"file": rel, "title": title, "ok": True,
-                            **stats})
-            ok += 1
+            if _entry_key(entry) in flagged:
+                results.append({"file": rel, "title": title, "ok": False,
+                                "error": "已标记不可下载；如需下载请先解除标记"})
+            else:
+                stats = _download_one(entry, quality, _is_direct_media_url)
+                results.append({"file": rel, "title": title, "ok": True,
+                                **stats})
+                ok += 1
         except DownloadCancelled:
             raise
         except Exception as exc:
@@ -188,9 +194,77 @@ def _download_images(entry: dict) -> dict:
 _MEDIA_CACHE_TTL = 60
 _STATUS_LABELS = {
     "ok": "完整", "partial": "部分", "missing": "该下未下",
-    "text": "纯文本",
+    "text": "纯文本", "nodl": "不可下载",
 }
 _media_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _no_dl_store_path() -> Path:
+    from toolbox.config_manager import get_config_dir
+    return get_config_dir() / _NO_DL_FILE
+
+
+def _load_no_dl() -> dict:
+    try:
+        data = json.loads(_no_dl_store_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {
+                "auto": set(data.get("auto") or []),
+                "manual": set(data.get("manual") or []),
+                "allow": set(data.get("allow") or []),
+            }
+    except Exception:
+        pass
+    return {"auto": set(), "manual": set(), "allow": set()}
+
+
+def _save_no_dl(store) -> None:
+    path = _no_dl_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {key: sorted(values) for key, values in store.items()},
+        ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _flagged_no_dl() -> set[str]:
+    store = _load_no_dl()
+    return set(store["auto"]) | set(store["manual"])
+
+
+def _entry_key(row_or_entry: dict) -> str:
+    """条目标识：与桌面 `_dl_key` 一致（绝对 file_path → video_id → title）。"""
+    file_path = str(row_or_entry.get("file_path") or "")
+    if not file_path and row_or_entry.get("path"):
+        root = get_export_subdir("video_data")
+        try:
+            candidate = (root / str(row_or_entry["path"])).resolve()
+            candidate.relative_to(root.resolve())
+            file_path = str(candidate)
+        except (ValueError, OSError):
+            file_path = ""
+    return file_path or str(row_or_entry.get("video_id") or
+                            row_or_entry.get("title") or "")
+
+
+def set_entry_no_dl(rel_path: str, marked: bool) -> dict:
+    """标记 / 解除条目的「不可下载」；与桌面共用 no_download_keys.json。"""
+    root = get_export_subdir("video_data")
+    entry = _load_entry(root, rel_path)
+    key = _entry_key(entry)
+    if not key:
+        raise ValueError("条目缺少可识别标识，无法标记")
+    store = _load_no_dl()
+    if marked:
+        store["manual"].add(key)
+        store["auto"].discard(key)
+        store["allow"].discard(key)
+    else:
+        store["auto"].discard(key)
+        store["manual"].discard(key)
+        store["allow"].add(key)
+    _save_no_dl(store)
+    return {"ok": True, "marked": bool(marked),
+            "message": "已标记为不可下载" if marked else "已解除不可下载标记"}
 
 
 def entries_with_status(page: int = 1, page_size: int = 20,
@@ -198,14 +272,18 @@ def entries_with_status(page: int = 1, page_size: int = 20,
                         status: str = "") -> dict:
     """条目列表 + 媒体完整度状态（对齐桌面 `_match_media` + `_item_media_complete`）。
 
-    status 筛选：'' 全部 / missing 该下未下 / partial 部分 / ok 完整 / text 纯文本。
+    status 筛选：'' 全部 / missing 该下未下 / partial 部分 / ok 完整 /
+    text 纯文本 / nodl 不可下载。
     """
     service = asset_query.AssetQueryService()
     base = service.entries(1, 500, keyword=keyword, platform=platform)
     rows = base.get("items") or []
     matched = _match_media(rows)
+    flagged = _flagged_no_dl()
     for row, media in zip(rows, matched):
-        row["status"] = _entry_status(row, media)
+        no_dl = _entry_key(row) in flagged
+        row["no_dl"] = bool(no_dl)
+        row["status"] = "nodl" if no_dl else _entry_status(row, media)
         row["n_img"] = sum(1 for m in media if m["type"] == "image")
         row["n_vid"] = sum(1 for m in media if m["type"] == "video")
     if status:

@@ -88,6 +88,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return assets.start_download(dict(req.json or {}))
     server.post("/api/assets/download", start_assets_download)
 
+    def set_asset_no_dl(req):
+        return assets.set_no_dl(dict(req.json or {}))
+    server.post("/api/assets/no-dl", set_asset_no_dl)
+
     server.get("/api/assets/offline/events", lambda req: offline.overview())
 
     def start_offline_search(req):
