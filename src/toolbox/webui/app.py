@@ -244,6 +244,18 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return BytesResponse(path.read_bytes(), mime)
     server.get("/api/image-sorter/preview", image_sorter_preview)
 
+    def image_sorter_transfer(req):
+        return image_sorter.transfer(dict(req.json or {}))
+    server.post("/api/image-sorter/transfer", image_sorter_transfer)
+
+    def image_sorter_delete(req):
+        return image_sorter.delete(dict(req.json or {}))
+    server.post("/api/image-sorter/delete", image_sorter_delete)
+
+    def image_sorter_rename(req):
+        return image_sorter.rename(dict(req.json or {}))
+    server.post("/api/image-sorter/rename", image_sorter_rename)
+
     server.get("/api/rename-batch", lambda req: rename_batch.overview())
 
     def rename_batch_preview(req):

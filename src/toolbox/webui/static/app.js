@@ -1438,6 +1438,10 @@
     api('/api/image-sorter').then(function (data) {
       root.replaceChildren();
       var folders = data.folders || [];
+      var targets = data.targets || [];
+      var canWrite = !!data.can_write;
+      var workDir = data.work_dir || '';
+      var selected = new Set();
       var kindSel = h('select', { class: 'select' });
       [['all', '全部'], ['image', '图片'], ['video', '视频']]
         .forEach(function (pair) {
@@ -1457,7 +1461,98 @@
         class: 'muted small', style: 'margin:8px 0'
       });
       var listHost = h('div');
+      var failHost = h('div');
       var timer = null;
+
+      var targetSel = h('select', { class: 'select' });
+      if (!targets.length) {
+        targetSel.appendChild(h('option', { value: '' },
+          canWrite ? '工作目录下暂无子文件夹' : '未设置分类工作目录'));
+        targetSel.disabled = true;
+      } else {
+        targets.forEach(function (item) {
+          targetSel.appendChild(h('option', { value: item.name }, item.name));
+        });
+      }
+      var moveBtn = h('button', { class: 'btn', type: 'button', disabled: true }, '移动');
+      var copyBtn = h('button', { class: 'btn', type: 'button', disabled: true }, '复制');
+      var renameBtn = h('button', { class: 'btn', type: 'button', disabled: true }, '重命名');
+      var deleteBtn = h('button', {
+        class: 'btn danger', type: 'button', disabled: true
+      }, '移入删除');
+      var selectedLabel = h('span', { class: 'muted small' }, '已选 0 个');
+
+      function syncWrite() {
+        selectedLabel.textContent = '已选 ' + selected.size + ' 个';
+        var ready = canWrite && targets.length > 0;
+        moveBtn.disabled = !ready || selected.size === 0;
+        copyBtn.disabled = !ready || selected.size === 0;
+        deleteBtn.disabled = !ready || selected.size === 0;
+        renameBtn.disabled = selected.size !== 1;
+      }
+
+      function runWrite(path, body) {
+        post(path, body).then(function (result) {
+          toast(result.summary || '已完成', 'success');
+          if (result.failed && result.failed.length) {
+            failHost.replaceChildren(h('div', {
+              class: 'muted small', style: 'margin-top:6px'
+            }, '未处理 ' + result.failed.length + ' 个：'
+              + result.failed.map(function (item) {
+                return (item.name || item.ref) + '（' + item.reason + '）';
+              }).join('；')));
+          } else {
+            failHost.replaceChildren();
+          }
+          selected.clear();
+          load();
+        }).catch(function (error) {
+          toast('操作失败：' + error.message, 'error');
+        });
+      }
+
+      moveBtn.addEventListener('click', function () {
+        if (!selected.size || !targetSel.value) return;
+        var ok = window.confirm('确定把选中的 ' + selected.size + ' 个文件移动到「'
+          + targetSel.value + '」？\n源文件会离开当前文件夹，可在分类工作目录找回。');
+        if (!ok) return;
+        runWrite('/api/image-sorter/transfer', {
+          refs: Array.from(selected), mode: 'move',
+          target: targetSel.value, confirmed: true
+        });
+      });
+      copyBtn.addEventListener('click', function () {
+        if (!selected.size || !targetSel.value) return;
+        var ok = window.confirm('确定把选中的 ' + selected.size + ' 个文件复制到「'
+          + targetSel.value + '」？\n源文件保留在原处；同名文件会自动加 (1)(2) 后缀。');
+        if (!ok) return;
+        runWrite('/api/image-sorter/transfer', {
+          refs: Array.from(selected), mode: 'copy',
+          target: targetSel.value, confirmed: true
+        });
+      });
+      deleteBtn.addEventListener('click', function () {
+        if (!selected.size) return;
+        var ok = window.confirm('确定把选中的 ' + selected.size
+          + ' 个文件移入「删除」文件夹？\n不会永久删除，可在分类工作目录的「删除」文件夹找回。');
+        if (!ok) return;
+        runWrite('/api/image-sorter/delete', {
+          refs: Array.from(selected), confirmed: true
+        });
+      });
+      renameBtn.addEventListener('click', function () {
+        if (selected.size !== 1) {
+          toast('请先勾选 1 个文件', 'warning');
+          return;
+        }
+        var ref = Array.from(selected)[0];
+        var base = ref.split(':').slice(1).join(':').split('/').pop();
+        var name = window.prompt('新文件名（不填扩展名则沿用原扩展名）', base);
+        if (!name || !name.trim() || name.trim() === base) return;
+        runWrite('/api/image-sorter/rename', {
+          ref: ref, name: name.trim(), confirmed: true
+        });
+      });
 
       function previewItem(item) {
         var overlay = h('div', { class: 'preview-overlay' });
@@ -1491,17 +1586,31 @@
               + ' 个文件（图片 ' + fmtNumber(result.images) + ' / 视频 '
               + fmtNumber(result.videos) + '）· ' + fmtBytes(result.bytes)
               + ' · 显示 ' + fmtNumber(result.shown)
-              + (result.truncated ? '（结果已截断，可缩小范围）' : '')
-              + ' · 只读，写操作在桌面端';
+              + (result.truncated ? '（结果已截断，可缩小范围）' : '');
             if (!result.items.length) {
               listHost.replaceChildren(empty(
                 folders.length
                   ? '没有符合条件的文件。'
                   : '未设置源文件夹。桌面端「媒体筛选」里添加后刷新。'));
+              syncWrite();
               return;
             }
+            var known = new Set(result.items.map(function (item) {
+              return item.ref;
+            }));
+            Array.from(selected).forEach(function (ref) {
+              if (!known.has(ref)) selected.delete(ref);
+            });
             var list = h('div', { class: 'artifact-list' });
             result.items.forEach(function (item) {
+              var check = h('input', {
+                type: 'checkbox', checked: selected.has(item.ref)
+              });
+              check.addEventListener('change', function () {
+                if (check.checked) selected.add(item.ref);
+                else selected.delete(item.ref);
+                syncWrite();
+              });
               var actions = [];
               if (item.is_image) {
                 actions.push(h('button', {
@@ -1510,6 +1619,7 @@
                 }, '预览'));
               }
               list.appendChild(h('div', { class: 'artifact-row' },
+                h('span', { style: 'width:22px' }, check),
                 h('span', {
                   class: 'badge' + (item.is_image ? ' ok' : '')
                 }, item.is_image ? '图片' : '视频'),
@@ -1523,6 +1633,7 @@
                 actions));
             });
             listHost.replaceChildren(list);
+            syncWrite();
           }).catch(function (error) {
             setError(listHost, error, load);
           });
@@ -1551,20 +1662,15 @@
             : '未设置（桌面端「媒体筛选」添加）'))));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '移动'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '复制'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '重命名'),
-          h('button', {
-            class: 'btn danger', type: 'button', disabled: true
-          }, '删除'),
-          h('span', { class: 'muted small' },
-            '移动 / 复制 / 改名 / 删除、MD5 过滤与去重在桌面端'))));
+          h('span', { class: 'muted small' }, '目标文件夹'), targetSel,
+          moveBtn, copyBtn, renameBtn, deleteBtn,
+          h('span', { style: 'flex:1' }), selectedLabel),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          canWrite
+            ? '分类工作目录：' + workDir
+              + '　·　删除 = 移入「删除」文件夹（可找回）；单次最多 200 个文件；MD5 去重仍在桌面端。'
+            : '复制 / 移动 / 删除需要先在桌面端「媒体筛选」设置分类工作目录；重命名可直接使用。'),
+        failHost));
       root.appendChild(stats);
       root.appendChild(listHost);
       load();
