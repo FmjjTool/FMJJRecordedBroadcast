@@ -177,7 +177,16 @@ def uninstall_task(task_id: str, confirmed: bool = False) -> dict:
 
 
 def system_info() -> dict:
+    from toolbox import webui_tunnel
+
     cfg = load_convert_config()
+    tunnel_cfg = webui_tunnel.get_tunnel().config()
+    mode = tunnel_cfg["mode"]
+    clients = []
+    for key, path in webui_tunnel.get_tunnel().detect().items():
+        meta = webui_tunnel.TUNNELS.get(key, {})
+        clients.append({"key": key, "name": meta.get("name") or key,
+                        "ready": bool(path)})
     return {
         "version": APP_VERSION,
         "app_root": get_app_root().name,
@@ -187,10 +196,16 @@ def system_info() -> dict:
         "webui": {
             "port": int(cfg.get("webui_port") or 8765),
             "lan": bool(cfg.get("webui_lan")),
-            "tunnel": str(cfg.get("webui_tunnel") or "none"),
+            "tunnel": mode,
+            "tunnel_name": (webui_tunnel.TUNNELS.get(mode, {})
+                            .get("name") or "未启用"),
+            "tunnel_public_url": tunnel_cfg.get("frp_public_url") or "",
+            "tunnel_frp_config": bool(tunnel_cfg.get("frp_config")),
+            "tunnel_clients": clients,
         },
         "note": "目录与主题可在本页修改，与桌面端共用配置；"
-                "依赖组件由桌面端管理，Web 端不提供安装或卸载。",
+                "依赖组件由桌面端管理，Web 端不提供安装或卸载。"
+                "公网隧道由桌面端启动 / 停止，本轮只读展示。",
     }
 
 

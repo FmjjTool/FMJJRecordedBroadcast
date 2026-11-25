@@ -3287,15 +3287,33 @@
       var webui = h('div', { class: 'card', style: 'margin-bottom:12px' });
       webui.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, 'WebUI'));
       var cfg = data.webui || {};
-      [
+      var tunnelRows = [
         ['端口', cfg.port],
         ['局域网访问', cfg.lan ? '已开启' : '关闭'],
-        ['公网隧道', cfg.tunnel || 'none']
-      ].forEach(function (pair) {
+        ['公网隧道', cfg.tunnel_name || cfg.tunnel || '未启用']
+      ];
+      if (cfg.tunnel_public_url) {
+        tunnelRows.push(['公网地址', cfg.tunnel_public_url]);
+      }
+      tunnelRows.forEach(function (pair) {
         webui.appendChild(h('div', { class: 'kv' },
           h('span', { class: 'muted' }, pair[0]),
           h('span', null, pair[1])));
       });
+      var clients = cfg.tunnel_clients || [];
+      if (clients.length) {
+        var clientRow = h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '隧道客户端：');
+        clients.forEach(function (item) {
+          clientRow.appendChild(h('span', {
+            class: 'badge ' + (item.ready ? 'ok' : 'warn'),
+            style: 'margin-left:6px'
+          }, item.name + (item.ready ? ' 已安装' : ' 未安装')));
+        });
+        webui.appendChild(clientRow);
+      }
+      webui.appendChild(h('div', { class: 'muted small', style: 'margin-top:6px' },
+        '隧道由桌面端「WebUI 公网访问」启动 / 停止，本页只读展示。'));
       host.appendChild(webui);
 
       var dirs = h('div', { class: 'card', style: 'margin-bottom:12px' });
