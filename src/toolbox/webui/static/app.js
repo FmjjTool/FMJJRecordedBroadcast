@@ -742,8 +742,9 @@
     });
     root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
       h('div', { class: 'muted small' },
-        '浏览桌面端导出的本地产物：评论区长图与原始数据、B站资源、公众号文章、抖音表情包；'
-        + '抓取与导出仍在桌面端。')));
+        '视频评论区与公众号解析可直接抓取并导出到本地产物目录；'
+        + 'B站资源（表情包 / 装扮 / UP 信息）与抖音表情包抓取仍在桌面端。'
+        + '下方列表读取桌面端与 Web 端导出的本地产物。')));
     root.appendChild(tabs);
     root.appendChild(host);
 
@@ -789,22 +790,201 @@
         actions);
     }
 
+    function commentsCard(reload) {
+      var platformSel = h('select', { class: 'select' },
+        h('option', { value: 'douyin' }, '抖音'),
+        h('option', { value: 'bili' }, 'B站'),
+        h('option', { value: 'weibo' }, '微博'));
+      var urlInput = h('input', {
+        class: 'input grow',
+        placeholder: '视频链接或 ID；抖音支持作者主页（抓最新 N 个）'
+      });
+      var pagesInput = h('input', {
+        class: 'input', style: 'width:70px', type: 'number',
+        min: '1', max: '50', value: '5'
+      });
+      var pngCb = h('input', { type: 'checkbox', checked: true });
+      var rawCb = h('input', { type: 'checkbox', checked: true });
+      var kwInput = h('input', {
+        class: 'input', placeholder: '关键词', style: 'width:130px'
+      });
+      var userInput = h('input', {
+        class: 'input', placeholder: '昵称', style: 'width:120px'
+      });
+      var likesInput = h('input', {
+        class: 'input', placeholder: '最少点赞', style: 'width:90px',
+        type: 'number', min: '0'
+      });
+      var imageSel = h('select', { class: 'select' },
+        h('option', { value: 'all' }, '全部评论'),
+        h('option', { value: 'has' }, '仅带图'),
+        h('option', { value: 'text' }, '仅纯文字'));
+      var sortSel = h('select', { class: 'select' },
+        h('option', { value: 'default' }, '默认排序'),
+        h('option', { value: 'likes' }, '按点赞'),
+        h('option', { value: 'time' }, '按时间'));
+      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始抓取');
+      var jobHost = h('div');
+      var running = false;
+      btn.addEventListener('click', function () {
+        if (running) return;
+        if (!urlInput.value.trim()) {
+          toast('请输入视频链接或 ID', 'warning');
+          return;
+        }
+        if (!pngCb.checked && !rawCb.checked) {
+          toast('请至少选择一种导出内容', 'warning');
+          return;
+        }
+        running = true;
+        btn.disabled = true;
+        btn.textContent = '抓取中…';
+        post('/api/tools/artifacts/comments', {
+          platform: platformSel.value,
+          url: urlInput.value.trim(),
+          pages: Number(pagesInput.value) || 5,
+          png: pngCb.checked,
+          raw: rawCb.checked,
+          keyword: kwInput.value.trim(),
+          user: userInput.value.trim(),
+          min_likes: Number(likesInput.value) || 0,
+          image_mode: imageSel.value,
+          sort_by: sortSel.value
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            running = false;
+            btn.disabled = false;
+            btn.textContent = '开始抓取';
+            var outcome = job.result || {};
+            toast(outcome.summary || '抓取完成', 'success');
+            reload();
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              btn.disabled = false;
+              btn.textContent = '开始抓取';
+              if (job.status === 'error') {
+                toast('抓取失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          btn.disabled = false;
+          btn.textContent = '开始抓取';
+          toast('抓取失败：' + error.message, 'error');
+        });
+      });
+      return h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '抓取评论区'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '平台'), platformSel,
+          urlInput),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '页数'), pagesInput,
+          h('label', { class: 'muted small' }, pngCb, ' 评论区长图'),
+          h('label', { class: 'muted small' }, rawCb, ' 原始数据'),
+          kwInput, userInput, likesInput, imageSel, sortSel,
+          h('span', { style: 'flex:1' }), btn),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '导出到「评论区/<平台>/<视频ID>/」，可在下方产物列表预览长图或下载；'
+          + '抓取依赖登录态与网络，作者主页模式对抖音有效。'),
+        jobHost);
+    }
+
+    function wechatCard(reload) {
+      var textarea = h('textarea', {
+        class: 'textarea', rows: '3',
+        placeholder: '粘贴 mp.weixin.qq.com 文章链接，一行一个（最多 30 篇）'
+      });
+      var checks = {};
+      var row = h('div', { class: 'toolbar', style: 'margin-top:8px' });
+      [['html', 'HTML'], ['docx', 'Word'], ['md', 'Markdown']]
+        .forEach(function (pair) {
+          checks[pair[0]] = h('input', { type: 'checkbox', checked: true });
+          row.appendChild(h('label', { class: 'muted small' },
+            checks[pair[0]], ' ' + pair[1]));
+        });
+      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始解析');
+      var jobHost = h('div');
+      var running = false;
+      btn.addEventListener('click', function () {
+        if (running) return;
+        if (!textarea.value.trim()) {
+          toast('请粘贴公众号文章链接', 'warning');
+          return;
+        }
+        var formats = Object.keys(checks).filter(function (key) {
+          return checks[key].checked;
+        });
+        if (!formats.length) {
+          toast('请至少选择一种导出格式', 'warning');
+          return;
+        }
+        running = true;
+        btn.disabled = true;
+        btn.textContent = '解析中…';
+        post('/api/tools/artifacts/wechat', {
+          text: textarea.value, formats: formats
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            running = false;
+            btn.disabled = false;
+            btn.textContent = '开始解析';
+            var outcome = job.result || {};
+            toast(outcome.summary || '解析完成',
+              outcome.failed ? 'warning' : 'success');
+            reload();
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              btn.disabled = false;
+              btn.textContent = '开始解析';
+              if (job.status === 'error') {
+                toast('解析失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          btn.disabled = false;
+          btn.textContent = '开始解析';
+          toast('解析失败：' + error.message, 'error');
+        });
+      });
+      return h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '解析公众号文章'),
+        textarea, row,
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' },
+            '导出到公众号分类目录（或桌面设置的自定义目录）；'
+            + 'PDF 需要桌面端渲染，Web 端不提供。'),
+          h('span', { style: 'flex:1' }), btn),
+        jobHost);
+    }
+
     function load() {
-      setLoading(host, '正在读取本地产物…');
+      host.replaceChildren();
+      if (state.artifacts.tab === 'comments') host.appendChild(commentsCard(load));
+      else if (state.artifacts.tab === 'wechat') host.appendChild(wechatCard(load));
+      var listHost = h('div');
+      host.appendChild(listHost);
+      setLoading(listHost, '正在读取本地产物…');
       api('/api/tools/artifacts?kind=' + encodeURIComponent(state.artifacts.tab))
         .then(function (data) {
-          host.replaceChildren();
+          listHost.replaceChildren();
           var groups = data.groups || [];
           var images = groups.reduce(function (sum, group) {
             return sum + (group.images || 0);
           }, 0);
-          host.appendChild(h('div', {
+          listHost.appendChild(h('div', {
             class: 'muted small', style: 'margin-bottom:8px'
           }, '共 ' + groups.length + ' 组 · ' + fmtNumber(data.total)
-            + ' 个文件 · 图片 ' + fmtNumber(images)
-            + ' · 只读，抓取 / 导出仍在桌面端'));
+            + ' 个文件 · 图片 ' + fmtNumber(images)));
           if (!groups.length) {
-            host.appendChild(empty(data.note || '暂无产物。'));
+            listHost.appendChild(empty(data.note || '暂无产物。'));
             return;
           }
           groups.forEach(function (group) {
@@ -824,10 +1004,10 @@
                 class: 'muted small', style: 'margin-top:6px'
               }, '仅显示前 30 个文件，共 ' + fmtNumber(group.total) + ' 个。'));
             }
-            host.appendChild(card);
+            listHost.appendChild(card);
           });
         }).catch(function (error) {
-          setError(host, error, load);
+          setError(listHost, error, load);
         });
     }
     load();

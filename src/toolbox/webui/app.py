@@ -46,7 +46,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     douyin_index = DouyinIndexService()
     chaohua = WeiboChaohuaService()
     info_accounts = InfoAccountsService(jobs)
-    artifacts = ArtifactService()
+    artifacts = ArtifactService(jobs)
     netdisk = NetdiskService(jobs)
     localwiki = LocalWikiService()
     livestream_summary = LivestreamSummaryService()
@@ -218,6 +218,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_info_collect(req):
         return info_accounts.start_collect(dict(req.json or {}))
     server.post("/api/info-accounts/collect", start_info_collect)
+
+    def start_comments_fetch(req):
+        return artifacts.start_comments(dict(req.json or {}))
+    server.post("/api/tools/artifacts/comments", start_comments_fetch)
+
+    def start_wechat_parse(req):
+        return artifacts.start_wechat(dict(req.json or {}))
+    server.post("/api/tools/artifacts/wechat", start_wechat_parse)
 
     server.get("/api/tools/artifacts", lambda req: artifacts.list(
         req.q("kind"), req.q_int("group_limit", 200, 1, 500),
