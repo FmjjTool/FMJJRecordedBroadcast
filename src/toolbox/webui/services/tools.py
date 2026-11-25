@@ -338,6 +338,9 @@ class ToolService:
     def launcher_overview(self) -> dict:
         return webui_tools.launcher_overview()
 
+    def launcher_launch(self, payload: dict) -> dict:
+        return webui_tools.launcher_launch(payload.get("index"))
+
     def migrate_overview(self) -> dict:
         return webui_tools.migrate_overview()
 

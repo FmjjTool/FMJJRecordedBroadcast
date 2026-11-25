@@ -1,7 +1,7 @@
-"""WebUI 桌面服务只读框架（L3）：模块概览、任务列表与系统信息。
+"""WebUI 桌面服务框架（L3）：模块概览、任务列表与系统信息。
 
-只读，不执行整理/转换/投稿等业务动作；页面按钮只做入口说明，实际操作
-仍在桌面端。WebUI 通过这些用例了解桌面服务状态，不直接访问页面控件。
+任务页支持安装 / 更新 / 删除 Windows 计划任务（与桌面端共用 task_center
+配置）；其余模块概览只读，具体业务动作由各自的 WebUI 用例提供。
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from toolbox.config_manager import (get_app_root, get_config_dir,
                                     get_export_dir, load_convert_config)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 MODULES = [
     {"key": "organize", "name": "自动整理", "group": "录播工具箱",
@@ -116,6 +117,63 @@ def task_rows() -> dict:
     except Exception:
         rows = []
     return {"tasks": rows}
+
+
+def _task_ids() -> set[str]:
+    return {str(row.get("id") or "") for row in task_center.list_tasks()}
+
+
+def task_schedule(task_id: str) -> dict:
+    task_id = str(task_id or "")
+    if task_id not in _task_ids():
+        raise ValueError("未知的定时任务")
+    return task_center.get_schedule(task_id)
+
+
+def install_task(task_id: str, mode: str, time_text: str, interval,
+                 confirmed: bool = False, extra_times=None) -> dict:
+    """安装 / 更新 Windows 计划任务（保存计划设置并注册）。"""
+    if not confirmed:
+        raise ValueError("缺少操作确认")
+    task_id = str(task_id or "")
+    if task_id not in _task_ids():
+        raise ValueError("未知的定时任务")
+    mode = str(mode or "daily")
+    if mode not in ("daily", "interval"):
+        raise ValueError("计划模式只支持每天或按间隔")
+    time_text = str(time_text or "09:00").strip()
+    if not _TIME_RE.fullmatch(time_text):
+        raise ValueError("时间格式应为 HH:MM")
+    if interval in (None, ""):
+        interval = 30
+    try:
+        interval = int(interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("间隔必须是分钟数") from exc
+    if not 1 <= interval <= 1439:
+        raise ValueError("间隔需在 1–1439 分钟之间")
+    if task_id == "webwiki":
+        extra = list(extra_times or
+                     task_center.get_schedule(task_id).get("extra_times") or [])
+    else:
+        extra = None
+    ok, message = task_center.install(task_id, mode, time_text, interval, extra)
+    if not ok:
+        raise ValueError(str(message or "安装失败"))
+    return {"ok": True, "message": str(message or "已安装 / 更新")}
+
+
+def uninstall_task(task_id: str, confirmed: bool = False) -> dict:
+    """删除 Windows 计划任务（与桌面端共用同一任务注册）。"""
+    if not confirmed:
+        raise ValueError("缺少操作确认")
+    task_id = str(task_id or "")
+    if task_id not in _task_ids():
+        raise ValueError("未知的定时任务")
+    ok, message = task_center.uninstall(task_id)
+    if not ok:
+        raise ValueError(str(message or "删除失败"))
+    return {"ok": True, "message": str(message or "已删除")}
 
 
 def system_info() -> dict:

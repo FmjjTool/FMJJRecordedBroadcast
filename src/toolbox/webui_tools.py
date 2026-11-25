@@ -988,21 +988,70 @@ def calendar_day_files(folder: str, limit: int = 500) -> dict:
 
 
 def launcher_overview() -> dict:
-    """继续操作：只读列出快捷项（名称、类型、路径状态）。"""
+    """继续操作：列出桌面端配置的快捷项（链接 / 软件）。"""
     cfg = load_convert_config()
     items = cfg.get("launcher_items") or []
     rows = []
     for index, item in enumerate(items, 1):
         item = item or {}
-        path = str(item.get("path") or "")
+        path = str(item.get("path") or "").strip()
+        is_link = path.lower().startswith(("http://", "https://"))
         rows.append({
             "index": index,
             "name": item.get("name") or f"软件{index}",
-            "type": "link" if item.get("type") == "link" else "app",
-            "exists": bool(path) and Path(path).exists(),
+            "type": "link" if is_link else "app",
+            "exists": bool(path) and (is_link or Path(path).is_file()),
+            "url": path if is_link else "",
         })
     return {"items": rows, "total": len(rows),
-            "note": "只读展示快捷项；启动外部软件请在桌面端「继续操作」页。"}
+            "note": "只启动桌面端已配置的快捷项：链接在浏览器新标签打开；"
+                    "软件在运行 WebUI 的电脑上启动（会二次确认）。"}
+
+
+def launcher_launch(index) -> dict:
+    """启动继续操作的快捷项：链接返回 URL 由前端打开，软件在本机启动。"""
+    cfg = load_convert_config()
+    items = cfg.get("launcher_items") or []
+    try:
+        idx = int(index)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("快捷项编号不正确") from exc
+    if not (0 <= idx < len(items)):
+        raise ValueError("快捷项不存在，请刷新后重试")
+    item = items[idx] or {}
+    name = str(item.get("name") or f"软件{idx + 1}")
+    path = str(item.get("path") or "").strip()
+    if not path:
+        raise ValueError("该快捷项没有配置路径，请在桌面端补齐")
+    if path.lower().startswith(("http://", "https://")):
+        return {"ok": True, "mode": "link", "name": name, "url": path,
+                "message": f"链接已准备在浏览器打开：{name}"}
+    if not Path(path).is_file():
+        raise ValueError("快捷项的文件不存在，请在桌面端检查路径")
+    _start_detached(path)
+    return {"ok": True, "mode": "app", "name": name,
+            "message": f"已在运行 WebUI 的电脑上启动：{name}"}
+
+
+def _start_detached(path: str) -> None:
+    folder = os.path.dirname(path) or None
+    lower = path.lower()
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    try:
+        if lower.endswith((".exe", ".com")):
+            subprocess.Popen([path], cwd=folder, creationflags=flags)
+        elif lower.endswith((".bat", ".cmd")):
+            extra = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+            subprocess.Popen(["cmd", "/c", path], cwd=folder,
+                             creationflags=flags | extra)
+        elif hasattr(os, "startfile"):
+            os.startfile(path)
+        else:
+            subprocess.Popen([path], cwd=folder)
+    except OSError as exc:
+        raise ValueError(f"启动失败：{exc}") from exc
 
 
 def _folder_brief(folder: Path) -> tuple[int, int]:

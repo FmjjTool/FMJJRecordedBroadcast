@@ -2278,14 +2278,50 @@
         h('div', { class: 'muted small' }, data.note || '')));
       var head = h('tr', null,
         h('th', { class: 'num' }, '#'), h('th', null, '名称'),
-        h('th', null, '类型'), h('th', null, '路径状态'));
+        h('th', null, '类型'), h('th', null, '路径状态'),
+        h('th', null, '操作'));
       var body = h('tbody');
       (data.items || []).forEach(function (item) {
+        var actionCell = h('td', null);
+        if (item.type === 'link') {
+          var openBtn = h('button', {
+            class: 'btn', type: 'button'
+          }, '打开链接');
+          openBtn.disabled = !item.exists || !item.url;
+          openBtn.addEventListener('click', function () {
+            window.open(item.url, '_blank', 'noopener');
+            toast('已在新标签打开：' + (item.name || ''), 'success');
+          });
+          actionCell.appendChild(openBtn);
+        } else {
+          var launchBtn = h('button', {
+            class: 'btn', type: 'button'
+          }, '启动');
+          launchBtn.disabled = !item.exists;
+          launchBtn.addEventListener('click', function () {
+            if (!window.confirm(
+              '将在运行 WebUI 的电脑上启动「' + (item.name || '') + '」。\n'
+              + '不会在你当前设备的浏览器中打开。\n确定吗？')) {
+              return;
+            }
+            launchBtn.disabled = true;
+            post('/api/tools/launcher/launch', { index: item.index })
+              .then(function (result) {
+                toast((result && result.message) || '已启动', 'success');
+              })
+              .catch(function (error) {
+                toast('启动失败：' + error.message, 'error');
+              })
+              .then(function () { launchBtn.disabled = false; });
+          });
+          actionCell.appendChild(launchBtn);
+        }
         body.appendChild(h('tr', null,
           h('td', { class: 'num' }, item.index),
           h('td', null, item.name || '-'),
           h('td', null, item.type === 'link' ? '链接' : '软件'),
-          h('td', null, item.exists ? '可用' : '未找到')));
+          h('td', null, item.exists ? '可用' : '未找到'),
+          actionCell));
       });
       host.appendChild(h('div', { class: 'table-wrap' },
         h('table', { class: 'db-table' }, h('thead', null, head), body)));
@@ -2581,19 +2617,165 @@
           }
         }, column.label + mark));
       });
+      head.appendChild(h('th', null, '操作'));
       var body = h('tbody');
       rows.forEach(function (item) {
+        var action = h('button', { class: 'btn', type: 'button' }, '设置');
+        action.addEventListener('click', function () {
+          openTaskForm(item);
+        });
         body.appendChild(h('tr', null,
           h('td', null, item.label || '-'),
           h('td', { class: 'muted small' }, item.usage || '-'),
           h('td', null, item.schedule || '-'),
           h('td', null, item.installed ? '已安装' : '未安装'),
-          h('td', null, item.next_run || '-')));
+          h('td', null, item.next_run || '-'),
+          h('td', null, action)));
       });
       host.appendChild(h('div', { class: 'table-wrap' },
         h('table', { class: 'db-table' }, h('thead', null, head), body)));
       host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
-        '只读展示；安装 / 删除与时间设置请在桌面端「任务」页操作。'));
+        '安装 / 更新 / 删除会操作运行 WebUI 电脑上的 Windows 计划任务；'
+        + '计划设置与桌面端「任务」页共用。'));
+
+      function openTaskForm(item) {
+        var overlay = h('div', { class: 'preview-overlay' });
+        var box = h('div', { class: 'preview-box', style: 'max-width:460px' });
+        var caption = h('div', { class: 'preview-caption' },
+          h('span', { class: 'ellipsis' }, item.label || '定时任务'),
+          h('button', { class: 'btn', type: 'button' }, '关闭'));
+        var closeBtn = caption.lastChild;
+        var form = h('div', { style: 'padding:14px; overflow:auto' },
+          h('div', { class: 'loading', text: '正在读取计划设置…' }));
+        box.appendChild(caption);
+        box.appendChild(form);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        closeBtn.addEventListener('click', function () { overlay.remove(); });
+        overlay.addEventListener('click', function (event) {
+          if (event.target === overlay) overlay.remove();
+        });
+
+        api('/api/tasks/schedule?id=' + encodeURIComponent(item.id))
+          .then(function (schedule) {
+            var modeSel = h('select', { class: 'select', style: 'width:100%' },
+              h('option', { value: 'daily', selected: schedule.mode === 'daily' }, '每天'),
+              h('option', {
+                value: 'interval',
+                selected: schedule.mode === 'interval',
+                disabled: !schedule.interval_supported
+              }, '按间隔'));
+            var timeInput = h('input', {
+              class: 'input', style: 'width:100%', value: schedule.time || '09:00'
+            });
+            var intervalInput = h('input', {
+              class: 'input', style: 'width:100%', type: 'number',
+              min: '1', max: '1439', value: String(schedule.interval || 30)
+            });
+            var timeRow = h('div', null,
+              h('div', { class: 'muted small', style: 'margin-top:10px' }, '每天时间（HH:MM）'),
+              timeInput);
+            var intervalRow = h('div', null,
+              h('div', { class: 'muted small', style: 'margin-top:10px' }, '间隔（分钟，1–1439）'),
+              intervalInput);
+            function syncMode() {
+              timeRow.style.display = modeSel.value === 'daily' ? '' : 'none';
+              intervalRow.style.display = modeSel.value === 'interval' ? '' : 'none';
+            }
+            modeSel.addEventListener('change', syncMode);
+            var installBtn = h('button', {
+              class: 'btn primary', type: 'button'
+            }, item.installed ? '更新计划' : '安装计划');
+            var deleteBtn = item.installed
+              ? h('button', { class: 'btn danger', type: 'button' }, '删除任务')
+              : null;
+            var status = h('div', { class: 'muted small', style: 'margin-top:8px' });
+            var busy = false;
+
+            function submitInstall() {
+              if (busy) return;
+              var mode = modeSel.value;
+              var timeText = String(timeInput.value || '').trim();
+              if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(timeText)) {
+                status.textContent = '时间格式应为 HH:MM，例如 09:30';
+                return;
+              }
+              var interval = Number(intervalInput.value);
+              if (mode === 'interval' &&
+                  (!isFinite(interval) || interval < 1 || interval > 1439)) {
+                status.textContent = '间隔需在 1–1439 分钟之间';
+                return;
+              }
+              var planText = mode === 'daily'
+                ? ('每天 ' + timeText)
+                : ('每 ' + interval + ' 分钟');
+              if (!window.confirm(
+                '将在运行 WebUI 的电脑上' + (item.installed ? '更新' : '安装') +
+                '计划任务「' + (item.label || '') + '」：' + planText + '。\n'
+                + '与桌面端共用同一 Windows 计划任务。确定吗？')) {
+                return;
+              }
+              busy = true;
+              installBtn.disabled = true;
+              if (deleteBtn) deleteBtn.disabled = true;
+              post('/api/tasks/install', {
+                id: item.id, mode: mode, time: timeText,
+                interval: interval, confirmed: true
+              }).then(function (result) {
+                toast((result && result.message) || '计划已保存', 'success');
+                overlay.remove();
+                renderTasks(host);
+              }).catch(function (error) {
+                busy = false;
+                installBtn.disabled = false;
+                if (deleteBtn) deleteBtn.disabled = false;
+                status.textContent = '操作失败：' + error.message;
+              });
+            }
+
+            function submitUninstall() {
+              if (busy) return;
+              if (!window.confirm(
+                '将删除运行 WebUI 电脑上的计划任务「' + (item.label || '') +
+                '」，之后不再自动执行。\n确定吗？')) {
+                return;
+              }
+              busy = true;
+              installBtn.disabled = true;
+              if (deleteBtn) deleteBtn.disabled = true;
+              post('/api/tasks/uninstall', {
+                id: item.id, confirmed: true
+              }).then(function (result) {
+                toast((result && result.message) || '已删除', 'success');
+                overlay.remove();
+                renderTasks(host);
+              }).catch(function (error) {
+                busy = false;
+                installBtn.disabled = false;
+                if (deleteBtn) deleteBtn.disabled = false;
+                status.textContent = '操作失败：' + error.message;
+              });
+            }
+
+            installBtn.addEventListener('click', submitInstall);
+            if (deleteBtn) deleteBtn.addEventListener('click', submitUninstall);
+            syncMode();
+            form.replaceChildren(
+              h('div', { class: 'muted small' }, item.usage || ''),
+              modeSel,
+              timeRow,
+              intervalRow,
+              h('div', { class: 'muted small', style: 'margin-top:10px' },
+                '操作在运行 WebUI 的电脑上执行；安装 / 更新会同时保存计划设置。'),
+              status,
+              h('div', { style: 'margin-top:12px; display:flex; gap:8px; justify-content:flex-end' },
+                deleteBtn, h('span', { style: 'flex:1' }), installBtn));
+          })
+          .catch(function (error) {
+            form.replaceChildren(h('div', { class: 'error' },
+              '读取计划设置失败：' + error.message));
+          });
+      }
     }).catch(function (error) {
       setError(host, error, function () { renderTasks(host); });
     });

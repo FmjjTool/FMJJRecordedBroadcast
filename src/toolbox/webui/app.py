@@ -106,6 +106,17 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get_re(r"/api/modules/(?P<key>[a-z_]+)",
                   lambda req, key: modules.detail(key))
     server.get("/api/tasks", lambda req: modules.tasks())
+    server.get("/api/tasks/schedule",
+               lambda req: modules.task_schedule(req.q("id")))
+
+    def install_task(req):
+        return modules.install_task(dict(req.json or {}))
+    server.post("/api/tasks/install", install_task)
+
+    def uninstall_task(req):
+        return modules.uninstall_task(dict(req.json or {}))
+    server.post("/api/tasks/uninstall", uninstall_task)
+
     server.get("/api/system", lambda req: modules.system())
 
     server.get("/api/tools/organize/overview",
@@ -178,6 +189,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                    req.q("folder"), req.q_int("limit", 500, 1, 1000)))
     server.get("/api/tools/launcher/overview",
                lambda req: tool_service.launcher_overview())
+
+    def launch_launcher(req):
+        return tool_service.launcher_launch(dict(req.json or {}))
+    server.post("/api/tools/launcher/launch", launch_launcher)
 
     server.get("/api/tools/migrate/overview",
                lambda req: tool_service.migrate_overview())
