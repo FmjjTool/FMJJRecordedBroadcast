@@ -1835,7 +1835,7 @@ def export_docx(data: CertificateData, out_dir: str | Path, *,
     import zipfile
 
     missing = missing_fields(data)
-    if missing:
+    if missing and not standalone:
         raise ValueError("缺少必填字段：" + "、".join(missing))
     out = Path(out_dir)
     if standalone:
@@ -1885,36 +1885,11 @@ def export_docx(data: CertificateData, out_dir: str | Path, *,
 
 
 def sample_certificate_data() -> CertificateData:
-    """内置样本数据：覆盖全部必填项，用于「导出样本 Word」。
+    """内置样本数据：除签发方与状态外全部留空，用于「导出样本 Word」。
 
-    全部为示意内容（编号用全零段），不会写入历史或真实数据。"""
-    sample_no = "FMJJ-DB-ART-2026-000000-000000"
-    data = CertificateData(
-        archive_no=sample_no,
-        title="样本作品名（LOGO设计）",
-        art_type="LOGO设计",
-        author_name="小茉",
-        author_contact="XM-0000（样本联系方式）",
-        lead_designer="小茉",
-        co_designers="小禾",
-        period_start="2026-01-01",
-        period_end="2026-12-31",
-        usage_note="数据汇总库内部归档、检索与认证状态展示（样本）",
-        manager_rep="管理组·小和",
-        contact_person="对接人·小和",
-        author_sign="小茉",
-        author_sign_date="2026-01-01",
-        licensee_rep_sign="管理组·小和",
-        licensee_sign_date="2026-01-01",
-        sample_format="png",
-        image_format="png",
-        wm_author="小茉",
-        wm_lead="小茉",
-        wm_title="样本作品名",
-        wm_archive_no=sample_no,
-        credit_note="圈名「小茉」+ 内部认证号（样本写法）",
-    )
-    return data
+    协议正文里的空字段统一落成下划线空白，便于打印后手填；
+    不含任何示意姓名或虚构内容。"""
+    return CertificateData()
 
 
 def export_docx_sample(out_dir: str | Path) -> str:
