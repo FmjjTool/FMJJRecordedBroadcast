@@ -1,6 +1,6 @@
-"""WebUI 批量改名（只读预览）：扫描文件夹并按规则生成新文件名。
+"""WebUI 批量改名：扫描文件夹、按规则生成预览、执行改名。
 
-不执行改名；执行仍在桌面端。规则引擎与桌面共用 `toolbox.rename_rules`。
+规则引擎与桌面共用 `toolbox.rename_rules`；执行前需二次确认。
 """
 
 from __future__ import annotations
@@ -52,13 +52,22 @@ def _cfg_from_options(options: dict) -> dict:
         except (TypeError, ValueError):
             return default
 
+    case = text("case")
+    if case not in ("upper", "lower", "capital"):
+        case = ""
+    convert = text("convert")
+    if convert not in ("full2half", "half2full"):
+        convert = ""
+    pos_text = text("pos_text")
     return {
-        "whole": {"case": "", "num": "", "convert": "",
+        "whole": {"case": case, "num": "", "convert": convert,
                   "ext_case": "", "new_ext": ""},
         "replace": {"find": text("find"), "to": text("to"),
                     "all": True, "case": False, "regex": False},
         "add": {"prefix": text("prefix"), "suffix": text("suffix"),
-                "pos_idx": 0, "pos_text": "", "from_right": False,
+                "pos_idx": max(0, integer("pos_idx", 0))
+                if pos_text else 0,
+                "pos_text": pos_text, "from_right": flag("from_right"),
                 "kw": "", "kw_text": "", "kw_after": True},
         "del": {"types": []},
         "num": {"on": flag("numbering"), "mode": "suffix",
@@ -107,20 +116,28 @@ def preview(path: str, options: dict | None = None) -> dict:
     filter_key = str(options.get("filter") or "all")
     if filter_key not in tuple(["all", *_EXT_GROUPS]):
         filter_key = "all"
-    files, truncated = _scan(path, recursive, filter_key)
+    root = Path(str(path or "").strip())
+    if not path or not root.is_dir():
+        raise ValueError("文件夹不存在或不可访问")
+    root = root.resolve()
+    files, truncated = _scan(str(root), recursive, filter_key)
     cfg = _cfg_from_options(options)
     ignore_ext = cfg["options"]["ignore_ext"]
     conflict = cfg["options"]["conflict"]
+    text_lines = [line.strip() for line in
+                  str(options.get("textmode") or "").splitlines()]
     now = datetime.now()
     rows = []
-    used: dict[str, int] = {}
+    used: dict[tuple[str, str], int] = {}
     changed = 0
-    name_counts: dict[str, int] = {}
+    name_counts: dict[tuple[str, str], int] = {}
     for item in files:
-        key = item.name.lower()
+        key = (_rel_parent(item, root), item.name.lower())
         name_counts[key] = name_counts.get(key, 0) + 1
     for index, file_path in enumerate(files):
         name = file_path.name
+        rel = str(file_path.relative_to(root))
+        rel_parent = _rel_parent(file_path, root)
         stem, ext = split_name(name, ignore_ext)
         new_stem, new_ext = apply_rules(stem, ext, cfg, index, now)
         if not new_stem or new_stem in (".", ".."):
@@ -128,9 +145,9 @@ def preview(path: str, options: dict | None = None) -> dict:
         new_name = join_name(new_stem, new_ext)
         status = "不变"
         if conflict:
-            key = new_name.lower()
+            key = (rel_parent, new_name.lower())
             same_other = name_counts.get(key, 0) - (
-                1 if key == name.lower() else 0)
+                1 if key == (rel_parent, name.lower()) else 0)
             if key in used or same_other > 0:
                 used[key] = used.get(key, 0) + 1
                 dot = new_name.rfind(".")
@@ -138,6 +155,10 @@ def preview(path: str, options: dict | None = None) -> dict:
                                 if dot > 0 else (new_name, ""))
                 new_name = f"{base}_{used[key]}{suffix}"
                 status = "冲突已加序号"
+        override = text_lines[index] if index < len(text_lines) else ""
+        if override:
+            new_name = override
+            status = "文本模式" if override != name else "不变"
         if new_name != name:
             changed += 1
             if status == "不变":
@@ -149,21 +170,46 @@ def preview(path: str, options: dict | None = None) -> dict:
         rows.append({
             "index": index + 1,
             "old": name,
+            "rel": rel,
             "new": new_name,
             "status": status,
             "ext": new_ext or "（无）",
             "size": size,
         })
+    _mark_duplicates(rows)
     return {
-        "path": str(Path(path).resolve()),
+        "path": str(root),
         "rows": rows,
         "total": len(rows),
         "changed": changed,
         "truncated": truncated,
         "recursive": recursive,
         "filter": filter_key,
-        "note": "只读预览；执行改名仍在桌面端。",
+        "note": "预览不执行改名；执行前会再次校验并二次确认。",
     }
+
+
+def _rel_parent(path: Path, root: Path) -> str:
+    parent = path.parent
+    try:
+        return str(parent.relative_to(root)).lower()
+    except ValueError:
+        return ""
+
+
+def _mark_duplicates(rows: list[dict]) -> None:
+    """同一目录下最终重名的行标记出来（执行时会跳过）。"""
+    counts: dict[tuple[str, str], int] = {}
+    for row in rows:
+        rel_parent = str(Path(row["rel"]).parent).lower()
+        key = (rel_parent, row["new"].lower())
+        counts[key] = counts.get(key, 0) + 1
+    for row in rows:
+        rel_parent = str(Path(row["rel"]).parent).lower()
+        key = (rel_parent, row["new"].lower())
+        if counts[key] > 1 and row["new"] != row["old"]:
+            row["status"] = "重名，执行会跳过"
+
 
 
 def overview() -> dict:
@@ -178,7 +224,7 @@ def overview() -> dict:
            for key, name in (("image", "图片"), ("video", "视频"),
                              ("audio", "音频"), ("subtitle", "字幕"),
                              ("doc", "文档"))],
-        "note": "只读预览；执行改名仍在桌面端。",
+        "note": "预览不执行改名；执行前会再次校验并二次确认。",
     }
 
 
@@ -199,20 +245,24 @@ def execute(path: str, options: dict | None = None) -> dict:
         if error:
             failures.append({"old": row["old"], "error": error})
             continue
-        if not (root / row["old"]).is_file():
+        source = root / row["rel"]
+        if not source.is_file():
             failures.append({"old": row["old"], "error": "源文件不存在"})
             continue
-        plan.append({"old": row["old"], "new": row["new"]})
+        plan.append({"old": row["old"], "rel": row["rel"],
+                     "new": row["new"]})
 
-    sources = {item["old"].lower() for item in plan}
-    seen: set[str] = set()
+    sources = {(str(Path(item["rel"]).parent).lower(), item["old"].lower())
+               for item in plan}
+    seen: set[tuple[str, str]] = set()
     valid = []
     for item in plan:
-        key = item["new"].lower()
+        parent = Path(item["rel"]).parent
+        key = (str(parent).lower(), item["new"].lower())
         if key in seen:
             failures.append({"old": item["old"], "error": "目标文件名重复"})
             continue
-        target = root / item["new"]
+        target = root / parent / item["new"]
         if target.exists() and key not in sources:
             failures.append({"old": item["old"], "error": "目标已存在"})
             continue
@@ -221,27 +271,31 @@ def execute(path: str, options: dict | None = None) -> dict:
 
     renamed = 0
     temp_paths: dict[str, Path] = {}
+    temp_names: dict[str, Path] = {}
     try:
         for index, item in enumerate(valid):
-            source = root / item["old"]
-            temp = root / f".fmjj_rename_{os.getpid()}_{index}"
+            source = root / item["rel"]
+            temp = source.parent / f".fmjj_rename_{os.getpid()}_{index}"
             if temp.exists():
                 raise OSError("临时文件名冲突")
             source.rename(temp)
-            temp_paths[item["old"]] = temp
+            temp_paths[item["rel"]] = temp
         for item in valid:
-            temp = temp_paths[item["old"]]
-            temp.rename(root / item["new"])
+            temp = temp_paths[item["rel"]]
+            final = root / Path(item["rel"]).parent / item["new"]
+            temp.rename(final)
+            temp_names[item["rel"]] = final
             renamed += 1
     except Exception as exc:  # noqa: BLE001 - 回滚后统一转成可读错误
         for item in reversed(valid):
-            final = root / item["new"]
-            temp = temp_paths.get(item["old"])
+            final = temp_names.get(item["rel"])
+            temp = temp_paths.get(item["rel"])
+            original = root / item["rel"]
             try:
                 if temp is not None and temp.exists():
-                    temp.rename(root / item["old"])
-                elif final.exists():
-                    final.rename(root / item["old"])
+                    temp.rename(original)
+                elif final is not None and final.exists():
+                    final.rename(original)
             except OSError:
                 pass
         raise ValueError(f"改名失败，已尝试回滚：{str(exc)[:120]}") from exc

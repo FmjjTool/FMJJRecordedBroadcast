@@ -1160,6 +1160,30 @@
       var replaceTo = h('input', {
         class: 'input', placeholder: '替换为', style: 'width:120px'
       });
+      var caseSel = h('select', { class: 'select' });
+      [['', '大小写不变'], ['upper', '全部大写'], ['lower', '全部小写'],
+        ['capital', '首字母大写']].forEach(function (pair) {
+        caseSel.appendChild(h('option', { value: pair[0] }, pair[1]));
+      });
+      var convertSel = h('select', { class: 'select' });
+      [['', '全半角不变'], ['full2half', '全角转半角'],
+        ['half2full', '半角转全角']].forEach(function (pair) {
+        convertSel.appendChild(h('option', { value: pair[0] }, pair[1]));
+      });
+      var posText = h('input', {
+        class: 'input', placeholder: '插入文本', style: 'width:120px'
+      });
+      var posIdx = h('input', {
+        class: 'input', type: 'number', value: '0', min: '0',
+        style: 'width:72px'
+      });
+      var fromRightCb = h('input', { type: 'checkbox' });
+      var textmode = h('textarea', {
+        class: 'textarea',
+        rows: 4,
+        placeholder: '每行一个完整新文件名（含扩展名）；行顺序与预览一致，'
+          + '留空表示沿用上面的规则结果'
+      });
       var numberingCb = h('input', { type: 'checkbox' });
       var startInput = h('input', {
         class: 'input', type: 'number', value: '1', style: 'width:72px'
@@ -1179,6 +1203,19 @@
       var execBtn = h('button', {
         class: 'btn primary', type: 'button', disabled: true
       }, '执行改名');
+      var fillTmBtn = h('button', {
+        class: 'btn mini', type: 'button'
+      }, '填入当前预览');
+      fillTmBtn.addEventListener('click', function () {
+        if (!lastRows.length) {
+          toast('请先扫描预览', 'warning');
+          return;
+        }
+        textmode.value = lastRows.map(function (row) {
+          return row.new;
+        }).join('\n');
+        schedule();
+      });
 
       function collect() {
         return {
@@ -1190,6 +1227,12 @@
           suffix: suffix.value,
           find: find.value,
           to: replaceTo.value,
+          case: caseSel.value,
+          convert: convertSel.value,
+          pos_idx: posIdx.value,
+          pos_text: posText.value,
+          from_right: fromRightCb.checked,
+          textmode: textmode.value,
           numbering: numberingCb.checked,
           start: startInput.value,
           width: widthInput.value,
@@ -1252,11 +1295,13 @@
         clearTimeout(timer);
         timer = setTimeout(load, 450);
       }
-      [template, prefix, suffix, find, replaceTo, startInput, widthInput]
+      [template, prefix, suffix, find, replaceTo, startInput, widthInput,
+        posText, posIdx, textmode]
         .forEach(function (input) {
           input.addEventListener('input', schedule);
         });
-      [recursiveCb, numberingCb, ignoreExtCb, conflictCb, filterSel]
+      [recursiveCb, numberingCb, ignoreExtCb, conflictCb, filterSel,
+        caseSel, convertSel, fromRightCb]
         .forEach(function (input) {
           input.addEventListener('change', schedule);
         });
@@ -1297,6 +1342,8 @@
             h('div', { class: 'table-wrap' },
               h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
                 h('th', null, '文件'), h('th', null, '原因'))), body))));
+          } else if (textmode.value.trim()) {
+            textmode.value = '';
           }
           load();
         }).catch(function (error) {
@@ -1320,13 +1367,30 @@
           h('span', { class: 'muted small' }, '替换'), find,
           h('span', { class: 'muted small' }, '为'), replaceTo),
         h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '大小写'), caseSel,
+          h('span', { class: 'muted small' }, '全半角'), convertSel),
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '插入'), posText,
+          h('span', { class: 'muted small' }, '位置'), posIdx,
+          h('label', { class: 'check' }, fromRightCb, ' 从右往左'),
+          h('span', { class: 'muted small' }, '（位置 0 表示开头 / 末尾）')),
+        h('div', { class: 'toolbar' },
           h('label', { class: 'check' }, numberingCb, ' 序号'),
           h('span', { class: 'muted small' }, '起始'), startInput,
           h('span', { class: 'muted small' }, '位数'), widthInput,
           h('label', { class: 'check' }, ignoreExtCb, ' 忽略扩展名'),
           h('label', { class: 'check' }, conflictCb, ' 冲突加序号')),
+        h('div', {
+          class: 'toolbar', style: 'margin-top:8px;margin-bottom:6px'
+        },
+          h('span', { class: 'row-title' }, '文本模式'),
+          h('span', { class: 'muted small' },
+            '每行一个完整新文件名，优先于上面的规则'),
+          h('span', { style: 'flex:1' }),
+          fillTmBtn),
+        textmode,
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '大小写 / 全半角 / 按位置插入 / 按类型删除 / 文本模式等规则在桌面端。')));
+          '按类型删除、扩展名改名、改名时间等规则仍在桌面端。')));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'row-title' }, '预览'),
