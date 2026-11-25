@@ -787,8 +787,11 @@ def rename_overview() -> dict:
         "accounts": options["accounts"],
         "types": options["types"],
         "platforms": options["platforms"],
+        "copyright_enabled": options["copyright_enabled"],
+        "copyright_text": options["copyright_text"],
         "note": "改名为标准命名（日期_时间_账户_类型_版本_平台_标题），"
-                "附属文件同步改名；版权属性写入需桌面端。",
+                "附属文件同步改名；可选写入版权标签（使用桌面命名投稿"
+                "设置的附加信息）。",
     }
 
 
@@ -800,18 +803,29 @@ def rename_options() -> dict:
         "accounts": [str(item) for item in (cfg.account_list or []) if item],
         "types": [str(item) for item in (cfg.live_types or []) if item],
         "platforms": [str(item) for item in (cfg.platform_list or []) if item],
+        "copyright_enabled": bool(cfg.append_extra_info),
+        "copyright_text": str(cfg.extra_info or "").strip(),
     }
 
 
-def rename_execute(rel_path: str, account: str, types, danmu: bool,
-                   platform: str, title: str) -> dict:
-    """按桌面模板生成标准名并改名（单文件，含附属同步）。
+def _rename_copyright_text() -> str:
+    from toolbox.config_manager import get_rename_config
 
-    与桌面 `_build_filename` 同构；校验非法字符与目标存在；版权属性
-    写入（NTFS 附加信息）不在 Web 端提供。
+    return str(get_rename_config().extra_info or "").strip()
+
+
+def rename_execute(rel_path: str, account: str, types, danmu: bool,
+                   platform: str, title: str, copyright: bool = False,
+                   on_progress=None) -> dict:
+    """按桌面模板生成标准名并改名（单文件，含附属同步与可选版权标签）。
+
+    版权标签复用桌面 `video_meta.write_copyright`：写标准 copyright，
+    MP4 家族同时写「备注」；文本取桌面命名投稿设置的附加信息。版权
+    写入失败时保留已改名的视频并在结果中返回失败原因。
     """
     import time as _time
 
+    from toolbox import video_meta
     from toolbox.rename_engine import (extract_file_title, extract_time_str,
                                        rebase_companions)
     from toolbox.utils import clean_special_chars
@@ -827,6 +841,10 @@ def rename_execute(rel_path: str, account: str, types, danmu: bool,
               if str(item or "").strip()]
     if not chosen:
         raise ValueError("请至少选择一种直播类型")
+    copyright_text = _rename_copyright_text()
+    if copyright and not copyright_text:
+        raise ValueError("已勾选写入版权属性，但桌面端命名投稿设置的附加信息为空")
+    _report(on_progress, 1, 3, "正在改名")
     version = "有弹幕" if danmu else "无弹幕"
     platform = str(platform or "").strip()
     name = path.stem
@@ -846,28 +864,40 @@ def rename_execute(rel_path: str, account: str, types, danmu: bool,
     if any(character in new_name for character in '<>:"/\\|?*'):
         raise ValueError("新文件名包含非法字符，请检查账户/类型/标题")
     dst = path.with_name(new_name)
-    if dst.resolve() == path.resolve():
-        return {"ok": True, "message": "文件名已一致，无需改名",
-                "new_name": new_name, "sidecars": 0, "skipped": 0}
-    if dst.exists():
-        raise ValueError(f"目标已存在：{new_name}")
-    for attempt in range(6):
+    renamed = dst.resolve() != path.resolve()
+    if renamed:
+        if dst.exists():
+            raise ValueError(f"目标已存在：{new_name}")
+        for attempt in range(6):
+            try:
+                path.rename(dst)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise ValueError(
+                        "视频仍被占用，改名未执行（可能有程序正在预览/播放"
+                        "或同步该文件），请关闭后重试")
+                _time.sleep(0.3)
+    sidecars, skipped = [], []
+    if renamed:
         try:
-            path.rename(dst)
-            break
-        except PermissionError:
-            if attempt == 5:
-                raise ValueError(
-                    "视频仍被占用，改名未执行（可能有程序正在预览/播放"
-                    "或同步该文件），请关闭后重试")
-            _time.sleep(0.3)
-    try:
-        sidecars, skipped = rebase_companions(str(path), str(dst))
-    except Exception:
-        sidecars, skipped = [], []
-    return {"ok": True, "message": f"已改名为 {new_name}",
-            "new_name": new_name,
-            "sidecars": len(sidecars or []), "skipped": len(skipped or [])}
+            sidecars, skipped = rebase_companions(str(path), str(dst))
+        except Exception:
+            sidecars, skipped = [], []
+    copyright_result = {"requested": bool(copyright), "ok": True, "message": ""}
+    if copyright:
+        _report(on_progress, 2, 3, "正在写入版权标签")
+        ok, message = video_meta.write_copyright(str(dst), copyright_text)
+        copyright_result = {"requested": True, "ok": bool(ok),
+                            "message": str(message or "")}
+    _report(on_progress, 3, 3, "完成")
+    message = "文件名已一致，无需改名" if not renamed else f"已改名为 {new_name}"
+    if copyright:
+        message += "；" + ("版权标签已写入" if copyright_result["ok"]
+                          else f"版权写入失败：{copyright_result['message']}")
+    return {"ok": True, "message": message, "new_name": new_name,
+            "sidecars": len(sidecars or []), "skipped": len(skipped or []),
+            "renamed": renamed, "copyright": copyright_result}
 
 
 def list_rename_preview(limit: int = 200) -> dict:

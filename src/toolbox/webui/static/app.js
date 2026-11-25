@@ -1318,6 +1318,12 @@
           class: 'input', style: 'width:100%',
           value: item.title && item.title !== '无标题' ? item.title : ''
         });
+        var copyrightText = String(overview.copyright_text || '');
+        var copyrightBox = h('input', {
+          type: 'checkbox',
+          checked: !!overview.copyright_enabled && !!copyrightText
+        });
+        if (!copyrightText) copyrightBox.disabled = true;
         var resultLine = h('div', { class: 'muted small', style: 'margin-top:8px' });
         var submit = h('button', { class: 'btn primary', type: 'button' }, '确认改名');
 
@@ -1339,24 +1345,30 @@
             + (danmuBox.checked ? '有弹幕' : '无弹幕')
             + (platformSel.value ? '_' + platformSel.value : '')
             + (title ? '_' + title : '');
+          var copyrightNote = copyrightBox.checked
+            ? ('将写入版权标签（' + (copyrightText.length > 60
+                ? copyrightText.slice(0, 60) + '…' : copyrightText) + '）。\n')
+            : '不写入版权标签。\n';
           if (!window.confirm(
             '确认改名\n\n' + item.name + ' →\n' + previewName + '\n\n'
-            + '附属文件会同步改名；版权属性写入需桌面端。\n确认继续？')) {
+            + '附属文件会同步改名；' + copyrightNote + '确认继续？')) {
             return;
           }
           running = true;
           submit.disabled = true;
-          submit.textContent = '改名中…';
+          submit.textContent = '处理中…';
           post('/api/tools/rename/execute', {
             path: item.path, account: account, types: types,
             danmu: danmuBox.checked, platform: platformSel.value,
-            title: title, confirmed: true
+            title: title, copyright: copyrightBox.checked, confirmed: true
           }).then(function (data) {
             watchJob(jobHost, data.job, function (job) {
-              var message = job.result && job.result.message
-                ? job.result.message : '改名完成';
+              var result = job.result || {};
+              var message = result.message || '改名完成';
+              var copyright = result.copyright || {};
+              var warn = copyright.requested && copyright.ok === false;
               resultLine.textContent = message;
-              toast(message, 'success');
+              toast(message, warn ? 'warning' : 'success');
               submit.textContent = '完成';
               setTimeout(function () { overlay.remove(); renderRename(host); }, 900);
             }, {
@@ -1392,6 +1404,13 @@
         form.appendChild(platformSel);
         form.appendChild(h('div', { class: 'muted small', style: 'margin-top:10px' }, '标题（留空用提取标题）'));
         form.appendChild(titleEntry);
+        form.appendChild(h('label', {
+          class: 'muted small', style: 'margin-top:10px; display:block'
+        }, copyrightBox, ' 写入版权标签'));
+        form.appendChild(h('div', { class: 'muted small' },
+          copyrightText
+            ? ('附加信息：' + copyrightText)
+            : '桌面端未配置版权附加信息，无法写入；可在桌面端命名投稿设置中填写。'));
         form.appendChild(resultLine);
         var footer = h('div', { style: 'margin-top:12px; text-align:right' });
         footer.appendChild(submit);

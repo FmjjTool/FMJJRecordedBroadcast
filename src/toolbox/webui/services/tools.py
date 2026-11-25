@@ -134,11 +134,23 @@ class ToolService:
         danmu = bool(payload.get("danmu"))
         platform = str(payload.get("platform") or "").strip()
         title = str(payload.get("title") or "").strip()
+        copyright_flag = bool(payload.get("copyright"))
         job = self._jobs.submit(
             "rename_execute",
-            lambda task: webui_tools.rename_execute(
-                rel, account, types, danmu, platform, title))
+            lambda task: self._rename_job(
+                task, rel, account, types, danmu, platform, title,
+                copyright_flag))
         return {"job": job.id}
+
+    def _rename_job(self, job, rel, account, types, danmu, platform, title,
+                    copyright_flag) -> dict:
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"命名投稿：{name}", fraction)
+
+        return webui_tools.rename_execute(
+            rel, account, types, danmu, platform, title,
+            copyright=copyright_flag, on_progress=progress)
 
     def video_overview(self) -> dict:
         return webui_tools.video_overview()
