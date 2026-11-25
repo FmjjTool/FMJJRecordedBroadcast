@@ -14,7 +14,9 @@ from toolbox.webui.services.info_accounts import InfoAccountsService
 from toolbox.webui.services.image_sorter import ImageSorterService
 from toolbox.webui.services.livestream_summary import LivestreamSummaryService
 from toolbox.webui.services.localwiki import LocalWikiService
+from toolbox.webui.services.music_playlist import MusicPlaylistService
 from toolbox.webui.services.rename_batch import RenameBatchService
+from toolbox.webui.services.tickets import TicketsService
 from toolbox.webui.services.netdisk import NetdiskService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
@@ -46,6 +48,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     livestream_summary = LivestreamSummaryService()
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
+    tickets = TicketsService()
+    music_playlist = MusicPlaylistService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -238,6 +242,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def rename_batch_preview(req):
         return rename_batch.preview(dict(req.json or {}))
     server.post("/api/rename-batch/preview", rename_batch_preview)
+
+    server.get("/api/tickets", lambda req: tickets.overview())
+
+    server.get("/api/music-playlist", lambda req: music_playlist.overview())
+    server.get("/api/music-playlist/report",
+               lambda req: music_playlist.report_text(req.q("name")))
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

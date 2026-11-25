@@ -14,6 +14,9 @@ _KINDS = {
     "bili": ("B站资源", "B站资源"),
     "wechat": ("公众号解析", "公众号文章"),
     "emoji": ("抖音表情包", "抖音表情包"),
+    "taobao": ("淘宝商品", "淘宝商品"),
+    "douyin_shop": ("抖音商城", "抖音商品"),
+    "bili_shop": ("B站小店", "B站小店"),
 }
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _MAX_PREVIEW = 20 * 1024 * 1024
@@ -33,6 +36,12 @@ def _root(kind: str) -> Path:
         return Path(get_export_subdir("douyin_emoji"))
     if kind == "bili":
         return Path(get_export_dir()) / "B站资源"
+    if kind == "taobao":
+        return Path(get_export_dir()) / "淘宝商品"
+    if kind == "douyin_shop":
+        return Path(get_export_subdir("douyin_shop"))
+    if kind == "bili_shop":
+        return Path(get_export_subdir("bili_shop"))
     raise ValueError("未知产物类型")
 
 

@@ -25,6 +25,7 @@
     chaohua: { topic: '' },
     image_sorter: { kind: 'all', q: '' },
     rename_batch: { path: '', recursive: false, filter: 'all' },
+    shopping: { tab: 'taobao' },
     info_accounts: { platform: '' },
     artifacts: { tab: 'comments' },
     netdisk: { tab: 'backup' },
@@ -64,6 +65,9 @@
     weibo_chaohua: { title: '微博超话', load: renderWeiboChaohua },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
     fan_groups: { title: '粉丝群', load: renderFanGroups },
+    tickets: { title: '票务解析', load: renderTickets },
+    shopping: { title: '购物解析', load: renderShoppingHub },
+    music_playlist: { title: '歌单', load: renderMusicPlaylist },
     tasks: { title: '定时任务', load: renderTasks },
     system: { title: '全局设置', load: renderSystem }
   };
@@ -354,6 +358,9 @@
         ['livestream_summary', '直播总结', '转录清单与已保存总结'],
         ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
         ['rename_batch', '批量改名', '规则预览与冲突检查'],
+        ['tickets', '票务解析', '演出缓存与导出目录'],
+        ['shopping', '购物解析', '淘宝 / 抖音 / B站小店产物'],
+        ['music_playlist', '歌单', '本地预览与执行报告'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -5297,6 +5304,255 @@
       load();
     }).catch(function (error) {
       setError(root, error, function () { renderWeiboChaohua(root); });
+    });
+  }
+
+  function renderTickets(root) {
+    setLoading(root, '正在读取票务缓存…');
+    api('/api/tickets').then(function (data) {
+      root.replaceChildren();
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '解析演出'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '获取选中详情'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '导出列表'),
+          h('span', { style: 'flex:1' }),
+          h('span', { class: 'muted small' },
+            data.saved_at ? '最近解析 ' + data.saved_at : '尚未解析')),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '解析、拉取详情、导出 JSON 与图片下载仍在桌面端；'
+          + '本页展示最近一次解析缓存与导出目录。')));
+      var events = data.events || [];
+      if (!events.length) {
+        root.appendChild(empty(
+          '暂无解析缓存。桌面端「票务解析」搜索一次后会写入本地缓存。'));
+      } else {
+        var body = h('tbody');
+        events.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', { class: 'ellipsis' }, row.url
+              ? h('a', { href: row.url, target: '_blank',
+                rel: 'noopener noreferrer' }, row.title)
+              : row.title),
+            h('td', null, row.platform),
+            h('td', null, row.city),
+            h('td', { class: 'ellipsis' }, row.venue),
+            h('td', null, row.show_time),
+            h('td', null, row.price),
+            h('td', null, row.status)));
+        });
+        root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+            '最近解析 · ' + fmtNumber(data.total) + ' 场'),
+          h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+              h('th', null, '标题'), h('th', null, '平台'),
+              h('th', null, '城市'), h('th', null, '场馆'),
+              h('th', null, '演出时间'), h('th', null, '票价'),
+              h('th', null, '状态'))), body))));
+      }
+      var folders = data.folders || [];
+      var folderCard = h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '导出目录 · ' + fmtNumber(data.folder_total) + ' 场'));
+      if (!folders.length) {
+        folderCard.appendChild(empty('暂无导出的演出目录。'));
+      } else {
+        var fbody = h('tbody');
+        folders.forEach(function (row) {
+          fbody.appendChild(h('tr', null,
+            h('td', { class: 'ellipsis' }, row.name),
+            h('td', { class: 'num' }, fmtNumber(row.images)),
+            h('td', null, row.mtime)));
+        });
+        folderCard.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '目录'), h('th', { class: 'num' }, '图片数'),
+            h('th', null, '时间'))), fbody)));
+      }
+      root.appendChild(folderCard);
+    }).catch(function (error) {
+      setError(root, error, function () { renderTickets(root); });
+    });
+  }
+
+  function renderShoppingHub(root) {
+    root.replaceChildren();
+    var TABS = [['taobao', '淘宝商品'], ['douyin_shop', '抖音商城'],
+      ['bili_shop', 'B站小店']];
+    var tabs = h('div', { class: 'tabs' });
+    var host = h('div');
+    TABS.forEach(function (item) {
+      tabs.appendChild(h('button', {
+        class: 'tab' + (state.shopping.tab === item[0] ? ' active' : ''),
+        type: 'button',
+        onclick: function () {
+          state.shopping.tab = item[0];
+          tabs.querySelectorAll('.tab').forEach(function (button, index) {
+            button.classList.toggle('active', TABS[index][0] === item[0]);
+          });
+          load();
+        }
+      }, item[1]));
+    });
+    root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+      h('div', { class: 'muted small' },
+        '浏览桌面端解析后保存的商品目录（主图 / SKU / 详情图）；'
+        + '解析与导出在桌面端。')));
+    root.appendChild(tabs);
+    root.appendChild(host);
+
+    function preview(kind, rel) {
+      var overlay = h('div', { class: 'preview-overlay' });
+      overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) overlay.remove();
+      });
+      overlay.appendChild(h('div', { class: 'preview-box' },
+        h('div', { class: 'preview-caption' },
+          h('span', null, rel),
+          h('button', {
+            class: 'btn mini', type: 'button',
+            onclick: function () { overlay.remove(); }
+          }, '关闭')),
+        h('div', { class: 'preview-body' },
+          h('img', {
+            alt: '',
+            src: '/api/tools/artifacts/preview?kind='
+              + encodeURIComponent(kind) + '&rel=' + encodeURIComponent(rel)
+              + '&token=' + encodeURIComponent(token)
+          }))));
+      document.body.appendChild(overlay);
+    }
+
+    function load() {
+      var kind = state.shopping.tab;
+      setLoading(host, '正在读取商品目录…');
+      api('/api/tools/artifacts?kind=' + encodeURIComponent(kind))
+        .then(function (data) {
+          host.replaceChildren();
+          var groups = data.groups || [];
+          host.appendChild(h('div', {
+            class: 'muted small', style: 'margin-bottom:8px'
+          }, '共 ' + groups.length + ' 组 · ' + fmtNumber(data.total)
+            + ' 个文件 · 只读'));
+          if (!groups.length) {
+            host.appendChild(empty(data.note || '暂无商品目录。'));
+            return;
+          }
+          groups.forEach(function (group) {
+            var card = h('div', { class: 'card', style: 'margin-bottom:12px' });
+            card.appendChild(h('div', { class: 'toolbar' },
+              h('span', { class: 'row-title' }, group.name),
+              h('span', { class: 'muted small' },
+                fmtNumber(group.total) + ' 个文件 · 图片 '
+                + fmtNumber(group.images))));
+            var list = h('div', { class: 'artifact-list' });
+            (group.files || []).slice(0, 30).forEach(function (file) {
+              var actions = [];
+              if (file.is_image) {
+                actions.push(h('button', {
+                  class: 'btn mini', type: 'button',
+                  onclick: function () { preview(kind, file.rel); }
+                }, '预览'));
+              }
+              actions.push(h('a', {
+                class: 'btn mini',
+                href: '/api/tools/artifacts/file?kind='
+                  + encodeURIComponent(kind) + '&rel='
+                  + encodeURIComponent(file.rel) + '&token='
+                  + encodeURIComponent(token)
+              }, '下载'));
+              list.appendChild(h('div', { class: 'artifact-row' },
+                h('span', { class: 'artifact-name', title: file.rel },
+                  file.name),
+                h('span', { class: 'muted small' }, fmtBytes(file.size)),
+                actions));
+            });
+            card.appendChild(list);
+            if (group.total > 30) {
+              card.appendChild(h('div', {
+                class: 'muted small', style: 'margin-top:6px'
+              }, '仅显示前 30 个文件，共 ' + fmtNumber(group.total) + ' 个。'));
+            }
+            host.appendChild(card);
+          });
+        }).catch(function (error) {
+          setError(host, error, load);
+        });
+    }
+    load();
+  }
+
+  function renderMusicPlaylist(root) {
+    setLoading(root, '正在读取歌单报告…');
+    api('/api/music-playlist').then(function (data) {
+      root.replaceChildren();
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '生成预览'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '创建歌单'),
+          h('span', { style: 'flex:1' }),
+          h('span', { class: 'muted small', title: data.report_dir },
+            '报告目录：' + (data.report_dir || '-'))),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '生成预览、创建歌单与写入平台需要账号授权，仍在桌面端；'
+          + '本页只读本地预览 / 执行报告。')));
+      var reports = data.reports || [];
+      var previewHost = h('div', { style: 'margin-top:12px' });
+      var card = h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '本地报告 · ' + fmtNumber(data.total) + ' 个'));
+      if (!reports.length) {
+        card.appendChild(empty('暂无报告。桌面端生成预览后会写入报告目录。'));
+      } else {
+        var body = h('tbody');
+        reports.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', { class: 'ellipsis' }, row.name),
+            h('td', null, row.kind),
+            h('td', { class: 'num' }, fmtBytes(row.size)),
+            h('td', null, row.mtime),
+            h('td', null, h('button', {
+              class: 'btn mini', type: 'button',
+              onclick: function () { loadReport(row.name); }
+            }, '查看'))));
+        });
+        card.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '文件'), h('th', null, '类型'),
+            h('th', { class: 'num' }, '大小'), h('th', null, '时间'),
+            h('th', null, ''))), body)));
+      }
+      root.appendChild(card);
+      root.appendChild(previewHost);
+
+      function loadReport(name) {
+        setLoading(previewHost, '正在读取报告…');
+        api('/api/music-playlist/report?name=' + encodeURIComponent(name))
+          .then(function (result) {
+            previewHost.replaceChildren(
+              h('div', { class: 'card' },
+                h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+                  result.name),
+                h('pre', {
+                  class: 'log-box', style: 'max-height:520px'
+                }, result.text)));
+          }).catch(function (error) {
+            setError(previewHost, error, function () { loadReport(name); });
+          });
+      }
+    }).catch(function (error) {
+      setError(root, error, function () { renderMusicPlaylist(root); });
     });
   }
 
