@@ -63,7 +63,19 @@ def _header_text(view, col: int) -> str:
 def _cell_text(view, row: int, col: int) -> str:
     if isinstance(view, QTableWidget):
         item = view.item(row, col)
-        return item.text() if item is not None else ""
+        if item is not None:
+            return item.text()
+        # 单元格里放的是下拉框 / 标签时按控件当前文本计宽，否则自适应会把这类列压没
+        widget = view.cellWidget(row, col)
+        if widget is not None:
+            for getter in ("currentText", "text"):
+                func = getattr(widget, getter, None)
+                if callable(func):
+                    try:
+                        return str(func() or "")
+                    except Exception:  # noqa: BLE001 - 控件已销毁时按空文本
+                        return ""
+        return ""
     if isinstance(view, QTreeWidget):
         item = view.topLevelItem(row)
         return item.text(col) if item is not None else ""
@@ -448,6 +460,12 @@ def _place_overlay(view):
 def _sync_actions(view):
     """表格显示/尺寸变化后对齐按钮：优先底部操作行，其次右下角浮层。"""
     if not isinstance(view, _TABLE_TYPES) or not view.isVisible():
+        return
+    if view.property("tableColumnsSelfManaged"):
+        # 页面自己管列宽（如映射窗口的「本地字段 / 腾讯字段」双列）：不挂全局按钮
+        overlay = _alive(getattr(view, "_table_column_overlay", None))
+        if overlay is not None:
+            overlay.hide()
         return
     if _ensure_actions(view) is not None:
         overlay = _alive(getattr(view, "_table_column_overlay", None))

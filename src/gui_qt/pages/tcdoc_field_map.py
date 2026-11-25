@@ -82,8 +82,9 @@ class FieldMapDialog(QDialog):
 
         tip = QLabel(
             "右边是腾讯文档的列（固定不改），左边选这一列用本地哪个字段：\n"
-            "程序字段 = 软件整理好的数据；JSON 字段 = 本地原始数据键（@title、@cover_url）。"
-            "「（不写）」= 这一列不写。")
+            "「本地：」= 程序字段，「JSON：」= 本地原始数据键（@title、@cover_url）。\n"
+            "没有对应程序字段的列会留「本地：列名（预留）」占位；选「（不写）」也保留"
+            "这个逻辑字段名，随时能改回来。")
         tip.setWordWrap(True)
         tip.setProperty("role", "caption")
         layout.addWidget(tip)
@@ -94,11 +95,13 @@ class FieldMapDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
+        self.table.setProperty("tableColumnsSelfManaged", True)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setStretchLastSection(False)
-        self.table.setColumnWidth(1, 250)
+        self.table.setColumnWidth(0, 360)
         self.table.setColumnWidth(2, 80)
         layout.addWidget(self.table, 1)
 
@@ -115,11 +118,18 @@ class FieldMapDialog(QDialog):
         layout.addWidget(self.status)
 
         buttons = QHBoxLayout()
+        fit = QPushButton("自适应列宽")
+        fit.setToolTip("按本地字段下拉框的内容调整左列宽度；右列始终占满剩余空间")
+        fit.clicked.connect(self._fit_columns)
+        buttons.addWidget(fit)
+        reset_width = QPushButton("重置列宽")
+        reset_width.clicked.connect(self._reset_widths)
+        buttons.addWidget(reset_width)
+        buttons.addStretch(1)
         reset = QPushButton("恢复默认")
         reset.setToolTip("把本表映射清空：腾讯列按同名程序字段写入，没有同名字段就不写")
         reset.clicked.connect(self._reset)
         buttons.addWidget(reset)
-        buttons.addStretch(1)
         close = QPushButton("关闭")
         close.clicked.connect(self.close)
         buttons.addWidget(close)
@@ -143,20 +153,27 @@ class FieldMapDialog(QDialog):
             self._rows.append(column)
 
             combo = QComboBox()
-            combo.setMinimumWidth(300)
+            # 不设最小宽度：列窄时由下拉框自己截断，避免控件溢出压住右边单元格
+            combo.setMinimumWidth(0)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(12)
             combo.addItem(_NOT_WRITTEN, "")
             for name in self._program_fields:
-                combo.addItem(f"程序字段：{name}", name)
+                combo.addItem(f"本地：{name}", name)
+            if column not in self._program_fields:
+                # 表里有、程序暂时没有的列：留一个逻辑字段占位，以后有数据可直接对上
+                combo.addItem(f"本地：{column}（预留）", column)
             for key in self._raw_keys:
-                combo.addItem(f"JSON 字段：@{key}", f"@{key}")
-            wanted = current.get(column, column if column in self._program_fields else "")
-            self._defaults[column] = (column if column in self._program_fields else "")
+                combo.addItem(f"JSON：@{key}", f"@{key}")
+            wanted = current.get(column, column)
+            self._defaults[column] = column
             if wanted and combo.findData(wanted) < 0:
                 combo.addItem(f"{wanted}（已不可用）", wanted)
             position = combo.findData(wanted)
             combo.setCurrentIndex(position if position >= 0 else 0)
             combo.currentIndexChanged.connect(
                 lambda _index, col=column: self._mark(col))
+            combo.setToolTip(f"逻辑字段：{column}\n当前：{combo.currentText()}")
             self.table.setCellWidget(row, 0, combo)
             self._combos[column] = combo
 
@@ -168,7 +185,7 @@ class FieldMapDialog(QDialog):
 
     def _state_cell(self, row: int, column: str, wanted: str) -> None:
         if wanted == self._defaults.get(column, ""):
-            text = "默认"
+            text = "默认" if column in self._program_fields else "预留"
         elif not wanted:
             text = "不写"
         else:
@@ -180,7 +197,9 @@ class FieldMapDialog(QDialog):
             item.setText(text)
 
     def _mark(self, column: str) -> None:
-        wanted = str(self._combos[column].currentData() or "")
+        combo = self._combos[column]
+        combo.setToolTip(f"逻辑字段：{column}\n当前：{combo.currentText()}")
+        wanted = str(combo.currentData() or "")
         self._state_cell(self._rows.index(column), column, wanted)
         self._refresh_status()
 
@@ -213,6 +232,24 @@ class FieldMapDialog(QDialog):
             self._state_cell(self._rows.index(column), column,
                              self._defaults.get(column, ""))
         self.status.setText("已恢复默认（还没保存）。")
+
+    def _fit_columns(self) -> None:
+        """左列按下拉框里最长的文字定宽（260..460），右列占满剩余宽度。"""
+        fm = self.table.fontMetrics()
+        longest = max((combo.currentText() for combo in self._combos.values()),
+                      key=len, default="")
+        width = min(max(fm.horizontalAdvance(longest) + 48, 300), 460)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setColumnWidth(0, width)
+
+    def _reset_widths(self) -> None:
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setColumnWidth(0, 360)
+        self.table.setColumnWidth(2, 80)
 
     def _save(self) -> None:
         pairs = self._pairs()
