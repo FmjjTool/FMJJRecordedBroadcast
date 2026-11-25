@@ -1,6 +1,7 @@
-"""腾讯文档 WebUI 服务：只读概览、同步状态与本地任务。
+"""腾讯文档 WebUI 服务：概览、同步状态、本地任务与白名单单条写回。
 
-写回腾讯文档不在 WebUI 暴露；采集/同步只调用既有 L3 任务并写入本地库。
+采集/同步只调用既有 L3 任务并写入本地库；写回固定为「官方动态」「直播记录」
+两表的单条新增，经 `webui_tcdoc_write` 用例执行，桌面与 WebUI 共用写锁。
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import threading
 from toolbox.tcdoc import config, push_history, storage, tables
 from toolbox.tcdoc import job as tcdoc_job
 from toolbox.webui.errors import Conflict
+from toolbox.webui.jobs import JobCancelled
 
 BusyError = Conflict
 
@@ -76,6 +78,50 @@ class TCDocService:
                 "total": int(total), "page": page, "page_size": page_size,
                 "pages": pages}
 
+    def writeback_status(self) -> dict:
+        return _write_module().status()
+
+    def writeback_preview(self, tab: str, days: int, limit: int) -> dict:
+        return _write_module().preview(tab, days, limit)
+
+    def start_writeback_upload(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        tab = str(payload.get("tab") or "")
+        if tab not in ("official", "live"):
+            raise ValueError("写回目标只支持「官方动态」或「直播记录」")
+        key = str(payload.get("key") or "").strip()
+        if not key:
+            raise ValueError("请选择要写入的记录")
+        if not payload.get("confirmed"):
+            raise ValueError("缺少写入确认")
+        try:
+            days = int(payload.get("days") or 30)
+        except (TypeError, ValueError):
+            days = 30
+        _write_module().ensure_uploadable(tab)
+        job = self.jobs.submit(
+            "tcdoc_write",
+            lambda task: self._writeback_job(task, tab, key, days))
+        return {"job": job.id}
+
+    def _writeback_job(self, job, tab: str, key: str, days: int) -> dict:
+        module = _write_module()
+
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"正在写入腾讯文档：{name}", fraction)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return module.upload_single(
+                tab, key, confirmed=True, days=days, on_progress=progress,
+                is_cancelled=cancelled)
+        except module.TcdocWriteCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
     def start_collect(self):
         return self._start("tcdoc_collect", "采集腾讯文档", tcdoc_job.collect_all)
 
@@ -99,6 +145,11 @@ class TCDocService:
         except Exception:
             self._lock.release()
             raise
+
+
+def _write_module():
+    from toolbox import webui_tcdoc_write
+    return webui_tcdoc_write
 
 
 def _row_dict(row) -> dict:

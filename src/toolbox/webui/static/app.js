@@ -27,7 +27,7 @@
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
-    tcdoc: { docKey: '', rowsTab: '', rowsPage: 1 }
+    tcdoc: { docKey: '', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '' }
   };
   var routes = {
     collected: { title: '采集结果', load: renderCollected },
@@ -3340,6 +3340,9 @@
         var collectBtn = h('button', { class: 'btn primary', type: 'button' }, '立即采集');
         var syncBtn = h('button', { class: 'btn', type: 'button' }, '表格同步');
         var rowsHost = h('div');
+        var writebackHost = h('div', { class: 'card' });
+        var writeJobHost = h('div');
+        var writeResultHost = h('div');
 
         function start(url, label) {
           collectBtn.disabled = true;
@@ -3467,6 +3470,9 @@
                   h('th', null, '同步时间'), h('th', null, '状态'), h('th', null, ''))), sheetRows))
               : empty('暂无表格同步数据。')),
           rowsHost,
+          writebackHost,
+          writeJobHost,
+          writeResultHost,
           h('div', { class: 'card' }, h('div', { class: 'card-title' }, '推送历史'),
             pushRows.children.length
               ? h('div', { class: 'table-wrap' }, h('table', null,
@@ -3475,6 +3481,190 @@
                   h('th', null, '状态'), h('th', { class: 'num' }, '新增'),
                   h('th', { class: 'num' }, '图片'), h('th', { class: 'num' }, '失败'))), pushRows))
               : empty('暂无推送记录。')));
+        renderWriteback();
+
+        function renderWriteback() {
+          writebackHost.replaceChildren(
+            h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
+            h('div', { class: 'loading', text: '正在读取写回状态…' }));
+          Promise.all([
+            api('/api/tcdoc/writeback/status'),
+            api('/api/tcdoc/writeback/preview?tab=' +
+              encodeURIComponent(state.tcdoc.writeTab) +
+              '&days=' + state.tcdoc.writeDays + '&limit=100')
+          ]).then(function (results) {
+            var status = results[0] || {};
+            var preview = results[1] || {};
+            var refresh = preview.refresh || status.refresh || {};
+            var allowed = !!refresh.allowed;
+            var tabs = h('div', { class: 'tabs' });
+            (status.targets || []).forEach(function (target) {
+              tabs.appendChild(h('button', {
+                class: 'tab' + (state.tcdoc.writeTab === target.key ? ' active' : ''),
+                type: 'button',
+                onclick: function () {
+                  state.tcdoc.writeTab = target.key;
+                  state.tcdoc.writeKey = '';
+                  renderWriteback();
+                }
+              }, target.name));
+            });
+            var daysSelect = h('select', { class: 'select' },
+              [30, 90, 180, 365].map(function (value) {
+                return h('option', {
+                  value: String(value),
+                  selected: value === state.tcdoc.writeDays
+                }, value + ' 天');
+              }));
+            daysSelect.addEventListener('change', function () {
+              state.tcdoc.writeDays = Number(daysSelect.value);
+              state.tcdoc.writeKey = '';
+              renderWriteback();
+            });
+            var rows = preview.rows || [];
+            var known = new Set(rows.map(function (row) { return row.key; }));
+            if (!known.has(state.tcdoc.writeKey)) state.tcdoc.writeKey = '';
+            var body = h('tbody');
+            rows.forEach(function (row) {
+              var radio = h('input', {
+                type: 'radio', name: 'tcdocWriteKey',
+                checked: state.tcdoc.writeKey === row.key
+              });
+              radio.addEventListener('change', function () {
+                state.tcdoc.writeKey = row.key;
+                updateWriteButton();
+              });
+              var link = row.link
+                ? h('a', { href: row.link, target: '_blank',
+                           rel: 'noopener noreferrer' }, '打开')
+                : '-';
+              body.appendChild(h('tr', null,
+                h('td', null, radio),
+                h('td', null, row.time || '-'),
+                h('td', { class: 'ellipsis', title: row.title || '' },
+                  row.title || '-'),
+                h('td', null, (row.account || '-') +
+                  (row.platform ? ' / ' + row.platform : '')),
+                h('td', { class: 'muted small' }, link),
+                h('td', { class: 'num' }, row.images || 0),
+                h('td', { class: 'muted small' }, row.flag || '')));
+            });
+            var table = rows.length
+              ? h('div', { class: 'table-wrap' }, h('table', { class: 'db-table' },
+                  h('thead', null, h('tr', null,
+                    h('th', { style: 'width:36px' }, ''),
+                    h('th', null, '时间'), h('th', null, '标题'),
+                    h('th', null, '账号 / 平台'), h('th', null, '链接'),
+                    h('th', { class: 'num' }, '图片'),
+                    h('th', null, '标记'))), body))
+              : empty('当前范围内没有待写记录。可切换表或调整时间范围后重新加载。');
+            var summary = h('span', { class: 'muted small' },
+              '待写 ' + fmtNumber(preview.total || 0) + ' 条' +
+              (preview.truncated ? '（仅显示前 100 条）' : '') +
+              (preview.stats && preview.stats.since
+                ? ' · 自 ' + preview.stats.since : ''));
+            var writeBtn = h('button', {
+              class: 'btn primary', type: 'button'
+            }, '写入选中 1 条');
+
+            function updateWriteButton() {
+              writeBtn.disabled = !state.tcdoc.writeKey || !allowed;
+            }
+
+            writeBtn.addEventListener('click', function () {
+              var row = rows.find(function (item) {
+                return item.key === state.tcdoc.writeKey;
+              });
+              if (!row) {
+                toast('请先选择一条待写记录', 'warning');
+                return;
+              }
+              if (!allowed) {
+                toast('数据未刷新：请先在桌面端完成同步前刷新或开启免校对模式', 'warning');
+                return;
+              }
+              var lines = '将真实新增 1 条到「' + (preview.name || '') +
+                '」（《' + (preview.doc_name || status.doc_name || '封茗囧菌数据汇总库') +
+                '》）\n\n' +
+                (row.title ? '标题：' + row.title + '\n' : '') +
+                (row.time ? '时间：' + row.time + '\n' : '') +
+                (row.account ? '账号：' + row.account + '\n' : '') +
+                '\n只新增，不修改、不删除；写入后立即读回校验并记录推送历史。\n' +
+                '确定写入这 1 条吗？';
+              if (!window.confirm(lines)) return;
+              writeBtn.disabled = true;
+              post('/api/tcdoc/writeback/upload', {
+                tab: state.tcdoc.writeTab,
+                key: row.key,
+                days: state.tcdoc.writeDays,
+                confirmed: true
+              }).then(function (data) {
+                watchJob(writeJobHost, data.job, function (job) {
+                  writeBtn.disabled = false;
+                  var result = job.result || {};
+                  toast(result.summary || '写回完成',
+                    result.verified ? 'success' : 'info');
+                  var lines = [];
+                  if (result.summary) lines.push(result.summary);
+                  if (result.record_ids && result.record_ids.length) {
+                    lines.push('record_id：' + result.record_ids.join('、'));
+                  }
+                  if (result.error) lines.push('原因：' + result.error);
+                  if (result.note) lines.push(result.note);
+                  writeResultHost.replaceChildren(h('div', {
+                    class: 'card', style: 'margin-top:12px'
+                  }, h('div', { class: 'muted small' },
+                    lines.join('；') || '写回完成')));
+                  state.tcdoc.writeKey = '';
+                  renderWriteback();
+                }, {
+                  onSettled: function (job) {
+                    writeBtn.disabled = false;
+                    if (job.status === 'cancelled') {
+                      toast('写回已取消', 'info');
+                    }
+                    if (job.status === 'error') {
+                      toast('写回失败：' + job.error, 'error');
+                    }
+                  }
+                });
+              }).catch(function (error) {
+                writeBtn.disabled = false;
+                toast('写回失败：' + error.message, 'error');
+              });
+            });
+
+            updateWriteButton();
+            writebackHost.replaceChildren(
+              h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
+              h('div', { class: 'muted small' }, status.note || ''),
+              h('div', { class: 'muted small', style: 'margin-top:4px' },
+                '目标固定为《' + (status.doc_name || '封茗囧菌数据汇总库') +
+                '》，与上方文档选择无关。'),
+              h('div', { class: 'toolbar', style: 'margin:8px 0' },
+                h('span', { class: 'badge ' + (allowed ? 'ok' : 'warn') },
+                  allowed ? '数据已刷新' : '需要先刷新'),
+                h('span', { class: 'muted small' }, refresh.message || ''),
+                h('span', { style: 'flex:1' }),
+                h('button', { class: 'btn', type: 'button',
+                              onclick: renderWriteback }, '重新加载')),
+              tabs,
+              h('div', { class: 'toolbar' },
+                h('span', { class: 'muted small' }, '时间范围'), daysSelect,
+                summary, h('span', { style: 'flex:1' }), writeBtn),
+              table);
+          }).catch(function (error) {
+            writebackHost.replaceChildren(
+              h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
+              h('div', { class: 'error' }, '写回状态加载失败：' + error.message,
+                h('div', { class: 'small', style: 'margin-top:8px' },
+                  '请确认本地腾讯文档数据与登录状态后重试。'),
+                h('button', {
+                  class: 'btn', type: 'button', style: 'margin-top:8px',
+                  onclick: renderWriteback
+                }, '重试')));
+          });
+        }
       }).catch(function (error) {
         setError(root, error, function () { renderTcdoc(root); });
       });

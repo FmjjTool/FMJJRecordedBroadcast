@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import argparse
 import copy
+import functools
 import hashlib
 import json
 import os
 import re
 import sqlite3
 import sys
-from contextlib import closing
+import threading
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -33,6 +35,63 @@ from toolbox.tcdoc.import_local import (
     image_mime, install_readonly_guard, managed_cookie_reader, validate_target, weibo_key,
 )
 from toolbox.utils import PLATFORM_CN, sanitize_filename
+
+
+_WRITE_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _write_lock():
+    """上传互斥：同进程线程锁 + 跨进程文件锁，抢占失败立即报错。
+
+    桌面批量上传 / 单条试写 / 资产页单条上传与 WebUI 写回都经过
+    run() / write_lives()，统一在此拦截并发写入。
+    """
+    if not _WRITE_THREAD_LOCK.acquire(blocking=False):
+        raise ImportErrorDetail("另一个上传任务正在进行，请稍后再试")
+    handle = None
+    try:
+        try:
+            path = tc_cfg.data_dir() / "上传互斥.lock"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(path, "a+b")
+        except OSError as exc:
+            raise ImportErrorDetail(f"无法创建上传互斥文件：{exc}") from exc
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise ImportErrorDetail("另一个上传任务正在进行，请稍后再试") from exc
+        yield
+    finally:
+        if handle is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            handle.close()
+        _WRITE_THREAD_LOCK.release()
+
+
+def _serialized_write(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if kwargs.get("apply", False):
+            with _write_lock():
+                return fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 def link_key(link: str) -> str | None:
@@ -1137,6 +1196,7 @@ def _ms_to_day(raw) -> str:
     return text[:10]
 
 
+@_serialized_write
 def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
                 verify_each: bool = True, emit=lambda event: None) -> dict:
     """直播记录写回：预演 → 去重 → addRecords → 读回校验。
@@ -1487,6 +1547,7 @@ def _event_live_index(rows: list[dict]) -> dict:
     return index
 
 
+@_serialized_write
 def run(client, records, *, apply=False, available_only=False, verify_each=True,
         emit=lambda event: None, profile="posts", allow_new_options=False,
         source="上传"):

@@ -205,6 +205,17 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q("doc_key"), req.q("tab_id"), req.q_int("page", 1, 1),
         req.q_int("page_size", 50, 1, 200)))
 
+    server.get("/api/tcdoc/writeback/status",
+               lambda req: tcdoc.writeback_status())
+    server.get("/api/tcdoc/writeback/preview",
+               lambda req: tcdoc.writeback_preview(
+                   req.q("tab"), req.q_int("days", 30, 1, 3650),
+                   req.q_int("limit", 100, 1, 500)))
+
+    def start_tcdoc_writeback(req):
+        return tcdoc.start_writeback_upload(dict(req.json or {}))
+    server.post("/api/tcdoc/writeback/upload", start_tcdoc_writeback)
+
     def get_job(req, job_id):
         job = jobs.get(job_id)
         if job is None:
