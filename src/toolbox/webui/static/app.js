@@ -20,6 +20,7 @@
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true, selected: new Set() },
     trackers: { platform: '', open: '' },
+    fangroups: { open: '' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -46,6 +47,7 @@
     music_tracker: { title: '音乐账号', load: renderMusicTracker },
     media_tracker: { title: '网媒账号', load: renderMediaTracker },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
+    fan_groups: { title: '粉丝群', load: renderFanGroups },
     tasks: { title: '定时任务', load: renderTasks },
     system: { title: '全局设置', load: renderSystem }
   };
@@ -343,6 +345,7 @@
         ['record', '直播录制', '监控与录制控制（需桌面运行）'],
         ['music_tracker', '音乐账号', '五平台账号指标与历史'],
         ['media_tracker', '网媒账号', '网媒账号指标与历史'],
+        ['fan_groups', '粉丝群', 'QQ 群订阅与人数历史'],
         ['tcdoc', '腾讯文档', '浏览量 / 成员数每日记录']
       ]],
       ['全局', [
@@ -3767,6 +3770,145 @@
           loadTrackerHistory(host, kind, name);
         });
       });
+  }
+
+  function renderFanGroups(root) {
+    setLoading(root, '正在读取 QQ 群订阅列表…');
+    api('/api/fangroups').then(function (data) {
+      root.replaceChildren();
+      var groups = data.groups || [];
+      var tableHost = h('div');
+      var historyHost = h('div', { style: 'margin-top:12px' });
+      var refreshBtn = h('button', {
+        class: 'btn', type: 'button'
+      }, '刷新');
+      refreshBtn.addEventListener('click', function () {
+        renderFanGroups(root);
+      });
+
+      function draw() {
+        if (!groups.length) {
+          tableHost.replaceChildren(empty(
+            '暂无已订阅 QQ 群。桌面端「订阅列表」添加群号或分享链接后刷新。'));
+          return;
+        }
+        var head = h('tr');
+        ['', '群名', '群号', '人数', '变化', '状态', '来源']
+          .forEach(function (title) {
+            head.appendChild(h('th', null, title));
+          });
+        head.appendChild(h('th', null, ''));
+        var body = h('tbody');
+        groups.forEach(function (row) {
+          var fallback = h('span', {
+            class: 'fg-avatar fg-avatar-fallback'
+          }, (row.name || '?').slice(0, 1));
+          var avatar = fallback;
+          if (row.has_avatar) {
+            avatar = h('img', {
+              class: 'fg-avatar', alt: '',
+              src: '/api/fangroups/avatar?no='
+                + encodeURIComponent(row.no) + '&token='
+                + encodeURIComponent(token)
+            });
+            avatar.addEventListener('error', function () {
+              avatar.replaceWith(fallback);
+            });
+          }
+          var active = state.fangroups.open === row.no;
+          body.appendChild(h('tr', null,
+            h('td', null, avatar),
+            h('td', null, row.name || '-'),
+            h('td', null, row.no || '-'),
+            h('td', { class: 'num' }, row.members == null
+              ? '-' : fmtNumber(row.members)),
+            h('td', {
+              class: 'num' + (String(row.change || '').charAt(0) === '+'
+                ? ' delta-up'
+                : (String(row.change || '').charAt(0) === '-'
+                  && row.change !== '-' ? ' delta-down' : ''))
+            }, row.change || '-'),
+            h('td', { class: 'muted small' }, row.status || '-'),
+            h('td', { class: 'muted small' }, row.source || '-'),
+            h('td', null, h('button', {
+              class: 'btn mini', type: 'button',
+              onclick: function () {
+                if (state.fangroups.open === row.no) {
+                  state.fangroups.open = '';
+                  historyHost.replaceChildren();
+                } else {
+                  state.fangroups.open = row.no;
+                  loadHistory(row);
+                }
+                draw();
+              }
+            }, active ? '收起' : '历史'))));
+        });
+        tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, head), body)));
+      }
+
+      function loadHistory(row) {
+        setLoading(historyHost, '正在读取人数历史…');
+        api('/api/fangroups/history?no=' + encodeURIComponent(row.no)
+          + '&limit=200')
+          .then(function (result) {
+            if (!(result.rows || []).length) {
+              historyHost.replaceChildren(empty(
+                '暂无人数历史。桌面端刷新群信息后生成。'));
+              return;
+            }
+            var head = h('tr', null,
+              h('th', null, '采集时间'), h('th', { class: 'num' }, '人数'),
+              h('th', null, '群名'));
+            var body = h('tbody');
+            result.rows.forEach(function (item) {
+              body.appendChild(h('tr', null,
+                h('td', null, item.time || '-'),
+                h('td', { class: 'num' }, item.members == null
+                  ? '-' : fmtNumber(item.members)),
+                h('td', null, item.name || '-')));
+            });
+            historyHost.replaceChildren(
+              h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+                row.name + ' · 人数历史（最新在前）'),
+              h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' },
+                  h('thead', null, head), body)));
+          }).catch(function (error) {
+            setError(historyHost, error, function () { loadHistory(row); });
+          });
+      }
+
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '平台'),
+          h('select', { class: 'select' },
+            h('option', { value: 'qqgroup' }, 'QQ群')),
+          h('input', {
+            class: 'input grow', disabled: true,
+            placeholder: '粘贴群号或分享链接（订阅在桌面端）'
+          }),
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '查询')),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '导出 Excel'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '下载头像'),
+          h('span', { style: 'flex:1' }), refreshBtn),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '可粘贴群号或群资料分享链接（免登录）；订阅、刷新、导出与头像下载仍在桌面端。')));
+      root.appendChild(tableHost);
+      root.appendChild(historyHost);
+      draw();
+    }).catch(function (error) {
+      setError(root, error, function () { renderFanGroups(root); });
+    });
   }
 
   function renderRecord(host) {
