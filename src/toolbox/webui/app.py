@@ -198,6 +198,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tool_service.start_video_chapters_write(dict(req.json or {}))
     server.post("/api/tools/video/chapters/write", start_video_chapters_write)
 
+    def start_video_detect(req):
+        return tool_service.start_video_detect(dict(req.json or {}))
+    server.post("/api/tools/video/detect", start_video_detect)
+
     server.get("/api/tools/audio/overview",
                lambda req: tool_service.audio_overview())
     server.get("/api/tools/audio/sources", lambda req: tool_service.audio_sources(

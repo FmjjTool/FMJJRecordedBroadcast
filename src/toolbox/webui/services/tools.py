@@ -428,6 +428,34 @@ class ToolService:
                 rel, tags, rotation, on_progress=self._video_progress(task),
                 is_cancelled=self._video_cancelled(task)))
 
+    def start_video_detect(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择视频")
+        kind = str(payload.get("kind") or "").strip()
+        if kind not in ("silence", "black", "scene"):
+            raise ValueError("未知检测类型")
+        try:
+            threshold = float(payload.get("threshold"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("检测阈值不正确") from exc
+        try:
+            min_sec = float(payload.get("min_sec") or 0.5)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("最短时长不正确") from exc
+        if kind == "silence" and not -60 <= threshold <= 0:
+            raise ValueError("静音阈值需在 -60 到 0 dB 之间")
+        if kind in ("black", "scene") and not 0.01 <= threshold <= 1:
+            raise ValueError("阈值需在 0.01 到 1 之间")
+        if not 0.1 <= min_sec <= 10:
+            raise ValueError("最短时长需在 0.1 到 10 秒之间")
+        return self._submit_video(
+            "video_detect",
+            lambda task: webui_tools.detect_video(
+                rel, kind, threshold, min_sec,
+                on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
     def start_video_chapters_write(self, payload: dict) -> dict:
         rel = str(payload.get("path") or "").strip()
         if not rel:

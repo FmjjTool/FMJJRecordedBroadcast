@@ -895,6 +895,72 @@ def write_video_chapters(rel_path: str, segments, on_progress=None,
             "output": result.name, "outputs": [result.name], "ok": True}
 
 
+_DETECT_KINDS = ("silence", "black", "scene")
+
+
+def detect_video(rel_path: str, kind: str, threshold=None, min_sec=0.5,
+                 on_progress=None, is_cancelled=None) -> dict:
+    """检测静音段 / 黑帧段 / 场景切换点（只读，不生成文件）。"""
+    from toolbox.concat_engine import media_duration
+    from toolbox.edit_engine import (EditCancelled, cut_points_from_ranges,
+                                     detect_black, detect_scenes,
+                                     detect_silence)
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    kind = str(kind or "")
+    if kind not in _DETECT_KINDS:
+        raise ValueError("未知检测类型")
+    try:
+        seconds = float(min_sec if min_sec is not None else 0.5)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("最短时长不正确") from exc
+    if not 0.1 <= seconds <= 10:
+        raise ValueError("最短时长需在 0.1 到 10 秒之间")
+    try:
+        value = float(threshold)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("检测阈值不正确") from exc
+    if kind == "silence" and not -60 <= value <= 0:
+        raise ValueError("静音阈值需在 -60 到 0 dB 之间")
+    if kind in ("black", "scene") and not 0.01 <= value <= 1:
+        raise ValueError("阈值需在 0.01 到 1 之间")
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+
+    def progress(percent, message):
+        _report(on_progress, max(0, min(100, int(percent))) / 100.0, 1,
+                message or "检测中")
+
+    try:
+        if kind == "silence":
+            ranges = detect_silence(path, value, seconds, progress=progress,
+                                    cancel=is_cancelled)
+            points = cut_points_from_ranges(ranges)
+            summary = f"检测到 {len(ranges)} 段静音，{len(points)} 个切点"
+        elif kind == "black":
+            ranges = detect_black(path, seconds, value, progress=progress,
+                                  cancel=is_cancelled)
+            points = cut_points_from_ranges(ranges)
+            summary = f"检测到 {len(ranges)} 段黑帧，{len(points)} 个切点"
+        else:
+            ranges = []
+            points = detect_scenes(path, value, progress=progress,
+                                   cancel=is_cancelled)
+            summary = f"检测到 {len(points)} 个场景切换点"
+    except EditCancelled as exc:
+        raise ToolCancelled(str(exc)) from exc
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    return {"kind": kind, "path": _rel(root, path),
+            "ranges": [[int(a), int(b)] for a, b in ranges],
+            "points": [int(item) for item in points],
+            "duration_ms": int(media_duration(path) * 1000),
+            "summary": summary, "ok": True}
+
+
 def video_extra_sources(kind: str, limit: int = 200) -> dict:
     """列出工作目录内可用的外部音轨 / 字幕文件。"""
     root = _work_root()

@@ -1818,15 +1818,78 @@
         });
         var btn = h('button', { class: 'btn primary', type: 'button' }, '切割选中视频');
         var chapterBtn = h('button', { class: 'btn', type: 'button' }, '写入章节');
+        var detectKind = makeSelect([
+          { value: 'silence', label: '静音' },
+          { value: 'black', label: '黑帧' },
+          { value: 'scene', label: '场景切换' }
+        ], 'silence');
+        var detThreshold = h('input', {
+          class: 'input', style: 'width:92px', value: '-30'
+        });
+        var detUnit = h('span', { class: 'muted small' }, 'dB');
+        var detMin = h('input', {
+          class: 'input', style: 'width:72px', value: '0.5'
+        });
+        var detBtn = h('button', { class: 'btn', type: 'button' }, '检测');
+        var fillBtn = h('button', {
+          class: 'btn', type: 'button', disabled: true
+        }, '填入片段');
+        var clearBtn = h('button', {
+          class: 'btn ghost', type: 'button', disabled: true
+        }, '清空切点');
+        var detInfo = h('div', { class: 'muted small', style: 'margin:6px 0' },
+          '选择 1 个视频后检测；结果可一键填入下方片段。');
+        var detectPoints = [];
+        var detectDuration = 0;
+        var detectPath = '';
         tabHost.appendChild(h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '导出'), exportSel,
           h('span', { class: 'muted small' }, '方式'), modeSel,
           h('span', { style: 'flex:1' }), chapterBtn, btn));
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '自动检测'), detectKind,
+          h('span', { class: 'muted small' }, '阈值'),
+          detThreshold, detUnit,
+          h('span', { class: 'muted small' }, '最短'), detMin,
+          h('span', { class: 'muted small' }, '秒'), detBtn,
+          fillBtn, clearBtn));
+        tabHost.appendChild(detInfo);
         tabHost.appendChild(segments);
         tabHost.appendChild(nameRow);
         tabHost.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
           '先在表格勾选 1 个视频；时间可用秒（90）或时间码（01:30 / 00:01:30）。输出到工作目录根，不覆盖已有文件。'
+          + '检测只读视频不生成文件：静音阈值用 dB（-60 到 0），黑帧与场景用 0.01 到 1；'
           + '「写入章节」会把上方片段写成章节并封装为新视频（不转码）。'));
+        var detectDefaults = {
+          silence: { value: '-30', unit: 'dB' },
+          black: { value: '0.10', unit: '' },
+          scene: { value: '0.40', unit: '' }
+        };
+        detectKind.addEventListener('change', function () {
+          var preset = detectDefaults[detectKind.value];
+          detThreshold.value = preset.value;
+          detUnit.textContent = preset.unit;
+          detMin.disabled = detectKind.value === 'scene';
+        });
+        detMin.disabled = detectKind.value === 'scene';
+
+        function msClock(ms) {
+          var total = Math.max(0, Math.round(ms / 100) / 10);
+          var hours = Math.floor(total / 3600);
+          var minutes = Math.floor((total % 3600) / 60);
+          var seconds = (total % 60).toFixed(1);
+          return (hours < 10 ? '0' : '') + hours + ':'
+            + (minutes < 10 ? '0' : '') + minutes + ':'
+            + (Number(seconds) < 10 ? '0' : '') + seconds;
+        }
+
+        function resetDetect() {
+          detectPoints = [];
+          detectDuration = 0;
+          detectPath = '';
+          fillBtn.disabled = true;
+          clearBtn.disabled = true;
+        }
         exportSel.addEventListener('change', function () {
           nameRow.style.display = exportSel.value === 'each' ? 'none' : '';
         });
@@ -1834,11 +1897,109 @@
           var disabled = running || selected.size !== 1;
           btn.disabled = disabled;
           chapterBtn.disabled = disabled;
+          detBtn.disabled = disabled;
+          fillBtn.disabled = running || !detectPoints.length || !detectDuration;
+          clearBtn.disabled = running || !detectPoints.length;
           btn.textContent = running ? '处理中…' : '切割选中视频';
           chapterBtn.textContent = running ? '处理中…' : '写入章节';
+          detBtn.textContent = running ? '处理中…' : '检测';
         };
         actionRefreshers.push(sync);
         sync();
+        detBtn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length !== 1) {
+            toast('请先在表格勾选 1 个视频', 'warning');
+            return;
+          }
+          var threshold = Number(detThreshold.value);
+          if (!isFinite(threshold)) {
+            toast('请填写检测阈值', 'warning');
+            return;
+          }
+          if (detectKind.value === 'silence') {
+            if (threshold < -60 || threshold > 0) {
+              toast('静音阈值需在 -60 到 0 dB 之间', 'warning');
+              return;
+            }
+          } else if (threshold < 0.01 || threshold > 1) {
+            toast('阈值需在 0.01 到 1 之间', 'warning');
+            return;
+          }
+          var minSec = detectKind.value === 'scene' ? 0.5 : Number(detMin.value);
+          if (detectKind.value !== 'scene'
+              && (!isFinite(minSec) || minSec < 0.1 || minSec > 10)) {
+            toast('最短时长需在 0.1 到 10 秒之间', 'warning');
+            return;
+          }
+          running = true;
+          updateButtons();
+          post('/api/tools/video/detect', {
+            path: paths[0], kind: detectKind.value,
+            threshold: threshold, min_sec: minSec
+          }).then(function (data) {
+            watchJob(jobHost, data.job, function (job) {
+              running = false;
+              updateButtons();
+              var result = job.result || {};
+              detectPoints = (result.points || []).slice();
+              detectDuration = Number(result.duration_ms || 0);
+              detectPath = String(result.path || '');
+              var found = result.summary || '检测完成';
+              detInfo.textContent = found
+                + (detectDuration ? ' · 时长 ' + msClock(detectDuration) : '')
+                + (detectPoints.length ? '，可点「填入片段」' : '，没有可用切点');
+              toast(found, 'success');
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                running = false;
+                updateButtons();
+                if (job.status === 'cancelled') {
+                  detInfo.textContent = '检测已取消。';
+                  toast('检测已取消', 'info');
+                }
+              }
+            });
+          }).catch(function (error) {
+            running = false;
+            updateButtons();
+            toast('检测失败：' + error.message, 'error');
+          });
+        });
+        fillBtn.addEventListener('click', function () {
+          if (!detectPoints.length || !detectDuration) {
+            toast('请先执行检测', 'warning');
+            return;
+          }
+          var paths = selectedPaths();
+          if (paths.length !== 1 || (detectPath && paths[0] !== detectPath)) {
+            toast('当前选中的视频已变化，请重新检测', 'warning');
+            return;
+          }
+          var bounds = [0];
+          detectPoints.forEach(function (point) {
+            if (point > 0 && point < detectDuration) bounds.push(point);
+          });
+          bounds.push(detectDuration);
+          var rows = [];
+          for (var index = 1; index < bounds.length; index += 1) {
+            if (bounds[index] - bounds[index - 1] >= 400) {
+              rows.push(msClock(bounds[index - 1]) + '-'
+                + msClock(bounds[index]));
+            }
+          }
+          if (!rows.length) {
+            toast('切点间隔太短，未生成片段', 'warning');
+            return;
+          }
+          segments.value = rows.join('\n');
+          toast('已按切点填入 ' + rows.length + ' 个片段', 'success');
+        });
+        clearBtn.addEventListener('click', function () {
+          resetDetect();
+          detInfo.textContent = '已清空切点。';
+        });
         chapterBtn.addEventListener('click', function () {
           var paths = selectedPaths();
           if (paths.length !== 1) {
