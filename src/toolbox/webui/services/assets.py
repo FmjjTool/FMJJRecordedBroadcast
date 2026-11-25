@@ -52,6 +52,12 @@ class AssetService:
         return webui_assets_dl.set_entry_no_dl(path,
                                                bool(payload.get("marked")))
 
+    def entry_detail(self, path: str) -> dict:
+        return self._query.entry_detail(path)
+
+    def local_stat(self, category: str, rel_dir: str, name: str) -> dict:
+        return self._query.local_stat(category, rel_dir, name)
+
     def preview_local(self, category: str, rel_dir: str, name: str):
         """返回 (bytes, mime)；只读预览，详见 L3 `preview_local`。"""
         return self._query.preview_local(category, rel_dir, name)

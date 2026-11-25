@@ -30,6 +30,14 @@ _DB_COLUMNS = [
 _PLATFORM_ORDER = ["douyin", "bilibili", "weibo", "kuaishou",
                    "xiaohongshu", "acfun", "tieba", "zhihu"]
 _LOCAL_SCAN_LIMIT = 50000
+_DETAIL_MAX_CHARS = 200 * 1024
+_DETAIL_FIELDS = (
+    ("title", "标题"), ("author", "作者"), ("platform", "平台"),
+    ("publish_time", "发布时间"), ("video_id", "视频 ID"),
+    ("duration", "时长"), ("play_count", "播放"), ("like_count", "点赞"),
+    ("comment_count", "评论"), ("coin_count", "投币"),
+    ("danmaku_count", "弹幕"), ("video_url", "链接"),
+)
 _LOCAL_CACHE_TTL = 300
 _LOCAL_GROUP_LIMIT = 200
 _PREVIEW_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
@@ -151,6 +159,75 @@ class AssetQueryService:
             summary += f"（超过 {_LOCAL_SCAN_LIMIT} 个文件，结果已截断）"
         return {"category": category, "summary": summary, "files": int(files),
                 "groups": len(payload), "truncated": bool(truncated)}
+
+    def entry_detail(self, path: str) -> dict:
+        """条目二级详情：读取导出 JSON 概要与原始文本（只读，限制 200KB）。"""
+        root = get_export_dir() / EXPORT_CATEGORIES["video_data"]
+        rel = str(path or "").replace("\\", "/").strip("/")
+        if not rel or ".." in rel.split("/"):
+            raise ValueError("条目路径不合法")
+        target = root / rel
+        try:
+            target.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError("条目不在导出目录内") from exc
+        if not target.is_file():
+            raise ValueError("导出文件不存在或已被移动")
+        if target.suffix.lower() != ".json":
+            raise ValueError("只支持查看 JSON 导出文件")
+        try:
+            stat = target.stat()
+        except OSError as exc:
+            raise ValueError("导出文件读取失败") from exc
+        raw = target.read_text(encoding="utf-8", errors="replace")
+        truncated = len(raw) > _DETAIL_MAX_CHARS
+        text = raw[:_DETAIL_MAX_CHARS]
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = {}
+        fields = []
+        if isinstance(data, dict):
+            for key, label in _DETAIL_FIELDS:
+                value = data.get(key)
+                if isinstance(value, (dict, list)):
+                    value = json.dumps(value, ensure_ascii=False)[:200]
+                if value in (None, ""):
+                    continue
+                fields.append({"label": label, "value": str(value)[:300]})
+        return {"path": rel, "file": target.name,
+                "size": int(stat.st_size),
+                "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                      time.localtime(stat.st_mtime)),
+                "fields": fields, "text": text, "truncated": truncated,
+                "note": "只读详情：显示导出 JSON 的字段与原文，最多 200KB。"}
+
+    def local_stat(self, category: str, rel_dir: str, name: str) -> dict:
+        """本地分类文件的详情（大小 / 修改时间 / 类型），只读。"""
+        root = self.category_root(category)
+        rel = str(rel_dir or "").replace("\\", "/").strip("/")
+        file_name = str(name or "").strip()
+        if not file_name or ".." in file_name or "/" in file_name:
+            raise ValueError("文件名不合法")
+        if ".." in rel.split("/"):
+            raise ValueError("目录不合法")
+        target = (root / rel / file_name) if rel else (root / file_name)
+        try:
+            target.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError("文件不在分类目录内") from exc
+        if not target.is_file():
+            raise ValueError("文件不存在或已被移动")
+        stat = target.stat()
+        ext = target.suffix.lower()
+        kind = ("image" if ext in _PREVIEW_IMAGE_EXTS
+                else "video" if ext in _PREVIEW_VIDEO_EXTS else "file")
+        return {"category": category, "dir": rel, "name": file_name,
+                "size": int(stat.st_size),
+                "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                      time.localtime(stat.st_mtime)),
+                "kind": kind,
+                "previewable": kind in ("image", "video")}
 
     def preview_local(self, category: str, rel_dir: str, name: str) -> tuple:
         """预览分类目录内文件：图片返回原字节，视频返回 ffmpeg 首帧。

@@ -2101,6 +2101,71 @@
     });
   }
 
+  function openEntryDetail(item) {
+      var overlay = h('div', { class: 'preview-overlay' });
+      var box = h('div', { class: 'preview-box' });
+      var caption = h('div', { class: 'preview-caption' },
+        h('span', { class: 'ellipsis' }, item.title || item.file || '条目详情'),
+        h('button', { class: 'btn', type: 'button' }, '关闭'));
+      var closeBtn = caption.lastChild;
+      var body = h('div', {
+        class: 'preview-body', style: 'padding:12px 14px'
+      }, '正在读取导出文件…');
+      box.appendChild(caption);
+      box.appendChild(body);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      function close() { overlay.remove(); }
+      closeBtn.addEventListener('click', close);
+      overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) close();
+      });
+      document.addEventListener('keydown', function onKey(event) {
+        if (event.key === 'Escape') {
+          close();
+          document.removeEventListener('keydown', onKey);
+        }
+      });
+
+      api('/api/assets/entry?path=' + encodeURIComponent(item.path))
+        .then(function (data) {
+          var grid = h('div');
+          (data.fields || []).forEach(function (field) {
+            grid.appendChild(h('div', { class: 'kv' },
+              h('span', { class: 'muted' }, field.label),
+              h('span', { class: 'ellipsis', title: field.value }, field.value)));
+          });
+          if (!(data.fields || []).length) {
+            grid.appendChild(h('div', { class: 'muted small' },
+              '导出 JSON 里没有可识别的字段。'));
+          }
+          var pre = h('pre', {
+            class: 'job-log',
+            style: 'max-height:300px;overflow:auto;white-space:pre-wrap;'
+              + 'word-break:break-all;margin-top:8px'
+          });
+          pre.textContent = data.text || '';
+          var actions = h('div', { class: 'toolbar', style: 'margin-top:8px' });
+          if (item.url) {
+            actions.appendChild(h('a', {
+              class: 'btn', href: item.url, target: '_blank',
+              rel: 'noopener noreferrer'
+            }, '打开原链接'));
+          }
+          actions.appendChild(h('span', { class: 'muted small' },
+            data.file + ' · ' + fmtBytes(data.size) + ' · ' + data.mtime));
+          body.replaceChildren(
+            grid, actions,
+            h('div', { class: 'muted small', style: 'margin-top:8px' },
+              '导出 JSON 原文' + (data.truncated ? '（已截断，最多 200KB）' : '')),
+            pre);
+        }).catch(function (error) {
+          body.replaceChildren(h('div', { class: 'muted' },
+            '详情读取失败：' + error.message));
+        });
+    }
+
   function renderAssets(root) {
     setLoading(root, '正在读取资产概览…');
     api('/api/assets/summary').then(function (summary) {
@@ -2243,6 +2308,12 @@
                 (item.n_img && item.n_vid ? ' / ' : '') +
                 (item.n_vid ? '视 ' + item.n_vid : '')
               : '';
+            var detailBtn = h('button', {
+              class: 'btn', type: 'button', title: '查看导出 JSON 字段与原文'
+            }, '详情');
+            detailBtn.addEventListener('click', function () {
+              openEntryDetail(item);
+            });
             var noDlBtn = h('button', {
               class: 'btn', type: 'button', title: item.no_dl
                 ? '解除后重新计入媒体完整度并可下载'
@@ -2276,8 +2347,14 @@
               h('td', null, fmtTime(item.publish_time)),
               h('td', { class: 'num' }, fmtNumber(item.play)),
               h('td', { class: 'num' }, fmtNumber(item.like)),
-              h('td', { class: 'ellipsis' }, item.file || '-'),
-              h('td', null, noDlBtn)));
+              h('td', { class: 'ellipsis' },
+                h('a', {
+                  href: '#', title: '查看详情', onclick: function (event) {
+                    event.preventDefault();
+                    openEntryDetail(item);
+                  }
+                }, item.file || '-')),
+              h('td', null, h('div', { class: 'toolbar' }, detailBtn, noDlBtn))));
           });
           tableHost.replaceChildren();
           if (data.truncated) {
@@ -6962,8 +7039,12 @@
         h('span', { class: 'ellipsis' }, file.name),
         h('button', { class: 'btn', type: 'button' }, '关闭'));
       var closeBtn = caption.lastChild;
+      var meta = h('div', {
+        class: 'muted small', style: 'padding:0 14px 8px'
+      }, '正在读取文件信息…');
       var body = h('div', { class: 'preview-body' }, '正在加载预览…');
       box.appendChild(caption);
+      box.appendChild(meta);
       box.appendChild(body);
       overlay.appendChild(box);
       document.body.appendChild(overlay);
@@ -6982,6 +7063,19 @@
         }
       });
 
+      api('/api/assets/local/stat?cat=' + encodeURIComponent(category)
+        + '&dir=' + encodeURIComponent(file.rel_dir || '')
+        + '&name=' + encodeURIComponent(file.name))
+        .then(function (info) {
+          var kind = info.kind === 'image' ? '图片'
+            : (info.kind === 'video' ? '视频（显示首帧）' : '文件');
+          meta.textContent = [(info.dir || '根目录'), kind,
+            fmtBytes(info.size), info.mtime].join(' · ');
+        }).catch(function () {
+          meta.textContent = [file.rel_dir || '根目录',
+            file.size ? fmtBytes(file.size) : ''].filter(Boolean).join(' · ');
+        });
+
       var url = '/api/assets/local/preview?cat=' + encodeURIComponent(category)
         + '&dir=' + encodeURIComponent(file.rel_dir || '')
         + '&name=' + encodeURIComponent(file.name);
@@ -6998,6 +7092,7 @@
       };
       image.src = withToken(url);
     }
+
   }
 
   function fmtBytes(value) {
