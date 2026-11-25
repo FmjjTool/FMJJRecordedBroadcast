@@ -27,7 +27,7 @@
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
-    tcdoc: { docKey: '', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '' }
+    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '' }
   };
   var routes = {
     home: { title: '工作台', load: renderHome },
@@ -4290,6 +4290,7 @@
     api('/api/tcdoc/overview?doc_key=' + encodeURIComponent(state.tcdoc.docKey))
       .then(function (data) {
         state.tcdoc.docKey = data.selected;
+        if (!state.tcdoc.tab) state.tcdoc.tab = 'sync';
         var docSelect = h('select', { class: 'select' });
         data.docs.forEach(function (doc) {
           docSelect.appendChild(h('option', { value: doc.key }, doc.name));
@@ -4297,17 +4298,30 @@
         docSelect.value = data.selected || '';
         docSelect.addEventListener('change', function () {
           state.tcdoc.docKey = docSelect.value;
+          state.tcdoc.rowsTab = '';
+          state.tcdoc.rowsPage = 1;
           renderTcdoc(root);
         });
+        var current = (data.docs || []).filter(function (doc) {
+          return doc.key === data.selected;
+        })[0] || {};
         var jobHost = h('div');
         var latest = data.latest || {};
-        var stats = data.tables.stats || {};
-        var collectBtn = h('button', { class: 'btn primary', type: 'button' }, '立即采集');
+        var latestText = latest.ts
+          ? '最近采集 ' + fmtTime(latest.ts)
+            + ' · 浏览 ' + fmtNumber(latest.views)
+            + ' · 成员 ' + fmtNumber(latest.members)
+            + ' · 浏览人 ' + fmtNumber(latest.readers)
+          : '暂无采集记录。';
+        var collectBtn = h('button', {
+          class: 'btn primary', type: 'button'
+        }, '立即采集');
         var syncBtn = h('button', { class: 'btn', type: 'button' }, '表格同步');
-        var rowsHost = h('div');
-        var writebackHost = h('div', { class: 'card' });
-        var writeJobHost = h('div');
-        var writeResultHost = h('div');
+        var openBtn = h('button', { class: 'btn', type: 'button' }, '打开链接');
+        openBtn.disabled = !current.url;
+        openBtn.addEventListener('click', function () {
+          if (current.url) window.open(current.url, '_blank', 'noopener');
+        });
 
         function start(url, label) {
           collectBtn.disabled = true;
@@ -4318,6 +4332,13 @@
               syncBtn.disabled = false;
               toast(label + '完成', 'success');
               renderTcdoc(root);
+            }, {
+              cancelable: true,
+              onSettled: function (job2) {
+                collectBtn.disabled = false;
+                syncBtn.disabled = false;
+                if (job2.status === 'cancelled') toast(label + '已取消', 'info');
+              }
             });
           }).catch(function (error) {
             collectBtn.disabled = false;
@@ -4325,314 +4346,571 @@
             toast(error.message, 'error');
           });
         }
-        collectBtn.addEventListener('click', function () { start('/api/tcdoc/collect', '采集'); });
-        syncBtn.addEventListener('click', function () { start('/api/tcdoc/sync', '表格同步'); });
-
-        var dailyRows = h('tbody');
-        (data.daily || []).slice().reverse().forEach(function (row) {
-          dailyRows.appendChild(h('tr', null,
-            h('td', null, fmtTime(row.ts)),
-            h('td', { class: 'num' }, fmtNumber(row.views)),
-            h('td', { class: 'num' }, fmtNumber(row.members)),
-            h('td', { class: 'num' }, fmtNumber(row.readers)),
-            h('td', { class: 'num' }, row.views_delta == null ? '-' : fmtNumber(row.views_delta)),
-            h('td', { class: 'num' }, row.members_delta == null ? '-' : fmtNumber(row.members_delta))));
+        collectBtn.addEventListener('click', function () {
+          start('/api/tcdoc/collect', '采集');
+        });
+        syncBtn.addEventListener('click', function () {
+          start('/api/tcdoc/sync', '表格同步');
         });
 
-        var sheetRows = h('tbody');
-        (data.tables.sheets || []).forEach(function (sheet) {
-          sheetRows.appendChild(h('tr', null,
-            h('td', null, sheet.tab_name || sheet.tab_id),
-            h('td', { class: 'num' }, fmtNumber(sheet.n_rows)),
-            h('td', null, fmtTime(sheet.fetched_at)),
-            h('td', null, sheet.skipped ? h('span', { class: 'badge warn' }, '已跳过') : h('span', { class: 'badge ok' }, '已同步')),
-            h('td', null, h('button', {
-              class: 'btn', type: 'button',
-              onclick: function () {
-                state.tcdoc.rowsTab = sheet.tab_id;
-                state.tcdoc.rowsPage = 1;
-                loadSheet(sheet);
-              }
-            }, '查看行'))));
-        });
-
-        function loadSheet(sheet) {
-          setLoading(rowsHost, '正在读取表格行…');
-          api('/api/tcdoc/table-rows?doc_key=' + encodeURIComponent(state.tcdoc.docKey) +
-            '&tab_id=' + encodeURIComponent(sheet.tab_id) + '&page=' + state.tcdoc.rowsPage + '&page_size=50')
-            .then(function (rows) {
-              var columns = (sheet.columns || []).map(function (column) {
-                return typeof column === 'string' ? column : (column && column.name) || '';
-              }).filter(Boolean);
-              if (!columns.length && rows.rows.length && rows.rows[0].values) {
-                columns = Object.keys(rows.rows[0].values);
-              }
-              var head = h('tr', null, h('th', null, '行号'));
-              columns.forEach(function (column) { head.appendChild(h('th', null, column)); });
-              var body = h('tbody');
-              rows.rows.forEach(function (row) {
-                var tr = h('tr', null, h('td', { class: 'num' }, row.row_no));
-                columns.forEach(function (column) {
-                  var value = row.values ? row.values[column] : '';
-                  if (value === null || value === undefined) value = '';
-                  tr.appendChild(h('td', { class: 'ellipsis' }, String(value)));
-                });
-                body.appendChild(tr);
+        var tabs = h('div', { class: 'tabs' });
+        var tabHost = h('div');
+        var TABS = [
+          ['bridge', '中间层同步'], ['sync', '表格同步'],
+          ['daily', '历史记录'], ['snapshot', '采集明细'],
+          ['revision', '修订记录'], ['members', '成员名单'],
+          ['docs', '文档管理'], ['writeback', '映射回写']
+        ];
+        TABS.forEach(function (item) {
+          tabs.appendChild(h('button', {
+            class: 'tab' + (state.tcdoc.tab === item[0] ? ' active' : ''),
+            type: 'button',
+            onclick: function () {
+              state.tcdoc.tab = item[0];
+              tabs.querySelectorAll('.tab').forEach(function (button, index) {
+                button.classList.toggle('active', TABS[index][0] === item[0]);
               });
-              var hostTable = h('div', { class: 'table-wrap' },
-                h('table', null, h('thead', null, head), body));
-              var pagerHost = h('div', { class: 'pager' });
-              pager(pagerHost, rows.page, rows.pages, rows.total, function (page) {
-                state.tcdoc.rowsPage = page;
-                loadSheet(sheet);
-              });
-              rowsHost.replaceChildren(
-                h('div', { class: 'muted small', style: 'margin-bottom:8px' },
-                  sheet.tab_name + ' · ' + rows.total + ' 行'),
-                hostTable, pagerHost);
-            }).catch(function (error) { setError(rowsHost, error); });
-        }
-
-        var pushRows = h('tbody');
-        (data.push_history || []).forEach(function (entry) {
-          pushRows.appendChild(h('tr', null,
-            h('td', null, fmtTime(entry.time)),
-            h('td', null, entry.tab_name || entry.tab_id || '-'),
-            h('td', null, entry.source || '-'),
-            h('td', null, h('span', { class: 'badge ' + (entry.status === '成功' ? 'ok' : 'warn') }, entry.status || '-')),
-            h('td', { class: 'num' }, fmtNumber(entry.added)),
-            h('td', { class: 'num' }, fmtNumber(entry.images)),
-            h('td', { class: 'num' }, fmtNumber(entry.failed))));
+              renderTab();
+            }
+          }, item[1]));
         });
 
         root.replaceChildren(
-          h('div', { class: 'toolbar' },
-            h('span', { class: 'muted small' }, '文档'), docSelect,
-            data.auto ? h('span', { class: 'badge ok' }, '自动维护已开启') : h('span', { class: 'badge' }, '自动维护已关闭'),
-            h('span', { class: 'spacer' }),
-            collectBtn, syncBtn),
-          h('div', { class: 'grid cols-4' },
-            statCard('最新浏览量', latest.views, latest.ts ? '采集于 ' + fmtTime(latest.ts) : '暂无采集记录'),
-            statCard('成员数', latest.members, data.doc_stats ? ('本地记录 ' + fmtNumber(data.doc_stats.records) + ' 条') : ''),
-            statCard('浏览人', data.browser_stats ? data.browser_stats.records : 0,
-              data.browser_stats && data.browser_stats.last ? '最近 ' + fmtTime(data.browser_stats.last) : ''),
-            statCard('表格行数', stats.rows, (stats.sheets || 0) + ' 张子表' + (stats.last ? ' · ' + fmtTime(stats.last) : ''))),
-          jobHost,
-          h('div', { class: 'card', style: 'margin-top:12px' },
-            h('div', { class: 'card-title' }, '采集历史'),
-            dailyRows.children.length
-              ? h('div', { class: 'table-wrap' }, h('table', null,
-                h('thead', null, h('tr', null,
-                  h('th', null, '时间'), h('th', { class: 'num' }, '浏览量'),
-                  h('th', { class: 'num' }, '成员数'), h('th', { class: 'num' }, '浏览人'),
-                  h('th', { class: 'num' }, '浏览增量'), h('th', { class: 'num' }, '成员增量'))), dailyRows))
-              : empty('暂无采集历史。点「立即采集」开始第一次采集。')),
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, '表格同步状态'),
-            sheetRows.children.length
-              ? h('div', { class: 'table-wrap' }, h('table', null,
-                h('thead', null, h('tr', null,
-                  h('th', null, '子表'), h('th', { class: 'num' }, '行数'),
-                  h('th', null, '同步时间'), h('th', null, '状态'), h('th', null, ''))), sheetRows))
-              : empty('暂无表格同步数据。')),
-          rowsHost,
-          writebackHost,
-          writeJobHost,
-          writeResultHost,
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, '推送历史'),
-            pushRows.children.length
-              ? h('div', { class: 'table-wrap' }, h('table', null,
-                h('thead', null, h('tr', null,
-                  h('th', null, '时间'), h('th', null, '子表'), h('th', null, '来源'),
-                  h('th', null, '状态'), h('th', { class: 'num' }, '新增'),
-                  h('th', { class: 'num' }, '图片'), h('th', { class: 'num' }, '失败'))), pushRows))
-              : empty('暂无推送记录。')));
-        renderWriteback();
+          h('div', { class: 'card', style: 'margin-bottom:12px' },
+            h('div', { class: 'toolbar' },
+              h('span', { class: 'muted small' }, '文档'), docSelect,
+              openBtn, collectBtn, syncBtn,
+              h('span', { class: 'spacer' }),
+              data.auto ? h('span', { class: 'badge ok' }, '自动维护已开启')
+                : h('span', { class: 'badge' }, '自动维护已关闭')),
+            h('div', { class: 'muted small', style: 'margin-top:6px' },
+              latestText),
+            h('div', { class: 'muted small', style: 'margin-top:4px' },
+              '定时采集已统一到「任务」页面，可在那里修改计划并安装 / 删除计划任务。')),
+          tabs,
+          tabHost,
+          jobHost);
+        renderTab();
 
-        function renderWriteback() {
-          writebackHost.replaceChildren(
-            h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
-            h('div', { class: 'loading', text: '正在读取写回状态…' }));
-          Promise.all([
-            api('/api/tcdoc/writeback/status'),
-            api('/api/tcdoc/writeback/preview?tab=' +
-              encodeURIComponent(state.tcdoc.writeTab) +
-              '&days=' + state.tcdoc.writeDays + '&limit=100')
-          ]).then(function (results) {
-            var status = results[0] || {};
-            var preview = results[1] || {};
-            var refresh = preview.refresh || status.refresh || {};
-            var allowed = !!refresh.allowed;
-            var tabs = h('div', { class: 'tabs' });
-            (status.targets || []).forEach(function (target) {
-              tabs.appendChild(h('button', {
-                class: 'tab' + (state.tcdoc.writeTab === target.key ? ' active' : ''),
-                type: 'button',
-                onclick: function () {
-                  state.tcdoc.writeTab = target.key;
-                  state.tcdoc.writeKey = '';
-                  renderWriteback();
-                }
-              }, target.name));
-            });
-            var daysSelect = h('select', { class: 'select' },
-              [30, 90, 180, 365].map(function (value) {
-                return h('option', {
-                  value: String(value),
-                  selected: value === state.tcdoc.writeDays
-                }, value + ' 天');
-              }));
-            daysSelect.addEventListener('change', function () {
-              state.tcdoc.writeDays = Number(daysSelect.value);
-              state.tcdoc.writeKey = '';
-              renderWriteback();
-            });
-            var rows = preview.rows || [];
-            var known = new Set(rows.map(function (row) { return row.key; }));
-            if (!known.has(state.tcdoc.writeKey)) state.tcdoc.writeKey = '';
-            var body = h('tbody');
-            rows.forEach(function (row) {
-              var radio = h('input', {
-                type: 'radio', name: 'tcdocWriteKey',
-                checked: state.tcdoc.writeKey === row.key
-              });
-              radio.addEventListener('change', function () {
-                state.tcdoc.writeKey = row.key;
-                updateWriteButton();
-              });
-              var link = row.link
-                ? h('a', { href: row.link, target: '_blank',
-                           rel: 'noopener noreferrer' }, '打开')
-                : '-';
-              body.appendChild(h('tr', null,
-                h('td', null, radio),
-                h('td', null, row.time || '-'),
-                h('td', { class: 'ellipsis', title: row.title || '' },
-                  row.title || '-'),
-                h('td', null, (row.account || '-') +
-                  (row.platform ? ' / ' + row.platform : '')),
-                h('td', { class: 'muted small' }, link),
-                h('td', { class: 'num' }, row.images || 0),
-                h('td', { class: 'muted small' }, row.flag || '')));
-            });
-            var table = rows.length
-              ? h('div', { class: 'table-wrap' }, h('table', { class: 'db-table' },
-                  h('thead', null, h('tr', null,
-                    h('th', { style: 'width:36px' }, ''),
-                    h('th', null, '时间'), h('th', null, '标题'),
-                    h('th', null, '账号 / 平台'), h('th', null, '链接'),
-                    h('th', { class: 'num' }, '图片'),
-                    h('th', null, '标记'))), body))
-              : empty('当前范围内没有待写记录。可切换表或调整时间范围后重新加载。');
-            var summary = h('span', { class: 'muted small' },
-              '待写 ' + fmtNumber(preview.total || 0) + ' 条' +
-              (preview.truncated ? '（仅显示前 100 条）' : '') +
-              (preview.stats && preview.stats.since
-                ? ' · 自 ' + preview.stats.since : ''));
-            var writeBtn = h('button', {
-              class: 'btn primary', type: 'button'
-            }, '写入选中 1 条');
+        function renderTab() {
+          tabHost.replaceChildren();
+          if (state.tcdoc.tab === 'sync') renderSyncTab();
+          else if (state.tcdoc.tab === 'daily') renderDailyTab();
+          else if (state.tcdoc.tab === 'snapshot') renderSnapshotTab();
+          else if (state.tcdoc.tab === 'revision') renderRevisionTab();
+          else if (state.tcdoc.tab === 'members') renderMembersTab();
+          else if (state.tcdoc.tab === 'docs') renderDocsTab();
+          else if (state.tcdoc.tab === 'writeback') renderWritebackTab();
+          else {
+            tabHost.appendChild(empty(
+              '中间层同步（选择目标表格、时间范围与账号后写入）仅在桌面端提供。'));
+          }
+        }
 
-            function updateWriteButton() {
-              writeBtn.disabled = !state.tcdoc.writeKey || !allowed;
-            }
-
-            writeBtn.addEventListener('click', function () {
-              var row = rows.find(function (item) {
-                return item.key === state.tcdoc.writeKey;
-              });
-              if (!row) {
-                toast('请先选择一条待写记录', 'warning');
-                return;
-              }
-              if (!allowed) {
-                toast('数据未刷新：请先在桌面端完成同步前刷新或开启免校对模式', 'warning');
-                return;
-              }
-              var lines = '将真实新增 1 条到「' + (preview.name || '') +
-                '」（《' + (preview.doc_name || status.doc_name || '封茗囧菌数据汇总库') +
-                '》）\n\n' +
-                (row.title ? '标题：' + row.title + '\n' : '') +
-                (row.time ? '时间：' + row.time + '\n' : '') +
-                (row.account ? '账号：' + row.account + '\n' : '') +
-                '\n只新增，不修改、不删除；写入后立即读回校验并记录推送历史。\n' +
-                '确定写入这 1 条吗？';
-              if (!window.confirm(lines)) return;
-              writeBtn.disabled = true;
-              post('/api/tcdoc/writeback/upload', {
-                tab: state.tcdoc.writeTab,
-                key: row.key,
-                days: state.tcdoc.writeDays,
-                confirmed: true
-              }).then(function (data) {
-                watchJob(writeJobHost, data.job, function (job) {
-                  writeBtn.disabled = false;
-                  var result = job.result || {};
-                  toast(result.summary || '写回完成',
-                    result.verified ? 'success' : 'info');
-                  var lines = [];
-                  if (result.summary) lines.push(result.summary);
-                  if (result.record_ids && result.record_ids.length) {
-                    lines.push('record_id：' + result.record_ids.join('、'));
-                  }
-                  if (result.error) lines.push('原因：' + result.error);
-                  if (result.note) lines.push(result.note);
-                  writeResultHost.replaceChildren(h('div', {
-                    class: 'card', style: 'margin-top:12px'
-                  }, h('div', { class: 'muted small' },
-                    lines.join('；') || '写回完成')));
-                  state.tcdoc.writeKey = '';
-                  renderWriteback();
-                }, {
-                  onSettled: function (job) {
-                    writeBtn.disabled = false;
-                    if (job.status === 'cancelled') {
-                      toast('写回已取消', 'info');
-                    }
-                    if (job.status === 'error') {
-                      toast('写回失败：' + job.error, 'error');
-                    }
-                  }
-                });
-              }).catch(function (error) {
-                writeBtn.disabled = false;
-                toast('写回失败：' + error.message, 'error');
-              });
-            });
-
-            updateWriteButton();
-            writebackHost.replaceChildren(
-              h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
-              h('div', { class: 'muted small' }, status.note || ''),
-              h('div', { class: 'muted small', style: 'margin-top:4px' },
-                '目标固定为《' + (status.doc_name || '封茗囧菌数据汇总库') +
-                '》，与上方文档选择无关。'),
-              h('div', { class: 'toolbar', style: 'margin:8px 0' },
-                h('span', { class: 'badge ' + (allowed ? 'ok' : 'warn') },
-                  allowed ? '数据已刷新' : '需要先刷新'),
-                h('span', { class: 'muted small' }, refresh.message || ''),
-                h('span', { style: 'flex:1' }),
-                h('button', { class: 'btn', type: 'button',
-                              onclick: renderWriteback }, '重新加载')),
-              tabs,
-              h('div', { class: 'toolbar' },
-                h('span', { class: 'muted small' }, '时间范围'), daysSelect,
-                summary, h('span', { style: 'flex:1' }), writeBtn),
-              table);
-          }).catch(function (error) {
-            writebackHost.replaceChildren(
-              h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
-              h('div', { class: 'error' }, '写回状态加载失败：' + error.message,
-                h('div', { class: 'small', style: 'margin-top:8px' },
-                  '请确认本地腾讯文档数据与登录状态后重试。'),
-                h('button', {
-                  class: 'btn', type: 'button', style: 'margin-top:8px',
-                  onclick: renderWriteback
-                }, '重试')));
+        function renderSyncTab() {
+          var sheets = data.tables.sheets || [];
+          var sheetSelect = h('select', { class: 'select' });
+          if (!sheets.length) {
+            sheetSelect.appendChild(h('option', { value: '' }, '（暂无子表）'));
+            sheetSelect.disabled = true;
+          }
+          sheets.forEach(function (sheet) {
+            sheetSelect.appendChild(h('option', {
+              value: sheet.tab_id,
+              selected: state.tcdoc.rowsTab === sheet.tab_id
+            }, sheet.tab_name || sheet.tab_id));
           });
+          if (!state.tcdoc.rowsTab && sheets.length) {
+            state.tcdoc.rowsTab = sheets[0].tab_id;
+            sheetSelect.value = sheets[0].tab_id;
+          }
+          var rowsHost = h('div');
+          var pagerHost = h('div', { class: 'col-pager' });
+          var syncNow = h('button', {
+            class: 'btn', type: 'button'
+          }, '同步表格');
+          syncNow.addEventListener('click', function () {
+            start('/api/tcdoc/sync', '表格同步');
+          });
+          tabHost.appendChild(h('div', { class: 'toolbar' },
+            h('span', { class: 'muted small' }, '工作表'), sheetSelect,
+            h('span', { style: 'flex:1' }), syncNow));
+          tabHost.appendChild(rowsHost);
+          tabHost.appendChild(pagerHost);
+          sheetSelect.addEventListener('change', function () {
+            state.tcdoc.rowsTab = sheetSelect.value;
+            state.tcdoc.rowsPage = 1;
+            loadRows();
+          });
+
+          function loadRows() {
+            var tabId = state.tcdoc.rowsTab;
+            if (!tabId) {
+              rowsHost.replaceChildren(empty(
+                '暂无表格同步数据。点「同步表格」抓取当前文档。'));
+              pagerHost.replaceChildren();
+              return;
+            }
+            setLoading(rowsHost, '正在读取表格行…');
+            api('/api/tcdoc/table-rows?doc_key='
+              + encodeURIComponent(state.tcdoc.docKey)
+              + '&tab_id=' + encodeURIComponent(tabId)
+              + '&page=' + state.tcdoc.rowsPage + '&page_size=50')
+              .then(function (rows) {
+                var sheet = sheets.filter(function (item) {
+                  return item.tab_id === tabId;
+                })[0] || {};
+                var columns = (sheet.columns || []).map(function (column) {
+                  return typeof column === 'string' ? column
+                    : (column && column.name) || '';
+                }).filter(Boolean);
+                if (!columns.length && rows.rows.length
+                    && rows.rows[0].values) {
+                  columns = Object.keys(rows.rows[0].values);
+                }
+                var head = h('tr', null, h('th', null, '行号'));
+                columns.forEach(function (column) {
+                  head.appendChild(h('th', null, column));
+                });
+                var body = h('tbody');
+                rows.rows.forEach(function (row) {
+                  var tr = h('tr', null,
+                    h('td', { class: 'num' }, row.row_no));
+                  columns.forEach(function (column) {
+                    var value = row.values ? row.values[column] : '';
+                    if (value === null || value === undefined) value = '';
+                    tr.appendChild(h('td', { class: 'ellipsis' },
+                      String(value)));
+                  });
+                  body.appendChild(tr);
+                });
+                rowsHost.replaceChildren(
+                  h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+                    (sheet.tab_name || tabId) + ' · ' + rows.total + ' 行'),
+                  h('div', { class: 'table-wrap' },
+                    h('table', null, h('thead', null, head), body)));
+                pagerHost.replaceChildren();
+                if (rows.pages > 1) {
+                  pagerHost.appendChild(h('button', {
+                    class: 'btn ghost mini', type: 'button',
+                    disabled: rows.page <= 1,
+                    onclick: function () {
+                      state.tcdoc.rowsPage = rows.page - 1;
+                      loadRows();
+                    }
+                  }, '上一页'));
+                  pagerHost.appendChild(h('span', { class: 'muted small' },
+                    rows.page + ' / ' + rows.pages));
+                  pagerHost.appendChild(h('button', {
+                    class: 'btn ghost mini', type: 'button',
+                    disabled: rows.page >= rows.pages,
+                    onclick: function () {
+                      state.tcdoc.rowsPage = rows.page + 1;
+                      loadRows();
+                    }
+                  }, '下一页'));
+                }
+              }).catch(function (error) {
+                setError(rowsHost, error, loadRows);
+              });
+          }
+          loadRows();
+        }
+
+        function renderDailyTab() {
+          var daily = (data.daily || []).slice().reverse();
+          if (!daily.length) {
+            tabHost.appendChild(empty(
+              '暂无采集历史。点「立即采集」开始第一次采集。'));
+            return;
+          }
+          var body = h('tbody');
+          daily.forEach(function (row) {
+            body.appendChild(h('tr', null,
+              h('td', null, fmtTime(row.ts)),
+              h('td', { class: 'num' }, fmtNumber(row.views)),
+              h('td', { class: 'num' }, row.views_delta == null
+                ? '-' : fmtNumber(row.views_delta)),
+              h('td', { class: 'num' }, fmtNumber(row.members)),
+              h('td', { class: 'num' }, row.members_delta == null
+                ? '-' : fmtNumber(row.members_delta)),
+              h('td', { class: 'num' }, fmtNumber(row.readers))));
+          });
+          tabHost.appendChild(h('div', { class: 'table-wrap' },
+            h('table', null, h('thead', null, h('tr', null,
+              h('th', null, '采集时间'), h('th', { class: 'num' }, '浏览量'),
+              h('th', { class: 'num' }, '浏览增量'),
+              h('th', { class: 'num' }, '成员数'),
+              h('th', { class: 'num' }, '成员增量'),
+              h('th', { class: 'num' }, '已查看人数'))), body)));
+        }
+
+        function renderSnapshotTab() {
+          setLoading(tabHost, '正在读取采集明细…');
+          api('/api/tcdoc/snapshots?doc_key='
+            + encodeURIComponent(state.tcdoc.docKey) + '&limit=2000')
+            .then(function (result) {
+              var rows = (result.rows || []).slice().reverse();
+              if (!rows.length) {
+                tabHost.replaceChildren(empty('暂无采集明细。'));
+                return;
+              }
+              var body = h('tbody');
+              rows.forEach(function (row) {
+                body.appendChild(h('tr', null,
+                  h('td', null, fmtTime(row.ts)),
+                  h('td', null, h('span', {
+                    class: 'badge ' + (row.ok ? 'ok' : 'warn')
+                  }, row.ok ? '成功' : '失败')),
+                  h('td', { class: 'num' }, row.views == null
+                    ? '-' : fmtNumber(row.views)),
+                  h('td', { class: 'num' }, row.members == null
+                    ? '-' : fmtNumber(row.members)),
+                  h('td', { class: 'ellipsis' }, row.message || '')));
+              });
+              tabHost.replaceChildren(
+                h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+                  '共 ' + fmtNumber(result.total) + ' 条（最新在前）'),
+                h('div', { class: 'table-wrap' },
+                  h('table', null, h('thead', null, h('tr', null,
+                    h('th', null, '采集时间'), h('th', null, '状态'),
+                    h('th', { class: 'num' }, '浏览量'),
+                    h('th', { class: 'num' }, '成员数'),
+                    h('th', null, '说明'))), body)));
+            }).catch(function (error) {
+              setError(tabHost, error, renderSnapshotTab);
+            });
+        }
+
+        function renderRevisionTab() {
+          setLoading(tabHost, '正在读取修订记录…');
+          api('/api/tcdoc/revisions?doc_key='
+            + encodeURIComponent(state.tcdoc.docKey) + '&limit=500')
+            .then(function (result) {
+              var meta = result.meta || {};
+              var info = '共 ' + fmtNumber(result.total) + ' 条'
+                + (meta.fetched_at ? ' · 拉取于 ' + fmtTime(meta.fetched_at) : '')
+                + (meta.complete ? '' : ' · 未完整拉取');
+              if (!(result.rows || []).length) {
+                tabHost.replaceChildren(
+                  h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+                    info),
+                  empty('暂无本地修订记录。桌面端「拉取修订记录」后可在此查看。'));
+                return;
+              }
+              var body = h('tbody');
+              result.rows.forEach(function (row) {
+                body.appendChild(h('tr', null,
+                  h('td', null, row.ts || '-'),
+                  h('td', null, row.version || '-'),
+                  h('td', null, row.author || '-'),
+                  h('td', { class: 'num' }, row.rev == null ? '-' : row.rev),
+                  h('td', null, row.type || '-')));
+              });
+              tabHost.replaceChildren(
+                h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+                  info),
+                h('div', { class: 'table-wrap' },
+                  h('table', null, h('thead', null, h('tr', null,
+                    h('th', null, '时间'), h('th', null, '版本'),
+                    h('th', null, '编辑人'), h('th', { class: 'num' }, '修订号'),
+                    h('th', null, '类型'))), body)));
+            }).catch(function (error) {
+              setError(tabHost, error, renderRevisionTab);
+            });
+        }
+
+        function renderMembersTab() {
+          setLoading(tabHost, '正在读取成员名单…');
+          api('/api/tcdoc/members?doc_key='
+            + encodeURIComponent(state.tcdoc.docKey) + '&limit=2000')
+            .then(function (result) {
+              var meta = result.meta || {};
+              var info = '共 ' + fmtNumber(result.total) + ' 人'
+                + (meta.fetched_at ? ' · 拉取于 ' + fmtTime(meta.fetched_at) : '')
+                + (meta.unique != null ? ' · 累计 ' + fmtNumber(meta.unique) + ' 人'
+                  : '');
+              if (!(result.users || []).length) {
+                tabHost.replaceChildren(
+                  h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+                    info),
+                  empty('暂无本地成员名单。桌面端「拉取全部成员」后可在此查看。'));
+                return;
+              }
+              var body = h('tbody');
+              result.users.forEach(function (user) {
+                body.appendChild(h('tr', null,
+                  h('td', null, user.name || '-'),
+                  h('td', null, user.role || '-'),
+                  h('td', null, user.source || '-'),
+                  h('td', { class: 'ellipsis' }, user.uid || '-'),
+                  h('td', null, user.corp_name || '-')));
+              });
+              tabHost.replaceChildren(
+                h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+                  info),
+                h('div', { class: 'table-wrap' },
+                  h('table', null, h('thead', null, h('tr', null,
+                    h('th', null, '昵称'), h('th', null, '权限等级'),
+                    h('th', null, '账号来源'), h('th', null, 'UID'),
+                    h('th', null, '企业'))), body)));
+            }).catch(function (error) {
+              setError(tabHost, error, renderMembersTab);
+            });
+        }
+
+        function renderDocsTab() {
+          var docs = data.docs || [];
+          var body = h('tbody');
+          docs.forEach(function (doc) {
+            body.appendChild(h('tr', null,
+              h('td', null, doc.name || '-'),
+              h('td', null, doc.kind_label || doc.kind || '-'),
+              h('td', { class: 'num' }, fmtNumber(doc.records)),
+              h('td', null, doc.last ? fmtTime(doc.last) : '-'),
+              h('td', { class: 'ellipsis' }, doc.url
+                ? h('a', {
+                  href: doc.url, target: '_blank',
+                  rel: 'noopener noreferrer'
+                }, doc.url)
+                : '-')));
+          });
+          tabHost.appendChild(h('div', { class: 'table-wrap' },
+            h('table', null, h('thead', null, h('tr', null,
+              h('th', null, '名称'), h('th', null, '类型'),
+              h('th', { class: 'num' }, '记录数'),
+              h('th', null, '最近采集'), h('th', null, '链接'))), body)));
+          tabHost.appendChild(h('div', {
+            class: 'muted small', style: 'margin-top:8px'
+          }, '添加 / 编辑 / 删除文档、生成诊断包与重建报表仅在桌面端提供。'));
+        }
+
+        function renderWritebackTab() {
+          var writeHost = h('div');
+          var pushHost = h('div', { style: 'margin-top:12px' });
+          tabHost.appendChild(writeHost);
+          tabHost.appendChild(pushHost);
+          renderTcdocWriteback(writeHost);
+          renderTcdocPushHistory(pushHost, data.push_history || []);
         }
       }).catch(function (error) {
         setError(root, error, function () { renderTcdoc(root); });
       });
+  }
+
+  function renderTcdocPushHistory(host, entries) {
+    if (!entries.length) {
+      host.appendChild(empty('暂无推送记录。'));
+      return;
+    }
+    var body = h('tbody');
+    entries.forEach(function (entry) {
+      body.appendChild(h('tr', null,
+        h('td', null, fmtTime(entry.time)),
+        h('td', null, entry.tab_name || entry.tab_id || '-'),
+        h('td', null, entry.source || '-'),
+        h('td', null, h('span', {
+          class: 'badge ' + (entry.status === '成功' ? 'ok' : 'warn')
+        }, entry.status || '-')),
+        h('td', { class: 'num' }, fmtNumber(entry.added)),
+        h('td', { class: 'num' }, fmtNumber(entry.images)),
+        h('td', { class: 'num' }, fmtNumber(entry.failed))));
+    });
+    host.appendChild(h('div', { class: 'card-title' }, '推送历史'));
+    host.appendChild(h('div', { class: 'table-wrap' },
+      h('table', null, h('thead', null, h('tr', null,
+        h('th', null, '时间'), h('th', null, '子表'), h('th', null, '来源'),
+        h('th', null, '状态'), h('th', { class: 'num' }, '新增'),
+        h('th', { class: 'num' }, '图片'),
+        h('th', { class: 'num' }, '失败'))), body)));
+  }
+
+  function renderTcdocWriteback(host) {
+    host.replaceChildren(
+      h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
+      h('div', { class: 'loading' }, '正在读取写回状态…'));
+    var writeJobHost = h('div');
+    var writeResultHost = h('div');
+    Promise.all([
+      api('/api/tcdoc/writeback/status'),
+      api('/api/tcdoc/writeback/preview?tab='
+        + encodeURIComponent(state.tcdoc.writeTab)
+        + '&days=' + state.tcdoc.writeDays + '&limit=100')
+    ]).then(function (results) {
+      var status = results[0] || {};
+      var preview = results[1] || {};
+      var refresh = preview.refresh || status.refresh || {};
+      var allowed = !!refresh.allowed;
+      var tabs = h('div', { class: 'tabs' });
+      (status.targets || []).forEach(function (target) {
+        tabs.appendChild(h('button', {
+          class: 'tab' + (state.tcdoc.writeTab === target.key ? ' active' : ''),
+          type: 'button',
+          onclick: function () {
+            state.tcdoc.writeTab = target.key;
+            state.tcdoc.writeKey = '';
+            renderTcdocWriteback(host);
+          }
+        }, target.name));
+      });
+      var daysSelect = h('select', { class: 'select' },
+        [30, 90, 180, 365].map(function (value) {
+          return h('option', {
+            value: String(value),
+            selected: value === state.tcdoc.writeDays
+          }, value + ' 天');
+        }));
+      daysSelect.addEventListener('change', function () {
+        state.tcdoc.writeDays = Number(daysSelect.value);
+        state.tcdoc.writeKey = '';
+        renderTcdocWriteback(host);
+      });
+      var rows = preview.rows || [];
+      var known = new Set(rows.map(function (row) { return row.key; }));
+      if (!known.has(state.tcdoc.writeKey)) state.tcdoc.writeKey = '';
+      var body = h('tbody');
+      rows.forEach(function (row) {
+        var radio = h('input', {
+          type: 'radio', name: 'tcdocWriteKey',
+          checked: state.tcdoc.writeKey === row.key
+        });
+        radio.addEventListener('change', function () {
+          state.tcdoc.writeKey = row.key;
+          updateWriteButton();
+        });
+        var link = row.link
+          ? h('a', { href: row.link, target: '_blank',
+            rel: 'noopener noreferrer' }, '打开')
+          : '-';
+        body.appendChild(h('tr', null,
+          h('td', null, radio),
+          h('td', null, row.time || '-'),
+          h('td', { class: 'ellipsis', title: row.title || '' },
+            row.title || '-'),
+          h('td', null, (row.account || '-')
+            + (row.platform ? ' / ' + row.platform : '')),
+          h('td', { class: 'muted small' }, link),
+          h('td', { class: 'num' }, row.images || 0),
+          h('td', { class: 'muted small' }, row.flag || '')));
+      });
+      var table = rows.length
+        ? h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, h('tr', null,
+              h('th', { style: 'width:36px' }, ''),
+              h('th', null, '时间'), h('th', null, '标题'),
+              h('th', null, '账号 / 平台'), h('th', null, '链接'),
+              h('th', { class: 'num' }, '图片'),
+              h('th', null, '标记'))), body))
+        : empty('当前范围内没有待写记录。可切换表或调整时间范围后重新加载。');
+      var summary = h('span', { class: 'muted small' },
+        '待写 ' + fmtNumber(preview.total || 0) + ' 条'
+        + (preview.truncated ? '（仅显示前 100 条）' : '')
+        + (preview.stats && preview.stats.since
+          ? ' · 自 ' + preview.stats.since : ''));
+      var writeBtn = h('button', {
+        class: 'btn primary', type: 'button'
+      }, '写入选中 1 条');
+
+      function updateWriteButton() {
+        writeBtn.disabled = !state.tcdoc.writeKey || !allowed;
+      }
+
+      writeBtn.addEventListener('click', function () {
+        var row = rows.filter(function (item) {
+          return item.key === state.tcdoc.writeKey;
+        })[0];
+        if (!row) {
+          toast('请先选择一条待写记录', 'warning');
+          return;
+        }
+        if (!allowed) {
+          toast('数据未刷新：请先在桌面端完成同步前刷新或开启免校对模式',
+            'warning');
+          return;
+        }
+        var lines = '将真实新增 1 条到「' + (preview.name || '') +
+          '」（《' + (preview.doc_name || status.doc_name || '封茗囧菌数据汇总库') +
+          '》）\n\n'
+          + (row.title ? '标题：' + row.title + '\n' : '')
+          + (row.time ? '时间：' + row.time + '\n' : '')
+          + (row.account ? '账号：' + row.account + '\n' : '')
+          + '\n只新增，不修改、不删除；写入后立即读回校验并记录推送历史。\n'
+          + '确定写入这 1 条吗？';
+        if (!window.confirm(lines)) return;
+        writeBtn.disabled = true;
+        post('/api/tcdoc/writeback/upload', {
+          tab: state.tcdoc.writeTab,
+          key: row.key,
+          days: state.tcdoc.writeDays,
+          confirmed: true
+        }).then(function (data2) {
+          watchJob(writeJobHost, data2.job, function (job) {
+            writeBtn.disabled = false;
+            var result = job.result || {};
+            toast(result.summary || '写回完成',
+              result.verified ? 'success' : 'info');
+            var notes = [];
+            if (result.summary) notes.push(result.summary);
+            if (result.record_ids && result.record_ids.length) {
+              notes.push('record_id：' + result.record_ids.join('、'));
+            }
+            if (result.error) notes.push('原因：' + result.error);
+            if (result.note) notes.push(result.note);
+            writeResultHost.replaceChildren(h('div', {
+              class: 'muted small', style: 'margin-top:12px'
+            }, notes.join('；') || '写回完成'));
+            state.tcdoc.writeKey = '';
+            renderTcdocWriteback(host);
+          }, {
+            onSettled: function (job) {
+              writeBtn.disabled = false;
+              if (job.status === 'cancelled') toast('写回已取消', 'info');
+              if (job.status === 'error') {
+                toast('写回失败：' + job.error, 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          writeBtn.disabled = false;
+          toast('写回失败：' + error.message, 'error');
+        });
+      });
+
+      updateWriteButton();
+      host.replaceChildren(
+        h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
+        h('div', { class: 'muted small' }, status.note || ''),
+        h('div', { class: 'muted small', style: 'margin-top:4px' },
+          '目标固定为《' + (status.doc_name || '封茗囧菌数据汇总库')
+          + '》，与上方文档选择无关。'),
+        h('div', { class: 'toolbar', style: 'margin:8px 0' },
+          h('span', { class: 'badge ' + (allowed ? 'ok' : 'warn') },
+            allowed ? '数据已刷新' : '需要先刷新'),
+          h('span', { class: 'muted small' }, refresh.message || ''),
+          h('span', { style: 'flex:1' }),
+          h('button', {
+            class: 'btn', type: 'button',
+            onclick: function () { renderTcdocWriteback(host); }
+          }, '重新加载')),
+        tabs,
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '时间范围'), daysSelect,
+          summary, h('span', { style: 'flex:1' }), writeBtn),
+        table,
+        writeJobHost,
+        writeResultHost);
+    }).catch(function (error) {
+      host.replaceChildren(
+        h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
+        h('div', { class: 'error' }, '写回状态加载失败：' + error.message,
+          h('div', { class: 'small', style: 'margin-top:8px' },
+            '请确认本地腾讯文档数据与登录状态后重试。'),
+          h('button', {
+            class: 'btn', type: 'button', style: 'margin-top:8px',
+            onclick: function () { renderTcdocWriteback(host); }
+          }, '重试')));
+    });
   }
 
   function init() {

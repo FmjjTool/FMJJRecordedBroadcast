@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import threading
 
-from toolbox.tcdoc import config, push_history, storage, tables
+from toolbox.tcdoc import config, members as members_mod
+from toolbox.tcdoc import push_history, revision, storage, tables
 from toolbox.tcdoc import job as tcdoc_job
 from toolbox.webui.errors import Conflict
 from toolbox.webui.jobs import JobCancelled
@@ -46,9 +47,23 @@ class TCDocService:
             pushes = push_history.load(20)
         except Exception:
             pushes = []
+        doc_rows = []
+        for doc in docs:
+            entry = {"key": doc.get("key"), "name": doc.get("name"),
+                     "kind": doc.get("kind"),
+                     "kind_label": config.kind_label(doc.get("kind")),
+                     "url": str(doc.get("url") or ""),
+                     "records": 0, "last": ""}
+            if db_path.exists():
+                try:
+                    count, last = storage.doc_stats(db_path, doc.get("key"))
+                    entry["records"] = int(count or 0)
+                    entry["last"] = last or ""
+                except Exception:
+                    pass
+            doc_rows.append(entry)
         return {
-            "docs": [{"key": doc.get("key"), "name": doc.get("name"),
-                      "kind": doc.get("kind")} for doc in docs],
+            "docs": doc_rows,
             "selected": doc_key,
             "auto": config.auto_sync_enabled(),
             "latest": latest,
@@ -77,6 +92,37 @@ class TCDocService:
         return {"doc_key": doc_key, "tab_id": tab_id, "rows": rows,
                 "total": int(total), "page": page, "page_size": page_size,
                 "pages": pages}
+
+    def snapshots(self, doc_key: str, limit: int = 500) -> dict:
+        """采集明细（本地每次采集的成功 / 失败记录）。"""
+        doc_key = str(doc_key or "").strip()
+        if not doc_key:
+            raise ValueError("缺少文档")
+        db_path = config.db_path()
+        if not db_path.exists():
+            return {"rows": [], "total": 0}
+        limit = max(1, min(5000, int(limit)))
+        rows = storage.all_snapshots(db_path, doc_key, limit=limit)
+        return {"rows": [dict(row) for row in rows], "total": len(rows)}
+
+    def revisions(self, doc_key: str, limit: int = 200) -> dict:
+        """本地修订记录（只读）。"""
+        doc_key = str(doc_key or "").strip()
+        if not doc_key:
+            raise ValueError("缺少文档")
+        limit = max(1, min(2000, int(limit)))
+        rows, total = revision.load_rows(doc_key, limit=limit)
+        return {"rows": rows, "total": int(total), "meta": revision.meta(doc_key)}
+
+    def members(self, doc_key: str, limit: int = 500) -> dict:
+        """本地成员名单（只读）。"""
+        doc_key = str(doc_key or "").strip()
+        if not doc_key:
+            raise ValueError("缺少文档")
+        limit = max(1, min(5000, int(limit)))
+        users, total = members_mod.load_users(doc_key, limit=limit)
+        return {"users": users, "total": int(total),
+                "meta": members_mod.meta(doc_key)}
 
     def writeback_status(self) -> dict:
         return _write_module().status()

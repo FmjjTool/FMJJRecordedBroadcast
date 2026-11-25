@@ -271,6 +271,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tcdoc/table-rows", lambda req: tcdoc.table_rows(
         req.q("doc_key"), req.q("tab_id"), req.q_int("page", 1, 1),
         req.q_int("page_size", 50, 1, 200)))
+    server.get("/api/tcdoc/snapshots", lambda req: tcdoc.snapshots(
+        req.q("doc_key"), req.q_int("limit", 500, 1, 5000)))
+    server.get("/api/tcdoc/revisions", lambda req: tcdoc.revisions(
+        req.q("doc_key"), req.q_int("limit", 200, 1, 2000)))
+    server.get("/api/tcdoc/members", lambda req: tcdoc.members(
+        req.q("doc_key"), req.q_int("limit", 500, 1, 5000)))
 
     server.get("/api/tcdoc/writeback/status",
                lambda req: tcdoc.writeback_status())
