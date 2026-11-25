@@ -224,7 +224,14 @@
     sidebar.classList.remove('open');
     scrim.classList.remove('show');
     content.replaceChildren();
-    routes[route].load(content);
+    try {
+      routes[route].load(content);
+    } catch (error) {
+      setError(content, error, function () { navigate(route); });
+      if (window.console && console.error) {
+        console.error('页面渲染失败', route, error);
+      }
+    }
   }
 
   function watchJob(host, jobId, onDone, options) {
