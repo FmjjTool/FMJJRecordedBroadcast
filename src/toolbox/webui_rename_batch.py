@@ -19,6 +19,22 @@ _EXT_GROUPS = {
     "subtitle": (".srt", ".ass", ".vtt", ".lrc"),
     "doc": (".txt", ".md", ".doc", ".docx", ".pdf", ".xlsx"),
 }
+_ILLEGAL_CHARS = set('<>:"/\\|?*')
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
+                   *(f"COM{i}" for i in range(1, 10)),
+                   *(f"LPT{i}" for i in range(1, 10))}
+
+
+def _name_error(name: str) -> str:
+    if not name or name in (".", ".."):
+        return "文件名为空"
+    if any(ch in _ILLEGAL_CHARS for ch in name):
+        return "文件名包含非法字符"
+    if name.split(".")[0].upper() in _RESERVED_NAMES:
+        return "文件名是系统保留名"
+    if len(name) > 240:
+        return "文件名过长"
+    return ""
 
 
 def _cfg_from_options(options: dict) -> dict:
@@ -164,3 +180,70 @@ def overview() -> dict:
                              ("doc", "文档"))],
         "note": "只读预览；执行改名仍在桌面端。",
     }
+
+
+def execute(path: str, options: dict | None = None) -> dict:
+    """执行改名：重算预览后两阶段改名（先临时名，失败回滚）。"""
+    options = options or {}
+    root = Path(str(path or "").strip())
+    if not path or not root.is_dir():
+        raise ValueError("文件夹不存在或不可访问")
+    root = root.resolve()
+    result = preview(str(root), options)
+    plan = []
+    failures = []
+    for row in result["rows"]:
+        if row["new"] == row["old"]:
+            continue
+        error = _name_error(row["new"])
+        if error:
+            failures.append({"old": row["old"], "error": error})
+            continue
+        if not (root / row["old"]).is_file():
+            failures.append({"old": row["old"], "error": "源文件不存在"})
+            continue
+        plan.append({"old": row["old"], "new": row["new"]})
+
+    sources = {item["old"].lower() for item in plan}
+    seen: set[str] = set()
+    valid = []
+    for item in plan:
+        key = item["new"].lower()
+        if key in seen:
+            failures.append({"old": item["old"], "error": "目标文件名重复"})
+            continue
+        target = root / item["new"]
+        if target.exists() and key not in sources:
+            failures.append({"old": item["old"], "error": "目标已存在"})
+            continue
+        seen.add(key)
+        valid.append(item)
+
+    renamed = 0
+    temp_paths: dict[str, Path] = {}
+    try:
+        for index, item in enumerate(valid):
+            source = root / item["old"]
+            temp = root / f".fmjj_rename_{os.getpid()}_{index}"
+            if temp.exists():
+                raise OSError("临时文件名冲突")
+            source.rename(temp)
+            temp_paths[item["old"]] = temp
+        for item in valid:
+            temp = temp_paths[item["old"]]
+            temp.rename(root / item["new"])
+            renamed += 1
+    except Exception as exc:  # noqa: BLE001 - 回滚后统一转成可读错误
+        for item in reversed(valid):
+            final = root / item["new"]
+            temp = temp_paths.get(item["old"])
+            try:
+                if temp is not None and temp.exists():
+                    temp.rename(root / item["old"])
+                elif final.exists():
+                    final.rename(root / item["old"])
+            except OSError:
+                pass
+        raise ValueError(f"改名失败，已尝试回滚：{str(exc)[:120]}") from exc
+    return {"path": str(root), "renamed": renamed, "failed": failures,
+            "total": len(valid) + len(failures), "ok": True}

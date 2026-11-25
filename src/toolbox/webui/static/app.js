@@ -1173,8 +1173,12 @@
         class: 'muted small', style: 'margin:8px 0'
       });
       var tableHost = h('div');
+      var resultHost = h('div');
       var timer = null;
       var lastRows = [];
+      var execBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '执行改名');
 
       function collect() {
         return {
@@ -1207,10 +1211,11 @@
         setLoading(tableHost, '正在生成预览…');
         post('/api/rename-batch/preview', payload).then(function (result) {
           lastRows = result.rows || [];
+          execBtn.disabled = !result.changed;
           stats.textContent = '共 ' + fmtNumber(result.total) + ' 个文件 · 将改名 '
             + fmtNumber(result.changed) + ' 个'
             + (result.truncated ? '（超过 2000 个，已截断）' : '')
-            + ' · 只读预览，执行改名在桌面端';
+            + ' · 执行前会二次确认，只改文件名不改内容';
           if (!lastRows.length) {
             tableHost.replaceChildren(empty('文件夹内没有符合条件的文件。'));
             return;
@@ -1256,6 +1261,49 @@
           input.addEventListener('change', schedule);
         });
       scanBtn.addEventListener('click', load);
+      execBtn.addEventListener('click', function () {
+        var changed = lastRows.filter(function (row) {
+          return row.new !== row.old;
+        }).length;
+        if (!changed) {
+          toast('没有需要改名的文件', 'warning');
+          return;
+        }
+        var payload = collect();
+        if (!window.confirm('将对「' + payload.path + '」的 ' + changed
+          + ' 个文件执行改名。\n\n只修改文件名，不改文件内容；'
+          + '目标已存在或文件名非法的会跳过。\n\n确定继续？')) {
+          return;
+        }
+        execBtn.disabled = true;
+        resultHost.replaceChildren();
+        post('/api/rename-batch/execute', Object.assign(payload,
+          { confirmed: true })).then(function (result) {
+          var failed = result.failed || [];
+          toast('改名完成：成功 ' + result.renamed
+            + (failed.length ? '，失败 ' + failed.length : ''),
+            failed.length ? 'warning' : 'success');
+          if (failed.length) {
+            var body = h('tbody');
+            failed.forEach(function (item) {
+              body.appendChild(h('tr', null,
+                h('td', { class: 'ellipsis' }, item.old),
+                h('td', null, item.error)));
+            });
+            resultHost.replaceChildren(h('div', {
+              class: 'card', style: 'margin-bottom:12px'
+            }, h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+              '未改名 · ' + failed.length + ' 个'),
+            h('div', { class: 'table-wrap' },
+              h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+                h('th', null, '文件'), h('th', null, '原因'))), body))));
+          }
+          load();
+        }).catch(function (error) {
+          execBtn.disabled = false;
+          toast('改名失败：' + error.message, 'error');
+        });
+      });
 
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
@@ -1283,12 +1331,12 @@
         h('div', { class: 'toolbar' },
           h('span', { class: 'row-title' }, '预览'),
           h('span', { style: 'flex:1' }),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '执行改名'),
-          h('span', { class: 'muted small' }, '执行改名在桌面端'))));
+          execBtn,
+          h('span', { class: 'muted small' },
+            '只改文件名，不改内容；执行前二次确认'))));
       root.appendChild(stats);
       root.appendChild(tableHost);
+      root.appendChild(resultHost);
       load();
     }).catch(function (error) {
       setError(root, error, function () { renderRenameBatch(root); });

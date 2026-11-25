@@ -249,6 +249,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return rename_batch.preview(dict(req.json or {}))
     server.post("/api/rename-batch/preview", rename_batch_preview)
 
+    def rename_batch_execute(req):
+        return rename_batch.execute(dict(req.json or {}))
+    server.post("/api/rename-batch/execute", rename_batch_execute)
+
     server.get("/api/tickets", lambda req: tickets.overview())
 
     server.get("/api/music-playlist", lambda req: music_playlist.overview())
