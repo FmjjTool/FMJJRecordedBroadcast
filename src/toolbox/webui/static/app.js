@@ -965,10 +965,233 @@
         jobHost);
     }
 
+    function biliCard(reload) {
+      var modeSel = h('select', { class: 'select' },
+        h('option', { value: 'emote' }, '表情包'),
+        h('option', { value: 'garb' }, '装扮'),
+        h('option', { value: 'up' }, 'UP 信息'));
+      var modeHost = h('div', { style: 'margin-top:8px' });
+      var jobHost = h('div');
+
+      function jobRun(path, body, label) {
+        post(path, body).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            toast(outcome.summary || (label + '完成'), 'success');
+            reload();
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              if (job.status === 'error') {
+                toast(label + '失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          toast(label + '失败：' + error.message, 'error');
+        });
+      }
+
+      function renderEmote() {
+        var keyword = h('input', {
+          class: 'input grow', placeholder: '包名关键字，留空列出全部'
+        });
+        var searchBtn = h('button', { class: 'btn', type: 'button' }, '搜索');
+        var listHost = h('div', { style: 'margin-top:8px' });
+        var selected = new Set();
+        var dlBtn = h('button', {
+          class: 'btn primary', type: 'button', disabled: true
+        }, '下载选中');
+        var info = h('div', { class: 'muted small', style: 'margin-top:6px' });
+        function syncDl() {
+          dlBtn.disabled = selected.size === 0;
+          dlBtn.textContent = '下载选中' + (selected.size
+            ? '（' + selected.size + ' 个包）' : '');
+        }
+        function search() {
+          searchBtn.disabled = true;
+          info.textContent = '正在读取表情包列表…';
+          post('/api/tools/bili/emote/search', { keyword: keyword.value.trim() })
+            .then(function (data) {
+              searchBtn.disabled = false;
+              selected.clear();
+              syncDl();
+              var items = data.items || [];
+              info.textContent = '共 ' + fmtNumber(data.total) + ' 个表情包'
+                + (data.truncated ? '（仅列前 ' + items.length + ' 个）' : '')
+                + ' · 勾选后下载到「B站资源/表情包」';
+              if (!items.length) {
+                listHost.replaceChildren(empty('没有匹配的表情包。'));
+                return;
+              }
+              var head = h('tr', null, h('th', { style: 'width:32px' }, ''),
+                h('th', null, '表情包'), h('th', null, '更新时间'));
+              var body = h('tbody');
+              items.forEach(function (item) {
+                var check = h('input', { type: 'checkbox' });
+                check.addEventListener('change', function () {
+                  if (check.checked) selected.add(item.id);
+                  else selected.delete(item.id);
+                  syncDl();
+                });
+                body.appendChild(h('tr', null,
+                  h('td', null, check),
+                  h('td', { class: 'ellipsis', title: item.id }, item.name || item.id),
+                  h('td', { class: 'muted small' }, item.mtime || '-')));
+              });
+              listHost.replaceChildren(h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' }, h('thead', null, head), body)));
+            }).catch(function (error) {
+              searchBtn.disabled = false;
+              info.textContent = '';
+              toast('搜索失败：' + error.message, 'error');
+            });
+        }
+        searchBtn.addEventListener('click', search);
+        dlBtn.addEventListener('click', function () {
+          if (!selected.size) return;
+          var ids = Array.from(selected);
+          dlBtn.disabled = true;
+          jobRun('/api/tools/bili/emote/download', { ids: ids }, '表情包下载');
+        });
+        modeHost.replaceChildren(
+          h('div', { class: 'toolbar' }, keyword, searchBtn, dlBtn),
+          info, listHost);
+        search();
+      }
+
+      function renderIdInput(mode) {
+        var isGarb = mode === 'garb';
+        var input = h('input', {
+          class: 'input grow',
+          placeholder: isGarb
+            ? '装扮 item_id 或装扮链接（如 107423）'
+            : 'UP 主 UID 或空间链接（如 470880931）'
+        });
+        var btn = h('button', { class: 'btn primary', type: 'button' },
+          isGarb ? '下载装扮素材' : '下载空间资源');
+        btn.addEventListener('click', function () {
+          var value = input.value.trim();
+          if (!value) {
+            toast(isGarb ? '请填写装扮 ID' : '请填写 UP 主 UID', 'warning');
+            return;
+          }
+          btn.disabled = true;
+          jobRun(isGarb ? '/api/tools/bili/garb/download'
+                        : '/api/tools/bili/up/download',
+            isGarb ? { item_id: value } : { uid: value },
+            isGarb ? '装扮下载' : '空间资源下载');
+          setTimeout(function () { btn.disabled = false; }, 1500);
+        });
+        modeHost.replaceChildren(
+          h('div', { class: 'toolbar' }, input, btn),
+          h('div', { class: 'muted small', style: 'margin-top:6px' },
+            isGarb
+              ? '读取装扮详情后按桌面端同一份清单下载（背景 / 表情包 / 皮肤 / 头像框等）。'
+              : '下载头像、空间横幅、App 端背景、投稿封面、充电表情、收藏集封面等。'));
+      }
+
+      modeSel.addEventListener('change', function () {
+        if (modeSel.value === 'emote') renderEmote();
+        else renderIdInput(modeSel.value);
+      });
+      renderEmote();
+      return h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, 'B站资源下载'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '类型'), modeSel,
+          h('span', { class: 'muted small' },
+            '需要 B站 登录；输出到「B站资源/表情包 | 装扮 | 空间资源」。')),
+        modeHost, jobHost);
+    }
+
+    function emojiCard(reload) {
+      var room = h('input', {
+        class: 'input grow',
+        placeholder: '直播间号或 live.douyin.com 链接'
+      });
+      var fetchBtn = h('button', { class: 'btn', type: 'button' }, '拉取表情');
+      var dlBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '下载全部');
+      var info = h('div', { class: 'muted small', style: 'margin-top:6px' });
+      var listHost = h('div');
+      var jobHost = h('div');
+      var items = [];
+      fetchBtn.addEventListener('click', function () {
+        if (!room.value.trim()) {
+          toast('请填写直播间号或链接', 'warning');
+          return;
+        }
+        fetchBtn.disabled = true;
+        info.textContent = '正在拉取会员表情栏…';
+        post('/api/tools/douyin-emoji/fetch', { room: room.value.trim() })
+          .then(function (data) {
+            fetchBtn.disabled = false;
+            items = data.items || [];
+            dlBtn.disabled = items.length === 0;
+            info.textContent = '共 ' + fmtNumber(data.total) + ' 个会员表情'
+              + (data.describe ? ' · ' + data.describe : '')
+              + (data.error ? ' · ' + data.error : '');
+            if (!items.length) {
+              listHost.replaceChildren(empty('没有拉到会员表情。'));
+              return;
+            }
+            var list = h('div', { class: 'artifact-list' });
+            items.slice(0, 40).forEach(function (item) {
+              list.appendChild(h('div', { class: 'artifact-row' },
+                h('span', { class: 'artifact-name', title: item.url },
+                  item.name)));
+            });
+            listHost.replaceChildren(list,
+              items.length > 40
+                ? h('div', { class: 'muted small', style: 'margin-top:6px' },
+                  '仅列前 40 个，共 ' + fmtNumber(items.length) + ' 个。')
+                : null);
+          }).catch(function (error) {
+            fetchBtn.disabled = false;
+            info.textContent = '';
+            toast('拉取失败：' + error.message, 'error');
+          });
+      });
+      dlBtn.addEventListener('click', function () {
+        if (!room.value.trim()) return;
+        dlBtn.disabled = true;
+        post('/api/tools/douyin-emoji/download', { room: room.value.trim() })
+          .then(function (result) {
+            watchJob(jobHost, result.job, function (job) {
+              var outcome = job.result || {};
+              toast(outcome.summary || '下载完成', 'success');
+              reload();
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                if (job.status === 'error') {
+                  dlBtn.disabled = false;
+                  toast('下载失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            dlBtn.disabled = false;
+            toast('下载失败：' + error.message, 'error');
+          });
+      });
+      return h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '抖音会员表情'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          room, fetchBtn, dlBtn),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '拉取直播间的「会员表情栏」（需要抖音登录 Cookie），下载到「抖音表情包」导出目录。'),
+        info, listHost, jobHost);
+    }
+
     function load() {
       host.replaceChildren();
       if (state.artifacts.tab === 'comments') host.appendChild(commentsCard(load));
       else if (state.artifacts.tab === 'wechat') host.appendChild(wechatCard(load));
+      else if (state.artifacts.tab === 'bili') host.appendChild(biliCard(load));
+      else if (state.artifacts.tab === 'emoji') host.appendChild(emojiCard(load));
       var listHost = h('div');
       host.appendChild(listHost);
       setLoading(listHost, '正在读取本地产物…');

@@ -196,6 +196,58 @@ def comments_run(payload: dict, on_progress=None, on_log=None,
     }
 
 
+def douyin_emoji_fetch(payload: dict) -> dict:
+    """拉取抖音直播间「会员表情栏」（只读，需要抖音登录 Cookie）。"""
+    from toolbox import douyin_emoji as DE
+
+    room = str(payload.get("room") or "").strip()
+    if not room:
+        raise ValueError("请填写直播间号或直播间链接")
+    result = DE.fetch_vip_emojis(room) or {}
+    error = str(result.get("error") or "")
+    items = result.get("items") or []
+    if error and not items:
+        raise ValueError(f"拉取失败：{error}")
+    rows = [{"name": str(item.get("name") or "表情"),
+             "url": str(item.get("url") or "")} for item in items
+            if item.get("url")]
+    return {"items": rows, "total": len(rows), "error": error,
+            "describe": str(result.get("describe") or ""),
+            "member": bool(result.get("member")),
+            "note": "只读拉取；下载后写入「抖音表情包」导出目录。"}
+
+
+def douyin_emoji_download(payload: dict, on_progress=None, on_log=None,
+                          is_cancelled=None) -> dict:
+    """拉取并下载抖音直播间会员表情。"""
+    from toolbox import douyin_emoji as DE
+    from toolbox.config_manager import get_export_subdir
+
+    room = str(payload.get("room") or "").strip()
+    if not room:
+        raise ValueError("请填写直播间号或直播间链接")
+    data = douyin_emoji_fetch({"room": room})
+    items = data.get("items") or []
+    if not items:
+        raise ValueError("没有可下载的会员表情")
+    out_dir = Path(get_export_subdir("douyin_emoji"))
+    _log(on_log, f"共 {len(items)} 个表情，开始下载到 {out_dir}")
+
+    def progress(done, total, name, ok) -> None:
+        if is_cancelled and is_cancelled():
+            return
+        _progress(on_progress, done, total, f"{'已下载' if ok else '失败'}：{name}")
+
+    result = DE.download_items(items, out_dir, on_progress=progress,
+                               stop=is_cancelled or (lambda: False))
+    saved = len(result.get("saved") or [])
+    failed = len(result.get("failed") or [])
+    return {"saved": saved, "failed": failed,
+            "summary": f"抖音表情下载完成：成功 {saved} 个"
+                       + (f"，失败 {failed} 个" if failed else ""),
+            "note": "输出目录：抖音表情包；可在下方产物列表查看。"}
+
+
 def _filter_desc(keyword, user, image_mode, min_likes, sort_by) -> str:
     parts = []
     if keyword:

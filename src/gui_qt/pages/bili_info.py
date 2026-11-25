@@ -20,43 +20,7 @@ from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_emoji import _DlBar, _padded, render_files
 
 
-def space_files(card: dict, appinfo: dict, emotes: list) -> list[dict]:
-    """空间资源：头像/头像框(增强+普通+App)/网页+App背景图/投稿封面/充电表情/收藏集封面。"""
-    files = [{"path": "头像", "url": card.get("card", {}).get("face", "")}]
-    space = card.get("space", {}) or {}
-    if space.get("l_img"):
-        files.append({"path": "网页端空间背景图", "url": space["l_img"]})
-    if space.get("s_img") and space["s_img"] != space.get("l_img"):
-        files.append({"path": "网页端空间背景图(小图)", "url": space["s_img"]})
-    pendant = card.get("card", {}).get("pendant", {}) or {}
-    pen_name = api.sanitize(pendant.get("name", "头像框"))
-    enhanced = pendant.get("image_enhance", "")
-    if enhanced:
-        files.append({"path": f"头像框 - {pen_name}", "url": enhanced})
-    if pendant.get("image") and pendant["image"] != enhanced:
-        files.append({"path": f"头像框 - {pen_name}(普通版)", "url": pendant["image"]})
-    if appinfo.get("card", {}).get("pendant_url"):
-        files.append({"path": f"头像框 - {pen_name}(App端)", "url": appinfo["card"]["pendant_url"]})
-    images = appinfo.get("images", {}) or {}
-    if images.get("imgUrl"):
-        files.append({"path": "App端空间背景图", "url": images["imgUrl"]})
-    if images.get("night_imgurl"):
-        files.append({"path": "App端空间背景图（夜间模式）", "url": images["night_imgurl"]})
-    for it in (appinfo.get("archive", {}) or {}).get("item", []) or []:
-        if it.get("cover"):
-            files.append({"path": f"投稿封面/{api.sanitize(it.get('title', '投稿'))}", "url": it["cover"]})
-    for e in emotes:
-        if e.get("icon"):
-            files.append({"path": f"充电表情/{api.sanitize(e.get('name', e.get('emoji', '表情')))}",
-                          "url": e["icon"]})
-    # 收藏集卡牌封面（collection_top_simple）
-    cts = ((images.get("collection_top_simple", {}) or {}).get("top", {}) or {}).get("result", []) or []
-    for r in cts:
-        if r.get("cover"):
-            t = api.sanitize(f"{(r.get('title', {}) or {}).get('title', '')} "
-                             f"{(r.get('title', {}) or {}).get('sub_title', '')}".strip() or "收藏集")
-            files.append({"path": f"收藏集封面/{t}", "url": r["cover"]})
-    return [f for f in files if f["url"]]
+from toolbox.bili_assets import space_files  # noqa: F401  共用 Qt-free 清单
 
 
 class BiliInfoPage(BasePage):

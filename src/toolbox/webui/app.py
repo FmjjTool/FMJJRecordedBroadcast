@@ -227,6 +227,30 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return artifacts.start_wechat(dict(req.json or {}))
     server.post("/api/tools/artifacts/wechat", start_wechat_parse)
 
+    def bili_emote_search(req):
+        return artifacts.bili_emote_search(dict(req.json or {}))
+    server.post("/api/tools/bili/emote/search", bili_emote_search)
+
+    def start_bili_emote_download(req):
+        return artifacts.start_bili_emote_download(dict(req.json or {}))
+    server.post("/api/tools/bili/emote/download", start_bili_emote_download)
+
+    def start_bili_garb_download(req):
+        return artifacts.start_bili_garb_download(dict(req.json or {}))
+    server.post("/api/tools/bili/garb/download", start_bili_garb_download)
+
+    def start_bili_up_download(req):
+        return artifacts.start_bili_up_download(dict(req.json or {}))
+    server.post("/api/tools/bili/up/download", start_bili_up_download)
+
+    def douyin_emoji_fetch(req):
+        return artifacts.douyin_emoji_fetch(dict(req.json or {}))
+    server.post("/api/tools/douyin-emoji/fetch", douyin_emoji_fetch)
+
+    def start_douyin_emoji_download(req):
+        return artifacts.start_douyin_emoji_download(dict(req.json or {}))
+    server.post("/api/tools/douyin-emoji/download", start_douyin_emoji_download)
+
     server.get("/api/tools/artifacts", lambda req: artifacts.list(
         req.q("kind"), req.q_int("group_limit", 200, 1, 500),
         req.q_int("file_limit", 200, 1, 1000)))

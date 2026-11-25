@@ -38,6 +38,70 @@ class ArtifactService:
                 is_cancelled=lambda: bool(task.cancel_requested)))
         return {"job": job.id}
 
+    def bili_emote_search(self, payload: dict) -> dict:
+        from toolbox import webui_bili_tools
+        return webui_bili_tools.emote_search(dict(payload))
+
+    def start_bili_emote_download(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        if not (payload.get("ids") or []):
+            raise ValueError("请先勾选要下载的表情包")
+        from toolbox import webui_bili_tools
+        job = self.jobs.submit(
+            "bili_emote_download",
+            lambda task: webui_bili_tools.emote_download(
+                dict(payload), on_progress=self._progress(task),
+                on_log=task.log,
+                is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
+
+    def start_bili_garb_download(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        if not str(payload.get("item_id") or "").strip():
+            raise ValueError("请填写装扮 ID 或链接")
+        from toolbox import webui_bili_tools
+        job = self.jobs.submit(
+            "bili_garb_download",
+            lambda task: webui_bili_tools.garb_download(
+                dict(payload), on_progress=self._progress(task),
+                on_log=task.log,
+                is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
+
+    def start_bili_up_download(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        if not str(payload.get("uid") or "").strip():
+            raise ValueError("请填写 UP 主 UID 或空间链接")
+        from toolbox import webui_bili_tools
+        job = self.jobs.submit(
+            "bili_up_download",
+            lambda task: webui_bili_tools.up_download(
+                dict(payload), on_progress=self._progress(task),
+                on_log=task.log,
+                is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
+
+    def douyin_emoji_fetch(self, payload: dict) -> dict:
+        from toolbox import webui_collect_tools
+        return webui_collect_tools.douyin_emoji_fetch(dict(payload))
+
+    def start_douyin_emoji_download(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        if not str(payload.get("room") or "").strip():
+            raise ValueError("请填写直播间号或链接")
+        from toolbox import webui_collect_tools
+        job = self.jobs.submit(
+            "douyin_emoji_download",
+            lambda task: webui_collect_tools.douyin_emoji_download(
+                dict(payload), on_progress=self._progress(task),
+                on_log=task.log,
+                is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
+
     @staticmethod
     def _progress(task):
         def progress(done, total, text) -> None:
