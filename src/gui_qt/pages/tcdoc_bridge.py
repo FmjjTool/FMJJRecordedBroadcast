@@ -722,11 +722,17 @@ class TcDocBridgePanel(QWidget):
         self.api_write_btn.clicked.connect(self._write_single_live)
         row2.addWidget(self.api_write_btn)
 
+        self.field_map_btn = QPushButton("字段映射")
+        self.field_map_btn.setToolTip(
+            "配置当前表「内部字段 → 腾讯列名」：改列名、换列或让某列不写；"
+            "保存到 config.json 的 tcdoc_field_maps，立即生效。")
+        self.field_map_btn.clicked.connect(self._open_field_map)
+        row2.addWidget(self.field_map_btn)
+
         self.manual_btn = QPushButton("手动录入")
         self.manual_btn.setToolTip(
             "为当前表手动新增一行；只生成可复制的 TSV，不会直接写入腾讯文档。"
             "图片列请用「复制图片」或到腾讯文档里补。")
-        self.manual_btn.setVisible(False)
         self.manual_btn.clicked.connect(self._manual_entry)
         row2.addWidget(self.manual_btn)
         row2.addStretch(1)
@@ -1086,6 +1092,13 @@ class TcDocBridgePanel(QWidget):
 
     def _on_target_changed(self, *_args) -> None:
         target = self.target_combo.currentData()
+        dialog = getattr(self, "_field_map_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.close()
+            except RuntimeError:  # 已销毁
+                pass
+            self._field_map_dialog = None
         if target:
             self._save_cfg(tcdoc_bridge_doc_key=target["doc_key"],
                            tcdoc_bridge_tab_id=target["tab_id"])
@@ -1093,7 +1106,8 @@ class TcDocBridgePanel(QWidget):
         songs = profile == "songs"
         lives = profile == "lives"
         readonly = profile in ("events", "merch", "lives")
-        self.manual_btn.setVisible(profile in ("events", "merch", "lives"))
+        self.manual_btn.setVisible(bool(target))
+        self.field_map_btn.setVisible(bool(target))
         self.partner_filter_btn.setVisible(profile == "posts")
         self.live_account_btn.setVisible(lives)
         self.dup_combo.setVisible(lives)
@@ -1962,17 +1976,35 @@ class TcDocBridgePanel(QWidget):
     _MANUAL_SKIP_TYPES = {5, 10, 11, 13, 19, 21}   # 图片/人员/公式/关联
 
     def _manual_entry(self) -> None:
-        """手动新增一行：按当前表头生成输入框，只生成可复制 TSV。"""
+        """手动新增一行：按当前表头生成输入框，只生成可复制 TSV。
+
+        所有表都能用（官方动态 / 完整歌曲 / 线下活动 / 周边图鉴 / 直播记录）；
+        输入框按腾讯表的真实列名显示，落库时换成程序内部字段名，
+        这样字段映射改了列名也能正确显示与复制。
+        """
+        from toolbox.tcdoc import field_maps
+
         target = self.target_combo.currentData()
         if not target:
             return
         profile = str(target.get("profile") or "posts")
-        columns = [col for col in (target.get("columns") or [])
-                   if str(col.get("name") or "")
-                   and int(col.get("type") or 1) not in self._MANUAL_SKIP_TYPES]
-        if not columns:
-            columns = [{"name": name, "typeName": "文本"}
-                       for name in (target.get("columns") or [])]
+        doc_key = str(target.get("doc_key") or "")
+        tab_id = str(target.get("tab_id") or "")
+        pairs: list[tuple[str, str]] = []   # (腾讯列名, 内部字段名)
+        seen: set[str] = set()
+        for col in target.get("columns") or []:
+            shown = str(col.get("name") or "")
+            if not shown or int(col.get("type") or 1) in self._MANUAL_SKIP_TYPES:
+                continue
+            internal = field_maps.internal_of(doc_key, tab_id, shown)
+            if internal in seen or not field_maps.target(doc_key, tab_id, internal):
+                continue
+            seen.add(internal)
+            pairs.append((shown, internal))
+        if not pairs:
+            pairs = [(name, field_maps.internal_of(doc_key, tab_id, name))
+                     for name in (c.get("name") for c in target.get("columns") or [])
+                     if name]
         dlg = QDialog(self)
         dlg.setWindowTitle(f"手动录入 · {target.get('tab_name') or ''}")
         dlg.resize(640, 620)
@@ -1987,14 +2019,11 @@ class TcDocBridgePanel(QWidget):
         form = QFormLayout(body)
         form.setContentsMargins(4, 4, 4, 4)
         edits: dict[str, QLineEdit] = {}
-        for col in columns:
-            name = str(col.get("name") or "")
+        for shown, internal in pairs:
             edit = QLineEdit()
-            type_name = str(col.get("typeName") or "")
-            edit.setPlaceholderText(type_name if type_name and type_name != "1"
-                                    else name)
-            edits[name] = edit
-            form.addRow(name, edit)
+            edit.setPlaceholderText(shown)
+            edits[internal] = edit
+            form.addRow(shown if shown == internal else f"{shown}（← {internal}）", edit)
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
         buttons = QHBoxLayout()
@@ -2016,9 +2045,17 @@ class TcDocBridgePanel(QWidget):
             row["_source"] = ""
             row["_needs_review"] = True
             if self._result is None:
-                names = [c.get("name") for c in target.get("columns") or []]
+                names = [internal for _shown, internal in pairs]
                 self._result = bridge.manual_target_result(profile, names)
+            elif not self._result.get("columns"):
+                self._result["columns"] = [internal for _shown, internal in pairs]
             self._result["rows"].append(row)
+            # 手动行可能填了自动比对结果里没有的列（如表里额外的人工列）
+            columns = list(self._result.get("columns") or [])
+            for key in row:
+                if not str(key).startswith("_") and key not in columns:
+                    columns.append(key)
+            self._result["columns"] = columns
             self._fill_table(self._result["rows"], self._result.get("columns"))
             self._show_table()
             self.copy_btn.setEnabled(True)
@@ -2632,6 +2669,40 @@ class TcDocBridgePanel(QWidget):
         if not rows:
             return
         self._copy_rows(rows, f"全部 {len(rows)} 行")
+
+    def _open_field_map(self) -> None:
+        """打开字段映射窗口（非模态）：内部字段 → 当前表的真实列名。"""
+        if self._closed:
+            return
+        target = self.target_combo.currentData()
+        if not target:
+            return
+        dialog = getattr(self, "_field_map_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.close()
+            except RuntimeError:  # 已销毁
+                pass
+            self._field_map_dialog = None
+        from gui_qt.pages.tcdoc_field_map import FieldMapDialog
+
+        dialog = FieldMapDialog(self, target,
+                                on_saved=lambda: self._on_field_map_saved(target))
+        dialog.destroyed.connect(lambda *_: setattr(self, "_field_map_dialog", None))
+        self._field_map_dialog = dialog
+        dialog.show()
+
+    def _on_field_map_saved(self, target) -> None:
+        """映射保存后按新列名重跑比对（上传/复制都会用它）。"""
+        if self._closed:
+            return
+        if self._songs_mode:
+            # 完整歌曲是检索行，不重新比对；按新列名重画当前结果即可
+            self._fill_table(self._rows, (self._result or {}).get("columns"))
+            self.status.setText("字段映射已保存，立即生效。")
+            return
+        self.status.setText("字段映射已保存，正在按新列名重新比对…")
+        self._run_compare()
 
     def _open_push_history(self) -> None:
         """打开推送历史（非模态，可一边查看一边操作主界面）。"""

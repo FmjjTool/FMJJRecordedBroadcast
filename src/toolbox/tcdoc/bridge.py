@@ -1465,15 +1465,31 @@ def song_row_from_matches(matches: dict, title: str, singer: str,
 
 # ==================== 腾讯表格 ====================
 
-def _is_sync_sheet(sheet: dict) -> bool:
-    names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
-    return all(name in names for name in REQUIRED_COLUMNS) and any(
-        name in names for name in LINK_COLUMNS)
+def _resolved_required(doc_key: str, tab_id: str, names) -> list[str]:
+    """必需列按字段映射解析成目标表里的真实列名；配置为「不写」的列跳过。"""
+    out = []
+    for name in names:
+        target = field_maps.target(doc_key, tab_id, name)
+        if target:
+            out.append(target)
+    return out
 
 
-def _is_song_sheet(sheet: dict) -> bool:
+def _is_sync_sheet(sheet: dict, doc_key: str = "", tab_id: str = "") -> bool:
     names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
-    return all(name in names for name in SONG_REQUIRED_COLUMNS)
+    tab_id = tab_id or str(sheet.get("tab_id") or "")
+    required = _resolved_required(doc_key, tab_id, REQUIRED_COLUMNS)
+    links = _resolved_required(doc_key, tab_id, LINK_COLUMNS)
+    return bool(required) and all(name in names for name in required) and any(
+        name in names for name in links)
+
+
+def _is_song_sheet(sheet: dict, doc_key: str = SONG_DOC_KEY,
+                   tab_id: str = SONG_TAB_ID) -> bool:
+    names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
+    tab_id = tab_id or str(sheet.get("tab_id") or "")
+    required = _resolved_required(doc_key, tab_id, SONG_REQUIRED_COLUMNS)
+    return bool(required) and all(name in names for name in required)
 
 
 def list_targets() -> list[dict]:
@@ -1491,23 +1507,27 @@ def list_targets() -> list[dict]:
             if sheet.get("skipped"):
                 continue
             names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
-            if key == SONG_DOC_KEY and sheet["tab_id"] == EVENT_TAB_ID:
-                if not all(name in names for name in EVENT_REQUIRED_COLUMNS):
+            tab_id = str(sheet.get("tab_id") or "")
+            if key == SONG_DOC_KEY and tab_id == EVENT_TAB_ID:
+                if not all(name in names for name in
+                           _resolved_required(key, tab_id, EVENT_REQUIRED_COLUMNS)):
                     continue
                 profile = "events"
-            elif key == SONG_DOC_KEY and sheet["tab_id"] == MERCH_TAB_ID:
-                if not all(name in names for name in MERCH_REQUIRED_COLUMNS):
+            elif key == SONG_DOC_KEY and tab_id == MERCH_TAB_ID:
+                if not all(name in names for name in
+                           _resolved_required(key, tab_id, MERCH_REQUIRED_COLUMNS)):
                     continue
                 profile = "merch"
-            elif key == SONG_DOC_KEY and sheet["tab_id"] == LIVE_TAB_ID:
-                if not all(name in names for name in LIVE_REQUIRED_COLUMNS):
+            elif key == SONG_DOC_KEY and tab_id == LIVE_TAB_ID:
+                if not all(name in names for name in
+                           _resolved_required(key, tab_id, LIVE_REQUIRED_COLUMNS)):
                     continue
                 profile = "lives"
-            elif key == SONG_DOC_KEY and sheet["tab_id"] == SONG_TAB_ID:
-                if not _is_song_sheet(sheet):
+            elif key == SONG_DOC_KEY and tab_id == SONG_TAB_ID:
+                if not _is_song_sheet(sheet, key, tab_id):
                     continue
                 profile = "songs"
-            elif _is_sync_sheet(sheet):
+            elif _is_sync_sheet(sheet, key, tab_id):
                 profile = "posts"
             else:
                 continue

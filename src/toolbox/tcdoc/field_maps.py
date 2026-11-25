@@ -98,12 +98,31 @@ def load_maps() -> dict[str, dict[str, str]]:
     return maps
 
 
+def save_maps(maps) -> None:
+    """整体写回映射配置（保留其它配置）；改完立即失效缓存。"""
+    tc_cfg.save_cfg(**{CONFIG_KEY: _normalize(maps)})
+    _CACHE["stamp"] = None
+
+
 def mapping(doc_key, tab_id) -> dict[str, str]:
     """该目标表生效的映射：先 "*"，再用该表的键覆盖。"""
     maps = load_maps()
     merged: dict[str, str] = dict(maps.get(WILDCARD) or {})
     merged.update(maps.get(table_key(doc_key, tab_id)) or {})
     return merged
+
+
+def save_scope(doc_key, tab_id, pairs) -> None:
+    """替换某张表的映射（其它表与 "*" 保持不变）；清空即删除该表条目。"""
+    maps = dict(load_maps())
+    scope = table_key(doc_key, tab_id)
+    cleaned = {str(name).strip(): ("" if target is None else str(target).strip())
+               for name, target in (pairs or {}).items() if str(name).strip()}
+    if cleaned:
+        maps[scope] = cleaned
+    else:
+        maps.pop(scope, None)
+    save_maps(maps)
 
 
 def target(doc_key, tab_id, name: str) -> str:
