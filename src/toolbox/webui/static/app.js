@@ -3366,6 +3366,34 @@
       });
       host.appendChild(themeCard);
 
+      var deps = h('div', { class: 'card', style: 'margin-top:12px' });
+      deps.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '依赖与组件'));
+      var depHost = h('div');
+      deps.appendChild(depHost);
+      host.appendChild(deps);
+      depHost.replaceChildren(h('div', { class: 'loading' }, '正在检测依赖…'));
+      api('/api/system/deps').then(function (result) {
+        depHost.replaceChildren();
+        (result.items || []).forEach(function (item) {
+          depHost.appendChild(h('div', {
+            style: 'display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;'
+              + 'padding:6px 0;border-bottom:1px solid var(--border)'
+          },
+            h('span', { style: 'min-width:110px;font-weight:bold' }, item.name),
+            h('span', { class: 'badge ' + (item.ok ? 'ok' : 'warn') },
+              item.ok ? '已就绪' : '未就绪'),
+            h('span', { class: 'muted small' }, item.usage || ''),
+            h('span', { style: 'flex:1' }),
+            h('span', { class: 'muted small' }, item.detail || '')));
+        });
+        depHost.appendChild(h('div', {
+          class: 'muted small', style: 'margin-top:8px'
+        }, result.note || ''));
+      }).catch(function (error) {
+        depHost.replaceChildren(h('div', { class: 'error' },
+          '依赖检测失败：' + error.message));
+      });
+
       host.appendChild(h('div', { class: 'muted small' }, settings.note || ''));
     }).catch(function (error) {
       setError(host, error, function () { renderSystem(host); });

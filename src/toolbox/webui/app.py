@@ -132,6 +132,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return modules.save_system_theme(dict(req.json or {}))
     server.post("/api/system/theme", save_system_theme)
 
+    server.get("/api/system/deps", lambda req: modules.dependencies())
+
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())
     server.get("/api/tools/organize/preview",

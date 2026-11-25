@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from toolbox import webui_modules, webui_settings
+from toolbox import webui_deps, webui_modules, webui_settings
 
 
 class ModuleService:
@@ -41,3 +41,6 @@ class ModuleService:
 
     def save_system_theme(self, payload: dict) -> dict:
         return webui_settings.save_system_theme(payload.get("theme"))
+
+    def dependencies(self) -> dict:
+        return webui_deps.dependency_status()
