@@ -2686,7 +2686,10 @@ class TcDocBridgePanel(QWidget):
             self._field_map_dialog = None
         from gui_qt.pages.tcdoc_field_map import FieldMapDialog
 
-        dialog = FieldMapDialog(self, target,
+        rows = list(self._rows or [])
+        if not rows and self._result:
+            rows = list(self._result.get("rows") or [])
+        dialog = FieldMapDialog(self, target, rows=rows,
                                 on_saved=lambda: self._on_field_map_saved(target))
         dialog.destroyed.connect(lambda *_: setattr(self, "_field_map_dialog", None))
         self._field_map_dialog = dialog
@@ -2872,9 +2875,12 @@ class TcDocBridgePanel(QWidget):
             return
         columns = (self._result or {}).get("columns") or bridge.COLUMNS
         target = self.target_combo.currentData() or {}
+        table_columns = [str(col.get("name") or "")
+                         for col in target.get("columns") or []
+                         if str(col.get("name") or "")]
         QApplication.clipboard().setText(bridge.to_tsv(
             rows, columns, str(target.get("doc_key") or ""),
-            str(target.get("tab_id") or "")))
+            str(target.get("tab_id") or ""), table_columns=table_columns))
         self.status.setText(f"已复制{label}（不含表头），去腾讯文档粘贴即可。")
         if self.app is not None:
             try:

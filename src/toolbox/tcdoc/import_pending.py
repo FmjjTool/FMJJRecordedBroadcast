@@ -367,7 +367,8 @@ def records_from_rows(project: Path, rows: list[dict], catalogue: dict):
             missing.append({"key": key, "slot": slot, "url": url,
                             "path": candidates[0] if candidates else None})
         records.append({"key": key, "columns": columns, "images": paths,
-                        "expected_images": len(album), "missing_slots": gaps})
+                        "expected_images": len(album), "missing_slots": gaps,
+                        "_raw": dict(row.get("_raw") or {})})
     return records, missing
 
 
@@ -603,6 +604,7 @@ def song_records_from_rows(project: Path, rows: list[dict]) -> list[dict]:
             "images": [str(image.path) for image in images],
             "expected_images": expected,
             "missing_slots": gaps,
+            "_raw": dict(row.get("_raw") or {}),
             "_images": images,
         })
     return records
@@ -621,16 +623,19 @@ def _remark_plan(columns: dict, fields: list[dict], skipped: dict,
     任何程序写入（批量/单行/自动推送）都会调用它把
     「自动推送程序上传+北京时间」追加到已有备注后面；表里没这一列就静默跳过
     （不拦下整条记录、也不改表结构），字段存在但不是文本类型时记一笔原因。
-    列名默认兼容「备注信息」（四张子表）与「备注」（官方动态新增列），
-    config 里配置字段映射后按映射的目标列名找列。
+    列名默认兼容「备注信息」（四张子表）与「备注」（官方动态新增列）；
+    config 里若把另一列映射成备注来源，就写那一列；被映射成 JSON 来源的备注列跳过。
     """
-    target = field_maps.target(doc_key, tab_id, bridge.REMARK_COLUMN)
+    pairs = field_maps.mapping(doc_key, tab_id)
+    titles = {str(field.get("fieldTitle") or "") for field in fields}
+    target = next((column for column, source in pairs.items()
+                   if source in bridge.REMARK_ALIASES and column in titles), "")
+    if not target:
+        target = next((name for name in bridge.REMARK_ALIASES
+                       if name not in pairs and name in titles), "")
     if not target:
         return None, None, None
-    if target in bridge.REMARK_ALIASES:
-        names = bridge.REMARK_ALIASES
-    else:
-        names = (target,)
+    names = (target,)
     hits = [f for f in fields if str(f.get("fieldTitle") or "") in names]
     if not hits:
         # 目标表没有备注列：静默跳过，不新增字段、不影响其它列
@@ -719,6 +724,8 @@ def make_song_plan(record: dict, fields: list[dict], doc_key="", tab_id=""):
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
 
+    _apply_raw_sources(record, fields, values, kinds, skipped, doc_key, tab_id)
+
     bili = str(columns.get(bridge.SONG_BILI_COLUMN) or "").strip()
     bili_title = field_maps.target(doc_key, tab_id, bridge.SONG_BILI_COLUMN)
     if bili and bili_title:
@@ -789,6 +796,57 @@ def _date_ms(value: str):
     moment = (moment.replace(tzinfo=BEIJING)
               if moment.tzinfo is None else moment.astimezone(BEIJING))
     return str(int(moment.timestamp() * 1000)), None
+
+
+def _apply_raw_sources(record: dict, fields: list[dict], values: dict, kinds: dict,
+                       skipped: dict, doc_key="", tab_id=""):
+    """字段映射里「腾讯列 ← @本地JSON字段」的部分：取值后按目标列类型编码。"""
+    entries = field_maps.raw_targets(doc_key, tab_id)
+    if not entries:
+        return
+    by_title = {str(field.get("fieldTitle") or ""): field
+                for field in fields if field.get("fieldTitle")}
+    raw = record.get("_raw") or {}
+    for column, source in entries:
+        if column in values:
+            continue   # 已有程序字段写入同一列：程序值优先
+        field = by_title.get(column)
+        if field is None:
+            skipped[column] = "目标缺少字段"
+            continue
+        text = field_maps.raw_value(raw, source).strip()
+        if not text:
+            continue
+        kind = int(field.get("fieldType") or 1)
+        if kind == 1:
+            values[column] = [{"type": "text", "text": text}]
+            kinds[column] = 1
+        elif kind == 4:
+            encoded, why = _date_ms(text)
+            if why:
+                skipped[column] = why
+                continue
+            values[column] = encoded
+            kinds[column] = 4
+        elif kind == 8:
+            parts = urlsplit(text)
+            if parts.scheme not in {"http", "https"} or not parts.hostname:
+                skipped[column] = "链接无法识别"
+                continue
+            values[column] = [{"type": "url", "text": text, "link": text}]
+            kinds[column] = 8
+        elif kind in {9, 17}:
+            options = [o for o in field_options(field)
+                       if o.get("text") == text and o.get("id")]
+            if len(options) != 1:
+                skipped[column] = "没有匹配的既有选项"
+                continue
+            values[column] = options
+            kinds[column] = kind
+        elif kind == 5:
+            skipped[column] = "图片列按图片流程处理，不能用 JSON 字段写入"
+        else:
+            skipped[column] = "字段类型不匹配"
 
 
 def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events",
@@ -936,6 +994,8 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
 
+    _apply_raw_sources(record, fields, values, kinds, skipped, doc_key, tab_id)
+
     for required in spec["required"]:
         title = target_of(required)
         if not title or title not in values:
@@ -958,12 +1018,13 @@ def merch_key(columns: dict) -> str:
 
 
 def _candidate_record(columns: dict, key: str, title: str, account: str,
-                      platform: str, day: str, images=None, existing: bool = False) -> dict:
+                      platform: str, day: str, images=None, existing: bool = False,
+                      raw=None) -> dict:
     images = list(images or [])
     return {"key": key, "title": title, "account": account, "platform": platform,
             "time": day, "columns": columns, "images": [str(i.path) for i in images],
             "expected_images": len(images), "missing_slots": [], "_images": images,
-            "_existing": existing}
+            "_existing": existing, "_raw": dict(raw or {})}
 
 
 def _promo_local_images(row: dict, media_root: Path) -> list:
@@ -1001,7 +1062,7 @@ def event_records_from_rows(rows: list[dict]) -> list[dict]:
             str(columns.get("城市") or columns.get("活动类型") or ""),
             "线下活动", str(columns.get("活动日期") or ""),
             images=_promo_local_images(row, media_root),
-            existing=bool(row.get("_existing"))))
+            existing=bool(row.get("_existing")), raw=row.get("_raw")))
     return records
 
 
@@ -1016,7 +1077,7 @@ def merch_records_from_rows(rows: list[dict]) -> list[dict]:
         records.append(_candidate_record(
             columns, merch_key(columns), name,
             str(columns.get("来源渠道") or ""), "周边图鉴",
-            str(columns.get("首发日期") or "")))
+            str(columns.get("首发日期") or ""), raw=row.get("_raw")))
     return records
 
 
@@ -1209,6 +1270,7 @@ def make_live_plan(record: dict, fields: list[dict], available_only=True,
     if remark is not None:
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
+    _apply_raw_sources(record, fields, values, kinds, skipped, doc_key, tab_id)
     for required in LIVE_REQUIRED_FIELDS:
         title = field_maps.target(doc_key, tab_id, required)
         if not title or title not in values:
@@ -1409,6 +1471,7 @@ def make_plan(record: dict, fields: list[dict], available_only=False,
     if remark is not None:
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
+    _apply_raw_sources(record, fields, values, kinds, skipped, doc_key, tab_id)
     for required in ("作品标题", "作品内容", "发布时间"):
         title = field_maps.target(doc_key, tab_id, required)
         if not title or title not in values:

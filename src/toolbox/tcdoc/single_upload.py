@@ -134,6 +134,7 @@ def upload_entry(entry: dict, *, doc_key: str, tab_id: str, refresh: bool = True
         "images": [],
         "expected_images": len(paths),
         "missing_slots": [],
+        "_raw": dict(row.get("_raw") or {}),
         "_images": [LocalImage.inspect(path, MEDIA_ROOT) for path in paths],
     }
     client = LocalImportClient(ManagedAuth(_read_cookie), doc_key, tab_id)

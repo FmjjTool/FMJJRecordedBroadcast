@@ -558,6 +558,8 @@ def _row_from_song_group(entries: list[dict], albums: list[dict], columns) -> di
     row.update({column: links.get(column, "") for column in SONG_LINK_COLUMNS})
     row["_images"] = [cover] if cover else []
     row["_cover_url"] = cover
+    # 原始导出条目（中文键：歌曲名 / 歌手 …）：字段映射里可用 @歌曲名 等取值
+    row["_raw"] = dict(entries[0]) if entries else {}
     return row
 
 
@@ -1083,6 +1085,7 @@ def _ticket_candidates(days) -> list:
             "promo_images": _local_images(data, ("本地封面", "本地宣传图")),
             "source": str(data.get("链接") or ""),
             "author": str(data.get("平台") or ""),
+            "_raw": dict(data),
         })
     return rows
 
@@ -1121,6 +1124,7 @@ def _shopping_candidates(days) -> list:
             "images": images,
             "source": str(data.get("链接") or ""),
             "author": str(data.get("店铺") or shop_name or ""),
+            "_raw": dict(data),
         })
     return rows
 
@@ -1145,6 +1149,7 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
             candidate = (_event_candidate(item) if profile == "events"
                          else _merch_candidate(item))
             if candidate:
+                candidate["_raw"] = dict(item)
                 candidates.append(candidate)
     after_local = time.perf_counter()
     groups: dict[str, dict] = {}
@@ -1193,7 +1198,9 @@ reverse=True)
         columns = EVENT_FALLBACK_COLUMNS if profile == "events" else MERCH_FALLBACK_COLUMNS
     # 快照表头可能是映射后的目标列名：还原成内部字段名，行数据与预览列才能对上
     columns = tuple(dict.fromkeys(
-        field_maps.internal_of(SONG_DOC_KEY, tab_id, name) for name in columns))
+        name for name in (field_maps.internal_of(SONG_DOC_KEY, tab_id, column)
+                          for column in columns)
+        if name))
     if profile == "events":
         # 「场馆地址」是 type 22 地理位置字段：OpenAPI 只校验不检索，连真实腾讯地图
         # POI 也返回 ret=22037（2026-11-24 实测），所以只写文本列「场馆地址（文本）」。
@@ -1229,6 +1236,7 @@ reverse=True)
             })
         row["_images"] = list(item.get("images") or [])
         row["_promo_images"] = list(item.get("promo_images") or [])
+        row["_raw"] = dict(item.get("_raw") or {})
         row["_source"] = item.get("source") or ""
         row["_needs_review"] = True
         if is_existing:
@@ -2036,6 +2044,8 @@ def _row_from_group(items: list[dict], index: dict) -> dict:
         "作品时长": _duration_text(duration),
         "作品链接": page,
         "动态链接(b站)": dyn,
+        # 原始条目（英文键）：字段映射里可用 @title / @cover_url 等取值
+        "_raw": dict(base),
         # UI 用：检测/复制图片，不参与 TSV 列
         "_images": images,
     }
@@ -2152,7 +2162,9 @@ def _live_row(account: str, session: dict) -> dict:
     }
     return {"values": values, "day": start[:10], "time": start[11:16],
             "title": _norm_live_title(session.get("title")),
-            "link": "", "room": room}
+            "link": "", "room": room,
+            # 原始直播历史会话（start / end / room_id / title …）：@键 映射用
+            "raw": dict(session, 账号=account)}
 
 
 _BILI_VIDEO_URL = "https://www.bilibili.com/video/{}"
@@ -2306,12 +2318,14 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
                 or by_day_title.get((item["day"], item["title"]))
             if match is None:
                 rows.append(dict(item["values"], _images=[], _source="",
-                                 _needs_review=False, _dup=""))
+                                 _needs_review=False, _dup="",
+                                 _raw=dict(item.get("raw") or {})))
                 continue
             if match["idx"] in claimed:
                 # 同一天多场（第二场 / 重开播）：远端只可能有一行，后续场次留给人工判断
                 rows.append(dict(item["values"], _images=[], _source="",
-                                 _needs_review=True, _dup="同日多场，需人工确认"))
+                                 _needs_review=True, _dup="同日多场，需人工确认",
+                                 _raw=dict(item.get("raw") or {})))
                 continue
             claimed.add(match["idx"])
             duplicates += 1
@@ -2319,7 +2333,8 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
                 continue
             merged = _merge_live_values(item["values"], match["values"], mode, cols)
             rows.append(dict(merged, _images=[], _source="", _needs_review=True,
-                             _dup=LIVE_DUP_MODES[mode]))
+                             _dup=LIVE_DUP_MODES[mode],
+                             _raw=dict(item.get("raw") or {})))
 
     rows.sort(key=lambda row: (row.get("开始时间") or ""), reverse=True)
     timing = {"total": time.perf_counter() - started}
@@ -2466,17 +2481,40 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
     }
 
 
-def to_tsv(rows: list[dict], columns=None, doc_key="", tab_id="") -> str:
+def to_tsv(rows: list[dict], columns=None, doc_key="", tab_id="",
+           table_columns=None) -> str:
     """待同步行 → 制表符分隔文本（不含表头，可直接粘贴）。
 
-    传 doc_key/tab_id 时按字段映射输出：值仍从内部字段取，列顺序按配置后的目标列，
-    配置为「不写」的列不输出（与程序上传的实际写入一致）。
+    columns 是程序字段（行数据的键）。传 table_columns（腾讯表列顺序）时按表的列序
+    输出：每列取它配置的来源（程序字段或 @JSON 字段），「不写」/无来源的列跳过。
     """
     from . import field_maps
 
     columns = list(columns or COLUMNS)
-    pairs = field_maps.mapping(doc_key, tab_id) if (doc_key or tab_id) else {}
-    sources = [column for column in columns if pairs.get(column, column)]
+    if table_columns:
+        plan = []          # [(列名, 来源程序字段或 @JSON)]；空来源=该列留空
+        for column in table_columns:
+            source = (field_maps.source_of(doc_key, tab_id, column)
+                      if (doc_key or tab_id) else column)
+            plan.append((column, source or ""))
+        lines = []
+        for row in rows:
+            cells = []
+            for column, source in plan:
+                if not source:
+                    value = ""
+                elif source.startswith("@"):
+                    value = field_maps.raw_value(row.get("_raw") or {}, source)
+                else:
+                    value = row.get(source, "")
+                cells.append(_clean_cell(value))
+            lines.append("\t".join(cells))
+        return "\r\n".join(lines)
+    if doc_key or tab_id:
+        sources = [column for column in columns
+                   if field_maps.target(doc_key, tab_id, column)]
+    else:
+        sources = columns
     lines = []
     for row in rows:
         values = [_clean_cell(row.get(column, "")) for column in sources]

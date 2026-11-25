@@ -1,23 +1,25 @@
 """腾讯文档写回字段映射（config 驱动，按目标表浮动）。
 
-配置位置 config/config.json → convert.tcdoc_field_maps：
+配的是「腾讯表这一列，用本地哪个字段的值」，腾讯列固定不动：
 
     "tcdoc_field_maps": {
-      "*": {"作品时长": ""},
       "DRnd3bkhkQUR1aEJr|ss_h2uh2s": {
-        "作品标题": "标题",
-        "发布账号": "作者"
+        "标题": "作品标题",
+        "作者": "发布账号",
+        "备注": "@description",
+        "作品时长": ""
       }
     }
 
-规则：
-- 键写程序内部字段名（下面 INTERNAL_FIELDS 里列的名字），值写目标表里的列名；
-- 值为空串 = 这个字段不写；没配置的字段完全按代码默认走；
-- 优先级：doc_key|tab_id（该表） > "*"（所有表）；
-- 新增表不用改代码：给它加一条 doc_key|tab_id 的映射即可，键名照旧用内部字段名。
+- 键 = 腾讯表里的列名（不存在的列不会写）；
+- 值 = 本地来源字段：
+  * 程序字段名（见 INTERNAL_FIELDS，如 作品标题 / 发布账号）；
+  * "@键名" = 本地原始 JSON 字段（如 @title、@cover_url，支持 a.b 取嵌套）；
+  * 空串 = 这一列不写。
+- 没配置的列按默认：列名与程序字段同名时取该字段，否则不写；
+- 优先级：`doc_key|tab_id`（该表） > `*`（所有表）。
 
-INTERNAL_FIELDS 只是给界面/文档做提示用的清单，实际映射不校验键名
-（拼错的键不会命中任何字段，不影响其它列写入）。
+同一个本地字段只写一处（配置里多个列指向同一字段时取第一个），避免重复写。
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ WILDCARD = "*"
 # config.json 很小，但映射会在逐行匹配里被反复查询：按文件戳缓存，改配置后自动失效
 _CACHE: dict = {"stamp": None, "maps": {}}
 
-# 各同步类型可映射的内部字段（与 import_pending / bridge 里的固定列名一致）
+# 各同步类型可用于映射的程序字段（与 import_pending / bridge 的固定列名一致）
 INTERNAL_FIELDS = {
     "posts": (
         "作品标题", "发布距今", "作品内容", "发布账号", "封面图", "动态类型",
@@ -61,7 +63,7 @@ def table_key(doc_key, tab_id) -> str:
 
 
 def _normalize(raw) -> dict[str, dict[str, str]]:
-    """配置值 → {scope: {内部字段: 目标列名}}；非法结构直接忽略。"""
+    """配置值 → {scope: {腾讯列名: 来源字段}}；非法结构直接忽略。"""
     if not isinstance(raw, dict):
         return {}
     out: dict[str, dict[str, str]] = {}
@@ -69,11 +71,11 @@ def _normalize(raw) -> dict[str, dict[str, str]]:
         if not isinstance(pairs, dict):
             continue
         cleaned: dict[str, str] = {}
-        for name, target in pairs.items():
-            name = str(name or "").strip()
-            if not name:
+        for column, source in pairs.items():
+            column = str(column or "").strip()
+            if not column:
                 continue
-            cleaned[name] = "" if target is None else str(target).strip()
+            cleaned[column] = "" if source is None else str(source).strip()
         if cleaned:
             out[str(scope).strip()] = cleaned
     return out
@@ -116,8 +118,8 @@ def save_scope(doc_key, tab_id, pairs) -> None:
     """替换某张表的映射（其它表与 "*" 保持不变）；清空即删除该表条目。"""
     maps = dict(load_maps())
     scope = table_key(doc_key, tab_id)
-    cleaned = {str(name).strip(): ("" if target is None else str(target).strip())
-               for name, target in (pairs or {}).items() if str(name).strip()}
+    cleaned = {str(column).strip(): ("" if source is None else str(source).strip())
+               for column, source in (pairs or {}).items() if str(column).strip()}
     if cleaned:
         maps[scope] = cleaned
     else:
@@ -125,55 +127,93 @@ def save_scope(doc_key, tab_id, pairs) -> None:
     save_maps(maps)
 
 
-def target(doc_key, tab_id, name: str) -> str:
-    """内部字段名 → 目标列名；返回空串表示「按配置不写」。"""
-    name = str(name or "")
-    if not name:
+def source_of(doc_key, tab_id, column) -> str:
+    """腾讯列 → 本地来源字段；未配置时返回同名程序字段（列名本身）。"""
+    column = str(column or "")
+    if not column:
         return ""
     pairs = mapping(doc_key, tab_id)
-    return pairs[name] if name in pairs else name
+    return pairs[column] if column in pairs else column
+
+
+def target(doc_key, tab_id, internal) -> str:
+    """程序字段 → 实际写入的腾讯列；空串表示不写。
+
+    优先找显式指向该字段的列；该字段的同名列被改成别的来源时返回空串。
+    """
+    internal = str(internal or "")
+    if not internal:
+        return ""
+    pairs = mapping(doc_key, tab_id)
+    for column, source in pairs.items():
+        if source == internal:
+            return column
+    if internal in pairs:
+        return ""
+    return internal
+
+
+def raw_targets(doc_key, tab_id) -> list[tuple[str, str]]:
+    """配置里来自本地原始 JSON 的列：[(腾讯列, "@键名"), …]。"""
+    return [(column, source) for column, source in mapping(doc_key, tab_id).items()
+            if source.startswith("@")]
+
+
+def raw_value(raw, source: str):
+    """从原始记录取 "@a.b" 的值；取不到返回空串。"""
+    key = str(source or "").lstrip("@")
+    value = raw or {}
+    for part in key.split("."):
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(part)
+    if isinstance(value, (list, tuple)):
+        return "、".join(str(item) for item in value if item not in (None, ""))
+    return "" if value is None else str(value)
 
 
 def display_columns(doc_key, tab_id, columns) -> list[str]:
-    """内部列名 → 表格显示/粘贴用的目标列名（去掉配置为「不写」的列）。"""
-    pairs = mapping(doc_key, tab_id)
+    """程序字段列 → 表格显示/粘贴用的腾讯列名（去掉「不写」的列）。"""
     out = []
     for name in columns or ():
-        shown = pairs.get(str(name), str(name))
+        shown = target(doc_key, tab_id, name)
         if shown:
             out.append(shown)
     return out
 
 
 def source_map(doc_key, tab_id, columns) -> dict[str, str]:
-    """显示列名 → 内部字段名（界面按目标列名展示，取值仍用内部字段）。"""
-    pairs = mapping(doc_key, tab_id)
+    """腾讯列名 → 程序字段名（界面按腾讯列展示，取值仍用程序字段）。"""
     out: dict[str, str] = {}
     for name in columns or ():
         name = str(name)
-        shown = pairs.get(name, name)
+        shown = target(doc_key, tab_id, name)
         if shown:
             out.setdefault(shown, name)
     return out
 
 
-def internal_of(doc_key, tab_id, shown: str) -> str:
-    """目标列名 → 内部字段名；没有映射时原样返回。"""
-    shown = str(shown or "")
-    for name, target in mapping(doc_key, tab_id).items():
-        if target and target == shown:
-            return name
-    return shown
+def internal_of(doc_key, tab_id, column) -> str:
+    """腾讯列 → 该列实际取值的程序字段名；来源是 @JSON 或「不写」时返回空串。"""
+    source = source_of(doc_key, tab_id, column)
+    if not source or source.startswith("@"):
+        return ""
+    return source
 
 
 def rename_to_internal(values, doc_key, tab_id) -> dict:
-    """远端行（按目标列名取值）→ 内部字段名为键的副本，方便复用原有匹配逻辑。"""
-    inverse = {target: name for name, target in mapping(doc_key, tab_id).items()
-               if target}
-    if not inverse:
+    """远端行（按腾讯列名取值）→ 程序字段名为键的副本，便于复用原有匹配逻辑。"""
+    pairs = mapping(doc_key, tab_id)
+    if not pairs:
         return dict(values or {})
-    return {inverse.get(str(key), str(key)): value
-            for key, value in (values or {}).items()}
+    out = {}
+    for key, value in (values or {}).items():
+        key = str(key)
+        source = pairs.get(key) if key in pairs else key
+        if not source or source.startswith("@"):
+            continue
+        out.setdefault(source, value)
+    return out
 
 
 def signature(doc_key="", tab_id="") -> tuple:
