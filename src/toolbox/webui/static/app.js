@@ -13,7 +13,7 @@
   var sidebar = document.getElementById('sidebar');
   var scrim = document.getElementById('scrim');
   var state = {
-    route: 'collected',
+    route: 'home',
     theme: localStorage.getItem('webui-theme') || 'auto',
     collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1,
@@ -30,6 +30,7 @@
     tcdoc: { docKey: '', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '' }
   };
   var routes = {
+    home: { title: '工作台', load: renderHome },
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
     organize: { title: '自动整理', load: renderOrganize },
@@ -40,10 +41,10 @@
     launcher: { title: '继续操作', load: renderLauncher },
     calendar: { title: '日历浏览', load: renderCalendar },
     migrate: { title: '文件迁移', load: renderMigrate },
-    record: { title: '录制', load: renderRecord },
+    record: { title: '直播录制', load: renderRecord },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
-    tasks: { title: '任务', load: renderTasks },
-    system: { title: '系统', load: renderSystem }
+    tasks: { title: '定时任务', load: renderTasks },
+    system: { title: '全局设置', load: renderSystem }
   };
   var searchTimer = null;
 
@@ -214,7 +215,7 @@
   }
 
   function navigate(route) {
-    if (!routes[route]) route = 'collected';
+    if (!routes[route]) route = 'home';
     state.route = route;
     location.hash = '#/' + route;
     document.querySelectorAll('.nav-item').forEach(function (button) {
@@ -313,6 +314,51 @@
       });
     }
     tick();
+  }
+
+  function renderHome(host) {
+    host.replaceChildren();
+    host.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'row-title' }, '录播工具箱 Web 服务端'),
+      h('div', { class: 'muted small', style: 'margin-top:6px' },
+        '分组与命名与桌面端一致；这里只列出已接入 Web 的页面，'
+        + '桌面端的采集任务、网络库、账户追踪、音乐工具、本地工具等页面尚未接入。')));
+    [
+      ['常用工具', [
+        ['collected', '采集结果', '结果库、下载与导出'],
+        ['assets', '资产库', '已获取资源与本地扫描'],
+        ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
+        ['rename', '命名投稿', '标准命名与版权标签'],
+        ['subtitle', '字幕转换', '字幕与歌词格式转换'],
+        ['organize', '自动整理', '按日期整理录播文件']
+      ]],
+      ['更多工具', [
+        ['audio', '音频提取', '按音轨提取音频'],
+        ['launcher', '继续操作', '打开链接或启动本机软件'],
+        ['calendar', '日历浏览', '按日期文件夹浏览'],
+        ['migrate', '文件迁移', '复制 / 剪切到目标目录'],
+        ['record', '直播录制', '监控与录制控制（需桌面运行）'],
+        ['tcdoc', '腾讯文档', '浏览量 / 成员数每日记录']
+      ]],
+      ['全局', [
+        ['tasks', '任务', '定时任务与安装'],
+        ['system', '设置', '目录、主题与依赖']
+      ]]
+    ].forEach(function (group) {
+      host.appendChild(h('div', {
+        class: 'row-title', style: 'margin:16px 0 8px'
+      }, group[0]));
+      var grid = h('div', { class: 'grid cols-3' });
+      group[1].forEach(function (item) {
+        grid.appendChild(h('button', {
+          class: 'card tool-card', type: 'button',
+          onclick: function () { navigate(item[0]); }
+        },
+          h('div', { class: 'tool-card-title' }, item[1]),
+          h('div', { class: 'muted small' }, item[2])));
+      });
+      host.appendChild(grid);
+    });
   }
 
   function renderCollected(root) {
@@ -4496,7 +4542,7 @@
     });
     applyTheme();
     var hash = (location.hash || '').replace(/^#\/?/, '');
-    navigate(routes[hash] ? hash : 'collected');
+    navigate(routes[hash] ? hash : 'home');
     api('/api/health').then(function () {
       document.getElementById('serverDot').className = 'dot ok';
       document.getElementById('serverState').textContent = '服务已连接';

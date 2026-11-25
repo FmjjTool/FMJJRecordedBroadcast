@@ -189,6 +189,15 @@ code {
 }
 .card + .card { margin-top: 12px; }
 .card-title { font-size: 14px; font-weight: bold; margin: 0 0 10px; }
+.tool-card {
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+}
+.tool-card:hover { border-color: var(--accent); }
+.tool-card-title { font-weight: bold; margin-bottom: 4px; }
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
 .grid { display: grid; gap: 12px; }
