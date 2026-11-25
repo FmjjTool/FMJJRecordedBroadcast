@@ -1465,15 +1465,22 @@ def apply_watermark(image: Image.Image, text: str, *, angle: float = -28.0) -> I
     base.alpha_composite(overlay)
 
     # 右下角标签：半透明小标签，保证「图中清晰可辨」但不压住主体
-    label_size = max(14, int(short * 0.019))
-    label_font = _font(label_size, bold=True)
     label_draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    label = _ellipsize(label_draw, text, label_font, width * 0.5)
+    margin = max(12, int(short * 0.018))
+    max_text_w = max(40.0, width - margin * 2 - int(short * 0.03))
+    label_size = max(14, int(short * 0.019))
+    while label_size > 12:
+        label_font = _font(label_size, bold=True)
+        if label_draw.textlength(text, font=label_font) <= max_text_w:
+            break
+        label_size -= 1
+    label_font = _font(label_size, bold=True)
+    label = _ellipsize(label_draw, text, label_font, max_text_w)
     pad_x, pad_y = int(label_size * 0.7), int(label_size * 0.42)
     text_w = int(label_draw.textlength(label, font=label_font))
     box_w = text_w + pad_x * 2
     box_h = label_size + pad_y * 2
-    margin = max(12, int(short * 0.018))
+
     plaque = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     plaque_draw = ImageDraw.Draw(plaque)
     plaque_draw.rounded_rectangle(
