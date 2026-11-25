@@ -1123,15 +1123,153 @@ def organize_overview() -> dict:
     root = _work_root()
     if root is None:
         return {"has_work_dir": False, "work_dir": "", "files": 0,
-                "groups": 0, "no_date": 0,
+                "groups": 0, "no_date": 0, "sources": [], "recursive": False,
                 "note": "尚未设置工作目录，请先在桌面端全局设置中配置。"}
     groups, no_date = scan_files(str(root))
     files = sum(len(items) for items in groups.values()) + len(no_date)
+    sources, recursive = _organize_sources()
     return {"has_work_dir": True, "work_dir": root.name,
             "files": files, "groups": len(groups),
             "no_date": len(no_date),
-            "note": "只读预览：按文件名日期分组；执行整理"
-                    "（移动视频到日期文件夹）仍在桌面端。"}
+            "sources": [{"path": str(path), "exists": Path(path).is_dir()}
+                        for path in sources],
+            "recursive": bool(recursive),
+            "note": "按文件名日期分组；勾选分组后「整理选中分组」把视频移入对应日期文件夹"
+                    "（附属文件随视频移动）。无日期视频不参与。"}
+
+
+def _organize_sources() -> tuple[list[str], bool]:
+    from toolbox import bili_upload as organize_cfg
+
+    try:
+        settings = organize_cfg.load_settings()
+    except Exception:  # noqa: BLE001
+        settings = {}
+    sources = [str(item) for item in (settings.get("sources") or [])
+               if str(item).strip()]
+    return sources, bool(settings.get("recursive"))
+
+
+def organize_save_sources(payload: dict) -> dict:
+    """保存 A 端来源文件夹与是否递归（与桌面端共用 config/organize.json）。"""
+    from toolbox import bili_upload as organize_cfg
+
+    raw = payload.get("sources")
+    if raw is None:
+        sources, recursive = _organize_sources()
+    else:
+        if not isinstance(raw, list):
+            raise ValueError("来源列表格式不正确")
+        sources = []
+        for item in raw:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            path = Path(text)
+            if not path.is_absolute():
+                raise ValueError("来源文件夹请填写完整路径")
+            if not path.is_dir():
+                raise ValueError(f"来源文件夹不存在：{text}")
+            if str(path) not in sources:
+                sources.append(str(path))
+        recursive = bool(payload.get("recursive"))
+    if len(sources) > 50:
+        raise ValueError("来源文件夹最多 50 个")
+    try:
+        organize_cfg.save_settings({"sources": sources,
+                                    "recursive": bool(recursive)})
+    except OSError as exc:
+        raise ValueError(f"来源设置保存失败：{exc}") from exc
+    return {"ok": True, "sources": sources, "recursive": bool(recursive)}
+
+
+def organize_scan_sources() -> dict:
+    """扫描 A 端来源，返回迁移计划摘要（只读，不移动文件）。"""
+    from toolbox.organize_engine import scan_sources
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    sources, recursive = _organize_sources()
+    if not sources:
+        raise ValueError("还没有添加 A 端来源文件夹")
+    plan, skipped = scan_sources(sources, str(root), recursive)
+    by_date: dict[str, int] = {}
+    no_date = 0
+    for item in plan:
+        if item.get("date"):
+            by_date[item["date"]] = by_date.get(item["date"], 0) + 1
+        else:
+            no_date += 1
+    return {
+        "total": len(plan),
+        "by_date": [{"date": date, "count": count}
+                    for date, count in sorted(by_date.items(), reverse=True)],
+        "no_date": no_date,
+        "samples": [{"name": item["name"], "date": item.get("date") or "",
+                     "companions": len(item.get("companions") or [])}
+                    for item in plan[:30]],
+        "skipped": [str(text) for text in skipped[:50]],
+        "skipped_total": len(skipped),
+        "recursive": bool(recursive),
+        "note": "只读扫描：空文件、最近 30 秒仍在写入、已在工作目录内的视频会被跳过。",
+    }
+
+
+def organize_migrate(payload: dict, on_progress=None,
+                     is_cancelled=None) -> dict:
+    """把 A 端来源视频迁移到工作目录日期文件夹（执行前重新扫描）。"""
+    from toolbox.organize_engine import execute_migration, scan_sources
+
+    if payload.get("confirmed") is not True:
+        raise ValueError("请在页面上确认后再迁移")
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    sources, recursive = _organize_sources()
+    if not sources:
+        raise ValueError("还没有添加 A 端来源文件夹")
+    plan, skipped = scan_sources(sources, str(root), recursive)
+    if not plan:
+        raise ValueError("来源里没有可迁移的视频（空文件 / 最近仍在写入 / 已在工作目录内）")
+    for item in plan:
+        if not item.get("date"):
+            item["date"] = _mtime_date(item["path"])
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+
+    def progress(current, total, result) -> None:
+        if not on_progress:
+            return
+        text = (f"已迁移：{result['target']}"
+                if result.get("ok")
+                else f"失败：{result.get('source')} · {result.get('error')}")
+        on_progress(current, total, text)
+
+    results = execute_migration(str(root), plan, on_progress=progress)
+    ok = [item for item in results if item.get("ok")]
+    failed = [item for item in results if not item.get("ok")]
+    companions = sum(len(item.get("companions") or []) for item in ok)
+    companion_skipped = [reason for item in results
+                         for reason in (item.get("companion_skipped") or [])]
+    return {
+        "summary": (f"来源迁移完成：成功 {len(ok)} 个，失败 {len(failed)} 个"
+                    + (f"，带出附属文件 {companions} 个" if companions else "")),
+        "moved": len(ok),
+        "failed": len(failed),
+        "companions": companions,
+        "failed_files": [str(item.get("source") or "") for item in failed][:100],
+        "skipped": [str(text) for text in skipped[:50]],
+        "companion_skipped": companion_skipped[:50],
+        "note": "同名自动编号、校验成功后删除来源；完成后可到「命名投稿」继续。",
+    }
+
+
+def _mtime_date(path) -> str:
+    try:
+        return time.strftime("%Y-%m-%d", time.localtime(Path(path).stat().st_mtime))
+    except OSError:
+        return ""
 
 
 def list_organize_preview(limit: int = 100) -> dict:
@@ -1155,7 +1293,7 @@ def list_organize_preview(limit: int = 100) -> dict:
         })
     return {"groups": rows,
             "no_date": [str(name) for name in no_date][:200],
-            "note": "只读预览：不会移动或改名；执行整理需在桌面端操作。"}
+            "note": "只读预览：不会移动或改名。「整理选中分组」才执行移动。"}
 
 
 def organize_run(dates, on_progress=None, is_cancelled=None) -> dict:

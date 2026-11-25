@@ -2709,6 +2709,150 @@
       host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'muted small' }, overview.note || '')));
 
+      var sources = (overview.sources || []).map(function (item) {
+        return item.path;
+      });
+      var recursive = h('input', {
+        type: 'checkbox', checked: !!overview.recursive
+      });
+      var addInput = h('input', {
+        class: 'input grow', placeholder: 'A 端来源文件夹完整路径'
+      });
+      var addBtn = h('button', { class: 'btn', type: 'button' }, '添加');
+      var sourceList = h('div', { class: 'days', style: 'margin-top:8px' });
+      var scanBtn = h('button', { class: 'btn', type: 'button' }, '扫描来源');
+      var migrateBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '迁移来源视频');
+      var scanHost = h('div', { class: 'muted small', style: 'margin-top:6px' });
+      var migrateHost = h('div');
+      var lastScan = null;
+      var migrating = false;
+
+      function drawSources() {
+        sourceList.replaceChildren();
+        if (!sources.length) {
+          sourceList.appendChild(h('span', { class: 'muted small' },
+            '还没有来源文件夹；只整理工作目录时可不填。'));
+          migrateBtn.disabled = true;
+          return;
+        }
+        sources.forEach(function (path) {
+          sourceList.appendChild(h('span', {
+            class: 'badge', title: path, style: 'margin:0 6px 6px 0'
+          }, path, h('button', {
+            class: 'btn mini', type: 'button', style: 'margin-left:6px',
+            onclick: function () {
+              sources = sources.filter(function (item) { return item !== path; });
+              saveSources();
+            }
+          }, '移除')));
+        });
+      }
+
+      function saveSources() {
+        post('/api/tools/organize/sources', {
+          sources: sources, recursive: recursive.checked
+        }).then(function (result) {
+          sources = result.sources || sources;
+          drawSources();
+          toast('来源设置已保存', 'success');
+        }).catch(function (error) {
+          toast('来源保存失败：' + error.message, 'error');
+        });
+      }
+
+      addBtn.addEventListener('click', function () {
+        var path = addInput.value.trim();
+        if (!path) {
+          toast('请填写来源文件夹完整路径', 'warning');
+          return;
+        }
+        if (sources.indexOf(path) >= 0) {
+          toast('该来源已存在', 'info');
+          return;
+        }
+        sources.push(path);
+        addInput.value = '';
+        saveSources();
+      });
+      recursive.addEventListener('change', saveSources);
+      scanBtn.addEventListener('click', function () {
+        if (!sources.length) {
+          toast('请先添加 A 端来源文件夹', 'warning');
+          return;
+        }
+        scanBtn.disabled = true;
+        scanHost.textContent = '正在扫描来源文件夹…';
+        api('/api/tools/organize/sources/scan').then(function (result) {
+          scanBtn.disabled = false;
+          lastScan = result;
+          var dates = (result.by_date || []).map(function (item) {
+            return item.date + '（' + item.count + '）';
+          }).slice(0, 8).join('、');
+          scanHost.textContent = '来源可迁移 ' + fmtNumber(result.total)
+            + ' 个视频' + (dates ? '：' + dates : '')
+            + (result.no_date ? '；无日期 ' + result.no_date + ' 个按修改时间归组' : '')
+            + (result.skipped_total
+              ? '；跳过 ' + fmtNumber(result.skipped_total) + ' 个（空文件 / 正在写入 / 已在工作目录）'
+              : '');
+          migrateBtn.disabled = migrating || !result.total;
+        }).catch(function (error) {
+          scanBtn.disabled = false;
+          lastScan = null;
+          migrateBtn.disabled = true;
+          scanHost.textContent = '';
+          toast('扫描失败：' + error.message, 'error');
+        });
+      });
+      migrateBtn.addEventListener('click', function () {
+        if (migrating) return;
+        var total = lastScan ? lastScan.total : 0;
+        if (!total) {
+          toast('请先扫描来源', 'warning');
+          return;
+        }
+        if (!window.confirm('确认从来源迁移视频\n\n将把 ' + total
+          + ' 个视频移动到工作目录的对应日期文件夹（无日期按修改时间归组）。\n'
+          + '同名自动编号，校验成功后删除来源文件；附属文件一起带出。\n\n确认执行？')) {
+          return;
+        }
+        migrating = true;
+        migrateBtn.disabled = true;
+        post('/api/tools/organize/sources/migrate', { confirmed: true })
+          .then(function (data) {
+            watchJob(migrateHost, data.job, function (job) {
+              migrating = false;
+              var result = job.result || {};
+              toast(result.summary || '迁移完成', 'success');
+              renderOrganize(host);
+            }, {
+              onSettled: function (job) {
+                migrating = false;
+                if (job.status === 'error') {
+                  migrateBtn.disabled = false;
+                  toast('迁移失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            migrating = false;
+            migrateBtn.disabled = false;
+            toast('迁移失败：' + error.message, 'error');
+          });
+      });
+      drawSources();
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, 'A 端来源（可选）'),
+        h('div', { class: 'muted small', style: 'margin:4px 0 6px' },
+          '从其它文件夹（如另一台机器 / 采集盘）把视频迁移进工作目录；'
+          + '与桌面端「自动整理」共用同一份来源设置。'),
+        h('div', { class: 'toolbar' },
+          addInput, addBtn,
+          h('label', { class: 'muted small' }, recursive, ' 含子文件夹'),
+          h('span', { style: 'flex:1' }), scanBtn, migrateBtn),
+        sourceList, scanHost, migrateHost));
+
       var tableHost = h('div');
       var jobHost = h('div');
       host.appendChild(jobHost);

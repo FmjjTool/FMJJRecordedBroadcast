@@ -300,6 +300,17 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tool_service.start_organize(dict(req.json or {}))
     server.post("/api/tools/organize/run", start_organize)
 
+    def save_organize_sources(req):
+        return tool_service.organize_save_sources(dict(req.json or {}))
+    server.post("/api/tools/organize/sources", save_organize_sources)
+
+    server.get("/api/tools/organize/sources/scan",
+               lambda req: tool_service.organize_scan_sources())
+
+    def start_organize_migrate(req):
+        return tool_service.start_organize_migrate(dict(req.json or {}))
+    server.post("/api/tools/organize/sources/migrate", start_organize_migrate)
+
     server.get("/api/tools/rename/overview",
                lambda req: tool_service.rename_overview())
     server.get("/api/tools/rename/preview", lambda req: tool_service.rename_preview(

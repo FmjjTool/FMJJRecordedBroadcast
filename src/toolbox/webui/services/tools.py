@@ -111,6 +111,36 @@ class ToolService:
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def organize_save_sources(self, payload: dict) -> dict:
+        return webui_tools.organize_save_sources(payload)
+
+    def organize_scan_sources(self) -> dict:
+        return webui_tools.organize_scan_sources()
+
+    def start_organize_migrate(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        if not payload.get("confirmed"):
+            raise ValueError("缺少迁移确认")
+        webui_tools.organize_scan_sources()
+        job = self._jobs.submit(
+            "organize_migrate",
+            lambda task: self._organize_migrate_job(task, dict(payload)))
+        return {"job": job.id}
+
+    def _organize_migrate_job(self, job, payload: dict) -> dict:
+        def progress(done, total, name) -> None:
+            job.update(str(name), done / total if total else None)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.organize_migrate(
+                payload, on_progress=progress, is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
     def rename_overview(self) -> dict:
         return webui_tools.rename_overview()
 
