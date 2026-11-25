@@ -1098,6 +1098,11 @@ class PlatformPane(QWidget):
                 self.manager.stop_record(a, reason="删除")
             if a in self.manager.anchors:
                 self.manager.anchors.remove(a)
+            overlay = self.overlays.pop(a.key, None)
+            if overlay is not None:
+                overlay.set_active(False)
+                overlay.close()
+                overlay.deleteLater()
         self.model.refresh_all()
         self.save()
         self._log("已删除 %d 个主播" % len(items), "warn")

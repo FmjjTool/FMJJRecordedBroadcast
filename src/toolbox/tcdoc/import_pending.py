@@ -139,6 +139,8 @@ _IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 
 # 目录名 → (目录 mtime_ns, {小写文件名: 路径})；作者媒体目录动辄上万文件，
 # 逐行 glob 会把比对拖到分钟级，整批行共用一次扫描结果。
+# 有界缓存：单条目可达数万 Path，条目数超限时按插入序淘汰最旧目录，防长期增长。
+_DIR_INDEX_MAX = 8
 _DIR_INDEX: dict[str, tuple[int, dict[str, Path]]] = {}
 
 
@@ -164,11 +166,15 @@ def _dir_index(directory: Path) -> dict[str, Path]:
                         continue
         except OSError:
             files = {}
+    _DIR_INDEX.pop(key, None)
     _DIR_INDEX[key] = (stamp, files)
+    while len(_DIR_INDEX) > _DIR_INDEX_MAX:
+        _DIR_INDEX.pop(next(iter(_DIR_INDEX)))
     return files
 
 
 _OWNERS_CACHE: dict[str, tuple[int, dict]] = {}
+_OWNERS_CACHE_MAX = 64
 
 
 def _stem_owners(directory: Path) -> dict:
@@ -188,7 +194,10 @@ def _stem_owners(directory: Path) -> dict:
         owners = {}
     if not isinstance(owners, dict):
         owners = {}
+    _OWNERS_CACHE.pop(key, None)
     _OWNERS_CACHE[key] = (stamp, owners)
+    while len(_OWNERS_CACHE) > _OWNERS_CACHE_MAX:
+        _OWNERS_CACHE.pop(next(iter(_OWNERS_CACHE)))
     return owners
 
 

@@ -49,6 +49,15 @@ FANSCLUB_NAME_RE = re.compile(
 _IMG_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 _img_local = {}      # url -> Path（会话内映射，后台线程写/主线程读）
 _img_miss = set()    # 目录里确认没有的 url（避免重复 glob）
+_IMG_CACHE_MAX = 2048
+
+
+def _img_cache_trim():
+    """有界缓存：命中的本地映射按插入序淘汰；负缓存直接清空（仅损失一次 glob）。"""
+    while len(_img_local) > _IMG_CACHE_MAX:
+        _img_local.pop(next(iter(_img_local)))
+    if len(_img_miss) > _IMG_CACHE_MAX:
+        _img_miss.clear()
 
 
 def _webcast_img_dir():
@@ -95,10 +104,12 @@ def img_cache_lookup(url):
         for cand in _webcast_img_dir().glob(_img_key(url) + ".*"):
             if cand.is_file() and cand.stat().st_size > 0:
                 _img_local[url] = cand
+                _img_cache_trim()
                 return cand
     except Exception:
         pass
     _img_miss.add(url)
+    _img_cache_trim()
     return None
 
 
@@ -123,6 +134,7 @@ def img_cache_download(url):
             p.write_bytes(r.content)
             _img_local[url] = p
             _img_miss.discard(url)
+            _img_cache_trim()
             return p
     except Exception:
         pass

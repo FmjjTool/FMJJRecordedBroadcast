@@ -1362,7 +1362,8 @@ class PicturesDialog(QDialog):
             self, "选择图片", "", "图片 (*.jpg *.jpeg *.png *.gif *.webp *.bmp)")
         for f in files:
             try:
-                data = open(f, "rb").read()
+                with open(f, "rb") as fh:
+                    data = fh.read()
             except OSError:
                 continue
             self.pictures.append(tags_io.Pic(data, "", 3, os.path.basename(f)))

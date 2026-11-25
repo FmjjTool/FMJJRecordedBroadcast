@@ -222,6 +222,7 @@ def _fmt_duration_cn(sec) -> str:
 
 
 _DURATION_CACHE: dict = {}
+_DURATION_CACHE_MAX = 2048
 
 
 def _probe_video_duration(path: str) -> int:
@@ -248,6 +249,8 @@ def _probe_video_duration(path: str) -> int:
                     dur = int(float(r.stdout.strip()))
     except Exception:
         dur = 0
+    while len(_DURATION_CACHE) >= _DURATION_CACHE_MAX:
+        _DURATION_CACHE.pop(next(iter(_DURATION_CACHE)))
     _DURATION_CACHE[key] = dur
     return dur
 

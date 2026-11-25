@@ -748,6 +748,19 @@ def _guest_buvid() -> str:
 
 
 _danmu_auth_cache: dict = {}    # room_id -> {"token", "host", "ts"}（弹幕 WS 鉴权 10 分钟复用）
+_DANMU_AUTH_CACHE_MAX = 64
+
+
+def _danmu_auth_cache_put(room_id: str, out: dict) -> None:
+    """有界写入：超限按插入序淘汰最旧房间；顺带清掉已过期条目。"""
+    now = time.time()
+    for rid in [rid for rid, c in _danmu_auth_cache.items()
+                if now - c.get("ts", 0) >= 600]:
+        _danmu_auth_cache.pop(rid, None)
+    _danmu_auth_cache.pop(room_id, None)
+    _danmu_auth_cache[room_id] = {**out, "ts": now}
+    while len(_danmu_auth_cache) > _DANMU_AUTH_CACHE_MAX:
+        _danmu_auth_cache.pop(next(iter(_danmu_auth_cache)))
 
 
 def get_danmaku_auth(room_id: str) -> dict:
@@ -769,6 +782,8 @@ def get_danmaku_auth(room_id: str) -> dict:
     c = _danmu_auth_cache.get(room_id)
     if c and c.get("token") and time.time() - c["ts"] < 600:
         return {"token": c["token"], "host": c.get("host") or ""}
+    if c is not None:
+        _danmu_auth_cache.pop(room_id, None)
 
     # 一级：游客 HTTP + WBI 签名 + buvid 设备指纹
     try:
@@ -779,7 +794,7 @@ def get_danmaku_auth(room_id: str) -> dict:
             r = c.get(url, headers={**hdr, "Cookie": ck})
             out = _parse(r.json().get("data") or {})
             if out["token"]:
-                _danmu_auth_cache[room_id] = {**out, "ts": time.time()}
+                _danmu_auth_cache_put(room_id, out)
                 return out
     except Exception:
         pass
@@ -787,7 +802,7 @@ def get_danmaku_auth(room_id: str) -> dict:
     try:
         out = _danmaku_token_playwright(room_id)
         if out.get("token"):
-            _danmu_auth_cache[room_id] = {**out, "ts": time.time()}
+            _danmu_auth_cache_put(room_id, out)
             return out
     except Exception:
         pass
@@ -803,7 +818,7 @@ def get_danmaku_auth(room_id: str) -> dict:
                           headers={**hdr, "Cookie": ck})
                 out = _parse(r.json().get("data") or {})
                 if out.get("token"):
-                    _danmu_auth_cache[room_id] = {**out, "ts": time.time()}
+                    _danmu_auth_cache_put(room_id, out)
                 return out
     except Exception:
         pass

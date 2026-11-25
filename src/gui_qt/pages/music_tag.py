@@ -636,7 +636,8 @@ class MusicTagPage(BasePage):
         if not f:
             return
         try:
-            text = open(f, "r", encoding="utf-8", errors="replace").read()
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
         except OSError as exc:
             self.app.toast(f"读取失败：{exc}", "error")
             return
@@ -1244,7 +1245,8 @@ class MusicTagPage(BasePage):
         if not f:
             return
         try:
-            data = open(f, "rb").read()
+            with open(f, "rb") as fh:
+                data = fh.read()
         except OSError as exc:
             self.app.toast(f"读取图片失败：{exc}", "error")
             return
@@ -1401,7 +1403,8 @@ class MusicTagPage(BasePage):
         local = self._local_lyric_path(self._rows[i]["path"])
         if local:
             try:
-                text = open(local, "r", encoding="utf-8", errors="replace").read()
+                with open(local, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
             except OSError:
                 text = ""
             if text.strip():
@@ -1514,7 +1517,8 @@ class MusicTagPage(BasePage):
                     "同目录没有同名 .lrc，可导入 .lrc 或到工具栏「歌词搜索」联网获取")
                 return
             try:
-                text = open(local, "r", encoding="utf-8", errors="replace").read()
+                with open(local, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
             except OSError as exc:
                 self._lyric_dialog_info.setText(f"读取失败：{exc}")
                 return
@@ -1550,7 +1554,8 @@ class MusicTagPage(BasePage):
         if not f:
             return
         try:
-            text = open(f, "r", encoding="utf-8", errors="replace").read()
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
         except OSError as exc:
             self.app.toast(f"读取失败：{exc}", "error")
             return
