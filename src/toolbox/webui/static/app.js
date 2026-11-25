@@ -2866,13 +2866,27 @@
         selectedLabel, h('span', { style: 'flex:1' }), rescan));
 
       var listHost = h('div');
+      var previewVideo = h('video', {
+        controls: true, preload: 'metadata',
+        style: 'width:100%;max-height:320px;background:#000;border-radius:8px'
+      });
+      var previewNote = h('div', { class: 'muted small', style: 'margin-top:6px' },
+        '勾选 1 个视频即可预览（拖动进度按需加载）。MKV / AVI 等浏览器不支持的格式可能无法播放，请用桌面端。');
+      var previewHost = h('div', {
+        class: 'card', style: 'margin-top:12px;display:none'
+      }, previewVideo, previewNote);
       var opHost = h('div', { class: 'card', style: 'margin-top:12px' });
       var jobHost = h('div');
       var resultHost = h('div');
       host.appendChild(listHost);
+      host.appendChild(previewHost);
       host.appendChild(opHost);
       host.appendChild(jobHost);
       host.appendChild(resultHost);
+      previewVideo.addEventListener('error', function () {
+        if (!previewVideo.getAttribute('src')) return;
+        previewNote.textContent = '该视频格式浏览器无法播放，请在桌面端预览。';
+      });
 
       var running = false;
       var actionRefreshers = [];
@@ -2921,7 +2935,31 @@
           && selected.size === sources.items.length;
         selectAll.indeterminate = selected.size > 0
           && selected.size < sources.items.length;
+        syncPreview();
         actionRefreshers.forEach(function (refresh) { refresh(); });
+      }
+
+      var previewPath = '';
+
+      function syncPreview() {
+        var paths = selectedPaths();
+        if (paths.length !== 1) {
+          previewHost.style.display = 'none';
+          if (previewPath) {
+            previewPath = '';
+            previewVideo.removeAttribute('src');
+            previewVideo.load();
+          }
+          return;
+        }
+        previewHost.style.display = '';
+        if (paths[0] === previewPath) return;
+        previewPath = paths[0];
+        previewNote.textContent = '勾选 1 个视频即可预览（拖动进度按需加载）。'
+          + 'MKV / AVI 等浏览器不支持的格式可能无法播放，请用桌面端。';
+        previewVideo.src = withToken('/api/tools/video/stream?path='
+          + encodeURIComponent(paths[0]));
+        previewVideo.load();
       }
 
       function draw() {

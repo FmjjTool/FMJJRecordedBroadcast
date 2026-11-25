@@ -925,6 +925,27 @@ def _plain_segment_rows(segments) -> list[tuple[int, int]]:
     return rows
 
 
+_VIDEO_PREVIEW_MIME = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska", ".webm": "video/webm",
+    ".avi": "video/x-msvideo", ".flv": "video/x-flv", ".wmv": "video/x-ms-wmv",
+}
+
+
+def video_preview_target(rel_path: str) -> dict:
+    """视频预览：只允许工作目录内、浏览器可尝试播放的视频文件。"""
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    if not path.is_file():
+        raise ValueError("视频不存在或已被移动")
+    mime = _VIDEO_PREVIEW_MIME.get(path.suffix.lower())
+    if not mime:
+        raise ValueError("该文件不是可预览的视频格式")
+    return {"path": path, "content_type": mime, "size": path.stat().st_size}
+
+
 def segment_clock(ms: int) -> str:
     """毫秒 → HH:MM:SS.s，与网页片段输入框一致。"""
     total = max(0, int(ms)) / 1000

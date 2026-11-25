@@ -38,6 +38,7 @@ _STATIC = {
 _CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
         "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'none'")
+_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 
 
 @dataclass
@@ -89,6 +90,13 @@ class AttachmentResponse:
     data: bytes
     filename: str
     content_type: str = "application/octet-stream"
+
+
+@dataclass
+class RangeResponse:
+    """本地媒体文件流，支持 HTTP Range（视频预览拖动进度）。"""
+    path: Path
+    content_type: str = "video/mp4"
 
 
 class WebUIServer:
@@ -312,6 +320,9 @@ def _make_handler(app: WebUIServer):
             if isinstance(result, AttachmentResponse):
                 self._send_attachment(result)
                 return
+            if isinstance(result, RangeResponse):
+                self._send_range(result)
+                return
             if isinstance(result, BytesResponse):
                 self._headers(200, result.content_type, len(result.data))
                 self.wfile.write(result.data)
@@ -323,6 +334,49 @@ def _make_handler(app: WebUIServer):
             body = _json_bytes(payload)
             self._headers(status, "application/json; charset=utf-8", len(body))
             self.wfile.write(body)
+
+        def _send_range(self, response: RangeResponse) -> None:
+            try:
+                size = response.path.stat().st_size
+                handle = response.path.open("rb")
+            except OSError:
+                self._send(_error(404, "file not found"))
+                return
+            start, end = 0, max(0, size - 1)
+            ranged = False
+            match = _RANGE_RE.fullmatch((self.headers.get("Range") or "").strip())
+            if match and size > 0:
+                first, last = match.group(1), match.group(2)
+                if first:
+                    start = int(first)
+                    if last:
+                        end = min(int(last), size - 1)
+                elif last:
+                    length = min(int(last), size)
+                    start, end = size - length, size - 1
+                if start >= size or start > end:
+                    handle.close()
+                    self._headers(416, "text/plain; charset=utf-8", 0,
+                                  {"Content-Range": f"bytes */{size}"})
+                    return
+                ranged = True
+            length = end - start + 1 if size else 0
+            extra = {"Accept-Ranges": "bytes"}
+            if ranged:
+                extra["Content-Range"] = f"bytes {start}-{end}/{size}"
+            self._headers(206 if ranged else 200, response.content_type,
+                          length, extra)
+            try:
+                handle.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = handle.read(min(1024 * 128, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            finally:
+                handle.close()
 
         def _send_attachment(self, response: AttachmentResponse) -> None:
             data = response.data or b""

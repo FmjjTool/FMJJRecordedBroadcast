@@ -5,7 +5,7 @@ from __future__ import annotations
 from toolbox.webui.errors import NotFound
 from toolbox.webui.jobs import JobManager
 from toolbox.webui.server import (AttachmentResponse, BytesResponse,
-                                  FileResponse, WebUIServer)
+                                  FileResponse, RangeResponse, WebUIServer)
 from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.artifacts import ArtifactService
 from toolbox.webui.services.collected import CollectedService
@@ -344,6 +344,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_video_detect(req):
         return tool_service.start_video_detect(dict(req.json or {}))
     server.post("/api/tools/video/detect", start_video_detect)
+
+    def video_stream(req):
+        data = tool_service.video_preview(req.q("path"))
+        return RangeResponse(data["path"], data["content_type"])
+
+    server.get("/api/tools/video/stream", video_stream)
 
     def export_video_segments(req):
         data = tool_service.video_segments_export(dict(req.json or {}))

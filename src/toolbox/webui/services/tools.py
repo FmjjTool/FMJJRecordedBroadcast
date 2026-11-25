@@ -469,6 +469,9 @@ class ToolService:
                 rel, segments, on_progress=self._video_progress(task),
                 is_cancelled=self._video_cancelled(task)))
 
+    def video_preview(self, rel: str) -> dict:
+        return webui_tools.video_preview_target(str(rel or ""))
+
     def video_segments_export(self, payload: dict) -> dict:
         fmt = str(payload.get("format") or "csv").strip().lower()
         name = str(payload.get("name") or "").strip()
