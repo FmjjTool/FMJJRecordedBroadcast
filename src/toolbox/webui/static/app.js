@@ -1162,6 +1162,9 @@
       root.replaceChildren();
       var tabs = h('div', { class: 'tabs' });
       var host = h('div');
+      var providers = data.providers || [];
+      var providerLabel = {};
+      providers.forEach(function (item) { providerLabel[item.value] = item.label; });
       var TABS = [['backup', '备份到网盘'], ['download', '文件下载']];
       TABS.forEach(function (item) {
         tabs.appendChild(h('button', {
@@ -1185,6 +1188,122 @@
         else renderDownload();
       }
 
+      function editMapping(mapping) {
+        var form = {
+          id: mapping ? mapping.id : '',
+          provider: h('select', { class: 'select' },
+            providers.map(function (item) {
+              return h('option', {
+                value: item.value,
+                selected: mapping
+                  ? item.value === mapping.provider
+                  : item.value === 'quark'
+              }, item.label);
+            })),
+          local: h('input', {
+            class: 'input', style: 'width:100%',
+            placeholder: '本地目录完整路径，如 D:\\WindowsDocs\\视频',
+            value: mapping ? mapping.local_dir : ''
+          }),
+          remote: h('input', {
+            class: 'input', style: 'width:100%',
+            placeholder: '云端目录，如 封茗囧菌直播录屏2017年起',
+            value: mapping ? mapping.remote_dir : ''
+          }),
+          exclude: h('input', {
+            class: 'input', style: 'width:100%',
+            placeholder: '排除规则，分号分隔，如 cache/*; *.tmp',
+            value: mapping ? mapping.exclude : ''
+          }),
+          maxMb: h('input', {
+            class: 'input', style: 'width:110px', type: 'number', min: '0',
+            value: String(mapping ? mapping.max_file_mb : 0)
+          }),
+          enabled: h('input', {
+            type: 'checkbox', checked: mapping ? !!mapping.enabled : true
+          }),
+          replace: h('input', {
+            type: 'checkbox',
+            checked: mapping ? mapping.replace_changed !== false : true
+          }),
+          share: h('input', {
+            type: 'checkbox', checked: mapping ? !!mapping.share : false
+          }),
+          expire: h('select', { class: 'select' },
+            ['永久', '7天', '30天', '1天'].map(function (value) {
+              return h('option', {
+                value: value,
+                selected: mapping ? mapping.share_expire === value : value === '永久'
+              }, value);
+            })),
+          passcode: h('input', {
+            type: 'checkbox', checked: mapping ? !!mapping.share_passcode : false
+          })
+        };
+        var errLine = h('div', { class: 'muted small', style: 'color:var(--danger)' });
+        var overlay = h('div', { class: 'preview-overlay' });
+        overlay.addEventListener('click', function (event) {
+          if (event.target === overlay) overlay.remove();
+        });
+        var saveBtn = h('button', { class: 'btn primary', type: 'button' },
+          mapping ? '保存修改' : '新增映射');
+        overlay.appendChild(h('div', {
+          class: 'preview-box', style: 'max-width:640px'
+        },
+          h('div', { class: 'preview-caption' },
+            h('span', null, mapping ? '编辑备份映射' : '新增备份映射'),
+            h('button', {
+              class: 'btn', type: 'button',
+              onclick: function () { overlay.remove(); }
+            }, '取消')),
+          h('div', { style: 'padding:12px 14px' },
+            h('div', { class: 'kv' }, h('span', { class: 'muted' }, '网盘'),
+              form.provider),
+            h('div', { class: 'kv', style: 'margin-top:8px' },
+              h('span', { class: 'muted' }, '本地目录'), form.local),
+            h('div', { class: 'kv', style: 'margin-top:8px' },
+              h('span', { class: 'muted' }, '云端目录'), form.remote),
+            h('div', { class: 'kv', style: 'margin-top:8px' },
+              h('span', { class: 'muted' }, '排除规则'), form.exclude),
+            h('div', { class: 'toolbar', style: 'margin-top:8px' },
+              h('span', { class: 'muted small' }, '单文件上限 MB'),
+              form.maxMb,
+              h('label', { class: 'muted small' }, form.enabled, ' 启用'),
+              h('label', { class: 'muted small' }, form.replace, ' 替换已变更文件'),
+              h('label', { class: 'muted small' }, form.share, ' 完成后生成分享'),
+              form.expire,
+              h('label', { class: 'muted small' }, form.passcode, ' 提取码')),
+            errLine,
+            h('div', { class: 'toolbar', style: 'margin-top:10px' },
+              h('span', { class: 'muted small' },
+                '本地目录必须已存在；保存后立即生效，下一次备份按新规则执行。'),
+              h('span', { style: 'flex:1' }), saveBtn))));
+        document.body.appendChild(overlay);
+        saveBtn.addEventListener('click', function () {
+          saveBtn.disabled = true;
+          post('/api/netdisk/mappings', {
+            id: form.id,
+            provider: form.provider.value,
+            local_dir: form.local.value.trim(),
+            remote_dir: form.remote.value.trim(),
+            exclude: form.exclude.value.trim(),
+            max_file_mb: Number(form.maxMb.value) || 0,
+            enabled: form.enabled.checked,
+            replace_changed: form.replace.checked,
+            share: form.share.checked,
+            share_expire: form.expire.value,
+            share_passcode: form.passcode.checked
+          }).then(function (result) {
+            toast(result.summary || '已保存', 'success');
+            overlay.remove();
+            renderNetdisk(root);
+          }).catch(function (error) {
+            saveBtn.disabled = false;
+            errLine.textContent = '保存失败：' + error.message;
+          });
+        });
+      }
+
       function renderBackup() {
         var mappings = data.mappings || [];
         var schedule = data.schedule || {};
@@ -1197,14 +1316,81 @@
         var schedText = schedule.mode === 'interval'
           ? ('每 ' + (schedule.interval_minutes || 120) + ' 分钟')
           : ('每日 ' + (schedule.time || '02:30'));
+        var jobHost = h('div');
+        var running = false;
+        var addBtn = h('button', { class: 'btn', type: 'button' }, '新增映射');
+        var backupBtn = h('button', {
+          class: 'btn primary', type: 'button'
+        }, '立即备份');
+        addBtn.addEventListener('click', function () { editMapping(null); });
+        backupBtn.addEventListener('click', function () {
+          if (running) return;
+          var enabled = mappings.filter(function (item) {
+            return item.enabled && item.local_dir;
+          });
+          if (!enabled.length) {
+            toast('没有启用的备份目录，请先新增或启用一条映射', 'warning');
+            return;
+          }
+          if (!window.confirm('立即备份\n\n将按顺序备份 ' + enabled.length
+            + ' 组启用的映射；已有且未变化的文件自动跳过，'
+            + '上传完成后回写每组最近运行结果。\n\n确认开始？')) {
+            return;
+          }
+          running = true;
+          backupBtn.disabled = true;
+          addBtn.disabled = true;
+          post('/api/netdisk/backup', {}).then(function (result) {
+            watchJob(jobHost, result.job, function (job) {
+              running = false;
+              backupBtn.disabled = false;
+              addBtn.disabled = false;
+              var outcome = job.result || {};
+              toast(outcome.summary || '备份完成',
+                outcome.failed ? 'warning' : 'success');
+              var shareHost = h('div');
+              (outcome.shares || []).forEach(function (item) {
+                shareHost.appendChild(h('div', { class: 'muted small' },
+                  '分享：' + item.url
+                  + (item.passcode ? '  提取码：' + item.passcode : '')));
+              });
+              if ((outcome.shares || []).length) {
+                jobHost.appendChild(h('div', { class: 'card' },
+                  h('div', { class: 'row-title' }, '本次分享链接'),
+                  shareHost));
+              }
+              setTimeout(function () { renderNetdisk(root); }, 1200);
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                running = false;
+                backupBtn.disabled = false;
+                addBtn.disabled = false;
+                if (job.status === 'error') {
+                  toast('备份失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            running = false;
+            backupBtn.disabled = false;
+            addBtn.disabled = false;
+            toast('备份失败：' + error.message, 'error');
+          });
+        });
+
         host.appendChild(h('div', {
           class: 'muted small', style: 'margin-bottom:8px'
         }, '共 ' + mappings.length + ' 组映射 · 定时 ' + schedText
-          + ' · 已备份 ' + fmtNumber(files) + ' 个文件 · ' + fmtBytes(bytes)
-          + ' · 只读，备份 / 下载仍在桌面端'));
+          + ' · 已备份 ' + fmtNumber(files) + ' 个文件 · ' + fmtBytes(bytes)));
+        host.appendChild(h('div', { class: 'toolbar', style: 'margin-bottom:8px' },
+          addBtn, backupBtn,
+          h('span', { class: 'muted small' },
+            '立即备份与桌面端同一条引擎；定时任务仍在「任务」页面管理。')));
+        host.appendChild(jobHost);
         if (!mappings.length) {
           host.appendChild(empty(
-            '还没有备份目录。桌面端「网络库 → 备份到网盘」新增一组映射。'));
+            '还没有备份目录。点「新增映射」选择本地目录与云端目录。'));
         }
         mappings.forEach(function (mapping) {
           var extras = [];
@@ -1217,6 +1403,42 @@
               + (mapping.last_share_url
                 ? '：' + mapping.last_share_url : ''));
           }
+          var editBtn = h('button', { class: 'btn', type: 'button' }, '编辑');
+          editBtn.addEventListener('click', function () { editMapping(mapping); });
+          var toggleBtn = h('button', { class: 'btn', type: 'button' },
+            mapping.enabled ? '停用' : '启用');
+          toggleBtn.addEventListener('click', function () {
+            toggleBtn.disabled = true;
+            post('/api/netdisk/mappings/enabled', {
+              id: mapping.id, enabled: !mapping.enabled
+            }).then(function (result) {
+              toast(result.summary || '已保存', 'success');
+              renderNetdisk(root);
+            }).catch(function (error) {
+              toggleBtn.disabled = false;
+              toast('操作失败：' + error.message, 'error');
+            });
+          });
+          var delBtn = h('button', {
+            class: 'btn danger', type: 'button'
+          }, '删除');
+          delBtn.addEventListener('click', function () {
+            if (!window.confirm('删除备份映射\n\n将删除「'
+              + (mapping.local_dir || '') + ' → ' + (mapping.remote_dir || '')
+              + '」这条映射。\n只删除映射配置，不会删除本地文件或云端文件。\n\n确认删除？')) {
+              return;
+            }
+            delBtn.disabled = true;
+            post('/api/netdisk/mappings/delete', {
+              id: mapping.id, confirmed: true
+            }).then(function (result) {
+              toast(result.summary || '已删除', 'success');
+              renderNetdisk(root);
+            }).catch(function (error) {
+              delBtn.disabled = false;
+              toast('删除失败：' + error.message, 'error');
+            });
+          });
           host.appendChild(h('div', {
             class: 'card', style: 'margin-bottom:12px'
           },
@@ -1229,7 +1451,9 @@
               }, (mapping.local_dir || '（未选本地目录）') + ' → '
                 + (mapping.remote_dir || '（未设云端目录）')),
               h('span', { class: 'badge ' + (mapping.enabled ? 'ok' : '') },
-                mapping.enabled ? '启用' : '停用')),
+                mapping.enabled ? '启用' : '停用'),
+              h('span', { style: 'flex:1' }),
+              editBtn, toggleBtn, delBtn),
             h('div', { class: 'muted small', style: 'margin-top:4px' },
               '已备份 ' + fmtNumber(mapping.files) + ' 个 · '
               + fmtBytes(mapping.bytes)
@@ -1287,11 +1511,220 @@
       }
 
       function renderDownload() {
-        host.appendChild(h('div', { class: 'card' },
-          h('div', { class: 'card-title' }, '文件下载'),
-          h('div', { class: 'muted small' },
-            '浏览四大网盘目录、断点续传下载与自动解压在桌面端；'
-            + 'Web 端只读展示备份状态与运行记录。')));
+        var rootId = (data.root_ids || {})[providers.length ? providers[0].value : 'quark'] || '0';
+        var providerSel = h('select', { class: 'select' },
+          providers.map(function (item) {
+            return h('option', { value: item.value }, item.label);
+          }));
+        var crumbs = [{ fid: (data.root_ids || {})[providerSel.value] || rootId,
+                        name: '根目录' }];
+        var selected = new Map();
+        var listHost = h('div');
+        var listJobHost = h('div');
+        var dlJobHost = h('div');
+        var pathLabel = h('span', { class: 'muted small' });
+        var saveInput = h('input', {
+          class: 'input grow', value: data.default_save_dir || '',
+          placeholder: '保存到（导出目录或工作目录内）'
+        });
+        var upBtn = h('button', { class: 'btn', type: 'button' }, '上一级');
+        var refreshBtn = h('button', { class: 'btn', type: 'button' }, '刷新');
+        var dlBtn = h('button', {
+          class: 'btn primary', type: 'button', disabled: true
+        }, '下载选中');
+        var folderBtn = h('button', {
+          class: 'btn', type: 'button'
+        }, '下载当前文件夹');
+        var selLabel = h('span', { class: 'muted small' }, '');
+        var busy = false;
+
+        function currentFid() { return crumbs[crumbs.length - 1].fid; }
+
+        function syncPath() {
+          pathLabel.textContent = ' / ' + crumbs.map(function (item) {
+            return item.name;
+          }).join(' / ');
+          upBtn.disabled = busy || crumbs.length <= 1;
+          dlBtn.disabled = busy || selected.size === 0;
+          dlBtn.textContent = busy ? '处理中…' : '下载选中';
+          folderBtn.disabled = busy;
+          selLabel.textContent = selected.size
+            ? '已选 ' + selected.size + ' 个文件' : '';
+        }
+
+        function enter(fid, name) {
+          crumbs.push({ fid: fid, name: name });
+          selected.clear();
+          loadDir();
+        }
+
+        function loadDir() {
+          busy = true;
+          syncPath();
+          setLoading(listHost, '正在读取云端目录…');
+          post('/api/netdisk/cloud/list', {
+            provider: providerSel.value, fid: currentFid()
+          }).then(function (result) {
+            watchJob(listJobHost, result.job, function (job) {
+              busy = false;
+              syncPath();
+              var outcome = job.result || {};
+              var entries = outcome.entries || [];
+              if (!entries.length) {
+                listHost.replaceChildren(empty('该目录为空。'));
+                return;
+              }
+              var head = h('tr', null,
+                h('th', { style: 'width:32px' }, ''),
+                h('th', null, '名称'), h('th', null, '类型'),
+                h('th', { class: 'num' }, '大小'),
+                h('th', null, '修改时间'));
+              var body = h('tbody');
+              entries.forEach(function (entry) {
+                var check = h('input', { type: 'checkbox' });
+                if (!entry.dir) {
+                  check.addEventListener('change', function () {
+                    if (check.checked) selected.set(entry.fid, entry);
+                    else selected.delete(entry.fid);
+                    syncPath();
+                  });
+                } else {
+                  check.disabled = true;
+                }
+                var nameNode = entry.dir
+                  ? h('a', {
+                    href: '#', title: '进入文件夹', onclick: function (event) {
+                      event.preventDefault();
+                      enter(entry.fid, entry.name);
+                    }
+                  }, entry.name + '/')
+                  : h('span', null, entry.name);
+                body.appendChild(h('tr', null,
+                  h('td', null, check),
+                  h('td', { class: 'ellipsis' }, nameNode),
+                  h('td', { class: 'muted small' },
+                    entry.dir ? '文件夹' : '文件'),
+                  h('td', { class: 'num' },
+                    entry.dir ? '-' : fmtBytes(entry.size)),
+                  h('td', { class: 'muted small' }, entry.updated || '-')));
+              });
+              var parts = [];
+              if (outcome.truncated) {
+                parts.push(h('div', {
+                  class: 'muted small', style: 'margin:6px 2px'
+                }, '目录超过 ' + fmtNumber(outcome.total)
+                  + ' 项，仅显示已加载部分。'));
+              }
+              parts.push(h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' },
+                  h('thead', null, head), body)));
+              listHost.replaceChildren.apply(listHost, parts);
+            }, {
+              onSettled: function (job) {
+                busy = false;
+                syncPath();
+                if (job.status === 'error') {
+                  setError(listHost, new Error(job.error || '列目录失败'),
+                    loadDir);
+                }
+              }
+            });
+          }).catch(function (error) {
+            busy = false;
+            syncPath();
+            setError(listHost, error, loadDir);
+          });
+        }
+
+        function doDownload(payload, title) {
+          if (busy) return;
+          if (!window.confirm(title + '\n\n保存到：' + saveInput.value.trim()
+            + '\n\n已存在的同名同大小文件会跳过；中断后可重新下载续传。\n\n确认下载？')) {
+            return;
+          }
+          busy = true;
+          syncPath();
+          payload.provider = providerSel.value;
+          payload.save_dir = saveInput.value.trim();
+          post('/api/netdisk/cloud/download', payload).then(function (result) {
+            watchJob(dlJobHost, result.job, function (job) {
+              busy = false;
+              syncPath();
+              var outcome = job.result || {};
+              toast(outcome.summary || '下载完成',
+                outcome.failed ? 'warning' : 'success');
+              if (outcome.failures && outcome.failures.length) {
+                dlJobHost.appendChild(h('div', {
+                  class: 'card', style: 'margin-top:8px'
+                }, h('div', { class: 'muted small' },
+                  '失败文件：' + outcome.failures.map(function (item) {
+                    return item.name + '（' + (item.error || '未知') + '）';
+                  }).join('；'))));
+              }
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                busy = false;
+                syncPath();
+                if (job.status === 'error') {
+                  toast('下载失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            busy = false;
+            syncPath();
+            toast('下载失败：' + error.message, 'error');
+          });
+        }
+
+        upBtn.addEventListener('click', function () {
+          if (crumbs.length > 1) {
+            crumbs.pop();
+            selected.clear();
+            loadDir();
+          }
+        });
+        refreshBtn.addEventListener('click', function () {
+          selected.clear();
+          loadDir();
+        });
+        providerSel.addEventListener('change', function () {
+          crumbs = [{ fid: (data.root_ids || {})[providerSel.value] || '0',
+                      name: '根目录' }];
+          selected.clear();
+          loadDir();
+        });
+        dlBtn.addEventListener('click', function () {
+          var files = Array.from(selected.values()).map(function (entry) {
+            return { fid: entry.fid, name: entry.name, size: entry.size,
+                     download_id: entry.download_id };
+          });
+          if (!files.length) return;
+          doDownload({ files: files, folders: [] },
+            '下载选中 ' + files.length + ' 个文件');
+        });
+        folderBtn.addEventListener('click', function () {
+          var folder = crumbs[crumbs.length - 1];
+          doDownload({ files: [], folders: [
+            { fid: folder.fid, name: folder.name }
+          ] }, '下载文件夹：' + folder.name);
+        });
+
+        host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+          h('div', { class: 'toolbar' },
+            h('span', { class: 'muted small' }, '网盘'), providerSel,
+            upBtn, refreshBtn, pathLabel,
+            h('span', { style: 'flex:1' }), selLabel, dlBtn, folderBtn),
+          h('div', { class: 'toolbar', style: 'margin-top:8px' },
+            h('span', { class: 'muted small' }, '保存到'), saveInput),
+          h('div', { class: 'muted small', style: 'margin-top:6px' },
+            '浏览云端目录并下载到导出目录或工作目录内；文件夹会递归下载并保留层级，'
+            + '已存在的同名同大小文件自动跳过。自动解压仍在桌面端。')));
+        host.appendChild(listJobHost);
+        host.appendChild(dlJobHost);
+        host.appendChild(listHost);
+        loadDir();
       }
 
       renderTab();

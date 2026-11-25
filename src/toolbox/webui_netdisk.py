@@ -1,12 +1,18 @@
-"""WebUI 网络库（只读）：备份映射、统计、最近运行与任务日志。
+"""WebUI 网络库：备份映射增删改、立即备份、云端目录浏览与下载。
 
-不触发备份 / 下载，也不浏览云端目录；这些仍在桌面端。
+备份与下载复用桌面端引擎（`toolbox.quark.backup` / `toolbox.quark.download`），
+与桌面共用同一份映射配置与登录态；下载目录限制在导出目录或工作目录内。
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
+
+ROOT_IDS = {"quark": "0", "baidu": "/", "yun139": "/", "115": "0"}
+_MAX_LIST = 3000
 
 
 def _modules():
@@ -94,5 +100,346 @@ def overview() -> dict:
         "runs": run_rows,
         "schedule": schedule,
         "log": log_lines,
-        "note": "只读：新增 / 修改映射、立即备份与文件下载仍在桌面端。",
+        "providers": [{"value": key, "label": label}
+                      for key, label in _providers().items()],
+        "root_ids": dict(ROOT_IDS),
+        "default_save_dir": str(_default_save_dir()),
+        "note": ("可新增 / 编辑 / 启停 / 删除备份映射，并「立即备份」；"
+                 "「文件下载」可浏览云端目录并下载到导出目录或工作目录内。"),
     }
+
+
+def _default_save_dir() -> Path:
+    from toolbox.config_manager import get_export_dir
+    return get_export_dir() / "网盘下载"
+
+
+def _providers() -> dict:
+    from toolbox.quark import config as qconfig
+    return dict(qconfig.PROVIDERS)
+
+
+def save_mapping(payload: dict) -> dict:
+    """新增或修改一条备份映射（按 id 判断修改）。"""
+    from toolbox.quark import config as qconfig
+
+    provider = str(payload.get("provider") or "quark").strip()
+    if provider not in qconfig.PROVIDERS:
+        raise ValueError("未知网盘类型")
+    local = str(payload.get("local_dir") or "").strip()
+    if not local:
+        raise ValueError("请填写本地目录")
+    local_path = Path(local)
+    if not local_path.is_absolute():
+        raise ValueError("本地目录请填写完整路径")
+    if not local_path.is_dir():
+        raise ValueError("本地目录不存在或不是文件夹")
+    remote = qconfig.normalize_remote_dir(payload.get("remote_dir"))
+    if not remote:
+        raise ValueError("请填写云端目录（如 封茗囧菌直播录屏2017年起）")
+    try:
+        max_mb = int(payload.get("max_file_mb") or 0)
+    except (TypeError, ValueError):
+        max_mb = 0
+    if max_mb < 0 or max_mb > 1048576:
+        raise ValueError("单文件上限需在 0 到 1048576 MB 之间")
+    expire = qconfig.normalize_share_expire(payload.get("share_expire"))
+    mapping_id = str(payload.get("id") or "").strip()
+    if mapping_id:
+        mapping = qconfig.mapping_by_id(mapping_id)
+        if mapping is None:
+            raise ValueError("映射不存在，可能已被删除")
+    else:
+        mapping = qconfig.Mapping()
+    mapping.provider = provider
+    mapping.local_dir = str(local_path)
+    mapping.remote_dir = remote
+    mapping.enabled = bool(payload.get("enabled", True))
+    mapping.exclude = str(payload.get("exclude") or "")
+    mapping.max_file_mb = max_mb
+    mapping.replace_changed = bool(payload.get("replace_changed", True))
+    mapping.share = bool(payload.get("share"))
+    mapping.share_expire = expire
+    mapping.share_passcode = bool(payload.get("share_passcode"))
+    qconfig.update_mapping(mapping)
+    return {"ok": True, "id": mapping.id,
+            "summary": ("已保存映射：" + mapping.title())[:200]}
+
+
+def set_mapping_enabled(payload: dict) -> dict:
+    from toolbox.quark import config as qconfig
+
+    mapping_id = str(payload.get("id") or "").strip()
+    mapping = qconfig.mapping_by_id(mapping_id)
+    if mapping is None:
+        raise ValueError("映射不存在，可能已被删除")
+    mapping.enabled = bool(payload.get("enabled"))
+    qconfig.update_mapping(mapping)
+    return {"ok": True, "id": mapping.id, "enabled": mapping.enabled,
+            "summary": "已" + ("启用" if mapping.enabled else "停用") + "该映射"}
+
+
+def delete_mapping(payload: dict) -> dict:
+    from toolbox.quark import config as qconfig
+
+    if payload.get("confirmed") is not True:
+        raise ValueError("请确认后再删除映射")
+    mapping_id = str(payload.get("id") or "").strip()
+    if not qconfig.delete_mapping(mapping_id):
+        raise ValueError("映射不存在，可能已被删除")
+    return {"ok": True, "id": mapping_id, "summary": "已删除该备份映射"}
+
+
+def backup(on_progress=None, on_log=None, is_cancelled=None) -> dict:
+    """立即备份：与桌面端同一条引擎，逐组更新映射的最近运行结果。"""
+    from toolbox.quark import backup as qbackup
+    from toolbox.quark import config as qconfig
+
+    mappings = [item for item in qconfig.load_mappings()
+                if item.enabled and item.local_dir]
+    if not mappings:
+        raise ValueError("没有启用的备份目录，请先新增或启用一条映射")
+    stop_event = threading.Event()
+
+    def progress(payload) -> None:
+        if is_cancelled and is_cancelled():
+            stop_event.set()
+        if not on_progress:
+            return
+        percent = int(payload.get("percent") or 0)
+        phase = str(payload.get("phase") or "")
+        name = str(payload.get("name") or "")
+        text = {"mapping": "第 %d/%d 组：%s" % (int(payload.get("current") or 0) + 1,
+                                               int(payload.get("total") or 0), name),
+                "hash": "校验中 · " + name,
+                "file": "上传中 · " + name}.get(phase) or name or "备份中"
+        on_progress(percent / 100, text)
+
+    def log(message) -> None:
+        if on_log:
+            on_log(str(message))
+
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    results = qbackup.run_all(mappings, progress=progress, log=log,
+                              stop_event=stop_event)
+    for result in results:
+        mapping = qconfig.mapping_by_id(result.mapping_id)
+        if mapping is None:
+            continue
+        mapping.last_run = started
+        mapping.last_result = (f"上传 {result.uploaded} · 跳过 {result.skipped}"
+                               + (f" · 失败 {result.failed}"
+                                  if result.failed else ""))
+        if getattr(result, "share_url", ""):
+            mapping.last_share_url = result.share_url
+        qconfig.update_mapping(mapping)
+    failed = [item for item in results if not item.ok]
+    uploaded = sum(item.uploaded for item in results)
+    skipped = sum(item.skipped for item in results)
+    total_bytes = sum(item.bytes for item in results)
+    shares = [{"url": item.share_url,
+               "passcode": getattr(item, "share_passcode", "")}
+              for item in results if getattr(item, "share_url", "")]
+    return {
+        "ok": not stop_event.is_set(),
+        "cancelled": stop_event.is_set(),
+        "groups": len(results),
+        "uploaded": uploaded,
+        "skipped": skipped,
+        "failed": len(failed),
+        "bytes": total_bytes,
+        "shares": shares,
+        "failures": [{"local_dir": item.local_dir,
+                      "message": str(item.message or "")[:200]}
+                     for item in failed],
+        "summary": (f"备份完成：上传 {uploaded} · 跳过 {skipped} · "
+                    f"{_human_size(total_bytes)}"
+                    + (f" · {len(failed)} 组失败" if failed else ""))
+                   + ("（已停止）" if stop_event.is_set() else ""),
+    }
+
+
+def ensure_cloud_list(payload: dict) -> dict:
+    """列目录前置校验（请求线程执行，失败直接 400）。"""
+    provider = str(payload.get("provider") or "quark").strip()
+    if provider not in ROOT_IDS:
+        raise ValueError("未知网盘类型")
+    fid = str(payload.get("fid") or ROOT_IDS[provider]).strip() or ROOT_IDS[provider]
+    return {"provider": provider, "fid": fid}
+
+
+def ensure_cloud_download(payload: dict) -> dict:
+    """下载前置校验：网盘、清单与保存目录（不创建目录）。"""
+    provider = str(payload.get("provider") or "quark").strip()
+    if provider not in ROOT_IDS:
+        raise ValueError("未知网盘类型")
+    files = payload.get("files") or []
+    folders = payload.get("folders") or []
+    if not isinstance(files, list) or not isinstance(folders, list):
+        raise ValueError("下载清单格式不正确")
+    if not files and not folders:
+        raise ValueError("请先勾选要下载的文件或文件夹")
+    if len(files) > 500 or len(folders) > 50:
+        raise ValueError("单次下载数量过多，请分批")
+    save_dir = _save_dir(payload.get("save_dir"), create=False)
+    return {"provider": provider, "files": files, "folders": folders,
+            "save_dir": str(save_dir)}
+
+
+def cloud_list(provider: str, fid: str) -> dict:
+    """列云端目录（最多 3000 项）；只读。"""
+    from toolbox.quark import backup as qbackup
+
+    data = ensure_cloud_list({"provider": provider, "fid": fid})
+    provider, fid = data["provider"], data["fid"]
+    client = qbackup.build_client(provider)
+    entries = []
+    truncated = False
+    try:
+        for batch in client.iter_entries(fid):
+            for entry in batch:
+                entries.append(_entry_row(entry))
+                if len(entries) >= _MAX_LIST:
+                    truncated = True
+                    break
+            if truncated:
+                break
+    except Exception as exc:  # noqa: BLE001 - 各后端异常类型不同
+        raise ValueError(f"读取云端目录失败：{exc}") from exc
+    entries.sort(key=lambda item: (not item["dir"], item["name"]))
+    return {"provider": provider, "fid": fid, "entries": entries,
+            "total": len(entries), "truncated": truncated,
+            "note": "只读列目录；勾选文件或进入文件夹后可下载。"}
+
+
+def _entry_row(entry: dict) -> dict:
+    name = str(entry.get("file_name") or "")
+    return {"fid": str(entry.get("fid") or ""),
+            "name": name,
+            "dir": bool(entry.get("dir")),
+            "size": int(entry.get("size") or 0),
+            "updated": _fmt_time(entry.get("updated_at")),
+            "download_id": str(entry.get("download_id")
+                               or entry.get("fid") or "")}
+
+
+def _fmt_time(value) -> str:
+    if isinstance(value, str) and "T" in value:
+        try:
+            return datetime.fromisoformat(
+                value.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            return value[:16].replace("T", " ")
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return str(value or "")
+    if num > 10 ** 12:
+        num //= 1000
+    try:
+        return datetime.fromtimestamp(num).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return str(value or "")
+
+
+def _save_dir(text: str, create: bool = True) -> Path:
+    """下载保存目录：必须是导出目录或工作目录下的路径（安全边界）。"""
+    from toolbox.config_manager import get_export_dir, load_convert_config
+
+    raw = str(text or "").strip()
+    if not raw:
+        raw = str(get_export_dir() / "网盘下载")
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ValueError("保存目录请填写完整路径")
+    roots = [get_export_dir()]
+    work = str(load_convert_config().get("work_dir") or "").strip()
+    if work and Path(work).is_dir():
+        roots.append(Path(work))
+    resolved = path.resolve()
+    for root in roots:
+        try:
+            resolved.relative_to(root.resolve())
+            break
+        except ValueError:
+            continue
+    else:
+        raise ValueError("保存目录必须在导出目录或工作目录内")
+    if create:
+        try:
+            resolved.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"保存目录不可用：{exc}") from exc
+    return resolved
+
+
+def cloud_download(payload: dict, on_progress=None, on_log=None,
+                   is_cancelled=None) -> dict:
+    """下载选中的云端文件 / 文件夹到本地保存目录（支持续传与中断）。"""
+    from toolbox.quark import backup as qbackup
+    from toolbox.quark import download as qdownload
+
+    data = ensure_cloud_download(payload)
+    provider = data["provider"]
+    files, folders = data["files"], data["folders"]
+    save_dir = _save_dir(data["save_dir"])
+    client = qbackup.build_client(provider)
+    stop_event = threading.Event()
+
+    def progress(name, done, total, speed=0.0) -> None:
+        if is_cancelled and is_cancelled():
+            stop_event.set()
+        if on_progress:
+            on_progress(done / total if total else None,
+                        f"{name} {_human_size(done)}/{_human_size(total)}")
+
+    def log(message) -> None:
+        if on_log:
+            on_log(str(message))
+
+    downloader = qdownload.Downloader(
+        client, save_dir, on_progress=progress, on_log=log,
+        stop_event=stop_event)
+    items = []
+    for entry in files:
+        items.append(qdownload.DownloadItem(
+            fid=str(entry.get("fid") or ""),
+            name=str(entry.get("name") or ""),
+            size=int(entry.get("size") or 0),
+            updated=str(entry.get("updated") or ""),
+            download_id=str(entry.get("download_id")
+                            or entry.get("fid") or "")))
+    for folder in folders:
+        items.extend(downloader.walk(str(folder.get("fid") or ""),
+                                     str(folder.get("name") or "")))
+    if not items:
+        raise ValueError("没有可下载的文件（文件夹可能为空）")
+    results = downloader.run(items)
+    ok = [item for item in results if item.ok]
+    failed = [item for item in results if not item.ok]
+    total_bytes = sum(item.size for item in ok)
+    return {
+        "ok": not stop_event.is_set(),
+        "cancelled": stop_event.is_set(),
+        "downloaded": len(ok),
+        "failed": len(failed),
+        "bytes": total_bytes,
+        "save_dir": str(save_dir),
+        "failures": [{"name": item.name, "error": str(item.error or "")[:200]}
+                     for item in failed][:50],
+        "summary": (f"下载完成：成功 {len(ok)} · 失败 {len(failed)} · "
+                    f"{_human_size(total_bytes)}") + ("（已停止）"
+                                                     if stop_event.is_set() else ""),
+    }
+
+
+def _human_size(value) -> str:
+    try:
+        num = float(value or 0)
+    except (TypeError, ValueError):
+        num = 0.0
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num < 1024 or unit == "TB":
+            return f"{int(num)} B" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"

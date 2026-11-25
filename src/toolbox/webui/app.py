@@ -47,7 +47,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     chaohua = WeiboChaohuaService()
     info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService()
-    netdisk = NetdiskService()
+    netdisk = NetdiskService(jobs)
     localwiki = LocalWikiService()
     livestream_summary = LivestreamSummaryService()
     image_sorter = ImageSorterService()
@@ -239,6 +239,30 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tools/artifacts/file", artifact_download)
 
     server.get("/api/netdisk", lambda req: netdisk.overview())
+
+    def save_netdisk_mapping(req):
+        return netdisk.save_mapping(dict(req.json or {}))
+    server.post("/api/netdisk/mappings", save_netdisk_mapping)
+
+    def toggle_netdisk_mapping(req):
+        return netdisk.set_mapping_enabled(dict(req.json or {}))
+    server.post("/api/netdisk/mappings/enabled", toggle_netdisk_mapping)
+
+    def delete_netdisk_mapping(req):
+        return netdisk.delete_mapping(dict(req.json or {}))
+    server.post("/api/netdisk/mappings/delete", delete_netdisk_mapping)
+
+    def start_netdisk_backup(req):
+        return netdisk.start_backup()
+    server.post("/api/netdisk/backup", start_netdisk_backup)
+
+    def start_netdisk_cloud_list(req):
+        return netdisk.start_cloud_list(dict(req.json or {}))
+    server.post("/api/netdisk/cloud/list", start_netdisk_cloud_list)
+
+    def start_netdisk_cloud_download(req):
+        return netdisk.start_cloud_download(dict(req.json or {}))
+    server.post("/api/netdisk/cloud/download", start_netdisk_cloud_download)
 
     server.get("/api/localwiki", lambda req: localwiki.overview())
 
