@@ -44,6 +44,7 @@
     assets: { title: '资产库', load: renderAssets },
     netdisk: { title: '网络库', load: renderNetdisk },
     localwiki: { title: '资料站', load: renderLocalWiki },
+    livestream_summary: { title: '直播总结', load: renderLivestreamSummary },
     organize: { title: '自动整理', load: renderOrganize },
     editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: renderRename },
@@ -346,6 +347,7 @@
         ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
         ['netdisk', '网络库', '网盘备份状态与运行记录'],
         ['localwiki', '资料站', '部署状态与站点访问统计'],
+        ['livestream_summary', '直播总结', '转录清单与已保存总结'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -1080,6 +1082,117 @@
       renderTab();
     }).catch(function (error) {
       setError(root, error, function () { renderNetdisk(root); });
+    });
+  }
+
+  function renderLivestreamSummary(root) {
+    setLoading(root, '正在读取转录文件与总结设置…');
+    api('/api/livestream-summary').then(function (data) {
+      root.replaceChildren();
+      var settings = data.settings || {};
+      var transcripts = data.transcripts || [];
+      var saved = data.saved || [];
+
+      var fileSelect = h('select', { class: 'select grow' });
+      if (!transcripts.length) {
+        fileSelect.appendChild(h('option', { value: '' },
+          data.work_dir ? '工作文件夹内没有转录文件（TXT / SRT）'
+            : '未设置工作文件夹'));
+        fileSelect.disabled = true;
+      } else {
+        transcripts.forEach(function (item) {
+          fileSelect.appendChild(h('option', { value: item.rel },
+            item.name + '（' + item.mtime + '）'));
+        });
+      }
+
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '转录文件'), fileSelect,
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '开始总结'),
+          h('span', { class: 'spacer' }),
+          h('span', { class: 'muted small' }, '空闲（AI 总结在桌面端）')),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '工作目录：' + (data.work_dir || '未设置')
+          + ' · 输出：' + (data.output_dir || '-'))));
+
+      function kv(label, value) {
+        return h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, label),
+          h('span', { class: 'ellipsis', title: String(value) }, value));
+      }
+      var baseUrl = String(settings.base_url || '');
+      var keyText = settings.has_key ? '已保存（加密）'
+        : ((baseUrl.indexOf('127.0.0.1') >= 0
+          || baseUrl.indexOf('localhost') >= 0)
+          ? '本机模型可不填' : '未保存');
+      var grid = h('div', { class: 'grid cols-2' });
+      grid.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '模型设置'),
+        kv('模式', settings.mode === 'rule' ? '本地规则（不调用模型）' : 'AI 模型'),
+        kv('接口地址', settings.base_url || '-'),
+        kv('模型名称', settings.model || '-'),
+        kv('每块字数', settings.chunk_chars || '-'),
+        kv('API Key', keyText),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '保存设置'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '测试连接'),
+          h('span', { class: 'muted small' },
+            '模型检测 / 下载与保存在桌面端'))));
+
+      var savedHost = h('div');
+      var savedSelect = h('select', { class: 'select grow' });
+      if (!saved.length) {
+        savedSelect.appendChild(h('option', { value: '' }, '暂无已保存总结'));
+        savedSelect.disabled = true;
+      } else {
+        saved.forEach(function (item) {
+          savedSelect.appendChild(h('option', { value: item.name },
+            item.name + '（' + item.mtime + '）'));
+        });
+      }
+      grid.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '已保存总结'),
+        h('div', { class: 'toolbar' }, savedSelect,
+          h('span', { class: 'muted small' }, '只读预览')),
+        savedHost));
+
+      function loadSaved(name) {
+        if (!name) return;
+        setLoading(savedHost, '正在读取总结…');
+        api('/api/livestream-summary/saved?name=' + encodeURIComponent(name))
+          .then(function (result) {
+            savedHost.replaceChildren(
+              h('div', { class: 'muted small', style: 'margin:8px 0 6px' },
+                result.name + ' · ' + fmtNumber(result.text.length) + ' 字'),
+              h('pre', {
+                class: 'log-box', style: 'max-height:420px'
+              }, result.text));
+          }).catch(function (error) {
+            setError(savedHost, error, function () { loadSaved(name); });
+          });
+      }
+      savedSelect.addEventListener('change', function () {
+        loadSaved(savedSelect.value);
+      });
+      root.appendChild(grid);
+      root.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
+        h('div', { class: 'card-title' }, '运行日志'),
+        h('div', { class: 'muted small' },
+          '分块提取 / 合并 / 终稿过程日志由桌面端输出；Web 端暂不提供。')));
+      if (saved.length) loadSaved(saved[0].name);
+      else savedHost.appendChild(empty(
+        '桌面端完成总结后会保存到「直播总结」目录。'));
+    }).catch(function (error) {
+      setError(root, error, function () { renderLivestreamSummary(root); });
     });
   }
 

@@ -11,6 +11,7 @@ from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
+from toolbox.webui.services.livestream_summary import LivestreamSummaryService
 from toolbox.webui.services.localwiki import LocalWikiService
 from toolbox.webui.services.netdisk import NetdiskService
 from toolbox.webui.services.modules import ModuleService
@@ -40,6 +41,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     artifacts = ArtifactService()
     netdisk = NetdiskService()
     localwiki = LocalWikiService()
+    livestream_summary = LivestreamSummaryService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -206,6 +208,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/netdisk", lambda req: netdisk.overview())
 
     server.get("/api/localwiki", lambda req: localwiki.overview())
+
+    server.get("/api/livestream-summary",
+               lambda req: livestream_summary.overview())
+    server.get("/api/livestream-summary/saved",
+               lambda req: livestream_summary.saved_text(req.q("name")))
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())
