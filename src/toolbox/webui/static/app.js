@@ -18,7 +18,7 @@
     collected: { q: '', pageSize: 100, formats: new Set(), overview: null, cols: {} },
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1,
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
-    record: { platform: '', order: '', asc: true },
+    record: { platform: '', order: '', asc: true, selected: new Set() },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -3636,78 +3636,55 @@
       var bridge = results[1] || {};
       host.replaceChildren();
       var connected = !!bridge.connected;
-      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'muted small' },
-          connected ? '桌面控制通道已连接，可直接控制录制。'
-                    : (bridge.error || '桌面程序未运行，当前仅显示已保存配置。')),
-        connected ? null : h('div', {
-          class: 'muted small', style: 'margin-top:4px'
-        }, '在桌面端打开「直播录制」窗口后刷新本页即可控制。')));
-
       var platforms = (connected && bridge.platforms
         && bridge.platforms.length) ? bridge.platforms : (data.platforms || []);
       if (!platforms.length) {
-        host.appendChild(empty('尚未配置录制主播。请先在桌面端「直播录制」页添加主播。'));
+        host.appendChild(empty(
+          '尚未配置录制主播。请先在桌面端「直播录制」页添加主播。'));
         return;
       }
+      var keys = platforms.map(function (item) { return item.key; });
+      if (keys.indexOf(state.record.platform) < 0) {
+        state.record.platform = keys[0];
+      }
+
       var allAnchors = [];
       platforms.forEach(function (platform) {
         platform.anchors.forEach(function (anchor) {
-          allAnchors.push(anchor);
+          allAnchors.push(Object.assign({ platform_key: platform.key }, anchor));
         });
       });
-      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
-      stats.appendChild(statCard('主播', fmtNumber(allAnchors.length), '当前配置'));
-      stats.appendChild(statCard('监控中', fmtNumber(allAnchors.filter(function (item) {
-        return item.monitoring;
-      }).length), connected ? '实时状态' : '配置状态'));
-      stats.appendChild(statCard('录制中', fmtNumber(allAnchors.filter(function (item) {
-        return item.recording;
-      }).length), connected ? '实时状态' : '需桌面运行'));
-      stats.appendChild(statCard('平台', fmtNumber(platforms.length), '有主播的平台'));
-      host.appendChild(stats);
-
-      var keys = platforms.map(function (item) { return item.key; });
-      if (state.record.platform && keys.indexOf(state.record.platform) < 0) {
-        state.record.platform = '';
-      }
-      var toolbar = h('div', { class: 'toolbar' });
-      var select = h('select', { class: 'select' });
-      select.appendChild(h('option', { value: '' }, '全部平台'));
-      platforms.forEach(function (item) {
-        select.appendChild(h('option', { value: item.key },
-          item.name + '（' + item.anchors.length + '）'));
-      });
-      select.value = state.record.platform || '';
-      select.addEventListener('change', function () {
-        state.record.platform = select.value;
-        draw();
-      });
-      toolbar.appendChild(select);
-      toolbar.appendChild(h('span', { class: 'muted small' },
-        connected ? '启停操作需二次确认；点击表头排序。'
-                  : '只读：启停录制需桌面程序运行。'));
-      host.appendChild(toolbar);
-
+      var infoBar = h('div', { class: 'record-info muted small' });
       var tableHost = h('div');
-      host.appendChild(tableHost);
       var busy = false;
+      var selected = state.record.selected;
+
+      function currentPlatform() {
+        return platforms.filter(function (item) {
+          return item.key === state.record.platform;
+        })[0] || { anchors: [], name: '' };
+      }
 
       function visibleRows() {
-        var rows = [];
-        platforms.forEach(function (platform) {
-          if (state.record.platform && platform.key !== state.record.platform) return;
-          platform.anchors.forEach(function (anchor) {
-            rows.push(Object.assign({}, anchor, {
-              platform_key: platform.key,
-              platform_name: platform.name
-            }));
-          });
+        return currentPlatform().anchors.map(function (anchor) {
+          return Object.assign({ platform_key: state.record.platform }, anchor);
         });
-        return rows;
       }
 
-      function control(item, action, text) {
+      function updateInfo() {
+        var rows = visibleRows();
+        var monitoring = rows.filter(function (item) {
+          return item.monitoring;
+        }).length;
+        var recording = rows.filter(function (item) {
+          return item.recording;
+        }).length;
+        infoBar.textContent = '共 ' + rows.length + ' 个主播 · 监控 '
+          + monitoring + ' · 录制中 ' + recording + ' · '
+          + (connected ? '桌面控制通道已连接' : '只读：桌面程序未运行');
+      }
+
+      function control(item, action, text, after) {
         if (busy) return;
         if (!window.confirm('确认对「' + (item.name || item.room) + '」执行「'
           + text + '」？')) {
@@ -3719,30 +3696,130 @@
         }).then(function () {
           toast('操作成功', 'success');
           busy = false;
-          renderRecord(host);
+          if (after) after();
+          else renderRecord(host);
         }).catch(function (error) {
           busy = false;
           toast('操作失败：' + error.message, 'error');
         });
       }
 
+      function targetsFor(action) {
+        var rows = visibleRows();
+        if (selected.size) {
+          rows = rows.filter(function (item) {
+            return selected.has(item.platform_key + '|' + item.room);
+          });
+        }
+        return rows.filter(function (item) {
+          if (action === 'start_monitor') return !item.monitoring;
+          if (action === 'stop_monitor') return item.monitoring;
+          return item.recording;
+        });
+      }
+
+      function bulkAction(action, label) {
+        if (!connected || busy) return;
+        var targets = targetsFor(action);
+        if (!targets.length) {
+          toast('没有可' + label + '的主播', 'warning');
+          return;
+        }
+        if (!window.confirm('将对 ' + targets.length + ' 个主播执行「' + label
+          + '」（未勾选时作用于本平台全部主播），继续？')) {
+          return;
+        }
+        busy = true;
+        var index = 0;
+        var ok = 0;
+        var fail = 0;
+        function next() {
+          if (index >= targets.length) {
+            busy = false;
+            toast('完成：成功 ' + ok + '，失败 ' + fail,
+              fail ? 'warning' : 'success');
+            renderRecord(host);
+            return;
+          }
+          var item = targets[index++];
+          post('/api/record/control', {
+            platform: item.platform_key, room: item.room, action: action
+          }).then(function () { ok += 1; next(); })
+            .catch(function () { fail += 1; next(); });
+        }
+        next();
+      }
+
+      var monitorBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: !connected,
+        onclick: function () { bulkAction('start_monitor', '开启监控'); }
+      }, '开启监控录制');
+      var stopRecordBtn = h('button', {
+        class: 'btn', type: 'button', disabled: !connected,
+        onclick: function () { bulkAction('stop_record', '停止录制'); }
+      }, '一键停止录制');
+      var stopMonitorBtn = h('button', {
+        class: 'btn', type: 'button', disabled: !connected,
+        onclick: function () { bulkAction('stop_monitor', '关闭监控'); }
+      }, '关闭监控');
+      var selectAllBtn = h('button', {
+        class: 'btn ghost mini', type: 'button'
+      }, '全选');
+      var selectNoneBtn = h('button', {
+        class: 'btn ghost mini', type: 'button'
+      }, '取消');
+
+      selectAllBtn.addEventListener('click', function () {
+        visibleRows().forEach(function (item) {
+          selected.add(item.platform_key + '|' + item.room);
+        });
+        draw();
+      });
+      selectNoneBtn.addEventListener('click', function () {
+        selected.clear();
+        draw();
+      });
+
+      var refreshBtn = h('button', {
+        class: 'btn', type: 'button'
+      }, '刷新状态');
+      refreshBtn.addEventListener('click', function () {
+        renderRecord(host);
+      });
+
       function draw() {
-        var items = visibleRows();
-        if (!items.length) {
-          tableHost.replaceChildren(empty('该平台暂无主播。'));
+        var rows = visibleRows();
+        updateInfo();
+        if (!rows.length) {
+          tableHost.replaceChildren(empty(
+            '该平台暂无主播。请先在桌面端「直播录制」添加。'));
           return;
         }
         var columns = [
-          { key: 'platform_name', label: '平台' },
-          { key: 'room', label: '房间号' },
-          { key: 'name', label: '主播' },
-          { key: 'remark', label: '备注' },
-          { key: 'monitoring', label: '监控', bool: true },
-          { key: 'recording', label: '录制中', bool: true },
-          { key: 'want_record', label: '录制意图', bool: true }
+          { key: 'name', label: '主播名称' },
+          { key: 'monitoring', label: '监控状态' },
+          { key: 'want_record', label: '是否录制' },
+          { key: 'recording', label: '录制中' },
+          { key: 'remark', label: '备注' }
         ];
-        items = sortRows(items, columns, state.record);
-        var head = h('tr');
+        var sorted = sortRows(rows, columns, state.record);
+        var pageKeys = sorted.map(function (item) {
+          return item.platform_key + '|' + item.room;
+        });
+        var allChecked = pageKeys.every(function (key) {
+          return selected.has(key);
+        });
+        var headBox = h('input', { type: 'checkbox', checked: allChecked });
+        headBox.addEventListener('change', function () {
+          pageKeys.forEach(function (key) {
+            if (headBox.checked) selected.add(key);
+            else selected.delete(key);
+          });
+          draw();
+        });
+        var head = h('tr', null,
+          h('th', { style: 'width:36px' }, headBox),
+          h('th', { style: 'width:48px' }, '序号'));
         columns.forEach(function (column) {
           var mark = state.record.order === column.key
             ? (state.record.asc ? ' ↑' : ' ↓') : '';
@@ -3756,47 +3833,86 @@
         });
         head.appendChild(h('th', null, '操作'));
         var body = h('tbody');
-        items.forEach(function (item) {
+        sorted.forEach(function (item, index) {
+          var key = item.platform_key + '|' + item.room;
+          var box = h('input', {
+            type: 'checkbox', checked: selected.has(key)
+          });
+          box.addEventListener('change', function () {
+            if (box.checked) selected.add(key);
+            else selected.delete(key);
+          });
           var actionCell = h('td', { style: 'white-space:nowrap' });
           if (connected) {
-            var recordBtn = h('button', {
-              class: 'btn', type: 'button', style: 'margin:2px'
-            }, item.recording ? '停止录制' : '开始录制');
-            recordBtn.addEventListener('click', function () {
-              control(item, item.recording ? 'stop_record' : 'start_record',
-                item.recording ? '停止录制' : '开始录制');
-            });
-            var monitorBtn = h('button', {
-              class: 'btn', type: 'button', style: 'margin:2px'
-            }, item.monitoring ? '关闭监控' : '开启监控');
-            monitorBtn.addEventListener('click', function () {
-              control(item, item.monitoring ? 'stop_monitor' : 'start_monitor',
-                item.monitoring ? '关闭监控' : '开启监控');
-            });
-            actionCell.appendChild(recordBtn);
-            actionCell.appendChild(monitorBtn);
+            actionCell.appendChild(h('button', {
+              class: 'btn mini', type: 'button', style: 'margin-right:4px',
+              onclick: function () {
+                control(item, item.recording ? 'stop_record' : 'start_record',
+                  item.recording ? '停止录制' : '开始录制');
+              }
+            }, item.recording ? '停止录制' : '开始录制'));
+            actionCell.appendChild(h('button', {
+              class: 'btn mini', type: 'button',
+              onclick: function () {
+                control(item, item.monitoring ? 'stop_monitor' : 'start_monitor',
+                  item.monitoring ? '关闭监控' : '开启监控');
+              }
+            }, item.monitoring ? '关闭监控' : '开启监控'));
           } else {
             actionCell.appendChild(h('span', { class: 'muted small' }, '只读'));
           }
           body.appendChild(h('tr', null,
-            h('td', null, item.platform_name || item.platform_key),
-            h('td', null, item.room || '-'),
+            h('td', null, box),
+            h('td', { class: 'num' }, index + 1),
             h('td', { title: item.title || '' }, item.name || '-'),
-            h('td', { title: item.remark || '' }, item.remark || '-'),
-            h('td', null, item.monitoring ? '是' : '否'),
-            h('td', null, item.recording ? '是' : '否'),
+            h('td', null, h('span', {
+              class: 'badge ' + (item.monitoring ? 'ok' : '')
+            }, item.monitoring ? '监控中' : '未监控')),
             h('td', null, item.want_record ? '是' : '否'),
+            h('td', null, item.recording
+              ? h('span', { class: 'badge ok' }, '录制中')
+              : h('span', { class: 'muted small' }, '否')),
+            h('td', { class: 'ellipsis' }, item.remark || '-'),
             actionCell));
         });
         tableHost.replaceChildren(h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' }, h('thead', null, head), body)));
       }
+
+      var platBar = h('div', { class: 'record-platforms' });
+      platforms.forEach(function (platform) {
+        platBar.appendChild(h('button', {
+          class: 'btn' + (platform.key === state.record.platform ? ' active' : ''),
+          type: 'button',
+          onclick: function () {
+            state.record.platform = platform.key;
+            selected.clear();
+            renderRecord(host);
+          }
+        }, platform.name + '（' + platform.anchors.length + '）'));
+      });
+      platBar.appendChild(h('span', { class: 'muted small' },
+        '各平台的列表与录制任务互相独立，切换不会中断录制'));
+
+      host.appendChild(h('div', { class: 'toolbar' },
+        monitorBtn, stopRecordBtn, stopMonitorBtn,
+        h('span', { class: 'spacer' }), selectAllBtn, selectNoneBtn));
+      host.appendChild(h('div', { class: 'toolbar' },
+        h('span', { class: 'muted small' },
+          '未勾选时批量操作作用于本平台全部主播；添加 / 批量修改主播、录制设置、推送设置、FLV 修复、写时间码与弹幕姬在桌面端。'),
+        h('span', { style: 'flex:1' }), refreshBtn));
+      host.appendChild(infoBar);
+      host.appendChild(tableHost);
+      host.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
+        h('div', { class: 'card-title' }, '运行日志'),
+        h('div', { class: 'muted small' },
+          '运行日志由桌面端录制页实时输出；Web 端暂不提供，可在桌面端查看。')));
+      host.appendChild(platBar);
       draw();
     }).catch(function (error) {
       setError(host, error, function () { renderRecord(host); });
     });
   }
-
   function kindLabel(kind) {
     var labels = { video: '视频', note: '图文', image: '图文', dynamic: '动态' };
     return labels[kind] || (kind || '-');
