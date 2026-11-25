@@ -7,6 +7,7 @@ from toolbox.webui.jobs import JobManager
 from toolbox.webui.server import BytesResponse, FileResponse, WebUIServer
 from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.collected import CollectedService
+from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
@@ -14,6 +15,7 @@ from toolbox.webui.services.record import RecordService
 from toolbox.webui.services.tcdoc import TCDocService
 from toolbox.webui.services.tools import ToolService
 from toolbox.webui.services.trackers import TrackerService
+from toolbox.webui.services.weibo_chaohua import WeiboChaohuaService
 from version import APP_VERSION
 
 
@@ -28,6 +30,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     tcdoc = TCDocService(jobs)
     trackers = TrackerService()
     fangroups = FanGroupService()
+    douyin_index = DouyinIndexService()
+    chaohua = WeiboChaohuaService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -161,6 +165,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                 ".gif": "image/gif"}.get(suffix, "application/octet-stream")
         return BytesResponse(path.read_bytes(), mime)
     server.get("/api/fangroups/avatar", fangroup_avatar)
+
+    server.get("/api/douyin-index", lambda req: douyin_index.overview())
+    server.get("/api/douyin-index/report", lambda req: douyin_index.report(
+        req.q("name")))
+
+    server.get("/api/weibo-chaohua", lambda req: chaohua.overview())
+    server.get("/api/weibo-chaohua/analysis", lambda req: chaohua.analysis(
+        req.q("topic_id")))
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

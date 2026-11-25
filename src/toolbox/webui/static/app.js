@@ -21,6 +21,8 @@
     record: { platform: '', order: '', asc: true, selected: new Set() },
     trackers: { platform: '', open: '' },
     fangroups: { open: '' },
+    douyin: { name: '', tab: 'core' },
+    chaohua: { topic: '' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -46,6 +48,8 @@
     record: { title: '直播录制', load: renderRecord },
     music_tracker: { title: '音乐账号', load: renderMusicTracker },
     media_tracker: { title: '网媒账号', load: renderMediaTracker },
+    douyin_index: { title: '抖音指数', load: renderDouyinIndex },
+    weibo_chaohua: { title: '微博超话', load: renderWeiboChaohua },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
     fan_groups: { title: '粉丝群', load: renderFanGroups },
     tasks: { title: '定时任务', load: renderTasks },
@@ -345,6 +349,8 @@
         ['record', '直播录制', '监控与录制控制（需桌面运行）'],
         ['music_tracker', '音乐账号', '五平台账号指标与历史'],
         ['media_tracker', '网媒账号', '网媒账号指标与历史'],
+        ['douyin_index', '抖音指数', '达人核心指标与粉丝画像'],
+        ['weibo_chaohua', '微博超话', '本地累计与增长分析'],
         ['fan_groups', '粉丝群', 'QQ 群订阅与人数历史'],
         ['tcdoc', '腾讯文档', '浏览量 / 成员数每日记录']
       ]],
@@ -3908,6 +3914,413 @@
       draw();
     }).catch(function (error) {
       setError(root, error, function () { renderFanGroups(root); });
+    });
+  }
+
+  function renderDouyinIndex(root) {
+    setLoading(root, '正在读取抖音指数快照…');
+    api('/api/douyin-index').then(function (data) {
+      root.replaceChildren();
+      var reports = data.reports || [];
+      if (!reports.length) {
+        root.appendChild(empty(
+          '暂无本地快照。桌面端「抖音指数」搜索达人并抓取后会保存到本地，刷新本页即可查看。'));
+        return;
+      }
+      var names = reports.map(function (item) { return item.name; });
+      if (names.indexOf(state.douyin.name) < 0) {
+        state.douyin.name = names[0];
+      }
+      var select = h('select', { class: 'select' });
+      reports.forEach(function (item) {
+        select.appendChild(h('option', {
+          value: item.name,
+          selected: item.name === state.douyin.name
+        }, item.nick + (item.fetched_at ? '（' + item.fetched_at + '）' : '')));
+      });
+      select.value = state.douyin.name;
+      select.addEventListener('change', function () {
+        state.douyin.name = select.value;
+        loadReport();
+      });
+      var refreshBtn = h('button', {
+        class: 'btn', type: 'button'
+      }, '刷新');
+      refreshBtn.addEventListener('click', function () {
+        renderDouyinIndex(root);
+      });
+      var summary = h('div', {
+        class: 'muted small', style: 'margin:8px 0'
+      });
+      var tabs = h('div', { class: 'tabs' });
+      var tabHost = h('div');
+      var TABS = [['core', '核心指标'], ['trend', '每日趋势'],
+        ['videos', '达人视频'], ['fans', '粉丝分析'],
+        ['similar', '相似达人']];
+      TABS.forEach(function (item) {
+        tabs.appendChild(h('button', {
+          class: 'tab' + (state.douyin.tab === item[0] ? ' active' : ''),
+          type: 'button',
+          onclick: function () {
+            state.douyin.tab = item[0];
+            tabs.querySelectorAll('.tab').forEach(function (button, index) {
+              button.classList.toggle('active', TABS[index][0] === item[0]);
+            });
+            renderTab();
+          }
+        }, item[1]));
+      });
+      root.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '达人'), select,
+          h('span', { class: 'muted small', style: 'margin-left:8px' },
+            '搜索与抓取仍在桌面端'),
+          h('span', { style: 'flex:1' }), refreshBtn)));
+      root.appendChild(summary);
+      root.appendChild(tabs);
+      root.appendChild(tabHost);
+
+      var report = null;
+
+      function deltaClass(raw) {
+        if (typeof raw !== 'number') return '';
+        if (raw > 0) return ' delta-up';
+        if (raw < 0) return ' delta-down';
+        return '';
+      }
+
+      function tableOf(head, body) {
+        return h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body));
+      }
+
+      function loadReport() {
+        setLoading(tabHost, '正在读取达人报表…');
+        api('/api/douyin-index/report?name='
+          + encodeURIComponent(state.douyin.name))
+          .then(function (result) {
+            report = result;
+            var author = result.author || {};
+            var meta = result.meta || {};
+            summary.textContent = author.name + '（抖音号 '
+              + (author.uid || '-') + '）'
+              + (author.tags ? ' · ' + author.tags : '')
+              + ' · 粉丝 ' + author.fans + ' · 总获赞 ' + author.likes
+              + ' · 作品 ' + (author.items == null ? '-' : author.items)
+              + (meta.fetched_at ? ' · 采集于 ' + meta.fetched_at : '')
+              + (meta.days ? ' · 统计 ' + meta.days + ' 天' : '');
+            renderTab();
+          }).catch(function (error) {
+            setError(tabHost, error, loadReport);
+          });
+      }
+
+      function renderTab() {
+        if (!report) return;
+        tabHost.replaceChildren();
+        if (state.douyin.tab === 'core') renderCore();
+        else if (state.douyin.tab === 'trend') renderTrend();
+        else if (state.douyin.tab === 'videos') renderVideos();
+        else if (state.douyin.tab === 'fans') renderFans();
+        else renderSimilar();
+      }
+
+      function renderCore() {
+        var head = h('tr', null, h('th', null, '指标'));
+        ['昨日', '近7天', '近15天', '近30天'].forEach(function (title) {
+          head.appendChild(h('th', { class: 'num' }, title));
+          head.appendChild(h('th', { class: 'num' }, title + '环比'));
+        });
+        var body = h('tbody');
+        (report.core || []).forEach(function (row) {
+          var tr = h('tr', null, h('td', null, row.label));
+          row.cells.forEach(function (cell) {
+            tr.appendChild(h('td', { class: 'num' }, cell.value));
+            tr.appendChild(h('td', {
+              class: 'num' + deltaClass(cell.exchange_raw)
+            }, cell.exchange));
+          });
+          body.appendChild(tr);
+        });
+        var avgHead = h('tr', null,
+          h('th', null, '稿均指标'), h('th', { class: 'num' }, '近7天'),
+          h('th', { class: 'num' }, '环比'), h('th', { class: 'num' }, '近30天'),
+          h('th', { class: 'num' }, '环比'));
+        var avgBody = h('tbody');
+        (report.avg || []).forEach(function (row) {
+          avgBody.appendChild(h('tr', null,
+            h('td', null, row.label),
+            h('td', { class: 'num' }, row.week),
+            h('td', {
+              class: 'num' + deltaClass(row.week_exchange_raw)
+            }, row.week_exchange),
+            h('td', { class: 'num' }, row.month),
+            h('td', {
+              class: 'num' + deltaClass(row.month_exchange_raw)
+            }, row.month_exchange)));
+        });
+        tabHost.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '核心指标（昨日 / 近7天 / 近15天 / 近30天）'));
+        tabHost.appendChild(tableOf(head, body));
+        tabHost.appendChild(h('div', {
+          class: 'row-title', style: 'margin:14px 0 8px'
+        }, '稿均指标'));
+        tabHost.appendChild(tableOf(avgHead, avgBody));
+      }
+
+      function renderTrend() {
+        if (!(report.trend || []).length) {
+          tabHost.appendChild(empty('暂无趋势数据。'));
+          return;
+        }
+        var head = h('tr', null, h('th', null, '日期'),
+          h('th', { class: 'num' }, '新增点赞'),
+          h('th', { class: 'num' }, '净增粉丝'),
+          h('th', { class: 'num' }, '新增分享'),
+          h('th', { class: 'num' }, '新增评论'),
+          h('th', { class: 'num' }, '新增作品'));
+        var body = h('tbody');
+        report.trend.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', null, row.date),
+            h('td', { class: 'num' }, row.like),
+            h('td', { class: 'num' }, row.fans),
+            h('td', { class: 'num' }, row.share),
+            h('td', { class: 'num' }, row.comment),
+            h('td', { class: 'num' }, row.item)));
+        });
+        tabHost.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '每日趋势 · 共 ' + report.trend.length + ' 天'));
+        tabHost.appendChild(tableOf(head, body));
+      }
+
+      function renderVideos() {
+        if (!(report.videos || []).length) {
+          tabHost.appendChild(empty('暂无作品数据。'));
+          return;
+        }
+        var head = h('tr', null, h('th', null, '发布日期'), h('th', null, '内容'),
+          h('th', { class: 'num' }, '点赞量'), h('th', { class: 'num' }, '评论量'),
+          h('th', { class: 'num' }, '分享量'), h('th', { class: 'num' }, '收藏量'),
+          h('th', { class: 'num' }, '视频指数'));
+        var body = h('tbody');
+        report.videos.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', null, row.date),
+            h('td', { class: 'ellipsis' }, row.url
+              ? h('a', { href: row.url, target: '_blank',
+                rel: 'noopener noreferrer' }, row.text || '-')
+              : (row.text || '-')),
+            h('td', { class: 'num' }, row.like),
+            h('td', { class: 'num' }, row.comment),
+            h('td', { class: 'num' }, row.share),
+            h('td', { class: 'num' }, row.favorite),
+            h('td', { class: 'num' }, row.index)));
+        });
+        tabHost.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '达人视频 · 共 ' + report.videos.length + ' 条'));
+        tabHost.appendChild(tableOf(head, body));
+      }
+
+      function renderFans() {
+        if (!(report.fans || []).length) {
+          tabHost.appendChild(empty('暂无粉丝画像。'));
+          return;
+        }
+        var head = h('tr', null, h('th', null, '维度'), h('th', null, '项目'),
+          h('th', { class: 'num' }, '占比'), h('th', { class: 'num' }, 'TGI'));
+        var body = h('tbody');
+        report.fans.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', null, row.dimension),
+            h('td', null, row.name),
+            h('td', { class: 'num' }, row.pct),
+            h('td', { class: 'num' }, row.tgi)));
+        });
+        tabHost.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '粉丝画像 · 共 ' + report.fans.length + ' 项（TGI>100 表示偏好度高于大盘）'));
+        tabHost.appendChild(tableOf(head, body));
+      }
+
+      function renderSimilar() {
+        if (!(report.similar || []).length) {
+          tabHost.appendChild(empty('暂无相似达人。'));
+          return;
+        }
+        var head = h('tr', null, h('th', { class: 'num' }, '排名'),
+          h('th', null, '达人'), h('th', null, '抖音号'),
+          h('th', { class: 'num' }, '粉丝'), h('th', { class: 'num' }, '总获赞'),
+          h('th', { class: 'num' }, '作品'), h('th', null, '标签'));
+        var body = h('tbody');
+        report.similar.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', { class: 'num' }, row.rank == null ? '-' : row.rank),
+            h('td', null, row.name || '-'),
+            h('td', null, row.uid || '-'),
+            h('td', { class: 'num' }, row.fans),
+            h('td', { class: 'num' }, row.likes),
+            h('td', { class: 'num' }, row.items == null ? '-' : row.items),
+            h('td', null, row.tags || '-')));
+        });
+        tabHost.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '相似达人 · 共 ' + report.similar.length + ' 位'));
+        tabHost.appendChild(tableOf(head, body));
+      }
+
+      loadReport();
+    }).catch(function (error) {
+      setError(root, error, function () { renderDouyinIndex(root); });
+    });
+  }
+
+  function renderWeiboChaohua(root) {
+    setLoading(root, '正在读取超话本地数据…');
+    api('/api/weibo-chaohua').then(function (data) {
+      root.replaceChildren();
+      var topics = data.topics || [];
+      if (!topics.length) {
+        root.appendChild(empty(data.note || '本地暂无超话数据。'));
+        return;
+      }
+      if (!topics.some(function (item) {
+        return item.topic_id === state.chaohua.topic;
+      })) {
+        state.chaohua.topic = topics[0].topic_id;
+      }
+      var select = h('select', { class: 'select' });
+      topics.forEach(function (item) {
+        select.appendChild(h('option', {
+          value: item.topic_id,
+          selected: item.topic_id === state.chaohua.topic
+        }, item.nick + '（' + item.topic_id + '）'));
+      });
+      select.value = state.chaohua.topic;
+      select.addEventListener('change', function () {
+        state.chaohua.topic = select.value;
+        load();
+      });
+      var refreshBtn = h('button', {
+        class: 'btn', type: 'button'
+      }, '刷新');
+      refreshBtn.addEventListener('click', function () {
+        renderWeiboChaohua(root);
+      });
+      var summary = h('div', {
+        class: 'muted small', style: 'margin:8px 0'
+      });
+      var contentHost = h('div');
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '超话'), select,
+          h('span', { class: 'muted small', style: 'margin-left:8px' },
+            '解析与采集仍在桌面端'),
+          h('span', { style: 'flex:1' }), refreshBtn),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '输入超话链接或 ID 解析、频道采集与导出 Excel 仍在桌面端。')));
+      root.appendChild(summary);
+      root.appendChild(contentHost);
+
+      function section(title, labels, rows, emptyText, buildCells, numeric) {
+        var card = h('div', { class: 'card', style: 'margin-bottom:12px' });
+        card.appendChild(h('div', {
+          class: 'row-title', style: 'margin-bottom:8px'
+        }, title));
+        if (!rows.length) {
+          card.appendChild(empty(emptyText));
+          return card;
+        }
+        var head = h('tr');
+        labels.forEach(function (label, index) {
+          head.appendChild(h('th', {
+            class: numeric.indexOf(index) >= 0 ? 'num' : ''
+          }, label));
+        });
+        var body = h('tbody');
+        rows.forEach(function (row) {
+          var tr = h('tr');
+          buildCells(row).forEach(function (cell, index) {
+            if (cell && cell.nodeType) {
+              tr.appendChild(h('td', {
+                class: numeric.indexOf(index) >= 0 ? 'num' : ''
+              }, cell));
+            } else {
+              tr.appendChild(h('td', {
+                class: (numeric.indexOf(index) >= 0 ? 'num ' : '')
+                  + (index === 2 ? 'ellipsis' : '')
+              }, cell));
+            }
+          });
+          body.appendChild(tr);
+        });
+        card.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, head), body)));
+        return card;
+      }
+
+      function num(value) {
+        return value == null ? '-' : fmtNumber(value);
+      }
+
+      function load() {
+        setLoading(contentHost, '正在读取历史分析…');
+        api('/api/weibo-chaohua/analysis?topic_id='
+          + encodeURIComponent(state.chaohua.topic))
+          .then(function (result) {
+            var topic = result.topic || {};
+            var lastRun = result.last_run || {};
+            summary.textContent = topic.nick + '（' + topic.topic_id + '）'
+              + ' · 累计 ' + fmtNumber(result.total_posts) + ' 帖'
+              + ' · ' + fmtNumber(result.total_runs) + ' 次采集'
+              + (result.first_seen ? ' · 首次 ' + result.first_seen : '')
+              + (result.last_seen ? ' · 最近 ' + result.last_seen : '')
+              + (lastRun.finished_at
+                ? ' · 最近一次新增 ' + fmtNumber(lastRun.new_posts)
+                  + ' / 状态 ' + (lastRun.status || '-') : '');
+            contentHost.replaceChildren();
+            contentHost.appendChild(section(
+              '最近采集批次', ['完成时间', '频道', '抓取', '去重', '新增', '状态'],
+              result.runs || [], '暂无采集批次。',
+              function (row) {
+                return [row.finished_at, row.channels, num(row.raw_total),
+                  num(row.unique_total), num(row.new_posts), row.status || '-'];
+              }, [2, 3, 4]));
+            contentHost.appendChild(section(
+              '超话指标快照', ['时间', '签到', '分类排名', '帖子数', '粉丝数'],
+              result.snapshots || [], '暂无指标快照。',
+              function (row) {
+                return [row.captured_at, row.checkin, row.category,
+                  row.post_count, row.fans];
+              }, []));
+            contentHost.appendChild(section(
+              '每日新增', ['日期', '新增帖子'], result.daily_new || [],
+              '暂无每日新增数据。',
+              function (row) { return [row.day, num(row.count)]; }, [1]));
+            contentHost.appendChild(section(
+              '热门帖子（按点赞）', ['作者', '时间', '内容', '赞', '评论', '转发', '链接'],
+              result.top_posts || [], '暂无帖子数据。',
+              function (row) {
+                return [row.author, row.dt, row.text, num(row.likes),
+                  num(row.comments), num(row.reposts),
+                  row.url ? h('a', { href: row.url, target: '_blank',
+                    rel: 'noopener noreferrer' }, '打开') : '-'];
+              }, [3, 4, 5]));
+            contentHost.appendChild(section(
+              '增长榜（多次采集的点赞增幅）',
+              ['作者', '时间', '内容', '最少赞', '最多赞', '采集次数'],
+              result.growth || [], '暂无多次采集的帖子。',
+              function (row) {
+                return [row.author, row.dt, row.text, num(row.min_likes),
+                  num(row.max_likes), num(row.captures)];
+              }, [3, 4, 5]));
+          }).catch(function (error) {
+            setError(contentHost, error, load);
+          });
+      }
+
+      load();
+    }).catch(function (error) {
+      setError(root, error, function () { renderWeiboChaohua(root); });
     });
   }
 
