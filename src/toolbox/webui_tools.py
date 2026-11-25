@@ -898,6 +898,78 @@ def write_video_chapters(rel_path: str, segments, on_progress=None,
 _DETECT_KINDS = ("silence", "black", "scene")
 
 
+# ==================== 片段清单导入 / 导出（CSV / EDL / 章节） ====================
+
+_SEGMENT_DOC_FORMATS = {
+    "csv": ("csv", "text/csv; charset=utf-8"),
+    "edl": ("edl", "text/plain; charset=utf-8"),
+    "chapters": ("txt", "text/plain; charset=utf-8"),
+}
+
+
+def _plain_segment_rows(segments) -> list[tuple[int, int]]:
+    """校验片段但不套用切割任务的条数上限（导出只读，不生成文件）。"""
+    rows = []
+    for item in segments or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError("片段格式不正确")
+        try:
+            start, end = int(item[0]), int(item[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("片段时间必须是毫秒数") from exc
+        if start < 0 or end <= start:
+            raise ValueError("片段结束时间必须大于开始时间")
+        rows.append((start, end))
+    if not rows:
+        raise ValueError("请至少填写一个片段")
+    return rows
+
+
+def segment_clock(ms: int) -> str:
+    """毫秒 → HH:MM:SS.s，与网页片段输入框一致。"""
+    total = max(0, int(ms)) / 1000
+    hours = int(total // 3600)
+    minutes = int((total % 3600) // 60)
+    return f"{hours:02d}:{minutes:02d}:{total - hours * 3600 - minutes * 60:04.1f}"
+
+
+def export_segments_document(segments, fmt: str = "csv", name: str = "") -> dict:
+    """生成片段清单文本并在内存返回，不写磁盘、不改源文件。"""
+    from toolbox import edit_engine
+
+    rows = _plain_segment_rows(segments)
+    fmt = str(fmt or "csv").strip().lower()
+    if fmt not in _SEGMENT_DOC_FORMATS:
+        raise ValueError("未知导出格式，只支持 csv / edl / chapters")
+    if fmt == "csv":
+        text = edit_engine.segments_csv_text(rows)
+    elif fmt == "edl":
+        text = edit_engine.edl_text(rows)
+    else:
+        text = edit_engine.chapters_text(rows)
+    stem = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", str(name or "").strip()).strip(" ._")
+    ext, mime = _SEGMENT_DOC_FORMATS[fmt]
+    return {"text": text, "filename": f"{stem or '片段清单'}.{ext}",
+            "content_type": mime, "count": len(rows)}
+
+
+def import_segments_document(text: str) -> dict:
+    """解析片段 CSV 文本（本工具导出格式），返回毫秒片段与时间码行。"""
+    from toolbox.edit_engine import EditError, parse_segments_csv
+
+    raw = str(text or "")
+    if not raw.strip():
+        raise ValueError("请先选择或粘贴 CSV 内容")
+    try:
+        rows = parse_segments_csv(raw)
+    except EditError as exc:
+        raise ValueError(str(exc)) from exc
+    return {"segments": [[start, end] for start, end in rows],
+            "text": "\n".join(segment_clock(start) + "-" + segment_clock(end)
+                              for start, end in rows),
+            "count": len(rows)}
+
+
 def detect_video(rel_path: str, kind: str, threshold=None, min_sec=0.5,
                  on_progress=None, is_cancelled=None) -> dict:
     """检测静音段 / 黑帧段 / 场景切换点（只读，不生成文件）。"""

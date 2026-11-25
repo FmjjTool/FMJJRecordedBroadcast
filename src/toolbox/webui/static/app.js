@@ -207,6 +207,32 @@
     return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(token);
   }
 
+  function downloadPost(path, body, fallbackName) {
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) headers['X-WebUI-Token'] = token;
+    return fetch(path, {
+      method: 'POST', headers: headers, body: JSON.stringify(body || {})
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(function (text) {
+          var data = null;
+          try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+          throw new Error(data && data.error ? data.error : ('导出失败（' + response.status + '）'));
+        });
+      }
+      return response.blob().then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = fallbackName || 'download';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+      });
+    });
+  }
+
   function pager(host, page, pages, total, onChange) {
     host.replaceChildren(
       h('span', { class: 'page-text' }, '第 ' + page + ' / ' + pages + ' 页 · 共 ' + total + ' 条'),
@@ -3135,6 +3161,13 @@
         var clearBtn = h('button', {
           class: 'btn ghost', type: 'button', disabled: true
         }, '清空切点');
+        var expCsvBtn = h('button', { class: 'btn', type: 'button' }, '导出 CSV');
+        var expEdlBtn = h('button', { class: 'btn', type: 'button' }, '导出 EDL');
+        var expChapBtn = h('button', { class: 'btn', type: 'button' }, '导出章节文件');
+        var impCsvBtn = h('button', { class: 'btn', type: 'button' }, '导入 CSV');
+        var csvInput = h('input', {
+          type: 'file', accept: '.csv,text/csv', style: 'display:none'
+        });
         var detInfo = h('div', { class: 'muted small', style: 'margin:6px 0' },
           '选择 1 个视频后检测；结果可一键填入下方片段。');
         var detectPoints = [];
@@ -3153,11 +3186,15 @@
           fillBtn, clearBtn));
         tabHost.appendChild(detInfo);
         tabHost.appendChild(segments);
+        tabHost.appendChild(h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '片段清单'),
+          expCsvBtn, expEdlBtn, expChapBtn, impCsvBtn, csvInput));
         tabHost.appendChild(nameRow);
         tabHost.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
           '先在表格勾选 1 个视频；时间可用秒（90）或时间码（01:30 / 00:01:30）。输出到工作目录根，不覆盖已有文件。'
           + '检测只读视频不生成文件：静音阈值用 dB（-60 到 0），黑帧与场景用 0.01 到 1；'
-          + '「写入章节」会把上方片段写成章节并封装为新视频（不转码）。'));
+          + '「写入章节」会把上方片段写成章节并封装为新视频（不转码）。'
+          + '片段清单导出可交给剪辑软件（EDL / 章节），导入 CSV 会覆盖上方片段。'));
         var detectDefaults = {
           silence: { value: '-30', unit: 'dB' },
           black: { value: '0.10', unit: '' },
@@ -3196,6 +3233,10 @@
           btn.disabled = disabled;
           chapterBtn.disabled = disabled;
           detBtn.disabled = disabled;
+          expCsvBtn.disabled = running;
+          expEdlBtn.disabled = running;
+          expChapBtn.disabled = running;
+          impCsvBtn.disabled = running;
           fillBtn.disabled = running || !detectPoints.length || !detectDuration;
           clearBtn.disabled = running || !detectPoints.length;
           btn.textContent = running ? '处理中…' : '切割选中视频';
@@ -3297,6 +3338,66 @@
         clearBtn.addEventListener('click', function () {
           resetDetect();
           detInfo.textContent = '已清空切点。';
+        });
+
+        function segmentDocName() {
+          var paths = selectedPaths();
+          if (paths.length !== 1) return '';
+          var name = String(paths[0]).split('/').pop();
+          return name.replace(/\.[^.]+$/, '');
+        }
+
+        function exportSegmentsDoc(fmt, label) {
+          var parsed;
+          try {
+            parsed = parseSegments(segments.value);
+          } catch (error) {
+            toast(error.message, 'warning');
+            return;
+          }
+          expCsvBtn.disabled = true;
+          expEdlBtn.disabled = true;
+          expChapBtn.disabled = true;
+          var stem = segmentDocName();
+          downloadPost('/api/tools/video/segments/export', {
+            segments: parsed, format: fmt, name: stem ? stem + '_片段' : '片段清单'
+          }, (stem || '片段') + '.' + (fmt === 'chapters' ? 'txt' : fmt)).then(function () {
+            toast('已导出 ' + label + '：' + parsed.length + ' 个片段', 'success');
+          }).catch(function (error) {
+            toast(error.message, 'error');
+          }).then(function () {
+            sync();
+          });
+        }
+
+        expCsvBtn.addEventListener('click', function () {
+          exportSegmentsDoc('csv', 'CSV');
+        });
+        expEdlBtn.addEventListener('click', function () {
+          exportSegmentsDoc('edl', 'EDL');
+        });
+        expChapBtn.addEventListener('click', function () {
+          exportSegmentsDoc('chapters', '章节文件');
+        });
+        impCsvBtn.addEventListener('click', function () {
+          csvInput.value = '';
+          csvInput.click();
+        });
+        csvInput.addEventListener('change', function () {
+          var file = csvInput.files && csvInput.files[0];
+          if (!file) return;
+          if (file.size > 1024 * 512) {
+            toast('CSV 文件过大（上限 512KB）', 'warning');
+            return;
+          }
+          file.text().then(function (text) {
+            return post('/api/tools/video/segments/import', { csv: text });
+          }).then(function (data) {
+            segments.value = data.text || '';
+            toast('已导入 ' + data.count + ' 个片段', 'success');
+          }).catch(function (error) {
+            toast('导入失败：' + error.message, 'error');
+          });
         });
         chapterBtn.addEventListener('click', function () {
           var paths = selectedPaths();

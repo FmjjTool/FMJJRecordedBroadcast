@@ -83,6 +83,14 @@ class BytesResponse:
     content_type: str = "image/jpeg"
 
 
+@dataclass
+class AttachmentResponse:
+    """内存中生成的小文件，按附件下载（片段 CSV / EDL / 章节等）。"""
+    data: bytes
+    filename: str
+    content_type: str = "application/octet-stream"
+
+
 class WebUIServer:
     def __init__(self, token: str, host: str = "127.0.0.1", port: int = 0,
                  on_stop=None):
@@ -301,6 +309,9 @@ def _make_handler(app: WebUIServer):
             if isinstance(result, FileResponse):
                 self._send_file(result)
                 return
+            if isinstance(result, AttachmentResponse):
+                self._send_attachment(result)
+                return
             if isinstance(result, BytesResponse):
                 self._headers(200, result.content_type, len(result.data))
                 self.wfile.write(result.data)
@@ -312,6 +323,18 @@ def _make_handler(app: WebUIServer):
             body = _json_bytes(payload)
             self._headers(status, "application/json; charset=utf-8", len(body))
             self.wfile.write(body)
+
+        def _send_attachment(self, response: AttachmentResponse) -> None:
+            data = response.data or b""
+            ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_",
+                                response.filename) or "download"
+            utf8_name = quote(response.filename, safe="")
+            self._headers(
+                200, response.content_type, len(data),
+                {"Content-Disposition":
+                 f'attachment; filename="{ascii_name}"; '
+                 f"filename*=UTF-8''{utf8_name}"})
+            self.wfile.write(data)
 
         def _send_file(self, response: FileResponse) -> None:
             try:

@@ -491,23 +491,38 @@ def _timecode(ms: int, fps: int = 30) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}:{frames:02d}"
 
 
-def export_segments_csv(segments: List[Tuple[int, int]], path: Path) -> Path:
-    path = Path(path)
+def segments_csv_text(segments: List[Tuple[int, int]]) -> str:
     lines = ["序号,开始秒,结束秒,时长秒,开始时间,结束时间"]
     for idx, (start, end) in enumerate(segments, 1):
         lines.append(
             f"{idx},{start/1000:.3f},{end/1000:.3f},{(end-start)/1000:.3f},"
             f"{start/1000:.2f},{end/1000:.2f}")
-    path.write_text("\ufeff" + "\n".join(lines), encoding="utf-8")
+    return "\ufeff" + "\n".join(lines)
+
+
+def export_segments_csv(segments: List[Tuple[int, int]], path: Path) -> Path:
+    path = Path(path)
+    path.write_text(segments_csv_text(segments), encoding="utf-8")
     return path
 
 
-def import_segments_csv(path: Path) -> List[Tuple[int, int]]:
-    """导入本工具导出的片段 CSV（序号,开始秒,结束秒,...）。"""
-    path = Path(path)
-    text = path.read_text(encoding="utf-8-sig")
+def parse_segments_csv(text: str) -> List[Tuple[int, int]]:
+    """解析本工具导出的片段 CSV 文本（序号,开始秒,结束秒,...）。
+
+    首行是表头时跳过；用户手写的无表头 CSV 也能识别。
+    """
     segments: List[Tuple[int, int]] = []
-    for line in text.splitlines()[1:]:
+    lines = text.splitlines()
+    offset = 0
+    if lines:
+        head = [p.strip() for p in lines[0].split(",")]
+        if len(head) >= 3:
+            try:
+                float(head[1])
+                float(head[2])
+            except ValueError:
+                offset = 1
+    for line in lines[offset:]:
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 3:
             continue
@@ -523,8 +538,12 @@ def import_segments_csv(path: Path) -> List[Tuple[int, int]]:
     return segments
 
 
-def export_edl(segments: List[Tuple[int, int]], path: Path, fps: int = 30) -> Path:
-    path = Path(path)
+def import_segments_csv(path: Path) -> List[Tuple[int, int]]:
+    """导入本工具导出的片段 CSV（序号,开始秒,结束秒,...）。"""
+    return parse_segments_csv(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def edl_text(segments: List[Tuple[int, int]], fps: int = 30) -> str:
     lines = ["TITLE: FMJJ Segments", "FCM: NON-DROP FRAME", ""]
     record = 0
     for idx, (start, end) in enumerate(segments, 1):
@@ -536,18 +555,27 @@ def export_edl(segments: List[Tuple[int, int]], path: Path, fps: int = 30) -> Pa
         lines.append(
             f"{idx:03d}  AX       V     C        "
             f"{src_in} {src_out} {rec_in} {rec_out}")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines)
+
+
+def export_edl(segments: List[Tuple[int, int]], path: Path, fps: int = 30) -> Path:
+    path = Path(path)
+    path.write_text(edl_text(segments, fps), encoding="utf-8")
     return path
+
+
+def chapters_text(segments: List[Tuple[int, int]]) -> str:
+    lines = [";FFMETADATA1"]
+    for idx, (start, end) in enumerate(segments, 1):
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={start}",
+                  f"END={end}", f"title=片段 {idx}"]
+    return "\n".join(lines) + "\n"
 
 
 def export_chapters(segments: List[Tuple[int, int]], path: Path) -> Path:
     """导出 ffmetadata 章节文件（可被播放器/剪辑软件识别）。"""
     path = Path(path)
-    lines = [";FFMETADATA1"]
-    for idx, (start, end) in enumerate(segments, 1):
-        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={start}",
-                  f"END={end}", f"title=片段 {idx}"]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text(chapters_text(segments), encoding="utf-8")
     return path
 
 

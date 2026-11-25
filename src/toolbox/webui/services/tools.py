@@ -469,6 +469,15 @@ class ToolService:
                 rel, segments, on_progress=self._video_progress(task),
                 is_cancelled=self._video_cancelled(task)))
 
+    def video_segments_export(self, payload: dict) -> dict:
+        fmt = str(payload.get("format") or "csv").strip().lower()
+        name = str(payload.get("name") or "").strip()
+        return webui_tools.export_segments_document(
+            payload.get("segments") or [], fmt, name)
+
+    def video_segments_import(self, payload: dict) -> dict:
+        return webui_tools.import_segments_document(str(payload.get("csv") or ""))
+
     def calendar_days(self) -> dict:
         return webui_tools.calendar_days()
 
