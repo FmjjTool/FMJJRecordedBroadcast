@@ -17,6 +17,7 @@ from toolbox.webui.services.localwiki import LocalWikiService
 from toolbox.webui.services.music_playlist import MusicPlaylistService
 from toolbox.webui.services.music_download import MusicDownloadService
 from toolbox.webui.services.music_tag import MusicTagService
+from toolbox.webui.services.performance import PerformanceService
 from toolbox.webui.services.rename_batch import RenameBatchService
 from toolbox.webui.services.tickets import TicketsService
 from toolbox.webui.services.netdisk import NetdiskService
@@ -54,6 +55,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     music_playlist = MusicPlaylistService()
     music_download = MusicDownloadService()
     music_tag = MusicTagService()
+    performance = PerformanceService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -256,6 +258,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/music-download", lambda req: music_download.overview())
     server.get("/api/music-tag", lambda req: music_tag.overview(
         req.q_int("limit", 120, 1, 300)))
+
+    server.get("/api/performance", lambda req: performance.overview())
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

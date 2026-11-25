@@ -70,6 +70,23 @@
     music_playlist: { title: '歌单', load: renderMusicPlaylist },
     music_download: { title: '下载', load: renderMusicDownload },
     music_tag: { title: '标签', load: renderMusicTag },
+    performance: { title: '性能诊断', load: renderPerformance },
+    image_crop: { title: '图片裁切', load: function (host) {
+      renderDesktopOnly(host, '图片裁切',
+        '图片裁切是自绘画布（选区、旋转、缩放），Web 端不提供编辑，请在桌面端使用。');
+    } },
+    cover_maker: { title: '封面制作', load: function (host) {
+      renderDesktopOnly(host, '封面制作',
+        '封面制作使用桌面端自绘排版与字体资源，Web 端不提供编辑，请在桌面端使用。');
+    } },
+    certificate_maker: { title: '证书制作', load: function (host) {
+      renderDesktopOnly(host, '证书制作',
+        '证书制作使用桌面端自绘模板与图片合成，Web 端不提供编辑，请在桌面端使用。');
+    } },
+    proxy: { title: '网络代理', load: function (host) {
+      renderDesktopOnly(host, '网络代理',
+        '网络代理需要在本机启动代理内核进程，Web 端不提供启停，请在桌面端或系统代理中设置。');
+    } },
     tasks: { title: '定时任务', load: renderTasks },
     system: { title: '全局设置', load: renderSystem }
   };
@@ -386,7 +403,8 @@
       ]],
       ['全局', [
         ['tasks', '任务', '定时任务与安装'],
-        ['system', '设置', '目录、主题与依赖']
+        ['system', '设置', '目录、主题与依赖'],
+        ['performance', '性能诊断', '本机 CPU / 内存 / 磁盘读数']
       ]]
     ].forEach(function (group) {
       host.appendChild(h('div', {
@@ -5686,6 +5704,79 @@
       root.appendChild(filesCard);
     }).catch(function (error) {
       setError(root, error, function () { renderMusicTag(root); });
+    });
+  }
+
+  function renderDesktopOnly(host, title, message) {
+    host.replaceChildren(h('div', { class: 'card' },
+      h('div', { class: 'row-title' }, title),
+      h('div', { class: 'muted small', style: 'margin-top:8px' }, message)));
+  }
+
+  function renderPerformance(root) {
+    setLoading(root, '正在读取本机性能读数…');
+    api('/api/performance').then(function (data) {
+      root.replaceChildren();
+      var cpu = data.cpu || {};
+      var mem = data.memory || {};
+      var proc = data.process || {};
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          ['开始检测', '停止检测', '记录标记', 'Python 快照', '导出报告']
+            .map(function (text) {
+              return h('button', {
+                class: 'btn', type: 'button', disabled: true
+              }, text);
+            }),
+          h('span', { class: 'muted small' },
+            '桌面端采样 / 快照 / 导出与子进程明细仍在桌面端'))));
+      var cards = h('div', {
+        class: 'grid cols-4', style: 'margin-bottom:12px'
+      });
+      cards.appendChild(statCard('CPU',
+        cpu.percent == null ? '-' : cpu.percent + '%',
+        (cpu.cores || '-') + ' 逻辑核'));
+      cards.appendChild(statCard('内存',
+        mem.percent == null ? '-' : Math.round(mem.percent * 10) / 10 + '%',
+        fmtBytes(mem.used || 0) + ' / ' + fmtBytes(mem.total || 0)));
+      cards.appendChild(statCard('当前服务进程',
+        'PID ' + (proc.pid || '-'),
+        'RSS ' + fmtBytes(proc.rss || 0) + ' · 私有 '
+          + fmtBytes(proc.private || 0)));
+      cards.appendChild(statCard('线程 / Python',
+        fmtNumber(proc.threads || 0) + ' 线程',
+        'Python ' + (proc.python || '-')));
+      root.appendChild(cards);
+
+      var disks = data.disks || [];
+      var diskCard = h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '磁盘'));
+      if (!disks.length) {
+        diskCard.appendChild(empty('未读取到磁盘信息。'));
+      } else {
+        var head = h('tr', null,
+          h('th', null, '分卷'), h('th', { class: 'num' }, '已用'),
+          h('th', { class: 'num' }, '可用'), h('th', { class: 'num' }, '总量'),
+          h('th', { class: 'num' }, '占比'));
+        var body = h('tbody');
+        disks.forEach(function (disk) {
+          body.appendChild(h('tr', null,
+            h('td', null, disk.mount),
+            h('td', { class: 'num' }, fmtBytes(disk.used)),
+            h('td', { class: 'num' }, fmtBytes(disk.free)),
+            h('td', { class: 'num' }, fmtBytes(disk.total)),
+            h('td', { class: 'num' },
+              disk.percent == null ? '-' : disk.percent + '%')));
+        });
+        diskCard.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, head), body)));
+      }
+      root.appendChild(diskCard);
+      root.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+        data.note || ''));
+    }).catch(function (error) {
+      setError(root, error, function () { renderPerformance(root); });
     });
   }
 
