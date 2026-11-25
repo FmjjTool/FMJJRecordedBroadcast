@@ -441,7 +441,7 @@ description: "全软件页面功能介绍与使用说明（软件内已移除所
 
 - 启动：全局设置「WebUI 独立服务」卡片可启动 / 停止 / 打开浏览器 / 随软件启动；也可源码运行 `python main.py --webui --webui-port 8765`，打包版运行 `FengMingToolbox.exe --webui --webui-port 8765`。可选 `--webui-host`（默认 `127.0.0.1`）、`--webui-token`（不填则生成并写入 `config/webui_url.txt`），也可用环境变量 `FMJJ_WEBUI_TOKEN`。
 - 手机访问：设置页勾选「允许局域网访问」并重启 WebUI 后监听 `0.0.0.0`，手机与电脑同一 Wi-Fi 可访问；「手机二维码」生成含访问令牌的局域网链接，首次访问需在 Windows 防火墙提示中允许。公网访问使用「WebUI 公网访问（隧道）」卡片：Cloudflare 快速隧道提供临时 HTTPS 地址（需 cloudflared）；Tailscale 用私有网络（需登录，WebUI 需允许局域网，停止只清显示状态、不执行 `tailscale down`）；frp 需选择 frpc 配置文件（公网地址由服务器侧配置，可在配置里填公网地址用于显示）；不要把端口直接映射到公网。
-- 服务完全独立于桌面 Qt：只加载 `toolbox/webui` 的 Qt-free 服务端与原生 Web 前端，不创建窗口、不导出控件树；访问地址在启动输出和 `config/webui_url.txt` 中。深链可直达页面（如 `?token=...#/editor`），登录后会保留 `#/` 路由并移除令牌。
+- 服务完全独立于桌面 Qt：只加载 `toolbox/webui` 的 Qt-free 服务端与原生 Web 前端，不创建窗口、不导出控件树；访问地址在启动输出和 `config/webui_url.txt` 中。深链可直达页面（如 `?token=...#/editor`），登录后会保留 `#/` 路由并移除令牌。Web 前端沿用 `ui-visual-spec` 的字号阶梯、圆角档位与侧栏尺寸（侧栏 228 / 窄屏 200、导航 8×11、按钮 / 导航圆角 8、卡片 12、工具卡 10），颜色取 `theme.py` 语义令牌（只改 WebUI CSS，不动 `theme.py` / QSS）。
 - 架构边界（强制隔离）：WebUI 是 L2 显示层，只做参数校验、DTO/HTTP 适配与界面状态；业务查询、扫描、导出等用例统一放在 `toolbox/` 的独立 L3 Web 中间层（`webui_tools.py`、`asset_query.py`、`live_record_status.py`、`webui_modules.py`），与桌面端用例分文件、分进程隔离。中间层只 import L4 引擎与 L5 设施，禁止 `PySide6`/`gui_qt`；为 WebUI 加能力默认不改桌面行为；WebUI 崩溃不影响桌面实例；验证一律用隔离副本。详见 `layering-contract` 的「WebUI 中间层隔离」。
 - 工作台：首页卡片与桌面端分组 / 命名一致（内容采集 / 资产管理 / 录播工具箱 / 账户追踪 / 直播录制 / 全局），列出已接入 Web 的页面（采集结果、资产库、视频操作、命名投稿、字幕转换、自动整理、音频提取、继续操作、日历浏览、文件迁移、直播录制、腾讯文档、任务、设置）；未接入的桌面页面不出现在 Web。默认入口为工作台，深链仍可直达其它页。
 - 首批页面：
