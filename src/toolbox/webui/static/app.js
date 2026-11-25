@@ -19,6 +19,7 @@
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1,
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true, selected: new Set() },
+    trackers: { platform: '', open: '' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -42,6 +43,8 @@
     calendar: { title: '日历浏览', load: renderCalendar },
     migrate: { title: '文件迁移', load: renderMigrate },
     record: { title: '直播录制', load: renderRecord },
+    music_tracker: { title: '音乐账号', load: renderMusicTracker },
+    media_tracker: { title: '网媒账号', load: renderMediaTracker },
     tcdoc: { title: '腾讯文档', load: renderTcdoc },
     tasks: { title: '定时任务', load: renderTasks },
     system: { title: '全局设置', load: renderSystem }
@@ -338,6 +341,8 @@
         ['calendar', '日历浏览', '按日期文件夹浏览'],
         ['migrate', '文件迁移', '复制 / 剪切到目标目录'],
         ['record', '直播录制', '监控与录制控制（需桌面运行）'],
+        ['music_tracker', '音乐账号', '五平台账号指标与历史'],
+        ['media_tracker', '网媒账号', '网媒账号指标与历史'],
         ['tcdoc', '腾讯文档', '浏览量 / 成员数每日记录']
       ]],
       ['全局', [
@@ -3623,6 +3628,145 @@
       return order.asc ? result : -result;
     });
     return sorted;
+  }
+
+  function renderMusicTracker(root) {
+    renderTrackerPage(root, 'music');
+  }
+
+  function renderMediaTracker(root) {
+    renderTrackerPage(root, 'media');
+  }
+
+  function renderTrackerPage(root, kind) {
+    var label = kind === 'music' ? '音乐账号' : '网媒账号';
+    setLoading(root, '正在读取' + label + '与历史缓存…');
+    api(kind === 'music' ? '/api/trackers/music' : '/api/trackers/media')
+      .then(function (data) {
+        root.replaceChildren();
+        var platformSel = h('select', { class: 'select' });
+        platformSel.appendChild(h('option', { value: '' }, '全部平台'));
+        (data.platforms || []).forEach(function (item) {
+          platformSel.appendChild(h('option', { value: item.key },
+            item.name));
+        });
+        platformSel.value = state.trackers.platform || '';
+        var grid = h('div', { class: 'account-grid' });
+
+        function draw() {
+          grid.replaceChildren();
+          var rows = (data.accounts || []).filter(function (row) {
+            return !state.trackers.platform
+              || row.platform === state.trackers.platform;
+          });
+          if (!rows.length) {
+            grid.appendChild(empty('该平台暂无账号。账号配置在桌面端'
+              + '「Cookie 管理 → 账号配置」维护。'));
+            return;
+          }
+          rows.forEach(function (row) {
+            grid.appendChild(buildAccountCard(row, kind));
+          });
+        }
+
+        platformSel.addEventListener('change', function () {
+          state.trackers.platform = platformSel.value;
+          draw();
+        });
+        var refreshBtn = h('button', {
+          class: 'btn', type: 'button'
+        }, '刷新');
+        refreshBtn.addEventListener('click', function () {
+          renderTrackerPage(root, kind);
+        });
+        var exportBtn = h('button', {
+          class: 'btn', type: 'button', disabled: true,
+          title: '按组导出在桌面端'
+        }, '按组导出');
+        var collectBtn = h('button', {
+          class: 'btn primary', type: 'button', disabled: true,
+          title: '采集需要桌面端登录态与采集引擎'
+        }, '获取全部');
+        root.appendChild(h('div', { class: 'toolbar' },
+          refreshBtn, exportBtn, collectBtn,
+          h('span', { class: 'muted small' }, '平台'), platformSel,
+          h('span', { class: 'spacer' }),
+          h('span', { class: 'muted small' },
+            '共 ' + fmtNumber(data.total) + ' 个账号；采集与导出仍在桌面端。')));
+        root.appendChild(grid);
+        draw();
+      }).catch(function (error) {
+        setError(root, error, function () { renderTrackerPage(root, kind); });
+      });
+  }
+
+  function buildAccountCard(row, kind) {
+    var historyHost = h('div', { style: 'margin-top:8px' });
+    var historyBtn = h('button', {
+      class: 'btn mini', type: 'button'
+    }, '历史');
+    historyBtn.addEventListener('click', function () {
+      loadTrackerHistory(historyHost, kind, row.name);
+    });
+    var metrics = h('div', { class: 'metric-grid' });
+    (row.metrics || []).forEach(function (metric) {
+      metrics.appendChild(h('div', { class: 'metric' },
+        h('div', { class: 'label' }, metric.label),
+        h('div', { class: 'value', title: String(metric.value) },
+          metric.value)));
+    });
+    return h('div', { class: 'card account-card' },
+      h('div', { class: 'account-head' },
+        h('div', { style: 'min-width:0' },
+          h('div', { class: 'row-title' }, row.name),
+          h('div', { class: 'muted small' },
+            row.platform_name + (row.group ? ' · ' + row.group : ''))),
+        h('div', { class: 'muted small', style: 'white-space:nowrap' },
+          row.last_time ? '最近 ' + row.last_time
+            : (row.records ? row.records + ' 条记录' : '暂无采集'))),
+      metrics,
+      h('div', { class: 'col-tools' }, historyBtn),
+      historyHost);
+  }
+
+  function loadTrackerHistory(host, kind, name) {
+    if (host.dataset.open === '1') {
+      host.replaceChildren();
+      host.dataset.open = '';
+      return;
+    }
+    host.dataset.open = '1';
+    setLoading(host, '正在读取历史…');
+    api('/api/trackers/' + kind + '/history?name='
+      + encodeURIComponent(name) + '&limit=50')
+      .then(function (result) {
+        if (!(result.rows || []).length) {
+          host.replaceChildren(empty(
+            '暂无历史缓存。桌面端点「采集」后生成。'));
+          return;
+        }
+        var head = h('tr');
+        result.columns.forEach(function (column) {
+          head.appendChild(h('th', null, column.label));
+        });
+        var body = h('tbody');
+        result.rows.forEach(function (cells) {
+          var tr = h('tr');
+          result.columns.forEach(function (column) {
+            tr.appendChild(h('td', { class: 'ellipsis' },
+              cells[column.key] == null ? '-' : cells[column.key]));
+          });
+          body.appendChild(tr);
+        });
+        host.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, head), body)));
+      }).catch(function (error) {
+        setError(host, error, function () {
+          host.dataset.open = '';
+          loadTrackerHistory(host, kind, name);
+        });
+      });
   }
 
   function renderRecord(host) {

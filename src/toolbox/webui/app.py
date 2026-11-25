@@ -12,6 +12,7 @@ from toolbox.webui.services.offline import OfflineService
 from toolbox.webui.services.record import RecordService
 from toolbox.webui.services.tcdoc import TCDocService
 from toolbox.webui.services.tools import ToolService
+from toolbox.webui.services.trackers import TrackerService
 from version import APP_VERSION
 
 
@@ -24,6 +25,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     offline = OfflineService(jobs)
     tool_service = ToolService(jobs)
     tcdoc = TCDocService(jobs)
+    trackers = TrackerService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -135,6 +137,13 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/system/theme", save_system_theme)
 
     server.get("/api/system/deps", lambda req: modules.dependencies())
+
+    server.get("/api/trackers/music", lambda req: trackers.music())
+    server.get("/api/trackers/media", lambda req: trackers.media())
+    server.get("/api/trackers/music/history", lambda req: trackers.music_history(
+        req.q("name"), req.q_int("limit", 50, 1, 200)))
+    server.get("/api/trackers/media/history", lambda req: trackers.media_history(
+        req.q("name"), req.q_int("limit", 50, 1, 200)))
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())
