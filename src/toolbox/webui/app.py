@@ -6,6 +6,7 @@ from toolbox.webui.errors import NotFound
 from toolbox.webui.jobs import JobManager
 from toolbox.webui.server import BytesResponse, FileResponse, WebUIServer
 from toolbox.webui.services.assets import AssetService
+from toolbox.webui.services.artifacts import ArtifactService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
@@ -34,6 +35,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     douyin_index = DouyinIndexService()
     chaohua = WeiboChaohuaService()
     info_accounts = InfoAccountsService()
+    artifacts = ArtifactService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -177,6 +179,25 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q("topic_id")))
 
     server.get("/api/info-accounts", lambda req: info_accounts.overview())
+
+    server.get("/api/tools/artifacts", lambda req: artifacts.list(
+        req.q("kind"), req.q_int("group_limit", 200, 1, 500),
+        req.q_int("file_limit", 200, 1, 1000)))
+
+    def artifact_preview(req):
+        path = artifacts.file(req.q("kind"), req.q("rel"), preview=True)
+        suffix = path.suffix.lower()
+        mime = {".png": "image/png", ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg", ".webp": "image/webp",
+                ".gif": "image/gif", ".bmp": "image/bmp"}.get(
+            suffix, "application/octet-stream")
+        return BytesResponse(path.read_bytes(), mime)
+    server.get("/api/tools/artifacts/preview", artifact_preview)
+
+    def artifact_download(req):
+        path = artifacts.file(req.q("kind"), req.q("rel"))
+        return FileResponse(path, path.name, "application/octet-stream")
+    server.get("/api/tools/artifacts/file", artifact_download)
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

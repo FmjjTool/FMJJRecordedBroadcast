@@ -231,6 +231,24 @@ code {
   color: var(--muted);
 }
 .fg-avatar-fallback { border: 1px solid var(--border); }
+.artifact-list { display: flex; flex-direction: column; gap: 4px; }
+.artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.artifact-row:last-child { border-bottom: none; }
+.artifact-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.artifact-row .btn.mini { flex: none; }
 .delta-up { color: var(--ok); }
 .delta-down { color: var(--danger); }
 

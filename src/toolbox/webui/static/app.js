@@ -24,6 +24,7 @@
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
     info_accounts: { platform: '' },
+    artifacts: { tab: 'comments' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -37,6 +38,7 @@
   var routes = {
     home: { title: '工作台', load: renderHome },
     info_accounts: { title: '采集任务', load: renderInfoAccounts },
+    info_tools: { title: '采集工具', load: renderInfoTools },
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
     organize: { title: '自动整理', load: renderOrganize },
@@ -338,6 +340,7 @@
       ['常用工具', [
         ['info_accounts', '采集任务', '账号清单与批量解析'],
         ['collected', '采集结果', '结果库、下载与导出'],
+        ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -494,6 +497,118 @@
     }).catch(function (error) {
       setError(root, error, function () { renderInfoAccounts(root); });
     });
+  }
+
+  function renderInfoTools(root) {
+    root.replaceChildren();
+    var TABS = [['comments', '视频评论区'], ['bili', 'B站资源'],
+      ['wechat', '公众号解析'], ['emoji', '抖音表情包']];
+    var tabs = h('div', { class: 'tabs' });
+    var host = h('div');
+    TABS.forEach(function (item) {
+      tabs.appendChild(h('button', {
+        class: 'tab' + (state.artifacts.tab === item[0] ? ' active' : ''),
+        type: 'button',
+        onclick: function () {
+          state.artifacts.tab = item[0];
+          tabs.querySelectorAll('.tab').forEach(function (button, index) {
+            button.classList.toggle('active', TABS[index][0] === item[0]);
+          });
+          load();
+        }
+      }, item[1]));
+    });
+    root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+      h('div', { class: 'muted small' },
+        '浏览桌面端导出的本地产物：评论区长图与原始数据、B站资源、公众号文章、抖音表情包；'
+        + '抓取与导出仍在桌面端。')));
+    root.appendChild(tabs);
+    root.appendChild(host);
+
+    function preview(kind, rel) {
+      var overlay = h('div', { class: 'preview-overlay' });
+      overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) overlay.remove();
+      });
+      overlay.appendChild(h('div', { class: 'preview-box' },
+        h('div', { class: 'preview-caption' },
+          h('span', null, rel),
+          h('button', {
+            class: 'btn mini', type: 'button',
+            onclick: function () { overlay.remove(); }
+          }, '关闭')),
+        h('div', { class: 'preview-body' },
+          h('img', {
+            alt: '',
+            src: '/api/tools/artifacts/preview?kind='
+              + encodeURIComponent(kind) + '&rel=' + encodeURIComponent(rel)
+              + '&token=' + encodeURIComponent(token)
+          }))));
+      document.body.appendChild(overlay);
+    }
+
+    function fileRow(kind, file) {
+      var actions = [];
+      if (file.is_image) {
+        actions.push(h('button', {
+          class: 'btn mini', type: 'button',
+          onclick: function () { preview(kind, file.rel); }
+        }, '预览'));
+      }
+      actions.push(h('a', {
+        class: 'btn mini',
+        href: '/api/tools/artifacts/file?kind=' + encodeURIComponent(kind)
+          + '&rel=' + encodeURIComponent(file.rel)
+          + '&token=' + encodeURIComponent(token)
+      }, '下载'));
+      return h('div', { class: 'artifact-row' },
+        h('span', { class: 'artifact-name', title: file.rel }, file.name),
+        h('span', { class: 'muted small' }, fmtBytes(file.size)),
+        actions);
+    }
+
+    function load() {
+      setLoading(host, '正在读取本地产物…');
+      api('/api/tools/artifacts?kind=' + encodeURIComponent(state.artifacts.tab))
+        .then(function (data) {
+          host.replaceChildren();
+          var groups = data.groups || [];
+          var images = groups.reduce(function (sum, group) {
+            return sum + (group.images || 0);
+          }, 0);
+          host.appendChild(h('div', {
+            class: 'muted small', style: 'margin-bottom:8px'
+          }, '共 ' + groups.length + ' 组 · ' + fmtNumber(data.total)
+            + ' 个文件 · 图片 ' + fmtNumber(images)
+            + ' · 只读，抓取 / 导出仍在桌面端'));
+          if (!groups.length) {
+            host.appendChild(empty(data.note || '暂无产物。'));
+            return;
+          }
+          groups.forEach(function (group) {
+            var card = h('div', { class: 'card', style: 'margin-bottom:12px' });
+            card.appendChild(h('div', { class: 'toolbar' },
+              h('span', { class: 'row-title' }, group.name),
+              h('span', { class: 'muted small' },
+                fmtNumber(group.total) + ' 个文件 · 图片 '
+                + fmtNumber(group.images))));
+            var list = h('div', { class: 'artifact-list' });
+            (group.files || []).slice(0, 30).forEach(function (file) {
+              list.appendChild(fileRow(data.kind, file));
+            });
+            card.appendChild(list);
+            if (group.total > 30) {
+              card.appendChild(h('div', {
+                class: 'muted small', style: 'margin-top:6px'
+              }, '仅显示前 30 个文件，共 ' + fmtNumber(group.total) + ' 个。'));
+            }
+            host.appendChild(card);
+          });
+        }).catch(function (error) {
+          setError(host, error, load);
+        });
+    }
+    load();
   }
 
   function renderCollected(root) {
