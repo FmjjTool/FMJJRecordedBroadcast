@@ -1562,7 +1562,8 @@
       var tabs = h('div', { class: 'tabs' });
       var tabHost = h('div');
       [['convert', '转换'], ['compress', '压缩'], ['merge', '合并'],
-       ['cut', '切割'], ['snapshot', '截图']].forEach(function (pair) {
+       ['cut', '切割'], ['snapshot', '截图'], ['tracks', '轨道'],
+       ['metadata', '元数据']].forEach(function (pair) {
         tabs.appendChild(h('button', {
           class: 'tab' + (state.video.tab === pair[0] ? ' active' : ''),
           type: 'button', dataset: { tab: pair[0] },
@@ -1816,23 +1817,45 @@
           placeholder: '每行一个片段：开始-结束，例如\n00:10-01:20\n01:45-02:30'
         });
         var btn = h('button', { class: 'btn primary', type: 'button' }, '切割选中视频');
+        var chapterBtn = h('button', { class: 'btn', type: 'button' }, '写入章节');
         tabHost.appendChild(h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '导出'), exportSel,
           h('span', { class: 'muted small' }, '方式'), modeSel,
-          h('span', { style: 'flex:1' }), btn));
+          h('span', { style: 'flex:1' }), chapterBtn, btn));
         tabHost.appendChild(segments);
         tabHost.appendChild(nameRow);
         tabHost.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
-          '先在表格勾选 1 个视频；时间可用秒（90）或时间码（01:30 / 00:01:30）。输出到工作目录根，不覆盖已有文件。'));
+          '先在表格勾选 1 个视频；时间可用秒（90）或时间码（01:30 / 00:01:30）。输出到工作目录根，不覆盖已有文件。'
+          + '「写入章节」会把上方片段写成章节并封装为新视频（不转码）。'));
         exportSel.addEventListener('change', function () {
           nameRow.style.display = exportSel.value === 'each' ? 'none' : '';
         });
         var sync = function () {
-          btn.disabled = running || selected.size !== 1;
+          var disabled = running || selected.size !== 1;
+          btn.disabled = disabled;
+          chapterBtn.disabled = disabled;
           btn.textContent = running ? '处理中…' : '切割选中视频';
+          chapterBtn.textContent = running ? '处理中…' : '写入章节';
         };
         actionRefreshers.push(sync);
         sync();
+        chapterBtn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length !== 1) {
+            toast('请先在表格勾选 1 个视频', 'warning');
+            return;
+          }
+          var parsed;
+          try {
+            parsed = parseSegments(segments.value);
+          } catch (error) {
+            toast(error.message, 'warning');
+            return;
+          }
+          runOp('/api/tools/video/chapters/write', {
+            path: paths[0], segments: parsed
+          }, '写入章节');
+        });
         btn.addEventListener('click', function () {
           var paths = selectedPaths();
           if (paths.length !== 1) {
@@ -1915,6 +1938,263 @@
         });
       }
 
+      function renderTracksPanel() {
+        var infoHost = h('div');
+        var tableHost = h('div');
+        var trackBoxes = [];
+        var reloadBtn = h('button', { class: 'btn', type: 'button' }, '刷新轨道');
+        var extractBtn = h('button', { class: 'btn primary', type: 'button' }, '提取全部轨道');
+        var removeBtn = h('button', { class: 'btn danger', type: 'button' }, '删除选中轨道');
+        var audioSel = h('select', { class: 'select grow' });
+        var subSel = h('select', { class: 'select grow' });
+        var audioAppendBtn = h('button', { class: 'btn', type: 'button' }, '追加音轨');
+        var audioReplaceBtn = h('button', { class: 'btn', type: 'button' }, '替换音轨');
+        var subtitleBtn = h('button', { class: 'btn', type: 'button' }, '添加字幕');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '先在表格勾选 1 个视频；提取与删除都只生成新文件。'),
+          h('span', { style: 'flex:1' }), reloadBtn, extractBtn));
+        tabHost.appendChild(infoHost);
+        tabHost.appendChild(tableHost);
+        tabHost.appendChild(h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { style: 'flex:1' }), removeBtn));
+        tabHost.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '外部音轨 / 字幕'),
+          h('div', { class: 'toolbar' },
+            h('span', { class: 'muted small' }, '音轨文件'), audioSel,
+            audioAppendBtn, audioReplaceBtn),
+          h('div', { class: 'toolbar' },
+            h('span', { class: 'muted small' }, '字幕文件'), subSel, subtitleBtn),
+          h('div', { class: 'muted small' },
+            '只列出工作目录内的文件；输出到工作目录根，源视频不变；'
+            + '外部音轨编码不适合 mp4 时会自动改用 mkv。')));
+
+        function currentPath() {
+          var paths = selectedPaths();
+          return paths.length === 1 ? paths[0] : '';
+        }
+
+        function sync() {
+          var one = !!currentPath();
+          reloadBtn.disabled = running || !one;
+          extractBtn.disabled = running || !one;
+          removeBtn.disabled = running || !one
+            || !trackBoxes.some(function (entry) { return entry.box.checked; });
+          audioAppendBtn.disabled = running || !one || !audioSel.value;
+          audioReplaceBtn.disabled = running || !one || !audioSel.value;
+          subtitleBtn.disabled = running || !one || !subSel.value;
+          extractBtn.textContent = running ? '处理中…' : '提取全部轨道';
+          removeBtn.textContent = running ? '处理中…' : '删除选中轨道';
+        }
+        actionRefreshers.push(sync);
+
+        function fillSelect(select, items, emptyText) {
+          select.replaceChildren();
+          if (!items.length) {
+            select.appendChild(h('option', { value: '' }, emptyText));
+            select.disabled = true;
+            return;
+          }
+          select.disabled = false;
+          items.forEach(function (item) {
+            select.appendChild(h('option', {
+              value: item.path, title: item.name
+            }, item.name));
+          });
+        }
+
+        function loadExtras() {
+          Promise.all([
+            api('/api/tools/video/extras?kind=audio'),
+            api('/api/tools/video/extras?kind=subtitle')
+          ]).then(function (results) {
+            fillSelect(audioSel, results[0].items || [],
+              '（工作目录内无音频文件）');
+            fillSelect(subSel, results[1].items || [],
+              '（工作目录内无字幕文件）');
+            sync();
+          }).catch(function () { sync(); });
+        }
+
+        function loadTracks() {
+          var path = currentPath();
+          trackBoxes = [];
+          if (!path) {
+            infoHost.replaceChildren(
+              h('div', { class: 'muted small' }, '先在表格勾选 1 个视频。'));
+            tableHost.replaceChildren();
+            sync();
+            return;
+          }
+          setLoading(infoHost, '正在读取轨道…');
+          tableHost.replaceChildren();
+          api('/api/tools/video/tracks?path=' + encodeURIComponent(path))
+            .then(function (data) {
+              infoHost.replaceChildren(
+                h('div', { class: 'muted small' }, data.note || ''));
+              var tracks = data.tracks || [];
+              if (!tracks.length) {
+                tableHost.replaceChildren(
+                  empty('该视频没有可提取的音轨或字幕轨。'));
+                sync();
+                return;
+              }
+              var head = h('tr', null,
+                h('th', { style: 'width:36px' }, ''),
+                h('th', null, '序号'), h('th', null, '类型'),
+                h('th', null, '编码'), h('th', null, '语言'),
+                h('th', null, '标题'));
+              var body = h('tbody');
+              tracks.forEach(function (track) {
+                var box = h('input', { type: 'checkbox' });
+                box.addEventListener('change', sync);
+                trackBoxes.push({ box: box, index: track.index });
+                body.appendChild(h('tr', null,
+                  h('td', null, box),
+                  h('td', { class: 'num' }, track.index),
+                  h('td', null, track.kind === 'audio' ? '音轨' : '字幕'),
+                  h('td', null, track.codec || '-'),
+                  h('td', null, track.language || '-'),
+                  h('td', { class: 'ellipsis' }, track.title || '-')));
+              });
+              tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' },
+                  h('thead', null, head), body)));
+              sync();
+            }).catch(function (error) {
+              setError(infoHost, error, loadTracks);
+            });
+        }
+
+        reloadBtn.addEventListener('click', function () {
+          loadExtras();
+          loadTracks();
+        });
+        extractBtn.addEventListener('click', function () {
+          var path = currentPath();
+          if (!path) return;
+          runOp('/api/tools/video/tracks/extract', { path: path }, '提取轨道');
+        });
+        removeBtn.addEventListener('click', function () {
+          var path = currentPath();
+          if (!path) return;
+          var indices = trackBoxes.filter(function (entry) {
+            return entry.box.checked;
+          }).map(function (entry) { return entry.index; });
+          if (!indices.length) {
+            toast('请先勾选要删除的轨道', 'warning');
+            return;
+          }
+          runOp('/api/tools/video/tracks/remove',
+            { path: path, indices: indices }, '删除轨道');
+        });
+        audioAppendBtn.addEventListener('click', function () {
+          var path = currentPath();
+          if (!path || !audioSel.value) return;
+          runOp('/api/tools/video/audio/add', {
+            path: path, audio: audioSel.value, replace: false
+          }, '追加音轨');
+        });
+        audioReplaceBtn.addEventListener('click', function () {
+          var path = currentPath();
+          if (!path || !audioSel.value) return;
+          runOp('/api/tools/video/audio/add', {
+            path: path, audio: audioSel.value, replace: true
+          }, '替换音轨');
+        });
+        subtitleBtn.addEventListener('click', function () {
+          var path = currentPath();
+          if (!path || !subSel.value) return;
+          runOp('/api/tools/video/subtitle/add', {
+            path: path, subtitle: subSel.value
+          }, '添加字幕');
+        });
+
+        loadTracks();
+        loadExtras();
+        sync();
+      }
+
+      function renderMetadataPanel() {
+        var infoHost = h('div');
+        var inputs = {};
+        var rotationSel = h('select', { class: 'select' },
+          h('option', { value: '0' }, '0°'),
+          h('option', { value: '90' }, '90°'),
+          h('option', { value: '180' }, '180°'),
+          h('option', { value: '270' }, '270°'));
+        var reloadBtn = h('button', { class: 'btn', type: 'button' }, '重新读取');
+        var writeBtn = h('button', { class: 'btn primary', type: 'button' }, '写入元数据');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '先在表格勾选 1 个视频；写入生成 <文件名>_meta 新文件，源视频保留。'),
+          h('span', { style: 'flex:1' }), reloadBtn, writeBtn));
+        var form = h('div', { style: 'display:grid; gap:10px; max-width:560px' });
+        [['title', '标题'], ['artist', '作者'], ['comment', '备注'],
+         ['date', '日期']].forEach(function (pair) {
+          inputs[pair[0]] = h('input', { class: 'input', style: 'width:100%' });
+          form.appendChild(h('div', null,
+            h('div', { class: 'muted small', style: 'margin-bottom:4px' }, pair[1]),
+            inputs[pair[0]]));
+        });
+        form.appendChild(h('div', null,
+          h('div', { class: 'muted small', style: 'margin-bottom:4px' }, '旋转'),
+          rotationSel));
+        tabHost.appendChild(infoHost);
+        tabHost.appendChild(form);
+
+        function currentPath() {
+          var paths = selectedPaths();
+          return paths.length === 1 ? paths[0] : '';
+        }
+
+        function sync() {
+          var one = !!currentPath();
+          reloadBtn.disabled = running || !one;
+          writeBtn.disabled = running || !one;
+          writeBtn.textContent = running ? '处理中…' : '写入元数据';
+        }
+        actionRefreshers.push(sync);
+
+        function loadMeta() {
+          var path = currentPath();
+          if (!path) {
+            infoHost.replaceChildren(
+              h('div', { class: 'muted small' }, '先在表格勾选 1 个视频。'));
+            sync();
+            return;
+          }
+          setLoading(infoHost, '正在读取元数据…');
+          api('/api/tools/video/metadata?path=' + encodeURIComponent(path))
+            .then(function (data) {
+              var tags = data.tags || {};
+              Object.keys(inputs).forEach(function (key) {
+                inputs[key].value = tags[key] || '';
+              });
+              rotationSel.value = String(data.rotation || 0);
+              infoHost.replaceChildren(
+                h('div', { class: 'muted small' }, data.note || ''));
+              sync();
+            }).catch(function (error) {
+              setError(infoHost, error, loadMeta);
+            });
+        }
+
+        reloadBtn.addEventListener('click', loadMeta);
+        writeBtn.addEventListener('click', function () {
+          var path = currentPath();
+          if (!path) return;
+          var tags = {};
+          Object.keys(inputs).forEach(function (key) {
+            tags[key] = inputs[key].value.trim();
+          });
+          runOp('/api/tools/video/metadata/write', {
+            path: path, tags: tags, rotation: Number(rotationSel.value)
+          }, '写入元数据');
+        });
+
+        loadMeta();
+        sync();
+      }
+
       function renderTab() {
         tabHost.replaceChildren();
         actionRefreshers = [];
@@ -1922,6 +2202,8 @@
         else if (state.video.tab === 'merge') renderMergePanel();
         else if (state.video.tab === 'cut') renderCutPanel();
         else if (state.video.tab === 'snapshot') renderSnapshotPanel();
+        else if (state.video.tab === 'tracks') renderTracksPanel();
+        else if (state.video.tab === 'metadata') renderMetadataPanel();
         else renderConvertPanel();
         updateButtons();
       }

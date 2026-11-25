@@ -329,6 +329,118 @@ class ToolService:
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def video_tracks(self, rel_path: str) -> dict:
+        return webui_tools.video_tracks(rel_path)
+
+    def video_metadata(self, rel_path: str) -> dict:
+        return webui_tools.video_metadata(rel_path)
+
+    def video_extras(self, kind: str, limit: int = 200) -> dict:
+        return webui_tools.video_extra_sources(kind, limit)
+
+    def _video_progress(self, job):
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"视频操作：{name}", fraction)
+        return progress
+
+    @staticmethod
+    def _video_cancelled(job):
+        return lambda: bool(job.cancel_requested)
+
+    @staticmethod
+    def _run_video(job, fn):
+        try:
+            return fn()
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
+    def _submit_video(self, kind: str, action) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        job = self._jobs.submit(
+            kind, lambda task: self._run_video(task, lambda: action(task)))
+        return {"job": job.id}
+
+    def start_video_tracks_extract(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择视频")
+        return self._submit_video(
+            "video_tracks_extract",
+            lambda task: webui_tools.extract_video_tracks(
+                rel, on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
+    def start_video_tracks_remove(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择视频")
+        indices = payload.get("indices") or []
+        if not isinstance(indices, list) or not indices:
+            raise ValueError("请选择要删除的轨道")
+        return self._submit_video(
+            "video_tracks_remove",
+            lambda task: webui_tools.remove_video_tracks(
+                rel, indices, on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
+    def start_video_audio_add(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        audio = str(payload.get("audio") or "").strip()
+        if not rel or not audio:
+            raise ValueError("请选择视频与外部音轨")
+        replace = bool(payload.get("replace"))
+        return self._submit_video(
+            "video_audio_add",
+            lambda task: webui_tools.add_video_audio(
+                rel, audio, replace=replace,
+                on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
+    def start_video_subtitle_add(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        subtitle = str(payload.get("subtitle") or "").strip()
+        if not rel or not subtitle:
+            raise ValueError("请选择视频与字幕文件")
+        return self._submit_video(
+            "video_subtitle_add",
+            lambda task: webui_tools.add_video_subtitle(
+                rel, subtitle, on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
+    def start_video_metadata_write(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择视频")
+        tags = payload.get("tags") or {}
+        if not isinstance(tags, dict):
+            raise ValueError("元数据格式不正确")
+        try:
+            rotation = int(payload.get("rotation") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("旋转角度不正确") from exc
+        if rotation not in (0, 90, 180, 270):
+            raise ValueError("旋转角度只支持 0 / 90 / 180 / 270")
+        return self._submit_video(
+            "video_metadata_write",
+            lambda task: webui_tools.write_video_metadata(
+                rel, tags, rotation, on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
+    def start_video_chapters_write(self, payload: dict) -> dict:
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择视频")
+        segments = payload.get("segments") or []
+        if not isinstance(segments, list) or not segments:
+            raise ValueError("请至少填写一个片段")
+        return self._submit_video(
+            "video_chapters_write",
+            lambda task: webui_tools.write_video_chapters(
+                rel, segments, on_progress=self._video_progress(task),
+                is_cancelled=self._video_cancelled(task)))
+
     def calendar_days(self) -> dict:
         return webui_tools.calendar_days()
 

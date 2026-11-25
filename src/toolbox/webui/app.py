@@ -167,6 +167,37 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tool_service.start_video_snapshot(dict(req.json or {}))
     server.post("/api/tools/video/snapshot", start_video_snapshot)
 
+    server.get("/api/tools/video/tracks",
+               lambda req: tool_service.video_tracks(req.q("path")))
+    server.get("/api/tools/video/metadata",
+               lambda req: tool_service.video_metadata(req.q("path")))
+    server.get("/api/tools/video/extras", lambda req: tool_service.video_extras(
+        req.q("kind"), req.q_int("limit", 200, 1, 500)))
+
+    def start_video_tracks_extract(req):
+        return tool_service.start_video_tracks_extract(dict(req.json or {}))
+    server.post("/api/tools/video/tracks/extract", start_video_tracks_extract)
+
+    def start_video_tracks_remove(req):
+        return tool_service.start_video_tracks_remove(dict(req.json or {}))
+    server.post("/api/tools/video/tracks/remove", start_video_tracks_remove)
+
+    def start_video_audio_add(req):
+        return tool_service.start_video_audio_add(dict(req.json or {}))
+    server.post("/api/tools/video/audio/add", start_video_audio_add)
+
+    def start_video_subtitle_add(req):
+        return tool_service.start_video_subtitle_add(dict(req.json or {}))
+    server.post("/api/tools/video/subtitle/add", start_video_subtitle_add)
+
+    def start_video_metadata_write(req):
+        return tool_service.start_video_metadata_write(dict(req.json or {}))
+    server.post("/api/tools/video/metadata/write", start_video_metadata_write)
+
+    def start_video_chapters_write(req):
+        return tool_service.start_video_chapters_write(dict(req.json or {}))
+    server.post("/api/tools/video/chapters/write", start_video_chapters_write)
+
     server.get("/api/tools/audio/overview",
                lambda req: tool_service.audio_overview())
     server.get("/api/tools/audio/sources", lambda req: tool_service.audio_sources(

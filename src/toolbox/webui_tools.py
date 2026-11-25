@@ -690,6 +690,274 @@ def _remove_quietly(path: Path) -> None:
         pass
 
 
+# ==================== 视频操作：轨道 / 音轨字幕 / 元数据 / 章节 ====================
+
+_AUDIO_EXTS = {".m4a", ".mp3", ".aac", ".flac", ".wav", ".opus", ".ogg", ".ac3"}
+_SUBTITLE_VIDEO_EXTS = {".srt", ".ass", ".ssa", ".vtt"}
+_META_KEYS = ("title", "artist", "comment", "date")
+_ROTATIONS = (0, 90, 180, 270)
+
+
+def video_tracks(rel_path: str) -> dict:
+    """列出视频内可提取的音轨 / 字幕轨（只读）。"""
+    from toolbox.edit_engine import probe_tracks
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    tracks = []
+    for stream in probe_tracks(path):
+        tags = stream.get("tags") or {}
+        tracks.append({
+            "index": int(stream.get("index") or -1),
+            "kind": "audio" if stream.get("codec_type") == "audio" else "subtitle",
+            "codec": str(stream.get("codec_name") or ""),
+            "language": str(tags.get("language") or ""),
+            "title": str(tags.get("title") or ""),
+        })
+    return {"path": _rel(root, path), "tracks": tracks,
+            "note": "提取或删除轨道都只生成新文件，不修改源视频。"}
+
+
+def extract_video_tracks(rel_path: str, on_progress=None,
+                         is_cancelled=None) -> dict:
+    from toolbox.edit_engine import EditError, extract_all_tracks
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    try:
+        outputs = extract_all_tracks(
+            path, root,
+            progress=lambda percent, message: _report(
+                on_progress, max(0, min(100, int(percent))) / 100.0, 1,
+                message or "提取轨道"))
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return {"summary": f"已提取 {len(outputs)} 条轨道",
+            "outputs": [item.name for item in outputs], "ok": True}
+
+
+def remove_video_tracks(rel_path: str, indices, on_progress=None,
+                        is_cancelled=None) -> dict:
+    from toolbox.concat_engine import probe_media
+    from toolbox.edit_engine import EditError, probe_tracks, remove_tracks
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    chosen = []
+    for value in indices or []:
+        try:
+            chosen.append(int(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("轨道编号不正确") from exc
+    chosen = sorted(set(chosen))
+    if not chosen:
+        raise ValueError("请先选择要删除的轨道")
+    allowed = {int(item.get("index") or -1) for item in probe_tracks(path)}
+    if any(index not in allowed for index in chosen):
+        raise ValueError("所选轨道不存在，请刷新轨道列表")
+    total = len(probe_media(path).streams)
+    if total - len(chosen) <= 0:
+        raise ValueError("不能删除全部轨道")
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    out = _video_output(path, "删轨")
+    _report(on_progress, 0.3, 1, "正在删除轨道")
+    try:
+        result = remove_tracks(path, chosen, out)
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _report(on_progress, 1, 1, "完成")
+    return {"summary": f"已删除 {len(chosen)} 条轨道", "output": result.name,
+            "outputs": [result.name], "ok": True}
+
+
+def add_video_audio(rel_path: str, audio_rel: str, replace: bool = False,
+                    on_progress=None, is_cancelled=None) -> dict:
+    from toolbox.edit_engine import EditError, add_external_audio
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    audio = _resolve_extra(root, audio_rel, _AUDIO_EXTS, "音频")
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    tag = "替换音轨" if replace else "追加音轨"
+    out = _video_output(path, tag)
+    _report(on_progress, 0.3, 1, tag)
+    try:
+        result = add_external_audio(path, audio, out, replace=bool(replace))
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _report(on_progress, 1, 1, "完成")
+    return {"summary": f"{tag}完成：{result.name}",
+            "output": result.name, "outputs": [result.name], "ok": True}
+
+
+def add_video_subtitle(rel_path: str, subtitle_rel: str, on_progress=None,
+                       is_cancelled=None) -> dict:
+    from toolbox.edit_engine import EditError, add_external_subtitle
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    subtitle = _resolve_extra(root, subtitle_rel, _SUBTITLE_VIDEO_EXTS, "字幕")
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    out = _video_output(path, "加字幕")
+    _report(on_progress, 0.3, 1, "正在添加字幕")
+    try:
+        result = add_external_subtitle(path, subtitle, out)
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _report(on_progress, 1, 1, "完成")
+    return {"summary": f"字幕已添加：{result.name}",
+            "output": result.name, "outputs": [result.name], "ok": True}
+
+
+def video_metadata(rel_path: str) -> dict:
+    from toolbox.edit_engine import read_metadata
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    meta = read_metadata(path)
+    return {"path": _rel(root, path),
+            "tags": {key: str(meta.get(key) or "") for key in _META_KEYS},
+            "rotation": int(meta.get("rotation") or 0),
+            "rotations": list(_ROTATIONS),
+            "note": "写入元数据会重新封装为新文件（不转码），源视频保留。"}
+
+
+def write_video_metadata(rel_path: str, tags, rotation=0, on_progress=None,
+                         is_cancelled=None) -> dict:
+    from toolbox.edit_engine import EditError, write_metadata
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    raw = tags if isinstance(tags, dict) else {}
+    values = {}
+    for key in _META_KEYS:
+        text = str(raw.get(key) or "").strip()
+        if len(text) > 500:
+            raise ValueError("元数据字段过长（每个最多 500 字）")
+        values[key] = text
+    try:
+        rotation_value = int(rotation or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("旋转角度不正确") from exc
+    if rotation_value not in _ROTATIONS:
+        raise ValueError("旋转角度只支持 0 / 90 / 180 / 270")
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    out = _video_output(path, "meta")
+    _report(on_progress, 0.3, 1, "正在写入元数据")
+    try:
+        result = write_metadata(path, out, values, rotation_value)
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _report(on_progress, 1, 1, "完成")
+    return {"summary": f"元数据已写入：{result.name}",
+            "output": result.name, "outputs": [result.name], "ok": True}
+
+
+def write_video_chapters(rel_path: str, segments, on_progress=None,
+                         is_cancelled=None) -> dict:
+    from toolbox.edit_engine import EditError, write_chapters
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    rows = _segment_rows(segments)
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    out = _video_output(path, "章节")
+    _report(on_progress, 0.3, 1, "正在写入章节")
+    try:
+        result = write_chapters(path, rows, out)
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _report(on_progress, 1, 1, "完成")
+    return {"summary": f"章节已写入：{result.name}",
+            "output": result.name, "outputs": [result.name], "ok": True}
+
+
+def video_extra_sources(kind: str, limit: int = 200) -> dict:
+    """列出工作目录内可用的外部音轨 / 字幕文件。"""
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    kind = str(kind or "")
+    if kind == "audio":
+        exts, label = _AUDIO_EXTS, "音频"
+    elif kind == "subtitle":
+        exts, label = _SUBTITLE_VIDEO_EXTS, "字幕"
+    else:
+        raise ValueError("未知外部文件类型")
+    limit = max(1, min(500, int(limit)))
+    files = _scan_by_exts(root, exts)
+    return {"kind": kind, "label": label,
+            "items": _file_items(root, files[:limit]),
+            "total": len(files),
+            "truncated": len(files) > limit,
+            "note": f"只列出工作目录内的{label}文件。"}
+
+
+def _segment_rows(segments) -> list[tuple[int, int]]:
+    rows = []
+    for item in segments or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError("片段格式不正确")
+        try:
+            start, end = int(item[0]), int(item[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("片段时间必须是毫秒数") from exc
+        if start < 0 or end <= start:
+            raise ValueError("片段结束时间必须大于开始时间")
+        rows.append((start, end))
+    if not rows:
+        raise ValueError("请至少填写一个片段")
+    if len(rows) > _MAX_CUT_SEGMENTS:
+        raise ValueError(f"单次最多处理 {_MAX_CUT_SEGMENTS} 个片段")
+    return rows
+
+
+def _video_output(src: Path, tag: str) -> Path:
+    from toolbox.concat_engine import unique_output_path
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    ext = src.suffix.lower() if src.suffix.lower() in (".mp4", ".mkv", ".mov") else ".mkv"
+    return unique_output_path(root / f"{src.stem}_{tag}{ext}")
+
+
+def _resolve_extra(root: Path, rel: str, exts: set[str], label: str) -> Path:
+    path = (root / str(rel or "").strip()).resolve()
+    try:
+        path.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{label}文件不在工作目录内") from exc
+    if not path.is_file():
+        raise ValueError(f"{label}文件不存在或已被移动")
+    if path.suffix.lower() not in exts:
+        raise ValueError(f"不是支持的{label}格式")
+    return path
+
+
 def organize_overview() -> dict:
     from toolbox.organize_engine import scan_files
 
