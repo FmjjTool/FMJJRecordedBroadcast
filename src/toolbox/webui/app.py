@@ -22,6 +22,7 @@ from toolbox.webui.services.performance import PerformanceService
 from toolbox.webui.services.rename_batch import RenameBatchService
 from toolbox.webui.services.tickets import TicketsService
 from toolbox.webui.services.netdisk import NetdiskService
+from toolbox.webui.services.publish import PublishService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
 from toolbox.webui.services.record import RecordService
@@ -48,6 +49,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService(jobs)
     netdisk = NetdiskService(jobs)
+    publish = PublishService(jobs)
     localwiki = LocalWikiService()
     livestream_summary = LivestreamSummaryService()
     image_sorter = ImageSorterService()
@@ -390,6 +392,17 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_rename_execute(req):
         return tool_service.start_rename_execute(dict(req.json or {}))
     server.post("/api/tools/rename/execute", start_rename_execute)
+
+    server.get("/api/publish/overview", lambda req: publish.overview())
+
+    def publish_precheck(req):
+        return publish.precheck(dict(req.json or {}))
+    server.post("/api/publish/precheck", publish_precheck)
+
+    def start_publish_upload(req):
+        return publish.start_upload(dict(req.json or {}))
+    server.post("/api/publish/upload", start_publish_upload)
+
 
     server.get("/api/tools/video/overview",
                lambda req: tool_service.video_overview())

@@ -3917,10 +3917,12 @@
     setLoading(host, '正在读取工作目录…');
     Promise.all([
       api('/api/tools/rename/overview'),
-      api('/api/tools/rename/preview?limit=300')
+      api('/api/tools/rename/preview?limit=300'),
+      api('/api/publish/overview').catch(function () { return null; })
     ]).then(function (results) {
       var overview = results[0];
       var preview = results[1];
+      var publishInfo = results[2] || {};
       host.replaceChildren();
       if (!overview.has_work_dir) {
         host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
@@ -3942,6 +3944,214 @@
 
       var jobHost = h('div');
       host.appendChild(jobHost);
+
+      var selected = new Set();
+      var precheckResult = null;
+      var uploading = false;
+      var publishJobHost = h('div');
+      var checksHost = h('div');
+      var pset = publishInfo.settings || {};
+      var titleInput = h('input', {
+        class: 'input', style: 'width:100%',
+        value: pset.title || '', placeholder: '标题模板'
+      });
+      var descInput = h('textarea', {
+        class: 'textarea', rows: '2',
+        placeholder: '简介模板（留空 = 不填）'
+      });
+      descInput.value = pset.desc || '';
+      var tagsInput = h('input', {
+        class: 'input', style: 'width:100%', value: pset.tags || '',
+        placeholder: '标签，逗号分隔（1–12 个）'
+      });
+      var tidInput = h('input', {
+        class: 'input', style: 'width:100px', type: 'number', min: '1',
+        value: String(pset.tid || ''), placeholder: '分区 ID'
+      });
+      var statementSel = h('select', { class: 'select' });
+      (publishInfo.statements || []).forEach(function (item) {
+        statementSel.appendChild(h('option', {
+          value: item.value,
+          selected: item.value === (pset.creation_statement || 'self')
+        }, item.label));
+      });
+      var seasonInput = h('input', {
+        class: 'input', style: 'width:200px', value: pset.season || '',
+        placeholder: '合集名（留空不加）'
+      });
+      var sourceInput = h('input', {
+        class: 'input grow', value: pset.source || '',
+        placeholder: '创作声明为转载时必填原直播来源链接'
+      });
+      var dateInput = h('input', {
+        class: 'input', style: 'width:150px', value: pset.date || '',
+        placeholder: '日期 YYYYMMDD（可留空）'
+      });
+      var autoCheck = h('input', {
+        type: 'checkbox', checked: pset.auto_publish !== false
+      });
+      var selLabel = h('span', { class: 'muted small' }, '已选 0 个');
+      var precheckBtn = h('button', { class: 'btn', type: 'button' }, '预检');
+      var uploadBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '确认投稿');
+
+      function currentSettings() {
+        return {
+          title: titleInput.value.trim(),
+          desc: descInput.value,
+          tags: tagsInput.value.trim(),
+          tid: Number(tidInput.value) || 0,
+          creation_statement: statementSel.value,
+          season: seasonInput.value.trim(),
+          source: sourceInput.value.trim(),
+          date: dateInput.value.trim(),
+          auto_publish: autoCheck.checked
+        };
+      }
+
+      function signature() {
+        return JSON.stringify({
+          paths: Array.from(selected).sort(),
+          settings: currentSettings()
+        });
+      }
+
+      function syncPublish() {
+        selLabel.textContent = '已选 ' + selected.size + ' 个';
+        var ready = selected.size > 0;
+        precheckBtn.disabled = uploading || !ready;
+        uploadBtn.disabled = uploading || !ready || !precheckResult
+          || precheckResult.signature !== signature();
+        uploadBtn.textContent = uploading ? '上传中…'
+          : (precheckResult && precheckResult.signature === signature()
+            ? '确认投稿' : '请先预检');
+      }
+
+      function renderChecks(result) {
+        checksHost.replaceChildren();
+        var list = h('div', { class: 'muted small', style: 'margin-top:6px' });
+        (result.checks || []).forEach(function (check) {
+          list.appendChild(h('div', null,
+            (check.ok ? '✓ ' : (check.fatal ? '✕ ' : '! '))
+            + check.label + '：' + (check.detail || '')));
+        });
+        checksHost.appendChild(list);
+        var meta = result.metadata || {};
+        if (result.ok) {
+          checksHost.appendChild(h('div', {
+            class: 'card', style: 'margin-top:8px'
+          },
+            h('div', { class: 'row-title' }, meta.title || '（无标题）'),
+            h('div', { class: 'muted small', style: 'margin-top:4px' },
+              result.parts + ' P · 分区 ' + meta.tid + ' · 标签 '
+              + meta.tag + ' · 共 '
+              + fmtBytes(result.total_bytes)
+              + (result.account && result.account.name
+                ? ' · 账号 ' + result.account.name : '')),
+            meta.desc ? h('div', { class: 'muted small', style: 'margin-top:4px' },
+              meta.desc) : null));
+        } else if (result.blocking) {
+          checksHost.appendChild(h('div', {
+            class: 'muted small', style: 'margin-top:6px;color:var(--danger)'
+          }, result.blocking));
+        }
+      }
+
+      precheckBtn.addEventListener('click', function () {
+        if (!selected.size) return;
+        precheckBtn.disabled = true;
+        precheckBtn.textContent = '预检中…';
+        post('/api/publish/precheck', {
+          paths: Array.from(selected), settings: currentSettings()
+        }).then(function (result) {
+          precheckBtn.disabled = false;
+          precheckBtn.textContent = '预检';
+          result.signature = signature();
+          precheckResult = result;
+          renderChecks(result);
+          uploadBtn.disabled = !result.ok;
+          uploadBtn.textContent = result.ok ? '确认投稿' : '预检未通过';
+          toast(result.ok ? '预检通过，可确认投稿'
+            : ('预检未通过：' + (result.blocking || '')), result.ok ? 'success' : 'warning');
+        }).catch(function (error) {
+          precheckBtn.disabled = false;
+          precheckBtn.textContent = '预检';
+          toast('预检失败：' + error.message, 'error');
+        });
+      });
+
+      uploadBtn.addEventListener('click', function () {
+        if (!precheckResult || precheckResult.signature !== signature()) {
+          toast('请先预检当前选择与设置', 'warning');
+          return;
+        }
+        var meta = precheckResult.metadata || {};
+        var action = autoCheck.checked ? '上传并自动投稿' : '仅上传，不投稿';
+        if (!window.confirm('确认' + action + '\n\n'
+          + (meta.title || '') + '\n'
+          + precheckResult.parts + ' P · 分区 ' + meta.tid + '\n'
+          + '账号：' + ((precheckResult.account || {}).name || '-') + '\n'
+          + '合集：' + (seasonInput.value.trim() || '不加入合集') + '\n'
+          + '标签：' + (meta.tag || '') + '\n\n'
+          + '上传会真实发布到 B站，确认开始？')) {
+          return;
+        }
+        uploading = true;
+        syncPublish();
+        post('/api/publish/upload', {
+          paths: Array.from(selected), settings: currentSettings(), confirmed: true
+        }).then(function (result) {
+          watchJob(publishJobHost, result.job, function (job) {
+            uploading = false;
+            var outcome = job.result || {};
+            toast(outcome.summary || '上传完成',
+              outcome.state === 'uncertain' ? 'warning' : 'success');
+            precheckResult = null;
+            syncPublish();
+            setTimeout(function () { renderRename(host); }, 1200);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              uploading = false;
+              syncPublish();
+              if (job.status === 'error') {
+                toast('上传失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          uploading = false;
+          syncPublish();
+          toast('上传失败：' + error.message, 'error');
+        });
+      });
+
+      host.appendChild(h('div', {
+        class: 'card', style: 'margin-bottom:12px'
+      },
+        h('div', { class: 'row-title' }, 'B站投稿上传'),
+        h('div', { class: 'muted small', style: 'margin:4px 0 6px' },
+          '先在下方表格勾选已标准命名的视频（可多选成分 P），填好投稿信息后「预检」，'
+          + '通过后「确认投稿」才会真实上传。'
+          + (publishInfo.logged_in ? '' : ' 当前未检测到 B站登录 Cookie。')),
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '标题模板'), titleInput),
+        h('div', { style: 'margin-top:6px' }, descInput),
+        h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '标签'), tagsInput),
+        h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '分区 ID'), tidInput,
+          h('span', { class: 'muted small' }, '创作声明'), statementSel,
+          h('label', { class: 'muted small' }, autoCheck, ' 上传后自动投稿')),
+        h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '合集'), seasonInput,
+          h('span', { class: 'muted small' }, '日期'), dateInput,
+          selLabel,
+          h('span', { style: 'flex:1' }), precheckBtn, uploadBtn),
+        h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '原直播来源'), sourceInput),
+        checksHost, publishJobHost));
 
       function openRenameForm(item) {
         var overlay = h('div', { class: 'preview-overlay' });
@@ -4093,7 +4303,7 @@
         { key: 'standard', label: '已标准命名', bool: true }
       ];
       var rows = sortRows(preview.items, columns, state.rename);
-      var head = h('tr');
+      var head = h('tr', null, h('th', { style: 'width:32px' }, ''));
       columns.forEach(function (column) {
         var mark = state.rename.order === column.key
           ? (state.rename.asc ? ' ↑' : ' ↓') : '';
@@ -4118,7 +4328,20 @@
         } else {
           actionCell.appendChild(h('span', { class: 'muted small' }, '—'));
         }
+        var check = h('input', {
+          type: 'checkbox', disabled: !item.standard,
+          title: item.standard ? '' : '先标准命名后才能投稿'
+        });
+        check.addEventListener('change', function () {
+          if (!item.path) return;
+          if (check.checked) selected.add(item.path);
+          else selected.delete(item.path);
+          precheckResult = null;
+          checksHost.replaceChildren();
+          syncPublish();
+        });
         body.appendChild(h('tr', null,
+          h('td', null, check),
           h('td', { class: 'ellipsis' }, item.name || '-'),
           h('td', null, item.platform ? platformLabel(item.platform) : '-'),
           h('td', null, item.date || '-'),
@@ -4133,6 +4356,7 @@
         h('table', { class: 'db-table' }, h('thead', null, head), body)));
       host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
         preview.note || '点击「命名」生成标准文件名。'));
+      syncPublish();
     }).catch(function (error) {
       setError(host, error, function () { renderRename(host); });
     });
