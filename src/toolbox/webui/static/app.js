@@ -3252,7 +3252,12 @@
   function renderSystem(host) {
     host.replaceChildren();
     setLoading(host, '正在读取系统信息…');
-    api('/api/system').then(function (data) {
+    Promise.all([
+      api('/api/system'),
+      api('/api/system/settings')
+    ]).then(function (results) {
+      var data = results[0];
+      var settings = results[1];
       host.replaceChildren();
       var info = h('div', { class: 'card', style: 'margin-bottom:12px' });
       info.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '版本与目录'));
@@ -3269,7 +3274,7 @@
       });
       host.appendChild(info);
 
-      var webui = h('div', { class: 'card' });
+      var webui = h('div', { class: 'card', style: 'margin-bottom:12px' });
       webui.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, 'WebUI'));
       var cfg = data.webui || {};
       [
@@ -3281,9 +3286,87 @@
           h('span', { class: 'muted' }, pair[0]),
           h('span', null, pair[1])));
       });
-      webui.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
-        data.note || ''));
       host.appendChild(webui);
+
+      var dirs = h('div', { class: 'card', style: 'margin-bottom:12px' });
+      dirs.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '目录设置'));
+      var workInput = h('input', {
+        class: 'input', style: 'width:100%',
+        value: settings.work_dir || '',
+        placeholder: '工作目录完整路径；留空 = 不修改'
+      });
+      var exportInput = h('input', {
+        class: 'input', style: 'width:100%',
+        value: settings.export_dir || '',
+        placeholder: '导出目录完整路径；留空 = 不修改'
+      });
+      workInput.disabled = !!settings.work_dir_locked;
+      exportInput.disabled = !!settings.export_dir_locked;
+      var saveDirs = h('button', { class: 'btn primary', type: 'button' },
+        '保存目录');
+      dirs.appendChild(h('div', { class: 'muted small', style: 'margin-bottom:4px' },
+        '工作目录' + (settings.work_dir_locked ? '（已锁定）' : '')));
+      dirs.appendChild(workInput);
+      dirs.appendChild(h('div', { class: 'muted small', style: 'margin:8px 0 4px' },
+        '导出目录' + (settings.export_dir_locked ? '（已锁定）' : '')));
+      dirs.appendChild(exportInput);
+      dirs.appendChild(h('div', { class: 'toolbar', style: 'margin-top:8px' },
+        h('span', { class: 'muted small' },
+          '目录必须已存在；修改后立即影响扫描与导出路径，并与桌面端共用。'),
+        h('span', { style: 'flex:1' }), saveDirs));
+      saveDirs.addEventListener('click', function () {
+        if (!window.confirm('保存后会立即影响扫描与导出路径，确定保存目录设置？')) {
+          return;
+        }
+        saveDirs.disabled = true;
+        post('/api/system/dirs', {
+          work_dir: workInput.value.trim(),
+          export_dir: exportInput.value.trim(),
+          confirmed: true
+        }).then(function (result) {
+          saveDirs.disabled = false;
+          toast('目录设置已保存', 'success');
+          renderSystem(host);
+        }).catch(function (error) {
+          saveDirs.disabled = false;
+          toast('保存失败：' + error.message, 'error');
+        });
+      });
+      host.appendChild(dirs);
+
+      var themeCard = h('div', { class: 'card' });
+      themeCard.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '外观主题'));
+      var themeCurrent = settings.theme_follow_system ? 'auto' : settings.theme;
+      var themeSel = h('select', { class: 'select' },
+        [['light', '浅色'], ['dark', '深色'], ['auto', '跟随系统']].map(
+          function (pair) {
+            return h('option', {
+              value: pair[0], selected: pair[0] === themeCurrent
+            }, pair[1]);
+          }));
+      var saveTheme = h('button', { class: 'btn primary', type: 'button' },
+        '保存主题');
+      themeCard.appendChild(h('div', { class: 'toolbar' },
+        themeSel, saveTheme,
+        h('span', { class: 'muted small' },
+          '主题写入桌面端配置；桌面端若启用定时切换，以其设置为准。')));
+      saveTheme.addEventListener('click', function () {
+        saveTheme.disabled = true;
+        post('/api/system/theme', { theme: themeSel.value })
+          .then(function () {
+            saveTheme.disabled = false;
+            state.theme = themeSel.value;
+            localStorage.setItem('webui-theme', state.theme);
+            applyTheme();
+            toast('主题已保存', 'success');
+          }).catch(function (error) {
+            saveTheme.disabled = false;
+            toast('保存失败：' + error.message, 'error');
+          });
+      });
+      host.appendChild(themeCard);
+
+      host.appendChild(h('div', { class: 'muted small' }, settings.note || ''));
     }).catch(function (error) {
       setError(host, error, function () { renderSystem(host); });
     });

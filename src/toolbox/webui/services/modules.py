@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from toolbox import webui_modules
+from toolbox import webui_modules, webui_settings
 
 
 class ModuleService:
@@ -30,3 +30,14 @@ class ModuleService:
 
     def system(self) -> dict:
         return webui_modules.system_info()
+
+    def system_settings(self) -> dict:
+        return webui_settings.system_settings()
+
+    def save_system_dirs(self, payload: dict) -> dict:
+        return webui_settings.save_system_dirs(
+            payload.get("work_dir"), payload.get("export_dir"),
+            bool(payload.get("confirmed")))
+
+    def save_system_theme(self, payload: dict) -> dict:
+        return webui_settings.save_system_theme(payload.get("theme"))

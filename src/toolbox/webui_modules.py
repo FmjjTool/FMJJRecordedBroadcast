@@ -189,7 +189,8 @@ def system_info() -> dict:
             "lan": bool(cfg.get("webui_lan")),
             "tunnel": str(cfg.get("webui_tunnel") or "none"),
         },
-        "note": "Web 端只读展示；目录、依赖与主题等设置在桌面端「全局设置」修改。",
+        "note": "目录与主题可在本页修改，与桌面端共用配置；"
+                "依赖组件由桌面端管理，Web 端不提供安装或卸载。",
     }
 
 

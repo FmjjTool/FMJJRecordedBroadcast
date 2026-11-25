@@ -122,6 +122,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tasks/uninstall", uninstall_task)
 
     server.get("/api/system", lambda req: modules.system())
+    server.get("/api/system/settings", lambda req: modules.system_settings())
+
+    def save_system_dirs(req):
+        return modules.save_system_dirs(dict(req.json or {}))
+    server.post("/api/system/dirs", save_system_dirs)
+
+    def save_system_theme(req):
+        return modules.save_system_theme(dict(req.json or {}))
+    server.post("/api/system/theme", save_system_theme)
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())
