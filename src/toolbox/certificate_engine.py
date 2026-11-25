@@ -1823,20 +1823,28 @@ def _agreement_values(data: CertificateData) -> dict[str, str]:
     }
 
 
-def export_docx(data: CertificateData, out_dir: str | Path) -> str:
+def export_docx(data: CertificateData, out_dir: str | Path, *,
+                standalone: bool = False) -> str:
     """导出 Word：证书页 + 完整协议（正文 + 附件一 + 附件二），可再编辑。
 
     正文用内置全文按软件字段填充：导入文档里的旧值不会覆盖当前录入，
     出现冲突时以软件生成为准。
+    standalone=True 时只写一个 .docx 到输出目录根部（不建证书文件夹、不打 zip），
+    方便单独转发。
     """
     import zipfile
 
     missing = missing_fields(data)
     if missing:
         raise ValueError("缺少必填字段：" + "、".join(missing))
-    folder, stem = certificate_package(data, out_dir)
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{stem}.docx"
+    out = Path(out_dir)
+    if standalone:
+        out.mkdir(parents=True, exist_ok=True)
+        target = out / "授权协议样本.docx"
+    else:
+        folder, stem = certificate_package(data, out)
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"{stem}.docx"
 
     body: list[str] = list(_docx_certificate_block(data))
     body.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
@@ -1869,10 +1877,49 @@ def export_docx(data: CertificateData, out_dir: str | Path) -> str:
                     "</Relationships>")
         zf.writestr("word/document.xml", document)
     temp.replace(target)
-    archive = folder.parent / f"{stem}.zip"
-    if archive.is_file():
-        _zip_package(folder, archive)
+    if not standalone:
+        archive = folder.parent / f"{stem}.zip"
+        if archive.is_file():
+            _zip_package(folder, archive)
     return str(target)
+
+
+def sample_certificate_data() -> CertificateData:
+    """内置样本数据：覆盖全部必填项，用于「导出样本 Word」。
+
+    全部为示意内容（编号用全零段），不会写入历史或真实数据。"""
+    sample_no = "FMJJ-DB-ART-2026-000000-000000"
+    data = CertificateData(
+        archive_no=sample_no,
+        title="样本作品名（LOGO设计）",
+        art_type="LOGO设计",
+        author_name="小茉",
+        author_contact="XM-0000（样本联系方式）",
+        lead_designer="小茉",
+        co_designers="小禾",
+        period_start="2026-01-01",
+        period_end="2026-12-31",
+        usage_note="数据汇总库内部归档、检索与认证状态展示（样本）",
+        manager_rep="管理组·小和",
+        contact_person="对接人·小和",
+        author_sign="小茉",
+        author_sign_date="2026-01-01",
+        licensee_rep_sign="管理组·小和",
+        licensee_sign_date="2026-01-01",
+        sample_format="png",
+        image_format="png",
+        wm_author="小茉",
+        wm_lead="小茉",
+        wm_title="样本作品名",
+        wm_archive_no=sample_no,
+        credit_note="圈名「小茉」+ 内部认证号（样本写法）",
+    )
+    return data
+
+
+def export_docx_sample(out_dir: str | Path) -> str:
+    """导出授权协议样本 Word：完整协议结构 + 示意内容，单独一个 .docx。"""
+    return export_docx(sample_certificate_data(), out_dir, standalone=True)
 
 
 def _save_png(image: Image.Image, path: Path) -> str:

@@ -349,6 +349,12 @@ class CertificateMakerPage(BasePage):
             "正文按软件当前字段填充，冲突以软件为准")
         self.word_btn.clicked.connect(self._on_export_docx)
         toolbar.addWidget(self.word_btn)
+        self.sample_word_btn = QPushButton("导出样本 Word")
+        self.sample_word_btn.setToolTip(
+            "无需填写字段，直接导出一份完整授权协议样本 .docx 到输出目录，"
+            "全部为示意内容，可单独转发参考")
+        self.sample_word_btn.clicked.connect(self._on_export_docx_sample)
+        toolbar.addWidget(self.sample_word_btn)
         root.addLayout(toolbar)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -1373,7 +1379,7 @@ class CertificateMakerPage(BasePage):
     def _on_add_images(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self, "选择作品图 / 水印样本", "",
-            "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;所有文件 (*.*)",
+            "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.psd);;所有文件 (*.*)",
         )
         if not paths:
             return
@@ -1715,3 +1721,11 @@ class CertificateMakerPage(BasePage):
             return
         self.app.toast(f"已导出 Word 到证书文件夹：{Path(path).name}", "success")
         self._save_config()
+    def _on_export_docx_sample(self) -> None:
+        """导出授权协议样本 Word：内置示意内容，单独一个 .docx 便于转发。"""
+        try:
+            path = engine.export_docx_sample(self._out_dir)
+        except Exception as exc:  # noqa: BLE001 - 导出失败直接提示
+            self.app.toast(f"导出样本 Word 失败：{exc}", "error")
+            return
+        self.app.toast(f"已导出样本 Word：{Path(path).name}（输出目录根部）", "success")
