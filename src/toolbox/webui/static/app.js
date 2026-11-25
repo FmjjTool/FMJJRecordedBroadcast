@@ -6275,15 +6275,52 @@
           title: '按组导出在桌面端'
         }, '按组导出');
         var collectBtn = h('button', {
-          class: 'btn primary', type: 'button', disabled: true,
-          title: '采集需要桌面端登录态与采集引擎'
+          class: 'btn primary', type: 'button'
         }, '获取全部');
+        var jobHost = h('div');
+        var running = false;
+        collectBtn.addEventListener('click', function () {
+          if (running) return;
+          running = true;
+          collectBtn.disabled = true;
+          collectBtn.textContent = '采集中…';
+          post('/api/trackers/collect', {
+            kind: kind, platform: platformSel.value
+          }).then(function (result) {
+            watchJob(jobHost, result.job, function (job) {
+              running = false;
+              collectBtn.disabled = false;
+              collectBtn.textContent = '获取全部';
+              var outcome = job.result || {};
+              toast(outcome.summary || '采集完成',
+                outcome.failed ? 'warning' : 'success');
+              renderTrackerPage(root, kind);
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                running = false;
+                collectBtn.disabled = false;
+                collectBtn.textContent = '获取全部';
+                if (job.status === 'error') {
+                  toast('采集失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            running = false;
+            collectBtn.disabled = false;
+            collectBtn.textContent = '获取全部';
+            toast('采集失败：' + error.message, 'error');
+          });
+        });
         root.appendChild(h('div', { class: 'toolbar' },
           refreshBtn, exportBtn, collectBtn,
           h('span', { class: 'muted small' }, '平台'), platformSel,
           h('span', { class: 'spacer' }),
           h('span', { class: 'muted small' },
-            '共 ' + fmtNumber(data.total) + ' 个账号；采集与导出仍在桌面端。')));
+            '共 ' + fmtNumber(data.total) + ' 个账号；'
+            + '「获取全部」按当前平台筛选采集，单账号卡片可导出变化对比图。')));
+        root.appendChild(jobHost);
         root.appendChild(grid);
         draw();
       }).catch(function (error) {
@@ -6298,6 +6335,21 @@
     }, '历史');
     historyBtn.addEventListener('click', function () {
       loadTrackerHistory(historyHost, kind, row.name);
+    });
+    var exportBtn = h('button', {
+      class: 'btn mini', type: 'button', title: '导出最近两次变化对比 PNG'
+    }, '导出图片');
+    exportBtn.addEventListener('click', function () {
+      exportBtn.disabled = true;
+      downloadPost('/api/trackers/export', {
+        kind: kind, name: row.name, platform: row.platform || ''
+      }, (row.name || '账号') + '.png').then(function () {
+        exportBtn.disabled = false;
+        toast('已导出变化对比图', 'success');
+      }).catch(function (error) {
+        exportBtn.disabled = false;
+        toast('导出失败：' + error.message, 'error');
+      });
     });
     var metrics = h('div', { class: 'metric-grid' });
     (row.metrics || []).forEach(function (metric) {
@@ -6316,7 +6368,7 @@
           row.last_time ? '最近 ' + row.last_time
             : (row.records ? row.records + ' 条记录' : '暂无采集'))),
       metrics,
-      h('div', { class: 'col-tools' }, historyBtn),
+      h('div', { class: 'col-tools' }, historyBtn, exportBtn),
       historyHost);
   }
 

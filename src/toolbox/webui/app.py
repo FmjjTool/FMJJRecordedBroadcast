@@ -41,7 +41,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     offline = OfflineService(jobs)
     tool_service = ToolService(jobs)
     tcdoc = TCDocService(jobs)
-    trackers = TrackerService()
+    trackers = TrackerService(jobs)
     fangroups = FanGroupService()
     douyin_index = DouyinIndexService()
     chaohua = WeiboChaohuaService()
@@ -174,6 +174,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/system/theme", save_system_theme)
 
     server.get("/api/system/deps", lambda req: modules.dependencies())
+
+    def start_tracker_collect(req):
+        return trackers.start_collect(dict(req.json or {}))
+    server.post("/api/trackers/collect", start_tracker_collect)
+
+    def export_tracker_png(req):
+        data = trackers.export_png(dict(req.json or {}))
+        return AttachmentResponse(data["data"], data["filename"], "image/png")
+    server.post("/api/trackers/export", export_tracker_png)
 
     server.get("/api/trackers/music", lambda req: trackers.music())
     server.get("/api/trackers/media", lambda req: trackers.media())
