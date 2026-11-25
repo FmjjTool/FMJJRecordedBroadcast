@@ -9,6 +9,7 @@ from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
+from toolbox.webui.services.info_accounts import InfoAccountsService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
 from toolbox.webui.services.record import RecordService
@@ -32,6 +33,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     fangroups = FanGroupService()
     douyin_index = DouyinIndexService()
     chaohua = WeiboChaohuaService()
+    info_accounts = InfoAccountsService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -173,6 +175,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/weibo-chaohua", lambda req: chaohua.overview())
     server.get("/api/weibo-chaohua/analysis", lambda req: chaohua.analysis(
         req.q("topic_id")))
+
+    server.get("/api/info-accounts", lambda req: info_accounts.overview())
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

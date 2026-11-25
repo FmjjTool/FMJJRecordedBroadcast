@@ -23,6 +23,7 @@
     fangroups: { open: '' },
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
+    info_accounts: { platform: '' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -35,6 +36,7 @@
   };
   var routes = {
     home: { title: '工作台', load: renderHome },
+    info_accounts: { title: '采集任务', load: renderInfoAccounts },
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
     organize: { title: '自动整理', load: renderOrganize },
@@ -334,6 +336,7 @@
         + '桌面端的采集任务、网络库、账户追踪、音乐工具、本地工具等页面尚未接入。')));
     [
       ['常用工具', [
+        ['info_accounts', '采集任务', '账号清单与批量解析'],
         ['collected', '采集结果', '结果库、下载与导出'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
@@ -372,6 +375,124 @@
           h('div', { class: 'muted small' }, item[2])));
       });
       host.appendChild(grid);
+    });
+  }
+
+  function renderInfoAccounts(root) {
+    setLoading(root, '正在读取账号清单…');
+    api('/api/info-accounts').then(function (data) {
+      root.replaceChildren();
+      var accounts = data.accounts || [];
+      var platformSel = h('select', { class: 'select' });
+      platformSel.appendChild(h('option', { value: '' }, '全部平台'));
+      (data.by_platform || []).forEach(function (item) {
+        platformSel.appendChild(h('option', { value: item.key },
+          item.name + '（' + item.count + '）'));
+      });
+      platformSel.value = state.info_accounts.platform || '';
+      var tableHost = h('div');
+
+      function draw() {
+        var rows = accounts.filter(function (row) {
+          return !state.info_accounts.platform
+            || row.platform === state.info_accounts.platform;
+        });
+        if (!rows.length) {
+          tableHost.replaceChildren(empty(
+            '暂无账号。桌面端「采集任务」批量添加账号主页链接后刷新。'));
+          return;
+        }
+        var head = h('tr');
+        ['平台', '账号', '链接', '分组', '备注', '类型']
+          .forEach(function (title) {
+            head.appendChild(h('th', null, title));
+          });
+        var body = h('tbody');
+        rows.forEach(function (row) {
+          var kindLabels = { auto: '自动', video: '只视频',
+            dynamic: '只动态', all: '全部' };
+          body.appendChild(h('tr', null,
+            h('td', null, h('span', { class: 'badge' },
+              row.platform_name || '未知')),
+            h('td', null, row.name || '-'),
+            h('td', { class: 'ellipsis' }, row.url
+              ? h('a', { href: row.url, target: '_blank',
+                rel: 'noopener noreferrer' }, row.url)
+              : '-'),
+            h('td', { class: 'muted small' }, row.groups || '-'),
+            h('td', { class: 'muted small' }, row.note || '-'),
+            h('td', null, kindLabels[row.kind] || row.kind || '-')));
+        });
+        tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, head), body)));
+      }
+
+      platformSel.addEventListener('change', function () {
+        state.info_accounts.platform = platformSel.value;
+        draw();
+      });
+
+      var s = data.settings || {};
+      var dateText = (s.date_start || s.date_end)
+        ? ((s.date_start || '不限') + ' ~ ' + (s.date_end || '现在'))
+        : '不限';
+      function setting(label, value) {
+        return h('div', { class: 'metric' },
+          h('div', { class: 'label' }, label),
+          h('div', { class: 'value' }, value));
+      }
+
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '批量添加 / 解析'),
+        h('div', { class: 'muted small', style: 'margin:4px 0 6px' },
+          '一行一个，支持整段分享文案：账号主页链接 → 添加账号；'
+          + '作品 / 视频链接 → 解析到采集结果。'),
+        h('textarea', {
+          class: 'textarea', rows: '3', disabled: true,
+          placeholder: '一行一个链接（批量处理在桌面端）'
+        }),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '开始处理'),
+          h('span', { class: 'muted small' }, '批量解析在桌面端'))));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'row-title' }, '账号列表'),
+          h('span', { class: 'muted small' },
+            '共 ' + fmtNumber(data.total) + ' 个账号'),
+          h('span', { style: 'flex:1' }),
+          h('span', { class: 'muted small' }, '平台'), platformSel),
+        tableHost));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '采集设置'),
+        h('div', { class: 'metric-grid', style: 'margin-top:8px' },
+          setting('采集范围', '全部账号'),
+          setting('每账号条数', String(s.count || 10)),
+          setting('限流', '每 ' + (s.rate_count || 10) + ' 个停 '
+            + (s.rate_interval || 10) + ' 秒'),
+          setting('增量模式', s.incremental ? '开' : '关'),
+          setting('获取后自动下载', s.auto_download ? '开' : '关'),
+          setting('日期段', dateText)),
+        h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '以上设置与账号配置在桌面端修改。')));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '获取最新'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '会话定时'),
+          h('span', { class: 'muted small' }, '空闲（采集在桌面端）'))));
+      root.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'card-title' }, '运行日志'),
+        h('div', { class: 'muted small' },
+          '运行日志由桌面端采集任务实时输出；Web 端暂不提供。')));
+      draw();
+    }).catch(function (error) {
+      setError(root, error, function () { renderInfoAccounts(root); });
     });
   }
 
