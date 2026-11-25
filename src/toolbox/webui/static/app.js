@@ -68,6 +68,8 @@
     tickets: { title: '票务解析', load: renderTickets },
     shopping: { title: '购物解析', load: renderShoppingHub },
     music_playlist: { title: '歌单', load: renderMusicPlaylist },
+    music_download: { title: '下载', load: renderMusicDownload },
+    music_tag: { title: '标签', load: renderMusicTag },
     tasks: { title: '定时任务', load: renderTasks },
     system: { title: '全局设置', load: renderSystem }
   };
@@ -361,6 +363,8 @@
         ['tickets', '票务解析', '演出缓存与导出目录'],
         ['shopping', '购物解析', '淘宝 / 抖音 / B站小店产物'],
         ['music_playlist', '歌单', '本地预览与执行报告'],
+        ['music_download', '下载', '本地音乐文件列表'],
+        ['music_tag', '标签', '标签快照与历史'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -5553,6 +5557,135 @@
       }
     }).catch(function (error) {
       setError(root, error, function () { renderMusicPlaylist(root); });
+    });
+  }
+
+  function renderMusicDownload(root) {
+    setLoading(root, '正在读取下载目录…');
+    api('/api/music-download').then(function (data) {
+      root.replaceChildren();
+      var formats = (data.by_ext || []).map(function (item) {
+        return item.ext + ' ' + fmtNumber(item.count);
+      }).join(' · ');
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '搜索'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '下载选中'),
+          h('span', { style: 'flex:1' }),
+          h('span', { class: 'muted small', title: data.root },
+            '下载目录：' + (data.root || '-'))),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '共 ' + fmtNumber(data.total) + ' 首 · ' + fmtBytes(data.bytes)
+          + (formats ? ' · ' + formats : '')
+          + (data.truncated ? '（超过 3000 个，已截断）' : '')
+          + ' · 只读，搜索与下载在桌面端')));
+      var files = data.files || [];
+      if (!files.length) {
+        root.appendChild(empty(
+          '下载目录内暂无音频文件。桌面端「下载」页搜索并下载后会出现在这里。'));
+        return;
+      }
+      var body = h('tbody');
+      files.forEach(function (row) {
+        body.appendChild(h('tr', null,
+          h('td', { class: 'ellipsis', title: row.rel }, row.name),
+          h('td', null, h('span', { class: 'badge' }, row.ext)),
+          h('td', { class: 'num' }, fmtBytes(row.size)),
+          h('td', null, row.mtime)));
+      });
+      root.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '本地音乐文件'),
+        h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '文件名'), h('th', null, '格式'),
+            h('th', { class: 'num' }, '大小'), h('th', null, '时间'))), body))));
+    }).catch(function (error) {
+      setError(root, error, function () { renderMusicDownload(root); });
+    });
+  }
+
+  function renderMusicTag(root) {
+    setLoading(root, '正在读取音乐目录与标签…');
+    api('/api/music-tag?limit=120').then(function (data) {
+      root.replaceChildren();
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '添加文件'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '添加文件夹'),
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '写入标签'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '抓取歌词'),
+          h('span', { style: 'flex:1' }),
+          h('span', { class: 'muted small', title: data.root },
+            '音乐目录：' + (data.root || '-'))),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '只读：修改 / 批量写入标签、歌词抓取与历史恢复仍在桌面端；'
+          + '文件最多读取前 300 个。')));
+      var history = data.history || [];
+      var historyCard = h('div', {
+        class: 'card', style: 'margin-bottom:12px'
+      }, h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+        '标签历史 · ' + fmtNumber(history.length) + ' 条'));
+      if (!history.length) {
+        historyCard.appendChild(empty(
+          '暂无标签历史。桌面端写入标签后会记录快照。'));
+      } else {
+        var hbody = h('tbody');
+        history.forEach(function (row) {
+          hbody.appendChild(h('tr', null,
+            h('td', null, row.time),
+            h('td', { class: 'ellipsis' }, row.file),
+            h('td', { class: 'ellipsis' }, row.title || '-'),
+            h('td', null, row.artist || '-'),
+            h('td', null, row.album || '-')));
+        });
+        historyCard.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '时间'), h('th', null, '文件'),
+            h('th', null, '标题'), h('th', null, '艺术家'),
+            h('th', null, '专辑'))), hbody)));
+      }
+      root.appendChild(historyCard);
+
+      var files = data.files || [];
+      var filesCard = h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '音乐文件 · ' + fmtNumber(data.total)
+          + (data.truncated ? '（仅前 300 个）' : '')));
+      if (!files.length) {
+        filesCard.appendChild(empty('音乐目录内暂无音频文件。'));
+      } else {
+        var fbody = h('tbody');
+        files.forEach(function (row) {
+          fbody.appendChild(h('tr', null,
+            h('td', { class: 'ellipsis', title: row.rel }, row.name),
+            h('td', { class: 'ellipsis' }, row.title || '-'),
+            h('td', null, row.artist || '-'),
+            h('td', null, row.album || '-'),
+            h('td', null, row.year || '-'),
+            h('td', null, row.genre || '-')));
+        });
+        filesCard.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '文件名'), h('th', null, '标题'),
+            h('th', null, '艺术家'), h('th', null, '专辑'),
+            h('th', null, '年份'), h('th', null, '流派'))), fbody)));
+      }
+      root.appendChild(filesCard);
+    }).catch(function (error) {
+      setError(root, error, function () { renderMusicTag(root); });
     });
   }
 
