@@ -24,6 +24,7 @@
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
     image_sorter: { kind: 'all', q: '' },
+    rename_batch: { path: '', recursive: false, filter: 'all' },
     info_accounts: { platform: '' },
     artifacts: { tab: 'comments' },
     netdisk: { tab: 'backup' },
@@ -47,6 +48,7 @@
     localwiki: { title: '资料站', load: renderLocalWiki },
     livestream_summary: { title: '直播总结', load: renderLivestreamSummary },
     image_sorter: { title: '媒体筛选', load: renderImageSorter },
+    rename_batch: { title: '批量改名', load: renderRenameBatch },
     organize: { title: '自动整理', load: renderOrganize },
     editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: renderRename },
@@ -351,6 +353,7 @@
         ['localwiki', '资料站', '部署状态与站点访问统计'],
         ['livestream_summary', '直播总结', '转录清单与已保存总结'],
         ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
+        ['rename_batch', '批量改名', '规则预览与冲突检查'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -1085,6 +1088,181 @@
       renderTab();
     }).catch(function (error) {
       setError(root, error, function () { renderNetdisk(root); });
+    });
+  }
+
+  function renderRenameBatch(root) {
+    setLoading(root, '正在读取改名设置…');
+    api('/api/rename-batch').then(function (data) {
+      root.replaceChildren();
+      if (!state.rename_batch.path) {
+        state.rename_batch.path = data.work_dir || '';
+      }
+      var pathInput = h('input', {
+        class: 'input grow',
+        placeholder: '要扫描的文件夹完整路径',
+        value: state.rename_batch.path || ''
+      });
+      var recursiveCb = h('input', {
+        type: 'checkbox', checked: !!state.rename_batch.recursive
+      });
+      var filterSel = h('select', { class: 'select' });
+      (data.filters || []).forEach(function (item) {
+        filterSel.appendChild(h('option', {
+          value: item.key,
+          selected: item.key === state.rename_batch.filter
+        }, item.name));
+      });
+      var scanBtn = h('button', {
+        class: 'btn primary', type: 'button'
+      }, '扫描预览');
+      var template = h('input', {
+        class: 'input', placeholder: '如 {名}_{序号}，留空不启用'
+      });
+      var prefix = h('input', {
+        class: 'input', placeholder: '前缀', style: 'width:120px'
+      });
+      var suffix = h('input', {
+        class: 'input', placeholder: '后缀', style: 'width:120px'
+      });
+      var find = h('input', {
+        class: 'input', placeholder: '查找', style: 'width:120px'
+      });
+      var replaceTo = h('input', {
+        class: 'input', placeholder: '替换为', style: 'width:120px'
+      });
+      var numberingCb = h('input', { type: 'checkbox' });
+      var startInput = h('input', {
+        class: 'input', type: 'number', value: '1', style: 'width:72px'
+      });
+      var widthInput = h('input', {
+        class: 'input', type: 'number', value: '2', style: 'width:72px'
+      });
+      var ignoreExtCb = h('input', { type: 'checkbox', checked: true });
+      var conflictCb = h('input', { type: 'checkbox', checked: true });
+      var stats = h('div', {
+        class: 'muted small', style: 'margin:8px 0'
+      });
+      var tableHost = h('div');
+      var timer = null;
+      var lastRows = [];
+
+      function collect() {
+        return {
+          path: pathInput.value.trim(),
+          recursive: recursiveCb.checked,
+          filter: filterSel.value,
+          template: template.value.trim(),
+          prefix: prefix.value,
+          suffix: suffix.value,
+          find: find.value,
+          to: replaceTo.value,
+          numbering: numberingCb.checked,
+          start: startInput.value,
+          width: widthInput.value,
+          ignore_ext: ignoreExtCb.checked,
+          conflict: conflictCb.checked
+        };
+      }
+
+      function load() {
+        var payload = collect();
+        state.rename_batch.path = payload.path;
+        state.rename_batch.recursive = payload.recursive;
+        state.rename_batch.filter = payload.filter;
+        if (!payload.path) {
+          stats.textContent = '请填写要扫描的文件夹。';
+          tableHost.replaceChildren();
+          return;
+        }
+        setLoading(tableHost, '正在生成预览…');
+        post('/api/rename-batch/preview', payload).then(function (result) {
+          lastRows = result.rows || [];
+          stats.textContent = '共 ' + fmtNumber(result.total) + ' 个文件 · 将改名 '
+            + fmtNumber(result.changed) + ' 个'
+            + (result.truncated ? '（超过 2000 个，已截断）' : '')
+            + ' · 只读预览，执行改名在桌面端';
+          if (!lastRows.length) {
+            tableHost.replaceChildren(empty('文件夹内没有符合条件的文件。'));
+            return;
+          }
+          var head = h('tr');
+          ['序号', '文件名', '新文件名', '状态', '扩展名', '大小']
+            .forEach(function (title, index) {
+              head.appendChild(h('th', {
+                class: index === 0 || index === 5 ? 'num' : ''
+              }, title));
+            });
+          var body = h('tbody');
+          lastRows.forEach(function (row) {
+            body.appendChild(h('tr', null,
+              h('td', { class: 'num' }, row.index),
+              h('td', { class: 'ellipsis' }, row.old),
+              h('td', {
+                class: 'ellipsis',
+                style: row.status === '不变' ? '' : 'color: var(--link)'
+              }, row.new),
+              h('td', null, row.status),
+              h('td', null, row.ext),
+              h('td', { class: 'num' }, fmtBytes(row.size))));
+          });
+          tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' },
+              h('thead', null, head), body)));
+        }).catch(function (error) {
+          setError(tableHost, error, load);
+        });
+      }
+
+      function schedule() {
+        clearTimeout(timer);
+        timer = setTimeout(load, 450);
+      }
+      [template, prefix, suffix, find, replaceTo, startInput, widthInput]
+        .forEach(function (input) {
+          input.addEventListener('input', schedule);
+        });
+      [recursiveCb, numberingCb, ignoreExtCb, conflictCb, filterSel]
+        .forEach(function (input) {
+          input.addEventListener('change', schedule);
+        });
+      scanBtn.addEventListener('click', load);
+
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '文件夹'), pathInput,
+          h('label', { class: 'check' }, recursiveCb, ' 包含子文件夹'),
+          h('span', { class: 'muted small' }, '类型'), filterSel,
+          scanBtn)));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '改名规则'),
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '模板'), template),
+        h('div', { class: 'toolbar' },
+          prefix, suffix,
+          h('span', { class: 'muted small' }, '替换'), find,
+          h('span', { class: 'muted small' }, '为'), replaceTo),
+        h('div', { class: 'toolbar' },
+          h('label', { class: 'check' }, numberingCb, ' 序号'),
+          h('span', { class: 'muted small' }, '起始'), startInput,
+          h('span', { class: 'muted small' }, '位数'), widthInput,
+          h('label', { class: 'check' }, ignoreExtCb, ' 忽略扩展名'),
+          h('label', { class: 'check' }, conflictCb, ' 冲突加序号')),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '大小写 / 全半角 / 按位置插入 / 按类型删除 / 文本模式等规则在桌面端。')));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'row-title' }, '预览'),
+          h('span', { style: 'flex:1' }),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '执行改名'),
+          h('span', { class: 'muted small' }, '执行改名在桌面端'))));
+      root.appendChild(stats);
+      root.appendChild(tableHost);
+      load();
+    }).catch(function (error) {
+      setError(root, error, function () { renderRenameBatch(root); });
     });
   }
 

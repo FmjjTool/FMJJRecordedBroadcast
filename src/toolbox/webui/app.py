@@ -14,6 +14,7 @@ from toolbox.webui.services.info_accounts import InfoAccountsService
 from toolbox.webui.services.image_sorter import ImageSorterService
 from toolbox.webui.services.livestream_summary import LivestreamSummaryService
 from toolbox.webui.services.localwiki import LocalWikiService
+from toolbox.webui.services.rename_batch import RenameBatchService
 from toolbox.webui.services.netdisk import NetdiskService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
@@ -44,6 +45,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     localwiki = LocalWikiService()
     livestream_summary = LivestreamSummaryService()
     image_sorter = ImageSorterService()
+    rename_batch = RenameBatchService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -230,6 +232,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
             suffix, "application/octet-stream")
         return BytesResponse(path.read_bytes(), mime)
     server.get("/api/image-sorter/preview", image_sorter_preview)
+
+    server.get("/api/rename-batch", lambda req: rename_batch.overview())
+
+    def rename_batch_preview(req):
+        return rename_batch.preview(dict(req.json or {}))
+    server.post("/api/rename-batch/preview", rename_batch_preview)
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())
