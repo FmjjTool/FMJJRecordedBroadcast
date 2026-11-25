@@ -1503,17 +1503,20 @@
   function renderVideo(host) {
     host.replaceChildren();
     setLoading(host, '正在读取工作目录…');
-    Promise.all([
-      api('/api/tools/video/overview'),
-      api('/api/tools/video/sources?limit=300')
-    ]).then(function (results) {
-      var overview = results[0];
-      var sources = results[1];
-      host.replaceChildren();
+    api('/api/tools/video/overview').then(function (overview) {
       if (!overview.has_work_dir) {
+        host.replaceChildren();
         host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
-        return;
+        return null;
       }
+      return api('/api/tools/video/sources?limit=300').then(function (sources) {
+        return { overview: overview, sources: sources };
+      });
+    }).then(function (results) {
+      if (!results) return;
+      var overview = results.overview;
+      var sources = results.sources;
+      host.replaceChildren();
       var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
       stats.appendChild(statCard('视频', fmtNumber(sources.total), '工作目录内'));
       stats.appendChild(statCard('输出格式', overview.output_extension || '-', '桌面端配置'));
@@ -4500,7 +4503,7 @@
   }
 
   if (urlToken) {
-    history.replaceState(null, '', location.pathname);
+    history.replaceState(null, '', location.pathname + (location.hash || ''));
     login(urlToken, function () {
       init();
     }, function (message) {
