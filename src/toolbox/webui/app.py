@@ -11,6 +11,7 @@ from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
+from toolbox.webui.services.image_sorter import ImageSorterService
 from toolbox.webui.services.livestream_summary import LivestreamSummaryService
 from toolbox.webui.services.localwiki import LocalWikiService
 from toolbox.webui.services.netdisk import NetdiskService
@@ -42,6 +43,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     netdisk = NetdiskService()
     localwiki = LocalWikiService()
     livestream_summary = LivestreamSummaryService()
+    image_sorter = ImageSorterService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -213,6 +215,21 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: livestream_summary.overview())
     server.get("/api/livestream-summary/saved",
                lambda req: livestream_summary.saved_text(req.q("name")))
+
+    server.get("/api/image-sorter", lambda req: image_sorter.overview())
+    server.get("/api/image-sorter/scan", lambda req: image_sorter.scan(
+        req.q("kind") or "all", req.q("q"),
+        req.q_int("limit", 500, 1, 2000)))
+
+    def image_sorter_preview(req):
+        path = image_sorter.file(req.q("ref"), preview=True)
+        suffix = path.suffix.lower()
+        mime = {".png": "image/png", ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg", ".webp": "image/webp",
+                ".gif": "image/gif", ".bmp": "image/bmp"}.get(
+            suffix, "application/octet-stream")
+        return BytesResponse(path.read_bytes(), mime)
+    server.get("/api/image-sorter/preview", image_sorter_preview)
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

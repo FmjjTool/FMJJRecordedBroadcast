@@ -23,6 +23,7 @@
     fangroups: { open: '' },
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
+    image_sorter: { kind: 'all', q: '' },
     info_accounts: { platform: '' },
     artifacts: { tab: 'comments' },
     netdisk: { tab: 'backup' },
@@ -45,6 +46,7 @@
     netdisk: { title: '网络库', load: renderNetdisk },
     localwiki: { title: '资料站', load: renderLocalWiki },
     livestream_summary: { title: '直播总结', load: renderLivestreamSummary },
+    image_sorter: { title: '媒体筛选', load: renderImageSorter },
     organize: { title: '自动整理', load: renderOrganize },
     editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: renderRename },
@@ -348,6 +350,7 @@
         ['netdisk', '网络库', '网盘备份状态与运行记录'],
         ['localwiki', '资料站', '部署状态与站点访问统计'],
         ['livestream_summary', '直播总结', '转录清单与已保存总结'],
+        ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -1082,6 +1085,146 @@
       renderTab();
     }).catch(function (error) {
       setError(root, error, function () { renderNetdisk(root); });
+    });
+  }
+
+  function renderImageSorter(root) {
+    setLoading(root, '正在读取源文件夹…');
+    api('/api/image-sorter').then(function (data) {
+      root.replaceChildren();
+      var folders = data.folders || [];
+      var kindSel = h('select', { class: 'select' });
+      [['all', '全部'], ['image', '图片'], ['video', '视频']]
+        .forEach(function (pair) {
+          kindSel.appendChild(h('option', {
+            value: pair[0],
+            selected: pair[0] === state.image_sorter.kind
+          }, pair[1]));
+        });
+      var search = h('input', {
+        class: 'input grow', placeholder: '搜索文件名',
+        value: state.image_sorter.q || ''
+      });
+      var refreshBtn = h('button', {
+        class: 'btn', type: 'button'
+      }, '刷新扫描');
+      var stats = h('div', {
+        class: 'muted small', style: 'margin:8px 0'
+      });
+      var listHost = h('div');
+      var timer = null;
+
+      function previewItem(item) {
+        var overlay = h('div', { class: 'preview-overlay' });
+        overlay.addEventListener('click', function (event) {
+          if (event.target === overlay) overlay.remove();
+        });
+        overlay.appendChild(h('div', { class: 'preview-box' },
+          h('div', { class: 'preview-caption' },
+            h('span', null, item.name),
+            h('button', {
+              class: 'btn mini', type: 'button',
+              onclick: function () { overlay.remove(); }
+            }, '关闭')),
+          h('div', { class: 'preview-body' },
+            h('img', {
+              alt: '',
+              src: '/api/image-sorter/preview?ref='
+                + encodeURIComponent(item.ref) + '&token='
+                + encodeURIComponent(token)
+            }))));
+        document.body.appendChild(overlay);
+      }
+
+      function load() {
+        setLoading(listHost, '正在扫描源文件夹…');
+        api('/api/image-sorter/scan?kind=' + encodeURIComponent(kindSel.value)
+          + '&q=' + encodeURIComponent(state.image_sorter.q)
+          + '&limit=500')
+          .then(function (result) {
+            stats.textContent = '共 ' + fmtNumber(result.total_files)
+              + ' 个文件（图片 ' + fmtNumber(result.images) + ' / 视频 '
+              + fmtNumber(result.videos) + '）· ' + fmtBytes(result.bytes)
+              + ' · 显示 ' + fmtNumber(result.shown)
+              + (result.truncated ? '（结果已截断，可缩小范围）' : '')
+              + ' · 只读，写操作在桌面端';
+            if (!result.items.length) {
+              listHost.replaceChildren(empty(
+                folders.length
+                  ? '没有符合条件的文件。'
+                  : '未设置源文件夹。桌面端「媒体筛选」里添加后刷新。'));
+              return;
+            }
+            var list = h('div', { class: 'artifact-list' });
+            result.items.forEach(function (item) {
+              var actions = [];
+              if (item.is_image) {
+                actions.push(h('button', {
+                  class: 'btn mini', type: 'button',
+                  onclick: function () { previewItem(item); }
+                }, '预览'));
+              }
+              list.appendChild(h('div', { class: 'artifact-row' },
+                h('span', {
+                  class: 'badge' + (item.is_image ? ' ok' : '')
+                }, item.is_image ? '图片' : '视频'),
+                h('span', {
+                  class: 'artifact-name',
+                  title: item.folder + '/' + item.name
+                }, item.name),
+                h('span', { class: 'muted small' }, item.folder),
+                h('span', { class: 'muted small' }, fmtBytes(item.size)),
+                h('span', { class: 'muted small' }, item.mtime),
+                actions));
+            });
+            listHost.replaceChildren(list);
+          }).catch(function (error) {
+            setError(listHost, error, load);
+          });
+      }
+
+      kindSel.addEventListener('change', function () {
+        state.image_sorter.kind = kindSel.value;
+        load();
+      });
+      refreshBtn.addEventListener('click', load);
+      search.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          state.image_sorter.q = search.value.trim();
+          load();
+        }, 320);
+      });
+
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '类型'), kindSel,
+          search, refreshBtn),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '源文件夹：' + (folders.length
+            ? folders.map(function (item) { return item.path; }).join('　')
+            : '未设置（桌面端「媒体筛选」添加）'))));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'toolbar' },
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '移动'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '复制'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '重命名'),
+          h('button', {
+            class: 'btn danger', type: 'button', disabled: true
+          }, '删除'),
+          h('span', { class: 'muted small' },
+            '移动 / 复制 / 改名 / 删除、MD5 过滤与去重在桌面端'))));
+      root.appendChild(stats);
+      root.appendChild(listHost);
+      load();
+    }).catch(function (error) {
+      setError(root, error, function () { renderImageSorter(root); });
     });
   }
 
