@@ -113,7 +113,7 @@ def upload_entry(entry: dict, *, doc_key: str, tab_id: str, refresh: bool = True
             raise ImportErrorDetail(f"自动刷新失败，未上传（{state.get('message')}｜{detail}）")
 
     remote = bridge.load_remote(doc_key, tab_id)
-    index = bridge._index_of(remote)
+    index = bridge._index_of(remote, doc_key, tab_id)
     row = bridge._row_from_group([_item_from_entry(entry)], index)
     link = row.get("作品链接") or row.get("动态链接(b站)")
     if not link:

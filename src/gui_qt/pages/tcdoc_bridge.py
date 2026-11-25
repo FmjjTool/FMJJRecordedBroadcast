@@ -126,6 +126,8 @@ class _PendingModel(QAbstractTableModel):
         super().__init__(parent)
         self.rows = []
         self.columns = list(_DISPLAY_COLUMNS)
+        # 显示列名 → 内部字段名（字段映射改了目标列名时按内部字段取值）
+        self.sources = {}
         self._sort_column = -1
         self._sort_order = Qt.AscendingOrder
 
@@ -152,10 +154,14 @@ class _PendingModel(QAbstractTableModel):
         self._sort_locked()
         self.layoutChanged.emit()
 
-    def set_columns(self, columns):
+    def set_columns(self, columns, sources=None):
         self.beginResetModel()
         self.columns = list(columns)
+        self.sources = dict(sources or {})
         self.endResetModel()
+
+    def _source(self, column: str) -> str:
+        return self.sources.get(column, column)
 
     def rowCount(self, parent=None):
         return 0 if parent is not None and parent.isValid() else len(self.rows)
@@ -177,13 +183,13 @@ class _PendingModel(QAbstractTableModel):
             return None
         column = self.columns[index.column()]
         if role == Qt.TextAlignmentRole:
-            if column in self._CENTER_COLUMNS:
+            if self._source(column) in self._CENTER_COLUMNS:
                 return int(Qt.AlignCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
         if role not in (Qt.DisplayRole, Qt.ToolTipRole):
             return None
         row = self.rows[index.row()]
-        if column == "图片":
+        if self._source(column) == "图片":
             images = row.get("_images") or []
             local = row.get("_local_images")
             missing = row.get("_missing_images")
@@ -194,7 +200,7 @@ class _PendingModel(QAbstractTableModel):
                 tip = (f"本地已下载 {local} 张，缺 {missing} 张"
                        "（上传时可尝试在线补图）\n" + tip)
             return tip
-        value = str(row.get(column) or "")
+        value = str(row.get(self._source(column)) or "")
         if bridge.tables.LINK_FIELD_SEP in value:
             # 链接列两级结构：表格里显示文本，悬停看 URL
             label, url = bridge.tables.split_link(value)
@@ -203,7 +209,7 @@ class _PendingModel(QAbstractTableModel):
 
     def cell_text(self, row, column) -> str:
         """单元格显示文本（排序键也按这份文本解析）。"""
-        if column == "图片":
+        if self._source(column) == "图片":
             images = row.get("_images") or []
             local = row.get("_local_images")
             if not images:
@@ -215,7 +221,7 @@ class _PendingModel(QAbstractTableModel):
             if local < len(images):
                 return f"本地 {local}/{len(images)} 张"
             return f"本地 {len(images)} 张"
-        value = str(row.get(column) or "")
+        value = str(row.get(self._source(column)) or "")
         if bridge.tables.LINK_FIELD_SEP in value:
             label, _url = bridge.tables.split_link(value)
             return label
@@ -1561,13 +1567,17 @@ class TcDocBridgePanel(QWidget):
         for record in records:
             try:
                 if profile == "songs":
-                    pending.make_song_plan(record, fields)
+                    pending.make_song_plan(record, fields,
+                                           target["doc_key"], target["tab_id"])
                 elif profile in ("events", "merch"):
-                    pending.make_candidate_plan(record, fields, profile)
+                    pending.make_candidate_plan(record, fields, profile,
+                                                target["doc_key"], target["tab_id"])
                 else:
                     # 新名字（如新 UP 主）不在这里拦下：留到上传前统一确认是否新建选项
                     pending.make_plan(record, fields, available_only=False,
-                                      allow_new_options=True)
+                                      allow_new_options=True,
+                                      doc_key=target["doc_key"],
+                                      tab_id=target["tab_id"])
             except pending.ImportErrorDetail as exc:
                 record["blocked"] = str(exc)
         if profile == "posts":
@@ -1577,18 +1587,22 @@ class TcDocBridgePanel(QWidget):
         new_options = {}
         if profile == "posts":
             new_options = pending.new_choice_options(
-                [r for r in records if not r.get("blocked")], fields)
+                [r for r in records if not r.get("blocked")], fields,
+                target["doc_key"], target["tab_id"])
         return {"records": records, "new_options": new_options, "missing": missing}
 
     @staticmethod
     def _filter_event_append_records(records: list[dict], client) -> list[dict]:
         """已存在活动只保留还有本地图片可追加的行；已补全的不再展示。"""
+        from toolbox.tcdoc import field_maps
         from toolbox.tcdoc import import_pending as pending
 
         existing = [record for record in records if record.get("_existing")]
         if not existing:
             return records
-        live = pending._event_live_index(client.get_records())
+        doc_key, tab_id = client.doc_key, client.tab_id
+        live = pending._event_live_index(client.get_records(), doc_key, tab_id)
+        promo_title = field_maps.target(doc_key, tab_id, "宣传图") or "宣传图"
         kept = []
         for record in existing:
             row = live.get(record["key"])
@@ -1597,7 +1611,7 @@ class TcDocBridgePanel(QWidget):
                 kept.append(record)
                 continue
             values = row.get("values") or {}
-            present = set(pending._image_titles(values))
+            present = set(pending._image_titles(values, promo_title))
             missing = [image for image in record.get("_images") or []
                        if image.upload_name not in present]
             if not missing:
@@ -2163,14 +2177,16 @@ class TcDocBridgePanel(QWidget):
                   for col in target.get("columns") or []
                   if str(col.get("name") or "")]
         remote_keys = []
+        doc_key = str(target.get("doc_key") or "")
+        tab_id = str(target.get("tab_id") or "")
         try:
-            remote = bridge.load_remote(str(target.get("doc_key") or ""),
-                                        str(target.get("tab_id") or ""))
-            remote_keys = [import_pending.live_key(row.get("values") or {})
-                           for row in remote]
+            remote = bridge.load_remote(doc_key, tab_id)
+            remote_keys = [import_pending.live_key_from_values(
+                row.get("values") or {}, doc_key, tab_id) for row in remote]
         except Exception:  # noqa: BLE001 - 读不到快照就按「全部新增」预演
             remote_keys = []
-        preview = import_pending.preview_lives(rows, fields, remote_keys=remote_keys)
+        preview = import_pending.preview_lives(rows, fields, remote_keys=remote_keys,
+                                               doc_key=doc_key, tab_id=tab_id)
 
         dlg = QDialog(self)
         dlg.setWindowTitle("预览 API 写回（不会写入）")
@@ -2541,16 +2557,24 @@ class TcDocBridgePanel(QWidget):
     def _fill_table(self, rows: list[dict], columns=None,
                     append_images: bool = True) -> None:
         if columns:
-            display = list(columns) + (["图片"] if append_images else [])
-            if display != self._model.columns:
-                self._model.set_columns(display)
+            from toolbox.tcdoc import field_maps
+            target = self.target_combo.currentData() or {}
+            doc_key = str(target.get("doc_key") or "")
+            tab_id = str(target.get("tab_id") or "")
+            sources = field_maps.source_map(doc_key, tab_id, columns)
+            display = field_maps.display_columns(doc_key, tab_id, columns)
+            if append_images:
+                display = display + ["图片"]
+            if display != self._model.columns or sources != self._model.sources:
+                self._model.set_columns(display, sources)
                 header = self.table.horizontalHeader()
                 header.setSectionResizeMode(QHeaderView.Interactive)
                 for index, name in enumerate(display):
                     if index == 0:
                         header.setSectionResizeMode(0, QHeaderView.Stretch)
                         continue
-                    self.table.setColumnWidth(index, _WIDTHS.get(name, 100))
+                    self.table.setColumnWidth(
+                        index, _WIDTHS.get(sources.get(name, name), 100))
         self._rows = list(rows)
         self._model.replace(self._rows)
         self._update_copy_row_btn()
@@ -2776,7 +2800,10 @@ class TcDocBridgePanel(QWidget):
         if not rows:
             return
         columns = (self._result or {}).get("columns") or bridge.COLUMNS
-        QApplication.clipboard().setText(bridge.to_tsv(rows, columns))
+        target = self.target_combo.currentData() or {}
+        QApplication.clipboard().setText(bridge.to_tsv(
+            rows, columns, str(target.get("doc_key") or ""),
+            str(target.get("tab_id") or "")))
         self.status.setText(f"已复制{label}（不含表头），去腾讯文档粘贴即可。")
         if self.app is not None:
             try:

@@ -315,6 +315,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "tcdoc_bridge_subject_keywords": ["封茗囧菌", "囧菌"],
     # 中间层：免校对模式（上传不再要求先「同步前刷新」，直接推送本地数据）
     "tcdoc_skip_sync_refresh": False,
+    # 中间层：字段映射（按目标表浮动配置，键见 toolbox/tcdoc/field_maps.py）
+    "tcdoc_field_maps": {},
     # 资产页「图识别（以图搜图）」：CLIP 图像编码器 ONNX（空 = config/models 自动查找）
     "image_search_model": "",
     "image_search_topk": 30,

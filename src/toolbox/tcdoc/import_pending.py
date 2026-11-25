@@ -28,7 +28,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from toolbox import increment_db
-from toolbox.tcdoc import bridge, comment_images, config as tc_cfg, push_history, tables
+from toolbox.tcdoc import bridge, comment_images, config as tc_cfg, field_maps, push_history, tables
 from toolbox.tcdoc.import_local import (
     ALIASES, BEIJING, CHOICE_COLUMNS, MAX_IMAGE_BYTES, ImportErrorDetail, LocalImage,
     LocalImportClient, ManagedAuth, TEST_TARGET, UnknownWriteResult, field_options,
@@ -614,26 +614,37 @@ SONG_CHOICE_FIELDS = ("语言", "合唱形式")
 SONG_DATE_FIELDS = ("首发日期",)
 
 
-def _remark_plan(columns: dict, fields: list[dict], skipped: dict):
+def _remark_plan(columns: dict, fields: list[dict], skipped: dict,
+                 doc_key="", tab_id=""):
     """备注列计划：返回 (写入值, 字段类型, 字段名)；没有备注列时返回 (None, None, None)。
 
     任何程序写入（批量/单行/自动推送）都会调用它把
     「自动推送程序上传+北京时间」追加到已有备注后面；表里没这一列就静默跳过
     （不拦下整条记录、也不改表结构），字段存在但不是文本类型时记一笔原因。
-    列名兼容「备注信息」（四张子表）与「备注」（官方动态新增列）。
+    列名默认兼容「备注信息」（四张子表）与「备注」（官方动态新增列），
+    config 里配置字段映射后按映射的目标列名找列。
     """
-    hits = [f for f in fields
-            if str(f.get("fieldTitle") or "") in bridge.REMARK_ALIASES]
+    target = field_maps.target(doc_key, tab_id, bridge.REMARK_COLUMN)
+    if not target:
+        return None, None, None
+    if target in bridge.REMARK_ALIASES:
+        names = bridge.REMARK_ALIASES
+    else:
+        names = (target,)
+    hits = [f for f in fields if str(f.get("fieldTitle") or "") in names]
     if not hits:
         # 目标表没有备注列：静默跳过，不新增字段、不影响其它列
         return None, None, None
-    hits.sort(key=lambda f: bridge.REMARK_ALIASES.index(str(f.get("fieldTitle"))))
+    hits.sort(key=lambda f: (names.index(str(f.get("fieldTitle")))
+                             if str(f.get("fieldTitle")) in names else len(names)))
     field = hits[0]
     title = str(field.get("fieldTitle"))
     if int(field.get("fieldType") or 0) != 1:
         skipped[title] = "备注字段不是文本类型"
         return None, None, None
-    text = bridge.append_auto_remark(columns.get(title))
+    existing = next((columns.get(name) for name in bridge.REMARK_ALIASES
+                     if columns.get(name)), columns.get(title))
+    text = bridge.append_auto_remark(existing)
     return [{"type": "text", "text": text}], 1, title
 
 
@@ -642,12 +653,13 @@ def _remark_plan(columns: dict, fields: list[dict], skipped: dict):
 SONG_BILI_WRITE_ENABLED = False
 
 
-def make_song_plan(record: dict, fields: list[dict]):
+def make_song_plan(record: dict, fields: list[dict], doc_key="", tab_id=""):
     """完整歌曲字段计划：只写明确支持的文本/日期/单选/链接/封面字段。
 
     「B站链接」列（type 8）已按本地快照表头核过，但它是搜索匹配得到的，不属于
     官方平台链接，按约定「新字段先单条试写 + 读回校验」：试写通过前本批显式记
     「未写入」，不静默丢弃、也不冒充成功（见 SONG_BILI_WRITE_ENABLED）。
+    字段映射（config tcdoc_field_maps）可把这些内部列改写到目标表别的列。
     """
     columns = record["columns"]
     by_title: dict[str, list[dict]] = {}
@@ -655,9 +667,12 @@ def make_song_plan(record: dict, fields: list[dict]):
         by_title.setdefault(str(field.get("fieldTitle") or ""), []).append(field)
 
     def unique(name: str) -> dict:
-        hits = by_title.get(name) or []
+        target = field_maps.target(doc_key, tab_id, name)
+        if not target:
+            raise ImportErrorDetail(f"字段已按映射配置为不写：{name}")
+        hits = by_title.get(target) or []
         if len(hits) != 1:
-            raise ImportErrorDetail(f"字段无法唯一匹配：{name}")
+            raise ImportErrorDetail(f"字段无法唯一匹配：{name}→{target}")
         return hits[0]
 
     values, kinds, skipped = {}, {}, {}
@@ -665,6 +680,9 @@ def make_song_plan(record: dict, fields: list[dict]):
     for name in names:
         value = str(columns.get(name) or "").strip()
         if not value:
+            continue
+        if not field_maps.target(doc_key, tab_id, name):
+            # 配置里明确「不写」：静默跳过，不算错误
             continue
         field = unique(name)
         kind = field.get("fieldType")
@@ -695,14 +713,16 @@ def make_song_plan(record: dict, fields: list[dict]):
         values[field["fieldTitle"]] = encoded
         kinds[field["fieldTitle"]] = kind
 
-    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped,
+                                                     doc_key, tab_id)
     if remark is not None:
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
 
     bili = str(columns.get(bridge.SONG_BILI_COLUMN) or "").strip()
-    if bili:
-        hits = by_title.get(bridge.SONG_BILI_COLUMN) or []
+    bili_title = field_maps.target(doc_key, tab_id, bridge.SONG_BILI_COLUMN)
+    if bili and bili_title:
+        hits = by_title.get(bili_title) or []
         if not SONG_BILI_WRITE_ENABLED:
             skipped[bridge.SONG_BILI_COLUMN] = "B站链接待单条试写校验后启用（本批未写入）"
         elif len(hits) != 1:
@@ -714,17 +734,17 @@ def make_song_plan(record: dict, fields: list[dict]):
             if parts.scheme not in {"http", "https"} or not parts.hostname:
                 skipped[bridge.SONG_BILI_COLUMN] = "链接无法识别"
             else:
-                values[bridge.SONG_BILI_COLUMN] = [
-                    {"type": "url", "text": bili, "link": bili}]
-                kinds[bridge.SONG_BILI_COLUMN] = 8
+                values[bili_title] = [{"type": "url", "text": bili, "link": bili}]
+                kinds[bili_title] = 8
 
-    if record.get("_images"):
+    if record.get("_images") and field_maps.target(doc_key, tab_id, "封面图"):
         field = unique("封面图")
         if field.get("fieldType") != 5:
             raise ImportErrorDetail("封面图字段不是图片类型")
         kinds[field["fieldTitle"]] = field["fieldType"]
 
-    if "歌曲名称" not in values:
+    title = field_maps.target(doc_key, tab_id, "歌曲名称")
+    if not title or title not in values:
         raise ImportErrorDetail("必需字段无法写入：歌曲名称")
     return values, kinds, skipped
 
@@ -771,11 +791,13 @@ def _date_ms(value: str):
     return str(int(moment.timestamp() * 1000)), None
 
 
-def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events"):
+def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events",
+                        doc_key="", tab_id=""):
     """线下活动 / 周边图鉴字段计划：只写明确支持的列，不新建下拉选项。
 
     线下活动可写「宣传图」图片列（本地封面/宣传图）；已存在行只追加该图片列。
-    周边图鉴仍不碰图片列。
+    周边图鉴仍不碰图片列。字段映射（config tcdoc_field_maps）把这些内部列
+    改写到目标表别的列；映射成空串的字段不写。
     """
     spec = CANDIDATE_FIELDS.get(profile) or CANDIDATE_FIELDS["events"]
     columns = record.get("columns") or {}
@@ -783,8 +805,15 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
     for field in fields:
         by_title.setdefault(str(field.get("fieldTitle") or ""), []).append(field)
 
+    def target_of(name: str) -> str:
+        return field_maps.target(doc_key, tab_id, name)
+
     def one(name: str):
-        hits = by_title.get(name) or []
+        """内部字段名 → 目标表字段；映射为不写或列缺失时返回 None。"""
+        target = target_of(name)
+        if not target:
+            return None
+        hits = by_title.get(target) or []
         return hits[0] if len(hits) == 1 else None
 
     values, kinds, skipped = {}, {}, {}
@@ -796,9 +825,9 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
                 continue
             field = one(name)
             if field is None:
-                skipped[name] = "目标缺少字段"
+                skipped[name] = "目标缺少字段或已配置为不写"
             elif int(field.get("fieldType") or 0) == 5:
-                kinds[name] = 5
+                kinds[str(field.get("fieldTitle"))] = 5
             else:
                 skipped[name] = "字段不是图片类型"
         return values, kinds, skipped
@@ -808,12 +837,13 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
             continue
         field = one(name)
         if field is None:
-            skipped[name] = "目标缺少字段"
+            skipped[name] = "目标缺少字段或已配置为不写"
             continue
+        title = str(field.get("fieldTitle"))
         kind = int(field.get("fieldType") or 1)
         if kind == 1:
-            values[name] = [{"type": "text", "text": value}]
-            kinds[name] = kind
+            values[title] = [{"type": "text", "text": value}]
+            kinds[title] = kind
         else:
             skipped[name] = "字段类型不匹配"
 
@@ -823,19 +853,20 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
             continue
         field = one(name)
         if field is None:
-            skipped[name] = "目标缺少字段"
+            skipped[name] = "目标缺少字段或已配置为不写"
             continue
+        title = str(field.get("fieldTitle"))
         kind = int(field.get("fieldType") or 1)
         if kind == 4:
             encoded, why = _date_ms(value)
             if why:
                 skipped[name] = why
                 continue
-            values[name] = encoded
-            kinds[name] = kind
+            values[title] = encoded
+            kinds[title] = kind
         elif kind == 1:
-            values[name] = [{"type": "text", "text": value}]
-            kinds[name] = kind
+            values[title] = [{"type": "text", "text": value}]
+            kinds[title] = kind
         else:
             skipped[name] = "字段类型不匹配"
 
@@ -845,8 +876,9 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
             continue
         field = one(name)
         if field is None:
-            skipped[name] = "目标缺少字段"
+            skipped[name] = "目标缺少字段或已配置为不写"
             continue
+        title = str(field.get("fieldTitle"))
         kind = int(field.get("fieldType") or 1)
         if kind not in {9, 17}:
             skipped[name] = "字段不是单选类型"
@@ -856,8 +888,8 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
         if len(options) != 1:
             skipped[name] = "没有匹配的既有选项"
             continue
-        values[name] = options
-        kinds[name] = kind
+        values[title] = options
+        kinds[title] = kind
 
     for name in spec["link"]:
         value = str(columns.get(name) or "").strip()
@@ -865,19 +897,20 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
             continue
         field = one(name)
         if field is None:
-            skipped[name] = "目标缺少字段"
+            skipped[name] = "目标缺少字段或已配置为不写"
             continue
+        title = str(field.get("fieldTitle"))
         kind = int(field.get("fieldType") or 1)
         if kind == 8:
             parts = urlsplit(value)
             if parts.scheme not in {"http", "https"} or not parts.hostname:
                 skipped[name] = "链接无法识别"
                 continue
-            values[name] = [{"type": "url", "text": value, "link": value}]
-            kinds[name] = kind
+            values[title] = [{"type": "url", "text": value, "link": value}]
+            kinds[title] = kind
         elif kind == 1:
-            values[name] = [{"type": "text", "text": value}]
-            kinds[name] = kind
+            values[title] = [{"type": "text", "text": value}]
+            kinds[title] = kind
         else:
             skipped[name] = "字段类型不匹配"
 
@@ -891,19 +924,21 @@ def make_candidate_plan(record: dict, fields: list[dict], profile: str = "events
             continue
         field = one(name)
         if field is None:
-            skipped[name] = "目标缺少字段"
+            skipped[name] = "目标缺少字段或已配置为不写"
         elif int(field.get("fieldType") or 0) == 5:
-            kinds[name] = 5
+            kinds[str(field.get("fieldTitle"))] = 5
         else:
             skipped[name] = "字段不是图片类型"
 
-    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped,
+                                                     doc_key, tab_id)
     if remark is not None:
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
 
     for required in spec["required"]:
-        if required not in values:
+        title = target_of(required)
+        if not title or title not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
     return values, kinds, skipped
 
@@ -985,39 +1020,48 @@ def merch_records_from_rows(rows: list[dict]) -> list[dict]:
     return records
 
 
-def event_remote_keys(rows: list[dict]) -> set[str]:
+def event_remote_keys(rows: list[dict], doc_key="", tab_id="") -> set[str]:
     keys = set()
+    title = field_maps.target(doc_key, tab_id, "活动名称")
+    if not title:
+        return keys
     for row in rows:
         name = bridge._song_title_key(
-            _live_cell_text((row.get("values") or {}).get("活动名称")))
+            _live_cell_text((row.get("values") or {}).get(title)))
         if name:
             keys.add("event:" + name)
     return keys
 
 
-def merch_remote_keys(rows: list[dict]) -> set[str]:
+def merch_remote_keys(rows: list[dict], doc_key="", tab_id="") -> set[str]:
     keys = set()
+    title = field_maps.target(doc_key, tab_id, "周边名称")
+    if not title:
+        return keys
     for row in rows:
         name = bridge._song_title_key(
-            _live_cell_text((row.get("values") or {}).get("周边名称")))
+            _live_cell_text((row.get("values") or {}).get(title)))
         if name:
             keys.add("merch:" + name)
     return keys
 
 
-def song_remote_keys(rows: list[dict]) -> dict[str, list]:
+def song_remote_keys(rows: list[dict], doc_key="", tab_id="") -> dict[str, list]:
     """远端完整歌曲按歌曲名建立身份键，用于跳过已存在歌曲。"""
     keys: dict[str, list] = {}
+    title = field_maps.target(doc_key, tab_id, "歌曲名称")
+    if not title:
+        return keys
     for row in rows:
         values = row.get("values") or {}
-        key = bridge._song_title_key(bridge._song_cell_text(values.get("歌曲名称")))
+        key = bridge._song_title_key(bridge._song_cell_text(values.get(title)))
         if key:
             keys.setdefault(key, []).append(row.get("recordID"))
     return keys
 
 
-def count_song_title_keys(rows: list[dict]) -> dict[str, int]:
-    return {key: len(ids) for key, ids in song_remote_keys(rows).items()}
+def count_song_title_keys(rows: list[dict], doc_key="", tab_id="") -> dict[str, int]:
+    return {key: len(ids) for key, ids in song_remote_keys(rows, doc_key, tab_id).items()}
 
 
 def make_manifest(project=ROOT, days=30):
@@ -1073,22 +1117,45 @@ def live_key(row: dict) -> str:
     return f"date:{day}|{title}"
 
 
-def make_live_plan(record: dict, fields: list[dict], available_only=True):
+def live_key_from_values(values: dict, doc_key="", tab_id="") -> str:
+    """远端表格行（按列名取值）→ 直播去重键；列名按字段映射解析。"""
+    values = values or {}
+
+    def text(name):
+        title = field_maps.target(doc_key, tab_id, name)
+        return _live_cell_text(values.get(title)) if title else ""
+
+    def day(name):
+        title = field_maps.target(doc_key, tab_id, name)
+        return _ms_to_day(values.get(title)) if title else ""
+
+    return live_key({"直播标题": text("直播标题"),
+                     "开始时间": day("开始时间"),
+                     "直播链接1": text("直播链接1")})
+
+
+def make_live_plan(record: dict, fields: list[dict], available_only=True,
+                   doc_key="", tab_id=""):
     """直播记录行 → OpenAPI values/kinds/skipped，只做编码，不发送请求。
 
     公式列（直播时长/直播距今）不写；多选列没有既有选项时跳过该字段并记原因；
     链接列写成 `[{type:url, text:显示文本, link:URL}]`，保留两级结构。
+    字段映射（config tcdoc_field_maps）把这些内部列改写到目标表别的列。
     """
     values, kinds, skipped = {}, {}, {}
     for name in LIVE_READONLY_FIELDS:
-        if any(f.get("fieldTitle") == name for f in fields):
+        title = field_maps.target(doc_key, tab_id, name)
+        if title and any(f.get("fieldTitle") == title for f in fields):
             skipped[name] = "公式列不写"
     for name in LIVE_FIELDS:
+        target = field_maps.target(doc_key, tab_id, name)
         raw = record.get(name, "")
-        hits = [f for f in fields if f.get("fieldTitle") == name]
+        if not target:
+            continue
+        hits = [f for f in fields if f.get("fieldTitle") == target]
         if len(hits) != 1:
             if not available_only:
-                raise ImportErrorDetail(f"字段无法唯一匹配：{name}")
+                raise ImportErrorDetail(f"字段无法唯一匹配：{name}→{target}")
             skipped[name] = "目标缺少字段"
             continue
         field = hits[0]
@@ -1137,25 +1204,28 @@ def make_live_plan(record: dict, fields: list[dict], available_only=True):
             kinds[title] = kind
             continue
         skipped[name] = "字段类型不匹配"
-    remark, remark_kind, remark_title = _remark_plan(record, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(record, fields, skipped,
+                                                     doc_key, tab_id)
     if remark is not None:
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
     for required in LIVE_REQUIRED_FIELDS:
-        if required not in values:
+        title = field_maps.target(doc_key, tab_id, required)
+        if not title or title not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
     return values, kinds, skipped
 
 
 def preview_lives(rows: list[dict], fields: list[dict], remote_keys=(),
-                  available_only=True) -> dict:
+                  available_only=True, doc_key="", tab_id="") -> dict:
     """直播记录写回预演：返回每条 payload 与跳过去重结果，**不发送任何请求**。"""
     remote = {str(key) for key in (remote_keys or ())}
     out: dict = {"records": [], "duplicates": [], "errors": [], "sent": 0}
     for row in rows:
         key = live_key(row)
         try:
-            values, kinds, skipped = make_live_plan(row, fields, available_only)
+            values, kinds, skipped = make_live_plan(row, fields, available_only,
+                                                   doc_key, tab_id)
         except ImportErrorDetail as exc:
             out["errors"].append({"key": key, "title": row.get("直播标题"),
                                   "error": str(exc)})
@@ -1205,15 +1275,11 @@ def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
     """
     fields = client.get_fields()
     before = client.get_records()
-    known = set()
-    for record in before:
-        values = record.get("values") or {}
-        known.add(live_key({
-            "直播标题": _live_cell_text(values.get("直播标题")),
-            "开始时间": _ms_to_day(values.get("开始时间")),
-            "直播链接1": _live_cell_text(values.get("直播链接1")),
-        }))
-    preview = preview_lives(rows, fields, remote_keys=known, available_only=True)
+    known = {live_key_from_values(record.get("values") or {},
+                                  client.doc_key, client.tab_id)
+             for record in before}
+    preview = preview_lives(rows, fields, remote_keys=known, available_only=True,
+                            doc_key=client.doc_key, tab_id=client.tab_id)
     receipt = {"phase": "complete", "apply": apply, "rows_before": len(before),
                "rows_after": len(before), "sent": 0,
                "added": [], "skipped": [item["key"] for item in preview["duplicates"]],
@@ -1228,8 +1294,13 @@ def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
 
     def save_history(status="成功", note=""):
         remark_text = ""
+        remark_titles = set(bridge.REMARK_ALIASES) | {
+            field_maps.target(client.doc_key, client.tab_id, name)
+            for name in bridge.REMARK_ALIASES}
         for item in todo:
-            for title in bridge.REMARK_ALIASES:
+            for title in remark_titles:
+                if not title:
+                    continue
                 block = (item.get("values") or {}).get(title)
                 if isinstance(block, list) and block and isinstance(block[0], dict):
                     remark_text = str(block[0].get("text") or "")
@@ -1273,9 +1344,16 @@ def write_lives(client, rows: list[dict], *, limit: int = 1, apply: bool = True,
 
 
 def make_plan(record: dict, fields: list[dict], available_only=False,
-              allow_new_options=False):
+              allow_new_options=False, doc_key="", tab_id=""):
     columns = record["columns"]
     aliases = {**ALIASES, "作品时长": ("作品时长",), "动态链接(b站)": ("动态链接(b站)",)}
+    # 字段映射：内部字段名 → 目标表列名；映射成空串的字段本次不写
+    for name in list(aliases):
+        target = field_maps.target(doc_key, tab_id, name)
+        if not target:
+            aliases.pop(name, None)
+        elif target != name:
+            aliases[name] = (target,)
     values, kinds, skipped = {}, {}, {}
     for name, names in aliases.items():
         value = columns.get(name, "")
@@ -1326,31 +1404,39 @@ def make_plan(record: dict, fields: list[dict], available_only=False,
             continue
         values[title] = encoded
         kinds[title] = kind
-    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped)
+    remark, remark_kind, remark_title = _remark_plan(columns, fields, skipped,
+                                                     doc_key, tab_id)
     if remark is not None:
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
     for required in ("作品标题", "作品内容", "发布时间"):
-        if required not in values:
+        title = field_maps.target(doc_key, tab_id, required)
+        if not title or title not in values:
             raise ImportErrorDetail(f"必需字段无法写入：{required}")
-    if not any(kinds.get(name) == 8 for name in ("作品链接", "链接", "动态链接(b站)")):
+    link_titles = [field_maps.target(doc_key, tab_id, name)
+                   for name in ("作品链接", "动态链接(b站)")]
+    if not any(title and kinds.get(title) == 8 for title in link_titles):
         raise ImportErrorDetail("没有可写的原帖链接字段")
-    if not any(kind == 5 for kind in kinds.values()):
+    if record.get("_images") and not any(kind == 5 for kind in kinds.values()):
         raise ImportErrorDetail("没有可写的图片字段")
     return values, kinds, skipped
 
 
-def new_choice_options(records: list[dict], fields: list[dict]) -> dict[str, list[str]]:
+def new_choice_options(records: list[dict], fields: list[dict],
+                       doc_key="", tab_id="") -> dict[str, list[str]]:
     """这批记录会新建的下拉选项：{字段名: [新选项文本...]}。
 
-    只用于上传前向用户确认；不写任何东西。
+    只用于上传前向用户确认；不写任何东西。字段映射改到别的列时按目标列名找字段。
     """
     by_title = {f.get("fieldTitle"): f for f in fields if f.get("fieldTitle")}
     out: dict[str, list[str]] = {}
     for record in records:
         for name in CHOICE_COLUMNS:
             value = str(record["columns"].get(name) or "").strip()
-            field = by_title.get(name)
+            target = field_maps.target(doc_key, tab_id, name)
+            if not target:
+                continue
+            field = by_title.get(target)
             if not value or field is None or field.get("fieldType") not in {9, 17}:
                 continue
             if any(o.get("text") == value and o.get("id") for o in field_options(field)):
@@ -1361,20 +1447,29 @@ def new_choice_options(records: list[dict], fields: list[dict]) -> dict[str, lis
     return out
 
 
-def count_remote_keys(rows: list[dict]) -> dict[str, int]:
+def count_remote_keys(rows: list[dict], doc_key="", tab_id="") -> dict[str, int]:
     """按原帖链接统计出现次数：>1 说明表里已有重复行。"""
     counts: dict[str, int] = {}
     for row in rows:
-        for key in remote_keys([row]):
+        for key in remote_keys([row], doc_key, tab_id):
             counts[key] = counts.get(key, 0) + 1
     return counts
 
 
-def remote_keys(rows: list[dict]):
+def remote_keys(rows: list[dict], doc_key="", tab_id=""):
     keys = {}
+    titles = []
+    link_title = field_maps.target(doc_key, tab_id, "作品链接")
+    if link_title:
+        titles.append(link_title)
+        if link_title == "作品链接":
+            titles.append("链接")   # 旧表把这一列叫「链接」
+    dyn_title = field_maps.target(doc_key, tab_id, "动态链接(b站)")
+    if dyn_title:
+        titles.append(dyn_title)
     for row in rows:
         values = row.get("values") or {}
-        for title in ("作品链接", "链接", "动态链接(b站)"):
+        for title in titles:
             for part in values.get(title) or []:
                 key = link_key(part.get("link", "")) if isinstance(part, dict) else None
                 if key:
@@ -1419,22 +1514,26 @@ def verify(row: dict, values: dict, kinds: dict, images: list[LocalImage],
 CHOICE_TITLES = ("发布账号", "发布平台", "动态类型", "发布位置")
 
 
-def choice_values(record: dict, fields: list[dict]):
+def choice_values(record: dict, fields: list[dict], doc_key="", tab_id=""):
     """为四个单选列构造写入值：已有同名选项复用其 id，缺失时只给文本由表内快速添加。"""
     values, skipped = {}, {}
-    for title in CHOICE_TITLES:
-        text = str(record["columns"].get(title) or "").strip()
-        hits = [f for f in fields if f.get("fieldTitle") == title]
+    for name in CHOICE_TITLES:
+        target = field_maps.target(doc_key, tab_id, name)
+        text = str(record["columns"].get(name) or "").strip()
+        if not target:
+            continue
+        hits = [f for f in fields if f.get("fieldTitle") == target]
         if len(hits) != 1:
-            skipped[title] = "目标缺少字段"
+            skipped[name] = "目标缺少字段"
             continue
         field = hits[0]
         if field.get("fieldType") not in {9, 17}:
-            skipped[title] = "字段不是单选类型"
+            skipped[name] = "字段不是单选类型"
             continue
         if not text:
-            skipped[title] = "本地值为空"
+            skipped[name] = "本地值为空"
             continue
+        title = str(field.get("fieldTitle"))
         existing = [o for o in field_options(field) if o.get("text") == text and o.get("id")]
         values[title] = [{"id": existing[0]["id"], "text": text}] if existing else [{"text": text}]
     return values, skipped
@@ -1449,8 +1548,11 @@ class ChoiceFillClient(LocalImportClient):
             raise ImportErrorDetail("补写选项仅允许本次授权测试目标")
         if not records:
             return []
+        allowed = {field_maps.target(self.doc_key, self.tab_id, name)
+                   for name in CHOICE_TITLES}
         for record in records:
-            if not str(record.get("recordID") or "") or set(record.get("values") or {}) - set(CHOICE_TITLES):
+            if (not str(record.get("recordID") or "")
+                    or set(record.get("values") or {}) - allowed):
                 raise ImportErrorDetail("只允许按 recordID 补写四个单选列")
         path = (f"/smartbook/v2/files/{quote(self.file_id, safe='')}"
                 f"/sheets/{quote(self.tab_id, safe='')}")
@@ -1468,12 +1570,12 @@ def fill_choices(client, records, *, apply=False, emit=lambda event: None):
     before = client.get_records()
     by_key = {}
     for row in before:
-        for key, ids in remote_keys([row]).items():
+        for key, ids in remote_keys([row], client.doc_key, client.tab_id).items():
             by_key.setdefault(key, ids[0])
     plan, updates = [], []
     for record in records:
         rid = by_key.get(record["key"])
-        values, skipped = choice_values(record, fields)
+        values, skipped = choice_values(record, fields, client.doc_key, client.tab_id)
         plan.append({"key": record["key"], "title": record["columns"]["作品标题"],
                      "record_id": rid, "values": {k: v[0].get("text") for k, v in values.items()},
                      "skipped_fields": skipped})
@@ -1536,12 +1638,15 @@ def _image_titles(values: dict, title: str = "宣传图") -> list[str]:
     return [str(i.get("title") or "") for i in raw if isinstance(i, dict)]
 
 
-def _event_live_index(rows: list[dict]) -> dict:
+def _event_live_index(rows: list[dict], doc_key="", tab_id="") -> dict:
     """线上记录 → 活动键对应的 record；同名只取第一条。"""
     index = {}
+    title = field_maps.target(doc_key, tab_id, "活动名称")
+    if not title:
+        return index
     for row in rows:
         values = row.get("values") or {}
-        key = "event:" + bridge._song_title_key(_live_cell_text(values.get("活动名称")))
+        key = "event:" + bridge._song_title_key(_live_cell_text(values.get(title)))
         if key != "event:" and key not in index:
             index[key] = row
     return index
@@ -1562,30 +1667,36 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
     if available_only and (client.doc_key, client.tab_id) != TEST_TARGET:
         raise ImportErrorDetail("只写可用字段的例外仅允许本次授权测试目标")
     fields = client.get_fields()
+    doc_key, tab_id = client.doc_key, client.tab_id
     if profile == "songs":
-        plans = [(record, *make_song_plan(record, fields)) for record in records]
+        plans = [(record, *make_song_plan(record, fields, doc_key, tab_id))
+                 for record in records]
     elif profile in ("events", "merch"):
-        plans = [(record, *make_candidate_plan(record, fields, profile))
+        plans = [(record, *make_candidate_plan(record, fields, profile, doc_key, tab_id))
                  for record in records]
     else:
-        plans = [(record, *make_plan(record, fields, available_only, allow_new_options))
+        plans = [(record, *make_plan(record, fields, available_only, allow_new_options,
+                                     doc_key, tab_id))
                  for record in records]
     comment_field = None
     if profile == "posts":
+        comment_title = field_maps.target(doc_key, tab_id,
+                                          comment_images.COMMENT_FIELD_TITLE)
         comment_field = next(
             (field for field in fields
-             if str(field.get("fieldTitle") or "") == comment_images.COMMENT_FIELD_TITLE
+             if str(field.get("fieldTitle") or "") == comment_title
              and int(field.get("fieldType") or 0) == 5), None)
     before = client.get_records()
     if profile == "songs":
-        known = {"song:" + key for key in song_remote_keys(before)}
+        known = {"song:" + key for key in song_remote_keys(before, doc_key, tab_id)}
     elif profile == "events":
-        known = event_remote_keys(before)
+        known = event_remote_keys(before, doc_key, tab_id)
     elif profile == "merch":
-        known = merch_remote_keys(before)
+        known = merch_remote_keys(before, doc_key, tab_id)
     else:
-        known = set(remote_keys(before))
-    live_events = _event_live_index(before) if profile == "events" else {}
+        known = set(remote_keys(before, doc_key, tab_id))
+    live_events = (_event_live_index(before, doc_key, tab_id)
+                   if profile == "events" else {})
 
     def operation(record) -> str:
         if record.get("_existing"):
@@ -1610,8 +1721,12 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
         return receipt
 
     remark_text = ""
+    remark_titles = set(bridge.REMARK_ALIASES) | {
+        field_maps.target(doc_key, tab_id, name) for name in bridge.REMARK_ALIASES}
     for _record, values, _kinds, _skipped in plans:
-        for title in bridge.REMARK_ALIASES:
+        for title in remark_titles:
+            if not title:
+                continue
             block = values.get(title)
             if isinstance(block, list) and block and isinstance(block[0], dict):
                 remark_text = str(block[0].get("text") or "")
@@ -1644,8 +1759,9 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                     if not rid:
                         raise ImportErrorDetail("目标活动行缺少 recordID，无法追加宣传图")
                     live_values = live.get("values") or {}
-                    existing_entries = _image_write_entries(live_values)
-                    existing_names = set(_image_titles(live_values))
+                    promo_title = field_maps.target(doc_key, tab_id, "宣传图") or "宣传图"
+                    existing_entries = _image_write_entries(live_values, promo_title)
+                    existing_names = set(_image_titles(live_values, promo_title))
                     pending_images = [image for image in record["_images"]
                                       if image.upload_name not in existing_names]
                     if not pending_images:
@@ -1688,7 +1804,12 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                     emit({"phase": "comment_prepared", "key": record["key"],
                           "count": len(record.get("_comment_images") or []),
                           "note": record.get("comment_note") or ""})
-                images = record["_images"]
+                cover_source = ("宣传图" if profile == "events"
+                        else "封面图" if profile in ("posts", "songs") else "")
+                cover_title = (field_maps.target(doc_key, tab_id, cover_source)
+                               if cover_source else "")
+                # 配置成「不写图片列」时不传图，免得白传一轮
+                images = record["_images"] if cover_title else []
                 for image in images:
                     image.read_verified()
                 tickets = []
@@ -1698,14 +1819,16 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                     emit({"phase": "image_uploaded", "key": record["key"],
                           "name": image.path.name, "kind": "cover"})
 
-                image_title = ("封面图" if kinds.get("封面图") == 5 else
-                               next((title for title, kind in kinds.items() if kind == 5), ""))
+                image_title = (cover_title if cover_title and kinds.get(cover_title) == 5
+                               else next((title for title, kind in kinds.items()
+                                          if kind == 5), ""))
                 comment_selected = (list(record.get("_comment_images") or [])
                                     if profile == "posts" else [])
                 comment_note = str(record.get("comment_note") or "")
                 comment_tickets = []
                 comment_uploaded = []
-                if comment_selected and image_title == comment_images.COMMENT_FIELD_TITLE:
+                comment_title = str((comment_field or {}).get("fieldTitle") or "")
+                if comment_selected and image_title == comment_title:
                     comment_note = _join_notes(
                         comment_note, "封面图与评论区图片是同一字段，未写入评论区图片")
                     comment_selected = []
@@ -1738,14 +1861,14 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
                 if tickets and image_title:
                     values[image_title] = [{"imageID": ticket} for ticket in tickets]
                 if comment_tickets and comment_field is not None:
-                    values[comment_images.COMMENT_FIELD_TITLE] = [
+                    values[comment_title] = [
                         {"imageID": ticket} for ticket in comment_tickets]
-                    kinds[comment_images.COMMENT_FIELD_TITLE] = 5
+                    kinds[comment_title] = 5
                 image_groups = {}
                 if image_title:
                     image_groups[image_title] = images
                 if comment_tickets:
-                    image_groups[comment_images.COMMENT_FIELD_TITLE] = comment_uploaded
+                    image_groups[comment_title] = comment_uploaded
 
                 rid = client.add_record(values)
                 known.add(record["key"])
@@ -1782,8 +1905,8 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
         if pending_verify:
             fresh = client.get_records()
             saved_by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
-            counts = (count_song_title_keys(fresh) if profile == "songs"
-                      else count_remote_keys(fresh))
+            counts = (count_song_title_keys(fresh, doc_key, tab_id) if profile == "songs"
+                      else count_remote_keys(fresh, doc_key, tab_id))
             for added, values, kinds, images, image_groups in pending_verify:
                 if profile in ("events", "merch"):
                     # 候选表只给「新增」授权，重复性由名称键在上方 already-skip 判断
@@ -1806,7 +1929,8 @@ def run(client, records, *, apply=False, available_only=False, verify_each=True,
             by_id = {str(row.get("recordID")): row for row in fresh if row.get("recordID")}
             for item, rid, before_count, images in pending_append_verify:
                 row = by_id.get(rid)
-                titles = _image_titles((row or {}).get("values") or {})
+                promo_title = field_maps.target(doc_key, tab_id, "宣传图") or "宣传图"
+                titles = _image_titles((row or {}).get("values") or {}, promo_title)
                 ok = (row is not None
                       and len(titles) == before_count + len(images)
                       and all(image.upload_name in titles for image in images))

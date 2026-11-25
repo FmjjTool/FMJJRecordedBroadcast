@@ -547,11 +547,17 @@ def field_options(raw: dict) -> list[dict]:
     return []
 
 
-def resolve_fields(raw_fields: list[dict]) -> dict:
+def resolve_fields(raw_fields: list[dict], doc_key="", tab_id="") -> dict:
+    from toolbox.tcdoc import field_maps
+
     resolved = {}
     for semantic, aliases in ALIASES.items():
-        matches = [f for f in raw_fields if f.get("fieldTitle") in aliases]
+        target = field_maps.target(doc_key, tab_id, semantic)
+        names = (target,) if target else ()
+        matches = [f for f in raw_fields if f.get("fieldTitle") in names]
         if len(matches) != 1 or not matches[0].get("fieldID"):
+            if not target:
+                continue  # 配置为「不写」：整列跳过
             raise ImportErrorDetail(f"缺少或无法唯一匹配字段：{semantic}")
         raw = matches[0]
         kind = raw.get("fieldType")
@@ -567,7 +573,9 @@ def resolve_fields(raw_fields: list[dict]) -> dict:
 def encode_columns(post: LocalPost, fields: dict, dynamic_type: str, position: str) -> dict:
     values = {}
     for semantic, value in post.columns(dynamic_type, position).items():
-        f = fields[semantic]
+        f = fields.get(semantic)
+        if f is None:
+            continue  # 该字段在配置里被映射成「不写」
         kind = f["fieldType"]
         if kind in {9, 17}:
             options = [o for o in f["options"] if o.get("text") == value and o.get("id")]
@@ -589,7 +597,10 @@ def encode_columns(post: LocalPost, fields: dict, dynamic_type: str, position: s
 
 def existing_keys(records: list[dict], fields: dict) -> dict[str, list[str]]:
     out = {}
-    link_title = fields["作品链接"]["fieldTitle"]
+    link = fields.get("作品链接")
+    if link is None:
+        raise ImportErrorDetail("作品链接列已按字段映射配置为不写，无法按链接去重")
+    link_title = link["fieldTitle"]
     for row in records:
         value = (row.get("values") or {}).get(link_title) or []
         if not isinstance(value, list):
@@ -632,7 +643,7 @@ def check_readback(row: dict, values: dict, post: LocalPost, fields: dict) -> di
 
 def run_import(client, posts: list[LocalPost], *, apply=False, dynamic_type="动态",
                position="动态", emit: Callable[[dict], None] = lambda event: None) -> dict:
-    fields = resolve_fields(client.get_fields())
+    fields = resolve_fields(client.get_fields(), client.doc_key, client.tab_id)
     records = client.get_records()
     keys = existing_keys(records, fields)
     # 在第一张图片上传前，核对整批所有列、既有选项和本地图片。
@@ -655,7 +666,7 @@ def run_import(client, posts: list[LocalPost], *, apply=False, dynamic_type="动
         return receipt
     for post, values in plans:
         try:
-            if resolve_fields(client.get_fields()) != fields:
+            if resolve_fields(client.get_fields(), client.doc_key, client.tab_id) != fields:
                 raise ImportErrorDetail("预览后字段或选项已变化，请重新预览")
             current = client.get_records()
             current_keys = existing_keys(current, fields)
@@ -678,7 +689,7 @@ def run_import(client, posts: list[LocalPost], *, apply=False, dynamic_type="动
                 receipt["skipped"].append({"post_id": post.post_id, "record_ids": latest_keys[post.key]})
                 receipt["rows_after"] = len(latest)
                 continue
-            if resolve_fields(client.get_fields()) != fields:
+            if resolve_fields(client.get_fields(), client.doc_key, client.tab_id) != fields:
                 raise ImportErrorDetail("上传期间字段或选项已变化，未新增记录")
             values = dict(values)
             values[fields["封面图"]["fieldTitle"]] = [{"imageID": i} for i in image_ids]

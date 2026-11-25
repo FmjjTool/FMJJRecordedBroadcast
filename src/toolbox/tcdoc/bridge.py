@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as tc_cfg
+from . import field_maps
 from . import tables
 
 # 中间层列顺序（与用户确认的腾讯「官方动态」列标准一致）
@@ -586,11 +587,15 @@ def collect_local_songs(root: Path | None = None) -> list[dict]:
     return rows
 
 
-def _song_remote_keys(remote: list[dict]) -> set[str]:
+def _song_remote_keys(remote: list[dict], doc_key: str = SONG_DOC_KEY,
+                      tab_id: str = SONG_TAB_ID) -> set[str]:
     keys = set()
+    title = field_maps.target(doc_key, tab_id, "歌曲名称")
+    if not title:
+        return keys
     for row in remote:
         values = row.get("values") or {}
-        key = _song_title_key(_song_cell_text(values.get("歌曲名称")))
+        key = _song_title_key(_song_cell_text(values.get(title)))
         if key:
             keys.add(key)
     return keys
@@ -832,23 +837,31 @@ def _merch_candidate(item: dict):
     }
 
 
-def _event_synced(candidate: dict, remote_rows: list[dict]) -> bool:
+def _event_synced(candidate: dict, remote_rows: list[dict],
+                  doc_key: str = "", tab_id: str = "") -> bool:
     """按日期 + 名称（或城市）判断远端是否已有该活动。"""
+    names = {name: field_maps.target(doc_key, tab_id, name) for name in
+             ("活动名称", "活动日期", "开始时间", "活动类型")}
+
+    def cell(values, name):
+        title = names.get(name)
+        return values.get(title) if title else ""
+
     c_name = _song_title_key(candidate.get("name"))
     c_date = str(candidate.get("date") or "")
     city = str(candidate.get("city") or "")
     for row in remote_rows:
         values = row.get("values") or {}
-        r_name_text = str(values.get("活动名称") or "")
+        r_name_text = str(cell(values, "活动名称") or "")
         r_name = _song_title_key(r_name_text)
-        r_date = (_date_key(values.get("活动日期"))
-                  or _date_key(values.get("开始时间")))
+        r_date = (_date_key(cell(values, "活动日期"))
+                  or _date_key(cell(values, "开始时间")))
         if c_date and r_date and c_date != r_date:
             continue
         if c_name and r_name and (c_name == r_name or c_name in r_name
                                   or r_name in c_name):
             return True
-        r_type = str(values.get("活动类型") or "")
+        r_type = str(cell(values, "活动类型") or "")
         if (c_date and r_date == c_date and r_type
                 and candidate.get("type") not in ("", "线下活动")
                 and candidate["type"] in r_type):
@@ -858,14 +871,18 @@ def _event_synced(candidate: dict, remote_rows: list[dict]) -> bool:
     return False
 
 
-def _merch_synced(candidate: dict, remote_rows: list[dict]) -> bool:
+def _merch_synced(candidate: dict, remote_rows: list[dict],
+                  doc_key: str = "", tab_id: str = "") -> bool:
     """按周边名称判断远端是否已有该周边。"""
     c_name = _song_title_key(candidate.get("name"))
     if not c_name:
         return False
+    title = field_maps.target(doc_key, tab_id, "周边名称")
+    if not title:
+        return False
     for row in remote_rows:
         values = row.get("values") or {}
-        r_name = _song_title_key(values.get("周边名称"))
+        r_name = _song_title_key(values.get(title))
         if not r_name:
             continue
         if c_name == r_name or (len(c_name) >= 4 and c_name in r_name) or (
@@ -1158,8 +1175,9 @@ def _build_candidate_result(profile: str, days, collected=None) -> dict:
             group["text"] = candidate["text"]
     pending, existing = [], []
     for group in groups.values():
-        synced = (_event_synced(group, remote) if profile == "events"
-                  else _merch_synced(group, remote))
+        synced = (_event_synced(group, remote, SONG_DOC_KEY, tab_id)
+                  if profile == "events"
+                  else _merch_synced(group, remote, SONG_DOC_KEY, tab_id))
         if not synced:
             pending.append(group)
         elif profile == "events" and group.get("promo_images"):
@@ -1173,6 +1191,9 @@ reverse=True)
     columns = _sheet_columns(SONG_DOC_KEY, tab_id)
     if not columns:
         columns = EVENT_FALLBACK_COLUMNS if profile == "events" else MERCH_FALLBACK_COLUMNS
+    # 快照表头可能是映射后的目标列名：还原成内部字段名，行数据与预览列才能对上
+    columns = tuple(dict.fromkeys(
+        field_maps.internal_of(SONG_DOC_KEY, tab_id, name) for name in columns))
     if profile == "events":
         # 「场馆地址」是 type 22 地理位置字段：OpenAPI 只校验不检索，连真实腾讯地图
         # POI 也返回 ret=22037（2026-11-24 实测），所以只写文本列「场馆地址（文本）」。
@@ -1560,7 +1581,7 @@ def _remote_snapshot(doc_key: str, tab_id: str) -> tuple[list[dict], dict]:
     if cached and cached[0] == stamp:
         return cached[1], cached[2]
     if db_file is None or not db_file.is_file():
-        return [], _remote_index([])
+        return [], _remote_index([], doc_key, tab_id)
     # 只读快照失败时短暂重试；不再回退到 rows_page()，那条路径每次都跑
     # 建表脚本、需要写锁，表格同步期间会把比对无限拖住。
     rows = None
@@ -1571,19 +1592,20 @@ def _remote_snapshot(doc_key: str, tab_id: str) -> tuple[list[dict], dict]:
         time.sleep(0.2 * (attempt + 1))
     if rows is None:
         raise SourceBusyError("腾讯表格本地存档暂时无法读取（可能正在同步），请稍后重试")
-    index = _remote_index(rows)
+    index = _remote_index(rows, doc_key, tab_id)
     if len(_REMOTE_CACHE) > 8:
         _REMOTE_CACHE.clear()
     _REMOTE_CACHE[key] = (stamp, rows, index)
     return rows, index
 
 
-def _index_of(rows: list[dict]) -> dict:
-    """缓存命中时直接复用索引；被替换过的行（测试注入）才重新计算。"""
+def _index_of(rows: list[dict], doc_key: str = "", tab_id: str = "") -> dict:
+    """缓存命中时直接复用索引；被替换过的行（测试注入）或映射变化时重新计算。"""
+    want = field_maps.signature(doc_key, tab_id)
     for cached_rows, cached_index in ((v[1], v[2]) for v in _REMOTE_CACHE.values()):
-        if cached_rows is rows:
+        if cached_rows is rows and cached_index.get("_map_sig", ()) == want:
             return cached_index
-    return _remote_index(rows)
+    return _remote_index(rows, doc_key, tab_id)
 
 
 def load_remote(doc_key: str, tab_id: str) -> list[dict]:
@@ -1591,8 +1613,22 @@ def load_remote(doc_key: str, tab_id: str) -> list[dict]:
     return _remote_snapshot(doc_key, tab_id)[0]
 
 
-def _remote_index(rows: list[dict]) -> dict:
-    """腾讯表 → 链接/ID/标题索引 + 动态类型投票 + 发布账号统计。"""
+def _remote_index(rows: list[dict], doc_key: str = "", tab_id: str = "") -> dict:
+    """腾讯表 → 链接/ID/标题索引 + 动态类型投票 + 发布账号统计。
+
+    字段映射（config tcdoc_field_maps）把某列改到别的列名时，这里按目标列名取值，
+    保证「已同步」判断与上传写入用的是同一套列。
+    """
+
+    def get(values: dict, name: str):
+        title = title_map.get(name)
+        return values.get(title) if title else ""
+
+    title_map = {name: field_maps.target(doc_key, tab_id, name)
+                 for name in ("发布平台", "作品ID", "作品标题", "发布时间",
+                              "发布账号", "动态类型", "发布位置", "作品链接",
+                              *LINK_COLUMNS)}
+
     urls: set[str] = set()
     ids: set[str] = set()
     texts: set[tuple] = set()
@@ -1605,39 +1641,39 @@ def _remote_index(rows: list[dict]) -> dict:
 
     for row in rows:
         values = row.get("values") or {}
-        plat = _platform_of(values.get("发布平台"))
+        plat = _platform_of(get(values, "发布平台"))
         for column in LINK_COLUMNS:
-            url = _norm_url(values.get(column))
+            url = _norm_url(get(values, column))
             if not url:
                 continue
             urls.add(url)
             ids.update(_url_ids(url))
-        record_id = str(values.get("作品ID") or "").strip()
+        record_id = str(get(values, "作品ID") or "").strip()
         if record_id:
             ids.add(record_id)
 
-        title = _norm_title(values.get("作品标题"))
-        day = _date_key(values.get("发布时间"))
+        title = _norm_title(get(values, "作品标题"))
+        day = _date_key(get(values, "发布时间"))
         if title:
             if day:
                 texts.add((plat, day, title))
                 texts.add((plat, day, title[:20]))
             if len(title) >= 10:
                 titles.add((plat, title[:20]))
-        for name in _split_multi(values.get("发布账号")):
+        for name in _split_multi(get(values, "发布账号")):
             accounts[name] += 1
 
-        page = _norm_url(values.get("作品链接"))
+        page = _norm_url(get(values, "作品链接"))
         if plat == "weibo":
             kind_group = "weibo"
-        elif page and ("/note/" in page or _first(values.get("动态类型")) == "图文"):
+        elif page and ("/note/" in page or _first(get(values, "动态类型")) == "图文"):
             kind_group = "image"
         elif page:
             kind_group = "video"
         else:
             kind_group = "dynamic"
-        type_value = _first(values.get("动态类型"))
-        pos_value = _first(values.get("发布位置"))
+        type_value = _first(get(values, "动态类型"))
+        pos_value = _first(get(values, "发布位置"))
         if type_value or pos_value:
             votes[(plat, kind_group)][(type_value, pos_value)] += 1
         if type_value:
@@ -1649,7 +1685,8 @@ def _remote_index(rows: list[dict]) -> dict:
     return {"urls": urls, "ids": ids, "texts": texts, "titles": titles,
             "votes": votes, "accounts": accounts,
             "types": types_seen, "positions": positions_seen,
-            "plat_types": plat_types}
+            "plat_types": plat_types,
+            "_map_sig": field_maps.signature(doc_key, tab_id)}
 
 
 # ==================== 作品链接 ====================
@@ -2191,8 +2228,11 @@ def build_live_pending(days=30, accounts=None, duplicate_mode="skip",
     """
     started = time.perf_counter()
     mode = duplicate_mode if duplicate_mode in LIVE_DUP_MODES else "skip"
-    cols = [str(name) for name in (columns or LIVE_FALLBACK_COLUMNS) if str(name).strip()]
-    remote = load_remote(SONG_DOC_KEY, LIVE_TAB_ID)
+    cols = [field_maps.internal_of(SONG_DOC_KEY, LIVE_TAB_ID, str(name))
+            for name in (columns or LIVE_FALLBACK_COLUMNS) if str(name).strip()]
+    remote = [{"values": field_maps.rename_to_internal(row.get("values") or {},
+                                                      SONG_DOC_KEY, LIVE_TAB_ID)}
+              for row in load_remote(SONG_DOC_KEY, LIVE_TAB_ID)]
 
     by_link: dict[str, dict] = {}
     by_day_title: dict[tuple, dict] = {}
@@ -2329,7 +2369,7 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
         return build_song_pending()
     started = time.perf_counter()
     remote = load_remote(doc_key, tab_id)
-    index = _index_of(remote)
+    index = _index_of(remote, doc_key, tab_id)
     after_remote = time.perf_counter()
     local = collect_local_items(days, collected)
     after_local = time.perf_counter()
@@ -2406,12 +2446,20 @@ def build_pending(doc_key: str, tab_id: str, days=30, accounts=None,
     }
 
 
-def to_tsv(rows: list[dict], columns=None) -> str:
-    """待同步行 → 制表符分隔文本（不含表头，可直接粘贴）。"""
-    columns = tuple(columns or COLUMNS)
+def to_tsv(rows: list[dict], columns=None, doc_key="", tab_id="") -> str:
+    """待同步行 → 制表符分隔文本（不含表头，可直接粘贴）。
+
+    传 doc_key/tab_id 时按字段映射输出：值仍从内部字段取，列顺序按配置后的目标列，
+    配置为「不写」的列不输出（与程序上传的实际写入一致）。
+    """
+    from . import field_maps
+
+    columns = list(columns or COLUMNS)
+    pairs = field_maps.mapping(doc_key, tab_id) if (doc_key or tab_id) else {}
+    sources = [column for column in columns if pairs.get(column, column)]
     lines = []
     for row in rows:
-        values = [_clean_cell(row.get(column, "")) for column in columns]
+        values = [_clean_cell(row.get(column, "")) for column in sources]
         lines.append("\t".join(values))
     return "\r\n".join(lines)
 

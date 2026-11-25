@@ -192,7 +192,8 @@ def _upload_post(target, key, days, on_progress, is_cancelled) -> dict:
     fields = client.get_fields()
     try:
         pending.make_plan(record, fields, available_only=False,
-                          allow_new_options=False)
+                          allow_new_options=False,
+                          doc_key=target["doc_key"], tab_id=target["tab_id"])
     except ImportErrorDetail as exc:
         raise ValueError(
             f"该行暂时无法写入：{exc}"
