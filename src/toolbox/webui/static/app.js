@@ -26,7 +26,7 @@
     image_sorter: { kind: 'all', q: '' },
     rename_batch: { path: '', recursive: false, filter: 'all' },
     shopping: { tab: 'taobao' },
-    info_accounts: { platform: '' },
+    info_accounts: { platform: '', scope: 'all' },
     artifacts: { tab: 'comments' },
     netdisk: { tab: 'backup' },
     audio: { order: '', asc: true, selected: new Set() },
@@ -455,6 +455,8 @@
     api('/api/info-accounts').then(function (data) {
       root.replaceChildren();
       var accounts = data.accounts || [];
+      var settings = data.settings || {};
+      var selected = new Set();
       var platformSel = h('select', { class: 'select' });
       platformSel.appendChild(h('option', { value: '' }, '全部平台'));
       (data.by_platform || []).forEach(function (item) {
@@ -463,19 +465,65 @@
       });
       platformSel.value = state.info_accounts.platform || '';
       var tableHost = h('div');
+      var jobHost = h('div');
+      var resultHost = h('div');
+      var selectedLabel = h('span', { class: 'muted small' }, '已选 0 个');
+      var scopeSel = h('select', { class: 'select' },
+        h('option', { value: 'all' }, '全部账号'),
+        h('option', { value: 'selected' }, '选中账号'));
+      scopeSel.value = state.info_accounts.scope || 'all';
+      var countInput = h('input', {
+        class: 'input', style: 'width:80px', value: String(settings.count || 10)
+      });
+      var incCheck = h('input', {
+        type: 'checkbox', checked: !!settings.incremental
+      });
+      var dateStart = h('input', {
+        class: 'input', style: 'width:130px', type: 'date',
+        value: settings.date_start || ''
+      });
+      var dateEnd = h('input', {
+        class: 'input', style: 'width:130px', type: 'date',
+        value: settings.date_end || ''
+      });
+      var parseText = h('textarea', {
+        class: 'textarea', rows: '3',
+        placeholder: '一行一个链接或整段分享文案（最多 200 行）'
+      });
+      var parseBtn = h('button', { class: 'btn primary', type: 'button' }, '开始处理');
+      var fetchBtn = h('button', { class: 'btn primary', type: 'button' }, '获取最新');
+      var busy = false;
 
-      function draw() {
-        var rows = accounts.filter(function (row) {
+      function visibleRows() {
+        return accounts.filter(function (row) {
           return !state.info_accounts.platform
             || row.platform === state.info_accounts.platform;
         });
+      }
+
+      function syncRun() {
+        selectedLabel.textContent = '已选 ' + selected.size + ' 个';
+        var target = scopeSel.value === 'selected' ? selected.size : accounts.length;
+        scopeSel.options[1].textContent = '选中账号（' + selected.size + '）';
+        fetchBtn.disabled = busy || target === 0;
+        fetchBtn.textContent = busy ? '处理中…' : '获取最新';
+        parseBtn.disabled = busy;
+        parseBtn.textContent = busy ? '处理中…' : '开始处理';
+        scopeSel.disabled = busy;
+      }
+
+      function draw() {
+        var rows = visibleRows();
         if (!rows.length) {
           tableHost.replaceChildren(empty(
-            '暂无账号。桌面端「采集任务」批量添加账号主页链接后刷新。'));
+            accounts.length
+              ? '当前平台没有账号。'
+              : '暂无账号。可在上方批量粘贴账号主页链接后点「开始处理」。'));
+          syncRun();
           return;
         }
         var head = h('tr');
-        ['平台', '账号', '链接', '分组', '备注', '类型']
+        ['', '平台', '账号', '链接', '分组', '备注', '类型']
           .forEach(function (title) {
             head.appendChild(h('th', null, title));
           });
@@ -483,7 +531,16 @@
         rows.forEach(function (row) {
           var kindLabels = { auto: '自动', video: '只视频',
             dynamic: '只动态', all: '全部' };
+          var check = h('input', {
+            type: 'checkbox', checked: selected.has(row.url)
+          });
+          check.addEventListener('change', function () {
+            if (check.checked) selected.add(row.url);
+            else selected.delete(row.url);
+            syncRun();
+          });
           body.appendChild(h('tr', null,
+            h('td', { style: 'width:32px' }, check),
             h('td', null, h('span', { class: 'badge' },
               row.platform_name || '未知')),
             h('td', null, row.name || '-'),
@@ -498,17 +555,98 @@
         tableHost.replaceChildren(h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' },
             h('thead', null, head), body)));
+        syncRun();
       }
 
       platformSel.addEventListener('change', function () {
         state.info_accounts.platform = platformSel.value;
         draw();
       });
+      scopeSel.addEventListener('change', function () {
+        state.info_accounts.scope = scopeSel.value;
+        syncRun();
+      });
+      incCheck.addEventListener('change', function () {
+        post('/api/info-accounts/settings', {
+          incremental: incCheck.checked
+        }).catch(function (error) {
+          toast('增量模式保存失败：' + error.message, 'error');
+        });
+      });
+      function saveDates() {
+        post('/api/info-accounts/settings', {
+          date_start: dateStart.value, date_end: dateEnd.value
+        }).then(function () {
+          toast('日期段已保存', 'success');
+        }).catch(function (error) {
+          toast('日期段保存失败：' + error.message, 'error');
+        });
+      }
+      dateStart.addEventListener('change', saveDates);
+      dateEnd.addEventListener('change', saveDates);
 
-      var s = data.settings || {};
-      var dateText = (s.date_start || s.date_end)
-        ? ((s.date_start || '不限') + ' ~ ' + (s.date_end || '现在'))
-        : '不限';
+      function runJob(path, body) {
+        busy = true;
+        syncRun();
+        post(path, body).then(function (data) {
+          watchJob(jobHost, data.job, function (job) {
+            busy = false;
+            var result = job.result || {};
+            toast(result.summary || '完成',
+              result.cancelled ? 'info' : 'success');
+            resultHost.replaceChildren();
+            if (result.counts) {
+              var c = result.counts;
+              resultHost.appendChild(h('div', {
+                class: 'muted small', style: 'margin-top:6px'
+              }, '新增账号 ' + c.accounts + '，重复账号 '
+                + c.duplicate_accounts + '，作品 ' + c.posts
+                + ' 条（新入库 ' + c.new_posts + '），失败 ' + c.failed));
+            }
+            syncRun();
+            if (path.indexOf('parse') >= 0) {
+              setTimeout(function () { renderInfoAccounts(root); }, 600);
+            }
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              busy = false;
+              syncRun();
+              if (job.status === 'error') {
+                toast('任务失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          busy = false;
+          syncRun();
+          toast('任务失败：' + error.message, 'error');
+        });
+      }
+
+      parseBtn.addEventListener('click', function () {
+        if (!parseText.value.trim()) {
+          toast('请粘贴账号主页或作品链接', 'warning');
+          return;
+        }
+        runJob('/api/info-accounts/parse', { text: parseText.value });
+      });
+      fetchBtn.addEventListener('click', function () {
+        var urls = scopeSel.value === 'selected'
+          ? Array.from(selected) : [];
+        if (scopeSel.value === 'selected' && !urls.length) {
+          toast('请勾选要采集的账号，或把采集范围改为「全部账号」', 'warning');
+          return;
+        }
+        runJob('/api/info-accounts/collect', {
+          urls: urls,
+          count: Number(countInput.value) || 10,
+          incremental: incCheck.checked,
+          date_start: dateStart.value,
+          date_end: dateEnd.value
+        });
+      });
+
       function setting(label, value) {
         return h('div', { class: 'metric' },
           h('div', { class: 'label' }, label),
@@ -519,49 +657,64 @@
         h('div', { class: 'row-title' }, '批量添加 / 解析'),
         h('div', { class: 'muted small', style: 'margin:4px 0 6px' },
           '一行一个，支持整段分享文案：账号主页链接 → 添加账号；'
-          + '作品 / 视频链接 → 解析到采集结果。'),
-        h('textarea', {
-          class: 'textarea', rows: '3', disabled: true,
-          placeholder: '一行一个链接（批量处理在桌面端）'
-        }),
+          + '作品 / 视频链接 → 解析并存入采集结果。'),
+        parseText,
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '开始处理'),
-          h('span', { class: 'muted small' }, '批量解析在桌面端'))));
+          parseBtn,
+          h('span', { class: 'muted small' },
+            '处理过程与结果见下方运行日志；最多 200 行。'))));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'row-title' }, '账号列表'),
           h('span', { class: 'muted small' },
             '共 ' + fmtNumber(data.total) + ' 个账号'),
+          h('button', {
+            class: 'btn', type: 'button',
+            onclick: function () {
+              visibleRows().forEach(function (row) { selected.add(row.url); });
+              draw();
+            }
+          }, '全选本页'),
+          h('button', {
+            class: 'btn', type: 'button',
+            onclick: function () {
+              visibleRows().forEach(function (row) { selected.delete(row.url); });
+              draw();
+            }
+          }, '全不选'),
           h('span', { style: 'flex:1' }),
+          selectedLabel,
           h('span', { class: 'muted small' }, '平台'), platformSel),
         tableHost));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'row-title' }, '采集设置'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '采集范围'), scopeSel,
+          h('span', { class: 'muted small' }, '每账号条数'), countInput,
+          h('label', { class: 'muted small' }, incCheck, ' 增量模式'),
+          h('span', { class: 'muted small' }, '日期段'), dateStart,
+          h('span', { class: 'muted small' }, '~'), dateEnd),
         h('div', { class: 'metric-grid', style: 'margin-top:8px' },
-          setting('采集范围', '全部账号'),
-          setting('每账号条数', String(s.count || 10)),
-          setting('限流', '每 ' + (s.rate_count || 10) + ' 个停 '
-            + (s.rate_interval || 10) + ' 秒'),
-          setting('增量模式', s.incremental ? '开' : '关'),
-          setting('获取后自动下载', s.auto_download ? '开' : '关'),
-          setting('日期段', dateText)),
+          setting('平台数', String((data.by_platform || []).length)),
+          setting('限流', '每 ' + (settings.rate_count || 10) + ' 个停 '
+            + (settings.rate_interval || 10) + ' 秒'),
+          setting('获取后自动下载', settings.auto_download ? '开' : '关'),
+          setting('账号配置', '桌面端维护')),
         h('div', { class: 'muted small', style: 'margin-top:8px' },
-          '以上设置与账号配置在桌面端修改。')));
+          '增量模式表示只把新内容投影到增量库；关闭时按作品导出文件。'
+          + '账号增删改仍在桌面端。')));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '获取最新'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '会话定时'),
-          h('span', { class: 'muted small' }, '空闲（采集在桌面端）'))));
-      root.appendChild(h('div', { class: 'card' },
-        h('div', { class: 'card-title' }, '运行日志'),
-        h('div', { class: 'muted small' },
-          '运行日志由桌面端采集任务实时输出；Web 端暂不提供。')));
+          fetchBtn,
+          h('span', { class: 'muted small' },
+            scopeSel.value === 'selected'
+              ? '只采集勾选的账号' : '采集全部账号的最新内容'),
+          h('span', { class: 'spacer' }),
+          h('span', { class: 'muted small' }, '会话定时仍在桌面端'))));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'card-title' }, '运行'),
+        jobHost,
+        resultHost));
       draw();
     }).catch(function (error) {
       setError(root, error, function () { renderInfoAccounts(root); });
@@ -4224,7 +4377,7 @@
         var body = h('tbody');
         rows.forEach(function (day) {
           var link = h('a', {
-            href: '#', text: day.date || day.folder
+            href: '#', title: day.folder
           }, day.date || day.folder);
           link.addEventListener('click', function (event) {
             event.preventDefault();
@@ -4862,6 +5015,11 @@
         value: settings.export_dir || '',
         placeholder: '导出目录完整路径；留空 = 不修改'
       });
+      var migrateInput = h('input', {
+        class: 'input', style: 'width:100%',
+        value: settings.migrate_target_dir || '',
+        placeholder: '迁移目标目录完整路径；留空 = 不修改'
+      });
       workInput.disabled = !!settings.work_dir_locked;
       exportInput.disabled = !!settings.export_dir_locked;
       var saveDirs = h('button', { class: 'btn primary', type: 'button' },
@@ -4872,6 +5030,9 @@
       dirs.appendChild(h('div', { class: 'muted small', style: 'margin:8px 0 4px' },
         '导出目录' + (settings.export_dir_locked ? '（已锁定）' : '')));
       dirs.appendChild(exportInput);
+      dirs.appendChild(h('div', { class: 'muted small', style: 'margin:8px 0 4px' },
+        '迁移目标目录（文件迁移）'));
+      dirs.appendChild(migrateInput);
       dirs.appendChild(h('div', { class: 'toolbar', style: 'margin-top:8px' },
         h('span', { class: 'muted small' },
           '目录必须已存在；修改后立即影响扫描与导出路径，并与桌面端共用。'),
@@ -4884,6 +5045,7 @@
         post('/api/system/dirs', {
           work_dir: workInput.value.trim(),
           export_dir: exportInput.value.trim(),
+          migrate_target_dir: migrateInput.value.trim(),
           confirmed: true
         }).then(function (result) {
           saveDirs.disabled = false;

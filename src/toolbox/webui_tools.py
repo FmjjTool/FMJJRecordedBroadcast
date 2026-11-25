@@ -1512,7 +1512,7 @@ def migrate_overview() -> dict:
         "has_target_dir": bool(target) and Path(target).is_dir(),
         "note": ("复制保留源文件，剪切移动并在迁移后清理空目录；"
                  "同名文件跳过并计入重复，不覆盖目标。"
-                 "目标目录请在桌面端「文件迁移」页设置。"),
+                 "目标目录可在「全局设置 → 目录设置」里修改。"),
     }
 
 

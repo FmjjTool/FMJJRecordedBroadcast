@@ -27,29 +27,32 @@ def _check_dir(text: str, label: str) -> Path:
 
 
 def system_settings() -> dict:
-    """当前目录与主题设置（只读）。"""
+    """当前目录、迁移目标与主题设置（只读）。"""
     cfg = load_convert_config()
     return {
         "work_dir": _dir_text(cfg.get("work_dir")),
         "export_dir": str(get_export_dir()),
+        "migrate_target_dir": _dir_text(cfg.get("migrate_target_dir")),
         "work_dir_locked": bool(cfg.get("work_dir_locked")),
         "export_dir_locked": bool(cfg.get("export_dir_locked")),
         "theme": str(cfg.get("theme") or "light"),
         "theme_follow_system": bool(cfg.get("theme_follow_system")),
-        "note": "目录与主题与桌面端共用同一配置；依赖组件由桌面端管理，"
+        "note": "目录、迁移目标与主题与桌面端共用同一配置；依赖组件由桌面端管理，"
                 "Web 端不提供安装或卸载。",
     }
 
 
 def save_system_dirs(work_dir=None, export_dir=None,
+                     migrate_target_dir=None,
                      confirmed: bool = False) -> dict:
-    """保存工作目录 / 导出目录（空值表示不修改）。"""
+    """保存工作目录 / 导出目录 / 迁移目标目录（空值表示不修改）。"""
     if not confirmed:
         raise ValueError("请确认后再保存目录设置")
     cfg = load_convert_config()
     work = _dir_text(work_dir)
     export = _dir_text(export_dir)
-    if not work and not export:
+    migrate = _dir_text(migrate_target_dir)
+    if not work and not export and not migrate:
         raise ValueError("请至少填写一个目录")
     changed = {}
     if work:
@@ -63,7 +66,22 @@ def save_system_dirs(work_dir=None, export_dir=None,
             raise ValueError("导出目录已锁定，请在桌面端解锁后再修改")
         path = _check_dir(export, "导出目录")
         changed["export_dir"] = str(path)
-    if "work_dir" in changed:
+    if migrate:
+        path = _check_dir(migrate, "迁移目标目录")
+        source = _dir_text(cfg.get("work_dir"))
+        if source:
+            try:
+                source_path = Path(source).resolve()
+                if path.resolve() == source_path \
+                        or source_path in path.resolve().parents \
+                        or path.resolve() in source_path.parents:
+                    raise ValueError(
+                        "迁移目标目录不能与工作目录互为父子目录（会递归迁移）")
+            except OSError as exc:
+                raise ValueError(f"迁移目标目录不可用：{exc}") from exc
+        cfg["migrate_target_dir"] = str(path)
+        changed["migrate_target_dir"] = str(path)
+    if "work_dir" in changed or "migrate_target_dir" in changed:
         save_convert_config(cfg)
     if "export_dir" in changed:
         set_export_dir(changed["export_dir"])

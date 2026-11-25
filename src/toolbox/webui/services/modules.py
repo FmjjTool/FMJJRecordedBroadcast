@@ -37,6 +37,7 @@ class ModuleService:
     def save_system_dirs(self, payload: dict) -> dict:
         return webui_settings.save_system_dirs(
             payload.get("work_dir"), payload.get("export_dir"),
+            payload.get("migrate_target_dir"),
             bool(payload.get("confirmed")))
 
     def save_system_theme(self, payload: dict) -> dict:

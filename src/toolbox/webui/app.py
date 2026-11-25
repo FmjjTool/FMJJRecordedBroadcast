@@ -45,7 +45,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     fangroups = FanGroupService()
     douyin_index = DouyinIndexService()
     chaohua = WeiboChaohuaService()
-    info_accounts = InfoAccountsService()
+    info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService()
     netdisk = NetdiskService()
     localwiki = LocalWikiService()
@@ -200,6 +200,18 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q("topic_id")))
 
     server.get("/api/info-accounts", lambda req: info_accounts.overview())
+
+    def save_info_accounts_settings(req):
+        return info_accounts.save_settings(dict(req.json or {}))
+    server.post("/api/info-accounts/settings", save_info_accounts_settings)
+
+    def start_info_parse(req):
+        return info_accounts.start_parse(dict(req.json or {}))
+    server.post("/api/info-accounts/parse", start_info_parse)
+
+    def start_info_collect(req):
+        return info_accounts.start_collect(dict(req.json or {}))
+    server.post("/api/info-accounts/collect", start_info_collect)
 
     server.get("/api/tools/artifacts", lambda req: artifacts.list(
         req.q("kind"), req.q_int("group_limit", 200, 1, 500),
