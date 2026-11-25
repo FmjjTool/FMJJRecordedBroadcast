@@ -749,6 +749,18 @@ class NeteasePage(BasePage):
                   "artist": self._render_artist}.get(kind)
         if render:
             render(data or [] if kind in ("songs", "albums", "multi") else data)
+        self._fit_detail_top()
+
+    def _fit_detail_top(self):
+        """结果按顶部排，末尾补弹簧。
+
+        不给 detail_layout 留弹簧时，最后一行（歌曲/专辑行）会被拉伸到
+        填满整个滚动区：单曲专辑只剩一行时中间出现大片空白。
+        """
+        layout = self.detail_layout
+        if layout.count() and layout.itemAt(layout.count() - 1).spacerItem() is not None:
+            return
+        layout.addStretch(1)
 
     # ===================== 五平台对比：搜索与渲染 =====================
     def _work_all(self, kw, singer):
@@ -1458,27 +1470,36 @@ class NeteasePage(BasePage):
         if not isinstance(album, dict):
             self._render_album_info(album)
             return
-        songs = album.get("songs") or []
-        album_info = album.get("album") or {}
-        pic = album_info.get("picUrl") or album_info.get("blurPicUrl")
-        artist = album_info.get("artist") or {}
+        songs = [s for s in (album.get("songs") or []) if isinstance(s, dict)]
+        # 网易云 /api/v1/album/ 是扁平结构（顶部 name/coverImgUrl/artist），
+        # 同时兼容带一层 album 的旧结构
+        album_info = album.get("album") if isinstance(album.get("album"), dict) else album
+        pic = (album_info.get("picUrl") or album_info.get("coverImgUrl")
+               or album_info.get("blurPicUrl") or "")
+        artist = album_info.get("artist") or album_info.get("artists") or ""
         artist_name = artist.get("name", "") if isinstance(artist, dict) else str(artist)
-        publish = album_info.get("publishTime", 0)
-        pub_str = time.strftime("%Y-%m-%d", time.localtime(publish / 1000)) if publish else "未知"
+        name = album_info.get("name") or ""
+        publish = album_info.get("publishTime") or 0
+        try:
+            pub_str = (time.strftime("%Y-%m-%d", time.localtime(publish / 1000))
+                       if publish else "未知")
+        except (ValueError, OSError, OverflowError):
+            pub_str = "未知"
         card = self._album_info_card(
-            album_info.get("name", ""), artist_name,
-            album_info.get("size", len(songs)), pub_str, pic,
-            album_info.get("description") or "")
+            name, artist_name, album_info.get("size") or len(songs), pub_str, pic,
+            album_info.get("description") or album_info.get("briefDesc") or "")
         self.detail_layout.addWidget(card)
         self.results = [
             {"id": s["id"], "name": s.get("name", ""),
-             "artists": "/".join(a.get("name", "") for a in (s.get("ar") or [])),
-             "album": album_info.get("name", ""),
-             "duration": s.get("dt", 0)}
-            for s in songs
+             "artists": s.get("artists") or "/".join(
+                 a.get("name", "") for a in (s.get("ar") or [])),
+             "album": (s.get("al") or {}).get("name") or name,
+             "picUrl": s.get("picUrl") or (s.get("al") or {}).get("picUrl") or pic,
+             "duration": s.get("duration") or s.get("dt") or 0}
+            for s in songs if s.get("id")
         ]
         self._render_songs(self.results)
-        self.status_label.setText(f"专辑「{album_info.get('name', '')}」共 {len(self.results)} 首")
+        self.status_label.setText(f"专辑「{name}」共 {len(self.results)} 首")
 
     # ===================== 渲染：专辑搜索结果（整张专辑下载） =====================
     def _album_row(self, album):

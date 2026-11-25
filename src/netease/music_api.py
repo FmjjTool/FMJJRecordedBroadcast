@@ -438,26 +438,38 @@ class NeteaseAPI:
             if result.get('code') != 200:
                 raise APIException(f"获取专辑详情失败: {result.get('message', '未知错误')}")
             
-            album = result.get('album', {})
+            album = result.get('album') or {}
+            # /api/v1/album/ 直接给 picUrl；老响应只有加密 pic，需要再拼一次
+            cover = album.get('picUrl') or self.get_pic_url(album.get('pic'))
             info = {
                 'id': album.get('id'),
-                'name': album.get('name'),
-                'coverImgUrl': self.get_pic_url(album.get('pic')),
-                'artist': album.get('artist', {}).get('name', ''),
-                'publishTime': album.get('publishTime'),
-                'description': album.get('description', ''),
+                'name': album.get('name') or '',
+                'coverImgUrl': cover,
+                'artist': (album.get('artist') or {}).get('name', ''),
+                'publishTime': album.get('publishTime') or 0,
+                'description': album.get('description') or '',
+                'size': album.get('size') or 0,
                 'songs': []
             }
-            
-            for song in result.get('songs', []):
+
+            for song in result.get('songs') or []:
+                al = song.get('al') or {}
+                ar = song.get('ar') or []
                 info['songs'].append({
-                    'id': song['id'],
-                    'name': song['name'],
-                    'artists': '/'.join(artist['name'] for artist in song['ar']),
-                    'album': song['al']['name'],
-                    'picUrl': self.get_pic_url(song['al'].get('pic'))
+                    'id': song.get('id'),
+                    'name': song.get('name') or '',
+                    'artists': '/'.join((a.get('name') or '') for a in ar),
+                    'album': al.get('name') or '',
+                    'picUrl': al.get('picUrl') or self.get_pic_url(al.get('pic')),
+                    'duration': song.get('dt') or 0,
                 })
-            
+
+            if not info['size']:
+                info['size'] = len(info['songs'])
+            if not info['coverImgUrl']:
+                info['coverImgUrl'] = next(
+                    (s['picUrl'] for s in info['songs'] if s['picUrl']), '')
+
             return info
         except requests.RequestException as e:
             raise APIException(f"获取专辑详情请求失败: {e}")
