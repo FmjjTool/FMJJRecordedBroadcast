@@ -114,6 +114,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: tool_service.organize_preview(
                    req.q_int("limit", 100, 1, 500)))
 
+    def start_organize(req):
+        return tool_service.start_organize(dict(req.json or {}))
+    server.post("/api/tools/organize/run", start_organize)
+
     server.get("/api/tools/rename/overview",
                lambda req: tool_service.rename_overview())
     server.get("/api/tools/rename/preview", lambda req: tool_service.rename_preview(

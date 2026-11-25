@@ -316,6 +316,44 @@ def list_organize_preview(limit: int = 100) -> dict:
             "note": "只读预览：不会移动或改名；执行整理需在桌面端操作。"}
 
 
+def organize_run(dates, on_progress=None, is_cancelled=None) -> dict:
+    """执行整理：移动选中日期分组的视频到日期文件夹（复用桌面引擎）。
+
+    不信任客户端提交的文件列表——执行前重新扫描，仅按选中的日期键
+    过滤；无日期文件不参与（桌面端同口径）。
+    """
+    from toolbox.organize_engine import execute_organize, scan_files
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    chosen = [str(item or "").strip() for item in (dates or [])]
+    chosen = [item for item in chosen if item]
+    if not chosen:
+        raise ValueError("请选择要整理的日期分组")
+    groups, _no_date = scan_files(str(root))
+    selected = {}
+    for date_str in chosen:
+        items = groups.get(date_str)
+        if not items:
+            continue
+        selected[date_str] = items
+    if not selected:
+        raise ValueError("所选分组没有可整理的视频（可能已整理）")
+    if is_cancelled and is_cancelled():
+        raise ToolCancelled("任务已取消")
+    total = sum(len(items) for items in selected.values())
+    if on_progress:
+        on_progress(0, total, "开始整理")
+    success, failed, failed_files = execute_organize(str(root), selected)
+    if on_progress:
+        on_progress(total, total, "整理完成")
+    return {"summary": f"整理完成：成功 {success} 个，失败 {failed} 个",
+            "moved": int(success), "failed": int(failed),
+            "failed_files": [str(name) for name in failed_files][:100],
+            "note": "视频已移动到对应日期文件夹；附属文件随视频一起移动。"}
+
+
 def rename_overview() -> dict:
     from toolbox.rename_engine import is_standard_recording_name
 

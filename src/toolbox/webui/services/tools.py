@@ -84,6 +84,33 @@ class ToolService:
     def organize_preview(self, limit: int = 100) -> dict:
         return webui_tools.list_organize_preview(limit)
 
+    def start_organize(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        dates = payload.get("dates") or []
+        if not isinstance(dates, list) or not dates:
+            raise ValueError("请选择要整理的日期分组")
+        if not payload.get("confirmed"):
+            raise ValueError("缺少整理确认")
+        job = self._jobs.submit(
+            "organize_run",
+            lambda task: self._organize_job(task, dates))
+        return {"job": job.id}
+
+    def _organize_job(self, job, dates) -> dict:
+        def progress(done: int, total: int, name: str) -> None:
+            job.update(f"{name}（{done}/{total}）",
+                       done / total if total else None)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.organize_run(
+                dates, on_progress=progress, is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
     def rename_overview(self) -> dict:
         return webui_tools.rename_overview()
 

@@ -20,7 +20,7 @@
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true },
     audio: { order: '', asc: true, selected: new Set() },
-    organize: { order: '', asc: true },
+    organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
     video: { order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
@@ -1104,18 +1104,52 @@
         h('div', { class: 'muted small' }, overview.note || '')));
 
       var tableHost = h('div');
+      var jobHost = h('div');
+      host.appendChild(jobHost);
       host.appendChild(tableHost);
       var groups = preview.groups || [];
+      var selected = state.organize.selected;
+      var known = new Set(groups.map(function (item) { return item.date; }));
+      Array.from(selected).forEach(function (date) {
+        if (!known.has(date)) selected.delete(date);
+      });
+      var runBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '整理选中分组');
+      var selectAll = h('input', { type: 'checkbox', title: '全部分组' });
+      var selectedLabel = h('span', { class: 'muted small' }, '');
+      var running = false;
+
+      function updateButtons() {
+        runBtn.disabled = running || selected.size === 0;
+        runBtn.textContent = running ? '整理中…' : '整理选中分组';
+        selectedLabel.textContent = selected.size
+          ? '已选 ' + selected.size + ' 组 · '
+            + groups.filter(function (item) {
+              return selected.has(item.date);
+            }).reduce(function (sum, item) {
+              return sum + item.count;
+            }, 0) + ' 个视频'
+          : '未选择分组';
+        selectAll.checked = groups.length > 0
+          && selected.size === groups.length;
+        selectAll.indeterminate = selected.size > 0
+          && selected.size < groups.length;
+      }
+
       if (!groups.length) {
         tableHost.appendChild(empty('工作目录顶层没有可整理的视频。'));
       } else {
+        host.appendChild(h('div', { class: 'toolbar' },
+          h('label', { class: 'muted small' }, selectAll, ' 全选'),
+          selectedLabel, h('span', { style: 'flex:1' }), runBtn));
         var columns = [
           { key: 'date', label: '日期分组' },
           { key: 'count', label: '文件数' },
           { key: 'size', label: '大小' }
         ];
         var rows = sortRows(groups, columns, state.organize);
-        var head = h('tr');
+        var head = h('tr', null, h('th', { style: 'width:36px' }, ''));
         columns.forEach(function (column) {
           var mark = state.organize.order === column.key
             ? (state.organize.asc ? ' ↑' : ' ↓') : '';
@@ -1130,7 +1164,16 @@
         head.appendChild(h('th', null, '文件预览'));
         var body = h('tbody');
         rows.forEach(function (item) {
+          var check = h('input', {
+            type: 'checkbox', checked: selected.has(item.date)
+          });
+          check.addEventListener('change', function () {
+            if (check.checked) selected.add(item.date);
+            else selected.delete(item.date);
+            updateButtons();
+          });
           body.appendChild(h('tr', null,
+            h('td', null, check),
             h('td', null, item.date || '-'),
             h('td', { class: 'num' }, fmtNumber(item.count)),
             h('td', { class: 'num' }, fmtBytes(item.size)),
@@ -1141,6 +1184,54 @@
         tableHost.appendChild(h('div', { class: 'table-wrap' },
           h('table', { class: 'db-table' }, h('thead', null, head), body)));
       }
+      updateButtons();
+
+      selectAll.addEventListener('change', function () {
+        selected.clear();
+        if (selectAll.checked) {
+          groups.forEach(function (item) { selected.add(item.date); });
+        }
+        renderOrganize(host);
+      });
+      runBtn.addEventListener('click', function () {
+        if (!selected.size || running) return;
+        var dates = Array.from(selected);
+        var count = groups.filter(function (item) {
+          return selected.has(item.date);
+        }).reduce(function (sum, item) {
+          return sum + item.count;
+        }, 0);
+        if (!window.confirm(
+          '确认整理\n\n将把 ' + dates.length + ' 个日期分组（共 ' + count
+          + ' 个视频）移动到对应的日期文件夹。\n附属文件随视频一起移动；'
+          + '无日期的视频不会被移动。\n\n确认继续？')) {
+          return;
+        }
+        running = true;
+        updateButtons();
+        post('/api/tools/organize/run', {
+          dates: dates, confirmed: true
+        }).then(function (data) {
+          watchJob(jobHost, data.job, function (job) {
+            running = false;
+            updateButtons();
+            var summary = job.result && job.result.summary
+              ? job.result.summary : '整理完成';
+            toast(summary, 'success');
+            selected.clear();
+            renderOrganize(host);
+          }, {
+            onSettled: function (job) {
+              running = false;
+              updateButtons();
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          updateButtons();
+          toast('整理失败：' + error.message, 'error');
+        });
+      });
       if (preview.no_date && preview.no_date.length) {
         var card = h('div', { class: 'card', style: 'margin-top:12px' },
           h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '无日期文件名'));
