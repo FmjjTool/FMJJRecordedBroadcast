@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -33,6 +35,19 @@ _SUBTITLE_FORMAT_LABELS = {
     "ass": "ASS",
     "srt": "SRT",
 }
+# 与桌面「视频操作」页 COMPRESS_PRESETS 同值：标签, 清晰度, 压缩率。
+_COMPRESS_PRESETS = {
+    "light": ("轻度（画质优先）", 88, 12),
+    "normal": ("标准", 75, 35),
+    "strong": ("高强度（体积优先）", 60, 62),
+}
+_COMPRESS_RESOLUTIONS = (
+    ("keep", "保持原始"),
+    ("1920x1080", "1920x1080"),
+    ("1280x720", "1280x720"),
+    ("854x480", "854x480"),
+)
+_MAX_CUT_SEGMENTS = 50
 
 
 class ToolCancelled(Exception):
@@ -215,8 +230,35 @@ def video_overview() -> dict:
         "output_extension": ext,
         "files": len(files),
         "limited": len(files) >= _MAX_FILES,
-        "note": "只生成新文件，不删除、不改写源视频；输出与原文件同目录；"
-                "目标格式与源相同则跳过。默认输出格式在桌面端全局设置修改。",
+        "note": "只生成新文件，不删除、不改写源视频；压缩 / 截图输出到源视频同目录，"
+                "合并 / 切割输出到工作目录根；已有同名文件自动加序号，不覆盖。"
+                "转换输出格式与跳过规则跟随桌面端全局设置。",
+        "compress_presets": [
+            {"value": key, "label": label}
+            for key, (label, _q, _r) in _COMPRESS_PRESETS.items()
+        ],
+        "resolutions": [
+            {"value": value, "label": label}
+            for value, label in _COMPRESS_RESOLUTIONS
+        ],
+        "merge_modes": [
+            {"value": "copy", "label": "无损拼接（推荐）"},
+            {"value": "encode", "label": "兼容转码（参数不一致时）"},
+        ],
+        "merge_exts": [".mp4", ".mkv"],
+        "cut_exports": [
+            {"value": "each", "label": "逐段导出"},
+            {"value": "merge", "label": "拼接成一个文件"},
+            {"value": "complement", "label": "删除选中片段（导出剩余）"},
+        ],
+        "cut_modes": [
+            {"value": "copy", "label": "无损（关键帧边界，快）"},
+            {"value": "precise", "label": "精确（重编码，准）"},
+        ],
+        "snapshot_formats": [
+            {"value": "jpg", "label": "JPG"},
+            {"value": "png", "label": "PNG"},
+        ],
     }
 
 
@@ -273,6 +315,379 @@ def convert_videos(rel_paths, on_progress=None, is_cancelled=None) -> dict:
             on_progress(index, len(paths), rel)
     return {"summary": f"完成 {ok}/{len(paths)} 个文件",
             "results": results, "ok": ok, "failed": len(paths) - ok}
+
+
+def validate_compress_options(preset: str, resolution: str) -> tuple[str, str]:
+    """校验压缩预设与分辨率，返回规范化后的 (preset, resolution)。"""
+    key = str(preset or "normal")
+    if key not in _COMPRESS_PRESETS:
+        raise ValueError("未知压缩强度")
+    res = str(resolution or "keep")
+    if res not in {value for value, _label in _COMPRESS_RESOLUTIONS}:
+        raise ValueError("不支持的压缩分辨率")
+    return key, res
+
+
+def compress_videos(rel_paths, preset: str = "normal", resolution: str = "keep",
+                    clear_metadata: bool = True, on_progress=None,
+                    is_cancelled=None) -> dict:
+    """批量压缩视频（ffmpeg 重编码，输出 <名>_compressed_video，源文件不动）。
+
+    参数与桌面压缩预设一致：清晰度 / 压缩率换算 CRF，可选缩放分辨率与
+    清除元数据。不 import 桌面的 QThread 实现，避免 WebUI 依赖 PySide6。
+    """
+    from toolbox.utils import find_ffmpeg_exe
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    key, resolution = validate_compress_options(preset, resolution)
+    _label, quality, ratio = _COMPRESS_PRESETS[key]
+    raw = [str(item or "").strip() for item in (rel_paths or [])]
+    raw = [item for item in raw if item][:_MAX_TASK_FILES]
+    if not raw:
+        raise ValueError("请选择要压缩的视频")
+    paths = [_resolve(root, rel) for rel in raw]
+    ffmpeg_bin = find_ffmpeg_exe()
+    if not ffmpeg_bin:
+        raise ValueError("未找到 ffmpeg，请先在全局设置中配置 FFmpeg 位置")
+    results = []
+    ok = 0
+    for index, path in enumerate(paths, 1):
+        if is_cancelled and is_cancelled():
+            raise ToolCancelled("任务已取消")
+        rel = _rel(root, path)
+        out = _compressed_output(path)
+        try:
+            before = int(path.stat().st_size)
+        except OSError:
+            before = 0
+        try:
+            _run_compress_ffmpeg(
+                ffmpeg_bin, path, out, quality, ratio, resolution,
+                bool(clear_metadata),
+                lambda pct, idx=index, name=rel: _report(
+                    on_progress, idx - 1 + pct, len(paths), name),
+                is_cancelled)
+            after = int(out.stat().st_size)
+            results.append({"file": rel, "ok": True, "output": out.name,
+                            "before": before, "after": after})
+            ok += 1
+        except ToolCancelled:
+            _remove_quietly(out)
+            raise
+        except Exception as exc:
+            _remove_quietly(out)
+            results.append({"file": rel, "ok": False, "output": "",
+                            "before": before, "after": 0,
+                            "error": str(exc)[:300]})
+        _report(on_progress, index, len(paths), rel)
+    return {"summary": f"压缩完成 {ok}/{len(paths)} 个文件",
+            "results": results, "ok": ok, "failed": len(paths) - ok}
+
+
+def _run_compress_ffmpeg(ffmpeg_bin: str, src: Path, out: Path, quality: int,
+                         ratio: int, resolution: str, clear_metadata: bool,
+                         on_percent, is_cancelled) -> None:
+    from toolbox.concat_engine import media_duration
+
+    duration = media_duration(src)
+    crf = max(16, min(35 - int(quality * 0.2) + int(ratio * 0.15), 42))
+    webm = out.suffix.lower() == ".webm"
+    cmd = [ffmpeg_bin, "-y", "-progress", "pipe:1", "-nostats",
+           "-i", str(src)]
+    if clear_metadata:
+        cmd += ["-map_metadata", "-1"]
+    if webm:
+        cmd += ["-c:v", "libvpx-vp9", "-crf", str(crf)]
+    else:
+        cmd += ["-c:v", "libx264", "-crf", str(crf)]
+    scale = _scale_filter(resolution)
+    if scale:
+        cmd += ["-vf", scale]
+    if webm:
+        cmd += ["-c:a", "libopus", "-b:a", "96k"]
+    else:
+        cmd += ["-c:a", "aac", "-b:a", "128k"]
+    if out.suffix.lower() in (".mp4", ".mov"):
+        cmd += ["-movflags", "+faststart"]
+    cmd.append(str(out))
+
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="ignore", creationflags=creationflags)
+    stderr_lines: list[str] = []
+
+    def drain() -> None:
+        try:
+            for line in proc.stderr:
+                stderr_lines.append(line)
+        except Exception:
+            pass
+
+    drain_thread = threading.Thread(target=drain, daemon=True)
+    drain_thread.start()
+    out_time_us = 0
+    last_bucket = -1
+    try:
+        for raw_line in proc.stdout:
+            line = raw_line.strip()
+            if line.startswith("out_time_us="):
+                try:
+                    out_time_us = int(line.split("=", 1)[1])
+                except ValueError:
+                    continue
+                if duration > 0 and on_percent:
+                    pct = min(out_time_us / 1_000_000.0 / duration, 0.999)
+                    bucket = int(pct * 100)
+                    if bucket != last_bucket:
+                        last_bucket = bucket
+                        on_percent(pct)
+            elif line.startswith("progress="):
+                if is_cancelled and is_cancelled():
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    raise ToolCancelled("任务已取消")
+        code = proc.wait()
+    finally:
+        drain_thread.join(timeout=2)
+    if code != 0 or not out.is_file() or out.stat().st_size == 0:
+        detail = "".join(stderr_lines).strip()[-300:]
+        raise RuntimeError(detail or "ffmpeg 压缩失败")
+
+
+def _compressed_output(src: Path) -> Path:
+    ext = src.suffix.lower()
+    candidate = src.with_name(f"{src.stem}_compressed_video{ext}")
+    idx = 1
+    while candidate.exists():
+        candidate = src.with_name(f"{src.stem}_compressed_video_{idx}{ext}")
+        idx += 1
+    return candidate
+
+
+def _scale_filter(resolution: str) -> str:
+    text = str(resolution or "").strip().lower()
+    if text in ("", "keep") or "x" not in text:
+        return ""
+    width, height = text.split("x", 1)
+    try:
+        return (f"scale={max(int(width), 2)}:{max(int(height), 2)}"
+                ":force_original_aspect_ratio=decrease")
+    except ValueError:
+        return ""
+
+
+def merge_videos(rel_paths, mode: str = "copy", output_name: str = "",
+                 output_ext: str = ".mp4", on_progress=None,
+                 is_cancelled=None) -> dict:
+    """按顺序合并视频（复用桌面 concat_engine；输出到工作目录根）。"""
+    from toolbox.concat_engine import (ConcatCancelled, ConcatError,
+                                       MODE_COPY, MODE_ENCODE,
+                                       check_compatibility, concat_media,
+                                       probe_media, unique_output_path)
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    raw = [str(item or "").strip() for item in (rel_paths or [])]
+    raw = [item for item in raw if item][:_MAX_TASK_FILES]
+    if len(raw) < 2:
+        raise ValueError("至少选择 2 个视频才能合并")
+    paths = [_resolve(root, rel) for rel in raw]
+    mode = str(mode or MODE_COPY)
+    if mode not in (MODE_COPY, MODE_ENCODE):
+        raise ValueError("未知合并方式")
+    ext = str(output_ext or ".mp4").lower()
+    if ext not in (".mp4", ".mkv"):
+        raise ValueError("合并输出只支持 mp4 / mkv")
+    name = str(output_name or "").strip() or \
+        f"合并_{time.strftime('%Y%m%d_%H%M%S')}"
+    name = re.sub(r'[\\/:*?"<>|]', " ", name).strip() or "合并视频"
+    if Path(name).suffix.lower() != ext:
+        name += ext
+    out = unique_output_path(root / name)
+
+    try:
+        infos = [probe_media(path) for path in paths]
+    except ConcatError as exc:
+        raise ValueError(str(exc)) from exc
+    problems = check_compatibility(infos)
+    if problems and mode == MODE_COPY:
+        note = "参数不一致，无损拼接可能失败或花屏，建议改用兼容转码"
+    else:
+        note = "编码参数一致" if not problems else "按兼容转码合并"
+    if on_progress:
+        on_progress(0, 1, f"开始合并 {len(paths)} 个文件")
+
+    def progress(percent, message):
+        _report(on_progress, max(0, min(100, int(percent))) / 100.0, 1,
+                message or "合并中")
+
+    try:
+        concat_media(paths, out, mode, progress=progress,
+                     cancel=lambda: bool(is_cancelled and is_cancelled()))
+    except ConcatCancelled as exc:
+        raise ToolCancelled(str(exc)) from exc
+    except ConcatError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return {"summary": f"合并完成：{out.name}（{note}）",
+            "output": out.name, "problems": problems[:10], "ok": True}
+
+
+def cut_video(rel_path: str, segments, mode: str = "copy",
+              export: str = "each", merged_name: str = "",
+              on_progress=None, is_cancelled=None) -> dict:
+    """按片段切割单个视频（复用桌面 edit_engine；输出到工作目录根）。"""
+    from toolbox.concat_engine import probe_media
+    from toolbox.edit_engine import (EditCancelled, EditError,
+                                     complement_segments, cut_segments)
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    mode = str(mode or "copy")
+    if mode not in ("copy", "precise"):
+        raise ValueError("未知切割方式")
+    export = str(export or "each")
+    if export not in ("each", "merge", "complement"):
+        raise ValueError("未知导出方式")
+    rows = []
+    for item in segments or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError("切割片段格式不正确")
+        try:
+            start, end = int(item[0]), int(item[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("切割时间必须是毫秒数") from exc
+        if start < 0 or end <= start:
+            raise ValueError("切割片段结束时间必须大于开始时间")
+        rows.append((start, end))
+    if not rows:
+        raise ValueError("请至少填写一个切割片段")
+    if len(rows) > _MAX_CUT_SEGMENTS:
+        raise ValueError(f"单次最多切割 {_MAX_CUT_SEGMENTS} 个片段")
+    try:
+        total_ms = int(probe_media(path).duration * 1000)
+    except Exception as exc:
+        raise ValueError(f"无法读取视频时长：{exc}") from exc
+    if total_ms <= 0:
+        raise ValueError("无法读取视频时长，文件可能损坏")
+    clamped = []
+    for start, end in rows:
+        start = max(0, min(start, total_ms))
+        end = max(0, min(end, total_ms))
+        if end > start:
+            clamped.append((start, end))
+    if not clamped:
+        raise ValueError("切割片段超出视频时长")
+    if export == "complement":
+        clamped = complement_segments(clamped, total_ms)
+        if not clamped:
+            raise ValueError("选中片段覆盖了整段视频，没有可导出的内容")
+    merge = export in ("merge", "complement")
+    name = re.sub(r'[\\/:*?"<>|]', " ", str(merged_name or "")).strip()
+    name = name or f"{path.stem}_片段合并"
+    if not Path(name).suffix:
+        name += ".mp4"
+    if on_progress:
+        on_progress(0, 1, f"开始切割 {len(clamped)} 段")
+
+    def progress(percent, message):
+        _report(on_progress, max(0, min(100, int(percent))) / 100.0, 1,
+                message or "切割中")
+
+    try:
+        outputs = cut_segments(
+            path, clamped, root, mode, merge=merge,
+            merged_name=name if merge else "", progress=progress,
+            cancel=lambda: bool(is_cancelled and is_cancelled()))
+    except EditCancelled as exc:
+        raise ToolCancelled(str(exc)) from exc
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return {"summary": f"切割完成：输出 {len(outputs)} 个文件",
+            "outputs": [item.name for item in outputs], "ok": True}
+
+
+def snapshot_video(rel_path: str, mode: str = "single", position: str = "",
+                   interval_sec: float = 0, image_format: str = "jpg",
+                   on_progress=None, is_cancelled=None) -> dict:
+    """截图：单帧导出到视频同目录，或按间隔抽帧到「<文件名>_frames」。"""
+    from toolbox.edit_engine import (EditCancelled, EditError, snapshot,
+                                     snapshot_every)
+
+    root = _work_root()
+    if root is None:
+        raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
+    path = _resolve(root, str(rel_path or ""))
+    fmt = "png" if str(image_format or "").lower() == "png" else "jpg"
+    mode = str(mode or "single")
+    try:
+        if mode == "interval":
+            interval = float(interval_sec or 0)
+            if interval < 0.1:
+                raise ValueError("抽帧间隔至少 0.1 秒")
+            if interval > 3600:
+                raise ValueError("抽帧间隔不能超过 3600 秒")
+            outputs = snapshot_every(
+                path, interval, progress=lambda percent, message: _report(
+                    on_progress,
+                    max(0, min(100, int(percent))) / 100.0, 1,
+                    message or "抽帧中"),
+                cancel=lambda: bool(is_cancelled and is_cancelled()))
+            return {"summary": f"已导出 {len(outputs)} 帧",
+                    "folder": f"{path.stem}_frames",
+                    "outputs": [item.name for item in outputs][:200],
+                    "ok": True}
+        if mode != "single":
+            raise ValueError("未知截图方式")
+        time_ms = _parse_time_ms(position)
+        if time_ms is None:
+            raise ValueError("时间点格式不正确，可用 90、01:30 或 00:01:30")
+        out = snapshot(path, time_ms, path.parent, image_format=fmt)
+        return {"summary": f"已截图：{out.name}", "outputs": [out.name],
+                "ok": True}
+    except EditCancelled as exc:
+        raise ToolCancelled(str(exc)) from exc
+    except EditError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _parse_time_ms(text) -> int | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        parts = raw.split(":")
+        if len(parts) == 1:
+            seconds = float(parts[0])
+        elif len(parts) == 2:
+            seconds = int(parts[0]) * 60 + float(parts[1])
+        elif len(parts) == 3:
+            seconds = (int(parts[0]) * 3600 + int(parts[1]) * 60 +
+                       float(parts[2]))
+        else:
+            return None
+    except ValueError:
+        return None
+    if seconds < 0:
+        return None
+    return int(seconds * 1000)
+
+
+def _report(on_progress, done, total, name) -> None:
+    if on_progress:
+        on_progress(done, total, name)
+
+
+def _remove_quietly(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def organize_overview() -> dict:

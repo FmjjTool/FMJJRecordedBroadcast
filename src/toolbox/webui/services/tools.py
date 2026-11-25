@@ -171,6 +171,152 @@ class ToolService:
         except webui_tools.ToolCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def start_video_compress(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        paths = payload.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("请选择要压缩的视频")
+        preset = str(payload.get("preset") or "normal")
+        resolution = str(payload.get("resolution") or "keep")
+        preset, resolution = webui_tools.validate_compress_options(
+            preset, resolution)
+        clear_metadata = bool(payload.get("clear_metadata", True))
+        job = self._jobs.submit(
+            "video_compress",
+            lambda task: self._video_compress_job(
+                task, paths, preset, resolution, clear_metadata))
+        return {"job": job.id}
+
+    def _video_compress_job(self, job, paths, preset: str, resolution: str,
+                            clear_metadata: bool) -> dict:
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"正在压缩: {name}", fraction)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.compress_videos(
+                paths, preset=preset, resolution=resolution,
+                clear_metadata=clear_metadata, on_progress=progress,
+                is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
+    def start_video_merge(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        paths = payload.get("paths") or []
+        if not isinstance(paths, list) or len(paths) < 2:
+            raise ValueError("至少选择 2 个视频才能合并")
+        mode = str(payload.get("mode") or "copy")
+        if mode not in ("copy", "encode"):
+            raise ValueError("未知合并方式")
+        output_name = str(payload.get("output_name") or "").strip()
+        output_ext = str(payload.get("output_ext") or ".mp4").lower()
+        if output_ext not in (".mp4", ".mkv"):
+            raise ValueError("合并输出只支持 mp4 / mkv")
+        job = self._jobs.submit(
+            "video_merge",
+            lambda task: self._video_merge_job(
+                task, paths, mode, output_name, output_ext))
+        return {"job": job.id}
+
+    def _video_merge_job(self, job, paths, mode: str, output_name: str,
+                         output_ext: str) -> dict:
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"正在合并: {name}", fraction)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.merge_videos(
+                paths, mode=mode, output_name=output_name,
+                output_ext=output_ext, on_progress=progress,
+                is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
+    def start_video_cut(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择要切割的视频")
+        segments = payload.get("segments") or []
+        if not isinstance(segments, list) or not segments:
+            raise ValueError("请至少填写一个切割片段")
+        mode = str(payload.get("mode") or "copy")
+        if mode not in ("copy", "precise"):
+            raise ValueError("未知切割方式")
+        export = str(payload.get("export") or "each")
+        if export not in ("each", "merge", "complement"):
+            raise ValueError("未知导出方式")
+        merged_name = str(payload.get("merged_name") or "").strip()
+        job = self._jobs.submit(
+            "video_cut",
+            lambda task: self._video_cut_job(
+                task, rel, segments, mode, export, merged_name))
+        return {"job": job.id}
+
+    def _video_cut_job(self, job, rel: str, segments, mode: str, export: str,
+                       merged_name: str) -> dict:
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"正在切割: {name}", fraction)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.cut_video(
+                rel, segments, mode=mode, export=export,
+                merged_name=merged_name, on_progress=progress,
+                is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
+    def start_video_snapshot(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        rel = str(payload.get("path") or "").strip()
+        if not rel:
+            raise ValueError("请选择要截图的视频")
+        mode = str(payload.get("mode") or "single")
+        if mode not in ("single", "interval"):
+            raise ValueError("未知截图方式")
+        position = str(payload.get("position") or "").strip()
+        interval_sec = payload.get("interval_sec") or 0
+        image_format = str(payload.get("format") or "jpg").lower()
+        if mode == "single" and not position:
+            raise ValueError("请填写截图时间点")
+        job = self._jobs.submit(
+            "video_snapshot",
+            lambda task: self._video_snapshot_job(
+                task, rel, mode, position, interval_sec, image_format))
+        return {"job": job.id}
+
+    def _video_snapshot_job(self, job, rel: str, mode: str, position: str,
+                            interval_sec, image_format: str) -> dict:
+        def progress(done, total, name) -> None:
+            fraction = (float(done) / total) if total else None
+            job.update(f"正在截图: {name}", fraction)
+
+        def cancelled() -> bool:
+            return bool(job.cancel_requested)
+
+        try:
+            return webui_tools.snapshot_video(
+                rel, mode=mode, position=position, interval_sec=interval_sec,
+                image_format=image_format, on_progress=progress,
+                is_cancelled=cancelled)
+        except webui_tools.ToolCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+
     def calendar_days(self) -> dict:
         return webui_tools.calendar_days()
 

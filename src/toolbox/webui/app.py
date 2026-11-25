@@ -136,6 +136,22 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tool_service.start_video_convert(dict(req.json or {}))
     server.post("/api/tools/video/convert", start_video_convert)
 
+    def start_video_compress(req):
+        return tool_service.start_video_compress(dict(req.json or {}))
+    server.post("/api/tools/video/compress", start_video_compress)
+
+    def start_video_merge(req):
+        return tool_service.start_video_merge(dict(req.json or {}))
+    server.post("/api/tools/video/merge", start_video_merge)
+
+    def start_video_cut(req):
+        return tool_service.start_video_cut(dict(req.json or {}))
+    server.post("/api/tools/video/cut", start_video_cut)
+
+    def start_video_snapshot(req):
+        return tool_service.start_video_snapshot(dict(req.json or {}))
+    server.post("/api/tools/video/snapshot", start_video_snapshot)
+
     server.get("/api/tools/audio/overview",
                lambda req: tool_service.audio_overview())
     server.get("/api/tools/audio/sources", lambda req: tool_service.audio_sources(

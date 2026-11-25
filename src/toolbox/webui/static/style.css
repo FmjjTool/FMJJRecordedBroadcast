@@ -214,6 +214,21 @@ code {
 }
 .input:focus, .select:focus { border-color: var(--accent); }
 .input.grow { flex: 1; min-width: 160px; }
+.textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 8px 9px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+.textarea:focus { border-color: var(--accent); }
 .check { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .check input { accent-color: var(--accent); }
 
@@ -336,6 +351,7 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 }
 .toast.error { background: #c62828; }
 .toast.success { background: #2e7d32; }
+.toast.warning { background: #b8860b; }
 
 .gate {
   position: fixed;

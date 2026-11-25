@@ -22,7 +22,7 @@
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
-    video: { order: '', asc: true, selected: new Set() },
+    video: { tab: 'convert', order: '', asc: true, selected: new Set() },
     calendar: { day: '', order: '', asc: true },
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
@@ -1475,12 +1475,12 @@
       stats.appendChild(statCard('输出格式', overview.output_extension || '-', '桌面端配置'));
       stats.appendChild(statCard('已列出', fmtNumber(sources.items.length),
         sources.truncated ? '仅前 300 个' : '全部'));
-      stats.appendChild(statCard('处理方式', '无损优先', '同目录输出'));
+      stats.appendChild(statCard('处理方式', '只生成新文件', '不覆盖已有文件'));
       host.appendChild(stats);
       host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'muted small' }, overview.note || '')));
       if (!sources.items.length) {
-        host.appendChild(empty('工作目录下没有可转换的视频。'));
+        host.appendChild(empty('工作目录下没有可操作的视频。'));
         return;
       }
 
@@ -1492,20 +1492,22 @@
 
       var selectedLabel = h('span', { class: 'muted small' });
       var selectAll = h('input', { type: 'checkbox' });
-      var runBtn = h('button', { class: 'btn primary', type: 'button' }, '转换选中视频');
       var rescan = h('button', { class: 'btn', type: 'button' }, '刷新');
       host.appendChild(h('div', { class: 'toolbar' },
         h('label', { class: 'muted small' }, selectAll, ' 全选'),
-        selectedLabel, h('span', { style: 'flex:1' }), rescan, runBtn));
+        selectedLabel, h('span', { style: 'flex:1' }), rescan));
 
-      var jobHost = h('div');
       var listHost = h('div');
+      var opHost = h('div', { class: 'card', style: 'margin-top:12px' });
+      var jobHost = h('div');
       var resultHost = h('div');
-      host.appendChild(jobHost);
       host.appendChild(listHost);
+      host.appendChild(opHost);
+      host.appendChild(jobHost);
       host.appendChild(resultHost);
 
       var running = false;
+      var actionRefreshers = [];
       var columns = [
         { key: 'name', label: '文件名' },
         { key: 'dir', label: '目录' },
@@ -1513,14 +1515,44 @@
         { key: 'mtime', label: '修改时间' }
       ];
 
+      var tabs = h('div', { class: 'tabs' });
+      var tabHost = h('div');
+      [['convert', '转换'], ['compress', '压缩'], ['merge', '合并'],
+       ['cut', '切割'], ['snapshot', '截图']].forEach(function (pair) {
+        tabs.appendChild(h('button', {
+          class: 'tab' + (state.video.tab === pair[0] ? ' active' : ''),
+          type: 'button', dataset: { tab: pair[0] },
+          onclick: function () {
+            state.video.tab = pair[0];
+            tabs.querySelectorAll('.tab').forEach(function (button) {
+              button.classList.toggle('active', button.dataset.tab === pair[0]);
+            });
+            renderTab();
+          }
+        }, pair[1]));
+      });
+      opHost.appendChild(tabs);
+      opHost.appendChild(tabHost);
+
+      selectAll.addEventListener('change', function () {
+        selected.clear();
+        if (selectAll.checked) {
+          sources.items.forEach(function (item) { selected.add(item.path); });
+        }
+        draw();
+      });
+      rescan.addEventListener('click', function () {
+        selected.clear();
+        renderVideo(host);
+      });
+
       function updateButtons() {
-        runBtn.disabled = running || selected.size === 0;
-        runBtn.textContent = running ? '转换中…' : '转换选中视频';
         selectedLabel.textContent = '已选 ' + selected.size + ' 个';
         selectAll.checked = sources.items.length > 0
           && selected.size === sources.items.length;
         selectAll.indeterminate = selected.size > 0
           && selected.size < sources.items.length;
+        actionRefreshers.forEach(function (refresh) { refresh(); });
       }
 
       function draw() {
@@ -1559,31 +1591,33 @@
         updateButtons();
       }
 
-      selectAll.addEventListener('change', function () {
-        selected.clear();
-        if (selectAll.checked) {
-          sources.items.forEach(function (item) { selected.add(item.path); });
-        }
-        draw();
-      });
-      rescan.addEventListener('click', function () {
-        selected.clear();
-        renderVideo(host);
-      });
-      runBtn.addEventListener('click', function () {
-        if (!selected.size || running) return;
-        var paths = Array.from(selected);
+      function selectedPaths() {
+        return sortRows(sources.items, columns, state.video)
+          .filter(function (item) { return selected.has(item.path); })
+          .map(function (item) { return item.path; });
+      }
+
+      function makeSelect(items, selectedValue) {
+        return h('select', { class: 'select' }, items.map(function (item) {
+          return h('option', {
+            value: item.value,
+            selected: item.value === selectedValue
+          }, item.label);
+        }));
+      }
+
+      function runOp(url, body, label) {
+        if (running) return;
         running = true;
         updateButtons();
-        post('/api/tools/video/convert', { paths: paths }).then(function (data) {
+        post(url, body).then(function (data) {
           watchJob(jobHost, data.job, function (job) {
             running = false;
             updateButtons();
             var summary = job.result && job.result.summary
-              ? job.result.summary : '转换完成';
+              ? job.result.summary : '已完成';
             toast(summary, 'success');
-            showResult(job);
-            selected.clear();
+            showOpResult(job);
             draw();
           }, {
             cancelable: true,
@@ -1591,49 +1625,322 @@
               running = false;
               updateButtons();
               if (job.status === 'cancelled') {
-                toast('视频转换已取消', 'info');
+                toast(label + '已取消', 'info');
               }
             }
           });
         }).catch(function (error) {
           running = false;
           updateButtons();
-          toast('转换失败：' + error.message, 'error');
+          toast(label + '失败：' + error.message, 'error');
         });
-      });
+      }
+
+      function renderConvertPanel() {
+        var btn = h('button', { class: 'btn primary', type: 'button' }, '转换选中视频');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' },
+            '按桌面默认输出格式做无损优先的格式转换；输出到源视频同目录，目标格式相同时跳过。'),
+          h('span', { style: 'flex:1' }), btn));
+        var sync = function () {
+          btn.disabled = running || selected.size === 0;
+          btn.textContent = running ? '处理中…' : '转换选中视频';
+        };
+        actionRefreshers.push(sync);
+        sync();
+        btn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (!paths.length) return;
+          runOp('/api/tools/video/convert', { paths: paths }, '转换');
+        });
+      }
+
+      function renderCompressPanel() {
+        var preset = makeSelect(overview.compress_presets || [], 'normal');
+        var resolution = makeSelect(overview.resolutions || [], 'keep');
+        var clean = h('input', { type: 'checkbox', checked: true });
+        var btn = h('button', { class: 'btn primary', type: 'button' }, '压缩选中视频');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '压缩强度'), preset,
+          h('span', { class: 'muted small' }, '分辨率'), resolution,
+          h('label', { class: 'check small' }, clean, ' 清除元数据'),
+          h('span', { style: 'flex:1' }), btn));
+        tabHost.appendChild(h('div', { class: 'muted small' },
+          '重新编码输出到源视频同目录（<文件名>_compressed_video），源文件不动，同名自动加序号；视频较大时耗时较长。'));
+        var sync = function () {
+          btn.disabled = running || selected.size === 0;
+          btn.textContent = running ? '处理中…' : '压缩选中视频';
+        };
+        actionRefreshers.push(sync);
+        sync();
+        btn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (!paths.length) return;
+          runOp('/api/tools/video/compress', {
+            paths: paths,
+            preset: preset.value,
+            resolution: resolution.value,
+            clear_metadata: clean.checked
+          }, '压缩');
+        });
+      }
+
+      function renderMergePanel() {
+        var mode = makeSelect(overview.merge_modes || [], 'copy');
+        var ext = makeSelect((overview.merge_exts || ['.mp4']).map(function (value) {
+          return { value: value, label: value };
+        }), '.mp4');
+        var name = h('input', {
+          class: 'input grow', placeholder: '留空自动命名 合并_日期_时间'
+        });
+        var btn = h('button', { class: 'btn primary', type: 'button' }, '合并选中视频');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '方式'), mode,
+          h('span', { class: 'muted small' }, '格式'), ext,
+          h('span', { class: 'muted small' }, '文件名'), name,
+          h('span', { style: 'flex:1' }), btn));
+        tabHost.appendChild(h('div', { class: 'muted small' },
+          '勾选 2 个以上视频，按上方表格当前排序顺序合并（可点表头调整顺序）；输出到工作目录根，不覆盖已有文件。'));
+        var sync = function () {
+          btn.disabled = running || selected.size < 2;
+          btn.textContent = running ? '处理中…' : '合并选中视频';
+        };
+        actionRefreshers.push(sync);
+        sync();
+        btn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length < 2) {
+            toast('至少选择 2 个视频才能合并', 'warning');
+            return;
+          }
+          runOp('/api/tools/video/merge', {
+            paths: paths,
+            mode: mode.value,
+            output_name: name.value.trim(),
+            output_ext: ext.value
+          }, '合并');
+        });
+      }
+
+      function parseTimeMs(value) {
+        var parts = String(value || '').trim().split(':');
+        var seconds = null;
+        if (parts.length === 1) {
+          seconds = Number(parts[0]);
+        } else if (parts.length === 2) {
+          seconds = Number(parts[0]) * 60 + Number(parts[1]);
+        } else if (parts.length === 3) {
+          seconds = Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2]);
+        }
+        if (seconds == null || !isFinite(seconds) || seconds < 0) return null;
+        return Math.round(seconds * 1000);
+      }
+
+      function parseSegments(text) {
+        var rows = [];
+        String(text || '').split(/\n+/).forEach(function (line) {
+          var trimmed = line.trim();
+          if (!trimmed) return;
+          var parts = trimmed.split('-');
+          if (parts.length !== 2) {
+            throw new Error('片段格式不正确：' + trimmed);
+          }
+          var start = parseTimeMs(parts[0]);
+          var end = parseTimeMs(parts[1]);
+          if (start == null || end == null) {
+            throw new Error('时间格式不正确：' + trimmed);
+          }
+          if (end <= start) {
+            throw new Error('结束时间必须大于开始时间：' + trimmed);
+          }
+          rows.push([start, end]);
+        });
+        if (!rows.length) throw new Error('请至少填写一个片段');
+        return rows;
+      }
+
+      function renderCutPanel() {
+        var exportSel = makeSelect(overview.cut_exports || [], 'each');
+        var modeSel = makeSelect(overview.cut_modes || [], 'copy');
+        var nameInput = h('input', {
+          class: 'input grow', placeholder: '合并文件名，留空自动命名'
+        });
+        var nameRow = h('div', { class: 'toolbar', style: 'display:none' },
+          h('span', { class: 'muted small' }, '文件名'), nameInput);
+        var segments = h('textarea', {
+          class: 'textarea', rows: '4',
+          placeholder: '每行一个片段：开始-结束，例如\n00:10-01:20\n01:45-02:30'
+        });
+        var btn = h('button', { class: 'btn primary', type: 'button' }, '切割选中视频');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '导出'), exportSel,
+          h('span', { class: 'muted small' }, '方式'), modeSel,
+          h('span', { style: 'flex:1' }), btn));
+        tabHost.appendChild(segments);
+        tabHost.appendChild(nameRow);
+        tabHost.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '先在表格勾选 1 个视频；时间可用秒（90）或时间码（01:30 / 00:01:30）。输出到工作目录根，不覆盖已有文件。'));
+        exportSel.addEventListener('change', function () {
+          nameRow.style.display = exportSel.value === 'each' ? 'none' : '';
+        });
+        var sync = function () {
+          btn.disabled = running || selected.size !== 1;
+          btn.textContent = running ? '处理中…' : '切割选中视频';
+        };
+        actionRefreshers.push(sync);
+        sync();
+        btn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length !== 1) {
+            toast('请先在表格勾选 1 个视频', 'warning');
+            return;
+          }
+          var parsed;
+          try {
+            parsed = parseSegments(segments.value);
+          } catch (error) {
+            toast(error.message, 'warning');
+            return;
+          }
+          runOp('/api/tools/video/cut', {
+            path: paths[0],
+            segments: parsed,
+            mode: modeSel.value,
+            export: exportSel.value,
+            merged_name: nameInput.value.trim()
+          }, '切割');
+        });
+      }
+
+      function renderSnapshotPanel() {
+        var fmt = makeSelect(overview.snapshot_formats || [], 'jpg');
+        var position = h('input', {
+          class: 'input', placeholder: '时间点：90 或 01:30 或 00:01:30'
+        });
+        var singleBtn = h('button', { class: 'btn primary', type: 'button' }, '截取单帧');
+        var interval = h('input', {
+          class: 'input', placeholder: '间隔秒数，如 10'
+        });
+        var everyBtn = h('button', { class: 'btn', type: 'button' }, '按间隔抽帧');
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '格式'), fmt,
+          position, singleBtn));
+        tabHost.appendChild(h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '抽帧间隔'), interval, everyBtn));
+        tabHost.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '先在表格勾选 1 个视频；单帧输出到视频同目录，按间隔抽帧输出到「<文件名>_frames」文件夹（JPG）。'));
+        var sync = function () {
+          var disabled = running || selected.size !== 1;
+          singleBtn.disabled = disabled;
+          everyBtn.disabled = disabled;
+          singleBtn.textContent = running ? '处理中…' : '截取单帧';
+          everyBtn.textContent = running ? '处理中…' : '按间隔抽帧';
+        };
+        actionRefreshers.push(sync);
+        sync();
+        singleBtn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length !== 1) {
+            toast('请先在表格勾选 1 个视频', 'warning');
+            return;
+          }
+          if (!position.value.trim()) {
+            toast('请填写截图时间点', 'warning');
+            return;
+          }
+          runOp('/api/tools/video/snapshot', {
+            path: paths[0], mode: 'single',
+            position: position.value.trim(), format: fmt.value
+          }, '截图');
+        });
+        everyBtn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length !== 1) {
+            toast('请先在表格勾选 1 个视频', 'warning');
+            return;
+          }
+          var seconds = Number(interval.value);
+          if (!isFinite(seconds) || seconds < 0.1) {
+            toast('抽帧间隔至少 0.1 秒', 'warning');
+            return;
+          }
+          runOp('/api/tools/video/snapshot', {
+            path: paths[0], mode: 'interval', interval_sec: seconds,
+            format: 'jpg'
+          }, '抽帧');
+        });
+      }
+
+      function renderTab() {
+        tabHost.replaceChildren();
+        actionRefreshers = [];
+        if (state.video.tab === 'compress') renderCompressPanel();
+        else if (state.video.tab === 'merge') renderMergePanel();
+        else if (state.video.tab === 'cut') renderCutPanel();
+        else if (state.video.tab === 'snapshot') renderSnapshotPanel();
+        else renderConvertPanel();
+        updateButtons();
+      }
+
+      function showOpResult(job) {
+        var result = job.result || {};
+        var rows = result.results || [];
+        resultHost.replaceChildren();
+        if (rows.length) {
+          var labels = {
+            lossless: '无损封装', skip: '已存在跳过',
+            encode: '重新编码', encode_fallback: '重编码'
+          };
+          var head = h('tr', null,
+            h('th', null, '文件'), h('th', null, '结果'),
+            h('th', null, '输出'), h('th', null, '说明'));
+          var body = h('tbody');
+          rows.forEach(function (row) {
+            var note = row.error || '';
+            if (!note && row.before && row.after) {
+              note = fmtBytes(row.before) + ' → ' + fmtBytes(row.after);
+            }
+            if (!note) note = labels[row.mode] || row.mode || '-';
+            body.appendChild(h('tr', null,
+              h('td', null, row.file || '-'),
+              h('td', null, row.ok ? '成功' : '失败'),
+              h('td', { class: 'muted small' }, row.output || '-'),
+              h('td', { class: 'muted small' }, note)));
+          });
+          resultHost.appendChild(h('div', {
+            class: 'card', style: 'margin-top:12px'
+          },
+            h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+              result.summary || '处理结果'),
+            h('div', { class: 'table-wrap' },
+              h('table', { class: 'db-table' }, h('thead', null, head), body))));
+          return;
+        }
+        var lines = [];
+        if (result.output) lines.push('输出：' + result.output);
+        if (result.folder) lines.push('输出文件夹：' + result.folder);
+        if (result.outputs && result.outputs.length) {
+          lines.push('输出：' + result.outputs.slice(0, 30).join('、') +
+            (result.outputs.length > 30
+              ? ' 等 ' + result.outputs.length + ' 个文件' : ''));
+        }
+        if (result.problems && result.problems.length) {
+          lines.push('参数差异提示：' + result.problems.slice(0, 5).join('；'));
+        }
+        if (!lines.length) return;
+        resultHost.appendChild(h('div', {
+          class: 'card', style: 'margin-top:12px'
+        },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+            result.summary || '处理结果'),
+          h('div', { class: 'muted small' }, lines.join('；'))));
+      }
+
       draw();
+      renderTab();
     }).catch(function (error) {
       setError(host, error, function () { renderVideo(host); });
     });
-
-    function showResult(job) {
-      var result = job.result || {};
-      var rows = result.results || [];
-      if (!rows.length) return;
-      var labels = {
-        lossless: '无损封装', skip: '已存在跳过',
-        encode: '重新编码', encode_fallback: '重编码'
-      };
-      var head = h('tr', null,
-        h('th', null, '文件'), h('th', null, '结果'),
-        h('th', null, '输出'), h('th', null, '说明'));
-      var body = h('tbody');
-      rows.forEach(function (row) {
-        body.appendChild(h('tr', null,
-          h('td', null, row.file || '-'),
-          h('td', null, row.ok ? '成功' : '失败'),
-          h('td', { class: 'muted small' }, row.output || '-'),
-          h('td', { class: 'muted small' },
-            row.error || labels[row.mode] || row.mode || '-')));
-      });
-      resultHost.replaceChildren(h('div', {
-        class: 'card', style: 'margin-top:12px'
-      },
-        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
-          result.summary || '转换结果'),
-        h('div', { class: 'table-wrap' },
-          h('table', { class: 'db-table' }, h('thead', null, head), body))));
-    }
   }
 
   function renderSubtitle(host) {
