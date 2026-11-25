@@ -63,6 +63,12 @@ class CollectedService:
         return {"platform": platform, "page": page, "page_size": page_size,
                 "pages": pages, "total": int(total), "items": items}
 
+    def keys(self, platform: str, keyword: str = "") -> dict:
+        """整栏条目键（用于全选 / 反选 / 全不选，与桌面端一致）。"""
+        keys = collected_store.query_keys(
+            str(platform or ""), str(keyword or ""), limit=_MAX_EXPORT)
+        return {"platform": platform, "keys": keys, "total": len(keys)}
+
     def export_job(self, job, payload: dict) -> dict:
         formats = [fmt for fmt in payload.get("formats") or [] if fmt in _FORMATS]
         if not formats:

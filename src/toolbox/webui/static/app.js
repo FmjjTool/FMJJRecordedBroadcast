@@ -15,7 +15,7 @@
   var state = {
     route: 'home',
     theme: localStorage.getItem('webui-theme') || 'auto',
-    collected: { platform: 'douyin', page: 1, pageSize: 30, q: '', data: null, selected: new Set(), formats: new Set(), overview: null },
+    collected: { q: '', pageSize: 100, formats: new Set(), overview: null, cols: {} },
     assets: { tab: 'entries', page: 1, q: '', platform: '', dbPlatform: '', dbPage: 1, dbQ: '', dbOrder: '', dbAsc: false, cat: '', localPage: 1,
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true },
@@ -368,20 +368,24 @@
       if (!state.collected.formats.size) {
         overview.formats.forEach(function (fmt) { state.collected.formats.add(fmt); });
       }
-      var itemHost = h('div');
-      var pagerHost = h('div', { class: 'pager' });
       var jobHost = h('div');
       var info = h('span', { class: 'muted small' });
-      var tabs = h('div', { class: 'tabs' });
       var search = h('input', {
-        class: 'input grow', placeholder: '搜索标题、作者或作品 ID', value: state.collected.q
+        class: 'input grow', placeholder: '搜索标题、作者或作品 ID',
+        value: state.collected.q
       });
-      var formatBoxes = h('div', { class: 'toolbar', style: 'margin:0' });
-      var comment = h('input', { class: 'input', type: 'number', min: '0', max: '50', value: overview.comment_pages, style: 'width:76px' });
-      var exportSelected = h('button', { class: 'btn primary', type: 'button', disabled: true }, '导出勾选');
-      var exportFiltered = h('button', { class: 'btn', type: 'button' }, '导出当前筛选');
-      var downloadSelected = h('button', { class: 'btn', type: 'button', disabled: true }, '下载勾选');
+      var comment = h('input', {
+        class: 'input', type: 'number', min: '0', max: '50',
+        value: overview.comment_pages, style: 'width:76px'
+      });
+      var exportSelected = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '导出所有勾选');
+      var downloadSelected = h('button', {
+        class: 'btn', type: 'button', disabled: true
+      }, '下载所有勾选');
 
+      var formatBoxes = h('div', { class: 'toolbar', style: 'margin:0' });
       overview.formats.forEach(function (fmt) {
         formatBoxes.appendChild(h('label', { class: 'check' },
           h('input', {
@@ -389,185 +393,292 @@
             onchange: function (event) {
               if (event.target.checked) state.collected.formats.add(fmt);
               else state.collected.formats.delete(fmt);
+              updateInfo();
             }
           }), fmt.toUpperCase()));
       });
-      formatBoxes.appendChild(h('label', { class: 'check', style: 'margin-left:8px' }, '微博评论页',
-        comment));
+      formatBoxes.appendChild(h('label', {
+        class: 'check', style: 'margin-left:8px'
+      }, '微博评论页', comment));
 
-      overview.platforms.forEach(function (platform) {
-        tabs.appendChild(h('button', {
-          class: 'tab' + (platform.key === state.collected.platform ? ' active' : ''),
-          type: 'button', dataset: { platform: platform.key },
-          onclick: function () {
-            state.collected.platform = platform.key;
-            state.collected.page = 1;
-            tabs.querySelectorAll('.tab').forEach(function (button) {
-              button.classList.toggle('active', button.dataset.platform === platform.key);
-            });
-            load();
-          }
-        }, platform.name + ' ' + fmtNumber(platform.total)));
-      });
+      var grid = h('div', { class: 'grid cols-4 collected-grid' });
+      var cols = {};
 
-      function load() {
-        setLoading(itemHost, '正在读取条目…');
-        api('/api/collected/items?platform=' + encodeURIComponent(state.collected.platform) +
-          '&page=' + state.collected.page + '&page_size=' + state.collected.pageSize +
-          '&q=' + encodeURIComponent(state.collected.q)).then(function (data) {
-          state.collected.data = data;
-          itemHost.replaceChildren(buildCollectedTable(data));
-          pager(pagerHost, data.page, data.pages, data.total, function (page) {
-            state.collected.page = page;
-            load();
-          });
-          updateInfo();
-        }).catch(function (error) {
-          setError(itemHost, error, load);
-          pagerHost.replaceChildren();
+      function column(key) {
+        return state.collected.cols[key];
+      }
+
+      function totalSelected() {
+        var total = 0;
+        Object.keys(cols).forEach(function (key) {
+          total += column(key).selected.size;
         });
+        return total;
+      }
+
+      function allSelectedKeys() {
+        var keys = [];
+        Object.keys(cols).forEach(function (key) {
+          column(key).selected.forEach(function (item) { keys.push(item); });
+        });
+        return keys;
       }
 
       function updateInfo() {
-        var count = state.collected.selected.size;
-        info.textContent = selectedCountText(count) + ' · 导出格式 ' +
-          (state.collected.formats.size ? Array.from(state.collected.formats).join(' / ') : '未选择');
+        var total = totalSelected();
         var noFormats = state.collected.formats.size === 0;
-        exportSelected.disabled = count === 0 || noFormats;
-        exportFiltered.disabled = noFormats;
-        downloadSelected.disabled = count === 0;
+        info.textContent = selectedCountText(total) + ' · 导出格式 '
+          + (noFormats ? '未选择'
+            : Array.from(state.collected.formats).join(' / '));
+        exportSelected.disabled = total === 0 || noFormats;
+        downloadSelected.disabled = total === 0;
+        Object.keys(cols).forEach(updateColumnButtons);
       }
 
-      function checkedKeys() {
-        return Array.from(state.collected.selected);
+      function updateColumnButtons(key) {
+        var col = column(key);
+        var count = col.selected.size;
+        col.refs.exportBtn.disabled = count === 0
+          || state.collected.formats.size === 0;
+        col.refs.downloadBtn.disabled = count === 0;
       }
 
-      function startExport(keys) {
+      function drawColumn(key) {
+        var col = column(key);
+        var data = col.data;
+        if (!data) return;
+        col.refs.count.textContent = fmtNumber(data.total);
+        var host = col.refs.list;
+        host.replaceChildren();
+        if (!data.items.length) {
+          host.appendChild(empty('该栏暂无条目。可在桌面端「采集任务」解析后刷新。'));
+        } else {
+          data.items.forEach(function (item) {
+            var checked = col.selected.has(item.key);
+            var kind = item.kind === 'video' ? 'video'
+              : (item.kind === 'dynamic' ? 'dynamic' : 'image');
+            var checkbox = h('input', { type: 'checkbox', checked: checked });
+            var row = h('label', {
+              class: 'col-item' + (checked ? ' checked' : '')
+            }, checkbox, h('span', { class: 'col-item-main' },
+              h('span', { class: 'col-item-title' },
+                h('span', { class: 'kind kind-' + kind },
+                  '[' + kindLabel(item.kind) + '] '),
+                item.url
+                  ? h('a', {
+                    href: item.url, target: '_blank',
+                    rel: 'noopener noreferrer'
+                  }, item.title)
+                  : item.title),
+              h('span', { class: 'col-item-meta' },
+                (item.author || '-') + ' · ' + fmtTime(item.publish_time)
+                + ' · 播放 ' + fmtNumber(item.play)
+                + ' · 赞 ' + fmtNumber(item.like))));
+            checkbox.addEventListener('change', function () {
+              if (checkbox.checked) col.selected.add(item.key);
+              else col.selected.delete(item.key);
+              row.classList.toggle('checked', checkbox.checked);
+              updateInfo();
+            });
+            host.appendChild(row);
+          });
+        }
+        drawColumnPager(key);
+        updateColumnButtons(key);
+      }
+
+      function drawColumnPager(key) {
+        var col = column(key);
+        var data = col.data;
+        if (!data) return;
+        col.refs.pager.replaceChildren(
+          h('button', {
+            class: 'btn ghost mini', type: 'button',
+            disabled: data.page <= 1,
+            onclick: function () {
+              col.page = data.page - 1;
+              loadColumn(key);
+            }
+          }, '上一页'),
+          h('span', { class: 'muted small' }, data.page + ' / ' + data.pages),
+          h('button', {
+            class: 'btn ghost mini', type: 'button',
+            disabled: data.page >= data.pages,
+            onclick: function () {
+              col.page = data.page + 1;
+              loadColumn(key);
+            }
+          }, '下一页'));
+      }
+
+      function loadColumn(key) {
+        var col = column(key);
+        setLoading(col.refs.list, '正在读取条目…');
+        api('/api/collected/items?platform=' + encodeURIComponent(key)
+          + '&page=' + col.page
+          + '&page_size=' + state.collected.pageSize
+          + '&q=' + encodeURIComponent(state.collected.q))
+          .then(function (data) {
+            col.data = data;
+            drawColumn(key);
+          }).catch(function (error) {
+            setError(col.refs.list, error, function () { loadColumn(key); });
+          });
+      }
+
+      function loadAll() {
+        Object.keys(cols).forEach(function (key) {
+          column(key).page = 1;
+          loadColumn(key);
+        });
+      }
+
+      function columnSelect(key, mode) {
+        api('/api/collected/keys?platform=' + encodeURIComponent(key)
+          + '&q=' + encodeURIComponent(state.collected.q))
+          .then(function (data) {
+            var col = column(key);
+            var keys = data.keys || [];
+            if (mode === 'all') {
+              keys.forEach(function (item) { col.selected.add(item); });
+            } else if (mode === 'none') {
+              col.selected.clear();
+            } else {
+              keys.forEach(function (item) {
+                if (col.selected.has(item)) col.selected.delete(item);
+                else col.selected.add(item);
+              });
+            }
+            if (col.data) drawColumn(key);
+            updateInfo();
+          }).catch(function (error) {
+            toast('选择失败：' + error.message, 'error');
+          });
+      }
+
+      function startExport(keys, platform) {
         var formats = Array.from(state.collected.formats);
         if (!formats.length) {
           toast('请至少选择一种导出格式', 'error');
           return;
         }
+        if (!keys.length) {
+          toast('请先勾选要导出的条目', 'warning');
+          return;
+        }
         exportSelected.disabled = true;
-        exportFiltered.disabled = true;
+        downloadSelected.disabled = true;
         post('/api/collected/export', {
-          keys: keys || [], platform: state.collected.platform,
-          keyword: state.collected.q, formats: formats,
-          comment_pages: Number(comment.value || 0)
+          keys: keys, platform: platform || '', keyword: '',
+          formats: formats, comment_pages: Number(comment.value || 0)
         }).then(function (data) {
           watchJob(jobHost, data.job, function () {
-            exportSelected.disabled = state.collected.selected.size === 0;
-            exportFiltered.disabled = false;
-            load();
+            toast('导出完成', 'success');
+            updateInfo();
+            loadAll();
           });
         }).catch(function (error) {
-          exportSelected.disabled = state.collected.selected.size === 0;
-          exportFiltered.disabled = false;
+          updateInfo();
           toast(error.message, 'error');
         });
       }
 
       function startDownload(keys) {
-        if (!confirm('将按最高画质、4 线程把勾选内容下载到服务端导出目录，继续？')) return;
+        if (!keys.length) {
+          toast('请先勾选要下载的条目', 'warning');
+          return;
+        }
+        if (!confirm('将按最高画质、4 线程把勾选内容下载到服务端导出目录，继续？')) {
+          return;
+        }
         exportSelected.disabled = true;
-        exportFiltered.disabled = true;
         downloadSelected.disabled = true;
         post('/api/collected/download', { keys: keys }).then(function (data) {
           watchJob(jobHost, data.job, function () {
-            exportSelected.disabled = state.collected.selected.size === 0;
-            exportFiltered.disabled = false;
-            downloadSelected.disabled = state.collected.selected.size === 0;
+            updateInfo();
           });
         }).catch(function (error) {
-          exportSelected.disabled = state.collected.selected.size === 0;
-          exportFiltered.disabled = false;
-          downloadSelected.disabled = state.collected.selected.size === 0;
+          updateInfo();
           toast(error.message, 'error');
         });
       }
 
-      exportSelected.addEventListener('click', function () { startExport(checkedKeys()); });
-      exportFiltered.addEventListener('click', function () { startExport([]); });
-      downloadSelected.addEventListener('click', function () { startDownload(checkedKeys()); });
+      overview.platforms.forEach(function (platform) {
+        var col = state.collected.cols[platform.key];
+        if (!col) {
+          col = state.collected.cols[platform.key] = {
+            page: 1, data: null, selected: new Set()
+          };
+        }
+        cols[platform.key] = col;
+        var listHost = h('div', { class: 'col-list' });
+        var pagerHost = h('div', { class: 'col-pager' });
+        var exportBtn = h('button', {
+          class: 'btn mini', type: 'button', disabled: true
+        }, '导出');
+        var downloadBtn = h('button', {
+          class: 'btn mini', type: 'button', disabled: true
+        }, '下载');
+        var selectAll = h('button', {
+          class: 'btn ghost mini', type: 'button',
+          onclick: function () { columnSelect(platform.key, 'all'); }
+        }, '全选');
+        var invert = h('button', {
+          class: 'btn ghost mini', type: 'button',
+          onclick: function () { columnSelect(platform.key, 'invert'); }
+        }, '反选');
+        var selectNone = h('button', {
+          class: 'btn ghost mini', type: 'button',
+          onclick: function () { columnSelect(platform.key, 'none'); }
+        }, '全不选');
+        exportBtn.addEventListener('click', function () {
+          startExport(Array.from(col.selected), platform.key);
+        });
+        downloadBtn.addEventListener('click', function () {
+          startDownload(Array.from(col.selected));
+        });
+        col.refs = {
+          count: h('span', { class: 'muted small' }, fmtNumber(platform.total)),
+          list: listHost, pager: pagerHost,
+          exportBtn: exportBtn, downloadBtn: downloadBtn
+        };
+        grid.appendChild(h('div', { class: 'card platform-col' },
+          h('div', { class: 'col-head' },
+            h('span', { class: 'row-title' }, platform.name),
+            col.refs.count),
+          h('div', { class: 'col-tools' }, selectAll, invert, selectNone),
+          h('div', { class: 'col-tools' }, exportBtn, downloadBtn),
+          listHost,
+          pagerHost));
+      });
+
+      exportSelected.addEventListener('click', function () {
+        startExport(allSelectedKeys(), '');
+      });
+      downloadSelected.addEventListener('click', function () {
+        startDownload(allSelectedKeys());
+      });
 
       search.addEventListener('input', function () {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(function () {
           state.collected.q = search.value.trim();
-          state.collected.page = 1;
-          load();
+          loadAll();
           updateInfo();
         }, 320);
       });
 
-      function buildCollectedTable(data) {
-        if (!data.items.length) {
-          return empty('没有符合条件的条目。可清空搜索词或切换平台。');
-        }
-        var pageKeys = data.items.map(function (item) { return item.key; });
-        var allChecked = pageKeys.every(function (key) { return state.collected.selected.has(key); });
-        var someChecked = pageKeys.some(function (key) { return state.collected.selected.has(key); });
-        var selectAll = h('input', {
-          type: 'checkbox', checked: allChecked,
-          onchange: function (event) {
-            pageKeys.forEach(function (key) {
-              if (event.target.checked) state.collected.selected.add(key);
-              else state.collected.selected.delete(key);
-            });
-            itemHost.replaceChildren(buildCollectedTable(data));
-            updateInfo();
-          }
-        });
-        selectAll.indeterminate = someChecked && !allChecked;
-        var head = h('tr', null,
-          h('th', { style: 'width:36px' }, selectAll),
-          h('th', null, '标题'), h('th', null, '作者'), h('th', null, '发布时间'),
-          h('th', null, '类型'), h('th', { class: 'num' }, '播放'), h('th', { class: 'num' }, '点赞'));
-        var body = h('tbody');
-        data.items.forEach(function (item) {
-          var checkbox = h('input', {
-            type: 'checkbox', checked: state.collected.selected.has(item.key),
-            onchange: function (event) {
-              if (event.target.checked) state.collected.selected.add(item.key);
-              else state.collected.selected.delete(item.key);
-              updateInfo();
-            }
-          });
-          var title = item.url
-            ? h('a', { href: item.url, target: '_blank', rel: 'noopener noreferrer' }, item.title)
-            : item.title;
-          body.appendChild(h('tr', null,
-            h('td', null, checkbox),
-            h('td', { class: 'ellipsis' }, title),
-            h('td', null, item.author || '-'),
-            h('td', null, fmtTime(item.publish_time)),
-            h('td', null, h('span', { class: 'badge' }, kindLabel(item.kind))),
-            h('td', { class: 'num' }, fmtNumber(item.play)),
-            h('td', { class: 'num' }, fmtNumber(item.like))));
-        });
-        return h('div', { class: 'table-wrap' },
-          h('table', null, h('thead', null, head), body));
-      }
-
       root.replaceChildren(
-        h('div', { class: 'toolbar' },
-          h('span', { class: 'muted small' }, '平台'),
-          tabs,
-          h('span', { class: 'spacer' })),
-        h('div', { class: 'card' },
+        h('div', { class: 'card', style: 'margin-bottom:12px' },
           h('div', { class: 'toolbar' },
-            search,
-            formatBoxes,
-            h('span', { class: 'spacer' }),
-            info,
-            exportSelected,
-            exportFiltered,
-            downloadSelected),
-          itemHost,
-          pagerHost),
+            exportSelected, downloadSelected,
+            h('span', { class: 'spacer' }), info),
+          h('div', { class: 'toolbar', style: 'margin-top:8px' },
+            search, formatBoxes)),
+        grid,
         jobHost);
-      info.id = 'collectedInfo';
-      load();
+      updateInfo();
+      loadAll();
     }).catch(function (error) {
       setError(root, error, function () { renderCollected(root); });
     });

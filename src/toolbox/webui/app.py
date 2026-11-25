@@ -33,6 +33,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/collected/items", lambda req: collected.items(
         req.q("platform"), req.q_int("page", 1, 1),
         req.q_int("page_size", 30, 1, 200), req.q("q")))
+    server.get("/api/collected/keys", lambda req: collected.keys(
+        req.q("platform"), req.q("q")))
 
     def start_export(req):
         payload = dict(req.json)
