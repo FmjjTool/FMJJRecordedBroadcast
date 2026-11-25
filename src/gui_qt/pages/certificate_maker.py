@@ -355,6 +355,10 @@ class CertificateMakerPage(BasePage):
             "全部为示意内容，可单独转发参考")
         self.sample_word_btn.clicked.connect(self._on_export_docx_sample)
         toolbar.addWidget(self.sample_word_btn)
+        self.clear_btn = QPushButton("清空字段")
+        self.clear_btn.setToolTip("清空表单全部已填内容，图片列表保留")
+        self.clear_btn.clicked.connect(self._on_clear_fields)
+        toolbar.addWidget(self.clear_btn)
         root.addLayout(toolbar)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -1729,3 +1733,17 @@ class CertificateMakerPage(BasePage):
             self.app.toast(f"导出样本 Word 失败：{exc}", "error")
             return
         self.app.toast(f"已导出样本 Word：{Path(path).name}（输出目录根部）", "success")
+    def _on_clear_fields(self) -> None:
+        """清空表单全部已填字段（图片列表保留），需二次确认。"""
+        answer = QMessageBox.question(
+            self, "清空字段",
+            "清空当前表单全部已填内容？\n\n"
+            "作品、署名、编号等字段将全部移除，图片列表保留，此操作不可恢复。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._restore_form({})
+        self._refresh_preview()
+        self._save_config()
+        self.app.toast("已清空表单字段（图片列表保留）")
