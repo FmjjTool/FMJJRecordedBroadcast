@@ -11,6 +11,7 @@ from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
+from toolbox.webui.services.netdisk import NetdiskService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
 from toolbox.webui.services.record import RecordService
@@ -36,6 +37,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     chaohua = WeiboChaohuaService()
     info_accounts = InfoAccountsService()
     artifacts = ArtifactService()
+    netdisk = NetdiskService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
     server.get("/api/health", lambda req: {
@@ -198,6 +200,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         path = artifacts.file(req.q("kind"), req.q("rel"))
         return FileResponse(path, path.name, "application/octet-stream")
     server.get("/api/tools/artifacts/file", artifact_download)
+
+    server.get("/api/netdisk", lambda req: netdisk.overview())
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

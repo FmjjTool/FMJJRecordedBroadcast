@@ -25,6 +25,7 @@
     chaohua: { topic: '' },
     info_accounts: { platform: '' },
     artifacts: { tab: 'comments' },
+    netdisk: { tab: 'backup' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -41,6 +42,7 @@
     info_tools: { title: '采集工具', load: renderInfoTools },
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
+    netdisk: { title: '网络库', load: renderNetdisk },
     organize: { title: '自动整理', load: renderOrganize },
     editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: renderRename },
@@ -341,6 +343,7 @@
         ['info_accounts', '采集任务', '账号清单与批量解析'],
         ['collected', '采集结果', '结果库、下载与导出'],
         ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
+        ['netdisk', '网络库', '网盘备份状态与运行记录'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -931,6 +934,150 @@
       loadAll();
     }).catch(function (error) {
       setError(root, error, function () { renderCollected(root); });
+    });
+  }
+
+  function renderNetdisk(root) {
+    setLoading(root, '正在读取网盘备份状态…');
+    api('/api/netdisk').then(function (data) {
+      root.replaceChildren();
+      var tabs = h('div', { class: 'tabs' });
+      var host = h('div');
+      var TABS = [['backup', '备份到网盘'], ['download', '文件下载']];
+      TABS.forEach(function (item) {
+        tabs.appendChild(h('button', {
+          class: 'tab' + (state.netdisk.tab === item[0] ? ' active' : ''),
+          type: 'button',
+          onclick: function () {
+            state.netdisk.tab = item[0];
+            tabs.querySelectorAll('.tab').forEach(function (button, index) {
+              button.classList.toggle('active', TABS[index][0] === item[0]);
+            });
+            renderTab();
+          }
+        }, item[1]));
+      });
+      root.appendChild(tabs);
+      root.appendChild(host);
+
+      function renderTab() {
+        host.replaceChildren();
+        if (state.netdisk.tab === 'backup') renderBackup();
+        else renderDownload();
+      }
+
+      function renderBackup() {
+        var mappings = data.mappings || [];
+        var schedule = data.schedule || {};
+        var files = mappings.reduce(function (sum, item) {
+          return sum + (item.files || 0);
+        }, 0);
+        var bytes = mappings.reduce(function (sum, item) {
+          return sum + (item.bytes || 0);
+        }, 0);
+        var schedText = schedule.mode === 'interval'
+          ? ('每 ' + (schedule.interval_minutes || 120) + ' 分钟')
+          : ('每日 ' + (schedule.time || '02:30'));
+        host.appendChild(h('div', {
+          class: 'muted small', style: 'margin-bottom:8px'
+        }, '共 ' + mappings.length + ' 组映射 · 定时 ' + schedText
+          + ' · 已备份 ' + fmtNumber(files) + ' 个文件 · ' + fmtBytes(bytes)
+          + ' · 只读，备份 / 下载仍在桌面端'));
+        if (!mappings.length) {
+          host.appendChild(empty(
+            '还没有备份目录。桌面端「网络库 → 备份到网盘」新增一组映射。'));
+        }
+        mappings.forEach(function (mapping) {
+          var extras = [];
+          if (mapping.exclude) extras.push('排除：' + mapping.exclude);
+          if (mapping.max_file_mb) {
+            extras.push('单文件上限 ' + mapping.max_file_mb + 'MB');
+          }
+          if (mapping.share) {
+            extras.push('生成分享链接'
+              + (mapping.last_share_url
+                ? '：' + mapping.last_share_url : ''));
+          }
+          host.appendChild(h('div', {
+            class: 'card', style: 'margin-bottom:12px'
+          },
+            h('div', { class: 'toolbar' },
+              h('span', { class: 'badge' }, mapping.provider_name),
+              h('span', {
+                class: 'row-title',
+                style: 'white-space:normal;overflow-wrap:anywhere',
+                title: mapping.local_dir + ' → ' + mapping.remote_dir
+              }, (mapping.local_dir || '（未选本地目录）') + ' → '
+                + (mapping.remote_dir || '（未设云端目录）')),
+              h('span', { class: 'badge ' + (mapping.enabled ? 'ok' : '') },
+                mapping.enabled ? '启用' : '停用')),
+            h('div', { class: 'muted small', style: 'margin-top:4px' },
+              '已备份 ' + fmtNumber(mapping.files) + ' 个 · '
+              + fmtBytes(mapping.bytes)
+              + (mapping.last_run
+                ? ' · 最近 ' + mapping.last_run
+                  + (mapping.last_result ? ' · ' + mapping.last_result : '')
+                : ' · 尚未运行')),
+            extras.length ? h('div', {
+              class: 'muted small', style: 'margin-top:4px'
+            }, extras.join(' ｜ ')) : null));
+        });
+
+        var runs = data.runs || [];
+        var runsCard = h('div', {
+          class: 'card', style: 'margin-bottom:12px'
+        }, h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '最近运行'));
+        if (!runs.length) {
+          runsCard.appendChild(empty('暂无运行记录。'));
+        } else {
+          var head = h('tr');
+          ['完成时间', '本地目录', '扫描', '上传', '跳过', '失败', '大小', '状态']
+            .forEach(function (title, index) {
+              head.appendChild(h('th', {
+                class: index >= 2 && index <= 6 ? 'num' : ''
+              }, title));
+            });
+          var body = h('tbody');
+          runs.forEach(function (row) {
+            body.appendChild(h('tr', null,
+              h('td', null, row.finished_at || '-'),
+              h('td', { class: 'ellipsis' }, row.local_dir || '-'),
+              h('td', { class: 'num' }, fmtNumber(row.scanned)),
+              h('td', { class: 'num' }, fmtNumber(row.uploaded)),
+              h('td', { class: 'num' }, fmtNumber(row.skipped)),
+              h('td', { class: 'num' }, fmtNumber(row.failed)),
+              h('td', { class: 'num' }, fmtBytes(row.bytes)),
+              h('td', null, h('span', {
+                class: 'badge ' + (row.ok ? 'ok' : 'warn')
+              }, row.ok ? '成功' : '有失败'))));
+          });
+          runsCard.appendChild(h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' },
+              h('thead', null, head), body)));
+        }
+        host.appendChild(runsCard);
+
+        var log = data.log || [];
+        host.appendChild(h('div', { class: 'card' },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+            '任务日志（config/quark_backup_task.log）'),
+          log.length
+            ? h('pre', { class: 'log-box' }, log.join('\n'))
+            : empty('暂无任务日志。')));
+      }
+
+      function renderDownload() {
+        host.appendChild(h('div', { class: 'card' },
+          h('div', { class: 'card-title' }, '文件下载'),
+          h('div', { class: 'muted small' },
+            '浏览四大网盘目录、断点续传下载与自动解压在桌面端；'
+            + 'Web 端只读展示备份状态与运行记录。')));
+      }
+
+      renderTab();
+    }).catch(function (error) {
+      setError(root, error, function () { renderNetdisk(root); });
     });
   }
 
