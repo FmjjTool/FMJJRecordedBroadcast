@@ -43,6 +43,7 @@
     collected: { title: '采集结果', load: renderCollected },
     assets: { title: '资产库', load: renderAssets },
     netdisk: { title: '网络库', load: renderNetdisk },
+    localwiki: { title: '资料站', load: renderLocalWiki },
     organize: { title: '自动整理', load: renderOrganize },
     editor: { title: '视频操作', load: renderVideo },
     rename: { title: '命名投稿', load: renderRename },
@@ -344,6 +345,7 @@
         ['collected', '采集结果', '结果库、下载与导出'],
         ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
         ['netdisk', '网络库', '网盘备份状态与运行记录'],
+        ['localwiki', '资料站', '部署状态与站点访问统计'],
         ['assets', '资产库', '已获取资源与本地扫描'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -1078,6 +1080,163 @@
       renderTab();
     }).catch(function (error) {
       setError(root, error, function () { renderNetdisk(root); });
+    });
+  }
+
+  function renderLocalWiki(root) {
+    setLoading(root, '正在读取资料站状态…');
+    api('/api/localwiki').then(function (data) {
+      root.replaceChildren();
+      var d = data.data || {};
+      var service = data.service || {};
+      var a = data.analytics || {};
+      var latest = a.latest || {};
+      function metric(label, value) {
+        return h('div', { class: 'metric' },
+          h('div', { class: 'label' }, label),
+          h('div', { class: 'value', title: String(value) }, value));
+      }
+      function num(value) {
+        return value == null ? '-' : fmtNumber(value);
+      }
+      var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
+      stats.appendChild(statCard('GitHub 登录',
+        data.github.logged_in ? '已登录' : '未登录',
+        '拉取与部署在桌面端'));
+      stats.appendChild(statCard('服务状态',
+        service.site_running ? '运行中'
+          : (service.api_running ? 'API 运行中' : '未运行'),
+        service.url || ('站点端口 ' + (service.site_port || '-'))));
+      stats.appendChild(statCard('站点数据',
+        d.exists ? '已重建' : '未重建',
+        d.exists ? d.mtime : '桌面端重建'));
+      stats.appendChild(statCard('本地图片', fmtNumber(d.local_images),
+        '优先使用本地图'));
+      root.appendChild(stats);
+
+      var repoText = (data.repos || []).map(function (repo) {
+        return repo.text;
+      }).join('　');
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '代码与目录'),
+        h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, '仓库'),
+          h('span', { style: 'text-align:right' }, repoText || '-')),
+        h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, '资料站目录'),
+          h('span', { class: 'ellipsis', title: data.paths.root || '' },
+            data.paths.root || '-')),
+        h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, '端口'),
+          h('span', null, 'API ' + (service.api_port || '-')
+            + ' / 站点 ' + (service.site_port || '-'))),
+        h('div', { class: 'kv' },
+          h('span', { class: 'muted' }, '数据量'),
+          h('span', null, d.exists
+            ? ('歌曲 ' + num(d.songs) + ' / 活动 ' + num(d.events)
+              + ' / 周边 ' + num(d.goods) + ' / 动态 ' + num(d.posts)
+              + (d.live ? ' / 直播记录 ' + num(d.live) : ''))
+            : '-')),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('button', {
+            class: 'btn primary', type: 'button', disabled: true
+          }, '一键部署并启动'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '采集今日'),
+          h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '打开后台'),
+          h('span', { class: 'muted small' },
+            '部署 / 启动 / 采集 / 改端口在桌面端'))));
+
+      var analyticsCard = h('div', {
+        class: 'card', style: 'margin-bottom:12px'
+      }, h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+        '站点访问统计'));
+      analyticsCard.appendChild(h('div', {
+        class: 'metric-grid', style: 'margin-bottom:8px'
+      },
+        metric('统计口径', a.scope_label || '-'),
+        metric('最近日期', latest.date || '-'),
+        metric('访客', num(latest.visitors)),
+        metric('打开', num(latest.sessions)),
+        metric('浏览量', num(latest.pageviews)),
+        metric('在线', num(latest.online))));
+      analyticsCard.appendChild(h('div', {
+        class: 'muted small', style: 'margin-bottom:8px'
+      }, a.has_today ? '今日已采集'
+        : '今日未采集（桌面端「采集今日」）'));
+      var history = a.history || [];
+      if (history.length) {
+        var head = h('tr', null,
+          h('th', null, '日期'), h('th', null, '口径'),
+          h('th', { class: 'num' }, '访客'), h('th', { class: 'num' }, '打开'),
+          h('th', { class: 'num' }, '浏览量'));
+        var body = h('tbody');
+        history.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', null, row.date || '-'),
+            h('td', null, row.scope || '-'),
+            h('td', { class: 'num' }, num(row.visitors)),
+            h('td', { class: 'num' }, num(row.opens)),
+            h('td', { class: 'num' }, num(row.views))));
+        });
+        analyticsCard.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, head), body)));
+      } else {
+        analyticsCard.appendChild(empty('暂无访问统计。桌面端采集后生成。'));
+      }
+      var fetchLog = a.fetch_log || [];
+      if (fetchLog.length) {
+        analyticsCard.appendChild(h('div', {
+          class: 'row-title', style: 'margin:12px 0 6px'
+        }, '采集日志'));
+        var logBody = h('tbody');
+        fetchLog.slice(0, 5).forEach(function (row) {
+          logBody.appendChild(h('tr', null,
+            h('td', null, row.time || '-'),
+            h('td', null, h('span', {
+              class: 'badge ' + (row.ok ? 'ok' : 'warn')
+            }, row.ok ? '成功' : '失败')),
+            h('td', { class: 'ellipsis' }, row.message || '')));
+        });
+        analyticsCard.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, h('tr', null,
+              h('th', null, '时间'), h('th', null, '结果'),
+              h('th', null, '说明'))), logBody)));
+      }
+      root.appendChild(analyticsCard);
+
+      var docs = data.docs || [];
+      var docSelect = h('select', { class: 'select grow' });
+      docs.forEach(function (doc) {
+        docSelect.appendChild(h('option', { value: doc.url || '' },
+          doc.name + (doc.url ? '' : '（无链接）')));
+      });
+      var openDoc = h('button', {
+        class: 'btn', type: 'button', disabled: !docs.some(function (doc) {
+          return doc.url;
+        })
+      }, '打开预览');
+      openDoc.addEventListener('click', function () {
+        if (docSelect.value) {
+          window.open(docSelect.value, '_blank', 'noopener');
+        }
+      });
+      root.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '腾讯文档预览'),
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '源文档'), docSelect, openDoc),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '站点数据直接读取「腾讯文档」已同步的本地表格；'
+          + '密码设置与「采集今日」在桌面端。')));
+    }).catch(function (error) {
+      setError(root, error, function () { renderLocalWiki(root); });
     });
   }
 
