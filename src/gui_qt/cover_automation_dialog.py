@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt import table_columns, table_sort
 from gui_qt.common import post_to_main, run_bg
-from toolbox.cover_automation import generate_missing, scan_videos
+from toolbox.cover_automation import generate_missing, scan_videos, validate_row_metadata
 
 
 _PAGE_SIZE = 200
@@ -110,7 +110,9 @@ class CoverAutomationDialog(QDialog):
         cv.addWidget(self.empty_label, 1)
         self.table = QTableWidget(0, 6, card)
         self.table.setHorizontalHeaderLabels(["", "视频文件", "标题", "日期", "状态", "原因"])
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
+                                   | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.table.setToolTip("双击标题或日期可修正识别结果；已有封面与重名冲突条目不可生成")
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setWordWrap(False)
@@ -209,6 +211,7 @@ class CoverAutomationDialog(QDialog):
             return
         root, recursive = self._root, self.recursive_checkbox.isChecked()
         self._busy = "scan"
+        self._cancel.clear()
         self._fill_timer.stop()
         self.table.hide()
         self.empty_label.setText("扫描中，正在识别视频标题、日期和已有封面")
@@ -217,12 +220,19 @@ class CoverAutomationDialog(QDialog):
         self.progress.show()
         self.progress.setRange(0, 0)
         self._refresh_controls()
-        run_bg(lambda: scan_videos(root, recursive=recursive), self._scan_done,
+        run_bg(lambda: scan_videos(root, recursive=recursive, is_cancelled=self._cancel.is_set), self._scan_done,
                owner=self.parentWidget())
 
     def _scan_done(self, rows, error):
         self._busy = ""
         self.progress.hide()
+        if self._cancel.is_set():
+            self._rows = []
+            self._selected.clear()
+            self.empty_label.setText("扫描已取消，点「扫描」重新识别完整目录")
+            self.status_label.setText("已取消，本轮扫描结果未用于生成")
+            self._refresh_controls()
+            return
         if error:
             self.empty_label.setText("扫描失败，请检查目录是否可访问后点「扫描」重试")
             self.status_label.setText(self._error_message("扫描失败", error))
@@ -231,6 +241,9 @@ class CoverAutomationDialog(QDialog):
             self._refresh_controls()
             return
         self._rows = [dict(row) for row in rows or []]
+        for row in self._rows:
+            row["_requires_date"] = (row.get("status") == "invalid"
+                                     and "日期" in str(row.get("reason", "")))
         self._selected = {row["video"] for row in self._rows if row.get("status") == "ready"}
         self._page = 0
         self.status_label.setText("扫描已完成，勾选待生成条目后点「生成封面」")
@@ -272,8 +285,12 @@ class CoverAutomationDialog(QDialog):
             values = (row.get("video"), row.get("title"), row.get("date"),
                       _STATUS_TEXT.get(row.get("status"), "已跳过"), row.get("reason"))
             for col, value in enumerate(values, 1):
-                text = str(value or "—")
+                editable = col in (2, 3) and row.get("status") in {"ready", "invalid", "failed"}
+                text = str(value or ("" if editable else "—"))
                 item = QTableWidgetItem(text)
+                item.setData(Qt.ItemDataRole.UserRole, row["video"])
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                              | (Qt.ItemFlag.ItemIsEditable if editable else Qt.ItemFlag.NoItemFlags))
                 item.setToolTip(text)
                 if col == 1 and row.get("cover"):
                     item.setToolTip(f"视频：{text}\n封面：{row['cover']}")
@@ -298,13 +315,45 @@ class CoverAutomationDialog(QDialog):
         self._render_page()
 
     def _on_item_changed(self, item):
-        if item.column() != 0 or self._busy:
+        if self._busy:
             return
         video = item.data(Qt.ItemDataRole.UserRole)
-        if item.checkState() == Qt.CheckState.Checked:
-            self._selected.add(video)
+        if item.column() == 0:
+            if item.checkState() == Qt.CheckState.Checked:
+                self._selected.add(video)
+            else:
+                self._selected.discard(video)
+        elif item.column() in (2, 3):
+            row = next((row for row in self._rows if row["video"] == video), None)
+            if row is None or row.get("status") in {"exists", "conflict", "generated", "skipped"}:
+                return
+            row["title" if item.column() == 2 else "date"] = item.text().strip()
+            try:
+                metadata = validate_row_metadata(row)
+                if row.get("_requires_date") and not metadata["date"]:
+                    raise ValueError("文件日期需要复核，请填写有效日期后再生成")
+                row.update(metadata)
+                row.update(status="ready", reason="" if metadata["date"] else "未识别日期，日期将留空（可填写）")
+                self._selected.add(video)
+            except ValueError as exc:
+                row.update(status="invalid", reason=str(exc))
+                self._selected.discard(video)
+            self.table.blockSignals(True)
+            check = self.table.item(item.row(), 0)
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if row["status"] == "ready":
+                flags |= Qt.ItemFlag.ItemIsUserCheckable
+            check.setFlags(flags)
+            check.setCheckState(Qt.CheckState.Checked if video in self._selected else Qt.CheckState.Unchecked)
+            for col, value in ((4, _STATUS_TEXT[row["status"]]), (5, row["reason"] or "—")):
+                cell = self.table.item(item.row(), col)
+                cell.setText(value)
+                cell.setToolTip(value)
+            item.setToolTip(item.text())
+            self.table.blockSignals(False)
+            self.status_label.setText("识别结果已修改，请复核标题和日期后生成")
         else:
-            self._selected.discard(video)
+            return
         self._refresh_controls()
 
     def _select_ready(self, checked):
@@ -341,7 +390,7 @@ class CoverAutomationDialog(QDialog):
                                      and bool(self._template.get("bg")))
         self.start_button.setToolTip("按当前样式补生成勾选视频的同名 JPG 封面"
                                      if self._template.get("bg") else "请先在封面制作页选择底图，再重新打开此窗口")
-        self.cancel_button.setVisible(self._busy == "generate")
+        self.cancel_button.setVisible(busy)
         self.cancel_button.setEnabled(not self._cancel.is_set())
         self.close_button.setToolTip("关闭窗口后任务继续在后台执行" if busy else "关闭窗口")
 
@@ -409,7 +458,8 @@ class CoverAutomationDialog(QDialog):
     def _request_cancel(self):
         self._cancel.set()
         self.cancel_button.setEnabled(False)
-        self.status_label.setText("停止中，将保留已生成的封面")
+        self.status_label.setText("停止扫描中，本轮结果将丢弃" if self._busy == "scan"
+                                  else "停止中，将保留已生成的封面")
 
     def _error_message(self, action, error):
         text = str(error)

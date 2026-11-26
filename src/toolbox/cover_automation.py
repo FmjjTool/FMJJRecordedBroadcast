@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable
 
+from toolbox import image_render
 from toolbox.cover_engine import render_cover_image, validate_template
 from toolbox.date_folders import format_date_range, split_date_range
 
@@ -95,10 +96,10 @@ def recognize_video(video: Path, root: Path) -> dict:
     return {"title": title, "date": value, "reason": reason}
 
 
-def existing_cover(video: Path) -> Path | None:
+def existing_cover(video: Path, entries=None) -> Path | None:
     """同名、录制器 _封面、常见 _cover/.cover 附属图均视为已有封面。"""
     stems = {video.stem.casefold() + suffix for suffix in ("", "_封面", ".cover", "_cover")}
-    for item in video.parent.iterdir():
+    for item in video.parent.iterdir() if entries is None else entries:
         if item.stem.casefold() in stems and item.suffix.lower() in IMAGE_EXTENSIONS:
             # 即使损坏或是链接也保留，绝不自动覆盖用户已有内容。
             return item
@@ -116,6 +117,7 @@ def scan_videos(root: Path, recursive: bool = True, *,
 
     for folder, directories, filenames in os.walk(root, followlinks=False, onerror=walk_error):
         directories[:] = sorted(d for d in directories if not _linked(Path(folder) / d)) if recursive else []
+        images = [Path(folder) / name for name in filenames if Path(name).suffix.lower() in IMAGE_EXTENSIONS]
         for name in sorted(filenames, key=str.casefold):
             if is_cancelled():
                 return rows
@@ -126,7 +128,7 @@ def scan_videos(root: Path, recursive: bool = True, *,
                 raise ValueError("视频超过 10000 条，请缩小扫描目录")
             relative = video.relative_to(root).as_posix()
             cover = video.with_suffix(".jpg")
-            found = existing_cover(video)
+            found = existing_cover(video, images)
             metadata = recognize_video(video, root)
             reason = metadata["reason"]
             row = {"video": relative, **metadata, "cover": cover.relative_to(root).as_posix(),
@@ -156,6 +158,16 @@ def _date_value(value: str) -> str:
     return format_date_range(start, end, dashed=True)
 
 
+def validate_row_metadata(row: dict) -> dict:
+    """桌面/Web 复核编辑共用的元数据校验。"""
+    title = str(row.get("title") or "").strip()
+    if not title:
+        raise ValueError("标题为空，请填写标题后再生成")
+    if len(title) > 4000:
+        raise ValueError("标题过长，请缩短后再生成")
+    return {"title": title, "date": _date_value(str(row.get("date") or "").strip())}
+
+
 def generate_missing(root: Path, rows: list[dict], template: dict, *,
                      is_cancelled: Callable[[], bool] = lambda: False,
                      on_progress: Callable[[int, int, str], None] = lambda done, total, message: None) -> dict:
@@ -163,6 +175,8 @@ def generate_missing(root: Path, rows: list[dict], template: dict, *,
     root = _root(root)
     if not isinstance(rows, list) or not rows or len(rows) > 10000:
         raise ValueError("请先扫描并选择 1 至 10000 条视频")
+    if any(not isinstance(row, dict) for row in rows):
+        raise ValueError("视频清单无效，请重新扫描")
     data = validate_template(template)
     result = {"generated": 0, "skipped": 0, "failed": 0, "cancelled": False, "items": []}
     seen = set()
@@ -186,11 +200,11 @@ def generate_missing(root: Path, rows: list[dict], template: dict, *,
                 raise ValueError("多个视频对应同一封面名，请先区分文件主名")
             else:
                 seen.add(identity)
-                title = str(row.get("title") or "").strip()
-                if not title:
-                    raise ValueError("标题为空，请填写标题后再生成")
-                value = _date_value(str(row.get("date") or "").strip())
-                picture = render_cover_image(data, title, value, data["remark"])
+                metadata = validate_row_metadata(row)
+                original = recognize_video(video, root)
+                if original["reason"] and "日期" in original["reason"] and not metadata["date"]:
+                    raise ValueError("文件日期需要复核，请填写有效日期后再生成")
+                picture = render_cover_image(data, metadata["title"], metadata["date"], data["remark"])
                 if is_cancelled():
                     result["cancelled"] = True
                     break
@@ -200,6 +214,9 @@ def generate_missing(root: Path, rows: list[dict], template: dict, *,
                     picture.save(stream, "JPEG", quality=data["jpg_quality"], dpi=(image_render.DPI, image_render.DPI))
                     stream.flush()
                     os.fsync(stream.fileno())
+                if is_cancelled():
+                    result["cancelled"] = True
+                    break
                 _video(root, item["video"])
                 if existing_cover(video):
                     item.update(status="skipped", reason="生成期间出现封面，已保留原文件")

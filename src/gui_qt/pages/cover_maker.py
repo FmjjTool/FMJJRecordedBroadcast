@@ -1916,6 +1916,7 @@ class CoverMakerPage(BasePage):
             "y_shift": round(float(self.y_shift), 4),
             "export_resolution": self.res_combo.currentText(),
             "jpg_quality": self.quality_slider.value(),
+            "remark": self.states["remark"].text if include_text else "",
         }
 
     def _on_batch_cover(self):

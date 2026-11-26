@@ -183,7 +183,9 @@
           message.textContent = result.summary || '已完成，封面位于视频同目录。';
           (result.items || []).forEach(function (item) {
             var row = state.rows.find(function (candidate) { return candidate.video === item.video; });
-            if (row && (item.status === 'generated' || item.status === 'exists')) { row.status = 'exists'; row._selected = false; }
+            if (!row) return;
+            row._selected = false; row._edited = false; row.reason = item.reason || '';
+            row.status = item.status === 'failed' ? 'invalid' : 'exists';
           });
         }, { cancelable: true, onSettled: function () { state.busy = false; state.job = ''; draw(); } });
       }

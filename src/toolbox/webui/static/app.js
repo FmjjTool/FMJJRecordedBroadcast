@@ -5220,7 +5220,8 @@ function renderLivestreamSummary(root) {
       var previewNote = h('div', { class: 'muted small', style: 'margin-top:6px' },
         '勾选 1 个视频即可预览（拖动进度按需加载）。MKV / AVI 等浏览器不支持的格式可能无法播放，请用桌面端。');
       var previewHost = h('div', {
-        class: 'card', style: 'margin-top:12px;display:none'
+        class: 'card', style: 'margin-top:12px;display:none', tabindex: '0',
+        'aria-label': '视频预览与片段标记'
       }, previewVideo, previewNote);
       var opHost = h('div', { class: 'card video-operations', style: 'margin-top:12px' });
       var jobHost = h('div');
@@ -5385,6 +5386,15 @@ function renderLivestreamSummary(root) {
         draft.pendingStart = null;
         refreshCutDraft();
       });
+      previewHost.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.altKey || event.metaKey || event.repeat
+            || event.target.closest('textarea,select,input:not([type=range]),[contenteditable=true]')) return;
+        var key = event.key.toLowerCase();
+        var button = key === 'i' ? markStartBtn : (key === 'o' ? markEndBtn : null);
+        if (!button || button.disabled) return;
+        event.preventDefault();
+        button.click();
+      });
       var columns = [
         { key: 'name', label: '文件名' },
         { key: 'dir', label: '目录' },
@@ -5394,8 +5404,8 @@ function renderLivestreamSummary(root) {
 
       var tabs = h('div', { class: 'tabs' });
       var tabHost = h('div');
-      [['convert', '转换'], ['compress', '压缩'], ['merge', '合并'],
-       ['cut', '切割'], ['snapshot', '截图'], ['tracks', '轨道'],
+      [['convert', '转换'], ['merge', '合并'], ['cut', '切割'],
+       ['compress', '压缩'], ['tracks', '轨道'], ['snapshot', '截图'],
        ['metadata', '元数据']].forEach(function (pair) {
         tabs.appendChild(h('button', {
           class: 'tab' + (state.video.tab === pair[0] ? ' active' : ''),
@@ -6315,7 +6325,7 @@ function renderLivestreamSummary(root) {
           h('span', { class: 'muted small' }, '先在表格勾选 1 个视频；写入生成 <文件名>_meta 新文件，源视频保留。'),
           h('span', { style: 'flex:1' }), reloadBtn, writeBtn));
         var form = h('div', { class: 'video-metadata-form' });
-        [['title', '标题'], ['artist', '作者'], ['comment', '备注'],
+        [['title', '标题'], ['comment', '备注'], ['artist', '作者'],
          ['date', '日期']].forEach(function (pair) {
           inputs[pair[0]] = h('input', {
             class: 'input', placeholder: pair[1], title: pair[1],
@@ -9292,7 +9302,7 @@ function renderLivestreamSummary(root) {
           h('span', { class: 'muted small' },
             '淘宝需要登录态；抖音 / B站按公开接口解析。'),
           h('span', { style: 'flex:1' }), btn),
-        input, resultHost, jobHost);
+        resultHost, jobHost);
     }
 
     function preview(kind, rel) {

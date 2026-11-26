@@ -43,20 +43,20 @@ def validate_template(template: dict) -> dict:
     fit_mode = str(template.get("fit_mode") or "crop")
     if fit_mode not in {"crop", "contain"}:
         raise ValueError("底图适配方式不支持")
+    remark_field = template["fields"].get("remark")
+    remark_text = remark_field.get("text", "") if isinstance(remark_field, dict) else ""
     result = {"version": 1, "bg": str(template.get("bg") or ""),
               "export_resolution": resolution, "fit_mode": fit_mode,
               "y_shift": _number(template.get("y_shift", 0), 0, -.3, .3),
               "jpg_quality": int(_number(template.get("jpg_quality", 95), 95, 60, 100)),
-              "remark": str(template.get("remark") or "")[:4000], "fields": {}}
+              "remark": str(template.get("remark") or remark_text or "")[:4000],
+              "fields": {}}
     for key in FIELD_KEYS:
         data = template["fields"].get(key, {})
         if not isinstance(data, dict):
             raise ValueError("模板文字样式无效")
         size, y = _DEFAULTS[key]
         color = str(data.get("color") or image_render.tokens("dark")["text"])
-        # QColor 的 #AARRGGBB 转换为 Pillow 的 #RRGGBBAA。
-        if len(color) == 9 and color.startswith("#"):
-            color = "#" + color[3:] + color[1:3]
         try:
             ImageColor.getrgb(color)
         except (ValueError, TypeError) as exc:
@@ -169,6 +169,10 @@ def render_cover_image(template: dict, title: str, date: str = "", remark: str =
             line_width = draw.textlength(line, font=font)
             dx = 0 if alignment == "left" else block_width - line_width if alignment == "right" else (block_width - line_width) / 2
             # bbox 原点补偿，保持文字块按模板中心定位。
+            color = state["color"]
+            # 模板颜色仍保持QColor格式，重复校验不能反复换通道。
+            if len(color) == 9 and color.startswith("#"):
+                color = "#" + color[3:] + color[1:3]
             draw.text((x + dx, y + index * line_height - metrics[index][1]), line,
-                      font=font, fill=state["color"])
+                      font=font, fill=color)
     return canvas

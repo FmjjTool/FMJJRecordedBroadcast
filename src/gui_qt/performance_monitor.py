@@ -90,7 +90,7 @@ class PerformanceMonitor(QObject):
                               "widgets": len(page.findChildren(QWidget)) + 1,
                               "table_slots": sum(table.model().rowCount() * table.model().columnCount()
                                                  for table in grids if table.model() is not None)})
-        self.recorder.sample(self.app.current_page, self._lag, inventory, list(self._children))
+        self.recorder.sample(self.app.current_page or "启动阶段", self._lag, inventory, list(self._children))
         self._lag = 0.0
 
     def _read_children(self):
