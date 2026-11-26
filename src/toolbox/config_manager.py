@@ -395,6 +395,13 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "info_schedule_mode": "daily",
     "info_collect_time": "08:30",
     "info_interval_minutes": 360,
+    # 内容定时采集：订阅对象与业务参数由 content_collect_store 独立保存。
+    "chaohua_schedule_mode": "daily",
+    "chaohua_collect_time": "09:30",
+    "chaohua_interval_minutes": 720,
+    "douyin_index_schedule_mode": "daily",
+    "douyin_index_collect_time": "09:45",
+    "douyin_index_interval_minutes": 720,
     # 首页看板「追踪账号」下钻抽屉：用户勾选要观察的账号 key；None = 未配置（默认全部观察）
     "home_watch_accounts": None,
     # 直播总结（大模型方案）：接口地址 / 模型名 / 每块字数 / 输出目录；

@@ -137,7 +137,7 @@ def write_event_playlist(payload: dict) -> dict:
 
 
 def overview() -> dict:
-    """中间层概览：可同步的表、刷新门禁与默认范围。"""
+    """中间层概览：按文档勾选范围过滤目标，共用桌面的只读快照。"""
     targets = []
     for item in bridge.list_targets():
         targets.append({
@@ -586,7 +586,7 @@ def _find_target(doc_key, tab_id) -> dict:
     for item in bridge.list_targets():
         if item["doc_key"] == doc_key and item["tab_id"] == tab_id:
             return item
-    raise ValueError("该表不在本地已同步列表中，请先在桌面端「表格同步」拉取")
+    raise ValueError("该表未在当前同步范围内或尚无本地快照，请刷新表格清单后重试")
 
 
 def _accounts(value):

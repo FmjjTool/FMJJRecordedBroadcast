@@ -51,6 +51,12 @@ PRIVACY_FILES = {
 PRIVACY_FILE_PATTERNS = [re.compile(r"^app_\d{8}_\d{6}.*\.log$")]
 PRIVACY_DIRS = {"config", "logs", "download", "__pycache__"}
 
+# 本地总结引擎与 GGUF 始终由用户按需下载，标准版和 FULL 均不得携带。
+OPTIONAL_LLM_BINARY = re.compile(
+    r"^(?:lib)?llama(?:[-_.].*)?\.(?:exe|dll|so(?:\.\d+)*|dylib|lib|a)$",
+    re.IGNORECASE,
+)
+
 ISS_TEMPLATE = r"""; 由 build.py 自动生成 — Inno Setup 6 脚本（安装目录可选 / 写注册表 / 可卸载）
 ; 手动编译：ISCC.exe installer.iss
 ; 注意：本文件里 {xxx} 是 Inno 常量（如 {app}），{{ 才是字面量大括号
@@ -186,6 +192,8 @@ def run_pyinstaller(name: str):
         "--exclude-module", "IPython",
         "--exclude-module", "jedi",
         "--exclude-module", "parso",
+        # 选装的本地总结使用独立 llama.cpp 组件，不能误收集开发环境的 Python 绑定。
+        "--exclude-module", "llama_cpp",
         # 函数体内动态 import 的模块，静态分析收不到，必须显式声明
         # （QtWebEngine 已移除：登录改走系统浏览器 + Playwright 嵌入）
         "--hidden-import", "qrcode",                        # 扫码登录二维码
@@ -364,10 +372,30 @@ def prune(name: str):
         print("  无可清理项")
 
 
+def optional_llm_bundle_hits(root: Path) -> list[str]:
+    """只读检查误混入产物/供应商目录的选装本地总结组件，不删除或改写文件。"""
+    hits = []
+    for path in root.rglob("*"):
+        rel = path.relative_to(root)
+        parts = tuple(part.casefold() for part in rel.parts)
+        if path.is_dir():
+            if (parts[-2:] == ("optional_components", "local_llm")
+                    or path.name.casefold() == "llama_cpp"):
+                hits.append(f"[可选推理目录] {rel}")
+            continue
+        if ".gguf" in (suffix.casefold() for suffix in path.suffixes):
+            hits.append(f"[可选语言模型] {rel}")
+        elif OPTIONAL_LLM_BINARY.fullmatch(path.name):
+            hits.append(f"[可选推理程序] {rel}")
+        elif path.name.casefold().startswith("llama_cpp_python-"):
+            hits.append(f"[可选推理安装包] {rel}")
+    return hits
+
+
 def privacy_scan(name: str):
     step("隐私扫描（确保不携带 Cookie/账号等本机数据）")
     dist = ROOT / "dist" / name
-    hits = []
+    hits = optional_llm_bundle_hits(dist)
     for p in dist.rglob("*"):
         rel = p.relative_to(dist)
         rel_posix = rel.as_posix()
@@ -381,11 +409,11 @@ def privacy_scan(name: str):
         if p.name in PRIVACY_FILES or any(pat.match(p.name) for pat in PRIVACY_FILE_PATTERNS):
             hits.append(f"[文件] {rel}")
     if hits:
-        print("发现隐私/本机数据，禁止分发：")
+        print("发现隐私/本机数据或选装本地推理组件，禁止分发：")
         for h in hits:
             print("  " + h)
         sys.exit("请检查 ADD_DATA / 打包配置后重试")
-    print("扫描通过：dist 内无 Cookie / 配置 / 账号等隐私文件")
+    print("扫描通过：dist 内无 Cookie / 配置 / 账号等隐私文件，且未携带选装本地推理组件或 GGUF")
 
 
 def find_iscc() -> str | None:
@@ -530,6 +558,12 @@ def prepare_full_vendor():
 def stage_full_bundle(dist: Path):
     """把内置组件装配进 dist，并写入 FULL_EDITION 标记。"""
     step("装配 FULL 内置组件")
+    optional_hits = optional_llm_bundle_hits(FULL_VENDOR)
+    if optional_hits:
+        print("本地总结 CPU/GPU 引擎与 GGUF 不随 FULL 包内置：")
+        for hit in optional_hits:
+            print("  " + hit)
+        sys.exit("请将上述选装组件移出 FULL 供应商目录后重试；本次未复制内置组件")
     missing = []
     for rel in ("bin/ffmpeg.exe", "bin/ffprobe.exe", "models/whisper-faster.exe"):
         if not (FULL_VENDOR / rel).is_file():

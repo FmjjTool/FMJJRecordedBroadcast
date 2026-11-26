@@ -15,6 +15,7 @@ from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
 from toolbox.webui.services.image_sorter import ImageSorterService
 from toolbox.webui.services.livestream_summary import LivestreamSummaryService
+from toolbox.webui.services.local_llm import LocalLLMService
 from toolbox.webui.services.localwiki import LocalWikiService
 from toolbox.webui.services.music_playlist import MusicPlaylistService
 from toolbox.webui.services.music_download import MusicDownloadService
@@ -57,6 +58,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     shopping = ShoppingService(jobs)
     localwiki = LocalWikiService(jobs)
     livestream_summary = LivestreamSummaryService(jobs)
+    local_llm = LocalLLMService(jobs)
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
     file_time = FileTimeService()
@@ -205,6 +207,13 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/system/theme", save_system_theme)
 
     server.get("/api/system/deps", lambda req: modules.dependencies())
+    server.get("/api/system/llm", lambda req: local_llm.overview())
+    server.get("/api/system/llm/sources", lambda req: local_llm.sources())
+    for action in ("install-runtime", "download-model", "import-model",
+                   "remove-runtime", "remove-model"):
+        server.post("/api/system/llm/" + action,
+                    lambda req, operation=action: local_llm.start(
+                        operation, dict(req.json or {})))
 
     def start_tracker_collect(req):
         return trackers.start_collect(dict(req.json or {}))
@@ -542,6 +551,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.get("/api/music-tag/detail",
                lambda req: music_tag.detail(req.q("rel", "")))
+    server.get("/api/music-tag/history",
+               lambda req: music_tag.history(req.q("rel", "")))
 
     def start_tag_write(req):
         return music_tag.start_write(dict(req.json or {}))

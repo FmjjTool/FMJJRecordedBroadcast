@@ -32,6 +32,23 @@ def _credential():
     return auth.get_cookie("xianyu") or ""
 
 
+class _TaskCredential:
+    """任务一旦使用某登录态，账号变化/关闭后停止，不能切换身份继续。"""
+    def __init__(self):
+        self.snapshot = None
+
+    def __call__(self):
+        current = _credential()
+        if self.snapshot is not None and current != self.snapshot:
+            raise xianyu.AuthRequired("闲鱼登录状态已变化，请重新开始本次任务")
+        self.snapshot = current
+        return current
+
+    def check(self):
+        if self.snapshot is not None:
+            self()
+
+
 def _row(item):
     return {key: str(item.get(key) or "") for key in
             ("item_id", "title", "price", "sales", "seller", "location", "url")} | {
@@ -46,14 +63,14 @@ def search(text, limit=30, on_log=None, is_cancelled=None):
         raise ValueError("搜索数量须为 1–30") from exc
     if not 1 <= limit <= xianyu.MAX_ITEMS:
         raise ValueError("搜索数量须为 1–30")
-    items = xianyu.search(text, limit, credential=_credential,
+    items = xianyu.search(text, limit, credential=_TaskCredential(),
                           on_log=on_log, is_cancelled=is_cancelled)
     return {"platform": "xianyu", "kind": "search", "items": [_row(item) for item in items],
             "total": len(items), "summary": f"闲鱼搜索已完成：{len(items)} 件商品（首批最多 30 件）"}
 
 
 def parse(text, on_log=None, is_cancelled=None):
-    item = xianyu.fetch_item(text, credential=_credential,
+    item = xianyu.fetch_item(text, credential=_TaskCredential(),
                              on_log=on_log, is_cancelled=is_cancelled)
     return {"platform": "xianyu", "kind": "item", "items": [_row(item)], "total": 1,
             "summary": "闲鱼商品已解析，勾选后可入库并下载图片"}
@@ -219,9 +236,11 @@ def save_items(items, on_log=None, is_cancelled=None):
     root = _root()
     saved, skipped, failures, results = 0, 0, [], []
     cancelled = False
+    credential = _TaskCredential()
     for index, value in enumerate(ids, 1):
         try:
             xianyu.check_cancel(is_cancelled)
+            credential.check()
             if on_log:
                 on_log(f"保存闲鱼商品 {index}/{len(ids)}")
             folder = _inside(root / value, root)
@@ -231,7 +250,7 @@ def save_items(items, on_log=None, is_cancelled=None):
                     results.append(_row(existing) | {"saved": True, "skipped": True})
                     skipped += 1
                     continue
-                detail = xianyu.fetch_item(value, credential=_credential,
+                detail = xianyu.fetch_item(value, credential=credential,
                                            on_log=on_log, is_cancelled=is_cancelled)
                 image_folder = _inside(folder / "images", folder)
                 image_folder.mkdir(exist_ok=True)

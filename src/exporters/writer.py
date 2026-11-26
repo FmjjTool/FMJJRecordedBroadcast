@@ -15,6 +15,7 @@ import time
 import threading
 from datetime import datetime
 from typing import Callable, Optional
+from toolbox.durable_io import exclusive_file_lock
 
 _metric_patch_lock = threading.Lock()
 
@@ -57,46 +58,47 @@ def patch_existing_video_json(patches, output_dir) -> dict:
         with _metric_patch_lock:
             for path in candidates():
                 try:
-                    original = path.read_bytes()
-                    payload = json.loads(original.decode("utf-8-sig"))
-                    if isinstance(payload, list):
-                        if len(payload) != 1 or not isinstance(payload[0], dict):
-                            continue  # 多记录导出/汇总不是单条资产条目。
-                        record = payload[0]
-                    elif isinstance(payload, dict):
-                        record = payload
-                    else:
-                        continue
-                    if record.get("平台") != "douyin":
-                        continue
-                    video_id = str(record.get("视频ID") or "")
-                    if video_id not in patches:
-                        continue
-                    result["matched"] += 1
-                    if video_id not in result["matched_ids"]:
-                        result["matched_ids"].append(video_id)
-                    status = metric_patch_status(record, patches[video_id], localized=True)
-                    if status != "ready":
-                        result[status] += 1
-                        if status == "stale" and video_id not in result["stale_ids"]:
-                            result["stale_ids"].append(video_id)
-                        if status == "invalid" and video_id not in result["invalid_ids"]:
-                            result["invalid_ids"].append(video_id)
-                        continue
-                    merged, changed = merge_existing_metrics(record, patches[video_id], localized=True)
-                    if not changed:
-                        continue
-                    # 外部采集可能同时重写导出，发现变化就保留外部新版，留待下次补丁。
-                    if linked(path) or not path.is_file() or path.read_bytes() != original:
-                        result["errors"].append({"store": "asset_json", "error": "ConcurrentChange"})
-                        continue
-                    output = [merged] if isinstance(payload, list) else merged
-                    _atomic_write(str(path), lambda stream, value=output:
-                                  json.dump(value, stream, ensure_ascii=False, indent=2))
-                    result["updated"] += 1
-                    if video_id not in result["updated_ids"]:
-                        result["updated_ids"].append(video_id)
-                    result["changed_paths"].append(str(path))
+                    with exclusive_file_lock(path.parent / ".asset-json.lock"):
+                        original = path.read_bytes()
+                        payload = json.loads(original.decode("utf-8-sig"))
+                        if isinstance(payload, list):
+                            if len(payload) != 1 or not isinstance(payload[0], dict):
+                                continue  # 多记录导出/汇总不是单条资产条目。
+                            record = payload[0]
+                        elif isinstance(payload, dict):
+                            record = payload
+                        else:
+                            continue
+                        if record.get("平台") != "douyin":
+                            continue
+                        video_id = str(record.get("视频ID") or "")
+                        if video_id not in patches:
+                            continue
+                        result["matched"] += 1
+                        if video_id not in result["matched_ids"]:
+                            result["matched_ids"].append(video_id)
+                        status = metric_patch_status(record, patches[video_id], localized=True)
+                        if status != "ready":
+                            result[status] += 1
+                            if status == "stale" and video_id not in result["stale_ids"]:
+                                result["stale_ids"].append(video_id)
+                            if status == "invalid" and video_id not in result["invalid_ids"]:
+                                result["invalid_ids"].append(video_id)
+                            continue
+                        merged, changed = merge_existing_metrics(record, patches[video_id], localized=True)
+                        if not changed:
+                            continue
+                        # 外部采集可能同时重写导出，发现变化就保留外部新版，留待下次补丁。
+                        if linked(path) or not path.is_file() or path.read_bytes() != original:
+                            result["errors"].append({"store": "asset_json", "error": "ConcurrentChange"})
+                            continue
+                        output = [merged] if isinstance(payload, list) else merged
+                        _atomic_write(str(path), lambda stream, value=output:
+                                      json.dump(value, stream, ensure_ascii=False, indent=2))
+                        result["updated"] += 1
+                        if video_id not in result["updated_ids"]:
+                            result["updated_ids"].append(video_id)
+                        result["changed_paths"].append(str(path))
                 except (OSError, ValueError, TypeError, UnicodeError) as exc:
                     result["errors"].append({"store": "asset_json", "error": type(exc).__name__})
     except OSError as exc:
@@ -234,8 +236,10 @@ def export_json(info_list: list, output_path: Optional[str] = None, pretty: bool
                 d["评论记录"] = rows
     if not output_path:
         output_path = f"video_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    _atomic_write(output_path, lambda f: json.dump(
-        data, f, ensure_ascii=False, indent=2 if pretty else None))
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(output_path)), ".asset-json.lock")
+    with exclusive_file_lock(lock_path):
+        _atomic_write(output_path, lambda f: json.dump(
+            data, f, ensure_ascii=False, indent=2 if pretty else None))
     return os.path.abspath(output_path)
 
 

@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import re
+
 from toolbox import account_tracker_task as _acc
 from toolbox import content_collect_task as _content
 from toolbox import fan_groups_task as _fan
@@ -47,7 +49,6 @@ _PAGE_KEYS = {
     "info": "info_accounts",
     "chaohua": "weibo_chaohua", "douyin_index": "douyin_index",
 }
-_CONTENT_DEFAULT_TIMES = {"chaohua": "09:30", "douyin_index": "09:45"}
 # 站点访问统计的两个补采时间点（空 = 不启用）
 _WEBWIKI_EXTRA_TIME_KEYS = ("webwiki_analytics_time2", "webwiki_analytics_time3")
 
@@ -66,11 +67,10 @@ def _interval_text(value) -> str:
     return f"每 {minutes // 60} 小时" if minutes % 60 == 0 else f"每 {minutes} 分钟"
 
 
-def _schedule_text(cfg: dict, mode_key: str, time_key: str, interval_key: str,
-                   default_time: str = "09:00") -> str:
+def _schedule_text(cfg: dict, mode_key: str, time_key: str, interval_key: str) -> str:
     if mode_key and str(cfg.get(mode_key) or "daily") == "interval":
         return _interval_text(cfg.get(interval_key))
-    return f"每天 {cfg.get(time_key) or default_time}"
+    return f"每天 {cfg.get(time_key) or '09:00'}"
 
 
 def _next_run(data: dict) -> str:
@@ -106,8 +106,7 @@ def list_tasks() -> list[dict]:
         if tid == "webwiki":
             schedule = "每天 " + " / ".join(sorted(_webwiki_times(cfg)))
         else:
-            schedule = _schedule_text(cfg, mode_key, time_key, interval_key,
-                                      _CONTENT_DEFAULT_TIMES.get(tid, "09:00"))
+            schedule = _schedule_text(cfg, mode_key, time_key, interval_key)
         out.append({
             "id": tid,
             "label": label,
@@ -134,7 +133,7 @@ def get_schedule(task_id: str) -> dict:
         interval = 30
     result = {
         "mode": mode if interval_key else "daily",
-        "time": str(cfg.get(time_key) or _CONTENT_DEFAULT_TIMES.get(task_id, "09:00")),
+        "time": str(cfg.get(time_key) or "09:00"),
         "interval": interval,
         "interval_supported": bool(interval_key),
         "extra_times": ([str(cfg.get(key) or "") for key in _WEBWIKI_EXTRA_TIME_KEYS]
@@ -146,11 +145,30 @@ def get_schedule(task_id: str) -> dict:
     return result
 
 
+def _content_schedule(mode, time_text, interval) -> tuple[str, str, int]:
+    """新内容任务统一校验，非法输入不保存订阅或计划。"""
+    if mode not in ("daily", "interval"):
+        raise ValueError("计划模式只支持每天或按间隔")
+    if not isinstance(time_text, str) or not re.fullmatch(
+            r"(?:[01]\d|2[0-3]):[0-5]\d", time_text.strip()):
+        raise ValueError("时间格式应为 HH:MM")
+    if isinstance(interval, bool) or not isinstance(interval, (int, str)):
+        raise ValueError("间隔分钟数无效")
+    try:
+        interval = int(interval)
+    except ValueError as exc:
+        raise ValueError("间隔分钟数无效") from exc
+    if not 1 <= interval <= 1439:
+        raise ValueError("间隔需在 1–1439 分钟之间")
+    return mode, time_text.strip(), interval
+
+
 def save_schedule(task_id: str, mode: str, time_text: str, interval: int,
                   extra_times=None, collection=None) -> None:
     """保存计划设置到全局配置（是否安装由 install() 负责）。"""
     mode_key, time_key, interval_key = _CFG_KEYS[task_id]
     if task_id in _content.TASK_NAMES:
+        mode, time_text, interval = _content_schedule(mode, time_text, interval)
         from toolbox.content_collect import get_settings, save_settings, validate_settings
         values = get_settings(task_id)["values"] if collection is None else collection
         # 在触碰任一设置前验证对象与参数；不把空订阅登记成可执行计划。
@@ -175,6 +193,8 @@ def save_schedule(task_id: str, mode: str, time_text: str, interval: int,
 def install(task_id: str, mode: str, time_text: str, interval: int,
             extra_times=None, collection=None) -> tuple[bool, str]:
     """保存并注册 / 更新指定任务的 Windows 计划任务。"""
+    if task_id in _content.TASK_NAMES:
+        mode, time_text, interval = _content_schedule(mode, time_text, interval)
     save_schedule(task_id, mode, time_text, interval, extra_times, collection)
     if task_id == "webwiki":
         return _webwiki.install_daily(time_text, extra_times or [])

@@ -681,7 +681,7 @@ class TcDocBridgePanel(QWidget):
         row2.setSpacing(8)
 
         self.compare_btn = QPushButton("重新比对")
-        self.compare_btn.clicked.connect(self._run_compare)
+        self.compare_btn.clicked.connect(lambda: self.refresh(reload_targets=True))
         row2.addWidget(self.compare_btn)
 
         self.refresh_sync_btn = QPushButton("同步前刷新")

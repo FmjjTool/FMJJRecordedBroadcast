@@ -25,13 +25,15 @@ from PySide6.QtWidgets import (
 from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.navigation import line_icon
+from gui_qt.local_llm_panel import LocalLlmOptionsWidget
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolSectionCard
 from toolbox import livestream_summary_rule as rule
 from toolbox.config_manager import get_export_subdir
 from toolbox.livestream_summary import config as ls_config
-from toolbox.livestream_summary import local_model, pipeline
-from toolbox.livestream_summary.client import ChatClient, is_local_base_url
+from toolbox.livestream_summary import pipeline
+from toolbox.livestream_summary.client import is_local_base_url
+from toolbox.livestream_summary.session import client_session
 
 
 class LivestreamSummaryPage(BasePage):
@@ -39,11 +41,10 @@ class LivestreamSummaryPage(BasePage):
         super().__init__(app)
         self._running = False
         self._cancel: threading.Event | None = None
-        self._pull_cancel: threading.Event | None = None
+        self._local_refreshing = False
         self._source: Path | None = None
         self._result_text = ""
         self._icons: list[tuple[QWidget, str, str]] = []
-        self._local_ready = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -52,7 +53,7 @@ class LivestreamSummaryPage(BasePage):
         root.addWidget(self._build_toolbar())
         root.addLayout(self._build_body(), 1)
         self._load_settings()
-        self._detect_local()
+        self._refresh_native_status()
         self._refresh_files()
 
     # ==================== 图标 ====================
@@ -87,7 +88,7 @@ class LivestreamSummaryPage(BasePage):
 
     def _refresh_mode_icons(self):
         color = theme.current_palette().color(QPalette.Link).name()
-        for index, name in ((0, "robot"), (1, "document")):
+        for index, name in ((0, "robot"), (1, "document"), (2, "chip")):
             self.mode_combo.setItemIcon(index, line_icon(name, color, 16))
 
     def on_theme_changed(self):
@@ -159,8 +160,9 @@ class LivestreamSummaryPage(BasePage):
 
         left = QVBoxLayout()
         left.setSpacing(12)
-        left.addWidget(self._build_local_card())
         left.addWidget(self._build_model_card())
+        self.local_card = self._build_local_card()
+        left.addWidget(self.local_card)
         left.addStretch(1)
         left_host = QWidget()
         left_host.setLayout(left)
@@ -187,138 +189,57 @@ class LivestreamSummaryPage(BasePage):
 
     def _build_local_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
-            "本机模型（可选）",
-            "在本机跑模型只是可选项：不装也能用——在下方「总结方式」里选云接口（填 Key），"
-            "或直接用本地规则。未安装时这里只给下载入口，不会静默安装。",
-            icon="chip")
+            "本地模型配置", "CPU / GPU 模块与模型请在全局设置的「运行环境与组件」中准备。", icon="chip")
         self._register_icon(card, "chip", "title")
-
+        self.local_status = QLabel("未检测本地总结组件")
+        self.local_status.setWordWrap(True)
+        card.content_layout.addWidget(self.local_status)
         status_row = QHBoxLayout()
-        status_row.setSpacing(6)
-        self.local_status = QLabel("未检测")
-        self.local_status.setProperty("role", "caption")
-        status_row.addWidget(self.local_status, 1)
-
-        self.local_detect_btn = QPushButton("检测")
+        status_row.setSpacing(8)
+        status_row.addStretch(1)
+        self.local_detect_btn = QPushButton("刷新模型")
         self.local_detect_btn.setProperty("variant", "secondary")
-        self.local_detect_btn.setToolTip("检测本机 Ollama 服务与已安装模型")
-        self.local_detect_btn.clicked.connect(self._detect_local)
+        self.local_detect_btn.clicked.connect(self._refresh_native_status)
         self._register_icon(self.local_detect_btn, "refresh")
         status_row.addWidget(self.local_detect_btn)
-
-        install_btn = QPushButton("下载 Ollama")
-        install_btn.setProperty("variant", "secondary")
-        install_btn.setToolTip("打开 Ollama 官方下载页；安装后回到本页点检测")
-        install_btn.clicked.connect(self._open_ollama_download)
-        self._register_icon(install_btn, "globe")
-        status_row.addWidget(install_btn)
         card.content_layout.addLayout(status_row)
-
-        self.local_models_combo = QComboBox()
-        self.local_models_combo.addItem("尚未检测到模型", None)
-        self.local_models_combo.currentIndexChanged.connect(self._sync_local_actions)
-        card.content_layout.addWidget(self.local_models_combo)
-
-        use_row = QHBoxLayout()
-        use_row.setSpacing(6)
-        self.use_local_btn = QPushButton("使用这个模型")
-        self.use_local_btn.setProperty("variant", "secondary")
-        self.use_local_btn.setToolTip("把接口地址和模型名自动填到下方设置")
-        self.use_local_btn.setEnabled(False)
-        self.use_local_btn.clicked.connect(self._use_local_model)
-        self._register_icon(self.use_local_btn, "check")
-        use_row.addWidget(self.use_local_btn)
-        use_row.addStretch(1)
-
-        self.delete_local_btn = QPushButton("删除模型")
-        self.delete_local_btn.setProperty("variant", "danger")
-        self.delete_local_btn.setToolTip("删除当前选中的本机模型，释放磁盘空间")
-        self.delete_local_btn.setEnabled(False)
-        self.delete_local_btn.clicked.connect(self._delete_local_model)
-        self._register_icon(self.delete_local_btn, "trash", "danger")
-        use_row.addWidget(self.delete_local_btn)
-        card.content_layout.addLayout(use_row)
-
-        pull_row = QHBoxLayout()
-        pull_row.setSpacing(6)
-        self.recommend_combo = QComboBox()
-        for item in local_model.RECOMMENDED_MODELS:
-            self.recommend_combo.addItem(
-                f"{item['label']} · {item['size']}", item["name"])
-        pull_row.addWidget(self.recommend_combo, 1)
-
-        self.pull_btn = QPushButton("下载模型")
-        self.pull_btn.setProperty("variant", "secondary")
-        self.pull_btn.setToolTip("通过本机 Ollama 下载模型，完成后自动填入配置")
-        self.pull_btn.clicked.connect(self._pull_model)
-        self._register_icon(self.pull_btn, "download")
-        pull_row.addWidget(self.pull_btn)
-
-        self.pull_stop_btn = QPushButton("停止")
-        self.pull_stop_btn.setProperty("variant", "ghost")
-        self.pull_stop_btn.setEnabled(False)
-        self.pull_stop_btn.clicked.connect(self._stop_pull)
-        self._register_icon(self.pull_stop_btn, "stop")
-        pull_row.addWidget(self.pull_stop_btn)
-        card.content_layout.addLayout(pull_row)
-
-        self.pull_progress = QProgressBar()
-        self.pull_progress.setRange(0, 100)
-        self.pull_progress.setValue(0)
-        self.pull_progress.setFixedHeight(16)
-        self.pull_progress.setVisible(False)
-        card.content_layout.addWidget(self.pull_progress)
-
-        self.install_command = QLabel(
-            f"未安装时可在终端执行：{local_model.INSTALL_COMMAND}")
-        self.install_command.setProperty("role", "caption")
-        self.install_command.setWordWrap(True)
-        card.content_layout.addWidget(self.install_command)
-
-        self.local_muted_hint = QLabel(
-            "未检测到本机模型不影响使用：云接口与本地规则都不需要 Ollama。")
-        self.local_muted_hint.setProperty("role", "caption")
-        self.local_muted_hint.setWordWrap(True)
-        card.content_layout.addWidget(self.local_muted_hint)
-        self._set_local_ready(False)
+        self.local_options = LocalLlmOptionsWidget()
+        card.content_layout.addWidget(self.local_options)
+        note = QLabel("线程数设为自动时由引擎选择；GPU 卸载层数只在 GPU 模块生效。模型准备完成后，在此选择并保存。")
+        note.setWordWrap(True)
+        note.setProperty("role", "caption")
+        card.content_layout.addWidget(note)
         return card
 
     def _build_model_card(self) -> ToolSectionCard:
         card = ToolSectionCard(
-            "总结方式",
-            "大模型总结质量更好，但需要接口与 Key；本地规则完全离线，"
-            "不填任何凭据也能出结果，代价是只做原文摘录。",
-            icon="compass")
+            "总结方式", "选择模型接口、本地模型或本地规则保底；推理组件完全可选。", icon="compass")
         self._register_icon(card, "compass", "title")
-
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("大模型总结（OpenAI 兼容接口）", "ai")
         self.mode_combo.addItem("本地规则保底（不联网、不用 Key）", "rule")
-        self.mode_combo.setToolTip("本地规则模式不会发起任何网络请求")
+        self.mode_combo.addItem("本地模型（CPU / GPU）", "local")
+        self.mode_combo.setMinimumContentsLength(8)
+        self.mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.mode_combo.setFocusPolicy(Qt.StrongFocus)
         self.mode_combo.currentIndexChanged.connect(self._sync_mode)
         self._refresh_mode_icons()
         card.content_layout.addWidget(self.mode_combo)
-
         self.model_box = QWidget()
         box = QVBoxLayout(self.model_box)
         box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(10)
-
+        box.setSpacing(8)
         box.addWidget(QLabel("接口地址"))
         self.base_url_edit = QLineEdit()
         self.base_url_edit.setPlaceholderText(ls_config.DEFAULT_BASE_URL)
         box.addWidget(self.base_url_edit)
-
-        local_hint = QLabel(
-            "本地模型示例：Ollama 填 http://127.0.0.1:11434/v1，"
-            "LM Studio 填 http://127.0.0.1:1234/v1；本机地址可以不填 Key。")
+        local_hint = QLabel("也可连接已运行的 Ollama / LM Studio 等兼容接口；本机地址可以不填 Key。")
         local_hint.setProperty("role", "caption")
         local_hint.setWordWrap(True)
         box.addWidget(local_hint)
-
         box.addWidget(QLabel("API Key"))
         key_row = QHBoxLayout()
-        key_row.setSpacing(6)
+        key_row.setSpacing(8)
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.Password)
         key_row.addWidget(self.api_key_edit, 1)
@@ -328,48 +249,40 @@ class LivestreamSummaryPage(BasePage):
         clear_btn.clicked.connect(self._clear_api_key)
         key_row.addWidget(clear_btn)
         box.addLayout(key_row)
-
         box.addWidget(QLabel("模型名称"))
         self.model_edit = QLineEdit()
-        self.model_edit.setPlaceholderText("例如 qwen2.5:7b / deepseek-chat / gpt-4o-mini")
+        self.model_edit.setPlaceholderText("服务商或已运行的本地服务提供的模型名称")
         box.addWidget(self.model_edit)
-
+        self.key_status = QLabel("")
+        self.key_status.setProperty("role", "caption")
+        self.key_status.setWordWrap(True)
+        box.addWidget(self.key_status)
+        card.content_layout.addWidget(self.model_box)
         chunk_row = QHBoxLayout()
-        chunk_row.setSpacing(6)
+        chunk_row.setSpacing(8)
         chunk_row.addWidget(QLabel("每块字数"))
         self.chunk_spin = QSpinBox()
         self.chunk_spin.setRange(2000, 20000)
         self.chunk_spin.setSingleStep(1000)
         self.chunk_spin.setSuffix(" 字")
-        self.chunk_spin.setToolTip("转录较长时会按该字数分块提取；太小会增加请求次数")
-        chunk_row.addWidget(self.chunk_spin)
-        chunk_row.addStretch(1)
-        box.addLayout(chunk_row)
-
+        self.chunk_spin.setToolTip("长转录按此字数分块；应为模型指令和输出保留足够上下文。")
+        chunk_row.addWidget(self.chunk_spin, 1)
+        card.content_layout.addLayout(chunk_row)
         buttons = QHBoxLayout()
-        buttons.setSpacing(6)
-        save_btn = QPushButton("保存设置")
-        save_btn.setProperty("variant", "primary")
-        save_btn.setToolTip("保存接口地址、模型、分块字数与输入的 Key")
-        save_btn.clicked.connect(self._save_settings)
-        self._register_icon(save_btn, "save", "primary")
-        buttons.addWidget(save_btn)
-
+        buttons.setSpacing(8)
         self.test_btn = QPushButton("测试连接")
         self.test_btn.setProperty("variant", "secondary")
-        self.test_btn.setToolTip("发送一次极短的测试请求；本地模型也会消耗少量算力")
+        self.test_btn.setToolTip("本地模式将加载所选模型并执行一次短测试")
         self.test_btn.clicked.connect(self._test_connection)
         self._register_icon(self.test_btn, "pulse")
         buttons.addWidget(self.test_btn)
         buttons.addStretch(1)
-        box.addLayout(buttons)
-
-        self.key_status = QLabel("API Key：未保存")
-        self.key_status.setProperty("role", "caption")
-        self.key_status.setWordWrap(True)
-        box.addWidget(self.key_status)
-
-        card.content_layout.addWidget(self.model_box)
+        self.save_btn = QPushButton("保存设置")
+        self.save_btn.setProperty("variant", "primary")
+        self.save_btn.clicked.connect(self._save_settings)
+        self._register_icon(self.save_btn, "save", "primary")
+        buttons.addWidget(self.save_btn)
+        card.content_layout.addLayout(buttons)
         return card
 
     def _build_result_card(self) -> ToolSectionCard:
@@ -418,189 +331,37 @@ class LivestreamSummaryPage(BasePage):
         card.content_layout.addWidget(self.log_view, 1)
         return card
 
-    # ==================== 本机模型 ====================
+    # ==================== 本地模型状态（只读） ====================
 
-    def _set_local_ready(self, ready: bool):
-        """未检测到本机服务时弱化模型选择与下载控件，只保留检测/下载入口。"""
-        self._local_ready = bool(ready)
-        self.local_models_combo.setEnabled(self._local_ready)
-        self.recommend_combo.setEnabled(self._local_ready)
-        self.pull_btn.setEnabled(self._local_ready)
-        if not self._local_ready:
-            self.pull_stop_btn.setEnabled(False)
-        self.install_command.setVisible(not self._local_ready)
-        self.local_muted_hint.setVisible(not self._local_ready)
-        self._sync_local_actions()
-
-    def _detect_local(self):
-        self.local_status.setText("检测中…")
+    def _refresh_native_status(self):
+        if self._local_refreshing or self._running:
+            return
+        self._local_refreshing = True
         self.local_detect_btn.setEnabled(False)
 
         def work():
-            if not local_model.is_running():
-                return {"running": False, "models": []}
-            return {"running": True, "models": local_model.list_models()}
+            from toolbox.livestream_summary import optional_runtime
+            return optional_runtime.status()
 
-        def done(result, err):
-            self.local_detect_btn.setEnabled(True)
-            if err:
-                self.local_status.setText("检测失败")
-                self.local_models_combo.clear()
-                self.local_models_combo.addItem("检测失败，请确认 Ollama 已启动", None)
-                self._set_local_ready(False)
-                self._append_log(f"本机模型检测失败：{err}")
+        def done(snapshot, error):
+            self._local_refreshing = False
+            self.local_detect_btn.setEnabled(not self._running)
+            if error:
+                self.local_status.setText("检测本地总结组件失败，请刷新后重试。")
                 return
-            if not result["running"]:
-                self.local_status.setText("未运行 / 未安装（不影响使用）")
-                self.local_models_combo.clear()
-                self.local_models_combo.addItem("未检测到 Ollama", None)
-                self._set_local_ready(False)
-                return
-            models = result["models"]
-            self.local_status.setText(f"Ollama 已运行 · {len(models)} 个模型")
-            self._set_local_ready(True)
-            self.local_models_combo.clear()
-            if models:
-                for item in models:
-                    self.local_models_combo.addItem(
-                        f"{item['name']} · {local_model.format_size(item['size'])}",
-                        item["name"])
+            snapshot = snapshot or {}
+            self.local_options.set_status(snapshot)
+            installed = [str(item.get("label") or item["id"])
+                         for item in snapshot.get("runtimes", ()) if item.get("installed")]
+            if not snapshot.get("supported"):
+                message = str(snapshot.get("note") or "本地推理模块仅支持 Windows x64。")
             else:
-                self.local_models_combo.addItem("还没有模型，可从上方推荐下载", None)
-            self._sync_local_actions()
+                message = ("已安装模块：" + " / ".join(installed) if installed
+                           else "尚未安装推理模块，请在全局设置准备 CPU 或 GPU 模块。")
+                message += f" · {len(snapshot.get('models', ()))} 个模型"
+            self.local_status.setText(message)
 
         run_bg(work, done, owner=self)
-
-    def _sync_local_actions(self, *_args):
-        has_model = bool(self.local_models_combo.currentData()) and self._local_ready
-        self.use_local_btn.setEnabled(has_model)
-        self.delete_local_btn.setEnabled(has_model)
-
-    def _use_local_model(self):
-        name = self.local_models_combo.currentData()
-        if not name:
-            self.app.toast("请先检测并选择一个已安装模型", "info")
-            return
-        self.mode_combo.setCurrentIndex(0)
-        self.base_url_edit.setText(local_model.chat_base_url())
-        self.model_edit.setText(name)
-        self._refresh_key_status()
-        self._save_settings(quiet=True)
-        self._append_log(f"已切换本机模型：{name}")
-        self.app.toast(f"已使用本机模型：{name}", "success")
-
-    def _delete_local_model(self):
-        name = self.local_models_combo.currentData()
-        if not name:
-            self.app.toast("请先检测并选择一个已安装模型", "info")
-            return
-        if self._running:
-            self.app.toast("总结正在进行中，暂不能删除模型", "info")
-            return
-        if self._pull_cancel is not None and not self._pull_cancel.is_set():
-            self.app.toast("模型下载正在进行中，请稍后再删除", "info")
-            return
-        if QMessageBox.question(
-                self, "删除本机模型",
-                f"从本机 Ollama 删除模型「{name}」？\n\n"
-                "删除后需要重新下载才能使用。"
-        ) != QMessageBox.Yes:
-            return
-        self.delete_local_btn.setEnabled(False)
-        self.local_detect_btn.setEnabled(False)
-        self.local_status.setText(f"正在删除 {name}…")
-        self._append_log(f"开始删除本机模型：{name}")
-
-        def work():
-            local_model.delete_model(name)
-            return name
-
-        def done(result, err):
-            self.local_detect_btn.setEnabled(True)
-            if err:
-                self.local_status.setText("模型删除失败")
-                self._append_log(f"模型删除失败：{err}")
-                self.app.toast(f"模型删除失败：{err}", "error")
-                self._sync_local_actions()
-                return
-            if (self.model_edit.text().strip() == name
-                    and is_local_base_url(self.base_url_edit.text())):
-                self.model_edit.clear()
-                ls_config.save_settings(self._collect_settings())
-                self._append_log(f"已删除模型 {name}，并清空当前模型名")
-            else:
-                self._append_log(f"已删除模型 {name}")
-            self.local_status.setText(f"已删除 {name}")
-            self._detect_local()
-            self.app.toast(f"已删除模型 {name}", "success")
-
-        run_bg(work, done, owner=self)
-
-    def _pull_model(self):
-        if self._pull_cancel is not None and not self._pull_cancel.is_set():
-            self.app.toast("模型下载正在进行中", "info")
-            return
-        name = self.recommend_combo.currentData()
-        if not name:
-            return
-        self._pull_cancel = threading.Event()
-        self.pull_btn.setEnabled(False)
-        self.pull_stop_btn.setEnabled(True)
-        self.pull_progress.setVisible(True)
-        self.pull_progress.setValue(0)
-        self.local_status.setText(f"正在下载 {name}…")
-        self._append_log(f"开始下载本机模型：{name}")
-
-        def work():
-            if not local_model.is_running():
-                raise local_model.LocalModelError(
-                    "Ollama 未运行，请先安装并启动 Ollama")
-            local_model.pull_model(
-                name,
-                progress=lambda percent, message: post_to_main(
-                    self._on_pull_progress, percent, message),
-                cancel=self._pull_cancel)
-            return name
-
-        def done(result, err):
-            self.pull_btn.setEnabled(self._local_ready)
-            self.pull_stop_btn.setEnabled(False)
-            self.pull_progress.setVisible(False)
-            self._pull_cancel = None
-            if err:
-                if "已停止" in str(err):
-                    self.local_status.setText("模型下载已停止")
-                    self._append_log("模型下载已停止")
-                else:
-                    self.local_status.setText("模型下载失败")
-                    self._append_log(f"模型下载失败：{err}")
-                    self.app.toast(f"模型下载失败：{err}", "error")
-                return
-            self._append_log(f"模型下载完成：{name}")
-            self.mode_combo.setCurrentIndex(0)
-            self.base_url_edit.setText(local_model.chat_base_url())
-            self.model_edit.setText(name)
-            self._refresh_key_status()
-            self._save_settings(quiet=True)
-            self._detect_local()
-            self.app.toast(f"模型 {name} 已下载并配置", "success")
-
-        run_bg(work, done, owner=self)
-
-    def _on_pull_progress(self, percent: int, message: str):
-        self.pull_progress.setValue(max(0, min(100, int(percent))))
-        if message:
-            self.local_status.setText(message[:80])
-
-    def _stop_pull(self):
-        if self._pull_cancel is not None:
-            self._pull_cancel.set()
-            self.local_status.setText("正在停止下载…")
-            self.pull_stop_btn.setEnabled(False)
-
-    def _open_ollama_download(self):
-        import webbrowser
-        webbrowser.open(local_model.INSTALL_URL)
 
     # ==================== 设置 ====================
 
@@ -609,18 +370,30 @@ class LivestreamSummaryPage(BasePage):
         self.base_url_edit.setText(settings.base_url)
         self.model_edit.setText(settings.model)
         self.chunk_spin.setValue(settings.chunk_chars)
+        self.local_options.set_values(settings.local)
         index = self.mode_combo.findData(settings.mode)
         self.mode_combo.setCurrentIndex(max(0, index))
         self._refresh_key_status()
         self._sync_mode()
 
     def _sync_mode(self):
-        ai = self.mode_combo.currentData() == "ai"
-        self.model_box.setEnabled(ai)
-        if not self._running:
-            self.test_btn.setEnabled(ai)
+        mode = self.mode_combo.currentData()
+        ai = mode == "ai"
+        self.model_box.setVisible(ai)
+        self.model_box.setEnabled(ai and not self._running)
+        if hasattr(self, "local_card"):
+            self.local_card.setVisible(mode == "local")
+            self.local_options.setEnabled(mode == "local" and not self._running)
+        self.mode_combo.setEnabled(not self._running)
+        self.chunk_spin.setEnabled(mode != "rule" and not self._running)
+        self.save_btn.setEnabled(not self._running)
+        self.test_btn.setEnabled(mode != "rule" and not self._running)
+        if hasattr(self, "local_detect_btn"):
+            self.local_detect_btn.setEnabled(not self._running and not self._local_refreshing)
 
     def _refresh_key_status(self):
+        if self.mode_combo.currentData() != "ai":
+            return
         if ls_config.has_api_key():
             self.api_key_edit.clear()
             self.api_key_edit.setPlaceholderText("已保存；留空表示不修改")
@@ -634,26 +407,34 @@ class LivestreamSummaryPage(BasePage):
 
     @staticmethod
     def _default_output_dir() -> str:
-        """输出目录固定跟随全局设置：统一导出目录 +「直播总结」，页面不提供改写入口。"""
+        """输出固定跟随全局统一导出目录。"""
         return str(get_export_subdir("livestream_summary"))
 
     def _collect_settings(self) -> ls_config.Settings:
+        current = ls_config.load_settings()
+        mode = self.mode_combo.currentData() or "ai"
         return ls_config.Settings(
-            base_url=self.base_url_edit.text().strip() or ls_config.DEFAULT_BASE_URL,
-            model=self.model_edit.text().strip(),
-            chunk_chars=int(self.chunk_spin.value()),
-            output_dir="",
-            mode=self.mode_combo.currentData() or "ai",
+            base_url=(self.base_url_edit.text().strip() or ls_config.DEFAULT_BASE_URL)
+            if mode == "ai" else current.base_url,
+            model=self.model_edit.text().strip() if mode == "ai" else current.model,
+            chunk_chars=int(self.chunk_spin.value()), output_dir="", mode=mode,
+            local=self.local_options.values() if mode == "local" else current.local,
         )
 
     def _save_settings(self, quiet: bool = False) -> bool:
-        typed_key = self.api_key_edit.text().strip()
-        if typed_key:
-            encrypted = ls_config.save_api_key(typed_key)
-            self.api_key_edit.clear()
-            if not encrypted:
-                self._append_log("提示：本机缺少 cryptography，API Key 以降级方式保存")
-        ls_config.save_settings(self._collect_settings())
+        try:
+            settings = self._collect_settings()
+        except ValueError as error:
+            self.app.toast(str(error), "warning")
+            return False
+        if settings.mode == "ai":
+            typed_key = self.api_key_edit.text().strip()
+            if typed_key:
+                encrypted = ls_config.save_api_key(typed_key)
+                self.api_key_edit.clear()
+                if not encrypted:
+                    self._append_log("提示：本机缺少 cryptography，API Key 以降级方式保存")
+        ls_config.save_settings(settings)
         self._refresh_key_status()
         if not quiet:
             self.app.toast("直播总结设置已保存", "success")
@@ -751,26 +532,18 @@ class LivestreamSummaryPage(BasePage):
         if self._source is None or not self._source.is_file():
             self.app.toast("工作文件夹内没有可用的转录文件（TXT / SRT）", "info")
             return
-        self._save_settings(quiet=True)
+        if not self._save_settings(quiet=True):
+            return
         settings = self._collect_settings()
-        api_key = ls_config.load_api_key()
-        allow_empty_key = is_local_base_url(settings.base_url)
-        if settings.mode == "ai":
-            if not api_key and not allow_empty_key:
-                QMessageBox.warning(self, "缺少 API Key",
-                                    "请先填写并保存 API Key；\n"
-                                    "如果使用本机模型，把接口地址改成 127.0.0.1 / localhost 即可不填 Key。")
-                return
-            if not settings.model:
-                QMessageBox.warning(self, "缺少模型名称",
-                                    "请填写服务商或本地模型名称，例如 deepseek-chat / qwen2.5:7b。")
-                return
+        if settings.mode == "local" and not settings.local["model"]:
+            self.app.toast("请选择已准备的本地模型", "warning")
+            return
 
         self._running = True
         self._cancel = threading.Event()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.test_btn.setEnabled(False)
+        self._sync_mode()
         self.progress.setValue(0)
         self.status_label.setText("准备中…")
         self._result_text = ""
@@ -780,7 +553,7 @@ class LivestreamSummaryPage(BasePage):
             self._append_log(f"开始总结（本地规则，不联网）：{self._source.name}")
         else:
             self._append_log(
-                f"开始总结：{self._source.name} · 模型 {settings.model} · "
+                f"开始总结：{self._source.name} · 模型 {settings.local['model'] if settings.mode == 'local' else settings.model} · "
                 f"每块 {settings.chunk_chars} 字")
 
         source = self._source
@@ -791,23 +564,27 @@ class LivestreamSummaryPage(BasePage):
             folder = str(source.parent)
             if settings.mode == "rule":
                 return pipeline.run_rule(text, source.name, folder=folder)
-            client = ChatClient(settings.base_url, api_key, settings.model,
-                                allow_empty_key=allow_empty_key)
-            return pipeline.run(
-                text, source.name, client,
-                progress=lambda stage, percent, message: post_to_main(
-                    self._on_progress, stage, percent, message),
-                cancel=cancel, chunk_chars=settings.chunk_chars, folder=folder)
+            with client_session(settings, cancel=cancel,
+                                progress=lambda percent, message: post_to_main(
+                                    self._on_progress, "load", percent, message)) as client:
+                extra = ({"max_tokens": settings.local["max_tokens"]}
+                         if settings.mode == "local" else {})
+                return pipeline.run(
+                    text, source.name, client,
+                    progress=lambda stage, percent, message: post_to_main(
+                        self._on_progress, stage, percent, message),
+                    cancel=cancel, chunk_chars=settings.chunk_chars, folder=folder, **extra)
 
         def done(result, err):
             self._running = False
+            self._cancel = None
             self.start_btn.setEnabled(self._source is not None)
             self.stop_btn.setEnabled(False)
             self._sync_mode()
             if err:
-                if "已停止" in str(err):
-                    self.status_label.setText("已停止")
-                    self._append_log("任务已停止")
+                if "已停止" in str(err) or "已取消" in str(err):
+                    self.status_label.setText("已取消")
+                    self._append_log("任务已取消")
                 else:
                     self.status_label.setText("失败")
                     self._append_log(f"总结失败：{err}")
@@ -860,35 +637,49 @@ class LivestreamSummaryPage(BasePage):
             self.stop_btn.setEnabled(False)
 
     def _test_connection(self):
-        self._save_settings(quiet=True)
+        if self._running or not self._save_settings(quiet=True):
+            return
         settings = self._collect_settings()
-        api_key = ls_config.load_api_key()
-        allow_empty = is_local_base_url(settings.base_url)
-        if not api_key and not allow_empty:
-            QMessageBox.warning(self, "缺少 API Key",
-                                "请先填写并保存 API Key；本机模型地址可以不填。")
+        if settings.mode == "rule":
             return
-        if not settings.model:
-            QMessageBox.warning(self, "缺少模型名称", "请填写模型名称后再测试。")
+        if settings.mode == "local" and not settings.local["model"]:
+            self.app.toast("请选择已准备的本地模型", "warning")
             return
-        self.test_btn.setEnabled(False)
-        self.status_label.setText("正在测试连接…")
-        self._append_log(f"测试连接：{settings.base_url} · {settings.model}")
+        self._running = True
+        self._cancel = threading.Event()
+        cancel = self._cancel
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self._sync_mode()
+        self.progress.setValue(0)
+        self.status_label.setText("测试连接中…")
+        self._append_log("开始本地模型测试" if settings.mode == "local" else "开始模型接口测试")
 
         def work():
-            return ChatClient(settings.base_url, api_key, settings.model,
-                              allow_empty_key=allow_empty).test_connection()
+            with client_session(settings, cancel=cancel,
+                                progress=lambda percent, message: post_to_main(
+                                    self._on_progress, "load", percent, message)) as client:
+                return client.test_connection(cancel=cancel)
 
         def done(result, err):
-            self.test_btn.setEnabled(True)
+            self._running = False
+            self._cancel = None
+            self.start_btn.setEnabled(self._source is not None)
+            self.stop_btn.setEnabled(False)
+            self._sync_mode()
             if err:
+                if cancel.is_set():
+                    self.status_label.setText("已取消")
+                    self._append_log("模型测试已取消")
+                    return
                 self.status_label.setText("连接失败")
                 self._append_log(f"连接失败：{err}")
                 self.app.toast(f"连接失败：{err}", "error")
                 return
+            self.progress.setValue(100)
             self.status_label.setText("连接正常")
             self._append_log(f"连接正常，模型回复：{str(result)[:60]}")
-            self.app.toast("模型接口连接正常", "success")
+            self.app.toast("模型连接正常", "success")
 
         run_bg(work, done, owner=self)
 
@@ -935,13 +726,11 @@ class LivestreamSummaryPage(BasePage):
     def on_show(self):
         """切回本页时重新扫描工作文件夹，新转录的文件自动出现在下拉里。"""
         self._refresh_files()
+        self._refresh_native_status()
 
     def has_active_tasks(self) -> bool:
-        return self._running or (
-            self._pull_cancel is not None and not self._pull_cancel.is_set())
+        return self._running
 
     def shutdown(self):
         self._stop()
-        if self._pull_cancel is not None:
-            self._pull_cancel.set()
         super().shutdown()

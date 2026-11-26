@@ -202,6 +202,37 @@ def detail(payload: dict) -> dict:
     }
 
 
+def history(payload: dict, limit: int = 5) -> dict:
+    """读取单个音乐文件的完整标签历史快照，只读、不初始化或改写历史库。"""
+    path = _resolve(payload.get("rel") or "")
+    limit = max(1, min(5, int(limit)))
+    db_path = Path(get_config_dir()) / "music_tag_history.db"
+    if not db_path.is_file():
+        return {"rel": path.relative_to(_root()).as_posix(), "rows": [], "total": 0}
+    try:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True,
+                               timeout=3)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        raise ValueError("读取标签历史失败，请稍后重试") from exc
+    try:
+        columns = ", ".join(("createtime",) + _FIELDS)
+        rows = conn.execute(
+            f"SELECT {columns} FROM tag_history WHERE filepath=? "
+            "ORDER BY serial DESC LIMIT ?", (str(path), limit)).fetchall()
+    except sqlite3.Error as exc:
+        raise ValueError("读取标签历史失败，请稍后重试") from exc
+    finally:
+        conn.close()
+    result = []
+    for row in rows:
+        item = {"time": _ts(row["createtime"])}
+        item.update({key: str(row[key] or "") for key in _FIELDS})
+        result.append(item)
+    return {"rel": path.relative_to(_root()).as_posix(),
+            "rows": result, "total": len(result)}
+
+
 def write(payload: dict) -> dict:
     """写入标签：只处理提交的字段（空串表示清除该字段）。"""
     from music import tag_history

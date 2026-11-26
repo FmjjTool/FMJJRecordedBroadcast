@@ -1,6 +1,6 @@
 """WebUI 系统设置（L3）：工作目录 / 导出目录 / 外观主题。
 
-与桌面端共用同一份配置；依赖组件由桌面端管理，这里只提供目录与主题的读写。
+与桌面端共用同一份配置；可选本地推理组件由独立的共享用例管理。
 """
 
 from pathlib import Path
@@ -37,8 +37,8 @@ def system_settings() -> dict:
         "export_dir_locked": bool(cfg.get("export_dir_locked")),
         "theme": str(cfg.get("theme") or "light"),
         "theme_follow_system": bool(cfg.get("theme_follow_system")),
-        "note": "目录、迁移目标与主题与桌面端共用同一配置；依赖组件由桌面端管理，"
-                "Web 端不提供安装或卸载。",
+        "note": "目录、迁移目标与主题与桌面端共用同一配置；本地推理模块与模型可在本页按需准备，"
+                "其他依赖沿用桌面端的管理入口。",
     }
 
 

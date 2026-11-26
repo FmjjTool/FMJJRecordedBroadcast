@@ -248,6 +248,7 @@ def _read_manifest(directory, kind, identifier):
                 _safe_name(name, gguf=True)
             if name.casefold() in names or not 0 < int(item.get("size", 0)) <= _MAX_MODEL:
                 return None
+            item["size"] = int(item["size"])
             names.add(name.casefold())
         return value
     except (OSError, ValueError, TypeError, RuntimeErrorBase):
@@ -276,7 +277,7 @@ def _entry_ready(root, kind, identifier, *, verify=False, cancel=None):
             path = _within(folder, item["filename"])
             if not path.is_file() or path.stat().st_size != int(item["size"]):
                 return None
-            if verify and (kind == "runtime" or path.stat().st_mtime_ns != item.get("mtime_ns")):
+            if verify:
                 if _sha_file(path, cancel) != item["sha256"]:
                     return None
         if kind == "runtime":
@@ -406,12 +407,10 @@ def _download(url, target, size, expected_sha, *, progress=None, cancel=None):
         raise RuntimeErrorBase("官方资产缺少可信大小或 SHA-256，已拒绝下载")
     proxies = iter(_proxy_candidates())
     proxy = None
-    attempt = 0
     errors = []
     try:
         while True:
             _check_cancel(cancel)
-            attempt += 1
             _report(progress, 0, "通过直连下载官方资产…" if proxy is None else "直连失败，尝试可用代理…")
             try:
                 with requests.Session() as session:
@@ -536,7 +535,8 @@ def _extract_runtime(archive_path, staged, cancel):
             names.add(name.casefold())
             mode = info.external_attr >> 16
             file_type = stat.S_IFMT(mode)
-            if (info.flag_bits & 1 or file_type not in (0, stat.S_IFREG, stat.S_IFDIR)
+            if (info.flag_bits & 1 or info.external_attr & 0x400
+                    or file_type not in (0, stat.S_IFREG, stat.S_IFDIR)
                     or (info.is_dir() and file_type == stat.S_IFREG)
                     or (not info.is_dir() and file_type == stat.S_IFDIR)):
                 raise RuntimeErrorBase("运行模块压缩包含链接、特殊文件或加密条目")
@@ -665,7 +665,7 @@ def download_model(model_id, *, progress=None, cancel=None, root=None):
 
 
 def _import_sources(path):
-    first = Path(path)
+    first = _plain_path(Path(path))
     identifier = _safe_name(first.name, gguf=True)
     match = _SPLIT.fullmatch(identifier)
     if not match:
@@ -677,6 +677,7 @@ def _import_sources(path):
                    for i in range(1, int(match[3]) + 1)]
     total = 0
     for source in sources:
+        _plain_path(source)  # 不经相邻分片的 symlink/junction 读取目录外文件。
         if not source.is_file() or not 24 <= source.stat().st_size <= _MAX_MODEL:
             raise RuntimeErrorBase("GGUF 模型或分片缺失、大小异常")
         _gguf_header(source)
@@ -687,6 +688,7 @@ def _import_sources(path):
 
 
 def import_model(path, *, progress=None, cancel=None, root=None):
+    _check_cancel(cancel)
     identifier, sources, total = _import_sources(path)
     base = _root(root)
     with _Guard(base):
@@ -717,6 +719,7 @@ def import_model(path, *, progress=None, cancel=None, root=None):
                 after = source.stat()
                 if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns or target.stat().st_size != before.st_size:
                     raise RuntimeErrorBase("源模型导入期间发生变化，已停止")
+                _gguf_header(target)
                 records.append({"filename": source.name, "size": before.st_size,
                                 "sha256": digest.hexdigest(), "mtime_ns": target.stat().st_mtime_ns})
             _write_manifest(staged, "model", identifier, records, label=identifier, source="import")
@@ -791,9 +794,17 @@ class _LocalClient(ChatClient):
         self.http = requests.Session()
         self.http.trust_env = False
 
+    def _check_request_cancel(self, flag):
+        try:
+            _check_cancel(flag)
+        except CancelledError:
+            # 在向调用者报告取消前，确保本任务的 native 子进程已实际结束。
+            self.owner._stop_child()
+            raise
+
     def chat(self, system, user, *, temperature=0.3, max_tokens=8192, cancel=None, on_wait=None):
         flag = cancel or self.owner.cancel
-        _check_cancel(flag)
+        self._check_request_cancel(flag)
         if self.owner._closed:
             raise ChatError("本地推理会话已结束")
         options = self.owner.options
@@ -802,17 +813,30 @@ class _LocalClient(ChatClient):
                 "temperature": options["temperature"],
                 "max_tokens": min(max(1, int(max_tokens)), options["max_tokens"]), "stream": False}
         self.requests_made += 1
+        finished = threading.Event()
+
+        def watch():
+            while not finished.wait(0.1):
+                try:
+                    _check_cancel(flag)
+                except CancelledError:
+                    self.owner._stop_child()
+                    return
+
+        threading.Thread(target=watch, daemon=True).start()
         try:
             response = self.http.post(self.base_url + "/chat/completions", json=body,
                                       headers={"Authorization": "Bearer " + self.api_key}, timeout=(3, 600))
             with response:
-                _check_cancel(flag)
+                self._check_request_cancel(flag)
                 if response.status_code >= 400:
                     raise ChatError(f"本地模型请求失败（HTTP {response.status_code}），请检查上下文、模型与内存设置")
                 return _content(response.json())
         except (requests.RequestException, ValueError) as exc:
-            _check_cancel(flag)
+            self._check_request_cancel(flag)
             raise ChatError("本地推理连接中断，请检查模型、显卡驱动与可用内存") from exc
+        finally:
+            finished.set()
 
     def close(self):
         self.http.close()
@@ -828,11 +852,15 @@ class LocalSession:
         self.root = _root(root)
         self.process = self.client = self.guard = None
         self._closed = True
+        self._used = False
         self._process_lock = threading.Lock()
         self._stop_monitor = threading.Event()
         self._job = None
 
     def __enter__(self):
+        if self._used:
+            raise RuntimeErrorBase("本地推理会话不能重复进入，请为新任务创建新会话")
+        self._used = True
         if not _supported():
             raise RuntimeErrorBase("可选推理模块目前仅支持 Windows x64")
         _check_cancel(self.cancel)
@@ -863,9 +891,12 @@ class LocalSession:
                 command += ["--threads", str(opts["threads"])]
             env = {k: v for k, v in os.environ.items() if not k.startswith("LLAMA_")}
             env["LLAMA_API_KEY"] = token  # 临时会话令牌不放入命令行、配置或日志。
-            self.process = subprocess.Popen(command, cwd=executable.parent, env=env, stdin=subprocess.DEVNULL,
-                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                            creationflags=_NO_WINDOW)
+            try:
+                self.process = subprocess.Popen(command, cwd=executable.parent, env=env, stdin=subprocess.DEVNULL,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                creationflags=_NO_WINDOW)
+            except OSError as exc:
+                raise RuntimeErrorBase("本地推理模块无法启动，请检查文件、系统依赖与显卡驱动") from exc
             try:
                 from toolbox.process_tree import create_kill_job, assign_job
                 self._job = create_kill_job()
@@ -919,6 +950,8 @@ class LocalSession:
                         self.process.kill()
                     with contextlib.suppress(subprocess.TimeoutExpired, OSError):
                         self.process.wait(timeout=2)
+                except OSError:
+                    pass
             if self._job:
                 from toolbox.process_tree import terminate_job
                 terminate_job(self._job)

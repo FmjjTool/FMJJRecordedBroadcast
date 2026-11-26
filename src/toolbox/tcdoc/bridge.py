@@ -1503,7 +1503,7 @@ def _is_song_sheet(sheet: dict, doc_key: str = SONG_DOC_KEY,
 
 
 def list_targets() -> list[dict]:
-    """本地已同步的五类比对目标及歌曲片段只读快照。"""
+    """当前勾选范围内的本地比对目标；不删除范围外的已存快照。"""
     targets = []
     for doc in tc_cfg.load_docs():
         key = str(doc.get("key") or tables.doc_key_of(doc.get("url")) or "")
@@ -1513,8 +1513,12 @@ def list_targets() -> list[dict]:
             sheets = tables.sheets_of(key)
         except Exception:  # noqa: BLE001 - 单个文档异常不影响其它文档
             continue
+        selected = tc_cfg.selected_tabs(key)
+        allowed_names = set(selected) if selected is not None else None
         for sheet in sheets:
             if sheet.get("skipped"):
+                continue
+            if allowed_names is not None and sheet.get("tab_name") not in allowed_names:
                 continue
             names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
             tab_id = str(sheet.get("tab_id") or "")

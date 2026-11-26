@@ -1390,6 +1390,10 @@ class TcDocPage(BasePage):
         # 全选 = 不限定（None），这样以后新增的子表也会自动同步
         tc_cfg.set_selected_tabs(key, chosen if len(chosen) < len(names) else None)
         self._refresh_auto_state()
+        self._loaded_tabs.discard(self.bridge_tab_index)
+        bridge_panel = self._panels.get(self.bridge_tab_index)
+        if bridge_panel is not None:
+            bridge_panel.refresh(reload_targets=True, prefer_doc_key=key)
         self.app.toast(
             "已保存子表范围：全部" if len(chosen) == len(names)
             else f"已保存子表范围：{len(chosen)}/{len(names)} 张", "success")

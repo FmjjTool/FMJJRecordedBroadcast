@@ -33,6 +33,7 @@ from toolbox import edition, updater
 from version import APP_VERSION
 
 from gui_qt.common import FlowLayout, post_to_main, run_bg
+from gui_qt.local_llm_panel import LocalLlmComponentsPanel
 from gui_qt.pages.backup_panel import BackupPanel
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.quark_backup import QuarkBackupPage
@@ -392,6 +393,14 @@ class GlobalSettingsPage(BasePage):
         self._ffmpeg_ok = None     # FFmpeg 可用性缓存（None = 未检测）
         self._ffmpeg_installing = False  # 一键下载进行中（防重复点击）
         self._dep_downloading = False    # 组件下载进行中（防重复点击）
+        self.local_llm_panel = LocalLlmComponentsPanel(
+            app,
+            busy_check=lambda: self._dep_downloading or self._ffmpeg_installing,
+            busy_changed=self._set_local_llm_busy,
+            on_complete=self._refresh_dependencies,
+            parent=self,
+        )
+        card.content_layout.addWidget(self.local_llm_panel)
 
         # ---- AI Skill 下载（内置 Skill 导出到本地，供 AI 助手使用） ----
         card = self._section_card("AI Skill（导出到本地）", "robot")
@@ -523,6 +532,7 @@ class GlobalSettingsPage(BasePage):
         for card, icon in self._section_cards:
             card.set_icon(icon)
         self.cloud_backup_page.on_theme_changed()
+        self.local_llm_panel.on_theme_changed()
         self.scroll.sync_content()
 
     def _btn(self, text, slot):
@@ -573,6 +583,7 @@ class GlobalSettingsPage(BasePage):
         self._refresh_info(show_toast=False)
         # 依赖检测（每次回到本页都重检一次，不依赖外部信号）
         self._refresh_dependencies()
+        self.local_llm_panel.refresh()
         # WebUI 独立服务：端口、自动启动与运行状态
         self._load_webui()
         self._load_webui_tunnel()
@@ -583,7 +594,14 @@ class GlobalSettingsPage(BasePage):
 
     def shutdown(self):
         self.on_hide()
+        self.local_llm_panel.cancel()
         self.cloud_backup_page.shutdown()
+
+    def has_active_tasks(self):
+        return self._dep_downloading or self.local_llm_panel.is_busy()
+
+    def _set_local_llm_busy(self, busy):
+        self._dep_downloading = bool(busy)
 
     # ---- WebUI 独立服务 ----
     def _webui(self):
@@ -1340,6 +1358,12 @@ class GlobalSettingsPage(BasePage):
         ("clip_model", "图识别模型", "_check_clip_model_detail",
          "以图搜图的 CLIP 视觉编码器（约 85MB，仅图识别使用）",
          "https://hf-mirror.com/", True, "clip_model"),
+        ("local_llm_runtime", "本地总结模块", "_check_local_llm_runtime_detail",
+         "可选 CPU / GPU 推理模块，在下方独立下载；FULL 版也不内置",
+         "https://github.com/ggml-org/llama.cpp/releases", True, "local_llm"),
+        ("local_llm_model", "本地总结模型", "_check_local_llm_model_detail",
+         "可选 GGUF 模型，与推理模块分开准备；支持下载或导入",
+         "https://huggingface.co/Qwen", True, "local_llm"),
         ("git", "Git", "_check_git_detail",
          "可选：本地资料站拉取代码 / 版本回退（不装不影响其他功能）",
          "https://git-scm.com/download/win", True, "external"),
@@ -1813,6 +1837,19 @@ class GlobalSettingsPage(BasePage):
             return False, ""
         size = status.get("size") or 0
         return True, (f"已就绪 {size / 1024 ** 2:.0f}MB" if size else "已就绪")
+
+    def _check_local_llm_runtime_detail(self):
+        from toolbox.livestream_summary import optional_runtime
+        snapshot = optional_runtime.status()
+        installed = [str(item.get("label") or item["id"])
+                     for item in snapshot.get("runtimes", ()) if item.get("installed")]
+        return bool(installed), " / ".join(installed) or (
+            "未下载" if snapshot.get("supported") else "仅支持 Windows x64")
+
+    def _check_local_llm_model_detail(self):
+        from toolbox.livestream_summary import optional_runtime
+        models = optional_runtime.status().get("models", ())
+        return bool(models), f"{len(models)} 个已准备" if models else "未准备"
 
     def _check_git_detail(self):
         """可选依赖：本地资料站拉代码用 Git（要求已在 PATH）。"""

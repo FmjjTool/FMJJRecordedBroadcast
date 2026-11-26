@@ -44,7 +44,11 @@ def _root(kind: str) -> Path:
     if kind == "bili_shop":
         return Path(get_export_subdir("bili_shop"))
     if kind == "xianyu":
-        return Path(get_export_dir()) / "闲鱼商品"
+        export = Path(get_export_dir()).resolve()
+        root = export / "闲鱼商品"
+        if root.resolve().parent != export:
+            raise ValueError("闲鱼商品目录不在导出范围内")
+        return root
     raise ValueError("未知产物类型")
 
 

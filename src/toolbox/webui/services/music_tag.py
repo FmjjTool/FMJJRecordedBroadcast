@@ -18,6 +18,9 @@ class MusicTagService:
     def detail(self, rel: str) -> dict:
         return webui_music_tag.detail({"rel": rel})
 
+    def history(self, rel: str) -> dict:
+        return webui_music_tag.history({"rel": rel})
+
     def _submit(self, kind: str, payload: dict, handler) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")

@@ -2967,9 +2967,11 @@ function renderLivestreamSummary(root) {
         });
       }
       var modeSel = h('select', { class: 'select' },
-        h('option', { value: 'ai' }, '大模型总结'),
+        h('option', { value: 'ai' }, '模型接口'),
+        h('option', { value: 'local' }, '本地模型（CPU / GPU）'),
         h('option', { value: 'rule' }, '本地规则保底'));
-      modeSel.value = settings.mode === 'rule' ? 'rule' : 'ai';
+      modeSel.value = ['ai', 'local', 'rule'].indexOf(settings.mode) >= 0
+        ? settings.mode : 'ai';
       var startBtn = h('button', { class: 'btn primary', type: 'button' },
         '开始总结');
       var statusText = h('span', { class: 'muted small' }, '空闲');
@@ -2989,8 +2991,14 @@ function renderLivestreamSummary(root) {
         statusText.textContent = modeSel.value === 'rule'
           ? '本地规则总结中…' : '调用模型总结中…';
         resultHost.replaceChildren();
-        post('/api/tools/livestream-summary/run', {
-          rel: fileSelect.value, mode: modeSel.value
+        modeSel.disabled = true;
+        saveBtn.disabled = true;
+        testBtn.disabled = true;
+        localForm.setDisabled(true);
+        persistSettings().then(function () {
+          return post('/api/tools/livestream-summary/run', {
+            rel: fileSelect.value, mode: modeSel.value
+          });
         }).then(function (result) {
           watchJob(jobHost, result.job, function (job) {
             var outcome = job.result || {};
@@ -3025,9 +3033,14 @@ function renderLivestreamSummary(root) {
               running = false;
               startBtn.disabled = false;
               startBtn.textContent = '开始总结';
+              modeSel.disabled = false;
+              saveBtn.disabled = false;
+              syncMode();
               if (job.status === 'error') {
                 statusText.textContent = '失败';
                 toast('总结失败：' + (job.error || '未知错误'), 'error');
+              } else if (job.status === 'cancelled') {
+                statusText.textContent = '已取消';
               }
             }
           });
@@ -3036,6 +3049,9 @@ function renderLivestreamSummary(root) {
           startBtn.disabled = false;
           startBtn.textContent = '开始总结';
           statusText.textContent = '失败';
+          modeSel.disabled = false;
+          saveBtn.disabled = false;
+          syncMode();
           toast('总结失败：' + error.message, 'error');
         });
       });
@@ -3072,16 +3088,42 @@ function renderLivestreamSummary(root) {
       var settingsHost = h('div', { class: 'muted small',
         style: 'margin-top:8px' }, settings.has_key
         ? 'API Key 已保存（本机加密，不回显）。' : '尚未保存 API Key。');
+      var localForm = window.FMJJLocalLLM.createOptionsForm(
+        h, data.local_fields || [], settings.local || {}, data.local_runtime || {});
+      var localBox = h('div', { style: 'margin-top:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '本地推理配置'),
+        localForm.element,
+        h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '模块和模型请在全局设置中按需准备；CPU 线程数填 0 表示自动，GPU 层数只在 GPU 模式生效。'));
+      var cloudFields = h('div', { class: 'form-grid' },
+        h('label', null, h('span', { class: 'muted small' }, '接口地址'), baseInput),
+        h('label', null, h('span', { class: 'muted small' }, '模型名称'), modelInput),
+        h('label', null, h('span', { class: 'muted small' }, 'API Key'), keyInput));
 
-      saveBtn.addEventListener('click', function () {
-        saveBtn.disabled = true;
-        post('/api/tools/livestream-summary/settings', {
+      function persistSettings() {
+        return post('/api/tools/livestream-summary/settings', {
           base_url: baseInput.value, model: modelInput.value,
           chunk_chars: Number(chunkInput.value) || 6000,
-          mode: modeSel.value, api_key: keyInput.value
+          mode: modeSel.value, api_key: modeSel.value === 'ai' ? keyInput.value : '',
+          local: localForm.read()
         }).then(function (result) {
           keyInput.value = '';
           settingsHost.textContent = result.summary;
+          return result;
+        });
+      }
+      function syncMode() {
+        cloudFields.hidden = modeSel.value !== 'ai';
+        localBox.hidden = modeSel.value !== 'local';
+        localForm.setDisabled(modeSel.value !== 'local' || running);
+        chunkInput.disabled = modeSel.value === 'rule' || running;
+        testBtn.disabled = modeSel.value === 'rule' || running;
+      }
+      modeSel.addEventListener('change', syncMode);
+
+      saveBtn.addEventListener('click', function () {
+        saveBtn.disabled = true;
+        persistSettings().then(function (result) {
           toast(result.summary, 'success');
         }).catch(function (error) {
           toast('保存失败：' + error.message, 'error');
@@ -3091,15 +3133,26 @@ function renderLivestreamSummary(root) {
       testBtn.addEventListener('click', function () {
         testBtn.disabled = true;
         testBtn.textContent = '测试中…';
-        post('/api/tools/livestream-summary/test', {}).then(function (result) {
-          toast(result.summary || result.message, 'success');
-          settingsHost.textContent = result.message;
+        persistSettings().then(function () {
+          return post('/api/tools/livestream-summary/test', {});
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            toast(outcome.summary || outcome.message, 'success');
+            settingsHost.textContent = outcome.message || outcome.summary;
+          }, { cancelable: true, indeterminate: true,
+            onSettled: function (job) {
+              testBtn.textContent = '测试连接';
+              syncMode();
+              if (job.status === 'error') settingsHost.textContent = '连接失败：' + job.error;
+              if (job.status === 'cancelled') settingsHost.textContent = '已取消';
+            }
+          });
         }).catch(function (error) {
           settingsHost.textContent = '连接失败：' + error.message;
           toast('连接失败：' + error.message, 'error');
-        }).then(function () {
-          testBtn.disabled = false;
           testBtn.textContent = '测试连接';
+          syncMode();
         });
       });
 
@@ -3125,19 +3178,17 @@ function renderLivestreamSummary(root) {
       grid.appendChild(h('div', { class: 'card' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           '模型设置'),
-        h('div', { class: 'form-grid' },
-          h('label', null, h('span', { class: 'muted small' }, '接口地址'),
-            baseInput),
-          h('label', null, h('span', { class: 'muted small' }, '模型名称'),
-            modelInput),
+        cloudFields,
+        h('div', { class: 'form-grid', style: 'margin-top:8px' },
           h('label', null, h('span', { class: 'muted small' }, '每块字数'),
-            chunkInput),
-          h('label', null, h('span', { class: 'muted small' }, 'API Key'),
-            keyInput)),
+            chunkInput)),
+        localBox,
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           saveBtn, testBtn),
-        kv('当前模式', settings.mode === 'rule' ? '本地规则（不调用模型）' : 'AI 模型'),
+        kv('已保存模式', settings.mode === 'rule' ? '本地规则（不调用模型）'
+          : settings.mode === 'local' ? '本地模型（CPU / GPU）' : '模型接口'),
         settingsHost));
+      syncMode();
       grid.appendChild(h('div', { class: 'card' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           '已保存总结'),
@@ -7762,6 +7813,11 @@ function renderLivestreamSummary(root) {
       var depHost = h('div', { style: 'margin-top:8px' });
       deps.appendChild(depHost);
       host.appendChild(deps);
+      var localLLMHost = h('div');
+      host.appendChild(localLLMHost);
+      window.FMJJLocalLLM.mountSettings(localLLMHost, {
+        h: h, api: api, post: post, watchJob: watchJob, toast: toast
+      });
       depHost.replaceChildren(h('div', { class: 'loading' }, '正在检测依赖…'));
       api('/api/system/deps').then(function (result) {
         depHost.replaceChildren();
@@ -9763,7 +9819,10 @@ function renderLivestreamSummary(root) {
           }, '入库下载', function (outcome) {
             (outcome.items || []).forEach(function (saved) {
               xianyuRows.forEach(function (item) {
-                if (item.item_id === saved.item_id && saved.saved !== false) item.saved = true;
+                if (item.item_id === saved.item_id && saved.saved !== false) {
+                  item.saved = true;
+                  selected.delete(String(item.item_id || item.url));
+                }
               });
             });
             drawTable();
