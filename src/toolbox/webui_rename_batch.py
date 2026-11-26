@@ -37,55 +37,104 @@ def _name_error(name: str) -> str:
     return ""
 
 
-def _cfg_from_options(options: dict) -> dict:
+# 表单字段表：前端控件、L2 透传、L3 配置三处都从这里读，新增参数只改这一处。
+FIELDS: dict[str, dict] = {
+    "recursive": {"type": "bool", "default": False},
+    "filter": {"type": "str", "default": "all"},
+    "template": {"type": "str", "default": ""},
+    "prefix": {"type": "str", "default": ""},
+    "suffix": {"type": "str", "default": ""},
+    "find": {"type": "str", "default": ""},
+    "to": {"type": "str", "default": ""},
+    "case": {"type": "enum", "default": "",
+             "allow": ("", "upper", "lower", "capital")},
+    "convert": {"type": "enum", "default": "",
+                "allow": ("", "full2half", "half2full")},
+    "ext_case": {"type": "enum", "default": "",
+                 "allow": ("", "upper", "lower", "delete")},
+    "new_ext": {"type": "str", "default": ""},
+    "pos_text": {"type": "str", "default": ""},
+    "pos_idx": {"type": "int", "default": 0, "min": 0},
+    "from_right": {"type": "bool", "default": False},
+    "kw": {"type": "str", "default": ""},
+    "kw_text": {"type": "str", "default": ""},
+    "kw_after": {"type": "bool", "default": True},
+    "del_types": {"type": "strlist", "default": [],
+                  "allow": ("space", "digit", "lower", "upper",
+                            "chinese", "special")},
+    "del_pos": {"type": "int", "default": 0, "min": 0},
+    "del_cnt": {"type": "int", "default": 0, "min": 0},
+    "del_from_right": {"type": "bool", "default": False},
+    "del_kw": {"type": "str", "default": ""},
+    "del_kw_cnt": {"type": "int", "default": 0, "min": 0},
+    "del_dir": {"type": "enum", "default": "right", "allow": ("right", "left")},
+    "del_incl": {"type": "bool", "default": False},
+    "numbering": {"type": "bool", "default": False},
+    "start": {"type": "int", "default": 1, "min": 0},
+    "width": {"type": "int", "default": 2, "min": 1, "max": 6},
+    "textmode": {"type": "str", "default": ""},
+    "ignore_ext": {"type": "bool", "default": True},
+    "conflict": {"type": "bool", "default": True},
+}
+
+
+def normalize(options: dict | None) -> dict:
+    """按 FIELDS 取值与校验，缺省或非法值回落到默认值。"""
     options = options or {}
+    out: dict = {}
+    for name, spec in FIELDS.items():
+        raw = options.get(name)
+        kind = spec["type"]
+        if kind == "bool":
+            out[name] = spec["default"] if raw is None else bool(raw)
+        elif kind == "int":
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                value = spec["default"]
+            value = max(value, spec.get("min", value))
+            if "max" in spec:
+                value = min(value, spec["max"])
+            out[name] = value
+        elif kind == "enum":
+            text = str(raw or "")
+            out[name] = text if text in spec["allow"] else spec["default"]
+        elif kind == "strlist":
+            items = raw if isinstance(raw, (list, tuple)) else []
+            out[name] = [str(item) for item in items
+                         if str(item) in spec["allow"]]
+        else:
+            out[name] = str(raw or "")
+    return out
 
-    def text(key: str, default: str = "") -> str:
-        return str(options.get(key) or default)
 
-    def flag(key: str) -> bool:
-        return bool(options.get(key))
-
-    def integer(key: str, default: int) -> int:
-        try:
-            return int(options.get(key))
-        except (TypeError, ValueError):
-            return default
-
-    case = text("case")
-    if case not in ("upper", "lower", "capital"):
-        case = ""
-    convert = text("convert")
-    if convert not in ("full2half", "half2full"):
-        convert = ""
-    pos_text = text("pos_text")
-    valid_types = {"space", "digit", "lower", "upper", "chinese", "special"}
-    del_types = [str(item) for item in (options.get("del_types") or [])
-                 if str(item) in valid_types]
+def _cfg_from_options(options: dict) -> dict:
+    value = normalize(options)
     return {
-        "whole": {"case": case, "num": "", "convert": convert,
-                  "ext_case": "", "new_ext": ""},
-        "replace": {"find": text("find"), "to": text("to"),
+        "whole": {"case": value["case"], "num": "",
+                  "convert": value["convert"],
+                  "ext_case": value["ext_case"],
+                  "new_ext": value["new_ext"].strip()},
+        "replace": {"find": value["find"], "to": value["to"],
                     "all": True, "case": False, "regex": False},
-        "add": {"prefix": text("prefix"), "suffix": text("suffix"),
-                "pos_idx": max(0, integer("pos_idx", 0))
-                if pos_text else 0,
-                "pos_text": pos_text, "from_right": flag("from_right"),
-                "kw": "", "kw_text": "", "kw_after": True},
-        "del": {"types": del_types,
-                "pos": max(0, integer("del_pos", 0)),
-                "cnt": max(0, integer("del_cnt", 0)),
-                "from_right": flag("del_from_right"),
-                "kw": text("del_kw"),
-                "kw_cnt": max(0, integer("del_kw_cnt", 0)),
-                "dir_right": text("del_dir", "right") != "left",
-                "incl_kw": flag("del_incl")},
-        "num": {"on": flag("numbering"), "mode": "suffix",
-                "start": max(0, integer("start", 1)), "step": 1,
-                "width": max(1, min(6, integer("width", 2)))},
-        "template": text("template"),
-        "options": {"ignore_ext": options.get("ignore_ext", True) is not False,
-                    "conflict": options.get("conflict", True) is not False},
+        "add": {"prefix": value["prefix"], "suffix": value["suffix"],
+                "pos_idx": value["pos_idx"] if value["pos_text"] else 0,
+                "pos_text": value["pos_text"],
+                "from_right": value["from_right"],
+                "kw": value["kw"], "kw_text": value["kw_text"],
+                "kw_after": value["kw_after"]},
+        "del": {"types": value["del_types"],
+                "pos": value["del_pos"], "cnt": value["del_cnt"],
+                "from_right": value["del_from_right"],
+                "kw": value["del_kw"], "kw_cnt": value["del_kw_cnt"],
+                "dir_right": value["del_dir"] != "left",
+                "incl_kw": value["del_incl"]},
+        "num": {"on": value["numbering"], "mode": "suffix",
+                "start": value["start"], "step": 1,
+                "width": value["width"]},
+        "template": value["template"],
+        "options": {"ignore_ext": value["ignore_ext"],
+                    "conflict": value["conflict"]},
     }
 
 

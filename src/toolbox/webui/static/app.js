@@ -2186,6 +2186,21 @@
         ['half2full', '半角转全角']].forEach(function (pair) {
         convertSel.appendChild(h('option', { value: pair[0] }, pair[1]));
       });
+      var extCaseSel = h('select', { class: 'select' });
+      [['', '扩展名不变'], ['upper', '扩展名大写'], ['lower', '扩展名小写'],
+        ['delete', '删除扩展名']].forEach(function (pair) {
+        extCaseSel.appendChild(h('option', { value: pair[0] }, pair[1]));
+      });
+      var newExt = h('input', {
+        class: 'input', placeholder: '如 png（留空不改）', style: 'width:120px'
+      });
+      var kwInput = h('input', {
+        class: 'input', placeholder: '定位关键词', style: 'width:120px'
+      });
+      var kwText = h('input', {
+        class: 'input', placeholder: '插入文本', style: 'width:120px'
+      });
+      var kwAfterCb = h('input', { type: 'checkbox', checked: true });
       var posText = h('input', {
         class: 'input', placeholder: '插入文本', style: 'width:120px'
       });
@@ -2287,6 +2302,11 @@
           to: replaceTo.value,
           case: caseSel.value,
           convert: convertSel.value,
+          ext_case: extCaseSel.value,
+          new_ext: newExt.value,
+          kw: kwInput.value,
+          kw_text: kwText.value,
+          kw_after: kwAfterCb.checked,
           pos_idx: posIdx.value,
           pos_text: posText.value,
           from_right: fromRightCb.checked,
@@ -2364,15 +2384,23 @@
         timer = setTimeout(load, 450);
       }
       [template, prefix, suffix, find, replaceTo, startInput, widthInput,
-        posText, posIdx, textmode]
+        posText, posIdx, textmode, newExt, kwInput, kwText]
         .forEach(function (input) {
           input.addEventListener('input', schedule);
         });
       [recursiveCb, numberingCb, ignoreExtCb, conflictCb, filterSel,
-        caseSel, convertSel, fromRightCb]
+        caseSel, convertSel, fromRightCb, extCaseSel, kwAfterCb]
         .forEach(function (input) {
           input.addEventListener('change', schedule);
         });
+      // 扩展名规则只在「忽略扩展名」开启时才作用到主名之外，切换时自动打开。
+      function extRuleChanged() {
+        if (extCaseSel.value || newExt.value.trim()) {
+          ignoreExtCb.checked = true;
+        }
+      }
+      extCaseSel.addEventListener('change', extRuleChanged);
+      newExt.addEventListener('input', extRuleChanged);
       Object.keys(delTypeBoxes).forEach(function (key) {
         delTypeBoxes[key].addEventListener('change', schedule);
       });
@@ -2449,6 +2477,15 @@
           h('span', { class: 'muted small' }, '大小写'), caseSel,
           h('span', { class: 'muted small' }, '全半角'), convertSel),
         h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '扩展名'), extCaseSel,
+          h('span', { class: 'muted small' }, '改为'), newExt,
+          h('span', { class: 'muted small' },
+            '（扩展名规则生效时会自动勾选「忽略扩展名」）')),
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, '关键词插入'), kwInput,
+          h('span', { class: 'muted small' }, '插入'), kwText,
+          h('label', { class: 'check' }, kwAfterCb, ' 关键词后面')),
+        h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '插入'), posText,
           h('span', { class: 'muted small' }, '位置'), posIdx,
           h('label', { class: 'check' }, fromRightCb, ' 从右往左'),
@@ -2478,7 +2515,7 @@
           fillTmBtn),
         textmode,
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '扩展名改名、改名时间等规则仍在桌面端。')));
+          '随机数、改名时间与目录改名仍在桌面端。')));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'row-title' }, '预览'),
