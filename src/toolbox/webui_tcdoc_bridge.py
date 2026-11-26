@@ -172,6 +172,58 @@ def preview(payload: dict, on_progress=None, is_cancelled=None) -> dict:
     }
 
 
+def option_preview(payload: dict) -> dict:
+    """只读检查：勾选的记录会让哪些下拉列新建哪些选项值。
+
+    不写任何东西，也不要求刷新门禁；真正新建发生在勾选「允许新建下拉选项」
+    之后的上传里（腾讯按「快速添加」建值）。
+    """
+    target = _find_target(payload.get("doc_key"), payload.get("tab_id"))
+    if target["profile"] != "posts":
+        return {"tab_name": target.get("tab_name") or "",
+                "tab_id": target["tab_id"], "columns": [], "total": 0,
+                "note": "该表没有需要新建的下拉选项。"}
+    keys = [str(item) for item in (payload.get("keys") or []) if str(item).strip()]
+    if not keys:
+        raise ValueError("请先勾选要比对的记录")
+    days = _days(payload.get("days"))
+    result = bridge.build_pending(target["doc_key"], target["tab_id"], days=days,
+                                  accounts=_accounts(payload.get("accounts")))
+    rows = list(result.get("rows") or [])
+    picked, seen = [], set()
+    for index, row in enumerate(rows):
+        key = _row_key("posts", row, index)
+        if key in keys and key not in seen:
+            seen.add(key)
+            picked.append(row)
+    if not picked:
+        raise ValueError("待上传记录已变化或已同步，请重新比对后再试")
+    sources = bridge.collect_local_items(days)
+    catalogue = pending.build_catalogue(pending.ROOT, sources)
+    try:
+        records, _missing = pending.records_from_rows(pending.ROOT, picked,
+                                                      catalogue)
+    except ImportErrorDetail as exc:
+        raise ValueError(f"待上传记录无法写入：{exc}") from exc
+    client = _client(target)
+    client.connect()
+    fields = client.get_fields()
+    created = pending.new_choice_options(records, fields, target["doc_key"],
+                                         target["tab_id"])
+    columns = [{"column": name, "values": values}
+               for name, values in created.items() if values]
+    return {
+        "tab_name": target.get("tab_name") or "官方动态",
+        "doc_name": DOC_NAME,
+        "tab_id": target["tab_id"],
+        "columns": columns,
+        "total": sum(len(item["values"]) for item in columns),
+        "note": ("只读检查：这些选项值会在上传时按「快速添加」新建，"
+                 "需要在上传前勾选「允许新建下拉选项」；不新增字段、"
+                 "不改字段名或顺序、不删选项。"),
+    }
+
+
 def refresh(on_status=None) -> dict:
     """同步前刷新：采集平台资料 + 拉取腾讯文档快照（与桌面端同一套流程）。"""
     return sync_refresh.run(on_status=on_status or (lambda _text: None))
@@ -200,6 +252,8 @@ def ensure_uploadable(payload: dict) -> dict:
         raise ValueError("请先勾选要上传的记录")
     if len(keys) > MAX_UPLOAD:
         raise ValueError(f"单次最多上传 {MAX_UPLOAD} 条，请缩小范围")
+    if payload.get("allow_new_options") and target["profile"] != "posts":
+        raise ValueError("只有「官方动态」支持新建下拉选项")
     return target
 
 
@@ -230,10 +284,12 @@ def upload(payload: dict, on_progress=None, is_cancelled=None) -> dict:
     _check_cancelled(is_cancelled)
     if profile == "lives":
         return _upload_lives(target, picked, on_progress, is_cancelled)
-    return _upload_posts(target, picked, days, on_progress, is_cancelled)
+    return _upload_posts(target, picked, days, on_progress, is_cancelled,
+                         allow_new_options=bool(payload.get("allow_new_options")))
 
 
-def _upload_posts(target, rows, days, on_progress, is_cancelled) -> dict:
+def _upload_posts(target, rows, days, on_progress, is_cancelled,
+                  allow_new_options=False) -> dict:
     _progress(on_progress, 0.3, 1, "正在准备记录与本地图片")
     sources = bridge.collect_local_items(days)
     catalogue = pending.build_catalogue(pending.ROOT, sources)
@@ -254,15 +310,21 @@ def _upload_posts(target, rows, days, on_progress, is_cancelled) -> dict:
     for record in records:
         try:
             pending.make_plan(record, fields, available_only=False,
-                              allow_new_options=False,
+                              allow_new_options=allow_new_options,
                               doc_key=target["doc_key"], tab_id=target["tab_id"])
         except ImportErrorDetail as exc:
             blocked.append({"title": str(record.get("作品标题") or ""),
                             "reason": str(exc)})
     if blocked:
+        hint = ("请在页面上勾选「允许新建下拉选项」后重试（只新增选项值）"
+                if not allow_new_options
+                else "请先在桌面端补齐缺失字段后上传")
         raise ValueError(
-            f"{len(blocked)} 条记录字段不满足写入条件（如新账号 / 新平台需要新建下拉选项）："
-            f"{blocked[0]['title']}（{blocked[0]['reason']}）；请在桌面端确认后上传")
+            f"{len(blocked)} 条记录字段不满足写入条件："
+            f"{blocked[0]['title']}（{blocked[0]['reason']}）；{hint}")
+    creating = pending.new_choice_options(records, fields, target["doc_key"],
+                                          target["tab_id"]) \
+        if allow_new_options else {}
     for record in records:
         if is_cancelled and is_cancelled():
             raise BridgeCancelled("任务已取消")
@@ -279,7 +341,8 @@ def _upload_posts(target, rows, days, on_progress, is_cancelled) -> dict:
     _progress(on_progress, 0.5, 1, "正在连接腾讯文档并新增记录")
     receipt = pending.run(client, records, apply=True, verify_each=False,
                           emit=emit, profile="posts",
-                          allow_new_options=False, source="WebUI 中间层上传")
+                          allow_new_options=allow_new_options,
+                          source="WebUI 中间层上传")
     added = list(receipt.get("added") or [])
     skipped = list(receipt.get("skipped") or [])
     updated = int(receipt.get("updated") or 0)
@@ -300,6 +363,8 @@ def _upload_posts(target, rows, days, on_progress, is_cancelled) -> dict:
         "failed_verify": len(failed),
         "missing_images": len(missing),
         "record_ids": [str(item.get("record_id") or "") for item in added][:20],
+        "created_options": [{"column": name, "values": values}
+                            for name, values in creating.items() if values],
         "summary": _summary(len(added), updated, len(skipped), len(failed),
                             len(missing)),
         "note": "仅新增 / 追加，不修改或删除已有行。",

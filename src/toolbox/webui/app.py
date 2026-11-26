@@ -741,6 +741,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.bridge_preview(dict(req.json or {}))
     server.post("/api/tcdoc/bridge/preview", tcdoc_bridge_preview)
 
+    def tcdoc_bridge_options(req):
+        return tcdoc.bridge_option_preview(dict(req.json or {}))
+    server.post("/api/tcdoc/bridge/options", tcdoc_bridge_options)
+
     def start_tcdoc_bridge_refresh(req):
         job = tcdoc.start_bridge_refresh()
         return {"job": job.id}

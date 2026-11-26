@@ -10589,6 +10589,14 @@ function renderMusicTag(root) {
           var uploadBtn = h('button', {
             class: 'btn primary', type: 'button', disabled: true
           }, '上传选中');
+          var optBtn = h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '检查新下拉选项');
+          var optAllow = h('input', { type: 'checkbox' });
+          var optLabel = h('label', {
+            class: 'check', style: 'display:none'
+          }, optAllow, ' 允许新建下拉选项（仅本次）');
+          var optPanel = h('div');
           var selLabel = h('span', { class: 'muted small' }, '已选 0 条');
           var playlistBtn = h('button', {
             class: 'btn', type: 'button', style: 'display:none'
@@ -10613,6 +10621,7 @@ function renderMusicTag(root) {
               || selected.size === 0 || selected.size > maxUpload;
             uploadBtn.textContent = busy ? '处理中…'
               : (canUpload ? '上传选中' : '该表只读');
+            optBtn.disabled = busy || !canUpload || selected.size === 0;
             compareBtn.disabled = busy;
             refreshBtn.disabled = busy;
           }
@@ -10775,6 +10784,49 @@ function renderMusicTag(root) {
             });
           }
 
+          optBtn.addEventListener('click', function () {
+            var target = targetNow();
+            if (!target || !selected.size) return;
+            optBtn.disabled = true;
+            setLoading(optPanel, '正在读取云端字段并比对下拉选项…');
+            post('/api/tcdoc/bridge/options', {
+              doc_key: target.doc_key, tab_id: target.tab_id,
+              days: Number(daysSel.value) || 30,
+              accounts: accSel.value, keys: Array.from(selected)
+            }).then(function (data) {
+              var columns = data.columns || [];
+              optAllow.checked = false;
+              if (!columns.length) {
+                optLabel.style.display = 'none';
+                optPanel.replaceChildren(h('div', {
+                  class: 'muted small', style: 'margin-top:6px'
+                }, '勾选的记录不需要新建下拉选项。'));
+                syncButtons();
+                return;
+              }
+              var body = h('tbody');
+              columns.forEach(function (item) {
+                body.appendChild(h('tr', null,
+                  h('td', null, item.column),
+                  h('td', null, item.values.join('、'))));
+              });
+              optLabel.style.display = '';
+              optPanel.replaceChildren(h('div', {
+                class: 'table-wrap', style: 'margin-top:8px'
+              }, h('table', { class: 'db-table' },
+                h('thead', null, h('tr', null,
+                  h('th', null, '下拉列'),
+                  h('th', null, '将新建的选项值'))), body),
+              h('div', { class: 'muted small', style: 'margin-top:6px' },
+                '共 ' + fmtNumber(data.total) + ' 个选项值 · ' + data.note)));
+              syncButtons();
+            }).catch(function (error) {
+              optBtn.disabled = false;
+              toast('检查下拉选项失败：' + error.message, 'error');
+              optPanel.replaceChildren();
+            });
+          });
+
           uploadBtn.addEventListener('click', function () {
             var target = targetNow();
             if (!target || !lastPreview || !selected.size) return;
@@ -10785,9 +10837,12 @@ function renderMusicTag(root) {
             var withImages = lastPreview.items.filter(function (item) {
               return selected.has(item.key) && item.images;
             }).length;
+            var allowNew = optAllow.checked
+              && optLabel.style.display !== 'none';
             var ok = window.confirm('确定向「' + target.doc_name + ' / '
               + target.tab_name + '」新增 ' + selected.size + ' 条记录？\n'
               + (withImages ? '其中 ' + withImages + ' 条带本地图片（含评论区图片）。\n' : '')
+              + (allowNew ? '本次允许为下拉列新建上面列出的选项值。\n' : '')
               + '只新增 / 追加，不修改或删除已有行；写入后读回校验并记录推送历史。');
             if (!ok) return;
             busy = true;
@@ -10796,7 +10851,8 @@ function renderMusicTag(root) {
               doc_key: target.doc_key, tab_id: target.tab_id,
               days: Number(daysSel.value) || 30,
               accounts: accSel.value, dup_mode: dupSel.value,
-              keys: Array.from(selected), confirmed: true
+              keys: Array.from(selected), confirmed: true,
+              allow_new_options: allowNew
             }).then(function (data) {
               watchJob(jobHost2, data.job, function (job) {
                 busy = false;
@@ -10804,16 +10860,26 @@ function renderMusicTag(root) {
                 toast(result.summary || '上传完成',
                   result.failed_verify ? 'warning' : 'success');
                 if (jobHost2) {
-                  jobHost2.replaceChildren(h('div', {
-                    class: 'card', style: 'margin-top:8px'
-                  }, h('div', { class: 'muted small' }, result.summary || ''),
+                  var lines = [
+                    h('div', { class: 'muted small' }, result.summary || ''),
                     failList(result.blocked || []),
                     h('div', { class: 'muted small' },
                       '新增 ' + fmtNumber(result.added) + ' 条'
                       + (result.updated ? ' · 追加 ' + result.updated + ' 条' : '')
                       + (result.skipped ? ' · 跳过 ' + result.skipped + ' 条' : '')
                       + (result.missing_images
-                        ? ' · 缺图 ' + result.missing_images + ' 张' : ''))));
+                        ? ' · 缺图 ' + result.missing_images + ' 张' : ''))
+                  ];
+                  if ((result.created_options || []).length) {
+                    lines.push(h('div', { class: 'muted small' },
+                      '新建下拉选项：'
+                      + result.created_options.map(function (item) {
+                        return item.column + '（' + item.values.join('、') + '）';
+                      }).join('；')));
+                  }
+                  jobHost2.replaceChildren(h('div', {
+                    class: 'card', style: 'margin-top:8px'
+                  }, lines));
                 }
                 selected.clear();
                 runCompare();
@@ -10996,8 +11062,10 @@ function renderMusicTag(root) {
               h('span', { class: 'muted small' }, '时间'), daysSel,
               accSel, dupSel, compareBtn),
             h('div', { class: 'toolbar', style: 'margin-top:8px' },
-              refreshBtn, gateBadge, tsvBtn, uploadBtn, playlistBtn,
+              refreshBtn, gateBadge, tsvBtn, optBtn, uploadBtn, playlistBtn,
               h('span', { style: 'flex:1' }), selLabel),
+            optLabel,
+            optPanel,
             refreshInfo,
             h('div', { class: 'muted small', style: 'margin-top:4px' },
               '比对只读本地快照与本地采集数据；批量上传只限「官方动态」「直播记录」且仅新增，'

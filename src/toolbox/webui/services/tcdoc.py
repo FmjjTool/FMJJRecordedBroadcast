@@ -205,6 +205,9 @@ class TCDocService:
     def bridge_preview(self, payload: dict) -> dict:
         return _bridge_module().preview(payload)
 
+    def bridge_option_preview(self, payload: dict) -> dict:
+        return _bridge_module().option_preview(dict(payload or {}))
+
     def start_bridge_refresh(self) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
