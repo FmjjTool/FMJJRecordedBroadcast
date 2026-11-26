@@ -353,6 +353,9 @@ class MusicPlaylistPage(BasePage):
                 parts.append(f"{row['name']}：实验接口，可能失败（{row.get('note')}）")
             elif row["platform"] == "kugou":
                 parts.append("酷狗：云歌单需先登录酷狗 App（账号与登录 → 酷狗 → App扫码）")
+        netease_slot = service.login_slot_label("netease")
+        if netease_slot:
+            parts.append(f"网易云建单账号：{netease_slot}")
         return "；".join(parts)
 
     def _target_platforms(self) -> list[str]:
@@ -559,6 +562,9 @@ class MusicPlaylistPage(BasePage):
                     })
                     post_to_main(self._log, f"{plan.platform_name} 跳过：{exc}")
                     continue
+                slot_note = service.login_slot_label(plan.platform)
+                if slot_note:
+                    post_to_main(self._log, f"{plan.platform_name} 建单账号：{slot_note}")
                 journal = self._report_dir / f"journal_{plan.platform}.json"
                 try:
                     result = service.apply_plan(

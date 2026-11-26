@@ -730,7 +730,8 @@ def _qqgroup(cookie: str) -> dict:
 
 _VERIFIERS = {
     "bilibili": _bili, "douyin": _douyin, "weibo": _weibo, "acfun": _acfun,
-    "netease": _netease, "qq": _qq, "kuaishou": _kuaishou,
+    "netease": _netease, "netease_playlist": _netease, "qq": _qq,
+    "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
     "quark": _quark, "baidu": _baidu, "yun139": _yun139,

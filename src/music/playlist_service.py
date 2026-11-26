@@ -202,6 +202,16 @@ def get_login_jar(platform: str) -> dict[str, str]:
     return cookie_from_auth(platform)
 
 
+def login_slot_label(platform: str) -> str:
+    """建单实际使用的账号（网易云分权：歌单账号优先，未配置时用主账号）。"""
+    if (platform or "").strip().lower() != "netease":
+        return ""
+    from auth import netease_playlist_configured
+
+    return ("网易云（歌单创建）" if netease_playlist_configured()
+            else "网易云（会员下载）主账号")
+
+
 def capabilities() -> list[dict]:
     rows = []
     for platform, writer in WRITERS.items():

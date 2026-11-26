@@ -65,10 +65,20 @@ def parse_cookie_string(cookie: str) -> dict[str, str]:
 
 
 def cookie_from_auth(platform: str) -> dict[str, str]:
-    """通过统一管理接口只读获取当前有效登录态。"""
+    """通过统一管理接口只读获取当前有效登录态。
+
+    网易云分权：建歌单优先用「网易云（歌单）」账号，未单独登录时回落主账号；
+    会员下载始终用主账号（`auth.get_netease_cookie()`），两者互不影响。
+    """
     from auth import get_cookie
 
-    jar = parse_cookie_string(get_cookie(platform))
+    if (platform or "").strip().lower() == "netease":
+        from auth import get_netease_playlist_cookie
+
+        raw = get_netease_playlist_cookie()
+    else:
+        raw = get_cookie(platform)
+    jar = parse_cookie_string(raw)
     if not jar:
         raise AuthRequiredError("需要登录后才能创建合集", platform=platform, phase="auth")
     return jar

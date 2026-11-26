@@ -34,7 +34,8 @@ COOKIE_PLATFORMS = [
     ("acfun", "AcFun", False, True),
     ("douyin", "抖音", False, True),
     ("weibo", "微博", False, True),
-    ("netease", "网易云", True, False),
+    ("netease", "网易云（会员下载）", True, False),
+    ("netease_playlist", "网易云（歌单创建）", True, False),
     ("qq", "QQ音乐", True, True),
     ("kugou", "酷狗", False, True),
     ("kugou_lite", "酷狗概念版", True, False),
@@ -502,6 +503,7 @@ class CookieManagerDialog(QDialog):
             row.addWidget(self._btn("清除", lambda p=plat: self._clear(p), danger=True))
             w = QWidget()
             w.setLayout(row)
+            w.setProperty("platform", plat)
             w.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             self.container_layout.addWidget(w)
 
@@ -641,7 +643,9 @@ class CookieManagerDialog(QDialog):
             if not w:
                 continue
             labels = w.findChildren(QLabel)
-            if labels and labels[0].text() == auth.PLATFORM_NAMES.get(plat):
+            if w.property("platform") != plat:
+                continue
+            if labels:
                 lite_name = ""
                 if plat == "netease":
                     has = bool(auth.get_netease_cookie_stored().strip())
@@ -1547,8 +1551,8 @@ class CookieManagerDialog(QDialog):
         dlg.show()
 
     def _qr_login(self, plat):
-        if plat == "netease":
-            self._netease_qr()
+        if plat in ("netease", "netease_playlist"):
+            self._netease_qr(plat)
         elif plat == "bilibili":
             self._bilibili_qr()
         elif plat == "qq":
@@ -1821,9 +1825,15 @@ class CookieManagerDialog(QDialog):
         return (f"uin={musicid}; qqmusic_key={musickey}; qm_keyst={musickey}; "
                 f"tmeLoginType=1; wxuin={musicid};")
 
-    def _netease_qr(self):
+    def _netease_qr(self, slot: str = "netease"):
+        """网易云扫码登录；slot 区分会员下载账号与歌单创建账号。"""
         from netease.music_api import QRLoginManager
-        dlg, qr_label, status = self._qr_dialog("网易云扫码登录")
+
+        playlist = slot == "netease_playlist"
+        title = "网易云歌单账号扫码登录" if playlist else "网易云扫码登录"
+        saved = ("网易云歌单账号登录成功，Cookie 已保存（建歌单使用这个账号）"
+                 if playlist else "网易云登录成功，Cookie 已保存（下载 / 采集使用）")
+        dlg, qr_label, status = self._qr_dialog(title)
 
         def run():
             try:
@@ -1844,9 +1854,9 @@ class CookieManagerDialog(QDialog):
                     code, cookies = manager.check_qr_login(unikey)
                     if code == 803:
                         cookie_str = f"MUSIC_U={cookies.get('MUSIC_U', '')};os=pc;appver=8.9.70;"
-                        auth.set_cookie("netease", cookie_str)
-                        self._mark_relogged("netease")
-                        post_to_main(self._on_qr_success, dlg, "网易云登录成功，Cookie 已保存")
+                        auth.set_cookie(slot, cookie_str)
+                        self._mark_relogged(slot)
+                        post_to_main(self._on_qr_success, dlg, saved)
                         return
                     elif code == 801:
                         post_to_main(status.setText, "等待扫码...")

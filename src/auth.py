@@ -80,6 +80,8 @@ COOKIE_TTL_DAYS = {
     # AcFun：acPasstoken 长期有效，失效只能重新登录，不按天数判过期
     "acfun": 0,
     "qq": 0,
+    # 网易云歌单账号：只用于建歌单，与会员下载账号分开
+    "netease_playlist": 0,
     "kugou": 0,
     "kuwo": 0,
     "5sing": 0,
@@ -107,6 +109,7 @@ PLATFORM_NAMES = {
     "douyin": "抖音",
     "weibo": "微博",
     "netease": "网易云",
+    "netease_playlist": "网易云（歌单）",
     "qq": "QQ音乐",
     "kugou": "酷狗",
     "kugou_lite": "酷狗概念版",
@@ -268,6 +271,25 @@ def get_netease_cookie_stored() -> str:
     """已存储的网易云 Cookie（不看总开关、不校验过期）。
     仅供登录状态展示/用户名探测使用；采集请走 get_netease_cookie()。"""
     return load_cookies().get("netease", "")
+
+
+NETEASE_DOWNLOAD_SLOT = "netease"           # 会员下载 / 采集
+NETEASE_PLAYLIST_SLOT = "netease_playlist"  # 歌单创建（分权账号）
+
+
+def get_netease_playlist_cookie() -> str:
+    """歌单创建专用账号的 Cookie。
+
+    单独登录过「网易云（歌单）」就用它；没有配置时回落到主账号，
+    保持只有一个账号时的原有行为（调用方会在日志里注明用的是哪个账号）。
+    """
+    playlist = get_cookie(NETEASE_PLAYLIST_SLOT)
+    return playlist or get_cookie(NETEASE_DOWNLOAD_SLOT)
+
+
+def netease_playlist_configured() -> bool:
+    """是否单独登录了歌单账号（不看总开关，只看有没有存过）。"""
+    return bool((load_cookies().get(NETEASE_PLAYLIST_SLOT) or "").strip())
 
 
 def get_cookie_age(platform: str) -> str:

@@ -338,6 +338,9 @@ def apply(payload: dict, on_log=None, is_cancelled=None) -> dict:
             })
             log(f"{plan.platform_name} 跳过：{exc}")
             continue
+        slot_note = service.login_slot_label(plan.platform)
+        if slot_note:
+            log(f"{plan.platform_name} 建单账号：{slot_note}")
         journal = report_dir / f"journal_{plan.platform}.json"
         try:
             result = service.apply_plan(
