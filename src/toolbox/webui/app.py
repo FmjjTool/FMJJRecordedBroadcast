@@ -23,6 +23,7 @@ from toolbox.webui.services.rename_batch import RenameBatchService
 from toolbox.webui.services.tickets import TicketsService
 from toolbox.webui.services.netdisk import NetdiskService
 from toolbox.webui.services.publish import PublishService
+from toolbox.webui.services.shopping import ShoppingService
 from toolbox.webui.services.modules import ModuleService
 from toolbox.webui.services.offline import OfflineService
 from toolbox.webui.services.record import RecordService
@@ -50,6 +51,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     artifacts = ArtifactService(jobs)
     netdisk = NetdiskService(jobs)
     publish = PublishService(jobs)
+    shopping = ShoppingService(jobs)
     localwiki = LocalWikiService()
     livestream_summary = LivestreamSummaryService()
     image_sorter = ImageSorterService()
@@ -373,6 +375,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_tickets_export(req):
         return tickets.start_export(dict(req.json or {}))
     server.post("/api/tickets/export", start_tickets_export)
+
+    def start_shopping_parse(req):
+        return shopping.start_parse(dict(req.json or {}))
+    server.post("/api/tools/shopping/parse", start_shopping_parse)
+
 
 
     server.get("/api/music-playlist", lambda req: music_playlist.overview())

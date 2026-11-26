@@ -7766,10 +7766,97 @@
     });
     root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
       h('div', { class: 'muted small' },
-        '浏览桌面端解析后保存的商品目录（主图 / SKU / 详情图）；'
-        + '解析与导出在桌面端。')));
+        '可直接解析淘宝店铺 / 商品、抖音商品分享文案与 B站小店；'
+        + '下方列表浏览已保存的商品目录（主图 / SKU / 详情图）。')));
+    root.appendChild(buildShoppingParse(load));
     root.appendChild(tabs);
     root.appendChild(host);
+
+    function buildShoppingParse(reload) {
+      var platformSel = h('select', { class: 'select' },
+        h('option', { value: 'taobao' }, '淘宝（店铺 / 商品）'),
+        h('option', { value: 'douyin' }, '抖音商品'),
+        h('option', { value: 'bili' }, 'B站小店'));
+      var input = h('textarea', {
+        class: 'textarea', rows: '3',
+        placeholder: '店铺 / 商品链接或分享文案（抖音可一次多行/多条分享）'
+      });
+      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始解析');
+      var jobHost = h('div');
+      var resultHost = h('div', { style: 'margin-top:8px' });
+      var running = false;
+      btn.addEventListener('click', function () {
+        if (running) return;
+        if (!input.value.trim()) {
+          toast('请粘贴链接或分享文案', 'warning');
+          return;
+        }
+        running = true;
+        btn.disabled = true;
+        btn.textContent = '解析中…';
+        post('/api/tools/shopping/parse', {
+          platform: platformSel.value, text: input.value
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            running = false;
+            btn.disabled = false;
+            btn.textContent = '开始解析';
+            var outcome = job.result || {};
+            toast(outcome.summary || '解析完成',
+              outcome.failures && outcome.failures.length ? 'warning' : 'success');
+            var items = outcome.items || [];
+            if (!items.length) {
+              resultHost.replaceChildren(empty('没有解析到商品。'));
+              reload();
+              return;
+            }
+            var head = h('tr', null, h('th', null, '商品'),
+              h('th', null, '价格'), h('th', { class: 'num' }, '销量'),
+              h('th', null, '链接'));
+            var body = h('tbody');
+            items.forEach(function (item) {
+              body.appendChild(h('tr', null,
+                h('td', { class: 'ellipsis' }, item.title || '-'),
+                h('td', null, item.price || '-'),
+                h('td', { class: 'num' }, item.sales || '-'),
+                h('td', { class: 'ellipsis' }, item.url
+                  ? h('a', { href: item.url, target: '_blank',
+                    rel: 'noopener noreferrer' }, item.url) : '-')));
+            });
+            resultHost.replaceChildren(
+              h('div', { class: 'muted small', style: 'margin-bottom:6px' },
+                (outcome.shop && outcome.shop.name
+                  ? outcome.shop.name + ' · ' : '') + items.length + ' 件商品'),
+              h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' },
+                  h('thead', null, head), body)));
+            reload();
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              btn.disabled = false;
+              btn.textContent = '开始解析';
+              if (job.status === 'error') {
+                toast('解析失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          btn.disabled = false;
+          btn.textContent = '开始解析';
+          toast('解析失败：' + error.message, 'error');
+        });
+      });
+      return h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '解析商品'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '平台'), platformSel, btn,
+          h('span', { class: 'muted small' },
+            '淘宝需要登录态；抖音 / B站按公开接口解析。')),
+        input, resultHost, jobHost);
+    }
 
     function preview(kind, rel) {
       var overlay = h('div', { class: 'preview-overlay' });
