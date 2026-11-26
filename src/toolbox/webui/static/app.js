@@ -9657,8 +9657,20 @@ function renderMusicTag(root) {
       var bridge = results[1] || {};
       host.replaceChildren();
       var connected = !!bridge.connected;
-      var platforms = (connected && bridge.platforms
-        && bridge.platforms.length) ? bridge.platforms : (data.platforms || []);
+      // 以本地配置（含 0 主播的六个平台）为底，连着桌面控制桥时用它的主播覆盖
+      var platforms = (data.platforms || []).map(function (item) {
+        return { key: item.key, name: item.name, anchors: item.anchors || [] };
+      });
+      var byKey = {};
+      platforms.forEach(function (item) { byKey[item.key] = item; });
+      ((bridge.platforms) || []).forEach(function (item) {
+        if (!item || !item.key) return;
+        if (byKey[item.key]) byKey[item.key].anchors = item.anchors || [];
+        else {
+          byKey[item.key] = { key: item.key, name: item.name, anchors: item.anchors || [] };
+          platforms.push(byKey[item.key]);
+        }
+      });
       if (!platforms.length) {
         host.appendChild(empty(
           '尚未配置录制主播。请先在桌面端「直播录制」页添加主播。'));
@@ -9808,6 +9820,171 @@ function renderMusicTag(root) {
         renderRecord(host);
       });
 
+      var addBtn = h('button', {
+        class: 'btn', type: 'button', disabled: !connected
+      }, '添加主播');
+      var importBtn = h('button', {
+        class: 'btn', type: 'button', disabled: !connected
+      }, '批量导入');
+
+      addBtn.addEventListener('click', function () {
+        if (!connected) {
+          toast('需要桌面端保持运行，才能通过控制桥写入主播', 'warning');
+          return;
+        }
+        var platform = currentPlatform();
+        var roomInput = h('input', {
+          class: 'input grow', placeholder: '房间号或直播间链接'
+        });
+        var nameInput = h('input', {
+          class: 'input', placeholder: '主播名称（可留空，识别后自动填）',
+          style: 'min-width:220px'
+        });
+        var remarkInput = h('input', {
+          class: 'input', placeholder: '备注（可选）', style: 'min-width:160px'
+        });
+        var monCb = h('input', { type: 'checkbox', checked: true });
+        var recCb = h('input', { type: 'checkbox' });
+        var infoBox = h('div', {
+          class: 'muted small', style: 'margin-top:8px'
+        }, '填房间号后可点「识别」补全名称与开播状态；不识别也能直接添加。');
+        var inspectBtn = h('button', { class: 'btn', type: 'button' }, '识别');
+        var okBtn = h('button', {
+          class: 'btn primary', type: 'button'
+        }, '添加');
+        var overlay = h('div', { class: 'preview-overlay' });
+        overlay.addEventListener('click', function (event) {
+          if (event.target === overlay) overlay.remove();
+        });
+
+        inspectBtn.addEventListener('click', function () {
+          var room = roomInput.value.trim();
+          if (!room) {
+            toast('请先填写房间号或直播间链接', 'warning');
+            return;
+          }
+          inspectBtn.disabled = true;
+          infoBox.textContent = '识别中…';
+          post('/api/record/inspect', {
+            platform: platform.key, room: room
+          }).then(function (info) {
+            inspectBtn.disabled = false;
+            roomInput.value = info.room || room;
+            if (!nameInput.value.trim() && info.name) {
+              nameInput.value = info.name;
+            }
+            infoBox.textContent = '识别成功：' + (info.name || '-')
+              + ' · ' + (info.live ? '直播中' : '未开播')
+              + (info.online ? ' · 在线 ' + fmtNumber(info.online) : '')
+              + (info.title ? ' · ' + info.title : '')
+              + (info.qualities && info.qualities.length
+                ? ' · 清晰度：' + info.qualities.join(' / ') : '')
+              + (info.stream ? '' : (' · ' + (info.error || '未取到直播流')));
+          }).catch(function (error) {
+            inspectBtn.disabled = false;
+            infoBox.textContent = '识别失败：' + error.message
+              + '（可以只填房间号直接添加）';
+          });
+        });
+
+        okBtn.addEventListener('click', function () {
+          var room = roomInput.value.trim();
+          if (!room) {
+            toast('请先填写房间号或直播间链接', 'warning');
+            return;
+          }
+          okBtn.disabled = true;
+          post('/api/record/add', {
+            platform: platform.key, room: room,
+            name: nameInput.value.trim(),
+            remark: remarkInput.value.trim(),
+            monitoring: monCb.checked,
+            want_record: recCb.checked
+          }).then(function (result) {
+            overlay.remove();
+            toast(result.message || '已添加', 'success');
+            renderRecord(host);
+          }).catch(function (error) {
+            okBtn.disabled = false;
+            toast('添加失败：' + error.message, 'error');
+          });
+        });
+
+        overlay.appendChild(h('div', { class: 'preview-box' },
+          h('div', { class: 'preview-caption' },
+            h('span', null, '添加主播 · ' + (platform.name || platform.key)),
+            h('button', {
+              class: 'btn mini', type: 'button',
+              onclick: function () { overlay.remove(); }
+            }, '关闭')),
+          h('div', { class: 'preview-body' },
+            h('div', { class: 'toolbar' }, roomInput, inspectBtn),
+            h('div', { class: 'toolbar', style: 'margin-top:8px' }, nameInput),
+            h('div', { class: 'toolbar', style: 'margin-top:8px' }, remarkInput),
+            h('div', { class: 'toolbar', style: 'margin-top:8px' },
+              h('label', { class: 'check' }, monCb, ' 加入监控（检测开播）'),
+              h('label', { class: 'check' }, recCb, ' 开播即录')),
+            infoBox,
+            h('div', { class: 'muted small', style: 'margin-top:8px' },
+              '添加会写入桌面端的录制配置（桌面为唯一写入方），'
+              + '需要桌面程序保持运行。'),
+            h('div', { class: 'toolbar', style: 'margin-top:10px' },
+              h('span', { style: 'flex:1' }), okBtn))));
+        document.body.appendChild(overlay);
+        roomInput.focus();
+      });
+
+      importBtn.addEventListener('click', function () {
+        if (!connected) {
+          toast('需要桌面端保持运行，才能通过控制桥写入主播', 'warning');
+          return;
+        }
+        var platform = currentPlatform();
+        var area = h('textarea', {
+          class: 'textarea', rows: '8',
+          placeholder: '每行一个房间号或直播间链接',
+          style: 'width:100%;font-family:monospace;font-size:12px'
+        });
+        var okBtn = h('button', {
+          class: 'btn primary', type: 'button'
+        }, '导入');
+        var overlay = h('div', { class: 'preview-overlay' });
+        overlay.addEventListener('click', function (event) {
+          if (event.target === overlay) overlay.remove();
+        });
+        okBtn.addEventListener('click', function () {
+          if (!area.value.trim()) {
+            toast('请先粘贴房间号', 'warning');
+            return;
+          }
+          okBtn.disabled = true;
+          post('/api/record/import', {
+            platform: platform.key, text: area.value
+          }).then(function (result) {
+            overlay.remove();
+            toast(result.message || '已导入', 'success');
+            renderRecord(host);
+          }).catch(function (error) {
+            okBtn.disabled = false;
+            toast('导入失败：' + error.message, 'error');
+          });
+        });
+        overlay.appendChild(h('div', { class: 'preview-box' },
+          h('div', { class: 'preview-caption' },
+            h('span', null, '批量导入 · ' + (platform.name || platform.key)),
+            h('button', {
+              class: 'btn mini', type: 'button',
+              onclick: function () { overlay.remove(); }
+            }, '关闭')),
+          h('div', { class: 'preview-body' }, area,
+            h('div', { class: 'muted small', style: 'margin-top:8px' },
+              '重复或无法识别的行会跳过；导入后默认加入监控。'),
+            h('div', { class: 'toolbar', style: 'margin-top:10px' },
+              h('span', { style: 'flex:1' }), okBtn))));
+        document.body.appendChild(overlay);
+        area.focus();
+      });
+
       function draw() {
         var rows = visibleRows();
         updateInfo();
@@ -9917,10 +10094,12 @@ function renderMusicTag(root) {
 
       host.appendChild(h('div', { class: 'toolbar' },
         monitorBtn, stopRecordBtn, stopMonitorBtn,
-        h('span', { class: 'spacer' }), selectAllBtn, selectNoneBtn));
+        h('span', { class: 'spacer' }), addBtn, importBtn,
+        selectAllBtn, selectNoneBtn));
       host.appendChild(h('div', { class: 'toolbar' },
         h('span', { class: 'muted small' },
-          '未勾选时批量操作作用于本平台全部主播；添加 / 批量修改主播、录制设置、推送设置、FLV 修复、写时间码与弹幕姬在桌面端。'),
+          '未勾选时批量操作作用于本平台全部主播；批量修改、录制设置、推送设置、'
+          + 'FLV 修复、写时间码与弹幕姬仍在桌面端。'),
         h('span', { style: 'flex:1' }), refreshBtn));
       host.appendChild(infoBar);
       host.appendChild(tableHost);

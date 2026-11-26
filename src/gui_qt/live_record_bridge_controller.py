@@ -39,13 +39,15 @@ class DesktopRecordController:
                               "anchors": anchors})
         return {"open": True, "platforms": platforms, "note": ""}
 
-    def action(self, platform: str, room: str, action: str) -> dict:
+    def action(self, platform: str, room: str, action: str,
+               extra: dict | None = None) -> dict:
         result: dict = {"ok": False, "message": "操作失败"}
         done = threading.Event()
 
         def run():
             try:
-                result.update(self._do_action(platform, room, action))
+                result.update(self._do_action(platform, room, action,
+                                              extra or {}))
             except Exception as exc:  # noqa: BLE001 - 回传桌面错误
                 result.update(ok=False, message=str(exc)[:300])
             finally:
@@ -57,16 +59,24 @@ class DesktopRecordController:
             return {"ok": False, "message": "桌面主线程响应超时"}
         return result
 
-    def _do_action(self, platform: str, room: str, action: str) -> dict:
+    def _do_action(self, platform: str, room: str, action: str,
+                   extra: dict | None = None) -> dict:
         from gui_qt.live_record_window import open_live_record_window
 
+        extra = extra or {}
         win = open_live_record_window(self._app, platform=platform, room=room)
         pane = win.panes.get(platform)
         if pane is None:
             return {"ok": False, "message": "平台不存在"}
         manager = pane.manager
+        if action == "import_anchors":
+            return _import_anchors(pane, manager, platform, extra)
         anchor = next((item for item in manager.anchors
                        if str(item.room) == str(room)), None)
+        if action == "add_anchor":
+            if anchor is not None:
+                return {"ok": False, "message": "该房间已在列表中"}
+            return _add_anchor(pane, manager, platform, room, extra)
         if anchor is None:
             return {"ok": False, "message": "主播不存在"}
         if action == "start_monitor":
@@ -97,6 +107,77 @@ class DesktopRecordController:
         except Exception:
             pass
         return {"ok": True, "message": message}
+
+
+def _add_anchor(pane, manager, platform: str, room: str,
+                extra: dict) -> dict:
+    """新增一个主播：与桌面「添加主播」同样的落库路径（追加 + 刷新 + 保存）。"""
+    anchor = live_record.Anchor(
+        platform=platform, room=room,
+        name=str(extra.get("name") or ""),
+        monitoring=bool(extra.get("monitoring", True)),
+        remark=str(extra.get("remark") or ""),
+        quality=str(extra.get("quality") or ""),
+        quality_label=str(extra.get("quality_label") or ""),
+        stop_minutes=int(extra.get("stop_minutes") or 0))
+    anchor._want_record = bool(extra.get("want_record"))
+    manager.anchors.append(anchor)
+    if anchor.monitoring and not manager.running:
+        try:
+            manager.start_monitor()
+        except Exception:  # noqa: BLE001 - 监控起不来不影响已添加
+            pass
+    if anchor._want_record:
+        try:
+            manager.start_record(anchor)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        pane.model.refresh_all()
+        pane.save()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "room": room,
+            "message": "已添加：%s（%s）" % (anchor.name or room, room)}
+
+
+def _import_anchors(pane, manager, platform: str, extra: dict) -> dict:
+    """批量导入：每行一个房间号或直播间链接，重复的跳过。"""
+    from toolbox.live_room_resolver import parse_room_input
+
+    lines = [line.strip() for line in str(extra.get("text") or "").splitlines()
+             if line.strip()]
+    if not lines:
+        return {"ok": False, "message": "请填写要导入的房间号或链接"}
+    existing = {str(item.room) for item in manager.anchors}
+    added = skipped = 0
+    for line in lines:
+        room = parse_room_input(platform, line)
+        if not room or room in existing:
+            skipped += 1
+            continue
+        anchor = live_record.Anchor(platform=platform, room=room,
+                                    monitoring=True)
+        anchor._want_record = False
+        manager.anchors.append(anchor)
+        existing.add(room)
+        added += 1
+    if not added:
+        return {"ok": False, "added": 0, "skipped": skipped,
+                "message": "没有新增（全部重复或无法识别）"}
+    if not manager.running:
+        try:
+            manager.start_monitor()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        pane.model.refresh_all()
+        pane.save()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "added": added, "skipped": skipped,
+            "message": "新增 %d 个房间%s" % (
+                added, ("，跳过 %d" % skipped) if skipped else "")}
 
 
 def _config_platforms() -> list[dict]:

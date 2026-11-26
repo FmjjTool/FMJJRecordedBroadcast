@@ -14,7 +14,8 @@ from pathlib import Path
 from toolbox.config_manager import get_app_root
 
 BRIDGE_FILE = "webui_desktop_bridge.json"
-ACTIONS = ("start_record", "stop_record", "start_monitor", "stop_monitor")
+ACTIONS = ("start_record", "stop_record", "start_monitor", "stop_monitor",
+           "add_anchor", "import_anchors")
 
 
 def bridge_info() -> dict | None:
@@ -71,7 +72,8 @@ def status() -> dict:
                 "error": f"桌面控制通道不可用：{str(exc)[:200]}"}
 
 
-def action(platform: str, room: str, name: str) -> dict:
+def action(platform: str, room: str, name: str,
+           extra: dict | None = None) -> dict:
     if name not in ACTIONS:
         raise ValueError("不支持的操作")
     info = bridge_info()
@@ -80,7 +82,8 @@ def action(platform: str, room: str, name: str) -> dict:
     try:
         return _request(info["port"], "POST", "/action", info["token"],
                         body={"platform": platform, "room": room,
-                              "action": name}, timeout=25)
+                              "action": name, "extra": extra or {}},
+                        timeout=25)
     except ValueError:
         raise
     except Exception as exc:  # noqa: BLE001

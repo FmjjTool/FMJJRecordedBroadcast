@@ -153,6 +153,18 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return record.control(dict(req.json or {}))
     server.post("/api/record/control", record_control)
 
+    def record_inspect(req):
+        return record.inspect(dict(req.json or {}))
+    server.post("/api/record/inspect", record_inspect)
+
+    def record_add(req):
+        return record.add_anchor(dict(req.json or {}))
+    server.post("/api/record/add", record_add)
+
+    def record_import(req):
+        return record.import_anchors(dict(req.json or {}))
+    server.post("/api/record/import", record_import)
+
     server.get("/api/modules", lambda req: modules.list())
     server.get_re(r"/api/modules/(?P<key>[a-z_]+)",
                   lambda req, key: modules.detail(key))

@@ -20,7 +20,8 @@ from toolbox.config_manager import get_app_root
 _log = logging.getLogger(__name__)
 
 BRIDGE_FILE = "webui_desktop_bridge.json"
-_ACTIONS = {"start_record", "stop_record", "start_monitor", "stop_monitor"}
+_ACTIONS = {"start_record", "stop_record", "start_monitor", "stop_monitor",
+            "add_anchor", "import_anchors"}
 
 
 class DesktopBridge:
@@ -73,10 +74,11 @@ class DesktopBridge:
     def status(self) -> dict:
         return self._controller.status()
 
-    def action(self, platform: str, room: str, action: str) -> dict:
+    def action(self, platform: str, room: str, action: str,
+               extra: dict | None = None) -> dict:
         if action not in _ACTIONS:
             return {"ok": False, "message": "不支持的操作"}
-        return self._controller.action(platform, room, action)
+        return self._controller.action(platform, room, action, extra or {})
 
     def _info(self) -> dict:
         httpd = self._httpd
@@ -152,11 +154,14 @@ def _make_handler(bridge: DesktopBridge):
             platform = str(payload.get("platform") or "")
             room = str(payload.get("room") or "")
             action = str(payload.get("action") or "")
-            if not platform or not room:
+            extra = payload.get("extra")
+            if not isinstance(extra, dict):
+                extra = {}
+            if not platform or (not room and action != "import_anchors"):
                 self._send(400, {"error": "缺少平台或房间号"})
                 return
             try:
-                self._send(200, bridge.action(platform, room, action))
+                self._send(200, bridge.action(platform, room, action, extra))
             except Exception as exc:
                 self._send(500, {"error": str(exc)[:300]})
 

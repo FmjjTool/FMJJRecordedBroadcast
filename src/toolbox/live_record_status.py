@@ -13,18 +13,17 @@ def overview() -> dict:
     state = live_record.load_state() or {}
     platforms_cfg = state.get("platforms") or {}
     order = list(live_record.PLATFORMS)
-    platform_rows = []
+    configured: dict[str, list] = {}
     anchors_total = 0
     monitoring = 0
     want_record = 0
     for key, data in platforms_cfg.items():
-        info = live_record.PLATFORMS.get(key) or {}
         anchors = []
         for item in (data or {}).get("anchors") or []:
             item = item or {}
             anchor = {
                 "platform": key,
-                "platform_name": info.get("name") or key,
+                "platform_name": (live_record.PLATFORMS.get(key) or {}).get("name") or key,
                 "room": str(item.get("room") or ""),
                 "name": item.get("name") or "",
                 "title": item.get("title") or "",
@@ -41,23 +40,26 @@ def overview() -> dict:
             anchors_total += 1
             monitoring += int(anchor["monitoring"])
             want_record += int(anchor["want_record"])
-        if anchors:
-            platform_rows.append({
-                "key": key,
-                "name": info.get("name") or key,
-                "anchors": anchors,
-            })
-    platform_rows.sort(key=lambda row: (
-        order.index(row["key"]) if row["key"] in order else len(order),
-        row["key"]))
+        configured[key] = anchors
+    # 六个平台都列出来（含 0 个主播的），Web 端平台切换与桌面一致
+    keys = order + sorted(set(configured) - set(order))
+    platform_rows = []
+    for key in keys:
+        info = live_record.PLATFORMS.get(key) or {}
+        platform_rows.append({
+            "key": key,
+            "name": info.get("name") or key,
+            "anchors": configured.get(key, []),
+        })
     return {
         "read_only": True,
         "platforms": platform_rows,
         "summary": {
-            "platforms": len(platform_rows),
+            "platforms": len([row for row in platform_rows if row["anchors"]]),
             "anchors": anchors_total,
             "monitoring": monitoring,
             "want_record": want_record,
         },
-        "note": "当前为只读：实时录制状态、在线人数与运行日志请在桌面端录制页查看。",
+        "note": "实时录制状态、在线人数与运行日志请在桌面端录制页查看；"
+                "平台与主播清单来自已保存配置，最多每秒刷新一次。",
     }
