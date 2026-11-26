@@ -6875,7 +6875,7 @@ function renderLivestreamSummary(root) {
 
         function showSummary(lines, path) {
           var summary = Array.isArray(lines) && lines.length ? lines : [path || ''];
-          infoHost.replaceChildren(summary.map(function (line) {
+          infoHost.replaceChildren(...summary.map(function (line) {
             return h('div', { class: 'video-metadata-line', style: 'overflow-wrap:anywhere' },
               String(line || ''));
           }));

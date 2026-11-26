@@ -79,6 +79,9 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/cover/generate", lambda req: cover.start_generate(req.json))
 
     server.get("/api/certificates/history", lambda req: certificates.overview())
+    server.post("/api/certificates/evidence/prepare", lambda req: certificates.prepare())
+    server.get("/api/certificates/evidence/progress", lambda req: certificates.progress(req.q("export_id")))
+    server.post("/api/certificates/evidence/cancel", lambda req: certificates.cancel(req.body("export_id")))
 
     def export_certificate_evidence(req):
         result = certificates.export(req.json)
