@@ -1,11 +1,12 @@
-"""WebUI 粉丝群（QQ 群订阅列表）只读数据（L3）。
+"""WebUI 粉丝群用例（L3，Qt-free）。
 
-读取 QQ 群订阅目录与人数历史（本地 SQLite），不修改订阅、不触发刷新 / 下载。
+复用 QQ 群服务读取目录 / 历史、刷新与取消订阅；订阅与历史仍由既有 owner 写入。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 def _service():
@@ -13,23 +14,103 @@ def _service():
     return qq_groups_service
 
 
+def _qq_public_row(row) -> dict:
+    """只输出展示字段，分享输入与本地头像路径不离开服务端。"""
+    return {
+        "no": row.no,
+        "name": row.name,
+        "members": row.member_count,
+        "change": row.delta_text,
+        "status": row.status,
+        "source": {"share": "分享链接", "login": "群号"}.get(row.source, "-"),
+        "updated": row.fetched_at,
+        "has_avatar": bool(row.avatar_path),
+        "subscribed": bool(row.share_url),
+    }
+
+
 def overview() -> dict:
-    service = _service()
-    groups = []
-    for row in service.catalog():
-        source = {"share": "分享链接", "login": "群号"}.get(row.source, "-")
-        groups.append({
-            "no": row.no,
-            "name": row.name,
-            "members": row.member_count,
-            "change": row.delta_text,
-            "status": row.status,
-            "source": source,
-            "updated": row.fetched_at,
-            "has_avatar": bool(row.avatar_path),
-        })
+    groups = [_qq_public_row(row) for row in _service().catalog()]
     return {"groups": groups, "total": len(groups),
-            "note": "只读：QQ 群订阅列表与人数历史；订阅、刷新、导出与头像下载仍在桌面端。"}
+            "subscribed_count": sum(row["subscribed"] for row in groups),
+            "note": "QQ群支持查询订阅、刷新、取消订阅、人数历史、导出与头像下载；取消订阅保留历史和头像。"}
+
+
+def _qq_refresh_error(message: str) -> str:
+    """平台异常可能含链接、路径或登录信息，只返回固定类别提示。"""
+    text = str(message or "")
+    if re.search(r"登录|认证|票据|cookie|token|credential|authorization", text, re.I):
+        return "需要登录或登录状态已失效"
+    if re.search(r"超时|timeout|timed out", text, re.I):
+        return "请求超时，请稍后重试"
+    status = re.search(r"\bHTTP\s*(\d{3})\b", text, re.I)
+    if status:
+        return f"读取群资料失败（HTTP {status.group(1)}）"
+    return "刷新失败，请稍后重试"
+
+
+def qq_refresh(payload: dict | None = None, on_log=None, is_cancelled=None,
+               on_progress=None) -> dict:
+    """刷新全部 QQ 群订阅；取消时保留已完成的历史记录和部分结果。"""
+    service = _service()
+    total = sum(bool(row.share_url) for row in service.catalog())
+    if not total:
+        raise ValueError("还没有已订阅的QQ群，请先查询并订阅")
+
+    class CancelProbe:
+        def is_set(self):
+            return bool(is_cancelled and is_cancelled())
+
+    cancel = CancelProbe()
+
+    def progress(index, count, label):
+        message = f"刷新QQ群 {index}/{count}：{label}"
+        if on_log:
+            on_log(message)
+        if on_progress:
+            on_progress((index - 1) / max(count, 1), message)
+
+    if cancel.is_set():
+        result = {"total": total, "ok": 0, "errors": [], "results": [], "cancelled": True}
+    else:
+        try:
+            result = service.refresh_all(progress=progress, cancel=cancel)
+        except Exception as exc:  # noqa: BLE001 - 不向网页透传存储 / 平台内部信息
+            raise ValueError(_qq_refresh_error(str(exc))) from exc
+    rows = [_qq_public_row(row) for row in result["results"]]
+    errors = [{"name": str(name), "error": _qq_refresh_error(message)}
+              for name, message in result["errors"]]
+    total, ok = int(result["total"]), len(rows)
+    cancelled = bool(result["cancelled"] or cancel.is_set())
+    if cancelled:
+        summary = f"刷新已取消，已完成 {ok}/{total} 个群，已完成记录已保留"
+    else:
+        summary = f"已刷新 {ok}/{total} 个群"
+    if errors:
+        summary += f"，失败 {len(errors)} 个"
+    if on_progress:
+        on_progress((ok + len(errors)) / max(total, 1), summary)
+    return {"total": total, "ok": ok, "errors": errors, "results": rows,
+            "cancelled": cancelled, "summary": summary}
+
+
+def qq_remove(payload: dict) -> dict:
+    """仅取消订阅，不删除人数历史、头像或任何平台资料。"""
+    if payload.get("confirmed") is not True:
+        raise ValueError("取消订阅需要确认")
+    group_no = str(payload.get("no") or "").strip()
+    if not re.fullmatch(r"[0-9]{5,12}", group_no):
+        raise ValueError("请输入有效的QQ群号")
+    service = _service()
+    row = next((item for item in service.catalog() if item.no == group_no), None)
+    if row is None:
+        raise ValueError("QQ群不存在，请刷新列表后重试")
+    try:
+        removed = bool(service.remove(group_no)) if row.share_url else False
+    except Exception as exc:  # noqa: BLE001 - 不透传存储路径等内部信息
+        raise ValueError("取消订阅失败，请稍后重试") from exc
+    summary = "已取消订阅，人数历史与头像已保留" if removed else "该群未订阅，人数历史与头像已保留"
+    return {"removed": removed, "group_no": group_no, "summary": summary}
 
 
 def history(group_no: str, limit: int = 200) -> dict:
