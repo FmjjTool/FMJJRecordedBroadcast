@@ -208,6 +208,33 @@ class TCDocService:
     def bridge_option_preview(self, payload: dict) -> dict:
         return _bridge_module().option_preview(dict(payload or {}))
 
+    def promo_status(self) -> dict:
+        return _image_module().status()
+
+    def promo_preview(self, payload: dict) -> dict:
+        payload = payload or {}
+        try:
+            days = int(payload.get("days") or 365)
+        except (TypeError, ValueError):
+            days = 365
+        try:
+            limit = int(payload.get("limit") or 200)
+        except (TypeError, ValueError):
+            limit = 200
+        return _image_module().preview(days, str(payload.get("query") or ""),
+                                       limit)
+
+    def promo_apply(self, payload: dict) -> dict:
+        payload = payload or {}
+        keys = payload.get("keys")
+        if not isinstance(keys, list):
+            raise ValueError("活动清单格式错误")
+        try:
+            days = int(payload.get("days") or 365)
+        except (TypeError, ValueError):
+            days = 365
+        return _image_module().apply(keys, days, bool(payload.get("confirmed")))
+
     def start_bridge_refresh(self) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
@@ -314,6 +341,11 @@ def _bridge_module():
 def _edit_module():
     from toolbox import webui_tcdoc_edit
     return webui_tcdoc_edit
+
+
+def _image_module():
+    from toolbox import webui_tcdoc_image
+    return webui_tcdoc_image
 
 
 def _row_dict(row) -> dict:

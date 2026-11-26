@@ -1618,33 +1618,15 @@ class TcDocBridgePanel(QWidget):
     @staticmethod
     def _filter_event_append_records(records: list[dict], client) -> list[dict]:
         """已存在活动只保留还有本地图片可追加的行；已补全的不再展示。"""
-        from toolbox.tcdoc import field_maps
         from toolbox.tcdoc import import_pending as pending
 
         existing = [record for record in records if record.get("_existing")]
         if not existing:
             return records
-        doc_key, tab_id = client.doc_key, client.tab_id
-        live = pending._event_live_index(client.get_records(), doc_key, tab_id)
-        promo_title = field_maps.target(doc_key, tab_id, "宣传图") or "宣传图"
-        kept = []
-        for record in existing:
-            row = live.get(record["key"])
-            if row is None:
-                record["blocked"] = "目标活动行已不存在，请重新比对"
-                kept.append(record)
-                continue
-            values = row.get("values") or {}
-            present = set(pending._image_titles(values, promo_title))
-            missing = [image for image in record.get("_images") or []
-                       if image.upload_name not in present]
-            if not missing:
-                continue
-            record["_images"] = missing
-            record["images"] = [str(image.path) for image in missing]
-            record["_record_id"] = str(row.get("recordID") or "")
-            record["_existing_images"] = len(present)
-            kept.append(record)
+        live = pending._event_live_index(client.get_records(), client.doc_key,
+                                         client.tab_id)
+        kept = pending.append_candidates(existing, live, client.doc_key,
+                                         client.tab_id)
         fresh = [record for record in records if not record.get("_existing")]
         return fresh + kept
 

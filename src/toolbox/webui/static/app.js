@@ -10515,7 +10515,7 @@ function renderMusicTag(root) {
           ['daily', '历史记录'], ['snapshot', '采集明细'],
           ['revision', '修订记录'], ['members', '成员名单'],
           ['docs', '文档管理'], ['writeback', '映射回写'],
-          ['edit', '修改 / 删除']
+          ['edit', '修改 / 删除'], ['promo', '宣传图追加']
         ];
         TABS.forEach(function (item) {
           tabs.appendChild(h('button', {
@@ -10558,6 +10558,7 @@ function renderMusicTag(root) {
           else if (state.tcdoc.tab === 'docs') renderDocsTab();
           else if (state.tcdoc.tab === 'writeback') renderWritebackTab();
           else if (state.tcdoc.tab === 'edit') renderTcdocEdit(tabHost);
+          else if (state.tcdoc.tab === 'promo') renderTcdocPromo(tabHost);
           else renderBridgeTab();
         }
 
@@ -11417,6 +11418,145 @@ function renderMusicTag(root) {
         h('th', null, '状态'), h('th', { class: 'num' }, '新增'),
         h('th', { class: 'num' }, '图片'),
         h('th', { class: 'num' }, '失败'))), body)));
+  }
+
+  function renderTcdocPromo(host) {
+    var daysInput = h('input', {
+      class: 'input', type: 'number', value: '365', min: '1', max: '3650',
+      style: 'width:90px'
+    });
+    var query = h('input', {
+      class: 'input', placeholder: '按活动名 / 日期 / 城市筛选',
+      style: 'min-width:200px'
+    });
+    var loadBtn = h('button', { class: 'btn', type: 'button' }, '读取可追加活动');
+    var applyBtn = h('button', {
+      class: 'btn primary', type: 'button', disabled: true
+    }, '追加选中');
+    var selInfo = h('span', { class: 'muted small' }, '未选择');
+    var note = h('div', { class: 'muted small', style: 'margin:8px 0' },
+      '正在读取…');
+    var tableHost = h('div');
+    var items = [];
+    var selected = new Set();
+    var gateOk = true;
+
+    function updateSel() {
+      var images = 0;
+      items.forEach(function (item) {
+        if (selected.has(item.key)) images += item.add_count || 0;
+      });
+      selInfo.textContent = selected.size
+        ? ('已选 ' + selected.size + ' 场 · ' + images + ' 张图') : '未选择';
+      applyBtn.disabled = !selected.size || !gateOk;
+    }
+
+    function render() {
+      if (!items.length) {
+        tableHost.replaceChildren(empty('没有可追加宣传图的活动。'));
+        return;
+      }
+      var head = h('tr');
+      ['选择', '活动', '日期', '城市', '表内图片', '待追加', '状态']
+        .forEach(function (title, index) {
+          head.appendChild(h('th', {
+            class: index >= 4 && index <= 5 ? 'num' : ''
+          }, title));
+        });
+      var body = h('tbody');
+      items.forEach(function (item) {
+        var box = h('input', {
+          type: 'checkbox', checked: selected.has(item.key),
+          disabled: !!item.blocked || !gateOk
+        });
+        box.addEventListener('change', function () {
+          if (box.checked) selected.add(item.key);
+          else selected.delete(item.key);
+          updateSel();
+        });
+        body.appendChild(h('tr', null,
+          h('td', null, box),
+          h('td', { class: 'ellipsis' }, item.name || item.key),
+          h('td', null, item.date),
+          h('td', null, item.city),
+          h('td', { class: 'num' }, item.existing_images),
+          h('td', { class: 'num' }, item.add_count),
+          h('td', {
+            style: item.blocked ? 'color: var(--danger)' : ''
+          }, item.blocked ? ('受阻：' + item.blocked)
+            : ('可追加 ' + item.add_count + ' 张'))));
+      });
+      tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+        h('table', { class: 'db-table' },
+          h('thead', null, head), body)));
+    }
+
+    function load() {
+      selected.clear();
+      setLoading(tableHost, '正在对比云端「宣传图」与本地图片…');
+      post('/api/tcdoc/promo/preview', {
+        days: Number(daysInput.value) || 365, query: query.value.trim(), limit: 200
+      }).then(function (data) {
+        items = data.items || [];
+        var refresh = data.refresh || {};
+        gateOk = !!refresh.allowed;
+        note.textContent = '「' + data.tab_name + '」' + data.doc_name
+          + ' · ' + data.tab_id + ' · 可追加 ' + fmtNumber(data.total)
+          + ' 场 / ' + fmtNumber(data.images) + ' 张 · 已补齐 '
+          + fmtNumber(data.synced) + ' 场 · ' + data.note
+          + (gateOk ? '' : (' · 当前不可写：' + (refresh.message || '需要先同步前刷新')));
+        updateSel();
+        render();
+        loadBtn.disabled = false;
+      }).catch(function (error) {
+        loadBtn.disabled = false;
+        setError(tableHost, error, load);
+      });
+    }
+
+    applyBtn.addEventListener('click', function () {
+      if (!selected.size || !gateOk) return;
+      var images = 0;
+      items.forEach(function (item) {
+        if (selected.has(item.key)) images += item.add_count || 0;
+      });
+      if (!window.confirm('将向 ' + selected.size + ' 场线下活动追加 '
+        + images + ' 张宣传图。\n\n只更新这些行的「宣传图」列，'
+        + '不改其它字段、不删或替换已有图片。\n\n确定追加？')) {
+        return;
+      }
+      applyBtn.disabled = true;
+      applyBtn.textContent = '正在追加…';
+      post('/api/tcdoc/promo/apply', {
+        days: Number(daysInput.value) || 365,
+        keys: Array.from(selected), confirmed: true
+      }).then(function (result) {
+        applyBtn.textContent = '追加选中';
+        toast(result.summary, result.failed_verify ? 'warning' : 'success');
+        load();
+      }).catch(function (error) {
+        applyBtn.textContent = '追加选中';
+        applyBtn.disabled = false;
+        toast('追加失败：' + error.message, 'error');
+      });
+    });
+    loadBtn.addEventListener('click', load);
+    query.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') load();
+    });
+
+    host.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'toolbar' },
+        h('span', { class: 'muted small' }, '时间范围（天）'), daysInput,
+        h('span', { class: 'muted small' }, '筛选'), query,
+        loadBtn, h('span', { style: 'flex:1' }), selInfo, applyBtn),
+      h('div', { class: 'muted small', style: 'margin-top:6px' },
+        '仅「线下活动」（ss_e1kkm2）的「宣传图」列：把本地 cover / images '
+        + '里云端还没有的图片追加到已存在的活动行；不改其它字段、'
+        + '不删或替换已有图片。需要先「同步前刷新」或在桌面端开启免校对模式。'),
+      note, tableHost));
+    loadBtn.disabled = true;
+    load();
   }
 
   function renderTcdocEdit(host) {

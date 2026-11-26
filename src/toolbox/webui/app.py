@@ -735,6 +735,16 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.edit_delete(dict(req.json or {}))
     server.post("/api/tcdoc/edit/delete", tcdoc_edit_delete)
 
+    server.get("/api/tcdoc/promo/status", lambda req: tcdoc.promo_status())
+
+    def tcdoc_promo_preview(req):
+        return tcdoc.promo_preview(dict(req.json or {}))
+    server.post("/api/tcdoc/promo/preview", tcdoc_promo_preview)
+
+    def tcdoc_promo_apply(req):
+        return tcdoc.promo_apply(dict(req.json or {}))
+    server.post("/api/tcdoc/promo/apply", tcdoc_promo_apply)
+
     server.get("/api/tcdoc/bridge", lambda req: tcdoc.bridge_overview())
 
     def tcdoc_bridge_preview(req):
