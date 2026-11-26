@@ -168,6 +168,16 @@ def validate_row_metadata(row: dict) -> dict:
     return {"title": title, "date": _date_value(str(row.get("date") or "").strip())}
 
 
+def _publish_new(source: Path, target: Path) -> None:
+    """同卷原子发布且不替换；Windows rename 同时兼容 NTFS / exFAT。"""
+    if os.name == "nt":
+        # Windows rename 在目标已存在时抛 FileExistsError；不得换成 replace。
+        os.rename(source, target)
+    else:
+        # POSIX rename 会覆盖目标，改用原子且排他的 hard link。
+        os.link(source, target)
+
+
 def generate_missing(root: Path, rows: list[dict], template: dict, *,
                      is_cancelled: Callable[[], bool] = lambda: False,
                      on_progress: Callable[[int, int, str], None] = lambda done, total, message: None) -> dict:
@@ -222,8 +232,7 @@ def generate_missing(root: Path, rows: list[dict], template: dict, *,
                     item.update(status="skipped", reason="生成期间出现封面，已保留原文件")
                     result["skipped"] += 1
                 else:
-                    # link 原子发布完整临时文件；目标已存在时失败，不可用 replace。
-                    os.link(temporary, target)
+                    _publish_new(temporary, target)
                     item.update(status="generated", cover=target.relative_to(root).as_posix(), reason="已生成")
                     result["generated"] += 1
         except FileExistsError:

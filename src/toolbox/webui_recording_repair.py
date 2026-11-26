@@ -53,9 +53,11 @@ def _root(platform):
             (Path(get_export_dir()) / "直播录制" / live_record.PLATFORMS[platform]["name"]).absolute())
     try:
         for part in (path, *path.parents):
-            if part.exists() or part.is_symlink():
+            try:
                 if _is_link(part):
                     raise ValueError("录制目录包含链接，无法安全读取，请在桌面端使用普通目录")
+            except FileNotFoundError:
+                continue
         return path.resolve()
     except OSError:
         raise ValueError("无法读取录制目录，请检查目录是否可访问") from None
@@ -164,6 +166,7 @@ def repair_job(platform, rel, workspace, on_progress=None, cancel=None):
     platform, rel = _platform(platform), _relative(rel)
     source = _source(platform, rel)
     destination = Path(workspace) / (source.stem + "_修复" + source.suffix.lower())
+    published = False
     try:
         before = source.stat()
         result = repair_recording(source, destination, on_progress=on_progress, cancel=cancel)
@@ -171,8 +174,10 @@ def repair_job(platform, rel, workspace, on_progress=None, cancel=None):
             raise RepairCancelled("已取消修复")
         if not result.get("ok"):
             raise ValueError("修复失败，请检查文件是否包含有效音视频、已停止录制，以及 FFmpeg 依赖是否可用")
+        published = True
         after = source.stat()
-        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        if ((before.st_size, before.st_mtime_ns, before.st_dev, before.st_ino)
+                != (after.st_size, after.st_mtime_ns, after.st_dev, after.st_ino)):
             destination.unlink(missing_ok=True)
             raise ValueError("源文件在修复期间发生变化，请停止录制后重新修复")
         return {"ok": True, "platform": platform, "source": rel,
@@ -181,4 +186,9 @@ def repair_job(platform, rel, workspace, on_progress=None, cancel=None):
                 "stats": {key: result[key] for key in
                           ("tags", "dropped", "ts_fixed", "resync", "seam_dropped") if key in result}}
     except OSError:
+        if published:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise ValueError("无法读取源文件或写入任务结果，请检查文件占用与磁盘空间") from None

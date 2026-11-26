@@ -162,7 +162,10 @@ class CoverAutomationDialog(QDialog):
         self.start_button.setProperty("variant", "primary")
         self.start_button.clicked.connect(self._start)
         self.buttons.rejected.connect(self.reject)
-        root.addWidget(self.buttons)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(self.buttons)
+        root.addLayout(button_row)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -248,7 +251,7 @@ class CoverAutomationDialog(QDialog):
                                      and "日期" in str(row.get("reason", "")))
         self._selected = {row["video"] for row in self._rows if row.get("status") == "ready"}
         self._page = 0
-        self.status_label.setText("扫描已完成，勾选待生成条目后点「生成封面」")
+        self.status_label.setText("扫描已完成，双击标题或日期可修正，勾选后生成封面")
         self._sorter.col = -1
         self.table.horizontalHeader().setSortIndicatorShown(False)
         self._render_page()

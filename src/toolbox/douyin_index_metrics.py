@@ -20,7 +20,8 @@ _CST = timezone(timedelta(hours=8))
 def metric_patch_result(*, changed_paths=False):
     """返回各 owner 共用、可序列化的空回执。计数按实际匹配记录统计。"""
     result = {"matched": 0, "updated": 0, "stale": 0, "invalid": 0,
-              "errors": [], "matched_ids": [], "updated_ids": [], "stale_ids": []}
+              "errors": [], "matched_ids": [], "updated_ids": [],
+              "stale_ids": [], "invalid_ids": []}
     if changed_paths:
         result["changed_paths"] = []
     return result

@@ -31,7 +31,6 @@
     shopping: { tab: 'taobao' },
     info_accounts: { platform: '', scope: 'all' },
     artifacts: { tab: 'comments' },
-    netdisk: { tab: 'backup' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -353,7 +352,10 @@
       if (!box.isConnected) return;
       api('/api/jobs/' + jobId).then(function (job) {
         status.textContent = job.status === 'done' ? '已完成' : (job.status === 'error' ? '失败' : (job.status === 'cancelled' ? '已取消' : (job.message || '运行中')));
-        bar.firstChild.style.width = (job.progress == null ? 30 : Math.round(job.progress * 100)) + '%';
+        var indeterminate = options.indeterminate && job.progress == null;
+        bar.classList.toggle('is-indeterminate', !!indeterminate);
+        bar.firstChild.style.width = indeterminate ? '35%'
+          : (job.progress == null ? 30 : Math.round(job.progress * 100)) + '%';
         log.textContent = (job.logs || []).join('\n');
         if (job.status === 'done') {
           if (job.result) {
@@ -404,7 +406,7 @@
         ['info_accounts', '采集任务', '账号清单与批量解析'],
         ['collected', '采集结果', '结果库、下载与导出'],
         ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
-        ['netdisk', '网络库', '网盘备份状态与运行记录'],
+        ['netdisk', '网络库', '网盘文件浏览与下载'],
         ['localwiki', '资料站', '部署状态与站点访问统计'],
         ['livestream_summary', '直播总结', '转录清单与已保存总结'],
         ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
@@ -1565,36 +1567,18 @@
   }
 
   function renderNetdisk(root) {
-    setLoading(root, '正在读取网盘备份状态…');
-    api('/api/netdisk').then(function (data) {
+    return renderNetdiskPanel(root, 'download');
+  }
+
+  function renderNetdiskPanel(root, mode) {
+    setLoading(root, mode === 'backup' ? '正在读取网盘备份状态…' : '正在读取网盘目录…');
+    return api('/api/netdisk').then(function (data) {
       root.replaceChildren();
-      var tabs = h('div', { class: 'tabs' });
       var host = h('div');
       var providers = data.providers || [];
       var providerLabel = {};
       providers.forEach(function (item) { providerLabel[item.value] = item.label; });
-      var TABS = [['backup', '备份到网盘'], ['download', '文件下载']];
-      TABS.forEach(function (item) {
-        tabs.appendChild(h('button', {
-          class: 'tab' + (state.netdisk.tab === item[0] ? ' active' : ''),
-          type: 'button',
-          onclick: function () {
-            state.netdisk.tab = item[0];
-            tabs.querySelectorAll('.tab').forEach(function (button, index) {
-              button.classList.toggle('active', TABS[index][0] === item[0]);
-            });
-            renderTab();
-          }
-        }, item[1]));
-      });
-      root.appendChild(tabs);
       root.appendChild(host);
-
-      function renderTab() {
-        host.replaceChildren();
-        if (state.netdisk.tab === 'backup') renderBackup();
-        else renderDownload();
-      }
 
       function editMapping(mapping) {
         var form = {
@@ -1704,7 +1688,7 @@
           }).then(function (result) {
             toast(result.summary || '已保存', 'success');
             overlay.remove();
-            renderNetdisk(root);
+            renderNetdiskPanel(root, mode);
           }).catch(function (error) {
             saveBtn.disabled = false;
             errLine.textContent = '保存失败：' + error.message;
@@ -1767,7 +1751,7 @@
                   h('div', { class: 'row-title' }, '本次分享链接'),
                   shareHost));
               }
-              setTimeout(function () { renderNetdisk(root); }, 1200);
+              setTimeout(function () { renderNetdiskPanel(root, mode); }, 1200);
             }, {
               cancelable: true,
               onSettled: function (job) {
@@ -1821,7 +1805,7 @@
               id: mapping.id, enabled: !mapping.enabled
             }).then(function (result) {
               toast(result.summary || '已保存', 'success');
-              renderNetdisk(root);
+              renderNetdiskPanel(root, mode);
             }).catch(function (error) {
               toggleBtn.disabled = false;
               toast('操作失败：' + error.message, 'error');
@@ -1841,7 +1825,7 @@
               id: mapping.id, confirmed: true
             }).then(function (result) {
               toast(result.summary || '已删除', 'success');
-              renderNetdisk(root);
+              renderNetdiskPanel(root, mode);
             }).catch(function (error) {
               delBtn.disabled = false;
               toast('删除失败：' + error.message, 'error');
@@ -2135,9 +2119,10 @@
         loadDir();
       }
 
-      renderTab();
+      if (mode === 'backup') renderBackup();
+      else renderDownload();
     }).catch(function (error) {
-      setError(root, error, function () { renderNetdisk(root); });
+      setError(root, error, function () { renderNetdiskPanel(root, mode); });
     });
   }
 
@@ -3581,6 +3566,13 @@ function renderLivestreamSummary(root) {
     var countsLabel = h('span', { class: 'muted small' });
     var selected = state.assets.dlSelected || (state.assets.dlSelected = new Set());
     var running = false;
+    var pageItems = [];
+    var pageMeta = null;
+    var rowNodes = new Map();
+    var knownItems = state.assets.entryKnown || (state.assets.entryKnown = new Map());
+    var tableBody = null;
+    var requestSeq = 0;
+    var loading = false;
     var STATUS_BADGE = {
       ok: ['已完整', 'ok'], partial: ['部分下载', 'warn'],
       missing: ['该下未下', 'danger'], text: ['纯文本', ''],
@@ -3591,44 +3583,110 @@ function renderLivestreamSummary(root) {
       dlBtn.disabled = running || selected.size === 0;
       dlBtn.textContent = running ? '下载中…' : '下载选中';
       selectedLabel.textContent = selected.size ? '已选 ' + selected.size + ' 条' : '';
+      var checked = 0;
+      pageItems.forEach(function (item) {
+        var node = rowNodes.get(item.path);
+        var isChecked = selected.has(item.path);
+        if (node) node.element.querySelector('input[type="checkbox"]').checked = isChecked;
+        if (isChecked) checked += 1;
+      });
+      selectAll.disabled = loading || !pageItems.length;
+      selectAll.checked = !!pageItems.length && checked === pageItems.length;
+      selectAll.indeterminate = checked > 0 && checked < pageItems.length;
+    }
+
+    function scopeKey() {
+      return JSON.stringify([state.assets.page, state.assets.q,
+        state.assets.platform, state.assets.status || '']);
+    }
+
+    function updateCounts() {
+      var parts = [];
+      if (pageMeta && pageMeta.counts) {
+        ['ok', 'partial', 'missing', 'text', 'nodl'].forEach(function (key) {
+          if (pageMeta.counts[key]) {
+            parts.push(((pageMeta.labels || {})[key] || key) + ' ' + pageMeta.counts[key]);
+          }
+        });
+      }
+      countsLabel.textContent = parts.join(' · ');
+    }
+
+    function matchesView(item) {
+      if (!item) return false;
+      var keyword = (state.assets.q || '').toLowerCase();
+      return (!state.assets.platform || item.platform === state.assets.platform)
+        && (!keyword || ((item.title || '') + ' ' + (item.author || '')).toLowerCase().indexOf(keyword) >= 0)
+        && (!state.assets.status || item.status === state.assets.status);
+    }
+
+    function refreshRows(paths) {
+      var scope = scopeKey();
+      var seq = requestSeq;
+      return post('/api/assets/entries/refresh', { paths: paths }).then(function (data) {
+        if (!host.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
+        var updates = new Map((data.items || []).map(function (item) { return [item.path, item]; }));
+        var removed = new Set(data.removed || []);
+        var membershipChanged = false;
+        paths.forEach(function (path) {
+          var previous = knownItems.get(path);
+          var next = updates.get(path);
+          if (removed.has(path)) {
+            selected.delete(path);
+            knownItems.delete(path);
+          } else if (next) {
+            knownItems.set(path, next);
+          } else {
+            return;
+          }
+          var wasVisible = matchesView(previous);
+          var isVisible = matchesView(next);
+          if (wasVisible !== isVisible || removed.has(path)) membershipChanged = true;
+          if (pageMeta && pageMeta.counts && previous && next && wasVisible && isVisible
+              && previous.status !== next.status) {
+            pageMeta.counts[previous.status] = Math.max(0, (pageMeta.counts[previous.status] || 0) - 1);
+            pageMeta.counts[next.status] = (pageMeta.counts[next.status] || 0) + 1;
+          }
+        });
+        if (membershipChanged) return load();
+        if (!pageMeta) return;
+        pageMeta.items = pageItems.map(function (item) { return updates.get(item.path) || item; });
+        renderPage(pageMeta);
+      }).catch(function (error) {
+        if (host.isConnected && scope === scopeKey()) {
+          toast('资源状态刷新失败：' + error.message, 'error');
+        }
+      });
     }
 
     function load() {
-      setLoading(tableHost, '正在读取已获取资源…');
+      var seq = ++requestSeq;
+      var scope = scopeKey();
+      loading = true;
+      updateButtons();
+      tableHost.setAttribute('aria-busy', 'true');
+      if (!tableBody) setLoading(tableHost, '正在读取已获取资源…');
       var url = '/api/assets/entries-status?page=' + state.assets.page
         + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
         + '&platform=' + encodeURIComponent(state.assets.platform)
         + '&status=' + encodeURIComponent(state.assets.status || '');
-      api(url)
+      return api(url)
         .then(function (data) {
-          if (data.counts) {
-            var parts = [];
-            ['ok', 'partial', 'missing', 'text', 'nodl'].forEach(function (key) {
-              if (data.counts[key]) {
-                parts.push((data.labels[key] || key) + ' ' + data.counts[key]);
-              }
-            });
-            countsLabel.textContent = parts.join(' · ');
-          } else {
-            countsLabel.textContent = '';
-          }
-          if (!data.items.length) {
-            tableHost.replaceChildren(empty('没有匹配的导出 JSON。可清空搜索词或切换平台。'));
-            pagerHost.replaceChildren();
-            selected.clear();
-            updateButtons();
-            return;
-          }
-          var known = new Set(data.items.map(function (item) { return item.path; }));
-          Array.from(selected).forEach(function (path) {
-            if (!known.has(path) && selected.size > data.items.length) {
-              if (data.items.every(function (item) { return !known.has(path) || selected.has(item.path); })) {
-                selected.delete(path);
-              }
-            }
-          });
-          var body = h('tbody');
-          data.items.forEach(function (item) {
+          if (!host.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
+          renderPage(data);
+        }).catch(function (error) {
+          if (!host.isConnected || seq !== requestSeq) return;
+          if (tableBody) toast('资源清单刷新失败：' + error.message, 'error');
+          else setError(tableHost, error, load);
+        }).finally(function () {
+          if (seq !== requestSeq) return;
+          loading = false;
+          tableHost.removeAttribute('aria-busy');
+          updateButtons();
+        });
+    }
+
+    function makeRow(item) {
             var check = h('input', {
               type: 'checkbox', checked: selected.has(item.path)
             });
@@ -3672,13 +3730,14 @@ function renderLivestreamSummary(root) {
                 path: item.path, marked: !item.no_dl
               }).then(function (result) {
                 toast((result && result.message) || '已保存', 'success');
-                load();
+                return refreshRows([item.path]);
               }).catch(function (error) {
-                noDlBtn.disabled = false;
                 toast('操作失败：' + error.message, 'error');
+              }).finally(function () {
+                noDlBtn.disabled = false;
               });
             });
-            body.appendChild(h('tr', null,
+            return h('tr', { dataset: { entryPath: item.path } },
               h('td', null, check),
               h('td', { class: 'ellipsis' }, title),
               h('td', null, item.author || '-'),
@@ -3695,14 +3754,31 @@ function renderLivestreamSummary(root) {
                     openEntryDetail(item);
                   }
                 }, item.file || '-')),
-              h('td', null, h('div', { class: 'toolbar' }, detailBtn, noDlBtn))));
-          });
-          tableHost.replaceChildren();
-          if (data.truncated) {
-            tableHost.appendChild(h('div', { class: 'muted small', style: 'margin:6px 2px' },
-              '已获取资源仅展示前 2000 条 JSON 概览。'));
-          }
-          tableHost.appendChild(h('div', { class: 'table-wrap' },
+              h('td', null, h('div', { class: 'toolbar' }, detailBtn, noDlBtn)));
+    }
+
+    function renderPage(data) {
+      var scrollX = window.scrollX, scrollY = window.scrollY;
+      pageMeta = data;
+      pageItems = data.items || [];
+      state.assets.page = data.page;
+      updateCounts();
+      if (!pageItems.length) {
+        tableHost.replaceChildren(empty('没有匹配的导出 JSON。可清空搜索词或切换平台。'));
+        tableBody = null;
+        rowNodes.clear();
+        pagerHost.replaceChildren();
+        updateButtons();
+        return;
+      }
+      if (!tableBody) {
+        tableBody = h('tbody');
+        tableHost.replaceChildren();
+        if (data.truncated) {
+          tableHost.appendChild(h('div', { class: 'muted small', style: 'margin:6px 2px' },
+            '已获取资源仅展示前 2000 条 JSON 概览。'));
+        }
+        tableHost.appendChild(h('div', { class: 'table-wrap' },
             h('table', null,
               h('thead', null, h('tr', null,
                 h('th', { style: 'width:36px' }, ''),
@@ -3711,31 +3787,46 @@ function renderLivestreamSummary(root) {
                 h('th', null, '发布时间'), h('th', { class: 'num' }, '播放'),
                 h('th', { class: 'num' }, '点赞'), h('th', null, '导出文件'),
                 h('th', null, '操作'))),
-              body)));
-          selectAll.checked = data.items.length > 0
-            && data.items.every(function (item) { return selected.has(item.path); });
-          selectAll.indeterminate = selected.size > 0 && !selectAll.checked;
-          updateButtons();
-          pager(pagerHost, data.page, data.pages, data.total, function (page) {
-            state.assets.page = page;
-            load();
-          });
-        }).catch(function (error) { setError(tableHost, error, load); });
+              tableBody)));
+      }
+      var desired = new Set(pageItems.map(function (item) { return item.path; }));
+      rowNodes.forEach(function (entry, path) {
+        if (!desired.has(path)) {
+          entry.element.remove();
+          rowNodes.delete(path);
+        }
+      });
+      var cursor = tableBody.firstChild;
+      pageItems.forEach(function (item) {
+        knownItems.set(item.path, item);
+        var fingerprint = JSON.stringify(item);
+        var entry = rowNodes.get(item.path);
+        if (!entry || entry.fingerprint !== fingerprint) {
+          var node = makeRow(item);
+          if (entry) {
+            if (cursor === entry.element) cursor = node;
+            entry.element.replaceWith(node);
+          }
+          entry = { element: node, fingerprint: fingerprint };
+          rowNodes.set(item.path, entry);
+        }
+        if (entry.element === cursor) cursor = cursor.nextSibling;
+        else tableBody.insertBefore(entry.element, cursor);
+      });
+      updateButtons();
+      pager(pagerHost, data.page, data.pages, data.total, function (page) {
+        state.assets.page = page;
+        load();
+      });
+      window.scrollTo(scrollX, scrollY);
     }
 
     selectAll.addEventListener('change', function () {
-      var url = '/api/assets/entries-status?page=' + state.assets.page
-        + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
-        + '&platform=' + encodeURIComponent(state.assets.platform)
-        + '&status=' + encodeURIComponent(state.assets.status || '');
-      api(url)
-        .then(function (data) {
-          data.items.forEach(function (item) {
-            if (selectAll.checked) selected.add(item.path);
-            else selected.delete(item.path);
-          });
-          load();
-        });
+      pageItems.forEach(function (item) {
+        if (selectAll.checked) selected.add(item.path);
+        else selected.delete(item.path);
+      });
+      updateButtons();
     });
 
     statusSel.addEventListener('change', function () {
@@ -3746,7 +3837,7 @@ function renderLivestreamSummary(root) {
 
     dlBtn.addEventListener('click', function () {
       if (!selected.size || running) return;
-      var paths = Array.from(selected);
+      var paths = Array.from(selected).slice(0, 50);
       running = true;
       updateButtons();
       post('/api/assets/download', {
@@ -3759,13 +3850,16 @@ function renderLivestreamSummary(root) {
             ? job.result.summary : '下载完成';
           toast(summary, 'success');
           showResult(job);
-          selected.clear();
-          load();
         }, {
           cancelable: true,
           onSettled: function (job) {
             running = false;
+            ((job.result || {}).results || []).forEach(function (result) {
+              if (result.ok) selected.delete(result.file);
+            });
             updateButtons();
+            if (job.status !== 'done') showResult(job);
+            refreshRows(paths);
             if (job.status === 'cancelled') {
               toast('下载已取消', 'info');
             }
@@ -7446,6 +7540,14 @@ function renderLivestreamSummary(root) {
       });
       host.appendChild(themeCard);
 
+      var backupHost = h('div');
+      host.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '备份与恢复'),
+        h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+          '备份到网盘；计划时间仍在「任务」页管理。配置与资产备份沿用桌面端全局设置。'),
+        backupHost));
+      renderNetdiskPanel(backupHost, 'backup');
+
       var deps = h('details', { class: 'card', style: 'margin-top:12px' });
       deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));
       var depHost = h('div', { style: 'margin-top:8px' });
@@ -8126,8 +8228,11 @@ function renderLivestreamSummary(root) {
                   post('/api/tools/fangroups/qq/remove', {
                     no: row.no, confirmed: true
                   }).then(function (result) {
-                    row.subscribed = false;
-                    row.source = '未订阅';
+                    var sourceRow = groups.find(function (item) { return item.no === row.no; });
+                    if (sourceRow) {
+                      sourceRow.subscribed = false;
+                      sourceRow.source = '未订阅';
+                    }
                     data.subscribed_count = Math.max(0, Number(data.subscribed_count || 0) - 1);
                     qqRefreshErrorsHost.replaceChildren();
                     draw();
@@ -8308,7 +8413,27 @@ function renderLivestreamSummary(root) {
       var searchBtn = h('button', { class: 'btn', type: 'button' }, '搜索达人');
       var searchHost = h('div', { style: 'margin-top:8px' });
       var fetchJobHost = h('div');
+      var fetchResultHost = h('div', { class: 'muted small', style: 'margin-top:8px' });
+      if (state.douyin.lastResult) {
+        fetchResultHost.textContent = state.douyin.lastResult.summary || '';
+        var lastErrors = state.douyin.lastResult.writeback
+          && state.douyin.lastResult.writeback.errors || [];
+        lastErrors.forEach(function (message) {
+          fetchResultHost.appendChild(h('div', { class: 'error' }, message));
+        });
+      }
       var searching = false;
+      var fetching = false;
+      function setFetching(busy) {
+        fetching = busy;
+        keyword.disabled = busy;
+        daysSel.disabled = busy;
+        searchBtn.disabled = busy;
+        searchHost.querySelectorAll('button').forEach(function (button) {
+          button.disabled = busy;
+          button.textContent = busy ? '抓取中…' : '抓取并回写';
+        });
+      }
       searchBtn.addEventListener('click', function () {
         if (searching) return;
         if (!keyword.value.trim()) {
@@ -8337,31 +8462,39 @@ function renderLivestreamSummary(root) {
             items.forEach(function (item) {
               var btn = h('button', {
                 class: 'btn mini primary', type: 'button'
-              }, '抓取');
+              }, '抓取并回写');
               btn.addEventListener('click', function () {
-                btn.disabled = true;
-                btn.textContent = '抓取中…';
+                if (fetching) return;
+                if (!window.confirm('抓取「' + (item.name || item.uid) + '」并回写已有资产？\n\n'
+                  + '将保存指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。'
+                  + '\n不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。')) return;
+                setFetching(true);
+                fetchResultHost.textContent = '';
                 post('/api/douyin-index/fetch', {
-                  uid: item.uid, days: Number(daysSel.value) || 30
+                  uid: item.uid, days: Number(daysSel.value) || 30, confirmed: true
                 }).then(function (job) {
                   watchJob(fetchJobHost, job.job, function (done) {
                     var outcome = done.result || {};
-                    toast(outcome.summary || '抓取完成', 'success');
-                    setTimeout(function () { renderDouyinIndex(root); }, 800);
+                    state.douyin.lastResult = outcome;
+                    renderDouyinIndex(root);
                   }, {
                     cancelable: true,
                     onSettled: function (done) {
+                      setFetching(false);
                       if (done.status === 'error') {
-                        btn.disabled = false;
-                        btn.textContent = '抓取';
-                        toast('抓取失败：' + (done.error || '未知错误'), 'error');
+                        fetchResultHost.textContent = '抓取失败：'
+                          + (done.error || '请检查登录状态、网络与目录权限后重试');
+                      } else if (done.status === 'cancelled') {
+                        state.douyin.lastResult = done.result || {
+                          summary: '已取消，已保存的快照与已完成的回写保留；可在资产库刷新查看。'
+                        };
+                        renderDouyinIndex(root);
                       }
                     }
                   });
                 }).catch(function (error) {
-                  btn.disabled = false;
-                  btn.textContent = '抓取';
-                  toast('抓取失败：' + error.message, 'error');
+                  setFetching(false);
+                  fetchResultHost.textContent = '抓取失败：' + error.message;
                 });
               });
               body.appendChild(h('tr', null,
@@ -8383,12 +8516,12 @@ function renderLivestreamSummary(root) {
           });
       });
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'row-title' }, '搜索达人并抓取'),
+        h('div', { class: 'row-title' }, '搜索达人并回写资产'),
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           keyword, daysSel, searchBtn,
           h('span', { class: 'muted small' },
-            '搜索需要抖音指数 Cookie；抓取会写入「抖音指数」导出目录。')),
-        searchHost, fetchJobHost));
+            '搜索需要登录；抓取后保存指数快照，并按视频 ID 回写已有抖音资产。')),
+        searchHost, fetchJobHost, fetchResultHost));
       if (!reports.length) {
         root.appendChild(empty(
           '暂无本地快照。可搜索达人后抓取，或到桌面端「抖音指数」抓取。'));
@@ -10888,10 +11021,11 @@ function renderMusicTag(root) {
       host.appendChild(h('div', { class: 'toolbar' },
         h('span', { class: 'muted small' },
           '未勾选时批量操作作用于本平台全部主播；批量修改、录制设置、推送设置、'
-          + 'FLV 修复、写时间码与弹幕姬仍在桌面端。'),
+          + '写时间码与弹幕姬仍在桌面端。'),
         h('span', { style: 'flex:1' }), refreshBtn));
       host.appendChild(infoBar);
       host.appendChild(tableHost);
+      renderRecordingRepair(host, state.record.platform);
       host.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
         h('div', { class: 'card-title' }, '运行日志'),
         h('div', { class: 'muted small' },
@@ -10902,6 +11036,82 @@ function renderMusicTag(root) {
       setError(host, error, function () { renderRecord(host); });
     });
   }
+  function renderRecordingRepair(host, platform) {
+    var source = h('select', {
+      class: 'select', 'aria-label': '待修复录制文件',
+      style: 'width:100%;max-width:100%;min-width:0'
+    });
+    var confirmed = h('input', { type: 'checkbox' });
+    var note = h('div', { class: 'muted small', style: 'margin:8px 0' },
+      'FLV 修复标签和时间戳；TS 跳过损坏数据包并无损重封装。已丢失的画面或声音无法恢复。');
+    var status = h('div', { class: 'muted small', role: 'status' });
+    var jobHost = h('div');
+    var refresh = h('button', { class: 'btn', type: 'button' }, '刷新文件');
+    var run = h('button', { class: 'btn primary', type: 'button', disabled: true }, '开始修复');
+    var busy = false;
+    function updateRun() { run.disabled = busy || !source.value || !confirmed.checked; }
+    source.addEventListener('change', function () {
+      confirmed.checked = false;
+      updateRun();
+    });
+    confirmed.addEventListener('change', updateRun);
+    function loadSources() {
+      refresh.disabled = true;
+      source.disabled = true;
+      run.disabled = true;
+      confirmed.checked = false;
+      status.textContent = '正在查找录制文件…';
+      api('/api/record/repair/sources?platform=' + encodeURIComponent(platform))
+        .then(function (data) {
+          source.replaceChildren(h('option', { value: '' }, '选择已停止录制的文件'));
+          (data.files || []).forEach(function (file) {
+            source.appendChild(h('option', { value: file.rel, title: file.rel },
+              file.rel + ' · ' + fmtBytes(file.size)));
+          });
+          status.textContent = data.files && data.files.length
+            ? '已找到 ' + data.files.length + ' 个文件' + (data.truncated ? '（仅显示部分，请在桌面端选择其他文件）' : '')
+            : '该平台录制目录中没有 FLV / TS 文件，录制结束后点「刷新文件」。';
+          source.disabled = !data.files || !data.files.length;
+          refresh.disabled = false;
+          updateRun();
+        }).catch(function (error) {
+          source.replaceChildren();
+          status.textContent = '查找录制文件失败：' + error.message + '，请重试。';
+          refresh.disabled = false;
+        });
+    }
+    refresh.addEventListener('click', loadSources);
+    run.addEventListener('click', function () {
+      if (busy || !source.value || !confirmed.checked) return;
+      busy = true;
+      updateRun();
+      source.disabled = refresh.disabled = confirmed.disabled = true;
+      function settled() {
+        busy = false;
+        source.disabled = refresh.disabled = confirmed.disabled = false;
+        confirmed.checked = false;
+        updateRun();
+      }
+      post('/api/record/repair', {
+        platform: platform, rel: source.value, confirmed_stopped: true
+      }).then(function (result) {
+        watchJob(jobHost, result.job, null, {
+          cancelable: true, indeterminate: true, onSettled: settled
+        });
+      }).catch(function (error) {
+        status.textContent = '开始修复失败：' + error.message;
+        settled();
+      });
+    });
+    host.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
+      h('div', { class: 'card-title' }, 'FLV / TS 修复'), note, source,
+      h('label', { class: 'muted small', style: 'display:flex;align-items:center;gap:8px;margin-top:8px' },
+        confirmed, '我已确认所选文件已停止录制（源文件保留，修复结果单独下载）'),
+      h('div', { class: 'toolbar', style: 'margin-top:8px' },
+        status, h('span', { class: 'spacer' }), refresh, run), jobHost));
+    loadSources();
+  }
+
   function kindLabel(kind) {
     var labels = { video: '视频', note: '图文', image: '图文', dynamic: '动态' };
     return labels[kind] || (kind || '-');

@@ -330,9 +330,13 @@ def entries_with_status(page: int = 1, page_size: int = 20,
             "labels": _STATUS_LABELS}
 
 
-def _status_row(row: dict, media: list[dict], flagged: set) -> dict:
+def _status_key(row: dict, root: str | Path) -> str:
+    return str(Path(root) / row["path"]) if row.get("path") else _entry_key(row)
+
+
+def _status_row(row: dict, media: list[dict], flagged: set, root=None) -> dict:
     result = {key: value for key, value in row.items() if not key.startswith("_")}
-    no_dl = _entry_key(row) in flagged
+    no_dl = (_status_key(row, root) if root is not None else _entry_key(row)) in flagged
     result.update(no_dl=bool(no_dl), status="nodl" if no_dl else _entry_status(row, media),
                   n_img=sum(1 for item in media if item["type"] == "image"),
                   n_vid=sum(1 for item in media if item["type"] == "video"))
@@ -347,22 +351,32 @@ def _status_snapshot(query) -> dict:
     if (snapshot and snapshot["root"] == root
             and snapshot["revision"] == query._entries_revision
             and time.monotonic() - snapshot["updated"] < _MEDIA_CACHE_TTL):
-        for row in snapshot["rows"].values():
-            row.update(_status_row(row, snapshot["media"].get(row["path"], []), flagged))
+        changed_flags = snapshot["flagged"] ^ flagged
+        for key in changed_flags:
+            for rel in snapshot["flag_rows"].get(key, ()):
+                row = snapshot["rows"].get(rel)
+                if row is not None:
+                    row.update(_status_row(row, snapshot["media"].get(rel, []), flagged, root))
+        snapshot["flagged"] = set(flagged)
         return snapshot
     seeded = query._entry_media
-    if rows and all(row["path"] in seeded for row in rows):
+    if all(row["path"] in seeded for row in rows):
         matched = [seeded[row["path"]] for row in rows]
     else:
         matched = _match_media(rows)
     media = {row["path"]: list(files) for row, files in zip(rows, matched)}
     for rel, files in _target_outputs.get(root, {}).items():
         if rel in media:
-            media[rel] = _merge_media(media[rel], files)
+            media[rel] = _merge_media(media[rel], [
+                item for item in files if Path(item["path"]).is_file()])
+    flag_rows = {}
+    for row in rows:
+        flag_rows.setdefault(_status_key(row, root), set()).add(row["path"])
     snapshot = {"root": root, "revision": query._entries_revision,
-                "rows": {row["path"]: _status_row(row, media[row["path"]], flagged)
+                "rows": {row["path"]: _status_row(row, media[row["path"]], flagged, root)
                          for row in rows}, "media": media,
-                "updated": time.monotonic(), "truncated": query._entries_truncated}
+                "updated": time.monotonic(), "truncated": query._entries_truncated,
+                "flagged": set(flagged), "flag_rows": flag_rows}
     _status_cache[query] = snapshot
     return snapshot
 
@@ -390,11 +404,12 @@ def refresh_entries(paths, *, query=None) -> dict:
                 media = _target_media_files(root, row)
             media = _merge_media(media, _target_outputs.get(str(root), {}).get(rel, []))
             media = [item for item in media if Path(item["path"]).is_file()]
-            fresh = _status_row(row, media, flagged)
+            fresh = _status_row(row, media, flagged, root)
             items.append(fresh)
             if snapshot is not None:
                 snapshot["rows"][rel] = fresh
                 snapshot["media"][rel] = media
+                snapshot["flag_rows"].setdefault(_status_key(row, root), set()).add(rel)
         if snapshot is not None:
             for rel in result["removed"]:
                 snapshot["rows"].pop(rel, None)

@@ -303,9 +303,20 @@ class _DocPreviewPanel(QWidget):
         self._text_stack.setCurrentWidget(self._skeleton)
 
         def work():
-            return tc_engine.collector.preview(
-                doc, on_status=lambda s: post_to_main(self._on_status, s, req),
-                is_cancelled=cancel_fetch.is_set)
+            from toolbox.tcdoc.body_images import BodyImagesCancelled
+            try:
+                return tc_engine.collector.preview(
+                    doc, on_status=lambda s: post_to_main(self._on_status, s, req),
+                    is_cancelled=cancel_fetch.is_set)
+            except BodyImagesCancelled as exc:
+                try:
+                    saved_pages = (tc_engine.archive.pages_of(key)
+                                   if tc_cfg.pages_db_path().is_file() else [])
+                except Exception:  # noqa: BLE001 - 取消不得被本地读回错误替换
+                    saved_pages = []
+                return {"cancelled": True, "pages": saved_pages,
+                        "saved_pages": int(getattr(exc, "saved_pages", 0)),
+                        "save_error": bool(getattr(exc, "save_error", ""))}
 
         def done(result, err):
             if req != self._req or getattr(self._page_owner, "_closed", False):
@@ -319,10 +330,24 @@ class _DocPreviewPanel(QWidget):
             self.fetch_btn.setEnabled(True)
             self.fetch_btn.setText("重新抓取")
             self._text_stack.setCurrentWidget(self.text_view)
+            if result and result.get("cancelled"):
+                count = result.get("saved_pages") or 0
+                note = f"已取消（本轮保存 {count} 篇），已有存档保留"
+                if result.get("save_error"):
+                    note = "已取消，本轮完成的正文未能保存；已有存档保留"
+                pages = result.get("pages") or []
+                if pages:
+                    text = (tc_engine.collector.join_pages(pages) if len(pages) > 1
+                            else pages[0].get("text") or "")
+                    self._apply_pages(pages, text, note)
+                else:
+                    self.status.setText(note)
+                self.export_btn.setEnabled(bool(self._full_text.strip()))
+                return
             if err:
                 from toolbox.tcdoc.body_images import BodyImagesCancelled
                 cancelled = cancel_fetch.is_set() or isinstance(err, BodyImagesCancelled)
-                completed = len(getattr(err, "completed_pages", []) or [])
+                completed = int(getattr(err, "saved_pages", 0))
                 cancel_note = (f"已取消（完成 {completed} 篇），已有存档保留" if completed
                                else "已取消，已有存档保留")
                 self.status.setText(cancel_note if cancelled else "抓取正文失败，请重新抓取后重试")

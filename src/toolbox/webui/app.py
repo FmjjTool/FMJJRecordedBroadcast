@@ -41,7 +41,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     collected = CollectedService()
     cover = CoverService(jobs)
     assets = AssetService(jobs)
-    record = RecordService()
+    record = RecordService(jobs)
     modules = ModuleService()
     offline = OfflineService(jobs)
     tool_service = ToolService(jobs)
@@ -173,6 +173,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return record.import_anchors(dict(req.json or {}))
     server.post("/api/record/import", record_import)
 
+    server.get("/api/record/repair/sources",
+               lambda req: record.repair_sources(req.q("platform")))
+    server.post("/api/record/repair",
+                lambda req: record.start_repair(dict(req.json or {})))
+
     server.get("/api/modules", lambda req: modules.list())
     server.get_re(r"/api/modules/(?P<key>[a-z_]+)",
                   lambda req, key: modules.detail(key))
@@ -277,6 +282,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/douyin-index/search", search_douyin_index)
 
     def start_douyin_index_fetch(req):
+        """复用已确认的抓取/资产回写任务；确认参数由服务统一校验。"""
         return douyin_index.start_fetch(dict(req.json or {}))
     server.post("/api/douyin-index/fetch", start_douyin_index_fetch)
 

@@ -154,7 +154,7 @@ class AssetQueryService:
     def refresh_entry_paths(self, paths: list[str]) -> dict:
         """只重读指定 JSON，并修补现有清单；不触发目录枚举或全量加载。"""
         root = (get_export_dir() / EXPORT_CATEGORIES["video_data"]).resolve()
-        targets = [_entry_target(root, rel) for rel in paths]
+        targets = list(dict.fromkeys(_entry_target(root, rel) for rel in paths))
         items, removed = [], []
         for target in targets:
             rel = target.relative_to(root).as_posix()
@@ -376,7 +376,7 @@ class AssetQueryService:
     def _entry_rows(self) -> list[dict]:
         with self._entries_lock:
             export_root = get_export_dir().resolve()
-            root = export_root / EXPORT_CATEGORIES["video_data"]
+            root = (export_root / EXPORT_CATEGORIES["video_data"]).resolve()
             stamp = _entry_stamp(root)
             cached = self._entries_cache
             now = time.monotonic()

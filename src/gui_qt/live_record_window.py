@@ -25,7 +25,7 @@ from datetime import datetime
 
 from PySide6.QtCore import (QAbstractTableModel, QDateTime, QModelIndex, QObject,
                             Qt, QTimer, Signal)
-from PySide6.QtGui import QAction, QBrush, QFont
+from PySide6.QtGui import QAction, QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
@@ -169,15 +169,15 @@ class AnchorModel(QAbstractTableModel):
             return self._text(a, index.row(), key)
         if role == Qt.ItemDataRole.BackgroundRole:
             if a.recording:
-                return QBrush(theme.color("accent_soft"))
+                return QBrush(QColor(theme.color("accent_soft")))
             if a.live:
-                return QBrush(theme.color("surface_alt"))
+                return QBrush(QColor(theme.color("surface_alt")))
             return None
         if role == Qt.ItemDataRole.ForegroundRole:
             if a.error:
-                return QBrush(theme.color("danger"))
+                return QBrush(QColor(theme.color("danger")))
             if key in ("monitoring", "want_record") and not self._flag(a, key):
-                return QBrush(theme.color("muted"))
+                return QBrush(QColor(theme.color("muted")))
             return None
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return int(COLUMNS[index.column()][3])

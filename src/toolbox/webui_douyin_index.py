@@ -1,8 +1,8 @@
 """WebUI 抖音指数：读取本地快照，并支持达人搜索与抓取。
 
 读取本地 `latest.json`；搜索走 `platforms.douyin_index.search_daren`，
-抓取走 `fetch_daren_all` + `save_snapshot`（写入「抖音指数」导出目录）。
-需要桌面端配置的抖音指数 Cookie。本模块 Qt-free。
+抓取复用 douyin_index_service，保存快照并按视频 ID 回写已有资产。
+使用软件统一管理的登录状态。本模块 Qt-free。
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _reports() -> list[dict]:
 def overview() -> dict:
     rows = _reports()
     return {"reports": rows, "total": len(rows),
-            "note": "只读：展示本地已保存的快照；搜索与抓取仍在桌面端。"}
+            "note": "抓取后保存指数快照，并按视频 ID 回写已有抖音资产；未匹配的作品不新建。"}
 
 
 def _find(name: str) -> Path:
@@ -230,8 +230,8 @@ def load_report(name: str) -> dict:
 
 
 def search(payload: dict) -> dict:
-    """按名称 / 抖音号搜索达人（只读，需要抖音指数 Cookie）。"""
-    from platforms import douyin_index as dxi
+    """按名称 / 抖音号搜索达人（只读，使用统一登录状态）。"""
+    from toolbox import douyin_index_service
 
     keyword = str(payload.get("keyword") or "").strip()
     if not keyword:
@@ -242,9 +242,9 @@ def search(payload: dict) -> dict:
         total = 20
     total = max(1, min(total, 50))
     try:
-        rows = dxi.search_daren(keyword, total) or []
+        rows = douyin_index_service.search_daren(keyword, total) or []
     except Exception as exc:  # noqa: BLE001 - 搜索接口异常类型较多
-        raise ValueError(f"搜索失败：{exc}") from exc
+        raise ValueError("搜索失败：请检查登录状态与网络连接后重试") from exc
     items = []
     for row in rows:
         uid = str(row.get("user_id") or row.get("uid") or "")
@@ -262,14 +262,16 @@ def search(payload: dict) -> dict:
             "avatar": str(row.get("avatar_uri") or row.get("avatar_url") or ""),
         })
     return {"items": items, "total": len(items), "keyword": keyword,
-            "note": "只读搜索；选一个达人抓取指数快照。"}
+            "note": "只读搜索；选择达人并确认后抓取快照、回写已有资产。"}
 
 
 def fetch(payload: dict, on_progress=None, on_log=None,
           is_cancelled=None) -> dict:
-    """抓取一个达人的完整抖音指数并保存快照。"""
-    from platforms import douyin_index as dxi
+    """确认后抓取快照并回写已有资产；返回去路径化的回写回执。"""
+    from toolbox import douyin_index_service
 
+    if payload.get("confirmed") is not True:
+        raise ValueError("请先确认抓取并回写已有资产")
     uid = str(payload.get("uid") or "").strip()
     if not uid:
         raise ValueError("请选择要抓取的达人")
@@ -288,15 +290,14 @@ def fetch(payload: dict, on_progress=None, on_log=None,
             on_progress(None, str(message))
 
     try:
-        data = dxi.fetch_daren_all(uid, days, progress=say)
+        result = douyin_index_service.fetch_and_save(
+            uid, days, progress=say, is_cancelled=is_cancelled)
+    except douyin_index_service.FetchCancelled:
+        return {"cancelled": True, "warning": True, "summary": "已取消，未回写资产"}
     except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"抓取失败：{exc}") from exc
-    if is_cancelled and is_cancelled():
-        raise ValueError("任务已取消（数据未保存）")
-    try:
-        path = dxi.save_snapshot(data)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"保存快照失败：{exc}") from exc
+        raise ValueError("抓取或保存失败：请检查登录状态、网络连接与导出目录权限后重试") from exc
+    data, path = result["data"], result["path"]
+    outcome = result["writeback"]
     name = str((data.get("author") or {}).get("user_name") or uid)
     videos = len(data.get("videos") or [])
     fetched_at = str((data.get("meta") or {}).get("fetched_at") or "")
@@ -306,6 +307,8 @@ def fetch(payload: dict, on_progress=None, on_log=None,
         "videos": videos,
         "days": days,
         "fetched_at": fetched_at,
-        "summary": f"已抓取「{name}」抖音指数：{videos} 个视频 · 近 {days} 天",
-        "note": "快照已写入「抖音指数」导出目录，页面刷新后可查看。",
+        "writeback": outcome,
+        "warning": bool(outcome.get("errors") or outcome.get("cancelled")),
+        "summary": f"「{name}」指数快照已保存（{videos} 个视频 · 近 {days} 天）；{outcome['summary']}",
+        "note": "在资产库刷新查看；仅更新精确匹配的视频指标，保留作品内容与本地文件。",
     }

@@ -46,7 +46,12 @@ class AssetService:
         if status not in _STATUS_KEYS:
             raise ValueError("未知状态筛选")
         return webui_assets_dl.entries_with_status(
-            page, page_size, keyword, platform, status)
+            page, page_size, keyword, platform, status, query=self._query)
+
+    def refresh_entries(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("刷新数据格式不正确")
+        return webui_assets_dl.refresh_entries(payload.get("paths"), query=self._query)
 
     def set_no_dl(self, payload: dict) -> dict:
         path = str(payload.get("path") or "").strip()
@@ -92,8 +97,9 @@ class AssetService:
         try:
             return webui_assets_dl.download_entries(
                 paths, quality=quality, on_progress=progress,
-                is_cancelled=cancelled)
+                is_cancelled=cancelled, query=self._query)
         except webui_assets_dl.DownloadCancelled as exc:
+            job.result = exc.result
             raise JobCancelled(str(exc)) from exc
 
     def start_local_scan(self, category: str) -> dict:

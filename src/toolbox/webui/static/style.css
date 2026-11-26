@@ -519,6 +519,11 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .job-status { font-weight: bold; }
 .progress { height: 6px; margin: 8px 0; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
 .progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.progress.is-indeterminate > i { animation: record-repair-progress 1.2s linear infinite; transition: none; }
+@keyframes record-repair-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(290%); }
+}
 .job-log {
   margin: 8px 0 0;
   max-height: 180px;

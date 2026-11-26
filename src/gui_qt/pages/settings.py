@@ -103,9 +103,7 @@ class _ComponentsSectionCard(ToolSectionCard):
             "QPushButton#settingsComponentsToggle { background: transparent;"
             " border: 1px solid transparent; padding: 0; }"
             "QPushButton#settingsComponentsToggle:hover {"
-            " background: palette(alternate-base); border-radius: 6px; }"
-            "QPushButton#settingsComponentsToggle:focus {"
-            " border: 1px solid palette(highlight); }")
+            " background: palette(alternate-base); border-radius: 6px; }")
         header = QHBoxLayout(self.toggle_button)
         header.setContentsMargins(0, 0, 0, 0)
         header.addLayout(self.heading_layout, 1)
@@ -419,6 +417,9 @@ class GlobalSettingsPage(BasePage):
         card.content_layout.addWidget(backup_note)
         self.backup_panel = BackupPanel(app, self)
         card.content_layout.addWidget(self.backup_panel)
+        cloud_title = QLabel("备份到网盘")
+        cloud_title.setProperty("role", "sectionTitle")
+        card.content_layout.addWidget(cloud_title)
         self.cloud_backup_page = QuarkBackupPage(app)
         self.cloud_backup_page.setMinimumHeight(420)
         card.content_layout.addWidget(self.cloud_backup_page)
@@ -577,6 +578,11 @@ class GlobalSettingsPage(BasePage):
 
     def on_hide(self):
         self._skel_timer.stop()
+        self.cloud_backup_page.on_hide()
+
+    def shutdown(self):
+        self.on_hide()
+        self.cloud_backup_page.shutdown()
 
     # ---- WebUI 独立服务 ----
     def _webui(self):

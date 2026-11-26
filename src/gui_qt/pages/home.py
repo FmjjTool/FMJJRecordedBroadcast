@@ -389,7 +389,7 @@ class _AccountConfigDialog(QDialog):
 
 
 class _StatCard(QFrame):
-    """可点击的统计卡：点击后在首页展开二级抽屉。"""
+    """可点击的统计卡：先在卡片内展开摘要，完整详情按需打开。"""
 
     clicked = Signal(str)
 
@@ -397,6 +397,8 @@ class _StatCard(QFrame):
         super().__init__(parent)
         self._key = key
         self._clickable = clickable
+        self.preview = None
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         self.setObjectName("workbenchStatCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_Hover, True)
@@ -406,7 +408,9 @@ class _StatCard(QFrame):
 
     def mouseReleaseEvent(self, event):
         if (self._clickable and event.button() == Qt.LeftButton
-                and self.rect().contains(event.position().toPoint())):
+                and self.rect().contains(event.position().toPoint())
+                and (self.preview is None or not self.preview.isVisible()
+                     or event.position().y() < self.preview.y())):
             self.clicked.emit(self._key)
         super().mouseReleaseEvent(event)
 
@@ -415,6 +419,7 @@ class HomePage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self._stat_values = {}
+        self._stat_previews = {}
         self._refreshing = False
         self._tool_grids = []
         self._last_layout = None
@@ -435,8 +440,8 @@ class HomePage(BasePage):
         body.setObjectName("workbenchHomeBody")
         scroll.setWidget(body)
         v = QVBoxLayout(body)
-        v.setContentsMargins(26, 14, 26, 28)
-        v.setSpacing(14)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
 
         v.addWidget(self._build_hero())
         v.addLayout(self._build_stats())
@@ -498,13 +503,12 @@ class HomePage(BasePage):
             clickable = (key in ACCOUNT_DRAWER_KEYS or key in TCDOC_DRAWER_KEYS
                          or key in SITE_STAT_KEYS)
             if clickable:
-                tip = (f"{tip}\n点击展开站点访问历史与采集" if key in SITE_STAT_KEYS
-                       else f"{tip}\n点击展开详情抽屉")
+                tip = f"{tip}\n点击在卡片内展开摘要，再次点击指标收起"
             card = _StatCard(key, tip, clickable=clickable)
             if clickable:
                 card.clicked.connect(self._open_drawer)
             box = QVBoxLayout(card)
-            box.setContentsMargins(18, 13, 18, 13)
+            box.setContentsMargins(16, 12, 16, 12)
             box.setSpacing(4)
             value = QLabel("—")
             value.setObjectName("workbenchStatValue")
@@ -517,6 +521,27 @@ class HomePage(BasePage):
             cap.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             box.addWidget(cap)
             box.addWidget(value)
+            if clickable:
+                preview = QWidget()
+                preview_box = QVBoxLayout(preview)
+                preview_box.setContentsMargins(0, 8, 0, 0)
+                preview_box.setSpacing(6)
+                for _ in range(3):
+                    line = QLabel()
+                    line.setObjectName("workbenchHomeMuted")
+                    line.setTextFormat(Qt.PlainText)
+                    line.setWordWrap(True)
+                    line.setMinimumWidth(0)
+                    line.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+                    preview_box.addWidget(line)
+                details_btn = QPushButton("完整详情")
+                details_btn.setToolTip("打开完整历史、筛选与操作")
+                details_btn.clicked.connect(self._show_drawer)
+                preview_box.addWidget(details_btn, 0, Qt.AlignLeft)
+                box.addWidget(preview)
+                preview.hide()
+                card.preview = preview
+                self._stat_previews[key] = preview
             self._stat_values[key] = value
             self._stat_cards.append(card)
             row.addWidget(card, index // 4, index % 4)
@@ -968,12 +993,14 @@ class HomePage(BasePage):
             mode = "tcdoc"
         else:
             return
-        # 同一张卡片再点一次 = 收起；切换到另一张卡片 = 直接换抽屉内容
-        if self.drawer.isVisible() and self._drawer_key == key:
+        # 首次只展开所点卡片的摘要；完整抽屉由「完整详情」显式打开。
+        if self._drawer_key == key:
             self._close_drawer()
             return
+        self._close_drawer()
         self._drawer_mode = mode
         self._drawer_key = key
+        self._stat_previews[key].show()
         if mode == "accounts":
             self.drawer_title.setText("追踪账号")
             self.drawer_sub.setText(
@@ -993,14 +1020,64 @@ class HomePage(BasePage):
                 "后台密码、采集今日与本地历史（再次点卡片收起）")
             self.drawer_stack.setCurrentWidget(self.site_drawer_page)
             self._refresh_site_drawer()
+        self._refresh_stat_preview()
+        card = next(card for card in self._stat_cards if card._key == key)
+        self.scroll.ensureWidgetVisible(card, 0, 16)
+
+    def _show_drawer(self):
+        if not self._drawer_key:
+            return
         self.drawer.show()
         self._fit_drawer_height()
         self.scroll.ensureWidgetVisible(self.drawer, 0, 16)
 
     def _close_drawer(self):
         self.drawer.hide()
+        for preview in self._stat_previews.values():
+            preview.hide()
         self._drawer_mode = ""
         self._drawer_key = ""
+
+    def _refresh_stat_preview(self):
+        """复用当前详情表的数据，只摘出所点指标的三条记录，不另外取数。"""
+        key = self._drawer_key
+        preview = self._stat_previews.get(key)
+        if preview is None:
+            return
+
+        def cell(table, row, column):
+            item = table.item(row, column)
+            return item.text() if item is not None else "—"
+
+        if key in SITE_STAT_KEYS:
+            table = self.site_history_table
+            column = {"site_visitors": 2, "site_sessions": 3,
+                      "site_pageviews": 4, "site_online": 5}[key]
+            lines = [f"{cell(table, row, 0)} · {cell(table, row, 1)}\n"
+                     f"{cell(table, row, column)}"
+                     for row in range(min(3, table.rowCount()))]
+            empty = "尚无历史记录，可在完整详情中采集"
+        elif key in TCDOC_DRAWER_KEYS:
+            table = self.tcdoc_table
+            column = {"doc_views": 1, "doc_members": 3, "doc_readers": 5,
+                      "tcdoc_rows": 1}[key]
+            metric = "浏览量 " if key == "tcdoc_rows" else ""
+            name = self.tcdoc_doc_combo.currentText()
+            lines = [f"{name} · {cell(table, row, 0)}\n"
+                     f"{metric}{cell(table, row, column)}"
+                     for row in range(min(3, table.rowCount()))]
+            empty = self.tcdoc_status.text() or "尚无文档历史记录"
+        else:
+            table = self.account_table
+            lines = [f"{cell(table, row, 0)} · {cell(table, row, 1)}\n"
+                     f"粉丝 {cell(table, row, 3)}"
+                     for row in range(min(3, table.rowCount()))]
+            empty = self.account_status.text() or "尚无观察账号"
+        for index, label in enumerate(preview.findChildren(QLabel)):
+            text = lines[index] if index < len(lines) else (empty if index == 0 else "")
+            label.setText(text)
+            label.setToolTip(text)
+            label.setVisible(bool(text))
 
     @staticmethod
     def _fit_table_height(table, max_rows: int = 6) -> None:
@@ -1011,6 +1088,9 @@ class HomePage(BasePage):
 
     def _fit_drawer_height(self):
         """按当前页表格的实际行数收紧抽屉高度，避免数据少时留一大片空白。"""
+        self._refresh_stat_preview()
+        if self.drawer.isHidden():
+            return
         stack = getattr(self, "drawer_stack", None)
         if stack is None or getattr(self, "drawer", None) is None:
             return
@@ -1337,8 +1417,7 @@ class HomePage(BasePage):
             self._arrange_grid(grid, cards, tools)
         self._arrange_grid(self._stats_grid, self._stat_cards, stats)
         self._arrange_grid(self._charts_grid, self._chart_cards, charts)
-        self.body.layout().setContentsMargins(18 if narrow else 26, 22,
-                                             18 if narrow else 26, 28)
+        self.body.layout().setContentsMargins(16, 16, 16, 16)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1397,12 +1476,12 @@ class HomePage(BasePage):
                                ("site_pageviews", "浏览量"),
                                ("site_online", "在线")):
                 self._stat_values[key].setToolTip(
-                    f"{head}\n{label}：{int(stats.get(key, 0)):,}\n点击展开站点访问历史与采集")
+                    f"{head}\n{label}：{int(stats.get(key, 0)):,}\n点击在卡片内展开摘要")
         else:
             for key in SITE_STAT_KEYS:
                 self._stat_values[key].setText("—")
                 self._stat_values[key].setToolTip(
-                    f"尚无站点访问统计（口径：{scope}）\n点击展开站点访问历史与采集")
+                    f"尚无站点访问统计（口径：{scope}）\n点击在卡片内展开摘要")
 
         self.donut.set_items(_dist_items(by_source))
         self.trend.set_data(labels, counts)

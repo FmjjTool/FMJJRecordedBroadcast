@@ -1,4 +1,4 @@
-"""抖音指数 WebUI 适配（L2）：本地快照报表、达人搜索与抓取任务。"""
+"""抖音指数 WebUI 适配（L2）：快照报表、搜索与确认后的资产回写任务。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ class DouyinIndexService:
             raise ValueError("任务服务不可用")
         if not str(payload.get("uid") or "").strip():
             raise ValueError("请选择要抓取的达人")
+        if payload.get("confirmed") is not True:
+            raise ValueError("请先确认抓取并回写已有资产")
         job = self.jobs.submit(
             "douyin_index_fetch",
             lambda task: webui_douyin_index.fetch(

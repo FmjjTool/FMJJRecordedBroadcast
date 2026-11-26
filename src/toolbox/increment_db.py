@@ -462,12 +462,18 @@ def patch_existing_metrics(patches, *, db_path=None) -> dict:
                         record = json.loads(values["raw_json"] or "{}")
                     except (TypeError, ValueError):
                         result["invalid"] += 1
+                        if video_id not in result["invalid_ids"]:
+                            result["invalid_ids"].append(video_id)
                         continue
                     if not isinstance(record, dict):
                         result["invalid"] += 1
+                        if video_id not in result["invalid_ids"]:
+                            result["invalid_ids"].append(video_id)
                         continue
                     if record.get("platform", "douyin") != "douyin" or str(record.get("video_id", video_id)) != video_id:
                         result["invalid"] += 1
+                        if video_id not in result["invalid_ids"]:
+                            result["invalid_ids"].append(video_id)
                         continue
                     record = dict(record)
                     record["platform"], record["video_id"] = "douyin", video_id
@@ -479,6 +485,8 @@ def patch_existing_metrics(patches, *, db_path=None) -> dict:
                         result[status] += 1
                         if status == "stale" and video_id not in result["stale_ids"]:
                             result["stale_ids"].append(video_id)
+                        if status == "invalid" and video_id not in result["invalid_ids"]:
+                            result["invalid_ids"].append(video_id)
                         continue
                     merged, changed = merge_existing_metrics(record, patches[video_id])
                     if not changed:

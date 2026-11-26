@@ -391,8 +391,17 @@ def patch_existing_metrics(patches, *, db_path=None) -> dict:
                     try:
                         record = json.loads(payload)
                     except (TypeError, ValueError):
-                        continue
+                        record = None
                     if not isinstance(record, dict):
+                        # JSON 本身损坏时，仅稳定主键精确等于作品 ID 才能归属。
+                        if str(key) in patches:
+                            video_id = str(key)
+                            result["matched"] += 1
+                            result["invalid"] += 1
+                            if video_id not in result["matched_ids"]:
+                                result["matched_ids"].append(video_id)
+                            if video_id not in result["invalid_ids"]:
+                                result["invalid_ids"].append(video_id)
                         continue
                     video_id = str(record.get("video_id") or "")
                     if video_id not in patches:
@@ -405,6 +414,8 @@ def patch_existing_metrics(patches, *, db_path=None) -> dict:
                         result[status] += 1
                         if status == "stale" and video_id not in result["stale_ids"]:
                             result["stale_ids"].append(video_id)
+                        if status == "invalid" and video_id not in result["invalid_ids"]:
+                            result["invalid_ids"].append(video_id)
                         continue
                     merged, changed = merge_existing_metrics(record, patches[video_id])
                     if changed:

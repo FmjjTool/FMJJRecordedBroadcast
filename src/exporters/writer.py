@@ -80,6 +80,8 @@ def patch_existing_video_json(patches, output_dir) -> dict:
                         result[status] += 1
                         if status == "stale" and video_id not in result["stale_ids"]:
                             result["stale_ids"].append(video_id)
+                        if status == "invalid" and video_id not in result["invalid_ids"]:
+                            result["invalid_ids"].append(video_id)
                         continue
                     merged, changed = merge_existing_metrics(record, patches[video_id], localized=True)
                     if not changed:
