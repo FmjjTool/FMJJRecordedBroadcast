@@ -37,6 +37,7 @@ from gui_qt import common, table_sort, theme
 from gui_qt.common import FlowLayout as _FlowLayout, _fmt, icon_button, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import ElidedLabel
 from toolbox import asset_index, offline_events
 from toolbox.asset_content import (
     docx_to_html, files_summary_html, fmt_size as _fmt_size,
@@ -94,15 +95,19 @@ def _asset_styles() -> str:
     """
 
 
-def _asset_label(text, name="assetMeta", *, wrap=False):
-    label = QLabel(str(text))
+def _asset_label(text, name="assetMeta", *, wrap=False, elide=False):
+    if elide:
+        label = ElidedLabel(" ".join(str(text).split()))
+        label.setToolTip(str(text))
+    else:
+        label = QLabel(str(text))
     label.setObjectName(name)
     label.setProperty("role", {"assetHeading": "title", "assetSubtitle": "subtitle",
                                "assetSectionTitle": "sectionTitle", "assetRowTitle": "sectionTitle"}.get(name, "muted"))
     label.setTextFormat(Qt.PlainText)
     label.setWordWrap(wrap)
     label.setMinimumWidth(0)
-    label.setSizePolicy(QSizePolicy.Ignored if wrap else QSizePolicy.Preferred,
+    label.setSizePolicy(QSizePolicy.Ignored if wrap or elide else QSizePolicy.Preferred,
                         QSizePolicy.Preferred)
     return label
 
@@ -3215,10 +3220,12 @@ class AssetPage(BasePage):
         """构建资源卡片；行级刷新仍只替换这一行，主题更新不触发加载。"""
         row = _RowWidget(lambda it=it: self._show_detail(it),
                          lambda pos, it=it: self._row_context_menu(it, pos))
+        row.setFixedHeight(112)
         h = QHBoxLayout(row)
         h.setContentsMargins(12, 12, 12, 12)
         h.setSpacing(12)
         key = self._dl_key(it)
+        no_dl = self._no_dl_flagged(key)
         cb = QCheckBox()
         cb.setChecked(key in self._checked_keys)
         cb.stateChanged.connect(
@@ -3240,10 +3247,9 @@ class AssetPage(BasePage):
         h.addWidget(thumb)
 
         info = QVBoxLayout()
-        info.setSpacing(5)
+        info.setSpacing(4)
         full_title = it["title"] or "-"
-        title = full_title[:60] + ("…" if len(full_title) > 60 else "")
-        title_label = _asset_label(_wrappable(title), "assetRowTitle", wrap=True)
+        title_label = _asset_label(full_title, "assetRowTitle", elide=True)
         src_dir = (it.get("src_dir") or "").strip()
         title_label.setToolTip(f"{full_title}\n\n{src_dir or '(根目录)'}\n{os.path.basename(it['file_path'])}")
         info.addWidget(title_label)
@@ -3251,8 +3257,14 @@ class AssetPage(BasePage):
         if it["platform"] == "bilibili" and "is_dynamic" in it:
             plat += " · 动态" if it["is_dynamic"] else " · 视频"
         author = (it.get("author") or "").strip() or "-"
-        author_disp = author[:20] + ("…" if len(author) > 20 else "")
-        info.addWidget(_asset_label(f"#{index}  ·  {plat}  ·  @{author_disp}", wrap=True))
+        author_line = QHBoxLayout()
+        author_line.setSpacing(8)
+        author_line.addWidget(_asset_label(f"#{index}  ·  {plat}  ·  @{author}", elide=True), 1)
+        if no_dl:
+            flag = _asset_label("不可下载 · 右键可解除")
+            flag.setProperty("assetTone", "danger")
+            author_line.addWidget(flag)
+        info.addLayout(author_line)
         imgs = sum(1 for media in it.get("media_files", []) if media["type"] == "image")
         vids = sum(1 for media in it.get("media_files", []) if media["type"] == "video")
         media_parts = []
@@ -3261,18 +3273,11 @@ class AssetPage(BasePage):
         if vids:
             media_parts.append(f"视频 {vids}")
         media_text = "  ·  " + " / ".join(media_parts) if media_parts else ""
-        info.addWidget(_asset_label(f"播放 {_fmt(it['play_count'])}  ·  获赞 {_fmt(it['like_count'])}{media_text}", wrap=True))
+        info.addWidget(_asset_label(f"播放 {_fmt(it['play_count'])}  ·  获赞 {_fmt(it['like_count'])}{media_text}", elide=True))
         fname = os.path.basename(it["file_path"])
-        fname = fname[:44] + ("…" if len(fname) > 44 else "")
         date = it["date_part"] if it["date_part"] else "-"
-        source = src_dir if len(src_dir) <= 26 else "…" + src_dir[-25:]
-        location = f"日期 {date}  ·  {source + ' / ' if source else ''}{fname}"
-        info.addWidget(_asset_label(_wrappable(location), wrap=True))
-        no_dl = self._no_dl_flagged(key)
-        if no_dl:
-            flag = _asset_label("不可下载 · 右键可解除", wrap=True)
-            flag.setProperty("assetTone", "danger")
-            info.addWidget(flag)
+        location = f"日期 {date}  ·  {src_dir + ' / ' if src_dir else ''}{fname}"
+        info.addWidget(_asset_label(location, elide=True))
         h.addLayout(info, 1)
 
         actions = QVBoxLayout()
