@@ -24,7 +24,7 @@
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
     image_sorter: { kind: 'all', q: '' },
-    rename_batch: { path: '', recursive: false, filter: 'all' },
+    rename_batch: { path: '', recursive: false, filter: 'all', tab: 'rename' },
     shopping: { tab: 'taobao' },
     info_accounts: { platform: '', scope: 'all' },
     artifacts: { tab: 'comments' },
@@ -2459,13 +2459,176 @@
         });
       });
 
-      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+      function buildFileTimeCard(host) {
+        var modeSel = h('select', { class: 'select' },
+          h('option', { value: 'set' }, '指定时间'),
+          h('option', { value: 'offset' }, '偏移量'),
+          h('option', { value: 'name' }, '按文件名时间'));
+        var valueInput = h('input', {
+          class: 'input', type: 'datetime-local', style: 'width:200px'
+        });
+        var offsetInput = h('input', {
+          class: 'input', value: '+0h', placeholder: '如 +2h / -210m / -30s',
+          style: 'width:140px'
+        });
+        var modeHint = h('span', { class: 'muted small' });
+        var prevBtn = h('button', { class: 'btn', type: 'button' }, '预览');
+        var applyBtn = h('button', {
+          class: 'btn primary', type: 'button', disabled: true
+        }, '应用');
+        var statLine = h('div', {
+          class: 'muted small', style: 'margin:8px 0'
+        }, '只改文件的修改 / 创建 / 访问时间，不改文件名与内容；'
+          + '范围沿用上方「文件夹 / 子文件夹 / 类型」。');
+        var tableHost = h('div');
+
+        function payload() {
+          return {
+            path: pathInput.value.trim(),
+            recursive: recursiveCb.checked,
+            filter: filterSel.value,
+            mode: modeSel.value,
+            value: valueInput.value,
+            offset: offsetInput.value
+          };
+        }
+
+        function syncMode() {
+          var mode = modeSel.value;
+          valueInput.disabled = mode !== 'set';
+          offsetInput.disabled = mode !== 'offset';
+          modeHint.textContent = mode === 'set'
+            ? '按指定时间写入修改 / 创建 / 访问时间'
+            : (mode === 'offset' ? '在当前时间上整体加减'
+              : '从文件名里的日期推断，识别不到会跳过');
+          applyBtn.disabled = true;
+        }
+
+        function renderRows(data) {
+          var ready = data.ready || 0;
+          statLine.textContent = '共 ' + fmtNumber(data.total) + ' 个文件 · 可应用 '
+            + fmtNumber(ready)
+            + (data.truncated ? '（超过 2000 个，已截断）' : '')
+            + ' · 应用前会再次计算并二次确认';
+          var rows = data.rows || [];
+          if (!rows.length) {
+            tableHost.replaceChildren(empty('文件夹内没有符合条件的文件。'));
+            applyBtn.disabled = true;
+            return;
+          }
+          var head = h('tr');
+          ['序号', '文件', '当前修改时间', '当前创建时间', '新修改时间',
+            '新创建时间', '状态'].forEach(function (title, index) {
+            head.appendChild(h('th', {
+              class: index === 0 ? 'num' : ''
+            }, title));
+          });
+          var body = h('tbody');
+          rows.forEach(function (row) {
+            body.appendChild(h('tr', null,
+              h('td', { class: 'num' }, row.index),
+              h('td', { class: 'ellipsis' }, row.name),
+              h('td', null, row.mtime),
+              h('td', null, row.ctime),
+              h('td', {
+                style: row.status === '跳过' ? 'color: var(--danger)' : ''
+              }, row.new_mtime),
+              h('td', null, row.new_ctime),
+              h('td', null, row.status)));
+          });
+          tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' },
+              h('thead', null, head), body)));
+          applyBtn.disabled = !ready;
+        }
+
+        function preview() {
+          var data = payload();
+          if (!data.path) {
+            toast('请先在上方填写文件夹', 'warning');
+            return;
+          }
+          setLoading(tableHost, '正在计算新时间…');
+          applyBtn.disabled = true;
+          post('/api/file-time/preview', data).then(renderRows)
+            .catch(function (error) {
+              setError(tableHost, error, preview);
+            });
+        }
+
+        applyBtn.addEventListener('click', function () {
+          var data = payload();
+          if (!window.confirm('将修改「' + data.path + '」下文件的时间。\n\n'
+            + '只改时间元数据，不改文件名与内容；无法计算的文件会跳过。\n\n'
+            + '确定继续？')) {
+            return;
+          }
+          applyBtn.disabled = true;
+          post('/api/file-time/apply', Object.assign(data, { confirmed: true }))
+            .then(function (result) {
+              var failed = result.failed || [];
+              toast('时间修改完成：成功 ' + result.applied
+                + (failed.length ? '，跳过 ' + failed.length : ''),
+                failed.length ? 'warning' : 'success');
+              preview();
+            }).catch(function (error) {
+              applyBtn.disabled = false;
+              toast('时间修改失败：' + error.message, 'error');
+            });
+        });
+        prevBtn.addEventListener('click', preview);
+        modeSel.addEventListener('change', syncMode);
+        valueInput.addEventListener('input', function () {
+          applyBtn.disabled = true;
+        });
+        offsetInput.addEventListener('input', function () {
+          applyBtn.disabled = true;
+        });
+        syncMode();
+
+        host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+          h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+            '时间修改'),
+          h('div', { class: 'toolbar' },
+            h('span', { class: 'muted small' }, '方式'), modeSel,
+            valueInput, offsetInput, modeHint,
+            h('span', { style: 'flex:1' }), prevBtn, applyBtn),
+          statLine,
+          tableHost));
+      }
+
+      var renameHost = h('div');
+      var timeHost = h('div');
+      var tabRenameBtn = h('button', {
+        class: 'btn primary', type: 'button'
+      }, '批量改名');
+      var tabTimeBtn = h('button', { class: 'btn', type: 'button' }, '时间修改');
+
+      function showTab(which) {
+        renameHost.style.display = which === 'time' ? 'none' : '';
+        timeHost.style.display = which === 'time' ? '' : 'none';
+        tabRenameBtn.className = which === 'time' ? 'btn' : 'btn primary';
+        tabTimeBtn.className = which === 'time' ? 'btn primary' : 'btn';
+        state.rename_batch.tab = which === 'time' ? 'time' : 'rename';
+      }
+      tabRenameBtn.addEventListener('click', function () { showTab('rename'); });
+      tabTimeBtn.addEventListener('click', function () { showTab('time'); });
+
+      root.appendChild(h('div', {
+        class: 'toolbar', style: 'margin-bottom:12px'
+      }, tabRenameBtn, tabTimeBtn));
+      root.appendChild(renameHost);
+      root.appendChild(timeHost);
+      buildFileTimeCard(timeHost);
+      showTab(state.rename_batch.tab === 'time' ? 'time' : 'rename');
+
+      renameHost.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '文件夹'), pathInput,
           h('label', { class: 'check' }, recursiveCb, ' 包含子文件夹'),
           h('span', { class: 'muted small' }, '类型'), filterSel,
           scanBtn)));
-      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+      renameHost.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '改名规则'),
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '模板'), template),
@@ -2516,16 +2679,16 @@
         textmode,
         h('div', { class: 'muted small', style: 'margin-top:6px' },
           '随机数、改名时间与目录改名仍在桌面端。')));
-      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+      renameHost.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'row-title' }, '预览'),
           h('span', { style: 'flex:1' }),
           execBtn,
           h('span', { class: 'muted small' },
             '只改文件名，不改内容；执行前二次确认'))));
-      root.appendChild(stats);
-      root.appendChild(tableHost);
-      root.appendChild(resultHost);
+      renameHost.appendChild(stats);
+      renameHost.appendChild(tableHost);
+      renameHost.appendChild(resultHost);
       load();
     }).catch(function (error) {
       setError(root, error, function () { renderRenameBatch(root); });

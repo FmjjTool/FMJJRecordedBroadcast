@@ -5,7 +5,6 @@ Windows 下创建时间通过 win32file 或 ctypes 修改。
 """
 
 import os
-import re
 from datetime import datetime
 
 from PySide6.QtWidgets import (
@@ -17,69 +16,8 @@ from PySide6.QtWidgets import (
 from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
-
-
-def set_file_times(path: str, atime: float, mtime: float, ctime: float | None):
-    """设置文件时间。ctime 仅 Windows 生效（pywin32 优先，无则 ctypes）。"""
-    os.utime(path, (atime, mtime))
-    if ctime is None or os.name != "nt":
-        return
-    try:
-        import pywintypes
-        import win32file
-        h = win32file.CreateFileW(path, win32file.GENERIC_WRITE,
-                                  0, None, win32file.OPEN_EXISTING, 0, None)
-        try:
-            win32file.SetFileTime(h, pywintypes.Time(ctime), pywintypes.Time(atime), pywintypes.Time(mtime))
-        finally:
-            win32file.CloseHandle(h)
-    except ImportError:
-        import ctypes
-        from ctypes import wintypes
-
-        def _ft(ts: float) -> wintypes.FILETIME:
-            v = int(ts * 10_000_000) + 116444736000000000
-            ft = wintypes.FILETIME()
-            ft.dwLowDateTime = v & 0xFFFFFFFF
-            ft.dwHighDateTime = v >> 32
-            return ft
-
-        k32 = ctypes.windll.kernel32
-        CreateTime = _ft(ctime)
-        AccessTime = _ft(atime)
-        WriteTime = _ft(mtime)
-        h = k32.CreateFileW(str(path), 0x40000000, 0, None, 3, 0x80, None)
-        if h != -1:
-            try:
-                k32.SetFileTime(h, ctypes.byref(CreateTime),
-                                ctypes.byref(AccessTime), ctypes.byref(WriteTime))
-            finally:
-                k32.CloseHandle(h)
-
-
-def parse_time_from_name(name: str) -> tuple[float, float, float] | None:
-    """从文件名提取时间（2024-01-02、20240102、2024-01-02 15-04-05 等常见格式）。"""
-    m = re.search(r"(20\d{2})[-_.年/](\d{1,2})[-_.月/](\d{1,2})日?"
-                  r"(?:[-_ T](\d{1,2})[-_:T时](\d{1,2})(?:[-_:分](\d{1,2}))?)?", name)
-    if not m:
-        m = re.search(r"(20\d{2})(\d{2})(\d{2})[-_ ]?(\d{2})?(\d{2})?(\d{2})?", name)
-        if not m:
-            return None
-        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        hh = int(m.group(4) or 12)
-        mi = int(m.group(5) or 0)
-        ss = int(m.group(6) or 0)
-    else:
-        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        hh = int(m.group(4) or 12)
-        mi = int(m.group(5) or 0)
-        ss = int(m.group(6) or 0)
-    try:
-        dt = datetime(y, mo, d, hh, mi, ss)
-        ts = dt.timestamp()
-        return (ts, ts, ts)
-    except ValueError:
-        return None
+from toolbox.file_time_rules import (parse_offset, parse_time_from_name,
+                                     set_file_times)
 
 
 class FileTimePage(BasePage):
@@ -229,14 +167,11 @@ class FileTimePage(BasePage):
             ts = self.time_dt.dateTime().toSecsSinceEpoch()
             return (ts, ts, ts)
         if self.rb_offset.isChecked():
-            txt = self.offset_entry.text().strip().lower()
-            m = re.fullmatch(r"([+-])(\d+(?:\.\d+)?)([smhd])", txt)
-            if not m:
-                return "偏移格式错误（如 -3h30m 不支持混合，请用 -210m）"
-            sign = 1 if m.group(1) == "+" else -1
-            unit = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(3)]
-            delta = sign * float(m.group(2)) * unit
-            return (st.st_atime + delta, st.st_mtime + delta, (st.st_ctime + delta) if os.name == "nt" else None)
+            delta = parse_offset(self.offset_entry.text())
+            if isinstance(delta, str):
+                return delta
+            return (st.st_atime + delta, st.st_mtime + delta,
+                    (st.st_ctime + delta) if os.name == "nt" else None)
         # 按文件名
         got = parse_time_from_name(os.path.basename(f))
         if not got:
