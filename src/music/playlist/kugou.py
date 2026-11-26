@@ -254,7 +254,8 @@ class KugouPlaylistWriter(BasePlaylistWriter):
         info = self._list_info(playlist_id, cookie, transport)
         if not info:
             return False
-        if info.get("is_drop"):
+        # 用户在客户端删掉歌单后，get_list_info 仍会返回旧记录，只有 deleted=1 能区分
+        if info.get("deleted") or info.get("is_drop"):
             return False
         got_name = str(info.get("name") or "").strip()
         return not (name and got_name and got_name != str(name).strip())
@@ -276,7 +277,7 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             return ""
         info = self._list_info(playlist_id, cookie, transport)
         if info:
-            if info.get("is_drop"):
+            if info.get("deleted") or info.get("is_drop"):
                 return ""
             got_name = str(info.get("name") or "").strip()
             if name and got_name and got_name != str(name).strip():
