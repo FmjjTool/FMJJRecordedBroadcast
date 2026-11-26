@@ -104,6 +104,21 @@ class MatchItem:
     score: float = 0.0
     candidates: list[tuple[SongInfo, float]] = field(default_factory=list)
     note: str = ""
+    # 逐首写入勾选：None = 按状态默认（已匹配写入、待确认不写入），
+    # True / False = 用户在结果表里手动勾选的结果，写入时以此为准。
+    selected: Optional[bool] = None
+
+    @property
+    def selectable(self) -> bool:
+        """结果表里能否勾选：只有找到了平台曲目且不是重复的才有可写入对象。"""
+        return bool(self.target) and self.status in ("matched", "uncertain")
+
+    def is_selected(self, include_uncertain: bool = False) -> bool:
+        if not self.selectable:
+            return False
+        if self.selected is None:
+            return self.status == "matched" or bool(include_uncertain)
+        return bool(self.selected)
 
     def to_dict(self) -> dict:
         return {
@@ -116,6 +131,8 @@ class MatchItem:
                 for song, score in self.candidates[:3]
             ],
             "note": self.note,
+            "selectable": self.selectable,
+            "selected": self.is_selected(False),
         }
 
 
@@ -138,10 +155,26 @@ class PlatformPlan:
         return counts
 
     def selected(self, include_uncertain: bool = False) -> list[MatchItem]:
-        allowed = {"matched"}
-        if include_uncertain:
-            allowed.add("uncertain")
-        return [item for item in self.items if item.status in allowed and item.target]
+        return [item for item in self.items if item.is_selected(include_uncertain)]
+
+    def select_all(self, include_uncertain: bool = False) -> int:
+        """按默认规则把可勾选曲目全部勾上（未找到 / 重复的无法勾选）。"""
+        count = 0
+        for item in self.items:
+            if not item.selectable:
+                item.selected = False
+                continue
+            item.selected = item.status == "matched" or bool(include_uncertain)
+            if item.selected:
+                count += 1
+        return count
+
+    def clear_selection(self) -> None:
+        for item in self.items:
+            item.selected = False
+
+    def selected_count(self, include_uncertain: bool = False) -> int:
+        return len(self.selected(include_uncertain))
 
     def to_dict(self) -> dict:
         return {

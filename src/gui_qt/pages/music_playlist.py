@@ -32,8 +32,11 @@ from gui_qt.toolbox_common import ElidedLabel, ToolSectionCard
 from music import playlist_service as service
 from music.playlist_service import PlaylistWriteError
 
-_COLUMNS = ["平台", "序号", "歌曲", "歌手", "状态", "匹配歌曲", "匹配歌手", "相似度", "说明"]
-_WIDTHS = [56, 40, 170, 100, 60, 160, 100, 52]
+_COLUMNS = ["写入", "平台", "序号", "歌曲", "歌手", "状态", "匹配歌曲", "匹配歌手", "相似度", "说明"]
+_WIDTHS = [44, 56, 40, 170, 100, 60, 160, 100, 52]
+# 结果表列下标（勾选列在最前，其余整体右移一位）
+_COL_CHECK, _COL_PLATFORM, _COL_INDEX = 0, 1, 2
+_COL_SCORE, _COL_NOTE = 8, 9
 _STATE_LABELS = {
     "matched": "已匹配",
     "uncertain": "待确认",
@@ -70,6 +73,10 @@ class MusicPlaylistPage(BasePage):
         self._report_dir = service.report_dir()
         self._report_paths: list[Path] = []
         self._platform_supported: dict[str, bool] = {}
+        # 结果表「写入」列勾选：key -> MatchItem / 复选框单元格（排序会移动单元格，键跟着走）
+        self._selection: dict[str, service.MatchItem] = {}
+        self._check_cells: dict[str, QTableWidgetItem] = {}
+        self._filling = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -174,7 +181,9 @@ class MusicPlaylistPage(BasePage):
         action_row.setSpacing(8)
         self.include_uncertain = QCheckBox("同时加入待确认歌曲")
         self.include_uncertain.setToolTip(
-            "相似度不足的候选通常只是同名翻唱或伴奏，默认不写入")
+            "相似度不足的候选通常只是同名翻唱或伴奏，默认不写入；\n"
+            "勾上后结果表里「待确认」的行会全部打勾，仍可逐首取消")
+        self.include_uncertain.toggled.connect(self._on_include_uncertain_changed)
         action_row.addWidget(self.include_uncertain)
 
         self.progress = QProgressBar()
@@ -220,6 +229,28 @@ class MusicPlaylistPage(BasePage):
         self.summary_label.setWordWrap(True)
         card.content_layout.addWidget(self.summary_label)
 
+        pick_row = QHBoxLayout()
+        pick_row.setSpacing(8)
+        self.selection_label = QLabel("")
+        self.selection_label.setProperty("role", "muted")
+        pick_row.addWidget(self.selection_label)
+        pick_row.addStretch(1)
+        self.select_all_btn = QPushButton("全选")
+        self.select_all_btn.setToolTip("勾选已匹配 + 待确认的全部歌曲")
+        self.select_all_btn.clicked.connect(lambda: self._bulk_select("all"))
+        pick_row.addWidget(self.select_all_btn)
+        self.select_matched_btn = QPushButton("只选已匹配")
+        self.select_matched_btn.setToolTip("只勾选相似度达标的歌曲，待确认的取消勾选")
+        self.select_matched_btn.clicked.connect(lambda: self._bulk_select("matched"))
+        pick_row.addWidget(self.select_matched_btn)
+        self.select_none_btn = QPushButton("全不选")
+        self.select_none_btn.clicked.connect(lambda: self._bulk_select("none"))
+        pick_row.addWidget(self.select_none_btn)
+        for button in (self.select_all_btn, self.select_matched_btn,
+                       self.select_none_btn):
+            button.setEnabled(False)
+        card.content_layout.addLayout(pick_row)
+
         self.table = QTableWidget(0, len(_COLUMNS))
         self.table.setHorizontalHeaderLabels(_COLUMNS)
         self.table.verticalHeader().setVisible(False)
@@ -231,9 +262,11 @@ class MusicPlaylistPage(BasePage):
         for index, width in enumerate(_WIDTHS):
             header.setSectionResizeMode(index, QHeaderView.Interactive)
             self.table.setColumnWidth(index, width)
-        header.setSectionResizeMode(8, QHeaderView.Stretch)
-        # 序号列不参与排序：其余列可点击表头升 / 降 / 还原
-        self._sorter = table_sort.install(self.table, skip_columns=(1,))
+        header.setSectionResizeMode(_COL_NOTE, QHeaderView.Stretch)
+        self.table.itemChanged.connect(self._on_check_changed)
+        # 序号列 / 勾选列不参与排序：其余列可点击表头升 / 降 / 还原
+        self._sorter = table_sort.install(
+            self.table, skip_columns=(_COL_CHECK, _COL_INDEX))
         card.content_layout.addWidget(self.table, 1)
 
         footer = QHBoxLayout()
@@ -401,7 +434,10 @@ class MusicPlaylistPage(BasePage):
         self._cancel.clear()
         self._plans = []
         self._report_paths = []
+        self._selection = {}
+        self._check_cells = {}
         self.table.setRowCount(0)
+        self.selection_label.setText("正在匹配…")
         self.summary_label.setText("正在读取来源…")
         self.log_view.clear()
         self.apply_btn.setEnabled(False)
@@ -454,21 +490,40 @@ class MusicPlaylistPage(BasePage):
             return
         total_matched = sum(plan.counts()["matched"] for plan in plans)
         self.summary_label.setText(
-            f"来源：{label}；已匹配 {total_matched} 首，确认后可写入")
+            f"来源：{label}；已匹配 {total_matched} 首，"
+            "可在「写入」列逐首勾选后确认写入")
         self.status_label.setText(
             f"预览完成：{source_count} 首歌，{len(plans)} 个平台"
             + ("；已停止，部分平台未匹配" if self._cancel.is_set() else ""))
         self._log(f"预览完成，报告：{self._report_paths[-1] if self._report_paths else '—'}")
         self.progress.setValue(100)
-        self.apply_btn.setEnabled(bool(total_matched))
+        self._refresh_selection()
 
     def _fill_table(self, plans):
+        include_uncertain = self.include_uncertain.isChecked()
+        self._selection = {}
+        self._check_cells = {}
         rows = []
         for plan in plans:
             for index, item in enumerate(plan.items, 1):
+                key = f"{plan.platform}#{index}"
+                self._selection[key] = item
+                # 默认勾选落成显式状态，用户随后逐首勾选 / 取消都以此为准
+                item.selected = item.is_selected(include_uncertain)
+                rows.append((key, plan.platform_name, index, item))
+
+        self._filling = True
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(rows))
+            for row_index, (key, platform_name, index, item) in enumerate(rows):
                 target = item.target
-                rows.append([
-                    plan.platform_name,
+                cell = self._check_cell(key, item)
+                self.table.setItem(row_index, _COL_CHECK, cell)
+                if item.selectable:
+                    self._check_cells[key] = cell
+                values = [
+                    platform_name,
                     str(index),
                     item.source.title,
                     item.source.artist or "—",
@@ -477,20 +532,103 @@ class MusicPlaylistPage(BasePage):
                     (target.singer or "—") if target else "—",
                     f"{item.score:.2f}" if target else "—",
                     item.note,
-                ])
-        self.table.setUpdatesEnabled(False)
-        try:
-            self.table.setRowCount(len(rows))
-            for row_index, row in enumerate(rows):
-                for col, text in enumerate(row):
-                    cell = QTableWidgetItem(text)
-                    if col in (1, 7):
-                        cell.setTextAlignment(Qt.AlignCenter)
-                    if col == 8:
-                        cell.setToolTip(text)
-                    self.table.setItem(row_index, col, cell)
+                ]
+                for offset, text in enumerate(values):
+                    col = _COL_PLATFORM + offset
+                    body = QTableWidgetItem(text)
+                    if col in (_COL_INDEX, _COL_SCORE):
+                        body.setTextAlignment(Qt.AlignCenter)
+                    if col == _COL_NOTE:
+                        body.setToolTip(text)
+                    self.table.setItem(row_index, col, body)
         finally:
             self.table.setUpdatesEnabled(True)
+            self._filling = False
+        self._refresh_selection()
+
+    def _check_cell(self, key: str, item) -> QTableWidgetItem:
+        """「写入」列：能写入的行给复选框，其余留空说明原因。"""
+        cell = QTableWidgetItem()
+        if not item.selectable:
+            cell.setText("—")
+            cell.setTextAlignment(Qt.AlignCenter)
+            cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            cell.setToolTip("未找到平台曲目或重复，无法写入")
+            return cell
+        cell.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
+                      | Qt.ItemIsSelectable)
+        # 用键定位 MatchItem：表头排序后单元格会换行，键跟着单元格走
+        cell.setData(Qt.UserRole, key)
+        cell.setCheckState(Qt.Checked if item.selected else Qt.Unchecked)
+        cell.setToolTip("勾选＝写入这首歌，取消勾选＝这次跳过")
+        return cell
+
+    def _on_check_changed(self, cell: QTableWidgetItem):
+        if self._filling or cell.column() != _COL_CHECK:
+            return
+        key = str(cell.data(Qt.UserRole) or "")
+        item = self._selection.get(key)
+        if item is None or not item.selectable:
+            return
+        item.selected = cell.checkState() == Qt.Checked
+        self._refresh_selection()
+
+    def _on_include_uncertain_changed(self, checked: bool):
+        """顶部开关同步到结果表：待确认的行整批勾上 / 取消。"""
+        if not self._selection or self._filling:
+            return
+        self._filling = True
+        try:
+            for key, item in self._selection.items():
+                if item.status != "uncertain" or not item.selectable:
+                    continue
+                item.selected = bool(checked)
+                cell = self._check_cells.get(key)
+                if cell is not None:
+                    cell.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        finally:
+            self._filling = False
+        self._refresh_selection()
+
+    def _bulk_select(self, mode: str):
+        if not self._selection:
+            return
+        self._filling = True
+        try:
+            for key, item in self._selection.items():
+                if not item.selectable:
+                    continue
+                if mode == "all":
+                    item.selected = True
+                elif mode == "matched":
+                    item.selected = item.status == "matched"
+                else:
+                    item.selected = False
+                cell = self._check_cells.get(key)
+                if cell is not None:
+                    cell.setCheckState(
+                        Qt.Checked if item.selected else Qt.Unchecked)
+        finally:
+            self._filling = False
+        self._refresh_selection()
+
+    def _chosen_plans(self) -> list[service.PlatformPlan]:
+        """当前勾选中有歌要写的平台计划（未勾选任何歌的平台不参与写入）。"""
+        return [plan for plan in self._plans if plan.selected()]
+
+    def _refresh_selection(self):
+        chosen = sum(plan.selected_count() for plan in self._plans) if self._plans else 0
+        total = sum(len(plan.items) for plan in self._plans) if self._plans else 0
+        if not self._plans:
+            self.selection_label.setText("预览后可在「写入」列逐首勾选")
+        else:
+            self.selection_label.setText(
+                f"已勾选 {chosen} / {total} 首写入（「写入」列可逐首勾选）")
+        if not self._busy:
+            self.apply_btn.setEnabled(bool(chosen))
+            for button in (self.select_all_btn, self.select_matched_btn,
+                           self.select_none_btn):
+                button.setEnabled(bool(self._plans))
 
     def _write_preview_report(self, plans):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -513,16 +651,19 @@ class MusicPlaylistPage(BasePage):
         if self._busy or not self._plans:
             return
         targets = set(self._target_platforms())
-        plans = [plan for plan in self._plans if plan.platform in targets]
+        plans = [plan for plan in self._chosen_plans() if plan.platform in targets]
         if not plans:
-            QMessageBox.information(self, "歌单", "当前勾选的平台还没有预览结果，请先预览")
+            QMessageBox.information(
+                self, "歌单", "还没有勾选任何要写入的歌曲，请先在「写入」列勾选")
             return
 
         lines = []
         for plan in plans:
             counts = plan.counts()
-            lines.append(f"{plan.platform_name}：写入 {counts['matched']} 首"
-                         f"（待确认 {counts['uncertain']} 首、未找到 {counts['missing']} 首不写入）")
+            chosen = plan.selected_count()
+            lines.append(f"{plan.platform_name}：勾选写入 {chosen} 首"
+                         f"（另有待确认 {counts['uncertain']} 首、"
+                         f"未找到 {counts['missing']} 首未勾选）")
         detail = "\n".join(lines)
         if any(plan.platform == "kugou" for plan in plans):
             detail += ("\n\n酷狗云歌单需要登录酷狗 App："
@@ -543,7 +684,8 @@ class MusicPlaylistPage(BasePage):
         self.progress.setRange(0, 0)
         self.status_label.setText("正在写入平台…")
         self._log("开始写入平台…")
-        include_uncertain = self.include_uncertain.isChecked()
+        # 逐首勾选已经在结果表里落成显式状态，写入完全以勾选为准
+        include_uncertain = False
         # 来源是线下活动时，写完平台歌单要回填腾讯文档「活动歌单_*」三列
         event = (dict(self._event) if self.source_box.currentData() == _SOURCE_EVENT
                  and self._event else None)
@@ -672,7 +814,12 @@ class MusicPlaylistPage(BasePage):
         self.pick_btn.setEnabled(not busy)
         for platform, box in self._platform_boxes.items():
             box.setEnabled(not busy and self._platform_supported.get(platform, False))
-        self.apply_btn.setEnabled(not busy and bool(self._plans))
+        for button in (self.select_all_btn, self.select_matched_btn,
+                       self.select_none_btn):
+            button.setEnabled(not busy and bool(self._plans))
+        self.apply_btn.setEnabled(
+            not busy and bool(self._plans) and any(
+                plan.selected_count() for plan in self._plans))
 
     def _log(self, text: str):
         if not text:

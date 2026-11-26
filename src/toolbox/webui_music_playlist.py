@@ -198,12 +198,31 @@ def _rows(plans) -> list[dict]:
                 "source_title": item.source.title,
                 "source_artist": item.source.artist or "",
                 "state": _STATE_LABELS.get(item.status, item.status),
+                "status": item.status,
                 "target_name": (target.song_name or target.title) if target else "",
                 "target_artist": (target.singer or "") if target else "",
                 "score": round(item.score, 2) if target else None,
                 "note": item.note or "",
+                "selectable": item.selectable,
+                "selected": item.is_selected(False),
             })
     return rows
+
+
+def _join_selection(plans, selection) -> None:
+    """把前端表格的逐首勾选（平台 → 1 起的序号列表）落到计划条目上。"""
+    for plan in plans:
+        indexes = selection.get(plan.platform)
+        if indexes is None:
+            continue
+        keep = set()
+        for value in indexes:
+            try:
+                keep.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        for index, item in enumerate(plan.items, 1):
+            item.selected = bool(item.selectable and index in keep)
 
 
 def _event_of(payload: dict) -> dict | None:
@@ -268,6 +287,7 @@ def preview(payload: dict, on_log=None, is_cancelled=None) -> dict:
     counts = {plan.platform: plan.counts() for plan in plans}
     matched = sum(item["matched"] for item in counts.values())
     total = sum(len(plan.items) for plan in plans)
+    chosen = sum(plan.selected_count() for plan in plans)
     rows = _rows(plans)
     truncated = len(rows) > _MAX_PREVIEW_ROWS
     if truncated:
@@ -295,12 +315,14 @@ def preview(payload: dict, on_log=None, is_cancelled=None) -> dict:
             "platform_name": plan.platform_name,
             "playlist_name": plan.playlist_name,
             "counts": counts[plan.platform],
+            "selected": plan.selected_count(),
         } for plan in plans],
         "rows": rows,
         "total": total,
         "matched": matched,
         "truncated": truncated,
         "report": report,
+        "chosen": chosen,
         "summary": f"{label} · {matched}/{total} 首可写入",
     }
 
@@ -318,7 +340,16 @@ def apply(payload: dict, on_log=None, is_cancelled=None) -> dict:
              if not targets or plan.platform in targets]
     if not plans:
         raise ValueError("所选平台没有预览结果")
-    include_uncertain = bool(payload.get("include_uncertain"))
+    selection = payload.get("selection")
+    if isinstance(selection, dict) and selection:
+        # 前端表格逐首勾选优先：没勾到任何歌的平台整条跳过
+        _join_selection(plans, selection)
+        plans = [plan for plan in plans if plan.selected()]
+        if not plans:
+            raise ValueError("没有勾选任何要写入的歌曲")
+        include_uncertain = False
+    else:
+        include_uncertain = bool(payload.get("include_uncertain"))
     cancel = is_cancelled or (lambda: False)
 
     results = []

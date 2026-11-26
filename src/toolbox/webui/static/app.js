@@ -8753,6 +8753,35 @@ function renderLivestreamSummary(root) {
     var previewId = '';
     var previewData = null;
     var busy = false;
+    // 预览结果表的逐首勾选（行对象 + 复选框），写入时换算成 平台 → 序号列表
+    var selectionCells = [];
+    var selectionLabel = null;
+
+    function selectionCount() {
+      return selectionCells.filter(function (entry) {
+        return entry.row.selectable && entry.box.checked;
+      }).length;
+    }
+
+    function collectSelection() {
+      var out = {};
+      selectionCells.forEach(function (entry) {
+        var row = entry.row;
+        if (!(row.platform in out)) out[row.platform] = [];
+        if (row.selectable && entry.box.checked) out[row.platform].push(row.index);
+      });
+      return out;
+    }
+
+    function refreshSelectionCount() {
+      var count = selectionCount();
+      if (selectionLabel) {
+        selectionLabel.textContent = '已勾选 ' + count
+          + ' 首写入（「写入」列可逐首勾选）';
+      }
+      applyBtn.disabled = !previewId || count <= 0;
+      return count;
+    }
 
     function syncSource() {
       var kind = kindSel.value;
@@ -8810,7 +8839,7 @@ function renderLivestreamSummary(root) {
     function renderPreview(data) {
       previewData = data;
       previewId = data.preview_id || '';
-      applyBtn.disabled = !previewId || !(data.matched > 0);
+      applyBtn.disabled = !previewId || !(data.chosen > 0);
       var planRows = (data.plans || []).map(function (plan) {
         var counts = plan.counts || {};
         return h('div', { class: 'muted small' },
@@ -8818,9 +8847,36 @@ function renderLivestreamSummary(root) {
           + '（待确认 ' + (counts.uncertain || 0) + '、未找到 '
           + (counts.missing || 0) + '、重复 ' + (counts.duplicate || 0) + '）');
       });
+      selectionCells = [];
+      selectionLabel = h('span', { class: 'muted small' });
+      function setAll(mode) {
+        selectionCells.forEach(function (entry) {
+          if (!entry.row.selectable) return;
+          if (mode === 'all') entry.box.checked = true;
+          else if (mode === 'matched') {
+            entry.box.checked = entry.row.status === 'matched';
+          } else entry.box.checked = false;
+        });
+        refreshSelectionCount();
+      }
+      includeUncertain.onchange = function () {
+        // 顶部开关同步到结果表：勾上＝待确认整批写入，取消＝回到只写已匹配
+        setAll(includeUncertain.checked ? 'all' : 'matched');
+      };
       var body = h('tbody');
       (data.rows || []).forEach(function (row) {
+        var box = h('input', {
+          type: 'checkbox',
+          checked: !!row.selected,
+          disabled: !row.selectable,
+          title: row.selectable
+            ? '勾选＝写入这首歌，取消勾选＝这次跳过'
+            : '未找到平台曲目或重复，无法写入'
+        });
+        box.addEventListener('change', refreshSelectionCount);
+        if (row.selectable) selectionCells.push({ row: row, box: box });
         body.appendChild(h('tr', null,
+          h('td', { class: 'num' }, box),
           h('td', null, h('span', { class: 'badge' }, row.platform_name)),
           h('td', { class: 'num' }, row.index),
           h('td', { class: 'ellipsis' }, row.source_title || '-'),
@@ -8830,20 +8886,38 @@ function renderLivestreamSummary(root) {
           h('td', { class: 'ellipsis' }, row.target_artist || '-'),
           h('td', { class: 'num' }, row.score === null ? '-' : row.score)));
       });
+      refreshSelectionCount();
       resultHost.replaceChildren(
         h('div', { style: 'margin-top:10px' },
           h('div', { class: 'row-title', style: 'margin-bottom:6px' },
             data.source + ' · ' + data.matched + '/' + data.total + ' 首可写入'),
           planRows,
+          h('div', { class: 'toolbar', style: 'margin-top:8px' },
+            selectionLabel,
+            h('span', { style: 'flex:1' }),
+            h('button', {
+              class: 'btn small', type: 'button',
+              onclick: function () { setAll('all'); }
+            }, '全选'),
+            h('button', {
+              class: 'btn small', type: 'button',
+              onclick: function () { setAll('matched'); }
+            }, '只选已匹配'),
+            h('button', {
+              class: 'btn small', type: 'button',
+              onclick: function () { setAll('none'); }
+            }, '全不选')),
           h('div', { class: 'table-wrap', style: 'margin-top:8px' },
             h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+              h('th', { class: 'num' }, '写入'),
               h('th', null, '平台'), h('th', { class: 'num' }, '序号'),
               h('th', null, '来源歌曲'), h('th', null, '来源歌手'),
               h('th', null, '状态'), h('th', null, '匹配歌曲'),
               h('th', null, '匹配歌手'), h('th', { class: 'num' }, '相似度'))),
             body)),
           data.truncated ? h('div', { class: 'muted small' },
-            '结果过多，仅显示前 ' + (data.rows || []).length + ' 行。') : null));
+            '结果过多，仅显示前 ' + (data.rows || []).length
+            + ' 行；未显示的行不会被勾选写入。') : null));
     }
 
     previewBtn.addEventListener('click', function () {
@@ -8883,8 +8957,14 @@ function renderLivestreamSummary(root) {
 
     applyBtn.addEventListener('click', function () {
       if (busy || !previewId) return;
+      var selection = collectSelection();
+      if (selectionCount() <= 0) {
+        toast('还没有勾选任何要写入的歌曲', 'warning');
+        return;
+      }
       var lines = (previewData.plans || []).map(function (plan) {
-        return plan.platform_name + '：写入 ' + ((plan.counts || {}).matched || 0) + ' 首';
+        var picked = (selection[plan.platform] || []).length;
+        return plan.platform_name + '：勾选写入 ' + picked + ' 首';
       }).join('\n');
       var detail = '歌单名称：' + (previewData.name || '') + '\n' + lines
         + (boxes.some(function (item) {
@@ -8900,7 +8980,8 @@ function renderLivestreamSummary(root) {
       post('/api/tools/music-playlist/apply', {
         preview_id: previewId,
         platforms: payload().platforms,
-        include_uncertain: includeUncertain.checked
+        include_uncertain: includeUncertain.checked,
+        selection: collectSelection()
       }).then(function (result) {
         watchJob(jobHost, result.job, function (job) {
           var data = job.result || {};
