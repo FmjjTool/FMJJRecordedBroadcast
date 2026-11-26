@@ -446,6 +446,8 @@ class DouyinIndexPage(BasePage):
 
     # ---------- 搜索（两步确认） ----------
     def _do_search(self):
+        if self._busy:
+            return
         kw = self.input_edit.text().strip()
         if not kw:
             self.status_label.setText("请输入达人名称或抖音号")
@@ -772,6 +774,7 @@ class DouyinIndexPage(BasePage):
         self._busy = busy
         if busy:
             self._cancel_requested = False
+        self.input_edit.setEnabled(not busy)
         self.search_btn.setEnabled(not busy)
         self.fetch_btn.setEnabled(not busy)
         self.open_btn.setEnabled(not busy)

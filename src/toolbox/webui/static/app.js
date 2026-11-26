@@ -8883,8 +8883,11 @@ function renderLivestreamSummary(root) {
   }
 
   function renderDouyinIndex(root) {
+    var view = {};
+    state.douyin.view = view;
     setLoading(root, '正在读取抖音指数快照…');
     api('/api/douyin-index').then(function (data) {
+      if (state.route !== 'douyin_index' || state.douyin.view !== view) return;
       root.replaceChildren();
       var reports = data.reports || [];
       var keyword = h('input', {
@@ -8908,7 +8911,7 @@ function renderLivestreamSummary(root) {
         });
       }
       var searching = false;
-      var fetching = false;
+      var fetching = !!state.douyin.fetchTask;
       function setFetching(busy) {
         fetching = busy;
         keyword.disabled = busy;
@@ -8919,8 +8922,34 @@ function renderLivestreamSummary(root) {
           button.textContent = busy ? '抓取中…' : '抓取并回写';
         });
       }
+      function watchFetch(task) {
+        if (!task.job) {
+          fetchJobHost.textContent = '正在提交抓取任务…';
+          return;
+        }
+        watchJob(fetchJobHost, task.job, null, {
+          cancelable: true,
+          indeterminate: true,
+          onSettled: function (done) {
+            if (state.douyin.fetchTask !== task) return;
+            state.douyin.fetchTask = null;
+            if (done.status === 'error') {
+              state.douyin.lastResult = { summary: '抓取失败：'
+                + (done.error || '请检查登录状态、网络与目录权限后重试') };
+            } else if (done.status === 'cancelled') {
+              state.douyin.lastResult = done.result || {
+                summary: '已取消，已保存的快照与已完成的回写保留；可在资产库刷新查看。'
+              };
+            } else {
+              state.douyin.lastResult = done.result || {};
+            }
+            setFetching(false);
+            if (state.route === 'douyin_index') renderDouyinIndex(root);
+          }
+        });
+      }
       searchBtn.addEventListener('click', function () {
-        if (searching) return;
+        if (searching || state.douyin.fetchTask) return;
         if (!keyword.value.trim()) {
           toast('请输入达人名称或抖音号', 'warning');
           return;
@@ -8949,37 +8978,30 @@ function renderLivestreamSummary(root) {
                 class: 'btn mini primary', type: 'button'
               }, '抓取并回写');
               btn.addEventListener('click', function () {
-                if (fetching) return;
+                if (fetching || state.douyin.fetchTask) return;
                 if (!window.confirm('抓取「' + (item.name || item.uid) + '」并回写已有资产？\n\n'
                   + '将保存指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。'
                   + '\n不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。')) return;
+                var task = { job: null };
+                state.douyin.fetchTask = task;
+                state.douyin.lastResult = null;
                 setFetching(true);
                 fetchResultHost.textContent = '';
+                watchFetch(task);
                 post('/api/douyin-index/fetch', {
                   uid: item.uid, days: Number(daysSel.value) || 30, confirmed: true
                 }).then(function (job) {
-                  watchJob(fetchJobHost, job.job, function (done) {
-                    var outcome = done.result || {};
-                    state.douyin.lastResult = outcome;
-                    renderDouyinIndex(root);
-                  }, {
-                    cancelable: true,
-                    onSettled: function (done) {
-                      setFetching(false);
-                      if (done.status === 'error') {
-                        fetchResultHost.textContent = '抓取失败：'
-                          + (done.error || '请检查登录状态、网络与目录权限后重试');
-                      } else if (done.status === 'cancelled') {
-                        state.douyin.lastResult = done.result || {
-                          summary: '已取消，已保存的快照与已完成的回写保留；可在资产库刷新查看。'
-                        };
-                        renderDouyinIndex(root);
-                      }
-                    }
-                  });
+                  task.job = job.job;
+                  if (state.route === 'douyin_index') {
+                    if (state.douyin.view === view) watchFetch(task);
+                    else renderDouyinIndex(root);
+                  }
                 }).catch(function (error) {
+                  if (state.douyin.fetchTask !== task) return;
+                  state.douyin.fetchTask = null;
+                  state.douyin.lastResult = { summary: '抓取失败：' + error.message };
                   setFetching(false);
-                  fetchResultHost.textContent = '抓取失败：' + error.message;
+                  if (state.route === 'douyin_index') renderDouyinIndex(root);
                 });
               });
               body.appendChild(h('tr', null,
@@ -9007,6 +9029,8 @@ function renderLivestreamSummary(root) {
           h('span', { class: 'muted small' },
             '搜索需要登录；抓取后保存指数快照，并按视频 ID 回写已有抖音资产。')),
         searchHost, fetchJobHost, fetchResultHost));
+      setFetching(!!state.douyin.fetchTask);
+      if (state.douyin.fetchTask) watchFetch(state.douyin.fetchTask);
       if (!reports.length) {
         root.appendChild(empty(
           '暂无本地快照。可搜索达人后抓取，或到桌面端「抖音指数」抓取。'));
@@ -9254,6 +9278,7 @@ function renderLivestreamSummary(root) {
 
       loadReport();
     }).catch(function (error) {
+      if (state.route !== 'douyin_index' || state.douyin.view !== view) return;
       setError(root, error, function () { renderDouyinIndex(root); });
     });
   }

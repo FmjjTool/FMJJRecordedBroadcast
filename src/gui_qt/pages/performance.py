@@ -295,7 +295,8 @@ class PerformancePage(BasePage):
             self.report_combo.clear()
             self.report_combo.addItem("当前会话", None)
             for item in (result or {}).get("reports", []):
-                label = f"{item.get('started_at') or '未记录时间'} · {item.get('samples', 0)} 次采样"
+                started = str(item.get('started_at') or '未记录时间').replace('T', ' ')[:19]
+                label = f"{started} · {item.get('samples', 0)} 次采样"
                 self.report_combo.addItem(label, item["id"])
                 self.report_combo.setItemData(self.report_combo.count() - 1, item["filename"], Qt.ToolTipRole)
             index = self.report_combo.findData(selected) if selected else 0
@@ -367,7 +368,8 @@ class PerformancePage(BasePage):
         if autosave.get("error"):
             self.save_status.setText("自动保存失败；数据仍保留，可在启动与报告页重试或手动导出")
         elif autosave.get("saved_at"):
-            self.save_status.setText(f"自动报告已保存 · {autosave['saved_at']} · logs/performance · 每 15 秒保存，停止与正常退出时保存")
+            stamp = str(autosave['saved_at']).replace('T', ' ')[:19]
+            self.save_status.setText(f"自动报告已保存 · {stamp} · logs/performance · 每 15 秒保存，停止与正常退出时保存")
         else:
             self.save_status.setText("开启检测后每 15 秒自动保存，停止与正常退出时保存；保留最近 20 份自动报告")
         if recorder.active:

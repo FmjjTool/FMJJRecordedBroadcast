@@ -133,12 +133,12 @@ def child_process_memory():
 
 
 def source_location(filename, line):
-    """报告保留项目相对位置，第三方文件只保留末两级，不输出用户名。"""
+    """报告保留项目相对位置；外部文件只保留文件名，避免持久化用户目录。"""
     parts = str(filename).replace("\\", "/").split("/")
     if "src" in parts:
         name = "/".join(parts[parts.index("src"):])
     else:
-        name = "/".join(parts[-2:])
+        name = parts[-1]
     return f"{name}:{line}"
 
 

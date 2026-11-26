@@ -251,13 +251,14 @@ def search(payload: dict) -> dict:
         if not uid:
             continue
         try:
-            fans = int(row.get("fans_count") or row.get("fans") or 0)
+            fans = int(next((row[key] for key in ("follow_count", "fans_count", "fans")
+                             if row.get(key) not in (None, "")), 0))
         except (TypeError, ValueError):
             fans = 0
         items.append({
             "uid": uid,
             "name": str(row.get("user_name") or row.get("nick_name") or ""),
-            "douyin_id": str(row.get("unique_id") or row.get("short_id") or ""),
+            "douyin_id": str(row.get("aweme_id") or row.get("unique_id") or row.get("short_id") or ""),
             "fans": fans,
             "avatar": str(row.get("avatar_uri") or row.get("avatar_url") or ""),
         })
