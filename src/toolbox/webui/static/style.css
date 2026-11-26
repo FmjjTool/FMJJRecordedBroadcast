@@ -581,3 +581,18 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
   .job-head { flex-wrap: wrap; }
   .col-list { max-height: 360px; min-height: 160px; }
 }
+
+/* 标签编辑表单：窄屏自动单列 */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px 12px;
+}
+.form-grid > label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.form-grid .input { width: 100%; }
+.db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }

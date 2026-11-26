@@ -57,9 +57,9 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
     tickets = TicketsService(jobs)
-    music_playlist = MusicPlaylistService()
+    music_playlist = MusicPlaylistService(jobs)
     music_download = MusicDownloadService(jobs)
-    music_tag = MusicTagService()
+    music_tag = MusicTagService(jobs)
     performance = PerformanceService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
 
@@ -385,6 +385,16 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/music-playlist", lambda req: music_playlist.overview())
     server.get("/api/music-playlist/report",
                lambda req: music_playlist.report_text(req.q("name")))
+    server.get("/api/music-playlist/platforms",
+               lambda req: music_playlist.capabilities())
+
+    def start_playlist_preview(req):
+        return music_playlist.start_preview(dict(req.json or {}))
+    server.post("/api/tools/music-playlist/preview", start_playlist_preview)
+
+    def start_playlist_apply(req):
+        return music_playlist.start_apply(dict(req.json or {}))
+    server.post("/api/tools/music-playlist/apply", start_playlist_apply)
 
     server.get("/api/music-download", lambda req: music_download.overview())
 
@@ -397,6 +407,25 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tools/music/download", start_music_download)
     server.get("/api/music-tag", lambda req: music_tag.overview(
         req.q_int("limit", 120, 1, 300)))
+
+    def tag_scan(req):
+        return music_tag.scan(dict(req.json or {}))
+    server.post("/api/tools/music-tag/scan", tag_scan)
+
+    server.get("/api/music-tag/detail",
+               lambda req: music_tag.detail(req.q("rel", "")))
+
+    def start_tag_write(req):
+        return music_tag.start_write(dict(req.json or {}))
+    server.post("/api/tools/music-tag/write", start_tag_write)
+
+    def start_tag_lyric(req):
+        return music_tag.start_lyric_search(dict(req.json or {}))
+    server.post("/api/tools/music-tag/lyric/search", start_tag_lyric)
+
+    def start_tag_lyric_apply(req):
+        return music_tag.start_lyric_apply(dict(req.json or {}))
+    server.post("/api/tools/music-tag/lyric/apply", start_tag_lyric_apply)
 
     server.get("/api/performance", lambda req: performance.overview())
 

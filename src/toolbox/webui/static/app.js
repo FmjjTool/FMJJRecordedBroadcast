@@ -7939,24 +7939,247 @@
     load();
   }
 
+  function buildPlaylistTools(reportDir) {
+    var kindSel = h('select', { class: 'select' },
+      h('option', { value: 'snapshot' }, '本地「完整歌曲」快照'),
+      h('option', { value: 'event' }, '线下活动'),
+      h('option', { value: 'playlist' }, '现有歌单链接'),
+      h('option', { value: 'text' }, '粘贴歌曲清单'));
+    var valueInput = h('input', {
+      class: 'input', type: 'text', placeholder: '歌单链接或 ID',
+      style: 'flex:1;min-width:180px'
+    });
+    var textArea = h('textarea', {
+      class: 'textarea', rows: '5',
+      placeholder: '每行一首：歌名 - 歌手（或制表符分隔）'
+    });
+    var eventSel = h('select', { class: 'select', style: 'flex:1' });
+    var nameInput = h('input', {
+      class: 'input', type: 'text', value: '封茗囧菌歌曲合集',
+      placeholder: '歌单名称', style: 'flex:1;min-width:160px', maxlength: '60'
+    });
+    var platformHost = h('div', { class: 'toolbar' });
+    var includeUncertain = h('input', { type: 'checkbox' });
+    var previewBtn = h('button', { class: 'btn primary', type: 'button' }, '预览匹配');
+    var applyBtn = h('button', {
+      class: 'btn', type: 'button', disabled: true
+    }, '创建歌单');
+    var jobHost = h('div');
+    var resultHost = h('div');
+    var boxes = [];
+    var events = [];
+    var previewId = '';
+    var previewData = null;
+    var busy = false;
+
+    function syncSource() {
+      var kind = kindSel.value;
+      valueInput.style.display = kind === 'playlist' ? '' : 'none';
+      textArea.style.display = kind === 'text' ? '' : 'none';
+      eventSel.style.display = kind === 'event' ? '' : 'none';
+    }
+    kindSel.addEventListener('change', syncSource);
+    syncSource();
+
+    api('/api/music-playlist/platforms').then(function (data) {
+      events = data.events || [];
+      events.forEach(function (event) {
+        eventSel.appendChild(h('option', { value: String(event.row_no) },
+          [event.name, event.date, event.city,
+            event.song_count + ' 首'].filter(Boolean).join(' · ')));
+      });
+      if (!events.length) {
+        eventSel.appendChild(h('option', { value: '' }, '本地暂无线下活动'));
+      }
+      (data.platforms || []).forEach(function (row) {
+        var box = h('input', { type: 'checkbox' });
+        var ok = row.supports_create && row.available;
+        box.disabled = !ok;
+        if (ok && (row.platform === 'netease' || row.platform === 'qq')) {
+          box.checked = true;
+        }
+        var label = h('label', {
+          class: 'muted small', title: row.note || ''
+        }, box, ' ' + row.name);
+        boxes.push({ row: row, box: box });
+        platformHost.appendChild(label);
+      });
+    }).catch(function (error) {
+      platformHost.appendChild(h('span', { class: 'muted small' },
+        '平台能力读取失败：' + error.message));
+    });
+
+    function payload() {
+      var kind = kindSel.value;
+      var source = { kind: kind };
+      if (kind === 'playlist') source.value = valueInput.value;
+      else if (kind === 'text') source.value = textArea.value;
+      else if (kind === 'event') source.row_no = Number(eventSel.value) || null;
+      return {
+        source: source,
+        name: nameInput.value,
+        platforms: boxes.filter(function (item) {
+          return item.box.checked && !item.box.disabled;
+        }).map(function (item) { return item.row.platform; })
+      };
+    }
+
+    function renderPreview(data) {
+      previewData = data;
+      previewId = data.preview_id || '';
+      applyBtn.disabled = !previewId || !(data.matched > 0);
+      var planRows = (data.plans || []).map(function (plan) {
+        var counts = plan.counts || {};
+        return h('div', { class: 'muted small' },
+          plan.platform_name + '：可写入 ' + (counts.matched || 0) + ' 首'
+          + '（待确认 ' + (counts.uncertain || 0) + '、未找到 '
+          + (counts.missing || 0) + '、重复 ' + (counts.duplicate || 0) + '）');
+      });
+      var body = h('tbody');
+      (data.rows || []).forEach(function (row) {
+        body.appendChild(h('tr', null,
+          h('td', null, h('span', { class: 'badge' }, row.platform_name)),
+          h('td', { class: 'num' }, row.index),
+          h('td', { class: 'ellipsis' }, row.source_title || '-'),
+          h('td', { class: 'ellipsis' }, row.source_artist || '-'),
+          h('td', null, row.state),
+          h('td', { class: 'ellipsis' }, row.target_name || '-'),
+          h('td', { class: 'ellipsis' }, row.target_artist || '-'),
+          h('td', { class: 'num' }, row.score === null ? '-' : row.score)));
+      });
+      resultHost.replaceChildren(
+        h('div', { style: 'margin-top:10px' },
+          h('div', { class: 'row-title', style: 'margin-bottom:6px' },
+            data.source + ' · ' + data.matched + '/' + data.total + ' 首可写入'),
+          planRows,
+          h('div', { class: 'table-wrap', style: 'margin-top:8px' },
+            h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+              h('th', null, '平台'), h('th', { class: 'num' }, '序号'),
+              h('th', null, '来源歌曲'), h('th', null, '来源歌手'),
+              h('th', null, '状态'), h('th', null, '匹配歌曲'),
+              h('th', null, '匹配歌手'), h('th', { class: 'num' }, '相似度'))),
+            body)),
+          data.truncated ? h('div', { class: 'muted small' },
+            '结果过多，仅显示前 ' + (data.rows || []).length + ' 行。') : null));
+    }
+
+    previewBtn.addEventListener('click', function () {
+      if (busy) return;
+      busy = true;
+      previewBtn.disabled = true;
+      previewBtn.textContent = '匹配中…';
+      applyBtn.disabled = true;
+      previewId = '';
+      post('/api/tools/music-playlist/preview', payload()).then(function (result) {
+        watchJob(jobHost, result.job, function (job) {
+          var data = job.result || {};
+          toast(data.summary || '预览完成', 'success');
+          if (data.report) {
+            jobHost.appendChild(h('div', { class: 'muted small' },
+              '预览报告：' + data.report));
+          }
+          renderPreview(data);
+        }, {
+          cancelable: true,
+          onSettled: function (job) {
+            busy = false;
+            previewBtn.disabled = false;
+            previewBtn.textContent = '预览匹配';
+            if (job.status === 'error') {
+              toast('预览失败：' + (job.error || '未知错误'), 'error');
+            }
+          }
+        });
+      }).catch(function (error) {
+        busy = false;
+        previewBtn.disabled = false;
+        previewBtn.textContent = '预览匹配';
+        toast('预览失败：' + error.message, 'error');
+      });
+    });
+
+    applyBtn.addEventListener('click', function () {
+      if (busy || !previewId) return;
+      var lines = (previewData.plans || []).map(function (plan) {
+        return plan.platform_name + '：写入 ' + ((plan.counts || {}).matched || 0) + ' 首';
+      }).join('\n');
+      var detail = '歌单名称：' + (previewData.name || '') + '\n' + lines
+        + (boxes.some(function (item) {
+          return item.row.platform === 'kugou' && item.box.checked;
+        }) ? '\n\n酷狗云歌单需先登录酷狗 App（账号与登录 → 酷狗 → App 扫码）。' : '')
+        + '\n\n写入会在各平台创建同名歌单并逐首添加，确认继续？';
+      if (!window.confirm(detail)) return;
+      busy = true;
+      applyBtn.disabled = true;
+      applyBtn.textContent = '写入中…';
+      post('/api/tools/music-playlist/apply', {
+        preview_id: previewId,
+        platforms: payload().platforms,
+        include_uncertain: includeUncertain.checked
+      }).then(function (result) {
+        watchJob(jobHost, result.job, function (job) {
+          var data = job.result || {};
+          toast(data.summary || '写入完成', 'success');
+          var list = h('div');
+          (data.results || []).forEach(function (item) {
+            list.appendChild(h('div', { class: 'muted small' },
+              '· ' + (item.platform_name || item.platform) + '：'
+              + (item.stopped
+                ? item.stopped
+                : '已添加 ' + (item.added || []).length + ' 首，失败 '
+                  + (item.failed || []).length + ' 首，跳过 '
+                  + (item.skipped || []).length + ' 首')));
+          });
+          if (data.report) {
+            list.appendChild(h('div', { class: 'muted small' },
+              '执行报告：' + data.report));
+          }
+          resultHost.replaceChildren(list);
+          previewId = '';
+        }, {
+          cancelable: true,
+          onSettled: function (job) {
+            busy = false;
+            applyBtn.disabled = true;
+            applyBtn.textContent = '创建歌单';
+            if (job.status === 'error') {
+              toast('写入失败：' + (job.error || '未知错误'), 'error');
+            }
+          }
+        });
+      }).catch(function (error) {
+        busy = false;
+        applyBtn.disabled = false;
+        applyBtn.textContent = '创建歌单';
+        toast('写入失败：' + error.message, 'error');
+      });
+    });
+
+    return h('div', { class: 'card', style: 'margin-bottom:12px' },
+      h('div', { class: 'row-title' }, '生成预览与创建歌单'),
+      h('div', { class: 'toolbar', style: 'margin-top:8px' },
+        h('span', { class: 'muted small' }, '来源'), kindSel, valueInput,
+        eventSel),
+      textArea,
+      h('div', { class: 'toolbar', style: 'margin-top:8px' },
+        h('span', { class: 'muted small' }, '歌单名称'), nameInput),
+      h('div', { class: 'toolbar', style: 'margin-top:8px' },
+        h('span', { class: 'muted small' }, '目标平台'), platformHost),
+      h('div', { class: 'toolbar', style: 'margin-top:8px' },
+        h('label', { class: 'muted small' }, includeUncertain,
+          ' 同时加入待确认歌曲'),
+        h('span', { style: 'flex:1' }),
+        h('span', { class: 'muted small ellipsis', style: 'max-width:100%',
+          title: reportDir || '' }, '报告目录：' + (reportDir || '-')),
+        previewBtn, applyBtn),
+      resultHost, jobHost);
+  }
+
   function renderMusicPlaylist(root) {
     setLoading(root, '正在读取歌单报告…');
     api('/api/music-playlist').then(function (data) {
       root.replaceChildren();
-      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'toolbar' },
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '生成预览'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '创建歌单'),
-          h('span', { style: 'flex:1' }),
-          h('span', { class: 'muted small', title: data.report_dir },
-            '报告目录：' + (data.report_dir || '-'))),
-        h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '生成预览、创建歌单与写入平台需要账号授权，仍在桌面端；'
-          + '本页只读本地预览 / 执行报告。')));
+      root.appendChild(buildPlaylistTools(data.report_dir));
       var reports = data.reports || [];
       var previewHost = h('div', { style: 'margin-top:12px' });
       var card = h('div', { class: 'card' },
@@ -8253,38 +8476,278 @@
     });
   }
 
-  function renderMusicTag(root) {
+function renderMusicTag(root) {
     setLoading(root, '正在读取音乐目录与标签…');
     api('/api/music-tag?limit=120').then(function (data) {
       root.replaceChildren();
+      var files = (data.files || []).slice();
+      var selected = '';
+      var editorHost = h('div');
+      var jobHost = h('div');
+      var tableHost = h('div');
+
+      var relInput = h('input', {
+        class: 'input', type: 'text', placeholder: '相对音乐目录的路径，留空 = 目录本身',
+        style: 'flex:1;min-width:160px'
+      });
+      var addFileBtn = h('button', { class: 'btn', type: 'button' }, '添加文件');
+      var addFolderBtn = h('button', { class: 'btn', type: 'button' }, '添加文件夹');
+
+      function mergeFiles(rows) {
+        rows.forEach(function (row) {
+          var index = files.findIndex(function (item) { return item.rel === row.rel; });
+          if (index >= 0) files[index] = Object.assign({}, files[index], row);
+          else files.unshift(row);
+        });
+      }
+
+      function scan(folder) {
+        addFileBtn.disabled = true;
+        addFolderBtn.disabled = true;
+        post('/api/tools/music-tag/scan', { path: relInput.value, folder: folder })
+          .then(function (result) {
+            mergeFiles(result.files || []);
+            renderFiles();
+            toast('已加入 ' + (result.files || []).length + ' 个文件', 'success');
+          }).catch(function (error) {
+            toast('扫描失败：' + error.message, 'error');
+          }).then(function () {
+            addFileBtn.disabled = false;
+            addFolderBtn.disabled = false;
+          });
+      }
+      addFileBtn.addEventListener('click', function () { scan(false); });
+      addFolderBtn.addEventListener('click', function () { scan(true); });
+
+      function renderFiles() {
+        tableHost.replaceChildren();
+        if (!files.length) {
+          tableHost.appendChild(empty('音乐目录内暂无音频文件。'));
+          return;
+        }
+        var body = h('tbody');
+        files.forEach(function (row) {
+          var tr = h('tr', {
+            style: 'cursor:pointer',
+            class: row.rel === selected ? 'selected' : ''
+          });
+          tr.appendChild(h('td', { class: 'ellipsis', title: row.rel }, row.name));
+          tr.appendChild(h('td', { class: 'ellipsis' }, row.title || '-'));
+          tr.appendChild(h('td', null, row.artist || '-'));
+          tr.appendChild(h('td', null, row.album || '-'));
+          tr.appendChild(h('td', null, row.year || '-'));
+          tr.appendChild(h('td', null, row.genre || '-'));
+          tr.addEventListener('click', function () {
+            selected = row.rel;
+            renderFiles();
+            openEditor(row);
+          });
+          body.appendChild(tr);
+        });
+        tableHost.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '文件名'), h('th', null, '标题'),
+            h('th', null, '艺术家'), h('th', null, '专辑'),
+            h('th', null, '年份'), h('th', null, '流派'))), body)));
+      }
+
+      function openEditor(row) {
+        setLoading(editorHost, '正在读取标签…');
+        api('/api/music-tag/detail?rel=' + encodeURIComponent(row.rel))
+          .then(function (detail) {
+            var fields = detail.fields || {};
+            var inputs = {};
+            var grid = h('div', { class: 'form-grid' });
+            [['title', '标题'], ['artist', '艺术家'], ['album', '专辑'],
+              ['albumartist', '专辑艺术家'], ['year', '年份'],
+              ['track', '音轨'], ['disc', '碟号'], ['genre', '流派'],
+              ['composer', '作曲'], ['comment', '备注']].forEach(function (pair) {
+              var key = pair[0];
+              var input = h('input', {
+                class: 'input', type: 'text', value: fields[key] || ''
+              });
+              inputs[key] = input;
+              grid.appendChild(h('label', null,
+                h('span', { class: 'muted small' }, pair[1]), input));
+            });
+            var lyrics = h('textarea', {
+              class: 'textarea', rows: '8',
+              placeholder: '歌词（LRC 或纯文本）'
+            });
+            lyrics.value = fields.lyrics || '';
+            var lyricHost = h('div');
+            var saveBtn = h('button', { class: 'btn primary', type: 'button' },
+              '写入标签');
+            var lyricBtn = h('button', { class: 'btn', type: 'button' },
+              '抓取歌词');
+            var busy = false;
+
+            saveBtn.addEventListener('click', function () {
+              if (busy) return;
+              busy = true;
+              saveBtn.disabled = true;
+              saveBtn.textContent = '写入中…';
+              var payloadFields = {};
+              Object.keys(inputs).forEach(function (key) {
+                payloadFields[key] = inputs[key].value;
+              });
+              payloadFields.lyrics = lyrics.value;
+              post('/api/tools/music-tag/write', {
+                rel: row.rel, fields: payloadFields
+              }).then(function (result) {
+                watchJob(jobHost, result.job, function (job) {
+                  var outcome = job.result || {};
+                  toast(outcome.summary || '已写入', 'success');
+                  var fresh = outcome.fields || {};
+                  Object.keys(inputs).forEach(function (key) {
+                    inputs[key].value = fresh[key] || '';
+                  });
+                  lyrics.value = fresh.lyrics || '';
+                  var target = files.find(function (item) { return item.rel === row.rel; });
+                  if (target) {
+                    target.title = fresh.title || '';
+                    target.artist = fresh.artist || '';
+                    target.album = fresh.album || '';
+                    target.year = fresh.year || '';
+                    target.genre = fresh.genre || '';
+                    renderFiles();
+                  }
+                }, {
+                  onSettled: function (job) {
+                    busy = false;
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = '写入标签';
+                    if (job.status === 'error') {
+                      toast('写入失败：' + (job.error || '未知错误'), 'error');
+                    }
+                  }
+                });
+              }).catch(function (error) {
+                busy = false;
+                saveBtn.disabled = false;
+                saveBtn.textContent = '写入标签';
+                toast('写入失败：' + error.message, 'error');
+              });
+            });
+
+            lyricBtn.addEventListener('click', function () {
+              if (busy) return;
+              busy = true;
+              lyricBtn.disabled = true;
+              lyricBtn.textContent = '搜索歌词…';
+              post('/api/tools/music-tag/lyric/search', {
+                rel: row.rel, title: inputs.title.value,
+                artist: inputs.artist.value
+              }).then(function (result) {
+                watchJob(jobHost, result.job, function (job) {
+                  var outcome = job.result || {};
+                  var candidates = outcome.candidates || [];
+                  if (!candidates.length) {
+                    lyricHost.replaceChildren(empty('没有找到歌词候选。'));
+                    return;
+                  }
+                  var list = h('div');
+                  candidates.forEach(function (cand) {
+                    var useBtn = h('button', { class: 'btn mini', type: 'button' },
+                      '使用');
+                    useBtn.addEventListener('click', function () {
+                      useBtn.disabled = true;
+                      post('/api/tools/music-tag/lyric/apply', {
+                        rel: row.rel, source: cand.source,
+                        source_id: cand.source_id,
+                        title: outcome.query ? outcome.query.title : '',
+                        artist: outcome.query ? outcome.query.artist : ''
+                      }).then(function (applied) {
+                        watchJob(jobHost, applied.job, function (done) {
+                          var data = done.result || {};
+                          lyrics.value = data.lyrics || '';
+                          toast(data.summary || '歌词已写入', 'success');
+                        }, {
+                          onSettled: function (failed) {
+                            useBtn.disabled = false;
+                            if (failed.status === 'error') {
+                              toast('写入失败：' + (failed.error || ''), 'error');
+                            }
+                          }
+                        });
+                      }).catch(function (error) {
+                        useBtn.disabled = false;
+                        toast('写入失败：' + error.message, 'error');
+                      });
+                    });
+                    list.appendChild(h('div', { class: 'toolbar', style: 'margin-top:4px' },
+                      h('span', { class: 'badge' }, cand.source),
+                      h('span', { class: 'ellipsis', style: 'flex:1' },
+                        cand.title + ' · ' + (cand.artist || '-')
+                        + (cand.album ? ' · ' + cand.album : '')),
+                      useBtn));
+                  });
+                  lyricHost.replaceChildren(
+                    h('div', { class: 'muted small', style: 'margin-top:8px' },
+                      '歌词候选 · ' + candidates.length + ' 个'), list);
+                }, {
+                  onSettled: function (job) {
+                    busy = false;
+                    lyricBtn.disabled = false;
+                    lyricBtn.textContent = '抓取歌词';
+                    if (job.status === 'error') {
+                      toast('搜索失败：' + (job.error || '未知错误'), 'error');
+                    }
+                  }
+                });
+              }).catch(function (error) {
+                busy = false;
+                lyricBtn.disabled = false;
+                lyricBtn.textContent = '抓取歌词';
+                toast('搜索失败：' + error.message, 'error');
+              });
+            });
+
+            editorHost.replaceChildren(
+              h('div', { class: 'card', style: 'margin-bottom:12px' },
+                h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+                  '编辑标签 · ' + row.name),
+                grid,
+                h('div', { class: 'muted small', style: 'margin:10px 0 4px' },
+                  '歌词'),
+                lyrics,
+                h('div', { class: 'toolbar', style: 'margin-top:8px' },
+                  saveBtn, lyricBtn,
+                  h('span', { class: 'muted small' },
+                    '写入前会自动记录标签历史。')),
+                lyricHost));
+            editorHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }).catch(function (error) {
+            setError(editorHost, error, function () { openEditor(row); });
+          });
+      }
+
+      if (!files.length) selected = '';
+      renderFiles();
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '音乐目录 · ' + fmtNumber(data.total)
+          + (data.truncated ? '（仅前 300 个）' : '')),
         h('div', { class: 'toolbar' },
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '添加文件'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '添加文件夹'),
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '写入标签'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '抓取歌词'),
+          relInput, addFileBtn, addFolderBtn,
           h('span', { style: 'flex:1' }),
-          h('span', { class: 'muted small', title: data.root },
-            '音乐目录：' + (data.root || '-'))),
+          h('span', { class: 'muted small ellipsis', title: data.root,
+            style: 'max-width:100%' }, '音乐目录：' + (data.root || '-'))),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '只读：修改 / 批量写入标签、歌词抓取与历史恢复仍在桌面端；'
-          + '文件最多读取前 300 个。')));
+          '点表格行打开编辑器；路径只能是音乐目录内的相对路径。')));
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '音乐文件'),
+        tableHost));
+      root.appendChild(editorHost);
+      root.appendChild(jobHost);
+
       var history = data.history || [];
-      var historyCard = h('div', {
-        class: 'card', style: 'margin-bottom:12px'
-      }, h('div', { class: 'row-title', style: 'margin-bottom:8px' },
-        '标签历史 · ' + fmtNumber(history.length) + ' 条'));
+      var historyCard = h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '标签历史 · ' + fmtNumber(history.length) + ' 条'));
       if (!history.length) {
-        historyCard.appendChild(empty(
-          '暂无标签历史。桌面端写入标签后会记录快照。'));
+        historyCard.appendChild(empty('暂无标签历史。写入标签后会自动记录快照。'));
       } else {
         var hbody = h('tbody');
         history.forEach(function (row) {
@@ -8302,32 +8765,6 @@
             h('th', null, '专辑'))), hbody)));
       }
       root.appendChild(historyCard);
-
-      var files = data.files || [];
-      var filesCard = h('div', { class: 'card' },
-        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
-          '音乐文件 · ' + fmtNumber(data.total)
-          + (data.truncated ? '（仅前 300 个）' : '')));
-      if (!files.length) {
-        filesCard.appendChild(empty('音乐目录内暂无音频文件。'));
-      } else {
-        var fbody = h('tbody');
-        files.forEach(function (row) {
-          fbody.appendChild(h('tr', null,
-            h('td', { class: 'ellipsis', title: row.rel }, row.name),
-            h('td', { class: 'ellipsis' }, row.title || '-'),
-            h('td', null, row.artist || '-'),
-            h('td', null, row.album || '-'),
-            h('td', null, row.year || '-'),
-            h('td', null, row.genre || '-')));
-        });
-        filesCard.appendChild(h('div', { class: 'table-wrap' },
-          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
-            h('th', null, '文件名'), h('th', null, '标题'),
-            h('th', null, '艺术家'), h('th', null, '专辑'),
-            h('th', null, '年份'), h('th', null, '流派'))), fbody)));
-      }
-      root.appendChild(filesCard);
     }).catch(function (error) {
       setError(root, error, function () { renderMusicTag(root); });
     });

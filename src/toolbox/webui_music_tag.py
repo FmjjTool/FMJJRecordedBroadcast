@@ -1,6 +1,8 @@
-"""WebUI 标签（只读）：音乐目录文件与标签快照、标签历史。
+"""WebUI 标签：音乐目录文件与标签快照、历史，以及编辑 / 写入 / 歌词抓取。
 
-读取标签不写文件；修改 / 批量写入 / 历史恢复仍在桌面端。
+所有可写操作都限定在「音乐下载目录」之内：路径只接受该目录下的相对路径，
+绝对路径、`..` 逃逸与目录外文件一律拒绝；写入前后各读一次标签，
+变化会记录到标签历史（桌面端「标签历史」同样可见）。
 """
 
 from __future__ import annotations
@@ -10,12 +12,17 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from toolbox.config_manager import get_config_dir, get_music_download_dir
+from toolbox.config_manager import (get_config_dir, get_music_download_dir,
+                                    load_convert_config)
 
 _AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".wav", ".ogg", ".ape", ".wv",
                ".aac", ".opus", ".wma"}
 _MAX_FILES = 300
 _MAX_HISTORY = 60
+_MAX_SCAN = 500
+_FIELDS = ("title", "artist", "album", "albumartist", "year", "track",
+           "track_count", "disc", "disc_count", "genre", "composer",
+           "lyricist", "comment", "lyrics")
 
 
 def _ts(value) -> str:
@@ -56,9 +63,50 @@ def _history() -> list[dict]:
     return result
 
 
+def _settings() -> dict:
+    try:
+        section = load_convert_config().get("music_tag")
+    except Exception:  # noqa: BLE001
+        section = {}
+    section = section if isinstance(section, dict) else {}
+    return {
+        "connector": str(section.get("connector") or "/"),
+        "id3_version": int(section.get("id3_version") or 3),
+    }
+
+
+def _root() -> Path:
+    return Path(get_music_download_dir()).resolve()
+
+
+def _resolve(rel: str) -> Path:
+    value = str(rel or "").strip().replace("\\", "/")
+    if not value:
+        raise ValueError("缺少文件路径")
+    if value.startswith("/") or ":" in value or value.startswith(".."):
+        raise ValueError("只支持音乐目录内的相对路径")
+    root = _root()
+    target = (root / value).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError("路径超出音乐目录") from None
+    if not target.is_file():
+        raise ValueError(f"文件不存在：{value}")
+    if target.suffix.lower() not in _AUDIO_EXTS:
+        raise ValueError("不是受支持的音频文件")
+    return target
+
+
+def _file_row(path: Path, root: Path) -> dict:
+    stat = path.stat()
+    return {"rel": path.relative_to(root).as_posix(), "name": path.name,
+            "size": int(stat.st_size), "mtime": _ts(stat.st_mtime)}
+
+
 def overview(limit: int = 120) -> dict:
     limit = max(1, min(_MAX_FILES, int(limit)))
-    root = Path(get_music_download_dir())
+    root = _root()
     from music.tags_io import load_tags
 
     files = []
@@ -79,7 +127,7 @@ def overview(limit: int = 120) -> dict:
                 continue
             try:
                 tags = load_tags(str(path)) or {}
-            except Exception:
+            except Exception:  # noqa: BLE001
                 tags = {}
             files.append({
                 "name": path.name,
@@ -100,5 +148,147 @@ def overview(limit: int = 120) -> dict:
         "total": len(files),
         "truncated": truncated,
         "history": _history(),
-        "note": "只读：修改 / 批量写入标签、歌词抓取与历史恢复仍在桌面端。",
+        "note": "可编辑标签、抓取歌词；路径限制在音乐目录内。",
+    }
+
+
+def scan(payload: dict) -> dict:
+    """「添加文件 / 添加文件夹」：按相对路径扫描音乐目录，返回可加入列表的音频。"""
+    value = str(payload.get("path") or "").strip().replace("\\", "/")
+    if value.startswith("/") or ":" in value or value.startswith(".."):
+        raise ValueError("只支持音乐目录内的相对路径")
+    folder = bool(payload.get("folder"))
+    root = _root()
+    target = (root / value).resolve() if value else root
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError("路径超出音乐目录") from None
+    if not target.exists():
+        raise ValueError(f"路径不存在：{value or '.'}")
+    found: list[Path] = []
+    if target.is_file():
+        if target.suffix.lower() in _AUDIO_EXTS:
+            found.append(target)
+    elif folder:
+        for dirpath, dirnames, filenames in os.walk(target):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for name in sorted(filenames):
+                if Path(name).suffix.lower() in _AUDIO_EXTS:
+                    found.append(Path(dirpath) / name)
+            if len(found) >= _MAX_SCAN:
+                break
+    else:
+        for name in sorted(os.listdir(target)):
+            path = target / name
+            if path.is_file() and path.suffix.lower() in _AUDIO_EXTS:
+                found.append(path)
+    if not found:
+        raise ValueError("该路径下没有音频文件")
+    rows = [_file_row(path, root) for path in found[:_MAX_SCAN]]
+    return {"files": rows, "total": len(rows), "root": str(root)}
+
+
+def detail(payload: dict) -> dict:
+    from music.tags_io import load_tags
+
+    path = _resolve(payload.get("rel") or "")
+    settings = _settings()
+    tags = load_tags(str(path), settings["connector"]) or {}
+    return {
+        "rel": path.relative_to(_root()).as_posix(),
+        "name": path.name,
+        "fields": {key: str(tags.get(key) or "") for key in _FIELDS},
+    }
+
+
+def write(payload: dict) -> dict:
+    """写入标签：只处理提交的字段（空串表示清除该字段）。"""
+    from music import tag_history
+    from music.tags_io import load_tags, save_tags
+
+    path = _resolve(payload.get("rel") or "")
+    incoming = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    changed = {key: str(incoming[key]) for key in _FIELDS if key in incoming}
+    if not changed:
+        raise ValueError("没有要写入的字段")
+    settings = _settings()
+    before = load_tags(str(path), settings["connector"]) or {}
+    after = dict(before)
+    after.update(changed)
+    save_tags(str(path), after, id3_version=settings["id3_version"])
+    tag_history.record(str(path), before, after)
+    fresh = load_tags(str(path), settings["connector"]) or {}
+    return {
+        "rel": path.relative_to(_root()).as_posix(),
+        "fields": {key: str(fresh.get(key) or "") for key in _FIELDS},
+        "summary": f"已写入 {path.name}（{len(changed)} 个字段）",
+    }
+
+
+def lyric_candidates(payload: dict) -> dict:
+    from music import tag_search
+
+    path = _resolve(payload.get("rel") or "")
+    stem = os.path.splitext(path.name)[0]
+    title = str(payload.get("title") or "").strip() or stem
+    artist = str(payload.get("artist") or "").strip()
+    errors: dict = {}
+    candidates = tag_search.search_tracks(title, artist, "", errors=errors,
+                                          used_filename=not payload.get("title"))
+    rows = []
+    for index, cand in enumerate(candidates[:12]):
+        rows.append({
+            "index": index,
+            "source": cand.source,
+            "source_id": cand.source_id,
+            "title": cand.title,
+            "artist": cand.artist,
+            "album": cand.album,
+            "has_lyric": bool(cand.lyric),
+        })
+    return {
+        "rel": path.relative_to(_root()).as_posix(),
+        "query": {"title": title, "artist": artist},
+        "candidates": rows,
+        "errors": {k: str(v)[:120] for k, v in (errors or {}).items()},
+        "summary": f"{title} · {len(rows)} 个候选",
+    }
+
+
+def lyric_apply(payload: dict) -> dict:
+    """按候选的来源与 ID 重新搜索并写入歌词（含翻译时合并到同一歌词块）。"""
+    from music import tag_history, tag_search
+    from music.tags_io import load_tags, save_tags
+
+    path = _resolve(payload.get("rel") or "")
+    source = str(payload.get("source") or "")
+    source_id = str(payload.get("source_id") or "")
+    title = str(payload.get("title") or "").strip()
+    artist = str(payload.get("artist") or "").strip()
+    if not source or not source_id:
+        raise ValueError("请选择歌词候选")
+    candidates = tag_search.search_tracks(title, artist, "",
+                                          used_filename=not title)
+    picked = next((c for c in candidates
+                   if c.source == source and c.source_id == source_id), None)
+    if picked is None:
+        raise ValueError("候选已失效，请重新搜索")
+    lyric, trans = tag_search.load_lyric(picked)
+    text = lyric or ""
+    if trans:
+        text = (text + "\n\n" if text else "") + trans
+    if not text.strip():
+        raise ValueError("该候选没有歌词")
+    settings = _settings()
+    before = load_tags(str(path), settings["connector"]) or {}
+    after = dict(before)
+    after["lyrics"] = text
+    save_tags(str(path), after, id3_version=settings["id3_version"])
+    tag_history.record(str(path), before, after)
+    return {
+        "rel": path.relative_to(_root()).as_posix(),
+        "lyrics": text,
+        "length": len(text),
+        "summary": f"已写入歌词：{picked.title} · {picked.artist}",
     }
