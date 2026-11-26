@@ -27,7 +27,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 
 def _credential():
-    # get_cookie 的读取链无保存/迁移/刷新调用；仅在平台要求登录时取当前快照。
+    # get_cookie 的读取链无保存/迁移/刷新调用；请求前选定当前有效登录快照。
     import auth
     return auth.get_cookie("xianyu") or ""
 

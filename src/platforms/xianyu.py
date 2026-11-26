@@ -1,7 +1,8 @@
 """闲鱼只读适配器，协议依据 goofish.com 官方 PC 搜索与商品页面。
 
-能力矩阵：关键词搜索首批最多 30 件 / 商品详情，匿名公开页 HTTP →
-匿名临时浏览器 → 已启用登录态临时浏览器；不翻页、不登录、不保存会话。
+能力矩阵：关键词搜索首批最多 30 件 / 商品详情；有当前有效登录态时直接
+使用认证临时浏览器，否则匿名公开页 HTTP → 匿名临时浏览器。
+不翻页、不登录、不保存会话；各分支遇访问限制或限流立即停止，不换身份重试。
 平台要求登录或人工验证时明确停止，不绕过验证。无时间线/追踪/交易能力。
 响应字段参考官方 xy-site/0.0.188 的 p_search-index.js、p_item-index.js。
 适配器不写资料库、不依赖 Qt，凭据由调用方的统一管理层快照注入。
@@ -19,7 +20,8 @@ import httpx
 
 MAX_ITEMS = 30
 MAX_BODY = 2 * 1024 * 1024
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
 
 class XianyuError(ValueError):
@@ -235,10 +237,11 @@ def _browser_payload(url, api, parser, cookie, cancel):
     check_cancel(cancel)
     result, errors = [], []
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.sync_api import TimeoutError as BrowserTimeoutError, sync_playwright
         from toolbox.browser import launch
         with sync_playwright() as playwright:
-            browser = launch(playwright, headless=True)
+            # 与统一登录浏览器使用同一国内站直连策略，不复用其持久化状态。
+            browser = launch(playwright, headless=True, args=["--no-proxy-server"])
             try:
                 context = browser.new_context(user_agent=UA, locale="zh-CN",
                                               viewport={"width": 1280, "height": 900})
@@ -274,12 +277,19 @@ def _browser_payload(url, api, parser, cookie, cancel):
                         errors.append(ParseChanged("闲鱼返回格式已变化，请稍后重试"))
 
                 page.on("response", capture)
-                page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                try:
+                    page.goto(url, wait_until="commit", timeout=25000)
+                except BrowserTimeoutError as exc:
+                    # 页面导航超时不能丢弃此前已收到的有效商品响应。
+                    if errors and not result:
+                        raise errors[-1]
+                    if not result:
+                        raise NetworkError("闲鱼页面连接超时，请检查网络后重试") from exc
                 deadline = time.monotonic() + 18
                 # 首个请求可能只建立内存游客票据，官网随后自动重试；不自行刷新登录态。
                 while not result and time.monotonic() < deadline:
                     check_cancel(cancel)
-                    if errors and not isinstance(errors[-1], AuthRequired):
+                    if errors and not isinstance(errors[-1], TicketRequired):
                         raise errors[-1]
                     page.wait_for_timeout(200)
                 if result:
@@ -303,6 +313,14 @@ def _browser_payload(url, api, parser, cookie, cancel):
 
 
 def _fetch(url, api, parser, credential, on_log, is_cancelled):
+    check_cancel(is_cancelled)
+    # 先选定本次任务身份；已有登录态不再先发游客请求，避免游客403提前终止。
+    cookie = credential() if credential else ""
+    check_cancel(is_cancelled)
+    if cookie:
+        if on_log:
+            on_log("使用当前闲鱼登录态只读请求")
+        return _browser_payload(url, api, parser, cookie, is_cancelled)
     if on_log:
         on_log("读取闲鱼公开页面")
     try:
@@ -311,18 +329,9 @@ def _fetch(url, api, parser, credential, on_log, is_cancelled):
         result = None
     if result is not None:
         return result
-    try:
-        if on_log:
-            on_log("读取闲鱼临时页面")
-        return _browser_payload(url, api, parser, "", is_cancelled)
-    except AuthRequired:
-        cookie = credential() if credential else ""
-        if not cookie:
-            raise
-        check_cancel(is_cancelled)
-        if on_log:
-            on_log("使用当前闲鱼登录态只读请求")
-        return _browser_payload(url, api, parser, cookie, is_cancelled)
+    if on_log:
+        on_log("读取闲鱼临时页面")
+    return _browser_payload(url, api, parser, "", is_cancelled)
 
 
 def search(keyword, limit=MAX_ITEMS, *, credential=None, on_log=None, is_cancelled=None):
