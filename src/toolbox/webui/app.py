@@ -58,7 +58,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     rename_batch = RenameBatchService()
     tickets = TicketsService(jobs)
     music_playlist = MusicPlaylistService()
-    music_download = MusicDownloadService()
+    music_download = MusicDownloadService(jobs)
     music_tag = MusicTagService()
     performance = PerformanceService()
     server = WebUIServer(token, host=host, port=port, on_stop=jobs.close)
@@ -387,6 +387,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: music_playlist.report_text(req.q("name")))
 
     server.get("/api/music-download", lambda req: music_download.overview())
+
+    def start_music_search(req):
+        return music_download.start_search(dict(req.json or {}))
+    server.post("/api/tools/music/search", start_music_search)
+
+    def start_music_download(req):
+        return music_download.start_download(dict(req.json or {}))
+    server.post("/api/tools/music/download", start_music_download)
     server.get("/api/music-tag", lambda req: music_tag.overview(
         req.q_int("limit", 120, 1, 300)))
 

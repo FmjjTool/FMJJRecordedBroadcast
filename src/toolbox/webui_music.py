@@ -1,0 +1,161 @@
+"""音乐搜索与下载 WebUI 适配（L3，Qt-free）。
+
+桌面「音乐信息获取 / 音乐下载」合并页的核心动作在此复现：
+搜索（单平台或五平台对比）与勾选下载（失败/试听自动换源）。
+歌单创建与标签写入不在本模块范围内。
+"""
+
+from __future__ import annotations
+
+from typing import Callable, Iterable
+
+MERGE = "all"
+MERGE_LABEL = "五平台对比"
+
+
+def _platforms() -> list[tuple[str, str, type]]:
+    from music import ALL_PLATFORMS
+    return list(ALL_PLATFORMS)
+
+
+def _label_map() -> dict[str, str]:
+    return {pid: name for pid, name, _ in _platforms()}
+
+
+def _duration_text(seconds: int) -> str:
+    seconds = max(0, int(seconds or 0))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _row(song) -> dict:
+    return {
+        "platform": song.platform,
+        "platform_name": _label_map().get(song.platform, song.platform),
+        "song_id": song.song_id,
+        "name": song.song_name or song.title,
+        "singer": song.singer or "",
+        "album": song.album_name or "",
+        "duration": int(song.duration or 0),
+        "duration_text": _duration_text(song.duration or 0),
+        "cover": song.cover_url or "",
+    }
+
+
+def _song_from_row(row: dict):
+    from music.models import SongInfo
+    return SongInfo(
+        platform=row.get("platform") or "",
+        song_id=str(row.get("song_id") or ""),
+        song_name=row.get("name") or "",
+        singer=row.get("singer") or "",
+        album_name=row.get("album") or "",
+        duration=int(row.get("duration") or 0),
+        cover_url=row.get("cover") or "",
+    )
+
+
+def search(payload: dict, on_log: Callable[[str], None] | None = None,
+           is_cancelled: Callable[[], bool] | None = None) -> dict:
+    """按关键词搜索歌曲；platform=all 时五平台依次搜并合并。"""
+    log = on_log or (lambda _msg: None)
+    keyword = str(payload.get("keyword") or "").strip()
+    if not keyword:
+        raise ValueError("请输入歌曲关键词")
+    platform = str(payload.get("platform") or "")
+    limit = max(1, min(int(payload.get("limit") or 20), 50))
+    known = _label_map()
+    if platform != MERGE and platform not in known:
+        raise ValueError("未知音乐平台")
+
+    targets = [(MERGE, MERGE_LABEL)] if platform == MERGE else [
+        (platform, known[platform])]
+    if platform == MERGE:
+        targets = [(pid, name) for pid, name, _ in _platforms()]
+
+    items: list[dict] = []
+    failures: list[dict] = []
+    for pid, name in targets:
+        if is_cancelled and is_cancelled():
+            break
+        log(f"搜索 {name}：{keyword}")
+        scraper_cls = next(cls for p, _, cls in _platforms() if p == pid)
+        try:
+            songs = scraper_cls().search_song(keyword, 1, limit) or []
+        except Exception as exc:  # noqa: BLE001 - 单平台失败不影响整体
+            failures.append({"platform": pid, "name": name,
+                             "error": str(exc)[:200]})
+            log(f"{name} 失败：{exc}")
+            continue
+        for song in songs:
+            items.append(_row(song))
+        log(f"{name} 命中 {len(songs)} 首")
+
+    if not items and failures:
+        first = failures[0]
+        raise ValueError(f"{first['name']}搜索失败：{first['error']}")
+    summary = f"{keyword} · {len(items)} 首"
+    if failures:
+        summary += f"（{len(failures)} 个平台失败）"
+    return {"keyword": keyword, "items": items, "total": len(items),
+            "failures": failures, "summary": summary}
+
+
+def download(payload: dict, on_log: Callable[[str], None] | None = None,
+             is_cancelled: Callable[[], bool] | None = None) -> dict:
+    """下载勾选歌曲到音乐下载目录；失败或仅试听时自动换源。"""
+    from music.downloader import download_song_smart
+    from toolbox.config_manager import get_music_download_dir
+
+    log = on_log or (lambda _msg: None)
+    rows = payload.get("items") or []
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("请先勾选要下载的歌曲")
+    if len(rows) > 100:
+        raise ValueError("一次最多下载 100 首")
+    quality = str(payload.get("quality") or "")
+    fallback = bool(payload.get("fallback", True))
+    out_dir = str(get_music_download_dir())
+    log(f"下载目录：{out_dir}")
+
+    files: list[dict] = []
+    failures: list[dict] = []
+    preview = 0
+    for index, row in enumerate(rows, 1):
+        if is_cancelled and is_cancelled():
+            log("已取消")
+            break
+        song = _song_from_row(row if isinstance(row, dict) else {})
+        title = f"{song.singer} - {song.song_name}".strip(" -")
+        log(f"[{index}/{len(rows)}] {title or song.song_id}")
+        if not song.song_id or not song.platform:
+            failures.append({"title": title, "error": "缺少歌曲 ID 或平台"})
+            continue
+        try:
+            result = download_song_smart(song, out_dir, quality,
+                                         fallback=fallback)
+        except Exception as exc:  # noqa: BLE001
+            failures.append({"title": title, "error": str(exc)[:200]})
+            continue
+        if result.success and result.file_path:
+            if result.is_preview:
+                preview += 1
+            files.append({
+                "title": title,
+                "file": result.file_path,
+                "quality": result.quality or "",
+                "preview": bool(result.is_preview),
+                "via": result.via_platform or song.platform,
+            })
+        else:
+            failures.append({"title": title,
+                             "error": result.error_message or "下载失败"})
+
+    total = len(files) + len(failures)
+    parts = [f"成功 {len(files)}"]
+    if preview:
+        parts.append(f"试听 {preview}")
+    if failures:
+        parts.append(f"失败 {len(failures)}")
+    return {"files": files, "failures": failures, "total": total,
+            "preview": preview, "out_dir": out_dir,
+            "summary": " / ".join(parts)}
