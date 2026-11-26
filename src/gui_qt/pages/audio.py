@@ -97,6 +97,9 @@ class AudioPage(BasePage):
 
         def option_group(label, combo):
             # 标签与下拉作为一组换行，控件保持内容宽度，不吸收横向留白。
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.setMinimumWidth(120)
             group = QWidget()
             row = QHBoxLayout(group)
             row.setContentsMargins(0, 0, 0, 0)
