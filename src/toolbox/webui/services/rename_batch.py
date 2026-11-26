@@ -30,4 +30,9 @@ class RenameBatchService:
         path = str(payload.get("path") or "").strip()
         if not path:
             raise ValueError("请填写要扫描的文件夹")
-        return webui_rename_batch.execute(path, _options(payload))
+        plan = payload.get("plan")
+        if plan is not None and not isinstance(plan, list):
+            raise ValueError("执行计划格式错误")
+        if isinstance(plan, list) and len(plan) > 2000:
+            raise ValueError("执行计划超过 2000 条")
+        return webui_rename_batch.execute(path, _options(payload), plan)

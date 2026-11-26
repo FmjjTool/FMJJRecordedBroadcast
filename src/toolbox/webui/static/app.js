@@ -2216,6 +2216,7 @@
           + '留空表示沿用上面的规则结果'
       });
       var numberingCb = h('input', { type: 'checkbox' });
+      var randomCb = h('input', { type: 'checkbox' });
       var startInput = h('input', {
         class: 'input', type: 'number', value: '1', style: 'width:72px'
       });
@@ -2322,6 +2323,7 @@
           del_incl: delIncl.checked,
           textmode: textmode.value,
           numbering: numberingCb.checked,
+          random: randomCb.checked,
           start: startInput.value,
           width: widthInput.value,
           ignore_ext: ignoreExtCb.checked,
@@ -2388,7 +2390,7 @@
         .forEach(function (input) {
           input.addEventListener('input', schedule);
         });
-      [recursiveCb, numberingCb, ignoreExtCb, conflictCb, filterSel,
+      [recursiveCb, numberingCb, randomCb, ignoreExtCb, conflictCb, filterSel,
         caseSel, convertSel, fromRightCb, extCaseSel, kwAfterCb]
         .forEach(function (input) {
           input.addEventListener('change', schedule);
@@ -2423,14 +2425,20 @@
         }
         var payload = collect();
         if (!window.confirm('将对「' + payload.path + '」的 ' + changed
-          + ' 个文件执行改名。\n\n只修改文件名，不改文件内容；'
+          + ' 个文件执行改名。\n\n按当前预览执行（随机后缀不会再变）；'
+          + '只修改文件名，不改文件内容；'
           + '目标已存在或文件名非法的会跳过。\n\n确定继续？')) {
           return;
         }
+        var plan = lastRows.filter(function (row) {
+          return row.new !== row.old;
+        }).map(function (row) {
+          return { rel: row.rel, new: row.new };
+        });
         execBtn.disabled = true;
         resultHost.replaceChildren();
         post('/api/rename-batch/execute', Object.assign(payload,
-          { confirmed: true })).then(function (result) {
+          { confirmed: true, plan: plan })).then(function (result) {
           var failed = result.failed || [];
           toast('改名完成：成功 ' + result.renamed
             + (failed.length ? '，失败 ' + failed.length : ''),
@@ -2657,6 +2665,7 @@
           h('label', { class: 'check' }, numberingCb, ' 序号'),
           h('span', { class: 'muted small' }, '起始'), startInput,
           h('span', { class: 'muted small' }, '位数'), widthInput,
+          h('label', { class: 'check' }, randomCb, ' 随机数'),
           h('label', { class: 'check' }, ignoreExtCb, ' 忽略扩展名'),
           h('label', { class: 'check' }, conflictCb, ' 冲突加序号')),
         h('div', {

@@ -70,6 +70,7 @@ FIELDS: dict[str, dict] = {
     "del_dir": {"type": "enum", "default": "right", "allow": ("right", "left")},
     "del_incl": {"type": "bool", "default": False},
     "numbering": {"type": "bool", "default": False},
+    "random": {"type": "bool", "default": False},
     "start": {"type": "int", "default": 1, "min": 0},
     "width": {"type": "int", "default": 2, "min": 1, "max": 6},
     "textmode": {"type": "str", "default": ""},
@@ -111,7 +112,8 @@ def normalize(options: dict | None) -> dict:
 def _cfg_from_options(options: dict) -> dict:
     value = normalize(options)
     return {
-        "whole": {"case": value["case"], "num": "",
+        "whole": {"case": value["case"],
+                  "num": "random" if value["random"] else "",
                   "convert": value["convert"],
                   "ext_case": value["ext_case"],
                   "new_ext": value["new_ext"].strip()},
@@ -287,26 +289,49 @@ def overview() -> dict:
     }
 
 
-def execute(path: str, options: dict | None = None) -> dict:
-    """执行改名：重算预览后两阶段改名（先临时名，失败回滚）。"""
+def _safe_rel(root: Path, rel: str) -> Path | None:
+    """把相对路径限定在 root 内，越界或指向目录返回 None。"""
+    try:
+        candidate = (root / str(rel or "")).resolve()
+    except (OSError, ValueError):
+        return None
+    if candidate == root or root not in candidate.parents:
+        return None
+    return candidate
+
+
+def execute(path: str, options: dict | None = None,
+            plan_rows: list | None = None) -> dict:
+    """执行改名：两阶段改名（先临时名，失败回滚）。
+
+    plan_rows 为预览行（`[{rel, new}]`），传入时按预览结果执行——随机数这类
+    每次重算都会变值的规则必须靠它才能「看到什么就改成什么」；不传则重算预览。
+    """
     options = options or {}
     root = Path(str(path or "").strip())
     if not path or not root.is_dir():
         raise ValueError("文件夹不存在或不可访问")
     root = root.resolve()
-    result = preview(str(root), options)
+    if plan_rows:
+        rows = []
+        for item in plan_rows:
+            rel = str((item or {}).get("rel") or "")
+            new = str((item or {}).get("new") or "")
+            rows.append({"rel": rel, "old": Path(rel).name, "new": new})
+    else:
+        rows = preview(str(root), options)["rows"]
     plan = []
     failures = []
-    for row in result["rows"]:
+    for row in rows:
         if row["new"] == row["old"]:
             continue
         error = _name_error(row["new"])
         if error:
             failures.append({"old": row["old"], "error": error})
             continue
-        source = root / row["rel"]
-        if not source.is_file():
-            failures.append({"old": row["old"], "error": "源文件不存在"})
+        source = _safe_rel(root, row["rel"])
+        if source is None or not source.is_file():
+            failures.append({"old": row["old"], "error": "源文件不存在或路径越界"})
             continue
         plan.append({"old": row["old"], "rel": row["rel"],
                      "new": row["new"]})
