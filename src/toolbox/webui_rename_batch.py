@@ -59,6 +59,9 @@ def _cfg_from_options(options: dict) -> dict:
     if convert not in ("full2half", "half2full"):
         convert = ""
     pos_text = text("pos_text")
+    valid_types = {"space", "digit", "lower", "upper", "chinese", "special"}
+    del_types = [str(item) for item in (options.get("del_types") or [])
+                 if str(item) in valid_types]
     return {
         "whole": {"case": case, "num": "", "convert": convert,
                   "ext_case": "", "new_ext": ""},
@@ -69,7 +72,14 @@ def _cfg_from_options(options: dict) -> dict:
                 if pos_text else 0,
                 "pos_text": pos_text, "from_right": flag("from_right"),
                 "kw": "", "kw_text": "", "kw_after": True},
-        "del": {"types": []},
+        "del": {"types": del_types,
+                "pos": max(0, integer("del_pos", 0)),
+                "cnt": max(0, integer("del_cnt", 0)),
+                "from_right": flag("del_from_right"),
+                "kw": text("del_kw"),
+                "kw_cnt": max(0, integer("del_kw_cnt", 0)),
+                "dir_right": text("del_dir", "right") != "left",
+                "incl_kw": flag("del_incl")},
         "num": {"on": flag("numbering"), "mode": "suffix",
                 "start": max(0, integer("start", 1)), "step": 1,
                 "width": max(1, min(6, integer("width", 2)))},
