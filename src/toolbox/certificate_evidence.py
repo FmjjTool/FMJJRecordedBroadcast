@@ -95,8 +95,13 @@ def _path(raw) -> Path:
         value = os.fspath(raw)
         if not isinstance(value, str) or not value or "\0" in value:
             raise ValueError
+        if value.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+            raise ValueError
         candidate = Path(value)
         if ".." in candidate.parts:
+            raise ValueError
+        drive, _tail = ntpath.splitdrive(value)
+        if ":" in value[len(drive):]:
             raise ValueError
         return Path(os.path.abspath(candidate))
     except (TypeError, ValueError, OSError):
@@ -214,13 +219,16 @@ def _revision(record) -> int:
 
 
 def _filename(record) -> str:
-    key = hashlib.sha256(str(record.get("id") or "record").encode("utf-8")).hexdigest()[:12]
+    record_id = str(record.get("id") or "record")
+    key = hashlib.sha256(record_id.encode("utf-8", errors="replace")).hexdigest()[:12]
     return f"certificate-evidence-{key}-r{_revision(record)}.zip"
 
 
 def _select(record_id, history_path):
     if not isinstance(record_id, str) or not record_id or len(record_id) > 256:
         raise EvidenceError("请先选择一条证书记录")
+    if os.path.isabs(record_id) or ntpath.isabs(record_id) or "/" in record_id or "\\" in record_id:
+        raise EvidenceError("所选证书记录标识无效")
     matches = [record for record in history.load_records(history_path)
                if str(record.get("id") or "") == record_id]
     if len(matches) != 1:
@@ -401,8 +409,12 @@ def _public_record(record):
         if isinstance(value, list):
             return [scrub(item) for item in value]
         return _public_string(value)
+    safe_id = str(record.get("id") or "")
+    if os.path.isabs(safe_id) or ntpath.isabs(safe_id) or "/" in safe_id or "\\" in safe_id:
+        safe_id = hashlib.sha256(safe_id.encode("utf-8", errors="replace")).hexdigest()[:24]
     result = {key: scrub(record.get(key) or "") for key in
-              ("id", "archive_no", "title", "art_type", "author_name", "status", "saved_at")}
+              ("archive_no", "title", "art_type", "author_name", "status", "saved_at")}
+    result["id"] = safe_id
     result.update(revision=_revision(record), data=scrub(data))
     return result
 
@@ -434,7 +446,7 @@ def _write_archive(stream, plan, password, is_cancelled, on_progress):
                         "source": item["source"], "captured_at": item["captured_at"]})
     manifest_json = _json({"format": "fmjj-certificate-evidence", "version": 1,
                           "created_at": _now(), "encryption": "WinZip AES-256",
-                          "record_id": str(plan["record"].get("id") or ""),
+                          "record_id": _public_record(plan["record"])["id"],
                           "revision": _revision(plan["record"]), "files": entries,
                           "warnings": plan["warnings"]})
     readme = ("证书证据包（格式 1）\n使用支持 AES-256 ZIP 的解压工具并输入导出口令。\n"
@@ -442,8 +454,8 @@ def _write_archive(stream, plan, password, is_cancelled, on_progress):
               "历史留存引用仅表示文件与保存时记录的校验值一致，并非独立保存的原件副本。\n"
               "本次发现/本次补充不代表历史原件；从字段重新生成的文档也不能替代原始协议。\n"
               "\n提示：\n" + "\n".join(plan["warnings"])).encode("utf-8")
-    total_size = plan["total_size"] + len(record_json) + len(manifest_json) + len(readme)
-    if total_size > MAX_TOTAL_BYTES:
+    total_plain_size = plan["total_size"] + len(record_json) + len(manifest_json) + len(readme)
+    if total_plain_size > MAX_TOTAL_BYTES:
         raise EvidenceError("证据包全部内容不能超过 64 MiB")
     total = len(entries) + 3
     on_progress(0, total)
@@ -459,8 +471,11 @@ def _write_archive(stream, plan, password, is_cancelled, on_progress):
         for i, (item, entry) in enumerate(zip(plan["files"], entries), 4):
             _cancel(is_cancelled)
             with archive.open(entry["entry"], "w") as target:
-                _read_file(item["path"], expected=item, consume=target.write,
-                           is_cancelled=is_cancelled)
+                verified = _read_file(item["path"], expected=item, consume=target.write,
+                                      is_cancelled=is_cancelled)
+            if (verified["name"] != item["name"]
+                    or os.path.normcase(verified["path"]) != os.path.normcase(item["path"])):
+                raise EvidenceError("附件路径在读取期间发生变化，请重试")
             on_progress(i, total)
         if any(not (item.flag_bits & 1) or getattr(item, "wz_aes_strength", None) != 3
                or getattr(item, "wz_aes_version", None) != 2
@@ -505,10 +520,13 @@ def export_bundle(record_id, password, target, *, output_root=None, extra_files=
            for item in plan["files"]):
         raise EvidenceError("导出目标不能与证据原文件相同")
     temporary = None
+    temporary_identity = None
     try:
         descriptor, name = tempfile.mkstemp(prefix=".certificate-evidence-", suffix=".tmp",
                                             dir=destination.parent)
         temporary = Path(name)
+        created_info = temporary.lstat()
+        temporary_identity = (created_info.st_dev, created_info.st_ino)
         with os.fdopen(descriptor, "w+b") as output:
             _write_archive(output, plan, secret, is_cancelled, on_progress)
             output.flush()
@@ -517,6 +535,10 @@ def export_bundle(record_id, password, target, *, output_root=None, extra_files=
         _cancel(is_cancelled)
         if _state(parent_info)[:2] != _state(_components(destination.parent, private=False))[:2]:
             raise EvidenceError("导出目录在写入期间发生变化")
+        temp_info = _components(temporary, private=False)
+        if (not stat.S_ISREG(temp_info.st_mode)
+                or (temp_info.st_dev, temp_info.st_ino) != temporary_identity):
+            raise EvidenceError("临时证据包在写入期间发生变化")
         # Windows rename fails when target exists. POSIX link publishes a complete
         # inode with O_EXCL semantics; neither branch overwrites a concurrent file.
         if os.name == "nt":
@@ -532,4 +554,14 @@ def export_bundle(record_id, password, target, *, output_root=None, extra_files=
         raise EvidenceError("导出失败：无法安全写入目标目录，请更换目录后重试") from None
     finally:
         if temporary is not None:
-            temporary.unlink(missing_ok=True)
+            try:
+                current = temporary.lstat()
+                if (_linked(current) or not stat.S_ISREG(current.st_mode)
+                        or (current.st_dev, current.st_ino) != temporary_identity):
+                    # Leave a replacement untouched; this inode is not ours.
+                    pass
+                else:
+                    temporary.unlink(missing_ok=True)
+            except (FileNotFoundError, OSError):
+                # Cleanup must not mask the original failure or cancellation.
+                pass

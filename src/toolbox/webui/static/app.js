@@ -6833,11 +6833,13 @@ function renderLivestreamSummary(root) {
         var metadataPath = '';
         var loadedPath = '';
         var metadataLoading = false;
-        var reloadBtn = h('button', { class: 'btn', type: 'button' }, '重新读取');
+        var editing = false;
+        var reloadBtn = h('button', { class: 'btn', type: 'button' }, '刷新');
+        var editBtn = h('button', { class: 'btn', type: 'button' }, '编辑标签');
         var writeBtn = h('button', { class: 'btn primary', type: 'button' }, '写入元数据');
         tabHost.appendChild(h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '先在表格勾选 1 个视频；写入生成 <文件名>_meta 新文件，源视频保留。'),
-          h('span', { style: 'flex:1' }), reloadBtn, writeBtn));
+          reloadBtn, editBtn, writeBtn));
         var form = h('div', { class: 'video-metadata-form' });
         [['title', '标题'], ['comment', '备注'], ['artist', '作者'],
          ['date', '日期']].forEach(function (pair) {
@@ -6848,6 +6850,7 @@ function renderLivestreamSummary(root) {
           form.appendChild(inputs[pair[0]]);
         });
         tabHost.appendChild(infoHost);
+        form.classList.add('hidden');
         tabHost.appendChild(form);
 
         function currentPath() {
@@ -6859,18 +6862,30 @@ function renderLivestreamSummary(root) {
           var path = currentPath();
           if (path !== metadataPath) loadMeta();
           reloadBtn.disabled = running || metadataLoading || !path;
+          editBtn.disabled = running || metadataLoading || !path || loadedPath !== path;
           writeBtn.disabled = running || metadataLoading || !path || loadedPath !== path;
           Object.keys(inputs).forEach(function (key) {
-            inputs[key].disabled = running || metadataLoading || !path;
+            inputs[key].disabled = running || metadataLoading || !path || !editing;
           });
           writeBtn.textContent = running ? '处理中…' : '写入元数据';
+          editBtn.textContent = editing ? '收起标签' : '编辑标签';
+          form.classList.toggle('hidden', !editing);
         }
         actionRefreshers.push(sync);
+
+        function showSummary(lines, path) {
+          var summary = Array.isArray(lines) && lines.length ? lines : [path || ''];
+          infoHost.replaceChildren(summary.map(function (line) {
+            return h('div', { class: 'video-metadata-line', style: 'overflow-wrap:anywhere' },
+              String(line || ''));
+          }));
+        }
 
         function loadMeta() {
           var path = currentPath();
           metadataPath = path;
           loadedPath = '';
+          editing = false;
           if (!path) {
             metadataLoading = false;
             Object.keys(inputs).forEach(function (key) { inputs[key].value = ''; });
@@ -6892,8 +6907,7 @@ function renderLivestreamSummary(root) {
               originalRotation = Number(data.rotation || 0);
               loadedPath = path;
               metadataLoading = false;
-              infoHost.replaceChildren(
-                h('div', { class: 'muted small' }, data.note || ''));
+              showSummary(data.summary_lines, path);
               sync();
             }).catch(function (error) {
               if (currentPath() !== path || metadataPath !== path) return;
@@ -6903,6 +6917,11 @@ function renderLivestreamSummary(root) {
             });
         }
 
+        editBtn.addEventListener('click', function () {
+          if (!loadedPath || loadedPath !== currentPath()) return;
+          editing = !editing;
+          sync();
+        });
         reloadBtn.addEventListener('click', loadMeta);
         writeBtn.addEventListener('click', function () {
           var path = currentPath();

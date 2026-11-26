@@ -115,7 +115,9 @@ def save_record(data: engine.CertificateData, path: Path | None = None, *,
                 previous_revision = 1
             unchanged = record.get("data") == payload["data"]
             previous = record.get("evidence") if unchanged else None
-            if not isinstance(previous, dict):
+            if (not isinstance(previous, dict) or previous.get("version") != 1
+                    or previous.get("revision") != previous_revision
+                    or not isinstance(previous.get("files"), list)):
                 previous = None
             record.update(payload)
             record["id"] = str(record.get("id") or uuid.uuid4().hex[:12])
