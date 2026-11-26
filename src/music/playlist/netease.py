@@ -131,6 +131,14 @@ class NeteasePlaylistWriter(BasePlaylistWriter):
             platform=self.platform, phase="add",
         )
 
+    def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     name: str = "",
+                     transport: Optional[httpx.BaseTransport] = None) -> str:
+        ident = str(playlist_id or "").strip()
+        if not ident:
+            return ""
+        return f"https://music.163.com/playlist?id={ident}"
+
     def sort_songs(self, playlist_id: str, ordered_song_ids: list[str],
                    cookie: dict[str, str], *,
                    transport: Optional[httpx.BaseTransport] = None) -> None:

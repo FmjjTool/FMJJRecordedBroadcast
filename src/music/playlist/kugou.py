@@ -233,8 +233,11 @@ class KugouPlaylistWriter(BasePlaylistWriter):
                 "sort": 0,
                 "timelen": 0,
                 "bitrate": 0,
-                "album_id": self._extra_int(song, "album_id", "albumid"),
-                "mixsongid": self._extra_int(song, "mixsongid", "mix_songid", "audio_id"),
+                    "album_id": self._extra_int(song, "album_id", "albumid"),
+                    # 云歌单按 mixsongid 定位音频：必须用 album_audio_id，
+                    # 用单曲 audio_id 会命中别的资源（实测声声慢被换成有声书）。
+                    "mixsongid": self._extra_int(song, "mixsongid", "mix_songid",
+                                                 "album_audio_id", "audio_id"),
             })
         if not resources:
             return result
