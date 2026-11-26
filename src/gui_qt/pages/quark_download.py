@@ -143,7 +143,7 @@ class QuarkDownloadPage(BasePage):
         self._sort_desc = False
 
         root = QVBoxLayout(self)
-        # 本页只作为「网络库」页签内容使用，左右留白交给页签容器
+        # 本页作为「网络库」内容使用，左右留白交给页面容器
         root.setContentsMargins(0, 12, 0, 0)
         root.setSpacing(12)
 
