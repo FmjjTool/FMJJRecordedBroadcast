@@ -39,6 +39,7 @@ _DETAIL_FIELDS = (
     ("danmaku_count", "弹幕"), ("video_url", "链接"),
 )
 _LOCAL_CACHE_TTL = 300
+_ENTRY_CACHE_TTL = 60
 _LOCAL_GROUP_LIMIT = 200
 _PREVIEW_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _PREVIEW_IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -54,6 +55,11 @@ class AssetQueryService:
     def __init__(self):
         self._entries_cache: tuple[str, int, list, bool] | None = None
         self._entries_truncated = False
+        self._entries_loaded_at = 0.0
+        self._entries_revision = 0
+        self._entries_view_updated = None
+        self._entry_media: dict[str, list[dict]] = {}
+        self._entries_lock = threading.RLock()
         self._local_cache: dict[str, dict] = {}
         self._local_lock = threading.Lock()
 
@@ -124,6 +130,17 @@ class AssetQueryService:
                 platform: str = "") -> dict:
         page = max(1, int(page))
         page_size = max(1, min(100, int(page_size)))
+        items = self.entry_rows(keyword, platform)
+        total = len(items)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        start = (page - 1) * page_size
+        return {"items": items[start:start + page_size], "total": total,
+                "page": page, "page_size": page_size, "pages": pages,
+                "truncated": bool(self._entries_truncated)}
+
+    def entry_rows(self, keyword: str = "", platform: str = "") -> list[dict]:
+        """返回完整内存清单；内部状态筛选不经过公开接口的分页上限。"""
         items = self._entry_rows()
         kw = (keyword or "").strip().lower()
         if kw:
@@ -132,13 +149,41 @@ class AssetQueryService:
                      or kw in (item.get("author") or "").lower()]
         if platform:
             items = [item for item in items if item.get("platform") == platform]
-        total = len(items)
-        pages = max(1, (total + page_size - 1) // page_size)
-        page = min(page, pages)
-        start = (page - 1) * page_size
-        return {"items": items[start:start + page_size], "total": total,
-                "page": page, "page_size": page_size, "pages": pages,
-                "truncated": bool(self._entries_truncated)}
+        return [dict(item) for item in items]
+
+    def refresh_entry_paths(self, paths: list[str]) -> dict:
+        """只重读指定 JSON，并修补现有清单；不触发目录枚举或全量加载。"""
+        root = (get_export_dir() / EXPORT_CATEGORIES["video_data"]).resolve()
+        targets = [_entry_target(root, rel) for rel in paths]
+        items, removed = [], []
+        for target in targets:
+            rel = target.relative_to(root).as_posix()
+            if not target.is_file():
+                removed.append(rel)
+                continue
+            try:
+                payload = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError("条目文件读取失败，请检查文件后重试") from exc
+            if isinstance(payload, list):
+                payload = payload[0] if payload else None
+            if not isinstance(payload, dict):
+                raise ValueError("条目文件格式不正确")
+            items.append(_entry_payload(root, target, payload))
+        with self._entries_lock:
+            cached = self._entries_cache
+            if cached and cached[0] == str(root):
+                replacements = {item["path"]: item for item in items}
+                gone = set(removed)
+                rows = [replacements.pop(row["path"], row) for row in cached[2]
+                        if row["path"] not in gone]
+                rows.extend(replacements.values())
+                rows.sort(key=lambda row: row.get("publish_time") or "", reverse=True)
+                self._entries_cache = (cached[0], _entry_stamp(root), rows, cached[3])
+            for rel in removed:
+                self._entry_media.pop(rel, None)
+            self._entries_revision += 1
+        return {"items": items, "removed": removed}
 
     def category_root(self, category: str) -> Path:
         root = get_export_dir() / category

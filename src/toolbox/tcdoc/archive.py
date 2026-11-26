@@ -57,13 +57,36 @@ def db_path() -> Path:
 
 def init_db(path=None) -> Path:
     path = Path(path or db_path())
+    existed = path.is_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as conn:
         conn.execute("PRAGMA busy_timeout=10000")
+        if existed:
+            names = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "pages" in names and "page_assets" not in names:
+                _backup_before_images(conn, path)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
         conn.commit()
     return path
+
+
+def _backup_before_images(conn, path: Path) -> None:
+    """旧库首次追加图片表前做一次一致性备份；失败则不开始升级。"""
+    backup = path.with_name(path.name + ".pre-body-images.bak")
+    if backup.exists():
+        return
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".bak.tmp", dir=path.parent)
+    os.close(fd)
+    try:
+        with closing(sqlite3.connect(temporary)) as destination:
+            conn.backup(destination)
+        if not backup.exists():
+            os.replace(temporary, backup)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 # ==================== 写入 ====================

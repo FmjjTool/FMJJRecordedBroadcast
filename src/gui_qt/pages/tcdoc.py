@@ -322,7 +322,10 @@ class _DocPreviewPanel(QWidget):
             if err:
                 from toolbox.tcdoc.body_images import BodyImagesCancelled
                 cancelled = cancel_fetch.is_set() or isinstance(err, BodyImagesCancelled)
-                self.status.setText("已取消，已有存档保留" if cancelled else f"抓取失败：{err}"[:200])
+                completed = len(getattr(err, "completed_pages", []) or [])
+                cancel_note = (f"已取消（完成 {completed} 篇），已有存档保留" if completed
+                               else "已取消，已有存档保留")
+                self.status.setText(cancel_note if cancelled else "抓取正文失败，请重新抓取后重试")
                 if not self._pages:
                     self.text_view.setPlaceholderText("抓取失败，可点「重新抓取」重试")
                 self.export_btn.setEnabled(bool(self._full_text.strip()))
@@ -337,6 +340,12 @@ class _DocPreviewPanel(QWidget):
                     save_note = f" · 已存档 +{added} ~{updated} -{removed}"
                 else:
                     save_note = " · 已存档（无变化）"
+                if save.get("skipped"):
+                    save_note += f" · {save['skipped']} 篇抓取失败，保留旧存档"
+                if save.get("complete") is False:
+                    save_note += " · 页面列表未完整读取，缺失页面旧存档保留"
+                if save.get("file_error"):
+                    save_note += " · Markdown 快照未能更新"
             else:
                 save_note = " · 自动存档失败" if result.get("save_error") else ""
             count = f"共 {len(pages)} 篇 · " if len(pages) > 1 else ""
