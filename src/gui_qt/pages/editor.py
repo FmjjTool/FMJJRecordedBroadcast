@@ -18,13 +18,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
@@ -52,8 +52,9 @@ from toolbox.edit_engine import (
 )
 from toolbox.utils import format_size, is_video_file
 
-from gui_qt import table_sort
+from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 
 COMPRESS_PRESETS = {
@@ -80,32 +81,149 @@ def _fmt_ms(ms: int) -> str:
     return f"{m:02d}:{s:02d}.{milli // 100}"
 
 
-class _SeekSlider(QSlider):
-    """可点即跳的进度条：点击轨道任意位置直接跳到该处。
+class _OptionGrid(QWidget):
+    """参数组按可用宽度切换网格列数，窄窗口只纵向滚动。"""
 
-    QSlider 默认只有拖手柄才改值，点击轨道走 pageStep（一次 1/10 时长），
-    用起来像「点不动」。这里把点击位置直接换算成时间点再发 clickedAt。
-    """
+    def __init__(self, widgets, columns=2, cell_width=210):
+        super().__init__()
+        self._widgets = widgets
+        self._max_columns = columns
+        self._cell_width = cell_width
+        self._columns = 0
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(8)
+        self._grid.setSizeConstraint(QLayout.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._arrange(1)
+
+    def minimumSizeHint(self):  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        cell = max(self._cell_width,
+                   max((w.minimumSizeHint().width() for w in self._widgets), default=0))
+        self._arrange(min(self._max_columns, max(1, (self.width() + 8) // (cell + 8))))
+
+    def _arrange(self, columns):
+        if columns == self._columns:
+            return
+        while self._grid.count():
+            self._grid.takeAt(0)
+        for column in range(self._max_columns):
+            self._grid.setColumnStretch(column, 1 if column < columns else 0)
+        for index, widget in enumerate(self._widgets):
+            self._grid.addWidget(widget, index // columns, index % columns)
+        self._columns = columns
+        self.updateGeometry()
+
+
+class _SeekSlider(QSlider):
+    """点击/拖动播放指针，并在同一时间轴显示片段和待定起点。"""
 
     clickedAt = Signal(int)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._segments = ()
+        self._pending_start = None
+        self._selected_index = -1
+        self._pointer_dragging = False
+        self.valueChanged.connect(lambda _value: self.update())
+
+    def set_segments(self, segments, pending_start=None, selected_index=-1):
+        self._segments = tuple(segments)
+        self._pending_start = pending_start
+        self._selected_index = selected_index
+        self.update()
+
+    def _geometry(self):
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove = self.style().subControlRect(
+            QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
+        handle = self.style().subControlRect(
+            QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+        return option, groove, handle
+
+    def _value_at(self, x):
+        option, groove, handle = self._geometry()
+        return QStyle.sliderValueFromPosition(
+            self.minimum(), self.maximum(),
+            int(x - groove.left() - handle.width() / 2),
+            max(1, groove.width() - handle.width()), option.upsideDown)
+
     def mousePressEvent(self, event):  # noqa: N802 (Qt 命名)
         if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
-            option = QStyleOptionSlider()
-            self.initStyleOption(option)
-            handle = self.style().subControlRect(
-                QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
-            if not handle.contains(event.position().toPoint()):
-                span = max(1, self.width() - handle.width())
-                pos = int(event.position().x() - handle.width() / 2)
-                value = QStyle.sliderValueFromPosition(
-                    self.minimum(), self.maximum(), pos, span,
-                    option.upsideDown)
-                self.setValue(value)
-                self.clickedAt.emit(value)
-                event.accept()
-                return
+            self._pointer_dragging = True
+            self.setSliderDown(True)
+            self.setValue(self._value_at(event.position().x()))
+            self.sliderMoved.emit(self.value())
+            self.clickedAt.emit(self.value())
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        if self._pointer_dragging:
+            self.setValue(self._value_at(event.position().x()))
+            self.sliderMoved.emit(self.value())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if self._pointer_dragging and event.button() == Qt.LeftButton:
+            self.setValue(self._value_at(event.position().x()))
+            self._pointer_dragging = False
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        if self.maximum() <= self.minimum():
+            return
+        option, groove, handle = self._geometry()
+        span = max(1, groove.width() - handle.width())
+
+        def x_at(value):
+            value = max(self.minimum(), min(self.maximum(), int(value)))
+            return (groove.left() + handle.width() / 2
+                    + QStyle.sliderPositionFromValue(
+                        self.minimum(), self.maximum(), value, span, option.upsideDown))
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setClipRect(self.rect())
+        y = groove.center().y()
+        for index, (start, end) in enumerate(self._segments):
+            x1, x2 = sorted((x_at(start), x_at(end)))
+            selected = index == self._selected_index
+            fill = QColor(theme.color("accent" if selected else "success"))
+            fill.setAlpha(180 if selected else 110)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(QRectF(x1, y - 4, max(2, x2 - x1), 8), 2, 2)
+            if selected:
+                for point, role in ((start, "success"), (end, "danger")):
+                    painter.setPen(QPen(QColor(theme.color(role)), 1))
+                    painter.drawLine(int(x_at(point)), 2, int(x_at(point)), self.height() - 2)
+        if self._pending_start is not None:
+            x1, x2 = sorted((x_at(self._pending_start), x_at(self.value())))
+            fill = QColor(theme.color("warning"))
+            fill.setAlpha(70)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(QRectF(x1, y - 4, max(2, x2 - x1), 8), 2, 2)
+            painter.setPen(QPen(QColor(theme.color("warning")), 1, Qt.DashLine))
+            x = int(x_at(self._pending_start))
+            painter.drawLine(x, 2, x, self.height() - 2)
+        # 片段底色在手柄下，当前位置始终清楚可见。
+        option.subControls = QStyle.SC_SliderHandle
+        self.style().drawComplexControl(QStyle.CC_Slider, option, painter, self)
 
 
 class EditorPage(BasePage):
