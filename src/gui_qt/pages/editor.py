@@ -863,11 +863,18 @@ class EditorPage(BasePage):
         self._on_current_changed(row)
 
     def _on_current_changed(self, row: int):
+        self._pending_start = None
+        self.segments = []
+        self.detect_points = []
+        self.points_list.clear()
+        self._refresh_segments()
         if row < 0 or row >= len(self.files):
             self.current_path = None
             self._duration_ms = 0
             self.player.stop()
             self.player.setSource(QUrl())
+            self.slider.setRange(0, 0)
+            self._update_time_label(0)
             self.play_btn.setText("▶ 播放")
             self.file_label.setText("未选择文件")
             self.track_table.setRowCount(0)
@@ -879,10 +886,6 @@ class EditorPage(BasePage):
             return
         self.current_path = self.files[row]
         self.file_label.setText(self.current_path)
-        self.segments = []
-        self.detect_points = []
-        self.points_list.clear()
-        self._refresh_segments()
         self._load_preview(self.current_path)
         self._refresh_tracks()
         self._refresh_meta()
@@ -908,6 +911,7 @@ class EditorPage(BasePage):
             self._duration_ms = duration
             self.slider.setRange(0, duration)
             self._update_time_label(self.player.position())
+            self._sync_timeline()
 
     def _on_position(self, position: int):
         # 拖动中不让播放位置反压滑块与时间标签，否则手感是「拖了又弹回去」
@@ -953,13 +957,15 @@ class EditorPage(BasePage):
     def _seek_to(self, position_ms: int):
         if not self.current_path:
             return
-        self.player.setPosition(max(0, int(position_ms)))
-        self._on_position(max(0, int(position_ms)))
+        position = max(0, min(self._duration_ms, int(position_ms)))
+        self.slider.setValue(position)
+        self.player.setPosition(position)
+        self._update_time_label(position)
 
     def _jump(self, delta_ms: int):
         if not self.current_path:
             return
-        current = self.player.position() or self.slider.value()
+        current = self.slider.value()
         self._seek_to(current + delta_ms)
 
     def _jump_to_text(self):
@@ -1002,6 +1008,8 @@ class EditorPage(BasePage):
         self.convert_btn.setEnabled(bool(self.files) and idle)
         self.convert_scan_btn.setEnabled(idle)
         self.convert_clear_btn.setEnabled(idle)
+        self.rotate_btn.setEnabled(has_file and idle)
+        self.meta_rotation.setEnabled(has_file and idle)
 
     # ==================== 转换页签 ====================
 
@@ -1180,11 +1188,16 @@ class EditorPage(BasePage):
     # ==================== 片段 ====================
 
     def _set_start(self):
-        self._pending_start = self.player.position() or self.slider.value()
+        if not self.current_path or self._duration_ms <= 0:
+            return
+        self._pending_start = self.slider.value()
+        self._sync_timeline()
         self._log(f"起点: {_fmt_ms(self._pending_start)}")
 
     def _set_end(self):
-        end = self.player.position() or self.slider.value()
+        if not self.current_path or self._duration_ms <= 0:
+            return
+        end = self.slider.value()
         start = self._pending_start
         if start is None:
             start = 0
@@ -1195,16 +1208,37 @@ class EditorPage(BasePage):
         self.segments.sort()
         self._pending_start = None
         self._refresh_segments()
+        self.seg_list.setCurrentRow(self.segments.index((int(start), int(end))))
         self._log(f"已添加片段 {_fmt_ms(start)} → {_fmt_ms(end)}")
 
     def _refresh_segments(self):
+        selected = self.seg_list.currentRow()
+        self.seg_list.blockSignals(True)
         self.seg_list.clear()
         for idx, (start, end) in enumerate(self.segments, 1):
             item = QListWidgetItem(
                 f"{idx}. {_fmt_ms(start)} → {_fmt_ms(end)}  ({_fmt_ms(end - start)})")
             item.setData(Qt.UserRole, (start, end))
+            item.setToolTip("双击定位到片段起点")
             self.seg_list.addItem(item)
+        if self.segments:
+            self.seg_list.setCurrentRow(max(0, min(selected, len(self.segments) - 1)))
+        self.seg_list.blockSignals(False)
+        self._sync_timeline()
         self._refresh_action_buttons()
+
+    def _sync_timeline(self, _row=None):
+        selected = self.seg_list.currentRow()
+        self.slider.set_segments(self.segments, self._pending_start, selected)
+        if self._pending_start is not None:
+            self.segment_status.setText(
+                f"待完成起点 {_fmt_ms(self._pending_start)} · 移动指针后标记结束（O）")
+        elif 0 <= selected < len(self.segments):
+            start, end = self.segments[selected]
+            self.segment_status.setText(
+                f"片段 {selected + 1} / {len(self.segments)} · 起 {_fmt_ms(start)} → 终 {_fmt_ms(end)}")
+        else:
+            self.segment_status.setText("未标记片段：移动播放指针后标记开始 / 结束")
 
     def _remove_segment(self):
         row = self.seg_list.currentRow()
@@ -1339,8 +1373,6 @@ class EditorPage(BasePage):
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.setContentsMargins(8, 8, 8, 8)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("预设:"))
         self.cmp_preset = QComboBox()
         for key, (label, _q, _r) in COMPRESS_PRESETS.items():
             self.cmp_preset.addItem(label, key)
@@ -1348,19 +1380,16 @@ class EditorPage(BasePage):
         self.cmp_preset.setCurrentIndex(max(0, idx))
         self.cmp_preset.currentIndexChanged.connect(
             lambda _i: self._save(editor_compress_preset=self.cmp_preset.currentData()))
-        row.addWidget(self.cmp_preset)
-        row.addWidget(QLabel("分辨率:"))
         self.cmp_res = QComboBox()
         self.cmp_res.addItems(["保持原始", "1920x1080", "1280x720", "854x480"])
         self.cmp_res.setCurrentText(cfg.get("editor_compress_res", "保持原始"))
         self.cmp_res.currentTextChanged.connect(lambda t: self._save(editor_compress_res=t))
-        row.addWidget(self.cmp_res)
+        v.addWidget(_OptionGrid([
+            self._field("预设:", self.cmp_preset), self._field("分辨率:", self.cmp_res)]))
         self.cmp_clean = QCheckBox("清除元数据")
         self.cmp_clean.setChecked(bool(cfg.get("editor_compress_clean", True)))
         self.cmp_clean.toggled.connect(lambda c: self._save(editor_compress_clean=c))
-        row.addWidget(self.cmp_clean)
-        row.addStretch(1)
-        v.addLayout(row)
+        v.addWidget(self.cmp_clean)
 
         row2 = QHBoxLayout()
         self.cmp_btn = QPushButton("开始压缩")
@@ -1376,9 +1405,10 @@ class EditorPage(BasePage):
         v.addLayout(row2)
         hint = QLabel("压缩会重新编码，输出到源目录：<原名>_compressed_video.mp4。")
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch(1)
-        self.tabs.addTab(tab, "压缩")
+        self._add_tab(tab, "压缩")
 
     # ==================== 轨道页签 ====================
 
@@ -1399,27 +1429,34 @@ class EditorPage(BasePage):
         self._track_sorter = table_sort.install(self.track_table, skip_columns=())
         v.addWidget(self.track_table, 1)
 
-        row = QHBoxLayout()
-        row.addWidget(self._btn("重新读取", self._refresh_tracks, small=True))
-        row.addWidget(self._btn("提取选中", self._extract_selected_tracks, small=True))
-        row.addWidget(self._btn("提取全部", self._extract_all_tracks, small=True))
-        row.addWidget(self._btn("删除选中轨道", self._remove_tracks, small=True, danger=True))
-        row.addStretch(1)
-        v.addLayout(row)
+        v.addWidget(_OptionGrid([
+            self._btn("重新读取", self._refresh_tracks, small=True),
+            self._btn("提取选中", self._extract_selected_tracks, small=True),
+            self._btn("提取全部", self._extract_all_tracks, small=True),
+            self._btn("删除选中轨道", self._remove_tracks, small=True, danger=True)],
+            columns=4, cell_width=112))
 
         ext_row = QHBoxLayout()
         ext_row.addWidget(self._btn("选择外部音轨", self._pick_ext_audio, small=True))
         self.ext_audio_label = QLabel("未选择")
         self.ext_audio_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        self.ext_audio_label.setMinimumWidth(0)
+        self.ext_audio_label.setWordWrap(True)
+        self.ext_audio_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         ext_row.addWidget(self.ext_audio_label, 1)
-        ext_row.addWidget(self._btn("追加音轨", lambda: self._apply_ext_audio(False), small=True))
-        ext_row.addWidget(self._btn("替换全部音轨", lambda: self._apply_ext_audio(True), small=True))
         v.addLayout(ext_row)
+        v.addWidget(_OptionGrid([
+            self._btn("追加音轨", lambda: self._apply_ext_audio(False), small=True),
+            self._btn("替换全部音轨", lambda: self._apply_ext_audio(True), small=True)],
+            columns=2, cell_width=120))
 
         sub_row = QHBoxLayout()
         sub_row.addWidget(self._btn("选择字幕", self._pick_ext_sub, small=True))
         self.ext_sub_label = QLabel("未选择")
         self.ext_sub_label.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        self.ext_sub_label.setMinimumWidth(0)
+        self.ext_sub_label.setWordWrap(True)
+        self.ext_sub_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         sub_row.addWidget(self.ext_sub_label, 1)
         sub_row.addWidget(self._btn("添加字幕", self._apply_ext_sub, small=True))
         sub_row.addStretch(1)
@@ -1428,7 +1465,7 @@ class EditorPage(BasePage):
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
-        self.tabs.addTab(tab, "轨道")
+        self._add_tab(tab, "轨道")
 
     # ==================== 元数据页签 ====================
 
@@ -1437,46 +1474,28 @@ class EditorPage(BasePage):
         v = QVBoxLayout(tab)
         v.setContentsMargins(8, 8, 8, 8)
 
-        grid = QHBoxLayout()
-        col1 = QVBoxLayout()
         self.meta_title = QLineEdit()
         self.meta_artist = QLineEdit()
-        col1.addWidget(QLabel("标题"))
-        col1.addWidget(self.meta_title)
-        col1.addWidget(QLabel("作者"))
-        col1.addWidget(self.meta_artist)
-        grid.addLayout(col1, 1)
-        col2 = QVBoxLayout()
         self.meta_comment = QLineEdit()
         self.meta_date = QLineEdit()
-        col2.addWidget(QLabel("备注"))
-        col2.addWidget(self.meta_comment)
-        col2.addWidget(QLabel("日期"))
-        col2.addWidget(self.meta_date)
-        grid.addLayout(col2, 1)
-        v.addLayout(grid)
+        edits = []
+        for label, edit in (("标题", self.meta_title), ("备注", self.meta_comment),
+                            ("作者", self.meta_artist), ("日期", self.meta_date)):
+            edit.setPlaceholderText(label)
+            edit.setAccessibleName(label)
+            edit.setToolTip(label)
+            edits.append(edit)
+        v.addWidget(_OptionGrid(edits))
+        v.addWidget(_OptionGrid([
+            self._btn("读取当前", self._refresh_meta, small=True),
+            self._btn("写入新文件", self._write_meta, small=True)], columns=2, cell_width=120))
 
-        rot_row = QHBoxLayout()
-        rot_row.addWidget(QLabel("旋转:"))
-        self.meta_rotation = QComboBox()
-        self.meta_rotation.addItem("保持原样", None)
-        self.meta_rotation.addItem("0°", 0)
-        self.meta_rotation.addItem("90°", 90)
-        self.meta_rotation.addItem("180°", 180)
-        self.meta_rotation.addItem("270°", 270)
-        rot_row.addWidget(self.meta_rotation)
-        rot_row.addStretch(1)
-        rot_row.addWidget(self._btn("读取当前", self._refresh_meta, small=True))
-        rot_row.addWidget(self._btn("写入新文件", self._write_meta, small=True))
-        v.addLayout(rot_row)
-
-        hint = QLabel("写入采用重新封装（-c copy），不改画质；mp4/mkv 支持元数据，"
-                      "旋转对 mp4 的显示矩阵生效，mkv 可能被忽略。")
+        hint = QLabel("写入新文件，不改画质与旋转方向；MP4 / MKV 支持元数据。")
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch(1)
-        self.tabs.addTab(tab, "元数据")
+        self._add_tab(tab, "元数据")
 
     # ==================== 截图页签 ====================
 
@@ -1484,25 +1503,21 @@ class EditorPage(BasePage):
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.setContentsMargins(8, 8, 8, 8)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("帧格式:"))
         self.shot_fmt = QComboBox()
         self.shot_fmt.addItems(["JPG", "PNG"])
-        row.addWidget(self.shot_fmt)
-        row.addWidget(QLabel("抽帧间隔(秒):"))
         self.shot_interval = QSpinBox()
         self.shot_interval.setRange(1, 3600)
         self.shot_interval.setValue(int(cfg.get("editor_shot_interval", 10)))
         self.shot_interval.valueChanged.connect(
             lambda val: self._save(editor_shot_interval=val))
-        row.addWidget(self.shot_interval)
+        self.shot_interval.setSuffix(" 秒")
+        v.addWidget(_OptionGrid([
+            self._field("帧格式:", self.shot_fmt), self._field("抽帧间隔:", self.shot_interval)]))
         self.shot_copy_cb = QCheckBox("截图后自动复制")
         self.shot_copy_cb.setChecked(bool(cfg.get("editor_shot_copy", True)))
         self.shot_copy_cb.setToolTip("截完图顺手进剪贴板，可直接粘到微信 / PS / PR")
         self.shot_copy_cb.toggled.connect(lambda on: self._save(editor_shot_copy=bool(on)))
-        row.addWidget(self.shot_copy_cb)
-        row.addStretch(1)
-        v.addLayout(row)
+        v.addWidget(self.shot_copy_cb)
 
         row2 = QHBoxLayout()
         self.shot_btn = QPushButton("当前帧")
@@ -1520,12 +1535,14 @@ class EditorPage(BasePage):
         v.addLayout(row2)
         hint = QLabel("截图输出到源文件同目录；按间隔抽帧输出到「<文件名>_frames」文件夹。")
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        hint.setWordWrap(True)
         v.addWidget(hint)
         hint2 = QLabel("「复制当前帧」不写文件：PNG 无损进剪贴板，可直接粘贴到 PS / PR / 微信。")
         hint2.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        hint2.setWordWrap(True)
         v.addWidget(hint2)
         v.addStretch(1)
-        self.tabs.addTab(tab, "截图")
+        self._add_tab(tab, "截图")
 
     # ==================== 合并执行 ====================
 
@@ -1986,10 +2003,23 @@ class EditorPage(BasePage):
             "comment": self.meta_comment.text().strip(),
             "date": self.meta_date.text().strip(),
         }
-        rotation = self.meta_rotation.currentData()
         self._begin("写入元数据", f"输出: {out}")
-        self._run(lambda: write_metadata(src, out, tags, rotation),
+        self._run(lambda: write_metadata(src, out, tags, None),
                   lambda r: f"元数据已写入: {Path(r).name}")
+
+    def _write_rotation(self):
+        if self.running or not self.current_path:
+            return
+        rotation = self.meta_rotation.currentData()
+        if rotation is None:
+            self.app.toast("先选择旋转角度", "warning")
+            return
+        src = Path(self.current_path)
+        ext = src.suffix if src.suffix.lower() in (".mp4", ".mkv", ".mov") else ".mkv"
+        out = unique_output_path(self._output_dir() / f"{src.stem}_rotate{ext}")
+        self._begin("导出旋转视频", f"输出: {out}")
+        self._run(lambda: write_metadata(src, out, {}, rotation),
+                  lambda r: f"旋转已导出: {Path(r).name}")
 
     # ==================== 截图 ====================
 

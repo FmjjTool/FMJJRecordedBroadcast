@@ -5215,15 +5215,14 @@ function renderLivestreamSummary(root) {
 
       var listHost = h('div');
       var previewVideo = h('video', {
-        controls: true, preload: 'metadata',
-        style: 'width:100%;max-height:320px;background:#000;border-radius:8px'
+        controls: true, preload: 'metadata', class: 'video-preview'
       });
       var previewNote = h('div', { class: 'muted small', style: 'margin-top:6px' },
         '勾选 1 个视频即可预览（拖动进度按需加载）。MKV / AVI 等浏览器不支持的格式可能无法播放，请用桌面端。');
       var previewHost = h('div', {
         class: 'card', style: 'margin-top:12px;display:none'
       }, previewVideo, previewNote);
-      var opHost = h('div', { class: 'card', style: 'margin-top:12px' });
+      var opHost = h('div', { class: 'card video-operations', style: 'margin-top:12px' });
       var jobHost = h('div');
       var resultHost = h('div');
       host.appendChild(listHost);
@@ -5238,6 +5237,154 @@ function renderLivestreamSummary(root) {
 
       var running = false;
       var actionRefreshers = [];
+      var cutDrafts = {};
+      var emptyCutDraft = { text: '', pendingStart: null, selected: -1 };
+      var cutEditorRefresh = null;
+      var previewDurationMs = 0;
+      var rangeLayer = h('div', { class: 'video-time-ranges', 'aria-hidden': 'true' });
+      var seek = h('input', {
+        class: 'video-seek', type: 'range', min: '0', max: '0', step: '1',
+        value: '0', disabled: true, 'aria-label': '视频时间轴'
+      });
+      var currentTimeLabel = h('span', { class: 'video-time-label' }, '00:00:00.000');
+      var durationLabel = h('span', { class: 'video-time-label' }, '00:00:00.000');
+      var markStartBtn = h('button', { class: 'btn', type: 'button' }, '标记开始');
+      var markEndBtn = h('button', { class: 'btn', type: 'button' }, '标记结束');
+      var removeSegmentBtn = h('button', { class: 'btn', type: 'button' }, '删除选中片段');
+      var clearSegmentsBtn = h('button', { class: 'btn ghost', type: 'button' }, '清空片段');
+      var markHint = h('span', { class: 'muted small video-mark-hint' });
+      previewHost.insertBefore(h('div', { class: 'video-timebar' },
+        currentTimeLabel, h('div', { class: 'video-time-track' }, rangeLayer, seek),
+        durationLabel), previewNote);
+      previewHost.insertBefore(h('div', { class: 'toolbar video-mark-actions' },
+        markStartBtn, markEndBtn, removeSegmentBtn, clearSegmentsBtn), previewNote);
+      previewHost.insertBefore(markHint, previewNote);
+
+      function videoClock(ms) {
+        var total = Math.max(0, Math.round(Number(ms) || 0));
+        var hours = Math.floor(total / 3600000);
+        var minutes = Math.floor((total % 3600000) / 60000);
+        var seconds = ((total % 60000) / 1000).toFixed(3);
+        return String(hours).padStart(2, '0') + ':'
+          + String(minutes).padStart(2, '0') + ':'
+          + (Number(seconds) < 10 ? '0' : '') + seconds;
+      }
+
+      function currentCutDraft() {
+        var paths = selectedPaths();
+        if (paths.length !== 1) return emptyCutDraft;
+        if (!cutDrafts[paths[0]]) {
+          cutDrafts[paths[0]] = { text: '', pendingStart: null, selected: -1 };
+        }
+        return cutDrafts[paths[0]];
+      }
+
+      function currentCutRows() {
+        var text = currentCutDraft().text;
+        if (!text.trim()) return [];
+        try { return parseSegments(text); } catch (_error) { return []; }
+      }
+
+      function refreshMarkers() {
+        var draft = currentCutDraft();
+        var rows = currentCutRows();
+        var one = selected.size === 1;
+        var hasDuration = one && previewDurationMs > 0;
+        var position = Math.max(0, Number(seek.value) || 0);
+        currentTimeLabel.textContent = videoClock(position);
+        durationLabel.textContent = videoClock(previewDurationMs);
+        seek.disabled = !hasDuration;
+        markStartBtn.disabled = running || !hasDuration;
+        markEndBtn.disabled = running || !hasDuration;
+        removeSegmentBtn.disabled = running || !one || !rows[draft.selected];
+        clearSegmentsBtn.disabled = running || !one
+          || (!draft.text && draft.pendingStart === null);
+        markHint.textContent = draft.pendingStart === null
+          ? '按当前播放指针标记；未标记开始时，从 00:00:00.000 开始。'
+          : '开始 ' + videoClock(draft.pendingStart) + ' · 移动指针后标记结束';
+        rangeLayer.replaceChildren();
+        if (!hasDuration) return;
+        rows.forEach(function (row, index) {
+          var start = Math.min(100, Math.max(0, row[0] / previewDurationMs * 100));
+          var end = Math.min(100, Math.max(0, row[1] / previewDurationMs * 100));
+          rangeLayer.appendChild(h('span', {
+            class: 'video-time-range' + (index === draft.selected ? ' is-selected' : ''),
+            style: 'left:' + start + '%;width:' + Math.max(0, end - start) + '%'
+          }));
+        });
+        if (draft.pendingStart !== null) {
+          rangeLayer.appendChild(h('span', {
+            class: 'video-time-pending',
+            style: 'left:' + Math.min(100, Math.max(0,
+              draft.pendingStart / previewDurationMs * 100)) + '%'
+          }));
+        }
+      }
+
+      function refreshCutDraft() {
+        refreshMarkers();
+        if (cutEditorRefresh) cutEditorRefresh();
+      }
+
+      seek.addEventListener('input', function () {
+        previewVideo.currentTime = Number(seek.value) / 1000;
+        refreshMarkers();
+      });
+      previewVideo.addEventListener('timeupdate', function () {
+        seek.value = Math.round((previewVideo.currentTime || 0) * 1000);
+        refreshMarkers();
+      });
+      function updatePreviewDuration() {
+        var duration = Number(previewVideo.duration);
+        previewDurationMs = selected.size === 1 && isFinite(duration) && duration > 0
+          ? Math.round(duration * 1000) : 0;
+        seek.max = previewDurationMs;
+        refreshMarkers();
+      }
+      previewVideo.addEventListener('loadedmetadata', updatePreviewDuration);
+      previewVideo.addEventListener('durationchange', updatePreviewDuration);
+      markStartBtn.addEventListener('click', function () {
+        currentCutDraft().pendingStart = Number(seek.value) || 0;
+        refreshCutDraft();
+      });
+      markEndBtn.addEventListener('click', function () {
+        var draft = currentCutDraft();
+        var start = draft.pendingStart === null ? 0 : draft.pendingStart;
+        var end = Number(seek.value) || 0;
+        if (end <= start) {
+          toast('结束时间必须大于开始时间，请移动播放指针后重试', 'warning');
+          return;
+        }
+        var rows;
+        try { rows = draft.text.trim() ? parseSegments(draft.text) : []; }
+        catch (error) { toast(error.message, 'warning'); return; }
+        rows.push([start, end]);
+        rows.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+        draft.selected = rows.findIndex(function (row) { return row[0] === start && row[1] === end; });
+        draft.text = rows.map(function (row) {
+          return videoClock(row[0]) + '-' + videoClock(row[1]);
+        }).join('\n');
+        draft.pendingStart = null;
+        refreshCutDraft();
+      });
+      removeSegmentBtn.addEventListener('click', function () {
+        var draft = currentCutDraft();
+        var rows = currentCutRows();
+        if (!rows[draft.selected]) return;
+        rows.splice(draft.selected, 1);
+        draft.selected = Math.min(draft.selected, rows.length - 1);
+        draft.text = rows.map(function (row) {
+          return videoClock(row[0]) + '-' + videoClock(row[1]);
+        }).join('\n');
+        refreshCutDraft();
+      });
+      clearSegmentsBtn.addEventListener('click', function () {
+        var draft = currentCutDraft();
+        draft.text = '';
+        draft.selected = -1;
+        draft.pendingStart = null;
+        refreshCutDraft();
+      });
       var columns = [
         { key: 'name', label: '文件名' },
         { key: 'dir', label: '目录' },
@@ -5284,6 +5431,7 @@ function renderLivestreamSummary(root) {
         selectAll.indeterminate = selected.size > 0
           && selected.size < sources.items.length;
         syncPreview();
+        refreshMarkers();
         actionRefreshers.forEach(function (refresh) { refresh(); });
       }
 
@@ -5298,11 +5446,17 @@ function renderLivestreamSummary(root) {
             previewVideo.removeAttribute('src');
             previewVideo.load();
           }
+          previewDurationMs = 0;
+          seek.max = '0';
+          seek.value = '0';
           return;
         }
         previewHost.style.display = '';
         if (paths[0] === previewPath) return;
         previewPath = paths[0];
+        previewDurationMs = 0;
+        seek.max = '0';
+        seek.value = '0';
         previewNote.textContent = '勾选 1 个视频即可预览（拖动进度按需加载）。'
           + 'MKV / AVI 等浏览器不支持的格式可能无法播放，请用桌面端。';
         previewVideo.src = withToken('/api/tools/video/stream?path='
