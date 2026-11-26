@@ -5815,7 +5815,11 @@ function renderLivestreamSummary(root) {
             }, String(index + 1) + '. ' + videoClock(row[0]) + '–' + videoClock(row[1]));
             select.addEventListener('click', function () {
               draft.selected = index;
-              refreshCutDraft();
+              segmentList.querySelectorAll('.video-segment').forEach(function (button, rowIndex) {
+                button.classList.toggle('active', rowIndex === index);
+                button.setAttribute('aria-pressed', rowIndex === index ? 'true' : 'false');
+              });
+              refreshMarkers();
             });
             select.addEventListener('dblclick', function () {
               seek.value = row[0];
@@ -6301,27 +6305,24 @@ function renderLivestreamSummary(root) {
       function renderMetadataPanel() {
         var infoHost = h('div');
         var inputs = {};
-        var rotationSel = h('select', { class: 'select' },
-          h('option', { value: '0' }, '0°'),
-          h('option', { value: '90' }, '90°'),
-          h('option', { value: '180' }, '180°'),
-          h('option', { value: '270' }, '270°'));
+        var originalRotation = 0;
+        var metadataPath = '';
+        var loadedPath = '';
+        var metadataLoading = false;
         var reloadBtn = h('button', { class: 'btn', type: 'button' }, '重新读取');
         var writeBtn = h('button', { class: 'btn primary', type: 'button' }, '写入元数据');
         tabHost.appendChild(h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '先在表格勾选 1 个视频；写入生成 <文件名>_meta 新文件，源视频保留。'),
           h('span', { style: 'flex:1' }), reloadBtn, writeBtn));
-        var form = h('div', { style: 'display:grid; gap:10px; max-width:560px' });
+        var form = h('div', { class: 'video-metadata-form' });
         [['title', '标题'], ['artist', '作者'], ['comment', '备注'],
          ['date', '日期']].forEach(function (pair) {
-          inputs[pair[0]] = h('input', { class: 'input', style: 'width:100%' });
-          form.appendChild(h('div', null,
-            h('div', { class: 'muted small', style: 'margin-bottom:4px' }, pair[1]),
-            inputs[pair[0]]));
+          inputs[pair[0]] = h('input', {
+            class: 'input', placeholder: pair[1], title: pair[1],
+            'aria-label': pair[1], maxlength: '500'
+          });
+          form.appendChild(inputs[pair[0]]);
         });
-        form.appendChild(h('div', null,
-          h('div', { class: 'muted small', style: 'margin-bottom:4px' }, '旋转'),
-          rotationSel));
         tabHost.appendChild(infoHost);
         tabHost.appendChild(form);
 
@@ -6331,34 +6332,50 @@ function renderLivestreamSummary(root) {
         }
 
         function sync() {
-          var one = !!currentPath();
-          reloadBtn.disabled = running || !one;
-          writeBtn.disabled = running || !one;
+          var path = currentPath();
+          if (path !== metadataPath) loadMeta();
+          reloadBtn.disabled = running || metadataLoading || !path;
+          writeBtn.disabled = running || metadataLoading || !path || loadedPath !== path;
+          Object.keys(inputs).forEach(function (key) {
+            inputs[key].disabled = running || metadataLoading || !path;
+          });
           writeBtn.textContent = running ? '处理中…' : '写入元数据';
         }
         actionRefreshers.push(sync);
 
         function loadMeta() {
           var path = currentPath();
+          metadataPath = path;
+          loadedPath = '';
           if (!path) {
+            metadataLoading = false;
+            Object.keys(inputs).forEach(function (key) { inputs[key].value = ''; });
             infoHost.replaceChildren(
               h('div', { class: 'muted small' }, '先在表格勾选 1 个视频。'));
             sync();
             return;
           }
+          metadataLoading = true;
+          sync();
           setLoading(infoHost, '正在读取元数据…');
           api('/api/tools/video/metadata?path=' + encodeURIComponent(path))
             .then(function (data) {
+              if (currentPath() !== path || metadataPath !== path) return;
               var tags = data.tags || {};
               Object.keys(inputs).forEach(function (key) {
                 inputs[key].value = tags[key] || '';
               });
-              rotationSel.value = String(data.rotation || 0);
+              originalRotation = Number(data.rotation || 0);
+              loadedPath = path;
+              metadataLoading = false;
               infoHost.replaceChildren(
                 h('div', { class: 'muted small' }, data.note || ''));
               sync();
             }).catch(function (error) {
+              if (currentPath() !== path || metadataPath !== path) return;
+              metadataLoading = false;
               setError(infoHost, error, loadMeta);
+              sync();
             });
         }
 
@@ -6371,7 +6388,7 @@ function renderLivestreamSummary(root) {
             tags[key] = inputs[key].value.trim();
           });
           runOp('/api/tools/video/metadata/write', {
-            path: path, tags: tags, rotation: Number(rotationSel.value)
+            path: path, tags: tags, rotation: originalRotation
           }, '写入元数据');
         });
 
@@ -6382,6 +6399,7 @@ function renderLivestreamSummary(root) {
       function renderTab() {
         tabHost.replaceChildren();
         actionRefreshers = [];
+        cutEditorRefresh = null;
         if (state.video.tab === 'compress') renderCompressPanel();
         else if (state.video.tab === 'merge') renderMergePanel();
         else if (state.video.tab === 'cut') renderCutPanel();
