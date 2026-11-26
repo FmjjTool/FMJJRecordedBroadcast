@@ -170,7 +170,7 @@ class PerformancePage(BasePage):
         self.report_note.setTextFormat(Qt.PlainText)
         self.report_note.setProperty("role", "caption")
         report_layout.addWidget(self.report_note)
-        self.startup_table = self._table(("启动阶段", "次数", "耗时 ms", "工作集变化 MB", "私有提交变化 MB", "结果"))
+        self.startup_table = self._table(("启动阶段", "次数", "耗时 ms", "工作集 MB", "私有提交 MB", "结果"))
         report_layout.addWidget(self.startup_table, 1)
         self.tabs.addTab(self.report_panel, "启动与报告")
         layout.addWidget(self.tabs, 1)

@@ -25,7 +25,7 @@
 
       function table(columns, data, order, renderer) {
         var area = h('div', { style: 'position:relative' });
-        var grid = h('table', { class: 'db-table', style: 'width:100%;table-layout:fixed' });
+        var grid = h('table', { class: 'db-table', style: 'width:100%;min-width:0;table-layout:fixed' });
         var group = h('colgroup');
         columns.forEach(function (column) { group.appendChild(h('col', { style: 'width:' + column.width + '%' })); });
         var head = h('thead'), body = h('tbody');
