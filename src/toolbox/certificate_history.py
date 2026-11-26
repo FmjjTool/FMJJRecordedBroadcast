@@ -109,9 +109,14 @@ def save_record(data: engine.CertificateData, path: Path | None = None, *,
     }
     for record in records:
         if _same_certificate(record, data):
-            previous_revision = int(record.get("revision") or 1)
+            try:
+                previous_revision = max(1, int(record.get("revision") or 1))
+            except (TypeError, ValueError, OverflowError):
+                previous_revision = 1
             unchanged = record.get("data") == payload["data"]
             previous = record.get("evidence") if unchanged else None
+            if not isinstance(previous, dict):
+                previous = None
             record.update(payload)
             record["id"] = str(record.get("id") or uuid.uuid4().hex[:12])
             record["revision"] = previous_revision + 1

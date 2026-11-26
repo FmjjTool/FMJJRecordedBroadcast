@@ -420,7 +420,7 @@ class GlobalSettingsPage(BasePage):
         # ---- 备份与恢复 ----
         card = self._section_card("备份与恢复", "package")
         backup_note = QLabel(
-            "配置与资产备份都在本卡片完成；备份到网盘与网盘文件下载在「网络库」页，"
+            "配置与资产备份都在本卡片完成；网盘备份与网盘下载在「网络库」页，"
             "计划任务仍在「任务」页管理。")
         backup_note.setProperty("role", "caption")
         backup_note.setWordWrap(True)
@@ -1329,6 +1329,9 @@ class GlobalSettingsPage(BasePage):
          "Excel 表格导入导出", "pip install openpyxl", False, "pip"),
         ("mutagen", "mutagen", "_check_mutagen_detail",
          "音乐标签读写（MP3 / FLAC 等）", "pip install mutagen", False, "pip"),
+        ("pyzipper", "证据加密组件", "_check_pyzipper_detail",
+         "可选：证书记录的 AES-256 ZIP 加密导出，不装不影响其他功能",
+         "pip install pyzipper==0.4.0 pycryptodomex==3.24.2", True, "pip"),
         ("websocket", "websocket-client", "_check_websocket_detail",
          "直播弹幕长连接（B站 / 抖音）", "pip install websocket-client", False, "pip"),
         ("playwright", "playwright", "_check_playwright_detail",
@@ -1756,6 +1759,15 @@ class GlobalSettingsPage(BasePage):
         try:
             import mutagen
             return True, f"mutagen {getattr(mutagen, 'version_string', '?')}"
+        except Exception:
+            return False, ""
+
+    def _check_pyzipper_detail(self):
+        """证据加密导出可选依赖；同时导入其 AES 后端，避免只见包名却不能使用。"""
+        try:
+            import pyzipper
+            from Cryptodome.Cipher import AES  # noqa: F401 - 同时核对二进制后端
+            return True, f"pyzipper {getattr(pyzipper, '__version__', '?')} · AES-256"
         except Exception:
             return False, ""
 

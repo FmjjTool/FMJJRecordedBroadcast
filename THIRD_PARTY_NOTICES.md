@@ -18,6 +18,8 @@ FengMingToolbox（封茗囧菌数据汇总库 · 统一维护工具箱）在开�
 | pydantic / pydantic-core | >= 2.0.0 | MIT | <https://github.com/pydantic/pydantic> |
 | cryptography | >= 40.0.0 | Apache-2.0 OR BSD-3-Clause | <https://github.com/pyca/cryptography> |
 | pycryptodome | 最新 | BSD-2-Clause（部分为公有领域） | <https://github.com/Legrandin/pycryptodome> |
+| pyzipper（证书证据 AES ZIP） | == 0.4.0 | MIT（并保留 Python 标准库来源许可） | <https://github.com/danifus/pyzipper> |
+| pycryptodomex（pyzipper 加密后端，`Cryptodome` 命名空间） | == 3.24.2 | BSD-2-Clause（部分为公有领域） | <https://github.com/Legrandin/pycryptodome> |
 | openpyxl | >= 3.1.0 | MIT | <https://foss.heptapod.net/openpyxl/openpyxl> |
 | Pillow | >= 10.0.0 | MIT-CMU (HPND) | <https://github.com/python-pillow/Pillow> |
 | pillow-heif | >= 0.13.0 | BSD-3-Clause | <https://github.com/bigcat88/pillow_heif> |

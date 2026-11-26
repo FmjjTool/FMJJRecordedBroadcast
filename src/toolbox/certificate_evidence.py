@@ -57,6 +57,10 @@ class EvidenceCancelled(EvidenceError):
     """The caller cancelled before publishing an archive."""
 
 
+class EvidenceLimitError(EvidenceError):
+    """Never silently drop files merely to fit an export limit."""
+
+
 def _now() -> str:
     return datetime.now(_TZ).isoformat(timespec="seconds")
 
@@ -132,7 +136,7 @@ def _checked_file(raw):
     if path.suffix.casefold() not in ALLOWED_SUFFIXES:
         raise EvidenceError("不支持此附件类型，请选择文档或图片")
     if info.st_size > MAX_TOTAL_BYTES:
-        raise EvidenceError("证据附件总大小不能超过 64 MiB")
+        raise EvidenceLimitError("证据附件总大小不能超过 64 MiB")
     return path, info
 
 
@@ -145,7 +149,7 @@ def _read_file(raw, *, expected=None, consume=None,
                is_cancelled=lambda: False, budget=MAX_TOTAL_BYTES):
     path, before = _checked_file(raw)
     if before.st_size > budget:
-        raise EvidenceError("证据附件总大小不能超过 64 MiB")
+        raise EvidenceLimitError("证据附件总大小不能超过 64 MiB")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     digest = hashlib.sha256()
     size = 0
@@ -193,7 +197,7 @@ def capture_evidence(paths) -> dict:
         if key in seen:
             continue
         if len(files) >= MAX_ATTACHMENTS:
-            raise EvidenceError("每个证据包最多包含 125 个附件")
+            raise EvidenceLimitError("每个证据包最多包含 125 个附件")
         item = _read_file(path, budget=MAX_TOTAL_BYTES - total)
         item["captured_at"] = captured
         files.append(item)
@@ -250,6 +254,7 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
     """Return a PRIVATE plan with source paths. Never expose it as a Web DTO."""
     record = _select(record_id, history_path)
     files, seen, warnings, total = [], set(), [], 0
+    rejected_refs = set()
     failed = {"missing": 0, "changed": 0, "unsafe": 0}
 
     def add(raw, source, expected=None, captured_at=""):
@@ -259,7 +264,7 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
         if key in seen:
             return
         if len(files) >= MAX_ATTACHMENTS:
-            raise EvidenceError("每个证据包最多包含 125 个附件")
+            raise EvidenceLimitError("每个证据包最多包含 125 个附件")
         item = _read_file(path, expected=expected, budget=MAX_TOTAL_BYTES - total)
         item.update(source=source, captured_at=str(captured_at or ""))
         files.append(item)
@@ -284,11 +289,15 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
                 path, info = _checked_file(ref["path"])
                 if info.st_size != ref["size"]:
                     failed["changed"] += 1
+                    rejected_refs.add(os.path.normcase(str(path)))
                     continue
                 add(path, "历史留存引用（本次已校验）", expected={
                     "size": ref["size"], "sha256": ref["sha256"].lower()},
                     captured_at=ref.get("captured_at") or evidence.get("captured_at"))
+            except EvidenceLimitError:
+                raise
             except EvidenceError as exc:
+                rejected_refs.add(os.path.normcase(str(_path(ref["path"]))))
                 message = str(exc)
                 failed["changed" if "变更" in message or "变化" in message else
                        "missing" if "不存在" in message or "无法读取" in message else "unsafe"] += 1
@@ -300,6 +309,8 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
                 try:
                     add(path, "本次发现，非历史留存")
                     discovered += 1
+                except EvidenceLimitError:
+                    raise
                 except EvidenceError:
                     failed["unsafe"] += 1
             if discovered:
@@ -312,6 +323,8 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
         raise EvidenceError("请提供补充文件列表")
     supplemented = len(files)
     for path in extra_files:
+        if os.path.normcase(str(_path(path))) in rejected_refs:
+            raise EvidenceError("补充文件与已变更或无法核验的历史附件重合，不能作为替代材料导出")
         add(path, "本次补充")
     if len(files) > supplemented:
         warnings.append("本次补充的文件并非当时留存的原始证据。")
@@ -322,6 +335,7 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
 
 
 def list_exports(*, output_root=None, history_path=None) -> dict:
+    """List candidate counts WITHOUT hashing all records; export rechecks hashes."""
     try:
         _dependency()
         available = True
@@ -329,16 +343,47 @@ def list_exports(*, output_root=None, history_path=None) -> dict:
         available = False
     records = []
     for record in history.load_records(history_path):
-        record_id = str(record.get("id") or "")
-        try:
-            plan = plan_export(record_id, output_root=output_root, history_path=history_path)
-            warnings, count = plan["warnings"], plan["file_count"]
-        except EvidenceError as exc:
-            warnings, count = [str(exc)], 0
-        records.append({key: str(record.get(key) or "") for key in
+        warnings, candidates, count, total, seen = [], [], 0, 0, set()
+        evidence = record.get("evidence")
+        if (isinstance(evidence, dict) and evidence.get("version") == 1
+                and evidence.get("revision") == _revision(record)):
+            refs = evidence.get("files") or []
+            if isinstance(refs, list):
+                candidates = [ref for ref in refs if isinstance(ref, dict)]
+        else:
+            warnings.append("此记录未留存当前版本的附件引用，证据材料不完整。")
+            if output_root is not None and not evidence:
+                try:
+                    candidates = [{"path": str(path)} for path in _discovered(record, output_root)]
+                except EvidenceError:
+                    candidates = []
+                if candidates:
+                    warnings.append("现有产物仅为本次发现，非历史留存。")
+        for ref in candidates:
+            try:
+                path, info = _checked_file(ref.get("path"))
+                key = os.path.normcase(str(path))
+                if key in seen:
+                    continue
+                if "size" in ref and (info.st_size != ref["size"]
+                        or not _HASH.fullmatch(str(ref.get("sha256") or ""))):
+                    raise EvidenceError("历史附件已变更或缺少校验信息")
+                seen.add(key)
+                count += 1
+                total += info.st_size
+            except EvidenceError:
+                if "部分附件不存在、已变更或未通过安全校验，材料不完整。" not in warnings:
+                    warnings.append("部分附件不存在、已变更或未通过安全校验，材料不完整。")
+        if count:
+            warnings.append("附件数量为候选数，导出时将重新校验文件内容。")
+        else:
+            warnings.append("没有可用附件，可导出历史字段快照。")
+        if count > MAX_ATTACHMENTS or total > MAX_TOTAL_BYTES:
+            warnings.append("候选附件超过数量或大小上限，当前无法导出。")
+        records.append({key: _public_string(str(record.get(key) or "")) for key in
                         ("id", "title", "archive_no", "saved_at")})
         records[-1].update(revision=_revision(record), warnings=warnings,
-                           file_count=count, filename=_filename(record))
+                           file_count=count, file_count_is_estimate=True, filename=_filename(record))
     return {"records": records, "available": available}
 
 
@@ -405,7 +450,7 @@ def _write_archive(stream, plan, password, is_cancelled, on_progress):
     with pyzipper.AESZipFile(stream, "w", compression=pyzipper.ZIP_DEFLATED,
                             encryption=pyzipper.WZ_AES, allowZip64=False) as archive:
         archive.setpassword(password)
-        archive.setencryption(pyzipper.WZ_AES, nbits=256)
+        archive.setencryption(pyzipper.WZ_AES, nbits=256, force_wz_aes_version=2)
         for done, (name, payload) in enumerate((("record.json", record_json),
                 ("manifest.json", manifest_json), ("说明.txt", readme)), 1):
             _cancel(is_cancelled)
@@ -418,6 +463,7 @@ def _write_archive(stream, plan, password, is_cancelled, on_progress):
                            is_cancelled=is_cancelled)
             on_progress(i, total)
         if any(not (item.flag_bits & 1) or getattr(item, "wz_aes_strength", None) != 3
+               or getattr(item, "wz_aes_version", None) != 2
                for item in archive.infolist()):
             raise EvidenceError("加密校验失败，证据包未导出")
     _cancel(is_cancelled)
