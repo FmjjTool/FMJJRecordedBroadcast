@@ -7,6 +7,27 @@
       : (value / 1000000).toFixed(1) + ' MB';
   }
 
+  function searchableModelList(h, select, label) {
+    if (select.options.length <= 12) return select;
+    var search = h('input', {
+      class: 'input', type: 'search', 'aria-label': label + '搜索',
+      placeholder: '输入名称筛选模型', style: 'min-width:140px;flex:1 1 140px'
+    });
+    var options = Array.prototype.slice.call(select.options);
+    function filter() {
+      var query = search.value.trim().toLocaleLowerCase();
+      options.forEach(function (option) {
+        option.hidden = option.value !== select.value && query !== ''
+          && option.textContent.toLocaleLowerCase().indexOf(query) < 0;
+      });
+    }
+    search.addEventListener('input', filter);
+    select.addEventListener('change', filter);
+    return h('div', {
+      class: 'grow', style: 'display:flex;flex-wrap:wrap;gap:8px;min-width:0'
+    }, search, select);
+  }
+
   function createOptionsForm(h, fields, values, runtime) {
     values = values || {};
     runtime = runtime || {};
@@ -39,7 +60,8 @@
       }
       controls[field.key] = input;
       panel.appendChild(h('label', null,
-        h('span', { class: 'muted small' }, field.label), input));
+        h('span', { class: 'muted small' }, field.label),
+        field.type === 'model' ? searchableModelList(h, input, field.label) : input));
     });
     function sync() {
       if (controls.gpu_layers) {
@@ -90,15 +112,20 @@
             '当前系统不支持这些运行组件，请使用模型接口或本地规则模式。'));
         }
 
-        function track(button) {
-          actions.push(button);
-          button.disabled = !data.supported || busy;
+        function syncActions() {
+          actions.forEach(function (item) {
+            item.button.disabled = !data.supported || busy || !item.available();
+          });
+        }
+        function track(button, available) {
+          actions.push({ button: button, available: available || function () { return true; } });
+          syncActions();
           return button;
         }
         function start(action, payload, button) {
           if (busy) return;
           busy = true;
-          actions.forEach(function (item) { item.disabled = true; });
+          syncActions();
           stateLine.textContent = '正在准备任务…';
           post('/api/system/llm/' + action, payload).then(function (result) {
             watchJob(jobHost, result.job, function (job) {
@@ -111,7 +138,7 @@
                 if (job.status === 'done') {
                   load();
                 } else {
-                  actions.forEach(function (item) { item.disabled = !data.supported; });
+                  syncActions();
                   stateLine.textContent = job.status === 'cancelled'
                     ? '已取消，可重新开始' : '失败：' + (job.error || '请检查日志后重试');
                 }
@@ -119,7 +146,7 @@
             });
           }).catch(function (error) {
             busy = false;
-            actions.forEach(function (item) { item.disabled = !data.supported; });
+            syncActions();
             stateLine.textContent = '准备失败：' + error.message;
             toast(stateLine.textContent, 'error');
             if (button) button.focus();
@@ -128,12 +155,10 @@
 
         (data.runtimes || []).forEach(function (item) {
           var install = track(h('button', { class: 'btn', type: 'button' },
-            item.installed ? '重新下载' : '下载模块'));
-          var remove = track(h('button', { class: 'btn danger', type: 'button' }, '卸载模块'));
-          remove.disabled = !item.installed || !data.supported;
+            item.installed ? '校验模块' : '下载模块'));
+          var remove = track(h('button', { class: 'btn danger', type: 'button' }, '卸载模块'),
+            function () { return item.installed; });
           install.addEventListener('click', function () {
-            if (item.installed && !global.confirm('重新下载「' + item.label
-                + '」模块？将替换本组件文件，模型和配置保留。')) return;
             start('install-runtime', { backend: item.id }, install);
           });
           remove.addEventListener('click', function () {
@@ -154,8 +179,8 @@
           available.appendChild(h('option', { value: item.id },
             item.label + ' · ' + sizeText(item.size)));
         });
-        var download = track(h('button', { class: 'btn', type: 'button' }, '下载模型'));
-        download.disabled = !data.supported || !available.options.length;
+        var download = track(h('button', { class: 'btn', type: 'button' }, '下载模型'),
+          function () { return available.options.length > 0; });
         download.addEventListener('click', function () {
           start('download-model', { model: available.value }, download);
         });
@@ -164,8 +189,8 @@
 
         var sources = h('select', { class: 'select grow', 'aria-label': '导入模型来源' },
           h('option', { value: '' }, '正在查找工作目录内的 GGUF 文件…'));
-        var importBtn = track(h('button', { class: 'btn', type: 'button' }, '导入模型'));
-        importBtn.disabled = true;
+        var importBtn = track(h('button', { class: 'btn', type: 'button' }, '导入模型'),
+          function () { return Boolean(sources.value); });
         var sourceNote = h('div', { class: 'muted small', style: 'margin-top:6px' });
         api('/api/system/llm/sources').then(function (sourceData) {
           sources.replaceChildren();
@@ -174,12 +199,14 @@
           });
           if (!sources.options.length) sources.appendChild(h('option', { value: '' },
             '工作目录内没有可导入的 GGUF 模型'));
-          importBtn.disabled = !data.supported || busy || !sources.value;
+          syncActions();
           sourceNote.textContent = sourceData.note || '';
         }).catch(function (error) {
           sources.replaceChildren(h('option', { value: '' }, '读取失败，请刷新后重试'));
+          syncActions();
           sourceNote.textContent = error.message;
         });
+        sources.addEventListener('change', syncActions);
         importBtn.addEventListener('click', function () {
           start('import-model', { source: sources.value }, importBtn);
         });
@@ -193,8 +220,9 @@
             (item.name || item.id) + ' · ' + sizeText(item.size)));
         });
         if (!installed.options.length) installed.appendChild(h('option', { value: '' }, '尚未安装模型'));
-        var deleteBtn = track(h('button', { class: 'btn danger', type: 'button' }, '删除模型'));
-        deleteBtn.disabled = !data.supported || !installed.value;
+        var deleteBtn = track(h('button', { class: 'btn danger', type: 'button' }, '删除模型'),
+          function () { return Boolean(installed.value); });
+        installed.addEventListener('change', syncActions);
         deleteBtn.addEventListener('click', function () {
           if (global.confirm('删除所选模型及其分片？只删除本软件管理的副本，导入源文件保留，可重新下载。')) {
             start('remove-model', { id: installed.value, confirmed: true }, deleteBtn);
@@ -203,7 +231,8 @@
         var refresh = track(h('button', { class: 'btn', type: 'button' }, '刷新'));
         refresh.addEventListener('click', load);
         card.appendChild(h('div', { class: 'toolbar', style: 'margin-top:12px' },
-          h('span', { class: 'muted small' }, '已安装模型'), installed, deleteBtn, refresh));
+          h('span', { class: 'muted small' }, '已安装模型'),
+          searchableModelList(h, installed, '已安装模型'), deleteBtn, refresh));
         card.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
           'GPU 模块需要支持 Vulkan 的显卡驱动；模块与模型可分别选择，不会自动改用其他模块。'));
         card.appendChild(stateLine);

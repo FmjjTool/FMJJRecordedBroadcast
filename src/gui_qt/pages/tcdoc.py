@@ -28,7 +28,7 @@ from pathlib import Path
 from threading import Event
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
@@ -145,6 +145,9 @@ class _DocPreviewPanel(QWidget):
         self._full_text = ""
         self._summary = ""
         self._cancel_fetch = Event()
+        self._preview_width = 0
+        self._image_sizes: dict[str, tuple[int, int]] = {}
+        self._resizing_images = False
 
         v = QVBoxLayout(self)
         v.setContentsMargins(6, 8, 6, 6)
@@ -201,7 +204,7 @@ class _DocPreviewPanel(QWidget):
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(100)
-        self._resize_timer.timeout.connect(lambda: self._render_current(preserve_scroll=True))
+        self._resize_timer.timeout.connect(self._resize_preview_images)
         self.text_view.viewport().installEventFilter(self)
         self._text_stack = QStackedWidget()
         self._text_stack.addWidget(self.text_view)
@@ -232,6 +235,8 @@ class _DocPreviewPanel(QWidget):
         self._pages = []
         self._full_text = ""
         self._summary = ""
+        self._resize_timer.stop()
+        self._image_sizes = {}
         self.page_combo.blockSignals(True)
         self.page_combo.clear()
         self.page_combo.blockSignals(False)
@@ -451,12 +456,66 @@ class _DocPreviewPanel(QWidget):
     def _render_current(self, preserve_scroll=False):
         if not self._pages:
             return
+        pages = self._visible_pages()
+        self._image_sizes = {}
+        for page in pages:
+            for image in page.get("images") or []:
+                try:
+                    uri = preview_content.local_image_path(image).as_uri()
+                except (OSError, ValueError):
+                    continue
+                width = max(1, int(image.get("width") or 780))
+                height = max(1, int(image.get("height") or width))
+                self._image_sizes[uri] = (width, height)
         scrollbar = self.text_view.verticalScrollBar()
         fraction = scrollbar.value() / max(1, scrollbar.maximum())
+        self._preview_width = max(80, self.text_view.viewport().width() - 24)
         self.text_view.setHtml(preview_content.html_for_pages(
-            self._visible_pages(), max_width=max(80, self.text_view.viewport().width() - 24)))
+            pages, max_width=self._preview_width))
         if preserve_scroll:
             scrollbar.setValue(round(fraction * scrollbar.maximum()))
+
+    def _resize_preview_images(self):
+        """只调整现有图片尺寸；重建全文会反复触发滚动条显隐并打断阅读。"""
+        width = max(80, self.text_view.viewport().width() - 24)
+        if width == self._preview_width or self._resizing_images:
+            return
+        self._preview_width = width
+        scrollbar = self.text_view.verticalScrollBar()
+        fraction = scrollbar.value() / max(1, scrollbar.maximum())
+        document = self.text_view.document()
+        changes = []
+        block = document.begin()
+        while block.isValid():
+            fragments = block.begin()
+            while not fragments.atEnd():
+                fragment = fragments.fragment()
+                if fragment.isValid() and fragment.charFormat().isImageFormat():
+                    fmt = fragment.charFormat().toImageFormat()
+                    size = self._image_sizes.get(fmt.name())
+                    if size:
+                        shown_width = min(size[0], width)
+                        shown_height = max(1, round(size[1] * shown_width / size[0]))
+                        if fmt.width() != shown_width or fmt.height() != shown_height:
+                            fmt.setWidth(shown_width)
+                            fmt.setHeight(shown_height)
+                            changes.append((fragment.position(), fmt))
+                fragments += 1
+            block = block.next()
+        if not changes:
+            return
+        self._resizing_images = True
+        try:
+            cursor = QTextCursor(document)
+            cursor.beginEditBlock()
+            for position, fmt in changes:
+                cursor.setPosition(position)
+                cursor.setPosition(position + 1, QTextCursor.KeepAnchor)
+                cursor.setCharFormat(fmt)
+            cursor.endEditBlock()
+            scrollbar.setValue(round(fraction * scrollbar.maximum()))
+        finally:
+            self._resizing_images = False
 
     def _open_body_image(self, url):
         for page in self._visible_pages():
@@ -470,7 +529,9 @@ class _DocPreviewPanel(QWidget):
                     return
 
     def eventFilter(self, obj, event):
-        if obj is self.text_view.viewport() and event.type() == QEvent.Resize:
+        if (obj is self.text_view.viewport() and event.type() == QEvent.Resize
+                and event.size().width() != event.oldSize().width()
+                and not self._resizing_images):
             self._resize_timer.start()
         return super().eventFilter(obj, event)
 

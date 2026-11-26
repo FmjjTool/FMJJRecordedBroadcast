@@ -4,7 +4,7 @@
 - 左侧：文件队列（合并顺序，可拖拽/上移下移）
 - 右上：内嵌播放器 + 彩色片段时间轴 + 播放指针标记
 - 右下：固定页签头，各页独立纵向滚动；旋转在转换页独立导出
-- 切割页：片段选择列表、检测与导入导出；元数据字段使用框内提示
+- 切割页：片段选择列表、检测与导入导出；元数据默认显示紧凑文件信息，按需展开标签编辑
 
 合并逻辑与 LC 对齐：concat demuxer + 参数兼容性检查；切割默认无损（关键帧边界），
 需要精确时可选重编码。压缩复用 image_sorter 的 MediaCompressThread。
@@ -48,10 +48,11 @@ from toolbox.edit_engine import (
     cut_points_from_ranges, cut_segments, detect_black, detect_scenes,
     detect_silence, export_chapters, export_edl, export_segments_csv,
     extract_all_tracks, extract_track, frame_bytes, import_segments_csv,
-    probe_tracks, read_metadata, remove_tracks, segments_from_points, snapshot,
+    probe_tracks, remove_tracks, segments_from_points, snapshot,
     snapshot_every, write_chapters, write_metadata,
 )
 from toolbox.utils import format_size, is_video_file
+from toolbox.video_details import read_video_details
 
 from gui_qt import table_sort, theme
 from gui_qt.common import FlowLayout, post_to_main, run_bg
@@ -990,9 +991,7 @@ class EditorPage(BasePage):
             self.play_btn.setText("播放")
             self.file_label.setText("未选择文件")
             self.track_table.setRowCount(0)
-            for edit in (self.meta_title, self.meta_artist,
-                         self.meta_comment, self.meta_date):
-                edit.clear()
+            self._refresh_meta()
             self._set_preview_enabled(False)
             self._refresh_action_buttons()
             return
@@ -1123,8 +1122,9 @@ class EditorPage(BasePage):
         self.convert_btn.setEnabled(bool(self.files) and idle)
         self.convert_scan_btn.setEnabled(idle)
         self.convert_clear_btn.setEnabled(idle)
-        self.rotate_btn.setEnabled(has_file and idle)
-        self.meta_rotation.setEnabled(has_file and idle)
+        self.rotate_btn.setEnabled(has_file and idle and not self._meta_busy)
+        self.meta_rotation.setEnabled(has_file and idle and not self._meta_busy)
+        self._sync_meta_controls()
         data = self._selected_segment_data() if hasattr(self, "seg_list") else None
         segment = self._selected_complete_segment(data)
         partial = self._partial_by_id(data.get("id")) if data and data.get("kind") == "partial" else None
@@ -1807,6 +1807,30 @@ class EditorPage(BasePage):
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(8)
+        self._meta_request = None
+        self._meta_loaded_path = None
+        self._meta_busy = False
+        self.meta_info_label = QLabel("先在左侧选择视频，即可查看文件信息")
+        self.meta_info_label.setTextFormat(Qt.PlainText)
+        self.meta_info_label.setWordWrap(True)
+        self.meta_info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.meta_info_label.setStyleSheet("font-size: 12px;")
+        v.addWidget(self.meta_info_label)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.meta_reload_btn = self._btn("刷新", self._refresh_meta, small=True)
+        self.meta_edit_btn = self._btn("编辑标签", self._toggle_meta_editor, small=True)
+        actions.addWidget(self.meta_reload_btn)
+        actions.addWidget(self.meta_edit_btn)
+        actions.addStretch(1)
+        v.addLayout(actions)
+
+        self.meta_editor = QWidget()
+        editor_layout = QVBoxLayout(self.meta_editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(8)
 
         self.meta_title = QLineEdit()
         self.meta_artist = QLineEdit()
@@ -1819,15 +1843,21 @@ class EditorPage(BasePage):
             edit.setAccessibleName(label)
             edit.setToolTip(label)
             edits.append(edit)
-        v.addWidget(_OptionGrid(edits))
-        v.addWidget(_OptionGrid([
-            self._btn("读取当前", self._refresh_meta, small=True),
-            self._btn("写入新文件", self._write_meta, small=True)], columns=2, cell_width=120))
+        editor_layout.addWidget(_OptionGrid(edits))
+        write_row = QHBoxLayout()
+        write_row.addStretch(1)
+        self.meta_write_btn = self._btn("写入新文件", self._write_meta, small=True)
+        self.meta_write_btn.setProperty("variant", "primary")
+        write_row.addWidget(self.meta_write_btn)
+        editor_layout.addLayout(write_row)
 
         hint = QLabel("写入新文件，不改画质与旋转方向；MP4 / MKV 支持元数据。")
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         hint.setWordWrap(True)
-        v.addWidget(hint)
+        editor_layout.addWidget(hint)
+        v.addWidget(self.meta_editor)
+        self.meta_editor.hide()
+        self._sync_meta_controls()
         v.addStretch(1)
         self._add_tab(tab, "元数据")
 
@@ -2307,26 +2337,65 @@ class EditorPage(BasePage):
 
     # ==================== 元数据 ====================
 
+    def _toggle_meta_editor(self):
+        expanded = self.meta_editor.isHidden()
+        self.meta_editor.setVisible(expanded)
+        self.meta_edit_btn.setText("收起编辑" if expanded else "编辑标签")
+
+    def _sync_meta_controls(self):
+        idle = not self.running
+        ready = bool(self.current_path and self._meta_loaded_path == self.current_path
+                     and not self._meta_busy)
+        self.meta_reload_btn.setEnabled(bool(self.current_path) and idle and not self._meta_busy)
+        self.meta_edit_btn.setEnabled(ready and idle)
+        self.meta_editor.setEnabled(ready and idle)
+
     def _refresh_meta(self):
+        token = object()
+        self._meta_request = token
+        self._meta_loaded_path = None
+        self._meta_busy = bool(self.current_path)
+        for edit in (self.meta_title, self.meta_artist, self.meta_comment, self.meta_date):
+            edit.clear()
         if not self.current_path:
+            self.meta_info_label.setText("先在左侧选择视频，即可查看文件信息")
+            self.meta_editor.hide()
+            self.meta_edit_btn.setText("编辑标签")
+            self._sync_meta_controls()
             return
-        try:
-            meta = read_metadata(Path(self.current_path))
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"读取元数据失败: {exc}")
-            return
-        self.meta_title.setText(meta.get("title", ""))
-        self.meta_artist.setText(meta.get("artist", ""))
-        self.meta_comment.setText(meta.get("comment", ""))
-        self.meta_date.setText(meta.get("date", ""))
-        idx = self.meta_rotation.findData(meta.get("rotation", 0) or 0)
-        self.meta_rotation.setCurrentIndex(idx if idx >= 0 else 0)
+        path = self.current_path
+        self.meta_info_label.setText(f"{Path(path).name}\n正在读取视频信息…")
+        self._sync_meta_controls()
+
+        def done(result, error):
+            if self._meta_request is not token or self.current_path != path:
+                return
+            self._meta_busy = False
+            if error or not isinstance(result, dict):
+                self.meta_info_label.setText(
+                    f"{Path(path).name}\n读取视频信息失败，请检查文件是否完整后刷新重试")
+            else:
+                self.meta_info_label.setText("\n".join(result["summary_lines"]))
+                tags = result["tags"]
+                self.meta_title.setText(tags["title"])
+                self.meta_artist.setText(tags["artist"])
+                self.meta_comment.setText(tags["comment"])
+                self.meta_date.setText(tags["date"])
+                idx = self.meta_rotation.findData(result.get("rotation") or 0)
+                self.meta_rotation.setCurrentIndex(idx if idx >= 0 else 0)
+                self._meta_loaded_path = path
+            self._refresh_action_buttons()
+
+        run_bg(lambda: read_video_details(Path(path)), done, owner=self)
 
     def _write_meta(self):
         if self.running:
             return
         if not self.current_path:
             self.app.toast("先在左侧选择文件", "warning")
+            return
+        if self._meta_busy or self._meta_loaded_path != self.current_path:
+            self.app.toast("请先刷新并成功读取当前视频信息", "warning")
             return
         src = Path(self.current_path)
         ext = src.suffix if src.suffix.lower() in (".mp4", ".mkv", ".mov") else ".mkv"

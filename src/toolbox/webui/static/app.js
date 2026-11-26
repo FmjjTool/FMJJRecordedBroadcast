@@ -5489,9 +5489,10 @@ function renderLivestreamSummary(root) {
         markEndBtn.disabled = running || !hasDuration;
         var partial = draft.drafts[draft.selectedDraft];
         var complete = rows[draft.selected];
-        removeSegmentBtn.disabled = running || !one || (!partial && !complete);
+        var pending = draft.selected === -2 && draft.pendingStart !== null;
+        removeSegmentBtn.disabled = running || !one || (!partial && !complete && !pending);
         deleteStartBtn.disabled = running || !one
-          || (partial ? partial.start === null : !complete);
+          || (partial ? partial.start === null : (!complete && !pending));
         deleteEndBtn.disabled = running || !one
           || (partial ? partial.end === null : !complete);
         clearSegmentsBtn.disabled = running || !one
@@ -5560,6 +5561,7 @@ function renderLivestreamSummary(root) {
       }
 
       function markEndpoint(endpoint) {
+        if (running || selected.size !== 1 || previewDurationMs <= 0) return;
         var draft = currentCutDraft();
         var position = Number(seek.value) || 0;
         if (draft.selectedDraft >= 0) {
@@ -5574,9 +5576,13 @@ function renderLivestreamSummary(root) {
           }
           promoteCutDraft(draft, draft.selectedDraft);
         } else if (endpoint === 'start') {
-          draft.selected = -1;
+          draft.selected = -2;
           draft.pendingStart = position;
         } else {
+          if (draft.pendingStart === null && draft.drafts.length) {
+            toast('先在片段列表选中待补标记，再补另一端', 'warning');
+            return;
+          }
           var start = draft.pendingStart === null ? 0 : draft.pendingStart;
           if (position <= start) {
             toast('结束时间必须大于开始时间，请移动播放指针后重试', 'warning');
@@ -5594,8 +5600,13 @@ function renderLivestreamSummary(root) {
       }
 
       function deleteEndpoint(endpoint) {
+        if (running || selected.size !== 1) return;
         var draft = currentCutDraft();
-        if (draft.selectedDraft >= 0) {
+        if (draft.selected === -2 && draft.pendingStart !== null) {
+          if (endpoint !== 'start') return;
+          draft.pendingStart = null;
+          draft.selected = -1;
+        } else if (draft.selectedDraft >= 0) {
           var partial = draft.drafts[draft.selectedDraft];
           if (!partial || partial[endpoint] === null) return;
           partial[endpoint] = null;
@@ -5618,6 +5629,7 @@ function renderLivestreamSummary(root) {
       }
 
       function clearCutMarks() {
+        if (running || selected.size !== 1) return;
         var draft = currentCutDraft();
         draft.text = '';
         draft.pendingStart = null;
@@ -5625,6 +5637,15 @@ function renderLivestreamSummary(root) {
         draft.drafts = [];
         draft.selectedDraft = -1;
         refreshCutDraft();
+      }
+
+      function cutMarksComplete() {
+        var draft = currentCutDraft();
+        if (draft.pendingStart !== null || draft.drafts.length) {
+          toast('还有未补齐的标记，请先补齐起点和终点，或删除该标记', 'warning');
+          return false;
+        }
+        return true;
       }
 
       function deleteAt(endpoint, index, draftIndex) {
@@ -5639,8 +5660,73 @@ function renderLivestreamSummary(root) {
         deleteEndpoint(endpoint);
       }
 
+      function removeCutItem() {
+        if (running || selected.size !== 1) return;
+        var draft = currentCutDraft();
+        if (draft.selected === -2 && draft.pendingStart !== null) {
+          draft.pendingStart = null;
+          draft.selected = -1;
+        } else if (draft.selectedDraft >= 0) {
+          if (!draft.drafts[draft.selectedDraft]) return;
+          draft.drafts.splice(draft.selectedDraft, 1);
+          draft.selectedDraft = -1;
+        } else {
+          var rows = currentCutRows();
+          if (!rows[draft.selected]) return;
+          rows.splice(draft.selected, 1);
+          writeCutRows(draft, rows, null);
+        }
+        refreshCutDraft();
+      }
+
+      function showPointMenu(event, entries) {
+        pointMenu.hidden = true;
+        if (running || selected.size !== 1 || !entries.length) return;
+        var draft = currentCutDraft();
+        pointMenu.replaceChildren();
+        entries.forEach(function (entry) {
+          pointMenu.appendChild(h('button', {
+            class: 'btn mini', type: 'button', role: 'menuitem',
+            onclick: function () {
+              if (!running && selected.size === 1 && currentCutDraft() === draft) entry.run();
+            }
+          }, entry.label));
+        });
+        pointMenu.style.position = 'fixed';
+        pointMenu.style.left = '8px';
+        pointMenu.style.top = '8px';
+        pointMenu.hidden = false;
+        var rect = pointMenu.getBoundingClientRect();
+        pointMenu.style.left = Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8)) + 'px';
+        pointMenu.style.top = Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8)) + 'px';
+        pointMenu.firstChild.focus({ preventScroll: true });
+      }
+
+      function openCutItemMenu(event, index, draftIndex) {
+        event.preventDefault();
+        if (running || selected.size !== 1) return;
+        var draft = currentCutDraft();
+        var row = currentCutRows()[index];
+        var partial = draft.drafts[draftIndex];
+        var pending = index === -2 && draft.pendingStart !== null;
+        if (!row && !partial && !pending) return;
+        draft.selected = index;
+        draft.selectedDraft = draftIndex;
+        refreshCutDraft();
+        var entries = [];
+        if (row || pending || (partial && partial.start !== null)) entries.push({
+          label: '删除起点', run: function () { deleteEndpoint('start'); }
+        });
+        if (row || (partial && partial.end !== null)) entries.push({
+          label: '删除终点', run: function () { deleteEndpoint('end'); }
+        });
+        entries.push({ label: row ? '删除片段' : '删除标记', run: removeCutItem });
+        showPointMenu(event, entries);
+      }
+
       function openPointMenu(event) {
         event.preventDefault();
+        if (running || selected.size !== 1 || previewDurationMs <= 0) return;
         var draft = currentCutDraft();
         var rect = timeTrack.getBoundingClientRect();
         var ratio = Math.min(1, Math.max(0,
@@ -5666,25 +5752,28 @@ function renderLivestreamSummary(root) {
             });
           });
         });
-        if (!entries.length) { pointMenu.hidden = true; return; }
-        pointMenu.replaceChildren();
-        entries.forEach(function (entry) {
-          pointMenu.appendChild(h('button', {
-            class: 'btn mini', type: 'button', role: 'menuitem',
-            onclick: function () { deleteAt(entry.endpoint, entry.index, entry.draftIndex); }
-          }, entry.label));
-        });
-        var hostRect = previewHost.getBoundingClientRect();
-        pointMenu.style.left = Math.max(8, event.clientX - hostRect.left) + 'px';
-        pointMenu.style.top = Math.max(8, event.clientY - hostRect.top) + 'px';
-        pointMenu.hidden = false;
-        pointMenu.firstChild.focus();
+        if (draft.pendingStart !== null && Math.abs(draft.pendingStart - at) <= tolerance) {
+          entries.push({ label: '待标起点 · 删除起点 · ' + videoClock(draft.pendingStart),
+            endpoint: 'start', index: -2, draftIndex: -1 });
+        }
+        showPointMenu(event, entries.map(function (entry) {
+          return { label: entry.label, run: function () {
+            deleteAt(entry.endpoint, entry.index, entry.draftIndex);
+          } };
+        }));
       }
 
       timeTrack.addEventListener('contextmenu', openPointMenu);
       previewHost.addEventListener('click', function (event) {
         if (!pointMenu.contains(event.target) && event.target !== rangeLayer) pointMenu.hidden = true;
       });
+      host.addEventListener('pointerdown', function (event) {
+        if (!pointMenu.contains(event.target)) pointMenu.hidden = true;
+      });
+      host.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') pointMenu.hidden = true;
+      });
+      host.addEventListener('scroll', function () { pointMenu.hidden = true; }, true);
 
       seek.addEventListener('input', function () {
         previewVideo.currentTime = Number(seek.value) / 1000;
@@ -5709,20 +5798,7 @@ function renderLivestreamSummary(root) {
       markEndBtn.addEventListener('click', function () {
         markEndpoint('end');
       });
-      removeSegmentBtn.addEventListener('click', function () {
-        var draft = currentCutDraft();
-        if (draft.selectedDraft >= 0) {
-          draft.drafts.splice(draft.selectedDraft, 1);
-          draft.selectedDraft = -1;
-          refreshCutDraft();
-          return;
-        }
-        var rows = currentCutRows();
-        if (!rows[draft.selected]) return;
-        rows.splice(draft.selected, 1);
-        writeCutRows(draft, rows, null);
-        refreshCutDraft();
-      });
+      removeSegmentBtn.addEventListener('click', removeCutItem);
       deleteStartBtn.addEventListener('click', function () { deleteEndpoint('start'); });
       deleteEndBtn.addEventListener('click', function () { deleteEndpoint('end'); });
       clearSegmentsBtn.addEventListener('click', function () {
@@ -5777,6 +5853,7 @@ function renderLivestreamSummary(root) {
       });
 
       function updateButtons() {
+        pointMenu.hidden = true;
         selectedLabel.textContent = '已选 ' + selected.size + ' 个';
         selectAll.checked = sources.items.length > 0
           && selected.size === sources.items.length;
@@ -6163,7 +6240,7 @@ function renderLivestreamSummary(root) {
               class: 'btn mini video-segment' + (index === draft.selected ? ' active' : ''),
               type: 'button', disabled: running,
               'aria-pressed': index === draft.selected ? 'true' : 'false',
-              title: '单击选中片段，双击定位到开始'
+              title: '单击选中片段，双击定位到开始，右键删除片段或端点'
             }, String(index + 1) + '. ' + videoClock(row[0]) + '–' + videoClock(row[1]));
             select.addEventListener('click', function () {
               draft.selected = index;
@@ -6178,6 +6255,9 @@ function renderLivestreamSummary(root) {
               seek.value = row[0];
               previewVideo.currentTime = row[0] / 1000;
               refreshMarkers();
+            });
+            select.addEventListener('contextmenu', function (event) {
+              openCutItemMenu(event, index, -1);
             });
             segmentList.appendChild(select);
           });
@@ -6208,8 +6288,39 @@ function renderLivestreamSummary(root) {
               previewVideo.currentTime = fixed / 1000;
               refreshMarkers();
             });
+            select.addEventListener('contextmenu', function (event) {
+              openCutItemMenu(event, -1, index);
+            });
             segmentList.appendChild(select);
           });
+          if (draft.pendingStart !== null) {
+            var pending = h('button', {
+              class: 'btn mini video-segment-draft video-segment-pending'
+                + (draft.selected === -2 ? ' active' : ''),
+              type: 'button', disabled: running,
+              'aria-pressed': draft.selected === -2 ? 'true' : 'false',
+              title: '选择后标记终点，右键可删除该起点'
+            }, '待标终点 · 起点 ' + videoClock(draft.pendingStart));
+            pending.addEventListener('click', function () {
+              draft.selected = -2;
+              draft.selectedDraft = -1;
+              segmentList.querySelectorAll('.video-segment, .video-segment-draft')
+                .forEach(function (button) {
+                  button.classList.toggle('active', button === pending);
+                  button.setAttribute('aria-pressed', button === pending ? 'true' : 'false');
+                });
+              refreshMarkers();
+            });
+            pending.addEventListener('dblclick', function () {
+              seek.value = draft.pendingStart;
+              previewVideo.currentTime = draft.pendingStart / 1000;
+              refreshMarkers();
+            });
+            pending.addEventListener('contextmenu', function (event) {
+              openCutItemMenu(event, -2, -1);
+            });
+            segmentList.appendChild(pending);
+          }
         }
         cutEditorRefresh = refreshCutEditor;
         segments.addEventListener('input', function () {
@@ -6339,6 +6450,7 @@ function renderLivestreamSummary(root) {
           draft.text = rows.join('\n');
           draft.pendingStart = null;
           draft.selected = rows.length ? 0 : -1;
+          draft.drafts = [];
           draft.selectedDraft = -1;
           refreshCutDraft();
           toast('已按切点填入 ' + rows.length + ' 个片段', 'success');
@@ -6356,6 +6468,7 @@ function renderLivestreamSummary(root) {
         }
 
         function exportSegmentsDoc(fmt, label) {
+          if (!cutMarksComplete()) return;
           var parsed;
           try {
             parsed = parseSegments(segments.value);
@@ -6405,6 +6518,7 @@ function renderLivestreamSummary(root) {
             draft.text = data.text || '';
             draft.pendingStart = null;
             draft.selected = data.count ? 0 : -1;
+            draft.drafts = [];
             draft.selectedDraft = -1;
             refreshCutDraft();
             toast('已导入 ' + data.count + ' 个片段', 'success');
@@ -6418,6 +6532,7 @@ function renderLivestreamSummary(root) {
             toast('请先在表格勾选 1 个视频', 'warning');
             return;
           }
+          if (!cutMarksComplete()) return;
           var parsed;
           try {
             parsed = parseSegments(segments.value);
@@ -6435,6 +6550,7 @@ function renderLivestreamSummary(root) {
             toast('请先在表格勾选 1 个视频', 'warning');
             return;
           }
+          if (!cutMarksComplete()) return;
           var parsed;
           try {
             parsed = parseSegments(segments.value);
@@ -8944,6 +9060,7 @@ function renderLivestreamSummary(root) {
               state.douyin.lastResult = done.result || {};
             }
             setFetching(false);
+            fetchJobHost.replaceChildren();
             if (state.route === 'douyin_index') {
               if (done.status === 'error' && state.douyin.view === view) {
                 fetchResultHost.textContent = state.douyin.lastResult.summary;
@@ -9005,6 +9122,7 @@ function renderLivestreamSummary(root) {
                   state.douyin.fetchTask = null;
                   state.douyin.lastResult = { summary: '抓取失败：' + error.message };
                   setFetching(false);
+                  fetchJobHost.replaceChildren();
                   if (state.route === 'douyin_index') {
                     if (state.douyin.view === view) {
                       fetchResultHost.textContent = state.douyin.lastResult.summary;

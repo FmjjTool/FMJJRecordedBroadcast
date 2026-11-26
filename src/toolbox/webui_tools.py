@@ -825,16 +825,18 @@ def add_video_subtitle(rel_path: str, subtitle_rel: str, on_progress=None,
 
 
 def video_metadata(rel_path: str) -> dict:
-    from toolbox.edit_engine import read_metadata
+    from toolbox.video_details import read_video_details
 
     root = _work_root()
     if root is None:
         raise ValueError("尚未设置工作目录，请先在桌面端全局设置中配置")
     path = _resolve(root, str(rel_path or ""))
-    meta = read_metadata(path)
+    details = read_video_details(path)
+    tags = details.get("tags") or {}
     return {"path": _rel(root, path),
-            "tags": {key: str(meta.get(key) or "") for key in _META_KEYS},
-            "rotation": int(meta.get("rotation") or 0),
+            "summary_lines": list(details.get("summary_lines") or []),
+            "tags": {key: str(tags.get(key) or "") for key in _META_KEYS},
+            "rotation": int(details.get("rotation") or 0),
             "rotations": list(_ROTATIONS),
             "note": "写入元数据会重新封装为新文件（不转码），源视频保留。"}
 
