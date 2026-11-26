@@ -6780,9 +6780,101 @@
     api('/api/douyin-index').then(function (data) {
       root.replaceChildren();
       var reports = data.reports || [];
+      var keyword = h('input', {
+        class: 'input grow', placeholder: '达人名称或抖音号'
+      });
+      var daysSel = h('select', { class: 'select' },
+        h('option', { value: '30' }, '近 30 天'),
+        h('option', { value: '90' }, '近 90 天'),
+        h('option', { value: '180' }, '近 180 天'),
+        h('option', { value: '365' }, '近 1 年'));
+      var searchBtn = h('button', { class: 'btn', type: 'button' }, '搜索达人');
+      var searchHost = h('div', { style: 'margin-top:8px' });
+      var fetchJobHost = h('div');
+      var searching = false;
+      searchBtn.addEventListener('click', function () {
+        if (searching) return;
+        if (!keyword.value.trim()) {
+          toast('请输入达人名称或抖音号', 'warning');
+          return;
+        }
+        searching = true;
+        searchBtn.disabled = true;
+        searchBtn.textContent = '搜索中…';
+        searchHost.replaceChildren(h('div', { class: 'muted small' },
+          '正在搜索…'));
+        post('/api/douyin-index/search', { keyword: keyword.value.trim() })
+          .then(function (result) {
+            searching = false;
+            searchBtn.disabled = false;
+            searchBtn.textContent = '搜索达人';
+            var items = result.items || [];
+            if (!items.length) {
+              searchHost.replaceChildren(empty('没有匹配的达人。'));
+              return;
+            }
+            var head = h('tr', null, h('th', null, '达人'),
+              h('th', null, '抖音号'), h('th', { class: 'num' }, '粉丝'),
+              h('th', null, '操作'));
+            var body = h('tbody');
+            items.forEach(function (item) {
+              var btn = h('button', {
+                class: 'btn mini primary', type: 'button'
+              }, '抓取');
+              btn.addEventListener('click', function () {
+                btn.disabled = true;
+                btn.textContent = '抓取中…';
+                post('/api/douyin-index/fetch', {
+                  uid: item.uid, days: Number(daysSel.value) || 30
+                }).then(function (job) {
+                  watchJob(fetchJobHost, job.job, function (done) {
+                    var outcome = done.result || {};
+                    toast(outcome.summary || '抓取完成', 'success');
+                    setTimeout(function () { renderDouyinIndex(root); }, 800);
+                  }, {
+                    cancelable: true,
+                    onSettled: function (done) {
+                      if (done.status === 'error') {
+                        btn.disabled = false;
+                        btn.textContent = '抓取';
+                        toast('抓取失败：' + (done.error || '未知错误'), 'error');
+                      }
+                    }
+                  });
+                }).catch(function (error) {
+                  btn.disabled = false;
+                  btn.textContent = '抓取';
+                  toast('抓取失败：' + error.message, 'error');
+                });
+              });
+              body.appendChild(h('tr', null,
+                h('td', { class: 'ellipsis' }, item.name || item.uid),
+                h('td', { class: 'muted small' }, item.douyin_id || '-'),
+                h('td', { class: 'num' }, fmtNumber(item.fans)),
+                h('td', null, btn)));
+            });
+            searchHost.replaceChildren(h('div', { class: 'table-wrap' },
+              h('table', { class: 'db-table' },
+                h('thead', null, head), body)));
+          }).catch(function (error) {
+            searching = false;
+            searchBtn.disabled = false;
+            searchBtn.textContent = '搜索达人';
+            searchHost.replaceChildren(h('div', {
+              class: 'muted small', style: 'color:var(--danger)'
+            }, '搜索失败：' + error.message));
+          });
+      });
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '搜索达人并抓取'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          keyword, daysSel, searchBtn,
+          h('span', { class: 'muted small' },
+            '搜索需要抖音指数 Cookie；抓取会写入「抖音指数」导出目录。')),
+        searchHost, fetchJobHost));
       if (!reports.length) {
         root.appendChild(empty(
-          '暂无本地快照。桌面端「抖音指数」搜索达人并抓取后会保存到本地，刷新本页即可查看。'));
+          '暂无本地快照。可搜索达人后抓取，或到桌面端「抖音指数」抓取。'));
         return;
       }
       var names = reports.map(function (item) { return item.name; });

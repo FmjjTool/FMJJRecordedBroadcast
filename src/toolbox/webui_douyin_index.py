@@ -1,6 +1,8 @@
-"""WebUI 抖音指数（只读）：读取本地快照 JSON（download/抖音指数/<达人>/latest.json）。
+"""WebUI 抖音指数：读取本地快照，并支持达人搜索与抓取。
 
-不触发搜索 / 抓取；搜索与抓取仍在桌面端。
+读取本地 `latest.json`；搜索走 `platforms.douyin_index.search_daren`，
+抓取走 `fetch_daren_all` + `save_snapshot`（写入「抖音指数」导出目录）。
+需要桌面端配置的抖音指数 Cookie。本模块 Qt-free。
 """
 
 from __future__ import annotations
@@ -224,4 +226,86 @@ def load_report(name: str) -> dict:
         "videos": videos,
         "fans": fan_rows,
         "similar": similar,
+    }
+
+
+def search(payload: dict) -> dict:
+    """按名称 / 抖音号搜索达人（只读，需要抖音指数 Cookie）。"""
+    from platforms import douyin_index as dxi
+
+    keyword = str(payload.get("keyword") or "").strip()
+    if not keyword:
+        raise ValueError("请输入达人名称或抖音号")
+    try:
+        total = int(payload.get("limit") or 20)
+    except (TypeError, ValueError):
+        total = 20
+    total = max(1, min(total, 50))
+    try:
+        rows = dxi.search_daren(keyword, total) or []
+    except Exception as exc:  # noqa: BLE001 - 搜索接口异常类型较多
+        raise ValueError(f"搜索失败：{exc}") from exc
+    items = []
+    for row in rows:
+        uid = str(row.get("user_id") or row.get("uid") or "")
+        if not uid:
+            continue
+        try:
+            fans = int(row.get("fans_count") or row.get("fans") or 0)
+        except (TypeError, ValueError):
+            fans = 0
+        items.append({
+            "uid": uid,
+            "name": str(row.get("user_name") or row.get("nick_name") or ""),
+            "douyin_id": str(row.get("unique_id") or row.get("short_id") or ""),
+            "fans": fans,
+            "avatar": str(row.get("avatar_uri") or row.get("avatar_url") or ""),
+        })
+    return {"items": items, "total": len(items), "keyword": keyword,
+            "note": "只读搜索；选一个达人抓取指数快照。"}
+
+
+def fetch(payload: dict, on_progress=None, on_log=None,
+          is_cancelled=None) -> dict:
+    """抓取一个达人的完整抖音指数并保存快照。"""
+    from platforms import douyin_index as dxi
+
+    uid = str(payload.get("uid") or "").strip()
+    if not uid:
+        raise ValueError("请选择要抓取的达人")
+    try:
+        days = int(payload.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(days, 365))
+    if is_cancelled and is_cancelled():
+        raise ValueError("任务已取消")
+
+    def say(message) -> None:
+        if on_log:
+            on_log(str(message))
+        if on_progress:
+            on_progress(None, str(message))
+
+    try:
+        data = dxi.fetch_daren_all(uid, days, progress=say)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"抓取失败：{exc}") from exc
+    if is_cancelled and is_cancelled():
+        raise ValueError("任务已取消（数据未保存）")
+    try:
+        path = dxi.save_snapshot(data)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"保存快照失败：{exc}") from exc
+    name = str((data.get("author") or {}).get("user_name") or uid)
+    videos = len(data.get("videos") or [])
+    fetched_at = str((data.get("meta") or {}).get("fetched_at") or "")
+    return {
+        "name": name,
+        "file": Path(path).name,
+        "videos": videos,
+        "days": days,
+        "fetched_at": fetched_at,
+        "summary": f"已抓取「{name}」抖音指数：{videos} 个视频 · 近 {days} 天",
+        "note": "快照已写入「抖音指数」导出目录，页面刷新后可查看。",
     }

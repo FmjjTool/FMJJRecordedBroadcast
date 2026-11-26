@@ -44,7 +44,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     tcdoc = TCDocService(jobs)
     trackers = TrackerService(jobs)
     fangroups = FanGroupService()
-    douyin_index = DouyinIndexService()
+    douyin_index = DouyinIndexService(jobs)
     chaohua = WeiboChaohuaService()
     info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService(jobs)
@@ -211,6 +211,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/douyin-index", lambda req: douyin_index.overview())
     server.get("/api/douyin-index/report", lambda req: douyin_index.report(
         req.q("name")))
+
+    def search_douyin_index(req):
+        return douyin_index.search(dict(req.json or {}))
+    server.post("/api/douyin-index/search", search_douyin_index)
+
+    def start_douyin_index_fetch(req):
+        return douyin_index.start_fetch(dict(req.json or {}))
+    server.post("/api/douyin-index/fetch", start_douyin_index_fetch)
 
     server.get("/api/weibo-chaohua", lambda req: chaohua.overview())
     server.get("/api/weibo-chaohua/analysis", lambda req: chaohua.analysis(
