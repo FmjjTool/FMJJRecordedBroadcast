@@ -139,6 +139,38 @@ class NeteasePlaylistWriter(BasePlaylistWriter):
             return ""
         return f"https://music.163.com/playlist?id={ident}"
 
+    def _detail(self, playlist_id: str, cookie: dict[str, str],
+                transport=None) -> dict:
+        """歌单详情（名字 + trackIds）；拿不到返回空字典。"""
+        ident = str(playlist_id or "").strip()
+        if not ident:
+            return {}
+        try:
+            with self._client(cookie, transport) as client:
+                resp = client.get(f"{BASE}/api/v6/playlist/detail",
+                                  params={"id": ident, "n": 1000},
+                                  headers={"Referer": f"{BASE}/"})
+            body = response_json(resp, platform=self.platform, phase="read")
+        except Exception:  # noqa: BLE001 - 读不到按未知处理
+            return {}
+        playlist = body.get("playlist")
+        return playlist if isinstance(playlist, dict) else {}
+
+    def playlist_song_ids(self, playlist_id: str, cookie: dict[str, str], *,
+                          transport: Optional[httpx.BaseTransport] = None) -> set[str]:
+        playlist = self._detail(playlist_id, cookie, transport)
+        return {str(item.get("id")) for item in (playlist.get("trackIds") or [])
+                if isinstance(item, dict) and item.get("id")}
+
+    def playlist_exists(self, playlist_id: str, cookie: dict[str, str], *,
+                        name: str = "",
+                        transport: Optional[httpx.BaseTransport] = None) -> bool:
+        playlist = self._detail(playlist_id, cookie, transport)
+        if not playlist:
+            return False
+        got_name = str(playlist.get("name") or "").strip()
+        return not (name and got_name and got_name != str(name).strip())
+
     def sort_songs(self, playlist_id: str, ordered_song_ids: list[str],
                    cookie: dict[str, str], *,
                    transport: Optional[httpx.BaseTransport] = None) -> None:

@@ -185,6 +185,80 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             )
         return str(playlist_id)
 
+    def _global_id(self, playlist_id: str, cookie: dict[str, str]) -> tuple[str, tuple]:
+        """歌单 ID → (global_collection_id, 登录身份)；拿不到身份时返回 ("", ())。"""
+        ident = str(playlist_id or "").strip()
+        if not ident:
+            return "", ()
+        try:
+            identity = self._identity(cookie)
+        except Exception:  # noqa: BLE001 - 拿不到身份时不硬拼
+            return "", ()
+        if ident.startswith("collection_"):
+            return ident, identity
+        userid = identity[0]
+        return f"collection_3_{userid}_{ident}_0", identity
+
+    def _list_info(self, playlist_id: str, cookie: dict[str, str],
+                   transport=None) -> dict:
+        """云歌单详情（名字、是否下架）；查不到返回空字典。"""
+        global_id, identity = self._global_id(playlist_id, cookie)
+        if not global_id:
+            return {}
+        userid, token, mid, dfid = identity
+        try:
+            body = self._signed_request(
+                "https://gateway.kugou.com/pubsongs/v3/get_list_info",
+                {"data": [{"global_collection_id": global_id, "userid": 0,
+                           "specialid": 0}], "userid": 0, "token": ""},
+                {}, cookie, userid, token, mid, dfid, transport)
+        except Exception:  # noqa: BLE001 - 查不到详情就当未知
+            return {}
+        items = body.get("data") or []
+        return items[0] if items and isinstance(items[0], dict) else {}
+
+    def playlist_song_ids(self, playlist_id: str, cookie: dict[str, str], *,
+                          transport: Optional[httpx.BaseTransport] = None) -> set[str]:
+        """云歌单里已有的歌曲 hash（重跑/复用时去重用）。"""
+        global_id, identity = self._global_id(playlist_id, cookie)
+        if not global_id:
+            return set()
+        userid, token, mid, dfid = identity
+        page_size = 300
+        found: set[str] = set()
+        for page in range(1, 21):
+            try:
+                body = self._signed_request(
+                    "https://gateway.kugou.com/pubsongs/v2/get_other_list_file_nofilt",
+                    {"global_collection_id": global_id, "page": page,
+                     "pagesize": page_size, "type": 0},
+                    {"global_collection_id": global_id, "page": page,
+                     "pagesize": page_size},
+                    cookie, userid, token, mid, dfid, transport)
+            except Exception:  # noqa: BLE001 - 读不到就当没有重复
+                break
+            data = body.get("data") or {}
+            songs = data.get("songs") or []
+            for song in songs:
+                value = str(song.get("hash") or "").strip().upper()
+                if value:
+                    found.add(value)
+            total = int(data.get("count") or 0)
+            if len(songs) < page_size or page * page_size >= max(total, len(found)):
+                break
+        return found
+
+    def playlist_exists(self, playlist_id: str, cookie: dict[str, str], *,
+                        name: str = "",
+                        transport: Optional[httpx.BaseTransport] = None) -> bool:
+        info = self._list_info(playlist_id, cookie, transport)
+        if not info:
+            return False
+        if info.get("is_drop"):
+            return False
+        got_name = str(info.get("name") or "").strip()
+        return not (name and got_name and got_name != str(name).strip())
+
     def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
                      name: str = "",
                      transport: Optional[httpx.BaseTransport] = None) -> str:
@@ -197,27 +271,10 @@ class KugouPlaylistWriter(BasePlaylistWriter):
 
         歌单不存在 / 已下架 / 名字对不上时返回空串，由调用方提示手工登记。
         """
-        ident = str(playlist_id or "").strip()
-        if not ident:
+        global_id, identity = self._global_id(playlist_id, cookie)
+        if not global_id:
             return ""
-        try:
-            userid, token, mid, dfid = self._identity(cookie)
-        except Exception:  # noqa: BLE001 - 拿不到身份时不硬拼链接
-            return ""
-        if ident.startswith("collection_"):
-            global_id = ident
-        else:
-            global_id = f"collection_3_{userid}_{ident}_0"
-        try:
-            body = self._signed_request(
-                "https://gateway.kugou.com/pubsongs/v3/get_list_info",
-                {"data": [{"global_collection_id": global_id, "userid": 0,
-                           "specialid": 0}], "userid": 0, "token": ""},
-                {}, cookie, userid, token, mid, dfid, transport)
-        except Exception:  # noqa: BLE001 - 核对失败仍给链接，写入前还有网页探测
-            return f"https://www.kugou.com/yy/special/single/{global_id}.html"
-        items = body.get("data") or []
-        info = items[0] if items and isinstance(items[0], dict) else {}
+        info = self._list_info(playlist_id, cookie, transport)
         if info:
             if info.get("is_drop"):
                 return ""

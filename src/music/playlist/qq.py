@@ -226,14 +226,16 @@ class QQPlaylistWriter(BasePlaylistWriter):
             result.failed.append((song.song_name or song.song_id, message))
         return result
 
-    def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
-                     name: str = "",
-                     transport: Optional[httpx.BaseTransport] = None) -> str:
-        """dirId → 歌单公开页（真正链接用的是 tid，不是 dirId）。"""
+    def _tid_of(self, playlist_id: str, cookie: dict[str, str],
+                transport=None) -> str:
+        """dirId → 网页歌单 id（tid）；解析不出返回空串。"""
         uin = _qq_uin(cookie)
         ident = str(playlist_id or "").strip()
         if not uin or not ident:
             return ""
+        if not ident.isdigit():
+            # 已经是 tid 时直接用，歌词单接口都用 tid
+            return ident
         payload = {
             "comm": {
                 "g_tk": _g_tk(cookie),
@@ -267,16 +269,57 @@ class QQPlaylistWriter(BasePlaylistWriter):
             body = response_json(resp, platform=self.platform, phase="url")
         except (ParseChangedError, RateLimitedError):
             return ""
-        req = _musicu_req(body)
-        url = _playlist_url_from_account(req, ident)
-        if not url:
+        url = _playlist_url_from_account(_musicu_req(body), ident)
+        return url.rsplit("/", 1)[-1] if url else ""
+
+    def playlist_song_ids(self, playlist_id: str, cookie: dict[str, str], *,
+                          transport: Optional[httpx.BaseTransport] = None) -> set[str]:
+        """歌单里已有的歌曲 mid（公开接口，重跑/复用时去重用）。"""
+        tid = self._tid_of(playlist_id, cookie, transport)
+        if not tid:
+            return set()
+        params = {"type": 1, "json": 1, "utf8": 1, "onlysong": 0,
+                  "disstid": tid, "format": "json", "g_tk": 5381}
+        try:
+            with httpx.Client(timeout=12.0, follow_redirects=True,
+                              transport=transport,
+                              headers={"User-Agent": QQ_UA,
+                                       "Referer": "https://y.qq.com/"}) as client:
+                resp = client.get(f"{BASE}/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg",
+                                  params=params)
+            data = resp.json()
+        except Exception:  # noqa: BLE001 - 读不到就当没有重复
+            return set()
+        cdlist = data.get("cdlist") or []
+        first = cdlist[0] if cdlist and isinstance(cdlist[0], dict) else {}
+        return {str(song.get("songmid") or song.get("mid") or "").strip()
+                for song in (first.get("songlist") or [])
+                if song.get("songmid") or song.get("mid")}
+
+    def playlist_exists(self, playlist_id: str, cookie: dict[str, str], *,
+                        name: str = "",
+                        transport: Optional[httpx.BaseTransport] = None) -> bool:
+        tid = self._tid_of(playlist_id, cookie, transport)
+        if not tid:
+            return False
+        title = _playlist_title(tid, transport)
+        if not title:
+            return False
+        return not (name and title.strip() != str(name).strip())
+
+    def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     name: str = "",
+                     transport: Optional[httpx.BaseTransport] = None) -> str:
+        """dirId → 歌单公开页（真正链接用的是 tid，不是 dirId）。"""
+        tid = self._tid_of(playlist_id, cookie, transport)
+        if not tid:
             return ""
         # dirId 与网页 id 不是一个体系（201=「我喜欢」），解析后再按歌单名核对一次
         if name:
-            title = _playlist_title(url.rsplit("/", 1)[-1], transport)
+            title = _playlist_title(tid, transport)
             if title and title.strip() != str(name).strip():
                 return ""
-        return url
+        return f"https://y.qq.com/n/ryqq_v2/playlist/{tid}"
     def _resolve_song_ref(self, client: httpx.Client, song: SongInfo) -> tuple[int, int]:
         numeric_id = self._extra_int(song, "id", "songid", "songId")
         song_type = 0

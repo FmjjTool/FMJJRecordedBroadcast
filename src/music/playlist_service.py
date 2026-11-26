@@ -166,6 +166,7 @@ class ApplyResult:
     skipped: list[dict] = field(default_factory=list)
     stopped: str = ""
     sort_error: str = ""
+    reused: bool = False     # True = 复用了账号里同名的旧歌单，没有新建
 
     def to_dict(self) -> dict:
         return {
@@ -178,6 +179,7 @@ class ApplyResult:
             "skipped": self.skipped,
             "stopped": self.stopped,
             "sort_error": self.sort_error,
+            "reused": self.reused,
         }
 
 
@@ -452,6 +454,34 @@ def write_report(path: str | Path, data: dict) -> None:
         json.dump(data, stream, ensure_ascii=False, indent=2)
 
 
+def find_existing_playlist(platform: str, playlist_name: str) -> str:
+    """在历史执行报告里找同平台、同名歌单，返回最近一次的 playlist_id。
+
+    用于重跑时复用账号里已经建好的歌单：调用方还会用平台接口核对它是否
+    还在、名字是否一致，核对不通过再新建。
+    """
+    name = str(playlist_name or "").strip()
+    if not name:
+        return ""
+    try:
+        paths = sorted(report_dir().glob("result_*.json"), reverse=True)
+    except OSError:
+        return ""
+    for path in paths:
+        data = load_journal(path)
+        for item in data.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("platform") or "") != platform:
+                continue
+            if str(item.get("playlist_name") or "").strip() != name:
+                continue
+            ident = str(item.get("playlist_id") or "").strip()
+            if ident:
+                return ident
+    return ""
+
+
 def read_source_file(path: str | Path) -> list[SourceSong]:
     file_path = Path(path)
     if not file_path.is_file():
@@ -542,8 +572,40 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
                         if item.target and item.target.song_id in already_added)
 
     if not playlist_id:
-        playlist_id = plan.writer.create_playlist(plan.playlist_name, cookie, transport=transport)
+        # 同名歌单已经存在时直接复用，避免每跑一次就在账号里多一个重复歌单
+        reusable = find_existing_playlist(plan.platform, plan.playlist_name)
+        if reusable:
+            try:
+                still_there = plan.writer.playlist_exists(
+                    reusable, cookie, name=plan.playlist_name, transport=transport)
+            except Exception:  # noqa: BLE001 - 核对失败按存在处理
+                still_there = True
+            if still_there:
+                playlist_id = reusable
+                result.reused = True
+        if not playlist_id:
+            playlist_id = plan.writer.create_playlist(
+                plan.playlist_name, cookie, transport=transport)
     result.playlist_id = playlist_id
+
+    # 复用的歌单里可能已经有这些歌：已存在的不再重复添加，否则数量会翻倍
+    try:
+        present = set(plan.writer.playlist_song_ids(
+            playlist_id, cookie, transport=transport) or ())
+    except Exception:  # noqa: BLE001 - 读不到就按没有重复处理
+        present = set()
+    if present:
+        kept = []
+        normalized = {str(x).upper() for x in present if x}
+        for item in remaining:
+            if item.target and str(item.target.song_id).upper() in normalized:
+                result.skipped.append({
+                    "song": item.target.song_name if item.target else item.source.title,
+                    "reason": "歌单里已有这首歌",
+                })
+            else:
+                kept.append(item)
+        remaining = kept
 
     # QQ 等平台会把新歌插到最前，按来源顺序逐首添加会得到倒序；
     # 对这类平台反向添加，最终顺序才与来源一致。
@@ -666,6 +728,18 @@ def _match_one(platform: str, source: SourceSong, scraper, *,
             linked_id = extract(link) if extract else ""
         except NotImplementedError:
             linked_id = ""
+        linked_extra = {}
+        if not linked_id:
+            # 链接里不带平台 ID（如酷狗 m.kugou.com/mixsong/<短码>.html）时，
+            # 交给平台自己解析一次，解析成功就不用再搜索匹配
+            resolver = getattr(scraper, "resolve_link_ids", None)
+            if resolver:
+                try:
+                    resolved = resolver(link) or {}
+                except Exception:  # noqa: BLE001 - 解析失败退回搜索
+                    resolved = {}
+                linked_id = str(resolved.get("song_id") or "")
+                linked_extra = resolved.get("extra") or {}
         if linked_id:
             return MatchItem(
                 source=source,
@@ -679,6 +753,7 @@ def _match_one(platform: str, source: SourceSong, scraper, *,
                     platform=platform,
                     platform_name=getattr(scraper, "platform_name", "") or PLATFORM_NAMES.get(platform, platform),
                     url=link,
+                    extra=dict(linked_extra),
                 ),
                 score=1.0,
                 note="使用完整歌曲表中的平台链接",

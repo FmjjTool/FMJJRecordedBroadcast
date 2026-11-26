@@ -151,6 +151,20 @@ class BasePlaylistWriter:
         """歌单公开网页链接；拿不到（或平台没有网页歌单页）返回空串。"""
         return ""
 
+    def playlist_song_ids(self, playlist_id: str, cookie: dict[str, str], *,
+                          transport: Optional[httpx.BaseTransport] = None) -> set[str]:
+        """歌单里已有的歌曲 ID，用于重跑 / 复用同名歌单时去重。
+
+        平台不支持查询（或查询失败）时返回空集合，调用方按「没有重复」处理。
+        """
+        return set()
+
+    def playlist_exists(self, playlist_id: str, cookie: dict[str, str], *,
+                        name: str = "",
+                        transport: Optional[httpx.BaseTransport] = None) -> bool:
+        """复用历史歌单前核对它是否还在；平台不支持核对时按「存在」处理。"""
+        return True
+
     def _client(self, cookie: dict[str, str], transport=None) -> httpx.Client:
         return httpx.Client(
             timeout=20.0,

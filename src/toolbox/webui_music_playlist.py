@@ -364,7 +364,8 @@ def apply(payload: dict, on_log=None, is_cancelled=None) -> dict:
         results.append(data)
         log(f"{plan.platform_name}：已添加 {len(data.get('added') or [])} 首，"
             f"失败 {len(data.get('failed') or [])} 首，"
-            f"跳过 {len(data.get('skipped') or [])} 首")
+            f"跳过 {len(data.get('skipped') or [])} 首"
+            + ("（复用同名歌单，未新建）" if data.get("reused") else ""))
 
     writeback = None
     event = cached.get("event")

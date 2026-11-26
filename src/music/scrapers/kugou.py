@@ -539,6 +539,45 @@ class KugouScraper(BaseScraper):
             return s
         return ""
 
+    def resolve_link_ids(self, link: str) -> dict:
+        """酷狗歌曲页链接 → {song_id, extra}；解析不出返回 {}。
+
+        「完整歌曲」表里存的是 `m.kugou.com/mixsong/<key>.html`，key 是 8 位
+        短码而不是 hash，`extract_song_id` 只能返回空。这里取一次页面，
+        从中读出 hash / audio_id / album_audio_id（云歌单加歌要靠
+        album_audio_id 定位音频）。
+        """
+        m = re.search(r"mixsong/([A-Za-z0-9]+)\.html", link or "")
+        if not m:
+            return {}
+        key = m.group(1)
+        if re.fullmatch(r"[a-fA-F0-9]{32}", key):
+            return {"song_id": key, "extra": {}}
+        url = f"https://m.kugou.com/mixsong/{key}.html"
+        try:
+            with get_client() as client:
+                resp = client.get(url, headers=make_headers(referer="https://m.kugou.com/"))
+            text = resp.text or ""
+        except Exception:  # noqa: BLE001 - 解析失败退回搜索匹配
+            return {}
+        found = re.search(r'"hash"\s*:\s*"([A-Fa-f0-9]{32})"', text)
+        if not found:
+            return {}
+        extra = {}
+        for field, pattern in (
+            ("mixsongid", r'"mixsongid"\s*:\s*"?(\d+)"?'),
+            ("album_audio_id", r'"album_audio_id"\s*:\s*"?(\d+)"?'),
+            ("audio_id", r'"audio_id"\s*:\s*"?(\d+)"?'),
+            ("album_id", r'"albumid"\s*:\s*"?(\d+)"?'),
+        ):
+            hit = re.search(pattern, text)
+            if hit:
+                extra[field] = hit.group(1)
+        # 页面上的 mixsongid 就是云歌单加歌要的 album_audio_id（同一首歌实测一致）
+        if "mixsongid" in extra and "album_audio_id" not in extra:
+            extra["album_audio_id"] = extra["mixsongid"]
+        return {"song_id": found.group(1), "extra": extra}
+
     @staticmethod
     def extract_playlist_id(text: str) -> str:
         """从输入解析歌单 specialid：special/single/xxx、specialid=xxx 或纯数字"""

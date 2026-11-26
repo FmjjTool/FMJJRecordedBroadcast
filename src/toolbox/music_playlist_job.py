@@ -135,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
             results.append({"platform": plan.platform, "playlist_id": "", "stopped": str(exc)})
             continue
         results.append(result.to_dict())
-        print(f"  歌单已创建/继续：{result.playlist_id or '未返回 ID'}")
+        print(f"  歌单已创建/继续：{result.playlist_id or '未返回 ID'}"
+              + ("（复用同名歌单）" if result.reused else ""))
         print(f"  已添加 {len(result.added)} 首，失败 {len(result.failed)} 首，"
               f"跳过 {len(result.skipped)} 首")
         if result.stopped:

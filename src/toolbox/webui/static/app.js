@@ -8777,7 +8777,8 @@ function renderLivestreamSummary(root) {
         var box = h('input', { type: 'checkbox' });
         var ok = row.supports_create && row.available;
         box.disabled = !ok;
-        if (ok && (row.platform === 'netease' || row.platform === 'qq')) {
+        if (ok && (row.platform === 'netease' || row.platform === 'qq'
+                   || row.platform === 'kugou')) {
           box.checked = true;
         }
         var label = h('label', {

@@ -46,6 +46,9 @@ _SOURCE_EVENT = "event"
 _SOURCE_FILE = "file"
 _SOURCE_PLAYLIST = "playlist"
 
+# 默认勾选的目标平台：线下歌单主要落这三个（酷我/5sing 需要时手动勾）
+DEFAULT_PLATFORMS = ("netease", "qq", "kugou")
+
 
 def _writeback_text(receipt) -> str:
     """回写回执 → 界面/log 用的一行说明。"""
@@ -154,7 +157,7 @@ class MusicPlaylistPage(BasePage):
             if not supported:
                 note = note or "该平台没有公开的歌单创建接口"
             box.setToolTip(note)
-            if supported and row["platform"] in ("netease", "qq"):
+            if supported and row["platform"] in DEFAULT_PLATFORMS:
                 box.setChecked(True)
             self._platform_boxes[row["platform"]] = box
             self._platform_supported[row["platform"]] = supported
@@ -640,7 +643,8 @@ class MusicPlaylistPage(BasePage):
             lines.append(
                 f"{name}：已添加 {len(item.get('added') or [])} 首，"
                 f"失败 {len(item.get('failed') or [])} 首，"
-                f"跳过 {len(item.get('skipped') or [])} 首")
+                f"跳过 {len(item.get('skipped') or [])} 首"
+                + ("（复用同名歌单，未新建）" if item.get("reused") else ""))
         if writeback is not None:
             lines.append(_writeback_text(writeback))
         text = "\n".join(lines) or "没有写入任何平台"
