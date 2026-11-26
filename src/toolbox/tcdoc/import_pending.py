@@ -1265,31 +1265,9 @@ def make_live_plan(record: dict, fields: list[dict], available_only=True,
             kinds[title] = kind
             continue
         skipped[name] = "字段类型不匹配"
-    # 自动推送 AI 摘要：按开播日期取本地「直播总结」，只写文本列，找不到就跳过
-    summary_title = field_maps.target(doc_key, tab_id, "AI 摘要")
-    if summary_title and summary_title not in values:
-        from toolbox.livestream_summary.archive import summary_for
-
-        summary = summary_for(record.get("开始时间"))
-        if summary:
-            hits = [f for f in fields
-                    if str(f.get("fieldTitle") or "") == summary_title]
-            if len(hits) == 1 and int(hits[0].get("fieldType") or 1) == 1:
-                values[summary_title] = [{"type": "text", "text": summary}]
-                kinds[summary_title] = 1
-            else:
-                skipped["AI 摘要"] = "目标列不是唯一的文本列"
     remark, remark_kind, remark_title = _remark_plan(record, fields, skipped,
                                                      doc_key, tab_id)
     if remark is not None:
-        if remark_title and remark_title == summary_title and remark_title in values:
-            # 映射把 AI 摘要指到了备注列：保留摘要，备注另起一行追加
-            chunks = values.get(remark_title)
-            existing = (str(chunks[0].get("text") or "")
-                        if isinstance(chunks, list) and chunks
-                        and isinstance(chunks[0], dict) else "")
-            remark = [{"type": "text",
-                       "text": bridge.append_auto_remark(existing)}]
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
     _apply_raw_sources(record, fields, values, kinds, skipped, doc_key, tab_id)
@@ -1735,6 +1713,37 @@ def _event_live_index(rows: list[dict], doc_key="", tab_id="") -> dict:
         if key != "event:" and key not in index:
             index[key] = row
     return index
+
+
+def append_candidates(records: list[dict], live: dict, doc_key="",
+                      tab_id="") -> list[dict]:
+    """已存在活动只保留还有本地图片可追加的行；已补齐的丢弃。
+
+    `live` 是 `_event_live_index(get_records())` 的结果；桌面与 WebUI 共用。
+    保留下来的行会把 `_images` 收紧成待追加的图片，并写入 `_record_id`。
+    """
+    promo_title = field_maps.target(doc_key, tab_id, "宣传图") or "宣传图"
+    kept = []
+    for record in records:
+        if not record.get("_existing"):
+            continue
+        row = live.get(record["key"])
+        if row is None:
+            record["blocked"] = "目标活动行已不存在，请重新比对"
+            kept.append(record)
+            continue
+        values = row.get("values") or {}
+        present = set(_image_titles(values, promo_title))
+        missing = [image for image in record.get("_images") or []
+                   if image.upload_name not in present]
+        if not missing:
+            continue
+        record["_images"] = missing
+        record["images"] = [str(image.path) for image in missing]
+        record["_record_id"] = str(row.get("recordID") or "")
+        record["_existing_images"] = len(present)
+        kept.append(record)
+    return kept
 
 
 @_serialized_write
