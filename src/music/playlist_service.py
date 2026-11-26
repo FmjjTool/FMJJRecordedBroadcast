@@ -604,7 +604,8 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
     # 歌单公开链接：QQ 需要把 dirId 换成 tid，酷狗只有已分配 specialid 才有网页页
     try:
         result.playlist_url = str(plan.writer.playlist_url(
-            playlist_id, cookie, transport=transport) or "").strip()
+            playlist_id, cookie, name=plan.playlist_name,
+            transport=transport) or "").strip()
     except Exception:  # noqa: BLE001 - 拿不到链接不影响已写入的歌单
         result.playlist_url = ""
     return result

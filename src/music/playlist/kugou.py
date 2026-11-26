@@ -186,6 +186,7 @@ class KugouPlaylistWriter(BasePlaylistWriter):
         return str(playlist_id)
 
     def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     name: str = "",
                      transport: Optional[httpx.BaseTransport] = None) -> str:
         """酷狗云歌单的公开页：只有分配了 specialid 的歌单才有网页地址。
 

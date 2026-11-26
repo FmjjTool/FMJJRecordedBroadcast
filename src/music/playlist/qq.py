@@ -227,6 +227,7 @@ class QQPlaylistWriter(BasePlaylistWriter):
         return result
 
     def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     name: str = "",
                      transport: Optional[httpx.BaseTransport] = None) -> str:
         """dirId → 歌单公开页（真正链接用的是 tid，不是 dirId）。"""
         uin = _qq_uin(cookie)
@@ -267,7 +268,15 @@ class QQPlaylistWriter(BasePlaylistWriter):
         except (ParseChangedError, RateLimitedError):
             return ""
         req = _musicu_req(body)
-        return _playlist_url_from_account(req, ident)
+        url = _playlist_url_from_account(req, ident)
+        if not url:
+            return ""
+        # dirId 与网页 id 不是一个体系（201=「我喜欢」），解析后再按歌单名核对一次
+        if name:
+            title = _playlist_title(url.rsplit("/", 1)[-1], transport)
+            if title and title.strip() != str(name).strip():
+                return ""
+        return url
     def _resolve_song_ref(self, client: httpx.Client, song: SongInfo) -> tuple[int, int]:
         numeric_id = self._extra_int(song, "id", "songid", "songId")
         song_type = 0
@@ -312,8 +321,29 @@ def _playlist_url_from_account(req: dict, dirid: str) -> str:
         if str(item.get("dirId") or item.get("dirid") or "") == str(dirid):
             tid = str(item.get("tid") or item.get("dissid") or "").strip()
             if tid:
-                return f"https://y.qq.com/n/ryqq/playlist/{tid}"
+                return f"https://y.qq.com/n/ryqq_v2/playlist/{tid}"
     return ""
+
+
+def _playlist_title(tid: str, transport=None) -> str:
+    """网页歌单 id → 歌单名（用于核对 dirId 解析是否命中目标歌单）。"""
+    if not tid:
+        return ""
+    params = {"type": 1, "json": 1, "utf8": 1, "onlysong": 0,
+              "disstid": tid, "format": "json", "g_tk": 5381}
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=True,
+                          transport=transport,
+                          headers={"User-Agent": QQ_UA,
+                                   "Referer": "https://y.qq.com/"}) as client:
+            resp = client.get(f"{BASE}/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg",
+                              params=params)
+        data = resp.json()
+        cdlist = data.get("cdlist") or []
+        first = cdlist[0] if cdlist and isinstance(cdlist[0], dict) else {}
+        return str(first.get("dissname") or "").strip()
+    except Exception:  # noqa: BLE001 - 拿不到名字时不影响已解析出的链接
+        return ""
 
 
 def _musicu_req(body: dict) -> dict:

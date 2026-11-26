@@ -27,7 +27,7 @@ EVENT_COLUMNS = {
 # 平台 → 歌单网页地址模板；{id} 为创建接口返回的歌单 ID
 _URL_TEMPLATES = {
     "netease": "https://music.163.com/playlist?id={id}",
-    "qq": "https://y.qq.com/n/ryqq/playlist/{id}",
+    "qq": "https://y.qq.com/n/ryqq_v2/playlist/{id}",
     "kugou": "https://www.kugou.com/yy/special/single/{id}.html",
 }
 

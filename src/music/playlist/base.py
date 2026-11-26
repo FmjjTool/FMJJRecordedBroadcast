@@ -146,6 +146,7 @@ class BasePlaylistWriter:
         return None
 
     def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     name: str = "",
                      transport: Optional[httpx.BaseTransport] = None) -> str:
         """歌单公开网页链接；拿不到（或平台没有网页歌单页）返回空串。"""
         return ""
