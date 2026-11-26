@@ -71,6 +71,7 @@ class PerformancePage(BasePage):
         self._snapshot_busy = False
         self._report_busy = self._save_busy = False
         self._history_report = self._history_id = None
+        self._history_error = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
@@ -314,16 +315,17 @@ class PerformancePage(BasePage):
         report_id = self.report_combo.currentData()
         self._history_id = report_id
         self._history_report = None
+        self._history_error = None
         if not report_id:
             self._render()
             return
-        self.report_note.setText("正在读取已保存报告…")
+        self._render()
 
         def done(result, err):
             if self._history_id != report_id:
                 return
             if err:
-                self.app.toast("读取报告失败，记录可能已轮转，请刷新后重试", "error")
+                self._history_error = "读取报告失败，记录可能已轮转，请点「刷新报告」重试"
             else:
                 self._history_report = result
             self._render()
@@ -406,6 +408,8 @@ class PerformancePage(BasePage):
         elif current is self.report_panel:
             selected = self._history_report if self._history_id else report
             if selected is None:
+                self._fill(self.startup_table, [])
+                self.report_note.setText(self._history_error or "正在读取已保存报告…")
                 return
             startup = selected.get("startup") or {}
             rows = startup.get("phases") or []
