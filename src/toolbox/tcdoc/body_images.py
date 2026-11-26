@@ -1,11 +1,12 @@
 """腾讯文档正文本地图像：只读 DOM → 无凭据下载 → 内容寻址缓存。
 
-Owner: 本模块是 ``正文图片/`` 的唯一写入方。schema 1 的每页 .index.json
+Owner: 本模块是 ``正文图片/`` 的唯一写入方。schema 2 的每页 .index.json
 仅保存来源身份哈希及相对路径；不保存 URL、签名或登录态。图片与索引均为派生缓存，
 不修改云端，旧文件不清理。archive 只引用结果，桌面与 Web 通过 safe_image_path 读取。
 
-能力：AI 文档/普通文档现有正文容器中的 img 与 CSS 背景图；有界滚动加载；
-HTTPS 腾讯图床匿名读取，以及当前页面的 blob/data 图。不支持 SVG、任意外链、
+能力：AI 文档/普通文档的正文图像块与正文 img；有界滚动加载；复用当前页面
+已成功加载的可信图床响应，缺失时匿名 HTTPS 下载，或读取页面内 blob/data。
+不采附件/文件卡片图标、工具区、占位图，不支持 SVG、任意外链、
 需附带账户凭据的图床、画布截图或绕过平台访问控制；单张失败保留明确状态。
 """
 
@@ -21,6 +22,7 @@ import stat
 import tempfile
 import time
 import warnings
+from collections import OrderedDict
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
@@ -36,6 +38,9 @@ MAX_SIDE = 32768
 MAX_IMAGES = 200
 MAX_SCROLLS = 40
 MAX_REDIRECTS = 3
+MAX_CAPTURE_IMAGES = 200
+MAX_CAPTURE_BYTES = 128 * 1024 * 1024
+_SELECTION_VERSION = 2
 _EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif", "WEBP": ".webp",
                "BMP": ".bmp", "AVIF": ".avif"}
 _HOSTS = ("docs.qq.com", "qpic.cn", "gtimg.com")
@@ -152,6 +157,97 @@ def _allowed_url(url: str) -> bool:
                 and any(host == base or host.endswith("." + base) for base in _HOSTS))
     except ValueError:
         return False
+
+
+class ImageCapture:
+    """复用此页面已经收到的图像响应，绝不重发浏览器请求或读取账户请求头。
+
+    response 事件只登记受限的响应引用；DOM 明确需要该图时才读取响应体。
+    缓存只在内存中按完整 URL 的哈希关联，且必须通过内容类型/实际解码检查。
+    """
+
+    def __init__(self, page):
+        self._page = page
+        self._pending = OrderedDict()
+        self._bodies = OrderedDict()
+        self._bytes = 0
+        self._closed = False
+        self._handler = self._on_response
+        page.on("response", self._handler)
+
+    def _on_response(self, response) -> None:
+        if self._closed:
+            return
+        try:
+            if (response.status != 200 or response.request.resource_type != "image"
+                    or not _allowed_url(response.url)):
+                return
+            headers = response.headers
+            content_type = str(headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if not content_type.startswith("image/") or content_type == "image/svg+xml":
+                return
+            length = int(headers.get("content-length") or 0)
+            if length < 0 or length > MAX_BYTES:
+                return
+            key = _sha(str(response.url))
+            self._pending[key] = response
+            self._pending.move_to_end(key)
+            while len(self._pending) > MAX_CAPTURE_IMAGES:
+                self._pending.popitem(last=False)
+        except Exception:  # noqa: BLE001 - 不打印响应/地址/请求头
+            return
+
+    def get(self, url: str, is_cancelled=None) -> bytes | None:
+        """仅返回当前 DOM 使用的同一来源的已加载原始图像字节。"""
+        _check_cancelled(is_cancelled)
+        if self._closed or not _allowed_url(url):
+            return None
+        key = _sha(url)
+        cached = self._bodies.get(key)
+        if cached is not None:
+            self._bodies.move_to_end(key)
+            return cached
+        response = self._pending.pop(key, None)
+        if response is None:
+            return None
+        try:
+            content = response.body()
+            _check_cancelled(is_cancelled)
+            if not isinstance(content, bytes) or not content or len(content) > MAX_BYTES:
+                return None
+            _inspect_image(content)
+            if len(content) > MAX_CAPTURE_BYTES:
+                return None
+            while self._bodies and (self._bytes + len(content) > MAX_CAPTURE_BYTES
+                                    or len(self._bodies) >= MAX_CAPTURE_IMAGES):
+                _old_key, old_content = self._bodies.popitem(last=False)
+                self._bytes -= len(old_content)
+            self._bodies[key] = content
+            self._bytes += len(content)
+            return content
+        except BodyImagesCancelled:
+            raise
+        except Exception:  # noqa: BLE001 - 拒绝坏图，不把 URL 或平台错误写进结果
+            return None
+
+    def close(self) -> None:
+        """解除此实例安装的监听并释放字节，不关闭页面或浏览器。"""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._page.remove_listener("response", self._handler)
+        except Exception:  # noqa: BLE001 - 页面已关闭时仍清空内存
+            pass
+        self._pending.clear()
+        self._bodies.clear()
+        self._bytes = 0
+        self._page = None
+
+
+def capture_page_responses(page) -> ImageCapture:
+    """必须在 page.goto 前安装；同一页面跨子页复用，最终调用 close。"""
+    return ImageCapture(page)
 
 
 def _identity(source: dict) -> str:

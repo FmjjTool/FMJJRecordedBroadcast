@@ -3114,6 +3114,9 @@ function renderLivestreamSummary(root) {
       }
       function syncMode() {
         cloudFields.hidden = modeSel.value !== 'ai';
+        [baseInput, modelInput, keyInput].forEach(function (input) {
+          input.disabled = modeSel.value !== 'ai' || running;
+        });
         localBox.hidden = modeSel.value !== 'local';
         localForm.setDisabled(modeSel.value !== 'local' || running);
         chunkInput.disabled = modeSel.value === 'rule' || running;
@@ -5409,6 +5412,7 @@ function renderLivestreamSummary(root) {
         class: 'video-seek', type: 'range', min: '0', max: '0', step: '1',
         value: '0', disabled: true, 'aria-label': '视频时间轴'
       });
+      var timeTrack = h('div', { class: 'video-time-track' }, rangeLayer, seek);
       var currentTimeLabel = h('span', { class: 'video-time-label' }, '00:00:00.000');
       var durationLabel = h('span', { class: 'video-time-label' }, '00:00:00.000');
       var markStartBtn = h('button', { class: 'btn', type: 'button' }, '标记开始');
@@ -5420,8 +5424,7 @@ function renderLivestreamSummary(root) {
       var markHint = h('span', { class: 'muted small video-mark-hint' });
       var pointMenu = h('div', { class: 'video-point-menu', role: 'menu', hidden: true });
       previewHost.insertBefore(h('div', { class: 'video-timebar' },
-        currentTimeLabel, h('div', { class: 'video-time-track' }, rangeLayer, seek),
-        durationLabel), previewNote);
+        currentTimeLabel, timeTrack, durationLabel), previewNote);
       previewHost.insertBefore(h('div', { class: 'toolbar video-mark-actions' },
         markStartBtn, markEndBtn), previewNote);
       previewHost.insertBefore(h('div', { class: 'toolbar video-point-actions' },
@@ -5550,19 +5553,8 @@ function renderLivestreamSummary(root) {
             return;
           }
           promoteCutDraft(draft, draft.selectedDraft);
-        } else if (draft.selected >= 0) {
-          var rows = currentCutRows();
-          var selected = rows[draft.selected];
-          if (!selected) { draft.selected = -1; return; }
-          var original = selected.slice();
-          selected[endpoint === 'start' ? 0 : 1] = position;
-          if (selected[1] <= selected[0]) {
-            rows[draft.selected] = original;
-            toast('结束时间必须大于开始时间，请调整端点后重试', 'warning');
-            return;
-          }
-          writeCutRows(draft, rows, selected);
         } else if (endpoint === 'start') {
+          draft.selected = -1;
           draft.pendingStart = position;
         } else {
           var start = draft.pendingStart === null ? 0 : draft.pendingStart;
@@ -5628,8 +5620,9 @@ function renderLivestreamSummary(root) {
       function openPointMenu(event) {
         event.preventDefault();
         var draft = currentCutDraft();
-        var rect = rangeLayer.getBoundingClientRect();
-        var ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+        var rect = timeTrack.getBoundingClientRect();
+        var ratio = Math.min(1, Math.max(0,
+          (event.clientX - rect.left - 6) / Math.max(1, rect.width - 12)));
         var at = ratio * previewDurationMs;
         var tolerance = Math.max(350, Math.min(1500, previewDurationMs * 0.005));
         var entries = [];
@@ -5666,7 +5659,7 @@ function renderLivestreamSummary(root) {
         pointMenu.firstChild.focus();
       }
 
-      rangeLayer.addEventListener('contextmenu', openPointMenu);
+      timeTrack.addEventListener('contextmenu', openPointMenu);
       previewHost.addEventListener('click', function (event) {
         if (!pointMenu.contains(event.target) && event.target !== rangeLayer) pointMenu.hidden = true;
       });

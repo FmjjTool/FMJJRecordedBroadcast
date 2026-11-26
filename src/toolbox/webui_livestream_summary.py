@@ -135,6 +135,8 @@ def save_settings(payload: dict) -> dict:
     base_url = str(payload.get("base_url") or current.base_url).strip()
     model = str(payload.get("model", current.model) or "").strip()
     mode = str(payload.get("mode") or current.mode)
+    if mode != "ai":
+        base_url, model = current.base_url, current.model
     try:
         chunk_chars = int(payload.get("chunk_chars") or current.chunk_chars)
     except (TypeError, ValueError):
@@ -152,7 +154,7 @@ def save_settings(payload: dict) -> dict:
         mode=mode,
         local=local,
     ))
-    api_key = str(payload.get("api_key") or "").strip()
+    api_key = str(payload.get("api_key") or "").strip() if mode == "ai" else ""
     if api_key:
         if not ls_config.save_api_key(api_key):
             raise ValueError("API Key 保存失败（本机加密存储不可用）")
